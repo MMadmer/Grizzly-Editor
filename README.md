@@ -45,8 +45,9 @@ configuration, `-Out <folder>` puts the files elsewhere. The repository holds no
 the C++ editor and compilers it replaced are the tags `cpp-editor-last` and `cpp-compilers-last`.
 
 While working on the editor: `bash tools/rust/cg.sh build -p grizzly -p gz-mcp-bridge` (the debug
-build in `Intermediate\cargo\debug`). Four entry points prove a change: `bash tools/rust/check.sh`,
-`bash tools/rust/test.sh`, `python tools/qa/diff_editors.py` and `python tools/qa/run_all.py`.
+build in `Intermediate\cargo\debug`). Five entry points prove a change: `bash tools/rust/check.sh`,
+`bash tools/rust/test.sh`, `python tools/qa/diff_editors.py`, `python tools/qa/diff_compile.py` and
+`python tools/qa/run_all.py`.
 The architecture and the contract with the game are [docs/RUST_MIGRATION.md](docs/RUST_MIGRATION.md);
 the rules of the repository are [CLAUDE.md](CLAUDE.md).
 

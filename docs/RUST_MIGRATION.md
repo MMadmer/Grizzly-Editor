@@ -1,8 +1,9 @@
 # Grizzly Editor on Rust
 
-Status: the Rust editor is the editor of the repository - phases 0 to 7 are done; the level
-compilers (phase 8) are still C++. The last commit that holds the C++ editor is the tag
-`cpp-editor-last`. This document is the contract and says what was built; it changes by
+Status: done - phases 0 to 8. The editor and the level compilers are Rust, and the repository
+holds no C or C++. The last commit that holds the C++ editor is the tag `cpp-editor-last`, the
+last that holds the C++ compilers `cpp-compilers-last`. This document is the contract and says
+what was built; it changes by
 editing the document first. What every package did, the test passes and the reviewer's
 findings are in `docs/rust/STATE.md`.
 
@@ -30,7 +31,7 @@ Three requirements, in this order:
 | I2 | Nothing in the game names the editor (the existing rule, unchanged). |
 | I3 | At the cutover the Rust editor does everything the C++ editor does. Deliberate differences are listed in section 12 and nowhere else. |
 | I4 | Until the cutover the project folder was the interface between the two editors: both opened the same project, so no file format inside a project changed before it. It stays the contract with every project made before. |
-| I5 | The C++ editor is the oracle. Until the cutover `Source/` was not edited on this branch; since it, the oracle is the built C++ editor on disk (`Bin\x64\Release\LevelEditor.exe`, of the tag `cpp-editor-last`; a self-contained copy that no later build touches is kept in `Bin\x64\CppEditor`) and its answers recorded under `Intermediate/oracle`, keyed with the stamp it had at the cutover. |
+| I5 | The C++ programs are the oracle. Until the cutover `Source/` was not edited on this branch; since phase 8 it is not in the tree. The oracle is what the built programs answered, recorded under `Intermediate/oracle`: the C++ editor of the tag `cpp-editor-last` (`Bin\x64\CppEditor\LevelEditor.exe`, its records keyed with the stamp it had at the cutover) and the C++ compilers of the tag `cpp-compilers-last` (`Bin\x64\CppCompilers`, their records keyed by the tag). The binaries stay on disk to record a new answer while they exist; the comparison tools work from the records without them. |
 | I6 | Every crate is `#![forbid(unsafe_code)]` unless section 6 names it. |
 | I7 | The UI thread never waits: no file access, no network, no lock that another thread may hold for longer than a pointer swap, no GPU readback, no pipeline compile. It draws and presents; its one wait is for the surface before the first frame. |
 | I8 | State changes only through commands, and every command is reachable over MCP. |
@@ -80,7 +81,7 @@ Three facts that shape the plan:
 | | |
 |---|---|
 | **Rewritten** | `LevelEditor`, `XrECore`, `XrEUI`, `XrEProps`, `XrETools`, every engine library the editor links, the entity factory (Dead Air flavour), the MCP bridge |
-| **Rewritten last** (phase 8) | `XrLC`, `XrLCLight`, `xrDO_Light` - separate processes until then |
+| **Rewritten last** (phase 8) | `XrLC`, `XrLCLight`, `xrDO_Light`: the crates `gz-lc` and `gz-lc-light`, a job of the editor's process |
 | **Kept as it is** | the game repository; the Python QA suites (they are the independent judge and only speak MCP); `tools/qa/github_mock` (Go); `tools/classic_mod` |
 | **Kept as C** | LuaJIT, behind `mlua`: the editor runs the game's own pure-Lua readers, and they must behave as they do in the game |
 | **Dropped** | Clear Sky and Shadow of Chernobyl flavours (`XrGameCS`, `XrGameSOC`, their factories, `fs_cs.ltx`, `fs_soc.ltx`); `ActorEditor`, `ParticleEditor`, `ShaderEditor` and the standalone `XrAI`, which no build target makes today; GameSpy, `XrNetServer`, BugTrap |
@@ -263,7 +264,7 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
   written.
 - **The game's own files are never written.** Every writer of the editor - the scene's own files, the project's file
   operations, the module build and the flat export, the level exports, the level build, the
-  release stage, the compilers' stage and Play's game root - passes one guard
+  release stage and Play's game root - passes one guard
   (`gz_editor::fsx::WriteGuard`) before it writes: nothing under the linked game's root, judged
   as written and where the path really is, except the module's `modules\<id>` (with its stage
   in `modules\.new`) and the flat `gamedata_<id>`.
@@ -331,6 +332,17 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
   declares no dependency that no crate uses.
 - TLS trusts the **Windows certificate store** (schannel or the platform verifier), not a
   bundled root list: a machine whose antivirus inspects HTTPS must keep working.
+- A `build.rs` only in the two binary crates: `grizzly` (the executable links one C runtime,
+  the DLL one; the icon) and `gz-mcp-bridge` (the icon). The icon resource is written from
+  `assets/grizzly-editor-icon.ico` by `gz-ico` at build time: no resource compiler runs and
+  nothing generated is in the tree. `licenses/` holds the notices of the C code the editor
+  links and of the LZO port in `gz-chunk`; `Build.ps1` puts them beside the binaries.
+
+**Tests.** No test writes a program file - a name ending in `.exe`, `.dll`, `.com`, `.scr`,
+`.bat`, `.cmd`, `.ps1`, `.msi`, or the bytes of an `MZ` header: a freshly built unsigned test
+binary that writes one reads as a dropper to an antivirus. A test that needs such a name
+passes a harmless one to the code under test; data that never reaches the disk is marked
+`// program-files: in memory`. `tools/rust/check_test_files.py` holds it, a step of `check.sh`.
 
 ## 7. Workspace
 
@@ -339,10 +351,10 @@ a higher one; layers 0-3 depend on neither egui nor wgpu.
 
 | Layer | Crates |
 |---|---|
-| 0 Base | `gz-base` (ids, revisions, `Pt`, paths, cp1251, `Origin`), `gz-task` (executors, jobs, cancel), `gz-store`, `gz-query`, `gz-log`, `gz-crash`, `gz-win`, `gz-corpus` (support of the corpus tests) |
+| 0 Base | `gz-base` (ids, revisions, `Pt`, paths, cp1251, `Origin`), `gz-task` (executors, jobs, cancel), `gz-store`, `gz-query`, `gz-log`, `gz-crash`, `gz-win`, `gz-corpus` (support of the corpus tests), `gz-ico` (the editor's icon file and the resource that carries it in an executable) |
 | 1 Formats | `gz-ltx` (lossless: comments, order and spacing survive an edit), `gz-luadata` (declarative Lua, refuses code), `gz-chunk` (chunk streams, LZO), `gz-fmt-object`, `gz-fmt-ogf`, `gz-fmt-tex` (DDS, TGA, THM), `gz-fmt-level` (cform, xcform, AI map, details), `gz-fmt-spawn` (`all.spawn`, game graph, patrols), `gz-entities` (server entity schema and packets), `gz-fmt-xr` (`shaders.xr`, `gamemtl.xr`, `lanims.xr`, `particles.xr`), `gz-fmt-xml`, `gz-fmt-sound` |
 | 2 Game link | `gz-vfs`, `gz-lua` (host for the game's pure-Lua readers) |
-| 3 Domain | `gz-editor` (the editor's handle: stores, services, the command registry, the frame clock), `gz-project`, `gz-game` (configs, strings, modes, communities, ranks, trade presets, fonts, kind catalog, world: it reads the mount the project holds, so it sits above `gz-project`), `gz-mod`, `gz-nq`, `gz-characters`, `gz-pda`, `gz-screens`, `gz-world`, `gz-build`, `gz-release` (packages, the index, signing, the VirusTotal scan), `gz-github`, `gz-publish`, `gz-catalog`, `gz-scene`, `gz-particles`, `gz-export-level`, `gz-levelbuild` |
+| 3 Domain | `gz-editor` (the editor's handle: stores, services, the command registry, the frame clock), `gz-project`, `gz-game` (configs, strings, modes, communities, ranks, trade presets, fonts, kind catalog, world: it reads the mount the project holds, so it sits above `gz-project`), `gz-mod`, `gz-nq`, `gz-characters`, `gz-pda`, `gz-screens`, `gz-world`, `gz-build`, `gz-release` (packages, the index, signing, the VirusTotal scan), `gz-github`, `gz-publish`, `gz-catalog`, `gz-scene`, `gz-particles`, `gz-export-level`, `gz-lc-light` (the level compiler's data model and its light), `gz-lc` (the level compiler), `gz-levelbuild` |
 | 4 Presentation | `gz-mcp` (the server and the catalogue), `gz-ui` (the kit, icons), `gz-render`, `gz-app` (the window, the shell, the command table), and a crate per surface: `gz-ui-app` (Start page), `gz-ui-content`, `gz-ui-graph`, `gz-ui-level`, `gz-ui-viewport`, `gz-ui-mod`, `gz-ui-pda`, `gz-ui-previews`, `gz-ui-release`, `gz-ui-world` |
 | Binaries | `grizzly` (the editor; `--headless` runs layers 0-3 and MCP without a window), `gz-mcp-bridge` (the stdio bridge `grizzly-mcp`) |
 
@@ -375,6 +387,8 @@ crate as `cargo metadata` gives it is in `docs/rust/STATE.md` ("For the plan").
 | `tools/mcp/grizzly_mcp.py` | `grizzly-mcp`, serving the catalogue `crates/gz-mcp/tools.json` |
 | Win32 file dialogs | `rfd`, each on a thread of its own |
 | `tools/qa/lint_ui_units.py` | the kit's types |
+| `XrLC.exe`, `XrLCLight.dll`, `xrDO_Light.exe`, run as processes from a stage | `gz-lc`, `gz-lc-light`: a job in the editor's process, the same code under `Grizzly.exe -headless -compile` |
+| CMake, Ninja and the developer shell in `Build.ps1` | cargo alone; `Build.ps1` builds the two programs and copies them with their PDBs and notices |
 
 ## 9. The contract with the game
 
@@ -398,7 +412,7 @@ held to it by the proof in the last column.
 | `[card]`, `[signature]`, `author.xkey`, issue bodies, content rules | game `MOD_CATALOG.md` | both ways against the catalog's `xms_catalog.py` and `catalog.py`; `test_mod_catalog.py`; the game verifies the signature |
 | `thumbnail.dds` | game `MOD_CATALOG.md` | format, size and mip chain checked; the game shows it |
 | Reads of the linked game (never written): `all.spawn`, configs, string tables, `textures_descr`, UI XML, fonts, kind catalog, archives | the game's files as they are | pickers and lookups answer as the oracle does (`quest_lookup`, `world_transitions`, `game_modes`, `list_spawn_sections`, ...) |
-| A full level (`level`, `level.geom`, `level.cform`, `all.spawn`) | engine formats | made by the C++ compilers until phase 8, from the editor's build output (`build.prj`, `level.spawn`, the HOM / SOM, details and AI map files), which equals the C++ editor's under the rules below |
+| A full level (`level`, `level.geom`, `level.cform`, the lightmaps, `level.details`) | engine formats | compiled in the editor's process (`gz-lc`) from the editor's build output (`build.prj`, `level.spawn`, the HOM / SOM, details and AI map files), which equals the C++ editor's under the rules below; the compiled level equals the C++ compilers' under the rules of the compile (below, `tools/qa/diff_compile.py`), and the game loads it (`test_play_game.py`) |
 
 **The rules of "equal to the oracle"** for the level exports and the level build. Byte for
 byte unless named here; there is no broad ignore (`diff_editors.py` `FILE_RULES`):
@@ -426,10 +440,41 @@ byte unless named here; there is no broad ignore (`diff_editors.py` `FILE_RULES`
 Compared this way: Make All on Escape and on `l10_limansk` (79 sectors, 274 portals, 251001
 detail slots, 127 wallmarks), and the Build menu's Make Game, Make AI Map, Make Details, Make
 HOM and Make SOM one at a time. With every file equal under these rules the compilers get the
-same input; the level that Play builds is compiled by the repository's `XrLC` and loaded by the
+same input; the level that Play builds is compiled in the editor's process and loaded by the
 game. **A level build writes into the open project** (`gamedata\levels\<level>`,
 `gamedata\spawns`) and never into the game; the level path is one folder name, and a level
 folder is wiped only when its real path lies below the project's levels folder and is no link.
+
+**The rules of "equal to the C++ compilers"** for a compiled level (`tools/qa/diff_compile.py`,
+the rules in `tools/qa/compare_compile.py`). The C++ side is recorded twice, so what its own two
+runs differ in is known and is the floor. Byte for byte unless named here:
+
+- `build.cform`: a triangle's last word (the C++ writes half of a pointer) and padding the C++
+  never sets are left out.
+- `level`: a progressive visual's sliding windows' reserved words are left out (never set);
+  the light of an MU reference is judged as below.
+- `level.geom`, `level.geomx`: the vertex buffers byte for byte but the light bytes, which are
+  held to the light bounds, and the lightmap coordinates, which follow the light; the header's
+  quality (never set) left out; a non-progressive visual's fast path as a multiset of triangles.
+- `level.cform`: byte for byte, else the triangles as a multiset, else the same surface
+  triangulated another way (the same vertices, per material and plane the same area), else
+  within what the two C++ runs differ in by half again - the triangle count, the triangles one
+  side alone has, the area that changed material. QSlim orders ties by heap addresses, so two
+  C++ runs differ, and so do two builds of one source.
+- **The light**, per channel in 0..255 steps as mean absolute error and 99th percentile:
+  lightmaps within 3 / 16, vertex light within 2 / 16, the detail objects' light within 0.5 / 2.
+  The floor is zero; the bounds are what the port may differ in (another DXT5 encoder, another
+  ray-triangle test on grazing faces, Rust's `sin` / `cos` / `pow`). Seen: lightmaps mean 0.73
+  and p99 8 at most, vertex light 0.02 / 0, `level.details` equal byte for byte.
+- **MU models**: their geometry byte for byte; a model's own light within the vertex bounds
+  (seen: mean 0.002, max 1); a reference's light within them for the references the C++ lights
+  on one thread, and reported, not judged, for the others (D25).
+
+Compared this way: `mp_test`, `l12u_control_monolith` (the middle scene: 410k collision faces,
+749 visuals, sectors and portals), `mp_close_combat` for the detail compiler and
+`l03u_agr_underground` for the MU models (7 models, 15 references). The last one's copy gets a
+lower lightmap density (4 px/m, one jitter sample) and `-noise` on both compilers, which reach
+nothing of the MU work, so that the C++ run ends in minutes; the record names what was set.
 
 Two consequences worth stating:
 
@@ -441,7 +486,9 @@ Two consequences worth stating:
 ## 10. Verification
 
 1. **The oracle.** The C++ editor at the branch point, driven over MCP.
-   `tools/qa/diff_editors.py` runs both editors side by side on copies of one project.
+   `tools/qa/diff_editors.py` runs both editors side by side on copies of one project; the
+   C++ compilers on the same `build.prj`, `tools/qa/diff_compile.py`. Both work from the
+   records of the C++ side (I5).
 2. **Golden files** for the rows of section 9, and for every format read the corpus: parse,
    write, compare over the linked game's and the projects' own files. `tools/rust/test.sh`
    runs only the test binaries that changed since they were green; `--all` runs everything
@@ -589,7 +636,7 @@ Replaces about 12k (the builder, the in-editor AI, the glue).
 - The level's panels: World Outliner, Details, Level Settings, the tool panels and
   choosers, on the scene of phase 4 and the viewport of phase 5.
 - `gz-levelbuild`: the build project for the compilers, the game graph and spawn
-  constructors, launching `XrLC` and `xrDO_Light` as jobs.
+  constructors, the compile as a job (the C++ compilers as processes until phase 8).
 - Play: the game started on the scene as a job (D1).
 
 Gate: `test_properties`, `test_world`, `tools/mcp/test_server_lifecycle.py`,
@@ -612,7 +659,7 @@ Gate: `test_properties`, `test_world`, `tools/mcp/test_server_lifecycle.py`,
   and the binary is `Grizzly.exe`, beside the built C++ editor rather than over it.
 - The branch merges into `main`.
 
-### Phase 8 - The compilers
+### Phase 8 - The compilers (done)
 
 `XrLC`, `XrLCLight`, `xrDO_Light` (36k) become Rust crates and jobs of the editor. Their
 results differ in the last bits of floating point, so the gate is the quality of light
@@ -640,8 +687,20 @@ holds no C++.
   of floating point; the lightmaps and vertex colours within a stated error (mean and a high
   percentile, and looked at side by side); the game loads the level (`test_play_game`); the
   compile no slower than the C++ one and the lighting near every core.
-- **Then the rest of the C++ goes**: `Source/`, `SDK/`, the CMake files and the compilers'
-  half of `Build.ps1`.
+- **The gate as passed**: four scenes under the rules of section 9. The compile took 2.4 s,
+  64.8 s, 9.3 s and 28.2 s against the C++ compilers' 20 s, 261 s, 78 s and 187 s (`mp_test`,
+  `l12u_control_monolith`, `mp_close_combat`'s details, `l03u_agr_underground`); the game
+  creates a new game on a level Play compiled this way, loads its geometry and collision and
+  synchronises.
+- **In the editor**: `level_build`'s `compile`, `compile_geometry`, `compile_details` and the
+  command `level_compile` run the compiler as the job `level_run` on the CPU pool - its phases
+  the job's stage, its log in the Output Log, the report (seconds, files, warnings, invalid
+  faces) in the answer and the Result dialog, stopped like any job. `Grizzly.exe -headless
+  -compile <level folder>` is the same code without a window.
+- **The rest of the C++ went**: `Source/`, `SDK/`, `cmake/`, the CMake files, the compilers'
+  half of `Build.ps1`, and with them every leftover only the C++ tools read. No C or C++ file
+  is tracked; the HLSL under `gamedata/shaders` is data of the kept C++ editor, which draws
+  with it when it records.
 
 ## 12. Deliberate differences
 
@@ -650,7 +709,7 @@ bug.
 
 | # | Difference | Why |
 |---|---|---|
-| D1 | **Play in Editor starts the game.** Play bakes the scene, builds the collision, the AI map, the game graph and `editor.spawn`, compiles the level with the repository's compilers (from a stage in the project's `temp\compilers`) and runs the LINKED game's engine on it as a job, in a game root of its own outside the project (copies of the executables, a junction to the archives, a copy of the loose gamedata with the level added, an appdata of its own, no module) - instead of running a game level inside the editor. | The embedded play needs `XrGame.dll` and the whole engine in the editor's process. The real game shows what a player gets, and its crash no longer takes the editor along. The game's `CLocatorAPI` copies every path into 256 bytes, so Play refuses a game root too deep for it and names the path. |
+| D1 | **Play in Editor starts the game.** Play bakes the scene, builds the collision, the AI map, the game graph and `editor.spawn`, compiles the level in the editor's process (`gz-lc`) and runs the LINKED game's engine on it as a job, in a game root of its own outside the project (copies of the executables, a junction to the archives, a copy of the loose gamedata with the level added, an appdata of its own, no module) - instead of running a game level inside the editor. | The embedded play needs `XrGame.dll` and the whole engine in the editor's process. The real game shows what a player gets, and its crash no longer takes the editor along. The game's `CLocatorAPI` copies every path into 256 bytes, so Play refuses a game root too deep for it and names the path. The root holds COPIES of the executables because the game's content service works in the folder of its engine: it rewrites `.dead-air-x64\content-state.txt` there at every start and starts a level only while the archives are that folder's `database`. Running the installed engine in place needs a change of the game (the content service taking its root from the fs config), which no phase of this plan makes (I1). |
 | D2 | **The viewport is drawn by the editor's own materials**, not by the R1 blenders. | 5.8. What an author judges - geometry, textures, transparency, placement - stays. |
 | D3 | The editor's own settings (window, layout, preferences) live in new files; nothing is migrated. | The editor has not shipped; the existing rule. |
 | D4 | Signatures and package bytes differ from the C++ editor's for the same input. | Section 9. |
@@ -663,12 +722,13 @@ bug.
 | D11 | Tools that did nothing in the C++ editor work: the AI Map tool's Ignored Materials leave holes, the link pad's Invert turns a one-way link round, a wallmark can be moved, a marquee in points mode selects the points inside it, a library group is placed by a click. | Each was a commented-out check, a self-link, a disabled control or a missing handler in the C++. |
 | D12 | A group's Make Thumbnail writes `<project>\rawdata\groups\<reference>.thm`. | That is where the Groups chooser reads it; the C++ wrote `$objects$\<scene name>.thm`, which nothing reads. |
 | D13 | The wire adds, never removes: refusals of `game_link` / `game_modes` carry `error`; `characters_write` refuses a path outside the project; `world_set` writes only its section; `mod_publish start` answers in one call; `quest_history` adds `undo_steps` / `redo_steps`; new commands `jobs`, `level_build`, the tool commands (`sector_tool`, `portal_tool`, `way_tool`, `shape_tool`, `light_tool`, `fog_tool`, `aimap_tool`, `details_tool`, `wallmark_tool`, `particles_tool`), the scene's own, `viewport_gesture`, `spawn_animation`, `-home`; a form that discards is a tool of its own with `destructiveHint` (the level tools included). | Each closes a hole an agent would otherwise fall into; nothing a C++-era script sends changes meaning. |
-| D14 | Orders the C++ took from pointer addresses or `rand` are stable. | Section 9: the game does not depend on them, and a stable order makes a build reproducible. |
+| D14 | Orders the C++ took from pointer addresses or `rand` are stable. In the level compiler an order the C++ takes from its own pools or from a fixed `rand` stream is reproduced (the face pool's blocks made after the load sort below the load's, as the C++ heap places them; the MU models' light draws the C++ stream, jumped to per vertex so that the vertices still light in parallel), and an order from heap addresses (QSlim's ties) is a rule of the comparison. | Section 9: the game does not depend on them, and a stable order makes a build reproducible. |
 | D15 | The command table lists what does something: the 35 C++ rows that are plumbing or whose bodies do nothing are not listed, and the editor ships its default keys. | A row that does nothing is noise for an author and a trap for an agent; the C++ bound no key until a `level.ini` existed. |
 | D16 | Faults of the C++ editor are not repeated: the particle library holds all of Dead Air's `particles.xr` (the C++ `CPSLibrary::Load` stopped at the first short `TargetColor`: 1035 names of 1428); the unsigned-release sentence is a warning of its own (the C++ glued it to the last build warning); `scene_visibility` takes a JSON boolean. | Each was an accident of the code, not a behaviour anyone relied on. |
 | D17 | A ray pick hits the scene whatever the camera sees (`probe_vertical`, `scan_walls`, `drop_objects`, way point snapping). | The C++ `CSceneObject::RayPick` skipped objects outside the camera's view, so an MCP answer depended on where a minimised window happened to look. |
 | D19 | A spawn point is placed only for a class the game's factory has a server class for, and a new smart cover's hold position time starts at 0. | The C++ placed a spawn point of undefined type for the first and left the second uninitialised. |
 | D24 | The level compilers light on one machine's cores: lighting over a network of machines (`-net`) and the radiosity pass (`-gi`) are not ported. | No option of the editor reaches either, and the cores of one machine do what the network was for. |
+| D25 | An MU reference is lit by itself. | The C++ keeps a vertex's light in the model its references share and lights the references on several threads, so a reference takes some of another's light and two C++ runs differ. |
 | D23 | Play's game graph is the linked game's graph with the level appended (the game's vertex numbers and graph guid unchanged), the way the game adds a module's level; a scene named like a level the game already has keeps the C++ single-level graph. | Dead Air's own start scripts spawn on fixed vertices of the game's graph; on the C++ editor's one-level graph the game stops there. |
 | D20 | The level path is one folder name; anything else is refused when typed and by the build. | The C++ took any text and concatenated it; a path that leaves the levels folder would be wiped by Make All. |
 | D21 | Make All builds a scene that holds an object in visual mode. | The C++ `BuildHOMModel` asserts on it. |
@@ -677,19 +737,20 @@ bug.
 
 ## 13. Working rules
 
-- **The branch.** All Rust work lands on `grizzly-rust`. `main` merges into it regularly;
-  the last merged commit is recorded here: **synced at `25f76d13`**.
-- **What changed in C++ since then is the port list.**
-  `git diff <synced>..main -- Source/Editors docs tools` - no separate bookkeeping.
-- **Areas flip one at a time.** When an area passes its gate, new work on it lands in Rust
-  and the C++ side takes fixes only. Until then a feature lands in C++ and joins the port
-  list.
+- **The branch.** The Rust work landed on `grizzly-rust`, forked from `25f76d13`, and merged
+  into `main`. The C++ it replaced is read from the tags (`git show cpp-editor-last:<path>`,
+  `git show cpp-compilers-last:<path>`); a Rust comment that names a `Source/...` place as the
+  oracle of a function means those tags.
+- **Five entry points prove a change**: `bash tools/rust/check.sh`, `bash tools/rust/test.sh`,
+  `python tools/qa/diff_editors.py`, `python tools/qa/diff_compile.py`, `python
+  tools/qa/run_all.py`. Each runs only what changed since it passed unless told `--all`;
+  nothing that already passed is run again to check something new.
 - **The editor.** `Bin\x64\Release\Grizzly.exe` (`Build.ps1`, the release profile: thin LTO,
   line tables in a PDB beside it) or `Intermediate\cargo\debug\Grizzly.exe`
   (`tools/rust/cg.sh build`), listening on 28016 (`-mcp_port` names another; QA uses its own
   ports and a home of its own per editor). The QA suites take the editor from
   `tools/qa/qa_target.py`: the Rust editor by default, `GRIZZLY_QA_EXE` another binary; the
-  C++ editor only for the differential's recording. `tools/mcp/grizzly_mcp.py` launches the
+  C++ editor (`Bin\x64\CppEditor`) only for the differential's recording. `tools/mcp/grizzly_mcp.py` launches the
   Rust bridge, so a client set up before the cutover keeps working.
 - **A work package is done** when its code, its commands, its tests and its line of the
   parity ledger are in, and the document that describes its behaviour still tells the
@@ -706,7 +767,7 @@ bug.
 | The new renderer shows less than the old one | spike S2; the D3D11 fallback behind the same frame packets |
 | The entity schema drifts from the game's classes | every packet of the game's `all.spawn` must round trip; unknown classes are preserved, never dropped |
 | Floating point differs between compilers in `xcform` and AI map output | the same order of operations and no fast-math; a stated tolerance and the game's load where bytes cannot match |
-| Two editors to maintain during the move | the port list from git, areas flipping one at a time, both on one project |
+| Two editors to maintain during the move | the port list from git, areas flipping one at a time, both on one project (over: one editor since the cutover) |
 | Persistent structures cost more than vectors on hot paths | measured in S3 and S4; bulk data stays in flat immutable blobs |
 | Deadlocks, which the compiler does not catch | stores never await stores; no lock across an await or a frame; the stress tests and the stress run |
 | Antivirus meets a new unsigned binary on every build | one executable, few modules to load; the loader line of the profile shows it |

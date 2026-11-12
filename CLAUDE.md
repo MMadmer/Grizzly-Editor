@@ -45,23 +45,27 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   pools and services are handles passed down from the editor; `Rc` / `RefCell` only in a surface's own view state.
 - **`unsafe` only in `gz-win`** (the Win32 that `std` lacks), every block with a `// SAFETY:` line, and no
   `unsafe impl Send` / `Sync` anywhere. Every other crate is `#![forbid(unsafe_code)]` through the workspace lints.
-- **Four entry points prove a change**: `bash tools/rust/check.sh` (clippy, fmt, `unsafe` only in `gz-win`, the
+- **Five entry points prove a change**: `bash tools/rust/check.sh` (clippy, fmt, `unsafe` only in `gz-win`, the
   registry against the catalogue `crates/gz-mcp/tools.json`, the text encodings, no test writing a program file, the
   icon of the release binaries), `bash tools/rust/test.sh` (only the test binaries that
   changed since they were green; `--all` for everything and the whole corpus), `python tools/qa/diff_editors.py` (the
-  same commands on both editors, the C++ side from its records), `python tools/qa/run_all.py` (the QA suites side by
-  side; `--with-game` adds the one that starts the real game). `GRIZZLY_QA_EXE` points the suites, the differential
+  same commands on both editors, the C++ side from its records), `python tools/qa/diff_compile.py` (the level
+  compiler against the C++ compilers' records, under the rules of `compare_compile.py`), `python tools/qa/run_all.py`
+  (the QA suites side by side; `--with-game` adds the one that starts the real game). `GRIZZLY_QA_EXE` points the suites, the differential
   run and `check.sh`'s registry at another binary (`Bin\x64\Release\Grizzly.exe`, the release build). Nothing that
   already passed is run again to check something new: one crate, one scenario, one suite or one phase (`--only`) while
-  fixing, the four once at the end.
+  fixing, the five once at the end.
 - **Every cargo command goes through `bash tools/rust/cg.sh <cargo args>`** (or `Build.ps1`, which uses the same
   settings): the target folder `Intermediate\cargo`, the log under `Intermediate`.
 - **A QA script opens only a copy of a project** under the system temp folder (`qa_target.copy_project`;
   `guard_project` stops it before an editor starts otherwise). A path under the author's projects is only ever a source
   to copy from. Every editor a suite starts runs on a port (28917 and up) and a home (`-home`) of its own, never the
   author's 28016 or settings.
-- **The phases left need no game change**: no commit in the game repository; what crosses to the game is files, held
-  to the proofs of the contract's section 9.
+- **The level compiler is part of the editor** (`gz-lc`, `gz-lc-light`): `level_build`'s `compile` actions and
+  `level_compile` run it as the job `level_run` on every core, Play compiles with it, and `Grizzly.exe -headless
+  -compile <level folder>` is the same code without a window. No program is started to compile a level.
+- **The migration needed no game change** and nothing here asks for one: no commit in the game repository; what
+  crosses to the game is files, held to the proofs of the contract's section 9.
 
 ## Mod philosophy
 
@@ -322,7 +326,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - The editor's scanner of modes reads BOTH roots,
   `modules\` and `mods\`, because what is already installed must not break.
 - **Every writer passes `gz_editor::fsx::WriteGuard`** before it writes - the project's file operations, the scene's own files (Save Scene As and its exports), the module
-  build and the flat export, the level exports, the level build, the release stage, the compilers' stage and Play's
+  build and the flat export, the level exports, the level build, the release stage and Play's
   game root: nothing under the linked game's root, judged as written and where the path really is, but the module's
   `modules\<id>` (with its stage in `modules\.new`) and the flat `gamedata_<id>`. A level build writes into the open
   project (`gamedata\levels\<level>`, `gamedata\spawns`), never into the game.
