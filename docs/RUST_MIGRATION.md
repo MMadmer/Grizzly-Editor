@@ -30,7 +30,7 @@ Three requirements, in this order:
 | I2 | Nothing in the game names the editor (the existing rule, unchanged). |
 | I3 | At the cutover the Rust editor does everything the C++ editor does. Deliberate differences are listed in section 12 and nowhere else. |
 | I4 | Until the cutover the project folder was the interface between the two editors: both opened the same project, so no file format inside a project changed before it. It stays the contract with every project made before. |
-| I5 | The C++ editor is the oracle. Until the cutover `Source/` was not edited on this branch; since it, the oracle is the built C++ editor on disk (`Bin\x64\Release\LevelEditor.exe`, of the tag `cpp-editor-last`) and its answers recorded under `Intermediate/oracle`, keyed with the stamp it had at the cutover. |
+| I5 | The C++ editor is the oracle. Until the cutover `Source/` was not edited on this branch; since it, the oracle is the built C++ editor on disk (`Bin\x64\Release\LevelEditor.exe`, of the tag `cpp-editor-last`; a self-contained copy that no later build touches is kept in `Bin\x64\CppEditor`) and its answers recorded under `Intermediate/oracle`, keyed with the stamp it had at the cutover. |
 | I6 | Every crate is `#![forbid(unsafe_code)]` unless section 6 names it. |
 | I7 | The UI thread never waits: no file access, no network, no lock that another thread may hold for longer than a pointer swap, no GPU readback, no pipeline compile. It draws and presents; its one wait is for the surface before the first frame. |
 | I8 | State changes only through commands, and every command is reachable over MCP. |
