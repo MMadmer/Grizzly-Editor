@@ -469,7 +469,8 @@ says so in `device_sign_in`.
 Packaging compresses at the highest level, so a large mod can outlast the
 request timeout (three minutes by default; raise `GRIZZLY_MCP_REQUEST_TIMEOUT_MS`
 in the environment of both the editor and the bridge). The work continues
-either way: `grizzly_progress` reports it, and `action=cancel` stops it with the
+either way: the answer then says `"running": true` and names the job (see the end of
+"Errors" below), `grizzly_progress` reports it, and `action=cancel` stops it with the
 output folder untouched.
 
 ## Listing a mod in the Mod Browser
@@ -708,8 +709,15 @@ Errors come back as `{"ok":false,"error":"..."}`. Every connection is a task of 
 own and every request runs beside the others: a read answers from the editor's
 snapshots without waiting for a frame, and a long command (a build, a held
 screenshot) holds only its own connection. A request that takes longer than three
-minutes (`GRIZZLY_MCP_REQUEST_TIMEOUT_MS`) answers `editor busy (timeout)` while the
-command runs on to its end; a request line is capped at 1 MiB.
+minutes (`GRIZZLY_MCP_REQUEST_TIMEOUT_MS`) is answered while the command runs on to its
+end. When the command started a job that still runs (a level compile, a build, a
+package, a publish), the answer is `{"ok":false,"running":true,"command":...,"jobs":[{id,
+kind, title, stage, group, started_ms}],"follow":[...]}` and its `error` says the command
+is still running and that this is not its result: the job is fine, follow it with `jobs`
+(every job's `state`, `result` and `error` once it ended) or the command `follow` names
+(`level_build action=status`, `mod_publish action=status`, `mod_catalog action=status`, and `mod_export` / `mod_package answer_only=true` for the result once the job ended),
+and do not send the command again while it runs. Only a command with no job behind it
+answers `editor busy (timeout)`. A request line is capped at 1 MiB.
 
 ## Prompt block for the agent
 

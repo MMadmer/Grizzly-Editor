@@ -15,7 +15,7 @@ mod wake;
 
 pub use cancel::{Cancel, Cancelled};
 pub use exec::{ExecOptions, Executors, Runtime};
-pub use jobs::{JobBusy, JobCtx, JobError, JobId, JobInfo, JobState, Jobs};
+pub use jobs::{JobBusy, JobCtx, JobError, JobId, JobInfo, JobScope, JobState, Jobs, in_scope};
 pub use wake::Wake;
 
 /// The text of a panic payload, for a job or a command that failed by panicking.

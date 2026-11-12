@@ -70,8 +70,10 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - **The level compiler is part of the editor** (`gz-lc`, `gz-lc-light`): `level_build`'s `compile` actions and
   `level_compile` run it as the job `level_run` on every core, Play compiles with it, and `Grizzly.exe -headless
   -compile <level folder>` is the same code without a window. No program is started to compile a level.
-- **The migration needed no game change** and nothing here asks for one: no commit in the game repository; what
-  crosses to the game is files, held to the proofs of the contract's section 9.
+- **The move to Rust needed no game change.** Since it the game has one ability the editor uses when the linked
+  engine says so (`EngineAbilities` in `xrEngine.exe`'s version resource, read by `gz-game`): started on another fs
+  config (`-fsltx`) it writes nothing into its installation - the game's `docs/dead-air/CONTENT_BUNDLES.md`. What
+  crosses to the game otherwise is files, held to the proofs of the contract's section 9.
 
 ## Mod philosophy
 
@@ -1078,6 +1080,10 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   copy nobody goes back for. One choke point, the content operations of `gz-project`'s `ops.rs`, and it
   refuses the project root. Say so in the wording: "deleted for good", never
   "restorable".
+- **Play starts the installed game where it is** (`gz-levelbuild`'s `play.rs`): `<game>\xrEngine.exe -fsltx
+  <root>\fsgame.ltx`, the root holding the marker, the fs config, the staged gamedata and an app data - no program
+  and no link. A linked engine without the ability runs from copies in the root; the answer and the log say
+  `in_place` or `copied`. `test_play_game` lists the installed game before and after and wants it equal.
 - **Play clears only a root it made** (`gz-levelbuild`'s `play_root.rs`): the checks of a project's deletion stand
   in front of every Play root - never a project, the editor, a game, a user folder, a drive or a link, judged as
   written and where the path really is; only a missing or empty folder becomes a root and gets Play's marker

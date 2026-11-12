@@ -6,9 +6,9 @@
 //! left and when it closes.
 //!
 //! [`PREFS`] is every preference of `EditorPreferences.cpp` and `LevelPreferences.cpp` - its
-//! settings key, its type, its official label, help and unit - including those whose consumers
-//! come later (the viewport, the snap steps, recovery). A row is live while the settings file
-//! keeps its key; one the shell's settings do not define yet shows its default, read-only.
+//! settings key, its type, its official label, help and unit. Every row is live: the shell's
+//! settings keep its key (`the_shells_keys_are_live`); a row whose key they did not define would
+//! show its default, read-only.
 
 use std::sync::Arc;
 
@@ -20,7 +20,7 @@ use gz_ui::grid::{Grid, color, combo, format_number, help_footer, integer, numbe
 use gz_ui::list::{NavRowSpec, list, nav_row};
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
-use gz_ui::{Accent, Font, Icon, PropFlags, PropertyGrid, SearchField, Tone, palette};
+use gz_ui::{Accent, Font, Icon, PropFlags, PropertyGrid, SearchField, palette};
 use parking_lot::Mutex;
 
 use crate::keyboard::KeyboardPage;
@@ -260,14 +260,14 @@ pub const PREFS: &[Pref] = &[
         "Tools\\Box Selection\\Limited Depth",
         "bp_lim_depth",
         PrefKind::Switch,
-        "A box selects only as deep as the nearest object under its corners.",
+        "A box selects only as deep as the farthest scene object under its four corners.",
         "",
     ),
     pref(
         "Tools\\Box Selection\\Back Face Culling",
         "bp_cull",
         PrefKind::Switch,
-        "Faces turned away from the camera are not picked.",
+        "Faces turned away from the camera are not picked by a box that selects faces. A box of the level editor selects whole objects, so nothing here reads it.",
         "",
     ),
     pref(
@@ -652,9 +652,6 @@ impl PreferencesDoc {
                 }
             });
         }
-        if !rows.iter().all(|p| p.live()) && self.search.is_empty() {
-            g.message(Tone::Muted, "The settings that read Off or show a value without a field are not kept by this build yet: they take effect with the parts of the editor that use them.");
-        }
     }
 
     /// The page: its title, the rows that scroll, the help of the row under the mouse.
@@ -851,6 +848,9 @@ mod tests {
         }
         let fov = PREFS.iter().find(|p| p.key == "view_fov");
         assert!(fov.is_some_and(|p| p.live() && p.parts() == ("Viewport", "", "Field of View")));
+        // and every row is kept by the settings file: none waits for a part of the editor
+        let dead: Vec<&str> = PREFS.iter().filter(|p| !p.live()).map(|p| p.path).collect();
+        assert!(dead.is_empty(), "{dead:?}");
     }
 
     #[test]

@@ -24,6 +24,7 @@
 //!   `g.was_reset`, `g.block`; `help_footer`; values `text_field`, `number` / `integer`, `switch`,
 //!   `combo`, `color`, `vec3_field`, `pick_field` -> [`PickAction`], `path_field` ->
 //!   [`PathAction`], `chips`, `text_block`, `read_only`
+//! - [`form`] - a form's widgets outside a grid: `section`, `raised_section`, `check`, `hint_field`
 //! - [`list`] - [`list::list`]`(ui, id, size, |l| ..)` with `l.row(stable_id, selected, |ui| ..)`
 //!   and `l.row_actions(icons, tips)`; [`nav_row`] per [`NavRowSpec`]; `table_headers` per
 //!   [`list::Column`]
@@ -53,6 +54,7 @@ pub mod theme;
 pub mod card;
 pub mod dialog;
 pub mod file_dialog;
+pub mod form;
 pub mod grid;
 pub mod list;
 pub mod menu;

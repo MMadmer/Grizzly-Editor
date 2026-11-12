@@ -1516,6 +1516,7 @@ impl ShellState {
         // centre: what the tab says; the log's last line fills the gap before it
         let room_x1 = left_end.max(right_x - 12.0);
         let mut status_x = room_x1;
+        self.status_centre = None;
         let id = self.active.to_string();
         // the centre is the active document's: the Start page (or a card over it) has none
         if self.menus_shown
@@ -1557,6 +1558,9 @@ impl ShellState {
             ctx.data_mut(|d| d.insert_temp(Id::unique("gz-app.status_centre_w"), used));
             if used <= 0.0 {
                 status_x = room_x1;
+            } else {
+                self.status_centre =
+                    Some(Rect::from_min_max(pos2(status_x, rect.min.y), pos2(status_x + used, rect.max.y)));
             }
         }
         let line_x1 = status_x - 16.0;

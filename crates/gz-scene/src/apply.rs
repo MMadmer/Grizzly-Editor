@@ -1185,6 +1185,33 @@ mod tests {
     }
 
     #[test]
+    fn deleting_a_scene_object_takes_it_out_of_its_sectors() {
+        // `ESceneSectorTool::OnObjectRemove`: the sector that held the object alone goes, the
+        // other keeps the meshes of the object that stays
+        use crate::objects::{SectorData, default_data};
+        let mut s = SceneState::default();
+        let a = s.insert(Object::new(ObjClass::SceneObject, "a", default_data(ObjClass::SceneObject)));
+        s.insert(Object::new(ObjClass::SceneObject, "b", default_data(ObjClass::SceneObject)));
+        let only_a = SectorData { items: vec![("a".into(), "m".into())], ..SectorData::default() };
+        let both = SectorData {
+            items: vec![("A".into(), "m".into()), ("b".into(), "m".into())],
+            ..SectorData::default()
+        };
+        s.insert(Object::new(ObjClass::Sector, "s1", ObjData::Sector(only_a)));
+        let s2 = s.insert(Object::new(ObjClass::Sector, "s2", ObjData::Sector(both)));
+        s.selection.insert(a);
+        let t = T::new(s);
+        assert!(matches!(
+            t.send(SceneCmd::RemoveSelection { class: Some(ObjClass::SceneObject), label: "Delete".into() }),
+            Ok(SceneReply::Count(1))
+        ));
+        let s = t.state();
+        assert!(s.find_relaxed("s1").is_none(), "the sector left without a mesh goes");
+        let Some(ObjData::Sector(d)) = s.get(s2).map(|o| &o.data) else { panic!("s2 stays") };
+        assert_eq!(d.items, vec![(SmolStr::new("b"), SmolStr::new("m"))]);
+    }
+
+    #[test]
     fn undo_restores_the_content_and_keeps_the_view() {
         let mut s = SceneState::default();
         let id = s.insert(Object::new(ObjClass::Light, "l", ObjData::Light(LightData::default())));

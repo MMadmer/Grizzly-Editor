@@ -1,25 +1,36 @@
 """The run-time net of `tools/rust/test.sh`: no test writes a program file.
 
-test.sh gives the test binaries a temp folder of their own (TEMP / TMP) and runs this beside them:
+test.sh runs it twice beside the test binaries. Once over a temp folder of their own (TEMP / TMP):
 
-    python tools/rust/watch_programs.py <folder> <report> [--ready <file>]
+    python tools/rust/watch_programs.py <folder> <report> [--ready <file>] --remove
+
+and once over the repository's own tree, which holds programs and scripts of its own and where cargo
+writes its programs (`Intermediate\cargo`, left out; cargo does not build while the binaries run):
+
+    python tools/rust/watch_programs.py <repo> <report> --ready <file> --marks Intermediate/test-logs
+        --exclude Intermediate/cargo --since-start
 
 It reads the folder's change notifications (ReadDirectoryChangesW through ctypes, the whole tree, a
 1 MB buffer), so a file is seen even when the test deletes it a millisecond later: every file
 created, renamed into place or written there is a finding when its name ends in a program's extension
 (.exe .dll .com .scr .bat .cmd .ps1 .msi) or its first two bytes are `MZ` (read where the file still
 exists: opened with every sharing flag, two bytes, closed at once: a test's own delete is never
-blocked). A buffer the system could not fill in time (it says so with an empty answer) makes it walk
-the whole folder once instead, and the report says so.
+blocked). With `--since-start` only a file made after the watch began counts (its creation time), so
+the tree's own `Build.ps1` or a release build edited meanwhile is no finding. A buffer the system
+could not fill in time (it says so with an empty answer) makes it walk the folder once instead (the
+excluded paths left out), and the report says so.
 
 What it cannot see: a file whose NAME is harmless and that is gone before it can be opened - its `MZ`
-head is never read (a program's name is seen however short the file lives); and anything written
-outside this folder. `tools/rust/check_test_files.py` reads the sources for both.
+head is never read (a program's name is seen however short the file lives); in a `--since-start` tree,
+a file older than the watch that a test rewrites in place or renames to a program's name; anything
+under an excluded path; and anything written outside the two watched trees.
+`tools/rust/check_test_files.py` reads the sources for all of them.
 
 The report has one line per finding, `<unix time>|<path relative to the folder>|<why>`, then
 `events <n>`, `overflows <n>` and `cpu <seconds>` (what the watcher cost). It stops when a file
-named `.stop` appears at the folder's top; with `--remove` it then removes the folder - a link
-inside is unlinked, never followed - and writes the report last.
+named `.stop` appears in the marks folder (`--marks`, the folder's top by default) - the mark that
+proves the watch armed (`.watch_armed`) is written there too and removed at the end; with `--remove`
+it then removes the folder - a link inside is unlinked, never followed - and writes the report last.
 """
 from __future__ import annotations
 
@@ -74,10 +85,18 @@ def head(path: str) -> bytes:
         k32.CloseHandle(h)
 
 
-def why(top: str, rel: str) -> str | None:
+def why(top: str, rel: str, since: float | None = None) -> str | None:
     path = os.path.join(top, rel)
     if os.path.isdir(path):
         return None
+    if since is not None:
+        # a tree with programs of its own: only what was made after the watch began
+        try:
+            if os.stat(path).st_ctime < since:
+                return None
+        except OSError:
+            # gone already: its name alone can still say what it was
+            pass
     if rel.lower().endswith(EXTENSIONS):
         return "a program's name"
     try:
@@ -88,15 +107,21 @@ def why(top: str, rel: str) -> str | None:
     return "starts with MZ" if head(path) == b"MZ" else None
 
 
-def sweep(top: str) -> list[tuple[str, str]]:
+def excluded(rel: str, excludes: list[str]) -> bool:
+    low = rel.lower()
+    return any(low == e or low.startswith(e + "\\") for e in excludes)
+
+
+def sweep(top: str, excludes: list[str], since: float | None) -> list[tuple[str, str]]:
     """Every program file the folder holds now (what an overflowed buffer could not name)."""
     out = []
     for d, dirs, files in os.walk(top):
         dirs[:] = [n for n in dirs if not os.path.islink(os.path.join(d, n))
-                   and not getattr(os.lstat(os.path.join(d, n)), "st_reparse_tag", 0)]
+                   and not getattr(os.lstat(os.path.join(d, n)), "st_reparse_tag", 0)
+                   and not excluded(os.path.relpath(os.path.join(d, n), top), excludes)]
         for n in files:
             rel = os.path.relpath(os.path.join(d, n), top)
-            w = why(top, rel)
+            w = why(top, rel, since)
             if w:
                 out.append((rel, w))
     return out
@@ -144,8 +169,16 @@ def main() -> int:
     ap.add_argument("report")
     ap.add_argument("--ready")
     ap.add_argument("--remove", action="store_true")
+    ap.add_argument("--marks", default="", help="the folder of the .stop and armed marks, relative to the watched one")
+    ap.add_argument("--exclude", action="append", default=[], help="a path relative to the folder that is not judged")
+    ap.add_argument("--since-start", action="store_true", help="only files made after the watch began count")
     args = ap.parse_args()
     top = os.path.abspath(args.folder)
+    since = time.time() - 1.0 if args.since_start else None
+    excludes = [os.path.normpath(e).lower().rstrip("\\") for e in args.exclude]
+    marks = os.path.normpath(args.marks) if args.marks else ""
+    stop_rel = os.path.join(marks, STOP) if marks else STOP
+    ready_rel = os.path.join(marks, READY) if marks else READY
     h = k32.CreateFileW(top, FILE_LIST_DIRECTORY, SHARE_ALL, None, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, None)
     if h == INVALID or h is None:
         print("the folder cannot be watched: %s (error %d)" % (top, ctypes.get_last_error()), file=sys.stderr)
@@ -168,7 +201,7 @@ def main() -> int:
 
     def arm() -> None:
         while not armed.is_set():
-            with open(os.path.join(top, READY), "w") as f:
+            with open(os.path.join(top, ready_rel), "w") as f:
                 f.write("armed\n")
             armed.wait(0.05)
     threading.Thread(target=arm, daemon=True).start()
@@ -180,25 +213,25 @@ def main() -> int:
             break
         if got.value == 0:
             overflows += 1
-            for rel, w in sweep(top):
+            for rel, w in sweep(top, excludes, since):
                 note(rel, w + " (found by a walk after an overflow)")
-            stop = os.path.exists(os.path.join(top, STOP))
+            stop = os.path.exists(os.path.join(top, stop_rel))
             continue
         at = 0
         while True:
             nxt, action, length = struct.unpack_from("<III", buf.raw, at)
             rel = buf.raw[at + 12:at + 12 + length].decode("utf-16-le")
             events += 1
-            if rel == STOP:
+            if rel == stop_rel:
                 stop = True
-            elif rel == READY:
+            elif rel == ready_rel:
                 if not armed.is_set():
                     armed.set()
                     if args.ready:
                         with open(args.ready, "w") as f:
                             f.write("ready\n")
-            elif action in (ACTION_ADDED, ACTION_MODIFIED, ACTION_RENAMED_NEW):
-                w = why(top, rel)
+            elif action in (ACTION_ADDED, ACTION_MODIFIED, ACTION_RENAMED_NEW) and not excluded(rel, excludes):
+                w = why(top, rel, since)
                 if w:
                     note(rel, w)
             if not nxt:
@@ -206,6 +239,11 @@ def main() -> int:
             at += nxt
     k32.CloseHandle(h)
     cpu = sum(os.times()[:2])
+    for mark in (ready_rel, stop_rel):
+        try:
+            os.unlink(os.path.join(top, mark))
+        except OSError:
+            pass
     if args.remove:
         remove(top)
     # the report last: whoever waits for it finds the folder gone already

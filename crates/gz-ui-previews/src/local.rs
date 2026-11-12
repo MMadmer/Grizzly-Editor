@@ -3,7 +3,7 @@
 
 use egui::{Align2, CornerRadius, Painter, Pos2, Rect, Sense, Ui, Vec2, pos2};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Font, Icon, Palette, icons, metrics, palette};
+use gz_ui::{Font, Palette, palette};
 
 /// The checkerboard a picture with alpha is judged against: only the cells inside `clip` are
 /// painted, lined up with `origin` so they move with the picture (a zoomed-in 4096 texture is
@@ -46,48 +46,8 @@ pub fn local_heading(ui: &mut Ui, title: &str, title_clip: Clip, facts: &[(&str,
 /// the whole row a click target; `open` is its state until it is clicked. Returns whether it is
 /// open.
 pub fn local_section(ui: &mut Ui, id_salt: &str, title: &str, open: bool) -> bool {
-    let ctx = ui.ctx().clone();
-    let p = palette(&ctx);
     let id = ui.make_persistent_id(("gz-ui-previews.section", id_salt));
-    let mut is_open = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(open);
-    let (rect, _) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), metrics::SECTION_HEADER), Sense::hover());
-    let resp = ui.interact(rect, id.with("header"), Sense::click());
-    if resp.clicked() {
-        is_open = !is_open;
-    }
-    ctx.data_mut(|d| d.insert_temp(id, is_open));
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        painter.rect_filled(
-            rect,
-            CornerRadius::same(metrics::RADIUS),
-            if resp.hovered() { p.hover } else { p.raised },
-        );
-        let chevron = Rect::from_min_size(
-            pos2(rect.min.x + 6.0, rect.center().y - metrics::GLYPH_STATUS * 0.5),
-            Vec2::splat(metrics::GLYPH_STATUS),
-        );
-        icons::draw(
-            painter,
-            if is_open { Icon::ChevronDown } else { Icon::ChevronRight },
-            chevron,
-            p.text_secondary,
-        );
-        let x = chevron.max.x + 6.0;
-        text::paint(
-            painter,
-            &Font::Strong.id(),
-            pos2(x, rect.center().y),
-            Align2::LEFT_CENTER,
-            p.text,
-            title,
-            Some((rect.max.x - x - 6.0).max(0.0)),
-            Clip::End,
-        );
-    }
-    gz_ui::audit::control(&ctx, title, true, None, None, rect);
-    is_open
+    gz_ui::form::raised_section(ui, id, title, open, None)
 }
 
 /// A muted line of Small text at the left and another at the right of one row: a timeline's

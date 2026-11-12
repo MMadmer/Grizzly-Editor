@@ -616,9 +616,43 @@ pub fn frustum_reach(view_proj: &Mat4) -> Aabb {
     b
 }
 
-/// The objects a box of the picture holds (`FrustumSelect`): a frustum through the rectangle
-/// (pixels of a picture `size` big), tested against each object's world box.
+/// The rectangle's corners in the picture, as `SelectionFrustum` walks them.
+fn rect_corners(a: glam::Vec2, b: glam::Vec2) -> [glam::Vec2; 4] {
+    let (x0, x1, y0, y1) = (a.x.min(b.x), a.x.max(b.x), a.y.min(b.y), a.y.max(b.y));
+    [glam::Vec2::new(x0, y0), glam::Vec2::new(x1, y0), glam::Vec2::new(x1, y1), glam::Vec2::new(x0, y1)]
+}
+
+/// How deep a box selects with Limited Depth on (`SelectionFrustum`): the farthest scene object
+/// hit through the rectangle's four corners, plus `tolerance`; `None` (the whole view) when no
+/// corner meets one nearer than `far`.
 #[must_use]
+pub fn box_depth(
+    state: &SceneState,
+    lib: &Library,
+    pick: &ScenePick,
+    camera: &gz_render::Camera,
+    size: [u32; 2],
+    (a, b): (glam::Vec2, glam::Vec2),
+    (near, far, tolerance): (f32, f32, f32),
+) -> Option<f32> {
+    let mut depth = 0.0f32;
+    for corner in rect_corners(a, b) {
+        let Some(ray) = gz_render::pick_ray(camera, size, corner) else { continue };
+        let hit = pick.ray_pick(state, lib, ray.origin, ray.dir, far, &|o: &Object| {
+            o.class == ObjClass::SceneObject && o.flags.visible
+        });
+        if let Some(h) = hit {
+            depth = depth.max(h.t);
+        }
+    }
+    (depth >= near).then_some(depth + tolerance)
+}
+
+/// The objects a box of the picture holds (`FrustumSelect`): a frustum through the rectangle
+/// (pixels of a picture `size` big), tested against each object's world box; with `depth` it
+/// ends at the plane through the corners' rays that far out (Limited Depth).
+#[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn frustum_select(
     state: &SceneState,
     lib: &Library,
@@ -627,6 +661,7 @@ pub fn frustum_select(
     a: glam::Vec2,
     b: glam::Vec2,
     class: ObjClass,
+    depth: Option<f32>,
 ) -> Vec<ObjId> {
     let (w, h) = (size[0].max(1) as f32, size[1].max(1) as f32);
     let (x0, x1) = (a.x.min(b.x) / w * 2.0 - 1.0, a.x.max(b.x) / w * 2.0 - 1.0);
@@ -646,15 +681,44 @@ pub fn frustum_select(
         glam::Vec4::new(tx, ty, 0.0, 1.0),
     );
     let frustum = gz_render::Frustum::from_view_proj(&(s * camera.view_proj(size)));
+    // Limited Depth: the plane through three of the corners' points `depth` out, the camera on
+    // its inner side, closes the box (`SelectionFrustum`'s last plane)
+    let limit = depth.and_then(|d| {
+        let p: Vec<Vec3> = rect_corners(a, b)
+            .iter()
+            .filter_map(|c| gz_render::pick_ray(camera, size, *c))
+            .map(|r| r.at(d))
+            .collect();
+        let [p0, p1, p2, ..] = p.as_slice() else { return None };
+        let mut n = (*p1 - *p0).cross(*p2 - *p0);
+        if n.dot(camera.position - *p0) < 0.0 {
+            n = -n;
+        }
+        n.try_normalize().map(|n| n.extend(-n.dot(*p0)))
+    });
+    let near_side = |c: Vec3, r: f32| limit.is_none_or(|pl| pl.truncate().dot(c) + pl.w >= -r);
+    let near_box = |b: &Aabb| {
+        limit.is_none_or(|pl| {
+            let n = pl.truncate();
+            n.dot(Vec3::select(n.cmpge(Vec3::ZERO), b.max, b.min)) + pl.w >= 0.0
+        })
+    };
     state
         .of_class(class)
         .filter(|o| o.flags.visible && o.editable())
         .filter(|o| match &o.data {
             // lights, sounds, glows and particles test their mark, not their range
-            ObjData::Light(_) | ObjData::SoundSrc(_) => frustum.intersects_sphere(o.position(), VIS_RADIUS),
-            ObjData::Glow(g) => frustum.intersects_sphere(o.position(), g.radius),
-            ObjData::Particles(_) => frustum.intersects_sphere(o.position(), objects::PSOBJECT_SIZE),
-            _ => world_box(state, lib, o).is_some_and(|b| frustum.intersects_aabb(&b)),
+            ObjData::Light(_) | ObjData::SoundSrc(_) => {
+                frustum.intersects_sphere(o.position(), VIS_RADIUS) && near_side(o.position(), VIS_RADIUS)
+            }
+            ObjData::Glow(g) => {
+                frustum.intersects_sphere(o.position(), g.radius) && near_side(o.position(), g.radius)
+            }
+            ObjData::Particles(_) => {
+                frustum.intersects_sphere(o.position(), objects::PSOBJECT_SIZE)
+                    && near_side(o.position(), objects::PSOBJECT_SIZE)
+            }
+            _ => world_box(state, lib, o).is_some_and(|b| frustum.intersects_aabb(&b) && near_box(&b)),
         })
         .map(|o| o.id)
         .collect()
@@ -813,6 +877,7 @@ mod tests {
             glam::Vec2::new(350.0, 250.0),
             glam::Vec2::new(450.0, 350.0),
             ObjClass::Light,
+            None,
         );
         assert_eq!(hit.len(), 1);
         let miss = frustum_select(
@@ -823,8 +888,16 @@ mod tests {
             glam::Vec2::new(0.0, 0.0),
             glam::Vec2::new(50.0, 50.0),
             ObjClass::Light,
+            None,
         );
         assert!(miss.is_empty());
+        // Limited Depth: the light is 13 m out; a box 5 m deep stops short of it, 20 m reaches it
+        let (a, b) = (glam::Vec2::new(350.0, 250.0), glam::Vec2::new(450.0, 350.0));
+        assert!(frustum_select(&s, &lib, &cam, size, a, b, ObjClass::Light, Some(5.0)).is_empty());
+        assert_eq!(frustum_select(&s, &lib, &cam, size, a, b, ObjClass::Light, Some(20.0)).len(), 1);
+        // nothing under the corners: no depth, the whole view
+        let pick = ScenePick::build(&s, &lib);
+        assert_eq!(box_depth(&s, &lib, &pick, &cam, size, (a, b), (0.1, 1500.0, 0.1)), None);
     }
 
     #[test]

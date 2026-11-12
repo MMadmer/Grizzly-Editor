@@ -282,6 +282,14 @@ pub fn toast(ctx: &Context, tone: Tone, text_: &str) {
     ctx.request_repaint();
 }
 
+/// The texts of the notes queued or on screen, oldest first: what MCP answers of them.
+#[must_use]
+pub fn toast_texts(ctx: &Context) -> Vec<String> {
+    ctx.data(|d| d.get_temp::<Toasts>(toasts_id()))
+        .map(|t| t.items.into_iter().map(|i| i.text).collect())
+        .unwrap_or_default()
+}
+
 /// Draws the queued notes stacked in the bottom-right corner of `ui`'s rectangle (the work area)
 /// above everything else, up to 360 pt wide, each with a cross to dismiss it.
 pub fn draw_toasts(ui: &mut Ui) {

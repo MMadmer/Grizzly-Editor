@@ -13,7 +13,8 @@
 # others. The corpus variables are set to this machine's data when they are not set already.
 # No test writes a program file, held at run time: the binaries' TEMP / TMP is a folder of this
 # run's, watched by tools/rust/watch_programs.py while they run (tools/rust/check_test_files.py
-# holds the source). Exit code 1 on any failure.
+# holds the source), and so is the repository's own tree but Intermediate\cargo. Exit code 1 on
+# any failure.
 set -u
 cd "$(dirname "$0")/../.." || exit 2
 root=$(pwd)
@@ -157,14 +158,18 @@ run_one() { # name dir exe fp
 jobs_max=$(( $(nproc 2>/dev/null || echo 4) / 2 ))
 [ $jobs_max -lt 1 ] && jobs_max=1
 rm -f Intermediate/test-logs/*.green Intermediate/test-logs/*.failed Intermediate/test-logs/*.skips \
-    Intermediate/test-logs/*.span Intermediate/test-logs/watch.txt Intermediate/test-logs/watch.ready
+    Intermediate/test-logs/*.span Intermediate/test-logs/watch.txt Intermediate/test-logs/watch.ready \
+    Intermediate/test-logs/watch_repo.txt Intermediate/test-logs/watch_repo.ready Intermediate/test-logs/.stop
 cached=$(grep -c '^cached|' Intermediate/test-logs/plan.txt)
 ran=$(grep -c '^run|' Intermediate/test-logs/plan.txt)
 grep '^cached|' Intermediate/test-logs/plan.txt | awk -F'|' '{ printf "cached %-34s %s tests\n", $2, $3 }'
 
 # the run-time net (tools/rust/watch_programs.py): the binaries get a temp folder of their own
-# (TEMP / TMP), watched through its change notifications while they run; a file created there
-# with a program's name or an MZ header fails the run, even one deleted at once
+# (TEMP / TMP), watched through its change notifications while they run, and so is the
+# repository's own tree (not Intermediate\cargo, where cargo writes its programs - it does not
+# build while they run; only what is made meanwhile counts there, the tree has scripts and builds
+# of its own); a file created in either with a program's name or an MZ header fails the run, even
+# one deleted at once
 watch_dir=$(mktemp -d /tmp/gztest_XXXXXX)
 watch_win=$(cygpath -w "$watch_dir")
 watch_failed=0
@@ -173,14 +178,20 @@ if [ "$ran" -gt 0 ]; then
     python -I tools/rust/watch_programs.py "$watch_win" Intermediate/test-logs/watch.txt \
         --ready Intermediate/test-logs/watch.ready --remove &
     disown
+    python -I tools/rust/watch_programs.py "$(cygpath -w "$root")" Intermediate/test-logs/watch_repo.txt \
+        --ready Intermediate/test-logs/watch_repo.ready --marks Intermediate/test-logs \
+        --exclude Intermediate/cargo --since-start &
+    disown
     t_arm=$(now)
-    while [ ! -f Intermediate/test-logs/watch.ready ]; do
-        if awk -v a="$t_arm" -v b="$(now)" 'BEGIN { exit !(b - a > 10) }'; then
-            echo "FAILED: the run-time net could not watch $watch_win"
-            watch_failed=1
-            break
-        fi
-        sleep 0.05
+    for ready in watch.ready watch_repo.ready; do
+        while [ ! -f "Intermediate/test-logs/$ready" ]; do
+            if awk -v a="$t_arm" -v b="$(now)" 'BEGIN { exit !(b - a > 10) }'; then
+                echo "FAILED: the run-time net could not watch ($ready)"
+                watch_failed=1
+                break
+            fi
+            sleep 0.05
+        done
     done
 fi
 alone=()
@@ -204,30 +215,38 @@ run_secs=$(since "$t1")
 watch_note=""
 if [ "$ran" -gt 0 ] && [ $watch_failed -eq 0 ]; then
     : > "$watch_dir/.stop"
+    : > Intermediate/test-logs/.stop
     t_stop=$(now)
-    while [ ! -f Intermediate/test-logs/watch.txt ]; do
-        if awk -v a="$t_stop" -v b="$(now)" 'BEGIN { exit !(b - a > 60) }'; then
-            echo "FAILED: the run-time net did not report"
-            watch_failed=1
-            break
-        fi
-        sleep 0.05
+    for report in watch.txt watch_repo.txt; do
+        while [ ! -f "Intermediate/test-logs/$report" ]; do
+            if awk -v a="$t_stop" -v b="$(now)" 'BEGIN { exit !(b - a > 60) }'; then
+                echo "FAILED: the run-time net did not report ($report)"
+                watch_failed=1
+                break
+            fi
+            sleep 0.05
+        done
     done
-    if [ -f Intermediate/test-logs/watch.txt ]; then
+    if [ -f Intermediate/test-logs/watch.txt ] && [ -f Intermediate/test-logs/watch_repo.txt ]; then
         # a finding with the binaries that ran at its time (a second either side)
         cat Intermediate/test-logs/*.span 2>/dev/null > Intermediate/test-logs/spans.txt
         awk -F'|' -v spans=Intermediate/test-logs/spans.txt '
             BEGIN { while ((getline l < spans) > 0) { split(l, f, " "); n++; a[n] = f[1]; b[n] = f[2]; who[n] = f[3] } }
+            FNR == 1 { where = (FILENAME ~ /watch_repo/) ? "the repository" : "its temp folder" }
             NF == 3 {
                 list = ""
                 for (i = 1; i <= n; i++) if ($1 >= a[i] - 1 && $1 <= b[i] + 1) list = list (list == "" ? "" : ", ") who[i]
-                printf "FAILED: a test wrote a program file: %s (%s) - while %s ran\n", $2, $3, (list == "" ? "no binary" : list)
+                printf "FAILED: a test wrote a program file in %s: %s (%s) - while %s ran\n", where, $2, $3, (list == "" ? "no binary" : list)
                 for (i = 1; i <= n; i++) if ($1 >= a[i] - 1 && $1 <= b[i] + 1) print who[i] > "/dev/stderr"
-            }' Intermediate/test-logs/watch.txt > Intermediate/test-logs/watch_findings.txt 2> Intermediate/test-logs/watch_blame.txt
+            }' Intermediate/test-logs/watch.txt Intermediate/test-logs/watch_repo.txt \
+            > Intermediate/test-logs/watch_findings.txt 2> Intermediate/test-logs/watch_blame.txt
         cat Intermediate/test-logs/watch_findings.txt
         [ -s Intermediate/test-logs/watch_findings.txt ] && watch_failed=1
-        watch_note=$(awk '$1 == "events" { e = $2 } $1 == "overflows" { o = $2 } $1 == "cpu" { c = $2 }
-            END { printf "; the net: %d events, %d overflows, %s s of CPU", e, o, c }' Intermediate/test-logs/watch.txt)
+        cost() {
+            awk '$1 == "events" { e = $2 } $1 == "overflows" { o = $2 } $1 == "cpu" { c = $2 }
+                END { printf "%d events, %d overflows, %s s of CPU", e, o, c }' "$1"
+        }
+        watch_note="; the net: $(cost Intermediate/test-logs/watch.txt); the repository: $(cost Intermediate/test-logs/watch_repo.txt)"
     fi
 fi
 [ -d "$watch_dir" ] && [ $watch_failed -eq 0 ] && rmdir "$watch_dir" 2>/dev/null

@@ -60,6 +60,7 @@ SUITES: dict[str, dict] = {
     "test_world": {"args": ["--project", TEST], "timeout": 180},
     "test_properties": {"args": ["--project", TEST], "timeout": 180},
     "test_scene_tools": {"args": ["--project", TEST], "timeout": 120},
+    "test_level_commands": {"args": ["--project", TEST], "timeout": 300},
     "test_previews": {"args": ["--project", OD], "timeout": 180},
     "test_mod_publish": {"args": ["--project", OD], "timeout": 240},
     "test_mod_catalog": {"args": ["--project", OD], "timeout": 300},

@@ -1768,6 +1768,7 @@ dependencies = [
  "gz-base",
  "gz-corpus",
  "gz-editor",
+ "gz-ltx",
  "gz-project",
  "gz-store",
  "gz-task",

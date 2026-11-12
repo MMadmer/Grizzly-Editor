@@ -2,11 +2,10 @@
 //! (docs/UI_DESIGN.md, section 4: "A widget the kit lacks is written as a local one").
 
 use egui::{
-    Align, Align2, CornerRadius, Id, Key, LayerId, Layout, Margin, Popup, Rect, Response, ScrollArea, Sense,
-    Stroke, StrokeKind, TextEdit, TextureId, Ui, UiBuilder, Vec2, pos2,
+    Align, CornerRadius, Id, Key, LayerId, Layout, Margin, Popup, Rect, Response, ScrollArea, Sense, Stroke,
+    StrokeKind, TextEdit, TextureId, Ui, UiBuilder, Vec2, pos2,
 };
 use gz_ui::menu::menu_popup;
-use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
 use gz_ui::{Font, Icon, MenuItem, SearchField, Tone, icons, menu_item, metrics, palette};
 
@@ -15,16 +14,7 @@ use gz_ui::{Font, Icon, MenuItem, SearchField, Tone, icons, menu_item, metrics, 
 pub fn local_text_field(ui: &mut Ui, id_salt: &str, value: &mut String, hint: &str) -> Response {
     let id = ui.make_persistent_id(("gz-ui-mod.text", id_salt));
     let w = ui.available_width().max(em(3.0));
-
-    ui.add(
-        TextEdit::singleline(value)
-            .id(id)
-            .font(Font::Body.id())
-            .margin(Margin::symmetric(8, 4))
-            .hint_text(hint)
-            .desired_width(w)
-            .min_size(Vec2::new(w, metrics::FRAME)),
-    )
+    gz_ui::form::hint_field(ui, id, value, hint, w)
 }
 
 /// A password field: the text is never shown.
@@ -52,48 +42,8 @@ pub fn local_password_field(
 
 /// A switch with its label after it; a click on either flips it. `width` is the room it takes.
 pub fn local_check(ui: &mut Ui, id_salt: &str, label: &str, value: &mut bool, width: f32) -> bool {
-    let ctx = ui.ctx().clone();
-    let p = palette(&ctx);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, metrics::FRAME), Sense::hover());
     let id = ui.make_persistent_id(("gz-ui-mod.check", id_salt));
-    let resp = ui.interact(rect, id, Sense::click());
-    let mut changed = false;
-    if resp.clicked() {
-        *value = !*value;
-        changed = true;
-    }
-    if ui.is_rect_visible(rect) {
-        let b = Rect::from_center_size(
-            pos2(rect.min.x + metrics::FRAME * 0.5, rect.center().y),
-            Vec2::splat(16.0),
-        );
-        let radius = CornerRadius::same(3);
-        if *value {
-            ui.painter().rect_filled(b, radius, if resp.hovered() { p.primary_hover } else { p.accent });
-            icons::draw(ui.painter(), Icon::Check, b.shrink(2.0), p.on_fill);
-        } else {
-            ui.painter().rect(
-                b,
-                radius,
-                if resp.hovered() { p.input_hover } else { p.input },
-                Stroke::new(1.0, p.border_strong),
-                StrokeKind::Inside,
-            );
-        }
-        let x = rect.min.x + metrics::FRAME + 4.0;
-        text::paint(
-            ui.painter(),
-            &Font::Body.id(),
-            pos2(x, rect.center().y),
-            Align2::LEFT_CENTER,
-            p.text,
-            label,
-            Some((rect.max.x - x).max(0.0)),
-            Clip::End,
-        );
-    }
-    gz_ui::audit::control(&ctx, label, true, None, None, rect);
-    changed
+    gz_ui::form::check(ui, id, label, value, width)
 }
 
 /// A block inside one property row: what `add` draws flows top-down from the value's left edge,

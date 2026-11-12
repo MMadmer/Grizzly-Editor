@@ -242,7 +242,10 @@ async fn ui_list(editor: Arc<Editor>, _args: Args, _origin: Origin) -> Reply {
             .collect();
         out.insert("popups".into(), Value::Array(popups));
         out.insert("work_area".into(), rect_px(shell.work(), ppp));
+        out.insert("toasts".into(), json!(gz_ui::state::toast_texts(ctx)));
         out.insert("start_page".into(), json!(shell.start_page()));
+        // the status bar's centre: the active document's status, none on the Start page
+        out.insert("status_centre".into(), shell.status_centre.map_or(Value::Null, |r| rect_px(r, ppp)));
         out.insert("size_class".into(), json!(shell.size_class()));
         let level = shell.level_state();
         out.insert(
@@ -549,7 +552,7 @@ async fn ui_toast(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let text = args.text("text").unwrap_or("A note.").to_owned();
     on_ui(&editor, move |_, ctx| {
         gz_ui::state::toast(ctx, Tone::Info, &text);
-        Ok(Value::Null)
+        Ok(json!({ "toasts": gz_ui::state::toast_texts(ctx) }))
     })
     .await
 }

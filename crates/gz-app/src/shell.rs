@@ -256,6 +256,9 @@ pub struct ShellState {
     pub(crate) palette: PaletteState,
     pub(crate) card_open: bool,
     pub(crate) card_rect: Option<Rect>,
+    /// Where the active document's status drew in the status bar's centre last frame; `None`
+    /// on the Start page and its cards, which are no document.
+    pub(crate) status_centre: Option<Rect>,
     seen_jobs: Vec<JobId>,
     pub(crate) cancelled: FxHashSet<JobId>,
     session: Session,
@@ -381,6 +384,7 @@ impl ShellState {
             popups_last: Vec::new(),
             palette: PaletteState::default(),
             card_open: false,
+            status_centre: None,
             card_rect: None,
             seen_jobs: Vec::new(),
             cancelled: FxHashSet::default(),

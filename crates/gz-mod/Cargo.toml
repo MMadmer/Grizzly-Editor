@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 gz-base.workspace = true
+gz-ltx.workspace = true
 gz-task.workspace = true
 gz-store.workspace = true
 gz-editor.workspace = true

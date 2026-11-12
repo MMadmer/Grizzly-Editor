@@ -10,7 +10,10 @@ Over MCP on a THROW-AWAY COPY of a project, with a gigabyte of payload so that a
   * a module the game holds open is refused with its name, and stays whole;
   * a packaging runs the same way and answers what mod_package always answered;
   * the UI's frames keep their own time while a build runs (frame_pacing: the frame's work apart from the wait for
-    the presentation, View > Real Time on so that the editor draws every frame).
+    the presentation, View > Real Time on so that the editor draws every frame);
+  * T: with a request timeout of 0.3 s (GRIZZLY_MCP_REQUEST_TIMEOUT_MS, an editor started for it) a build is answered
+    as still running - ok false, running true, its job and where to follow it, never "editor busy" - and the job
+    ends by itself, done, as `jobs` shows.
 
     python tools/qa/test_build_job.py --project <project> [--only A,C,...] [--shots <folder>]
 
@@ -40,7 +43,7 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 MCP = qa_target.MCP
 PAYLOAD_FILES = 24
 PAYLOAD_MB = 48
-PHASES = "ABCDE"
+PHASES = "ABCDTE"
 # the frame's own work while a build runs, mean over the build's frames: measured 3.5-7.8 ms on the reference mod
 # (STATE.md, "What the QA pass left, closed"); a frame that waited for vsync does not count
 FRAME_WORK_MEAN_MS = 16.0
@@ -72,14 +75,15 @@ def mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
     return json.loads(buf.decode("utf-8"))
 
 
-def start_editor(project: str) -> subprocess.Popen:
+def start_editor(project: str, env: dict | None = None) -> subprocess.Popen:
     exe = qa_target.exe()
     startup = subprocess.STARTUPINFO()
     startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
     # shown, never activated: a minimised editor draws no frame by itself, and A times the frames
     startup.wShowWindow = 4  # SW_SHOWNOACTIVATE
     qa_target.guard_project(project)
-    proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project], cwd=os.path.dirname(exe), startupinfo=startup)
+    proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project], cwd=os.path.dirname(exe), startupinfo=startup,
+                            env={**os.environ, **(env or {})})
     deadline = time.monotonic() + 240
     while time.monotonic() < deadline:
         try:
@@ -138,6 +142,8 @@ class Run:
         self.scratch = os.path.join(game, "modules", ".new")
         self.target = game.replace("\\", "/")
         self.built = False
+        # closes the editor and starts it again with these variables (main's)
+        self.restart = lambda env: None
 
     def ensure_built(self) -> None:
         """What B, C and D start from: a module built from the payload as it was written."""
@@ -241,6 +247,36 @@ class Run:
         check(fingerprint(self.module) == before and not os.path.exists(self.scratch), "D and it stays whole")
 
     # ---- E: a packaging --------------------------------------------------------------------------------------------
+    # ---- T: a request past its timeout names the job that goes on ----------------------------------------------------
+    def t(self) -> None:
+        self.restart({"GRIZZLY_MCP_REQUEST_TIMEOUT_MS": "300"})
+        try:
+            target = os.path.join(os.path.dirname(self.game), "game_t").replace("\\", "/")
+            began = time.monotonic()
+            a = mcp("mod_export", target=target, timeout=60)
+            took = time.monotonic() - began
+            jobs = a.get("jobs") or [{}]
+            check(a.get("ok") is False and a.get("running") is True and jobs[0].get("kind") == "build"
+                  and "jobs" in (a.get("follow") or []) and "busy" not in a.get("error", ""),
+                  "T a build past the 0.3 s timeout is answered as still running, naming its job (%.2f s)" % took,
+                  json.dumps(a)[:400])
+            check(a.get("error", "").startswith("mod_export is still running") and "not its result" in a.get("error", ""),
+                  "T its error says so in words", a.get("error", ""))
+            job_id = jobs[0].get("id")
+            deadline = time.monotonic() + 240
+            info = {}
+            while time.monotonic() < deadline:
+                info = next((j for j in mcp("jobs").get("jobs", []) if j.get("id") == job_id), {})
+                if info.get("state") != "running":
+                    break
+                time.sleep(0.2)
+            check(info.get("state") == "done", "T the job ends by itself, done, as jobs shows", json.dumps(info)[:300])
+            quick = mcp("mod_manifest")
+            check(quick.get("ok") and "running" not in quick, "T a command that ends in time answers as before",
+                  json.dumps(quick)[:200])
+        finally:
+            self.restart({})
+
     def e(self) -> None:
         # the project is enough to package: random payload only costs the zip its time
         for i in range(PAYLOAD_FILES):
@@ -296,6 +332,14 @@ def main() -> int:
         proc = start_editor(project)
         qa_target.mark("editor start")
         run = Run(project, game, release, args.shots)
+
+        def restart(env: dict) -> None:
+            nonlocal proc
+            mcp("window_control", action="close")
+            proc.wait(timeout=120)
+            proc = start_editor(project, env)
+
+        run.restart = restart
         run.module = os.path.join(game, "modules", mcp("mod_manifest").get("id"))
         for p in only:
             t = time.monotonic()

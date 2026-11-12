@@ -183,6 +183,36 @@ fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
+/// The jobs one request started: a command run inside [`in_scope`] records here every job it
+/// starts, from its own task and from the tasks it spawns through [`Executors::spawn`]. The MCP
+/// endpoint asks it when a command outlasts the request's timeout.
+#[derive(Clone, Debug, Default)]
+pub struct JobScope(Arc<Mutex<Vec<JobId>>>);
+
+impl JobScope {
+    /// The jobs started inside the scope so far, oldest first.
+    #[must_use]
+    pub fn ids(&self) -> Vec<JobId> {
+        self.0.lock().clone()
+    }
+}
+
+tokio::task_local! {
+    // the request a task works for: a value only inside the future `in_scope` runs, nothing
+    // outside it (the key holds no state of its own)
+    static SCOPE: JobScope;
+}
+
+/// Runs `fut` for a request: every job started inside it is recorded in `scope`.
+pub async fn in_scope<F: Future>(scope: JobScope, fut: F) -> F::Output {
+    SCOPE.scope(scope, fut).await
+}
+
+/// The scope of the task that asks, when it runs for a request.
+pub(crate) fn current_scope() -> Option<JobScope> {
+    SCOPE.try_with(Clone::clone).ok()
+}
+
 /// The job center. One per application.
 #[derive(Clone)]
 pub struct Jobs(Arc<Inner>);
@@ -249,6 +279,8 @@ impl Jobs {
             entry
         };
         inner.touch();
+        // the request this job was started for, when there is one, learns its id
+        let _ = SCOPE.try_with(|s| s.0.lock().push(entry.id));
 
         let ctx = JobCtx {
             id: entry.id,

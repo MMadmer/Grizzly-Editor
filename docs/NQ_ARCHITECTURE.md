@@ -1460,6 +1460,9 @@ and MCP.
 
 ## 17. Rollout plan
 
+Done: every phase below. Since the move to Rust the editor's half is `gz-nq` and `gz-ui-graph`
+(`docs/RUST_MIGRATION.md`); the table is the record of how it was rolled out.
+
 The working rule: every phase runs as separate subagents (per the `CLAUDE.md`
 rules); once the contract is fixed, the game and editor phases go **in
 parallel**. Commits follow the phases, each verified by its own DoD.

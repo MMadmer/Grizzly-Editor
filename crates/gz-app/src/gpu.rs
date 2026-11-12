@@ -100,7 +100,7 @@ pub struct Gpu {
     hint_read: AtomicBool,
     hint_reading: AtomicBool,
     /// `COMMAND_MUTE_SOUND`'s mute for a while.
-    mute_for_now: AtomicBool,
+    mute_held: AtomicBool,
     /// What the player reads: muted now.
     muted: Arc<AtomicBool>,
 }
@@ -165,9 +165,10 @@ impl Gpu {
         self.muted.clone()
     }
 
-    /// `MuteSounds(p1)`: on mutes for now; off goes back to what View > Mute Sounds says.
-    pub fn mute_for_now(&self, editor: &Editor, on: bool) {
-        self.mute_for_now.store(on, Ordering::Release);
+    /// `MuteSounds(p1)` (`COMMAND_MUTE_SOUND`): on holds the sounds muted until a call with off,
+    /// which goes back to what View > Mute Sounds says.
+    pub fn mute_held(&self, editor: &Editor, on: bool) {
+        self.mute_held.store(on, Ordering::Release);
         self.refresh_mute(editor);
     }
 
@@ -181,7 +182,7 @@ impl Gpu {
 
     fn refresh_mute(&self, editor: &Editor) {
         let kept = EditorSettings::of(editor).render_flag("mute_sounds");
-        self.muted.store(kept || self.mute_for_now.load(Ordering::Acquire), Ordering::Release);
+        self.muted.store(kept || self.mute_held.load(Ordering::Acquire), Ordering::Release);
     }
 }
 

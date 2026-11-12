@@ -468,4 +468,20 @@ mod tests {
         let times: Vec<f32> = m.envelopes[0].keys.iter().map(|k| k.time).collect();
         assert_eq!(times, vec![0.0, 2.0, 4.0]);
     }
+
+    #[test]
+    fn normalizing_gives_each_metre_the_same_time() {
+        // one metre in the first second, three in the next: at 1 m/s the second leg takes about
+        // three times as long as the first
+        let mut m = OMotion::default();
+        for (t, x) in [(0.0, 0.0), (1.0, 1.0), (2.0, 4.0)] {
+            create_key(&mut m, t, Vec3::new(x, 0.0, 0.0), Vec3::ZERO);
+        }
+        assert!(normalize_keys(&mut m, 0.0, 2.0, 1.0));
+        let t: Vec<f32> = m.envelopes[0].keys.iter().map(|k| k.time).collect();
+        assert_eq!(t[0], 0.0);
+        let (first, second) = (t[1] - t[0], t[2] - t[1]);
+        assert!(first > 0.5 && second / first > 2.0, "{t:?}");
+        assert!(!normalize_keys(&mut m, 2.0, 1.0, 1.0), "a range that ends before it starts");
+    }
 }

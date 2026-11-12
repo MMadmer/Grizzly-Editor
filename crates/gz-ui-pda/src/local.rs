@@ -36,45 +36,8 @@ pub fn local_list_header(ui: &mut Ui, title: &str, tip: &str) -> bool {
 /// A folding header outside a property grid (`XUI::Section`): a chevron and the title, the
 /// whole row a click target; `open` is its state until it is clicked.
 pub fn local_section(ui: &mut Ui, id_salt: &str, title: &str, open: bool) -> bool {
-    let ctx = ui.ctx().clone();
-    let p = palette(&ctx);
     let id = ui.make_persistent_id(("gz-ui-pda.section", id_salt));
-    let mut is_open = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(open);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), metrics::ROW), Sense::hover());
-    let resp = ui.interact(rect, id.with("header"), Sense::click());
-    if resp.clicked() {
-        is_open = !is_open;
-    }
-    ctx.data_mut(|d| d.insert_temp(id, is_open));
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        if resp.hovered() {
-            painter.rect_filled(rect, CornerRadius::same(3), p.hover);
-        }
-        let chevron = Rect::from_min_size(
-            pos2(rect.min.x + 4.0, rect.center().y - metrics::GLYPH_STATUS * 0.5),
-            Vec2::splat(metrics::GLYPH_STATUS),
-        );
-        icons::draw(
-            painter,
-            if is_open { Icon::ChevronDown } else { Icon::ChevronRight },
-            chevron,
-            p.text_secondary,
-        );
-        let x = chevron.max.x + 6.0;
-        text::paint(
-            painter,
-            &Font::Strong.id(),
-            pos2(x, rect.center().y),
-            Align2::LEFT_CENTER,
-            p.text,
-            title,
-            Some((rect.max.x - x).max(0.0)),
-            Clip::End,
-        );
-    }
-    gz_ui::audit::control(&ctx, title, true, None, None, rect);
-    is_open
+    gz_ui::form::section(ui, id, title, open)
 }
 
 /// A strip of tabs, 26 pt (a panel's tab strip): the selected one in the text colour on the

@@ -13,7 +13,7 @@ What it proves:
   E  the Level panels: close, open, focus and toggle round trips, and Level comes up with an opened panel; ui_scroll
      moves a panel whose body is a child of it (Details' grid) to its bottom and back
   F  the dialogs: Import Base Scene opens and closes over ui_dialog, and stays centred in the work area when the window
-     is resized both ways
+     is resized both ways; on the Start page the status bar has no centre (A: on Level it has the tab's status)
   G  the size: under 1100 pt the menus fold into one Menu button (titlebar_info folded, ui_popup menu:Menu), the size
      class follows the window (wide / compact), and ui_scale rescales the caption (32 pt at 1.0 and 1.5)
   H  menus and the palette: ui_popup puts a caption menu up and takes it down, one popup at a time, and refuses the
@@ -218,6 +218,9 @@ def phase_a(project, shots, ed, before_scale, contract) -> None:
         lst = mcp("ui_list")
         check(lst.get("size_class") == "wide" and lst.get("start_page") is False, "A a 1500 x 800 pt window is the Wide class",
               short(lst))
+        centre = lst.get("status_centre")
+        check(not qa_target.RUST or isinstance(centre, list) and len(centre) == 4 and centre[2] > 0,
+              "A the status bar's centre holds the Level tab's status (docs/UI_DESIGN.md section 5)", json.dumps(centre))
         shot(shots, "shell_wide")
         if qa_target.RUST:
             marks = shown_start()
@@ -419,6 +422,25 @@ def phase_e(project, shots, ed, before_scale, contract) -> None:
         o = mcp("ui_panel", action="open", id="details")
         check(o.get("active_tab") == "level", "E opening a panel from another tab brings Level up", short(o))
         mcp("ui_tab", action="close", id="characters")
+        if qa_target.RUST:
+            # the layout store's values: listed; a key of the test's own (no panel reads it, so the Level layout
+            # stays as built for G) set, read back and listed; a key nobody set refused
+            splits = (mcp("ui_split").get("splits") or {})
+            check(any(k.startswith("level.") for k in splits), "E ui_split lists the layout store's values",
+                  json.dumps(splits)[:300])
+            moved = mcp("ui_split", key="qa.shell_split", value=123.5)
+            back = mcp("ui_split", key="qa.shell_split")
+            listed = (mcp("ui_split").get("splits") or {}).get("qa.shell_split")
+            check(moved.get("ok") and back.get("value") == 123.5 and back.get("unit") == "pt" and listed == 123.5,
+                  "E ui_split sets a value, reads it back and lists it", short(moved) + " / " + short(back))
+            none = mcp("ui_split", key="level.no_such_split")
+            check(not none.get("ok"), "E ui_split refuses a split that does not exist", short(none))
+            # a toast is queued and answered, and ui_list names it while it is up
+            t = mcp("ui_toast", text="QA note from test_ui_shell")
+            lst = mcp("ui_list")
+            check("QA note from test_ui_shell" in (t.get("toasts") or [])
+                  and "QA note from test_ui_shell" in (lst.get("toasts") or []),
+                  "E ui_toast raises a toast that ui_list names", short(t) + " / " + short({"toasts": lst.get("toasts")}))
 
 
 
@@ -465,6 +487,11 @@ def phase_f(project, shots, ed, before_scale, contract) -> None:
             check(closed.get("ok") and pic.get("ok") and pic.get("modal") is None,
                   "F Import Base Scene goes down with the project it imports into",
                   short({k: v for k, v in pic.items() if k != "png_base64"}))
+            # the Start page is no document: its status bar has no centre (docs/UI_DESIGN.md, the Start page)
+            page = mcp("ui_list")
+            check(page.get("start_page") is True and (not qa_target.RUST or page.get("status_centre") is None),
+                  "F the Start page's status bar has no centre", short(page))
+            shot(shots, "shell_start_page")
             back = mcp("open_project", path=project, timeout=300)
             check(back.get("ok"), "F the project opens again", short(back))
 

@@ -493,6 +493,7 @@ New and Open move to the File menu (#29).
 
 **Start page (#28)**
 - A page filling the work area under the caption (`Start Page###start_page`, `BeginPage`), not a modal.
+- Its status bar has no centre: the centre is a document's `status()`, and the page is no document (`ui_list` answers `status_centre: null` here, the rect of the Level tab's status on Level).
 - Left, 320: New Project (Location, then Name with its rule as the hint, then [Create]), and [Open Folder...].
 - Right: search, Segmented Last Opened / Name (kept in `_projects.ini [browser] sort`), and 232x184 cards.
   - Each card has its preview cropped to the card, the name on a row of its own with the ⋯ menu, and the path with a start ellipsis.
@@ -527,7 +528,7 @@ Frame-reading commands are held by `gz-app`'s `shots.rs` until the frames they a
 
 | Command | Behaviour |
 |---|---|
-| `ui_list` | tabs {id, kind, label, path, dirty, active, missing, closable, loaded}, panels {id, window, open, visible, docked, focused, closable, host, rect}, drawer, dialogs, popups, work_area, start_page, size_class, layout_custom, viewport_maximized, `ui_scale` |
+| `ui_list` | tabs {id, kind, label, path, dirty, active, missing, closable, loaded}, panels {id, window, open, visible, docked, focused, closable, host, rect}, drawer, dialogs, popups, work_area, start_page, `status_centre` (the rect the active document's status drew in, null on the Start page), `toasts` (the notes up), size_class, layout_custom, viewport_maximized, `ui_scale` |
 | `ui_tab action=list\|activate\|open\|close\|next\|prev id= [kind= path=] [save=]` | a dirty close without save answers `unsaved`; `kind` is any of `ui_contract` `document_kinds` |
 | `ui_panel action=open\|close\|focus\|toggle id=` | `tools`, `world_outliner`, `details`, `level_settings`, `content_browser`, `output_log`, `viewport`; answers `host` |
 | `ui_drawer action=open\|close id=content\|log` | |
@@ -591,13 +592,15 @@ Unchanged: `exec_command`, `list_commands`, `theme`, `viewport_navigation` (its 
 - One crate per surface, each with one `install(builder)`: `gz-ui-app` (Start page, Output Log, Preferences, the keyboard page), `gz-ui-content` (Content Browser), `gz-ui-level` (the Level tab's dock and panels), `gz-ui-viewport`, `gz-ui-graph` (quests, behaviour graphs), `gz-ui-previews` (model, texture, the libraries), `gz-ui-pda` (PDA preview, Screens & Music), `gz-ui-mod` (Mod Settings, the build dialogs), `gz-ui-world` (Characters, World Rules), `gz-ui-release` (Package Release, Publish Release, Releases, Submit).
 - The surfaces' MCP commands are in each crate's `cmd.rs`, registered in the editor's command registry; `tools/rust/check.sh` holds the registry to the catalogue `crates/gz-mcp/tools.json`.
 
-**Still local**, each used by one crate (`local.rs`); a second user promotes one into `gz-ui`:
-- `gz-ui-app`: section, text field, rule. `gz-ui-content`: tree row, section, breadcrumbs, rename box, checker, menu heading, marquee.
-- `gz-ui-graph`: fold header, pane header, check, kind combo, pick list. `gz-ui-level`: eye toggle, button flow, panel header, tool tile, thumbnail, badge button, tab, tree list.
-- `gz-ui-mod`: text field, password field, check, value column, picture, pick list. `gz-ui-pda`: list header, section, tab strip, check, multi combo, code view, toggle row, drop mark.
-- `gz-ui-previews`: checker, heading, section, frame, texture pick, wheel. `gz-ui-release`: secret field and row, code, card title, fold, table head.
-- `gz-ui-world`: section, hint field, number text, check, cell check, dirty dot, problems drawer, level picker.
+**Promoted** because two surfaces carried a copy: `gz-ui`'s `form` - `section` (a row-tall folding header: Preferences, the Start page, the PDA preview's Details), `raised_section` (a raised folding strip with a pill at its right: World Rules, the Sound Library), `check` (a box and its label: Mod Settings, World Rules, the Characters tab, the item picker), `hint_field` (a text field with a hint: the Start page, Mod Settings, Package Release, the Characters tab). A surface's `local_*` of the same name only names the id its state lives under.
 
-**Proposed and not needed yet:** a badge on a toolbar action, trailing actions on a grid section, per-chip tone and tooltip, an ellipsizing toolbar status, tabs that always draw the selected overline, one shared "keys bound to a command" helper.
+**Still local**, each used by one crate (`local.rs`); a second user promotes one into `gz-ui`. Widgets that share a name and not a look are not copies: the Content Browser's section (28 pt, a muted count at its right) is not `form::section`; the switch-and-label checks of `gz-ui-graph` and `gz-ui-pda` are not `form::check`; the two checkers (the Content Browser's sized to the tile, the previews' lined up with the picture) and the two pick lists (the graph's picker body, Mod Settings' popup with Enter) differ in what they do.
+- `gz-ui-app`: rule. `gz-ui-content`: tree row, section, breadcrumbs, rename box, checker, menu heading, marquee.
+- `gz-ui-graph`: fold header, pane header, check, kind combo, pick list. `gz-ui-level`: eye toggle, button flow, panel header, tool tile, thumbnail, badge button, tab, tree list.
+- `gz-ui-mod`: password field, value column, picture, pick list. `gz-ui-pda`: list header, tab strip, check, multi combo, code view, toggle row, drop mark.
+- `gz-ui-previews`: checker, heading, frame, texture pick, wheel. `gz-ui-release`: secret field and row, code, card title, fold, table head.
+- `gz-ui-world`: number text, cell check, dirty dot, problems drawer, level picker.
+
+**Not built, because no surface asks for them** (proposals of the C++ redesign; one is built with the surface that first needs it): a badge on a toolbar action, trailing actions on a grid section, per-chip tone and tooltip, an ellipsizing toolbar status, tabs that always draw the selected overline, one shared "keys bound to a command" helper.
 
 **QA of the UI** (each on a copy, in a home of its own): `tools/qa/test_ui_shell.py` (the frame over MCP), `test_ui_tour.py` (the 35 audit issues, `--before` for the "before" shots), `test_graph_ui.py`, `test_previews.py`, `test_properties.py`, beside every surface's suite; the raw-pixel lint is gone (D6). Tour steps T1-T22 are the `audit_live.json` tour, T23 the texture preview, T24 the libraries. A tour step passes at `ui_scale 1.5` / 1707x912 and at `ui_scale 1.0` / 1280x720: it opens and closes over `ui_*`, reports no `escaped` entries and an empty `outside`, keeps its footers and overflow reachable and resizes both ways.

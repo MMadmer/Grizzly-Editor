@@ -5,7 +5,7 @@ use std::f32::consts::TAU;
 
 use egui::{
     Align2, Context, CornerRadius, Id, LayerId, Margin, Painter, Pos2, Rect, Response, ScrollArea, Sense,
-    Shape, Stroke, StrokeKind, TextEdit, Ui, UiBuilder, Vec2, pos2,
+    Shape, Stroke, TextEdit, Ui, UiBuilder, Vec2, pos2,
 };
 use gz_ui::menu::menu_popup;
 use gz_ui::text::{self, Clip};
@@ -39,66 +39,7 @@ pub fn set_section_open(ctx: &Context, key: &str, open: bool) {
 /// at the right what it holds in a few words; the whole row a click target. `open` is its state
 /// until it is clicked. Returns whether it is open.
 pub fn local_section(ui: &mut Ui, key: &str, title: &str, open: bool, right: Option<&str>) -> bool {
-    let ctx = ui.ctx().clone();
-    let p = palette(&ctx);
-    let id = section_id(key);
-    let mut is_open = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(open);
-    let (rect, _) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), metrics::SECTION_HEADER), Sense::hover());
-    let resp = ui.interact(rect, id.with("header"), Sense::click());
-    if resp.clicked() {
-        is_open = !is_open;
-    }
-    ctx.data_mut(|d| d.insert_temp(id, is_open));
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        painter.rect_filled(
-            rect,
-            CornerRadius::same(metrics::RADIUS),
-            if resp.hovered() { p.hover } else { p.raised },
-        );
-        let cy = rect.center().y;
-        let chevron = Rect::from_min_size(
-            pos2(rect.min.x + 6.0, cy - metrics::GLYPH_STATUS * 0.5),
-            Vec2::splat(metrics::GLYPH_STATUS),
-        );
-        icons::draw(
-            painter,
-            if is_open { Icon::ChevronDown } else { Icon::ChevronRight },
-            chevron,
-            p.text_secondary,
-        );
-        let mut end = rect.max.x - 8.0;
-        if let Some(right) = right.filter(|r| !r.is_empty()) {
-            let font = Font::Small.id();
-            let w = (text::width(&ctx, &font, right) + 12.0).min(rect.width() * 0.5);
-            let pill = Rect::from_min_max(pos2(end - w, cy - 9.0), pos2(end, cy + 9.0));
-            painter.rect_filled(pill, CornerRadius::same(9), p.base);
-            text::paint(
-                painter,
-                &font,
-                pos2(pill.min.x + 6.0, cy),
-                Align2::LEFT_CENTER,
-                p.text_secondary,
-                right,
-                Some(w - 12.0),
-                Clip::End,
-            );
-            end = pill.min.x - 6.0;
-        }
-        let x = chevron.max.x + 6.0;
-        text::paint(
-            painter,
-            &Font::Strong.id(),
-            pos2(x, cy),
-            Align2::LEFT_CENTER,
-            p.text,
-            title,
-            Some((end - x).max(0.0)),
-            Clip::End,
-        );
-    }
-    gz_ui::audit::control(&ctx, title, true, None, None, rect);
+    let is_open = gz_ui::form::raised_section(ui, section_id(key), title, open, right);
     if is_open {
         ui.add_space(4.0);
     }
@@ -108,17 +49,8 @@ pub fn local_section(ui: &mut Ui, key: &str, title: &str, open: bool, right: Opt
 /// A one-line text field with a hint while it is empty, as wide as it gets (the kit's
 /// `text_field` has no hint). Its id is its own: it keeps the keyboard while the form scrolls.
 pub fn local_hint_field(ui: &mut Ui, salt: &str, value: &mut String, hint: &str) -> Response {
-    let id = Id::unique(("gz-ui-world.text", salt));
     let w = ui.available_width().max(em(3.0));
-    ui.add(
-        TextEdit::singleline(value)
-            .id(id)
-            .font(Font::Body.id())
-            .margin(Margin::symmetric(8, 4))
-            .hint_text(hint)
-            .desired_width(w)
-            .min_size(Vec2::new(w, metrics::FRAME)),
-    )
+    gz_ui::form::hint_field(ui, Id::unique(("gz-ui-world.text", salt)), value, hint, w)
 }
 
 /// A whole number that may be empty: digits only, the hint shown while it is (the base's
@@ -165,59 +97,7 @@ pub fn local_number_text(
 /// A box with its label after it; a click on either flips it. `width` is the room it takes. A
 /// disabled `Ui` draws it dimmed and takes no click.
 pub fn local_check(ui: &mut Ui, salt: &str, label: &str, value: &mut bool, width: f32) -> bool {
-    let ctx = ui.ctx().clone();
-    let p = palette(&ctx);
-    let enabled = ui.is_enabled();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, metrics::FRAME), Sense::hover());
-    let id = Id::unique(("gz-ui-world.check", salt));
-    let resp = ui.interact(rect, id, if enabled { Sense::click() } else { Sense::hover() });
-    let mut changed = false;
-    if enabled && resp.clicked() {
-        *value = !*value;
-        changed = true;
-    }
-    if ui.is_rect_visible(rect) {
-        let b = Rect::from_center_size(
-            pos2(rect.min.x + metrics::FRAME * 0.5, rect.center().y),
-            Vec2::splat(16.0),
-        );
-        let radius = CornerRadius::same(3);
-        if *value {
-            let fill = if !enabled {
-                p.text_disabled
-            } else if resp.hovered() {
-                p.primary_hover
-            } else {
-                p.accent
-            };
-            ui.painter().rect_filled(b, radius, fill);
-            icons::draw(ui.painter(), Icon::Check, b.shrink(2.0), p.on_fill);
-        } else {
-            ui.painter().rect(
-                b,
-                radius,
-                if resp.hovered() && enabled { p.input_hover } else { p.input },
-                Stroke::new(1.0, p.border_strong),
-                StrokeKind::Inside,
-            );
-        }
-        if !label.is_empty() {
-            let x = rect.min.x + metrics::FRAME + 4.0;
-            let color = if enabled { p.text } else { p.text_disabled };
-            text::paint(
-                ui.painter(),
-                &Font::Body.id(),
-                pos2(x, rect.center().y),
-                Align2::LEFT_CENTER,
-                color,
-                label,
-                Some((rect.max.x - x).max(0.0)),
-                Clip::End,
-            );
-        }
-    }
-    gz_ui::audit::control(&ctx, label, enabled, None, None, rect);
-    changed
+    gz_ui::form::check(ui, Id::unique(("gz-ui-world.check", salt)), label, value, width)
 }
 
 /// A box in the middle of a table cell `width` wide; `tip` on hover. Returns whether it flipped.

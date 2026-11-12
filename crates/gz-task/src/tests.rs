@@ -143,3 +143,24 @@ fn a_job_that_panics_fails_and_its_waiters_return() {
     // the group is free again
     assert!(jobs.start("test", Some("g"), "Next", |_| async { Ok(serde_json::Value::Null) }).is_ok());
 }
+
+#[test]
+fn a_request_scope_learns_the_jobs_started_for_it() {
+    let rt = runtime();
+    let exec = rt.exec();
+    let jobs = Jobs::new(exec.clone());
+    let quick = |_| async { Ok(serde_json::Value::Null) };
+    let scope = crate::JobScope::default();
+    let (j, e) = (jobs.clone(), exec.clone());
+    let (inside, spawned) = rt.block_on(crate::in_scope(scope.clone(), async move {
+        let inside = j.start("a", None, "A", quick).unwrap();
+        // a task the command spawns works for the same request
+        let j2 = j.clone();
+        let spawned = e.spawn(async move { j2.start("b", None, "B", quick).unwrap() }).await.unwrap();
+        (inside, spawned)
+    }));
+    // a job started outside every scope belongs to no request
+    let outside = jobs.start("c", None, "C", quick).unwrap();
+    assert_eq!(scope.ids(), vec![inside, spawned]);
+    assert!(!scope.ids().contains(&outside));
+}

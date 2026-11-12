@@ -231,7 +231,7 @@ pub fn install(b: &mut ShellBuilder) {
             "COMMAND_MUTE_SOUND",
             "",
             CppAction::shell(|cx, p1, _| {
-                gz_app::gpu::Gpu::of(cx.editor).mute_for_now(cx.editor, p1.truthy());
+                gz_app::gpu::Gpu::of(cx.editor).mute_held(cx.editor, p1.truthy());
                 Ok(CommandVar::Int(1))
             }),
         )

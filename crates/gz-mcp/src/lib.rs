@@ -123,15 +123,77 @@ async fn connection(editor: Arc<Editor>, stream: TcpStream, timeout: Duration) -
 
 /// Runs one command as a task of its own: the caller gets a timeout answer when it takes too
 /// long, and the command runs to its end whatever the connection does - a timeout or a client
-/// that went away never cuts a command that changes state half way.
+/// that went away never cuts a command that changes state half way. The command runs in a job
+/// scope of its own, so a timeout answer can name the jobs it started ([`timed_out`]).
 async fn run_request(editor: &Arc<Editor>, cmd: String, args: Args, timeout: Duration) -> Value {
     let ed = editor.clone();
-    let task = editor.exec.spawn(async move { ed.call(&cmd, args, Origin::Mcp).await });
+    let scope = gz_task::JobScope::default();
+    let name = cmd.clone();
+    let task = editor
+        .exec
+        .spawn(gz_task::in_scope(scope.clone(), async move { ed.call(&cmd, args, Origin::Mcp).await }));
     match tokio::time::timeout(timeout, task).await {
         Ok(Ok(reply)) => reply,
         Ok(Err(_)) => json!({ "ok": false, "error": "internal error: the command did not finish" }),
-        Err(_) => json!({ "ok": false, "error": "editor busy (timeout)" }),
+        Err(_) => timed_out(editor, &name, &scope, timeout),
     }
+}
+
+/// Where a job of a kind is followed besides `jobs`.
+fn follow_of(kind: &str) -> Option<&'static str> {
+    match kind {
+        "level_build" | "level_run" => Some("level_build action=status"),
+        "build" => Some("mod_export answer_only=true (once the job ended)"),
+        "package" => Some("mod_package answer_only=true (once the job ended)"),
+        "publish" => Some("mod_publish action=status"),
+        "catalog" => Some("mod_catalog action=status"),
+        _ => None,
+    }
+}
+
+/// The answer of a request past its timeout. A command whose jobs still run says so - which,
+/// since when, where to follow them - with `ok: false` and `running: true`: it has not answered,
+/// it is no failure and no result. A command with no job behind it keeps "editor busy".
+fn timed_out(editor: &Editor, cmd: &str, scope: &gz_task::JobScope, timeout: Duration) -> Value {
+    let running: Vec<gz_task::JobInfo> = scope
+        .ids()
+        .into_iter()
+        .filter_map(|id| editor.jobs.get(id))
+        .filter(gz_task::JobInfo::running)
+        .collect();
+    if running.is_empty() {
+        return json!({ "ok": false, "error": "editor busy (timeout)" });
+    }
+    let mut follow = vec!["jobs".to_owned()];
+    for j in &running {
+        if let Some(f) = follow_of(&j.kind)
+            && !follow.iter().any(|x| x == f)
+        {
+            follow.push(f.to_owned());
+        }
+    }
+    let first = &running[0];
+    let error = format!(
+        "{cmd} is still running: its job {} #{} ({}) goes on past this request's {} s timeout, and this answer is \
+         not its result. Follow it with {}.",
+        first.kind,
+        first.id.0,
+        if first.stage.is_empty() {
+            first.title.clone()
+        } else {
+            format!("{}: {}", first.title, first.stage)
+        },
+        timeout.as_secs_f32(),
+        follow.join(" or "),
+    );
+    let jobs: Vec<Value> = running
+        .iter()
+        .map(|j| {
+            json!({ "id": j.id.0, "kind": j.kind, "title": j.title, "stage": j.stage, "group": j.group,
+                    "started_ms": j.started_ms })
+        })
+        .collect();
+    json!({ "ok": false, "running": true, "command": cmd, "error": error, "jobs": jobs, "follow": follow })
 }
 
 /// Reads through the next `\n`. Returns 0 at the end of the stream; a line over the limit is
@@ -212,7 +274,9 @@ mod tests {
         let editor = Editor::new(gz_editor::EditorOptions::default(), rt.exec(), log, reg);
         let reply =
             rt.block_on(run_request(&editor, "slow_edit".into(), Args::new(), Duration::from_millis(50)));
+        // no job behind it: the busy answer
         assert_eq!(reply["error"], "editor busy (timeout)");
+        assert!(reply.get("running").is_none());
         assert!(!done.load(Ordering::Acquire));
         // the caller was answered; the command was not cut: it ends by itself
         rt.block_on(async { tokio::time::sleep(Duration::from_millis(600)).await });
@@ -220,5 +284,40 @@ mod tests {
         let reply =
             rt.block_on(run_request(&editor, "slow_edit".into(), Args::new(), Duration::from_secs(5)));
         assert_eq!(reply["edited"], true);
+    }
+
+    #[test]
+    fn a_command_whose_job_outlasts_the_timeout_names_the_job() {
+        let rt = gz_task::Runtime::start(gz_task::ExecOptions::default()).unwrap();
+        let (log, _guard) = gz_editor::Log::start(None, false).unwrap();
+        let mut reg = gz_editor::Registry::new();
+        // a command that starts a job and answers when it ended, as `level_build` does
+        reg.add("test", "slow_build", |ed, _a, _o| async move {
+            let id = ed
+                .jobs
+                .start("level_build", Some("level_build"), "Building the level", |ctx| async move {
+                    ctx.stage("Compiling");
+                    tokio::time::sleep(Duration::from_millis(400)).await;
+                    Ok(json!({ "built": true }))
+                })
+                .map_err(|b| gz_editor::CmdError::busy(b.to_string()))?;
+            let info = ed.jobs.wait(id).await.unwrap();
+            Ok(json!({ "built": info.result.is_some() }))
+        });
+        let editor = Editor::new(gz_editor::EditorOptions::default(), rt.exec(), log, reg);
+        let reply =
+            rt.block_on(run_request(&editor, "slow_build".into(), Args::new(), Duration::from_millis(100)));
+        assert_eq!(reply["ok"], false);
+        assert_eq!(reply["running"], true, "{reply}");
+        assert_eq!(reply["jobs"][0]["kind"], "level_build");
+        assert_eq!(reply["jobs"][0]["stage"], "Compiling");
+        assert_eq!(reply["follow"], json!(["jobs", "level_build action=status"]));
+        let error = reply["error"].as_str().unwrap();
+        assert!(error.starts_with("slow_build is still running: its job level_build #"), "{error}");
+        assert!(!error.contains("busy"));
+        // the job ends by itself, and the next call answers its result
+        let id = gz_task::JobId(reply["jobs"][0]["id"].as_u64().unwrap());
+        let ended = rt.block_on(editor.jobs.wait(id)).unwrap();
+        assert!(ended.result.is_some());
     }
 }

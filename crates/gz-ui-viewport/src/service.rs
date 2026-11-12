@@ -209,6 +209,10 @@ pub struct Prefs {
     pub snap_grid: f32,
     pub snap_angle: f32,
     pub snap_scale: f32,
+    /// Tools > Box Selection > Limited Depth and Depth Tolerance (`bp_lim_depth`,
+    /// `bp_depth_tolerance`).
+    pub bp_lim_depth: bool,
+    pub bp_depth_tolerance: f32,
 }
 
 impl Default for Prefs {
@@ -229,6 +233,8 @@ impl Default for Prefs {
             snap_grid: 0.1,
             snap_angle: 5.625,
             snap_scale: 0.1,
+            bp_lim_depth: true,
+            bp_depth_tolerance: 0.1,
         }
     }
 }
@@ -254,6 +260,8 @@ impl Prefs {
             snap_grid: f("snap_grid_step", d.snap_grid),
             snap_angle: f("snap_angle_step", d.snap_angle),
             snap_scale: f("snap_scale_step", d.snap_scale),
+            bp_lim_depth: s.pref("bp_lim_depth").map_or(d.bp_lim_depth, |v| v != 0.0),
+            bp_depth_tolerance: f("bp_depth_tolerance", d.bp_depth_tolerance),
         }
     }
 

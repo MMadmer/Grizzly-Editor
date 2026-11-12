@@ -23,6 +23,8 @@ Other agents were writing while this was read: `crates/gz-scene/src/objtools/` a
 
 Counts: 333 items walked; after the parity work of 2026-11-12 no row is `missing`: every one of the 52 is `same` with where the Rust editor has it, `dropped` (`REFRESH_SOUND_ENV_GEOMETRY`: its C++ body does nothing) or `differs (D18)` (the Targets switches) - see the rows.
 
+**No row waits** (the close sweep of 2026-11-13, `docs/rust/STATE.md` "Open: nothing"): every row of the ledger is `same`, `dropped` with its reason, or `differs` with the deliberate difference of `docs/RUST_MIGRATION.md` section 12 that says so. The rows the list above had closed and the ledger still called `differs` were checked against the tree and now say where; "Unjudged" is judged.
+
 ## The list that matters
 
 Every `missing` and `differs` item, by area. Size: S (a day or less), M (days), L (a week+).
@@ -96,20 +98,20 @@ Every `missing` and `differs` item, by area. Size: S (a day or less), M (days), 
 - closed S - macros: Run Macro slots 1-8 (Alt+1..Alt+8), Assign Macro, Execute Command List, Log Commands: `UI_MainCommand.cpp` `CommandRunMacro` / `CommandAssignMacro` / `CommandExecuteCommandList` / `CommandLogCommands` (the Keyboard page's order list names the slots, nothing registers them).
 - closed S - grid slot count command: `UI_MainCommand.cpp` `CommandGridNumberOfSlots`.
 - closed S - `-uiscale <f>`: `XrEUI/XrUIKit.cpp` `CommandLineScale`.
-- differs S - no splash window while the editor starts: `EditorStartup` (splash thread); the stage profile is there (`grizzly/src/startup.rs`).
-- closed S - the Start page's status bar shows the Level tab's centre (STATE.md, still open).
+- differs (D7) S - no splash window while the editor starts: `EditorStartup` (splash thread); the stage profile is there (`grizzly/src/startup.rs`).
+- closed S - the Start page's status bar showed the Level tab's centre: it has none now (`gz-app/src/chrome.rs` `draw_status`, the centre only while a document is up), held by `ui_list` `status_centre` (null on the Start page) in `test_ui_shell` A and F.
 
 ### MCP wire
 
 - closed M - `list_commands` / `exec_command` cover the 48 `UiCommand`s, not the 118 `COMMAND_*` of the C++ registry, and `id` is the Rust table's index: `LevelEditor/Editor/Mcp/LevelMcp.cpp` (`GetEditorCommands`); Rust `gz-app/src/cmds.rs` `command_table`.
 - closed S - `exec_command` never reads `p2s` / `p2i`: `LevelMcp.cpp` `exec_command` (`ExecCommand(id, P1, P2)`).
 - closed S - `screenshot_editor` answers `busy: false` and `outside: []` always: `XrECore/Editor/GrizzlyMCP.cpp`; Rust `gz-app/src/shots.rs`.
-- differs S - `game_link` / `game_modes` refusals carry `error` first (C++ `EditorProject::McpGameLink` had none).
-- differs S - `characters_write` refuses a path outside the project and validates a text without `id` under its file's id: `XrECore/Editor/EditorCharacters.cpp` `McpWrite`.
-- differs S - `world_set` writes only the section it changed; an empty declared `[start_kit]` becomes `perks = true`: `XrECore/Editor/EditorWorld.cpp` `McpSet` / `Save`.
+- differs (D13) S - `game_link` / `game_modes` refusals carry `error` first (C++ `EditorProject::McpGameLink` had none).
+- differs (D13) S - `characters_write` refuses a path outside the project and validates a text without `id` under its file's id: `XrECore/Editor/EditorCharacters.cpp` `McpWrite`.
+- differs (D13) S - `world_set` writes only the section it changed; an empty declared `[start_kit]` becomes `perks = true`: `XrECore/Editor/EditorWorld.cpp` `McpSet` / `Save`.
 - closed S - `screens_set action=drop` always fills the loading surface: `XrECore/Editor/EditorScreens.cpp` `McpSet`.
-- differs S - `mod_publish action=start` answers once packaging ended in one call (no `job_pending` round): `XrECore/Editor/EditorModPublish.cpp` `McpPublish` + `GrizzlyMCP.cpp` `FollowsJob`.
-- differs S - `quest_history` adds `undo_steps` / `redo_steps`, and an undo back to the saved state is clean: `LevelEditor/UI/QuestGraph/UIQuestGraph.cpp` `McpHistory`.
+- differs (D13) S - `mod_publish action=start` answers once packaging ended in one call (no `job_pending` round): `XrECore/Editor/EditorModPublish.cpp` `McpPublish` + `GrizzlyMCP.cpp` `FollowsJob`.
+- differs (D13) S - `quest_history` adds `undo_steps` / `redo_steps`, and an undo back to the saved state is clean: `LevelEditor/UI/QuestGraph/UIQuestGraph.cpp` `McpHistory`.
 
 ## In work (known, not re-derived)
 
@@ -168,11 +170,11 @@ that does the same.
 | `COMMAND_LOAD_SELECTION`, `SAVE_SELECTION` | scene fragments to / from a file | `gz-ui-level/src/level_cmds.rs`, MCP `selection_file` | same |
 | `COMMAND_UNDO`, `REDO` | scene undo / redo | `COMMAND_UNDO` / `COMMAND_REDO` -> `undo` / `redo` | same |
 | `COMMAND_CLEAR/COLLECT/SHOW/EXPORT_SCENE_SUMMARY` | Summary Info | `gz-ui-level/src/level_cmds.rs`, MCP `scene_summary` | same |
-| `COMMAND_BUILD`, `MAKE_GAME`, `MAKE_AIMAP`, `MAKE_DETAILS`, `MAKE_HOM`, `MAKE_SOM` | Make *, each confirmed naming the level folder (`ConfirmLevelBuild`) | `make_all` ... `make_aimap` (MCP, Build > Make rows) without the confirmation and without a `UiCommand` | differs |
+| `COMMAND_BUILD`, `MAKE_GAME`, `MAKE_AIMAP`, `MAKE_DETAILS`, `MAKE_HOM`, `MAKE_SOM` | Make *, each confirmed naming the level folder (`ConfirmLevelBuild`) | `make_all` ... `make_aimap` (MCP, Build > Make rows), each a `UiCommand` with its key (F9 / F5) behind the C++ question naming the level folder (`gz-ui-level/src/level_cmds.rs` `ConfirmLevelBuild`) | same |
 | `COMMAND_INVERT_SELECTION_ALL`, `SELECT_ALL` | of the current class | same ids | same |
-| `COMMAND_DESELECT_ALL` | of the current class | same id; every class | differs |
-| `COMMAND_DELETE_SELECTION` | removes the selection, no question | same id; the menu row asks (`dlg.delete_object`), the key does not | differs |
-| `COMMAND_HIDE_SEL`, `HIDE_UNSEL`, `HIDE_ALL` | of the current class | same ids; menu = every class, key = target class | differs |
+| `COMMAND_DESELECT_ALL` | of the current class | same id, of the current class (menu `gz-ui-level/src/menus.rs`, key `gz-ui-viewport/src/keys.rs`) | same |
+| `COMMAND_DELETE_SELECTION` | removes the selection, no question | same id, no question on either path (D8: one undo step) | same |
+| `COMMAND_HIDE_SEL`, `HIDE_UNSEL`, `HIDE_ALL` | of the current class | same ids, of the current class on the menu and the keys | same |
 | (none) | - | `COMMAND_UNHIDE_ALL` "Unhide All" (Rust only) | same (addition) |
 | `COMMAND_SET/ADD_SEL/DEL_SEL/CLEAR/SELECT_SNAP_OBJECTS` | the snap list | `snap_objects` and the Tools panel's snap buttons (`gz-ui-level/src/tools.rs`) | same |
 | `COMMAND_REFRESH_SOUND_ENV_GEOMETRY` | `CLevelSoundManager::RefreshEnvGeometry` | - (the C++ body does nothing: `RefreshEnvGeometry` is commented out) | dropped |
@@ -214,7 +216,7 @@ shell's `BUILTINS` and contributions (`gz-app/src/chrome.rs`), `gz-ui-level/src/
 | Scene > Pick Any Class | `etfPickAnyClass` toggle | `gz-ui-level/src/menus.rs` | same |
 | Scene > Create Recovery Snapshot | `EditorRecovery::RequestSnapshot` | `recovery action=snapshot` row | same |
 | (none) | - | Scene > Select All / Unselect All / Invert / Hide * / Unhide All (Rust only) | same (addition) |
-| Build > Make > Make All..., Make Game..., Make Details..., Make HOM..., Make SOM..., Make AI Map... | confirmed builds | `BUILD_ROWS` -> `make_*`, unconfirmed | differs |
+| Build > Make > Make All..., Make Game..., Make Details..., Make HOM..., Make SOM..., Make AI Map... | confirmed builds | `BUILD_ROWS` -> `make_*`, asked first as the C++ (`ConfirmLevelBuild`) | same |
 | Build > Compile > Geometry & Light / Detail Object Light | `RunXrLC` / `RunXrDO` | `compile_geometry` / `compile_details` | same |
 | Build > Compile > AI Map > High / Low | `RunXrAI_AIMap(true / false)` | `compile_aimap mode=high/low` | same |
 | Build > Compile > AI Map > Verify | `RunXrAI_Verify` | `gz-ui-level/src/menus.rs`, `level_build compile_aimap mode=verify` | same |
@@ -236,12 +238,12 @@ shell's `BUILTINS` and contributions (`gz-app/src/chrome.rs`), `gz-ui-level/src/
 | Help > Keyboard Shortcuts / About Grizzly Editor | Keyboard page / notice | `Builtin::KeyboardShortcuts` / `About` | same |
 | View > Render > GPU | adapter + driver hint | `gz-ui-viewport/src/menus.rs`, `gz-app/src/gpu.rs` | same |
 | View > Render > Quality | render scale | `gz-ui-viewport/src/menus.rs` | same |
-| View > Render > Fill Mode (Point / Wireframe / Solid) | `dwFillMode` | Wireframe toggle; `view_mode fill=` | differs |
-| View > Render > Shade Mode (Flat / Gouraud) | `dwShadeMode` | `view_mode shade=` only | differs |
-| View > Render > Edged Faces / Linear Filtering / Textures | device flags | `view_mode` only | differs |
+| View > Render > Fill Mode (Point / Wireframe / Solid) | `dwFillMode` | `gz-ui-viewport/src/menus.rs` (View > Render), `view_mode fill=` | same |
+| View > Render > Shade Mode (Flat / Gouraud) | `dwShadeMode` | `gz-ui-viewport/src/menus.rs` Shade Mode, `view_mode shade=` | same |
+| View > Render > Edged Faces / Linear Filtering / Textures | device flags | `gz-ui-viewport/src/menus.rs` rows, `view_mode` | same |
 | View > Render > Hardware Rendering | `HW.Caps.bForceGPU_SW` | - | dropped (D2: a render state of the R1 device) |
 | View > Safe Rect / Grid / Lighting / Game Lighting > / Stats | view flags | `options_body`, `game_body` | same |
-| View > Fog / Environment > None, (weather cycles) | `rsFog`, `rsEnvironment` + `SetWeather` | `view_mode fog= environment=` only | differs |
+| View > Fog / Environment > None, (weather cycles) | `rsFog`, `rsEnvironment` + `SetWeather` | `gz-ui-viewport/src/menus.rs` Fog / Environment, `view_mode fog= environment=`, the weathers through Game Lighting (D2) | same |
 | View > Mute Sounds / Real Time | `rsMuteSounds` / `rsRenderRealTime` | `gz-ui-viewport/src/menus.rs` | same |
 | View > Maximize Viewport (F11) | | `menus.rs` row, F11 | same |
 | (none) | - | View > Spawn Helpers (Rust only) | same (addition) |
@@ -254,10 +256,10 @@ shell's `BUILTINS` and contributions (`gz-app/src/chrome.rs`), `gz-ui-level/src/
 | `build_cform`, `build_aimap`, `build_ggraph`, `build_all`, `play_game`, `play_clean`, `stop`, `reload_configs`, `game_folder` | | `LEVEL_ACTIONS` | same |
 | `play` (+ `play_options` Verify Space Restrictors) | plays inside the editor (`Scene->Play`) | `play` runs the game on the baked scene | dropped (D1) |
 | Project row: `build_mod` split, `publish_release`, `releases` (`UITopBarForm::DrawProject`) | | `gz-ui-mod/src/menu.rs` `build_mod`, `gz-ui-release/src/lib.rs` | same |
-| Viewport pill Options (`UIViewportToolbar.cpp`, `DrawViewportOptions`) | the View options | `menus::options_body` | differs (as the View menu above) |
+| Viewport pill Options (`UIViewportToolbar.cpp`, `DrawViewportOptions`) | the View options | `menus::options_body`, the View menu's rows | same |
 | Pills Perspective, Show; `tool_select` / `tool_place` / `tool_move` / `tool_rotate` / `tool_scale`; `osnap`, Snap options, `grid_snap` / `scale_snap` / `angle_snap` | | `gz-ui-viewport/src/pane.rs` | same |
 | Status bar: drawer buttons, last log line, warning / error counts, Tasks, Rebuild chip (`XrUIShell.cpp`, `UIMainForm.cpp`) | | `gz-app/src/chrome.rs` `draw_status`, `gz-ui-level/src/status.rs` | same |
-| Status bar on the Start page | no Level centre | the Level centre is shown | differs |
+| Status bar on the Start page | no Level centre | no centre: the active document's alone (`chrome.rs` `draw_status`; `ui_list` `status_centre`, `test_ui_shell` A / F) | same |
 | Caption: menus folded under 1100 pt, tab strip, window buttons, hit test (`UITitleBar.cpp`, `XrUIShell.cpp`) | | `gz-app/src/chrome.rs`, `gz-win` | same |
 | Tab context menu: Close, Close Others, Close All, Close Saved, Copy Path, Show in Explorer, Show in Content Browser | | `chrome.rs` tab menu | same |
 
@@ -274,7 +276,7 @@ shell's `BUILTINS` and contributions (`gz-app/src/chrome.rs`), `gz-ui-level/src/
 | Scene bindings of `kCommandNames` (`EditorPreferences.cpp`) present in Rust: Undo, Redo, Delete, Find, Select All, Deselect All, Invert, Hide Sel / Unsel / All, gizmo modes, Place / Stop Placing, Frame All / Selection, Wireframe, Grid, grid size, Safe Rect, Drop to Ground, the Mod rows, the libraries, Palette, Preferences, Quit, Cancel Running Job | | `SCENE_COMMANDS`, `BINDINGS`, the area `UiCommand`s | same |
 | Bindings New Scene (Ctrl+N), Open Scene (Ctrl+L), Open Last Scene (Ctrl+R), Save As (Ctrl+Shift+S), Cut / Copy / Paste on Level, the 18 tool switches, Show AI Map (`\`), Make All (F9), Make Game (F5), Details (Enter), Scene Options (Ctrl+O), World Outliner, Content Browser, Run Macro 1-8 (Alt+1..8) | | the rows above, bound in `gz-ui-app/src/keyboard.rs` | same |
 | File Menu (Alt+F), Move Camera To (Ctrl+Enter), Simulate, Apply Simulated Positions | handlers do nothing | - | dropped (not reachable) |
-| Esc: stop placing, then the bound command (`TUI::KeyDown`) | | Esc = Deselect All only | differs |
+| Esc: stop placing, then the bound command (`TUI::KeyDown`) | | `gz-ui-viewport/src/pane.rs` `shortcut`: placing ends, then Deselect All | same |
 
 ### 5. MCP commands
 
@@ -468,9 +470,9 @@ the theme / list-category names.
 | every `dlg.*` of the C++ (34: `assign_shortcut`, `bake_result`, `build_result`, `build_to_folder`, `catalog_submit`, `catalog_withdraw`, `choose`, `clean_target`, `delete_character`, `delete_object`, `delete_project`, `detail_objects`, `disable_game_updates`, `edit_release`, `edit_text`, `empty_world`, `export_flat`, `export_result`, `game_type`, `import_base_scene`, `nq_overwrite`, `nq_project_find`, `nq_reload`, `nq_task_references`, `nq_task_rename`, `nq_text`, `numeric_vector`, `package_release`, `package_result`, `properties`, `publish_release`, `rename_object`, `replace_release`, `text_editor`) | | the same ids (`rg 'dlg\.'` finds each in `crates`); Rust adds `dlg.notice`, `dlg.publish_result` | same |
 | `ui_dialog open` ids `package_release`, `build_to_folder`, `export_flat`, `import_base_scene`, `publish_release`, `submit` (`LevelMcp.cpp` `OpenDialog`) | | `contract.rs` dialog table + the owning areas | same |
 | Confirmations `clean_target`, `clear_detail_objects`, `clear_snap_list`, `delete_character`, `delete_object`, `discard_recovery`, `empty_world`, `disable_game_updates`, `nq_overwrite`, `nq_reload`, `pda_revert`, `reload_light_animations`, `replace_release`, `sync_sounds`, `sync_textures`, `delete_release` | | same ids | same |
-| Confirmation `clear_colour_indices` (`UIDOShuffle.cpp`) | | `clear_color_indices` | differs |
+| Confirmation `clear_colour_indices` (`UIDOShuffle.cpp`) | | `clear_colour_indices` (`gz-ui-level/src/detail_objects.rs`) | same |
 | Confirmations `rename_objects`, `reset_surfaces`, `detach_spawn_objects`, `rewrite_thumbnails` | | `gz-ui-level` (`rename_objects`, `reset_surfaces`, `detach_spawn_objects`), `gz-ui-previews/src/libtools.rs` (`rewrite_thumbnails`) | same |
-| Confirmations `make_all`, `make_game`, `make_details`, `make_hom`, `make_som`, `make_aimap` (`ConfirmLevelBuild`) | | - (the builds run unasked) | differs |
+| Confirmations `make_all`, `make_game`, `make_details`, `make_hom`, `make_som`, `make_aimap` (`ConfirmLevelBuild`) | | `gz-ui-level/src/level_cmds.rs` `ConfirmLevelBuild` (the level folder named; `-nodlg` and MCP as the kit's `Asker`) | same |
 | Confirmations `clear_ai_map`, `clear_ignored_materials`, `remove_default_sector`, `remove_duplicate_portals`, `detach_shapes` | | the AI Map / Sector / Portal / Shape tools (`gz-ui-level/src/tools_objects.rs`, `tools_bulk.rs`) | same |
 | Document kinds `level`, `quest:<rel>`, `beh:<rel>`, `pda`, `model`, `texture`, `characters`, `mod_settings`, `world_rules`, `releases`, `preferences`, `light_animations`, `texture_library`, `sound_library`, `screens` | | `gz-app` + the areas' `DocDesc`s | same |
 | Level panels `tools`, `world_outliner`, `details`, `level_settings`, `content_browser`, `output_log`, `viewport`; drawers Content / Log | | `gz-ui-level/src/lib.rs`, `gz-ui-content`, `gz-ui-app/src/log.rs` | same |
@@ -486,19 +488,21 @@ source (props of `crates/gz-scene/src/props.rs` and the areas).
 | `CSceneObject::FillProp` (Reference chooser, Surfaces: texture / shader / compiler shader / game material choosers, Clear Surface) | | `props.rs` | same |
 | `CCustomObject::AnimationFillProp` (dynamic objects: Motionable, Motion\*) | | `gz-scene/src/props.rs` (Motionable, Motion rows), MCP `object_motion` | same |
 | `CSpawnPoint::FillProp` (30 labels: entity, Profile (spawn section), env mod, respawn point, player start, `[xms_order]` rows, attached shape) | | `props.rs` | same (labels) |
-| `CSpawnPoint::FillProp` choosers Order\Look path, Order\Route, Order\Target, Respawn Point\Profile (`smCustom`) | pick from lists | typed text (`ListKey::of_choose` -> None) | differs |
+| `CSpawnPoint::FillProp` choosers Order\Look path, Order\Route, Order\Target, Respawn Point\Profile (`smCustom`) | pick from lists | picked: the scene's way paths and the game's patrols, the scene's story ids (`gz-ui-level/src/details.rs`), `respawn_items` (`ListKey::RespawnItems`) | same |
 | `CLight::FillProp` (`ELight_props.cpp`, 23 labels), `CGlow::FillProp`, `ESoundSource::FillProp` (17), `ESoundEnvironment::FillProp`, `CEditShape::FillProp`, `CSector::FillProp`, `CPortal::FillProp`, `CWayPoint::FillProp`, `CGroupObject::FillProp`, `EParticlesObject::FillProp` | | `props.rs` | same |
 | `CGlow` "Fixed size", `ESoundSource` "Looped", `ESceneSpawnTool` Common\Show Spawn Type / Trace Visibility | | - | dropped (not reachable: commented out in the C++) |
 | Level Settings: `EScene::FillProp` (`scene.cpp`, 14 labels), the Quality segmented, tool sheets of Light (22), Glow, Sector, Portal (`ESceneLightTools.cpp` ...) | | `gz-ui-level` Level Settings over `props.rs` | same |
 | `ESceneFogVolumeTools::FillProp` VolumeType / profile (ltx) | | the Fog Volume tool (`gz-ui-level/src/tools_objects.rs` `fog_tool`, MCP `fog_tool`); `EFogVolume::FillPropObjects` is never called in the C++, so Details has no such rows on either side | same |
 | `ESceneDOTools::FillProp` (Base Texture, Common\Draw *), `ESceneWallmarkTool::FillProp` (Alignment, Draw Wallmarks), `ESceneAIMapTool::FillProp` | | the Detail Objects panel and `details_tool` (D18), the Wallmark and AI Map tools (`gz-ui-level/src/tools_bulk.rs`, MCP `wallmark_tool`, `aimap_tool`) | same |
-| Random Append sheet (`ESceneObjectTools.cpp`: Scale, Scale\Proportional, Minimum / Maximum, Rotate, Rotate\Minimum / Maximum, Objects) | | `RandomSettings` dialog: the four ranges only | differs |
+| Random Append sheet (`ESceneObjectTools.cpp`: Scale, Scale\Proportional, Minimum / Maximum, Rotate, Rotate\Minimum / Maximum, Objects) | | `RandomSettings` (`gz-ui-level/src/tools.rs`): the switches, Proportional, the ranges and the objects; MCP `object_tool action=random` | same |
 | Scene summary sheet (`SceneSummaryInfo.cpp`) | | `gz-ui-level` (Summary Info), MCP `scene_summary` | same |
 | Texture Library `Cube Map\Smaller Copy` (`UIImageEditorForm.cpp`) | | `gz-ui-previews/src/libtools.rs`, `gz-fmt-tex/src/cubemap.rs` | same |
 | Texture / Sound / Light Animation library sheets (`UIImageEditorForm.cpp`, `UISoundEditorForm.cpp`, `UIEditLightAnim.cpp`), the image preview's rows (`UIImagePreview.cpp`: Slices is shown for arrays only) | | `gz-ui-previews` | same |
 | Detail object rows Min / Max Scale, Density, No Waving (`UIDOShuffle.cpp`) | | `gz-ui-level/src/detail_objects.rs` ("Minimum Scale", "Maximum Scale", "Density Factor") | same |
 | `CEditableObject::FillBasicProps` (`EditObjectProps.cpp`), `PDomain::FillProp` (`pDomain.cpp`), the game material editor (`XrGameMaterialLibraryEditors.cpp`) | | - | dropped (not reachable from the level editor: `ActorEditor` / `ParticleEditor` / `ShaderEditor`, section 4) |
-| Spawn entity rows (`ISE_Abstract::FillProps` of the Dead Air classes) | | `gz-entities` typed properties | unjudged |
+| Bone data files (`CEditableObject::LoadBoneData` / `SaveBoneData`, `.bones`), `GenerateBoneShape`, `CEditableMesh::OptimizeMesh` (`EditObjectSkin.cpp`, `EditMeshModify.cpp`) | | - | dropped (only `ActorEditor` reaches them: `UI_ActorToolsProps.cpp`; `CEditableObject::Optimize`, the one caller of `OptimizeMesh`, is called by a commented-out line of `UI_ActorTools.cpp`; plan section 4) |
+| Motion keys of a dynamic object: Scale Keys, Normalize Keys (`CustomObjectAnimation.cpp` -> `COMotion::ScaleKeys` / `NormalizeKeys`) | | `gz-scene/src/objmotion.rs` `scale_keys` / `normalize_keys`, MCP `object_motion` | same |
+| Spawn entity rows (`ISE_Abstract::FillProps` of the Dead Air classes) | | `gz-entities` typed properties; the differential compares the Details rows of one spawn of every entity class the linked game's sections give (`diff_editors.py` `gen_scene_class_rows`): rows, order, values, `enabled`, help | same |
 
 ### 8. Preferences, the command line, the editor's own files
 
@@ -507,6 +511,8 @@ source (props of `crates/gz-scene/src/props.rs` and the areas).
 | `EditorPreferences.cpp` `kPrefHelp` rows (40: General, Viewport, Tools, Objects) | | `gz-ui-app/src/prefs.rs` over `gz-app/src/settings.rs` `PREFS` | same |
 | `LevelPreferences.cpp` Recovery\Enabled / Interval / Delay After Input / Snapshots Kept | | `prefs.rs` Recovery page | same |
 | `LevelPreferences.cpp` Scene\Targets\Enable\<class>, Scene\Targets\Read Only\<class> | | Level Settings > Targets (`gz-scene/src/props.rs`) | differs (D18) |
+| `EditorPreferences.cpp` Tools\Box Selection\Limited Depth, Depth Tolerance (`CLevelMain::SelectionFrustum`) | a marquee reaches as far as the farthest scene object under its corners, plus the tolerance | `gz-ui-viewport/src/draw.rs` `box_depth` + `frustum_select` (the marquee, `pane.rs`); stored and not read before the close sweep | same |
+| `EditorPreferences.cpp` Tools\Box Selection\Back Face Culling (`bp_cull`) | read only by `CEditableMesh::FrustumPickFaces`, which nothing of the level editor calls | the preference, stored and answered on the wire; its help says no box of the level editor reads it | same |
 | Keyboard page (`CCustomPreferences::DrawKeyboard`, `UIKeyPressForm`) | | `gz-ui-app/src/keyboard.rs`, `dlg.assign_shortcut` | same |
 | `-project`, `-nodlg`, `-qa_github`, `-iconsheet` | | `grizzly/src/cli.rs` | same |
 | `-uiscale <f>` (`XrUIKit.cpp` `CommandLineScale`) | | `grizzly/src/cli.rs` | same |
@@ -514,8 +520,8 @@ source (props of `crates/gz-scene/src/props.rs` and the areas).
 | (none) | | `-headless`, `-mcp_port`, `-root`, `-log_echo`, `-dump_commands` (Rust only) | same (addition) |
 | `level.ini` (settings, `[shortcuts]`), `level_imgui.ini` | | `grizzly_editor.ltx` | differs (D3: new files, nothing migrated) |
 | `_projects.ini`, `project.ltx`, `<project>\temp\session.ltx`, recovery snapshots, `preview.png`, `releases\deleted.tags`, `Documents\Grizzly Editor\catalog.ltx` | | `gz-project`, `gz-app/src/shell.rs`, `gz-scene` recovery, `gz-publish`, `gz-release/src/keys.rs` | same |
-| the picker cache `nq_index_*.txt` | | in-memory `Query`s; Rust adds `<project>\temp\viewport.ltx`, `appdata\game_index` | differs (STATE.md: not ported, by design) |
-| Startup: splash window on its own thread, stage profile, loader line, code page line (`EditorStartup`) | | profile and lines in `grizzly/src/startup.rs`; no splash | differs |
+| the picker cache `nq_index_*.txt` | | in-memory `Query`s (plan 5.4: derived data is a query, nothing cached on disk is invalidated by hand); Rust adds `<project>\temp\viewport.ltx`, `appdata\game_index` | dropped (plan 5.4) |
+| Startup: splash window on its own thread, stage profile, loader line, code page line (`EditorStartup`) | | profile and lines in `grizzly/src/startup.rs`; no splash | differs (D7) |
 
 ### 9. Stubs in the Rust tree
 
@@ -526,21 +532,23 @@ source (props of `crates/gz-scene/src/props.rs` and the areas).
 |---|---|---|
 | `gz-github/src/github.rs` "Not yet: poll again"; `gz-nq/src/service.rs`, `gz-scene/src/objtools/portal.rs` a variable `todo`; `gz-ui-viewport/src/lighting.rs` "not yet scaled" | only words | same |
 | `gz-ui-level/src/tools.rs` "This tool has no settings of its own." | the fallback for Sound Source, Sound Environment, Glow, Group: the C++ has no panel for them either; every other tool has its panel | same |
+| The close sweep (2026-11-13): `todo!`, `unimplemented!`, `TODO`, `FIXME`, "not yet", "for now", "later", "placeholder", "stub" over `crates` | words only (a placeholder mesh, a "later" registration, the device flow's "Not yet: poll again"); `gz-app/src/gpu.rs`'s "mutes for now" was the C++ `MuteSounds` hold, renamed `mute_held`; `gz-ui-app/src/prefs.rs` said rows wait for their parts of the editor - none does (`the_shells_keys_are_live` holds every row live) and the note is gone | same |
+| Commands of the registry no test named (`Grizzly.exe -dump_commands` against the suites, the differential and the crates' tests): `ui_toast`, `ui_split` (`test_ui_shell` E), `spawn_animation` (`test_properties` C), `build_cform`, `build_aimap`, `build_all`, `reload_configs`, `level_rebuild_status`, `compile_details`, `play_game` (`test_level_commands`) | each has its test now; `ui_toast` answers the notes up and `ui_list` names them | same |
 
 The earlier hits (`validate.rs` "Not ported", the VIPM pass, the Wallmark tool, the fog volume token, the
 characters' and world rules' "later package") are gone from the source: the work was done, the unused
 fog volume token removed.
 
-## Unjudged
+## Once unjudged, judged since
 
 | Item | Why |
 |---|---|
 | judged - The answers of the MCP commands beyond key names (types, values, order, error texts) | the differential run compares them value for value: "Commands compared by the differential run" below (94 commands compared, every one equal or equal but for the fields its IGNORE table names; the rest with why not) |
-| judged in part - The spawn entities' property rows (`gz-entities` against the Dead Air `FillProps`) | the run compares the Details rows of `physic_destroyable_object` and `inventory_box` spawns and Level Settings: rows, order (the property tree's), values, help. Fixed: the Game Type row (commented out in the C++), `ALife\Story ID (script)`, story ids by name, the Profile by the Spawn tool's name, the tree order, Level Settings' help and unit. Differs: a spawn's `Model\Animation` is the C++ playback buttons, the Detail Objects rows live on their tool's panel (STATE.md, Differences the differential left). Other classes were not sampled |
-| Read-only versus editable per Details row, and the chooser kinds inside entity rows | only labels and the scene's `choose` lists were compared |
-| Viewport gestures past the key names: box selection with Limited Depth / Back Face Culling, gizmo sensitivities, vertex snap behaviour | needs the editor running |
-| Graph canvas gestures and the Content Browser's drag and drop | labels match; behaviour needs the editor running |
-| Tooltips and help texts | not compared |
+| judged - The spawn entities' property rows (`gz-entities` against the Dead Air `FillProps`) | the run compares the Details rows of one spawn of every entity class the linked game's sections give (`diff_editors.py` `gen_scene_classes` / `gen_scene_class_rows`) and Level Settings: rows, order (the property tree's), values, `enabled`, help. Fixed: the Game Type row (commented out in the C++), `ALife\Story ID (script)`, story ids by name, the Profile by the Spawn tool's name, the tree order, Level Settings' help and unit. Differs, by the IGNORE tables with their reasons: a spawn's `Model\Animation` is the C++ playback buttons, the Detail Objects rows live on their tool's panel (D18), a new smart cover's hold time (D19) |
+| judged - Read-only versus editable per Details row, and the chooser kinds inside entity rows | every Details row the differential reads carries `enabled` and is compared (`gen_scene_class_rows`, one spawn of every class); a chooser's kind is in neither editor's answer: the lists a row picks from are `gz-ui-level/src/lists.rs` `of_choose` (its tests) and `details.rs`, the chooser itself `test_properties` C |
+| judged - Viewport gestures past the key names: box selection with Limited Depth / Back Face Culling, gizmo sensitivities, vertex snap behaviour | `test_scene_tools` drives them through `viewport_gesture` in the running editor (M a marquee, G a gizmo drag, R / A clicks, the snap); Limited Depth is `draw.rs` `a_marquee_selects_what_it_holds` (a box 5 m deep misses a light 13 m out, 20 m reaches it) - it was stored and not read until the close sweep; Back Face Culling is read by no box of the C++ level editor either (section 8); the gizmo sensitivities are `Prefs::tools_sr` and `gizmo.rs` `snapping`; the vertex snap lands on the hit point as the C++ does (`pane.rs` `pick_ground`, `// oracle:`) |
+| judged - Graph canvas gestures and the Content Browser's drag and drop | `test_graph_ui` (Frame All, panes, splits, minimap, content-sized nodes over `quest_view`), `test_screens` (a file dropped at a point of the window lands on its drop zone, `simulate_drop`), `test_unicode_names` (the browser's rename box and moves); a pointer gesture without MCP is no test of this repository (the editor takes no synthetic input) |
+| judged - Tooltips and help texts | the Details and Level Settings rows' help is compared by the differential (`help` of every row); the menus' and toolbars' tips are product text of their own (CLAUDE.md "Code and text": short, official, English), not ports |
 
 ## Commands compared by the differential run
 

@@ -201,6 +201,25 @@ def run(project: str) -> None:
                 status = mcp("property_choose", action="status", key="Visual")
                 check(status.get("form_alive") is False and status.get("pending") is False, "C as Cancel: no chooser, no edit left",
                       json.dumps(status))
+            # the spawn's playback over MCP: read, stopped, at its first frame; nothing of the scene changes
+            sa = mcp("spawn_animation", object=name)
+            tried = []
+            for visual in ("actors\\stalker_neutral\\stalker_neutral_1", "dynamics\\box\\box_wood_01",
+                           "physics\\box\\box_1a"):
+                if sa.get("ok") or "model" not in sa.get("error", ""):
+                    break
+                tried.append(mcp("spawn_set_visual", name=name, visual=visual))
+                sa = mcp("spawn_animation", object=name)
+            sa["tried"] = tried
+            check(sa.get("ok") and sa.get("object") == name and sa.get("state") in ("playing", "paused", "stopped"),
+                  "C spawn_animation reads the spawn's playback", json.dumps(sa)[:300])
+            stopped = mcp("spawn_animation", object=name, action="stop")
+            first = mcp("spawn_animation", object=name, action="first")
+            check(stopped.get("state") == "stopped" and first.get("state") == "paused" and first.get("time") == 0,
+                  "C spawn_animation stops the model and puts it at its first frame",
+                  json.dumps(stopped)[:200] + " / " + json.dumps(first)[:200])
+            none = mcp("spawn_animation", object="qa_no_such_object")
+            check(not none.get("ok"), "C spawn_animation refuses an object that is not there", json.dumps(none)[:200])
             mcp("delete_selected")
 
         # ------------------------------------------------------------ D: Preferences

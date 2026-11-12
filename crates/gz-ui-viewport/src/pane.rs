@@ -1188,14 +1188,29 @@ fn click_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons, 
 /// The end of a marquee (`FrustumSelect`): what the box holds of the current class is added.
 fn marquee_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, size: [u32; 2], a: G2, b: G2) {
     let Ok(svc) = SceneService::of(editor) else { return };
-    let cam = vp.read(|s| s.nav.camera());
+    let (cam, prefs, far) = vp.read(|s| (s.nav.camera(), s.prefs, s.nav.far));
     let ed = editor.clone();
     crate::gesture::spawn(editor, async move {
-        let snap = svc.store.snapshot();
+        let (snap, pick) = svc.pick().await;
         let lib = svc.library.clone();
         let class = snap.tools.target;
-        let ids =
-            ed.exec.cpu(move || crate::draw::frustum_select(&snap, &lib, &cam, size, a, b, class)).await;
+        let ids = ed
+            .exec
+            .cpu(move || {
+                let depth = prefs.bp_lim_depth.then(|| {
+                    crate::draw::box_depth(
+                        &snap,
+                        &lib,
+                        &pick,
+                        &cam,
+                        size,
+                        (a, b),
+                        (prefs.near, far, prefs.bp_depth_tolerance),
+                    )
+                });
+                crate::draw::frustum_select(&snap, &lib, &cam, size, a, b, class, depth.flatten())
+            })
+            .await;
         if !ids.is_empty() {
             let _ = svc.store.send(SceneCmd::Select { ids, mode: SelectMode::Add }, ed.ui_origin()).await;
         }

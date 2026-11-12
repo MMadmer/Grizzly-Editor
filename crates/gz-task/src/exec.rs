@@ -79,7 +79,11 @@ impl Executors {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        self.0.rt.spawn(fut)
+        // a task spawned for a request works for it too: the jobs it starts are the request's
+        match crate::jobs::current_scope() {
+            Some(scope) => self.0.rt.spawn(crate::jobs::in_scope(scope, fut)),
+            None => self.0.rt.spawn(fut),
+        }
     }
 
     #[must_use]

@@ -27,7 +27,7 @@ Three requirements, in this order:
 
 | # | Invariant |
 |---|---|
-| I1 | No phase needs a commit in the game repository. A phase that finds it needs one stops, and this document changes first. |
+| I1 | No phase of the move needed a commit in the game repository, and phases 0 to 8 made none. After it, at the author's word, the game learned one general ability - an engine started on another fs config (`-fsltx`) writes nothing into its installation and takes a path as long as the system does (game `3816558ff`, `EngineAbilities` in `xrEngine.exe`'s version resource) - which Play uses when the linked engine has it (D1). |
 | I2 | Nothing in the game names the editor (the existing rule, unchanged). |
 | I3 | At the cutover the Rust editor does everything the C++ editor does. Deliberate differences are listed in section 12 and nowhere else. |
 | I4 | Until the cutover the project folder was the interface between the two editors: both opened the same project, so no file format inside a project changed before it. It stays the contract with every project made before. |
@@ -84,7 +84,7 @@ Three facts that shape the plan:
 | **Rewritten last** (phase 8) | `XrLC`, `XrLCLight`, `xrDO_Light`: the crates `gz-lc` and `gz-lc-light`, a job of the editor's process |
 | **Kept as it is** | the game repository; the Python QA suites (they are the independent judge and only speak MCP); `tools/qa/github_mock` (Go); `tools/classic_mod` |
 | **Kept as C** | LuaJIT, behind `mlua`: the editor runs the game's own pure-Lua readers, and they must behave as they do in the game |
-| **Dropped** | Clear Sky and Shadow of Chernobyl flavours (`XrGameCS`, `XrGameSOC`, their factories, `fs_cs.ltx`, `fs_soc.ltx`); `ActorEditor`, `ParticleEditor`, `ShaderEditor` and the standalone `XrAI`, which no build target makes today; GameSpy, `XrNetServer`, BugTrap |
+| **Dropped** | Clear Sky and Shadow of Chernobyl flavours (`XrGameCS`, `XrGameSOC`, their factories, `fs_cs.ltx`, `fs_soc.ltx`); `ActorEditor` (with what only it reaches of the object format: `.bones` files, `GenerateBoneShape`, `OptimizeMesh`), `ParticleEditor`, `ShaderEditor` and the standalone `XrAI`, which no build target makes today; GameSpy, `XrNetServer`, BugTrap |
 
 ## 5. Target architecture
 
@@ -217,6 +217,11 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
 - The server is a task per connection. Reads answer from snapshots without visiting the UI
   thread; writes go to the store's queue. A command no longer waits for a frame unless its
   contract is a frame.
+- **A request past its timeout tells the truth.** A command runs to its end whatever its
+  connection does, in a job scope of its own (`gz_task::JobScope`: every job started from its
+  task and the tasks it spawns): past `GRIZZLY_MCP_REQUEST_TIMEOUT_MS` a command whose job still
+  runs answers `ok: false`, `running: true`, the jobs and where to follow them - not a result,
+  not a failure; only one with no job behind it answers `editor busy (timeout)`.
 - **Frame-held requests keep their contract.** `screenshot_editor`, `screenshot_viewport`,
   `ui_list`, `ui_audit`, `titlebar_info` and the `pending` answers are answered by a frame -
   of the window and, for the viewport, of its own pass - that STARTED after the request's
@@ -371,7 +376,7 @@ a higher one; layers 0-3 depend on neither egui nor wgpu.
 An area crate is its domain plus `service.rs` and `cmd.rs` with one `register(reg)`; a surface
 crate has one `install(builder)`. The scripts that check and test the workspace are
 `tools/rust/check.sh` and `tools/rust/test.sh`; there is no `xtask`. The exact layer of every
-crate as `cargo metadata` gives it is in `docs/rust/STATE.md` ("For the plan").
+crate as `cargo metadata` gives it is in `docs/rust/STATE.md` ("The crates' layers").
 
 ## 8. What replaces what
 
@@ -757,7 +762,7 @@ bug.
 
 | # | Difference | Why |
 |---|---|---|
-| D1 | **Play in Editor starts the game.** Play bakes the scene, builds the collision, the AI map, the game graph and `editor.spawn`, compiles the level in the editor's process (`gz-lc`) and runs the LINKED game's engine on it as a job, in a game root of its own outside the project (copies of the engine and the libraries it loads, a junction to the archives, a copy of the loose gamedata with the level added, an appdata of its own, no module). The root is `%LOCALAPPDATA%\GrizzlyPlay\<id>` (`<home>\play\<id>` for an editor started with a home of its own) or the folder `root=` names, and only a missing or empty folder becomes one: Play writes its marker (`play_root.txt`) there first and every entry's name into it before the entry, removes from a root only what its marker listed or this run wrote, and the checks of a project's deletion stand in front of every root (never a project, the editor, a game, a user folder, a drive, a link; no project anywhere inside what it clears) - instead of running a game level inside the editor. | The embedded play needs `XrGame.dll` and the whole engine in the editor's process. The real game shows what a player gets, and its crash no longer takes the editor along. The game's `CLocatorAPI` copies every path into 256 bytes, so Play refuses a game root too deep for it and names the path. The root holds COPIES of the executables because the game's content service works in the folder of its engine: it rewrites `.dead-air-x64\content-state.txt` there at every start and starts a level only while the archives are that folder's `database`. Running the installed engine in place needs a change of the game (the content service taking its root from the fs config), which no phase of this plan makes (I1). |
+| D1 | **Play in Editor starts the game.** Play bakes the scene, builds the collision, the AI map, the game graph and `editor.spawn`, compiles the level in the editor's process (`gz-lc`) and runs the LINKED game's engine on it as a job, on a game root of its own outside the project: the root's `fsgame.ltx` (the game's, with `$arch_dir$` naming the game's archives), a copy of the loose gamedata with the level added, an appdata of its own, no module. An engine that says `fsltx-in-place` in its version resource (`EngineAbilities`) is started where it is installed and writes nothing there; an older one runs from copies of itself and its libraries in the root beside a junction to the archives. The root is `%LOCALAPPDATA%\GrizzlyPlay\<id>` (`<home>\play\<id>` for an editor started with a home of its own) or the folder `root=` names; only a missing or empty folder becomes one, the marker `play_root.txt` first, and Play removes from a root only what its marker listed or this run wrote, behind the checks of a project's deletion (never a project, the editor, a game, a user folder, a drive, a link; no project anywhere inside what it clears). A root deeper than the engine takes is refused naming the path. - instead of running a game level inside the editor. | The embedded play needs `XrGame.dll` and the whole engine in the editor's process. The real game shows what a player gets, and its crash no longer takes the editor along; the game knows another fs config (the game repository, `3816558ff`), so nothing of the installation is copied or written. |
 | D2 | **The viewport is drawn by the editor's own materials**, not by the R1 blenders. | 5.8. What an author judges - geometry, textures, transparency, placement - stays. |
 | D3 | The editor's own settings (window, layout, preferences) live in new files; nothing is migrated. | The editor has not shipped; the existing rule. |
 | D4 | Signatures and package bytes differ from the C++ editor's for the same input. | Section 9. |

@@ -2,43 +2,17 @@
 //! (`MOD_UPDATES.md` 1.1: quoting).
 
 /// What the C++ `Trim` takes off both ends.
-pub const WS: &[char] = &[' ', '\t', '\r', '\n'];
+pub const WS: &[char] = gz_ltx::doc::MANIFEST_WS;
 
 #[must_use]
 pub fn trim(s: &str) -> &str {
     s.trim_matches(WS)
 }
 
-/// Where the `;` that starts a comment is, `None` when the line has none. A `;` between a pair
-/// of double quotes belongs to the value (`\"` escapes inside them); a quote that never closes
-/// is an ordinary character. `//` is NOT a comment here: a website is `https://...`.
-#[must_use]
-pub fn find_comment(s: &str) -> Option<usize> {
-    let b = s.as_bytes();
-    let mut i = 0;
-    while let Some(&c) = b.get(i) {
-        if c == b';' {
-            return Some(i);
-        }
-        if c == b'"' {
-            let mut close = i + 1;
-            while let Some(&q) = b.get(close) {
-                if q == b'"' {
-                    break;
-                }
-                if q == b'\\' && close + 1 < b.len() {
-                    close += 1;
-                }
-                close += 1;
-            }
-            if close < b.len() {
-                i = close;
-            }
-        }
-        i += 1;
-    }
-    None
-}
+/// Where the `;` that starts a comment is, `None` when the line has none: `gz_ltx`'s manifest
+/// rule (a `;` inside a quoted value belongs to it, `//` is no comment: a website is
+/// `https://...`).
+pub use gz_ltx::doc::find_manifest_comment as find_comment;
 
 /// `"..."` to text: `\n`, `\"` and `\\` are decoded, any other backslash stays as written.
 /// `None` when `val` is not exactly one quoted string.
