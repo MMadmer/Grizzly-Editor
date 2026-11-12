@@ -2985,3 +2985,44 @@ Once, at the end, on the fast build of the final tree (`Intermediate\cargoast\G
   `-att`, `-no_invalidefaces` and the invalid-face abort, more than two pages, MU models other than l03u's (at 4 px/m,
   one sample, `-noise`), the implicit light at more than one sample, the nine-sample jitter only through the
   lightmaps of mp_test and l12u.
+
+## The final review: the lead's part and the run on the final tree
+
+The final review (Fable 5.2, 12 Nov; its report is in the conversation's record, its scripts and outputs under
+`Intermediate/critic-final/`) said the move was not done: Play's `root=` could wipe a folder it did not make
+(blocking), the compile differed from run to run, the comparison covered less than section 9 said, and the notices
+named three pieces of 284. Two engineers closed the first three ("The final review, Play and the tests", "The final
+review, the compiler", above); the lead's part:
+
+- **The notices are made from what the programs link** (`tools/rust/notices.py`, `licenses/NOTICES_HEAD.txt` +
+  `licenses/THIRD_PARTY_NOTICES.txt`, 684 KB): the 284 third-party crates of the two programs' dependency closure
+  for Windows (normal dependencies, never through a proc macro), each with its license and repository, then the
+  206 distinct license texts the crates ship, the fonts egui embeds included. `check.sh` fails a file the lock no
+  longer gives.
+- **No GPL code is linked.** `gz-chunk` carried a port of LZO 2.10 (GPL v2+), compressor and decompressor. The
+  editor only READS LZO blocks (the files of the game's archives) and writes none - the compressor was called by
+  one test. `gz_chunk::lzo::decompress` is now the `lzo` crate (Apache-2.0, `#![forbid(unsafe_code)]`, strict about
+  the stream's end) behind the same contract: exactly the stated size; a size the stream cannot reach (more than
+  256 times the block) refused before anything is reserved; a size the machine cannot hold an error
+  (`try_reserve_exact`). The tests pack their fixtures with `lzokay-native` (MIT, a dev-dependency) and keep four
+  blocks as the engine's compressor writes them. `licenses/LZO_LICENSE.txt` is gone. The whole corpus (every file
+  of the game's archives) reads through it in `test.sh --all`.
+- **Not decided here, the author's to decide before a release**: the editor's own license - the workspace says
+  `LicenseRef-Grizzly` and no text of it exists in the repository.
+- **Not done, a change of the GAME**: Play still copies the engine and its libraries into its root, because the
+  game's content service works in the folder of its engine (D1).
+
+**The run on the final tree** - 12 Nov, 22:10 - 22:34, commit `7866dfd9`, the release build, one step after
+another (`Intermediate/final2/`, `summary.txt` and a log per step):
+
+| Step | Result | Time |
+|---|---|---|
+| `Build.ps1` | the two programs, their PDBs, the notices | 245 s |
+| `check.sh` | ok: clippy, fmt, `unsafe` only in `gz-win` (29), the registry, encodings, test files, the icon, the notices | 50 s |
+| `test.sh --all` | 78 binaries, 1178 tests green; the net over the tests' temp folder: 3287 events, no program file, 6.4 s of CPU | 322 s (228 s of it the build of the test binaries) |
+| `diff_editors.py --all` | 10 scenarios, 755 steps, 746 written files, 0 differ | 53 s |
+| `diff_compile.py --all` | mp_test, l12u_control_monolith, mp_close_combat, mp_close_combat_implicit, l03u_agr_underground PASS; every scene's second compile byte for byte | 502 s |
+| `run_all.py --with-game` | 23 suites, 23 passed | 159 s |
+| `test_play_game.py --scene l03u_agr_underground` | 33 checks pass: the level in the game 25 s after Play, no dump, the installed game's 107,624 entries unchanged | 83 s |
+
+Nothing changed under `D:\XFinedProjects` or the game's `modules`; no process and no Play root left.

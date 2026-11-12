@@ -472,19 +472,36 @@ runs differ in is known and is the floor. Byte for byte unless named here:
   side alone has, the area that changed material. QSlim orders ties by heap addresses, so two
   C++ runs differ, and so do two builds of one source.
 - **The light**, per channel in 0..255 steps as mean absolute error and 99th percentile:
-  lightmaps within 3 / 16, vertex light within 2 / 16, the detail objects' light within 0.5 / 2.
-  The floor is zero; the bounds are what the port may differ in (another DXT5 encoder, another
-  ray-triangle test on grazing faces, Rust's `sin` / `cos` / `pow`). Seen: lightmaps mean 0.73
-  and p99 8 at most, vertex light 0.02 / 0, `level.details` equal byte for byte.
+  lightmaps and implicitly lit textures within 1.5 / 16, vertex light within 0.2 / 2 - about
+  twice what was seen (lightmaps 0.68 / 8 on l12u, vertex light 0.085 / 1) - and the detail
+  objects' light byte for byte. Every lightmapped triangle is sampled through each side's own
+  coordinates, the flat ones (a deflector the light found flat shrinks to a texel or a line)
+  along their line or at their texel. The second picture's colour is judged less each side's
+  own encoder disagreement with the first picture's alpha (DXT5 blocks). What the bounds allow
+  is what the port differs in: another DXT5 encoder, another ray-triangle test on grazing
+  faces, Rust's `sin` / `cos` / `pow`. A deflector that the light moves to another lightmap
+  page takes its triangles along: the static geometry is then compared as one multiset.
 - **MU models**: their geometry byte for byte; a model's own light within the vertex bounds
   (seen: mean 0.002, max 1); a reference's light within them for the references the C++ lights
   on one thread, and reported, not judged, for the others (D25).
 
 Compared this way: `mp_test`, `l12u_control_monolith` (the middle scene: 410k collision faces,
-749 visuals, sectors and portals), `mp_close_combat` for the detail compiler and
-`l03u_agr_underground` for the MU models (7 models, 15 references). The last one's copy gets a
-lower lightmap density (4 px/m, one jitter sample) and `-noise` on both compilers, which reach
-nothing of the MU work, so that the C++ run ends in minutes; the record names what was set.
+749 visuals, sectors and portals), `mp_close_combat` for the detail compiler,
+`l03u_agr_underground` for the MU models (7 models, 15 references) and
+`mp_close_combat_implicit` for the implicit (terrain) light and two lightmap pages. The MU
+scene's copy gets a lower lightmap density (4 px/m, one jitter sample) and `-noise` on both
+compilers, which reach nothing of the MU work, so that the C++ run ends in minutes; the
+implicit scene one jitter sample, and its MU models are emptied in the input both compilers
+read, because the C++ compiler crashes converting them. The record names what was set.
+
+Every scene is also compiled twice by the Rust compiler and the bytes must be equal, and the
+smallest on one thread against all (`diff_compile.py`).
+
+**Not proven against the C++** (no recorded scene exercises it; `compare_compile.py`'s header
+lists it phase by phase): the Draft quality; the flags `-nosun`, `-nosmg`, `-no_optimize`,
+`-att`, `-no_invalidefaces` and the abort on invalid faces; more than two lightmap pages; MU
+models other than l03u's and at other settings than its lowered ones; the implicit light at
+more than one jitter sample; the nine-sample jitter beyond the lightmaps of mp_test and l12u.
 
 Two consequences worth stating:
 
@@ -697,7 +714,10 @@ holds no C++.
   the level build call it in place of `XrLC.exe` and `xrDO_Light.exe`.
 - **Every core, and the same result on any number of them.** Each phase is data-parallel on
   the CPU pool - here a compile is minutes, and an idle core is the fault. A texel's jitter
-  comes from the texel, never from a shared generator; reductions run in a fixed order.
+  comes from the texel, never from a shared generator; reductions run in a fixed order; a
+  cache may save work and never changes an answer (the cached triangle of a ray is tested
+  behind its own box). Held by the comparison: two compiles of every scene give the same
+  bytes, one thread the same as all.
 - **Ported as written, with the libraries it leans on**: the tangent basis (NVMeshMender) and
   the index ordering (NvTriStrip) are ported, not replaced, so that the geometry half can be
   compared with the C++ compiler's output chunk by chunk.
@@ -708,7 +728,7 @@ holds no C++.
   of floating point; the lightmaps and vertex colours within a stated error (mean and a high
   percentile, and looked at side by side); the game loads the level (`test_play_game`); the
   compile no slower than the C++ one and the lighting near every core.
-- **The gate as passed**: four scenes under the rules of section 9. The compile took 2.4 s,
+- **The gate as passed**: five scenes under the rules of section 9 (the fifth, with the implicit light and two lightmap pages, was added after the final review). The compile took 2.4 s,
   64.8 s, 9.3 s and 28.2 s against the C++ compilers' 20 s, 261 s, 78 s and 187 s (`mp_test`,
   `l12u_control_monolith`, `mp_close_combat`'s details, `l03u_agr_underground`); the game
   creates a new game on a level Play compiled this way, loads its geometry and collision and
@@ -749,6 +769,7 @@ bug.
 | D17 | A ray pick hits the scene whatever the camera sees (`probe_vertical`, `scan_walls`, `drop_objects`, way point snapping). | The C++ `CSceneObject::RayPick` skipped objects outside the camera's view, so an MCP answer depended on where a minimised window happened to look. |
 | D19 | A spawn point is placed only for a class the game's factory has a server class for, and a new smart cover's hold position time starts at 0. | The C++ placed a spawn point of undefined type for the first and left the second uninitialised. |
 | D24 | The level compilers light on one machine's cores: lighting over a network of machines (`-net`) and the radiosity pass (`-gi`) are not ported. | No option of the editor reaches either, and the cores of one machine do what the network was for. |
+| D27 | The level compiler's ray test answers a ray with a zero direction component as the C++ slab test does; the C++'s boxes rounded outward and its triangle cache shared between threads are not ported. | The first made the compile differ from run to run where a ray started on a box's face; the C++'s shared cache makes its own two runs differ on a thousandth of the shrunk deflectors' texels. |
 | D25 | An MU reference is lit by itself. | The C++ keeps a vertex's light in the model its references share and lights the references on several threads, so a reference takes some of another's light and two C++ runs differ. |
 | D26 | The Build menu has no rows for xrAI, and `level_build` no `compile_aimap` / `compile_spawn`. | No build makes that program, and the AI map, the game graph and the spawn are built in the editor's process. |
 | D23 | Play's game graph is the linked game's graph with the level appended (the game's vertex numbers and graph guid unchanged), the way the game adds a module's level; a scene named like a level the game already has keeps the C++ single-level graph. | Dead Air's own start scripts spawn on fixed vertices of the game's graph; on the C++ editor's one-level graph the game stops there. |
