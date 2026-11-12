@@ -228,6 +228,13 @@ pub async fn new_scene(editor: &Arc<Editor>, svc: &SceneService, origin: Origin)
     Ok(())
 }
 
+/// A file the scene's commands are about to write: never under the linked game's folder (the
+/// one guard of every writer, `gz_editor::fsx::WriteGuard`).
+pub fn writable(editor: &Editor, path: &Path) -> Result<(), CmdError> {
+    let guard = gz_project::Project::of(editor).map(|(_, p)| p.write_guard(None)).unwrap_or_default();
+    guard.check(path).map_err(|e| CmdError::invalid(e.to_string()))
+}
+
 /// The file a name means in the project's `$maps$`: absolute as given, `.level` added.
 #[must_use]
 pub fn maps_file(svc: &SceneService, name: &str, ext: &str) -> PathBuf {

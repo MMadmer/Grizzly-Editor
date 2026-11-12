@@ -6,6 +6,8 @@ _appdata_cs_/
 _appdata_soc_/
 /Bin/
 Intermediate/
+# the old MSBuild output of RedImage; nothing builds it any more
+Source/External/RedImage/libraries/
 /Lib/
 import/
 #rawdata/

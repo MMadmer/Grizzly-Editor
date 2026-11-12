@@ -282,6 +282,7 @@ async fn scene_summary(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
                 .ok_or_else(|| CmdError::invalid("nothing collected yet: action=collect first"))?;
             let file = edit::maps_file(&svc, a.need("file")?, "txt");
             let text = s.export();
+            edit::writable(&ed, &file)?;
             let f2 = file.clone();
             ed.exec
                 .io(move || {
@@ -332,6 +333,7 @@ async fn compiler_errors(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         "export" => {
             let file = file_of(&a)?;
             let bytes = crate::debug::write_compiler_error(&svc.store.snapshot().tools.debug);
+            edit::writable(&ed, &file)?;
             let f2 = file.clone();
             ed.exec
                 .io(move || {
@@ -455,6 +457,7 @@ async fn object_motion(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                 .and_then(|r| r.model())
                 .ok_or_else(|| CmdError::invalid(format!("'{}' has no motion to export", obj.name)))?;
             let bytes = gz_fmt_object::write_anm(&m);
+            edit::writable(&ed, &file)?;
             let f2 = file.clone();
             ed.exec
                 .io(move || {
@@ -861,6 +864,7 @@ async fn group_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                 .find_chunk(crate::objects::CHUNK_OBJECT_BODY)
                 .map(|(b, _)| b.to_vec())
                 .ok_or_else(|| CmdError::internal("the group wrote no body"))?;
+            edit::writable(&ed, &file)?;
             let f2 = file.clone();
             ed.exec
                 .io(move || {

@@ -316,7 +316,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   anywhere.
 - The editor's scanner of modes reads BOTH roots,
   `modules\` and `mods\`, because what is already installed must not break.
-- **Every writer passes `gz_editor::fsx::WriteGuard`** before it writes - the project's file operations, the module
+- **Every writer passes `gz_editor::fsx::WriteGuard`** before it writes - the project's file operations, the scene's own files (Save Scene As and its exports), the module
   build and the flat export, the level exports, the level build, the release stage, the compilers' stage and Play's
   game root: nothing under the linked game's root, judged as written and where the path really is, but the module's
   `modules\<id>` (with its stage in `modules\.new`) and the flat `gamedata_<id>`. A level build writes into the open

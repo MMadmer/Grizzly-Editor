@@ -261,7 +261,7 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
   for the browser, the asset index and the build.
 - Text is UTF-8 inside; cp1251 is converted explicitly where the game's files are read or
   written.
-- **The game's own files are never written.** Every writer of the editor - the project's file
+- **The game's own files are never written.** Every writer of the editor - the scene's own files, the project's file
   operations, the module build and the flat export, the level exports, the level build, the
   release stage, the compilers' stage and Play's game root - passes one guard
   (`gz_editor::fsx::WriteGuard`) before it writes: nothing under the linked game's root, judged

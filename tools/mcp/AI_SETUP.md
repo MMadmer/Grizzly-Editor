@@ -718,7 +718,7 @@ command runs on to its end; a request line is capped at 1 MiB.
 > after the commands you sent before it.
 >
 > If you start the editor yourself, launch it as
-> `Grizzly.exe -project "<project folder>" -nodlg` so it opens straight into that
+> `Grizzly.exe -project "<project folder>"` so it opens straight into that
 > project instead of waiting on the Start page. On a running editor,
 > `grizzly_open_project` switches projects. Only the active tab is drawn: bring the
 > one you want to see up with `grizzly_ui_tab` (or its opener) before a screenshot.

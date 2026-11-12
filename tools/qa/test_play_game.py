@@ -155,6 +155,23 @@ def unlink_archives(root: str) -> None:
         os.rmdir(link)
 
 
+def sweep_stale() -> None:
+    """What a run that was killed left in the temp folder: its game root still holds a junction to the game's
+    archives. The link goes first, then the folders - never a delete through the link. A root a game still runs
+    from is left alone."""
+    temp = tempfile.gettempdir()
+    for name in os.listdir(temp):
+        path = os.path.join(temp, name)
+        if not os.path.isdir(path) or not (name.startswith("gzpr_") or name.startswith("gzpg_")):
+            continue
+        if name.startswith("gzpr_"):
+            if games_in(path):
+                continue
+            unlink_archives(path)
+        print("removing what an earlier run left: %s" % path, flush=True)
+        qa_target.remove_tree(path)
+
+
 def run(project: str, root: str, keep_log: str | None) -> None:
     for p in (os.path.join(project, "rawdata", "levels", SCENE + ".level"),):
         shutil.copy2(os.path.join(REPO, "rawdata", "levels", SCENE + ".level"), p)
@@ -282,6 +299,7 @@ def main() -> int:
         return 2
     except OSError:
         pass
+    sweep_stale()
     work = tempfile.mkdtemp(prefix="gzpg_")
     # a folder of its own, right in the temp folder: every path the game indexes under its root, its own shader
     # cache's among them, has to fit 255 characters (play.rs, GAME_PATH_LIMIT) - a deeper root stops the game at

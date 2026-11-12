@@ -467,6 +467,7 @@ fn next_numbered(p: &Path) -> PathBuf {
 /// The save: the snapshot serialised off the store, the files committed on the IO pool, then
 /// the store marked saved.
 pub async fn save_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: PathBuf) -> Result<(), String> {
+    crate::edit::writable(editor, &file).map_err(|e| e.message)?;
     let snap = svc.store.snapshot();
     let f = file.clone();
     let files = editor.exec.cpu(move || io::write_scene(&snap, &f)).await.map_err(|e| e.to_string())?;

@@ -1607,7 +1607,7 @@ texts of the third-party code that stays stay with it. `Intermediate/cutover/clo
   pass), and at the root `T-6638.7z` (an archive of old X-Ray sources), `ccc__temp__vertices`, an empty
   `engine.log`, `tool_compile_xrLC.cmd` / `tool_compile_xrDO.cmd` (naming a `Bin\Win32` that no build makes) - none
   is named by the brief's section 1. The untracked MSBuild output under `Source/External/RedImage/{intermediate,
-  libraries}` is git-ignored and was left.
+  libraries}` was left; `intermediate` was ignored already, `libraries` is ignored since the reviewer's check.
 - The repository: 18,201 files tracked at the tag, 2,157 now (2,155 kept, `cmake/CompilerTargets.cmake`, `crates/grizzly/build.rs`); C++ 3,270,206 lines at the tag, 338,302 now (21,607 of them SDK headers); Rust 246,592 (`Intermediate/cutover/size.py`).
 
 **The compilers build from what is left**: `pwsh -NoProfile -File .\Build.ps1 -Only compilers -Out
