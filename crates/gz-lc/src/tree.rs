@@ -393,7 +393,7 @@ fn build_ogf(g: &LcGlobalData, faces: &[gz_lc_light::FaceId]) -> Option<Ogf> {
 pub fn flex2ogf(g: &LcGlobalData, splits: Vec<Split>, tree: &mut Tree, noise: bool, log: &mut Log) {
     for (i, s) in splits.iter().enumerate() {
         if s.len() > SS_HIGH_X2 {
-            log.msg(format!("! ERROR: subdiv #{i} has more than {SS_HIGH_X2} faces ({})", s.len()));
+            log.warn(format!("! ERROR: subdiv #{i} has more than {SS_HIGH_X2} faces ({})", s.len()));
         }
     }
     let ogfs: Vec<Option<Ogf>> = splits.par_iter().map(|s| build_ogf(g, s)).collect();

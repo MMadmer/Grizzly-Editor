@@ -8,11 +8,27 @@ Rules (one per chunk; anything else is byte for byte):
                       padding after the material and after `reserved` left out (uninitialised in the C++).
   level.cform         byte for byte, else the triangles as a multiset; else (QSlim re-rates the edges around a
                       contraction in the order of their heap addresses, MxQSlim.cpp apply_contraction: the two C++
-                      runs differ too) the header and the triangle count equal, the triangles one side alone has no
-                      more than between cpp1 and cpp2 (at least 1e-4 of all), every material word's area within 1e-4.
+                      runs differ too, and so do two C++ builds of one source) the header equal and either the same
+                      triangle count and the same surface triangulated another way - the same vertices, every corner
+                      of a triangle one side alone a vertex of the other, per material word and plane the one-sided
+                      triangles' areas equal within 1e-4 - or the triangle counts apart by no more than between
+                      cpp1 and cpp2 by half again (at least 1e-4 of all), the triangles one side alone has no more
+                      than between cpp1 and cpp2 (at least 1e-4 of all) and the area that changed material no larger than between
+                      cpp1 and cpp2 by half again (per word: within 1e-4 of its area or 1.5 times the C++ runs'
+                      largest; in all: within 1e-6 of the area or 1.5 times theirs).
   level               chunks 1, 2, 4, 6, 7, 8 byte for byte; chunk 3 visual by visual, each sub-chunk byte for byte
                       but a progressive visual's fast path (22), whose sliding windows' four reserved words are left
-                      out (never set in the C++: cpp1 and cpp2 differ there).
+                      out (never set in the C++: cpp1 and cpp2 differ there), and the light of an MU reference: a
+                      tree's c_scale / c_bias (OGF_TREEDEF2; its xform byte for byte) and a LOD's corner colours
+                      (OGF_LODDEF2; its corners and texture coordinates byte for byte), judged as below.
+  MU models           their visuals' geometry byte for byte (the vertices but their light, the indices, the sliding
+                      windows, a tree's xform, a LOD's quads); a model's own light (level.geom) under the vertex
+                      bounds; a reference's light - every tree vertex lit through c_scale / c_bias, every LOD corner
+                      colour - under the vertex bounds for the references the C++ lights alone. The C++ keeps a
+                      vertex's light in the MODEL its references share (xrMU_Model::calc_lighting writes _vertex::C)
+                      and lights the references on four threads and a fifth for the rest (CMULight, get_intervals):
+                      a reference whose model has another reference on another thread takes some of that one's
+                      light, so its light is reported, not judged.
   level.geom/geomx    the header's version byte for byte, its quality left out (uninitialised in the C++); the vertex
                       buffers byte for byte but the light bytes (normal's w, the colour) under the light bounds below;
                       the lightmap coordinates (tc1) left out of that: a deflector the light finds flat shrinks to a
@@ -39,7 +55,7 @@ from collections import Counter
 
 import numpy as np
 
-VERSION = 4
+VERSION = 5
 
 # The bounds of the light, per channel in 0..255 steps (mean absolute error, 99th percentile). The C++ compiler's
 # floor (cpp1 against cpp2) is zero; the bounds are what the Rust compiler is allowed to differ in: the DXT5 encoder
@@ -126,16 +142,51 @@ def cmp_level_cform(a: bytes, b: bytes) -> tuple[list[str], str, dict]:
     ma, mb = tri_multiset(a), tri_multiset(b)
     if ma == mb:
         return [], "as a multiset of triangles", {}
-    problems = [f"level.cform: {len(ma)} / {len(mb)} triangles"] if len(ma) != len(mb) else []
+    # a count that differs is judged against the C++ runs' own (judge)
+    problems: list[str] = []
     ca, cb = Counter(ma), Counter(mb)
     only_a, only_b = ca - cb, cb - ca
     words: dict = {}
     for rows, k in ((ma, 0), (mb, 1)):
         for t, w in rows:
             words.setdefault(w, [0.0, 0.0])[k] += tri_area(t)
-    return problems, "the C++ runs' own difference", {
-        "triangles": len(ma), "one_sided": max(sum(only_a.values()), sum(only_b.values())),
-        "area": {str(w): v for w, v in words.items()}}
+    stats = {"triangles": len(ma), "count_diff": abs(len(ma) - len(mb)), "one_sided": max(sum(only_a.values()), sum(only_b.values())),
+             "area": {str(w): v for w, v in words.items()},
+             "moved": sum(abs(x - y) for x, y in words.values()),
+             "moved_max": max((abs(x - y) for x, y in words.values()), default=0.0),
+             "total": sum(x for x, _ in words.values())}
+    if len(ma) == len(mb) and retriangulated(ma, mb, only_a, only_b):
+        return [], "the same surface triangulated another way", stats
+    return problems, "the C++ runs' own difference", stats
+
+
+def plane_key(t) -> tuple:
+    """A triangle's plane, its normal turned to a positive largest component, rounded: 1e-3 on the normal, 1 cm on
+    the distance."""
+    p = np.array(t, dtype=np.float64)
+    n = np.cross(p[1] - p[0], p[2] - p[0])
+    ln = float(np.linalg.norm(n))
+    if ln == 0.0:
+        return ()
+    n /= ln
+    if n[int(np.argmax(np.abs(n)))] < 0:
+        n = -n
+    return tuple(np.round(n, 3).tolist()) + (round(float(n @ p[0]), 2),)
+
+
+def retriangulated(ma, mb, only_a: Counter, only_b: Counter) -> bool:
+    """The two collision models hold the same vertices, every corner of a triangle one side alone has is a vertex of
+    the other side, and per material word and plane the one-sided triangles cover the same area (within 1e-4):
+    the same surface, triangulated in another order of QSlim's ties."""
+    va = {c for t, _ in ma for c in t}
+    vb = {c for t, _ in mb for c in t}
+    if va != vb:
+        return False
+    groups: dict = {}
+    for side, only in ((0, only_a), (1, only_b)):
+        for (t, w), k in only.items():
+            groups.setdefault((w, plane_key(t)), [0.0, 0.0])[side] += k * tri_area(t)
+    return all(abs(x - y) <= CFORM_AREA * max(x, y, 1e-9) for x, y in groups.values())
 
 
 OGF_HEADER = 1
@@ -143,6 +194,19 @@ OGF_HEADER = 1
 
 OGF_FASTPATH = 22
 OGF_SWIDATA = 6
+OGF_TREEDEF2 = 12
+OGF_LODDEF2 = 11
+OGF_CHILDREN_L = 10
+MT_LOD, MT_TREE_ST, MT_TREE_PM = 6, 7, 11
+MU_THREADS = 4
+
+
+def same_lod_quads(x: bytes, y: bytes) -> bool:
+    """OGF_LODDEF2: eight quads of four corners (position, texture coordinates, rgb+hemi, sun, then the struct's three
+    bytes of padding - OGF_LOD::_vertex, never set: cpp1 and cpp2 differ there): the corners and coordinates equal."""
+    a = np.frombuffer(x, np.uint8).reshape(32, 28)
+    b = np.frombuffer(y, np.uint8).reshape(32, 28)
+    return bool((a[:, :20] == b[:, :20]).all())
 
 
 def same_fast_path(x: bytes, y: bytes) -> bool:
@@ -162,7 +226,7 @@ def same_fast_path(x: bytes, y: bytes) -> bool:
 
 def cmp_visuals(a: bytes, b: bytes, out: list[str]) -> dict:
     va, vb = chunks(a), chunks(b)
-    stats = {"visuals": len(va), "equal": 0, "swi_rule": 0, "differ": 0}
+    stats = {"visuals": len(va), "equal": 0, "swi_rule": 0, "mu_light": 0, "differ": 0}
     if len(va) != len(vb):
         out.append(f"level: {len(va)} visuals in the C++, {len(vb)} in the Rust")
     for (ia, da), (ib, db) in zip(va, vb):
@@ -170,16 +234,20 @@ def cmp_visuals(a: bytes, b: bytes, out: list[str]) -> dict:
             stats["equal"] += 1
             continue
         sa, sb = chunks(da), chunks(db)
-        bad = []
+        bad, rule = [], "swi_rule"
         if [c for c, _ in sa] != [c for c, _ in sb]:
             bad.append("sub-chunks " + str([c for c, _ in sa]) + " / " + str([c for c, _ in sb]))
         else:
             for (c, x), (_, y) in zip(sa, sb):
                 if x == y or (c == OGF_FASTPATH and same_fast_path(x, y)):
                     continue
+                # an MU reference's light: cmp_mu judges it
+                if (c == OGF_TREEDEF2 and len(x) == len(y) == 104 and x[:64] == y[:64]) or                         (c == OGF_LODDEF2 and len(x) == len(y) == 896 and same_lod_quads(x, y)):
+                    rule = "mu_light"
+                    continue
                 bad.append(f"chunk {c} ({len(x)} / {len(y)} bytes)")
             if not bad:
-                stats["swi_rule"] += 1
+                stats[rule] += 1
                 continue
         stats["differ"] += 1
         if stats["differ"] <= 8:
@@ -536,11 +604,105 @@ def cmp_details(a: bytes, b: bytes, out: list[str]) -> dict:
                 "max": int(d[:, i].max()) if len(d) else 0} for i, n in enumerate(names)}
 
 
+# ---------------------------------------------------------------------------------------- MU models
+
+def mu_refs(level: bytes, geom: bytes) -> list[dict]:
+    """The MU references in the order the compiler exports them: each tree visual with its model's vertices and
+    indices (level.geom), its sliding windows, its OGF_TREEDEF2 and its LOD's OGF_LODDEF2."""
+    buffers, ibs = vbs(geom), ibs_of(geom)
+    vis = chunks(chunk_map(level).get(3, b""))
+    lod_of: dict = {}
+    for _, v in vis:
+        s = chunk_map(v)
+        h = s.get(OGF_HEADER, b"")
+        if len(h) > 1 and h[1] == MT_LOD and OGF_CHILDREN_L in s:
+            n = struct.unpack_from("<I", s[OGF_CHILDREN_L], 0)[0]
+            for child in struct.unpack_from(f"<{n}I", s[OGF_CHILDREN_L], 4):
+                lod_of[child] = s.get(OGF_LODDEF2)
+    out = []
+    for i, v in vis:
+        s = chunk_map(v)
+        h = s.get(OGF_HEADER, b"")
+        if len(h) < 2 or h[1] not in (MT_TREE_ST, MT_TREE_PM) or 21 not in s:
+            continue
+        vbid, vs, vc, ibid, is_, ic = struct.unpack_from("<6I", s[21], 0)
+        el, raw = buffers[vbid]
+        out.append({"visual": i, "model": (vbid, vs, vc), "decl": el, "verts": raw[vs:vs + vc],
+                    "idx": ibs[ibid][is_:is_ + ic], "swi": s.get(OGF_SWIDATA), "tree": s.get(OGF_TREEDEF2),
+                    "lod": lod_of.get(i)})
+    return out
+
+
+def raced(refs: list[dict]) -> list[bool]:
+    """Whether the C++ lights a reference while another reference of its model may be lit on another thread: CMUThread
+    gives every one of four threads `n / 4` references in order and a fifth the rest (get_intervals)."""
+    n = len(refs)
+    stride = n // MU_THREADS if n >= MU_THREADS else 1
+    thread = [min(k // stride, MU_THREADS) if n >= MU_THREADS else k for k in range(n)]
+    return [any(refs[j]["model"] == r["model"] and thread[j] != thread[k] for j in range(n) if j != k)
+            for k, r in enumerate(refs)]
+
+
+def tree_lit(r: dict) -> np.ndarray:
+    """Every vertex of a reference lit as the engine lights a tree: the model's hemisphere (the normal's w) times
+    c_scale plus c_bias, per channel r, g, b, hemi, sun, in 0..255 steps."""
+    hemi = r["verts"][:, 15].astype(np.float64) / 255.0
+    f = np.frombuffer(r["tree"], "<f4").astype(np.float64)
+    return (hemi[:, None] * f[None, 16:21] + f[None, 21:26]) * 255.0
+
+
+def lod_colours(r: dict) -> np.ndarray:
+    """A LOD's 32 corners: r, g, b, hemi, sun."""
+    return np.frombuffer(r["lod"], np.uint8).reshape(32, 28)[:, 20:25].astype(np.int32)
+
+
+def cmp_mu(la: bytes, ga: bytes, lb: bytes, gb: bytes, out: list[str]) -> dict:
+    """The MU references of two outputs: their models' geometry and their light (see the rules above)."""
+    ra, rb = mu_refs(la, ga), mu_refs(lb, gb)
+    if len(ra) != len(rb):
+        out.append(f"MU: {len(ra)} / {len(rb)} references")
+        return {}
+    race = raced(ra)
+    stats: dict = {"references": len(ra), "models": len({r["model"] for r in ra}), "raced": int(sum(race))}
+    found: dict = {"model": [], "tree": [], "lod": [], "tree_raced": [], "lod_raced": []}
+    seen = set()
+    for k, (a, b) in enumerate(zip(ra, rb)):
+        if a["model"] != b["model"] or a["decl"] != b["decl"] or a["verts"].shape != b["verts"].shape:
+            out.append(f"MU: reference {k} has another model or vertex format")
+            continue
+        cols = light_columns(a["decl"])
+        rest = [i for i in range(a["verts"].shape[1]) if i not in cols]
+        if a["model"] not in seen:
+            # the model's own light, once per model
+            seen.add(a["model"])
+            found["model"].append(a["verts"][:, cols].astype(np.int32) - b["verts"][:, cols].astype(np.int32))
+        if (a["verts"][:, rest] != b["verts"][:, rest]).any() or not np.array_equal(a["idx"], b["idx"]) \
+                or a["swi"] != b["swi"]:
+            out.append(f"MU: reference {k}: its model's geometry differs")
+        if (a["tree"] is None) != (b["tree"] is None) or (a["lod"] is None) != (b["lod"] is None):
+            out.append(f"MU: reference {k}: a tree or LOD definition on one side only")
+            continue
+        tag = "_raced" if race[k] else ""
+        if a["tree"] is not None:
+            if a["tree"][:64] != b["tree"][:64]:
+                out.append(f"MU: reference {k}: its xform differs")
+            found["tree" + tag].append(tree_lit(a) - tree_lit(b))
+        if a["lod"] is not None:
+            if not same_lod_quads(a["lod"], b["lod"]):
+                out.append(f"MU: reference {k}: its LOD quads differ")
+            found["lod" + tag].append(lod_colours(a) - lod_colours(b))
+    for name, parts in found.items():
+        if parts:
+            m, p, x = err_stats(np.concatenate([d.ravel() for d in parts]))
+            stats[name] = {"mean": m, "p99": p, "max": x}
+    return stats
+
+
 # ---------------------------------------------------------------------------------------- the whole
 
 def compare_dirs(da: str, db: str, files_a: set, files_b: set, out_dir: str | None) -> dict:
     """One C++ output against another output (the Rust one, or the second C++ run)."""
-    res: dict = {"problems": [], "rules": {}, "light": {}, "vertex": {}, "details": {}}
+    res: dict = {"problems": [], "rules": {}, "light": {}, "vertex": {}, "details": {}, "mu": {}}
     pr = res["problems"]
     skip_b = {"build.err"}
     # xrDO_Light's bookkeeping for a later partial relight (recalculation.cpp): only its own next run reads it, and
@@ -583,6 +745,7 @@ def compare_dirs(da: str, db: str, files_a: set, files_b: set, out_dir: str | No
         elif a != b:
             pr.append(f"{n} differs ({len(a)} / {len(b)} bytes)")
     if "level" in files_a & files_b and "level.geom" in files_a & files_b:
+        res["mu"] = cmp_mu(read(da, "level"), read(da, "level.geom"), read(db, "level"), read(db, "level.geom"), pr)
         got, why, pa, pb, where = light_compare(da, db)
         if got is None:
             pr.append("lightmaps: " + why)
@@ -596,6 +759,8 @@ def compare_dirs(da: str, db: str, files_a: set, files_b: set, out_dir: str | No
 
 
 CFORM_AREA = 1e-4
+# Another tie order of QSlim may move area between materials half as far again as the C++'s two runs did.
+CFORM_FLOOR = 1.5
 
 
 def judge(res: dict, floor: dict) -> list[str]:
@@ -604,13 +769,27 @@ def judge(res: dict, floor: dict) -> list[str]:
     # apply_contraction), so ties fall another way from run to run: the triangles one side alone has may be as many
     # as between the two C++ runs (at least 1e-4 of all), and every material word keeps its area within 1e-4
     cf = res.get("cform") or {}
-    if cf:
-        allowed = max((floor.get("cform") or {}).get("one_sided", 0), -(-cf["triangles"] // 10000))
+    if cf and res["rules"].get("level.cform") != "the same surface triangulated another way":
+        fl = floor.get("cform") or {}
+        allowed = max(fl.get("one_sided", 0), -(-cf["triangles"] // 10000))
+        count_allowed = max(int(CFORM_FLOOR * fl.get("count_diff", 0)), -(-cf["triangles"] // 10000))
+        if cf.get("count_diff", 0) > count_allowed:
+            bad.append(f"level.cform: {cf['count_diff']} triangles more on one side (allowed {count_allowed})")
         if cf["one_sided"] > allowed:
             bad.append(f"level.cform: {cf['one_sided']} triangles one side alone has (allowed {allowed})")
+        word_allowed = CFORM_FLOOR * fl.get("moved_max", 0.0)
         for w, (x, y) in cf["area"].items():
-            if abs(x - y) > CFORM_AREA * max(x, 1e-6):
-                bad.append(f"level.cform: material word {w} has the area {y:.6f} against {x:.6f}")
+            if abs(x - y) > max(CFORM_AREA * max(x, 1e-6), word_allowed):
+                bad.append(f"level.cform: material word {w} has the area {y:.6f} against {x:.6f} "
+                           f"(allowed {max(CFORM_AREA * max(x, 1e-6), word_allowed):.6f})")
+        moved_allowed = max(1e-6 * cf.get("total", 0.0), CFORM_FLOOR * fl.get("moved", 0.0))
+        if cf.get("moved", 0.0) > moved_allowed:
+            bad.append(f"level.cform: {cf['moved']:.6f} m2 changed material (allowed {moved_allowed:.6f})")
+    mu = res.get("mu") or {}
+    for name in ("model", "tree", "lod"):
+        s = mu.get(name)
+        if s and (s["mean"] > VERTEX_MEAN or s["p99"] > VERTEX_P99):
+            bad.append(f"MU {name} light: mean {s['mean']:.2f}, p99 {s['p99']:.1f} (bounds {VERTEX_MEAN}, {VERTEX_P99})")
     lm = res["light"].get("lightmaps", {})
     for ch, s in lm.items():
         if isinstance(s, dict) and (s["mean"] > LIGHT_MEAN or s["p99"] > LIGHT_P99):
@@ -716,6 +895,8 @@ def compare(scene, rd, rec, rust_dir, rrec, out, log) -> bool:
     log(f"  rules: {json.dumps(res['rules'])}")
     log(f"  light: {json.dumps(res['light'])[:1500]}")
     log(f"  vertex: {json.dumps(res['vertex'])}  details: {json.dumps(res['details'])}")
+    if res.get("mu"):
+        log(f"  MU: {json.dumps(res['mu'])}  floor MU: {json.dumps(floor.get('mu'))}")
     for row in res["phases"]:
         log("  " + row)
     return not res["problems"] and not res["judged"]

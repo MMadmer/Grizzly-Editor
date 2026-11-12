@@ -8,8 +8,8 @@ What it does:
   1. copies the project into the system temp folder and puts the repository's smallest scene into it (mp_test:
      one arena, one light); its multiplayer spawns give way to an actor and a graph point, an AI map is generated
      over the arena, and the scene is saved and built (Make All);
-  2. compiles the geometry with the repository's XrLC (level_build compile_geometry: the editor runs it from a
-     stage of the project whose fsgame.ltx names the project's levels);
+  2. compiles the geometry with the editor's own level compiler, in its process (level_build compile_geometry: a
+     job on every core, into the project's level folder; the command answers when it ends, with its report);
   3. starts Play: the editor builds the collision, the AI map, the game graph (joined onto the linked game's,
      whose vertex numbers the game's start scripts name) and editor.spawn, makes a game root in a short temp folder
      of its own (root=; the game takes paths of 255 characters at most) - the linked game's executables copied, a
@@ -24,6 +24,12 @@ of its actor, the client connected, the level's collision model built under the 
 collision read, and the load's synchronisation ended (the actor's first update has run by then: the game's start
 scripts spawn its kit there). Then five seconds more, and no assert, no fatal error, no crash dump.
 Opt-in in run_all.py (--with-game): it starts the real game, half a minute of the run.
+
+Why the game root holds copies of the executables, not the installed engine run in place with -fsltx: the game's
+content service works in the folder of xrCore.dll whatever the fs config says (Core.ApplicationPath,
+ContentService.cpp): every start's verification rewrites <game>\.dead-air-x64\content-state.txt, and a level
+starts only when $arch_dir$ is that folder's database. The suite proves it on the root (the file is written there)
+and lists the installed game before and after the run (path, size, write time): any difference fails.
 
 The editor runs on a hidden desktop (the game repository's Start-DetachedHiddenDesktopProcess.ps1), so the game it
 starts is there too and no window reaches the user's screen. Nothing of the installed game is written: its
@@ -172,6 +178,28 @@ def sweep_stale() -> None:
         qa_target.remove_tree(path)
 
 
+def listing(top: str) -> dict[str, tuple[int, int]]:
+    """Every file and folder under `top` with its size and write time; a link is listed, never followed."""
+    out: dict[str, tuple[int, int]] = {}
+    for d, dirs, files in os.walk(top):
+        keep = []
+        for n in dirs:
+            p = os.path.join(d, n)
+            st = os.lstat(p)
+            out[os.path.relpath(p, top)] = (0, st.st_mtime_ns)
+            if not (os.path.islink(p) or getattr(st, "st_reparse_tag", 0)):
+                keep.append(n)
+        dirs[:] = keep
+        for n in files:
+            p = os.path.join(d, n)
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            out[os.path.relpath(p, top)] = (st.st_size, st.st_mtime_ns)
+    return out
+
+
 def run(project: str, root: str, keep_log: str | None) -> None:
     for p in (os.path.join(project, "rawdata", "levels", SCENE + ".level"),):
         shutil.copy2(os.path.join(REPO, "rawdata", "levels", SCENE + ".level"), p)
@@ -206,17 +234,20 @@ def run(project: str, root: str, keep_log: str | None) -> None:
     if not check(built.get("ok"), "Make All builds the level", short(built)):
         return
     t = time.monotonic()
-    started = mcp("level_build", action="compile_geometry", params="-silent")
-    check(started.get("ok"), "XrLC starts from the editor's stage of the project", short(started))
-    wait_idle(280)
+    done = mcp("level_build", action="compile_geometry", timeout=280)
+    report = done.get("report") or {}
+    check(done.get("ok") and report.get("parts"), "the editor's level compiler compiled the level in its process "
+          "(%.1f s, %s threads)" % (time.monotonic() - t, report.get("threads")),
+          short({k: v for k, v in done.items() if k != "report"}))
+    wait_idle(30)
     level_dir = os.path.join(project, "gamedata", "levels", SCENE)
     compiled = all(os.path.isfile(os.path.join(level_dir, f)) for f in ("level", "level.geom", "level.cform"))
-    check(compiled, "XrLC compiled the level into the project (%.0f s)" % (time.monotonic() - t),
+    check(compiled, "the level's files are in the project's level folder",
           ", ".join(sorted(os.listdir(level_dir))))
     if not compiled:
         return
 
-    t0 = time.monotonic()
+    t0, play_wall = time.monotonic(), time.time()
     play = mcp("level_build", action="play", root=root, params="-i -always_active -silent_error_mode -force_flushlog")
     if not check(play.get("ok") and play.get("run", {}).get("started"), "Play starts the game in its own root",
                  short(play)):
@@ -264,6 +295,10 @@ def run(project: str, root: str, keep_log: str | None) -> None:
             break
     check(not bad, "no assert and no fatal error in the game's log", "; ".join(bad[:3]))
     check(not dumps(root), "no crash dump", ", ".join(dumps(root)))
+    state = os.path.join(root, ".dead-air-x64", "content-state.txt")
+    check(os.path.isfile(state) and os.path.getmtime(state) >= play_wall - 1,
+          "the game's content service rewrote content-state.txt beside the root's engine (why the engine is not run "
+          "in the installed game's folder)")
     check(bool(still), "the game was still running when it was stopped (%.0f s after Play, the level in at %s s)"
           % (seconds, "%.0f" % loaded_at if loaded_at is not None else "-"))
     if keep_log:
@@ -300,6 +335,7 @@ def main() -> int:
     except OSError:
         pass
     sweep_stale()
+    before = listing(GAME)
     work = tempfile.mkdtemp(prefix="gzpg_")
     # a folder of its own, right in the temp folder: every path the game indexes under its root, its own shader
     # cache's among them, has to fit 255 characters (play.rs, GAME_PATH_LIMIT) - a deeper root stops the game at
@@ -357,6 +393,10 @@ def main() -> int:
             unlink_archives(root)
             qa_target.remove_tree(root)
             qa_target.remove_tree(work)
+    after = listing(GAME)
+    differ = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+    check(not differ, "nothing of the installed game changed (%d entries listed before and after)" % len(before),
+          ", ".join(differ[:10]))
     failed = [t for ok, t in results if not ok]
     print("PLAY GAME: %d pass, %d fail" % (len(results) - len(failed), len(failed)), flush=True)
     return 1 if failed else 0

@@ -1,6 +1,6 @@
 [package]
 name = "gz-levelbuild"
-description = "The full level build of a scene: the build project, the game files, the AI map, the game graph, the spawn file, the compilers and the game as jobs."
+description = "The full level build of a scene: the build project, the game files, the AI map, the game graph, the spawn file, the level compilers in process and the game as jobs."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -28,6 +28,8 @@ gz-game.workspace = true
 gz-build.workspace = true
 gz-project.workspace = true
 gz-export-level.workspace = true
+gz-lc.workspace = true
+gz-lc-light.workspace = true
 glam.workspace = true
 serde.workspace = true
 serde_json.workspace = true

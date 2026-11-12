@@ -2009,6 +2009,174 @@ in its log loop and lights on six threads, hence its loads.
 before the first run (13:37) and nothing after the last (15:48): 0 entries both times. No process of the
 compilers is left, no `gzlc_*` stage under `%TEMP%`; the scratch copies are gone.
 
+## Phase 8c: the compiler in the editor, no C++
+
+The brief `docs/rust/briefs/lc-final.md`, 12 Nov, sections 1, 2 and 4; section 3 (the deletion, `Build.ps1`, the
+documents, `qa_target.py`, the icons, the sweep of the other crates' tests) went to a second engineer on the branch
+`phase8-cleanup` (the lead's split, 16:3x). Before the first run (15:53:50): `find D:\XFinedProjects "D:\Games\Dead
+Air\modules" -newermt` ten minutes earlier - nothing; no editor, game or compiler of ours running.
+
+**The oracle compilers.** `Bin\x64\CppCompilers`: a build of the tag `cpp-compilers-last` (now commit 0ba98df4,
+the lead's: under `-silent` XrLC and xrDO_Light create no window at all - `cl_log.cpp`, `xrLC.cpp`, `xrDO_Light.cpp`;
+window code only). `diff_compile.py` starts them from there and nowhere else (hidden startup info, `-silent`), and
+checks while one runs that it owns no top-level window (EnumWindows by its process id, visible or not): mp_close_combat's
+two xrDO_Light runs, "0 windows of its own". A run that made one fails its record. The XrLC records below were made
+by the build of 16:2x, before that commit; the lead proved its outputs equal on mp_test (window code only). The key of
+a record names the tag (`CPP_SOURCE`), not the binaries' stamps (`FORMAT` 3): a rebuild of the tag keeps the records,
+and with no record and no oracle binary a scene fails with a sentence saying where the compiler is to be built.
+Records are never deleted by the tool now; the August ones (FORMAT 2: `compile-mp_test-3798f398b6a05401`,
+`compile-l12u_control_monolith-46e7b6d5bcfa14a3`, `compile-mp_close_combat-ccf94d1b52e339cf`) are left for the lead.
+
+**The August build against today's** (the same input, `oldnew` of the records): mp_test - `build.lights`, `level`,
+`level.geom(x)` equal, `level.cform` 4 of 24 triangles another triangulation of the same surface; l12u - light equal
+texel for texel, `level.cform` 41 triangles one side alone has, the sliding windows' reserved words. What differs is
+what the heap orders (QSlim's ties) and memory nobody sets: two builds of one source differ exactly there. Today's
+is the oracle.
+
+### 1. MU models against the C++ compiler
+
+**The scene: `l03u_agr_underground`** (7 MU models, 15 references, LODs), its copy's `[build_params]` set before Make
+All (`diff_compile.py` `OPTIONS`): `light_pixel_per_meter` 4 (was 10), `light_jitter_samples` 1 (was 9); the quality
+stays High, because Draft takes the MU light to one sample (`xrMU_Model_Calc_lighting.cpp`) and skips progressive
+meshes (`OGF_Face.cpp`). Both compilers also get `-noise` (`FLAGS`): no progressive meshes for the STATIC visuals
+(`xrFlex2OGF.cpp`); the MU models keep theirs (`xrMU_Model_Calc_ogf.cpp` calls `MakeProgressive` unconditionally).
+Without it XrLC passed 600 s in "Converting to OGFs" (one thread, the static VIPM) with the August binary, after
+LMaps had shrunk from 513 s to about 100 s; the static progressive meshes are proven on l12u. `LIMITS` gives the
+scene 1200 s a run (both together within the brief's forty minutes); it needed 186.8 s (688.6 s CPU) and 545.3 s
+(890.5 s CPU) - XrLC sets its own process to the idle class, and a cargo release build of the other engineer had
+every core during the second run, so its wall time says nothing (CPU seconds are given beside every C++ time).
+
+**What differed, and what was done:**
+- **The MU models' own light** (each model vertex's hemisphere, `level.geom`): mean 6.85, p99 36, max 86 per channel
+  against the C++ - whose two runs are equal. The C++ base thread lights the models one after another from the one
+  `::Random`, holdrand 1 at the start (x64's `FPU::initialize` seeds nothing), three draws per sample (`random_dir`
+  with a cone), six samples per vertex, nothing else drawing meanwhile. Now `light_mu` gives every model the
+  generator as its first draw finds it and every vertex jumps to its draws (`XrRandom::advanced`, the LCG composed in
+  O(log n); `MuModel::light_draws`): the vertices still light in parallel. After: mean 0.002, max 1.
+- **The static geometry from the tesselation on** (`build.cform`: 3082 triangles from face 512137 on, 16 split
+  points elsewhere; then `level.cform`, 179 visuals' containers, the vertex buffers): the split order follows the
+  face pool's addresses, and today's C++ put the face pool's block made after the load (block 63, the tesselation's)
+  BELOW the 63 blocks of the load - `xrLC` reads `build.prj` into one buffer, loads the faces above it and frees it
+  when `CBuild::Load` returns (`FS.r_close`, xrLC.cpp), and the later block takes that space. `PoolSim::mark_loaded`
+  (called at the end of `load`) orders the face pool's later blocks below the load's; the vertex pool keeps rising
+  order (tried: modelling it too breaks l03u and l12u - the faces take the space first). After: `build.cform` byte for
+  byte, 1192 of 1219 visuals byte for byte, the rest under the rules; l12u and mp_test pass with it as before.
+  Proven by experiment first: blocks 0..2 swapped changed nothing, block 63 moved below made `build.cform` equal.
+- **The references' light** (a tree's `c_scale` / `c_bias`, a LOD's corner colours): the C++'s own two runs differ
+  there (cpp1 / cpp2: 12 of 15 trees' `OGF_TREEDEF2`, all 15 `OGF_LODDEF2`). The C++ keeps a vertex's light in the
+  MODEL its references share (`xrMU_Model::calc_lighting` writes `_vertex::C`, then reads it back for the group mix)
+  and lights the references on four threads plus one for the rest (`CMULight`, `get_intervals(4, n)`): a reference
+  whose model has another reference on another thread takes some of that one's light. Seen: the four LODs that differ
+  most (3, 4, 7, 13) all belong to models of several references lit on several threads; the Rust light of a
+  reference does not move with its seed (another seed: mean 0.54). Rust lights each reference by itself (the intent;
+  plainly broken C++). The rule (`compare_compile.cmp_mu`): references whose model the C++ lights on one thread only
+  are judged under the vertex bounds, the others are reported.
+- **The LOD corners' three padding bytes** (`OGF_LOD::_vertex`, never set: cpp1 and cpp2 differ) are left out.
+- **`level.cform`**: QSlim's tie order (heap) differs between cpp1 and cpp2 here too, in the count (7) and in up to
+  8.2e-4 of a material's area; the rules now judge the count and the area that changed material against the C++
+  runs' own (see "For the plan"), and a re-triangulation of the same surface (mp_test against today's build) passes.
+
+**The proof** (`python tools/qa/diff_compile.py --scene l03u_agr_underground`, from the record): PASS. MU: 15
+references of 7 models, 12 lit on several C++ threads; the models' geometry (vertices but their light, indices,
+sliding windows, xforms, LOD quads) byte for byte; the models' own light mean 0.002 / p99 0 / max 1; the three
+references lit alone: trees mean 0.0008 / max 1, LODs mean 0.046 / max 1; the twelve others (reported): trees mean
+25.2 / p99 191 against the C++ runs' own 21.6 / 150, LODs 3.1 / 25 against 0.95 / 11. Lightmaps mean 0.62 / p99 8
+at most (2.a hemi 0.51 / 8), static vertex light 0.018 / 0; `level.cform` 431 triangles one side alone has (the C++
+runs: 547), 8 more on one side (theirs: 7), 0.0244 m2 changed material (theirs: 0.0228). The pictures
+(`Intermediate/compile/l03u_agr_underground/pictures`) were looked at: the same light and shadows, the difference a
+speckle of 5-bit steps. Rust 34.6 s (329.6 s CPU) against the C++'s 186.8 s (688.6 s CPU).
+
+### 2. The editor compiles with it
+
+- **In process, as a job** (`crates/gz-levelbuild/src/compile.rs`): `compile_geometry`, `compile_details`, the new
+  `compile` (and the command `level_compile`) run `gz_lc::compile` / `compile_details` on the project's
+  `gamedata\levels\<level>` as the job `level_run` of the group `game` (one at a time with the game, its card in the
+  Task Center, `level_build stop` stops it), on the editor's CPU pool (`editor.exec.cpu`: every core), data from the
+  editor's `fsgame.ltx` (`Sources::of_root`). The compiler's phases are the job's stage, its progress the card's
+  fraction, its log lines the Output Log; all three are passed on at most four times a second (`Throttle`). The
+  answer: `{started: "gz-lc", level, parts, job, report {level, dir, threads, seconds, parts [{part, seconds, phases,
+  files, warnings, invalid_faces}]}}` when it ends, or at once with `wait=false`. `build_all` makes the build and
+  compiles the level in the same job (`{build, compile}`). The Build menu's Compile rows show the report in the kit's
+  Result dialog (`dlg.compile_result`: time, each part, files, threads, invalid faces, warnings). `gz_lc::Report` gained
+  `warnings` (`Log::warn`: invalid faces kept, junctions, multiple edges, an oversized subdivision) and
+  `invalid_faces`; a compile refused for invalid faces writes `build.err` first, as `err_save` does.
+- **Gone**: the compilers' stage (`runs::stage_compilers`, `compiler_fsgame`, `temp\compilers`, the copies of
+  `Bin\x64\Release`), `Program::XrLc` / `XrDo`. `rg -i "xrlc\.exe|xrdo_light\.exe" crates tools` finds only
+  `diff_compile.py` / `compare_compile.py` (the oracle). xrAI (`compile_aimap`, `compile_spawn`) still looks for
+  `xrAI.exe` beside the editor: no build makes one since the cutover, so those two rows answer "not there" as before.
+- **MCP**: `crates/gz-mcp/tools.json` - `grizzly_level_build` describes the in-process compile and takes `compile`,
+  `level`, `details`, `wait`; `grizzly_level_compile` is new. `check.sh`: every catalogue command is registered.
+- **The window while it compiles** (`tools/qa/measure_compile.py`, the fast build, l12u_control_monolith, a copy of
+  Test on a hidden desktop, the Level tab up, a frame asked for every quarter second; `Intermediate/compile/measure*`):
+  idle - frame work mean 2.1 ms, p95 2.7, max 4.2, load 0.95 of 16 cores; compiling - frame work mean 3.2 ms, p95 4.0,
+  max 12.2, no frame over 16.7 ms, the process at 8.3 - 10.3 of 16 cores. The compile in the editor took 80 - 109 s
+  (runs at different moments of a busy machine) against 64 s headless right after; with the Preferences tab up (no
+  viewport drawn) 70 s. The difference is the viewport: the window draws at its active rate (the frame pacing's idle
+  cap; over 4096 frames in each window) and each frame of the Level tab draws the scene, part of it on the same CPU
+  pool. Passing every progress report on (each wakes the window) cost 93 s; the throttle brought it to 80 s. Nothing
+  was made smaller; the drawing rate is the shell's (For the plan).
+- **QA**: `test_scene_tools` phase C (mp_test: Make All, a compile started with `wait=false` and stopped - the job ends
+  `cancelled` -, then one over MCP ends `done`, its report names the phases and the files, the files are in the
+  level folder): 9 / 9 (debug build, the compile 2.0 s on 16 threads).
+
+### 3. Play in the game
+
+`tools/qa/test_play_game.py` through `run_all.py test_play_game`: PASS, 88.5 s - the editor's level compiler compiled
+mp_test in its process (0.2 s, 16 threads), the game created the new game from `editor.spawn`, made the player,
+connected, built and read the level's collision and geometry, ended its synchronisation (the level in 41 s after
+Play), no assert, no dump, still running when stopped.
+
+**Play's root keeps copies of the executables** (the lead asked for the installed `xrEngine.exe` run in place with
+`-fsltx`, unless the engine writes into its own folder whatever the fs config says - it does). A `-fsltx <root>\fsgame.ltx`
+moves `$fs_root$` (the folder of that file: `CLocatorAPI::setup_fs_path`), and with it the app data, logs, saves, the
+shader cache, `$game_data$` and the modules root (`xms_core.cpp`: `$fs_root$\modules`); the archives could be named
+in place. But the game's content service works in the folder of `xrCore.dll` (`Core.ApplicationPath`,
+`ContentService.cpp`): every start's verification (`StartVerify`, also from the play gate `PlayBlocked` of a level
+start) ends in `ContentState::SaveCache`, a truncating rewrite of `<application>\.dead-air-x64\content-state.txt`,
+and a level starts only while `$arch_dir$` is `<application>\database` (else "$arch_dir$ points at ..." latches the
+install incomplete and blocks play). So the game root keeps copies of the executables and its junction to the
+archives. Proven by the suite: the root's `content-state.txt` is rewritten during Play (a check), and a listing of
+the installed game (path, size, write time; 107,624 entries, links listed, never followed) before and after the
+run is equal (a check that fails on any difference).
+- The test of `play.rs` writes no program file any more: `prepare_with` takes the game's programs
+  (`GamePrograms`: engines and extensions; `LINKED_GAME` is Dead Air's) and the test uses `engine.bin` / `core.lib`.
+  Nothing else in `crates/gz-levelbuild` writes a program; `rg -n "Command::new|spawn" crates`: what the editor starts
+  is the linked game's engine (the copy in Play's root), xrAI, `cmd /c mklink /J`, `taskkill`, `explorer.exe`,
+  `reg.exe`, `gh` - no copied program but Play's engine.
+
+### 4. Proof
+
+Once, on the final tree of this pass, 17:40 - 17:57, against the debug build (the release build and the icon are the
+other engineer's and the lead's); the compile comparison drives `Intermediate\cargo\fast\Grizzly.exe` as it always did:
+- `bash tools/rust/check.sh`: clippy clean, fmt clean, `unsafe` only in `gz-win` (28), one file-dialog function, every
+  catalogue command registered (`level_compile` among them); 38 s.
+- `bash tools/rust/test.sh --all`: 77 binaries run, 0 cached, 0 failed, 0 skipped; 1155 tests green; 131.6 s.
+- `python tools/qa/diff_editors.py --all`: 10 scenarios, 755 steps, 0 differ; 746 written files, 0 differ; 62.5 s.
+- `python tools/qa/diff_compile.py --all`: mp_test, l12u_control_monolith, mp_close_combat, l03u_agr_underground PASS
+  from today's records (no C++ started); 245.3 s. Rust 2.41 / 64.81 / 9.34 / 28.19 s against the C++'s 20.09 / 504.78 /
+  78.39 / 186.80 s wall (11.6 / 1390.7 / 115.4 / 688.6 s CPU; the l12u record was made on a loaded machine - the
+  August record of the same input took 261 s).
+- `python tools/qa/run_all.py --with-game`: 23 suites, 22 passed, wall 178.7 s; `test_play_game` 63.2 s. The one that
+  failed, `test_mcp_bridge` ("listed 198, catalogue 199"), drove a `grizzly-mcp.exe` built at 11:18 that embeds the
+  catalogue of then (`include_str!`); rebuilt (`cg.sh build -p gz-mcp-bridge`), the suite alone: PASS, 3.0 s.
+
+At the end (17:57:04): `find D:\XFinedProjects "D:\Games\Dead Air\modules" -newermt '2026-11-12 15:43:50'` - nothing.
+No Grizzly, xrEngine, XrLC, xrDO_Light, LevelEditor or github_mock process left; no `gzlc_*`, `gzmc_*`, `gzpg_*`,
+`gzpr_*`, `gzqa_*` or `grizzly_*` folder in the temp folder; no `.part` record; no `gamedata\levels` in the repository.
+The repository root's `_projects.ini` (ignored by git) is an old C++ recording's (it names a `grizzly_diff_*\s6_scene\cpp`
+copy), there before this pass; `run_all.py` puts it back byte for byte. Nothing under `Bin\`, `rawdata\` or `gamedata\`
+was written; under `Intermediate\oracle` only the four new records.
+
+### Decisions taken in this pass
+
+- The MU scene's build options and `-noise` (above): the cheapest settings that leave the MU work as it is.
+- The MU models' jitter reproduces the C++ stream; the references' light stays per reference (the C++ races).
+- The face pool's later blocks sort below the load's (`PoolSim::mark_loaded`): a model of the oracle's heap, stated
+  as `// oracle:` at `PoolSim`; the vertex pool is not modelled.
+- The compile in the editor answers when it ends (like Make All), `wait=false` at once.
+- Play keeps its own root with copies of the executables (the content service's write).
+- `diff_compile.py` keys records by the tag and never deletes one.
+
 ## For the plan
 
 What `docs/RUST_MIGRATION.md` (and CLAUDE.md where named) should say after the reviewer's pass; the lead edits
@@ -2155,6 +2323,38 @@ them.
     list" end with the merge into `main`.
   - phase 7: done as written, with `Build.ps1` building the editor first (outside the developer shell, as `cg.sh`)
     and the compilers second, `-Only`, `-Out`.
+- **After phase 8c** (the pass "Phase 8c" above), the plan should say:
+  - **Phase 8's gate as built**: four scenes against `Bin\x64\CppCompilers` (a build of `cpp-compilers-last`):
+    mp_test, l12u_control_monolith (the middle scene), mp_close_combat (the detail compiler) and
+    l03u_agr_underground for the MU models - with its copy's build options lowered (4 px/m, one jitter sample) and
+    `-noise` on both compilers, none of which reaches the MU work. "Within ten minutes" holds per C++ run there only
+    by those settings; the record says what was set (`OPTIONS`, `FLAGS`, `LIMITS` of `diff_compile.py`).
+  - **D1**: "... compiles the level in the editor's process (`gz-lc`, a job of the Task Center on every core) ..." in
+    place of "with the repository's compilers (from a stage in the project's `temp\compilers`)". The game root stays a
+    root of its own with COPIES of the executables: the game's content service rewrites
+    `<the engine's folder>\.dead-air-x64\content-state.txt` at every start and starts a level only while `$arch_dir$`
+    is that folder's `database`, so the installed engine cannot run in place unchanged. Lifting it is a change of the
+    GAME (the content service taking its root from the fs config), then Play can run the installed engine with
+    `-fsltx`, no copy, no junction - a game release first.
+  - **D14** gains: "The face pool's blocks made after `CBuild::Load` are ordered below the load's, the space the
+    project file's buffer left (`PoolSim::mark_loaded`); seen on l03u with the build of `cpp-compilers-last`. The vertex
+    pool is not modelled." And: "two C++ builds of one source differ where the heap orders (QSlim's ties) and in
+    memory nobody sets; the comparison's rules cover both".
+  - **A deliberate difference (D25)**: "An MU reference is lit by itself. The C++ keeps a vertex's light in the model
+    its references share and lights them on four threads, so a reference whose model has another on another thread
+    takes some of its light (its own two runs differ there)." And: "The MU models' own light draws its jitter from the
+    C++ stream (`::Random` from holdrand 1, three draws a sample, the models in order), jumped to per vertex."
+  - **Section 9**, the compile's rules gain: an MU reference's light judged for the references the C++ lights alone,
+    reported for the rest; the LOD corners' padding left out; `level.cform` as "the same surface triangulated another
+    way" or within the C++ runs' own count, one-sided triangles and area moved between materials, half as far again.
+  - **Section 10.8 / the window during a compile**: frame work mean 3.2 ms / p95 4.0 / max 12.2, no slow frame, the
+    process at 8 - 10 of 16 cores; the compile itself 25 - 70 % slower in the editor than headless (80 - 109 s against
+    64 s on l12u), because the window draws the Level tab's scene at its active rate (over 50 frames a second while a
+    job runs) on the same CPU pool; 70 s with no viewport. Drawing the viewport only when its picture can change
+    (a job's progress changes nothing in it) is the shell's next step; nothing was made smaller for it here.
+  - **xrAI**: `compile_aimap` / `compile_spawn` still start an `xrAI.exe` no build makes since the cutover; the plan
+    should say whether those two Build menu rows go (their work is done in-process by the AI map, game graph and spawn
+    builders) or stay as a door to an external program.
 
 ## Next packages, in dependency order
 

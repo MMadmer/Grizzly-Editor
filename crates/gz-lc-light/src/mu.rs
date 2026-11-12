@@ -21,6 +21,9 @@ use crate::ray::{LightCache, Opacity, RapidCollector, RayFace, RayModel, RcFace,
 use crate::vertex::{TransGroups, mix_group};
 use crate::{Ctl, LcError, Result};
 
+/// `Fvector::random_dir(axis, angle)` draws three numbers: the direction's two, the cone's one.
+const DRAWS_PER_SAMPLE: u64 = 3;
+
 /// `xrMU_Model::_subdiv`: a run of faces of one material; the rest is the geometry export's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Subdiv {
@@ -232,8 +235,10 @@ impl MuModel {
     /// `xrMU_Model::calc_lighting(dest, xform, model, lights, flags)`: every vertex lit at six
     /// points near it along normals jittered within 30 degrees (one at the draft quality),
     /// then the vertices of one point mixed by their translucency. Answers the light per vertex
-    /// in list order. The C++ draws the jitter from one generator all threads share; here each
-    /// vertex seeds its own from where it stands.
+    /// in list order. The C++ draws the jitter from `::Random`, one generator all threads share.
+    /// With `stream` (the generator as this model's first draw finds it) every vertex jumps to
+    /// the draws the C++ gives it - three per sample, the vertices in list order - so the
+    /// vertices still light in parallel; without, each vertex seeds its own from where it stands.
     #[must_use]
     pub fn calc_lighting_with(
         &self,
@@ -241,6 +246,7 @@ impl MuModel {
         xform: &Matrix,
         model: &RayModel,
         flags: u32,
+        stream: Option<XrRandom>,
     ) -> Vec<BaseColor> {
         let rot = xform.without_translation().transposed().inverted_43();
         let samples = if env.params.quality == QUALITY_DRAFT { 1u32 } else { 6 };
@@ -250,8 +256,9 @@ impl MuModel {
 
         let lit: Vec<BaseColor> = verts
             .par_iter()
+            .enumerate()
             .with_min_len(16)
-            .map_init(LightCache::default, |cache, &v| {
+            .map_init(LightCache::default, |cache, (i, &v)| {
                 let Some(vx) = mesh.vertex(v) else { return BaseColor::default() };
                 let (mut amb, mut trans) = (0.0f32, 0.0f32);
                 for f in &vx.adjacents {
@@ -266,7 +273,10 @@ impl MuModel {
                 trans /= n_adj;
                 let vp = xform.transform_tiny(vx.p);
                 let (vn, _) = exact_normalize(rot.transform_dir(vx.n));
-                let mut rnd = XrRandom::from_words(&point_words(vp));
+                let mut rnd = match stream {
+                    Some(s) => s.advanced(i as u64 * u64::from(samples) * DRAWS_PER_SAMPLE),
+                    None => XrRandom::from_words(&point_words(vp)),
+                };
                 let mut c = ColorC::default();
                 for sample in 0..samples {
                     let a = 0.2 * sample as f32 / samples as f32;
@@ -306,11 +316,20 @@ impl MuModel {
         colors
     }
 
+    /// The draws of `::Random` this model's light takes (`random_dir` with a cone: three per
+    /// sample).
+    #[must_use]
+    pub fn light_draws(&self, params: &BuildParams) -> u64 {
+        let samples = if params.quality == QUALITY_DRAFT { 1u64 } else { 6 };
+        self.mesh.vertices().len() as u64 * samples * DRAWS_PER_SAMPLE
+    }
+
     /// `xrMU_Model::calc_lighting()`: the model's own hemisphere in its own shadow, into
-    /// `color`.
-    pub fn calc_lighting(&mut self, env: &MuEnv<'_>) -> Result<()> {
+    /// `color`, the jitter drawn from `stream` as the C++ base thread draws it.
+    pub fn calc_lighting(&mut self, env: &MuEnv<'_>, stream: XrRandom) -> Result<()> {
         let model = self.own_ray_model(env.shaders, env.materials)?;
-        self.color = self.calc_lighting_with(env, &Matrix::IDENTITY, &model, LP_DONT_RGB + LP_DONT_SUN);
+        self.color =
+            self.calc_lighting_with(env, &Matrix::IDENTITY, &model, LP_DONT_RGB + LP_DONT_SUN, Some(stream));
         Ok(())
     }
 }
@@ -376,7 +395,9 @@ impl MuReference {
     /// `xrMU_Reference::calc_lighting`: the reference lit in the level, then the fit.
     pub fn calc_lighting(&mut self, model: &MuModel, env: &MuEnv<'_>, level: &RayModel) {
         let flags = if env.nosun { LP_DONT_SUN } else { 0 } | LP_DEFAULT;
-        self.color = model.calc_lighting_with(env, &self.xform, level, flags);
+        // the C++ lights the references on four threads from the one `::Random`: no order to
+        // reproduce (its own runs differ), so each vertex seeds its own
+        self.color = model.calc_lighting_with(env, &self.xform, level, flags, None);
         let n = self.color.len().min(model.color.len());
         let a: Vec<f64> = model.color.iter().take(n).map(|c| f64::from(c.get().hemi)).collect();
         for i in 0..5 {
@@ -542,12 +563,22 @@ pub fn light_mu(
     ctl.stage("MU : Models...");
     let done = AtomicUsize::new(0);
     let total = models.len() + refs.len();
+    // `CMUThread`: the models one after another on one thread, the jitter from `::Random` as the
+    // process starts it (`CRandom()`, holdrand 1: x64's `FPU::initialize` seeds nothing), so each
+    // model's first draw is known before any is lit
+    let mut stream = XrRandom::new(1);
+    let mut starts = Vec::with_capacity(models.len());
+    for m in models.iter() {
+        starts.push(stream);
+        stream = stream.advanced(m.light_draws(env.params));
+    }
     let results: Vec<Result<()>> = models
         .par_iter_mut()
-        .map(|m| {
+        .zip(starts)
+        .map(|(m, start)| {
             ctl.check()?;
             m.calc_materials(env.shaders, env.materials);
-            m.calc_lighting(env)?;
+            m.calc_lighting(env, start)?;
             ctl.progress(done.fetch_add(1, Ordering::Relaxed) + 1, total);
             Ok(())
         })

@@ -53,8 +53,9 @@ pub enum Error {
     Io(String),
     #[error("{0}")]
     Invalid(String),
+    /// The count and `build.err` with their corners, which [`compile`] writes before it answers.
     #[error("{0} invalid faces. Compilation aborted.")]
-    InvalidFaces(u32),
+    InvalidFaces(u32, Vec<u8>),
     #[error("{0}")]
     Refused(String),
     #[error(transparent)]
@@ -130,6 +131,8 @@ impl Options {
 pub struct Log {
     pub lines: Vec<String>,
     pub phases: Vec<(String, f64)>,
+    /// What the author should look at: the lines `warn` wrote, without the log's indent.
+    pub warnings: Vec<String>,
     started: Option<(String, Instant)>,
     echo: Option<Echo>,
 }
@@ -161,6 +164,12 @@ impl Log {
         self.push(format!("    |    | {s}"));
     }
 
+    /// A `clMsg` the author should look at: in the log and in the report's warnings.
+    pub fn warn(&mut self, s: String) {
+        self.msg(s.clone());
+        self.warnings.push(s);
+    }
+
     /// `Status`.
     pub fn status(&mut self, s: String) {
         self.push(format!("    | {s}"));
@@ -186,6 +195,9 @@ impl Log {
 #[derive(Clone, Debug, Default)]
 pub struct Output {
     pub files: Vec<(String, Vec<u8>)>,
+    /// The faces `Face::Verify` refused (kept under `-no_invalidefaces`; their corners are in
+    /// `build.err`).
+    pub invalid_faces: u32,
 }
 
 impl Output {
@@ -201,6 +213,8 @@ pub struct Report {
     pub phases: Vec<(String, f64)>,
     pub files: Vec<(String, usize)>,
     pub seconds: f64,
+    pub warnings: Vec<String>,
+    pub invalid_faces: u32,
 }
 
 /// Where a compile reads and writes.
@@ -339,6 +353,7 @@ pub fn compile_project(
     out.put("level.geom", geom_main);
     out.put("level.geomx", geom_fast);
     out.put("build.err", g.mesh.errors.write_err());
+    out.invalid_faces = g.mesh.errors.invalid_faces;
     log.end_phase();
     Ok(out)
 }
@@ -371,12 +386,23 @@ pub fn compile(input: &Input, opts: &Options, ctl: &Ctl<'_>, log: &mut Log) -> R
     let shaders = input.sources.shaders()?;
     log.status("Processing textures...".into());
     let textures = input.sources.textures(&prj.textures, TextureUse::Level { radiosity: false })?;
-    let out = compile_project(&prj, shaders, textures, opts, ctl, log)?;
-    let mut report = Report::default();
+    let out = match compile_project(&prj, shaders, textures, opts, ctl, log) {
+        Ok(out) => out,
+        Err(Error::InvalidFaces(n, err)) => {
+            // `err_save` before the abort: the author finds the faces in the viewport from it
+            let path = input.level.join("build.err");
+            std::fs::write(&path, &err)
+                .map_err(|e| Error::Io(format!("{} could not be written: {e}", path.display())))?;
+            return Err(Error::InvalidFaces(n, Vec::new()));
+        }
+        Err(e) => return Err(e),
+    };
+    let mut report = Report { invalid_faces: out.invalid_faces, ..Report::default() };
     write_all(&input.level, &out, &mut report)?;
     report.seconds = t.elapsed().as_secs_f64();
     report.lines = std::mem::take(&mut log.lines);
     report.phases = log.phases.clone();
+    report.warnings = log.warnings.clone();
     Ok(report)
 }
 
@@ -402,5 +428,6 @@ pub fn compile_details(input: &Input, ctl: &Ctl<'_>, log: &mut Log) -> Result<Re
     report.seconds = t.elapsed().as_secs_f64();
     report.lines = std::mem::take(&mut log.lines);
     report.phases = log.phases.clone();
+    report.warnings = log.warnings.clone();
     Ok(report)
 }

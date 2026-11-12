@@ -300,17 +300,44 @@ pub fn connect_by_edge_flags(start: u32, test: u32, start_edge: u16, test_edge: 
     is_soft_edge(start, start_edge) && is_soft_edge(test, test_edge)
 }
 
-/// `poolSS<T, granularity>` as far as the order of its addresses goes: a freed object is the
+/// `poolSS<T, 8 * 1024>` as far as the order of its addresses goes: a freed object is the
 /// first given out again (the free list is a stack), else the next slot after the last; blocks
-/// come at rising addresses. Where the C++ sorts objects by their pointers the compiler sorts by
-/// these, and so meets them in the C++ order.
+/// come at rising addresses - but a block made after [`Self::mark_loaded`] lies below every block
+/// made before it. Where the C++ sorts objects by their pointers the compiler sorts by
+/// [`Self::order`], and so meets them in the C++ order.
+///
+/// oracle: the blocks' places are the heap's. `xrLC` reads `build.prj` into one buffer, loads
+/// the level's vertices and faces into blocks above it, and frees it when `CBuild::Load` returns
+/// (`FS.r_close`, xrLC.cpp); the blocks the compile makes later (the tesselation's faces) go into
+/// that space. Seen on l03u_agr_underground with the compilers of `cpp-compilers-last`: with the
+/// tesselation's block in rising order its split order differs from 512137 faces on.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PoolSim {
     free: Vec<u64>,
     next: u64,
+    /// The blocks the load made.
+    loaded: Option<u64>,
 }
 
+/// `poolSS`'s granularity: the objects of one block.
+const POOL_BLOCK: u64 = 8 * 1024;
+
 impl PoolSim {
+    /// The end of the load: blocks made from here on lie below the load's.
+    pub fn mark_loaded(&mut self) {
+        self.loaded = Some(self.next.div_ceil(POOL_BLOCK));
+    }
+
+    /// The sort key of a slot: its address's order among the pool's.
+    #[must_use]
+    pub fn order(&self, a: u64) -> u64 {
+        match self.loaded {
+            Some(blocks) if a / POOL_BLOCK >= blocks => a - blocks * POOL_BLOCK,
+            Some(_) => a | (1 << 48),
+            None => a,
+        }
+    }
+
     /// `create`.
     pub fn create(&mut self) -> u64 {
         self.free.pop().unwrap_or_else(|| {
@@ -433,13 +460,19 @@ impl Mesh {
     /// Where the C++ pool put a vertex (see [`PoolSim`]).
     #[must_use]
     pub fn vertex_addr(&self, v: VertId) -> u64 {
-        self.vaddr.get(v.0 as usize).copied().unwrap_or(u64::MAX)
+        self.vaddr.get(v.0 as usize).map_or(u64::MAX, |&a| self.vpool.order(a))
     }
 
     /// Where the C++ pool put a face.
     #[must_use]
     pub fn face_addr(&self, f: FaceId) -> u64 {
-        self.faddr.get(f.0 as usize).copied().unwrap_or(u64::MAX)
+        self.faddr.get(f.0 as usize).map_or(u64::MAX, |&a| self.fpool.order(a))
+    }
+
+    /// The end of `CBuild::Load`: the face pool's later blocks lie below the load's (see
+    /// [`PoolSim`]). The vertex pool's do not: the tesselation's faces take the space first.
+    pub fn mark_loaded(&mut self) {
+        self.fpool.mark_loaded();
     }
 
     /// `vertices_isolate_and_pool_reload`'s pool: every listed vertex made again, in list order,
@@ -846,9 +879,10 @@ impl Mesh {
         for i in 0..vcount {
             let Some(&v) = self.vert_list.get(i) else { break };
             // the C++ sorts a vertex's faces by their addresses
-            let faddr = &self.faddr;
+            let (faddr, fpool) = (&self.faddr, &self.fpool);
             let Some(vx) = self.verts.get_mut(v.0 as usize).and_then(Option::as_mut) else { continue };
-            vx.adjacents.sort_unstable_by_key(|f| faddr.get(f.0 as usize).copied().unwrap_or(u64::MAX));
+            vx.adjacents
+                .sort_unstable_by_key(|f| faddr.get(f.0 as usize).map_or(u64::MAX, |&a| fpool.order(a)));
             let adj = vx.adjacents.clone();
             for f in &adj {
                 if let Some(face) = self.face_mut(*f) {

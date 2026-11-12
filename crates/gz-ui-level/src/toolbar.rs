@@ -75,7 +75,7 @@ pub const LEVEL_ACTIONS: [LevelAction; 9] = [
         Icon::BuildAll,
         "",
         "Build All",
-        "Compile the level and run the level builder (xrLC)",
+        "Make the level build and compile it: geometry and light",
         "build_all",
         1,
     ),

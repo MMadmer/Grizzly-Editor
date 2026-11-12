@@ -280,6 +280,10 @@ fn build_menu(ui: &mut Ui, editor: &Arc<Editor>, builds: &[&toolbar::LevelAction
                         crate::level_cmds::ask_make(editor, ui.ctx(), command);
                         continue;
                     }
+                    if matches!(*command, "compile_geometry" | "compile_details") {
+                        crate::level_cmds::compile(editor, ui.ctx(), command);
+                        continue;
+                    }
                     let mut args = Args::new();
                     match *arg {
                         "" => {}

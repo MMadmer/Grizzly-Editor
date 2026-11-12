@@ -5,14 +5,32 @@
 //! `editor.spawn` staged into it, and an `appdata` of its own (the player's settings copied the
 //! first time, no save, no module). The game's own QA roots are built the same way.
 //!
+//! Why the engine does not run where it is installed, with `-fsltx` naming the root's
+//! `fsgame.ltx` (which moves `$fs_root$`, `$app_data_root$`, `$game_data$` and the modules root
+//! to the root): the game's content service works in the folder of `xrCore.dll`, whatever the fs
+//! config says (`Core.ApplicationPath`, `ContentService.cpp`). Every start's verification rewrites
+//! `<game>\.dead-air-x64\content-state.txt` (`verify_worker` -> `ContentState::SaveCache`, a
+//! truncating write), and the service refuses to start a level unless `$arch_dir$` is that
+//! folder's `database` - so the archives stay a junction of the root, not a path in its
+//! `fsgame.ltx`.
+//!
 //! The editor's C++ Play ran IXRay's `Xr3DA.exe`, which read `level.ai.temp` under `-editor_scene`;
 //! Dead Air Refined's engine reads `level.ai`, so the staged level folder names it so.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The engines a game root is looked into for, the linked game's own first.
-const ENGINES: [&str; 2] = ["xrEngine.exe", "Xr3DA.exe"];
+/// What of a game folder is its program: the engines a root is looked into for (the linked
+/// game's own first) and the extensions of the files copied beside them.
+#[derive(Clone, Copy, Debug)]
+pub struct GamePrograms {
+    pub engines: &'static [&'static str],
+    pub extensions: &'static [&'static str],
+}
+
+/// Dead Air Refined's.
+pub const LINKED_GAME: GamePrograms =
+    GamePrograms { engines: &["xrEngine.exe", "Xr3DA.exe"], extensions: &["exe", "dll"] };
 /// What the game's content service reads beside the executable; a stale incomplete latch would
 /// keep it at the main menu.
 const CONTENT_DIR: &str = ".dead-air-x64";
@@ -30,8 +48,8 @@ pub struct PlayRoot {
 
 /// The engine of a game folder.
 #[must_use]
-pub fn engine_of(game: &Path) -> Option<PathBuf> {
-    ENGINES.iter().map(|e| game.join(e)).find(|p| p.is_file())
+pub fn engine_of(game: &Path, programs: &GamePrograms) -> Option<PathBuf> {
+    programs.engines.iter().map(|e| game.join(e)).find(|p| p.is_file())
 }
 
 fn same_file(a: &Path, b: &Path) -> bool {
@@ -117,8 +135,14 @@ fn link_archives(game: &Path, root: &Path) -> Result<(), String> {
 
 /// Makes `root` a game root of the linked game at `game`, ready for [`stage_level`]. Blocking.
 pub fn prepare(game: &Path, root: &Path) -> Result<PlayRoot, String> {
-    let engine = engine_of(game)
-        .ok_or_else(|| format!("the linked game at {} has no xrEngine.exe or Xr3DA.exe", game.display()))?;
+    prepare_with(game, root, &LINKED_GAME)
+}
+
+/// [`prepare`] for a game whose programs are `programs`.
+pub fn prepare_with(game: &Path, root: &Path, programs: &GamePrograms) -> Result<PlayRoot, String> {
+    let engine = engine_of(game, programs).ok_or_else(|| {
+        format!("the linked game at {} has no {}", game.display(), programs.engines.join(" or "))
+    })?;
     let fsgame = game.join("fsgame.ltx");
     if !fsgame.is_file() {
         return Err(format!("the linked game at {} has no fsgame.ltx", game.display()));
@@ -129,7 +153,9 @@ pub fn prepare(game: &Path, root: &Path) -> Result<PlayRoot, String> {
     for e in entries.flatten() {
         let p = e.path();
         let ext = p.extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase);
-        if e.file_type().is_ok_and(|t| t.is_file()) && matches!(ext.as_deref(), Some("exe" | "dll")) {
+        if e.file_type().is_ok_and(|t| t.is_file())
+            && ext.as_deref().is_some_and(|x| programs.extensions.contains(&x))
+        {
             copy_changed(&p, &root.join(e.file_name()))?;
         }
     }
@@ -253,17 +279,21 @@ mod tests {
         fs::create_dir_all(game.join("database")).unwrap();
         fs::create_dir_all(game.join("appdata").join("savedgames")).unwrap();
         fs::create_dir_all(game.join("modules").join("someone")).unwrap();
-        fs::write(game.join("xrEngine.exe"), b"exe").unwrap();
-        fs::write(game.join("xrCore.dll"), b"dll").unwrap();
+        // no test writes a file named like a program: the game's programs are a harmless pair here
+        let programs = GamePrograms { engines: &["engine.bin"], extensions: &["bin", "lib"] };
+        fs::write(game.join("engine.bin"), b"engine").unwrap();
+        fs::write(game.join("core.lib"), b"library").unwrap();
+        fs::write(game.join("readme.txt"), b"not copied").unwrap();
         fs::write(game.join("fsgame.ltx"), b"$fs_root$").unwrap();
         fs::write(game.join("gamedata").join("configs").join("system.ltx"), b"[x]").unwrap();
         fs::write(game.join("database").join("a.db0"), b"db").unwrap();
         fs::write(game.join("appdata").join("user.ltx"), b"vid_mode 800x600").unwrap();
         fs::write(game.join("appdata").join("savedgames").join("s.scop"), b"save").unwrap();
         let root = base.path().join("project").join("temp").join("play");
-        let p = prepare(&game, &root).unwrap();
-        assert_eq!(p.exe, root.join("xrEngine.exe"));
-        assert_eq!(fs::read(root.join("xrCore.dll")).unwrap(), b"dll");
+        let p = prepare_with(&game, &root, &programs).unwrap();
+        assert_eq!(p.exe, root.join("engine.bin"));
+        assert_eq!(fs::read(root.join("core.lib")).unwrap(), b"library");
+        assert!(!root.join("readme.txt").exists(), "only the programs are copied");
         assert!(root.join("gamedata").join("configs").join("system.ltx").is_file());
         assert!(is_junction(&root.join("database")) && root.join("database").join("a.db0").is_file());
         assert_eq!(fs::read(root.join("appdata").join("user.ltx")).unwrap(), b"vid_mode 800x600");
@@ -281,7 +311,7 @@ mod tests {
         assert_eq!(fs::read(staged.join("level.ai")).unwrap(), b"ai");
         assert_eq!(fs::read(root.join("gamedata").join("spawns").join("editor.spawn")).unwrap(), b"spawn");
         // again: the root is refreshed, the game's gamedata never gains the staged level
-        prepare(&game, &root).unwrap();
+        prepare_with(&game, &root, &programs).unwrap();
         assert!(!game.join("gamedata").join("levels").exists());
         assert!(!root.join("gamedata").join("levels").exists(), "a new Play stages its level anew");
         // every path the game will index fits with the root in front, the archives' too

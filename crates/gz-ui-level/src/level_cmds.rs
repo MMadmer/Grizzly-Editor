@@ -436,6 +436,73 @@ pub fn validate(editor: &Arc<Editor>, ctx: &Context) {
     });
 }
 
+/// Build > Compile > Geometry & Light / Detail Object Light: the compile in the editor's process,
+/// its card in the Task Center (Stop stops it), its report in the kit's Result dialog
+/// (`dlg.compile_result`): the seconds, the files, the warnings, the invalid faces.
+pub fn compile(editor: &Arc<Editor>, ctx: &Context, command: &'static str) {
+    let ed = editor.clone();
+    let ctx = ctx.clone();
+    editor.exec.spawn(async move {
+        let r = ed.call(command, Args::new(), ed.ui_origin()).await;
+        let spec = compile_result(&r);
+        let line = gz_ui::dialog::result(&ctx, asker(&ed), spec);
+        if let Some(l) = line {
+            ed.log.plain(l);
+        }
+        ctx.request_repaint();
+    });
+}
+
+/// The Result dialog of a compile's reply.
+fn compile_result(r: &Value) -> ResultSpec {
+    let ok = r.get("ok").and_then(Value::as_bool) == Some(true);
+    if !ok {
+        let why = r.get("error").and_then(Value::as_str).unwrap_or("The compile did not run.");
+        let tone = if why == "Stopped." { Tone::Warning } else { Tone::Error };
+        let headline = if why == "Stopped." { "The compile was stopped." } else { why };
+        return ResultSpec::new("compile_result", "Compile", tone, headline);
+    }
+    let report = r.get("report").cloned().unwrap_or(json!({}));
+    let level = report.get("level").and_then(Value::as_str).unwrap_or_default();
+    let parts = report.get("parts").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut warnings = Vec::new();
+    let mut invalid = 0;
+    let mut files = 0;
+    for p in &parts {
+        warnings.extend(
+            p.get("warnings")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_owned),
+        );
+        invalid += p.get("invalid_faces").and_then(Value::as_u64).unwrap_or(0);
+        files += p.get("files").and_then(Value::as_array).map_or(0, Vec::len);
+    }
+    let tone = if warnings.is_empty() { Tone::Success } else { Tone::Warning };
+    let mut spec = ResultSpec::new("compile_result", "Compile", tone, &format!("{level} is compiled."));
+    let seconds = report.get("seconds").and_then(Value::as_f64).unwrap_or(0.0);
+    spec.rows.push(("Time".to_owned(), format!("{seconds:.1} s")));
+    for p in &parts {
+        let name = match p.get("part").and_then(Value::as_str) {
+            Some("details") => "Detail Object Light",
+            _ => "Geometry & Light",
+        };
+        let s = p.get("seconds").and_then(Value::as_f64).unwrap_or(0.0);
+        spec.rows.push((name.to_owned(), format!("{s:.1} s")));
+    }
+    spec.rows.push(("Files Written".to_owned(), files.to_string()));
+    if let Some(t) = report.get("threads").and_then(Value::as_u64) {
+        spec.rows.push(("Threads".to_owned(), t.to_string()));
+    }
+    if invalid > 0 {
+        spec.rows.push(("Invalid Faces".to_owned(), format!("{invalid} (build.err)")));
+    }
+    spec.warnings = warnings;
+    spec
+}
+
 /// The Summary Info sheet's rows (`SSceneSummary::FillProp`), shown in `dlg.scene_summary`.
 #[derive(Default)]
 struct SummarySheet {

@@ -210,7 +210,7 @@ pub fn build_cform(g: &mut LcGlobalData, log: &mut Log) -> Vec<u8> {
         cl.add_face(p[0], p[1], p[2], face.material_game, sector, face.sm_group);
     }
     if critical > 0 {
-        log.msg(format!("MultipleEdges: {critical} faces"));
+        log.warn(format!("MultipleEdges: {critical} faces"));
     }
     for r in &g.mu_refs {
         let Some(m) = g.mu_models.get_mut(r.model as usize) else { continue };

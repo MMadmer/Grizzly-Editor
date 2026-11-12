@@ -155,6 +155,8 @@ pub fn load(
         }
     }
     g.load_mu(prj)?;
+    // `FS.r_close(F)` after `CBuild::Load`: the pools' later blocks go where build.prj was
+    g.mesh.mark_loaded();
     let mut bb = Aabb::INVALID;
     for p in prj.verts.iter() {
         bb.modify(*p);

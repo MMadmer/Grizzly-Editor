@@ -352,7 +352,9 @@ impl Matrix {
 }
 
 /// `CRandom`: the engine's linear congruential generator. The compiler seeds one per sample from
-/// the sample's own data, never shares one between threads.
+/// the sample's own data, or - where the C++ draws from its one `::Random` in an order that does
+/// not depend on threads (the MU models' own light) - jumps to the draw that sample takes; it
+/// never shares one between threads.
 #[derive(Clone, Copy, Debug)]
 pub struct XrRandom {
     hold: i32,
@@ -375,6 +377,24 @@ impl XrRandom {
             h ^= h >> 29;
         }
         Self { hold: (h ^ (h >> 32)) as i32 }
+    }
+
+    /// The generator `n` draws further on: what `n` calls of [`Self::rand_i`] leave, in
+    /// O(log n) (the step `x * a + c` composed with itself).
+    #[must_use]
+    pub fn advanced(self, mut n: u64) -> Self {
+        let (mut a, mut c) = (214_013u32, 2_531_011u32);
+        let (mut acc_a, mut acc_c) = (1u32, 0u32);
+        while n > 0 {
+            if n & 1 == 1 {
+                acc_a = acc_a.wrapping_mul(a);
+                acc_c = acc_c.wrapping_mul(a).wrapping_add(c);
+            }
+            c = c.wrapping_mul(a).wrapping_add(c);
+            a = a.wrapping_mul(a);
+            n >>= 1;
+        }
+        Self { hold: (self.hold as u32).wrapping_mul(acc_a).wrapping_add(acc_c) as i32 }
     }
 
     /// `randI`.
@@ -437,6 +457,13 @@ mod tests {
         // the first values of rand() after srand(1)
         let mut r = XrRandom::new(1);
         assert_eq!([r.rand_i(), r.rand_i(), r.rand_i()], [41, 18467, 6334]);
+        // a jump lands where as many draws do
+        let mut stepped = XrRandom::new(7);
+        for _ in 0..1000 {
+            stepped.rand_i();
+        }
+        assert_eq!(XrRandom::new(7).advanced(1000).rand_i(), stepped.rand_i());
+        assert_eq!(XrRandom::new(7).advanced(0).rand_i(), XrRandom::new(7).rand_i());
         let mut a = XrRandom::from_words(&[1, 2, 3]);
         let mut b = XrRandom::from_words(&[1, 2, 3]);
         assert_eq!(a.dir(), b.dir());

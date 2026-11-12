@@ -13,6 +13,7 @@ use gz_scene::objects::PointKind;
 use gz_scene::{ObjClass, ObjData, SceneService, SceneState};
 use gz_store::Snap;
 
+use crate::compile;
 use crate::files;
 use crate::graph::{self, GraphPoint, LevelGameGraph};
 use crate::libs::Engine;
@@ -73,6 +74,8 @@ pub fn register(reg: &mut Registry) {
     for name in COMMANDS {
         reg.add(AREA, name, move |ed, a, o| async move { level_build(&ed, name, &a, o).await });
     }
+    // a compile on its own: a level folder of the project (`level=`, else the open scene's)
+    reg.add(AREA, "level_compile", |ed, a, o| async move { level_build(&ed, "compile", &a, o).await });
     reg.add(AREA, "level_rebuild_status", |ed, _a, _o| async move { rebuild_status(&ed) });
     reg.add(AREA, "scene_validate", |ed, _a, _o| async move { scene_validate(&ed).await });
     reg.add(AREA, "scene_export_obj", |ed, a, _o| async move { scene_export_obj(&ed, &a).await });
@@ -105,8 +108,11 @@ async fn level_build(editor: &Arc<Editor>, action: &str, a: &Args, _o: Origin) -
             if let Some((_, id)) = *lb.running.lock() {
                 stopped |= editor.jobs.cancel(id);
             }
-            if let Some(job) = editor.jobs.running_in(JOB_BUILD) {
-                stopped |= editor.jobs.cancel(job.id);
+            // a compile, xrAI or the game that has not marked itself yet is the group's job
+            for group in [JOB_BUILD, GROUP_RUN] {
+                if let Some(job) = editor.jobs.running_in(group) {
+                    stopped |= editor.jobs.cancel(job.id);
+                }
             }
             Ok(json!({ "stopped": stopped }))
         }
@@ -138,57 +144,54 @@ async fn level_build(editor: &Arc<Editor>, action: &str, a: &Args, _o: Origin) -
                 .map_err(CmdError::invalid)?;
             start_game(editor, &session, &root, &format!("-fsltx fsgame.ltx {}", place.params))
         }
-        "compile_geometry" | "compile_details" | "compile_aimap" | "compile_spawn" => {
+        "compile_geometry" | "compile_details" => {
             if busy {
                 return Err(CmdError::busy(BUSY));
             }
             let svc = SceneService::of(editor)?;
             let level = svc.store.snapshot().meta.level.level_path.to_string();
-            // the compilers write `$game_levels$\<level>` themselves: the same one folder name
+            let parts = if action == "compile_geometry" {
+                vec![compile::Part::Level]
+            } else {
+                vec![compile::Part::Details]
+            };
+            compile_command(editor, &session, &level, Some(parts), a).await
+        }
+        "compile" => {
+            if busy {
+                return Err(CmdError::busy(BUSY));
+            }
+            let level = match a.text("level").filter(|l| !l.trim().is_empty()) {
+                Some(l) => l.to_owned(),
+                None => SceneService::of(editor)?.store.snapshot().meta.level.level_path.to_string(),
+            };
+            compile_command(editor, &session, &level, None, a).await
+        }
+        "compile_aimap" | "compile_spawn" => {
+            if busy {
+                return Err(CmdError::busy(BUSY));
+            }
+            let svc = SceneService::of(editor)?;
+            let level = svc.store.snapshot().meta.level.level_path.to_string();
             if !(action == "compile_spawn" && a.flag("all_levels")) {
                 crate::folder::level_folder(&levels_root(editor), &level).map_err(CmdError::invalid)?;
             }
-            let (program, params) = match action {
-                "compile_geometry" => (Program::XrLc, String::new()),
-                "compile_details" => (Program::XrDo, String::new()),
+            let params = match action {
                 // `RunXrAI_Verify`
-                "compile_aimap" if a.str("mode") == Some("verify") => {
-                    (Program::XrAi, format!("-verify {level}"))
-                }
+                "compile_aimap" if a.str("mode") == Some("verify") => format!("-verify {level}"),
                 // oracle: the menu's "High" passes `-draft` (`RunXrAI_AIMap(true)`)
-                "compile_aimap" => (
-                    Program::XrAi,
-                    format!("-f {level} {}", if a.str("mode") == Some("low") { "" } else { "-draft" }),
-                ),
+                "compile_aimap" => {
+                    format!("-f {level} {}", if a.str("mode") == Some("low") { "" } else { "-draft" })
+                }
                 // `RunXrAI_Spawn(false)`: every level, an empty name
-                _ if a.flag("all_levels") => (Program::XrAi, "-no_separator_check -s  -out all".to_owned()),
-                _ => (Program::XrAi, format!("-no_separator_check -s {level} -out all")),
+                _ if a.flag("all_levels") => "-no_separator_check -s  -out all".to_owned(),
+                _ => format!("-no_separator_check -s {level} -out all"),
             };
             let params = match a.text("params").filter(|p| !p.trim().is_empty()) {
                 Some(more) => format!("{params} {more}"),
                 None => params,
             };
-            let Some(exe) = runs::find_exe(&exe_dirs(editor), program) else {
-                return Err(not_there(program));
-            };
-            // the compiler reads its fsgame.ltx beside the stage: the project's levels are its levels
-            let (bin, editor_root, project) = (
-                exe.parent().map(Path::to_path_buf).unwrap_or_default(),
-                editor.paths.root.clone(),
-                session.root.clone(),
-            );
-            let stage = project.join("temp").join("compilers");
-            let guard = write_guard(editor);
-            let out = editor
-                .exec
-                .io(move || {
-                    guard.check(&stage).map_err(|e| e.to_string())?;
-                    runs::stage_compilers(&bin, &editor_root, &project, &stage)
-                })
-                .await
-                .map_err(CmdError::invalid)?;
-            let args = runs::arguments(program, &level, &params);
-            run_program(editor, &session, program, out.join(program.exe()), out, args)
+            start_run(editor, &session, Program::XrAi, params)
         }
         "build_cform" | "build_aimap" | "build_game_graph" | "build_ggraph" | "build_all" | "play"
         | "play_game" | "make_all" | "make_game" | "make_details" | "make_hom" | "make_som"
@@ -292,19 +295,86 @@ fn not_there(program: Program) -> CmdError {
 }
 
 /// Starts a compiler or the game as the `level_run` job; answers once it started.
-fn start_run(
-    editor: &Arc<Editor>,
-    session: &Arc<ProjectSession>,
-    program: Program,
-    level: &str,
-    params: String,
-) -> Reply {
+fn start_run(editor: &Arc<Editor>, session: &Arc<ProjectSession>, program: Program, params: String) -> Reply {
     let Some(exe) = runs::find_exe(&exe_dirs(editor), program) else {
         return Err(not_there(program));
     };
-    let args = runs::arguments(program, level, &params);
+    let args = runs::arguments(&params);
     let cwd = exe.parent().map_or_else(|| editor.paths.exe_dir.clone(), Path::to_path_buf);
     run_program(editor, session, program, exe, cwd, args)
+}
+
+/// The level compilers on `level`'s folder of the project as the `level_run` job (`parts`: the
+/// given ones, else the level and, when the build wrote `build.details`, the details; `details=`
+/// decides that). Answers the compile's report when it ends, or at once with `wait=false`.
+async fn compile_command(
+    editor: &Arc<Editor>,
+    session: &Arc<ProjectSession>,
+    level: &str,
+    parts: Option<Vec<compile::Part>>,
+    a: &Args,
+) -> Reply {
+    if level.trim().is_empty() {
+        return Err(CmdError::invalid(
+            "No level to compile: name it (level=) or open a scene with a level path.",
+        ));
+    }
+    let dir = crate::folder::level_folder(&levels_root(editor), level).map_err(CmdError::invalid)?;
+    let (d2, guard, details) = (dir.clone(), write_guard(editor), a.bool("details"));
+    let parts = editor
+        .exec
+        .io(move || {
+            guard.check(&d2).map_err(|e| e.to_string())?;
+            if !d2.join("build.prj").is_file() {
+                return Err(format!("{} holds no build.prj: Make All writes it first.", d2.display()));
+            }
+            let parts = parts.unwrap_or_else(|| compile::parts_of(&d2, details));
+            if parts.contains(&compile::Part::Details) && !d2.join("build.details").is_file() {
+                return Err(format!(
+                    "{} holds no build.details: Make Details writes it first.",
+                    d2.display()
+                ));
+            }
+            if parts == [compile::Part::Details] && !d2.join("build.cform").is_file() {
+                return Err(format!("{} holds no build.cform: compile the level first.", d2.display()));
+            }
+            Ok(parts)
+        })
+        .await
+        .map_err(CmdError::invalid)?;
+    let flags = a.text("params").unwrap_or_default().trim().to_owned();
+    let names: Vec<&str> = parts.iter().map(|p| p.name()).collect();
+    editor.log.info(format!(
+        "* Compile {level} ({}){}.",
+        names.join(", "),
+        if flags.is_empty() { String::new() } else { format!(" {flags}") }
+    ));
+    let req = compile::Request { level: level.to_owned(), dir, parts: parts.clone(), flags };
+    let lb = LevelBuild::of(session);
+    let ed = editor.clone();
+    let id = editor
+        .jobs
+        .start(JOB_RUN, Some(GROUP_RUN), format!("Compiling {level}"), move |ctx| async move {
+            *lb.running.lock() = Some((Program::Compile, ctx.id));
+            let r = compile::run(&ed, req, &ctx).await;
+            *lb.running.lock() = None;
+            r
+        })
+        .map_err(|_| CmdError::busy(BUSY))?;
+    let started = json!({ "started": Program::Compile.exe(), "level": level, "parts": names, "job": id.0 });
+    if a.bool("wait") == Some(false) {
+        return Ok(started);
+    }
+    let info =
+        editor.jobs.wait(id).await.ok_or_else(|| CmdError::internal("the compile job was forgotten"))?;
+    match info.error {
+        Some(e) => Err(CmdError::invalid(e)),
+        None => {
+            let mut out = started;
+            out["report"] = info.result.map(|r| (*r).clone()).unwrap_or(json!({}));
+            Ok(out)
+        }
+    }
 }
 
 /// Runs `exe` with `args` in `cwd` as the `level_run` job; answers once it started.
@@ -383,14 +453,7 @@ fn start_game(
     root: &crate::play::PlayRoot,
     params: &str,
 ) -> Reply {
-    run_program(
-        editor,
-        session,
-        Program::Game,
-        root.exe.clone(),
-        root.root.clone(),
-        runs::arguments(Program::Game, "", params),
-    )
+    run_program(editor, session, Program::Game, root.exe.clone(), root.root.clone(), runs::arguments(params))
 }
 
 /// What a build reads: the snapshot, the library objects it names, the engine libraries, the
@@ -1033,10 +1096,13 @@ async fn run_action(
         "build_all" => {
             let r = compile_level(editor, &inp, ctx).await?;
             editor.log.info("Building OK.");
+            // `RunXrLC` after the build: here the level compiler in the same job, so Stop stops it
             let level = inp.snap.meta.level.level_path.to_string();
-            let started = start_run(editor, session, Program::XrLc, &level, String::new())
-                .map_err(|e| JobError::new(e.message))?;
-            Ok(json!({ "build": r, "run": started }))
+            let dir = level_dir(editor, &level)?;
+            let req =
+                compile::Request { level, dir, parts: vec![compile::Part::Level], flags: String::new() };
+            let report = compile::run(editor, req, ctx).await?;
+            Ok(json!({ "build": r, "compile": report }))
         }
         _ => {
             let staged = build_for_play(editor, &lb, &inp, verify_restrictors, ctx).await?;

@@ -135,8 +135,14 @@ pub fn pre_optimize(
             g.mesh.verify_face(f);
         }
     }
-    if g.mesh.errors.invalid_faces > 0 && !no_invalid_check {
-        return Err(Error::InvalidFaces(g.mesh.errors.invalid_faces));
+    if g.mesh.errors.invalid_faces > 0 {
+        if !no_invalid_check {
+            return Err(Error::InvalidFaces(g.mesh.errors.invalid_faces, g.mesh.errors.write_err()));
+        }
+        log.warn(format!(
+            "{} invalid faces kept (-no_invalidefaces); build.err holds them.",
+            g.mesh.errors.invalid_faces
+        ));
     }
     let verts = g.mesh.vertices().to_vec();
     for v in verts {
@@ -223,7 +229,8 @@ pub fn correct_tjunctions(g: &LcGlobalData, log: &mut Log) {
             edges.insert(e);
         }
     }
-    log.msg(format!("*** {} junctions and {} long edges found.", junctions.len(), edges.len()));
+    let line = format!("*** {} junctions and {} long edges found.", junctions.len(), edges.len());
+    if junctions.is_empty() && edges.is_empty() { log.msg(line) } else { log.warn(line) }
 }
 
 /// `aht_max_edge`: `c_SS_maxsize / 2.5`.

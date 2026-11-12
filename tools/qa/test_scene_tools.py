@@ -16,6 +16,9 @@ Every gesture goes through viewport_gesture, which feeds the viewport's own inpu
   W  a wallmark of a texture the game has, laid on the ground: the picture differs where it lies, and only there
   S  a screenshot is current: the scene opened again, ONE screenshot_editor and ONE screenshot_viewport right after it
      show the scene (the viewport is not flat) and say nothing is pending
+  C  the level compiler in the editor's process: mp_test (the repository's smallest scene) built by Make All, a
+     compile started without waiting and stopped (the job ends cancelled), then compiled whole over MCP (the job
+     ends done, its report names the phases and the files, the files are in the level folder)
 
     python tools/qa/test_scene_tools.py --project <project> [--only R,A,...] [--shots <folder>]
 
@@ -40,7 +43,7 @@ import qa_target
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MCP = qa_target.MCP
-PHASES = "RAMGPVDWS"
+PHASES = "RAMGPVDWSC"
 # open ground of Escape east of the village, no tree over it; every phase works round a point of its own
 SPOTS = {"R": (-119.0, -162.0), "A": (-130.0, -147.0), "M": (-100.0, -154.0), "G": (-119.0, -136.0),
          "P": (-101.0, -136.0), "V": (-130.0, -166.0), "D": (-110.0, -190.0), "W": (-110.0, -190.0)}
@@ -514,8 +517,55 @@ def phase_s() -> None:
           short({k: v for k, v in pic.items() if k != "png_base64"}))
 
 
+def job_of(job_id: int) -> dict:
+    return next((j for j in mcp("jobs").get("jobs", []) if j.get("id") == job_id), {})
+
+
+def phase_c() -> None:
+    scene = "mp_test"
+    levels = os.path.join(CTX.project, "rawdata", "levels")
+    shutil.copy2(os.path.join(qa_target.REPO, "rawdata", "levels", scene + ".level"), levels)
+    shutil.copytree(os.path.join(qa_target.REPO, "rawdata", "levels", scene), os.path.join(levels, scene),
+                    dirs_exist_ok=True)
+    opened = mcp("open_scene", scene=scene + ".level", discard=True, timeout=120)
+    if not check(opened.get("ok"), "C the small scene opens", short(opened)):
+        return
+    built = mcp("level_build", action="make_all", timeout=120)
+    if not check(built.get("ok"), "C Make All writes its build", short(built)):
+        return
+    started = mcp("level_compile", wait=False)
+    stopped = mcp("level_build", action="stop")
+    job = started.get("job")
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline and job_of(job).get("state") == "running":
+        time.sleep(0.1)
+    j = job_of(job)
+    check(started.get("ok") and started.get("started") and stopped.get("stopped") and j.get("state") == "cancelled",
+          "C a compile started without waiting is stopped by the level build's stop (state %s)" % j.get("state"),
+          short({"started": started, "stopped": stopped, "job": j}))
+    t = time.monotonic()
+    done = mcp("level_build", action="compile", timeout=120)
+    seconds = time.monotonic() - t
+    report = done.get("report") or {}
+    parts = report.get("parts") or [{}]
+    phases = [p.get("name") for p in parts[0].get("phases", [])]
+    files = {f.get("name") for f in parts[0].get("files", [])}
+    level_dir = os.path.join(CTX.project, "gamedata", "levels", scene)
+    there = all(os.path.isfile(os.path.join(level_dir, n)) for n in ("level", "level.geom", "level.geomx",
+                                                                     "level.cform", "build.cform", "build.lights"))
+    j = job_of(done.get("job"))
+    check(done.get("ok") and j.get("state") == "done" and report.get("threads", 0) >= 1,
+          "C the compile over MCP ends done (%.1f s, %s threads)" % (seconds, report.get("threads")),
+          short({k: v for k, v in done.items() if k != "report"}))
+    check("LIGHT: LMaps..." in phases and "Converting to OGFs..." in phases and {"level", "level.geom"} <= files,
+          "C its report names the compiler's phases and the files (%d phases, %d files)" % (len(phases), len(files)),
+          short(parts[0]))
+    check(there, "C the level's files are in the project's level folder",
+          ", ".join(sorted(os.listdir(level_dir))) if os.path.isdir(level_dir) else "no folder")
+
+
 STEPS = {"R": phase_r, "A": phase_a, "M": phase_m, "G": phase_g, "P": phase_p, "V": phase_v, "D": phase_d,
-         "W": phase_w, "S": phase_s}
+         "W": phase_w, "S": phase_s, "C": phase_c}
 
 
 def main() -> int:

@@ -14,8 +14,10 @@ Intermediate/oracle/compile-<scene>-<key>/:
                 compilers' own phase list, the process's CPU time sampled through the run
 A later run starts no C++ compiler when the record is there.
 
-The C++ compilers run from a stage under the system temp folder with an fsgame.ltx of their own (the editor's, its
-levels the stage's), `-silent`, under a hard limit of ten minutes, ended by their process id past it.
+The C++ compilers (Bin/x64/CppCompilers: built from the tagged sources) run from a stage under the system temp
+folder with an fsgame.ltx of their own (the editor's, its levels the stage's), `-silent`, hidden (no window, no
+taskbar entry), under a hard limit of ten minutes (LIMITS names a scene's own), ended by their process id past it.
+When a record is missing and that folder holds no compiler, the scene fails with a sentence saying so.
 
 The Rust compile runs `Grizzly.exe -headless -compile <level folder>` (Intermediate/cargo/fast unless
 GRIZZLY_LC_EXE names another), then `-compile_details`. The comparison is in compare_compile.py; this file runs the
@@ -45,16 +47,32 @@ REPO = qa_target.REPO
 INTER = os.path.join(REPO, "Intermediate")
 ORACLE = os.path.join(INTER, "oracle")
 OUT = os.path.join(INTER, "compile")
-CPP_BIN = os.path.join(REPO, "Bin", "x64", "CppEditor")
+# The C++ compilers built from the tagged sources (Build.ps1 -Only compilers, cpp-compilers-last): the oracle. Read
+# only; nothing here writes there.
+CPP_BIN = os.path.join(REPO, "Bin", "x64", "CppCompilers")
 RUST_EXE = os.environ.get("GRIZZLY_LC_EXE") or os.path.join(INTER, "cargo", "fast", "Grizzly.exe")
 EDITOR_EXE = os.environ.get("GRIZZLY_QA_EXE") or RUST_EXE
 TEST_PROJECT = r"D:\XFinedProjects\Test"
-SCENES = ["mp_test", "l12u_control_monolith", "mp_close_combat"]
+SCENES = ["mp_test", "l12u_control_monolith", "mp_close_combat", "l03u_agr_underground"]
 # Scenes proven for the detail compiler alone: XrLC does not finish them within the limit (mp_close_combat's
 # implicit light passes ten minutes), so both detail compilers read the same build.prj, build.details and the
 # Rust compiler's build.cform and build.lights (equal to the C++ ones under the rules of the other scenes).
 DETAILS_ONLY = {"mp_close_combat"}
-FORMAT = 2
+# The build options a scene's copy gets before Make All, so that XrLC finishes it within the limit. Both compilers
+# read them from the same build.prj. l03u_agr_underground holds MU models (7 models, 15 references); at its own
+# 10 px/m and 9 jitter samples XrLC's LMaps alone took 513 s. Neither option reaches the MU models: the pixels per
+# metre size the deflectors (xrDeflector.cpp), the jitter samples their texels (xrDeflectorLight.cpp); the MU light
+# takes its samples from the quality (xrMU_Model_Calc_lighting.cpp), which stays High.
+OPTIONS = {"l03u_agr_underground": {"light_pixel_per_meter": "4.000000", "light_jitter_samples": "1"}}
+# Flags both level compilers get for a scene. -noise leaves the static visuals without progressive meshes
+# (xrFlex2OGF.cpp: `if (!b_noise) MakeProgressive`); the MU models keep theirs (xrMU_Model_Calc_ogf.cpp calls it
+# unconditionally). With 4 px/m and one sample XrLC still passed 600 s in "Converting to OGFs" (the static
+# visuals' VIPM, one thread); the static progressive meshes are proven on l12u_control_monolith.
+FLAGS = {"l03u_agr_underground": ["-noise"]}
+# The limit of one C++ run where ten minutes do not hold it: the scene's one recording (two runs) may take forty.
+LIMITS = {"l03u_agr_underground": 1200.0}
+FORMAT = 3
+CPP_SOURCE = "cpp-compilers-last"
 LIMIT = 600.0
 PORT = 28931
 
@@ -99,10 +117,38 @@ def scene_files(scene: str) -> list[tuple[str, str]]:
 
 def key_of(scene: str) -> str:
     parts = {"format": FORMAT, "scene": [f"{r}|{stamp(p)}" for r, p in scene_files(scene)]}
-    parts["cpp"] = [f"{n}|{stamp(os.path.join(CPP_BIN, n))}" for n in sorted(os.listdir(CPP_BIN))
-                    if n.lower().endswith((".exe", ".dll"))]
+    if scene in OPTIONS:
+        parts["options"] = OPTIONS[scene]
+    if scene in FLAGS:
+        parts["flags"] = FLAGS[scene]
+    # the oracle is a build of one tagged source, so the key names the tag, not the binaries' stamps: a record stays
+    # good when the folder is rebuilt from it, or gone
+    parts["cpp"] = CPP_SOURCE
     parts["data"] = [stamp(os.path.join(REPO, "gamedata", "shaders_xrlc.xr")), stamp(os.path.join(REPO, "fsgame.ltx"))]
     return hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def lower_options(level: str, options: dict[str, str]) -> None:
+    """The scene file's [build_params] with the given keys set; every key must be there once."""
+    with open(level, "rb") as f:
+        text = f.read().decode("cp1251")
+    lines = text.split("\n")
+    section, found = "", set()
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s.startswith("[") and "]" in s:
+            section = s[1:s.index("]")].strip().lower()
+            continue
+        if section == "build_params" and "=" in s:
+            k = s.split("=", 1)[0].strip()
+            if k in options:
+                head = line[:line.index("=") + 1]
+                lines[i] = f"{head} {options[k]}" + ("\r" if line.endswith("\r") else "")
+                found.add(k)
+    if found != set(options):
+        raise RuntimeError(f"{level}: [build_params] lacks {sorted(set(options) - found)}")
+    with open(level, "wb") as f:
+        f.write("\n".join(lines).encode("cp1251"))
 
 
 def record_dir(scene: str, key: str) -> str:
@@ -136,6 +182,8 @@ class Watch:
         self.samples: list[tuple[float, float]] = []
         self.lines: list[tuple[float, str]] = []
         self.phases: list[str] = []
+        # the most top-level windows the process owned at once (a C++ compiler: none)
+        self.windows = 0
         self.before = self.logs()
         self.stop = threading.Event()
         self.handle = k32.OpenProcess(0x1000, False, proc.pid)
@@ -184,6 +232,7 @@ class Watch:
                         self.samples.append((now, c))
                 if self.log_dir:
                     self.poll_log(now)
+                    self.windows = max(self.windows, windows_of(self.proc.pid))
             except Exception as e:  # noqa: BLE001 - a watcher never ends the run it watches
                 log(f"    ! watcher: {e!r}")
             if now - last_note > 30:
@@ -201,12 +250,40 @@ class Watch:
             k32.CloseHandle(self.handle)
 
 
-def run_limited(cmd: list[str], cwd: str, log_dir: str | None, stdout_lines: list | None = None) -> tuple[int | None, Watch, float]:
-    t0 = time.monotonic()
+u32 = ctypes.WinDLL("user32", use_last_error=True)
+_ENUM = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+u32.EnumWindows.argtypes = [_ENUM, wt.LPARAM]
+u32.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
+
+
+def windows_of(pid: int) -> int:
+    """The top-level windows `pid` owns, visible or not. A C++ compiler under -silent creates none (cl_log.cpp of
+    cpp-compilers-last, commit 0ba98df4: no log dialog, no message box)."""
+    found = [0]
+
+    def each(hwnd, _):
+        owner = wt.DWORD()
+        u32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid:
+            found[0] += 1
+        return True
+
+    u32.EnumWindows(_ENUM(each), 0)
+    return found[0]
+
+
+def hidden() -> dict:
+    """What starts a process with no window and no taskbar entry: the author's desktop stays as it is."""
     startup = subprocess.STARTUPINFO()
     startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
-    startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
-    proc = subprocess.Popen(cmd, cwd=cwd, startupinfo=startup,
+    startup.wShowWindow = 0  # SW_HIDE
+    return {"startupinfo": startup, "creationflags": subprocess.CREATE_NO_WINDOW}
+
+
+def run_limited(cmd: list[str], cwd: str, log_dir: str | None, stdout_lines: list | None = None,
+                limit: float = LIMIT) -> tuple[int | None, Watch, float]:
+    t0 = time.monotonic()
+    proc = subprocess.Popen(cmd, cwd=cwd, **hidden(),
                             stdout=subprocess.PIPE if stdout_lines is not None else subprocess.DEVNULL,
                             stderr=subprocess.STDOUT if stdout_lines is not None else subprocess.DEVNULL,
                             text=stdout_lines is not None, encoding="utf-8" if stdout_lines is not None else None,
@@ -225,9 +302,9 @@ def run_limited(cmd: list[str], cwd: str, log_dir: str | None, stdout_lines: lis
         reader.start()
     code = None
     try:
-        code = proc.wait(timeout=LIMIT)
+        code = proc.wait(timeout=limit)
     except subprocess.TimeoutExpired:
-        log(f"! {os.path.basename(cmd[0])} passed its {LIMIT:.0f} s: ended by its process id {proc.pid}")
+        log(f"! {os.path.basename(cmd[0])} passed its {limit:.0f} s: ended by its process id {proc.pid}")
         subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
         proc.wait(timeout=30)
     if reader:
@@ -264,15 +341,15 @@ def make_input(scene: str, dst: str) -> None:
             to = os.path.join(project, "rawdata", "levels", *rel.split("/"))
             os.makedirs(os.path.dirname(to), exist_ok=True)
             shutil.copy2(p, to)
+        if scene in OPTIONS:
+            lower_options(os.path.join(project, "rawdata", "levels", scene + ".level"), OPTIONS[scene])
+            log(f"  {scene}: build options {OPTIONS[scene]}")
         home = os.path.join(work, "home")
         os.makedirs(home, exist_ok=True)
         env = dict(os.environ, GRIZZLY_HOME=home)
         qa_target.guard_project(project)
-        startup = subprocess.STARTUPINFO()
-        startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
-        startup.wShowWindow = 7
         proc = subprocess.Popen([EDITOR_EXE, "-mcp_port", str(PORT), "-home", home, "-nodlg", "-headless",
-                                 "-project", project], cwd=os.path.dirname(EDITOR_EXE), env=env, startupinfo=startup,
+                                 "-project", project], cwd=os.path.dirname(EDITOR_EXE), env=env, **hidden(),
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             deadline = time.monotonic() + 120
@@ -362,12 +439,19 @@ def run_cpp(scene: str, input_dir: str, dst: str, details_only: bool = False) ->
                              ("xrDO_Light.exe", os.path.isfile(os.path.join(level, "build.details")))):
             if not enabled:
                 continue
-            log(f"  C++ {exe} -f {scene} -silent")
-            code, w, wall = run_limited([os.path.join(bin_dir, exe), "-f", scene, "-silent", "-flushlog"], bin_dir,
-                                         os.path.join(stage, "_appdata_", "logs"))
+            flags = FLAGS.get(scene, []) if exe == "XrLC.exe" else []
+            log(f"  C++ {exe} -f {scene} -silent {' '.join(flags)}")
+            code, w, wall = run_limited([os.path.join(bin_dir, exe), "-f", scene, "-silent", "-flushlog", *flags],
+                                        bin_dir, os.path.join(stage, "_appdata_", "logs"),
+                                        limit=LIMITS.get(scene, LIMIT))
             cpu = w.samples[-1][1] if w.samples else 0.0
-            log(f"  C++ {exe}: exit {code}, {wall:.1f} s wall, {cpu:.1f} s cpu, {len(w.lines)} log lines")
-            rec["runs"][exe] = {"exit": code, "wall": wall, "cpu": w.samples, "lines": w.lines, "phases": w.phases}
+            log(f"  C++ {exe}: exit {code}, {wall:.1f} s wall, {cpu:.1f} s cpu, {len(w.lines)} log lines, "
+                f"{w.windows} windows of its own")
+            if w.windows:
+                log(f"! {exe} made a window: the oracle build is not the one of {CPP_SOURCE}")
+                code = code if code else 1
+            rec["runs"][exe] = {"exit": code, "wall": wall, "cpu": w.samples, "lines": w.lines, "phases": w.phases,
+                                "windows": w.windows}
             if code != 0:
                 break
         logs = os.path.join(stage, "_appdata_", "logs")
@@ -404,6 +488,9 @@ def record_oracle(scene: str, key: str) -> str:
     qa_target.remove_tree(tmp)
     os.makedirs(tmp)
     log(f"{scene}: recording the oracle ({key})")
+    if not os.path.isfile(os.path.join(CPP_BIN, "XrLC.exe")):
+        raise RuntimeError(f"{scene}: no record under {ORACLE} for this input, and {CPP_BIN} holds no C++ compiler to "
+                           f"record one (a build of {CPP_SOURCE}: Build.ps1 of that tag, -Only compilers)")
     make_input(scene, os.path.join(tmp, "input"))
     rec = {"scene": scene, "key": key, "made": time.strftime("%Y-%m-%d %H:%M:%S")}
     rec["input"] = {n: {"size": os.path.getsize(os.path.join(tmp, "input", n)),
@@ -419,12 +506,11 @@ def record_oracle(scene: str, key: str) -> str:
         if bad:
             # a C++ run that failed or passed its limit records nothing, and the second run is not started
             qa_target.remove_tree(tmp)
-            raise RuntimeError(f"{scene}: {', '.join(bad)} did not finish within {LIMIT:.0f} s: no oracle")
+            raise RuntimeError(f"{scene}: {', '.join(bad)} did not finish within {LIMITS.get(scene, LIMIT):.0f} s: "
+                               "no oracle")
     with open(os.path.join(tmp, "record.json"), "w", encoding="utf-8") as f:
         json.dump(rec, f, indent=1)
-    for old in os.listdir(ORACLE):
-        if old.startswith(f"compile-{scene}-") and not old.endswith(".part"):
-            qa_target.remove_tree(os.path.join(ORACLE, old))
+    # a record of an earlier input or build stays where it is: records are never deleted here
     os.replace(tmp, rd)
     return rd
 
@@ -457,8 +543,9 @@ def run_rust(scene: str, input_dir: str, dst: str, details: bool = True, level: 
                 continue
             lines: list = []
             log(f"  Rust {flag} {scene}")
-            code, w, wall = run_limited([RUST_EXE, "-headless", "-nodlg", "-root", REPO, "-home", home, flag, dst], REPO,
-                                        None, lines)
+            flags = FLAGS.get(scene, []) if flag == "-compile" else []
+            code, w, wall = run_limited([RUST_EXE, "-headless", "-nodlg", "-root", REPO, "-home", home, flag, dst,
+                                         *flags], REPO, None, lines, limit=LIMITS.get(scene, LIMIT))
             cpu = w.samples[-1][1] if w.samples else 0.0
             log(f"  Rust {flag}: exit {code}, {wall:.1f} s wall, {cpu:.1f} s cpu")
             rec["runs"][flag] = {"exit": code, "wall": wall, "cpu": w.samples, "lines": lines}

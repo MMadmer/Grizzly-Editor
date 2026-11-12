@@ -40,9 +40,12 @@
 //!
 //! # The editor side
 //!
-//! - [`runs`] - `XrLC.exe -f <level>`, `xrDO_light.exe -f <level>` and the game
-//!   (`Xr3DA.exe <params>`) as `tokio::process` children: their output followed into the job's
-//!   stage, Stop ends the whole process tree, a missing executable is a sentence.
+//! - [`compile`] - the level compilers in the editor's process: `gz_lc::compile` (geometry and
+//!   light) and the detail compile on a level folder of the project, a job on the CPU pool with
+//!   the compiler's phases as its stage, its log in the Output Log, its report as the result.
+//! - [`runs`] - xrAI and the game (`Xr3DA.exe <params>`) as `tokio::process` children: their
+//!   output followed into the job's stage, Stop ends the whole process tree, a missing executable
+//!   is a sentence.
 //! - [`LevelBuild`] (`session.services`) - what is built of the scene and when it went stale
 //!   ([`LevelBuild::rebuild`] answers the status bar's Rebuild chip), the derived data kept in
 //!   memory (collision form, level graph, game graph), the running process.
@@ -50,9 +53,10 @@
 //!   `build_cform`, `build_aimap`, `build_game_graph`, `build_all`, `play`, `play_game`,
 //!   `play_clean`, `play_stop`, `reload_configs`, `make_all`, `make_game`, `make_details`,
 //!   `make_hom`, `make_som`, `make_aimap`, `compile_geometry`, `compile_details`,
-//!   `compile_aimap`, `compile_spawn`), `level_rebuild_status` (`{collision, ai_map,
+//!   `compile_aimap`, `compile_spawn`), `level_compile` (a level folder compiled on its own),
+//!   `level_rebuild_status` (`{collision, ai_map,
 //!   game_graph}` for the Rebuild chip) and `level_build` (the same by `action`, and `status`).
-//!   Every build is the job `level_build` (one at a time) with stages and Stop; a compiler or
+//!   Every build is the job `level_build` (one at a time) with stages and Stop; a compile, xrAI or
 //!   the game runs as the job `level_run` (group `game`). Play starts the real game on the baked
 //!   scene (docs/RUST_MIGRATION.md D1): there is no game
 //!   inside the editor's process.
@@ -66,6 +70,7 @@
 
 pub mod breakable;
 mod cmd;
+pub mod compile;
 pub mod details;
 pub mod files;
 pub mod folder;

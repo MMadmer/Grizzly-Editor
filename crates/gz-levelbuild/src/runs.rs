@@ -1,6 +1,7 @@
-//! The compilers and the game as processes of their own (`CLevelTool::RunXrLC`, `RunXrDO`,
-//! `RunGame`): started with the C++ command lines, their output followed line by line, Stop
-//! ends the whole process tree.
+//! The programs the editor starts as processes of their own (`CLevelTool::RunGame`): started
+//! with the C++ command lines, their output followed line by line, Stop ends the whole process
+//! tree. The level compilers are no programs any more: they run in the editor's process
+//! (`crate::compile`).
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -9,13 +10,11 @@ use gz_task::Cancel;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
-/// What a run starts.
+/// What holds the `level_run` job.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Program {
-    /// The level compiler: geometry and light.
-    XrLc,
-    /// The detail objects' light.
-    XrDo,
+    /// The level compilers, in process.
+    Compile,
     /// The AI compiler (`compile_aimap`, `compile_spawn`).
     XrAi,
     /// The game.
@@ -23,11 +22,11 @@ pub enum Program {
 }
 
 impl Program {
+    /// The name `level_build status` answers in `running`.
     #[must_use]
     pub fn exe(self) -> &'static str {
         match self {
-            Self::XrLc => "XrLC.exe",
-            Self::XrDo => "xrDO_light.exe",
+            Self::Compile => "gz-lc",
             Self::XrAi => "xrAI.exe",
             Self::Game => "Xr3DA.exe",
         }
@@ -37,28 +36,20 @@ impl Program {
     #[must_use]
     pub fn title(self) -> &'static str {
         match self {
-            Self::XrLc => "the level compiler (XrLC)",
-            Self::XrDo => "the detail light compiler (xrDO_Light)",
+            Self::Compile => "the level compiler",
             Self::XrAi => "the AI compiler (xrAI)",
             Self::Game => "the game",
         }
     }
 }
 
-/// The command line after the executable: `-f <level>` and then the given parameters for the
-/// level compilers, the given parameters for xrAI and the game.
+/// The command line after the executable: the given parameters.
 #[must_use]
-pub fn arguments(program: Program, level: &str, params: &str) -> Vec<String> {
-    let given = params.split_whitespace().map(str::to_owned);
-    match program {
-        Program::XrLc | Program::XrDo => {
-            ["-f".to_owned(), level.to_owned()].into_iter().chain(given).collect()
-        }
-        Program::XrAi | Program::Game => given.collect(),
-    }
+pub fn arguments(params: &str) -> Vec<String> {
+    params.split_whitespace().map(str::to_owned).collect()
 }
 
-/// The C++ log line (`* Run XrLC.exe -f l01.`).
+/// The C++ log line (`* Run xrAI.exe -f l01.`).
 #[must_use]
 pub fn command_line(program: Program, args: &[String]) -> String {
     let mut s = program.exe().to_owned();
@@ -146,74 +137,5 @@ pub async fn run(
                 return Ok(Ended::Exited(status.ok().and_then(|s| s.code())));
             }
         }
-    }
-}
-
-/// The compilers read the `fsgame.ltx` three folders above their executable, whose levels folder
-/// is the editor's, while a project's level is built into the project. So they run from a stage
-/// of the project's (`temp\compilers`): copies of the folder's executables and libraries in
-/// `bin\x64\Release`, beside an `fsgame.ltx` whose roots name the editor's data and, for the
-/// levels and the spawns, the project's `gamedata` (the C++ editor's own `EditorProject` mounts).
-/// Answers the stage's folder of executables. Blocking.
-pub fn stage_compilers(
-    bin: &Path,
-    editor_root: &Path,
-    project: &Path,
-    stage: &Path,
-) -> Result<PathBuf, String> {
-    let out = stage.join("bin").join("x64").join("Release");
-    std::fs::create_dir_all(&out).map_err(|e| format!("{} could not be made: {e}", out.display()))?;
-    let entries = std::fs::read_dir(bin).map_err(|e| format!("{} could not be read: {e}", bin.display()))?;
-    for e in entries.flatten() {
-        let p = e.path();
-        let ext = p.extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase);
-        if e.file_type().is_ok_and(|t| t.is_file()) && matches!(ext.as_deref(), Some("exe" | "dll")) {
-            let to = out.join(e.file_name());
-            let same = matches!((std::fs::metadata(&p), std::fs::metadata(&to)),
-                (Ok(a), Ok(b)) if a.len() == b.len() && a.modified().ok() == b.modified().ok());
-            if !same {
-                std::fs::copy(&p, &to)
-                    .map_err(|err| format!("{} could not be copied: {err}", p.display()))?;
-            }
-        }
-    }
-    let text = std::fs::read(editor_root.join("fsgame.ltx"))
-        .map_err(|e| format!("the editor's fsgame.ltx could not be read: {e}"))?;
-    let body = compiler_fsgame(&gz_base::text::cp1251_to_utf8(&text), editor_root, project);
-    std::fs::write(stage.join("fsgame.ltx"), gz_base::text::utf8_to_cp1251(&body).0)
-        .map_err(|e| format!("the compilers' fsgame.ltx could not be written: {e}"))?;
-    Ok(out)
-}
-
-/// The compilers' `fsgame.ltx`: the editor's, its roots made absolute, the levels and the spawns
-/// the project's; the application data stays beside the stage.
-#[must_use]
-pub fn compiler_fsgame(text: &str, editor_root: &Path, project: &Path) -> String {
-    let root = |p: &Path| format!("{}\\", p.display().to_string().trim_end_matches(['\\', '/']));
-    let mut lines = Vec::new();
-    for line in text.lines() {
-        let alias = line.split('=').next().unwrap_or_default().trim().to_ascii_lowercase();
-        lines.push(match alias.as_str() {
-            "$game_levels$" => format!("$game_levels$ = true| false| {}| gamedata\\levels\\", root(project)),
-            "$game_spawn$" => format!("$game_spawn$ = true| false| {}| gamedata\\spawns\\", root(project)),
-            "$app_data_root$" => line.to_owned(),
-            _ => line.replace("$fs_root$", &root(editor_root)),
-        });
-    }
-    lines.join("\r\n") + "\r\n"
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_compilers_read_the_projects_levels() {
-        let text = "$game_data$ = false| true| $fs_root$| gamedata\\\n$game_levels$ = true| false| $game_data$| levels\\\n";
-        let got = compiler_fsgame(text, Path::new("D:\\Editor"), Path::new("C:\\Temp\\P\\"));
-        assert_eq!(
-            got,
-            "$game_data$ = false| true| D:\\Editor\\| gamedata\\\r\n$game_levels$ = true| false| C:\\Temp\\P\\| gamedata\\levels\\\r\n"
-        );
     }
 }

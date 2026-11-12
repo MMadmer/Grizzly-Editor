@@ -4754,7 +4754,7 @@
   },
   {
    "name": "grizzly_level_build",
-   "description": "The Level tab's builds and runs, each a job of its own. action=status (the default) answers {rebuild {cform, ai_map, game_graph}, needs_rebuild, rebuild_text, running, building}; build_cform / build_aimap / build_game_graph / build_all build the open scene's collision, AI map, game graph or all of them and answer when done; make_* writes one part of the level build (make_all the whole build project); compile_geometry / compile_details / compile_aimap / compile_spawn start xrLC, xrDO or xrAI on the scene's level (compile_aimap takes mode=low for the quick map) and answer once the program started; play / play_game build what Play needs and start the linked game on the scene, in a game root of its own (root=, else <appdata>\\play\\<project>, never inside the project or the game: copies of the game's executables, a link to its archives, its loose gamedata with the level and editor.spawn staged into it, an appdata of its own - nothing of the install is written) and answer once the game started, play_clean starts the game alone in that root; stop or play_stop stops the build and the running program; reload_configs reads the linked game's configs again. One build at a time, and none while a compiler or the game runs.",
+   "description": "The Level tab's builds and runs, each a job of its own. action=status (the default) answers {rebuild {cform, ai_map, game_graph}, needs_rebuild, rebuild_text, running, building}; build_cform / build_aimap / build_game_graph build the open scene's collision, AI map or game graph and answer when done; build_all makes the whole build and compiles the level in the same job, answering {build, compile}; make_* writes one part of the level build (make_all the whole build project); compile_geometry (the geometry and the light) and compile_details (the detail objects' light) compile the scene's level folder of the project in the editor's process, on every core, as the job level_run (its card in the Task Center; stop stops it) and answer when it ends with {started, level, parts, job, report {level, dir, threads, seconds, parts [{part, seconds, phases [{name, seconds}], files [{name, size}], warnings, invalid_faces}]}} - wait=false answers at once with {started, level, parts, job} and grizzly_jobs follows it; compile compiles a level folder on its own (level=, else the open scene's; the details too when the build wrote build.details, details= decides); params= takes the compiler's flags (-nosun, -noise, -nosmg, -no_optimize, -no_invalidefaces, -att); compile_aimap / compile_spawn start xrAI on the scene's level (compile_aimap takes mode=low for the quick map) and answer once it started; play / play_game build what Play needs and start the linked game on the scene, in a game root of its own (root=, else <appdata>\\play\\<project>, never inside the project or the game: copies of the game's executables, a link to its archives, its loose gamedata with the level and editor.spawn staged into it, an appdata of its own - nothing of the install is written) and answer once the game started, play_clean starts the game alone in that root; stop or play_stop stops the build and the running program; reload_configs reads the linked game's configs again. One build at a time, and none while a compiler or the game runs.",
    "annotations": {
     "title": "Build or run the level",
     "readOnlyHint": false,
@@ -4783,6 +4783,7 @@
        "make_hom",
        "make_som",
        "make_aimap",
+       "compile",
        "compile_geometry",
        "compile_details",
        "compile_aimap",
@@ -4811,11 +4812,54 @@
      },
      "params": {
       "type": "string",
-      "description": "play / play_game / play_clean: more of the game's command line, after the editor's own"
+      "description": "play / play_game / play_clean: more of the game's command line, after the editor's own; compile / compile_geometry / compile_details: the compiler's flags (-nosun, -noise, -nosmg, -no_optimize, -no_invalidefaces, -att); compile_aimap / compile_spawn: more of xrAI's command line"
+     },
+     "level": {
+      "type": "string",
+      "description": "compile: the level folder under the project's gamedata\\levels (default: the open scene's level path)"
+     },
+     "details": {
+      "type": "boolean",
+      "description": "compile: the detail objects' light too (default: when the build wrote build.details)"
+     },
+     "wait": {
+      "type": "boolean",
+      "description": "compile / compile_geometry / compile_details: false answers once the compile started (default true: when it ends, with its report)"
      }
     }
    },
    "cmd": "level_build"
+  },
+  {
+   "name": "grizzly_level_compile",
+   "description": "Compiles a level folder of the open project with the editor's level compiler, in its own process and on every core: build.prj (what Make All wrote) into level, level.geom, level.geomx, level.cform, the lightmaps, build.cform, build.lights and build.err, then - when the folder holds build.details, or details=true - the detail objects' light into level.details. A job of the Task Center (kind level_run, one at a time with the game; grizzly_level_build action=stop stops it). Answers when it ends: {started, level, parts, job, report {level, dir, threads, seconds, parts [{part, seconds, phases [{name, seconds}], files [{name, size}], warnings, invalid_faces}]}}; wait=false answers at once and grizzly_jobs follows the job. A level with invalid faces is refused (their corners go to build.err) unless params names -no_invalidefaces.",
+   "annotations": {
+    "title": "Compile a level",
+    "readOnlyHint": false,
+    "destructiveHint": false
+   },
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "level": {
+      "type": "string",
+      "description": "the level folder under the project's gamedata\\levels (default: the open scene's level path)"
+     },
+     "details": {
+      "type": "boolean",
+      "description": "the detail objects' light too (default: when the folder holds build.details)"
+     },
+     "params": {
+      "type": "string",
+      "description": "the compiler's flags: -nosun, -noise, -nosmg, -no_optimize, -no_invalidefaces, -att"
+     },
+     "wait": {
+      "type": "boolean",
+      "description": "false: answer once the compile started (default true: when it ends)"
+     }
+    }
+   },
+   "cmd": "level_compile"
   },
   {
    "name": "grizzly_sector_tool",
