@@ -19,6 +19,10 @@ Every gesture goes through viewport_gesture, which feeds the viewport's own inpu
   C  the level compiler in the editor's process: mp_test (the repository's smallest scene) built by Make All, a
      compile started without waiting and stopped (the job ends cancelled), then compiled whole over MCP (the job
      ends done, its report names the phases and the files, the files are in the level folder)
+  Y  Play takes no folder it did not make: play_clean, play_root and play name as root= a throw-away project folder
+     (its own gamedata, fsgame.ltx, a level), a folder inside it, a folder that holds a file, a folder inside the open
+     project, the editor's own folder and a relative path - every one refused before anything is built or written,
+     and a listing of the work folder before and after is equal; no game is started
 
     python tools/qa/test_scene_tools.py --project <project> [--only R,A,...] [--shots <folder>]
 
@@ -43,7 +47,7 @@ import qa_target
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MCP = qa_target.MCP
-PHASES = "RAMGPVDWSC"
+PHASES = "RAMGPVDWSCY"
 # open ground of Escape east of the village, no tree over it; every phase works round a point of its own
 SPOTS = {"R": (-119.0, -162.0), "A": (-130.0, -147.0), "M": (-100.0, -154.0), "G": (-119.0, -136.0),
          "P": (-101.0, -136.0), "V": (-130.0, -166.0), "D": (-110.0, -190.0), "W": (-110.0, -190.0)}
@@ -564,8 +568,70 @@ def phase_c() -> None:
           ", ".join(sorted(os.listdir(level_dir))) if os.path.isdir(level_dir) else "no folder")
 
 
+# ---- Y: Play takes no folder it did not make --------------------------------------------------------------------------
+
+def tree_of(top: str) -> dict:
+    """Every entry under `top` with its size and write time; a link is listed, never followed."""
+    out = {}
+    for d, dirs, files in os.walk(top):
+        keep = []
+        for n in dirs:
+            p = os.path.join(d, n)
+            st = os.lstat(p)
+            out[os.path.relpath(p, top)] = (0, st.st_mtime_ns)
+            if not (os.path.islink(p) or getattr(st, "st_reparse_tag", 0)):
+                keep.append(n)
+        dirs[:] = keep
+        for n in files:
+            st = os.lstat(os.path.join(d, n))
+            out[os.path.relpath(os.path.join(d, n), top)] = (st.st_size, st.st_mtime_ns)
+    return out
+
+
+def phase_y() -> None:
+    work = os.path.dirname(CTX.project)
+    # the reviewer's stand-in for a project named as root=: its own gamedata, fsgame.ltx and a level
+    victim = os.path.join(work, "victim")
+    os.makedirs(os.path.join(victim, "gamedata", "levels", "my_level"))
+    for rel, text in (("mod.ltx", "[module]\nid = victim\nname = Victim\n"), ("fsgame.ltx", "; the folder's own\n"),
+                      ("gamedata\\precious.txt", "the author's work\n"),
+                      ("gamedata\\levels\\my_level\\level.ltx", "the author's level\n")):
+        with open(os.path.join(victim, rel), "w") as f:
+            f.write(text)
+    # a folder that is no project but holds something, and a folder inside the open project
+    busy = os.path.join(work, "busy")
+    os.makedirs(busy)
+    with open(os.path.join(busy, "notes.txt"), "w") as f:
+        f.write("mine\n")
+    inside = os.path.join(CTX.project, "temp", "play_here")
+    # the folders named (the project itself is the editor's to write meanwhile)
+    listed = lambda: {k: tree_of(k) for k in (victim, busy)}  # noqa: E731
+    before = listed()
+    cases = (
+        (victim, "it is a project folder"),
+        (os.path.join(victim, "gamedata"), "it lies inside the project"),
+        (busy, "is not a Play root: choose an empty folder"),
+        (inside, "it lies inside the project"),
+        (qa_target.REPO, "the editor"),
+        ("relative\\root", "by a full path"),
+    )
+    for root, said in cases:
+        for action in ("play_clean", "play_root", "play"):
+            a = mcp("level_build", action=action, root=root, timeout=60)
+            check(not a.get("ok") and said in str(a.get("error")),
+                  "Y level_build %s root=<%s> is refused (%s)" % (action, os.path.basename(root), said), short(a))
+    after = listed()
+    differ = sorted("%s\\%s" % (os.path.basename(top), k) for top in before
+                    for k in set(before[top]) | set(after[top]) if before[top].get(k) != after[top].get(k))
+    count = sum(len(v) for v in before.values())
+    check(not differ and not os.path.exists(inside),
+          "Y the folders are as they were (%d entries listed before and after)" % count, ", ".join(differ[:10]))
+    st = mcp("level_build", action="status")
+    check(st.get("ok") and not st.get("running") and not st.get("building"), "Y nothing was started", short(st))
+
+
 STEPS = {"R": phase_r, "A": phase_a, "M": phase_m, "G": phase_g, "P": phase_p, "V": phase_v, "D": phase_d,
-         "W": phase_w, "S": phase_s, "C": phase_c}
+         "W": phase_w, "S": phase_s, "C": phase_c, "Y": phase_y}
 
 
 def main() -> int:

@@ -9,6 +9,7 @@ use gz_editor::{Args, ArgsExt, CmdError, Editor, JobCtx, JobError, ProjectSessio
 use gz_entities::Settings;
 use gz_fmt_object::ObjectFlags;
 use gz_game::GameLink;
+use gz_project::DeleteContext;
 use gz_scene::objects::PointKind;
 use gz_scene::{ObjClass, ObjData, SceneService, SceneState};
 use gz_store::Snap;
@@ -35,11 +36,6 @@ const BUSY: &str = "A compiler or the game is running.";
 /// `-fsltx fsgame.ltx`.
 const PLAY_PARAMS: &str =
     "-editor_scene -start server(editor/single/alife/new) client(localhost) -nointro -noprefetch";
-/// Where Play builds its game roots when the caller names none: the editor's application data,
-/// a folder per project. Not inside the project: the game started in a root that lies in a
-/// project folder stops in xrCore at its start (seen: a breakpoint, no log line), the same root
-/// moved out of it runs.
-const PLAY_ROOT: &str = "play";
 
 /// The commands, as the Level tab's toolbar and Build menu name them (`gz-ui-level`'s
 /// `LEVEL_ACTIONS` and `BUILD_ROWS`).
@@ -123,24 +119,32 @@ async fn level_build(editor: &Arc<Editor>, action: &str, a: &Args, _o: Origin) -
             editor.log.info("* The game configs are read again.");
             Ok(json!({ "reloaded": true }))
         }
-        "play_clean" => {
+        "play_clean" | "play_root" => {
             if busy {
                 return Err(CmdError::busy(BUSY));
             }
-            let place = play_place(editor, &session, a)?;
+            let place = play_place(editor, &session, a).await?;
             let game = PathBuf::from(linked_game(editor)?);
             let archived = longest_game_path(editor).await;
+            let params = place.params.clone();
             let root = editor
                 .exec
                 .io(move || {
                     place.guard.check(&place.root).map_err(|e| e.to_string())?;
-                    let r = crate::play::prepare(&game, &place.root)?;
-                    crate::play::check_path_lengths(&r.root, &archived)?;
-                    Ok::<_, String>(r)
+                    crate::play::prepare(&crate::play::PlayInput {
+                        game: &game,
+                        root: &place.root,
+                        context: &place.context,
+                        archived: &archived,
+                        level: None,
+                    })
                 })
                 .await
                 .map_err(CmdError::invalid)?;
-            start_game(editor, &session, &root, &format!("-fsltx fsgame.ltx {}", place.params))
+            if action == "play_root" {
+                return Ok(root_answer(&root));
+            }
+            start_game(editor, &session, &root, &format!("-fsltx fsgame.ltx {params}"))
         }
         "compile_geometry" | "compile_details" => {
             if busy {
@@ -174,8 +178,9 @@ async fn level_build(editor: &Arc<Editor>, action: &str, a: &Args, _o: Origin) -
             let act = action.to_owned();
             // Play's "Verify Space Restrictors" (the Level toolbar's Play menu)
             let verify = a.flag("verify_restrictors");
+            // the root is checked before anything is built or written
             let place = if matches!(action, "play" | "play_game") {
-                Some(play_place(editor, &session, a)?)
+                Some(play_place(editor, &session, a).await?)
             } else {
                 None
             };
@@ -373,23 +378,60 @@ fn linked_game(editor: &Editor) -> Result<String, CmdError> {
     Ok(root)
 }
 
-/// Where Play runs the game: its root (`root=`, else `<appdata>\play\<project>`), checked by the
-/// project's write guard, and what the caller adds to the command line (`params=`).
+/// Where Play runs the game: its root (`root=`, else [`crate::play_root::default_root`]), what
+/// the root checks compare with, the project's write guard, and what the caller adds to the
+/// command line (`params=`).
 struct PlayPlace {
     root: PathBuf,
     params: String,
     guard: gz_editor::fsx::WriteGuard,
+    context: Arc<DeleteContext>,
 }
 
-fn play_place(editor: &Arc<Editor>, session: &Arc<ProjectSession>, a: &Args) -> Result<PlayPlace, CmdError> {
+/// What a Play root is checked against: the deletion's guards of this machine
+/// ([`gz_project::system_guards`]), the open project and every listed one.
+async fn play_context(editor: &Arc<Editor>) -> DeleteContext {
+    let listed = gz_project::Projects::of(editor).list(editor).await.entries();
+    let open = gz_project::Project::of(editor).ok().map(|(_, p)| (p.root().to_owned(), p.game_root()));
+    let (exe, root) = (editor.paths.exe_dir.clone(), editor.paths.root.clone());
+    editor
+        .exec
+        .io(move || {
+            let guards = gz_project::system_guards(&exe, &root, open.as_ref().map(|o| o.1.as_str()), &listed);
+            DeleteContext { listed, open: open.map(|o| o.0), guards }
+        })
+        .await
+}
+
+/// The root of a Play, checked before anything is built or written (and again by `prepare`).
+async fn play_place(
+    editor: &Arc<Editor>,
+    session: &Arc<ProjectSession>,
+    a: &Args,
+) -> Result<PlayPlace, CmdError> {
     let root = match a.text("root").filter(|r| !r.trim().is_empty()) {
         Some(r) => PathBuf::from(r),
-        None => editor.paths.appdata.join(PLAY_ROOT).join(session.root.file_name().unwrap_or_default()),
+        None => crate::play_root::default_root(&session.root),
     };
+    let context = Arc::new(play_context(editor).await);
+    let (r, cx) = (root.clone(), context.clone());
+    editor.exec.io(move || crate::play_root::check_root(&cx, &r)).await.map_err(CmdError::invalid)?;
     Ok(PlayPlace {
         root,
         params: a.text("params").unwrap_or_default().to_owned(),
         guard: write_guard(editor),
+        context,
+    })
+}
+
+/// `play_root`'s answer: the root, what it was, the programs copied.
+fn root_answer(r: &crate::play::PlayRoot) -> serde_json::Value {
+    json!({
+        "root": r.root.display().to_string().replace('\\', "/"),
+        "was": r.was,
+        "exe": r.exe.file_name().map(|n| n.to_string_lossy().into_owned()),
+        "programs": r.programs.len(),
+        "program_bytes": r.program_bytes,
     })
 }
 
@@ -1047,15 +1089,19 @@ async fn run_action(
             ctx.stage("Preparing the game");
             let game = PathBuf::from(linked_game(editor).map_err(|e| JobError::new(e.message))?);
             let archived = longest_game_path(editor).await;
-            let root = place.root.clone();
-            let guard = place.guard.clone();
+            let (root, guard, context) = (place.root.clone(), place.guard.clone(), place.context.clone());
             let ready = editor
                 .exec
                 .io(move || {
                     guard.check(&root).map_err(|e| e.to_string())?;
-                    let r = crate::play::prepare(&game, &root)?;
+                    let r = crate::play::prepare(&crate::play::PlayInput {
+                        game: &game,
+                        root: &root,
+                        context: &context,
+                        archived: &archived,
+                        level: Some((&staged.level, &staged.dir)),
+                    })?;
                     crate::play::stage_level(&r.root, &staged.level, &staged.dir, &staged.ai, &staged.spawn)?;
-                    crate::play::check_path_lengths(&r.root, &archived)?;
                     Ok::<_, String>(r)
                 })
                 .await

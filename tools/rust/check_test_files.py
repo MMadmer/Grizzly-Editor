@@ -7,7 +7,16 @@ gets a harmless name, and the code under test takes the name as a parameter wher
 
 Test code is a file under a crate's `tests/`, an item under `#[cfg(test)]` (a `mod name;` takes its
 whole file), and a `#[test]` function. A literal that never reaches the disk carries
-`// program-files: in memory` on its line or the line above.
+`// program-files: in memory` on its line or the line above. A bare extension literal is a finding
+anywhere in test code (`"exe"`, `"dll"`, ...), except `"com"` and `"cmd"` - a word of a URL, a JSON
+key, the shell `Command::new` starts - which are findings as the argument of `with_extension` or
+`set_extension`.
+
+What this source check cannot see, and the run-time net of `tools/rust/test.sh`
+(`tools/rust/watch_programs.py`: the test binaries' own TEMP folder watched while they run) is for:
+a name built outside test code (a const or a helper of the library, `format!` pieces, an extension
+held in a variable), a copy of `current_exe()` or of another program read from the disk, bytes that
+become `MZ` only at run time, and anything a test writes outside its temp folder.
 
     python tools/rust/check_test_files.py [crates]
 
@@ -20,6 +29,9 @@ import sys
 EXTENSIONS = "exe|dll|com|scr|bat|cmd|ps1|msi"
 NAMED = re.compile(rf"\.({EXTENSIONS})(?![\w/])", re.IGNORECASE)
 BARE = re.compile(r"^(exe|dll|scr|bat|ps1|msi)$", re.IGNORECASE)
+# words that are also something else: findings only where they name an extension
+BARE_AS_EXTENSION = re.compile(r"^(com|cmd)$", re.IGNORECASE)
+EXTENSION_CALL = re.compile(r"\b(with|set)_extension\s*\(\s*&?\s*$")
 HEADER_BYTES = re.compile(r"b'M'[\s\S]{0,40}?b'Z'|0x4[dD]\s*,\s*0x5[aA]\b|0x5[aA]4[dD]\b")
 MARKER = "program-files: in memory"
 
@@ -140,13 +152,17 @@ def findings(path, text, whole):
         return MARKER in lines[line] or (line > 0 and MARKER in lines[line - 1])
 
     out = []
+    # the code right before a literal: what it is the argument of
+    before = ""
     for kind, start, _end, value in tokens:
         if not inside(start):
+            before = value if kind == "code" else before
             continue
         at = start
         if kind == "str":
             url = "://" in value or "www." in value
             hit = (value.startswith("MZ") or BARE.match(value)
+                   or (BARE_AS_EXTENSION.match(value) and EXTENSION_CALL.search(before))
                    or any(not (url and m.group(1).lower() == "com") for m in NAMED.finditer(value)))
         else:
             hit = HEADER_BYTES.search(value)
@@ -155,6 +171,7 @@ def findings(path, text, whole):
             line = text.count("\n", 0, at)
             if not marked(line):
                 out.append((line + 1, lines[line].strip()))
+        before = value if kind == "code" else before
     children = []
     for name in files:
         if name.endswith(".rs"):

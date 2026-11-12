@@ -43,6 +43,11 @@
 //! - [`compile`] - the level compilers in the editor's process: `gz_lc::compile` (geometry and
 //!   light) and the detail compile on a level folder of the project, a job on the CPU pool with
 //!   the compiler's phases as its stage, its log in the Output Log, its report as the result.
+//! - [`play_root`] - what may be Play's game root ([`play_root::check_root`]: the questions of a
+//!   project's deletion, a project anywhere on the way, only a missing or empty folder or one
+//!   carrying Play's marker) and [`play`] - the root made and refreshed, clearing only what Play
+//!   writes there, the engine and the libraries it needs copied (the game's runtime list and the
+//!   import tables, `pe`), the level staged.
 //! - [`process`] - the game, the one program the editor starts, as a `tokio::process` child: its
 //!   output followed into the job's stage, Stop ends the whole process tree, one that does not
 //!   start is a sentence.
@@ -55,7 +60,7 @@
 //!   `make_hom`, `make_som`, `make_aimap`, `compile_geometry`, `compile_details`),
 //!   `level_compile` (a level folder compiled on its own), `level_rebuild_status` (`{collision,
 //!   ai_map, game_graph}` for the Rebuild chip) and `level_build` (the same by `action`, and
-//!   `status`). Every build is the job `level_build` (one at a time) with stages and Stop; a
+//!   `status`, `play_root` - Play's root made without a game started). Every build is the job `level_build` (one at a time) with stages and Stop; a
 //!   compile or the game runs as the job `level_run` (group `game`). Play starts the real game on the baked
 //!   scene (docs/RUST_MIGRATION.md D1): there is no game
 //!   inside the editor's process.
@@ -78,7 +83,9 @@ mod hemi;
 pub mod libs;
 pub mod merge;
 pub mod nav;
+mod pe;
 pub mod play;
+pub mod play_root;
 pub mod prj;
 pub mod process;
 mod service;

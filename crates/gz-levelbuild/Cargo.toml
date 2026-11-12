@@ -27,6 +27,7 @@ gz-fmt-xr.workspace = true
 gz-game.workspace = true
 gz-build.workspace = true
 gz-project.workspace = true
+gz-win.workspace = true
 gz-export-level.workspace = true
 gz-lc.workspace = true
 gz-lc-light.workspace = true
