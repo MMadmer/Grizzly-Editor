@@ -1,5 +1,5 @@
 //! The lexer of the editor's LuaJIT (2.1.0-beta3 with two local changes: `//` and `/* */`
-//! comments), ported from `Source/External/LuaJIT/src/lj_lex.c` so a syntax error reads the
+//! comments), ported from `cpp-editor-last:Source/External/LuaJIT/src/lj_lex.c` so a syntax error reads the
 //! same, word for word, as the C++ editor's.
 
 use crate::num::{Scanned, strscan};

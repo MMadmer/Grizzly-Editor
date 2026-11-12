@@ -20,7 +20,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$exe = Join-Path $root 'Intermediate\cargo\debug\Grizzly.exe'
+# the debug build, or the binary GRIZZLY_QA_EXE names (Bin\x64\Release\Grizzly.exe, the release one)
+$exe = if ($env:GRIZZLY_QA_EXE) { $env:GRIZZLY_QA_EXE } else { Join-Path $root 'Intermediate\cargo\debug\Grizzly.exe' }
 if (-not (Test-Path $exe)) { Write-Host "run-editor: $exe is not built"; exit 2 }
 
 # --- the lock: a directory, because creating one is atomic ---------------------------------

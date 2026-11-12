@@ -1,115 +1,81 @@
 # Grizzly Editor
 
-Level/SDK editor for **Dead Air: Refined** (S.T.A.L.K.E.R. X-Ray 1.6 family),
-built on the [RedPanda XRayEngine](https://github.com/RedPandaProjects/XRayEngine)
-port of the original GSC editors to x64 + ImGui.
+The level and mod editor for **Dead Air: Refined** (the S.T.A.L.K.E.R. X-Ray 1.6 family), written in
+Rust. A mod is a project folder of its own; the editor builds it into a module the game loads from
+`modules\<id>`, packages and publishes its releases, and lists it in the game's Mod Browser. Mods
+target Dead Air Refined strictly.
 
-### What it adds on top of RedPanda
+### What it does
 
-* **Mod projects** — pick/create a project folder on startup; all writes
-  (scenes, compiled spawns, imports, logs) land in the project, the shared SDK
-  data stays read-only. `File → Project → Import Base Scene` copies a stock
-  level into the project.
-* **Unreal-style viewport** — RMB fly + WASD/QE, MMB pan, wheel dolly/speed,
-  Alt orbit; Q/W/E/R gizmo modes, Space cycle, F focus, Esc deselect;
-  click-select across all object classes.
-* **Content Browser** — dockable asset browser with folder tree, thumbnail
-  grid, search, double-click open and drag&drop into the viewport. Folders and
-  assets are one selection with one set of commands: Copy/Cut/Paste/Delete/
-  Rename work on any mix of them, and a paste goes into the folder you are
-  looking at. The SDK library and the linked game install are read-only sources
-  you copy out of.
-* **Gameplay objects from the linked game** — linking a game makes its configs
-  the editor's configs, so the Spawn tool offers that game's real roster
-  (14k+ sections for Dead Air) instead of the SDK's stock one. Pick the tool
-  with the radio button in `LeftBar → Tools`; its panel opens underneath.
-* **Quest graphs (NQ)** — author whole quests as node graphs: dialogs, PDA
-  tasks, objectives, triggers and conditions in one `.nqasset` per quest. The
-  editor never compiles them — it validates and ships the file, and Dead Air
-  Refined's NQ runtime interprets it, so a game update fixes every mod's quests
-  at once. Infinite top-down canvas plus a text path that is equally
-  first-class: the file is declarative Lua and the full `quest_*` MCP toolset
-  reads and writes it without a single screenshot. See
+* **Mod projects** — a Start page of project cards; every write (scenes, builds, imports, logs)
+  lands in the project, the editor's own library (`rawdata`, `gamedata`) and the linked game stay
+  read-only sources to copy out of.
+* **The level** — the scene of the X-Ray SDK (objects, lights, spawn points, way paths, shapes,
+  sectors and portals, details, the AI map, wallmarks, particles, sounds), an Unreal-style viewport
+  (RMB fly + WASD/QE, MMB pan, Alt orbit, gizmos), the World Outliner, Details and Level Settings.
+  The level's changes ship as additive deltas (`.xspawn`, `overlay.xcform`, visuals); **Play**
+  builds the level and starts the linked game on it.
+* **Content Browser** — the project, the editor's library and the linked game's files in one
+  browser, with thumbnails, search, drag and drop and one set of commands for files and folders.
+* **Quests and behaviour graphs** — node graphs in `.nqasset` / `.behasset` files (declarative Lua)
+  that the game's NQ runtime interprets; the editor validates and ships them. See
   [docs/nq/NQ_FORMAT.md](docs/nq/NQ_FORMAT.md).
-* **One-click mod build** — `Mod → Build Mod into Game` (`Ctrl+B`, or the
-  toolbar button) does a clean mirrored build into `<game>\modules\<id>`.
-  See [docs/MOD_QUICKSTART.md](docs/MOD_QUICKSTART.md).
-* **One-click release** — **Publish Release** next to it packages the module
-  and publishes it as a GitHub release of the mod's own repository: uploaded as
-  a draft, every asset verified, then made the latest release. The game's Mods
-  menu updates players from it and downloads only the files that changed.
-* Per-monitor DPI awareness, GPU picker for hybrid laptops
-  (`Options → Render → GPU`), CoC/Dead Air data compatibility fixes.
+* **The module's own content** — characters (`.npcasset`), PDA interfaces (`.pdaasset`), loading
+  and menu screens with their music, the mode's world rules and start kit.
+* **One-click build and release** — `Mod → Build Mod into Game` (`Ctrl+B`) does a clean build into
+  `<game>\modules\<id>` beside the editor; **Publish Release** packages the module and publishes it
+  as a GitHub release the game's Mods menu updates players from. See
+  [docs/MOD_QUICKSTART.md](docs/MOD_QUICKSTART.md).
 
 ### Building
 
-One command after a clean clone (needs Visual Studio 2022+ with the
-*Desktop development with C++* workload; CMake and Ninja ship with VS):
+One command after a clean clone (needs pwsh 7, Rust through [rustup](https://rustup.rs) -
+`rust-toolchain.toml` picks the toolchain - and Visual Studio 2022+ with the *Desktop development
+with C++* workload and the MSVC v14.50 toolset; CMake and Ninja ship with Visual Studio):
 
 ```powershell
-.\Build.ps1
+pwsh -NoProfile -File .\Build.ps1
 ```
 
-Binaries land in `Bin\x64\Release`. Useful variants: `-Target XrGame`,
-`-Clean`, `-Debug`. Optional targets: `XrLC`, `xrDO_Light` (level compilers).
+It builds the editor in release (`Grizzly.exe`, the MCP bridge `grizzly-mcp.exe`) and the level
+compilers it runs (`XrLC.exe`, `xrDO_Light.exe`, the last C++ of the repository, under `Source/`)
+into `Bin\x64\Release`, and says how long each part took. `-Only editor` or `-Only compilers` builds
+one part, `-Debug` the debug configuration, `-Out <folder>` puts the binaries elsewhere.
+
+While working on the editor: `bash tools/rust/cg.sh build -p grizzly -p gz-mcp-bridge` (the debug
+build in `Intermediate\cargo\debug`). Four entry points prove a change: `bash tools/rust/check.sh`,
+`bash tools/rust/test.sh`, `python tools/qa/diff_editors.py` and `python tools/qa/run_all.py`.
+The architecture and the contract with the game are [docs/RUST_MIGRATION.md](docs/RUST_MIGRATION.md);
+the rules of the repository are [CLAUDE.md](CLAUDE.md). The C++ editor this one replaced is the tag
+`cpp-editor-last`.
 
 ### Command line
 
 ```powershell
-LevelEditor.exe -project "<project>"
+Bin\x64\Release\Grizzly.exe -project "<project>"
 ```
 
-`-project <folder|name>` opens that project at startup and **skips the project
-picker** — the point being that a scripted run (a smoke test, an AI agent
-driving the MCP port) lands straight in the project it needs instead of sitting
-on a modal nobody is there to click. The argument is either a project folder or
-the name of a project already in the recent list; quote it when it has spaces.
-An unopenable value logs why and falls back to the picker.
-
-Diagnostics, all off by default: `-flushlog` (write the log line by line, so a
-crash keeps what was already printed), `-trace` (frame markers plus the
-capture/mirror reasons), `-bc` (allocation-free breadcrumbs to `bc.txt`),
-`-debugrender` (drain the D3D11 InfoQueue into the log), `-nodlg` (never open a
-modal error box: log a symbolised stack trace, write a minidump, terminate —
-mandatory for unattended runs).
-
-### Toolchain and dependencies
-
-The whole tree builds as **C++17** (`cmake/XRayCommon.cmake`). The 2004-era
-AI templates (A*, action planner, path managers) needed dependent-base name
-bridges and duplicate-default-argument removals to survive conformant two-phase
-lookup — semantics untouched, name lookup only.
-
-Vendored dependencies, deliberately pinned:
-
-* **ImGui 1.88-docking** (`Source/Editors/XrEUI`) — carries local patches
-  (modal helpers, DX11 backend wiring); upgrading is a standalone project with
-  no current payoff.
-* **RedImage + stb_image 2.19** — the editor's image decoding (BC1-7 through
-  ispc_texcomp, TGA/PNG/JPG via stb). Input is trusted local game data.
-* **zlib 1.2.3** (`Source/External/zlib`) — consumed only by the offline level
-  compiler (`XrLCLight`), not by the editor runtime.
-* **DirectXTex/Mesh/Math** — not used: the d3dx9 removal (S7) replaced decode
-  with RedImage and mesh optimisation with a built-in Forsyth implementation,
-  so there is nothing left for them to do.
+`-project <folder>` opens that project at start, skipping the Start page. `-nodlg` never opens a
+dialog (a question gets its logged answer, a crash writes a symbolised stack and a dump and exits
+with code 3) - for unattended runs. `-headless` runs everything but the picture, driven over MCP;
+`-home <folder>` keeps the project list, settings and logs there; `-mcp_port <n>` moves the
+control endpoint.
 
 ### AI integration (MCP)
 
-The editor hosts a local automation endpoint on `127.0.0.1:28016` from the
-first frame (project browser included). A dependency-free MCP stdio bridge
-lives at `tools/mcp/grizzly_mcp.py`; tools include editor/viewport screenshots
-(working even when the window is covered), content-browser navigation, asset
-copying out of the read-only sources, project/file management and editor state
-queries — plus `grizzly_list_commands`/`grizzly_exec_command`, a generic bridge
-to the editor's own command registry: everything the menus and shortcuts can
-do, addressable by name, including commands added later. Combine `-project`
-and `-nodlg` with the bridge to get a fully unattended session.
+The editor hosts a local automation endpoint on `127.0.0.1:28016` from its start (the Start page
+included, and without a window under `-headless`). Every action of the UI has a command, and the
+stdio bridge `grizzly-mcp.exe` serves them as MCP tools - the catalogue
+[`crates/gz-mcp/tools.json`](crates/gz-mcp/tools.json): screenshots that are always current
+(working even when the window is covered or minimized), the scene, the content browser, quests,
+characters, builds and releases, plus `grizzly_list_commands` / `grizzly_exec_command` for the
+editor's whole command table.
 
-Setup instructions for any AI agent — including a ready-to-paste prompt block —
-are in [`tools/mcp/AI_SETUP.md`](tools/mcp/AI_SETUP.md). Claude Code one-liner:
+Setup instructions for any AI agent - including a ready-to-paste prompt block - are in
+[`tools/mcp/AI_SETUP.md`](tools/mcp/AI_SETUP.md). Claude Code one-liner:
 
 ```bash
-claude mcp add -s user grizzly-editor -- python "<repo>/tools/mcp/grizzly_mcp.py"
+claude mcp add -s user grizzly-editor -- "<repo>/Bin/x64/Release/grizzly-mcp.exe"
 ```
 
 ### Credits
@@ -118,4 +84,4 @@ claude mcp add -s user grizzly-editor -- python "<repo>/tools/mcp/grizzly_mcp.py
   sanctioned by GSC Game World; they remain the copyright holders of the
   original source code.
 * [RedPanda Projects](https://github.com/RedPandaProjects/XRayEngine) — the
-  x64/ImGui port this fork is based on.
+  x64 port of the SDK the C++ editor was based on.

@@ -5,11 +5,17 @@ MCP. It contains everything needed to connect to and control the editor.
 
 ## What is available
 
-The Grizzly Editor hosts a local automation endpoint whenever it is running:
+The Grizzly Editor (`Grizzly.exe`) hosts a local automation endpoint whenever it is running:
 
-* transport: TCP, line-based JSON, `127.0.0.1:28016`
-* alive from the very first frame — the Start page included
-* an MCP stdio bridge is bundled at `tools/mcp/grizzly_mcp.py` (Python 3, stdlib only)
+* transport: TCP, line-based JSON, `127.0.0.1:28016` (`-mcp_port <n>` names another)
+* alive before the window is on the screen — the Start page included, and without any
+  window under `-headless`
+* the MCP stdio bridge is `grizzly-mcp.exe`, built beside the editor (`Bin\x64\Release`
+  by `Build.ps1`; `Intermediate\cargo\debug` by `bash tools/rust/cg.sh build -p gz-mcp-bridge`).
+  Its tools, their descriptions, schemas and annotations and the server's instructions are the
+  catalogue `crates/gz-mcp/tools.json`, word for word. `GRIZZLY_MCP_PORT` points it at
+  another port. `tools/mcp/grizzly_mcp.py`, the Python bridge of the C++ editor, is now a
+  launcher of the binary (same stdio, same exit code), so a client set up with it keeps working
 
 Scene-load performance can be checked against the same endpoint without an MCP
 client. Keep the expected object count in the command so a faster incomplete
@@ -25,33 +31,32 @@ Launch it with the project already open — otherwise it comes up on the Start
 page and waits for somebody to pick a project:
 
 ```powershell
-LevelEditor.exe -project "<project>"
+Bin\x64\Release\Grizzly.exe -project "<project>"
 ```
 
-`-project` takes a project folder or the name of one in the recent list (quote
-paths with spaces). An unopenable value is logged and the Start page comes up
-as usual. `grizzly_open_project` does the same thing on an editor that is already
-running, and `grizzly_project_create` makes a new project the way the Start page's
-New Project form does.
+`-project` takes a project folder (quote paths with spaces). An unopenable value is
+logged and the Start page comes up as usual. `grizzly_open_project` does the same
+thing on an editor that is already running, and `grizzly_project_create` makes a new
+project the way the Start page's New Project form does.
 
-The project opens on the first frame tick, whether or not the window is ever
-drawn: a background editor does not draw, and an unattended one is always in the
-background. The last scene auto-loads only once the window is drawn, so an
-unattended run loads its scene with `grizzly_open_scene`.
+The project opens before the window comes up, whether or not the window is ever
+drawn, and its last scene loads with it. `-headless` runs everything but the picture
+(no window, no screenshots); `-home <folder>` keeps the project list, the settings and
+the logs there instead of beside the editor (or `GRIZZLY_HOME`), which is how a test
+stays out of the author's own.
 
-**Always add `-nodlg` to an unattended run.** A fatal error then never opens a
-system-modal dialog: the log gets a real, symbolised stack trace, a minidump is
-written next to the logs, and the process terminates (exit code 3) instead of
-hanging on a box nobody will click. Also useful: `-flushlog` (log written line
-by line, so a crash keeps what was printed), `-trace` (frame markers and
-capture diagnostics).
+**Always add `-nodlg` to an unattended run.** No dialog ever opens: a question
+gets its logged answer (No; OK for a note), and a fatal error writes a symbolised
+stack trace into the log, a minidump next to the logs, and ends the process with
+exit code 3 instead of hanging on a box nobody will click. Also useful:
+`-log_echo` (the log on stderr as well).
 
 ## Registering the MCP server
 
 **Claude Code:**
 
 ```bash
-claude mcp add -s user grizzly-editor -- python "<repo>/tools/mcp/grizzly_mcp.py"
+claude mcp add -s user grizzly-editor -- "<repo>/Bin/x64/Release/grizzly-mcp.exe"
 ```
 
 **Any other MCP client** — generic server config:
@@ -60,15 +65,16 @@ claude mcp add -s user grizzly-editor -- python "<repo>/tools/mcp/grizzly_mcp.py
 {
   "mcpServers": {
     "grizzly-editor": {
-      "command": "python",
-      "args": ["<repo>/tools/mcp/grizzly_mcp.py"]
+      "command": "<repo>/Bin/x64/Release/grizzly-mcp.exe",
+      "args": []
     }
   }
 }
 ```
 
-Replace `<repo>` with the folder the editor is installed in.
-
+Replace `<repo>` with the folder the editor is installed in. A client configured
+before with `python <repo>/tools/mcp/grizzly_mcp.py` keeps working through the
+launcher; it says so on stderr and exits with 1 when no `grizzly-mcp.exe` is built.
 ## Tools
 
 | Tool | What it returns |
@@ -214,7 +220,7 @@ Replace `<repo>` with the folder the editor is installed in.
 | `grizzly_ui_split` | the layout's splits and grid widths in pt: no `key` lists them, `key` reads one, `key` + `value` sets it (the author's saved preference - put it back) |
 | `grizzly_ui_audit` | what the UI kit saw in the frames after the last command: `truncated` (text cut, what was shown), `escaped` (content past a window that cannot scroll that way, by how much), `controls` (label, enabled, why, help); `id` narrows it to a panel, drawer, dialog or window |
 | `grizzly_ui_scale` | the UI scale; `value` 1.0..2.5 rescales at once for a test and is never saved |
-| `grizzly_ui_contract` | the constants QA pins, from `EditorUiContract.h`: `tile_range`, `tile_default` / `tile_default_panel` (the most a fitted tile takes in the drawer / the docked panel), `tile_error`, `view_default` / `view_default_panel` (`tiles` / `list`), `theme_keys`, `categories`, `card_menu`, `delete_project_dialog`, `panels` / `drawers` / `dialogs` `{id: window}` (a dialog's window is `Title###dlg.<name>`), `kit_dialogs` (the `dlg.<name>` of every dialog a row, a job or a question raises), `document_kinds`, `popups`, `menus`, `viewport_menus`, `palette` (the Command Palette's modal id), `ui_scale_range`. Read these instead of hardcoding them |
+| `grizzly_ui_contract` | the constants QA pins, from the editor's UI contract (`gz-app`'s `contract.rs`): `tile_range`, `tile_default` / `tile_default_panel` (the most a fitted tile takes in the drawer / the docked panel), `tile_error`, `view_default` / `view_default_panel` (`tiles` / `list`), `theme_keys`, `categories`, `card_menu`, `delete_project_dialog`, `panels` / `drawers` / `dialogs` `{id: window}` (a dialog's window is `Title###dlg.<name>`), `kit_dialogs` (the `dlg.<name>` of every dialog a row, a job or a question raises), `document_kinds`, `popups`, `menus`, `viewport_menus`, `palette` (the Command Palette's modal id), `ui_scale_range`. Read these instead of hardcoding them |
 | `grizzly_window_control` | `action` `minimize` / `maximize` / `restore` / `resize` (`width` x `height` pt of client area, restored first) / `close`. A close with unsaved tabs refuses with `error:"unsaved"` and the `dirty` list unless `save=true` (a scene without a file cannot be saved); under `-nodlg` it discards, as the exit prompt always answered there. Answers `maximized`, `minimized`, `client` (px), `client_pt`, `dpi`, `saved` / `discarded` |
 | `grizzly_window_close_discard` | close the editor and DROP every unsaved change. `destructiveHint`; the editor asks nothing |
 | `grizzly_titlebar_info` | the caption as the frames after the last command drew it, valid on every page: `band`, `caption_h`, `menus_end`, `buttons_x`, `interactive` (the client ranges that take the mouse - the rest drags the window), `tabs` `[{id, rect}]` (none on the Start page), `maximized`, `dpi`, `folded` (under 1100 pt the menus are one Menu button), `icon` |
@@ -685,18 +691,20 @@ One JSON object per line in, one per line out:
 `modal` is the dialog on top - its title, its id (what follows `###` in its
 window name) and its rect in the picture's pixels (`null` without one; the Start
 page, Link Game and Recover Unsaved Scene are pages, not dialogs). `active_tab` is
-the tab the picture shows, `busy` says a blocking job drew it. `outside` names the
-ImGui windows drawn in platform windows of their own - a panel dragged out of the
-editor - which the picture does not hold (the capture mirrors the editor's main
-window); it stays empty unless Preferences allow panels outside the window
-(`floating_panels`, takes a restart). A dialog is never there: every modal is
-pinned to the main window. A minimized editor is pictured the way it looks
-restored.
+the tab the picture shows, `busy` says one of the long operations (a level build,
+a scene load, a scene tool, a library's work) was running while it was taken. `outside`
+names the panels drawn in windows of their own - a panel dragged out of the
+editor - which the picture does not hold; it stays empty unless Preferences allow
+panels outside the window (`floating_panels`, read at start). A dialog is never
+there: every dialog is drawn in the main window. A minimized editor is pictured the
+way it looks restored.
 
-Errors come back as `{"ok":false,"error":"..."}`. Requests execute on the
-editor's main thread; a busy editor can take up to three minutes before the
-endpoint returns a timeout. The server accepts up to 16 concurrent clients and
-queues at most 64 main-thread requests; each request buffer is capped at 1 MiB.
+Errors come back as `{"ok":false,"error":"..."}`. Every connection is a task of its
+own and every request runs beside the others: a read answers from the editor's
+snapshots without waiting for a frame, and a long command (a build, a held
+screenshot) holds only its own connection. A request that takes longer than three
+minutes (`GRIZZLY_MCP_REQUEST_TIMEOUT_MS`) answers `editor busy (timeout)` while the
+command runs on to its end; a request line is capped at 1 MiB.
 
 ## Prompt block for the agent
 
@@ -710,7 +718,7 @@ queues at most 64 main-thread requests; each request buffer is capped at 1 MiB.
 > after the commands you sent before it.
 >
 > If you start the editor yourself, launch it as
-> `LevelEditor.exe -project "<project folder>"` so it opens straight into that
+> `Grizzly.exe -project "<project folder>" -nodlg` so it opens straight into that
 > project instead of waiting on the Start page. On a running editor,
 > `grizzly_open_project` switches projects. Only the active tab is drawn: bring the
 > one you want to see up with `grizzly_ui_tab` (or its opener) before a screenshot.

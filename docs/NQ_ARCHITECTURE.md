@@ -132,7 +132,7 @@ only) is never affected in any case: NQ writes exclusively through
 The runtime scans **the whole module root recursively** for `*.nqasset`
 (the `xms_native_list_files` native, §12.3), so the file's location inside the
 module does not matter. Export (`EditorMod::Export`,
-`Source/Editors/XrECore/Editor/EditorModManifest.cpp:843-1063`) already copies
+`cpp-editor-last:Source/Editors/XrECore/Editor/EditorModManifest.cpp:843-1063`) already copies
 every non-editor-only folder whole (`:939-960`) — `.nqasset` needs no separate
 export hook, only the **validation gate** (§13.10).
 
@@ -161,6 +161,8 @@ No `script.ltx` change is needed: `axr_main.on_game_start()` iterates every root
 `_G[name]` access itself autoloads the file.
 
 ### 3.3 Editor
+
+The Rust editor's quest code is `gz-nq` (the model, reading and writing through `gz-luadata`, the catalog, the validator, the pickers, the documents and their commands) and `gz-ui-graph` (the tab, the canvas, the panels). The C++ files this section names are the tree at the tag `cpp-editor-last`.
 
 ```
 Source\Editors\XrECore\Editor\Nq\        ; model, IO, catalog, validator, document, MCP, export gate
@@ -772,7 +774,7 @@ The mapping:
   spawn's `custom_data`, the `story_objects.script` registry
   (`get_story_object_id(sid)`, `_g.script:1548`; not persisted, rebuilt from the
   spawn). A mod-placed NPC gets a story id through its `custom_data` in the
-  `.xspawn` (`EditorModScene.cpp:774-792` already writes `custom_data` as a file) —
+  `.xspawn` (`cpp-editor-last:Source/Editors/LevelEditor/Editor/EditorModScene.cpp:774-792` wrote `custom_data` as a file) —
   the editor appends `[story_object]` via the "assign story id" button in the
   picker (§13.6). Vanilla NPCs — by their story ids.
 - **`ref`** — the name of an object this quest created (`spawn.*`,
@@ -969,6 +971,8 @@ the QA script hooks in via `[common]`, waits for `actor_on_first_update`, then
 
 ## 13. Editor side: implementation
 
+The Rust editor's quest code is `gz-nq` (the model, reading and writing through `gz-luadata`, the catalog, the validator, the pickers, the documents and their commands) and `gz-ui-graph` (the tab, the canvas, the panels). The C++ files this section names (and its line numbers) are the tree at the tag `cpp-editor-last`.
+
 ### 13.1 Model (`NqAsset.h`)
 
 ```cpp
@@ -1002,7 +1006,7 @@ otherwise — the bundle `<sdk>\gamedata\configs\nq\catalog.ltx`. Cached until
 ### 13.3 Reading/writing (`NqLua`)
 
 - Reading goes through the LuaJIT C API (already linked:
-  `cmake/EditorTargets.cmake:118-126`, `lua51.dll` is staged): `luaL_newstate`
+  `cpp-editor-last:cmake/EditorTargets.cmake:118-126`, `lua51.dll` is staged): `luaL_newstate`
   without opening libraries → `luaL_loadbuffer` → an empty environment
   (`lua_newtable; lua_setfenv`) → `lua_pcall` → walking the result (`lua_next`)
   into `SNqValue`. A syntax error/non-table → a message with line:column from
@@ -1097,7 +1101,7 @@ goes dirty).
 ### 13.8 Canvas (`NqCanvas`)
 
 An in-house `ImDrawList` implementation (the tree carries no node libraries,
-ImGui docking in `Source/Editors/XrEUI/`; third-party ones
+ImGui docking in `cpp-editor-last:Source/Editors/XrEUI/`; third-party ones
 (imnodes/imgui-node-editor) give no vertical flow and are version-picky).
 
 ```
@@ -1284,8 +1288,8 @@ Edit Text / Edit Lua dialog (Check Syntax).
 ### 13.11 MCP
 
 C++ — the graph commands in `LevelEditor/Editor/Mcp/LevelMcpGraph.cpp` (the tabs, `UIQuestGraph::Mcp*`) and
-`NqMcp.cpp`; Python — entries in `TOOLS` + `CMD_MAP` (`tools/mcp/grizzly_mcp.py`),
-the table in `tools/mcp/AI_SETUP.md`. Structured arguments travel as **a string
+`NqMcp.cpp`; the bridge's tools are the catalogue `crates/gz-mcp/tools.json` (the Rust editor's commands: `gz-nq`'s
+and `gz-ui-graph`'s `cmd.rs`), the table in `tools/mcp/AI_SETUP.md`. Structured arguments travel as **a string
 holding a Lua table** (the parser already exists — `NqLua`), responses are JSON
 built by string emitters (no JSON library).
 
@@ -1409,7 +1413,7 @@ and MCP.
 
 ## 16. Test plan
 
-**Editor (headless, `LevelEditor.exe -project <project> -nodlg` + MCP):**
+**Editor (headless, `Grizzly.exe -headless -project <project> -nodlg` + MCP):**
 1. `quest_new` → the file is created, canonical, `quest_get` = the template, 0 errors.
 2. `quest_write` of the reference quest (§4.4) → 0 errors; a repeated `quest_get.lua`
    is byte-for-byte equal (canonicalization is idempotent).

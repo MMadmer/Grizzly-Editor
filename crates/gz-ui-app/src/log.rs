@@ -526,7 +526,7 @@ mod tests {
     fn the_status_line_skips_the_machinery() {
         assert!(!notable_note("startup: 0.14 s, 120 file reads"));
         assert!(!notable_note("  Loading fonts   0.02 s"));
-        assert!(!notable_note("control endpoint: 127.0.0.1:28017"));
+        assert!(!notable_note("control endpoint: 127.0.0.1:28016"));
         assert!(notable_note("Project opened: D:\\Mods\\A"));
     }
 

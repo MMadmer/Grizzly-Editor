@@ -14,10 +14,6 @@ use gz_task::{ExecOptions, Runtime};
 use crate::cli::Cli;
 use crate::startup::Startup;
 
-/// The port the Rust editor listens on while the C++ editor keeps 28016
-/// (docs/RUST_MIGRATION.md, section 13).
-const SIDE_BY_SIDE_PORT: u16 = 28017;
-
 /// The editor's data root: the nearest folder above the executable that holds the project list
 /// or the bundled game data.
 fn find_root(exe_dir: &Path) -> PathBuf {
@@ -133,7 +129,7 @@ fn main() -> ExitCode {
     gz_ui_mod::cards::ensure(&editor);
 
     startup.stage("Opening the control endpoint");
-    let port = cli.mcp_port.unwrap_or(SIDE_BY_SIDE_PORT);
+    let port = cli.mcp_port.unwrap_or(gz_mcp::DEFAULT_PORT);
     match runtime.block_on(gz_mcp::serve(editor.clone(), port)) {
         Ok(addr) => log.info(format!("control endpoint: {addr}")),
         Err(e) => log.error(format!("the control endpoint did not open on port {port}: {e}")),

@@ -34,8 +34,6 @@ import sys
 SKIP_DIRS = (
     'sdk/',
     'source/external/',
-    'source/xrgamespy/',
-    'source/packages/',
     'externals/',
 )
 

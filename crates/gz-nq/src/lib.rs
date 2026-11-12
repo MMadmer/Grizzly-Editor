@@ -1,6 +1,6 @@
 //! Quests and behaviour graphs: the `.nqasset` / `.behasset` node graphs of the editor.
 //!
-//! The C++ specification is `Source/Editors/XrECore/Editor/Nq/` (`NqAsset`, `NqLua`'s typed
+//! The C++ specification is `cpp-editor-last:Source/Editors/XrECore/Editor/Nq/` (`NqAsset`, `NqLua`'s typed
 //! half, `NqCatalog`, `NqDoc`, `NqValidate`, `NqLayout`, `NqReferences`, `NqProjectIndex`,
 //! `NqPickers`, `NqItemCaps`, `NqExport`, `NqMcp`) and the canvas operations of the graph tab
 //! that MCP reaches (`UIQuestGraph::McpEdit` / `McpFind` / `McpBookmarks` / `McpHistory` /

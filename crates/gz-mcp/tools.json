@@ -3965,7 +3965,7 @@
   },
   {
    "name": "grizzly_ui_split",
-   "description": "The splits and grid label widths the layout keeps, in pt ([GrizzlyLayout] of level_imgui.ini). No key: every one. key: read it; key + value: set it (it is the author's saved preference - put it back after a test).",
+   "description": "The splits and grid label widths the layout keeps, in pt ([layout] of grizzly_editor.ltx). No key: every one. key: read it; key + value: set it (it is the author's saved preference - put it back after a test).",
    "annotations": {
     "title": "Read or set a layout split",
     "readOnlyHint": false,
@@ -4023,7 +4023,7 @@
   },
   {
    "name": "grizzly_ui_contract",
-   "description": "The UI constants a test pins instead of hardcoding (EditorUiContract.h): tile_range, tile_default and tile_error of the Content Browser, theme_keys, categories, the Start page card_menu labels, delete_project_dialog, the panels / drawers / dialogs {id: window name - a dialog's is Title###dlg.<name>}, document_kinds, popups, menus, viewport_menus, palette (the Command Palette's modal id), ui_scale_range.",
+   "description": "The UI constants a test pins instead of hardcoding (the editor's UI contract): tile_range, tile_default and tile_error of the Content Browser, theme_keys, categories, the Start page card_menu labels, delete_project_dialog, the panels / drawers / dialogs {id: window name - a dialog's is Title###dlg.<name>}, document_kinds, popups, menus, viewport_menus, palette (the Command Palette's modal id), ui_scale_range.",
    "annotations": {
     "title": "Read the UI contract",
     "readOnlyHint": true
@@ -4609,7 +4609,7 @@
   },
   {
    "name": "grizzly_shortcuts",
-   "description": "The editor's keyboard shortcuts (the Keyboard page of Preferences). action list (default; 'filter' narrows it, spaces separate terms that must all match) | set ('command', 'keys') | clear ('command'). command is the id (the level.ini name: COMMAND_UNDO, COMMAND_ZOOM_EXTENTS.\"Selected\") or the label the Keyboard page shows - the menus' official names, 'Group · Name' ('Edit · Undo', 'View · Frame Selection'). Rows are {id, label, keys}; set answers shortcut and moved_from (the command that had the shortcut and lost it, or null). Saved at once, like the page.",
+   "description": "The editor's keyboard shortcuts (the Keyboard page of Preferences). action list (default; 'filter' narrows it, spaces separate terms that must all match) | set ('command', 'keys') | clear ('command'). command is the id (the name grizzly_editor.ltx [shortcuts] stores: COMMAND_UNDO, COMMAND_ZOOM_EXTENTS.\"Selected\") or the label the Keyboard page shows - the menus' official names, 'Group · Name' ('Edit · Undo', 'View · Frame Selection'). Rows are {id, label, keys}; set answers shortcut and moved_from (the command that had the shortcut and lost it, or null). Saved at once, like the page.",
    "annotations": {
     "title": "List or rebind shortcuts",
     "readOnlyHint": false,

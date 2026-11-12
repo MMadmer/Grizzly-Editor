@@ -1,4 +1,4 @@
-//! The game's XML: a tolerant reader with the navigation of `CXml` (`Source/XrXMLParser`), the
+//! The game's XML: a tolerant reader with the navigation of `CXml` (`cpp-editor-last:Source/XrXMLParser`), the
 //! `#include` pre-pass of its `ParseFile`, the string tables and the texture descriptions.
 //!
 //! # API

@@ -1,5 +1,5 @@
-//! `grizzly-mcp`: the MCP server over stdio that drives the Grizzly Editor (the Rust port of
-//! `tools/mcp/grizzly_mcp.py`).
+//! `grizzly-mcp`: the MCP server over stdio that drives the Grizzly Editor (`tools/mcp/grizzly_mcp.py`,
+//! the Python bridge it replaced, is now a launcher of this binary).
 //!
 //! JSON-RPC, one message per line: `initialize`, `notifications/initialized`, `tools/list`,
 //! `tools/call`. Each tool call goes to the editor's endpoint on 127.0.0.1 - one JSON line in,
@@ -7,7 +7,7 @@
 //! annotations and the server's instructions are `crates/gz-mcp/tools.json`, word for word: the
 //! safety paragraphs in the descriptions reach the client unchanged.
 //!
-//! `GRIZZLY_MCP_PORT` names the editor's port (28017 until the cutover);
+//! `GRIZZLY_MCP_PORT` names another port of the editor than its own 28016;
 //! `GRIZZLY_MCP_CLIENT_TIMEOUT_MS` / `GRIZZLY_MCP_REQUEST_TIMEOUT_MS` how long one answer may take.
 
 use std::collections::{BTreeSet, HashMap};
@@ -19,7 +19,7 @@ use serde_json::{Map, Value, json};
 
 const CATALOG: &str = include_str!("../../gz-mcp/tools.json");
 const HOST: [u8; 4] = [127, 0, 0, 1];
-const DEFAULT_PORT: u16 = 28017;
+const DEFAULT_PORT: u16 = 28016;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// What a tool is to the bridge: the command it sends and the arguments its schema declares.

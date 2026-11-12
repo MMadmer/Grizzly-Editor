@@ -1,6 +1,6 @@
 //! Particle systems as the editor plays them: a port of the engine's particle library
-//! (`Source/XrParticles`: the domains, every action, the particle store, the noise) and of the
-//! playback of `Source/XrRender/Private` (`CParticleEffect`, `CPEDef`'s animation and collision,
+//! (`cpp-editor-last:Source/XrParticles`: the domains, every action, the particle store, the noise) and of the
+//! playback of `cpp-editor-last:Source/XrRender/Private` (`CParticleEffect`, `CPEDef`'s animation and collision,
 //! `CParticleGroup` with its child effects and timing, `CPSLibrary`'s lookups).
 //!
 //! Pure: no window, no GPU, no thread and no global state. A [`Library`] is made once from a

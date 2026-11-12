@@ -1,19 +1,30 @@
-# Shared build rules ported from Source/Default.props + Default.Release.props.
+# Shared build rules ported from the property sheets cpp-editor-last:Source/Default.props and
+# cpp-editor-last:Source/Default.Release.props.
+# (Source/ at the tag cpp-editor-last).
 # Parity notes:
-#  - Release compiles with BOTH NDEBUG (per-project) and DEBUG (Default.Release.props)
-#  - warnings are fully off (/W0), RTTI on, C++14, /arch:AVX, /MD, LTCG
+#  - Release compiles with BOTH NDEBUG (per-project) and DEBUG (the Release property sheet)
+#  - warnings are fully off (/W0), RTTI on, C++17, /arch:AVX, /MD, LTCG
 #  - WIN32 is intentionally NOT defined on x64
 #  - outputs: dlls/exes -> Bin/x64/<cfg>, import+static libs -> Lib/x64/<cfg>
+#    (XRAY_BIN_DIR / XRAY_LIB_DIR name others)
 
 set(XRAY_ROOT    "${CMAKE_SOURCE_DIR}")
 set(XRAY_SOURCE  "${XRAY_ROOT}/Source")
 set(XRAY_CFG_DIR "x64/${CMAKE_BUILD_TYPE}")
+set(XRAY_BIN_DIR "" CACHE PATH "Where the binaries go (empty: Bin/x64/<config>)")
+set(XRAY_LIB_DIR "" CACHE PATH "Where the import and static libraries go (empty: Lib/x64/<config>)")
 set(XRAY_BIN     "${XRAY_ROOT}/Bin/${XRAY_CFG_DIR}")
 set(XRAY_LIB     "${XRAY_ROOT}/Lib/${XRAY_CFG_DIR}")
+if (XRAY_BIN_DIR)
+    set(XRAY_BIN "${XRAY_BIN_DIR}")
+endif()
+if (XRAY_LIB_DIR)
+    set(XRAY_LIB "${XRAY_LIB_DIR}")
+endif()
 
 option(XRAY_LTO "Whole-program optimization (/GL + /LTCG) like the old vcxproj" ON)
 
-# every target routes through this to get the Default.props behaviour
+# every target routes through this to get the property sheet's behaviour
 function(xray_common target)
     cmake_parse_arguments(ARG "NO_MBCS" "PCH" "" ${ARGN})
 
@@ -32,7 +43,7 @@ function(xray_common target)
         # the old v142 STL still shipped auto_ptr/binary_function; the modern
         # one removes them unless this compatibility switch is set
         _HAS_AUTO_PTR_ETC=1
-        $<$<CONFIG:Release>:DEBUG>      # sic — Default.Release.props does exactly this
+        $<$<CONFIG:Release>:DEBUG>      # sic — the Release property sheet does exactly this
         $<$<CONFIG:Release>:NDEBUG>
     )
     if (NOT ARG_NO_MBCS)
@@ -100,8 +111,7 @@ function(xray_editor_cxx20 target)
     )
 endfunction()
 
-# glob helper: "all .cpp under DIR except EXCLUDE names" (case-insensitive,
-# the source tree mixes OccRasterizer/occRasterizer spellings freely)
+# glob helper: "all .cpp under DIR except EXCLUDE names" (case-insensitive)
 function(xray_glob out_var dir)
     cmake_parse_arguments(ARG "" "" "EXCLUDE" ${ARGN})
     file(GLOB _files CONFIGURE_DEPENDS "${dir}/*.cpp")
@@ -118,57 +128,6 @@ function(xray_glob out_var dir)
         set(_files "${_kept}")
     endif()
     set(${out_var} "${_files}" PARENT_SCOPE)
-endfunction()
-
-# case-insensitive removal from an existing list by file name
-function(xray_exclude list_var)
-    string(TOLOWER "${ARGN}" _excl_lower)
-    set(_kept "")
-    foreach(_f IN LISTS ${list_var})
-        get_filename_component(_name "${_f}" NAME)
-        string(TOLOWER "${_name}" _name_lower)
-        if (NOT _name_lower IN_LIST _excl_lower)
-            list(APPEND _kept "${_f}")
-        endif()
-    endforeach()
-    set(${list_var} "${_kept}" PARENT_SCOPE)
-endfunction()
-
-# Classic MSVC /Yc + /Yu precompiled header, replicating the vcxproj semantics
-# exactly: the compiler SKIPS all text up to the `#include "<header>"` line in
-# every consumer, so out-of-dir TUs never parse their sibling stdafx.h. This is
-# the load-bearing difference from CMake's force-include PCH for targets that
-# pull sources from other projects (XrECore, LevelEditor).
-function(xray_msvc_pch target pch_name creator)
-    cmake_parse_arguments(ARG "" "" "NOPCH" ${ARGN})
-    set(_pch "${CMAKE_BINARY_DIR}/pch/${target}.pch")
-    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/pch")
-    string(TOLOWER "${ARG_NOPCH}" _nopch_lower)
-    get_filename_component(_creator_abs "${creator}" ABSOLUTE)
-    get_target_property(_srcs ${target} SOURCES)
-    foreach(_f IN LISTS _srcs)
-        if (NOT _f MATCHES "\\.(cpp|cxx)$")
-            continue()
-        endif()
-        get_filename_component(_name "${_f}" NAME)
-        string(TOLOWER "${_name}" _name_lower)
-        get_filename_component(_abs "${_f}" ABSOLUTE)
-        # sources shared between targets (e.g. stats_manager.cpp in XrECore and
-        # LevelEditor) must pick THIS target's pch only — source properties are
-        # directory-global, so gate the flags on the consuming target's name
-        set(_guard "$<STREQUAL:$<TARGET_PROPERTY:NAME>,${target}>")
-        if (_abs STREQUAL _creator_abs)
-            set_property(SOURCE "${_f}" APPEND PROPERTY COMPILE_OPTIONS
-                "$<${_guard}:/Yc${pch_name}>" "$<${_guard}:/Fp${_pch}>")
-            set_property(SOURCE "${_f}" PROPERTY OBJECT_OUTPUTS "${_pch}")
-        elseif (_name_lower IN_LIST _nopch_lower)
-            # compiles without any PCH, exactly like PrecompiledHeader=NotUsing
-        else()
-            set_property(SOURCE "${_f}" APPEND PROPERTY COMPILE_OPTIONS
-                "$<${_guard}:/Yu${pch_name}>" "$<${_guard}:/Fp${_pch}>")
-            set_property(SOURCE "${_f}" APPEND PROPERTY OBJECT_DEPENDS "${_pch}")
-        endif()
-    endforeach()
 endfunction()
 
 # mark files that must build without the target's PCH

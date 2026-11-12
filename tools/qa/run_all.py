@@ -38,7 +38,8 @@ OUT = os.path.join(REPO, "Intermediate", "qa")
 STATE = os.path.join(OUT, "state.json")
 OD = r"D:\XFinedProjects\DARF-Overnight-Delivery"
 TEST = r"D:\XFinedProjects\Test"
-RUST_EXE = os.path.join(REPO, "Intermediate", "cargo", "debug", "Grizzly.exe")
+# the editor the suites drive: the debug build, or the binary GRIZZLY_QA_EXE names (qa_target.exe())
+RUST_EXE = os.environ.get("GRIZZLY_QA_EXE") or os.path.join(REPO, "Intermediate", "cargo", "debug", "Grizzly.exe")
 
 # name -> script, arguments, timeout (s), alone
 SUITES: dict[str, dict] = {

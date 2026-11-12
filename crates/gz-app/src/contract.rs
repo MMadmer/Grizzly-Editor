@@ -1,4 +1,4 @@
-//! The UI constants MCP answers and QA pins (`Source/Editors/XrECore/Editor/EditorUiContract.h`).
+//! The UI constants MCP answers and QA pins (`cpp-editor-last:Source/Editors/XrECore/Editor/EditorUiContract.h`).
 //!
 //! Each one is defined here once; the code that draws it uses it from here and `ui_contract`
 //! reports them all, so a test reads the value instead of hardcoding it.

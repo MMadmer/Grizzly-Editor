@@ -1,7 +1,7 @@
 //! The graph tab: where a quest (`.nqasset`) or a behaviour graph (`.behasset`) is edited
 //! (docs/UI_DESIGN.md, section 6, "Quest and Behaviour graph").
 //!
-//! The C++ specification is `Source/Editors/LevelEditor/UI/QuestGraph/` (`UIQuestGraph`,
+//! The C++ specification is `cpp-editor-last:Source/Editors/LevelEditor/UI/QuestGraph/` (`UIQuestGraph`,
 //! `NqCanvas`, `NqInspector`, `NqLook`) and `UIQuestGraph::McpView` for `quest_view`.
 //!
 //! - [`tab`] - [`tab::GraphTab`], one [`gz_app::Document`] per file (`quest:<rel>` /

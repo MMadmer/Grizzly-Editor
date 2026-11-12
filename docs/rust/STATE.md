@@ -1566,6 +1566,179 @@ Decisions taken in this pass:
 - `build_spawn` marks the actor `ASPLAYER`; `place_spawn` marks a `$player` section's new entity as the C++ does.
 - The root depth is refused, not worked around in the game (the game repository is read-only here).
 
+## The cutover
+
+The brief `docs/rust/briefs/cutover.md`, 12 Nov. The last commit with the C++ editor is the tag `cpp-editor-last`.
+Before the first run (10:28:36): `find D:\XFinedProjects "D:\Games\Dead Air\modules" -newermt '2026-11-12 10:18:35'` -
+nothing; no editor, game or compiler running.
+
+**1. What left the repository.** The closure of the three compilers was taken from the build itself, not from
+names: the compilers built from a fresh CMake folder of the full tree (`Intermediate/cutover/closure`, 445 steps,
+72 s), then ninja's graph (`ninja -t inputs XrLC xrDO_Light XrLCLight`) and its dependency records (`ninja -t
+deps`: every header each object read) gave the files, the link lines of `build.ninja` and the `#pragma
+comment(lib)` of those files the libraries (from the SDK: `d3dx9.lib`, `DxErr.lib`; the rest is the Windows SDK's).
+Two kinds of input no record holds were added by hand and proven by the second build: `ISPC/win/ispc.exe` (the
+command of a custom rule) and what a `.rc` includes (`Editors/Public/grizzly_resource.h` - the first proof build
+stopped there and it was put back from the tag; `assets/grizzly-editor-icon.ico` stays at the root). The license
+texts of the third-party code that stays stay with it. `Intermediate/cutover/closure.py`, `plan_delete.py`,
+`kept.txt`, `dropped.txt`.
+- Deleted (16,047 tracked files): under `Source/` everything but the closure - `Editors/LevelEditor`, `XrECore`,
+  `XrEUI`, `XrEProps`, `ActorEditor`, `ParticleEditor`, `ShaderEditor`, `XrAI`, `XrFontGenerate`, the three
+  `XrSE_Factory*`, `XrGame`, `XrGameCS`, `XrGameSOC`, `XrGameSpy`, `XrNetServer`, `XrPhysics`, `XrParticles`,
+  `XrXMLParser`, `XrCPU_Pipe` (but the header the compilers read), `XrSound` (but `Sound.h`), `XrRender` (but
+  `Public` and one header), `XrEngine` (but 40 headers and `xrLoadSurface.cpp`), `xrServerEntities*`,
+  `XrWeatherEditor*` (but one header), `Xr3DA*`, `TestApp`, `packages`, `Engine.sln`, every `.vcxproj` /
+  `.filters` / `.props` (the pipeline is CMake), `External/{BugTrap, Crypto, FreeType, LuaJIT, Luabind, Ode,
+  OpenALSoft, OpenAutomate, OpenSSL, Theora}` and what `External/Public`, `RedImage` (its MSBuild junk, the
+  generated ISPC headers - now written into the build folder), `LZO` held beyond the build; under `SDK/` all but
+  12 DirectX headers, 8 hxgrid headers, `stb_image.h`, `library_linkage.h` and the two libraries (`boost`, `loki`,
+  `freetype`, `DPlay`, `Lib/Win32`, `Bin`, `LuaJit.7z`); at the root `fs_cs.ltx`, `fs_soc.ltx`, `fsgame_cs.ltx`,
+  `fsgame_soc.ltx`, `actor.ini`, `particle.ini`, `shader.ini` (the dropped flavours and editors; no Rust code
+  reads them), the four `tool_*xrAI*` / `tool_create_spawn` / `tool_verify_ai_map` launchers of the dropped
+  standalone XrAI; `cmake/{EditorTargets, GameTargets, GameScriptTUs, LuaJITTarget}.cmake`, `cmake/LuaJITHost`;
+  `tools/qa/lint_ui_units.py` (D6).
+- Stays for the compilers (1,075 files under `Source/` and `SDK/`): `Editors/{XrLC, XrLCLight, xrDO_Light,
+  XrDXT, XrETools, XrQSlim, FreeMagic}` and seven files of `Editors/Public`, `XrCore`, `XrCDB`, `XrAPI`,
+  `External/{zlib, LZO, Ogg, Vorbis, RedImage, Public (30)}`, `xr_msvc_stl_compat.h`, `THIRD_PARTY_NOTICES.txt`
+  (rewritten for what is built now: LZO, Ogg/Vorbis, zlib/MiniZip, and LuaJIT/libvorbis inside the editor).
+  `XrETools` stays: `XrLC` links it.
+- Left, as the rules of this pass require: `rawdata\{actor,particle,shader}_imgui_default.ini` and
+  `rawdata\ActorEditorLevel.cform` (only the C++ editors read them; nothing under `rawdata\` is deleted in this
+  pass), and at the root `T-6638.7z` (an archive of old X-Ray sources), `ccc__temp__vertices`, an empty
+  `engine.log`, `tool_compile_xrLC.cmd` / `tool_compile_xrDO.cmd` (naming a `Bin\Win32` that no build makes) - none
+  is named by the brief's section 1. The untracked MSBuild output under `Source/External/RedImage/{intermediate,
+  libraries}` is git-ignored and was left.
+- The repository: 18,201 files tracked at the tag, 2,157 now (2,155 kept, `cmake/CompilerTargets.cmake`, `crates/grizzly/build.rs`); C++ 3,270,206 lines at the tag, 338,302 now (21,607 of them SDK headers); Rust 246,592 (`Intermediate/cutover/size.py`).
+
+**The compilers build from what is left**: `pwsh -NoProfile -File .\Build.ps1 -Only compilers -Out
+Intermediate\cutover\proof-bin` - a fresh CMake folder, LTO on as shipped: 80 s (the first run stopped at the
+`.rc`'s header after 441 of 445 steps, the second finished the 5 left). `XrLC.exe`, `xrDO_Light.exe`,
+`XrLCLight.dll`, `XrCore.dll`, `XrCDB.dll`, `XrAPI.dll`, `XrDXT.dll`, `XrETools.dll`. The proof did not write into
+`Bin\` (`-Out`): there the compilers of the last C++ build stay, and Play runs them.
+
+**2. The editor under its own name.**
+- `Build.ps1` builds the editor first (cargo with the settings of `cg.sh`, outside the Visual Studio shell: inside
+  it the C dependencies' build scripts see another environment and rebuild, 3.5 min each time) and then the
+  compilers (CMake in the developer shell, the newest MSVC with `<hash_map>`, the newest ninja found), into
+  `Bin\x64\Release` (`-Out` elsewhere, `-Only editor|compilers`, `-Debug`), and prints each part's seconds. It
+  copies `Grizzly.exe`, `grizzly-mcp.exe` and their PDBs; `LevelEditor.exe` and its DLLs were not touched (no
+  DLL was added, so the oracle's stamp of the folder is what it was).
+- **The release profile** stays thin LTO, 16 codegen units, `debug = "line-tables-only"` (the PDB beside the
+  executable is what `std`'s backtrace in `gz-crash` reads). It had never been linked: the link failed on
+  `__imp_realloc` - the vendored LuaJIT (`luajit-src` runs `msvcbuild.bat static`, /MT) pulls the static C runtime,
+  the rest of the program is built for the DLL one, and under thin LTO the static one is met first.
+  `crates/grizzly/build.rs` leaves the static runtime out of the executable's link (`/NODEFAULTLIB:libcmt.lib`,
+  `libucrt.lib`, `libvcruntime.lib`): one C runtime, the DLL one, as the debug build already used
+  (`vcruntime140.dll`, the UCRT). A clean release build of the editor and the bridge: 347 s; after a change of the
+  `grizzly` crate alone 164 s; Build.ps1's run 220 s. `Grizzly.exe` 71.6 MB, its PDB 250 MB.
+- The default port is 28016 (`gz_mcp::DEFAULT_PORT`, the editor and `grizzly-mcp`); QA keeps 28917 and up.
+- `tools/mcp/grizzly_mcp.py` is a launcher of `grizzly-mcp.exe` (`GRIZZLY_MCP_EXE`, `Bin\x64\Release`,
+  `Intermediate\cargo\release`, `Intermediate\cargo\debug`; same stdio, the child's exit code, a sentence and exit
+  code 1 when none is built). `test_mcp_bridge.py` holds the safety paragraphs as the Python bridge wrote them, word
+  for word (checked against the tag), and takes the bridge beside the editor it drives.
+- QA: `qa_target.py` drives the Rust editor with nothing set (the debug build; `GRIZZLY_QA_EXE` another binary,
+  which `run_all.py`, `diff_editors.py`, `check.sh`'s registry and `run-editor.ps1` take too); `GRIZZLY_QA_TARGET=cpp`
+  is accepted from `diff_editors.py` alone, any suite refuses it with a sentence, an unknown value too.
+  `diff_editors.py`'s key of the C++ editor is the stamp the folder had at the cutover (`CPP_STAMP`): the sources
+  are gone, so it cannot change, and Build.ps1 now rebuilds the compilers' `XrCore.dll` / `XrCDB.dll` beside
+  `LevelEditor.exe` from the same sources - that must not throw the records away.
+  `tools/mcp/run_benchmark.py` and `tools/qa/bench_build.py` still measure the C++ editor against the Rust one
+  (records and an opt-out, `--no-cpp`); the other `tools/mcp` scripts were never the C++ editor's alone.
+
+**3. The documents.** `CLAUDE.md` rewritten rule by rule ("The move to Rust" became "How the editor is built");
+`tools/mcp/AI_SETUP.md` (the binary, the port, the catalogue, how a project and its last scene open, the raw
+protocol as the Rust server runs it; the safety section untouched); `README.md`; `docs/UI_DESIGN.md` (the kit is
+`gz-ui`, the contract `gz-app`'s `contract.rs`, section 8 is where it lives now; the C++ plan is at the tag);
+`docs/NQ_ARCHITECTURE.md` (its C++ sections say they are the tag's tree). A Rust comment that cited a deleted
+`Source/...` path cites `cpp-editor-last:Source/...`. Two tool descriptions named C++ files (`ui_split`,
+`shortcuts`: `level_imgui.ini`, `level.ini`; `ui_contract`: `EditorUiContract.h`) and now name the editor's own.
+References to deleted paths left in what stays (`Intermediate/cutover/deleted_refs.py`): the game engine's own
+sources the documents cite (`PhraseDialog.cpp`, `CustomOutfit.cpp`, ... - all in the game repository's
+`src\xrGame`), and the C++ file names inside the two sections of `NQ_ARCHITECTURE.md` marked as the tag's. The
+migration's records (`docs/rust/briefs`, `PARITY.md`, this file, `RUST_MIGRATION.md`) keep the paths they were
+written with: they name the tree at the tag.
+
+CLAUDE.md rules dropped, and why (every other rule carried over in the new editor's terms):
+- "`Source/` is the oracle and is not edited on this branch", `GRIZZLY_QA_TARGET=rust` - the migration rule is over;
+  `Source/` holds the compilers.
+- The modal pin of the patched `imgui.cpp` (`BeginPopupModal`), ImGui's platform windows for a window that leaves
+  the viewport, the stale `level_imgui.ini` placing a modal, `NoSavedSettings` - ImGui; the behaviour (a dialog in
+  the main window, centred, clamped, scrolling) carried over.
+- `XrUIManager::NewPlatformFrame` / `SetRenderSize` / `CEditorRenderDevice::Initialize`, and "unless another
+  window of the editor is in front" - the C++ minimized-picture code; the Rust window pictures a minimized editor at
+  its restored size (`window.rs`), the in-front exception has no counterpart.
+- `test_mod_catalog.py` F's stale layout entry and "the layout and preferences files come back byte for byte" - the
+  Rust shell keeps no ImGui layout; the suite skips that precondition.
+- The splash thread of `EditorStartup` (D7), its `Stage()` / `Finish()`, the C++ start numbers (19k reads, 62k
+  file operations), the `CPU::Detect` and `LoadTHM` lessons, the Per-Monitor V2 opt-in of `DpiScale()`, "a frame
+  drawn before it loads them itself" - C++ startup code; the profile and its rules carried over.
+- `XrEUI/XrUIKit.h`, `GrizzlyTheme::U32`, `XUI::Pt` / `Em` / `SetDpi`, `lint_ui_units.py` and `// ui-units: ok`
+  (D6), xrCore's `FLT_MIN`, `ImGui::MenuItem` vs `XUI::MenuItem`, `XUI_Local<Name>`, "the 20 pt logo is the only
+  bitmap left" - the C++ kit; the kit rules carried over as `gz-ui`'s.
+- `XrUIShell`, `XUI::Shell::Open`, `DocDesc`, `KeepAliveOnly`, `[ui] level_layout_custom`, `[ui] layout_version`
+  and `level_imgui.ini` - the C++ shell and its ImGui files (D3: nothing migrated).
+- "`BlockShortCuts` is gone" - C++ history.
+- `FromMcp()` / `Unattended()` / `ELog.DlgMsg` - now `gz-ui`'s `Asker` (`Ui`, `Mcp`, `Unattended`).
+- Gone-for-good items that were C++ files (`ed\bar`, `spectrum.*`, `rawdata/level_imgui_default.ini`) and the
+  render target's 64 px buckets - C++ renderer details.
+- Start page: `XUI::BeginPage` / `BeginPageCard` / `CardFooter`, `EditorRecovery::OfferPending`, `SetPreviewScope`,
+  "never inside the UI pass", the deferral of Switch Project out of the UI pass, `s_DeadPreviews` (an ImGui texture
+  kept for the frame being drawn), `Close()` writing `last_scene` - C++ mechanics; the behaviour carried over.
+- `GetFinalPathNameByHandle`, `IsReparseTagNameSurrogate`, `EditorFileOps::Delete` / `Rename` - names; the checks
+  carried over (`gz-project`'s `delete.rs`, `ops.rs`; `gz-win`).
+- Builds: `TUI::Idle` running the checks a slice per frame and "the descriptor on the main thread" - the Rust job
+  runs the checks off the UI thread; `FollowsJob`, `SBuildWalk`, `EditorMod::*` names.
+- Releases, catalog, characters, quests, behaviour graphs, the world, PDA, screens: the C++ class and function
+  names (`EditorMod::PackageRelease`, `kPartInputLimit`, minizip's `ReadPackageLayout`, `EditorCatalog::DrawKeyLine`,
+  `kClientId` in `EditorGithub.cpp`, `CreateKey`, `CheckStagedContent`, `TagVocabulary`, `VtPace`, `kOrder`,
+  `lvRequired`, `SCatalog*`, `XUI::BeginCard` / `FooterBusy` / `BeginSheet`, `EditorCharacters::*`, `SNqValue`,
+  `TextRaw`, `NqInspector::*`, `NqPickers::*`, `SetModelPreview`, `[GrizzlyLayout]` and the old `level.ini
+  quest_*_split` keys, `NqLayout::Box`, `kZoom * XUI::Dpi()`, `NqLook::*`, `EditorMod::SManifest::vars`,
+  `ProjectGlobals`, `NqCatalog::kTypes`, `NqValidate::CheckParamValue`, `EditorWorld`, `ptPlayerStart`,
+  `ManifestGeneration`, `SXmsOrder`, `EditorPda`, `DrawItem`, `Toolbar::Segmented`, `ValidateForBuild`,
+  `EditorScreens`) - replaced by the crate and file that hold it now; "Until the implementation starts, the
+  document IS the contract" - the implementation started long ago.
+- Screens: `XUI::FileDropZone` (`XrUIFileDrop.cpp`), `WM_DROPFILES`, the multithreaded apartment where
+  `RegisterDragDrop` fails, `IsEditorProcessForeground` while `FileDropActive` - C++ / COM details.
+- Dangerous operations: "deleting scene objects, clearing the scene" as confirmed operations - D8 makes them one
+  undo step that asks nothing (the Outliner's Delete still names what goes); the rule says so now.
+- Code and text: "From any ImGui panel's `Draw()` never call anything that redraws the frame" (`XrUIManager::
+  InUIPass`) - ImGui; the twins of `Source/XrRender/Private` and `Source/Editors/XrECore/Editor` - gone; "the
+  editor process speaks UTF-8" (`LevelEditor.manifest` `activeCodePage`, the profile's `file names: UTF-8` line) -
+  the Rust editor talks UTF-16 to the file system, no code page is involved (the rule became "a file name is one
+  string"); the pointer rule now applies to the compilers' C++.
+- Icons: `EditorAssetIcons::KindOf` / `IconOf` (joining the project root first), the generation `Invalidate()`
+  bumps - C++ implementation details; `XUI::Icon::Quest` etc. - names.
+
+**4. Proof.** Once, on the final tree, 11:19-11:27, nothing else running:
+- `GRIZZLY_QA_EXE=Bin/x64/Release/Grizzly.exe bash tools/rust/check.sh`: clippy clean, fmt clean, `unsafe` only in
+  `gz-win` (28), one file-dialog function, the release binary registers every catalogue command; 20 s.
+- `bash tools/rust/test.sh --all`: 75 binaries run, 0 cached, 0 failed; 1099 tests green; 81 s.
+- `GRIZZLY_QA_EXE=<release> python tools/qa/diff_editors.py --all`: 10 scenarios, 755 steps, 0 differ; 746 written
+  files, 0 differ; 43.0 s, all from the records (no C++ editor started; the fingerprint is the release binary's).
+- `GRIZZLY_QA_EXE=<release> python tools/qa/run_all.py --with-game`: 23 suites, 23 passed (`test_ui_shell`'s 0.3 s
+  window budget among them, `test_play_game` 57.6 s: the game loaded the level Play built with the compilers of
+  `Bin\x64\Release`); wall 168.7 s.
+- Release against debug, from the same source (`Intermediate/cutover/bench_rel.py`: each minimised, a copy of Test
+  and of Overnight Delivery): the endpoint answers 0.58 s / 0.58 s after the process starts, the first held
+  screenshot 1.61 s / 1.98 s; Escape's load (6006 objects, median of 3) 201 ms / 258 ms, ready 215 ms / 259 ms;
+  Overnight Delivery's clean module build (204 files) 1.05 s / 1.38 s, the rebuild 0.31 s / 0.31 s.
+
+At the end: `find D:\XFinedProjects "D:\Games\Dead Air\modules" -newermt '2026-11-12 10:18:35'` at 11:28:11: nothing. Under `Bin\` only the four new files (`Grizzly.exe`, `Grizzly.pdb`, `grizzly-mcp.exe`, `grizzly_mcp.pdb`); nothing under `rawdata\`, `gamedata\` or `Intermediate\oracle` written. No Grizzly, LevelEditor, xrEngine, XrLC, xrDO_Light or github_mock process left; no `gzpg_*`, `gzpr_*`, `gzqa_*`, `grizzly_*` or `gzbench_*` folder in the temp folder.
+
+Decisions taken in this pass:
+- The closure is file by file (ninja's records), not folder by folder; dead sources inside the kept folders (the
+  `EXCLUDE` lists of the CMake files, the `.vcxproj` files) went, and so did the `EXCLUDE` lists.
+- One build pipeline for the C++ (CMake via Build.ps1); `Engine.sln` and every project file went.
+- Build.ps1 builds the editor outside the developer shell (the same environment as `cg.sh`).
+- The release executable links the DLL C runtime alone (`crates/grizzly/build.rs`).
+- `diff_editors.py`'s C++ stamp is frozen at the cutover's value.
+- `check.sh` / `test.sh` are code-level: they ran once on the final tree; the release binary is what `check.sh`'s
+  registry check, `diff_editors.py` and `run_all.py` drove (`GRIZZLY_QA_EXE`). `test.sh` in the release profile
+  would rebuild all 75 test binaries with thin LTO.
+- What the rules of this pass kept from deletion (`rawdata\*_imgui_default.ini`, `rawdata\ActorEditorLevel.cform`)
+  and the root files no section names are left for the lead.
+
 ## For the plan
 
 What `docs/RUST_MIGRATION.md` (and CLAUDE.md where named) should say after the reviewer's pass; the lead edits
@@ -1676,6 +1849,33 @@ them.
 - **The game's suites as proof of section 9**: only `Run-ScreensQa.ps1 -Part Descriptions` takes outside input
   (`-ExtraCharacters`); `Run-ModsQa.ps1` and `Run-NqQa.ps1 -Scenario Scout` make their own fixtures, so they prove
   the game's side of the contract, not the editor's output.
+- **After the cutover** (the pass "The cutover" above), the plan should say:
+  - the status line: "Status: the Rust editor is the editor of the repository (phase 7 done; the C++ editor's last
+    commit is the tag `cpp-editor-last`). Phase 8, the compilers, is left."
+  - I4 and I5: the project folder WAS the interface of the two editors until the cutover; the oracle is now the
+    C++ editor of the tag, through its records under `Intermediate/oracle` (the built `Bin\x64\Release\LevelEditor.exe`
+    records a new one); `Source/` holds the compilers' closure alone and is edited only for them.
+  - section 3 and 4: the scope is done - every row of "Rewritten" is in `crates/`, "Dropped" is gone from the tree;
+    "Rewritten last" (`XrLC`, `XrLCLight`, `xrDO_Light`) is what `Source/` holds: 1,075 files under `Source/` and
+    `SDK/` (the compilers, `XrETools`, `XrDXT`, `XrQSlim`, `FreeMagic`, `XrCore`, `XrCDB`, `XrAPI`, zlib, LZO,
+    Ogg, Vorbis, RedImage, 30 headers of `External/Public`, 40 of `XrEngine` and `xrLoadSurface.cpp`, 21 of the SDK and
+    `d3dx9.lib` / `DxErr.lib`), found from ninja's records of a build of them, built by CMake (`cmake/`) through
+    `Build.ps1`.
+  - section 6: the release profile (thin LTO, 16 codegen units, the line tables in a PDB beside the executable)
+    and `crates/grizzly/build.rs`: the executable links the DLL C runtime alone (the vendored LuaJIT is /MT; with
+    both runtimes the release link fails on `__imp_realloc`).
+  - section 8: `tools/mcp/grizzly_mcp.py` is a launcher of `grizzly-mcp.exe`; `tools/qa/lint_ui_units.py` is gone.
+  - section 10.1: "The oracle. The C++ editor of the tag `cpp-editor-last`: its records under `Intermediate/oracle`,
+    keyed with the stamp it had at the cutover (`diff_editors.py` `CPP_STAMP`), so a rebuild of the compilers'
+    libraries beside it does not throw them away."
+  - section 13, the paragraph "Side by side" becomes: "**The editor.** `Bin\x64\Release\Grizzly.exe` (Build.ps1, the
+    release profile) or `Intermediate\cargo\debug\Grizzly.exe` (`cg.sh build`), listening on 28016 (`-mcp_port`
+    names another; QA uses 28917 and up, each editor in a home of its own). The QA suites drive it with nothing set
+    (`GRIZZLY_QA_EXE` names another binary); `GRIZZLY_QA_TARGET=cpp` is for `diff_editors.py`'s records only, and a
+    suite refuses it." "The branch", "Areas flip one at a time" and "What changed in C++ since then is the port
+    list" end with the merge into `main`.
+  - phase 7: done as written, with `Build.ps1` building the editor first (outside the developer shell, as `cg.sh`)
+    and the compilers second, `-Only`, `-Out`.
 
 ## Next packages, in dependency order
 

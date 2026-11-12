@@ -64,7 +64,8 @@ PARITY_HEAD = "## Commands compared by the differential run"
 PARITY_END = "<!-- end of the differential run's section -->"
 
 CPP_EXE = os.path.join(REPO, "Bin", "x64", "Release", "LevelEditor.exe")
-RUST_EXE = os.path.join(INTER, "cargo", "debug", "Grizzly.exe")
+# the Rust editor: the debug build, or the binary GRIZZLY_QA_EXE names (Bin\x64\Release\Grizzly.exe, the release one)
+RUST_EXE = os.environ.get("GRIZZLY_QA_EXE") or os.path.join(INTER, "cargo", "debug", "Grizzly.exe")
 CPP_PORT = 28016
 RUST_PORT0 = 28120
 # The C++ editor's own files in the repository root; the Rust editor writes into its -home and
@@ -840,7 +841,7 @@ S8 = [
 ]
 
 # The Play path's steps both editors have: the rows of the C++ Build menu's command table
-# (UI_LevelMain.cpp: COMMAND_MAKE_GAME, _MAKE_AIMAP, _MAKE_DETAILS, _MAKE_HOM, _MAKE_SOM; Make All is
+# (cpp-editor-last:Source/Editors/LevelEditor/Editor/UI_LevelMain.cpp: COMMAND_MAKE_GAME, _MAKE_AIMAP, _MAKE_DETAILS, _MAKE_HOM, _MAKE_SOM; Make All is
 # s7 and s8), one at a time into an empty level folder, on the scene that gives each of them work.
 # Collision, AI map, game graph, the editor spawn and the start of the game are the C++ top bar's
 # buttons (UITopBarForm: ClickCForm, ClickAIMap, ClickGGraph, ClickPlayPC) with no command row and no
@@ -948,12 +949,15 @@ def game_stamp() -> str:
     return sha256("\n".join(parts).encode())
 
 
+# The C++ editor's stamp when it left the repository (the cutover, tag cpp-editor-last): LevelEditor.exe and every
+# DLL beside it as the records were made. Its sources are gone, so it can no longer change; Build.ps1 rebuilds the
+# compilers' libraries beside it (XrCore.dll, XrCDB.dll, ...) from the same sources, which must not invalidate them.
+CPP_STAMP = "4064068b014fe4f153ed2d7610bc32bc2f28664250e73073464902e295f161a4"
+
+
 def cpp_stamp() -> str:
-    """The C++ editor's logic: LevelEditor.exe and every DLL beside it (XrECore.dll, XrEngine.dll, the game's
-    entity factory, ...) - a rebuilt library changes the oracle as much as a rebuilt executable."""
-    folder = os.path.dirname(CPP_EXE)
-    names = [os.path.basename(CPP_EXE)] + sorted(n for n in os.listdir(folder) if n.lower().endswith(".dll"))
-    return sha256("\n".join(f"{n}:{stamp_file(os.path.join(folder, n))}" for n in names).encode())
+    """The C++ editor's part of a record's key: fixed since the cutover (CPP_STAMP)."""
+    return CPP_STAMP
 
 
 def plain_steps(steps: list[dict]) -> list:

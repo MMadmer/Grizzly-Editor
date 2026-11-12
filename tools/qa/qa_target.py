@@ -1,22 +1,32 @@
 """Which editor the QA suites drive.
 
-The suites check behaviour, not a binary, so the editor and its port are parameters:
+The suites check behaviour, not a binary, so the editor and its port are parameters. With nothing
+set they drive the editor, Intermediate\\cargo\\debug\\Grizzly.exe, on port 28917 with a home of its
+own (never the author's 28016 or settings):
 
-    GRIZZLY_QA_TARGET=rust   the Rust editor: Intermediate\\cargo\\debug\\Grizzly.exe on port 28917
-    GRIZZLY_QA_EXE=<path>    another binary of the chosen target
+    GRIZZLY_QA_EXE=<path>    another binary - Bin\\x64\\Release\\Grizzly.exe, the release build
     GRIZZLY_QA_PORT=<n>      another port
-
-With nothing set the target is the C++ editor (Bin\\x64\\Release\\LevelEditor.exe on 28016).
+    GRIZZLY_QA_TARGET=cpp    the C++ editor of the tag cpp-editor-last (Bin\\x64\\Release\\LevelEditor.exe on
+                             28016): for tools/qa/diff_editors.py's oracle records only - a suite refuses it
 """
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 
-RUST = os.environ.get("GRIZZLY_QA_TARGET", "").strip().lower() == "rust"
+TARGET = (os.environ.get("GRIZZLY_QA_TARGET") or "rust").strip().lower()
+if TARGET not in ("rust", "cpp"):
+    print("REFUSED: GRIZZLY_QA_TARGET=%s names no editor (rust, the default, or cpp)" % TARGET, flush=True)
+    sys.exit(2)
+RUST = TARGET == "rust"
+if not RUST and os.path.basename(sys.argv[0]).lower() != "diff_editors.py":
+    print("REFUSED: the C++ editor left the repository at the cutover (tag cpp-editor-last); it is the oracle of "
+          "tools/qa/diff_editors.py only, and no suite runs on it. Unset GRIZZLY_QA_TARGET.", flush=True)
+    sys.exit(2)
 PORT = int(os.environ.get("GRIZZLY_QA_PORT") or (28917 if RUST else 28016))
 MCP = ("127.0.0.1", PORT)
 

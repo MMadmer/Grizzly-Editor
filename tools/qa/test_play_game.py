@@ -2,7 +2,7 @@
 """The game loads a level the Rust editor built and started with Play (plan D1, phase 6's gate): on a THROW-AWAY
 COPY of a project, in a game root of the editor's own, on a hidden desktop, within three minutes.
 
-    GRIZZLY_QA_TARGET=rust python tools/qa/test_play_game.py --project D:\\XFinedProjects\\Test [--keep-log <file>]
+    python tools/qa/test_play_game.py --project D:\\XFinedProjects\\Test [--keep-log <file>]
 
 What it does:
   1. copies the project into the system temp folder and puts the repository's smallest scene into it (mp_test:

@@ -5,7 +5,7 @@
 #   - `unsafe` in `crates/gz-win` only (the count inside is printed);
 #   - the editor builds, and `Grizzly.exe -dump_commands` registers every `cmd` of
 #     `crates/gz-mcp/tools.json` (checked again only when the executable is newer than its last
-#     pass, kept in Intermediate/check-commands.stamp).
+#     pass, kept in Intermediate/check-commands.stamp); GRIZZLY_QA_EXE checks that binary instead.
 # Exit code 1 when any of them fails.
 set -u
 cd "$(dirname "$0")/../.." || exit 2
@@ -57,11 +57,16 @@ else
 fi
 
 echo "== build and registry"
-if ! bash tools/rust/cg.sh build -p grizzly; then
+# GRIZZLY_QA_EXE names a binary built already (Bin/x64/Release/Grizzly.exe, the release build): its
+# registry is the one checked, and the debug build is not made
+if [ -n "${GRIZZLY_QA_EXE:-}" ] && [ ! -f "$GRIZZLY_QA_EXE" ]; then
+    echo "build: $GRIZZLY_QA_EXE is not built"
+    bad=1
+elif [ -z "${GRIZZLY_QA_EXE:-}" ] && ! bash tools/rust/cg.sh build -p grizzly; then
     echo "build: failed"
     bad=1
 else
-    exe=Intermediate/cargo/debug/Grizzly.exe
+    exe=${GRIZZLY_QA_EXE:-Intermediate/cargo/debug/Grizzly.exe}
     stamp=Intermediate/check-commands.stamp
     if [ -f "$stamp" ] && [ ! "$exe" -nt "$stamp" ]; then
         echo "registry: unchanged since its last pass"

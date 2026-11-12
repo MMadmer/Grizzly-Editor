@@ -128,7 +128,9 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 opt-level = 2
 
-# The shipped editor: thin LTO across crates. Slow to link; built for a release only.
+# The shipped editor (Build.ps1): thin LTO across crates, 16 codegen units, the line tables in a
+# PDB beside the executable - what gz-crash's symbolised stacks read. Slow to link; built for a
+# release only.
 [profile.release]
 opt-level = 3
 lto = "thin"

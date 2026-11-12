@@ -1,13 +1,12 @@
-# Grizzly Editor — the single build pipeline (CMake + Ninja).
-# Clean clone -> .\Build.ps1 -> Bin\x64\Release with the full working set:
-# LevelEditor + engine DLLs + XrGame/SOC/CS + SE factories.
+# The level compilers XrLC, XrLCLight and xrDO_Light (CMake + Ninja), the last C++ of the
+# repository until they become Rust (docs/RUST_MIGRATION.md, phase 8). Build.ps1 builds the Rust
+# editor and then runs this.
 #
-# Ported from the old Engine.sln vcxproj files (Release|x64), including their
-# quirks (DEBUG defined in Release, /W0, /arch:AVX, C++14). The specs live in
-# cmake/*.cmake; the vcxproj files are no longer used by this pipeline.
+# Ported from the vcxproj files of cpp-editor-last:Source/Engine.sln (Release|x64), including
+# their quirks (DEBUG defined in Release, /W0, /arch:AVX). The specs live in cmake/*.cmake.
 
 cmake_minimum_required(VERSION 3.25)
-project(GrizzlyEditor LANGUAGES C CXX RC)
+project(GrizzlyCompilers LANGUAGES C CXX RC)
 
 if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
@@ -21,13 +20,9 @@ foreach(_lang C CXX)
     string(REPLACE "-DWIN32" "" CMAKE_${_lang}_FLAGS "${CMAKE_${_lang}_FLAGS}")
 endforeach()
 
-# broken-on-master editors are ported but excluded from the default build;
-# the C++/CLI weather editor needs the .NET SDK and is loaded at runtime only
-option(XRAY_BUILD_WEATHER_EDITOR "Build the C++/CLI weather editor DLLs" OFF)
-
 include(cmake/XRayCommon.cmake)
 
-# Keep the notices beside every produced editor binary, including targeted builds.
+# Keep the notices beside the binaries, including targeted builds.
 file(MAKE_DIRECTORY "${XRAY_BIN}")
 configure_file(
     "${XRAY_SOURCE}/External/THIRD_PARTY_NOTICES.txt"
@@ -35,13 +30,7 @@ configure_file(
     COPYONLY
 )
 
-include(cmake/LuaJITTarget.cmake)
 include(cmake/ExternalTargets.cmake)
 include(cmake/LzoTarget.cmake)
 include(cmake/CoreTargets.cmake)
-include(cmake/EditorTargets.cmake)
-include(cmake/GameTargets.cmake)
-
-# solution-level (order-only) dependencies: runtime-loaded modules must exist
-add_dependencies(XrEngine XrCPU_Pipe)
-add_dependencies(LevelEditor XrSE_Factory XrSE_FactoryCS XrSE_FactorySOC XrGame XrGameSOC XrGameCS)
+include(cmake/CompilerTargets.cmake)
