@@ -43,6 +43,12 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   every command is in the registry (`gz-editor`) and reachable over MCP, and the UI thread never waits on a file, the
   network, a lock a job may hold, a GPU readback or a pipeline compile. No `static` holding state, no singleton: stores,
   pools and services are handles passed down from the editor; `Rc` / `RefCell` only in a surface's own view state.
+- **Frames are drawn on demand, and a scene pass only when its picture can change** (`gz-ui-viewport`'s
+  `service.rs`, `due`): the scene, the library, the view as a pass reads it, assets, an animation, a spawn. A job's
+  progress redraws the chip, the Task Center's card and the spinner at their own rates and builds no scene pass, so a
+  long job has the machine; what a command answers never waits for a frame to compute it (a tab's `dirty()` answers
+  for a document not drawn yet). No pool is made smaller or slower for smoothness; the process opts out of Windows'
+  power throttling (`gz_win::keep_full_speed`). `frame_pacing` tells UI frames from scene passes, with their causes.
 - **`unsafe` only in `gz-win`** (the Win32 that `std` lacks), every block with a `// SAFETY:` line, and no
   `unsafe impl Send` / `Sync` anywhere. Every other crate is `#![forbid(unsafe_code)]` through the workspace lints.
 - **Five entry points prove a change**: `bash tools/rust/check.sh` (clippy, fmt, `unsafe` only in `gz-win`, the
@@ -106,7 +112,9 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - The editor is fully drivable over MCP (TCP 127.0.0.1:28016; the stdio bridge `grizzly-mcp.exe`, the catalogue
   `crates/gz-mcp/tools.json`; `tools/mcp/grizzly_mcp.py` is a launcher of the binary for clients set up before;
   documentation in `tools/mcp/AI_SETUP.md`). New UI features ship with an MCP command: the editor is AI-friendly by
-  design, and `check.sh` fails a catalogue command the registry lacks.
+  design, and `check.sh` fails a catalogue command the registry lacks. Both binaries embed the catalogue and answer
+  `-catalogue` with its hash and count; `tools/qa/catalogue.py <exe>` says in one sentence when a binary was built
+  from another `tools.json`, and `check.sh` and `test_mcp_bridge` ask it first.
 - Screenshots are ONE call and always current: `gz-app`'s `shots.rs` HOLDS a `screenshot_editor` /
   `screenshot_viewport` request until the frames it asked for were presented, then answers. It has to: the editor
   redraws on demand, so an answer given at once showed the frame from BEFORE the caller's last commands - and because

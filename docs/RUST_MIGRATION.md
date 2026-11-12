@@ -303,7 +303,7 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
 
 | Crate | Why |
 |---|---|
-| `gz-win` | Win32 that `std` lacks: caption hit test, per-monitor DPI, dropped files, the clipboard, reparse tags and final path names, known folders, Credential Manager, a minimised start, the crash dump |
+| `gz-win` | Win32 that `std` lacks: caption hit test, per-monitor DPI, dropped files, the clipboard, reparse tags and final path names, known folders, Credential Manager, a minimised start, the crash dump, the opt-out of power throttling |
 
 - `gz-win` is the whole list: the crash handler (`gz-crash`) needs none of its own, and the
   renderer fallback of 5.8 was not taken.
@@ -384,7 +384,7 @@ crate as `cargo metadata` gives it is in `docs/rust/STATE.md` ("For the plan").
 | `XrSound` (OpenAL), Vorbis | `cpal` for output, `lewton` to decode; OGG comments by `gz-fmt-sound` |
 | `ogg_enc` (oggenc + libvorbis) | `vorbis_rs` (libvorbis aoTuV, vendored): VBR at the description's quality, the parameters put in as the first comment by `gz-fmt-sound` |
 | QSlim, WildMagic, FreeMagic | ported with the mesh tools that use them |
-| `tools/mcp/grizzly_mcp.py` | `grizzly-mcp`, serving the catalogue `crates/gz-mcp/tools.json` |
+| `tools/mcp/grizzly_mcp.py` | `grizzly-mcp`, serving the catalogue `crates/gz-mcp/tools.json`, which both programs embed and name with `-catalogue` (a hash and a count: `tools/qa/catalogue.py` tells a stale binary in one sentence) |
 | Win32 file dialogs | `rfd`, each on a thread of its own |
 | `tools/qa/lint_ui_units.py` | the kit's types |
 | `XrLC.exe`, `XrLCLight.dll`, `xrDO_Light.exe`, run as processes from a stage | `gz-lc`, `gz-lc-light`: a job in the editor's process, the same code under `Grizzly.exe -headless -compile` |
@@ -513,6 +513,17 @@ Two consequences worth stating:
    start (warm; its first frame follows when the driver has made the device),
    fewer file operations per start than today's 82k, no UI frame over 16 ms caused by the
    editor's own work, a rebuild no slower than the C++ job.
+9. **A long operation has the machine.** No pool is made smaller or slower for smoothness; the
+   drawing thread runs above normal priority instead. Frames are drawn on demand: a scene pass
+   is built only when one of its inputs moved (the scene, the library, the view as a pass
+   reads it, assets, an animation, a spawn), a frame asked for later is drawn later, and a
+   job's progress redraws the status chip, the Task Center's card and the spinner at their own
+   rates (10, 20 and 30 a second) with no scene pass. The process opts out of Windows' power
+   throttling (`gz_win::keep_full_speed`), which slowed a compile in an editor whose window was
+   not in front by 11 - 18 %. Measured on the middle scene: idle, 0.04 cores; compiling, no
+   scene pass, frame work p95 3.1 ms (3.9 ms with the camera orbiting), the compile within
+   5 % of the headless one. `frame_pacing` answers UI frames and scene passes apart, each
+   with what caused it.
 
 ## 11. Phases
 
@@ -729,6 +740,7 @@ bug.
 | D19 | A spawn point is placed only for a class the game's factory has a server class for, and a new smart cover's hold position time starts at 0. | The C++ placed a spawn point of undefined type for the first and left the second uninitialised. |
 | D24 | The level compilers light on one machine's cores: lighting over a network of machines (`-net`) and the radiosity pass (`-gi`) are not ported. | No option of the editor reaches either, and the cores of one machine do what the network was for. |
 | D25 | An MU reference is lit by itself. | The C++ keeps a vertex's light in the model its references share and lights the references on several threads, so a reference takes some of another's light and two C++ runs differ. |
+| D26 | The Build menu has no rows for xrAI, and `level_build` no `compile_aimap` / `compile_spawn`. | No build makes that program, and the AI map, the game graph and the spawn are built in the editor's process. |
 | D23 | Play's game graph is the linked game's graph with the level appended (the game's vertex numbers and graph guid unchanged), the way the game adds a module's level; a scene named like a level the game already has keeps the C++ single-level graph. | Dead Air's own start scripts spawn on fixed vertices of the game's graph; on the C++ editor's one-level graph the game stops there. |
 | D20 | The level path is one folder name; anything else is refused when typed and by the build. | The C++ took any text and concatenated it; a path that leaves the levels folder would be wiped by Make All. |
 | D21 | Make All builds a scene that holds an object in visual mode. | The C++ `BuildHOMModel` asserts on it. |
