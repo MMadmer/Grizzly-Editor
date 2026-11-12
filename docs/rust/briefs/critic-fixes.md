@@ -1,7 +1,7 @@
 # Brief: the reviewer's findings
 
-An independent reviewer read the whole work (phase A: reading only). This pass fixes what it
-found. You are alone in the tree. Read `docs/rust/CONVENTIONS.md`; in `docs/rust/STATE.md` the
+An independent reviewer read the whole work and then ran it (its logs:
+`Intermediate/critic/`). This pass fixes what it found. You are alone in the tree. Read `docs/rust/CONVENTIONS.md`; in `docs/rust/STATE.md` the
 sections "The differential run", "The QA suites", "What the QA pass left, closed"; sections 2,
 5, 6, 7, 9 and 10 of `docs/RUST_MIGRATION.md`.
 
@@ -37,6 +37,19 @@ build's project have no proof that ran.
   `<editor>\gamedata\levels\<level>`: run them one after the other and move each result out
   (or give the Rust build an output root for QA) - never both into one folder, and never into
   the game.
+- **Say the rule before you compare.** "Within the stated tolerance" needs a stated one:
+  write into STATE.md ("For the plan") the exact rule for `overlay.xcform`, the cut and the
+  `.ogf` (byte for byte unless a float provably differs between the two compilers' code - then
+  which field, how much, and why the game does not care), and ONE justified rule per file of
+  the level build (padding the C++ leaves uninitialised, an order it took from pointer
+  addresses, a `rand`) - never a broad ignore. If every file the level build writes equals the
+  C++ editor's under those rules, the external compilers get the same input and phase 6's gate
+  (a level built here loads in the game) holds by that. Where a file cannot be made equal,
+  compile ONE small level from both editors' output with the repository's compilers and
+  compare what they produce - under a hard limit of five minutes a run; if no compiler can be
+  run within it, say exactly what stays unproven.
+- The C++ `COMMAND_BUILD` creates `<repo>\gamedata\levels\<level>`, which does not exist now:
+  move its output into the oracle and remove the folder afterwards.
 - Record the oracle again for every scenario you change (nothing answers on 28016 unless the
   author's own editor is up - then stop and say so). The oracle's key takes every binary the
   C++ editor loads its logic from (`XrECore.dll` and the other DLLs beside `LevelEditor.exe`),
@@ -102,8 +115,15 @@ builds frames from several threads while a job touches the same state proves it.
 ## 6. The smaller findings (all of them)
 
 - `crates/gz-editor/src/frames.rs`: a frame-held request must be answered by a frame that
-  STARTED after the request's commands were applied; a frame already in flight does not count.
-  A test.
+  STARTED after the request's commands were applied; a frame already in flight does not count
+  - for the UI frame and for the viewport's own pass alike. A test.
+- `crates/gz-corpus/src/lib.rs`: a corpus test that skips prints into captured output, so
+  `tools/rust/test.sh` cannot tell a skip from a pass. The runner shows every skip
+  (`skipped <binary>: <why>`) and `--all` FAILS when a corpus test skipped on a machine where
+  the script itself set the variables.
+- `dlg.import_base_scene` stays over the Start page after `project_close`: a dialog that
+  belongs to a project goes down with it. `ui_dialog close` without `id` closes the dialog on
+  top instead of refusing.
 - `tools/qa/test_unicode_names.py`: its last check passes on a constant (`startup.rs` always
   logs "file names: UTF-8"). Make the check mean something (the name on disk read back through
   the listing) or drop it for the Rust target with a line in STATE.md's exception list.
@@ -127,6 +147,56 @@ builds frames from several threads while a job touches the same state proves it.
 - `docs/rust/PARITY.md`: its tables still show 52 `missing` rows and a stale stub table while
   its list says closed. Make the tables and the list agree with the code (a row is `same`,
   `differs` with its D-number, or `missing` - and after this pass none is `missing`).
+
+## 7. Serious: the start-up budget was measured to the wrong point
+
+`crates/grizzly/src/main.rs` ends the start-up profile before `gz_app::run` makes the window
+and the graphics device. Measured by the reviewer on four warm starts: the first frame is
+presented 1.01-1.17 s after the process starts; STATE.md says 0.12 s, the budget is 0.3 s, and
+the plan's D7 ("no splash: the editor's own window is up before one could be") rests on it.
+- The profile ends at the first PRESENTED frame and names the stages in between (the window
+  created, the window shown, the adapter, the device, the surface, the first frame) with their
+  seconds, in the log as today.
+- **The window is on the screen within 0.3 s of the process start**: it is created and shown,
+  in the theme's background colour, before the device exists; the device is made without
+  blocking the event loop and the first frame follows when it is ready. Then make the device
+  itself quicker (one backend asked for, not every backend probed; nothing enumerated that is
+  not used). Report both numbers - window shown, first frame - from four warm starts.
+- A check in `test_ui_shell` (or the lifecycle script) reads the profile and fails when the
+  window was shown later than 0.3 s on a warm start.
+
+## 8. Serious: a screenshot after a scene load shows an empty viewport
+
+`screenshot_editor` called once `scene_load_status.loaded` is true pictures an empty viewport
+(3 of 3 starts); a second call shows the scene. `crates/gz-app/src/shots.rs` waits for UI
+frames only. The rule of the project is that a screenshot is ONE call and always current: it
+is held until the viewport's pass for the scene revision the caller's commands produced has
+been shown, and nothing that pass asked for (meshes, textures) is still loading - with a
+bound, after which the answer says what was still pending (`pending: [...]`), never a silent
+half picture. The same for `screenshot_viewport`. A check in `test_scene_tools`: load, one
+screenshot, the viewport is not flat.
+
+## 9. Serious: frames stall while a build runs
+
+Frames of up to 218 ms during a build, the UI thread asleep inside tessellation. The cause is
+in the manifest: `Cargo.toml` enables egui's `rayon` feature, so every `tessellate` runs
+`par_iter` on rayon's GLOBAL pool; the UI thread is not a worker of it and sleeps until
+normal-priority workers get a core from the build. Take the feature out (tessellation on the
+drawing thread, which runs above normal), check that nothing else on the drawing thread enters
+a rayon pool or waits for one (`rg "par_iter|rayon::|install\(" crates/gz-app crates/gz-ui*`),
+measure the frame's work during a build again and write the numbers; the limit in
+`test_build_job` then covers the worst frame, not only the mean.
+
+## 10. A build loads a third of the cores
+
+Measured: a clean build of the reference mod uses 0.24-0.38 of 16 logical cores. The user's
+demand is that the editor's work takes everything the hardware has; an idle core beside a
+serial stage is the fault here, not a busy one. Profile the build by stage (the walk, the
+checks, the bake, hashing, linking or copying, the descriptor; for a release also the zip and
+the index) - wall time and CPU time of each - and make every stage that has independent work
+run it in parallel (the walk by folder, hashing and deflate by file, the checks by asset), on
+the CPU or the IO pool as the work is. Write the table before and after into STATE.md. A stage
+that stays serial has a sentence saying why it must.
 
 ## How to work
 

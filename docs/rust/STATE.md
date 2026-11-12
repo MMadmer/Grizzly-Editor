@@ -1195,6 +1195,22 @@ byte.
 - After the runs: no `Grizzly.exe`, `LevelEditor.exe` or `github_mock` of these runs left; the repository's
   `_projects.ini`, `level.ini`, `level_imgui.ini`, `grizzly_editor.ltx` unchanged (`git status`); the temp copies removed.
 
+## A QA fault: the author's project was opened in place
+
+From the QA pass until 12 Nov 03:15 local, `tools/qa/run_all.py` handed `test_mod_publish.py` the
+author's own project (`D:\XFinedProjects\DARF-Overnight-Delivery`), and the suite opened it in place:
+it rewrote `mod.ltx` for the run (version 0.9.6, a QA repository), packaged into its `releases\`,
+restored the manifest and removed its release at the end. Three runs did so (the QA pass's, the
+lead's acceptance run, one run of the pass after). Found by the reviewer. Checked by the lead:
+`mod.ltx`, `preview.png` and `spawn\l03_agroprom.xspawn` equal, by SHA-256, the copy the differential
+run took before those runs (`mod.ltx` and the `.xspawn` also the module installed in the game);
+`project.ltx` reads whole; `releases\` holds 1.0.0 and 1.0.1 only; the write times of those four
+files and of `temp\session.ltx` are 03:09-03:10. Nothing was lost; a run killed midway would have
+left the author's manifest changed. Since then a suite opens only a copy under the system temp folder
+(`qa_target.copy_project`, `guard_project`: exit code 2 before an editor starts), and `run_all.py`
+ends a timed-out suite's whole process tree. The source checks further down start at 03:15 for that
+reason.
+
 ## What the suites could not hold the Rust editor to
 
 ImGui artefacts with no meaning in the new shell:
