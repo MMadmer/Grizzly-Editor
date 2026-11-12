@@ -24,7 +24,8 @@
 //! - The domain, pure: [`configs::load_tree`] (breadth-first include discovery, parallel reads
 //!   and parses, then the engine's assembly) over a [`configs::FileSource`]; [`modes`]
 //!   ([`modes::scan`], [`modes::checkboxes`], [`modes::provides_mode`]); [`spawn`]
-//!   ([`spawn::sections`], [`spawn::list_path`]); [`version::exe_version`].
+//!   ([`spawn::sections`], [`spawn::list_path`]); [`version::exe_version`],
+//!   [`version::engine_abilities`] (what the engine says it can: Play runs it in place on that).
 //! - [`register`]: `game_link`, `game_modes`, `list_spawn_sections`.
 
 #![forbid(unsafe_code)]

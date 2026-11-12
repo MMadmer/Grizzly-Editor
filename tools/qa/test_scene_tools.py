@@ -23,8 +23,9 @@ Every gesture goes through viewport_gesture, which feeds the viewport's own inpu
      (its own gamedata, fsgame.ltx, a level), a folder inside it, a folder that holds a file, a folder inside the open
      project, the editor's own folder and a relative path - every one refused before anything is built or written,
      and a listing of the work folder before and after is equal; no game is started. Then a root Play makes
-     itself (play_root in an empty temp folder) gets a project in its gamedata: play_root, play_clean and play
-     refuse it, naming the project, and its listing is unchanged
+     itself (play_root in an empty temp folder) - for the linked game's engine in place, so no program and no link
+     in it - gets a project in its gamedata: play_root, play_clean and play refuse it, naming the project, and its
+     listing is unchanged
 
     python tools/qa/test_scene_tools.py --project <project> [--only R,A,...] [--shots <folder>]
 
@@ -635,14 +636,21 @@ def phase_y() -> None:
 
 def phase_y_marked() -> None:
     """A root Play made (it carries play_root.txt) that holds a project inside its gamedata: refused, untouched."""
-    # right in the temp folder: the game takes paths of 255 characters at most
     root = tempfile.mkdtemp(prefix="gzpr_")
     try:
         made = mcp("level_build", action="play_root", root=root, timeout=120)
         if not check(made.get("ok") and made.get("was") == "empty",
-                     "Y play_root makes Play's root in an empty folder (%s programs)" % made.get("programs"),
-                     short(made)):
+                     "Y play_root makes Play's root in an empty folder (%s, %s programs, paths up to %s)"
+                     % (made.get("play"), made.get("programs"), made.get("path_limit")), short(made)):
             return
+        # the linked game's engine says it runs in place: the root holds no program and no link
+        top = sorted(os.listdir(root))
+        programs = [n for n in top if n.lower().endswith((".exe", ".dll"))]
+        check(made.get("play") == "in_place" and made.get("programs") == 0 and not programs
+              and not os.path.lexists(os.path.join(root, "database"))
+              and made.get("exe_path", "").lower().endswith("/xrengine.exe")
+              and not made.get("exe_path", "").lower().startswith(root.replace("\\", "/").lower()),
+              "Y the root is for the installed engine in place: no program, no link (%s)" % ", ".join(top), short(made))
         again = mcp("level_build", action="play_root", root=root, timeout=120)
         check(again.get("ok") and again.get("was") == "play_root" and again.get("walked", 0) > 0,
               "Y the root again: its gamedata walked for a project before it is cleared (%s entries, %s ms)"

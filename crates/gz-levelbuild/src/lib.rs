@@ -46,9 +46,10 @@
 //! - [`play_root`] - what may be Play's game root ([`play_root::check_root`]: the questions of a
 //!   project's deletion, a project anywhere on the way, only a missing or empty folder or one
 //!   carrying Play's marker) and [`play`] - the root made and refreshed, clearing only what Play
-//!   writes there, the engine and the libraries it needs copied (the game's runtime list and the
-//!   import tables, `pe`), the level staged.
-//! - [`process`] - the game, the one program the editor starts, as a `tokio::process` child: its
+//!   writes there, the level staged; the installed engine runs in place on the root's fs config
+//!   when it says it can (`EngineAbilities`, [`play::PlayMode`]), an older one from copies of it
+//!   and the libraries it needs (the game's runtime list and the import tables, `pe`).
+//! - [`process`] - the game, the one program Play starts, as a `tokio::process` child: its
 //!   output followed into the job's stage, Stop ends the whole process tree, one that does not
 //!   start is a sentence.
 //! - [`LevelBuild`] (`session.services`) - what is built of the scene and when it went stale

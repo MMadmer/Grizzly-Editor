@@ -33,7 +33,7 @@ pub const JOB_RUN: &str = "level_run";
 const GROUP_RUN: &str = "game";
 const BUSY: &str = "A compiler or the game is running.";
 /// The game's command line for a scene of the editor (`ClickPlayPC`), after the root's own
-/// `-fsltx fsgame.ltx`.
+/// `-fsltx` (`PlayRoot::fsltx_args`).
 const PLAY_PARAMS: &str =
     "-editor_scene -start server(editor/single/alife/new) client(localhost) -nointro -noprefetch";
 
@@ -144,7 +144,7 @@ async fn level_build(editor: &Arc<Editor>, action: &str, a: &Args, _o: Origin) -
             if action == "play_root" {
                 return Ok(root_answer(&root));
             }
-            start_game(editor, &session, &root, &format!("-fsltx fsgame.ltx {params}"))
+            start_game(editor, &session, &root, &params)
         }
         "compile_geometry" | "compile_details" => {
             if busy {
@@ -330,16 +330,23 @@ async fn compile_command(
     }
 }
 
-/// Starts the root's engine in the root as the `level_run` job; answers once it started.
+/// Starts the root's engine - the installed one in place, the root's copy otherwise - in the
+/// root on the root's `fsgame.ltx` and `params`, as the `level_run` job; answers once it started.
 fn start_game(
     editor: &Arc<Editor>,
     session: &Arc<ProjectSession>,
     root: &crate::play::PlayRoot,
     params: &str,
 ) -> Reply {
-    let (exe, cwd, args) = (root.exe.clone(), root.root.clone(), process::arguments(params));
+    let mut args = root.fsltx_args();
+    args.extend(process::arguments(params));
+    let (exe, cwd) = (root.exe.clone(), root.root.clone());
     let line = process::command_line(&exe, &args);
-    editor.log.info(format!("* Run {line}."));
+    let how = match root.mode {
+        crate::play::PlayMode::InPlace => format!("the installed engine in place, {}", exe.display()),
+        crate::play::PlayMode::Copied => format!("a copy of the engine in the game root {}", cwd.display()),
+    };
+    editor.log.info(format!("* Run {line} ({how})."));
     let lb = LevelBuild::of(session);
     let (ed, lb2) = (editor.clone(), lb.clone());
     let id = editor
@@ -365,7 +372,12 @@ fn start_game(
         })
         .map_err(|_| CmdError::busy(BUSY))?;
     *lb.running.lock() = Some((Running::Game, id));
-    Ok(json!({ "started": Running::Game.name(), "command": line }))
+    Ok(json!({
+        "started": Running::Game.name(),
+        "command": line,
+        "play": root.mode.name(),
+        "exe": root.exe.display().to_string().replace('\\', "/"),
+    }))
 }
 
 /// The linked game's folder, or the sentence that says the project has none.
@@ -434,6 +446,9 @@ fn root_answer(r: &crate::play::PlayRoot) -> serde_json::Value {
         "root": r.root.display().to_string().replace('\\', "/"),
         "was": r.was,
         "exe": r.exe.file_name().map(|n| n.to_string_lossy().into_owned()),
+        "exe_path": r.exe.display().to_string().replace('\\', "/"),
+        "play": r.mode.name(),
+        "path_limit": r.path_limit,
         "programs": r.programs.len(),
         "program_bytes": r.program_bytes,
         "walked": r.walked,
@@ -1112,10 +1127,14 @@ async fn run_action(
                 })
                 .await
                 .map_err(JobError::new)?;
-            let params = format!("-fsltx fsgame.ltx {PLAY_PARAMS} {}", place.params);
+            let params = format!("{PLAY_PARAMS} {}", place.params);
             let started = start_game(editor, session, &ready, params.trim_end())
                 .map_err(|e| JobError::new(e.message))?;
-            Ok(json!({ "run": started, "root": ready.root.display().to_string().replace('\\', "/") }))
+            Ok(json!({
+                "run": started,
+                "root": ready.root.display().to_string().replace('\\', "/"),
+                "play": ready.mode.name(),
+            }))
         }
     }
 }

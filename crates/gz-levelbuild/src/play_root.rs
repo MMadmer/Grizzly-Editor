@@ -246,8 +246,8 @@ pub fn check_root(cx: &DeleteContext, root: &Path) -> Result<RootState, String> 
 }
 
 /// Where Play makes a project's game root when the caller names none, under a short name of the
-/// project's path (the game takes paths of 255 characters at most): an editor started with a home
-/// of its own (`-home`, `GRIZZLY_HOME`) keeps it there, `<home>\play\<id>`, so a run that plays
+/// project's path (an older game takes paths of 255 characters at most, `play::path_limit`): an
+/// editor started with a home of its own (`-home`, `GRIZZLY_HOME`) keeps it there, `<home>\play\<id>`, so a run that plays
 /// leaves nothing in the user's profile; the author's editor (no home given) in the user's local
 /// application data, `GrizzlyPlay\<id>` - outside the editor's folders, which a root may not lie in.
 #[must_use]

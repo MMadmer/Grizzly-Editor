@@ -29,9 +29,51 @@ pub fn exe_version(exe: &[u8]) -> Option<String> {
     None
 }
 
+/// The version resource's `EngineAbilities` string (UTF-16): the words a game build says its
+/// engine can do, space-separated. Dead Air Refined's are written down in its `ProductVersion.h`:
+/// `fsltx-in-place` (on another fs config it writes nothing into its own folder and takes the
+/// archives from that config's `$arch_dir$`), `long-paths` (long-path aware; its paths take
+/// [`LONG_PATH_LIMIT`] characters where Windows long paths are on). An engine without the
+/// string says nothing: an empty list.
+#[must_use]
+pub fn engine_abilities(exe: &[u8]) -> Vec<String> {
+    let key: Vec<u8> = "EngineAbilities\0".encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let Some(at) = exe.windows(key.len()).position(|w| w == key.as_slice()) else {
+        return Vec::new();
+    };
+    // the key, its padding to a 32-bit boundary (zeros), then the value up to its terminator
+    let units: Vec<u16> =
+        exe[at + key.len()..].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+    let value: Vec<u16> = units.iter().copied().skip_while(|&u| u == 0).take_while(|&u| u != 0).collect();
+    String::from_utf16_lossy(&value).split_whitespace().map(str::to_owned).collect()
+}
+
+/// What a `long-paths` engine takes: its path buffers, `string_path` (`2 * MAX_PATH` bytes), less
+/// the terminator.
+pub const LONG_PATH_LIMIT: usize = 519;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn utf16(s: &str) -> Vec<u8> {
+        s.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    }
+
+    #[test]
+    fn engine_abilities_from_the_version_strings() {
+        // program-files: in memory
+        let mut exe = b"MZ....".to_vec();
+        exe.extend(utf16("ProductVersion\0"));
+        exe.extend(utf16("1.6.4\0"));
+        exe.extend(utf16("EngineAbilities\0"));
+        exe.extend([0, 0]);
+        exe.extend(utf16("fsltx-in-place long-paths\0"));
+        exe.extend(utf16("VarFileInfo\0"));
+        assert_eq!(engine_abilities(&exe), ["fsltx-in-place", "long-paths"]);
+        // program-files: in memory
+        assert!(engine_abilities(b"MZ an engine that says nothing").is_empty());
+    }
 
     #[test]
     fn fixed_file_info() {

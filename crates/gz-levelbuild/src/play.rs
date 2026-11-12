@@ -1,8 +1,20 @@
 //! Play's game root (D1): the linked game run on the baked scene without a file of its install
-//! changed. The root holds copies of the game's engine and libraries (copies, not hard links: a
-//! link would share a file of the install with whatever the root's removal does to it), a junction
-//! to its archives, a copy of its loose `gamedata` with the level and `editor.spawn` staged into
-//! it, and an `appdata` of its own (the player's settings copied the first time, no save, no
+//! changed. Which way is the engine's to say, read from its version resource before anything is
+//! written ([`PlayMode`], `gz_game::version::engine_abilities`), never found out by trying:
+//! - **in place** - an engine that says `fsltx-in-place` (Dead Air Refined from the build that
+//!   added it) is started where it is installed, with `-fsltx <root>\fsgame.ltx`: on another fs
+//!   config it writes nothing into its own folder (its content records go to the config's app
+//!   data, a relative root of the config is the config's folder, no update check) and takes the
+//!   archives from that config's `$arch_dir$`, which the root's `fsgame.ltx` names by the game's
+//!   own path. The root holds the marker, `fsgame.ltx`, the copy of the loose `gamedata` with the
+//!   level and `editor.spawn` staged into it, an `appdata` of its own and an empty `modules` - no
+//!   program and no link;
+//! - **copied** - an older engine, which rewrites `.dead-air-x64\content-state.txt` beside itself
+//!   and starts a level only on that folder's `database`, runs from copies of the engine and its
+//!   libraries in the root (copies, not hard links: a link would share a file of the install with
+//!   whatever the root's removal does to it), beside a junction to the archives.
+//!
+//! In both the `appdata` is the root's (the player's settings copied the first time, no save, no
 //! module). The game's own QA roots are built the same way.
 //!
 //! What may be a root is [`crate::play_root::check_root`]'s: it is asked before anything else
@@ -13,32 +25,28 @@
 //! refusal (a root being made, missing or empty at the check, has nothing removed). What Play
 //! writes into its root, and the only things it clears there:
 //! - the marker (`play_root.txt`), `program = ` and `entry = ` lines - a program it listed and no
-//!   longer copies is removed;
-//! - `fsgame.ltx`, the game's, overwritten;
-//! - `database`, the junction to the game's archives (made once; unlinked, never followed,
-//!   wherever a root is cleared);
+//!   longer copies is removed (all of them once the engine runs in place);
+//! - `fsgame.ltx`, the game's, overwritten (in place: its `$arch_dir$` names the game's archives);
+//! - `database`, the junction to the game's archives of a copied engine (made once; unlinked,
+//!   never followed, wherever a root is cleared - and when the engine runs in place);
 //! - `gamedata\`, the game's loose gamedata copied anew every time - the old copy removed (a link
 //!   in it unlinked) only when the marker listed it and no `project.ltx` / `mod.ltx` lies inside
 //!   it, walked again right before -, and the staged level in it;
 //! - `appdata\` (logs, saves, screenshots, the player's `user.ltx` and the caches, seeded once and
-//!   never cleared), `modules\` (empty), `.dead-air-x64\` (the content files copied, the latch
-//!   removed).
+//!   never cleared; in place the game keeps its content records there too), `modules\` (empty),
+//!   `.dead-air-x64\` of a copied engine (the content files copied, the latch removed; removed
+//!   when the engine runs in place).
 //!
-//! Which programs are copied: the engine, every library the game's own list of its runtime names
+//! Which programs a copied engine takes: the engine, every library the game's own list of its runtime names
 //! (`.dead-air-x64\runtime-files.txt`, kept by its installer and updater; without it every library
 //! of the game's folder), and every library of the game's folder any of them imports, ordinary or
 //! delay-loaded (read from their import tables, [`crate::pe`]) - so a game build that adds a
 //! library to its list, or links one it forgot to list, still starts. Never another executable:
 //! the updater, the uninstaller and the tools stay where they are.
 //!
-//! Why the engine does not run where it is installed, with `-fsltx` naming the root's
-//! `fsgame.ltx` (which moves `$fs_root$`, `$app_data_root$`, `$game_data$` and the modules root
-//! to the root): the game's content service works in the folder of `xrCore.dll`, whatever the fs
-//! config says (`Core.ApplicationPath`, `ContentService.cpp`). Every start's verification rewrites
-//! `<game>\.dead-air-x64\content-state.txt` (`verify_worker` -> `ContentState::SaveCache`, a
-//! truncating write), and the service refuses to start a level unless `$arch_dir$` is that
-//! folder's `database` - so the archives stay a junction of the root, not a path in its
-//! `fsgame.ltx`.
+//! The depth of a root is what the engine takes ([`path_limit`]): a `long-paths` engine 519
+//! characters where Windows long paths are on (else `MAX_PATH`, 259), an older one 255
+//! (`CLocatorAPI::Register` copied every path it indexed into a `string256`).
 //!
 //! The editor's C++ Play ran IXRay's `Xr3DA.exe`, which read `level.ai.temp` under `-editor_scene`;
 //! Dead Air Refined's engine reads `level.ai`, so the staged level folder names it so.
@@ -68,6 +76,98 @@ pub const LINKED_GAME: GamePrograms = GamePrograms {
     libraries: &["dll"],
     runtime_list: Some(".dead-air-x64\\runtime-files.txt"),
 };
+
+/// The engine's word for "started on another fs config, I write nothing into my folder and take
+/// the archives from that config's `$arch_dir$`".
+pub const IN_PLACE: &str = "fsltx-in-place";
+/// The engine's word for "long-path aware, my paths take [`gz_game::version::LONG_PATH_LIMIT`]".
+pub const LONG_PATHS: &str = "long-paths";
+
+/// How Play runs the linked game.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlayMode {
+    /// The installed engine, where it is, on the root's `fsgame.ltx`.
+    InPlace,
+    /// Copies of the engine and its libraries in the root, beside a junction to the archives.
+    Copied,
+}
+
+impl PlayMode {
+    /// As the answers and the log name it.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::InPlace => "in_place",
+            Self::Copied => "copied",
+        }
+    }
+}
+
+/// What an engine says it can, from its version resource: nothing is started to find out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Ability {
+    pub in_place: bool,
+    pub long_paths: bool,
+}
+
+/// [`Ability`] of the engine at `engine`; an engine that cannot be read says nothing.
+#[must_use]
+pub fn ability_of(engine: &Path) -> Ability {
+    let words = fs::read(engine).map(|b| gz_game::version::engine_abilities(&b)).unwrap_or_default();
+    let has = |w: &str| words.iter().any(|x| x == w);
+    Ability { in_place: has(IN_PLACE), long_paths: has(LONG_PATHS) }
+}
+
+/// The longest path the game takes. `long_paths_on` asks Windows, and only for an engine that
+/// is long-path aware.
+#[must_use]
+pub fn path_limit(ability: Ability, long_paths_on: impl FnOnce() -> bool) -> usize {
+    match (ability.long_paths, ability.long_paths && long_paths_on()) {
+        (true, true) => gz_game::version::LONG_PATH_LIMIT,
+        (true, false) => WINDOWS_PATH_LIMIT,
+        (false, _) => GAME_PATH_LIMIT,
+    }
+}
+
+/// Whether Windows takes paths over `MAX_PATH` from a long-path aware program
+/// (`HKLM\SYSTEM\CurrentControlSet\Control\FileSystem` `LongPathsEnabled`).
+#[must_use]
+pub fn windows_long_paths() -> bool {
+    std::process::Command::new("reg.exe")
+        .args(["query", r"HKLM\SYSTEM\CurrentControlSet\Control\FileSystem", "/v", "LongPathsEnabled"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .is_ok_and(|o| {
+            o.status.success() && String::from_utf8_lossy(&o.stdout).split_whitespace().last() == Some("0x1")
+        })
+}
+
+/// The game's `fsgame.ltx` for a root its engine runs on in place: `$arch_dir$`, rooted at
+/// `$fs_root$` in the game's, is rooted at the game's folder instead, so the archives are read
+/// where they are installed and the root needs no link to them. Every other line stays.
+#[must_use]
+pub fn fsgame_in_place(text: &str, game: &Path) -> String {
+    let game = game.to_string_lossy();
+    let game = game.trim_end_matches('\\');
+    let mut out = String::with_capacity(text.len() + game.len());
+    for line in text.split_inclusive('\n') {
+        let (id, value) = line.split_once('=').unwrap_or((line, ""));
+        let mut items: Vec<String> = value.split('|').map(str::to_owned).collect();
+        if id.trim().eq_ignore_ascii_case("$arch_dir$")
+            && items.len() >= 3
+            && items[2].trim().eq_ignore_ascii_case("$fs_root$")
+        {
+            items[2] = format!(" {game}\\");
+            out.push_str(id);
+            out.push('=');
+            out.push_str(&items.join("|"));
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
+}
 /// What the game's content service reads beside the executable; a stale incomplete latch would
 /// keep it at the main menu.
 const CONTENT_DIR: &str = ".dead-air-x64";
@@ -80,8 +180,12 @@ const CACHES: [&str; 4] = ["shaders_cache", "shaders_cache_grizzly", "cdb_cache"
 #[derive(Clone, Debug)]
 pub struct PlayRoot {
     pub root: PathBuf,
+    /// The engine to start: the game's own in place, the root's copy otherwise.
     pub exe: PathBuf,
-    /// The engine and the libraries copied, by name.
+    pub mode: PlayMode,
+    /// The longest path the game takes ([`path_limit`]).
+    pub path_limit: usize,
+    /// The engine and the libraries copied, by name (none in place).
     pub programs: Vec<String>,
     pub program_bytes: u64,
     /// What the root was before: `missing`, `empty` or `play_root`.
@@ -90,6 +194,20 @@ pub struct PlayRoot {
     pub walked: u32,
     /// How long that walk took, in milliseconds.
     pub walk_ms: u64,
+}
+
+impl PlayRoot {
+    /// What goes in front of the caller's parameters: the root's `fsgame.ltx` - by its full path
+    /// for the engine in place (which takes a quoted path), by name for a copy, which runs in the
+    /// root and reads a path up to its first space.
+    #[must_use]
+    pub fn fsltx_args(&self) -> Vec<String> {
+        let config = match self.mode {
+            PlayMode::InPlace => self.root.join("fsgame.ltx").to_string_lossy().into_owned(),
+            PlayMode::Copied => "fsgame.ltx".to_owned(),
+        };
+        vec!["-fsltx".to_owned(), config]
+    }
 }
 
 /// What a Play prepares: the linked game, the root, what the checks compare with, the longest
@@ -262,8 +380,12 @@ pub fn prepare_with(input: &PlayInput<'_>, programs: &GamePrograms) -> Result<Pl
     prepare_checked(input, programs, &state)
 }
 
-/// The entries of a root's top Play writes besides its programs and the marker.
+/// The entries of a root's top Play writes besides its programs and the marker: for a copied
+/// engine, and for the engine in place.
 const ENTRIES: [&str; 6] = ["fsgame.ltx", "database", "gamedata", "appdata", "modules", CONTENT_DIR];
+const ENTRIES_IN_PLACE: [&str; 4] = ["fsgame.ltx", "gamedata", "appdata", "modules"];
+/// Where an engine in place keeps its content records: the root's app data.
+const CONTENT_IN_PLACE: &str = "appdata\\content\\content-state.txt";
 
 /// What Play may remove or overwrite in a root: what its marker listed when the root was checked,
 /// and what Play wrote in this very run. A name is claimed - and its line appended to the marker -
@@ -352,8 +474,31 @@ fn prepare_checked(
     if !fsgame.is_file() {
         return Err(format!("the linked game at {} has no fsgame.ltx", game.display()));
     }
-    let copied = programs_of(game, programs, &engine)?;
-    check_path_lengths(root, &planned_longest(input, state, &copied))?;
+    // the engine says which way it runs; nothing is tried
+    let ability = ability_of(&engine);
+    let mode = if ability.in_place { PlayMode::InPlace } else { PlayMode::Copied };
+    let config = match mode {
+        PlayMode::InPlace => {
+            let text =
+                fs::read(&fsgame).map_err(|e| format!("{} could not be read: {e}", fsgame.display()))?;
+            let text = fsgame_in_place(&gz_base::text::cp1251_to_utf8(&text), game);
+            let (bytes, lossy) = gz_base::text::utf8_to_cp1251(&text);
+            if lossy {
+                return Err(format!(
+                    "The game's folder {} has a character in its name the game cannot read (it reads paths in the Windows-1251 code page), so its fs config cannot name the game's archives.",
+                    game.display()
+                ));
+            }
+            Some(bytes.into_owned())
+        }
+        PlayMode::Copied => None,
+    };
+    let copied = match mode {
+        PlayMode::InPlace => Vec::new(),
+        PlayMode::Copied => programs_of(game, programs, &engine)?,
+    };
+    let limit = path_limit(ability, windows_long_paths);
+    check_path_lengths(root, &planned_longest(input, state, &copied, mode), limit)?;
     let (old_programs, old_entries) = match state {
         RootState::Marked { programs, entries } => (programs.clone(), entries.clone()),
         RootState::Missing | RootState::Empty => (Vec::new(), Vec::new()),
@@ -379,10 +524,25 @@ fn prepare_checked(
         }
     }
     claims.claim("fsgame.ltx", false)?;
-    fs::copy(&fsgame, root.join("fsgame.ltx")).map_err(|e| format!("fsgame.ltx could not be copied: {e}"))?;
-    // a junction already there is kept; anything else of that name was refused by the claim
-    claims.claim("database", false)?;
-    link_archives(game, root)?;
+    match &config {
+        Some(text) => fs::write(root.join("fsgame.ltx"), text),
+        None => fs::copy(&fsgame, root.join("fsgame.ltx")).map(|_| ()),
+    }
+    .map_err(|e| format!("fsgame.ltx could not be written in {}: {e}", root.display()))?;
+    match mode {
+        // a junction already there is kept; anything else of that name was refused by the claim
+        PlayMode::Copied => {
+            claims.claim("database", false)?;
+            link_archives(game, root)?;
+        }
+        // the archives are read where they are: a link a copied engine needed goes, as a link
+        PlayMode::InPlace => {
+            let link = root.join("database");
+            if listed("database") && is_junction(&link) {
+                remove_tree(&link);
+            }
+        }
+    }
     // the loose gamedata as the game has it now; the old copy goes only from a root whose marker
     // listed it at the check, and only when no project lies inside it
     claims.claim("gamedata", false)?;
@@ -423,25 +583,44 @@ fn prepare_checked(
     // no module of the player's: the game root has a modules folder of its own, empty
     claims.claim("modules", false)?;
     let _ = fs::create_dir_all(root.join("modules"));
-    claims.claim(CONTENT_DIR, false)?;
     let content = root.join(CONTENT_DIR);
-    let _ = fs::create_dir_all(&content);
-    for f in CONTENT_FILES {
-        let src = game.join(CONTENT_DIR).join(f);
-        if src.is_file() {
-            let _ = fs::copy(&src, content.join(f));
+    match mode {
+        PlayMode::Copied => {
+            claims.claim(CONTENT_DIR, false)?;
+            let _ = fs::create_dir_all(&content);
+            for f in CONTENT_FILES {
+                let src = game.join(CONTENT_DIR).join(f);
+                if src.is_file() {
+                    let _ = fs::copy(&src, content.join(f));
+                }
+            }
+            let _ = fs::remove_file(content.join(CONTENT_LATCH));
+        }
+        // the engine in place keeps its content records in the root's app data itself
+        PlayMode::InPlace => {
+            if listed(CONTENT_DIR) {
+                remove_tree(&content);
+            }
         }
     }
-    let _ = fs::remove_file(content.join(CONTENT_LATCH));
     // the marker as the root is now: the programs copied, the entries written
     drop(claims.marker.take());
-    let entries: Vec<String> = ENTRIES.iter().map(|e| (*e).to_owned()).collect();
+    let written: &[&str] = match mode {
+        PlayMode::Copied => &ENTRIES,
+        PlayMode::InPlace => &ENTRIES_IN_PLACE,
+    };
+    let entries: Vec<String> = written.iter().map(|e| (*e).to_owned()).collect();
     fs::write(root.join(MARKER), play_root::marker_text(&copied, &entries))
         .map_err(|e| format!("{MARKER} could not be written in {}: {e}", root.display()))?;
-    let exe = root.join(engine.file_name().unwrap_or_default());
+    let exe = match mode {
+        PlayMode::InPlace => engine,
+        PlayMode::Copied => root.join(engine.file_name().unwrap_or_default()),
+    };
     Ok(PlayRoot {
         root: root.to_path_buf(),
         exe,
+        mode,
+        path_limit: limit,
         programs: copied,
         program_bytes: bytes,
         was: state.name(),
@@ -450,10 +629,14 @@ fn prepare_checked(
     })
 }
 
-/// The longest file path the game takes: `CLocatorAPI::Register` copies every path it indexes into
-/// a `string256`, and a longer one stops the game at its start (a breakpoint in xrCore, before its
-/// log opens - what a root inside a project folder, or a deep temp folder, did).
+/// The longest file path an engine that is not long-path aware takes: its `CLocatorAPI::Register`
+/// copied every path it indexes into a `string256`, and a longer one stopped the game at its start
+/// (a breakpoint in xrCore, before its log opens - what a root inside a project folder, or a deep
+/// temp folder, did).
 pub const GAME_PATH_LIMIT: usize = 255;
+/// `MAX_PATH` less the terminator: what Windows takes from a long-path aware engine while its
+/// long paths are off.
+pub const WINDOWS_PATH_LIMIT: usize = 259;
 
 /// The longest path below `dir` (relative to the root, backslashes, after `rel`), links not
 /// followed.
@@ -482,7 +665,7 @@ fn keep_longer(longest: &mut String, path: String) {
 
 /// The longest path the root will hold once Play has prepared it and staged its level: what
 /// it copies of the game, what it stages, what the root keeps (its appdata), the archives.
-fn planned_longest(input: &PlayInput<'_>, state: &RootState, programs: &[String]) -> String {
+fn planned_longest(input: &PlayInput<'_>, state: &RootState, programs: &[String], mode: PlayMode) -> String {
     let mut longest = String::new();
     longest_below(&input.game.join("gamedata"), "gamedata", &mut longest);
     for c in CACHES {
@@ -521,20 +704,25 @@ fn planned_longest(input: &PlayInput<'_>, state: &RootState, programs: &[String]
     for p in programs {
         keep_longer(&mut longest, p.clone());
     }
-    for f in CONTENT_FILES {
-        keep_longer(&mut longest, format!("{CONTENT_DIR}\\{f}"));
+    match mode {
+        PlayMode::Copied => {
+            for f in CONTENT_FILES {
+                keep_longer(&mut longest, format!("{CONTENT_DIR}\\{f}"));
+            }
+        }
+        PlayMode::InPlace => keep_longer(&mut longest, CONTENT_IN_PLACE.to_owned()),
     }
     longest
 }
 
 /// Refuses a root the game could not start in: `longest`, the longest path it will hold
-/// (relative to it), has to fit [`GAME_PATH_LIMIT`] with the root in front.
-fn check_path_lengths(root: &Path, longest: &str) -> Result<(), String> {
+/// (relative to it), has to fit `limit` ([`path_limit`]) with the root in front.
+fn check_path_lengths(root: &Path, longest: &str, limit: usize) -> Result<(), String> {
     let root_text = root.to_string_lossy();
     let total = root_text.trim_end_matches('\\').chars().count() + 1 + longest.chars().count();
-    if total > GAME_PATH_LIMIT {
+    if total > limit {
         return Err(format!(
-            "The game root {root_text} is too deep for the game: with {longest} in it a path is {total} characters long, and the game takes {GAME_PATH_LIMIT} at most. Give Play a shorter root."
+            "The game root {root_text} is too deep for the game: with {longest} in it a path is {total} characters long, and the game takes {limit} at most. Give Play a shorter root."
         ));
     }
     Ok(())
@@ -706,7 +894,8 @@ mod tests {
         let root = base.path().join("deep");
         let room = GAME_PATH_LIMIT - root.to_string_lossy().chars().count() - 1 - "gamedata\\".len();
         let fits = PlayInput { archived: &"a".repeat(room), ..input(&game, &root, &cx) };
-        assert!(check_path_lengths(&root, &planned_longest(&fits, &RootState::Missing, &[])).is_ok());
+        let longest = planned_longest(&fits, &RootState::Missing, &[], PlayMode::Copied);
+        assert!(check_path_lengths(&root, &longest, GAME_PATH_LIMIT).is_ok());
         let deep = "a".repeat(room + 1);
         let refused =
             prepare_with(&PlayInput { archived: &deep, ..input(&game, &root, &cx) }, &PROGRAMS).unwrap_err();
@@ -796,5 +985,122 @@ mod tests {
         assert_eq!(fs::read(root.join("gamedata").join("precious.txt")).unwrap(), b"mine");
         remove_tree(&root);
         assert!(game.join("database").join("a.db0").is_file());
+    }
+
+    const FSGAME: &str = "$app_data_root$ \t\t= true| false| appdata\\\r\n$arch_dir$              = false| false| $fs_root$|\t\t\t  database\\\r\n$game_data$ \t\t\t= true| true| \t$fs_root$| \t\t\t  gamedata\\\r\n";
+
+    /// An engine (no program: a text file under a harmless name) that says what it can, as the
+    /// game's version resource does.
+    fn engine_saying(words: &str) -> Vec<u8> {
+        let mut bytes = b"an engine; StringFileInfo ".to_vec();
+        for s in ["EngineAbilities\0", words, "\0"] {
+            bytes.extend(s.encode_utf16().flat_map(u16::to_le_bytes));
+        }
+        bytes
+    }
+
+    #[test]
+    fn an_engine_that_says_it_can_runs_in_place_and_its_root_holds_no_program() {
+        let base = tempfile::tempdir().unwrap();
+        let game = game(base.path());
+        fs::write(game.join("fsgame.ltx"), FSGAME).unwrap();
+        let cx = DeleteContext::default();
+        let listed = |dir: &Path| {
+            let mut v: Vec<String> = fs::read_dir(dir)
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            v.sort();
+            v
+        };
+        let before = listed(&game);
+
+        // a root an older engine ran from: its copies, its link, its content files
+        let root = base.path().join("play");
+        let old = prepare_with(&input(&game, &root, &cx), &PROGRAMS).unwrap();
+        assert_eq!((old.mode, old.programs.len()), (PlayMode::Copied, 2));
+        assert_eq!(old.fsltx_args(), ["-fsltx", "fsgame.ltx"]);
+        assert!(is_junction(&root.join("database")) && root.join(CONTENT_DIR).is_dir());
+
+        // the game updated to an engine that runs in place
+        fs::write(game.join("engine.bin"), engine_saying("fsltx-in-place long-paths")).unwrap();
+        let p = prepare_with(&input(&game, &root, &cx), &PROGRAMS).unwrap();
+        assert_eq!(p.mode, PlayMode::InPlace);
+        assert_eq!(p.exe, game.join("engine.bin"), "the installed engine, where it is");
+        assert!(p.programs.is_empty() && p.program_bytes == 0);
+        let config = root.join("fsgame.ltx").to_string_lossy().into_owned();
+        assert_eq!(p.fsltx_args(), ["-fsltx".to_owned(), config]);
+        // no program and no link: the copies and the junction went, the game's archives stay
+        assert_eq!(listed(&root), ["appdata", "fsgame.ltx", "gamedata", "modules", MARKER]);
+        assert!(game.join("database").join("a.db0").is_file());
+        let fsgame = fs::read_to_string(root.join("fsgame.ltx")).unwrap();
+        let arch = fsgame.lines().find(|l| l.starts_with("$arch_dir$")).unwrap();
+        assert_eq!(
+            arch,
+            format!("$arch_dir$              = false| false| {}\\|\t\t\t  database\\", game.display())
+        );
+        assert!(fsgame.contains("$game_data$ \t\t\t= true| true| \t$fs_root$|"), "{fsgame}");
+        let marker = fs::read_to_string(root.join(MARKER)).unwrap();
+        assert!(!marker.contains("program = ") && !marker.contains("entry = database"), "{marker}");
+        assert!(marker.contains("entry = gamedata") && marker.contains("entry = appdata"), "{marker}");
+        assert_eq!(fs::read(root.join("appdata").join("user.ltx")).unwrap(), b"vid_mode 800x600");
+
+        // the level is staged as before, and the game's folder is as it was
+        let level = base.path().join("built");
+        fs::create_dir_all(&level).unwrap();
+        fs::write(level.join("level"), b"geometry").unwrap();
+        stage_level(&root, "qa_level", &level, b"ai", b"spawn").unwrap();
+        assert!(root.join("gamedata").join("levels").join("qa_level").join("level.ai").is_file());
+        assert_eq!(listed(&game), before);
+        assert!(!game.join("gamedata").join("levels").exists());
+
+        // a new root of an engine in place is made with no program from the start
+        let fresh = base.path().join("fresh");
+        let p = prepare_with(&input(&game, &fresh, &cx), &PROGRAMS).unwrap();
+        assert_eq!((p.mode, p.was), (PlayMode::InPlace, "missing"));
+        assert_eq!(listed(&fresh), ["appdata", "fsgame.ltx", "gamedata", "modules", MARKER]);
+    }
+
+    #[test]
+    fn the_engine_says_how_deep_a_root_may_be() {
+        let base = tempfile::tempdir().unwrap();
+        let (old, in_place, aware) =
+            (base.path().join("a.bin"), base.path().join("b.bin"), base.path().join("c.bin"));
+        fs::write(&old, b"an engine that says nothing").unwrap();
+        fs::write(&in_place, engine_saying("fsltx-in-place")).unwrap();
+        fs::write(&aware, engine_saying("long-paths fsltx-in-place")).unwrap();
+        assert_eq!(ability_of(&old), Ability::default());
+        assert_eq!(ability_of(&in_place), Ability { in_place: true, long_paths: false });
+        assert_eq!(ability_of(&aware), Ability { in_place: true, long_paths: true });
+        assert_eq!(ability_of(&base.path().join("missing.bin")), Ability::default());
+        let never = || -> bool { panic!("Windows is asked only for a long-path aware engine") };
+        assert_eq!(path_limit(ability_of(&old), never), GAME_PATH_LIMIT);
+        assert_eq!(path_limit(ability_of(&in_place), never), GAME_PATH_LIMIT);
+        assert_eq!(path_limit(ability_of(&aware), || true), 519);
+        assert_eq!(path_limit(ability_of(&aware), || false), WINDOWS_PATH_LIMIT);
+        // a root an older engine refuses, the long-path aware one takes
+        let root = PathBuf::from(format!("C:\\{}", "r".repeat(120)));
+        let longest = format!("appdata\\shaders_cache_grizzly\\{}", "s".repeat(150));
+        let why = check_path_lengths(&root, &longest, GAME_PATH_LIMIT).unwrap_err();
+        assert!(why.contains("too deep") && why.contains("takes 255 at most"), "{why}");
+        assert!(check_path_lengths(&root, &longest, 519).is_ok());
+    }
+
+    #[test]
+    fn the_fs_config_in_place_names_the_games_archives_and_nothing_else_changes() {
+        let game = Path::new("D:\\Games\\Dead Air");
+        let out = fsgame_in_place(FSGAME, game);
+        let lines: Vec<&str> = out.split("\r\n").collect();
+        assert_eq!(lines[0], "$app_data_root$ \t\t= true| false| appdata\\");
+        assert_eq!(
+            lines[1],
+            "$arch_dir$              = false| false| D:\\Games\\Dead Air\\|\t\t\t  database\\"
+        );
+        assert_eq!(lines[2], "$game_data$ \t\t\t= true| true| \t$fs_root$| \t\t\t  gamedata\\");
+        assert_eq!(out.len(), FSGAME.len() - "$fs_root$".len() + "D:\\Games\\Dead Air\\".len());
+        // an archive folder named outright is left as it is
+        let named = "$arch_dir$ = false| false| E:\\archives\\\r\n";
+        assert_eq!(fsgame_in_place(named, game), named);
     }
 }

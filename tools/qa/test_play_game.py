@@ -6,21 +6,20 @@ COPY of a project, in a game root of the editor's own, on a hidden desktop, with
 
 What it does:
   1. copies the project into the system temp folder and puts a scene of the repository into it (--scene, SCENES:
-     mp_test by default - one arena, one light -, or l03u_agr_underground - multiple-usage models with their LODs,
-     sectors and portals); its spawns give way to an actor and a graph point, an AI map is generated where the
-     scene has none, a scene named like a level of the game gets a level path of its own, and the scene is saved
-     and built (Make All);
+     mp_test by default - one arena, one light -, l03u_agr_underground - multiple-usage models with their LODs,
+     sectors and portals -, or mp_close_combat - terrain with implicit light and multiple-usage models); its spawns
+     give way to an actor and a graph point, an AI map is generated where the scene has none, a scene named like a
+     level of the game gets a level path of its own, and the scene is saved and built (Make All);
   2. compiles the geometry with the editor's own level compiler, in its process (level_build compile_geometry: a
      job on every core, into the project's level folder; the command answers when it ends, with its report);
-  3. makes Play's game root in an empty temp folder of its own (level_build play_root root=; the game takes paths of
-     255 characters at most, and Play takes only a missing or empty folder or one carrying its play_root.txt; without
-     root= an editor with a home of its own, as every suite's, plays in <home>\\play\\<id> - never in the user's
-     profile -, refused naming the path when the home is too deep for the game; the suite names a short root) - the
-     engine and the libraries it needs copied, none of the game folder's other programs, a link to the archives -,
-     writes the root's own settings, then starts Play: the editor builds the collision, the AI map, the game graph
-     (joined onto the linked game's, whose vertex numbers the game's start scripts name) and editor.spawn, stages
-     the level into the root's copy of the loose gamedata, and runs the game there with
-     -start server(editor/single/alife/new);
+  3. makes Play's game root in an empty temp folder of its own (level_build play_root root=; Play takes only a
+     missing or empty folder or one carrying its play_root.txt, as deep as the linked game takes - its engine says
+     so; without root= an editor with a home of its own, as every suite's, plays in <home>\\play\\<id> - never in
+     the user's profile) - the linked game's engine says it runs in place (EngineAbilities), so the root holds no
+     program and no link -, writes the root's own settings, then starts Play: the editor builds the collision, the
+     AI map, the game graph (joined onto the linked game's, whose vertex numbers the game's start scripts name) and
+     editor.spawn, stages the level into the root's copy of the loose gamedata, and runs the INSTALLED engine where
+     it is with -fsltx <root>\\fsgame.ltx -start server(editor/single/alife/new);
   4. reads the game's log until the level is loaded (LOADED, below), with no assert and no crash dump;
   5. stops the game (Play's stop; one left running is ended and fails the run), closes the editor over MCP,
      removes the copy and the root (the archives' link first, as a link).
@@ -31,16 +30,17 @@ collision read, and the load's synchronisation ended (the actor's first update h
 scripts spawn its kit there). Then five seconds more, and no assert, no fatal error, no crash dump.
 Opt-in in run_all.py (--with-game): it starts the real game, half a minute of the run.
 
-Why the game root holds copies of the executables, not the installed engine run in place with -fsltx: the game's
-content service works in the folder of xrCore.dll whatever the fs config says (Core.ApplicationPath,
-ContentService.cpp): every start's verification rewrites <game>\.dead-air-x64\content-state.txt, and a level
-starts only when $arch_dir$ is that folder's database. The suite proves it on the root (the file is written there)
-and lists the installed game before and after the run (path, size, write time): any difference fails.
+Why the installed engine may run in place: started on another fs config it writes nothing into its own folder - its
+content records go to the config's app data (the suite wants <root>\\appdata\\content\\content-state.txt written
+during Play), a relative root of the config is the config's folder, no update check - and it takes the archives
+from the config's $arch_dir$, which the root's fsgame.ltx names by the game's own path (the game repository's
+CONTENT_BUNDLES.md, "A game on another fs config"). The suite lists the installed game before and after the run
+(path, size, write time; links listed, never followed): any difference fails.
 
 The editor runs on a hidden desktop (the game repository's Start-DetachedHiddenDesktopProcess.ps1), so the game it
-starts is there too and no window reaches the user's screen. Nothing of the installed game is written: its
-executables are copied, not linked, its archives are read through a junction, its modules, saves and settings are
-never opened for writing. The game's own QA roots are built the same way (Run-NqQa.ps1, New-QaRoot).
+starts is there too and no window reaches the user's screen. The game the suite started is told from the author's
+by its command line (it names the root); with the installed engine running and not the suite's, the author is
+playing and the suite does not start.
 """
 from __future__ import annotations
 
@@ -87,6 +87,18 @@ SCENES = {
                              "options": {**QUICK_LIGHT, "Scene\\Build options\\Lighting\\Pixel per meter": "4",
                                          "Scene\\Build options\\Lighting\\Jitter samples": "1 - Low"},
                              "flags": "-noise"},
+    # terrain with implicit light AND multiple-usage models - the pair the compiler's proof has no C++ record of
+    # (diff_compile.py empties the MU models for its implicit record), so the game judges it. Its 124 spawns go; the
+    # actor and a graph point stand on a team spawn of the arena; an AI map is generated over the terrain from
+    # there. The light at diff_compile.py's options for its implicit record: the scene's own 10 px/m and quality,
+    # one jitter sample (at nine the compile passes the three minutes an MCP command waits); a level path of its own.
+    "mp_close_combat": {"remove": "*", "actor": (-423.07376, 1.0, -391.087648), "graph": (-423.07376, 1.0, -391.087648),
+                        "aimap": {"objects": "scenes\\mp_close_combat\\mp_close_combat_conteiners_terrain",
+                                  "seed": (-423.07376, 1.0, -391.087648)},
+                        "level": "qa_mpcc",
+                        "options": {"Scene\\Build options\\Quality": "Custom",
+                                    "Scene\\Build options\\Lighting\\Pixel per meter": "10",
+                                    "Scene\\Build options\\Lighting\\Jitter samples": "1 - Low"}, "flags": ""},
 }
 SCENE = "mp_test"
 # the settings the game's own QA forces (Run-NqQa.ps1, Update-QaUserLtx): a window, no sound, no pause
@@ -168,18 +180,73 @@ def user_ltx(root: str) -> None:
         f.write("\n".join(lines) + "\n")
 
 
-def games_in(root: str) -> list[int]:
-    """The processes running an executable of the game root (the game Play started there)."""
+def engines() -> list[tuple[int, str, str]]:
+    """Every running process with its executable and command line."""
     try:
         out = subprocess.run(["powershell", "-NoProfile", "-Command",
-                              "Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path } | "
-                              "ForEach-Object { \"$($_.Id)|$($_.Path)\" }"],
-                             capture_output=True, text=True, timeout=30).stdout
+                              "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+                              "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { "
+                              "$_.ExecutablePath } | ForEach-Object { \"$($_.ProcessId)|$($_.ExecutablePath)|"
+                              "$($_.CommandLine)\" }"],
+                             capture_output=True, encoding="utf-8", errors="replace", timeout=60).stdout or ""
     except (OSError, subprocess.SubprocessError):
         return []
-    prefix = os.path.normcase(os.path.realpath(root)).rstrip("\\") + os.sep
-    return [int(pid) for pid, _, path in (l.partition("|") for l in out.splitlines())
-            if pid.strip().isdigit() and os.path.normcase(os.path.realpath(path.strip())).startswith(prefix)]
+    found = []
+    for line in out.splitlines():
+        pid, _, rest = line.partition("|")
+        path, _, command = rest.partition("|")
+        if pid.strip().isdigit():
+            found.append((int(pid), path.strip(), command))
+    return found
+
+
+def games_in(root: str) -> list[int]:
+    """The games Play started on the game root: an executable of the root (a copied engine), or any process whose
+    command line names the root (the installed engine run in place on the root's fsgame.ltx)."""
+    real = os.path.normcase(os.path.realpath(root)).rstrip("\\")
+    named = os.path.normcase(root).rstrip("\\")
+    return [pid for pid, path, command in engines()
+            if os.path.normcase(os.path.realpath(path)).startswith(real + os.sep)
+            or named in os.path.normcase(command) or real in os.path.normcase(command)]
+
+
+def players() -> list[int]:
+    """The installed game's engine run by somebody else: no suite's root on its command line."""
+    exe = os.path.normcase(os.path.join(GAME, "xrEngine.exe"))
+    temp = os.path.normcase(tempfile.gettempdir())
+    return [pid for pid, path, command in engines()
+            if os.path.normcase(path) == exe and not any(p in os.path.normcase(command)
+                                                         for p in (os.path.join(temp, "gzpr_"),))]
+
+
+def programs_in(root: str) -> list[str]:
+    """The files of the root a program is made of: a program's extension or an MZ head. Links are not followed."""
+    found = []
+    for d, dirs, files in os.walk(root):
+        dirs[:] = [n for n in dirs if not (os.path.islink(os.path.join(d, n))
+                                           or getattr(os.lstat(os.path.join(d, n)), "st_reparse_tag", 0))]
+        for n in files:
+            p = os.path.join(d, n)
+            head = b""
+            try:
+                with open(p, "rb") as f:
+                    head = f.read(2)
+            except OSError:
+                pass
+            if n.lower().endswith((".exe", ".dll", ".com", ".scr", ".bat", ".cmd", ".ps1", ".msi")) or head == b"MZ":
+                found.append(os.path.relpath(p, root))
+    return found
+
+
+def links_in(root: str) -> list[str]:
+    found = []
+    for d, dirs, _files in os.walk(root):
+        for n in list(dirs):
+            p = os.path.join(d, n)
+            if os.path.islink(p) or getattr(os.lstat(p), "st_reparse_tag", 0):
+                found.append(os.path.relpath(p, root))
+                dirs.remove(n)
+    return found
 
 
 def unlink_archives(root: str) -> None:
@@ -207,11 +274,15 @@ def sweep_stale() -> None:
 
 
 def listing(top: str) -> dict[str, tuple[int, int]]:
-    """Every file and folder under `top` with its size and write time; a link is listed, never followed."""
+    """Every file and folder under `top` with its size and write time; a link is listed, never followed. A `.git`
+    is left out: the game folder holds the game's source repository, whose bookkeeping any git command rewrites -
+    the author's, meanwhile - and which no game reads or writes."""
     out: dict[str, tuple[int, int]] = {}
     for d, dirs, files in os.walk(top):
         keep = []
         for n in dirs:
+            if n.lower() == ".git":
+                continue
             p = os.path.join(d, n)
             st = os.lstat(p)
             out[os.path.relpath(p, top)] = (0, st.st_mtime_ns)
@@ -219,6 +290,8 @@ def listing(top: str) -> dict[str, tuple[int, int]]:
                 keep.append(n)
         dirs[:] = keep
         for n in files:
+            if n.lower() == ".git":
+                continue
             p = os.path.join(d, n)
             try:
                 st = os.lstat(p)
@@ -292,18 +365,26 @@ def run(project: str, root: str, scene: str, keep_log: str | None) -> None:
 
     # Play makes its root only in an empty folder (play_root.txt marks it its own): made first, then the root's
     # own settings written into it, then Play
+    t = time.monotonic()
     made = mcp("level_build", action="play_root", root=root)
-    check(made.get("ok") and made.get("was") == "empty" and made.get("exe") == "xrEngine.exe",
-          "Play makes its root in the empty folder (%s programs, %.1f MB)"
-          % (made.get("programs"), (made.get("program_bytes") or 0) / 1e6), short(made))
-    check(os.path.isfile(os.path.join(root, "play_root.txt")) and
-          not any(os.path.exists(os.path.join(root, n)) for n in ("DeadAirUpdater.exe", "JSGME.exe", "unins000.exe")),
-          "the root carries Play's marker and none of the game folder's other programs")
+    engine = os.path.join(GAME, "xrEngine.exe").replace("\\", "/")
+    check(made.get("ok") and made.get("was") == "empty" and made.get("play") == "in_place"
+          and made.get("exe_path", "").lower() == engine.lower() and made.get("programs") == 0,
+          "Play makes its root in the empty folder for the installed engine in place (%.1f s, paths up to %s)"
+          % (time.monotonic() - t, made.get("path_limit")), short(made))
+    top = sorted(os.listdir(root)) if os.path.isdir(root) else []
+    check(top == ["appdata", "fsgame.ltx", "gamedata", "modules", "play_root.txt"] and not programs_in(root)
+          and not links_in(root), "the root holds the marker, fsgame.ltx, gamedata, appdata and modules - no program, "
+          "no link", "top %s, programs %s, links %s" % (top, programs_in(root)[:5], links_in(root)))
+    fsgame = open(os.path.join(root, "fsgame.ltx"), encoding="cp1251").read() if "fsgame.ltx" in top else ""
+    arch = next((l for l in fsgame.splitlines() if l.startswith("$arch_dir$")), "")
+    check(("%s\\|" % GAME).lower() in arch.lower(), "the root's fsgame.ltx names the installed archives: " + arch.strip())
     user_ltx(root)
     t0, play_wall = time.monotonic(), time.time()
     play = mcp("level_build", action="play", root=root, params="-i -always_active -silent_error_mode -force_flushlog")
-    if not check(play.get("ok") and play.get("run", {}).get("started"), "Play starts the game in its own root",
-                 short(play)):
+    if not check(play.get("ok") and play.get("run", {}).get("started") and play.get("play") == "in_place"
+                 and play.get("run", {}).get("exe", "").lower() == engine.lower(),
+                 "Play starts the installed engine in place on its root", short(play)):
         return
     print("play: " + short(play), flush=True)
     staged = os.path.join(root, "gamedata", "levels", level)
@@ -348,10 +429,13 @@ def run(project: str, root: str, scene: str, keep_log: str | None) -> None:
             break
     check(not bad, "no assert and no fatal error in the game's log", "; ".join(bad[:3]))
     check(not dumps(root), "no crash dump", ", ".join(dumps(root)))
-    state = os.path.join(root, ".dead-air-x64", "content-state.txt")
+    state = os.path.join(root, "appdata", "content", "content-state.txt")
     check(os.path.isfile(state) and os.path.getmtime(state) >= play_wall - 1,
-          "the game's content service rewrote content-state.txt beside the root's engine (why the engine is not run "
-          "in the installed game's folder)")
+          "the game kept its content records in the root's app data (appdata\\content\\content-state.txt)")
+    check("The fs config lies outside the application folder" in text,
+          "the game says it runs on another fs config and only reads the installation")
+    check(not programs_in(root) and not links_in(root), "the root still holds no program and no link after Play",
+          ", ".join(programs_in(root)[:5] + links_in(root)[:5]))
     check(bool(still), "the game was still running when it was stopped (%.0f s after Play, the level in at %s s)"
           % (seconds, "%.0f" % loaded_at if loaded_at is not None else "-"))
     if keep_log:
@@ -388,12 +472,13 @@ def main() -> int:
         return 2
     except OSError:
         pass
+    if players():
+        print("the installed game runs and the suite did not start it (pids %s): the author is playing" % players())
+        return 2
     sweep_stale()
     before = listing(GAME)
     work = tempfile.mkdtemp(prefix="gzpg_")
-    # a folder of its own, right in the temp folder: every path the game indexes under its root, its own shader
-    # cache's among them, has to fit 255 characters (play.rs, GAME_PATH_LIMIT) - a deeper root stops the game at
-    # its start, and Play refuses it
+    # a folder of its own in the temp folder; the game run in place on it is told apart by this path
     root = tempfile.mkdtemp(prefix="gzpr_")
     project = ""
     launcher = None
