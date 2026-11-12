@@ -12,6 +12,7 @@
 
 extern void logThread			(void *dummy);
 extern volatile BOOL bClose;
+extern void logNoWindow();
 
 static const char* h_str = 
 	"The following keys are supported / required:\n"
@@ -36,6 +37,9 @@ void Startup(LPSTR     lpCmdLine)
 //	if (strstr(cmd,"-o"))								bModifyOptions = TRUE;
 	if ( strstr(cmd,"-net") )						
 														bNet = true;
+	// -silent: no window at all, the log file is the output
+	if (strstr(cmd,"-silent"))							logNoWindow		();
+
 	// Give a LOG-thread a chance to startup
 	InitCommonControls	();
 	thread_spawn		(logThread,	"log-update", 1024*1024,0);
@@ -47,7 +51,7 @@ void Startup(LPSTR     lpCmdLine)
 	extern  HWND logWindow;
 	string256			temp;
 	xr_sprintf			(temp, "%s - Detail Compiler", name);
-	SetWindowText		(logWindow, temp);
+	if (logWindow)			SetWindowText	(logWindow, temp);
 
 	//FS.update_path	(name,"$game_levels$",name);
 	FS.get_path			("$level$")->_set	(name);

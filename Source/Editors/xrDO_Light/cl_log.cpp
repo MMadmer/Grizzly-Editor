@@ -12,6 +12,9 @@ static xrCriticalSection	csLog
 ;
 
 volatile BOOL				bClose				= FALSE;
+// -silent: the run has no window at all, the log file is its output
+static BOOL					bNoWindow			= FALSE;
+void logNoWindow	()		{ bNoWindow = TRUE; }
 
 static char					status	[1024	]	="";
 static char					phase	[1024	]	="";
@@ -94,24 +97,28 @@ void Progress		(const float F)
 
 void Phase			(const char *phase_name)
 {
-	while (!(hwPhaseTime && hwStage)) Sleep(1);
+	while (!bNoWindow && !(hwPhaseTime && hwStage)) Sleep(1);
 
 	csLog.Enter			();
 	// Replace phase name with TIME:Name 
 	char	tbuf		[512];
 	bPhaseChange		= TRUE;
 	phase_total_time	= timeGetTime()-phase_start_time;
-	xr_sprintf				( tbuf,"%s : %s",make_time(phase_total_time/1000).c_str(),	phase);
-	SendMessage			( hwPhaseTime, LB_DELETESTRING, SendMessage(hwPhaseTime,LB_GETCOUNT,0,0)-1,0);
-	SendMessage			( hwPhaseTime, LB_ADDSTRING, 0, (LPARAM) tbuf);
+	if (!bNoWindow) {
+		xr_sprintf				( tbuf,"%s : %s",make_time(phase_total_time/1000).c_str(),	phase);
+		SendMessage			( hwPhaseTime, LB_DELETESTRING, SendMessage(hwPhaseTime,LB_GETCOUNT,0,0)-1,0);
+		SendMessage			( hwPhaseTime, LB_ADDSTRING, 0, (LPARAM) tbuf);
+	}
 
 	// Start _new phase
 	phase_start_time	= timeGetTime();
 	xr_strcpy				(phase,  phase_name);
-	SetWindowText		( hwStage,		phase_name );
-	xr_sprintf				( tbuf,"--:--:-- * %s",phase);
-	SendMessage			( hwPhaseTime,  LB_ADDSTRING, 0, (LPARAM) tbuf);
-	SendMessage			( hwPhaseTime,	LB_SETTOPINDEX, SendMessage(hwPhaseTime,LB_GETCOUNT,0,0)-1,0);
+	if (!bNoWindow) {
+		SetWindowText		( hwStage,		phase_name );
+		xr_sprintf				( tbuf,"--:--:-- * %s",phase);
+		SendMessage			( hwPhaseTime,  LB_ADDSTRING, 0, (LPARAM) tbuf);
+		SendMessage			( hwPhaseTime,	LB_SETTOPINDEX, SendMessage(hwPhaseTime,LB_GETCOUNT,0,0)-1,0);
+	}
 	Progress			(0);
 
 	// Release focus
@@ -124,24 +131,26 @@ void logThread(void *dummy)
 {
 	SetProcessPriorityBoost	(GetCurrentProcess(),TRUE);
 
-	logWindow = CreateDialog(
-		HINSTANCE(GetModuleHandle(0)),
-	 	MAKEINTRESOURCE(IDD_LOG),
-		0, logDlgProc );
-	if (!logWindow) {
-		R_CHK			(GetLastError());
-	};
-	SetWindowPos(logWindow,HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW);
-	hwLog		= GetDlgItem(logWindow, IDC_LOG);
-	hwProgress	= GetDlgItem(logWindow, IDC_PROGRESS);
-	hwInfo		= GetDlgItem(logWindow, IDC_INFO);
-	hwStage		= GetDlgItem(logWindow, IDC_STAGE);
-	hwTime		= GetDlgItem(logWindow, IDC_TIMING);
-	hwPText		= GetDlgItem(logWindow, IDC_P_TEXT);
-	hwPhaseTime	= GetDlgItem(logWindow, IDC_PHASE_TIME);
+	if (!bNoWindow) {
+		logWindow = CreateDialog(
+			HINSTANCE(GetModuleHandle(0)),
+		 	MAKEINTRESOURCE(IDD_LOG),
+			0, logDlgProc );
+		if (!logWindow) {
+			R_CHK			(GetLastError());
+		};
+		SetWindowPos(logWindow,HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW);
+		hwLog		= GetDlgItem(logWindow, IDC_LOG);
+		hwProgress	= GetDlgItem(logWindow, IDC_PROGRESS);
+		hwInfo		= GetDlgItem(logWindow, IDC_INFO);
+		hwStage		= GetDlgItem(logWindow, IDC_STAGE);
+		hwTime		= GetDlgItem(logWindow, IDC_TIMING);
+		hwPText		= GetDlgItem(logWindow, IDC_P_TEXT);
+		hwPhaseTime	= GetDlgItem(logWindow, IDC_PHASE_TIME);
 
-	SendMessage(hwProgress, PBM_SETRANGE,	0, MAKELPARAM(0, 1000)); 
-	SendMessage(hwProgress, PBM_SETPOS,		0, 0); 
+		SendMessage(hwProgress, PBM_SETRANGE,	0, MAKELPARAM(0, 1000)); 
+		SendMessage(hwProgress, PBM_SETPOS,		0, 0); 
+	}
 
 	Msg("\"LevelBuilder v4.1\" beta build\nCompilation date: %s\n",__DATE__);
 	{
@@ -162,6 +171,19 @@ void logThread(void *dummy)
 	while (TRUE)
 	{
 		SetPriorityClass	(GetCurrentProcess(),IDLE_PRIORITY_CLASS);	// bHighPriority?NORMAL_PRIORITY_CLASS:IDLE_PRIORITY_CLASS
+
+		// no window: nothing to draw; the log is still flushed as it grows
+		if (bNoWindow) {
+			csLog.Enter		();
+			if (LogSize!=LogFile->size()) {
+				LogSize			= u32(LogFile->size());
+				FlushLog		( );
+			}
+			csLog.Leave		();
+			if (bClose)			break;
+			Sleep				(200);
+			continue;
+		}
 
 		// transfer data
 		while (!csLog.TryEnter())	{
@@ -231,7 +253,7 @@ void logThread(void *dummy)
 	}
 
 	// Cleanup
-	DestroyWindow(logWindow);
+	if (logWindow) DestroyWindow(logWindow);
 }
 
 void __cdecl clMsg( const char *format, ...)
