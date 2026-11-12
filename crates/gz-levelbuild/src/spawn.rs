@@ -106,9 +106,9 @@ fn spawn_id_offset(p: &[u8]) -> Option<usize> {
     (at + 2 <= p.len()).then_some(at)
 }
 
-/// The game vertex range of level 0 and its first vertex.
-fn level_vertices(graph: &GameGraph) -> Option<u16> {
-    graph.vertices.iter().position(|v| v.level_id == 0).map(|i| i as u16)
+/// The first game vertex of a level.
+fn level_vertices(graph: &GameGraph, level_id: u8) -> Option<u16> {
+    graph.vertices.iter().position(|v| v.level_id == level_id).map(|i| i as u16)
 }
 
 /// `CGameSpawnConstructor::build`: every spawn element on the level vertex under it and the
@@ -130,15 +130,22 @@ pub fn build_spawn(
 ) -> Result<SpawnBuild> {
     let mut log =
         vec!["Start build spawn".to_owned(), format!("level  0 {level}"), "Loading spawns ...".to_owned()];
+    // `game_graph().header().level(level_name)`: Play's graph holds the linked game's levels too
+    let level_id = graph
+        .levels
+        .iter()
+        .find(|l| l.name.eq_ignore_ascii_case(level))
+        .map(|l| l.id)
+        .ok_or_else(|| BuildError::new(format!("! The game graph has no level {level}.")))?;
     let cross =
-        graph.cross_tables.first().ok_or_else(|| BuildError::new("! The game graph has no cross table."))?;
+        graph.cross_table(level_id).ok_or_else(|| BuildError::new("! The game graph has no cross table."))?;
     let mut spawns: Vec<Entity> = Vec::new();
     let mut story: BTreeMap<u32, String> = BTreeMap::new();
     let mut actors = 0usize;
     // the graph points a level changer of this level may name: (name, position, direction)
     let mut graph_points: Vec<(String, Vec3, Vec3)> = Vec::new();
     for el in elements {
-        let e = el.entity;
+        let mut e = el.entity;
         let Some(class) = class_of(&e) else { continue };
         if class == Class::GraphPoint {
             graph_points.push((e.name().to_owned(), e.position(), e.angle()));
@@ -151,6 +158,12 @@ pub fn build_spawn(
             actors += 1;
             if actors > 1 {
                 return Err(BuildError::new("! Too many actors on the level"));
+            }
+            // oracle: the C++ keeps the mark the spawn point got from `$player`; the game makes
+            // no level current without it (`CALifeGraphRegistry::update`), so the one actor
+            // carries it here whatever the scene saved
+            if !e.is_player() && e.set_player().is_err() {
+                return Err(BuildError::new(format!("! The actor {} cannot be made the player.", e.name())));
             }
         }
         if let Some(id) = e.story_id() {
@@ -170,7 +183,7 @@ pub fn build_spawn(
     }
 
     log.push("Correct objects ...".to_owned());
-    let Some(first) = level_vertices(graph) else {
+    let Some(first) = level_vertices(graph, level_id) else {
         return Err(BuildError::new(format!(
             "! There are no graph vertices in the game graph for the level '{level}' !"
         )));
@@ -257,7 +270,7 @@ pub fn build_spawn(
         if let Some((gv, dist)) = cross.cell(node) {
             let _ = e.set_vertices(gv, node, dist);
         }
-        fill_level_changer(e, level, graph, &graph_points, &mut log)?;
+        fill_level_changer(e, level, level_id, graph, &graph_points, &mut log)?;
     }
     if actors == 0 {
         return Err(BuildError::new("! There is no ACTOR spawn point!"));
@@ -450,6 +463,7 @@ fn verify_space_restrictors(level: &str, nav: &LevelNav, spawns: &[Entity], log:
 fn fill_level_changer(
     e: &mut Entity,
     level: &str,
+    level_id: u8,
     graph: &GameGraph,
     points: &[(String, Vec3, Vec3)],
     log: &mut Vec<String>,
@@ -465,8 +479,11 @@ fn fill_level_changer(
     let similar = |a: Vec3, b: Vec3| {
         (a.x - b.x).abs() <= 0.001 && (a.y - b.y).abs() <= 0.001 && (a.z - b.z).abs() <= 0.001
     };
-    let found =
-        graph.vertices.iter().enumerate().find(|(_, v)| v.level_id == 0 && similar(v.local_point, *position));
+    let found = graph
+        .vertices
+        .iter()
+        .enumerate()
+        .find(|(_, v)| v.level_id == level_id && similar(v.local_point, *position));
     let Some((index, vertex)) = found else {
         return Err(BuildError::new(format!(
             "Cannot find a correspndance between graph and graph points from level editor! Rebuild graph for the level {}",
@@ -528,7 +545,239 @@ fn patrol(nav: &LevelNav, cross: &gz_fmt_spawn::CrossTable, w: &Way) -> PatrolPa
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use crate::graph::{GraphPoint, build_game_graph, tests::grid};
+    use gz_entities::MapSettings;
+    use gz_fmt_level::LevelGraph;
+
+    fn settings() -> MapSettings {
+        let creature = [
+            ("ef_creature_type", "1"),
+            ("going_speed", "1.5"),
+            ("terrain", "stalker_terrain"),
+            ("MaxHealthValue", "200"),
+            ("eye_range", "100"),
+            ("visual", "actors\\x\\x.ogf"),
+        ];
+        let item =
+            [("class", "II_MEDKI"), ("inv_weight", "0.5"), ("cost", "100"), ("visual", "Dynamics\\Item.ogf")];
+        let actor: Vec<(&str, &str)> = creature
+            .iter()
+            .copied()
+            .chain([("class", "S_ACTOR"), ("max_item_mass", "50"), ("$player", "on")])
+            .collect();
+        MapSettings::new()
+            .section("script", &[("current_server_entity_version", "12")])
+            .section("graph_point", &[("class", "AI_GRAPH")])
+            .section("actor", &actor)
+            .section("medkit", &item)
+    }
+
+    /// What the game's loader relies on in a spawn file (`CALifeSpawnRegistry::load`,
+    /// `CGameGraph`, `AISpaceBase::Load` / `Validate`, `CALifeGraphRegistry::setup_current_level`),
+    /// read back with the repository's reader.
+    fn check_spawn_file(bytes: &[u8], level: &str, level_ai: &[u8], st: &MapSettings) -> Vec<String> {
+        let mut bad = Vec::new();
+        let lg = LevelGraph::read(level_ai).unwrap();
+        let nodes = lg.nodes.len() as u32;
+        let file = SpawnFile::parse(Arc::from(bytes)).unwrap();
+        let h = &file.header;
+        let Some(g) = &file.game_graph else { return vec!["no game graph (chunk 4)".into()] };
+        if h.version != XRAI_VERSION_PRIQUEL {
+            bad.push(format!("header version {}", h.version));
+        }
+        if h.spawn_count as usize != file.vertices.len()
+            || file.declared_vertices as usize != file.vertices.len()
+        {
+            bad.push(format!(
+                "spawn counts {} / {} / {}",
+                h.spawn_count,
+                file.declared_vertices,
+                file.vertices.len()
+            ));
+        }
+        // the levels whose objects the file holds (`m_level_spawns`): Play's are one of the graph's
+        if h.level_count == 0 || h.level_count as usize > g.levels.len() {
+            bad.push(format!("level count {} for {} levels", h.level_count, g.levels.len()));
+        }
+        if h.graph_guid != g.guid {
+            bad.push("the header's graph guid is not the graph's".into());
+        }
+        if usize::from(g.vertex_count) != g.vertices.len() || g.edge_count as usize != g.edges.len() {
+            bad.push("the graph's counts are not its records".into());
+        }
+        let Some(lvl) = g.levels.iter().find(|l| l.name == level) else {
+            bad.push(format!("the level table has no level {level}"));
+            return bad;
+        };
+        if lvl.guid != lg.header.guid {
+            bad.push("the level's guid is not the AI map's".into());
+        }
+        let Some(cross) = g.cross_table(lvl.id) else {
+            bad.push("the level has no cross table".into());
+            return bad;
+        };
+        if g.cross_tables.len() != g.levels.len() {
+            bad.push("one cross table per level".into());
+        }
+        if cross.level_guid != lg.header.guid || cross.game_guid != g.guid {
+            bad.push("the cross table's guids".into());
+        }
+        if cross.level_vertex_count != nodes
+            || cross.cell_count() != nodes as usize
+            || cross.game_vertex_count != u32::from(g.vertex_count)
+        {
+            bad.push("the cross table's counts".into());
+        }
+        for (i, v) in g.vertices.iter().enumerate() {
+            if g.level(v.level_id).is_none() {
+                bad.push(format!("graph vertex {i}: level id {} is not in the level table", v.level_id));
+            }
+            if g.edges_of(i as u16).len() != usize::from(v.edge_count) {
+                bad.push(format!("graph vertex {i}: edges"));
+            }
+            if v.level_id == lvl.id && cross.cell(v.level_vertex).map(|c| c.0) != Some(i as u16) {
+                bad.push(format!("graph vertex {i}: the cross table gives its level vertex to another"));
+            }
+        }
+        let mut players = 0;
+        for (i, v) in file.vertices.iter().enumerate() {
+            if usize::from(v.id) != i {
+                bad.push(format!("spawn {i} has id {}", v.id));
+            }
+            let e = Entity::from_packets(&v.spawn, &v.update, st).unwrap();
+            if e.header().spawn_id != v.id {
+                bad.push(format!("spawn {i}: the packet's spawn id {}", e.header().spawn_id));
+            }
+            let gv = e.game_vertex_id().unwrap_or(u16::MAX);
+            let lv = e.level_vertex_id().unwrap_or(u32::MAX);
+            if gv >= g.vertex_count || g.level_of_vertex(gv).map(|l| l.id) != Some(lvl.id) {
+                bad.push(format!("spawn {i}: game vertex {gv} is not a vertex of the level"));
+            }
+            if lv >= nodes || cross.cell(lv).map(|c| c.0) != Some(gv) {
+                bad.push(format!("spawn {i}: level vertex {lv} does not lead to game vertex {gv}"));
+            }
+            if class_of(&e) == Some(Class::CreatureActor) {
+                let direct = e.object().is_some_and(|o| o.alife().direct_control);
+                if !e.is_player() || !direct {
+                    bad.push(format!("the actor: player {} direct control {direct}", e.is_player()));
+                }
+                players += 1;
+            } else if e.is_player() {
+                bad.push(format!("spawn {i} is marked as the player"));
+            }
+        }
+        if players != 1 {
+            bad.push(format!("{players} actors"));
+        }
+        bad
+    }
+
+    #[test]
+    fn editor_spawn_holds_what_the_games_loader_relies_on() {
+        let st = settings();
+        let lg = grid(6, 2, [1; 16]);
+        let nav = LevelNav::new(&lg);
+        let points = vec![
+            GraphPoint {
+                name: "gp_a".into(),
+                position: Vec3::new(0.0, 0.0, 0.0),
+                locations: [0; 4],
+                connection_level: String::new(),
+                connection_point: String::new(),
+            },
+            GraphPoint {
+                name: "gp_b".into(),
+                position: Vec3::new(5.0, 0.0, 1.0),
+                locations: [0; 4],
+                connection_level: String::new(),
+                connection_point: String::new(),
+            },
+        ];
+        let gg = build_game_graph(&nav, &points, "l_test", lg.header.guid, [2; 16]).unwrap();
+        let element = |section: &str, name: &str, p: Vec3| {
+            Element::new(Entity::create_spawn_point(section, &st).unwrap(), name, p, Vec3::ZERO, None)
+        };
+        let elements = vec![
+            element("graph_point", "gp_a", points[0].position),
+            element("graph_point", "gp_b", points[1].position),
+            element("actor", "actor", Vec3::new(4.0, 0.0, 1.0)),
+            element("medkit", "medkit", Vec3::new(1.0, 0.0, 0.0)),
+        ];
+        let built = build_spawn("l_test", &nav, &gg.graph, elements, &[], [3; 16], false).unwrap();
+        let bad = check_spawn_file(&built.bytes, "l_test", &lg.write().unwrap(), &st);
+        assert!(bad.is_empty(), "{bad:#?}");
+        // the actor stands on b's half of the map, the medkit on a's
+        let file = SpawnFile::parse(Arc::from(&built.bytes[..])).unwrap();
+        let ents: Vec<Entity> =
+            file.vertices.iter().map(|v| Entity::from_packets(&v.spawn, &v.update, &st).unwrap()).collect();
+        assert_eq!(ents.iter().map(|e| e.section()).collect::<Vec<_>>(), ["actor", "medkit"]);
+        assert_eq!(ents[0].game_vertex_id(), Some(1));
+        assert_eq!(ents[1].game_vertex_id(), Some(0));
+    }
+
+    #[test]
+    fn editor_spawn_on_the_linked_games_graph_holds_the_same() {
+        let st = settings();
+        let lg = grid(6, 2, [1; 16]);
+        let nav = LevelNav::new(&lg);
+        let point = |name: &str, x: f32, z: f32| GraphPoint {
+            name: name.into(),
+            position: Vec3::new(x, 0.0, z),
+            locations: [0; 4],
+            connection_level: String::new(),
+            connection_point: String::new(),
+        };
+        let own = build_game_graph(
+            &nav,
+            &[point("gp_a", 0.0, 0.0), point("gp_b", 5.0, 1.0)],
+            "l_test",
+            lg.header.guid,
+            [2; 16],
+        )
+        .unwrap();
+        let base = crate::graph::tests::base_world();
+        let joined = crate::graph::join_base(&base, &own.graph).unwrap().unwrap();
+        let elements = vec![Element::new(
+            Entity::create_spawn_point("actor", &st).unwrap(),
+            "actor",
+            Vec3::new(4.0, 0.0, 1.0),
+            Vec3::ZERO,
+            None,
+        )];
+        let built = build_spawn("l_test", &nav, &joined, elements, &[], [3; 16], false).unwrap();
+        let bad = check_spawn_file(&built.bytes, "l_test", &lg.write().unwrap(), &st);
+        assert!(bad.is_empty(), "{bad:#?}");
+        // the actor on the level's own vertex b, numbered after the game's vertices
+        let file = SpawnFile::parse(Arc::from(&built.bytes[..])).unwrap();
+        let actor = Entity::from_packets(&file.vertices[0].spawn, &file.vertices[0].update, &st).unwrap();
+        assert_eq!(actor.game_vertex_id(), Some(base.vertex_count + 1));
+        assert_eq!(file.game_graph.unwrap().guid, base.guid);
+    }
+
+    #[test]
+    fn an_actor_saved_without_the_player_mark_is_the_player_in_editor_spawn() {
+        let st = settings();
+        let lg = grid(3, 1, [1; 16]);
+        let nav = LevelNav::new(&lg);
+        let point = GraphPoint {
+            name: "gp".into(),
+            position: Vec3::ZERO,
+            locations: [0; 4],
+            connection_level: String::new(),
+            connection_point: String::new(),
+        };
+        let gg = build_game_graph(&nav, &[point], "l_test", lg.header.guid, [2; 16]).unwrap();
+        // what a scene placed before the mark was made keeps: the factory's entity
+        let unmarked = Entity::create("actor", &st).unwrap();
+        assert!(!unmarked.is_player());
+        let elements = vec![Element::new(unmarked, "actor", Vec3::new(1.0, 0.0, 0.0), Vec3::ZERO, None)];
+        let built = build_spawn("l_test", &nav, &gg.graph, elements, &[], [3; 16], false).unwrap();
+        let bad = check_spawn_file(&built.bytes, "l_test", &lg.write().unwrap(), &st);
+        assert!(bad.is_empty(), "{bad:#?}");
+    }
 
     #[test]
     fn the_spawn_id_is_found_in_a_packet() {

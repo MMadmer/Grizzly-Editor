@@ -7,10 +7,15 @@ editor home, project copy and mock port, with a hard timeout, and each suite's l
     python tools/qa/run_all.py test_pda ...    the suites named (extra arguments after --extra)
     python tools/qa/run_all.py test_pda --only B,C   only those phases of the suite named
     python tools/qa/run_all.py -j 4            four at a time (default: a quarter of the cores)
+    python tools/qa/run_all.py --with-game     also the suites that start the real game (test_play_game: the game
+                                               loads a level Play made; half a minute, so not in the everyday set)
 
 Prints `PASS/FAIL <suite> <seconds> <failed checks>` per suite and a total; exit code 1 on any
 failure. Each suite's output is Intermediate/qa/<suite>.log; the results Intermediate/qa/state.json.
-A suite marked `alone` (it times frames or loads) runs after the others, by itself.
+A suite marked `alone` (it times frames or loads) runs after the others, by itself; one marked `game` starts the
+real game and runs only with --with-game (or when named).
+Every editor a suite starts gets the suite's home on its command line and in GRIZZLY_HOME; the run fails when the
+repository root's _projects.ini or grizzly_editor.ltx changed or appeared meanwhile (and puts it back).
 """
 from __future__ import annotations
 
@@ -38,7 +43,8 @@ RUST_EXE = os.path.join(REPO, "Intermediate", "cargo", "debug", "Grizzly.exe")
 # name -> script, arguments, timeout (s), alone
 SUITES: dict[str, dict] = {
     "test_project_browser": {"args": ["--no-explorer"], "timeout": 120},
-    "test_ui_shell": {"args": ["--project", OD], "timeout": 120},
+    # its phase A times a start to the shown window (0.3 s): alone, like the other suites that time something
+    "test_ui_shell": {"args": ["--project", OD], "timeout": 120, "alone": True},
     "test_ui_tour": {"args": ["--project", OD], "timeout": 180},
     "test_asset_icons": {"args": ["--project", OD], "timeout": 120},
     "test_unicode_names": {"args": ["--project", OD], "timeout": 120},
@@ -62,13 +68,70 @@ SUITES: dict[str, dict] = {
                               "timeout": 180, "alone": True},
     "benchmark_scene_load": {"script": os.path.join(REPO, "tools", "mcp", "run_benchmark.py"), "args": [],
                              "timeout": 300, "alone": True},
+    # the real game in a root of its own (three minutes at most for the game itself)
+    "test_play_game": {"args": ["--project", TEST], "timeout": 300, "alone": True, "game": True},
 }
+
+# What an editor without a home of its own would write into the repository root.
+ROOT_FILES = [os.path.join(REPO, n) for n in ("_projects.ini", "grizzly_editor.ltx")]
+
+
+def read_opt(path: str) -> bytes | None:
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def root_files_changed(before: dict[str, bytes | None]) -> list[str]:
+    """The repository root's files an editor changed or made during the run, each put back as it was."""
+    changed = []
+    for path, was in before.items():
+        now = read_opt(path)
+        if now == was:
+            continue
+        changed.append("%s %s" % (os.path.basename(path), "appeared" if was is None else "changed"))
+        if was is None:
+            os.remove(path)
+        else:
+            with open(path, "wb") as f:
+                f.write(was)
+    return changed
 
 
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+# IO_REPARSE_TAG name-surrogate bit: a junction or a symbolic link, not a placeholder of a cloud folder
+_NAME_SURROGATE = 0x20000000
+
+
+def unlink_links(path: str) -> list[str]:
+    """Every junction and symbolic link under `path`, the link itself removed and never followed: what it points at
+    (the game's archives, for one) stays. Answers the links removed."""
+    gone: list[str] = []
+    try:
+        entries = list(os.scandir(path))
+    except OSError:
+        return gone
+    for e in entries:
+        try:
+            st = e.stat(follow_symlinks=False)
+        except OSError:
+            continue
+        if e.is_symlink() or getattr(st, "st_reparse_tag", 0) & _NAME_SURROGATE:
+            try:
+                (os.rmdir if e.is_dir() else os.unlink)(e.path)
+            except OSError:
+                os.unlink(e.path)
+            gone.append(e.path)
+        elif e.is_dir(follow_symlinks=False):
+            gone += unlink_links(e.path)
+    return gone
 
 
 def remove_tree(path: str) -> bool:
@@ -84,6 +147,8 @@ def remove_tree(path: str) -> bool:
         except OSError:
             pass
 
+    # a link goes first, as a link: a delete never walks into what it points at
+    unlink_links(path)
     for _ in range(20):
         shutil.rmtree(path, onerror=writable)
         if not os.path.exists(path):
@@ -134,10 +199,13 @@ def run_one(name: str, extra: list[str], port_lock: threading.Lock) -> dict:
     home = tempfile.mkdtemp(prefix="grizzly_qa_home_")
     # the suite's temp folder is its own: whatever it makes there (its copies, its homes) goes with it, also when
     # the suite is ended by its timeout and cleans up nothing itself
-    tmp = tempfile.mkdtemp(prefix="grizzly_qa_tmp_%s_" % name)
+    # short: a suite that starts the game puts its root in here, and the game takes paths of 255 characters at most
+    tmp = tempfile.mkdtemp(prefix="gzqa_")
     env = dict(os.environ)
     env.update({"TEMP": tmp, "TMP": tmp,
                 "GRIZZLY_QA_TARGET": "rust", "GRIZZLY_QA_PORT": str(port), "GRIZZLY_QA_HOME": home,
+                # an editor started without -home takes this one
+                "GRIZZLY_HOME": home,
                 # the QA credentials of the Credential Manager are this suite's own: two suites side by
                 # side never take away each other's token or VirusTotal key
                 "GRIZZLY_QA_CREDENTIAL": "%s-%d" % (name.replace("_", "-"), port),
@@ -200,11 +268,12 @@ def main() -> int:
     ap.add_argument("--failed", action="store_true", help="only the suites that failed last time")
     ap.add_argument("-j", "--jobs", type=int, default=max(1, (os.cpu_count() or 4) // 4))
     ap.add_argument("--only", help="phases of the one suite named, passed to it as --only")
+    ap.add_argument("--with-game", action="store_true", help="also the suites that start the real game")
     ap.add_argument("--extra", nargs=argparse.REMAINDER, default=[], help="arguments for a single suite")
     args = ap.parse_args()
 
     state = load_state()
-    names = list(SUITES)
+    names = [n for n in SUITES if args.with_game or not SUITES[n].get("game")]
     if args.suites:
         unknown = [n for n in args.suites if n not in SUITES]
         if unknown:
@@ -231,6 +300,7 @@ def main() -> int:
     together = [n for n in names if not SUITES[n].get("alone")]
     alone = [n for n in names if SUITES[n].get("alone")]
     lock = threading.Lock()
+    root_before = {p: read_opt(p) for p in ROOT_FILES}
     t0 = time.monotonic()
     results: dict[str, dict] = {}
 
@@ -254,6 +324,10 @@ def main() -> int:
     if left:
         print("! Rust editors left running after the run: pids %s" % left)
         bad.append("editors left running")
+    touched = root_files_changed(root_before)
+    if touched:
+        print("! an editor wrote into the repository root: %s (put back)" % ", ".join(touched))
+        bad.append("repository root written")
     print("TOTAL %d suites, %d passed, %d failed, wall %.1f s" % (len(results), len(results) - len(
         [n for n in results if not results[n]["ok"]]), len([n for n in results if not results[n]["ok"]]), wall))
     return 1 if bad else 0

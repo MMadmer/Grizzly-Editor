@@ -125,11 +125,14 @@ async fn level_build(editor: &Arc<Editor>, action: &str, a: &Args, _o: Origin) -
             }
             let place = play_place(editor, &session, a)?;
             let game = PathBuf::from(linked_game(editor)?);
+            let archived = longest_game_path(editor).await;
             let root = editor
                 .exec
                 .io(move || {
                     place.guard.check(&place.root).map_err(|e| e.to_string())?;
-                    crate::play::prepare(&game, &place.root)
+                    let r = crate::play::prepare(&game, &place.root)?;
+                    crate::play::check_path_lengths(&r.root, &archived)?;
+                    Ok::<_, String>(r)
                 })
                 .await
                 .map_err(CmdError::invalid)?;
@@ -803,6 +806,21 @@ async fn build_for_play(
     ctx.stage("Building the game graph");
     let gg = ensure_graph(editor, lb, inp).await?;
     ctx.check()?;
+    ctx.stage("Joining the linked game's graph");
+    let base = linked_game_graph(editor).await?;
+    let own = gg.graph.clone();
+    let joined =
+        editor.exec.cpu(move || graph::join_base(&base, &own)).await.map_err(|e| JobError::new(e.0))?;
+    let play_graph = match joined {
+        Some(g) => Arc::new(g),
+        None => {
+            editor.log.warn(format!(
+                "* {level} is a level of the linked game: Play keeps the level's own game graph, and the game's scripts that name its vertices find none of them."
+            ));
+            Arc::new(gg.graph.clone())
+        }
+    };
+    ctx.check()?;
     ctx.stage("Building the spawn");
     let (snap, settings) = (inp.snap.clone(), inp.settings.clone());
     let lv = level.clone();
@@ -837,7 +855,7 @@ async fn build_for_play(
                     _ => None,
                 })
                 .collect();
-            spawn::build_spawn(&lv, &nav, &gg.graph, elements, &ways, guid(), verify_restrictors)
+            spawn::build_spawn(&lv, &nav, &play_graph, elements, &ways, guid(), verify_restrictors)
         })
         .await
         .map_err(|e| {
@@ -854,6 +872,34 @@ async fn build_for_play(
     let spawns = game_out(editor).join("spawns");
     write_files(editor, spawns, vec![("editor.spawn".to_owned(), built.bytes.clone())]).await?;
     Ok(Staged { level, dir, ai: ai_temp, spawn: built.bytes })
+}
+
+/// The longest path of the linked game's files, relative to its gamedata: what the game indexes
+/// under a game root's `gamedata` besides what the root holds itself.
+async fn longest_game_path(editor: &Arc<Editor>) -> String {
+    let files = match GameLink::of(editor) {
+        Ok(link) => link.files().await.ok(),
+        Err(_) => None,
+    };
+    files
+        .and_then(|f| f.iter().map(|r| r.path).max_by_key(|p| p.chars().count()).map(str::to_owned))
+        .unwrap_or_default()
+}
+
+/// The linked game's game graph: chunk 4 of its `spawns\all.spawn`, read and never written.
+async fn linked_game_graph(editor: &Arc<Editor>) -> Result<gz_fmt_spawn::GameGraph, JobError> {
+    let link = GameLink::of(editor).map_err(|e| JobError::new(e.to_string()))?;
+    let files = link.files().await.map_err(|e| JobError::new(e.to_string()))?;
+    let bytes =
+        editor.exec.io(move || files.read("spawns\\all.spawn")).await.map_err(|e| {
+            JobError::new(format!("The linked game's spawns\\all.spawn could not be read: {e}"))
+        })?;
+    editor
+        .exec
+        .cpu(move || gz_fmt_spawn::SpawnFile::parse(Arc::from(bytes)).map(|f| f.game_graph))
+        .await
+        .map_err(|e| JobError::new(format!("The linked game's spawns\\all.spawn could not be read: {e}")))?
+        .ok_or_else(|| JobError::new("The linked game's spawns\\all.spawn holds no game graph."))
 }
 
 /// What Play stages into its game root: the level built, its AI map, the spawn.
@@ -997,6 +1043,7 @@ async fn run_action(
             let place = place.ok_or_else(|| JobError::new("Play has no game root"))?;
             ctx.stage("Preparing the game");
             let game = PathBuf::from(linked_game(editor).map_err(|e| JobError::new(e.message))?);
+            let archived = longest_game_path(editor).await;
             let root = place.root.clone();
             let guard = place.guard.clone();
             let ready = editor
@@ -1005,6 +1052,7 @@ async fn run_action(
                     guard.check(&root).map_err(|e| e.to_string())?;
                     let r = crate::play::prepare(&game, &root)?;
                     crate::play::stage_level(&r.root, &staged.level, &staged.dir, &staged.ai, &staged.spawn)?;
+                    crate::play::check_path_lengths(&r.root, &archived)?;
                     Ok::<_, String>(r)
                 })
                 .await

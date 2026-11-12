@@ -35,7 +35,7 @@ fn app_paths(cli: &Cli) -> AppPaths {
     let exe_dir =
         std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
     let root = cli.root.clone().unwrap_or_else(|| find_root(&exe_dir));
-    let home = cli.home.clone().unwrap_or_else(|| root.clone());
+    let home = cli.home(std::env::var(crate::cli::HOME_VAR).ok(), &root);
     AppPaths { exe_dir, appdata: root.join("_appdata_"), logs: home.join("logs"), home, root }
 }
 

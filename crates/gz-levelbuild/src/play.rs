@@ -178,6 +178,49 @@ pub fn prepare(game: &Path, root: &Path) -> Result<PlayRoot, String> {
     Ok(PlayRoot { root: root.to_path_buf(), exe })
 }
 
+/// The longest file path the game takes: `CLocatorAPI::Register` copies every path it indexes into
+/// a `string256`, and a longer one stops the game at its start (a breakpoint in xrCore, before its
+/// log opens - what a root inside a project folder, or a deep temp folder, did).
+pub const GAME_PATH_LIMIT: usize = 255;
+
+/// The longest path below `dir` (relative, backslashes), the archives' link not followed.
+fn longest_below(dir: &Path, rel: &str, longest: &mut String) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let path = if rel.is_empty() { name } else { format!("{rel}\\{name}") };
+        let Ok(t) = e.file_type() else { continue };
+        if t.is_symlink() || is_junction(&e.path()) {
+            continue;
+        }
+        if t.is_dir() {
+            longest_below(&e.path(), &path, longest);
+        } else if path.chars().count() > longest.chars().count() {
+            *longest = path;
+        }
+    }
+}
+
+/// Refuses a root the game could not start in: every file under it - the staged one and, under
+/// `gamedata\`, `archived`, the longest path of the game's archives - has to fit
+/// [`GAME_PATH_LIMIT`] with the root in front.
+pub fn check_path_lengths(root: &Path, archived: &str) -> Result<(), String> {
+    let mut longest = String::new();
+    longest_below(root, "", &mut longest);
+    let archived = format!("gamedata\\{}", archived.replace('/', "\\"));
+    if archived.chars().count() > longest.chars().count() {
+        longest = archived;
+    }
+    let root_text = root.to_string_lossy();
+    let total = root_text.trim_end_matches('\\').chars().count() + 1 + longest.chars().count();
+    if total > GAME_PATH_LIMIT {
+        return Err(format!(
+            "The game root {root_text} is too deep for the game: with {longest} in it a path is {total} characters long, and the game takes {GAME_PATH_LIMIT} at most. Give Play a shorter root."
+        ));
+    }
+    Ok(())
+}
+
 /// The built level (`level_dir`, every file of it) into the root's `gamedata\levels\<level>`,
 /// `level.ai` among them, and the spawn as `gamedata\spawns\editor.spawn`. Blocking.
 pub fn stage_level(
@@ -241,6 +284,14 @@ mod tests {
         prepare(&game, &root).unwrap();
         assert!(!game.join("gamedata").join("levels").exists());
         assert!(!root.join("gamedata").join("levels").exists(), "a new Play stages its level anew");
+        // every path the game will index fits with the root in front, the archives' too
+        let room = GAME_PATH_LIMIT - root.to_string_lossy().chars().count() - 1 - "gamedata\\".len();
+        assert!(check_path_lengths(&root, &"a".repeat(room)).is_ok());
+        let refused = check_path_lengths(&root, &"a".repeat(room + 1)).unwrap_err();
+        assert!(
+            refused.contains("too deep") && refused.contains(&format!("{}", GAME_PATH_LIMIT + 1)),
+            "{refused}"
+        );
         // the archives' link goes as a link: the game's archives stay
         remove_tree(&root);
         assert!(game.join("database").join("a.db0").is_file());

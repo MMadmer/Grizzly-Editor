@@ -1444,7 +1444,7 @@ project folder stopped in xrCore at its start (breakpoint, 1.4 s, no log line); 
 Found on the way: `runs::arguments` dropped every parameter of XrLC / xrDO, so no `-silent` reached XrLC and its
 "Congratulation!" box held the job for ever (XrLC compiles mp_test in 11 s now).
 
-**The in-game load: NOT reached.** `tools/qa/test_play_game.py` (not in `run_all.py`: it starts the game; it
+**The in-game load: NOT reached** (reached since - "Play ends in the game"). `tools/qa/test_play_game.py` (not in `run_all.py`: it starts the game; it
 fails with the reason below) on a copy of Test with mp_test (its MP spawns replaced by an actor and a graph
 point, an AI map of 1840 nodes generated, Make All, XrLC): the editor, on a hidden desktop, builds the collision
 (16 vertices, 24 triangles), the AI map, the game graph (1 vertex), `editor.spawn`, stages the root and starts
@@ -1485,6 +1485,86 @@ Decisions taken in this pass:
   `Start-DetachedHiddenDesktopProcess.ps1`, used as it is): the game Play starts inherits it.
 - A test that wrote files named like the editor's compilers was refused execution by the machine's on-access
   scanner ("Access denied", os error 5, at every relink); the stage's test checks the pure `compiler_fsgame`.
+
+## Play ends in the game
+
+The brief `docs/rust/briefs/play-fix.md`, 12 Nov. Before the first run (09:46:17): `find D:\XFinedProjects
+"D:\Games\Dead Air\modules" -newermt` ten minutes earlier - nothing; no editor or game running, 28016 free.
+
+**1. The game loads the level Play made.** Three faults, each found in a file read back or a crash report, in
+this order:
+- **The actor was not the player.** `M_SPAWN_OBJECT_ASPLAYER` (bit 3 of `s_flags`) was missing from the actor's
+  packet in `editor.spawn`. The game takes the player from that mark alone (`CALifeGraphRegistry::update`, xrGame
+  `alife_graph_registry.cpp`): without it `m_actor` stays null, `setup_current_level` never runs, and the actor's
+  `on_register` meets no current level - the crash of the last pass. The C++ sets the mark when a spawn point is
+  made, from the section's `$player` (`CSpawnPoint::SSpawnData::Create`, `SpawnPoint.cpp`); `Spawn_Write(.., TRUE)`
+  keeps it. The Rust `place_spawn` made the entity with the factory alone (`Entity::create`). Now
+  `Entity::create_spawn_point` does what `SSpawnData::Create` does, and `build_spawn` marks the one actor whatever
+  the scene saved (a scene placed before this fix keeps the factory's entity). The game's `all.spawn` read with
+  the repository's reader is the model: its one actor carries the mark and `[actor] $player = on`
+  (`gz-entities/tests/corpus.rs`, `the_actor_of_all_spawn_is_the_player`).
+- **Dead Air's start scripts name vertices of the game's graph.** With the player in, the new game was made
+  ("New game is successfully created!"), the level loaded, and the actor's first update stopped in
+  `CALifeGraphRegistry::add` from `alife():create`: `xr_actor.actor_on_first_update` spawns repair kits and a kit
+  on fixed game vertices of the base world (643, 2772, 3616, 4147, 451, 698, 1892) unless the level is
+  `fake_start`. A one-level graph has one vertex. Decision: Play's `editor.spawn` holds the level's own graph
+  (as the C++ builds it, unchanged) appended to the linked game's (`graph::join_base`), the game's own rule for a
+  module's level (`XmsGame::ComposeGameGraph`): base vertices, edges, death points, cross tables and guid as the
+  game has them, the level under id 128 (the first module id, `XMS::LevelId`) at offset (10000, 0, 10000), its
+  vertices, edges and cross table numbered after the game's. `build_spawn` finds its level by name in the graph
+  (`game_graph().header().level(name)`, as `CLevelSpawnConstructor` does) instead of taking level 0. A scene
+  named like a level of the game keeps the one-level graph and logs a warning (the composer adds no base level
+  either). The `level_count` of the header stays 1: the levels whose objects the file holds.
+- **The root's depth.** Under `run_all.py` (a suite's temp folder is deeper) the game stopped 1.5 s after its
+  start with no log line; its crash report (`session_reports\*.zip`, symbolised with the game's own pdb through
+  dbghelp): a breakpoint in xrCore from the CRT, `CLocatorAPI::Register` (`LocatorAPI.cpp:330`) copying a path
+  into a `string256`. The game indexes its own shader cache, whose longest name is 188 characters, so a root over
+  66 characters cannot start. `play::check_path_lengths` refuses such a root naming the path; `test_play_game`
+  puts its root in a temp folder of its own (`gzpr_*`), `run_all.py`'s suite folders are `gzqa_*`.
+
+The invariants the game's loader relies on are a unit test of the builder (`spawn.rs`,
+`check_spawn_file`, read back with `gz-fmt-spawn` and `gz-entities`): header version, spawn counts, graph guid,
+level count; the graph's counts and records; the level in the table with the AI map's guid; one cross table per
+level, its guids, its node count equal to `level.ai`'s (read back from the bytes written); every vertex's level in
+the table, its edges, its level vertex given back to it by the cross table; every spawn's id, its game vertex on
+the level, its level vertex leading to it; one actor, the player, under direct control. Three tests: a level alone,
+a level joined onto a two-level world, an actor without the mark. `graph.rs`
+`a_level_is_appended_to_the_linked_games_graph_with_its_ids_unchanged`; `play.rs` the path limit.
+
+**The proof** - `tools/qa/test_play_game.py` (opt-in: `run_all.py --with-game`, or named): PASS 32 / 0 through
+`run_all.py test_play_game` (50.7 s). The game's log, 26 s after Play: `* New game is successfully created!`,
+`# New player created.`, `* client : connection accepted - <All Ok>`, `* ObjectSpace cache for
+'appdata\cdb_cache\mp_test\objspace.bin' ... Building the model from scratch`, `* [texload] geometry level.geom`,
+`* [ground] collision mesh: 24 triangles, 15 vertices`, `* End of synchronization A[1] R[1]`, then
+`[ALife]: objects[110], online[4]` (the start kit spawned); no assert, no fatal error, no dump; the game still
+running 31 s after Play, ended by Play's stop (the suite checks no process of the root is left), the root's archive
+link unlinked before the root went. The log: `Intermediate/qa/play_game/engine5.log`.
+
+**2. No editor writes into the repository root.** `grizzly`: without `-home` the home is `GRIZZLY_HOME`, then the
+data root (`Cli::home`, test `the_home_comes_from_the_command_line_then_the_environment_then_the_root`).
+`qa_target` sets `GRIZZLY_HOME` for every process a suite starts, `run_all.py` for every suite, `diff_editors.py`
+for every Rust editor. `run_all.py` reads the root's `_projects.ini` and `grizzly_editor.ltx` before the run and
+fails it when either changed or appeared ("repository root written"), putting it back. Both `remove_tree`s of the
+QA (`qa_target`, `run_all`) unlink every junction and symbolic link inside first (a name-surrogate reparse tag),
+so a suite ended by its timeout cannot take the game's archives with its root (checked on a scratch junction).
+
+The final runs of this pass (12 Nov, 10:02-10:15):
+- `bash tools/rust/check.sh`: ok.
+- `bash tools/rust/test.sh` (default mode): 17 binaries run, 58 cached, 0 failed, 0 skipped; 1099 tests green.
+- `python tools/qa/diff_editors.py` (default mode): 10 scenarios, 755 steps, 0 differ; 746 written files, 0 differ
+  (`s9_play` 9 / 14, `s7_levelbuild` 4 / 17, `s8_levelbuild2` 2 / 19); 42.3 s.
+- `GRIZZLY_QA_TARGET=rust python tools/qa/run_all.py`: 22 suites, 21 passed in the run (108.2 s); `test_ui_shell` A
+  failed its 0.3 s budget for a shown window at 0.357 s with four suites beside it, and passed alone right after
+  (12.1 s). Open: that budget is a timing check under the run's parallel load. No "repository root written".
+- `find D:\XFinedProjects "D:\Games\Dead Air\modules" -newermt '2026-11-12 09:36:17'` at 10:15:24: nothing. No
+  Grizzly, xrEngine, XrLC or github_mock process left; no `gzpg_*`, `gzpr_*`, `gzqa_*` or `grizzly_*` folder in the
+  temp folder; the game's 43 archives in place; no `grizzly_editor.ltx` and no `gamedata\levels` in the repository.
+
+Decisions taken in this pass:
+- Play's graph is the linked game's with the level appended (above); the C++ one-level graph stays for a level
+  of the game's own name.
+- `build_spawn` marks the actor `ASPLAYER`; `place_spawn` marks a `$player` section's new entity as the C++ does.
+- The root depth is refused, not worked around in the game (the game repository is read-only here).
 
 ## For the plan
 
@@ -1527,8 +1607,20 @@ them.
 - **What the differential run compares of the level build** (section 9, 11): Make All on Escape (`s7`) and on
   l10_limansk (`s8`: sectors, portals, details, wallmarks), the Build menu's Make Game / AI Map / Details / HOM /
   SOM one at a time (`s9`). Collision, AI map, game graph, `editor.spawn` and Play are the C++ top bar's buttons
-  with no command row: proven only by the game, and that proof is not reached (`editor.spawn`'s actor has no
-  level in the game's ALife graph registry; "The reviewer's verification, closed", 3).
+  with no command row: proven by the game (`test_play_game`, "Play ends in the game").
+- **D1, Play's game graph**: `editor.spawn` carries the level's own game graph (the C++ `CGameGraphBuilder`'s)
+  appended to the linked game's (`spawns\all.spawn`, chunk 4, read only) the way the game appends a module's level
+  (`XmsGame::ComposeGameGraph`): the game's vertex numbers and graph guid unchanged, the level under id 128 or the
+  first above the game's, offset (10000, 0, 10000), its cross table renumbered. A level the game already has keeps
+  the C++ single-level graph (with a warning). Reason: Dead Air's own start scripts (`xr_actor.script`, the actor's
+  first update of a new game) spawn items on fixed vertices of the game's graph (643, 2772, 3616, ...); on a
+  one-level graph that is an index past the registry (`CALifeGraphRegistry::add`).
+- **D1, the game root's depth**: Dead Air's `CLocatorAPI::Register` copies every path it indexes into a
+  `string256`; the game's own shader cache (`appdata\shaders_cache_grizzly\r5_dxil\...`) has names of 188
+  characters, so a game root longer than 66 characters stops the game at its start (a breakpoint in xrCore,
+  before the log opens; the same symptom as the root inside a project folder of the last pass). Play refuses such a root
+  with the path that does not fit (`play::check_path_lengths`). It is a limit of the game, to be lifted there (the
+  game repository was not to be edited in this pass).
 - **D1 as built**: Play runs the LINKED game's engine (`xrEngine.exe`) in a game root of its own outside the
   project (`<appdata>\play\<project>` or `root=`): copies of the executables, a junction to the archives, a copy
   of the loose gamedata with the level, `level.ai` and `editor.spawn` staged, an appdata of its own, no module.

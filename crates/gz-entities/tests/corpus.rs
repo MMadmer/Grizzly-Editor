@@ -176,3 +176,25 @@ fn every_entity_of_all_spawn_decodes_and_writes_back() {
     );
     finish("all.spawn entities", file.vertices.len(), started, &failed);
 }
+
+/// The model of a valid spawn file: its one actor carries `M_SPAWN_OBJECT_ASPLAYER` - the mark
+/// the game makes the player of, and the level current from - and the game's actor section says
+/// `$player`, the key a new spawn point takes the mark from.
+#[test]
+fn the_actor_of_all_spawn_is_the_player() {
+    let Some(game) = gz_corpus::game() else { return };
+    let game = game.unwrap();
+    let ltx = system_ltx(&game);
+    let settings = LtxSettings(&ltx);
+    let file = SpawnFile::parse(Arc::from(game.read_path("spawns/all.spawn").unwrap())).unwrap();
+    let actors: Vec<Entity> = file
+        .vertices
+        .iter()
+        .filter_map(|v| Entity::from_packets(&v.spawn, &v.update, &settings).ok())
+        .filter(|e| e.class_info().is_some_and(|c| c.class == gz_entities::Class::CreatureActor))
+        .collect();
+    assert_eq!(actors.len(), 1);
+    assert!(actors[0].is_player(), "flags {:#06x}", actors[0].header().flags);
+    assert_eq!(settings.r_bool(actors[0].section(), "$player"), Some(true));
+    assert!(Entity::create_spawn_point(actors[0].section(), &settings).unwrap().is_player());
+}

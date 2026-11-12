@@ -635,7 +635,7 @@ async fn place_spawn(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                     if !settings.section_exist(&sec) || !settings.line_exist(&sec, "$spawn") {
                         return Err(refused());
                     }
-                    let e = Entity::create(&sec, settings.as_ref())
+                    let e = Entity::create_spawn_point(&sec, settings.as_ref())
                         .map_err(|_| CmdError::invalid("the spawn factory refused this section"))?;
                     let def = settings.r_float(&sec, "$def_sphere");
                     let needs = e.class_info().is_some_and(|c| c.class.has_shape());

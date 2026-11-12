@@ -27,6 +27,11 @@ HOME = (os.environ.get("GRIZZLY_QA_HOME") or tempfile.mkdtemp(prefix="grizzly_ho
 # What the editor needs on its command line to be this target.
 ARGS: list[str] = ["-mcp_port", str(PORT), "-home", HOME] if RUST else []
 
+# Every process a suite starts inherits the home: a Rust editor started without -home (a launcher's,
+# a helper's) takes it from GRIZZLY_HOME and never writes into the repository root.
+if RUST:
+    os.environ["GRIZZLY_HOME"] = HOME
+
 # The files of its own the editor could write in the repository root: a suite puts them back
 # byte for byte (for the Rust editor they stay untouched - it writes into HOME).
 KEPT = [os.path.join(REPO, name) for name in (
@@ -80,6 +85,34 @@ def mark(label: str) -> None:
     _LAST[0] = now
 
 
+# IO_REPARSE_TAG name-surrogate bit: a junction or a symbolic link, not a placeholder of a cloud folder
+_NAME_SURROGATE = 0x20000000
+
+
+def unlink_links(path: str) -> list[str]:
+    """Every junction and symbolic link under `path`, the link itself removed and never followed: what it points at
+    (the game's archives, for one) stays. Answers the links removed."""
+    gone: list[str] = []
+    try:
+        entries = list(os.scandir(path))
+    except OSError:
+        return gone
+    for e in entries:
+        try:
+            st = e.stat(follow_symlinks=False)
+        except OSError:
+            continue
+        if e.is_symlink() or getattr(st, "st_reparse_tag", 0) & _NAME_SURROGATE:
+            try:
+                (os.rmdir if e.is_dir() else os.unlink)(e.path)
+            except OSError:
+                os.unlink(e.path)
+            gone.append(e.path)
+        elif e.is_dir(follow_symlinks=False):
+            gone += unlink_links(e.path)
+    return gone
+
+
 def remove_tree(path: str) -> bool:
     """Removes a suite's temp folder for good: read-only entries too (a copy's git objects, which a plain rmtree
     leaves behind), with a few retries for a file the editor or a scanner lets go of a moment late. Says so when
@@ -94,6 +127,8 @@ def remove_tree(path: str) -> bool:
         except OSError:
             pass
 
+    # a link goes first, as a link: a delete never walks into what it points at
+    unlink_links(path)
     for _ in range(20):
         shutil.rmtree(path, onerror=writable)
         if not os.path.exists(path):

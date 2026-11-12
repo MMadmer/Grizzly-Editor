@@ -1096,6 +1096,8 @@ class Side:
         else:
             window = SCENARIOS[self.scenario].get("window", False)
             qa_target.guard_project(self.project)
+            # the home again in the environment: an editor this one starts without -home keeps to it too
+            env["GRIZZLY_HOME"] = self.home
             cmd = [RUST_EXE, "-mcp_port", str(self.port), "-home", self.home, "-nodlg", "-project", self.project]
             cmd += ([] if window else ["-headless"]) + (["-qa_github"] if qa else [])
             startup = subprocess.STARTUPINFO()

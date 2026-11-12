@@ -365,6 +365,106 @@ fn assemble(
     })
 }
 
+/// The first level id a level added to the linked game's graph takes (`XMS::LevelId`: the
+/// game's own levels live well below it).
+const JOINED_LEVEL_ID: u8 = 128;
+/// Where an added level lies in global space (`XmsGame::ComposeGameGraph`: away from the base map).
+const JOINED_OFFSET: Vec3 = Vec3::new(10000.0, 0.0, 10000.0);
+
+/// Play's game graph: the level's own graph appended to the linked game's, the way the game
+/// adds a module's level (`XmsGame::ComposeGameGraph`). The game's vertices, their ids and the
+/// graph's guid stay as they are - the game's scripts name its vertices by number - and the level
+/// follows them under a level id of its own, its vertices and cross table renumbered after them.
+/// `None` when the linked game already has a level of that name: the game's composer adds no level
+/// of the base game either.
+pub fn join_base(base: &GameGraph, level: &GameGraph) -> Result<Option<GameGraph>> {
+    let (Some(own), Some(own_cross)) = (level.levels.first(), level.cross_tables.first()) else {
+        return Err(BuildError::new("The level's game graph has no level."));
+    };
+    if base.levels.iter().any(|l| l.name.eq_ignore_ascii_case(&own.name)) {
+        return Ok(None);
+    }
+    if base.cross_tables.len() != base.levels.len() {
+        return Err(BuildError::new("The linked game's graph has no cross table for every level."));
+    }
+    let id = base.levels.iter().map(|l| l.id.saturating_add(1)).fold(JOINED_LEVEL_ID, u8::max);
+    if id == u8::MAX {
+        return Err(BuildError::new("The linked game's graph has no free level id."));
+    }
+    let first = base.vertices.len();
+    let total = first + level.vertices.len();
+    let count = u16::try_from(total).ok().filter(|&n| n < u16::MAX).ok_or_else(|| {
+        BuildError::new("The linked game's graph and the level hold too many game vertices together.")
+    })?;
+    // per vertex: the record, its edges, its death points
+    let mut joined: Vec<(GraphVertex, Vec<GraphEdge>, Vec<LevelPoint>)> = Vec::with_capacity(total);
+    for (i, v) in base.vertices.iter().enumerate() {
+        let i = i as u16;
+        joined.push((*v, base.edges_of(i).to_vec(), base.points_of(i).to_vec()));
+    }
+    for (i, v) in level.vertices.iter().enumerate() {
+        let edges = level
+            .edges_of(i as u16)
+            .iter()
+            .map(|e| GraphEdge { vertex_id: e.vertex_id.saturating_add(first as u16), distance: e.distance })
+            .collect();
+        let vertex = GraphVertex { global_point: v.local_point + JOINED_OFFSET, level_id: id, ..*v };
+        joined.push((vertex, edges, Vec::new()));
+    }
+    let edge_count: u32 = joined.iter().map(|j| j.1.len() as u32).sum();
+    let point_count: u32 = joined.iter().map(|j| j.2.len() as u32).sum();
+    let mut edge_offset = total as u32 * VERTEX_SIZE;
+    let mut point_offset = edge_offset + edge_count * EDGE_SIZE;
+    let (mut vertices, mut edges, mut death_points) =
+        (Vec::with_capacity(total), Vec::with_capacity(edge_count as usize), Vec::new());
+    for (v, e, p) in joined {
+        vertices.push(GraphVertex {
+            edge_offset,
+            point_offset,
+            edge_count: e.len() as u8,
+            death_point_count: p.len() as u8,
+            ..v
+        });
+        edge_offset += e.len() as u32 * EDGE_SIZE;
+        point_offset += p.len() as u32 * POINT_SIZE;
+        edges.extend(e);
+        death_points.extend(p);
+    }
+    let mut cells = Vec::with_capacity(own_cross.cells.len());
+    for n in 0..own_cross.level_vertex_count {
+        let (gv, d) = own_cross.cell(n).unwrap_or((0, 0.0));
+        cells.extend_from_slice(&gv.saturating_add(first as u16).to_le_bytes());
+        cells.extend_from_slice(&d.to_le_bytes());
+    }
+    // the game walks the cross tables in the order of the level ids
+    let mut tables: Vec<(GraphLevel, CrossTable)> =
+        base.levels.iter().cloned().zip(base.cross_tables.iter().cloned()).collect();
+    tables.sort_by_key(|(l, _)| l.id);
+    tables.push((
+        GraphLevel { name: own.name.clone(), offset: JOINED_OFFSET, id, section: "".into(), guid: own.guid },
+        CrossTable {
+            game_vertex_count: u32::from(count),
+            game_guid: base.guid,
+            cells: Bytes::from_vec(cells),
+            ..own_cross.clone()
+        },
+    ));
+    let (levels, cross_tables) = tables.into_iter().unzip();
+    Ok(Some(GameGraph {
+        version: base.version,
+        vertex_count: count,
+        edge_count,
+        death_point_count: point_count,
+        guid: base.guid,
+        levels,
+        vertices,
+        edges,
+        death_points,
+        cross_tables,
+        tail: Bytes::from_vec(Vec::new()),
+    }))
+}
+
 /// One level of a merge: its own game graph, the graph points it was made of and the
 /// caption other levels' connections name it by.
 #[derive(Clone, Debug)]
@@ -602,6 +702,80 @@ pub(crate) mod tests {
         assert_eq!(a_cells, 6);
         assert_eq!(g.graph.vertices[0].edge_offset, 2 * VERTEX_SIZE);
         assert_eq!(g.graph.vertices[1].edge_offset, 2 * VERTEX_SIZE + EDGE_SIZE);
+    }
+
+    /// A game graph of two levels, as a linked game's `all.spawn` holds one.
+    pub(crate) fn base_world() -> GameGraph {
+        let (la, lb) = (grid(4, 1, [1; 16]), grid(3, 1, [3; 16]));
+        let (na, nb) = (Arc::new(LevelNav::new(&la)), Arc::new(LevelNav::new(&lb)));
+        let pa = vec![point("a_start", 0.0, 0.0, "", ""), point("a_exit", 3.0, 0.0, "level_b", "b_entry")];
+        let pb = vec![point("b_entry", 0.0, 0.0, "level_a", "a_exit"), point("b_far", 2.0, 0.0, "", "")];
+        let ga = build_game_graph(&na, &pa, "l_a", [1; 16], [2; 16]).unwrap();
+        let gb = build_game_graph(&nb, &pb, "l_b", [3; 16], [4; 16]).unwrap();
+        let part = |id: u8, name: &str, caption: &str, graph: LevelGameGraph, nav: Arc<LevelNav>| LevelPart {
+            id,
+            name: name.into(),
+            caption: caption.into(),
+            section: format!("level{id}"),
+            offset: Vec3::new(f32::from(id) * 100.0, 0.0, 0.0),
+            graph,
+            nav,
+        };
+        let parts = vec![part(1, "l_a", "level_a", ga, na), part(2, "l_b", "level_b", gb, nb)];
+        merge_levels(&parts, [9; 16]).unwrap().0
+    }
+
+    #[test]
+    fn a_level_is_appended_to_the_linked_games_graph_with_its_ids_unchanged() {
+        let base = base_world();
+        let lg = grid(6, 2, [5; 16]);
+        let nav = LevelNav::new(&lg);
+        let own = build_game_graph(
+            &nav,
+            &[point("x", 0.0, 0.0, "", ""), point("y", 5.0, 1.0, "", "")],
+            "l_new",
+            [5; 16],
+            [6; 16],
+        )
+        .unwrap()
+        .graph;
+        let g = join_base(&base, &own).unwrap().unwrap();
+        // the game's vertices, edges and death points where they were, the graph's guid kept
+        let n = base.vertices.len();
+        assert_eq!(g.guid, base.guid);
+        assert_eq!(usize::from(g.vertex_count), n + own.vertices.len());
+        for i in 0..n as u16 {
+            let (a, b) = (&base.vertices[usize::from(i)], &g.vertices[usize::from(i)]);
+            assert_eq!(
+                (a.local_point, a.global_point, a.level_id, a.level_vertex),
+                (b.local_point, b.global_point, b.level_id, b.level_vertex)
+            );
+            assert_eq!(base.edges_of(i), g.edges_of(i));
+            assert_eq!(base.points_of(i), g.points_of(i));
+        }
+        assert!(!base.death_points.is_empty() && g.death_points.len() == base.death_points.len());
+        // the level under an id of its own, after the game's, with its cross table renumbered
+        let l = g.levels.last().unwrap();
+        assert_eq!((l.name.as_str(), l.id, l.guid), ("l_new", JOINED_LEVEL_ID, [5; 16]));
+        assert_eq!(g.levels.iter().map(|l| l.id).collect::<Vec<_>>(), [1, 2, JOINED_LEVEL_ID]);
+        let ct = g.cross_table(JOINED_LEVEL_ID).unwrap();
+        assert_eq!((ct.game_guid, ct.level_guid, ct.level_vertex_count), (base.guid, [5; 16], 12));
+        assert_eq!(ct.game_vertex_count, u32::from(g.vertex_count));
+        for c in 0..12 {
+            let (gv, _) = ct.cell(c).unwrap();
+            assert_eq!(usize::from(gv), n + usize::from(own.cross_tables[0].cell(c).unwrap().0));
+        }
+        let mine = &g.vertices[n];
+        assert_eq!(
+            (mine.level_id, mine.global_point),
+            (JOINED_LEVEL_ID, own.vertices[0].local_point + JOINED_OFFSET)
+        );
+        assert_eq!(g.edges_of(n as u16)[0].vertex_id as usize, n + 1);
+        // the file reads back as it was made, and a level the game already has is not added again
+        let back = GameGraph::parse_file(&Arc::from(g.to_bytes())).unwrap();
+        assert_eq!(back, g);
+        let again = build_game_graph(&nav, &[point("x", 0.0, 0.0, "", "")], "L_A", [5; 16], [6; 16]).unwrap();
+        assert!(join_base(&base, &again.graph).unwrap().is_none());
     }
 
     #[test]

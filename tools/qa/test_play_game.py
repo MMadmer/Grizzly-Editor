@@ -10,17 +10,20 @@ What it does:
      over the arena, and the scene is saved and built (Make All);
   2. compiles the geometry with the repository's XrLC (level_build compile_geometry: the editor runs it from a
      stage of the project whose fsgame.ltx names the project's levels);
-  3. starts Play: the editor builds the collision, the AI map, the game graph and editor.spawn, makes a game root
-     of its own beside the copy (root=; a root inside a project folder does not start) (the linked game's executables copied, a link to its archives, its loose
-     gamedata with the level staged into it, an appdata of its own), and runs the game there with
-     -start server(editor/single/alife/new);
-  4. reads the game's log until the level is loaded - the new game created from editor.spawn, the level's
-     geometry and collision read from levels\\mp_test, the actor in it - with no assert and no crash dump;
-  5. stops the game, closes the editor over MCP, removes the copy (the archives' link first).
+  3. starts Play: the editor builds the collision, the AI map, the game graph (joined onto the linked game's,
+     whose vertex numbers the game's start scripts name) and editor.spawn, makes a game root in a short temp folder
+     of its own (root=; the game takes paths of 255 characters at most) - the linked game's executables copied, a
+     link to its archives, its loose gamedata with the level staged into it, an appdata of its own - and runs the
+     game there with -start server(editor/single/alife/new);
+  4. reads the game's log until the level is loaded (LOADED, below), with no assert and no crash dump;
+  5. stops the game (Play's stop; one left running is ended and fails the run), closes the editor over MCP,
+     removes the copy and the root (the archives' link first, as a link).
 
-As of 12 Nov it FAILS at 4: the game stops in CSE_ALifeDynamicObject::on_register() for the actor right after
-"Loading spawn registry..." (STATE.md, "The reviewer's verification, closed", 3); the failure names that frame.
-Not part of run_all.py: it starts the game.
+The level is in when the game's log holds every line of LOADED: the new game made of editor.spawn, the player made
+of its actor, the client connected, the level's collision model built under the level's name, its geometry and
+collision read, and the load's synchronisation ended (the actor's first update has run by then: the game's start
+scripts spawn its kit there). Then five seconds more, and no assert, no fatal error, no crash dump.
+Opt-in in run_all.py (--with-game): it starts the real game, half a minute of the run.
 
 The editor runs on a hidden desktop (the game repository's Start-DetachedHiddenDesktopProcess.ps1), so the game it
 starts is there too and no window reaches the user's screen. Nothing of the installed game is written: its
@@ -59,9 +62,12 @@ USER_LTX = {"renderer": "renderer_r4", "vid_mode": "1024x768", "vid_window_mode"
 # what the game's log says once the level is in: the new game made of editor.spawn, the level's own files read
 LOADED = {
     "the new game is created from editor.spawn": "New game is successfully created!",
+    "the player is made of the spawn's actor": "# New player created.",
     "the client is connected": "client : connection accepted",
+    "the level's collision model is built for the level": "cdb_cache\\" + SCENE + "\\objspace.bin",
     "the level's geometry is read": "geometry level.geom",
-    "the level's collision is read": "levels\\" + SCENE,
+    "the level's collision is read": "[ground] collision mesh:",
+    "the level's load has ended": "End of synchronization",
 }
 FATAL = ("FATAL ERROR", "Expression    :", "stack trace:", "[error]", "! Cannot find level")
 
@@ -128,6 +134,20 @@ def user_ltx(root: str) -> None:
         f.write("\n".join(lines) + "\n")
 
 
+def games_in(root: str) -> list[int]:
+    """The processes running an executable of the game root (the game Play started there)."""
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command",
+                              "Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path } | "
+                              "ForEach-Object { \"$($_.Id)|$($_.Path)\" }"],
+                             capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    prefix = os.path.normcase(os.path.realpath(root)).rstrip("\\") + os.sep
+    return [int(pid) for pid, _, path in (l.partition("|") for l in out.splitlines())
+            if pid.strip().isdigit() and os.path.normcase(os.path.realpath(path.strip())).startswith(prefix)]
+
+
 def unlink_archives(root: str) -> None:
     link = os.path.join(root, "database")
     if os.path.lexists(link):
@@ -135,9 +155,7 @@ def unlink_archives(root: str) -> None:
         os.rmdir(link)
 
 
-def run(project: str, keep_log: str | None) -> None:
-    # beside the copy, in the run's temp folder (a game root inside a project folder does not start)
-    root = os.path.join(os.path.dirname(project), "playroot")
+def run(project: str, root: str, keep_log: str | None) -> None:
     for p in (os.path.join(project, "rawdata", "levels", SCENE + ".level"),):
         shutil.copy2(os.path.join(REPO, "rawdata", "levels", SCENE + ".level"), p)
     shutil.copytree(os.path.join(REPO, "rawdata", "levels", SCENE), os.path.join(project, "rawdata", "levels", SCENE))
@@ -211,6 +229,10 @@ def run(project: str, keep_log: str | None) -> None:
     still = mcp("level_build", action="status").get("running")
     mcp("level_build", action="play_stop")
     wait_idle(30)
+    left = games_in(root)
+    for pid in left:
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True)
+    check(not left, "Play's stop ends the game", "still running: pids %s (ended)" % left)
     for what, marker in LOADED.items():
         line = next((l for l in text.splitlines() if marker in l), "")
         check(bool(line), f"the game's log: {what}" + (f" - {line.strip()[:150]}" if line else ""), marker)
@@ -260,7 +282,11 @@ def main() -> int:
         return 2
     except OSError:
         pass
-    work = tempfile.mkdtemp(prefix="grizzly_playgame_")
+    work = tempfile.mkdtemp(prefix="gzpg_")
+    # a folder of its own, right in the temp folder: every path the game indexes under its root, its own shader
+    # cache's among them, has to fit 255 characters (play.rs, GAME_PATH_LIMIT) - a deeper root stops the game at
+    # its start, and Play refuses it
+    root = tempfile.mkdtemp(prefix="gzpr_")
     project = ""
     launcher = None
     pid_file, launcher_file = os.path.join(work, "editor.pid"), os.path.join(work, "launcher.pid")
@@ -284,7 +310,7 @@ def main() -> int:
             except OSError:
                 time.sleep(0.1)
         qa_target.mark("editor start (hidden desktop)")
-        run(project, args.keep_log)
+        run(project, root, args.keep_log)
     finally:
         try:
             mcp("level_build", action="play_stop", timeout=30)
@@ -303,11 +329,15 @@ def main() -> int:
             if editor_pid:
                 print(f"! the editor did not leave: ending pid {editor_pid}", flush=True)
                 subprocess.run(["taskkill", "/T", "/F", "/PID", str(editor_pid)], capture_output=True)
+        # a run cut short leaves no game behind either
+        for pid in games_in(root):
+            print(f"! the game did not leave: ending pid {pid}", flush=True)
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True)
         if os.environ.get("GRIZZLY_PLAY_KEEP"):
-            print("kept for a look: " + work, flush=True)
+            print("kept for a look: %s, %s" % (work, root), flush=True)
         else:
-            if project:
-                unlink_archives(os.path.join(work, "playroot"))
+            unlink_archives(root)
+            qa_target.remove_tree(root)
             qa_target.remove_tree(work)
     failed = [t for ok, t in results if not ok]
     print("PLAY GAME: %d pass, %d fail" % (len(results) - len(failed), len(failed)), flush=True)

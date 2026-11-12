@@ -340,6 +340,22 @@ impl GameGraph {
         self.edges.get(first..first + usize::from(v.edge_count)).unwrap_or(&[])
     }
 
+    /// The death points of a vertex: `point_offset` counts bytes from the start of the vertex
+    /// table, after the vertices and the edges.
+    #[must_use]
+    pub fn points_of(&self, vertex: u16) -> &[LevelPoint] {
+        let Some(v) = self.vertices.get(usize::from(vertex)) else { return &[] };
+        let base = self.vertices.len() * VERTEX_SIZE + self.edges.len() * EDGE_SIZE;
+        let Some(first) = (v.point_offset as usize)
+            .checked_sub(base)
+            .filter(|o| o % POINT_SIZE == 0)
+            .map(|o| o / POINT_SIZE)
+        else {
+            return &[];
+        };
+        self.death_points.get(first..first + usize::from(v.death_point_count)).unwrap_or(&[])
+    }
+
     /// The cross table of a level.
     #[must_use]
     pub fn cross_table(&self, level_id: u8) -> Option<&CrossTable> {

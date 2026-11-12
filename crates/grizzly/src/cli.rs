@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// The environment variable that names the home when `-home` does not.
+pub const HOME_VAR: &str = "GRIZZLY_HOME";
 
 /// The command line. Options keep the single dash the editor has always taken (`-project`,
 /// `-nodlg`); a double dash is accepted too.
@@ -16,8 +19,8 @@ pub struct Cli {
     pub mcp_port: Option<u16>,
     /// `-root <folder>`: the editor's data root, when it is not found from the executable.
     pub root: Option<PathBuf>,
-    /// `-home <folder>`: where the editor keeps its project list, settings and logs (the data
-    /// root without it). Tests give every editor one of its own.
+    /// `-home <folder>`: where the editor keeps its project list, settings and logs. Without it
+    /// `GRIZZLY_HOME`, then the data root. Tests give every editor one of its own.
     pub home: Option<PathBuf>,
     /// `-log_echo`: also print the log to stderr.
     pub echo: bool,
@@ -62,5 +65,33 @@ impl Cli {
             }
         }
         cli
+    }
+
+    /// The home: `-home`, else `env_home` (the value of [`HOME_VAR`]) when it is not blank, else the
+    /// data root. A test harness sets the variable once and every editor it starts keeps out of
+    /// the repository's own project list and settings, whether its command line names a home or not.
+    pub fn home(&self, env_home: Option<String>, root: &Path) -> PathBuf {
+        self.home
+            .clone()
+            .or_else(|| env_home.filter(|v| !v.trim().is_empty()).map(|v| PathBuf::from(v.trim())))
+            .unwrap_or_else(|| root.to_path_buf())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cli(args: &[&str]) -> Cli {
+        Cli::parse(std::iter::once("grizzly").chain(args.iter().copied()).map(str::to_owned))
+    }
+
+    #[test]
+    fn the_home_comes_from_the_command_line_then_the_environment_then_the_root() {
+        let root = Path::new("C:/editor");
+        assert_eq!(cli(&["-home", "C:/a"]).home(Some("C:/b".into()), root), PathBuf::from("C:/a"));
+        assert_eq!(cli(&[]).home(Some("C:/b".into()), root), PathBuf::from("C:/b"));
+        assert_eq!(cli(&[]).home(Some("  ".into()), root), root);
+        assert_eq!(cli(&[]).home(None, root), root);
     }
 }

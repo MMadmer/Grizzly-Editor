@@ -361,6 +361,30 @@ impl Entity {
         })
     }
 
+    /// `CSpawnPoint::SSpawnData::Create`: the factory's entity of a new spawn point, marked
+    /// `M_SPAWN_OBJECT_ASPLAYER` when its section says `$player = true`. The game takes the
+    /// player from that mark alone (`CALifeGraphRegistry::update`): without it no level is
+    /// current and the new game stops at the actor's `on_register`.
+    pub fn create_spawn_point(section: &str, settings: &dyn Settings) -> Result<Self> {
+        let mut e = Self::create(section, settings)?;
+        if settings.r_bool(section, "$player") == Some(true) {
+            e.set_player()?;
+        }
+        Ok(e)
+    }
+
+    /// `M_SPAWN_OBJECT_ASPLAYER` of the header: the entity the game makes the player.
+    #[must_use]
+    pub fn is_player(&self) -> bool {
+        self.header().flags & M_SPAWN_OBJECT_ASPLAYER != 0
+    }
+
+    /// Sets `M_SPAWN_OBJECT_ASPLAYER`.
+    pub fn set_player(&mut self) -> Result<()> {
+        self.header_mut()?.flags |= M_SPAWN_OBJECT_ASPLAYER;
+        Ok(())
+    }
+
     /// A spawn packet (`M_SPAWN` word first), as a scene's binary chunk or `all.spawn` holds it.
     /// `Err` only when even the header cannot be read; anything after it that does not decode
     /// gives an [`Opaque`] entity.
@@ -1011,6 +1035,22 @@ mod tests {
         ] {
             round_trip(section);
         }
+    }
+
+    #[test]
+    fn a_spawn_point_of_a_player_section_is_the_player() {
+        let mut s = settings();
+        s.set("actor", "$player", "on");
+        let actor = Entity::create_spawn_point("actor", &s).unwrap();
+        assert!(actor.is_player());
+        // the mark is written into the packet and read back from it, as a saved scene keeps it
+        let p = actor.to_spawn_packet();
+        assert!(Entity::from_spawn_packet(&p, &s).unwrap().is_player());
+        // the factory alone does not mark it, and a section without the key is not the player
+        assert!(!Entity::create("actor", &s).unwrap().is_player());
+        assert!(!Entity::create_spawn_point("stalker", &s).unwrap().is_player());
+        s.set("actor", "$player", "off");
+        assert!(!Entity::create_spawn_point("actor", &s).unwrap().is_player());
     }
 
     #[test]
