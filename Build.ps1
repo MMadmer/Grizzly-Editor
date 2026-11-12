@@ -42,6 +42,7 @@ $from = Join-Path $root "Intermediate\cargo\$(if ($Debug) { 'debug' } else { 're
 $files = [ordered]@{}
 foreach ($name in 'Grizzly.exe', 'Grizzly.pdb', 'grizzly-mcp.exe', 'grizzly_mcp.pdb') { $files[$name] = Join-Path $from $name }
 $files['THIRD_PARTY_NOTICES.txt'] = Join-Path $root 'licenses\THIRD_PARTY_NOTICES.txt'
+$files['LICENSE.txt'] = Join-Path $root 'LICENSE'
 $copied = @()
 foreach ($name in $files.Keys) {
     $src = $files[$name]

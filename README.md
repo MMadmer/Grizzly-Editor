@@ -87,3 +87,10 @@ claude mcp add -s user grizzly-editor -- "<repo>/Bin/x64/Release/grizzly-mcp.exe
   original source code.
 * [RedPanda Projects](https://github.com/RedPandaProjects/XRayEngine) — the
   x64 port of the SDK the C++ editor was based on.
+
+## License
+
+Grizzly Editor is released under the MIT License ([LICENSE](LICENSE)). The third-party code the two
+programs carry is listed with its licenses in
+[licenses/THIRD_PARTY_NOTICES.txt](licenses/THIRD_PARTY_NOTICES.txt), made from what they link
+(`python tools/rust/notices.py`); `Build.ps1` puts both files beside the programs.

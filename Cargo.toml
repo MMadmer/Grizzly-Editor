@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
-license = "LicenseRef-Grizzly"
+license = "MIT"
 publish = false
 
 [workspace.lints.rust]
@@ -94,9 +94,8 @@ encoding_rs = "0.8"
 glam = { version = "0.34", features = ["serde", "bytemuck"] }
 base64 = "0.23"
 hex = "0.4"
-# LZO1X: the decoder of the game archives' blocks; the tests' compressor
-lzo = { version = "0.1.4", default-features = false }
-lzokay-native = "0.2.1"
+# LZO1X: the decoder of the game archives' blocks (the tests turn its compressor on)
+lzokay-native = { version = "0.2.1", default-features = false, features = ["decompress"] }
 time = { version = "0.3", features = ["formatting", "parsing", "local-offset", "macros"] }
 # files, media
 notify = "8"

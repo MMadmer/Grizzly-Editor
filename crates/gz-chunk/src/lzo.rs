@@ -13,24 +13,20 @@
 //!
 //! What is here:
 //!
-//! - [`decompress`] - a block unpacked to exactly the size its owner states. The decoder is the
-//!   `lzo` crate (Apache-2.0, safe Rust, written for untrusted input): every read and every
-//!   copy is checked, and the stream has to end where the input ends. The editor carries no
-//!   code of the LZO library itself.
+//! - [`decompress`] - a block unpacked to exactly the size its owner states. The decoder is
+//!   `lzokay-native` (MIT, safe Rust, a port of lzokay - an implementation of the format of its
+//!   own): every read and every copy is checked, its output grows only as the stream fills it.
+//!   The editor carries no code of the LZO library itself.
 //! - [`unpack_entry`], [`read_archive_index`], [`ArchiveEntry`] - the archive framing above.
 //!
 //! Not here: a compressor - the editor reads the game's archives and writes none (the tests
-//! pack their fixtures with `lzokay-native`); `rtc9` (LZO1X-999 with a preset dictionary,
+//! pack their fixtures with the same crate's compressor, a feature only they turn on); `rtc9` (LZO1X-999 with a preset dictionary,
 //! network packets only); the byte scrambling of Shadow of Chernobyl's own `.db` archives,
 //! which the game applies to a directory before LZHUF when an archive has no header chunk.
 
 use std::borrow::Cow;
 
 use crate::{ChunkError, Reader, Result};
-
-/// A match's length grows by 255 for every byte of the stream, so a block never unpacks to
-/// more than this many times its own size.
-const MAX_RATIO: usize = 256;
 
 const INPUT_OVERRUN: ChunkError = ChunkError::Compression("the LZO stream ends early");
 const OUTPUT_OVERRUN: ChunkError =
@@ -40,28 +36,25 @@ const OUTPUT_SHORT: ChunkError =
 const LOOKBEHIND_OVERRUN: ChunkError = ChunkError::Compression("an LZO match starts before the output");
 const TRAILING: ChunkError = ChunkError::Compression("bytes follow the end of the LZO stream");
 const MALFORMED: ChunkError = ChunkError::Compression("the LZO stream is malformed");
-const NO_MEMORY: ChunkError = ChunkError::Compression("not enough memory to unpack the LZO stream");
 
 /// Unpacks `packed` into exactly `unpacked_len` bytes.
 ///
 /// The stream has to end exactly where the input ends and give exactly that many bytes, the
-/// two things the game checks. A stated size the stream cannot reach is refused before
-/// anything is reserved for it, and a size the machine cannot hold is an error, not an abort.
+/// two things the game checks. The stated size is only a limit: nothing is reserved for it
+/// that the stream does not fill, so a wrong size costs no memory.
 pub fn decompress(packed: &[u8], unpacked_len: usize) -> Result<Vec<u8>> {
-    if unpacked_len > packed.len().saturating_mul(MAX_RATIO).saturating_add(64) {
-        return Err(OUTPUT_SHORT);
-    }
-    let mut out = Vec::new();
-    out.try_reserve_exact(unpacked_len).map_err(|_| NO_MEMORY)?;
-    out.resize(unpacked_len, 0);
-    let n = lzo::decompress_into(packed, &mut out).map_err(|e| match e {
-        lzo::Error::InputOverrun => INPUT_OVERRUN,
-        lzo::Error::OutputOverrun => OUTPUT_OVERRUN,
-        lzo::Error::LookbehindOverrun => LOOKBEHIND_OVERRUN,
-        lzo::Error::InputNotConsumed => TRAILING,
-        lzo::Error::Malformed => MALFORMED,
+    use lzokay_native::Error;
+    let mut src = std::io::Cursor::new(packed);
+    let out = lzokay_native::decompress_bounded(&mut src, unpacked_len).map_err(|e| match e {
+        Error::OutputOverrun => OUTPUT_OVERRUN,
+        Error::LookbehindOverrun => LOOKBEHIND_OVERRUN,
+        Error::IOError(io) if io.kind() == std::io::ErrorKind::UnexpectedEof => INPUT_OVERRUN,
+        _ => MALFORMED,
     })?;
-    if n != unpacked_len {
+    if src.position() != packed.len() as u64 {
+        return Err(TRAILING);
+    }
+    if out.len() != unpacked_len {
         return Err(OUTPUT_SHORT);
     }
     Ok(out)
@@ -198,7 +191,7 @@ mod tests {
         assert!(decompress(&longer, 4000).is_err());
         // a match that points before the output
         assert!(decompress(&[18, b'a', 0x40, 0xff, 17, 0, 0], 4).is_err());
-        // a stated size the stream cannot reach reserves nothing
+        // a stated size the stream does not reach is an error and reserves nothing
         assert!(decompress(&[17, 0, 0], usize::MAX).is_err());
         assert!(decompress(&[17, 0, 0], 1 << 20).is_err());
     }

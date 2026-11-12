@@ -1394,7 +1394,6 @@ version = "0.1.0"
 dependencies = [
  "glam",
  "gz-base",
- "lzo",
  "lzokay-native",
  "thiserror 2.0.21",
 ]
@@ -2944,12 +2943,6 @@ dependencies = [
  "cc",
  "which",
 ]
-
-[[package]]
-name = "lzo"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1574f8e322bb9d442095896ff66d126e521f5a85ef7d7343a269bb7d6eeb3f0b"
 
 [[package]]
 name = "lzokay-native"
