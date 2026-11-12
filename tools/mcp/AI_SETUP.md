@@ -11,7 +11,9 @@ The Grizzly Editor (`Grizzly.exe`) hosts a local automation endpoint whenever it
 * alive before the window is on the screen — the Start page included, and without any
   window under `-headless`
 * the MCP stdio bridge is `grizzly-mcp.exe`, built beside the editor (`Bin\x64\Release`
-  by `Build.ps1`; `Intermediate\cargo\debug` by `bash tools/rust/cg.sh build -p gz-mcp-bridge`).
+  by `pwsh -NoProfile -File .\Build.ps1`, the one build: cargo alone, the repository holds no C++
+  and the level compilers are part of `Grizzly.exe`; `Intermediate\cargo\debug` by
+  `bash tools/rust/cg.sh build -p gz-mcp-bridge`).
   Its tools, their descriptions, schemas and annotations and the server's instructions are the
   catalogue `crates/gz-mcp/tools.json`, word for word. `GRIZZLY_MCP_PORT` points it at
   another port. `tools/mcp/grizzly_mcp.py`, the Python bridge of the C++ editor, is now a

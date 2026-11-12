@@ -31,23 +31,24 @@ target Dead Air Refined strictly.
 
 One command after a clean clone (needs pwsh 7, Rust through [rustup](https://rustup.rs) -
 `rust-toolchain.toml` picks the toolchain - and Visual Studio 2022+ with the *Desktop development
-with C++* workload and the MSVC v14.50 toolset; CMake and Ninja ship with Visual Studio):
+with C++* workload: its C compiler builds the vendored LuaJIT and libvorbis, its Windows SDK gives the
+libraries the editor links):
 
 ```powershell
 pwsh -NoProfile -File .\Build.ps1
 ```
 
-It builds the editor in release (`Grizzly.exe`, the MCP bridge `grizzly-mcp.exe`) and the level
-compilers it runs (`XrLC.exe`, `xrDO_Light.exe`, the last C++ of the repository, under `Source/`)
-into `Bin\x64\Release`, and says how long each part took. `-Only editor` or `-Only compilers` builds
-one part, `-Debug` the debug configuration, `-Out <folder>` puts the binaries elsewhere.
+It builds the editor in release - `Grizzly.exe` (the level compilers are part of it) and the MCP bridge
+`grizzly-mcp.exe` - and puts them with their PDBs and the third-party notices (`licenses\`) into
+`Bin\x64\Release`, touching nothing else there, and says how long it took. `-Debug` builds the debug
+configuration, `-Out <folder>` puts the files elsewhere. The repository holds no C or C++ of its own;
+the C++ editor and compilers it replaced are the tags `cpp-editor-last` and `cpp-compilers-last`.
 
 While working on the editor: `bash tools/rust/cg.sh build -p grizzly -p gz-mcp-bridge` (the debug
 build in `Intermediate\cargo\debug`). Four entry points prove a change: `bash tools/rust/check.sh`,
 `bash tools/rust/test.sh`, `python tools/qa/diff_editors.py` and `python tools/qa/run_all.py`.
 The architecture and the contract with the game are [docs/RUST_MIGRATION.md](docs/RUST_MIGRATION.md);
-the rules of the repository are [CLAUDE.md](CLAUDE.md). The C++ editor this one replaced is the tag
-`cpp-editor-last`.
+the rules of the repository are [CLAUDE.md](CLAUDE.md).
 
 ### Command line
 

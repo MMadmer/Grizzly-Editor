@@ -53,3 +53,6 @@ serde_json.workspace = true
 gz-lc.workspace = true
 gz-lc-light.workspace = true
 rayon.workspace = true
+
+[build-dependencies]
+gz-ico.workspace = true

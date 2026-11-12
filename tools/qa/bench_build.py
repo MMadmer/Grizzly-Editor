@@ -6,8 +6,8 @@ C++ one, on copies in the system temp folder (export_target and the build target
     frame_pacing at rest and during the clean build (the frame's own work apart from the wait for the
     presentation), the editor's CPU use over the build (process CPU time / wall time / logical cores),
     the clean build's and a rebuild's seconds (nothing changed);
-  * the C++ editor (Bin\\x64\\Release\\LevelEditor.exe, minimised, on 28016 - not run when something already
-    answers there): the clean build's and the rebuild's seconds. Its _projects.ini, level.ini and level_imgui.ini
+  * the C++ editor (the kept Bin\\x64\\CppEditor\\LevelEditor.exe, minimised, on 28016 - not run when it is not
+    there or something already answers there): the clean build's and the rebuild's seconds. Its _projects.ini, level.ini and level_imgui.ini
     come back byte for byte.
 
     python tools/qa/bench_build.py [--project D:\\XFinedProjects\\DARF-Overnight-Delivery] [--scene l03_agroprom.level]
@@ -32,7 +32,7 @@ import qa_target
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
-CPP_EXE = os.path.join(REPO, "Bin", "x64", "Release", "LevelEditor.exe")
+CPP_EXE = os.path.join(REPO, "Bin", "x64", "CppEditor", "LevelEditor.exe")
 CPP_KEPT = ["_projects.ini", "level.ini", "level_imgui.ini"]
 PAYLOAD_FILES = 24
 PAYLOAD_MB = 48
@@ -196,6 +196,8 @@ def rust(project: str, work: str, scene: str) -> dict:
 
 
 def cpp(project: str, work: str) -> dict:
+    if not os.path.isfile(CPP_EXE):
+        return {"skipped": f"no C++ editor: {CPP_EXE} is not there"}
     if answers(28016):
         return {"skipped": "something answers on 28016: the author's editor, not touched"}
     kept = {n: (open(os.path.join(REPO, n), "rb").read() if os.path.isfile(os.path.join(REPO, n)) else None)

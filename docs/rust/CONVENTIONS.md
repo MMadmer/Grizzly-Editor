@@ -5,10 +5,13 @@ The rules every crate under `crates/` follows. The plan and the architecture are
 
 ## The oracle
 
-- The C++ editor under `Source/` is the specification. Port **behaviour**: formats byte for
+- The C++ editor and compilers are the specification. Port **behaviour**: formats byte for
   byte, checks with the same outcome, problem codes and messages word for word. Do not port
   structure: no globals, no manager singletons, no `xr_string`.
-- `Source/` is never edited.
+- The C++ is no longer in the tree: the editor's sources are the tag `cpp-editor-last`, the
+  compilers' the tag `cpp-compilers-last` (`git show <tag>:Source/...`). A comment that names a
+  `Source/...` place (`Source/Editors/XrLC/...`, the oracle of a function) means that place at
+  those tags; such comments stay as they are.
 - Where the C++ is wrong in a way a file or an answer depends on, keep the behaviour and say so
   in a comment that starts with `// oracle:`.
 
@@ -52,8 +55,17 @@ The rules every crate under `crates/` follows. The plan and the architecture are
 - Dependencies come from `[workspace.dependencies]` (`foo.workspace = true`). A crate that
   needs one that is not there names it in its own `Cargo.toml` with a version; the root
   manifest is not edited by anyone but the integrator.
-- No `build.rs`, no proc macro beyond `serde` and `thiserror`, no generic public API where a
-  concrete one does.
+- No `build.rs` but the two executables' (`grizzly`: the C runtime and the icon; `gz-mcp-bridge`:
+  the icon, both through `gz-ico`), no proc macro beyond `serde` and `thiserror`, no generic
+  public API where a concrete one does.
+
+## Tests
+
+- No test writes, copies or renames a file with a program's extension (`.exe`, `.dll`, `.com`,
+  `.scr`, `.bat`, `.cmd`, `.ps1`, `.msi`) or one that starts with `MZ`: an antivirus reads a
+  fresh unsigned test binary that drops one as malware. Give the file a harmless name and let
+  the code under test take the name as a parameter; a literal that only lives in memory carries
+  `// program-files: in memory`. `tools/rust/check_test_files.py` (in `check.sh`) holds it.
 
 ## Crate skeleton
 
@@ -86,6 +98,7 @@ gz-base.workspace = true
 | `gz-editor` | `Editor` (pools, log, jobs, frames, notices, services, the open `ProjectSession`), `Registry`, `Args` / `ArgsExt`, `Reply`, `CmdError`, `DirtySource`, `AutoSave`, `fsx::{write_atomic, read_opt, read_text, WriteGuard}` (every writer checks `WriteGuard` - `Project::write_guard` - before it writes) |
 | `gz-chunk` | `Reader`, `Writer`, `Chunk`, `ChunkError`, `lzhuf`, `lzo` |
 | `gz-ltx` | `LtxDoc` (lossless editing), `Ltx` (the engine's resolved view) |
+| `gz-ico` | `images`, `for_side`, `largest` (an `.ico`'s images), `icon_res` / `embed` (the icon resource of an executable, from its `build.rs`) |
 
 ## An area crate
 

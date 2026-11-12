@@ -28,7 +28,7 @@ import qa_target  # noqa: E402
 
 SOURCE = r"D:\XFinedProjects\Test"
 SCENE = "l01_escape.level"
-CPP_EXE = os.path.join(REPO, "Bin", "x64", "Release", "LevelEditor.exe")
+CPP_EXE = os.path.join(REPO, "Bin", "x64", "CppEditor", "LevelEditor.exe")
 CPP_PORT = 28016
 CPP_KEPT = [os.path.join(REPO, n) for n in ("_projects.ini", "level.ini", "level_imgui.ini")]
 RECORD = os.path.join(REPO, "Intermediate", "qa", "benchmark_cpp.json")
@@ -104,6 +104,10 @@ def main() -> int:
     ok = True
     try:
         if args.again or not os.path.isfile(RECORD):
+            if not os.path.isfile(CPP_EXE):
+                print("FAIL no C++ record (%s) and no C++ editor to make one: %s is not there" % (RECORD, CPP_EXE),
+                      flush=True)
+                return 1
             if answers(CPP_PORT):
                 print("FAIL something answers on 127.0.0.1:%d (the author's editor): no C++ numbers to compare with"
                       % CPP_PORT, flush=True)

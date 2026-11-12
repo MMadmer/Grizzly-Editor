@@ -1,4 +1,4 @@
-//! The executable's link settings.
+//! The executable's link settings and its icon.
 
 fn main() {
     // One C runtime: the DLL one (ucrt, vcruntime140) the standard library and the Vorbis encoder
@@ -10,5 +10,11 @@ fn main() {
         for lib in ["libcmt.lib", "libucrt.lib", "libvcruntime.lib"] {
             println!("cargo:rustc-link-arg-bins=/NODEFAULTLIB:{lib}");
         }
+    }
+    // the editor's one icon, the picture Explorer and the taskbar show for Grizzly.exe
+    let ico = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/grizzly-editor-icon.ico");
+    if let Err(e) = gz_ico::embed(&ico) {
+        println!("cargo:warning=the icon: {e}");
+        std::process::exit(1);
     }
 }
