@@ -90,7 +90,8 @@ records removed; the command core (`gz-editor`); version 0.7.0; the contracts (`
 
 | Stream | Brief | Owns | Model |
 |---|---|---|---|
-| L1 Level domain | `briefs/L1-level-domain.md` | `gz-scene`, `gz-entities`, `gz-export-level`, `gz-levelbuild`, `gz-lc*` entry points; the `scene.*` and `level.*` commands; their suites | Opus 5.5, xhigh |
+| L1a Scene | `briefs/L1a-scene.md` | `gz-scene` (model, selection, file format, properties), `gz-entities`; the `scene.*` commands; their suites | Opus 5.5, xhigh |
+| L1b Build | `briefs/L1b-build.md` | `gz-levelbuild`, `gz-export-level`, the `gz-lc*` entry points, `gz-scene`'s bulk tools and zones; the `level.*` commands; their suites | Opus 5.5, xhigh |
 | G Graphs | `briefs/G-graphs.md` | `gz-nq` (model, layout, validate, doc), `gz-ui-graph`; the game half (disabled nodes, catalog summaries) | Opus 5.5, xhigh |
 | M Mod side | `briefs/M-mod-side.md` | `gz-mod`, `gz-build`, `gz-release`, `gz-publish`, `gz-catalog`, `gz-github`, `gz-screens`, `gz-world`, `gz-ui-mod`, `gz-ui-world`, `gz-ui-pda`, `gz-ui-release`; their commands and suites | Opus 5.5, high |
 
@@ -121,9 +122,11 @@ local build in `Bin\x64\Release`; `main` moved to the result; CLAUDE.md and the 
   actions over commands; `exec_command` and the `COMMAND_*` table are gone; `ui.*`, `app.*`, `shot.*`, `perf.*`
   are typed commands; the stall monitor records; the status line shows reports only; every defect of
   `ux_rest.md` B.1-B.3, B.11-B.13 is fixed or answered in the report.
-- **L1**: `.scene` round-trips every base scene of the editor's library (objects, spawn packets byte-exact through
-  named properties, groups, the painted layers); the SDK writer is gone; selection has no target class; `scene.*`
-  and `level.*` replace the 80 old names; the build is one pipeline command; nothing of it waits on the UI thread.
+- **L1** (L1a the scene, L1b the build): `.scene` round-trips every base scene of the editor's library (objects,
+  spawn packets byte-exact through named properties, groups, the painted layers); the SDK writer is gone;
+  selection has no target class; `scene.*` and `level.*` replace the 80 old names; the build is one pipeline
+  command with saved state; visibility cells, the ground and the AI map's bounds need no hand-made step; nothing
+  of it waits on the UI thread.
 - **G**: the six wire styles from one builder; readable nodes at every zoom; the author's 110-node quest fits and
   reads; the picker filters by the pin and ranks; frames, reroutes, collapse, disable (the game passes a disabled
   node through), align / distribute / straighten / select connected / insert on wire / replace; graph actions are
