@@ -3291,3 +3291,49 @@ implicit light loaded by the game was not run.
 - Section 9, the rules: level.cform's suppress bits left out; an MU reference's light 0.45 / 6; the paged rule's
   sector key, whole meshes, one-sided triangles against twice the C++ runs'; the sliding windows held per side;
   build.err byte for byte; a refused input.
+
+## Closing: the lead's part and the run on the final tree
+
+13 Nov. The author's word after the final review: the editor is MIT, and nothing stays open. Three engineers closed
+Play in place ("Closing: Play in place"), the compiler's proof ("Closing: the compiler's proof") and the old notes
+("Closing: the old notes", "Open: nothing" at the top). The lead's part:
+
+- **The license**: `LICENSE` (MIT), the workspace's `license = "MIT"`, the README's section; `Build.ps1` puts it
+  beside the programs as `LICENSE.txt`.
+- **The LZO decoder** is `lzokay-native` (MIT, safe Rust, a port of lzokay - an implementation of the format of its
+  own, long in use), with its compressor a feature only the tests turn on: one crate instead of two, of the editor's
+  own license. `gz_chunk::lzo::decompress` keeps its contract (exactly the stated size, the stream ends where the
+  input ends, the output grows only as the stream fills it).
+- **The game's commit** (`D:\Games\Dead Air\DeadAir-x64`, `3816558ff`, by path - the Play engineer's fourteen files,
+  nothing else of that tree) and the check of its deploy: the installed `xrEngine.exe`, `xrCore.dll` and `xrGame.dll`
+  equal `bin\x64\Release`, the backup `_predeploy_fsltx_20261113` holds 75 files.
+- **The oracle's commit**: the C++ working copy `D:\Games\XFined-Editor-cpp` (branch `cpp-compilers`), `4b11cc22` -
+  XrLC links with a 128 MB stack; the tag `cpp-compilers-last` points at it.
+- **A job started on the UI thread is the request's** (`gz-task` `in_scope_sync`, `current_scope`; `gz-app`'s UI
+  queue takes the caller's scope along): the sweep's "running" answer of a request past its timeout missed a job a
+  command starts through the shell's queue. A test holds it.
+- **The comparison's everyday run is its quick scenes** (`diff_compile.py` `QUICK`, ten scenes, eighty seconds);
+  `--all` is all seventeen, each compiled twice - forty minutes, for a change of the compiler.
+- **A fault of the lead's monitoring**: a `git status` in the game repository every 25 minutes, while the Play
+  engineer's suite listed the installed game (the repository lies inside the installation) - one of its runs failed
+  on `.git`. The suite's listing leaves that `.git` out; the lead runs no git command there while a suite runs.
+
+**The run on the final tree** - 13 Nov, 04:41 - 05:06, commit `157bfacb`, the release build, one step after
+another (`Intermediate/final4/`, `summary.txt` and a log per step):
+
+| Step | Result | Time |
+|---|---|---|
+| `Build.ps1` | the two programs, their PDBs, the notices, `LICENSE.txt` | 266 s |
+| `check.sh` | ok | 37 s |
+| `test.sh --all` | 78 binaries, 1194 tests green; the net: 3769 events in the tests' temp folder and 685 in the repository, no program file | 209 s |
+| `diff_editors.py --all` | 10 scenarios, 755 steps, 746 written files, 0 differ | 43 s |
+| `diff_compile.py` | the ten quick scenes PASS | 80 s |
+| `diff_compile.py --scene` l12u_control_monolith, mp_close_combat_implicit, l03u_agr_underground | PASS | 312 s |
+| `run_all.py --with-game` | 24 suites, 24 passed | 246 s |
+| `test_play_game.py --scene l03u_agr_underground` | 36 checks pass, the installed engine in place | 115 s |
+| `test_play_game.py --scene mp_close_combat` | 39 checks pass: implicit light and MU models in the game, the level in 19 s after Play | 140 s |
+
+All seventeen scenes of the compile comparison, each compiled twice, ran at the end of the compiler engineer's pass
+on the same compiler sources (`Intermediate/close-compiler/final_all.out`: 17 PASS, 2492 s). The installed game's
+listing before and after each game run is equal (107,495 entries); nothing changed under `D:\XFinedProjects` or the
+game's `modules`; no process, no Play root and no temp folder left.
