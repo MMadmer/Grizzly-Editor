@@ -94,7 +94,7 @@ class Editor:
 
     def close(self) -> None:
         try:
-            mcp("window_control", action="close", discard=True)
+            mcp("app.quit", discard=True)
         except OSError:
             pass
         if self.proc:
@@ -106,7 +106,7 @@ class Editor:
 
 def shot(folder: str | None, name: str) -> dict:
     # a screenshot is also how a frame gets drawn in a minimized editor: the tab lays itself out in it
-    pic = mcp("screenshot_editor")
+    pic = mcp("shot.window")
     if folder and pic.get("png_base64"):
         os.makedirs(folder, exist_ok=True)
         path = os.path.join(folder, name + ".png")
@@ -118,7 +118,7 @@ def shot(folder: str | None, name: str) -> dict:
 
 def escaped_in_tab() -> list | None:
     """What the kit saw spill out of the work area's windows last frame; None when ui_audit is not there."""
-    a = mcp("ui_audit")
+    a = mcp("ui.audit")
     if not isinstance(a.get("escaped"), list):
         return None
     return [e for e in a["escaped"] if "doc.host" in str(e.get("window", ""))]
@@ -192,7 +192,7 @@ def run_texture(project: str, shots: str | None) -> None:
     else:
         note("the editor library has no ed\\ed_nodata: " + json.dumps(t)[:200])
     # the linked game's: a block-compressed file names its own format and where the game keeps it
-    game = mcp("darf_list", ext="dds", filter="textures", limit=1)
+    game = mcp("file.list", source="game", kind="dds", query="textures", limit=1)
     files = game.get("files", []) if game.get("ok") else []
     if files and files[0].get("path"):
         t = mcp("texture_preview", action="open", path=files[0]["path"], source="darf")
@@ -215,12 +215,12 @@ def run_texture(project: str, shots: str | None) -> None:
 
 # ---------------------------------------------------------------------------------------------------- M
 def find_model() -> dict | None:
-    objs = mcp("list_assets", category="Objects", limit=5)
-    for a in objs.get("assets", []) if objs.get("ok") else []:
-        if a.get("name"):
-            return {"name": a["name"]}
+    objs = mcp("file.list", source="library", kind="objects", limit=5)
+    for a in objs.get("files", []) if objs.get("ok") else []:
+        if a.get("path"):
+            return {"name": a["path"]}
     # a prop of the game's: a static mesh the model pool always takes
-    game = mcp("darf_list", ext="ogf", filter="dynamics", limit=5)
+    game = mcp("file.list", source="game", kind="ogf", query="dynamics", limit=5)
     for a in game.get("files", []) if game.get("ok") else []:
         if a.get("path"):
             return {"name": a["path"], "source": "darf"}
@@ -265,7 +265,7 @@ def run_model(shots: str | None) -> None:
 
 # a character of the linked game draws with textures only its archives hold: each is found, none is the placeholder
 def run_game_character(shots: str | None) -> None:
-    game = mcp("darf_list", ext="ogf", filter="actors", limit=5)
+    game = mcp("file.list", source="game", kind="ogf", query="actors", limit=5)
     for a in game.get("files", []) if game.get("ok") else []:
         if not a.get("path"):
             continue
@@ -313,12 +313,12 @@ def run_library(kind: str, shots: str | None) -> None:
     mcp("library", kind=kind, action="state", search="")
     # a state call never switches tabs
     if before and before != kind:
-        mcp("ui_tab", action="activate", id=before)
+        mcp("ui.tab", action="activate", doc=before)
         s = mcp("library", kind=kind, action="state")
         check(s.get("ok") and s.get("active") is False, "L " + kind + ": state leaves the active tab alone", json.dumps(s)[:200])
     s = mcp("library", kind=kind, action="state")
     check(s.get("dirty") is False, "L " + kind + " is still clean", json.dumps(s)[:200])
-    c = mcp("ui_tab", action="close", id=kind)
+    c = mcp("ui.tab", action="close", doc=kind)
     if c.get("ok") is False and "unknown" in str(c.get("error", "")):
         note("ui_tab is not there: the " + kind + " tab stays open")
 
@@ -334,8 +334,8 @@ def run_libraries(shots: str | None) -> None:
 def run_sizes(project: str, shots: str | None) -> None:
     sizes = [(1707, 912, 1.5, "large"), (1280, 720, 1.0, "small")]
     for w, h, scale, tag in sizes:
-        r = mcp("window_control", action="resize", width=w, height=h)
-        u = mcp("ui_scale", value=scale)
+        r = mcp("app.window", action="resize", width=w, height=h)
+        u = mcp("ui.scale", value=scale)
         if not r.get("ok") or not u.get("ok"):
             note("window_control resize / ui_scale are not there: sizes not checked")
             return
@@ -352,7 +352,7 @@ def run_sizes(project: str, shots: str | None) -> None:
             if mcp("library", kind=kind, action="open").get("ok"):
                 shot(shots, "size_%s_%s" % (tag, kind))
                 audit("S " + tag + " " + kind)
-    mcp("ui_scale", value=1.5)
+    mcp("ui.scale", value=1.5)
 
 
 PHASES = "TMLS"

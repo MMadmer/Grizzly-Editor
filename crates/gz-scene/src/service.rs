@@ -128,7 +128,7 @@ impl SceneService {
             DirtyRegistered
         });
         let root = session.root.clone();
-        let editor_root = editor.paths.root.clone();
+        let editor_root = gz_project::library_root(editor);
         let mut initial = SceneState::default();
         initial.meta.guid = io::new_guid(root.as_os_str().len() as u64);
         let svc = session.services.get_or_init(|| SceneService {
@@ -476,5 +476,18 @@ pub async fn save_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: Pat
     let rec = svc.recovery.clone();
     editor.exec.io(move || rec.reset()).await;
     note_scene(editor, svc, &file);
+    // what the scene still takes from the editor's library goes on the project file's list
+    let snap = svc.store.snapshot();
+    let refs: Vec<String> = snap
+        .objects
+        .values()
+        .filter_map(|o| match &o.data {
+            crate::model::ObjData::SceneObject(d) if !d.visual_mode() => Some(d.reference.to_string()),
+            _ => None,
+        })
+        .collect();
+    if let Err(e) = gz_project::library::note_scene_refs(editor, refs).await {
+        editor.log.warn(format!("the project file's library list was not updated: {}", e.message));
+    }
     Ok(())
 }

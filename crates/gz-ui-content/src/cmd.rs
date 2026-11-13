@@ -26,7 +26,7 @@ fn refuse(message: impl Into<String>) -> CmdError {
 }
 
 const SOURCE_ERROR: &str = "source must be project, editor, darf or 0/1/2";
-const CATEGORY_ERROR: &str = "unknown category (see list_assets)";
+const CATEGORY_ERROR: &str = "unknown category (see file.list source=library)";
 
 /// `source`: a name or a number 0..2; absent is the current one.
 fn parse_source(args: &Args) -> Result<Option<Source>, CmdError> {
@@ -85,7 +85,7 @@ fn host_fields(out: &mut Map<String, Value>, host: &str, st: &Inner) {
 
 /// Brings the browser into view (`MakeVisible`) and answers the host it is seen in.
 async fn make_visible(editor: &Arc<Editor>) -> String {
-    match actions::call(editor, "ui_drawer", &[("action", json!("open")), ("id", json!("content"))]).await {
+    match actions::call(editor, "ui.drawer", &[("action", json!("open")), ("id", json!("content"))]).await {
         Ok(r) => r.get("host").and_then(Value::as_str).unwrap_or("none").to_owned(),
         Err(_) => "none".to_owned(),
     }
@@ -346,7 +346,7 @@ async fn find_named(
 /// (`RevealAsset`).
 pub(crate) async fn content_browser_open(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let Some(raw) = args.text("name") else {
-        return Err(refuse("missing 'name' argument (see list_assets / darf_list)"));
+        return Err(refuse("missing 'name' argument (see file.list)"));
     };
     let mut name = String::with_capacity(raw.len());
     for c in raw.chars() {
@@ -610,7 +610,7 @@ pub(crate) async fn content_browser_copy(ed: Arc<Editor>, args: Args, _origin: O
     let (files, err) = if dst.is_empty() {
         mirror(&ed, target.source, target.category, &list, overwrite).await
     } else {
-        if let Err((e, _)) = actions::call(&ed, "content_mkdir", &[("path", json!(dst))]).await {
+        if let Err((e, _)) = actions::call(&ed, "file.mkdir", &[("path", json!(dst))]).await {
             return Err(failed(0, e));
         }
         let entries: Vec<Entry> = if folder.is_empty() {
@@ -638,9 +638,8 @@ async fn mirror(
     for name in list {
         let mut one = String::new();
         if source == Source::Game {
-            match actions::call(ed, "darf_copy", &[("path", json!(name)), ("overwrite", json!(overwrite))])
-                .await
-            {
+            let pairs = [("from", json!("game")), ("path", json!(name)), ("overwrite", json!(overwrite))];
+            match actions::call(ed, "file.import", &pairs).await {
                 Ok(_) => files += 1,
                 Err((e, r)) => {
                     one = if r.get("exists").and_then(Value::as_bool) == Some(true) && !overwrite {
@@ -653,7 +652,7 @@ async fn mirror(
         } else if crate::model::category(category).lib.is_empty() {
             one = "this category has no file of its own - it lives inside a shared library file".to_owned();
         } else {
-            let root = ed.paths.root.clone();
+            let root = gz_project::library_root(ed);
             let (n, cat) = (name.clone(), category);
             let backing = ed.exec.io(move || actions::library_files(&root, cat, &n)).await;
             if backing.is_empty() {
@@ -661,12 +660,12 @@ async fn mirror(
             }
             for (from, dst) in backing {
                 let pairs = [
-                    ("src", json!(from.display().to_string())),
-                    ("dst", json!(dst)),
+                    ("path", json!(from.display().to_string())),
+                    ("to", json!(dst)),
                     ("recursive", json!(false)),
                     ("overwrite", json!(overwrite)),
                 ];
-                match actions::call(ed, "content_copy", &pairs).await {
+                match actions::call(ed, "file.copy", &pairs).await {
                     Ok(r) => files += r.get("files").and_then(Value::as_u64).unwrap_or(0),
                     Err((e, r)) => {
                         files += r.get("files").and_then(Value::as_u64).unwrap_or(0);

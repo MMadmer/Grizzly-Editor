@@ -1,7 +1,10 @@
-//! The Command Palette's ranking (docs/UI_DESIGN.md, section 6, "Command Palette").
+//! The Command Palette's rows and their order (docs/UI_DESIGN.md, section 5).
 //!
-//! Only what a row shows is matched - its name, where it lives, its keys - never the COMMAND_*
-//! id: "log" once found Submit to Mod Browser by COMMAND_MOD_CATALOG.
+//! A row is an action, an open tab, a panel of the Level tab, or a command of the level editor's
+//! own table. Only what a row shows is matched - its name, its category or path, its keys - with
+//! the kit's ranking (`gz_ui::rank`: word prefixes first, then letters in order). Without a query
+//! the actions run last from the palette lead, then the open tabs, then everything else in its
+//! group's order.
 
 use gz_ui::Icon;
 use serde_json::{Value, json};
@@ -9,229 +12,114 @@ use serde_json::{Value, json};
 /// One row of the palette.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaletteRow {
-    /// What runs it: `tab:<id>`, `panel:<id>`, `drawer:<id>`, or a command's id.
+    /// What runs it: an action's id, `tab:<id>`, `panel:<id>`, or a level command's id.
     pub id: String,
-    /// `tab`, `panel`, `drawer`, `command`.
+    /// `action`, `tab`, `panel`, `command`.
     pub kind: &'static str,
     pub label: String,
+    /// The muted column: an action's group, "Tab", "Panel".
     pub category: String,
-    /// "Edit > Undo", "Window > Panel", "Tab > quests\a.nqasset".
-    pub path: String,
-    /// The id without its preset: the registry's name.
-    pub name: String,
+    /// What else the row says: a tab's project-relative path.
+    pub detail: String,
     pub shortcut: String,
     pub icon: Icon,
-    /// The command's index in the shell's table; `None` for a tab, a panel or a drawer.
-    pub command: Option<usize>,
-    pub score: i32,
+    /// Off rows are listed with the reason and never run.
+    pub enabled: bool,
+    pub why: String,
+    /// Run from the palette lately: its place among the recent ones, 0 the newest.
+    pub recent: Option<usize>,
 }
 
 impl PaletteRow {
     #[must_use]
     pub fn to_json(&self) -> Value {
-        let command = self.command.map_or(-1, |c| i64::try_from(c).unwrap_or(-1));
         json!({
             "id": self.id,
             "kind": self.kind,
             "label": self.label,
             "category": self.category,
-            "path": self.path,
-            "name": self.name,
+            "detail": self.detail,
             "shortcut": self.shortcut,
-            "command": command,
-            "subcommand": if command < 0 { -1 } else { 0 },
-            "score": self.score,
+            "enabled": self.enabled,
+            "why": self.why,
+            "recent": self.recent.is_some(),
         })
     }
 }
 
-pub const NO_MATCH: i32 = 0x3fff_ffff;
-/// A match that is only every letter in order: never better than any real one.
-const LETTERS: i32 = 160;
+/// The layout store's list of the actions run from the palette, newest first.
+pub const RECENT_KEY: &str = "palette.recent";
+/// How many it keeps.
+pub const RECENT_KEEP: usize = 8;
 
-fn is_break(c: u8) -> bool {
-    matches!(c, b' ' | b'_' | b'-' | b'/' | b'\\' | b'>' | b'.' | b'(' | b':')
-}
-
-/// Lower is better. The whole name, then its start, then the start of one of its words ("log"
-/// finds Output Log before Catalog), then anywhere in it, then every letter in order.
-#[must_use]
-pub fn score_in(token: &str, hay: &str, letters: bool) -> i32 {
-    if token.is_empty() || hay.is_empty() {
-        return NO_MATCH;
-    }
-    if hay == token {
-        return 0;
-    }
-    let h = hay.as_bytes();
-    if hay.starts_with(token) {
-        return 4 + ((hay.len() - token.len()) / 8) as i32;
-    }
-    let mut from = 0;
-    while let Some(off) = hay.get(from..).and_then(|rest| rest.find(token)) {
-        let at = from + off;
-        if at > 0 && h.get(at - 1).copied().is_some_and(is_break) {
-            let mut word = 0;
-            for i in 0..at {
-                if h.get(i).copied().is_some_and(is_break)
-                    && h.get(i + 1).copied().is_some_and(|c| !is_break(c))
-                {
-                    word += 1;
-                }
-            }
-            return 16 + word * 2;
-        }
-        from = at + 1;
-        if from >= hay.len() {
-            break;
-        }
-    }
-    if let Some(sub) = hay.find(token) {
-        return 48 + sub as i32;
-    }
-    if !letters {
-        return NO_MATCH;
-    }
-    // each letter in order starts a word or follows the one before ("big" finds Build Into
-    // Game); letters scattered through the middle of words are no match at all
-    let t = token.as_bytes();
-    let (mut matched, mut first, mut previous, mut gaps) = (0usize, None::<usize>, 0usize, 0i32);
-    for (i, &c) in h.iter().enumerate() {
-        if matched >= t.len() {
-            break;
-        }
-        if t.get(matched) != Some(&c) {
-            continue;
-        }
-        let follows = first.is_some() && i == previous + 1;
-        if !follows && i > 0 && !h.get(i - 1).copied().is_some_and(is_break) {
-            continue;
-        }
-        if first.is_none() {
-            first = Some(i);
-        } else {
-            gaps += (i - previous - 1) as i32;
-        }
-        previous = i;
-        matched += 1;
-    }
-    match first {
-        Some(f) if matched == t.len() => LETTERS + f as i32 + gaps * 3,
-        _ => NO_MATCH,
-    }
-}
-
-/// Every word of the query matches what the row shows: the name counts most, the path less, the
-/// keys least.
-#[must_use]
-pub fn score_row(label: &str, path: &str, shortcut: &str, tokens: &[String]) -> i32 {
-    let (label, path, shortcut) = (label.to_lowercase(), path.to_lowercase(), shortcut.to_lowercase());
-    let mut total = 0;
-    for token in tokens {
-        let best = score_in(token, &label, true)
-            .min(score_in(token, &path, false).saturating_add(12))
-            .min(score_in(token, &shortcut, false).saturating_add(30));
-        if best >= NO_MATCH {
-            return NO_MATCH;
-        }
-        total += best;
-    }
-    total
-}
-
-/// The query's words, lower case.
-#[must_use]
-pub fn tokenize(query: &str) -> Vec<String> {
-    query.split_whitespace().map(str::to_lowercase).collect()
-}
-
-fn kind_rank(kind: &str) -> i32 {
+fn kind_rank(kind: &str) -> u8 {
     match kind {
-        "tab" => 0,
-        "panel" => 1,
-        "drawer" => 2,
+        "tab" => 1,
+        "panel" => 2,
         _ => 3,
     }
 }
 
-/// Ranks the rows for a query and keeps the best `limit`.
+/// The rows for a query, best first.
 #[must_use]
-pub fn rank(mut rows: Vec<PaletteRow>, query: &str, limit: usize) -> Vec<PaletteRow> {
-    let tokens = tokenize(query);
-    let ranked = !tokens.is_empty();
-    for row in &mut rows {
-        row.score = if ranked {
-            score_row(&row.label, &row.path, &row.shortcut, &tokens)
-        } else {
-            kind_rank(row.kind)
-        };
+pub fn rank(rows: Vec<PaletteRow>, query: &str) -> Vec<PaletteRow> {
+    if query.trim().is_empty() {
+        let mut rows = rows;
+        // the recent ones first, newest first; then tabs, panels, the rest as they came
+        rows.sort_by_key(|r| match r.recent {
+            Some(n) => (0, n),
+            None => (kind_rank(r.kind), 0),
+        });
+        return rows;
     }
-    rows.retain(|r| r.score < NO_MATCH);
-    rows.sort_by(|a, b| {
-        a.score
-            .cmp(&b.score)
-            .then_with(|| if ranked { a.label.len().cmp(&b.label.len()) } else { std::cmp::Ordering::Equal })
-            .then_with(|| a.path.to_lowercase().cmp(&b.path.to_lowercase()))
-            .then_with(|| a.id.to_lowercase().cmp(&b.id.to_lowercase()))
+    let order = gz_ui::rank::rank(rows.len(), query, |i| {
+        let r = &rows[i];
+        let second = if r.detail.is_empty() { r.category.as_str() } else { r.detail.as_str() };
+        (r.label.as_str(), second, r.shortcut.as_str())
     });
-    rows.truncate(limit);
-    rows
-}
-
-/// The part of the path before a command's own name: "Scene > Build" of "Scene > Build > Make All".
-#[must_use]
-pub fn parent(row: &PaletteRow) -> &str {
-    if row.kind != "command" {
-        return &row.path;
-    }
-    row.path.rfind(" > ").map_or("", |at| row.path.get(..at).unwrap_or(""))
+    let mut slots: Vec<Option<PaletteRow>> = rows.into_iter().map(Some).collect();
+    order.into_iter().filter_map(|i| slots.get_mut(i).and_then(Option::take)).collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{NO_MATCH, PaletteRow, rank, score_in};
+    use super::{PaletteRow, rank};
     use gz_ui::Icon;
 
-    fn row(kind: &'static str, label: &str, path: &str) -> PaletteRow {
+    fn row(kind: &'static str, label: &str, category: &str) -> PaletteRow {
         PaletteRow {
             id: format!("{kind}:{label}"),
             kind,
             label: label.into(),
-            category: String::new(),
-            path: path.into(),
-            name: String::new(),
+            category: category.into(),
+            detail: String::new(),
             shortcut: String::new(),
             icon: Icon::None,
-            command: None,
-            score: 0,
+            enabled: true,
+            why: String::new(),
+            recent: None,
         }
-    }
-
-    #[test]
-    fn words_beat_the_middle() {
-        assert_eq!(score_in("log", "log", true), 0);
-        assert!(score_in("log", "output log", true) < score_in("log", "catalog", true));
-        assert!(score_in("big", "build into game", true) < NO_MATCH);
-        assert_eq!(score_in("log", "build into game", true), NO_MATCH);
     }
 
     #[test]
     fn log_finds_the_output_log_first() {
         let rows = vec![
-            row("command", "Submit to Mod Browser", "Mod > Submit to Mod Browser"),
-            row("panel", "Output Log", "Window > Panel"),
-            row("drawer", "Log Drawer", "Window > Drawer"),
-            row("command", "Catalog", "Mod > Catalog"),
+            row("action", "Submit to Mod Browser", "Mod"),
+            row("panel", "Output Log", "Panel"),
+            row("action", "Log Drawer", "Window"),
+            row("action", "Catalog", "Mod"),
         ];
-        let out = rank(rows, "log", 10);
+        let out = rank(rows, "log");
         assert!(out.iter().take(2).any(|r| r.label == "Output Log"));
         assert!(!out.iter().any(|r| r.label == "Submit to Mod Browser"));
     }
 
     #[test]
-    fn no_query_lists_tabs_first() {
-        let rows = vec![row("command", "Undo", "Edit > Undo"), row("tab", "Level", "Tab")];
-        let out = rank(rows, "", 10);
-        assert_eq!(out.first().map(|r| r.kind), Some("tab"));
+    fn no_query_lists_the_recent_ones_then_the_tabs() {
+        let mut undo = row("action", "Undo", "Edit");
+        undo.recent = Some(0);
+        let rows = vec![row("action", "Save", "File"), row("tab", "Level", "Tab"), undo];
+        let out = rank(rows, "");
+        assert_eq!(out.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(), ["Undo", "Level", "Save"]);
     }
 }

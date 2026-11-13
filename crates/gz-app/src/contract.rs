@@ -1,6 +1,6 @@
-//! The UI constants MCP answers and QA pins (`cpp-editor-last:Source/Editors/XrECore/Editor/EditorUiContract.h`).
+//! The UI constants MCP answers and QA pins.
 //!
-//! Each one is defined here once; the code that draws it uses it from here and `ui_contract`
+//! Each one is defined here once; the code that draws it uses it from here and `ui.contract`
 //! reports them all, so a test reads the value instead of hardcoding it.
 
 /// Content Browser tiles (pt).
@@ -36,14 +36,15 @@ pub const WINDOW_START_PAGE: &str = "Start Page###start_page";
 pub const DRAWERS: [(&str, &str); 2] =
     [("content", "Content Drawer###drawer.content"), ("log", "Output Log###drawer.log")];
 
-/// The dialogs `ui_dialog` opens and closes: the MCP id and the window's name.
-pub const DIALOGS: [(&str, &str); 6] = [
+/// The dialogs `ui.dialog` opens and closes: the MCP id and the window's name.
+pub const DIALOGS: [(&str, &str); 7] = [
     ("package_release", "Package Release###dlg.package_release"),
     ("publish_release", "Publish Release###dlg.publish_release"),
     ("build_to_folder", "Build to Folder###dlg.build_to_folder"),
     ("export_flat", "Export Flat Gamedata###dlg.export_flat"),
     ("import_base_scene", "Import Base Scene###dlg.import_base_scene"),
     ("submit", "Submit to Mod Browser###dlg.catalog_submit"),
+    ("update", "Update###dlg.update"),
 ];
 
 /// The kinds of major tab.
@@ -65,7 +66,7 @@ pub const DOCUMENT_KINDS: [&str; 15] = [
     "sound_library",
 ];
 
-/// Kit dialogs a row, a document or a question raises; none opens over `ui_dialog`, each closes
+/// Kit dialogs a row, a document or a question raises; none opens over `ui.dialog`, each closes
 /// with it, as Esc.
 pub const KIT_DIALOGS: [&str; 28] = [
     "dlg.disable_game_updates",
@@ -103,10 +104,10 @@ pub const TASK_CARD: &str = "Tasks###tasks_card";
 
 /// The Command Palette: the modal's id (`screenshot_editor` `modal.id`).
 pub const PALETTE_ID: &str = "grizzly_command_palette";
-/// Its window, as the C++ editor named it.
+/// Its window.
 pub const PALETTE_WINDOW: &str = "Command Palette###grizzly_command_palette";
 
-/// Popups `ui_popup` puts up to be looked at.
+/// Popups `ui.popup` puts up to be looked at.
 pub const POPUPS: [&str; 15] = [
     "menu:<name>",
     "tab_menu:<tab>",
@@ -132,9 +133,12 @@ pub const MENUS: [&str; 11] =
 /// The viewport's menus (`viewport:<menu>`).
 pub const VIEWPORT_MENUS: [&str; 7] = ["options", "perspective", "show", "snap", "grid", "scale", "angle"];
 
-/// `ui_scale`: tests only, never saved.
+/// `ui.scale`: tests only, never saved.
 pub const UI_SCALE_MIN: f32 = 1.0;
 pub const UI_SCALE_MAX: f32 = 2.5;
+
+/// Preferences > Interface > Interface Scale: Auto, then these percentages.
+pub const INTERFACE_SCALES: [&str; 6] = ["auto", "100", "125", "150", "175", "200"];
 
 /// The theme presets: the wire key and the name the author reads.
 pub const THEME_PRESETS: [(&str, &str); 2] = [("grizzly-purple", "Grizzly Purple"), ("graphite", "Graphite")];

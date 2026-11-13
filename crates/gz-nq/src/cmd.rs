@@ -1,6 +1,7 @@
-//! The `quest_*` commands (`NqMcp::Handle`, and the graph tab's `McpEdit` / `McpFind` /
-//! `McpBookmarks` / `McpHistory` / `McpMinimap`). The wire is the C++ one: the same names, the
-//! same forgiving arguments, the same fields in the same order, the same error texts.
+//! The `quest_*` commands of open documents and the graph tab (edit, find, bookmarks, history,
+//! minimap). A graph's file is the author's: it is created, read and changed with file tools,
+//! checked with `asset.check` and searched with `asset.find`; these commands work on what the
+//! editor has open.
 
 use std::sync::Arc;
 
@@ -14,7 +15,6 @@ use crate::check;
 use crate::doc::{self, CanvasOp, DocOp, ViewOp, zoom_of};
 use crate::layout;
 use crate::pickers::{PickerEntry, PickerType};
-use crate::references;
 use crate::service::{DocHandle, NqDirty, NqService};
 use crate::text::{self, contains_no_case};
 use crate::validate::{self, NqProblem};
@@ -50,8 +50,7 @@ fn r1(v: f32) -> Value {
     json!((f64::from(v) * 10.0).round() / 10.0)
 }
 
-/// `path`, `id`, `title`, `nodes`, `errors`, `warnings`, `problems` [, `outline`] [, `lua`]
-/// (`AppendSummary`).
+/// `path`, `id`, `title`, `nodes`, `errors`, `warnings`, `problems` [, `outline`].
 fn summary(
     out: &mut Map<String, Value>,
     catalog: &crate::Catalog,
@@ -59,7 +58,6 @@ fn summary(
     g: &Graph,
     problems: &[NqProblem],
     with_outline: bool,
-    with_lua: bool,
 ) {
     out.insert("path".into(), json!(wire));
     out.insert("id".into(), json!(g.id));
@@ -73,12 +71,10 @@ fn summary(
         ol.push_str(&validate::to_text(problems));
         out.insert("outline".into(), json!(ol));
     }
-    if with_lua {
-        out.insert("lua".into(), json!(asset::write(catalog, g)));
-    }
 }
 
-/// `open`, `dirty` [, `undo`, `redo`] (`AppendDocState`).
+/// `open`, `dirty` [, `undo`, `redo`], and what the file on disk says the document does not
+/// show: `disk_error`, `missing`, `conflicts`.
 fn doc_state(out: &mut Map<String, Value>, d: Option<&DocHandle>) {
     out.insert("open".into(), json!(d.is_some()));
     out.insert("dirty".into(), json!(d.is_some_and(DocHandle::is_dirty)));
@@ -86,27 +82,43 @@ fn doc_state(out: &mut Map<String, Value>, d: Option<&DocHandle>) {
         let h = d.store.history();
         out.insert("undo".into(), json!(h.undo.len()));
         out.insert("redo".into(), json!(h.redo.len()));
+        let disk = d.disk();
+        if let Some(e) = disk.error {
+            out.insert("disk_error".into(), json!(e));
+        }
+        if disk.missing {
+            out.insert("missing".into(), json!(true));
+        }
+        if !disk.conflicts.is_empty() {
+            let list: Vec<Value> = disk
+                .conflicts
+                .iter()
+                .map(|c| {
+                    json!({
+                        "path": gz_luadata::path::show(&c.path),
+                        "mine": c.mine.as_ref().map(gz_luadata::to_json),
+                        "theirs": c.theirs.as_ref().map(gz_luadata::to_json),
+                        "line": c.span.map(|s| s.line),
+                    })
+                })
+                .collect();
+            out.insert("conflicts".into(), Value::Array(list));
+        }
     }
 }
 
-async fn respond_doc(
-    ed: &Editor,
-    svc: &NqService,
-    d: &DocHandle,
-    with_outline: bool,
-    with_lua: bool,
-) -> Map<String, Value> {
+async fn respond_doc(ed: &Editor, svc: &NqService, d: &DocHandle, with_outline: bool) -> Map<String, Value> {
     let catalog = svc.catalog(ed).await;
     let problems = svc.problems(ed, d).await;
     let snap = d.store.snapshot();
     let mut out = Map::new();
-    summary(&mut out, &catalog, &d.path().wire, &snap.graph, &problems, with_outline, with_lua);
+    summary(&mut out, &catalog, &d.path().wire, &snap.graph, &problems, with_outline);
     doc_state(&mut out, Some(d));
     out
 }
 
 /// A document that exists on disk opens on demand: MCP works without a canvas.
-async fn open_for_edit(ed: &Editor, svc: &NqService, path: &str) -> Result<Arc<DocHandle>, CmdError> {
+async fn open_for_edit(ed: &Arc<Editor>, svc: &NqService, path: &str) -> Result<Arc<DocHandle>, CmdError> {
     svc.open(ed, path).await.map_err(refused)
 }
 
@@ -123,63 +135,12 @@ async fn quest_catalog(ed: Arc<Editor>, _args: Args, _o: Origin) -> Reply {
     svc.catalog(&ed).await.to_json().map_err(refused)
 }
 
-async fn quest_list(ed: Arc<Editor>, _args: Args, _o: Origin) -> Reply {
-    let svc = service(&ed)?;
-    svc.refresh_tree().await;
-    let index = svc.index(&ed, true).await;
-    let env = svc.env(&ed, true).await;
-    let mut quests = Vec::with_capacity(index.entries.len());
-    for e in &index.entries {
-        let mut o = Map::new();
-        o.insert("path".into(), json!(e.rel));
-        if !e.usable() {
-            o.insert("readable".into(), json!(false));
-            o.insert("error".into(), json!(e.error));
-            o.insert("errors".into(), json!(1));
-            o.insert("warnings".into(), json!(0));
-            quests.push(Value::Object(o));
-            continue;
-        }
-        let d = svc.get_doc(&e.rel);
-        let (g, problems): (Graph, Arc<Vec<NqProblem>>) = match &d {
-            Some(d) => (d.store.snapshot().graph.clone(), svc.problems(&ed, d).await),
-            None => ((*e.graph).clone(), Arc::new(env.validate(&e.graph, &e.rel))),
-        };
-        o.insert("readable".into(), json!(true));
-        o.insert("id".into(), json!(g.id));
-        // a behaviour graph is listed beside the quests but is not one
-        o.insert("kind".into(), json!(g.kind.key()));
-        o.insert("title".into(), json!(text::preview(&g.title)));
-        o.insert("nodes".into(), json!(g.nodes.len()));
-        o.insert("errors".into(), json!(validate::count_errors(&problems)));
-        o.insert("warnings".into(), json!(validate::count_warnings(&problems)));
-        o.insert("open".into(), json!(d.is_some()));
-        o.insert("dirty".into(), json!(d.as_ref().is_some_and(|d| d.is_dirty())));
-        quests.push(Value::Object(o));
-    }
-    Ok(json!({ "count": quests.len(), "quests": quests }))
-}
-
-async fn quest_new(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
-    let path = need_path(&args)?;
-    let svc = service(&ed)?;
-    let p = svc.resolve(&path, true).map_err(refused)?;
-    let abs = p.abs.clone();
-    if ed.exec.io(move || abs.exists()).await {
-        return Err(refused("file already exists"));
-    }
-    // the extension says what is being made: .behasset is a behaviour graph
-    let text = asset::template_for(&p.wire);
-    svc.write_file(&p, text).await.map_err(refused)?;
-    let d = svc.open(&ed, &p.wire).await.map_err(refused)?;
-    Ok(Value::Object(respond_doc(&ed, &svc, &d, true, true).await))
-}
-
-async fn quest_open(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
+/// Opens a document and answers its summary.
+pub async fn quest_open(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
     let path = need_path(&args)?;
     let svc = service(&ed)?;
     let d = open_for_edit(&ed, &svc, &path).await?;
-    Ok(Value::Object(respond_doc(&ed, &svc, &d, true, false).await))
+    Ok(Value::Object(respond_doc(&ed, &svc, &d, true).await))
 }
 
 async fn quest_close(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
@@ -192,72 +153,6 @@ async fn quest_close(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
     }
 }
 
-/// The summary of a graph that is not open: read from the disk and validated.
-async fn closed_summary(
-    ed: &Editor,
-    svc: &NqService,
-    path: &str,
-    with_lua: bool,
-) -> Result<Map<String, Value>, CmdError> {
-    let (g, p) = svc.read_graph(ed, path).await.map_err(refused)?;
-    let env = svc.env(ed, true).await;
-    let problems = env.validate(&g, &p.wire);
-    let mut out = Map::new();
-    summary(&mut out, &env.catalog, &p.wire, &g, &problems, true, with_lua);
-    doc_state(&mut out, None);
-    Ok(out)
-}
-
-async fn quest_get(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
-    let path = need_path(&args)?;
-    let svc = service(&ed)?;
-    if let Some(d) = svc.get_doc(&path) {
-        return Ok(Value::Object(respond_doc(&ed, &svc, &d, true, true).await));
-    }
-    svc.resolve(&path, false).map_err(refused)?;
-    Ok(Value::Object(closed_summary(&ed, &svc, &path, true).await?))
-}
-
-async fn quest_write(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
-    let path = need_path(&args)?;
-    let Some(lua) = arg(&args, "lua").filter(|l| !l.is_empty()) else {
-        return Err(refused("missing 'lua' (the whole file text: return { nq = 1, ... })"));
-    };
-    let svc = service(&ed)?;
-    let p = svc.resolve(&path, true).map_err(refused)?;
-    let chunk = as_chunk(&lua);
-    let catalog = svc.catalog(&ed).await;
-    let name = asset::base_name(&p.wire);
-    let v = asset::parse_value(&chunk, &name).map_err(|e| refused(e.with_position()))?;
-    let (g, shape) = asset::graph_from_value(&catalog, &v);
-    if let Some(d) = svc.get_doc(&p.wire) {
-        // open document: replaced in memory with an undo step, saved by quest_save. The reader
-        // DROPS what it cannot type: taking the text anyway would put a document into the tab
-        // that no longer says what the caller wrote
-        if !shape.is_empty() {
-            return Err(refused(shape.join("; ")));
-        }
-        svc.send(&ed, &d, DocOp::Replace(g), Origin::Mcp).await?;
-        let mut out = Map::new();
-        out.insert("saved".into(), json!(false));
-        out.extend(respond_doc(&ed, &svc, &d, true, false).await);
-        return Ok(Value::Object(out));
-    }
-    // closed (or new) file: the canonical text goes to disk when it parses; problems are
-    // reported, only the build refuses them
-    if !shape.is_empty() {
-        return Err(refused(format!("nothing written - the editor cannot represent: {}", shape.join("; "))));
-    }
-    svc.write_file(&p, asset::write(&catalog, &g)).await.map_err(|e| refused(format!("{e}: {}", p.wire)))?;
-    let env = svc.env(&ed, true).await;
-    let problems = env.validate(&g, &p.wire);
-    let mut out = Map::new();
-    out.insert("saved".into(), json!(true));
-    summary(&mut out, &catalog, &p.wire, &g, &problems, true, false);
-    doc_state(&mut out, None);
-    Ok(Value::Object(out))
-}
-
 async fn undo_redo(ed: Arc<Editor>, args: Args, undo: bool) -> Reply {
     let path = need_path(&args)?;
     let svc = service(&ed)?;
@@ -266,7 +161,7 @@ async fn undo_redo(ed: Arc<Editor>, args: Args, undo: bool) -> Reply {
     if done.is_none() {
         return Err(refused(if undo { "nothing to undo" } else { "nothing to redo" }));
     }
-    Ok(Value::Object(respond_doc(&ed, &svc, &d, true, false).await))
+    Ok(Value::Object(respond_doc(&ed, &svc, &d, true).await))
 }
 
 async fn quest_undo(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
@@ -291,25 +186,15 @@ async fn quest_apply(ed: Arc<Editor>, args: Args, o: Origin) -> Reply {
     let reply = svc.send(&ed, &d, DocOp::ApplyOps(v), o).await?;
     let mut out = Map::new();
     out.insert("applied".into(), json!(reply.count));
-    out.extend(respond_doc(&ed, &svc, &d, true, false).await);
+    out.extend(respond_doc(&ed, &svc, &d, true).await);
     Ok(Value::Object(out))
-}
-
-async fn quest_validate(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
-    let path = need_path(&args)?;
-    let svc = service(&ed)?;
-    if let Some(d) = svc.get_doc(&path) {
-        return Ok(Value::Object(respond_doc(&ed, &svc, &d, true, false).await));
-    }
-    svc.resolve(&path, false).map_err(refused)?;
-    Ok(Value::Object(closed_summary(&ed, &svc, &path, false).await?))
 }
 
 async fn quest_save(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
     let path = need_path(&args)?;
     let svc = service(&ed)?;
     let d = svc.get_doc(&path).ok_or_else(|| refused("not open"))?;
-    svc.save(&ed, &d, args.flag("force")).await.map_err(refused)?;
+    svc.save(&ed, &d).await.map_err(refused)?;
     let problems = svc.problems(&ed, &d).await;
     Ok(json!({
         "path": d.path().wire,
@@ -323,7 +208,7 @@ async fn quest_reload(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
     let svc = service(&ed)?;
     let d = svc.get_doc(&path).ok_or_else(|| refused("not open"))?;
     svc.reload(&ed, &d).await.map_err(refused)?;
-    Ok(Value::Object(respond_doc(&ed, &svc, &d, true, false).await))
+    Ok(Value::Object(respond_doc(&ed, &svc, &d, true).await))
 }
 
 async fn quest_layout(ed: Arc<Editor>, args: Args, o: Origin) -> Reply {
@@ -351,19 +236,10 @@ async fn quest_layout(ed: Arc<Editor>, args: Args, o: Origin) -> Reply {
     Ok(Value::Object(out))
 }
 
-async fn quest_check_all(ed: Arc<Editor>, _args: Args, _o: Origin) -> Reply {
-    let svc = service(&ed)?;
-    let r = check::run(&ed, &svc).await;
-    Ok(json!({
-        "passed": r.errors == 0,
-        "errors": r.errors,
-        "warnings": r.warnings,
-        "error": r.error(),
-        "log": r.log,
-    }))
-}
-
-async fn quest_project_find(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
+/// The nodes of the project's graphs a text names (the graph tab's Find in Project): the
+/// open documents with unsaved edits laid over their files. Files and lines that mention a
+/// text are `asset.find`'s.
+pub async fn project_find(ed: Arc<Editor>, args: Args) -> Reply {
     let Some(query) = arg(&args, "query") else { return Err(refused("missing 'query'")) };
     let svc = service(&ed)?;
     let index = svc.index(&ed, true).await;
@@ -390,7 +266,9 @@ async fn quest_project_find(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
     }))
 }
 
-async fn quest_references(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
+/// Where the project's graphs name a thing of a type the catalog knows (a task, a variable, a
+/// character...), with the node and slot (the graph tab's References).
+pub async fn references(ed: Arc<Editor>, args: Args) -> Reply {
     let Some(ty) = arg(&args, "type").filter(|s| !s.is_empty()) else {
         return Err(refused("missing 'type'"));
     };
@@ -404,7 +282,7 @@ async fn quest_references(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
     };
     let index = svc.index(&ed, true).await;
     let catalog = svc.catalog(&ed).await;
-    let r = references::find(&index, &catalog, &ty, &value, scope.as_deref()).map_err(refused)?;
+    let r = crate::references::find(&index, &catalog, &ty, &value, scope.as_deref()).map_err(refused)?;
     let limit = usize::try_from(args.i64("limit").unwrap_or(500).clamp(1, 2000)).unwrap_or(500);
     let count = limit.min(r.references.len());
     Ok(json!({
@@ -418,8 +296,8 @@ async fn quest_references(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
         "generation": r.generation,
         "fingerprint": crate::index::fingerprint_text(r.fingerprint),
         "catalog_generation": r.catalog_generation,
-        "references": r.references.iter().take(count).map(references::Reference::to_json).collect::<Vec<_>>(),
-        "diagnostics": r.diagnostics.iter().map(references::Diagnostic::to_json).collect::<Vec<_>>(),
+        "references": r.references.iter().take(count).map(crate::references::Reference::to_json).collect::<Vec<_>>(),
+        "diagnostics": r.diagnostics.iter().map(crate::references::Diagnostic::to_json).collect::<Vec<_>>(),
     }))
 }
 
@@ -444,20 +322,34 @@ async fn quest_rename_task(ed: Arc<Editor>, args: Args, o: Origin) -> Reply {
     out.insert("to".into(), json!(to));
     out.insert("references_updated".into(), json!(reply.count));
     out.insert("runtime_identity_changed".into(), json!(true));
-    out.extend(respond_doc(&ed, &svc, &d, true, false).await);
+    out.extend(respond_doc(&ed, &svc, &d, true).await);
     Ok(Value::Object(out))
 }
 
-async fn quest_lookup(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
-    let ty = arg(&args, "type").unwrap_or_default();
-    let query = arg(&args, "query").unwrap_or_default();
-    let path = arg(&args, "path").unwrap_or_default();
-    let limit = usize::try_from(args.i64("limit").unwrap_or(50)).ok().filter(|&l| l > 0).unwrap_or(50);
-    if ty.is_empty() {
-        return Err(refused(
-            "missing 'type' (item_section, squad_section, level, smart, story_id, profile, community, info, spot_type, task_id, var_name, global_name, ref_name, node_id, quest_id, behaviour_id, role, way_path, character_id, level_changer)",
-        ));
-    }
+/// The lists of the project's documents `game.lookup` serves beside the pickers' own.
+const DOCUMENT_LISTS: [&str; 10] = [
+    "quest_id",
+    "behaviour_id",
+    "way_path",
+    "global_name",
+    "character_id",
+    "role",
+    "task_id",
+    "var_name",
+    "ref_name",
+    "node_id",
+];
+
+/// Every list the quest editor serves through `game.lookup`: the pickers' lists over the game's
+/// data and the project's documents.
+fn lookup_types() -> Vec<&'static str> {
+    PickerType::ALL.iter().map(|t| t.name()).chain(DOCUMENT_LISTS).collect()
+}
+
+/// One list of `game.lookup`: a picker's (ranked by the picker) or one of the project's
+/// documents (a document-scoped one needs `path`).
+async fn lookup(ed: Arc<Editor>, q: gz_game::LookupQuery) -> Result<gz_game::LookupAnswer, CmdError> {
+    let (ty, query, path, limit) = (q.ty, q.query, q.path.unwrap_or_default(), q.want.max(1));
     let svc = service(&ed)?;
     let picker = PickerType::from_name(&ty);
     let mut doc_entries: Vec<PickerEntry> = Vec::new();
@@ -493,7 +385,7 @@ async fn quest_lookup(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
             }
             "role" | "task_id" | "var_name" | "ref_name" | "node_id" => {
                 if path.is_empty() {
-                    return Err(refused("document-scoped type needs 'path'"));
+                    return Err(refused(format!("the list {ty} is a document's: give its path")));
                 }
                 let (g, _) = svc.read_graph(&ed, &path).await.map_err(refused)?;
                 match ty.as_str() {
@@ -534,38 +426,28 @@ async fn quest_lookup(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
                     }
                 }
             }
-            _ => return Err(refused("unknown lookup type")),
+            _ => return Err(refused(format!("no list {ty}"))),
         }
     }
     let pickers = svc.pickers(&ed).await;
     let (found, total, available): (Vec<&PickerEntry>, usize, bool) = match picker {
         None => {
-            let found = doc_entries
+            let matching: Vec<&PickerEntry> = doc_entries
                 .iter()
                 .filter(|e| {
                     query.is_empty() || contains_no_case(&e.id, &query) || contains_no_case(&e.name, &query)
                 })
-                .take(limit)
                 .collect();
-            (found, doc_entries.len(), true)
+            let total = matching.len();
+            (matching.into_iter().take(limit).collect(), total, true)
         }
         Some(t) => (pickers.search(t, &query, limit), pickers.entries(t).len(), pickers.available()),
     };
-    let entries: Vec<Value> = found
-        .iter()
-        .map(|e| {
-            let mut o = Map::new();
-            o.insert("id".into(), json!(e.id));
-            if !e.name.is_empty() {
-                o.insert("name".into(), json!(e.name));
-            }
-            if !e.extra.is_empty() {
-                o.insert("extra".into(), json!(e.extra));
-            }
-            Value::Object(o)
-        })
+    let entries = found
+        .into_iter()
+        .map(|e| gz_game::LookupEntry { id: e.id.clone(), name: e.name.clone(), extra: e.extra.clone() })
         .collect();
-    Ok(json!({ "type": ty, "available": available, "total": total, "entries": entries }))
+    Ok(gz_game::LookupAnswer { available, total, entries })
 }
 
 // ---- the graph tab's operations ---------------------------------------------------------------
@@ -580,7 +462,7 @@ fn view_state(out: &mut Map<String, Value>, v: &doc::View) {
 }
 
 /// The tab's document (`OpenMcpWindow`): opened on demand.
-async fn tab_doc(ed: &Editor, svc: &NqService, args: &Args) -> Result<Arc<DocHandle>, CmdError> {
+async fn tab_doc(ed: &Arc<Editor>, svc: &NqService, args: &Args) -> Result<Arc<DocHandle>, CmdError> {
     let Some(path) = arg(args, "path").filter(|p| !p.is_empty()) else {
         return Err(refused("path is required"));
     };
@@ -870,23 +752,14 @@ pub async fn quest_minimap(ed: Arc<Editor>, args: Args, o: Origin) -> Reply {
 /// Every `quest_*` command of the bridge except `quest_view`, the graph tab's own.
 pub fn register(reg: &mut Registry) {
     reg.add(AREA, "quest_catalog", quest_catalog);
-    reg.add(AREA, "quest_list", quest_list);
-    reg.add(AREA, "quest_new", quest_new);
     reg.add(AREA, "quest_open", quest_open);
     reg.add(AREA, "quest_close", quest_close);
-    reg.add(AREA, "quest_get", quest_get);
-    reg.add(AREA, "quest_write", quest_write);
     reg.add(AREA, "quest_undo", quest_undo);
     reg.add(AREA, "quest_redo", quest_redo);
     reg.add(AREA, "quest_apply", quest_apply);
-    reg.add(AREA, "quest_validate", quest_validate);
     reg.add(AREA, "quest_save", quest_save);
     reg.add(AREA, "quest_reload", quest_reload);
     reg.add(AREA, "quest_layout", quest_layout);
-    reg.add(AREA, "quest_lookup", quest_lookup);
-    reg.add(AREA, "quest_check_all", quest_check_all);
-    reg.add(AREA, "quest_project_find", quest_project_find);
-    reg.add(AREA, "quest_references", quest_references);
     reg.add(AREA, "quest_rename_task", quest_rename_task);
     reg.add(AREA, "quest_edit", quest_edit);
     reg.add(AREA, "quest_find", quest_find);
@@ -895,10 +768,12 @@ pub fn register(reg: &mut Registry) {
     reg.add(AREA, "quest_minimap", quest_minimap);
 }
 
-/// What the area hangs on the editor: the `content_create` templates of a quest and a
+/// What the area hangs on the editor: the `file.create` templates of a quest and a
 /// behaviour graph, open documents following a rename, the build's check of the graphs, and the
 /// unsaved documents.
 pub fn install(editor: &Editor) {
+    // the pickers' lists and the documents' are game.lookup's
+    gz_game::Lookups::of(editor).provide(lookup_types(), lookup);
     let templates = AssetTemplates::of(editor);
     templates.provide(TemplateKind::Quest, |cx| {
         Ok(asset::quest_template(&text::id_from_name(cx.stem)).into_bytes())
@@ -910,7 +785,7 @@ pub fn install(editor: &Editor) {
         if let Some(session) = ed.project_opt()
             && let Some(svc) = NqService::get(&session)
         {
-            svc.retarget(from, to);
+            svc.retarget(ed, from, to);
         }
     });
     // the graphs die with the project, the work in them does not (`NqDocs::SaveDirty` before
@@ -924,5 +799,11 @@ pub fn install(editor: &Editor) {
         }
     });
     gz_build::BuildChecks::of(editor).add(Arc::new(check::GraphCheck));
+    // the graphs as kinds of assets: asset.check gives their problems per file, positioned
+    let kinds = gz_asset::Kinds::of(editor);
+    for k in crate::kind::kinds() {
+        kinds.add(k);
+    }
+    kinds.covers_build_stage(check::STAGE);
     editor.add_dirty_source(Arc::new(NqDirty));
 }

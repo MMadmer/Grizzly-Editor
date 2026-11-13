@@ -1,4 +1,5 @@
-//! Keys: a chord, how it reads ("Ctrl+Shift+P"), and the shell's own chords.
+//! Keys: a chord and how it reads ("Ctrl+Shift+P"). What a chord does is an action's
+//! (`actions.rs`); the order in which takers see it is the shell's (`shell.rs`, `keys`).
 
 use egui::{Event, Key, Modifiers};
 
@@ -25,6 +26,16 @@ impl Chord {
     #[must_use]
     pub const fn ctrl_shift(key: Key) -> Self {
         Self { key, ctrl: true, shift: true, alt: false }
+    }
+
+    #[must_use]
+    pub const fn shift(key: Key) -> Self {
+        Self { key, ctrl: false, shift: true, alt: false }
+    }
+
+    #[must_use]
+    pub const fn alt(key: Key) -> Self {
+        Self { key, ctrl: false, shift: false, alt: true }
     }
 
     /// The chord a key event is, with the modifiers it came with.
@@ -150,24 +161,6 @@ fn key_from_label(part: &str) -> Option<Key> {
     }
 }
 
-/// A chord the shell owns: Ctrl+Shift+P, Ctrl+(Shift+)Tab, Ctrl+F4, Ctrl+Space, Ctrl+`, Ctrl+S,
-/// F11. A binding of the scene on one of them is ignored.
-#[must_use]
-pub fn shell_chord(c: &Chord) -> bool {
-    if c.alt {
-        return false;
-    }
-    if !c.ctrl {
-        return c.key == Key::F11 && !c.shift;
-    }
-    match c.key {
-        Key::P => c.shift,
-        Key::Tab => true,
-        Key::F4 | Key::Space | Key::Backtick | Key::S => !c.shift,
-        _ => false,
-    }
-}
-
 /// The key presses of this frame that nobody took yet, as chords, in order.
 #[must_use]
 pub fn pressed(events: &[Event]) -> Vec<Chord> {
@@ -198,7 +191,7 @@ pub fn consume(input: &mut egui::InputState, chord: &Chord) -> bool {
 mod tests {
     use egui::Key;
 
-    use super::{Chord, shell_chord};
+    use super::Chord;
 
     #[test]
     fn labels_read_back() {
@@ -219,15 +212,5 @@ mod tests {
         assert_eq!(Chord::parse("Ctrl+"), None);
         assert_eq!(Chord::parse("Ctrl+A+B"), None);
         assert_eq!(Chord::parse("Banana"), None);
-    }
-
-    #[test]
-    fn the_shell_owns_its_chords() {
-        assert!(shell_chord(&Chord::ctrl_shift(Key::P)));
-        assert!(shell_chord(&Chord::ctrl(Key::Tab)));
-        assert!(shell_chord(&Chord::ctrl_shift(Key::Tab)));
-        assert!(shell_chord(&Chord::new(Key::F11)));
-        assert!(!shell_chord(&Chord::ctrl_shift(Key::S)));
-        assert!(!shell_chord(&Chord::ctrl(Key::Z)));
     }
 }

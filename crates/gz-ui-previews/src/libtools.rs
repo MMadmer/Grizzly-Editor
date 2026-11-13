@@ -1,24 +1,20 @@
-//! The Libraries menu's maintenance rows and the commands behind them (`MenuLibraries`):
-//! Reload Objects (`CommandReloadObjects`), Reload Textures (`CommandReloadTextures`), Rewrite
-//! Texture Descriptions... (`RewriteThumbnails`), and Mute Sound (`CommandMuteSound`); the
-//! Texture Library's Cube Map \ Smaller Copy (`CreateSmallerCubeMap`).
-//!
-//! Refresh Sound Environment Geometry is not a row: its C++ command sets a flag whose work,
-//! `RealRefreshEnvGeometry`, is commented out - it does nothing there either.
+//! The Libraries menu's maintenance rows and the commands behind them: `library.reload` (the
+//! scene's objects or the textures read again), `library.rewrite_descriptions` (every `.thm` of the
+//! texture library written in this editor's format) and `library.sync` (textures against their
+//! sources, sounds against theirs); the Texture Library's Cube Map > Smaller Copy.
 
 use std::sync::Arc;
 use std::time::Instant;
 
-use gz_app::{CommandVar, CppAction, CppCommand, ShellBuilder, UiCommand};
-use gz_editor::Editor;
+use gz_app::{Action, ShellBuilder, args};
+use gz_editor::{CmdError, Editor, Origin, Registry, Reply, Spec, json};
 use gz_fmt_tex::{TextureFlags, TextureFormat, TextureParams, TextureType};
 use gz_ui::Icon;
 use gz_ui::dialog::{self, Answer, ConfirmSpec};
+use schemars::JsonSchema;
+use serde::Deserialize;
 
 use crate::paths::{EditorDirs, list_files};
-
-/// The Rust command of Rewrite Texture Descriptions... (the C++ ran it from the menu alone).
-pub const REWRITE_THUMBNAILS: &str = "COMMAND_REWRITE_THUMBNAILS";
 
 /// `Lib.ReloadObjects`: the scene's object library forgets what it read; the objects the scene
 /// shows are read again at once.
@@ -199,58 +195,119 @@ pub fn smaller_cube_map(editor: &Arc<Editor>, dirs: &EditorDirs, name: &str) {
     }
 }
 
-/// The rows and the commands of the Libraries menu's maintenance group.
+/// The actions and rows of the Libraries menu's maintenance group.
 pub fn install(b: &mut ShellBuilder) {
-    b.cpp_command(
-        CppCommand::new(
-            10,
-            "COMMAND_RELOAD_TEXTURES",
-            "",
-            CppAction::shell(|cx, _, _| {
-                reload_textures(cx.editor);
-                Ok(CommandVar::Int(1))
+    b.action(
+        Action::new("library.reload_objects", "Reload Objects", "Libraries", "library.reload")
+            .icon(Icon::Refresh)
+            .args(|_| args(&[("kind", "objects")]))
+            .enabled(|cx| {
+                let open = cx
+                    .editor
+                    .project_opt()
+                    .and_then(|s| s.services.get::<gz_scene::SceneService>())
+                    .is_some();
+                gz_app::Enabled::when(open, "No scene is open.")
             }),
+    );
+    b.action(
+        Action::new("library.reload_textures", "Reload Textures", "Libraries", "library.reload")
+            .icon(Icon::Refresh)
+            .args(|_| args(&[("kind", "textures")])),
+    );
+    b.action(
+        Action::new(
+            "library.rewrite_descriptions",
+            "Rewrite Texture Descriptions...",
+            "Libraries",
+            "library.rewrite_descriptions",
         )
-        .editable(false)
-        .face("Libraries", "Reload Textures", Icon::Refresh),
+        .icon(Icon::Refresh),
     );
-    b.cpp_command(
-        CppCommand::new(
-            73,
-            "COMMAND_RELOAD_OBJECTS",
-            "",
-            CppAction::shell(|cx, _, _| reload_objects(cx.editor).map(|()| CommandVar::Int(1))),
-        )
-        .editable(false)
-        .face("Libraries", "Reload Objects", Icon::Refresh)
-        .enabled(|ed, _| ed.project_opt().and_then(|s| s.services.get::<gz_scene::SceneService>()).is_some()),
+    for (order, id) in ["library.reload_objects", "library.reload_textures", "library.rewrite_descriptions"]
+        .into_iter()
+        .enumerate()
+    {
+        b.menu_action("Libraries", 2, i32::try_from(order).unwrap_or(0), id, None);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum LibraryKind {
+    Textures,
+    Sounds,
+    Objects,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct KindParams {
+    /// textures or sounds (sync); textures or objects (reload).
+    kind: LibraryKind,
+}
+
+/// `library.sync`: the library against its sources, as a job; the window asks first.
+async fn library_sync(ed: Arc<Editor>, p: KindParams, _origin: Origin) -> Reply {
+    if p.kind == LibraryKind::Objects {
+        return Err(CmdError::invalid("kind must be textures or sounds"));
+    }
+    gz_app::on_ui(&ed, move |shell, ctx| {
+        shell.with_cx(ctx, |cx| match p.kind {
+            LibraryKind::Textures => crate::synchronize_textures(cx),
+            _ => crate::synchronize_sounds(cx),
+        });
+        Ok(())
+    })
+    .await?;
+    Ok(json!({ "started": true }))
+}
+
+/// `library.reload`: what the editor read of the textures or of the scene's objects, read again.
+fn library_reload(ed: &Editor, p: &KindParams, _origin: Origin) -> Reply {
+    match p.kind {
+        LibraryKind::Textures => {
+            reload_textures(ed);
+            Ok(json!({ "reloaded": "textures" }))
+        }
+        LibraryKind::Objects => Err(CmdError::invalid("reload kind=objects runs from the window's thread")),
+        LibraryKind::Sounds => Err(CmdError::invalid("kind must be textures or objects")),
+    }
+}
+
+async fn library_reload_any(ed: Arc<Editor>, p: KindParams, origin: Origin) -> Reply {
+    if p.kind == LibraryKind::Objects {
+        reload_objects(&ed).map_err(|e| CmdError::new("refused", e))?;
+        return Ok(json!({ "reloaded": "objects" }));
+    }
+    library_reload(&ed, &p, origin)
+}
+
+async fn library_rewrite(ed: Arc<Editor>, _p: gz_editor::NoParams, _origin: Origin) -> Reply {
+    rewrite_thumbnails(&ed);
+    Ok(json!({ "started": true }))
+}
+
+/// Registers `library.sync`, `library.reload` and `library.rewrite_descriptions`.
+pub fn register(reg: &mut Registry) {
+    reg.area(
+        "library",
+        "The editor's libraries: textures, sounds, light animations, the objects the scene reads",
     );
-    b.cpp_command(
-        CppCommand::new(
-            38,
-            "COMMAND_MUTE_SOUND",
-            "",
-            CppAction::shell(|cx, p1, _| {
-                gz_app::gpu::Gpu::of(cx.editor).mute_held(cx.editor, p1.truthy());
-                Ok(CommandVar::Int(1))
-            }),
-        )
-        .editable(false)
-        .face("Libraries", "Mute Sound", Icon::None),
+    reg.cmd(
+        Spec::write("library.sync", "Synchronizes the textures or the sounds with their sources, as a job.")
+            .example("kind=textures"),
+        library_sync,
     );
-    b.command(UiCommand::new(
-        REWRITE_THUMBNAILS,
-        "Libraries",
-        "Rewrite Texture Descriptions...",
-        Icon::Refresh,
-        |cx| rewrite_thumbnails(cx.editor),
-    ));
-    b.cpp_command(
-        CppCommand::new(127, REWRITE_THUMBNAILS, "Libraries\\Rewrite Texture Descriptions", CppAction::Ui)
-            .face("Libraries", "Rewrite Texture Descriptions...", Icon::Refresh),
+    reg.cmd(
+        Spec::write("library.reload", "Reads the textures or the scene's objects again."),
+        library_reload_any,
     );
-    // the rows shown are the faces: their keys and their switches are the commands'
-    b.menu_item("Libraries", 2, 0, "COMMAND_RELOAD_OBJECTS");
-    b.menu_item("Libraries", 2, 1, "COMMAND_RELOAD_TEXTURES");
-    b.menu_item("Libraries", 2, 2, REWRITE_THUMBNAILS);
+    reg.cmd(
+        Spec::write(
+            "library.rewrite_descriptions",
+            "Writes every texture description of the library in this editor's format, as a job.",
+        ),
+        library_rewrite,
+    );
 }

@@ -42,6 +42,18 @@
 //!   ([`DialogInfo`]), `modal_on_top`, `close_dialog`
 //! - [`file_dialog`] - the system's file dialog: `pick` opens it for a person only, on a thread
 //!   of its own; an MCP caller or `-nodlg` gets nothing opened and `NAME_THE_FILE`
+//!
+//! One widget per job (each the only one of its kind; `-kitsheet` shows them all, [`kitsheet`]):
+//! - [`Section`] - the fold header: chevron, title, count, trailing actions; open state kept
+//! - [`Check`], [`Switch`] - a box for one of several, a switch for a setting that applies at once
+//! - [`Combo`], [`PickList`] - a value and the popup list that picks it: ranked search
+//!   ([`rank`]), virtualized rows, Recent and Favourites, the keyboard
+//! - [`ItemRows`] - a small editable table (cells, a cross per row, Add, drag to reorder);
+//!   [`Table`] - a record list (sortable resizable columns, virtualized rows, selection, a menu)
+//! - [`state::banner`], [`state::banner_list`] - a toned bar, with a list and an action per item
+//! - [`drop`] - typed drag payloads ([`drop::Payload`]) and drop zones ([`drop::Zone`])
+//! - [`text::fit`] - a cut text kept per text, face and width, for what is drawn every frame
+//! - [`upload::Tiled`] - a big picture that reaches the GPU a few tiles a frame
 
 pub mod audit;
 pub mod button;
@@ -52,27 +64,46 @@ pub mod text;
 pub mod theme;
 
 pub mod card;
+pub mod check;
 pub mod dialog;
+pub mod drop;
 pub mod file_dialog;
 pub mod form;
 pub mod grid;
+pub mod kitsheet;
 pub mod list;
 pub mod menu;
+pub mod pick;
+pub mod rank;
+pub mod rows;
 pub mod search;
+pub mod section;
 pub mod splitter;
 pub mod state;
 pub mod toolbar;
 pub mod units;
+pub mod upload;
 
-pub use button::{Button, Kind, icon_button, icon_button_sized, keycaps, keycaps_width, segmented};
+#[cfg(test)]
+mod testkit;
+#[cfg(test)]
+mod tests;
+
+pub use button::{
+    Button, Kind, icon_button, icon_button_sized, keycaps, keycaps_width, note_primary, segmented,
+};
 pub use card::CardAction;
+pub use check::{Check, Switch};
 pub use dialog::{Answer, Asker, ConfirmSpec, Dialog, DialogInfo, DialogSize, ResultSpec};
 pub use font::Font;
 pub use grid::{PathAction, PickAction, PropFlags, PropertyGrid};
 pub use icons::Icon;
 pub use list::{NavRowSpec, nav_row};
 pub use menu::{MenuItem, menu_item};
+pub use pick::{Combo, PickItem, PickList, Picked};
+pub use rows::{Col, ItemRows, RowsEdit, Table, TableEvent};
 pub use search::SearchField;
+pub use section::{Section, SectionResponse};
 pub use text::Clip;
 pub use theme::{Accent, Palette, Tone, metrics, palette};
 pub use toolbar::{Toolbar, ToolbarStyle};

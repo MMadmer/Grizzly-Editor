@@ -19,6 +19,7 @@ gz-vfs.workspace = true
 gz-game.workspace = true
 gz-mod.workspace = true
 gz-build.workspace = true
+gz-asset.workspace = true
 gz-lua.workspace = true
 gz-luadata.workspace = true
 gz-fmt-xml.workspace = true

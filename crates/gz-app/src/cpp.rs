@@ -1,7 +1,8 @@
-//! The C++ editor's command table (`UI_MainCommand.cpp` `TUI::RegisterCommands`,
-//! `UI_LevelMain.cpp` `CLevelMain::RegisterCommands`), as `list_commands` and `exec_command`
-//! answer it: every command under its C++ name and its C++ numeric id, with its description and
-//! its sub-commands, so a script written against the C++ editor keeps working.
+//! The level editor's numbered command table: what `list_commands` and `exec_command` answer and
+//! a macro plays - every command under its name (`COMMAND_ZOOM_EXTENTS`) and number, with its
+//! description and its sub-commands. It leaves with the level's actions (stream L2): until then
+//! the Level tab and the viewport register their commands here, and every other area's are
+//! [`crate::Action`]s.
 //!
 //! A row is registered with [`crate::ShellBuilder::cpp_command`]: its id, name, description,
 //! sub-commands with their default keys, and its action - the [`crate::UiCommand`]s its crate
@@ -9,17 +10,7 @@
 //! an editor command with arguments made of the two parameters, a function of the window, or a
 //! task that runs off the UI thread. A row whose action is not there is left out: the table never
 //! lists a command that does not work. Every row's sub-commands are `UiCommand`s too, so the
-//! palette lists them and the Keyboard page binds them (an `editable` row only, as in the C++).
-//!
-//! The C++ commands that are plumbing of its own shell are not rows: `COMMAND_INITIALIZE`,
-//! `DESTROY`, `QUIT`, `UPDATE_PROPERTIES`, `REFRESH_PROPERTIES`, `RENDER_FOCUS`, `RENDER_RESIZE`,
-//! `UPDATE_GRID`, `UPDATE_CAPTION`, `UPDATE_TOOLBAR`, `REFRESH_UI_BAR`, `RESTORE_UI_BAR`,
-//! `SAVE_UI_BAR`, `CREATE_SOUND_LIB`, `CHECK_MODIFIED`, `SET_SETTINGS`, `CLEAN_LIBRARY`,
-//! `UNLOAD_TEXTURES`, `EVICT_OBJECTS`, `EVICT_TEXTURES`, `SAVE_BACKUP`, `CHANGE_AXIS`. Neither are
-//! the ones whose C++ bodies do nothing (`CHANGE_SNAP`, `MOVE_CAMERA_TO`, `EDIT_COMMAND_LIST`,
-//! `SIMULATE`, `USE_SIMULATE_POSITIONS`, `LIBRARY_EDITOR`, `LANIM_EDITOR`, `FILE_MENU`,
-//! `SHOWCONTEXTMENU`, `SHOW_CLIP_EDITOR`, `REFRESH_SNAP_OBJECTS`, `SCENE_HIGHLIGHT_TEXTURE`,
-//! `REFRESH_SOUND_ENV_GEOMETRY` - its `RealRefreshEnvGeometry` is commented out).
+//! palette lists them and the Keyboard page binds them (an `editable` row only).
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -70,7 +61,7 @@ impl CommandVar {
         self.int().is_none_or(|v| v != 0)
     }
 
-    /// How the C++ answers it: a number as a JSON number, a text as a string.
+    /// As `list_commands` answers it: a number as a JSON number, a text as a string.
     #[must_use]
     pub fn json(&self) -> Value {
         match self {
@@ -97,7 +88,7 @@ impl CommandVar {
         (!inner.is_empty()).then(|| CommandVar::Str(inner.to_owned()))
     }
 
-    /// The C++ log line's form of a parameter: `"text"` or `12`.
+    /// A parameter as Log Commands writes it: `"text"` or `12`.
     fn log_form(&self) -> String {
         match self {
             CommandVar::Int(v) => v.to_string(),
@@ -222,13 +213,13 @@ impl CppAction {
     }
 }
 
-/// A row of the C++ table.
+/// A row of the table.
 pub struct CppCommand {
-    /// The C++ enum value.
+    /// The command's number.
     pub id: u32,
     /// `COMMAND_*`.
     pub name: SmolStr,
-    /// `Desc()`: "Edit\Undo"; empty for a command the C++ registered without one.
+    /// Its path: "Edit\Undo"; empty for a command registered without one.
     pub desc: SmolStr,
     /// `REGISTER_CMD_SE` / `_CE`: it takes a shortcut and the palette lists it.
     pub editable: bool,
@@ -303,7 +294,7 @@ impl CppCommand {
     }
 }
 
-/// A row as the shell keeps it: the C++ data and, per sub-command, the index of its face in the
+/// A row as the shell keeps it: the row and, per sub-command, the index of its face in the
 /// shell's commands.
 pub(crate) struct Row {
     pub cmd: CppCommand,
@@ -316,13 +307,8 @@ pub(crate) struct Table {
     pub rows: Vec<Row>,
 }
 
-/// Rust's own commands that have no C++ row: their ids continue after the C++ table.
-const RUST_ONLY: [(u32, &str); 4] = [
-    (123, "COMMAND_UNHIDE_ALL"),
-    (124, "COMMAND_MOD_SCREENS"),
-    (125, "COMMAND_MOD_BUILD_TO_FOLDER"),
-    (126, "COMMAND_MOD_EXPORT_FLAT"),
-];
+/// Commands numbered after the table's own rows.
+const RUST_ONLY: [(u32, &str); 1] = [(123, "COMMAND_UNHIDE_ALL")];
 
 /// The first id the table hands out to a command it was not told about.
 const FREE_IDS: u32 = 200;
@@ -330,7 +316,7 @@ const FREE_IDS: u32 = 200;
 impl Table {
     /// Builds the table: the rows registered (a later one of an id wins), their faces added to
     /// `commands` where the action is not a `UiCommand` of its own, rows whose action is missing
-    /// dropped, and every `UiCommand` nobody named given a row of its own after the C++ ones.
+    /// dropped, and every `UiCommand` nobody named given a row of its own after the numbered ones.
     pub(crate) fn build(mut rows: Vec<CppCommand>, commands: &mut Vec<UiCommand>) -> Self {
         // a later registration of an id replaces the earlier one
         let mut kept: Vec<CppCommand> = Vec::with_capacity(rows.len());
@@ -546,7 +532,6 @@ impl CommandLog {
 
 /// One line for a command run while Log Commands is on: `COMMAND_X ("a",1)`, a nested one after
 /// `;` and a dot per level.
-// oracle: the C++ keeps the flag and the depth but its Msg calls are commented out
 pub(crate) fn log_command(editor: &Editor, name: &str, p1: &CommandVar, p2: &CommandVar, depth: usize) {
     if !CommandLog::of(editor).on() {
         return;
@@ -560,35 +545,24 @@ pub(crate) fn preset_json(sub: &CppSub, keys: &str) -> Value {
     json!({ "desc": sub.desc, "p1": sub.p1.json(), "p2": sub.p2.json(), "keys": keys })
 }
 
-/// The C++ rows whose function is a `UiCommand` an area registers, and the shell's own: their
-/// ids, names, descriptions and sub-commands as `RegisterCommands` gives them. A row whose
-/// `UiCommand`s are not registered in this build is left out by [`Table::build`].
+/// The rows whose function is a `UiCommand` the Level tab or the viewport registers: their ids,
+/// names, descriptions and sub-commands. A row whose `UiCommand`s are not registered in this build
+/// is left out by [`Table::build`].
 pub(crate) fn known_rows() -> Vec<CppCommand> {
     use CppAction::Ui;
     let ui = |id: u32, name: &str, desc: &str| CppCommand::new(id, name, desc, Ui);
-    let plain_s = |id: u32, name: &str| CppCommand::new(id, name, "", Ui).editable(false);
     vec![
-        ui(3, "COMMAND_EDITOR_PREF", "Editor Preference"),
         ui(4, "COMMAND_CHANGE_ACTION", "Change Action")
             .subs(vec![CppSub::ints("Select", 0, 0), CppSub::ints("Add", 1, 0)]),
-        plain_s(5, "COMMAND_IMAGE_EDITOR"),
-        plain_s(6, "COMMAND_LIGHTANIM_EDITOR"),
-        plain_s(8, "COMMAND_CHECK_TEXTURES"),
-        plain_s(9, "COMMAND_REFRESH_TEXTURES"),
-        ui(18, "COMMAND_EXIT", "Exit"),
         ui(23, "COMMAND_ZOOM_EXTENTS", "Zoom")
             .subs(vec![CppSub::ints("Extent", 0, 0), CppSub::ints("Selected", 1, 0)]),
         ui(26, "COMMAND_TOGGLE_RENDER_WIRE", "Toggle Wireframe"),
-        ui(28, "COMMAND_BREAK_LAST_OPERATION", "Break Last Operation"),
         ui(30, "COMMAND_TOGGLE_SAFE_RECT", "Toggle Safe Rect"),
         ui(31, "COMMAND_TOGGLE_GRID", "Toggle Grid"),
         ui(34, "COMMAND_GRID_SLOT_SIZE", "Change Grid Size")
             .subs(vec![CppSub::ints("Decrease", 0, 0), CppSub::ints("Increase", 1, 0)]),
-        plain_s(45, "COMMAND_SOUND_EDITOR"),
-        plain_s(46, "COMMAND_SYNC_SOUNDS"),
         ui(47, "COMMAND_UNDO", "Edit\\Undo"),
         ui(48, "COMMAND_REDO", "Edit\\Redo"),
-        ui(56, "COMMAND_COMMAND_PALETTE", "Windows\\Command Palette"),
         ui(61, "COMMAND_SHOW_OBJECTLIST", "Scene\\Show Object List"),
         ui(93, "COMMAND_INVERT_SELECTION_ALL", "Selection\\Invert"),
         ui(94, "COMMAND_SELECT_ALL", "Selection\\Select All"),
@@ -605,15 +579,6 @@ pub(crate) fn known_rows() -> Vec<CppCommand> {
             CppSub::ints("Cycle", 3, 0),
         ]),
         ui(113, "COMMAND_DROP_TO_GROUND", "Object\\Drop To Ground"),
-        ui(114, "COMMAND_MOD_BUILD", "Mod\\Build Into Game"),
-        ui(115, "COMMAND_MOD_EDIT_MANIFEST", "Mod\\Edit Manifest"),
-        ui(116, "COMMAND_MOD_PACKAGE", "Mod\\Package Release"),
-        ui(117, "COMMAND_MOD_PUBLISH", "Mod\\Publish Release"),
-        ui(118, "COMMAND_MOD_RELEASES", "Mod\\Manage Releases"),
-        ui(119, "COMMAND_MOD_CHARACTERS", "Mod\\Characters"),
-        ui(120, "COMMAND_MOD_WORLD", "Mod\\World"),
-        ui(121, "COMMAND_MOD_PDA", "Mod\\PDA Interface"),
-        ui(122, "COMMAND_MOD_CATALOG", "Mod\\Submit to Mod Browser"),
     ]
 }
 
@@ -677,16 +642,14 @@ pub(crate) fn shell_rows() -> Vec<CppCommand> {
     rows
 }
 
-/// The Keyboard page's names of the commands that take a shortcut, in its order
-/// (`EditorPreferences.cpp` `kCommandNames`): id, group, label.
+/// The Keyboard page's names of the level's commands that take a shortcut, in its order: id,
+/// group, label.
 pub(crate) const COMMAND_NAMES: &[(&str, &str, &str)] = &[
     (r#"COMMAND_CLEAR"#, "File", "New Scene"),
     (r#"COMMAND_LOAD"#, "File", "Open Scene"),
     (r#"COMMAND_LOAD_FIRSTRECENT"#, "File", "Open Last Scene"),
-    (r#"COMMAND_SAVE."Save""#, "File", "Save"),
-    (r#"COMMAND_SAVE."Save As""#, "File", "Save As"),
-    (r#"COMMAND_FILE_MENU"#, "File", "File Menu"),
-    (r#"COMMAND_EXIT"#, "File", "Quit"),
+    (r#"COMMAND_SAVE."Save""#, "File", "Save Scene"),
+    (r#"COMMAND_SAVE."Save As""#, "File", "Save Scene As"),
     (r#"COMMAND_UNDO"#, "Edit", "Undo"),
     (r#"COMMAND_REDO"#, "Edit", "Redo"),
     (r#"COMMAND_CUT"#, "Edit", "Cut"),
@@ -694,9 +657,6 @@ pub(crate) const COMMAND_NAMES: &[(&str, &str, &str)] = &[
     (r#"COMMAND_PASTE"#, "Edit", "Paste"),
     (r#"COMMAND_DELETE_SELECTION"#, "Edit", "Delete"),
     (r#"COMMAND_SHOW_OBJECTLIST"#, "Edit", "Find in World Outliner"),
-    (r#"COMMAND_COMMAND_PALETTE"#, "Edit", "Command Palette"),
-    (r#"COMMAND_EDITOR_PREF"#, "Edit", "Preferences"),
-    (r#"COMMAND_BREAK_LAST_OPERATION"#, "Edit", "Cancel Running Job"),
     (r#"COMMAND_SELECT_ALL"#, "Selection", "Select All"),
     (r#"COMMAND_DESELECT_ALL"#, "Selection", "Deselect All"),
     (r#"COMMAND_INVERT_SELECTION_ALL"#, "Selection", "Invert Selection"),
@@ -712,7 +672,6 @@ pub(crate) const COMMAND_NAMES: &[(&str, &str, &str)] = &[
     (r#"COMMAND_CHANGE_ACTION."Select""#, "Viewport Tools", "Stop Placing"),
     (r#"COMMAND_ZOOM_EXTENTS."Extent""#, "View", "Frame All"),
     (r#"COMMAND_ZOOM_EXTENTS."Selected""#, "View", "Frame Selection"),
-    (r#"COMMAND_MOVE_CAMERA_TO"#, "View", "Move Camera To"),
     (r#"COMMAND_TOGGLE_RENDER_WIRE"#, "View", "Wireframe"),
     (r#"COMMAND_TOGGLE_GRID"#, "View", "Show Grid"),
     (r#"COMMAND_GRID_SLOT_SIZE."Decrease""#, "View", "Smaller Grid Cells"),
@@ -738,23 +697,12 @@ pub(crate) const COMMAND_NAMES: &[(&str, &str, &str)] = &[
     (r#"COMMAND_CHANGE_TARGET."Static Wallmark""#, "Tools Panel", "Wallmark Tool"),
     (r#"COMMAND_CHANGE_TARGET."Fog Volume""#, "Tools Panel", "Fog Volume Tool"),
     (r#"COMMAND_DROP_TO_GROUND"#, "Object", "Drop to Ground"),
-    (r#"COMMAND_SIMULATE"#, "Object", "Simulate Physics"),
-    (r#"COMMAND_USE_SIMULATE_POSITIONS"#, "Object", "Apply Simulated Positions"),
     (r#"COMMAND_BUILD"#, "Make", "Make All"),
     (r#"COMMAND_MAKE_GAME"#, "Make", "Make Game"),
     (r#"COMMAND_MAKE_DETAILS"#, "Make", "Make Details"),
     (r#"COMMAND_MAKE_HOM"#, "Make", "Make HOM"),
     (r#"COMMAND_MAKE_SOM"#, "Make", "Make SOM"),
     (r#"COMMAND_MAKE_AIMAP"#, "Make", "Make AI Map"),
-    (r#"COMMAND_MOD_BUILD"#, "Mod", "Build Into Game"),
-    (r#"COMMAND_MOD_EDIT_MANIFEST"#, "Mod", "Mod Settings"),
-    (r#"COMMAND_MOD_CHARACTERS"#, "Mod", "Characters"),
-    (r#"COMMAND_MOD_WORLD"#, "Mod", "World Rules"),
-    (r#"COMMAND_MOD_PDA"#, "Mod", "PDA Interface"),
-    (r#"COMMAND_MOD_PACKAGE"#, "Mod", "Package Release"),
-    (r#"COMMAND_MOD_PUBLISH"#, "Mod", "Publish Release"),
-    (r#"COMMAND_MOD_RELEASES"#, "Mod", "Releases"),
-    (r#"COMMAND_MOD_CATALOG"#, "Mod", "Submit to Mod Browser"),
     (r#"COMMAND_SHOW_PROPERTIES"#, "Window", "Details"),
     (r#"COMMAND_OPTIONS"#, "Window", "Details (Scene Options)"),
     (r#"COMMAND_SHOW_WORLD_OUTLINER"#, "Window", "World Outliner"),
@@ -769,8 +717,7 @@ pub(crate) const COMMAND_NAMES: &[(&str, &str, &str)] = &[
     (r#"COMMAND_RUN_MACRO."Slot #8""#, "Macros", "Run Macro 8"),
 ];
 
-/// The group and label `shortcuts` and the Keyboard page show for a sub-command
-/// (`CCustomPreferences::CommandName`): the listed name, or the description's last part with
+/// The group and label `app.keys` and the Keyboard page show for a sub-command: the listed name, or the description's last part with
 /// the parts before it as the group ("General" without one).
 pub(crate) fn command_name(id: &str, desc: &str, sub_desc: &str) -> (String, String) {
     if let Some((_, group, label)) = COMMAND_NAMES.iter().find(|(i, _, _)| *i == id) {

@@ -12,6 +12,8 @@ cd "$(dirname "$0")/../.." || exit 2
 mkdir -p Intermediate
 unset NoDefaultCurrentDirectoryInExePath
 bad=0
+# every program this script starts runs under a time limit and is ended with what it started
+limited="python tools/rust/limited.py"
 
 echo "== clippy"
 cargo clippy --workspace --all-targets > Intermediate/check-clippy.log 2>&1
@@ -69,7 +71,7 @@ else
     exe=${GRIZZLY_QA_EXE:-Intermediate/cargo/debug/Grizzly.exe}
     twin="$(dirname "$exe")/Grizzly-Cmd.exe"
     # a commandlet: no window, no port, its own log; the answer on stdout and 0
-    if listing=$(timeout 60 "$twin" help -home Intermediate/check-home 2>&1) && echo "$listing" | grep -q "^Areas$"; then
+    if listing=$($limited 60 "$twin" help -home Intermediate/check-home 2>&1) && echo "$listing" | grep -q "^Areas$"; then
         bare=$(echo "$listing" | sed -n 's/^Without a card (\([0-9]*\)).*/\1/p')
         echo "commands: help answers${bare:+; $bare commands still without a card}"
     else
@@ -114,13 +116,15 @@ if [ -f "$release/Grizzly.exe" ] && [ -f "$release/Grizzly-Cmd.exe" ] && [ -f "$
         bad=1
     fi
     # the twin runs the editor beside it for a shell: the same answer, the editor's exit code
-    twin=$("$release/Grizzly-Cmd.exe" run ping -json -home Intermediate/check-home 2>&1); twin_code=$?
-    editor=$("$release/Grizzly.exe" run ping -json -home Intermediate/check-home 2>&1)
-    "$release/Grizzly-Cmd.exe" -home Intermediate/check-home -compile "$release/no-such-level" > /dev/null 2>&1; refused=$?
+    # a release build older than the commandlets would open a window and wait: every run is limited
+    twin=$($limited 30 "$release/Grizzly-Cmd.exe" run ping -json -home Intermediate/check-home 2>&1); twin_code=$?
+    editor=$($limited 30 "$release/Grizzly.exe" run ping -json -home Intermediate/check-home 2>&1)
+    $limited 30 "$release/Grizzly-Cmd.exe" -home Intermediate/check-home -compile "$release/no-such-level" > /dev/null 2>&1; refused=$?
     if [ -n "$twin" ] && [ "$twin" = "$editor" ] && [ $twin_code -eq 0 ] && [ $refused -ne 0 ]; then
         echo "command line: Grizzly-Cmd.exe answers as the editor does and ends with its exit code"
     else
         echo "command line: Grizzly-Cmd.exe said '$twin' (exit $twin_code), the editor '$editor'; a refused compile ended with $refused"
+        [ $twin_code -eq 124 ] && echo "command line: the release build in $release is older than the sources - pwsh -NoProfile -File ./Build.ps1"
         bad=1
     fi
 else

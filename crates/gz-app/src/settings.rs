@@ -1,5 +1,6 @@
-//! The editor's own settings file: the preferences, the theme, the window's place, the layout
-//! store and the shortcuts the author bound.
+//! The editor's own settings file: the preferences, the accent and the interface scale, the
+//! window's place, the layout store (sizes and the kit's short lists) and the keys the author
+//! bound.
 //!
 //! One LTX file under the editor's data root, read once at start and written when something
 //! changed - on the IO pool, never from a frame. Nothing is migrated from `level.ini`.
@@ -42,12 +43,8 @@ const fn def(key: &'static str, ty: PrefType, default: f64, lo: f64, hi: f64) ->
     PrefDef { key, ty, default, lo, hi }
 }
 
-/// How many of [`PREFS`] the `preferences` command lists and takes: the C++ editor's table
-/// (`kPrefs`). The rest are kept and edited by the Preferences tab only.
-pub const WIRE_PREFS: usize = 28;
-
-/// Every preference: first the ones `preferences action=get` lists, in its order, then the ones
-/// only the Preferences tab edits (the objects' switches, recovery).
+/// Every preference of the window itself and of the level editor, by its settings key. An area
+/// adds its own with [`EditorSettings::add_defs`] (a group of Preferences, `ShellBuilder::pref_group`).
 pub const PREFS: [PrefDef; 33] = [
     def("active_idle_fps", PrefType::U32, 120.0, 30.0, 240.0),
     def("floating_panels", PrefType::Bool, 0.0, 0.0, 1.0),
@@ -89,10 +86,20 @@ pub fn pref_def(key: &str) -> Option<&'static PrefDef> {
     PREFS.iter().find(|p| p.key == key)
 }
 
-/// A preference the `preferences` command knows.
+/// The interface scales Preferences offers besides Auto (the monitor's), in percent.
+pub const INTERFACE_SCALES: [u32; 5] = [100, 125, 150, 175, 200];
+
+/// `auto` (the monitor's scale: `None`) or a percentage of [`INTERFACE_SCALES`]; `None` for
+/// anything else.
 #[must_use]
-pub fn wire_pref_def(key: &str) -> Option<&'static PrefDef> {
-    PREFS.iter().take(WIRE_PREFS).find(|p| p.key == key)
+pub fn parse_interface_scale(text: &str) -> Option<Option<f32>> {
+    let t = text.trim().trim_end_matches('%').trim();
+    if t.eq_ignore_ascii_case("auto") {
+        return Some(None);
+    }
+    let v: f32 = t.parse().ok()?;
+    let percent = if v <= 4.0 { (v * 100.0).round() } else { v.round() };
+    INTERFACE_SCALES.iter().find(|s| **s as f32 == percent).map(|s| Some(*s as f32 / 100.0))
 }
 
 /// A number as C's `%g` would print it, as a JSON number.
@@ -155,6 +162,8 @@ pub struct Placement {
 struct Inner {
     doc: LtxDoc,
     prefs: Vec<f64>,
+    /// What an area added (`add_defs`), with their values.
+    extra: Vec<(PrefDef, f64)>,
     dirty: bool,
 }
 
@@ -180,7 +189,7 @@ impl EditorSettings {
             .collect();
         Self {
             path: path.to_path_buf(),
-            inner: Mutex::new(Inner { doc, prefs, dirty: false }),
+            inner: Mutex::new(Inner { doc, prefs, extra: Vec::new(), dirty: false }),
             page: Mutex::new(SmolStr::new("General")),
         }
     }
@@ -192,12 +201,15 @@ impl EditorSettings {
 
     #[must_use]
     pub fn pref(&self, key: &str) -> Option<f64> {
-        let i = PREFS.iter().position(|d| d.key == key)?;
-        self.inner.lock().prefs.get(i).copied()
+        let s = self.inner.lock();
+        match PREFS.iter().position(|d| d.key == key) {
+            Some(i) => s.prefs.get(i).copied(),
+            None => s.extra.iter().find(|(d, _)| d.key == key).map(|(_, v)| *v),
+        }
     }
 
     pub fn set_pref(&self, key: &str, value: f64) {
-        let Some((i, def)) = PREFS.iter().enumerate().find(|(_, d)| d.key == key) else { return };
+        let Some(def) = self.def(key) else { return };
         let text = match def.ty {
             PrefType::Bool => (if value != 0.0 { "true" } else { "false" }).to_owned(),
             PrefType::Color => format!("0x{:08X}", value as u32),
@@ -205,10 +217,60 @@ impl EditorSettings {
             _ => fmt_g(value),
         };
         let mut s = self.inner.lock();
-        if let Some(slot) = s.prefs.get_mut(i) {
-            *slot = value;
+        match PREFS.iter().position(|d| d.key == key) {
+            Some(i) => {
+                if let Some(slot) = s.prefs.get_mut(i) {
+                    *slot = value;
+                }
+            }
+            None => {
+                if let Some(slot) = s.extra.iter_mut().find(|(d, _)| d.key == key) {
+                    slot.1 = value;
+                }
+            }
         }
         s.doc.set("preferences", key, &text);
+        s.dirty = true;
+    }
+
+    /// The definition of a preference: the window's own or one an area added.
+    #[must_use]
+    pub fn def(&self, key: &str) -> Option<PrefDef> {
+        pref_def(key)
+            .copied()
+            .or_else(|| self.inner.lock().extra.iter().find(|(d, _)| d.key == key).map(|(d, _)| *d))
+    }
+
+    /// The preferences areas added, in the order they came.
+    #[must_use]
+    pub fn extra_defs(&self) -> Vec<PrefDef> {
+        self.inner.lock().extra.iter().map(|(d, _)| *d).collect()
+    }
+
+    /// Adds an area's preferences: `app.prefs` lists and sets them, and their values come from the
+    /// settings file. A key added twice keeps the first definition.
+    pub fn add_defs(&self, defs: &[PrefDef]) {
+        let mut s = self.inner.lock();
+        for d in defs {
+            if pref_def(d.key).is_some() || s.extra.iter().any(|(e, _)| e.key == d.key) {
+                continue;
+            }
+            let v = s.doc.get("preferences", d.key).and_then(|t| parse_pref(d, t).ok()).unwrap_or(d.default);
+            s.extra.push((*d, v));
+        }
+    }
+
+    /// Preferences > Interface > Interface Scale: `None` is Auto, the monitor's scale.
+    #[must_use]
+    pub fn interface_scale(&self) -> Option<f32> {
+        let s = self.inner.lock();
+        s.doc.get("ui", "scale").and_then(parse_interface_scale).flatten()
+    }
+
+    pub fn set_interface_scale(&self, scale: Option<f32>) {
+        let mut s = self.inner.lock();
+        let text = scale.map_or_else(|| "auto".to_owned(), |v| format!("{}", (v * 100.0).round() as u32));
+        s.doc.set("ui", "scale", &text);
         s.dirty = true;
     }
 
@@ -285,6 +347,39 @@ impl EditorSettings {
         s.dirty = true;
     }
 
+    /// Forgets what the author bound an action to: its defaults apply again.
+    pub fn remove_shortcut(&self, id: &str) {
+        let mut s = self.inner.lock();
+        if s.doc.remove("shortcuts", id) {
+            s.dirty = true;
+        }
+    }
+
+    /// The kit's short lists (a pick list's recent and favourite entries, a section's state):
+    /// `[lists]`, each a key and its items as a JSON array.
+    #[must_use]
+    pub fn lists(&self) -> Vec<(SmolStr, Vec<String>)> {
+        let s = self.inner.lock();
+        s.doc
+            .entries("lists")
+            .filter_map(|(k, v)| {
+                serde_json::from_str::<Vec<String>>(gz_ltx::doc::unquote(v))
+                    .ok()
+                    .map(|l| (SmolStr::new(k), l))
+            })
+            .collect()
+    }
+
+    pub fn set_lists(&self, lists: &[(SmolStr, Vec<String>)]) {
+        let mut s = self.inner.lock();
+        let entries: Vec<(String, String)> = lists
+            .iter()
+            .map(|(k, v)| (k.to_string(), gz_ltx::doc::quote(&serde_json::to_string(v).unwrap_or_default())))
+            .collect();
+        s.doc.replace_entries("lists", entries);
+        s.dirty = true;
+    }
+
     /// The file a Run Macro slot runs (`[macros] COMMAND_RUN_MACRO."Slot #1"`); empty for none.
     #[must_use]
     pub fn macro_file(&self, key: &str) -> String {
@@ -298,8 +393,8 @@ impl EditorSettings {
         s.dirty = true;
     }
 
-    /// The adapter the device is made on, by name (`[render] gpu_adapter`, the C++
-    /// `CLevelPreferences::GpuAdapter`); empty is the system's default.
+    /// The adapter the device is made on, by name (`[render] gpu_adapter`); empty is the system's
+    /// default.
     #[must_use]
     pub fn gpu_adapter(&self) -> String {
         let s = self.inner.lock();
@@ -312,7 +407,7 @@ impl EditorSettings {
         s.dirty = true;
     }
 
-    /// File > Recent Scene: `[editor_prefs] recent_files_N`, newest first, as the C++ keeps it.
+    /// File > Recent Scene: `[editor_prefs] recent_files_N`, newest first.
     #[must_use]
     pub fn recent_scenes(&self) -> Vec<String> {
         let s = self.inner.lock();
@@ -327,14 +422,13 @@ impl EditorSettings {
         out
     }
 
-    /// `CCustomPreferences::AppendRecentFile`: `name` goes first, the list keeps fewer than
-    /// `scene_recent_count` entries.
+    /// `name` goes first; the list keeps fewer than `scene_recent_count` entries.
     pub fn add_recent_scene(&self, name: &str) {
         let limit = self.pref("scene_recent_count").unwrap_or(10.0).max(0.0) as usize;
         let mut list = self.recent_scenes();
         list.retain(|n| n != name);
         list.insert(0, name.to_owned());
-        // oracle: `while (size >= scene_recent_count) pop_back` keeps one fewer than the count
+        // one fewer than the count, as the list always kept
         while !list.is_empty() && list.len() >= limit {
             list.pop();
         }
@@ -449,11 +543,11 @@ pub fn parse_theme(text: &str) -> Option<Accent> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PREFS, WIRE_PREFS, parse_pref, parse_theme, pref_def, pref_json};
+    use super::{PREFS, parse_interface_scale, parse_pref, parse_theme, pref_def, pref_json};
     use gz_ui::Accent;
 
     #[test]
-    fn values_parse_like_the_cpp_editor() {
+    fn values_parse_as_their_types_say() {
         let fov = pref_def("view_fov").map(|d| parse_pref(d, "75"));
         assert_eq!(fov, Some(Ok(75.0)));
         let fps = pref_def("active_idle_fps").map(|d| parse_pref(d, "10"));
@@ -473,7 +567,10 @@ mod tests {
         let Some(c) = pref_def("fog_color") else { return };
         assert_eq!(pref_json(c, f64::from(0x0055_5555u32)), serde_json::json!("0x00555555"));
         assert_eq!(PREFS.len(), 33);
-        assert_eq!(PREFS.get(WIRE_PREFS - 1).map(|d| d.key), Some("render_radius"));
+        assert_eq!(parse_interface_scale("auto"), Some(None));
+        assert_eq!(parse_interface_scale("125%"), Some(Some(1.25)));
+        assert_eq!(parse_interface_scale("1.5"), Some(Some(1.5)));
+        assert_eq!(parse_interface_scale("130"), None);
     }
 
     #[test]

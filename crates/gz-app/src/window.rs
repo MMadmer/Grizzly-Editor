@@ -177,6 +177,10 @@ fn hwnd_of(window: &Window) -> Option<isize> {
 pub struct FrameReport {
     /// The document id of the tab the frame drew.
     pub active_tab: SmolStr,
+    /// Its longest phase, for a stall: `ui pass (level)`, `command: gz_app::cmds::ui_tab`.
+    pub during: String,
+    /// The first frame of the start: making the font atlas and the first pipelines is no stall.
+    pub first: bool,
 }
 
 /// The thing that draws: the shell with its tabs.
@@ -650,10 +654,12 @@ impl App {
         let shell = &mut self.shell;
         let mut report = FrameReport::default();
         let mut causes = Vec::new();
+        let pass = Instant::now();
         let mut output = live.ctx.run_ui(raw, |ui| {
             causes = ui.ctx().repaint_causes();
             report = shell.frame(ui);
         });
+        let pass_ms = pass.elapsed().as_secs_f32() * 1000.0;
         let pinger = self.editor.exec.wake().take_last();
         let cause = frame_cause(woken.then_some(pinger), input, asked, &causes);
 
@@ -737,6 +743,16 @@ impl App {
         }
         let total = began.elapsed().as_secs_f32() * 1000.0;
         let wait_ms = (waited * 1000.0).min(total);
+        // the frame's own work held the UI thread: a stall, unless it is the start's first
+        let work_ms = total - wait_ms;
+        if !report.first && self.frame > 1 {
+            let during = if work_ms - pass_ms > pass_ms {
+                format!("painting the frame ({:.0} ms; the UI pass {pass_ms:.0} ms)", work_ms - pass_ms)
+            } else {
+                report.during.clone()
+            };
+            crate::stalls::Stalls::of(&self.editor).note(&self.editor, work_ms, &report.active_tab, &during);
+        }
         self.editor.frames.publish(FrameStamp {
             frame: self.frame,
             active_tab: report.active_tab,
@@ -878,72 +894,18 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
-        // the device is still being made: the window keeps the theme's background
-        if let Some(p) = &self.pending {
-            match event {
-                WindowEvent::RedrawRequested | WindowEvent::Resized(_) => {
-                    if let Some(h) = hwnd_of(&p.window) {
-                        gz_win::fill_client(h, self.opts.background);
-                    }
-                }
-                WindowEvent::CloseRequested => event_loop.exit(),
-                _ => {}
-            }
+        // a frame times itself; every other event is timed here for the stall monitor
+        if matches!(event, WindowEvent::RedrawRequested) {
+            self.handle_window_event(event_loop, window_id, event);
             return;
         }
-        let Some(live) = self.live.as_mut() else { return };
-        if window_id != live.window.id() {
-            // a panel's own window: its input, its size, its close (the panel docks again)
-            if let Ok(mut sh) = live.shared.try_borrow_mut() {
-                let Shared { painter, extra, .. } = &mut *sh;
-                if let Some((id, x)) = extra.iter_mut().find(|(_, x)| x.window.id() == window_id) {
-                    let _ = x.input.on_window_event(&x.window, &event);
-                    match &event {
-                        WindowEvent::Resized(size) => {
-                            if let (Some(w), Some(h)) = (
-                                std::num::NonZeroU32::new(size.width),
-                                std::num::NonZeroU32::new(size.height),
-                            ) {
-                                painter.on_window_resized(*id, w, h);
-                            }
-                        }
-                        WindowEvent::CloseRequested => x.info.events.push(egui::ViewportEvent::Close),
-                        _ => {}
-                    }
-                }
-            }
-            self.dirty = true;
-            return;
-        }
-        let response = live.input.on_window_event(&live.window, &event);
-        if response.repaint {
-            self.dirty = true;
-            self.input = true;
-        }
-        match event {
-            WindowEvent::Resized(size) => {
-                // iconic, the window keeps the size it is pictured at
-                if live.window.is_minimized() == Some(true) {
-                    self.dirty = true;
-                    return;
-                }
-                if let (Some(w), Some(h)) =
-                    (std::num::NonZeroU32::new(size.width), std::num::NonZeroU32::new(size.height))
-                {
-                    live.size_px = [size.width, size.height];
-                    live.shared.borrow_mut().painter.on_window_resized(ViewportId::ROOT, w, h);
-                }
-                self.dirty = true;
-            }
-            WindowEvent::RedrawRequested => self.run_frame(event_loop),
-            WindowEvent::CloseRequested => {
-                if self.shell.close_requested() {
-                    event_loop.exit();
-                } else {
-                    self.dirty = true;
-                }
-            }
-            _ => {}
+        let kind = event_name(&event);
+        let began = Instant::now();
+        self.handle_window_event(event_loop, window_id, event);
+        let ms = began.elapsed().as_secs_f32() * 1000.0;
+        if self.frame > 1 {
+            let tab = self.editor.frames.current().active_tab;
+            crate::stalls::Stalls::of(&self.editor).note(&self.editor, ms, &tab, &format!("event: {kind}"));
         }
     }
 
@@ -1050,6 +1012,92 @@ impl ApplicationHandler<UserEvent> for App {
         }
         self.leaving.store(false, Ordering::SeqCst);
     }
+}
+
+impl App {
+    fn handle_window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
+        // the device is still being made: the window keeps the theme's background
+        if let Some(p) = &self.pending {
+            match event {
+                WindowEvent::RedrawRequested | WindowEvent::Resized(_) => {
+                    if let Some(h) = hwnd_of(&p.window) {
+                        gz_win::fill_client(h, self.opts.background);
+                    }
+                }
+                WindowEvent::CloseRequested => event_loop.exit(),
+                _ => {}
+            }
+            return;
+        }
+        let Some(live) = self.live.as_mut() else { return };
+        if window_id != live.window.id() {
+            // a panel's own window: its input, its size, its close (the panel docks again)
+            if let Ok(mut sh) = live.shared.try_borrow_mut() {
+                let Shared { painter, extra, .. } = &mut *sh;
+                if let Some((id, x)) = extra.iter_mut().find(|(_, x)| x.window.id() == window_id) {
+                    let _ = x.input.on_window_event(&x.window, &event);
+                    match &event {
+                        WindowEvent::Resized(size) => {
+                            if let (Some(w), Some(h)) = (
+                                std::num::NonZeroU32::new(size.width),
+                                std::num::NonZeroU32::new(size.height),
+                            ) {
+                                painter.on_window_resized(*id, w, h);
+                            }
+                        }
+                        WindowEvent::CloseRequested => x.info.events.push(egui::ViewportEvent::Close),
+                        _ => {}
+                    }
+                }
+            }
+            self.dirty = true;
+            return;
+        }
+        let response = live.input.on_window_event(&live.window, &event);
+        if response.repaint {
+            self.dirty = true;
+            self.input = true;
+        }
+        match event {
+            WindowEvent::Resized(size) => {
+                // iconic, the window keeps the size it is pictured at
+                if live.window.is_minimized() == Some(true) {
+                    self.dirty = true;
+                    return;
+                }
+                if let (Some(w), Some(h)) =
+                    (std::num::NonZeroU32::new(size.width), std::num::NonZeroU32::new(size.height))
+                {
+                    live.size_px = [size.width, size.height];
+                    live.shared.borrow_mut().painter.on_window_resized(ViewportId::ROOT, w, h);
+                }
+                self.dirty = true;
+            }
+            WindowEvent::RedrawRequested => self.run_frame(event_loop),
+            WindowEvent::CloseRequested => {
+                if self.shell.close_requested() {
+                    event_loop.exit();
+                } else {
+                    self.dirty = true;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// What a window event is called in a stall: its variant's name, `resized`, `keyboard input`.
+fn event_name(event: &WindowEvent) -> String {
+    let debug = format!("{event:?}");
+    let head = debug.split(['(', ' ', '{']).next().unwrap_or("event");
+    let mut out = String::with_capacity(head.len() + 4);
+    for (i, c) in head.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            out.push(' ');
+        }
+        out.extend(c.to_lowercase());
+    }
+    out
 }
 
 /// While the window goes a panic of the UI thread only logs, so every step of the teardown runs;

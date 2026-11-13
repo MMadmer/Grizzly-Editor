@@ -106,7 +106,7 @@ class Editor:
 
     def close(self) -> None:
         try:
-            mcp("window_control", action="close")
+            mcp("app.quit")
         except OSError:
             pass
         if self.proc:
@@ -180,21 +180,21 @@ def run(project: str, shot: str | None) -> None:
         mcp("content_browser_selection", action="clear")
         if shot:
             mcp("content_browser_selection", action="select", name=entry)
-            pic = mcp("screenshot_editor")
+            pic = mcp("shot.window")
             if pic.get("png_base64"):
                 with open(shot, "wb") as f:
                     f.write(base64.b64decode(pic["png_base64"]))
                 print("screenshot: " + shot, flush=True)
 
         # ------------------------------------------------------------------ C: a rename reaches the disk
-        r = mcp("content_rename", escaped=True, path=f"gamedata/{FOLDER}/{CYRILLIC}", name=RENAMED)
+        r = mcp("file.rename", escaped=True, path=f"gamedata/{FOLDER}/{CYRILLIC}", name=RENAMED)
         on_disk = sorted(os.listdir(folder))
         check(r.get("ok") and RENAMED in on_disk and CYRILLIC not in on_disk,
               "C a rename sent as \\u escapes (like the bridge) writes that name to disk, not its bytes read as cp1251",
               json.dumps(r, ensure_ascii=False)[:160] + " disk=" + repr(on_disk))
 
         # ------------------------------------------------------------------ D: quests
-        quests = [q.get("path", "") for q in mcp("quest_list").get("quests", [])]
+        quests = [q.get("extra", "") for q in mcp("game.lookup", type="quest_id", limit=500).get("entries", [])]
         check(any(q.replace("\\", "/").endswith("quests/" + QUEST_FILE) for q in quests),
               "D a quest with a Cyrillic file name is found under that name", repr(quests)[:240])
 
@@ -252,7 +252,7 @@ def run(project: str, shot: str | None) -> None:
                   "G a name made on disk with a character beyond the BMP is listed under that name",
                   json.dumps(r, ensure_ascii=False)[:240])
             mcp("content_browser_selection", action="clear")
-            r = mcp("content_rename", escaped=True, path=f"gamedata/{FOLDER}/{made}", name=moved)
+            r = mcp("file.rename", escaped=True, path=f"gamedata/{FOLDER}/{made}", name=moved)
             on_disk = os.listdir(folder)
             check(r.get("ok") and moved in on_disk and made not in on_disk,
                   "G and the editor's rename writes such a name to disk as it is",

@@ -15,7 +15,7 @@ use gz_fmt_xml::sheets::TextureSheets;
 use gz_game::{Bundled, GameLink};
 use gz_lua::LuaHost;
 use gz_mod::{Edit, ManifestService};
-use gz_project::{AssetTemplates, Project, TemplateKind};
+use gz_project::{AssetTemplates, ChangeKind, Filter, Project, ProjectHooks, TemplateKind};
 use gz_query::Query;
 use gz_vfs::GameFiles;
 
@@ -403,7 +403,7 @@ struct PdaCheck;
 
 impl BuildCheck for PdaCheck {
     fn stage(&self) -> &'static str {
-        "Checking the PDA"
+        crate::kind::STAGE
     }
 
     fn headline(&self) -> Option<&'static str> {
@@ -420,12 +420,44 @@ impl BuildCheck for PdaCheck {
     }
 }
 
-/// Hangs the area on the editor: the build's check and the template of `content_create
-/// kind=pda` (`NewPda` gets the id `new_pda`, `NewPda2` gets `new_pda2`, titled `New PDA`).
+/// Hangs the area on the editor: the build's check, the template of `file.create kind=pda`
+/// (`NewPda` gets the id `new_pda`, `NewPda2` gets `new_pda2`, titled `New PDA`), the PDA kind
+/// of `gz-asset` with its manifest check, and - on every open project, through its watcher -
+/// the first layout that appears in a module that uses none made the module's layout, and the
+/// used layout's file going away clearing `[pda] layout`.
 pub fn install(editor: &Editor) {
     BuildChecks::of(editor).add(Arc::new(PdaCheck));
     AssetTemplates::of(editor).provide(TemplateKind::Pda, |cx| {
         let id = if cx.n <= 1 { "new_pda".to_owned() } else { format!("new_pda{}", cx.n) };
         Ok(template(&id, "New PDA").into_bytes())
+    });
+    let kinds = gz_asset::Kinds::of(editor);
+    kinds.add(crate::kind::kind());
+    kinds.covers_build_stage(crate::kind::STAGE);
+    kinds.add_manifest_check(crate::kind::manifest_check);
+    ProjectHooks::of(editor).on_open(|ed, _session| {
+        let Ok((_, project)) = Project::of(ed) else { return };
+        let mut rx = project.tree.changes().subscribe(Filter::Extensions(vec!["pdaasset".into()]));
+        let (ed, weak) = (ed.clone(), Arc::downgrade(&project));
+        ed.exec.clone().spawn(async move {
+            while let Some(c) = rx.recv().await {
+                if weak.upgrade().is_none() {
+                    break;
+                }
+                let Ok((session, _)) = Project::of(&ed) else { break };
+                let service = PdaService::of_session(&ed, &session);
+                let used = service.used_layout(&ed).await;
+                match c.kind {
+                    ChangeKind::Created if used.is_empty() => {
+                        let _ = service.use_layout(&ed, c.path.as_str(), Origin::Mcp).await;
+                    }
+                    // the module does not keep naming a layout that is gone
+                    ChangeKind::Removed if same_path(&used, c.path.as_str()) => {
+                        let _ = service.use_layout(&ed, "", Origin::Mcp).await;
+                    }
+                    _ => {}
+                }
+            }
+        });
     });
 }

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """End-to-end check of the module's own characters (EditorCharacters).
 
-Drives the editor over MCP on a THROW-AWAY COPY of a project: writes characters,
-reads them back, builds the module into a temporary folder and verifies that the
-assets ship as they are and nothing is made of them: what the game makes of a
+Drives the editor over MCP on a THROW-AWAY COPY of a project: writes characters as files (the
+way an agent does), checks them with asset.check, builds the module into a temporary folder and
+verifies that the assets ship as they are and nothing is made of them: what the game makes of a
 character is the game repo's Run-ScreensQa.ps1 -Part Descriptions. Phase U opens the
 Characters tab on a character over MCP (characters_view) and wants its form drawn
 whole, with nothing escaping its window.
@@ -81,7 +81,7 @@ class Editor:
 
     def close(self) -> None:
         try:
-            mcp("window_control", action="close")
+            mcp("app.quit")
         except OSError:
             pass
         if self.proc:
@@ -241,11 +241,78 @@ SPAWNER_BAD = """return {
 """
 
 
+PROJECT = [""]
+
+
+def char_path(cid: str) -> str:
+    return "characters/%s.npcasset" % cid
+
+
+def text_id(text: str) -> str:
+    m = re.search(r'\bid\s*=\s*"([^"]*)"', text)
+    return m.group(1) if m else ""
+
+
+def problem_lines(answer: dict) -> list[str]:
+    """asset.check's errors and warnings as `<code> <file>: <text>` lines."""
+    return ["%s %s: %s" % (p.get("code"), p.get("file", ""), p.get("text", ""))
+            for p in answer.get("problems", []) if p.get("severity") in ("error", "warning", "required")]
+
+
+def char_write(text: str) -> dict:
+    """A character written as a file, and what asset.check says of it."""
+    rel = char_path(text_id(text))
+    full = os.path.join(PROJECT[0], rel.replace("/", os.sep))
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w", encoding="utf-8") as f:
+        f.write(text)
+    r = mcp("asset.check", path=rel)
+    return {"ok": r.get("ok"), "file": rel, "problems": problem_lines(r), "answer": r}
+
+
+def char_delete(cid: str) -> bool:
+    full = os.path.join(PROJECT[0], char_path(cid).replace("/", os.sep))
+    if os.path.isfile(full):
+        os.remove(full)
+        return True
+    return False
+
+
+def char_ids() -> list[str]:
+    """The project's characters as the editor knows them (the pickers' list)."""
+    return sorted(e.get("id") for e in mcp("game.lookup", type="character_id", limit=500).get("entries", []))
+
+
+def until(what, seconds: float = 10.0):
+    """Asks `what` until it answers something true: the project's watcher takes a moment."""
+    deadline = time.monotonic() + seconds
+    got = what()
+    while not got and time.monotonic() < deadline:
+        time.sleep(0.1)
+        got = what()
+    return got
+
+
+def quest_write(rel: str, text: str) -> dict:
+    full = os.path.join(PROJECT[0], rel.replace("/", os.sep))
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w", encoding="utf-8") as f:
+        f.write(text)
+    return mcp("asset.check", path=rel)
+
+
+def remove(rel: str) -> None:
+    full = os.path.join(PROJECT[0], rel.replace("/", os.sep))
+    if os.path.isfile(full):
+        os.remove(full)
+
+
 def run_spawn_checks(mcp, check, module, out_dir, os, json):
     """spawn.npc: the character is named by its asset id, and a ref per NPC."""
     # its own cast: a template and a character that starts from it
-    mcp("characters_write", text=QA_TPL)
-    mcp("characters_write", text=QA_RUNNER)
+    char_write(QA_TPL)
+    char_write(QA_RUNNER)
+    until(lambda: "qa_runner" in char_ids())
     cat = mcp("quest_catalog")
     by_id = {k.get("id"): k for k in cat.get("kinds", []) if isinstance(k, dict)}
     kind = by_id.get("spawn.npc", {})
@@ -257,30 +324,29 @@ def run_spawn_checks(mcp, check, module, out_dir, os, json):
     unique = next((r for r in kind.get("rows", []) if r.get("name") == "unique"), {})
     check("default" not in unique, "F unique declares no flat default - it follows what the row names", json.dumps(unique))
 
-    look = mcp("quest_lookup", type="character_id")
+    look = mcp("game.lookup", type="character_id")
     entries = {e.get("id"): e for e in look.get("entries", [])}
     check("qa_courier" in entries and "qa_runner" in entries, "F lookup character_id lists the project's characters",
           json.dumps(sorted(entries)))
     check("template" in str(entries.get("qa_tpl", {}).get("extra", "")), "F and says which one is a template",
           json.dumps(entries.get("qa_tpl")))
 
-    w = mcp("quest_write", path="quests/qa_spawner.nqasset", lua=SPAWNER)
+    w = quest_write("quests/qa_spawner.nqasset", SPAWNER)
     errs = " ".join(p.get("code", "") for p in w.get("problems", []) if str(p.get("code", "")).startswith("E"))
     check(w.get("ok") and errs == "", "F a quest that spawns characters by their asset id validates", errs or json.dumps(w)[:200])
-    refs = mcp("quest_lookup", type="ref_name", path="quests/qa_spawner.nqasset")
+    refs = mcp("game.lookup", type="ref_name", path="quests/qa_spawner.nqasset")
     names = sorted(e.get("id") for e in refs.get("entries", []))
     check(names == ["courier", "extra", "guard"], "F every row's ref is a ref of the graph", json.dumps(names))
-    outline = str(mcp("quest_get", path="quests/qa_spawner.nqasset").get("outline", ""))
+    outline = str(mcp("quest_open", path="quests/qa_spawner.nqasset").get("outline", ""))
     check("npcs={qa_courier" in outline, "F the outline reads a row as who it creates, not as the ref it keeps", outline[:300])
 
-    b = mcp("quest_write", path="quests/qa_spawner_bad.nqasset", lua=SPAWNER_BAD)
-    text = " | ".join("%s %s" % (p.get("code"), p.get("message", "")) for p in b.get("problems", []))
+    b = quest_write("quests/qa_spawner_bad.nqasset", SPAWNER_BAD)
+    text = " | ".join("%s %s" % (p.get("code"), p.get("text", "")) for p in b.get("problems", []))
     check("not a character of this project" in text, "F a character that does not exist is refused", text[:300])
     check("template" in text, "F a template cannot be spawned, and the message says why", text[:300])
     check("exactly one" in text, "F a row names a character OR a section", text[:300])
     check("unknown key 'uniqe'" in text, "F a misspelt key is an error, not a silent no-op", text[:300])
-    mcp("quest_close", path="quests/qa_spawner_bad.nqasset", discard=True)
-    mcp("content_delete", path="quests/qa_spawner_bad.nqasset")
+    remove("quests/qa_spawner_bad.nqasset")
 
     built = mcp("mod_export", target=out_dir)
     check(built.get("ok"), "F the module builds with the spawner in it", json.dumps(built)[:200])
@@ -291,34 +357,33 @@ def run_spawn_checks(mcp, check, module, out_dir, os, json):
     check(os.path.isfile(asset), "F and so does the character it names", asset)
 
     # deleting the character turns the same quest into an error - no restart, no refresh
-    mcp("characters_delete", id="qa_runner")
-    v = mcp("quest_validate", path="quests/qa_spawner.nqasset")
-    text = " | ".join("%s %s" % (p.get("code"), p.get("message", "")) for p in v.get("problems", []))
+    char_delete("qa_runner")
+    until(lambda: "qa_runner" not in char_ids())
+    v = mcp("asset.check", path="quests/qa_spawner.nqasset")
+    text = " | ".join("%s %s" % (p.get("code"), p.get("text", "")) for p in v.get("problems", []))
     check("qa_runner" in text and "not a character" in text, "F a deleted character is an error in the quest that names it", text[:300])
 
-    mcp("characters_delete", id="qa_tpl")
+    char_delete("qa_tpl")
     mcp("quest_close", path="quests/qa_spawner.nqasset", discard=True)
-    mcp("content_delete", path="quests/qa_spawner.nqasset")
+    remove("quests/qa_spawner.nqasset")
 
 
 def run_base_checks(mcp, check, read, module, out_dir, os, json):
     """Inheritance: a shared kit written once, and what refuses to inherit."""
-    k = mcp("characters_write", text=KIT)
+    k = char_write(KIT)
     check(k.get("ok"), "E a template is written", json.dumps(k)[:200])
-    check(k.get("character", {}).get("abstract") is True, "E and says it is one")
+    look = until(lambda: next((e for e in mcp("game.lookup", type="character_id", limit=500).get("entries", [])
+                               if e.get("id") == "qa_kit"), None))
+    check("template" in str((look or {}).get("extra", "")), "E and the editor knows it is one", json.dumps(look))
     check(k.get("problems") == [], "E a template needs no name and no model",
           json.dumps(k.get("problems")))
 
-    g = mcp("characters_write", text=GUARD_KIT)
+    g = char_write(GUARD_KIT)
     check(g.get("ok"), "E a character inherits from it", json.dumps(g)[:200])
-    check(g.get("problems") == [], "E with no problems", json.dumps(g.get("problems")))
-
-    got = mcp("characters_get", id="qa_kitguard")
-    ch = got.get("character", {})
-    check(ch.get("base") == "qa_kit", "E it reports its base")
-    # torch, knife, bandage, medkit(4), ak74u  - bread was taken out by count = 0
-    check(ch.get("supplies") == 5, "E the kit is the base plus its own, merged",
-          str(ch.get("supplies")))
+    until(lambda: "qa_kitguard" in char_ids())
+    g = char_write(GUARD_KIT)
+    check(g.get("problems") == [], "E with no problems: its name and model come from the base",
+          json.dumps(g.get("problems")))
 
     built = mcp("mod_export", target=out_dir)
     check(built.get("ok"), "E the module builds", json.dumps(built)[:200])
@@ -327,17 +392,19 @@ def run_base_checks(mcp, check, read, module, out_dir, os, json):
         check(os.path.isfile(os.path.join(root, "characters", name + ".npcasset")),
               "E %s ships as its asset: the game does the inheriting" % name)
 
-    o = mcp("characters_write", text=NO_BASE)
+    char_write(NO_BASE)
+    until(lambda: "qa_orphan" in char_ids())
+    o = char_write(NO_BASE)
     check("E111" in " ".join(o.get("problems", [])), "E a base that does not exist is reported",
           json.dumps(o.get("problems")))
-    mcp("characters_write", text=LOOP_A)
-    mcp("characters_write", text=LOOP_B)
-    check("E112" in " ".join(mcp("characters_list").get("problems", [])),
-          "E a base that comes back to itself is reported",
-          json.dumps(mcp("characters_list").get("problems"))[:200])
+    char_write(LOOP_A)
+    char_write(LOOP_B)
+    loops = until(lambda: "E112" in " ".join(problem_lines(mcp("asset.check", path="characters"))))
+    check(bool(loops), "E a base that comes back to itself is reported",
+          json.dumps(problem_lines(mcp("asset.check", path="characters")))[:300])
 
     for gone in ("qa_orphan", "qa_loop_a", "qa_loop_b", "qa_kitguard", "qa_kit"):
-        mcp("characters_delete", id=gone)
+        char_delete(gone)
 
 
 def run_ui_checks(mcp, check, json):
@@ -350,17 +417,17 @@ def run_ui_checks(mcp, check, json):
     check(v.get("dirty") is False and v.get("problems") == [], "U with nothing unsaved and no problems", json.dumps(v)[:300])
     check(v.get("count") == 2 and v.get("file", "").endswith("qa_courier.npcasset"), "U the list has both, the form its file",
           json.dumps(v)[:300])
-    check(mcp("ui_list").get("active_tab") == "characters", "U Characters is the active tab")
-    audit = mcp("ui_audit", id="characters")
+    check(mcp("ui.list").get("active_tab") == "characters", "U Characters is the active tab")
+    audit = mcp("ui.audit", id="characters")
     check(audit.get("ok") and not audit.get("escaped"), "U nothing escapes the Characters tab",
           json.dumps(audit.get("escaped"))[:400])
     labels = {c.get("label") for c in audit.get("controls", [])}
     for want in ("Identity", "Name and Bio", "Delete..."):
         check(want in labels, "U the form draws " + want, json.dumps(sorted(x for x in labels if x))[:400])
     # what is below the fold is drawn once the form scrolls to it
-    scrolled = mcp("ui_scroll", id="characters", to="bottom")
+    scrolled = mcp("ui.scroll", id="characters", to="bottom")
     check(scrolled.get("ok"), "U the form scrolls", json.dumps(scrolled)[:300])
-    labels = {c.get("label") for c in mcp("ui_audit", id="characters").get("controls", [])}
+    labels = {c.get("label") for c in mcp("ui.audit", id="characters").get("controls", [])}
     for want in ("Starting Kit", "Add Item"):
         check(want in labels, "U the form draws " + want, json.dumps(sorted(x for x in labels if x))[:400])
     v = mcp("characters_view", path="characters/qa_guard.npcasset")
@@ -368,7 +435,7 @@ def run_ui_checks(mcp, check, json):
     gone = mcp("characters_view", select="qa_nobody")
     check(not gone.get("ok") and "qa_nobody" in gone.get("error", ""), "U one that does not exist is refused by name",
           json.dumps(gone))
-    closed = mcp("ui_tab", action="close", id="characters")
+    closed = mcp("ui.tab", action="close", doc="characters")
     check(closed.get("ok"), "U the tab closes when nothing is unsaved", json.dumps(closed)[:300])
     check(mcp("characters_view").get("open") is False, "U and characters_view says it is closed")
 
@@ -390,82 +457,77 @@ def run(project: str) -> None:
 
         # the checks count characters: an author's
         # project may bring characters of its own, so the copy starts without them
-        own = [c["id"] for c in mcp("characters_list").get("characters", [])]
-        for cid in own:
-            mcp("characters_delete", id=cid)
-        check(mcp("characters_list").get("characters") == [], "A the copy starts without characters", str(own))
+        PROJECT[0] = project
+        own = [os.path.join(b, f) for b, _, fs in os.walk(project) for f in fs if f.lower().endswith(".npcasset")]
+        for path in own:
+            os.remove(path)
+        check(until(lambda: char_ids() == []) is not None and char_ids() == [], "A the copy starts without characters",
+              str(char_ids()))
 
         # ---------------------------------------------------------------- A: write
-        w = mcp("characters_write", text=COURIER)
+        w = char_write(COURIER)
         check(w.get("ok"), "A a character is written", json.dumps(w)[:200])
-        check(w.get("character", {}).get("id") == "qa_courier", "A it comes back with its id")
+        check(w.get("file") == "characters/qa_courier.npcasset", "A it is the file of its id")
         check(w.get("problems") == [], "A and with no problems", json.dumps(w.get("problems")))
 
-        w2 = mcp("characters_write", text=GUARD)
+        w2 = char_write(GUARD)
         check(w2.get("ok"), "A a second character is written", json.dumps(w2)[:200])
 
-        lst = mcp("characters_list")
-        ids = sorted(c["id"] for c in lst.get("characters", []))
-        check(ids == ["qa_courier", "qa_guard"], "A both are listed", str(ids))
+        ids = until(lambda: char_ids() == ["qa_courier", "qa_guard"]) and char_ids()
+        check(ids == ["qa_courier", "qa_guard"], "A both are known to the editor", str(char_ids()))
 
-        got = mcp("characters_get", id="qa_courier")
-        check(got.get("ok") and "qa_courier" in got.get("text", ""), "A one reads back whole")
-        check(got.get("character", {}).get("supplies") == 3, "A its kit has three rows",
-              str(got.get("character")))
-
-        # canonical: writing what was read changes nothing
-        again = mcp("characters_write", id="qa_courier", text=got.get("text", ""))
-        again_text = mcp("characters_get", id="qa_courier").get("text", "")
-        check(again.get("ok") and again_text == got.get("text", ""),
-              "A write(read(x)) is the same file")
+        ref = mcp("asset.reference", kind="character")
+        check(ref.get("ok") and "| `supplies` |" in ref.get("text", ""), "A asset.reference kind=character lists the keys",
+              json.dumps(ref)[:200])
 
         # ---------------------------------------------------------------- B: refusals
-        bad = mcp("characters_write", text=BROKEN)
+        bad = char_write(BROKEN)
         problems = " ".join(bad.get("problems", []))
         check(bad.get("ok") and "E102" in problems, "B an id with spaces is reported", problems)
-        expr = mcp("characters_write", text='return { npc = 1, id = "qa_expr", name = "a" .. "b", visual = "x" }')
+        expr = char_write('return { npc = 1, id = "qa_expr", name = "a" .. "b", visual = "x" }')
         check("not data" in json.dumps(expr), "B what only Lua could work out is refused: the game runs nothing in the file", json.dumps(expr)[:300])
         check("E103" in problems, "B and so is a missing name", problems)
         check("E104" in problems, "B and a missing visual", problems)
-        mcp("characters_delete", id="QA Bad Id")
+        char_delete("QA Bad Id")
+        char_delete("qa_expr")
 
         # a community is picked from the linked game's list in the window; the text path
         # can still name one the game has never heard of, and the engine refuses those
-        odd = mcp("characters_write", text=COURIER.replace('"qa_courier"', '"qa_martian"')
-                  .replace('community = "stalker"', 'community = "martians"'))
+        odd = char_write(COURIER.replace('"qa_courier"', '"qa_martian"')
+                         .replace('community = "stalker"', 'community = "martians"'))
         odd_problems = " ".join(odd.get("problems", []))
-        if mcp("quest_lookup", type="community", limit=5).get("entries"):
+        if mcp("game.lookup", type="community", limit=5).get("entries"):
             check("W114" in odd_problems and "martians" in odd_problems,
                   "B a community the linked game does not list is a warning that names it", odd_problems)
             check("W114" not in " ".join(w.get("problems", [])), "B and one it does list is not")
-        mcp("characters_delete", id="qa_martian")
+        char_delete("qa_martian")
 
         # the window picks portraits, dialogs and items from lists; the text path can name
         # anything, and what the linked game does not have is said - the old SoC portrait id
         # is the classic: no picture in Dead Air Refined
-        odd = mcp("characters_write", text=COURIER.replace('"qa_courier"', '"qa_oddlooks"')
-                  .replace('"ui_inGame2_neutral_2"', '"ui_npc_u_stalker_neutral_1"')
-                  .replace('rank      = 300,', 'rank      = 300,\n    start_dialog = "qa_no_such_dialog",')
-                  .replace('supplies  = {', 'supplies  = {\n        { section = "qa_no_such_item" },'))
+        odd = char_write(COURIER.replace('"qa_courier"', '"qa_oddlooks"')
+                         .replace('"ui_inGame2_neutral_2"', '"ui_npc_u_stalker_neutral_1"')
+                         .replace('rank      = 300,', 'rank      = 300,\n    start_dialog = "qa_no_such_dialog",')
+                         .replace('supplies  = {', 'supplies  = {\n        { section = "qa_no_such_item" },'))
         odd_problems = " ".join(odd.get("problems", []))
-        if mcp("quest_lookup", type="character_icon", limit=5).get("entries"):
+        if mcp("game.lookup", type="character_icon", limit=5).get("entries"):
             check("W115" in odd_problems, "B a portrait the linked game does not have is a warning", odd_problems)
             check("W116" in odd_problems, "B and so is a dialog", odd_problems)
             check("W117" in odd_problems and "qa_no_such_item" in odd_problems, "B and an item of the kit", odd_problems)
             check(not any(c in " ".join(w.get("problems", [])) for c in ("W115", "W116", "W117")),
                   "B while a character made of what the game has gets none of them")
-        mcp("characters_delete", id="qa_oddlooks")
+        char_delete("qa_oddlooks")
 
         # a model on a skeleton of its own passes every other check and stops the game the moment
         # the NPC comes online: Clear Sky's Forester has no eyes and no jaw for an NPC's damage
-        forester = mcp("characters_write", text=COURIER.replace('"qa_courier"', '"qa_forester"')
-                       .replace("stalker_neutral\\\\stalker_neutral_1", "stalker_lesnik\\\\stalker_lesnik_1"))
+        forester = char_write(COURIER.replace('"qa_courier"', '"qa_forester"')
+                              .replace("stalker_neutral\\\\stalker_neutral_1", "stalker_lesnik\\\\stalker_lesnik_1"))
         forester_problems = " ".join(forester.get("problems", []))
-        if mcp("quest_lookup", type="character_icon", limit=5).get("entries"):
+        if mcp("game.lookup", type="character_icon", limit=5).get("entries"):
             check("E123" in forester_problems and "eye_left" in forester_problems and "jaw_1" in forester_problems,
                   "B a model on a skeleton of its own is an error naming the bones it lacks", forester_problems)
             check("E123" not in " ".join(w.get("problems", [])), "B while a stalker model has them all")
-        mcp("characters_delete", id="qa_forester")
+        char_delete("qa_forester")
 
         # ---------------------------------------------------------------- U: the Characters tab
         run_ui_checks(mcp, check, json)
@@ -490,10 +552,9 @@ def run(project: str) -> None:
         run_spawn_checks(mcp, check, module, out_dir, os, json)
 
         # ---------------------------------------------------------------- D: removal
-        d1 = mcp("characters_delete", id="qa_guard")
-        check(d1.get("ok"), "D a character can be removed", json.dumps(d1)[:200])
-        d2 = mcp("characters_delete", id="qa_courier")
-        check(d2.get("ok"), "D and so can the last one")
+        check(char_delete("qa_guard"), "D a character's file is removed")
+        check(char_delete("qa_courier"), "D and so is the last one")
+        until(lambda: char_ids() == [])
 
         built2 = mcp("mod_export", target=out_dir)
         check(built2.get("ok"), "D the module builds again", json.dumps(built2)[:200])
@@ -501,7 +562,7 @@ def run(project: str) -> None:
         check(not gone, "D and with them what the module ships", json.dumps(gone)[:200])
 
         # the copy is left without characters, as it started
-        left = mcp("characters_list").get("characters", [])
+        left = char_ids()
         check(left == [], "D no character is left in the project", str(left))
 
     finally:

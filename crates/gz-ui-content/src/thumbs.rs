@@ -51,7 +51,10 @@ fn load_texture(editor: &Editor, name: &str) -> Result<AssetBytes, String> {
     if let Some(root) = editor.project_root() {
         disk.push((root.join("gamedata\\textures").join(format!("{rel}.dds")), "dds"));
     }
-    disk.push((editor.paths.root.join("gamedata\\textures").join(format!("{rel}.dds")), "dds"));
+    disk.push((
+        gz_project::library_root(editor).join("gamedata\\textures").join(format!("{rel}.dds")),
+        "dds",
+    ));
     for (path, ext) in &disk {
         if let Ok(bytes) = std::fs::read(path) {
             return Ok(AssetBytes { bytes, ext: Some((*ext).into()) });
@@ -63,7 +66,7 @@ fn load_texture(editor: &Editor, name: &str) -> Result<AssetBytes, String> {
     {
         return Ok(AssetBytes { bytes, ext: Some("dds".into()) });
     }
-    let tga = editor.paths.root.join("rawdata\\textures").join(format!("{rel}.tga"));
+    let tga = gz_project::library_root(editor).join("rawdata\\textures").join(format!("{rel}.tga"));
     std::fs::read(&tga)
         .map(|bytes| AssetBytes { bytes, ext: Some("tga".into()) })
         .map_err(|_| format!("the texture '{name}' is not in the project, the editor or the game"))

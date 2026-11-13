@@ -1,4 +1,4 @@
-//! The value a declarative Lua file holds (`SNqValue`).
+//! The value a declarative Lua file holds.
 
 use std::cmp::Ordering;
 
@@ -8,7 +8,8 @@ use smol_str::SmolStr;
 use crate::write::number_to_text;
 
 /// The well-known keys, in the order every generic table is written in; any other key follows
-/// them in byte order (`kKeyOrder`).
+/// them in byte order. [`key_rank_bytes`] is this list as a match.
+#[cfg(test)]
 const KEY_ORDER: &[&str] = &[
     "kind",
     "name",
@@ -85,21 +86,135 @@ const KEY_ORDER: &[&str] = &[
     "spa",
 ];
 
-/// The rank of a key in the canonical order; 100000 for a key that is not well known
-/// (`NqKeyRank`).
+/// The rank of a key in the canonical order; 100000 for a key that is not well known.
 #[must_use]
 pub fn key_rank(key: &str) -> u32 {
     key_rank_bytes(key.as_bytes())
 }
 
-/// [`key_rank`] over bytes. Like `strcmp` in the C++, it looks at the key up to its first NUL.
+/// [`key_rank`] over bytes. Like a C string compare, it looks at the key up to its first NUL.
 #[must_use]
 pub fn key_rank_bytes(key: &[u8]) -> u32 {
     let key = key.split(|&b| b == 0).next().unwrap_or(&[]);
-    KEY_ORDER.iter().position(|k| k.as_bytes() == key).map_or(100_000, |i| i as u32)
+    // by length first: this runs for every key of every table a file holds
+    match key.len() {
+        1 => match key {
+            b"x" => 22,
+            b"y" => 23,
+            b"z" => 24,
+            _ => 100_000,
+        },
+        2 => match key {
+            b"op" => 32,
+            b"is" => 35,
+            b"to" => 56,
+            b"of" => 60,
+            _ => 100_000,
+        },
+        3 => match key {
+            b"npc" => 2,
+            b"who" => 3,
+            b"ref" => 18,
+            b"pos" => 20,
+            b"not" => 64,
+            b"rus" => 65,
+            b"eng" => 66,
+            b"ukr" => 67,
+            b"pol" => 68,
+            b"fra" => 69,
+            b"ger" => 70,
+            b"ita" => 71,
+            b"spa" => 72,
+            _ => 100_000,
+        },
+        4 => match key {
+            b"kind" => 0,
+            b"name" => 1,
+            b"task" => 4,
+            b"into" => 14,
+            b"hold" => 19,
+            b"text" => 25,
+            b"icon" => 30,
+            b"spot" => 31,
+            b"info" => 39,
+            b"node" => 50,
+            b"from" => 55,
+            b"code" => 59,
+            b"cond" => 61,
+            _ => 100_000,
+        },
+        5 => match key {
+            b"quest" => 5,
+            b"story" => 9,
+            b"level" => 12,
+            b"place" => 13,
+            b"smart" => 15,
+            b"spawn" => 16,
+            b"title" => 26,
+            b"descr" => 27,
+            b"value" => 33,
+            b"delta" => 34,
+            b"count" => 37,
+            b"since" => 49,
+            b"theme" => 58,
+            _ => 100_000,
+        },
+        6 => match key {
+            b"target" => 6,
+            b"radius" => 21,
+            b"sender" => 29,
+            b"amount" => 38,
+            b"status" => 44,
+            b"repeat" => 46,
+            b"weight" => 62,
+            b"params" => 63,
+            _ => 100_000,
+        },
+        7 => match key {
+            b"section" => 8,
+            b"profile" => 10,
+            b"restart" => 45,
+            b"timeout" => 48,
+            b"seconds" => 52,
+            b"percent" => 57,
+            _ => 100_000,
+        },
+        8 => match key {
+            b"by_actor" => 36,
+            b"cooldown" => 47,
+            b"duration" => 51,
+            _ => 100_000,
+        },
+        9 => match key {
+            b"character" => 7,
+            b"community" => 11,
+            b"initiator" => 28,
+            b"spot_task" => 40,
+            _ => 100_000,
+        },
+        10 => match key {
+            b"restrictor" => 17,
+            b"game_hours" => 53,
+            _ => 100_000,
+        },
+        11 => match key {
+            b"allow_break" => 43,
+            _ => 100_000,
+        },
+        12 => match key {
+            b"follow_actor" => 42,
+            b"game_minutes" => 54,
+            _ => 100_000,
+        },
+        14 => match key {
+            b"spot_objective" => 41,
+            _ => 100_000,
+        },
+        _ => 100_000,
+    }
 }
 
-/// The canonical order of two keys: by rank, then by bytes (`NqKeyLess`).
+/// The canonical order of two keys: by rank, then by bytes.
 #[must_use]
 pub fn key_cmp(a: &str, b: &str) -> Ordering {
     key_cmp_bytes(a.as_bytes(), b.as_bytes())
@@ -391,7 +506,7 @@ impl Value {
     }
 
     /// The value as text: a string as it is, a number in its shortest plain form, a boolean
-    /// as `true` / `false`, anything else `default` (`AsString`).
+    /// as `true` / `false`, anything else `default`.
     #[must_use]
     pub fn to_text(&self, default: &str) -> String {
         match self {
@@ -403,7 +518,7 @@ impl Value {
     }
 
     /// The value as a number: a number, a string that is one entirely, a boolean as 1 / 0,
-    /// anything else `default` (`AsNumber`).
+    /// anything else `default`.
     #[must_use]
     pub fn to_number(&self, default: f64) -> f64 {
         match self {
@@ -415,7 +530,7 @@ impl Value {
     }
 
     /// The value as a boolean: a boolean, a number that is not zero, the strings `true` and
-    /// `1`, anything else `default` (`AsBool`).
+    /// `1`, anything else `default`.
     #[must_use]
     pub fn to_bool(&self, default: bool) -> bool {
         match self {
@@ -536,6 +651,11 @@ mod tests {
         assert_eq!(key_rank("kind"), 0);
         assert_eq!(key_rank("spa"), 72);
         assert_eq!(key_rank("Kind"), 100_000);
+        for (i, k) in KEY_ORDER.iter().enumerate() {
+            assert_eq!(key_rank(k), i as u32, "{k}");
+            assert_eq!(key_rank_bytes(format!("{k}\0x").as_bytes()), i as u32);
+        }
+        assert_eq!(key_rank("kinds"), 100_000);
     }
 
     #[test]

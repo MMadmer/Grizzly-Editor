@@ -1,7 +1,7 @@
 //! Deleting a project from the Start page: [`check_delete`] is the ONE set of checks in front of
 //! the confirmation, the deletion and MCP alike; [`delete_project`] checks again and deletes.
 //!
-//! Only a listed folder that holds `project.ltx` or `mod.ltx`; never the open project, a link,
+//! Only a listed folder that holds a project file or `mod.ltx`; never the open project, a link,
 //! a drive root, the user's own folders, the editor or a game, never one inside the editor or a
 //! game, and never one that holds another project. Inside, a link goes as a link and is never
 //! followed, and the manifests go last: a deletion that stops half way leaves a project that can
@@ -13,8 +13,9 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::fsys::{self, DirItem};
-use crate::project::ProjectFile;
-use crate::{list, paths};
+use crate::machine::{self, MachineFile, ProjectState};
+use crate::project::{self, ProjectFile};
+use crate::{legacy, list, paths};
 
 const MAX_NESTED: usize = 16;
 const MAX_FAILED: usize = 32;
@@ -102,8 +103,9 @@ pub struct DeleteContext {
 }
 
 /// The guards of this machine: the editor (`exe_dir`, `editor_root`), the user's own folders,
-/// Windows, Program Files, Temp, the open project's game, and what every listed project points
-/// at (its game, its editor, where it builds to). Reads the listed `project.ltx` files.
+/// Windows, Program Files, Temp, the open project's game, the editor's default game, and what
+/// every listed project points at on this machine (its game, where it builds to). Reads the
+/// listed projects' files and their state in `home`.
 ///
 /// The user's folders are where the shell keeps them (`SHGetKnownFolderPath`), redirected ones
 /// included.
@@ -111,6 +113,7 @@ pub struct DeleteContext {
 pub fn system_guards(
     exe_dir: &Path,
     editor_root: &Path,
+    home: &Path,
     open_game_root: Option<&str>,
     listed: &[String],
 ) -> Vec<Guard> {
@@ -153,14 +156,31 @@ pub fn system_guards(
     if let Some(game) = open_game_root.filter(|g| !g.is_empty()) {
         add(game, "the game the open project is linked to", true);
     }
+    let read = |p: &Path| std::fs::read(p).ok().map(|b| gz_base::text::decode_guess(&b).into_owned());
+    if let Some(text) = read(&home.join(machine::MACHINE_FILE)) {
+        add(&MachineFile::parse(&text).game_root(), "the editor's default game", true);
+    }
     for folder in listed {
-        let manifest = Path::new(folder).join(crate::project::FILE);
-        let Ok(text) = std::fs::read(&manifest) else { continue };
-        let file = ProjectFile::parse(&gz_base::text::decode_guess(&text));
         let of = format!(" of the project {}", paths::leaf_of(folder));
-        add(file.game_root(), &format!("the linked game{of}"), true);
-        add(file.sdk_root(), &format!("the editor{of}"), true);
-        add(file.export_target(), &format!("the export target{of}"), true);
+        let id = project::project_files(Path::new(folder))
+            .first()
+            .and_then(|f| read(f))
+            .and_then(|t| ProjectFile::parse(&t).ok())
+            .map(|f| f.id().to_owned())
+            .unwrap_or_default();
+        if !id.is_empty()
+            && let Some(text) = read(&machine::state_path(home, &id))
+        {
+            let state = ProjectState::parse(&text);
+            add(&state.game_root(), &format!("the linked game{of}"), true);
+            add(&state.export_target(), &format!("the export target{of}"), true);
+        }
+        // a project no editor opened since it had project.ltx
+        if let Some(text) = read(&Path::new(folder).join(legacy::FILE)) {
+            let old = legacy::Legacy::parse(&text);
+            add(&old.game_root, &format!("the linked game{of}"), true);
+            add(&old.export_target, &format!("the export target{of}"), true);
+        }
     }
     out
 }
@@ -177,7 +197,9 @@ fn volume_root(path: &str) -> bool {
 }
 
 fn is_manifest_name(name: &str) -> bool {
-    name.eq_ignore_ascii_case("project.ltx") || name.eq_ignore_ascii_case("mod.ltx")
+    name.eq_ignore_ascii_case(legacy::FILE)
+        || name.eq_ignore_ascii_case("mod.ltx")
+        || project::is_project_file_name(name)
 }
 
 /// A crashed packaging leaves its stage in `temp\` - a copy of the module, no project.
@@ -291,7 +313,7 @@ pub fn check_delete(cx: &DeleteContext, path: &str) -> DeleteInfo {
         return info;
     }
     if !list::has_manifest(Path::new(&info.path)) {
-        info.refuse("It holds no project.ltx or mod.ltx - it is not a project.");
+        info.refuse("It holds no project file and no mod.ltx - it is not a project.");
         return info;
     }
     if !on_list {
@@ -361,7 +383,7 @@ pub fn check_delete(cx: &DeleteContext, path: &str) -> DeleteInfo {
 /// What [`projects_inside`] found below a folder.
 #[derive(Clone, Debug, Default)]
 pub struct Inside {
-    /// The folders that hold `project.ltx` or `mod.ltx` (the first sixteen), the folder itself
+    /// The folders that hold a project file or `mod.ltx` (the first sixteen), the folder itself
     /// among them when it holds one.
     pub projects: Vec<String>,
     pub total: u32,
@@ -627,7 +649,7 @@ mod tests {
         let cx = DeleteContext { listed: vec![t.text("Plain")], ..DeleteContext::default() };
         assert_eq!(
             check_delete(&cx, &t.text("Plain")).refused.as_deref(),
-            Some("It holds no project.ltx or mod.ltx - it is not a project.")
+            Some("It holds no project file and no mod.ltx - it is not a project.")
         );
         fs::write(t.path("file.txt"), "x").unwrap();
         assert_eq!(

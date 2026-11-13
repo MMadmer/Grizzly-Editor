@@ -23,6 +23,7 @@ use tokio::sync::{Notify, watch};
 use crate::asset_kind::{self, AssetKind};
 use crate::fsys;
 use crate::rules::is_tooling_entry;
+use crate::watch::ProjectWatch;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryKind {
@@ -348,11 +349,23 @@ impl Shared {
     }
 }
 
-/// The project's file tree, kept current. Lives in the `Project` service; the watcher and the
-/// re-list task end with it.
+/// The project's file tree, kept current, and the changes of its files ([`ProjectWatch`]).
+/// Lives in the `Project` service; the watcher and the tasks end with it.
 pub struct TreeWatch {
     shared: Arc<Shared>,
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    changes: ProjectWatch,
+}
+
+/// Whether an event makes its path appear: a creation, or the new name of a rename.
+fn creates(kind: &notify::EventKind, index: usize, count: usize) -> bool {
+    use notify::event::{ModifyKind, RenameMode};
+    match kind {
+        notify::EventKind::Create(_) => true,
+        notify::EventKind::Modify(ModifyKind::Name(RenameMode::To)) => true,
+        notify::EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => index + 1 == count,
+        _ => false,
+    }
 }
 
 impl TreeWatch {
@@ -372,18 +385,28 @@ impl TreeWatch {
         });
         exec.spawn(run(Arc::downgrade(&shared), kick, exec.clone()));
         shared.mark_all();
+        let changes = ProjectWatch::start(root.clone(), exec);
 
         let weak = Arc::downgrade(&shared);
+        let hub = changes.clone();
         let made = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             let Some(shared) = weak.upgrade() else { return };
             match res {
-                Ok(event) if event.need_rescan() => shared.mark_all(),
+                Ok(event) if event.need_rescan() => {
+                    shared.mark_all();
+                    hub.rescan();
+                }
                 Ok(event) => {
-                    for p in &event.paths {
+                    let count = event.paths.len();
+                    for (i, p) in event.paths.iter().enumerate() {
                         shared.on_change(p);
+                        hub.event(p, creates(&event.kind, i, count));
                     }
                 }
-                Err(_) => shared.mark_all(),
+                Err(_) => {
+                    shared.mark_all();
+                    hub.rescan();
+                }
             }
         });
         let (watcher, problem) = match made {
@@ -396,7 +419,14 @@ impl TreeWatch {
             }
             Err(e) => (None, Some(format!("the project's files are not watched: {e}"))),
         };
-        (Self { shared, watcher: Mutex::new(watcher) }, problem)
+        changes.set_live(watcher.is_some());
+        (Self { shared, watcher: Mutex::new(watcher), changes }, problem)
+    }
+
+    /// The changes of the project's files, for anything that has to follow them.
+    #[must_use]
+    pub fn changes(&self) -> &ProjectWatch {
+        &self.changes
     }
 
     /// The current snapshot. Lock-free.

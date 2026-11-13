@@ -24,6 +24,15 @@ const LABEL_FRAC: f32 = 0.30;
 const TABLE_ROW: f32 = 26.0;
 
 /// A row's flags with Invalid when one of its problems is an error (`RowFlags`).
+/// "name.eng: here "Ivan", on disk "Petro"": one value both the form and the file changed.
+pub(crate) fn conflict_line(c: &gz_luadata::Conflict) -> String {
+    let show = |v: &Option<gz_luadata::Value>| match v {
+        None => "removed".to_owned(),
+        Some(v) => gz_luadata::inline(v).unwrap_or_else(|| "a long text".to_owned()),
+    };
+    format!("{}: here {}, on disk {}", gz_luadata::path::show(&c.path), show(&c.mine), show(&c.theirs))
+}
+
 fn flags(own: &[String], field: &str, base: PropFlags) -> PropFlags {
     if own.iter().any(|p| p.starts_with('E') && field_of(p) == field) {
         base | PropFlags::INVALID
@@ -300,6 +309,20 @@ impl CharactersDoc {
         }
         if !self.status.is_empty() {
             let _ = text::status(ui, Tone::Error, &self.status);
+        }
+        // the file changed on disk too: the values both sides changed keep the form's
+        if !self.conflicts.is_empty() {
+            let n = self.conflicts.len();
+            let head = format!(
+                "Changed on disk too: {n} value{}. The form keeps its own; Take Theirs takes the file's.",
+                if n == 1 { "" } else { "s" }
+            );
+            let lines: Vec<String> = self.conflicts.iter().map(conflict_line).collect();
+            let items: Vec<(&str, Option<&str>)> =
+                lines.iter().map(|l| (l.as_str(), Some("Take Theirs"))).collect();
+            if let Some(i) = gz_ui::state::banner_list(ui, Tone::Warning, &head, &items) {
+                self.take_theirs(i);
+            }
         }
         ui.add_space(6.0);
     }

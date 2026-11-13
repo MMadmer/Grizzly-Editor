@@ -38,6 +38,13 @@ type answer struct {
 	payload any
 	body    []byte
 	headers map[string]string
+	// cutting: only the first cut bytes of the body are sent, then the connection is held for
+	// hold and reset (an asset download the harness breaks).
+	cutting bool
+	cut     int
+	hold    time.Duration
+	// sent learns how many body bytes went out.
+	sent func(int)
 }
 
 func reply(status int, payload any, err error) (*answer, error) {
@@ -266,7 +273,25 @@ func (x *exchange) send(response *answer) error {
 	header.Set("Connection", "close")
 	x.control.SetWriteDeadline(time.Now().Add(socketTimeout))
 	x.w.WriteHeader(response.status)
-	if _, err := x.w.Write(body); err != nil {
+	if response.cutting && response.cut < len(body) {
+		written, _ := x.w.Write(body[:response.cut])
+		x.control.Flush()
+		if response.sent != nil {
+			response.sent(written)
+		}
+		if response.hold > 0 {
+			time.Sleep(response.hold)
+		}
+		// a tidy close: the client gets every byte sent, then a body shorter than it was told
+		// (a reset could throw away what it had not read yet)
+		x.hangUp(false)
+		return errClientClosed
+	}
+	written, err := x.w.Write(body)
+	if response.sent != nil {
+		response.sent(written)
+	}
+	if err != nil {
 		return err
 	}
 	return x.control.Flush()
@@ -355,7 +380,7 @@ func (x *exchange) route() (*answer, error) {
 func (x *exchange) routeLocked(raw []byte) (*answer, error) {
 	m, seg, query := x.mock, x.segments, x.query
 	get, post := x.r.Method == "GET", x.r.Method == "POST"
-	if len(seg) > 0 && (seg[0] == "user" || seg[0] == "repos") {
+	if len(seg) > 0 && (seg[0] == "user" || seg[0] == "repos") && !x.anonymousRead() {
 		if err := x.checkAPIHeaders(); err != nil {
 			return nil, err
 		}
@@ -385,6 +410,8 @@ func (x *exchange) routeLocked(raw []byte) (*answer, error) {
 			return nil, err
 		}
 		return ok(m.harnessClose(number, cmp.Or(query["reason"], closeReasons[0]), cmp.Or(query["by"], actionsBot)))
+	case match(seg, "__asset", "*"):
+		return m.assetHarness(seg[1], x.r.Method, query)
 	case get && match(seg, "__vt"):
 		return ok(m.vtStateJSON(), nil)
 	case post && match(seg, "__vt", "queue"):
@@ -742,15 +769,21 @@ func (x *exchange) upload(owner, repo, releaseID, name string) (*answer, error) 
 
 func (x *exchange) cdnAnswer(a *asset) (*answer, error) {
 	headers := map[string]string{"Content-Type": "application/octet-stream", "Accept-Ranges": "bytes"}
-	first, last, ranged, err := parseRange(x.r.Header.Get("Range"), len(a.data))
+	asked := x.r.Header.Get("Range")
+	first, last, ranged, err := parseRange(asked, len(a.data))
 	if err != nil {
 		return nil, err
 	}
-	if !ranged {
-		return &answer{status: http.StatusOK, body: a.data, headers: headers}, nil
+	var result *answer
+	if !ranged || x.mock.noRanges {
+		first, last = 0, len(a.data)-1
+		result = &answer{status: http.StatusOK, body: a.data, headers: headers}
+	} else {
+		headers["Content-Range"] = fmt.Sprintf("bytes %d-%d/%d", first, last, len(a.data))
+		result = &answer{status: http.StatusPartialContent, body: a.data[first : last+1], headers: headers}
 	}
-	headers["Content-Range"] = fmt.Sprintf("bytes %d-%d/%d", first, last, len(a.data))
-	return &answer{status: http.StatusPartialContent, body: a.data[first : last+1], headers: headers}, nil
+	x.mock.assetServed(a.name, asked, first, last, result)
+	return result, nil
 }
 
 // parseRange resolves a single bytes range; ranged is false for no header or a form this mock ignores.

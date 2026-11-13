@@ -72,13 +72,13 @@ def start_once(home: str) -> tuple[dict[str, float], str]:
                     break
             except OSError:
                 time.sleep(0.05)
-        shot = call("screenshot_editor", timeout=30)
+        shot = call("shot.window", timeout=30)
         marks = milestones(home)
         note = "" if shot.get("ok") else "screenshot: " + json.dumps(shot)[:200]
         return marks, note
     finally:
         try:
-            call("window_control", timeout=10, action="close", discard=True)
+            call("app.quit", timeout=10, discard=True)
         except OSError:
             pass
         try:

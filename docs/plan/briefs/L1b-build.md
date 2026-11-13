@@ -51,6 +51,8 @@ to know (audit B6). The model:
 - The 17 alias commands (`build_cform`, `make_all`, `compile_geometry`, `play_clean`, ...),
   `level_rebuild_status`, `reload_configs` (becomes `level.play action=reload_configs` or goes if nothing but a
   running Play needs it) are deleted, with their callers fixed.
+- A `level.*` command that needs the scene when none is up loads the project's scene first (stream L1a gives
+  `scene.*` the same): `Grizzly-Cmd.exe run level.build` builds from a cold start.
 - One way to answer long work (`docs/COMMANDS.md` 3): the command waits for its job, `wait=false` answers the
   job id, `job.*` follows it. No `action=status` polling contract, no `answer_only`.
 

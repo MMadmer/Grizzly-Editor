@@ -62,7 +62,7 @@ async fn open_tab(
     if let Some(s) = source {
         args.insert("source".into(), json!(s));
     }
-    let reply = editor.call("ui_tab", args, Origin::Mcp).await;
+    let reply = editor.call("ui.tab", args, Origin::Mcp).await;
     if reply.get("ok").and_then(Value::as_bool) == Some(true) {
         return Ok(());
     }
@@ -267,9 +267,9 @@ async fn texture_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
             if open {
                 let mut a = Args::new();
                 a.insert("action".into(), json!("close"));
-                a.insert("id".into(), json!("texture"));
+                a.insert("doc".into(), json!("texture"));
                 a.insert("discard".into(), json!(true));
-                let _ = editor.call("ui_tab", a, Origin::Mcp).await;
+                let _ = editor.call("ui.tab", a, Origin::Mcp).await;
             }
             return texture_answer(&editor).await;
         }
@@ -527,7 +527,7 @@ fn png_reply(name: &str, png: &[u8], rendered: bool) -> Value {
 
 async fn asset_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let Some(raw) = args.text("name") else {
-        return Err(invalid("missing 'name' argument (see list_assets)"));
+        return Err(invalid("missing 'name' argument (see file.list source=library)"));
     };
     let name = engine_name(raw);
     let source = args.str("source").unwrap_or_default().to_lowercase();
@@ -546,7 +546,7 @@ async fn asset_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Repl
                     return Err(invalid("no game is linked: link one with game_link"));
                 }
                 if sources.find_game_visual(&name).is_none() {
-                    return Err(invalid("not found in the linked game install (see darf_list)"));
+                    return Err(invalid("not found in the game's files (see file.list source=game)"));
                 }
             }
             let png = render_model(&editor, &name, src)

@@ -5,9 +5,13 @@
 #   .\Build.ps1             - release
 #   .\Build.ps1 -Debug      - the debug build, into Bin\x64\Debug
 #   .\Build.ps1 -Out <dir>  - put the files there instead of Bin\x64\<config>
+#   .\Build.ps1 -Package    - the release, then its archives in Bin\x64\Package (tools/rust/package.py):
+#                             Grizzly-Editor-<version>.zip, its -symbols.zip and update-manifest.txt.
+#                             Nothing is published; a release goes out by the author's hand.
 param(
     [string]$Out = '',
-    [switch]$Debug
+    [switch]$Debug,
+    [switch]$Package
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,6 +25,7 @@ $config = if ($Debug) { 'Debug' } else { 'Release' }
 function Fail([string]$msg) { Write-Host "`nBUILD SETUP ERROR: $msg" -ForegroundColor Red; exit 1 }
 
 if ($PSVersionTable.PSVersion.Major -lt 7) { Fail "run it with pwsh 7: pwsh -NoProfile -File .\Build.ps1" }
+if ($Package -and $Debug) { Fail "a package is made from the release build: drop -Debug" }
 
 $bin = if ($Out) { [IO.Path]::GetFullPath($Out, (Get-Location).Path) } else { Join-Path $root "Bin\x64\$config" }
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
@@ -56,5 +61,12 @@ foreach ($name in $files.Keys) {
 }
 
 Write-Host "`nBuilt into ${bin}: $($copied -join ', ')"
+if ($Package) {
+    $python = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if (-not $python) { Fail "python 3 not found: tools/rust/package.py makes the archives" }
+    Write-Host ''
+    & $python (Join-Path $root 'tools\rust\package.py') --bin $bin --out (Join-Path $root 'Bin\x64\Package')
+    if ($LASTEXITCODE) { exit $LASTEXITCODE }
+}
 Write-Host ("  {0} s" -f $clock.Elapsed.TotalSeconds.ToString('F1', [Globalization.CultureInfo]::InvariantCulture))
 exit 0

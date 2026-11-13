@@ -75,7 +75,7 @@ def start(cmd: list[str], cwd: str, port: int, limit: float = 120.0) -> subproce
 
 def stop(proc: subprocess.Popen, port: int) -> None:
     try:
-        call(port, {"cmd": "window_control", "action": "close", "discard": True}, timeout=10)
+        call(port, {"cmd": "app.quit", "discard": True}, timeout=10)
     except OSError:
         pass
     try:

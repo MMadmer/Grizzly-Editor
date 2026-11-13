@@ -4,8 +4,10 @@
 use std::io::{self, Write};
 use std::path::Path;
 
-/// The editor's scratch, path bookkeeping and captured preview, by their name in the project
-/// root. Everything else there is the author's module: never shown as content, never exported.
+/// The editor's scratch and captured preview, by their name in the project root: never shown as
+/// content, never exported. The project file (`*.grizzly`) is the project itself and goes with
+/// them. `project.ltx` is what an earlier editor kept there - this machine's paths: one that a
+/// project still holds (it is converted and removed when the project is opened) never ships.
 const EDITOR_ONLY: [&str; 9] = [
     "import",
     "temp",
@@ -14,9 +16,13 @@ const EDITOR_ONLY: [&str; 9] = [
     "screenshots",
     "backup",
     "releases",
-    "project.ltx",
     "preview.png",
+    "project.ltx",
 ];
+
+/// The guides at the root for those who work on the files without the editor (`AGENTS.md`, the
+/// editor's; `CLAUDE.md`, an agent's own): the author's, never the module's.
+const GUIDES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
 
 /// What the Windows shell leaves in folders it has shown.
 const SHELL_LITTER: [&str; 4] = ["Thumbs.db", "ehthumbs.db", "ehthumbs_vista.db", "desktop.ini"];
@@ -25,12 +31,15 @@ const SHELL_LITTER: [&str; 4] = ["Thumbs.db", "ehthumbs.db", "ehthumbs_vista.db"
 #[must_use]
 pub fn is_editor_only_entry(name_in_root: &str) -> bool {
     EDITOR_ONLY.iter().any(|n| n.eq_ignore_ascii_case(name_in_root))
+        || crate::project::is_project_file_name(name_in_root)
 }
 
 /// Sources: shown and editable, but the game has no use for them and the export leaves them out.
 #[must_use]
 pub fn is_source_only_entry(name_in_root: &str) -> bool {
-    name_in_root.eq_ignore_ascii_case("rawdata") || name_in_root.eq_ignore_ascii_case("Content")
+    name_in_root.eq_ignore_ascii_case("rawdata")
+        || name_in_root.eq_ignore_ascii_case("Content")
+        || GUIDES.iter().any(|n| n.eq_ignore_ascii_case(name_in_root))
 }
 
 /// Tooling: version control, IDE and OS litter. Never shown, never shipped and never walked,
@@ -55,8 +64,7 @@ pub fn is_tooling_entry(name: &str) -> bool {
 pub const GITIGNORE_TEXT: &str = "# Grizzly Editor: its own files, never part of the mod. Written once because\n\
 # this project is a git repository - edit it freely, the editor will not again.\n\
 \n\
-# this machine's paths and last scene; the editor recreates it on open\n\
-/project.ltx\n\
+# the Start page's picture of the project\n\
 /preview.png\n\
 # packaged releases - rebuilt from the sources, published on GitHub\n\
 /releases/\n\
@@ -122,9 +130,12 @@ mod tests {
     #[test]
     fn editor_and_source_entries() {
         assert!(is_editor_only_entry("Releases"));
-        assert!(is_editor_only_entry("project.ltx"));
+        assert!(is_editor_only_entry("Delivery.grizzly"));
+        assert!(!is_editor_only_entry(".grizzly"));
         assert!(!is_editor_only_entry("mod.ltx"));
         assert!(is_source_only_entry("RAWDATA"));
+        assert!(is_source_only_entry("agents.md"));
+        assert!(is_source_only_entry("CLAUDE.md"));
         assert!(is_source_only_entry("content"));
         assert!(!is_source_only_entry("gamedata"));
     }
@@ -138,6 +149,8 @@ mod tests {
         std::fs::create_dir(dir.join(".git")).unwrap();
         assert!(ensure_gitignore(&dir).unwrap());
         assert_eq!(std::fs::read_to_string(dir.join(".gitignore")).unwrap(), GITIGNORE_TEXT);
+        // the project file is the author's and goes into the repository
+        assert!(!GITIGNORE_TEXT.contains("grizzly") && !GITIGNORE_TEXT.contains("project.ltx"));
         std::fs::write(dir.join(".gitignore"), "mine\n").unwrap();
         assert!(!ensure_gitignore(&dir).unwrap());
         assert_eq!(std::fs::read_to_string(dir.join(".gitignore")).unwrap(), "mine\n");

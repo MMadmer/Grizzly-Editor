@@ -1,11 +1,11 @@
-//! View > Render > GPU (`UIMainMenuForm::DrawViewportOptions`, `device.cpp`): the adapter the
+//! View > Render > GPU: the adapter the
 //! device is made on - a preference read when the window opens, so a change takes a restart -
 //! and the driver's hint, which Windows keeps per executable in
 //! `HKCU\Software\Microsoft\DirectX\UserGpuPreferences` and applies when the process starts.
 //! The hint is read and written through `reg.exe` on the IO pool: never from a frame.
 //!
-//! The sounds' mute switch lives here too: View > Mute Sounds (`rsMuteSounds`, kept) and
-//! `COMMAND_MUTE_SOUND` (the C++ `MuteSounds`, a mute for a while) together decide it.
+//! The sounds' mute switch lives here too: View > Mute Sounds (kept in the settings) and a mute
+//! for a while (a library's preview) together decide it.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};

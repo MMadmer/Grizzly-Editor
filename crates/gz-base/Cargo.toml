@@ -15,3 +15,6 @@ serde.workspace = true
 smol_str.workspace = true
 encoding_rs.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

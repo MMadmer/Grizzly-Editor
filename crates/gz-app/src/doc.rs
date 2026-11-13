@@ -167,6 +167,8 @@ pub(crate) enum Request {
     TaskCard(bool),
     Popup(String),
     OwnKeys(String),
+    Action(String),
+    CaptureKeys,
 }
 
 impl ShellRequests {
@@ -228,6 +230,17 @@ impl ShellRequests {
     /// Output Log): the scene's bindings stay away from the next frame's keys.
     pub fn own_keys(&mut self, who: &str) {
         self.list.push(Request::OwnKeys(who.to_owned()));
+    }
+
+    /// Runs an action by its id, as its menu row would.
+    pub fn action(&mut self, id: &str) {
+        self.list.push(Request::Action(id.to_owned()));
+    }
+
+    /// The surface reads the keys itself in the next frame (the Keyboard page records a
+    /// shortcut): no action, no document and no binding takes one.
+    pub fn capture_keys(&mut self) {
+        self.list.push(Request::CaptureKeys);
     }
 }
 
@@ -300,6 +313,20 @@ pub trait Document {
     }
     fn save(&mut self, cx: &mut DocCx<'_>) -> Result<(), String> {
         Ok(())
+    }
+    /// Reads its file again (`doc.reload`); `discard` lets it drop unsaved edits first.
+    fn reload(&mut self, cx: &mut DocCx<'_>, discard: bool) -> Result<(), String> {
+        Err("This tab has no file to read again.".to_owned())
+    }
+    /// The part of the document that has the keyboard now ("canvas"): actions of that part's
+    /// scope take their keys there (`actions::Scope::Part`).
+    fn key_part(&self, ctx: &egui::Context) -> Option<&'static str> {
+        None
+    }
+    /// What the toolbar row says for a tab whose toolbar has nothing of its own: "Saved to
+    /// mod.ltx as you edit". The row is never drawn empty.
+    fn toolbar_status(&self) -> Option<String> {
+        None
     }
     /// Forgets the unsaved changes.
     fn discard(&mut self, cx: &mut DocCx<'_>) {}

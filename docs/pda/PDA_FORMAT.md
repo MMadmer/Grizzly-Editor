@@ -18,7 +18,10 @@ layouts", is its game half.
   ```
 
   **Mod > PDA Interface** in the editor, the preview's **Use in Module** button and
-  MCP `pda_use` all write that line.
+  MCP `pda_use` all write that line. The first layout a module gets is its layout: a
+  `.pdaasset` that appears in a project whose manifest names none is written into the line
+  as it appears (the content browser's Add, `file.create kind=pda`, an agent's own file),
+  and the line goes when the file it names is removed.
 - The build ships the file as it is. Nothing of the game is written: no `pda.xml`, no
   script of the game. A module without `[pda]` leaves the PDA alone, and a game without
   a module layout draws the stock PDA byte for byte.
@@ -53,6 +56,21 @@ return {
   preview = { level = "l03_agroprom", vars = { money = "12450" } },   -- the editor's only
 }
 ```
+
+### How the editor reads and writes a layout
+
+- The editor writes a layout as it is: the Source pane's text, or the template for a new
+  one. It rewrites nothing, adds no comment and keeps the author's layout and line endings
+  (`docs/ASSETS.md`).
+- `pda = 1` is the format version. A layout of a newer version opens nothing and loses
+  nothing: the editor says it was made by a newer Grizzly Editor (`newer_version`). A file
+  without the header is `E001`; anything else the game's reader refuses is `E301`.
+- A layout changed on disk while the preview shows it is read again at once. When the
+  Source pane holds edits, the values the pane changed go into the file's new text and the
+  file's other changes stay; a value both changed keeps the pane's, and the Details pane
+  says "Changed on disk too" with Take Theirs (MCP `asset.take_theirs`). A text that does
+  not read cannot be merged: the pane keeps its text and says so. A file removed while the
+  pane holds edits is written again by Save.
 
 ### The canvas
 
@@ -205,7 +223,7 @@ map_spots = {
 A key is a stock spot NODE of `ui\map_spots.xml` (`actor_level_spot`, `actor_level_spot_p`,
 `green_spot`, `secondary_task_spot`, `storyline_task_spot`, their `_mini` twins, ...); the
 module only restyles, never adds a spot type - a script that names a type the game does not
-know stops it. `icon` is a texture id, or a texture file (the project's own `gamedata	extures\...` too) with `rect = { x, y, w, h }` - the piece of it in its pixels; `color` a colour (tints the icon), `size` 4..128 (24), `level` the
+know stops it. `icon` is a texture id, or a texture file (the project's own `gamedata\textures\...` too) with `rect = { x, y, w, h }` - the piece of it in its pixels; `color` a colour (tints the icon), `size` 4..128 (24), `level` the
 `location_level` (5), `heading = true` turns it with the player, `inner` an icon drawn on top
 (`icon`, `color`, `size`, `x`, `y` inside the spot; centred by default), `arrows` the name
 the minimap's `_below` / `_above` textures start with. While the layout is on the game
@@ -303,14 +321,14 @@ stock PDA stays (the log says why).
 
 | command | what |
 |---|---|
-| `pda_list` | the project's layouts, the used one marked |
-| `pda_get` | one layout: text, outline, problems |
-| `pda_write` | create (template) or replace; `use` picks it |
-| `pda_delete` | delete (final); clears `[pda]` when it was the used one |
+| the file | a layout is a file: read it, write it, delete it with the agent's own tools or `file.*` |
+| `file.create kind=pda path=<folder>` | a new layout from the template; the module's first is used at once |
+| `asset.check path=<file or folder>` | every problem of a layout, the game reader's codes at their line and column |
+| `asset.reference kind=pda` | this document |
 | `pda_use` | set or clear `[pda] layout` |
-| `pda_validate` | check a text or a file |
 | `pda_preview` | open / state / click (`id`, `id` + `row`, `n`, or a canvas `x`,`y`) / page / key / aspect / lang / reset / reload / close; apply (`text=` into the Source pane, unsaved) / save / revert. With any action: `pane=source\|details\|both\|none`, `tab=problems\|pages\|vars\|log`, `zoom=fit\|100\|<0.25..4>`, and `save=` / `discard=` for unsaved edits. The answer gives `active`, `text_dirty`, `panes` (`source`, `details`, `tab`, `details_width`, `source_height` in pt), `zoom`, `scale` (what the frame drew at), `device_gap` (pt between the device and the canvas' nearest edge, below 0 when cut), `screen_edges` (the device's sides that lie on the game's screen edge: `top`, `bottom`, `left`, `right`), `read_line`; the state gives `map.bound`, the preview level's world rect, and `map.spots`: the player and the `preview.markers` the slot shows, in canvas units. The answer is the frame the call asked for - the editor holds it until the tab was drawn, so an opener's panes, `scale`, `device_gap` and `screen_edges` need no second call (`pending` is false) |
 
-The preview follows the file: a write shows at once, unless the Source pane holds edits.
+The preview follows the file: a write shows at once; with edits in the Source pane it is
+merged into them (`disk_note` in the answer names what both changed).
 `open` activates the tab; every other action leaves the active tab alone.
-`screenshot_editor` after `pda_preview action=open` is what the author sees.
+`shot.window` after `pda_preview action=open` is what the author sees.

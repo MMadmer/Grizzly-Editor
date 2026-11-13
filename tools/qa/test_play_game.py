@@ -535,7 +535,7 @@ def main() -> int:
     finally:
         try:
             mcp("level_build", action="play_stop", timeout=30)
-            mcp("window_control", action="close", discard=True, timeout=30)
+            mcp("app.quit", discard=True, timeout=30)
         except OSError:
             pass
         deadline = time.monotonic() + 60

@@ -18,6 +18,8 @@ gz-query.workspace = true
 gz-project.workspace = true
 gz-ui.workspace = true
 gz-app.workspace = true
+# the editor's own updates: the chip, the dialog, the Preferences group
+gz-update.workspace = true
 egui.workspace = true
 parking_lot.workspace = true
 serde_json.workspace = true

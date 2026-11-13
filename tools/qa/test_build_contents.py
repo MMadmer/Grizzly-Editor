@@ -93,7 +93,7 @@ class Editor:
 
     def close(self) -> None:
         try:
-            mcp("window_control", action="close")
+            mcp("app.quit")
         except OSError:
             pass
         if self.proc:
@@ -182,10 +182,10 @@ def run_ui_checks() -> None:
     for page in SETTINGS_PAGES:
         v = mcp("mod_settings_view", page=page)
         check(v.get("ok") and v.get("active") and v.get("page") == page, "U the tab opens on " + page, json.dumps(v)[:300])
-        audit = mcp("ui_audit", id="mod_settings")
+        audit = mcp("ui.audit", id="mod_settings")
         check(audit.get("ok") and not audit.get("escaped"), "U nothing escapes the " + page + " page",
               json.dumps(audit.get("escaped"))[:400])
-    controls = labels_of(mcp("ui_audit", id="mod_settings"))
+    controls = labels_of(mcp("ui.audit", id="mod_settings"))
     check("Revert" not in controls and "Save" not in controls, "U the tab saves as it is edited: no Revert, no Save",
           json.dumps(sorted(x for x in controls if x))[:400])
     # a save made elsewhere reaches the form and leaves it clean
@@ -195,7 +195,7 @@ def run_ui_checks() -> None:
     mcp("mod_exclude", path="qa_ui_probe", excluded=False)
     # Relations are picked from the linked game's modules, never typed into boxes
     mcp("mod_settings_view", page="relations")
-    audit = mcp("ui_audit", id="mod_settings")
+    audit = mcp("ui.audit", id="mod_settings")
     controls = labels_of(audit)
     check("Add Module..." in controls, "U Relations offers Add Module...", json.dumps(sorted(x for x in controls if x))[:400])
     # the same label-left grid as the other pages: a row per relation, its Add Module... in the value column
@@ -207,7 +207,7 @@ def run_ui_checks() -> None:
           json.dumps({"rows": rows, "adds": adds})[:400])
     # Mod Browser too: Picture and Tags are rows, the picture's buttons in the value column
     mcp("mod_settings_view", page="mod_browser")
-    audit = mcp("ui_audit", id="mod_settings")
+    audit = mcp("ui.audit", id="mod_settings")
     controls = labels_of(audit)
     picture, tags, choose = controls.get("Picture"), controls.get("Tags"), controls.get("Choose Picture...")
     grid = bool(picture and tags and choose) and choose["rect"][0] >= picture["rect"][0] + 60 and \
@@ -223,17 +223,17 @@ def run_ui_checks() -> None:
     bad = mcp("mod_settings_view", page="nowhere")
     check(not bad.get("ok") and "general" in bad.get("error", ""), "U an unknown page is refused, naming the pages",
           json.dumps(bad))
-    closed = mcp("ui_tab", action="close", id="mod_settings")
+    closed = mcp("ui.tab", action="close", doc="mod_settings")
     check(closed.get("ok"), "U the tab closes when nothing is unsaved", json.dumps(closed)[:300])
 
-    windows = mcp("ui_contract").get("dialogs", {})
+    windows = mcp("ui.contract").get("dialogs", {})
     module_id = mcp("mod_manifest").get("id", "")
     for dialog in BUILD_DIALOGS:
         window = windows.get(dialog, "")
         check(window.endswith("###dlg." + dialog), "U the contract names " + dialog + " by its kit id", window)
-        opened = mcp("ui_dialog", action="open", id=dialog)
+        opened = mcp("ui.dialog", action="open", id=dialog)
         check(opened.get("ok"), "U ui_dialog opens " + dialog, json.dumps(opened)[:300])
-        audit = mcp("ui_audit", id="dlg." + dialog)
+        audit = mcp("ui.audit", id="dlg." + dialog)
         check(audit.get("ok") and not audit.get("escaped"), "U nothing escapes " + dialog, json.dumps(audit.get("escaped"))[:400])
         controls = labels_of(audit)
         check("Cancel" in controls, "U " + dialog + " has Cancel", json.dumps(sorted(x for x in controls if x))[:300])
@@ -243,11 +243,11 @@ def run_ui_checks() -> None:
             cut = [t for t in audit.get("truncated", []) if t.get("label", "").endswith(tail + module_id)]
             check(all(t.get("shown", "").endswith(tail + module_id) for t in cut),
                   "U " + dialog + " keeps the end of the path it writes to", json.dumps(cut)[:300])
-        listed = [d.get("id") for d in mcp("ui_list").get("dialogs", [])]
+        listed = [d.get("id") for d in mcp("ui.list").get("dialogs", [])]
         check(dialog in listed, "U ui_list names " + dialog + " as the dialog on top", json.dumps(listed))
-        shut = mcp("ui_dialog", action="close", id=dialog)
+        shut = mcp("ui.dialog", action="close", id=dialog)
         check(shut.get("ok"), "U ui_dialog closes " + dialog, json.dumps(shut)[:300])
-        listed = [d.get("id") for d in mcp("ui_list").get("dialogs", [])]
+        listed = [d.get("id") for d in mcp("ui.list").get("dialogs", [])]
         check(dialog not in listed, "U and it is gone", json.dumps(listed))
 
 
@@ -292,10 +292,10 @@ def run(project: str) -> None:
         write(project, ".gitignore", "# the author's own now\n")
 
         # ------------------------------------------------------------------ B: never walked, never listed
-        quests = [q.get("path", "") for q in mcp("quest_list").get("quests", [])]
+        quests = [q.get("extra", "") for q in mcp("game.lookup", type="quest_id", limit=500).get("entries", [])]
         check(not any("qa_hidden_in_git" in q for q in quests), "B a quest inside .git is no quest of the project",
               json.dumps(quests))
-        chars = [c.get("id") for c in mcp("characters_list").get("characters", [])]
+        chars = [c.get("id") for c in mcp("game.lookup", type="character_id", limit=500).get("entries", [])]
         check("qa_hidden" not in chars, "B nor a character inside .vscode", json.dumps(chars))
         check("qa_courier" in chars, "B the project's own character is listed")
         for rel in (".git", ".gitignore", ".vscode"):
@@ -327,10 +327,16 @@ def run(project: str) -> None:
         check("[exclude]" in ltx and "wip_char" in ltx, "C the list lives in mod.ltx [exclude]")
 
         # excluded quests and characters are no part of the build
-        quests = [q.get("path", "") for q in mcp("quest_list").get("quests", [])]
+        quests = [q.get("extra", "") for q in mcp("game.lookup", type="quest_id", limit=500).get("entries", [])]
         check(not any("wip.nqasset" in q for q in quests), "C a quest in an excluded folder is not the build's",
               json.dumps(quests))
-        chars = [c.get("id") for c in mcp("characters_list").get("characters", [])]
+        # the pickers' list follows the manifest a moment later: it never makes a caller wait
+        deadline = time.monotonic() + 10
+        while True:
+            chars = [c.get("id") for c in mcp("game.lookup", type="character_id", limit=500).get("entries", [])]
+            if "qa_ghost" not in chars or time.monotonic() > deadline:
+                break
+            time.sleep(0.1)
         check("qa_ghost" not in chars, "C nor a character in one", json.dumps(chars))
 
         # ------------------------------------------------------------------ D: the build
@@ -397,7 +403,7 @@ def run(project: str) -> None:
 
         # ------------------------------------------------------------------ H: a clone without project.ltx
         os.remove(os.path.join(project, "project.ltx"))
-        listed = json.dumps(mcp("list_projects"))
+        listed = json.dumps(mcp("project.list"))
         check(os.path.basename(project) in listed, "H a folder with mod.ltx and no project.ltx is still a project",
               listed[:300])
     finally:

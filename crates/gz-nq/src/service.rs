@@ -6,14 +6,14 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::SystemTime;
 
-use gz_base::{Origin, RelPath, Rev, RevCounter};
+use gz_base::{Origin, Problem, RelPath, Rev, RevCounter};
 use gz_editor::{CmdError, DirtyDoc, DirtySource, Editor, Executors, Log, ProjectSession};
 use gz_game::{Bundled, GameLink};
 use gz_mod::ManifestService;
-use gz_project::{AssetKind, EntryKind, FileTree, Project};
+use gz_project::{AssetKind, EntryKind, FileTree, Filter, Project};
 use gz_query::Query;
 use gz_store::{Store, StoreOptions};
 use gz_vfs::{GameFiles, ModuleRoot};
@@ -23,6 +23,7 @@ use rustc_hash::FxHashMap;
 use crate::asset::{self, Graph};
 use crate::caps::ItemCaps;
 use crate::catalog::{Catalog, SourceFile};
+use crate::disk::{DiskState, OnDisk};
 use crate::doc::{DocCmd, DocOp, DocReply, GraphDoc};
 use crate::index::{self, IndexEntry, IndexSnapshot};
 pub use crate::pickers::Transition;
@@ -71,13 +72,31 @@ pub struct DocPath {
     pub inside: bool,
 }
 
-/// One open document: its store and its file.
+/// One open document: its store, its file and what the file says the document does not show.
 pub struct DocHandle {
     pub store: Store<GraphDoc>,
     path: RwLock<DocPath>,
+    /// The file as read (its lossless document) and the model's value of it.
+    pub(crate) on_disk: Mutex<Option<OnDisk>>,
+    disk: RwLock<DiskState>,
+    /// One read or write of the file at a time.
+    pub(crate) io: tokio::sync::Mutex<()>,
+    /// Which follower of the file is the current one (a rename starts another).
+    pub(crate) follow: AtomicU64,
 }
 
 impl DocHandle {
+    pub(crate) fn new(exec: &Executors, path: DocPath) -> Self {
+        Self {
+            store: Store::spawn("graph", GraphDoc::default(), exec, StoreOptions { history_limit: 200 }),
+            path: RwLock::new(path),
+            on_disk: Mutex::new(None),
+            disk: RwLock::new(DiskState::default()),
+            io: tokio::sync::Mutex::new(()),
+            follow: AtomicU64::new(0),
+        }
+    }
+
     #[must_use]
     pub fn path(&self) -> DocPath {
         self.path.read().clone()
@@ -86,6 +105,26 @@ impl DocHandle {
     #[must_use]
     pub fn is_dirty(&self) -> bool {
         self.store.is_dirty()
+    }
+
+    /// What the file on disk says that the document does not show: it does not read, it is
+    /// gone, values both sides changed.
+    #[must_use]
+    pub fn disk(&self) -> DiskState {
+        self.disk.read().clone()
+    }
+
+    pub(crate) fn set_disk(&self, f: impl FnOnce(&mut DiskState)) {
+        let mut d = self.disk.write();
+        f(&mut d);
+        d.rev += 1;
+    }
+
+    /// What reading the file found that the graph's own check does not say: the header, a byte
+    /// order mark, an old version.
+    #[must_use]
+    pub fn read_problems(&self) -> Vec<Problem> {
+        self.on_disk.lock().as_ref().map_or_else(Vec::new, |o| o.asset.notes.clone())
     }
 }
 
@@ -162,13 +201,15 @@ impl ValidateEnv {
 
 /// The graph area of the open project (`session.services`).
 pub struct NqService {
-    exec: Executors,
+    pub(crate) exec: Executors,
     log: Log,
     root: String,
     root_key: String,
-    project: Arc<Project>,
-    docs: Mutex<Vec<Arc<DocHandle>>>,
-    docs_rev: RevCounter,
+    pub(crate) project: Arc<Project>,
+    pub(crate) docs: Mutex<Vec<Arc<DocHandle>>>,
+    pub(crate) docs_rev: RevCounter,
+    /// Moves with every change of a graph file the project's watcher reports.
+    graphs_rev: Arc<RevCounter>,
     catalog: Query<(), Catalog>,
     catalog_gen: AtomicU32,
     game_pickers: Query<(), Option<Arc<GameIndex>>>,
@@ -184,11 +225,8 @@ pub struct NqService {
     world: RwLock<Option<Arc<dyn WorldLookup>>>,
 }
 
-fn file_time(path: &Path) -> Option<SystemTime> {
-    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
-}
-
-/// Reads a graph file as the C++ `NqLua::ReadFile` does: at most 16 MB, a BOM dropped.
+/// Reads a graph file for the index: at most 16 MB, a byte order mark left out (the read path
+/// says what is wrong with one).
 fn read_graph_file(path: &Path) -> Result<String, String> {
     let meta = std::fs::metadata(path).map_err(|_| "cannot open file".to_owned())?;
     if meta.len() > 16 << 20 {
@@ -214,6 +252,7 @@ impl NqService {
         let exec = editor.exec.clone();
         session.services.get_or_init(|| {
             let root = project.root().to_owned();
+            let graphs_rev = follow_graphs(editor, &project);
             NqService {
                 root_key: path_key(&root),
                 root,
@@ -221,6 +260,7 @@ impl NqService {
                 log: editor.log.clone(),
                 docs: Mutex::new(Vec::new()),
                 docs_rev: RevCounter::new(),
+                graphs_rev,
                 catalog: Query::new(exec.clone()),
                 catalog_gen: AtomicU32::new(0),
                 game_pickers: Query::new(exec.clone()),
@@ -548,14 +588,6 @@ impl NqService {
         let catalog = self.catalog(editor).await;
         let manifest = self.manifest(editor);
         let tree = self.tree();
-        let rev = tree
-            .rev()
-            .mix(manifest.as_ref().map_or(Rev::ZERO, |m| m.rev()))
-            .mix(Rev(u64::from(catalog.generation)))
-            .mix(if overlay { self.overlay_rev() } else { Rev::ZERO });
-        if let Some(s) = self.index.peek_at(&overlay, rev) {
-            return s;
-        }
         let rules: Vec<String> = manifest
             .as_ref()
             .and_then(|m| m.snapshot().manifest().map(|x| x.exclude.clone()))
@@ -564,6 +596,24 @@ impl NqService {
         let mut files: Vec<RelPath> = tree.files_with_extension("nqasset");
         files.extend(tree.files_with_extension("behasset"));
         files.retain(|rel| !gz_mod::outside_build(&rules, rel.as_str()));
+        // the watcher says when a graph file changed; the list of them, when one came or went
+        // with a folder; without a watcher the tree's stamps say it all
+        let files_rev = if self.project.tree.changes().live() {
+            let mut h = index::FNV_OFFSET;
+            for f in &files {
+                h = index::hash_bytes(h, f.key().as_bytes());
+            }
+            self.graphs_rev.get().mix(Rev(h))
+        } else {
+            tree.rev()
+        };
+        let rev = files_rev
+            .mix(manifest.as_ref().map_or(Rev::ZERO, |m| m.rev()))
+            .mix(Rev(u64::from(catalog.generation)))
+            .mix(if overlay { self.overlay_rev() } else { Rev::ZERO });
+        if let Some(s) = self.index.peek_at(&overlay, rev) {
+            return s;
+        }
         let root_norm = normalize_path(&self.root);
         let mut todo: Vec<ToRead> = Vec::new();
         let mut entries: Vec<IndexEntry> = Vec::new();
@@ -675,12 +725,20 @@ impl NqService {
         let env = self.env(editor, true).await;
         let snap = doc.store.snapshot();
         let p = doc.path();
-        let rev = Rev(snap.edit).mix(env.rev).mix(Rev(index::content_hash(&p.key)));
+        let read = doc.read_problems();
+        let rev = Rev(snap.edit)
+            .mix(env.rev)
+            .mix(Rev(index::content_hash(&p.key)))
+            .mix(Rev(doc.disk().rev))
+            .mix(Rev(read.len() as u64));
         let wire = p.wire.clone();
         self.problems
             .fresh(&p.key, rev, move || {
-                let mut out = validate::shape_errors(&snap.shape);
-                out.extend(env.validate(&snap.graph, &wire));
+                let mut out: Vec<NqProblem> =
+                    read.iter().filter(|r| r.severity != gz_base::Severity::Note).map(read_problem).collect();
+                out.extend(validate::shape_errors(&snap.shape));
+                // the header is the read path's: it says what the file holds, not the model
+                out.extend(env.validate(&snap.graph, &wire).into_iter().filter(|x| x.code != "E001"));
                 out
             })
             .await
@@ -712,69 +770,12 @@ impl NqService {
         doc.store.send(DocCmd { catalog, op }, origin).await
     }
 
-    /// Reads a file into a graph with its shape problems (`NqDoc::Load`).
-    async fn load_file(
-        &self,
-        editor: &Editor,
-        p: &DocPath,
-    ) -> Result<(Graph, Vec<String>, Option<SystemTime>), String> {
-        let catalog = self.catalog(editor).await;
-        let abs = p.abs.clone();
-        let chunk = asset::base_name(&p.wire);
-        self.exec
-            .io(move || {
-                let text = read_graph_file(&abs)?;
-                let v = asset::parse_value(&text, &chunk).map_err(|e| e.with_line())?;
-                let (g, shape) = asset::graph_from_value(&catalog, &v);
-                Ok((g, shape, file_time(&abs)))
-            })
-            .await
+    /// The open document of a path key.
+    pub(crate) fn find_doc(&self, key: &str) -> Option<Arc<DocHandle>> {
+        self.docs.lock().iter().find(|d| d.path.read().key == key).cloned()
     }
 
-    /// Opens a document, or returns the one already open (`NqDocs::Open`). A missing file is an
-    /// error: a new one is made with `quest_new` or `quest_write`.
-    pub async fn open(&self, editor: &Editor, path: &str) -> Result<Arc<DocHandle>, String> {
-        let p = self.resolve(path, false)?;
-        if let Some(d) = self.docs.lock().iter().find(|d| d.path.read().key == p.key).cloned() {
-            return Ok(d);
-        }
-        let abs = p.abs.clone();
-        if !self.exec.io(move || abs.is_file()).await {
-            return Err(format!("file does not exist: {}", p.wire));
-        }
-        let (graph, shape, time) = self.load_file(editor, &p).await?;
-        let store =
-            Store::spawn("graph", GraphDoc::default(), &self.exec, StoreOptions { history_limit: 200 });
-        let catalog = self.catalog(editor).await;
-        store
-            .send(DocCmd { catalog, op: DocOp::Load { graph, shape, file_time: time } }, Origin::Mcp)
-            .await
-            .map_err(|e| e.message)?;
-        let handle = Arc::new(DocHandle { store, path: RwLock::new(p.clone()) });
-        let mut docs = self.docs.lock();
-        if let Some(d) = docs.iter().find(|d| d.path.read().key == p.key).cloned() {
-            return Ok(d);
-        }
-        docs.push(handle.clone());
-        self.docs_rev.bump();
-        Ok(handle)
-    }
-
-    /// Reads the file of an open document again; its edits and history go (`NqDoc::Reload`).
-    pub async fn reload(&self, editor: &Editor, doc: &DocHandle) -> Result<(), String> {
-        let p = doc.path();
-        let abs = p.abs.clone();
-        if !self.exec.io(move || abs.is_file()).await {
-            return Err("file does not exist".into());
-        }
-        let (graph, shape, time) = self.load_file(editor, &p).await?;
-        self.send(editor, doc, DocOp::Load { graph, shape, file_time: time }, Origin::Mcp)
-            .await
-            .map(|_| ())
-            .map_err(|e| e.message)
-    }
-
-    /// Closes a document; a dirty one only with `discard` (`NqDocs::Close`).
+    /// Closes a document; a dirty one only with `discard`.
     pub fn close(&self, path: &str, discard: bool) -> Result<(), String> {
         let d = self.get_doc(path).ok_or_else(|| "not open".to_owned())?;
         if d.is_dirty() && !discard {
@@ -786,102 +787,12 @@ impl NqService {
         Ok(())
     }
 
-    /// Writes the canonical text (`NqDoc::Save`); refuses a file that changed on disk since it
-    /// was read, unless `force`.
-    pub async fn save(&self, editor: &Editor, doc: &DocHandle, force: bool) -> Result<(), String> {
-        let p = doc.path();
-        if !p.inside {
-            return Err("the document is outside the project folder - it cannot be saved from here".into());
-        }
-        let snap = doc.store.snapshot();
-        let catalog = self.catalog(editor).await;
-        let text = asset::write(&catalog, &snap.graph);
-        let known = snap.file_time;
-        let abs = p.abs.clone();
-        let written = self
-            .exec
-            .io(move || {
-                if !force && known.is_some() && file_time(&abs) != known {
-                    return Err("modified externally".to_owned());
-                }
-                gz_editor::fsx::write_atomic(&abs, text.as_bytes())
-                    .map_err(|_| "cannot create file".to_owned())?;
-                Ok(file_time(&abs))
-            })
-            .await?;
-        self.project.tree.mark_fs(&p.abs);
-        self.send(editor, doc, DocOp::Saved { file_time: written }, Origin::Mcp)
-            .await
-            .map(|_| ())
-            .map_err(|e| e.message)
-    }
-
-    /// Writes an unsaved document before the project closes (`NqDoc::SaveRescue`): over its file,
-    /// or beside it as `<file>.recovered` when the file changed on disk since it was read or the
-    /// document holds parts it could not read - overwriting either would trade one loss for
-    /// another. Answers where it went.
-    pub async fn save_rescue(&self, editor: &Editor, doc: &DocHandle) -> Result<PathBuf, String> {
-        let p = doc.path();
-        if p.abs.as_os_str().is_empty() {
-            return Err("the document has no path".into());
-        }
-        let snap = doc.store.snapshot();
-        let catalog = self.catalog(editor).await;
-        let text = asset::write(&catalog, &snap.graph);
-        let (known, partial, abs) = (snap.file_time, snap.partial, p.abs.clone());
-        let (written, time, aside) = self
-            .exec
-            .io(move || {
-                let aside = partial || (known.is_some() && file_time(&abs) != known);
-                let mut target = abs.clone().into_os_string();
-                if aside {
-                    target.push(".recovered");
-                }
-                let target = PathBuf::from(target);
-                gz_editor::fsx::write_atomic(&target, text.as_bytes()).map_err(|e| e.to_string())?;
-                Ok::<_, String>((target, file_time(&abs), aside))
-            })
-            .await?;
-        self.project.tree.mark_fs(&written);
-        if !aside {
-            self.send(editor, doc, DocOp::Saved { file_time: time }, Origin::Mcp)
-                .await
-                .map_err(|e| e.message)?;
-        }
-        Ok(written)
-    }
-
-    /// Every dirty document written before the project closes, each one logged as the C++
-    /// `NqDocs::SaveDirty` logs it. Answers how many were written.
-    pub async fn save_dirty(&self, editor: &Editor) -> usize {
-        let mut saved = 0;
-        for d in self.docs().into_iter().filter(|d| d.is_dirty()) {
-            let path = d.path().abs.display().to_string();
-            match self.save_rescue(editor, &d).await {
-                Ok(written) => {
-                    saved += 1;
-                    if written == d.path().abs {
-                        editor.log.info(format!("* [nq] unsaved quest written before it was closed: {path}"));
-                    } else {
-                        editor.log.warn(format!(
-                            "! [nq] {path} changed on disk - the unsaved changes went to {}",
-                            written.display()
-                        ));
-                    }
-                }
-                Err(e) => editor
-                    .log
-                    .warn(format!("! [nq] {path} could NOT be saved ({e}) - the unsaved changes are lost")),
-            }
-        }
-        saved
-    }
-
-    /// A file or a folder was renamed: open documents follow it (`NqDocs::Retarget`).
-    pub fn retarget(&self, from: &Path, to: &Path) {
+    /// A file or a folder was renamed: open documents follow it, and their files anew.
+    pub fn retarget(&self, editor: &Arc<Editor>, from: &Path, to: &Path) {
         let was = path_key(&from.to_string_lossy());
         let new_abs = normalize_path(&to.to_string_lossy());
         let old_abs = normalize_path(&from.to_string_lossy());
+        let mut moved = Vec::new();
         for d in self.docs.lock().iter() {
             let mut p = d.path.write();
             let target = if p.key == was {
@@ -902,43 +813,13 @@ impl NqService {
                     inside: self.inside(&abs),
                     abs: PathBuf::from(abs),
                 };
+                moved.push(d.clone());
             }
         }
         self.docs_rev.bump();
-    }
-
-    /// A graph of a path: the open document's, else read from the disk (`NqDocs::ReadQuest`).
-    pub async fn read_graph(&self, editor: &Editor, path: &str) -> Result<(Arc<Graph>, DocPath), String> {
-        let p = self.resolve(path, false)?;
-        if let Some(d) = self.docs.lock().iter().find(|d| d.path.read().key == p.key).cloned() {
-            return Ok((Arc::new(d.store.snapshot().graph.clone()), p));
+        for d in moved {
+            self.follow(editor, &d);
         }
-        let catalog = self.catalog(editor).await;
-        let abs = p.abs.clone();
-        let wire = p.wire.clone();
-        let chunk = asset::base_name(&p.wire);
-        let g = self
-            .exec
-            .io(move || {
-                let text = read_graph_file(&abs).map_err(|e| format!("{e}: {wire}"))?;
-                asset::parse(&catalog, &text, &chunk).map_err(|e| e.with_line())
-            })
-            .await?;
-        Ok((Arc::new(g), p))
-    }
-
-    /// Writes a graph's canonical text to a path of the project and lets the tree know.
-    pub async fn write_file(&self, p: &DocPath, text: String) -> Result<(), String> {
-        let abs = p.abs.clone();
-        self.exec
-            .io(move || {
-                gz_editor::fsx::write_atomic(&abs, text.as_bytes())
-                    .map_err(|_| "cannot create file".to_owned())
-            })
-            .await?;
-        self.project.tree.mark_fs(&p.abs);
-        self.project.tree.refresh().await;
-        Ok(())
     }
 
     /// Waits until the tree holds every change marked so far.
@@ -980,6 +861,41 @@ fn stamp(tree: &FileTree, dirs: &[(&str, &str)]) -> Rev {
         }
     }
     Rev(h)
+}
+
+/// What reading a file found, as a problem of the graph.
+fn read_problem(p: &Problem) -> NqProblem {
+    NqProblem {
+        severity: if p.is_error() { validate::Severity::Error } else { validate::Severity::Warning },
+        code: p.code.clone(),
+        node: String::new(),
+        slot: String::new(),
+        message: p.message.clone(),
+    }
+}
+
+/// A counter of the graph files' changes, moved by the project's watcher: the index reads it
+/// instead of the whole tree's stamp.
+fn follow_graphs(editor: &Editor, project: &Arc<Project>) -> Arc<RevCounter> {
+    let counter = Arc::new(RevCounter::new());
+    let mut rx =
+        project.tree.changes().subscribe(Filter::Extensions(vec!["nqasset".into(), "behasset".into()]));
+    let (weak, tree) = (Arc::downgrade(&counter), Arc::downgrade(project));
+    editor.exec.spawn(async move {
+        while rx.recv().await.is_some() {
+            // the tree lists what the index reads: it is current before the counter moves
+            if let Some(p) = tree.upgrade() {
+                p.tree.refresh().await;
+            }
+            match weak.upgrade() {
+                Some(c) => {
+                    c.bump();
+                }
+                None => break,
+            }
+        }
+    });
+    counter
 }
 
 fn memory_entry(catalog: &Catalog, d: &DocHandle, rel: &str, key: &str) -> IndexEntry {
@@ -1193,7 +1109,7 @@ impl DirtySource for NqDirty {
             let Some(svc) = editor.project_opt().and_then(|s| NqService::get(&s)) else { return Ok(()) };
             for d in svc.docs().into_iter().filter(|d| d.is_dirty()) {
                 let name = d.path().wire;
-                svc.save(editor, &d, false).await.map_err(|e| format!("{name}: {e}"))?;
+                svc.save(editor, &d).await.map_err(|e| format!("{name}: {e}"))?;
             }
             Ok(())
         })

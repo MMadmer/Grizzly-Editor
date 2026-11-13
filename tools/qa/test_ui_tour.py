@@ -71,7 +71,7 @@ class Tour:
 
     # ---- helpers --------------------------------------------------------------------------------------------------
     def shot(self, issue: int) -> dict:
-        pic = mcp("screenshot_editor")
+        pic = mcp("shot.window")
         if self.shots and pic.get("png_base64"):
             os.makedirs(self.shots, exist_ok=True)
             with open(os.path.join(self.shots, "tour_%02d_%s.png" % (issue, self.cfg)), "wb") as f:
@@ -79,21 +79,21 @@ class Tour:
         return pic
 
     def escaped(self, surface: str) -> list:
-        a = mcp("ui_audit", id=surface)
+        a = mcp("ui.audit", id=surface)
         return a.get("escaped") or []
 
     def level(self) -> None:
-        mcp("ui_popup", show="none")
-        for d in mcp("ui_dialog", action="list").get("dialogs", []):
-            mcp("ui_dialog", action="close", id=d.get("id", ""))
-        mcp("ui_drawer", action="close")
-        mcp("ui_tab", action="activate", id="level")
+        mcp("ui.popup", show="none")
+        for d in mcp("ui.dialog", action="list").get("dialogs", []):
+            mcp("ui.dialog", action="close", id=d.get("id", ""))
+        mcp("ui.drawer", action="close")
+        mcp("ui.tab", action="activate", doc="level")
 
     def open_graph(self, kind: str) -> str:
         rel = self.quest if kind == "quest" else self.beh
         if not rel:
-            made = mcp("content_create", kind="quest" if kind == "quest" else "behaviour")
-            rel = (made.get("made") or "").replace("/", "\\")
+            made = mcp("file.create", kind="quest" if kind == "quest" else "behaviour")
+            rel = (made.get("path") or "").replace("/", "\\")
             if not rel:
                 raise Skip("no %s could be made: %s" % (kind, short(made)))
             if kind == "quest":
@@ -107,7 +107,7 @@ class Tour:
 
     def panel_or_drawer(self, panel: str, drawer: str) -> str:
         """The panel on Level where the size class has room for it, else its drawer; the audit id that shows it."""
-        o = mcp("ui_panel", action="open", id=panel)
+        o = mcp("ui.panel", action="open", id=panel)
         return drawer if o.get("host") == "drawer" else panel
 
 
@@ -124,17 +124,17 @@ def issue(n: int, title: str):
 # ---- the 35 issues: set the surface up, assert one thing, take the picture --------------------------------------------
 @issue(1, "Preferences opens (it crashed on Esc and Num Del)")
 def _1(t: Tour):
-    o = mcp("ui_tab", action="open", kind="preferences")
+    o = mcp("ui.tab", action="open", kind="preferences")
     alive = mcp("ping").get("ok")
     t.shot(1)
-    mcp("ui_tab", action="close", id="preferences")
+    mcp("ui.tab", action="close", doc="preferences")
     return o.get("ok") and alive, short(o)
 
 
 @issue(2, "a document owns the window: the Level panels are not on screen over it")
 def _2(t: Tour):
     t.open_graph("quest")
-    lst = mcp("ui_list")
+    lst = mcp("ui.list")
     shown = [p["id"] for p in lst.get("panels", []) if p.get("visible") and p.get("id") != "viewport"]
     t.shot(2)
     return lst.get("active_tab", "").startswith("quest:") and not shown, short({"visible_panels": shown})
@@ -145,7 +145,7 @@ def _3(t: Tour):
     rel = t.open_graph("quest")
     v = mcp("quest_view", path=rel, frame="all")
     canvas = (v.get("panes") or {}).get("canvas") or [0, 0, 400, 260]
-    esc = t.escaped(mcp("ui_list").get("active_tab", ""))
+    esc = t.escaped(mcp("ui.list").get("active_tab", ""))
     t.shot(3)
     return not esc and canvas[2] >= 399 and canvas[3] >= 259, short({"escaped": esc, "canvas": canvas})
 
@@ -165,13 +165,13 @@ def _4(t: Tour):
 @issue(5, "Details: rows are there and nothing escapes the panel")
 def _5(t: Tour):
     t.level()
-    sections = mcp("list_spawn_sections", filter="stalker", limit=1).get("sections") or []
-    name = (sections[0].get("section") if sections and isinstance(sections[0], dict) else sections[0]) if sections else ""
+    sections = mcp("game.lookup", type="spawn_section", query="stalker", limit=1).get("entries") or []
+    name = (sections[0].get("id") if sections and isinstance(sections[0], dict) else sections[0]) if sections else ""
     if name:
         placed = mcp("place_spawn", section=name, x=0, y=0, z=4)
         if placed.get("name"):
             mcp("select_objects", names=placed["name"])
-    mcp("ui_panel", action="focus", id="details")
+    mcp("ui.panel", action="focus", id="details")
     p = mcp("property_inspector", action="get", target="selection", limit=20)
     esc = t.escaped("details")
     t.shot(5)
@@ -188,14 +188,14 @@ def _6(t: Tour):
 @issue(7, "a dialog stays centred when the window is resized")
 def _7(t: Tour):
     t.level()
-    o = mcp("ui_dialog", action="open", id="import_base_scene")
+    o = mcp("ui.dialog", action="open", id="import_base_scene")
     if not o.get("ok"):
         raise Skip(short(o))
-    lst = mcp("ui_list")
+    lst = mcp("ui.list")
     dlg = next((d for d in lst.get("dialogs", []) if d.get("id") == "import_base_scene"), None)
     work = lst.get("work_area") or [0, 0, 0, 0]
     t.shot(7)
-    mcp("ui_dialog", action="close", id="import_base_scene")
+    mcp("ui.dialog", action="close", id="import_base_scene")
     if not dlg:
         return False, short(lst)
     r = dlg["rect"]
@@ -205,30 +205,30 @@ def _7(t: Tour):
 @issue(8, "Submit to Mod Browser: nothing escapes, the footer stays in the dialog")
 def _8(t: Tour):
     t.level()
-    o = mcp("ui_dialog", action="open", id="submit")
+    o = mcp("ui.dialog", action="open", id="submit")
     if not o.get("ok"):
         raise Skip(short(o))
     esc = t.escaped("submit")
     pic = t.shot(8)
-    mcp("ui_dialog", action="close", id="submit")
+    mcp("ui.dialog", action="close", id="submit")
     modal = pic.get("modal") or {}
-    work = mcp("ui_list").get("work_area") or [0, 0, 0, 0]
+    work = mcp("ui.list").get("work_area") or [0, 0, 0, 0]
     return not esc and modal and modal.get("y", 0) + modal.get("h", 0) <= work[1] + work[3] + 1, short({"escaped": esc, "modal": modal})
 
 
 @issue(9, "Mod Settings: nothing escapes")
 def _9(t: Tour):
     t.level()
-    o = mcp("ui_tab", action="open", kind="mod_settings")
+    o = mcp("ui.tab", action="open", kind="mod_settings")
     if not o.get("ok"):
         raise Skip(short(o))
     # a tab or, until it is one, the dialog: ui_audit knows either by this id
     esc = t.escaped("mod_settings")
     t.shot(9)
     if (o.get("tab") or {}).get("id") == "mod_settings":
-        mcp("ui_tab", action="close", id="mod_settings", discard=True)
+        mcp("ui.tab", action="close", doc="mod_settings", discard=True)
     else:
-        mcp("ui_dialog", action="close", id="mod_settings")
+        mcp("ui.dialog", action="close", id="mod_settings")
     return not esc, short({"escaped": esc})
 
 
@@ -251,7 +251,7 @@ def _11(t: Tour):
 @issue(12, "a behaviour graph never says quest")
 def _12(t: Tour):
     t.open_graph("beh")
-    a = mcp("ui_audit", id=mcp("ui_list").get("active_tab", ""))
+    a = mcp("ui.audit", id=mcp("ui.list").get("active_tab", ""))
     words = [e.get("label", "") for k in ("truncated", "controls") for e in a.get(k) or []]
     quest = [w for w in words if "quest" in w.lower()]
     t.shot(12)
@@ -273,7 +273,7 @@ def _13(t: Tour):
 @issue(14, "the quest inspector: nothing escapes its panes")
 def _14(t: Tour):
     t.open_graph("quest")
-    esc = t.escaped(mcp("ui_list").get("active_tab", ""))
+    esc = t.escaped(mcp("ui.list").get("active_tab", ""))
     t.shot(14)
     return not esc, short({"escaped": esc})
 
@@ -281,7 +281,7 @@ def _14(t: Tour):
 @issue(15, "the graph toolbar has no cryptic labels")
 def _15(t: Tour):
     t.open_graph("quest")
-    a = mcp("ui_audit", id=mcp("ui_list").get("active_tab", ""))
+    a = mcp("ui.audit", id=mcp("ui.list").get("active_tab", ""))
     bad = [e.get("label") for e in a.get("controls") or [] if e.get("label") in ("B<", "B>", "<", ">", "Keys >", "Keys")]
     t.shot(15)
     return not bad, short({"cryptic": bad})
@@ -291,7 +291,7 @@ def _15(t: Tour):
 def _16(t: Tour):
     t.level()
     where = t.panel_or_drawer("output_log", "log")
-    lst = mcp("ui_list")
+    lst = mcp("ui.list")
     esc = t.escaped(where)
     t.shot(16)
     shown = lst.get("drawer") == "log" or any(p.get("id") == "output_log" and p.get("visible") for p in lst.get("panels", []))
@@ -302,7 +302,7 @@ def _16(t: Tour):
 def _17(t: Tour):
     t.level()
     e = mcp("exec_command", name="COMMAND_SHOW_OBJECTLIST")
-    lst = mcp("ui_list")
+    lst = mcp("ui.list")
     t.shot(17)
     ol = next((p for p in lst.get("panels", []) if p.get("id") == "world_outliner"), {})
     return e.get("ok") and lst.get("active_tab") == "level" and ol.get("visible"), short(ol)
@@ -311,7 +311,7 @@ def _17(t: Tour):
 @issue(18, "the World Outliner: nothing escapes (its search and Refresh were cut)")
 def _18(t: Tour):
     t.level()
-    mcp("ui_panel", action="focus", id="world_outliner")
+    mcp("ui.panel", action="focus", id="world_outliner")
     esc = t.escaped("world_outliner")
     t.shot(18)
     return not esc, short({"escaped": esc})
@@ -320,8 +320,8 @@ def _18(t: Tour):
 @issue(19, "Tools is named Tools, and nothing escapes it")
 def _19(t: Tour):
     t.level()
-    mcp("ui_panel", action="focus", id="tools")
-    window = (mcp("ui_contract").get("panels") or {}).get("tools", "")
+    mcp("ui.panel", action="focus", id="tools")
+    window = (mcp("ui.contract").get("panels") or {}).get("tools", "")
     esc = t.escaped("tools")
     t.shot(19)
     return window.startswith("Tools###") and not esc, short({"window": window, "escaped": esc})
@@ -341,7 +341,7 @@ def _20(t: Tour):
 def _21(t: Tour):
     t.level()
     mcp("property_inspector", action="open", target="world")
-    lst = mcp("ui_list")
+    lst = mcp("ui.list")
     ls = next((p for p in lst.get("panels", []) if p.get("id") == "level_settings"), {})
     esc = t.escaped("level_settings")
     t.shot(21)
@@ -351,20 +351,20 @@ def _21(t: Tour):
 @issue(22, "Characters: nothing escapes")
 def _22(t: Tour):
     t.level()
-    o = mcp("ui_tab", action="open", kind="characters")
+    o = mcp("ui.tab", action="open", kind="characters")
     esc = t.escaped("characters")
     t.shot(22)
-    mcp("ui_tab", action="close", id="characters", discard=True)
+    mcp("ui.tab", action="close", doc="characters", discard=True)
     return o.get("ok") and not esc, short({"escaped": esc})
 
 
 @issue(23, "World Rules is a tab: inside the window, nothing escapes")
 def _23(t: Tour):
     t.level()
-    o = mcp("ui_tab", action="open", kind="world_rules")
+    o = mcp("ui.tab", action="open", kind="world_rules")
     esc = t.escaped("world_rules")
     pic = t.shot(23)
-    mcp("ui_tab", action="close", id="world_rules", discard=True)
+    mcp("ui.tab", action="close", doc="world_rules", discard=True)
     return o.get("ok") and not esc and not pic.get("outside"), short({"escaped": esc, "outside": pic.get("outside")})
 
 
@@ -384,7 +384,7 @@ def _24(t: Tour):
     gaps, edges = {}, {}
     for aspect in ("16:9", "4:3"):
         mcp("pda_preview", action="aspect", aspect=aspect)
-        mcp("screenshot_editor")
+        mcp("shot.window")
         state = mcp("pda_preview", action="state")
         gaps[aspect] = state.get("device_gap", -1)
         edges[aspect] = state.get("screen_edges") or []
@@ -404,7 +404,7 @@ def _25(t: Tour):
     tab = o.get("tab")
     label = tab.get("label", "") if isinstance(tab, dict) else ""
     t.shot(25)
-    mcp("ui_tab", action="close", id="model", discard=True)
+    mcp("ui.tab", action="close", doc="model", discard=True)
     # a game model's textures come from the linked game: none is drawn as the placeholder
     missing = [x.get("name") for x in o.get("textures") or [] if x.get("from") == "missing"]
     # the opener answers the frame it opened: the Details pane has its width in that answer already
@@ -416,26 +416,26 @@ def _25(t: Tour):
 @issue(26, "the palette: 'log' finds the Output Log, no COMMAND_* ids as names, keycaps")
 def _26(t: Tour):
     t.level()
-    q = mcp("command_palette", action="query", query="log", limit=5)
+    q = mcp("ui.palette", action="query", query="log", limit=5)
     rows_ = q.get("results") or []
-    mcp("command_palette", action="open", query="log")
+    mcp("ui.palette", action="open", query="log")
     pic = t.shot(26)
-    mcp("command_palette", action="close")
+    mcp("ui.palette", action="close")
     ok = any(r.get("label") == "Output Log" for r in rows_[:2]) and not any(str(r.get("label", "")).startswith("COMMAND_") for r in rows_)
     # a row matches by what it shows, never by its hidden COMMAND_* id or letters scattered through its words
     ok = ok and all("log" in (str(r.get("label", "")) + " " + str(r.get("path", ""))).lower() for r in rows_[:4])
-    return ok and (pic.get("modal") or {}).get("id") == mcp("ui_contract").get("palette"), short(rows_[:3])
+    return ok and (pic.get("modal") or {}).get("id") == mcp("ui.contract").get("palette"), short(rows_[:3])
 
 
 @issue(27, "dialog footers: the buttons are right-aligned, Cancel last")
 def _27(t: Tour):
     t.level()
-    o = mcp("ui_dialog", action="open", id="import_base_scene")
+    o = mcp("ui.dialog", action="open", id="import_base_scene")
     if not o.get("ok"):
         raise Skip(short(o))
-    a = mcp("ui_audit", id="import_base_scene")
+    a = mcp("ui.audit", id="import_base_scene")
     t.shot(27)
-    mcp("ui_dialog", action="close", id="import_base_scene")
+    mcp("ui.dialog", action="close", id="import_base_scene")
     buttons = [e for e in a.get("controls") or [] if e.get("label") in ("Cancel", "Import", "Open", "OK")]
     cancel = next((b for b in buttons if b.get("label") == "Cancel"), None)
     if not cancel:
@@ -446,13 +446,13 @@ def _27(t: Tour):
 @issue(28, "the Start page: its cards and menu answer, the project comes back")
 def _28(t: Tour):
     t.level()
-    c = mcp("project_close", discard=True)
+    c = mcp("project.close", discard=True)
     if not c.get("ok"):
         raise Skip(short(c))
     b = mcp("project_browser_menu")
     t.shot(28)
     qa_target.guard_project(t.project)
-    back = mcp("open_project", path=t.project, timeout=600)
+    back = mcp("project.open", path=t.project, timeout=600)
     deadline = time.monotonic() + 300
     while time.monotonic() < deadline and not mcp("mod_manifest").get("ok"):
         time.sleep(0.05)
@@ -462,7 +462,7 @@ def _28(t: Tour):
 @issue(29, "the main toolbar: vector actions and the project group, nothing escapes")
 def _29(t: Tour):
     t.level()
-    a = mcp("ui_audit", id="##toolbar")
+    a = mcp("ui.audit", id="##toolbar")
     labels = [e.get("label") for e in a.get("controls") or []]
     t.shot(29)
     return "Build Mod" in labels and not a.get("escaped"), short({"labels": labels[:12], "escaped": a.get("escaped")})
@@ -471,7 +471,7 @@ def _29(t: Tour):
 @issue(30, "the status bar: rebuild chip and counts, nothing escapes")
 def _30(t: Tour):
     t.level()
-    a = mcp("ui_audit", id="##statusbar")
+    a = mcp("ui.audit", id="##statusbar")
     # what needs rebuilding is the status bar's chip; the stats are a pill of the viewport (level.ini keeps the flag an
     # author turned on, so it is reported, not asserted)
     stats = mcp("view_mode").get("stats")
@@ -482,40 +482,40 @@ def _30(t: Tour):
 @issue(31, "Publish Release: nothing escapes")
 def _31(t: Tour):
     t.level()
-    o = mcp("ui_dialog", action="open", id="publish_release")
+    o = mcp("ui.dialog", action="open", id="publish_release")
     if not o.get("ok"):
         raise Skip(short(o))
     esc = t.escaped("publish_release")
     t.shot(31)
-    mcp("ui_dialog", action="close", id="publish_release")
+    mcp("ui.dialog", action="close", id="publish_release")
     return not esc, short({"escaped": esc})
 
 
 @issue(32, "Package Release: nothing escapes, sized in em")
 def _32(t: Tour):
     t.level()
-    o = mcp("ui_dialog", action="open", id="package_release")
+    o = mcp("ui.dialog", action="open", id="package_release")
     if not o.get("ok"):
         raise Skip(short(o))
     esc = t.escaped("package_release")
     t.shot(32)
-    mcp("ui_dialog", action="close", id="package_release")
+    mcp("ui.dialog", action="close", id="package_release")
     return not esc, short({"escaped": esc})
 
 
 @issue(33, "Releases: nothing escapes")
 def _33(t: Tour):
     t.level()
-    o = mcp("ui_tab", action="open", kind="releases")
+    o = mcp("ui.tab", action="open", kind="releases")
     if not o.get("ok"):
         raise Skip(short(o))
     tab = (o.get("tab") or {}).get("id") == "releases"
     esc = t.escaped("releases")
     t.shot(33)
     if tab:
-        mcp("ui_tab", action="close", id="releases", discard=True)
+        mcp("ui.tab", action="close", doc="releases", discard=True)
     else:
-        mcp("ui_dialog", action="close", id="releases")
+        mcp("ui.dialog", action="close", id="releases")
     return not esc, short({"escaped": esc})
 
 
@@ -526,7 +526,7 @@ def _34(t: Tour):
     if not o.get("ok"):
         raise Skip(short(o))
     pic = t.shot(34)
-    lst = mcp("ui_list")
+    lst = mcp("ui.list")
     mcp("mod_catalog", action="hide")
     return pic.get("modal") is not None and len(lst.get("dialogs") or []) >= 1, short({"modal": pic.get("modal")})
 
@@ -534,9 +534,9 @@ def _34(t: Tour):
 @issue(35, "property_inspector target=world raises Level Settings in its dock node")
 def _35(t: Tour):
     t.level()
-    mcp("ui_panel", action="focus", id="details")
+    mcp("ui.panel", action="focus", id="details")
     mcp("property_inspector", action="open", target="world")
-    lst = mcp("ui_list")
+    lst = mcp("ui.list")
     ls = next((p for p in lst.get("panels", []) if p.get("id") == "level_settings"), {})
     t.shot(35)
     return bool(ls.get("visible")), short(ls)
@@ -569,17 +569,17 @@ def run(project: str, args) -> None:
     proc = start_editor(project)
     tour = Tour(project, args.shots)
     try:
-        before = float(mcp("ui_list").get("ui_scale") or 1.0)
+        before = float(mcp("ui.list").get("scale") or 1.0)
         only = {int(x) for x in args.only.split(",")} if args.only else set(ISSUES)
         for cfg in [c.strip() for c in args.sizes.split(",") if c.strip()]:
             if cfg not in CONFIGS:
                 raise RuntimeError("unknown size " + cfg)
             w, h, scale = CONFIGS[cfg]
             tour.cfg = cfg
-            mcp("ui_scale", value=scale)
-            mcp("window_control", action="resize", width=w, height=h)
+            mcp("ui.scale", value=scale)
+            mcp("app.window", action="resize", width=w, height=h)
             for _ in range(2):
-                mcp("ui_list")
+                mcp("ui.list")
             for n in sorted(only):
                 title, fn = ISSUES[n]
                 try:
@@ -593,10 +593,10 @@ def run(project: str, args) -> None:
                     status, detail = "FAIL", repr(exc)
                 rows.append((cfg, "#%d" % n, status, title))
                 print("%s %-5s #%-2d %s%s" % (status, cfg, n, title, ("  <- " + detail) if status != "PASS" else ""), flush=True)
-        mcp("ui_scale", value=before)
+        mcp("ui.scale", value=before)
     finally:
         try:
-            mcp("window_control", action="close", discard=True)
+            mcp("app.quit", discard=True)
         except OSError:
             pass
         try:

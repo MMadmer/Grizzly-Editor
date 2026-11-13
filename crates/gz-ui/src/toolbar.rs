@@ -352,7 +352,7 @@ fn look(
     enabled: bool,
     hovered: bool,
     pressed: bool,
-    checked: bool,
+    _checked: bool,
 ) -> (Color32, Color32, Font) {
     if !enabled {
         let fill =
@@ -372,11 +372,8 @@ fn look(
         Kind::Secondary => (pick(p.button, p.button_hover, p.pressed), p.text, Font::Body),
         Kind::Primary => (pick(p.primary, p.primary_hover, p.primary_pressed), p.on_fill, Font::Strong),
         Kind::Danger => (pick(p.danger, p.danger_hover, p.danger_pressed), p.on_fill, Font::Strong),
-        Kind::Ghost => (
-            if checked { p.selection_focused } else { pick(Color32::TRANSPARENT, p.hover, p.pressed) },
-            p.text,
-            Font::Body,
-        ),
+        // a toggle that is on keeps no fill: the line under it says so
+        Kind::Ghost => (pick(Color32::TRANSPARENT, p.hover, p.pressed), p.text, Font::Body),
         Kind::GhostDanger => (pick(Color32::TRANSPARENT, p.hover, p.pressed), p.error, Font::Body),
     }
 }
@@ -409,6 +406,17 @@ fn tool_button(ui: &mut Ui, rect: Rect, id: Id, f: &Face<'_>) -> Response {
         let painter = ui.painter();
         if fill != Color32::TRANSPARENT {
             painter.rect_filled(rect, f.corners, fill);
+        }
+        if f.kind == Kind::Secondary {
+            painter.rect_stroke(
+                rect,
+                f.corners,
+                Stroke::new(1.0, if resp.hovered() { p.border_strong } else { p.border }),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if f.checked && f.enabled {
+            crate::button::toggle_line(painter, rect, p.accent_bright);
         }
         let font_id = font.id();
         let text_w = if f.label.is_empty() { 0.0 } else { text::width(ui.ctx(), &font_id, f.label) };
@@ -624,6 +632,24 @@ impl<'u, 'a> Toolbar<'u, 'a> {
         }
     }
 
+    /// How many items were added so far (a separator or a spring counts).
+    #[must_use]
+    pub fn items(&self) -> usize {
+        self.cur_items.len()
+    }
+
+    /// Where the next item would start, in pt: the right edge of what is on the row.
+    #[must_use]
+    pub fn cursor_x(&self) -> f32 {
+        self.x
+    }
+
+    /// The row's rect.
+    #[must_use]
+    pub fn rect(&self) -> egui::Rect {
+        egui::Rect::from_min_size(self.origin, Vec2::new(self.width, self.height))
+    }
+
     /// Takes the room the row has left (shared with the other springs).
     pub fn spring(&mut self) {
         let id = self.id.with(("spring", self.serial));
@@ -676,6 +702,9 @@ impl<'u, 'a> Toolbar<'u, 'a> {
         kind: Kind,
     ) -> bool {
         let id = self.id.with(("action", id_salt));
+        if kind == Kind::Primary {
+            crate::button::note_primary(&self.ctx, self.id, "toolbar", label);
+        }
         let w_full = if label.is_empty() {
             self.button
         } else {
@@ -820,6 +849,9 @@ impl<'u, 'a> Toolbar<'u, 'a> {
         add: impl FnOnce(&mut Ui),
     ) -> bool {
         let id = self.id.with(("split", id_salt));
+        if kind == Kind::Primary {
+            crate::button::note_primary(&self.ctx, self.id, "toolbar", label);
+        }
         let popup_id = id.with("popup");
         let chevron = 20.0;
         let seam = 1.0;

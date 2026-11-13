@@ -355,7 +355,7 @@ pub fn request_export(cx: &mut DocCx<'_>, flat: bool) {
         let dialog = if flat { EXPORT_FLAT } else { BUILD_TO_FOLDER };
         call::call_then(
             ed,
-            "ui_dialog",
+            "ui.dialog",
             call::args([("action", call::s("open")), ("id", call::s(dialog))]),
             |reply, ctx| {
                 if !call::ok(reply) {
@@ -394,7 +394,7 @@ impl ExportDialog {
             cx.requests.task_card(true);
             return Err("a build is running: its card in the Task Center follows it".to_owned());
         }
-        let remembered = project.file().export_target().to_owned();
+        let remembered = project.export_target();
         // the first export of a linked project: the game root IS the deploy target
         self.target = if remembered.is_empty() { project.game_root() } else { remembered };
         self.open = true;

@@ -1,5 +1,6 @@
-//! The graph as plain data (`NqAsset`, the typed half of `NqLua`): read from a declarative Lua
-//! value, written back canonically, outlined.
+//! The graph as plain data: read from a declarative Lua value, projected back to one for a save
+//! to compare ([`model_value`]: the save writes only the difference into the author's text),
+//! written canonically for a new file ([`write`]), outlined for an answer.
 //!
 //! A `.nqasset` is a quest and a `.behasset` a behaviour graph; the header key says which (`nq`
 //! or `beh`) and the extension has to agree (the validator's `E001`). Everything under `params`
@@ -983,9 +984,31 @@ pub fn write_node(n: &Node, indent: usize) -> String {
     gz_luadata::write_node(&node_to_value(n), indent)
 }
 
-/// The whole graph as the exact tables the writer emits (`QuestToValue`).
+/// The whole graph as the tables a new file is written from: the nodes in their topological
+/// order.
 #[must_use]
 pub fn graph_to_value(catalog: &Catalog, q: &Graph) -> Table {
+    graph_table(catalog, q, true, &AutoPos::default())
+}
+
+/// Positions the layout gave nodes the file wrote none for: what a save leaves out, so a file
+/// without coordinates stays without them until the author moves a node.
+pub type AutoPos = FxHashMap<SmolStr, [f32; 2]>;
+
+/// The graph as a save compares it with what was read: the nodes in the model's order, the
+/// positions the layout chose left out.
+#[must_use]
+pub fn model_value(catalog: &Catalog, q: &Graph, auto: &AutoPos) -> Value {
+    Value::Table(graph_table(catalog, q, false, auto))
+}
+
+/// The nodes of `q` that have no position of their own, by id.
+#[must_use]
+pub fn unplaced(q: &Graph) -> Vec<SmolStr> {
+    q.nodes.iter().filter(|n| !n.has_pos).map(|n| n.id.clone()).collect()
+}
+
+fn graph_table(catalog: &Catalog, q: &Graph, topo: bool, auto: &AutoPos) -> Table {
     let mut out = Table::new();
     // the header key is the kind: nothing else in the file says it
     put(&mut out, if q.is_behaviour() { "beh" } else { "nq" }, q.nq);
@@ -1070,23 +1093,45 @@ pub fn graph_to_value(catalog: &Catalog, q: &Graph) -> Table {
         }
         put(&mut out, "tasks", tasks);
     }
-    let order = q.topo_order(catalog);
-    let nodes: Vec<Value> = order.iter().filter_map(|&i| q.nodes.get(i)).map(node_to_value).collect();
+    let node_value = |n: &Node| {
+        let mut v = node_to_value(n);
+        if auto.get(&n.id).is_some_and(|p| *p == n.pos) {
+            v.erase("pos");
+        }
+        v
+    };
+    let nodes: Vec<Value> = if topo {
+        q.topo_order(catalog).iter().filter_map(|&i| q.nodes.get(i)).map(node_value).collect()
+    } else {
+        q.nodes.iter().map(node_value).collect()
+    };
     put(&mut out, "nodes", Value::from(nodes));
     out
 }
 
-/// The canonical file text (`NqLua::Write`): the generated header with the outline, then
-/// `return { ... }`. `write(read(x))` is idempotent.
+/// The text of a new file: `return { ... }` in the canonical layout, the header key first, the
+/// nodes in their topological order. An existing file is never written this way: a save writes
+/// only what changed into the author's text.
 #[must_use]
 pub fn write(catalog: &Catalog, q: &Graph) -> String {
-    let mut head = String::from(if q.is_behaviour() { "-- beh: " } else { "-- nq: " });
-    head.push_str(&q.id);
-    head.push_str(" \"");
-    head.push_str(&gz_luadata::one_line(&preview(&q.title)));
-    head.push_str("\"\n");
-    head.push_str(&gz_luadata::comment_block(&outline(catalog, q)));
-    gz_luadata::write_asset(&head, &graph_to_value(catalog, q))
+    gz_luadata::write_asset("", &graph_to_value(catalog, q))
+}
+
+/// How a graph file's values map onto its text: nodes matched by `id` and laid out as nodes,
+/// task objectives by `id`, new keys in the canonical order.
+#[must_use]
+pub fn diff_rules() -> gz_luadata::DiffRules {
+    gz_luadata::DiffRules::new()
+        .keyed("nodes", "id")
+        .node_layout("nodes")
+        .keyed("tasks.*.objectives", "id")
+        .order("", &["nq", "beh", "id", "title", "activation", "roles", "vars", "tasks", "nodes"])
+        .order(
+            "nodes.*",
+            &["id", "kind", "once", "params", "cond", "on_enter", "on_exit", "out", "pos", "comment"],
+        )
+        .order("tasks.*", &["title", "descr", "type", "target", "icon", "auto_complete", "objectives"])
+        .order("roles.*", &["title", "many", "optional", "default"])
 }
 
 // ---- outline ----------------------------------------------------------------------------------
@@ -1317,30 +1362,62 @@ mod tests {
     ];
 
     #[test]
-    fn examples_read_and_write_back_canonically() {
+    fn examples_save_only_what_changed() {
         let cat = bundled();
         for (name, text) in EXAMPLES {
-            let g = match parse(&cat, text, name) {
-                Ok(g) => g,
-                Err(e) => panic!("{name}: {}", e.message),
-            };
+            let mut doc = gz_luadata::LuaDoc::parse(text).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let (g, shape) = graph_from_value(&cat, &doc.value());
+            assert!(shape.is_empty(), "{name}: {shape:?}");
             assert_eq!(g.id, name);
-            let once = write(&cat, &g);
-            let again = match parse(&cat, &once, name) {
-                Ok(g) => g,
-                Err(e) => panic!("{name} rewritten: {}", e.message),
-            };
-            // the writer puts the nodes in topological order: the same nodes, maybe reordered
-            let mut a: Vec<&Node> = again.nodes.iter().collect();
-            let mut b: Vec<&Node> = g.nodes.iter().collect();
-            a.sort_by(|x, y| x.id.cmp(&y.id));
-            b.sort_by(|x, y| x.id.cmp(&y.id));
-            assert_eq!(a, b, "{name}: the model survives a write");
-            assert_eq!(write(&cat, &again), once, "{name}: writing is idempotent");
-            // the body below the generated header is what the example holds, comments aside
-            let body = once.find("return {").map(|i| &once[i..]).unwrap_or("");
-            assert!(body.starts_with("return {\n  nq = 1,\n"), "{name}");
+            let base = model_value(&cat, &g, &AutoPos::default());
+            assert!(
+                !doc.apply_diff(&base, &base.clone(), &diff_rules()).unwrap(),
+                "{name}: nothing to write"
+            );
+            // a node moved and a new one linked from the start: the rest of the file stays
+            let mut edited = g.clone();
+            let start = edited.nodes.iter().position(|n| n.kind == "trigger.start").unwrap();
+            let mut fresh = Node::new("checked", "flow.end");
+            fresh.params.set("status", "completed");
+            edited.nodes.push_back(fresh);
+            if let Some(n) = edited.nodes.get_mut(start) {
+                n.connect("alt", "checked");
+                n.pos = [10.0, 20.0];
+                n.has_pos = true;
+            }
+            let new = model_value(&cat, &edited, &AutoPos::default());
+            assert!(doc.apply_diff(&base, &new, &diff_rules()).unwrap());
+            let out = doc.text();
+            for line in text.lines().filter(|l| l.trim_start().starts_with("--")) {
+                assert!(out.contains(line), "{name}: the comment {line:?} went");
+            }
+            let again = parse(&cat, out, name).unwrap_or_else(|e| panic!("{name}: {}", e.message));
+            assert_eq!(again.nodes.len(), g.nodes.len() + 1);
+            assert!(again.nodes.iter().any(|n| n.id == "checked"));
+            assert_eq!(again.nodes[start].targets("alt"), Some(&[SmolStr::new("checked")][..]));
         }
+    }
+
+    #[test]
+    fn a_save_keeps_auto_positions_out() {
+        let cat = Catalog::empty();
+        let (mut g, _) = graph_from_value(
+            &cat,
+            &parse_value(
+                "return { nq = 1, id = 'q', nodes = { { id = 'a', kind = 'trigger.start' } } }",
+                "q",
+            )
+            .unwrap(),
+        );
+        let base = model_value(&cat, &g, &AutoPos::default());
+        if let Some(n) = g.nodes.get_mut(0) {
+            n.pos = [3.0, 4.0];
+            n.has_pos = true;
+        }
+        let mut auto = AutoPos::default();
+        auto.insert("a".into(), [3.0, 4.0]);
+        assert!(gz_luadata::data_eq(&model_value(&cat, &g, &auto), &base));
+        assert!(!gz_luadata::data_eq(&model_value(&cat, &g, &AutoPos::default()), &base));
     }
 
     #[test]
@@ -1394,12 +1471,12 @@ mod tests {
     #[test]
     fn templates() {
         let q = quest_template("wolf");
-        assert!(q.starts_with("-- nq: wolf \"New quest\"\n-- quest wolf \"New quest\" (active: auto)\n-- [T] start (trigger.start) -> finish\n"));
+        assert!(q.starts_with("return {\n  nq = 1,\n  id = \"wolf\",\n  title = \"New quest\",\n"), "{q}");
         assert!(q.contains(
             "    { id = \"finish\", kind = \"flow.end\", params = { status = \"completed\" } },\n"
         ));
         let b = behaviour_template("");
-        assert!(b.starts_with("-- beh: new_behaviour \"New behaviour\"\n-- behaviour new_behaviour \"New behaviour\" (roles: squad)\n"));
+        assert!(b.starts_with("return {\n  beh = 1,\n  id = \"new_behaviour\",\n"), "{b}");
         assert!(b.contains("  roles = { squad = { title = \"Squad\", many = true } },\n"));
         assert!(template_for("q/NewBehaviour2.behasset").contains("id = \"newbehaviour2\""));
     }

@@ -350,8 +350,8 @@ def phase_p() -> None:
     gname = (grp.get("object") or {}).get("name") or ""
     check(grp.get("ok") and grp.get("members") == 2, "P group_tool action=group makes a group of the two", short(grp))
     mcp("select_objects", names=gname)
-    opened = mcp("ui_dialog", action="open", id="group_pivot")
-    pic = mcp("screenshot_editor")
+    opened = mcp("ui.dialog", action="open", id="group_pivot")
+    pic = mcp("shot.window")
     modal = pic.get("modal") or {}
     check(opened.get("ok") and modal.get("id") == "dlg.choose" and "Object" in str(modal.get("title")),
           "P ui_dialog open id=group_pivot puts the Pivot chooser up", short(modal) + " " + short(opened))
@@ -359,20 +359,20 @@ def phase_p() -> None:
         os.makedirs(SHOTS, exist_ok=True)
         with open(os.path.join(SHOTS, "p_chooser.png"), "wb") as f:
             f.write(base64.b64decode(pic["png_base64"]))
-    audit = mcp("ui_audit", id="dlg.choose")
+    audit = mcp("ui.audit", id="dlg.choose")
     controls = {str(c.get("label")): c for c in audit.get("controls") or []}
     check(audit.get("ok") and not audit.get("escaped") and (controls.get("Select") or {}).get("enabled") is False
           and "Cancel" in controls, "P its Select waits for a pick, and nothing leaves it", short(sorted(controls)))
     refused = mcp("viewport_gesture", kind="click", at=CTX.centre())
     check(not refused.get("ok") and "a dialog is up" in str(refused.get("error")), "P a gesture is refused while it is up",
           short(refused))
-    mcp("ui_dialog", action="close", id="dlg.choose")
-    check(not mcp("screenshot_editor").get("modal"), "P it closes as Cancel does")
+    mcp("ui.dialog", action="close", id="dlg.choose")
+    check(not mcp("shot.window").get("modal"), "P it closes as Cancel does")
     aligned = mcp("group_tool", action="align_pivot", object=b)
     gp, bp = position(gname), position(b)
     check(aligned.get("changed") == 1 and all(abs(p - q) < 1e-3 for p, q in zip(gp, bp)),
           "P its pick, align_pivot object=, puts the group's pivot on that object", "%s vs %s" % (gp, bp))
-    no_group = mcp("deselect_all") and mcp("ui_dialog", action="open", id="group_pivot")
+    no_group = mcp("deselect_all") and mcp("ui.dialog", action="open", id="group_pivot")
     check(not no_group.get("ok") and "Select a group" in str(no_group.get("error")),
           "P without a selected group it says so", short(no_group))
 
@@ -523,12 +523,12 @@ def phase_s() -> None:
     from PIL import Image
     opened = mcp("open_scene", scene="l01_escape.level", discard=True, timeout=300)
     check(opened.get("ok"), "S the scene opens again", short(opened))
-    mcp("ui_tab", action="open", id="level")
+    mcp("ui.tab", action="open", doc="level")
     # the view a fresh load of Escape has (the phases before moved it): the picture must be of it
     mcp("camera_set", **ESCAPE_VIEW)
     # one call each, nothing waited for in between: the answer holds until the picture is current
-    shot = mcp("screenshot_editor", timeout=60)
-    view = [p for p in mcp("ui_list").get("panels", []) if p.get("id") == "viewport"]
+    shot = mcp("shot.window", timeout=60)
+    view = [p for p in mcp("ui.list").get("panels", []) if p.get("id") == "viewport"]
     rect = view[0].get("rect") if view else None
     data = base64.b64decode(shot.get("png_base64") or b"")
     spread = 0.0
@@ -553,7 +553,7 @@ def phase_s() -> None:
 
 
 def job_of(job_id: int) -> dict:
-    return next((j for j in mcp("jobs").get("jobs", []) if j.get("id") == job_id), {})
+    return next((j for j in mcp("job.list").get("jobs", []) if j.get("id") == job_id), {})
 
 
 def phase_c() -> None:
@@ -758,7 +758,7 @@ def main() -> int:
             time.sleep(0.05)
         qa_target.mark("editor start")
         opened = mcp("open_scene", scene="l01_escape.level", timeout=300)
-        mcp("ui_tab", action="open", id="level")
+        mcp("ui.tab", action="open", doc="level")
         if not check(opened.get("ok"), "the Escape scene is open", short(opened)):
             return 1
         refused = mcp("viewport_gesture", kind="click", at=[-5, 10])
@@ -777,14 +777,14 @@ def main() -> int:
                 traceback.print_exc()
                 check(False, "%s ran to its end" % p, repr(exc))
             print("TIME phase %s %.1f s" % (p, time.monotonic() - t), flush=True)
-        mcp("ui_tab", action="open", kind="preferences")
+        mcp("ui.tab", action="open", kind="preferences")
         elsewhere = mcp("viewport_gesture", kind="click", at=CTX.centre())
         check(not elsewhere.get("ok") and "Level tab is not the active one" in str(elsewhere.get("error")),
               "a gesture is refused while another tab is up", short(elsewhere))
     finally:
         if proc:
             try:
-                mcp("window_control", action="close", discard=True)
+                mcp("app.quit", discard=True)
             except OSError:
                 pass
             try:

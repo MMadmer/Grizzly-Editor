@@ -25,6 +25,10 @@ report.
 7. **No test writes a program file** (CLAUDE.md, "Build and verification"). No change of an antivirus or system
    setting.
 8. **No `unsafe` outside `gz-win`.** No `static` holding state. Nothing waits on the UI thread (CLAUDE.md).
+9. **Nothing you start may wait for ever.** Every program a script or a command of yours starts runs under a time
+   limit and is ended with everything it started when the limit runs out: `python tools/rust/limited.py <seconds>
+   <program> ...` in a shell or a script, the QA harness's own limits in a suite. Never start an editor with a
+   window outside the harness. Before you finish, no process of yours is left running.
 
 ## How to build and prove
 

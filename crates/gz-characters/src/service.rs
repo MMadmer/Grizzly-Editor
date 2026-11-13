@@ -7,12 +7,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
-use gz_base::{RelPath, Rev};
+use gz_base::{RelPath, Rev, RevCounter};
 use gz_editor::{CmdError, Editor, Executors};
 use gz_game::GameLink;
 use gz_mod::ManifestService;
 use gz_nq::{CharacterBrief, CharacterLookup, NqService, Pickers};
-use gz_project::{AssetKind, EntryKind, FileTree, Project};
+use gz_project::{AssetKind, EntryKind, FileTree, Filter, Project};
 use gz_query::Query;
 use gz_vfs::GameFiles;
 use parking_lot::{Mutex, RwLock};
@@ -208,6 +208,8 @@ pub struct Characters {
     presets: Query<(), Vec<String>>,
     damage: Query<(), Vec<String>>,
     bones: Mutex<(Rev, BoneCache)>,
+    /// Moves with every change of a character file the project's watcher reports.
+    changes: Arc<RevCounter>,
 }
 
 /// What `gz_nq` reads of the characters.
@@ -237,7 +239,6 @@ impl Characters {
             Self {
                 exec: editor.exec.clone(),
                 root: project.root().to_owned(),
-                project,
                 manifest,
                 roster: Query::new(editor.exec.clone()),
                 memo: Mutex::new(None),
@@ -246,6 +247,8 @@ impl Characters {
                 presets: Query::new(editor.exec.clone()),
                 damage: Query::new(editor.exec.clone()),
                 bones: Mutex::new((Rev::ZERO, Arc::new(Mutex::new(FxHashMap::default())))),
+                changes: follow_files(editor, &project),
+                project,
             }
         });
         if made && let Ok(nq) = NqService::of(editor) {
@@ -284,14 +287,23 @@ impl Characters {
             .collect()
     }
 
-    fn stamp_of(tree: &FileTree, files: &[RelPath], rules: &[String]) -> Rev {
+    /// The stamp of the files: the watcher's count of their changes and their list, or -
+    /// without a watcher - their sizes and write times as the tree has them.
+    fn stamp_of(&self, tree: &FileTree, files: &[RelPath], rules: &[String]) -> Rev {
         let mut h = FNV_OFFSET;
         for rule in rules {
             h = fnv(h, rule.as_bytes());
             h = fnv(h, b"\n");
         }
+        let live = self.project.tree.changes().live();
+        if live {
+            h = fnv(h, &self.changes.get().0.to_le_bytes());
+        }
         for rel in files {
             h = fnv(h, rel.key().as_bytes());
+            if live {
+                continue;
+            }
             if let Some(EntryKind::File { size, modified, .. }) = tree.entry(rel).map(|e| e.kind) {
                 h = fnv(h, &size.to_le_bytes());
                 let t = modified
@@ -306,14 +318,14 @@ impl Characters {
     /// The stamp of the files now, worked out once per state of the tree and the manifest.
     fn current_stamp(&self) -> Rev {
         let tree = self.project.tree.snapshot();
-        let cheap = tree.rev().mix(self.manifest.rev());
+        let cheap = tree.rev().mix(self.manifest.rev()).mix(self.changes.get());
         if let Some((key, stamp)) = *self.memo.lock()
             && key == cheap
         {
             return stamp;
         }
         let rules = self.rules();
-        let stamp = Self::stamp_of(&tree, &Self::files(&tree, &rules), &rules);
+        let stamp = self.stamp_of(&tree, &Self::files(&tree, &rules), &rules);
         *self.memo.lock() = Some((cheap, stamp));
         stamp
     }
@@ -324,7 +336,7 @@ impl Characters {
         let tree = self.project.tree.snapshot();
         let rules = self.rules();
         let files = Self::files(&tree, &rules);
-        let stamp = Self::stamp_of(&tree, &files, &rules);
+        let stamp = self.stamp_of(&tree, &files, &rules);
         if let Some(r) = self.roster.peek_at(&(), stamp) {
             return r;
         }
@@ -462,5 +474,60 @@ impl Characters {
         } else {
             PathBuf::from(&self.root).join(file.replace('/', "\\"))
         }
+    }
+}
+
+/// A counter of the character files' changes, moved by the project's watcher once the tree
+/// holds them.
+fn follow_files(editor: &Editor, project: &Arc<Project>) -> Arc<RevCounter> {
+    let counter = Arc::new(RevCounter::new());
+    let mut rx = project.tree.changes().subscribe(Filter::Extensions(vec!["npcasset".into()]));
+    let (weak, tree) = (Arc::downgrade(&counter), Arc::downgrade(project));
+    editor.exec.spawn(async move {
+        while rx.recv().await.is_some() {
+            if let Some(p) = tree.upgrade() {
+                p.tree.refresh().await;
+            }
+            match weak.upgrade() {
+                Some(c) => {
+                    c.bump();
+                }
+                None => break,
+            }
+        }
+    });
+    counter
+}
+
+impl Characters {
+    /// Saves an edited character into its file: the difference between the character as it was
+    /// read (`before`) and as it is now, written into the file's own text - comments, layout
+    /// and keys the editor does not know stay. A file that does not exist yet is written
+    /// canonically. Answers the file, project-relative.
+    pub async fn save(
+        &self,
+        editor: &Editor,
+        file: &str,
+        before: Option<&Character>,
+        after: &Character,
+    ) -> Result<String, CmdError> {
+        let rel = RelPath::new(file).map_err(|e| CmdError::invalid(format!("{file}: {e}")))?;
+        let abs = rel.to_fs(Path::new(&self.root));
+        let exists = self.exec.io(move || abs.is_file()).await;
+        if exists {
+            let mut f = gz_asset::read(editor, &rel).await?;
+            let old = match before {
+                Some(b) => crate::model::to_value(b),
+                None => crate::model::from_value(&f.doc.value())
+                    .map(|c| crate::model::to_value(&c))
+                    .map_err(CmdError::invalid)?,
+            };
+            f.apply(&old, &crate::model::to_value(after))?;
+            gz_asset::write(editor, &mut f).await?;
+        } else {
+            gz_asset::write_text(editor, &rel, crate::model::write(after)).await?;
+        }
+        self.project.tree.refresh().await;
+        Ok(rel.as_str().to_owned())
     }
 }

@@ -34,11 +34,7 @@ fn err(text: &str) {
 
 /// Whether a folder is a project: it holds a project file or a module manifest.
 fn is_project(dir: &Path) -> bool {
-    dir.join("mod.ltx").is_file()
-        || dir.join("project.ltx").is_file()
-        || std::fs::read_dir(dir).is_ok_and(|entries| {
-            entries.flatten().any(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("grizzly")))
-        })
+    gz_project::list::has_manifest(dir)
 }
 
 /// The project a commandlet works on: `-project`, else the current folder when it is one.
@@ -66,6 +62,15 @@ fn args_of(editor: &Editor, command: &str, pairs: &[(String, String)]) -> Args {
         args.insert(name.clone(), parsed.unwrap_or_else(|| Value::String(value.clone())));
     }
     args
+}
+
+/// Whether a command works on the open level: then the project's scene comes up with the
+/// project. A command without a card may be one of those, so it gets the scene too.
+fn wants_scene(editor: &Editor, command: &str) -> bool {
+    match editor.registry().card(command) {
+        Some((spec, _)) => matches!(spec.area(), "scene" | "level" | "viewport" | "shot"),
+        None => true,
+    }
 }
 
 /// Splits a script line into words; double quotes keep spaces, `\"` is a quote inside them.
@@ -269,7 +274,9 @@ pub fn run(runtime: &Runtime, editor: &Arc<Editor>, cli: &Cli) -> ExitCode {
         {
             let mut args = Args::new();
             args.insert("path".to_owned(), json!(project.display().to_string()));
-            let reply = editor.call("open_project", args, Origin::Mcp).await;
+            // work on files does not wait for a level to load
+            args.insert("scene".to_owned(), json!(steps.iter().any(|s| wants_scene(editor, &s.command))));
+            let reply = editor.call("project.open", args, Origin::Mcp).await;
             if reply.get("ok").and_then(Value::as_bool) != Some(true) {
                 let why = reply.get("error").and_then(Value::as_str).unwrap_or("unknown error");
                 err(&format!("error: the project {} did not open: {why}", project.display()));

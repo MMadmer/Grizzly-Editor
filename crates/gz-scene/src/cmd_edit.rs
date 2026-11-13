@@ -977,7 +977,7 @@ async fn library_group(
     let rel = format!("{}.group", reference.replace('/', "\\"));
     let files = [
         svc.root.join("rawdata").join("groups").join(&rel),
-        ed.paths.root.join("rawdata").join("groups").join(&rel),
+        gz_project::library_root(ed).join("rawdata").join("groups").join(&rel),
     ];
     let shown = files[0].display().to_string();
     let body = ed

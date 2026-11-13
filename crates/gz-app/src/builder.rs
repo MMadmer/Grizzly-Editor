@@ -3,11 +3,19 @@
 //! Each UI crate exposes `pub fn install(b: &mut ShellBuilder)` and `grizzly`'s `main` calls
 //! them in turn. The shell names none of them: it draws what was contributed here. Everything is
 //! called on the UI thread, so nothing here needs to be `Send`.
+//!
+//! What the author triggers by name is an [`Action`] (`ShellBuilder::action`): a menu row names
+//! it (`menu_action`), a toolbar draws it (`actions::toolbar_button`), the palette and the
+//! Keyboard page list it. [`UiCommand`] is the level editor's own table of the same things until
+//! its actions are built; nothing else registers one.
+
+use std::sync::Arc;
 
 use gz_editor::{Editor, SmolStr};
 use gz_ui::{Icon, Toolbar};
 use rustc_hash::FxHashMap;
 
+use crate::actions::Action;
 use crate::doc::{DocCx, Drawer, Factory};
 use crate::keys::Chord;
 
@@ -16,7 +24,8 @@ pub type EnabledFn = Box<dyn Fn(&Editor, &str) -> bool>;
 pub type DrawFn = Box<dyn FnMut(&mut egui::Ui, &mut DocCx<'_>)>;
 pub type ToolbarFn = Box<dyn for<'t> FnMut(&mut Toolbar<'_, 't>, &mut DocCx<'_>)>;
 
-/// A command of the UI: what a menu item, a palette row and a shortcut run.
+/// A command of the level editor's own table: what its menu items, palette rows and shortcuts
+/// run until they are actions.
 pub struct UiCommand {
     /// The shortcut id, as the Keyboard page and `shortcuts` know it: `COMMAND_UNDO`,
     /// `COMMAND_ZOOM_EXTENTS."Selected"`.
@@ -87,7 +96,9 @@ impl UiCommand {
 
 /// What a menu row is.
 pub enum MenuContent {
-    /// A row that runs a command; `label` overrides the command's name ("Open Scene...").
+    /// A row that runs an action; `label` overrides its title ("Build to Folder...").
+    Action { id: SmolStr, label: Option<SmolStr> },
+    /// A row of the level editor's own table; `label` overrides the command's name.
     Command { command: SmolStr, label: Option<SmolStr> },
     /// Rows drawn by their owner: a list that changes (Recent Scene), toggles with checks.
     Custom(DrawFn),
@@ -165,10 +176,76 @@ pub struct LogState {
     pub warnings: u32,
 }
 
+/// A group of rows an area adds to a page of Preferences: the page (an existing one -
+/// General, Interface, Viewport, Tools, Objects, Recovery - or one of its own: Game, Library,
+/// Graph), a section title (empty for rows of the page itself), and the rows.
+#[derive(Clone, Copy, Debug)]
+pub struct PrefGroup {
+    pub page: &'static str,
+    /// The page's icon in the nav, for a page this group brings.
+    pub icon: Icon,
+    pub section: &'static str,
+    pub rows: &'static [PrefRow],
+    /// What the group says instead of its rows while they mean nothing here ("This is a
+    /// development build: it does not update itself."); `None` from it shows the rows.
+    pub note: Option<NoteFn>,
+}
+
+/// What a group says instead of its rows, as one read-only row - its label and its sentence
+/// (`None`: the rows).
+pub type NoteFn = fn(&Arc<Editor>) -> Option<(&'static str, String)>;
+
+/// A row of a [`PrefGroup`]: its official label, its help, and what it is.
+#[derive(Clone, Copy, Debug)]
+pub struct PrefRow {
+    pub label: &'static str,
+    pub help: &'static str,
+    pub kind: PrefKind,
+}
+
+/// What a row of an area's group edits or shows.
+#[derive(Clone, Copy, Debug)]
+pub enum PrefKind {
+    /// A setting of the editor's settings file, edited as its type says; `app.prefs` lists and
+    /// sets it. `choices` names the values of a `U32` setting picked from a list (index = value).
+    Setting { def: crate::settings::PrefDef, unit: &'static str, choices: &'static [&'static str] },
+    /// On or off, kept by the area itself: `get` reads it, `set` changes it (through a command).
+    Switch { get: fn(&Arc<Editor>) -> bool, set: fn(&Arc<Editor>, bool), default: bool },
+    /// A value to read, never edited.
+    ReadOnly { value: fn(&Arc<Editor>) -> String },
+    /// A button and, beside it, the sentence `status` answers (what the last run found). `run`
+    /// starts the work (a command); `enabled` says why the button is off.
+    Button {
+        text: &'static str,
+        run: fn(&Arc<Editor>),
+        enabled: fn(&Arc<Editor>) -> crate::actions::Enabled,
+        status: fn(&Arc<Editor>) -> String,
+    },
+}
+
+impl PrefRow {
+    /// A row editing a setting of the editor's settings file.
+    #[must_use]
+    pub const fn setting(def: crate::settings::PrefDef, label: &'static str, help: &'static str) -> Self {
+        Self { label, help, kind: PrefKind::Setting { def, unit: "", choices: &[] } }
+    }
+
+    /// The setting this row edits, if it edits one of the settings file.
+    #[must_use]
+    pub fn def(&self) -> Option<crate::settings::PrefDef> {
+        match self.kind {
+            PrefKind::Setting { def, .. } => Some(def),
+            _ => None,
+        }
+    }
+}
+
 /// Everything the areas plugged in, consumed by the shell when the window opens.
 #[derive(Default)]
 pub struct ShellBuilder {
     pub(crate) factories: FxHashMap<SmolStr, Factory>,
+    pub(crate) actions: Vec<Action>,
+    pub(crate) pref_groups: Vec<PrefGroup>,
     pub(crate) commands: Vec<UiCommand>,
     pub(crate) menus: Vec<MenuEntry>,
     pub(crate) project_toolbar: Vec<(i32, ToolbarFn)>,
@@ -185,8 +262,8 @@ pub struct ShellBuilder {
 }
 
 impl ShellBuilder {
-    /// A row of the C++ command table (`list_commands`, `exec_command`): its C++ id, name,
-    /// description, sub-commands with their keys, and its action. A row of an id registered twice
+    /// A row of the level's numbered command table (`list_commands`, `exec_command`): its number,
+    /// name, description, sub-commands with their keys, and its action. A row of an id registered twice
     /// keeps the later one; one whose action is not there is left out.
     pub fn cpp_command(&mut self, command: crate::cpp::CppCommand) {
         self.cpp.push(command);
@@ -219,7 +296,7 @@ impl ShellBuilder {
         self.start_page.is_some()
     }
 
-    /// The sub-commands of a C++ table row by its name, as the last registration left it.
+    /// The sub-commands of a row of the numbered table by its name, as the last registration left it.
     #[must_use]
     pub fn cpp_subs(&self, name: &str) -> Option<Vec<String>> {
         self.cpp
@@ -239,13 +316,61 @@ impl ShellBuilder {
         self.factories.insert(SmolStr::new(kind), Box::new(f));
     }
 
-    /// A command of the UI. An id registered twice keeps the later command.
+    /// An action: what a menu row, a toolbar button, a shortcut and a palette row run. An id
+    /// registered twice keeps the later action.
+    pub fn action(&mut self, action: Action) {
+        self.actions.retain(|a| a.id != action.id);
+        self.actions.push(action);
+    }
+
+    /// Whether an action of this id was added (a test of an application's own builder).
+    #[must_use]
+    pub fn has_action(&self, id: &str) -> bool {
+        self.actions.iter().any(|a| a.id == id)
+    }
+
+    /// A menu row running an action; `label` overrides its title ("Package Release...").
+    pub fn menu_action(&mut self, menu: &str, group: i32, order: i32, id: &str, label: Option<&str>) {
+        self.menus.push(MenuEntry {
+            menu: SmolStr::new(menu),
+            submenu: None,
+            group,
+            order,
+            content: MenuContent::Action { id: SmolStr::new(id), label: label.map(SmolStr::new) },
+        });
+    }
+
+    /// A menu row running an action, in a submenu of `menu`.
+    pub fn submenu_action(
+        &mut self,
+        menu: &str,
+        submenu: &str,
+        group: i32,
+        order: i32,
+        id: &str,
+        label: Option<&str>,
+    ) {
+        self.menus.push(MenuEntry {
+            menu: SmolStr::new(menu),
+            submenu: Some(SmolStr::new(submenu)),
+            group,
+            order,
+            content: MenuContent::Action { id: SmolStr::new(id), label: label.map(SmolStr::new) },
+        });
+    }
+
+    /// Rows an area adds to Preferences.
+    pub fn pref_group(&mut self, group: PrefGroup) {
+        self.pref_groups.push(group);
+    }
+
+    /// A command of the level editor's own table. An id registered twice keeps the later one.
     pub fn command(&mut self, command: UiCommand) {
         self.commands.retain(|c| c.id != command.id);
         self.commands.push(command);
     }
 
-    /// A menu row running a command.
+    /// A menu row running an action, or (until its table goes) a command of the level editor's.
     pub fn menu_item(&mut self, menu: &str, group: i32, order: i32, command: &str) {
         self.menus.push(MenuEntry {
             menu: SmolStr::new(menu),

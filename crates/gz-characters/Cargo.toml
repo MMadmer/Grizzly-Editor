@@ -1,6 +1,6 @@
 [package]
 name = "gz-characters"
-description = "The module's own NPCs: the .npcasset model, inheritance, validation, the build check and the characters_* commands."
+description = "The module's own NPCs: the .npcasset model, inheritance, validation, the save that writes only what changed, the build check and the character kind."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -22,6 +22,7 @@ gz-game.workspace = true
 gz-project.workspace = true
 gz-mod.workspace = true
 gz-build.workspace = true
+gz-asset.workspace = true
 gz-nq.workspace = true
 gz-chunk.workspace = true
 gz-fmt-ogf.workspace = true

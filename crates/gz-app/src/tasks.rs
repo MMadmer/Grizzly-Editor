@@ -1,5 +1,5 @@
-//! The Task Center: what jobs say of themselves beyond their stage and fraction, and the
-//! `progress` answer.
+//! The Task Center: what jobs say of themselves beyond their stage and fraction, the rows of the
+//! last jobs that ended, and the `ui.tasks` answer.
 //!
 //! A job attaches its card as JSON in [`TaskCardTable`], an `Editor` service keyed by a std
 //! type on purpose: an area crate below the UI publishes without depending on this crate -
@@ -59,10 +59,50 @@ pub fn card_of(editor: &Editor, job: JobId) -> Option<TaskCard> {
     serde_json::from_value(value).ok()
 }
 
-/// Forgets the cards of jobs that ended.
+/// How many jobs that ended the Task Center keeps showing, dimmed, with their result.
+pub const FINISHED_KEPT: usize = 5;
+
+/// The jobs that ended, newest first, as many as the Task Center shows.
+#[must_use]
+pub fn finished_rows(editor: &Editor) -> Vec<JobInfo> {
+    let mut done: Vec<JobInfo> = editor.jobs.snapshot().into_iter().filter(|j| !j.running()).collect();
+    done.sort_by_key(|j| std::cmp::Reverse(j.ended_ms.unwrap_or(0)));
+    done.truncate(FINISHED_KEPT);
+    done
+}
+
+/// What a job came to, in a few words: "Done in 00:12", "Stopped", "Failed: <why>".
+#[must_use]
+pub fn result_text(job: &JobInfo) -> String {
+    let took = format_elapsed(job.ended_ms.unwrap_or(job.started_ms).saturating_sub(job.started_ms));
+    match job.state {
+        gz_editor::JobState::Done => format!("Done in {took}"),
+        gz_editor::JobState::Cancelled => "Stopped".to_owned(),
+        gz_editor::JobState::Failed => {
+            format!("Failed: {}", job.error.as_deref().unwrap_or("it stopped on an error"))
+        }
+        gz_editor::JobState::Running => String::new(),
+    }
+}
+
+/// One job that ended, as `ui.tasks` lists it under `finished`.
+pub(crate) fn finished_json(job: &JobInfo, now: u64) -> Value {
+    json!({
+        "job": job.id.0,
+        "kind": job.kind,
+        "text": job.title,
+        "state": job.state,
+        "result": result_text(job),
+        "owner": job.owner,
+        "ended_ago_ms": now.saturating_sub(job.ended_ms.unwrap_or(now)),
+    })
+}
+
+/// Forgets the cards of jobs that ended, but for the ones the Task Center still shows.
 pub(crate) fn sweep(editor: &Editor, running: &[JobInfo]) {
     if let Some(table) = editor.services.get::<TaskCardTable>() {
-        table.lock().retain(|id, _| running.iter().any(|j| j.id == *id));
+        let kept: Vec<JobId> = finished_rows(editor).iter().map(|j| j.id).collect();
+        table.lock().retain(|id, _| running.iter().any(|j| j.id == *id) || kept.contains(id));
     }
 }
 
@@ -78,9 +118,11 @@ pub fn format_elapsed(ms: u64) -> String {
     if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m:02}:{s:02}") }
 }
 
-/// One running job, as `progress` lists it under `background`.
+/// One running job, as `ui.tasks` lists it under `running`.
 pub(crate) fn task_json(job: &JobInfo, card: Option<&TaskCard>, cancel_requested: bool, now: u64) -> Value {
     let mut out = Map::new();
+    out.insert("job".into(), json!(job.id.0));
+    out.insert("owner".into(), json!(job.owner));
     out.insert("text".into(), json!(job.title));
     out.insert("detail".into(), json!(job.stage));
     let empty = TaskCard::default();

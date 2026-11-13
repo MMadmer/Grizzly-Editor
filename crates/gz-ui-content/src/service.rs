@@ -97,7 +97,7 @@ fn want_of(editor: &Editor, cats: &Catalogs, key: CatKey) -> Want {
         },
         Source::Editor => {
             let rev = cats.editor_want.get(key.1).map_or(Rev::ZERO, RevCounter::get).next();
-            Want::Editor(editor.paths.root.clone(), key.1, rev)
+            Want::Editor(gz_project::library_root(editor), key.1, rev)
         }
     }
 }

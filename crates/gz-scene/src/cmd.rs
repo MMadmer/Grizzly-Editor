@@ -110,7 +110,7 @@ pub fn register(reg: &mut Registry) {
     crate::bulk::cmd::register(reg);
 }
 
-/// Hooks the scene into the project's life and `list_assets`.
+/// Hooks the scene into the project's life and the library lists (`file.list source=library`).
 pub fn install(editor: &Editor) {
     let lists = AssetLists::of(editor);
     lists.provide("Objects", |ed| {
@@ -121,15 +121,20 @@ pub fn install(editor: &Editor) {
         }
         // no project: the editor's own library, listed once
         let lib = ed.services.get_or_init(|| {
-            EditorLibrary(library::Library::new(vec![ed.paths.root.join("rawdata").join("objects")]))
+            EditorLibrary(library::Library::new(vec![
+                gz_project::library_root(ed).join("rawdata").join("objects"),
+            ]))
         });
         lib.0.list().as_ref().clone()
     });
-    lists.provide("Groups", |ed| library::list_groups(&ed.paths.root.join("rawdata").join("groups")));
+    lists.provide("Groups", |ed| {
+        library::list_groups(&gz_project::library_root(ed).join("rawdata").join("groups"))
+    });
     // the editor's own libraries, as the C++ choosers list them: the effects by name, then the
     // groups by name (`CPSLibrary` sorts both); the light animations in the file's order
     lists.provide("Particles", |ed| {
-        let Ok(bytes) = std::fs::read(ed.paths.root.join("gamedata").join("particles.xr")) else {
+        let Ok(bytes) = std::fs::read(gz_project::library_root(ed).join("gamedata").join("particles.xr"))
+        else {
             return Vec::new();
         };
         let Ok(lib) = gz_fmt_xr::Particles::read(&bytes) else { return Vec::new() };
@@ -141,7 +146,7 @@ pub fn install(editor: &Editor) {
         effects
     });
     lists.provide("Light Anims", |ed| {
-        let Ok(bytes) = std::fs::read(ed.paths.root.join("gamedata").join("lanims.xr")) else {
+        let Ok(bytes) = std::fs::read(gz_project::library_root(ed).join("gamedata").join("lanims.xr")) else {
             return Vec::new();
         };
         gz_fmt_xr::LightAnims::read(&bytes)
@@ -589,6 +594,14 @@ async fn place_object(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     if loaded.is_err() {
         return Err(CmdError::invalid("can't load reference object (check the library path)"));
     }
+    // what the author places from the editor's library is copied into the project as it is
+    // placed: the object, its textures and thumbnails
+    let (root, library, r) = (svc.root.clone(), gz_project::library_root(&ed), reference.clone());
+    let only_library = ed.exec.io(move || gz_project::library::resolve_object(&root, &library, &r)).await
+        == gz_project::library::Resolves::Library;
+    if only_library && let Err(e) = gz_project::library::bring_in(&ed, vec![reference.clone()]) {
+        ed.log.warn(format!("{reference} could not be copied into the project: {}", e.message));
+    }
     let mut obj =
         Object::new(ObjClass::SceneObject, &name, ObjData::SceneObject(SceneObjectData::library(&reference)));
     obj.xform = Transform { position: pos, rotation: rot, scale };
@@ -600,9 +613,9 @@ async fn place_object(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
 
 async fn place_spawn(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let svc = SceneService::of(&ed)?;
-    let section = a
-        .str("section")
-        .ok_or_else(|| CmdError::invalid("missing 'section' argument (see list_spawn_sections)"))?;
+    let section = a.str("section").ok_or_else(|| {
+        CmdError::invalid("missing 'section' argument (see game.lookup type=spawn_section)")
+    })?;
     let point = [PLAYERSTART_CHOOSE_NAME, ENVMOD_CHOOSE_NAME, RPOINT_CHOOSE_NAME]
         .into_iter()
         .find(|p| p.eq_ignore_ascii_case(section) || p[1..].eq_ignore_ascii_case(section));
@@ -623,7 +636,7 @@ async fn place_spawn(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         None => {
             let refused = || {
                 CmdError::invalid(
-                    "no such spawn section in pSettings (see list_spawn_sections; player_start, env_mod and rpoint place the Player Start, an Environment Modifier and a Respawn Point)",
+                    "no such spawn section in pSettings (see game.lookup type=spawn_section; player_start, env_mod and rpoint place the Player Start, an Environment Modifier and a Respawn Point)",
                 )
             };
             let settings = crate::game::settings(&ed).await.ok_or_else(refused)?;

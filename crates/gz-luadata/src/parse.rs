@@ -1,4 +1,4 @@
-//! The compile step of `NqLua::ParseValue`: LuaJIT's parser (`lj_parse.c`), ported for what a
+//! The compile step of the reader: LuaJIT's parser (`lj_parse.c`), ported for what a
 //! compile can say - every syntax message, the scope and goto checks, the nesting, local,
 //! upvalue and register limits - without the bytecode itself.
 //!

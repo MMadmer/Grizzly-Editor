@@ -31,7 +31,7 @@ mod submit;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gz_app::{DialogDesc, MenuContent, MenuEntry, OpenRequest, ShellBuilder, UiCommand};
+use gz_app::{Action, DialogDesc, ShellBuilder, args};
 use gz_editor::{Editor, SmolStr};
 use gz_ui::{Asker, Icon, Kind};
 
@@ -48,10 +48,10 @@ pub const WITHDRAW_WINDOW: &str = "Withdraw from Mod Browser###dlg.catalog_withd
 /// The Releases tab: its document kind and its id.
 pub const RELEASES_KIND: &str = "releases";
 
-/// The shortcut ids of the Mod menu's rows (`EditorPreferences.cpp`).
-const CMD_PUBLISH: &str = gz_ui_mod::menu::PUBLISH;
-const CMD_RELEASES: &str = gz_ui_mod::menu::RELEASES;
-const CMD_CATALOG: &str = gz_ui_mod::menu::CATALOG;
+/// The actions of the Mod menu's rows this package owns.
+const ACT_PUBLISH: &str = gz_ui_mod::menu::PUBLISH;
+const ACT_RELEASES: &str = gz_ui_mod::menu::RELEASES;
+const ACT_CATALOG: &str = gz_ui_mod::menu::CATALOG;
 
 /// What the Publish dialog, the edit dialog, the Releases tab, the toolbar and the menu share. UI
 /// thread only.
@@ -129,40 +129,28 @@ pub fn install(b: &mut ShellBuilder) {
         Ok(Box::new(releases::ReleasesDoc::new(editor, doc_hub.clone())))
     });
 
-    b.command(
-        UiCommand::new(CMD_PUBLISH, "Mod", "Publish Release", Icon::Publish, |cx| {
-            cx.requests.dialog(PUBLISH_ID)
-        })
-        .enabled(|ed: &Editor, _| ed.project_opt().is_some()),
+    b.action(
+        Action::new(ACT_PUBLISH, "Publish Release...", "Mod", "ui.dialog")
+            .icon(Icon::Publish)
+            .args(|_| args(&[("action", "open"), ("id", PUBLISH_ID)]))
+            .enabled(gz_ui_mod::menu::with_project),
     );
-    let cmd_hub = hub.clone();
-    b.command(
-        UiCommand::new(CMD_RELEASES, "Mod", "Releases", Icon::Releases, move |cx| {
-            cmd_hub.borrow_mut().refresh_wanted = true;
-            cx.requests.open(OpenRequest::kind(RELEASES_KIND));
-        })
-        .enabled(|ed: &Editor, _| ed.project_opt().is_some()),
+    b.action(
+        Action::new(ACT_RELEASES, "Releases", "Mod", "ui.tab")
+            .icon(Icon::Releases)
+            .args(|_| args(&[("action", "open"), ("kind", RELEASES_KIND)]))
+            .enabled(gz_ui_mod::menu::with_project)
+            .checked(|cx| cx.tab == RELEASES_KIND),
     );
-    b.command(
-        UiCommand::new(CMD_CATALOG, "Mod", "Submit to Mod Browser", Icon::Globe, |cx| {
-            cx.requests.dialog(SUBMIT_ID)
-        })
-        .enabled(|ed: &Editor, _| ed.project_opt().is_some()),
+    b.action(
+        Action::new(ACT_CATALOG, "Submit to Mod Browser...", "Mod", "ui.dialog")
+            .icon(Icon::Globe)
+            .args(|_| args(&[("action", "open"), ("id", SUBMIT_ID)]))
+            .enabled(gz_ui_mod::menu::with_project),
     );
     // Mod: ... | Package Release..., Publish Release..., Releases | Submit to Mod Browser...
-    for (command, label) in [
-        (CMD_PUBLISH, Some("Publish Release...")),
-        (CMD_RELEASES, None),
-        (CMD_CATALOG, Some("Submit to Mod Browser...")),
-    ] {
-        let (group, order) = gz_ui_mod::mod_menu_slot(command).unwrap_or((3, 9));
-        b.menu_entry(MenuEntry {
-            menu: SmolStr::new("Mod"),
-            submenu: None,
-            group,
-            order,
-            content: MenuContent::Command { command: SmolStr::new(command), label: label.map(SmolStr::new) },
-        });
+    for id in [ACT_PUBLISH, ACT_RELEASES, ACT_CATALOG] {
+        gz_ui_mod::menu::row(b, id, None);
     }
 
     // the toolbar, after Build Mod: [Publish Release] [Releases]
@@ -179,14 +167,16 @@ pub fn install(b: &mut ShellBuilder) {
             if running {
                 cx.requests.task_card(true);
             } else {
-                cx.requests.dialog(PUBLISH_ID);
+                cx.requests.action(ACT_PUBLISH);
             }
         }
-        if cx.active_tab != RELEASES_KIND
-            && tb.action("releases", Icon::Releases, "Releases", "The releases already on GitHub.\nDeletes one together with its git tag.", true, false, Kind::Ghost)
+        // drawn on every tab, checked on its own: the row never moves when the tab changes
+        let on_releases = cx.active_tab == RELEASES_KIND;
+        if tb.action("releases", Icon::Releases, "Releases", "The releases already on GitHub.\nDeletes one together with its git tag.", true, on_releases, Kind::Ghost)
+            && !on_releases
         {
             tb_hub.borrow_mut().refresh_wanted = true;
-            cx.requests.open(OpenRequest::kind(RELEASES_KIND));
+            cx.requests.action(ACT_RELEASES);
         }
     });
 }

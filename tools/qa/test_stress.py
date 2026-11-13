@@ -125,9 +125,9 @@ class Load:
     def reader(self, seed: int) -> None:
         rnd = random.Random(seed)
         reads = [("state", {}), ("scene_info", {}), ("list_objects", {"class": "spawn", "limit": 20}),
-                 ("quest_list", {}), ("mod_manifest", {}), ("progress", {}), ("frame_pacing", {}),
-                 ("camera_get", {}), ("ui_list", {}), ("scene_stats", {}), ("selection", {}),
-                 ("list_commands", {}), ("characters_list", {}), ("world_get", {}), ("scene_load_status", {})]
+                 ("game.lookup", {"type": "quest_id"}), ("mod_manifest", {}), ("ui.tasks", {}), ("frame_pacing", {}),
+                 ("camera_get", {}), ("ui.list", {}), ("scene_stats", {}), ("selection", {}),
+                 ("list_commands", {}), ("asset.check", {"path": "mod.ltx"}), ("world_get", {}), ("scene_load_status", {})]
         while self.running():
             cmd, args = rnd.choice(reads)
             a, dt, why = call(cmd, **args)
@@ -150,14 +150,14 @@ class Load:
     def ui(self, seed: int) -> None:
         rnd = random.Random(seed)
         while self.running():
-            for cmd, args in (("ui_tab", {"action": "open", "kind": "characters"}),
-                              ("ui_drawer", {"action": "open", "id": "log"}),
-                              ("screenshot_editor", {}),
-                              ("ui_drawer", {"action": "close"}),
-                              ("ui_tab", {"action": "activate", "id": "level"}),
-                              ("ui_panel", {"action": "focus", "id": rnd.choice(["details", "world_outliner", "tools"])}),
-                              ("command_palette", {"action": "query", "query": rnd.choice(["log", "scene", "build"])}),
-                              ("ui_audit", {})):
+            for cmd, args in (("ui.tab", {"action": "open", "kind": "characters"}),
+                              ("ui.drawer", {"action": "open", "id": "log"}),
+                              ("shot.window", {}),
+                              ("ui.drawer", {"action": "close"}),
+                              ("ui.tab", {"action": "activate", "doc": "level"}),
+                              ("ui.panel", {"action": "focus", "id": rnd.choice(["details", "world_outliner", "tools"])}),
+                              ("ui.palette", {"action": "query", "query": rnd.choice(["log", "scene", "build"])}),
+                              ("ui.audit", {})):
                 a, dt, why = call(cmd, **args)
                 self.note(cmd, a, dt, why)
 
@@ -234,7 +234,7 @@ def run(project: str, seconds: float, out_dir: str) -> None:
         check(st and st.get("ok"), "C the editor still answers after the load", why)
     finally:
         t0 = time.monotonic()
-        call("window_control", timeout=10, action="close", discard=True)
+        call("app.quit", timeout=10, discard=True)
         try:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:

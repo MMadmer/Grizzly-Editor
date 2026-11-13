@@ -2117,7 +2117,7 @@ impl Canvas {
         self.open_menu(ctx, Menu::AddAction { node: SmolStr::new(node), exit }, at);
     }
 
-    fn delete_hot_link(&mut self, ctx: &egui::Context, sc: &Scene, cx: &mut CanvasCx<'_>) {
+    pub fn delete_hot_link(&mut self, ctx: &egui::Context, sc: &Scene, cx: &mut CanvasCx<'_>) {
         let Some(l) = self.hot_link.and_then(|i| sc.links.get(i)) else { return };
         let (Some(f), Some(t)) = (sc.nodes.get(l.from as usize), sc.nodes.get(l.to as usize)) else { return };
         cx.ops.push(Op::Doc(DocOp::Disconnect {
@@ -2138,84 +2138,24 @@ impl Canvas {
         (self.hovered || self.focused) && !egui::Popup::is_any_open(ctx) && !ctx.egui_wants_keyboard_input()
     }
 
-    /// A key of the canvas (`HandleKeys`); `true` when taken.
+    /// A key of the canvas while it has the keys; `true` when taken. Esc drops a gesture under
+    /// way; every other key of the canvas is an action of the graph (`actions.rs`).
     pub fn key(
         &mut self,
-        ctx: &egui::Context,
-        sc: Option<&Scene>,
-        cx: &mut CanvasCx<'_>,
+        _ctx: &egui::Context,
+        _sc: Option<&Scene>,
+        _cx: &mut CanvasCx<'_>,
         chord: &gz_app::Chord,
     ) -> bool {
-        let (ctrl, shift, alt) = (chord.ctrl, chord.shift, chord.alt);
-        match (chord.key, ctrl, shift, alt) {
-            (Key::Delete, false, false, false) => {
-                self.delete_selection(cx);
-                true
-            }
-            (Key::Home, false, false, false) => {
-                self.want_frame_all = true;
-                true
-            }
-            (Key::F, false, false, false) => {
-                self.want_frame_sel = true;
-                true
-            }
-            (Key::F2, false, false, false) => {
-                self.want_rename = true;
-                true
-            }
-            (Key::Q, false, false, false) => {
-                cx.ops.push(Op::Doc(DocOp::Canvas(CanvasOp::ConnectNearest)));
-                true
-            }
-            (Key::D, false, false, true) => {
-                cx.ops.push(Op::Doc(DocOp::Canvas(CanvasOp::Bypass)));
-                true
-            }
-            (Key::D, false, false, false) => {
-                if let Some(sc) = sc {
-                    self.delete_hot_link(ctx, sc, cx);
-                }
-                true
-            }
-            (Key::A, true, false, false) => {
-                self.select_all(cx);
-                true
-            }
-            (Key::D, true, false, false) => {
-                cx.ops.push(Op::Doc(DocOp::Canvas(CanvasOp::Duplicate)));
-                true
-            }
-            (Key::B, true, false, false) => {
-                self.toggle_bookmarks(ctx, cx);
-                true
-            }
-            (Key::ArrowLeft, false, false, true) => {
-                cx.ops.push(Op::Doc(DocOp::View(ViewOp::HistoryBack)));
-                true
-            }
-            (Key::ArrowRight, false, false, true) => {
-                cx.ops.push(Op::Doc(DocOp::View(ViewOp::HistoryForward)));
-                true
-            }
-            (Key::Z, true, false, false) => {
-                cx.ops.push(Op::Undo);
-                true
-            }
-            (Key::Y, true, false, false) | (Key::Z, true, true, false) => {
-                cx.ops.push(Op::Redo);
-                true
-            }
-            (Key::Escape, false, false, false) => {
-                let busy = self.linking.is_some() || self.marquee.is_some() || self.act_drag.is_some();
-                self.linking = None;
-                self.marquee = None;
-                // drops the action back where it came from: the move only happens on release
-                self.act_drag = None;
-                busy
-            }
-            _ => false,
+        if chord.key != Key::Escape || chord.ctrl || chord.shift || chord.alt {
+            return false;
         }
+        let busy = self.linking.is_some() || self.marquee.is_some() || self.act_drag.is_some();
+        self.linking = None;
+        self.marquee = None;
+        // drops the action back where it came from: the move only happens on release
+        self.act_drag = None;
+        busy
     }
 
     pub fn select_all(&self, cx: &mut CanvasCx<'_>) {

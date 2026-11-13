@@ -2,12 +2,12 @@
 //!
 //! A list of the project's characters (as their files say, sorted by id) and the form of the one
 //! selected. The tab keeps VIEW state and the character being edited: the roster comes from
-//! `gz_characters::Characters` on the pools, a save is `characters_write` with the canonical
-//! text (`gz_characters::write`), a deletion `characters_delete`. The form binds to what is
-//! STORED (`text_raw`), never to the resolved character: the game falls back, the form must not.
-//! The problems of the edited character are worked out on the pools when it changes, resolved
-//! against the others the way `characters_write` reports them. The C++ specification is the
-//! Characters tab of `EditorCharacters.cpp` from `RecomputeInherited` to `McpView`.
+//! `gz_characters::Characters` on the pools; a save is `Characters::save` - the difference
+//! between the character as the tab read it and as it is now, written into the file's own text
+//! (a new character's file is written canonically); a deletion is `file.delete`. The form binds
+//! to what is STORED (`text_raw`), never to the resolved character: the game falls back, the
+//! form must not. The problems of the edited character are worked out on the pools when it
+//! changes, resolved against the others the way the build sees them.
 
 use std::sync::Arc;
 
@@ -18,6 +18,7 @@ use gz_characters::resolve::resolve;
 use gz_characters::{Character, Characters, Checker, Roster, text_collapse, text_raw, text_set};
 use gz_editor::{Editor, Value, json};
 use gz_luadata::Value as LuaValue;
+use gz_luadata::{Conflict, Limits, LuaDoc, set_at};
 use gz_mod::ManifestService;
 use gz_project::Project;
 use gz_ui::dialog::{Answer, ConfirmSpec, confirm, unsaved_prompt};
@@ -62,7 +63,7 @@ pub(crate) enum Action {
     BaseChanged,
 }
 
-/// A save as the commands carry it out (`SaveEdited`).
+/// A save as it is carried out.
 #[derive(Clone, Debug)]
 pub(crate) struct SavePlan {
     /// The file the character was read from, empty for a new one.
@@ -71,35 +72,50 @@ pub(crate) struct SavePlan {
     /// id the author settled on.
     target: String,
     rename: bool,
-    text: String,
+    /// The character as the tab read it from its file; none for a new one.
+    before: Option<Character>,
+    /// The character as it is now.
+    after: Character,
 }
 
-/// Carries a save out: the rename first when the file follows the id, then the text. The file
-/// written, project-relative.
+/// Carries a save out: the rename first when the file follows the id, then the difference
+/// written into the file. The file written, project-relative.
 pub(crate) async fn run_save(ed: &Arc<Editor>, plan: SavePlan) -> Result<String, String> {
     let origin = ed.ui_origin();
     let mut target = plan.target;
     if plan.rename {
         let leaf = target.rsplit('/').next().unwrap_or(&target).to_owned();
-        let reply =
-            ed.call("content_rename", args([("path", s(&plan.old)), ("name", s(&leaf))]), origin).await;
-        // a rename refused leaves the file where it is: the text goes there
+        let reply = ed.call("file.rename", args([("path", s(&plan.old)), ("name", s(&leaf))]), origin).await;
+        // a rename refused leaves the file where it is: the character goes there
         if !call::ok(&reply) {
             target = plan.old;
         }
     }
-    let reply =
-        ed.call("characters_write", args([("text", s(&plan.text)), ("path", s(&target))]), origin).await;
-    if call::ok(&reply) {
-        Ok(reply.get("file").and_then(Value::as_str).map_or(target, str::to_owned))
-    } else {
-        Err(call::error_text(&reply))
-    }
+    let svc = Characters::of(ed).await.map_err(|e| e.message)?;
+    svc.save(ed, &target, plan.before.as_ref(), &plan.after).await.map_err(|e| e.message)
+}
+
+/// The form's edits (`edit`, read as `base`) put onto the character the file holds now
+/// (`disk`): every value the form changed, the file's values elsewhere; the values both changed
+/// keep the form's and come back as conflicts. None when the values do not make a character.
+pub(crate) fn merge_character(
+    base: &Character,
+    edit: &Character,
+    disk: &Character,
+) -> Option<(Character, Vec<Conflict>)> {
+    let rules = gz_characters::model::diff_rules();
+    let (from, mine) = (gz_characters::model::to_value(base), gz_characters::model::to_value(edit));
+    let theirs = gz_characters::model::write(disk);
+    let (doc, conflicts) =
+        LuaDoc::rebase_with(&from, &mine, &theirs, &rules, &disk.file, Limits::asset()).ok()?;
+    let mut merged = gz_characters::model::from_value(&doc.value()).ok()?;
+    merged.file.clone_from(&edit.file);
+    Some((merged, conflicts))
 }
 
 /// The problems of the edited character as the build will see it: resolved against the others
-/// (its base, the ids they take), then validated - the answer `characters_write` gives
-/// (`Revalidate`). Blocking: run it on the IO pool (a model's bones may be read).
+/// (its base, the ids they take), then validated. Blocking: run it on the IO pool (a model's
+/// bones may be read).
 pub(crate) fn own_problems(
     roster: &Roster,
     sel: Option<usize>,
@@ -216,6 +232,12 @@ pub struct CharactersDoc {
     pub(crate) module_id: String,
     pub(crate) sel: Option<usize>,
     pub(crate) edit: Character,
+    /// The character as the form read it from its file: what a save takes the difference from,
+    /// and what an outside change is merged against. None for a new one.
+    base: Option<Character>,
+    /// The values both the form and the file on disk changed since the form read it: the
+    /// form keeps its own, Take Theirs takes the file's.
+    pub(crate) conflicts: Vec<Conflict>,
     pub(crate) dirty: bool,
     pub(crate) name_rus: String,
     pub(crate) name_eng: String,
@@ -256,6 +278,8 @@ impl CharactersDoc {
             module_id: String::new(),
             sel: None,
             edit: Character::default(),
+            base: None,
+            conflicts: Vec::new(),
             dirty: false,
             name_rus: String::new(),
             name_eng: String::new(),
@@ -341,6 +365,9 @@ impl CharactersDoc {
         };
         if self.dirty {
             self.sel = found;
+            if let Some(disk) = found.and_then(|i| roster.raw.get(i)) {
+                self.rebase(disk);
+            }
             self.recompute_inherited();
         } else {
             self.select(found.or(if roster.raw.is_empty() { None } else { Some(0) }));
@@ -375,16 +402,54 @@ impl CharactersDoc {
         match picked {
             Some((i, c)) => {
                 self.sel = Some(i);
+                self.base = Some(c.clone());
                 self.edit = c;
             }
             None => {
                 self.sel = None;
+                self.base = None;
                 self.edit = Character::default();
             }
         }
+        self.conflicts.clear();
         self.dirty = false;
         self.pull();
         self.recompute_inherited();
+        self.edit_gen += 1;
+    }
+
+    /// The file of the edited character changed on disk while the form holds edits: the form's
+    /// changes go onto the file's new values, so what the file gained shows and stays; a value
+    /// both changed keeps the form's and is listed in `conflicts`.
+    fn rebase(&mut self, disk: &Character) {
+        let Some(base) = self.base.clone() else { return };
+        if *disk == base {
+            return;
+        }
+        if let Some((c, conflicts)) = merge_character(&base, &self.edit, disk) {
+            self.edit = c;
+            self.conflicts = conflicts;
+            self.pull();
+        }
+        self.base = Some(disk.clone());
+        self.dirty = self.base.as_ref() != Some(&self.edit);
+    }
+
+    /// The form takes the file's value of one conflict (Take Theirs).
+    pub(crate) fn take_theirs(&mut self, index: usize) {
+        if index >= self.conflicts.len() {
+            return;
+        }
+        let c = self.conflicts.remove(index);
+        let mut v = gz_characters::model::to_value(&self.edit);
+        set_at(&mut v, &c.path, c.theirs.unwrap_or(LuaValue::Nil));
+        if let Ok(mut taken) = gz_characters::model::from_value(&v) {
+            taken.file.clone_from(&self.edit.file);
+            self.edit = taken;
+            self.pull();
+            self.recompute_inherited();
+        }
+        self.dirty = self.base.as_ref() != Some(&self.edit);
         self.edit_gen += 1;
     }
 
@@ -530,7 +595,6 @@ impl CharactersDoc {
             return Err("the character needs an id".into());
         }
         self.push_texts();
-        let text = gz_characters::write(&self.edit);
         let old = self.edit.file.clone();
         let wanted = format!("characters/{}.npcasset", self.edit.id);
         let taken = |rel: &str| {
@@ -543,7 +607,7 @@ impl CharactersDoc {
             && !old.eq_ignore_ascii_case(&wanted)
             && !taken(&wanted);
         let target = if old.is_empty() || rename { wanted } else { old.clone() };
-        Ok(SavePlan { old, target, rename, text })
+        Ok(SavePlan { old, target, rename, before: self.base.clone(), after: self.edit.clone() })
     }
 
     /// Starts a save on the pools; `then` runs once it is written.
@@ -572,6 +636,8 @@ impl CharactersDoc {
                 self.status.clear();
                 self.dirty = false;
                 self.edit.file = file;
+                self.base = Some(self.edit.clone());
+                self.conflicts.clear();
                 self.reload_fresh();
                 self.run_then(then);
             }
@@ -682,7 +748,7 @@ impl CharactersDoc {
             return;
         }
         let inbox = self.inbox.clone();
-        call::call_then(&self.editor, "characters_delete", args([("path", s(&file))]), move |reply, _| {
+        call::call_then(&self.editor, "file.delete", args([("path", s(&file))]), move |reply, _| {
             inbox.lock().deleted = Some(if call::ok(reply) { Ok(()) } else { Err(call::error_text(reply)) });
         });
     }
@@ -739,6 +805,7 @@ impl CharactersDoc {
             "dirty": self.dirty,
             "count": self.roster.as_ref().map_or(0, |r| r.raw.len()),
             "problems": self.own,
+            "conflicts": self.conflicts.iter().map(crate::char_form::conflict_line).collect::<Vec<_>>(),
         })
     }
 
@@ -935,6 +1002,30 @@ mod tests {
         assert_eq!(field_of("W120 a: x"), "trade");
         assert_eq!(field_of("E999 a: x"), "");
         assert_eq!(problem_text("W105 a: done!"), "Done!");
+    }
+
+    #[test]
+    fn edits_in_the_form_merge_with_a_change_on_disk() {
+        let base = Character {
+            id: "trader".into(),
+            file: "characters/trader.npcasset".into(),
+            name: LuaValue::from("Sidorovich"),
+            community: "stalker".into(),
+            ..Character::default()
+        };
+        // the form renames him, the file on disk moves him to another community
+        let edit = Character { name: LuaValue::from("Sid"), ..base.clone() };
+        let disk = Character { community: "dolg".into(), ..base.clone() };
+        let (merged, conflicts) = merge_character(&base, &edit, &disk).expect("merged");
+        assert_eq!((merged.name.clone(), merged.community.as_str()), (LuaValue::from("Sid"), "dolg"));
+        assert!(conflicts.is_empty(), "{conflicts:?}");
+        assert_eq!(merged.file, base.file);
+        // both change the name: the form keeps its own and the conflict names the file's
+        let disk = Character { name: LuaValue::from("Old Sid"), ..base.clone() };
+        let (merged, conflicts) = merge_character(&base, &edit, &disk).expect("merged");
+        assert_eq!(merged.name, LuaValue::from("Sid"));
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].theirs, Some(LuaValue::from("Old Sid")));
     }
 
     #[test]

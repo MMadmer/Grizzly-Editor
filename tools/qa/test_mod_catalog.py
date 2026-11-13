@@ -321,7 +321,7 @@ class Editor:
 
     def close(self) -> None:
         try:
-            mcp("window_control", action="close")
+            mcp("app.quit")
         except (OSError, ValueError):
             pass
         try:
@@ -350,7 +350,7 @@ def shot(folder: str | None, name: str) -> dict:
     """The editor as it looks now, for the operator - only when --shots names a folder."""
     if not folder:
         return {}
-    pic = mcp("screenshot_editor")
+    pic = mcp("shot.window")
     if pic.get("png_base64"):
         path = os.path.join(folder, name + ".png")
         write_bytes(path, base64.b64decode(pic["png_base64"]))
@@ -503,7 +503,7 @@ def stale_layout(layout: bytes, title: str, y: int) -> bytes:
 
 def submit_names() -> tuple[str, str]:
     """The Submit window's title and its dialog id (dlg.<name>), from the running editor's ui_contract."""
-    window = str((mcp("ui_contract").get("dialogs") or {}).get("submit") or SUBMIT_WINDOW)
+    window = str((mcp("ui.contract").get("dialogs") or {}).get("submit") or SUBMIT_WINDOW)
     title, _, name = window.partition("###")
     return title, name
 
@@ -1207,19 +1207,19 @@ class Run:
         check(data.get("ok") and (data.get("job") or {}).get("kind") == "check",
               "F show opens the window and starts a check", short(data.get("job")))
         # the dialog fits itself once, when it opens: a check that ends later scrolls inside it instead of growing it
-        early = mcp("screenshot_editor").get("modal") or {}
+        early = mcp("shot.window").get("modal") or {}
         data = follow(data)
         check(job_done(data, "check") and not blocks(data), "F the check it started runs to the end", short(data.get("job")))
         # main() saved the window's place far below the editor, and ImGui gives a window outside the main viewport
         # a platform window of its own - one no screenshot of the editor holds
-        pic = mcp("screenshot_editor")
+        pic = mcp("shot.window")
         self.window_in_shot(pic, "F the window opens inside the editor, and a screenshot holds it, wherever the layout "
                             "saved it")
         late = pic.get("modal") or {}
         check(int(early.get("h", 0)) > 0 and abs(int(early.get("h", 0)) - int(late.get("h", -1))) <= 1,
               "F the window keeps its height while the check runs and after it ends",
               "%s -> %s" % (early.get("h"), late.get("h")))
-        audit = mcp("ui_audit", id="submit")
+        audit = mcp("ui.audit", id="submit")
         controls = audit.get("controls") or []
         submit = [c for c in controls if c.get("label") in ("Scan and Submit", "Scan and Update", "Update Submission", "Submit")]
         check(audit.get("ok") and not audit.get("escaped") and len(submit) == 1 and inside(submit[0].get("rect"), late) and
@@ -1236,7 +1236,7 @@ class Run:
         follow(mcp("mod_catalog", action="show"))
         check(resize_editor(self.pid, 1500, 1000), "F the editor's window takes another size")
         time.sleep(0.5)
-        pic = mcp("screenshot_editor")
+        pic = mcp("shot.window")
         self.window_in_shot(pic, "F after the resize the window is still inside the editor")
         why = centred(pic)
         check(not why, "F after the resize the window is centred in the editor", why)
@@ -1245,10 +1245,10 @@ class Run:
 
         # a minimized editor has no client area, and ImGui draws nothing of a minimized window: a screenshot of it
         # was one flat colour. It stays minimized from here on, so every later picture is taken of a minimized editor
-        st = mcp("window_control", action="minimize")
+        st = mcp("app.window", action="minimize")
         check(st.get("ok") and st.get("minimized") is True, "F the editor is minimized", short(st))
         follow(mcp("mod_catalog", action="show"))
-        pic = mcp("screenshot_editor")
+        pic = mcp("shot.window")
         self.window_in_shot(pic, "F a screenshot of the minimized editor holds the window as well")
         why = centred(pic)
         check(not why, "F the minimized editor's picture has the window centred", why)
@@ -1443,17 +1443,17 @@ class Run:
         # withdraws anything
         posted = len(api_requests(mock, "POST", "/issues"))
         follow(mcp("mod_catalog", action="show", confirm="withdraw"))
-        pic = mcp("screenshot_editor")
+        pic = mcp("shot.window")
         modal = pic.get("modal") or {}
         check(modal.get("id") == WITHDRAW_SHEET, "W show confirm=withdraw puts the withdrawal's question on top", short(modal))
-        audit = mcp("ui_audit", id=WITHDRAW_SHEET)
+        audit = mcp("ui.audit", id=WITHDRAW_SHEET)
         labels = [c.get("label") for c in audit.get("controls") or []]
         check("Withdraw" in labels and "Cancel" in labels and not audit.get("escaped"),
               "W the question offers Withdraw and Cancel, and nothing of it leaves its window",
               short(audit.get("escaped")) + " " + short(labels))
         shot(self.shots, "catalog_withdraw_sheet")
         mcp("mod_catalog", action="hide")
-        pic = mcp("screenshot_editor")
+        pic = mcp("shot.window")
         check(not pic.get("modal") and len(api_requests(mock, "POST", "/issues")) == posted and
               not submissions(mock.catalog(), "QaOwner", WITHDRAW_TITLE),
               "W hide takes the window and its question down, and nothing was sent", short(pic.get("modal")))

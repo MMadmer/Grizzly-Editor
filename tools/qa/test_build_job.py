@@ -120,7 +120,7 @@ class Job(threading.Thread):
 
 
 def job_row() -> dict:
-    rows = mcp("progress").get("background") or []
+    rows = mcp("ui.tasks").get("background") or []
     return next((r for r in rows if r.get("key")), {})
 
 
@@ -154,7 +154,7 @@ class Run:
 
     # ---- A: the editor goes on while a build copies ---------------------------------------------------------------
     def a(self) -> None:
-        mcp("ui_tab", action="open", id="level")
+        mcp("ui.tab", action="open", doc="level")
         mcp("view_mode", real_time=True)
         mcp("frame_pacing")
         job = Job("mod_export", target=self.target)
@@ -175,8 +175,8 @@ class Run:
             time.sleep(.05)
         check(worst < .75, f"A a command is answered at once while it copies ({worst * 1000:.0f} ms at worst, {copying} asked)")
         if job.is_alive() and self.shots:
-            mcp("ui_popup", show="tasks")
-            pic = mcp("screenshot_editor")
+            mcp("ui.popup", show="tasks")
+            pic = mcp("shot.window")
             if pic.get("png_base64"):
                 os.makedirs(self.shots, exist_ok=True)
                 with open(os.path.join(self.shots, "job_card.png"), "wb") as f:
@@ -204,7 +204,8 @@ class Run:
                 f.write((i + 1000).to_bytes(4, "little"))
         job = Job("mod_export", target=self.target)
         check(bool(wait_for_copy(job)), "B the changed files are being copied")
-        stopped = mcp("progress", action="cancel")
+        running = [j for j in mcp("job.list", running=True).get("jobs", []) if j.get("kind") == "build"] or             mcp("job.list", running=True).get("jobs", [])
+        stopped = mcp("job.stop", job=running[0].get("id")) if running else {"ok": False, "error": "no job runs"}
         job.join()
         check(stopped.get("ok") and job.answer.get("error") == "cancelled", "B Stop ends the build", json.dumps(job.answer)[:300])
         check(fingerprint(self.module) == before, "B the last build is exactly as it was")
@@ -266,7 +267,7 @@ class Run:
             deadline = time.monotonic() + 240
             info = {}
             while time.monotonic() < deadline:
-                info = next((j for j in mcp("jobs").get("jobs", []) if j.get("id") == job_id), {})
+                info = next((j for j in mcp("job.list").get("jobs", []) if j.get("id") == job_id), {})
                 if info.get("state") != "running":
                     break
                 time.sleep(0.2)
@@ -335,7 +336,7 @@ def main() -> int:
 
         def restart(env: dict) -> None:
             nonlocal proc
-            mcp("window_control", action="close")
+            mcp("app.quit")
             proc.wait(timeout=120)
             proc = start_editor(project, env)
 
@@ -348,7 +349,7 @@ def main() -> int:
     finally:
         if proc:
             try:
-                mcp("window_control", action="close")
+                mcp("app.quit")
                 proc.wait(timeout=120)
             except (OSError, subprocess.TimeoutExpired) as error:
                 print("! the editor did not close:", error, flush=True)

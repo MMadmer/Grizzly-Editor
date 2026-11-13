@@ -67,7 +67,7 @@ def start_editor(project: str) -> subprocess.Popen:
     while time.monotonic() < deadline:
         try:
             if mcp("mod_manifest", timeout=30).get("ok"):
-                mcp("ui_list")
+                mcp("ui.list")
                 return proc
         except OSError:
             pass
@@ -203,9 +203,9 @@ def main() -> int:
         # ---- U: the tab
         v = mcp("screens_view", open=True, surface="loading", screen="night", layer=0)
         check(v.get("ok") and v.get("open"), "U the tab opens", v)
-        shot = mcp("screenshot_editor")
+        shot = mcp("shot.window")
         check(shot.get("active_tab") == "screens", "U it is the active tab", shot.get("active_tab"))
-        audit = mcp("ui_audit")
+        audit = mcp("ui.audit")
         escaped = [e for e in audit.get("escaped", []) if "screens" in json.dumps(e).lower()]
         check(not escaped, "U nothing escapes it", escaped)
         if args.shots:
@@ -215,13 +215,13 @@ def main() -> int:
                 with open(os.path.join(args.shots, "screens_loading.png"), "wb") as f:
                     f.write(base64.b64decode(image))
         mcp("screens_view", surface="menu")
-        check(mcp("screenshot_editor").get("active_tab") == "screens", "U the menu surface draws")
+        check(mcp("shot.window").get("active_tab") == "screens", "U the menu surface draws")
         mcp("screens_view", surface="loading")
 
         png(os.path.join(outside, "dropped.png"))
         v = mcp("screens_view", simulate_drop=os.path.join(outside, "dropped.png"), x=1000.0, y=500.0)
-        mcp("ui_list")
-        mcp("screenshot_editor")
+        mcp("ui.list")
+        mcp("shot.window")
         a = mcp("screens_get")
         check("dropped" in screens(a), "U a file dropped on the empty part of the tab becomes a screen", list(screens(a)))
 
@@ -237,7 +237,7 @@ def main() -> int:
         check("disable_game_updates" not in text(mod), "G turning it off takes the key away")
     finally:
         try:
-            mcp("window_control", action="close")
+            mcp("app.quit")
         except OSError:
             pass
         try:

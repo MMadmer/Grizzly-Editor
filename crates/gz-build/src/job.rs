@@ -37,7 +37,7 @@ pub struct BuildRequest {
     pub target: String,
     /// The author agreed to the files there going (an MCP build always has).
     pub clean: bool,
-    /// On success the target is remembered as `project.ltx [xms] export_target` (the window's
+    /// On success the target is remembered in this machine's state of the project (the window's
     /// builds do; MCP builds do not).
     pub remember_target: bool,
 }
@@ -371,7 +371,7 @@ pub async fn run_build(
         Ok(()) => out.ok = true,
         Err(err) => out.err = err,
     }
-    editor.log.info(format!("* [XMS] build stages: {}", feeder.profile.text()));
+    editor.log.detail(format!("* [XMS] build stages: {}", feeder.profile.text()));
     out.warnings = warnings.join("\n");
     out.cancelled = !out.ok && out.err == "cancelled";
     builds.end();
@@ -495,7 +495,7 @@ async fn build(
         }
     }
     if req.remember_target
-        && let Err(e) = project.set_value("xms", "export_target", &req.target).await
+        && let Err(e) = project.set_export_target(&req.target).await
     {
         editor.log.warn(e.message);
     }

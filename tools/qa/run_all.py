@@ -47,6 +47,8 @@ RUST_EXE = os.environ.get("GRIZZLY_QA_EXE") or os.path.join(REPO, "Intermediate"
 # name -> script, arguments, timeout (s), alone
 SUITES: dict[str, dict] = {
     "test_project_browser": {"args": ["--no-explorer"], "timeout": 120},
+    # a project moved and opened in a home that never saw it; a second start hands over (two homes, its own ports)
+    "test_portable": {"args": ["--project", TEST], "timeout": 300},
     # its phase A times a start to the shown window (0.3 s): alone, like the other suites that time something
     "test_ui_shell": {"args": ["--project", OD], "timeout": 120, "alone": True},
     "test_ui_tour": {"args": ["--project", OD], "timeout": 180},
@@ -58,6 +60,7 @@ SUITES: dict[str, dict] = {
     "test_characters": {"args": ["--project", OD], "timeout": 180},
     "test_behaviours": {"args": ["--project", OD], "timeout": 180},
     "test_graph_ui": {"args": ["--project", OD], "timeout": 180},
+    "test_assets": {"args": ["--project", OD], "timeout": 180},
     "test_pda": {"args": ["--project", OD], "timeout": 180},
     "test_screens": {"args": ["--project", OD], "timeout": 180},
     "test_world": {"args": ["--project", TEST], "timeout": 180},
@@ -67,6 +70,8 @@ SUITES: dict[str, dict] = {
     "test_previews": {"args": ["--project", OD], "timeout": 180},
     "test_mod_publish": {"args": ["--project", OD], "timeout": 240},
     "test_mod_catalog": {"args": ["--project", OD], "timeout": 300},
+    # the editor updates itself: a fake installation of harmless files against the mock, no project
+    "test_update": {"args": [], "timeout": 120},
     "test_mcp_bridge": {"args": [], "timeout": 120},
     "test_stress": {"args": ["--project", TEST], "timeout": 120, "alone": True},
     "test_server_lifecycle": {"script": os.path.join(REPO, "tools", "mcp", "run_lifecycle.py"), "args": [],

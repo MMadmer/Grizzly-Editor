@@ -1,6 +1,6 @@
 [package]
 name = "gz-luadata"
-description = "Declarative Lua data: the reader that refuses code and the canonical writer of quest, character and PDA assets."
+description = "Declarative Lua data: the reader that refuses code, the lossless document every save goes through, and the canonical writer of new files."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

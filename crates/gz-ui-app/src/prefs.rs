@@ -1,20 +1,23 @@
 //! Preferences: the `preferences` singleton tab (docs/UI_DESIGN.md, section 6, "Preferences").
 //!
-//! A search, a nav list with an icon per page, and the property grid of the page: at most 44 em
-//! wide, a value at most 16 em. A change applies at once through the shell's `EditorSettings`
-//! and the file is written when the field being typed in or dragged lets go, when the tab is
-//! left and when it closes.
+//! A search, a nav list with an icon per page, and the page: a column of cards at most 760 pt wide,
+//! one per section, each a property grid (a value at most 16 em). A change applies at once through
+//! the shell's `EditorSettings` and the file is written when the field being typed in or dragged
+//! lets go, when the tab is left and when it closes.
 //!
-//! [`PREFS`] is every preference of `EditorPreferences.cpp` and `LevelPreferences.cpp` - its
-//! settings key, its type, its official label, help and unit. Every row is live: the shell's
-//! settings keep its key (`the_shells_keys_are_live`); a row whose key they did not define would
-//! show its default, read-only.
+//! [`PREFS`] is every preference of the window and the level editor - its settings key, its type,
+//! its official label, help and unit. Every row is live: the shell's settings keep its key
+//! (`the_shells_keys_are_live`). An area adds a group of its own to a page - an existing one or
+//! one it brings (Game, Library, Graph, Updates) - with `ShellBuilder::pref_group`; the page shows
+//! it as a card of its own.
 
 use std::sync::Arc;
 
 use egui::{Align, Color32, Layout, Rect, ScrollArea, Ui, UiBuilder, Vec2, pos2};
-use gz_app::settings::{PrefType, pref_def};
-use gz_app::{DocCx, Document, EditorSettings, ShellBuilder};
+use gz_app::settings::{INTERFACE_SCALES, PrefType, pref_def};
+use gz_app::{
+    DocCx, Document, EditorSettings, PrefGroup, PrefGroups, PrefKind as RowKind, PrefRow, ShellBuilder,
+};
 use gz_editor::{Editor, SmolStr};
 use gz_ui::grid::{Grid, color, combo, format_number, help_footer, integer, number, read_only, switch};
 use gz_ui::list::{NavRowSpec, list, nav_row};
@@ -30,6 +33,8 @@ use crate::keyboard::KeyboardPage;
 pub enum PrefKind {
     /// The editor's colours: the accent family.
     Theme,
+    /// The UI's scale: Auto (the monitor's) or a percentage.
+    Scale,
     Float,
     Whole,
     Switch,
@@ -98,7 +103,20 @@ pub const OBJECT_FLAGS: &str = "object_flags";
 
 /// Every preference, in the order the pages list them.
 pub const PREFS: &[Pref] = &[
-    pref("General\\Theme", "theme", PrefKind::Theme, "The editor's colours.", ""),
+    pref(
+        "Interface\\Interface Scale",
+        "scale",
+        PrefKind::Scale,
+        "How large the editor draws everything. Auto follows the monitor's scale.",
+        "",
+    ),
+    pref(
+        "Interface\\Accent",
+        "accent",
+        PrefKind::Theme,
+        "The colour of what is active, selected or the one action of a surface.",
+        "",
+    ),
     pref(
         "General\\Allow Panels Outside the Window",
         "floating_panels",
@@ -349,9 +367,11 @@ pub const PREFS: &[Pref] = &[
 /// The Keyboard page: the shortcuts, not a page of the grid.
 pub const KEYBOARD: &str = "Keyboard";
 
-/// The pages in the nav's order, with their icons (General is Mod Settings' General too).
-pub const PAGES: [(&str, Icon); 6] = [
+/// The pages in the nav's order, with their icons (General is Mod Settings' General too). An
+/// area's group may bring a page of its own after these.
+pub const PAGES: [(&str, Icon); 7] = [
     ("General", Icon::Info),
+    ("Interface", Icon::Aspect),
     ("Viewport", Icon::Perspective),
     ("Tools", Icon::Move),
     ("Objects", Icon::SceneObject),
@@ -360,6 +380,7 @@ pub const PAGES: [(&str, Icon); 6] = [
 ];
 
 const THEMES: [&str; 2] = ["Grizzly Purple", "Graphite"];
+const SCALES: [&str; 6] = ["Auto", "100%", "125%", "150%", "175%", "200%"];
 
 impl Pref {
     /// The page, the section (empty for a row of the page itself) and the label.
@@ -384,7 +405,7 @@ impl Pref {
     /// The settings file keeps this preference (the theme always).
     #[must_use]
     pub fn live(&self) -> bool {
-        self.kind == PrefKind::Theme || pref_def(self.key).is_some()
+        matches!(self.kind, PrefKind::Theme | PrefKind::Scale) || pref_def(self.key).is_some()
     }
 
     /// Its default and range: the shell's where it defines the key, else this table's.
@@ -411,6 +432,13 @@ impl Pref {
 fn value_of(settings: &EditorSettings, p: &Pref) -> f64 {
     match p.kind {
         PrefKind::Theme => f64::from(u8::from(settings.accent() == Accent::Graphite)),
+        // the index into SCALES: 0 Auto
+        PrefKind::Scale => settings.interface_scale().map_or(0.0, |s| {
+            INTERFACE_SCALES
+                .iter()
+                .position(|v| (*v as f32 / 100.0 - s).abs() < 0.01)
+                .map_or(0.0, |i| (i + 1) as f64)
+        }),
         PrefKind::Flag(bit) => match settings.pref(OBJECT_FLAGS) {
             Some(v) => f64::from(u8::from((v as u32) & bit != 0)),
             None => p.bounds().0,
@@ -426,6 +454,13 @@ fn set_value(settings: &EditorSettings, ctx: &egui::Context, p: &Pref, v: f64) {
             let accent = if v >= 1.0 { Accent::Graphite } else { Accent::Violet };
             settings.set_accent(accent);
             gz_ui::theme::install(ctx, accent);
+        }
+        PrefKind::Scale => {
+            let i = v.round() as usize;
+            settings.set_interface_scale(
+                i.checked_sub(1).and_then(|k| INTERFACE_SCALES.get(k)).map(|s| *s as f32 / 100.0),
+            );
+            ctx.request_repaint();
         }
         PrefKind::Flag(bit) => {
             let cur = settings.pref(OBJECT_FLAGS).unwrap_or(0.0) as u32;
@@ -446,6 +481,7 @@ fn value_text(p: &Pref, v: f64) -> String {
     match p.kind {
         PrefKind::Switch | PrefKind::Flag(_) => (if v != 0.0 { "On" } else { "Off" }).to_owned(),
         PrefKind::Theme => THEMES.get(v as usize).copied().unwrap_or("").to_owned(),
+        PrefKind::Scale => SCALES.get(v as usize).copied().unwrap_or("").to_owned(),
         PrefKind::Color => format!("#{:06x}", (v as u32) & 0x00ff_ffff),
         PrefKind::Angle => format!("{}\u{b0}", format_number(v, 3)),
         _ if p.unit.is_empty() => format_number(v, 3),
@@ -532,7 +568,8 @@ impl PreferencesDoc {
         }
         ui.add_space(4.0);
         let searching = !self.search.is_empty();
-        let counts: Vec<usize> = PAGES
+        let pages = self.pages();
+        let counts: Vec<usize> = pages
             .iter()
             .map(|(name, _)| {
                 if *name == KEYBOARD {
@@ -544,7 +581,7 @@ impl PreferencesDoc {
             .collect();
         let mut picked = None;
         list(ui, "prefs_nav", Vec2::new(width, 0.0), |l| {
-            for ((name, icon), count) in PAGES.iter().zip(&counts) {
+            for ((name, icon), count) in pages.iter().zip(&counts) {
                 let count_text = count.to_string();
                 let spec = NavRowSpec {
                     icon: *icon,
@@ -591,6 +628,10 @@ impl PreferencesDoc {
                     let mut i = v as usize;
                     combo(ui, "prefs.theme", &mut i, &THEMES).then_some(i as f64)
                 }
+                PrefKind::Scale => {
+                    let mut i = v as usize;
+                    combo(ui, "prefs.scale", &mut i, &SCALES).then_some(i as f64)
+                }
                 PrefKind::Switch | PrefKind::Flag(_) => {
                     let mut b = v != 0.0;
                     switch(ui, &mut b).changed().then_some(f64::from(u8::from(b)))
@@ -629,14 +670,41 @@ impl PreferencesDoc {
         }
     }
 
-    /// The rows of one page: its own rows first, then its sections, each in the order given.
-    fn draw_page_rows(&mut self, g: &mut Grid<'_>, page: &str, depth: u32, ctx: &egui::Context) {
+    /// The groups areas added to Preferences.
+    fn groups(&self) -> Vec<PrefGroup> {
+        self.editor.services.get::<PrefGroups>().map(|g| g.0.clone()).unwrap_or_default()
+    }
+
+    /// The pages of the nav: the window's own, then those the areas' groups bring.
+    fn pages(&self) -> Vec<(&'static str, Icon)> {
+        let mut out: Vec<(&'static str, Icon)> = PAGES.to_vec();
+        for g in self.groups() {
+            if !out.iter().any(|(n, _)| *n == g.page) {
+                // before Keyboard, which stays last
+                let at = out.len() - 1;
+                out.insert(at, (g.page, g.icon));
+            }
+        }
+        out
+    }
+
+    /// The rows of one page as cards: its own rows, then a card per section, then the groups the
+    /// areas added to it, each in the order given.
+    fn draw_page_cards(&mut self, ui: &mut Ui, page: &str, ctx: &egui::Context) {
         let rows: Vec<&'static Pref> = PREFS
             .iter()
             .filter(|p| p.parts().0 == page && (self.search.is_empty() || p.matches(&self.search)))
             .collect();
-        for p in rows.iter().filter(|p| p.parts().1.is_empty()) {
-            self.draw_row(g, p, depth, ctx);
+        let own: Vec<&'static Pref> = rows.iter().filter(|p| p.parts().1.is_empty()).copied().collect();
+        if !own.is_empty() {
+            gz_ui::card::card(ui, &format!("prefs.{page}"), "", gz_ui::Tone::Muted, false, |ui| {
+                PropertyGrid::new("preferences").show(ui, |g| {
+                    for p in &own {
+                        self.draw_row(g, p, 0, ctx);
+                    }
+                });
+            });
+            ui.add_space(gz_ui::metrics::CARD_GAP - 4.0);
         }
         let mut sections: Vec<&'static str> = Vec::new();
         for p in &rows {
@@ -646,11 +714,159 @@ impl PreferencesDoc {
             }
         }
         for section in sections {
-            g.section(section, true, None, |g| {
-                for p in rows.iter().filter(|p| p.parts().1 == section) {
-                    self.draw_row(g, p, depth + 1, ctx);
+            gz_ui::card::card(
+                ui,
+                &format!("prefs.{page}.{section}"),
+                section,
+                gz_ui::Tone::Muted,
+                false,
+                |ui| {
+                    PropertyGrid::new("preferences").show(ui, |g| {
+                        for p in rows.iter().filter(|p| p.parts().1 == section) {
+                            self.draw_row(g, p, 0, ctx);
+                        }
+                    });
+                },
+            );
+            ui.add_space(gz_ui::metrics::CARD_GAP - 4.0);
+        }
+        for group in self.groups().into_iter().filter(|g| g.page == page) {
+            let shown: Vec<&PrefRow> = group
+                .rows
+                .iter()
+                .filter(|r| {
+                    self.search.is_empty()
+                        || gz_ui::search::matches(
+                            &self.search,
+                            &format!("{} {} {}", group.page, group.section, r.label),
+                        )
+                })
+                .collect();
+            if shown.is_empty() {
+                continue;
+            }
+            let note = group.note.and_then(|f| f(&self.editor));
+            gz_ui::card::card(
+                ui,
+                &format!("prefs.{page}.{}", group.section),
+                group.section,
+                gz_ui::Tone::Muted,
+                false,
+                |ui| {
+                    PropertyGrid::new("preferences").show(ui, |g| match &note {
+                        // the rows mean nothing here: one sentence says why
+                        Some((label, text)) => {
+                            g.row(label, text, PropFlags::READ_ONLY, 0, |ui| {
+                                gz_ui::grid::read_only(ui, text, Clip::End);
+                            });
+                        }
+                        None => {
+                            for r in shown {
+                                self.draw_group_row(g, r, ctx);
+                            }
+                        }
+                    });
+                },
+            );
+            ui.add_space(gz_ui::metrics::CARD_GAP - 4.0);
+        }
+    }
+
+    /// A row an area added: a setting of the settings file edited as its type says, a switch the
+    /// area keeps, a value to read, or a button with what it last found.
+    fn draw_group_row(&mut self, g: &mut Grid<'_>, r: &PrefRow, ctx: &egui::Context) {
+        let editor = self.editor.clone();
+        let (d, unit, choices) = match r.kind {
+            RowKind::Setting { def, unit, choices } => (def, unit, choices),
+            RowKind::Switch { get, set, default } => {
+                let mut on = get(&editor);
+                let mut flags = PropFlags::INLINE;
+                if on != default {
+                    flags = flags | PropFlags::MODIFIED;
                 }
-            });
+                if g.row(r.label, r.help, flags, 0, |ui| switch(ui, &mut on).changed()) == Some(true) {
+                    set(&editor, on);
+                    ctx.request_repaint();
+                }
+                if g.was_reset() {
+                    set(&editor, default);
+                }
+                return;
+            }
+            RowKind::ReadOnly { value } => {
+                let v = value(&editor);
+                g.row(r.label, r.help, PropFlags::READ_ONLY, 0, |ui| {
+                    gz_ui::grid::read_only(ui, &v, Clip::End)
+                });
+                return;
+            }
+            RowKind::Button { text: label, run, enabled, status } => {
+                let on = enabled(&editor);
+                let sentence = status(&editor);
+                g.row(r.label, r.help, PropFlags::NONE, 0, |ui| {
+                    ui.horizontal(|ui| {
+                        if gz_ui::Button::new(label).enabled(on.on(), on.why()).show(ui).clicked() {
+                            run(&editor);
+                        }
+                        ui.add_space(8.0);
+                        text::secondary(ui, &sentence);
+                    });
+                });
+                return;
+            }
+        };
+        let settings = self.settings.clone();
+        let v = settings.pref(d.key).unwrap_or(d.default);
+        let switch_like = d.ty == PrefType::Bool;
+        let mut flags = if switch_like { PropFlags::INLINE } else { PropFlags::NONE };
+        if (v - d.default).abs() > 1e-9 {
+            flags = flags | PropFlags::MODIFIED;
+        }
+        let changed = g.row(r.label, r.help, flags, 0, |ui| {
+            ui.set_max_width(em(16.0).min(ui.available_width()));
+            if !choices.is_empty() {
+                let mut i = v.round().max(0.0) as usize;
+                return combo(ui, d.key, &mut i, choices).then_some(i as f64);
+            }
+            match d.ty {
+                PrefType::Bool => {
+                    let mut b = v != 0.0;
+                    switch(ui, &mut b).changed().then_some(f64::from(u8::from(b)))
+                }
+                PrefType::U32 => {
+                    let mut i = v.round() as i32;
+                    integer(ui, &mut i, 0.25, unit).changed().then_some(f64::from(i))
+                }
+                PrefType::Angle => {
+                    let mut f = v as f32;
+                    number(ui, &mut f, 0.1, "\u{b0}").changed().then_some(f64::from(f))
+                }
+                PrefType::Float => {
+                    let mut f = v as f32;
+                    number(ui, &mut f, 0.01, unit).changed().then_some(f64::from(f))
+                }
+                PrefType::Color => {
+                    let c = v as u32;
+                    let mut c32 = Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8);
+                    color(ui, &mut c32).changed().then(|| {
+                        let [rr, gg, bb, _] = c32.to_srgba_unmultiplied();
+                        f64::from(
+                            (c & 0xff00_0000) | (u32::from(rr) << 16) | (u32::from(gg) << 8) | u32::from(bb),
+                        )
+                    })
+                }
+            }
+        });
+        let next = match changed {
+            Some(Some(n)) => Some(n),
+            _ if g.was_reset() => Some(d.default),
+            _ => None,
+        };
+        if let Some(n) = next {
+            let n = if d.hi > d.lo { n.clamp(d.lo, d.hi) } else { n };
+            settings.set_pref(d.key, n);
+            self.save_pending = true;
+            ctx.request_repaint();
         }
     }
 
@@ -660,8 +876,8 @@ impl PreferencesDoc {
         let p = palette(&ctx);
         let searching = !self.search.is_empty();
         let keyboard = !searching && self.page == KEYBOARD;
-        // a page reads as a form, 44 em at most like Mod Settings
-        let width = ui.available_width().min(em(44.0)).max(1.0);
+        // a page is a column of cards, 760 pt at most
+        let width = ui.available_width().clamp(1.0, gz_ui::metrics::PAGE_W);
         let title = if searching { "Search Results" } else { self.page.as_str() };
         let r = Rect::from_min_size(ui.cursor().min, Vec2::new(width, Font::Title.line()));
         let mut t = ui.new_child(UiBuilder::new().max_rect(r));
@@ -703,17 +919,11 @@ impl PreferencesDoc {
                             None,
                         );
                     }
-                    if !pages.is_empty() {
-                        PropertyGrid::new("preferences").show(ui, |g| {
-                            for page in pages {
-                                let n = PREFS
-                                    .iter()
-                                    .filter(|p| p.parts().0 == page && p.matches(&self.search))
-                                    .count()
-                                    .to_string();
-                                g.section(page, true, Some(&n), |g| self.draw_page_rows(g, page, 1, &ctx));
-                            }
-                        });
+                    for page in pages {
+                        let p = palette(&ctx);
+                        text::label(ui, page, Font::Strong, p.text_secondary, Clip::End);
+                        ui.add_space(4.0);
+                        self.draw_page_cards(ui, page, &ctx);
                     }
                     if keys > 0 {
                         ui.add_space(8.0);
@@ -724,7 +934,7 @@ impl PreferencesDoc {
                     }
                 } else {
                     let page = self.page.clone();
-                    PropertyGrid::new("preferences").show(ui, |g| self.draw_page_rows(g, &page, 0, &ctx));
+                    self.draw_page_cards(ui, &page, &ctx);
                 }
             });
         ui.allocate_rect(area, egui::Sense::hover());
@@ -753,6 +963,10 @@ impl Document for PreferencesDoc {
     }
     fn tooltip(&self) -> Option<String> {
         Some("The editor's settings. A change takes effect at once and is saved.".to_owned())
+    }
+
+    fn toolbar_status(&self) -> Option<String> {
+        Some("A change takes effect at once and is saved".to_owned())
     }
 
     fn body(&mut self, ui: &mut Ui, cx: &mut DocCx<'_>) {
@@ -785,8 +999,10 @@ impl Document for PreferencesDoc {
         );
         self.draw_page(&mut right);
         ui.allocate_rect(full, egui::Sense::hover());
-        let ed = self.editor.clone();
-        self.keyboard.draw_assign(ui, &ed);
+        // a shortcut being recorded takes the keys of the next frame, before any action does
+        if self.keyboard.recording() {
+            cx.requests.capture_keys();
+        }
 
         // written once the field being typed in or dragged lets go, not on every step
         if self.save_pending && !ctx.egui_wants_keyboard_input() && ctx.dragged_id().is_none() {

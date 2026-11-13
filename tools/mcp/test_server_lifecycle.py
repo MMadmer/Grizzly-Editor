@@ -109,13 +109,13 @@ def test_disconnects(host: str, port: int, timeout: float, repeats: int) -> None
 def test_json_arguments(host: str, port: int, timeout: float) -> None:
     cyrillic = "я" * 127
     response = one_request(
-        host, port, {"cmd": "command_palette", "action": "query", "query": cyrillic}, timeout
+        host, port, {"cmd": "ui.palette", "action": "query", "query": cyrillic}, timeout
     )
     if not response.get("ok") or response.get("query") != cyrillic:
         raise AssertionError(f"escaped UTF-8 argument changed: {response!r}")
 
     raw = json.dumps(
-        {"cmd": "command_palette", "action": "query", "query": cyrillic},
+        {"cmd": "ui.palette", "action": "query", "query": cyrillic},
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -125,17 +125,17 @@ def test_json_arguments(host: str, port: int, timeout: float) -> None:
 
     for query in ("я" * 128, "😀" * 64):
         response = one_request(
-            host, port, {"cmd": "command_palette", "action": "query", "query": query}, timeout
+            host, port, {"cmd": "ui.palette", "action": "query", "query": query}, timeout
         )
         if response.get("query") not in (None, ""):
             raise AssertionError(f"oversized UTF-8 argument was truncated: {response!r}")
 
     malformed = (
-        b'{"cmd":"command_palette","action":"query","query":"\\ud800"}',
-        b'{"cmd":"command_palette","action":"query","query":"\\udc00"}',
-        b'{"cmd":"command_palette","action":"query","query":"bad\\xescape"}',
-        b'{"cmd":"command_palette","action":"query","query":"unterminated}',
-        b'{"cmd":"command_palette","action":"query","query":"\xc0\xaf"}',
+        b'{"cmd":"ui.palette","action":"query","query":"\\ud800"}',
+        b'{"cmd":"ui.palette","action":"query","query":"\\udc00"}',
+        b'{"cmd":"ui.palette","action":"query","query":"bad\\xescape"}',
+        b'{"cmd":"ui.palette","action":"query","query":"unterminated}',
+        b'{"cmd":"ui.palette","action":"query","query":"\xc0\xaf"}',
     )
     for wire in malformed:
         response = one_wire_request(host, port, wire, timeout)
@@ -145,7 +145,7 @@ def test_json_arguments(host: str, port: int, timeout: float) -> None:
     response = one_wire_request(
         host,
         port,
-        b'{"cmd":"command_palette","action":"query","query":null,"next":"sentinel"}',
+        b'{"cmd":"ui.palette","action":"query","query":null,"next":"sentinel"}',
         timeout,
     )
     if response.get("query") == "sentinel":
@@ -228,7 +228,7 @@ def test_shutdown(
     try:
         with connect(host, port, timeout) as quitter:
             request = (
-                b'{"cmd":"command_palette","action":"execute","id":"COMMAND_EXIT"}\n'
+                b'{"cmd":"ui.palette","action":"run","id":"app.quit"}\n'
                 if via_palette
                 else b'{"cmd":"exec_command","name":"COMMAND_QUIT"}\n'
             )

@@ -77,8 +77,9 @@ is the per-graph override ("As in Preferences" first).
   the game - part 7): drawn at 40 % with a hatched header, its wires dashed; the validator says a disabled node
   is skipped (note severity).
 - **Problems are sentences** on the node and in the Problems drawer (the code in the tooltip and in commands);
-  clicking one frames the node. The validator learns the module's own items, sections and characters before it
-  warns about an unknown one (17 false `W060` on the author's quest, audit fact 12).
+  clicking one frames the node. The false "unknown item" warnings about the module's own items (17 `W060` on
+  the author's quest, audit fact 12) are stream M's: it gives every validator one index of the module's own
+  sections and fixes the call in `gz-nq`'s `validate.rs` - leave that call site to it.
 
 ## 4. The picker and what the canvas can do
 

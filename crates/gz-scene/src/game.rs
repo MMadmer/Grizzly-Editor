@@ -119,7 +119,7 @@ pub async fn settings(editor: &Editor) -> Option<Arc<GameSettings>> {
     }
 }
 
-/// The Spawn tool's list (`list_spawn_sections`).
+/// The Spawn tool's list (`game.lookup type=spawn_section`).
 pub async fn spawn_sections(editor: &Editor) -> Arc<[SpawnSection]> {
     gz_game::spawn_roster(editor).await
 }

@@ -186,3 +186,32 @@ fn a_closure_run_on_another_thread_for_a_request_keeps_its_scope() {
     assert_eq!(scope.ids(), vec![on_thread]);
     assert!(crate::current_scope().is_none());
 }
+
+#[test]
+fn a_projects_jobs_stop_when_it_closes_and_the_editors_go_on() {
+    let rt = runtime();
+    let jobs = Jobs::new(rt.exec());
+    let open = Arc::new(parking_lot::Mutex::new(Some(7_u64)));
+    let probe = open.clone();
+    jobs.set_owner_probe(move || *probe.lock());
+    let forever = |ctx: crate::JobCtx| async move {
+        loop {
+            ctx.check()?;
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    };
+    let project = jobs.start("check", None, "Check", forever).unwrap();
+    let editor = jobs.start_for_editor("update", None, "Update", forever).unwrap();
+    assert_eq!(jobs.get(project).unwrap().owner, crate::Owner::Project(7));
+    assert_eq!(jobs.get(editor).unwrap().owner, crate::Owner::Editor);
+    // nothing changed: nothing stops
+    assert_eq!(jobs.stop_orphans(), 0);
+    *open.lock() = None;
+    assert_eq!(jobs.stop_orphans(), 1);
+    let ended = rt.block_on(jobs.wait(project)).unwrap();
+    assert_eq!(ended.state, JobState::Cancelled);
+    assert!(jobs.get(editor).unwrap().running());
+    assert_eq!(serde_json::to_value(jobs.get(editor).unwrap()).unwrap()["owner"], "editor");
+    jobs.cancel(editor);
+    rt.block_on(jobs.wait(editor));
+}

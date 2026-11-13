@@ -23,6 +23,7 @@ gz-game.workspace = true
 gz-project.workspace = true
 gz-mod.workspace = true
 gz-build.workspace = true
+gz-asset.workspace = true
 gz-fmt-xml.workspace = true
 imbl.workspace = true
 rayon.workspace = true

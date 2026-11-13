@@ -37,7 +37,7 @@
 //! the Function picker).
 //!
 //! Nothing here writes a file or computes inside a frame: every action is a command that already
-//! exists (`mod_set_manifest`, `mod_commands`, `pda_use`, `pda_write`, `mod_catalog
+//! exists (`mod_set_manifest`, `mod_commands`, `pda_use`, the PDA tab's opener, `mod_catalog
 //! action=key_unlock`) or the job the build and the packaging commands start, and what a frame
 //! shows comes from snapshots and from data read on the pools.
 
@@ -76,4 +76,5 @@ pub fn install(b: &mut ShellBuilder) {
 /// The commands of this package: `mod_settings_view`.
 pub fn register(reg: &mut Registry) {
     reg.add(AREA, "mod_settings_view", view_cmd::mod_settings_view);
+    menu::register(reg);
 }

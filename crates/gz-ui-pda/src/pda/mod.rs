@@ -13,14 +13,14 @@ pub mod doc;
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use egui::{Pos2, Vec2};
 use gz_base::Origin;
 use gz_editor::{DirtyDoc, DirtySource, Editor, ProjectSession, SmolStr};
 use gz_mod::ManifestService;
 use gz_pda::{Layout, PdaService, Preview, ReadError, base_name, project_relative};
-use gz_project::Project;
+use gz_project::{Filter, Project};
 use parking_lot::Mutex;
 
 use crate::assets::PdaAssets;
@@ -98,6 +98,9 @@ pub struct Model {
     /// What the file holds, as last read or written.
     pub disk: String,
     pub text_dirty: bool,
+    /// What the file on disk did that the Source pane's edits keep out of view: empty, or the
+    /// sentence the tab shows with Take Theirs.
+    pub disk_note: String,
     pub read_ok: bool,
     pub read_err: String,
     pub read_line: u32,
@@ -147,6 +150,7 @@ impl Model {
             text: String::new(),
             disk: String::new(),
             text_dirty: false,
+            disk_note: String::new(),
             read_ok: false,
             read_err: String::new(),
             read_line: 0,
@@ -230,6 +234,8 @@ pub struct PdaTab {
     /// The project folder.
     pub root: String,
     pub m: Mutex<Model>,
+    /// Which follower of the file is the current one: a file loaded starts another.
+    follow: AtomicU64,
 }
 
 /// The unsaved Source text, for everything that asks before work is lost.
@@ -262,6 +268,7 @@ impl DirtySource for PdaDirty {
                 let mut m = tab.m.lock();
                 m.text = m.disk.clone();
                 m.text_dirty = false;
+                m.disk_note.clear();
             }
             wake(editor);
             Ok(())
@@ -278,9 +285,20 @@ impl PdaTab {
         let flag = editor.services.get_or_init(DirtyRegistered::default);
         if !flag.0.swap(true, Ordering::SeqCst) {
             editor.add_dirty_source(Arc::new(PdaDirty));
+            // asset.take_theirs reaches the tab: the one open document of the kind
+            let kinds = gz_asset::Kinds::of(editor);
+            if let Some(ops) = kinds.of_file("layout.pdaasset") {
+                let mut ops = (*ops).clone();
+                ops.take_theirs = Some(|ed, rel, _| Box::pin(take_theirs_of(ed, rel)));
+                kinds.add(ops);
+            }
         }
         let root = session.root.display().to_string();
-        session.services.get_or_init(|| PdaTab { root, m: Mutex::new(Model::new()) })
+        session.services.get_or_init(|| PdaTab {
+            root,
+            m: Mutex::new(Model::new()),
+            follow: AtomicU64::new(0),
+        })
     }
 }
 
@@ -298,7 +316,11 @@ pub async fn read(editor: &Arc<Editor>, tab: &Arc<PdaTab>, keep: bool) {
         (m.read_seq, Arc::<str>::from(m.text.as_str()), base_name(&m.path), m.preview.lang.clone())
     };
     let service = PdaService::of_session(editor, &session);
-    let res = service.evaluate(editor, text, &chunk, &lang).await;
+    // a layout of a newer format opens nothing: the read path says why
+    let res = match newer_version(editor, &text) {
+        Some(why) => Err(ReadError { message: why.0, line: why.1 }),
+        None => service.evaluate(editor, text, &chunk, &lang).await,
+    };
     let source = service.reader_source(editor).await;
     {
         let mut m = tab.m.lock();
@@ -311,12 +333,27 @@ pub async fn read(editor: &Arc<Editor>, tab: &Arc<PdaTab>, keep: bool) {
     wake(editor);
 }
 
+/// The sentence of a text of a newer format than this editor reads, with its line.
+fn newer_version(editor: &Editor, text: &str) -> Option<(String, u32)> {
+    let ops = gz_asset::Kinds::of(editor).of_file("layout.pdaasset")?;
+    let rel = gz_base::RelPath::new("layout.pdaasset").ok()?;
+    match gz_asset::read_text(&ops, rel, std::path::PathBuf::new(), text, &[]) {
+        Err(f) if f.code == "newer_version" => {
+            let line = f.problem.line.unwrap_or(0);
+            let why = f.problem.message.replacen("layout.pdaasset was", "this layout was", 1);
+            Some((why, line))
+        }
+        _ => None,
+    }
+}
+
 /// Reads a file into the preview (`LoadFile`): the Source pane gets its text, clean. The page
-/// stays when it is the same file. `false` when the file cannot be read.
+/// stays when it is the same file. `false` when the file cannot be read. A new file is
+/// followed: the project's watcher tells the tab when it changes outside the editor.
 pub async fn load_file(editor: &Arc<Editor>, tab: &Arc<PdaTab>, abs: &str) -> bool {
     let p = abs.to_owned();
     let Ok(text) = editor.exec.io(move || gz_pda::read_text(Path::new(&p))).await else { return false };
-    let same = {
+    let (same, rel) = {
         let mut m = tab.m.lock();
         let same = m.path == abs;
         m.path = abs.to_owned();
@@ -324,10 +361,32 @@ pub async fn load_file(editor: &Arc<Editor>, tab: &Arc<PdaTab>, abs: &str) -> bo
         m.text.clone_from(&text);
         m.disk = text;
         m.text_dirty = false;
-        same
+        m.disk_note.clear();
+        (same, m.rel.clone())
     };
+    if !same {
+        follow_file(editor, tab, &rel);
+    }
     read(editor, tab, same).await;
     true
+}
+
+/// Follows the tab's file through the project's watcher until another file is loaded.
+fn follow_file(editor: &Arc<Editor>, tab: &Arc<PdaTab>, rel: &str) {
+    let generation = tab.follow.fetch_add(1, Ordering::AcqRel) + 1;
+    let Ok((_, project)) = Project::of(editor) else { return };
+    let Ok(rel) = gz_base::RelPath::new(rel) else { return };
+    let mut rx = project.tree.changes().subscribe(Filter::Path(rel));
+    let (ed, weak) = (editor.clone(), Arc::downgrade(tab));
+    editor.exec.spawn(async move {
+        while rx.recv().await.is_some() {
+            let Some(tab) = weak.upgrade() else { break };
+            if tab.follow.load(Ordering::Acquire) != generation {
+                break;
+            }
+            follow(&ed, &tab).await;
+        }
+    });
 }
 
 /// Writes the Source pane's text to the file (`SaveText`).
@@ -339,12 +398,15 @@ pub async fn save_text(editor: &Arc<Editor>, tab: &Arc<PdaTab>) -> Result<(), St
     if path.is_empty() {
         return Err("no PDA layout is open".to_owned());
     }
+    // the author's text, written as it is: past the write guard, as the editor's own write
+    let rel = gz_base::RelPath::new(&project_relative(&tab.root, &path))
+        .map_err(|_| format!("{path} is outside the project: it cannot be saved from here"))?;
+    // a file that holds the text already is not written again
     let (p, t) = (path.clone(), text.clone());
-    editor
-        .exec
-        .io(move || gz_editor::fsx::write_atomic(Path::new(&p), t.as_bytes()))
-        .await
-        .map_err(|_| format!("can't write {path}"))?;
+    let same = editor.exec.io(move || std::fs::read(&p).is_ok_and(|b| b == t.as_bytes())).await;
+    if !same {
+        gz_asset::write_text(editor, &rel, text.clone()).await.map_err(|e| e.message)?;
+    }
     {
         let mut m = tab.m.lock();
         if m.path == path {
@@ -352,10 +414,8 @@ pub async fn save_text(editor: &Arc<Editor>, tab: &Arc<PdaTab>) -> Result<(), St
                 m.text_dirty = false;
             }
             m.disk = text;
+            m.disk_note.clear();
         }
-    }
-    if let Ok((_, project)) = Project::of(editor) {
-        project.tree.mark_fs(Path::new(&path));
     }
     wake(editor);
     Ok(())
@@ -387,14 +447,15 @@ pub async fn reload_all(editor: &Arc<Editor>, tab: &Arc<PdaTab>) {
 }
 
 /// The file follows the disk: written behind the preview (an agent, another editor), it is
-/// read again unless the Source pane holds edits; gone, the tab goes (`FileWritten`).
+/// read again; with edits in the Source pane the two are merged ([`merge`]). Gone, the tab goes
+/// - unless it holds edits, which Save writes again (`FileWritten`).
 pub async fn follow(editor: &Arc<Editor>, tab: &Arc<PdaTab>) {
-    let (path, disk) = {
+    let (path, disk, dirty) = {
         let m = tab.m.lock();
-        if m.path.is_empty() || m.text_dirty {
+        if m.path.is_empty() {
             return;
         }
-        (m.path.clone(), m.disk.clone())
+        (m.path.clone(), m.disk.clone(), m.text_dirty)
     };
     let p = path.clone();
     let now = editor
@@ -408,11 +469,17 @@ pub async fn follow(editor: &Arc<Editor>, tab: &Arc<PdaTab>) {
                 m.open = false;
                 m.path.clear();
                 m.rel.clear();
+            } else if m.path == path {
+                m.disk_note = format!("{} is gone from the disk. Save writes it again.", m.shown_name());
             }
             drop(m);
             wake(editor);
         }
         Some(Some(text)) if text != disk => {
+            if dirty {
+                merge(editor, tab, &path, disk, text).await;
+                return;
+            }
             let still = {
                 let m = tab.m.lock();
                 m.path == path && !m.text_dirty
@@ -423,6 +490,94 @@ pub async fn follow(editor: &Arc<Editor>, tab: &Arc<PdaTab>) {
         }
         Some(_) => {}
     }
+}
+
+/// The file changed on disk while the Source pane holds edits: the values the pane changed go
+/// into the file's new text, and the file's other changes stay; a value both changed keeps the
+/// pane's and is counted in the note. When one of the texts does not read nothing can be
+/// merged: the pane keeps its text and the note says so. Take Theirs takes the file's text.
+async fn merge(editor: &Arc<Editor>, tab: &Arc<PdaTab>, path: &str, base: String, theirs: String) {
+    let mine = tab.m.lock().text.clone();
+    let Some(ops) = gz_asset::Kinds::of(editor).of_file("layout.pdaasset") else { return };
+    let (name, text) = (base_name(path), theirs.clone());
+    let typed = mine.clone();
+    let merged = editor
+        .exec
+        .cpu(move || -> Option<(String, usize)> {
+            let limits = ops.limits;
+            let base = gz_luadata::LuaDoc::parse_with(&base, &name, limits).ok()?.value();
+            let mine = gz_luadata::LuaDoc::parse_with(&typed, &name, limits).ok()?.value();
+            let (doc, conflicts) =
+                gz_luadata::LuaDoc::rebase_with(&base, &mine, &text, &(ops.diff_rules)(), &name, limits)
+                    .ok()?;
+            Some((doc.into_text(), conflicts.len()))
+        })
+        .await;
+    let read_again = {
+        let mut m = tab.m.lock();
+        // the author typed meanwhile, or the tab moved on: the next change merges again
+        if m.path != path || !m.text_dirty || m.text != mine {
+            return;
+        }
+        m.disk = theirs;
+        let file = m.shown_name();
+        if let Some((text, conflicts)) = merged {
+            m.text = text;
+            m.text_dirty = m.text != m.disk;
+            m.disk_note = match conflicts {
+                0 => String::new(),
+                n => format!(
+                    "Changed on disk too: {n} value{}. The Source pane keeps its own; Take Theirs takes the file's.",
+                    if n == 1 { "" } else { "s" }
+                ),
+            };
+            if conflicts == 0 {
+                m.preview.push_log(format!("{file} changed on disk: its changes are in the Source pane"));
+            }
+            true
+        } else {
+            m.disk_note = format!(
+                "{file} changed on disk, and a text that does not read cannot be merged. Save writes the Source pane's text; Take Theirs takes the file's."
+            );
+            false
+        }
+    };
+    if read_again {
+        read(editor, tab, true).await;
+    } else {
+        wake(editor);
+    }
+}
+
+/// The Source pane drops its edits for the file's text (Take Theirs).
+pub async fn take_theirs(editor: &Arc<Editor>, tab: &Arc<PdaTab>) {
+    {
+        let mut m = tab.m.lock();
+        m.text = m.disk.clone();
+        m.text_dirty = false;
+        m.disk_note.clear();
+    }
+    read(editor, tab, true).await;
+}
+
+/// `asset.take_theirs` for a layout: the tab's, when it shows that file and the file changed.
+async fn take_theirs_of(editor: Arc<Editor>, rel: gz_base::RelPath) -> Result<usize, String> {
+    let session = editor.project().map_err(|e| e.message)?;
+    let Some(tab) = session.services.get::<PdaTab>() else {
+        return Err(format!("{rel} is not open in the PDA tab"));
+    };
+    let (same, changed) = {
+        let m = tab.m.lock();
+        (!m.rel.is_empty() && gz_pda::same_path(&m.rel, rel.as_str()), !m.disk_note.is_empty())
+    };
+    if !same {
+        return Err(format!("{rel} is not open in the PDA tab"));
+    }
+    if !changed {
+        return Err(format!("{rel} has no change on disk the PDA tab keeps out"));
+    }
+    take_theirs(&editor, &tab).await;
+    Ok(0)
 }
 
 /// The layout Mod > PDA Interface opens (`ShowModuleLayout`): the one the module uses, else the
@@ -449,23 +604,15 @@ pub async fn module_layout(editor: &Arc<Editor>) -> Option<String> {
         .bytes()
         .map(|c| if c.is_ascii_alphanumeric() { char::from(c.to_ascii_lowercase()) } else { '_' })
         .collect();
-    let folder = Path::new(project.root()).join("pda");
-    let file = folder.join(format!("{safe}.pdaasset"));
+    let file = Path::new(project.root()).join("pda").join(format!("{safe}.pdaasset"));
     let text = gz_pda::template(&safe, if name.is_empty() { &safe } else { &name });
-    let target = file.clone();
-    // the C++ wrote over a file of that name the build leaves out; it is used as it is instead
-    let made = editor
-        .exec
-        .io(move || {
-            let _ = std::fs::create_dir_all(&folder);
-            target.is_file() || gz_editor::fsx::write_atomic(&target, text.as_bytes()).is_ok()
-        })
-        .await;
-    if !made {
-        return None;
-    }
-    project.tree.mark_fs(&file);
     let rel = project_relative(project.root(), &file.display().to_string());
+    // a file of that name is used as it is, never written over
+    let exists = editor.exec.io(move || file.is_file()).await;
+    if !exists {
+        let rp = gz_base::RelPath::new(&rel).ok()?;
+        gz_asset::write_text(editor, &rp, text).await.ok()?;
+    }
     let _ = service.use_layout(editor, &rel, Origin::Ui).await;
     Some(rel)
 }

@@ -246,6 +246,23 @@ fn open_claim(path: &Path) -> std::io::Result<File> {
     o.open(path)
 }
 
+/// A scene's path as the manifest keeps it: project-relative with `/` when it lies inside the
+/// project, so a project moved elsewhere still knows its snapshots' scenes.
+fn relative_to(root: &Path, source: &str) -> String {
+    Path::new(source)
+        .strip_prefix(root)
+        .map(|r| r.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| source.to_owned())
+}
+
+/// A scene's path from the manifest, made whole against the project's folder.
+fn absolute(root: Option<&Path>, stored: &str) -> String {
+    if stored.is_empty() || Path::new(stored).is_absolute() {
+        return stored.to_owned();
+    }
+    root.map_or_else(|| stored.to_owned(), |r| r.join(stored.replace('/', "\\")).display().to_string())
+}
+
 impl Recovery {
     #[must_use]
     pub fn new() -> Self {
@@ -410,7 +427,7 @@ impl Recovery {
         let (source_mtime, source_size) = file_meta(Path::new(source)).unwrap_or((0, 0));
         let fresh = Entry {
             snapshot: name.clone(),
-            source: source.to_owned(),
+            source: relative_to(&root, source),
             saved_at,
             snapshot_size: stream.len() as u64,
             snapshot_hash: fnv1a(stream),
@@ -505,7 +522,7 @@ impl Recovery {
         let path = Self::dir_of(&root).join(&entry.snapshot);
         validate(&entry, &path).map_err(|why| format!("the recovery snapshot is no longer valid: {why}"))?;
         let id = self.begin(OpState::RestorePending);
-        Ok((id, path, entry.source))
+        Ok((id, path, absolute(Some(&root), &entry.source)))
     }
 
     /// The restore ended.
@@ -631,8 +648,10 @@ impl Recovery {
                 }
             }
         };
+        let source_of = |e: &Entry| absolute(s.bound.as_deref(), &e.source);
         let source_newer = entry.as_ref().is_some_and(|e| {
-            !e.source.is_empty() && file_meta(Path::new(&e.source)) != Some((e.source_mtime, e.source_size))
+            !e.source.is_empty()
+                && file_meta(Path::new(&source_of(e))) != Some((e.source_mtime, e.source_size))
         });
         Status {
             state,
@@ -648,7 +667,7 @@ impl Recovery {
             snapshot_available: entry.is_some(),
             source_newer,
             saved_at: entry.as_ref().map_or(0, |e| e.saved_at),
-            source: entry.as_ref().map(|e| e.source.clone()).unwrap_or_default(),
+            source: entry.as_ref().map(source_of).unwrap_or_default(),
             snapshot: match (&entry, &dir) {
                 (Some(e), Some(d)) => d.join(&e.snapshot).display().to_string(),
                 _ => String::new(),

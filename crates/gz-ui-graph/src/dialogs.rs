@@ -1,7 +1,7 @@
 //! The graph tab's dialogs: Find in Project (`dlg.nq_project_find`), Rename Task
 //! (`dlg.nq_task_rename`), Task References (`dlg.nq_task_references`) and Edit Text / Edit Lua
-//! (`dlg.nq_text`). What they ask runs as the commands MCP runs (`quest_project_find`,
-//! `quest_references`, `quest_rename_task`), off the UI thread; the answer lands on a later frame.
+//! (`dlg.nq_text`). What they ask runs off the UI thread (the graph area's project search and
+//! references, `quest_rename_task`); the answer lands on a later frame.
 
 use std::cell::Cell;
 use std::sync::Arc;
@@ -33,6 +33,24 @@ fn call(
     let origin = editor.ui_origin();
     let _task = editor.exec.spawn(async move {
         let reply = ed.call(name, args, origin).await;
+        *slot.lock() = Some(reply);
+        ctx.request_repaint();
+    });
+}
+
+/// What a dialog asks of the graph area, run off the UI thread: its answer lands in `slot`.
+fn ask<F, Fut>(editor: &Arc<Editor>, ctx: &egui::Context, f: F, args: Args, slot: Arc<Mutex<Option<Json>>>)
+where
+    F: FnOnce(Arc<Editor>, Args) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = gz_editor::Reply> + Send + 'static,
+{
+    let ed = editor.clone();
+    let ctx = ctx.clone();
+    let _task = editor.exec.spawn(async move {
+        let reply = match f(ed, args).await {
+            Ok(v) => gz_editor::ok_reply(v),
+            Err(e) => gz_editor::error_reply(&e),
+        };
         *slot.lock() = Some(reply);
         ctx.request_repaint();
     });
@@ -82,10 +100,10 @@ impl ProjectFind {
 
     fn search(&mut self, editor: &Arc<Editor>, ctx: &egui::Context) {
         self.busy = true;
-        call(
+        ask(
             editor,
             ctx,
-            "quest_project_find",
+            gz_nq::tab_handlers::project_find,
             args(&[("query", Json::from(self.query.clone()))]),
             self.reply.clone(),
         );
@@ -352,7 +370,7 @@ impl TaskRefs {
         self.busy = true;
         let a =
             args(&[("type", Json::from("task_id")), ("value", Json::from(id)), ("path", Json::from(path))]);
-        call(editor, ctx, "quest_references", a, self.reply.clone());
+        ask(editor, ctx, gz_nq::tab_handlers::references, a, self.reply.clone());
     }
 
     /// Draws the dialog; the reference picked: (node, slot of an action or empty).

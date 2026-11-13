@@ -30,6 +30,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod actions;
 pub mod canvas;
 pub mod cmd;
 pub mod derived;
@@ -55,4 +56,5 @@ pub fn install(b: &mut ShellBuilder) {
 /// `quest_view`, and `quest_open` that also brings the tab up. Register after `gz_nq::register`.
 pub fn register(reg: &mut Registry) {
     cmd::register(reg);
+    actions::register(reg);
 }

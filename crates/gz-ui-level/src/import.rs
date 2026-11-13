@@ -47,7 +47,7 @@ fn open(cx: &mut DocCx<'_>) -> Result<(), String> {
     s.search.clear();
     s.pick.clear();
     drop(s);
-    let root = editor.paths.root.clone();
+    let root = gz_project::library_root(&editor);
     let project = editor.project_root();
     let ed = editor.clone();
     editor.exec.spawn_io(move || {
@@ -74,7 +74,7 @@ fn open(cx: &mut DocCx<'_>) -> Result<(), String> {
 
 fn import(editor: &Arc<Editor>, name: String, there: bool) {
     let Some(project) = editor.project_root() else { return };
-    let root = editor.paths.root.clone();
+    let root = gz_project::library_root(editor);
     let ed = editor.clone();
     editor.exec.spawn_io(move || {
         let result = gz_project::project::import_base_scene(&root, &project, &name);

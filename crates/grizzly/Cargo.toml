@@ -30,8 +30,10 @@ gz-project.workspace = true
 gz-game.workspace = true
 gz-mod.workspace = true
 gz-build.workspace = true
+gz-asset.workspace = true
 gz-nq.workspace = true
 gz-release.workspace = true
+gz-update.workspace = true
 gz-publish = { path = "../gz-publish" }
 gz-catalog.workspace = true
 gz-pda.workspace = true

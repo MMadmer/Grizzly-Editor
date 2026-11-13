@@ -1,12 +1,13 @@
-//! Macros (`UI_MainCommand.cpp` `CommandExecuteCommandList`, `CommandRunMacro`,
-//! `CommandAssignMacro`, `CommandLogCommands`): a text of commands, one a line, run through the
-//! same path as `exec_command`, off the UI thread; the first refusal stops it and names the line.
+//! Macros of the level's command table (Execute Command List, Run Macro, Assign Macro, Log
+//! Commands): a text of commands, one a line, run through the same path as `exec_command`, off the
+//! UI thread; the first refusal stops it and names the line. They leave with the level's actions
+//! (stream L2).
 //!
-//! The file format is the C++ editor's: `COMMAND_NAME[.Sub](p1, p2)` a line, `;` or `//` start a
-//! comment line, a parameter is a number or a quoted text, a missing one keeps the sub-command's.
-//! The eight slots of Run Macro keep their file in the settings under the C++ key
-//! (`[macros] COMMAND_RUN_MACRO."Slot #1"`); a file is looked for as given, then in the editor's
-//! `import` folder (`$import$`), and one picked there is kept relative to it.
+//! The file format: `COMMAND_NAME[.Sub](p1, p2)` a line, `;` or `//` start a comment line, a
+//! parameter is a number or a quoted text, a missing one keeps the sub-command's. The eight slots
+//! of Run Macro keep their file in the settings (`[macros] COMMAND_RUN_MACRO."Slot #1"`); a file is
+//! looked for as given, then in the editor's `import` folder (`$import$`), and one picked there is
+//! kept relative to it.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,7 +24,7 @@ pub const SLOTS: usize = 8;
 /// How deep a macro may run macros.
 const MAX_DEPTH: usize = 8;
 
-/// The C++ id of `COMMAND_RUN_MACRO`.
+/// The number of `COMMAND_RUN_MACRO` in the table.
 pub(crate) const RUN_MACRO_ID: u32 = 52;
 
 /// The settings key of a slot (`COMMAND_RUN_MACRO."Slot #1"`, 0-based `slot`).
@@ -73,13 +74,14 @@ pub fn parse(text: &str) -> Vec<Line> {
     out
 }
 
-/// The file a macro names: as given, else under the editor's `import` folder.
-fn macro_file(editor: &Editor, name: &str) -> Option<PathBuf> {
+/// The file a macro names: as given, else under the editor's `import` folder. It touches the
+/// disk, so it runs on the IO pool only.
+fn macro_file(import: &std::path::Path, name: &str) -> Option<PathBuf> {
     let given = PathBuf::from(name);
     if given.is_file() {
         return Some(given);
     }
-    let under = import_dir(editor).join(name);
+    let under = import.join(name);
     under.is_file().then_some(under)
 }
 
@@ -87,7 +89,7 @@ fn import_dir(editor: &Editor) -> PathBuf {
     editor.paths.root.join("import")
 }
 
-/// A file picked for a slot: relative to `import` when it lies there (`CommandAssignMacro`).
+/// A file picked for a slot: relative to `import` when it lies there (Assign Macro).
 fn slot_name(editor: &Editor, file: &str) -> String {
     let dir = import_dir(editor);
     let dir_text = format!("{}\\", dir.display());
@@ -99,7 +101,7 @@ fn slot_name(editor: &Editor, file: &str) -> String {
     }
 }
 
-/// How deep the command lists that run now are nested (`s_CommandExecutionDepth`).
+/// How deep the command lists that run now are nested.
 #[derive(Default)]
 struct Depth(AtomicUsize);
 
@@ -123,21 +125,25 @@ pub async fn run_list(editor: &Arc<Editor>, text: &str, origin: Origin) -> Resul
         return Err("Macros run each other too deep.".to_owned());
     }
     for line in parse(text) {
-        crate::cmds::exec_line(editor, &line, level, origin).await?;
+        crate::cpp_cmds::exec_line(editor, &line, level, origin).await?;
     }
     Ok(())
 }
 
-/// Reads a macro's file and runs it (`CommandRunMacro` with a file name).
+/// Reads a macro's file and runs it (Run Macro with a file name).
 pub async fn run_file(editor: &Arc<Editor>, name: &str, origin: Origin) -> Result<(), String> {
-    let Some(file) = macro_file(editor, name) else {
-        return Err(format!("Can't open the macro '{name}'."));
-    };
-    let text = editor
+    let (import, wanted) = (import_dir(editor), name.to_owned());
+    let read = editor
         .exec
-        .io(move || std::fs::read(&file).map(|b| gz_base::text::decode_guess(&b).into_owned()))
-        .await
-        .map_err(|e| format!("Can't read the macro '{name}': {e}"))?;
+        .io(move || {
+            let file = macro_file(&import, &wanted)?;
+            Some(std::fs::read(&file).map(|b| gz_base::text::decode_guess(&b).into_owned()))
+        })
+        .await;
+    let text = match read {
+        None => return Err(format!("Can't open the macro '{name}'.")),
+        Some(r) => r.map_err(|e| format!("Can't read the macro '{name}': {e}"))?,
+    };
     run_list(editor, &text, origin).await
 }
 
@@ -182,14 +188,14 @@ fn slot_of(p: &CommandVar) -> Result<usize, String> {
     Ok(slot)
 }
 
-/// The macro rows of the C++ table.
+/// The macro rows of the table.
 pub(crate) fn rows() -> Vec<CppCommand> {
     let execute = CppAction::task(|ed: Arc<Editor>, p1: CommandVar, _p2, origin| async move {
         let text = p1.text().ok_or_else(|| "p1s is the command list".to_owned())?.to_owned();
         run_list(&ed, &text, origin).await.map(|()| CommandVar::Int(1))
     });
     let log = CppAction::shell(|cx, p1, _p2| {
-        // oracle: `bAllowLogCommands = !_p1`: a 0 turns logging on
+        // a 0 turns logging on
         crate::cpp::CommandLog::of(cx.editor).set(!p1.truthy());
         Ok(CommandVar::Int(1))
     });
@@ -269,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn slot_keys_are_the_cpp_ones() {
+    fn slot_keys_name_the_slot() {
         assert_eq!(slot_key(0), "COMMAND_RUN_MACRO.\"Slot #1\"");
         assert_eq!(slot_key(7), "COMMAND_RUN_MACRO.\"Slot #8\"");
     }

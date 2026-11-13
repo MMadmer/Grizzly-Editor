@@ -23,21 +23,25 @@
 //!
 //! Nothing here touches a file or computes inside a frame: lists, counts and pictures come from
 //! snapshots and queries filled on the pools; every action is an existing command
-//! (`open_project`, `project_create`, `project_delete`, `project_forget`, `project_reveal`,
-//! `project_close`, `game_link`, `shortcuts`), so the window and MCP share one code path.
+//! (`project.open`, `project.create`, `project.delete`, `project.forget`, `project.reveal`,
+//! `project.close`, `game.link`, `shortcuts`), so the window and MCP share one code path.
 
 #![forbid(unsafe_code)]
 
 mod browser_cmd;
 pub mod cards;
+pub mod collect;
 mod folder;
+pub mod game_prefs;
 pub mod keyboard;
+pub mod launch;
 pub mod link;
 pub mod local;
 pub mod log;
 pub mod prefs;
 mod reply;
 pub mod start;
+pub mod update;
 
 use gz_app::ShellBuilder;
 use gz_editor::Registry;
@@ -52,8 +56,10 @@ const AREA: &str = "gz-ui-app";
 pub fn install(b: &mut ShellBuilder) {
     start::install(b);
     link::install(b);
+    collect::install(b);
     log::install(b);
     prefs::install(b);
+    update::install(b);
 }
 
 /// The commands of this package: `project_browser_menu`.

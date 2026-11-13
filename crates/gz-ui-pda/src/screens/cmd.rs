@@ -65,7 +65,7 @@ pub async fn screens_view(editor: Arc<Editor>, args: Args, _origin: Origin) -> R
         let mut a = Args::new();
         a.insert("action".into(), json!("open"));
         a.insert("kind".into(), json!("screens"));
-        let _ = editor.call("ui_tab", a, Origin::Mcp).await;
+        let _ = editor.call("ui.tab", a, Origin::Mcp).await;
     }
     if let Some(tab) = &tab {
         let mut v = tab.v.lock();

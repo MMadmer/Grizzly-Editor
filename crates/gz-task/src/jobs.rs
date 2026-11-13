@@ -29,10 +29,37 @@ pub enum JobState {
     Cancelled,
 }
 
+/// Whom a job belongs to. A project's job stops when that project closes; the editor's own work
+/// (its updates, its library) goes on whatever project is open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Owner {
+    Editor,
+    /// The project that was open when the job started, by the key the owner probe gave it.
+    Project(u64),
+}
+
+impl Owner {
+    #[must_use]
+    pub fn word(self) -> &'static str {
+        match self {
+            Owner::Editor => "editor",
+            Owner::Project(_) => "project",
+        }
+    }
+}
+
+impl Serialize for Owner {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.word())
+    }
+}
+
 /// What a job shows of itself at a moment.
 #[derive(Clone, Debug, Serialize)]
 pub struct JobInfo {
     pub id: JobId,
+    /// The editor's or the open project's.
+    pub owner: Owner,
     /// The machine name of what runs: `build`, `package`, `publish`, `scene_load`, ...
     pub kind: SmolStr,
     /// Jobs of one group run one at a time.
@@ -121,6 +148,7 @@ const NO_FRACTION: u32 = u32::MAX;
 
 struct Entry {
     id: JobId,
+    owner: Owner,
     kind: SmolStr,
     group: Option<SmolStr>,
     title: String,
@@ -144,6 +172,7 @@ impl Entry {
         let end = self.end.lock();
         JobInfo {
             id: self.id,
+            owner: self.owner,
             kind: self.kind.clone(),
             group: self.group.clone(),
             title: self.title.clone(),
@@ -162,9 +191,13 @@ impl Entry {
     }
 }
 
+/// Answers whose a job started now is: the open project's key, or `None` without one.
+type OwnerProbe = Arc<dyn Fn() -> Option<u64> + Send + Sync>;
+
 struct Inner {
     exec: Executors,
     list: Mutex<Vec<Arc<Entry>>>,
+    probe: Mutex<Option<OwnerProbe>>,
     next: AtomicU64,
     rev: RevCounter,
     changed: watch::Sender<Rev>,
@@ -232,6 +265,7 @@ impl Jobs {
         Self(Arc::new(Inner {
             exec,
             list: Mutex::new(Vec::new()),
+            probe: Mutex::new(None),
             next: AtomicU64::new(1),
             rev: RevCounter::new(),
             changed,
@@ -239,9 +273,70 @@ impl Jobs {
         }))
     }
 
-    /// Starts a job. With a `group`, refuses while another job of that group runs.
+    /// Tells the center how to know the open project: a job started while one is open is that
+    /// project's ([`Owner::Project`]) unless it is started with [`Self::start_for_editor`].
+    pub fn set_owner_probe(&self, probe: impl Fn() -> Option<u64> + Send + Sync + 'static) {
+        *self.0.probe.lock() = Some(Arc::new(probe));
+    }
+
+    fn owner_now(&self) -> Owner {
+        let probe = self.0.probe.lock().clone();
+        probe.and_then(|p| p()).map_or(Owner::Editor, Owner::Project)
+    }
+
+    /// Stops every running job of a project that is no longer the open one; answers how many
+    /// were asked to stop. The window calls it as a project closes or another opens.
+    pub fn stop_orphans(&self) -> usize {
+        let open = self.owner_now();
+        let orphans: Vec<Arc<Entry>> = self
+            .0
+            .list
+            .lock()
+            .iter()
+            .filter(|e| e.running() && matches!(e.owner, Owner::Project(_)) && e.owner != open)
+            .cloned()
+            .collect();
+        for e in &orphans {
+            e.cancel.cancel();
+        }
+        orphans.len()
+    }
+
+    /// Starts a job. With a `group`, refuses while another job of that group runs. It belongs to
+    /// the project open now (or to the editor without one).
     pub fn start<F, Fut>(
         &self,
+        kind: &str,
+        group: Option<&str>,
+        title: impl Into<String>,
+        work: F,
+    ) -> Result<JobId, JobBusy>
+    where
+        F: FnOnce(JobCtx) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<serde_json::Value, JobError>> + Send + 'static,
+    {
+        let owner = self.owner_now();
+        self.start_owned(owner, kind, group, title, work)
+    }
+
+    /// [`Self::start`] for the editor's own work: it goes on when the project closes.
+    pub fn start_for_editor<F, Fut>(
+        &self,
+        kind: &str,
+        group: Option<&str>,
+        title: impl Into<String>,
+        work: F,
+    ) -> Result<JobId, JobBusy>
+    where
+        F: FnOnce(JobCtx) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<serde_json::Value, JobError>> + Send + 'static,
+    {
+        self.start_owned(Owner::Editor, kind, group, title, work)
+    }
+
+    fn start_owned<F, Fut>(
+        &self,
+        owner: Owner,
         kind: &str,
         group: Option<&str>,
         title: impl Into<String>,
@@ -261,6 +356,7 @@ impl Jobs {
             }
             let entry = Arc::new(Entry {
                 id: JobId(inner.next.fetch_add(1, Ordering::Relaxed)),
+                owner,
                 kind: SmolStr::new(kind),
                 group: group.map(SmolStr::new),
                 title: title.into(),

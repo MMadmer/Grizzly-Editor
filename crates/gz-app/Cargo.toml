@@ -25,6 +25,7 @@ gz-win.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+schemars.workspace = true
 rustc-hash.workspace = true
 png.workspace = true
 # the window icon and the caption logo, from the one .ico of the executables

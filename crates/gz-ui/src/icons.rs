@@ -1,4 +1,4 @@
-//! The editor's vector icon set (docs/UI_DESIGN.md, section 3; XrUIIcons.cpp is the spec).
+//! The editor's vector icon set (docs/UI_DESIGN.md, section 3).
 //!
 //! Every glyph is geometry on a 16-unit grid, built once and only scaled when drawn, so it is
 //! exact at any size and DPI. [`draw`] takes a square, [`draw_in`] centres one in a rectangle;
@@ -12,7 +12,7 @@ use egui::{Color32, Painter, Rect, Ui};
 
 use crate::theme::palette;
 
-/// Every icon of the kit. The order and the names are the C++ `XUI::Icon`'s.
+/// Every icon of the kit; [`Icon::name`] is the stable name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {
     None,
@@ -401,7 +401,7 @@ impl Icon {
         Icon::Drawer,
     ];
 
-    /// The stable lower-case name ("chevron_down") MCP answers and QA read: the C++ `IconName`.
+    /// The stable lower-case name ("chevron_down") MCP answers and QA read.
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {

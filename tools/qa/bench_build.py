@@ -99,7 +99,7 @@ def start(cmd: list[str], port: int, show: int, env=None) -> subprocess.Popen:
 
 def close(port: int, proc: subprocess.Popen) -> None:
     try:
-        mcp(port, "window_control", action="close", discard=True, timeout=60)
+        mcp(port, "app.quit", discard=True, timeout=60)
     except (OSError, ValueError):
         pass
     try:
@@ -132,10 +132,10 @@ def rust(project: str, work: str, scene: str) -> dict:
                   "-mcp_port", str(port), "-home", home, "-nodlg", "-project", project], port, 4)
     out: dict = {}
     try:
-        mcp(port, "window_control", action="resize", width=2160, height=1350)
+        mcp(port, "app.window", action="resize", width=2160, height=1350)
         if scene:
             out["scene"] = mcp(port, "open_scene", scene=scene, timeout=600).get("ok")
-            mcp(port, "ui_tab", action="open", id="level")
+            mcp(port, "ui.tab", action="open", doc="level")
         mcp(port, "view_mode", real_time=True)
         mcp(port, "frame_pacing")
         time.sleep(float(os.environ.get("BENCH_IDLE", "3")))
@@ -152,7 +152,7 @@ def rust(project: str, work: str, scene: str) -> dict:
         last_pacing = time.monotonic()
         while job.is_alive():
             time.sleep(0.02)
-            rows = mcp(port, "progress").get("background") or []
+            rows = mcp(port, "ui.tasks").get("background") or []
             row = next((r for r in rows if r.get("key")), {})
             label = "%s: %s" % (row.get("step"), row.get("detail") or row.get("status") or row.get("stage") or "")
             if row and not stages:

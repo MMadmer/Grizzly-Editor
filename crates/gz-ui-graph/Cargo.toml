@@ -22,6 +22,8 @@ gz-app.workspace = true
 egui.workspace = true
 parking_lot.workspace = true
 serde_json.workspace = true
+schemars.workspace = true
+serde.workspace = true
 rustc-hash.workspace = true
 smol_str.workspace = true
 # the Edit menu's Paste reads the clipboard itself: egui hands text over only with Ctrl+V

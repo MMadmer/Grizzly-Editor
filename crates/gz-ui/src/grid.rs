@@ -29,7 +29,6 @@ use crate::button::icon_button_sized;
 use crate::font::Font;
 use crate::icons::{self, Icon};
 use crate::layout;
-use crate::menu::{MenuItem, menu_item};
 use crate::text::{self, Clip};
 use crate::theme::{Tone, metrics, palette};
 use crate::units::em;
@@ -110,7 +109,7 @@ fn mixed_id() -> Id {
 }
 
 /// Whether the value being drawn is in a Mixed row.
-fn is_mixed(ui: &Ui) -> bool {
+pub fn is_mixed(ui: &Ui) -> bool {
     ui.ctx().data(|d| d.get_temp::<bool>(mixed_id())).unwrap_or(false)
 }
 
@@ -555,13 +554,18 @@ pub fn help_footer(ui: &mut Ui) {
 // Values
 // ------------------------------------------------------------------------------------------------
 
+/// An input's frame: the input fill, a 1 pt outline at rest (stronger under the pointer), the
+/// 2 pt focus ring while it has the keyboard.
 fn field_frame(ui: &Ui, rect: Rect, hovered: bool, focused: bool) {
     let p = palette(ui.ctx());
     let radius = CornerRadius::same(metrics::RADIUS);
     ui.painter().rect_filled(rect, radius, if hovered || focused { p.input_hover } else { p.input });
-    if focused {
-        ui.painter().rect_stroke(rect, radius, Stroke::new(1.0, p.accent_bright), StrokeKind::Inside);
-    }
+    let stroke = if focused {
+        Stroke::new(metrics::FOCUS_RING, p.accent_bright)
+    } else {
+        Stroke::new(1.0, if hovered { p.border } else { p.border_subtle })
+    };
+    ui.painter().rect_stroke(rect, radius, stroke, StrokeKind::Inside);
 }
 
 /// A one-line text field, the width it gets.
@@ -715,38 +719,40 @@ pub fn integer(ui: &mut Ui, value: &mut i32, speed: f32, unit: &str) -> Response
     resp
 }
 
-/// A switch: a box the accent fills when it is on.
+/// A switch: a setting that applies at once (the kit's [`crate::Switch`] look, with no label).
+/// Mixed - the selection differs - shows the knob in the middle, muted.
 pub fn switch(ui: &mut Ui, value: &mut bool) -> Response {
-    let p = palette(ui.ctx());
     let mixed = is_mixed(ui);
-    let (rect, mut resp) = ui.allocate_exact_size(Vec2::splat(metrics::FRAME), Sense::click());
+    let (rect, mut resp) =
+        ui.allocate_exact_size(Vec2::new(crate::check::TRACK.x + 4.0, metrics::FRAME), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, *value, ""));
     if resp.clicked() {
-        *value = !*value;
+        *value = if mixed { true } else { !*value };
         resp.mark_changed();
     }
     if ui.is_rect_visible(rect) {
-        let b = Rect::from_center_size(rect.center(), Vec2::splat(16.0));
-        let radius = CornerRadius::same(3);
-        if *value && !mixed {
-            ui.painter().rect_filled(b, radius, if resp.hovered() { p.primary_hover } else { p.accent });
-            icons::draw(ui.painter(), Icon::Check, b.shrink(2.0), p.on_fill);
-        } else {
+        let t = Rect::from_min_size(
+            pos2(rect.min.x + 2.0, rect.center().y - crate::check::TRACK.y * 0.5),
+            crate::check::TRACK,
+        );
+        if mixed {
+            let p = palette(ui.ctx());
             ui.painter().rect(
-                b,
-                radius,
-                if resp.hovered() { p.input_hover } else { p.input },
-                Stroke::new(1.0, p.border_strong),
+                t,
+                CornerRadius::same(8),
+                p.input,
+                Stroke::new(1.0, p.border),
                 StrokeKind::Inside,
             );
-            if mixed {
-                icons::draw(ui.painter(), Icon::Minus, b.shrink(2.0), p.text_secondary);
-            }
+            ui.painter().circle_filled(t.center(), t.height() * 0.5 - 3.0, p.text_muted);
+        } else {
+            crate::check::paint_switch(ui, t, *value, resp.hovered(), ui.is_enabled());
         }
         if resp.has_focus() {
+            let p = palette(ui.ctx());
             ui.painter().rect_stroke(
-                b.expand(2.0),
-                CornerRadius::same(5),
+                t.expand(2.0),
+                CornerRadius::same(10),
                 Stroke::new(metrics::FOCUS_RING, p.accent_bright),
                 StrokeKind::Outside,
             );
@@ -755,26 +761,9 @@ pub fn switch(ui: &mut Ui, value: &mut bool) -> Response {
     resp
 }
 
-/// One of a few named choices. Returns whether the choice changed.
+/// One of a few named choices: the kit's [`crate::Combo`]. Returns whether the choice changed.
 pub fn combo(ui: &mut Ui, id_salt: &str, current: &mut usize, options: &[&str]) -> bool {
-    let shown = if is_mixed(ui) { MULTIPLE } else { options.get(*current).copied().unwrap_or("") };
-    let mut changed = false;
-    let w = ui.available_width();
-    let resp = egui::ComboBox::from_id_salt(("gz-ui.combo", id_salt)).selected_text(shown).width(w).show_ui(
-        ui,
-        |ui| {
-            for (i, option) in options.iter().enumerate() {
-                if menu_item(ui, option, MenuItem { selected: i == *current, ..MenuItem::default() })
-                    && i != *current
-                {
-                    *current = i;
-                    changed = true;
-                }
-            }
-        },
-    );
-    audit::control(ui.ctx(), shown, true, None, None, resp.response.rect);
-    changed
+    crate::pick::combo(ui, ("gz-ui.grid.combo", id_salt), current, options)
 }
 
 /// A colour as `#rrggbb`, or `#rrggbbaa` when it is not opaque.

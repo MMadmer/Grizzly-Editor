@@ -4,7 +4,7 @@
 
 What it proves:
   A  one asset of every kind - quest, behaviour graph, character, character template, PDA
-     interface - is made the way an author makes it (content_create, characters_write)
+     interface - is made the way an author makes it (file.create, a character file written beside it)
   B  selected in the content browser, each one's tile draws its own icon
      (content_browser_selection 'icons'), and a file of no kind of the editor's own draws none
   C  the tile size answers over MCP (content_browser_navigation tile=, in pt) at both ends of its
@@ -104,7 +104,7 @@ class Editor:
     def close(self) -> None:
         # never killed: a killed editor leaves project.ltx behind half written
         try:
-            mcp("window_control", action="close")
+            mcp("app.quit")
         except OSError:
             pass
         if self.proc:
@@ -117,7 +117,7 @@ class Editor:
 def shot(folder: str | None, name: str) -> None:
     if not folder:
         return
-    pic = mcp("screenshot_editor")
+    pic = mcp("shot.window")
     if pic.get("png_base64"):
         os.makedirs(folder, exist_ok=True)
         path = os.path.join(folder, name + ".png")
@@ -131,7 +131,7 @@ def run(project: str, shots: str | None) -> None:
     try:
         ed.start(project)
         # a folder of their own: the tiles are all there is to see in it, at any size
-        m = mcp("content_mkdir", path="qa_icons")
+        m = mcp("file.mkdir", path="qa_icons")
         nav = mcp("content_browser_navigation", action="navigate", source="project", folder="qa_icons")
         check(m.get("ok") and nav.get("ok"), "A the content browser is in a folder of the test's own",
               json.dumps(nav)[:300])
@@ -139,8 +139,8 @@ def run(project: str, shots: str | None) -> None:
         # ------------------------------------------------------------ A: one of every kind
         made: dict[str, str] = {}
         for kind in KINDS:
-            c = mcp("content_create", kind=kind)
-            made[kind] = c.get("made", "")
+            c = mcp("file.create", kind=kind)
+            made[kind] = c.get("path", "")
             check(c.get("ok") and made[kind].replace("/", "\\").lower().startswith("qa_icons\\"),
                   "A Create makes a " + KINDS[kind] + " in the open folder", json.dumps(c)[:300])
         # a template is a character that says abstract = true: the file is all it takes
@@ -150,8 +150,16 @@ def run(project: str, shots: str | None) -> None:
         plain = "qa_icons\\qa_icon_notes.txt"
         with open(os.path.join(project, plain), "w", encoding="utf-8") as f:
             f.write("a file of no kind of the editor's own\n")
-        t = mcp("characters_list")
-        check(any(c.get("id") == "qa_icon_template" and c.get("abstract") for c in t.get("characters", [])),
+        # the pickers' list follows the files a moment later: it never makes a caller wait
+        deadline = time.monotonic() + 10
+        while True:
+            t = mcp("game.lookup", type="character_id", limit=500)
+            if any(c.get("id") == "qa_icon_template" and "template" in c.get("extra", "") for c in t.get("entries", [])):
+                break
+            if time.monotonic() > deadline:
+                break
+            time.sleep(0.1)
+        check(any(c.get("id") == "qa_icon_template" and "template" in c.get("extra", "") for c in t.get("entries", [])),
               "A the template is a character template to the editor too", json.dumps(t)[:300])
 
         # ------------------------------------------------------------ B: each tile's icon
@@ -177,7 +185,7 @@ def run(project: str, shots: str | None) -> None:
         # ------------------------------------------------------------ C: the tile slider
         mcp("content_browser_navigation", action="navigate", source="project", folder="qa_icons")
         mcp("content_browser_selection", action="clear")
-        contract = mcp("ui_contract")
+        contract = mcp("ui.contract")
         low, high = (contract.get("tile_range") or [48, 192])[:2]
         # the host shown keeps a size and a view of its own (the docked panel starts as a list, the drawer as tiles):
         # put back those
@@ -222,7 +230,7 @@ def run(project: str, shots: str | None) -> None:
         mcp("content_browser_navigation", view=kept_view)
 
         # ------------------------------------------------------------ D: glyphs, search, pane, reveal
-        mcp("content_mkdir", path="qa_icons/qa_sub")
+        mcp("file.mkdir", path="qa_icons/qa_sub")
         mcp("content_browser_navigation", action="navigate", source="project", folder="qa_icons")
         want = {"qa_icons\\qa_sub": "folder", plain: "file_text", made["quest"].replace("/", "\\"): "quest"}
         for entry, glyph in want.items():
@@ -254,8 +262,8 @@ def run(project: str, shots: str | None) -> None:
         # Add works in the project's own source only: on a read-only one its button is off and says why. The audit is
         # the last frame's, and a background editor draws only when asked: a screenshot draws one first.
         def add_button() -> dict:
-            mcp("screenshot_editor")
-            return next((c for c in mcp("ui_audit").get("controls", [])
+            mcp("shot.window")
+            return next((c for c in mcp("ui.audit").get("controls", [])
                          if c.get("label") == "Add" and "Content" in str(c.get("window", ""))), {})
 
         ro = mcp("content_browser_navigation", action="home", source="editor")
@@ -268,10 +276,10 @@ def run(project: str, shots: str | None) -> None:
               "D and on in the project's own source", json.dumps(rw)[:200] + " | " + json.dumps(add)[:300])
 
         if shots:
-            p = mcp("ui_popup", show="cb_add")
+            p = mcp("ui.popup", show="cb_add")
             check(p.get("ok"), "D the Add menu comes up over MCP", json.dumps(p)[:200])
             shot(shots, "add_menu")
-            mcp("ui_popup", show="none")
+            mcp("ui.popup", show="none")
     finally:
         ed.close()
 

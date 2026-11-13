@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use egui::epaint::Shadow;
 use egui::style::{Selection, WidgetVisuals, Widgets};
 use egui::{
     Color32, Context, CornerRadius, FontFamily, FontId, Id, Margin, Stroke, Style, TextStyle, Vec2, Visuals,
@@ -28,7 +29,7 @@ pub mod metrics {
     pub const PANEL_TOOLBAR: f32 = 32.0;
     pub const STATUS_BAR: f32 = 24.0;
     /// The height of a control: a button, a field, a combo.
-    pub const FRAME: f32 = 24.0;
+    pub const FRAME: f32 = 26.0;
     pub const ROW: f32 = 22.0;
     pub const PROPERTY_ROW: f32 = 26.0;
     pub const SECTION_HEADER: f32 = 28.0;
@@ -49,6 +50,16 @@ pub mod metrics {
     pub const DIALOG_BUTTON_H: f32 = 28.0;
     pub const TOOLTIP_W: f32 = 360.0;
     pub const FORM_W: f32 = 760.0;
+    /// A settings-like page: a centred column of cards at most this wide.
+    pub const PAGE_W: f32 = 760.0;
+    /// A card on a page: its corner, its padding and the gap between two.
+    pub const CARD_RADIUS: u8 = 6;
+    pub const CARD_PAD: f32 = 12.0;
+    pub const CARD_GAP: f32 = 12.0;
+    /// The narrowest a menu is.
+    pub const MENU_MIN_W: f32 = 200.0;
+    /// The underline of a toolbar toggle that is on.
+    pub const TOGGLE_LINE: f32 = 2.0;
     /// Spacing steps.
     pub const S2: f32 = 2.0;
     pub const S4: f32 = 4.0;
@@ -139,6 +150,30 @@ pub struct Palette {
     pub dim: Color32,
     /// The label on a Primary or Danger fill.
     pub on_fill: Color32,
+    /// The families of graph nodes: ten hues of one lightness. A family colour says what a node
+    /// is, never its state - state is the status tones'.
+    pub graph_family: [Color32; 10],
+    /// Graph wires: at rest, under the pointer, of the selection, unrelated to the selection.
+    pub wire_base: Color32,
+    pub wire_hot: Color32,
+    pub wire_selected: Color32,
+    pub wire_dim: Color32,
+    /// Graph pins: an exit (flow), an input, one under the pointer, one a wire may land on.
+    pub pin_exec: Color32,
+    pub pin_input: Color32,
+    pub pin_hot: Color32,
+    pub pin_target: Color32,
+    /// A comment frame on a graph: its fill and its title strip.
+    pub frame_fill: Color32,
+    pub frame_title: Color32,
+    /// The graph's grid lines.
+    pub grid_line: Color32,
+    /// Elevation: what a menu, a pick list or a tooltip casts.
+    pub shadow_popup: Shadow,
+    /// What a dialog casts.
+    pub shadow_dialog: Shadow,
+    /// What a drawer, a toast, the Task card and a graph node cast.
+    pub shadow_card: Shadow,
 }
 
 impl Palette {
@@ -205,7 +240,50 @@ impl Palette {
             axis_z: rgb(0x61afef),
             dim: Color32::from_rgba_unmultiplied(0x0c, 0x0b, 0x0e, 153),
             on_fill: Color32::WHITE,
+            // OKLCH lightness 0.72, chroma 0.09, hues 36 degrees apart: equal weight on the canvas
+            graph_family: [
+                rgb(0xd08a8c),
+                rgb(0xcf9776),
+                rgb(0xbfa56a),
+                rgb(0xa3b06e),
+                rgb(0x80b685),
+                rgb(0x68b5a4),
+                rgb(0x68aec0),
+                rgb(0x7ea3d3),
+                rgb(0x9a98d6),
+                rgb(0xb98fc5),
+            ],
+            wire_base: rgb(0x8e8a99),
+            wire_hot: rgb(0xf2effb),
+            wire_selected: bright,
+            wire_dim: rgb(0x3d3947),
+            pin_exec: rgb(0xbdb8c9),
+            pin_input: rgb(0x8e8a99),
+            pin_hot: rgb(0xf2effb),
+            pin_target: bright,
+            frame_fill: Color32::from_rgba_unmultiplied(0x9a, 0x98, 0xd6, 18),
+            frame_title: Color32::from_rgba_unmultiplied(0x9a, 0x98, 0xd6, 46),
+            grid_line: rgb(0x1f1e25),
+            shadow_popup: Shadow {
+                offset: [0, 4],
+                blur: 14,
+                spread: 0,
+                color: Color32::from_black_alpha(110),
+            },
+            shadow_dialog: Shadow {
+                offset: [0, 10],
+                blur: 32,
+                spread: 2,
+                color: Color32::from_black_alpha(140),
+            },
+            shadow_card: Shadow { offset: [0, 2], blur: 10, spread: 0, color: Color32::from_black_alpha(90) },
         }
+    }
+
+    /// The colour of a node family, by its number (wraps after ten).
+    #[must_use]
+    pub fn family(&self, n: usize) -> Color32 {
+        self.graph_family[n % self.graph_family.len()]
     }
 
     /// The colour of a tone.
@@ -263,10 +341,11 @@ fn visuals(p: &Palette) -> Visuals {
     };
     let mut v = Visuals::dark();
     v.dark_mode = true;
+    // an input reads as an input: a 1 pt outline at rest, a stronger one under the pointer
     v.widgets = Widgets {
         noninteractive: widget(p.base, p.border_subtle, p.text),
-        inactive: widget(p.button, Color32::TRANSPARENT, p.text),
-        hovered: widget(p.button_hover, p.border_strong, p.text),
+        inactive: widget(p.button, p.border_subtle, p.text),
+        hovered: widget(p.button_hover, p.border, p.text),
         active: widget(p.pressed, p.border_strong, p.text),
         open: widget(p.hover, p.border, p.text),
     };
@@ -282,7 +361,10 @@ fn visuals(p: &Palette) -> Visuals {
     v.error_fg_color = p.error;
     v.window_corner_radius = CornerRadius::same(metrics::RADIUS_DIALOG);
     v.window_fill = p.overlay;
-    v.window_stroke = Stroke::new(1.0, p.border);
+    // elevation instead of heavy borders: a hairline and the shadow
+    v.window_stroke = Stroke::new(1.0, p.border_subtle);
+    v.window_shadow = p.shadow_dialog;
+    v.popup_shadow = p.shadow_popup;
     v.menu_corner_radius = CornerRadius::same(metrics::RADIUS_POPUP);
     v.panel_fill = p.base;
     v.text_cursor.stroke = Stroke::new(1.5, p.accent_bright);

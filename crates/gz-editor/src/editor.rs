@@ -130,20 +130,29 @@ impl Editor {
     #[must_use]
     pub fn new(opts: EditorOptions, exec: Executors, log: Log, registry: Registry) -> Arc<Self> {
         let wake = exec.wake().clone();
-        Arc::new(Self {
-            jobs: Jobs::new(exec.clone()),
-            frames: FrameClock::new(wake.clone()),
-            notices: Notices::new(log.clone(), wake),
-            exec,
-            log,
-            flags: opts.flags,
-            paths: opts.paths,
-            services: Services::new(),
-            project: ArcSwapOption::empty(),
-            project_rev: RevCounter::new(),
-            registry,
-            dirty: RwLock::new(Vec::new()),
-            quit: Cancel::new(),
+        let jobs = Jobs::new(exec.clone());
+        Arc::new_cyclic(|this: &std::sync::Weak<Self>| {
+            // a job started while a project is open is that project's, and stops when it closes
+            let weak = this.clone();
+            jobs.set_owner_probe(move || {
+                let ed = weak.upgrade()?;
+                ed.project_opt().map(|_| ed.project_rev().0)
+            });
+            Self {
+                jobs,
+                frames: FrameClock::new(wake.clone()),
+                notices: Notices::new(log.clone(), wake),
+                exec,
+                log,
+                flags: opts.flags,
+                paths: opts.paths,
+                services: Services::new(),
+                project: ArcSwapOption::empty(),
+                project_rev: RevCounter::new(),
+                registry,
+                dirty: RwLock::new(Vec::new()),
+                quit: Cancel::new(),
+            }
         })
     }
 
@@ -166,6 +175,11 @@ impl Editor {
     pub fn set_project(&self, session: Option<Arc<ProjectSession>>) -> Option<Arc<ProjectSession>> {
         let old = self.project.swap(session);
         self.project_rev.bump();
+        // the jobs of the project that closed go with it, with a window or without one
+        let stopped = self.jobs.stop_orphans();
+        if stopped > 0 {
+            self.log.plain(format!("{stopped} job(s) of the closed project were stopped"));
+        }
         self.exec.wake().ping();
         old
     }

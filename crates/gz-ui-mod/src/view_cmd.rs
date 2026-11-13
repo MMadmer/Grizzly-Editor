@@ -25,7 +25,7 @@ pub(crate) async fn mod_settings_view(ed: Arc<Editor>, a: Args, origin: Origin) 
     };
     let ask = a.flag("ask_game_updates");
     if page.is_some() || ask {
-        let reply = ed.call("ui_tab", args([("action", s("open")), ("kind", s(TAB))]), origin).await;
+        let reply = ed.call("ui.tab", args([("action", s("open")), ("kind", s(TAB))]), origin).await;
         if !ok(&reply)
             && reply.get("error").and_then(serde_json::Value::as_str)
                 != Some("the editor runs without a window")

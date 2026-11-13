@@ -101,7 +101,7 @@ def run(work: str, name: str, extra_env: dict, script_args: list[str]) -> bool:
         if proc.poll() is None:
             try:
                 with socket.create_connection(("127.0.0.1", qa_target.PORT), timeout=3) as s:
-                    s.sendall(b'{"cmd":"window_control","action":"close","discard":true}\n')
+                    s.sendall(b'{"cmd":"app.quit","discard":true}\n')
                     s.recv(4096)
             except OSError:
                 pass
@@ -116,7 +116,7 @@ def run(work: str, name: str, extra_env: dict, script_args: list[str]) -> bool:
 def close_over_mcp(port: int) -> None:
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=3) as s:
-            s.sendall(b'{"cmd":"window_control","action":"close","discard":true}\n')
+            s.sendall(b'{"cmd":"app.quit","discard":true}\n')
             s.recv(4096)
     except OSError:
         pass
@@ -267,7 +267,7 @@ def streams() -> bool:
         echoed = proc.stderr.readline()
         proc.stderr.close()
         # the editor goes on logging into a stream nobody reads, and closes as it would have
-        pings = [ask(port, {"cmd": "list_projects"}).get("ok") for _ in range(3)]
+        pings = [ask(port, {"cmd": "project.list"}).get("ok") for _ in range(3)]
         close_over_mcp(port)
         try:
             code = proc.wait(timeout=30)

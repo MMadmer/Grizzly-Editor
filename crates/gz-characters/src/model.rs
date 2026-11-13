@@ -1,7 +1,12 @@
-//! A character as plain data, read and written the C++ way (`EditorCharacters::Parse`,
-//! `Load`, `Write`, `Template`).
+//! A character as plain data: read from its file, projected back to a value for a save to
+//! compare ([`to_value`]: the save writes only the difference into the author's text), written
+//! canonically for a new file ([`write`], [`template`]).
 
-use gz_luadata::{Table, Value, format_g, write_value};
+use gz_luadata::{DiffRules, Table, Value, format_g, write_value};
+
+/// The header key of a character file and the format version this editor reads up to.
+pub const HEADER: &str = "npc";
+pub const VERSION: u32 = 1;
 
 /// One row of a starting kit.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -320,14 +325,26 @@ fn read_trade(t: &Value, trade: &mut Trade) {
     }
 }
 
-/// Reads the text of a character file (`EditorCharacters::Parse`). `chunk_name` is what LuaJIT
-/// names the chunk in its messages: the file's base name. The error is the sentence the C++
-/// gave: `line N: <message>` when the reader names a line.
+/// Reads the text of a character file. `chunk_name` is what LuaJIT names the chunk in its
+/// messages: the file's base name. The error is a sentence, `line N: <message>` when the reader
+/// names a line; a file of a newer format version is refused.
 pub fn parse(text: &str, chunk_name: &str) -> Result<Character, String> {
     let v = gz_luadata::parse_named(text, chunk_name)
         .map_err(|e| if e.line != 0 { format!("line {}: {}", e.line, e.message) } else { e.message })?;
+    from_value(&v)
+}
+
+/// A character of a file's value. A file of a newer format version is refused.
+pub fn from_value(v: &Value) -> Result<Character, String> {
     if !v.is_table() {
         return Err("a character file must return one table".into());
+    }
+    if let Some(Value::Number(n)) = v.get(HEADER)
+        && *n > f64::from(VERSION)
+    {
+        return Err(format!(
+            "made by a newer Grizzly Editor ({HEADER} = {n}; this one reads up to {VERSION}): update the editor to open it"
+        ));
     }
     let mut c = Character {
         id: v.get_string("id", ""),
@@ -393,7 +410,7 @@ pub fn parse(text: &str, chunk_name: &str) -> Result<Character, String> {
     Ok(c)
 }
 
-/// The base name of a path without its extension (`NqUtil::BaseName`).
+/// The base name of a path without its extension.
 #[must_use]
 pub fn base_name(path: &str) -> &str {
     let leaf = path.rsplit(['\\', '/']).next().unwrap_or(path);
@@ -403,9 +420,8 @@ pub fn base_name(path: &str) -> &str {
     }
 }
 
-/// A file's text as a character (`EditorCharacters::Load` after the read): `file` is what
-/// [`Character::file`] says; the file name is the id when the file names none - a renamed file
-/// renames the character, the rule quests follow.
+/// A file's text as a character: `file` is what [`Character::file`] says; the file name is the
+/// id when the file names none - a renamed file renames the character, the rule quests follow.
 pub fn load_text(text: &str, file: &str) -> Result<Character, String> {
     let stem = base_name(file);
     let mut c = parse(text, stem)?;
@@ -416,8 +432,8 @@ pub fn load_text(text: &str, file: &str) -> Result<Character, String> {
     Ok(c)
 }
 
-/// Reads a character file as `NqLua::ReadFile` does: at most 16 MB, a UTF-8 BOM dropped; the
-/// error texts are the C++ ones.
+/// Reads a character file for the roster: at most 16 MB, a UTF-8 byte order mark left out (the
+/// read path says what is wrong with one).
 pub fn read_file(path: &std::path::Path) -> Result<String, String> {
     let meta = std::fs::metadata(path).map_err(|_| "cannot open file".to_owned())?;
     if meta.len() > 16 << 20 {
@@ -435,7 +451,7 @@ fn lua_string(s: &str) -> String {
     write_value(&Value::from(s), 0)
 }
 
-/// `%g` of a float as the C++ printed it (the float promoted to a double).
+/// `%g` of a float (promoted to a double).
 fn g(v: f32) -> String {
     format_g(f64::from(v), 6)
 }
@@ -450,9 +466,9 @@ fn name_list(list: &[String]) -> String {
     out
 }
 
-/// The canonical text of a character: fixed key order, fixed layout, `write(read(x))`
-/// idempotent (`EditorCharacters::Write`). A name or bio that holds `rus` alone is written as
-/// the plain string it means.
+/// The canonical text of a new character file: fixed key order, fixed layout. A name or bio
+/// that holds `rus` alone is written as the plain string it means. An existing file is never
+/// written this way: a save writes only what changed into it ([`to_value`]).
 #[must_use]
 pub fn write(c: &Character) -> String {
     let mut name = c.name.clone();
@@ -549,7 +565,7 @@ pub fn write(c: &Character) -> String {
     s
 }
 
-/// A starting point for a new character, named after its file (`EditorCharacters::Template`).
+/// A starting point for a new character, named after its file.
 /// The name is a placeholder in the mod's language; the portrait is a loner's face of Dead Air
 /// Refined (the old SoC id is no picture there).
 #[must_use]
@@ -565,4 +581,167 @@ pub fn template(id: &str) -> String {
         ..Character::default()
     };
     write(&c)
+}
+
+fn put(t: &mut Table, k: &str, v: impl Into<Value>) {
+    t.put(k, v);
+}
+
+fn name_values(list: &[String]) -> Value {
+    Value::from(list.iter().map(|n| Value::from(n.as_str())).collect::<Vec<_>>())
+}
+
+/// A character as a save compares it with what was read: the keys [`write`] writes, in its
+/// order, nothing the file did not say (an unset field stays out).
+#[must_use]
+pub fn to_value(c: &Character) -> Value {
+    let mut t = Table::new();
+    put(&mut t, HEADER, VERSION);
+    put(&mut t, "id", c.id.as_str());
+    if !c.base.is_empty() {
+        put(&mut t, "base", c.base.as_str());
+    }
+    if c.is_abstract {
+        put(&mut t, "abstract", true);
+    }
+    let mut name = c.name.clone();
+    text_collapse(&mut name);
+    if !text_empty(&name) {
+        put(&mut t, "name", name);
+    }
+    let mut bio = c.bio.clone();
+    text_collapse(&mut bio);
+    if !text_empty(&bio) {
+        put(&mut t, "bio", bio);
+    }
+    for (key, value) in
+        [("community", &c.community), ("visual", &c.visual), ("icon", &c.icon), ("spec_rank", &c.spec_rank)]
+    {
+        if !value.is_empty() {
+            put(&mut t, key, value.as_str());
+        }
+    }
+    if c.has_rank {
+        put(&mut t, "rank", c.rank);
+    }
+    if c.has_reputation {
+        put(&mut t, "reputation", c.reputation);
+    }
+    if c.has_money {
+        let mut m = Table::new();
+        put(&mut m, "min", c.money_min);
+        put(&mut m, "max", c.money_max);
+        if c.money_infinite {
+            put(&mut m, "infinite", true);
+        }
+        put(&mut t, "money", m);
+    }
+    if !c.supplies.is_empty() {
+        let rows: Vec<Value> = c
+            .supplies
+            .iter()
+            .map(|s| {
+                let mut r = Table::new();
+                put(&mut r, "section", s.section.as_str());
+                if s.count != 1 {
+                    put(&mut r, "count", s.count);
+                }
+                Value::Table(r)
+            })
+            .collect();
+        put(&mut t, "supplies", Value::from(rows));
+    }
+    if c.trade.declared && c.trade.off {
+        put(&mut t, "trade", false);
+    } else if c.trade.declared {
+        let tr = &c.trade;
+        let mut x = Table::new();
+        put(&mut x, "sells", name_values(&tr.sells));
+        put(&mut x, "buys", name_values(&tr.buys));
+        put(&mut x, "markup", f64::from(tr.markup));
+        put(&mut x, "pays", f64::from(tr.pays));
+        put(&mut x, "restock", tr.restock);
+        if !tr.stock.is_empty() {
+            let rows: Vec<Value> = tr
+                .stock
+                .iter()
+                .map(|r| {
+                    let mut v = Table::new();
+                    put(&mut v, "section", r.section.as_str());
+                    if r.count != 1 {
+                        put(&mut v, "count", r.count);
+                    }
+                    if r.chance != 1.0 {
+                        put(&mut v, "chance", f64::from(r.chance));
+                    }
+                    Value::Table(v)
+                })
+                .collect();
+            put(&mut x, "stock", Value::from(rows));
+        }
+        put(&mut t, "trade", x);
+    }
+    if !c.start_dialog.is_empty() {
+        put(&mut t, "start_dialog", c.start_dialog.as_str());
+    }
+    if c.has_squad && !c.squad {
+        put(&mut t, "squad", false);
+    }
+    Value::Table(t)
+}
+
+/// The keys a character file knows, by level.
+pub const KNOWN: &[(&str, &[&str])] = &[
+    (
+        "",
+        &[
+            "npc",
+            "id",
+            "base",
+            "abstract",
+            "name",
+            "bio",
+            "community",
+            "visual",
+            "icon",
+            "spec_rank",
+            "rank",
+            "reputation",
+            "money",
+            "supplies",
+            "trade",
+            "start_dialog",
+            "squad",
+            "editor",
+        ],
+    ),
+    ("money", &["min", "max", "infinite"]),
+    ("trade", &["sells", "buys", "markup", "pays", "restock", "stock"]),
+];
+
+/// How a character's values map onto its file: new keys in [`write`]'s order.
+#[must_use]
+pub fn diff_rules() -> DiffRules {
+    DiffRules::new().order(
+        "",
+        &[
+            "npc",
+            "id",
+            "base",
+            "abstract",
+            "name",
+            "bio",
+            "community",
+            "visual",
+            "icon",
+            "spec_rank",
+            "rank",
+            "reputation",
+            "money",
+            "supplies",
+            "trade",
+            "start_dialog",
+            "squad",
+        ],
+    )
 }

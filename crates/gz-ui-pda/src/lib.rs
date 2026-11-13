@@ -57,15 +57,8 @@ pub fn install(b: &mut ShellBuilder) {
     pda::doc::install(b);
     screens::doc::install(b);
     // the rows go where the Mod menu keeps their slots: Screens & Music, then PDA Interface
-    for command in [gz_ui_mod::menu::SCREENS, gz_ui_mod::menu::PDA] {
-        let (group, order) = gz_ui_mod::mod_menu_slot(command).unwrap_or((0, 9));
-        b.menu_entry(gz_app::MenuEntry {
-            menu: gz_editor::SmolStr::new("Mod"),
-            submenu: None,
-            group,
-            order,
-            content: gz_app::MenuContent::Command { command: gz_editor::SmolStr::new(command), label: None },
-        });
+    for id in [gz_ui_mod::menu::SCREENS, gz_ui_mod::menu::PDA] {
+        gz_ui_mod::menu::row(b, id, None);
     }
 }
 
@@ -73,4 +66,5 @@ pub fn install(b: &mut ShellBuilder) {
 pub fn register(reg: &mut Registry) {
     reg.add(AREA, "pda_preview", pda::cmd::pda_preview);
     reg.add(AREA, "screens_view", screens::cmd::screens_view);
+    pda::doc::register(reg);
 }

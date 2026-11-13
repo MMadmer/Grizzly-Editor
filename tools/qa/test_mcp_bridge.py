@@ -237,7 +237,7 @@ def run(project: str) -> None:
         if editor.poll() is None:
             try:
                 with socket.create_connection(("127.0.0.1", qa_target.PORT), timeout=3) as s:
-                    s.sendall(b'{"cmd":"window_control","action":"close","discard":true}\n')
+                    s.sendall(b'{"cmd":"app.quit","discard":true}\n')
                     s.recv(4096)
             except OSError:
                 pass

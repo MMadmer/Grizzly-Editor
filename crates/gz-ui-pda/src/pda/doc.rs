@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use egui::{Align, Layout, Rect, ScrollArea, Sense, Ui, UiBuilder, Vec2, pos2};
-use gz_app::{DocCx, Document, OpenRequest, ShellBuilder, UiCommand};
+use gz_app::{DocCx, Document, OpenRequest, ShellBuilder};
 use gz_base::{Origin, RelPath, Rev};
 use gz_editor::{Args, Editor, Value};
 use gz_mod::ManifestService;
@@ -46,9 +46,6 @@ pub struct PdaDoc {
     serial: u64,
     target: Option<Target>,
     started: bool,
-    /// The file tree's revision the file was last compared at.
-    tree_rev: Option<Rev>,
-    following: Arc<AtomicBool>,
     /// Waiting for the layout a target names.
     opening: Arc<AtomicBool>,
     canvas: CanvasCache,
@@ -87,8 +84,6 @@ impl PdaDoc {
             serial,
             target: Some(target),
             started: false,
-            tree_rev: None,
-            following: Arc::new(AtomicBool::new(false)),
             opening: Arc::new(AtomicBool::new(false)),
             canvas: CanvasCache::default(),
             used: None,
@@ -145,23 +140,6 @@ impl PdaDoc {
             }
             _ => {}
         }
-    }
-
-    /// The file follows the disk: the tree moved, so it is compared again (off the UI thread).
-    fn follow_tick(&mut self) {
-        let Ok((_, project)) = Project::of(&self.editor) else { return };
-        let rev = project.tree.rev();
-        if self.tree_rev == Some(rev) || self.following.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        self.tree_rev = Some(rev);
-        let flag = self.following.clone();
-        self.spawn(move |ed, tab| {
-            Box::pin(async move {
-                super::follow(&ed, &tab).await;
-                flag.store(false, Ordering::SeqCst);
-            })
-        });
     }
 
     /// `[pda] layout` of the manifest, read again when the manifest moved.
@@ -237,6 +215,14 @@ impl PdaDoc {
     fn draw_details(&mut self, ui: &mut Ui, m: &mut Model) {
         let used = self.used_layout();
         let p = palette(ui.ctx());
+        // what the file on disk did that the Source pane's edits keep out of view
+        if !m.disk_note.is_empty() {
+            let note = m.disk_note.clone();
+            if gz_ui::state::banner(ui, Tone::Warning, &note, Some("Take Theirs"), None) == Some(0) {
+                self.spawn(|e, tab| Box::pin(async move { super::take_theirs(&e, &tab).await }));
+            }
+            ui.add_space(6.0);
+        }
         // what the tab shows and whether the module uses it
         let name = m.shown_name();
         let is_used = !m.rel.is_empty() && same_path(&used, &m.rel);
@@ -744,7 +730,6 @@ impl Document for PdaDoc {
 
     fn body(&mut self, ui: &mut Ui, _cx: &mut DocCx<'_>) {
         self.start();
-        self.follow_tick();
         let ctx = ui.ctx().clone();
         self.assets.set_ctx(&ctx);
         self.assets.sync(&self.editor);
@@ -928,9 +913,9 @@ impl Document for PdaDoc {
     }
 
     fn inactive(&mut self, _cx: &mut DocCx<'_>) {
-        // the file follows the disk whether or not the tab is up
+        // the file follows the disk whether or not the tab is up (the project's watcher tells
+        // the tab's follower, [`super::load_file`] starts it)
         self.start();
-        self.follow_tick();
     }
 
     fn on_close(&mut self, _cx: &mut DocCx<'_>) {
@@ -991,7 +976,7 @@ fn open_module_layout(cx: &mut DocCx<'_>) {
         args.insert("action".into(), Value::String("open".into()));
         args.insert("kind".into(), Value::String("pda".into()));
         args.insert("path".into(), Value::String(rel));
-        let reply = ed.call("ui_tab", args, ed.ui_origin()).await;
+        let reply = ed.call("ui.tab", args, ed.ui_origin()).await;
         if reply.get("ok").and_then(Value::as_bool) != Some(true) {
             let why = reply.get("error").and_then(Value::as_str).unwrap_or("the tab did not open");
             ed.notices.error(format!("PDA Interface: {why}"));
@@ -1026,8 +1011,32 @@ pub fn install(b: &mut ShellBuilder) {
         };
         Ok(Box::new(PdaDoc::new(editor.clone(), tab, assets, serial, target)) as Box<dyn Document>)
     });
-    b.command(
-        UiCommand::new("COMMAND_MOD_PDA", "Mod", "PDA Interface", Icon::PdaInterface, open_module_layout)
-            .enabled(|editor, _| editor.project_opt().is_some()),
+    b.action(
+        gz_app::Action::new(gz_ui_mod::menu::PDA, "PDA Interface", "Mod", "pda.open")
+            .icon(Icon::PdaInterface)
+            .enabled(gz_ui_mod::menu::with_project),
+    );
+}
+
+/// `pda.open`: the module's PDA interface in its tab, made from the template when it has none.
+async fn pda_open(ed: Arc<Editor>, _p: gz_editor::NoParams, _origin: gz_editor::Origin) -> gz_editor::Reply {
+    ed.project()?;
+    gz_app::on_ui(&ed, |shell, ctx| {
+        shell.with_cx(ctx, open_module_layout);
+        Ok(())
+    })
+    .await?;
+    Ok(gz_editor::json!({ "opening": "pda" }))
+}
+
+/// Registers `pda.open`.
+pub(crate) fn register(reg: &mut gz_editor::Registry) {
+    reg.area("pda", "The module's PDA interface: its tab and its layout");
+    reg.cmd(
+        gz_editor::Spec::write(
+            "pda.open",
+            "Opens the module's PDA interface, made from the template when it has none.",
+        ),
+        pda_open,
     );
 }

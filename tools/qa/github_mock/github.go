@@ -174,6 +174,11 @@ type mock struct {
 	vtUploadTokens map[string]bool
 	// When the requests that count toward --vt-rate arrived.
 	vtCalls []time.Time
+
+	// The release assets as a client reads them (assets.go): the harness's faults and counts.
+	assetDrop  *assetDrop
+	noRanges   bool
+	assetStats map[string]*assetStat
 }
 
 func newMock(cfg *config) *mock {
@@ -190,6 +195,7 @@ func newMock(cfg *config) *mock {
 		commits:        map[string]*commit{},
 		nextCommentID:  firstCommentID,
 		vtUploadTokens: map[string]bool{},
+		assetStats:     map[string]*assetStat{},
 	}
 }
 

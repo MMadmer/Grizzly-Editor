@@ -1,4 +1,4 @@
-//! Numbers the way the two C sides read and print them: LuaJIT's scanner for a literal and for
+//! Numbers the way the game reads and prints them: LuaJIT's scanner for a literal and for
 //! a string used in arithmetic, C's `strtod` for a typed read, C's `%g` for the writer.
 
 /// What LuaJIT's number scanner (`lj_strscan_scan`) made of a text.

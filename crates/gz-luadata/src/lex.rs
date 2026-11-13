@@ -1,6 +1,5 @@
-//! The lexer of the editor's LuaJIT (2.1.0-beta3 with two local changes: `//` and `/* */`
-//! comments), ported from `cpp-editor-last:Source/External/LuaJIT/src/lj_lex.c` so a syntax error reads the
-//! same, word for word, as the C++ editor's.
+//! LuaJIT 2.1's lexer (with `//` and `/* */` comments), modelled so a syntax error reads word
+//! for word as LuaJIT writes it: the game reads these files with LuaJIT.
 
 use crate::num::{Scanned, strscan};
 
@@ -107,13 +106,15 @@ pub(crate) enum TokVal {
 }
 
 /// A compile error before it is given its location prefix: the message, the line the lexer
-/// stood on, and the token it was near (`None` for the errors LuaJIT raises without one).
+/// stood on, the token it was near (`None` for the errors LuaJIT raises without one) and the
+/// byte offset where that token starts.
 #[derive(Clone, Debug)]
 pub(crate) enum SynErr {
     At {
         line: u32,
         msg: Vec<u8>,
         near: Option<Vec<u8>>,
+        at: usize,
     },
     /// A message that carries no location (the bytecode loader's).
     Raw(Vec<u8>),
@@ -133,6 +134,11 @@ pub(crate) struct Lexer<'a> {
     pub tokval: TokVal,
     lookahead: Tok,
     lookaheadval: TokVal,
+    /// Where the current token, the lookahead and the token being scanned start.
+    tok_at: usize,
+    look_at: usize,
+    scan_at: usize,
+    scanning: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -148,7 +154,16 @@ impl<'a> Lexer<'a> {
             tokval: TokVal::None,
             lookahead: TK_EOF,
             lookaheadval: TokVal::None,
+            tok_at: 0,
+            look_at: 0,
+            scan_at: 0,
+            scanning: false,
         }
+    }
+
+    /// The offset of the character the lexer stands on.
+    fn here(&self) -> usize {
+        if self.c == LEX_EOF { self.src.len() } else { self.p.saturating_sub(1) }
     }
 
     fn next(&mut self) -> i32 {
@@ -244,7 +259,8 @@ impl<'a> Lexer<'a> {
         } else {
             Some(Self::token2str(tok))
         };
-        SynErr::At { line: self.line, msg: msg.into(), near }
+        let at = if self.scanning { self.scan_at } else { self.tok_at };
+        SynErr::At { line: self.line, msg: msg.into(), near, at }
     }
 
     fn number(&mut self) -> R<TokVal> {
@@ -447,6 +463,7 @@ impl<'a> Lexer<'a> {
     fn scan(&mut self) -> R<(Tok, TokVal)> {
         self.sb.clear();
         loop {
+            self.scan_at = self.here();
             let c = self.c;
             if is_ident(c) {
                 if is_digit(c) {
@@ -501,7 +518,7 @@ impl<'a> Lexer<'a> {
                         }
                         continue;
                     } else if self.c == i32::from(b'*') {
-                        // oracle: the editor's LuaJIT counts no line inside /* */ and swallows the
+                        // this LuaJIT counts no line inside /* */ and swallows the
                         // character after a '*' that does not close the comment
                         self.next();
                         while self.c != LEX_EOF {
@@ -573,23 +590,34 @@ impl<'a> Lexer<'a> {
     pub fn advance(&mut self) -> R<()> {
         self.lastline = self.line;
         if self.lookahead == TK_EOF {
-            let (t, v) = self.scan()?;
+            let (t, v) = self.scan_marked()?;
             self.tok = t;
             self.tokval = v;
+            self.tok_at = self.scan_at;
         } else {
             self.tok = self.lookahead;
             self.lookahead = TK_EOF;
             self.tokval = std::mem::take(&mut self.lookaheadval);
+            self.tok_at = self.look_at;
         }
         Ok(())
     }
 
     /// `lj_lex_lookahead`.
     pub fn peek(&mut self) -> R<Tok> {
-        let (t, v) = self.scan()?;
+        let (t, v) = self.scan_marked()?;
         self.lookahead = t;
         self.lookaheadval = v;
+        self.look_at = self.scan_at;
         Ok(t)
+    }
+
+    /// A scan whose errors point at the token being scanned.
+    fn scan_marked(&mut self) -> R<(Tok, TokVal)> {
+        self.scanning = true;
+        let r = self.scan();
+        self.scanning = false;
+        r
     }
 }
 

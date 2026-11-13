@@ -31,7 +31,7 @@ fn world_doc(shell: &mut ShellState) -> Option<&mut WorldDoc> {
 
 /// Brings a tab up through the shell's own opener; a window-less editor has none to bring.
 async fn open_tab(ed: &Arc<Editor>, kind: &str, origin: Origin) -> Result<(), CmdError> {
-    let reply = ed.call("ui_tab", args([("action", s("open")), ("kind", s(kind))]), origin).await;
+    let reply = ed.call("ui.tab", args([("action", s("open")), ("kind", s(kind))]), origin).await;
     if !ok(&reply)
         && reply.get("error").and_then(serde_json::Value::as_str) != Some("the editor runs without a window")
     {
@@ -54,7 +54,7 @@ enum Step {
     Done,
     NotFound,
     Unsaved(Vec<String>),
-    Save(SavePlan),
+    Save(Box<SavePlan>),
 }
 
 fn gone() -> CmdError {
@@ -101,7 +101,7 @@ pub(crate) async fn characters_view(ed: Arc<Editor>, a: Args, origin: Origin) ->
         if Some(index) != doc.sel && doc.is_dirty() {
             // the caller decides what happens to edits in progress: MCP never asks
             if save {
-                return doc.save_plan().map(Step::Save).map_err(|e| {
+                return doc.save_plan().map(|p| Step::Save(Box::new(p))).map_err(|e| {
                     CmdError::new("refused", format!("the edited character was not saved: {e}"))
                 });
             }
@@ -125,7 +125,9 @@ pub(crate) async fn characters_view(ed: Arc<Editor>, a: Args, origin: Origin) ->
                 (None, Some(p)) => format!("at {p}"),
                 (None, None) => String::new(),
             };
-            return Err(CmdError::not_found(format!("no character {what} (characters_list names them)")));
+            return Err(CmdError::not_found(format!(
+                "no character {what} (asset.find refs_to=<id> names the files)"
+            )));
         }
         Step::Unsaved(names) => {
             return Err(CmdError::unsaved(json!(names)).with_data(
@@ -133,7 +135,7 @@ pub(crate) async fn characters_view(ed: Arc<Editor>, a: Args, origin: Origin) ->
             ));
         }
         Step::Save(plan) => {
-            let file = run_save(&ed, plan)
+            let file = run_save(&ed, *plan)
                 .await
                 .map_err(|e| CmdError::new("refused", format!("the edited character was not saved: {e}")))?;
             let roster = svc.fresh_roster().await;

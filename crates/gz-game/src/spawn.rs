@@ -1,5 +1,5 @@
 //! The gameplay-object roster: every config section that declares `$spawn` and a `class`, as
-//! the Spawn tool lists it (`list_spawn_sections`, `UISpawnTool::RefreshList`).
+//! the Spawn tool lists it (`game.lookup type=spawn_section`).
 
 use gz_ltx::Ltx;
 

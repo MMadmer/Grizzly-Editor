@@ -1,9 +1,9 @@
 //! PDA interfaces: a module's own PDA screens (`.pdaasset`, declarative Lua, `pda = 1`), named by
 //! `mod.ltx [pda] layout`.
 //!
-//! The C++ specification is `EditorPda.cpp` (the asset, the reader, validation, the build gate,
-//! `[pda] layout`, the MCP handlers) and the state of `EditorPdaPreview.cpp`. The format is
-//! `docs/pda/PDA_FORMAT.md`.
+//! The format is `docs/pda/PDA_FORMAT.md`. A layout's text is the author's: the editor writes
+//! it as it was sent, never rewritten; a layout of a newer format version opens nothing (the
+//! read path of `gz-asset` refuses it with the sentence).
 //!
 //! **The editor interprets nothing of its own.** What a layout MEANS is the game's
 //! `scripts\xms_pda_layout.script`: pure Lua that turns the asset into a flat item list plus
@@ -14,12 +14,12 @@
 //!
 //! The domain (pure):
 //!
-//! - [`read`] - [`evaluate`] (`EditorPda::Read`): the text checked by `gz_luadata` (syntax with
+//! - [`read`] - [`evaluate`]: the text checked by `gz_luadata` (syntax with
 //!   its line, code outside strings refused), then the game's `normalize` over the very table
 //!   LuaJIT builds of it; [`Reader`] (the script and where it came from), [`ReadError`],
 //!   [`template`], [`base_name`], [`is_pda_path`].
 //! - [`layout`] - [`Layout`], [`Item`], [`Page`], [`PdaProblem`], [`MapSpot`], [`Marker`]: the
-//!   reader's answer as the C++ read it off the Lua stack, plus the editor-only `preview` block.
+//!   reader's answer as it is read off the Lua stack, plus the editor-only `preview` block.
 //! - [`preview`] - [`Preview`]: the preview's running interface as data - pages, vars, the
 //!   action log, list rows and scroll, keys, the map zoom - and the transitions a click, a key or
 //!   an action makes (`signal:` / `lua:` / `close` are a toast and a log line); item boxes,
@@ -34,10 +34,14 @@
 //!   [`PdaService::use_layout`] through `gz-mod`'s manifest store).
 //! - [`validate_for_build`] and the `BuildCheck` [`install`] registers: a used layout with an
 //!   error, a missing file or one the build leaves out refuses the build. [`install`] also
-//!   gives `content_create kind=pda` its template.
-//! - [`register`]: `pda_list`, `pda_get`, `pda_write`, `pda_delete`, `pda_use`, `pda_validate`.
+//!   gives `file.create kind=pda` its template, adds the PDA kind of `gz-asset` ([`kind`]), whose
+//!   `asset.check` runs the game's reader and puts its problems where the file says what they
+//!   are about, and makes the first layout that appears in a module using none the module's
+//!   layout.
+//! - [`register`] registers `pda_use`.
 
 mod cmd;
+pub mod kind;
 pub mod layout;
 pub mod preview;
 pub mod read;

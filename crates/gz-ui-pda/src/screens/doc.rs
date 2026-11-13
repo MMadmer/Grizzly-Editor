@@ -13,7 +13,7 @@ use egui::{
     Align, Color32, CornerRadius, DragAndDrop, Id, LayerId, Layout, Order, Rect, ScrollArea, Sense, Stroke,
     StrokeKind, TextureHandle, TextureId, TextureOptions, Ui, UiBuilder, Vec2, pos2,
 };
-use gz_app::{DocCx, Document, OpenRequest, ShellBuilder, UiCommand};
+use gz_app::{DocCx, Document, OpenRequest, ShellBuilder};
 use gz_base::{RelPath, Rev};
 use gz_editor::Editor;
 use gz_mod::ManifestService;
@@ -1448,11 +1448,11 @@ pub fn install(b: &mut ShellBuilder) {
         tab.v.lock().open = true;
         Ok(Box::new(ScreensDoc::new(editor.clone(), tab)) as Box<dyn Document>)
     });
-    b.command(
-        UiCommand::new("COMMAND_MOD_SCREENS", "Mod", "Screens & Music", Icon::Picture, |cx| {
-            cx.requests.open(OpenRequest::kind("screens"))
-        })
-        .enabled(|editor, _| editor.project_opt().is_some()),
+    b.action(
+        gz_app::Action::new(gz_ui_mod::menu::SCREENS, "Screens & Music", "Mod", "ui.tab")
+            .icon(Icon::Picture)
+            .args(|_| gz_app::args(&[("action", "open"), ("kind", "screens")]))
+            .enabled(gz_ui_mod::menu::with_project),
     );
 }
 

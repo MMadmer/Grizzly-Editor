@@ -1,5 +1,8 @@
-//! The project list, `_projects.ini` in the editor's root: `[recent] p0..p11` (the last opened
-//! first), `create_parent` (the New Project form's location) and `[browser] sort`.
+//! The project list, `_projects.ini` in the editor's home: the Start page's memory and nothing
+//! more - `[recent] p0..p11` (the last opened first) with the project's id beside each
+//! (`id0..id11`), `create_parent` (the New Project form's location) and `[browser] sort`. A
+//! project that is not on it opens the same; one that moved shows as Missing until it is opened
+//! from its new place, which takes the old entry's place by the id.
 //!
 //! The file is edited through [`LtxDoc`], so a list nobody changed writes back byte for byte
 //! (QA restores and compares it). A folder that is gone stays on the list: a drive that is not
@@ -19,7 +22,7 @@ pub const MAX_RECENT: usize = 12;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryState {
-    /// The folder holds `project.ltx` or `mod.ltx`.
+    /// The folder holds a project file or `mod.ltx`.
     Project,
     /// The folder does not exist.
     Missing,
@@ -28,7 +31,7 @@ pub enum EntryState {
 }
 
 impl EntryState {
-    /// As `list_projects` names it.
+    /// As `project.list` names it.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -39,12 +42,14 @@ impl EntryState {
     }
 }
 
-/// A project is a folder with `project.ltx` - or with `mod.ltx` alone (a fresh clone of a
-/// mod's repository; opening it writes `project.ltx`).
+/// A project is a folder with a project file (`*.grizzly`) or with `mod.ltx` (a fresh clone of a
+/// mod's repository; opening it writes the project file). A folder with an old `project.ltx`
+/// that no editor has opened since is one too: the open converts it.
 #[must_use]
 pub fn has_manifest(folder: &Path) -> bool {
-    std::fs::symlink_metadata(folder.join("project.ltx")).is_ok()
-        || std::fs::symlink_metadata(folder.join("mod.ltx")).is_ok()
+    std::fs::symlink_metadata(folder.join("mod.ltx")).is_ok()
+        || std::fs::symlink_metadata(folder.join(crate::legacy::FILE)).is_ok()
+        || !crate::project::project_files(folder).is_empty()
 }
 
 /// What a listed folder is now. Two or three attribute reads.
@@ -106,11 +111,26 @@ impl ProjectList {
     /// The listed folders, the last opened first, spelled as the file has them.
     #[must_use]
     pub fn entries(&self) -> Vec<String> {
+        self.entries_with_ids().into_iter().map(|(p, _)| p).collect()
+    }
+
+    /// The listed folders with the id of the project each held when it was opened (`""` when
+    /// the list does not know it).
+    #[must_use]
+    pub fn entries_with_ids(&self) -> Vec<(String, String)> {
         (0..MAX_RECENT)
             .filter_map(|i| {
-                ini::get(&self.doc, "recent", &format!("p{i}")).filter(|v| !v.is_empty()).map(str::to_owned)
+                let path = ini::get(&self.doc, "recent", &format!("p{i}")).filter(|v| !v.is_empty())?;
+                let id = ini::get(&self.doc, "recent", &format!("id{i}")).unwrap_or_default();
+                Some((path.to_owned(), id.to_owned()))
             })
             .collect()
+    }
+
+    /// The id the list knows for a listed folder.
+    #[must_use]
+    pub fn id_of(&self, path: &str) -> Option<String> {
+        self.entries_with_ids().into_iter().find(|(p, _)| paths::same_path(p, path)).map(|(_, id)| id)
     }
 
     /// The New Project form's location, when the file names one.
@@ -136,18 +156,27 @@ impl ProjectList {
         self.entries().into_iter().find(|e| paths::same_path(e, path))
     }
 
-    fn write_entries(doc: &mut LtxDoc, entries: &[String]) {
+    fn write_entries(doc: &mut LtxDoc, entries: &[(String, String)]) {
         for i in 0..MAX_RECENT {
-            ini::set(doc, "recent", &format!("p{i}"), entries.get(i).map_or("", String::as_str));
+            let (path, id) = entries.get(i).map_or(("", ""), |(p, id)| (p.as_str(), id.as_str()));
+            ini::set(doc, "recent", &format!("p{i}"), path);
+            // an id is written beside its entry, and only where the list knows ids at all
+            if !id.is_empty() || ini::get(doc, "recent", &format!("id{i}")).is_some() {
+                ini::set(doc, "recent", &format!("id{i}"), id);
+            }
         }
     }
 
-    /// The list after `project` opened: it floats to the top, its duplicates collapse, the rest
-    /// keep their order (twelve at most), and the form's location is written along.
+    /// The list after the project `id` opened from `project`: it floats to the top, its
+    /// duplicates collapse - another spelling of the folder, and the entry of the same project
+    /// at a place it moved away from - the rest keep their order (twelve at most), and the
+    /// form's location is written along.
     #[must_use]
-    pub fn opened(&self, project: &str, create_parent: &str) -> Self {
-        let mut list = vec![project.to_owned()];
-        list.extend(self.entries().into_iter().filter(|e| !e.eq_ignore_ascii_case(project)));
+    pub fn opened(&self, project: &str, id: &str, create_parent: &str) -> Self {
+        let mut list = vec![(project.to_owned(), id.to_owned())];
+        list.extend(self.entries_with_ids().into_iter().filter(|(p, other)| {
+            !p.eq_ignore_ascii_case(project) && (id.is_empty() || !other.eq_ignore_ascii_case(id))
+        }));
         list.truncate(MAX_RECENT);
         let mut doc = self.doc.clone();
         Self::write_entries(&mut doc, &list);
@@ -158,7 +187,8 @@ impl ProjectList {
     /// The list without `path` (every spelling of it).
     #[must_use]
     pub fn without(&self, path: &str) -> Self {
-        let keep: Vec<String> = self.entries().into_iter().filter(|e| !paths::same_path(e, path)).collect();
+        let keep: Vec<(String, String)> =
+            self.entries_with_ids().into_iter().filter(|(e, _)| !paths::same_path(e, path)).collect();
         let mut doc = self.doc.clone();
         Self::write_entries(&mut doc, &keep);
         Self { doc }
@@ -202,7 +232,7 @@ mod tests {
 
     #[test]
     fn opening_moves_to_the_front() {
-        let list = ProjectList::parse(SAMPLE).opened("D:\\Mods\\Beta", "D:\\Mods");
+        let list = ProjectList::parse(SAMPLE).opened("D:\\Mods\\Beta", "", "D:\\Mods");
         assert_eq!(list.entries(), ["D:\\Mods\\Beta", "D:\\Mods\\Alpha"]);
         assert_eq!(
             list.to_text(),
@@ -212,19 +242,38 @@ mod tests {
             )
         );
         // the same move again changes nothing
-        assert_eq!(list.opened("D:\\Mods\\Beta", "D:\\Mods").to_text(), list.to_text());
+        assert_eq!(list.opened("D:\\Mods\\Beta", "", "D:\\Mods").to_text(), list.to_text());
     }
 
     #[test]
     fn twelve_at_most() {
         let mut list = ProjectList::default();
         for i in 0..14 {
-            list = list.opened(&format!("D:\\P{i}"), "D:\\");
+            list = list.opened(&format!("D:\\P{i}"), "", "D:\\");
         }
         let entries = list.entries();
         assert_eq!(entries.len(), MAX_RECENT);
         assert_eq!(entries.first().map(String::as_str), Some("D:\\P13"));
         assert!(list.to_text().starts_with("[recent]\r\np0=D:\\P13\r\n"));
+    }
+
+    #[test]
+    fn a_project_that_moved_takes_its_old_entrys_place() {
+        let list = ProjectList::default().opened("D:\\Mods\\Alpha", "aaaa", "D:\\Mods").opened(
+            "D:\\Mods\\Beta",
+            "bbbb",
+            "D:\\Mods",
+        );
+        assert_eq!(list.id_of("d:/mods/alpha").as_deref(), Some("aaaa"));
+        // Alpha moved to E:: one entry, at the new place
+        let moved = list.opened("E:\\Alpha", "aaaa", "D:\\Mods");
+        assert_eq!(
+            moved.entries_with_ids(),
+            [("E:\\Alpha".to_owned(), "aaaa".to_owned()), ("D:\\Mods\\Beta".to_owned(), "bbbb".to_owned())]
+        );
+        // forgetting keeps the ids with their entries
+        let forgot = moved.without("E:\\Alpha");
+        assert_eq!(forgot.entries_with_ids(), [("D:\\Mods\\Beta".to_owned(), "bbbb".to_owned())]);
     }
 
     #[test]

@@ -3,17 +3,17 @@
 manifest pickup, the build gate) over MCP, on a THROW-AWAY COPY of a project.
 
 What it proves:
-  A  a new layout from the template becomes the module's ([pda] layout in mod.ltx), and
-     mod_manifest reports it
-  B  the game's reader judges a file: the courier fixture reads clean, broken files come
-     back with their codes (E3xx), a file that does not parse is refused with its line
+  A  a new layout from the template (file.create) becomes the module's ([pda] layout in mod.ltx)
+     as it appears, and mod_manifest reports it
+  B  the game's reader judges a file (asset.check): the courier fixture reads clean, broken files
+     come back with their codes (E3xx), a file that does not parse names its line
   C  pda_use picks, clears and refuses (a missing file, a file the build leaves out)
   D  the preview plays the layout like the game: tabs, a row that fills vars and opens an
      overlay, a button that sets a var and switches pages, the keys, a stock section, the
      16:9 device, a click by canvas point - and the tab follows a write to the file
   E  the build ships the layout with [pda] in the module's mod.ltx, and refuses one with
      an error
-  F  deleting the used layout clears [pda]; Create > PDA Interface makes NewPda
+  F  the used layout's file removed clears [pda]; Create > PDA Interface makes NewPda
   G  the editor's bundled reader and sheet are the game's, byte for byte
   H  the tab: its panes, Details tab and zoom over MCP, each answer holding the frame it asked for (panes,
      scale, device gap, screen edges - no second call); text put into the Source pane stays
@@ -116,7 +116,7 @@ class Editor:
 
     def close(self) -> None:
         try:
-            mcp("window_control", action="close")
+            mcp("app.quit")
         except OSError:
             pass
         if self.proc:
@@ -136,6 +136,35 @@ def sha(path: str) -> str:
         return hashlib.sha256(f.read()).hexdigest()
 
 
+PROJECT = [""]
+
+
+def put(rel: str, text: str) -> None:
+    """Writes a layout the way an agent does: a file of the project."""
+    full = os.path.join(PROJECT[0], rel.replace("/", os.sep))
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def judged(text: str, rel: str = "pda/qa_judged.pdaasset") -> dict:
+    """What asset.check finds in a text, written as a file of its own and taken away again."""
+    put(rel, text)
+    try:
+        return mcp("asset.check", path=rel)
+    finally:
+        os.remove(os.path.join(PROJECT[0], rel.replace("/", os.sep)))
+
+
+def until(what, seconds: float = 10.0):
+    deadline = time.monotonic() + seconds
+    got = what()
+    while not got and time.monotonic() < deadline:
+        time.sleep(0.1)
+        got = what()
+    return got
+
+
 def codes(answer: dict) -> list[str]:
     return [p.get("code", "") for p in answer.get("problems", [])]
 
@@ -150,7 +179,7 @@ def visible(state: dict, **match) -> list[dict]:
 
 def shot(folder: str | None, name: str) -> None:
     # a screenshot is also how a frame gets drawn in a minimized editor: the tab lays itself out in it
-    pic = mcp("screenshot_editor")
+    pic = mcp("shot.window")
     if not folder:
         return
     if pic.get("png_base64"):
@@ -174,7 +203,7 @@ def follows() -> dict:
 
 def escaped_in_tab() -> list | None:
     """What the kit saw spill out of the work area's windows last frame; None when ui_audit is not there."""
-    a = mcp("ui_audit")
+    a = mcp("ui.audit")
     if not isinstance(a.get("escaped"), list):
         return None
     return [e for e in a["escaped"] if "doc.host" in str(e.get("window", ""))]
@@ -229,7 +258,7 @@ def run_tab(project: str, fixture: str, shots: str | None) -> None:
     edited = fixture.replace('title = "Orders"', 'title = "Queue"', 1)
     check(edited != fixture, "H the fixture takes an edit")
     p = mcp("pda_preview", action="apply", text=edited)
-    titles = [pg.get("title") for pg in mcp("pda_get", path="pda/courier.pdaasset").get("layout", {}).get("pages", [])]
+    titles = ["Queue"] if 'title = "Queue"' in read(courier) else []
     check(p.get("ok") and p.get("text_dirty") is True and sha(courier) == before and "Queue" not in titles,
           "H apply shows the text unsaved and leaves the file alone", json.dumps(p)[:200])
     shot(shots, "pda_tab_dirty")
@@ -258,13 +287,38 @@ def run_tab(project: str, fixture: str, shots: str | None) -> None:
     p = mcp("pda_preview", action="save", pane="details")
     check(p.get("ok") and p.get("text_dirty") is False, "H save writes the pane's text", json.dumps(p)[:200])
     check(sha(courier) != before, "H and the file has it")
-    mcp("pda_write", path="pda/courier.pdaasset", text=fixture, use=False)
+    put("pda/courier.pdaasset", fixture)
     p = follows()
     check(p.get("state", {}).get("read") is True and p.get("text_dirty") is False, "H the fixture is back", json.dumps(p)[:200])
+
+    # the file changes on disk while the pane holds edits: the two are merged value by value
+    mcp("pda_preview", action="apply", text=fixture.replace('title = "Orders"', 'title = "Queue"', 1))
+    put("pda/courier.pdaasset", fixture.replace('text = "Orders"', 'text = "Deliveries"', 1))
+    merged = until(lambda: any(i.get("text") == "Deliveries"
+                               for i in follows().get("state", {}).get("visible", [])))
+    p = follows()
+    check(bool(merged) and p.get("text_dirty") is True and not p.get("disk_note"),
+          "H an outside change reaches a pane with edits, the edits kept", json.dumps(p)[:200])
+    mcp("pda_preview", action="save")
+    on_disk = read(courier)
+    check('title = "Queue"' in on_disk and 'text = "Deliveries"' in on_disk,
+          "H and Save writes both: the pane's value and the file's", on_disk[:200])
+    # both change the same value: the pane keeps its own, the tab says so, Take Theirs takes the file's
+    mcp("pda_preview", action="apply", text=on_disk.replace('title = "Queue"', 'title = "Mine"', 1))
+    put("pda/courier.pdaasset", on_disk.replace('title = "Queue"', 'title = "Theirs"', 1))
+    noted = until(lambda: "1 value" in str(follows().get("disk_note", "")))
+    check(bool(noted), "H a value both changed is named: Changed on disk too", json.dumps(follows())[:300])
+    t = mcp("asset.take_theirs", path="pda/courier.pdaasset")
+    p = follows()
+    check(t.get("ok") and p.get("text_dirty") is False and not p.get("disk_note")
+          and 'title = "Theirs"' in read(courier), "H asset.take_theirs takes the file's text", json.dumps(t)[:200])
+    put("pda/courier.pdaasset", fixture)
+    until(lambda: not any(i.get("text") == "Deliveries" for i in follows().get("state", {}).get("visible", [])))
 
 
 def run(project: str, shots: str | None, only: str) -> None:
     ed = Editor()
+    PROJECT[0] = project
     out_dir = tempfile.mkdtemp(prefix="grizzly_pda_")
     needed = {n for p in only for n in NEEDS.get(p, "")} - set(only)
     try:
@@ -291,43 +345,59 @@ def run(project: str, shots: str | None, only: str) -> None:
 
 
 def phase_a(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
-        l = mcp("pda_list")
-        check(l.get("ok") and l.get("used") == "" and l.get("layouts") == [], "A a fresh project has no PDA layout",
-              json.dumps(l)[:300])
-        w = mcp("pda_write", id="qa_app", title="QA App")
-        check(w.get("ok") and w.get("created") and w.get("used"), "A the template is written and used at once",
-              json.dumps(w)[:400])
-        check(w.get("errors") == 0, "A and it reads clean", json.dumps(w.get("problems"))[:300])
+        none = [f for _, _, fs in os.walk(project) for f in fs if f.lower().endswith(".pdaasset")]
+        check(mcp("mod_manifest").get("pda_layout", "") == "" and none == [], "A a fresh project has no PDA layout",
+              json.dumps(none)[:300])
+        os.makedirs(os.path.join(project, "pda"), exist_ok=True)
+        w = mcp("file.create", kind="pda", path="pda")
+        made = w.get("path", "")
+        used = until(lambda: mcp("mod_manifest").get("pda_layout") == made.replace("/", "\\"))
+        check(w.get("ok") and bool(used), "A the template is written and, the first layout, used as it appears",
+              json.dumps(w)[:400] + " " + str(mcp("mod_manifest").get("pda_layout")))
+        # the later phases know it as qa_app: renamed on disk, named again
+        os.replace(os.path.join(project, made.replace("/", os.sep)), os.path.join(project, "pda", "qa_app.pdaasset"))
+        # the old name is gone (the module drops it) and a new file appeared: either may come first
+        until(lambda: mcp("mod_manifest").get("pda_layout") != made.replace("/", "\\"))
+        u = mcp("pda_use", path="pda/qa_app.pdaasset")
+        check(u.get("ok"), "A pda_use names the renamed file", json.dumps(u)[:200])
+        c = mcp("asset.check", path="pda/qa_app.pdaasset")
+        check(c.get("ok") and c.get("counts", {}).get("error", 1) == 0, "A and it reads clean", json.dumps(c)[:300])
         check(os.path.isfile(os.path.join(project, "pda", "qa_app.pdaasset")), "A pda/qa_app.pdaasset exists")
         text = read(mod_ltx)
         check("[pda]" in text and "pda\\qa_app.pdaasset" in text, "A mod.ltx names it in [pda] layout", text[-300:])
         check(mcp("mod_manifest").get("pda_layout") == "pda\\qa_app.pdaasset", "A mod_manifest reports it")
-        pages = [p["id"] for p in w.get("layout", {}).get("pages", [])]
-        check(pages == ["home", "map", "journal"], "A the template has home, map and a stock journal", str(pages))
+        tpl = read(os.path.join(project, "pda", "qa_app.pdaasset"))
+        check(all(('id = "%s"' % pg) in tpl for pg in ("home", "map", "journal")) and "stock" in tpl,
+              "A the template has home, map and a stock journal", tpl[:300])
 
 
 
 def phase_b(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
-        w = mcp("pda_write", path="pda/courier.pdaasset", text=fixture, use=False)
-        check(w.get("ok") and w.get("errors") == 0 and w.get("warnings") == 0 and not w.get("use_changed"),
-              "B the courier fixture reads clean and is not used by itself", json.dumps(w.get("problems"))[:400])
-        ids = sorted(i["id"] for i in w.get("layout", {}).get("ids", []))
-        check(ids == sorted(["tab_orders", "tab_map", "tab_journal", "orders", "card", "done", "details", "take", "back"]),
-              "B every addressable id is listed", str(ids))
-        g = mcp("pda_get", path="pda/courier.pdaasset")
-        check(g.get("ok") and g.get("text") == fixture and g.get("used") is False, "B pda_get gives the file back", json.dumps(g)[:200])
-        check("xms_pda_layout.script" in g.get("reader", ""), "B and names the reader", g.get("reader", ""))
-        v = mcp("pda_validate", text=broken)
-        check(v.get("ok") and v.get("valid") is False and "E305" in codes(v), "B an unknown widget kind is E305", json.dumps(v)[:300])
-        v = mcp("pda_validate", text=fixture.replace('page = "map" }', 'page = "nowhere" }', 1))
+        put("pda/courier.pdaasset", fixture)
+        w = mcp("asset.check", path="pda/courier.pdaasset")
+        counts = w.get("counts", {})
+        check(w.get("ok") and counts.get("error") == 0 and counts.get("warning") == 0,
+              "B the courier fixture reads clean", json.dumps(w.get("problems"))[:400])
+        time.sleep(0.4)
+        check(mcp("mod_manifest").get("pda_layout") == "pda\\qa_app.pdaasset",
+              "B and is not used by itself: the module has a layout already")
+        v = judged(broken)
+        e305 = [x for x in v.get("problems", []) if x.get("code") == "E305"]
+        check(bool(e305) and e305[0].get("line", 0) > 0, "B an unknown widget kind is E305, at its line", json.dumps(v)[:300])
+        v = judged(fixture.replace('page = "map" }', 'page = "nowhere" }', 1))
         check("E308" in codes(v), "B a tab to a page that does not exist is E308", str(codes(v)))
-        v = mcp("pda_validate", text=fixture.replace('"ui_xms_icon_plus"', '"ui_qa_no_such_texture"', 1))
+        v = judged(fixture.replace('"ui_xms_icon_plus"', '"ui_qa_no_such_texture"', 1))
         check("W320" in codes(v), "B a texture neither the game nor the project has is W320", str(codes(v)))
-        bad = mcp("pda_write", path="pda/broken.pdaasset", text="return { pda = 1,\n  id = \n}")
-        check(not bad.get("ok") and bad.get("line", 0) >= 2 and not os.path.exists(os.path.join(project, "pda", "broken.pdaasset")),
-              "B a file that does not parse is refused with its line", json.dumps(bad)[:300])
-        code = mcp("pda_write", path="pda/code.pdaasset", text="os.execute('calc') return { pda = 1 }")
-        check(not code.get("ok"), "B code outside strings is refused", json.dumps(code)[:300])
+        bad = judged("return { pda = 1,\n  id = \n}")
+        syntax = [x for x in bad.get("problems", []) if x.get("code") == "syntax"]
+        check(bool(syntax) and syntax[0].get("line", 0) >= 2, "B a file that does not parse names its line",
+              json.dumps(bad)[:300])
+        code = judged("os.execute('calc') return { pda = 1 }")
+        check(any(x.get("severity") == "error" for x in code.get("problems", [])), "B code outside strings is refused",
+              json.dumps(code)[:300])
+        newer = judged("return { pda = 2, id = \"qa_newer\" }")
+        check("newer_version" in codes(newer), "B a layout of a newer format is refused with the sentence",
+              json.dumps(newer)[:300])
 
 
 
@@ -343,9 +413,8 @@ def phase_c(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         u = mcp("pda_use", path="drafts/draft.pdaasset")
         check(not u.get("ok") and "left out" in u.get("error", ""), "C a file the build leaves out is refused", json.dumps(u))
         mcp("mod_exclude", path="drafts", excluded=False)
-        listed = [x["path"] for x in mcp("pda_list").get("layouts", [])]
-        check(any(p.endswith("courier.pdaasset") for p in listed) and any(p.endswith("qa_app.pdaasset") for p in listed),
-              "C pda_list shows both layouts", str(listed))
+        listed = mcp("asset.check", path="pda").get("files")
+        check(listed == 2, "C asset.check of the folder covers both layouts", str(listed))
 
 
 
@@ -411,11 +480,12 @@ def phase_d(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         st = p.get("state", {})
         check(st.get("page") == "orders" and st.get("vars", {}).get("current") == "Нет заказа", "D reset: the start page and the declared vars")
         # the tab follows the file
-        mcp("pda_write", path="pda/courier.pdaasset", text=fixture.replace('title = "Orders"', 'title = "Deliveries"', 1), use=False)
+        put("pda/courier.pdaasset", fixture.replace('text = "Orders"', 'text = "Deliveries"', 1))
         p = follows()
         check(p.get("state", {}).get("read") is True, "D the tab re-reads a file written behind it", json.dumps(p)[:200])
-        g = mcp("pda_get", path="pda/courier.pdaasset")
-        check(any(pg.get("title") == "Deliveries" for pg in g.get("layout", {}).get("pages", [])), "D and the change is there")
+        seen = until(lambda: any(i.get("text") == "Deliveries"
+                                 for i in mcp("pda_preview", action="state").get("state", {}).get("visible", [])))
+        check(bool(seen), "D and the change is there")
         # the map slot lists what it shows, in canvas units: the player and the markers inside it
         p = mcp("pda_preview", action="page", page="map")
         mp = p.get("state", {}).get("map", {})
@@ -426,7 +496,7 @@ def phase_d(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
                                  ' { x = %g, z = %g, hint = "Parcel" }, { x = %g, z = %g, hint = "Far" } } },'
                                  % (cx, cz, cx, cz + 20, b[0] + 1, b[1] + 1), 1)
         check(marked != fixture, "D the fixture takes preview markers")
-        mcp("pda_write", path="pda/courier.pdaasset", text=marked, use=False)
+        put("pda/courier.pdaasset", marked)
         follows()
         mcp("pda_preview", action="reset")
         p = mcp("pda_preview", action="page", page="map")
@@ -436,7 +506,7 @@ def phase_d(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         check(len(me) == 1 and len(parcel) == 1 and parcel[0]["y"] < me[0]["y"],
               "D the map slot lists the player and a marker north of them", json.dumps(spots))
         check(not [s for s in spots if s.get("hint") == "Far"], "D a marker outside the slot is not listed", json.dumps(spots))
-        mcp("pda_write", path="pda/courier.pdaasset", text=fixture, use=False)
+        put("pda/courier.pdaasset", fixture)
         follows()
 
 
@@ -451,22 +521,25 @@ def phase_e(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         check(os.path.isfile(os.path.join(root, "pda", "courier.pdaasset")), "E the layout ships as it is")
         shipped = read(os.path.join(root, "mod.ltx")) if os.path.isfile(os.path.join(root, "mod.ltx")) else ""
         check("[pda]" in shipped and "courier.pdaasset" in shipped, "E the module's mod.ltx carries [pda]", shipped[-200:])
-        mcp("pda_write", path="pda/courier.pdaasset", text=broken, use=False)
+        put("pda/courier.pdaasset", broken)
         ex = mcp("mod_export", target=out_dir)
         check(not ex.get("ok") and "E305" in ex.get("error", ""), "E a used layout with an error stops the build",
               json.dumps(ex)[:300])
-        mcp("pda_write", path="pda/courier.pdaasset", text=fixture, use=False)
+        put("pda/courier.pdaasset", fixture)
 
 
 
 def phase_f(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
-        d = mcp("pda_delete", path="pda/courier.pdaasset")
-        check(d.get("ok") and d.get("use_cleared") and not os.path.exists(os.path.join(project, "pda", "courier.pdaasset")),
-              "F deleting the used layout deletes the file and clears [pda]", json.dumps(d))
-        check("[pda]" not in read(mod_ltx), "F mod.ltx has no [pda] any more")
-        c = mcp("content_create", kind="pda")
-        made = c.get("made", "")
+        os.remove(os.path.join(project, "pda", "courier.pdaasset"))
+        cleared = until(lambda: mcp("mod_manifest").get("pda_layout", "x") == "")
+        check(bool(cleared), "F the used layout's file removed clears [pda] layout",
+              str(mcp("mod_manifest").get("pda_layout")))
+        check("courier" not in read(mod_ltx), "F mod.ltx names it no more", read(mod_ltx)[-200:])
+        c = mcp("file.create", kind="pda", path="pda")
+        made = c.get("path", "")
         check(c.get("ok") and made.lower().endswith("newpda.pdaasset"), "F Create > PDA Interface makes NewPda", json.dumps(c))
+        now = until(lambda: mcp("mod_manifest").get("pda_layout") == made.replace("/", "\\"))
+        check(bool(now), "F and, the only layout now, the module uses it", str(mcp("mod_manifest").get("pda_layout")))
 
 
 

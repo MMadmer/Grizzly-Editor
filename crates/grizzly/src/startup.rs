@@ -99,15 +99,18 @@ impl Startup {
         let total = self.loader.seconds + self.began.elapsed().as_secs_f64();
         let reads: u64 = self.loader.reads + self.stages.iter().map(|s| s.reads).sum::<u64>();
         let ops: u64 = self.loader.ops + self.stages.iter().map(|s| s.ops).sum::<u64>();
-        log.info(format!("startup: {total:.2} s, {reads} file reads, {ops} file operations"));
+        log.detail(format!("startup: {total:.2} s, {reads} file reads, {ops} file operations"));
         for s in std::iter::once(&self.loader).chain(self.stages.iter()) {
-            log.info(format!("  {:<30} {:>6.2} s {:>8} reads {:>8} ops", s.name, s.seconds, s.reads, s.ops));
+            log.detail(format!(
+                "  {:<30} {:>6.2} s {:>8} reads {:>8} ops",
+                s.name, s.seconds, s.reads, s.ops
+            ));
         }
         if !self.milestones.is_empty() {
             let parts: Vec<String> = self.milestones.iter().map(|(w, s)| format!("{w} {s:.3} s")).collect();
-            log.info(format!("startup after the process was created: {}", parts.join(", ")));
+            log.detail(format!("startup after the process was created: {}", parts.join(", ")));
         }
-        log.info("file names: UTF-8 (wide system calls; the code page is not involved)");
+        log.detail("file names: UTF-8 (wide system calls; the code page is not involved)");
     }
 }
 

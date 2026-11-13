@@ -1,36 +1,39 @@
 //! Declarative Lua data: the editor's own assets (`.nqasset`, `.behasset`, `.npcasset`,
-//! `.pdaasset`) are `return { ... }` tables that carry data and never code. This crate is the
-//! port of `NqLua::ParseValue` and of the canonical writer of `NqLua.cpp`.
+//! `.pdaasset`, a scene's data files) are `return { ... }` tables that carry data and never
+//! code. This crate reads them as the game does, keeps them as lossless documents and writes
+//! new ones canonically.
 //!
 //! # API
 //!
-//! - [`Value`] / [`Table`]: what a file holds (`SNqValue`). A table keeps its array part in
+//! - [`Value`] / [`Table`]: what a file holds. A table keeps its array part in
 //!   order and its string keys in the canonical order ([`key_cmp`]); typed reads
 //!   (`to_text`, `to_number`, `to_bool`, `get_*`), `set` / `put` / `erase` / `push`,
 //!   `canonicalize`, `patch`. `serde::Serialize` gives the JSON shape [`to_json`] gives.
-//! - [`parse`] / [`parse_named`]: text to value, accepting exactly what the C++ accepts and
-//!   refusing with the same message, line and column ([`LuaDataError`]). The chunk name is the
-//!   file's base name as the C++ passes it (`"nqasset"` when empty); it matters only to a name
-//!   longer than 59 bytes, which LuaJIT cuts short in its messages.
-//! - [`syntax_check`]: compiles custom Lua (a `lua` action's code) without running it
-//!   (`NqLua::SyntaxCheck`).
-//! - The writer ([`write`]): [`write_value`] (`WriteValue`), [`write_node`] (`WriteNodeAt`),
-//!   [`write_asset`] (the body layout of `NqLua::Write`), [`comment_block`], [`one_line`].
+//! - [`parse`] / [`parse_named`]: text to value, accepting exactly what the game's reader
+//!   accepts and refusing with its message, at the exact line and column ([`LuaDataError`]).
+//!   The chunk name is the file's base name (`"nqasset"` when empty); it matters only to a
+//!   name longer than 59 bytes, which LuaJIT cuts short in its messages.
+//! - [`LuaDoc`]: a file as a lossless document - its text byte for byte, its value, positions
+//!   of everything ([`Span`], [`Seg`] paths), edits that touch only their bytes and
+//!   [`LuaDoc::apply_diff`] / [`LuaDoc::rebase`], with the reader's [`Limits`].
+//! - [`syntax_check`]: compiles custom Lua (a `lua` action's code) without running it.
+//! - The canonical writer of new files and fragments ([`write`]): [`write_value`],
+//!   [`write_node`], [`write_asset`], [`one_line`].
 //! - Helpers: [`quote`], [`unquote`], [`is_ident`], [`is_keyword`], [`format_number`],
 //!   [`number_to_text`], [`format_g`].
 //! - [`to_json`] / [`from_json`].
 //!
 //! # How a file is read
 //!
-//! The C++ runs the text through LuaJIT in an empty environment. Here the same three steps are
-//! ported: the compile is LuaJIT 2.1's lexer and parser (`lex`, `parse`: every syntax message,
+//! The game runs the text through LuaJIT in an empty environment. Here the same three steps are
+//! modelled: the compile is LuaJIT 2.1's lexer and parser (`lex`, `parse`: every syntax message,
 //! the nesting, local, upvalue and register limits); then the declarative scan (`decl`); then
 //! the run of what is left - constructors, literals and minus signs - with the interpreter's
 //! semantics (`eval`): template versus run-time fields, strings coerced in arithmetic, the
 //! first failing operation's message and line, and the walk's limits (nesting 48, 200000
 //! values).
 //!
-//! # Not certainly equal to the C++
+//! # Not certainly equal to LuaJIT
 //!
 //! - The instruction count behind `execution limit exceeded` (4,000,000 instructions) is
 //!   modelled per instruction and may be off by one; no file the editor writes comes near it.
@@ -43,16 +46,20 @@
 #![forbid(unsafe_code)]
 
 mod decl;
+mod doc;
 mod eval;
 pub mod json;
 mod lex;
 mod num;
 mod parse;
+pub mod path;
 pub mod value;
 pub mod write;
 
+pub use doc::{Conflict, DiffRules, Limits, LuaDoc, Slot, Span};
 pub use json::{from_json, to_json};
 pub use num::format_g;
+pub use path::{Seg, covers, data_eq, get_at, set_at};
 pub use value::{Table, Value, key_cmp, key_rank};
 pub use write::{
     comment_block, format_number, inline, is_ident, is_keyword, number_to_text, one_line, quote, write_asset,
@@ -63,19 +70,14 @@ use eval::{Outcome, RunErr};
 use parse::compile;
 
 /// Why a text is not a declarative Lua file: the message the author reads, the 1-based line
-/// and column (0 when unknown), as `NqLua::SError` carries them.
+/// and column (counted in characters) of what it is about; 0 only for a refusal that is about
+/// no place (the bytecode loader's).
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct LuaDataError {
     pub line: u32,
     pub column: u32,
     pub message: String,
-}
-
-impl LuaDataError {
-    fn plain(message: impl Into<String>) -> Self {
-        Self { line: 0, column: 0, message: message.into() }
-    }
 }
 
 /// Decodes one Lua string literal (`"..."`, `'...'`, `[[...]]`) as the reader does; `None`
@@ -104,7 +106,7 @@ fn located(chunk: &[u8], line: u32, msg: &[u8]) -> Vec<u8> {
     raw
 }
 
-/// `SplitLuaError`: the line and the message without its `name:line:` prefix.
+/// The line and the message of a LuaJIT error, without its `name:line:` prefix.
 fn split_lua_error(raw: &[u8], chunk: &[u8]) -> (u32, Vec<u8>) {
     let raw = raw.split(|&c| c == 0).next().unwrap_or(&[]);
     let mut p = 0;
@@ -147,35 +149,6 @@ fn split_lua_error(raw: &[u8], chunk: &[u8]) -> (u32, Vec<u8>) {
     (0, raw.to_vec())
 }
 
-/// `GuessColumn`: where the token named after `near '` stands in the error's line.
-fn guess_column(text: &[u8], line: u32, msg: &[u8]) -> u32 {
-    if line == 0 {
-        return 0;
-    }
-    let Some(near_at) = msg.windows(6).position(|w| w == b"near '") else { return 0 };
-    let tok_beg = near_at + 6;
-    let Some(len) = msg.get(tok_beg..).and_then(|r| r.iter().position(|&c| c == b'\'')) else { return 0 };
-    if len == 0 {
-        return 0;
-    }
-    let tok = msg.get(tok_beg..tok_beg + len).unwrap_or(&[]);
-    if tok == b"<eof>" {
-        return 0;
-    }
-    let mut l = 1;
-    let mut i = 0;
-    while i < text.len() && l < line {
-        if text.get(i) == Some(&b'\n') {
-            l += 1;
-        }
-        i += 1;
-    }
-    let line_end =
-        text.get(i..).and_then(|r| r.iter().position(|&c| c == b'\n')).map_or(text.len(), |e| i + e);
-    let src = text.get(i..line_end).unwrap_or(&[]);
-    src.windows(tok.len()).position(|w| w == tok).map_or(0, |at| u32::try_from(at + 1).unwrap_or(0))
-}
-
 fn lossy(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
 }
@@ -192,49 +165,54 @@ fn bytecode_error(src: &[u8], chunk: &[u8]) -> Vec<u8> {
     raw
 }
 
+/// A refusal of the reader: the message, the line the model reports, and the offset of what it
+/// is about where the model knows it.
+pub(crate) struct Judged {
+    pub at: Option<usize>,
+    pub line: u32,
+    pub message: String,
+}
+
+impl Judged {
+    fn plain(message: impl Into<String>) -> Self {
+        Self { at: None, line: 0, message: message.into() }
+    }
+}
+
 /// The compile step: `luaL_loadbuffer` with `=chunk`.
-fn compile_step(src: &[u8], chunk: &[u8]) -> Result<parse::Compiled, LuaDataError> {
-    let raw = match compile(src) {
+fn compile_step(src: &[u8], chunk: &[u8]) -> Result<parse::Compiled, Judged> {
+    let (raw, at) = match compile(src) {
         Ok(Some(c)) => return Ok(c),
-        Ok(None) => bytecode_error(src, chunk),
-        Err(lex::SynErr::Raw(m)) => m,
-        Err(lex::SynErr::At { line, msg, near }) => {
+        Ok(None) => (bytecode_error(src, chunk), None),
+        Err(lex::SynErr::Raw(m)) => (m, None),
+        Err(lex::SynErr::At { line, msg, near, at }) => {
             let mut raw = located(chunk, line, &msg);
             if let Some(near) = near {
                 raw.extend(b" near '");
                 raw.extend(near);
                 raw.push(b'\'');
             }
-            raw
+            (raw, Some(at))
         }
     };
     let (line, msg) = split_lua_error(&raw, chunk);
-    let column = guess_column(src, line, &msg);
-    Err(LuaDataError { line, column, message: lossy(&msg) })
+    Err(Judged { at, line, message: lossy(&msg) })
 }
 
-/// [`parse_named`] with the C++ default chunk name.
-pub fn parse(text: &str) -> Result<Value, LuaDataError> {
-    parse_named(text, "")
-}
-
-/// Reads a declarative Lua file: compiles it, refuses anything that is not one literal table,
-/// runs it and returns the table (`NqLua::ParseValue`).
-pub fn parse_named(text: &str, chunk_name: &str) -> Result<Value, LuaDataError> {
+/// The reader that judges a file the game reads: the compile, the declarative scan, the run.
+pub(crate) fn judge(text: &str, chunk_name: &str) -> Result<Value, Judged> {
     let chunk = c_name(chunk_name, "nqasset");
     let src = text.as_bytes();
     let compiled = compile_step(src, chunk)?;
-    if let Some(p) = decl::problem(src) {
-        return Err(LuaDataError::plain(lossy(&p)));
+    if let Some((at, p)) = decl::problem(src) {
+        return Err(Judged { at: Some(at), line: 0, message: lossy(&p) });
     }
     match eval::run(&compiled) {
         Ok(Outcome::Value(v)) => Ok(v),
-        Ok(Outcome::NotOneTable) => {
-            Err(LuaDataError::plain("the file must return one table (return { ... })"))
-        }
-        Ok(Outcome::Walk(m)) => Err(LuaDataError::plain(m)),
+        Ok(Outcome::NotOneTable) => Err(Judged::plain("the file must return one table (return { ... })")),
+        Ok(Outcome::Walk(m)) => Err(Judged::plain(m)),
         Err(RunErr::Limit) => {
-            Err(LuaDataError::plain("execution limit exceeded (a quest file must be plain data)"))
+            Err(Judged::plain("execution limit exceeded (a quest file must be plain data)"))
         }
         Err(RunErr::At { line, msg }) => {
             let raw = located(chunk, line, msg.as_bytes());
@@ -243,17 +221,50 @@ pub fn parse_named(text: &str, chunk_name: &str) -> Result<Value, LuaDataError> 
             if !message.contains("execution limit") {
                 message.insert_str(0, "code outside strings: ");
             }
-            Err(LuaDataError { line, column: 0, message })
+            Err(Judged { at: None, line, message })
         }
     }
 }
 
-/// Compiles custom Lua without running it (`NqLua::SyntaxCheck`); the line and column are
-/// relative to the code.
+/// A refusal with its exact place: the offset the model knows, else the place the document's
+/// own reader finds for the same refusal. `skip` is what lies before the judged text (a byte
+/// order mark).
+pub(crate) fn locate(text: &str, skip: usize, j: Judged) -> LuaDataError {
+    let at = j.at.map(|a| a + skip).or_else(|| doc::refusal_at(text, skip, &j.message));
+    match at {
+        Some(a) => {
+            let (line, column) = doc::position(text, &doc::line_starts(text.as_bytes()), a);
+            LuaDataError { line, column, message: j.message }
+        }
+        None => LuaDataError { line: j.line, column: 0, message: j.message },
+    }
+}
+
+/// [`parse_named`] with the default chunk name.
+pub fn parse(text: &str) -> Result<Value, LuaDataError> {
+    parse_named(text, "")
+}
+
+/// Reads a declarative Lua file: compiles it, refuses anything that is not one literal table,
+/// runs it and returns the table. A refusal carries the line and column of what it is about.
+pub fn parse_named(text: &str, chunk_name: &str) -> Result<Value, LuaDataError> {
+    judge(text, chunk_name).map_err(|j| locate(text, 0, j))
+}
+
+/// Compiles custom Lua without running it; the line and column are relative to the code.
 pub fn syntax_check(code: &str) -> Result<(), LuaDataError> {
-    // the C++ passes strlen(code)
+    // the code ends at its first NUL, as a C string does
     let src = code.as_bytes().split(|&c| c == 0).next().unwrap_or(&[]);
-    compile_step(src, b"code").map(|_| ())
+    compile_step(src, b"code").map(|_| ()).map_err(|j| {
+        let text = std::str::from_utf8(src).unwrap_or("");
+        match j.at {
+            Some(a) => {
+                let (line, column) = doc::position(text, &doc::line_starts(text.as_bytes()), a);
+                LuaDataError { line, column, message: j.message }
+            }
+            None => LuaDataError { line: j.line, column: 0, message: j.message },
+        }
+    })
 }
 
 #[cfg(test)]
@@ -316,24 +327,24 @@ mod tests {
             err("return {\n a = 1\n b = 2 }"),
             (3, 2, "'}' expected (to close '{' at line 1) near 'b'".into())
         );
-        assert_eq!(err("return { a = \"abc }"), (1, 0, "unfinished string near '<eof>'".into()));
+        assert_eq!(err("return { a = \"abc }"), (1, 14, "unfinished string near '<eof>'".into()));
         assert_eq!(err("return { a = \"abc\n}"), (1, 14, "unfinished string near '\"abc'".into()));
         assert_eq!(err("return { a = 1 } x"), (1, 18, "'<eof>' expected near 'x'".into()));
         assert_eq!(err("return { \"a\" \"b\" }"), (1, 14, "'}' expected near '\"b\"'".into()));
         assert_eq!(err("return { a = 1abc }"), (1, 14, "malformed number near '1abc'".into()));
         assert_eq!(err("return { a = \"\\q\" }"), (1, 14, "invalid escape sequence near '\"'".into()));
         let deep = format!("return {}{}", "{".repeat(199), "}".repeat(199));
-        assert_eq!(err(&deep), (1, 0, "chunk has too many syntax levels".into()));
+        assert_eq!(err(&deep), (1, 206, "chunk has too many syntax levels".into()));
         let name = "x".repeat(70);
         let e = parse_named("return { a = }", &name).unwrap_err();
-        assert_eq!((e.line, e.column), (0, 0));
+        assert_eq!((e.line, e.column), (1, 14));
         assert_eq!(e.message, format!("{}:1: unexpected symbol near '}}'", "x".repeat(59)));
     }
 
     #[test]
     fn code_is_refused() {
         let code = "'b' is code, not data (only literals and 'key =' names are allowed)";
-        assert_eq!(err("return { a = b }"), (0, 0, code.into()));
+        assert_eq!(err("return { a = b }"), (1, 14, code.into()));
         assert_eq!(err("local x = 1 return { x }").2, "'local' before the table is code, not data");
         assert_eq!(err("return { a = 1 + 2 }").2, "'+' outside a string is code, not data");
         assert_eq!(err("return { a = 1 // c\n }").2, "'/' outside a string is code, not data");
@@ -342,7 +353,7 @@ mod tests {
         assert_eq!(err("return {}, {}").2, "the file must return one table (return { ... })");
         assert_eq!(
             err("return {\n  a = 1,\n  b = -{},\n}"),
-            (3, 0, "code outside strings: attempt to perform arithmetic on a table value".into())
+            (3, 7, "code outside strings: attempt to perform arithmetic on a table value".into())
         );
         assert_eq!(
             err("return { a = \"x\" - 3 }").2,
@@ -352,7 +363,7 @@ mod tests {
             err("return { a = -nil }").2,
             "code outside strings: attempt to perform arithmetic on a nil value"
         );
-        assert_eq!(err("return { [nil] = 1 }"), (1, 0, "code outside strings: table index is nil".into()));
+        assert_eq!(err("return { [nil] = 1 }"), (1, 10, "code outside strings: table index is nil".into()));
         let nested = |n: usize| format!("return {}{}", "{".repeat(n), "}".repeat(n));
         assert!(parse(&nested(49)).is_ok());
         assert_eq!(err(&nested(50)).2, "table nesting too deep (self reference?)");

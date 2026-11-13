@@ -16,6 +16,8 @@ pub fn own_icon(kind: AssetKind) -> Icon {
         AssetKind::Character => Icon::Character,
         AssetKind::CharacterTemplate => Icon::CharacterTemplate,
         AssetKind::Pda => Icon::PdaInterface,
+        // the project file is the project: the Start page's and the caption's, never a tile
+        AssetKind::Project => Icon::Home,
     }
 }
 

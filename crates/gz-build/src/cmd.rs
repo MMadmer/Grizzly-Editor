@@ -50,7 +50,7 @@ async fn mod_export(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
         None => {
             let game = project.game_root();
             if game.is_empty() {
-                return Err(refuse("no 'target' and no linked game (see game_link)"));
+                return Err(refuse("no 'target' and no linked game (see game.link)"));
             }
             game
         }

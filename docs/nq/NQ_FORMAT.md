@@ -15,7 +15,8 @@ in the game repo. The architecture contract — `docs/NQ_ARCHITECTURE.md`.
 
 ## 1. File rules
 
-- UTF-8 without BOM, `\n` line endings, the `.nqasset` extension.
+- UTF-8 without BOM, the `.nqasset` extension. A new file has `\n` line
+  endings; the editor keeps the ones a file has.
 - The content is **one `return { … }`**. The file loads with an empty
   environment (`setfenv(chunk, {})`) in both the editor and the game: no
   libraries, no globals. Any code — a function call, a global access, `local`,
@@ -30,11 +31,28 @@ in the game repo. The architecture contract — `docs/NQ_ARCHITECTURE.md`.
 - A node's `pos` is **optional** — editor canvas coordinates, the game ignores
   them. Nodes without `pos` are laid out automatically on open. `comment` is an
   editor-only field too.
-- On save the editor rewrites the file **canonically**: a fixed key order, a
-  topological node order, 2-space indent, and a generated comment block with
-  the graph outline at the top. Hand-written comments are lost in the process
-  (deliberate: diffs stay stable). Writing is idempotent —
-  `write(read(x)) == x`.
+- The editor writes **only what changed** (`docs/ASSETS.md`). A save puts each
+  changed value into the text where it stands and leaves every other byte as it
+  was: the author's key order, layout, comments and line endings stay, and no
+  comment block is generated. A document opened and saved without a change is
+  not written at all. A `pos` the editor worked out for a node that had none is
+  not written until the author moves that node; a new node goes after the node
+  it is linked from, and a new key after its neighbours, in the indent around it.
+- `nq = 1` is the format version (`beh = 1` for a behaviour graph, §10). A file
+  of a newer version is refused with a sentence naming both versions
+  (`newer_version`: update the editor). An older version is lifted step by step
+  as the file is read; the text stays as it was until the file is saved, and
+  `asset.migrate` writes the lift for a file, a folder or the project. A file
+  without the header is `E001` (the game refuses it); its first save adds the
+  header as the first key.
+- The editor changes the file only through its own edits. A file changed on
+  disk while it is open is read again: with no unsaved edits the document
+  follows it and keeps its view; with unsaved edits the outside change and the
+  author's are merged value by value, and the values both changed keep the
+  author's - the graph tab names them ("Changed on disk too: <n> values") and
+  Take Theirs (`asset.take_theirs`) takes the file's. A file that does not read
+  keeps the last good document; the tab says why, at its line and column, until
+  the file reads again.
 
 ## 2. Schema
 
@@ -127,7 +145,7 @@ refused (`E022`).
 |---|---|---|
 | `text` | `"string"` or `{ rus = "…", eng = "…" }` | UTF-8; placeholders `{var:name}`, `{global:name}` (a global variable of the module, `{global:<module>.<name>}` another module's), `{actor}` |
 | `string` | `"…"` | a free string (e.g. the `section` filter of `objective.kill_count`) |
-| picker strings | `"…"` | `item_section`, `squad_section`, `spawn_section` (any section with `$spawn`), `level`, `smart`, `restrictor`, `community`, `info`, `var_name`, `task_id`, `objective_id` (a step of the task named by the neighboring `task` parameter), `quest_id` (`"<module>.<quest>"` or `"<quest>"` = own module), `character_id` (a character of this project by the `id` of its `.npcasset`; `"<module>.<id>"` reaches a character another module ships), `ref_name`, `signal_name`, `spot_type`, `node_id`, `level_changer` (a transition of the linked game by the object name the engine knows it by - `world_transitions` lists them per level) — each has its own picker (`quest_lookup`) |
+| picker strings | `"…"` | `item_section`, `squad_section`, `spawn_section` (any section with `$spawn`), `level`, `smart`, `restrictor`, `community`, `info`, `var_name`, `task_id`, `objective_id` (a step of the task named by the neighboring `task` parameter), `quest_id` (`"<module>.<quest>"` or `"<quest>"` = own module), `character_id` (a character of this project by the `id` of its `.npcasset`; `"<module>.<id>"` reaches a character another module ships), `ref_name`, `signal_name`, `spot_type`, `node_id`, `level_changer` (a transition of the linked game by the object name the engine knows it by - `world_transitions` lists them per level) — each has its own picker (`game.lookup type=<the picker>`) |
 | `int` | `5` | integer; catalog `min`/`max` are checked |
 | `float` | `2.5` | `min`/`max` are checked |
 | `bool` | `true` / `false` | strictly boolean |
@@ -164,40 +182,36 @@ canvas screenshots. What guarantees this:
 1. **The file is self-contained.** Everything the editor knows about a quest
    lives in `.nqasset`. No sidecars.
 2. **Coordinates are optional.** Write nodes without `pos` — the editor lays
-   them out itself (`quest_layout` or simply opening the document). The
-   canonical writer always puts the editor fields (`pos`, `comment`) last in a
-   node.
+   them out itself (`quest_layout` or simply opening the document), and a save
+   does not write the positions it worked out.
 3. **The schema on demand.** `grizzly_quest_catalog` returns every kind with its
    groups, `use`, parameters (type/required/default/min/max/enum), pins, the
    `wait`/`once`/`event` flags and a one-line description. That is enough to
    write a quest from scratch.
-4. **Problems as text.** `grizzly_quest_write` / `quest_apply` /
-   `quest_validate` return `problems` — a list of `{code, severity, node, slot,
-   message}` with the same codes the game prints. A Lua syntax error position
-   is line:column.
-5. **Reading as text.** `grizzly_quest_get` returns the canonical file text
-   (`lua`) and an **outline** — a linear description of the graph (§5). Works
-   for an unopened file too. `grizzly_quest_list` gives a summary of every
-   project quest.
-6. **Editing — whole-file or by operations.** The usual loop is to rewrite the
-   whole file (`quest_write`); targeted edits — `quest_apply` with an operation
-   list.
-7. **The generated header.** The canonical writer puts a comment block with the
-   same outline at the top of the file: opening the `.nqasset` in any editor, a
-   human or an AI sees the quest structure without the graph.
-8. **Screenshots are possible but unnecessary.** `grizzly_quest_view` +
+4. **Problems as text.** `asset.check` (a file, a folder or the project)
+   returns `problems` — `{code, severity, text, file, line, column, end_line,
+   end_column, fix}`, the codes the game prints, every one at its place in the
+   file; `quest_open` / `quest_apply` return the document's `{code, severity,
+   node, slot, message}`.
+5. **Reading as text.** The file is the text: read it. `quest_open` adds the
+   **outline** — a linear description of the graph (§5). `game.lookup
+   type=quest_id` lists the project's quests, `asset.find` searches their lines
+   or the assets that name an id.
+6. **Editing — the file or by operations.** The usual loop is to write the
+   file; the editor follows it (an open tab reads it again). Targeted edits of
+   an open document — `quest_apply` with an operation list, then `quest_save`.
+7. **Screenshots are possible but unnecessary.** `grizzly_quest_view` +
    `grizzly_screenshot_editor` remain for visual checks; no step of the workflow
    depends on them.
 
-The recommended loop: `quest_catalog` → write the text → `quest_write` → read
-`problems`/`outline` → `quest_apply` for spot fixes → `quest_save` →
-`quest_check_all` (the same gate the build uses) → `mod_export`.
+The recommended loop: `quest_catalog` → write the file → `asset.check` →
+fix what it names (or `quest_open` + `quest_apply` + `quest_save`) →
+`asset.check` over the project (the build runs the same checks) → `mod_export`.
 
 ## 5. The outline format
 
 One line per node in topological order from the triggers. This is what
-`quest_get` / `quest_validate` return in the `outline` field, and the same
-thing the editor writes as the comment block at the top of the file on save.
+`quest_open`, `quest_apply` and `quest_edit` return in the `outline` field.
 
 ```
 quest dialog_branching "Долг вежливости" (active: auto; vars: agreed, asked; tasks: kill_boars)
@@ -484,29 +498,25 @@ document answers with an `unsaved` error unless `discard: true` is passed.
 | Tool | Arguments | Response |
 |---|---|---|
 | `grizzly_quest_catalog` | — | `source` (`game`/`bundled`), `version`, `api`, `files`, `count`, `kinds[]` — per kind: `id`, `group`, `title`, `desc`, `use[]`, `params[]` (`name`, `type`, `required`, `default`, `min`, `max`, `enum[]`), `pins[]`, `wait`, `once`, `event`, `impl`, `since` |
-| `grizzly_quest_list` | — | `count`, `quests[]`: `path`, `readable`, `id`, `title`, `nodes`, `errors`, `warnings`, `open`, `dirty`. An unreadable file — `readable:false` + `error` |
-| `grizzly_quest_new` | `path` | creates the file from the template (`trigger.start → flow.end`, `id` = the file name, title "New quest"), opens the tab. Refuses when the file exists. Responds with the summary and `lua` |
-| `grizzly_quest_open` | `path` | opens the document (reads the file, lays out `pos`-less nodes, validates). Re-opening just returns the state |
+| `grizzly_quest_open` | `path` | opens the document (reads the file, lays out `pos`-less nodes, validates) and answers the summary and the `outline`. Re-opening just returns the state; `disk_error`, `missing` and `conflicts` say what the file on disk did meanwhile |
 | `grizzly_quest_close` | `path`, `discard?` | `{ok:true}` |
-| `grizzly_quest_get` | `path` | the summary + `lua` (canonical text) + `outline`. Works for an unopened file too (reads from disk) |
-| `grizzly_quest_write` | `path`, `lua` | replaces the quest whole. An open document — in memory with an undo snapshot (`saved:false`, then `quest_save`); a closed or new file — the canonical text goes to disk (`saved:true`). Problems are returned but do not block the write — only the build |
 | `grizzly_quest_undo` / `grizzly_quest_redo` | `path` | undo/redo in the document's own ring (the scene undo is untouched). Error `nothing to undo` when empty |
 | `grizzly_quest_apply` | `path`, `ops` | applies the operation list (all or nothing, one undo step). The response + `applied` — how many operations went through |
-| `grizzly_quest_validate` | `path` | the summary + `outline`; an open document is re-validated |
-| `grizzly_quest_save` | `path`, `force?` | `path`, `errors`, `warnings`. Refuses with `modified externally` when the file changed on disk after loading — then `force: true` |
+| `grizzly_quest_save` | `path` | `path`, `errors`, `warnings`. Writes only the values the document changed; a change the file took on disk meanwhile is merged first (the values both changed keep the document's) |
 | `grizzly_quest_reload` | `path` | re-reads the open document from disk (drops unsaved edits and the undo history) |
 | `grizzly_quest_layout` | `path`, `all?` | a deterministic pin-aware top-down layout: full bounds of nested branches and of exclusive trigger trees do not intersect, shared descendants take their own merge blocks between the incoming branches. `all:false` moves only `pos`-less nodes. Response: `moved`, `positions[]` (`id`, `x`, `y`, and `w`/`h` - the node's box as the canvas draws it, sized by its content) |
 | `grizzly_quest_view` | `path`, `frame?` (`"all"` or a node id), `zoom_level?` (0..9, 6 = 100%), `cx?`, `cy?`, `select?` (`"<node>"`/`"a,b"`/`"none"` — the Details panel follows), `slot?` (`"enter:0"`/`"exit:1"`/`"none"` — opens the action under the node in the Details panel), `graph_panel?`/`details?`/`keys?`/`problems?` (`"show"`/`"hide"`/`"toggle"` — the Graph panel, the Details panel, the Shortcuts card, the Problems drawer), `graph_width?`/`details_width?` (pt), `action_split?`/`vars_split?` (shares of their column), `scroll?` (`"top"`/`"bottom"` — the selected node's pane, or the Graph panel with nothing selected; `"action:top"`/`"action:bottom"` — the action pane; `"tasks"`/`"task:<id>"`/`"task:<id>/steps"`/`"variables"` — the Graph panel; an error when that pane is not on screen) | opens/focuses the graph tab and sets the view. The raw response: `path`, `zoom_level`, `zoom` (the level's factor) with `ui_scale` and `title_px`, `center`, `nodes`, `open_tabs`, `graph_panel` (`open`/`rail`/`overlay`/`hidden`), `details`, `drawer`, `minimap`, `panes` (pt; null when not drawn), `pending`; Frame All never goes below 0.75, where a title is 12 px at 100%. The answer describes the frames the call changed (a first `frame:all`, a selection, a slot, a pane, a split, a scroll): the MCP pump holds the request until they are drawn and answers from them, in one call, raw socket included (`answer_only: true` reads the view and applies nothing - the pump's own re-read). Then — `grizzly_screenshot_editor` |
 | `grizzly_quest_edit` | `path`, `op`, `nodes?` (instead of the current selection), `from`/`pin`/`to` | every graph edit the canvas can do, without a mouse: `connect`, `disconnect` (without `to` — the whole pin, without `pin` — all pins), `bypass` (the node stays, the chain closes over it: A→B→C becomes A→C), `delete`, `duplicate`, `connect_nearest`, `select_all`. The response carries the outline — the result reads without a screenshot |
 | `grizzly_quest_find` | `path`, `action?`, `query?`, `select?`, `limit?` | full-text node search over ids/kinds/parameters/conditions/actions/links/comments; `get` with `query` atomically changes the query without navigating, `next`/`previous` focus the result. Tokens are AND-joined, quotes keep a phrase, `-token` excludes |
-| `grizzly_quest_project_find` | `query`, `limit?` | a read-only search over all sorted project `*.nqasset` without opening documents; the query syntax matches `quest_find`. A dirty open document overlays its disk copy. Results carry `source` (`disk`/`memory`); the response — `complete`, `diagnostics`, `generation`, a deterministic `fingerprint` |
-| `grizzly_quest_references` | `type`, `value`, `path?`, `limit?` | exact references only in parameters the current catalog typed as `type`; `path` narrows to one quest and is effectively mandatory for a local `task_id`. The walk includes nested `cond_list`/`cases_cond`; an unknown kind/parameter, a malformed value, Lua or an unreadable file give `complete:false` with precise diagnostics rather than fake completeness |
 | `grizzly_quest_rename_task` | `path`, `from`, `to`, `ack_runtime_identity:true` | renames the task declaration and every catalog-proven `task_id` reference inside one document as one undo step. Refuses before the `Snapshot` on an unknown/Lua/malformed/partially read area. The ack is mandatory: the task id is stored in runtime/save state, old state does not migrate |
 | `grizzly_quest_bookmarks` | `path`, `action?`, `node?` | transient node bookmarks (`get/add/remove/toggle/next/previous/clear`); do not touch the asset/dirty/undo |
 | `grizzly_quest_history` | `path`, `action?` | the transient view history (`get/back/forward/clear`): center, zoom, selection and the Details slot |
 | `grizzly_quest_minimap` | `path`, `action?` | the interactive transient minimap (`get/show/hide/toggle`); `visible` is the toggle, `shown` what the last frame drew (only from 12 nodes, `min_nodes`); the response carries the graph and viewport bounds |
-| `grizzly_quest_lookup` | `type`, `query?`, `limit?` (default 50), `path?` | picker data. `type`: `item_section`, `squad_section`, `level`, `smart`, `story_id`, `profile`, `community`, `info`, `spot_type` (from the linked game, cached) or the document-side `task_id`, `var_name`, `ref_name`, `node_id` (need `path`), `quest_id` (project quests). A `ref_name` entry carries its category (`squad`/`object`/`item`) in `extra`, the same hint the picker shows a human |
-| `grizzly_quest_check_all` | — | the build gate: `passed`, `errors`, `warnings`, `error`, `log[]` (lines `<path>: <code> <node>: <message>`) |
+| `game.lookup` | `type`, `query?`, `limit?` (default 50), `offset?`, `path?` | picker data (any list the game offers, `spawn_section` and `mode` too). `type`: `item_section`, `squad_section`, `level`, `smart`, `story_id`, `profile`, `community`, `info`, `spot_type` (from the linked game, cached) or the document-side `task_id`, `var_name`, `ref_name`, `node_id` (need `path`), `quest_id` (project quests). A `ref_name` entry carries its category (`squad`/`object`/`item`) in `extra`, the same hint the picker shows a human |
+| `asset.check` | `path?`, `fail_on?` (`error`/`warning`), `limit?`, `offset?` | every problem of a file, a folder or the project (the build's checks): `files`, `counts`, `total`, `problems[]` with `file`, `line`, `column`, `end_line`, `end_column`, `code`, `severity`, `text`, `fix`. With `fail_on` it fails with `failed` when it finds one; `Grizzly-Cmd.exe run asset.check fail_on=error` exits 1 then |
+| `asset.find` | `query?` or `refs_to?`, `path?`, `limit?`, `offset?` | the lines that hold a text, or the values and keys that name an id, in every asset of the project: `total`, `results[]` (`file`, `line`, `column`, `text`) |
+| `asset.reference` | `kind` | the format reference of a kind (this document for `quest` and `behaviour`) |
+| `asset.take_theirs` | `path` | an open document whose file changed on disk too takes the file's values where both changed |
 
 ### 8.1 `quest_apply` operations
 

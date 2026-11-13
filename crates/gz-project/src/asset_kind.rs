@@ -14,6 +14,9 @@ pub enum AssetKind {
     Character,
     CharacterTemplate,
     Pda,
+    /// The project file (`<Name>.grizzly`): the project itself, never a tile of the Content
+    /// Browser.
+    Project,
 }
 
 impl AssetKind {
@@ -26,6 +29,7 @@ impl AssetKind {
             AssetKind::Character => "character",
             AssetKind::CharacterTemplate => "character template",
             AssetKind::Pda => "PDA interface",
+            AssetKind::Project => "project",
         }
     }
 
@@ -37,8 +41,41 @@ impl AssetKind {
             AssetKind::Behaviour => ".behasset",
             AssetKind::Character | AssetKind::CharacterTemplate => ".npcasset",
             AssetKind::Pda => ".pdaasset",
+            AssetKind::Project => crate::project::EXTENSION,
         }
     }
+
+    /// The key that names the kind and its format version in the file (`nq = 1`).
+    #[must_use]
+    pub fn header(self) -> &'static str {
+        match self {
+            AssetKind::Quest => "nq",
+            AssetKind::Behaviour => "beh",
+            AssetKind::Character | AssetKind::CharacterTemplate => "npc",
+            AssetKind::Pda => "pda",
+            AssetKind::Project => crate::project::HEADER,
+        }
+    }
+
+    /// The format version this editor writes and the newest it reads.
+    #[must_use]
+    pub fn version(self) -> u32 {
+        match self {
+            AssetKind::Quest | AssetKind::Behaviour | AssetKind::Pda => 1,
+            AssetKind::Character | AssetKind::CharacterTemplate => 1,
+            AssetKind::Project => crate::project::VERSION,
+        }
+    }
+
+    /// The kind of a file: the one of the extension (a character template reads as a character).
+    #[must_use]
+    pub fn of_extension(name: &str) -> Option<AssetKind> {
+        kind_of(name, None)
+    }
+
+    /// Every kind with a file of its own, one per extension.
+    pub const FILES: [AssetKind; 4] =
+        [AssetKind::Quest, AssetKind::Behaviour, AssetKind::Character, AssetKind::Pda];
 }
 
 /// The extensions of the editor's own kinds: the one list every caller asks.
@@ -77,6 +114,8 @@ pub fn kind_of(name: &str, head: Option<&[u8]>) -> Option<AssetKind> {
         Some(AssetKind::Behaviour)
     } else if is(".pdaasset") {
         Some(AssetKind::Pda)
+    } else if is(crate::project::EXTENSION) {
+        Some(AssetKind::Project)
     } else if is(".npcasset") {
         let head = head.map(|h| h.get(..HEAD_LEN).unwrap_or(h));
         if head.is_some_and(|h| head_says(h, "abstract", "true")) {

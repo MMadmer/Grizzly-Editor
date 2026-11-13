@@ -64,13 +64,13 @@ pub(crate) fn s(text: &str) -> Value {
     Value::String(text.to_owned())
 }
 
-/// Opens a tab by its kind through the shell's own opener (`ui_tab action=open`), from anywhere.
+/// Opens a tab by its kind through the shell's own opener (`ui.tab action=open`), from anywhere.
 pub(crate) fn open_tab(editor: &Arc<Editor>, kind: &str) {
     let ed = editor.clone();
     let kind = kind.to_owned();
     let a = args([("action", s("open")), ("kind", s(&kind))]);
     let _task = editor.exec.spawn(async move {
-        let reply = ed.call("ui_tab", a, ed.ui_origin()).await;
+        let reply = ed.call("ui.tab", a, ed.ui_origin()).await;
         if !ok(&reply) {
             ed.log.warn(format!("the {kind} tab did not open: {}", error_text(&reply)));
         }

@@ -1,38 +1,40 @@
-//! The Mod menu and the project toolbar's Build Mod (docs/UI_DESIGN.md, section 5).
+//! The Mod menu and the project toolbar's Build Mod (docs/UI_DESIGN.md, section 5), as actions.
 //!
 //! The menu's rows stand in the design's order - Mod Settings, Characters, World Rules, Screens
 //! & Music, PDA Interface | Build Into Game, Build to Folder..., Export Flat Gamedata..., Bake
 //! Scene Layer > | Package Release..., Publish Release..., Releases | Submit to Mod Browser... -
-//! as [`MOD_MENU`] gives each its group and order. This package adds the rows whose targets it
-//! owns (Mod Settings, the builds, Package Release); the package that owns any other row adds it
-//! at its slot with `ShellBuilder::menu_item("Mod", group, order, id)` (a submenu by
-//! `MenuEntry::submenu`) and registers the `UiCommand` of that id, so no row stands without a
-//! command. The C++ specification is `MenuMod` of `UIMainMenuForm.cpp` and
-//! `UITopBarForm::DrawProject`.
+//! as [`MOD_MENU`] gives each its group and order. This package adds the actions whose targets it
+//! owns (Mod Settings, the builds, Package Release); the package that owns any other row adds its
+//! action and the row at its slot (`ShellBuilder::menu_action("Mod", group, order, id, label)`).
+//! Every row runs a command: the tabs open through `ui.tab`, the builds through `mod.build`.
 
-use gz_app::{DocCx, MenuContent, MenuEntry, OpenRequest, ShellBuilder, UiCommand};
-use gz_editor::{Editor, SmolStr};
+use std::sync::Arc;
+
+use gz_app::{Action, ActionCx, DocCx, Enabled, Scope, ShellBuilder, args};
+use gz_editor::{Editor, Origin, Registry, Reply, Spec, json};
 use gz_ui::{Icon, Kind, MenuItem, menu_item};
+use schemars::JsonSchema;
+use serde::Deserialize;
 
 use crate::build::{self, build_running, build_target_text, can_build_into_game, job_status_text};
 
-pub const MOD_SETTINGS: &str = "COMMAND_MOD_EDIT_MANIFEST";
-pub const CHARACTERS: &str = "COMMAND_MOD_CHARACTERS";
-pub const WORLD_RULES: &str = "COMMAND_MOD_WORLD";
-pub const SCREENS: &str = "COMMAND_MOD_SCREENS";
-pub const PDA: &str = "COMMAND_MOD_PDA";
-pub const BUILD_INTO_GAME: &str = "COMMAND_MOD_BUILD";
-pub const BUILD_TO_FOLDER: &str = "COMMAND_MOD_BUILD_TO_FOLDER";
-pub const EXPORT_FLAT: &str = "COMMAND_MOD_EXPORT_FLAT";
-/// Not a command: the submenu its owner fills (Spawn Layer..., Collision Overlay..., Visual
+pub const MOD_SETTINGS: &str = "mod.settings";
+pub const CHARACTERS: &str = "mod.characters";
+pub const WORLD_RULES: &str = "mod.world_rules";
+pub const SCREENS: &str = "mod.screens";
+pub const PDA: &str = "mod.pda";
+pub const BUILD_INTO_GAME: &str = "mod.build_into_game";
+pub const BUILD_TO_FOLDER: &str = "mod.build_to_folder";
+pub const EXPORT_FLAT: &str = "mod.export_flat";
+/// Not an action: the submenu its owner fills (Spawn Layer..., Collision Overlay..., Visual
 /// Overlay..., Level Cut...).
 pub const BAKE_SCENE_LAYER: &str = "Bake Scene Layer";
-pub const PACKAGE: &str = "COMMAND_MOD_PACKAGE";
-pub const PUBLISH: &str = "COMMAND_MOD_PUBLISH";
-pub const RELEASES: &str = "COMMAND_MOD_RELEASES";
-pub const CATALOG: &str = "COMMAND_MOD_CATALOG";
+pub const PACKAGE: &str = "mod.package";
+pub const PUBLISH: &str = "mod.publish";
+pub const RELEASES: &str = "mod.releases";
+pub const CATALOG: &str = "mod.submit";
 
-/// Every row of the Mod menu: its command id (or, for Bake Scene Layer, the submenu's name), its
+/// Every row of the Mod menu: its action (or, for Bake Scene Layer, the submenu's name), its
 /// group (a separator stands between groups) and its order in the group.
 pub const MOD_MENU: [(&str, i32, i32); 13] = [
     (MOD_SETTINGS, 0, 0),
@@ -56,75 +58,67 @@ pub fn mod_menu_slot(id: &str) -> Option<(i32, i32)> {
     MOD_MENU.iter().find(|(i, _, _)| *i == id).map(|(_, g, o)| (*g, *o))
 }
 
-fn has_project(editor: &Editor, _tab: &str) -> bool {
-    editor.project_opt().is_some()
+/// An action of the Mod menu is on with a project open.
+#[must_use]
+pub fn with_project(cx: &ActionCx<'_>) -> Enabled {
+    Enabled::when(cx.editor.project_opt().is_some(), "Open a project first.")
 }
 
-/// A row of the Mod menu at its slot, with the menu's own label ("Build to Folder...").
-fn row(b: &mut ShellBuilder, command: &str, label: Option<&str>) {
-    let (group, order) = mod_menu_slot(command).unwrap_or((9, 0));
-    b.menu_entry(MenuEntry {
-        menu: SmolStr::new("Mod"),
-        submenu: None,
-        group,
-        order,
-        content: MenuContent::Command { command: SmolStr::new(command), label: label.map(SmolStr::new) },
-    });
+/// A row of the Mod menu at its slot.
+pub fn row(b: &mut ShellBuilder, id: &str, label: Option<&str>) {
+    let (group, order) = mod_menu_slot(id).unwrap_or((9, 0));
+    b.menu_action("Mod", group, order, id, label);
+}
+
+fn build_to(to: &'static str) -> gz_editor::Args {
+    args(&[("to", to)])
 }
 
 pub(crate) fn install(b: &mut ShellBuilder) {
-    b.command(
-        UiCommand::new(MOD_SETTINGS, "Mod", "Mod Settings", Icon::Settings, |cx| {
-            cx.requests.open(OpenRequest::kind(crate::settings::TAB))
-        })
-        .enabled(has_project),
+    b.action(
+        Action::new(MOD_SETTINGS, "Mod Settings", "Mod", "ui.tab")
+            .icon(Icon::Package)
+            .args(|_| args(&[("action", "open"), ("kind", crate::settings::TAB)]))
+            .enabled(with_project),
     );
-    b.command(
-        UiCommand::new(
-            BUILD_INTO_GAME,
-            "Mod",
-            "Build Into Game",
-            Icon::BuildMod,
-            build::request_build_into_game,
-        )
-        .keys("Ctrl+B")
-        .enabled(|ed, _| can_build_into_game(ed)),
+    b.action(
+        Action::new(BUILD_INTO_GAME, "Build Into Game", "Mod", "mod.build")
+            .icon(Icon::BuildMod)
+            .keys(const { &[gz_app::Chord::ctrl(egui::Key::B)] })
+            // a graph keeps Ctrl+B for its bookmarks
+            .scope(Scope::Tab(&["level"]))
+            .args(|_| build_to("game"))
+            .enabled(|cx| {
+                Enabled::when(can_build_into_game(cx.editor), "Link a game and set a valid module id first.")
+            }),
     );
-    b.command(
-        UiCommand::new(BUILD_TO_FOLDER, "Mod", "Build to Folder", Icon::GameFolder, |cx| {
-            build::request_export(cx, false)
-        })
-        .enabled(has_project),
+    b.action(
+        Action::new(BUILD_TO_FOLDER, "Build to Folder...", "Mod", "mod.build")
+            .icon(Icon::GameFolder)
+            .args(|_| build_to("folder"))
+            .enabled(with_project),
     );
-    b.command(
-        UiCommand::new(EXPORT_FLAT, "Mod", "Export Flat Gamedata", Icon::FileArchive, |cx| {
-            build::request_export(cx, true)
-        })
-        .enabled(has_project),
+    b.action(
+        Action::new(EXPORT_FLAT, "Export Flat Gamedata...", "Mod", "mod.build")
+            .icon(Icon::FileArchive)
+            .args(|_| build_to("flat"))
+            .enabled(with_project),
     );
-    b.command(
-        UiCommand::new(PACKAGE, "Mod", "Package Release", Icon::Package, crate::package::request)
-            .enabled(has_project),
+    b.action(
+        Action::new(PACKAGE, "Package Release...", "Mod", "mod.build")
+            .icon(Icon::Package)
+            .args(|_| build_to("release"))
+            .enabled(with_project),
     );
-    row(b, MOD_SETTINGS, None);
-    row(b, BUILD_INTO_GAME, None);
-    row(b, BUILD_TO_FOLDER, Some("Build to Folder..."));
-    row(b, EXPORT_FLAT, Some("Export Flat Gamedata..."));
-    row(b, PACKAGE, Some("Package Release..."));
+    for id in [MOD_SETTINGS, BUILD_INTO_GAME, BUILD_TO_FOLDER, EXPORT_FLAT, PACKAGE] {
+        row(b, id, None);
+    }
     b.project_toolbar(0, build_mod);
 }
 
-/// What the Build Mod split's menu picked.
-enum Picked {
-    IntoGame,
-    ToFolder,
-    Flat,
-    Package,
-}
-
 /// Shipping the mod is the most-used action of the editor: the one Primary button of the row, on
-/// every tab (`UITopBarForm::DrawProject`). Its label keeps its width: what a running job does is
-/// in the tip, and a click brings the job's card up.
+/// every tab. Its label keeps its width: what a running job does is in the tip, and a click brings
+/// the job's card up.
 fn build_mod(tb: &mut gz_ui::Toolbar<'_, '_>, cx: &mut DocCx<'_>) {
     crate::cards::ensure(cx.editor);
     let editor = cx.editor.clone();
@@ -141,18 +135,14 @@ fn build_mod(tb: &mut gz_ui::Toolbar<'_, '_>, cx: &mut DocCx<'_>) {
     tb.group(100);
     let can = can_build_into_game(&editor);
     if tb.split("build_mod", Icon::BuildMod, "Build Mod", &tip, can, Kind::Primary, |ui| {
-        if menu_item(
-            ui,
-            "Build Into Game",
-            MenuItem { icon: Icon::BuildMod, enabled: !busy && can, ..MenuItem::default() },
-        ) {
-            picked = Some(Picked::IntoGame);
-        }
-        if menu_item(ui, "Build to Folder...", MenuItem { enabled: !busy, ..MenuItem::default() }) {
-            picked = Some(Picked::ToFolder);
-        }
-        if menu_item(ui, "Export Flat Gamedata...", MenuItem { enabled: !busy, ..MenuItem::default() }) {
-            picked = Some(Picked::Flat);
+        for (id, icon, label, on) in [
+            (BUILD_INTO_GAME, Icon::BuildMod, "Build Into Game", !busy && can),
+            (BUILD_TO_FOLDER, Icon::GameFolder, "Build to Folder...", !busy),
+            (EXPORT_FLAT, Icon::FileArchive, "Export Flat Gamedata...", !busy),
+        ] {
+            if menu_item(ui, label, MenuItem { icon, enabled: on, ..MenuItem::default() }) {
+                picked = Some(id);
+            }
         }
         ui.separator();
         if menu_item(
@@ -160,18 +150,99 @@ fn build_mod(tb: &mut gz_ui::Toolbar<'_, '_>, cx: &mut DocCx<'_>) {
             "Package Release...",
             MenuItem { icon: Icon::Package, enabled: !busy, ..MenuItem::default() },
         ) {
-            picked = Some(Picked::Package);
+            picked = Some(PACKAGE);
         }
     }) {
-        picked = Some(Picked::IntoGame);
+        picked = Some(BUILD_INTO_GAME);
     }
-    match picked {
-        Some(Picked::IntoGame) => build::request_build_into_game(cx),
-        Some(Picked::ToFolder) => build::request_export(cx, false),
-        Some(Picked::Flat) => build::request_export(cx, true),
-        Some(Picked::Package) => crate::package::request(cx),
-        None => {}
+    if let Some(id) = picked {
+        cx.requests.action(id);
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum BuildTo {
+    /// Into the linked game, `<game>\modules\<id>`.
+    #[default]
+    Game,
+    /// Into a folder of the author's (`target`); the window asks for it.
+    Folder,
+    /// A flat `gamedata_<id>` in a folder (`target`); the window asks for it.
+    Flat,
+    /// The window's Package Release dialog (over MCP: `mod_package`).
+    Release,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct BuildParams {
+    /// Where the module goes.
+    #[serde(default)]
+    to: BuildTo,
+    /// The folder for folder and flat over MCP (the window asks for it).
+    #[serde(default)]
+    target: Option<String>,
+}
+
+/// `mod.build`: from the window, the build flows with their card and result dialog (Build to
+/// Folder, Export Flat and Package Release open their dialogs); over MCP the build itself, its
+/// answer when it ended.
+async fn mod_build(ed: Arc<Editor>, p: BuildParams, origin: Origin) -> Reply {
+    ed.project()?;
+    let window = origin != Origin::Mcp && gz_app::UiQueue::of(&ed).is_ok();
+    if window {
+        let to = p.to;
+        gz_app::on_ui(&ed, move |shell, ctx| {
+            shell.with_cx(ctx, |cx| match to {
+                BuildTo::Game => build::request_build_into_game(cx),
+                BuildTo::Folder => build::request_export(cx, false),
+                BuildTo::Flat => build::request_export(cx, true),
+                BuildTo::Release => crate::package::request(cx),
+            });
+            Ok(())
+        })
+        .await?;
+        return Ok(json!({ "started": true }));
+    }
+    let mut a = gz_editor::Args::new();
+    match p.to {
+        BuildTo::Game => {}
+        BuildTo::Folder | BuildTo::Flat => {
+            let t = p
+                .target
+                .filter(|t| !t.is_empty())
+                .ok_or_else(|| gz_editor::CmdError::invalid("folder and flat take target="))?;
+            a.insert("target".into(), json!(t));
+            if p.to == BuildTo::Flat {
+                a.insert("flat".into(), json!(true));
+            }
+        }
+        BuildTo::Release => {
+            return Err(gz_editor::CmdError::new(
+                "refused",
+                "a release is packaged with mod_package over MCP",
+            ));
+        }
+    }
+    let reply = ed.call("mod_export", a, origin).await;
+    if reply.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+        Ok(reply)
+    } else {
+        let why =
+            reply.get("error").and_then(serde_json::Value::as_str).unwrap_or("the build failed").to_owned();
+        Err(gz_editor::CmdError::new("failed", why))
+    }
+}
+
+/// Registers `mod.build`.
+pub(crate) fn register(reg: &mut Registry) {
+    reg.area("mod", "The module: its settings, building it, packaging it");
+    reg.cmd(
+        Spec::write("mod.build", "Builds the module into the linked game, a folder or a flat gamedata; the window asks what it needs.")
+            .example("to=game"),
+        mod_build,
+    );
 }
 
 #[cfg(test)]

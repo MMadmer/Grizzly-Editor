@@ -18,6 +18,7 @@ gz-vfs.workspace = true
 gz-game.workspace = true
 gz-mod.workspace = true
 gz-pda.workspace = true
+gz-asset.workspace = true
 gz-screens.workspace = true
 gz-luadata.workspace = true
 gz-fmt-tex.workspace = true

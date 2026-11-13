@@ -66,10 +66,10 @@ fn toggle(args: &Args, key: &str, current: bool) -> Result<Option<bool>, CmdErro
 async fn open_tab(ed: &Arc<Editor>, wire: &str, id: &str) -> Result<(), CmdError> {
     let mut a = Args::new();
     a.insert("action".into(), json!("open"));
-    a.insert("id".into(), json!(id));
+    a.insert("doc".into(), json!(id));
     a.insert("kind".into(), json!(id.split(':').next().unwrap_or("quest")));
     a.insert("path".into(), json!(wire));
-    let reply = ed.call("ui_tab", a, ed.ui_origin()).await;
+    let reply = ed.call("ui.tab", a, ed.ui_origin()).await;
     if reply.get("ok").and_then(Value::as_bool) == Some(true) {
         return Ok(());
     }
@@ -363,12 +363,7 @@ async fn quest_open(ed: Arc<Editor>, args: Args, o: Origin) -> Reply {
             ed.log.warn(format!("[nq] the tab of {wire} did not come up: {}", e.message));
         }
     }
-    // an open document answers quest_validate with exactly what quest_open answers
-    let reply = ed.call("quest_validate", args, o).await;
-    if reply.get("ok").and_then(Value::as_bool) == Some(true) {
-        return Ok(reply);
-    }
-    Err(refused(reply.get("error").and_then(Value::as_str).unwrap_or("quest_open failed")))
+    gz_nq::tab_handlers::quest_open(ed, args, o).await
 }
 
 /// The graph's tab up before a tab command acts, as the C++ `OpenMcpWindow` did: the document

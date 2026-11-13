@@ -11,9 +11,9 @@
 //!   Name and Bio (a row per language), Appearance, Profile, Dialogs, the Starting Kit table and
 //!   Trade. The form binds to the RAW stored values (`gz_characters::text_raw`), never the
 //!   resolved ones; what the base gives shows as a hint or a muted row. Ctrl+S saves through
-//!   `characters_write`, Delete... asks through `dlg.delete_character` and runs
-//!   `characters_delete`; unsaved edits ask before any switch. Validation runs on change, on the
-//!   pools.
+//!   `Characters::save` (only what changed reaches the file), Delete... asks through
+//!   `dlg.delete_character` and runs `file.delete`; unsaved edits ask before any switch.
+//!   Validation runs on change, on the pools.
 //! - **World Rules** ([`world`]): the `world_rules` singleton tab, saved to `mod.ltx` as it is
 //!   edited through `world_set`: Original Game, Player Start and Starting Kit on the surface,
 //!   Applies On, Playable Area and Transitions under one folded More; a problems bar and drawer
@@ -37,9 +37,10 @@
 //! [`local::local_dirty_dot`], [`local::local_problems_drawer`] and
 //! [`local::local_level_picker`] (a searchable list of the linked game's levels).
 //!
-//! Nothing here writes a file or computes inside a frame: every edit is a command that exists
-//! (`characters_write`, `characters_delete`, `world_set`, `place_spawn`, `focus_object`,
-//! `preview_model`); what a frame shows comes from snapshots and from data read on the pools.
+//! Nothing here writes a file or computes inside a frame: every edit is a command or a service
+//! call on the pools (`Characters::save`, `file.delete`, `world_set`, `place_spawn`,
+//! `focus_object`, `preview_model`); what a frame shows comes from snapshots and from data read
+//! on the pools.
 
 #![forbid(unsafe_code)]
 
@@ -53,8 +54,8 @@ pub mod portraits;
 mod view_cmd;
 pub mod world;
 
-use gz_app::{MenuContent, MenuEntry, OpenRequest, ShellBuilder, UiCommand};
-use gz_editor::{Editor, Registry, SmolStr};
+use gz_app::{Action, ShellBuilder, args};
+use gz_editor::Registry;
 use gz_ui::Icon;
 
 pub use picker::item_picker;
@@ -62,40 +63,24 @@ pub use picker::item_picker;
 /// The crate's name, as the registry records who registered a command.
 const AREA: &str = "gz-ui-world";
 
-fn has_project(editor: &Editor, _tab: &str) -> bool {
-    editor.project_opt().is_some()
-}
-
-/// A row of the Mod menu at its slot.
-fn menu_row(b: &mut ShellBuilder, command: &str) {
-    let (group, order) = gz_ui_mod::mod_menu_slot(command).unwrap_or((0, 9));
-    b.menu_entry(MenuEntry {
-        menu: SmolStr::new("Mod"),
-        submenu: None,
-        group,
-        order,
-        content: MenuContent::Command { command: SmolStr::new(command), label: None },
-    });
-}
-
 /// Plugs the Characters and World Rules tabs and their Mod menu rows into the shell.
 pub fn install(b: &mut ShellBuilder) {
     characters::install(b);
     world::install(b);
-    b.command(
-        UiCommand::new(gz_ui_mod::menu::CHARACTERS, "Mod", "Characters", Icon::Character, |cx| {
-            cx.requests.open(OpenRequest::kind(characters::TAB))
-        })
-        .enabled(has_project),
+    b.action(
+        Action::new(gz_ui_mod::menu::CHARACTERS, "Characters", "Mod", "ui.tab")
+            .icon(Icon::Character)
+            .args(|_| args(&[("action", "open"), ("kind", characters::TAB)]))
+            .enabled(gz_ui_mod::menu::with_project),
     );
-    b.command(
-        UiCommand::new(gz_ui_mod::menu::WORLD_RULES, "Mod", "World Rules", Icon::World, |cx| {
-            cx.requests.open(OpenRequest::kind(world::TAB))
-        })
-        .enabled(has_project),
+    b.action(
+        Action::new(gz_ui_mod::menu::WORLD_RULES, "World Rules", "Mod", "ui.tab")
+            .icon(Icon::World)
+            .args(|_| args(&[("action", "open"), ("kind", world::TAB)]))
+            .enabled(gz_ui_mod::menu::with_project),
     );
-    menu_row(b, gz_ui_mod::menu::CHARACTERS);
-    menu_row(b, gz_ui_mod::menu::WORLD_RULES);
+    gz_ui_mod::menu::row(b, gz_ui_mod::menu::CHARACTERS, None);
+    gz_ui_mod::menu::row(b, gz_ui_mod::menu::WORLD_RULES, None);
 }
 
 /// The commands of this package: `characters_view`, `world_view`.

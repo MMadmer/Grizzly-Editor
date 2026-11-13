@@ -34,6 +34,7 @@ gz-corpus = { path = "crates/gz-corpus" }
 # layer 1
 gz-ltx = { path = "crates/gz-ltx" }
 gz-luadata = { path = "crates/gz-luadata" }
+gz-asset = { path = "crates/gz-asset" }
 gz-chunk = { path = "crates/gz-chunk" }
 gz-ico = { path = "crates/gz-ico" }
 gz-fmt-object = { path = "crates/gz-fmt-object" }
@@ -60,6 +61,7 @@ gz-world = { path = "crates/gz-world" }
 gz-build = { path = "crates/gz-build" }
 gz-release = { path = "crates/gz-release" }
 gz-github = { path = "crates/gz-github" }
+gz-update = { path = "crates/gz-update" }
 gz-catalog = { path = "crates/gz-catalog" }
 gz-scene = { path = "crates/gz-scene" }
 gz-export-level = { path = "crates/gz-export-level" }

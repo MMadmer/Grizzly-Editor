@@ -1,11 +1,12 @@
-//! The canonical writer of `NqLua.cpp`: the same bytes for the same value. Layout, key quoting,
-//! number formatting and string escaping follow the C++ line by line, including where it is
+//! The canonical writer: the same bytes for the same value, for new files and for the
+//! fragments a document inserts. Layout, key quoting, number formatting and string escaping
+//! are fixed, including where they are
 //! odd (a value that needs a long bracket cuts the inline form short, see [`inline_into`]).
 
 use crate::num::format_g;
 use crate::value::{Table, Value};
 
-/// The line width the pretty form fits into (`kWidth`).
+/// The line width the pretty form fits into.
 pub const WIDTH: usize = 100;
 
 const KEYWORDS: [&str; 22] = [
@@ -13,7 +14,7 @@ const KEYWORDS: [&str; 22] = [
     "not", "or", "repeat", "return", "then", "true", "until", "while", "goto",
 ];
 
-/// The part of a key the C++ sees through `c_str()`: everything before the first NUL.
+/// The part of a key a C string holds: everything before the first NUL.
 fn c_str(s: &str) -> &str {
     s.split('\0').next().unwrap_or("")
 }
@@ -24,7 +25,7 @@ pub fn is_keyword(s: &str) -> bool {
     KEYWORDS.contains(&c_str(s))
 }
 
-/// A name that can stand as a key without brackets (`IsIdent`): ASCII letters, digits and `_`,
+/// A name that can stand as a key without brackets: ASCII letters, digits and `_`,
 /// not starting with a digit, not a reserved word.
 #[must_use]
 pub fn is_ident(s: &str) -> bool {
@@ -55,7 +56,7 @@ pub fn format_number(n: f64) -> String {
     if parse_c(&s) == Some(n) { s } else { format_g(n, 17) }
 }
 
-/// A number as `AsString` gives it: a whole number below 9e15 as an integer, anything else
+/// A number as [`Value::to_text`] gives it: a whole number below 9e15 as an integer, anything else
 /// `%.15g`.
 #[must_use]
 pub fn number_to_text(n: f64) -> String {
@@ -94,7 +95,7 @@ pub fn wants_long_bracket(s: &str) -> bool {
     nl
 }
 
-/// Appends a string in double quotes (`QuoteString`).
+/// Appends a string in double quotes.
 pub fn quote_into(out: &mut String, s: &str) {
     out.push('"');
     for ch in s.chars() {
@@ -113,7 +114,7 @@ pub fn quote_into(out: &mut String, s: &str) {
     out.push('"');
 }
 
-/// A string in double quotes, escaped (`QuoteString`).
+/// A string in double quotes, escaped.
 #[must_use]
 pub fn quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
@@ -121,7 +122,7 @@ pub fn quote(s: &str) -> String {
     out
 }
 
-/// Appends a string in a long bracket whose closer the text does not hold (`LongString`).
+/// Appends a string in a long bracket whose closer the text does not hold.
 pub fn long_string_into(out: &mut String, s: &str) {
     let mut level = usize::from(s.ends_with(']'));
     loop {
@@ -141,7 +142,7 @@ pub fn long_string_into(out: &mut String, s: &str) {
     out.push(']');
 }
 
-/// Appends a key: bare when it is a name, `["..."]` otherwise (`WriteKey`).
+/// Appends a key: bare when it is a name, `["..."]` otherwise.
 pub fn key_into(out: &mut String, k: &str) {
     if is_ident(k) {
         out.push_str(k);
@@ -160,8 +161,8 @@ pub fn key(k: &str) -> String {
     out
 }
 
-/// Appends the single-line form (`Inline`). False when a value needs a long bracket; what was
-/// appended up to that point stays, as in the C++.
+/// Appends the single-line form. False when a value needs a long bracket; what was appended
+/// up to that point stays.
 pub fn inline_into(out: &mut String, v: &Value) -> bool {
     match v {
         Value::Nil => out.push_str("nil"),
@@ -217,7 +218,7 @@ fn indent(out: &mut String, n: usize) {
     out.extend(std::iter::repeat_n(' ', n));
 }
 
-/// Appends the pretty form (`Pretty`): inline when it fits in what is left of the line, one
+/// Appends the pretty form: inline when it fits in what is left of the line, one
 /// entry per line otherwise.
 pub fn pretty_into(out: &mut String, v: &Value, ind: usize, first_line_used: usize) {
     let Value::Table(t) = v else {
@@ -257,7 +258,7 @@ pub fn pretty_into(out: &mut String, v: &Value, ind: usize, first_line_used: usi
     out.push('}');
 }
 
-/// Any value as Lua text at `indent` spaces (`NqLua::WriteValue`).
+/// Any value as Lua text at `indent` spaces.
 #[must_use]
 pub fn write_value(v: &Value, indent: usize) -> String {
     let mut out = String::new();
@@ -265,7 +266,7 @@ pub fn write_value(v: &Value, indent: usize) -> String {
     out
 }
 
-/// Appends a node table in the node layout (`WriteNodeAt`): `{ id = .., kind = ..[, once = ..],`
+/// Appends a node table in the node layout: `{ id = .., kind = ..[, once = ..],`
 /// then one field per line, the closing brace on the last field's line; a node whose inline
 /// form fits stays on one line. The array part of the table is not written.
 pub fn node_into(out: &mut String, nv: &Value, ind: usize) {
@@ -305,7 +306,7 @@ pub fn node_into(out: &mut String, nv: &Value, ind: usize) {
     }
 }
 
-/// A node table as Lua text (`NqLua::WriteNode`, given the node already as a value).
+/// A node table as Lua text.
 #[must_use]
 pub fn write_node(nv: &Value, indent: usize) -> String {
     let mut out = String::new();
@@ -313,13 +314,13 @@ pub fn write_node(nv: &Value, indent: usize) -> String {
     out
 }
 
-/// Text on one line: newlines and tabs become spaces (`OneLine`).
+/// Text on one line: newlines and tabs become spaces.
 #[must_use]
 pub fn one_line(s: &str) -> String {
     s.chars().map(|c| if matches!(c, '\n' | '\r' | '\t') { ' ' } else { c }).collect()
 }
 
-/// Every line of `text` as a `-- ` comment line (the outline header of `NqLua::Write`).
+/// Every line of `text` as a `-- ` comment line.
 #[must_use]
 pub fn comment_block(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 16);
@@ -334,11 +335,11 @@ pub fn comment_block(text: &str) -> String {
     out
 }
 
-/// A whole asset file as `NqLua::Write` lays it out: `head` (the comment header, written as
+/// A whole new asset file: `head` (comment lines, written as
 /// given), then `return {`, one top-level key per line - `nodes` as a list with a blank line
 /// between nodes, `tasks` one task per line when it does not fit - and `}`.
 ///
-/// Top-level keys are written as they are, without brackets, as the C++ does.
+/// Top-level keys are written as they are, without brackets.
 #[must_use]
 pub fn write_asset(head: &str, top: &Table) -> String {
     let mut out = String::with_capacity(head.len() + 4096);

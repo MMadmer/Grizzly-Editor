@@ -85,7 +85,7 @@ impl GameLink {
         }))
     }
 
-    /// The linked game's folder as `project.ltx` names it (`""`: none).
+    /// The game's folder: the project's own, else the editor's default (`""`: none).
     #[must_use]
     pub fn root(&self) -> String {
         self.project.game_root()
@@ -211,8 +211,7 @@ impl GameLink {
         .await
     }
 
-    /// The game modes a module can target (`EditorGameModes::Scan`). Not linked: no modes and
-    /// the reason.
+    /// The game modes a module can target. No game: no modes and the reason.
     pub async fn modes(&self) -> Arc<ModeScan> {
         let (files, rev) = match self.snapshot().await {
             Ok(s) => s,
@@ -230,7 +229,7 @@ impl GameLink {
         value.as_ref().clone().map_err(GameError::Read)
     }
 
-    /// The version of the linked game's `xrEngine.exe` (`EditorMod::LinkedGameVersion`).
+    /// The version of the game's `xrEngine.exe`.
     pub async fn game_version(&self) -> Option<String> {
         let root = self.root();
         if root.is_empty() {

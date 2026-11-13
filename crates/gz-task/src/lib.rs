@@ -16,7 +16,7 @@ mod wake;
 pub use cancel::{Cancel, Cancelled};
 pub use exec::{ExecOptions, Executors, Runtime};
 pub use jobs::{
-    JobBusy, JobCtx, JobError, JobId, JobInfo, JobScope, JobState, Jobs, current_scope, in_scope,
+    JobBusy, JobCtx, JobError, JobId, JobInfo, JobScope, JobState, Jobs, Owner, current_scope, in_scope,
     in_scope_sync,
 };
 pub use wake::Wake;

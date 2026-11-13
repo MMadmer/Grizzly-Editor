@@ -56,7 +56,7 @@ pub mod pending;
 pub mod texture;
 pub mod texture_load;
 
-use gz_app::{DocCx, OpenRequest, ShellBuilder, UiCommand};
+use gz_app::{Action, DocCx, ShellBuilder, args};
 use gz_editor::Registry;
 use gz_ui::Icon;
 use gz_ui::dialog::{self, Answer, ConfirmSpec};
@@ -67,18 +67,13 @@ use crate::paths::EditorDirs;
 /// The crate's name, as the registry records who registered a command.
 const AREA: &str = "gz-ui-previews";
 
-/// A singleton tab: brought up when it is open, opened otherwise.
-fn open_singleton(cx: &mut DocCx<'_>, kind: &str) {
-    cx.requests.open(OpenRequest { id: Some(kind.to_owned()), ..OpenRequest::kind(kind) });
-}
-
 fn asker(cx: &DocCx<'_>) -> dialog::Asker {
     if cx.editor.flags.unattended { dialog::Asker::Unattended } else { dialog::Asker::Ui }
 }
 
 /// Synchronize Textures...: asks, then every source picture against its description and game
 /// texture, as a job (`CommandRefreshTextures`).
-fn synchronize_textures(cx: &mut DocCx<'_>) {
+pub(crate) fn synchronize_textures(cx: &mut DocCx<'_>) {
     let spec = ConfirmSpec {
         id: "sync_textures".to_owned(),
         title: "Synchronize Textures".to_owned(),
@@ -136,7 +131,7 @@ fn synchronize_textures(cx: &mut DocCx<'_>) {
 
 /// Synchronize Sounds...: the orphans are counted off the frame, then the question names them
 /// (`CommandSyncSounds`).
-fn synchronize_sounds(cx: &mut DocCx<'_>) {
+pub(crate) fn synchronize_sounds(cx: &mut DocCx<'_>) {
     let editor = cx.editor.clone();
     let asker = asker(cx);
     let dirs = EditorDirs::of(&editor);
@@ -204,63 +199,63 @@ pub fn install(b: &mut ShellBuilder) {
     b.document(textures::KIND, textures::factory);
     b.document(sounds::KIND, sounds::factory);
 
-    b.command(UiCommand::new(
-        "COMMAND_LIGHTANIM_EDITOR",
-        "Libraries",
-        "Light Animations",
-        Icon::Light,
-        |cx| open_singleton(cx, lanim::KIND),
-    ));
-    b.command(UiCommand::new(
-        "COMMAND_IMAGE_EDITOR",
-        "Libraries",
-        "Texture Library",
-        Icon::FileTexture,
-        |cx| open_singleton(cx, textures::KIND),
-    ));
-    b.command(UiCommand::new("COMMAND_SOUND_EDITOR", "Libraries", "Sound Library", Icon::FileSound, |cx| {
-        open_singleton(cx, sounds::KIND)
-    }));
+    let open_tab =
+        |id: &'static str, title: &'static str, icon: Icon, kind: &'static str| (id, title, icon, kind);
+    for (id, title, icon, kind) in [
+        open_tab("library.light_animations", "Light Animations", Icon::Light, lanim::KIND),
+        open_tab("library.textures", "Texture Library", Icon::FileTexture, textures::KIND),
+        open_tab("library.sounds", "Sound Library", Icon::FileSound, sounds::KIND),
+    ] {
+        let a = Action::new(id, title, "Libraries", "ui.tab").icon(icon);
+        b.action(match kind {
+            k if k == lanim::KIND => {
+                a.args(|_| args(&[("action", "open"), ("doc", lanim::KIND), ("kind", lanim::KIND)]))
+            }
+            k if k == textures::KIND => {
+                a.args(|_| args(&[("action", "open"), ("doc", textures::KIND), ("kind", textures::KIND)]))
+            }
+            _ => a.args(|_| args(&[("action", "open"), ("doc", sounds::KIND), ("kind", sounds::KIND)])),
+        });
+    }
     // the library and New Textures share one tab: the library gives way unless it holds
     // unsaved changes, which the shell asks about first
-    b.command(UiCommand::new(
-        "COMMAND_CHECK_TEXTURES",
-        "Libraries",
-        "Check New Textures",
-        Icon::Search,
-        |cx| {
-            cx.requests.open(OpenRequest {
-                path: Some("import".to_owned()),
-                arg: Some("import".to_owned()),
-                ..OpenRequest::kind(textures::KIND)
-            });
-        },
-    ));
-    b.command(UiCommand::new(
-        "COMMAND_REFRESH_TEXTURES",
-        "Libraries",
-        "Synchronize Textures...",
-        Icon::Refresh,
-        synchronize_textures,
-    ));
-    b.command(UiCommand::new(
-        "COMMAND_SYNC_SOUNDS",
-        "Libraries",
-        "Synchronize Sounds...",
-        Icon::Refresh,
-        synchronize_sounds,
-    ));
-
-    b.menu_item("Libraries", 0, 0, "COMMAND_LIGHTANIM_EDITOR");
-    b.menu_item("Libraries", 0, 1, "COMMAND_IMAGE_EDITOR");
-    b.menu_item("Libraries", 0, 2, "COMMAND_SOUND_EDITOR");
-    b.menu_item("Libraries", 1, 0, "COMMAND_CHECK_TEXTURES");
-    b.menu_item("Libraries", 1, 1, "COMMAND_REFRESH_TEXTURES");
-    b.menu_item("Libraries", 1, 2, "COMMAND_SYNC_SOUNDS");
+    b.action(
+        Action::new("library.check_textures", "Check New Textures", "Libraries", "ui.tab")
+            .icon(Icon::Search)
+            .args(|_| {
+                args(&[
+                    ("action", "open"),
+                    ("kind", textures::KIND),
+                    ("path", "import"),
+                    ("source", "import"),
+                ])
+            }),
+    );
+    b.action(
+        Action::new("library.sync_textures", "Synchronize Textures...", "Libraries", "library.sync")
+            .icon(Icon::Refresh)
+            .args(|_| args(&[("kind", "textures")])),
+    );
+    b.action(
+        Action::new("library.sync_sounds", "Synchronize Sounds...", "Libraries", "library.sync")
+            .icon(Icon::Refresh)
+            .args(|_| args(&[("kind", "sounds")])),
+    );
+    for (group, order, id) in [
+        (0, 0, "library.light_animations"),
+        (0, 1, "library.textures"),
+        (0, 2, "library.sounds"),
+        (1, 0, "library.check_textures"),
+        (1, 1, "library.sync_textures"),
+        (1, 2, "library.sync_sounds"),
+    ] {
+        b.menu_action("Libraries", group, order, id, None);
+    }
     libtools::install(b);
 }
 
 /// The commands of this package: `preview_model`, `texture_preview`, `library`, `asset_preview`.
 pub fn register(reg: &mut Registry) {
     cmd::register(reg);
+    libtools::register(reg);
 }

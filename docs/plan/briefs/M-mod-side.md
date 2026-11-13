@@ -46,6 +46,22 @@ An effect that depends on the action is declared so the doors work (`docs/COMMAN
 actions differ in effect is split by effect (`release.catalog` check / status are `release.catalog_status` if the
 card cannot say it otherwise - decide, and say in your report how a caller sees it in `help`).
 
+## 1a. What the validators know, and what follows the files
+
+- **The module's own sections.** `Grizzly-Cmd.exe check` on the author's module prints 150 warnings that are
+  false: `W117`, `W121` (characters) and `W060` (quests) say "the linked game has no item 'od_...'" about items
+  the module itself brings. Build ONE index of the sections a module defines - every `[section]` of the `.ltx`
+  files under the project's `gamedata/configs` (and what its `mod.ltx` mounts), read off the UI thread, cached
+  per project and dropped by the project's watcher when one of those files changes - beside the linked game's
+  index in `gz-game`, behind one question: "does the game, with this module on, have the section X?". Every
+  validator that warns about an unknown item, section, visual or dialog asks it: the characters' checks
+  (`gz-characters` `validate.rs`), the quests' (`gz-nq` `validate.rs` - that one call site is yours for this),
+  the world rules' start kit. A warning remains only for what neither side has.
+- **`mod.ltx` through the watcher.** `ManifestService` (`gz-mod`) subscribes to the project's watcher
+  (`gz_project::ProjectWatch`, `Filter::Path`) instead of re-reading the disk before every edit: an outside edit
+  of `mod.ltx` shows in Mod Settings, World Rules and Screens & Music at once, and an unsaved field keeps its
+  value (the manifest's editors save as they are edited, so there is nothing to merge but the field in flight).
+
 ## 2. Jobs belong to the project
 
 The Mod Browser check survived `project_close` and restarted (audit D.13). Every job of your crates is the

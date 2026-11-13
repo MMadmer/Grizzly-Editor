@@ -47,38 +47,61 @@ const CANVAS_MIN_H: f32 = 260.0;
 const RAIL: f32 = 36.0;
 const GAP: f32 = 6.0;
 
-/// The Shortcuts card's rows, read off the canvas's keys and gestures; `None` heads a group.
-const KEYS: [(Option<&str>, &str); 29] = [
-    (None, "View"),
-    (Some("Home"), "Frame the whole graph"),
-    (Some("F"), "Frame the selection"),
-    (Some("Alt+Left / Right"), "Back / forward through the view history"),
-    (Some("Right or middle drag"), "Pan"),
-    (Some("Wheel"), "Zoom at the cursor"),
-    (None, "Nodes"),
-    (Some("Click / Ctrl+Click"), "Select / add to the selection"),
-    (Some("Drag on empty space"), "Select with a rectangle"),
-    (Some("Ctrl+A"), "Select every node"),
-    (Some("F2"), "Rename the node"),
-    (Some("Delete"), "Delete the selection"),
-    (Some("Ctrl+C / Ctrl+V"), "Copy / paste"),
-    (Some("Ctrl+D"), "Duplicate the selection"),
-    (Some("Ctrl+Z / Ctrl+Y"), "Undo / redo"),
-    (Some("Ctrl+B"), "Bookmark the selection"),
-    (Some("Ctrl+F, F3"), "Find, find next"),
-    (None, "Links"),
-    (Some("Drag from a pin"), "Draw a link"),
-    (Some("Q"), "Link the selected node to the nearest free pin"),
-    (Some("Hover a link"), "It lights up: the keys below act on it"),
-    (Some("D or Alt+Click"), "Cut the lit link"),
-    (Some("Alt+D"), "Keep the node, close the chain over it (A-B-C becomes A-C)"),
-    (None, "Actions"),
-    (Some("Drag an action row"), "Move it within the node, or to another node"),
-    (Some("Double-click a row"), "Edit the action in the Details panel"),
-    (None, "Other"),
-    (Some("Right-click"), "The menu of what is under the cursor"),
-    (Some("Escape"), "Cancel the gesture in progress"),
+/// What a row of the Shortcuts card names: a group's heading, a gesture, or actions whose keys
+/// are read off the bindings as they are now (with a gesture after them, `extra`).
+enum KeyRow {
+    Head,
+    Gesture(&'static str),
+    Keys(&'static [&'static str], &'static str),
+}
+
+/// The Shortcuts card's rows.
+const KEYS: [(KeyRow, &str); 29] = [
+    (KeyRow::Head, "View"),
+    (KeyRow::Keys(&["graph.frame_all"], ""), "Frame the whole graph"),
+    (KeyRow::Keys(&["graph.frame_selection"], ""), "Frame the selection"),
+    (KeyRow::Keys(&["graph.back", "graph.forward"], ""), "Back / forward through the view history"),
+    (KeyRow::Gesture("Right or middle drag"), "Pan"),
+    (KeyRow::Gesture("Wheel"), "Zoom at the cursor"),
+    (KeyRow::Head, "Nodes"),
+    (KeyRow::Gesture("Click / Ctrl+Click"), "Select / add to the selection"),
+    (KeyRow::Gesture("Drag on empty space"), "Select with a rectangle"),
+    (KeyRow::Keys(&["graph.select_all"], ""), "Select every node"),
+    (KeyRow::Keys(&["graph.rename"], ""), "Rename the node"),
+    (KeyRow::Keys(&["edit.delete"], ""), "Delete the selection"),
+    (KeyRow::Keys(&["edit.copy", "edit.paste"], ""), "Copy / paste"),
+    (KeyRow::Keys(&["edit.duplicate"], ""), "Duplicate the selection"),
+    (KeyRow::Keys(&["edit.undo", "edit.redo"], ""), "Undo / redo"),
+    (KeyRow::Keys(&["graph.bookmark"], ""), "Bookmark the selection"),
+    (KeyRow::Keys(&["edit.find", "graph.find_next"], ""), "Find, find next"),
+    (KeyRow::Head, "Links"),
+    (KeyRow::Gesture("Drag from a pin"), "Draw a link"),
+    (KeyRow::Keys(&["graph.connect_nearest"], ""), "Link the selected node to the nearest free pin"),
+    (KeyRow::Gesture("Hover a link"), "It lights up: the keys below act on it"),
+    (KeyRow::Keys(&["graph.remove_wire"], "Alt+Click"), "Cut the lit link"),
+    (KeyRow::Keys(&["graph.bypass"], ""), "Keep the node, close the chain over it (A-B-C becomes A-C)"),
+    (KeyRow::Head, "Actions"),
+    (KeyRow::Gesture("Drag an action row"), "Move it within the node, or to another node"),
+    (KeyRow::Gesture("Double-click a row"), "Edit the action in the Details panel"),
+    (KeyRow::Head, "Other"),
+    (KeyRow::Gesture("Right-click"), "The menu of what is under the cursor"),
+    (KeyRow::Gesture("Escape"), "Cancel the gesture in progress"),
 ];
+
+/// The keys a row of the card prints: its actions' keys as bound now, then its gesture.
+fn key_text(row: &KeyRow, keys_of: &dyn Fn(&str) -> String) -> String {
+    match row {
+        KeyRow::Head => String::new(),
+        KeyRow::Gesture(g) => (*g).to_owned(),
+        KeyRow::Keys(ids, extra) => {
+            let mut parts: Vec<String> = ids.iter().map(|id| keys_of(id)).filter(|k| !k.is_empty()).collect();
+            if !extra.is_empty() {
+                parts.push((*extra).to_owned());
+            }
+            if parts.is_empty() { "Not bound".to_owned() } else { parts.join(" / ") }
+        }
+    }
+}
 
 /// The document id of a graph tab: `quest:<rel>` or `beh:<rel>`, `/` separated (`DocId`).
 #[must_use]
@@ -90,6 +113,7 @@ pub fn doc_id(wire: &str, behaviour: bool) -> String {
 pub fn install(b: &mut ShellBuilder) {
     b.document("quest", |ed, req| GraphTab::open(ed, req).map(|t| Box::new(t) as Box<dyn Document>));
     b.document("beh", |ed, req| GraphTab::open(ed, req).map(|t| Box::new(t) as Box<dyn Document>));
+    crate::actions::install(b);
 }
 
 /// The drawer under the panes.
@@ -634,7 +658,10 @@ impl GraphTab {
         let origin = full.min;
         let mut top = origin.y;
         let bottom = full.max.y;
-        if self.data.external {
+        // what the file on disk says that the graph does not show: it does not read, it is gone,
+        // or both it and the unsaved edits changed some values
+        let disk = &self.data.disk;
+        if disk.error.is_some() || disk.missing || !disk.conflicts.is_empty() {
             let banner_r =
                 Rect::from_min_max(pos2(origin.x + 8.0, top + 8.0), pos2(full.max.x - 8.0, bottom));
             let mut b = ui.new_child(UiBuilder::new().id_salt("gz-ui-graph.banner").max_rect(banner_r));
@@ -642,11 +669,26 @@ impl GraphTab {
             let file = std::path::Path::new(&self.wire)
                 .file_name()
                 .map_or(name, |f| f.to_string_lossy().into_owned());
-            let text_ = format!("{file} changed on disk. Reload it, or keep this version and save over it.");
-            match gz_ui::state::banner(&mut b, Tone::Warning, &text_, Some("Reload"), Some("Overwrite...")) {
-                Some(0) => self.reload(&ctx),
-                Some(_) => self.overwrite(&ctx),
-                None => {}
+            if let Some(e) = &disk.error {
+                let text_ = format!(
+                    "{file} does not read: {e}. The graph shows the last state that read, until the file is fixed."
+                );
+                gz_ui::state::banner(&mut b, Tone::Error, &text_, None, None);
+            } else if disk.missing {
+                let text_ = format!("{file} is gone from the disk. Save writes it again.");
+                gz_ui::state::banner(&mut b, Tone::Warning, &text_, None, None);
+            } else {
+                let n = disk.conflicts.len();
+                let text_ = format!(
+                    "Changed on disk too: {n} value{}. The graph keeps its own; Take Theirs takes the file's.",
+                    if n == 1 { "" } else { "s" }
+                );
+                let lines: Vec<String> = disk.conflicts.iter().map(conflict_line).collect();
+                let items: Vec<(&str, Option<&str>)> =
+                    lines.iter().map(|l| (l.as_str(), Some("Take Theirs"))).collect();
+                if let Some(i) = gz_ui::state::banner_list(&mut b, Tone::Warning, &text_, &items) {
+                    self.take_theirs(&ctx, i);
+                }
             }
             top = b.min_rect().max.y + 8.0 + GAP;
         }
@@ -1006,7 +1048,9 @@ impl GraphTab {
             self.keys_rect = None;
             return;
         };
-        let card = keys_card(ui, c, self.keys_rect, self.id.as_str());
+        let editor = self.editor.clone();
+        let keys_of = move |id: &str| gz_app::actions::keys_label(&editor, id);
+        let card = keys_card(ui, c, self.keys_rect, self.id.as_str(), &keys_of);
         self.keys_rect = card.rect;
         if card.close {
             self.show_keys = false;
@@ -1186,39 +1230,46 @@ impl GraphTab {
 
     // ---- the actions of the toolbar, the menu and the keys ------------------------------------
 
-    /// Saves (`Save`): refused at once when the file changed on disk, else written on the IO pool.
+    /// Saves (`Save`) on the IO pool: what changed goes into the file's own text, over whatever
+    /// the file took in meanwhile.
     pub fn save_now(&mut self, ctx: &egui::Context) -> Result<(), String> {
         let Some(doc) = self.shared() else { return Ok(()) };
-        if self.data.external {
-            self.set_message("Not saved: the file changed on disk", Tone::Warning);
-            return Err(
-                "the file changed on disk - Reload it, or Overwrite it from the banner over the graph"
-                    .to_owned(),
-            );
-        }
         if !doc.path().inside {
             return Err(
                 "the document is outside the project folder - it cannot be saved from here".to_owned()
             );
         }
-        self.write(ctx, &doc, false);
+        self.write(ctx, &doc);
         Ok(())
     }
 
-    fn write(&mut self, ctx: &egui::Context, doc: &Arc<DocHandle>, force: bool) {
+    /// Takes the file's value of one conflict the banner lists.
+    fn take_theirs(&mut self, ctx: &egui::Context, index: usize) {
+        let Some(doc) = self.doc.clone() else { return };
+        let (ed, ctx2) = (self.editor.clone(), ctx.clone());
+        let _task = self.editor.exec.spawn(async move {
+            if let Ok(svc) = NqService::of(&ed)
+                && let Err(e) = svc.take_theirs(&ed, &doc, Some(index)).await
+            {
+                ed.log.warn(format!("[nq] Take Theirs: {e}"));
+            }
+            ctx2.request_repaint();
+        });
+        self.refresher_force();
+    }
+
+    fn write(&mut self, ctx: &egui::Context, doc: &Arc<DocHandle>) {
         let (ed, d, ctx2) = (self.editor.clone(), doc.clone(), ctx.clone());
         let result: Arc<Mutex<Option<Result<(), String>>>> = Arc::new(Mutex::new(None));
         let r2 = result.clone();
         self.set_message("Saving", Tone::Muted);
         let _task = self.editor.exec.spawn(async move {
             let r = match NqService::of(&ed) {
-                Ok(svc) => svc.save(&ed, &d, force).await,
+                Ok(svc) => svc.save(&ed, &d).await,
                 Err(e) => Err(e.message),
             };
             let text_ = match &r {
-                Ok(()) if force => "Saved over the file on disk".to_owned(),
                 Ok(()) => "Saved".to_owned(),
-                Err(e) if e == "modified externally" => "Not saved: the file changed on disk".to_owned(),
                 Err(e) => format!("Save failed: {e}"),
             };
             if r.is_err() {
@@ -1255,6 +1306,73 @@ impl GraphTab {
     }
 
     /// Reads the file again; asks first when there are unsaved edits (`Reload`).
+    /// What [`Self::run_named`] knows: the graph's actions without their `graph.`.
+    pub const NAMED: &'static [&'static str] = &[
+        "frame_all",
+        "frame_selection",
+        "rename",
+        "connect_nearest",
+        "bypass",
+        "remove_wire",
+        "select_all",
+        "bookmark",
+        "previous_bookmark",
+        "next_bookmark",
+        "back",
+        "forward",
+        "find_next",
+        "find_previous",
+        "find_in_project",
+        "auto_layout",
+        "validate",
+        "reload",
+    ];
+
+    /// Runs one of the graph's actions by its name (`graph.action`), the way its key did.
+    pub fn run_named(&mut self, ctx: &egui::Context, what: &str) -> Result<(), String> {
+        match what {
+            "frame_all" => self.canvas.request_frame_all(),
+            "frame_selection" => self.canvas.request_frame_selection(),
+            "rename" => self.canvas.want_rename = true,
+            "connect_nearest" => {
+                self.queued.push(Op::Doc(DocOp::Canvas(gz_nq::doc::CanvasOp::ConnectNearest)))
+            }
+            "bypass" => self.queued.push(Op::Doc(DocOp::Canvas(gz_nq::doc::CanvasOp::Bypass))),
+            "remove_wire" => {
+                let c2 = ctx.clone();
+                self.with_canvas_cx(|c, sc, ccx| {
+                    if let Some(sc) = sc {
+                        c.delete_hot_link(&c2, sc, ccx);
+                    }
+                });
+            }
+            "select_all" => {
+                self.with_canvas_cx(|c, _, ccx| c.select_all(ccx));
+            }
+            "bookmark" => {
+                let c2 = ctx.clone();
+                self.with_canvas_cx(|c, _, ccx| c.toggle_bookmarks(&c2, ccx));
+            }
+            "previous_bookmark" => self.queued.push(Op::Doc(DocOp::View(ViewOp::BookmarkJump(-1)))),
+            "next_bookmark" => self.queued.push(Op::Doc(DocOp::View(ViewOp::BookmarkJump(1)))),
+            "back" => self.queued.push(Op::Doc(DocOp::View(ViewOp::HistoryBack))),
+            "forward" => self.queued.push(Op::Doc(DocOp::View(ViewOp::HistoryForward))),
+            "find_next" | "find_previous" => {
+                let (_, i) = self.find_results();
+                self.navigate_find(ctx, if what == "find_previous" { i - 1 } else { i + 1 });
+            }
+            "find_in_project" => {
+                let q = self.find_text.clone();
+                self.project_find.open_with(&self.editor, ctx, &q);
+            }
+            "auto_layout" => self.auto_layout(ctx),
+            "validate" => self.validate(ctx),
+            "reload" => self.reload(ctx),
+            other => return Err(format!("the graph has no action '{other}' ({})", Self::NAMED.join(", "))),
+        }
+        Ok(())
+    }
+
     pub fn reload(&mut self, ctx: &egui::Context) {
         let Some(doc) = self.doc.clone() else { return };
         let run = {
@@ -1308,42 +1426,6 @@ impl GraphTab {
                 run();
             }
         }) {
-            self.editor.log.info(line);
-        }
-    }
-
-    /// Saves over a file that changed on disk, after asking (`Overwrite`).
-    pub fn overwrite(&mut self, ctx: &egui::Context) {
-        let Some(doc) = self.doc.clone() else { return };
-        let spec = gz_ui::ConfirmSpec {
-            id: "nq_overwrite".to_owned(),
-            title: "Overwrite".to_owned(),
-            headline: "Replace the file on disk with the graph as it is here?".to_owned(),
-            items: vec![self.wire.clone()],
-            total: 1,
-            consequence: "The changes made to the file on disk are lost - this cannot be undone.".to_owned(),
-            action: "Overwrite".to_owned(),
-            destructive: true,
-        };
-        let asker = if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
-        let (ed, id) = (self.editor.clone(), self.id.clone());
-        let line = gz_ui::dialog::confirm(ctx, asker, spec, move |a| {
-            if a != gz_ui::Answer::Yes {
-                return;
-            }
-            if let Ok(q) = gz_app::UiQueue::of(&ed) {
-                q.post(move |shell, ctx| {
-                    if let Some(t) = shell
-                        .document_mut(&id)
-                        .and_then(|d| d.as_any_mut())
-                        .and_then(|a| a.downcast_mut::<GraphTab>())
-                    {
-                        t.write(ctx, &doc, true);
-                    }
-                });
-            }
-        });
-        if let Some(line) = line {
             self.editor.log.info(line);
         }
     }
@@ -1511,6 +1593,20 @@ impl Document for GraphTab {
             Details,
         }
         let mut act: Vec<A> = Vec::new();
+        // what each key is bound to now: the author may have rebound any of them
+        let key = |id: &str| gz_app::actions::keys_label(cx.editor, id);
+        let tip = |what: &str, id: &str| {
+            let k = key(id);
+            if k.is_empty() { what.to_owned() } else { format!("{what} ({k})") }
+        };
+        let (k_find_project, k_back, k_forward, k_bookmark, k_frame_all, k_frame_sel) = (
+            key("graph.find_in_project"),
+            key("graph.back"),
+            key("graph.forward"),
+            key("graph.bookmark"),
+            key("graph.frame_all"),
+            key("graph.frame_selection"),
+        );
         let snap = self.doc.as_ref().map(|d| d.store.snapshot());
         let (back_n, fwd_n, bookmarks) = snap.as_ref().map_or((0, 0, Vec::new()), |s| {
             (s.view.back.len(), s.view.forward.len(), s.view.bookmarks.clone())
@@ -1520,7 +1616,7 @@ impl Document for GraphTab {
             "save",
             Icon::Save,
             "Save",
-            if behaviour { "Save the graph (Ctrl+S)" } else { "Save the quest (Ctrl+S)" },
+            &tip(if behaviour { "Save the graph" } else { "Save the quest" }, "file.save"),
             true,
             false,
             Kind::Ghost,
@@ -1528,10 +1624,10 @@ impl Document for GraphTab {
             act.push(A::Save);
         }
         tb.group(8);
-        if tb.action("undo", Icon::Undo, "Undo", "Undo (Ctrl+Z)", undo_n > 0, false, Kind::Ghost) {
+        if tb.action("undo", Icon::Undo, "Undo", &tip("Undo", "edit.undo"), undo_n > 0, false, Kind::Ghost) {
             act.push(A::Undo);
         }
-        if tb.action("redo", Icon::Redo, "Redo", "Redo (Ctrl+Y)", redo_n > 0, false, Kind::Ghost) {
+        if tb.action("redo", Icon::Redo, "Redo", &tip("Redo", "edit.redo"), redo_n > 0, false, Kind::Ghost) {
             act.push(A::Redo);
         }
         tb.group(7);
@@ -1559,7 +1655,7 @@ impl Document for GraphTab {
             "frame",
             Icon::FrameAll,
             "Frame All",
-            "Show the whole graph (Home)",
+            &tip("Show the whole graph", "graph.frame_all"),
             true,
             false,
             Kind::Ghost,
@@ -1572,7 +1668,7 @@ impl Document for GraphTab {
             "find",
             Icon::Search,
             "Find",
-            "Find nodes in this graph (Ctrl+F, F3 next)",
+            &tip("Find nodes in this graph", "edit.find"),
             true,
             find_open,
             Kind::Ghost,
@@ -1611,7 +1707,7 @@ impl Document for GraphTab {
                 if menu_item(
                     ui,
                     "Find in Project",
-                    MenuItem { icon: Icon::FindInProject, keys: "Ctrl+Shift+F", ..MenuItem::default() },
+                    MenuItem { icon: Icon::FindInProject, keys: &k_find_project, ..MenuItem::default() },
                 ) {
                     act.push(A::ProjectFind);
                 }
@@ -1619,12 +1715,7 @@ impl Document for GraphTab {
                 if menu_item(
                     ui,
                     "Back",
-                    MenuItem {
-                        icon: Icon::Back,
-                        keys: "Alt+Left",
-                        enabled: back_n > 0,
-                        ..MenuItem::default()
-                    },
+                    MenuItem { icon: Icon::Back, keys: &k_back, enabled: back_n > 0, ..MenuItem::default() },
                 ) {
                     act.push(A::Back);
                 }
@@ -1633,7 +1724,7 @@ impl Document for GraphTab {
                     "Forward",
                     MenuItem {
                         icon: Icon::Forward,
-                        keys: "Alt+Right",
+                        keys: &k_forward,
                         enabled: fwd_n > 0,
                         ..MenuItem::default()
                     },
@@ -1654,7 +1745,7 @@ impl Document for GraphTab {
                     if menu_item(
                         ui,
                         "Bookmark the Selection",
-                        MenuItem { keys: "Ctrl+B", enabled: has_sel, ..MenuItem::default() },
+                        MenuItem { keys: &k_bookmark, enabled: has_sel, ..MenuItem::default() },
                     ) {
                         act.push(A::ToggleBookmarks);
                     }
@@ -1722,14 +1813,19 @@ impl Document for GraphTab {
             if menu_item(
                 ui,
                 "Frame All",
-                MenuItem { icon: Icon::ZoomFit, keys: "Home", ..MenuItem::default() },
+                MenuItem { icon: Icon::ZoomFit, keys: &k_frame_all, ..MenuItem::default() },
             ) {
                 act.push(A::FrameAll);
             }
             if menu_item(
                 ui,
                 "Frame Selection",
-                MenuItem { icon: Icon::FrameSelection, keys: "F", enabled: has_sel, ..MenuItem::default() },
+                MenuItem {
+                    icon: Icon::FrameSelection,
+                    keys: &k_frame_sel,
+                    enabled: has_sel,
+                    ..MenuItem::default()
+                },
             ) {
                 act.push(A::FrameSel);
             }
@@ -1864,11 +1960,22 @@ impl Document for GraphTab {
         let mm_avail = self.minimap_available();
         let mm = mm_avail && self.doc.as_ref().is_some_and(|d| d.store.snapshot().view.minimap);
         let keys = self.show_keys;
+        // the keys as bound now, read off the actions
+        let k = |id: &str| gz_app::actions::keys_label(cx.editor, id);
+        let (k_save, k_frame, k_find, k_next, k_prev, k_project, k_bookmark) = (
+            k("file.save"),
+            k("graph.frame_all"),
+            k("edit.find"),
+            k("graph.find_next"),
+            k("graph.find_previous"),
+            k("graph.find_in_project"),
+            k("graph.bookmark"),
+        );
         bar.menu("Graph", |ui| {
             let item = |ui: &mut Ui, label: &str, keys: &str, enabled: bool, selected: bool| {
                 menu_item(ui, label, MenuItem { keys, enabled, selected, ..MenuItem::default() })
             };
-            if item(ui, "Save", "Ctrl+S", true, false) {
+            if item(ui, "Save", &k_save, true, false) {
                 act.push("save");
             }
             if item(ui, "Reload", "", true, false) {
@@ -1881,24 +1988,24 @@ impl Document for GraphTab {
             if item(ui, "Auto Layout", "", true, false) {
                 act.push("layout");
             }
-            if item(ui, "Frame All", "Home", true, false) {
+            if item(ui, "Frame All", &k_frame, true, false) {
                 act.push("frame");
             }
             ui.separator();
-            if item(ui, "Find", "Ctrl+F", true, false) {
+            if item(ui, "Find", &k_find, true, false) {
                 act.push("find");
             }
-            if item(ui, "Find Next", "F3", true, false) {
+            if item(ui, "Find Next", &k_next, true, false) {
                 act.push("next");
             }
-            if item(ui, "Find Previous", "Shift+F3", true, false) {
+            if item(ui, "Find Previous", &k_prev, true, false) {
                 act.push("prev");
             }
-            if item(ui, "Find in Project...", "Ctrl+Shift+F", true, false) {
+            if item(ui, "Find in Project...", &k_project, true, false) {
                 act.push("project_find");
             }
             ui.separator();
-            if item(ui, "Bookmark the Selection", "Ctrl+B", has_sel, false) {
+            if item(ui, "Bookmark the Selection", &k_bookmark, has_sel, false) {
                 act.push("bookmark");
             }
             if item(ui, "Previous Bookmark", "", bookmarks, false) {
@@ -1962,29 +2069,18 @@ impl Document for GraphTab {
         }
     }
 
+    /// What has the keys: the canvas, while the pointer is on it or it has the focus. The graph's
+    /// actions of the canvas take their keys then.
+    fn key_part(&self, ctx: &egui::Context) -> Option<&'static str> {
+        self.canvas.takes_keys(ctx).then_some("canvas")
+    }
+
+    /// Esc closes the shortcuts card and drops a gesture; every other key is an action's.
     fn shortcut(&mut self, cx: &mut DocCx<'_>, chord: &Chord) -> bool {
         let ctx = cx.ctx.clone();
-        let (ctrl, shift, alt) = (chord.ctrl, chord.shift, chord.alt);
-        match (chord.key, ctrl, shift, alt) {
-            (Key::F, true, true, false) => {
-                let q = self.find_text.clone();
-                self.project_find.open_with(&self.editor, &ctx, &q);
-                return true;
-            }
-            (Key::F, true, false, false) => {
-                self.open_find(&ctx);
-                return true;
-            }
-            (Key::F3, false, _, false) => {
-                let (_, i) = self.find_results();
-                self.navigate_find(&ctx, if shift { i - 1 } else { i + 1 });
-                return true;
-            }
-            (Key::Escape, false, false, false) if self.show_keys => {
-                self.show_keys = false;
-                return true;
-            }
-            _ => {}
+        if chord.key == Key::Escape && !chord.ctrl && !chord.shift && !chord.alt && self.show_keys {
+            self.show_keys = false;
+            return true;
         }
         if !self.canvas.takes_keys(&ctx) {
             return false;
@@ -1992,6 +2088,12 @@ impl Document for GraphTab {
         let c2 = ctx.clone();
         let chord = *chord;
         self.with_canvas_cx(|c, sc, ccx| c.key(&c2, sc, ccx, &chord)).unwrap_or(false)
+    }
+
+    fn reload(&mut self, cx: &mut DocCx<'_>, _discard: bool) -> Result<(), String> {
+        let ctx = cx.ctx.clone();
+        GraphTab::reload(self, &ctx);
+        Ok(())
     }
 
     fn edit(&mut self, cx: &mut DocCx<'_>, action: EditAction, run: bool) -> bool {
@@ -2090,7 +2192,13 @@ struct KeysCard {
 
 /// The Keyboard Shortcuts card over the canvas `c`, `last` its rect in the frame before, `salt` its tab. It
 /// guards the canvas under it - a click or a drag on it is the card's - and goes in after the canvas.
-fn keys_card(ui: &mut Ui, c: Rect, last: Option<Rect>, salt: &str) -> KeysCard {
+fn keys_card(
+    ui: &mut Ui,
+    c: Rect,
+    last: Option<Rect>,
+    salt: &str,
+    keys_of: &dyn Fn(&str) -> String,
+) -> KeysCard {
     let w = 440.0f32.min(c.width() - 16.0);
     if w < 160.0 {
         return KeysCard { rect: None, close: false };
@@ -2137,21 +2245,22 @@ fn keys_card(ui: &mut Ui, c: Rect, last: Option<Rect>, salt: &str) -> KeysCard {
             .id_salt("gz-ui-graph.keys_rows")
             .max_height((r.height() - 80.0).max(60.0))
             .show(ui, |ui| {
-                for (keys, what) in KEYS {
-                    match keys {
-                        None => {
+                for (row, what) in &KEYS {
+                    match row {
+                        KeyRow::Head => {
                             ui.add_space(2.0);
                             gz_ui::text::label(ui, what, Font::Strong, p.text, Clip::End);
                         }
-                        Some(k) => {
+                        _ => {
+                            let k = key_text(row, keys_of);
                             ui.horizontal(|ui| {
                                 ui.scope(|ui| {
                                     ui.set_width(gz_ui::units::em(9.0));
-                                    gz_ui::text::label(ui, k, Font::Body, p.text, Clip::End);
+                                    gz_ui::text::label(ui, &k, Font::Body, p.text, Clip::End);
                                 });
                                 ui.add(
                                     egui::Label::new(
-                                        egui::RichText::new(what)
+                                        egui::RichText::new(*what)
                                             .font(Font::Body.id())
                                             .color(p.text_secondary),
                                     )
@@ -2164,6 +2273,16 @@ fn keys_card(ui: &mut Ui, c: Rect, last: Option<Rect>, salt: &str) -> KeysCard {
             });
     });
     KeysCard { rect: Some(inner.response.rect), close }
+}
+
+/// One conflict as the banner lists it: where, and what each side says.
+fn conflict_line(c: &gz_luadata::Conflict) -> String {
+    let show = |v: &Option<gz_luadata::Value>| match v {
+        None => "removed".to_owned(),
+        Some(v) => gz_luadata::inline(v).unwrap_or_else(|| "a long text".to_owned()),
+    };
+    let line = c.span.map_or_else(String::new, |s| format!(" (line {})", s.line));
+    format!("{}{line}: here {}, on disk {}", gz_luadata::path::show(&c.path), show(&c.mine), show(&c.theirs))
 }
 
 #[cfg(test)]
@@ -2191,7 +2310,7 @@ mod tests {
                 {
                     *canvas_clicks += 1;
                 }
-                card = Some(super::keys_card(ui, canvas, last, "t"));
+                card = Some(super::keys_card(ui, canvas, last, "t", &|_| String::new()));
             },
         );
         // the textures egui made are the painter's, and here nobody paints

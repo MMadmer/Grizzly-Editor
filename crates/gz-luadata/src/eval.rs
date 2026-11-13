@@ -1,4 +1,4 @@
-//! The run step of `NqLua::ParseValue` and its walk of the returned table (`WalkValue`).
+//! The run step of the reader and its walk of the returned table.
 //!
 //! Only a file the declarative scan let through is run, so what runs is a `return` of table
 //! constructors, literals and minus signs. The run reproduces what LuaJIT's interpreter does
@@ -226,7 +226,7 @@ impl Run<'_> {
     }
 
     fn text(&self, s: u32) -> SmolStr {
-        // oracle: a Lua string is bytes; one that is not UTF-8 (a "\xff" escape) is kept lossily
+        // a Lua string is bytes; one that is not UTF-8 (a "\xff" escape) is kept lossily
         let b = self.c.syms.get(s as usize).map_or(&[][..], Vec::as_slice);
         SmolStr::new(String::from_utf8_lossy(b))
     }

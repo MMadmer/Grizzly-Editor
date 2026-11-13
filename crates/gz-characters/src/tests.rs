@@ -8,8 +8,8 @@ use gz_nq::PickerType;
 
 use crate::game::{model_path, ogf_bone_names, trade_categories};
 use crate::model::{
-    Character, Supply, TradeRow, load_text, parse, template, text_collapse, text_in, text_raw, text_set,
-    valid_id, write,
+    Character, Supply, TradeRow, diff_rules, load_text, parse, template, text_collapse, text_in, text_raw,
+    text_set, to_value, valid_id, write,
 };
 use crate::resolve::resolve;
 use crate::service::Roster;
@@ -67,7 +67,7 @@ fn trade_false_takes_a_shop_away() {
 }
 
 #[test]
-fn write_is_canonical_and_idempotent() {
+fn a_new_file_is_written_canonically() {
     let text = template("Courier 2");
     assert_eq!(
         text,
@@ -83,8 +83,6 @@ fn write_is_canonical_and_idempotent() {
          }\n"
     );
     assert!(template("").contains("\"new_character\""));
-    let c = ch(&text, "courier_2.npcasset");
-    assert_eq!(write(&c), text);
 
     let full = ch(
         r#"return { id = "t", abstract = true, reputation = -5, money = { min = 1, max = 2, infinite = true }, squad = false,
@@ -100,7 +98,25 @@ fn write_is_canonical_and_idempotent() {
     assert!(out.contains("\t\tsells   = { \"food\" },\n\t\tbuys    = {},\n\t\tmarkup  = 1,\n\t\tpays    = 0.25,\n\t\trestock = 12,\n"));
     assert!(out.contains("\t\t\t{ section = \"v\", chance = 0.3 },\n"));
     assert!(out.contains("\tstart_dialog = \"d\",\n\tsquad     = false,\n}\n"));
-    assert_eq!(write(&ch(&out, "t.npcasset")), out);
+}
+
+#[test]
+fn a_save_writes_only_what_changed() {
+    let text = "-- the guide\nreturn {\n  npc = 1,\n  id = \"guide\",\n  name = \"Guide\", -- shown to the player\n  future_key = { 1 },\n  rank = 300,\n  supplies = { \"bread\" },\n}\n";
+    let c = ch(text, "guide.npcasset");
+    let mut after = c.clone();
+    after.rank = 500;
+    after.community = "dolg".into();
+    let mut doc = gz_luadata::LuaDoc::parse(text).unwrap();
+    assert!(!doc.apply_diff(&to_value(&c), &to_value(&c), &diff_rules()).unwrap());
+    assert!(doc.apply_diff(&to_value(&c), &to_value(&after), &diff_rules()).unwrap());
+    assert_eq!(
+        doc.text(),
+        "-- the guide\nreturn {\n  npc = 1,\n  id = \"guide\",\n  name = \"Guide\", -- shown to the player\n  community = \"dolg\",\n  future_key = { 1 },\n  rank = 500,\n  supplies = { \"bread\" },\n}\n"
+    );
+    // a newer format is refused, saying so
+    let e = parse("return { npc = 2, id = \"x\" }", "x").unwrap_err();
+    assert!(e.contains("newer Grizzly Editor"), "{e}");
 }
 
 // ---- texts ---------------------------------------------------------------------------------

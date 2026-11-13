@@ -41,6 +41,9 @@ ARGS: list[str] = ["-mcp_port", str(PORT), "-home", HOME] if RUST else []
 # a helper's) takes it from GRIZZLY_HOME and never writes into the repository root.
 if RUST:
     os.environ["GRIZZLY_HOME"] = HOME
+    # the editor finds its default game by itself; a suite's editor looks only at what its own home
+    # knew - the game a copied project was linked to (copy_project) - never at the installed game
+    os.environ.setdefault("GRIZZLY_GAME_SEARCH", "home")
 
 # The files of its own the editor could write in the repository root: a suite puts them back
 # byte for byte (for the Rust editor they stay untouched - it writes into HOME).
@@ -193,11 +196,47 @@ def guard_project(path: str) -> str:
     return path
 
 
+def project_id(folder: str) -> str:
+    """The id of the project file (`*.grizzly`) at the root of `folder`; "" without one."""
+    import re
+    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        if name.lower().endswith(".grizzly") and os.path.isfile(os.path.join(folder, name)):
+            with open(os.path.join(folder, name), "rb") as f:
+                m = re.search(r'\bid\s*=\s*"([0-9A-Fa-f-]{36})"', f.read().decode("utf-8", "replace"))
+            return m.group(1) if m else ""
+    return ""
+
+
+def _ltx_value(path: str, section: str, key: str) -> str:
+    """A value of an LTX file of an editor's home ("" when it is not there)."""
+    try:
+        with open(path, "rb") as f:
+            text = f.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+    current = ""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("[") and "]" in line:
+            current = line[1:line.index("]")].strip().lower()
+        elif current == section and "=" in line:
+            k, v = line.split("=", 1)
+            if k.strip().lower() == key:
+                return v.strip().strip('"')
+    return ""
+
+
+def project_state(project_id: str) -> str:
+    """This suite's editor's state of the project `project_id`: <home>/projects/<id>.ltx."""
+    return os.path.join(HOME, "projects", project_id + ".ltx")
+
+
 def copy_project(src: str, dst: str, ignore=(".git", "releases", "temp", "logs", "backup"), trimmed: bool = False) -> str:
     """THE way a suite copies a project: into `dst`, which must lie under the system temp folder; only what a suite
-    needs (no .git, releases, temp, logs, backup unless it names another set; with `trimmed` also TRIMMED),
-    project.ltx naming the copy's own folder, and the export target pointed into the suite's temp folder - never at
-    the game. Answers `dst`, checked by guard_project."""
+    needs (no .git, releases, temp, logs, backup unless it names another set; with `trimmed` also TRIMMED). What is
+    this machine's goes into the suite's own home by the project's id: the game the author's editor reads for the
+    project, and the export target pointed into the suite's temp folder - never at the game. An old project.ltx
+    in the copy names the copy's own folder and the same export target. Answers `dst`, checked by guard_project."""
     guard_project(dst)
     t = time.monotonic()
     names = set(ignore)
@@ -225,6 +264,18 @@ def copy_project(src: str, dst: str, ignore=(".git", "releases", "temp", "logs",
         at = next(i for i, l in enumerate(lines) if l.strip().lower() == "[xms]")
         lines.insert(at + 1, "export_target=" + away)
         with open(pl, "w", encoding="utf-8", newline="") as f:
+            f.write("\r\n".join(lines) + "\r\n")
+    pid = project_id(dst)
+    if pid and RUST:
+        away = os.path.join(os.path.dirname(dst), "export_target")
+        # the author's editor keeps its home at the repository's data root
+        game = _ltx_value(os.path.join(REPO, "projects", pid + ".ltx"), "game", "root") or \
+            _ltx_value(os.path.join(REPO, "machine.ltx"), "game", "root")
+        lines = ["[project]", "root=" + dst, "[build]", "export_target=" + away]
+        if game:
+            lines += ["[game]", "root=" + game]
+        os.makedirs(os.path.dirname(project_state(pid)), exist_ok=True)
+        with open(project_state(pid), "w", encoding="utf-8", newline="") as f:
             f.write("\r\n".join(lines) + "\r\n")
 
     _SPENT["copy"] = _SPENT.get("copy", 0.0) + time.monotonic() - t

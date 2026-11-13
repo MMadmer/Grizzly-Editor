@@ -1,7 +1,11 @@
 //! Buttons (docs/UI_DESIGN.md, section 4).
 //!
-//! One Primary per surface. The Danger fill goes only on the destructive action; the button that
-//! opens the question is [`Kind::GhostDanger`]. A disabled button says why in its tooltip.
+//! One Primary per surface: a dialog footer or a toolbar that lays out a second one is a bug of
+//! its surface, and a debug build stops on it ([`note_primary`]). The Danger fill goes only on
+//! the destructive action; the button that opens the question is [`Kind::GhostDanger`]. A
+//! Secondary has a hairline. A toggle that is on (`checked`) - a toolbar button that shows a
+//! panel - is a Ghost with a 2 pt accent line under it, never an accent fill. A disabled button
+//! says why in its tooltip.
 
 use egui::{
     Align2, Color32, CornerRadius, Rect, Response, Role, Sense, Stroke, StrokeKind, Ui, Vec2, Widget,
@@ -33,13 +37,57 @@ struct Look {
     fill: Color32,
     text: Color32,
     font: Font,
+    /// The 1 pt outline a Secondary has.
+    outline: Option<Color32>,
 }
 
-fn look(p: &Palette, kind: Kind, enabled: bool, hovered: bool, pressed: bool, checked: bool) -> Look {
+/// Notes a Primary laid out in `scope` (a footer, a toolbar) this frame. One per surface: a
+/// second one stops a debug build, naming both. The same button drawn twice in a frame (a sizing
+/// pass) counts once.
+pub fn note_primary(ctx: &egui::Context, scope: egui::Id, what: &str, label: &str) {
+    let frame = ctx.cumulative_frame_nr();
+    let id = scope.with("gz-ui.primary");
+    let labels = ctx.data_mut(|d| {
+        let slot = d.get_temp_mut_or_insert_with::<(u64, Vec<String>)>(id, || (frame, Vec::new()));
+        if slot.0 != frame {
+            *slot = (frame, Vec::new());
+        }
+        if !slot.1.iter().any(|l| l == label) {
+            slot.1.push(label.to_owned());
+        }
+        slot.1.clone()
+    });
+    debug_assert!(
+        labels.len() <= 1,
+        "two Primary buttons in one {what}: {labels:?} - a surface has one Primary"
+    );
+}
+
+/// How many Primary buttons `scope` laid out in this frame.
+#[must_use]
+pub fn primaries(ctx: &egui::Context, scope: egui::Id) -> usize {
+    let frame = ctx.cumulative_frame_nr();
+    ctx.data(|d| d.get_temp::<(u64, Vec<String>)>(scope.with("gz-ui.primary")))
+        .filter(|s| s.0 == frame)
+        .map_or(0, |s| s.1.len())
+}
+
+/// The line under a toggle that is on.
+pub fn toggle_line(painter: &egui::Painter, rect: Rect, color: Color32) {
+    let w = (rect.width() - 8.0).max(4.0);
+    let line = Rect::from_center_size(
+        egui::pos2(rect.center().x, rect.max.y - metrics::TOGGLE_LINE * 0.5),
+        Vec2::new(w, metrics::TOGGLE_LINE),
+    );
+    painter.rect_filled(line, CornerRadius::same(1), color);
+}
+
+fn look(p: &Palette, kind: Kind, enabled: bool, hovered: bool, pressed: bool) -> Look {
     if !enabled {
         let fill =
             if matches!(kind, Kind::Ghost | Kind::GhostDanger) { Color32::TRANSPARENT } else { p.input };
-        return Look { fill, text: p.text_disabled, font: Font::Body };
+        let outline = (kind == Kind::Secondary).then_some(p.border_subtle);
+        return Look { fill, text: p.text_disabled, font: Font::Body, outline };
     }
     let pick = |rest: Color32, hover: Color32, press: Color32| {
         if pressed {
@@ -51,27 +99,37 @@ fn look(p: &Palette, kind: Kind, enabled: bool, hovered: bool, pressed: bool, ch
         }
     };
     match kind {
-        Kind::Secondary => {
-            Look { fill: pick(p.button, p.button_hover, p.pressed), text: p.text, font: Font::Body }
-        }
+        Kind::Secondary => Look {
+            fill: pick(p.button, p.button_hover, p.pressed),
+            text: p.text,
+            font: Font::Body,
+            outline: Some(if hovered { p.border_strong } else { p.border }),
+        },
         Kind::Primary => Look {
             fill: pick(p.primary, p.primary_hover, p.primary_pressed),
             text: p.on_fill,
             font: Font::Strong,
+            outline: None,
         },
         Kind::Danger => Look {
             fill: pick(p.danger, p.danger_hover, p.danger_pressed),
             text: p.on_fill,
             font: Font::Strong,
+            outline: None,
         },
+        // on: no fill, the line under it says so
         Kind::Ghost => Look {
-            fill: if checked { p.selection_focused } else { pick(Color32::TRANSPARENT, p.hover, p.pressed) },
+            fill: pick(Color32::TRANSPARENT, p.hover, p.pressed),
             text: p.text,
             font: Font::Body,
+            outline: None,
         },
-        Kind::GhostDanger => {
-            Look { fill: pick(Color32::TRANSPARENT, p.hover, p.pressed), text: p.error, font: Font::Body }
-        }
+        Kind::GhostDanger => Look {
+            fill: pick(Color32::TRANSPARENT, p.hover, p.pressed),
+            text: p.error,
+            font: Font::Body,
+            outline: None,
+        },
     }
 }
 
@@ -193,17 +251,21 @@ impl Widget for Button<'_> {
         resp.widget_info(|| WidgetInfo::labeled(Role::Button, self.enabled, self.label));
 
         if ui.is_rect_visible(rect) {
-            let l = look(
-                &p,
-                self.kind,
-                self.enabled,
-                resp.hovered(),
-                resp.is_pointer_button_down_on(),
-                self.checked,
-            );
+            let l = look(&p, self.kind, self.enabled, resp.hovered(), resp.is_pointer_button_down_on());
             let painter = ui.painter();
             if l.fill != Color32::TRANSPARENT {
                 painter.rect_filled(rect, CornerRadius::same(metrics::RADIUS), l.fill);
+            }
+            if let Some(o) = l.outline {
+                painter.rect_stroke(
+                    rect,
+                    CornerRadius::same(metrics::RADIUS),
+                    Stroke::new(1.0, o),
+                    StrokeKind::Inside,
+                );
+            }
+            if self.checked && self.enabled {
+                toggle_line(painter, rect, p.accent_bright);
             }
             let content_w = icon_w + text::width(ui.ctx(), &l.font.id(), self.label);
             let mut x = rect.center().x - content_w * 0.5;
@@ -212,7 +274,12 @@ impl Widget for Button<'_> {
                     egui::pos2(x, rect.center().y - metrics::GLYPH * 0.5),
                     Vec2::splat(metrics::GLYPH),
                 );
-                icons::draw(painter, icon, r, l.text);
+                icons::draw(
+                    painter,
+                    icon,
+                    r,
+                    if self.checked && self.enabled { p.accent_bright } else { l.text },
+                );
                 x += icon_w;
             }
             if !self.label.is_empty() {
@@ -260,9 +327,7 @@ pub fn icon_button_sized(
     if ui.is_rect_visible(rect) {
         let hovered = resp.hovered() && enabled;
         let pressed = resp.is_pointer_button_down_on() && enabled;
-        let fill = if checked {
-            p.selection_focused
-        } else if pressed {
+        let fill = if pressed {
             p.pressed
         } else if hovered {
             p.hover
@@ -271,6 +336,9 @@ pub fn icon_button_sized(
         };
         if fill != Color32::TRANSPARENT {
             ui.painter().rect_filled(rect, CornerRadius::same(metrics::RADIUS), fill);
+        }
+        if checked && enabled {
+            toggle_line(ui.painter(), rect, p.accent_bright);
         }
         let color = if !enabled {
             p.text_disabled
@@ -311,34 +379,29 @@ pub fn segmented(ui: &mut Ui, current: &mut usize, labels: &[&str], icons_of: Op
         })
         .collect();
     let total: f32 = widths.iter().sum();
-    // what does not fit side by side becomes a combo of the same choices
+    // what does not fit side by side becomes the kit's combo of the same choices
     if total > ui.available_width() && labels.len() > 1 {
-        let shown = labels.get(*current).copied().unwrap_or("");
         let widest = widths.iter().copied().fold(0.0, f32::max);
         let w = (widest + metrics::GLYPH + 16.0).min(ui.available_width()).max(em(4.0));
-        let mut changed = false;
-        let resp = egui::ComboBox::from_id_salt((
-            "gz-ui.segmented",
-            labels.first().copied().unwrap_or(""),
-            labels.len(),
-        ))
-        .selected_text(shown)
-        .width(w)
-        .show_ui(ui, |ui| {
-            for (i, label) in labels.iter().enumerate() {
-                let item = crate::menu::MenuItem {
-                    icon: icons_of.and_then(|ic| ic.get(i)).copied().unwrap_or(Icon::None),
-                    selected: i == *current,
-                    ..crate::menu::MenuItem::default()
-                };
-                if crate::menu::menu_item(ui, label, item) && i != *current {
-                    *current = i;
-                    changed = true;
-                }
+        let items: Vec<crate::pick::PickItem> = labels
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                crate::pick::PickItem::new(i.to_string(), *l)
+                    .icon(icons_of.and_then(|ic| ic.get(i)).copied().unwrap_or(Icon::None))
+            })
+            .collect();
+        let current_id = current.to_string();
+        let salt = ("gz-ui.segmented", labels.first().copied().unwrap_or(""), labels.len());
+        let shown = labels.get(*current).copied().unwrap_or("");
+        let list = crate::pick::PickList::new(salt, &items).current(&current_id).without_search();
+        return match crate::pick::Combo::new(salt, shown).width(w).show(ui, list) {
+            Some(i) if i != *current => {
+                *current = i;
+                true
             }
-        });
-        audit::control(ui.ctx(), shown, true, None, None, resp.response.rect);
-        return changed;
+            _ => false,
+        };
     }
     let (rect, _) = ui.allocate_exact_size(Vec2::new(total, metrics::FRAME), Sense::hover());
     let radius = CornerRadius::same(metrics::RADIUS);

@@ -79,13 +79,13 @@ def mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
 
 def settle() -> None:
     """The next frames are drawn: ui_audit is held until they are (GrizzlyMCP::IsShot)."""
-    mcp("ui_audit")
+    mcp("ui.audit")
 
 
 def shot(name: str) -> None:
     if not shots_dir:
         return
-    r = mcp("screenshot_editor")
+    r = mcp("shot.window")
     if r.get("ok") and r.get("png_base64"):
         with open(os.path.join(shots_dir, name + ".png"), "wb") as f:
             f.write(base64.b64decode(r["png_base64"]))
@@ -143,7 +143,7 @@ class Editor:
 
     def close(self) -> None:
         try:
-            mcp("window_control", action="close")
+            mcp("app.quit")
         except OSError:
             pass
         if self.proc:
@@ -188,10 +188,12 @@ def run(project: str) -> None:
     ed = Editor()
     try:
         ed.start(project)
-        w1 = mcp("quest_write", path=BIG, lua=big_quest())
-        check(w1.get("ok"), "the big quest is written", json.dumps(w1)[:300])
-        w2 = mcp("quest_write", path=SMALL, lua=SMALL_TEXT)
-        check(w2.get("ok"), "the small behaviour graph is written", json.dumps(w2)[:300])
+        # the graphs are files: written the way an agent writes them, checked by the editor
+        for rel, text in ((BIG, big_quest()), (SMALL, SMALL_TEXT)):
+            with open(os.path.join(project, rel.replace("/", os.sep)), "w", encoding="utf-8") as f:
+                f.write(text)
+            c = mcp("asset.check", path=rel, fail_on="error")
+            check(c.get("ok"), "%s is written and has no error" % rel, json.dumps(c)[:300])
 
         # ------------------------------------------------------------------ A: content-sized boxes
         lay = mcp("quest_layout", path=BIG, all=False)
@@ -209,13 +211,13 @@ def run(project: str) -> None:
 
         for width, height, scale in SIZES:
             tag = "%dx%d@%g" % (width, height, scale)
-            mcp("ui_scale", value=scale)
-            r = mcp("window_control", action="resize", width=width, height=height)
+            mcp("ui.scale", value=scale)
+            r = mcp("app.window", action="resize", width=width, height=height)
             check(r.get("ok"), tag + " the window takes the size", json.dumps(r)[:200])
             settle()
 
             # -------------------------------------------------------------- B: Frame All is readable
-            warned = mcp("progress").get("warnings")
+            warned = mcp("ui.tasks").get("warnings")
             v = settled(BIG, frame="all", graph_panel="show", details="show")
             check(v.get("ok"), tag + " quest_view answers", json.dumps(v)[:300])
             check(abs(v.get("ui_scale", 0) - scale) < 0.01, tag + " the reply names the UI scale", str(v.get("ui_scale")))
@@ -228,7 +230,7 @@ def run(project: str) -> None:
             beyond = v.get("beyond") or {}
             check(beyond.get("above") == 0 and beyond.get("below", 0) > 0,
                   tag + " from its start: nothing above the view, the rest counted below it", json.dumps(beyond))
-            now = mcp("progress").get("warnings")
+            now = mcp("ui.tasks").get("warnings")
             check(now == warned, tag + " the canvas's note about it is no warning the status bar counts", "%s -> %s" % (warned, now))
             shot("frame_all_" + tag)
 
@@ -259,7 +261,7 @@ def run(project: str) -> None:
             # row is brought into it (the audit lists a row only while it is drawn; its rect is px)
             settle()
             node = pane(v, "node") or [0, 0, 0, 0]
-            row = next((e for e in mcp("ui_audit").get("controls", [])
+            row = next((e for e in mcp("ui.audit").get("controls", [])
                         if str(e.get("help", "")).startswith("Runs when the node is entered")), None)
             top, h = [c / scale for c in ((row or {}).get("rect") or [0, -9999, 0, 0])[1::2]]
             check(row is not None and node[1] - 1 <= top and top + h <= node[1] + node[3] + 1,
@@ -303,14 +305,14 @@ def run(project: str) -> None:
             check(big.get("visible") is True and big.get("shown") is True and big.get("available") is True,
                   tag + " a graph of 16 nodes gets its minimap", json.dumps(big)[:200])
             settle()
-            toggle = toolbar_control(mcp("ui_audit"), lambda label: label == "Minimap")
+            toggle = toolbar_control(mcp("ui.audit"), lambda label: label == "Minimap")
             check(toggle is not None and toggle.get("enabled") is True, tag + " its toolbar toggle is enabled",
                   json.dumps(toggle)[:200])
             # a zoom of two digits is led by a figure space (U+2007): every level is as wide as "100%"
             def is_zoom(label: str) -> bool:
                 return label.strip().endswith("%") and label.strip()[:-1].isdigit()
 
-            zoom = toolbar_control(mcp("ui_audit"), is_zoom)
+            zoom = toolbar_control(mcp("ui.audit"), is_zoom)
             rect = (zoom or {}).get("rect") or [0, 0, 0, 1]
             check(zoom is not None and rect[2] > rect[3] * 1.5, tag + " the zoom menu shows its percentage, not a bare icon",
                   json.dumps(zoom)[:200])
@@ -319,7 +321,7 @@ def run(project: str) -> None:
                 """Every other control of the toolbar with its width: a folded label is a button's width."""
                 settle()
                 return sorted((str(e.get("label", "")), round((e.get("rect") or [0, 0, 0, 0])[2]))
-                              for e in mcp("ui_audit").get("controls", [])
+                              for e in mcp("ui.audit").get("controls", [])
                               if "toolbar" in str(e.get("window", "")) and not is_zoom(str(e.get("label", ""))))
 
             settled(BIG, zoom_level=5)
@@ -336,13 +338,13 @@ def run(project: str) -> None:
             check(small.get("visible") is True and small.get("shown") is False and small.get("available") is False,
                   tag + " a graph of 3 nodes does not", json.dumps(small)[:200])
             settle()
-            toggle = toolbar_control(mcp("ui_audit"), lambda label: label == "Minimap")
+            toggle = toolbar_control(mcp("ui.audit"), lambda label: label == "Minimap")
             check(toggle is not None and toggle.get("enabled") is False and "12" in str(toggle.get("why")),
                   tag + " and its toggle is disabled, saying why - not lit with no minimap", json.dumps(toggle)[:200])
 
             # -------------------------------------------------------------- H: a behaviour graph never says "quest"
             settle()
-            audit = mcp("ui_audit")
+            audit = mcp("ui.audit")
             said = []
             for key in ("controls", "truncated"):
                 for e in audit.get(key, []):
@@ -356,8 +358,8 @@ def run(project: str) -> None:
             shot("behaviour_" + tag)
 
         # ---------------------------------------------------------------------- I: the rail
-        mcp("ui_scale", value=1.0)
-        mcp("window_control", action="resize", width=900, height=720)
+        mcp("ui.scale", value=1.0)
+        mcp("app.window", action="resize", width=900, height=720)
         settle()
         v = settled(BIG, frame="all")
         check(v.get("graph_panel") == "rail", "I a narrow window folds the Graph panel to a rail", str(v.get("graph_panel")))
@@ -373,7 +375,7 @@ def run(project: str) -> None:
         # ---------------------------------------------------------------------- J: clean up
         for rel in (BIG, SMALL):
             mcp("quest_close", path=rel, discard=True)
-            d = mcp("content_delete", path=rel)
+            d = mcp("file.delete", path=rel)
             check(d.get("ok"), "J %s is removed" % rel, json.dumps(d)[:160])
     finally:
         ed.close()

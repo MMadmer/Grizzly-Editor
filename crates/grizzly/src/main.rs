@@ -10,6 +10,7 @@ mod cli;
 mod commandlet;
 mod compile;
 mod core_cmds;
+mod launch;
 mod startup;
 
 use std::io::Write;
@@ -89,6 +90,15 @@ fn main() -> ExitCode {
     if let Some((what, folder, flags)) = &cli.compile {
         return compile::run(*what, folder, flags, &paths.root, &log);
     }
+    // one editor per home: a second start hands its project to the editor that holds the home
+    // (an update's restart takes over from the one that is ending, and never hands back)
+    if !cli.commandlet()
+        && cli.updated.is_none()
+        && launch::hand_over(&paths.home, cli.project.as_deref(), &log)
+    {
+        log.info("Grizzly Editor closed: the editor that holds this home took the request");
+        return ExitCode::SUCCESS;
+    }
 
     startup.stage("Starting the workers");
     let runtime = match Runtime::start(ExecOptions::default()) {
@@ -123,26 +133,63 @@ fn main() -> ExitCode {
     gz_screens::install(&editor);
     gz_characters::install(&editor);
     gz_world::install(&editor);
+    // the editor's own updates: a finished one tidied up, a download continued
+    let start = gz_update::Start {
+        updated_from: cli.updated.clone(),
+        window: !headless,
+        commandlet: cli.commandlet(),
+    };
+    gz_update::install(&editor, start);
     gz_scene::install(&editor);
     gz_export_level::install(&editor);
     gz_ui_content::install_hooks(&editor);
+    // a project handed over by a second start asks about unsaved work in the window
+    gz_ui_app::launch::install_hooks(&editor);
+    // the author's own editor keeps .grizzly files opening with it
+    let own_home =
+        cli.home.is_none() && std::env::var(crate::cli::HOME_VAR).map_or(true, |v| v.trim().is_empty());
+    if own_home && !headless && !cli.unattended {
+        gz_project::association::at_start(&editor);
+    }
     // the Task Center's rows of builds and packaging, also for a build started over MCP
     gz_ui_mod::cards::ensure(&editor);
 
     // a commandlet listens nowhere unless it is told a port: it is nobody's server
+    let mut bound = None;
     if !cli.commandlet() || cli.mcp_port.is_some() {
         startup.stage("Opening the control endpoint");
         let port = cli.mcp_port.unwrap_or(gz_mcp::DEFAULT_PORT);
-        match runtime.block_on(gz_mcp::serve(editor.clone(), port)) {
-            Ok(addr) => log.info(format!("control endpoint: {addr}")),
-            Err(e) => log.error(format!("the control endpoint did not open on port {port}: {e}")),
+        // the editor an update restarted into takes the port its predecessor is letting go of
+        let mut tries = if cli.updated.is_some() { 50 } else { 1 };
+        loop {
+            tries -= 1;
+            match runtime.block_on(gz_mcp::serve(editor.clone(), port)) {
+                Ok(addr) => {
+                    log.info(format!("control endpoint: {addr}"));
+                    bound = Some(addr.port());
+                }
+                Err(_) if tries > 0 => {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    continue;
+                }
+                Err(e) => log.error(format!("the control endpoint did not open on port {port}: {e}")),
+            }
+            break;
         }
     }
+
+    // the editor holds its home while it runs; a commandlet is nobody's editor
+    let _lock = if cli.commandlet() {
+        None
+    } else {
+        bound.and_then(|port| launch::Lock::take(&editor.paths.home, port))
+    };
 
     if cli.commandlet() {
         // it opens its project itself, runs, and ends with what its commands came to
         let code = commandlet::run(&runtime, &editor, &cli);
         runtime.block_on(gz_project::close_project(&editor));
+        gz_update::at_exit(&editor);
         log.info("Grizzly Editor closed");
         return code;
     }
@@ -154,6 +201,7 @@ fn main() -> ExitCode {
 
     if cli.headless {
         startup.finish(&log);
+        gz_update::ready(&editor);
         // Without a window the editor lives until it is told to quit.
         runtime.block_on(editor.quit_token().cancelled());
     } else {
@@ -167,7 +215,12 @@ fn main() -> ExitCode {
         let shell = gz_app::GrizzlyShell::new(
             editor.clone(),
             shell,
-            gz_app::ShellOptions { fonts, iconsheet: cli.iconsheet, ui_scale: cli.ui_scale },
+            gz_app::ShellOptions {
+                fonts,
+                iconsheet: cli.iconsheet,
+                kitsheet: cli.kitsheet,
+                ui_scale: cli.ui_scale,
+            },
         );
         // the profile runs on to the first frame on the screen
         startup.set_log(log.clone());
@@ -179,6 +232,8 @@ fn main() -> ExitCode {
     }
     // the project closes with the editor: the scene to reopen, the preview, unsaved graphs
     runtime.block_on(gz_project::close_project(&editor));
+    // a staged update goes in now, and a restart starts the new version
+    gz_update::at_exit(&editor);
     log.info("Grizzly Editor closed");
     ExitCode::SUCCESS
 }
@@ -194,14 +249,15 @@ fn build_registry() -> Registry {
     gz_game::register(&mut registry);
     gz_mod::register(&mut registry);
     gz_build::register(&mut registry);
+    gz_asset::register(&mut registry);
     gz_nq::register(&mut registry);
     gz_release::register(&mut registry);
     gz_publish::register(&mut registry);
+    gz_update::register(&mut registry);
     // after gz-release: the real mod_catalog replaces its key-only stand-in
     gz_catalog::register(&mut registry);
     gz_pda::register(&mut registry);
     gz_screens::register(&mut registry);
-    gz_characters::register(&mut registry);
     gz_world::register(&mut registry);
     gz_scene::register(&mut registry);
     gz_export_level::register(&mut registry);
@@ -245,13 +301,14 @@ fn project_probe(editor: &Editor) -> gz_app::project::ProjectInfo {
         folder: text("project"),
         name: text("project_name"),
         game_linked: gz_project::Project::of(editor).is_ok_and(|(_, p)| p.game_linked_now()),
+        tabs_file: gz_project::Project::of(editor).ok().map(|(_, p)| p.tabs_file()),
     }
 }
 
 fn open_project_at_start(runtime: &Runtime, editor: &std::sync::Arc<Editor>, project: &Path) {
     let mut args = gz_editor::Args::new();
     args.insert("path".to_owned(), serde_json::Value::String(project.display().to_string()));
-    let reply = runtime.block_on(editor.call("open_project", args, editor.ui_origin()));
+    let reply = runtime.block_on(editor.call("project.open", args, editor.ui_origin()));
     if reply.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
         let why = reply.get("error").and_then(serde_json::Value::as_str).unwrap_or("unknown error");
         editor.log.error(format!("the project {} did not open: {why}", project.display()));
@@ -261,6 +318,19 @@ fn open_project_at_start(runtime: &Runtime, editor: &std::sync::Arc<Editor>, pro
 #[cfg(test)]
 mod tests {
     use gz_app::{Drawer, ShellBuilder, contract};
+
+    /// An installation unpacked anywhere has its programs at the data root: `fs.ltx` is beside
+    /// them, so the root is their folder and the home defaults to it.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn an_unpacked_installation_is_its_own_data_root() {
+        let dir = std::env::temp_dir().join(format!("grizzly-root-{}", std::process::id()));
+        let install = dir.join("Grizzly Editor");
+        std::fs::create_dir_all(install.join("gamedata")).unwrap();
+        std::fs::write(install.join("fs.ltx"), b"$sdk_root$ = false| false| $fs_root$\n").unwrap();
+        assert_eq!(super::find_root(&install), install);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A command with a card is its own documentation: `help` prints nothing else. So a card has
     /// a name of the agreed form, a summary that is a sentence, and a word on every parameter.

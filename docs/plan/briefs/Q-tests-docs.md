@@ -28,6 +28,9 @@ comments and test modules in every crate (never behaviour).
 - `tools/mcp/run_lifecycle.py` / `test_server_lifecycle.py`: the editor's and the commandlets' lifecycle
   (`Grizzly-Cmd.exe run / script / help`: exit codes 0 / 1 / 2, stdout and stderr, a closed pipe, Ctrl+C, no
   port taken, its own log), in one suite `test_cli.py` under `tools/qa`; `tools/mcp` keeps only `AI_SETUP.md`.
+- `tools/qa/test_update.py` is headless: add a phase with a window that proves the updater's face - the chip for
+  each state, the dialog `update` (`ui.dialog`) with the notes, the Preferences group, Help > Check for Updates -
+  by `ui.list` and one picture each.
 - `run_all.py`: the suite table is the truth; `--with-game` as now; no suite names an oracle.
 
 ## 2. The entry points and the checks

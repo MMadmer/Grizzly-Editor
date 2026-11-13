@@ -1,6 +1,7 @@
 //! What other areas hang on the project area: work to do when a project opens or closes, the
-//! module skeleton a project gets, files that follow a rename, the templates `content_create`
-//! writes and the lists `list_assets` answers.
+//! module skeleton a project gets, files that follow a rename, the question a second start's
+//! project asks in the window, the templates `file.create` writes and the library lists
+//! `file.list` answers.
 
 use std::future::Future;
 use std::path::Path;
@@ -18,6 +19,7 @@ type BeforeCloseHook =
     Arc<dyn Fn(Arc<Editor>, Arc<ProjectSession>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 type LiveSceneFn = Arc<dyn Fn(&Editor) -> bool + Send + Sync>;
 type FolderFn = Arc<dyn Fn(&Editor) -> Result<String, String> + Send + Sync>;
+type LaunchFn = Arc<dyn Fn(&Arc<Editor>, &str) -> bool + Send + Sync>;
 
 /// Hooks other areas register in `editor.services`; this crate's open, close, create and rename
 /// call them.
@@ -30,6 +32,7 @@ pub struct ProjectHooks {
     live_scene: RwLock<Option<LiveSceneFn>>,
     scaffold: RwLock<Vec<ScaffoldHook>>,
     renamed: RwLock<Vec<RenameHook>>,
+    launch: RwLock<Option<LaunchFn>>,
 }
 
 impl ProjectHooks {
@@ -57,7 +60,19 @@ impl ProjectHooks {
         self.before_close.write().push(Arc::new(move |ed, session| Box::pin(f(ed, session))));
     }
 
-    /// Where `content_create` makes an asset when the caller names no folder: the folder the
+    /// What `project.open from_launch=true` does when unsaved work is in the way: the window asks
+    /// Save / Don't Save / Cancel and opens the project (`folder`) after the answer. The provider
+    /// answers whether it asked; without one (no window) the open answers `unsaved`.
+    pub fn provide_launch_prompt(&self, f: impl Fn(&Arc<Editor>, &str) -> bool + Send + Sync + 'static) {
+        *self.launch.write() = Some(Arc::new(f));
+    }
+
+    pub(crate) fn ask_before_launch(&self, editor: &Arc<Editor>, folder: &str) -> bool {
+        let f = self.launch.read().clone();
+        f.is_some_and(|f| f(editor, folder))
+    }
+
+    /// Where `file.create` makes an asset when the caller names no folder: the folder the
     /// Content Browser shows (project-relative, `""` the root), or why it cannot (the browser
     /// shows a source that is not the project). Without a provider: the project root.
     pub fn provide_content_folder(
@@ -137,7 +152,7 @@ impl ProjectHooks {
     }
 }
 
-/// The kinds `content_create` makes, with the first free name of each.
+/// The kinds `file.create` makes, with the first free name of each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TemplateKind {
     Quest,
@@ -235,7 +250,7 @@ impl AssetTemplates {
     }
 }
 
-/// The content browser's categories, in its order, as `list_assets` names them.
+/// The library's categories, in the content browser's order (`file.list source=library`).
 pub const CATEGORIES: [&str; 10] = [
     "Objects",
     "Levels",

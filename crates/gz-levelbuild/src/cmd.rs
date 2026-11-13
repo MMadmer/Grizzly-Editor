@@ -404,11 +404,13 @@ struct PlayPlace {
 async fn play_context(editor: &Arc<Editor>) -> DeleteContext {
     let listed = gz_project::Projects::of(editor).list(editor).await.entries();
     let open = gz_project::Project::of(editor).ok().map(|(_, p)| (p.root().to_owned(), p.game_root()));
-    let (exe, root) = (editor.paths.exe_dir.clone(), editor.paths.root.clone());
+    let (exe, root, home) =
+        (editor.paths.exe_dir.clone(), editor.paths.root.clone(), editor.paths.home.clone());
     editor
         .exec
         .io(move || {
-            let guards = gz_project::system_guards(&exe, &root, open.as_ref().map(|o| o.1.as_str()), &listed);
+            let guards =
+                gz_project::system_guards(&exe, &root, &home, open.as_ref().map(|o| o.1.as_str()), &listed);
             DeleteContext { listed, open: open.map(|o| o.0), guards }
         })
         .await

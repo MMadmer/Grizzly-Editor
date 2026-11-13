@@ -12,7 +12,7 @@ What it proves:
      three lists the C++ filled are picked from - Fixed bones the model's bones (several), an anomaly's Attack
      animation its model's motions, a helicopter's Motion the game's .anm files - and an empty one says why
   D  Preferences opens as a tab, ui_audit finds nothing escaping it, and it closes
-  E  shortcuts: list, set (moved from the command that had it), clear - and every shortcut is back as it was
+  E  shortcuts: app.keys lists the actions, bind (moved from the action that had it), clear - and every shortcut is back as it was
   F  the editor's preferences file and layout come back byte for byte
 
     python tools/qa/test_properties.py --project <project>
@@ -92,7 +92,7 @@ class Editor:
 
     def close(self) -> None:
         try:
-            mcp("window_control", action="close", discard=True)
+            mcp("app.quit", discard=True)
         except OSError:
             pass
         if self.proc:
@@ -120,7 +120,7 @@ def rows(answer: dict) -> dict:
 
 def shot() -> None:
     # the editor redraws on demand: a picture makes it draw the frame a request waits for
-    mcp("screenshot_editor", timeout=120)
+    mcp("shot.window", timeout=120)
 
 
 def placed_spawn(section: str) -> str:
@@ -145,7 +145,7 @@ def choosers(spawn: str) -> None:
         two = ",".join(items[:2])
         opened = mcp("property_choose", action="open", key="Fixed bones")
         shot()
-        dialogs = json.dumps(mcp("ui_dialog", action="list"))
+        dialogs = json.dumps(mcp("ui.dialog", action="list"))
         check(opened.get("ok") and "dlg.choose" in dialogs and opened.get("total") == bones.get("total"),
               "C its chooser opens on the same list", json.dumps(opened)[:300] + " / " + dialogs[:200])
         mcp("property_choose", action="pick", item=two)
@@ -199,7 +199,7 @@ def run(project: str) -> None:
         opened = mcp("property_inspector", target="world", action="open", limit=500)
         check(opened.get("ok") and opened.get("open"), "A property_inspector opens Level Settings", json.dumps(opened)[:300])
         shot()
-        panels = {p.get("id"): p for p in mcp("ui_list").get("panels", [])}
+        panels = {p.get("id"): p for p in mcp("ui.list").get("panels", [])}
         check(panels.get("level_settings", {}).get("visible"), "A and raises it on the Level tab", json.dumps(panels.get("level_settings")))
         world = rows(opened)
         hemi = world.get("Scene\\Build options\\Lighting\\Hemisphere quality [0-3]", {})
@@ -210,7 +210,7 @@ def run(project: str) -> None:
         weld = world.get("Scene\\Build options\\Optimizing\\Weld distance (m)", {})
         check(weld.get("label") == "Weld distance" and weld.get("unit") == "m", "A a unit leaves the label for the value",
               json.dumps(weld))
-        audit = mcp("ui_audit", id="level_settings")
+        audit = mcp("ui.audit", id="level_settings")
         check(audit.get("ok") and not audit.get("escaped"), "A nothing escapes Level Settings", json.dumps(audit.get("escaped"))[:400])
 
         # ------------------------------------------------------------ B: property_set
@@ -232,8 +232,8 @@ def run(project: str) -> None:
 
         # ------------------------------------------------------------ C: the chooser
         # a physics object has a Visual row: the one that opens the chooser
-        roster = mcp("list_spawn_sections", filter="physic_object", limit=20).get("sections") or []
-        sections = [r.get("section", "") if isinstance(r, dict) else str(r) for r in roster]
+        roster = mcp("game.lookup", type="spawn_section", query="physic_object", limit=20).get("entries") or []
+        sections = [r.get("id", "") if isinstance(r, dict) else str(r) for r in roster]
         section = "physic_object" if "physic_object" in sections else next((s for s in sections if s), "")
         placed = mcp("place_spawn", section=section, x=1, y=0, z=1) if section else {"error": "no physic_object section"}
         name = (placed.get("object") or {}).get("name", "")
@@ -254,9 +254,9 @@ def run(project: str) -> None:
             chooser = mcp("property_choose", action="open", key="Visual")
             if check(chooser.get("ok"), "C the Visual row opens the chooser", json.dumps(chooser)):
                 shot()
-                dialogs = json.dumps(mcp("ui_dialog", action="list"))
+                dialogs = json.dumps(mcp("ui.dialog", action="list"))
                 check("dlg.choose" in dialogs, "C the chooser is the kit dialog ###dlg.choose", dialogs[:400])
-                closed = mcp("ui_dialog", action="close", id="choose")
+                closed = mcp("ui.dialog", action="close", id="choose")
                 check(closed.get("ok"), "C ui_dialog closes it", json.dumps(closed))
                 shot()
                 shot()
@@ -286,51 +286,52 @@ def run(project: str) -> None:
             mcp("delete_selected")
 
         # ------------------------------------------------------------ D: Preferences
-        tab = mcp("ui_tab", action="open", id="preferences")
+        tab = mcp("ui.tab", action="open", doc="preferences")
         check(tab.get("ok"), "D Preferences opens as a tab", json.dumps(tab)[:300])
         shot()
-        audit = mcp("ui_audit", id="preferences")
+        audit = mcp("ui.audit", id="preferences")
         check(audit.get("ok") and not audit.get("escaped"), "D nothing escapes Preferences", json.dumps(audit.get("escaped"))[:400])
         labels = {c.get("label") for c in audit.get("controls", [])}
         check("Search settings" in labels, "D it has its search", json.dumps(sorted(x for x in labels if x))[:400])
-        prefs = mcp("preferences", action="get", key="bp_cull")
+        prefs = mcp("app.prefs", action="get", key="bp_cull")
         check(prefs.get("ok") and prefs.get("value") in (True, False), "D bp_cull is a preference of its own", json.dumps(prefs))
         # the snap steps of Preferences ARE the viewport toolbar's
-        before = mcp("preferences", action="get", key="snap_angle_step")
-        mcp("preferences", action="set", key="snap_angle_step", value="11.25")
+        before = mcp("app.prefs", action="get", key="snap_angle_step")
+        mcp("app.prefs", action="set", key="snap_angle_step", value="11.25")
         angle = mcp("viewport_controls").get("angle", {})
         check(abs(float(angle.get("step", 0)) - 11.25) < 1e-3, "D the angle snap of Preferences is the toolbar's",
               json.dumps(angle))
-        mcp("preferences", action="set", key="snap_angle_step", value=str(before.get("value", "5.625")))
-        closed = mcp("ui_tab", action="close", id="preferences")
+        mcp("app.prefs", action="set", key="snap_angle_step", value=str(before.get("value", "5.625")))
+        closed = mcp("ui.tab", action="close", doc="preferences")
         check(closed.get("ok"), "D and closes", json.dumps(closed)[:300])
 
         # ------------------------------------------------------------ E: shortcuts
-        listed = mcp("shortcuts")
-        every = {s.get("id"): s.get("keys", "") for s in listed.get("shortcuts", [])}
-        check(listed.get("ok") and len(every) > 10, "E shortcuts lists the commands", json.dumps(listed)[:300])
-        names = {s.get("id"): s.get("label") for s in listed.get("shortcuts", [])}
-        check(names.get('COMMAND_ZOOM_EXTENTS."Selected"') == "View · Frame Selection" and
-              names.get("COMMAND_EDITOR_PREF") == "Edit · Preferences", "E commands go by their official names",
-              json.dumps({k: names.get(k) for k in ('COMMAND_ZOOM_EXTENTS."Selected"', "COMMAND_EDITOR_PREF")}))
-        undo = next((i for i in every if i == "COMMAND_UNDO"), "")
-        safe = next((i for i in every if i == "COMMAND_TOGGLE_SAFE_RECT"), "")
-        if check(bool(undo) and bool(safe), "E Undo and Toggle Safe Rect take shortcuts", json.dumps(sorted(every))[:300]):
+        listed = mcp("app.keys")
+        key_rows = {s.get("id"): s for s in listed.get("keys", [])}
+        every = {i: ", ".join(r.get("keys") or []) for i, r in key_rows.items()}
+        check(listed.get("ok") and len(every) > 10, "E app.keys lists the actions", json.dumps(listed)[:300])
+        names = {i: (r.get("group"), r.get("title")) for i, r in key_rows.items()}
+        check(names.get('COMMAND_ZOOM_EXTENTS."Selected"') == ("View", "Frame Selection") and
+              names.get("app.preferences") == ("Edit", "Preferences"), "E actions go by their official names",
+              json.dumps({k: names.get(k) for k in ('COMMAND_ZOOM_EXTENTS."Selected"', "app.preferences")}))
+        undo = "edit.undo" if "edit.undo" in every else ""
+        about = "help.about" if "help.about" in every else ""
+        if check(bool(undo) and bool(about), "E Undo and About take shortcuts", json.dumps(sorted(every))[:300]):
             combo = "Ctrl+Shift+Alt+F12"
-            first = mcp("shortcuts", action="set", command=safe, keys=combo)
-            check(first.get("ok") and first.get("shortcut", {}).get("keys") == combo, "E set gives a command a shortcut",
+            first = mcp("app.keys", action="bind", id=about, keys=combo)
+            check(first.get("ok") and combo in (first.get("row") or {}).get("keys", []), "E bind gives an action a shortcut",
                   json.dumps(first))
-            moved = mcp("shortcuts", action="set", command=undo, keys=combo)
-            check(moved.get("moved_from") == safe, "E the command that had it lets it go", json.dumps(moved))
-            bad = mcp("shortcuts", action="set", command=undo, keys="Ctrl+NoSuchKey")
+            moved = mcp("app.keys", action="bind", id=undo, keys=combo)
+            check(about in (moved.get("moved_from") or []), "E the action that had it lets it go", json.dumps(moved))
+            bad = mcp("app.keys", action="bind", id=undo, keys="Ctrl+NoSuchKey")
             check(not bad.get("ok"), "E a key nobody names is refused", json.dumps(bad))
             # as they were
-            for command in (undo, safe):
-                if every[command]:
-                    mcp("shortcuts", action="set", command=command, keys=every[command])
+            for action in (undo, about):
+                if every[action]:
+                    mcp("app.keys", action="bind", id=action, keys=every[action])
                 else:
-                    mcp("shortcuts", action="clear", command=command)
-            after = {s.get("id"): s.get("keys", "") for s in mcp("shortcuts").get("shortcuts", [])}
+                    mcp("app.keys", action="clear", id=action)
+            after = {s.get("id"): ", ".join(s.get("keys") or []) for s in mcp("app.keys").get("keys", [])}
             check(after == every, "E every shortcut is back as it was",
                   json.dumps({k: (every.get(k), after.get(k)) for k in set(every) | set(after) if every.get(k) != after.get(k)}))
     finally:

@@ -1,10 +1,9 @@
 //! What the linked game's files mean: its configs, string tables, texture sheets, modes, spawn
 //! roster and version. Read-only: nothing here writes a file of the game.
 //!
-//! The C++ specification is `EditorGameConfigs` (the `system.ltx` tree), `EditorGameModes`
-//! (the modes), the Spawn tool's list (`UISpawnTool`), `EditorMod::LinkedGameVersion` and the
-//! handlers named in [`register`]. The files themselves are `gz-vfs`'s [`gz_vfs::GameFiles`],
-//! mounted and kept by `gz-project`'s [`gz_project::Project`].
+//! The game is the open project's own on this machine, else the editor's default one, which is
+//! found by itself (`gz-project`'s [`gz_project::Machine`]). Its files are `gz-vfs`'s
+//! [`gz_vfs::GameFiles`], mounted and kept by `gz-project`'s [`gz_project::Project`].
 //!
 //! # API
 //!
@@ -26,18 +25,20 @@
 //!   ([`modes::scan`], [`modes::checkboxes`], [`modes::provides_mode`]); [`spawn`]
 //!   ([`spawn::sections`], [`spawn::list_path`]); [`version::exe_version`],
 //!   [`version::engine_abilities`] (what the engine says it can: Play runs it in place on that).
-//! - [`register`]: `game_link`, `game_modes`, `list_spawn_sections`.
+//! - [`register`]: `game.link`, `game.info`, `game.lookup`; [`Lookups`] - the lists other areas
+//!   serve through `game.lookup` (the quest editor's pickers).
 
 #![forbid(unsafe_code)]
 
 mod cmd;
 pub mod configs;
 pub mod modes;
+pub mod project_kind;
 mod service;
 pub mod spawn;
 pub mod version;
 
-pub use cmd::{install, register};
+pub use cmd::{LookupAnswer, LookupEntry, LookupQuery, Lookups, install, register};
 pub use configs::{ConfigTree, SYSTEM_LTX};
 pub use modes::{GameMode, ModeScan};
 pub use service::{Bundled, GameError, GameLink, Provenance, read_game_or_bundled, spawn_roster};

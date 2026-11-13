@@ -5,7 +5,13 @@
 //! Writing never waits on the disk.
 //!
 //! The file keeps the engine's line marks, which tools and people already read: `! ` an error,
-//! `~ ` a warning, `* ` information, no mark for plain text.
+//! `~ ` a warning, `* ` information (a report or a detail), no mark for plain text.
+//!
+//! A **report** is a line the author may want to read now: an error, a warning, or an
+//! information line that says what the editor did. A **detail** is information of the editor's
+//! machinery - a start-up profile, a build's stage times - kept in the file and the Output Log but
+//! never the status bar's line. [`Log::last_report`] is the newest report, kept as a field the
+//! writer updates, so a reader never walks the ring.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -26,6 +32,9 @@ use serde::Serialize;
 #[serde(rename_all = "snake_case")]
 pub enum Level {
     Plain,
+    /// Information of the editor's machinery: profiles, stage times. Marked as information in the
+    /// file, never a report.
+    Detail,
     Info,
     Warning,
     Error,
@@ -36,14 +45,20 @@ impl Level {
     pub fn mark(self) -> &'static str {
         match self {
             Level::Plain => "",
-            Level::Info => "* ",
+            Level::Detail | Level::Info => "* ",
             Level::Warning => "~ ",
             Level::Error => "! ",
         }
     }
+
+    /// A line of this level is a report: what the status bar may show.
+    #[must_use]
+    pub fn reports(self) -> bool {
+        matches!(self, Level::Info | Level::Warning | Level::Error)
+    }
 }
 
-/// A line as the C++ log held it: its level's mark in front (`~ [nq] ...`), unless the text
+/// A line as the log holds it: its level's mark in front (`~ [nq] ...`), unless the text
 /// carries one already.
 #[must_use]
 pub fn marked(level: Level, text: &str) -> String {
@@ -76,6 +91,8 @@ struct Inner {
     errors: AtomicU32,
     warnings: AtomicU32,
     rev: RevCounter,
+    /// The newest report, set as it is written.
+    last_report: Mutex<Option<Arc<Record>>>,
 }
 
 struct Ring {
@@ -113,6 +130,7 @@ impl Log {
             errors: AtomicU32::new(0),
             warnings: AtomicU32::new(0),
             rev: RevCounter::new(),
+            last_report: Mutex::new(None),
         }));
         let writer = std::thread::Builder::new()
             .name("gz-log".to_owned())
@@ -129,6 +147,7 @@ impl Log {
             errors: AtomicU32::new(0),
             warnings: AtomicU32::new(0),
             rev: RevCounter::new(),
+            last_report: Mutex::new(None),
         }))
     }
 
@@ -158,6 +177,9 @@ impl Log {
             }
             record
         };
+        if level.reports() {
+            *self.0.last_report.lock() = Some(record.clone());
+        }
         self.0.rev.bump();
         if let Some(tx) = &self.0.tx {
             let _ = tx.send(Msg::Line(record));
@@ -170,6 +192,12 @@ impl Log {
 
     pub fn info(&self, text: impl fmt::Display) {
         self.write(Level::Info, text.to_string());
+    }
+
+    /// A line of the editor's machinery (a profile, stage times): in the file and the Output
+    /// Log, never the status bar's line.
+    pub fn detail(&self, text: impl fmt::Display) {
+        self.write(Level::Detail, text.to_string());
     }
 
     pub fn warn(&self, text: impl fmt::Display) {
@@ -225,10 +253,11 @@ impl Log {
         ring.lines.iter().skip(skip).cloned().collect()
     }
 
-    /// The newest line worth showing in the status bar: the last non-plain one.
+    /// The newest report: what the status bar shows. A field the writer sets; nothing walks the
+    /// ring for it.
     #[must_use]
-    pub fn last_notable(&self) -> Option<Arc<Record>> {
-        self.0.ring.lock().lines.iter().rev().find(|r| r.level != Level::Plain).cloned()
+    pub fn last_report(&self) -> Option<Arc<Record>> {
+        self.0.last_report.lock().clone()
     }
 
     pub fn clear(&self) {
@@ -303,8 +332,32 @@ macro_rules! warn {
 macro_rules! error {
     ($log:expr, $($arg:tt)*) => { $log.write($crate::Level::Error, format!($($arg)*)) };
 }
+/// `detail!(log, "...")`.
+#[macro_export]
+macro_rules! detail {
+    ($log:expr, $($arg:tt)*) => { $log.write($crate::Level::Detail, format!($($arg)*)) };
+}
 /// `plain!(log, "...")`.
 #[macro_export]
 macro_rules! plain {
     ($log:expr, $($arg:tt)*) => { $log.write($crate::Level::Plain, format!($($arg)*)) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Level, Log};
+
+    #[test]
+    fn a_detail_is_never_the_last_report() {
+        let log = Log::memory();
+        assert!(log.last_report().is_none());
+        log.info("Saved quests/a.nqasset");
+        log.detail("startup after the process was created: first frame 1.2 s");
+        log.plain("plain text");
+        assert_eq!(log.last_report().map(|r| r.text.clone()).as_deref(), Some("Saved quests/a.nqasset"));
+        log.warn("a warning");
+        assert_eq!(log.last_report().map(|r| r.level), Some(Level::Warning));
+        assert_eq!(log.tail(10).len(), 4);
+        assert_eq!(Level::Detail.mark(), "* ");
+    }
 }

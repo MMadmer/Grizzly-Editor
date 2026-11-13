@@ -58,6 +58,8 @@ pub struct Cli {
     pub echo: bool,
     /// `-iconsheet`: show every icon of the kit and nothing else.
     pub iconsheet: bool,
+    /// `-kitsheet`: show every widget of the kit in every state, and its tokens, and nothing else.
+    pub kitsheet: bool,
     /// `-minimized`: the window starts minimised, as it does for a launcher that asks for a
     /// minimised start (a shortcut's Run: Minimized). The twin for a command line passes its own
     /// launcher's request on with it.
@@ -82,6 +84,8 @@ pub struct Cli {
     pub keep_going: bool,
     /// Why the commandlet's own words make no sense; the run prints it and ends with 2.
     pub usage: Option<String>,
+    /// `-updated <version>`: this run is the new version an update restarted into, from that one.
+    pub updated: Option<String>,
 }
 
 /// Which compiler `-compile` runs.
@@ -114,10 +118,12 @@ impl Cli {
                 "home" => cli.home = it.next().map(PathBuf::from),
                 "log_echo" | "log-echo" => cli.echo = true,
                 "iconsheet" => cli.iconsheet = true,
+                "kitsheet" => cli.kitsheet = true,
                 "minimized" => cli.minimized = true,
                 "json" => cli.json = true,
                 "quiet" => cli.quiet = true,
                 "keep_going" | "keep-going" => cli.keep_going = true,
+                "updated" => cli.updated = it.next(),
                 "compile" | "compile_details" => {
                     let what = if name == "compile" { CompileWhat::Level } else { CompileWhat::Details };
                     if let Some(folder) = it.next() {
@@ -306,6 +312,10 @@ mod tests {
         assert_eq!(cli(&["check", "fail_on=warning"]).verb, run("asset.check", &[("fail_on", "warning")]));
         assert_eq!(cli(&["reference", "quest"]).verb, run("asset.reference", &[("kind", "quest")]));
         assert_eq!(cli(&["update"]).verb, run("update.apply", &[("restart", "false")]));
+        // the restart into a new version names the old one; it is no project to open
+        let updated = cli(&["-updated", "0.7.0", "-headless"]);
+        assert_eq!(updated.updated.as_deref(), Some("0.7.0"));
+        assert!(updated.project.is_none() && updated.unknown.is_empty());
     }
 
     #[test]

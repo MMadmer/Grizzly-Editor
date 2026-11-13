@@ -138,7 +138,7 @@ def window(handle, until, frames: bool = True, step=None) -> dict:
             step()
         else:
             if frames:
-                mcp("ui_list", timeout=30)
+                mcp("ui.list", timeout=30)
             time.sleep(0.25 if frames else 1.0)
         if time.monotonic() - last > 10:
             last = time.monotonic()
@@ -237,7 +237,7 @@ def main() -> int:
         if not pid:
             return
         try:
-            mcp("window_control", action="close", discard=True, timeout=30)
+            mcp("app.quit", discard=True, timeout=30)
         except OSError:
             pass
         deadline = time.monotonic() + 60
@@ -289,7 +289,7 @@ def main() -> int:
             log(f"  the editor out of power throttling: {bool(ok)}")
         log(f"{args.scene}: editor {exe} pid {ed['pid']}")
         a = mcp("open_scene", scene=args.scene + ".level", timeout=300)
-        mcp("ui_tab", action="open", id="level")
+        mcp("ui.tab", action="open", doc="level")
         if not a.get("ok"):
             log(f"! open_scene: {a}")
             return False
@@ -302,7 +302,7 @@ def main() -> int:
         if not args.headless_editor:
             mcp("screenshot_viewport", timeout=60)
         if args.away:
-            mcp("ui_tab", action="open", kind="preferences")
+            mcp("ui.tab", action="open", kind="preferences")
         return True
 
     def settle(label: str) -> dict:
@@ -329,14 +329,14 @@ def main() -> int:
         job = started.get("job")
         log(f"  {label}: compile started: {started}")
         if card:
-            log(f"  {label}: the Task Center's card: {mcp('ui_popup', show='tasks')}")
+            log(f"  {label}: the Task Center's card: {mcp('ui.popup', show='tasks')}")
 
         def ended() -> bool:
-            j = next((j for j in mcp("jobs").get("jobs", []) if j.get("id") == job), {})
+            j = next((j for j in mcp("job.list").get("jobs", []) if j.get("id") == job), {})
             return j.get("state") != "running"
 
         busy = window(ed["handle"], ended, frames=not args.no_frames, step=step)
-        j = next((j for j in mcp("jobs").get("jobs", []) if j.get("id") == job), {})
+        j = next((j for j in mcp("job.list").get("jobs", []) if j.get("id") == job), {})
         res = j.get("result") or {}
         busy["compiler_seconds"] = res.get("seconds")
         busy["state"] = j.get("state")

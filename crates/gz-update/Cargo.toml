@@ -1,0 +1,33 @@
+[package]
+name = "gz-update"
+description = "The editor updates itself: the latest release, the delta read out of its archive by range, the staged download, the journalled swap."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-editor.workspace = true
+futures.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+tokio.workspace = true
+sha2.workspace = true
+hex.workspace = true
+flate2.workspace = true
+crc32fast = "1"
+# anonymous downloads; the Windows proxy settings apply
+reqwest = { workspace = true, features = ["system-proxy"] }
+
+[target.'cfg(windows)'.dependencies]
+gz-win.workspace = true
+
+[dev-dependencies]
+gz-task.workspace = true
+tempfile.workspace = true

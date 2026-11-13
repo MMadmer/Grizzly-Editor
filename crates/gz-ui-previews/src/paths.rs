@@ -33,9 +33,14 @@ pub struct EditorDirs {
 }
 
 impl EditorDirs {
+    /// The editor's library (Preferences > Library) for what it reads; the editor's own data
+    /// root for where it imports and keeps saves.
     #[must_use]
     pub fn of(editor: &Editor) -> Self {
-        Self::at(&editor.paths.root)
+        let mut dirs = Self::at(&gz_project::library_root(editor));
+        dirs.import = editor.paths.root.join("import");
+        dirs.saves = editor.paths.root.join("savedgames");
+        dirs
     }
 
     #[must_use]

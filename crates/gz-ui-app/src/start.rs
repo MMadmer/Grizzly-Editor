@@ -187,11 +187,13 @@ pub(crate) fn refresh(st: &mut PageState, editor: &Arc<Editor>, page: &Arc<Start
 pub(crate) async fn delete_plan(editor: &Arc<Editor>, path: String) -> DeleteInfo {
     let listed = Projects::of(editor).list(editor).await.entries();
     let open = Project::of(editor).ok().map(|(_, p)| (p.root().to_owned(), p.game_root()));
-    let (exe, root) = (editor.paths.exe_dir.clone(), editor.paths.root.clone());
+    let (exe, root, home) =
+        (editor.paths.exe_dir.clone(), editor.paths.root.clone(), editor.paths.home.clone());
     editor
         .exec
         .io(move || {
-            let guards = gz_project::system_guards(&exe, &root, open.as_ref().map(|o| o.1.as_str()), &listed);
+            let guards =
+                gz_project::system_guards(&exe, &root, &home, open.as_ref().map(|o| o.1.as_str()), &listed);
             let cx = DeleteContext { listed, open: open.map(|o| o.0), guards };
             gz_project::check_delete(&cx, &path)
         })
@@ -225,7 +227,7 @@ fn state_help(state: EntryState) -> &'static str {
     if state == EntryState::Missing {
         "The folder is not there: moved, deleted, or on a drive that is not plugged in. Its menu takes it off the list."
     } else {
-        "The folder holds no project.ltx or mod.ltx any more. Its menu takes it off the list."
+        "The folder holds no project file or mod.ltx any more. Its menu takes it off the list."
     }
 }
 
@@ -486,7 +488,7 @@ fn draw_projects(
         if Button::new("New Project").primary().tip("Opens the form that makes a new project.").show(ui).clicked() {
             st.form_open = !st.form_open;
         }
-        if Button::new("Open Folder...").tip("Opens a folder that holds mod.ltx or project.ltx, such as a fresh clone of a mod's repository.").show(ui).clicked() {
+        if Button::new("Open Folder...").tip("Opens a folder that holds a project file (.grizzly) or mod.ltx, such as a fresh clone of a mod's repository.").show(ui).clicked() {
             actions.push(Action::OpenFolder);
         }
         let w = (ui.available_width() - sort_w - 8.0).max(em(8.0));
@@ -1060,7 +1062,7 @@ fn run(action: Action, st: &mut PageState, editor: &Arc<Editor>, page: &Arc<Star
     let (ed, pg) = (editor.clone(), page.clone());
     match action {
         Action::Open(path) => {
-            call_then(editor, "open_project", args([("path", s(&path))]), move |reply, _| {
+            call_then(editor, "project.open", args([("path", s(&path))]), move |reply, _| {
                 if !ok(reply) {
                     let mut st = pg.state.lock();
                     st.page_error = format!("The project cannot be opened: {}", error_text(reply));
@@ -1082,7 +1084,7 @@ fn run(action: Action, st: &mut PageState, editor: &Arc<Editor>, page: &Arc<Star
         Action::Create => {
             st.creating = true;
             let a = args([("name", s(&st.name)), ("parent", s(&st.parent))]);
-            call_then(editor, "project_create", a, move |reply, _| {
+            call_then(editor, "project.create", a, move |reply, _| {
                 let mut st = pg.state.lock();
                 st.creating = false;
                 if ok(reply) {
@@ -1101,7 +1103,7 @@ fn run(action: Action, st: &mut PageState, editor: &Arc<Editor>, page: &Arc<Star
             });
         }
         Action::Reveal(path) => {
-            call_then(editor, "project_reveal", args([("path", s(&path))]), move |reply, _| {
+            call_then(editor, "project.reveal", args([("path", s(&path))]), move |reply, _| {
                 if !ok(reply) {
                     set_page_error(&pg, format!("Show in Explorer: {}", error_text(reply)));
                 }
@@ -1109,7 +1111,7 @@ fn run(action: Action, st: &mut PageState, editor: &Arc<Editor>, page: &Arc<Star
         }
         Action::AskDelete(path, name) => open_confirm(st, editor, page, path, name),
         Action::Forget(path, name) => {
-            call_then(editor, "project_forget", args([("path", s(&path))]), move |reply, ctx| {
+            call_then(editor, "project.forget", args([("path", s(&path))]), move |reply, ctx| {
                 let mut st = pg.state.lock();
                 if ok(reply) {
                     toast(ctx, Tone::Info, &format!("{name} was taken off the list."));
@@ -1120,7 +1122,7 @@ fn run(action: Action, st: &mut PageState, editor: &Arc<Editor>, page: &Arc<Star
             })
         }
         Action::DeleteNow(path, name) => {
-            call_then(editor, "project_delete", args([("path", s(&path))]), move |reply, ctx| {
+            call_then(editor, "project.delete", args([("path", s(&path))]), move |reply, ctx| {
                 let mut st = pg.state.lock();
                 if ok(reply) {
                     st.confirm = None;
@@ -1158,7 +1160,7 @@ fn run(action: Action, st: &mut PageState, editor: &Arc<Editor>, page: &Arc<Star
     }
 }
 
-/// Open Folder...: a folder that holds `mod.ltx` or `project.ltx` opens; anything else says why.
+/// Open Folder...: a folder that holds a project file or `mod.ltx` opens; anything else says why.
 fn open_folder(editor: &Arc<Editor>, page: &Arc<StartPage>, folder: String) {
     let (ed, pg) = (editor.clone(), page.clone());
     let _task = editor.exec.spawn(async move {
@@ -1166,11 +1168,11 @@ fn open_folder(editor: &Arc<Editor>, page: &Arc<StartPage>, folder: String) {
         let is_project =
             ed.exec.io(move || gz_project::list::has_manifest(std::path::Path::new(&probe))).await;
         if !is_project {
-            let text_ = format!("Not a project folder - it holds no mod.ltx or project.ltx: {folder}");
+            let text_ = format!("Not a project folder - it holds no project file and no mod.ltx: {folder}");
             post_ui(&ed, move |_| set_page_error(&pg, text_));
             return;
         }
-        let reply = ed.call("open_project", args([("path", s(&folder))]), ed.ui_origin()).await;
+        let reply = ed.call("project.open", args([("path", s(&folder))]), ed.ui_origin()).await;
         if !ok(&reply) {
             let text_ = format!("The project cannot be opened: {}", error_text(&reply));
             post_ui(&ed, move |_| set_page_error(&pg, text_));

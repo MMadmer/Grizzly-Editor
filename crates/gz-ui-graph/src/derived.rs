@@ -1,12 +1,13 @@
 //! What a graph tab reads besides its document's snapshot, fetched off the UI thread: the
 //! catalog, the problems, the pickers, the item capabilities, the project's characters, the
 //! module's globals, the ids of the project's graphs (with a behaviour graph's roles), the way
-//! paths, the scene's level, and whether the file changed on disk. All of it comes from
-//! `gz_nq::NqService`'s queries, so a refresh of an unchanged document costs lookups only.
+//! paths, the scene's level, and what the file on disk says the document does not show (its
+//! `DiskState`, kept by the project's watcher). All of it comes from `gz_nq::NqService`'s
+//! queries, so a refresh of an unchanged document costs lookups only.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use gz_base::Rev;
 use gz_editor::Editor;
@@ -16,7 +17,7 @@ use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
 
-/// How often a tab that is drawn looks again without an edit (the file on disk, the manifest).
+/// How often a tab that is drawn looks again without an edit (the manifest, the file's state).
 const POLL: Duration = Duration::from_secs(1);
 
 /// One project graph another one can name.
@@ -50,8 +51,9 @@ pub struct DocData {
     pub way_paths: Arc<Vec<PickerEntry>>,
     /// The open scene's level, for a fresh position.
     pub level: String,
-    /// The file changed on disk behind the document.
-    pub external: bool,
+    /// What the file on disk says the document does not show: it does not read, it is gone,
+    /// values both sides changed.
+    pub disk: gz_nq::DiskState,
     pub missing: bool,
     pub has_project: bool,
 }
@@ -81,10 +83,6 @@ impl Default for Refresher {
             last_at: None,
         }
     }
-}
-
-fn file_time(path: &std::path::Path) -> Option<SystemTime> {
-    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
 }
 
 impl Refresher {
@@ -153,10 +151,7 @@ async fn fetch(ed: &Arc<Editor>, doc: &Arc<DocHandle>) -> Option<DocData> {
         }
         e.1.push_str(&p.text());
     }
-    let path = doc.path();
-    let known = snap.file_time;
-    let abs = path.abs.clone();
-    let (exists, now) = ed.exec.io(move || (abs.is_file(), file_time(&abs))).await;
+    let disk = doc.disk();
     Some(DocData {
         errors: gz_nq::validate::count_errors(&problems),
         warnings: gz_nq::validate::count_warnings(&problems),
@@ -172,8 +167,8 @@ async fn fetch(ed: &Arc<Editor>, doc: &Arc<DocHandle>) -> Option<DocData> {
         graphs: Arc::new(graphs),
         way_paths: Arc::new(svc.way_paths()),
         level: env.level.clone().unwrap_or_default(),
-        external: exists && known.is_some() && now != known,
-        missing: !exists,
+        missing: disk.missing,
+        disk,
         has_project: true,
     })
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The Start page - its project cards, their menu (Show in Explorer, Delete..., Remove from List), the
-Delete Project dialog, the New Project form and the Link Game card - over MCP (EditorProject), on
+Delete Project dialog, the New Project form and the Link Game card - over MCP (`project.*`), on
 THROW-AWAY projects in a temp folder only.
 
 Nothing here touches a folder the test did not make: _projects.ini is replaced for the run by a list
@@ -29,15 +29,18 @@ What it proves:
   F  Remove from List: refused for a project, done for a folder without one, nothing on disk changes
   G  Show in Explorer: refusals, the folder it resolves, and one real window, closed again
   H  the open project is refused, and the menu is not offered while a project is open; a project
-     with no game shows the Link Game card, which is no modal and lets nothing escape
-  N  project_create: refused while a project is open, for a bad name and for a relative location;
-     after project_close it makes the project, opens it and puts it on the list
+     with no game known at all shows the Link Game card, which is no modal, lets nothing escape and
+     offers the places the editor looked at; an old project.ltx was converted (the project file, no
+     project.ltx, AGENTS.md)
+  N  project.create: refused while a project is open, for a bad name and for a relative location;
+     after project.close it makes the project with its project file and AGENTS.md, opens it and puts
+     it on the list with its id
   P  a card shows its preview.png; a black one, an empty grey one with stats text, none, or a gone
      folder get the placeholder
-  L  project.ltx last_scene: an absolute path inside the project comes back below its root; a copy
-     naming the original's scene does not reopen it and forgets it; a project closed before its
-     scene loaded (no game linked) keeps it
-  Z  _projects.ini is back byte for byte
+  L  the project file's scene: an old absolute last_scene inside the project comes back below its
+     root; a copy naming the original's scene does not reopen it and forgets it; a project closed
+     before its scene loaded (no game known) keeps it
+  Z  no UI pass stalled; _projects.ini is back byte for byte
 
     python tools/qa/test_project_browser.py [--shots <folder>] [--no-explorer] [--keep]
 """
@@ -130,7 +133,7 @@ class Editor:
     def close(self) -> None:
         # never killed: a killed editor leaves project.ltx behind half written
         try:
-            mcp("window_control", action="close")
+            mcp("app.quit")
         except OSError:
             pass
         if self.proc:
@@ -144,7 +147,7 @@ def shot(folder: str | None, name: str) -> dict:
     """The editor as it looks now. Always taken - it is what makes a background editor draw the frames
     the answers after it report on -, saved only when --shots names a folder. The answer comes back
     (modal, outside) without its picture."""
-    pic = mcp("screenshot_editor")
+    pic = mcp("shot.window")
     if folder and pic.get("png_base64"):
         os.makedirs(folder, exist_ok=True)
         path = os.path.join(folder, name + ".png")
@@ -159,7 +162,7 @@ def shot(folder: str | None, name: str) -> dict:
 
 def escaped(window: str) -> list:
     """What the last frame let escape from a window (ui_audit), or the error as the one entry."""
-    audit = mcp("ui_audit", id=window)
+    audit = mcp("ui.audit", id=window)
     if not audit.get("ok"):
         return [audit.get("error", "ui_audit failed")]
     return audit.get("escaped", [])
@@ -202,33 +205,36 @@ def write_png(path: str, w: int, h: int, pixel) -> None:
                 chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 
+def project_file(project: str) -> str | None:
+    """The project file at the root of `project` (`*.grizzly`), None without one."""
+    names = sorted(n for n in os.listdir(project) if n.lower().endswith(".grizzly")) if os.path.isdir(project) else []
+    return os.path.join(project, names[0]) if names else None
+
+
 def last_scene(project: str) -> str | None:
-    """project.ltx [project] last_scene as written, None when the key is not there."""
-    try:
-        text = open(os.path.join(project, "project.ltx"), encoding="utf-8", errors="replace").read()
-    except OSError:
+    """The project file's `scene` as written, "" when it names none, None without a project file."""
+    import re
+    path = project_file(project)
+    if not path:
         return None
-    section = ""
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("["):
-            section = line.strip("[]").strip().lower()
-        elif section == "project" and "=" in line and line.split("=", 1)[0].strip().lower() == "last_scene":
-            return line.split("=", 1)[1].strip()
-    return None
+    m = re.search(r'\bscene\s*=\s*"([^"]*)"', open(path, encoding="utf-8", errors="replace").read())
+    return m.group(1).replace("\\\\", "\\") if m else ""
 
 
 def set_last_scene(project: str, value: str) -> None:
-    """Puts last_scene into project.ltx [project], every other line as it was."""
-    path = os.path.join(project, "project.ltx")
-    lines = open(path, encoding="utf-8", errors="replace").read().splitlines() if os.path.isfile(path) else []
-    lines = [l for l in lines if l.split("=", 1)[0].strip().lower() != "last_scene"]
-    at = next((i + 1 for i, l in enumerate(lines) if l.strip().lower() == "[project]"), None)
-    if at is None:
-        lines, at = lines + ["[project]"], len(lines) + 1
-    lines.insert(at, "last_scene=" + value)
-    with open(path, "w", encoding="utf-8", newline="\r\n") as f:
+    """Puts `scene = <value>` into the project file, every other line as it was."""
+    path = project_file(project)
+    text = open(path, encoding="utf-8").read()
+    lines = [l for l in text.splitlines() if not l.strip().startswith("scene")]
+    at = next(i for i, l in enumerate(lines) if l.strip().startswith("id"))
+    lines.insert(at + 1, '  scene = "%s",' % value.replace("\\", "\\\\"))
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
+
+
+def grizzly(project_id: str) -> str:
+    """A project file's text."""
+    return 'return {\n  grizzly = 1,\n  id = "%s",\n}\n' % project_id
 
 
 def set_attributes(path: str, readonly: bool = False, hidden: bool = False) -> None:
@@ -251,8 +257,8 @@ def is_junction(path: str) -> bool:
 
 
 def listed(state: dict | None = None) -> dict:
-    """list_projects as {lowered forward-slash path: entry}."""
-    data = state or mcp("list_projects")
+    """project.list as {lowered forward-slash path: entry}."""
+    data = state or mcp("project.list")
     return {fwd(p.get("path", "")).lower(): p for p in data.get("projects", [])}
 
 
@@ -278,7 +284,7 @@ class Work:
         # C: the project that is deleted, with everything a real one gathers
         d = self.p["delete"] = self.path("QaDelete")
         sizes = [
-            write(os.path.join(d, "project.ltx"), "[project]\nname = QaDelete\n"),
+            write(os.path.join(d, "QaDelete.grizzly"), grizzly("00000000-0000-4000-8000-00000000de1e")),
             write(os.path.join(d, "mod.ltx"), mod("qa_delete")),
             write(os.path.join(d, "readonly.txt"), "git and CDs leave files read-only\n"),
             write(os.path.join(d, "gamedata", "configs", "qa_delete.ltx"), "[qa_delete]\nvalue = 1\n"),
@@ -315,8 +321,9 @@ class Work:
         _winapi.CreateJunction(self.p["real"], self.p["junction"])
         self.p["holdsgame"] = self.path("QaHoldsGame")
         write(os.path.join(self.p["holdsgame"], "mod.ltx"), mod("qa_holds_game"))
-        write(os.path.join(self.p["holdsgame"], "project.ltx"),
-              "[project]\nname = QaHoldsGame\ngame_root = %s\n" % os.path.join(self.p["holdsgame"], "game"))
+        holds_id = "00000000-0000-4000-8000-0000000a11ed"
+        write(os.path.join(self.p["holdsgame"], "QaHoldsGame.grizzly"), grizzly(holds_id))
+        write(qa_target.project_state(holds_id), "[game]\nroot = %s\n" % os.path.join(self.p["holdsgame"], "game"))
         write(os.path.join(self.p["holdsgame"], "game", "fsgame.ltx"), "; a game\n")
         self.p["game"] = self.path("GameX")
         write(os.path.join(self.p["game"], "fsgame.ltx"), "; a game\n")
@@ -349,7 +356,7 @@ class Work:
         self.p["scene"] = os.path.join(self.p["open"], "rawdata", "levels", "qa_scene.level")
         write(self.p["scene"], "; a scene the editor never loads here: no game is linked\n")
         write(os.path.join(self.p["open"], "project.ltx"), "[project]\nname = %s\nlast_scene = %s\n" % (TWIN, self.p["scene"]))
-        # N: made by project_create; nothing is there before
+        # N: made by project.create; nothing is there before
         self.p["created"] = self.path("QaCreated")
 
         for p in self.p.values():
@@ -411,7 +418,7 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
     p = w.p
     try:
         st = ed.start()
-        check(not st.get("project_active"), "A the editor starts on the Start page", short(st))
+        check(not st.get("project"), "A the editor starts on the Start page", short(st))
 
         # ------------------------------------------------------------------ A: the list
         lst = listed()
@@ -442,22 +449,22 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
               "P a card shows its preview; a black or empty grey one, none, or a gone folder gets the placeholder",
               json.dumps(pictures))
         mcp("project_browser_menu", new_project=True)
-        audit = mcp("ui_audit", id="start_page")
+        audit = mcp("ui.audit", id="start_page")
         create = [c for c in audit.get("controls", []) if c.get("label") == "Create"]
         check(audit.get("ok") and create and not create[0].get("enabled") and create[0].get("why"),
               "S Create is off while the form has no name, and says why", short(audit))
-        before = mcp("ui_scale").get("ui_scale")
+        before = mcp("ui.scale").get("scale")
         for scale in (1.0, 1.5):
-            mcp("ui_scale", value=scale)
+            mcp("ui.scale", value=scale)
             shot(shots, "start_page_%g" % scale)
             esc = escaped("start_page")
             check(not esc, "S nothing escapes the Start page at UI scale %g" % scale, json.dumps(esc)[:600])
             # the twins' parent lives in the path line: it no longer takes the name's room
-            cut = [t for t in mcp("ui_audit", id="start_page").get("truncated", []) if t.get("label") == TWIN]
+            cut = [t for t in mcp("ui.audit", id="start_page").get("truncated", []) if t.get("label") == TWIN]
             check(not cut, "S a card's name has its row to itself: the twins' long name is whole at UI scale %g" % scale,
                   json.dumps(cut)[:600])
         if before:
-            mcp("ui_scale", value=before)
+            mcp("ui.scale", value=before)
 
         found = cards(mcp("project_browser_menu", search="qaLOCKED"))
         check([c for c, _ in found] == [fwd(p["locked"]).lower()], "S the search ignores case", json.dumps(found))
@@ -531,7 +538,7 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
               "B looking deleted nothing")
 
         # ------------------------------------------------------------------ C: a deletion
-        d = mcp("project_delete", path=p["delete"])
+        d = mcp("project.delete", path=p["delete"])
         gone = d.get("deleted") or {}
         check(d.get("ok") and not d.get("refused") and d.get("removed_from_list") and
               (gone.get("files"), gone.get("folders"), gone.get("links"), gone.get("bytes")) ==
@@ -551,7 +558,7 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
             path = p.get(key_or_path, key_or_path)
             assert not os.path.isabs(path) or w.inside(path), path
             before = sorted(os.walk(path)) if os.path.isdir(path) else None
-            r = mcp("project_delete", path=path)
+            r = mcp("project.delete", path=path)
             after = sorted(os.walk(path)) if os.path.isdir(path) else None
             ok = not r.get("ok") and r.get("refused") and words.lower() in r.get("error", "").lower() and \
                 before == after and not r.get("removed_from_list")
@@ -560,7 +567,7 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
             check(ok, "D refused: " + what + ", nothing deleted", short(r))
             return r
 
-        refused("notproject", "not a project", "a folder with no project.ltx or mod.ltx")
+        refused("notproject", "not a project", "a folder with no project file and no mod.ltx")
         refused("outside", "not in the project list", "a project outside the list")
         refused("QaDelete", "full path", "a relative path")
         refused(w.path("QaNoSuchFolder"), "no such folder", "a folder that does not exist and is not listed")
@@ -570,10 +577,12 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
                 lambda r: fwd(p["real"]).lower() in r.get("error", "").lower())
         check(is_junction(p["junction"]) and os.path.isfile(os.path.join(p["real"], "file.txt")),
               "D the junction and the project behind it are both still there")
-        refused("holdsgame", "holds the linked game of the project QaHoldsGame", "a folder holding a listed project's game")
-        refused("ingame", "lies inside the linked game of the project QaLinker", "a folder inside a listed project's game")
+        refused("holdsgame", "holds the linked game of the project QaHoldsGame",
+                "a folder holding a listed project's game (this machine's state of it)")
+        refused("ingame", "lies inside the linked game of the project QaLinker",
+                "a folder inside the game an old project.ltx names")
 
-        d = mcp("project_delete", path=p["missing"])
+        d = mcp("project.delete", path=p["missing"])
         check(d.get("ok") and d.get("missing") and d.get("removed_from_list") and
               (d.get("deleted") or {}).get("files") == 0 and not os.path.lexists(p["missing"]),
               "D a missing folder only leaves the list", short(d))
@@ -582,7 +591,7 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
         # ------------------------------------------------------------------ E: a file in use
         held = open(os.path.join(p["locked"], "data", "locked.bin"), "rb")
         try:
-            d = mcp("project_delete", path=p["locked"])
+            d = mcp("project.delete", path=p["locked"])
             failed = d.get("failed") or []
             check(not d.get("ok") and not d.get("refused") and d.get("failed_total") == 1 and
                   failed and same(failed[0].get("path", ""), os.path.join(p["locked"], "data", "locked.bin")) and
@@ -595,32 +604,32 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
                   "E and it is still in the list")
         finally:
             held.close()
-        d = mcp("project_delete", path=p["locked"])
+        d = mcp("project.delete", path=p["locked"])
         check(d.get("ok") and d.get("removed_from_list") and not os.path.lexists(p["locked"]),
               "E once the file is free, a second call finishes it", short(d))
 
         # ------------------------------------------------------------------ F: Remove from List
-        f = mcp("project_forget", path=p["nested"])
+        f = mcp("project.forget", path=p["nested"])
         check(not f.get("ok") and os.path.isdir(p["nested"]) and fwd(p["nested"]).lower() in listed(),
               "F a folder that holds a project is not taken off the list", short(f))
-        f = mcp("project_forget", path=p["notproject"])
+        f = mcp("project.forget", path=p["notproject"])
         check(f.get("ok") and fwd(p["notproject"]).lower() not in listed() and
               os.path.isfile(os.path.join(p["notproject"], "readme.txt")),
               "F a folder without a project leaves the list, and nothing on disk changes", short(f))
-        f = mcp("project_forget", path=p["outside"])
+        f = mcp("project.forget", path=p["outside"])
         check(not f.get("ok"), "F a folder outside the list is refused", short(f))
 
         # ------------------------------------------------------------------ G: Show in Explorer
-        r = mcp("project_reveal", path=p["outside"], dry_run=True)
+        r = mcp("project.reveal", path=p["outside"], dry_run=True)
         check(not r.get("ok") and "not in the project list" in r.get("error", ""),
               "G a folder outside the list is not shown", short(r))
-        r = mcp("project_reveal", path=p["gone"], dry_run=True)
+        r = mcp("project.reveal", path=p["gone"], dry_run=True)
         check(not r.get("ok") and "does not exist" in r.get("error", ""), "G a gone folder is not shown", short(r))
-        r = mcp("project_reveal", path=p["nested"], dry_run=True)
+        r = mcp("project.reveal", path=p["nested"], dry_run=True)
         check(r.get("ok") and not r.get("opened") and same(r.get("path", ""), p["nested"]),
               "G dry_run resolves the listed folder and opens nothing", short(r))
         if explorer:
-            r = mcp("project_reveal", path=p["nested"])
+            r = mcp("project.reveal", path=p["nested"])
             closed = close_explorer(p["nested"]) if r.get("ok") else 0
             check(r.get("ok") and r.get("opened") and closed >= 1,
                   "G a real reveal opens an Explorer window on the folder (closed again: %d)" % closed, short(r))
@@ -629,9 +638,17 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
 
         # ------------------------------------------------------------------ H: the open project
         qa_target.guard_project(p["open"])
-        o = mcp("open_project", path=p["open"])
+        o = mcp("project.open", path=p["open"])
         check(o.get("ok"), "H a listed project opens", short(o))
-        d = mcp("project_delete", path=p["open"])
+        made = project_file(p["open"])
+        check(made and os.path.basename(made) == TWIN + ".grizzly" and o.get("id") and
+              not os.path.exists(os.path.join(p["open"], "project.ltx")) and
+              os.path.isfile(os.path.join(p["open"], "AGENTS.md")),
+              "H the old project.ltx was converted: the project file is written, project.ltx is gone, AGENTS.md is there",
+              short(o))
+        entry = listed().get(fwd(p["open"]).lower()) or {}
+        check(entry.get("id") == o.get("id"), "H the list knows the project by its id", short(entry))
+        d = mcp("project.delete", path=p["open"])
         check(not d.get("ok") and d.get("refused") and "open project" in d.get("error", "") and
               os.path.isfile(os.path.join(p["open"], "mod.ltx")),
               "H the open project is refused", short(d))
@@ -640,52 +657,62 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
               "H no card menu while a project is open", short(m))
         m = mcp("project_browser_menu")
         check(m.get("ok") and m.get("browser") is False, "H the report still answers, browser:false", short(m))
-        link = mcp("game_link")
+        link = mcp("game.info", candidates=True)
         st = mcp("state")
         pic = shot(shots, "link_game")
-        check(not link.get("linked") and st.get("start_page") and pic.get("modal") is None,
-              "H a project with no game shows the Link Game card, which is no modal", short(pic))
+        check(link.get("ok") and not link.get("valid") and st.get("start_page") and pic.get("modal") is None,
+              "H a project with no game known at all shows the Link Game card, which is no modal", short(pic))
+        info = mcp("project.info")
+        check(info.get("ok") and info.get("id") == o.get("id") and (info.get("game") or {}).get("valid") is False,
+              "H project.info names the file, the id and the game in use", short(info))
         esc = escaped("start_page")
         check(not esc, "H nothing escapes the Link Game card", json.dumps(esc)[:600])
 
         # ------------------------------------------------------------------ N: New Project over MCP
-        n = mcp("project_create", parent=w.root, name="QaCreated")
+        n = mcp("project.create", parent=w.root, name="QaCreated")
         check(not n.get("ok") and "project is open" in n.get("error", "") and not os.path.exists(p["created"]),
-              "N project_create is refused while a project is open", short(n))
-        c = mcp("project_close")
-        check(c.get("ok") and c.get("start_page"), "N project_close goes back to the Start page", short(c))
-        n = mcp("project_create", parent=w.root, name="Qa Created!")
+              "N project.create is refused while a project is open", short(n))
+        c = mcp("project.close")
+        check(c.get("ok") and c.get("start_page"), "N project.close goes back to the Start page", short(c))
+        n = mcp("project.create", parent=w.root, name="Qa Created!")
         check(not n.get("ok") and "Latin letters" in n.get("error", ""), "N a name with spaces or signs is refused", short(n))
-        n = mcp("project_create", parent="relative/folder", name="QaCreated")
+        n = mcp("project.create", parent="relative/folder", name="QaCreated")
         check(not n.get("ok") and "full path" in n.get("error", "") and not os.path.exists(p["created"]),
               "N a relative location is refused", short(n))
-        n = mcp("project_create", parent=w.root, name="QaCreated")
+        n = mcp("project.create", parent=w.root, name="QaCreated")
         st = mcp("state")
         check(n.get("ok") and same(n.get("path", ""), p["created"]) and n.get("existed") is False and
-              os.path.isfile(os.path.join(p["created"], "mod.ltx")) and st.get("project_active"),
-              "N project_create makes the project and opens it", short(n))
-        check(fwd(p["created"]).lower() in listed(), "N and it is on the list")
+              os.path.isfile(os.path.join(p["created"], "mod.ltx")) and st.get("project"),
+              "N project.create makes the project and opens it", short(n))
+        check(os.path.isfile(os.path.join(p["created"], "QaCreated.grizzly")) and n.get("file") == "QaCreated.grizzly" and
+              os.path.isfile(os.path.join(p["created"], "AGENTS.md")),
+              "N with its project file, named after the folder, and AGENTS.md", short(n))
+        check((listed().get(fwd(p["created"]).lower()) or {}).get("id") == n.get("id"), "N and it is on the list, with its id")
 
         # ------------------------------------------------------------------ L: the last scene
         rel = "rawdata\\levels\\qa_scene.level"
         got = last_scene(p["open"])
         check(got is not None and got.replace("/", "\\").lower() == rel,
-              "L a scene named by an absolute path inside the project is written back below its root", repr(got))
-        c = mcp("project_close")
+              "L an old absolute last_scene inside the project is the project file's scene, below its root", repr(got))
+        c = mcp("project.close")
         # a copy of a project names the original's scene: it is never opened, and forgotten on close
         set_last_scene(p["created"], p["scene"])
         qa_target.guard_project(p["created"])
-        o = mcp("open_project", path=p["created"])
-        c = mcp("project_close")
+        o = mcp("project.open", path=p["created"])
+        c = mcp("project.close")
         got = last_scene(p["created"])
         check(o.get("ok") and c.get("ok") and got == "",
-              "L a scene outside the project is not reopened: last_scene is left empty", repr(got))
+              "L a scene outside the project is not reopened, and the project file forgets it", repr(got))
         qa_target.guard_project(p["open"])
-        o = mcp("open_project", path=p["open"])
-        c = mcp("project_close")
+        o = mcp("project.open", path=p["open"])
+        c = mcp("project.close")
         got = last_scene(p["open"])
         check(o.get("ok") and c.get("ok") and got is not None and got.replace("/", "\\").lower() == rel,
               "L a project closed before its scene loaded keeps it", repr(got))
+        stalls = mcp("perf.stalls")
+        check(stalls.get("ok") and not stalls.get("stalls"),
+              "Z no UI pass held the UI thread over 100 ms (worst %s ms)" % stalls.get("worst_ms"),
+              json.dumps(stalls.get("stalls"))[:600])
     finally:
         ed.close()
 

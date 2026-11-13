@@ -3,7 +3,8 @@
 //! - [`empty_state`] - what an empty list or panel says; fits the height it gets (drops the icon
 //!   first, then the margins). Returns whether its action was pressed.
 //! - [`badge`], [`status_dot`], [`spinner`], [`busy_line`] - small marks of state.
-//! - [`banner`] - a toned bar with a sentence and up to two actions.
+//! - [`banner`] - a toned bar with a sentence and up to two actions; [`banner_list`] - one with a
+//!   short list under the sentence, an action per item (the problems of a file, each with its fix).
 //! - [`toast`] queues a note, [`draw_toasts`] draws the queue bottom-right, timed out.
 //! - [`tone_icon`] - the icon a tone is shown with.
 
@@ -241,20 +242,94 @@ pub fn banner(ui: &mut Ui, tone: Tone, text_: &str, a1: Option<&str>, a2: Option
     clicked
 }
 
+/// A toned bar with a sentence and a short list under it: each item a line, with its own action
+/// button at its right when it has one. Returns the index of the item whose action was pressed.
+pub fn banner_list(ui: &mut Ui, tone: Tone, text_: &str, items: &[(&str, Option<&str>)]) -> Option<usize> {
+    let p = palette(ui.ctx());
+    let ctx = ui.ctx().clone();
+    let origin = ui.cursor().min;
+    let width = ui.available_width().max(em(8.0));
+    let pad = 10.0;
+    let icon = metrics::GLYPH;
+    let text_x = origin.x + pad + icon + 8.0;
+    let wrap = (origin.x + width - pad - text_x).max(em(6.0));
+    let galley = ctx.fonts_mut(|f| f.layout(text_.to_owned(), Font::Body.id(), p.text, wrap));
+    let item_h = metrics::FRAME + 2.0;
+    let h =
+        galley.size().y + pad * 2.0 + items.len() as f32 * item_h + if items.is_empty() { 0.0 } else { 4.0 };
+    let rect = Rect::from_min_size(origin, Vec2::new(width, h));
+    ui.allocate_rect(rect, Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        painter.rect_filled(rect, CornerRadius::same(metrics::RADIUS_POPUP), p.tint(tone));
+        let strip = Rect::from_min_max(rect.min, pos2(rect.min.x + 3.0, rect.max.y));
+        painter.rect_filled(
+            strip,
+            CornerRadius { nw: metrics::RADIUS_POPUP, sw: metrics::RADIUS_POPUP, ne: 0, se: 0 },
+            p.tone(tone),
+        );
+        let glyph = Rect::from_min_size(
+            pos2(origin.x + pad, rect.min.y + pad + (Font::Body.line() - icon) * 0.5),
+            Vec2::splat(icon),
+        );
+        icons::draw(painter, tone_icon(tone), glyph, p.tone(tone));
+        painter.galley(pos2(text_x, rect.min.y + pad), galley.clone(), p.text);
+    }
+    let mut clicked = None;
+    let mut y = rect.min.y + pad + galley.size().y + 4.0;
+    for (i, (line, action)) in items.iter().enumerate() {
+        let w = action.map_or(0.0, |a| button_width(&ctx, a, Kind::Secondary, false, 0.0));
+        let right = rect.max.x - pad;
+        let room = (right - if w > 0.0 { w + 8.0 } else { 0.0 } - text_x - 12.0).max(0.0);
+        let cy = y + item_h * 0.5;
+        ui.painter().circle_filled(pos2(text_x + 3.0, cy), 2.0, p.text_secondary);
+        text::paint(
+            ui.painter(),
+            &Font::Body.id(),
+            pos2(text_x + 12.0, cy),
+            Align2::LEFT_CENTER,
+            p.text,
+            line,
+            Some(room),
+            Clip::End,
+        );
+        if let Some(a) = action {
+            let r =
+                Rect::from_min_size(pos2(right - w, cy - metrics::FRAME * 0.5), Vec2::new(w, metrics::FRAME));
+            if ui.put(r, Button::new(a)).clicked() {
+                clicked = Some(i);
+            }
+        }
+        y += item_h;
+    }
+    clicked
+}
+
 /// A queued note.
 #[derive(Clone, Debug)]
 struct ToastItem {
     tone: Tone,
     text: String,
+    /// Its one button: the label and what it runs (an action's id, which the shell runs).
+    action: Option<(String, String)>,
     /// When it was first drawn, in seconds of the context's clock; `None` until then.
     born: Option<f64>,
     serial: u64,
+}
+
+impl ToastItem {
+    /// How long it stays: an error or a note with a button 10 seconds, the rest 6.
+    fn life(&self) -> f64 {
+        if self.tone == Tone::Error || self.action.is_some() { 10.0 } else { 6.0 }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
 struct Toasts {
     items: Vec<ToastItem>,
     serial: u64,
+    /// What the buttons pressed since the shell last looked ask to run.
+    picked: Vec<String>,
 }
 
 fn toasts_id() -> Id {
@@ -267,6 +342,17 @@ const TOAST_W: f32 = metrics::TOOLTIP_W;
 
 /// Queues a note for [`draw_toasts`]. It stays 6 seconds, an error 10.
 pub fn toast(ctx: &Context, tone: Tone, text_: &str) {
+    push_toast(ctx, tone, text_, None);
+}
+
+/// [`toast`] with one button under the text: `label` ("Details", "What's New") and the id of
+/// what it runs - an action's, which the shell runs once the button is pressed
+/// ([`take_toast_actions`]). Pressed, the note goes. It stays 10 seconds.
+pub fn toast_with(ctx: &Context, tone: Tone, text_: &str, label: &str, action: &str) {
+    push_toast(ctx, tone, text_, Some((label.to_owned(), action.to_owned())));
+}
+
+fn push_toast(ctx: &Context, tone: Tone, text_: &str, action: Option<(String, String)>) {
     if text_.is_empty() {
         return;
     }
@@ -274,7 +360,7 @@ pub fn toast(ctx: &Context, tone: Tone, text_: &str) {
         let t = d.get_temp_mut_or_default::<Toasts>(toasts_id());
         t.serial += 1;
         let serial = t.serial;
-        t.items.push(ToastItem { tone, text: text_.to_owned(), born: None, serial });
+        t.items.push(ToastItem { tone, text: text_.to_owned(), action, born: None, serial });
         while t.items.len() > MAX_TOASTS {
             t.items.remove(0);
         }
@@ -290,9 +376,29 @@ pub fn toast_texts(ctx: &Context) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Draws the queued notes stacked in the bottom-right corner of `ui`'s rectangle (the work area)
-/// above everything else, up to 360 pt wide, each with a cross to dismiss it.
+/// The notes up now with their buttons: `(text, Some((label, action)))`.
+#[must_use]
+pub fn toast_list(ctx: &Context) -> Vec<(String, Option<(String, String)>)> {
+    ctx.data(|d| d.get_temp::<Toasts>(toasts_id()))
+        .map(|t| t.items.into_iter().map(|i| (i.text, i.action)).collect())
+        .unwrap_or_default()
+}
+
+/// What the notes' buttons asked to run since the last call (action ids, oldest first).
+#[must_use]
+pub fn take_toast_actions(ctx: &Context) -> Vec<String> {
+    ctx.data_mut(|d| std::mem::take(&mut d.get_temp_mut_or_default::<Toasts>(toasts_id()).picked))
+}
+
+/// Draws the queued notes stacked in the bottom-right corner of `ui`'s rectangle above everything
+/// else, up to 360 pt wide, each with a cross to dismiss it.
 pub fn draw_toasts(ui: &mut Ui) {
+    draw_toasts_at(ui, Align2::RIGHT_BOTTOM);
+}
+
+/// [`draw_toasts`] at another corner or edge of `ui`'s rectangle (the shell keeps the corner of
+/// the Task card free of them).
+pub fn draw_toasts_at(ui: &mut Ui, at: Align2) {
     let ctx = ui.ctx().clone();
     let now = ctx.input(|i| i.time);
     let list = ctx.data_mut(|d| {
@@ -300,30 +406,28 @@ pub fn draw_toasts(ui: &mut Ui) {
         for item in &mut t.items {
             item.born.get_or_insert(now);
         }
-        t.items.retain(|item| {
-            now - item.born.unwrap_or(now) <= if item.tone == Tone::Error { 10.0 } else { 6.0 }
-        });
+        t.items.retain(|item| now - item.born.unwrap_or(now) <= item.life());
         t.items.clone()
     });
     if list.is_empty() {
         return;
     }
     // the next expiry needs a frame of its own
-    let next = list
-        .iter()
-        .map(|item| (if item.tone == Tone::Error { 10.0 } else { 6.0 }) - (now - item.born.unwrap_or(now)))
-        .fold(f64::MAX, f64::min);
+    let next =
+        list.iter().map(|item| item.life() - (now - item.born.unwrap_or(now))).fold(f64::MAX, f64::min);
     ctx.request_repaint_after(std::time::Duration::from_secs_f64(next.max(0.05)));
 
     let p = palette(&ctx);
-    let corner = ui.max_rect().right_bottom() - Vec2::splat(16.0);
+    let r = ui.max_rect().shrink(16.0);
+    let corner = at.pos_in_rect(&r);
     let area = Area::new(Id::unique("gz-ui.toasts.area"))
         .order(Order::Foreground)
-        .pivot(Align2::RIGHT_BOTTOM)
+        .pivot(at)
         .fixed_pos(corner)
         .interactable(true);
     let layer = area.layer();
     let mut dismissed = None;
+    let mut picked = None;
     area.show(&ctx, |ui| {
         ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
         ui.set_width(TOAST_W);
@@ -333,14 +437,18 @@ pub fn draw_toasts(ui: &mut Ui) {
                 let text_w = inner_w - 22.0 - 24.0;
                 let galley =
                     ui.ctx().fonts_mut(|f| f.layout(item.text.clone(), Font::Body.id(), p.text, text_w));
-                let h = galley.size().y.max(metrics::GLYPH) + 20.0;
+                let text_h = galley.size().y.max(metrics::GLYPH);
+                // the button sits under the text, at its right end
+                let button_h = if item.action.is_some() { metrics::FRAME + 8.0 } else { 0.0 };
+                let h = text_h + 20.0 + button_h;
                 let (rect, _) = ui.allocate_exact_size(Vec2::new(TOAST_W, h), Sense::hover());
                 let painter = ui.painter();
+                painter.add(p.shadow_card.as_shape(rect, CornerRadius::same(metrics::RADIUS_POPUP)));
                 painter.rect(
                     rect,
                     CornerRadius::same(metrics::RADIUS_POPUP),
                     p.overlay,
-                    Stroke::new(1.0, p.border_strong),
+                    Stroke::new(1.0, p.border_subtle),
                     egui::StrokeKind::Inside,
                 );
                 let glyph = Rect::from_min_size(
@@ -367,10 +475,28 @@ pub fn draw_toasts(ui: &mut Ui) {
                 {
                     dismissed = Some(item.serial);
                 }
+                if let Some((label, action)) = &item.action {
+                    let w = crate::units::button_width(ui.ctx(), label, crate::Kind::Secondary, false, 0.0);
+                    let slot = Rect::from_min_size(
+                        pos2(rect.max.x - 12.0 - w, rect.min.y + 10.0 + text_h + 8.0),
+                        Vec2::new(w, metrics::FRAME),
+                    );
+                    let mut child = ui.new_child(egui::UiBuilder::new().id_salt("action").max_rect(slot));
+                    if crate::Button::new(label).kind(crate::Kind::Secondary).show(&mut child).clicked() {
+                        picked = Some((item.serial, action.clone()));
+                    }
+                }
             });
         }
     });
     ctx.move_to_top(layer);
+    if let Some((serial, action)) = picked {
+        ctx.data_mut(|d| {
+            let t = d.get_temp_mut_or_default::<Toasts>(toasts_id());
+            t.items.retain(|i| i.serial != serial);
+            t.picked.push(action);
+        });
+    }
     if let Some(serial) = dismissed {
         ctx.data_mut(|d| {
             d.get_temp_mut_or_default::<Toasts>(toasts_id()).items.retain(|t| t.serial != serial)

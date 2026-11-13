@@ -1,7 +1,7 @@
-//! The build gate of the graphs (`NqExport::ValidateProject`): every graph the build ships, as
-//! it is on disk, validated in parallel; then `E113`, a behaviour graph that runs itself through
-//! a chain of others, which no single document can see. `quest_check_all` answers with it, and
-//! the build asks it through a [`gz_build::BuildCheck`].
+//! The build gate of the graphs: every graph the build ships, as it is on disk, validated in
+//! parallel; then `E113`, a behaviour graph that runs itself through a chain of others, which no
+//! single document can see. The build asks it through a [`gz_build::BuildCheck`]; `asset.check`
+//! gives the same problems per file, positioned.
 
 use std::sync::Arc;
 
@@ -141,12 +141,15 @@ pub(crate) async fn run(editor: &Editor, svc: &NqService) -> Report {
     report
 }
 
+/// What the build says while the graphs' check runs.
+pub(crate) const STAGE: &str = "Checking the quests";
+
 /// The graphs' check of the build.
 pub(crate) struct GraphCheck;
 
 impl BuildCheck for GraphCheck {
     fn stage(&self) -> &'static str {
-        "Checking the quests"
+        STAGE
     }
 
     fn check(

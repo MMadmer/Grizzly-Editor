@@ -82,7 +82,7 @@ finally {
 import socket
 try:
     with socket.create_connection(('127.0.0.1', $Port), timeout=3) as s:
-        s.sendall(b'{"cmd":"window_control","action":"close","discard":true}\n'); s.recv(4096)
+        s.sendall(b'{"cmd":"app.quit","discard":true}\n'); s.recv(4096)
 except OSError:
     pass
 "@

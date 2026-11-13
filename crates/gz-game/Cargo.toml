@@ -15,14 +15,21 @@ gz-base.workspace = true
 gz-query.workspace = true
 gz-editor.workspace = true
 gz-project.workspace = true
+gz-asset.workspace = true
+gz-luadata.workspace = true
+futures.workspace = true
 gz-vfs.workspace = true
 gz-ltx.workspace = true
 gz-fmt-xml.workspace = true
 rayon.workspace = true
 rustc-hash.workspace = true
 serde_json.workspace = true
+serde.workspace = true
+schemars.workspace = true
+parking_lot.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 gz-corpus.workspace = true
 gz-fmt-spawn.workspace = true

@@ -82,8 +82,9 @@ pub const LEVEL: &str = "level";
 pub fn install(b: &mut ShellBuilder) {
     b.document(LEVEL, |editor, _req| Ok(Box::new(LevelDoc::new(editor)) as Box<dyn gz_app::Document>));
     for (id, label, icon) in [
-        (layout::PanelId::Tools.id(), "Tools", Icon::Settings),
-        (layout::PanelId::Outliner.id(), "World Outliner", Icon::Level),
+        // one icon each: the Window menu tells them apart by it
+        (layout::PanelId::Tools.id(), "Tools", Icon::Place),
+        (layout::PanelId::Outliner.id(), "World Outliner", Icon::SceneObject),
         (layout::PanelId::Details.id(), "Details", Icon::Info),
         (layout::PanelId::LevelSettings.id(), "Level Settings", Icon::Level),
     ] {

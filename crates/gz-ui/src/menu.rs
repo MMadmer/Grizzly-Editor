@@ -1,9 +1,11 @@
 //! Menus (docs/UI_DESIGN.md, section 4, "Menus").
 //!
-//! - [`menu_item`] with [`MenuItem`] - a row of a menu: an icon, the label, keycaps flush right
-//!   in their column (at least 24 pt after the longest label), a danger item in the error colour.
-//! - [`popup_frame`], [`popup_body`], [`menu_popup`] - the theme's popup: overlay fill, padding,
-//!   rows that touch.
+//! - [`menu_item`] with [`MenuItem`] - a row of a menu: an icon, the label, the shortcut flush
+//!   right in muted text (at least 24 pt after the longest label), a danger item in the error
+//!   colour. A popup has ONE icon column: when any of its rows has an icon or a check, every row
+//!   reserves it, so the labels of a popup start at one x.
+//! - [`popup_frame`], [`popup_body`], [`menu_popup`] - the theme's popup: overlay fill, a hairline,
+//!   the popup shadow, rows that touch, at least 200 pt wide.
 //! - [`show_popup`] / [`take_popup_request`] - a popup asked for by name (MCP `ui_popup`); the
 //!   widget that owns the name opens it on its next frame.
 
@@ -13,7 +15,6 @@ use egui::{
 };
 
 use crate::audit;
-use crate::button::{keycaps, keycaps_width};
 use crate::font::Font;
 use crate::icons::{self, Icon};
 use crate::text::{self, Clip};
@@ -52,13 +53,70 @@ pub fn menu_item(ui: &mut Ui, label: &str, item: MenuItem<'_>) -> bool {
     row(ui, label, item, false, tip)
 }
 
+/// What the popup being drawn knows of its rows: whether one of them had an icon or a check last
+/// frame (then every row reserves the column), and whether one has this frame.
+#[derive(Clone, Debug, Default)]
+struct Column {
+    reserve: bool,
+    seen: bool,
+    /// Where each row's label started, for `label_columns`.
+    labels: Vec<f32>,
+}
+
+fn column_stack_id() -> Id {
+    Id::unique("gz-ui.menu.columns")
+}
+
+/// Whether this row keeps the icon column: it has an icon or a check, or another row of its
+/// popup did last frame. A row outside a popup body keeps it when it needs it.
+fn reserves_column(ctx: &Context, own: bool) -> bool {
+    ctx.data_mut(|d| match d.get_temp_mut_or_default::<Vec<(Id, Column)>>(column_stack_id()).last_mut() {
+        Some((_, c)) => {
+            c.seen |= own;
+            own || c.reserve
+        }
+        None => own,
+    })
+}
+
+/// The width of a shortcut drawn in a menu row.
+fn keys_width(ctx: &Context, keys: &str) -> f32 {
+    if keys.is_empty() { 0.0 } else { text::width(ctx, &Font::Small.id(), keys) }
+}
+
 /// A menu row, optionally with a submenu chevron and a tooltip: the overflow menu's rows.
 pub(crate) fn row(ui: &mut Ui, label: &str, item: MenuItem<'_>, submenu: bool, tip: &str) -> bool {
+    let picked = row_response(ui, label, &item, submenu, tip).clicked() && item.enabled;
+    if picked && (ui.stack().contained_in(UiKind::Menu) || ui.stack().contained_in(UiKind::Popup)) {
+        ui.close();
+    }
+    picked
+}
+
+/// A row that opens a submenu to its right while hovered: a row like its neighbours - the same
+/// icon column, the same label start - with a chevron at its end. `add` draws the submenu's rows.
+pub fn submenu<R>(
+    ui: &mut Ui,
+    label: &str,
+    icon: Icon,
+    enabled: bool,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
+    let item = MenuItem { icon, enabled, ..MenuItem::default() };
+    let resp = row_response(ui, label, &item, true, "");
+    if !enabled {
+        return None;
+    }
+    egui::containers::menu::SubMenu::new().show(ui, &resp, |ui| popup_body(ui, add)).map(|r| r.inner)
+}
+
+/// Lays out and paints one row and answers its response; what a click means is the caller's.
+fn row_response(ui: &mut Ui, label: &str, item: &MenuItem<'_>, submenu: bool, tip: &str) -> egui::Response {
     let p = palette(ui.ctx());
     let font = Font::Body.id();
-    let has_slot = item.icon != Icon::None || item.selected;
+    let has_slot = reserves_column(ui.ctx(), item.icon != Icon::None || item.selected);
     let label_w = text::width(ui.ctx(), &font, label);
-    let keys_w = keycaps_width(ui, item.keys);
+    let keys_w = keys_width(ui.ctx(), item.keys);
     let desired = 8.0
         + if has_slot { metrics::GLYPH + 8.0 } else { 0.0 }
         + label_w
@@ -91,16 +149,27 @@ pub(crate) fn row(ui: &mut Ui, label: &str, item: MenuItem<'_>, submenu: bool, t
                 pos2(x, rect.center().y - metrics::GLYPH * 0.5),
                 Vec2::splat(metrics::GLYPH),
             );
-            let (icon, color) = match (item.icon, item.selected) {
-                (Icon::None, _) => (Icon::Check, p.accent_bright),
-                (icon, true) => (icon, p.accent_bright),
-                (icon, false) if !item.enabled => (icon, p.text_disabled),
-                (icon, false) if item.danger => (icon, p.error),
-                (icon, false) => (icon, p.text_secondary),
+            // a check takes the icon's place
+            let shown = match (item.icon, item.selected) {
+                (_, true) => Some((Icon::Check, p.accent_bright)),
+                (Icon::None, false) => None,
+                (icon, false) if !item.enabled => Some((icon, p.text_disabled)),
+                (icon, false) if item.danger => Some((icon, p.error)),
+                (icon, false) => Some((icon, p.text_secondary)),
             };
-            icons::draw(painter, icon, glyph, color);
+            if let Some((icon, color)) = shown {
+                icons::draw(painter, icon, glyph, color);
+            }
             x += metrics::GLYPH + 8.0;
         }
+        #[cfg(test)]
+        ui.ctx().data_mut(|d| d.insert_temp(Id::unique("gz-ui.menu.test_label_x"), x));
+        ui.ctx().data_mut(|d| {
+            if let Some((_, c)) = d.get_temp_mut_or_default::<Vec<(Id, Column)>>(column_stack_id()).last_mut()
+            {
+                c.labels.push(x);
+            }
+        });
         // a menu wider than this row's needs leaves the label whole; a narrower one cuts it
         let right = rect.max.x
             - 8.0
@@ -117,11 +186,12 @@ pub(crate) fn row(ui: &mut Ui, label: &str, item: MenuItem<'_>, submenu: bool, t
             Clip::End,
         );
         if keys_w > 0.0 {
-            keycaps(
-                ui,
+            painter.text(
                 pos2(rect.max.x - 8.0 - if submenu { 16.0 } else { 0.0 }, rect.center().y),
+                Align2::RIGHT_CENTER,
                 item.keys,
-                item.enabled,
+                Font::Small.id(),
+                if item.enabled { p.text_muted } else { p.text_disabled },
             );
         }
         if submenu {
@@ -134,32 +204,77 @@ pub(crate) fn row(ui: &mut Ui, label: &str, item: MenuItem<'_>, submenu: bool, t
     }
     let said = (!tip.is_empty()).then_some(tip);
     audit::control(ui.ctx(), label, item.enabled, if item.enabled { None } else { said }, said, rect);
-    let resp = if tip.is_empty() { resp } else { resp.on_hover_text(tip) };
-    let picked = resp.clicked() && item.enabled;
-    if picked && (ui.stack().contained_in(UiKind::Menu) || ui.stack().contained_in(UiKind::Popup)) {
-        ui.close();
-    }
-    picked
+    if tip.is_empty() { resp } else { resp.on_hover_text(tip) }
 }
 
-/// The frame of a menu or popup: overlay fill, the border, 6 pt corners, 4 pt padding.
+/// The frame of a menu or popup: overlay fill, a hairline, the popup shadow, 6 pt corners, 4 pt
+/// padding.
 pub fn popup_frame(ctx: &Context) -> Frame {
     let p = palette(ctx);
     Frame::new()
         .fill(p.overlay)
-        .stroke(Stroke::new(1.0, p.border))
+        .stroke(Stroke::new(1.0, p.border_subtle))
+        .shadow(p.shadow_popup)
         .corner_radius(CornerRadius::same(metrics::RADIUS_POPUP))
         .inner_margin(Margin::same(4))
 }
 
-/// The body of a popup: rows that touch, at least 10 em wide, laid out top-down.
+/// The body of a popup: rows that touch, at least 200 pt wide, laid out top-down, one icon
+/// column for all of its rows.
 pub fn popup_body<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    ui.with_layout(Layout::top_down_justified(Align::Min), |ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(8.0, 0.0);
-        ui.set_min_width(em(10.0));
-        add(ui)
-    })
-    .inner
+    popup_body_labels(ui, add).0
+}
+
+/// [`popup_body`], answering where its rows' labels started too.
+fn popup_body_labels<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> (R, Vec<f32>) {
+    let ctx = ui.ctx().clone();
+    let id = ui.scope_id().with("gz-ui.menu.column");
+    // what this popup's rows said last frame; unknown (its first frame): keep the column
+    let reserve = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(true);
+    ctx.data_mut(|d| {
+        d.get_temp_mut_or_default::<Vec<(Id, Column)>>(column_stack_id())
+            .push((id, Column { reserve, seen: false, labels: Vec::new() }));
+    });
+    let out = ui
+        .with_layout(Layout::top_down_justified(Align::Min), |ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(8.0, 0.0);
+            ui.set_min_width(metrics::MENU_MIN_W.max(em(10.0)));
+            add(ui)
+        })
+        .inner;
+    let (seen, labels) = ctx.data_mut(|d| {
+        let stack = d.get_temp_mut_or_default::<Vec<(Id, Column)>>(column_stack_id());
+        match stack.iter().rposition(|(i, _)| *i == id) {
+            Some(at) => {
+                let c = stack.remove(at).1;
+                (c.seen, c.labels)
+            }
+            None => (reserve, Vec::new()),
+        }
+    });
+    if seen != reserve {
+        ctx.data_mut(|d| d.insert_temp(id, seen));
+        ctx.request_repaint();
+    }
+    (out, labels)
+}
+
+fn labels_id(popup_id: Id) -> Id {
+    popup_id.with("gz-ui.menu.labels")
+}
+
+/// Where the labels of the rows of the menu `popup_id` started, the last frame it was drawn
+/// (`ui.list` names them: a menu with one label column has one x).
+#[must_use]
+pub fn label_columns(ctx: &Context, popup_id: Id) -> Vec<f32> {
+    ctx.data(|d| d.get_temp::<Vec<f32>>(labels_id(popup_id))).unwrap_or_default()
+}
+
+/// Whether the rows of the popup drawn with `id` keep an icon column (what its last frame
+/// found). For a test and the audit.
+#[must_use]
+pub fn reserves_icon_column(ctx: &Context, body_id: Id) -> Option<bool> {
+    ctx.data(|d| d.get_temp::<bool>(body_id.with("gz-ui.menu.column")))
 }
 
 /// A menu kept open in egui's memory, under `anchor`. Open it with `Popup::open_id` or
@@ -177,8 +292,12 @@ pub fn menu_popup<R>(
         .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
         .gap(2.0)
         .frame(popup_frame(ctx))
-        .show(|ui| popup_body(ui, add))
-        .map(|r| r.inner)
+        .show(|ui| popup_body_labels(ui, add))
+        .map(|r| {
+            let (out, labels) = r.inner;
+            ctx.data_mut(|d| d.insert_temp(labels_id(popup_id), labels));
+            out
+        })
 }
 
 fn requests_id() -> Id {

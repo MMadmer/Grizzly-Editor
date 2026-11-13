@@ -1,4 +1,4 @@
-//! The declarative source scan of `NqLua.cpp` (`DeclarativeProblem`): the empty environment
+//! The declarative source scan: the empty environment the file runs in
 //! only stops code that touches a global, so literal arithmetic, `local` and concatenation are
 //! refused here, the way the game's loader refuses them (`xms_nq_load.script`).
 
@@ -62,10 +62,11 @@ fn quoted(t: &T<'_>) -> Vec<u8> {
     }
 }
 
-/// The problem when the source is something other than one literal table, as bytes.
-pub(crate) fn problem(s: &[u8]) -> Option<Vec<u8>> {
+/// The problem when the source is something other than one literal table, as bytes, with
+/// the offset of what it is about.
+pub(crate) fn problem(s: &[u8]) -> Option<(usize, Vec<u8>)> {
     let n = s.len();
-    let mut toks: Vec<T<'_>> = Vec::new();
+    let mut toks: Vec<(usize, T<'_>)> = Vec::new();
     let mut i = 0;
     while let Some(&c) = s.get(i) {
         if space(c) {
@@ -77,7 +78,7 @@ pub(crate) fn problem(s: &[u8]) -> Option<Vec<u8>> {
             if let Some((level, after)) = long {
                 match skip_long(s, after, level, "long comment") {
                     Ok(next) => i = next,
-                    Err(p) => return Some(p),
+                    Err(p) => return Some((i, p)),
                 }
             } else {
                 while i < n && s.get(i) != Some(&b'\n') {
@@ -101,21 +102,23 @@ pub(crate) fn problem(s: &[u8]) -> Option<Vec<u8>> {
                 }
             }
             if s.get(j) != Some(&c) {
-                return Some(b"unterminated string".to_vec());
+                return Some((i, b"unterminated string".to_vec()));
             }
-            toks.push(T::Str);
+            toks.push((i, T::Str));
             i = j + 1;
             continue;
         }
         if c == b'[' {
             if let Some((level, after)) = long_bracket_at(s, i) {
                 match skip_long(s, after, level, "long string") {
-                    Ok(next) => i = next,
-                    Err(p) => return Some(p),
+                    Ok(next) => {
+                        toks.push((i, T::Str));
+                        i = next;
+                    }
+                    Err(p) => return Some((i, p)),
                 }
-                toks.push(T::Str);
             } else {
-                toks.push(T::Punct(b'['));
+                toks.push((i, T::Punct(b'[')));
                 i += 1;
             }
             continue;
@@ -136,9 +139,9 @@ pub(crate) fn problem(s: &[u8]) -> Option<Vec<u8>> {
                 }
             }
             if s.get(i..j).is_some_and(|t| t.windows(2).any(|w| w == b"..")) {
-                return Some(b"concatenation is code, not data".to_vec());
+                return Some((i, b"concatenation is code, not data".to_vec()));
             }
-            toks.push(T::Num);
+            toks.push((i, T::Num));
             i = j;
             continue;
         }
@@ -147,39 +150,39 @@ pub(crate) fn problem(s: &[u8]) -> Option<Vec<u8>> {
             while s.get(j).is_some_and(|&d| alpha(d) || digit(d)) {
                 j += 1;
             }
-            toks.push(T::Word(s.get(i..j).unwrap_or(&[])));
+            toks.push((i, T::Word(s.get(i..j).unwrap_or(&[]))));
             i = j;
             continue;
         }
         if punct(c) {
-            toks.push(T::Punct(c));
+            toks.push((i, T::Punct(c)));
             i += 1;
             continue;
         }
         let mut m = b"'".to_vec();
         m.push(c);
         m.extend(b"' outside a string is code, not data");
-        return Some(m);
+        return Some((i, m));
     }
-    let Some(first) = toks.first() else { return Some(b"no 'return' statement".to_vec()) };
+    let Some((at, first)) = toks.first() else { return Some((n, b"no 'return' statement".to_vec())) };
     if *first != T::Word(b"return") {
         let mut m = b"'".to_vec();
         m.extend(quoted(first));
         m.extend(b"' before the table is code, not data");
-        return Some(m);
+        return Some((*at, m));
     }
-    for (k, t) in toks.iter().enumerate().skip(1) {
+    for (k, (at, t)) in toks.iter().enumerate().skip(1) {
         let T::Word(w) = t else { continue };
         if matches!(*w, b"true" | b"false" | b"nil") {
             continue;
         }
-        if toks.get(k + 1) == Some(&T::Punct(b'=')) {
+        if toks.get(k + 1).map(|t| &t.1) == Some(&T::Punct(b'=')) {
             continue;
         }
         let mut m = b"'".to_vec();
         m.extend(*w);
         m.extend(b"' is code, not data (only literals and 'key =' names are allowed)");
-        return Some(m);
+        return Some((*at, m));
     }
     None
 }

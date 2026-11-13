@@ -4,14 +4,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Registry, Reply, Value, json};
+use gz_editor::{CmdError, Editor, Origin, Registry, Reply, Spec, Value, json};
 use gz_ui::dialog;
+use schemars::JsonSchema;
+use serde::Deserialize;
 
 use crate::contract;
 use crate::queue::UiQueue;
 use crate::window::WindowLink;
-
-const AREA: &str = "window";
 
 /// What a picture of the window holds for besides the UI frames: the viewport's pass of the scene
 /// as the caller's commands left it, with what it draws loaded (the viewport crate fills it in).
@@ -59,8 +59,7 @@ pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, CmdEr
     Ok(out)
 }
 
-/// The jobs that were the C++ editor's blocking operations (`SProgressOperation`): a level
-/// build, a scene load, a scene tool, the texture and sound libraries' work.
+/// The jobs a picture reports as `busy`: a level build, a scene load, a scene tool, the texture and sound libraries' work.
 const BLOCKING_KINDS: [&str; 7] = [
     "level_build",
     "scene_load",
@@ -71,21 +70,29 @@ const BLOCKING_KINDS: [&str; 7] = [
     "sound_library",
 ];
 
-/// `busy` as `AppendShotWindows` defines it (`ProgressOperationActive`): one of the operations
-/// the C++ ran as a blocking job is running while the picture is taken. They run beside the
-/// window here, so the frame is drawn as usual.
+/// `busy`: one of those jobs is running while the picture is taken. They run beside the window, so
+/// the frame is drawn as usual.
 fn busy_now(editor: &Editor) -> bool {
     editor.jobs.snapshot().iter().any(|j| j.running() && BLOCKING_KINDS.contains(&j.kind.as_str()))
 }
 
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct WindowShot {
+    /// How many fresh frames to wait for before the picture (1..16, 2 without): the commands that
+    /// came before it are drawn first.
+    #[serde(default)]
+    frames: Option<u32>,
+}
+
 /// One call, always current: the request is held for the frames it asked for, then pictured.
-async fn screenshot_editor(editor: Arc<Editor>, args: Args) -> Reply {
+async fn shot_window(editor: Arc<Editor>, p: WindowShot, _origin: Origin) -> Reply {
     let link = editor
         .services
         .get::<WindowLink>()
         .ok_or_else(|| CmdError::new("no_window", "the editor runs without a window"))?;
     // the commands that came before this one have to be drawn first: a layout settles in two passes
-    let frames = args.u32("frames").unwrap_or(2).clamp(1, 16);
+    let frames = p.frames.unwrap_or(2).clamp(1, 16);
     editor.frames.after(u64::from(frames)).await?;
     // the viewport's picture of the scene is part of the frame: held until it is current too,
     // then a frame that began after it, which shows it (no layout changes with the picture)
@@ -112,14 +119,15 @@ async fn screenshot_editor(editor: Arc<Editor>, args: Args) -> Reply {
     let modal = match UiQueue::of(&editor) {
         Ok(q) => q
             .run(|shell, ctx| {
+                // the rect in the picture's pixels
                 if let Some(d) = dialog::modal_on_top(ctx) {
                     let [x0, y0, x1, y1] = d.rect_px;
-                    return Ok(json!({ "title": d.title, "id": d.id, "x": x0.floor() as i64, "y": y0.floor() as i64, "w": (x1 - x0).floor() as i64, "h": (y1 - y0).floor() as i64 }));
+                    return Ok(json!({ "title": d.title, "id": crate::cmds::dialog_mcp_id(&d.id), "rect": [x0.floor() as i64, y0.floor() as i64, (x1 - x0).floor() as i64, (y1 - y0).floor() as i64] }));
                 }
                 if shell.palette_open() {
                     let ppp = ctx.pixels_per_point();
                     let r = shell.palette_rect();
-                    return Ok(json!({ "title": "Command Palette", "id": contract::PALETTE_ID, "x": (r.min.x * ppp).floor() as i64, "y": (r.min.y * ppp).floor() as i64, "w": (r.width() * ppp).floor() as i64, "h": (r.height() * ppp).floor() as i64 }));
+                    return Ok(json!({ "title": "Command Palette", "id": contract::PALETTE_ID, "rect": [(r.min.x * ppp).floor() as i64, (r.min.y * ppp).floor() as i64, (r.width() * ppp).floor() as i64, (r.height() * ppp).floor() as i64] }));
                 }
                 Ok(Value::Null)
             })
@@ -150,7 +158,7 @@ async fn screenshot_editor(editor: Arc<Editor>, args: Args) -> Reply {
         "height": h,
         "active_tab": stamp.active_tab,
         "busy": busy,
-        "dpi": (f64::from(stamp.scale) * 1000.0).round() / 1000.0,
+        "scale": (f64::from(stamp.scale) * 1000.0).round() / 1000.0,
         "outside": outside,
         "modal": modal,
         "frame": stamp.frame,
@@ -166,7 +174,14 @@ async fn screenshot_editor(editor: Arc<Editor>, args: Args) -> Reply {
     })
 }
 
-/// Registers the window's own commands.
+/// Registers `shot.window`.
 pub fn register(reg: &mut Registry) {
-    reg.add(AREA, "screenshot_editor", |editor, args, _| screenshot_editor(editor, args));
+    reg.area("shot", "Pictures: the window, the viewport, an asset");
+    reg.cmd(
+        Spec::read(
+            "shot.window",
+            "A picture of the window as the commands before it left it, with its size and scale.",
+        ),
+        shot_window,
+    );
 }

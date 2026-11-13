@@ -226,8 +226,9 @@ async fn game_files(editor: &Editor) -> Option<Arc<gz_vfs::GameFiles>> {
 /// Where a model is looked for before the game: the project, then the editor's own data.
 fn model_roots(editor: &Editor) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = editor.project_root().into_iter().collect();
-    if !roots.contains(&editor.paths.root) {
-        roots.push(editor.paths.root.clone());
+    let library = gz_project::library_root(editor);
+    if !roots.contains(&library) {
+        roots.push(library);
     }
     roots
 }
@@ -326,11 +327,11 @@ async fn read(editor: &Arc<Editor>, key: &ListKey) -> Vec<String> {
             Err(_) => Vec::new(),
         },
         ListKey::Groups => {
-            let root = editor.paths.root.join("rawdata").join("groups");
+            let root = gz_project::library_root(editor).join("rawdata").join("groups");
             editor.exec.io(move || gz_scene::library::list_groups(&root)).await
         }
         ListKey::BaseScenes => {
-            let root = editor.paths.root.clone();
+            let root = gz_project::library_root(editor);
             editor.exec.io(move || gz_project::project::base_scenes(&root)).await
         }
         ListKey::SpawnSections => {

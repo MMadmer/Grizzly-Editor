@@ -17,9 +17,10 @@ use gz_ui::font::FontFiles;
 use gz_ui::{Icon, Tone, audit, layout, state};
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::actions::{Action, ActionCx, ActionTable};
 use crate::builder::{
-    DialogDesc, DrawFn, DrawerDesc, LogState, MenuEntry, PageCard, PanelDesc, ShellBuilder, ToolbarFn,
-    UiCommand,
+    DialogDesc, DrawFn, DrawerDesc, LogState, MenuContent, MenuEntry, PageCard, PanelDesc, PrefGroup,
+    ShellBuilder, ToolbarFn, UiCommand,
 };
 use crate::doc::{
     DocCx, Document, Drawer, EditAction, Factory, OpenRequest, PanelOp, Request, ShellRequests,
@@ -51,6 +52,8 @@ pub struct ShellOptions {
     pub fonts: FontFiles,
     /// `-iconsheet`: the work area shows every icon of the kit and nothing else.
     pub iconsheet: bool,
+    /// `-kitsheet`: the work area shows every widget of the kit in every state, and the tokens.
+    pub kitsheet: bool,
     /// `-uiscale <f>` (0.5..4): the UI at this scale, whatever the monitor says
     /// (`CommandLineScale`). Taken again when the window meets another monitor's scale.
     pub ui_scale: Option<f32>,
@@ -80,6 +83,8 @@ pub(crate) struct Tab {
     pub panicked: Option<String>,
     /// Where it was in the strip last frame (pt); `None` under the chevron.
     pub rect: Option<Rect>,
+    /// It showed its icon alone last frame (a tool tab gives way before any name is cut).
+    pub icon_only: bool,
 }
 
 impl Tab {
@@ -153,6 +158,9 @@ impl Tab {
 /// What the builder handed over, kept for the life of the window.
 pub(crate) struct Parts {
     pub factories: FxHashMap<SmolStr, Factory>,
+    /// What menus, toolbars, keys and the palette run (an `Editor` service too).
+    pub actions: Arc<crate::actions::Actions>,
+    /// The level editor's own table, until its actions are built.
     pub commands: Vec<UiCommand>,
     pub menus: Vec<MenuEntry>,
     pub project_toolbar: Vec<(i32, ToolbarFn)>,
@@ -165,11 +173,15 @@ pub(crate) struct Parts {
     pub log_state: Option<crate::builder::LogStateFn>,
     pub reveal: Option<crate::builder::RevealFn>,
     pub reset_layout: Option<crate::builder::ResetLayoutFn>,
-    /// The C++ command table over `commands`.
+    /// The level editor's numbered table over `commands` (`list_commands`, `exec_command`).
     pub cpp: crate::cpp::Table,
 }
 
-/// A popup on screen, as `ui_list` names it.
+/// The groups areas added to Preferences: an `Editor` service the Preferences tab reads.
+#[derive(Default)]
+pub struct PrefGroups(pub Vec<PrefGroup>);
+
+/// A popup on screen, as `ui.list` names it.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PopupInfo {
     pub id: String,
@@ -177,6 +189,8 @@ pub(crate) struct PopupInfo {
     pub window: String,
     /// pt.
     pub rect: Rect,
+    /// Where each row's label starts (pt), for a menu: one x is one label column.
+    pub label_x: Vec<f32>,
 }
 
 /// The caption's geometry as the last frame left it, in pt.
@@ -212,6 +226,10 @@ pub(crate) struct PaletteState {
     pub scroll_to_selected: bool,
     /// Where it was drawn last frame (pt).
     pub rect: Rect,
+    /// The rows for `ranked_for`, ranked: worked out when the query changes or the palette
+    /// opens, never per frame.
+    pub ranked: Vec<crate::palette::PaletteRow>,
+    pub ranked_for: Option<String>,
 }
 
 impl Default for PaletteState {
@@ -223,6 +241,8 @@ impl Default for PaletteState {
             focus: false,
             scroll_to_selected: false,
             rect: Rect::NOTHING,
+            ranked: Vec::new(),
+            ranked_for: None,
         }
     }
 }
@@ -230,6 +250,8 @@ impl Default for PaletteState {
 #[derive(Default)]
 struct Session {
     root: Option<PathBuf>,
+    /// Where the project's tabs are kept (the project area says: this machine's state of it).
+    file: Option<PathBuf>,
     dirty: bool,
 }
 
@@ -264,6 +286,9 @@ pub struct ShellState {
     pub(crate) popups_last: Vec<PopupInfo>,
     pub(crate) palette: PaletteState,
     pub(crate) card_open: bool,
+    /// The card came up by itself, for a job the window started: it goes a moment after the last
+    /// job ended. One the author opened (its chip, `ui.tasks show=true`) stays.
+    pub(crate) card_auto: bool,
     pub(crate) card_rect: Option<Rect>,
     /// Where the active document's status drew in the status bar's centre last frame; `None`
     /// on the Start page and its cards, which are no document.
@@ -273,6 +298,7 @@ pub struct ShellState {
     session: Session,
     pub(crate) logo: Option<TextureHandle>,
     pub(crate) iconsheet: bool,
+    pub(crate) kitsheet: bool,
     pub(crate) tab_menu: Option<SmolStr>,
     pub(crate) drag_tab: Option<SmolStr>,
     warned: FxHashSet<SmolStr>,
@@ -283,6 +309,31 @@ pub struct ShellState {
     panic_guard: Arc<AtomicBool>,
     /// `exec` logged the command it runs: `run_command` does not log it again.
     pub(crate) quiet_log: bool,
+    /// `ui.scale`: the test's scale, over the author's preference until the editor ends.
+    pub(crate) test_scale: Option<f32>,
+    /// The scale applied last: the preference, `-uiscale` or a test's.
+    scale_applied: Option<(Option<f32>, f32)>,
+    /// What the active tab takes of the Edit menu, and whether it is dirty: worked out once a
+    /// frame, for the actions' checks.
+    pub(crate) edits_now: Vec<EditAction>,
+    pub(crate) dirty_now: bool,
+    /// What the frame drew where (pt), for `ui.frame`.
+    pub(crate) toolbar_rect: Option<Rect>,
+    pub(crate) project_toolbar_rect: Option<Rect>,
+    pub(crate) toolbar_status_shown: Option<String>,
+    pub(crate) status_line_rect: Option<Rect>,
+    pub(crate) status_chip_ids: Vec<&'static str>,
+    /// The phases of the frame being drawn, for the stall monitor.
+    pub(crate) phases: crate::stalls::FramePhases,
+    /// The frames drawn: the first is no stall.
+    frames: u64,
+    /// When the last running job ended: the card shows its result a moment longer.
+    pub(crate) last_job_end: Option<Instant>,
+    /// The context the shell draws with: the kit's stores live in it.
+    pub(crate) egui_ctx: Context,
+    /// A surface reads the keys itself (this frame's ask, and the last frame's).
+    capture_now: bool,
+    capture_last: bool,
 }
 
 /// The Level tab of a shell no level editor was installed in (a test of `gz-app` alone): the
@@ -316,9 +367,11 @@ impl ShellState {
         gpu: RenderState,
         queue: Arc<UiQueue>,
         builder: ShellBuilder,
-        iconsheet: bool,
+        sheets: (bool, bool),
         panic_guard: Arc<AtomicBool>,
+        egui_ctx: Context,
     ) -> Self {
+        let (iconsheet, kitsheet) = sheets;
         let settings = EditorSettings::of(&editor);
         let mut bindings = FxHashMap::default();
         for (id, keys) in settings.shortcuts() {
@@ -326,6 +379,8 @@ impl ShellState {
         }
         let ShellBuilder {
             factories,
+            actions,
+            pref_groups,
             commands,
             menus,
             project_toolbar,
@@ -341,8 +396,43 @@ impl ShellState {
             cpp,
         } = builder;
         JobMarks::of(&editor).log_state.lock().clone_from(&log_state);
+        // the window's own actions first, then the areas': a later id replaces an earlier one
+        let mut table = ActionTable::default();
+        for a in crate::shell_actions::shell_actions().into_iter().chain(actions) {
+            table.add(a);
+        }
+        table.load_bindings(&settings);
+        let mut menus = menus;
+        for (menu, group, order, id, label) in crate::shell_actions::SHELL_MENU {
+            menus.push(MenuEntry {
+                menu: SmolStr::new(menu),
+                submenu: None,
+                group: *group,
+                order: *order,
+                content: MenuContent::Action { id: SmolStr::new(id), label: label.map(SmolStr::new) },
+            });
+        }
+        for (group, order, id) in crate::shell_actions::PROJECT_MENU {
+            menus.push(MenuEntry {
+                menu: SmolStr::new("File"),
+                submenu: Some(SmolStr::new("Project")),
+                group: *group,
+                order: *order,
+                content: MenuContent::Action { id: SmolStr::new(id), label: None },
+            });
+        }
+        // an area's preferences are the settings' too: `app.prefs` lists and sets them
+        for g in &pref_groups {
+            let defs: Vec<crate::settings::PrefDef> =
+                g.rows.iter().filter_map(crate::builder::PrefRow::def).collect();
+            settings.add_defs(&defs);
+        }
+        editor.services.insert(PrefGroups(pref_groups));
+        // a job belongs to the project open when it starts; closing it stops its jobs
+        let shared = editor.services.insert(crate::actions::Actions::new(table));
         let mut parts = Parts {
             factories,
+            actions: shared,
             commands,
             menus,
             project_toolbar,
@@ -359,8 +449,8 @@ impl ShellState {
         };
         parts.project_toolbar.sort_by_key(|(o, _)| *o);
         parts.status_chips.sort_by_key(|(o, _)| *o);
-        add_shell_commands(&mut parts.commands);
-        // the C++ table: what the shell knows of the C++ rows, the shell's own, then the areas'
+        // the level editor's numbered table: the rows the shell knows, its panels' and the
+        // macros', then the level crates' own
         let mut rows = crate::cpp::known_rows();
         rows.extend(crate::cpp::shell_rows());
         rows.extend(cpp);
@@ -394,6 +484,7 @@ impl ShellState {
             popups_last: Vec::new(),
             palette: PaletteState::default(),
             card_open: false,
+            card_auto: false,
             status_centre: None,
             card_rect: None,
             seen_jobs: Vec::new(),
@@ -401,6 +492,7 @@ impl ShellState {
             session: Session::default(),
             logo: None,
             iconsheet,
+            kitsheet,
             tab_menu: None,
             drag_tab: None,
             warned: FxHashSet::default(),
@@ -410,6 +502,21 @@ impl ShellState {
             fps: 0.0,
             panic_guard,
             quiet_log: false,
+            test_scale: None,
+            scale_applied: None,
+            edits_now: Vec::new(),
+            dirty_now: false,
+            toolbar_rect: None,
+            project_toolbar_rect: None,
+            toolbar_status_shown: None,
+            status_line_rect: None,
+            status_chip_ids: Vec::new(),
+            phases: crate::stalls::FramePhases::default(),
+            frames: 0,
+            last_job_end: None,
+            egui_ctx,
+            capture_now: false,
+            capture_last: false,
         };
         s.open_level();
         s
@@ -438,6 +545,7 @@ impl ShellState {
                 failed: false,
                 panicked: None,
                 rect: None,
+                icon_only: false,
             },
         );
         self.active = SmolStr::new(LEVEL);
@@ -647,6 +755,7 @@ impl ShellState {
                     failed: false,
                     panicked: None,
                     rect: None,
+                    icon_only: false,
                 };
                 self.tabs.push(tab);
                 self.session.dirty = true;
@@ -784,34 +893,6 @@ impl ShellState {
         if let Some(id) = self.tabs.get(next).map(|t| t.id.clone()) {
             self.activate(ctx, &id);
         }
-    }
-
-    pub(crate) fn save_active(&mut self, ctx: &Context) {
-        let id = self.active.to_string();
-        let Some(i) = self.find(&id) else { return };
-        let Some(tab) = self.tabs.get_mut(i) else { return };
-        let Some(doc) = tab.doc.as_mut() else { return };
-        if let Err(e) = doc.save(&mut cx!(self, ctx))
-            && !e.is_empty()
-            && let Some(line) = dialog::notice(ctx, self.asker(), Tone::Error, "Save failed", &e)
-        {
-            self.editor.log.plain(line);
-        }
-    }
-
-    /// The Edit menu's action on the active tab; `run = false` asks whether it is there at all.
-    pub(crate) fn edit(&mut self, ctx: &Context, action: EditAction, run: bool) -> bool {
-        let id = self.active.to_string();
-        let Some(i) = self.find(&id) else { return false };
-        let Some(tab) = self.tabs.get_mut(i) else { return false };
-        if tab.failed {
-            return false;
-        }
-        let Some(doc) = tab.doc.as_mut() else { return false };
-        if doc.missing() {
-            return false;
-        }
-        doc.edit(&mut cx!(self, ctx), action, run)
     }
 
     /// The tabs with unsaved changes: id and label.
@@ -991,7 +1072,7 @@ impl ShellState {
         if !self.command_enabled(i) {
             return false;
         }
-        // Log Commands: a face of a C++ row logs itself; a UiCommand of its own is logged here
+        // Log Commands: a face of a numbered row logs itself; a UiCommand of its own is logged here
         if !self.quiet_log && crate::cpp::CommandLog::of(&self.editor).on() {
             for row in &self.parts.cpp.rows {
                 if !matches!(row.cmd.action, crate::cpp::CppAction::Ui) {
@@ -1015,13 +1096,6 @@ impl ShellState {
         true
     }
 
-    /// The keys bound to a command id now, as text; `fallback` when it has none.
-    pub(crate) fn keys_of(&self, id: &str, fallback: &str) -> String {
-        self.command_index(id)
-            .and_then(|i| self.binding(i))
-            .map_or_else(|| fallback.to_owned(), |c| c.label())
-    }
-
     pub(crate) fn modal_up(&self, ctx: &Context) -> bool {
         self.palette.open
             || dialog::modal_on_top(ctx).is_some()
@@ -1037,16 +1111,122 @@ impl ShellState {
             && self.key_owner_last.is_none()
     }
 
-    /// Keys, first taker wins: a text field, the shell's chords, the document, the bindings.
+    /// What is in front of the author, for an action's checks.
+    pub(crate) fn action_cx(&self) -> ActionCx<'_> {
+        let (kind, path) = match self.find(&self.active).and_then(|i| self.tabs.get(i)) {
+            Some(t) => (t.kind.as_str(), t.doc.as_ref().and_then(|d| d.path()).map(|_| "").unwrap_or("")),
+            None => ("", ""),
+        };
+        ActionCx {
+            editor: &self.editor,
+            tab: &self.active,
+            kind,
+            path,
+            project: !self.start_page,
+            dirty: self.dirty_now,
+            edits: &self.edits_now,
+            drawer: self.drawer,
+        }
+    }
+
+    /// Runs an action by its id when it is on; `Err` says why it did not run.
+    pub(crate) fn run_action(&mut self, id: &str) -> Result<(), String> {
+        let Some(action) = self.parts.actions.table.read().get(id).copied() else {
+            return Err(format!("no action '{id}' (app.keys lists them)"));
+        };
+        let tab = self.active.clone();
+        let path = self.active_path();
+        let kind = self.find(&tab).and_then(|i| self.tabs.get(i)).map(|t| t.kind.clone()).unwrap_or_default();
+        let cx = ActionCx {
+            editor: &self.editor,
+            tab: &tab,
+            kind: &kind,
+            path: &path,
+            project: !self.start_page,
+            dirty: self.dirty_now,
+            edits: &self.edits_now,
+            drawer: self.drawer,
+        };
+        let on = (action.enabled)(&cx);
+        if !on.on() {
+            return Err(if on.why().is_empty() {
+                format!("{} is off here.", action.title)
+            } else {
+                on.why().to_owned()
+            });
+        }
+        crate::actions::run(&self.editor, &action, &cx);
+        Ok(())
+    }
+
+    /// The active tab's file, project-relative.
+    pub(crate) fn active_path(&self) -> String {
+        let Some(t) = self.find(&self.active).and_then(|i| self.tabs.get(i)) else { return String::new() };
+        let p = t.path();
+        project_relative(self.editor.project_root().as_deref(), &p)
+    }
+
+    /// What the active tab takes of the Edit menu and whether it is dirty, worked out once a frame.
+    fn refresh_edits(&mut self, ctx: &Context) {
+        let id = self.active.to_string();
+        let mut edits = Vec::with_capacity(8);
+        let mut dirty = false;
+        if let Some(i) = self.find(&id)
+            && let Some(tab) = self.tabs.get_mut(i)
+            && !tab.failed
+            && tab.panicked.is_none()
+        {
+            dirty = tab.dirty();
+            if let Some(doc) = tab.doc.as_mut()
+                && !doc.missing()
+            {
+                for a in EditAction::ALL {
+                    if doc.edit(&mut cx!(self, ctx), a, false) {
+                        edits.push(a);
+                    }
+                }
+            }
+        }
+        self.edits_now = edits;
+        self.dirty_now = dirty;
+        let kind = self
+            .find(&self.active)
+            .and_then(|i| self.tabs.get(i))
+            .map(|t| t.kind.to_string())
+            .unwrap_or_default();
+        self.parts.actions.set_facts(crate::actions::Facts {
+            tab: self.active.to_string(),
+            kind,
+            path: self.active_path(),
+            project: !self.start_page,
+            dirty: self.dirty_now,
+            edits: self.edits_now.clone(),
+            drawer: self.drawer,
+        });
+    }
+
+    /// The part of the active document that has the keys ("canvas").
+    fn key_part(&self, ctx: &Context) -> Option<&'static str> {
+        self.find(&self.active)
+            .and_then(|i| self.tabs.get(i))
+            .and_then(|t| t.doc.as_ref())
+            .and_then(|d| d.key_part(ctx))
+    }
+
+    /// Keys, first taker wins: a text field, the actions (a tab's own before the window's), the
+    /// document's own keys, then the level editor's table.
     fn keys(&mut self, ctx: &Context) {
-        if self.start_page || ctx.egui_wants_keyboard_input() || self.modal_up(ctx) {
+        if self.start_page || ctx.egui_wants_keyboard_input() || self.modal_up(ctx) || self.capture_last {
             return;
         }
         let presses = ctx.input(|i| keys::pressed(&i.events));
         for chord in presses {
-            if keys::shell_chord(&chord) {
+            // a panel that answers its own keys keeps them, but for the frame's own
+            if let Some(id) = self.action_for_chord(ctx, &chord) {
                 ctx.input_mut(|i| keys::consume(i, &chord));
-                self.shell_chord(ctx, &chord);
+                if let Err(e) = self.run_action(id) {
+                    self.editor.log.plain(e);
+                }
                 continue;
             }
             let id = self.active.to_string();
@@ -1064,6 +1244,10 @@ impl ShellState {
             if !self.scene_keys_allowed(ctx) {
                 continue;
             }
+            // a binding of the level's table on a key the window keeps for an action is ignored
+            if self.parts.actions.table.read().global_chord(&chord).is_some() {
+                continue;
+            }
             let found = (0..self.parts.commands.len()).find(|&i| self.binding(i) == Some(chord));
             if let Some(i) = found {
                 ctx.input_mut(|inp| keys::consume(inp, &chord));
@@ -1072,26 +1256,29 @@ impl ShellState {
         }
     }
 
-    fn shell_chord(&mut self, ctx: &Context, chord: &Chord) {
-        use egui::Key;
-        match (chord.key, chord.ctrl, chord.shift) {
-            (Key::P, true, true) => self.open_palette(""),
-            (Key::Tab, true, false) => self.cycle(ctx, 1),
-            (Key::Tab, true, true) => self.cycle(ctx, -1),
-            (Key::F4, true, false) => {
-                let id = self.active.to_string();
-                self.request_close(ctx, &id);
-            }
-            (Key::Space, true, false) => self.toggle_drawer(ctx, Drawer::Content),
-            (Key::Backtick, true, false) => self.toggle_drawer(ctx, Drawer::Log),
-            (Key::S, true, false) => self.save_active(ctx),
-            (Key::F11, false, false) if self.active == LEVEL => {
-                if let Some(doc) = self.tabs.first_mut().and_then(|t| t.doc.as_mut()) {
-                    doc.shortcut(&mut cx!(self, ctx), chord);
-                }
-            }
-            _ => {}
+    /// The action a chord runs now: a panel that answers its own keys keeps them, but for the
+    /// frame's own; the part of the document that has the keys narrows the rest.
+    fn action_for_chord(&self, ctx: &Context, chord: &Chord) -> Option<&'static str> {
+        let owned = self.key_owner_last.is_some() || self.drawer.is_some();
+        let part = self.key_part(ctx);
+        let cx = self.action_cx();
+        self.parts.actions.table.read().for_chord(chord, &cx, part, owned).map(|a| a.id)
+    }
+
+    /// What a chord runs on the active tab now, as the key pass finds it: an action's id, else a
+    /// level command's id (while the scene takes keys); `None` when neither takes it - the
+    /// document may still take it as a key of its own.
+    pub(crate) fn resolve_chord(&self, ctx: &Context, chord: &Chord) -> Option<String> {
+        if let Some(id) = self.action_for_chord(ctx, chord) {
+            return Some(id.to_owned());
         }
+        if !self.scene_keys_allowed(ctx) || self.parts.actions.table.read().global_chord(chord).is_some() {
+            return None;
+        }
+        (0..self.parts.commands.len())
+            .find(|&i| self.binding(i) == Some(*chord))
+            .and_then(|i| self.parts.commands.get(i))
+            .map(|c| c.id.to_string())
     }
 
     pub(crate) fn open_palette(&mut self, query: &str) {
@@ -1102,19 +1289,21 @@ impl ShellState {
         self.palette.scroll_to_selected = true;
     }
 
-    /// A binding that collides with one of the shell's chords is logged once and never acts.
+    /// A binding of the level's table on a key an action keeps everywhere is logged once and
+    /// never acts.
     fn warn_collisions(&mut self) {
         for i in 0..self.parts.commands.len() {
             let Some(chord) = self.binding(i) else { continue };
             let Some(c) = self.parts.commands.get(i) else { continue };
-            if keys::shell_chord(&chord)
-                && c.id != "COMMAND_COMMAND_PALETTE"
+            let owner = self.parts.actions.table.read().global_chord(&chord).map(|a| a.title);
+            if let Some(title) = owner
                 && self.warned.insert(c.id.clone())
             {
-                self.editor.log.warn(format!(
-                    "{} is bound to {}, which the editor's frame keeps for itself: the binding is ignored",
+                self.editor.log.plain(format!(
+                    "{} is bound to {}, which {} keeps everywhere: the binding is ignored",
                     c.label,
-                    chord.label()
+                    chord.label(),
+                    title
                 ));
             }
         }
@@ -1164,11 +1353,17 @@ impl ShellState {
                 self.panel(ctx, &id, op);
             }
             Request::Exit => self.request_exit(ctx),
-            Request::TaskCard(shown) => self.card_open = shown,
+            Request::TaskCard(shown) => self.show_card(shown),
             Request::Popup(name) => {
                 let _ = self.show_popup(ctx, &name);
             }
             Request::OwnKeys(who) => self.key_owner_now = Some(SmolStr::new(who)),
+            Request::Action(id) => {
+                if let Err(e) = self.run_action(&id) {
+                    state::toast(ctx, Tone::Warning, &e);
+                }
+            }
+            Request::CaptureKeys => self.capture_now = true,
         }
     }
 
@@ -1206,25 +1401,41 @@ impl ShellState {
                 self.fps = if self.fps == 0.0 { 1.0 / dt } else { self.fps * 0.9 + 0.1 / dt };
             }
         }
-        // what other threads asked for lands in this frame
+        // what other threads asked for lands in this frame, each timed for the stall monitor
+        self.phases.clear();
         for job in self.queue.drain() {
-            job(self, &ctx);
+            let t = Instant::now();
+            (job.run)(self, &ctx);
+            self.phases.add(crate::stalls::command_of(job.label), t.elapsed().as_secs_f32() * 1000.0);
         }
         self.apply_requests(&ctx);
         if audit::wanted(&ctx) {
             audit::new_frame(&ctx);
         }
         self.popups_cur.clear();
+        let t = Instant::now();
         self.begin_frame(&ctx);
+        self.refresh_edits(&ctx);
         self.keys(&ctx);
         self.apply_requests(&ctx);
+        self.phases.add("frame start", t.elapsed().as_secs_f32() * 1000.0);
 
+        let t = Instant::now();
+        gz_ui::drop::begin(&ctx);
         self.draw_frame(ui);
         self.apply_requests(&ctx);
+        self.phases.add(format!("ui pass ({})", self.active), t.elapsed().as_secs_f32() * 1000.0);
+        let t = Instant::now();
         dialog::draw_overlays(ui);
         self.apply_requests(&ctx);
         self.end_frame(&ctx);
-        FrameReport { active_tab: self.active.clone() }
+        self.phases.add("dialogs and the end of the frame", t.elapsed().as_secs_f32() * 1000.0);
+        self.frames += 1;
+        FrameReport {
+            active_tab: self.active.clone(),
+            during: self.phases.longest(),
+            first: self.frames == 1,
+        }
     }
 
     fn begin_frame(&mut self, ctx: &Context) {
@@ -1253,24 +1464,42 @@ impl ShellState {
             if !self.seen_jobs.contains(&job.id)
                 && let Some(card) = crate::tasks::card_of(&self.editor, job.id)
             {
-                if !card.from_mcp {
+                if !card.from_mcp && !self.card_open {
                     self.card_open = true;
+                    self.card_auto = true;
                 }
                 self.seen_jobs.push(job.id);
             }
         }
+        let ended = !self.seen_jobs.is_empty() && running.is_empty();
         self.seen_jobs.retain(|id| running.iter().any(|j| j.id == *id));
         self.cancelled.retain(|id| running.iter().any(|j| j.id == *id));
         JobMarks::of(&self.editor).cancelled.lock().retain(|id| running.iter().any(|j| j.id == *id));
         crate::tasks::sweep(&self.editor, &running);
-        if running.is_empty() {
-            self.card_open = false;
+        // the last job ended: its row says how for a moment, then the card goes
+        if ended {
+            self.last_job_end = Some(Instant::now());
         }
+        if running.is_empty()
+            && self.card_open
+            && self.card_auto
+            && self.last_job_end.is_none_or(|t| t.elapsed() >= Duration::from_secs(4))
+        {
+            self.card_open = false;
+            self.card_auto = false;
+        }
+    }
+
+    /// The Task Center as the author asked for it: it stays until they close it.
+    pub(crate) fn show_card(&mut self, on: bool) {
+        self.card_open = on;
+        self.card_auto = false;
     }
 
     fn end_frame(&mut self, ctx: &Context) {
         self.popups_last = std::mem::take(&mut self.popups_cur);
         self.key_owner_last = self.key_owner_now.take();
+        self.capture_last = std::mem::take(&mut self.capture_now);
         if self.session.dirty {
             self.write_session();
         }
@@ -1300,6 +1529,7 @@ impl ShellState {
         }
         if layout::take_dirty(ctx) {
             self.settings.set_layout(&layout::all(ctx));
+            self.settings.set_lists(&layout::all_lists(ctx));
         }
         if self.settings.is_dirty() {
             let since = self.last_settings_save.elapsed();
@@ -1313,10 +1543,6 @@ impl ShellState {
     }
 
     // ---- the session -----------------------------------------------------------------------
-
-    fn session_file(root: &Path) -> PathBuf {
-        root.join("temp").join("session.ltx")
-    }
 
     fn session_text(&self) -> String {
         let tabs: Vec<SessionTab> = self
@@ -1344,11 +1570,13 @@ impl ShellState {
 
     fn write_session(&mut self) {
         self.session.dirty = false;
-        let Some(root) = self.session.root.clone() else { return };
+        let Some(path) = self.session.file.clone() else { return };
         let text = self.session_text();
         let log = self.editor.log.clone();
         self.editor.exec.spawn_io(move || {
-            let path = Self::session_file(&root);
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
             if let Err(e) = gz_editor::fsx::write_atomic(&path, text.as_bytes()) {
                 log.warn(format!("the open tabs could not be written to {}: {e}", path.display()));
             }
@@ -1361,8 +1589,10 @@ impl ShellState {
             return;
         }
         self.session.dirty = false;
-        if let Some(root) = &self.session.root {
-            let path = Self::session_file(root);
+        if let Some(path) = self.session.file.clone() {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
             if let Err(e) = gz_editor::fsx::write_atomic(&path, self.session_text().as_bytes()) {
                 self.editor
                     .log
@@ -1390,6 +1620,7 @@ impl ShellState {
             }
         }
         self.session.root = root.clone();
+        self.session.file = root.as_ref().and_then(|_| crate::project::project_info(&self.editor).tabs_file);
         self.session.dirty = false;
         let Some(root) = root else {
             self.activate(ctx, LEVEL);
@@ -1400,8 +1631,10 @@ impl ShellState {
             self.session.dirty = true;
         }
         let queue = self.queue.clone();
+        let file = self.session.file.clone();
         self.editor.exec.spawn_io(move || {
-            let text = std::fs::read(Self::session_file(&root))
+            let text = file
+                .and_then(|f| std::fs::read(f).ok())
                 .map(|b| gz_base::text::decode_guess(&b).into_owned())
                 .unwrap_or_default();
             let tabs = tabs::decode_session(&text);
@@ -1430,6 +1663,7 @@ impl ShellState {
                 failed: false,
                 panicked: None,
                 rect: None,
+                icon_only: false,
             });
         }
     }
@@ -1492,6 +1726,7 @@ impl ShellState {
             title: title.to_owned(),
             window: window.to_owned(),
             rect,
+            label_x: Vec::new(),
         });
     }
 
@@ -1536,12 +1771,13 @@ impl ShellState {
         self.caption
     }
 
-    /// The tabs in the strip and where they are; none on the Start page.
-    pub(crate) fn tab_rects(&self) -> Vec<(String, Rect)> {
+    /// The tabs in the strip, where they are and whether they show their icon alone; none on
+    /// the Start page.
+    pub(crate) fn tab_rects(&self) -> Vec<(String, Rect, bool)> {
         if !self.menus_shown {
             return Vec::new();
         }
-        self.tabs.iter().filter_map(|t| t.rect.map(|r| (t.id.to_string(), r))).collect()
+        self.tabs.iter().filter_map(|t| t.rect.map(|r| (t.id.to_string(), r, t.icon_only))).collect()
     }
 
     /// What the Level document says of itself to MCP (`layout_custom`, `viewport_maximized`).
@@ -1574,14 +1810,34 @@ impl ShellState {
 
     // ---- the Keyboard page's table ---------------------------------------------------------
 
-    /// Every command that takes a shortcut: id, "group · label", keys.
-    /// What `shortcuts` lists, as the C++ did: every sub-command of an editable C++ row, in the
-    /// registry's order, then the bindable commands no row has.
-    pub(crate) fn shortcut_rows(&self) -> Vec<(String, String, String)> {
-        self.shortcut_faces().into_iter().filter_map(|i| self.shortcut_row(i)).collect()
+    /// Every action with its keys, then the level editor's own commands that take a shortcut,
+    /// as `app.keys` lists them.
+    pub(crate) fn key_rows(&self) -> Vec<serde_json::Value> {
+        let mut out: Vec<serde_json::Value> = {
+            let t = self.parts.actions.table.read();
+            t.all().iter().map(|a| crate::actions::key_row(&t, a)).collect()
+        };
+        for i in self.level_faces() {
+            if let Some(row) = self.level_row(i) {
+                out.push(row);
+            }
+        }
+        out
     }
 
-    fn shortcut_faces(&self) -> Vec<usize> {
+    /// One row of `key_rows`, by its id.
+    pub(crate) fn key_row(&self, id: &str) -> serde_json::Value {
+        {
+            let t = self.parts.actions.table.read();
+            if let Some(a) = t.get(id) {
+                return crate::actions::key_row(&t, a);
+            }
+        }
+        self.command_index(id).and_then(|i| self.level_row(i)).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// The level editor's commands that take a shortcut, in its table's order.
+    fn level_faces(&self) -> Vec<usize> {
         let mut rows: Vec<&crate::cpp::Row> = self.parts.cpp.rows.iter().collect();
         rows.sort_by_key(|r| r.cmd.id);
         let bindable = |f: &usize| self.parts.commands.get(*f).is_some_and(|c| c.bindable);
@@ -1593,8 +1849,8 @@ impl ShellState {
         out
     }
 
-    /// The Keyboard page's name of a face of a C++ row (`CommandName`).
-    fn cpp_name(&self, face: usize) -> Option<(String, String)> {
+    /// The Keyboard page's name of a level command (its table's group and label).
+    fn level_name(&self, face: usize) -> Option<(String, String)> {
         self.parts.cpp.rows.iter().find_map(|r| {
             let k = r.faces.iter().position(|f| *f == Some(face))?;
             let sub = r.cmd.subs.get(k)?;
@@ -1603,27 +1859,70 @@ impl ShellState {
         })
     }
 
-    pub(crate) fn shortcut_row(&self, i: usize) -> Option<(String, String, String)> {
+    fn level_row(&self, i: usize) -> Option<serde_json::Value> {
         let c = self.parts.commands.get(i).filter(|c| c.bindable)?;
-        let (group, label) = self.cpp_name(i).unwrap_or_else(|| (c.group.to_string(), c.label.to_string()));
-        Some((
-            c.id.to_string(),
-            format!("{group} \u{b7} {label}"),
-            self.binding(i).map(|k| k.label()).unwrap_or_default(),
-        ))
+        let (group, title) = self.level_name(i).unwrap_or_else(|| (c.group.to_string(), c.label.to_string()));
+        let keys: Vec<String> = self.binding(i).map(|k| k.label()).into_iter().collect();
+        let ignored =
+            self.binding(i).and_then(|k| self.parts.actions.table.read().global_chord(&k).map(|a| a.id));
+        Some(serde_json::json!({
+            "id": c.id,
+            "title": title,
+            "group": group,
+            "keys": keys,
+            "default": c.default_keys.map(|k| k.label()).into_iter().collect::<Vec<_>>(),
+            "scope": "level",
+            "command": "",
+            "conflicts": ignored.into_iter().collect::<Vec<_>>(),
+        }))
     }
 
-    /// A command by its id or by the label the Keyboard page shows.
-    pub(crate) fn shortcut_target(&self, name: &str) -> Option<usize> {
-        self.shortcut_faces().into_iter().find(|&i| {
-            self.shortcut_row(i).is_some_and(|(id, label, _)| {
-                id.eq_ignore_ascii_case(name) || label.eq_ignore_ascii_case(name)
-            })
-        })
+    /// Binds an action, or a level command, to `keys` (empty takes them away); answers what let
+    /// a chord go. Saved soon.
+    pub(crate) fn bind_keys(&mut self, id: &str, keys: Vec<Chord>) -> Result<Vec<String>, String> {
+        if self.parts.actions.table.read().get(id).is_some() {
+            let moved = self.parts.actions.table.write().bind(id, keys, &self.settings);
+            self.settings.save_soon(&self.editor);
+            return Ok(moved);
+        }
+        let i = self
+            .command_index(id)
+            .filter(|i| self.parts.commands.get(*i).is_some_and(|c| c.bindable))
+            .ok_or_else(|| format!("no action '{id}' takes keys (app.keys lists them)"))?;
+        Ok(self.bind(i, keys.first().copied()).into_iter().collect())
     }
 
-    /// Binds a command (`None` takes its shortcut away); the command that had the chord lets it
-    /// go. Saved at once. Answers that command's id.
+    /// Back to the defaults: one action's or level command's, or every one's.
+    pub(crate) fn reset_keys(&mut self, id: Option<&str>) -> Result<(), String> {
+        match id {
+            Some(one) if self.parts.actions.table.read().get(one).is_some() => {
+                self.parts.actions.table.write().reset(Some(one), &self.settings);
+            }
+            Some(one) => {
+                let i = self
+                    .command_index(one)
+                    .ok_or_else(|| format!("no action '{one}' (app.keys lists them)"))?;
+                if let Some(c) = self.parts.commands.get(i) {
+                    let cid = c.id.clone();
+                    self.bindings.remove(&cid);
+                    self.settings.remove_shortcut(&cid);
+                }
+            }
+            None => {
+                self.parts.actions.table.write().reset(None, &self.settings);
+                let ids: Vec<SmolStr> = self.bindings.keys().cloned().collect();
+                for cid in ids {
+                    self.settings.remove_shortcut(&cid);
+                }
+                self.bindings.clear();
+            }
+        }
+        self.settings.save_soon(&self.editor);
+        Ok(())
+    }
+
+    /// Binds a level command (`None` takes its shortcut away); the command that had the chord
+    /// lets it go. Answers that command's id.
     pub(crate) fn bind(&mut self, i: usize, chord: Option<Chord>) -> Option<String> {
         let mut moved = None;
         if let Some(chord) = chord {
@@ -1647,6 +1946,46 @@ impl ShellState {
         moved
     }
 
+    /// The keys an action is bound to now, as a menu row shows them.
+    pub(crate) fn action_keys(&self, id: &str) -> String {
+        self.parts.actions.table.read().keys_label(id)
+    }
+
+    /// An action by its id.
+    pub(crate) fn action(&self, id: &str) -> Option<Action> {
+        self.parts.actions.table.read().get(id).copied()
+    }
+
+    /// The Edit menu's action on a tab; `run = false` asks whether it is there at all.
+    pub(crate) fn edit_tab(&mut self, ctx: &Context, id: &str, action: EditAction, run: bool) -> bool {
+        let Some(i) = self.find(id) else { return false };
+        let Some(tab) = self.tabs.get_mut(i) else { return false };
+        if tab.failed {
+            return false;
+        }
+        let Some(doc) = tab.doc.as_mut() else { return false };
+        if doc.missing() {
+            return false;
+        }
+        doc.edit(&mut cx!(self, ctx), action, run)
+    }
+
+    /// Reads a tab's file again.
+    pub(crate) fn reload_tab(&mut self, ctx: &Context, id: &str, discard: bool) -> Result<(), String> {
+        let Some(i) = self.find(id) else { return Err("not open".to_owned()) };
+        let Some(tab) = self.tabs.get_mut(i) else { return Err("not open".to_owned()) };
+        let Some(doc) = tab.doc.as_mut() else { return Err("the tab is not loaded".to_owned()) };
+        doc.reload(&mut cx!(self, ctx), discard)
+    }
+
+    /// Runs `f` with a `DocCx` over this shell: a surface's command does its window's work
+    /// through it (a question for a person, a request of the shell).
+    pub fn with_cx<R>(&mut self, ctx: &Context, f: impl FnOnce(&mut DocCx<'_>) -> R) -> R {
+        let r = f(&mut cx!(self, ctx));
+        self.apply_requests(ctx);
+        r
+    }
+
     pub(crate) fn mark_session_dirty(&mut self) {
         self.session.dirty = true;
     }
@@ -1655,6 +1994,19 @@ impl ShellState {
         self.cancelled.insert(id);
         JobMarks::of(&self.editor).cancelled.lock().insert(id);
         self.editor.jobs.cancel(id)
+    }
+
+    /// The UI's scale: a test's (`ui.scale`), else `-uiscale`, else Preferences > Interface >
+    /// Interface Scale, else the monitor's. Applied when one of them or the monitor changes.
+    fn apply_scale(&mut self, ctx: &Context, command_line: Option<f32>) {
+        let native = ctx.native_pixels_per_point().unwrap_or(1.0).max(0.1);
+        let wanted = self.test_scale.or(command_line).or_else(|| self.settings.interface_scale());
+        if self.scale_applied == Some((wanted, native)) {
+            return;
+        }
+        self.scale_applied = Some((wanted, native));
+        ctx.set_zoom_factor(wanted.map_or(1.0, |s| s / native));
+        ctx.request_repaint();
     }
 
     fn close_requested(&mut self, ctx: Option<&Context>) -> bool {
@@ -1705,31 +2057,20 @@ impl JobMarks {
 
 pub fn default_log_state(editor: &Editor) -> LogState {
     let (errors, warnings) = editor.log.counts();
-    let last = editor.log.last_notable().map(|r| gz_log::marked(r.level, &r.text)).unwrap_or_default();
+    let last = editor.log.last_report().map(|r| gz_log::marked(r.level, &r.text)).unwrap_or_default();
     LogState { last, errors, warnings }
 }
 
-/// The shell's own commands: in the palette and on the Keyboard page.
-fn add_shell_commands(commands: &mut Vec<UiCommand>) {
-    let mut add = |c: UiCommand| {
-        if !commands.iter().any(|x| x.id == c.id) {
-            commands.push(c);
-        }
-    };
-    add(UiCommand::new("COMMAND_COMMAND_PALETTE", "Edit", "Command Palette", Icon::Search, |cx| {
-        cx.requests.palette()
-    })
-    .keys("Ctrl+Shift+P"));
-    add(UiCommand::new("COMMAND_EDITOR_PREF", "Edit", "Preferences", Icon::Settings, |cx| {
-        cx.requests.open(OpenRequest::kind("preferences"))
-    }));
-    add(UiCommand::new("COMMAND_EXIT", "File", "Quit", Icon::Close, |cx| cx.requests.exit()));
-    add(UiCommand::new("COMMAND_BREAK_LAST_OPERATION", "Edit", "Cancel Running Job", Icon::Stop, |cx| {
-        for job in cx.editor.jobs.snapshot().into_iter().filter(gz_editor::JobInfo::running) {
-            cx.editor.jobs.cancel(job.id);
-        }
-    })
-    .enabled(|editor, _| editor.jobs.any_running()));
+/// A path as a tab shows it in the palette: project-relative when it lies in the project.
+#[must_use]
+pub fn project_relative(root: Option<&Path>, path: &str) -> String {
+    let Some(root) = root else { return path.to_owned() };
+    let p = Path::new(path);
+    match p.strip_prefix(root) {
+        Ok(rel) => rel.display().to_string().replace('\\', "/"),
+        Err(_) if p.is_absolute() => path.to_owned(),
+        Err(_) => path.replace('\\', "/"),
+    }
 }
 
 /// Why an open did not happen.
@@ -1746,7 +2087,7 @@ pub(crate) enum OpenError {
 /// The window's first size and place, from the editor's settings.
 #[must_use]
 pub fn window_options(editor: &Editor) -> WindowOptions {
-    // window_control resize goes down to 320 x 240 pt; the C++ editor's frame did not stop it either
+    // app.window resize goes down to 320 x 240 pt: the frame does not stop it
     let mut opts = WindowOptions {
         decorations: false,
         min_size: [320.0, 240.0],
@@ -1783,8 +2124,6 @@ pub struct GrizzlyShell {
     opts: ShellOptions,
     state: Option<ShellState>,
     ctx: Option<Context>,
-    /// The monitor's scale `-uiscale` was last applied over.
-    native_seen: Option<f32>,
 }
 
 impl GrizzlyShell {
@@ -1792,7 +2131,7 @@ impl GrizzlyShell {
     pub fn new(editor: Arc<Editor>, builder: ShellBuilder, opts: ShellOptions) -> Self {
         let wake = editor.exec.wake().clone();
         let queue = editor.services.get_or_init(|| UiQueue::new(wake));
-        Self { editor, queue, builder: Some(builder), opts, state: None, ctx: None, native_seen: None }
+        Self { editor, queue, builder: Some(builder), opts, state: None, ctx: None }
     }
 }
 
@@ -1802,6 +2141,7 @@ impl Shell for GrizzlyShell {
         gz_ui::font::install(ctx, std::mem::take(&mut self.opts.fonts));
         gz_ui::theme::install(ctx, settings.accent());
         layout::load(ctx, settings.layout());
+        layout::load_lists(ctx, settings.lists());
         ctx.options_mut(|o| o.zoom_with_keyboard = false);
         let guard = Arc::new(AtomicBool::new(false));
         if !self.editor.flags.unattended {
@@ -1813,8 +2153,9 @@ impl Shell for GrizzlyShell {
             gpu.clone(),
             self.queue.clone(),
             builder,
-            self.opts.iconsheet,
+            (self.opts.iconsheet, self.opts.kitsheet),
             guard,
+            ctx.clone(),
         );
         state.logo = crate::chrome::load_logo(ctx);
         self.state = Some(state);
@@ -1822,17 +2163,11 @@ impl Shell for GrizzlyShell {
     }
 
     fn frame(&mut self, ui: &mut Ui) -> FrameReport {
-        // -uiscale: the scale is the command line's, also after the monitor's scale changes
-        if let Some(scale) = self.opts.ui_scale {
-            let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0).max(0.1);
-            if self.native_seen != Some(native) {
-                self.native_seen = Some(native);
-                ui.ctx().set_zoom_factor(scale / native);
-                ui.ctx().request_repaint();
-            }
-        }
         match self.state.as_mut() {
-            Some(s) => s.frame(ui),
+            Some(s) => {
+                s.apply_scale(ui.ctx(), self.opts.ui_scale);
+                s.frame(ui)
+            }
             None => FrameReport::default(),
         }
     }

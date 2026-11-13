@@ -46,6 +46,8 @@
 //	                    file VirusTotal did not know gets --vt-upload-results)
 //	POST /__vt/forget?sha=S
 //	                    VirusTotal no longer knows S, as if it had never seen it
+//	/__asset/...        the release assets as the editor's updater reads them: a cut
+//	                    connection, a server without ranges, the reads counted (assets.go)
 //
 // author= and by= default to github-actions[bot], the account a workflow writes
 // as: that is how a test plays the catalog's workflow - and a stranger forging it.
@@ -55,7 +57,9 @@
 //   - Every response closes its connection. The request body is always consumed
 //     first, so an error answer is never lost to a connection reset.
 //   - API routes (/user, /repos, /upload) demand a User-Agent header, as GitHub
-//     does, then the bearer token, then the repository name.
+//     does, then the bearer token, then the repository name. GET releases/latest
+//     of a public --repo without an Authorization header answers anonymously, as
+//     GitHub does: the editor's updater never sends a token.
 //   - "authorized" in the request log means the request carried an Authorization
 //     header, whatever its value. Web, CDN, device-flow, /catalog/public and /vt/
 //     requests must show false: a true there is a client leaking its token.

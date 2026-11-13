@@ -254,7 +254,6 @@ fn bare_effect(name: &str, args: &Args) -> Effect {
         "mod_package" | "mod_publish" => Effect::Publish,
         "mod_catalog" if matches!(action, "submit" | "withdraw") => Effect::Publish,
         "mod_releases" if action == "delete" => Effect::Destroy,
-        "project_delete" | "content_delete" | "pda_delete" => Effect::Destroy,
         _ if on("discard") => Effect::Destroy,
         _ => Effect::Write,
     }

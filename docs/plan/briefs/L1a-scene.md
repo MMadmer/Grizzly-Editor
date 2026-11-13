@@ -121,6 +121,16 @@ documents). The audit `Intermediate/plan2/commands.md` 3a and 3c list today's fa
 | `scene.recover` | write | `recovery` |
 | `doc.undo`, `doc.redo` for `doc=level` | write | `undo`, `redo` - register the scene with the shell's document commands the way stream K's report says |
 
+A project can be open without its scene (`project.open scene=false`; a commandlet opens it so unless a command
+of the areas `scene`, `level`, `viewport` or `shot` is among its commands). A `scene.*` command that needs a
+scene when none is up loads the project's scene first and waits for it - `Grizzly-Cmd.exe run scene.objects`
+works from a cold start - and says `no_scene` only when the project has none.
+
+Recent scenes are the project's machine state (`ProjectState::recent_scenes`, project-relative - stream A2
+made it); the absolute list in `grizzly_editor.ltx` (`gz-ui-level/src/level_cmds.rs`) goes. Nothing the scene
+writes into the project names this machine (the SDK format's `[level_tag] owner`, a machine and a user name,
+is not carried into `.scene`).
+
 `way_tool`, `shape_tool`, `light_tool`, `fog_tool`, `object_tool`, `particles_tool` dissolve into `scene.set` /
 `scene.place` / `scene.get` unless one does something those cannot - then it keeps one command with a name that
 says what (`scene.way_link`), and your report says why.

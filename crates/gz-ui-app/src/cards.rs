@@ -150,7 +150,7 @@ pub fn card_order(cards: &[Card], search: &str, sort: Sort) -> Vec<usize> {
     out
 }
 
-/// A card's state as `list_projects` and `project_browser_menu` name it.
+/// A card's state as `project.list` and `project_browser_menu` name it.
 #[must_use]
 pub fn state_name(state: EntryState) -> &'static str {
     state.as_str()

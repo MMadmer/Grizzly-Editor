@@ -13,7 +13,14 @@ use parking_lot::Mutex;
 
 use crate::shell::ShellState;
 
-type Job = Box<dyn FnOnce(&mut ShellState, &egui::Context) + Send>;
+/// What a job does on the UI thread.
+type JobFn = Box<dyn FnOnce(&mut ShellState, &egui::Context) + Send>;
+
+/// A closure for the UI thread, with the name of what queued it (for the stall monitor).
+pub(crate) struct Job {
+    pub label: &'static str,
+    pub run: JobFn,
+}
 
 /// The queue to the UI thread: an `Editor` service while the window runs.
 pub struct UiQueue {
@@ -40,10 +47,10 @@ impl UiQueue {
     }
 
     /// Runs `f` on the UI thread at the start of the next frame and answers what it returned.
-    pub async fn run<T: Send + 'static>(
-        &self,
-        f: impl FnOnce(&mut ShellState, &egui::Context) -> Result<T, CmdError> + Send + 'static,
-    ) -> Result<T, CmdError> {
+    pub async fn run<T: Send + 'static, F>(&self, f: F) -> Result<T, CmdError>
+    where
+        F: FnOnce(&mut ShellState, &egui::Context) -> Result<T, CmdError> + Send + 'static,
+    {
         let (tx, rx) = tokio::sync::oneshot::channel();
         {
             if !*self.open.lock() {
@@ -51,13 +58,16 @@ impl UiQueue {
             }
             // the closure works for the request that queued it: a job it starts is that request's
             let scope = gz_task::current_scope();
-            self.jobs.lock().push(Box::new(move |shell, ctx| {
-                let answer = match scope {
-                    Some(scope) => gz_task::in_scope_sync(scope, || f(shell, ctx)),
-                    None => f(shell, ctx),
-                };
-                let _ = tx.send(answer);
-            }));
+            self.jobs.lock().push(Job {
+                label: crate::stalls::label_of::<F>(),
+                run: Box::new(move |shell, ctx| {
+                    let answer = match scope {
+                        Some(scope) => gz_task::in_scope_sync(scope, || f(shell, ctx)),
+                        None => f(shell, ctx),
+                    };
+                    let _ = tx.send(answer);
+                }),
+            });
         }
         self.wake.ping();
         rx.await.map_err(|_| CmdError::internal("the window is gone"))?
@@ -65,16 +75,20 @@ impl UiQueue {
 
     /// Queues `f` for the start of the next frame and does not wait for it: an answer of a kit
     /// question, a file read that came back.
-    pub fn post(&self, f: impl FnOnce(&mut ShellState, &egui::Context) + Send + 'static) {
+    pub fn post<F>(&self, f: F)
+    where
+        F: FnOnce(&mut ShellState, &egui::Context) + Send + 'static,
+    {
         if !*self.open.lock() {
             return;
         }
+        let label = crate::stalls::label_of::<F>();
         match gz_task::current_scope() {
-            Some(scope) => self
-                .jobs
-                .lock()
-                .push(Box::new(move |shell, ctx| gz_task::in_scope_sync(scope, || f(shell, ctx)))),
-            None => self.jobs.lock().push(Box::new(f)),
+            Some(scope) => self.jobs.lock().push(Job {
+                label,
+                run: Box::new(move |shell, ctx| gz_task::in_scope_sync(scope, || f(shell, ctx))),
+            }),
+            None => self.jobs.lock().push(Job { label, run: Box::new(f) }),
         }
         self.wake.ping();
     }
@@ -93,9 +107,9 @@ impl UiQueue {
 }
 
 /// Runs `f` on the UI thread: [`UiQueue::run`] on this editor's queue, or the "no window" error.
-pub async fn on_ui<T: Send + 'static>(
-    editor: &Editor,
-    f: impl FnOnce(&mut ShellState, &egui::Context) -> Result<T, CmdError> + Send + 'static,
-) -> Result<T, CmdError> {
+pub async fn on_ui<T: Send + 'static, F>(editor: &Editor, f: F) -> Result<T, CmdError>
+where
+    F: FnOnce(&mut ShellState, &egui::Context) -> Result<T, CmdError> + Send + 'static,
+{
     UiQueue::of(editor)?.run(f).await
 }

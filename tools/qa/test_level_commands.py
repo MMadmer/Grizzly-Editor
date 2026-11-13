@@ -97,7 +97,7 @@ class Editor:
     def close(self) -> None:
         # never killed: a killed editor leaves project.ltx behind half written
         try:
-            mcp("window_control", action="close", discard=True)
+            mcp("app.quit", discard=True)
         except OSError:
             pass
         if self.proc:
@@ -158,7 +158,7 @@ def run(project: str, work: str) -> None:
         pg = mcp("play_game", root=root, timeout=120)
         check(not pg.get("ok") and listing(root) == before,
               "D play_game refuses root= a folder that holds a file, and leaves it as it was", short(pg))
-        jobs = mcp("jobs")
+        jobs = mcp("job.list")
         game = [j for j in (jobs.get("jobs") or []) if j.get("state") == "running"
                 and (j.get("kind") == "level_run" or j.get("group") == "game")]
         check(jobs.get("ok") and not game, "D no game job runs after the refusal: no game was started", short(jobs))
@@ -168,7 +168,7 @@ def run(project: str, work: str) -> None:
         # person; an MCP caller gets no window, and the refusal names the argument to pass instead
         for row, extra in (("COMMAND_LOAD", {}), ('COMMAND_SAVE."Save As"', {})):
             r = mcp("exec_command", name=row, **extra)
-            shot = mcp("screenshot_editor", timeout=120)
+            shot = mcp("shot.window", timeout=120)
             check(r.get("ok") and r.get("result") == 0 and "p1s" in (r.get("refused") or "")
                   and shot.get("modal") is None,
                   "E %s over MCP opens no window and names p1s" % row, short(r) + " / modal " + short(shot.get("modal")))

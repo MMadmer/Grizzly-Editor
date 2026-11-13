@@ -395,6 +395,9 @@ impl Footer<'_> {
         if kind == Kind::Danger {
             self.danger = true;
         }
+        if kind == Kind::Primary {
+            crate::button::note_primary(&ctx, self.ui.scope_id(), "dialog footer", label);
+        }
         let resp = self
             .ui
             .put(rect, Button::new(label).kind(kind).enabled(enabled, why).label_set(label_set).dialog());

@@ -853,7 +853,7 @@ impl Viewport {
             *k = Some(key);
         }
         let ed = editor.clone();
-        let editor_root = editor.paths.root.clone();
+        let editor_root = gz_project::library_root(editor);
         editor.exec.spawn(async move {
             let game = match gz_game::GameLink::of(&ed) {
                 Ok(g) => g.files().await.ok(),

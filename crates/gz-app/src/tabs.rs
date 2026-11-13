@@ -37,6 +37,51 @@ pub fn text_room(width: f32, cross: bool, dot: bool) -> f32 {
     (end - PAD_L - ICON - GAP).max(0.0)
 }
 
+/// A tab that shows its icon alone: as wide as the icon and its pads.
+pub const ICON_ONLY_W: f32 = PAD_L + ICON + PAD_L;
+
+/// A tool tab: a singleton of the editor (Characters, World Rules, Preferences, a library),
+/// whose icon says what it is - it gives way to its icon alone before any name is cut.
+#[must_use]
+pub fn is_tool(kind: &str) -> bool {
+    matches!(
+        kind,
+        "characters"
+            | "mod_settings"
+            | "world_rules"
+            | "screens"
+            | "releases"
+            | "preferences"
+            | "light_animations"
+            | "texture_library"
+            | "sound_library"
+    )
+}
+
+/// When the tabs want more than `avail`, the tool tabs show their icon alone, the rightmost
+/// first, until the rest fits; `want` takes their narrower width. Which tab is up plays no part:
+/// a switch between tabs moves none of them (a folded tab that is up is told by its highlight and
+/// names itself in its tip). Answers which tabs fold.
+#[must_use]
+pub fn fold_tools(want: &mut [f32], tool: &[bool], avail: f32) -> Vec<bool> {
+    let mut folded = vec![false; want.len()];
+    let total = |w: &[f32]| w.iter().sum::<f32>() + SPACING * w.len() as f32;
+    for i in (0..want.len()).rev() {
+        if total(want) <= avail {
+            break;
+        }
+        if tool.get(i).copied().unwrap_or(false) {
+            if let Some(w) = want.get_mut(i) {
+                *w = ICON_ONLY_W;
+            }
+            if let Some(f) = folded.get_mut(i) {
+                *f = true;
+            }
+        }
+    }
+    folded
+}
+
 /// How the strip lays its tabs out.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StripPlan {
@@ -68,6 +113,8 @@ pub fn plan_strip(want: &[f32], active: Option<usize>, avail: f32, count_extra: 
             .enumerate()
             .map(|(i, w)| if Some(i) == active { *w } else { w.min(W_MIN) })
             .sum::<f32>();
+    // a tab folded to its icon is narrower than any name: it keeps that width
+    let floor = |w: f32, cap: f32| if w <= ICON_ONLY_W { w } else { w.min(cap) };
     if at_min > avail {
         avail = (avail - count_extra).max(0.0);
     }
@@ -88,7 +135,7 @@ pub fn plan_strip(want: &[f32], active: Option<usize>, avail: f32, count_extra: 
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| Some(*i) != active)
-                .map(|(_, w)| w.min(cap) + SPACING)
+                .map(|(_, w)| floor(*w, cap) + SPACING)
                 .sum();
             if sum > rest {
                 hi = cap;
@@ -98,7 +145,7 @@ pub fn plan_strip(want: &[f32], active: Option<usize>, avail: f32, count_extra: 
         }
         for (i, w) in width.iter_mut().enumerate() {
             if Some(i) != active {
-                *w = want.get(i).copied().unwrap_or(W_MIN).min(lo);
+                *w = floor(want.get(i).copied().unwrap_or(W_MIN), lo);
             }
         }
     }
@@ -200,7 +247,10 @@ pub fn label_of_path(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{SessionTab, W_MIN, decode_session, encode_session, label_of_path, plan_strip, want_width};
+    use super::{
+        ICON_ONLY_W, SessionTab, W_MIN, decode_session, encode_session, fold_tools, label_of_path,
+        plan_strip, want_width,
+    };
     use gz_ui::Icon;
 
     #[test]
@@ -245,6 +295,25 @@ mod tests {
         assert!(tight.shown.get(4).copied().unwrap_or(false));
         assert!(tight.widths.iter().all(|w| *w >= W_MIN));
         assert!(tight.hidden() > 0);
+    }
+
+    #[test]
+    fn tool_tabs_fold_to_their_icon_before_a_name_is_cut() {
+        // Level, a quest, three tool tabs: the rightmost fold first, whichever tab is up
+        let tool = [false, false, true, true, true];
+        let mut want = vec![120.0, 200.0, 140.0, 140.0, 140.0];
+        let folded = fold_tools(&mut want, &tool, 600.0);
+        assert_eq!(folded, vec![false, false, false, true, true]);
+        assert_eq!(want[4], ICON_ONLY_W);
+        assert_eq!(want[2], 140.0, "the first tool tab keeps its name: the rest fits");
+        for up in [Some(2), Some(3), None] {
+            let plan = plan_strip(&want, up, 600.0, 0.0);
+            assert_eq!(plan.hidden(), 0);
+            assert_eq!(plan.widths, want, "nothing else is cut, and a switch moves no tab");
+        }
+        // room enough: nothing folds
+        let mut roomy = vec![120.0, 200.0, 140.0];
+        assert_eq!(fold_tools(&mut roomy, &[false, false, true], 2000.0), vec![false; 3]);
     }
 
     #[test]

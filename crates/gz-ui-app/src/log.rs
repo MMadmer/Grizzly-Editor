@@ -184,7 +184,7 @@ impl Inner {
         let level = match record.level {
             Level::Error => LineLevel::Error,
             Level::Warning => LineLevel::Warning,
-            Level::Info => LineLevel::Info,
+            Level::Info | Level::Detail => LineLevel::Info,
             Level::Plain => level_of(&text),
         };
         if level == LineLevel::Info && text.starts_with(PROJECT_OPENED) {
@@ -200,7 +200,8 @@ impl Inner {
                 self.warnings += 1;
             }
         }
-        if serious || (level == LineLevel::Info && notable_note(&text)) {
+        // a detail (a profile, stage times) is the machinery talking: never the status bar's line
+        if serious || (record.level == Level::Info && notable_note(&text)) {
             self.last = gz_log::marked(record.level, &text);
         }
         self.lines.push(Line { text, level, epoch: self.epoch, mark: false, counted });

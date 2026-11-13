@@ -223,7 +223,7 @@ pub(crate) async fn open_for_mcp(
             if let Some(s) = &req.arg {
                 pairs.push(("source", json!(s)));
             }
-            call(editor, "ui_tab", &pairs).await.map(|_| ()).map_err(|(e, _)| format!("{path}: {e}"))
+            call(editor, "ui.tab", &pairs).await.map(|_| ()).map_err(|(e, _)| format!("{path}: {e}"))
         }
         Open::Scene(scene) => {
             call(editor, "open_scene", &[("scene", json!(scene))]).await.map(|_| ()).map_err(|(e, _)| e)
@@ -289,7 +289,7 @@ pub(crate) fn commit_rename(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>,
     let inbox = browser.inbox.clone();
     let ed = editor.clone();
     editor.exec.spawn(async move {
-        match call(&ed, "content_rename", &[("path", json!(was)), ("name", json!(r.text))]).await {
+        match call(&ed, "file.rename", &[("path", json!(was)), ("name", json!(r.text))]).await {
             Ok(reply) => {
                 let to = reply.get("path").and_then(Value::as_str).unwrap_or("").replace('/', "\\");
                 let parent = parent_of(&was);
@@ -390,11 +390,11 @@ pub(crate) fn delete_selection(
         {
             return;
         }
-        let list = doomed.iter().map(|e| e.path.to_string()).collect::<Vec<_>>().join(";");
+        let list = doomed.iter().map(|e| e.path.to_string()).collect::<Vec<_>>();
         inbox.lock().clear_selection = true;
         let ed2 = ed.clone();
         ed.exec.spawn(async move {
-            match call(&ed2, "content_delete", &[("path", json!(list)), ("recursive", json!(true))]).await {
+            match call(&ed2, "file.delete", &[("path", json!(list)), ("recursive", json!(true))]).await {
                 Ok(r) => ed2.log.info(format!(
                     "Deleted {} file(s), {} folder(s) for good.",
                     count(&r, "files"),
@@ -506,10 +506,10 @@ pub(crate) async fn transfer(
     let (mut files, mut first_error, mut failed) = (0u64, None::<String>, 0u64);
     for (folder, list) in groups {
         let dst_arg = if folder.is_empty() { ".".to_owned() } else { folder };
-        let cmd = if cut && source == Source::Project { "content_move" } else { "content_copy" };
+        let cmd = if cut && source == Source::Project { "file.move" } else { "file.copy" };
         let pairs = [
-            ("src", json!(list.join(";"))),
-            ("dst", json!(dst_arg)),
+            ("path", json!(list)),
+            ("to", json!(dst_arg)),
             ("recursive", json!(true)),
             ("overwrite", json!(true)),
         ];
@@ -667,7 +667,7 @@ pub(crate) fn new_folder(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>, st
     let ed = editor.clone();
     let cats = browser.cats.clone();
     editor.exec.spawn(async move {
-        match call(&ed, "content_mkdir", &[("path", json!(rel))]).await {
+        match call(&ed, "file.mkdir", &[("path", json!(rel))]).await {
             Ok(_) => {
                 // the tile has to exist before it can be renamed
                 let _ = cats.fresh(&ed, (Source::Project, 0)).await;
@@ -689,11 +689,11 @@ pub(crate) fn create(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>, st: &I
     editor.exec.spawn(async move {
         let mut pairs = vec![("kind", json!(kind))];
         if !folder.is_empty() {
-            pairs.push(("folder", json!(folder)));
+            pairs.push(("path", json!(folder)));
         }
-        match call(&ed, "content_create", &pairs).await {
+        match call(&ed, "file.create", &pairs).await {
             Ok(r) => {
-                let made = r.get("made").and_then(Value::as_str).unwrap_or("").replace('/', "\\");
+                let made = r.get("path").and_then(Value::as_str).unwrap_or("").replace('/', "\\");
                 let _ = cats.fresh(&ed, (Source::Project, 0)).await;
                 if !made.is_empty() {
                     inbox.lock().rename = Some(Entry::new(&made, false));
@@ -803,7 +803,7 @@ pub(crate) fn reveal_in_explorer(
 }
 
 /// Link Game... of the Game source's empty state: the folder picker on a thread of its own, then
-/// `game_link`.
+/// `game.link`.
 pub(crate) fn link_game(editor: &Arc<Editor>) {
     let ed = editor.clone();
     let asker = if editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
@@ -812,7 +812,7 @@ pub(crate) fn link_game(editor: &Arc<Editor>) {
         let path = folder.display().to_string();
         let ed2 = ed.clone();
         ed.exec.spawn(async move {
-            if let Err((e, _)) = call(&ed2, "game_link", &[("path", json!(path))]).await {
+            if let Err((e, _)) = call(&ed2, "game.link", &[("path", json!(path))]).await {
                 ed2.notices.error(format!("Link Game: {e}"));
             }
             ed2.exec.wake().ping();

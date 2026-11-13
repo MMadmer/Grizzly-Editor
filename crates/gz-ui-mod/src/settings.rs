@@ -1293,31 +1293,9 @@ impl ModSettingsDoc {
         for action in std::mem::take(&mut self.actions) {
             match action {
                 Action::OpenPda(rel) => cx.requests.open(OpenRequest::file("pda", &rel)),
-                Action::CreatePda => {
-                    let safe: String = if self.form.id.is_empty() {
-                        "app".to_owned()
-                    } else {
-                        self.form
-                            .id
-                            .chars()
-                            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
-                            .collect()
-                    };
-                    let title = if self.form.name.is_empty() { safe.clone() } else { self.form.name.clone() };
-                    let ed = self.editor.clone();
-                    call::call_then(
-                        &self.editor,
-                        "pda_write",
-                        args([("id", s(&safe)), ("title", s(&title)), ("use", Value::Bool(true))]),
-                        move |reply, ctx| {
-                            if call::ok(reply) {
-                                call::open_tab(&ed, "pda");
-                            } else {
-                                gz_ui::state::toast(ctx, Tone::Error, &call::error_text(reply));
-                            }
-                        },
-                    );
-                }
+                // the PDA tab opened on a module without a layout makes one from the template,
+                // named after the module, and makes it the module's
+                Action::CreatePda => call::open_tab(&self.editor, "pda"),
                 Action::RescanModes => self.load_modes(true),
                 Action::ReadScripts => self.load_commands(),
                 Action::ChoosePicture => {
@@ -1342,11 +1320,10 @@ impl ModSettingsDoc {
         }
     }
 
-    fn draw_footer(&self, ui: &mut Ui, rect: Rect) {
-        let p = palette(ui.ctx());
-        ui.painter()
-            .line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, p.border_subtle));
-        let (status, tone) = match form::blocking(&self.problems).0 {
+    /// What the footer says of the file: the first problem that stops a save, the last failure,
+    /// or how the tab saves. The tab's empty toolbar row says it too.
+    fn save_status(&self) -> (String, Tone) {
+        match form::blocking(&self.problems).0 {
             Some(first) => {
                 (format!("{}: {}", PAGES.get(first.page).map_or("", |p| p.label), first.text), Tone::Error)
             }
@@ -1356,7 +1333,14 @@ impl ModSettingsDoc {
                 ("The picture waits for Save; the rest is saved as you edit".to_owned(), Tone::Warning)
             }
             None => ("Saved to mod.ltx as you edit".to_owned(), Tone::Muted),
-        };
+        }
+    }
+
+    fn draw_footer(&self, ui: &mut Ui, rect: Rect) {
+        let p = palette(ui.ctx());
+        ui.painter()
+            .line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, p.border_subtle));
+        let (status, tone) = self.save_status();
         let r = Rect::from_min_max(pos2(rect.min.x, rect.min.y + 4.0), rect.max);
         let mut child = ui.new_child(
             UiBuilder::new()
@@ -1396,13 +1380,17 @@ impl Document for ModSettingsDoc {
         "Mod Settings".to_owned()
     }
     fn icon(&self) -> Icon {
-        Icon::Settings
+        // a module, not the editor's settings: Preferences is the gear
+        Icon::Package
     }
     fn tooltip(&self) -> Option<String> {
         Some("mod.ltx: the module's name, version, game mode and what the build ships".to_owned())
     }
     fn dirty(&self) -> bool {
         ModSettingsDoc::dirty(self)
+    }
+    fn toolbar_status(&self) -> Option<String> {
+        Some(self.save_status().0)
     }
 
     fn body(&mut self, ui: &mut Ui, cx: &mut DocCx<'_>) {

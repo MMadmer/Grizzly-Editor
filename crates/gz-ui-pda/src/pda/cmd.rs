@@ -117,13 +117,13 @@ async fn settle(editor: &Arc<Editor>, tab: &Arc<PdaTab>, save: bool, discard: bo
     Err(CmdError::unsaved(json!([rel])))
 }
 
-/// Runs a `ui_tab` action, as the window would; headless there is no tab to touch.
+/// Runs a `ui.tab` action, as the window would; headless there is no tab to touch.
 async fn ui_tab(editor: &Arc<Editor>, fields: &[(&str, Value)]) -> Value {
     let mut args = Args::new();
     for (k, v) in fields {
         args.insert((*k).to_owned(), v.clone());
     }
-    editor.call("ui_tab", args, Origin::Mcp).await
+    editor.call("ui.tab", args, Origin::Mcp).await
 }
 
 fn click(m: &mut Model, args: &Args) -> Result<(), CmdError> {
@@ -217,7 +217,7 @@ pub async fn pda_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
             tab.m.lock().open = false;
             let _ = ui_tab(
                 &editor,
-                &[("action", json!("close")), ("id", json!("pda")), ("discard", json!(true))],
+                &[("action", json!("close")), ("doc", json!("pda")), ("discard", json!(true))],
             )
             .await;
         }
@@ -351,6 +351,9 @@ async fn answer(
     out.insert("open".into(), json!(m.open));
     out.insert("active".into(), json!(active));
     out.insert("text_dirty".into(), json!(m.text_dirty));
+    if !m.disk_note.is_empty() {
+        out.insert("disk_note".into(), json!(m.disk_note));
+    }
     out.insert(
         "panes".into(),
         json!({

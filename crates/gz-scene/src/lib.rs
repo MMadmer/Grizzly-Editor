@@ -75,7 +75,7 @@
 //! `spawn_order`, `spawn_set_visual`, `spawn_set_fixed_bones`, `mark_authored`, `mark_removed`,
 //! `drop_objects`, `snap_objects`, `scan_walls`, `probe_vertical`, `undo`, `redo`, `recovery`,
 //! `property_inspector`, `property_set`, `property_choose`; [`install`] provides the `Objects`
-//! and `Groups` categories of `list_assets`.
+//! and `Groups` lists of the library (`file.list source=library`).
 
 #![forbid(unsafe_code)]
 

@@ -1,54 +1,43 @@
-//! Mod > Bake Scene Layer (`MenuMod`, `EditorModScene::RequestExportSpawn` / `RequestExportXCForm`
-//! / `RequestExportOGF` / `RequestExportCut`): each row bakes the selection of the open scene
-//! into a level delta of the module at once - the four are faces of `mod_export_spawn`,
-//! `mod_export_xcform`, `mod_export_ogf_probe` and `mod_export_cut` - and reports in the kit's
-//! one Result dialog, `dlg.bake_result`, with Open Folder.
+//! Mod > Bake Scene Layer: each row bakes the selection of the open scene into a level delta of
+//! the module at once - the four are actions over `mod_export_spawn`, `mod_export_xcform`,
+//! `mod_export_ogf_probe` and `mod_export_cut` - and reports in the kit's one Result dialog,
+//! `dlg.bake_result`, with Open Folder.
 
 use std::sync::Arc;
 
-use gz_app::{CppAction, CppCommand, DocCx, MenuContent, MenuEntry, ShellBuilder, UiCommand};
-use gz_editor::{Args, Editor, SmolStr, Value};
+use gz_app::{Action, ReplyCx, ShellBuilder};
+use gz_editor::Value;
 use gz_ui::Icon;
 use gz_ui::Tone;
 use gz_ui::dialog::{ResultAction, ResultSpec};
 
 use crate::call;
 
-/// The four bakes: the command id, the C++-table id it is listed under, the menu row, the face's
-/// name, the editor command and what a failure is called.
-const BAKES: [(&str, u32, &str, &str, &str, &str); 4] = [
+/// The four bakes: the action, the menu row, the action's title, the editor command and what a
+/// failure is called.
+const BAKES: [(&str, &str, &str, &str, &str); 4] = [
     (
-        "COMMAND_MOD_BAKE_SPAWN",
-        128,
+        "mod.bake_spawn",
         "Spawn Layer...",
         "Bake Spawn Layer",
         "mod_export_spawn",
         "The spawn layer was not written",
     ),
     (
-        "COMMAND_MOD_BAKE_XCFORM",
-        129,
+        "mod.bake_collision",
         "Collision Overlay...",
         "Bake Collision Overlay",
         "mod_export_xcform",
         "The collision overlay was not written",
     ),
     (
-        "COMMAND_MOD_BAKE_OGF",
-        130,
+        "mod.bake_visuals",
         "Visual Overlay...",
         "Bake Visual Overlay",
         "mod_export_ogf_probe",
         "The visual overlay was not written",
     ),
-    (
-        "COMMAND_MOD_BAKE_CUT",
-        131,
-        "Level Cut...",
-        "Bake Level Cut",
-        "mod_export_cut",
-        "The level cut was not written",
-    ),
+    ("mod.bake_cut", "Level Cut...", "Bake Level Cut", "mod_export_cut", "The level cut was not written"),
 ];
 
 fn num(reply: &Value, key: &str) -> i64 {
@@ -153,49 +142,38 @@ fn parent(path: &str) -> String {
 }
 
 /// Runs a bake as the window does and shows what it came to.
-fn bake(editor: &Arc<Editor>, command: &'static str, failed: &'static str) {
-    let ed = editor.clone();
-    call::call_then(editor, command, Args::new(), move |reply, ctx| {
-        let (mut spec, folder) = report(command, failed, reply);
-        if !folder.is_empty() {
-            spec.action = Some(ResultAction {
-                label: "Open Folder".to_owned(),
-                run: Arc::new(move || call::open_folder(&folder)),
-            });
-        }
-        crate::build::show_result(&ed, ctx, spec);
-    });
-}
-
-fn has_project(editor: &Editor, _tab: &str) -> bool {
-    editor.project_opt().is_some()
+/// The kit's result of a bake, from its answer.
+fn show_bake(r: &ReplyCx<'_>, n: usize) {
+    let Some((_, _, _, command, failed)) = BAKES.get(n) else { return };
+    let (mut spec, folder) = report(command, failed, r.reply);
+    if !folder.is_empty() {
+        spec.action = Some(ResultAction {
+            label: "Open Folder".to_owned(),
+            run: Arc::new(move || call::open_folder(&folder)),
+        });
+    }
+    crate::build::show_result(r.editor, r.ctx, spec);
 }
 
 pub(crate) fn install(b: &mut ShellBuilder) {
     let (group, order) = crate::menu::mod_menu_slot(crate::menu::BAKE_SCENE_LAYER).unwrap_or((1, 3));
-    for (k, (id, cpp_id, row, label, command, failed)) in BAKES.into_iter().enumerate() {
-        b.command(
-            UiCommand::new(id, "Mod", label, Icon::Level, move |cx: &mut DocCx<'_>| {
-                bake(cx.editor, command, failed)
-            })
-            .enabled(has_project),
+    let shows: [fn(&ReplyCx<'_>); 4] =
+        [|r| show_bake(r, 0), |r| show_bake(r, 1), |r| show_bake(r, 2), |r| show_bake(r, 3)];
+    for (k, ((id, row, label, command, _), show)) in BAKES.into_iter().zip(shows).enumerate() {
+        b.action(
+            Action::new(id, label, "Mod", command)
+                .icon(Icon::Level)
+                .enabled(crate::menu::with_project)
+                .reply(show),
         );
-        b.cpp_command(
-            CppCommand::new(
-                cpp_id,
-                id,
-                &format!("Mod\\Bake Scene Layer\\{}", row.trim_end_matches('.')),
-                CppAction::Ui,
-            )
-            .face("Mod", label, Icon::Level),
-        );
-        b.menu_entry(MenuEntry {
-            menu: SmolStr::new("Mod"),
-            submenu: Some(SmolStr::new(crate::menu::BAKE_SCENE_LAYER)),
+        b.submenu_action(
+            "Mod",
+            crate::menu::BAKE_SCENE_LAYER,
             group,
-            order: order * 10 + i32::try_from(k).unwrap_or(0),
-            content: MenuContent::Command { command: SmolStr::new(id), label: Some(SmolStr::new(row)) },
-        });
+            order * 10 + i32::try_from(k).unwrap_or(0),
+            id,
+            Some(row),
+        );
     }
 }
 

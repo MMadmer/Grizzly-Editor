@@ -22,8 +22,8 @@ build gate.** Until the editor's first release the format may change freely
    strings). Read by a human, an AI, the editor and the game the same way.
    **AI-first**: an AI creates and edits a quest as text, no screenshots — the
    kind schema is served by `quest_catalog`, node coordinates are optional
-   (the editor lays them out itself), problems come back as text with codes,
-   `quest_get` returns the canonical text plus a textual graph outline (§4.5).
+   (the editor lays them out itself), problems come back as text with codes and
+   positions (`asset.check`), `quest_open` adds a textual graph outline (§4.5).
 2. **The editor does NOT compile the graph into game Lua.** On build it only
    validates and puts the file into the module as is. All logic is executed by
    the **NQ runtime inside the game** (Dead Air Refined Lua scripts + ~200
@@ -196,14 +196,13 @@ can call the validator); UI lives in `LevelEditor`.
   diagnostics; the editor loads the same way through the LuaJIT C API (§13.3).
 - Custom Lua is allowed **only** inside the string field `params.code` of a
   `lua`-kind action/condition.
-- Table keys are identifiers (`id = …`), not `["id"] = …` (both variants are read,
-  the canonical one is written). The exception is keys that are Lua reserved words
+- Table keys are identifiers (`id = …`), not `["id"] = …` (both variants are read;
+  a key the editor adds is written as an identifier). The exception is keys that are Lua reserved words
   (the `else` pin of `flow.branch`, the `["not"]` field of conditions): those are
   written as `["else"] = …`.
-- On save the editor **rewrites the file canonically** (key order and formatting
-  are fixed, §13.3): comments written by hand/AI are lost (deliberate — diffs stay
-  stable), and a generated comment block with the quest outline is written at the
-  top of the file (§4.5, item 7).
+- On save the editor **writes only what changed** (§13.3, `docs/ASSETS.md`
+  section 3): comments, key order and layout written by hand or by an AI stay
+  byte for byte, and no comment block is generated.
 - A node's `pos` is optional: nodes without coordinates are laid out automatically
   on open (§4.5, item 2).
 
@@ -352,21 +351,21 @@ never looking at the canvas. What guarantees this:
 
 1. **The file is self-contained.** Everything the editor knows about a quest lives
    in `.nqasset`; nothing is stored in sidecars or editor state. Node order in the
-   file is logical (top-down along the flow); on save the editor sorts nodes
-   topologically from the triggers (stable: links unchanged — order unchanged).
+   file is logical (top-down along the flow); the editor keeps the order the file
+   has and puts a new node after the node it is linked from.
 2. **Coordinates are optional.** A node without `pos` gets its position from the
-   auto-layout on open; an AI never has to write `pos`. Editor fields (`pos`,
-   `comment`) always come last in a node so they do not get in the way of reading.
+   auto-layout on open, and a save writes it only once the author moved the node;
+   an AI never has to write `pos`.
 3. **The schema is served on demand.** `grizzly_quest_catalog` returns every kind
    with its groups, purpose (`use`), parameters (type/required/default/enum), pins
    and a one-line description — enough to write a quest from scratch. The same
    catalog lives in `docs\nq\NQ_FORMAT.md` (phase 0) and in the `AI_SETUP.md`
    prompt block.
-4. **Problems come as text.** `grizzly_quest_write` (write the whole file) /
-   `grizzly_quest_validate` return a list of `{code, severity, node, slot, message}`
-   (§15) — the same format the game prints. A Lua syntax error position is
-   line:column.
-5. **Reading is text.** `grizzly_quest_get` returns the canonical file text plus an
+4. **Problems come as text.** `asset.check` returns every problem of a file, a
+   folder or the project with its code (§15), its sentence, its line and column and
+   - where the fix is mechanical - what to write instead; an open document's
+   `quest_open` / `quest_apply` answer `{code, severity, node, slot, message}`.
+5. **Reading is text.** The file is the text. `quest_open` adds an
    **outline** — a linear textual description of the graph:
    ```
    quest madmer.cordon_tales.wolf_debt "Долг вежливости" (active: auto; vars: agreed; tasks: kill_boars)
@@ -381,18 +380,15 @@ never looking at the canvas. What guarantees this:
    finish (flow.end; completed)
    problems: none            -- otherwise: "W011 sid_1: not all player replies are unconditional — …"
    ```
-   The outline is available without opening a tab (`grizzly_quest_list` gives a
-   summary of every quest).
-6. **Editing — whole-file or by operations.** An AI usually rewrites the whole
-   file (`quest_write` or a direct file write + `quest_reload`); targeted edits go
+   `game.lookup type=quest_id` lists the project's quests; `asset.find` searches
+   them.
+6. **Editing — the file or by operations.** An AI usually writes the file with its
+   own tools, and an open tab follows it; targeted edits of an open document go
    through `quest_apply` operations, also text (a Lua table).
-7. **The generated header.** The canonical writer prepends a comment block with
-   the same outline (rebuilt on every save, ignored on read) — opening the file in
-   any editor, a human or an AI sees the quest structure without the graph.
-8. **Names speak for themselves.** Kinds and parameters are short English
+7. **Names speak for themselves.** Kinds and parameters are short English
    identifiers with dotted namespaces (`dialog.topic`, `objective.kill`,
    `item.give`); texts are in the player's language.
-9. **Screenshots are unnecessary but possible.** `grizzly_quest_view` +
+8. **Screenshots are unnecessary but possible.** `grizzly_quest_view` +
    `grizzly_screenshot_editor` remain for visual checks, but no step of the AI
    workflow depends on them.
 
@@ -1013,18 +1009,16 @@ otherwise — the bundle `<sdk>\gamedata\configs\nq\catalog.ltx`. Cached until
   Lua. One `lua_State` per operation, closed immediately.
 - Custom `code` syntax check: `luaL_loadbuffer` of the chunk without execution
   (the same path) — warning W050 "Lua syntax error".
-- Writing — the canonical serializer: quest key order
-  `nq, id, title, activation, vars, tasks, nodes`; nodes — in a stable
-  topological order (a walk from the triggers in file order, over pins in catalog
-  order, over targets in `out` order; unreachable ones — at the end in their
-  previous order); node keys `id, kind, once, params, cond, on_enter, on_exit,
-  out, pos, comment`; strings in `"…"` with escaping, multi-line ones (`code`,
-  long texts) — `[[…]]`/`[==[…]==]`; 2-space indent; `out` — a string for one
-  target, a list for several. The file always starts with the generated comment
-  block: `-- nq: <id> "<title>"` and the graph outline (§4.5, item 5) — the only
-  comments the editor writes; on read they are ignored and rebuilt on every save.
-- The outline (§4.5) is produced by the same function for the writer, `quest_get`
-  and `quest_list`.
+- Writing — the difference into the file (`gz-luadata`'s `LuaDoc::apply_diff`,
+  `gz-asset`'s save path): a changed value is rewritten where it stands, a new key
+  goes where the kind's order puts it (`nq, id, title, activation, vars, tasks,
+  nodes`; node keys `id, kind, once, params, cond, on_enter, on_exit, out, pos,
+  comment`), a new node after the node it is linked from, laid out like the file
+  around it; nodes are matched by `id`. A new file (the template) is written
+  whole: the header first, strings in `"…"`, multi-line ones `[[…]]`, 2-space
+  indent, `out` a string for one target and a list for several.
+- The outline (§4.5) is the document's (`quest_open`, `quest_apply`,
+  `quest_edit`); nothing writes it into the file.
 
 ### 13.4 Document and undo (`NqDoc`)
 
@@ -1038,9 +1032,11 @@ otherwise — the bundle `<sdk>\gamedata\configs\nq\catalog.ltx`. Cached until
   while it is focused (`ImGui::IsWindowFocused(RootAndChildWindows)`); the scene
   commands `COMMAND_UNDO/REDO` do not fire then, the scene undo stack is
   untouched.
-- An external file change (an AI rewrote it): the `Reload` button/command; on
-  save the editor compares mtime and, if the file changed outside after opening,
-  asks (UI) / overwrites (MCP with `force`).
+- An external file change (an AI rewrote it) reaches the document through the
+  project's watcher: a document without unsaved edits reads the file again and
+  keeps its view; one with unsaved edits rebases them onto the file
+  (`docs/ASSETS.md` section 4). A save writes only the values the document
+  changed, into the file's text as it is.
 
 ### 13.5 Validator (`NqValidate`)
 
@@ -1234,7 +1230,7 @@ canvas, the **Details panel** (right, 360 pt, `graph.details_w`), and a
 panels keep their pt size and the canvas takes every resize; when the canvas
 would get less than 400 pt the Graph panel folds to a rail whose buttons open it
 over the canvas. The toolbar's Graph and Details buttons show and hide the
-panels. The sizes live in the layout (`[GrizzlyLayout]`, MCP `ui_split`).
+panels. The sizes live in the layout (`[GrizzlyLayout]`, MCP `ui.split`).
 
 Every field of both panels is a row of the UI kit's property grid: the label in
 its column, the value beside it, the help in the label's tooltip and in the
@@ -1269,8 +1265,11 @@ Edit Text / Edit Lua dialog (Check Syntax).
 - **Drawer**: Problems (n) - a click focuses the node and slot, right-click
   copies; it opens when Validate finds something. Find Results - the search
   field, previous/next and the results.
-- A file changed on disk behind the document shows a banner with Reload and
-  Overwrite... (both confirm what is lost).
+- A file changed on disk behind the document shows a banner only when there is
+  something to say: the file does not read (the graph keeps the last state that
+  read, the banner names the reader's line), the file is gone (Save writes it
+  again), or both sides changed some values ("Changed on disk too: <n> values",
+  each with Take Theirs).
 - Rename Task (Cancel is the default), Task References and Find in Project are
   dialogs of the kit.
 
@@ -1296,32 +1295,27 @@ built by string emitters (no JSON library).
 | Tool | Arguments | Response |
 |---|---|---|
 | `grizzly_quest_catalog` | — | kinds with groups, `use`, parameters (type/required/default/enum), pins; the catalog version; the source (game/bundled) |
-| `grizzly_quest_list` | — | every project `.nqasset`: path, id, title, error/warning counts |
-| `grizzly_quest_new` | `path` (project-relative) | creates from the template, opens the tab |
 | `grizzly_quest_open` / `grizzly_quest_close` | `path`[, `discard`] | |
-| `grizzly_quest_get` | `path` | `{ lua: "<canonical text>", outline: "<text outline, §4.5>", problems: [...], stats }`; works for an unopened file too (reads from disk) |
-| `grizzly_quest_write` | `path`, `lua` | replace the whole document (parse → validation → undo snapshot); problems and outline in the response; the file need not be open (then it is written to disk after validation, errors do not block the write — they only block the build) |
 | `grizzly_quest_undo` / `grizzly_quest_redo` | `path` | document undo/redo (the scene `undo` does not touch quests) |
 | `grizzly_quest_apply` | `path`, `ops` = a Lua table of operations: `add_node{node}`, `set_node{id, patch}`, `rename_node{id,new_id}`, `remove_node{id}`, `connect{from,pin,to}`, `disconnect{from,pin,to}`, `add_action{id,slot,index,action}`, `set_action{id,slot,index,patch}`, `move_action{...}`, `remove_action{...}`, `set_quest{patch}`, `set_pos{id,x,y}` | problems after applying |
-| `grizzly_quest_validate` | `path` | the problem list |
-| `grizzly_quest_save` | `path`[, `force`] | |
+| `grizzly_quest_save` | `path` | writes the values the document changed; a change on disk meanwhile is merged first |
 | `grizzly_quest_reload` | `path` | re-read from disk |
 | `grizzly_quest_layout` | `path` | auto-layout; every position carries `w`/`h`, the node's content-sized box (`NqLayout::Box`) |
 | `grizzly_quest_view` | `path`, `frame:"all"\|<node>`, `zoom_level`, `cx`/`cy` (override `frame`), `select:"<node>"\|"a,b"\|"none"` (the Details panel follows the selection), `slot:"enter:0"\|"exit:1"\|"none"` (open the action in the Details panel), `graph_panel`/`details`/`keys`/`problems:"show"\|"hide"\|"toggle"` (the Graph panel - on a rail it opens over the canvas -, the Details panel, the Shortcuts card, the Problems drawer), `graph_width`/`details_width` (pt), `action_split` (the share of the Details column the node keeps) / `vars_split` (the share of the Graph panel the Variables get), `scroll:"top"\|"bottom"\|"action:top"\|"action:bottom"\|"tasks"\|"task:<id>"\|"task:<id>/steps"\|"variables"` (an error when that pane is not on screen) | the resulting `zoom_level`/`zoom` (the level's factor) + `ui_scale`, `title_px`, `center`/`selected`/`slot`, `graph_panel` (`open`/`rail`/`overlay`/`hidden`), `details`, `drawer`, `minimap`, `beyond` (`{above, below, left, right}`: the nodes wholly past each edge of the view), `graph_width`/`details_width`, `panes` (graph, variables, canvas, details, node, action, drawer; pt of the main viewport, null when not drawn), the splits and the panes' scroll `[y, max]`; the answer describes the frames this call changed (a deferred `frame:all`, a selection, a slot, a pane, a width, a split, a tab that was not on screen; a scroll, and the node pane bringing a newly selected action's row into view, land a frame later): the handler marks it `pending:true` and the MCP pump holds the request like a screenshot until they are drawn, then answers by reading again with `answer_only:true` (applies nothing - a toggle must not flip back), so a raw socket caller gets it in one call too; then `grizzly_screenshot_editor` |
 | `grizzly_quest_edit` | `path`, `op`, `nodes` (instead of the current selection), `from`/`pin`/`to` | every graph edit the canvas can do, without a mouse: `connect`, `disconnect` (without `to` — the whole pin, without `pin` — all pins), `bypass` (the node stays in place, the chain closes over it: A→B→C becomes A→C), `delete`, `duplicate`, `connect_nearest`, `select_all`. The response carries the outline — the result reads without a screenshot |
 | `grizzly_quest_find` | `path`, `action`, `query`, `select`, `limit` | full-text results in file order, the active result and the view state; `get` with `query` atomically changes the query without navigating, `next`/`previous` focus the node |
-| `grizzly_quest_project_find` | `query`, `limit` | a read-only search over a direct sorted scan of all `*.nqasset`, opening no documents; dirty documents act as a memory overlay. The response: `source` on each result, `complete`/`diagnostics`, the cache `generation` and a deterministic content `fingerprint` |
-| `grizzly_quest_references` | `type`, `value`, `path?`, `limit?` | exact references only over the current catalog's types, including nested `cond_list`/`cases_cond`; anything unknown, malformed, Lua or unreadable explicitly marks the result incomplete |
 | `grizzly_quest_rename_task` | `path`, `from`, `to`, `ack_runtime_identity:true` | a safe task rename inside the document: a preflight of every catalog-typed area, then one `Snapshot` + one mutation of the declaration/references. Refuses before the snapshot on unknown/Lua/malformed/partial; the ack is mandatory because of runtime/save identity |
 | `grizzly_quest_bookmarks` | `path`, `action`, `node` | transient bookmarks (`get/add/remove/toggle/next/previous/clear`) and the view state |
 | `grizzly_quest_history` | `path`, `action` | the transient history (`get/back/forward/clear`) with all view states |
 | `grizzly_quest_minimap` | `path`, `action` | `visible` (the toggle), `available` (the graph has `min_nodes`, 12, nodes or more; the toolbar's toggle is disabled while it has not), `shown` (drawn last frame: available, and a canvas with room for it), graph/viewport bounds and the view state (`get/show/hide/toggle`) |
-| `grizzly_quest_lookup` | `type`, `query`, `limit` | picker data (§13.6) |
-| `grizzly_quest_check_all` | — | the same as the build gate |
+| `game.lookup` | `type`, `query`, `limit`, `offset`, `path` | picker data (§13.6) |
+| `asset.check` | `path?`, `fail_on?` | the build's checks over a file, a folder or the project, every problem at its line and column |
+| `asset.find` | `query?` / `refs_to?`, `path?` | the lines that hold a text, or the values and keys that name an id, across the project's assets |
+| `asset.take_theirs` | `path`, `index?` | an open document takes the file's value of a conflict (all of them without `index`) |
 
-The destructiveness rule: MCP commands show no dialogs; `quest_close` without
-`discard` on a dirty document returns an `unsaved` error, `quest_write`
-overwrites the document (undo exists).
+A quest is a file: an agent reads and writes it with its own tools, and the open
+tab follows. The destructiveness rule: MCP commands show no dialogs; `quest_close`
+without `discard` on a dirty document returns an `unsaved` error.
 
 `NqProjectIndex` never calls `NqDocs::Open`: it reads the sorted file list
 directly and reuses a parse only on an exact content-hash match. An open
@@ -1414,24 +1408,24 @@ and MCP.
 ## 16. Test plan
 
 **Editor (headless, `Grizzly.exe -headless -project <project> -nodlg` + MCP):**
-1. `quest_new` → the file is created, canonical, `quest_get` = the template, 0 errors.
-2. `quest_write` of the reference quest (§4.4) → 0 errors; a repeated `quest_get.lua`
-   is byte-for-byte equal (canonicalization is idempotent).
+1. `file.create kind=quest` → the file is the template, `asset.check` finds 0 errors.
+2. The reference quest (§4.4) written as a file → 0 errors; opened and saved
+   unchanged it is byte for byte the same file (`tools/qa/test_assets.py`).
 3. `quest_apply` of an operation set → the expected problems (E007 on a broken edge,
    E010 on broken alternation, E020, W011 …).
 4. `quest_catalog` contains every bundle kind; with a game linked — the game's.
 5. `mod_export` with a broken quest → `ok:false`, the error text; with a valid one →
    the file in `<game>\modules\<id>\…\*.nqasset` is identical to the project's.
-6. UI smoke: `quest_view` → `screenshot_editor` (the tab, nodes, action rows,
+6. UI smoke: `quest_view` → `shot.window` (the tab, nodes, action rows,
    edges); `quest_view` at zoom 0.2 and 2.0; `quest_view frame=all` never leaves
    a title under 12 px (`title_px`); `quest_layout` does not change semantics
-   (`quest_get` without `pos` is equal) and reports every node's `w`/`h`
+   (the outline is equal) and reports every node's `w`/`h`
    (`tools/qa/test_graph_ui.py`).
 7. Undo: `quest_apply` ×3 → `quest_undo` ×3 → the original text; `quest_redo` ×3 →
    the final one.
-8. The UI-less AI cycle: `quest_write` of a file absent on disk → created;
-   `quest_get` of an unopened file → the outline and problems match the opened
-   one's; `quest_list` gives the summary.
+8. The UI-less AI cycle: a file written beside the editor → `asset.check` names
+   its problems at their lines; an open tab follows the file, and unsaved edits in
+   it rebase onto the file's (`tools/qa/test_assets.py`).
 
 **Game (the QA script per §12.5, the three reference quests from `docs\nq\examples`):**
 1. `linear_fetch`: start → task → take the item → the reward → `flow.end`;
@@ -1487,10 +1481,10 @@ Risks and how they are closed:
 | NQ state falls out of the save | the re-stage on first update + dirty (§11), test item 9 |
 | `xr_meet` overrides start_dialog | re-set once per tick while the token exists |
 | The game and editor catalogs drift apart | the source is the game; the bundle is only a fallback; `quest_catalog` shows the source and version |
-| An AI writes invalid files | identical error codes on both sides, `quest_write` returns the problems, the game does not crash |
+| An AI writes invalid files | identical error codes on both sides, `asset.check` returns the problems at their lines, the game does not crash |
 | Id collisions between mods | uid = `<module>.<id>`; ref story ids and dialog/task ids carry the `nq.<module>.<quest>` prefix |
 | A level change rebuilds the Lua state | `init` is idempotent, everything is restored from the blob + `refs` |
-| An AI cannot see the canvas and is forced into screenshots | the text outline in `quest_get`/`quest_list` and in the file header, `pos` optional, the catalog on demand, problems as text (§4.5) |
+| An AI cannot see the canvas and is forced into screenshots | the file is the text, the outline in `quest_open`, `pos` optional, the catalog on demand, problems as text with positions (§4.5) |
 
 ---
 
@@ -1515,8 +1509,8 @@ Risks and how they are closed:
 | A recursive module scan | a list in the manifest | the manifest cannot be read from Lua, one more desync point; the folder is the single source |
 | Validation is the build gate | warn and export anyway | the project rule: the build refuses with a clear message; an AI gets the same codes through MCP |
 | Node deletion without confirmation | a modal | the document has undo; the file is untouched until save; closing a dirty tab asks and names the asset |
-| The outline and the generated file header, `pos` optional | "the graph is readable only on the canvas" | the user's requirement: an AI creates and edits quests as text, without screenshots; the outline is the same function for the writer, `quest_get` and `quest_list`, so it cannot diverge |
-| Canonical node order is topological | creation order | the file reads top-down as the quest's story; the order is stable, diffs do not jump |
+| The outline, `pos` optional | "the graph is readable only on the canvas" | the user's requirement: an AI creates and edits quests as text, without screenshots |
+| The editor keeps the file's node order and writes only what changed | a canonical rewrite on save | the author's (and an agent's) order, comments and layout are theirs; a diff shows exactly the edit |
 ## 19. Behaviour graphs — the module's NPC assets
 
 ### 19.1 A behaviour graph is not a quest, and not a quest file

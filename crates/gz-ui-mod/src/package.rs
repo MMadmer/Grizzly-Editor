@@ -217,7 +217,7 @@ pub fn request(cx: &mut DocCx<'_>) {
             Err(e) => cannot_package(&ed2, ctx, &e),
             Ok(()) => call::call_then(
                 &ed2,
-                "ui_dialog",
+                "ui.dialog",
                 args([("action", s("open")), ("id", s(PACKAGE_RELEASE))]),
                 |reply, ctx| {
                     if !call::ok(reply) {

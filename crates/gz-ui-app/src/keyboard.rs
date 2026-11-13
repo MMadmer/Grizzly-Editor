@@ -1,500 +1,510 @@
-//! The Keyboard page of Preferences: a Command | Shortcut | [Assign...] [Clear] table grouped as
-//! the menus are, under the official names (the palette's), with keycaps, over the shell's
-//! binding table - read and changed through the `shortcuts` command, as MCP does
-//! (`CCustomPreferences::DrawKeyboard`, `UIKeyPressForm`).
+//! The Keyboard page of Preferences: every action of the editor with its keys, grouped as the
+//! palette groups them, read and changed through `app.keys` - the command MCP runs - so the page
+//! and an agent see and change the same table.
+//!
+//! The keys of a row are its click target: a click records the next chord ("Press keys..."), Esc
+//! gives up, Backspace or the cross that shows on hover takes the keys away. A chord another
+//! action of an overlapping scope had is taken from it, and the page says so. A row whose keys are
+//! the same as another's says which; one the author changed has its Reset. The rows are laid out
+//! only where they are on screen.
 
 use std::sync::Arc;
 
-use egui::{Align, Align2, Layout, Rect, Sense, Stroke, Ui, UiBuilder, Vec2, pos2};
+use egui::{Align2, CornerRadius, Key, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, pos2};
 use gz_app::Chord;
-use gz_app::keys::{consume, pressed, shell_chord};
+use gz_app::keys::{consume, pressed};
 use gz_editor::{Editor, Value};
-use gz_ui::dialog::Footer;
+use gz_ui::dialog::{self, Answer, ConfirmSpec};
 use gz_ui::list::{Column, table_headers};
 use gz_ui::state::busy_line;
 use gz_ui::text::{self, Clip};
 use gz_ui::units::{button_width, em};
-use gz_ui::{Button, Dialog, DialogSize, Font, Kind, Tone, keycaps, keycaps_width, palette};
+use gz_ui::{Button, Font, Icon, Kind, Tone, icons, keycaps, keycaps_width, palette};
 use parking_lot::Mutex;
 
 use crate::reply::{args, call_then, error_text, ok, s};
 
-/// What separates the parts of a command's name: "Edit · Undo".
-pub const PATH_DOT: &str = " \u{b7} ";
-
-/// The commands that take a shortcut in the order the Keyboard page lists them, as the menus hold
-/// them (`kCommandNames`); a command missing here comes after them, by its group.
-pub const COMMAND_ORDER: &[&str] = &[
-    "COMMAND_CLEAR",
-    "COMMAND_LOAD",
-    "COMMAND_LOAD_FIRSTRECENT",
-    "COMMAND_SAVE.\"Save\"",
-    "COMMAND_SAVE.\"Save As\"",
-    "COMMAND_FILE_MENU",
-    "COMMAND_EXIT",
-    "COMMAND_UNDO",
-    "COMMAND_REDO",
-    "COMMAND_CUT",
-    "COMMAND_COPY",
-    "COMMAND_PASTE",
-    "COMMAND_DELETE_SELECTION",
-    "COMMAND_SHOW_OBJECTLIST",
-    "COMMAND_COMMAND_PALETTE",
-    "COMMAND_EDITOR_PREF",
-    "COMMAND_BREAK_LAST_OPERATION",
-    "COMMAND_SELECT_ALL",
-    "COMMAND_DESELECT_ALL",
-    "COMMAND_INVERT_SELECTION_ALL",
-    "COMMAND_HIDE_SEL",
-    "COMMAND_HIDE_UNSEL",
-    "COMMAND_HIDE_ALL",
-    "COMMAND_GIZMO_MODE.\"Select\"",
-    "COMMAND_CHANGE_ACTION.\"Add\"",
-    "COMMAND_GIZMO_MODE.\"Move\"",
-    "COMMAND_GIZMO_MODE.\"Rotate\"",
-    "COMMAND_GIZMO_MODE.\"Scale\"",
-    "COMMAND_GIZMO_MODE.\"Cycle\"",
-    "COMMAND_CHANGE_ACTION.\"Select\"",
-    "COMMAND_ZOOM_EXTENTS.\"Extent\"",
-    "COMMAND_ZOOM_EXTENTS.\"Selected\"",
-    "COMMAND_MOVE_CAMERA_TO",
-    "COMMAND_TOGGLE_RENDER_WIRE",
-    "COMMAND_TOGGLE_GRID",
-    "COMMAND_GRID_SLOT_SIZE.\"Decrease\"",
-    "COMMAND_GRID_SLOT_SIZE.\"Increase\"",
-    "COMMAND_TOGGLE_SAFE_RECT",
-    "COMMAND_TOGGLE_AIMAP_VISIBILITY",
-    "COMMAND_CHANGE_TARGET.\"Object\"",
-    "COMMAND_CHANGE_TARGET.\"Light\"",
-    "COMMAND_CHANGE_TARGET.\"Sound Source\"",
-    "COMMAND_CHANGE_TARGET.\"Sound Env\"",
-    "COMMAND_CHANGE_TARGET.\"Glow\"",
-    "COMMAND_CHANGE_TARGET.\"Shape\"",
-    "COMMAND_CHANGE_TARGET.\"Spawn Point\"",
-    "COMMAND_CHANGE_TARGET.\"Way\"",
-    "COMMAND_CHANGE_TARGET.\"Way Point\"",
-    "COMMAND_CHANGE_TARGET.\"Toggle Way Mode\"",
-    "COMMAND_CHANGE_TARGET.\"Sector\"",
-    "COMMAND_CHANGE_TARGET.\"Portal\"",
-    "COMMAND_CHANGE_TARGET.\"Group\"",
-    "COMMAND_CHANGE_TARGET.\"Particle System\"",
-    "COMMAND_CHANGE_TARGET.\"Detail Objects\"",
-    "COMMAND_CHANGE_TARGET.\"AI Map\"",
-    "COMMAND_CHANGE_TARGET.\"Static Wallmark\"",
-    "COMMAND_CHANGE_TARGET.\"Fog Volume\"",
-    "COMMAND_DROP_TO_GROUND",
-    "COMMAND_SIMULATE",
-    "COMMAND_USE_SIMULATE_POSITIONS",
-    "COMMAND_BUILD",
-    "COMMAND_MAKE_GAME",
-    "COMMAND_MAKE_DETAILS",
-    "COMMAND_MAKE_HOM",
-    "COMMAND_MAKE_SOM",
-    "COMMAND_MAKE_AIMAP",
-    "COMMAND_MOD_BUILD",
-    "COMMAND_MOD_EDIT_MANIFEST",
-    "COMMAND_MOD_CHARACTERS",
-    "COMMAND_MOD_WORLD",
-    "COMMAND_MOD_PDA",
-    "COMMAND_MOD_PACKAGE",
-    "COMMAND_MOD_PUBLISH",
-    "COMMAND_MOD_RELEASES",
-    "COMMAND_MOD_CATALOG",
-    "COMMAND_SHOW_PROPERTIES",
-    "COMMAND_OPTIONS",
-    "COMMAND_SHOW_WORLD_OUTLINER",
-    "COMMAND_SHOW_CONTENT_BROWSER",
-    "COMMAND_RUN_MACRO.\"Slot #1\"",
-    "COMMAND_RUN_MACRO.\"Slot #2\"",
-    "COMMAND_RUN_MACRO.\"Slot #3\"",
-    "COMMAND_RUN_MACRO.\"Slot #4\"",
-    "COMMAND_RUN_MACRO.\"Slot #5\"",
-    "COMMAND_RUN_MACRO.\"Slot #6\"",
-    "COMMAND_RUN_MACRO.\"Slot #7\"",
-    "COMMAND_RUN_MACRO.\"Slot #8\"",
-];
-
-/// A row of the Keyboard page.
+/// A row of the page.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ShortcutRow {
-    /// The command's `.ini` name: `COMMAND_UNDO`, `COMMAND_ZOOM_EXTENTS."Selected"`.
+pub struct KeyRow {
+    /// The action's id (`edit.undo`), or a COMMAND_* id of the level editor's own table.
     pub id: String,
+    pub title: String,
     pub group: String,
-    pub label: String,
-    /// What it is bound to now: "Ctrl+Z", or empty.
-    pub keys: String,
+    /// What it is bound to now, and by default.
+    pub keys: Vec<String>,
+    pub default: Vec<String>,
+    /// The other actions with one of its keys where both are live.
+    pub conflicts: Vec<String>,
 }
 
-impl ShortcutRow {
-    /// "group · label", the name the shell and MCP know it by.
+impl KeyRow {
+    /// The author bound it to other keys than its own.
     #[must_use]
-    pub fn full_label(&self) -> String {
-        if self.group.is_empty() {
-            self.label.clone()
-        } else {
-            format!("{}{PATH_DOT}{}", self.group, self.label)
-        }
+    pub fn changed(&self) -> bool {
+        self.keys != self.default
     }
 }
 
-/// The rows of a `shortcuts action=list` reply, in the page's order: the listed commands as
-/// listed, the rest after them by group.
+/// The rows of an `app.keys action=list` reply, grouped: the groups in the order they first come,
+/// the rows of a group in theirs.
 #[must_use]
-pub fn parse_rows(reply: &Value) -> Vec<ShortcutRow> {
-    let mut rows: Vec<ShortcutRow> = reply
-        .get("shortcuts")
+pub fn parse_rows(reply: &Value) -> Vec<KeyRow> {
+    let strings = |v: Option<&Value>| -> Vec<String> {
+        v.and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+            .unwrap_or_default()
+    };
+    let rows: Vec<KeyRow> = reply
+        .get("keys")
         .and_then(Value::as_array)
         .map(|a| {
             a.iter()
                 .map(|r| {
                     let text_ = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
-                    let full = text_("label");
-                    let (group, label) = match full.split_once(PATH_DOT) {
-                        Some((g, l)) => (g.to_owned(), l.to_owned()),
-                        None => ("General".to_owned(), full.clone()),
-                    };
-                    ShortcutRow { id: text_("id"), group, label, keys: text_("keys") }
+                    KeyRow {
+                        id: text_("id"),
+                        title: text_("title").trim_end_matches("...").to_owned(),
+                        group: text_("group"),
+                        keys: strings(r.get("keys")),
+                        default: strings(r.get("default")),
+                        conflicts: strings(r.get("conflicts")),
+                    }
                 })
                 .collect()
         })
         .unwrap_or_default();
-    let order = |r: &ShortcutRow| COMMAND_ORDER.iter().position(|id| *id == r.id).unwrap_or(usize::MAX);
-    rows.sort_by(|a, b| {
-        let (oa, ob) = (order(a), order(b));
-        oa.cmp(&ob)
-            .then_with(|| if oa == usize::MAX { a.group.cmp(&b.group) } else { std::cmp::Ordering::Equal })
-    });
-    rows
+    let mut groups: Vec<String> = Vec::new();
+    for r in &rows {
+        if !groups.contains(&r.group) {
+            groups.push(r.group.clone());
+        }
+    }
+    let mut out = Vec::with_capacity(rows.len());
+    for g in &groups {
+        out.extend(rows.iter().filter(|r| &r.group == g).cloned());
+    }
+    out
 }
 
-/// A search finds a command by its name, its group, its keys and its id.
+/// A search finds a row by its title, its group, its keys and its id.
 #[must_use]
-pub fn row_matches(search: &str, row: &ShortcutRow) -> bool {
-    gz_ui::search::matches(search, &format!("{} {} {} {}", row.group, row.label, row.keys, row.id))
+pub fn row_matches(search: &str, row: &KeyRow) -> bool {
+    gz_ui::search::matches(search, &format!("{} {} {} {}", row.group, row.title, row.keys.join(" "), row.id))
 }
 
-/// The chord a key press is, for a shortcut: Esc and Enter alone answer the dialog instead.
+/// A chord the page takes for a shortcut: Esc gives up, Enter alone is no shortcut.
 #[must_use]
 pub fn takes(chord: &Chord) -> bool {
     let bare = !chord.ctrl && !chord.shift && !chord.alt;
-    !(bare && matches!(chord.key, egui::Key::Escape | egui::Key::Enter))
+    !(bare && matches!(chord.key, Key::Escape | Key::Enter))
 }
 
-/// The Assign dialog: whose shortcut, and the chord pressed so far.
-struct Assign {
-    id: String,
-    name: String,
-    chord: Option<Chord>,
+/// A line of the table: a group's heading or a row.
+#[derive(Clone, Copy, Debug)]
+enum Line {
+    Group(usize),
+    Row(usize),
 }
 
-/// The page's view: the rows as the shell last listed them and the Assign dialog.
+/// The page's view: the rows as `app.keys` last listed them, the row recording a chord, the
+/// last note.
 #[derive(Default)]
 pub struct KeyboardPage {
-    rows: Arc<Mutex<Option<Vec<ShortcutRow>>>>,
-    assign: Option<Assign>,
+    rows: Arc<Mutex<Option<Vec<KeyRow>>>>,
+    recording: Option<String>,
+    note: Arc<Mutex<Option<(Tone, String)>>>,
 }
 
-/// What a frame of the table asked for.
-enum Ask {
-    Assign(String, String),
-    Clear(String),
-}
+const ROW_H: f32 = 30.0;
 
 impl KeyboardPage {
-    /// Lists the shortcuts again, off the UI thread.
+    /// Lists the keys again, off the UI thread.
     pub fn reload(&self, editor: &Arc<Editor>) {
         let rows = self.rows.clone();
-        call_then(editor, "shortcuts", args([("action", s("list"))]), move |reply, _| {
+        call_then(editor, "app.keys", args([("action", s("list"))]), move |reply, _| {
             if ok(reply) {
                 *rows.lock() = Some(parse_rows(reply));
             }
         });
     }
 
-    /// How many commands a search finds.
+    /// How many rows a search finds.
     #[must_use]
     pub fn matches(&self, search: &str) -> usize {
         self.rows.lock().as_ref().map_or(0, |rows| rows.iter().filter(|r| row_matches(search, r)).count())
     }
 
-    /// The table; with a search, only the commands it finds.
+    /// Runs `app.keys` and lists again; a key taken from another action is said.
+    fn change(&self, editor: &Arc<Editor>, a: gz_editor::Args, title: String) {
+        let (rows, note) = (self.rows.clone(), self.note.clone());
+        let ed = editor.clone();
+        call_then(editor, "app.keys", a, move |reply, _| {
+            if !ok(reply) {
+                *note.lock() = Some((Tone::Error, error_text(reply)));
+                return;
+            }
+            let moved: Vec<String> = reply
+                .get("moved_from")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                .unwrap_or_default();
+            let names: Vec<String> = rows
+                .lock()
+                .as_ref()
+                .map(|r| r.iter().filter(|x| moved.contains(&x.id)).map(|x| x.title.clone()).collect())
+                .unwrap_or_default();
+            *note.lock() = (!names.is_empty())
+                .then(|| (Tone::Warning, format!("{title} took its keys from {}.", names.join(", "))));
+            call_then(&ed, "app.keys", args([("action", s("list"))]), move |reply, _| {
+                if ok(reply) {
+                    *rows.lock() = Some(parse_rows(reply));
+                }
+            });
+        });
+    }
+
+    /// The table; with a search, only the rows it finds.
     pub fn draw(&mut self, ui: &mut Ui, editor: &Arc<Editor>, search: &str) {
         let ctx = ui.ctx().clone();
         let p = palette(&ctx);
-        let mut ask = None;
-        {
-            let guard = self.rows.lock();
-            let Some(rows) = guard.as_ref() else {
-                busy_line(ui, "Reading the shortcuts...");
-                return;
-            };
-            let shown: Vec<&ShortcutRow> =
-                rows.iter().filter(|r| search.is_empty() || row_matches(search, r)).collect();
-            // the Shortcut column is as wide as the widest keycaps
-            let keys_w = shown.iter().map(|r| keycaps_width(ui, &r.keys) + 16.0).fold(em(6.0), f32::max);
-            let assign_w = button_width(&ctx, "Assign...", Kind::Secondary, false, 0.0);
-            let clear_w = button_width(&ctx, "Clear", Kind::Secondary, false, 0.0);
-            let actions_w = assign_w + clear_w + 8.0 + 12.0;
-            let width = ui.available_width();
-            let command_w = (width - keys_w - actions_w).max(em(8.0));
-            table_headers(
-                ui,
-                &[
-                    Column::new("Command", command_w),
-                    Column::new("Shortcut", keys_w),
-                    Column::new("", actions_w),
-                ],
-            );
-            let mut group: Option<&str> = None;
-            for row in shown {
-                // the group's name over its commands, as the menus hold them
-                if group != Some(row.group.as_str()) {
-                    group = Some(row.group.as_str());
-                    let (r, _) = ui.allocate_exact_size(Vec2::new(width, 28.0), Sense::hover());
-                    text::paint(
-                        ui.painter(),
-                        &Font::Strong.id(),
-                        pos2(r.min.x + 6.0, r.center().y),
-                        Align2::LEFT_CENTER,
-                        p.text,
-                        &row.group,
-                        Some(command_w - 12.0),
+        let Some(rows) = self.rows.lock().clone() else {
+            busy_line(ui, "Reading the keys...");
+            return;
+        };
+        let shown: Vec<usize> =
+            (0..rows.len()).filter(|&i| search.is_empty() || row_matches(search, &rows[i])).collect();
+        let mut lines: Vec<Line> = Vec::with_capacity(shown.len() + 16);
+        let mut last_group: Option<&str> = None;
+        for &i in &shown {
+            if last_group != Some(rows[i].group.as_str()) {
+                last_group = Some(rows[i].group.as_str());
+                lines.push(Line::Group(i));
+            }
+            lines.push(Line::Row(i));
+        }
+
+        // above the table: the note of the last change, and Reset All
+        let changed = rows.iter().filter(|r| r.changed()).count();
+        ui.horizontal(|ui| {
+            let note = self.note.lock().clone();
+            match note {
+                Some((tone, text_)) => {
+                    let color = p.tone(tone);
+                    text::label(ui, &text_, Font::Body, color, Clip::End);
+                }
+                None => {
+                    let muted = p.text_secondary;
+                    text::label(
+                        ui,
+                        "Click a shortcut to change it; Backspace takes it away.",
+                        Font::Body,
+                        muted,
                         Clip::End,
                     );
                 }
-                let (r, _) = ui.allocate_exact_size(Vec2::new(width, 26.0), Sense::hover());
-                let x = r.min.x + 6.0 + 12.0;
-                let cut = text::paint(
-                    ui.painter(),
-                    &Font::Body.id(),
-                    pos2(x, r.center().y),
-                    Align2::LEFT_CENTER,
-                    p.text,
-                    &row.label,
-                    Some(command_w - 18.0 - 6.0),
-                    Clip::End,
-                );
-                // the id MCP and the settings file know the command by is its tooltip
-                let label_rect = Rect::from_min_max(pos2(x, r.min.y), pos2(r.min.x + command_w, r.max.y));
-                let tip = if cut { format!("{}\n{}", row.label, row.id) } else { row.id.clone() };
-                ui.interact(
-                    label_rect,
-                    ui.make_persistent_id(("gz-ui-app.shortcut", row.id.as_str())),
-                    Sense::hover(),
-                )
-                .on_hover_text(tip);
-                let keys_x = r.min.x + command_w + 6.0;
-                if row.keys.is_empty() {
-                    ui.painter().text(
-                        pos2(keys_x, r.center().y),
-                        Align2::LEFT_CENTER,
-                        "None",
-                        Font::Body.id(),
-                        p.text_muted,
-                    );
-                } else {
-                    let w = keycaps_width(ui, &row.keys);
-                    keycaps(ui, pos2(keys_x + w, r.center().y), &row.keys, true);
-                }
-                let cell = Rect::from_min_max(pos2(r.min.x + command_w + keys_w + 6.0, r.min.y), r.max);
-                let mut c = ui.new_child(
-                    UiBuilder::new()
-                        .id_salt(("gz-ui-app.shortcut.actions", row.id.as_str()))
-                        .max_rect(cell)
-                        .layout(Layout::left_to_right(Align::Center)),
-                );
-                c.spacing_mut().item_spacing.x = 8.0;
-                if Button::new("Assign...")
-                    .tip("Press the new shortcut in the dialog that opens")
-                    .show(&mut c)
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let label = "Reset All";
+                if ui
+                    .add(
+                        Button::new(label)
+                            .kind(Kind::GhostDanger)
+                            .enabled(changed > 0, "Every shortcut is its default."),
+                    )
                     .clicked()
                 {
-                    ask = Some(Ask::Assign(row.id.clone(), row.full_label()));
+                    self.ask_reset_all(&ctx, editor, changed);
                 }
-                if Button::new("Clear")
-                    .enabled(!row.keys.is_empty(), "This command has no shortcut")
-                    .show(&mut c)
-                    .clicked()
-                {
-                    ask = Some(Ask::Clear(row.id.clone()));
-                }
-                ui.painter().line_segment(
-                    [pos2(r.min.x, r.max.y - 0.5), pos2(r.max.x, r.max.y - 0.5)],
-                    Stroke::new(1.0, p.border_subtle),
-                );
-            }
-        }
-        match ask {
-            Some(Ask::Assign(id, name)) => self.assign = Some(Assign { id, name, chord: None }),
-            Some(Ask::Clear(id)) => {
-                let rows = self.rows.clone();
-                call_then(
-                    editor,
-                    "shortcuts",
-                    args([("action", s("clear")), ("command", s(&id))]),
-                    move |reply, ctx| {
-                        if ok(reply) {
-                            set_row_keys(&rows, &id, "");
-                        } else {
-                            gz_ui::state::toast(ctx, Tone::Error, &error_text(reply));
-                        }
-                    },
-                );
-            }
-            None => {}
-        }
-    }
+            });
+        });
+        ui.add_space(4.0);
 
-    /// The Assign dialog, while it is up: the next shortcut pressed, who has it now, Assign.
-    pub fn draw_assign(&mut self, ui: &mut Ui, editor: &Arc<Editor>) {
-        let Some(a) = self.assign.as_mut() else { return };
-        let ctx = ui.ctx().clone();
-        // the press of this frame that is a shortcut: taken, so nothing else acts on it
-        let chords = ctx.input(|i| pressed(&i.events));
-        if let Some(c) = chords.into_iter().rev().find(takes) {
-            ctx.input_mut(|i| consume(i, &c));
-            a.chord = Some(c);
-        }
-        let label = a.chord.map(|c| c.label()).unwrap_or_default();
-        let owner = {
-            let rows = self.rows.lock();
-            rows.as_ref().and_then(|rows| {
-                rows.iter()
-                    .find(|r| !label.is_empty() && r.keys == label && r.id != a.id)
-                    .map(ShortcutRow::full_label)
-            })
-        };
-        let mut open = true;
-        let mut assign = false;
-        let mut cancel = false;
-        let has = a.chord.is_some();
-        let reserved = a.chord.is_some_and(|c| shell_chord(&c));
-        let name = a.name.clone();
-        Dialog::new("Assign Shortcut", "dlg.assign_shortcut", DialogSize::S).show(
+        let width = ui.available_width();
+        let keys_w = em(12.0);
+        let reset_w = button_width(&ctx, "Reset", Kind::Ghost, false, 0.0) + 8.0;
+        let title_w = (width - keys_w - reset_w).max(em(10.0));
+        table_headers(
             ui,
-            &mut open,
-            |ui| {
-                let p = palette(ui.ctx());
-                text::label(ui, &name, Font::Strong, p.text, Clip::Middle);
-                text::secondary(ui, "Press the keys of the new shortcut.");
-                ui.add_space(8.0);
-                let (r, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::hover());
-                if label.is_empty() {
-                    ui.painter().text(
-                        pos2(r.min.x, r.center().y),
-                        Align2::LEFT_CENTER,
-                        "Waiting for a key...",
-                        Font::Body.id(),
-                        p.text_muted,
-                    );
-                } else {
-                    let w = keycaps_width(ui, &label);
-                    keycaps(ui, pos2(r.min.x + w, r.center().y), &label, true);
-                }
-                if let Some(owner) = &owner {
-                    ui.add_space(4.0);
-                    text::status(
-                        ui,
-                        Tone::Warning,
-                        &format!("{label} is bound to {owner}: it moves to this command."),
+            &[Column::new("Action", title_w), Column::new("Keys", keys_w), Column::new("", reset_w)],
+        );
+
+        // the row recording: the keys of the frame go to it, and to nothing else
+        if let Some(id) = self.recording.clone() {
+            let presses = ctx.input(|i| pressed(&i.events));
+            for chord in &presses {
+                ctx.input_mut(|i| consume(i, chord));
+            }
+            if let Some(chord) = presses.first().copied() {
+                if chord.key == Key::Escape && !chord.ctrl && !chord.shift && !chord.alt {
+                    self.recording = None;
+                } else if chord.key == Key::Backspace && !chord.ctrl && !chord.shift && !chord.alt {
+                    self.recording = None;
+                    let title = rows.iter().find(|r| r.id == id).map(|r| r.title.clone()).unwrap_or_default();
+                    self.change(editor, args([("action", s("clear")), ("id", s(&id))]), title);
+                } else if takes(&chord) {
+                    self.recording = None;
+                    let title = rows.iter().find(|r| r.id == id).map(|r| r.title.clone()).unwrap_or_default();
+                    self.change(
+                        editor,
+                        args([("action", s("bind")), ("id", s(&id)), ("keys", s(&chord.label()))]),
+                        title,
                     );
                 }
-                if reserved {
-                    ui.add_space(4.0);
-                    text::status(
-                        ui,
-                        Tone::Warning,
-                        "The shell keeps this shortcut for itself: the scene never sees it.",
-                    );
-                }
-            },
-            |f: &mut Footer<'_>| {
-                if f.button("Assign", Kind::Primary, true, has, "Press a shortcut first.") {
-                    assign = true;
-                }
-                if f.button("Cancel", Kind::Secondary, false, true, "") {
-                    cancel = true;
+            }
+        }
+
+        let mut record = None;
+        let mut clear = None;
+        let mut reset = None;
+        egui::ScrollArea::vertical().id_salt("gz-ui-app.keyboard").auto_shrink([false, false]).show_rows(
+            ui,
+            ROW_H,
+            lines.len(),
+            |ui, range| {
+                ui.spacing_mut().item_spacing = Vec2::ZERO;
+                for n in range {
+                    let Some(line) = lines.get(n).copied() else { continue };
+                    let (r, _) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
+                    match line {
+                        Line::Group(i) => {
+                            ui.painter().text(
+                                pos2(r.min.x + 6.0, r.center().y + 3.0),
+                                Align2::LEFT_CENTER,
+                                &rows[i].group,
+                                Font::Strong.id(),
+                                p.text,
+                            );
+                        }
+                        Line::Row(i) => {
+                            let row = &rows[i];
+                            let hover = ui.rect_contains_pointer(r);
+                            if hover {
+                                ui.painter().rect_filled(r, CornerRadius::same(4), p.hover);
+                            }
+                            // the title, and what it shares its keys with
+                            let title_room = title_w - 18.0;
+                            text::paint(
+                                ui.painter(),
+                                &Font::Body.id(),
+                                pos2(r.min.x + 18.0, r.center().y),
+                                Align2::LEFT_CENTER,
+                                p.text,
+                                &row.title,
+                                Some(title_room),
+                                Clip::End,
+                            );
+                            let cell = Rect::from_min_size(
+                                pos2(r.min.x + title_w, r.min.y + 2.0),
+                                Vec2::new(keys_w - 8.0, ROW_H - 4.0),
+                            );
+                            let resp = ui.interact(
+                                cell,
+                                ui.make_persistent_id(("gz-ui-app.key", &row.id)),
+                                Sense::click(),
+                            );
+                            let recording = self.recording.as_deref() == Some(row.id.as_str());
+                            let outline = if recording {
+                                p.accent_bright
+                            } else if resp.hovered() {
+                                p.border
+                            } else {
+                                p.border_subtle
+                            };
+                            ui.painter().rect(
+                                cell,
+                                CornerRadius::same(4),
+                                if recording || resp.hovered() { p.input_hover } else { p.input },
+                                Stroke::new(if recording { 2.0 } else { 1.0 }, outline),
+                                StrokeKind::Inside,
+                            );
+                            if recording {
+                                ui.painter().text(
+                                    pos2(cell.min.x + 8.0, cell.center().y),
+                                    Align2::LEFT_CENTER,
+                                    "Press keys...",
+                                    Font::Body.id(),
+                                    p.accent_bright,
+                                );
+                                ui.ctx().request_repaint();
+                            } else if row.keys.is_empty() {
+                                ui.painter().text(
+                                    pos2(cell.min.x + 8.0, cell.center().y),
+                                    Align2::LEFT_CENTER,
+                                    "None",
+                                    Font::Body.id(),
+                                    p.text_muted,
+                                );
+                            } else {
+                                let first = row.keys.first().cloned().unwrap_or_default();
+                                let w = keycaps_width(ui, &first);
+                                keycaps(ui, pos2(cell.min.x + 8.0 + w, cell.center().y), &first, true);
+                                if row.keys.len() > 1 {
+                                    ui.painter().text(
+                                        pos2(cell.min.x + 14.0 + w, cell.center().y),
+                                        Align2::LEFT_CENTER,
+                                        format!("+{}", row.keys.len() - 1),
+                                        Font::Small.id(),
+                                        p.text_muted,
+                                    );
+                                }
+                            }
+                            // the hover cross takes the keys away
+                            if !row.keys.is_empty() && !recording && (resp.hovered() || hover) {
+                                let x = Rect::from_center_size(
+                                    pos2(cell.max.x - 12.0, cell.center().y),
+                                    Vec2::splat(18.0),
+                                );
+                                let xr = ui.interact(
+                                    x,
+                                    ui.make_persistent_id(("gz-ui-app.key.clear", &row.id)),
+                                    Sense::click(),
+                                );
+                                icons::draw(
+                                    ui.painter(),
+                                    Icon::Close,
+                                    x.shrink(3.0),
+                                    if xr.hovered() { p.text } else { p.text_secondary },
+                                );
+                                if xr.on_hover_text("Take the keys away").clicked() {
+                                    clear = Some(i);
+                                }
+                            }
+                            let tip = if row.conflicts.is_empty() {
+                                format!("{}\nClick, then press the keys.", row.id)
+                            } else {
+                                let names: Vec<&str> = rows
+                                    .iter()
+                                    .filter(|x| row.conflicts.contains(&x.id))
+                                    .map(|x| x.title.as_str())
+                                    .collect();
+                                format!(
+                                    "The same keys as {} where both are live.\n{}",
+                                    names.join(", "),
+                                    row.id
+                                )
+                            };
+                            gz_ui::audit::control(ui.ctx(), &row.title, true, None, Some(&tip), cell);
+                            if resp.on_hover_text(tip).clicked() && clear.is_none() {
+                                record = Some(row.id.clone());
+                            }
+                            if !row.conflicts.is_empty() {
+                                icons::draw(
+                                    ui.painter(),
+                                    Icon::Warning,
+                                    Rect::from_min_size(
+                                        pos2(r.min.x + 2.0, r.center().y - 6.0),
+                                        Vec2::splat(12.0),
+                                    ),
+                                    p.warning,
+                                );
+                            }
+                            if row.changed() {
+                                let b = Rect::from_min_size(
+                                    pos2(r.max.x - reset_w + 4.0, r.min.y + 3.0),
+                                    Vec2::new(reset_w - 8.0, ROW_H - 6.0),
+                                );
+                                if ui
+                                    .put(
+                                        b,
+                                        Button::new("Reset").kind(Kind::Ghost).tip("Back to its own keys"),
+                                    )
+                                    .clicked()
+                                {
+                                    reset = Some(i);
+                                }
+                            }
+                        }
+                    }
                 }
             },
         );
-        if assign {
-            let (id, keys) = (a.id.clone(), label.clone());
-            let new_name = a.name.clone();
-            let rows = self.rows.clone();
-            let ed = editor.clone();
-            call_then(
-                editor,
-                "shortcuts",
-                args([("action", s("set")), ("command", s(&id)), ("keys", s(&keys))]),
-                move |reply, ctx| {
-                    if !ok(reply) {
-                        gz_ui::state::toast(ctx, Tone::Error, &error_text(reply));
-                        return;
-                    }
-                    // one shortcut, one command: the one that had it lets it go
-                    if let Some(from) = reply.get("moved_from").and_then(Value::as_str) {
-                        let old = rows
-                            .lock()
-                            .as_ref()
-                            .and_then(|r| r.iter().find(|r| r.id == from).map(ShortcutRow::full_label))
-                            .unwrap_or_else(|| from.to_owned());
-                        ed.log.info(format!("Shortcut {keys} moved from {old} to {new_name}"));
-                        set_row_keys(&rows, from, "");
-                    }
-                    set_row_keys(&rows, &id, &keys);
-                },
-            );
-            self.assign = None;
-        } else if !open || cancel {
-            self.assign = None;
+        if let Some(id) = record {
+            self.recording = Some(id);
+            *self.note.lock() = None;
+        }
+        if let Some(i) = clear {
+            let row = &rows[i];
+            self.change(editor, args([("action", s("clear")), ("id", s(&row.id))]), row.title.clone());
+        }
+        if let Some(i) = reset {
+            let row = &rows[i];
+            self.change(editor, args([("action", s("reset")), ("id", s(&row.id))]), row.title.clone());
         }
     }
-}
 
-fn set_row_keys(rows: &Mutex<Option<Vec<ShortcutRow>>>, id: &str, keys: &str) {
-    if let Some(row) = rows.lock().as_mut().and_then(|r| r.iter_mut().find(|r| r.id == id)) {
-        keys.clone_into(&mut row.keys);
+    /// Whether a row records a chord: the shell leaves the keys to the page meanwhile.
+    #[must_use]
+    pub fn recording(&self) -> bool {
+        self.recording.is_some()
     }
+
+    fn ask_reset_all(&self, ctx: &egui::Context, editor: &Arc<Editor>, changed: usize) {
+        let spec = ConfirmSpec {
+            id: "reset_keys".to_owned(),
+            title: "Reset All Keys".to_owned(),
+            headline: format!("Put {changed} changed shortcut(s) back to their defaults?"),
+            items: Vec::new(),
+            total: 0,
+            consequence: "The keys you bound are forgotten; every action has its own keys again.".to_owned(),
+            action: "Reset All".to_owned(),
+            destructive: false,
+        };
+        let asker = if editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
+        let (rows, ed) = (self.rows.clone(), editor.clone());
+        let line = dialog::confirm(ctx, asker, spec, move |answer| {
+            if answer != Answer::Yes {
+                return;
+            }
+            let ed2 = ed.clone();
+            call_then(&ed, "app.keys", args([("action", s("reset"))]), move |_, _| {
+                call_then(&ed2, "app.keys", args([("action", s("list"))]), move |reply, _| {
+                    if ok(reply) {
+                        *rows.lock() = Some(parse_rows(reply));
+                    }
+                });
+            });
+        });
+        if let Some(line) = line {
+            editor.log.plain(line);
+        }
+    }
+
+    /// Kept for the page's frame: nothing to draw outside the table now.
+    pub fn draw_assign(&mut self, _ui: &mut Ui, _editor: &Arc<Editor>) {}
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{KeyRow, parse_rows, row_matches, takes};
+    use egui::Key;
+    use gz_app::Chord;
+    use serde_json::json;
 
     #[test]
-    fn rows_come_in_the_menus_order() {
-        let reply = serde_json::json!({ "ok": true, "shortcuts": [
-            { "id": "COMMAND_ZZZ", "label": "Mod · Something", "keys": "" },
-            { "id": "COMMAND_REDO", "label": "Edit · Redo", "keys": "Ctrl+Y" },
-            { "id": "COMMAND_AAA", "label": "Build · Other", "keys": "" },
-            { "id": "COMMAND_UNDO", "label": "Edit · Undo", "keys": "Ctrl+Z" },
+    fn rows_come_grouped_and_say_what_changed() {
+        let reply = json!({ "ok": true, "keys": [
+            { "id": "file.save", "title": "Save", "group": "File", "keys": ["Ctrl+S"], "default": ["Ctrl+S"], "conflicts": [] },
+            { "id": "edit.undo", "title": "Undo", "group": "Edit", "keys": ["Ctrl+U"], "default": ["Ctrl+Z"], "conflicts": [] },
+            { "id": "app.quit", "title": "Quit", "group": "File", "keys": [], "default": [], "conflicts": [] },
         ]});
         let rows = parse_rows(&reply);
-        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids, ["COMMAND_UNDO", "COMMAND_REDO", "COMMAND_AAA", "COMMAND_ZZZ"]);
-        assert_eq!(rows.first().map(|r| (r.group.as_str(), r.label.as_str())), Some(("Edit", "Undo")));
-        assert_eq!(rows.first().map(ShortcutRow::full_label).as_deref(), Some("Edit \u{b7} Undo"));
-    }
-
-    #[test]
-    fn a_search_finds_names_keys_and_ids() {
-        let row = ShortcutRow {
-            id: "COMMAND_UNDO".to_owned(),
-            group: "Edit".to_owned(),
-            label: "Undo".to_owned(),
-            keys: "Ctrl+Z".to_owned(),
+        assert_eq!(
+            rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["file.save", "app.quit", "edit.undo"]
+        );
+        assert!(rows[2].changed());
+        assert!(!rows[0].changed());
+        let r = KeyRow {
+            id: "graph.frame_all".into(),
+            title: "Frame All".into(),
+            group: "Graph".into(),
+            keys: vec!["Home".into()],
+            default: vec![],
+            conflicts: vec![],
         };
-        assert!(row_matches("undo", &row));
-        assert!(row_matches("ctrl+z", &row));
-        assert!(row_matches("command_undo", &row));
-        assert!(!row_matches("redo", &row));
-    }
-
-    #[test]
-    fn esc_and_enter_answer_the_dialog() {
-        assert!(!takes(&Chord::new(egui::Key::Escape)));
-        assert!(!takes(&Chord::new(egui::Key::Enter)));
-        assert!(takes(&Chord::ctrl(egui::Key::Enter)));
-        assert!(takes(&Chord::new(egui::Key::F5)));
+        assert!(row_matches("graph home", &r));
+        assert!(!takes(&Chord::new(Key::Escape)));
+        assert!(takes(&Chord::ctrl(Key::Enter)));
     }
 }

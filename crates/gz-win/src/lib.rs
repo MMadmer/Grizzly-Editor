@@ -17,21 +17,30 @@
 //! - [`install_caption_hit_test`] - `WM_NCHITTEST` for a window that draws its own caption;
 //! - [`known_folder`], [`free_space`], [`volume_path_name`], [`is_volume_root`] - the user's
 //!   folders and the volumes;
-//! - [`long_paths_enabled`] - whether Windows takes long paths.
+//! - [`long_paths_enabled`], [`installed_game_roots`], [`Association`] - the registry: long
+//!   paths, where the installed game is, the project file's association for the current user;
+//! - [`process_alive`], [`allow_foreground`] - one editor per home: the running one, and its
+//!   window brought forward by a second start;
+//! - [`rename_in_place`], [`NamedEvent`] - the editor's own update: a rename that never copies,
+//!   and the signal of the restarted editor.
 
 #![cfg(windows)]
 
 mod caption;
 mod console;
 mod folders;
+mod instance;
 mod job;
 mod registry;
+mod update;
 
 pub use caption::{CaptionHitTest, CaptionShape, PxRect, hit_test, install_caption_hit_test};
 pub use console::{ConsoleStreams, attach_parent_console, on_console_end};
 pub use folders::{KnownFolder, free_space, is_volume_root, known_folder, volume_path_name};
+pub use instance::{allow_foreground, process_alive};
 pub use job::end_with_this_process;
-pub use registry::long_paths_enabled;
+pub use registry::{Association, delete_user_key, installed_game_roots, long_paths_enabled};
+pub use update::{NamedEvent, rename_in_place};
 
 use std::fs::File;
 use std::io;

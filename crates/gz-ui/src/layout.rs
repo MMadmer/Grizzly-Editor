@@ -1,5 +1,7 @@
 //! The layout store: sizes the author dragged - splitters, panel widths, label columns - by
-//! key, in points. One store per context; the application saves and restores it.
+//! key, in points, and the short lists a widget keeps for the author (a pick list's recent and
+//! favourite entries, a section folded open). One store per context; the application saves and
+//! restores it.
 
 use std::sync::Arc;
 
@@ -11,6 +13,7 @@ use rustc_hash::FxHashMap;
 #[derive(Default)]
 struct Store {
     values: FxHashMap<SmolStr, f32>,
+    lists: FxHashMap<SmolStr, Vec<String>>,
     /// Changed since the application last saved it.
     dirty: bool,
 }
@@ -56,6 +59,7 @@ pub fn reset(ctx: &Context, key: &str) {
     }
 }
 
+/// Forgets every size (the lists stay: they are the author's picks, not a layout).
 pub fn reset_all(ctx: &Context) {
     let h = handle(ctx);
     let mut s = h.0.lock();
@@ -63,6 +67,50 @@ pub fn reset_all(ctx: &Context) {
         s.values.clear();
         s.dirty = true;
     }
+}
+
+/// A list kept under `key`: empty when none was kept.
+#[must_use]
+pub fn list(ctx: &Context, key: &str) -> Vec<String> {
+    handle(ctx).0.lock().lists.get(key).cloned().unwrap_or_default()
+}
+
+pub fn set_list(ctx: &Context, key: &str, items: Vec<String>) {
+    let h = handle(ctx);
+    let mut s = h.0.lock();
+    if s.lists.get(key) != Some(&items) {
+        if items.is_empty() {
+            s.lists.remove(key);
+        } else {
+            s.lists.insert(SmolStr::new(key), items);
+        }
+        s.dirty = true;
+    }
+}
+
+/// Puts `item` first in the list under `key`, which keeps at most `keep`: what was picked last.
+pub fn push_recent(ctx: &Context, key: &str, item: &str, keep: usize) {
+    let mut l = list(ctx, key);
+    l.retain(|x| x != item);
+    l.insert(0, item.to_owned());
+    l.truncate(keep);
+    set_list(ctx, key, l);
+}
+
+/// Every list, sorted by key.
+#[must_use]
+pub fn all_lists(ctx: &Context) -> Vec<(SmolStr, Vec<String>)> {
+    let mut out: Vec<(SmolStr, Vec<String>)> =
+        handle(ctx).0.lock().lists.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Replaces the lists with saved ones: at start.
+pub fn load_lists(ctx: &Context, lists: impl IntoIterator<Item = (SmolStr, Vec<String>)>) {
+    let h = handle(ctx);
+    let mut s = h.0.lock();
+    s.lists = lists.into_iter().collect();
 }
 
 /// Every key with its value, sorted by key.

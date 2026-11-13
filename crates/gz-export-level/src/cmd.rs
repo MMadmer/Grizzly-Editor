@@ -125,7 +125,7 @@ async fn run_spawn(
         Err(_) => None,
     };
     let root = c.session.root.clone();
-    let sdk = editor.paths.root.join("gamedata").join("meshes");
+    let sdk = gz_project::library_root(editor).join("gamedata").join("meshes");
     let (snap, level) = (c.snap.clone(), c.level.clone());
     let st = settings.clone();
     let gathered: Gathered = editor

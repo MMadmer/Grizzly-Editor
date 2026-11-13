@@ -94,14 +94,14 @@ class Editor:
     def settle() -> None:
         # A minimized editor draws only when asked, and its first frame reopens the project's last scene - a blocking
         # load. That frame is drawn here and the load runs out: the checks read the editor, not a load's busy frames.
-        mcp("ui_list")
+        mcp("ui.list")
         deadline = time.monotonic() + 600
-        while mcp("progress").get("active") and time.monotonic() < deadline:
+        while mcp("ui.tasks").get("active") and time.monotonic() < deadline:
             time.sleep(0.05)
 
     def close(self) -> None:
         try:
-            mcp("window_control", action="close")
+            mcp("app.quit")
         except OSError:
             pass
         if self.proc:
@@ -162,7 +162,7 @@ def run_ui_checks() -> None:
     v = mcp("world_view")
     check(v.get("ok") and v.get("tab") == "world_rules", "U world_view answers", json.dumps(v)[:300])
     check(v.get("status") == "Saved to mod.ltx as you edit", "U the tab says it saves as you edit", json.dumps(v)[:300])
-    opened = mcp("ui_tab", action="open", kind="world_rules")
+    opened = mcp("ui.tab", action="open", kind="world_rules")
     check(opened.get("ok") and opened.get("tab", {}).get("id") == "world_rules", "U ui_tab opens World Rules",
           json.dumps(opened)[:300])
     v = mcp("world_view", drawer="open", level="l03_agroprom", filter="underground")
@@ -175,23 +175,23 @@ def run_ui_checks() -> None:
           json.dumps(bad))
     bad = mcp("world_view", drawer="sideways")
     check(not bad.get("ok"), "U and so is a drawer state that is not open or close", json.dumps(bad))
-    audit = mcp("ui_audit", id="world_rules")
+    audit = mcp("ui.audit", id="world_rules")
     check(audit.get("ok") and not audit.get("escaped"), "U nothing escapes the World Rules tab",
           json.dumps(audit.get("escaped"))[:400])
     labels = {c.get("label") for c in audit.get("controls", [])}
     for section in ("Original Game", "Player Start", "Place in Scene"):
         check(section in labels, "U the tab shows " + section, json.dumps(sorted(x for x in labels if x))[:400])
     # the rest is drawn once the page scrolls to it
-    scrolled = mcp("ui_scroll", id="world_rules", to="bottom")
+    scrolled = mcp("ui.scroll", id="world_rules", to="bottom")
     check(scrolled.get("ok"), "U the page scrolls", json.dumps(scrolled)[:300])
-    labels = {c.get("label") for c in mcp("ui_audit", id="world_rules").get("controls", [])}
+    labels = {c.get("label") for c in mcp("ui.audit", id="world_rules").get("controls", [])}
     for section in ("Applies On", "Transitions"):
         check(section in labels, "U the tab shows " + section, json.dumps(sorted(x for x in labels if x))[:400])
-    toolbar = {c.get("label") for c in mcp("ui_audit", id="##toolbar").get("controls", [])}
+    toolbar = {c.get("label") for c in mcp("ui.audit", id="##toolbar").get("controls", [])}
     check("Reload Game Data" in toolbar and "Empty World..." in toolbar, "U its toolbar offers Reload Game Data and Empty World...",
           json.dumps(sorted(x for x in toolbar if x))[:400])
     mcp("world_view", drawer="close", filter="")
-    closed = mcp("ui_tab", action="close", id="world_rules")
+    closed = mcp("ui.tab", action="close", doc="world_rules")
     check(closed.get("ok"), "U the tab closes: it saves as it goes, so nothing is unsaved", json.dumps(closed)[:300])
     check(mcp("world_view").get("open") is False, "U and world_view says it is closed")
 
@@ -320,11 +320,11 @@ def run(project: str) -> None:
         check(clash.get("ok"), "C a path named like one of the game's can be drawn", json.dumps(clash)[:200])
 
         stalker = ""
-        roster = mcp("list_spawn_sections", filter="stalker", limit=400).get("sections", [])
+        roster = mcp("game.lookup", type="spawn_section", query="stalker", limit=400).get("entries", [])
         for row in roster:
-            if row.get("class") != "AI_STL_S":
+            if row.get("extra") != "AI_STL_S":
                 continue
-            placed = mcp("place_spawn", section=row["section"], x=-215.0, y=-20.0, z=-145.0, snap_to_ground=True)
+            placed = mcp("place_spawn", section=row["id"], x=-215.0, y=-20.0, z=-145.0, snap_to_ground=True)
             if placed.get("ok"):
                 stalker = placed_name(placed)
                 break
@@ -381,17 +381,19 @@ def run(project: str) -> None:
         check(shipped_layer.count("op        = start") == 1, "D with one start")
 
         # ------------------------------------------------------------ E: quests
-        look = mcp("quest_lookup", type="level_changer", query="", limit=500)
+        look = mcp("game.lookup", type="level_changer", query="", limit=500)
         entries = look.get("entries", [])
         check(len(entries) > 20, "E level_changer is a picker type", json.dumps(look)[:300])
         changer = next((x["id"] for x in entries if x.get("id") == way_down), entries[0]["id"] if entries else "")
         qpath = os.path.join(project, "quests", "qa_world_roles.nqasset")
-        w = mcp("quest_write", path=qpath, lua=QUEST_E024.replace("%CHANGER%", changer))
-        v = mcp("quest_validate", path=qpath)
+        os.makedirs(os.path.dirname(qpath), exist_ok=True)
+        with open(qpath, "w", encoding="utf-8") as f:
+            f.write(QUEST_E024.replace("%CHANGER%", changer))
+        v = mcp("asset.check", path=qpath)
         vp = " ".join(p if isinstance(p, str) else json.dumps(p) for p in v.get("problems", []))
         check("E024" in vp and "a quest has no roles" in vp, "E { role = } in a quest is E024", vp[:400])
         check("W060" not in vp, "E a changer of the linked game is known", vp[:400])
-        mcp("content_delete", path="quests/qa_world_roles.nqasset")
+        mcp("file.delete", path="quests/qa_world_roles.nqasset")
 
         # ------------------------------------------------------------ F: stock again
         s = mcp("world_set", preset="stock", area="")

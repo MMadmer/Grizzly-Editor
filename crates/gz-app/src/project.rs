@@ -1,6 +1,7 @@
 //! What the shell needs to know of the open project, without naming the area that owns it: its
-//! folder, its name and whether its game is linked. The project area provides it through
-//! [`set_project_probe`]; without one the shell takes the folder's name and assumes a linked game.
+//! folder, its name, whether its game is linked and where its tabs are kept. The project area
+//! provides it through [`set_project_probe`]; without one the shell takes the folder's name,
+//! assumes a linked game and keeps no tabs.
 
 use gz_editor::{Editor, Value, json};
 
@@ -14,6 +15,8 @@ pub struct ProjectInfo {
     pub name: String,
     /// Its game is linked: without one the Start page stays up (with the Link Game card).
     pub game_linked: bool,
+    /// Where the tabs it brings back are kept: this machine's, in the editor's home.
+    pub tabs_file: Option<std::path::PathBuf>,
 }
 
 type ProbeFn = dyn Fn(&Editor) -> ProjectInfo + Send + Sync;
@@ -38,6 +41,7 @@ pub fn project_info(editor: &Editor) -> ProjectInfo {
             folder: root.display().to_string().replace('\\', "/"),
             name: root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
             game_linked: true,
+            tabs_file: None,
         },
         None => ProjectInfo::default(),
     }

@@ -1,32 +1,38 @@
 #!/usr/bin/env python3
 """The editor's frame over MCP (docs/UI_DESIGN.md, sections 5 and 7), on a THROW-AWAY COPY of a project.
 
-What it proves:
-  A  the frame reports itself: state and ui_list name the Level tab, the panels, the drawers; ui_contract has the
+What it proves (every length in pt, as the commands answer them; a picture is px with its `scale`):
+  A  the frame reports itself: state and ui.list name the Level tab, the panels, the drawers; ui.contract has the
      constants QA pins (panels, drawers, dialogs, menus, the palette's id); the minimised start's profile says
      'window minimised', and one start of its own that SHOWS the window (not activated) had it within 0.3 s
   B  the caption: 32 pt tall, the window buttons 3 x 46 pt at its right end; the major tabs on a row of their own,
      30 pt, right under it - and Windows agrees: WM_NCHITTEST answers HTCLIENT on a tab and on a window button,
      HTCAPTION on the drag band
   C  the major tabs: a tool tab opens, Level stays first and pinned (it refuses to close), next/prev cycle and move no
-     tab (a tool tab, the quest tab, Level: other menus in the caption each), a clean tab closes; a quest made dirty
-     refuses a plain close ('unsaved') and closes with discard=true
-  D  the drawers: over a document the Content and Log drawers open and close; ui_list names the one that is up
-  E  the Level panels: close, open, focus and toggle round trips, and Level comes up with an opened panel; ui_scroll
-     moves a panel whose body is a child of it (Details' grid) to its bottom and back
-  F  the dialogs: Import Base Scene opens and closes over ui_dialog, and stays centred in the work area when the window
-     is resized both ways; on the Start page the status bar has no centre (A: on Level it has the tab's status)
-  G  the size: under 1100 pt the menus fold into one Menu button (titlebar_info folded, ui_popup menu:Menu), the size
-     class follows the window (wide / compact), and ui_scale rescales the caption (32 pt at 1.0 and 1.5)
-  H  menus and the palette: ui_popup puts a caption menu up and takes it down, one popup at a time, and refuses the
-     tasks popover while no job runs; the palette ranks the Output Log panel first for 'log' and shows no COMMAND_* id
-     as a row's label; opened, it is the modal on top
+     tab, a clean tab closes; a quest made dirty refuses a plain close ('unsaved') and closes with discard=true
+  D  the drawers: over a document the Content and Log drawers open and close; ui.list names the one that is up
+  E  the Level panels: close, open, focus and toggle round trips; ui.scroll, ui.split, ui.toast (a note with a button
+     that runs an action)
+  F  the dialogs: Import Base Scene opens and closes over ui.dialog and stays centred in the work area at both sizes;
+     on the Start page the status bar has no centre and no drawer buttons
+  G  the size: under 1100 pt the menus fold into one Menu button (ui.frame folded, ui.popup menu:Menu), the size
+     class follows the window, ui.scale rescales the frame (the caption 32 pt at 1.0 and 1.5)
+  H  menus and the palette: a caption menu has ONE label column (every row's label starts at one x); one popup at a
+     time; the palette ranks a log row first for 'log', shows no COMMAND_* id, names a tab by its project path;
+     opened, it is the modal on top
+  I  actions: a palette row runs by its id (window.log_drawer opens the Log drawer) and comes back first as recent;
+     app.keys lists every action with its group (the graph's under Graph); a binding made in app.keys is what the key
+     pass finds (app.keys resolve), the old key no longer runs it, the palette shows the new key; reset puts it back
+  J  stable chrome and stalls: every tab kind is opened; switching between them moves no part of the frame (the
+     caption, the tab row and every tab, the toolbar row, the project's group, the status bar), a tool tab's empty
+     toolbar row holds its status; after the whole tour perf.stalls names no UI pass over 100 ms; the Task Center
+     lists what ended
 
     python tools/qa/test_ui_shell.py --project <project> [--only A,F,...] [--shots <folder>]
 
-Each phase stands on its own: it sets up the tab, panel or size it looks at.
-
-The ini files the editor writes when it closes (_projects.ini, level.ini, level_imgui.ini) come back byte for byte.
+The editor runs under -qa_github with every service address on the loopback: opening Releases asks nothing of
+GitHub. The ini files the editor writes when it closes (_projects.ini, level.ini, level_imgui.ini) come back byte for
+byte.
 """
 from __future__ import annotations
 
@@ -36,7 +42,6 @@ import ctypes
 import ctypes.wintypes as wt
 import json
 import os
-import shutil
 import socket
 import subprocess
 import sys
@@ -52,11 +57,18 @@ KEEP = qa_target.KEPT
 WIDE = (1500, 800)       # pt: the Wide size class (W >= 1400, H >= 640)
 COMPACT = (1280, 720)    # pt: Compact
 NARROW = (1000, 700)     # pt: under 1100 the caption's menus fold
+# every service the editor could reach, on a port of the loopback nothing listens on
+NOWHERE = "http://127.0.0.1:9"
+LOOPBACK_ENV = {
+    "GRIZZLY_GITHUB_API": NOWHERE,
+    "GRIZZLY_GITHUB_WEB": NOWHERE,
+    "GRIZZLY_VT_API": NOWHERE,
+    "GRIZZLY_CATALOG_BASE": NOWHERE + "/",
+}
 
 results: list[tuple[bool, str]] = []
 
-
-PHASES = "ABCDEFGH"
+PHASES = "ABCDEFGHIJ"
 
 
 def check(ok: bool, text: str, detail: str = "") -> bool:
@@ -96,11 +108,14 @@ class Editor:
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
         qa_target.guard_project(project)
-        self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project], cwd=os.path.dirname(exe), startupinfo=startup)
+        env = dict(os.environ, **LOOPBACK_ENV)
+        self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-qa_github", "-project", project],
+                                     cwd=os.path.dirname(exe), startupinfo=startup, env=env)
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
             try:
-                if mcp("mod_manifest", timeout=30).get("ok"):
+                st = mcp("state", timeout=30)
+                if st.get("ok") and st.get("project") and st.get("tabs"):
                     return
             except OSError:
                 pass
@@ -112,7 +127,7 @@ class Editor:
     def close(self) -> None:
         # never killed: a killed editor leaves project.ltx behind half written
         try:
-            mcp("window_control", action="close", discard=True)
+            mcp("app.quit", discard=True)
         except OSError:
             pass
         if self.proc:
@@ -123,7 +138,7 @@ class Editor:
 
 
 def shot(folder: str | None, name: str) -> dict:
-    pic = mcp("screenshot_editor")
+    pic = mcp("shot.window")
     if folder and pic.get("png_base64"):
         os.makedirs(folder, exist_ok=True)
         path = os.path.join(folder, name + ".png")
@@ -134,10 +149,10 @@ def shot(folder: str | None, name: str) -> dict:
 
 
 def resize(w: int, h: int) -> dict:
-    r = mcp("window_control", action="resize", width=w, height=h)
+    r = mcp("app.window", action="resize", width=w, height=h)
     # the swap chain follows the window on the next frames: let them be drawn before anyone looks
     for _ in range(2):
-        mcp("ui_list")
+        mcp("ui.list")
     return r
 
 
@@ -182,12 +197,18 @@ def near(a: float, b: float, tol: float) -> bool:
     return abs(a - b) <= tol
 
 
+def same_rect(a, b, tol: float = 0.6) -> bool:
+    if a is None or b is None:
+        return a is None and b is None
+    return len(a) == len(b) and all(near(x, y, tol) for x, y in zip(a, b))
+
+
 def run(project: str, shots: str | None, only: str) -> None:
     ed = Editor()
     try:
         ed.start(project)
-        before_scale = float(mcp("ui_list").get("ui_scale") or 1.0)
-        contract = mcp("ui_contract")
+        before_scale = float(mcp("ui.list").get("scale") or 1.0)
+        contract = mcp("ui.contract")
         for letter in PHASES:
             if letter not in only:
                 continue
@@ -202,40 +223,40 @@ def run(project: str, shots: str | None, only: str) -> None:
 
 
 def phase_a(project, shots, ed, before_scale, contract) -> None:
-        # ------------------------------------------------------------ A: the frame reports itself
-        st = mcp("state")
-        check(st.get("active_tab") == "level" and any(t.get("id") == "level" for t in st.get("tabs", [])),
-              "A state names the Level tab as the active one", short(st))
-        contract = mcp("ui_contract")
-        panel_ids = set((contract.get("panels") or {}).keys())
-        check({"tools", "world_outliner", "details", "level_settings", "content_browser", "output_log", "viewport"} <= panel_ids,
-              "A ui_contract lists the seven Level panels", short(contract))
-        check(set((contract.get("drawers") or {}).keys()) == {"content", "log"}, "A ui_contract lists the two drawers", short(contract))
-        dialogs = contract.get("dialogs") or {}
-        check("import_base_scene" in dialogs and all("###dlg." in w for i, w in dialogs.items() if i not in ("mod_settings", "releases")),
-              "A the contract's dialogs are Title###dlg.<name>", json.dumps(dialogs)[:400])
-        check(bool(contract.get("palette")) and "Menu" in (contract.get("menus") or []),
-              "A ui_contract names the palette's id and the folded Menu", short(contract))
-        resize(*WIDE)
-        lst = mcp("ui_list")
-        check(lst.get("size_class") == "wide" and lst.get("start_page") is False, "A a 1500 x 800 pt window is the Wide class",
-              short(lst))
-        centre = lst.get("status_centre")
-        check(not qa_target.RUST or isinstance(centre, list) and len(centre) == 4 and centre[2] > 0,
-              "A the status bar's centre holds the Level tab's status (docs/UI_DESIGN.md section 5)", json.dumps(centre))
-        shot(shots, "shell_wide")
-        if qa_target.RUST:
-            marks = shown_start()
-            # the suite's own editor starts minimised: its profile says so, and says nothing of a shown window
-            own = start_marks(qa_target.log_glob())
-            check("window minimised" in own and "window shown" not in own,
-                  "A a minimised start's profile says 'window minimised'", json.dumps(own))
-            # the start-up budget (plan 10.8): the window on the screen within 0.3 s of the process start, from a
-            # start that shows it (not activated); the profile ends at the first frame and says when each happened
-            shown = marks.get("window shown")
-            check(shown is not None and shown <= 0.3 and "first frame" in marks and "window minimised" not in marks,
-                  "A a shown window was on the screen within 0.3 s of the process start (%s s; first frame %s s)"
-                  % (shown, marks.get("first frame")), json.dumps(marks))
+    st = mcp("state")
+    check(st.get("active_tab") == "level" and any(t.get("id") == "level" for t in st.get("tabs", [])),
+          "A state names the Level tab as the active one", short(st))
+    check(st.get("window") is True and isinstance(st.get("jobs"), list) and "problems" in st,
+          "A state says there is a window, the jobs that run and the problem counts", short(st))
+    ping = mcp("ping")
+    check(ping.get("name") == "Grizzly Editor" and str(ping.get("version", "")).count(".") == 2,
+          "A ping names the editor and the version it was built as", short(ping))
+    panel_ids = set((contract.get("panels") or {}).keys())
+    check({"tools", "world_outliner", "details", "level_settings", "content_browser", "output_log", "viewport"} <= panel_ids,
+          "A ui.contract lists the seven Level panels", short(contract))
+    check(set((contract.get("drawers") or {}).keys()) == {"content", "log"}, "A ui.contract lists the two drawers", short(contract))
+    dialogs = contract.get("dialogs") or {}
+    check("import_base_scene" in dialogs and all("###dlg." in w for i, w in dialogs.items() if i not in ("mod_settings", "releases")),
+          "A the contract's dialogs are Title###dlg.<name>", json.dumps(dialogs)[:400])
+    check(bool(contract.get("palette")) and "Menu" in (contract.get("menus") or []) and contract.get("stall_ms") == 100,
+          "A ui.contract names the palette's id, the folded Menu and the stall limit", short(contract))
+    resize(*WIDE)
+    lst = mcp("ui.list")
+    check(lst.get("size_class") == "wide" and lst.get("start_page") is False, "A a 1500 x 800 pt window is the Wide class",
+          short(lst))
+    centre = lst.get("status_centre")
+    check(isinstance(centre, list) and len(centre) == 4 and centre[2] > 0,
+          "A the status bar's centre holds the Level tab's status", json.dumps(centre))
+    shot(shots, "frame_level")
+    marks = shown_start()
+    # the suite's own editor starts minimised: its profile says so, and says nothing of a shown window
+    own = start_marks(qa_target.log_glob())
+    check("window minimised" in own and "window shown" not in own,
+          "A a minimised start's profile says 'window minimised'", json.dumps(own))
+    shown = marks.get("window shown")
+    check(shown is not None and shown <= 0.3 and "first frame" in marks and "window minimised" not in marks,
+          "A a shown window was on the screen within 0.3 s of the process start (%s s; first frame %s s)"
+          % (shown, marks.get("first frame")), json.dumps(marks))
 
 
 def start_marks(pattern: str) -> dict:
@@ -262,8 +283,9 @@ def shown_start() -> dict:
     startup = subprocess.STARTUPINFO()
     startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
     startup.wShowWindow = 4  # SW_SHOWNOACTIVATE
-    proc = subprocess.Popen([exe, "-mcp_port", str(port), "-home", home, "-nodlg"], cwd=os.path.dirname(exe),
-                            startupinfo=startup, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    env = dict(os.environ, **LOOPBACK_ENV)
+    proc = subprocess.Popen([exe, "-mcp_port", str(port), "-home", home, "-nodlg", "-qa_github"], cwd=os.path.dirname(exe),
+                            startupinfo=startup, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
 
     def call(cmd: str, **extra) -> dict:
         with socket.create_connection(("127.0.0.1", port), timeout=10) as c:
@@ -288,7 +310,7 @@ def shown_start() -> dict:
         return marks
     finally:
         try:
-            call("window_control", action="close", discard=True)
+            call("app.quit", discard=True)
         except OSError:
             pass
         try:
@@ -299,295 +321,409 @@ def shown_start() -> dict:
         qa_target.remove_tree(home)
 
 
-
 def phase_b(project, shots, ed, before_scale, contract) -> None:
-        resize(*WIDE)
-        # ------------------------------------------------------------ B: the caption and its hit test
-        tb = mcp("titlebar_info")
-        dpi = float(tb.get("dpi") or 1.0)
-        band = tb.get("band") or [0, 0, 0, 0]
-        check(near(tb.get("caption_h", 0), 32 * dpi, 1.5), "B the caption is 32 pt tall", short(tb))
-        check(near(band[2] - tb.get("buttons_x", 0), 3 * 46 * dpi, 2), "B the window buttons are 3 x 46 pt at its right end",
-              short(tb))
-        tabs = tb.get("tabs") or []
-        inter = tb.get("interactive") or [[0, 0], [0, 0]]
-        row = tb.get("tab_row") or [0, 0, 0, 0]
-        check(near(row[1], band[3], 1.5) and near(row[3] - row[1], 30 * dpi, 1.5),
-              "B the tabs have a row of their own, 30 pt, right under the caption", short(tb))
-        check(bool(tabs) and all(row[1] - 1 <= t["rect"][1] and t["rect"][3] <= row[3] + 1 for t in tabs)
-              and all(t["rect"][1] >= band[3] - 1 for t in tabs),
-              "B every tab lies in the tab row, none in the caption", short(tb))
-        hwnd = editor_hwnd(ed.proc.pid if ed.proc else 0)
-        if check(bool(hwnd), "B the editor's window is found"):
-            cy = (band[1] + band[3]) / 2.0
-            level = next((t for t in tabs if t.get("id") == "level"), tabs[0] if tabs else None)
-            if level:
-                r = level["rect"]
-                got = hit_test(hwnd, (r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0)
-                check(got == HTCLIENT, "B the Level tab takes the mouse (HTCLIENT)", "hit %d" % got)
-            drag_x = (inter[0][1] + tb.get("buttons_x", 0)) / 2.0
-            got = hit_test(hwnd, drag_x, cy)
-            check(got == HTCAPTION, "B the band between the menus and the buttons drags the window (HTCAPTION)", "hit %d" % got)
-            got = hit_test(hwnd, band[2] - 23 * dpi, cy)
-            check(got == HTCLIENT, "B the close button takes the mouse (HTCLIENT)", "hit %d" % got)
+    resize(*WIDE)
+    fr = mcp("ui.frame")
+    scale = float(fr.get("scale") or 1.0)
+    band = fr.get("band") or [0, 0, 0, 0]          # [x, y, w, h] pt
+    check(near(fr.get("caption_h", 0), 32, 0.6) and near(band[3], 32, 0.6), "B the caption is 32 pt tall", short(fr))
+    check(near(band[0] + band[2] - fr.get("buttons_x", 0), 3 * 46, 1), "B the window buttons are 3 x 46 pt at its right end",
+          short(fr))
+    tabs = fr.get("tabs") or []
+    inter = fr.get("interactive") or [[0, 0], [0, 0]]
+    row = fr.get("tab_row") or [0, 0, 0, 0]
+    check(near(row[1], band[1] + band[3], 0.6) and near(row[3], 30, 0.6),
+          "B the tabs have a row of their own, 30 pt, right under the caption", short(fr))
+    check(bool(tabs) and all(row[1] - 0.6 <= t["rect"][1] and t["rect"][1] + t["rect"][3] <= row[1] + row[3] + 0.6 for t in tabs),
+          "B every tab lies in the tab row, none in the caption", short(fr))
+    hwnd = editor_hwnd(ed.proc.pid if ed.proc else 0)
+    if check(bool(hwnd), "B the editor's window is found"):
+        cy = (band[1] + band[3] / 2.0) * scale
+        level = next((t for t in tabs if t.get("id") == "level"), tabs[0] if tabs else None)
+        if level:
+            r = level["rect"]
+            got = hit_test(hwnd, (r[0] + r[2] / 2.0) * scale, (r[1] + r[3] / 2.0) * scale)
+            check(got == HTCLIENT, "B the Level tab takes the mouse (HTCLIENT)", "hit %d" % got)
+        drag_x = (inter[0][1] + fr.get("buttons_x", 0)) / 2.0 * scale
+        got = hit_test(hwnd, drag_x, cy)
+        check(got == HTCAPTION, "B the band between the menus and the buttons drags the window (HTCAPTION)", "hit %d" % got)
+        got = hit_test(hwnd, (band[0] + band[2] - 23) * scale, cy)
+        check(got == HTCLIENT, "B the close button takes the mouse (HTCLIENT)", "hit %d" % got)
 
+
+def tab_rects() -> dict:
+    return {t.get("id"): t.get("rect") for t in mcp("ui.frame").get("tabs") or []}
+
+
+def make_quest() -> str:
+    made = mcp("file.create", kind="quest")
+    return (made.get("path") or "").replace("/", "\\")
 
 
 def phase_c(project, shots, ed, before_scale, contract) -> None:
-        # ------------------------------------------------------------ C: the major tabs
-        def tab_rects() -> dict:
-            return {t.get("id"): t.get("rect") for t in mcp("titlebar_info").get("tabs") or []}
+    o = mcp("ui.tab", action="open", kind="characters")
+    check(o.get("ok") and (o.get("tab") or {}).get("id") == "characters", "C a tool tab opens and comes up at once", short(o))
+    lt = mcp("ui.tab", action="list")
+    ids = [t.get("id") for t in lt.get("tabs", [])]
+    check(ids[:1] == ["level"] and "characters" in ids, "C Level is the first tab, the tool tab follows", json.dumps(ids))
+    before_switch = tab_rects()
+    nx = mcp("ui.tab", action="next")
+    check(nx.get("ok") and (nx.get("tab") or {}).get("id") != "characters", "C next cycles away from the active tab", short(nx))
+    after_switch = tab_rects()
+    check(len(before_switch) >= 2 and all(same_rect(before_switch[k], after_switch.get(k)) for k in before_switch),
+          "C switching tabs moves no tab", json.dumps({"before": before_switch, "after": after_switch}))
+    pv = mcp("ui.tab", action="prev")
+    check((pv.get("tab") or {}).get("id") == "characters", "C prev comes back", short(pv))
+    lv = mcp("ui.tab", action="close", doc="level")
+    check(not lv.get("ok"), "C the Level tab refuses to close", short(lv))
+    cl = mcp("ui.tab", action="close", doc="characters")
+    check(cl.get("ok") and "characters" not in [t.get("id") for t in cl.get("tabs", [])], "C a clean tab closes", short(cl))
 
-        o = mcp("ui_tab", action="open", kind="characters")
-        check(o.get("ok") and (o.get("tab") or {}).get("id") == "characters", "C a tool tab opens and comes up at once", short(o))
-        lt = mcp("ui_tab", action="list")
-        ids = [t.get("id") for t in lt.get("tabs", [])]
-        check(ids[:1] == ["level"] and "characters" in ids, "C Level is the first tab, the tool tab follows", json.dumps(ids))
-        before_switch = tab_rects()
-        nx = mcp("ui_tab", action="next")
-        check(nx.get("ok") and (nx.get("tab") or {}).get("id") != "characters", "C next cycles away from the active tab", short(nx))
-        after_switch = tab_rects()
-        check(len(before_switch) >= 2 and before_switch == after_switch,
-              "C switching tabs moves no tab (another tab, other menus in the caption)",
-              json.dumps({"before": before_switch, "after": after_switch}))
-        pv = mcp("ui_tab", action="prev")
-        check((pv.get("tab") or {}).get("id") == "characters", "C prev comes back", short(pv))
-        lv = mcp("ui_tab", action="close", id="level")
-        check(not lv.get("ok"), "C the Level tab refuses to close", short(lv))
-        cl = mcp("ui_tab", action="close", id="characters")
-        check(cl.get("ok") and "characters" not in [t.get("id") for t in cl.get("tabs", [])], "C a clean tab closes", short(cl))
-
-        made = mcp("content_create", kind="quest")
-        rel = (made.get("made") or "").replace("/", "\\")
-        if check(made.get("ok") and rel, "C a quest is made for the dirty-close check", short(made)):
-            op = mcp("ui_tab", action="open", kind="quest", path=rel)
-            quest = (op.get("tab") or {}).get("id", "")
-            check(op.get("ok") and quest.startswith("quest:"), "C the quest opens as a tab of its own", short(op))
-            # the graph tab brings Graph into the caption where Level brings Scene, Build and View
-            on_quest = tab_rects()
-            mcp("ui_tab", action="prev")
-            on_level = tab_rects()
-            mcp("ui_tab", action="next")
-            check(quest in on_quest and on_quest == on_level,
-                  "C from the quest tab to Level and back, no tab moves",
-                  json.dumps({"quest": on_quest, "level": on_level}))
-            with open(os.path.join(project, rel), "rb") as f:
-                on_disk = f.read()
-            mcp("quest_edit", path=rel, op="select_all")
-            mcp("quest_edit", path=rel, op="duplicate")
-            info = mcp("ui_tab", action="list")
-            dirty = any(t.get("id") == quest and t.get("dirty") for t in info.get("tabs", []))
-            if check(dirty, "C an edit leaves the quest tab dirty", short(info)):
-                refused = mcp("ui_tab", action="close", id=quest)
-                check(not refused.get("ok") and refused.get("error") == "unsaved" and refused.get("dirty"),
-                      "C a dirty tab refuses a plain close and names what is unsaved", short(refused))
-            gone = mcp("ui_tab", action="close", id=quest, discard=True)
-            check(gone.get("ok"), "C discard=true closes it", short(gone))
-            with open(os.path.join(project, rel), "rb") as f:
-                check(f.read() == on_disk, "C the discarded edit never reached the file")
-
+    rel = make_quest()
+    if check(bool(rel), "C a quest is made for the dirty-close check"):
+        op = mcp("ui.tab", action="open", kind="quest", path=rel)
+        quest = (op.get("tab") or {}).get("id", "")
+        check(op.get("ok") and quest.startswith("quest:"), "C the quest opens as a tab of its own", short(op))
+        on_quest = tab_rects()
+        mcp("ui.tab", action="prev")
+        on_level = tab_rects()
+        mcp("ui.tab", action="next")
+        check(quest in on_quest and all(same_rect(on_quest[k], on_level.get(k)) for k in on_quest),
+              "C from the quest tab to Level and back, no tab moves", json.dumps({"quest": on_quest, "level": on_level}))
+        with open(os.path.join(project, rel), "rb") as f:
+            on_disk = f.read()
+        mcp("quest_edit", path=rel, op="select_all")
+        mcp("quest_edit", path=rel, op="duplicate")
+        info = mcp("ui.tab", action="list")
+        dirty = any(t.get("id") == quest and t.get("dirty") for t in info.get("tabs", []))
+        if check(dirty, "C an edit leaves the quest tab dirty", short(info)):
+            refused = mcp("ui.tab", action="close", doc=quest)
+            check(not refused.get("ok") and refused.get("code") == "unsaved" and refused.get("dirty"),
+                  "C a dirty tab refuses a plain close and names what is unsaved", short(refused))
+        gone = mcp("ui.tab", action="close", doc=quest, discard=True)
+        check(gone.get("ok"), "C discard=true closes it", short(gone))
+        with open(os.path.join(project, rel), "rb") as f:
+            check(f.read() == on_disk, "C the discarded edit never reached the file")
 
 
 def phase_d(project, shots, ed, before_scale, contract) -> None:
-        # ------------------------------------------------------------ D: the drawers over a document
-        mcp("ui_tab", action="open", kind="characters")
-        for which in ("log", "content"):
-            d = mcp("ui_drawer", action="open", id=which)
-            lst = mcp("ui_list")
-            check(d.get("ok") and lst.get("drawer") == which, "D the %s drawer opens over a document" % which, short(lst))
-            if which == "log":
-                shot(shots, "shell_log_drawer")
-            c = mcp("ui_drawer", action="close", id=which)
-            lst = mcp("ui_list")
-            check(c.get("ok") and lst.get("drawer") == "none", "D the %s drawer closes" % which, short(lst))
-        # a drawer opened over one tab does not cover the next one's canvas
-        mcp("ui_drawer", action="open", id="content")
-        mcp("ui_tab", action="activate", id="level")
-        lst = mcp("ui_list")
-        check(lst.get("drawer") == "none", "D another tab coming up closes the drawer", short(lst))
-        mcp("ui_tab", action="activate", id="characters")
-        mcp("ui_tab", action="close", id="characters")
-
+    mcp("ui.tab", action="open", kind="characters")
+    for which in ("log", "content"):
+        d = mcp("ui.drawer", action="open", id=which)
+        lst = mcp("ui.list")
+        check(d.get("ok") and lst.get("drawer") == which, "D the %s drawer opens over a document" % which, short(lst))
+        c = mcp("ui.drawer", action="close", id=which)
+        lst = mcp("ui.list")
+        check(c.get("ok") and lst.get("drawer") == "none", "D the %s drawer closes" % which, short(lst))
+    # a drawer opened over one tab does not cover the next one's canvas
+    mcp("ui.drawer", action="open", id="content")
+    mcp("ui.tab", action="activate", doc="level")
+    lst = mcp("ui.list")
+    check(lst.get("drawer") == "none", "D another tab coming up closes the drawer", short(lst))
+    mcp("ui.tab", action="activate", doc="characters")
+    mcp("ui.tab", action="close", doc="characters")
 
 
 def phase_e(project, shots, ed, before_scale, contract) -> None:
-        # ------------------------------------------------------------ E: the Level panels
-        mcp("ui_tab", action="activate", id="level")
-        for panel in ("world_outliner", "details", "level_settings", "tools"):
-            c = mcp("ui_panel", action="close", id=panel)
-            check(c.get("ok") and c.get("open") is False, "E %s closes" % panel, short(c))
-            o = mcp("ui_panel", action="open", id=panel)
-            check(o.get("ok") and o.get("open") is True and o.get("active_tab") == "level", "E %s opens on Level" % panel, short(o))
-        f = mcp("ui_panel", action="focus", id="level_settings")
-        lst = mcp("ui_list")
-        ls = next((p for p in lst.get("panels", []) if p.get("id") == "level_settings"), {})
-        check(f.get("ok") and ls.get("visible"), "E focus raises Level Settings in its dock node", short(ls))
-        t1 = mcp("ui_panel", action="toggle", id="output_log")
-        t2 = mcp("ui_panel", action="toggle", id="output_log")
-        check(t1.get("open") != t2.get("open"), "E toggle flips the Output Log both ways", short(t1) + " / " + short(t2))
-        v = mcp("ui_panel", action="close", id="viewport")
-        check(not v.get("ok"), "E the viewport does not close", short(v))
-        # Details scrolls in its grid, a child of the panel: the bottom is reached, and the top again
-        mcp("ui_panel", action="focus", id="details")
-        s1 = mcp("ui_scroll", id="details", to="bottom")
-        mcp("screenshot_editor")
-        s2 = mcp("ui_scroll", id="details", to="top")
-        if s1.get("ok") and (s1.get("scroll_max_y") or 0) > 0:
-            check(s2.get("scroll_y", 0) >= s1["scroll_max_y"] - 2, "E ui_scroll takes Details' grid to its bottom",
-                  short(s1) + " / " + short(s2))
-            mcp("screenshot_editor")
-            s3 = mcp("ui_scroll", id="details", to="top")
-            check(s3.get("scroll_y", 1) == 0, "E ui_scroll takes Details' grid back to the top", short(s3))
-        else:
-            print("NOTE Details does not scroll here (%s): the scroll round trip is not checked" % short(s1), flush=True)
-        mcp("ui_tab", action="open", kind="characters")
-        o = mcp("ui_panel", action="open", id="details")
-        check(o.get("active_tab") == "level", "E opening a panel from another tab brings Level up", short(o))
-        mcp("ui_tab", action="close", id="characters")
-        if qa_target.RUST:
-            # the layout store's values: listed; a key of the test's own (no panel reads it, so the Level layout
-            # stays as built for G) set, read back and listed; a key nobody set refused
-            splits = (mcp("ui_split").get("splits") or {})
-            check(any(k.startswith("level.") for k in splits), "E ui_split lists the layout store's values",
-                  json.dumps(splits)[:300])
-            moved = mcp("ui_split", key="qa.shell_split", value=123.5)
-            back = mcp("ui_split", key="qa.shell_split")
-            listed = (mcp("ui_split").get("splits") or {}).get("qa.shell_split")
-            check(moved.get("ok") and back.get("value") == 123.5 and back.get("unit") == "pt" and listed == 123.5,
-                  "E ui_split sets a value, reads it back and lists it", short(moved) + " / " + short(back))
-            none = mcp("ui_split", key="level.no_such_split")
-            check(not none.get("ok"), "E ui_split refuses a split that does not exist", short(none))
-            # a toast is queued and answered, and ui_list names it while it is up
-            t = mcp("ui_toast", text="QA note from test_ui_shell")
-            lst = mcp("ui_list")
-            check("QA note from test_ui_shell" in (t.get("toasts") or [])
-                  and "QA note from test_ui_shell" in (lst.get("toasts") or []),
-                  "E ui_toast raises a toast that ui_list names", short(t) + " / " + short({"toasts": lst.get("toasts")}))
-
+    mcp("ui.tab", action="activate", doc="level")
+    for panel in ("world_outliner", "details", "level_settings", "tools"):
+        c = mcp("ui.panel", action="close", id=panel)
+        check(c.get("ok") and c.get("open") is False, "E %s closes" % panel, short(c))
+        o = mcp("ui.panel", action="open", id=panel)
+        check(o.get("ok") and o.get("open") is True and o.get("active_tab") == "level", "E %s opens on Level" % panel, short(o))
+    f = mcp("ui.panel", action="focus", id="level_settings")
+    lst = mcp("ui.list")
+    ls = next((p for p in lst.get("panels", []) if p.get("id") == "level_settings"), {})
+    check(f.get("ok") and ls.get("visible"), "E focus raises Level Settings in its dock node", short(ls))
+    t1 = mcp("ui.panel", action="toggle", id="output_log")
+    t2 = mcp("ui.panel", action="toggle", id="output_log")
+    check(t1.get("open") != t2.get("open"), "E toggle flips the Output Log both ways", short(t1) + " / " + short(t2))
+    v = mcp("ui.panel", action="close", id="viewport")
+    check(not v.get("ok"), "E the viewport does not close", short(v))
+    mcp("ui.panel", action="focus", id="details")
+    s1 = mcp("ui.scroll", id="details", to="bottom")
+    mcp("ui.list")
+    if s1.get("ok") and (s1.get("scroll_max_y") or 0) > 0:
+        s2 = mcp("ui.scroll", id="details", to="top")
+        mcp("ui.list")
+        s3 = mcp("ui.scroll", id="details", to="top")
+        check(s3.get("scroll_y", 1) == 0, "E ui.scroll takes Details' grid back to the top (pt)", short(s2) + " / " + short(s3))
+    else:
+        print("NOTE Details does not scroll here (%s): the scroll round trip is not checked" % short(s1), flush=True)
+    mcp("ui.tab", action="open", kind="characters")
+    o = mcp("ui.panel", action="open", id="details")
+    check(o.get("active_tab") == "level", "E opening a panel from another tab brings Level up", short(o))
+    mcp("ui.tab", action="close", doc="characters")
+    splits = (mcp("ui.split").get("splits") or {})
+    check(any(k.startswith("level.") for k in splits), "E ui.split lists the layout store's values", json.dumps(splits)[:300])
+    moved = mcp("ui.split", key="qa.shell_split", value=123.5)
+    back = mcp("ui.split", key="qa.shell_split")
+    listed = (mcp("ui.split").get("splits") or {}).get("qa.shell_split")
+    check(moved.get("ok") and back.get("value") == 123.5 and back.get("unit") == "pt" and listed == 123.5,
+          "E ui.split sets a value, reads it back and lists it", short(moved) + " / " + short(back))
+    none = mcp("ui.split", key="level.no_such_split")
+    check(not none.get("ok"), "E ui.split refuses a split that does not exist", short(none))
+    t = mcp("ui.toast", text="QA note from test_ui_shell")
+    lst = mcp("ui.list")
+    check("QA note from test_ui_shell" in (t.get("toasts") or []) and "QA note from test_ui_shell" in (lst.get("toasts") or []),
+          "E ui.toast raises a toast that ui.list names", short(t) + " / " + short({"toasts": lst.get("toasts")}))
+    # a note may carry one button that runs an action (the updater's Details and What's New)
+    b = mcp("ui.toast", text="QA note with a button", action="help.update", label="Details")
+    notes = mcp("ui.list").get("toast_notes") or []
+    check(b.get("ok") and {"text": "QA note with a button", "button": "Details", "action": "help.update"} in notes,
+          "E a toast carries a button that names the action it runs", json.dumps(notes)[:300])
+    bad = mcp("ui.toast", text="QA note", action="no.such_action")
+    check(not bad.get("ok"), "E a toast's button must run an action that exists", short(bad))
 
 
 def phase_f(project, shots, ed, before_scale, contract) -> None:
-        # ------------------------------------------------------------ F: a dialog, centred at both sizes
-        def centred(tag: str) -> None:
-            lst = mcp("ui_list")
-            dlg = next((d for d in lst.get("dialogs", []) if d.get("id") == "import_base_scene"), None)
-            work = lst.get("work_area") or [0, 0, 0, 0]
-            if not check(dlg is not None, "F Import Base Scene is up (%s)" % tag, short(lst)):
-                return
-            r = dlg["rect"]
-            # centred in the work area (between the toolbar and the status bar) within a few px, and wholly inside it
-            centre = near(r[0] + r[2] / 2.0, work[0] + work[2] / 2.0, 3) and near(r[1] + r[3] / 2.0, work[1] + work[3] / 2.0, 3)
-            inside = (r[0] >= work[0] - 1 and r[1] >= work[1] - 1 and r[0] + r[2] <= work[0] + work[2] + 1 and
-                      r[1] + r[3] <= work[1] + work[3] + 1)
-            check(centre and inside, "F it is centred and inside the work area (%s)" % tag, json.dumps({"dialog": r, "work": work}))
+    def centred(tag: str) -> None:
+        lst = mcp("ui.list")
+        dlg = next((d for d in lst.get("dialogs", []) if d.get("id") == "import_base_scene"), None)
+        work = lst.get("work_area") or [0, 0, 0, 0]
+        if not check(dlg is not None, "F Import Base Scene is up (%s)" % tag, short(lst)):
+            return
+        r = dlg["rect"]
+        centre = near(r[0] + r[2] / 2.0, work[0] + work[2] / 2.0, 2) and near(r[1] + r[3] / 2.0, work[1] + work[3] / 2.0, 2)
+        inside = (r[0] >= work[0] - 1 and r[1] >= work[1] - 1 and r[0] + r[2] <= work[0] + work[2] + 1 and
+                  r[1] + r[3] <= work[1] + work[3] + 1)
+        check(centre and inside, "F it is centred and inside the work area (%s)" % tag, json.dumps({"dialog": r, "work": work}))
 
-        od = mcp("ui_dialog", action="open", id="import_base_scene")
-        if check(od.get("ok"), "F Import Base Scene opens over ui_dialog", short(od)):
-            centred("wide")
-            resize(*COMPACT)
-            centred("compact")
-            shot(shots, "shell_dialog_compact")
-            resize(*WIDE)
-            centred("wide again")
-            cd = mcp("ui_dialog", action="close", id="import_base_scene")
-            lst = mcp("ui_list")
-            check(cd.get("ok") and not any(d.get("id") == "import_base_scene" for d in lst.get("dialogs", [])),
-                  "F it closes over ui_dialog", short(lst))
-            # without an id the dialog on top closes, as Esc closes it
-            mcp("ui_dialog", action="open", id="import_base_scene")
-            mcp("ui_list")
-            top = mcp("ui_dialog", action="close")
-            lst = mcp("ui_list")
-            check(top.get("ok") and top.get("closing") == "import_base_scene"
-                  and not any(d.get("id") == "import_base_scene" for d in lst.get("dialogs", [])),
-                  "F ui_dialog close without an id closes the dialog on top", short(top))
-            # a dialog of the project goes down with it: the Start page shows no Import Base Scene
-            mcp("ui_dialog", action="open", id="import_base_scene")
-            mcp("ui_list")
-            closed = mcp("project_close", discard=True, timeout=120)
-            pic = mcp("screenshot_editor", timeout=60)
-            check(closed.get("ok") and pic.get("ok") and pic.get("modal") is None,
-                  "F Import Base Scene goes down with the project it imports into",
-                  short({k: v for k, v in pic.items() if k != "png_base64"}))
-            # the Start page is no document: its status bar has no centre (docs/UI_DESIGN.md, the Start page)
-            page = mcp("ui_list")
-            check(page.get("start_page") is True and (not qa_target.RUST or page.get("status_centre") is None),
-                  "F the Start page's status bar has no centre", short(page))
-            shot(shots, "shell_start_page")
-            back = mcp("open_project", path=project, timeout=300)
-            check(back.get("ok"), "F the project opens again", short(back))
-
+    od = mcp("ui.dialog", action="open", id="import_base_scene")
+    if not check(od.get("ok"), "F Import Base Scene opens over ui.dialog", short(od)):
+        return
+    centred("wide")
+    resize(*COMPACT)
+    centred("compact")
+    resize(*WIDE)
+    cd = mcp("ui.dialog", action="close", id="import_base_scene")
+    lst = mcp("ui.list")
+    check(cd.get("ok") and not any(d.get("id") == "import_base_scene" for d in lst.get("dialogs", [])),
+          "F it closes over ui.dialog", short(lst))
+    mcp("ui.dialog", action="open", id="import_base_scene")
+    mcp("ui.list")
+    top = mcp("ui.dialog", action="close")
+    lst = mcp("ui.list")
+    check(top.get("ok") and top.get("closing") == "import_base_scene"
+          and not any(d.get("id") == "import_base_scene" for d in lst.get("dialogs", [])),
+          "F ui.dialog close without an id closes the dialog on top", short(top))
+    # a dialog of the project goes down with it: the Start page shows no Import Base Scene
+    mcp("ui.dialog", action="open", id="import_base_scene")
+    mcp("ui.list")
+    closed = mcp("project.close", discard=True, timeout=120)
+    pic = mcp("shot.window", timeout=60)
+    check(closed.get("ok") and pic.get("ok") and pic.get("modal") is None,
+          "F Import Base Scene goes down with the project it imports into", short(pic))
+    page = mcp("ui.list")
+    check(page.get("start_page") is True and page.get("status_centre") is None,
+          "F the Start page's status bar has no centre", short(page))
+    labels = {c.get("label") for c in mcp("ui.audit").get("controls", [])}
+    check("Content Drawer" not in labels and "Output Log" not in labels,
+          "F the Start page's status bar has no drawer buttons", json.dumps(sorted(x for x in labels if x))[:300])
+    back = mcp("project.open", path=project, timeout=300)
+    check(back.get("ok"), "F the project opens again", short(back))
 
 
 def phase_g(project, shots, ed, before_scale, contract) -> None:
-        # ------------------------------------------------------------ G: folding, size classes, the scale
-        resize(*NARROW)
-        tb = mcp("titlebar_info")
-        lst = mcp("ui_list")
-        check(tb.get("folded") is True and lst.get("size_class") == "compact", "G under 1100 pt the menus fold, the class is Compact",
-              short(tb))
-        p = mcp("ui_popup", show="menu:Menu")
-        lst = mcp("ui_list")
-        check(p.get("ok") and lst.get("popups"), "G the folded Menu button puts its menus up", short(lst))
-        shot(shots, "shell_folded_menu")
-        mcp("ui_popup", show="none")
-        resize(*COMPACT)
-        check(mcp("ui_list").get("size_class") == "compact", "G 1280 x 720 pt is the Compact class")
-        resize(*WIDE)
-        tb = mcp("titlebar_info")
-        check(tb.get("folded") is False, "G a wide window shows the menus again", short(tb))
-        refused = mcp("ui_popup", show="menu:Menu")
-        check(not refused.get("ok"), "G menu:Menu is refused while the menus are not folded", short(refused))
-        for scale in (1.0, 1.5):
-            s = mcp("ui_scale", value=scale)
-            tb = mcp("titlebar_info")
-            check(s.get("ok") and near(tb.get("caption_h", 0), 32 * scale, 1.5) and near(float(tb.get("dpi") or 0), scale, .01),
-                  "G ui_scale %.1f: the caption is 32 pt at that scale" % scale, short(tb))
-        mcp("ui_scale", value=before_scale)
-
+    resize(*NARROW)
+    fr = mcp("ui.frame")
+    lst = mcp("ui.list")
+    check(fr.get("folded") is True and lst.get("size_class") == "compact", "G under 1100 pt the menus fold, the class is Compact",
+          short(fr))
+    p = mcp("ui.popup", show="menu:Menu")
+    lst = mcp("ui.list")
+    check(p.get("ok") and lst.get("popups"), "G the folded Menu button puts its menus up", short(lst))
+    mcp("ui.popup", show="none")
+    resize(*COMPACT)
+    check(mcp("ui.list").get("size_class") == "compact", "G 1280 x 720 pt is the Compact class")
+    resize(*WIDE)
+    fr = mcp("ui.frame")
+    check(fr.get("folded") is False, "G a wide window shows the menus again", short(fr))
+    refused = mcp("ui.popup", show="menu:Menu")
+    check(not refused.get("ok"), "G menu:Menu is refused while the menus are not folded", short(refused))
+    for scale in (1.0, 1.5):
+        s = mcp("ui.scale", value=scale)
+        fr = mcp("ui.frame")
+        check(s.get("ok") and near(fr.get("caption_h", 0), 32, 0.6) and near(float(fr.get("scale") or 0), scale, .01),
+              "G ui.scale %.1f: the caption stays 32 pt, drawn at that scale" % scale, short(fr))
+    mcp("ui.scale", value=before_scale)
 
 
 def phase_h(project, shots, ed, before_scale, contract) -> None:
-        # ------------------------------------------------------------ H: menus and the palette
-        for menu in ("File", "Edit", "Mod", "Window"):
-            p = mcp("ui_popup", show="menu:" + menu)
-            lst = mcp("ui_list")
-            check(p.get("ok") and lst.get("popups"), "H the %s menu comes up over ui_popup" % menu, short(lst))
-            if menu == "File":
-                shot(shots, "shell_menu_file")
-            mcp("ui_popup", show="none")
-        # one popup looked at at a time: the next one takes the one before down
-        mcp("ui_popup", show="menu:Window")
-        mcp("screenshot_editor")
-        mcp("ui_popup", show="menu:File")
-        mcp("screenshot_editor")
-        lst = mcp("ui_list")
-        check(len(lst.get("popups") or []) == 1, "H a popup put up takes the one before it down", short(lst))
-        mcp("ui_popup", show="none")
-        pr = mcp("progress")
-        if not pr.get("tasks") and not pr.get("background"):
-            t = mcp("ui_popup", show="tasks")
-            check(not t.get("ok"), "H with no job running, ui_popup tasks says there is nothing to show", short(t))
-        q = mcp("command_palette", action="query", query="log", limit=10)
-        rows = q.get("results") or []
-        # the Log drawer and the Output Log panel both show the log: one of the two leads, before names that only hide it
-        check(any(r.get("kind") == "panel" and r.get("label") == "Output Log" for r in rows[:2]),
-              "H 'log' ranks the Output Log panel in the first two", json.dumps(rows[:3])[:400])
-        check(not any(str(r.get("label", "")).startswith("COMMAND_") for r in rows), "H no row's label is a COMMAND_* id",
-              json.dumps(rows[:5])[:400])
-        mcp("command_palette", action="open")
-        pic = shot(shots, "shell_palette")
-        check((pic.get("modal") or {}).get("id") == contract.get("palette"), "H the open palette is the modal on top",
-              short(pic))
-        mcp("command_palette", action="close")
-        ex = mcp("command_palette", action="execute", id="drawer:log")
-        mcp("ui_tab", action="activate", id="level")
-        check(ex.get("ok"), "H a palette row that is a drawer runs over MCP", short(ex))
-        mcp("ui_drawer", action="close")
+    mcp("ui.tab", action="activate", doc="level")
+    for menu in ("File", "Edit", "Mod", "Window"):
+        p = mcp("ui.popup", show="menu:" + menu)
+        lst = mcp("ui.list")
+        pops = lst.get("popups") or []
+        check(p.get("ok") and pops, "H the %s menu comes up over ui.popup" % menu, short(lst))
+        xs = (pops[0].get("label_x") if pops else None) or []
+        check(len(xs) >= 2 and max(xs) - min(xs) <= 0.6, "H the %s menu has one label column" % menu, json.dumps(xs))
+        if menu == "File":
+            shot(shots, "frame_menu_file")
+        mcp("ui.popup", show="none")
+    mcp("ui.popup", show="menu:Window")
+    mcp("ui.list")
+    mcp("ui.popup", show="menu:File")
+    lst = mcp("ui.list")
+    check(len(lst.get("popups") or []) == 1, "H a popup put up takes the one before it down", short(lst))
+    mcp("ui.popup", show="none")
+    q = mcp("ui.palette", action="query", query="log", limit=10)
+    rows = q.get("results") or []
+    check(any(r.get("label") in ("Output Log", "Log Drawer") for r in rows[:2]),
+          "H 'log' ranks a row that shows the log in the first two", json.dumps(rows[:3])[:400])
+    check(not any(str(r.get("label", "")).startswith("COMMAND_") for r in rows), "H no row's label is a COMMAND_* id",
+          json.dumps(rows[:5])[:400])
+    check(all(r.get("category") for r in rows if r.get("kind") == "action"), "H every action row names its category",
+          json.dumps(rows[:5])[:400])
+    rel = make_quest()
+    if rel:
+        mcp("ui.tab", action="open", kind="quest", path=rel)
+        name = os.path.splitext(os.path.basename(rel))[0]
+        tq = mcp("ui.palette", action="query", query=name, limit=20)
+        tab_rows = [r for r in tq.get("results") or [] if r.get("kind") == "tab"]
+        check(bool(tab_rows) and all(":" not in str(r.get("detail", "")) and not str(r.get("detail", "")).startswith("\\")
+                                     for r in tab_rows),
+              "H a tab's row names its file by the project path", json.dumps(tab_rows[:2])[:300])
+        mcp("ui.tab", action="close", doc="quest:" + rel.replace("\\", "/"), discard=True)
+    mcp("ui.tab", action="activate", doc="level")
+    mcp("ui.palette", action="open")
+    pic = shot(shots, "frame_palette")
+    check((pic.get("modal") or {}).get("id") == contract.get("palette"), "H the open palette is the modal on top", short(pic))
+    mcp("ui.palette", action="close")
 
 
+def phase_i(project, shots, ed, before_scale, contract) -> None:
+    mcp("ui.tab", action="activate", doc="level")
+    mcp("ui.drawer", action="close")
+    ran = mcp("ui.palette", action="run", id="window.log_drawer")
+    lst = mcp("ui.list")
+    check(ran.get("ok") and lst.get("drawer") == "log", "I a palette row runs by its id: window.log_drawer opens the Log drawer",
+          short(ran) + " / drawer " + str(lst.get("drawer")))
+    mcp("ui.drawer", action="close")
+    first = (mcp("ui.palette", action="query", query="", limit=5).get("results") or [{}])[0]
+    check(first.get("id") == "window.log_drawer" and first.get("recent") is True,
+          "I the action run last leads the empty palette, as recent", json.dumps(first))
+    keys = mcp("app.keys")
+    rows = {r.get("id"): r for r in keys.get("keys", [])}
+    groups = {r.get("group") for r in rows.values()}
+    check({"File", "Edit", "Window", "Graph", "Mod"} <= groups, "I app.keys lists every action under its group",
+          json.dumps(sorted(g for g in groups if g)))
+    check(any(i.startswith("graph.") and r.get("group") == "Graph" and r.get("default") for i, r in rows.items()),
+          "I the graph's keys are actions of the group Graph with their default keys",
+          json.dumps([i for i in rows if i.startswith("graph.")])[:300])
+    row = rows.get("window.log_drawer") or {}
+    old = (row.get("keys") or [""])[0]
+    combo = "Ctrl+Shift+Alt+F11"
+    if not check(bool(old), "I the Log drawer has a key to rebind", json.dumps(row)):
+        return
+    before = mcp("app.keys", action="resolve", keys=combo)
+    bound = mcp("app.keys", action="bind", id="window.log_drawer", keys=combo)
+    now = mcp("app.keys", action="resolve", keys=combo)
+    gone = mcp("app.keys", action="resolve", keys=old)
+    check(before.get("runs") is None and bound.get("ok") and now.get("runs") == "window.log_drawer",
+          "I a binding made in app.keys is what the key pass finds", short(before) + " / " + short(now))
+    check(gone.get("runs") != "window.log_drawer", "I the old key no longer runs it", short(gone))
+    pal = mcp("ui.palette", action="query", query="Log Drawer", limit=5).get("results") or []
+    shown = next((r for r in pal if r.get("id") == "window.log_drawer"), {})
+    check(shown.get("shortcut") == combo, "I the palette shows the new key", json.dumps(shown))
+    mcp("app.keys", action="reset", id="window.log_drawer")
+    again = mcp("app.keys", action="resolve", keys=old)
+    check(again.get("runs") == "window.log_drawer", "I reset gives the action its default key back", short(again))
 
-PHASE = {"A": phase_a, "B": phase_b, "C": phase_c, "D": phase_d, "E": phase_e, "F": phase_f, "G": phase_g, "H": phase_h}
+
+# the tab kinds a tour opens without a file of their own, and how
+SINGLETONS = ("characters", "mod_settings", "world_rules", "screens", "releases", "preferences",
+              "light_animations", "texture_library", "sound_library")
+
+
+def frame_parts() -> dict:
+    fr = mcp("ui.frame")
+    return {
+        "band": fr.get("band"),
+        "tab_row": fr.get("tab_row"),
+        "toolbar": fr.get("toolbar"),
+        "project_toolbar": fr.get("project_toolbar"),
+        "status_bar": fr.get("status_bar"),
+        "tabs": {t.get("id"): t.get("rect") for t in fr.get("tabs") or []},
+        "toolbar_status": fr.get("toolbar_status"),
+        "active": fr.get("active_tab") or mcp("ui.list").get("active_tab"),
+    }
+
+
+def phase_j(project, shots, ed, before_scale, contract) -> None:
+    resize(*WIDE)
+    mcp("ui.tab", action="activate", doc="level")
+    mcp("perf.stalls", clear=True)
+    opened = ["level"]
+    for kind in SINGLETONS:
+        o = mcp("ui.tab", action="open", kind=kind)
+        if check(o.get("ok"), "J the %s tab opens" % kind, short(o)):
+            opened.append((o.get("tab") or {}).get("id", kind))
+        if kind == "mod_settings":
+            shot(shots, "frame_mod_settings")
+            st = frame_parts().get("toolbar_status") or ""
+            check("mod.ltx" in st, "J Mod Settings' toolbar row holds its status", json.dumps(st))
+        if kind == "preferences":
+            shot(shots, "frame_preferences")
+            mcp("app.prefs", action="show", page="keyboard")
+            shot(shots, "frame_keyboard")
+    rel = make_quest()
+    if rel:
+        o = mcp("ui.tab", action="open", kind="quest", path=rel)
+        if check(o.get("ok"), "J a quest tab opens", short(o)):
+            opened.append((o.get("tab") or {}).get("id"))
+            mcp("quest_view", path=rel, frame="all")
+            shot(shots, "frame_graph")
+    beh = mcp("file.create", kind="behaviour")
+    brel = (beh.get("path") or "").replace("/", "\\")
+    if brel:
+        o = mcp("ui.tab", action="open", kind="beh", path=brel)
+        if check(o.get("ok"), "J a behaviour graph tab opens", short(o)):
+            opened.append((o.get("tab") or {}).get("id"))
+    pda = mcp("pda.open")
+    lst = mcp("ui.list")
+    if check(pda.get("ok") and lst.get("active_tab", "").startswith("pda"), "J the PDA tab opens", short(pda)):
+        opened.append(lst.get("active_tab"))
+    for kind, path in (("texture", "ui\\ui_icon_equipment"), ("model", "dynamics\\weapons\\wpn_ak74\\wpn_ak74")):
+        o = mcp("ui.tab", action="open", kind=kind, path=path)
+        if check(o.get("ok"), "J the %s tab opens" % kind, short(o)):
+            opened.append((o.get("tab") or {}).get("id"))
+    # every tab is open: from here on no tab is added, so nothing of the frame may move between them
+    mcp("ui.tab", action="activate", doc="level")
+    base = frame_parts()
+    moved = []
+    for doc in opened[1:] + ["level"]:
+        mcp("ui.tab", action="activate", doc=doc)
+        now = frame_parts()
+        for part in ("band", "tab_row", "toolbar", "status_bar"):
+            if not same_rect(base[part], now[part]):
+                moved.append("%s: %s %s -> %s" % (doc, part, base[part], now[part]))
+        # Preferences has nothing to build: the project's group is not on its row
+        if not doc.startswith("preferences") and not same_rect(base["project_toolbar"], now["project_toolbar"]):
+            moved.append("%s: project group %s -> %s" % (doc, base["project_toolbar"], now["project_toolbar"]))
+        for t, r in base["tabs"].items():
+            if not same_rect(r, now["tabs"].get(t)):
+                moved.append("%s: tab %s %s -> %s" % (doc, t, r, now["tabs"].get(t)))
+    check(not moved, "J switching between every tab kind moves no part of the frame", "; ".join(moved)[:600])
+    stalls = mcp("perf.stalls")
+    check(stalls.get("ok") and not stalls.get("stalls"),
+          "J after the tour no UI pass held the UI thread over 100 ms (worst %s ms)" % stalls.get("worst_ms"),
+          json.dumps(stalls.get("stalls"))[:600])
+    tasks = mcp("ui.tasks", show=True)
+    finished = tasks.get("finished") or []
+    check(tasks.get("ok") and 0 < len(finished) <= 5 and all(f.get("result") for f in finished),
+          "J the Task Center keeps the last jobs that ended (five at most), each with how it ended", short(tasks))
+    pops = [p.get("id") for p in mcp("ui.list").get("popups") or []]
+    check("tasks" in pops, "J opened by the author, the Task Center stays up with only finished jobs", json.dumps(pops))
+    shot(shots, "frame_task_center")
+    mcp("ui.tasks", show=False)
+    for doc in opened[1:]:
+        if doc:
+            mcp("ui.tab", action="close", doc=doc, discard=True)
+
+
+PHASE = {"A": phase_a, "B": phase_b, "C": phase_c, "D": phase_d, "E": phase_e, "F": phase_f, "G": phase_g, "H": phase_h,
+         "I": phase_i, "J": phase_j}
 
 
 def main() -> int:
@@ -610,17 +746,6 @@ def main() -> int:
     copy = os.path.join(work, "QaShell")
     qa_target.copy_project(src, copy, ignore=(".git", "releases", "temp",))
     print("running against a copy: " + copy, flush=True)
-    # project.ltx names this machine's paths: the copy must name its own folder
-    pl = os.path.join(copy, "project.ltx")
-    if os.path.isfile(pl):
-        with open(pl, "rb") as f:
-            text = f.read().decode("utf-8", "replace")
-        at = text.lower().find(src.lower())
-        while at >= 0:
-            text = text[:at] + copy + text[at + len(src):]
-            at = text.lower().find(src.lower(), at + len(copy))
-        with open(pl, "w", encoding="utf-8", newline="") as f:
-            f.write(text)
     saved = {}
     for path in KEEP:
         try:
