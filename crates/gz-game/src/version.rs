@@ -29,8 +29,12 @@ pub fn exe_version(exe: &[u8]) -> Option<String> {
     None
 }
 
-/// The version resource's `EngineAbilities` string (UTF-16): the words a game build says its
-/// engine can do, space-separated. Dead Air Refined's are written down in its `ProductVersion.h`:
+/// The version resource's `EngineAbilities` string (UTF-16) of a program of the game: the words a
+/// game build says its engine can do, space-separated. The engine carries it, and so does every
+/// library that implements a word (Dead Air Refined: `xrEngine.dll`, `xrCore.dll`, `xrGame.dll`);
+/// a word holds only when all of them state it (`gz-levelbuild`'s `play::ability_of`), so a
+/// library of an older build makes a mixed installation one that cannot. Dead Air Refined's words
+/// are written down in its `ProductVersion.h`:
 /// `fsltx-in-place` (on another fs config it writes nothing into its own folder and takes the
 /// archives from that config's `$arch_dir$`), `long-paths` (long-path aware; its paths take
 /// [`LONG_PATH_LIMIT`] characters where Windows long paths are on). An engine without the

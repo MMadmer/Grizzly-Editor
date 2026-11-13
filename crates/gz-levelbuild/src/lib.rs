@@ -46,9 +46,9 @@
 //! - [`play_root`] - what may be Play's game root ([`play_root::check_root`]: the questions of a
 //!   project's deletion, a project anywhere on the way, only a missing or empty folder or one
 //!   carrying Play's marker) and [`play`] - the root made and refreshed, clearing only what Play
-//!   writes there, the level staged; the installed engine runs in place on the root's fs config
-//!   when it says it can (`EngineAbilities`, [`play::PlayMode`]), an older one from copies of it
-//!   and the libraries it needs (the game's runtime list and the import tables, `pe`).
+//!   writes there, the level staged; the installed engine runs in place on the root's fs config,
+//!   and an engine that does not say it can (`EngineAbilities`, [`play::ready_engine`]) is
+//!   refused before anything is built.
 //! - [`process`] - the game, the one program Play starts, as a `tokio::process` child: its
 //!   output followed into the job's stage, Stop ends the whole process tree, one that does not
 //!   start is a sentence.
@@ -84,7 +84,6 @@ mod hemi;
 pub mod libs;
 pub mod merge;
 pub mod nav;
-mod pe;
 pub mod play;
 pub mod play_root;
 pub mod prj;

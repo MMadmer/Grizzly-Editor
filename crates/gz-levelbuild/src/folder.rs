@@ -80,7 +80,7 @@ mod tests {
         assert!(check_wipe(&levels, &levels.join("..").join("..").join("precious")).is_err());
         // a junction inside the levels folder that points out of it
         let link = levels.join("linked");
-        let made = std::process::Command::new("cmd")
+        let made = crate::process::console("cmd")
             .args(["/c", "mklink", "/J"])
             .arg(&link)
             .arg(&outside)

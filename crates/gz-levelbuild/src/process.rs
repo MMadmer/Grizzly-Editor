@@ -35,9 +35,24 @@ pub enum Ended {
     Stopped,
 }
 
+/// A console program (`taskkill`; the tests' `cmd`) as a command that opens no console window: the
+/// editor is a window program, so one would flash up for it otherwise. The game's engine is a
+/// window program and is started as it is.
+#[must_use]
+pub fn console(program: &str) -> std::process::Command {
+    let mut c = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW
+        c.creation_flags(0x0800_0000);
+    }
+    c
+}
+
 /// Ends a process and every process it started (`taskkill /T /F`).
 fn kill_tree(pid: u32) {
-    let _ = std::process::Command::new("taskkill")
+    let _ = console("taskkill")
         .args(["/T", "/F", "/PID", &pid.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())

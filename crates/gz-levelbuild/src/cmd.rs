@@ -330,8 +330,8 @@ async fn compile_command(
     }
 }
 
-/// Starts the root's engine - the installed one in place, the root's copy otherwise - in the
-/// root on the root's `fsgame.ltx` and `params`, as the `level_run` job; answers once it started.
+/// Starts the installed engine where it is, in the root on the root's `fsgame.ltx` and `params`,
+/// as the `level_run` job; answers once it started.
 fn start_game(
     editor: &Arc<Editor>,
     session: &Arc<ProjectSession>,
@@ -342,11 +342,11 @@ fn start_game(
     args.extend(process::arguments(params));
     let (exe, cwd) = (root.exe.clone(), root.root.clone());
     let line = process::command_line(&exe, &args);
-    let how = match root.mode {
-        crate::play::PlayMode::InPlace => format!("the installed engine in place, {}", exe.display()),
-        crate::play::PlayMode::Copied => format!("a copy of the engine in the game root {}", cwd.display()),
-    };
-    editor.log.info(format!("* Run {line} ({how})."));
+    editor.log.info(format!(
+        "* Run {line} (the installed engine {}, started in place in the game root {}).",
+        exe.display(),
+        cwd.display()
+    ));
     let lb = LevelBuild::of(session);
     let (ed, lb2) = (editor.clone(), lb.clone());
     let id = editor
@@ -375,8 +375,7 @@ fn start_game(
     Ok(json!({
         "started": Running::Game.name(),
         "command": line,
-        "play": root.mode.name(),
-        "exe": root.exe.display().to_string().replace('\\', "/"),
+        "exe":root.exe.display().to_string().replace('\\', "/"),
     }))
 }
 
@@ -391,7 +390,7 @@ fn linked_game(editor: &Editor) -> Result<String, CmdError> {
 }
 
 /// Where Play runs the game: its root (`root=`, else [`crate::play_root::default_root`]), what
-/// the root checks compare with, the project's write guard, and what the caller adds to the
+/// the root checks compare with, the project's write guard and what the caller adds to the
 /// command line (`params=`).
 struct PlayPlace {
     root: PathBuf,
@@ -415,7 +414,8 @@ async fn play_context(editor: &Arc<Editor>) -> DeleteContext {
         .await
 }
 
-/// The root of a Play, checked before anything is built or written (and again by `prepare`).
+/// The root of a Play and the linked game's engine, checked before anything is built or written
+/// (and again by `prepare`): an engine that does not run in place is refused here.
 async fn play_place(
     editor: &Arc<Editor>,
     session: &Arc<ProjectSession>,
@@ -429,9 +429,17 @@ async fn play_place(
             crate::play_root::default_root(&session.root, home)
         }
     };
+    let game = PathBuf::from(linked_game(editor)?);
     let context = Arc::new(play_context(editor).await);
     let (r, cx) = (root.clone(), context.clone());
-    editor.exec.io(move || crate::play_root::check_root(&cx, &r)).await.map_err(CmdError::invalid)?;
+    editor
+        .exec
+        .io(move || {
+            crate::play::ready_engine(&game, &crate::play::LINKED_GAME)?;
+            crate::play_root::check_root(&cx, &r)
+        })
+        .await
+        .map_err(CmdError::invalid)?;
     Ok(PlayPlace {
         root,
         params: a.text("params").unwrap_or_default().to_owned(),
@@ -440,17 +448,14 @@ async fn play_place(
     })
 }
 
-/// `play_root`'s answer: the root, what it was, the programs copied.
+/// `play_root`'s answer: the root, what it was, the installed engine it runs.
 fn root_answer(r: &crate::play::PlayRoot) -> serde_json::Value {
     json!({
         "root": r.root.display().to_string().replace('\\', "/"),
         "was": r.was,
         "exe": r.exe.file_name().map(|n| n.to_string_lossy().into_owned()),
         "exe_path": r.exe.display().to_string().replace('\\', "/"),
-        "play": r.mode.name(),
         "path_limit": r.path_limit,
-        "programs": r.programs.len(),
-        "program_bytes": r.program_bytes,
         "walked": r.walked,
         "walk_ms": r.walk_ms,
     })
@@ -1133,7 +1138,6 @@ async fn run_action(
             Ok(json!({
                 "run": started,
                 "root": ready.root.display().to_string().replace('\\', "/"),
-                "play": ready.mode.name(),
             }))
         }
     }

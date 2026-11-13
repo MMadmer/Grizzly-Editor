@@ -640,13 +640,13 @@ def phase_y_marked() -> None:
     try:
         made = mcp("level_build", action="play_root", root=root, timeout=120)
         if not check(made.get("ok") and made.get("was") == "empty",
-                     "Y play_root makes Play's root in an empty folder (%s, %s programs, paths up to %s)"
-                     % (made.get("play"), made.get("programs"), made.get("path_limit")), short(made)):
+                     "Y play_root makes Play's root in an empty folder (paths up to %s)" % made.get("path_limit"),
+                     short(made)):
             return
-        # the linked game's engine says it runs in place: the root holds no program and no link
+        # the installed engine runs in place: the root holds no program and no link
         top = sorted(os.listdir(root))
         programs = [n for n in top if n.lower().endswith((".exe", ".dll"))]
-        check(made.get("play") == "in_place" and made.get("programs") == 0 and not programs
+        check(not any(k in made for k in ("play", "play_reason", "programs", "program_bytes")) and not programs
               and not os.path.lexists(os.path.join(root, "database"))
               and made.get("exe_path", "").lower().endswith("/xrengine.exe")
               and not made.get("exe_path", "").lower().startswith(root.replace("\\", "/").lower()),

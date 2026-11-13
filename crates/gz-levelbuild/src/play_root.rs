@@ -22,7 +22,9 @@ use gz_project::{DeleteContext, Guard, paths};
 /// entry of the root's top Play writes, before it writes it - the only entries Play ever removes
 /// or overwrites there.
 pub const MARKER: &str = "play_root.txt";
-const MARKER_HEAD: &str = "; A game root made by Play of the level editor. Play clears only what it writes here: the programs\r\n; below, gamedata\\, the staged level; nothing else in this folder is touched.\r\n";
+const MARKER_HEAD: &str = "; A game root made by Play of the level editor. Play clears only what it writes here: the entries\r\n; below, gamedata\\, the staged level; nothing else in this folder is touched.\r\n";
+/// What an earlier editor listed for the engine it copied into the root: read, so Play removes
+/// those copies, and never written.
 const PROGRAM_KEY: &str = "program = ";
 const ENTRY_KEY: &str = "entry = ";
 
@@ -33,7 +35,8 @@ pub enum RootState {
     Missing,
     /// An empty folder: Play makes its root in it.
     Empty,
-    /// Play's own root, with the programs and the other entries its marker lists.
+    /// Play's own root, with the entries its marker lists and the programs an earlier editor
+    /// copied there.
     Marked { programs: Vec<String>, entries: Vec<String> },
 }
 
@@ -108,9 +111,9 @@ fn marker_names(text: &str, key: &str) -> Vec<String> {
     out
 }
 
-/// A marker's line for a program (`program = `) or another entry (`entry = `).
-pub(crate) fn marker_line(program: bool, name: &str) -> String {
-    format!("{}{name}\r\n", if program { PROGRAM_KEY } else { ENTRY_KEY })
+/// A marker's line for an entry (`entry = `).
+pub(crate) fn marker_line(name: &str) -> String {
+    format!("{ENTRY_KEY}{name}\r\n")
 }
 
 /// A file name of the root's top: no separator, no `..`, no stream.
@@ -123,14 +126,11 @@ pub(crate) fn marker_head() -> &'static str {
     MARKER_HEAD
 }
 
-/// The marker's text for `programs` and the other `entries`.
-pub(crate) fn marker_text(programs: &[String], entries: &[String]) -> String {
+/// The marker's text for `entries`.
+pub(crate) fn marker_text(entries: &[String]) -> String {
     let mut out = MARKER_HEAD.to_owned();
-    for p in programs {
-        out.push_str(&marker_line(true, p));
-    }
     for e in entries {
-        out.push_str(&marker_line(false, e));
+        out.push_str(&marker_line(e));
     }
     out
 }
@@ -306,7 +306,8 @@ mod tests {
         assert_eq!(check_root(&cx, &missing).unwrap(), RootState::Missing);
         fs::create_dir_all(&missing).unwrap();
         assert_eq!(check_root(&cx, &missing).unwrap(), RootState::Empty);
-        let text = marker_text(&["engine.bin".to_owned(), "..\\x".to_owned()], &["gamedata".to_owned()]);
+        // the programs an earlier editor copied are listed too
+        let text = format!("{MARKER_HEAD}program = engine.bin\r\nprogram = ..\\x\r\nentry = gamedata\r\n");
         fs::write(missing.join(MARKER), text).unwrap();
         fs::create_dir_all(missing.join("gamedata")).unwrap();
         // a marker names plain file names only
@@ -325,7 +326,7 @@ mod tests {
         let cx = DeleteContext::default();
         let root = base.path().join("play");
         fs::create_dir_all(root.join("gamedata").join("mods").join("my_mod")).unwrap();
-        fs::write(root.join(MARKER), marker_text(&[], &["gamedata".to_owned()])).unwrap();
+        fs::write(root.join(MARKER), marker_text(&["gamedata".to_owned()])).unwrap();
         fs::write(root.join("gamedata").join("mods").join("my_mod").join("mod.ltx"), b"[module]").unwrap();
         let before = listing(base.path());
         let why = check_root(&cx, &root).unwrap_err();
@@ -416,7 +417,7 @@ mod tests {
         let game = base.path().join("game");
         fs::create_dir_all(&game).unwrap();
         let link = base.path().join("link");
-        let made = std::process::Command::new("cmd")
+        let made = crate::process::console("cmd")
             .args(["/c", "mklink", "/J"])
             .arg(&link)
             .arg(&game)
