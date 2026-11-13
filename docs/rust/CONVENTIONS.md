@@ -28,7 +28,9 @@ The rules every crate under `crates/` follows. The plan and the architecture are
 ## State and threads
 
 - No `static` that holds state, no lazily initialised global, no singleton accessor. What a
-  function needs it takes as an argument.
+  function needs it takes as an argument. The one task-local, `gz-task`'s `SCOPE` (the jobs a
+  request started), is context of a request's task, not state: it holds nothing between
+  requests.
 - Layers 1-3 are **pure**: functions over `&` data that return values. No logging (return
   warnings as data), no thread of your own, no async, no file access that is not the function's
   stated job.
@@ -150,10 +152,12 @@ Rules for commands:
 
 - Touch only the crates you were given. If `cargo` fails on somebody else's manifest or code,
   wait and retry; do not fix it.
-- Compile with `cargo check -p <crate>` (and `--tests` once). The target directory is shared:
-  "Blocking waiting for file lock" is normal, wait for it.
+- Every cargo command goes through `bash tools/rust/cg.sh <cargo args>` (`check -p <crate>` while
+  editing). The target directory is shared: "Blocking waiting for file lock" is normal, wait
+  for it.
 - **Running the editor for a look** goes through `tools/rust/run-editor.ps1` only: one run at
   a time on the machine (a lock), the project list and the settings file restored byte for
   byte, the window minimised. Never start `Grizzly.exe` by hand.
-- **Tests are written, not run.** Unit tests with small inline fixtures go into the crate;
-  running them is the last phase of the migration.
+- **Tests are written and run.** Unit tests with small inline fixtures go into the crate;
+  `bash tools/rust/test.sh` runs the test binaries that changed since they were green (`--all`:
+  everything and the whole corpus), under the net that fails a test that writes a program file.

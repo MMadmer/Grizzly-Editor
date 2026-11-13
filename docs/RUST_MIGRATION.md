@@ -320,7 +320,10 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
 
 **Shared state.**
 
-- No `static mut`, no lazily initialised global holding state, no singleton accessor.
+- No `static mut`, no lazily initialised global holding state, no singleton accessor. One
+  task-local exists and is context, not state: `gz-task`'s `SCOPE`, the jobs a request
+  started - a value only inside the future a request runs and the closure the UI queue runs
+  for it; the key holds nothing between requests.
 - `Rc` and `RefCell` only in a surface's own view state on the UI thread.
 - A mutex guards a small private structure and is never held across an `.await`, a frame or
   a call into another module. Two locks at once need a documented order.
@@ -333,7 +336,10 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
 - Pure Rust first. The C dependencies are two: LuaJIT (vendored by `mlua`) and libvorbis with
   the aoTuV tunings (vendored by `vorbis_rs`, a safe API) for the game sounds the Sound Library
   encodes.
-- Nothing under a copyleft-only license is linked. The engine's LZO (GPL) is not ported: the
+- No strong copyleft is linked - nothing GPL- or LGPL-only - and `tools/rust/notices.py` holds
+  the list of licenses a linked crate may have (`check.sh` fails on any other). Two crates are
+  MPL-2.0 (`imbl`, `imbl-sized-chunks`): copyleft per file, linked unmodified, their source
+  named in the notices, which the editor's MIT allows beside it. The engine's LZO (GPL) is not ported: the
   editor only reads LZO blocks (the game's archives), through `lzokay-native` (MIT, a port of
   lzokay, an implementation of the format of its own), and writes none. The editor itself is
   MIT (`LICENSE`, beside the programs as `LICENSE.txt`).
@@ -357,7 +363,8 @@ passes a harmless one to the code under test; data that never reaches the disk i
 `// program-files: in memory`. `tools/rust/check_test_files.py` holds it in the sources, a step of
 `check.sh`; `tools/rust/test.sh` holds it at run time: the test binaries get a temp folder of their
 own, and a file made there with a program's name or an `MZ` head fails the run, even one that
-lives a millisecond (`tools/rust/watch_programs.py`).
+lives a millisecond (`tools/rust/watch_programs.py`); the repository's own tree is watched the
+same way while the binaries run (not `Intermediate\cargo`, where cargo writes its programs).
 
 ## 7. Workspace
 
@@ -367,7 +374,7 @@ a higher one; layers 0-3 depend on neither egui nor wgpu.
 | Layer | Crates |
 |---|---|
 | 0 Base | `gz-base` (ids, revisions, `Pt`, paths, cp1251, `Origin`), `gz-task` (executors, jobs, cancel), `gz-store`, `gz-query`, `gz-log`, `gz-crash`, `gz-win`, `gz-corpus` (support of the corpus tests), `gz-ico` (the editor's icon file and the resource that carries it in an executable) |
-| 1 Formats | `gz-ltx` (lossless: comments, order and spacing survive an edit), `gz-luadata` (declarative Lua, refuses code), `gz-chunk` (chunk streams, LZO), `gz-fmt-object`, `gz-fmt-ogf`, `gz-fmt-tex` (DDS, TGA, THM), `gz-fmt-level` (cform, xcform, AI map, details), `gz-fmt-spawn` (`all.spawn`, game graph, patrols), `gz-entities` (server entity schema and packets), `gz-fmt-xr` (`shaders.xr`, `gamemtl.xr`, `lanims.xr`, `particles.xr`), `gz-fmt-xml`, `gz-fmt-sound` |
+| 1 Formats | `gz-ltx` (the one lossless line model of LTX text - comments, order and spacing survive an edit: `CInifile`'s lines and the module manifest's, `Syntax::Ini` / `Syntax::Manifest`, with `Placement` for where a new line goes; `gz-mod`'s `ManifestDoc` is it read by the manifest's rules), `gz-luadata` (declarative Lua, refuses code), `gz-chunk` (chunk streams, LZO), `gz-fmt-object`, `gz-fmt-ogf`, `gz-fmt-tex` (DDS, TGA, THM), `gz-fmt-level` (cform, xcform, AI map, details), `gz-fmt-spawn` (`all.spawn`, game graph, patrols), `gz-entities` (server entity schema and packets), `gz-fmt-xr` (`shaders.xr`, `gamemtl.xr`, `lanims.xr`, `particles.xr`), `gz-fmt-xml`, `gz-fmt-sound` |
 | 2 Game link | `gz-vfs`, `gz-lua` (host for the game's pure-Lua readers) |
 | 3 Domain | `gz-editor` (the editor's handle: stores, services, the command registry, the frame clock), `gz-project`, `gz-game` (configs, strings, modes, communities, ranks, trade presets, fonts, kind catalog, world: it reads the mount the project holds, so it sits above `gz-project`), `gz-mod`, `gz-nq`, `gz-characters`, `gz-pda`, `gz-screens`, `gz-world`, `gz-build`, `gz-release` (packages, the index, signing, the VirusTotal scan), `gz-github`, `gz-publish`, `gz-catalog`, `gz-scene`, `gz-particles`, `gz-export-level`, `gz-lc-light` (the level compiler's data model and its light), `gz-lc` (the level compiler), `gz-levelbuild` |
 | 4 Presentation | `gz-mcp` (the server and the catalogue), `gz-ui` (the kit, icons), `gz-render`, `gz-app` (the window, the shell, the command table), and a crate per surface: `gz-ui-app` (Start page), `gz-ui-content`, `gz-ui-graph`, `gz-ui-level`, `gz-ui-viewport`, `gz-ui-mod`, `gz-ui-pda`, `gz-ui-previews`, `gz-ui-release`, `gz-ui-world` |
@@ -444,7 +451,10 @@ byte unless named here; there is no broad ignore (`diff_editors.py` `FILE_RULES`
   the float operations differently); fields the C++ never initialises left out (a LOD
   material's `reserved` and `area`, an unset `Flight`).
 - `level.spawn`: the Rust build's breakable and climable entries are extra (D10); a smart
-  cover's loopholes as a set (the C++ order is Lua's `pairs`).
+  cover's loopholes as a set (the C++ order is Lua's `pairs`). A new scene-made entity's
+  packet carries the block the C++ editor's script run writes (it runs the repository's CoP
+  scripts, where `STATE_Read` returns early in the editor): a `se_zone_*` writes `u8 0`, a
+  smart terrain six `0` bytes and `u16 6`.
 - A portal of `build.prj`: sectors and corner counts equal, corners within 0.1 mm (the corners go
   onto the portal's plane and back in float with the operations in another order); a portal
   simplified from more than six corners passes when the two polygons' areas agree within 2 %.
@@ -479,13 +489,17 @@ runs differ in is known and is the floor. Byte for byte unless named here:
   runs differ, and so do two builds of one source. Two stray bits the C++ leaves on a
   triangle at the Draft quality (never set) are left out.
 - **The light**, per channel in 0..255 steps as mean absolute error and 99th percentile:
-  lightmaps and implicitly lit textures within 1.5 / 16, vertex light within 0.2 / 2 - about
-  twice what was seen (lightmaps 0.85 / 12 on the implicit scene's sun, vertex light 0.085 / 1) - and the detail
-  objects' light byte for byte. Every lightmapped triangle is sampled through each side's own
+  the light itself - the first picture's colour and alpha (the sun), the second picture's
+  alpha (the hemisphere), the implicitly lit textures - within 1.5 / 16, vertex light within
+  0.2 / 2, each about twice the largest seen over the seventeen scenes (0.68 / 8, the sun
+  0.44 / 7; vertex light 0.085 / 1), and the detail objects' light byte for byte. Every lightmapped triangle is sampled through each side's own
   coordinates, the flat ones (a deflector the light found flat shrinks to a texel or a line)
-  along their line or at their texel. Every channel is judged as it is; the second picture's
-  red and blue, DXT5's 5-bit channels where the two encoders round a flat value two steps
-  apart, within 3 / 16 (the game reads that picture's green). What the bounds allow
+  along their line or at their texel. Every channel is judged as it is. The sun is written a
+  second time into the second picture's colour, a DXT5 block of four levels whose green the
+  game reads: at a shadow's edge the two encoders pick other colours for a block, so that
+  copy is held to 2 / 28 (seen 1.00 / 14) and its red and blue, 5-bit channels, to 4 / 32
+  (seen 2.00 / 16) - what the light really differs in shows in the first picture's alpha.
+  What the bounds allow
   is what the port differs in: another DXT5 encoder, another ray-triangle test on grazing
   faces, Rust's `sin` / `cos` / `pow`. A deflector that the light moves to another lightmap
   page takes its triangles along: the static geometry is then compared as one multiset whose
@@ -542,7 +556,9 @@ Two consequences worth stating:
 1. **The oracle.** The C++ editor at the branch point, driven over MCP.
    `tools/qa/diff_editors.py` runs both editors side by side on copies of one project; the
    C++ compilers on the same `build.prj`, `tools/qa/diff_compile.py`. Both work from the
-   records of the C++ side (I5).
+   records of the C++ side (I5): the editor's are keyed with the stamp the C++ editor had at
+   the cutover (`diff_editors.py` `CPP_STAMP`), the compilers' by the tag, so a rebuild beside
+   them throws no record away.
 2. **Golden files** for the rows of section 9, and for every format read the corpus: parse,
    write, compare over the linked game's and the projects' own files. `tools/rust/test.sh`
    runs only the test binaries that changed since they were green; `--all` runs everything

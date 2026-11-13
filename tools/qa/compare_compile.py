@@ -53,13 +53,15 @@ Rules (one per chunk; anything else is byte for byte):
                       shrank (about half of all) - by the texels along its longest side, or the one under it, again
                       through each side's own coordinates (flat_samples). Mean absolute error and 99th percentile per
                       channel over all samples, under the bounds below; the flat ones are reported on their own too.
-                      Every channel is judged as it is. The second picture's colour is the sun once more
-                      (Pack_hemi) and the game reads its green (get_sun: lmh.g of s_hemi); its red and blue are
-                      DXT5's 5-bit channels, where the two encoders round a flat value two steps apart (mp_test:
-                      mean 2.0, p99 2), so those two are held to 3 / 16 (LIGHT_MEAN_5BIT), the others to the
-                      bounds below. (A rule that took each side's own difference between its two copies of the
-                      sun off the second picture's colour was a hidden difference - a black or a noisy second
-                      picture passed it - and is gone.)
+                      Every channel is judged as it is, under the bound of its kind (below). The sun is written
+                      twice: into the first picture's alpha (eight levels a block: what the light really differs
+                      in shows there) and into the second picture's colour (Pack_hemi: a DXT5 colour block, four
+                      levels from two 5-6-5 colours), whose green the game reads (get_sun: lmh.g of s_hemi). At a
+                      shadow's edge the two encoders pick other colours for a block, so that copy differs more
+                      than the light does, and its red and blue - 5-bit channels, where a flat value already
+                      rounds two steps apart - more again. (A rule that took each side's own difference between
+                      its two copies of the sun off the second picture's colour was a hidden difference - a
+                      black or a noisy second picture passed it - and is gone.)
   implicit textures   texel by texel (the layout is the texture's own), under the lightmap bounds.
   recalculation_data_slots.details   the C++ detail compiler's state for its partial relight, read by nothing but
                       its own next run: not written (the resumed light is not ported).
@@ -125,8 +127,8 @@ XrLC linked to a 128 MB stack, STATE.md "Closing: the compiler's proof"):
   The detail compiler: mp_close_combat (the Rust build.cform), mp_close_combat_implicit, _whole, the Draft scene.
   At a scene's own settings with MU models: mp_close_combat_whole and l03u_agr_underground_own (10 px/m, nine
     samples, no -noise: two pages, the static progressive meshes; XrLC 1187 / 1154 s a run).
-  Not recorded: a level with implicit light loaded by the game (the game loaded mp_test and l03u_agr_underground;
-    the files it reads are the ones compared here). Dropped: -gi, -net (D24).
+  The game is the judge too: it loads mp_test, l03u_agr_underground and mp_close_combat - implicit light and MU
+    models in one level - built by Play (tools/qa/test_play_game.py --scene). Dropped: -gi, -net (D24).
 """
 from __future__ import annotations
 
@@ -138,27 +140,29 @@ from collections import Counter
 
 import numpy as np
 
-VERSION = 9
+VERSION = 10
 
-# The bounds of the light, per channel in 0..255 steps (mean absolute error, 99th percentile), about twice the largest
-# seen over every recorded scene (flat triangles included, every channel as it is):
-#   lightmaps and implicit textures  seen mean 0.85, p99 12 (mp_close_combat_implicit, 2.g - the sun the game
-#                                    reads), 0.68 / 8 on the first picture (l12u_control_monolith, 1.r); the
-#                                    implicit texture 0.02 / 1 (mp_close_combat_implicit)
+# The bounds of the light, per channel in 0..255 steps (mean absolute error, 99th percentile): about twice the
+# largest seen over every recorded scene (Intermediate/close-compiler/final_all.out, flat triangles included,
+# every channel as it is), so a bound is never met at equality:
+#   the light itself - the first picture's colour and alpha (the sun), the second picture's alpha (the hemisphere),
+#   the implicit textures:      seen 0.68 / 8 (l12u_control_monolith, 1.r); the sun 0.44 / 7 and the hemisphere
+#                                0.65 / 7 (mp_close_combat_whole, mp_close_combat_implicit)     -> 1.5 / 16
+#   the sun's second copy, 2.g:  seen 1.00 / 14 (mp_close_combat_whole)                          -> 2.0 / 28
+#   its 5-bit channels, 2.r 2.b: seen 2.00 (mp_test, a flat value) / 16 (mp_close_combat_whole)  -> 4.0 / 32
 #   vertex light, MU models' light   seen mean 0.085 (mp_close_combat_implicit, level.geom), p99 1
 #                                    (l03u_agr_underground, the LODs of the references lit alone)
 #   the detail objects' light        level.details byte for byte on every scene: no bound
 # The C++'s own two runs are the floor: zero but on the shrunk (flat) deflectors, where they differ in one texel of
 # a thousand or less by up to 127 (l03u, l12u, mp_close_combat_implicit) - most likely the cached triangle of the C++ light
 # (xrDeflectorLight.cpp rayTrace, R_Light::tri), which every thread writes. What the bounds allow is the DXT5 encoder
-# (NVTT there, texpresso here: a flat 128 decodes as 126 against 128), another ray-triangle test than Opcode's on
-# grazing and coincident faces, the transparencies multiplied nearest first, Rust's sin/cos/pow.
+# (NVTT there, texpresso here: a flat 128 decodes as 126 against 128; another pair of colours for a block at a
+# shadow's edge), another ray-triangle test than Opcode's on grazing and coincident faces, the transparencies
+# multiplied nearest first, Rust's sin/cos/pow.
 LIGHT_MEAN = 1.5
 LIGHT_P99 = 16.0
-# The second picture's red and blue: DXT5's 5-bit colour channels, where NVTT and texpresso round a flat value two
-# steps apart (seen: mean 2.0, p99 2 on mp_test). The game reads that picture's green.
-LIGHT_MEAN_5BIT = 3.0
-FIVE_BIT = ("2.r", "2.b")
+# (mean, p99) of a lightmap channel that is not the light itself: the sun's copy in the second picture's colour.
+LIGHT_BOUNDS = {"2.g": (2.0, 28.0), "2.r": (4.0, 32.0), "2.b": (4.0, 32.0)}
 VERTEX_MEAN = 0.2
 VERTEX_P99 = 2.0
 # An MU reference's light (a tree's c_scale / c_bias through its vertices, a LOD's corner colours): the C++ lights
@@ -1242,9 +1246,9 @@ def judge(res: dict, floor: dict) -> list[str]:
             bad.append(f"MU {name} light: mean {s['mean']:.2f}, p99 {s['p99']:.1f} (bounds {mb}, {pb})")
     lm = res["light"].get("lightmaps", {})
     for ch, s in lm.items():
-        mean_bound = LIGHT_MEAN_5BIT if ch in FIVE_BIT else LIGHT_MEAN
-        if isinstance(s, dict) and (s["mean"] > mean_bound or s["p99"] > LIGHT_P99):
-            bad.append(f"lightmap channel {ch}: mean {s['mean']:.2f}, p99 {s['p99']:.1f} (bounds {mean_bound}, {LIGHT_P99})")
+        mean_bound, p99_bound = LIGHT_BOUNDS.get(ch, (LIGHT_MEAN, LIGHT_P99))
+        if isinstance(s, dict) and (s["mean"] > mean_bound or s["p99"] > p99_bound):
+            bad.append(f"lightmap channel {ch}: mean {s['mean']:.2f}, p99 {s['p99']:.1f} (bounds {mean_bound}, {p99_bound})")
     for n, s in res["vertex"].items():
         if s["mean"] > VERTEX_MEAN or s["p99"] > VERTEX_P99:
             bad.append(f"{n} vertex light: mean {s['mean']:.2f}, p99 {s['p99']:.1f}")

@@ -111,8 +111,9 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   `// program-files: in memory`. `tools/rust/check_test_files.py` holds it in the sources (a step of `check.sh`),
   and `tools/rust/test.sh` at run time: the test binaries get a temp folder of their own, and a file made there with a
   program's name or an `MZ` head fails the run (`tools/rust/watch_programs.py`).
-- The editor is MIT (`LICENSE`; `Build.ps1` puts it beside the programs as `LICENSE.txt`). Nothing under a
-  copyleft-only license is linked: a new dependency keeps it so.
+- The editor is MIT (`LICENSE`; `Build.ps1` puts it beside the programs as `LICENSE.txt`). No strong copyleft (GPL,
+  LGPL) is linked: `tools/rust/notices.py` holds the list of licenses a linked crate may have (MPL-2.0, copyleft
+  per file, is on it) and fails on any other, so a new dependency keeps it so.
 - `licenses\THIRD_PARTY_NOTICES.txt` is made by `python tools/rust/notices.py` from what the two programs link; a
   dependency added or removed means running it again (`check.sh` says so).
 - Test run: `Grizzly.exe -project "<project>" -nodlg` (`-nodlg` = no modals: the logged answers - No for a question,

@@ -9,6 +9,11 @@ for Windows - normal dependencies only: a build script's and a proc macro's own 
 are not in the programs. Each crate is listed with its version, the license its manifest states and its
 repository; the license files the crates ship follow, each text once with the crates that carry it.
 
+The editor is MIT, and what it links must let it be: every linked crate's license expression needs an
+alternative from ALLOWED - permissive licenses, and MPL-2.0, whose copyleft is per file (the crate is linked
+unmodified and its source named here). A crate with no such alternative (GPL- or LGPL-only, or no license stated)
+fails both the writing and `--check`, naming the crate.
+
 It reads `cargo metadata` (the lock file and the registry's sources on this machine); nothing is downloaded.
 """
 import hashlib
@@ -25,6 +30,57 @@ ROOTS = ("grizzly", "gz-mcp-bridge")
 TARGET = "x86_64-pc-windows-msvc"
 LICENSE_FILE = re.compile(r"^(licen[sc]e|copying|notice|unlicense|copyright)", re.IGNORECASE)
 WIDTH = 100
+# What a linked crate may be licensed under (SPDX ids). Not here on purpose: GPL, LGPL, AGPL, SSPL, EUPL, and
+# anything that asks more of the program that links it than a notice.
+ALLOWED = {
+    "MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "0BSD",
+    "Unlicense", "CC0-1.0", "BSL-1.0", "Unicode-3.0", "Unicode-DFS-2016",
+    # fonts a crate embeds
+    "OFL-1.1", "Ubuntu-font-1.0",
+    # copyleft per file: linked unmodified, the source named in the notices
+    "MPL-2.0", "MPL-2.0+",
+}
+
+
+def _split(expr: str, word: str) -> list[str]:
+    """`expr` cut at ` word ` outside parentheses."""
+    parts, depth, start, i = [], 0, 0, 0
+    needle = f" {word} "
+    while i < len(expr):
+        ch = expr[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0 and expr.startswith(needle, i):
+            parts.append(expr[start:i])
+            i += len(needle)
+            start = i
+            continue
+        i += 1
+    parts.append(expr[start:])
+    return [x.strip() for x in parts]
+
+
+def acceptable(expr: str | None) -> bool:
+    """Whether a license expression leaves a way to link under ALLOWED: one alternative of every OR, every part
+    of an AND (`/` is the old spelling of OR)."""
+    if not expr:
+        return False
+
+    def any_of(e: str) -> bool:
+        return any(all_of(x) for x in _split(e, "OR"))
+
+    def all_of(e: str) -> bool:
+        parts = _split(e, "AND")
+        if len(parts) > 1:
+            return all(any_of(x) for x in parts)
+        e = e.strip()
+        if e.startswith("(") and e.endswith(")"):
+            return any_of(e[1:-1])
+        return e in ALLOWED
+
+    return any_of(expr.replace("/", " OR "))
 
 
 def metadata() -> dict:
@@ -104,6 +160,11 @@ def build() -> str:
     with open(HEAD, "rb") as f:
         head = f.read().decode("utf-8").replace("\r\n", "\n").rstrip() + "\n"
     crates = linked(metadata())
+    refused = [f"{c['name']} {c['version']} ({c.get('license') or 'no license stated'})" for c in crates
+               if not acceptable(c.get("license"))]
+    if refused:
+        sys.exit("a linked crate has no license the editor may link under (tools/rust/notices.py ALLOWED):\n  "
+                 + "\n  ".join(refused))
     out = [head, "", "Rust crates", "===========", "",
            f"The two programs link {len(crates)} third-party crates (their normal dependencies for Windows). Each is",
            "listed with the license its manifest states; the license files the crates ship follow, each text",

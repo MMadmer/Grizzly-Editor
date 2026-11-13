@@ -39,7 +39,7 @@ code's stubs and every command of the registry. Each statement below is also mar
 | The final review, the lead: the editor's license not decided | MIT (`77575f32`) |
 | The final review, the lead: Play copies the engine (a change of the game) | closed by the Play engineer: "Closing: Play in place" (the installed engine on another fs config) |
 | For the plan: the game root's depth "to be lifted" in the game | closed by the Play engineer: "Closing: Play in place" (`string_path`, `longPathAware`) |
-| For the plan (both): the notes for the plan | folded but four, kept in "For the plan"; the layer table its own section |
+| For the plan (both): the notes for the plan | folded - the last four after the last review; the layer table its own section |
 | For the plan: drawing the viewport only when it can change "the shell's next step" | "After phase 8c: the window while a job runs", 1 |
 | Next packages, in dependency order | history: every one done |
 | PARITY.md: 24 rows `differs` / `unjudged` the list had closed or the plan explains | each says where (or its D); "Unjudged" judged |
@@ -2591,22 +2591,10 @@ steps ran on the binary before them (`d0ea0509`), which differs in `crates/gz-ui
 
 ## For the plan
 
-What `docs/RUST_MIGRATION.md` lacks still (the lead folds it). Everything this section held before the close sweep is
-in the plan now - phase 8's gate as passed, D1 (the game graph, the root's depth, the root as built), D14, D20,
-D21, D23 - D27, sections 5.4, 5.9 (`WriteGuard`), 7, 8, 9 (the rules of both comparisons, the light bounds, what is
-not proven), 10.8 / 10.9 (drawing on demand, power throttling), 13, I5, phase 7 and phase 8's cleanup; the layer
-table is "The crates' layers" below, where section 7 points.
-
-- **Section 9 or a finding of section 12**: a new scene-made entity's packet carries the editor script's block the
-  C++ editor writes (it runs the repository's CoP scripts, where `STATE_Read` returns early in the editor): a
-  `se_zone_*` writes `u8 0`, a smart terrain six `0` bytes and `u16 6`.
-- **Section 10.1**: the oracle's records are keyed with the stamp the C++ editor had at the cutover
-  (`diff_editors.py` `CPP_STAMP`), so a rebuild beside it does not throw them away.
-- **Section 7, `gz-ltx`**: "the one lossless line model of LTX text: `CInifile`'s lines and the module manifest's
-  (`Syntax::Ini` / `Syntax::Manifest`, `Placement` for where new lines go); `gz-mod`'s `ManifestDoc` is it read by
-  the manifest's rules".
-- **Section 10, the tests' net**: `test.sh` watches the repository's own tree too while the binaries run (not
-  `Intermediate\cargo`; a file made meanwhile only), beside the binaries' temp folder.
+Nothing: everything this section held is in `docs/RUST_MIGRATION.md` - the four notes the close sweep left
+here (the scene-made entity's script block in section 9, the records' keys in 10.1, `gz-ltx` in section 7, the
+tests' net over the repository in section 6) were folded after the last review. The layer table is "The
+crates' layers" below, where section 7 points.
 
 ## The crates' layers
 

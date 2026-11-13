@@ -19,7 +19,7 @@ recorded as `same`; answer values and types were not compared (see Unjudged).
 
 Other agents were writing while this was read: `crates/gz-scene/src/objtools/` and
 `crates/gz-particles/` appeared untracked during the audit (the briefs `tools-objects.md` and
-`render-rest.md`); what they add is ledgered as `in work`, not judged.
+`render-rest.md`); what they added was ledgered as in work at the audit and has been judged since (its rows say where).
 
 Counts: 333 items walked; after the parity work of 2026-11-12 no row is `missing`: every one of the 52 is `same` with where the Rust editor has it, `dropped` (`REFRESH_SOUND_ENV_GEOMETRY`: its C++ body does nothing) or `differs (D18)` (the Targets switches) - see the rows.
 
@@ -61,7 +61,7 @@ Every `missing` and `differs` item, by area. Size: S (a day or less), M (days), 
 - closed S - View > Render > Quality 25 / 50 / 100 / 200 %: `DrawViewportOptions` (`UI->SetRenderQuality`).
 - closed S - Fill Mode (Point / Wireframe / Solid), Shade Mode, Edged Faces, Linear Filtering, Textures, Fog, Environment are `view_mode` arguments but not in the View menu or the Options pill (only a Wireframe toggle): `DrawViewportOptions`; Rust `gz-ui-viewport/src/menus.rs` `options_body`.
 - closed S - View > Mute Sounds and Real Time: `DrawViewportOptions` (`rsMuteSounds`, `rsRenderRealTime`), `UI_MainCommand.cpp` `CommandMuteSound`.
-- closed S - Show AI Map toggle (`COMMAND_TOGGLE_AIMAP_VISIBILITY`, the `\` key): `UI_LevelMain.cpp` `CommandToggleAiMapVisibility` (the AI map's drawing itself is in work).
+- closed S - Show AI Map toggle (`COMMAND_TOGGLE_AIMAP_VISIBILITY`, the `\` key): `UI_LevelMain.cpp` `CommandToggleAiMapVisibility` (the AI map's drawing: `gz-ui-viewport`'s `draw_aimap.rs`).
 
 ### Content Browser
 
@@ -422,7 +422,7 @@ Rust handler.
 | `screens_get` | `LevelEditor/Editor/Mcp/LevelMcpMod.cpp` | `gz-screens` | same | every argument name found read in the handler crate (0: none) |
 | `screens_set` | `LevelEditor/Editor/Mcp/LevelMcpMod.cpp` | `gz-screens` | differs | `action=drop` always fills the loading surface; C++ `EditorScreens::McpSet` used the tab's selected surface; arguments read (23) |
 | `screens_view` | `LevelEditor/Editor/Mcp/LevelMcpMod.cpp` | `gz-ui-pda` | same | every argument name found read in the handler crate (8: layer, open, screen, simulate_drop, surface, track, x, y) |
-| `screenshot_editor` | `XrECore/Editor/GrizzlyMCP.cpp` | `gz-app`, `grizzly` | differs | `busy` is always false and `outside` always `[]` (`gz-app/src/shots.rs`); the C++ answers the frame's busy state (`GrizzlyMCP.cpp`) - `outside` waits for panels outside the window (in work) |
+| `screenshot_editor` | `XrECore/Editor/GrizzlyMCP.cpp` | `gz-app`, `grizzly` | same | answers the frame's `busy` state and the windows `outside` the picture (`gz-app/src/shots.rs`, `window.rs`), as the C++ did |
 | `screenshot_viewport` | `XrECore/Editor/GrizzlyMCP.cpp` | `gz-ui-viewport` | same | every argument name found read in the handler crate (0: none) |
 | `select_objects` | `LevelEditor/Editor/Mcp/LevelMcpScene.cpp` | `gz-scene` | same | every argument name found read in the handler crate (1: names) |
 | `selection` | `LevelEditor/Editor/Mcp/LevelMcpScene.cpp` | `gz-scene` | same | every argument name found read in the handler crate (0: none) |
