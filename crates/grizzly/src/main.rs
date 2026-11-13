@@ -7,6 +7,7 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod cli;
+mod commandlet;
 mod compile;
 mod core_cmds;
 mod startup;
@@ -43,37 +44,26 @@ fn app_paths(cli: &Cli) -> AppPaths {
     AppPaths { exe_dir, appdata: root.join("_appdata_"), logs: home.join("logs"), home, root }
 }
 
-/// A line for whoever reads this run's output. `false` once the reader is gone (a closed pipe, a
-/// stream the shell gave and does not take): the run stops printing and ends as it would have.
-fn say(line: &str) -> bool {
-    writeln!(std::io::stdout().lock(), "{line}").is_ok()
-}
-
 fn main() -> ExitCode {
     let mut startup = Startup::begin();
     let cli = Cli::parse(std::env::args());
     if cli.windowless() {
         gz_win::attach_parent_console();
     }
-    // before the log: a check of the binary writes nothing
-    if cli.catalogue {
-        say(&gz_mcp::catalogue_line());
-        if !cli.dump_commands {
-            return ExitCode::SUCCESS;
-        }
-    }
     let paths = app_paths(&cli);
 
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "user".to_owned()).to_lowercase();
-    // A compile run keeps a log of its own, and a dump of the registry writes none: neither takes
-    // the log of an editor that is open on the same home.
+    // A compile run and a commandlet keep logs of their own: neither takes the log of an editor
+    // that is open on the same home.
     let log_name = if cli.compile.is_some() {
         format!("grizzly_compile_{user}.log")
+    } else if cli.commandlet() {
+        format!("grizzly_cmd_{user}.log")
     } else {
         format!("grizzly_{user}.log")
     };
     let log_file = paths.logs.join(log_name);
-    let (log, _log_guard) = match Log::start((!cli.dump_commands).then_some(log_file.as_path()), cli.echo) {
+    let (log, _log_guard) = match Log::start(Some(log_file.as_path()), cli.echo) {
         Ok(started) => started,
         Err(e) => {
             gz_win::attach_parent_console();
@@ -111,50 +101,13 @@ fn main() -> ExitCode {
     let exec = runtime.exec();
 
     startup.stage("Registering commands");
-    let mut registry = Registry::new();
-    core_cmds::register(&mut registry);
-    // the frame's commands, also headless (they answer "no window" there); an area that owns one
-    // of them (ui_panel) registers after this and keeps its own
-    gz_app::register(&mut registry);
-    gz_project::register(&mut registry);
-    gz_game::register(&mut registry);
-    gz_mod::register(&mut registry);
-    gz_build::register(&mut registry);
-    gz_nq::register(&mut registry);
-    gz_release::register(&mut registry);
-    gz_publish::register(&mut registry);
-    // after gz-release: the real mod_catalog replaces its key-only stand-in
-    gz_catalog::register(&mut registry);
-    gz_pda::register(&mut registry);
-    gz_screens::register(&mut registry);
-    gz_characters::register(&mut registry);
-    gz_world::register(&mut registry);
-    gz_scene::register(&mut registry);
-    gz_export_level::register(&mut registry);
-    gz_levelbuild::register(&mut registry);
-    gz_ui_app::register(&mut registry);
-    gz_ui_mod::register(&mut registry);
-    gz_ui_content::register(&mut registry);
-    gz_ui_previews::register(&mut registry);
-    gz_ui_pda::register(&mut registry);
-    // after gz-scene: it wraps property_inspector with the panels' side
-    gz_ui_level::register(&mut registry);
-    gz_ui_viewport::register(&mut registry);
-    gz_ui_graph::register(&mut registry);
-    gz_ui_world::register(&mut registry);
+    let registry = build_registry();
 
-    if cli.dump_commands {
-        for c in registry.commands() {
-            if !say(&format!("{} {}", c.name, c.area)) {
-                break;
-            }
-        }
-        return ExitCode::SUCCESS;
-    }
-
-    let flags = Flags { unattended: cli.unattended, headless: cli.headless, qa_github: cli.qa_github };
+    // a commandlet is the editor without a window
+    let headless = cli.headless || cli.commandlet();
+    let flags = Flags { unattended: cli.unattended, headless, qa_github: cli.qa_github };
     let editor = Editor::new(EditorOptions { flags, paths }, exec, log.clone(), registry);
-    if cli.headless {
+    if headless {
         // From here on the end of the console it lives in (Ctrl+C, the console closed) is a quit:
         // whatever is open by then - a project opening at this very start too - closes the way it
         // does for any other.
@@ -176,11 +129,22 @@ fn main() -> ExitCode {
     // the Task Center's rows of builds and packaging, also for a build started over MCP
     gz_ui_mod::cards::ensure(&editor);
 
-    startup.stage("Opening the control endpoint");
-    let port = cli.mcp_port.unwrap_or(gz_mcp::DEFAULT_PORT);
-    match runtime.block_on(gz_mcp::serve(editor.clone(), port)) {
-        Ok(addr) => log.info(format!("control endpoint: {addr}")),
-        Err(e) => log.error(format!("the control endpoint did not open on port {port}: {e}")),
+    // a commandlet listens nowhere unless it is told a port: it is nobody's server
+    if !cli.commandlet() || cli.mcp_port.is_some() {
+        startup.stage("Opening the control endpoint");
+        let port = cli.mcp_port.unwrap_or(gz_mcp::DEFAULT_PORT);
+        match runtime.block_on(gz_mcp::serve(editor.clone(), port)) {
+            Ok(addr) => log.info(format!("control endpoint: {addr}")),
+            Err(e) => log.error(format!("the control endpoint did not open on port {port}: {e}")),
+        }
+    }
+
+    if cli.commandlet() {
+        // it opens its project itself, runs, and ends with what its commands came to
+        let code = commandlet::run(&runtime, &editor, &cli);
+        runtime.block_on(gz_project::close_project(&editor));
+        log.info("Grizzly Editor closed");
+        return code;
     }
 
     if let Some(project) = &cli.project {
@@ -217,6 +181,45 @@ fn main() -> ExitCode {
     runtime.block_on(gz_project::close_project(&editor));
     log.info("Grizzly Editor closed");
     ExitCode::SUCCESS
+}
+
+/// Every command of the editor: each area's own, then the ones the registry itself brings.
+fn build_registry() -> Registry {
+    let mut registry = Registry::new();
+    core_cmds::register(&mut registry);
+    // the frame's commands, also headless (they answer "no window" there); an area that owns one
+    // of them (ui_panel) registers after this and keeps its own
+    gz_app::register(&mut registry);
+    gz_project::register(&mut registry);
+    gz_game::register(&mut registry);
+    gz_mod::register(&mut registry);
+    gz_build::register(&mut registry);
+    gz_nq::register(&mut registry);
+    gz_release::register(&mut registry);
+    gz_publish::register(&mut registry);
+    // after gz-release: the real mod_catalog replaces its key-only stand-in
+    gz_catalog::register(&mut registry);
+    gz_pda::register(&mut registry);
+    gz_screens::register(&mut registry);
+    gz_characters::register(&mut registry);
+    gz_world::register(&mut registry);
+    gz_scene::register(&mut registry);
+    gz_export_level::register(&mut registry);
+    gz_levelbuild::register(&mut registry);
+    gz_ui_app::register(&mut registry);
+    gz_ui_mod::register(&mut registry);
+    gz_ui_content::register(&mut registry);
+    gz_ui_previews::register(&mut registry);
+    gz_ui_pda::register(&mut registry);
+    // after gz-scene: it wraps property_inspector with the panels' side
+    gz_ui_level::register(&mut registry);
+    gz_ui_viewport::register(&mut registry);
+    gz_ui_graph::register(&mut registry);
+    gz_ui_world::register(&mut registry);
+    registry.install_jobs();
+    // last: it lists what the areas registered
+    registry.install_help();
+    registry
 }
 
 /// What the UI crates plug into the shell: each one's `install`, one line per crate.
@@ -258,6 +261,49 @@ fn open_project_at_start(runtime: &Runtime, editor: &std::sync::Arc<Editor>, pro
 #[cfg(test)]
 mod tests {
     use gz_app::{Drawer, ShellBuilder, contract};
+
+    /// A command with a card is its own documentation: `help` prints nothing else. So a card has
+    /// a name of the agreed form, a summary that is a sentence, and a word on every parameter.
+    #[test]
+    fn every_card_is_worth_reading() {
+        let registry = super::build_registry();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut wrong = Vec::new();
+        for c in registry.commands() {
+            assert!(seen.insert(c.name), "{} is registered twice", c.name);
+            let Some(spec) = &c.spec else { continue };
+            let name = spec.name;
+            let well_named = name.split('.').count() <= 2
+                && name.split('.').all(|part| {
+                    !part.is_empty()
+                        && part.starts_with(|ch: char| ch.is_ascii_lowercase())
+                        && part.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+                });
+            if !well_named {
+                wrong.push(format!("{name}: a name is area.verb, lower case"));
+            }
+            if spec.summary.len() < 12 || !spec.summary.ends_with('.') {
+                wrong.push(format!("{name}: the summary is a sentence"));
+            }
+            if name.contains('.') && !registry.areas().iter().any(|a| a.name == spec.area()) {
+                wrong.push(format!("{name}: its area '{}' is not described (Registry::area)", spec.area()));
+            }
+            let (_, shape) = registry.card(name).unwrap();
+            for p in &shape.params {
+                if p.doc.is_empty() {
+                    wrong.push(format!("{name}: the parameter '{}' has no doc comment", p.name));
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "{}",
+            wrong.join(
+                "
+"
+            )
+        );
+    }
 
     /// The shell keeps a sentence for a surface nobody installed (a test of `gz-app` alone):
     /// the editor installs every one of them, so none of those sentences is ever its answer.

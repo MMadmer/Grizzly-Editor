@@ -3,11 +3,9 @@
 #   - clippy over the workspace and every target, without a warning;
 #   - `cargo fmt --check` without a difference;
 #   - `unsafe` in `crates/gz-win` only (the count inside is printed);
-#   - the editor builds, and `Grizzly.exe -dump_commands` registers every `cmd` of
-#     `crates/gz-mcp/tools.json` (checked again only when the executable or the catalogue is newer
-#     than its last pass, kept in Intermediate/check-commands.stamp); a binary built from another
-#     catalogue fails first, in one sentence with its build command (tools/qa/catalogue.py);
-#     GRIZZLY_QA_EXE checks that binary instead.
+#   - the editor builds and answers `help` from a shell (the commands document themselves: the
+#     registry's own test in crates/grizzly holds every card to the rules); GRIZZLY_QA_EXE checks
+#     that binary instead.
 # Exit code 1 when any of them fails.
 set -u
 cd "$(dirname "$0")/../.." || exit 2
@@ -58,39 +56,26 @@ else
     echo "file dialog: one kit function"
 fi
 
-echo "== build and registry"
-# GRIZZLY_QA_EXE names a binary built already (Bin/x64/Release/Grizzly.exe, the release build): its
-# registry is the one checked, and the debug build is not made
+echo "== build and commands"
+# GRIZZLY_QA_EXE names a binary built already (Bin/x64/Release/Grizzly.exe, the release build): it is the
+# one asked, and the debug build is not made
 if [ -n "${GRIZZLY_QA_EXE:-}" ] && [ ! -f "$GRIZZLY_QA_EXE" ]; then
     echo "build: $GRIZZLY_QA_EXE is not built"
     bad=1
-elif [ -z "${GRIZZLY_QA_EXE:-}" ] && ! bash tools/rust/cg.sh build -p grizzly; then
+elif [ -z "${GRIZZLY_QA_EXE:-}" ] && ! bash tools/rust/cg.sh build -p grizzly -p gz-mcp-bridge; then
     echo "build: failed"
     bad=1
 else
     exe=${GRIZZLY_QA_EXE:-Intermediate/cargo/debug/Grizzly.exe}
-    stamp=Intermediate/check-commands.stamp
-    if [ -f "$stamp" ] && [ ! "$exe" -nt "$stamp" ] && [ ! crates/gz-mcp/tools.json -nt "$stamp" ]; then
-        echo "registry: unchanged since its last pass"
-    elif ! stale=$(python tools/qa/catalogue.py "$exe"); then
-        # a binary built from another tools.json: the same sentence test_mcp_bridge gives for the bridge
-        echo "$stale"
-        echo "registry: stale binary"
-        rm -f "$stamp"
-        bad=1
+    twin="$(dirname "$exe")/Grizzly-Cmd.exe"
+    # a commandlet: no window, no port, its own log; the answer on stdout and 0
+    if listing=$(timeout 60 "$twin" help -home Intermediate/check-home 2>&1) && echo "$listing" | grep -q "^Areas$"; then
+        bare=$(echo "$listing" | sed -n 's/^Without a card (\([0-9]*\)).*/\1/p')
+        echo "commands: help answers${bare:+; $bare commands still without a card}"
     else
-        timeout 60 "$exe" -dump_commands > Intermediate/check-commands.txt 2>&1
-        missing=$(grep -o '"cmd": *"[^"]*"' crates/gz-mcp/tools.json | sed -E 's/.*"([^"]*)"$/\1/' | sort -u |
-            while read -r c; do grep -q "^$c " Intermediate/check-commands.txt || echo "$c"; done)
-        if [ -n "$missing" ]; then
-            printf 'not registered: %s\n' $missing
-            echo "registry: incomplete"
-            rm -f "$stamp"
-            bad=1
-        else
-            echo "registry: every catalogue command is registered"
-            touch "$stamp"
-        fi
+        echo "$listing" | head -5
+        echo "commands: Grizzly-Cmd.exe help did not answer"
+        bad=1
     fi
 fi
 
@@ -129,8 +114,8 @@ if [ -f "$release/Grizzly.exe" ] && [ -f "$release/Grizzly-Cmd.exe" ] && [ -f "$
         bad=1
     fi
     # the twin runs the editor beside it for a shell: the same answer, the editor's exit code
-    twin=$("$release/Grizzly-Cmd.exe" -catalogue 2>&1); twin_code=$?
-    editor=$("$release/Grizzly.exe" -catalogue 2>&1)
+    twin=$("$release/Grizzly-Cmd.exe" run ping -json -home Intermediate/check-home 2>&1); twin_code=$?
+    editor=$("$release/Grizzly.exe" run ping -json -home Intermediate/check-home 2>&1)
     "$release/Grizzly-Cmd.exe" -home Intermediate/check-home -compile "$release/no-such-level" > /dev/null 2>&1; refused=$?
     if [ -n "$twin" ] && [ "$twin" = "$editor" ] && [ $twin_code -eq 0 ] && [ $refused -ne 0 ]; then
         echo "command line: Grizzly-Cmd.exe answers as the editor does and ends with its exit code"

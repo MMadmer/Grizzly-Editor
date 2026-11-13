@@ -1,4 +1,4 @@
-//! Stress tests of the frame clock and of saving as it is edited.
+//! Stress tests of the frame clock and of saving as it is edited; the typed commands, their gates and `help`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -150,5 +150,191 @@ fn an_edit_made_before_the_saver_runs_is_saved_and_flushed() {
             tokio::time::timeout(Duration::from_secs(2), saver.flush(store.rev())).await.unwrap().unwrap();
         });
         assert_eq!(std::fs::read_to_string(&file).unwrap(), (round + 1).to_string());
+    }
+}
+
+// ---- commands with a card ---------------------------------------------------------------------
+
+mod cards {
+    use std::sync::Arc;
+
+    use gz_base::Origin;
+    use gz_task::{ExecOptions, Runtime};
+    use schemars::JsonSchema;
+    use serde::Deserialize;
+    use serde_json::{Map, Value, json};
+
+    use crate::{Editor, EditorOptions, Gate, Log, Registry, Shape, Spec};
+
+    /// What to place.
+    #[derive(Debug, Deserialize, JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    enum What {
+        Object,
+        Light,
+    }
+
+    #[derive(Debug, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    struct Place {
+        /// What to place.
+        kind: What,
+        /// Where, in metres.
+        position: [f32; 3],
+        /// How many.
+        #[serde(default)]
+        count: Option<u32>,
+        /// Names to give.
+        #[serde(default)]
+        names: Vec<String>,
+        /// Whether to snap to the ground.
+        #[serde(default)]
+        snap: bool,
+    }
+
+    #[derive(Debug, Default, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    struct Close {
+        /// Drop unsaved work.
+        #[serde(default)]
+        discard: bool,
+    }
+
+    fn editor() -> (Runtime, Arc<Editor>) {
+        let rt = Runtime::start(ExecOptions { async_threads: 2, cpu_threads: 1, io_threads: 1 }).unwrap();
+        let (log, _guard) = Log::start(None, false).unwrap();
+        let mut reg = Registry::new();
+        reg.area("scene", "The open level");
+        reg.cmd(
+            Spec::write("scene.place", "Places things in the scene.").example("kind=object position=1,2,3"),
+            |_ed, p: Place, _| async move {
+                Ok(json!({ "kind": format!("{:?}", p.kind), "position": p.position, "count": p.count,
+                           "names": p.names, "snap": p.snap }))
+            },
+        );
+        reg.cmd_sync(
+            Spec::write("project.close", "Closes the project.").destroys_with(&["discard"]),
+            |_ed, p: &Close, _| Ok(json!({ "discarded": p.discard })),
+        );
+        reg.cmd_sync(
+            Spec::destroy("file.delete", "Deletes a file for good."),
+            |_ed, _: &crate::NoParams, _| Ok(Value::Null),
+        );
+        reg.add_sync("test", "old_style", |_ed, _a, _o| Ok(Value::Null));
+        reg.install_help();
+        let editor = Editor::new(EditorOptions::default(), rt.exec(), log, reg);
+        (rt, editor)
+    }
+
+    fn args(v: Value) -> Map<String, Value> {
+        v.as_object().cloned().unwrap()
+    }
+
+    #[test]
+    fn a_request_is_read_into_the_commands_type_and_text_is_taken_for_what_it_says() {
+        let (rt, ed) = editor();
+        // as a command line gives them: every value a string
+        let reply = rt.block_on(ed.call(
+            "scene.place",
+            args(json!({ "kind": "light", "position": "1, 2.5,3", "count": "4", "names": "a, b", "snap": "yes" })),
+            Origin::Mcp,
+        ));
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(reply["kind"], "Light");
+        assert_eq!(reply["position"], json!([1.0, 2.5, 3.0]));
+        assert_eq!(reply["count"], 4);
+        assert_eq!(reply["names"], json!(["a", "b"]));
+        assert_eq!(reply["snap"], true);
+        // and as JSON gives them, a null meaning "not given"
+        let reply = rt.block_on(ed.call(
+            "scene.place",
+            args(json!({ "kind": "object", "position": [0, 0, 0], "count": null })),
+            Origin::Mcp,
+        ));
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(reply["count"], Value::Null);
+    }
+
+    #[test]
+    fn a_wrong_parameter_is_refused_with_the_usage() {
+        let (rt, ed) = editor();
+        let reply = rt.block_on(ed.call(
+            "scene.place",
+            args(json!({ "kind": "object", "postion": [0, 0, 0] })),
+            Origin::Mcp,
+        ));
+        assert_eq!(reply["ok"], false);
+        assert_eq!(reply["code"], "invalid");
+        assert_eq!(reply["error"], "scene.place has no parameter 'postion' - did you mean 'position'?");
+        let usage = reply["usage"].as_str().unwrap();
+        assert!(usage.contains("  kind: object|light (required) - What to place."), "{usage}");
+        assert!(usage.contains("  position: [x,y,z] (required) - Where, in metres."), "{usage}");
+        assert!(usage.contains("  count: integer - How many."), "{usage}");
+        assert!(usage.contains("  names: [string] - Names to give."), "{usage}");
+        // a missing one names itself
+        let reply = rt.block_on(ed.call("scene.place", args(json!({ "kind": "object" })), Origin::Mcp));
+        assert_eq!(reply["error"], "scene.place: missing field `position`", "{reply}");
+        // an unknown command names its neighbours
+        let reply = rt.block_on(ed.call("scene.plase", Map::new(), Origin::Mcp));
+        assert_eq!(reply["code"], "not_found");
+        assert!(reply["error"].as_str().unwrap().contains("did you mean: scene.place?"), "{reply}");
+    }
+
+    #[test]
+    fn a_door_lets_through_only_its_own_effect() {
+        let (rt, ed) = editor();
+        let call =
+            |name: &str, a: Value, gate: Gate| rt.block_on(ed.call_gated(name, args(a), Origin::Mcp, gate));
+        assert_eq!(call("project.close", json!({}), Gate::Run)["ok"], true);
+        // the same command loses data with `discard`: then it belongs to the other door
+        let refused = call("project.close", json!({ "discard": true }), Gate::Run);
+        assert_eq!(refused["code"], "gate");
+        assert_eq!(refused["error"], "project.close loses data for good here: run it with grizzly_destroy");
+        assert_eq!(call("project.close", json!({ "discard": true }), Gate::Destroy)["discarded"], true);
+        assert_eq!(call("project.close", json!({ "discard": "false" }), Gate::Run)["ok"], true);
+        assert_eq!(call("file.delete", json!({}), Gate::Run)["code"], "gate");
+        assert_eq!(call("file.delete", json!({}), Gate::Destroy)["ok"], true);
+        assert_eq!(
+            call("scene.place", json!({}), Gate::Destroy)["error"],
+            "scene.place is an ordinary command: run it with grizzly_run"
+        );
+        // no door: the author
+        assert_eq!(call("file.delete", json!({}), Gate::Any)["ok"], true);
+    }
+
+    #[test]
+    fn help_reads_the_registry() {
+        let (rt, ed) = editor();
+        let text = |about: Value| {
+            let a = if about.is_null() { Map::new() } else { args(json!({ "about": about })) };
+            rt.block_on(ed.call("help", a, Origin::Mcp))["text"].as_str().unwrap_or_default().to_owned()
+        };
+        let top = text(Value::Null);
+        assert!(top.contains("  scene    The open level (1)"), "{top}");
+        assert!(top.contains("  project   (1)"), "{top}");
+        assert!(top.contains("Without a card (1): old_style"), "{top}");
+        assert!(top.contains("  help  read"), "{top}");
+        let area = text(json!("scene"));
+        assert!(
+            area.starts_with("scene - The open level\n  scene.place  write    Places things in the scene."),
+            "{area}"
+        );
+        let one = text(json!("scene.place"));
+        assert!(
+            one.starts_with(
+                "scene.place (write) - Places things in the scene.\n  kind: object|light (required)"
+            ),
+            "{one}"
+        );
+        assert!(one.ends_with("Example: scene.place kind=object position=1,2,3\n"), "{one}");
+        assert!(text(json!("project.close")).contains("Loses data with: discard."));
+        let none = rt.block_on(ed.call("help", args(json!({ "about": "plac" })), Origin::Mcp));
+        assert!(none["error"].as_str().unwrap().contains("Commands with that word: scene.place."), "{none}");
+        // the shape of a type is what its fields say
+        let shape = Shape::of::<Place>();
+        assert_eq!(
+            shape.params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            ["kind", "position", "count", "names", "snap"]
+        );
     }
 }

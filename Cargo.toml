@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT"
@@ -84,6 +84,8 @@ imbl = "7"
 # data
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+# a command describes its parameters with the struct it reads them into
+schemars = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
 smol_str = { version = "0.3", features = ["serde"] }
 smallvec = "1"

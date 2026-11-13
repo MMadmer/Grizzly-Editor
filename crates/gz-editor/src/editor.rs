@@ -17,6 +17,7 @@ use crate::frames::FrameClock;
 use crate::notices::Notices;
 use crate::registry::Registry;
 use crate::services::Services;
+use crate::spec::Gate;
 
 /// How the editor was started.
 #[derive(Clone, Copy, Debug, Default)]
@@ -194,7 +195,13 @@ impl Editor {
 
     /// Runs a command by its wire name and returns the whole reply object.
     pub async fn call(self: &Arc<Self>, name: &str, args: Args, origin: Origin) -> Value {
-        self.registry.call(self.clone(), name, args, origin).await
+        self.registry.call(self.clone(), name, args, origin, Gate::Any).await
+    }
+
+    /// [`Self::call`] for a request that came through a door: a command whose effect the door
+    /// does not let through answers which door does.
+    pub async fn call_gated(self: &Arc<Self>, name: &str, args: Args, origin: Origin, gate: Gate) -> Value {
+        self.registry.call(self.clone(), name, args, origin, gate).await
     }
 
     /// Runs a command from the window without waiting; a failure becomes a notice.
