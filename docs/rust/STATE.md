@@ -3590,3 +3590,22 @@ commits clean, Play in place only consistent - and one new defect with four left
 The installed game's listing is equal before and after each game run (107,743 entries); nothing changed under
 `D:\XFinedProjects` or the game's `modules`; the root's project list is the author's; no process and no Play root
 left.
+
+**The second verification** (the reviewer, the same day): everything it had raised is closed - the reader that
+leaves, the console and the window (Ctrl+C, Ctrl+Break and a closed console probed on a headless editor, direct and
+through the twin: exit 0, the log whole; Ctrl+C on a compile ends it as any compiler), the leftovers; joining the
+launcher's console ends no QA editor that should live. Two minor notes, both closed (`378b1246`):
+
+- the console handler was installed after the project of the start had opened, so Ctrl+C while a headless editor
+  opened its project ended it on the spot: it goes in as soon as the editor exists (`main.rs`), and the lifecycle
+  suite's break comes while the project opens;
+- `gz-win`'s `ASK_TO_STOP` is a static set once, against the rule's letter: the rule (the plan's section 6,
+  `CONVENTIONS.md`) names what `gz-win` keeps for a Win32 callback without a context argument - the crash filter's
+  dump folder and the console handler's request to stop.
+
+Its observation, no defect: where the launcher's chain has Ctrl+C switched off (a process group of its own), Ctrl+C
+reaches no console program, this one included; Ctrl+Break and the close do.
+
+On the release build of `378b1246`: `Build.ps1` 188 s; `check.sh` ok; `test.sh` the one changed binary, 1198 tests
+green in all; `test_server_lifecycle` 12 checks pass (16 s). The run of `Intermediate/final7` stands for the rest:
+the change moved one call earlier in `main.rs`.
