@@ -3609,3 +3609,7 @@ reaches no console program, this one included; Ctrl+Break and the close do.
 On the release build of `378b1246`: `Build.ps1` 188 s; `check.sh` ok; `test.sh` the one changed binary, 1198 tests
 green in all; `test_server_lifecycle` 12 checks pass (16 s). The run of `Intermediate/final7` stands for the rest:
 the change moved one call earlier in `main.rs`.
+
+**The reviewer's last word** (its third pass, on `378b1246`): both notes closed - Ctrl+C sent to a headless editor as
+its endpoint answered, 150 ms and 40 ms after the start, ended it with exit code 0 each time, the log showing the
+project opened and then "Grizzly Editor closed" - and "Open: nothing" is true.
