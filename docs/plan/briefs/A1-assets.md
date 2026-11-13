@@ -114,8 +114,8 @@ Topic: `reg.topic("assets", ...)` - a page-long text: assets are files, the synt
 - Their callers: the Characters tab saves through the service (not the removed command); the QA suites that used
   the removed commands write the file with Python and call `asset.check` instead (`tools/qa/test_characters.py`,
   `test_pda.py`, `test_behaviours.py`, `test_graph_ui.py`, `test_unicode_names.py`, `test_asset_icons.py`,
-  `test_build_contents.py`, `test_world.py` - only those call sites); the catalogue file
-  `crates/gz-mcp/tools.json` loses the removed tools (the architect deletes the file itself later).
+  `test_build_contents.py`, `test_world.py` - only those call sites). There is no tool catalogue any more: a
+  command is documented by its card (`help`).
 
 ## 4. The watcher - one per project
 
