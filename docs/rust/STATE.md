@@ -53,6 +53,15 @@ code's stubs and every command of the registry. Each statement below is also mar
 | NQ_ARCHITECTURE.md section 17, the rollout plan | every phase done (said so) |
 | The tests' net sees only the temp folder | done in the sweep: `test.sh` watches the repository's tree too |
 | The lead's: a command past the request timeout answered "editor busy (timeout)" while its job ran fine | done in the sweep: `gz-mcp` `run_request` runs the command in a job scope of its own (`gz_task::JobScope`); past the timeout a command whose job still runs answers `ok: false`, `running: true`, the jobs and where to follow them; unit test `a_command_whose_job_outlasts_the_timeout_names_the_job`, `test_build_job` T, AI_SETUP.md, the bridge's instructions |
+| The last review (`docs/rust/briefs/critic-close.md`): `Grizzly.exe` is a console program | a window program, as the C++ editor was; `Grizzly-Cmd.exe` beside it for a shell - "The last review, the shell", "The last review: the lead's part and the run on the final tree" |
+| The last review: three choosers (`skeletonanims`, `skeletonbones`, `gameanim`) cannot list | they list what the C++ listed - "The last review, the shell" |
+| The last review: the root's `_projects.ini` a QA leftover, its snapshot in memory only | the author's list restored; `tools/qa/kept.py` keeps the root's files on disk while a tool has them aside (`b551b483`) |
+| The last review: four notes not folded, the light bound met at equality, MPL-2.0 against "nothing copyleft", three ledger rows "in work", stale lines of `CONVENTIONS.md` | `a5331965` (bounds per kind of channel with a margin; `notices.py` `ALLOWED`) |
+| The last review: texts that say "not part of this build"; the `COMMAND_LOAD` / Save As rows | "The last review, the shell"; two more of the kind in `gz-project` and `gz-ui-previews` (D16) |
+| The last review: the ability read from `xrEngine.exe` alone; the path limit proven only to 368 characters; the early crash report's condition | "The last review, the game and Play" (game `232c5db9f`): four programs state it, 519 proven, a config inside the application folder reports as before |
+| The last review: Play's copy path never run for real | there is no copy path: "Play in place only" - a game that cannot is refused before a build |
+| The game engineer's: the renderers' `MAX_PATH` buffers on a path of the fs | "Play in place only" (game `ccf33e523`): `string_path`-sized, a dump proven at 364 characters |
+| The shell engineer's: PowerShell's `>` takes nothing from a window program; a dump of the registry overwrote the author's log | `Grizzly-Cmd.exe`; a dump writes no log, a compile run its own |
 
 ## Decisions taken while building (they refine the plan)
 
@@ -3039,7 +3048,8 @@ holds the marker, `fsgame.ltx` (the game's, `$arch_dir$` rooted at the game's fo
 `gamedata` with the level, `appdata`, an empty `modules` - no program, no link; a root an older engine used loses
 its programs, its junction (as a link) and its `.dead-air-x64`, all listed by its marker. The engine is the game's
 own, started with `-fsltx <root>\fsgame.ltx` in the root; the answer (`play`, `play_root`) and the log line say
-`in_place` or `copied`. The copy path stays for an engine that says nothing. The depth check is the engine's
+`in_place` or `copied`. The copy path stays for an engine that says nothing (superseded: "Play in place only" -
+the copy path left the editor, and the value is read in the process). The depth check is the engine's
 (`path_limit`: 519 for `long-paths` with `LongPathsEnabled`, read through `reg.exe`; 259 without; 255 for an older
 engine). `test_play_game.py`: the root's contents, no program and no link before and after, the content records
 in the root's `appdata\content`, the game's own line; the game it started is told from the author's by its command
@@ -3335,7 +3345,8 @@ The brief `docs/rust/briefs/fix-game.md`, 13 Nov, both repositories; nothing com
 same `EngineAbilities` as `xrEngine.exe` in version resources of their own (`src/xrCore/ModuleVersion.rc2`, a
 `version.rc` per library). Play reads all four (`play.rs` `ability_of`, `GamePrograms::stating`): a word counts only
 when every one states it. A mixed installation - a library of an older build beside a newer engine - takes the copy
-path, and the answer's `play_reason` (and the log line) names the library. Before this deploy the installed game was
+path, and the answer's `play_reason` (and the log line) names the library (superseded: "Play in place only" - it is
+refused, naming the library). Before this deploy the installed game was
 exactly that: a new `xrEngine.exe` beside libraries with no version resource.
 
 **The path limit, what the game says.** UCRT `_splitpath` gives a folder over 256 characters back empty, and
@@ -3355,7 +3366,8 @@ deeper one the ordinary way; the console's cloud and tree dumps stop at `MAX_PAT
 `xrCore.dll`, the rule of `CLocatorAPI::setup_fs_path`); a config inside it reports into the working folder as
 before. Proven by a start from a working folder of its own with the application folder's config named outright.
 
-**The copy path, run for real.** Play takes `engine=` (`auto`, the default, or `copied`: copies whatever the engine
+**The copy path, run for real** (superseded: "Play in place only" - there is no copy path, no `engine=` and one
+run of the suite). Play takes `engine=` (`auto`, the default, or `copied`: copies whatever the engine
 says, for a game whose in-place run the author does not want). `test_play_game.py` runs `mp_test` both ways on one
 root (`--engine both`, mp_test's default; one way for the other scenes): in place, then copied - the copied engine and
 its libraries all listed by the marker, the junction to the installed archives, the copy's content records in the
@@ -3465,3 +3477,54 @@ already; the rest are the application or system folder, names or messages). `CON
   107,743 entries equal); `check.sh` clippy, fmt, unsafe, registry, encoding, notices clean; test files clean after the
   registry test's `reg.exe` got its in-memory mark (`check_test_files.py` again, exit 0); the icon step not run (no
   release build in `Bin\x64\Release`).
+
+## The last review: the lead's part and the run on the final tree
+
+13 Nov. The last review (`docs/rust/briefs/critic-close.md`) said "Open: nothing" was not yet true; its findings are
+the rows at the end of that table. Three engineers closed the shell ("The last review, the shell"), the game's
+ability and paths ("The last review, the game and Play") and Play's one way ("Play in place only"). The lead's part:
+
+- **Bounds, licenses, notes, the ledger** (`a5331965`) and **the root's files of the author** (`b551b483`), as the
+  table says.
+- **Play runs the game in place and no other way** - the lead's decision, against the brief that had asked for the
+  copy path's real run: the copy was what the author's antivirus answers to (a fresh unsigned program copying 57
+  programs into a temp folder and running the copy), its only honest proof made a suite do exactly that on every run,
+  and before the editor ships no fallback to an older game is owed. D1, I1 and `CLAUDE.md` say so.
+- **`Grizzly-Cmd.exe`**, the editor for a command line (`crates/grizzly/src/cmd_twin.rs`, the package's second
+  program; `gz-win` `job.rs` `end_with_this_process`): a shell does not wait for a window program, and PowerShell's
+  `>` took 0 lines of `Grizzly.exe -dump_commands`. The twin runs the editor with the same arguments and its own
+  streams, waits and ends with its exit code; the editor ends with it. Seen in a console of its own (the catalogue
+  line, 204 commands, a refused compile's exit code 1), in PowerShell (`>` 204 lines, a variable, exit codes 0 and
+  1); held by `check.sh` ("command line") and `test_server_lifecycle` (a headless editor prints through the twin and
+  ends it with 0 when closed over MCP; an editor whose twin is ended is gone with it). `Build.ps1` copies it,
+  `check_icon.py` wants it a console program with the icon.
+- **The log of an open editor is nobody else's**: `-dump_commands` writes no log (`check.sh` ran it on every check
+  and overwrote `logs\grizzly_<user>.log` of the repository root), a compile run writes
+  `grizzly_compile_<user>.log`, and `check.sh`'s refused compile runs on a home under `Intermediate`.
+- **Two refusals** said "in this build" of what no build has - `list_assets` for a category no area lists (the
+  editor installs a lister for each of the ten), `asset_preview` for a category with no thumbnails (the C++
+  sentence): both say what is so (D16).
+- **The game's commits**, by path, nothing else of that tree: `232c5db9f` (the ability in every program, the folder
+  split, the crash report's condition), `ccf33e523` (the renderers' buffers), `aaf8b4adc` (two paths of
+  `SEASONS.md` that had lost a backslash and an `a` to a bell character - found by the same search that caught
+  one in the new row of `TEST_MATRIX.md`). Both deploys checked: the backups `_predeploy_longpaths_20261113` and
+  `_predeploy_widepaths_20261113`, SHA-256 equal to `bin\x64\Release`.
+
+**The run on the final tree** - 13 Nov, 07:03 - 07:30, commit `e79f44ba`, the release build, one step after another
+(`Intermediate/final6/`, `summary.txt` and a log per step):
+
+| Step | Result | Time |
+|---|---|---|
+| `Build.ps1` | the editor, its twin, the bridge, their PDBs, the notices, `LICENSE.txt` | 292 s |
+| `check.sh` | ok: the editor a window program, the twin and the bridge console ones, each with the icon; the twin answers as the editor | 25 s |
+| `test.sh --all` | 79 binaries, 1195 tests green; the net: 3605 events in the tests' temp folder and 691 in the repository, no program file | 131 s |
+| `diff_editors.py --all` | 10 scenarios, 755 steps, 746 written files, 0 differ - the C++ side recorded anew for each (the linked game's engine changed with the deploy, and a record is keyed by it) | 196 s |
+| `diff_compile.py` | the ten quick scenes PASS | 85 s |
+| `diff_compile.py --scene` l12u_control_monolith, mp_close_combat_implicit, l03u_agr_underground | PASS | 339 s |
+| `run_all.py --with-game` | 24 suites, 24 passed | 282 s |
+| `test_play_game.py --scene l03u_agr_underground` | 39 checks pass, the installed engine in place | 107 s |
+| `test_play_game.py --scene mp_close_combat` | 42 checks pass: implicit light and MU models in the game | 131 s |
+
+The installed game's listing before and after each game run is equal (107,743 entries); nothing changed under
+`D:\XFinedProjects` or the game's `modules`; the root's project list is the author's; no process and no Play root
+left.
