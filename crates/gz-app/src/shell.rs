@@ -186,12 +186,21 @@ pub(crate) struct Caption {
     pub menus_x0: f32,
     pub menus_end: f32,
     pub buttons_x: f32,
+    /// The row of the major tabs under the caption; nothing on the Start page.
+    pub tab_row: Rect,
     pub valid: bool,
 }
 
 impl Default for Caption {
     fn default() -> Self {
-        Self { bar: Rect::NOTHING, menus_x0: 0.0, menus_end: 0.0, buttons_x: 0.0, valid: false }
+        Self {
+            bar: Rect::NOTHING,
+            menus_x0: 0.0,
+            menus_end: 0.0,
+            buttons_x: 0.0,
+            tab_row: Rect::NOTHING,
+            valid: false,
+        }
     }
 }
 

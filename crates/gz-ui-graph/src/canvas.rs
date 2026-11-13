@@ -230,6 +230,10 @@ pub struct CanvasCx<'a> {
     pub edit: u64,
     /// The status the document's last canvas command left, when it is new.
     pub doc_status: Option<String>,
+    /// What the tab draws over the canvas (the Keyboard Shortcuts card, the rail's Graph panel), as the
+    /// last frame laid it out: the pointer over one of them is not over the canvas - a click, the wheel
+    /// and a hover there are that panel's.
+    pub covered: &'a [Rect],
 }
 
 fn add(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
@@ -850,7 +854,9 @@ impl Canvas {
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, CornerRadius::ZERO, p.canvas);
         let resp = ui.interact(rect, self.id, Sense::click_and_drag());
-        self.hovered = resp.hovered() || resp.dragged();
+        let covered =
+            ctx.input(|i| i.pointer.hover_pos()).is_some_and(|m| cx.covered.iter().any(|r| r.contains(m)));
+        self.hovered = (resp.hovered() && !covered) || resp.dragged();
         let menu_up = egui::Popup::is_any_open(&ctx);
         if resp.clicked() || resp.drag_started() || resp.secondary_clicked() {
             self.focused = true;
@@ -1726,7 +1732,8 @@ impl Canvas {
                 i.time,
             )
         });
-        let over = (resp.hovered() || resp.contains_pointer()) && !menu_up;
+        let covered = cx.covered.iter().any(|r| r.contains(mouse));
+        let over = (resp.hovered() || resp.contains_pointer()) && !menu_up && !covered;
         // the minimap and the edge pills are the canvas's own controls: a click there is theirs
         let hovered = over && !self.minimap_hovered && self.beyond_hot.is_none();
 
@@ -2561,4 +2568,74 @@ fn create_node(cx: &mut CanvasCx<'_>, kind: &str, at: [f32; 2], link: Option<&(S
     }
     cx.ops.push(Op::Doc(DocOp::ApplyOps(Value::from(ops))));
     cx.view.select_only(&id);
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use egui::{Context, Event, Modifiers, MouseWheelUnit, Pos2, RawInput, Rect, pos2, vec2};
+    use gz_nq::{Catalog, Node, asset::Graph};
+
+    use super::{Canvas, CanvasCx, ViewMirror};
+    use crate::derived::DocData;
+    use crate::scene::{Scene, SceneInput};
+
+    /// The wheel over a panel the tab draws over the canvas (the Keyboard Shortcuts card) is that
+    /// panel's: the graph does not zoom under it, and it does beside it.
+    #[test]
+    fn the_wheel_over_a_panel_on_the_canvas_does_not_zoom_the_graph() {
+        let ctx = Context::default();
+        gz_ui::font::install(&ctx, gz_ui::font::FontFiles::default());
+        let mut g = Graph::default();
+        let mut s = Node::new("s", "trigger.start");
+        s.has_pos = true;
+        g.nodes.push_back(s);
+        let cat = Catalog::empty();
+        let p = gz_ui::Palette::new(gz_ui::Accent::default());
+        let scene = Scene::build(&SceneInput { graph: &g, catalog: &cat, edit: 1, palette: &p });
+        let data = DocData::default();
+        let mut view = ViewMirror::default();
+        let mut canvas = Canvas::new("test", false);
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 700.0));
+        let card = Rect::from_min_max(pos2(600.0, 8.0), pos2(992.0, 692.0));
+        let mut t = 0.0;
+        let mut wheel_at = |at: Pos2, view: &mut ViewMirror, canvas: &mut Canvas| {
+            let wheel = Event::MouseWheel {
+                unit: MouseWheelUnit::Line,
+                delta: vec2(0.0, 1.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+                source: egui::MouseWheelSource::Wheel,
+            };
+            for events in [vec![Event::PointerMoved(at)], vec![wheel], vec![]] {
+                t += 0.05;
+                let mut ops = Vec::new();
+                let mut out = ctx.run_ui(
+                    RawInput { screen_rect: Some(rect), time: Some(t), events, ..RawInput::default() },
+                    |ui| {
+                        let mut cx = CanvasCx {
+                            scene: Some(&scene),
+                            graph: &g,
+                            catalog: &cat,
+                            data: &data,
+                            view,
+                            bookmarks: &[],
+                            minimap: false,
+                            ops: &mut ops,
+                            edit: 1,
+                            doc_status: None,
+                            covered: &[card],
+                        };
+                        canvas.draw(ui, rect, &mut cx);
+                    },
+                );
+                out.textures_delta.clear();
+            }
+        };
+        let zoom = view.zoom;
+        wheel_at(pos2(800.0, 300.0), &mut view, &mut canvas);
+        assert_eq!(view.zoom, zoom, "the graph zoomed under the card");
+        wheel_at(pos2(300.0, 300.0), &mut view, &mut canvas);
+        assert_ne!(view.zoom, zoom, "the graph did not zoom beside the card");
+    }
 }

@@ -56,3 +56,5 @@ __pycache__/
 # Per-user editor state: window size, GPU name, recent files.
 # $local_root$ resolves here, so this IS the live prefs file, not a template.
 level.ini
+# the Rust editor's settings (window, layout, preferences), written beside its data root
+/grizzly_editor.ltx

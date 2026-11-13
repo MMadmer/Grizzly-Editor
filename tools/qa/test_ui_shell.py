@@ -5,10 +5,12 @@ What it proves:
   A  the frame reports itself: state and ui_list name the Level tab, the panels, the drawers; ui_contract has the
      constants QA pins (panels, drawers, dialogs, menus, the palette's id); the minimised start's profile says
      'window minimised', and one start of its own that SHOWS the window (not activated) had it within 0.3 s
-  B  the caption: 32 pt tall, the window buttons 3 x 46 pt at its right end, the tabs inside the interactive range -
-     and Windows agrees: WM_NCHITTEST answers HTCLIENT on a tab and on a window button, HTCAPTION on the drag band
-  C  the major tabs: a tool tab opens, Level stays first and pinned (it refuses to close), next/prev cycle, a clean tab
-     closes; a quest made dirty refuses a plain close ('unsaved') and closes with discard=true
+  B  the caption: 32 pt tall, the window buttons 3 x 46 pt at its right end; the major tabs on a row of their own,
+     30 pt, right under it - and Windows agrees: WM_NCHITTEST answers HTCLIENT on a tab and on a window button,
+     HTCAPTION on the drag band
+  C  the major tabs: a tool tab opens, Level stays first and pinned (it refuses to close), next/prev cycle and move no
+     tab (a tool tab, the quest tab, Level: other menus in the caption each), a clean tab closes; a quest made dirty
+     refuses a plain close ('unsaved') and closes with discard=true
   D  the drawers: over a document the Content and Log drawers open and close; ui_list names the one that is up
   E  the Level panels: close, open, focus and toggle round trips, and Level comes up with an opened panel; ui_scroll
      moves a panel whose body is a child of it (Details' grid) to its bottom and back
@@ -309,19 +311,23 @@ def phase_b(project, shots, ed, before_scale, contract) -> None:
               short(tb))
         tabs = tb.get("tabs") or []
         inter = tb.get("interactive") or [[0, 0], [0, 0]]
-        check(bool(tabs) and all(inter[0][0] <= t["rect"][0] and t["rect"][2] <= inter[0][1] for t in tabs),
-              "B every tab lies in the interactive range of the caption", short(tb))
+        row = tb.get("tab_row") or [0, 0, 0, 0]
+        check(near(row[1], band[3], 1.5) and near(row[3] - row[1], 30 * dpi, 1.5),
+              "B the tabs have a row of their own, 30 pt, right under the caption", short(tb))
+        check(bool(tabs) and all(row[1] - 1 <= t["rect"][1] and t["rect"][3] <= row[3] + 1 for t in tabs)
+              and all(t["rect"][1] >= band[3] - 1 for t in tabs),
+              "B every tab lies in the tab row, none in the caption", short(tb))
         hwnd = editor_hwnd(ed.proc.pid if ed.proc else 0)
         if check(bool(hwnd), "B the editor's window is found"):
             cy = (band[1] + band[3]) / 2.0
             level = next((t for t in tabs if t.get("id") == "level"), tabs[0] if tabs else None)
             if level:
                 r = level["rect"]
-                got = hit_test(hwnd, (r[0] + r[2]) / 2.0, cy)
+                got = hit_test(hwnd, (r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0)
                 check(got == HTCLIENT, "B the Level tab takes the mouse (HTCLIENT)", "hit %d" % got)
             drag_x = (inter[0][1] + tb.get("buttons_x", 0)) / 2.0
             got = hit_test(hwnd, drag_x, cy)
-            check(got == HTCAPTION, "B the band between the tabs and the buttons drags the window (HTCAPTION)", "hit %d" % got)
+            check(got == HTCAPTION, "B the band between the menus and the buttons drags the window (HTCAPTION)", "hit %d" % got)
             got = hit_test(hwnd, band[2] - 23 * dpi, cy)
             check(got == HTCLIENT, "B the close button takes the mouse (HTCLIENT)", "hit %d" % got)
 
@@ -329,13 +335,21 @@ def phase_b(project, shots, ed, before_scale, contract) -> None:
 
 def phase_c(project, shots, ed, before_scale, contract) -> None:
         # ------------------------------------------------------------ C: the major tabs
+        def tab_rects() -> dict:
+            return {t.get("id"): t.get("rect") for t in mcp("titlebar_info").get("tabs") or []}
+
         o = mcp("ui_tab", action="open", kind="characters")
         check(o.get("ok") and (o.get("tab") or {}).get("id") == "characters", "C a tool tab opens and comes up at once", short(o))
         lt = mcp("ui_tab", action="list")
         ids = [t.get("id") for t in lt.get("tabs", [])]
         check(ids[:1] == ["level"] and "characters" in ids, "C Level is the first tab, the tool tab follows", json.dumps(ids))
+        before_switch = tab_rects()
         nx = mcp("ui_tab", action="next")
         check(nx.get("ok") and (nx.get("tab") or {}).get("id") != "characters", "C next cycles away from the active tab", short(nx))
+        after_switch = tab_rects()
+        check(len(before_switch) >= 2 and before_switch == after_switch,
+              "C switching tabs moves no tab (another tab, other menus in the caption)",
+              json.dumps({"before": before_switch, "after": after_switch}))
         pv = mcp("ui_tab", action="prev")
         check((pv.get("tab") or {}).get("id") == "characters", "C prev comes back", short(pv))
         lv = mcp("ui_tab", action="close", id="level")
@@ -349,6 +363,14 @@ def phase_c(project, shots, ed, before_scale, contract) -> None:
             op = mcp("ui_tab", action="open", kind="quest", path=rel)
             quest = (op.get("tab") or {}).get("id", "")
             check(op.get("ok") and quest.startswith("quest:"), "C the quest opens as a tab of its own", short(op))
+            # the graph tab brings Graph into the caption where Level brings Scene, Build and View
+            on_quest = tab_rects()
+            mcp("ui_tab", action="prev")
+            on_level = tab_rects()
+            mcp("ui_tab", action="next")
+            check(quest in on_quest and on_quest == on_level,
+                  "C from the quest tab to Level and back, no tab moves",
+                  json.dumps({"quest": on_quest, "level": on_level}))
             with open(os.path.join(project, rel), "rb") as f:
                 on_disk = f.read()
             mcp("quest_edit", path=rel, op="select_all")

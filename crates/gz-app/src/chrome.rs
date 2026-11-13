@@ -30,6 +30,9 @@ use crate::shell::{PopupInfo, ShellState, Tab, cx};
 use crate::tabs::{self, LEVEL};
 
 pub const CAPTION_H: f32 = 32.0;
+/// The row of the major tabs, between the caption and the toolbar: the tabs stay where they are
+/// whatever menus the active tab brings into the caption.
+pub const TAB_ROW_H: f32 = 30.0;
 pub const TOOLBAR_H: f32 = 36.0;
 pub const STATUS_H: f32 = 24.0;
 const LOGO: f32 = 20.0;
@@ -411,14 +414,19 @@ impl ShellState {
         let caption = Rect::from_min_max(screen.min, pos2(screen.max.x, screen.min.y + CAPTION_H));
         let status =
             Rect::from_min_max(pos2(screen.min.x, (screen.max.y - STATUS_H).max(caption.max.y)), screen.max);
-        let toolbar = if self.start_page {
-            None
-        } else {
-            Some(Rect::from_min_max(
+        // the tab row and the toolbar belong to a project: the Start page has neither
+        let tab_row = (!self.start_page).then(|| {
+            Rect::from_min_max(
                 pos2(screen.min.x, caption.max.y),
-                pos2(screen.max.x, (caption.max.y + TOOLBAR_H).min(status.min.y)),
-            ))
-        };
+                pos2(screen.max.x, (caption.max.y + TAB_ROW_H).min(status.min.y)),
+            )
+        });
+        let toolbar = tab_row.map(|r| {
+            Rect::from_min_max(
+                pos2(screen.min.x, r.max.y),
+                pos2(screen.max.x, (r.max.y + TOOLBAR_H).min(status.min.y)),
+            )
+        });
         let work = Rect::from_min_max(
             pos2(screen.min.x, toolbar.map_or(caption.max.y, |t| t.max.y)),
             pos2(screen.max.x, status.min.y),
@@ -430,6 +438,7 @@ impl ShellState {
         ui.painter().rect_filled(screen, CornerRadius::ZERO, p.base);
 
         self.draw_caption(ui, caption);
+        self.draw_tab_row(ui, tab_row);
         if let Some(t) = toolbar {
             self.draw_toolbar(ui, t);
         }
@@ -554,12 +563,9 @@ impl ShellState {
             mb.open = mb.open_now.take();
             self.popups_cur.append(&mut mb.shown);
             self.menu_bar = mb;
-            end = self.draw_tab_strip(&mut row, bar, self.caption.buttons_x - 48.0);
+            end = row.cursor().min.x;
         } else {
             self.folded = bar.width() < FOLD_W;
-            for t in &mut self.tabs {
-                t.rect = None;
-            }
         }
         self.caption.menus_end = end;
 
@@ -977,7 +983,31 @@ impl ShellState {
 
     // ---- the tab strip -------------------------------------------------------------------
 
-    fn draw_tab_strip(&mut self, row: &mut Ui, bar: Rect, max_x: f32) -> f32 {
+    /// The row of the major tabs, under the caption: its own band, so a tab never moves when the
+    /// active one brings other menus into the caption. Client area, not the caption's drag band.
+    fn draw_tab_row(&mut self, ui: &mut Ui, rect: Option<Rect>) {
+        let shown = rect.filter(|_| self.menus_shown);
+        self.caption.tab_row = shown.unwrap_or(Rect::NOTHING);
+        let Some(rect) = rect else { return };
+        let p = palette(ui.ctx());
+        ui.painter().rect_filled(rect, CornerRadius::ZERO, p.chrome);
+        let Some(rect) = shown else {
+            for t in &mut self.tabs {
+                t.rect = None;
+            }
+            return;
+        };
+        let mut row = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-app.tab_row")
+                .max_rect(rect)
+                .layout(Layout::left_to_right(Align::Max)),
+        );
+        row.spacing_mut().item_spacing = Vec2::ZERO;
+        self.draw_tab_strip(&mut row, rect, rect.max.x - 8.0);
+    }
+
+    fn draw_tab_strip(&mut self, row: &mut Ui, bar: Rect, max_x: f32) {
         let ctx = row.ctx().clone();
         let p = palette(&ctx);
         let font = Font::Body.id();
@@ -1203,7 +1233,6 @@ impl ShellState {
             if resp.on_hover_text(&tip).clicked() {
                 Popup::toggle_id(&ctx, overflow);
             }
-            x = r.max.x;
         }
         let layer = row.layer_id();
         let entries: Vec<(SmolStr, String, Icon, bool)> =
@@ -1318,7 +1347,6 @@ impl ShellState {
         if let Some(id) = close {
             self.request_close(&ctx, &id);
         }
-        x
     }
 
     fn tab_menu_action(&mut self, ctx: &Context, target: &str, path: &str, action: u8) {

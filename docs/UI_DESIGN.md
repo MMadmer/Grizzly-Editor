@@ -66,7 +66,7 @@ Graphite changes only the accent family: accent 727782, bright 9399a5, selection
 - Radius: 4 for controls, 6 for popups and cards, 8 for dialogs, 0 when docked. Focus ring 2 pt accent.bright.
 
 **Sizes (pt).**
-- **Chrome:** caption 32 (window buttons 46x32); major tab 28 tall, 96-220 wide; toolbar 36 (buttons 28, glyph 16, group gap 12); panel tab strip 26; panel toolbar 32; status bar 24.
+- **Chrome:** caption 32 (window buttons 46x32); tab row 30, major tab 28 tall at its foot, 96-220 wide; toolbar 36 (buttons 28, glyph 16, group gap 12); panel tab strip 26; panel toolbar 32; status bar 24.
 - **Controls:** frame 24; row 22; property row 26; section header 28; inline icon button 24.
 - **Dialogs:** S 400, M 560, L 760, XL min(1040, 90% W). Never wider than W-32 or taller than H-48. Title 36, footer 52, buttons at least 88x28.
 - **Other:** tooltips and toasts up to 360; drawers 40% of H, clamped to 260-480; forms up to 760.
@@ -227,14 +227,15 @@ Errors and notes for the author become queued notices once the UI draws. A comma
 
 ## 5. Frame
 
-Chrome totals 92 pt:
-- **Caption (32):** logo, menus, major tabs, ⌄, a drag band of at least 48, the project name (dropped first), – ▢ ✕.
+Chrome totals 122 pt:
+- **Caption (32):** logo, menus, a drag band of at least 48, the project name (dropped first), – ▢ ✕.
+- **Tab row (30):** the major tabs and ⌄, from the left edge, in the chrome colour - a row of its own, so that no tab moves when the active one brings other menus into the caption (Level's Scene, Build and View, a graph tab's Graph). It is client area, not part of the drag band. The Start page has no tab row (nor a toolbar).
 - **Toolbar (36):** the tab's `toolbar()`, then Spring, then [Build Mod ▾ (Primary split)] [Publish Release] [Releases]. Publish Release keeps its label while a job runs: the state is in its tip, and the button stays lit meanwhile.
 - **Status bar (24).**
 
 **Caption**
 - It is drawn in every state (`gz-app`'s `chrome.rs`). The Start page, Link Game and Recovery show no menus.
-- The caption registers the menus, tabs, ⌄ and window buttons as HTCLIENT each frame; the rest is HTCAPTION (the window's `WM_NCHITTEST`, `gz-win`'s `caption.rs`). A frame that does not draw the caption invalidates the band.
+- The caption registers the menus and window buttons as HTCLIENT each frame; the rest is HTCAPTION (the window's `WM_NCHITTEST`, `gz-win`'s `caption.rs`). A frame that does not draw the caption invalidates the band.
 - The OS title reads "<project> - Grizzly Editor". The toolbar and status bar are bars of the window's frame.
 
 **Menus**, in order:
@@ -559,7 +560,7 @@ Discarding is possible only through bridge tools marked `destructiveHint`: `griz
 | `state` | + `active_tab`, `tabs`, `dialog`, `start_page`, `ui_scale` |
 | `screenshot_editor` | + `active_tab`, `busy`, `dpi`, `modal.id`. Hover is suppressed. Works during blocking jobs. `kShotFrames` stays 3 |
 | `screenshot_viewport` | forces a scene pass while Level is hidden; crops to the render size |
-| `titlebar_info` | keeps `band`, `menus_end`, `buttons_x`; + `tabs`, `interactive`, `caption_h`, `folded`. Valid on every page |
+| `titlebar_info` | keeps `band`, `menus_end`, `buttons_x`; + `tabs`, `tab_row` (null on the Start page), `interactive`, `caption_h`, `folded`. Valid on every page |
 | `reset_layout [scope=level\|all]` | rebuilds `GrizzlyLevel_v2` and reopens panels; `all` also resets Layout |
 | `progress` | + `background` (jobs beside the editor), `errors`, `warnings`, `status_line` |
 | `quest_*` openers | activate synchronously; `pending` is resolved by the pump before the reply |

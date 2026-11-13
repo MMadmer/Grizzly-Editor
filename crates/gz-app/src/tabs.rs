@@ -16,10 +16,11 @@ pub const SLOT: f32 = 16.0;
 pub const SPACING: f32 = 1.0;
 pub const CHEVRON: f32 = 24.0;
 
-/// The width a tab wants for a label of `text_w`.
+/// The width a tab wants for a label of `text_w`. A point more than the text: the tab is laid on
+/// whole pixels, and a name that fits only to the fraction would lose its last letters to the rounding.
 #[must_use]
 pub fn want_width(text_w: f32) -> f32 {
-    (PAD_L + ICON + GAP + text_w + GAP + SLOT + PAD_R).clamp(W_MIN, W_MAX)
+    (PAD_L + ICON + GAP + text_w.ceil() + 1.0 + GAP + SLOT + PAD_R).clamp(W_MIN, W_MAX)
 }
 
 /// The room a tab's name has: the slot takes room only when it holds something.
@@ -250,6 +251,11 @@ mod tests {
     fn widths_and_labels() {
         assert_eq!(want_width(0.0), W_MIN);
         assert_eq!(want_width(1000.0), 220.0);
+        // a name keeps every letter on the active tab, its cross shown, whatever the rounding
+        for text_w in [66.4_f32, 80.0, 101.7] {
+            let w = want_width(text_w);
+            assert!(super::text_room(w - 1.0, true, false) >= text_w, "{text_w} in {w}");
+        }
         assert_eq!(label_of_path("quests\\Night Run.nqasset"), "Night Run");
         assert_eq!(label_of_path(".gitignore"), ".gitignore");
     }

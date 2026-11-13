@@ -152,6 +152,10 @@ pub struct GraphTab {
     rail: bool,
     pub pane_graph: Option<Rect>,
     pub pane_canvas: Option<Rect>,
+    /// What the last frame drew over the canvas: the Keyboard Shortcuts card, the rail's Graph panel.
+    over_canvas: Vec<Rect>,
+    /// The Keyboard Shortcuts card as the last frame laid it out.
+    keys_rect: Option<Rect>,
     pub pane_details: Option<Rect>,
     pub pane_drawer: Option<Rect>,
     /// Frames a quest_view change still owes before its answer describes it.
@@ -231,6 +235,8 @@ impl GraphTab {
             rail: false,
             pane_graph: None,
             pane_canvas: None,
+            over_canvas: Vec::new(),
+            keys_rect: None,
             pane_details: None,
             pane_drawer: None,
             view_frames: 0,
@@ -721,6 +727,7 @@ impl GraphTab {
             let mut cui = ui.new_child(UiBuilder::new().id_salt("gz-ui-graph.canvas").max_rect(canvas_r));
             cui.set_clip_rect(canvas_r.intersect(ui.clip_rect()));
             let bookmarks = snap.view.bookmarks.clone();
+            let covered = std::mem::take(&mut self.over_canvas);
             let mut ccx = CanvasCx {
                 scene: self.scene.as_deref(),
                 graph: &snap.graph,
@@ -732,6 +739,7 @@ impl GraphTab {
                 ops: &mut ops,
                 edit: snap.edit,
                 doc_status,
+                covered: &covered,
             };
             self.canvas.draw(&mut cui, canvas_r, &mut ccx);
             // Ctrl+C / Ctrl+X / Ctrl+V reach the canvas as clipboard events, not keys
@@ -831,8 +839,10 @@ impl GraphTab {
             };
             self.inspector.draw_graph_panel(&mut oui, r.shrink(8.0), &mut pcx);
             self.pane_graph = Some(r);
+            self.over_canvas.push(r);
         }
         self.draw_keys_card(ui);
+        self.over_canvas.extend(self.keys_rect);
 
         self.pane_drawer = None;
         if drawer != DrawerTab::None {
@@ -992,77 +1002,15 @@ impl GraphTab {
 
     /// What the keyboard does here, read off the canvas's keys: a card over the canvas.
     fn draw_keys_card(&mut self, ui: &mut Ui) {
-        let Some(c) = self.pane_canvas.filter(|_| self.show_keys) else { return };
-        let w = 440.0f32.min(c.width() - 16.0);
-        if w < 160.0 {
+        let Some(c) = self.pane_canvas.filter(|_| self.show_keys) else {
+            self.keys_rect = None;
             return;
+        };
+        let card = keys_card(ui, c, self.keys_rect, self.id.as_str());
+        self.keys_rect = card.rect;
+        if card.close {
+            self.show_keys = false;
         }
-        let p = palette(ui.ctx());
-        let r =
-            Rect::from_min_max(pos2(c.max.x - w - 8.0, c.min.y + 8.0), pos2(c.max.x - 8.0, c.max.y - 8.0));
-        let mut kui = ui.new_child(UiBuilder::new().id_salt("gz-ui-graph.keys").max_rect(r));
-        kui.set_clip_rect(r.intersect(ui.clip_rect()));
-        let frame = egui::Frame::new()
-            .fill(p.overlay)
-            .stroke(Stroke::new(1.0, p.border))
-            .corner_radius(CornerRadius::same(6))
-            .inner_margin(egui::Margin::same(8));
-        let inner = frame.show(&mut kui, |ui| {
-            ui.set_width(w - 16.0);
-            ui.horizontal(|ui| {
-                gz_ui::text::label(ui, "Keyboard Shortcuts", Font::Strong, p.text, Clip::End);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if gz_ui::icon_button(ui, Icon::Close, "Close (Esc)", false, true).clicked() {
-                        self.show_keys = false;
-                    }
-                });
-            });
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(
-                        "They work while the cursor is over the graph. Every edit is also an MCP call.",
-                    )
-                    .font(Font::Small.id())
-                    .color(p.text_muted),
-                )
-                .wrap(),
-            );
-            egui::ScrollArea::vertical()
-                .id_salt("gz-ui-graph.keys_rows")
-                .max_height((r.height() - 80.0).max(60.0))
-                .show(ui, |ui| {
-                    for (keys, what) in KEYS {
-                        match keys {
-                            None => {
-                                ui.add_space(2.0);
-                                gz_ui::text::label(ui, what, Font::Strong, p.text, Clip::End);
-                            }
-                            Some(k) => {
-                                ui.horizontal(|ui| {
-                                    ui.scope(|ui| {
-                                        ui.set_width(gz_ui::units::em(9.0));
-                                        gz_ui::text::label(ui, k, Font::Body, p.text, Clip::End);
-                                    });
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(what)
-                                                .font(Font::Body.id())
-                                                .color(p.text_secondary),
-                                        )
-                                        .wrap(),
-                                    );
-                                });
-                            }
-                        }
-                    }
-                });
-        });
-        // the card takes the clicks over it
-        ui.interact(
-            inner.response.rect,
-            egui::Id::unique(("gz-ui-graph.keys_block", self.id.as_str())),
-            egui::Sense::click(),
-        );
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1461,6 +1409,7 @@ impl GraphTab {
                 ops: &mut ops,
                 edit: snap.edit,
                 doc_status: None,
+                covered: &[],
             };
             f(&mut self.canvas, scene.as_deref(), &mut ccx)
         };
@@ -2131,4 +2080,167 @@ pub fn status_line(n: usize, e: usize, w: usize) -> String {
         look::plural(e, "error", "errors"),
         look::plural(w, "warning", "warnings")
     )
+}
+
+/// The Keyboard Shortcuts card as a frame laid it out: where it is, and whether its cross was clicked.
+struct KeysCard {
+    rect: Option<Rect>,
+    close: bool,
+}
+
+/// The Keyboard Shortcuts card over the canvas `c`, `last` its rect in the frame before, `salt` its tab. It
+/// guards the canvas under it - a click or a drag on it is the card's - and goes in after the canvas.
+fn keys_card(ui: &mut Ui, c: Rect, last: Option<Rect>, salt: &str) -> KeysCard {
+    let w = 440.0f32.min(c.width() - 16.0);
+    if w < 160.0 {
+        return KeysCard { rect: None, close: false };
+    }
+    let p = palette(ui.ctx());
+    let r = Rect::from_min_max(pos2(c.max.x - w - 8.0, c.min.y + 8.0), pos2(c.max.x - 8.0, c.max.y - 8.0));
+    // the canvas under the card takes no click meant for it: the guard goes in UNDER the card's
+    // own controls (registered first), or it would take their clicks too - the cross among them.
+    // The card's size is the last frame's; its first frame guards the room it may take.
+    ui.interact(
+        last.unwrap_or(r),
+        egui::Id::unique(("gz-ui-graph.keys_block", salt)),
+        egui::Sense::click_and_drag(),
+    );
+    let mut close = false;
+    let mut kui = ui.new_child(UiBuilder::new().id_salt(("gz-ui-graph.keys", salt)).max_rect(r));
+    kui.set_clip_rect(r.intersect(ui.clip_rect()));
+    let frame = egui::Frame::new()
+        .fill(p.overlay)
+        .stroke(Stroke::new(1.0, p.border))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(egui::Margin::same(8));
+    let inner = frame.show(&mut kui, |ui| {
+        ui.set_width(w - 16.0);
+        ui.horizontal(|ui| {
+            gz_ui::text::label(ui, "Keyboard Shortcuts", Font::Strong, p.text, Clip::End);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if gz_ui::icon_button(ui, Icon::Close, "Close (Esc)", false, true).clicked() {
+                    close = true;
+                }
+            });
+        });
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(
+                    "They work while the cursor is over the graph. Every edit is also an MCP call.",
+                )
+                .font(Font::Small.id())
+                .color(p.text_muted),
+            )
+            .wrap(),
+        );
+        egui::ScrollArea::vertical()
+            .id_salt("gz-ui-graph.keys_rows")
+            .max_height((r.height() - 80.0).max(60.0))
+            .show(ui, |ui| {
+                for (keys, what) in KEYS {
+                    match keys {
+                        None => {
+                            ui.add_space(2.0);
+                            gz_ui::text::label(ui, what, Font::Strong, p.text, Clip::End);
+                        }
+                        Some(k) => {
+                            ui.horizontal(|ui| {
+                                ui.scope(|ui| {
+                                    ui.set_width(gz_ui::units::em(9.0));
+                                    gz_ui::text::label(ui, k, Font::Body, p.text, Clip::End);
+                                });
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(what)
+                                            .font(Font::Body.id())
+                                            .color(p.text_secondary),
+                                    )
+                                    .wrap(),
+                                );
+                            });
+                        }
+                    }
+                }
+            });
+    });
+    KeysCard { rect: Some(inner.response.rect), close }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use egui::{Context, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Sense, pos2, vec2};
+
+    /// One frame: a stand-in for the canvas, then the card over it, as the tab draws them.
+    fn frame(
+        ctx: &Context,
+        t: f64,
+        events: Vec<Event>,
+        last: Option<Rect>,
+        canvas_clicks: &mut u32,
+    ) -> super::KeysCard {
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 800.0));
+        let mut card = None;
+        let mut out = ctx.run_ui(
+            RawInput { screen_rect: Some(screen), time: Some(t), events, ..RawInput::default() },
+            |ui| {
+                let canvas = Rect::from_min_max(pos2(0.0, 0.0), pos2(1200.0, 800.0));
+                if ui
+                    .interact(canvas, egui::Id::unique("gz-ui-graph.test_canvas"), Sense::click_and_drag())
+                    .clicked()
+                {
+                    *canvas_clicks += 1;
+                }
+                card = Some(super::keys_card(ui, canvas, last, "t"));
+            },
+        );
+        // the textures egui made are the painter's, and here nobody paints
+        out.textures_delta.clear();
+        card.unwrap()
+    }
+
+    fn click(ctx: &Context, t: &mut f64, at: Pos2, last: Option<Rect>, canvas_clicks: &mut u32) -> bool {
+        let button = |pressed| Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let mut closed = false;
+        for events in [vec![Event::PointerMoved(at)], vec![button(true)], vec![button(false)], vec![]] {
+            *t += 0.05;
+            closed |= frame(ctx, *t, events, last, canvas_clicks).close;
+        }
+        closed
+    }
+
+    /// The card's cross closes it, and a click on the card is not the canvas's: the guard against
+    /// the canvas lies under the card's controls (it once lay over them and took the cross's click).
+    #[test]
+    fn the_cross_closes_the_card_and_the_canvas_under_it_takes_no_click() {
+        let ctx = Context::default();
+        gz_ui::font::install(&ctx, gz_ui::font::FontFiles::default());
+        let mut canvas_clicks = 0;
+        let mut t = 0.0;
+        let mut last = None;
+        for _ in 0..2 {
+            t += 0.05;
+            last = frame(&ctx, t, vec![], last, &mut canvas_clicks).rect;
+        }
+        let card = last.unwrap();
+
+        // the card's body: neither a close nor a click of the canvas
+        let body = pos2(card.center().x, card.max.y - 20.0);
+        assert!(!click(&ctx, &mut t, body, last, &mut canvas_clicks));
+        assert_eq!(canvas_clicks, 0, "a click on the card reached the canvas");
+
+        // the canvas beside the card still takes its clicks
+        assert!(!click(&ctx, &mut t, pos2(40.0, 400.0), last, &mut canvas_clicks));
+        assert_eq!(canvas_clicks, 1);
+
+        // the cross, at the card's top right
+        let cross = pos2(card.max.x - 8.0 - 10.0, card.min.y + 8.0 + 10.0);
+        assert!(click(&ctx, &mut t, cross, last, &mut canvas_clicks), "the cross did not close the card");
+        assert_eq!(canvas_clicks, 1);
+    }
 }

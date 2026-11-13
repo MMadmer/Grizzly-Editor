@@ -898,6 +898,11 @@ async fn titlebar_info(editor: Arc<Editor>, _args: Args, _origin: Origin) -> Rep
             "dpi": r2(ppp),
             "folded": shell.folded(),
             "interactive": [[px(c.menus_x0), px(c.menus_end)], [px(c.buttons_x), px(c.bar.max.x)]],
+            "tab_row": if c.tab_row.is_positive() {
+                json!([px(c.tab_row.min.x), px(c.tab_row.min.y), px(c.tab_row.max.x), px(c.tab_row.max.y)])
+            } else {
+                Value::Null
+            },
             "tabs": tabs,
         }))
     })

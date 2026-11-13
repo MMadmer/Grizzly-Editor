@@ -30,7 +30,7 @@
   },
   {
    "name": "grizzly_screenshot_editor",
-   "description": "Screenshot of the editor window (PNG): the caption with the major tabs, the active tab and its panels, the status bar, an open drawer and any dialog - read from the presented frame, so it works even when the editor is covered by other windows or minimized. One call: the editor holds the request until its frames are presented, so the picture shows the state after every command sent before it; no tooltip is drawn into it, and it works during a blocking job (the busy frame). The reply names active_tab, busy, dpi and the dialog on top (modal {title, id, x, y, w, h} in px; id is its dlg.<name>); a panel dragged out of the editor into a window of its own is not in the picture, and 'outside' names such windows. Only the ACTIVE tab is drawn: bring another one up with grizzly_ui_tab first.",
+   "description": "Screenshot of the editor window (PNG): the caption, the row of the major tabs, the active tab and its panels, the status bar, an open drawer and any dialog - read from the presented frame, so it works even when the editor is covered by other windows or minimized. One call: the editor holds the request until its frames are presented, so the picture shows the state after every command sent before it; no tooltip is drawn into it, and it works during a blocking job (the busy frame). The reply names active_tab, busy, dpi and the dialog on top (modal {title, id, x, y, w, h} in px; id is its dlg.<name>); a panel dragged out of the editor into a window of its own is not in the picture, and 'outside' names such windows. Only the ACTIVE tab is drawn: bring another one up with grizzly_ui_tab first.",
    "inputSchema": {
     "type": "object",
     "properties": {}
@@ -2811,7 +2811,7 @@
   },
   {
    "name": "grizzly_titlebar_info",
-   "description": "Geometry and state of the custom window chrome, valid on every page (the Start page included): the caption band rect, caption_h, where the menus and major tabs end (menus_end) and the window buttons start (buttons_x), the client-area ranges that take the mouse (interactive: the menus and tabs, the window buttons - the rest of the band drags the window), every major tab's rect (tabs [{id, rect}]), maximized, dpi, folded (the window is narrower than 1100 pt: the menus are one Menu button) and whether the app icon loaded. Client px.",
+   "description": "Geometry and state of the custom window chrome, valid on every page (the Start page included): the caption band rect, caption_h, where the menus end (menus_end) and the window buttons start (buttons_x), the client-area ranges of the band that take the mouse (interactive: the menus, the window buttons - the rest of the band drags the window), the row of the major tabs under the caption (tab_row, null on the Start page) and every major tab's rect in it (tabs [{id, rect}]), maximized, dpi, folded (the window is narrower than 1100 pt: the menus are one Menu button) and whether the app icon loaded. Client px.",
    "inputSchema": {
     "type": "object",
     "properties": {}
