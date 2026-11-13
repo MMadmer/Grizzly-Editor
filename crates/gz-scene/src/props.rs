@@ -25,7 +25,7 @@ pub enum Kind {
     /// A name checked for uniqueness.
     Name,
     /// A pick from a list the editor fills (`smTexture`, `smObject`, ...).
-    Choose(SmolStr),
+    Choose(Choice),
     Bool,
     Flag,
     Float {
@@ -59,6 +59,25 @@ pub enum Kind {
     Button(Vec<SmolStr>),
     Time,
     Canvas,
+}
+
+/// What a choose row picks from (`PROP_CHOOSE`'s mode, parameter and item count).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Choice {
+    /// The list: `object`, `texture`, `skeletonanims`, `skeletonbones`, `gameanim`, ...
+    pub list: SmolStr,
+    /// The list's parameter, where it depends on the object: the model whose motions or bones
+    /// it lists (empty for a spawn without a model), the sections a restriction picks from.
+    pub param: Option<SmolStr>,
+    /// How many items the row takes: more than one is a comma list (`max_items`).
+    pub max: u32,
+}
+
+impl Choice {
+    #[must_use]
+    pub fn of(list: &str) -> Self {
+        Self { list: SmolStr::new(list), param: None, max: 1 }
+    }
 }
 
 /// A row's value.
@@ -144,7 +163,7 @@ fn text(k: String, t: &str) -> Row {
 }
 
 fn choose(k: String, list: &str, t: &str) -> Row {
-    Row::new(k, Kind::Choose(SmolStr::new(list)), Val::Text(t.to_owned()))
+    Row::new(k, Kind::Choose(Choice::of(list)), Val::Text(t.to_owned()))
 }
 
 fn caption(k: String, t: &str) -> Row {
@@ -608,8 +627,13 @@ fn entity_row(pref: &str, p: &gz_entities::Prop, ctx: &PropContext) -> Row {
             Row::new(k, Kind::Vector { min: 0.0, max: 0.0, dec: 2 }, Val::Vec3(Vec3::from(*v)))
         }
         (PropKind::Color, PropValue::Int(v)) => Row::new(k, Kind::Color, Val::Color(*v as u32)),
-        (PropKind::Choose { choose: c, .. }, PropValue::Text(t)) => {
-            choose(k, &format!("{c:?}").to_lowercase(), t)
+        (PropKind::Choose { choose: c, param, max_items, .. }, PropValue::Text(t)) => {
+            let choice = Choice {
+                list: SmolStr::new(format!("{c:?}").to_lowercase()),
+                param: param.as_deref().map(SmolStr::new),
+                max: (*max_items).max(1),
+            };
+            Row::new(k, Kind::Choose(choice), Val::Text(t.clone()))
         }
         (_, PropValue::Text(t)) => text(k, t),
         (_, PropValue::Int(v)) => int(k, *v, 0, 0),

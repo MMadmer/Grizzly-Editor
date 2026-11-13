@@ -32,4 +32,10 @@ parking_lot.workspace = true
 rustc-hash.workspace = true
 serde_json.workspace = true
 time.workspace = true
+# a spawn's model: its bones and motions for the choosers
+gz-fmt-ogf.workspace = true
 # the system's file dialogs (Save As, the detail objects' .dti files)
+
+[dev-dependencies]
+gz-chunk.workspace = true
+tempfile.workspace = true

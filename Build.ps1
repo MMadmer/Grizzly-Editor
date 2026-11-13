@@ -1,5 +1,6 @@
 # Single entry point: clean clone -> .\Build.ps1 -> the editor in Bin\x64\Release: Grizzly.exe (the editor, the
-# level compilers inside it), grizzly-mcp.exe (its MCP server over stdio), their PDBs and the third-party notices.
+# level compilers inside it), Grizzly-Cmd.exe (the editor for a command line: it runs Grizzly.exe and waits),
+# grizzly-mcp.exe (its MCP server over stdio), their PDBs and the third-party notices.
 # Nothing else in that folder is written or removed. pwsh 7 only: in PowerShell 5.1 a tool's stderr stops the script.
 #   .\Build.ps1             - release
 #   .\Build.ps1 -Debug      - the debug build, into Bin\x64\Debug
@@ -36,11 +37,11 @@ Push-Location $root
 try { & $cargo @cargoArgs } finally { Pop-Location }
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
-# the two programs with their debug information beside them (the crash reports read it), and the notices of the
+# the programs with their debug information beside them (the crash reports read it), and the notices of the
 # third-party code they carry
 $from = Join-Path $root "Intermediate\cargo\$(if ($Debug) { 'debug' } else { 'release' })"
 $files = [ordered]@{}
-foreach ($name in 'Grizzly.exe', 'Grizzly.pdb', 'grizzly-mcp.exe', 'grizzly_mcp.pdb') { $files[$name] = Join-Path $from $name }
+foreach ($name in 'Grizzly.exe', 'Grizzly.pdb', 'Grizzly-Cmd.exe', 'Grizzly_Cmd.pdb', 'grizzly-mcp.exe', 'grizzly_mcp.pdb') { $files[$name] = Join-Path $from $name }
 $files['THIRD_PARTY_NOTICES.txt'] = Join-Path $root 'licenses\THIRD_PARTY_NOTICES.txt'
 $files['LICENSE.txt'] = Join-Path $root 'LICENSE'
 $copied = @()

@@ -455,7 +455,7 @@ async fn ui_drawer(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
             "open" => {
                 let Some(which) = which else { return Err(invalid("id must be content or log")) };
                 if !shell.has_drawer(which) {
-                    return Err(invalid(format!("the {} drawer is not part of this build yet", which.id())));
+                    return Err(invalid(format!("no {} drawer is installed in this shell", which.id())));
                 }
                 if shell.drawer_panel_visible(which) {
                     shell.toggle_drawer(ctx, which);

@@ -130,6 +130,10 @@ IGNORE: dict[str, dict[str, str]] = {
     },
     "property_inspector": {
         "open": "the panel's state: a window (the Rust editor runs this scenario headless)",
+        "rows[].list": "added by the Rust editor: what a choose row's chooser lists (STATE.md, The last review, the "
+                       "shell; D13: the wire adds)",
+        "rows[].choices": "added by the Rust editor: the entries of a choose row whose list is the object's own, its "
+                          "model's bones or motions (STATE.md, The last review, the shell; D13: the wire adds)",
     },
     "property_inspector target=world": {
         "visible": "counts the rows IGNORE_ROWS names for this command",

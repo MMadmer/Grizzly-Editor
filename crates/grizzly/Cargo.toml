@@ -14,6 +14,11 @@ workspace = true
 name = "Grizzly"
 path = "src/main.rs"
 
+# The editor for a command line: a console program that runs Grizzly.exe and waits for it.
+[[bin]]
+name = "Grizzly-Cmd"
+path = "src/cmd_twin.rs"
+
 [dependencies]
 gz-base.workspace = true
 gz-task.workspace = true

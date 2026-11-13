@@ -417,7 +417,7 @@ impl PropsPanel {
         let footer_h = 8.0 * 2.0 + Font::Small.line() * 2.0 + 2.0;
         let grid_h = (ui.available_height() - footer_h).max(40.0);
         let mut commits: Vec<Commit> = Vec::new();
-        let mut pick: Option<(String, String, Option<ListKey>, String)> = None;
+        let mut pick: Option<(String, String, props::Choice, String)> = None;
         let mut open_text: Option<(String, String, String)> = None;
         let role = if t == WORLD { "world" } else { "selection" };
         let frac = if t == WORLD { 0.50 } else { 0.40 };
@@ -472,31 +472,21 @@ impl PropsPanel {
             }
             send(editor, t, c);
         }
-        if let Some((key, label, list, current)) = pick {
+        if let Some((key, label, choice, current)) = pick {
             if t == SELECTION {
                 let mut v = svc.view.lock();
                 v.choosing = Some(key.clone());
                 v.chosen.clear();
             }
-            // the orders' choosers (`OnFillOrderPaths`, `OnFillOrderTargets`): the scene's ways, and
-            // the player and the story ids of the scene's spawns
-            let items = if key.ends_with("Order\\Look path") || key.ends_with("Order\\Route") {
-                Some(snap.of_class(ObjClass::Way).map(|o| o.name.to_string()).collect::<Vec<_>>())
-            } else if key.ends_with("Order\\Target") {
-                let mut v = vec!["actor".to_owned()];
-                v.extend(scene_story_ids(&snap));
-                Some(v)
-            } else {
-                None
-            };
-            let mut c =
-                Chooser::new(Purpose::Property { target: t, key: key.clone() }, &label, list, &current);
+            let items = owner_items(&snap, &key);
+            let list = ListKey::of_choose(&choice);
+            let mut c = several(
+                Chooser::new(Purpose::Property { target: t, key: key.clone() }, &label, list, &current),
+                &key,
+                &choice,
+            );
             if let Some(items) = items {
                 c = c.with_items(items);
-            }
-            // a respawn point's profile takes several
-            if key.ends_with("Respawn Point\\Profile") {
-                c = c.multi();
             }
             *chooser = Some(c);
         }
@@ -617,7 +607,7 @@ fn val_text(v: &Val) -> String {
 struct RowCx<'a> {
     panel: &'a mut PropsPanel,
     commits: &'a mut Vec<Commit>,
-    pick: &'a mut Option<(String, String, Option<ListKey>, String)>,
+    pick: &'a mut Option<(String, String, props::Choice, String)>,
     open_text: &'a mut Option<(String, String, String)>,
     quality: usize,
     expanded: bool,
@@ -788,11 +778,11 @@ fn draw_row(g: &mut grid::Grid<'_>, r: &MergedRow, depth: u32, cx: &mut RowCx<'_
                     }
                 });
             }
-            (RowKind::Choose(list), _) => {
+            (RowKind::Choose(choice), _) => {
                 let text = r.row.text();
                 match grid::pick_field(ui, &key, if text == "<none>" { "" } else { &text }, true) {
                     PickAction::Browse => {
-                        *cx.pick = Some((key.clone(), label.clone(), ListKey::of_choose(list), text.clone()))
+                        *cx.pick = Some((key.clone(), label.clone(), choice.clone(), text.clone()))
                     }
                     PickAction::Clear => commit_now = Some(String::new()),
                     PickAction::None => {}
@@ -849,14 +839,51 @@ pub fn chooser_for(
 ) -> Option<Chooser> {
     let all = rows(state, lib, SELECTION, ctx);
     let r = props::find(&all, key)?;
-    let RowKind::Choose(list) = &r.row.kind else { return None };
+    let RowKind::Choose(choice) = &r.row.kind else { return None };
     let text = r.row.text();
-    Some(Chooser::new(
+    let c = Chooser::new(
         Purpose::Property { target: SELECTION, key: r.row.key.clone() },
         &props::label_of(&r.row.key),
-        ListKey::of_choose(list),
+        ListKey::of_choose(choice),
         if text == "<none>" { "" } else { &text },
-    ))
+    );
+    Some(several(c, &r.row.key, choice))
+}
+
+/// Whether a choose row takes several items, written as a comma list: a respawn point's
+/// profiles, and a model's bones where the row takes more than one (`max_items`: Fixed bones).
+#[must_use]
+pub(crate) fn takes_several(key: &str, choice: &props::Choice, list: Option<&ListKey>) -> bool {
+    key.ends_with(RESPAWN_PROFILE) || (choice.max > 1 && matches!(list, Some(ListKey::SkeletonBones(_))))
+}
+
+const RESPAWN_PROFILE: &str = "Respawn Point\\Profile";
+
+/// The chooser of a row that takes several items: the bones it has are picked already.
+fn several(c: Chooser, key: &str, choice: &props::Choice) -> Chooser {
+    if !takes_several(key, choice, c.list.as_ref()) {
+        c
+    } else if key.ends_with(RESPAWN_PROFILE) {
+        c.multi()
+    } else {
+        c.multi_from_current()
+    }
+}
+
+/// The items of a chooser whose row gives them itself: the orders' choosers (`OnFillOrderPaths`,
+/// `OnFillOrderTargets`) pick the scene's ways, and the player and the story ids of the scene's
+/// spawns.
+#[must_use]
+pub fn owner_items(snap: &SceneState, key: &str) -> Option<Vec<String>> {
+    if key.ends_with("Order\\Look path") || key.ends_with("Order\\Route") {
+        Some(snap.of_class(ObjClass::Way).map(|o| o.name.to_string()).collect())
+    } else if key.ends_with("Order\\Target") {
+        let mut v = vec!["actor".to_owned()];
+        v.extend(scene_story_ids(snap));
+        Some(v)
+    } else {
+        None
+    }
 }
 
 /// The story ids of the scene's spawns (`CollectSceneStories`): `story_id = X` under

@@ -19,6 +19,81 @@ pub(crate) fn register(reg: &mut Registry) {
     reg.add(AREA, "outliner_filter", outliner_filter);
     reg.add(AREA, "scene_visibility", scene_visibility);
     reg.add(AREA, "property_inspector", property_inspector);
+    reg.add(AREA, "property_choose", property_choose);
+}
+
+/// A choose row's list in `property_inspector`: what it lists, and the items of an object's own.
+type RowList = (String, Option<Arc<Vec<String>>>);
+
+/// What a choose row picks from, as its chooser shows it: the owner's items or the list.
+struct Pickable {
+    /// What the list is of (`motions`, `bones`, `textures`, ...).
+    noun: String,
+    items: Arc<Vec<String>>,
+    /// The sentence of an empty list.
+    empty: String,
+    multi: bool,
+}
+
+/// The list of the choose row `key` (Details' rows), read now when nobody has read it yet.
+async fn pickable(ed: &Arc<Editor>, svc: &SceneService, key: &str) -> Option<Pickable> {
+    let snap = svc.store.snapshot();
+    let ctx = gz_scene::prop_context(ed).await;
+    let rows = details::rows(&snap, &svc.library, SELECTION, &ctx);
+    let row = props::find(&rows, key)?;
+    let props::Kind::Choose(choice) = &row.row.kind else { return None };
+    let list = crate::lists::ListKey::of_choose(choice);
+    let multi = crate::details::takes_several(&row.row.key, choice, list.as_ref());
+    if let Some(items) = details::owner_items(&snap, &row.row.key) {
+        let empty = "Nothing to pick: the scene has none.".to_owned();
+        return Some(Pickable { noun: choice.list.to_string(), items: Arc::new(items), empty, multi });
+    }
+    match list {
+        Some(list) => Some(Pickable {
+            noun: list.noun().to_owned(),
+            items: crate::lists::Lists::wait(ed, &list).await,
+            empty: list.empty_text(),
+            multi,
+        }),
+        None => Some(Pickable {
+            noun: choice.list.to_string(),
+            items: Arc::new(Vec::new()),
+            empty: "No items were found.".to_owned(),
+            multi,
+        }),
+    }
+}
+
+/// `property_choose`: `gz-scene`'s chooser, and with `open` and `status` the list it shows -
+/// `list` (what it lists), `total`, `items` (those holding `search`, `limit` of them, default
+/// 500), `multi` (a comma list of several), `empty` (the sentence of a list with nothing in it).
+async fn property_choose(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
+    let svc = SceneService::of(&ed)?;
+    let action = a.str("action").unwrap_or("").to_ascii_lowercase();
+    let reply = gz_scene::property_choose(ed.clone(), a.clone(), o).await?;
+    if !matches!(action.as_str(), "open" | "status" | "") {
+        return Ok(reply);
+    }
+    let open = svc.view.lock().choosing.clone();
+    let key = open.unwrap_or_else(|| a.text("key").unwrap_or("Visual").to_owned());
+    let Some(p) = pickable(&ed, &svc, &key).await else { return Ok(reply) };
+    let search = a.str("search").unwrap_or("").to_lowercase();
+    let limit = a.i64("limit").unwrap_or(500).max(0) as usize;
+    let matching: Vec<&String> =
+        p.items.iter().filter(|i| search.is_empty() || i.to_lowercase().contains(&search)).collect();
+    let mut out = match reply {
+        Value::Object(m) => m,
+        other => return Ok(other),
+    };
+    out.insert("list".into(), json!(p.noun));
+    out.insert("total".into(), json!(p.items.len()));
+    out.insert("matching".into(), json!(matching.len()));
+    out.insert("items".into(), json!(matching.into_iter().take(limit).collect::<Vec<_>>()));
+    out.insert("multi".into(), json!(p.multi));
+    if p.items.is_empty() {
+        out.insert("empty".into(), json!(p.empty));
+    }
+    Ok(Value::Object(out))
 }
 
 /// `GetArgBool`: true / false, 1 / 0, the words, or the fallback.
@@ -286,6 +361,21 @@ async fn property_inspector(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
     let f = filter.to_lowercase();
     let visible = rows.iter().filter(|r| f.is_empty() || r.row.key.to_lowercase().contains(&f)).count();
     let limit = a.i64("limit").unwrap_or(200).max(0) as usize;
+    // a choose row names its list; one of the object's own (its model's motions or bones) is
+    // answered whole, any other through property_choose
+    let mut lists: rustc_hash::FxHashMap<String, RowList> = Default::default();
+    for m in rows.iter().take(limit) {
+        let props::Kind::Choose(choice) = &m.row.kind else { continue };
+        let key = crate::lists::ListKey::of_choose(choice);
+        let noun = key.as_ref().map_or_else(|| choice.list.to_string(), |k| k.noun().to_owned());
+        let own = match &key {
+            Some(
+                k @ (crate::lists::ListKey::SkeletonMotions(_) | crate::lists::ListKey::SkeletonBones(_)),
+            ) => Some(crate::lists::Lists::wait(&ed, k).await),
+            _ => None,
+        };
+        lists.insert(m.row.key.clone(), (noun, own));
+    }
     let out: Vec<Value> = rows
         .iter()
         .take(limit)
@@ -300,6 +390,12 @@ async fn property_inspector(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
             let unit = props::unit_of(&m.row);
             if !unit.is_empty() {
                 o.insert("unit".into(), json!(unit));
+            }
+            if let Some((noun, own)) = lists.get(&m.row.key) {
+                o.insert("list".into(), json!(noun));
+                if let Some(items) = own {
+                    o.insert("choices".into(), json!(items.as_ref()));
+                }
             }
             Value::Object(o)
         })

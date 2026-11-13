@@ -1,7 +1,8 @@
 Grizzly Editor third-party notices
 ==================================
 
-The editor (Grizzly.exe) and its MCP server (grizzly-mcp.exe) contain the
+The editor (Grizzly.exe, and Grizzly-Cmd.exe, which runs it for a command
+line) and its MCP server (grizzly-mcp.exe) contain the
 following third-party code. Build.ps1 puts this file beside them.
 
 LZHUF

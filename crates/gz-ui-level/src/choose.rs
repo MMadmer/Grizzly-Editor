@@ -1,6 +1,6 @@
 //! The chooser `Select <what>###dlg.choose` (L): a search over a list, folders opened where a
-//! match sits, the item picked (`UIChooseForm`). A list the editor cannot read yet takes a
-//! typed value.
+//! match sits, the item picked (`UIChooseForm`). What comes from a list is picked, never typed:
+//! an empty list says what it lacks.
 //!
 //! Who asked decides what a pick does ([`Purpose`]); the dialog only answers what was picked.
 
@@ -45,8 +45,6 @@ pub struct Chooser {
     pub multi: bool,
     pub search: String,
     pub picked: Vec<String>,
-    /// The value typed when there is no list.
-    pub typed: String,
     /// The value it started from.
     pub current: String,
 }
@@ -62,7 +60,6 @@ impl Chooser {
             multi: false,
             search: String::new(),
             picked: if current.is_empty() { Vec::new() } else { vec![current.to_owned()] },
-            typed: current.to_owned(),
             current: current.to_owned(),
         }
     }
@@ -71,6 +68,16 @@ impl Chooser {
     pub fn multi(mut self) -> Self {
         self.multi = true;
         self.picked.clear();
+        self
+    }
+
+    /// Takes several items, starting from those of the comma list it was opened on (a model's
+    /// fixed bones).
+    #[must_use]
+    pub fn multi_from_current(mut self) -> Self {
+        self.multi = true;
+        self.picked =
+            self.current.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect();
         self
     }
 
@@ -94,14 +101,14 @@ pub enum Outcome {
 pub fn draw(ui: &mut Ui, editor: &Arc<Editor>, c: &mut Chooser) -> Outcome {
     let mut open = true;
     let mut outcome = Outcome::Open;
-    let items = match (&c.items, c.list) {
+    let items = match (&c.items, &c.list) {
         (Some(items), _) => Some(items.clone()),
         (None, Some(key)) => Lists::get(editor, key),
-        (None, None) => None,
+        // a list its owner did not give: nothing to pick
+        (None, None) => Some(Arc::new(Vec::new())),
     };
-    let listed = c.items.is_some() || c.list.is_some();
     let mut double = None;
-    let any = if listed { !c.picked.is_empty() } else { true };
+    let any = !c.picked.is_empty();
     let status = if c.current.is_empty() { String::new() } else { format!("Now: {}", c.current) };
     let multi = c.multi;
     let (mut select, mut none, mut cancel) = (false, false, false);
@@ -109,24 +116,21 @@ pub fn draw(ui: &mut Ui, editor: &Arc<Editor>, c: &mut Chooser) -> Outcome {
         ui,
         &mut open,
         |ui| {
-            if !listed {
-                gz_ui::text::prose(ui, "The editor cannot list these yet: type the value.");
-                ui.add_space(6.0);
-                gz_ui::grid::text_field(ui, &mut c.typed);
-                return;
-            }
             SearchField::new(&mut c.search).hint("Search").id_salt("choose_search").show(ui);
             ui.add_space(4.0);
             match &items {
-                None => {
-                    state::busy_line(ui, &format!("Reading the {}...", c.list.map_or("items", ListKey::noun)))
-                }
+                None => state::busy_line(
+                    ui,
+                    &format!("Reading the {}...", c.list.as_ref().map_or("items", ListKey::noun)),
+                ),
                 Some(list) if list.is_empty() => {
                     state::empty_state(
                         ui,
                         gz_ui::Icon::Search,
                         "Nothing to pick",
-                        &format!("No {} were found.", c.list.map_or("items", ListKey::noun)),
+                        &c.list
+                            .as_ref()
+                            .map_or_else(|| "No items were found.".to_owned(), ListKey::empty_text),
                         None,
                     );
                 }
@@ -170,7 +174,7 @@ pub fn draw(ui: &mut Ui, editor: &Arc<Editor>, c: &mut Chooser) -> Outcome {
         },
     );
     if select {
-        outcome = Outcome::Picked(if listed { c.picked.clone() } else { vec![c.typed.clone()] });
+        outcome = Outcome::Picked(c.picked.clone());
     } else if none {
         outcome = Outcome::Picked(Vec::new());
     } else if cancel {

@@ -1615,7 +1615,7 @@ impl ShellState {
                 (None, None) => {
                     gz_ui::card::page(&mut host, contract::WINDOW_START_PAGE, |ui| {
                         let text_ = if editor.project_opt().is_some() {
-                            "Link the game this project is for: the Link Game card is not part of this build yet."
+                            "Link the game this project is for: game_link over MCP."
                         } else {
                             "Open a project with open_project over MCP, or start the editor with -project <folder>."
                         };
@@ -2169,7 +2169,7 @@ impl ShellState {
                     return Err("the Start page has no menus".to_owned());
                 }
                 if matches!(arg, "File" | "Edit" | "Mod" | "Libraries" | "Window" | "Help") && !self.menu_has_rows(arg) {
-                    return Err(format!("the {arg} menu has nothing in this build yet"));
+                    return Err(format!("the {arg} menu has no rows in this shell"));
                 }
                 Popup::close_all(ctx);
                 self.tab_menu = None;
@@ -2210,7 +2210,7 @@ impl ShellState {
                     self.activate(ctx, LEVEL);
                 }
                 if kind.starts_with("cb_") && !self.has_drawer(Drawer::Content) {
-                    return Err("the Content Browser is not part of this build yet".to_owned());
+                    return Err("no Content Browser is installed in this shell".to_owned());
                 }
                 Popup::close_all(ctx);
                 self.tab_menu = None;

@@ -91,6 +91,14 @@ impl Cli {
         cli
     }
 
+    /// Whether this run talks to whoever started it: a check of the binary, the compilers, the
+    /// log echo, or a headless editor that lives on the command line. Such a run takes its
+    /// parent's console for the streams the launcher did not redirect. A window run keeps out of
+    /// any console, so closing the terminal it was started from cannot end it.
+    pub fn speaks(&self) -> bool {
+        self.catalogue || self.dump_commands || self.compile.is_some() || self.echo || self.headless
+    }
+
     /// The home: `-home`, else `env_home` (the value of [`HOME_VAR`]) when it is not blank, else the
     /// data root. A test harness sets the variable once and every editor it starts keeps out of
     /// the repository's own project list and settings, whether its command line names a home or not.
@@ -127,5 +135,16 @@ mod tests {
         assert_eq!(folder, PathBuf::from("D:/levels/x"));
         assert_eq!(flags, vec!["-nosun".to_owned(), "-noise".to_owned()]);
         assert!(c.headless);
+    }
+
+    #[test]
+    fn only_a_run_that_prints_takes_a_console() {
+        for args in
+            [&["-dump_commands"][..], &["-catalogue"], &["-log_echo"], &["-headless"], &["-compile", "D:/x"]]
+        {
+            assert!(cli(args).speaks(), "{args:?}");
+        }
+        assert!(!cli(&[]).speaks());
+        assert!(!cli(&["-project", "D:/p", "-nodlg", "-mcp_port", "28917"]).speaks());
     }
 }

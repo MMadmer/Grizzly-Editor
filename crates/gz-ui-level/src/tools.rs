@@ -217,7 +217,7 @@ impl ToolsPanel {
         let search = self.search.get_mut(index)?;
         SearchField::new(search).hint("Search").min_em(8.0).id_salt(&format!("tool_search_{index}")).show(ui);
         ui.add_space(4.0);
-        let Some(items) = Lists::get(editor, key) else {
+        let Some(items) = Lists::get(editor, &key) else {
             state::busy_line(ui, &format!("Reading the {}...", key.noun()));
             return None;
         };
@@ -295,7 +295,7 @@ impl ToolsPanel {
                             &current,
                         ));
                     }
-                    Some(1) => crate::lists::Lists::refresh(editor, ListKey::Objects),
+                    Some(1) => crate::lists::Lists::refresh(editor, &ListKey::Objects),
                     _ => {}
                 }
             });

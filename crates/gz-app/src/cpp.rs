@@ -617,8 +617,9 @@ pub(crate) fn known_rows() -> Vec<CppCommand> {
     ]
 }
 
-/// The rows whose function is the shell's: the panels, the grid's cell count, the scene's file
-/// commands that exist, and the macros.
+/// The rows whose function is the shell's: the panels, the grid's cell count and the macros. The
+/// scene's file rows (`COMMAND_LOAD`, `COMMAND_SAVE` with Save As) are the Level tab's, with its
+/// Open Scene and Save Scene As dialogs.
 pub(crate) fn shell_rows() -> Vec<CppCommand> {
     use crate::doc::PanelOp;
     let panel = |id: &'static str, op: PanelOp| {
@@ -671,45 +672,6 @@ pub(crate) fn shell_rows() -> Vec<CppCommand> {
             }),
         )
         .face("View", "Grid Cell Count", Icon::None),
-        // `CommandLoad` with a scene: the file dialog is not part of this build
-        CppCommand::new(
-            40,
-            "COMMAND_LOAD",
-            "File\\Load Level",
-            CppAction::editor("open_scene", |p1, p2| {
-                let scene = p1.text().ok_or_else(|| {
-                    "p1s names the scene (the Open Scene dialog is not part of this build)".to_owned()
-                })?;
-                let mut a = Args::new();
-                a.insert("scene".into(), json!(scene));
-                // flSceneLoadDiscard
-                if p2.int().is_some_and(|f| f & 1 != 0) {
-                    a.insert("discard".into(), json!(true));
-                }
-                Ok(a)
-            }),
-        )
-        .editable(false)
-        .face("File", "Open Scene", Icon::None),
-        // `CommandSave`: Save; Save As (p2 = 1) is not part of this build
-        CppCommand::new(
-            41,
-            "COMMAND_SAVE",
-            "File",
-            CppAction::editor("save_scene", |p1, p2| {
-                if p2.int() == Some(1) {
-                    return Err("Save As is not part of this build".to_owned());
-                }
-                let mut a = Args::new();
-                if let Some(file) = p1.text().filter(|f| !f.is_empty()) {
-                    a.insert("file".into(), json!(file));
-                }
-                Ok(a)
-            }),
-        )
-        .subs(vec![CppSub::ints("Save", 0, 0).label("Save Scene")])
-        .face("File", "Save Scene", Icon::Save)
-        .enabled(has_project),
     ];
     rows.extend(crate::macros::rows());
     rows

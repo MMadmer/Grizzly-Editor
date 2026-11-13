@@ -1,12 +1,16 @@
-"""The executables carry the editor's icon.
+"""The executables carry the editor's icon and are the programs they should be.
 
 Reads each executable's first icon group (RT_GROUP_ICON, the one Explorer shows) from its resource
 section and wants its largest image byte for byte equal to the largest image of
 assets/grizzly-editor-icon.ico, and as many images as the icon file holds.
 
-    python tools/rust/check_icon.py Bin/x64/Release/Grizzly.exe Bin/x64/Release/grizzly-mcp.exe
+It also reads the PE subsystem: the editor is a window program (2), so Explorer starts it without
+a console window that would end it on its close; its twin for a command line (Grizzly-Cmd.exe)
+and the MCP bridge, a stdio server, are console programs (3).
 
-Exit code 1 when an executable carries no icon or another one.
+    python tools/rust/check_icon.py Bin/x64/Release/Grizzly.exe Bin/x64/Release/Grizzly-Cmd.exe \n        Bin/x64/Release/grizzly-mcp.exe
+
+Exit code 1 when an executable carries no icon or another one, or has the other subsystem.
 """
 import os
 import struct
@@ -15,6 +19,14 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ICO = os.path.join(HERE, "..", "..", "assets", "grizzly-editor-icon.ico")
 RT_ICON, RT_GROUP_ICON = 3, 14
+SUBSYSTEM_WINDOWS, SUBSYSTEM_CONSOLE = 2, 3
+SUBSYSTEM_NAMES = {SUBSYSTEM_WINDOWS: "a window program", SUBSYSTEM_CONSOLE: "a console program"}
+
+
+def wanted_subsystem(path):
+    """The bridge speaks over stdio and the twin serves a shell; every other executable here is the editor."""
+    name = os.path.basename(path).lower()
+    return SUBSYSTEM_CONSOLE if name.startswith(("grizzly-mcp", "grizzly-cmd")) else SUBSYSTEM_WINDOWS
 
 
 def side(b):
@@ -43,6 +55,8 @@ class Resources:
         opt_size, = struct.unpack_from("<H", exe, pe + 20)
         opt = pe + 24
         magic, = struct.unpack_from("<H", exe, opt)
+        # the same offset in PE32 and PE32+
+        self.subsystem, = struct.unpack_from("<H", exe, opt + 68)
         dirs = opt + (112 if magic == 0x20B else 96)
         self.rva, _size = struct.unpack_from("<II", exe, dirs + 2 * 8)
         if not self.rva:
@@ -89,6 +103,10 @@ def check(path, want_count, want):
         return f"cannot be read: {e.strerror}"
     except ValueError as e:
         return f"carries no icon: {e}"
+    want_sub = wanted_subsystem(path)
+    if res.subsystem != want_sub:
+        have = SUBSYSTEM_NAMES.get(res.subsystem, f"subsystem {res.subsystem}")
+        return f"is {have} (subsystem {res.subsystem}), it must be {SUBSYSTEM_NAMES[want_sub]} ({want_sub})"
     group = res.find(RT_GROUP_ICON)
     if group is None:
         return "carries no icon"
@@ -115,7 +133,9 @@ def main():
             print(f"{name}: {problem}")
             bad = 1
         else:
-            print(f"{name}: the editor's icon ({len(images)} images, the {width} px one equal to the .ico's)")
+            sub = wanted_subsystem(path)
+            print(f"{name}: {SUBSYSTEM_NAMES[sub]} (subsystem {sub}), the editor's icon "
+                  f"({len(images)} images, the {width} px one equal to the .ico's)")
     return bad
 
 

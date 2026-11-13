@@ -515,7 +515,7 @@ New and Open move to the File menu (#29).
 - Light Animations, Texture Library and Sound Library become documents: list | preview or ImDrawList timeline | grid. An unsaved prompt replaces the destructor's MessageBox.
 - The Texture Library reads the `.tga` sources of `$textures$` (rawdata\textures). Check New Textures turns a library tab without unsaved changes into New Textures (from `$import$`); the finished import brings the library back. Empty states name the folder or file each library reads.
 - Detail Object List becomes an L dialog (`dlg.detail_objects`, above).
-- Choose (`###dlg.choose`, L): search opens folders.
+- Choose (`###dlg.choose`, L): search opens folders. Every list is picked, never typed (`gz-ui-level`'s `lists.rs`, read off the UI thread and kept for the session): a spawn's Model\Animation lists its model's motions (its own and those of the `.omf` files it names), Fixed bones and a light's bones its model's bones (Fixed bones takes several, the ones it has picked already), Motion the game's `anims\*.anm` / `*.anms`. An empty list says what is missing ("The model ... has no motions.", "The object has no model."). `property_choose` answers the same list (`list`, `total`, `items` with `search` / `limit`, `multi`, `empty`); `property_inspector` names a choose row's `list` and gives the object's own (`choices`).
 - Edit Text drops its crashing Load/Save.
 
 ## 7. MCP

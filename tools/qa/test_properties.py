@@ -8,7 +8,9 @@ What it proves:
      action=open raises the panel on the Level tab
   B  property_set writes a row the way editing it does and property_inspector reads it back; a value a row does not
      take is refused with what it takes, and nothing changes
-  C  a spawn's Details: its Visual row opens the chooser (###dlg.choose), ui_dialog closes it as Cancel would
+  C  a spawn's Details: its Visual row opens the chooser (###dlg.choose), ui_dialog closes it as Cancel would; the
+     three lists the C++ filled are picked from - Fixed bones the model's bones (several), an anomaly's Attack
+     animation its model's motions, a helicopter's Motion the game's .anm files - and an empty one says why
   D  Preferences opens as a tab, ui_audit finds nothing escaping it, and it closes
   E  shortcuts: list, set (moved from the command that had it), clear - and every shortcut is back as it was
   F  the editor's preferences file and layout come back byte for byte
@@ -121,6 +123,66 @@ def shot() -> None:
     mcp("screenshot_editor", timeout=120)
 
 
+def placed_spawn(section: str) -> str:
+    """A spawn of `section` placed and selected; its name, or "" (a FAIL says why)."""
+    placed = mcp("place_spawn", section=section, x=3, y=0, z=3)
+    name = (placed.get("object") or {}).get("name", "")
+    if check(placed.get("ok") and bool(name), f"C a {section} to pick for", json.dumps(placed)[:300]):
+        mcp("focus_object", name=name, select=True)
+    return name
+
+
+def choosers(spawn: str) -> None:
+    """The three lists the C++ filled (EditorChooseEvents.h: FillSkeletonBones, FillSkeletonAnims,
+    FillGameAnim) are picked from, never typed: a model's bones, a model's motions, the game's .anm files."""
+    # the physic object wears a skeleton now (spawn_animation above gave it one): its bones, several at once
+    bones = mcp("property_choose", action="status", key="Fixed bones")
+    items = bones.get("items") or []
+    check(bones.get("ok") and bones.get("list") == "bones" and bones.get("total", 0) > 1 and bones.get("multi") is True,
+          f"C Fixed bones lists the bones of the spawn's model ({bones.get('total')}), several to pick",
+          json.dumps(bones)[:300])
+    if len(items) > 1:
+        two = ",".join(items[:2])
+        opened = mcp("property_choose", action="open", key="Fixed bones")
+        shot()
+        dialogs = json.dumps(mcp("ui_dialog", action="list"))
+        check(opened.get("ok") and "dlg.choose" in dialogs and opened.get("total") == bones.get("total"),
+              "C its chooser opens on the same list", json.dumps(opened)[:300] + " / " + dialogs[:200])
+        mcp("property_choose", action="pick", item=two)
+        shot()
+        row = rows(mcp("property_inspector", target="selection", limit=500))
+        fixed = next((r for k, r in row.items() if k and k.endswith("\\Model\\Fixed bones")), {})
+        check(fixed.get("value") == two and len(fixed.get("choices") or []) == bones.get("total"),
+              "C the picked bones are the row's value, property_inspector lists the same bones", json.dumps(fixed)[:300])
+        mcp("property_set", target="selection", key=fixed.get("key", "Fixed bones"), value="")
+    # an object without a model has nothing to pick, and says so
+    bare = placed_spawn("physic_object")
+    if bare:
+        empty = mcp("property_choose", action="status", key="Fixed bones")
+        check(empty.get("total") == 0 and empty.get("empty") == "The object has no model.",
+              "C an object without a model says it has none", json.dumps(empty)[:300])
+        mcp("delete_selected")
+    # an anomaly's Attack animation: the motions of its model
+    zone = placed_spawn("zone_burning_fuzz_weak")
+    if zone:
+        motions = mcp("property_choose", action="status", key="Attack animation")
+        check(motions.get("list") == "motions" and "idle" in (motions.get("items") or []),
+              f"C Attack animation lists the motions of the anomaly's model ({motions.get('total')})",
+              json.dumps(motions)[:300])
+        mcp("delete_selected")
+    # a helicopter's Motion: the game's .anm animations
+    heli = placed_spawn("helicopter")
+    if heli:
+        anims = mcp("property_choose", action="status", key="Motion", limit=5)
+        listed = anims.get("items") or []
+        check(anims.get("list") == "animations" and anims.get("total", 0) > 0
+              and all(i.lower().endswith((".anm", ".anms")) for i in listed),
+              f"C Motion lists the game's .anm animations ({anims.get('total')})", json.dumps(anims)[:300])
+        mcp("delete_selected")
+    # the spawn of the caller is selected again for what follows
+    mcp("focus_object", name=spawn, select=True)
+
+
 def run(project: str) -> None:
     ed = Editor()
     try:
@@ -220,6 +282,7 @@ def run(project: str) -> None:
                   json.dumps(stopped)[:200] + " / " + json.dumps(first)[:200])
             none = mcp("spawn_animation", object="qa_no_such_object")
             check(not none.get("ok"), "C spawn_animation refuses an object that is not there", json.dumps(none)[:200])
+            choosers(name)
             mcp("delete_selected")
 
         # ------------------------------------------------------------ D: Preferences

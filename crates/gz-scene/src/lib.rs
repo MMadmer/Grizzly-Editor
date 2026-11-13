@@ -106,7 +106,7 @@ pub mod tools;
 
 pub use apply::{SceneCmd, SceneReply};
 pub use class::ObjClass;
-pub use cmd::{install, prop_context, register};
+pub use cmd::{install, prop_context, property_choose, register};
 pub use model::{
     BulkData, ModMarks, ObjData, ObjFlags, ObjId, Object, RenderItem, SceneMeta, SceneState, ToolSettings,
     Transform,

@@ -1,5 +1,10 @@
 //! Grizzly Editor.
 
+// A window program: started from Explorer, a shortcut or the taskbar it gets no console, and so
+// no console window whose close would end it without the unsaved-work question. A run that
+// prints takes its parent's console (`gz_win::attach_parent_console`).
+#![cfg_attr(not(test), windows_subsystem = "windows")]
+
 mod cli;
 mod compile;
 mod core_cmds;
@@ -39,6 +44,9 @@ fn app_paths(cli: &Cli) -> AppPaths {
 fn main() -> ExitCode {
     let mut startup = Startup::begin();
     let cli = Cli::parse(std::env::args());
+    if cli.speaks() {
+        gz_win::attach_parent_console();
+    }
     // before the log: a check of the binary writes nothing
     if cli.catalogue {
         println!("{}", gz_mcp::catalogue_line());
@@ -49,10 +57,18 @@ fn main() -> ExitCode {
     let paths = app_paths(&cli);
 
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "user".to_owned()).to_lowercase();
-    let log_file = paths.logs.join(format!("grizzly_{user}.log"));
-    let (log, _log_guard) = match Log::start(Some(&log_file), cli.echo) {
+    // A compile run keeps a log of its own, and a dump of the registry writes none: neither takes
+    // the log of an editor that is open on the same home.
+    let log_name = if cli.compile.is_some() {
+        format!("grizzly_compile_{user}.log")
+    } else {
+        format!("grizzly_{user}.log")
+    };
+    let log_file = paths.logs.join(log_name);
+    let (log, _log_guard) = match Log::start((!cli.dump_commands).then_some(log_file.as_path()), cli.echo) {
         Ok(started) => started,
         Err(e) => {
+            gz_win::attach_parent_console();
             eprintln!("Grizzly Editor cannot write its log {}: {e}", log_file.display());
             return ExitCode::from(2);
         }
@@ -208,15 +224,35 @@ fn project_probe(editor: &Editor) -> gz_app::project::ProjectInfo {
 }
 
 fn open_project_at_start(runtime: &Runtime, editor: &std::sync::Arc<Editor>, project: &Path) {
-    if !editor.registry().has("open_project") {
-        editor.log.warn("-project is ignored: this build cannot open projects yet");
-        return;
-    }
     let mut args = gz_editor::Args::new();
     args.insert("path".to_owned(), serde_json::Value::String(project.display().to_string()));
     let reply = runtime.block_on(editor.call("open_project", args, editor.ui_origin()));
     if reply.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
         let why = reply.get("error").and_then(serde_json::Value::as_str).unwrap_or("unknown error");
         editor.log.error(format!("the project {} did not open: {why}", project.display()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gz_app::{Drawer, ShellBuilder, contract};
+
+    /// The shell keeps a sentence for a surface nobody installed (a test of `gz-app` alone):
+    /// the editor installs every one of them, so none of those sentences is ever its answer.
+    #[test]
+    fn the_editor_installs_every_surface_the_contract_names() {
+        let mut shell = ShellBuilder::new();
+        super::install_ui(&mut shell);
+        for kind in contract::DOCUMENT_KINDS {
+            assert!(shell.has_document(kind), "no tab of the kind {kind}");
+        }
+        for (id, _) in contract::DIALOGS {
+            assert!(shell.has_dialog(id), "no dialog {id}");
+        }
+        assert!(shell.has_drawer(Drawer::Content) && shell.has_drawer(Drawer::Log));
+        assert!(shell.has_start_page());
+        // the scene's file rows are the Level tab's, with its Open Scene and Save As dialogs
+        assert!(shell.cpp_subs("COMMAND_LOAD").is_some());
+        assert_eq!(shell.cpp_subs("COMMAND_SAVE"), Some(vec!["Save".to_owned(), "Save As".to_owned()]));
     }
 }

@@ -1351,7 +1351,9 @@ async fn property_set(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     Ok(json!({ "target": target_name, "key": key, "value": text }))
 }
 
-async fn property_choose(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
+/// `property_choose`: the chooser of a choose row as a mouse drives it. The Level tab's crate
+/// registers over it and adds the list the chooser shows.
+pub async fn property_choose(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let svc = SceneService::of(&ed)?;
     let action = a.str("action").unwrap_or("").to_ascii_lowercase();
     let k = a.text("key").unwrap_or("Visual").to_owned();

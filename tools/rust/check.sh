@@ -98,8 +98,10 @@ fi
 # - text encodings: no C1 control character or broken UTF-8, cp1251 where the game's parsers read it
 #   (tools/lint/check_encoding.py, the gate the C++ build ran);
 # - no test writes a program file (tools/rust/check_test_files.py);
-# - Grizzly.exe and grizzly-mcp.exe of the release build (Bin/x64/Release, Build.ps1) carry the editor's icon
-#   (tools/rust/check_icon.py), checked when both are built.
+# - Grizzly.exe, Grizzly-Cmd.exe and grizzly-mcp.exe of the release build (Bin/x64/Release, Build.ps1) carry the
+#   editor's icon, the editor is a window program, its twin for a command line and the bridge console ones
+#   (tools/rust/check_icon.py), checked when they are built; the twin answers what the editor answers, with
+#   its exit code.
 echo "== encoding"
 if python tools/lint/check_encoding.py --quiet; then
     echo "encoding: clean"
@@ -119,11 +121,21 @@ fi
 
 echo "== icon"
 release=Bin/x64/Release
-if [ -f "$release/Grizzly.exe" ] && [ -f "$release/grizzly-mcp.exe" ]; then
-    if python tools/rust/check_icon.py "$release/Grizzly.exe" "$release/grizzly-mcp.exe"; then
-        echo "icon: both executables carry the editor's icon"
+if [ -f "$release/Grizzly.exe" ] && [ -f "$release/Grizzly-Cmd.exe" ] && [ -f "$release/grizzly-mcp.exe" ]; then
+    if python tools/rust/check_icon.py "$release/Grizzly.exe" "$release/Grizzly-Cmd.exe" "$release/grizzly-mcp.exe"; then
+        echo "icon: the executables carry the editor's icon; the editor is a window program, its twin and the bridge console ones"
     else
         echo "icon: failed"
+        bad=1
+    fi
+    # the twin runs the editor beside it for a shell: the same answer, the editor's exit code
+    twin=$("$release/Grizzly-Cmd.exe" -catalogue 2>&1); twin_code=$?
+    editor=$("$release/Grizzly.exe" -catalogue 2>&1)
+    "$release/Grizzly-Cmd.exe" -home Intermediate/check-home -compile "$release/no-such-level" > /dev/null 2>&1; refused=$?
+    if [ -n "$twin" ] && [ "$twin" = "$editor" ] && [ $twin_code -eq 0 ] && [ $refused -ne 0 ]; then
+        echo "command line: Grizzly-Cmd.exe answers as the editor does and ends with its exit code"
+    else
+        echo "command line: Grizzly-Cmd.exe said '$twin' (exit $twin_code), the editor '$editor'; a refused compile ended with $refused"
         bad=1
     fi
 else

@@ -161,13 +161,8 @@ fn draw_chip(ui: &mut Ui, cx: &mut DocCx<'_>) {
                         text::label(ui, name, Font::Body, p.text, Clip::End)
                     });
                     let Some(a) = toolbar::action(action) else { return };
-                    let registered = editor.registry().has(a.command);
-                    let why = if registered {
-                        "A compiler or the game is running."
-                    } else {
-                        "The level builders are not part of this build yet."
-                    };
-                    if gz_ui::Button::new("Build").enabled(registered && !busy, why).show(ui).clicked() {
+                    let why = "A compiler or the game is running.";
+                    if gz_ui::Button::new("Build").enabled(!busy, why).show(ui).clicked() {
                         toolbar::run(&editor, a, Args::new());
                         egui::Popup::close_id(&ctx, popup);
                     }

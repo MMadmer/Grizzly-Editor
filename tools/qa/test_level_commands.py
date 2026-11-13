@@ -10,6 +10,8 @@ in test_scene_tools (C, Y); here every name the toolbar and the Build menu post 
   C  compile_details on a level folder that does not hold what the detail compiler reads is refused, naming the file
   D  play_game with root= a folder that holds a file of somebody else's is refused before anything is built or
      written, the folder unchanged; no game is started
+  E  the scene's file rows of the C++ table over exec_command: COMMAND_LOAD without a scene and Save As open no
+     window for an MCP caller and name p1s; COMMAND_SAVE p1s=<file> saves there
 
     python tools/qa/test_level_commands.py --project <project>
 """
@@ -160,6 +162,23 @@ def run(project: str, work: str) -> None:
         game = [j for j in (jobs.get("jobs") or []) if j.get("state") == "running"
                 and (j.get("kind") == "level_run" or j.get("group") == "game")]
         check(jobs.get("ok") and not game, "D no game job runs after the refusal: no game was started", short(jobs))
+
+        # ------------------------------------------------------------ E: the scene's file rows of the C++ table
+        # COMMAND_LOAD without a scene and COMMAND_SAVE's Save As open the Open Scene / Save Scene As dialogs for a
+        # person; an MCP caller gets no window, and the refusal names the argument to pass instead
+        for row, extra in (("COMMAND_LOAD", {}), ('COMMAND_SAVE."Save As"', {})):
+            r = mcp("exec_command", name=row, **extra)
+            shot = mcp("screenshot_editor", timeout=120)
+            check(r.get("ok") and r.get("result") == 0 and "p1s" in (r.get("refused") or "")
+                  and shot.get("modal") is None,
+                  "E %s over MCP opens no window and names p1s" % row, short(r) + " / modal " + short(shot.get("modal")))
+        saved = os.path.join(project, "rawdata", "levels", "qa_saved_as.level")
+        r = mcp("exec_command", name="COMMAND_SAVE", p1s=saved)
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not os.path.isfile(saved):
+            time.sleep(0.25)
+        check(r.get("ok") and r.get("result") == 1 and os.path.isfile(saved),
+              "E COMMAND_SAVE p1s=<file> saves the scene there", short(r))
     finally:
         ed.close()
 

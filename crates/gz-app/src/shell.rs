@@ -276,7 +276,8 @@ pub struct ShellState {
     pub(crate) quiet_log: bool,
 }
 
-/// The Level tab a build without the level editor shows.
+/// The Level tab of a shell no level editor was installed in (a test of `gz-app` alone): the
+/// editor installs `gz-ui-level`'s, whose factory never fails.
 struct LevelPlaceholder;
 
 impl Document for LevelPlaceholder {
@@ -296,7 +297,7 @@ impl Document for LevelPlaceholder {
         false
     }
     fn body(&mut self, ui: &mut Ui, _cx: &mut DocCx<'_>) {
-        state::empty_state(ui, Icon::Level, "Level", "The level editor is not part of this build yet.", None);
+        state::empty_state(ui, Icon::Level, "Level", "No level editor is installed in this shell.", None);
     }
 }
 
@@ -510,7 +511,7 @@ impl ShellState {
         };
         let made = match self.parts.factories.get_mut(tab.kind.as_str()) {
             Some(f) => f(&self.editor, &req),
-            None => Err(format!("no tab of the kind '{}' in this build", req.kind)),
+            None => Err(format!("no tab of the kind '{}' is installed in this shell", req.kind)),
         };
         let Some(tab) = self.tabs.get_mut(i) else { return };
         match made {
@@ -551,7 +552,7 @@ impl ShellState {
         }
         let Some(factory) = self.parts.factories.get_mut(req.kind.as_str()) else {
             return Err(OpenError::Other(if crate::contract::DOCUMENT_KINDS.contains(&req.kind.as_str()) {
-                format!("{} is not part of this build yet", req.kind)
+                format!("no tab of the kind '{}' is installed in this shell", req.kind)
             } else {
                 format!("unknown kind '{}' (ui_contract lists the document kinds)", req.kind)
             }));
@@ -873,7 +874,7 @@ impl ShellState {
         self.parts.drawers.get(which.index()).is_some_and(Option::is_some)
     }
 
-    /// Opens a drawer over the active tab. `false` when this build has no body for it.
+    /// Opens a drawer over the active tab. `false` when the shell has no body installed for it.
     pub(crate) fn open_drawer(&mut self, which: Drawer) -> bool {
         if !self.has_drawer(which) {
             return false;
@@ -1166,7 +1167,7 @@ impl ShellState {
     pub(crate) fn open_dialog(&mut self, ctx: &Context, id: &str) -> Result<(), String> {
         let Some(i) = self.parts.dialogs.iter().position(|d| d.id == id) else {
             return Err(if crate::contract::DIALOGS.iter().any(|(d, _)| *d == id) {
-                format!("{id} is not part of this build yet")
+                format!("the dialog '{id}' is not installed in this shell")
             } else {
                 format!("unknown dialog '{id}' (ui_contract lists them)")
             });

@@ -833,7 +833,11 @@ async fn list_assets(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
                 ed.exec.io(move || provider(&editor)).await
             }
             Some(Lister::Async(provider)) => provider(ed.clone()).await,
-            None => return Err(refuse("category has no enumerator in this build")),
+            // the editor installs a lister for every category (the differential run lists each): this
+            // answers only an editor made of this crate alone
+            None => {
+                return Err(refuse("nothing lists this category: the area that reads it is not installed"));
+            }
         }
     };
     let filter = args.str("filter").unwrap_or_default().to_lowercase();

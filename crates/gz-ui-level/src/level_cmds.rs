@@ -275,6 +275,12 @@ pub fn open_scene_file(editor: &Arc<Editor>, ctx: &Context, file: String) {
     });
 }
 
+/// What `COMMAND_LOAD` without a scene answers a caller no dialog opens for (MCP, `-nodlg`).
+pub const NAME_THE_SCENE: &str =
+    "p1s names the scene to open (COMMAND_LOAD p1s=<file>): no Open Scene dialog opens for this caller";
+/// What `COMMAND_SAVE`'s Save As, or a Save of a scene without a file, answers such a caller.
+pub const NAME_THE_SAVE: &str = "p1s names the file to save the scene as (COMMAND_SAVE p1s=<file>): no Save Scene As dialog opens for this caller";
+
 /// File > Open Scene... (`CommandLoad` without a scene): the system's dialog in `$maps$`.
 pub fn open_scene_dialog(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
     let Some(svc) = editor.project_opt().and_then(|s| s.services.get::<SceneService>()) else {
@@ -884,7 +890,9 @@ pub(crate) fn install(b: &mut ShellBuilder) {
             CppAction::shell(|cx, p1, _| {
                 match p1.text() {
                     Some(file) => open_scene_file(cx.editor, cx.ctx, file.to_owned()),
-                    None => open_scene_dialog(cx.editor, cx.ctx)?,
+                    // a person gets the Open Scene dialog; a caller who cannot answer one is told
+                    // what to pass instead
+                    None => open_scene_dialog(cx.editor, cx.ctx).map_err(|_| NAME_THE_SCENE.to_owned())?,
                 }
                 ok()
             }),
@@ -899,8 +907,11 @@ pub(crate) fn install(b: &mut ShellBuilder) {
             "COMMAND_SAVE",
             "File",
             CppAction::shell(|cx, p1, p2| {
+                // the Save Scene As dialog for a person, the argument to pass for any other caller
+                let ask_file =
+                    |cx: &mut DocCx<'_>| save_as(cx.editor, cx.ctx).map_err(|_| NAME_THE_SAVE.to_owned());
                 if p2.int() == Some(1) {
-                    save_as(cx.editor, cx.ctx)?;
+                    ask_file(cx)?;
                     return ok();
                 }
                 let file = p1.text().filter(|f| !f.is_empty()).map(str::to_owned);
@@ -908,7 +919,7 @@ pub(crate) fn install(b: &mut ShellBuilder) {
                     Some(f) => run(cx.editor, "save_scene", args(&[("file", json!(f))])),
                     None => match scene(cx.editor).and_then(|s| s.store.snapshot().meta.file.clone()) {
                         Some(_) => run(cx.editor, "save_scene", Args::new()),
-                        None => save_as(cx.editor, cx.ctx)?,
+                        None => ask_file(cx)?,
                     },
                 }
                 ok()

@@ -197,6 +197,38 @@ impl ShellBuilder {
         Self::default()
     }
 
+    /// What is installed, for a test of an application's own builder: a document kind's
+    /// factory, a dialog by its MCP id, a drawer, the Start page.
+    #[must_use]
+    pub fn has_document(&self, kind: &str) -> bool {
+        self.factories.contains_key(kind)
+    }
+
+    #[must_use]
+    pub fn has_dialog(&self, id: &str) -> bool {
+        self.dialogs.iter().any(|d| d.id == id)
+    }
+
+    #[must_use]
+    pub fn has_drawer(&self, which: Drawer) -> bool {
+        self.drawers.get(which.index()).is_some_and(Option::is_some)
+    }
+
+    #[must_use]
+    pub fn has_start_page(&self) -> bool {
+        self.start_page.is_some()
+    }
+
+    /// The sub-commands of a C++ table row by its name, as the last registration left it.
+    #[must_use]
+    pub fn cpp_subs(&self, name: &str) -> Option<Vec<String>> {
+        self.cpp
+            .iter()
+            .rev()
+            .find(|c| c.name == name)
+            .map(|c| c.subs.iter().map(|s| s.desc.to_string()).collect())
+    }
+
     /// The factory of a document kind. A kind registered twice keeps the later factory.
     pub fn document(
         &mut self,

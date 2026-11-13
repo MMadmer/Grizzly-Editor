@@ -564,7 +564,11 @@ async fn asset_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Repl
         },
     };
     if !matches!(category, "Objects" | "Groups" | "Textures" | "Textures (raw)" | "Visuals") {
-        return Err(invalid("category has no thumbnails in this build"));
+        // names with no picture of their own: a level, a particle effect, a sound, an entity
+        // section, a light animation
+        return Err(invalid(
+            "this category has no thumbnails: Objects, Groups, Textures, Textures (raw) and Visuals have",
+        ));
     }
     let sources = crate::loader::Sources::of(&editor).await;
     let (n, c) = (name.clone(), category);

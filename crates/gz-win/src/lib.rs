@@ -6,6 +6,8 @@
 //! - [`process_counters`] - when the process was created and how many file operations it made:
 //!   the numbers of the startup profile;
 //! - [`started_minimized`] - whether the launcher asked for a minimised window;
+//! - [`attach_parent_console`] - the standard streams of a window program that prints;
+//! - [`end_with_this_process`] - a child process that does not outlive this one;
 //! - [`write_minidump`], [`install_fatal_exception_dump`] - what a crash leaves behind;
 //! - [`foreground_is_ours`] - whether a window of this process is in front;
 //! - [`raise_this_thread_priority`] - the thread that draws and presents above the pools;
@@ -13,15 +15,22 @@
 //!   behind others;
 //! - [`install_caption_hit_test`] - `WM_NCHITTEST` for a window that draws its own caption;
 //! - [`known_folder`], [`free_space`], [`volume_path_name`], [`is_volume_root`] - the user's
-//!   folders and the volumes.
+//!   folders and the volumes;
+//! - [`long_paths_enabled`] - whether Windows takes long paths.
 
 #![cfg(windows)]
 
 mod caption;
+mod console;
 mod folders;
+mod job;
+mod registry;
 
 pub use caption::{CaptionHitTest, CaptionShape, PxRect, hit_test, install_caption_hit_test};
+pub use console::{ConsoleStreams, attach_parent_console};
 pub use folders::{KnownFolder, free_space, is_volume_root, known_folder, volume_path_name};
+pub use job::end_with_this_process;
+pub use registry::long_paths_enabled;
 
 use std::fs::File;
 use std::io;
