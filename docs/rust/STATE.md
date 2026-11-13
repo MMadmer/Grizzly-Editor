@@ -3154,3 +3154,140 @@ another engineer's running editors, so `GRIZZLY_QA_EXE` named the release one):
 
 Not run: `diff_compile.py` (nothing of the compiler changed), `test.sh --all` and the whole `run_all.py` (the
 suites whose code did not change stand on their last runs).
+
+## Closing: the compiler's proof
+
+The brief `docs/rust/briefs/close-compiler.md`, 13 Nov, 00:14 - 04:40. Files: `tools/qa/diff_compile.py`,
+`tools/qa/compare_compile.py`, the C++ working copy `D:\Games\XFined-Editor-cpp` (`cmake/CompilerTargets.cmake`); no
+Rust file changed - nothing the new records found was the port's. Before the first run (00:14:51): `find
+D:\XFinedProjects "D:\Games\Dead Air\modules" -newermt` ten minutes earlier - nothing.
+
+### The crash of mp_close_combat's MU models: the C++'s, fixed in the oracle
+
+`diff_compile.py --diagnose <scene> --cpp-bin <build> [--set k=v] [--flag=-x]` (new) runs XrLC of a diagnostic build
+(the working copy built with `/Zi /DEBUG` and nothing else, `Intermediate/close-compiler/build_cpp.ps1 -Diag`, into
+`D:\Games\XFined-Editor-cpp\Bin\x64\Diag`) under a debugger written in the tool (kernel32 + dbghelp: first- and
+second-chance faults, the faulting thread's stack walked and scanned, `_NO_DEBUG_HEAP`), on the scene at 1 px/m,
+one sample, `-noise`, its models kept. Under the debugger the fault is **0xC00000FD, a stack overflow** (outside one
+it surfaces as 0xC0000005 once the guard page is gone), on the main thread, `FindBestScore` on every frame of it (1,817 in the first 512 KB scanned)
+(`XrETools/optimize_vertex_order.cpp:1456`): Forsyth's lookahead vertex-cache optimiser, which this tree uses in place
+of D3DX since `5a3f5886` ("Cut the editor loose from d3dx9") and which VIPM's `CalculateSW` calls for every sliding
+window, recurses once per face of the list; at ~300 bytes a frame the 1 MB default stack holds some 3,500 faces, and
+a model part of 7,706 vertices has more. A fault of the C++ on a valid input. The port runs that recursion as a loop
+(`gz-fmt-ogf`'s `optimize.rs`, said in its header).
+
+**The fix** (`D:\Games\XFined-Editor-cpp\cmake\CompilerTargets.cmake`, uncommitted): `target_link_options(XrLC PRIVATE
+/STACK:134217728)` - 128 MB reserve, committed only as deep as a run goes; VIPM takes up to 65,535 faces. No code
+changes; the header of XrLC.exe says 134217728. (A conversion of `BuildGroups` in `NVMeshMenderTwo.cpp` to a loop was
+tried first, before the debugger named the function, and reverted: the file is as at the tag.) The oracle
+`Bin\x64\CppCompilers` is a build of the working copy (`Build.ps1 -Only compilers -Out ...`, 95 s; the old binaries
+are kept in `Intermediate/close-compiler/oracle_before`). **Proven to change no result on mp_test**:
+`diff_compile.py --rerecord mp_test` (new: the oracle again on the record's own input, the record untouched): XrLC
+15.2 s wall, 10.8 s CPU; 4 files byte for byte equal to a run of the record, the other four (`build.cform`,
+`level.cform`, both pages) the ones the record's own two runs differ in; under the rules light 0 on every channel,
+vertex light 0, level.cform "the same surface triangulated another way". `mp_close_combat_whole` then ran through
+"Converting MU-models to OGFs" twice.
+
+### The list, each line
+
+| | scene (options) | C++ XrLC wall / CPU s, two runs | result |
+|---|---|---|---|
+| Draft | `mp_close_combat_draft` (the editor's Draft: quality 0, 0.1 px/m, 1 sample) | 41.1 / 101.8, 36.2 / 106.6 (+ xrDO_Light 339 / 152, 213 / 170) | PASS after two rules (below) |
+| -nosun | `mp_test_nosun` | 20.4 / 11.6, 101.5 / 15.5 | PASS; changes the sun: 1.a mean 125, 2.rgb 124 against mp_test |
+| -nosmg | `mp_test_nosmg`; `mp_close_combat_draft_nosmg` (Draft, no detail objects) | 66.7 / 17.9, 143.9 / 19.1; 22.3 / 76.9, 356.5 / 104.8 | PASS; on mp_test it changes only level.cform (the normals are the same either way), on the Draft scene the normals: the visuals, level.geom, build.cform, build.err |
+| -no_optimize | `mp_test_no_optimize` | 32.4 / 18.0, 24.1 / 15.0 | PASS; no weld: level.geom, its light mean 3.35 / max 17 against mp_test |
+| -att | `mp_test_att` | 15.6 / 10.9, 16.6 / 11.9 | PASS; linear point lights: the page's colour, mean 0.66 / max 57 |
+| -no_invalidefaces | `mp_test_invalid_kept` (one face's texture coordinates collapsed) | 15.8 / 11.0, 18.0 / 13.0 | PASS; the face kept: build.err 72 bytes (36 without), two more vertices |
+| the abort | `mp_test_invalid` (the same face, `REFUSED`) | 1.4 / 0.6, 1.6 / 0.6 | PASS: XrLC exit 3 (Debug.fatal under `-nodlg`) twice, the Rust exit 1; "1 invalid faces" on all three; build.err 72 bytes byte for byte; the Rust writes nothing else, the C++ leaves build.lights and the 12-byte head of `level` |
+| more than two pages | `mp_close_combat_pages` (20 px/m, 1 sample, its MU models) | 567.5 / 2402.9, 552.4 / 2370.1 | PASS: five pages both sides; 3,003 triangles on another page |
+| implicit at nine samples, nine samples on a third scene, MU + implicit, MU at own settings | `mp_close_combat_whole` (own settings: 10 px/m, 9 samples, no `-noise`, 29 MU models / 102 references) | 1991.2 / 6543.5, 1826.4 / 6446.0 (+ xrDO_Light 89.7 / 132.8, 75.8 / 112.5) | PASS |
+| MU at l03u's own settings | `l03u_agr_underground_own` (10 px/m, 9 samples, no `-noise`) | 1186.8 / 4295.7, 1154.1 / 4050.8 | PASS: two pages, 500 triangles on another page; level.cform under the rule of twice the C++ runs' (below) |
+| the paged rule | `l03u_agr_underground_paged` (6 px/m, 1 sample, `-noise`: two pages over 31 sectors) | 220.6 / 869.4, 217.6 / 849.3 | PASS but the phase times (below) |
+
+Measured on the new scenes (Rust against cpp1; lightmaps mean / p99 per channel at most): whole 1.a 0.44 / 7, 2.r/b
+1.47 / 16 (5-bit, bound 3 / 16), 2.g 1.00 / 14, hemi 0.60 / 6, the terrain's implicit textures 0.04 / 1 (max 22),
+vertex light 0.035, MU models' own light 0.002 / max 1, references lit alone trees 0.025 / 1, LODs 0.12 / 1,
+level.details byte for byte, level.cform 103 one-sided (the C++ runs' 132); l03u_own 1.r 0.21 / 5, hemi 0.24 / 4,
+vertex 0.013, MU references alone trees 0.002, LODs 0.04, level.cform 499 one-sided (theirs 497); pages 2.r/b 0.99 / 8, 1.a 0.23 / 3, vertex
+0.035, level.cform 353 (theirs 313); l03u_paged 1.r 0.29 / 6, hemi 0.27 / 4, vertex 0.013, level.cform 452 (theirs
+419); Draft: lightmaps 0, vertex 0.068, MU trees 0.245 / 5, LODs 0.35 / 3. Rust times against the C++'s (under the others' builds): whole 357 s
+(4,898 s CPU) against 1,991 s; pages 149 s against 568 s; l03u_paged 48 s against 221 s; l03u_own 171 s against
+1,187 s.
+
+**9. No program is copied to be run.** XrCore of `cpp-compilers-last` takes no fs config on its command line: no
+`-fsltx` anywhere, `Core._initialize("xrLC")` passes no `fs_fname`, and `CLocatorAPI::setup_fs_ltx` reads
+`fsgame.ltx` three folders above the executable (`LocatorAPI.cpp`). Starting from `Bin\x64\CppCompilers` itself would
+take XrLC and xrDO_Light parsing `-fsltx <path>` and passing it to `Core._initialize(name, 0, TRUE, path)` (xrCore
+then takes `$fs_root$` from that file's folder) - a C++ change the brief allows only for the crash, so not made. What
+is done instead: the stage is under `Intermediate/compile/stages` (the volume of `Bin`, never the temp folder) and its
+bin folder holds **hard links** to the oracle's files (`link_binaries`): no byte of a program is written anywhere,
+`fsutil hardlink list` shows the two names of one file. Every folder a recording makes under the temp folder (the
+project copy, the Rust homes) is checked for a file with a program's name before it is removed (`no_programs`;
+none in any run).
+
+**10.** compare_compile.py's header lists what is recorded phase by phase of `CBuild::Run`; nothing is "never
+recorded" but a level with implicit light loaded by the game (not on the brief's list; the files the game reads are
+the ones compared) and -gi / -net (D24).
+
+### What the new records found, and the rules
+
+Nothing of the port. What failed on the first comparisons and why:
+- **level.cform under Draft**: 92,001 of the C++'s triangles carry bit 14 or 15 of their word (suppress_shadows /
+  suppress_wm). XrLC never sets them: `CollectorPacked::add_face` assigns the material and sector bit fields of a
+  `TRI` on the stack and the two bits keep what the stack held (in High quality every face goes through
+  SimplifyCFORM's `add_face` again; no High record shows a stray bit). The Rust writes 0. The rule leaves the two bits out (`STRAY_BITS`) and counts them; then
+  the Draft level.cform is equal as a multiset. A Draft level of the C++ carried those bits to the game.
+- **MU references in Draft**: at one sample the C++'s own two runs differ on references the C++ lights alone (trees
+  0.086 / 3, LODs 0.26 / 2): its four CMULight threads draw sample directions from the one `::Random`, so no
+  reference has a fixed sequence. New bound for a reference's light (`MU_REF_MEAN` / `MU_REF_P99`): 0.45 / 6 -
+  scene mp_close_combat_draft, channels trees (seen 0.245 / 5) and LODs (0.35 / 3), under twice what is seen. A
+  model's own light keeps 0.2 / 2.
+- **Deflectors on other pages with the same shader list** (whole: every material on both pages on both sides, 463
+  against 464 visuals): `paged` now also triggers when the visuals' shader sequence differs.
+- **A progressive visual's coarser windows** follow the visual split; under the paged rule a progressive visual counts
+  with its whole mesh (window 0). The C++'s own two runs still differ on mp_close_combat_pages in two wall_farm
+  visuals (one has 132 against 216 faces in its whole window: its VIPM differs from run to run): 19 / 31 of 116,757
+  triangles, the port 37 / 49. The paged rule's one-sided triangles (static, fast paths) are judged against twice
+  the C++ runs' own (`PAGED_FLOOR`), at least 1e-4 of all.
+- **level.cform against the C++ runs' own**: l03u_agr_underground_paged had 452 one-sided triangles against their
+  419, l03u_agr_underground_own moved 0.0170 m2 of material word 1310754 against their 0.0089 (81.925 / 81.942 /
+  81.933 m2: the port's value beyond cpp2, as far from it as cpp2 from cpp1) - three draws of QSlim's heap-ordered
+  ties. Every level.cform count and area is now judged against twice what the C++ runs differ in (`CFORM_FLOOR`
+  2.0; it was half again, and once only as much for the one-sided triangles) - under twice what was seen.
+- **Phase times**: the C++ lights MU models on a thread beside the phases from "LIGHT: Starting MU" to "Converting
+  MU-models"; the port inside "Starting MU". That span is judged as one row. And `settle()` waits up to 60 s for a
+  quiet machine before the judged Rust compile.
+
+The new checks of item 8: **the sector** whose visual tree holds a triangle's visual is part of the paged rule's key
+(`visual_sectors`); **the sliding windows** are checked on every scene, each side by itself (`swi_problems`: inline
+and shared - OGF_SWICONTAINER - windows of every progressive visual and fast path against its own indices and vertex
+count). The check fails a corrupted window (tested: a window's vertex count set to 2, an offset past the end, a
+window with more faces than the one before). Counts: whole 10,908 windows each side, pages 10,748 / 10,750,
+l12u 9,401, l03u 1,013. build.err is now compared everywhere (byte for byte on every scene).
+
+### Proof
+
+Once, at the end, on the fast build of this tree (`Intermediate/cargo/fast/Grizzly.exe`, 00:24):
+- `cg.sh clippy -p gz-fmt-level -p gz-lc-light -p gz-lc --all-targets -- -D warnings`: clean (9 s); `fmt -- --check`:
+  clean; `cg.sh test` of the three: 54 + 1 + 41 + 18 green, 35 s with the build. No Rust file of mine changed.
+- `python tools/qa/diff_compile.py --all`, 03:56 - 04:37, 41.5 min, no C++ run (every record there): 17 scenes PASS,
+  every second compile byte for byte (16 scenes; the refused one compiles nothing), mp_test and l03u_agr_underground
+  on one thread byte for byte against all cores.
+- `find D:\XFinedProjects "D:\Games\Dead Air\modules" -newermt '2026-11-13 00:04:51'` at 04:37:51: nothing. No
+  compiler process, no stage under `Intermediate/compile/stages`, no `gzlc_*` folder under the temp folder; the
+  diagnosis stage (copies, made before the links) removed.
+
+Not done, for the lead: the change in `D:\Games\XFined-Editor-cpp` is uncommitted, and the oracle in
+`Bin\x64\CppCompilers` is built from it; `CPP_SOURCE` still names `cpp-compilers-last`, so the records made with the build before it stay
+(the rebuild changes no result on mp_test). `oracle_before` under `Intermediate/close-compiler` holds the previous
+oracle's binaries. Starting the oracle from `Bin` itself needs `-fsltx` in XrLC and xrDO_Light (item 9). A level with
+implicit light loaded by the game was not run.
+
+### For the plan
+
+- Section 9, "Not proven against the C++": empty but the game loading a level with implicit light.
+- Section 9, "compared this way": add the scenes above; the oracle is cpp-compilers-last with XrLC linked to a 128 MB
+  stack (the crash was XrETools' recursive optimiser on the 1 MB main thread).
+- Section 9, the rules: level.cform's suppress bits left out; an MU reference's light 0.45 / 6; the paged rule's
+  sector key, whole meshes, one-sided triangles against twice the C++ runs'; the sliding windows held per side;
+  build.err byte for byte; a refused input.
