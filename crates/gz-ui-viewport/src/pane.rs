@@ -30,9 +30,11 @@ enum Gesture {
     /// The camera took the press.
     Camera,
     /// A left press the tools did not capture: a drag that follows flies the camera, a Ctrl
-    /// drag draws a marquee.
+    /// drag draws a marquee, and a click - the button up before the pointer went `DRAG_START`
+    /// from `start` - does what the press waits to do (`click`), as in Unreal.
     Press {
         start: Pos2,
+        click: Option<Click>,
     },
     Transform(Box<Drag>),
     Marquee {
@@ -48,6 +50,59 @@ enum Gesture {
     },
     /// The AI map's brush stroke (Place with the AI Map tool).
     AiPaint(crate::bulktools::Paint),
+}
+
+/// What a left click does once the button is up, kept from the press: a drag in between does none of it.
+enum Click {
+    /// Select what the ray hits (or a tool's own pick), with the keys of the press.
+    Select { ray: Ray, b: Buttons, target: ObjClass },
+    /// Place the action's object where the ray hits.
+    Place { ray: Ray, b: Buttons },
+}
+
+/// How far the pointer may go from a left press before the press is a drag: a click below it, the
+/// camera or the marquee past it (points; Unreal's drag threshold is about as much).
+const DRAG_START: f32 = 4.0;
+
+/// What a left press that waits for its click turns into this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PressStep {
+    /// Still a click, if the button comes up now.
+    Wait,
+    /// The button came up: the click.
+    Click,
+    /// The button came up after a drag no one took: nothing.
+    Nothing,
+    /// Ctrl and a drag: the marquee.
+    Marquee,
+    /// A drag with no key: the camera.
+    Camera,
+    /// A drag with another key: no click any more, nothing else either.
+    Drag,
+}
+
+fn press_step(b: &Buttons, start: Pos2, now: Pos2, clicks: bool) -> PressStep {
+    let dragged = (now - start).length() > DRAG_START;
+    if !b.left {
+        return if clicks && !dragged { PressStep::Click } else { PressStep::Nothing };
+    }
+    if !dragged {
+        return PressStep::Wait;
+    }
+    if b.ctrl {
+        PressStep::Marquee
+    } else if !(b.right || b.middle || b.alt || b.shift) {
+        PressStep::Camera
+    } else {
+        PressStep::Drag
+    }
+}
+
+/// What the camera turns by this frame while it holds the cursor at `hold`, in pixels: the mouse's
+/// own motion when the window has it (raw input, endless at any screen edge), else how far the cursor
+/// went from where it is held back to every frame.
+fn held_delta(motion: Option<Vec2>, pos: Option<Pos2>, hold: Pos2, ppp: f32) -> Vec2 {
+    motion.unwrap_or_else(|| pos.map_or(Vec2::ZERO, |p| (p - hold) * ppp))
 }
 
 /// An object a transform drag holds, as it was at the press.
@@ -95,6 +150,8 @@ pub struct ViewportPane {
     rect: Rect,
     /// Where the gesture fed over MCP had the pointer last frame.
     fed_at: Option<Pos2>,
+    /// Where the camera holds the hidden cursor while it has the mouse (the press), points.
+    hold: Option<Pos2>,
 }
 
 impl ViewportPane {
@@ -115,6 +172,7 @@ impl ViewportPane {
             maximize_asked: false,
             rect: Rect::NOTHING,
             fed_at: None,
+            hold: None,
         }
     }
 
@@ -279,6 +337,8 @@ impl ViewportPane {
     fn input(&mut self, ctx: &egui::Context, canvas: &egui::Response, rect: Rect, ppp: f32, size: [u32; 2]) {
         // a gesture fed over MCP (`viewport_gesture`) stands for the mouse while it lasts
         let fed = self.vp.gesture_step();
+        let real = fed.is_none();
+        let mut motion = None;
         let (b, pressed, released, delta, pos, wheel, dt, over) = match fed {
             Some((step, m, last)) => {
                 let at = rect.min + step.at.to_vec2();
@@ -298,6 +358,7 @@ impl ViewportPane {
                 (b, step.pressed, step.released, delta, Some(at), 0.0, ctx.input(|i| i.stable_dt), true)
             }
             None => {
+                motion = ctx.input(|i| i.pointer.motion());
                 let (b, pressed, released, delta, pos, wheel, dt) = ctx.input(|i| {
                     let m = i.modifiers;
                     let b = Buttons {
@@ -321,6 +382,7 @@ impl ViewportPane {
                 (b, pressed, released, delta, pos, wheel, dt, canvas.hovered())
             }
         };
+        let latest = pos;
         let pos = pos.unwrap_or(rect.center());
         // C++: a pointer outside is pinned to the canvas's edge
         let clamped = pos2(pos.x.clamp(rect.min.x, rect.max.x), pos.y.clamp(rect.min.y, rect.max.y));
@@ -346,6 +408,9 @@ impl ViewportPane {
                 if pressed && over && b.any_button() {
                     if self.vp.with(|s| s.nav.move_start(b)) {
                         self.gesture = Gesture::Camera;
+                        if real {
+                            self.hold = Some(pos);
+                        }
                     } else if b.left
                         && let Some(ray) = ray
                     {
@@ -354,6 +419,14 @@ impl ViewportPane {
                 }
             }
             Gesture::Camera => {
+                // the cursor held in place: the camera turns by the mouse's own motion
+                let (dx, dy) = match self.hold {
+                    Some(hold) if real => {
+                        let d = held_delta(motion, latest, hold, ppp);
+                        (d.x, d.y)
+                    }
+                    _ => (dx, dy),
+                };
                 if dx != 0.0 || dy != 0.0 {
                     self.vp.with(|s| {
                         let aspect = s.aspect();
@@ -366,16 +439,29 @@ impl ViewportPane {
                     self.gesture = Gesture::None;
                 }
             }
-            Gesture::Press { start } => {
+            Gesture::Press { start, click } => {
                 let start = *start;
-                if !b.left {
-                    self.gesture = Gesture::None;
-                } else if b.ctrl && (clamped - start).length() > 4.0 {
-                    self.gesture = Gesture::Marquee { start, now: clamped };
-                } else if (dx != 0.0 || dy != 0.0) && !(b.right || b.middle || b.alt || b.shift || b.ctrl) {
-                    // a left drag no tool took is the camera's
-                    if self.vp.with(|s| s.nav.left_drag_start(b)) {
-                        self.gesture = Gesture::Camera;
+                match press_step(&b, start, clamped, click.is_some()) {
+                    PressStep::Wait => {}
+                    PressStep::Click => {
+                        let click = click.take();
+                        self.gesture = Gesture::None;
+                        if let Some(c) = click {
+                            self.run_click(c);
+                        }
+                    }
+                    PressStep::Nothing => self.gesture = Gesture::None,
+                    PressStep::Marquee => self.gesture = Gesture::Marquee { start, now: clamped },
+                    PressStep::Drag => *click = None,
+                    PressStep::Camera => {
+                        *click = None;
+                        // a left drag no tool took is the camera's, and selects nothing
+                        if self.vp.with(|s| s.nav.left_drag_start(b)) {
+                            self.gesture = Gesture::Camera;
+                            if real {
+                                self.hold = Some(start);
+                            }
+                        }
                     }
                 }
             }
@@ -439,6 +525,8 @@ impl ViewportPane {
             }
         }
 
+        self.hold_cursor(ctx, latest);
+
         // flying: WASD and QE held move the camera every frame
         let flying = self.vp.read(|s| s.nav.flying());
         if flying {
@@ -495,7 +583,7 @@ impl ViewportPane {
                     return;
                 }
                 crate::bulktools::BulkGesture::Done => {
-                    self.gesture = Gesture::Press { start: at };
+                    self.gesture = Gesture::Press { start: at, click: None };
                     return;
                 }
                 crate::bulktools::BulkGesture::None => {}
@@ -505,10 +593,12 @@ impl ViewportPane {
                 crate::objtools::ToolGesture::BoxPick => {
                     self.gesture = Gesture::ToolBox { start: at, now: at }
                 }
-                crate::objtools::ToolGesture::Done => self.gesture = Gesture::Press { start: at },
+                crate::objtools::ToolGesture::Done => {
+                    self.gesture = Gesture::Press { start: at, click: None }
+                }
                 crate::objtools::ToolGesture::None => {
-                    place(&self.editor, &self.vp, ray, *b);
-                    self.gesture = Gesture::Press { start: at };
+                    // placed on the click: a drag moves the camera and places nothing
+                    self.gesture = Gesture::Press { start: at, click: Some(Click::Place { ray, b: *b }) };
                 }
             }
             return;
@@ -528,13 +618,45 @@ impl ViewportPane {
             self.gesture = Gesture::Transform(Box::new(drag));
             return;
         }
-        if crate::bulktools::click(&self.editor, &self.vp, ray, *b, target) {
-        } else if target == ObjClass::Way && crate::objtools::way_points_mode(&self.editor) {
-            crate::objtools::way_point_click(&self.editor, &self.vp, ray, *b);
-        } else {
-            click_select(&self.editor, &self.vp, ray, *b, target);
+        // selected on the click: a drag moves the camera and selects nothing
+        self.gesture = Gesture::Press { start: at, click: Some(Click::Select { ray, b: *b, target }) };
+    }
+
+    /// A left click, the button up: what its press waited to do.
+    fn run_click(&mut self, click: Click) {
+        match click {
+            Click::Place { ray, b } => place(&self.editor, &self.vp, ray, b),
+            Click::Select { ray, b, target } => {
+                if crate::bulktools::click(&self.editor, &self.vp, ray, b, target) {
+                } else if target == ObjClass::Way && crate::objtools::way_points_mode(&self.editor) {
+                    crate::objtools::way_point_click(&self.editor, &self.vp, ray, b);
+                } else {
+                    click_select(&self.editor, &self.vp, ray, b, target);
+                }
+            }
         }
-        self.gesture = Gesture::Press { start: at };
+    }
+
+    /// While the camera has the mouse the cursor is hidden and held where the press was, so the
+    /// camera turns without end; it is let go there when the camera lets the mouse go.
+    fn hold_cursor(&mut self, ctx: &egui::Context, at: Option<Pos2>) {
+        let Some(hold) = self.hold else { return };
+        let ended = !matches!(self.gesture, Gesture::Camera);
+        // another window in front: the cursor is the system's again at once, where it is
+        let left = !ctx.input(|i| i.focused);
+        if ended || left {
+            self.hold = None;
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(egui::CursorGrab::None));
+            if !left {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CursorPosition(hold));
+            }
+            return;
+        }
+        ctx.set_cursor_icon(egui::CursorIcon::None);
+        ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(egui::CursorGrab::Confined));
+        if at.is_none_or(|p| (p - hold).length() > 0.25) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorPosition(hold));
+        }
     }
 
     fn start_drag(&mut self, kind: GizmoType, ray0: Ray, class: ObjClass) -> Option<Drag> {
@@ -1578,5 +1700,43 @@ async fn send_place(svc: &SceneService, o: Object, origin: gz_editor::Origin) ->
     match svc.store.send(SceneCmd::Place(Box::new(o)), origin).await {
         Ok(gz_scene::SceneReply::Id(id)) => Some(id),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::{Pos2, pos2, vec2};
+
+    use super::{PressStep, held_delta, press_step};
+    use crate::camera::Buttons;
+
+    #[test]
+    fn a_left_press_is_a_click_until_it_moves() {
+        let start = pos2(100.0, 100.0);
+        let held = Buttons { left: true, ..Buttons::default() };
+        let up = Buttons::default();
+        // a jitter under the threshold keeps the click
+        assert_eq!(press_step(&held, start, pos2(103.0, 101.0), true), PressStep::Wait);
+        assert_eq!(press_step(&up, start, pos2(103.0, 101.0), true), PressStep::Click);
+        // past it the drag is the camera's, and the button up after it does nothing
+        assert_eq!(press_step(&held, start, pos2(106.0, 100.0), true), PressStep::Camera);
+        assert_eq!(press_step(&up, start, pos2(106.0, 100.0), true), PressStep::Nothing);
+        // a press that waits for no click (a tool already acted) clicks nothing
+        assert_eq!(press_step(&up, start, start, false), PressStep::Nothing);
+        // Ctrl draws the marquee; another key only stops the click
+        let ctrl = Buttons { ctrl: true, ..held };
+        assert_eq!(press_step(&ctrl, start, pos2(110.0, 110.0), true), PressStep::Marquee);
+        let shift = Buttons { shift: true, ..held };
+        assert_eq!(press_step(&shift, start, pos2(110.0, 110.0), true), PressStep::Drag);
+    }
+
+    #[test]
+    fn the_held_cursor_turns_the_camera_by_the_mouse_not_by_where_it_is() {
+        let hold = pos2(400.0, 300.0);
+        // the mouse's own motion wins: the cursor was warped back, its place says nothing
+        assert_eq!(held_delta(Some(vec2(-12.0, 3.0)), Some(hold), hold, 1.5), vec2(-12.0, 3.0));
+        // without it, how far the cursor went from where it is held, in pixels
+        assert_eq!(held_delta(None, Some(pos2(410.0, 296.0)), hold, 1.5), vec2(15.0, -6.0));
+        assert_eq!(held_delta(None, None::<Pos2>, hold, 1.5), vec2(0.0, 0.0));
     }
 }

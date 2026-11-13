@@ -821,6 +821,7 @@ bug.
 | D20 | The level path is one folder name; anything else is refused when typed and by the build. | The C++ took any text and concatenated it; a path that leaves the levels folder would be wiped by Make All. |
 | D21 | Make All builds a scene that holds an object in visual mode. | The C++ `BuildHOMModel` asserts on it. |
 | D22 | A shape that Attach on Click detaches from a spawn point gets a free `shape` name. | The C++ appended it nameless. |
+| D28 | A left click in the viewport selects (or places) when the button comes up and only when the pointer moved less than 4 pt; a left drag moves the camera and selects nothing. While the camera holds the mouse the cursor is hidden and held where the press was. | The author's call, as Unreal does it: the C++ selected on the press, so a left drag meant to move the camera picked whatever was under the cursor first, and its camera turned only as far as the screen's edge. |
 | D18 | The six Detail Objects settings live on the Detail Objects panel (and `details_tool`), the tools' Enable / Read Only switches in Level Settings > Targets. | The C++ kept the first in Level Settings and the second in Preferences; UI_DESIGN 1a: one task in one view. |
 
 ## 13. Working rules

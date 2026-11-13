@@ -54,7 +54,7 @@ use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize};
-use winit::event::{StartCause, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::platform::windows::WindowAttributesExtWindows;
 use winit::window::{Window, WindowId};
@@ -944,6 +944,18 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// The mouse's own motion (raw input), as egui's `MouseMoved`: what the viewport's camera turns
+    /// by while it holds the cursor in place, where the cursor's place says nothing.
+    fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
+        if let DeviceEvent::MouseMotion { delta } = event
+            && let Some(live) = self.live.as_mut()
+            && live.input.on_mouse_motion(delta)
+        {
+            self.dirty = true;
+            self.input = true;
         }
     }
 

@@ -7,6 +7,8 @@ Every gesture goes through viewport_gesture, which feeds the viewport's own inpu
   R  Random Append: the Object tool in Place with Randomize Added Objects on - a click adds one object of the random
      set, its scale and rotation out of the set's ranges
   A  Attach on Click of the Spawn tool: a click on a shape gives it to the selected spawn point; the switch goes off
+  L  the left button as in Unreal: a left drag that starts on an object moves the camera and selects nothing, a
+     click on it selects it when the button comes up; in Place a left drag places nothing
   M  a marquee (Ctrl + drag) selects what its box holds
   G  a move drag on the gizmo's X arrow moves the selection along X alone
   P  the Group tool's Pivot chooser (ui_dialog id=group_pivot) lists the group's objects; align_pivot is its pick
@@ -50,9 +52,9 @@ import qa_target
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MCP = qa_target.MCP
-PHASES = "RAMGPVDWSCY"
+PHASES = "RALMGPVDWSCY"
 # open ground of Escape east of the village, no tree over it; every phase works round a point of its own
-SPOTS = {"R": (-119.0, -162.0), "A": (-130.0, -147.0), "M": (-100.0, -154.0), "G": (-119.0, -136.0),
+SPOTS = {"R": (-119.0, -162.0), "A": (-130.0, -147.0), "L": (-125.0, -156.0), "M": (-100.0, -154.0), "G": (-119.0, -136.0),
          "P": (-101.0, -136.0), "V": (-130.0, -166.0), "D": (-110.0, -190.0), "W": (-110.0, -190.0)}
 BOX = "dynamics\\equipment_cache\\equipment_box_01"
 CABINET = "statics\\shkaf\\cabinet_village_140x210_ph"
@@ -261,6 +263,32 @@ def phase_a() -> None:
 
 
 # ---- M: a marquee ---------------------------------------------------------------------------------------------------
+
+def phase_l() -> None:
+    x, y, z = look_down("L")
+    target(2)
+    box = place(BOX, x, y, z, snap_to_ground=True)
+    deselect()
+    mcp("viewport_controls", tool="select")
+    cx, cy = CTX.centre()
+    g = gesture(kind="drag", at=[cx, cy], to=[cx + CTX.size[1] * 0.2, cy])
+    check(g.get("ok") and g.get("camera_moved") and not g.get("picked"),
+          "L a left drag that starts on an object moves the camera and selects nothing", short(g))
+    look_down("L")
+    g = gesture(kind="click", at=[cx, cy])
+    check(g.get("ok") and box in (g.get("picked") or []) and not g.get("camera_moved"),
+          "L a click on it selects it when the button comes up", short(g))
+    # Place: the object goes down on the click, and a drag places nothing
+    deselect()
+    mcp("object_tool", action="random", on=True, objects=[BOX])
+    mcp("viewport_controls", tool="place", object_snap=True, grid_snap=False)
+    look_down("L")
+    g = gesture(kind="drag", at=[cx - CTX.size[1] * 0.1, cy], to=[cx + CTX.size[1] * 0.1, cy])
+    check(g.get("ok") and g.get("camera_moved") and not g.get("placed"),
+          "L in Place a left drag moves the camera and places nothing", short(g))
+    mcp("object_tool", action="random", on=False)
+    mcp("viewport_controls", tool="select")
+
 
 def phase_m() -> None:
     x, y, z = look_down("M")
@@ -676,7 +704,7 @@ def phase_y_marked() -> None:
         qa_target.remove_tree(root)
 
 
-STEPS = {"R": phase_r, "A": phase_a, "M": phase_m, "G": phase_g, "P": phase_p, "V": phase_v, "D": phase_d,
+STEPS = {"R": phase_r, "A": phase_a, "L": phase_l, "M": phase_m, "G": phase_g, "P": phase_p, "V": phase_v, "D": phase_d,
          "W": phase_w, "S": phase_s, "C": phase_c, "Y": phase_y}
 
 

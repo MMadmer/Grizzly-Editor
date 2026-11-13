@@ -304,6 +304,10 @@ API:
 - A customized layout shrinks its side nodes to their minimums first. Below that, panels scroll.
 - Reset Layout rebuilds for the current size class. F11 hides the panels.
 
+**The viewport's mouse** (`gz-ui-viewport`'s `pane.rs`, `camera.rs`), as in Unreal:
+- A left click selects (or places, with the Place action) when the button comes up, and only when the pointer moved less than 4 pt since the press. A left drag past that moves the camera (the vertical flies forward and back, the horizontal turns) and selects nothing; Ctrl+drag draws the marquee. A press on a gizmo handle takes the selection at once, and so do the tools' strokes (the AI map's brush, the Sector tool's paint and Box Pick).
+- While the camera holds the mouse - RMB look and fly, a left drag, MMB or LMB+RMB pan, Alt+LMB orbit, Alt+RMB dolly - the cursor is hidden and held where the press was: the camera turns without end, at no screen edge. It comes back there when the buttons are up. The camera reads the mouse's own motion (raw input), not the cursor's place.
+
 **Level toolbar.** The groups, lowest priority first:
 - Save | Undo, Redo
 - Build Collision, Build AI Map, Build Game Graph, Build All
