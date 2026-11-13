@@ -62,6 +62,9 @@ code's stubs and every command of the registry. Each statement below is also mar
 | The last review: Play's copy path never run for real | there is no copy path: "Play in place only" - a game that cannot is refused before a build |
 | The game engineer's: the renderers' `MAX_PATH` buffers on a path of the fs | "Play in place only" (game `ccf33e523`): `string_path`-sized, a dump proven at 364 characters |
 | The shell engineer's: PowerShell's `>` takes nothing from a window program; a dump of the registry overwrote the author's log | `Grizzly-Cmd.exe`; a dump writes no log, a compile run its own |
+| The reviewer's verification: a printing run whose reader leaves is an internal error (`println!` on a closed stream: exit 3 and a crash report) | every line is a `writeln!` whose failure stops the printing - "The reviewer's verification of the last fixes, closed" |
+| The same: a console can still end an editor with a window (`-log_echo` joined it; the twin's job) | a run with a window joins no console and outlives its twin; the console's end closes a headless editor the way a quit does - the same section |
+| The same: a crash report left in the root's `logs`; the ledger's chooser rows and D13 stale; `actions.rs` "this build cannot place objects yet"; two benchmark tools hold the root's files in memory only | the same section |
 
 ## Decisions taken while building (they refine the plan)
 
@@ -3493,7 +3496,8 @@ ability and paths ("The last review, the game and Play") and Play's one way ("Pl
 - **`Grizzly-Cmd.exe`**, the editor for a command line (`crates/grizzly/src/cmd_twin.rs`, the package's second
   program; `gz-win` `job.rs` `end_with_this_process`): a shell does not wait for a window program, and PowerShell's
   `>` took 0 lines of `Grizzly.exe -dump_commands`. The twin runs the editor with the same arguments and its own
-  streams, waits and ends with its exit code; the editor ends with it. Seen in a console of its own (the catalogue
+  streams, waits and ends with its exit code; the editor ends with it. (Refined after the reviewer's verification, below: only a
+  run without a window ends with it.) Seen in a console of its own (the catalogue
   line, 204 commands, a refused compile's exit code 1), in PowerShell (`>` 204 lines, a variable, exit codes 0 and
   1); held by `check.sh` ("command line") and `test_server_lifecycle` (a headless editor prints through the twin and
   ends it with 0 when closed over MCP; an editor whose twin is ended is gone with it). `Build.ps1` copies it,
@@ -3526,5 +3530,63 @@ ability and paths ("The last review, the game and Play") and Play's one way ("Pl
 | `test_play_game.py --scene mp_close_combat` | 42 checks pass: implicit light and MU models in the game | 131 s |
 
 The installed game's listing before and after each game run is equal (107,743 entries); nothing changed under
+`D:\XFinedProjects` or the game's `modules`; the root's project list is the author's; no process and no Play root
+left.
+
+## The reviewer's verification of the last fixes, closed
+
+13 Nov. The reviewer went through its findings again (`Intermediate/critic-verify/`): each closed, the game's two
+commits clean, Play in place only consistent - and one new defect with four leftovers. All closed (`a640899b`):
+
+- **A reader that leaves is no error.** `println!` and `eprintln!` panic when the stream refuses the line:
+  `Grizzly.exe -dump_commands | true` ended with exit code 3 and a 0.9 MB crash report six times of six, PowerShell's
+  `>` did the same, and a headless `-log_echo` editor whose reader left lost its log thread. Every line the programs
+  print is a `writeln!` whose failure stops the printing: the editor's `say` (`main.rs`: the catalogue line, the
+  dump), the log's echo (`gz-log` `write_loop`: the echo ends, the file goes on), the bridge's catalogue line, the
+  twin's complaints. Seen: `-dump_commands | true` three times, `| head -1`, `-catalogue | true`, the twin and the
+  bridge the same, all exit 0 and no report; PowerShell's `>` on the window program 0 lines and no report.
+- **No console ends an editor with a window.** `cli.rs` `windowless` (a check of the binary, a compiler, a headless
+  editor) replaced `speaks`: a run with a window joins no console, with `-log_echo` or without (its echo goes to the
+  streams it was given), and the twin ties only a windowless run to itself - an editor with a window outlives the
+  twin and the console. The twin passes a minimised start on (`-minimized`, a new option the editor takes like a
+  launcher's request; `gz-app` `WindowOptions::start_minimized`), so the suite's window stays off the author's
+  screen.
+- **A console's end closes a headless editor the way a quit does.** A windowless run joins its launcher's console
+  whatever its streams (`gz_win::attach_parent_console`), and `gz_win::on_console_end` turns Ctrl+C, Ctrl+Break, the
+  console closed, a logoff or a shutdown into `request_quit`: the project closes, the log says "Grizzly Editor
+  closed", exit code 0 (after a closed console Windows gives five seconds; the handler holds them open). The twin
+  takes the same events and stays for the editor's exit code. A compile run has nothing to close and ends as any
+  compiler does.
+- **The lifecycle suite holds it** (`tools/mcp/run_lifecycle.py`, 12 checks, 16 s): a headless editor through the
+  twin prints and ends it with 0; ended by force, it takes the editor along; an editor with a window outlives its
+  twin and came up minimised; a dump whose reader leaves after one line and an echo whose reader left end with 0 and
+  no crash report; in a console of its own, Ctrl+Break closes a headless editor started through the twin the way a
+  quit does, and an editor with a window started there with `-log_echo` is not in that console's process list and
+  lives on after it.
+- **The leftovers**: the crash report of the first item and a probe's `grizzly_compile_admin.log` removed from the
+  root's `logs`; `gz-ui-content` `actions.rs`' dead "this build cannot place objects in the scene yet" branch gone
+  (every build registers `place_object`); `tools/qa/bench_build.py` and `tools/mcp/run_benchmark.py` keep the root's
+  files on disk while the C++ editor runs (`kept.py`, which writes and removes nothing inside a run that holds the
+  copies already - `run_all.py` runs the second as a suite); `PARITY.md`'s `property_choose` row and chooser-kind
+  row and D13 name what the two commands add.
+- Read and left as it is: the game suite starts its editor on a hidden desktop (the game repository's own launcher),
+  so that the game's window never reaches the author's screen.
+
+**The run on the final tree** - 13 Nov, 08:02 - 08:25, commit `a640899b`, the release build, one step after another
+(`Intermediate/final7/`):
+
+| Step | Result | Time |
+|---|---|---|
+| `Build.ps1` | the editor, its twin, the bridge, their PDBs, the notices, `LICENSE.txt` | 263 s |
+| `check.sh` | ok | 19 s |
+| `test.sh --all` | 79 binaries, 1198 tests green; the net: 3608 events in the tests' temp folder and 692 in the repository, no program file | 171 s |
+| `diff_editors.py --all` | 10 scenarios, 755 steps, 746 written files, 0 differ, from the records | 51 s |
+| `diff_compile.py` | the ten quick scenes PASS | 85 s |
+| `diff_compile.py --scene` l12u_control_monolith, mp_close_combat_implicit, l03u_agr_underground | PASS | 352 s |
+| `run_all.py --with-game` | 24 suites, 24 passed | 191 s |
+| `test_play_game.py --scene l03u_agr_underground` | 39 checks pass | 87 s |
+| `test_play_game.py --scene mp_close_combat` | 42 checks pass | 122 s |
+
+The installed game's listing is equal before and after each game run (107,743 entries); nothing changed under
 `D:\XFinedProjects` or the game's `modules`; the root's project list is the author's; no process and no Play root
 left.

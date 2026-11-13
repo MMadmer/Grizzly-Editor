@@ -63,7 +63,11 @@ Bin\x64\Release\Grizzly.exe -project "<project>"
 dialog (a question gets its logged answer, a crash writes a symbolised stack and a dump and exits
 with code 3) - for unattended runs. `-headless` runs everything but the picture, driven over MCP;
 `-home <folder>` keeps the project list, settings and logs there; `-mcp_port <n>` moves the
-control endpoint.
+control endpoint; `-minimized` starts the window minimised.
+
+`Grizzly.exe` is a window program. From a shell, `Grizzly-Cmd.exe` beside it runs the same editor
+with the same options, waits for it and passes its output and exit code on (`Grizzly-Cmd.exe
+-headless -compile <level folder> > compile.log`).
 
 ### AI integration (MCP)
 

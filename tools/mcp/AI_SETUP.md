@@ -60,7 +60,8 @@ stays out of the author's own.
 gets its logged answer (No; OK for a note), and a fatal error writes a symbolised
 stack trace into the log, a minidump next to the logs, and ends the process with
 exit code 3 instead of hanging on a box nobody will click. Also useful:
-`-log_echo` (the log on stderr as well).
+`-log_echo` (the log on stderr as well; a reader that leaves only ends the echo) and
+`-minimized` (the window starts minimised).
 
 ## Registering the MCP server
 
