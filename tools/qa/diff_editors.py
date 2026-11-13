@@ -53,6 +53,7 @@ import time
 import zipfile
 
 import qa_target  # noqa: F401 - the binaries and the C++ editor's own files
+import kept  # noqa: E402 - the root's files on disk while a run has them aside
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -2246,7 +2247,12 @@ def main() -> int:
 
     t_start = time.monotonic()
     main_log = Logger(None, True)
+    back = kept.recover()
+    if back:
+        print("put back what a run that died left aside: " + ", ".join(back))
     repo_files = snapshot_kept(sorted(set(CPP_KEPT) | set(RUST_KEPT)))
+    # on disk too: a recording takes the author's project list and layout aside while the C++ editor runs
+    kept.to_disk(repo_files)
     cache: dict = {}
     names = list(SCENARIOS)
     if args.scenario:
@@ -2330,6 +2336,7 @@ def main() -> int:
             state["scenarios"][n]["ok"] = False
             state["scenarios"][n].setdefault("files", []).append("the repository's own files changed: " + ", ".join(changed))
         save_state(state)
+    kept.done()
 
     bad = [n for n in names if not state["scenarios"][n].get("ok")]
     steps = sum(len(state["scenarios"][n].get("steps", [])) for n in names)

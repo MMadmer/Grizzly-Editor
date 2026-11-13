@@ -32,6 +32,9 @@ import tempfile
 import threading
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import kept  # noqa: E402
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 OUT = os.path.join(REPO, "Intermediate", "qa")
@@ -330,7 +333,11 @@ def main() -> int:
     together = [n for n in names if not SUITES[n].get("alone")]
     alone = [n for n in names if SUITES[n].get("alone")]
     lock = threading.Lock()
+    back = kept.recover()
+    if back:
+        print("put back what a run that died left aside: " + ", ".join(back))
     root_before = {p: read_opt(p) for p in ROOT_FILES}
+    kept.to_disk({os.path.basename(p): data for p, data in root_before.items()})
     t0 = time.monotonic()
     results: dict[str, dict] = {}
 
@@ -356,6 +363,7 @@ def main() -> int:
         print("! Rust editors left running after the run: pids %s" % left)
         bad.append("editors left running")
     touched = root_files_changed(root_before)
+    kept.done()
     if touched:
         print("! an editor wrote into the repository root: %s (put back)" % ", ".join(touched))
         bad.append("repository root written")
