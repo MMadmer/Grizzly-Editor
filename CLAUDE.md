@@ -56,7 +56,8 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   icon of the release binaries), `bash tools/rust/test.sh` (only the test binaries that
   changed since they were green; `--all` for everything and the whole corpus), `python tools/qa/diff_editors.py` (the
   same commands on both editors, the C++ side from its records), `python tools/qa/diff_compile.py` (the level
-  compiler against the C++ compilers' records, under the rules of `compare_compile.py`), `python tools/qa/run_all.py`
+  compiler against the C++ compilers' records, under the rules of `compare_compile.py`: the quick scenes by default,
+  two minutes; `--all` is all seventeen, each compiled twice, forty minutes - for a change of the compiler), `python tools/qa/run_all.py`
   (the QA suites side by side; `--with-game` adds the one that starts the real game). `GRIZZLY_QA_EXE` points the suites, the differential
   run and `check.sh`'s registry at another binary (`Bin\x64\Release\Grizzly.exe`, the release build). Nothing that
   already passed is run again to check something new: one crate, one scenario, one suite or one phase (`--only`) while

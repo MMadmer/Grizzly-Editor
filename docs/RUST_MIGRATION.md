@@ -474,9 +474,10 @@ runs differ in is known and is the floor. Byte for byte unless named here:
   quality (never set) left out; a non-progressive visual's fast path as a multiset of triangles.
 - `level.cform`: byte for byte, else the triangles as a multiset, else the same surface
   triangulated another way (the same vertices, per material and plane the same area), else
-  within what the two C++ runs differ in by half again - the triangle count, the triangles one
-  side alone has, the area that changed material. QSlim orders ties by heap addresses, so two
-  C++ runs differ, and so do two builds of one source.
+  within twice what the two C++ runs differ in - the triangle count, the triangles one side
+  alone has, the area that changed material. QSlim orders ties by heap addresses, so two C++
+  runs differ, and so do two builds of one source. Two stray bits the C++ leaves on a
+  triangle at the Draft quality (never set) are left out.
 - **The light**, per channel in 0..255 steps as mean absolute error and 99th percentile:
   lightmaps and implicitly lit textures within 1.5 / 16, vertex light within 0.2 / 2 - about
   twice what was seen (lightmaps 0.85 / 12 on the implicit scene's sun, vertex light 0.085 / 1) - and the detail
@@ -487,33 +488,47 @@ runs differ in is known and is the floor. Byte for byte unless named here:
   apart, within 3 / 16 (the game reads that picture's green). What the bounds allow
   is what the port differs in: another DXT5 encoder, another ray-triangle test on grazing
   faces, Rust's `sin` / `cos` / `pow`. A deflector that the light moves to another lightmap
-  page takes its triangles along: the static geometry is then compared as one multiset.
+  page takes its triangles along: the static geometry is then compared as one multiset whose
+  key holds the triangle's sector, each progressive visual counted with its whole mesh, the
+  triangles one side alone has within twice the C++ runs' own; a progressive visual's
+  sliding windows, which cannot be compared across another split, are checked on each side
+  against its own index buffer and vertex count.
 - **MU models**: their geometry byte for byte; a model's own light within the vertex bounds
-  (seen: mean 0.002, max 1); a reference's light within them for the references the C++ lights
-  on one thread, and reported, not judged, for the others (D25).
+  (seen: mean 0.002, max 1); a reference's light within 0.45 / 6 for the references the C++
+  lights on one thread (its lighting threads share one random generator: seen 0.35 / 5 at the
+  Draft quality), and reported, not judged, for the others (D25).
+- **A refused input**: a level with an invalid face is refused by both - `build.err` byte for
+  byte - and compiled by both when the flag keeps such faces.
 
-Compared this way: `mp_test`, `l12u_control_monolith` (the middle scene: 410k collision faces,
-749 visuals, sectors and portals), `mp_close_combat` for the detail compiler,
-`l03u_agr_underground` for the MU models (7 models, 15 references) and
-`mp_close_combat_implicit` for the implicit (terrain) light and two lightmap pages. The MU
-scene's copy gets a lower lightmap density (4 px/m, one jitter sample) and `-noise` on both
-compilers, which reach nothing of the MU work, so that the C++ run ends in minutes; the
-implicit scene one jitter sample, and its MU models are emptied in the input both compilers
-read, because the C++ compiler crashes converting them. The record names what was set.
+Compared this way, seventeen recorded scenes (`diff_compile.py` `SCENES`; the oracle is a build
+of `cpp-compilers-last`):
 
-Every scene is also compiled twice by the Rust compiler and the bytes must be equal, and the
-smallest on one thread against all - with `--all` the MU scene too, the one whose light once
-differed from run to run (`diff_compile.py`).
+- `mp_test`; `l12u_control_monolith`, the middle scene (410k collision faces, 749 visuals,
+  sectors and portals); `mp_close_combat` for the detail compiler; `l03u_agr_underground` for
+  the MU models (7 models, 15 references) at a lowered lightmap density;
+  `mp_close_combat_implicit` for the implicit (terrain) light and two lightmap pages;
+- every flag on a scene where it changes something: `-nosun`, `-nosmg`, `-no_optimize`,
+  `-att`, and the invalid face refused and kept;
+- the Draft quality (`mp_close_combat_draft`, and with `-nosmg`);
+- `mp_close_combat_whole` at the scene's own settings - the implicit light at nine jitter
+  samples, MU models and implicit light in one level - and at twice the density for five
+  lightmap pages;
+- `l03u_agr_underground` at its own settings (the C++ takes twenty minutes a run), and at a
+  density that gives two pages over its 31 sectors, where the paged rule's sector key and
+  sliding windows count.
 
-**Not proven against the C++** (no recorded scene exercises it; `compare_compile.py`'s header
-lists it phase by phase): the Draft quality; the flags `-nosun`, `-nosmg`, `-no_optimize`,
-`-att`, `-no_invalidefaces` and the abort on invalid faces; more than two lightmap pages; MU
-models other than l03u's and at other settings than its lowered ones; the implicit light at
-more than one jitter sample; the nine-sample jitter beyond the lightmaps of mp_test and l12u;
-the visual tree (which sector a visual belongs to, the sliding windows) of a level whose
-deflectors moved between lightmap pages; MU models and the implicit light in one level (the C++
-crashes on that scene's MU models and the cause is not known); a level with implicit light
-loaded by the game (the game loaded mp_test and l03u_agr_underground).
+The C++ compiler crashed on `mp_close_combat`'s MU models: its own face-order search recurses
+once per face on a 1 MB stack. The oracle links with a larger stack since (the tag's last
+commit; no code and no record changed), so that scene is recorded whole. A level with
+implicit light and MU models is also loaded by the game (`test_play_game.py --scene
+mp_close_combat`).
+
+Every scene is also compiled twice by the Rust compiler and the bytes must be equal, and
+`mp_test` and the MU scene on one thread against all (`diff_compile.py --all`, forty minutes;
+the everyday run is the quick scenes, two minutes).
+
+Nothing the compile does is left unrecorded but what was dropped on purpose: the network
+light and the radiosity pass (D24).
 
 Two consequences worth stating:
 
@@ -740,7 +755,7 @@ holds no C++.
   of floating point; the lightmaps and vertex colours within a stated error (mean and a high
   percentile, and looked at side by side); the game loads the level (`test_play_game`); the
   compile no slower than the C++ one and the lighting near every core.
-- **The gate as passed**: five scenes under the rules of section 9 (the fifth, with the implicit light and two lightmap pages, was added after the final review). The compile took 2.4 s,
+- **The gate as passed**: seventeen scenes under the rules of section 9 (five at the gate, the rest recorded afterwards until nothing the compile does was left unproven). The compile took 2.4 s,
   64.8 s, 9.3 s and 28.2 s against the C++ compilers' 20 s, 261 s, 78 s and 187 s (`mp_test`,
   `l12u_control_monolith`, `mp_close_combat`'s details, `l03u_agr_underground`); the game
   creates a new game on a level Play compiled this way, loads its geometry and collision and
