@@ -805,7 +805,7 @@ bug.
 | D10 | Breakable and climable objects are built. | The fork's `VCPacked::add_vert` lost its welding, so the C++ editor of the branch point writes errors instead; the Rust build welds on the SDK's grid. |
 | D11 | Tools that did nothing in the C++ editor work: the AI Map tool's Ignored Materials leave holes, the link pad's Invert turns a one-way link round, a wallmark can be moved, a marquee in points mode selects the points inside it, a library group is placed by a click. | Each was a commented-out check, a self-link, a disabled control or a missing handler in the C++. |
 | D12 | A group's Make Thumbnail writes `<project>\rawdata\groups\<reference>.thm`. | That is where the Groups chooser reads it; the C++ wrote `$objects$\<scene name>.thm`, which nothing reads. |
-| D13 | The wire adds, never removes: refusals of `game_link` / `game_modes` carry `error`; `characters_write` refuses a path outside the project; `world_set` writes only its section; `mod_publish start` answers in one call; `quest_history` adds `undo_steps` / `redo_steps`; new commands `jobs`, `level_build`, the tool commands (`sector_tool`, `portal_tool`, `way_tool`, `shape_tool`, `light_tool`, `fog_tool`, `aimap_tool`, `details_tool`, `wallmark_tool`, `particles_tool`), the scene's own, `viewport_gesture`, `spawn_animation`, `-home`; a form that discards is a tool of its own with `destructiveHint` (the level tools included). | Each closes a hole an agent would otherwise fall into; nothing a C++-era script sends changes meaning. |
+| D13 | The wire adds, never removes: refusals of `game_link` / `game_modes` carry `error`; `characters_write` refuses a path outside the project; `world_set` writes only its section; `mod_publish start` answers in one call; `quest_history` adds `undo_steps` / `redo_steps`; `property_inspector` names a choose row's `list` (and its own model's bones or motions, `choices`) and `property_choose` answers the list the chooser shows (`search`, `limit`); new commands `jobs`, `level_build`, the tool commands (`sector_tool`, `portal_tool`, `way_tool`, `shape_tool`, `light_tool`, `fog_tool`, `aimap_tool`, `details_tool`, `wallmark_tool`, `particles_tool`), the scene's own, `viewport_gesture`, `spawn_animation`, `-home`; a form that discards is a tool of its own with `destructiveHint` (the level tools included). | Each closes a hole an agent would otherwise fall into; nothing a C++-era script sends changes meaning. |
 | D14 | Orders the C++ took from pointer addresses or `rand` are stable. In the level compiler an order the C++ takes from its own pools or from a fixed `rand` stream is reproduced (the face pool's blocks made after the load sort below the load's, as the C++ heap places them; the MU models' light draws the C++ stream, jumped to per vertex so that the vertices still light in parallel), and an order from heap addresses (QSlim's ties) is a rule of the comparison. | Section 9: the game does not depend on them, and a stable order makes a build reproducible. |
 | D15 | The command table lists what does something: the 35 C++ rows that are plumbing or whose bodies do nothing are not listed, and the editor ships its default keys. | A row that does nothing is noise for an author and a trap for an agent; the C++ bound no key until a `level.ini` existed. |
 | D16 | Faults of the C++ editor are not repeated: the particle library holds all of Dead Air's `particles.xr` (the C++ `CPSLibrary::Load` stopped at the first short `TargetColor`: 1035 names of 1428); the unsigned-release sentence is a warning of its own (the C++ glued it to the last build warning); `scene_visibility` takes a JSON boolean; two refusals that said "in this build" of what no build has say what is so (`asset_preview` for a category with no thumbnails, `list_assets` for a category no area lists). | Each was an accident of the code, not a behaviour anyone relied on. |
@@ -831,11 +831,15 @@ bug.
   `python tools/qa/diff_editors.py`, `python tools/qa/diff_compile.py`, `python
   tools/qa/run_all.py`. Each runs only what changed since it passed unless told `--all`;
   nothing that already passed is run again to check something new.
-- **The editor.** A window program, as the C++ editor was (no console that could end it); a run
-  that prints writes to the streams its launcher gave it and takes the parent's console for a
-  missing one, and `Grizzly-Cmd.exe` beside it is the editor for a shell - a console program
-  that runs it, waits and passes its output and exit code on (`check_icon.py` holds which
-  program is which, `check.sh` and `test_server_lifecycle` the twin).
+- **The editor.** A window program, as the C++ editor was. A run with a window joins no
+  console, so none can end it past the unsaved-work question. A run without one (a compile, a
+  dump, a headless editor) joins its launcher's console: it writes to the streams it was given
+  and to that console for a missing one, a reader that leaves is not an error (it stops
+  printing), and the console's end - Ctrl+C, the console closed - closes a headless editor the
+  way a quit does. `Grizzly-Cmd.exe` beside it is the editor for a shell - a console program
+  that runs it, waits and passes its output and exit code on; a windowless run never outlives
+  it, a run with a window does (`check_icon.py` holds which program is which, `check.sh` and
+  `test_server_lifecycle` the rest).
   `Bin\x64\Release\Grizzly.exe` (`Build.ps1`, the release profile: thin LTO,
   line tables in a PDB beside it) or `Intermediate\cargo\debug\Grizzly.exe`
   (`tools/rust/cg.sh build`), listening on 28016 (`-mcp_port` names another; QA uses its own

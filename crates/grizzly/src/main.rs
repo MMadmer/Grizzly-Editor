@@ -1,8 +1,9 @@
 //! Grizzly Editor.
 
 // A window program: started from Explorer, a shortcut or the taskbar it gets no console, and so
-// no console window whose close would end it without the unsaved-work question. A run that
-// prints takes its parent's console (`gz_win::attach_parent_console`).
+// no console window whose close would end it without the unsaved-work question. A run without
+// a window joins its parent's console (`gz_win::attach_parent_console`); one with a window
+// never does.
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod cli;
@@ -10,6 +11,7 @@ mod compile;
 mod core_cmds;
 mod startup;
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -41,15 +43,21 @@ fn app_paths(cli: &Cli) -> AppPaths {
     AppPaths { exe_dir, appdata: root.join("_appdata_"), logs: home.join("logs"), home, root }
 }
 
+/// A line for whoever reads this run's output. `false` once the reader is gone (a closed pipe, a
+/// stream the shell gave and does not take): the run stops printing and ends as it would have.
+fn say(line: &str) -> bool {
+    writeln!(std::io::stdout().lock(), "{line}").is_ok()
+}
+
 fn main() -> ExitCode {
     let mut startup = Startup::begin();
     let cli = Cli::parse(std::env::args());
-    if cli.speaks() {
+    if cli.windowless() {
         gz_win::attach_parent_console();
     }
     // before the log: a check of the binary writes nothing
     if cli.catalogue {
-        println!("{}", gz_mcp::catalogue_line());
+        say(&gz_mcp::catalogue_line());
         if !cli.dump_commands {
             return ExitCode::SUCCESS;
         }
@@ -69,7 +77,11 @@ fn main() -> ExitCode {
         Ok(started) => started,
         Err(e) => {
             gz_win::attach_parent_console();
-            eprintln!("Grizzly Editor cannot write its log {}: {e}", log_file.display());
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "Grizzly Editor cannot write its log {}: {e}",
+                log_file.display()
+            );
             return ExitCode::from(2);
         }
     };
@@ -133,7 +145,9 @@ fn main() -> ExitCode {
 
     if cli.dump_commands {
         for c in registry.commands() {
-            println!("{} {}", c.name, c.area);
+            if !say(&format!("{} {}", c.name, c.area)) {
+                break;
+            }
         }
         return ExitCode::SUCCESS;
     }
@@ -168,6 +182,10 @@ fn main() -> ExitCode {
     }
 
     if cli.headless {
+        // the console it lives in ending (Ctrl+C, the console closed) is a quit: the project
+        // closes the way it does for any other
+        let asked = editor.clone();
+        gz_win::on_console_end(move || asked.request_quit());
         startup.finish(&log);
         // Without a window the editor lives until it is told to quit.
         runtime.block_on(editor.quit_token().cancelled());
@@ -177,7 +195,8 @@ fn main() -> ExitCode {
         startup.stage("Building the shell");
         let mut shell = gz_app::ShellBuilder::new();
         install_ui(&mut shell);
-        let opts = gz_app::window_options(&editor);
+        let mut opts = gz_app::window_options(&editor);
+        opts.start_minimized = cli.minimized;
         let shell = gz_app::GrizzlyShell::new(
             editor.clone(),
             shell,

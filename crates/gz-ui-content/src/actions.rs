@@ -825,10 +825,6 @@ pub(crate) fn link_game(editor: &Arc<Editor>) {
 
 /// Place in Scene: the scene's `place_object` with the entry's library reference.
 pub(crate) fn place(editor: &Arc<Editor>, reference: String) {
-    if !editor.registry().has("place_object") {
-        editor.notices.error("This build cannot place objects in the scene yet.");
-        return;
-    }
     editor.post("place_object", args(&[("ref", json!(reference))]));
 }
 

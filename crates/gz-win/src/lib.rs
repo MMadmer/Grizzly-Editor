@@ -6,7 +6,8 @@
 //! - [`process_counters`] - when the process was created and how many file operations it made:
 //!   the numbers of the startup profile;
 //! - [`started_minimized`] - whether the launcher asked for a minimised window;
-//! - [`attach_parent_console`] - the standard streams of a window program that prints;
+//! - [`attach_parent_console`], [`on_console_end`] - a run without a window in its launcher's
+//!   console: its streams, and the console's end as a request to stop;
 //! - [`end_with_this_process`] - a child process that does not outlive this one;
 //! - [`write_minidump`], [`install_fatal_exception_dump`] - what a crash leaves behind;
 //! - [`foreground_is_ours`] - whether a window of this process is in front;
@@ -27,7 +28,7 @@ mod job;
 mod registry;
 
 pub use caption::{CaptionHitTest, CaptionShape, PxRect, hit_test, install_caption_hit_test};
-pub use console::{ConsoleStreams, attach_parent_console};
+pub use console::{ConsoleStreams, attach_parent_console, on_console_end};
 pub use folders::{KnownFolder, free_space, is_volume_root, known_folder, volume_path_name};
 pub use job::end_with_this_process;
 pub use registry::long_paths_enabled;

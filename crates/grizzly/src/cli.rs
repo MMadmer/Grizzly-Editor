@@ -26,6 +26,10 @@ pub struct Cli {
     pub echo: bool,
     /// `-iconsheet`: show every icon of the kit and nothing else.
     pub iconsheet: bool,
+    /// `-minimized`: the window starts minimised, as it does for a launcher that asks for a
+    /// minimised start (a shortcut's Run: Minimized). The twin for a command line passes its own
+    /// launcher's request on with it.
+    pub minimized: bool,
     /// `-dump_commands`: print every registered command with its area and exit.
     pub dump_commands: bool,
     /// `-catalogue`: print the line of the MCP catalogue this build embeds
@@ -70,6 +74,7 @@ impl Cli {
                 "home" => cli.home = it.next().map(PathBuf::from),
                 "log_echo" | "log-echo" => cli.echo = true,
                 "iconsheet" => cli.iconsheet = true,
+                "minimized" => cli.minimized = true,
                 "dump_commands" => cli.dump_commands = true,
                 "catalogue" => cli.catalogue = true,
                 "compile" | "compile_details" => {
@@ -91,12 +96,13 @@ impl Cli {
         cli
     }
 
-    /// Whether this run talks to whoever started it: a check of the binary, the compilers, the
-    /// log echo, or a headless editor that lives on the command line. Such a run takes its
-    /// parent's console for the streams the launcher did not redirect. A window run keeps out of
-    /// any console, so closing the terminal it was started from cannot end it.
-    pub fn speaks(&self) -> bool {
-        self.catalogue || self.dump_commands || self.compile.is_some() || self.echo || self.headless
+    /// Whether this run has no window: a check of the binary, a compiler, a headless editor. Such
+    /// a run lives in its launcher's console the way a console program does - it prints there
+    /// what the launcher did not redirect, and the console's end is its end. A run with a window
+    /// keeps out of every console, `-log_echo` or not (its echo goes to the streams it was
+    /// given): no console can end it past the unsaved-work question.
+    pub fn windowless(&self) -> bool {
+        self.catalogue || self.dump_commands || self.compile.is_some() || self.headless
     }
 
     /// The home: `-home`, else `env_home` (the value of [`HOME_VAR`]) when it is not blank, else the
@@ -138,13 +144,14 @@ mod tests {
     }
 
     #[test]
-    fn only_a_run_that_prints_takes_a_console() {
-        for args in
-            [&["-dump_commands"][..], &["-catalogue"], &["-log_echo"], &["-headless"], &["-compile", "D:/x"]]
-        {
-            assert!(cli(args).speaks(), "{args:?}");
+    fn only_a_run_without_a_window_lives_in_a_console() {
+        for args in [&["-dump_commands"][..], &["-catalogue"], &["-headless"], &["-compile", "D:/x"]] {
+            assert!(cli(args).windowless(), "{args:?}");
         }
-        assert!(!cli(&[]).speaks());
-        assert!(!cli(&["-project", "D:/p", "-nodlg", "-mcp_port", "28917"]).speaks());
+        assert!(cli(&["-headless", "-log_echo"]).windowless());
+        assert!(!cli(&[]).windowless());
+        // the echo of a window run goes to the streams it was given, never to a console it joins
+        assert!(!cli(&["-log_echo"]).windowless());
+        assert!(!cli(&["-project", "D:/p", "-nodlg", "-mcp_port", "28917"]).windowless());
     }
 }

@@ -214,6 +214,9 @@ pub struct WindowOptions {
     pub floating: bool,
     /// The theme's background: what the window shows before its device exists.
     pub background: [u8; 3],
+    /// `-minimized`: the window starts minimised, as it does for a launcher that asks for it
+    /// (`gz_win::started_minimized`).
+    pub start_minimized: bool,
 }
 
 impl Default for WindowOptions {
@@ -229,6 +232,7 @@ impl Default for WindowOptions {
             gpu_adapter: String::new(),
             floating: false,
             background: [0x20, 0x20, 0x25],
+            start_minimized: false,
         }
     }
 }
@@ -423,7 +427,7 @@ impl App {
     /// graphics device: the event loop goes on meanwhile and the first frame follows the device.
     fn create(&mut self, event_loop: &ActiveEventLoop) -> Result<Pending, String> {
         profile_stage(&self.profile, "Creating the window");
-        let start_minimized = gz_win::started_minimized();
+        let start_minimized = self.opts.start_minimized || gz_win::started_minimized();
         let mut attrs = Window::default_attributes()
             .with_title(&self.opts.title)
             .with_inner_size(LogicalSize::new(self.opts.size[0], self.opts.size[1]))

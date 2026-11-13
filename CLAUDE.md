@@ -108,15 +108,22 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   resource at build time (`gz-ico`, no tool and no generated file in the tree), and the window and the caption logo
   draw the same file. `tools/rust/check_icon.py` proves it on the built binaries (a step of `check.sh`), with what
   kind of program each is.
-- **`Grizzly.exe` is a window program** (as the C++ editor was): Explorer, a shortcut or the taskbar start it with
-  no console, so no console window can end it past the unsaved-work question. A run that prints (`-dump_commands`,
-  `-catalogue`, `-compile`, `-log_echo`, `-headless`) writes to the streams its launcher gave it (a pipe, a file)
-  and takes its parent's console for a missing one (`gz_win::attach_parent_console`). A shell does not wait for a
-  window program and PowerShell's `>` takes nothing from one: **`Grizzly-Cmd.exe`**, the console twin beside it,
-  runs `Grizzly.exe` with the same arguments and its own streams, waits and ends with the editor's exit code -
-  the editor ends with it (Ctrl+C, a closed console; `gz_win::end_with_this_process`). `check.sh` and
-  `test_server_lifecycle` hold the twin. A dump of the registry writes no log, a compile run its own
-  (`grizzly_compile_<user>.log`): neither takes the log of an editor open on the same home.
+- **`Grizzly.exe` is a window program** (as the C++ editor was). **A run with a window joins no console**, with
+  `-log_echo` or without (its echo goes to the streams it was given): no console can end it past the unsaved-work
+  question. **A run without a window** (`-dump_commands`, `-catalogue`, `-compile`, `-headless`; `cli.rs`
+  `windowless`) lives in its launcher's console the way a console program does: it keeps the streams it was given
+  (a pipe, a file) and takes that console for a missing one (`gz_win::attach_parent_console`), and the console's
+  end - Ctrl+C, Ctrl+Break, the console closed - closes a headless editor the way a quit does
+  (`gz_win::on_console_end`). **A reader that leaves is not an error**: every line a program prints is a
+  `writeln!` whose failure stops the printing (`say`, the log's echo), never `println!`, which panics on a closed
+  pipe.
+- **`Grizzly-Cmd.exe`** is the editor for a shell: a shell does not wait for a window program and PowerShell's `>`
+  takes nothing from one. The console twin runs `Grizzly.exe` beside it with the same arguments and its own
+  streams, waits and ends with the editor's exit code. A windowless run never outlives it
+  (`gz_win::end_with_this_process`); a run with a window does, and starts minimised when the twin was
+  (`-minimized`, which the editor takes like a launcher's request). `check.sh` and `test_server_lifecycle` hold
+  all of it. A dump of the registry writes no log, a compile run its own (`grizzly_compile_<user>.log`): neither
+  takes the log of an editor open on the same home.
 - **No test writes a program file** (`.exe`, `.dll`, `.com`, `.scr`, `.bat`, `.cmd`, `.ps1`, `.msi`, or bytes that
   start with `MZ`): the author's antivirus reads a fresh unsigned test binary that drops one as malware. A test that
   needs such a name passes a harmless one to the code under test; a literal that never reaches the disk carries
@@ -130,7 +137,8 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   dependency added or removed means running it again (`check.sh` says so).
 - Test run: `Grizzly.exe -project "<project>" -nodlg` (`-nodlg` = no modals: the logged answers - No for a question,
   OK for a note; a crash = symbolised stack + dump + exit code 3). `-headless` runs it without a window, `-home
-  <folder>` keeps its project list, settings and logs there (or `GRIZZLY_HOME`), `-mcp_port <n>` listens elsewhere.
+  <folder>` keeps its project list, settings and logs there (or `GRIZZLY_HOME`), `-mcp_port <n>` listens elsewhere,
+  `-minimized` starts the window minimised.
 - The editor is fully drivable over MCP (TCP 127.0.0.1:28016; the stdio bridge `grizzly-mcp.exe`, the catalogue
   `crates/gz-mcp/tools.json`; `tools/mcp/grizzly_mcp.py` is a launcher of the binary for clients set up before;
   documentation in `tools/mcp/AI_SETUP.md`). New UI features ship with an MCP command: the editor is AI-friendly by

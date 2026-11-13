@@ -443,13 +443,14 @@ fn fnv1a64(text: &str) -> u64 {
 fn main() -> std::process::ExitCode {
     // the editor's spelling (one dash or two); every other argument is ignored, as before
     if std::env::args().skip(1).any(|a| a.trim_start_matches('-').eq_ignore_ascii_case("catalogue")) {
-        println!("{}", catalogue_line());
+        // a reader that left is not an error of this program
+        let _ = writeln!(io::stdout().lock(), "{}", catalogue_line());
         return std::process::ExitCode::SUCCESS;
     }
     let bridge = match Bridge::load() {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("grizzly-mcp: {e}");
+            let _ = writeln!(io::stderr().lock(), "grizzly-mcp: {e}");
             return std::process::ExitCode::from(2);
         }
     };

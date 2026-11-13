@@ -249,14 +249,17 @@ impl Drop for LogGuard {
 }
 
 fn write_loop(rx: &Receiver<Msg>, mut out: Option<BufWriter<File>>, echo: bool) {
+    // the echo ends with its reader: a stream that refused a line is not written to again
+    let echo = std::cell::Cell::new(echo);
     let put = |record: &Record, out: &mut Option<BufWriter<File>>| {
         if let Some(out) = out {
             let _ = out.write_all(record.level.mark().as_bytes());
             let _ = out.write_all(record.text.as_bytes());
             let _ = out.write_all(b"\r\n");
         }
-        if echo {
-            eprintln!("{}{}", record.level.mark(), record.text);
+        if echo.get() && writeln!(std::io::stderr().lock(), "{}{}", record.level.mark(), record.text).is_err()
+        {
+            echo.set(false);
         }
     };
     loop {

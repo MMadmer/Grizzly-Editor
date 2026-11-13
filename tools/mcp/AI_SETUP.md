@@ -17,7 +17,9 @@ The Grizzly Editor (`Grizzly.exe`) hosts a local automation endpoint whenever it
 * `Grizzly.exe` is a window program: started from a script through a pipe it prints into the pipe, but a
   shell does not wait for it and PowerShell's `>` and `$x = ...` take nothing from it. `Grizzly-Cmd.exe`
   beside it is the same editor for a command line (`Grizzly-Cmd.exe -headless -compile <level folder> >
-  compile.log`): the same arguments, the shell's streams, the editor's exit code; the editor ends with it.
+  compile.log`): the same arguments, the shell's streams, the editor's exit code. A run without a window
+  (a compile, a dump, a headless editor) ends with it, and Ctrl+C closes a headless editor the way a quit
+  does; an editor with a window outlives the shell it was started from.
   Its tools, their descriptions, schemas and annotations and the server's instructions are the
   catalogue `crates/gz-mcp/tools.json`, word for word, embedded when it is built: a bridge
   older than the file serves other tools. `grizzly-mcp.exe -catalogue` (and `Grizzly.exe

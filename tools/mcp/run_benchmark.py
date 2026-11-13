@@ -24,6 +24,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(REPO, "tools", "qa"))
+import kept  # noqa: E402
 import qa_target  # noqa: E402
 
 SOURCE = r"D:\XFinedProjects\Test"
@@ -113,7 +114,10 @@ def main() -> int:
                       % CPP_PORT, flush=True)
                 return 1
             cpp_copy = qa_target.copy_project(SOURCE, os.path.join(work, "cpp", "Test"))
-            kept = {p: (open(p, "rb").read() if os.path.isfile(p) else None) for p in CPP_KEPT}
+            # the root's files of the author, also on disk while this run has them aside (kept.py)
+            kept.recover()
+            saved = {p: (open(p, "rb").read() if os.path.isfile(p) else None) for p in CPP_KEPT}
+            kept.to_disk({os.path.basename(p): data for p, data in saved.items()})
             try:
                 qa_target.guard_project(cpp_copy)
                 proc = start([CPP_EXE, "-nodlg", "-project", cpp_copy], os.path.dirname(CPP_EXE), CPP_PORT, 300)
@@ -122,13 +126,14 @@ def main() -> int:
                 finally:
                     stop(proc, CPP_PORT)
             finally:
-                for p, data in kept.items():
+                for p, data in saved.items():
                     if data is None:
                         if os.path.isfile(p):
                             os.remove(p)
                     else:
                         with open(p, "wb") as f:
                             f.write(data)
+                kept.done()
             os.makedirs(os.path.dirname(RECORD), exist_ok=True)
             with open(RECORD, "w", encoding="utf-8") as f:
                 json.dump(cpp, f, indent=1)

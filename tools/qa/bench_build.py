@@ -28,6 +28,7 @@ import tempfile
 import threading
 import time
 
+import kept
 import qa_target
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -200,8 +201,11 @@ def cpp(project: str, work: str) -> dict:
         return {"skipped": f"no C++ editor: {CPP_EXE} is not there"}
     if answers(28016):
         return {"skipped": "something answers on 28016: the author's editor, not touched"}
-    kept = {n: (open(os.path.join(REPO, n), "rb").read() if os.path.isfile(os.path.join(REPO, n)) else None)
-            for n in CPP_KEPT}
+    # the root's files of the author, also on disk while this run has them aside (kept.py)
+    kept.recover()
+    saved = {n: (open(os.path.join(REPO, n), "rb").read() if os.path.isfile(os.path.join(REPO, n)) else None)
+             for n in CPP_KEPT}
+    kept.to_disk(saved)
     out: dict = {}
     proc = None
     try:
@@ -220,7 +224,7 @@ def cpp(project: str, work: str) -> dict:
     finally:
         if proc:
             close(28016, proc)
-        for n, data in kept.items():
+        for n, data in saved.items():
             p = os.path.join(REPO, n)
             if data is None:
                 if os.path.exists(p):
@@ -228,6 +232,7 @@ def cpp(project: str, work: str) -> dict:
             else:
                 with open(p, "wb") as f:
                     f.write(data)
+        kept.done()
     return out
 
 
