@@ -17,7 +17,8 @@ its twin (no console can end it), started minimised because the twin was.
 Then the streams and the console (`streams`, `console`): a dump whose reader leaves after one
 line and a headless editor whose log echo lost its reader end with 0 and leave no crash
 report; in a console of its own (hidden), Ctrl+Break closes a headless editor started through
-the twin the way a quit does (exit code 0, "Grizzly Editor closed" in its log), and an editor
+the twin the way a quit does, also while it opens its project (exit code 0, "Grizzly Editor
+closed" in its log), and an editor
 with a window started there with -log_echo is not in that console and lives on after it.
 
     python tools/mcp/run_lifecycle.py
@@ -282,13 +283,16 @@ def streams() -> bool:
     return good
 
 
-def console_inner(out: str) -> int:
+def console_inner(out: str, project: str) -> int:
     """In a console of its own: Ctrl+Break on a headless editor started through the twin, and an editor with a
     window started here with -log_echo. Writes what it saw to `out`; the windowed editor is left running."""
     port = qa_target.PORT
     twin_exe = os.path.join(os.path.dirname(qa_target.exe()), "Grizzly-Cmd.exe")
     seen: dict = {}
-    proc = subprocess.Popen([twin_exe, *qa_target.ARGS, "-headless", "-nodlg"],
+    # with a project to open: the endpoint answers before the project is open, and the break right then finds
+    # the editor opening it
+    qa_target.guard_project(project)
+    proc = subprocess.Popen([twin_exe, *qa_target.ARGS, "-headless", "-nodlg", "-project", project],
                             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
     seen["up"] = wait_until(lambda: answers(port), 60)
     proc.send_signal(signal.CTRL_BREAK_EVENT)
@@ -334,7 +338,8 @@ def console(work: str) -> bool:
     hidden.wShowWindow = 0
     env = dict(os.environ, GRIZZLY_QA_PORT=str(port), GRIZZLY_QA_HOME=qa_target.HOME)
     try:
-        subprocess.run([sys.executable, os.path.abspath(__file__), "--console-inner", out], env=env,
+        project = project_copy(work, "console")
+        subprocess.run([sys.executable, os.path.abspath(__file__), "--console-inner", out, project], env=env,
                        creationflags=subprocess.CREATE_NEW_CONSOLE, startupinfo=hidden, timeout=240)
         seen = {}
         if os.path.isfile(out):
@@ -359,8 +364,8 @@ def console(work: str) -> bool:
 
 
 def main() -> int:
-    if len(sys.argv) == 3 and sys.argv[1] == "--console-inner":
-        return console_inner(sys.argv[2])
+    if len(sys.argv) == 4 and sys.argv[1] == "--console-inner":
+        return console_inner(sys.argv[2], sys.argv[3])
     if answers(qa_target.PORT):
         print(qa_target.busy_text())
         return 2

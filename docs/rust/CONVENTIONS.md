@@ -30,7 +30,9 @@ The rules every crate under `crates/` follows. The plan and the architecture are
 - No `static` that holds state, no lazily initialised global, no singleton accessor. What a
   function needs it takes as an argument. The one task-local, `gz-task`'s `SCOPE` (the jobs a
   request started), is context of a request's task, not state: it holds nothing between
-  requests.
+  requests. And `gz-win` keeps what a Win32 callback without a context argument has to reach in
+  a static set once: the crash filter's dump folder (`FATAL_DUMP`), the console handler's
+  request to stop (`ASK_TO_STOP`). Nothing else is added to that list without the plan.
 - Layers 1-3 are **pure**: functions over `&` data that return values. No logging (return
   warnings as data), no thread of your own, no async, no file access that is not the function's
   stated job.

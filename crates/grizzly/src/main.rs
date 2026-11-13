@@ -154,6 +154,13 @@ fn main() -> ExitCode {
 
     let flags = Flags { unattended: cli.unattended, headless: cli.headless, qa_github: cli.qa_github };
     let editor = Editor::new(EditorOptions { flags, paths }, exec, log.clone(), registry);
+    if cli.headless {
+        // From here on the end of the console it lives in (Ctrl+C, the console closed) is a quit:
+        // whatever is open by then - a project opening at this very start too - closes the way it
+        // does for any other.
+        let asked = editor.clone();
+        gz_win::on_console_end(move || asked.request_quit());
+    }
     gz_app::project::set_project_probe(&editor, project_probe);
     gz_game::install(&editor);
     gz_mod::install(&editor);
@@ -182,10 +189,6 @@ fn main() -> ExitCode {
     }
 
     if cli.headless {
-        // the console it lives in ending (Ctrl+C, the console closed) is a quit: the project
-        // closes the way it does for any other
-        let asked = editor.clone();
-        gz_win::on_console_end(move || asked.request_quit());
         startup.finish(&log);
         // Without a window the editor lives until it is told to quit.
         runtime.block_on(editor.quit_token().cancelled());

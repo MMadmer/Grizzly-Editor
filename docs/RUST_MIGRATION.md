@@ -323,7 +323,9 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
 - No `static mut`, no lazily initialised global holding state, no singleton accessor. One
   task-local exists and is context, not state: `gz-task`'s `SCOPE`, the jobs a request
   started - a value only inside the future a request runs and the closure the UI queue runs
-  for it; the key holds nothing between requests.
+  for it; the key holds nothing between requests. And `gz-win` keeps what a Win32 callback
+  without a context argument has to reach in a static set once - the crash filter's dump
+  folder, the console handler's request to stop: the system calls a plain function there.
 - `Rc` and `RefCell` only in a surface's own view state on the UI thread.
 - A mutex guards a small private structure and is never held across an `.await`, a frame or
   a call into another module. Two locks at once need a documented order.
