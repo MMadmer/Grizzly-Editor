@@ -38,8 +38,10 @@ libraries the editor links):
 pwsh -NoProfile -File .\Build.ps1
 ```
 
-It builds the editor in release - `Grizzly.exe` (the level compilers are part of it) and the MCP bridge
-`grizzly-mcp.exe` - and puts them with their PDBs and the third-party notices (`licenses\`) into
+It builds the editor in release - `Grizzly.exe` (the level compilers are part of it), `Grizzly-Cmd.exe` (the
+editor for a command line: a console program that runs `Grizzly.exe`, waits for it and passes its output and
+exit code on) and the MCP bridge `grizzly-mcp.exe` - and puts them with their PDBs and the third-party notices
+(`licenses\`) into
 `Bin\x64\Release`, touching nothing else there, and says how long it took. `-Debug` builds the debug
 configuration, `-Out <folder>` puts the files elsewhere. The repository holds no C or C++ of its own;
 the C++ editor and compilers it replaced are the tags `cpp-editor-last` and `cpp-compilers-last`.

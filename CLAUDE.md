@@ -71,9 +71,10 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - **The level compiler is part of the editor** (`gz-lc`, `gz-lc-light`): `level_build`'s `compile` actions and
   `level_compile` run it as the job `level_run` on every core, Play compiles with it, and `Grizzly.exe -headless
   -compile <level folder>` is the same code without a window. No program is started to compile a level.
-- **The move to Rust needed no game change.** Since it the game has one ability the editor uses when the linked
-  engine says so (`EngineAbilities` in `xrEngine.exe`'s version resource, read by `gz-game`): started on another fs
-  config (`-fsltx`) it writes nothing into its installation - the game's `docs/dead-air/CONTENT_BUNDLES.md`. What
+- **The move to Rust needed no game change.** Since it the game has one ability Play needs, stated by the engine and
+  the libraries that implement it (`EngineAbilities` in their version resources, read by `gz-game`): started on
+  another fs config (`-fsltx`) it writes nothing into its installation - the game's
+  `docs/dead-air/CONTENT_BUNDLES.md`. What
   crosses to the game otherwise is files, held to the proofs of the contract's section 9.
 
 ## Mod philosophy
@@ -94,7 +95,8 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 ## Build and verification
 
 - Build: `pwsh -NoProfile -File .\Build.ps1` (pwsh 7 strictly — in PowerShell 5.1 a tool's stderr kills the script):
-  the editor in release - `Grizzly.exe` (the level compilers are crates of it), `grizzly-mcp.exe`, their PDBs, which
+  the editor in release - `Grizzly.exe` (the level compilers are crates of it), `Grizzly-Cmd.exe` (the editor for a
+  command line), `grizzly-mcp.exe`, their PDBs, which
   the crash reports read, and the third-party notices of `licenses\` - into `Bin\x64\Release`, touching nothing else
   there; it says what it built and how long it took. `-Debug`, `-Out <folder>`. One build, cargo alone; Visual Studio's
   C++ workload is needed only for the C compiler of the vendored LuaJIT and libvorbis and the Windows SDK libraries.
@@ -102,9 +104,19 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - The release profile (`Cargo.toml`): thin LTO, 16 codegen units, the line tables in the PDB beside the executable.
   The executable links ONE C runtime, the DLL one (`crates/grizzly/build.rs`): the vendored LuaJIT is compiled for the
   static one, and with both the release link fails.
-- Both executables carry the editor's one icon, `assets/grizzly-editor-icon.ico`: their `build.rs` compiles it into a
+- Every executable carries the editor's one icon, `assets/grizzly-editor-icon.ico`: their `build.rs` compiles it into a
   resource at build time (`gz-ico`, no tool and no generated file in the tree), and the window and the caption logo
-  draw the same file. `tools/rust/check_icon.py` proves it on the built binaries (a step of `check.sh`).
+  draw the same file. `tools/rust/check_icon.py` proves it on the built binaries (a step of `check.sh`), with what
+  kind of program each is.
+- **`Grizzly.exe` is a window program** (as the C++ editor was): Explorer, a shortcut or the taskbar start it with
+  no console, so no console window can end it past the unsaved-work question. A run that prints (`-dump_commands`,
+  `-catalogue`, `-compile`, `-log_echo`, `-headless`) writes to the streams its launcher gave it (a pipe, a file)
+  and takes its parent's console for a missing one (`gz_win::attach_parent_console`). A shell does not wait for a
+  window program and PowerShell's `>` takes nothing from one: **`Grizzly-Cmd.exe`**, the console twin beside it,
+  runs `Grizzly.exe` with the same arguments and its own streams, waits and ends with the editor's exit code -
+  the editor ends with it (Ctrl+C, a closed console; `gz_win::end_with_this_process`). `check.sh` and
+  `test_server_lifecycle` hold the twin. A dump of the registry writes no log, a compile run its own
+  (`grizzly_compile_<user>.log`): neither takes the log of an editor open on the same home.
 - **No test writes a program file** (`.exe`, `.dll`, `.com`, `.scr`, `.bat`, `.cmd`, `.ps1`, `.msi`, or bytes that
   start with `MZ`): the author's antivirus reads a fresh unsigned test binary that drops one as malware. A test that
   needs such a name passes a harmless one to the code under test; a literal that never reaches the disk carries
@@ -1084,8 +1096,9 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   "restorable".
 - **Play starts the installed game where it is** (`gz-levelbuild`'s `play.rs`): `<game>\xrEngine.exe -fsltx
   <root>\fsgame.ltx`, the root holding the marker, the fs config, the staged gamedata and an app data - no program
-  and no link. A linked engine without the ability runs from copies in the root; the answer and the log say
-  `in_place` or `copied`. `test_play_game` lists the installed game before and after and wants it equal.
+  and no link. A linked game that does not state the ability (`fsltx-in-place`, in the version resources of the
+  engine and of its libraries) is refused before anything is built, naming the program: Play never copies a
+  program to run it. `test_play_game` lists the installed game before and after and wants it equal.
 - **Play clears only a root it made** (`gz-levelbuild`'s `play_root.rs`): the checks of a project's deletion stand
   in front of every Play root - never a project, the editor, a game, a user folder, a drive or a link, judged as
   written and where the path really is; only a missing or empty folder becomes a root and gets Play's marker

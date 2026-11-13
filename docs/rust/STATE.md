@@ -3325,3 +3325,143 @@ All seventeen scenes of the compile comparison, each compiled twice, ran at the 
 on the same compiler sources (`Intermediate/close-compiler/final_all.out`: 17 PASS, 2492 s). The installed game's
 listing before and after each game run is equal (107,495 entries); nothing changed under `D:\XFinedProjects` or the
 game's `modules`; no process, no Play root and no temp folder left.
+
+## The last review, the game and Play
+
+The brief `docs/rust/briefs/fix-game.md`, 13 Nov, both repositories; nothing committed.
+
+**The ability, stated by every program that implements it.** The game's `xrEngine.dll` (the quoted `-fsltx`),
+`xrCore.dll` (the config elsewhere, the paths) and `xrGame.dll` (the content service, the update check) carry the
+same `EngineAbilities` as `xrEngine.exe` in version resources of their own (`src/xrCore/ModuleVersion.rc2`, a
+`version.rc` per library). Play reads all four (`play.rs` `ability_of`, `GamePrograms::stating`): a word counts only
+when every one states it. A mixed installation - a library of an older build beside a newer engine - takes the copy
+path, and the answer's `play_reason` (and the log line) names the library. Before this deploy the installed game was
+exactly that: a new `xrEngine.exe` beside libraries with no version resource.
+
+**The path limit, what the game says.** UCRT `_splitpath` gives a folder over 256 characters back empty, and
+`GetFullPathNameA` stops at `MAX_PATH` even in a long-path aware program. Replaced on the way a path takes:
+`CLocatorAPI::Register`'s folder loop, `EFS_Utils::ExtractFilePath` (an ini file's `#include` folder), `xr_ini.cpp`'s
+include split and the application folder (`xrCore.cpp`) by `xr_split_folder` (`FileSystem.h`, `_splitpath_s` with
+`string_path` buffers), the protected mode's `real_path` by `_fullpath`. The limit stays 519 (`string_path`), now
+proven: `Intermediate/fix-game/prove_long.py`, a root of 330 characters with a space in it, the config named quoted,
+every folder indexed in it over 256, its longest path 519 - the new game's level in 19 s, the application folder
+listed equal (746 entries); the installed build before this change stopped at once in `CInifile::Load` (`path &&
+path[0]`). The editor adds what the game does not decide: the root is the engine's working folder, and
+`CreateProcessW` refuses one over 258 characters (`ERROR_DIRECTORY`, measured), so `check_path_lengths` refuses such a
+root (`WORKING_FOLDER_LIMIT`). The renderers' DirectStorage opens an archive by a path up to `MAX_PATH` and reads a
+deeper one the ordinary way; the console's cloud and tree dumps stop at `MAX_PATH` - neither is on a path Play takes.
+
+**The early crash report** moves beside the config only for a config outside the application folder (the folder of
+`xrCore.dll`, the rule of `CLocatorAPI::setup_fs_path`); a config inside it reports into the working folder as
+before. Proven by a start from a working folder of its own with the application folder's config named outright.
+
+**The copy path, run for real.** Play takes `engine=` (`auto`, the default, or `copied`: copies whatever the engine
+says, for a game whose in-place run the author does not want). `test_play_game.py` runs `mp_test` both ways on one
+root (`--engine both`, mp_test's default; one way for the other scenes): in place, then copied - the copied engine and
+its libraries all listed by the marker, the junction to the installed archives, the copy's content records in the
+root's `.dead-air-x64`, the level loaded from the copy; the root removed with its junction unlinked as a link, the
+installed `database` keeping its entries, the installed game's listing equal. Line 90's comment says what is true: the
+compile comparison holds implicit light with MU models to the C++ record (`mp_close_combat_whole`), and the game loads
+it. Every console program `gz-levelbuild` starts (`taskkill`, `reg.exe`, `cmd /c mklink`) goes through
+`process::console`, which sets `CREATE_NO_WINDOW`; the engine is started as it is.
+
+**Proof** (logs in `Intermediate/fix-game/`):
+- The game: `build_x64.ps1 -Configuration Release -Clean` (CMake changed) 3102 steps, 8 min 46 s, then `no work to
+  do`; `git diff --check` clean; `prove_long.py` 14 / 0 (elsewhere 22.5 s, inside 12.2 s, plain 9.7 s); the negative
+  control on the installed build 3 fail as expected.
+- Deploy: the game closed, 75 files backed up into `D:\Games\Dead Air\_predeploy_longpaths_20261113`, the 58 files of
+  `runtime-files.txt` and the PDBs by `deploy_live.py`, SHA-256 of 74 files against `bin\x64\Release`: 0 differ; the
+  four programs installed say `fsltx-in-place long-paths`. `Run-NqQa.ps1 -Scenario Scout` PASS 6 / 0.
+- The editor: `check.sh` - clippy clean, registry, encoding, test files clean; fmt and the icon check fail in the
+  shell engineer's files (`grizzly`, `gz-app`, `gz-ui-level`, `gz-project`; `Grizzly.exe` still subsystem 3).
+  `test.sh` 53 binaries run, 1198 tests green. `run_all.py test_scene_tools test_play_game` 2 / 2 (23.6 s, 103.2 s:
+  60 checks, in place the level in at 20 s, copied at 16 s, the installed game's 107,668 entries equal).
+  `test_play_game --scene l03u_agr_underground` 37 / 0, 224.2 s (compile 141.5 s, the level in at 29 s).
+
+## The last review, the shell
+
+The brief `docs/rust/briefs/fix-shell.md`, 13 Nov; nothing committed.
+
+**`Grizzly.exe` is a window program** (PE subsystem 2, was 3; `grizzly-mcp.exe` stays 3, a stdio server).
+`tools/rust/check_icon.py` reads the subsystem beside the icon, `check.sh` runs it on the release build. Started from
+Explorer the process has one window, the editor's, and no console host: nothing can close it behind the unsaved-work
+question. A run that prints - `-dump_commands`, `-catalogue`, `-compile`, `-compile_details`, `-log_echo`, `-headless`
+(`cli.rs` `speaks`) - calls `gz_win::attach_parent_console`: a stream the launcher redirected (a pipe, a file) stays
+exactly what it was, a missing one is taken from the parent's console. A plain window run takes no console, so closing
+the terminal it was typed in does not end it. cmd's `> file` and `| more`, PowerShell's `| more` / `| Out-File`, bash
+and every Python pipe of the QA tools read what they read before; PowerShell's own `> file` and `$x = ...` capture
+nothing from a window program (its rule for GUI programs: they are not redirected at the end of a pipeline) - pipe it.
+The editor's console children already had `CREATE_NO_WINDOW` (`gz-app`'s `reg.exe`, `gz-github`'s `gh`; `explorer.exe`
+is a window program); `gz-levelbuild`'s are its engineer's.
+
+**The three choosers list** (`gz-ui-level`'s `lists.rs`, as `EditorChooseEvents.h` filled them): `skeletonbones` - the
+bones of the row's model (`OGF_S_BONE_NAMES`), `skeletonanims` - every motion of the model, its own and those of each
+`.omf` its motion references name, once each, `gameanim` - the game's `anims\*.anm` / `*.anms`. A model is looked for in
+the project, the editor's data, then the game. The row carries its list's parameter now (`gz-scene`'s `props::Choice`:
+the list, the model, `max_items`): Fixed bones takes several (a comma list, the ones it has picked). The typed fallback
+and its sentence are gone; an empty list says what is missing ("The object has no model.", "The model ... has no
+motions."). `property_choose` (`gz-ui-level` registers over `gz-scene`'s) answers the list with `open` / `status`;
+`property_inspector` names a choose row's `list` and gives the object's own (`choices`) - `diff_editors.py` lists both
+fields as added by the wire (D13). On Escape: a physic object with `stalker_neutral_1` 47 bones, `zone_burning_fuzz_weak`'s
+Attack animation 2 motions, a helicopter's Motion 295 animations.
+
+**What the shell called "not part of this build".** Every build installs those surfaces (`grizzly`'s test
+`the_editor_installs_every_surface_the_contract_names`: every document kind, dialog, both drawers, the Start page, the
+scene's file rows). Removed as dead: `-project`'s "cannot open projects yet", the Build chip's "level builders"
+branch, `gz-app`'s own `COMMAND_LOAD` / `COMMAND_SAVE` rows (the Level tab's rows win in every build). Kept for a shell
+nobody installed into, said truly: the Level placeholder, `ui_tab` / session restore of a kind, `ui_dialog`,
+`ui_drawer`, the Content Browser popups, an empty menu ("... installed in this shell"), the Start page fallback
+("game_link over MCP"). `COMMAND_LOAD` without a scene and `COMMAND_SAVE`'s Save As open the Open Scene / Save Scene As
+dialogs for a person; an MCP caller gets no window and a refusal naming `p1s` (`test_level_commands.py` E).
+
+**Proofs**: `Build.ps1 -Only editor` 296 s; `check.sh` clean but fmt (25 s: `gz-project/src/cmd.rs:835`, not this
+brief's file); `test.sh` 12 binaries run, 1198 tests green (28 s); `test_properties` 47/47, `test_level_commands` 13/13,
+`test_mcp_bridge` 20/20, `test_server_lifecycle` passed, `test_ui_shell` 79/79 (run directly, each on a port of its own:
+`run_all.py` refused while another engineer's editor ran); `diff_compile.py --scene mp_test` PASS (43 s);
+`diff_editors.py` `s1_shell` 0 differ, `s6_scene` 0 differ (after the two wire fields).
+
+## Play in place only
+
+The brief `docs/rust/briefs/play-in-place-only.md`, 13 Nov, both repositories; nothing committed.
+
+**One way.** Play starts the linked game's installed `xrEngine.exe` where it is, `-fsltx <root>\fsgame.ltx`, or it does
+not start it. The copy path left `gz-levelbuild`: `EngineChoice` (`engine=`), `PlayMode`, the copies of the engine and
+its libraries, the junction to the archives, the content records copied into `.dead-air-x64`, the config named by its
+bare name, `GamePrograms`' `libraries` / `runtime_list`, `PlayRoot`'s `mode` / `reason` / `programs` /
+`program_bytes`, and `pe.rs` (155 lines, read by nothing else): `play.rs` 1257 to 979 lines, the suite 620 to 575.
+`play::ready_engine` reads the version resources of the engine and of `xrEngine.dll`, `xrCore.dll`, `xrGame.dll` and
+refuses in one sentence that names the program - the engine that does not state `fsltx-in-place`, or the libraries of
+a mixed installation by name - "Play needs a Dead Air Refined build that states it, so update the game". `cmd.rs`'s
+`play_place` asks it before the root check, so `play` / `play_game` refuse before a build starts; `prepare` asks again.
+The answers keep `exe` / `exe_path` and lose `play`, `play_reason`, `programs`, `program_bytes`; the log line says the
+installed engine was started in place in the root. A root an earlier editor made for a copied engine stays Play's: its
+marker's `program =` files, its `database` junction (unlinked) and its `.dead-air-x64` go when Play prepares it; Play
+writes no `program =` line (`play_root.rs` still reads them; its rules are unchanged). The limits: `long-paths` and
+Windows long paths on 519, off 259, an engine without the word 255; `WORKING_FOLDER_LIMIT` 258.
+
+**The registry read** is `gz_win::long_paths_enabled` (`crates/gz-win/src/registry.rs`, `RegGetValueW`,
+`Win32_System_Registry`); `reg.exe` is no longer started. `process::console` stays for `taskkill` and the tests'
+`mklink`. `test_scene_tools` phase Y read `play` / `programs` of `play_root`'s answer and now wants neither.
+
+**The game** (`D:\Games\Dead Air\DeadAir-x64`, uncommitted): the three wide buffers on a path of the fs are
+`string_path`-sized, a conversion that fails is the dump's log line and no save - `dump_cloud_map` (three
+conversions; it also makes its folder now, `VerifyPath`: a fresh app data has no `screenshots`), the trees dump in
+`da_trees_bake.cpp` (two), DirectStorage's `ArchiveFile` (the whole path; a refusal still reads the ordinary way). No
+other site takes a path of the fs through a short buffer (`dx11HW.cpp`'s pipeline cache is `string_path`-sized
+already; the rest are the application or system folder, names or messages). `CONTENT_BUNDLES.md` says so,
+`TEST_MATRIX.md` has the row "A dump on a deep fs root".
+
+**Proof** (logs in `Intermediate/play-only/`):
+- The game: incremental Release 125 steps, again 8, then `no work to do`; `git diff --check` clean;
+  `prove_dump.py` (prove_long.py's layout, the root 330 characters with a space, no `screenshots` folder, a script
+  that runs `r__cloud_map_dump` once the level stands) 7 / 0, 26 s: `cloud_map.png` at 364 characters (1.2 MB) with
+  both march PNGs, the application folder equal (746 entries). The first run, before `VerifyPath`, failed the save for
+  want of the folder.
+- Deploy: the game closed, 74 files backed up into `D:\Games\Dead Air\_predeploy_widepaths_20261113`, the 58 runtime
+  files and the PDBs by `deploy_live.py`, SHA-256 of 74 files against `bin\x64\Release`: 0 differ; changed:
+  `xrCore.dll`, `xrRender_R4/R5/R6.dll` and their PDBs.
+- The editor: `test.sh` 52 binaries run, 1195 tests green (191.6 s); `run_all.py test_scene_tools test_play_game`
+  2 / 2 (21.8 s, 62.2 s: 42 checks, the level in at 14 s, the answers without the old keys, the installed game's
+  107,743 entries equal); `check.sh` clippy, fmt, unsafe, registry, encoding, notices clean; test files clean after the
+  registry test's `reg.exe` got its in-memory mark (`check_test_files.py` again, exit 0); the icon step not run (no
+  release build in `Bin\x64\Release`).
