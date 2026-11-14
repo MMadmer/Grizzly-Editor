@@ -44,9 +44,10 @@ pub fn is_source_only_entry(name_in_root: &str) -> bool {
 
 /// The level build's own files in a level folder: what the compiler reads and the build keeps for
 /// itself, never what the game does.
-const LEVEL_BUILD_FILES: [&str; 8] = [
+const LEVEL_BUILD_FILES: [&str; 9] = [
     "build.prj",
     "build.state",
+    "build.report",
     "build.lights",
     "build.cform",
     "build.details",
