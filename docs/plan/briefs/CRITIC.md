@@ -34,9 +34,16 @@ The author's request, in his words (translated), is the measure - not the plan, 
   `git diff --stat 80ac92c7..HEAD -- crates/<crate>` and read the files). `docs/plan/reports/*.md` say what each
   engineer built, decided and did NOT prove - treat every "not proven", "not done", "request" line there as a
   lead and check whether it was closed.
-- The editor itself, without a window: `python tools/rust/limited.py 60 Bin/x64/Release/Grizzly-Cmd.exe help`
-  (every command documents itself), `... help <area>`, `... help <command>`, `... reference <kind>`. Pictures of
-  the surfaces as the engineers took them: `Intermediate/plan/<stream>/*.png`.
+- The editor itself, without a window: `python tools/rust/limited.py 60 Intermediate/cargo/debug/Grizzly-Cmd.exe help`
+  (every command documents itself), `... help <area>`, `... help <command>`, `... reference <kind>`. Use that debug
+  build: it is the current tree. `Bind\Release` holds an OLDER build that is rebuilt only at the very end - do
+  not judge it and do not report that it is stale.
+- Pictures of every tab kind, dialog and menu as they are NOW (taken by `tools/qa/test_tour.py` at 1707x912 / 1.5):
+  `Intermediate/plan/tour/*.png` - look at all 31. Older pictures the engineers took while building, some of
+  states since changed: `Intermediate/plan/<stream>/*.png` (use them for surfaces the tour does not show: the Start
+  page, the graph canvas with nodes and each wire style, the node picker, the Place panel, Details, the chooser).
+- The reports of the last two engineers are `docs/plan/reports/Q1.md` (the suites and checks) and `Q2.md` (the
+  sweep of the code's words, typed findings); HEAD is the tree after both and the architect's fixes on top.
 
 ## What to look for
 
