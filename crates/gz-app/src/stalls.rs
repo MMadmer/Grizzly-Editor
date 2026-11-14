@@ -15,6 +15,10 @@
 //! processor (a build on every core, twenty test editors side by side): that pass is kept apart
 //! as `starved` and is no stall. A UI thread that waits on a file or a lock leaves the heartbeat
 //! on time, and is one.
+//!
+//! **Where it waited** is asked for with `GRIZZLY_DEBUG_STALLS=1`: the heartbeat then stops the UI
+//! thread for a moment once a pass has run for the limit, reads its stack (`gz_win::thread_stack`),
+//! and the stall's log line names the functions it stood in.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Weak};
@@ -57,10 +61,14 @@ impl Beats {
     /// Runs until the stalls it beats for are gone.
     fn run(owner: Weak<Stalls>) {
         let mut last = Instant::now();
+        let sampling = debug_on();
         loop {
             std::thread::sleep(BEAT);
             let Some(stalls) = owner.upgrade() else { return };
             let now = Instant::now();
+            if sampling {
+                stalls.sample_long_pass(now);
+            }
             let gap = now.duration_since(last).as_secs_f32() * 1000.0;
             last = now;
             // a wake-up within a timer tick or two of its time is on time
@@ -99,6 +107,16 @@ pub struct Stalls {
     starved: Mutex<VecDeque<Stall>>,
     worst: Mutex<f32>,
     beats: Beats,
+    /// The pass the UI thread is in: its thread, when it began, and its stack once it was read.
+    pass: Mutex<Option<Pass>>,
+}
+
+/// A UI pass under way.
+struct Pass {
+    thread: u32,
+    began: Instant,
+    /// The UI thread's return addresses, read once the pass had run for the limit.
+    stack: Option<Vec<u64>>,
 }
 
 impl Stalls {
@@ -116,6 +134,39 @@ impl Stalls {
                 .spawn(move || Beats::run(owner));
         }
         stalls
+    }
+
+    /// The UI thread begins a pass (a frame, an event): from here the heartbeat may read its
+    /// stack when the pass runs long and a person asked for that.
+    pub fn pass_begins(&self) {
+        *self.pass.lock() = Some(Pass { thread: gz_win::current_thread_id(), began: Instant::now(), stack: None });
+    }
+
+    /// The pass is over; answers the stack read during it, as names.
+    pub fn pass_ends(&self) -> Option<Vec<String>> {
+        let stack = self.pass.lock().take()?.stack?;
+        Some(gz_win::symbol_names(&stack))
+    }
+
+    /// The heartbeat's part: a pass that has run for the limit has its thread's stack read, once.
+    fn sample_long_pass(&self, now: Instant) {
+        let thread = {
+            let pass = self.pass.lock();
+            match pass.as_ref() {
+                Some(p) if p.stack.is_none() && now.duration_since(p.began).as_secs_f32() * 1000.0 >= STALL_MS => {
+                    p.thread
+                }
+                _ => return,
+            }
+        };
+        // read with the lock let go: the thread read is the one that takes it
+        let stack = gz_win::thread_stack(thread);
+        if let Some(p) = self.pass.lock().as_mut()
+            && p.thread == thread
+            && p.stack.is_none()
+        {
+            p.stack = Some(stack);
+        }
     }
 
     /// Records `ms` of `during` on `tab` when it is a stall; answers whether it was one.

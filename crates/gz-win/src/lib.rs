@@ -32,6 +32,7 @@ mod folders;
 mod instance;
 mod job;
 mod registry;
+mod stack;
 mod update;
 
 pub use caption::{CaptionHitTest, CaptionShape, PxRect, hit_test, install_caption_hit_test};
@@ -39,6 +40,7 @@ pub use console::{ConsoleStreams, attach_parent_console, on_console_end};
 pub use folders::{KnownFolder, free_space, is_volume_root, known_folder, volume_path_name};
 pub use instance::{allow_foreground, process_alive};
 pub use job::end_with_this_process;
+pub use stack::{current_thread_id, symbol_names, thread_stack};
 pub use registry::{Association, delete_user_key, installed_game_roots, long_paths_enabled};
 pub use update::{NamedEvent, rename_in_place};
 

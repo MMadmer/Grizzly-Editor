@@ -656,6 +656,8 @@ impl App {
         let began = Instant::now();
         // what the UI thread itself spent on the processor: a stall with little of it was a wait
         let cpu_began = gz_win::thread_cpu_seconds();
+        let stalls = crate::stalls::Stalls::of(&self.editor);
+        stalls.pass_begins();
         // before anything is read: a request held for frames counts only frames begun after it
         self.editor.frames.begin();
         self.dirty = false;
@@ -785,15 +787,16 @@ impl App {
             };
             if work_ms > crate::stalls::STALL_MS {
                 let cpu_ms = (gz_win::thread_cpu_seconds() - cpu_began) * 1000.0;
-                let during = format!("{during}; {cpu_ms:.0} ms of it on the processor");
-                crate::stalls::Stalls::of(&self.editor).note(
-                    &self.editor,
-                    work_ms,
-                    &report.active_tab,
-                    &during,
-                );
+                let mut during = format!("{during}; {cpu_ms:.0} ms of it on the processor");
+                // GRIZZLY_DEBUG_STALLS: where the thread stood when the pass had run for the limit
+                if let Some(stack) = stalls.pass_ends() {
+                    during.push_str("; it stood in ");
+                    during.push_str(&stack.join(" <- "));
+                }
+                stalls.note(&self.editor, work_ms, &report.active_tab, &during);
             }
         }
+        let _ = stalls.pass_ends();
         self.editor.frames.publish(FrameStamp {
             frame: self.frame,
             active_tab: report.active_tab,
