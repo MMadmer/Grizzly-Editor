@@ -99,20 +99,21 @@ records removed; the command core (`gz-editor`); version 0.7.0; the contracts (`
 
 | Stream | Brief | Owns | Model |
 |---|---|---|---|
-| L2a Viewport | `briefs/L2a-viewport.md` | `gz-ui-viewport`, `gz-render`: the mode control, pills, gizmo, the drop target, brushes; `viewport.*` | Opus 5.5, high |
-| L2b1 Place and Outliner | `briefs/L2b1-place-outliner.md` | `gz-ui-level`: the layout, the Place panel, the Outliner, the modes' panels | Opus 5.5, high |
-| L2b2 Details and Build | `briefs/L2b2-details-build.md` | `gz-ui-level`: Details, the chooser, Build and Play, menus, the level's actions; the old command table deleted | Opus 5.5, high |
+| L2a Viewport | `briefs/L2a-viewport.md` | `gz-ui-viewport`, `gz-render`: the mode control, pills, gizmo, the drop target, brushes; `viewport.*` | Opus 5.5, xhigh |
+| L2b1 Place and Outliner | `briefs/L2b1-place-outliner.md` | `gz-ui-level`: the layout, the Place panel, the Outliner, the modes' panels | Opus 5.5, xhigh |
+| L2b2 Details and Build | `briefs/L2b2-details-build.md` | `gz-ui-level`: Details, the chooser, Build and Play, menus, the level's actions; the old command table deleted | Opus 5.5, xhigh |
 | S Start, content, previews | `briefs/S-start-content.md` | `gz-ui-app` (start page), `gz-ui-content`, `gz-ui-previews`; the PDA tab's two leftovers | Opus 5.5, high |
 
 **Wave 3b - after the surfaces**
 
 | Stream | Brief | Owns | Model |
 |---|---|---|---|
-| Q1 Suites and checks | `briefs/Q1-suites-checks.md` | `tools/qa`, the check scripts; the untyped registry API removed | Sonnet 5.5, high |
-| Q2 Sweep and documents | `briefs/Q2-sweep-docs.md` | comments, names and messages in every crate; the documents; dead tracked data | Sonnet 5.5, high |
+| Q Suites and sweep | `briefs/Q-suites-sweep.md` | `tools/qa`, the check scripts, the untyped registry API removed; comments, names, messages and test modules in every crate | Opus 5.5, high |
+| the architect | - | the documents: `ARCHITECTURE.md` (replaces `RUST_MIGRATION.md`), `STATE.md` (replaces `docs/rust/`), `AI_SETUP.md`, `README.md`, `CLAUDE.md`; dead tracked data | - |
 
-An engineer gets one or two large pieces of work, not five: a stream that grew past that was cut (L1 into two,
-L2 into three, Q into two).
+An engineer gets one or two large pieces of work, not five, and there are no more engineers than that takes:
+a stream that grew past it was cut (L1 into two, L2 into three); models and effort are chosen for the work,
+never to save on it.
 
 **Wave 4 - closing:** the critic (Fable 5.2) reads the whole diff against this plan and the contracts and is
 resumed after each round of fixes until it says nothing is open; the three entry points on the release build; the
