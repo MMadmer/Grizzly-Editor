@@ -1,12 +1,12 @@
 //! Detail objects as `EDetailManager::OnRender` draws them: the models of the slots round the
 //! camera placed the way the game places them (`CDetailManager::cache_Decompress`: the same
-//! dither, jitter, yaw, scale and the same random seeds per slot, each dropped onto the snap
-//! objects' surface), faded with distance (`UpdateVisibleM`), drawn instanced; the slot grid's
-//! boxes within 75 m; the base texture over the snap objects.
+//! dither, jitter, yaw, scale and the same random seeds per slot, each dropped onto the
+//! ground's surface), faded with distance (`UpdateVisibleM`), drawn instanced; the slot grid's
+//! boxes within 75 m; the base texture over the ground.
 //!
 //! Slots decompress on the CPU pool as part of a scene pass, those of the 49 x 49 cache window
 //! round the camera (`dm_cache_line`), and are kept until the window leaves them or what they
-//! were made of changes (the details, the snap objects, their library).
+//! were made of changes (the details, the scene, the library).
 
 use std::sync::Arc;
 
@@ -149,7 +149,7 @@ fn query(d: &SceneDetails, sx: i32, sz: i32) -> Option<&DetailSlot> {
 }
 
 /// `cache_Decompress`: the details of a slot. `scales` are the objects' scale limits as the tool
-/// holds them; `tris` the snap objects' triangles in the slot's box.
+/// holds them; `tris` the ground's triangles in the slot's box.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn decompress(
@@ -240,7 +240,8 @@ pub fn item_transform(i: &Item, scale: f32) -> Mat4 {
 struct Key {
     details: usize,
     library: u64,
-    snap: Vec<(u32, [f32; 16])>,
+    /// The scene's content: the ground may have moved.
+    serial: u64,
 }
 
 /// What the details pass keeps between frames: an `Editor` service. A clone shares the slots.
@@ -249,6 +250,8 @@ pub struct DetailCache {
     key: Option<Key>,
     slots: FxHashMap<(i32, i32), Arc<SlotItems>>,
     base: Option<String>,
+    /// The objects the details lie on, with their world boxes: a slot asks only those over it.
+    ground: Arc<Vec<(ObjId, gz_fmt_level::Aabb)>>,
 }
 
 const BASE_MESH: &str = "<details>/base";
@@ -284,38 +287,44 @@ impl DetailCache {
             self.drop_base(p.assets);
             return;
         }
-        let snap_ids: Vec<ObjId> = d
-            .snap_objects
-            .iter()
-            .filter_map(|n| p.state.find(ObjClass::SceneObject, &n.to_lowercase()).map(|o| o.id))
-            .collect();
-        let key = Key {
-            details: Arc::as_ptr(part) as usize,
-            library: p.lib.rev().0,
-            snap: snap_ids
-                .iter()
-                .filter_map(|id| p.state.get(*id))
-                .map(|o| (o.id.0, crate::draw::gm(&o.world()).to_cols_array()))
-                .collect(),
-        };
+        let key = Key { details: Arc::as_ptr(part) as usize, library: p.lib.rev().0, serial: p.state.serial };
         if self.key.as_ref() != Some(&key) {
             self.slots.clear();
             self.drop_base(p.assets);
             self.key = Some(key);
+            // the details' ground: every static object, or the layer's own list
+            let local = |r: &str| p.lib.cached(r).map(|o| o.bounds);
+            self.ground = Arc::new(
+                gz_scene::bulk::cmd::details_ground_ids(p.state, p.lib)
+                    .into_iter()
+                    .filter_map(|id| {
+                        let o = p.state.get(id)?;
+                        gz_scene::objects::world_box(p.state, o, &local).map(|b| (id, b))
+                    })
+                    .collect(),
+            );
         }
         if d.flags & tool_flags::SLOT_BOXES_DRAW != 0 {
             slot_boxes(d, &p.state.tools.bulk.slots_selected, p, built);
         }
+        let ground = self.ground.clone();
         if d.flags & tool_flags::BASE_TEXTURE_DRAW != 0 {
-            self.base_texture(d, p, &snap_ids, built);
+            let ids: Vec<ObjId> = ground.iter().map(|(id, _)| *id).collect();
+            self.base_texture(d, p, &ids, built);
         }
         if d.flags & tool_flags::OBJECTS_DRAW != 0 {
-            self.objects(d, p, &snap_ids, built);
+            self.objects(d, p, &ground, built);
         }
     }
 
     /// The models of the window's slots, as one batch per detail object.
-    fn objects(&mut self, d: &SceneDetails, p: &Pass<'_>, snap: &[ObjId], built: &mut Built) {
+    fn objects(
+        &mut self,
+        d: &SceneDetails,
+        p: &Pass<'_>,
+        ground: &[(ObjId, gz_fmt_level::Aabb)],
+        built: &mut Built,
+    ) {
         let cx = (p.eye.x / DETAIL_SLOT_SIZE + 0.5).floor() as i32;
         let cz = (p.eye.z / DETAIL_SLOT_SIZE + 0.5).floor() as i32;
         self.slots.retain(|(x, z), _| (x - cx).abs() <= DM_SIZE && (z - cz).abs() <= DM_SIZE);
@@ -326,18 +335,31 @@ impl DetailCache {
             .flat_map(|z| (cx - DM_SIZE..=cx + DM_SIZE).map(move |x| (x, z)))
             .filter(|k| !self.slots.contains_key(k))
             .collect();
+        // the ground under the window, which every slot of it then narrows
+        let reach = (DM_SIZE as f32 + 1.0) * DETAIL_SLOT_SIZE;
+        let ground: Vec<(ObjId, gz_fmt_level::Aabb)> = ground
+            .iter()
+            .filter(|(_, g)| {
+                g.min.x <= p.eye.x + reach
+                    && g.max.x >= p.eye.x - reach
+                    && g.min.z <= p.eye.z + reach
+                    && g.max.z >= p.eye.z - reach
+            })
+            .copied()
+            .collect();
         let made: Vec<((i32, i32), Arc<SlotItems>)> = missing
             .par_iter()
             .map(|&(x, z)| {
                 let items = match query(d, x, z) {
                     Some(slot) if !slot.is_empty() => {
                         let b = slot_box(slot, x, z);
-                        let tris = gz_scene::pick::box_triangles(
-                            p.state,
-                            p.lib,
-                            snap,
-                            &gz_fmt_level::Aabb::new(b.min, b.max),
-                        );
+                        let b = gz_fmt_level::Aabb::new(b.min, b.max);
+                        let near: Vec<ObjId> = ground
+                            .iter()
+                            .filter(|(_, g)| g.min.cmple(b.max).all() && g.max.cmpge(b.min).all())
+                            .map(|(id, _)| *id)
+                            .collect();
+                        let tris = gz_scene::pick::box_triangles(p.state, p.lib, &near, &b);
                         decompress(slot, x, z, &scales, density, &dither, &tris)
                     }
                     _ => SlotItems::default(),
@@ -405,15 +427,15 @@ impl DetailCache {
         }
     }
 
-    /// `SBase::Render`: the snap objects' surfaces with the base texture laid over the box.
-    fn base_texture(&mut self, d: &SceneDetails, p: &Pass<'_>, snap: &[ObjId], built: &mut Built) {
+    /// `SBase::Render`: the ground's surfaces with the base texture laid over the box.
+    fn base_texture(&mut self, d: &SceneDetails, p: &Pass<'_>, ground: &[ObjId], built: &mut Built) {
         let Some(texture) = d.base_texture.as_ref().filter(|t| !t.is_empty()) else { return };
         let blended = d.flags & tool_flags::BASE_TEXTURE_BLENDED != 0;
         let shader = if blended { "editor\\do_base" } else { "default" };
         let want = format!("{shader}|{texture}");
         let bbox = d.bbox;
         if self.base.as_deref() != Some(want.as_str()) {
-            let tris = gz_scene::pick::box_triangles(p.state, p.lib, snap, &bbox);
+            let tris = gz_scene::pick::box_triangles(p.state, p.lib, ground, &bbox);
             let size = bbox.max - bbox.min;
             let uv =
                 |v: Vec3| glam::Vec2::new((v.x - bbox.min.x) / size.x, 1.0 - (v.z - bbox.min.z) / size.z);

@@ -11,6 +11,7 @@ use imbl::Vector;
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
 
+use crate::canvas::{Canvas, Flow};
 use crate::catalog::Catalog;
 use crate::text::{self, preview};
 
@@ -108,6 +109,10 @@ pub struct Node {
     pub pos: [f32; 2],
     pub has_pos: bool,
     pub comment: String,
+    /// Drawn as its header and pins alone (`collapsed = true`, the editor's).
+    pub collapsed: bool,
+    /// The game passes it through without running it (`disabled = true`).
+    pub disabled: bool,
 }
 
 impl Node {
@@ -258,6 +263,8 @@ pub struct Graph {
     pub roles: Vec<Role>,
     pub tasks: Vector<Task>,
     pub nodes: Vector<Node>,
+    /// The editor's own table: flow, wires, frames, routes, bookmarks.
+    pub canvas: Canvas,
 }
 
 impl Default for Graph {
@@ -272,6 +279,7 @@ impl Default for Graph {
             roles: Vec::new(),
             tasks: Vector::new(),
             nodes: Vector::new(),
+            canvas: Canvas::default(),
         }
     }
 }
@@ -283,6 +291,12 @@ impl Graph {
     #[must_use]
     pub fn is_behaviour(&self) -> bool {
         self.kind == DocKind::Behaviour
+    }
+
+    /// The way the graph flows.
+    #[must_use]
+    pub fn flow(&self) -> Flow {
+        self.canvas.flow()
     }
 
     #[must_use]
@@ -739,6 +753,13 @@ pub fn node_from_value(catalog: &Catalog, v: &Value, errs: &mut Vec<String>) -> 
         }
     }
     n.comment = v.get_string("comment", "");
+    for (key, slot) in [("collapsed", &mut n.collapsed), ("disabled", &mut n.disabled)] {
+        match v.get(key) {
+            None | Some(Value::Nil) => {}
+            Some(Value::Bool(b)) => *slot = *b,
+            Some(_) => errs.push(format!("node '{id}': {key} must be true or false")),
+        }
+    }
     canonicalize_pins(catalog, &mut n);
     Some(n)
 }
@@ -853,6 +874,9 @@ pub fn graph_from_value(catalog: &Catalog, v: &Value) -> (Graph, Vec<String>) {
         }
         None => errs.push("nodes list is missing".to_owned()),
     }
+    q.canvas = Canvas::from_value(v.get("canvas"), &mut errs);
+    // a file with positions was laid out top to bottom; one without takes the preference later
+    q.canvas.implied = if q.nodes.iter().any(|n| n.has_pos) { Flow::Down } else { Flow::Right };
     (q, errs)
 }
 
@@ -942,6 +966,9 @@ pub fn node_to_value(n: &Node) -> Value {
     if n.once_set {
         put(&mut t, "once", n.once);
     }
+    if n.disabled {
+        put(&mut t, "disabled", true);
+    }
     if !n.params.is_empty() {
         put(&mut t, "params", n.params.clone());
     }
@@ -971,6 +998,9 @@ pub fn node_to_value(n: &Node) -> Value {
     }
     if n.has_pos {
         put(&mut t, "pos", Value::from(vec![Value::from(n.pos[0]), Value::from(n.pos[1])]));
+    }
+    if n.collapsed {
+        put(&mut t, "collapsed", true);
     }
     if !n.comment.is_empty() {
         put(&mut t, "comment", n.comment.as_str());
@@ -1093,9 +1123,14 @@ fn graph_table(catalog: &Catalog, q: &Graph, topo: bool, auto: &AutoPos) -> Tabl
         }
         put(&mut out, "tasks", tasks);
     }
+    let auto_placed = |n: &Node| auto.get(&n.id).is_some_and(|p| *p == n.pos);
+    let placed = q.nodes.iter().any(|n| n.has_pos && !auto_placed(n));
+    if let Some(c) = q.canvas.to_value(placed) {
+        put(&mut out, "canvas", c);
+    }
     let node_value = |n: &Node| {
         let mut v = node_to_value(n);
-        if auto.get(&n.id).is_some_and(|p| *p == n.pos) {
+        if auto_placed(n) {
             v.erase("pos");
         }
         v
@@ -1125,11 +1160,28 @@ pub fn diff_rules() -> gz_luadata::DiffRules {
         .keyed("nodes", "id")
         .node_layout("nodes")
         .keyed("tasks.*.objectives", "id")
-        .order("", &["nq", "beh", "id", "title", "activation", "roles", "vars", "tasks", "nodes"])
+        .keyed("canvas.bookmarks", "name")
+        .order("", &["nq", "beh", "id", "title", "activation", "roles", "vars", "tasks", "canvas", "nodes"])
         .order(
             "nodes.*",
-            &["id", "kind", "once", "params", "cond", "on_enter", "on_exit", "out", "pos", "comment"],
+            &[
+                "id",
+                "kind",
+                "once",
+                "disabled",
+                "params",
+                "cond",
+                "on_enter",
+                "on_exit",
+                "out",
+                "pos",
+                "collapsed",
+                "comment",
+            ],
         )
+        .order("canvas", &["flow", "wires", "frames", "routes", "bookmarks"])
+        .order("canvas.wires", &["style", "diagonal", "thickness", "by_pin", "dim", "bubbles", "arrows"])
+        .order("canvas.frames.*", &["title", "tone", "x", "y", "w", "h"])
         .order("tasks.*", &["title", "descr", "type", "target", "icon", "auto_complete", "objectives"])
         .order("roles.*", &["title", "many", "optional", "default"])
 }
@@ -1202,6 +1254,9 @@ pub fn outline_node(catalog: &Catalog, n: &Node) -> String {
     }
     if n.once_set {
         line.push_str(if n.once { "; once" } else { "; once=false" });
+    }
+    if n.disabled {
+        line.push_str("; disabled");
     }
     line.push(')');
     if let Some(t) = n.params.get("text") {
@@ -1396,6 +1451,94 @@ mod tests {
             assert!(again.nodes.iter().any(|n| n.id == "checked"));
             assert_eq!(again.nodes[start].targets("alt"), Some(&[SmolStr::new("checked")][..]));
         }
+    }
+
+    #[test]
+    fn the_canvas_round_trips_with_its_comments_and_unknown_keys() {
+        let cat = bundled();
+        let text = r#"return {
+  nq = 1,
+  id = "ambush",
+  canvas = {
+    flow = "right", -- the author's
+    wires = { style = "circuit", glow = 3 },
+    frames = { { title = "The ambush", tone = 3, x = 120, y = 40, w = 620, h = 300 } },
+    routes = { ["wait.done>ambush"] = { { 400, 120 }, { 400, 260 } } },
+    bookmarks = { { name = "Finale", node = "ambush" } },
+    lens = "wide",
+  },
+  nodes = {
+    { id = "start", kind = "trigger.start", out = { next = "wait" }, pos = { 0, 0 } },
+    { id = "wait", kind = "wait.timer", params = { duration = { seconds = 6 } }, collapsed = true, out = { done = "ambush" }, pos = { 240, 0 } },
+    { id = "ambush", kind = "flow.step", disabled = true, pos = { 480, 0 }, colour = "red" },
+  },
+}
+"#;
+        let mut doc = gz_luadata::LuaDoc::parse(text).unwrap_or_else(|e| panic!("{e}"));
+        let (g, shape) = graph_from_value(&cat, &doc.value());
+        assert!(shape.is_empty(), "{shape:?}");
+        assert_eq!(g.flow(), Flow::Right);
+        assert_eq!(g.canvas.wires.style, Some(crate::canvas::WireStyle::Circuit));
+        assert_eq!(g.canvas.frames.first().map(|f| f.title.as_str()), Some("The ambush"));
+        assert_eq!(g.canvas.route("wait", "done", "ambush").map(<[[f32; 2]]>::len), Some(2));
+        assert_eq!(g.canvas.bookmarks.first().map(|b| b.node.as_str()), Some("ambush"));
+        assert!(g.find_node("wait").is_some_and(|n| n.collapsed));
+        assert!(g.find_node("ambush").is_some_and(|n| n.disabled));
+        let base = model_value(&cat, &g, &AutoPos::default());
+        // nothing changed: nothing is written
+        assert!(!doc.apply_diff(&base, &base.clone(), &diff_rules()).unwrap_or(true));
+        assert_eq!(doc.text(), text);
+        // a frame moved, a reroute moved and a bookmark renamed: those values change, the rest stays
+        let mut edited = g.clone();
+        if let Some(f) = edited.canvas.frames.first_mut() {
+            f.x = 136.0;
+        }
+        edited.canvas.set_route("wait", "done", "ambush", vec![[400.0, 120.0], [432.0, 260.0]]);
+        if let Some(b) = edited.canvas.bookmarks.first_mut() {
+            b.name = "The end".into();
+        }
+        let new = model_value(&cat, &edited, &AutoPos::default());
+        assert!(doc.apply_diff(&base, &new, &diff_rules()).unwrap_or(false));
+        let out = doc.text();
+        for keep in
+            ["-- the author's", "glow = 3", "lens = \"wide\"", "colour = \"red\"", "x = 136", "{ 432, 260 }"]
+        {
+            assert!(
+                out.contains(keep),
+                "{keep} went:
+{out}"
+            );
+        }
+        // only the lines of what changed changed
+        let changed = text.lines().zip(out.lines()).filter(|(a, b)| a != b).count();
+        assert_eq!(changed, 3, "{out}");
+        let again = parse(&cat, out, "ambush").unwrap_or_else(|e| panic!("{}", e.message));
+        assert_eq!(again.canvas.bookmarks.first().map(|b| b.name.as_str()), Some("The end"));
+    }
+
+    #[test]
+    fn a_new_graph_writes_its_flow_once_its_nodes_are_placed() {
+        let cat = Catalog::empty();
+        let (mut g, _) = graph_from_value(
+            &cat,
+            &parse_value(
+                "return { nq = 1, id = 'q', nodes = { { id = 'a', kind = 'trigger.start' } } }",
+                "q",
+            )
+            .unwrap_or_default(),
+        );
+        // a file without positions takes the preference: here, down
+        g.canvas.implied = Flow::Down;
+        assert!(model_value(&cat, &g, &AutoPos::default()).get("canvas").is_none());
+        g.canvas.implied = Flow::Right;
+        let mut auto = AutoPos::default();
+        auto.insert("a".into(), [0.0, 0.0]);
+        g.nodes[0].has_pos = true;
+        // placed by the layout alone: still nothing to write
+        assert!(model_value(&cat, &g, &auto).get("canvas").is_none());
+        // the author moved it: the flow it was laid out in is written with it
+        let v = model_value(&cat, &g, &AutoPos::default());
+        assert_eq!(v.get("canvas").map(|c| c.get_string("flow", "")), Some("right".to_owned()));
     }
 
     #[test]

@@ -7,8 +7,7 @@ use std::sync::Arc;
 use egui::Key;
 use gz_app::{Chord, DocCx, ShellBuilder, UiCommand};
 use gz_editor::{Args, Editor};
-use gz_scene::apply::SelectMode;
-use gz_scene::{ObjClass, SceneCmd, SceneService};
+use gz_scene::{SceneCmd, SceneService};
 use gz_ui::Icon;
 
 use crate::gizmo::GizmoType;
@@ -349,52 +348,42 @@ pub fn run(editor: &Arc<Editor>, act: Act) {
             settings.save_soon(editor);
             vp.sync(editor);
         }
-        Act::DropToGround => editor.post("drop_objects", Args::new()),
+        Act::DropToGround => editor
+            .post("scene.align", Args::from_iter([("action".to_owned(), gz_editor::Value::from("drop"))])),
         // the AI map, the detail slots and the wallmarks keep their own selection
         Act::Delete if crate::bulktools::key(editor, "delete") => {}
         Act::DeselectAll if crate::bulktools::key(editor, "deselect_all") => {}
         Act::SelectAll if crate::bulktools::key(editor, "select_all") => {}
         Act::InvertSelection if crate::bulktools::key(editor, "invert_selection") => {}
-        // `RemoveSelection` / `SelectObjects(false, ..)` of the current tool's class
+        // the selection, of whatever kinds it holds
         Act::Delete => {
             if let Ok(svc) = SceneService::of(editor) {
-                let target = svc.store.snapshot().tools.target;
-                svc.store.post(
-                    SceneCmd::RemoveSelection { class: Some(target), label: "Delete".into() },
-                    editor.ui_origin(),
-                );
+                svc.store.post(SceneCmd::RemoveSelection { label: "Delete".into() }, editor.ui_origin());
             }
         }
-        Act::DeselectAll => {
+        Act::DeselectAll | Act::SelectAll | Act::InvertSelection => {
             if let Ok(svc) = SceneService::of(editor) {
-                let target = svc.store.snapshot().tools.target;
-                svc.store
-                    .post(SceneCmd::SelectClass { class: Some(target), select: false }, editor.ui_origin());
+                let (select, invert) = match act {
+                    Act::DeselectAll => (false, false),
+                    Act::SelectAll => (true, false),
+                    _ => (true, true),
+                };
+                svc.store.post(SceneCmd::SelectAll { classes: None, select, invert }, editor.ui_origin());
             }
         }
-        Act::SelectAll => {
-            if let Ok(svc) = SceneService::of(editor) {
-                let target = svc.store.snapshot().tools.target;
-                svc.store
-                    .post(SceneCmd::SelectClass { class: Some(target), select: true }, editor.ui_origin());
-            }
-        }
-        Act::InvertSelection | Act::HideSelected | Act::HideUnselected => {
+        Act::HideSelected | Act::HideUnselected => {
             let Ok(svc) = SceneService::of(editor) else { return };
             let snap = svc.store.snapshot();
-            let target = snap.tools.target;
             let pick = |want_selected: bool| -> Vec<gz_scene::ObjId> {
-                snap.of_class(target)
-                    .filter(|o| o.flags.visible && snap.is_selected(o.id) == want_selected)
+                snap.objects
+                    .values()
+                    .filter(|o| {
+                        o.class.is_object_tool() && o.flags.visible && snap.is_selected(o.id) == want_selected
+                    })
                     .map(|o| o.id)
                     .collect()
             };
             match act {
-                Act::InvertSelection => {
-                    let ids: Vec<_> =
-                        snap.of_class(target).filter(|o| o.flags.visible).map(|o| o.id).collect();
-                    svc.store.post(SceneCmd::Select { ids, mode: SelectMode::Toggle }, editor.ui_origin());
-                }
                 Act::HideSelected => {
                     svc.store.post(SceneCmd::Show { ids: pick(true), visible: false }, editor.ui_origin())
                 }
@@ -405,14 +394,13 @@ pub fn run(editor: &Arc<Editor>, act: Act) {
     editor.exec.wake().ping();
 }
 
-/// Frame All / Frame Selection (`ZoomObject`): the current class's objects, or its selected
+/// Frame All / Frame Selection: the scene's objects (a painting mode's layer), or the selected
 /// ones, in view. `false` when there is no box to frame.
 pub async fn frame(editor: &Arc<Editor>, selected: bool) -> bool {
     let Ok(svc) = SceneService::of(editor) else { return false };
     let snap = svc.store.snapshot();
     let lib = svc.library.clone();
-    let class: ObjClass = snap.tools.target;
-    let found = editor.exec.cpu(move || crate::draw::class_box(&snap, &lib, class, selected)).await;
+    let found = editor.exec.cpu(move || crate::draw::scene_box(&snap, &lib, selected)).await;
     let Some(b) = found else { return false };
     let vp = Viewport::of(editor);
     vp.with(|s| {

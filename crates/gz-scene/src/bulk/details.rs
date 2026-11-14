@@ -1,6 +1,8 @@
-//! The Detail Objects tool's generation (`ESceneDOTools_Generate.cpp`, `_Pick.cpp`): the slot
-//! grid over the snap objects, each slot's height from the faces under it, and the objects a
-//! slot scatters from the colours of the base texture.
+//! The detail objects - grass, small stones - as the game keeps them: a grid of 2 m slots over
+//! the ground, each slot holding up to four detail meshes with a density per corner. They are
+//! painted with a brush ([`paint`]: a mesh at a density, or erased) on the ground the slot grid
+//! lies over ([`grid_over`]); a colour-index picture can be imported instead ([`initialize`]:
+//! each colour of the picture names the meshes it scatters).
 //!
 //! Every slot is worked out on its own, so the slots run on every core.
 
@@ -12,10 +14,9 @@ use gz_fmt_level::{DETAIL_SLOT_SIZE, DetailHeader, DetailSlot, SceneDetails};
 use rayon::prelude::*;
 
 use super::xr::{self, CrtRand, EPS_L, Frustum, Plane, i_floor};
-use crate::class::ObjClass;
-use crate::library::Library;
-use crate::math::Aabb;
-use crate::model::{ObjId, SceneState};
+use crate::library::{Library, LibraryObject};
+use crate::math::{Aabb, Mat4, xform_box};
+use crate::model::{ObjData, ObjId, SceneState};
 
 const HALF: f32 = DETAIL_SLOT_SIZE * 0.5;
 /// `EPS_L_VAR`.
@@ -92,15 +93,6 @@ fn color_dist(c: &[f32; 4], src: &[f32; 4]) -> f32 {
             .sqrt()
 }
 
-/// The snap objects of the tool, by name.
-#[must_use]
-pub fn snap_ids(state: &SceneState, d: &SceneDetails) -> Vec<ObjId> {
-    d.snap_objects
-        .iter()
-        .filter_map(|n| state.find(ObjClass::SceneObject, &n.to_lowercase()).map(|o| o.id))
-        .collect()
-}
-
 /// `Scene->GetBox(bb, list)`: the snap objects' world boxes merged.
 #[must_use]
 pub fn objects_box(state: &SceneState, lib: &Library, ids: &[ObjId]) -> Option<Aabb> {
@@ -148,26 +140,110 @@ fn empty_slot() -> DetailSlot {
     s
 }
 
-/// The faces of the snap objects meeting a box, object by object.
-fn faces_in(state: &SceneState, lib: &Library, ids: &[ObjId], b: &Aabb) -> Vec<[Vec3; 3]> {
-    super::wallmark::box_triangles(state, lib, ids, b)
+/// The side of a cell of [`Ground`]'s buckets, in metres.
+const GROUND_CELL: f32 = 32.0;
+
+/// The ground as the slots ask it: each object's library object and transforms taken once, and
+/// the objects bucketed over the ground plane, so that a slot meets only the objects over it. A
+/// slot asking every object of a big level, and the library's lock for each, took minutes.
+struct Ground {
+    items: Vec<GroundItem>,
+    origin: (f32, f32),
+    nx: usize,
+    nz: usize,
+    cells: Vec<Vec<u32>>,
+}
+
+struct GroundItem {
+    lo: Arc<LibraryObject>,
+    world: Mat4,
+    inv: Mat4,
+    bounds: Aabb,
+}
+
+impl Ground {
+    fn new(state: &SceneState, lib: &Library, ids: &[ObjId], bbox: &Aabb) -> Self {
+        let mut items = Vec::with_capacity(ids.len());
+        for id in ids {
+            let Some(o) = state.get(*id) else { continue };
+            let ObjData::SceneObject(d) = &o.data else { continue };
+            let Some(lo) = lib.cached(&d.reference) else { continue };
+            if lo.bvh.is_none() {
+                continue;
+            }
+            let world = o.world();
+            let inv = Mat4::invert_43(&world);
+            let mut bounds = xform_box(&lo.bounds, &world);
+            bounds.grow(EPS_L);
+            items.push(GroundItem { lo, world, inv, bounds });
+        }
+        let span = |a: f32, b: f32| (((b - a) / GROUND_CELL).floor().max(0.0) as usize + 1).min(4096);
+        let (nx, nz) = (span(bbox.min.x, bbox.max.x), span(bbox.min.z, bbox.max.z));
+        let mut g =
+            Self { items, origin: (bbox.min.x, bbox.min.z), nx, nz, cells: vec![Vec::new(); nx * nz] };
+        for i in 0..g.items.len() {
+            let b = g.items[i].bounds;
+            let ((x0, z0), (x1, z1)) = (g.cell(b.min.x, b.min.z), g.cell(b.max.x, b.max.z));
+            for z in z0..=z1 {
+                for x in x0..=x1 {
+                    g.cells[z * nx + x].push(i as u32);
+                }
+            }
+        }
+        g
+    }
+
+    fn cell(&self, x: f32, z: f32) -> (usize, usize) {
+        let at = |v: f32, o: f32, n: usize| (((v - o) / GROUND_CELL).floor().max(0.0) as usize).min(n - 1);
+        (at(x, self.origin.0, self.nx), at(z, self.origin.1, self.nz))
+    }
+
+    /// The faces meeting a box, object by object in the ground's order (as
+    /// `wallmark::box_triangles` finds them).
+    fn faces(&self, b: &Aabb) -> Vec<[Vec3; 3]> {
+        let ((x0, z0), (x1, z1)) = (self.cell(b.min.x, b.min.z), self.cell(b.max.x, b.max.z));
+        let mut near: Vec<u32> = Vec::new();
+        for z in z0..=z1 {
+            for x in x0..=x1 {
+                near.extend_from_slice(&self.cells[z * self.nx + x]);
+            }
+        }
+        near.sort_unstable();
+        near.dedup();
+        let (c, e) = (b.center(), (b.max - b.min) * 0.5);
+        let mut out = Vec::new();
+        let mut found = Vec::new();
+        for i in near {
+            let it = &self.items[i as usize];
+            if it.bounds.min.cmpgt(b.max).any() || it.bounds.max.cmplt(b.min).any() {
+                continue;
+            }
+            let Some(bvh) = &it.lo.bvh else { continue };
+            found.clear();
+            bvh.query_box(&xform_box(b, &it.inv), &mut found);
+            found.sort_unstable();
+            for &t in &found {
+                let Some(tri) = it.lo.tri(t) else { continue };
+                let w = [
+                    it.world.transform_tiny(tri[0]),
+                    it.world.transform_tiny(tri[1]),
+                    it.world.transform_tiny(tri[2]),
+                ];
+                if xr::tri_box(c, e, &w, true) {
+                    out.push(w);
+                }
+            }
+        }
+        out
+    }
 }
 
 /// `UpdateSlotBBox`: the height of the faces under a slot, a little over and under them; an
 /// empty slot where there are none.
-#[must_use]
-pub fn slot_box(
-    state: &SceneState,
-    lib: &Library,
-    ids: &[ObjId],
-    bbox: &Aabb,
-    h: &DetailHeader,
-    sx: u32,
-    sz: u32,
-) -> DetailSlot {
+fn slot_box(ground: &Ground, bbox: &Aabb, h: &DetailHeader, sx: u32, sz: u32) -> DetailSlot {
     let r = slot_rect(h, sx, sz);
     let mut b = Aabb::new(Vec3::new(r[0], bbox.min.y, r[1]), Vec3::new(r[2], bbox.max.y, r[3]));
-    let faces = faces_in(state, lib, ids, &b);
+    let faces = ground.faces(&b);
     if faces.is_empty() {
         return empty_slot();
     }
@@ -181,7 +257,7 @@ pub fn slot_box(
     let frustum = Frustum::from_planes(&planes);
     let mut y_min = f32::MAX;
     let mut y_max = -f32::MAX;
-    // oracle: a slot whose faces all fall outside keeps the C++ allocation's garbage; empty here
+    // a slot whose faces all fall outside stays empty
     let mut slot = empty_slot();
     for f in &faces {
         let Some(poly) = frustum.clip_poly(f) else { continue };
@@ -290,8 +366,8 @@ fn closest_count(part: usize, c: &[f32; 4], best: &mut [IndexDist]) {
     }
 }
 
-/// `UpdateSlotObjects`: the objects of a slot from the colours of its part of the base texture,
-/// their densities per corner. `seed` is the `srand(time(NULL))` the C++ gives every slot.
+/// The objects of a slot from the colours of its part of the base texture, their densities per
+/// corner. `seed` is the random seed of the scatter.
 #[allow(clippy::too_many_arguments)]
 pub fn slot_objects(
     slot: &mut DetailSlot,
@@ -322,7 +398,7 @@ pub fn slot_objects(
     let dy = (y2 - y1) as f32 / 2.0;
     // 2 3
     // 0 1
-    // oracle: part 3's last row is worked out from dx, not dy
+    // part 3's last row is worked out from dx, not dy: the slots the game reads are laid out so
     let parts = [
         [x1, i_floor(y1 as f32 + dy + 0.501), i_floor(x1 as f32 + dx + 0.499), y2],
         [i_floor(x1 as f32 + dx + 0.501), i_floor(y1 as f32 + dy + 0.501), x2, y2],
@@ -349,7 +425,7 @@ pub fn slot_objects(
         }
     }
     if best.is_empty() {
-        // the C++ asserts here; the slot stays empty
+        // nothing to scatter: the slot stays empty
         for k in 0..4 {
             slot.set_id(k, DetailSlot::ID_EMPTY);
         }
@@ -406,51 +482,201 @@ pub struct DetailInputs<'a> {
     pub seed: u32,
 }
 
-/// Why the details could not be made: the C++ messages.
+/// Why the details could not be made.
 pub mod msg {
-    pub const SNAP_EMPTY: &str = "Snap list empty!";
+    pub const GROUND_EMPTY: &str = "The scene has no static objects for the details to lie on.";
     pub const BASE_EMPTY: &str = "Base texture empty!";
     pub const BASE_INVALID: &str = "Invalid base texture!";
     pub const OBJECTS_EMPTY: &str = "Object list empty!";
 }
 
-/// `Initialize` / `Reinitialize`: the header and every slot's height again, then (with objects)
-/// every slot's objects.
-pub fn initialize(
+/// The slot grid over the ground objects `ids`: the header over their box and every slot's
+/// height from the faces under it; the slots name no object. What painting starts from.
+pub fn grid_over(
     state: &SceneState,
     lib: &Library,
+    ids: &[ObjId],
     d: &SceneDetails,
-    inp: &DetailInputs<'_>,
     progress: &(dyn Fn(usize, usize) + Sync),
 ) -> Result<SceneDetails, &'static str> {
-    let ids = snap_ids(state, d);
-    if d.snap_objects.is_empty() {
-        return Err(msg::SNAP_EMPTY);
-    }
-    if !inp.base.valid() {
-        return Err(msg::BASE_EMPTY);
-    }
-    let Some(bbox) = objects_box(state, lib, &ids) else { return Err(msg::SNAP_EMPTY) };
+    let Some(bbox) = objects_box(state, lib, ids) else { return Err(msg::GROUND_EMPTY) };
     let header = header_for(&bbox, &d.header);
     let total = header.size_x as usize * header.size_z as usize;
+    let ground = Ground::new(state, lib, ids, &bbox);
     let done = std::sync::atomic::AtomicUsize::new(0);
     let slots: Vec<DetailSlot> = (0..total)
         .into_par_iter()
         .map(|i| {
             let (x, z) = ((i % header.size_x as usize) as u32, (i / header.size_x as usize) as u32);
-            let s = slot_box(state, lib, &ids, &bbox, &header, x, z);
+            let s = slot_box(&ground, &bbox, &header, x, z);
             let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if n.is_multiple_of(1024) {
-                progress(n, total * 2);
+                progress(n, total);
             }
             s
         })
         .collect();
-    let mut out = SceneDetails { header, slots: slots.into(), bbox, ..d.clone() };
+    Ok(SceneDetails { header, slots: slots.into(), bbox, ..d.clone() })
+}
+
+/// The import of a colour-index picture: the slot grid over the ground again, then every slot's
+/// objects from the colours of its part of the picture (each colour names the detail meshes it
+/// scatters).
+pub fn initialize(
+    state: &SceneState,
+    lib: &Library,
+    ids: &[ObjId],
+    d: &SceneDetails,
+    inp: &DetailInputs<'_>,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> Result<SceneDetails, &'static str> {
+    if !inp.base.valid() {
+        return Err(msg::BASE_EMPTY);
+    }
+    let mut out = grid_over(state, lib, ids, d, &|n, t| progress(n, t * 2))?;
+    let total = out.slots.len();
     if !out.indices.objects.is_empty() {
         out.slots = objects_for(&out, None, inp, &|n, t| progress(total + n, total + t)).into();
     }
     Ok(out)
+}
+
+/// One stroke of the detail brush: a detail mesh painted at a density, or taken away.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stroke {
+    /// The detail mesh (an index into the layer's mesh list); `None` erases every mesh.
+    pub object: Option<u8>,
+    pub center: Vec3,
+    /// Metres, in the ground plane.
+    pub radius: f32,
+    /// 0..1 of the densest a slot corner holds; ignored when erasing.
+    pub density: f32,
+    pub erase: bool,
+}
+
+/// The centres of a slot's four corners (`2 3` over `0 1`), in the ground plane.
+fn corners(h: &DetailHeader, i: usize) -> [(f32, f32); 4] {
+    let sx = h.size_x.max(1) as usize;
+    let (x, z) = ((i % sx) as i32, (i / sx) as i32);
+    let (cx, cz) = (h.from_slot_x(x), h.from_slot_z(z));
+    let q = HALF * 0.5;
+    [(cx - q, cz - q), (cx + q, cz - q), (cx - q, cz + q), (cx + q, cz + q)]
+}
+
+/// The strokes laid on the slots: a painted mesh takes the part it has in a slot, an empty part,
+/// or the part of the thinnest mesh there; each corner inside the brush gets the density (times
+/// the mesh's own density factor). Erasing sets the corners to nothing, and a part left with
+/// nothing names no mesh. A slot with no ground under it is left alone. Answers the layer and
+/// how many slots changed.
+#[must_use]
+pub fn paint(d: &SceneDetails, strokes: &[Stroke]) -> (SceneDetails, usize) {
+    let h = d.header;
+    let mut slots: Vec<DetailSlot> = d.slots.to_vec();
+    let mut changed = vec![false; slots.len()];
+    for st in strokes {
+        let reach = st.radius + HALF * std::f32::consts::SQRT_2;
+        let r2 = st.radius * st.radius;
+        let value = |obj: u8| -> u8 {
+            let f = d.indices.objects.get(usize::from(obj)).map_or(1.0, |o| o.density_factor);
+            (st.density.clamp(0.0, 1.0) * f * 15.0).round().clamp(0.0, 15.0) as u8
+        };
+        for (i, slot) in slots.iter_mut().enumerate() {
+            let c = corners(&h, i);
+            let (mx, mz) = ((c[0].0 + c[3].0) * 0.5, (c[0].1 + c[3].1) * 0.5);
+            if (mx - st.center.x).powi(2) + (mz - st.center.z).powi(2) > reach * reach {
+                continue;
+            }
+            let hit: Vec<usize> = (0..4)
+                .filter(|k| (c[*k].0 - st.center.x).powi(2) + (c[*k].1 - st.center.z).powi(2) <= r2)
+                .collect();
+            if hit.is_empty() || slot.height() <= 0.0 {
+                continue;
+            }
+            let before = *slot;
+            if st.erase {
+                for part in 0..4 {
+                    let id = slot.id(part);
+                    if id == DetailSlot::ID_EMPTY || st.object.is_some_and(|o| o != id) {
+                        continue;
+                    }
+                    for k in &hit {
+                        slot.set_density(part, *k, 0);
+                    }
+                    if (0..4).all(|k| slot.density(part, k) == 0) {
+                        slot.set_id(part, DetailSlot::ID_EMPTY);
+                    }
+                }
+            } else if let Some(obj) = st.object {
+                let total =
+                    |s: &DetailSlot, p: usize| (0..4).map(|k| u32::from(s.density(p, k))).sum::<u32>();
+                let part = (0..4)
+                    .find(|p| slot.id(*p) == obj)
+                    .or_else(|| (0..4).find(|p| slot.id(*p) == DetailSlot::ID_EMPTY))
+                    .unwrap_or_else(|| (0..4).min_by_key(|p| total(slot, *p)).unwrap_or(0));
+                if slot.id(part) != obj {
+                    slot.set_id(part, obj);
+                    for k in 0..4 {
+                        slot.set_density(part, k, 0);
+                    }
+                }
+                for k in &hit {
+                    slot.set_density(part, *k, value(obj));
+                }
+                slot.set_editor_colors();
+            }
+            if *slot != before {
+                changed[i] = true;
+            }
+        }
+    }
+    let n = changed.iter().filter(|c| **c).count();
+    (SceneDetails { slots: slots.into(), ..d.clone() }, n)
+}
+
+/// What a slot holds, part by part: the mesh and its density in each corner.
+#[must_use]
+pub fn coverage(slot: &DetailSlot) -> Vec<(u8, [u8; 4])> {
+    (0..4)
+        .filter(|p| slot.id(*p) != DetailSlot::ID_EMPTY)
+        .map(|p| (slot.id(p), [0, 1, 2, 3].map(|k| slot.density(p, k))))
+        .collect()
+}
+
+/// The layer without the mesh `object`: its parts go, and the parts of the meshes after it
+/// name them by their new places.
+#[must_use]
+pub fn remove_mesh(d: &SceneDetails, object: u8) -> SceneDetails {
+    let mut out = d.clone();
+    if usize::from(object) < out.indices.objects.len() {
+        let gone = out.indices.objects.remove(usize::from(object)).reference;
+        for c in &mut out.indices.colors {
+            c.objects.retain(|x| !x.eq_ignore_ascii_case(&gone));
+        }
+    }
+    let slots: Vec<DetailSlot> = d
+        .slots
+        .iter()
+        .map(|s| {
+            let mut s = *s;
+            for p in 0..4 {
+                let id = s.id(p);
+                if id == DetailSlot::ID_EMPTY {
+                    continue;
+                }
+                if id == object {
+                    s.set_id(p, DetailSlot::ID_EMPTY);
+                    for k in 0..4 {
+                        s.set_density(p, k, 0);
+                    }
+                } else if id > object {
+                    s.set_id(p, id - 1);
+                }
+            }
+            s
+        })
+        .collect();
+    out.slots = slots.into();
+    out
 }
 
 /// `UpdateObjects(bUpdateTex, bUpdateSelectedOnly)`: the objects of every slot, or of the
@@ -609,5 +835,58 @@ mod tests {
         let red = if slot.id(0) == 0 { 0 } else { 1 };
         assert!(slot.density(red, 0) > 0 && slot.density(red, 1) == 0);
         assert_eq!(slot.colors()[2..], [0, 0, 0]);
+    }
+
+    /// A 4 x 4 grid of 2 m slots over (0..8, 0..8), every slot on flat ground.
+    fn grid() -> SceneDetails {
+        let mut d = SceneDetails::default();
+        d.indices.objects = vec![
+            DetailObjectRef { reference: "grass_a".into(), ..DetailObjectRef::default() },
+            DetailObjectRef {
+                reference: "grass_b".into(),
+                density_factor: 0.5,
+                ..DetailObjectRef::default()
+            },
+        ];
+        d.bbox = Aabb::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(7.9, 1.0, 7.9));
+        d.header = header_for(&d.bbox, &DetailHeader::default());
+        let mut slot = empty_slot();
+        slot.set_heights(0.0, 0.5);
+        d.slots = vec![slot; (d.header.size_x * d.header.size_z) as usize].into();
+        d
+    }
+
+    #[test]
+    fn painted_details_are_the_games_slots_and_read_back() {
+        let d = grid();
+        assert_eq!((d.header.size_x, d.header.size_z), (4, 4));
+        // a mesh painted round the middle of the slot at (1, 1)
+        let at = Vec3::new(d.header.from_slot_x(1), 0.0, d.header.from_slot_z(1));
+        let stroke = Stroke { object: Some(0), center: at, radius: 1.0, density: 1.0, erase: false };
+        let (painted, n) = paint(&d, &[stroke]);
+        assert_eq!(n, 1, "only the slot under the brush");
+        let i = d.header.slot_index(1, 1).unwrap();
+        assert_eq!(coverage(&painted.slots[i]), vec![(0, [15, 15, 15, 15])]);
+        // a second mesh shares the slot; its density factor halves what it gets
+        let (both, _) = paint(&painted, &[Stroke { object: Some(1), ..stroke }]);
+        assert_eq!(coverage(&both.slots[i]), vec![(0, [15, 15, 15, 15]), (1, [8, 8, 8, 8])]);
+        // erasing one mesh leaves the other; erasing everything empties the slot
+        let (one, _) = paint(&both, &[Stroke { object: Some(0), erase: true, ..stroke }]);
+        assert_eq!(coverage(&one.slots[i]), vec![(1, [8, 8, 8, 8])]);
+        let (none, _) = paint(&both, &[Stroke { object: None, erase: true, ..stroke }]);
+        assert!(none.slots[i].is_empty());
+        // a slot without ground under it is left alone
+        let mut holes = grid();
+        let mut slots = holes.slots.to_vec();
+        slots[i] = empty_slot();
+        holes.slots = slots.into();
+        assert_eq!(paint(&holes, &[stroke]).1, 0);
+        // removing a mesh moves the meshes after it down
+        let gone = remove_mesh(&both, 0);
+        assert_eq!(gone.indices.objects.len(), 1);
+        assert_eq!(coverage(&gone.slots[i]), vec![(0, [8, 8, 8, 8])]);
+        // what the build writes from the painted slots: the same meshes and densities
+        let exported = both.slots[i].for_export(&[0, 1]);
+        assert_eq!(coverage(&exported), coverage(&both.slots[i]));
     }
 }

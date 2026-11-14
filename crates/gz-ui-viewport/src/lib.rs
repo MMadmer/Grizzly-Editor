@@ -1,10 +1,8 @@
 //! The Level tab's 3D view: the scene drawn by the renderer, the camera, picking, the transform
 //! tools and the overlays (docs/UI_DESIGN.md, section 6, "Viewport").
 //!
-//! The C++ specification is `UIRenderForm`, `UI_ViewportNavigation`, `CUI_Camera`, `CEStats`,
-//! `CToolCustom`, `UIViewportToolbar`, the gizmo, every tool's controls, `SceneRender` and each
-//! class's `Render`, `EGameLighting` and `GameLightingScene`, and the handlers named in
-//! [`register`], whose wire this crate keeps.
+//! It holds the view's toolbar, the gizmo, every mode's gestures, the drawing of each kind, the
+//! game lighting preview, and the handlers named in [`register`].
 //!
 //! # How it is put together
 //!
@@ -23,7 +21,7 @@
 //! - **The bulk tools' gestures** (`bulktools`): the AI map's brush stroke, the node click,
 //!   marquee and gizmo drags, the detail slots' click and marquee, a wallmark laid (Ctrl moves the
 //!   selected one), Delete and the selection keys - the `gz_scene::bulk::cmd` functions the
-//!   `aimap_tool`, `details_tool` and `wallmark_tool` commands run.
+//!   `scene.ai_map`, `scene.details` and `scene.wallmarks` commands run.
 //! - **Overlays are egui** over the picture: the pills, the axis gizmo, the transform gizmo, the
 //!   stats pill, the labels the renderer reports visible, the safe rect, the marquee.
 //! - **The extras of a pass** (`draw_extra`), on the same CPU task: particle systems playing

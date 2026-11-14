@@ -141,6 +141,7 @@ pub struct Publisher {
     starting: AtomicBool,
     pub(crate) sign: Mutex<SignView>,
     pub(crate) sign_cancel: Mutex<Option<gz_editor::Cancel>>,
+    pub(crate) sign_job: Mutex<Option<JobId>>,
 }
 
 /// The one start under way; let go when the start returns, whatever it answered.
@@ -192,6 +193,12 @@ impl Publisher {
             }
             _ => "Publish Release".to_owned(),
         }
+    }
+
+    /// The job of the last start's scan and upload, once the packaging started it.
+    #[must_use]
+    pub fn upload_job(&self) -> Option<JobId> {
+        *self.upload_job.lock()
     }
 
     /// The last packaging's answer.
@@ -274,7 +281,7 @@ impl Publisher {
             .ok_or_else(|| "mod.ltx not found in the project".to_owned())?
             .clone();
         if m.update_github.is_empty() {
-            return Err("no GitHub repository in the manifest: set it in Mod Settings (MCP: mod_set_manifest github=owner/repo)".to_owned());
+            return Err("no GitHub repository in the manifest: set it in Mod Settings (mod.set set={\"update\":{\"github\":\"owner/repo\"}})".to_owned());
         }
         if !gz_mod::validate_github_repo(&m.update_github) {
             return Err("invalid [update] github in mod.ltx: owner/repo expected".to_owned());

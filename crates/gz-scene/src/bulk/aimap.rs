@@ -1,4 +1,4 @@
-//! The AI Map tool's work (`ESceneAIMapTools.cpp`, `_Generate.cpp`, `_Pick.cpp`): nodes made on
+//! The AI map's work: nodes made on
 //! the collision model and linked, the flood that generates the map from the nodes there are,
 //! the brush, the link edits, smoothing, selection and picking.
 //!
@@ -6,11 +6,12 @@
 //! 129 buckets over the map's box); [`AiWork::into_part`] makes the scene's tiles again, sharing
 //! every tile the edit left as it was.
 //!
-//! The generation keeps the C++ order - a queue of nodes in the order they were made, each
+//! The generation keeps one order - a queue of nodes in the order they were made, each
 //! trying its four sides - and the steps that decide the outcome (finding a node there already,
 //! registering a new one) run in that order. What a side costs (the slide of the body, the 81
 //! rays of a new node) depends only on the collision model, so it is worked out ahead for a
-//! batch of the queue on every core and then taken in the C++ order.
+//! batch of the queue on every core and then taken in the queue's order, so the map is the same
+//! on any number of cores.
 
 use std::sync::Arc;
 
@@ -38,7 +39,7 @@ const OPPOSITE: [usize; 4] = [2, 3, 0, 1];
 /// How many queued nodes are worked out ahead at once.
 const BATCH: usize = 512;
 
-/// The tool's flags (`ESceneAIMapTool::fl*`).
+/// The layer's flags, as the AI map's chunk stores them.
 pub mod flags {
     pub const HIDE_NODES: u32 = 1 << 1;
     pub const SLOW_CALCULATE: u32 = 1 << 2;
@@ -181,8 +182,7 @@ impl Gen<'_> {
         if found.is_empty() {
             return None;
         }
-        // oracle: the C++ check of ignored materials is commented out; here an ignored material
-        // is left out of the node's ground, which leaves a hole in the map
+        // an ignored material is left out of the node's ground, which leaves a hole in the map
         let tris: Vec<(usize, Vec3)> = found
             .iter()
             .filter(|&&i| {
@@ -692,8 +692,8 @@ impl AiWork {
                             if tk.is_some() && so.is_some() {
                                 continue;
                             }
-                            // oracle: the C++ swaps the two link slots, which links a node to
-                            // itself; here the one direction there is turns round
+                            // the one direction there is turns round (swapping the two link
+                            // slots would link a node to itself)
                             if tk.is_some() {
                                 if let Some(n) = self.nodes.get_mut(t) {
                                     n.links[k] = None;
@@ -982,7 +982,7 @@ impl AiWork {
         c
     }
 
-    /// The selected nodes moved (`TUI_ControlAIMapNodeSelect::MoveProcess`): new centres, the
+    /// The selected nodes moved by a drag: new centres, the
     /// planes kept and carried with them.
     pub fn move_nodes(&mut self, moves: &[(u32, Vec3)]) -> usize {
         let mut c = 0;
@@ -1093,6 +1093,69 @@ impl AiWork {
     }
 }
 
+/// Where a generation over the ground starts: the spawn points inside the box (the player's
+/// start, the graph points, every placed NPC stands on ground NPCs walk), else the ground under
+/// the box's middle, else the first ground a coarse grid over the box finds. The flood then
+/// covers every patch a walk from them reaches.
+#[must_use]
+pub fn seeds(model: &CollideModel, spawns: &[Vec3], within: &Aabb) -> Vec<Vec3> {
+    let inside =
+        |p: &Vec3| p.x >= within.min.x && p.x <= within.max.x && p.z >= within.min.z && p.z <= within.max.z;
+    let mut out: Vec<Vec3> = spawns.iter().copied().filter(inside).collect();
+    if !out.is_empty() {
+        return out;
+    }
+    let top = within.max.y + 1.0;
+    let depth = within.max.y - within.min.y + 2.0;
+    let probe = |x: f32, z: f32| {
+        let start = Vec3::new(x, top, z);
+        model.ray_nearest(start, Vec3::NEG_Y, depth).map(|(_, r)| Vec3::new(x, top - r, z))
+    };
+    let c = (within.min + within.max) * 0.5;
+    if let Some(p) = probe(c.x, c.z) {
+        out.push(p);
+        return out;
+    }
+    const GRID: usize = 16;
+    for i in 0..GRID {
+        for k in 0..GRID {
+            let x = within.min.x + (within.max.x - within.min.x) * (i as f32 + 0.5) / GRID as f32;
+            let z = within.min.z + (within.max.z - within.min.z) * (k as f32 + 0.5) / GRID as f32;
+            if let Some(p) = probe(x, z) {
+                out.push(p);
+                return out;
+            }
+        }
+    }
+    out
+}
+
+/// A new AI map over the ground: the map's settings from `header` (its nodes dropped), the box
+/// `within`, a node on the ground at each seed, then the flood. Answers the work, the flood and
+/// how many seeds made a node.
+pub fn generate_over(
+    g: &Gen<'_>,
+    mut header: SceneAiMap,
+    within: Aabb,
+    seeds: &[Vec3],
+    progress: &(dyn Fn(usize, usize) -> bool + Sync),
+) -> (AiWork, Flood, usize) {
+    header.nodes = Arc::from([]);
+    header.bbox = within;
+    let mut w = AiWork { hash: Hash::new(&within), header, nodes: Vec::new() };
+    let mut seeded = 0;
+    for p in seeds {
+        let at = snap_xz(*p, w.ps());
+        if let Some(n) = g.create_node(at, false)
+            && w.place(n).is_some()
+        {
+            seeded += 1;
+        }
+    }
+    let flood = if w.nodes.is_empty() { Flood::default() } else { w.flood(g, false, false, None, progress) };
+    (w, flood, seeded)
+}
+
 /// A node packed over a box (`SaveStream`'s arithmetic).
 #[must_use]
 pub fn encode(n: &AiMapNode, bbox: &Aabb, params: &AiParams) -> SceneAiNode {
@@ -1190,7 +1253,7 @@ pub fn stats(nodes: &[AiMapNode], ps: f32, model: Option<&CollideModel>) -> MapS
     out
 }
 
-/// The four sides as the panel names them, in the C++ order.
+/// The four sides as the panel names them, in the order the chunk stores their links.
 pub const SIDES: [&str; 4] = ["left", "forward", "right", "back"];
 
 /// `ConvertV2L`: a side of the panel's pad (away from the camera, left, right, towards the
@@ -1341,8 +1404,7 @@ mod tests {
         (w.nodes, links, h)
     }
 
-    /// The numbers follow from `ESceneAIMapTool::CreateNode`, `CanTravel`, `BuildNode` and
-    /// `BuildNodes(bool)` (ESceneAIMapTools_Generate.cpp) with the default parameters: a 0.7 m
+    /// The numbers follow from the generation with the default parameters: a 0.7 m
     /// patch, 9 x 9 rays 0.0875 m apart over it, a node only where 70 % of them meet the ground
     /// (`rc_lim`), the body (radius 0.7 / sqrt 2 = 0.495) slid to the next patch and stopped where
     /// it touches something, 0.1 m short of it failing. No edge below lies on a ray.

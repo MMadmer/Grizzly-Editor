@@ -25,7 +25,10 @@ gz-fmt-tex.workspace = true
 gz-ui.workspace = true
 gz-app.workspace = true
 gz-ui-mod = { path = "../gz-ui-mod" }
+gz-ui-previews = { path = "../gz-ui-previews" }
 egui.workspace = true
 parking_lot.workspace = true
 rustc-hash.workspace = true
 serde_json.workspace = true
+serde.workspace = true
+schemars.workspace = true

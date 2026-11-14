@@ -1,4 +1,4 @@
-//! The PDA preview (`EditorPdaPreview.cpp`): the model one tab and `pda_preview` share, the
+//! The PDA preview (`EditorPdaPreview.cpp`): the model one tab and `pda.preview` share, the
 //! operations on it, the tab ([`doc`]), its canvas ([`canvas`]) and the command ([`cmd`]).
 //!
 //! The model is a service of the open project behind one lock: the file, the Source pane's

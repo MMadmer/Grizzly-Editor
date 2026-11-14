@@ -1,7 +1,6 @@
-//! `pda_preview` (`EditorPda::McpPreview`, frozen wire): open / state / click / page / key /
-//! aspect / lang / reset / reload / close / apply / save / revert, with `pane`, `tab` and
-//! `zoom` beside any action. The state answers in CANVAS units. An answer that depends on the
-//! frame waits for the frames that show it, so `pending` is false.
+//! `pda.preview`: open / state / click / page / key / aspect / lang / reset / reload / close /
+//! apply / save / revert, with `pane`, `tab` and `zoom` beside any action. The state answers in
+//! CANVAS units. An answer that depends on the frame waits for the frames that show it.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -9,6 +8,8 @@ use std::sync::Arc;
 use gz_base::Origin;
 use gz_editor::{Args, CmdError, Editor, Reply};
 use gz_pda::{Aspect, PdaService, Preview};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::assets::PdaAssets;
@@ -149,15 +150,103 @@ fn click(m: &mut Model, args: &Args) -> Result<(), CmdError> {
     Ok(())
 }
 
-pub async fn pda_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum PreviewAction {
+    /// What the preview shows now; changes nothing but the panes, the tab and the zoom.
+    #[default]
+    State,
+    /// Brings the PDA tab up on `path` (left out: the layout the module uses).
+    Open,
+    /// Closes the tab (unsaved Source text needs save or discard).
+    Close,
+    /// Clicks an item: by `id` (and `row` of a list), by `n` of the state's `visible`, or at the
+    /// canvas point `x`, `y`.
+    Click,
+    /// Goes to the page `page`.
+    Page,
+    /// Presses the PDA key `key`.
+    Key,
+    /// 4:3 or 16:9 (`aspect`).
+    Aspect,
+    /// The language the texts are read in (`lang`).
+    Lang,
+    /// The running interface starts over.
+    Reset,
+    /// Reads the game's side again; the Source pane's edits stay.
+    Reload,
+    /// Puts `text` into the Source pane unsaved, as typing does, and shows it.
+    Apply,
+    /// Saves the Source pane into the file.
+    Save,
+    /// Drops the Source pane's edits: the file as it is.
+    Revert,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PreviewParams {
+    #[serde(default)]
+    action: PreviewAction,
+    /// The layout (project-relative); another one than the open one is read after the Source
+    /// pane's edits are settled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    /// Saves the Source pane's edits before another file or a close.
+    #[serde(default)]
+    save: bool,
+    /// Drops the Source pane's edits before another file or a close.
+    #[serde(default)]
+    discard: bool,
+    /// Apply: the text that goes into the Source pane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    /// Page: the page's id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    page: Option<String>,
+    /// Key: the PDA key (left out: the tasks key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
+    /// Aspect: 4:3 or 16:9.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    aspect: Option<String>,
+    /// Lang: rus, eng, ...
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lang: Option<String>,
+    /// Click: an item's id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    /// Click: the row of a list item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    row: Option<i64>,
+    /// Click: the `n` of the state's `visible` list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    n: Option<i64>,
+    /// Click: a canvas point, from the left, in canvas units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    x: Option<f32>,
+    /// Click: a canvas point, from the top, in canvas units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    y: Option<f32>,
+    /// The panes shown: source, details, both or none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pane: Option<String>,
+    /// The Details tab: problems, pages, vars or log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tab: Option<String>,
+    /// fit, 100 or a factor 0.25..4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    zoom: Option<String>,
+}
+
+pub async fn pda_preview(editor: Arc<Editor>, p: PreviewParams, _origin: Origin) -> Reply {
+    let args = match serde_json::to_value(&p) {
+        Ok(Value::Object(map)) => map,
+        _ => Args::new(),
+    };
     let session = editor.project()?;
     let tab = PdaTab::of_session(&editor, &session);
     let assets = PdaAssets::of_session(&session);
-    // the second read of a pending answer, once its frames are drawn: it applies nothing
-    if arg_bool(&args, "answer_only") {
-        let (active, _) = shown(&editor).await;
-        return Ok(answer(&editor, &tab, &assets, false, active).await);
-    }
     let action = arg(&args, "action").filter(|a| !a.is_empty()).unwrap_or_else(|| "state".to_owned());
     let mut path = arg_or_empty(&args, "path");
     let given_path = !path.is_empty();
@@ -242,9 +331,15 @@ pub async fn pda_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
             }
             read(&editor, &tab, true).await;
         }
-        // the caller has decided: the edits go without a question
         "revert" => {
-            let p = tab.m.lock().path.clone();
+            let (p, dirty, rel) = {
+                let m = tab.m.lock();
+                (m.path.clone(), m.text_dirty, m.rel.clone())
+            };
+            // the edits go for good: only with discard
+            if dirty && !discard {
+                return Err(CmdError::unsaved(json!([rel])));
+            }
             load_file(&editor, &tab, &p).await;
         }
         "page" => {
@@ -253,7 +348,7 @@ pub async fn pda_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
             m.preview.go_to_page(&id).map_err(invalid)?;
         }
         "key" => {
-            // oracle: ArgString empties the default it was given, so a missing key presses the tasks key
+            // a missing key presses the tasks key
             let key = arg_or_empty(&args, "key");
             tab.m.lock().preview.open_key(&key, &clock_now());
         }
@@ -262,7 +357,7 @@ pub async fn pda_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
             tab.m.lock().preview.aspect = Aspect::parse(&a);
         }
         "lang" => {
-            // oracle: a missing lang empties it, and the reader reads rus then
+            // a missing lang empties it, and the reader reads rus then
             let lang = arg_or_empty(&args, "lang");
             tab.m.lock().preview.lang = lang;
             read(&editor, &tab, true).await;
@@ -320,7 +415,7 @@ pub async fn pda_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
     if owed {
         let _ = editor.frames.after(2).await;
     }
-    Ok(answer(&editor, &tab, &assets, false, active).await)
+    Ok(answer(&editor, &tab, &assets, active).await)
 }
 
 /// Whether the pda tab is up, and the egui frame being drawn.
@@ -332,13 +427,7 @@ async fn shown(editor: &Arc<Editor>) -> (bool, u64) {
 
 /// The answer (`AnswerPreview` and `JsonState`): the panes, the zoom and what the last frame
 /// drew, then the state in canvas units.
-async fn answer(
-    editor: &Arc<Editor>,
-    tab: &Arc<PdaTab>,
-    assets: &Arc<PdaAssets>,
-    pending: bool,
-    active: bool,
-) -> Value {
+async fn answer(editor: &Arc<Editor>, tab: &Arc<PdaTab>, assets: &Arc<PdaAssets>, active: bool) -> Value {
     let device = assets.device_wait(editor).await;
     let level = tab.m.lock().preview.layout.preview_level.clone();
     let map = assets.level_map_wait(editor, &level).await;
@@ -376,7 +465,6 @@ async fn answer(
         .map(|(_, n)| *n)
         .collect();
     out.insert("screen_edges".into(), json!(edges));
-    out.insert("pending".into(), json!(pending));
 
     // the state, in CANVAS units: the coordinates an agent writes into the file
     let mut st = Map::new();

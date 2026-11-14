@@ -1,24 +1,23 @@
-//! The scene's edits that read or write a file on the way: Cut, Copy, Paste and Duplicate
-//! through the clipboard (`CommandCut` / `CommandCopy` / `CommandPaste`, `UIMainForm::LevelEdit`),
-//! Open Selection and Save Selection As (`CommandLoadSelection` / `CommandSaveSelection`), a
-//! level part loaded again or unloaded (`CommandEnableTarget`), New Scene (`CommandClear`).
+//! The scene's edits that go through a file or make a new scene: Copy and Paste through the
+//! project's clipboard file, Duplicate, saving a set of objects as a `.group` asset and placing
+//! one, New Scene.
 //!
-//! The file work runs on the IO pool, the parse on the CPU pool; the change is one `SceneCmd`.
+//! The file work runs on the IO pool, the text on the CPU pool; the change is one `SceneCmd`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gz_base::Origin;
+use gz_base::{Origin, RelPath};
 use gz_editor::{CmdError, Editor};
 
 use crate::apply::{ReplaceKind, SceneCmd, SceneReply};
-use crate::class::ObjClass;
-use crate::io::{self, SyncSettings};
-use crate::model::SceneState;
-use crate::selection::{self, Selection};
+use crate::format::group::{self, Bundle};
+use crate::math::Vec3;
+use crate::model::{ObjData, ObjId, SceneState};
+use crate::objects::Loaded;
 use crate::service::SceneService;
 
-/// What a paste or an open added.
+/// What a paste added.
 #[derive(Clone, Debug, Default)]
 pub struct Added {
     pub objects: usize,
@@ -26,203 +25,290 @@ pub struct Added {
 }
 
 fn no_scene(s: &SceneState) -> Result<(), CmdError> {
-    if s.valid { Ok(()) } else { Err(CmdError::new("no_scene", "no scene")) }
+    if s.valid { Ok(()) } else { Err(CmdError::new("no_scene", "no scene is open")) }
 }
 
-/// `$temp$` of the open project: where a copy's selection file goes.
-fn temp_dir(svc: &SceneService) -> PathBuf {
-    svc.root.join("temp")
+/// The project's clipboard: a `.group` text in its `temp\`.
+#[must_use]
+pub fn clipboard_file(svc: &SceneService) -> PathBuf {
+    svc.root.join("temp").join("clipboard.group")
 }
 
-/// `EScene::SaveSelection(class, file)`.
-pub async fn save_selection(
-    editor: &Arc<Editor>,
-    svc: &SceneService,
-    class: Option<ObjClass>,
-    file: PathBuf,
-) -> Result<(), CmdError> {
+/// The objects of `ids` with their groups' members as a bundle (in the scene's order).
+#[must_use]
+pub fn bundle_of(state: &SceneState, ids: &[ObjId]) -> Bundle {
+    let all = group::with_members(state, ids);
+    let objects: Vec<crate::model::Object> =
+        all.iter().filter_map(|id| state.get(*id)).map(|o| (**o).clone()).collect();
+    let mut groups = Vec::new();
+    for (i, o) in objects.iter().enumerate() {
+        if let ObjData::Group(g) = &o.data {
+            let idx: Vec<usize> = g.members.iter().filter_map(|m| all.iter().position(|x| x == m)).collect();
+            groups.push((i, idx));
+        }
+    }
+    Bundle { objects, groups }
+}
+
+/// The objects a command means: the named ones, else the selection.
+pub fn ids_of(state: &SceneState, names: Option<&[String]>) -> Result<Vec<ObjId>, CmdError> {
+    match names {
+        Some(list) if !list.is_empty() => {
+            let mut ids = Vec::with_capacity(list.len());
+            let mut missing = Vec::new();
+            for n in list {
+                match state.find_any(n) {
+                    Some(o) => ids.push(o.id),
+                    None => missing.push(n.clone()),
+                }
+            }
+            if !missing.is_empty() {
+                return Err(CmdError::not_found(format!("no object is named {}", missing.join(", "))));
+            }
+            Ok(ids)
+        }
+        _ => Ok(state.selected_in_order()),
+    }
+}
+
+/// Copy: the objects (with their groups' members) as a `.group` text in the project's clipboard
+/// file. Answers how many objects it holds.
+pub async fn copy(editor: &Arc<Editor>, svc: &SceneService, ids: Vec<ObjId>) -> Result<usize, CmdError> {
     let snap = svc.store.snapshot();
     no_scene(&snap)?;
-    let bytes = editor
+    if ids.is_empty() {
+        return Err(CmdError::invalid("nothing is selected to copy"));
+    }
+    let settings = crate::game::settings(editor).await;
+    let all = group::with_members(&snap, &ids);
+    let n = all.len();
+    let text = editor
         .exec
-        .cpu(move || selection::write_selection(&snap, class))
+        .cpu(move || {
+            group::group_text(
+                &snap,
+                &all,
+                Vec3::ZERO,
+                settings.as_deref().map(|s| s as &(dyn gz_entities::Settings + Sync)),
+            )
+        })
         .await
-        .map_err(|e| CmdError::internal(e.to_string()))?;
+        .map_err(CmdError::invalid)?;
+    let file = clipboard_file(svc);
     editor
         .exec
         .io(move || {
             if let Some(dir) = file.parent() {
                 std::fs::create_dir_all(dir)?;
             }
-            std::fs::write(&file, &bytes)
+            gz_editor::fsx::write_atomic(&file, text.as_bytes())
         })
         .await
-        .map_err(|e| CmdError::io(format!("the selection could not be written: {e}")))
+        .map_err(|e| CmdError::io(format!("the clipboard could not be written: {e}")))?;
+    Ok(n)
 }
 
-/// Reads a selection file and parses it with the linked game's configs.
-async fn read_selection_file(
+/// Reads a `.group` text of a file into a bundle with the linked game's configs.
+pub async fn read_group_file(
     editor: &Arc<Editor>,
     file: PathBuf,
-) -> Result<(Selection, Vec<String>), CmdError> {
+    rel: RelPath,
+) -> Result<(Bundle, Vec<String>), CmdError> {
     let shown = file.display().to_string();
-    let bytes =
-        editor.exec.io(move || std::fs::read(&file)).await.map_err(|e| {
-            CmdError::not_found(format!("the selection file could not be read: {shown} ({e})"))
-        })?;
+    let text = editor
+        .exec
+        .io(move || std::fs::read_to_string(&file))
+        .await
+        .map_err(|e| CmdError::not_found(format!("{shown} could not be read ({e})")))?;
     let settings = crate::game::settings(editor).await;
     editor
         .exec
         .cpu(move || {
-            let st: SyncSettings<'_> = settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync));
-            selection::read_selection(&bytes, st.map(|s| s as &dyn gz_entities::Settings))
+            group::read_group(
+                &text,
+                &rel,
+                settings.as_deref().map(|s| s as &(dyn gz_entities::Settings + Sync)),
+            )
+            .map(|(b, problems)| (b, problems.iter().map(gz_base::Problem::line_text).collect()))
         })
         .await
-        .map_err(|e| CmdError::invalid(e.to_string()))
+        .map_err(|r| CmdError::new(r.code, r.problem.line_text()))
 }
 
-/// `EScene::LoadSelection(file)`: its objects added under free names, one undo step.
-pub async fn load_selection(
+/// Paste: the clipboard's objects added under free names, one undo step.
+pub async fn paste(
     editor: &Arc<Editor>,
     svc: &SceneService,
-    file: PathBuf,
-    label: &str,
+    offset: Vec3,
     origin: Origin,
 ) -> Result<Added, CmdError> {
     no_scene(&svc.store.snapshot())?;
-    let (sel, warnings) = read_selection_file(editor, file).await?;
+    let file = clipboard_file(svc);
+    if !editor
+        .exec
+        .io({
+            let f = file.clone();
+            move || f.is_file()
+        })
+        .await
+    {
+        return Err(CmdError::invalid("the clipboard is empty: copy something first"));
+    }
+    let (bundle, warnings) = read_group_file(
+        editor,
+        file,
+        RelPath::new("temp/clipboard.group").unwrap_or_else(|_| RelPath::root()),
+    )
+    .await?;
     for w in &warnings {
         editor.log.warn(w);
     }
-    let reply =
-        svc.store.send(SceneCmd::Paste { selection: Box::new(sel), label: label.to_owned() }, origin).await?;
-    let objects = match reply {
-        SceneReply::Count(n) => n,
-        _ => 0,
-    };
-    Ok(Added { objects, warnings })
+    let reply = svc
+        .store
+        .send(SceneCmd::Paste { bundle: Box::new(bundle), offset, label: "Paste".into() }, origin)
+        .await?;
+    Ok(Added { objects: if let SceneReply::Count(n) = reply { n } else { 0 }, warnings })
 }
 
-/// `CopySelection(class)`: the selection file in the project's `temp\`, its record on the
-/// clipboard. Answers the file.
-pub async fn copy(editor: &Arc<Editor>, svc: &SceneService, class: ObjClass) -> Result<PathBuf, CmdError> {
-    let dir = temp_dir(svc);
-    let file = editor
-        .exec
-        .io(move || selection::new_clip_file(&dir))
-        .await
-        .map_err(|e| CmdError::io(format!("the clipboard file could not be made: {e}")))?;
-    save_selection(editor, svc, Some(class), file.clone()).await?;
-    let record = selection::clip_record(Some(class), &file);
-    editor.exec.io(move || selection::clipboard_set(&record)).await.map_err(CmdError::io)?;
-    Ok(file)
-}
-
-/// `CutSelection(class)`: the copy, then the selection of the class removed as one undo step.
-pub async fn cut(
-    editor: &Arc<Editor>,
-    svc: &SceneService,
-    class: ObjClass,
-    origin: Origin,
-) -> Result<(PathBuf, usize), CmdError> {
-    let file = copy(editor, svc, class).await?;
-    let reply =
-        svc.store.send(SceneCmd::RemoveSelection { class: Some(class), label: "Cut".into() }, origin).await?;
-    let n = match reply {
-        SceneReply::Count(n) => n,
-        _ => 0,
-    };
-    Ok((file, n))
-}
-
-/// `PasteSelection`: the selection file the clipboard names.
-pub async fn paste(editor: &Arc<Editor>, svc: &SceneService, origin: Origin) -> Result<Added, CmdError> {
-    let record = editor.exec.io(selection::clipboard_get).await.map_err(CmdError::invalid)?;
-    let file = selection::clip_file(&record).ok_or_else(|| CmdError::invalid("No data in clipboard"))?;
-    load_selection(editor, svc, file, "Paste", origin).await
-}
-
-/// Duplicate: a copy pasted where it was (`UIMainForm::LevelEdit` "duplicate").
+/// Duplicate: a copy of the objects added beside them (moved by `offset`), one undo step.
 pub async fn duplicate(
-    editor: &Arc<Editor>,
     svc: &SceneService,
-    class: ObjClass,
+    ids: Vec<ObjId>,
+    offset: Vec3,
     origin: Origin,
 ) -> Result<Added, CmdError> {
-    let file = copy(editor, svc, class).await?;
-    load_selection(editor, svc, file, "Duplicate", origin).await
-}
-
-/// `CommandEnableTarget`: on reads the class's part of the scene's file again, off unloads it.
-/// A part is read only for a scene that has a file (`m_LastFileName`).
-pub async fn set_part_enabled(
-    editor: &Arc<Editor>,
-    svc: &SceneService,
-    class: ObjClass,
-    enabled: bool,
-    origin: Origin,
-) -> Result<(), CmdError> {
     let snap = svc.store.snapshot();
     no_scene(&snap)?;
-    let part = match (enabled, snap.meta.file.clone()) {
-        (true, Some(scene)) => {
-            let guid = snap.meta.guid;
-            let files = editor
-                .exec
-                .io(move || {
-                    let mut out = Vec::new();
-                    for i in 0.. {
-                        if i > 0 && !class.uses_ltx() {
-                            break;
-                        }
-                        let p = io::part_path(&scene, class, i);
-                        match std::fs::read(&p) {
-                            Ok(b) => out.push((p, b)),
-                            Err(_) => break,
-                        }
-                    }
-                    out
-                })
-                .await;
-            let settings = crate::game::settings(editor).await;
-            let (part, warnings) = editor
-                .exec
-                .cpu(move || {
-                    let st: SyncSettings<'_> =
-                        settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync));
-                    io::parse_part(class, &files, guid, st)
-                })
-                .await
-                .map_err(|e| CmdError::invalid(e.to_string()))?;
-            for w in warnings {
-                editor.log.warn(w);
-            }
-            Some(Box::new(part))
-        }
-        _ => None,
-    };
-    svc.store.send(SceneCmd::LevelPart { class, enabled, part }, origin).await?;
-    // `ExecCommand(COMMAND_CHANGE_TARGET, OBJCLASS_SCENEOBJECT)` after an unload
-    if !enabled {
-        svc.store.send(SceneCmd::SetTarget(ObjClass::SceneObject), origin).await?;
+    if ids.is_empty() {
+        return Err(CmdError::invalid("nothing is selected to duplicate"));
     }
-    Ok(())
+    let bundle = bundle_of(&snap, &ids);
+    let reply = svc
+        .store
+        .send(SceneCmd::Paste { bundle: Box::new(bundle), offset, label: "Duplicate".into() }, origin)
+        .await?;
+    Ok(Added { objects: if let SceneReply::Count(n) = reply { n } else { 0 }, warnings: Vec::new() })
 }
 
-/// `CommandClear`: an empty scene with no file, its history new. The level options and every
-/// tool's settings are the defaults again; a part that was not loaded stays so.
+/// The objects saved as a `.group` asset of the project, positions about `pivot`.
+pub async fn save_group(
+    editor: &Arc<Editor>,
+    svc: &SceneService,
+    ids: Vec<ObjId>,
+    pivot: Vec3,
+    file: PathBuf,
+) -> Result<usize, CmdError> {
+    let snap = svc.store.snapshot();
+    no_scene(&snap)?;
+    writable(editor, &file)?;
+    let settings = crate::game::settings(editor).await;
+    let all = group::with_members(&snap, &ids);
+    let n = all.len();
+    let text = editor
+        .exec
+        .cpu(move || {
+            group::group_text(
+                &snap,
+                &all,
+                pivot,
+                settings.as_deref().map(|s| s as &(dyn gz_entities::Settings + Sync)),
+            )
+        })
+        .await
+        .map_err(CmdError::invalid)?;
+    let ed = editor.clone();
+    editor
+        .exec
+        .io(move || -> std::io::Result<()> {
+            if let Some(dir) = file.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            gz_editor::fsx::write_atomic(&file, text.as_bytes())?;
+            if let Ok((_, project)) = gz_project::Project::of(&ed) {
+                project.tree.changes().note_written_fs(&file, text.as_bytes());
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| CmdError::io(format!("the group could not be written: {e}")))?;
+    Ok(n)
+}
+
+/// A group of the library (`rawdata\groups\<reference>.group`, the project's first, then the
+/// editor's), written as the X-Ray SDK writes one.
+pub async fn library_group(
+    editor: &Arc<Editor>,
+    svc: &SceneService,
+    reference: &str,
+) -> Result<Loaded, CmdError> {
+    let rel = format!("{}.group", reference.replace('/', "\\").trim_end_matches(".group"));
+    let files = [
+        svc.root.join("rawdata").join("groups").join(&rel),
+        gz_project::library_root(editor).join("rawdata").join("groups").join(&rel),
+    ];
+    let shown = rel.clone();
+    let body =
+        editor.exec.io(move || files.iter().find_map(|f| std::fs::read(f).ok())).await.ok_or_else(|| {
+            CmdError::not_found(format!("there is no group {shown} in the project or the library"))
+        })?;
+    let settings = crate::game::settings(editor).await;
+    let (loaded, warnings) = crate::sdk::read_library_group(
+        &body,
+        reference,
+        settings.as_deref().map(|s| s as &(dyn gz_entities::Settings + Sync)),
+    )
+    .map_err(CmdError::invalid)?;
+    for w in warnings {
+        editor.log.warn(w);
+    }
+    Ok(loaded)
+}
+
+/// A group whose `.group` is `reference`: the project's asset, else a group of the library.
+pub async fn group_asset(
+    editor: &Arc<Editor>,
+    svc: &SceneService,
+    reference: &str,
+) -> Result<Loaded, CmdError> {
+    let rel = RelPath::new(&reference.replace('\\', "/")).ok();
+    let file = rel.as_ref().map(|r| r.to_fs(&svc.root));
+    let f = file.clone();
+    let is_asset = editor.exec.io(move || f.is_some_and(|f| f.is_file())).await;
+    let (Some(file), Some(rel), true) = (file, rel, is_asset) else {
+        return library_group(editor, svc, reference).await;
+    };
+    let (bundle, warnings) = read_group_file(editor, file, rel).await?;
+    for w in &warnings {
+        editor.log.warn(w);
+    }
+    let [(gi, members)] = bundle.groups.as_slice() else {
+        return Err(CmdError::invalid(format!("{reference} holds no single group")));
+    };
+    let obj = bundle
+        .objects
+        .get(*gi)
+        .cloned()
+        .ok_or_else(|| CmdError::invalid(format!("{reference} holds no group")))?;
+    let members = members
+        .iter()
+        .filter_map(|i| bundle.objects.get(*i).cloned())
+        .map(|obj| Loaded { obj, members: Vec::new() })
+        .collect();
+    Ok(Loaded { obj, members })
+}
+
+/// New Scene: an empty scene with no file, its history new; the kinds' eyes and locks stay.
 pub async fn new_scene(editor: &Arc<Editor>, svc: &SceneService, origin: Origin) -> Result<(), CmdError> {
     let snap = svc.store.snapshot();
     let mut fresh = SceneState::default();
-    fresh.meta.guid = io::new_guid(svc.root.as_os_str().len() as u64);
-    for c in ObjClass::ALL {
+    for c in crate::class::ObjClass::ALL {
         let now = snap.tools.part(c);
         let t = fresh.tools.part_mut(c);
-        t.enabled = now.enabled;
         t.visible = now.visible;
-        t.readonly = now.readonly;
+        t.locked = now.locked;
     }
     svc.store.send(SceneCmd::Replace(Box::new(fresh), ReplaceKind::Loaded), origin).await?;
+    svc.forget_files();
     let rec = svc.recovery.clone();
     editor.exec.io(move || rec.reset()).await;
     Ok(())
@@ -233,20 +319,4 @@ pub async fn new_scene(editor: &Arc<Editor>, svc: &SceneService, origin: Origin)
 pub fn writable(editor: &Editor, path: &Path) -> Result<(), CmdError> {
     let guard = gz_project::Project::of(editor).map(|(_, p)| p.write_guard(None)).unwrap_or_default();
     guard.check(path).map_err(|e| CmdError::invalid(e.to_string()))
-}
-
-/// The file a name means in the project's `$maps$`: absolute as given, `.level` added.
-#[must_use]
-pub fn maps_file(svc: &SceneService, name: &str, ext: &str) -> PathBuf {
-    let mut p = PathBuf::from(name.replace('/', "\\"));
-    if p.extension().is_none() {
-        p.set_extension(ext);
-    }
-    if p.is_absolute() { p } else { svc.maps_dir().join(p) }
-}
-
-/// Whether a path lies in the project's `$maps$`: the C++ then keeps it relative.
-#[must_use]
-pub fn under_maps(svc: &SceneService, file: &Path) -> bool {
-    file.starts_with(svc.maps_dir())
 }

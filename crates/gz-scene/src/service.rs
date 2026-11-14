@@ -1,43 +1,46 @@
-//! What the scene area keeps while a project is open: the store, the library, the pick tree,
-//! the recovery session, the load status and the property panels' view.
+//! What the scene area keeps while a project is open: the store, the documents the scene was read
+//! from, the library, the pick tree, the recovery session, the load status, the problems its
+//! files hold and the property panels' view; loading, saving and following the scene's files.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use gz_base::{Origin, RelPath, SmolStr};
+use gz_base::{Origin, Problem, RelPath, SmolStr};
 use gz_editor::{CmdError, DirtyDoc, DirtySource, Editor, JobError, ProjectSession};
+use gz_project::Filter;
 use gz_query::Derived;
 use gz_store::{Store, StoreOptions};
 use parking_lot::Mutex;
 
 use crate::apply::{ReplaceKind, SceneCmd};
-use crate::class::ObjClass;
-use crate::io::{self, PartFiles, SyncSettings};
+use crate::format::{self, SceneFiles, Texts};
 use crate::library::Library;
 use crate::model::{ObjData, SceneState};
 use crate::pick::ScenePick;
-use crate::recovery::Recovery;
+use crate::recovery::{Recovery, Snapshot};
+use crate::sdk;
 
-/// What `scene_load_status` answers about the last load.
+/// What `scene.info` answers about the last load.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LoadStatus {
     pub attempted: bool,
     pub loaded: bool,
-    pub rollback_ok: bool,
     pub path: String,
     pub error: String,
 }
 
-/// The Details and Level Settings panels' own state (`property_inspector`'s filter, open).
+/// The Details and Level Settings panels' own state (the search, open), and a chooser put up to
+/// be looked at.
 #[derive(Clone, Debug, Default)]
 pub struct InspectorView {
     pub filter: [String; 2],
     pub open: [bool; 2],
-    /// `property_choose`: the row whose chooser is open, and the item picked in it.
+    /// The row whose chooser is open, and the item picked in it.
     pub choosing: Option<String>,
     pub chosen: String,
-    /// A tool's chooser put up over MCP to be looked at (`ui_dialog open id=group_pivot`).
+    /// A tool's chooser put up over MCP to be looked at (`ui.dialog open id=group_pivot`).
     pub tool_chooser: Option<String>,
 }
 
@@ -49,12 +52,21 @@ pub struct SceneService {
     pick: Derived<ScenePick>,
     pub load: Mutex<LoadStatus>,
     pub view: Mutex<InspectorView>,
-    /// The project's folder and the editor's.
+    /// The project's folder and the editor's library folder.
     pub root: PathBuf,
     pub editor_root: PathBuf,
-    /// The Details sheet's lists from the linked game (story ids, the Spawn tool's names), the
-    /// newest read; `property_inspector` and a scene load read them again.
+    /// The Details sheet's lists from the linked game (story ids, the spawn sections' names), the
+    /// newest read.
     prop_cx: parking_lot::RwLock<Arc<gz_entities::PropContext>>,
+    /// The documents the open scene was read from or last saved to: what a save writes the
+    /// difference into. `None` for a scene not in its own files yet (new, imported).
+    files: Mutex<Option<Arc<SceneFiles>>>,
+    /// What the open scene's files hold that is wrong, positioned (reading, following them).
+    problems: Mutex<Vec<Problem>>,
+    /// A scene was loaded or made in this session.
+    opened: AtomicBool,
+    /// Moves with every load: the task following the files of an older one stops.
+    watch_gen: AtomicU64,
 }
 
 /// Makes the dirty source register once per editor.
@@ -88,14 +100,13 @@ impl DirtySource for SceneDirty {
             }
             let snap = svc.store.snapshot();
             let name = snap.meta.name();
-            // the scene's own save, with its reason when it fails (C++ SettleUnsaved)
             let Some(file) = snap.meta.file.clone() else {
                 return Err(format!(
-                    "{}: the scene has no file yet: save_scene file=<path> first",
+                    "{}: the scene has no file yet: scene.save path=<file> first",
                     if name.is_empty() { "Untitled scene" } else { &name }
                 ));
             };
-            save_scene(editor, &svc, file).await.map_err(|e| format!("{name}: {e}"))
+            save_scene(editor, &svc, file).await.map(|_| ()).map_err(|e| format!("{name}: {e}"))
         })
     }
 
@@ -129,21 +140,23 @@ impl SceneService {
         });
         let root = session.root.clone();
         let editor_root = gz_project::library_root(editor);
-        let mut initial = SceneState::default();
-        initial.meta.guid = io::new_guid(root.as_os_str().len() as u64);
         let svc = session.services.get_or_init(|| SceneService {
-            store: Store::spawn("scene", initial, &editor.exec, StoreOptions::default()),
+            store: Store::spawn("scene", SceneState::default(), &editor.exec, StoreOptions::default()),
             library: Arc::new(Library::new(vec![
                 root.join("rawdata").join("objects"),
                 editor_root.join("rawdata").join("objects"),
             ])),
             recovery: Arc::new(Recovery::new()),
             pick: Derived::new(editor.exec.clone()),
-            load: Mutex::new(LoadStatus { rollback_ok: true, ..LoadStatus::default() }),
+            load: Mutex::new(LoadStatus::default()),
             view: Mutex::new(InspectorView::default()),
             root,
             editor_root,
             prop_cx: parking_lot::RwLock::new(Arc::new(gz_entities::PropContext::default())),
+            files: Mutex::new(None),
+            problems: Mutex::new(Vec::new()),
+            opened: AtomicBool::new(false),
+            watch_gen: AtomicU64::new(0),
         });
         start_recovery_timer(editor, &svc);
         svc
@@ -161,6 +174,36 @@ impl SceneService {
         cx
     }
 
+    /// Whether a scene was loaded or made in this session.
+    #[must_use]
+    pub fn opened(&self) -> bool {
+        self.opened.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_opened(&self) {
+        self.opened.store(true, Ordering::Relaxed);
+    }
+
+    /// What the open scene's files hold that is wrong.
+    #[must_use]
+    pub fn problems(&self) -> Vec<Problem> {
+        self.problems.lock().clone()
+    }
+
+    /// The documents the open scene was read from.
+    #[must_use]
+    pub fn files(&self) -> Option<Arc<SceneFiles>> {
+        self.files.lock().clone()
+    }
+
+    /// The scene is no longer the one its files hold (a new scene).
+    pub(crate) fn forget_files(&self) {
+        *self.files.lock() = None;
+        self.problems.lock().clear();
+        self.watch_gen.fetch_add(1, Ordering::Relaxed);
+        self.set_opened();
+    }
+
     /// The pick tree of the snapshot there is now (built on the CPU pool once per revision of
     /// the scene and of the library).
     pub async fn pick(&self) -> (Arc<gz_store::Snap<SceneState>>, Arc<ScenePick>) {
@@ -171,14 +214,8 @@ impl SceneService {
         (snap, pick)
     }
 
-    /// The `$maps$` of the project: where a bare scene name is looked for.
-    #[must_use]
-    pub fn maps_dir(&self) -> PathBuf {
-        self.root.join("rawdata").join("levels")
-    }
-
     /// Loads every library object the scene names, on the IO pool: its scene objects' and its
-    /// detail objects' (`EDetail` loads its own, which a build of the details reads).
+    /// detail objects'.
     pub async fn prefetch_library(&self, editor: &Editor, state: &SceneState) {
         let mut refs: Vec<SmolStr> = state
             .objects
@@ -198,6 +235,33 @@ impl SceneService {
         let exec = editor.exec.clone();
         editor.exec.io(move || exec.io_pool().install(|| lib.prefetch(&refs))).await;
     }
+}
+
+/// The scene's files for a recovery snapshot: what a save would write, every file whole.
+fn snapshot_of(
+    state: &SceneState,
+    files: Option<&SceneFiles>,
+    settings: sdk::SyncSettings<'_>,
+) -> Result<Snapshot, String> {
+    let name = state
+        .meta
+        .file
+        .as_ref()
+        .and_then(|f| f.file_stem())
+        .map_or_else(|| "untitled".to_owned(), |s| s.to_string_lossy().into_owned());
+    let plan = format::write(state, files, settings)?;
+    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
+    // what the save would write, and every file it would leave as it is
+    out.push((format!("{name}.{}", format::EXT), plan.after.scene.text().as_bytes().to_vec()));
+    for d in &plan.after.docs {
+        out.push((format!("{name}/{}", d.file), d.doc.text().as_bytes().to_vec()));
+    }
+    for l in format::layers::LAYERS {
+        if format::layers::has(l, &state.bulk) {
+            out.push((format!("{name}/{}", l.file), format::layers::write(l, &state.bulk)));
+        }
+    }
+    Ok(Snapshot { files: out })
 }
 
 fn start_recovery_timer(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
@@ -220,16 +284,7 @@ fn start_recovery_timer(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
             if svc.recovery.can_snapshot(linked).is_err() {
                 continue;
             }
-            let snap = svc.store.snapshot();
-            let source = snap.meta.file.as_ref().map(|f| f.display().to_string()).unwrap_or_default();
-            let rec = svc.recovery.clone();
-            let result =
-                ed.exec.cpu(move || io::write_undo_stream(&snap, true)).await.map_err(|e| e.to_string());
-            let saved = match result {
-                Ok(stream) => ed.exec.io(move || rec.save_now(&stream, &source)).await,
-                Err(e) => Err(e),
-            };
-            match saved {
+            match snapshot(&ed, &svc).await {
                 Ok(()) => ed.log.info("* recovery: snapshot saved"),
                 Err(e) => {
                     svc.recovery.retry_later();
@@ -240,46 +295,110 @@ fn start_recovery_timer(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
     });
 }
 
+/// A recovery snapshot of the scene now.
+pub(crate) async fn snapshot(ed: &Arc<Editor>, svc: &Arc<SceneService>) -> Result<(), String> {
+    let snap = svc.store.snapshot();
+    let source = snap.meta.file.as_ref().map(|f| f.display().to_string()).unwrap_or_default();
+    let files = svc.files();
+    let settings = crate::game::settings(ed).await;
+    let s = snap.clone();
+    let made = ed
+        .exec
+        .cpu(move || {
+            snapshot_of(
+                &s,
+                files.as_deref(),
+                settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync)),
+            )
+        })
+        .await?;
+    let rec = svc.recovery.clone();
+    ed.exec.io(move || rec.save_now(&made, &source)).await
+}
+
 /// Whether the project's game is linked (touches the disk: on the IO pool).
 pub(crate) async fn game_linked(editor: &Arc<Editor>) -> bool {
     let Ok((_, project)) = gz_project::Project::of(editor) else { return false };
     editor.exec.io(move || project.game_linked()).await
 }
 
-/// Reads the numbered part files of the classes a load needs, in parallel.
-fn read_parts(exec: &gz_task::Executors, file: &Path, classes: Vec<ObjClass>) -> PartFiles {
-    let file = file.to_path_buf();
-    let files = exec.par_io(classes, move |c| {
-        let mut out = Vec::new();
-        for i in 0.. {
-            if i > 0 && !c.uses_ltx() {
-                break;
-            }
-            let p = io::part_path(&file, c, i);
-            match std::fs::read(&p) {
-                Ok(b) => out.push((p, b)),
-                Err(_) => break,
-            }
+/// The scene file a path means: project-relative or absolute, `.scene` or the X-Ray SDK's
+/// `.level`; without an extension the `.scene` (or, when there is none, the `.level`).
+pub fn resolve_scene(svc: &SceneService, path: &str) -> Result<PathBuf, CmdError> {
+    let p = PathBuf::from(path.replace('/', "\\"));
+    let full = if p.is_absolute() { p } else { svc.root.join(p) };
+    match full.extension().and_then(|e| e.to_str()) {
+        Some(e) if e.eq_ignore_ascii_case(format::EXT) || e.eq_ignore_ascii_case(sdk::EXT) => Ok(full),
+        None => {
+            let scene = full.with_extension(format::EXT);
+            let level = full.with_extension(sdk::EXT);
+            Ok(if !scene.is_file() && level.is_file() { level } else { scene })
         }
-        (c, out)
-    });
-    PartFiles { files }
+        Some(_) => Err(CmdError::invalid("a scene is a .scene file (or an X-Ray SDK .level to import)")),
+    }
 }
 
-/// The scene file a name means: absolute as given, otherwise under the project's `$maps$`,
-/// `.level` added when the name has no extension.
-pub fn resolve_scene(svc: &SceneService, scene: &str) -> Result<PathBuf, CmdError> {
-    let mut name = scene.replace('/', "\\");
-    let leaf = name.rsplit('\\').next().unwrap_or("");
-    match leaf.rfind('.') {
-        None => name.push_str(".level"),
-        Some(dot) if !leaf[dot..].eq_ignore_ascii_case(".level") => {
-            return Err(CmdError::invalid("scene must use the .level extension"));
+/// Whether a file is the X-Ray SDK's scene.
+#[must_use]
+pub fn is_sdk(file: &Path) -> bool {
+    file.extension().is_some_and(|e| e.eq_ignore_ascii_case(sdk::EXT))
+}
+
+/// The texts of a scene's files (blocking).
+pub fn read_texts(scene: &Path) -> std::io::Result<Texts> {
+    let mut t = Texts { scene: std::fs::read_to_string(scene)?, ..Texts::default() };
+    let dir = format::folder_of(scene);
+    for cf in &format::CLASS_FILES {
+        if let Ok(text) = std::fs::read_to_string(dir.join(cf.file)) {
+            t.files.push((cf.file.to_owned(), text));
         }
-        Some(_) => {}
     }
-    let absolute = name.contains(':') || name.starts_with("\\\\");
-    Ok(if absolute { PathBuf::from(name) } else { svc.maps_dir().join(name) })
+    for l in format::layers::LAYERS {
+        if let Ok(b) = std::fs::read(dir.join(l.file)) {
+            t.layers.push((l.file.to_owned(), b));
+        }
+    }
+    Ok(t)
+}
+
+/// A scene's path as problems name it: project-relative, else as it is.
+fn rel_of(root: &Path, file: &Path) -> RelPath {
+    RelPath::from_fs(root, file)
+        .or_else(|| RelPath::new(&file.display().to_string().replace('\\', "/")).ok())
+        .unwrap_or_else(RelPath::root)
+}
+
+/// A scene read from its files, or an X-Ray SDK scene imported (blocking parts on the pools).
+pub(crate) struct Opened {
+    pub state: SceneState,
+    pub files: Option<SceneFiles>,
+    pub problems: Vec<Problem>,
+}
+
+/// Reads a scene's files into the model (blocking: run on the IO / CPU pools).
+pub(crate) fn open_files(
+    root: &Path,
+    file: &Path,
+    settings: sdk::SyncSettings<'_>,
+) -> Result<Opened, String> {
+    if is_sdk(file) {
+        let main =
+            std::fs::read(file).map_err(|e| format!("Cannot open scene file: {} ({e})", file.display()))?;
+        let kind = sdk::scene_kind(&main)?;
+        let parts = sdk::read_parts(file, &sdk::parts_needed(&main, kind));
+        let loaded = sdk::parse_scene(&main, file, &parts, settings).map_err(|e| e.to_string())?;
+        let rel = rel_of(root, file);
+        let problems =
+            loaded.warnings.into_iter().map(|w| Problem::warning("S040", w).in_file(rel.clone())).collect();
+        return Ok(Opened { state: loaded.state, files: None, problems });
+    }
+    let texts = read_texts(file).map_err(|e| format!("Cannot open scene file: {} ({e})", file.display()))?;
+    let main = rel_of(root, file);
+    let dir = rel_of(root, &format::folder_of(file));
+    let mut read = format::read(&texts, &main, &dir, settings).map_err(|r| r.to_string())?;
+    read.state.meta.file = Some(file.to_path_buf());
+    read.files.base.meta.file = Some(file.to_path_buf());
+    Ok(Opened { state: read.state, files: Some(read.files), problems: read.problems })
 }
 
 /// The load as a job: the files on the IO pool, the parse on the CPU pool, the library objects
@@ -290,8 +409,7 @@ pub async fn load_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: Pat
         *st = LoadStatus {
             attempted: true,
             loaded: false,
-            rollback_ok: true,
-            path: file.display().to_string().to_lowercase(),
+            path: file.display().to_string(),
             error: String::new(),
         };
     }
@@ -303,47 +421,37 @@ pub async fn load_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: Pat
     let s = svc.clone();
     let f = file.clone();
     let job = editor.jobs.start("scene_load", Some("scene"), "Loading the scene", move |ctx| async move {
-        ctx.stage("Reading the scene");
-        let main_path = f.clone();
-        let main = ctx
-            .exec
-            .io(move || std::fs::read(&main_path))
-            .await
-            .map_err(|e| JobError::new(format!("Cannot open scene file: {} ({e})", f.display())))?;
-        let kind = io::scene_kind(&main).map_err(JobError::new)?;
-        let classes = io::parts_needed(&main, kind);
-        ctx.check()?;
-        let exec = ctx.exec.clone();
-        let pf = f.clone();
-        let parts = ctx.exec.io(move || read_parts(&exec, &pf, classes)).await;
-        ctx.check()?;
         ctx.stage("Reading the game's configs");
         let settings = crate::game::settings(&ed).await;
         // the Details sheet's lists from the same configs
         crate::cmd::prop_context(&ed).await;
-        ctx.stage("Parsing");
-        let pf = f.clone();
-        let loaded = ctx
+        ctx.check()?;
+        ctx.stage("Reading the scene");
+        let (root, pf) = (s.root.clone(), f.clone());
+        let opened = ctx
             .exec
-            .cpu(move || {
-                let st: SyncSettings<'_> =
+            .io(move || {
+                let st: sdk::SyncSettings<'_> =
                     settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync));
-                io::parse_scene(&main, &pf, &parts, st)
+                open_files(&root, &pf, st)
             })
             .await
-            .map_err(|e| JobError::new(e.to_string()))?;
+            .map_err(JobError::new)?;
         ctx.check()?;
         ctx.stage("Loading the library objects");
-        s.prefetch_library(&ed, &loaded.state).await;
-        for w in &loaded.warnings {
-            ed.log.warn(w);
+        s.prefetch_library(&ed, &opened.state).await;
+        for p in opened.problems.iter().filter(|p| p.severity != gz_base::Severity::Note) {
+            ed.log.warn(p.line_text());
         }
-        let count = loaded.state.objects.len();
+        let count = opened.state.objects.len();
         s.store
-            .send(SceneCmd::Replace(Box::new(loaded.state), ReplaceKind::Loaded), Origin::Mcp)
+            .send(SceneCmd::Replace(Box::new(opened.state), ReplaceKind::Loaded), Origin::Mcp)
             .await
             .map_err(|e| JobError::new(e.message))?;
-        ed.log.info(format!("EScene: {count} objects loaded"));
+        *s.files.lock() = opened.files.map(Arc::new);
+        *s.problems.lock() = opened.problems;
+        s.set_opened();
+        ed.log.info(format!("the scene is open: {count} objects"));
         Ok(serde_json::json!({ "objects": count }))
     });
     let id = match job {
@@ -357,8 +465,8 @@ pub async fn load_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: Pat
     let info = editor.jobs.wait(id).await;
     let result = match info {
         Some(i) if i.error.is_none() && i.state == gz_editor::JobState::Done => Ok(()),
-        Some(i) => Err(i.error.unwrap_or_else(|| "Scene load failed".into())),
-        None => Err("Scene load failed".into()),
+        Some(i) => Err(i.error.unwrap_or_else(|| "the scene did not open".into())),
+        None => Err("the scene did not open".into()),
     };
     {
         let mut st = svc.load.lock();
@@ -374,11 +482,44 @@ pub async fn load_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: Pat
         let rec = svc.recovery.clone();
         editor.exec.io(move || rec.reset()).await;
         note_scene(editor, svc, &file);
+        follow(editor, svc);
     }
     result
 }
 
-/// Who is told of a scene loaded or saved (`EPrefs->AppendRecentFile`): File > Recent Scene.
+/// A scene command needs the scene: one is open, or the project's scene is opened now (and
+/// waited for). `no_scene` when the project has none.
+pub async fn need_scene(editor: &Arc<Editor>) -> Result<Arc<SceneService>, CmdError> {
+    let svc = SceneService::of(editor)?;
+    // a load under way (the project's own) is waited for; a tool's job is no reason to wait
+    let running: Vec<_> = editor
+        .jobs
+        .snapshot()
+        .into_iter()
+        .filter(|j| j.running() && j.kind == "scene_load")
+        .map(|j| j.id)
+        .collect();
+    for id in running {
+        editor.jobs.wait(id).await;
+    }
+    if svc.opened() {
+        return Ok(svc);
+    }
+    let Ok((_, project)) = gz_project::Project::of(editor) else {
+        return Err(CmdError::new("no_scene", "no scene is open"));
+    };
+    let Some(rel) = project.file().scene().map(str::to_owned) else {
+        return Err(CmdError::new(
+            "no_scene",
+            "the project has no scene: scene.new makes one, scene.open opens one",
+        ));
+    };
+    let file = svc.root.join(rel.replace('/', "\\"));
+    load_scene(editor, &svc, file).await.map_err(|e| CmdError::new("load_failed", e))?;
+    Ok(svc)
+}
+
+/// Who is told of a scene loaded or saved: File > Recent Scene.
 #[derive(Default)]
 pub struct SceneFileHooks {
     hooks: parking_lot::RwLock<Vec<FileHook>>,
@@ -403,7 +544,7 @@ impl SceneFileHooks {
     }
 }
 
-/// `Project::note_scene`: the project's `last_scene` follows the open scene.
+/// The project's scene follows the open scene.
 pub(crate) fn note_scene(editor: &Arc<Editor>, svc: &SceneService, file: &Path) {
     SceneFileHooks::of(editor).fire(editor, file);
     if let Ok((_, project)) = gz_project::Project::of(editor) {
@@ -411,12 +552,19 @@ pub(crate) fn note_scene(editor: &Arc<Editor>, svc: &SceneService, file: &Path) 
     }
 }
 
-/// Writes the files of a save the way `SaveTransaction` does: every target staged, the old
-/// version of each kept as its `.~` backup, the old contents put back when one write fails.
-pub fn commit_files(files: &[io::SaveFile]) -> Result<(), String> {
-    let mut written: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::new();
-    let rollback = |written: &[(PathBuf, Option<Vec<u8>>)]| {
-        for (p, old) in written.iter().rev() {
+/// Writes the files of a save: each changed file atomically, a file the scene no longer has
+/// removed; a write that fails puts back what was written before it. Every write is told to
+/// the project's watcher as the editor's own. Answers the files written or removed.
+pub(crate) fn commit(
+    scene: &Path,
+    files: &[format::Out],
+    watch: Option<&gz_project::ProjectWatch>,
+) -> Result<usize, String> {
+    let dir = format::folder_of(scene);
+    let path_of = |f: &format::Out| if f.file.is_empty() { scene.to_path_buf() } else { dir.join(&f.file) };
+    let mut done: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::new();
+    let rollback = |done: &[(PathBuf, Option<Vec<u8>>)]| {
+        for (p, old) in done.iter().rev() {
             match old {
                 Some(b) => {
                     let _ = gz_editor::fsx::write_atomic(p, b);
@@ -428,66 +576,305 @@ pub fn commit_files(files: &[io::SaveFile]) -> Result<(), String> {
         }
     };
     for f in files {
-        let old = std::fs::read(&f.path).ok();
+        let p = path_of(f);
+        let old = std::fs::read(&p).ok();
         match &f.bytes {
             Some(bytes) => {
-                if let Some(o) = &old {
-                    let _ = std::fs::write(io::backup_path(&f.path), o);
+                if let Some(parent) = p.parent()
+                    && let Err(e) = std::fs::create_dir_all(parent)
+                {
+                    rollback(&done);
+                    return Err(format!("the folder {} could not be made ({e})", parent.display()));
                 }
-                if let Err(e) = gz_editor::fsx::write_atomic(&f.path, bytes) {
-                    rollback(&written);
-                    return Err(format!("Cannot commit staged save file '{}' ({e})", f.path.display()));
+                if let Err(e) = gz_editor::fsx::write_atomic(&p, bytes) {
+                    rollback(&done);
+                    return Err(format!("{} could not be written ({e})", p.display()));
                 }
-                written.push((f.path.clone(), old));
+                if let Some(w) = watch {
+                    w.note_written_fs(&p, bytes);
+                }
+                done.push((p, old));
             }
             None => {
-                // a numbered part past what the tool needs, and every one after it
-                let mut p = f.path.clone();
-                while p.exists() {
+                if old.is_some() {
                     if let Err(e) = std::fs::remove_file(&p) {
-                        rollback(&written);
-                        return Err(format!("Cannot remove stale level part '{}' ({e})", p.display()));
+                        rollback(&done);
+                        return Err(format!("{} could not be removed ({e})", p.display()));
                     }
-                    p = next_numbered(&p);
+                    done.push((p, old));
                 }
             }
         }
     }
-    Ok(())
+    Ok(done.len())
 }
 
-fn next_numbered(p: &Path) -> PathBuf {
-    let s = p.to_string_lossy();
-    let digits = s.chars().rev().take_while(char::is_ascii_digit).count();
-    let (base, num) = s.split_at(s.len() - digits);
-    let n: u32 = num.parse().unwrap_or(0);
-    PathBuf::from(format!("{base}{}", n + 1))
-}
-
-/// The save: the snapshot serialised off the store, the files committed on the IO pool, then
-/// the store marked saved.
-pub async fn save_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: PathBuf) -> Result<(), String> {
+/// The save: the files worked out off the store (against the documents the scene was read from,
+/// unless `file` is another one - a Save As writes everything), written on the IO pool, then
+/// the store marked saved. Answers the files written or removed.
+pub async fn save_scene(
+    editor: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    file: PathBuf,
+) -> Result<usize, String> {
     crate::edit::writable(editor, &file).map_err(|e| e.message)?;
     let snap = svc.store.snapshot();
+    let same = snap.meta.file.as_deref() == Some(file.as_path()) && snap.meta.imported.is_none();
+    let files = if same { svc.files() } else { None };
+    let settings = crate::game::settings(editor).await;
+    let s = snap.clone();
+    let plan = editor
+        .exec
+        .cpu(move || {
+            format::write(
+                &s,
+                files.as_deref(),
+                settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync)),
+            )
+        })
+        .await?;
+    let watch = gz_project::Project::of(editor).ok().map(|(_, p)| p.tree.changes().clone());
     let f = file.clone();
-    let files = editor.exec.cpu(move || io::write_scene(&snap, &f)).await.map_err(|e| e.to_string())?;
-    editor.exec.io(move || commit_files(&files)).await?;
+    let out = plan.files.clone();
+    let written = editor.exec.io(move || commit(&f, &out, watch.as_ref())).await?;
+    let mut after = plan.after;
+    after.base.meta.file = Some(file.clone());
+    after.base.meta.imported = None;
+    *svc.files.lock() = Some(Arc::new(after));
     svc.store.send(SceneCmd::Saved { file: file.clone() }, Origin::Mcp).await.map_err(|e| e.message)?;
+    svc.set_opened();
     let rec = svc.recovery.clone();
     editor.exec.io(move || rec.reset()).await;
     note_scene(editor, svc, &file);
+    follow(editor, svc);
     // what the scene still takes from the editor's library goes on the project file's list
     let snap = svc.store.snapshot();
     let refs: Vec<String> = snap
         .objects
         .values()
         .filter_map(|o| match &o.data {
-            crate::model::ObjData::SceneObject(d) if !d.visual_mode() => Some(d.reference.to_string()),
+            ObjData::SceneObject(d) if !d.visual_mode() => Some(d.reference.to_string()),
             _ => None,
         })
         .collect();
     if let Err(e) = gz_project::library::note_scene_refs(editor, refs).await {
         editor.log.warn(format!("the project file's library list was not updated: {}", e.message));
     }
+    Ok(written)
+}
+
+// ---------------------------------------------------------------- following the files
+
+/// Follows the open scene's files: a change another program made comes into the open scene.
+fn follow(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
+    let generation = svc.watch_gen.fetch_add(1, Ordering::Relaxed) + 1;
+    let Some(file) = svc.store.snapshot().meta.file.clone() else { return };
+    let Ok((_, project)) = gz_project::Project::of(editor) else { return };
+    let (Some(main), Some(dir)) =
+        (RelPath::from_fs(&svc.root, &file), RelPath::from_fs(&svc.root, &format::folder_of(&file)))
+    else {
+        return;
+    };
+    let under = main.parent().unwrap_or_else(RelPath::root);
+    let mut rx = project.tree.changes().subscribe(Filter::Under(under));
+    let weak = Arc::downgrade(svc);
+    let ed = editor.clone();
+    editor.exec.spawn(async move {
+        while let Some(change) = rx.recv().await {
+            let Some(svc) = weak.upgrade() else { break };
+            if svc.watch_gen.load(Ordering::Relaxed) != generation {
+                break;
+            }
+            let ours = change.path == main
+                || change.path.starts_with(&dir) && change.path != dir
+                || change.kind == gz_project::ChangeKind::Rescan;
+            if !ours {
+                continue;
+            }
+            // a burst of files (another program saving the whole scene) is one change
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            while rx.try_recv().is_ok() {}
+            if let Err(e) = outside_change(&ed, &svc, &file).await {
+                ed.log.warn(format!("the scene's files changed outside the editor: {e}"));
+            }
+        }
+    });
+}
+
+/// What another program wrote comes in: a clean scene takes its files again as one undo step
+/// (Reload from Disk); a scene with unsaved changes keeps them over what the files say now
+/// (each file's difference rebased), and a place both changed keeps the editor's value and is
+/// named in the scene's problems. A file that does not read leaves the scene as it is and says
+/// where.
+pub(crate) async fn outside_change(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    file: &Path,
+) -> Result<(), String> {
+    let settings = crate::game::settings(ed).await;
+    let (root, f) = (svc.root.clone(), file.to_path_buf());
+    let st = settings.clone();
+    let opened = ed
+        .exec
+        .io(move || open_files(&root, &f, st.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync))))
+        .await;
+    let opened = match opened {
+        Ok(o) => o,
+        Err(e) => {
+            let p = Problem::error("syntax", e.clone()).in_file(rel_of(&svc.root, file));
+            svc.problems.lock().push(p);
+            return Err(e);
+        }
+    };
+    let Some(theirs) = opened.files else { return Ok(()) };
+    let snap = svc.store.snapshot();
+    if !svc.store.is_dirty() {
+        svc.prefetch_library(ed, &opened.state).await;
+        svc.store
+            .send(
+                SceneCmd::Reload {
+                    state: Box::new(opened.state),
+                    label: "Reload from Disk".into(),
+                    clean: true,
+                },
+                Origin::Mcp,
+            )
+            .await
+            .map_err(|e| e.message)?;
+        *svc.files.lock() = Some(Arc::new(theirs));
+        *svc.problems.lock() = opened.problems;
+        ed.log
+            .info("the scene was changed outside the editor: it is read again (Undo takes the change back)");
+        return Ok(());
+    }
+    // unsaved changes: this side's difference applied over each file's new text
+    let mine = svc.files();
+    let Some(mine) = mine else { return Ok(()) };
+    let (merged, conflicts) = ed
+        .exec
+        .cpu({
+            let snap = snap.clone();
+            move || {
+                rebase(
+                    &snap,
+                    &mine,
+                    &theirs,
+                    settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync)),
+                )
+            }
+        })
+        .await?;
+    let mut problems = opened.problems;
+    problems.extend(conflicts);
+    svc.store
+        .send(
+            SceneCmd::Reload {
+                state: Box::new(merged.0),
+                label: "Merge Changes from Disk".into(),
+                clean: false,
+            },
+            Origin::Mcp,
+        )
+        .await
+        .map_err(|e| e.message)?;
+    *svc.files.lock() = Some(Arc::new(merged.1));
+    *svc.problems.lock() = problems;
+    ed.log.info("the scene's files were changed outside the editor: the unsaved changes are kept over them");
     Ok(())
+}
+
+/// The open scene with its unsaved changes over the files as they are now: the merged state, the
+/// documents to save against (the files as they are now) and a problem per place both changed.
+fn rebase(
+    now: &SceneState,
+    mine: &SceneFiles,
+    theirs: &SceneFiles,
+    settings: sdk::SyncSettings<'_>,
+) -> Result<((SceneState, SceneFiles), Vec<Problem>), String> {
+    // what this side changed since it read the files, written as a save would write it, then
+    // rebased over the new texts
+    let plan = format::write(now, Some(mine), settings)?;
+    let mut problems = Vec::new();
+    let mut texts = Texts { scene: theirs.scene.text().to_owned(), ..Texts::default() };
+    let changed: Vec<&str> = plan.files.iter().map(|f| f.file.as_str()).collect();
+    // a file this side changed: its difference over the new text; a file it did not: the new text
+    let rebase_one = |file: &str,
+                      base: &gz_luadata::LuaDoc,
+                      new_text: &str,
+                      rules: &gz_luadata::DiffRules|
+     -> Result<(String, Vec<gz_luadata::Conflict>), String> {
+        let ours = plan.after.docs.iter().find(|d| d.file == file).map(|d| d.doc.value());
+        let Some(ours) = ours else { return Ok((new_text.to_owned(), Vec::new())) };
+        let (doc, conflicts) = gz_luadata::LuaDoc::rebase_with(
+            &base.value(),
+            &ours,
+            new_text,
+            rules,
+            file,
+            gz_luadata::Limits::scene(),
+        )
+        .map_err(|e| format!("{file}: {}", e.message))?;
+        Ok((doc.text().to_owned(), conflicts))
+    };
+    if changed.contains(&"") {
+        let (doc, conflicts) = gz_luadata::LuaDoc::rebase_with(
+            &mine.scene.value(),
+            &plan.after.scene.value(),
+            theirs.scene.text(),
+            &format::scene_rules(),
+            format::HEADER,
+            gz_luadata::Limits::scene(),
+        )
+        .map_err(|e| e.message)?;
+        texts.scene = doc.text().to_owned();
+        for c in conflicts {
+            problems.push(conflict_problem(&c, "the .scene"));
+        }
+    }
+    for cf in &format::CLASS_FILES {
+        let theirs_doc = theirs.docs.iter().find(|d| d.file == cf.file);
+        let mine_doc = mine.docs.iter().find(|d| d.file == cf.file);
+        let text = match (theirs_doc, mine_doc, changed.contains(&cf.file)) {
+            (Some(t), Some(m), true) => {
+                let (text, conflicts) = rebase_one(cf.file, &m.doc, t.doc.text(), &format::class_rules(cf))?;
+                for c in conflicts {
+                    problems.push(conflict_problem(&c, cf.file));
+                }
+                Some(text)
+            }
+            (Some(t), _, _) => Some(t.doc.text().to_owned()),
+            (None, _, true) => {
+                plan.after.docs.iter().find(|d| d.file == cf.file).map(|d| d.doc.text().to_owned())
+            }
+            (None, _, false) => None,
+        };
+        if let Some(text) = text {
+            texts.files.push((cf.file.to_owned(), text));
+        }
+    }
+    for l in format::layers::LAYERS {
+        texts.layers.push((l.file.to_owned(), format::layers::write(l, &now.bulk)));
+    }
+    let main = RelPath::new("scene.scene").unwrap_or_else(|_| RelPath::root());
+    let dir = RelPath::root();
+    let merged = format::read(&texts, &main, &dir, settings).map_err(|r| r.to_string())?;
+    let mut state = merged.state;
+    state.meta = now.meta.clone();
+    let mut files = theirs.clone();
+    files.base.meta = now.meta.clone();
+    Ok(((state, files), problems))
+}
+
+fn conflict_problem(c: &gz_luadata::Conflict, file: &str) -> Problem {
+    let what = gz_luadata::path::show(&c.path);
+    let p = Problem::warning(
+        "S050",
+        format!(
+            "{file}: '{what}' was changed both here and in the file: the editor's value is kept (save to write it)"
+        ),
+    );
+    match c.span {
+        Some(s) => p.at(s.line, s.column, s.end_line, s.end_column),
+        None => p,
+    }
 }

@@ -87,7 +87,7 @@ def start(cmd: list[str], port: int, show: int, env=None) -> subprocess.Popen:
     deadline = time.monotonic() + 300
     while time.monotonic() < deadline:
         try:
-            if mcp(port, "mod_manifest", timeout=30).get("ok"):
+            if mcp(port, "mod.info", timeout=30).get("ok"):
                 return proc
         except (OSError, ValueError):
             pass
@@ -112,7 +112,7 @@ def close(port: int, proc: subprocess.Popen) -> None:
 
 def build(port: int, target: str) -> tuple[float, dict]:
     t = time.monotonic()
-    r = mcp(port, "mod_export", target=target.replace("\\", "/"), timeout=900)
+    r = mcp(port, "mod.build", target="folder", path=target.replace("\\", "/"), timeout=900)
     return time.monotonic() - t, r
 
 
@@ -134,7 +134,7 @@ def rust(project: str, work: str, scene: str) -> dict:
     try:
         mcp(port, "app.window", action="resize", width=2160, height=1350)
         if scene:
-            out["scene"] = mcp(port, "open_scene", scene=scene, timeout=600).get("ok")
+            out["scene"] = mcp(port, "scene.open", path="rawdata/levels/" + scene, timeout=600).get("ok")
             mcp(port, "ui.tab", action="open", doc="level")
         mcp(port, "view_mode", real_time=True)
         mcp(port, "frame_pacing")

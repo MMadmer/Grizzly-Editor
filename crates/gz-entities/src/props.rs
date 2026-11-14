@@ -213,7 +213,7 @@ pub struct CoverDescription {
 pub struct PropContext {
     pub smart_covers: BTreeMap<SmolStr, CoverDescription>,
     /// `fp_data.story_names` / `spawn_story_names`: the `story_ids` and `spawn_story_ids`
-    /// sections (id = name), `NO STORY ID` / `NO SPAWN STORY ID` for -1 added by the reader.
+    /// sections (id = name), an empty name for -1 (no story id) added by the reader.
     pub story_names: BTreeMap<u32, SmolStr>,
     pub spawn_story_names: BTreeMap<u32, SmolStr>,
     /// The Spawn tool's name of a section (`SectionToEditor`: its `$spawn` list path).
@@ -239,8 +239,8 @@ impl PropContext {
             m.insert(u32::MAX, SmolStr::new(none));
             m
         };
-        self.story_names = read(&mut story.into_iter(), "NO STORY ID");
-        self.spawn_story_names = read(&mut spawn.into_iter(), "NO SPAWN STORY ID");
+        self.story_names = read(&mut story.into_iter(), "");
+        self.spawn_story_names = read(&mut spawn.into_iter(), "");
         self
     }
 

@@ -79,7 +79,7 @@ const TYPES: &[&str] = &[
 
 const ATTRS: &[&str] = &[
     "group", "title", "desc", "use", "docs", "params", "rows", "pins", "wait", "once", "event", "impl",
-    "since", "alias",
+    "since", "alias", "summary",
 ];
 
 /// Whether a name is a catalog type.
@@ -154,6 +154,11 @@ pub struct Kind {
     pub since: i32,
     /// Old names this kind replaces.
     pub alias: Vec<String>,
+    /// The parameters that tell a node or an action of the kind apart at a glance, in order
+    /// (`summary = text`, `summary = section, count`): what its row on the canvas says.
+    pub summary: Vec<String>,
+    /// What each pin means (`pin.<name> = ...`): the pin's tooltip.
+    pub pin_desc: Vec<(String, String)>,
     /// The file the section came from.
     pub source: String,
 }
@@ -194,6 +199,12 @@ impl Kind {
     #[must_use]
     pub fn has_rows(&self) -> bool {
         !self.rows.is_empty()
+    }
+
+    /// What a pin means, as the catalog says it.
+    #[must_use]
+    pub fn pin_text(&self, pin: &str) -> Option<&str> {
+        self.pin_desc.iter().find(|(p, _)| p == pin).map(|(_, d)| d.as_str())
     }
 
     /// A declared (static) pin; `cases` is none.
@@ -273,6 +284,11 @@ pub fn parse_text(text: &str, source: &str, kinds: &mut Vec<Kind>, header: &mut 
         }
         let Some(k) = cur.and_then(|i| kinds.get_mut(i)) else { continue };
 
+        if let Some(pname) = key.strip_prefix("pin.") {
+            k.pin_desc.retain(|(p, _)| p != pname);
+            k.pin_desc.push((pname.to_owned(), val.to_owned()));
+            continue;
+        }
         if let Some(rname) = key.strip_prefix("row.") {
             if row_names.iter().any(|n| n == rname) && !k.rows.iter().any(|p| p.name == rname) {
                 k.rows.push(parse_param(rname, val));
@@ -342,6 +358,7 @@ pub fn parse_text(text: &str, source: &str, kinds: &mut Vec<Kind>, header: &mut 
             "impl" => k.implementation = val.to_owned(),
             "since" => k.since = i32::try_from(c_atoi(val)).unwrap_or(0),
             "alias" => k.alias = split(val, ','),
+            "summary" => k.summary = split(val, ','),
             _ => {}
         }
     }
@@ -538,6 +555,13 @@ fn kind_json(k: &Kind) -> Json {
     if !k.alias.is_empty() {
         o.insert("alias".into(), json!(k.alias));
     }
+    if !k.summary.is_empty() {
+        o.insert("summary".into(), json!(k.summary));
+    }
+    if !k.pin_desc.is_empty() {
+        let pins: Map<String, Json> = k.pin_desc.iter().map(|(p, d)| (p.clone(), json!(d))).collect();
+        o.insert("pin_desc".into(), Json::Object(pins));
+    }
     o.insert("source".into(), json!(k.source));
     Json::Object(o)
 }
@@ -629,5 +653,38 @@ mod tests {
         assert_eq!(j["source"], "bundled");
         assert_eq!(j["count"], 3);
         assert_eq!(j["kinds"][0]["use"][0], "trigger");
+    }
+
+    /// The bundled catalog's `summary` names parameters of its kind, and its pin texts name pins
+    /// the kind has: what the canvas prints and its pins' tooltips.
+    #[test]
+    fn the_bundled_summaries_and_pin_texts_name_what_the_kind_has() {
+        let bytes = include_bytes!("../../../gamedata/configs/nq/catalog.ltx");
+        let text = gz_base::text::cp1251_to_utf8(bytes).into_owned();
+        let c = Catalog::assemble(&[SourceFile { label: "bundled".into(), text }], false, None, 1);
+        let mut with_summary = 0;
+        for k in c.kinds() {
+            for name in &k.summary {
+                assert!(k.param(name).is_some(), "{}: summary names '{name}', no parameter of it", k.id);
+            }
+            with_summary += usize::from(!k.summary.is_empty());
+            for (pin, desc) in &k.pin_desc {
+                assert!(k.has_pin(pin), "{}: pin.{pin} names no pin of it", k.id);
+                assert!(!desc.is_empty());
+            }
+        }
+        // every kind with parameters says which of them tells it apart
+        let unsaid: Vec<&str> = c
+            .kinds()
+            .iter()
+            .filter(|k| !k.params.is_empty() && k.summary.is_empty())
+            .map(|k| k.id.as_str())
+            .collect();
+        assert!(unsaid.is_empty(), "no summary: {unsaid:?}");
+        assert!(with_summary > 100);
+        assert_eq!(
+            c.find("wait.when").and_then(|k| k.pin_text("timeout")),
+            Some("When the timeout runs out first")
+        );
     }
 }

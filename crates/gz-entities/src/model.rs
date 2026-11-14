@@ -5,6 +5,7 @@
 //! constructors set without looking at the section.
 
 use glam::Vec3;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use smol_str::SmolStr;
 
@@ -65,7 +66,8 @@ pub const NO_RANK: i32 = -i32::MAX;
 pub const NO_COMMUNITY_INDEX: i32 = -1;
 
 /// One shape of a `CSE_Shape`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Shape {
     Sphere {
         center: Vec3,
@@ -84,15 +86,42 @@ pub enum Shape {
 
 pub type Shapes = SmallVec<[Shape; 1]>;
 
+/// A `SmallVec` read and written as a list.
+mod small_vec {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use smallvec::{Array, SmallVec};
+
+    pub fn serialize<A, S>(v: &SmallVec<A>, s: S) -> Result<S::Ok, S::Error>
+    where
+        A: Array,
+        A::Item: Serialize,
+        S: Serializer,
+    {
+        v.as_slice().serialize(s)
+    }
+
+    pub fn deserialize<'de, A, D>(d: D) -> Result<SmallVec<A>, D::Error>
+    where
+        A: Array,
+        A::Item: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        Ok(SmallVec::from_vec(Vec::<A::Item>::deserialize(d)?))
+    }
+}
+
 /// `CSE_ALifeObject`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ALife {
     pub graph_id: u16,
     pub distance: f32,
     pub direct_control: bool,
     pub node_id: u32,
+    #[serde(rename = "alife_flags")]
     pub flags: u32,
     /// `m_ini_string`: the custom data.
+    #[serde(rename = "custom_data")]
     pub ini_string: SmolStr,
     pub story_id: u32,
     pub spawn_story_id: u32,
@@ -114,10 +143,13 @@ impl Default for ALife {
 }
 
 /// `CSE_Visual`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Visual {
+    #[serde(rename = "visual")]
     pub name: SmolStr,
     pub startup_animation: SmolStr,
+    #[serde(rename = "visual_flags")]
     pub flags: u8,
 }
 
@@ -143,7 +175,8 @@ pub fn visual_name(name: &str) -> SmolStr {
 
 /// One bone of saved physics data. Position and rotation stay in the 8-bit form the packet
 /// holds, so they are written back as they were read.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SavedBone {
     pub position: [u8; 3],
     pub rotation: [u8; 4],
@@ -151,7 +184,8 @@ pub struct SavedBone {
 }
 
 /// `SPHBonesData`: the bones a physics shell was saved with.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SavedBones {
     pub bones_mask: u64,
     pub root_bone: u16,
@@ -186,7 +220,8 @@ impl SavedBones {
 }
 
 /// `CSE_PHSkeleton`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PhSkeleton {
     pub flags: u8,
     pub source_id: u16,
@@ -200,7 +235,8 @@ impl Default for PhSkeleton {
 }
 
 /// `CSE_ALifeGroupAbstract`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Group {
     pub create_spawn_positions: bool,
     pub count: u16,
@@ -215,7 +251,8 @@ impl Default for Group {
 
 /// The physics state an item or a physic object sends in its update (`SPHNetState`), with the
 /// item count it is sent under.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SyncState {
     pub num_items: u8,
     pub enabled: bool,
@@ -243,7 +280,8 @@ impl Default for SyncState {
 }
 
 /// `CSE_ALifeInventoryItem`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct InventoryItem {
     pub condition: f32,
     pub upgrades: Vec<SmolStr>,
@@ -260,7 +298,8 @@ impl Default for InventoryItem {
 }
 
 /// `CSE_ALifeTraderAbstract`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TraderAbstract {
     pub money: u32,
     pub specific_character: SmolStr,
@@ -294,7 +333,8 @@ impl Default for TraderAbstract {
 }
 
 /// `CSE_ALifeCreatureAbstract`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Creature {
     pub team: u8,
     pub squad: u8,
@@ -335,7 +375,8 @@ impl Default for Creature {
 }
 
 /// `CSE_ALifeMonsterAbstract`, with the one field `CSE_ALifeMonsterBase` adds.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Monster {
     pub out_space_restrictors: SmolStr,
     pub in_space_restrictors: SmolStr,
@@ -371,9 +412,12 @@ impl Default for Monster {
 
 /// `CSE_ALifeHumanAbstract` and `CSE_ALifeHumanStalker`: the brain's preferences and the start
 /// dialog.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Human {
+    #[serde(with = "small_vec")]
     pub equipment_preferences: SmallVec<[u8; 5]>,
+    #[serde(with = "small_vec")]
     pub weapon_preferences: SmallVec<[u8; 4]>,
     pub start_dialog: SmolStr,
 }
@@ -390,7 +434,8 @@ impl Default for Human {
 }
 
 /// `CSE_ALifeGraphPoint`.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct GraphPoint {
     pub connection_level_name: SmolStr,
     pub connection_point_name: SmolStr,
@@ -398,7 +443,8 @@ pub struct GraphPoint {
 }
 
 /// `CSE_Temporary`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Temporary {
     pub node_id: u32,
 }
@@ -410,14 +456,16 @@ impl Default for Temporary {
 }
 
 /// `CSE_ALifeSpaceRestrictor`.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Restrictor {
     /// `RestrictionSpace::ERestrictorTypes`.
     pub restrictor_type: u8,
 }
 
 /// `CSE_ALifeLevelChanger`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LevelChanger {
     pub next_graph_id: u16,
     pub next_node_id: u32,
@@ -443,7 +491,8 @@ impl Default for LevelChanger {
 }
 
 /// `CSE_ALifeObjectPhysic`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Physic {
     /// `EPOType`.
     pub kind: u32,
@@ -459,7 +508,8 @@ impl Default for Physic {
 }
 
 /// `CSE_ALifeObjectHangingLamp`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Lamp {
     pub flags: u16,
     pub color: u32,
@@ -512,13 +562,15 @@ impl Default for Lamp {
 }
 
 /// `CSE_ALifeHelicopter`.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Helicopter {
     pub engine_sound: SmolStr,
 }
 
 /// `CSE_ALifeCar`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Car {
     pub health: f32,
     /// `SDoorState`: open state and health.
@@ -534,7 +586,8 @@ impl Default for Car {
 }
 
 /// `CSE_ALifeObjectBreakable`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Breakable {
     pub health: f32,
 }
@@ -546,7 +599,8 @@ impl Default for Breakable {
 }
 
 /// `CSE_ALifeObjectClimable`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Climable {
     pub material: SmolStr,
 }
@@ -558,20 +612,23 @@ impl Default for Climable {
 }
 
 /// `CSE_ALifeStationaryMgun`: update only.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct StationaryMgun {
     pub working: bool,
     pub dest_enemy_dir: Vec3,
 }
 
 /// `CSE_ALifeTeamBaseZone`.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TeamBase {
     pub team: u8,
 }
 
 /// `CSE_ALifeInventoryBox`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct InventoryBox {
     pub can_take: bool,
     pub closed: bool,
@@ -585,7 +642,8 @@ impl Default for InventoryBox {
 }
 
 /// `CSE_ALifeItemTorch`: update only.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Torch {
     pub active: bool,
     pub nightvision_active: bool,
@@ -593,14 +651,16 @@ pub struct Torch {
 }
 
 /// `CSE_ALifeItemAmmo`.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Ammo {
     pub elapsed: u16,
     pub box_size: u16,
 }
 
 /// `CSE_ALifeItemWeapon` and the classes derived from it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Weapon {
     pub a_current: u16,
     pub a_elapsed: u16,
@@ -649,7 +709,8 @@ impl Default for Weapon {
 }
 
 /// `CSE_ALifeItemArtefact`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Artefact {
     pub anomaly_value: f32,
 }
@@ -661,7 +722,8 @@ impl Default for Artefact {
 }
 
 /// `CSE_ALifeItemPDA`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Pda {
     pub original_owner: u16,
     pub specific_character: SmolStr,
@@ -679,13 +741,15 @@ impl Default for Pda {
 }
 
 /// `CSE_ALifeItemDocument`.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Document {
     pub doc: SmolStr,
 }
 
 /// `CSE_ALifeCustomZone`, `CSE_ALifeAnomalousZone` and `CSE_ALifeZoneVisual`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Zone {
     /// The game's `m_maxPower`; the editor's classes write 0 here.
     pub max_power: f32,
@@ -716,7 +780,8 @@ impl Default for Zone {
 }
 
 /// `m_AliveState` of the actor's update.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AliveState {
     pub enabled: u8,
     pub angular_vel: Vec3,
@@ -728,7 +793,8 @@ pub struct AliveState {
 }
 
 /// `CSE_ALifeCreatureActor`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Actor {
     pub holder_id: u16,
     // update only
@@ -761,7 +827,8 @@ impl Default for Actor {
 }
 
 /// `CSE_ALifeMonsterRat`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Rat {
     pub eye_fov: f32,
     pub eye_range: f32,
@@ -813,7 +880,8 @@ impl Default for Rat {
 }
 
 /// `CSE_ALifeMonsterZombie`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Zombie {
     pub eye_fov: f32,
     pub eye_range: f32,
@@ -847,13 +915,15 @@ impl Default for Zombie {
 }
 
 /// `CSE_ALifeOnlineOfflineGroup`: member ids, sorted and unique as the engine keeps them.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Squad {
     pub members: Vec<u16>,
 }
 
 /// `CSE_SmartCover`.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SmartCover {
     pub description: SmolStr,
     pub hold_position_time: f32,
@@ -867,15 +937,22 @@ pub struct SmartCover {
 macro_rules! parts {
     ($( $(#[$doc:meta])* $name:ident, $name_mut:ident : $ty:ident; )*) => {
         /// The parts of a decoded entity. Which ones exist is decided by its class.
-        #[derive(Clone, Debug, Default, PartialEq)]
+        #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+        #[serde(default)]
         pub struct Object {
+            #[serde(flatten)]
             pub(crate) alife: ALife,
+            #[serde(flatten)]
             pub(crate) visual: Visual,
             pub(crate) motion: SmolStr,
+            #[serde(with = "small_vec")]
             pub(crate) shapes: Shapes,
             pub(crate) skeleton: PhSkeleton,
             pub(crate) script: Script,
-            $( pub(crate) $name: Option<Box<$ty>>, )*
+            $(
+                #[serde(skip_serializing_if = "Option::is_none")]
+                pub(crate) $name: Option<Box<$ty>>,
+            )*
         }
 
         impl Object {

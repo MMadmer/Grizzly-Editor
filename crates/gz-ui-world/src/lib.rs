@@ -24,7 +24,7 @@
 //!   the frames only look at; a list that is still loading shows busy.
 //! - [`item_picker`] - the one item picker both tabs use (a kit row, a stock row, the mode's
 //!   start kit).
-//! - [`register`] - `characters_view`, `world_view`; [`install`] - the two tabs and their Mod menu
+//! - [`register`] - `characters.view`, `world.view`; [`install`] - the two tabs and their Mod menu
 //!   rows (at `gz_ui_mod::mod_menu_slot`).
 //!
 //! Widgets the kit lacks, local to this crate: [`picker::local_list_picker`] (a long list in a
@@ -60,9 +60,6 @@ use gz_ui::Icon;
 
 pub use picker::item_picker;
 
-/// The crate's name, as the registry records who registered a command.
-const AREA: &str = "gz-ui-world";
-
 /// Plugs the Characters and World Rules tabs and their Mod menu rows into the shell.
 pub fn install(b: &mut ShellBuilder) {
     characters::install(b);
@@ -83,8 +80,7 @@ pub fn install(b: &mut ShellBuilder) {
     gz_ui_mod::menu::row(b, gz_ui_mod::menu::WORLD_RULES, None);
 }
 
-/// The commands of this package: `characters_view`, `world_view`.
+/// The commands of this package: `characters.view`, `world.view`.
 pub fn register(reg: &mut Registry) {
-    reg.add(AREA, "characters_view", view_cmd::characters_view);
-    reg.add(AREA, "world_view", view_cmd::world_view);
+    view_cmd::register(reg);
 }

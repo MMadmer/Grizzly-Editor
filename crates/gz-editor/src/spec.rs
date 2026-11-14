@@ -319,10 +319,54 @@ impl Shape {
 
 fn doc_of(s: &Value) -> String {
     // a doc comment's first paragraph, on one line
-    s.get("description")
+    let own = s
+        .get("description")
         .and_then(Value::as_str)
-        .map(|d| d.split("\n\n").next().unwrap_or(d).split_whitespace().collect::<Vec<_>>().join(" "))
-        .unwrap_or_default()
+        .map(|d| {
+            d.split(
+                "
+
+",
+            )
+            .next()
+            .unwrap_or(d)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+        })
+        .unwrap_or_default();
+    if !own.is_empty() {
+        return own;
+    }
+    // a choice whose every value says what it is documents itself: "a: ...; b: ..."
+    for key in ["oneOf", "anyOf"] {
+        let Some(alts) = s.get(key).and_then(Value::as_array) else { continue };
+        let said: Vec<String> = alts
+            .iter()
+            .filter_map(|a| {
+                let value = a.get("const").or_else(|| single_enum(a))?.as_str()?;
+                let what = a.get("description").and_then(Value::as_str)?;
+                let what = what
+                    .split(
+                        "
+
+",
+                    )
+                    .next()
+                    .unwrap_or(what)
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                Some(format!("{value}: {}", what.trim_end_matches('.')))
+            })
+            .collect();
+        if !said.is_empty()
+            && said.len() == alts.iter().filter(|a| a.get("type") != Some(&json!("null"))).count()
+        {
+            return format!("{}.", said.join("; "));
+        }
+    }
+    String::new()
 }
 
 /// How a value of this schema is written, and what reading it has to know.

@@ -1,14 +1,14 @@
-//! The exports over MCP (the wire is `EditorModScene::McpExport*`), the build's bake of the open
-//! scene and the `E201` check.
+//! The module's level layers of the open scene - the spawn layer, the collision and visual
+//! overlays, the level cut - as `level.export` runs them (`gz-levelbuild` registers the command),
+//! the bake of the whole scene the level build and the module build run, and the `E201` check.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use gz_base::Origin;
 use gz_build::BuildChecks;
 use gz_editor::fsx::WriteGuard;
-use gz_editor::{Args, ArgsExt, CmdError, Editor, ProjectSession, Registry, Reply, json};
+use gz_editor::{CmdError, Editor, ProjectSession, Reply, Value, json};
 use gz_game::GameLink;
 use gz_scene::library::{Library, LibraryObject};
 use gz_scene::{Object, SceneService, SceneState};
@@ -21,14 +21,25 @@ use crate::service::ExportService;
 use crate::spawn::{self, SpawnBake, SpawnInput};
 use crate::starts;
 
-const AREA: &str = "gz-export-level";
-
-/// Registers `mod_export_spawn`, `mod_export_xcform`, `mod_export_cut`, `mod_export_ogf_probe`.
-pub fn register(reg: &mut Registry) {
-    reg.add(AREA, "mod_export_spawn", |ed, a, o| async move { export_spawn(&ed, &a, o).await });
-    reg.add(AREA, "mod_export_xcform", |ed, a, _o| async move { export_xcform(&ed, &a).await });
-    reg.add(AREA, "mod_export_cut", |ed, a, _o| async move { export_cut(&ed, &a).await });
-    reg.add(AREA, "mod_export_ogf_probe", |ed, a, _o| async move { export_ogf(&ed, &a).await });
+/// What an export of a level layer takes.
+#[derive(Clone, Debug, Default)]
+pub struct Layer {
+    /// The level the layer is for; `None`: the open scene's.
+    pub level: Option<String>,
+    /// The objects it is made of, by name; `None`: the selection.
+    pub objects: Option<Vec<String>>,
+    /// Every object of the scene instead.
+    pub all: bool,
+    /// The spawn layer: only the spawn points of this section.
+    pub section: Option<String>,
+    /// The spawn layer: `add`, `remove` or both (left out).
+    pub mode: Option<String>,
+    /// The collision overlay: the sector its faces are in.
+    pub sector: i64,
+    /// The level cut: also hide the game's visuals that only touch a box.
+    pub overlap: bool,
+    /// The level cut: the boxes grown by this many centimetres.
+    pub grow_cm: i64,
 }
 
 /// Fills `gz-build`'s bake slot with the mirror pass of the open scene, and `gz-world`'s
@@ -54,17 +65,6 @@ pub fn install(editor: &Arc<Editor>) {
     });
 }
 
-/// `ArgBool`: a flag is `true` only when it says so; anything else, absent included, is
-/// `default` only when absent.
-fn arg_bool(a: &Args, key: &str, default: bool) -> bool {
-    if a.has(key) { a.bool(key).unwrap_or(false) } else { default }
-}
-
-/// `ArgInt`: `atoi` of what follows the key.
-fn arg_int(a: &Args, key: &str, default: i64) -> i64 {
-    if a.has(key) { a.i64(key).unwrap_or(0) } else { default }
-}
-
 /// The open project, the scene's snapshot and the level an export is for.
 struct Ctx {
     session: Arc<ProjectSession>,
@@ -75,15 +75,27 @@ struct Ctx {
     level: String,
 }
 
-fn ctx(editor: &Arc<Editor>, a: &Args) -> Result<Ctx, CmdError> {
+fn ctx(editor: &Arc<Editor>, l: &Layer) -> Result<Ctx, CmdError> {
     let session = editor.project()?;
     let svc = SceneService::of(editor)?;
-    let snap = svc.store.snapshot();
+    let mut snap = svc.store.snapshot();
     if !snap.valid {
-        return Err(CmdError::invalid("no scene"));
+        return Err(CmdError::not_found("No scene is open."));
     }
-    let level = resolve_level(a.str("level"), &snap.meta.name())
+    let level = resolve_level(l.level.as_deref(), &snap.meta.name())
         .ok_or_else(|| CmdError::invalid("no level name - open a scene or pass 'level'"))?;
+    // the objects named stand for the selection the exports read
+    if let Some(names) = &l.objects {
+        let mut state = snap.state.clone();
+        state.selection = gz_store::imbl::OrdSet::new();
+        for n in names {
+            let o = state
+                .find_relaxed(n)
+                .ok_or_else(|| CmdError::not_found(format!("there is no object '{n}' in the scene")))?;
+            state.selection.insert(o.id);
+        }
+        snap = Arc::new(Snap { rev: snap.rev, edit: snap.edit, state });
+    }
     let guard = gz_project::Project::of(editor).map(|(_, p)| p.write_guard(None)).unwrap_or_default();
     Ok(Ctx { session, guard, svc, snap, level })
 }
@@ -175,19 +187,13 @@ async fn run_spawn(
     Ok(SpawnRun { bake, path })
 }
 
-async fn export_spawn(editor: &Arc<Editor>, a: &Args, _o: Origin) -> Reply {
-    let c = ctx(editor, a)?;
-    let selected_only = arg_bool(a, "selected_only", true);
-    let run = run_spawn(
-        editor,
-        &c,
-        selected_only,
-        a.text("section").map(str::to_owned),
-        a.text("mode").map(str::to_owned),
-        false,
-    )
-    .await
-    .map_err(CmdError::invalid)?;
+/// The spawn layer of the selection (or the objects named, or the whole scene), merged into the
+/// level's `.xspawn`.
+pub async fn export_spawn(editor: &Arc<Editor>, l: &Layer) -> Reply {
+    let c = ctx(editor, l)?;
+    let run = run_spawn(editor, &c, !l.all, l.section.clone(), l.mode.clone(), false)
+        .await
+        .map_err(|e| CmdError::new("failed", e))?;
     let r = &run.bake.result;
     Ok(json!({
         "exported": r.exported,
@@ -197,7 +203,7 @@ async fn export_spawn(editor: &Arc<Editor>, a: &Args, _o: Origin) -> Reply {
         "starts": r.starts,
         "paths": r.paths,
         "orders": r.orders,
-        // the C++ Bake dialog's "Base objects removed" row and its missing-model warning
+        // the bake's "Base objects removed" row and its missing-model warning
         "missing": r.missing,
         "removed": r.removed,
         "path": run.path.as_deref().map(json_path).unwrap_or_default(),
@@ -206,10 +212,11 @@ async fn export_spawn(editor: &Arc<Editor>, a: &Args, _o: Origin) -> Reply {
     }))
 }
 
-async fn export_xcform(editor: &Arc<Editor>, a: &Args) -> Reply {
-    let c = ctx(editor, a)?;
-    let sector = arg_int(a, "sector", 0);
-    let selected_only = arg_bool(a, "selected_only", true);
+/// The collision overlay (`levels\<level>\overlay.xcform`) of the selection's static objects.
+pub async fn export_collision(editor: &Arc<Editor>, l: &Layer) -> Reply {
+    let c = ctx(editor, l)?;
+    let sector = l.sector;
+    let selected_only = !l.all;
     let lib = library(editor, &c.svc, &c.snap).await;
     let (root, level) = (c.session.root.clone(), c.level.clone());
     let existing = editor
@@ -226,7 +233,7 @@ async fn export_xcform(editor: &Arc<Editor>, a: &Args) -> Reply {
             overlay::collision(&snap, selected_only, sector, &look, &existing)
         })
         .await
-        .map_err(|e| CmdError::invalid(e.0))?;
+        .map_err(|e| CmdError::new("failed", e.0))?;
     let bytes = made.form.write();
     let (root, level, guard) = (c.session.root.clone(), c.level.clone(), c.guard.clone());
     let path = editor
@@ -235,7 +242,7 @@ async fn export_xcform(editor: &Arc<Editor>, a: &Args) -> Reply {
             gather::write_level_file(&root, &level, "overlay.xcform", &bytes, "overlay.xcform", &guard)
         })
         .await
-        .map_err(CmdError::invalid)?;
+        .map_err(|e| CmdError::new("io", e))?;
     editor.log.info(format!(
         "* [XMS] collision overlay: {} object(s), {} tri(s) -> {}",
         made.objects_used,
@@ -247,12 +254,12 @@ async fn export_xcform(editor: &Arc<Editor>, a: &Args) -> Reply {
     )
 }
 
-async fn export_cut(editor: &Arc<Editor>, a: &Args) -> Reply {
-    let c = ctx(editor, a)?;
-    let selected_only = arg_bool(a, "selected_only", true);
-    let overlap = arg_bool(a, "overlap", false);
-    // centimetres
-    let grow = arg_int(a, "grow", 0) as f32 / 100.0;
+/// The level cut: the selection's boxes hide the game's geometry and visuals there.
+pub async fn export_cut(editor: &Arc<Editor>, l: &Layer) -> Reply {
+    let c = ctx(editor, l)?;
+    let selected_only = !l.all;
+    let overlap = l.overlap;
+    let grow = l.grow_cm as f32 / 100.0;
     let lib = library(editor, &c.svc, &c.snap).await;
     let (root, level) = (c.session.root.clone(), c.level.clone());
     let (xcform, ltx) = editor
@@ -276,7 +283,7 @@ async fn export_cut(editor: &Arc<Editor>, a: &Args) -> Reply {
             overlay::cut(&snap, selected_only, overlap, grow, &bounds, &xcform, &ltx)
         })
         .await
-        .map_err(|e| CmdError::invalid(e.0))?;
+        .map_err(|e| CmdError::new("failed", e.0))?;
     let bytes = made.form.write();
     let total = made.form.cuts.len();
     let (root, level, guard) = (c.session.root.clone(), c.level.clone(), c.guard.clone());
@@ -298,7 +305,7 @@ async fn export_cut(editor: &Arc<Editor>, a: &Args) -> Reply {
             Ok(p)
         })
         .await
-        .map_err(CmdError::invalid)?;
+        .map_err(|e| CmdError::new("io", e))?;
     editor.log.info(format!(
         "* [XMS] level cut: {} new volume(s), {total} total -> {} (+ hide entries in overlay_visuals.ltx)",
         made.added,
@@ -307,16 +314,18 @@ async fn export_cut(editor: &Arc<Editor>, a: &Args) -> Reply {
     Ok(json!({ "cuts": made.added, "overlap": overlap, "path": json_path(&path) }))
 }
 
-/// `\\computer\user`, the build name the C++ stamps into an exported model.
+/// `\\computer\user`, the build name stamped into an exported model.
 fn build_name() -> String {
     let pc = std::env::var("COMPUTERNAME").unwrap_or_default();
     let user = std::env::var("USERNAME").unwrap_or_default();
     format!("\\\\{pc}\\{user}")
 }
 
-async fn export_ogf(editor: &Arc<Editor>, a: &Args) -> Reply {
-    let c = ctx(editor, a)?;
-    let selected_only = arg_bool(a, "selected_only", true);
+/// The visual overlay: each static object of the selection as a model in world space, with its
+/// registry entry.
+pub async fn export_visuals(editor: &Arc<Editor>, l: &Layer) -> Reply {
+    let c = ctx(editor, l)?;
+    let selected_only = !l.all;
     let lib = library(editor, &c.svc, &c.snap).await;
     let dir = gather::level_dir(&c.session.root, &c.level);
     let ltx_path = dir.join("overlay_visuals.ltx");
@@ -326,8 +335,7 @@ async fn export_ogf(editor: &Arc<Editor>, a: &Args) -> Reply {
         .io(move || std::fs::read(&lp).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default())
         .await;
     let snap = c.snap.clone();
-    // the game's materials: a surface whose material the game lacks is not exported (C++
-    // ExportObjectOGF against GameMaterialLibrary)
+    // the game's materials: a surface whose material the game lacks is not exported
     let materials = match gz_game::read_game_or_bundled(editor, "gamemtl.xr").await {
         Ok((bytes, _)) => {
             editor.exec.cpu(move || gz_fmt_xr::GameMaterials::read(&bytes).ok().map(Arc::new)).await
@@ -344,7 +352,7 @@ async fn export_ogf(editor: &Arc<Editor>, a: &Args) -> Reply {
     let visuals_dir = dir.join("visuals");
     let made = match made {
         Ok(m) => m,
-        Err(e) => return Err(CmdError::invalid(e.0)),
+        Err(e) => return Err(CmdError::new("failed", e.0)),
     };
     log_lines(editor, &made.log);
     let vd = visuals_dir.clone();
@@ -363,12 +371,13 @@ async fn export_ogf(editor: &Arc<Editor>, a: &Args) -> Reply {
             Ok::<_, String>(exec.par_io(files, |(n, p, b)| (n, gz_editor::fsx::write_atomic(&p, &b).is_ok())))
         })
         .await
-        .map_err(CmdError::invalid)?;
+        .map_err(|e| CmdError::new("io", e))?;
     let names: Vec<String> = written.iter().filter(|(_, ok)| *ok).map(|(n, _)| n.clone()).collect();
     let skipped_failed = made.skipped_failed + u32::try_from(written.len() - names.len()).unwrap_or(0);
     if names.is_empty() {
-        return Err(CmdError::invalid(
-            "nothing exported - only skeleton/dynamic or unresolvable objects in the selection",
+        return Err(CmdError::new(
+            "failed",
+            "Nothing was exported: the selection holds only skeleton, dynamic or unresolvable objects.",
         ));
     }
     let ltx = overlay::registry(&registry_text, &names);
@@ -381,7 +390,7 @@ async fn export_ogf(editor: &Arc<Editor>, a: &Args) -> Reply {
                 .map_err(|_| "visuals exported but can't write overlay_visuals.ltx".to_owned())
         })
         .await
-        .map_err(CmdError::invalid)?;
+        .map_err(|e| CmdError::new("io", e))?;
     editor.log.info(format!("* [XMS] visual overlay: {} ogf(s) -> {}", names.len(), visuals_dir.display()));
     Ok(json!({
         "exported": names.len(),
@@ -393,9 +402,32 @@ async fn export_ogf(editor: &Arc<Editor>, a: &Args) -> Reply {
     }))
 }
 
-/// `BakeCurrentSceneSpawn`: the open scene mirrored into its level's `.xspawn` before a build,
-/// as a note - a line for the layer and a `WARNING: ` line per thing left out. Empty without an
-/// open scene.
+/// The spawn layer of the whole scene `snap` (the level build's step): the level's `.xspawn` made
+/// again from what the scene holds. Answers what was baked, or why it was not.
+pub async fn bake_layer(
+    editor: &Arc<Editor>,
+    session: &Arc<ProjectSession>,
+    snap: Arc<Snap<SceneState>>,
+) -> Result<Value, String> {
+    let svc = session.services.get::<SceneService>().ok_or("no scene")?;
+    let level = resolve_level(None, &snap.meta.name()).ok_or("the scene has no name yet: save it first")?;
+    let guard =
+        session.services.get::<gz_project::Project>().map(|p| p.write_guard(None)).unwrap_or_default();
+    let c = Ctx { session: session.clone(), guard, svc, snap, level: level.clone() };
+    let run = run_spawn(editor, &c, false, None, None, true).await?;
+    let r = &run.bake.result;
+    Ok(json!({
+        "level": level,
+        "exported": r.exported,
+        "missing": r.missing,
+        "invisible": r.invisible,
+        "warnings": r.warnings,
+        "path": run.path.as_deref().map(json_path).unwrap_or_default(),
+    }))
+}
+
+/// The open scene mirrored into its level's `.xspawn` before a module build, as a note - a line
+/// for the layer and a `WARNING: ` line per thing left out. Empty without an open scene.
 async fn bake_note(editor: &Arc<Editor>, session: &Arc<ProjectSession>) -> String {
     let Some(svc) = session.services.get::<SceneService>() else { return String::new() };
     let snap = svc.store.snapshot();

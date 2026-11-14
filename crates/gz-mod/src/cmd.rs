@@ -1,34 +1,50 @@
-//! The manifest's commands. The wire is the C++ handlers' (`EditorModManifest.cpp`, reached
-//! from `LevelMcpMod.cpp`): `mod_manifest`, `mod_set_manifest`, `mod_exclude`, `mod_commands`.
+//! The manifest's commands: `mod.set` (what a text edit of `mod.ltx` cannot do in one step -
+//! the rules checked, the answer with the problems) and `mod.exclude` (the content browser's
+//! Exclude from Build). `mod.info`, which also says what a build would ship, is `gz-build`'s.
+//! An agent may equally edit `mod.ltx` itself and run `asset.check`.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use gz_base::{Origin, RelPath};
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Registry, Reply};
+use gz_base::{Origin, Problem, RelPath};
+use gz_editor::{CmdError, Editor, Registry, Reply, Spec};
 use gz_project::{EntryKind, FileTree, Project, ProjectHooks};
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::doc::entry_line;
 use crate::edit::Edit;
-use crate::model::{Command, GlobalVar, Manifest};
+use crate::model::{Command, GlobalVar, Manifest, ProvidesMode};
 use crate::rules::{
-    normalize_github_repo, valid_global_name, validate_github_repo, validate_id, validate_mode_id,
+    normalize_github_repo, valid_global_name, validate, validate_github_repo, validate_id, validate_mode_id,
     validate_version, validate_website,
 };
 use crate::service::{ArgCx, ManifestArgs, ManifestFields, ManifestService, ManifestState, command_check};
 use crate::text::{display_value, split_list, trim};
 use crate::{commands, io};
 
-const AREA: &str = "gz-mod";
-
 /// The room the Mod Settings form gives the description.
 const DESCRIPTION_ROOM: usize = 4096;
 
 pub fn register(reg: &mut Registry) {
-    reg.add(AREA, "mod_manifest", mod_manifest);
-    reg.add(AREA, "mod_set_manifest", mod_set_manifest);
-    reg.add(AREA, "mod_exclude", mod_exclude);
-    reg.add(AREA, "mod_commands", mod_commands);
+    reg.area("mod", "The module: its manifest, what a build ships, building and packaging it");
+    reg.cmd(
+        Spec::write(
+            "mod.set",
+            "Changes keys of mod.ltx by section, checked by the manifest's rules; answers the manifest and its problems.",
+        )
+        .example(r#"set={"module":{"version":"1.2.0"},"update":{"github":"owner/repo"}}"#),
+        mod_set,
+    );
+    reg.cmd(
+        Spec::write(
+            "mod.exclude",
+            "Leaves a file or folder of the project out of the build, or takes it back in ([exclude] of mod.ltx).",
+        )
+        .example("path=docs on=true"),
+        mod_exclude,
+    );
 }
 
 /// Hangs the area on the editor: a project that opens or is created without `mod.ltx` gets
@@ -43,20 +59,12 @@ fn refuse(message: impl Into<String>) -> CmdError {
     CmdError::new("refused", message)
 }
 
-/// A string argument the way `GetArg` read it: present means given, even empty; a bare number
-/// or flag is its text.
-fn arg(args: &Args, key: &str) -> Option<String> {
-    match args.get(key)? {
-        Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        Value::Bool(b) => Some(b.to_string()),
-        _ => None,
-    }
-}
-
-async fn open(ed: &Arc<Editor>) -> Result<(Arc<Project>, Arc<ManifestService>), CmdError> {
+/// The open project's manifest service, the file read again: a command answers what the file
+/// says now.
+pub async fn open_manifest(ed: &Arc<Editor>) -> Result<(Arc<Project>, Arc<ManifestService>), CmdError> {
     let (session, project) = Project::of(ed)?;
     let service = ManifestService::of_session(ed, &session).await?;
+    service.sync().await?;
     Ok((project, service))
 }
 
@@ -87,7 +95,8 @@ fn commands_json(commands: &[Command]) -> Value {
     )
 }
 
-/// The `mod_manifest` answer, fields in the C++ order. `world` comes from the area that owns it.
+/// The manifest as data: what `mod.info` and `mod.set` answer under `manifest`. `world` comes
+/// from the area that owns it.
 #[must_use]
 pub fn manifest_json(editor: &Editor, state: &ManifestState, m: &Manifest, tree: &FileTree) -> Value {
     let world = ManifestFields::of(editor).get("world").map_or(Value::Null, |f| f(state));
@@ -121,282 +130,469 @@ pub fn manifest_json(editor: &Editor, state: &ManifestState, m: &Manifest, tree:
         "world": world,
         "vars": vars,
         "commands": commands_json(&m.commands),
-        "pda_layout": m.pda_layout,
+        "pda_layout": m.pda_layout.replace('\\', "/"),
         "has_dirs": Value::Object(dirs),
     })
 }
 
-async fn manifest_reply(ed: &Arc<Editor>, project: &Project, service: &ManifestService) -> Reply {
+/// The manifest's own problems and its commands', placed in `mod.ltx`.
+pub async fn manifest_problems(ed: &Arc<Editor>, m: &Manifest) -> (Vec<String>, Vec<Problem>) {
+    let Ok(session) = ed.project() else { return (Vec::new(), Vec::new()) };
+    let mut problems = validate(m);
+    let (functions, commands) = command_check(ed, &session, m).await;
+    problems.extend(commands);
+    let file = RelPath::new(crate::model::FILE).ok();
+    for p in &mut problems {
+        if p.file.is_none() {
+            p.file.clone_from(&file);
+        }
+    }
+    (functions, problems)
+}
+
+/// `{manifest, problems, functions}` of the manifest as the store holds it now.
+pub async fn manifest_answer(ed: &Arc<Editor>, project: &Project, service: &ManifestService) -> Reply {
     let snap = service.snapshot();
-    let Some(m) = snap.manifest() else { return Err(refuse("mod.ltx not found in the project")) };
+    let Some(m) = snap.manifest() else { return Err(refuse("the project has no mod.ltx: it is no module")) };
     project.tree.refresh().await;
     let tree = project.tree.snapshot();
-    Ok(manifest_json(ed, &snap, m, &tree))
+    let manifest = manifest_json(ed, &snap, m, &tree);
+    let (functions, problems) = manifest_problems(ed, m).await;
+    Ok(json!({ "manifest": manifest, "problems": problems, "functions": functions }))
 }
 
-async fn mod_manifest(ed: Arc<Editor>, _args: Args, _origin: Origin) -> Reply {
-    let (project, service) = open(&ed).await?;
-    service.sync().await?;
-    manifest_reply(&ed, &project, &service).await
+// ---- mod.set ----------------------------------------------------------------------------------
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SetParams {
+    /// What to change, by section of mod.ltx. `module`: id, name, version, author, description,
+    /// disable_game_updates, website, mode, target, tags. `update`: github. `order`: after,
+    /// before. `requires`, `conflicts`, `exclude`: the whole list. `vars`: {name: default}.
+    /// `provides_mode`: {id, title} (an empty id drops it). `pda`: {layout}. `commands`:
+    /// {name: {function, help, args, cheat}}, null removes one. An empty text removes a key.
+    set: Map<String, Value>,
 }
 
-/// `name = default` rows, one per line or comma separated on one line.
-fn parse_vars(text: &str) -> Result<Vec<GlobalVar>, CmdError> {
-    let sep = if text.contains('\n') { '\n' } else { ',' };
+/// A value as the text `mod.ltx` holds: a number or a flag as written, a list joined by `sep`,
+/// `null` as empty.
+fn text_of(v: &Value, sep: &str) -> String {
+    match v {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::Array(items) => items.iter().map(|i| text_of(i, sep)).collect::<Vec<_>>().join(sep),
+        Value::Object(_) => v.to_string(),
+    }
+}
+
+/// A list: an array, or a text with one entry per line or comma separated.
+fn list_of(v: &Value) -> Vec<String> {
+    match v {
+        Value::Array(items) => {
+            items.iter().map(|i| trim(&text_of(i, ",")).to_owned()).filter(|s| !s.is_empty()).collect()
+        }
+        other => {
+            let t = text_of(other, ",");
+            split_list(&t, if t.contains('\n') { '\n' } else { ',' })
+        }
+    }
+}
+
+fn flag_of(v: &Value) -> Result<bool, CmdError> {
+    match v {
+        Value::Bool(b) => Ok(*b),
+        Value::Null => Ok(false),
+        Value::Number(n) => Ok(n.as_f64().is_some_and(|x| x != 0.0)),
+        Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => Ok(true),
+            "" | "false" | "0" | "no" | "off" => Ok(false),
+            other => Err(refuse(format!("'{other}' is no flag: true or false expected"))),
+        },
+        _ => Err(refuse("a flag is true or false")),
+    }
+}
+
+fn section_keys<'a>(section: &str, v: &'a Value) -> Result<&'a Map<String, Value>, CmdError> {
+    v.as_object()
+        .ok_or_else(|| refuse(format!("set.{section} takes its keys as an object: {{\"key\": value}}")))
+}
+
+fn unknown_key(section: &str, key: &str, known: &[&str]) -> CmdError {
+    refuse(format!(
+        "mod.set does not set [{section}] {key} (it sets {}): edit mod.ltx for anything else",
+        known.join(", ")
+    ))
+}
+
+/// `name = default` rows from an object, a list of rows or a text.
+fn parse_vars(v: &Value) -> Result<Vec<GlobalVar>, CmdError> {
+    let rows: Vec<(String, String)> = match v {
+        Value::Object(map) => map.iter().map(|(k, v)| (k.clone(), text_of(v, ","))).collect(),
+        other => list_of(other)
+            .into_iter()
+            .map(|row| {
+                let (name, value) = row.split_once('=').unwrap_or((row.as_str(), ""));
+                (trim(name).to_owned(), trim(value).to_owned())
+            })
+            .collect(),
+    };
     let mut vars: Vec<GlobalVar> = Vec::new();
-    for row in split_list(text, sep) {
-        let (name, value) = row.split_once('=').unwrap_or((row.as_str(), ""));
-        let (name, value) = (trim(name), trim(value));
+    for (name, value) in rows {
+        let name = trim(&name).to_owned();
         if name.is_empty() {
             continue;
         }
-        if !valid_global_name(name) {
+        if !valid_global_name(&name) {
             return Err(refuse(format!("a global variable is named by letters, digits and _: '{name}'")));
         }
-        if vars.iter().any(|v| v.name == name) {
+        if vars.iter().any(|g| g.name == name) {
             return Err(refuse(format!("the global variable '{name}' is declared twice")));
         }
-        vars.push(GlobalVar { name: name.to_owned(), value: value.to_owned() });
+        vars.push(GlobalVar { name, value: trim(&value).to_owned() });
     }
     Ok(vars)
 }
 
-async fn mod_set_manifest(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
-    let (project, service) = open(&ed).await?;
-    // a pre-XMS project: scaffold the manifest, then edit it
-    service.ensure(project.name()).await?;
-    let snap = service.snapshot();
-    let Some(cur) = snap.manifest() else { return Err(refuse("mod.ltx not found in the project")) };
-    let cur = cur.clone();
-    let mut edits: Vec<Edit> = Vec::new();
+const MODULE_KEYS: [&str; 10] = [
+    "id",
+    "name",
+    "version",
+    "author",
+    "description",
+    "disable_game_updates",
+    "website",
+    "mode",
+    "target",
+    "tags",
+];
 
-    let mut id = cur.id.clone();
-    if let Some(v) = arg(&args, "id") {
-        if !validate_id(&v) {
-            return Err(refuse("invalid id (allowed: a-z 0-9 _ . -)"));
+/// The edits of the `module` section; `tags` goes through the Mod Browser's hook.
+async fn module_edits(
+    ed: &Arc<Editor>,
+    service: &ManifestService,
+    cur: &Manifest,
+    keys: &Map<String, Value>,
+    edits: &mut Vec<Edit>,
+    id: &mut String,
+    mode: &mut String,
+) -> Result<bool, CmdError> {
+    let mut target_given = false;
+    for (key, v) in keys {
+        let text = text_of(v, ", ");
+        match key.as_str() {
+            "id" => {
+                if !validate_id(&text) {
+                    return Err(refuse("the module id takes a-z, 0-9, _ . and - only"));
+                }
+                edits.push(Edit::set("module", "id", text.as_str()));
+                id.clone_from(&text);
+            }
+            "name" => edits.push(Edit::set("module", "name", display_value(&text, false))),
+            "version" => {
+                if !validate_version(&text) {
+                    return Err(refuse("the version is 1 to 4 numbers separated by dots, e.g. 1.2.0"));
+                }
+                edits.push(Edit::set("module", "version", text));
+            }
+            "author" => edits.push(if text.is_empty() {
+                Edit::remove("module", "author")
+            } else {
+                Edit::set("module", "author", display_value(&text, false))
+            }),
+            "description" => {
+                let d = trim(&text);
+                if d.len() >= DESCRIPTION_ROOM {
+                    return Err(refuse("the description is too long: 4095 bytes at most"));
+                }
+                // the one text that routinely holds ';' and line breaks: always quoted
+                edits.push(if d.is_empty() {
+                    Edit::remove("module", "description")
+                } else {
+                    Edit::set("module", "description", display_value(d, true))
+                });
+            }
+            "disable_game_updates" => edits.push(if flag_of(v)? {
+                Edit::set("module", "disable_game_updates", "true")
+            } else {
+                Edit::remove("module", "disable_game_updates")
+            }),
+            "website" => {
+                let w = trim(&text);
+                if !validate_website(w) {
+                    return Err(refuse(
+                        "the website is a https link to ap-pro.ru or moddb.com, nothing else",
+                    ));
+                }
+                edits.push(Edit::optional("module", "website", w));
+            }
+            "mode" => {
+                if !validate_mode_id(&text) {
+                    return Err(refuse("a mode id takes a-z, 0-9, _ . and - only, or is empty"));
+                }
+                edits.push(Edit::optional("module", "mode", &text));
+                mode.clone_from(&text);
+            }
+            "target" => {
+                if !["default", "existing", "new", "any"].iter().any(|t| t.eq_ignore_ascii_case(&text)) {
+                    return Err(refuse("target is default, existing, new or any"));
+                }
+                edits.push(Edit::set("module", "target", text));
+                target_given = true;
+            }
+            "tags" => {
+                let Some(hook) = ManifestArgs::of(ed).get("tags") else {
+                    return Err(refuse("tags cannot be set: this editor has no Mod Browser support"));
+                };
+                let cx = ArgCx {
+                    editor: ed.clone(),
+                    root: service.root().to_path_buf(),
+                    value: list_of(v).join(", "),
+                    manifest: cur.clone(),
+                };
+                edits.extend(hook(cx).await.map_err(refuse)?);
+            }
+            "thumbnail" => return Err(refuse("the picture is set with mod.thumbnail from=<picture>")),
+            other => return Err(unknown_key("module", other, &MODULE_KEYS)),
         }
-        edits.push(Edit::set("module", "id", v.as_str()));
-        id = v;
     }
-    if let Some(v) = arg(&args, "name") {
-        edits.push(Edit::set("module", "name", display_value(&v, false)));
-    }
-    if let Some(v) = arg(&args, "version") {
-        if !validate_version(&v) {
-            return Err(refuse("invalid version (1-4 numbers separated by dots, e.g. 1.2.0)"));
+    Ok(target_given)
+}
+
+fn command_edits(cur: &Manifest, v: &Value, edits: &mut Vec<Edit>) -> Result<(), CmdError> {
+    let map = section_keys("commands", v)?;
+    for (name, spec) in map {
+        let name = trim(name).to_owned();
+        let same = |c: &&Command| c.name.eq_ignore_ascii_case(&name);
+        if spec.is_null() {
+            if !cur.commands.iter().any(|c| same(&c)) {
+                return Err(refuse(format!("there is no command '{name}'")));
+            }
+            edits.push(Edit::RemoveCommand(name));
+            continue;
         }
-        edits.push(Edit::set("module", "version", v));
-    }
-    if let Some(v) = arg(&args, "author") {
-        edits.push(if v.is_empty() {
-            Edit::remove("module", "author")
-        } else {
-            Edit::set("module", "author", display_value(&v, false))
-        });
-    }
-    if let Some(v) = arg(&args, "description") {
-        let d = trim(&v);
-        if d.len() >= DESCRIPTION_ROOM {
-            return Err(refuse("description is too long (4095 bytes at most)"));
+        if !commands::valid_command_name(&name) {
+            return Err(refuse(format!("a command name is a-z, 0-9 and _ only, 64 at most: '{name}'")));
         }
-        // the one text that routinely holds ';' and line breaks: always quoted
-        edits.push(if d.is_empty() {
-            Edit::remove("module", "description")
-        } else {
-            Edit::set("module", "description", display_value(d, true))
-        });
-    }
-    if let Some(off) = args.bool("disable_game_updates") {
-        edits.push(if off {
-            Edit::set("module", "disable_game_updates", "true")
-        } else {
-            Edit::remove("module", "disable_game_updates")
-        });
-    }
-    if let Some(v) = arg(&args, "website") {
-        let w = trim(&v);
-        if !validate_website(w) {
-            return Err(refuse(
-                "invalid website (only https://ap-pro.ru or https://moddb.com links are allowed)",
-            ));
+        let fields = spec.as_object().ok_or_else(|| {
+            refuse(format!("set.commands.{name} takes {{function, help, args, cheat}}, or null to remove it"))
+        })?;
+        let mut c = cur.commands.iter().find(same).cloned().unwrap_or_default();
+        c.name.clone_from(&name);
+        for (key, value) in fields {
+            match key.as_str() {
+                "function" => c.function = trim(&text_of(value, ",")).to_owned(),
+                "help" => c.help = trim(&text_of(value, ",")).to_owned(),
+                "args" => c.args = trim(&text_of(value, ",")).to_owned(),
+                "cheat" => c.cheat = flag_of(value)?,
+                other => {
+                    return Err(unknown_key(
+                        &format!("command.{name}"),
+                        other,
+                        &["function", "help", "args", "cheat"],
+                    ));
+                }
+            }
         }
-        edits.push(Edit::optional("module", "website", w));
-    }
-    if let Some(v) = arg(&args, "github") {
-        let repo = normalize_github_repo(&v);
-        if !validate_github_repo(&repo) {
-            return Err(refuse("invalid github (owner/repo, e.g. Madmer/agroprom-story)"));
+        if !commands::valid_command_function(&c.function) {
+            return Err(refuse(format!(
+                "a command calls <script>.<function> of the project's gamedata\\scripts, e.g. my_mod.status - got '{}'",
+                c.function
+            )));
         }
-        edits.push(Edit::optional("update", "github", &repo));
+        c.declared = true;
+        edits.push(Edit::SetCommand(c));
     }
-    let mut mode = cur.mode.clone();
-    if let Some(v) = arg(&args, "mode") {
-        if !validate_mode_id(&v) {
-            return Err(refuse("invalid mode id (allowed: a-z 0-9 _ . - or empty)"));
-        }
-        edits.push(Edit::optional("module", "mode", &v));
-        mode = v;
-    }
-    // provides_mode edits touch only the first declared mode; an empty id drops it
+    Ok(())
+}
+
+fn provides_mode_edit(cur: &Manifest, v: &Value) -> Result<Edit, CmdError> {
+    // only the first declared mode is edited; an empty id or null drops it
     let mut modes = cur.provides_modes.clone();
-    let mut modes_changed = false;
-    if let Some(v) = arg(&args, "provides_mode_id") {
-        if !validate_mode_id(&v) {
-            return Err(refuse("invalid provides_mode_id (allowed: a-z 0-9 _ . - or empty)"));
+    let (id, title) = match v {
+        Value::Null => (String::new(), None),
+        Value::Object(map) => {
+            for k in map.keys() {
+                if k != "id" && k != "title" {
+                    return Err(unknown_key("provides_mode", k, &["id", "title"]));
+                }
+            }
+            let id = map.get("id").map(|v| text_of(v, ","));
+            let title = map.get("title").map(|v| text_of(v, ","));
+            (id.unwrap_or_else(|| modes.first().map(|m| m.id.clone()).unwrap_or_default()), title)
         }
-        if !v.is_empty() {
-            if modes.is_empty() {
-                modes.push(crate::model::ProvidesMode::default());
-            }
-            if let Some(first) = modes.first_mut() {
-                first.id = v;
-            }
-        } else if !modes.is_empty() {
+        other => (text_of(other, ","), None),
+    };
+    if !validate_mode_id(&id) {
+        return Err(refuse("a mode id takes a-z, 0-9, _ . and - only, or is empty"));
+    }
+    if id.is_empty() {
+        if !modes.is_empty() {
             modes.remove(0);
         }
-        modes_changed = true;
-    }
-    if let Some(v) = arg(&args, "provides_mode_title")
-        && let Some(first) = modes.first_mut()
-    {
-        first.title = v;
-        modes_changed = true;
-    }
-    if modes_changed {
-        let mut lines: Vec<String> = Vec::new();
-        for m in &modes {
-            lines.push(entry_line("id", &m.id, 11));
-            if !m.title.is_empty() {
-                lines.push(entry_line("title", &m.title, 11));
+    } else {
+        if modes.is_empty() {
+            modes.push(ProvidesMode::default());
+        }
+        if let Some(first) = modes.first_mut() {
+            first.id = id;
+            if let Some(t) = title {
+                first.title = t;
             }
         }
-        lines.extend(cur.provides_extra.iter().cloned());
-        edits.push(Edit::lines("provides_mode", lines));
     }
-    // The targeting choice itself. "default" cannot be inferred - a module with no mode set
-    // either targets the ordinary game on purpose or was never decided, and only the caller
-    // knows which - so it is stated explicitly; picking a mode states it implicitly.
-    if let Some(v) = arg(&args, "target") {
-        if !["default", "existing", "new"].iter().any(|t| t.eq_ignore_ascii_case(&v)) {
-            return Err(refuse("invalid target (allowed: default, existing, new)"));
-        }
-        edits.push(Edit::set("module", "target", v));
-    } else if !modes.is_empty() {
-        edits.push(Edit::set("module", "target", "new"));
-    } else if mode == "*" {
-        // oracle: the C++ wrote `existing` here, which turned a classic module (`mode = *`,
-        // `target = any`: it mounts in every game) into one gated on a mode named "*" the first
-        // time anything of its manifest was set; a classic module stays classic
-    } else if !mode.is_empty() {
-        edits.push(Edit::set("module", "target", "existing"));
-    }
-    if let Some(v) = arg(&args, "requires") {
-        edits.push(Edit::lines("requires", split_list(&v, ',')));
-    }
-    for key in ["after", "before"] {
-        if let Some(v) = arg(&args, key) {
-            edits.push(Edit::optional("order", key, &split_list(&v, ',').join(", ")));
+    let mut lines: Vec<String> = Vec::new();
+    for m in &modes {
+        lines.push(entry_line("id", &m.id, 11));
+        if !m.title.is_empty() {
+            lines.push(entry_line("title", &m.title, 11));
         }
     }
-    if let Some(v) = arg(&args, "conflicts") {
-        edits.push(Edit::lines("conflicts", split_list(&v, ',')));
+    lines.extend(cur.provides_extra.iter().cloned());
+    Ok(Edit::lines("provides_mode", lines))
+}
+
+async fn mod_set(ed: Arc<Editor>, p: SetParams, origin: Origin) -> Reply {
+    let (project, service) = open_manifest(&ed).await?;
+    // a project without a manifest gets its scaffold, then the edit
+    service.ensure(project.name()).await?;
+    let snap = service.snapshot();
+    let Some(cur) = snap.manifest() else {
+        return Err(refuse("the project has no mod.ltx: it is no module"));
+    };
+    let cur = cur.clone();
+    let mut edits: Vec<Edit> = Vec::new();
+    let (mut id, mut mode) = (cur.id.clone(), cur.mode.clone());
+    let mut target_given = false;
+    let mut modes_touched = false;
+
+    // the order of the sections is fixed, whatever order the request named them in
+    let sections: BTreeMap<&str, &Value> = p.set.iter().map(|(k, v)| (k.as_str(), v)).collect();
+    for (section, v) in &sections {
+        match *section {
+            "module" => {
+                let keys = section_keys("module", v)?;
+                target_given |=
+                    module_edits(&ed, &service, &cur, keys, &mut edits, &mut id, &mut mode).await?;
+            }
+            "update" => {
+                for (key, value) in section_keys("update", v)? {
+                    if key != "github" {
+                        return Err(unknown_key("update", key, &["github"]));
+                    }
+                    let repo = normalize_github_repo(&text_of(value, ","));
+                    if !validate_github_repo(&repo) {
+                        return Err(refuse("github is owner/repo, e.g. Madmer/agroprom-story"));
+                    }
+                    edits.push(Edit::optional("update", "github", &repo));
+                }
+            }
+            "order" => {
+                for (key, value) in section_keys("order", v)? {
+                    if key != "after" && key != "before" {
+                        return Err(unknown_key("order", key, &["after", "before"]));
+                    }
+                    edits.push(Edit::optional("order", key, &list_of(value).join(", ")));
+                }
+            }
+            "requires" | "conflicts" | "exclude" => edits.push(Edit::lines(section, list_of(v))),
+            "vars" => {
+                let vars = parse_vars(v)?;
+                edits.push(Edit::lines(
+                    "vars",
+                    vars.iter().map(|g| entry_line(&g.name, &g.value, 15)).collect(),
+                ));
+            }
+            "provides_mode" => {
+                edits.push(provides_mode_edit(&cur, v)?);
+                modes_touched = true;
+            }
+            "pda" => {
+                for (key, value) in section_keys("pda", v)? {
+                    if key != "layout" {
+                        return Err(unknown_key("pda", key, &["layout"]));
+                    }
+                    let Some(hook) = ManifestArgs::of(&ed).get("pda.layout") else {
+                        return Err(refuse("the PDA layout cannot be set: this editor has no PDA support"));
+                    };
+                    let cx = ArgCx {
+                        editor: ed.clone(),
+                        root: service.root().to_path_buf(),
+                        value: text_of(value, ","),
+                        manifest: cur.clone(),
+                    };
+                    edits.extend(hook(cx).await.map_err(refuse)?);
+                }
+            }
+            "commands" => command_edits(&cur, v, &mut edits)?,
+            other => {
+                return Err(refuse(format!(
+                    "mod.set does not set [{other}]: module, update, order, requires, conflicts, exclude, vars, provides_mode, pda and commands are its sections (world.set, screens.set and the files themselves change the rest)"
+                )));
+            }
+        }
     }
-    // the whole list at once: one entry per line, or comma separated on one line
-    if let Some(v) = arg(&args, "exclude") {
-        edits.push(Edit::lines("exclude", split_list(&v, if v.contains('\n') { '\n' } else { ',' })));
-    }
-    if let Some(v) = arg(&args, "vars") {
-        let vars = parse_vars(&v)?;
-        edits.push(Edit::lines("vars", vars.iter().map(|g| entry_line(&g.name, &g.value, 15)).collect()));
-    }
-    // the Mod Browser's tags and picture belong to the catalog area
-    for key in ["tags", "thumbnail"] {
-        let Some(value) = arg(&args, key) else { continue };
-        let Some(hook) = ManifestArgs::of(&ed).get(key) else {
-            return Err(refuse(format!("'{key}' cannot be set: this editor has no Mod Browser support")));
-        };
-        let cx =
-            ArgCx { editor: ed.clone(), root: service.root().to_path_buf(), value, manifest: cur.clone() };
-        edits.extend(hook(cx).await.map_err(refuse)?);
+
+    // The targeting choice. "default" cannot be inferred - a module with no mode either targets
+    // the ordinary game on purpose or was never decided - so it is stated explicitly; picking a
+    // mode states it implicitly. A classic module (`mode = *`) keeps `target = any`.
+    let decides_target = modes_touched || sections.get("module").and_then(|m| m.get("mode")).is_some();
+    if !target_given && decides_target {
+        let mut after = snap.doc().cloned().unwrap_or_default();
+        for e in &edits {
+            crate::edit::apply(&mut after, e.clone())?;
+        }
+        let after = Manifest::parse(&after);
+        if !after.provides_modes.is_empty() {
+            edits.push(Edit::set("module", "target", "new"));
+        } else if after.mode != "*" && !after.mode.is_empty() {
+            edits.push(Edit::set("module", "target", "existing"));
+        }
     }
 
     if !validate_id(&id) {
-        return Err(refuse("module id missing or invalid (allowed: a-z 0-9 _ . -)"));
+        return Err(refuse("the module id is missing or invalid: a-z, 0-9, _ . and - only"));
     }
-    service.edit(edits, origin).await?;
-    manifest_reply(&ed, &project, &service).await
+    let changed = service.edit(edits, origin).await?;
+    let mut answer = manifest_answer(&ed, &project, &service).await?;
+    if let Value::Object(map) = &mut answer {
+        map.insert("changed".into(), json!(changed));
+    }
+    Ok(answer)
 }
 
-async fn mod_exclude(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
-    let (_project, service) = open(&ed).await?;
-    let Some(path) = args.text("path") else {
-        return Err(refuse("missing 'path' (project-relative, e.g. docs or design/story.md)"));
-    };
-    // a value that still carries its escaped separators
-    let path = path.replace("\\\\", "\\");
-    // true unless told otherwise - the menu item it stands for excludes
-    let excluded = args.bool("excluded").unwrap_or(true);
-    service.sync().await?;
+// ---- mod.exclude ------------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ExcludeParams {
+    /// A file or folder of the project, or a pattern (`*.psd`, `docs/*.md`).
+    path: String,
+    /// True leaves it out of the build, false takes it back in.
+    #[serde(default = "yes")]
+    on: bool,
+}
+
+const fn yes() -> bool {
+    true
+}
+
+async fn mod_exclude(ed: Arc<Editor>, p: ExcludeParams, origin: Origin) -> Reply {
+    let (_project, service) = open_manifest(&ed).await?;
     if !service.snapshot().exists() {
-        return Err(refuse("mod.ltx not found in the project"));
+        return Err(refuse("the project has no mod.ltx: it is no module"));
     }
-    service.edit(vec![Edit::SetExcluded { rel: path, excluded }], origin).await?;
+    let path = trim(&p.path).replace("\\\\", "\\");
+    if path.is_empty() {
+        return Err(CmdError::invalid(
+            "mod.exclude needs path: a file or folder of the project, or a pattern",
+        ));
+    }
+    let changed = service.edit(vec![Edit::SetExcluded { rel: path, excluded: p.on }], origin).await?;
     let snap = service.snapshot();
     let exclude = snap.manifest().map(|m| m.exclude.clone()).unwrap_or_default();
-    Ok(json!({ "exclude": exclude }))
-}
-
-async fn mod_commands(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
-    let (session, project) = Project::of(&ed)?;
-    let service = ManifestService::of_session(&ed, &session).await?;
-    service.ensure(project.name()).await?;
-    let name = arg(&args, "name").map(|n| trim(&n).to_owned()).unwrap_or_default();
-    if !name.is_empty() {
-        let snap = service.snapshot();
-        let Some(m) = snap.manifest() else { return Err(refuse("mod.ltx not found in the project")) };
-        let same = |c: &&Command| c.name.eq_ignore_ascii_case(&name);
-        let edit = if args.flag("remove") {
-            // every entry of that name: a second line and a section without one go with it
-            if !m.commands.iter().any(|c| same(&c)) {
-                return Err(refuse(format!("there is no command '{name}'")));
-            }
-            Edit::RemoveCommand(name.clone())
-        } else {
-            if !commands::valid_command_name(&name) {
-                return Err(refuse(format!("a command name is a-z, 0-9 and _ only, 64 at most: '{name}'")));
-            }
-            let mut c = m.commands.iter().find(same).cloned().unwrap_or_default();
-            c.name.clone_from(&name);
-            if let Some(v) = arg(&args, "function") {
-                c.function = trim(&v).to_owned();
-            }
-            if let Some(v) = arg(&args, "help") {
-                c.help = trim(&v).to_owned();
-            }
-            if let Some(v) = arg(&args, "args") {
-                c.args = trim(&v).to_owned();
-            }
-            if args.has("cheat") {
-                c.cheat = args.flag("cheat");
-            }
-            if !commands::valid_command_function(&c.function) {
-                return Err(refuse(format!(
-                    "function: <script>.<function> of the project's gamedata\\scripts, e.g. my_mod.status - got '{}'",
-                    c.function
-                )));
-            }
-            c.declared = true;
-            Edit::SetCommand(c)
-        };
-        service.edit(vec![edit], origin).await?;
-    }
-    let snap = service.snapshot();
-    let Some(m) = snap.manifest() else { return Err(refuse("mod.ltx not found in the project")) };
-    let (functions, problems) = command_check(&ed, &session, m).await;
-    // "E404 commands: '...'" -> {code, text}
-    let problems: Vec<Value> =
-        problems.iter().map(|p| json!({ "code": p.code, "text": p.message })).collect();
-    Ok(json!({ "commands": commands_json(&m.commands), "functions": functions, "problems": problems }))
+    Ok(json!({ "exclude": exclude, "changed": changed }))
 }
 
 #[cfg(test)]
@@ -406,23 +602,45 @@ mod tests {
 
     #[test]
     fn vars_rows() {
-        let vars = parse_vars("kills = 0\nmet = \"1\"\n\n").unwrap();
+        let vars = parse_vars(&json!("kills = 0\nmet = \"1\"\n\n")).unwrap();
         assert_eq!(vars.len(), 2);
         assert_eq!(vars[1].value, "\"1\"");
-        assert_eq!(parse_vars("a=1, b=2").unwrap().len(), 2);
+        assert_eq!(parse_vars(&json!("a=1, b=2")).unwrap().len(), 2);
+        assert_eq!(parse_vars(&json!({"kills": 0, "met": "yes"})).unwrap()[0].value, "0");
         assert_eq!(
-            parse_vars("a-b = 1").unwrap_err().message,
+            parse_vars(&json!("a-b = 1")).unwrap_err().message,
             "a global variable is named by letters, digits and _: 'a-b'"
         );
-        assert_eq!(parse_vars("a=1,a=2").unwrap_err().message, "the global variable 'a' is declared twice");
+        assert_eq!(
+            parse_vars(&json!(["a=1", "a=2"])).unwrap_err().message,
+            "the global variable 'a' is declared twice"
+        );
     }
 
     #[test]
-    fn string_arguments() {
-        let args: Args = serde_json::from_str(r#"{"name":"","version":2,"flag":true,"none":null}"#).unwrap();
-        assert_eq!(arg(&args, "name").as_deref(), Some(""));
-        assert_eq!(arg(&args, "version").as_deref(), Some("2"));
-        assert_eq!(arg(&args, "none"), None);
-        assert_eq!(arg(&args, "missing"), None);
+    fn values_as_text_and_lists() {
+        assert_eq!(text_of(&json!(2), ","), "2");
+        assert_eq!(text_of(&json!(null), ","), "");
+        assert_eq!(list_of(&json!(["a", " b ", ""])), ["a", "b"]);
+        assert_eq!(list_of(&json!("a, b")), ["a", "b"]);
+        assert_eq!(list_of(&json!("docs\n*.psd")), ["docs", "*.psd"]);
+        assert!(flag_of(&json!("yes")).unwrap());
+        assert!(flag_of(&json!("maybe")).is_err());
+    }
+
+    #[test]
+    fn provides_mode_first_entry() {
+        let mut cur = Manifest::default();
+        let e = provides_mode_edit(&cur, &json!({"id": "night", "title": "Night"})).unwrap();
+        assert_eq!(
+            e,
+            Edit::lines(
+                "provides_mode",
+                vec![entry_line("id", "night", 11), entry_line("title", "Night", 11)]
+            )
+        );
+        cur.provides_modes.push(ProvidesMode { id: "night".into(), title: "Night".into() });
+        assert_eq!(provides_mode_edit(&cur, &Value::Null).unwrap(), Edit::lines("provides_mode", Vec::new()));
+        assert!(provides_mode_edit(&cur, &json!({"name": "x"})).is_err());
     }
 }

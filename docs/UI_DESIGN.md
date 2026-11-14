@@ -30,7 +30,7 @@ The rule every surface is held to; the Screens & Music tab is its reference. A s
 - **Problems stay with what they are about.** A dot on the row, a sentence for the author on its details. No codes on screen, no log to go and read.
 - **Everything a person can do, an agent can do, by the same code.** Every action has an MCP command; every result of it is readable text on disk (`mod.ltx`, the declarative assets), so an agent can also just edit the file. A surface without both is not finished.
 
-**Applied (section 1a):** the graph toolbar keeps Save, Undo, Redo, the problems count when there are any, Frame All, Find, the panels and the zoom; the rest is its More menu. The Graph panel adds tasks and roles with + on the header and removes them with a cross on the row, ID and a role's details under More. Mod Settings saves as it is edited; Characters saves on Save (Ctrl+S), with a dirty dot on the row and a question before unsaved edits are left. World Rules keeps Original Game, Player Start and Starting Kit on the surface, the rest under More, and shows a problems bar only when there are problems. Publish Release is one Release line and the Notes; Package Release is one click; Submit shows a working key as one line and one spinner per job. The Start page is the projects, its form opens on New Project.
+**Applied (section 1a):** the graph toolbar keeps Save, Undo, Redo, the problems count when there are any, Frame All, Find, the panels and the zoom; the rest is its More menu. The Graph panel adds tasks and roles with + on the header and removes them with a cross on the row, ID and a role's details under More. Mod Settings, World Rules and Screens & Music save as they are edited and say so in the one place, the toolbar row; Characters saves on Save (its toolbar, Ctrl+S), with a dirty dot on the row and a question before unsaved edits are left, and shows the character as the game will. World Rules keeps Original Game, Player Start and Starting Kit on the surface, the rest under More, and shows a problems bar only when there are problems. Publish Release is one Release line and the Notes; Package Release is one click; Submit shows a working key as one line and one spinner per job. The Start page is the projects, its form opens on New Project.
 
 ## 2. Tokens
 
@@ -281,7 +281,7 @@ An **action** (`gz-app`'s `actions.rs`) is what the author can trigger by name: 
 - **Scope** says where its keys are live: `Global`, `Tab(kinds)`, or `Part(kinds, part)` - while the document says that part of it has the keys (`Document::key_part`: the graph's canvas). Its menu and palette rows are there wherever it is on.
 - **Groups** are the palette's categories and the Keyboard page's sections: File, Edit, Window, Help, Mod, Libraries, Graph, and the level editor's.
 - The shell's own (`shell_actions.rs`): `file.save` (Ctrl+S), `project.open_folder`, `project.switch`, `app.quit`, `edit.undo` (Ctrl+Z), `edit.redo` (Ctrl+Y, Ctrl+Shift+Z), `edit.cut` / `copy` / `paste` / `duplicate` / `delete` / `find` (Ctrl+X, C, V, D, Delete, Ctrl+F), `edit.palette` (Ctrl+Shift+P), `app.preferences`, `job.stop_running`, `window.content_drawer` (Ctrl+Space), `window.log_drawer` (Ctrl+\`), `window.next_tab` / `previous_tab` (Ctrl+Tab, Ctrl+Shift+Tab), `window.close_tab` (Ctrl+F4), `window.reset_layout`, `help.keyboard`, `help.about`.
-- The graph's (`gz-ui-graph`'s `actions.rs`, group Graph, each `graph.action what=<name>`): Frame All (Home), Frame Selection (F), Rename Node (F2), Connect to the Nearest (Q), Bypass Node (Alt+D), Remove the Wire Under the Pointer (D), Select All Nodes (Ctrl+A), Bookmark the Selection (Ctrl+B) - live on the canvas -; Previous / Next Bookmark, Back (Alt+Left), Forward (Alt+Right), Find Next (F3), Find Previous (Shift+F3), Find in Project (Ctrl+Shift+F), Auto Layout, Validate, Reload - live on the tab. A new one is a name `graph.<verb>`, its title, keys and scope, and an arm of `GraphTab::run_named`.
+- The graph's (`gz-ui-graph`'s `actions.rs`, group Graph): each runs one of the graph's commands on the tab that is up - `graph.edit` or `graph.arrange` on the selection, `graph.view` for the view, `graph.find` for the search. Live on the canvas: Frame All (Home), Frame Selection (F), Add Node... (Tab, Space), Replace Node..., Rename Node (F2), Remove the Wire Under the Pointer (D), Select All Nodes (Ctrl+A), Select Connected (Ctrl+L) / Upstream / Downstream, Connect to the Nearest (Q), Bypass Node (Alt+D), Duplicate with Wires (Ctrl+Shift+D), Disable / Enable (Ctrl+Shift+E), Collapse / Expand (Ctrl+Shift+H), Bookmark the Node (Ctrl+B), Set Bookmark 1-9 (Ctrl+Shift+1..9), Add Comment Frame (C), Auto Layout Selection / Branch, Align Left (Shift+A) / Centre / Right (Shift+D) / Top (Shift+W) / Middle / Bottom (Shift+S), Distribute Horizontally / Vertically, Straighten Connections (Shift+Q). Live on the tab: Back (Alt+Left), Forward (Alt+Right), Go to Bookmark 1-9 (Ctrl+1..9), Previous / Next Bookmark, Find (Ctrl+F), Find Next (F3), Find Previous (Shift+F3), Find in Project (Ctrl+Shift+F), Show Problems, Auto Layout, Flow Left to Right / Top to Bottom, the wire styles (Wires as in Preferences, Curved, Straight, Circuit, Angled, Subway), Reload. A new one is a name `graph.<verb>`, its title, keys, scope and the command with its arguments.
 - The Level tab and the viewport keep their numbered command table (`cpp.rs`, `exec_command`, `list_commands`, the macros) until their actions replace it.
 
 **Keys**, first taker wins (`gz-app`'s `shell.rs`):
@@ -324,7 +324,7 @@ None of them acts while a modal is up. `app.keys action=resolve keys=<chord>` an
   - `=% +% + -` become Select Same, Deselect Same, Select % of Same.
   - `M+/M-` becomes Segmented.
   - The AI Map D-pad becomes icon buttons.
-- Snap Objects is a closed Section. "Are you sure" prompts become `Confirm`.
+- "Are you sure" prompts become `Confirm`.
 - Detail Objects is the L dialog `Detail Objects###dlg.detail_objects`: Objects (Add... / Remove / Clear All... / Import... / Export..., the list, a thumbnail and the settings grid) and Colour Indices (Add Index / Clear All..., one block per colour with Add / Take Out / Remove).
 
 **Details and Level Settings**
@@ -364,92 +364,108 @@ None of them acts while a modal is up. `app.keys action=resolve keys=<chord>` an
 **Command Palette:** section 5.
 
 **Quest and Behaviour graph**
-- Toolbar: Save, Reload | Undo, Redo | Validate (badge), Auto Layout, Frame All | Back, Forward | Find (F3), Find in Project | Bookmarks ▾, Previous, Next | Spring | Zoom ▾, Minimap, Shortcuts ?, Graph panel, Details panel.
-- Graph panel, 280, always present: header fields, Tasks or Roles, and Variables under a splitter (`vars_split`) - the graph's own, then **Global**: the module's global variables (mod.ltx [vars]) in the same list-and-form, Add Global, written into the manifest once an edit is let go of. It becomes a rail when the canvas would drop below 400; on a rail the toolbar's button opens it over the canvas, and hiding folds it back to the rail.
-- Details, 360: the Node section - its actions are list rows (icon, name, `On enter N` at the right, the whole row one target; a newly selected one is scrolled into view) - then the selected action under a splitter (`action_split`). Kind descriptions become tooltips and the help footer, which removes the ~30 `Hint` paragraphs.
-- The sizes are Layout keys: `graph.panel_w`, `graph.details_w`, `graph.drawer_h`, `graph.vars_split`, `graph.action_split`, and the grids `grid.graph_*`.
-- Bottom drawer: Problems (n) and Find Results. It opens when Validate finds errors or warnings.
+- Toolbar: Save, Undo, Redo, the problems count (only when there are any), Frame All, Find | Spring | Graph panel, Details panel, Minimap (quiet toggles: a 2 pt accent line under a toggle that is on, never a fill), Zoom ▾ (its label the percentage, one width at every level) | More ▾: Reload, Auto Layout, Flow Direction ▸, Wires ▸, Find in Project, Back, Forward, Bookmarks ▸ (the named list, Bookmark the Node, Previous, Next), Keyboard Shortcuts. No Primary.
+- Graph menu: Save, Reload | Add Node..., Show Problems | Flow Direction ▸ (Left to Right, Top to Bottom - lays the graph out again, one undo step), Wires ▸ (As in Preferences first, then the five styles, then Colour by Pin, Dim Unrelated, Flow Bubbles, Arrowheads: the graph's own over Preferences) | Auto Layout, Auto Layout Selection, Auto Layout Branch, Align ▸, Select ▸, Node ▸ | Frame All, Frame Selection, Find, Find Next, Find Previous, Find in Project | Bookmarks ▸ | the panels and the Shortcuts card as toggles. Every row of the group Graph is its action, with its keys as bound now.
+- Graph panel, 280: ONE scroll - the header (Title, Activation; the ID under More), Tasks or Roles, Variables and **Global**, each a kit `Section` with a `+` on its header and its count. A variable's form is titled by its name (Name, Type, Default); Global is the module's variables (mod.ltx [vars]) in the same list-and-form, written into the manifest once an edit is let go of. The panel becomes a rail when the canvas would drop below 400; on a rail the toolbar's button opens it over the canvas.
+- Details, 360: the Node section - its actions are list rows (icon, name, `On enter N` at the right, the whole row one target; a newly selected one is scrolled into view) - then the selected action under a splitter (`action_split`). Under 1400 pt of the tab's width it folds to a rail on the right whose button opens it over the canvas's right edge. Kind descriptions are tooltips and the help footer.
+- The sizes are Layout keys: `graph.panel_w`, `graph.details_w`, `graph.drawer_h`, `graph.action_split`, and the grids `grid.graph_*`; a section's fold is `section.graph.<name>`.
+- Bottom drawer: Problems (n) - each a sentence, the node it is on first, the code in its tooltip; a click frames the node - and Find Results.
 - An external change is taken in without a question (docs/ASSETS.md section 4): a clean graph reads the file again, unsaved edits rebase onto it. A Banner says only what is left: the file does not read (Error, with the reader's line; the last good state stays), the file is gone (Save writes it again), or "Changed on disk too: <n> values" with one row and [Take Theirs] per value both sides changed. The Characters tab lists the same rows under its header; the PDA tab's Details pane shows its note with [Take Theirs].
 - Canvas:
-  - scale is `kZoom[level] x Dpi()`, applied once; the levels are `{0.2, 0.3, 0.4, 0.5, 0.65, 0.75, 1.0, 1.25, 1.5, 2.0}` (index 6 = 1:1);
-  - text is 16/15/14, with glyph px rounded per zoom level;
-  - level of detail: full detail for titles of 10 px and up, titles only at 7-10, blocks below;
-  - Frame All fits the graph's extent (nodes and back-edge channels) at the highest level up to 1:1, never below 0.75 (zoom index 5: a title is then 12 px at 100%); a graph that doesn't fit is framed AT 0.75 from its start - the trigger plus two levels in view at the top, the rest of the view filled with graph - and the status says so.
-- Node, 240 wide and clipped:
-  - a 28 pt header with family strip, icon, title, muted id and badges;
+  - the scale is the zoom level times the UI scale, applied once; 21 levels from 5% to 200% (`gz_nq::doc::ZOOM`, level 16 = 1:1);
+  - a graph flows left to right (inputs on a node's left, outputs down its right edge) or top to bottom (`canvas.flow`; a new graph takes Preferences > Graph > Flow);
+  - text: title 16, lines and actions 15 pt line boxes, rounded to whole px per level, never drawn under 11 px. Semantic zoom: where a body line would be under 11 px a node shows its title alone at a fixed 13 px over its whole box; a node under 48 px wide is a block of its family's colour, its title on hover (`graph.view` answers `detail` and `title_px`);
+  - Frame All fits the whole extent (nodes, routed wires, frames) at whatever level that takes, up to 1:1;
+  - wires: one polyline per wire in its style - Curved, Straight, Circuit (rounded right angles, lanes of their own), Angled (45-degree diagonals; at the start, middle or end), Subway (a shared trunk, parallel tracks); thickness 1-4 px, never under 1 px; colour by pin role (`wire.base` for the way on, the danger hue for failures, the families' hues for the other ways out; `wire.hot` under the pointer, `wire.selected` touching the selection); Dim Unrelated (15%); Flow Bubbles (off by default, frames only while they move on screen); arrowheads at the input's rim; back edges and the wires of a disabled node dashed; a pin that is not the way on named on its wire's first stretch;
+  - comment frames (`frame.fill`, a title strip in a family tone, a resize corner) under the nodes; reroutes as dots on their wire; alignment guides while dragging; the cut line of Ctrl+right drag in the danger hue.
+- Node, 180-360 wide by its content:
+  - a 28 pt header: the family icon in its `graph.family` colour, the title, the muted id, badges (the problems' count, a bookmark, `once`, `off`);
+  - the author's comment as an italic line;
   - up to 3 "key: value" lines;
-  - up to 4 action rows, then "+N more";
-  - pin labels inside the node.
-- `gz-nq`'s `layout.rs` (`node_box`) computes the box for the layout, drawing, hit tests, minimap and `quest_layout`.
-- The minimap is 180x120 and hidden under 12 nodes; without it a pill at the middle of each canvas edge counts the nodes wholly beyond it ("2 more") and a click brings the nearest in. Behaviour graphs never say "quest" (`gz-nq`'s `text.rs`).
+  - up to 4 action rows - the action's title and its catalog `summary` in words - then "+N more";
+  - a red top line with errors, amber with warnings, the first problem's sentence on the badge's hover; the `shadow.card` shadow; pins in their role's colour, a hollow ring when unwired, each with a tooltip of what it means;
+  - collapsed: the header and the pins; disabled: 40%, a hatched header.
+- `gz-nq`'s `layout.rs` (`node_box`) computes the box for the layout, drawing, hit tests, minimap and `graph.get`.
+- The picker is the kit's `PickList`: ranked search, the kind's icon and family colour, its description on the highlighted row, Recent (per project) and Favourites (a star per row) on top. Tab or Space opens it at the cursor; the empty canvas's menu is Paste, Add Comment Frame, Frame All, Auto Layout over the same list; a wire dropped on empty space opens it filtered by its pin.
+- The minimap never takes more than a fifth of the canvas's height and shows from 12 nodes; without it a pill at the middle of each canvas edge counts the nodes wholly beyond it ("2 more") and a click brings the nearest in. Behaviour graphs never say "quest" (`gz-nq`'s `text.rs`).
+- Every menu and the picker can be put up to look at: `graph.view menu=node|wire|canvas|frame|picker|replace` (a picker from a pin: `from_pin=node.pin`, `into=node`).
 
 **PDA Interface**
-- Toolbar: Save, Revert, Reload | Aspect, Language, Zoom (Fit/100%) as a segmented group | Reset State | Source, Details.
-- The canvas is centred; it pans (right or middle drag) and zooms at the cursor (Ctrl+wheel always; over a PDA list or the map the wheel is the game's), F fits, and Fit fits both axes with 16 pt round the device. Every side of the device that lies on the game's screen edge gets that edge drawn.
+- Toolbar: Save, Revert, Reload | Aspect [4:3 | 16:9], Language [rus | eng], Zoom [Fit | 100%] - three groups, each a muted caption before its segmented choice, a group gap between them | Reset State | Source, Details.
+- The canvas is centred; it pans (right or middle drag) and zooms at the cursor (Ctrl+wheel always; over a PDA list or the map the wheel is the game's), F fits, and Fit fits both axes with 16 pt round the device. Every side of the device that lies on the game's screen edge gets that edge drawn along the device, never past it.
 - Details (320) has the file with Use in Module, then tabs: Problems first, Pages (with the keys), Vars, Log.
-- Source is a bottom split: Mono, gutter, the reader's error line, Apply (Ctrl+Enter).
-- Unsaved text asks before Revert (naming the file), close or retarget (Save / Don't Save / Cancel).
+- Source is a bottom split: Mono, gutter, Lua data in four colours of the palette (keys accent.bright, strings success, numbers warning, comments muted; above 256 KB one colour), the reader's error line tinted and underlined with a squiggle; at the pane's foot the status (the reader's sentence, Unsaved edits, Saved), Line n when the reader stopped, and Apply (Ctrl+Enter).
+- Unsaved text asks before Revert (naming the file), close or retarget (Save / Don't Save / Cancel). `pda.preview` answers in canvas units; its `revert` and a retarget lose edits only with `discard`.
 
 **Model Preview and Texture Preview (new)**
 - Model: Frame, Reset View | Wireframe, Bones | Segmented Studio/Unlit | Details (320). Studio is a headlight along the view plus a key from above over an ambient. The view is drawn opaque (the target's alpha is a texture's gloss mask, not coverage). The model stands on a floor grid, and a visual only the linked game holds is drawn with the game's textures (`textures[].from`).
 - Texture: Fit, 1:1, Zoom ▾ | Segmented RGBA/R/G/B/A | Mip ▾ | Details. It pans and zooms at the cursor, and the checker is clipped to the view. Details name where the texture lives (`origin`), its container and format, and whether it is shown decoded.
 
 **Characters**
-- List (260) with search, dirty dots and Template badges, then a splitter.
-- Form, up to 760: Identity, Name & Bio (a row per language), Appearance, Profile, Dialogs, a Starting Kit table, and Trade.
+- Toolbar: Save (the tab's one Primary while the form holds edits, Ghost otherwise), Revert, Delete... (GhostDanger, asks through `dlg.delete_character`) | Reload.
+- Three columns. The list (260, a splitter): search, + on its header, a row per character with its portrait (a 22 pt face; the kind's glyph while there is none), id and name, Template badges and the dirty dot. The form, up to 760: Identity, Name & Bio (a row per language), Appearance, Profile, Dialogs, a Starting Kit table, and Trade. The preview, in the room the form leaves (300 pt at least, else it is not drawn): the character's model in the model viewer (`gz-ui-previews`' model view, its own orbit), then "In the Game" - the portrait at 96 pt, the name and the community as the player reads them; values the character leaves to its base are the base's.
+- Starting Kit is the kit's `ItemRows` (Item | Count | cross, Add Item, drag to reorder): the base's rows first, muted, "from <base>" after the item, their cross takes one out of this character (a count of 0); then the character's own rows.
 - Trade (badge "Trader" while the character keeps a shop): not a trader - a line saying so or naming the base's shop, Make a Trader (Change Trade over a base's), Not a Trader; a trader - Sells and Buys (a combo of ticks over the linked game's trade categories, a category it does not list stays ticked and says so), Markup, Pays, Restock, then a Stock table (Item | Count | Chance | remove), Add Item, Not a Trader.
 - Money: from / to fields, empty while the character sets none (the base's amount as the hint), Never runs out beside them, a Clear icon to unset.
-- Problems show as sentences under their fields; the codes stay in MCP and the build. Delete... is GhostDanger and asks through `dlg.delete_character`.
-- Unsaved edits ask before any switch. Validation runs on change.
+- Template and Squad are the grid's switches. Problems show as sentences under their fields; the codes stay in MCP and the build.
+- Unsaved edits ask before any switch. Validation runs on change. An item, a portrait or a dialog the module brings itself is no unknown one (the module's own sections, `gz-mod`'s `sections.rs`).
+- MCP: `characters.view` (select, path, show=<picker>, save / discard).
 
-**Screens & Music** (`screens`, Mod > Screens & Music, MCP `screens_get` / `screens_set` / `screens_view`). Saves to mod.ltx as it is edited, like World Rules.
-- Toolbar: `Loading | Menu` (which surface the tab edits), then `Screens [Mix In | Only Mine]` and `Music [Mix In | Only Mine]` for that surface, then the status.
+**Screens & Music** (`screens`, Mod > Screens & Music; `screens.info`, `screens.set`, `screens.import`, `screens.view`). Saves to mod.ltx as it is edited, like World Rules; the toolbar row says so.
+- Toolbar: `Loading | Menu` (which surface the tab edits), then `Screens [Mix In | Only Mine]` and `Music [Mix In | Only Mine]` for that surface - each a muted caption with a group gap before its choice - then the status.
 - Left (260 pt): Screens (rows of that surface) and Music, each with a + at its header; under Music `Repeat | Next Track`. A row's dot is a problem of it; its hover action removes it.
-- Right (a column of up to 640 pt): for a screen a 16:9 preview (pictures as they are, the rest marked where it goes), Layers, Music, and More folded (Name, Show On, Levels, Show Over It, Weight). For a track: File, Shuffle On, Volume, Weight.
+- Right (a column of up to 1040 pt, centred): for a screen a 16:9 preview (pictures as they are, the rest marked where it goes) as wide as the column, Layers, Music, and More folded (Name, Show On, Levels, Show Over It, Weight). For a track: File, Shuffle On, Volume, Weight.
+- Music is the kit's combo: Any Track, Silence, the video's own sound (on the loading screen), then the surface's tracks, each ticked on and off.
 - Layers: as many as the author adds, the top row is the top layer. + adds an empty one, the row's cross removes it, a row is dragged to reorder. A click opens that layer's File, Fit, Opacity and folded Position; a shader adds Texture, a video Its Sound when the screen plays it.
-- Files arrive by drag and drop, from Explorer or the Content Browser (the tab's drop zones, `gz-ui-pda`'s `drop.rs`; a tile lights up what is under it, a file from Explorer only lands; inner zones are asked first): on a layer it replaces its file, on Layers it adds layers, on Screens or the empty tab each becomes a new screen, on Music tracks; an `.ogg` is a track wherever it lands. Files from outside are copied into `screens\`, a PNG/JPG/TGA/BMP becomes a `.dds`, a `.ps` gets its `.s`.
+- Files arrive by drag and drop, from Explorer or the Content Browser (the tab's drop zones, `gz-ui-pda`'s `drop.rs`; a tile lights up what is under it, a file from Explorer only lands; inner zones are asked first): on a layer it replaces its file, on Layers it adds layers, on Screens or the empty tab each becomes a new screen, on Music tracks; an `.ogg` is a track wherever it lands. Files from outside are copied into `screens\`, a PNG/JPG/TGA/BMP becomes a `.dds`, a `.ps` gets its `.s` (`screens.import` is the same path for an agent).
 
 **World Rules**
 - Toolbar: Reload Game Data, Empty World... (confirms through `dlg.empty_world`). The status reads "Saved to mod.ltx as you edit".
-- One scroll up to 900: Original Game (Rule | Keep | Player Decides), Applies On (chips), Playable Area, Transitions (a filterable Transition | Leads To | Closed table), Player Start (Place in Scene).
-- Problems go in a drawer.
+- One scroll up to 900, kit `Section`s: Original Game (its count "n of 3 offered"), a row per rule - its label, then one segmented control [Remove | Keep | Player Decides]; Player Decides keeps the rule unless the player turns it off, and a fourth one is refused with a sentence; Keep Everything under them. Player Start (Place in Scene). Starting Kit: Money, Keep the perks, and the kit's `ItemRows` (Item | Count | cross, Add Item, drag to reorder; a row is sent once it has its item), Game's Base Kit and Remove Kit - an ordinary button: Edit > Undo on the tab puts the kit back. More (folded): Applies On (chips), Playable Area, Transitions (a filterable Transition | Leads To | Closed table).
+- Problems go in a drawer. An item the module brings itself is no unknown item (W208).
+- MCP: `world.info`, `world.set`, `world.lookup type=levels|transitions|patrols`, `world.view`.
 
 **Mod Settings**
-- Nav, 200, one `NavRow` per page with its icon and a problem dot: General, Mod Browser, Game Mode, Relations, Build Contents, PDA, Commands.
-- Form, up to 44 em, with validation under each field. The mod name and the mode title stay separate.
-- Mod Browser: Picture (the picture, its state and Choose Picture... / Remove beside it) and Tags (the fixed vocabulary as checkboxes) are rows of the same label-left grid.
+- Nav, 200, one `NavRow` per page with its icon and a problem dot: General, Mod Browser, Game Mode, Relations, Build Contents, PDA, Commands. A dot says only what was looked at: the project's scripts are read when the tab opens, on the pools, and a function is not called missing before they are.
+- The page, up to 760: its title and what it is for, then one kit card holding the page's label-left grid, a tone strip while the page has an error or a required field; validation under each field. The mod name and the mode title stay separate.
+- Mod Browser: Picture (the picture, its state and Choose Picture... / Remove beside it) and Tags (the fixed vocabulary as checkboxes) are rows of the same grid.
 - Relations: four rows of the same grid (Requires, Load After, Load Before, Conflicts), each a chip list with Add Module...: a searchable list of the modules installed in the linked game (`modules\` and `mods\`), and a typed id for one that is not installed.
 - Build Contents: Not Shipped, a block of paths and patterns.
-- Commands: a `PropertySection` per console command of `[commands]` (its name, a `cheat` badge) with Name (Delete as its trailing icon), Function (the chevron opens a searchable list of the project's `<script>.<function>`, Refresh reads the scripts again), Help, Arguments and Cheat; Add Command under them. The scripts and the linked game's modules are read when the page is picked, never per frame.
-- Sticky footer: what stops the save on the left, [Revert] [Save] on the right. File counts are taken on open, never per frame. The tab's toolbar row, which holds nothing else, says the same (`toolbar_status`).
+- Commands: the kit's `ItemRows` - Name | Function (its chevron picks a `<script>.<function>` of the project's scripts) | Arguments | Cheat | cross, Add Command, drag to reorder; a field with an error has the error outline. Under the table the selected command's Help and every sentence about it. Read the Scripts Again reads the scripts once more.
+- The tab saves as it is edited: the toolbar row says so ("Saved to mod.ltx as you edit", or what stops the save). While a new picture waits, the row holds Save (Primary) and that status. There is no footer.
+- MCP: `mod.view` (page, ask_game_updates, dialog); the data is `mod.info` / `mod.set` / `mod.thumbnail`.
 
 **Build dialogs**
-- **Build to Folder and Export Flat (M):** a PathField, and Writes To: the folder the build fills, read from its end (`<folder>\modules\<id>`, `<folder>\gamedata_<id>`). The native "files will be DELETED" box (default Yes) becomes a two-phase question: the build refuses, then `dlg.clean_target` names up to ten of the files it would delete, Cancel the default, and Yes re-runs it with `clean`.
-- **Package Release (M):** Output Folder, Requires Game, and the Author Key row (read-only unless the key asks for its password), sized in em. Replacing an earlier package of the version asks through `dlg.replace_release`.
+- **Build to Folder and Export Flat (M):** a PathField, and Writes To: the folder the build fills, read from its end (`<folder>\modules\<id>`, `<folder>\gamedata_<id>`). The label column is 8 em. A clean build that would delete files it did not write refuses; `dlg.clean_target` names up to ten of them, Cancel the default, and Yes builds again with `clean`.
+- **Package Release (M):** Output Folder, Requires Game, and the Author Key row (read-only unless the key asks for its password), a label column of 9 em. Replacing an earlier package of the version asks through `dlg.replace_release`.
 - **Result:** the kit's `Result` (section 4).
+- The Mod menu's Build to Folder..., Export Flat Gamedata... and Package Release... are `mod.view dialog=`; Build Into Game is `mod.build target=game` (a person in the window is asked what the build needs, a command asks nothing).
 
 **Publish Release (L)**
-- The Module section (Name, Repository, Version, Requires Game, Author Key) is read-only: Mod Settings edits the first ones, Requires Game is the linked game's version (MCP `requires_game=` names another), a locked key asks for its password in its row. The dialog no longer writes the repository or the version into mod.ltx.
+- One Release line (name · version · repository, read-only: Mod Settings edits them) and the Notes - a bordered field with a hint, Markdown - on the surface; Tag, Title, Options, Requires Game (the linked game's version; `release.publish requires_game=` names another), the Author Key and the account under More unless they are what stops the release. The label column is 9 em.
 - It reads the repository's releases as it opens (Publish is off meanwhile): a version already out - `v<version>` or `v<version>-rN` published - is a problem before the click, with [Open Mod Settings] and [Open Releases]. A read that fails is a muted note: GitHub checks again at publishing.
-- Every problem is listed at its top.
+- Every problem is listed at its top - except "not signed in", said once, in the Account row with Sign In / the token field beside it.
 - The device code is shown in Title Mono with Copy.
 - It closes when the job starts; the progress is the Task Center's card ([Stop Publishing]) from the packaging through the upload, and a click on the toolbar's Publish button brings it back; the result is the kit's `Result`.
 
 **Releases**
-- A sortable table: Tag (fixed at the widest tag) | Title | State ("Published" in secondary text for one that is not the latest) | Published (local) | Files ("3 files · 15 KB"), column lines in the header only, plus Details of the selected release (`mod_releases action=select`).
-- Edit... (`dlg.edit_release`) and Delete... (GhostDanger in the details toolbar, the row's context menu in the error colour, Del). Delete names the release, its files and tag, and what players get instead.
+- A sortable table: Tag (fixed at the widest tag) | Title | State ("Published" in secondary text for one that is not the latest) | Published (local) | Files ("3 files · 15 KB"), column lines in the header only, plus Details of the selected release (label column 8 em; `release.view select=`).
+- Edit... (`dlg.edit_release`; `release.view select= edit=true`) and Delete... (GhostDanger in the details toolbar, the row's context menu in the error colour, Del). Delete names the release, its files and tag, and what players get instead.
+- An empty state's action (Open Mod Settings, Sign In..., Publish Release...) is a Secondary button: Build Mod is the one Primary of the row.
 - A failure is a banner sentence naming what failed.
 
 **Submit to Mod Browser (L modal)**
-- Id `###dlg.catalog_submit`. Fixed height; the body scrolls.
-- Cards (`BeginCard`):
-  - Author Key.
+- Id `###dlg.catalog_submit`, answered as `submit`. Fixed height; the body scrolls.
+- Cards (`card`), their sentences wrapped at the card's width:
+  - Author Key (label column 8 em).
   - Requirements, failures first, the met ones folded under "Met (n)", VirusTotal findings left out.
   - "VirusTotal (required)", in the Required tone and never grey. This is the only place the verdict appears. [Scan] [Open Report] [Forget VirusTotal Key]; Open Report is on only while a package has a finished report, and Forget never touches the author key. While a check has not looked the packages up yet, the card says "Looking the packages up on VirusTotal..." instead of claiming they are not scanned.
   - Submission: the verdict, and "Submitting opens a public issue at github.com/MMadmer/darf-mods from <login>." "Not submitted yet." shows only once GitHub answered; until then it looks the submission up.
   - Withdrawal: Withdraw... (GhostDanger) raises the sheet `Withdraw from Mod Browser###dlg.catalog_withdraw`, the Danger Withdraw and Cancel the default.
 - Every card button is Secondary.
-- Footer: `FooterBusy` with the stage, [Stop <job>] (Stop Checking, Stop Scanning, Stop Submitting, ...) and [Hide] while a job runs; the submit button - Submit, Scan and Submit, Update Submission or Scan and Update, at the width of the widest - and [Close].
+- Footer while a job runs: the kit's busy line with the job's stage ("Waiting for VirusTotal: the report on 2 of 3 packages") and one [Stop <job>] (Stop Checking, Stop Scanning, Stop Submitting, ...); the title's cross hides the window and the job goes on. Idle: the submit button - Submit, Scan and Submit, Update Submission or Scan and Update, at the width of the widest - and [Close].
+- The project closing stops its job and takes the window and its results with it.
+- MCP: `release.catalog_status action=status|check|submission`, `release.catalog action=scan|submit|withdraw`, `release.key`, `release.account`; `release.view submit= withdraw_question=` puts the window and its sheet up to be looked at.
 
 **Start page**
 - A page filling the work area under the caption (`Start Page###start_page`, `BeginPage`), not a modal.
@@ -488,14 +504,14 @@ None of them acts while a modal is up. `app.keys action=resolve keys=<chord>` an
 - Light Animations, Texture Library and Sound Library become documents: list | preview or ImDrawList timeline | grid. An unsaved prompt replaces the destructor's MessageBox.
 - The Texture Library reads the `.tga` sources of `$textures$` (rawdata\textures). Check New Textures turns a library tab without unsaved changes into New Textures (from `$import$`); the finished import brings the library back. Empty states name the folder or file each library reads.
 - Detail Object List becomes an L dialog (`dlg.detail_objects`, above).
-- Choose (`###dlg.choose`, L): search opens folders. Every list is picked, never typed (`gz-ui-level`'s `lists.rs`, read off the UI thread and kept for the session): a spawn's Model\Animation lists its model's motions (its own and those of the `.omf` files it names), Fixed bones and a light's bones its model's bones (Fixed bones takes several, the ones it has picked already), Motion the game's `anims\*.anm` / `*.anms`. An empty list says what is missing ("The model ... has no motions.", "The object has no model."). `property_choose` answers the same list (`list`, `total`, `items` with `search` / `limit`, `multi`, `empty`); `property_inspector` names a choose row's `list` and gives the object's own (`choices`).
+- Choose (`###dlg.choose`, L): search opens folders. Every list is picked, never typed (`gz-ui-level`'s `lists.rs`, read off the UI thread and kept for the session): a spawn's Model\Animation lists its model's motions (its own and those of the `.omf` files it names), Fixed bones and a light's bones its model's bones (Fixed bones takes several, the ones it has picked already), Motion the game's `anims\*.anm` / `*.anms`. An empty list says what is missing ("The model ... has no motions.", "The object has no model."). `scene.choices` answers the same list (`list`, `total`, `choices` with `query` / `limit`, `several`, `empty`); `scene.get` names a pick property's `list`.
 - Edit Text drops its crashing Load/Save.
 
 ## 7. MCP
 
 The window's commands are typed cards of the registry (`docs/COMMANDS.md`): `help <name>` gives each one's parameters with their doc. **Lengths are pt both ways**; a rect is `[x, y, w, h]` pt. A picture is px with its `scale`. A window command in a run without a window answers `no_window`. An opener brings its target up in the same frame; reads never switch the tab.
 
-**Held for frames.** The editor draws on demand, so a command that reads what is drawn waits for the frames it needs before it answers (`editor.frames.after(n)`): `shot.window`, `ui.list`, `ui.audit`, `ui.frame`, `ui.scroll` (and `screenshot_viewport`). Commands that change what is drawn and answer with where it landed are held for the frames that show it, in the same call (`quest_view`, `pda_preview`, `preview_model`, `texture_preview`). Nothing answers `pending`.
+**Held for frames.** The editor draws on demand, so a command that reads what is drawn waits for the frames it needs before it answers (`editor.frames.after(n)`): `shot.window`, `ui.list`, `ui.audit`, `ui.frame`, `ui.scroll` (and `screenshot_viewport`). Commands that change what is drawn and answer with where it landed are held for the frames that show it, in the same call (`graph.view`, `pda.preview`, `preview_model`, `texture_preview`). Nothing answers `pending`.
 
 | Command | What it does |
 |---|---|
@@ -526,14 +542,13 @@ The window's commands are typed cards of the registry (`docs/COMMANDS.md`): `hel
 | `ui.tasks [show=]` | the Task Center as drawn: `running`, `finished` (with `result`), `card_open`, the counts, `status_line` |
 | `shot.window [frames=]` | a picture of the window as the commands before it left it: `png_base64`, `width`, `height`, `scale`, `active_tab`, `busy`, `modal` {title, id, rect px}, `outside` |
 | `perf.stalls [clear=]` | the UI passes and events over 100 ms: `stalls`, `worst_ms`, `limit_ms` |
-| `graph.action what= [doc=]` | one of the graph's actions on the tab that is up (or `doc`) |
 | `job.list`, `job.get`, `job.wait`, `job.stop` | every job of the editor, with its `owner` |
 | `project.open path= [save= discard= from_launch=]`, `project.close [save= discard=]`, `project.create name= [parent=]` | a project in the window: a folder, a project file or a `mod.ltx`; `from_launch` asks in the window when unsaved work is in the way; a close goes to the Start page |
 | `game.link [path= scope=project\|default find=]`, `game.info [candidates=]` | Link Game, Preferences > Game |
 
 Discarding is a call through the bridge's `grizzly_destroy` (`destructiveHint`): `app.quit discard=true`, `ui.tab action=close discard=true`, `project.close discard=true` and the other commands that declare `discard` (`docs/COMMANDS.md`).
 
-The surfaces' own commands are in their crates (`quest_view`, `pda_preview`, `mod.build`, `pda.open`, `library.*`, ...); the level editor's numbered table answers `list_commands` and runs `exec_command` until its actions replace it.
+The surfaces' own commands are in their crates (`graph.view`, `pda.preview`, `screens.view`, `world.view`, `characters.view`, `mod.view`, `release.view`, `pda.open`, `library.*`, ...); the level editor's numbered table answers `list_commands` and runs `exec_command` until its actions replace it.
 
 ## 8. Implementation
 
@@ -545,7 +560,7 @@ The surfaces' own commands are in their crates (`quest_view`, `pda_preview`, `mo
 **What the surfaces still carry of their own** (`local.rs`), to be replaced by the kit's one widget of its job in their own streams: fold headers (`form::section`, `form::raised_section`, the graph's fold header, the release fold) by `Section`; checks (`form::check`, the graph's, the PDA's, the world's cell check) by `Check` / `Switch`; pick lists (the graph's kind picker, Mod Settings', the world's item picker) by `PickList` and `Combo`; item rows (Characters', World Rules') by `ItemRows`; table heads (the release table head, `list::table_headers`) by `Table`; per-surface drop code by `drop`; ellipsizing in hot paths (the graph canvas) by `text::fit`; the PDA's sheet upload by `upload::Tiled`. Other local widgets, each used by one crate:
 - `gz-ui-app`: rule. `gz-ui-content`: tree row, section, breadcrumbs, rename box, checker, menu heading, marquee.
 - `gz-ui-graph`: pane header. `gz-ui-level`: eye toggle, button flow, panel header, tool tile, thumbnail, badge button, tab, tree list.
-- `gz-ui-mod`: password field, value column, picture. `gz-ui-pda`: list header, tab strip, multi combo, code view, toggle row, drop mark.
+- `gz-ui-mod`: password field, value column, picture. `gz-ui-pda`: list header, tab strip, code view (with the Lua colouring), drop mark.
 - `gz-ui-previews`: checker, heading, frame, texture pick, wheel. `gz-ui-release`: secret field and row, code, card title.
 - `gz-ui-world`: number text, dirty dot, problems drawer, level picker.
 

@@ -2,8 +2,8 @@
 //! and the port of its control endpoint). A second start of the editor on the same home with a
 //! project to open hands the project to that editor (`project.open path= from_launch=true`: the
 //! running one asks about unsaved work in its window), lets it bring its window to the front and
-//! ends; without a project it only brings that window forward. A commandlet and a compile run are
-//! instances of their own and never hand over.
+//! ends; without a project it only brings that window forward. A commandlet is an instance of its
+//! own and never hands over.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};

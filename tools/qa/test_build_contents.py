@@ -7,15 +7,14 @@ over MCP on a THROW-AWAY COPY of a project filled with all of that and checks:
 
   * tooling (.git, .gitignore, .github, .vscode, Thumbs.db, desktop.ini, Office
     locks) is never listed, never walked for assets and never shipped - at any depth;
-  * mod.ltx [exclude] (mod_exclude / mod_set_manifest) leaves out what the author
+  * mod.ltx [exclude] (mod.exclude / mod.set) leaves out what the author
     names - folders, files, patterns - from the module AND from the release package,
     and the quests and characters inside it are no part of the build;
   * the build says what it left out (`left_out`);
   * the clean build does not follow a link inside the target, refuses a target that
     is a link, and refuses a target that overlaps the project;
   * a git working copy gets a .gitignore for the editor's own files, once;
-  * a folder with mod.ltx and no project.ltx still counts as a project;
-  * the Mod Settings tab opens on each of its pages (mod_settings_view), follows a
+  * the Mod Settings tab opens on each of its pages (mod.view), follows a
     save made elsewhere without turning dirty, and its Relations and Mod Browser pages
     are the same label-left grid as the rest; the build dialogs (Build to Folder,
     Export Flat, Package Release) open, show and close over MCP by their kit ids, and
@@ -82,7 +81,7 @@ class Editor:
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
             try:
-                if mcp("mod_manifest", timeout=30).get("ok"):
+                if mcp("mod.info", timeout=30).get("ok"):
                     return
             except OSError:
                 pass
@@ -175,12 +174,12 @@ def labels_of(audit: dict) -> dict:
 
 def run_ui_checks() -> None:
     """Mod Settings is a tab that follows mod.ltx; the build dialogs open, show and close over MCP."""
-    v = mcp("mod_settings_view")
-    check(v.get("ok") and v.get("tab") == "mod_settings", "U mod_settings_view answers", json.dumps(v)[:300])
+    v = mcp("mod.view")
+    check(v.get("ok") and v.get("tab") == "mod_settings", "U mod.view answers", json.dumps(v)[:300])
     check([p.get("id") for p in v.get("pages", [])] == SETTINGS_PAGES, "U Mod Settings has its seven pages",
           json.dumps(v.get("pages"))[:300])
     for page in SETTINGS_PAGES:
-        v = mcp("mod_settings_view", page=page)
+        v = mcp("mod.view", page=page)
         check(v.get("ok") and v.get("active") and v.get("page") == page, "U the tab opens on " + page, json.dumps(v)[:300])
         audit = mcp("ui.audit", id="mod_settings")
         check(audit.get("ok") and not audit.get("escaped"), "U nothing escapes the " + page + " page",
@@ -188,13 +187,16 @@ def run_ui_checks() -> None:
     controls = labels_of(mcp("ui.audit", id="mod_settings"))
     check("Revert" not in controls and "Save" not in controls, "U the tab saves as it is edited: no Revert, no Save",
           json.dumps(sorted(x for x in controls if x))[:400])
+    frame = mcp("ui.frame")
+    check("as you edit" in str(frame.get("toolbar_status", "")), "U the toolbar row says how the tab saves - no footer",
+          json.dumps(frame.get("toolbar_status"))[:200])
     # a save made elsewhere reaches the form and leaves it clean
-    probe = mcp("mod_exclude", path="qa_ui_probe")
-    v = mcp("mod_settings_view")
+    probe = mcp("mod.exclude", path="qa_ui_probe")
+    v = mcp("mod.view")
     check(probe.get("ok") and v.get("dirty") is False, "U an outside save does not make the tab dirty", json.dumps(v)[:300])
-    mcp("mod_exclude", path="qa_ui_probe", excluded=False)
+    mcp("mod.exclude", path="qa_ui_probe", on=False)
     # Relations are picked from the linked game's modules, never typed into boxes
-    mcp("mod_settings_view", page="relations")
+    mcp("mod.view", page="relations")
     audit = mcp("ui.audit", id="mod_settings")
     controls = labels_of(audit)
     check("Add Module..." in controls, "U Relations offers Add Module...", json.dumps(sorted(x for x in controls if x))[:400])
@@ -206,7 +208,7 @@ def run_ui_checks() -> None:
     check(grid, "U Relations is a grid: each row's Add Module... sits in the value column",
           json.dumps({"rows": rows, "adds": adds})[:400])
     # Mod Browser too: Picture and Tags are rows, the picture's buttons in the value column
-    mcp("mod_settings_view", page="mod_browser")
+    mcp("mod.view", page="mod_browser")
     audit = mcp("ui.audit", id="mod_settings")
     controls = labels_of(audit)
     picture, tags, choose = controls.get("Picture"), controls.get("Tags"), controls.get("Choose Picture...")
@@ -214,20 +216,20 @@ def run_ui_checks() -> None:
         choose["rect"][1] >= picture["rect"][1] and tags["rect"][1] > choose["rect"][1]
     check(grid, "U Mod Browser is a grid: Picture and Tags are rows, Choose Picture... sits in the value column",
           json.dumps({"picture": picture, "tags": tags, "choose": choose})[:400])
-    both = mcp("mod_set_manifest", requires="qa.other", conflicts="qa.other")
-    v = mcp("mod_settings_view")
+    both = mcp("mod.set", set={"requires": ["qa.other"], "conflicts": ["qa.other"]})
+    v = mcp("mod.view")
     rel = [p for p in v.get("problems", []) if p.get("page") == "relations"]
     check(both.get("ok") and any("qa.other" in p.get("text", "") and p.get("tone") == "warning" for p in rel),
           "U a module required and in conflict at once is named on Relations", json.dumps(rel)[:300])
-    mcp("mod_set_manifest", requires="", conflicts="")
-    bad = mcp("mod_settings_view", page="nowhere")
+    mcp("mod.set", set={"requires": [], "conflicts": []})
+    bad = mcp("mod.view", page="nowhere")
     check(not bad.get("ok") and "general" in bad.get("error", ""), "U an unknown page is refused, naming the pages",
           json.dumps(bad))
     closed = mcp("ui.tab", action="close", doc="mod_settings")
     check(closed.get("ok"), "U the tab closes when nothing is unsaved", json.dumps(closed)[:300])
 
     windows = mcp("ui.contract").get("dialogs", {})
-    module_id = mcp("mod_manifest").get("id", "")
+    module_id = mcp("mod.info").get("manifest", {}).get("id", "")
     for dialog in BUILD_DIALOGS:
         window = windows.get(dialog, "")
         check(window.endswith("###dlg." + dialog), "U the contract names " + dialog + " by its kit id", window)
@@ -286,7 +288,7 @@ def run(project: str) -> None:
         # ------------------------------------------------------------------ A: git
         ignore = os.path.join(project, ".gitignore")
         text = io.open(ignore, encoding="utf-8").read() if os.path.isfile(ignore) else ""
-        check("/releases/" in text and "/project.ltx" in text and "/temp/" in text,
+        check("/releases/" in text and "/preview.png" in text and "/temp/" in text,
               "A a git working copy without a .gitignore gets one for the editor's own files", text[:200])
         check("/design" not in text and "LICENSE" not in text, "A and it names nothing of the author's")
         write(project, ".gitignore", "# the author's own now\n")
@@ -306,23 +308,27 @@ def run(project: str) -> None:
         check(r.get("ok") and not sel.get("ok"), "B nor a Thumbs.db deep in gamedata", json.dumps(sel)[:160])
 
         # ------------------------------------------------------------------ C: the author's exclusions
-        r = mcp("mod_set_manifest", exclude="docs\n*.psd\nwip_char")
-        check(r.get("ok") and r.get("exclude") == ["docs", "*.psd", "wip_char"],
-              "C mod_set_manifest takes the whole list, one entry per line", json.dumps(r.get("exclude")))
-        r = mcp("mod_exclude", path="design")
+        r = mcp("mod.set", set={"exclude": ["docs", "*.psd", "wip_char"]})
+        check(r.get("ok") and r.get("manifest", {}).get("exclude") == ["docs", "*.psd", "wip_char"],
+              "C mod.set takes the whole list", json.dumps(r.get("manifest", {}).get("exclude")))
+        r = mcp("mod.exclude", path="design")
         check(r.get("ok") and r.get("exclude") == ["docs", "*.psd", "wip_char", "design"],
-              "C mod_exclude adds one entry", json.dumps(r)[:200])
-        r = mcp("mod_exclude", path="design/story.md")
+              "C mod.exclude adds one entry", json.dumps(r)[:200])
+        r = mcp("mod.exclude", path="design/story.md")
         check(r.get("ok") and len(r.get("exclude", [])) == 4, "C an entry below an excluded folder adds nothing",
               json.dumps(r)[:200])
-        r = mcp("mod_exclude", path="design/story.md", excluded=False)
+        r = mcp("mod.exclude", path="design/story.md", on=False)
         check(not r.get("ok") and "design" in str(r.get("error")),
               "C including it names the rule that still takes it out", json.dumps(r)[:200])
-        r = mcp("mod_exclude", path="mod.ltx")
+        r = mcp("mod.exclude", path="mod.ltx")
         check(not r.get("ok"), "C mod.ltx cannot be excluded", json.dumps(r)[:160])
-        m = mcp("mod_manifest")
-        check(m.get("exclude") == ["docs", "*.psd", "wip_char", "design"], "C mod_manifest reports the list",
+        info = mcp("mod.info")
+        m = info.get("manifest", {})
+        check(m.get("exclude") == ["docs", "*.psd", "wip_char", "design"], "C mod.info reports the list",
               json.dumps(m.get("exclude")))
+        left = [x.replace("\\", "/") for x in info.get("build", {}).get("left_out", [])]
+        check("design" in left and info.get("build", {}).get("ships", 0) > 0,
+              "C and what a build would ship and leave out", json.dumps(info.get("build"))[:300])
         ltx = io.open(os.path.join(project, "mod.ltx"), encoding="utf-8", errors="replace").read()
         check("[exclude]" in ltx and "wip_char" in ltx, "C the list lives in mod.ltx [exclude]")
 
@@ -340,7 +346,7 @@ def run(project: str) -> None:
         check("qa_ghost" not in chars, "C nor a character in one", json.dumps(chars))
 
         # ------------------------------------------------------------------ D: the build
-        built = mcp("mod_export", target=target.replace("\\", "/"))
+        built = mcp("mod.build", target="folder", path=target.replace("\\", "/"))
         check(built.get("ok"), "D the module builds - a broken quest in an excluded folder does not stop it",
               json.dumps(built)[:300])
         module = os.path.join(target, "modules", m.get("id", ""))
@@ -366,23 +372,23 @@ def run(project: str) -> None:
         write(linked, "keep.txt", "not yours\n")
         inner = os.path.join(module, "pointer")
         if check(junction(inner, linked), "F a junction sits inside the module folder"):
-            again = mcp("mod_export", target=target.replace("\\", "/"))
+            again = mcp("mod.build", target="folder", path=target.replace("\\", "/"))
             check(again.get("ok") and os.path.isfile(keep) and not os.path.exists(inner),
                   "F the clean build removes the link and leaves what it pointed at", json.dumps(again)[:200])
         qa_target.remove_tree(module)
         if check(junction(module, linked), "F the module folder itself is a junction"):
-            refused = mcp("mod_export", target=target.replace("\\", "/"))
+            refused = mcp("mod.build", target="folder", path=target.replace("\\", "/"))
             check(not refused.get("ok") and "link" in str(refused.get("error")) and os.path.isfile(keep),
                   "F a build into a link is refused and the linked folder is untouched", json.dumps(refused)[:240])
             os.rmdir(module)
-        refused = mcp("mod_export", target=project.replace("\\", "/"))
+        refused = mcp("mod.build", target="folder", path=project.replace("\\", "/"))
         check(not refused.get("ok") and "overlap" in str(refused.get("error")),
               "F a target inside the project is refused", json.dumps(refused)[:240])
         check(not os.path.exists(os.path.join(project, "modules")),
               "F and not even an empty folder was made there")
 
         # ------------------------------------------------------------------ G: the release
-        pk = mcp("mod_package", out_dir=pkg.replace("\\", "/"))
+        pk = mcp("mod.package", path=pkg.replace("\\", "/"))
         check(pk.get("ok"), "G the release packages", json.dumps(pk)[:300])
         names = []
         for p in pk.get("packages", []):
@@ -398,14 +404,12 @@ def run(project: str) -> None:
         index = io.open(os.path.join(pkg, pk.get("index", {}).get("name", "")), encoding="utf-8").read()
         check(".git" not in index and "story.md" not in index and ".psd" not in index,
               "G the file index names none of it")
-        check("design" in [x.replace("\\", "/") for x in pk.get("left_out", [])], "G mod_package says what it left out",
+        check("design" in [x.replace("\\", "/") for x in pk.get("left_out", [])], "G mod.package says what it left out",
               json.dumps(pk.get("left_out")))
 
-        # ------------------------------------------------------------------ H: a clone without project.ltx
-        os.remove(os.path.join(project, "project.ltx"))
-        listed = json.dumps(mcp("project.list"))
-        check(os.path.basename(project) in listed, "H a folder with mod.ltx and no project.ltx is still a project",
-              listed[:300])
+        # ------------------------------------------------------------------ H: the jobs and the UI thread
+        stalls = mcp("perf.stalls")
+        check(stalls.get("ok") and not stalls.get("stalls"), "H no UI pass waited", json.dumps(stalls)[:300])
     finally:
         ed.close()
         for d in (target, pkg, linked):

@@ -71,6 +71,7 @@ return {
                                objectives = { { id = <ident>, title = <text>, descr = <text>,
                                                 target = <target_ref>, visible = <bool> }, … } }, … },
   nodes      = { <node>, <node>, … },
+  canvas     = { … },                 -- editor-only: how the graph is drawn (§2.1)
 }
 
 <node> = {
@@ -82,8 +83,10 @@ return {
   on_enter = { <action>, … },         -- in order, before the main action
   on_exit  = { <action>, … },         -- in order, after it
   out      = { <pin> = "<node id>" | { "<id>", "<id>" }, … },
+  disabled = true,                    -- optional: the game passes the node through (§2.2)
   pos      = { 0, 160 },              -- editor-only
-  comment  = "…",                     -- editor-only
+  collapsed = true,                   -- editor-only: header and pins alone
+  comment  = "…",                     -- editor-only: the italic line under the header
 }
 
 <action> = { kind = "item.give", params = { section = "wpn_pm", count = 1 } }
@@ -102,6 +105,62 @@ Task steps (`objectives`) are extra PDA rows of one task, each with its own map
 spot; their state is read by the `objective_status` condition. With
 `auto_complete` on (the default) the task completes itself once every step is
 `completed`; a failed step leaves the task open.
+
+### 2.1 The canvas
+
+`canvas` is the editor's and the game never reads it. Every key is optional:
+
+```lua
+canvas = {
+  flow = "right",                     -- "right" (left to right) | "down" (top to bottom)
+  wires = { style = "circuit", diagonal = "middle", thickness = 2,
+            by_pin = true, dim = false, bubbles = false, arrows = true },
+  frames = { { title = "The ambush", tone = 3, x = 120, y = 40, w = 620, h = 300 } },
+  routes = { ["wait.done>ambush"] = { { 400, 120 }, { 400, 260 } } },
+  bookmarks = { { name = "Finale", node = "finish" } },
+},
+```
+
+- `flow`: which way the graph runs - inputs on a node's left edge and outputs on its right, or
+  inputs on top and outputs at the bottom. A new graph takes Preferences > Graph > Flow (left to
+  right unless the author chose otherwise); a file that has node positions and no `flow` runs
+  `down` - it was laid out that way. `graph.arrange action=layout flow=` switches and lays the
+  graph out again in one undo step.
+- `wires`: the graph's own wire options over the author's preferences; a key left out follows
+  Preferences > Graph. `style` is `curved`, `straight`, `circuit` (right angles with rounded
+  corners, sibling wires on lanes of their own), `angled` (45-degree diagonals between straight
+  stubs, the diagonal at the `start`, `middle` or `end`) or `subway` (angled, the wires of one
+  output sharing a trunk until their targets part). `thickness` is 1-4 px at 100%; `by_pin`
+  colours a wire by its pin (a failure, timeout or abort in the danger hue); `dim` fades the wires
+  that do not touch the selection; `bubbles` sends dots down the wires from the selection;
+  `arrows` puts an arrowhead where a wire enters a node.
+- `frames`: comment frames - a title, a `tone` (0-9, one of the graph's family colours) and a
+  rectangle in world pt. Moving a frame moves the nodes inside it.
+- `routes`: a wire's reroutes, any number of waypoints, keyed `"<from>.<pin>><to>"`. Renaming a
+  node rewrites its keys; removing the node or the wire takes its route away.
+- `bookmarks`: named nodes, in order; Ctrl+1..9 jumps to bookmark 1..9 (by its name when it is a
+  digit, else its place), Ctrl+Shift+1..9 sets one on the selected node.
+
+The editor writes the file through the document's difference (`docs/ASSETS.md` 3): moving one
+node changes one line, a comment and a key the editor does not know stay where they were.
+
+### 2.2 Disabled nodes
+
+`disabled = true` keeps a node in the graph and takes it out of play; the game's runtime reads it
+(NQ_RUNTIME.md, "Disabled nodes"):
+
+- entering a disabled node runs none of its actions and no wait: it leaves at once by its way on -
+  the kind's first output in catalog order that is not a failure (`timeout`, `fail`, `failed`,
+  `aborted`, `abort`, `error`); a disabled `flow.branch` takes its first case, its conditions
+  unread;
+- a node with no way on (a `flow.end`, a way on nobody wired) ends its branch there;
+- a disabled trigger never fires;
+- a node passed through is not done (`node_done` stays false), and a save keeps nothing of it.
+
+The validator names a disabled node with a note (`disabled`, not a warning). The canvas draws it
+at 40 % with a hatched header and its wires dashed.
+
+### 2.3 Row schemas
 
 A list parameter whose kind declares a **row schema** is typed row by row.
 Three kinds do: `item.give` and `item.take` take plain rows (a section and a
@@ -182,36 +241,35 @@ canvas screenshots. What guarantees this:
 1. **The file is self-contained.** Everything the editor knows about a quest
    lives in `.nqasset`. No sidecars.
 2. **Coordinates are optional.** Write nodes without `pos` — the editor lays
-   them out itself (`quest_layout` or simply opening the document), and a save
+   them out itself (`graph.arrange action=layout` or simply opening the document), and a save
    does not write the positions it worked out.
-3. **The schema on demand.** `grizzly_quest_catalog` returns every kind with its
-   groups, `use`, parameters (type/required/default/min/max/enum), pins, the
-   `wait`/`once`/`event` flags and a one-line description. That is enough to
-   write a quest from scratch.
+3. **The schema on demand.** `asset.reference kind=quest` (or `kind=behaviour`) returns this
+   document and every kind of the linked game with its group, parameters (type, required,
+   default, range, enum) and pins. That is enough to write a quest from scratch.
 4. **Problems as text.** `asset.check` (a file, a folder or the project)
    returns `problems` — `{code, severity, text, file, line, column, end_line,
    end_column, fix}`, the codes the game prints, every one at its place in the
-   file; `quest_open` / `quest_apply` return the document's `{code, severity,
-   node, slot, message}`.
-5. **Reading as text.** The file is the text: read it. `quest_open` adds the
+   file; `graph.get` / `graph.edit` return the document's `{code, severity,
+   node, slot, message, sentence}`.
+5. **Reading as text.** The file is the text: read it. `graph.get` adds the
    **outline** — a linear description of the graph (§5). `game.lookup
    type=quest_id` lists the project's quests, `asset.find` searches their lines
    or the assets that name an id.
 6. **Editing — the file or by operations.** The usual loop is to write the
    file; the editor follows it (an open tab reads it again). Targeted edits of
-   an open document — `quest_apply` with an operation list, then `quest_save`.
-7. **Screenshots are possible but unnecessary.** `grizzly_quest_view` +
-   `grizzly_screenshot_editor` remain for visual checks; no step of the workflow
-   depends on them.
+   an open document — `graph.edit` with an operation list (`save=true` writes the file).
+7. **Screenshots are possible but unnecessary.** `graph.view` + `shot.window` remain for
+   visual checks; no step of the workflow depends on them.
 
-The recommended loop: `quest_catalog` → write the file → `asset.check` →
-fix what it names (or `quest_open` + `quest_apply` + `quest_save`) →
-`asset.check` over the project (the build runs the same checks) → `mod_export`.
+The recommended loop: `asset.reference kind=quest` → write the file → `asset.check` →
+fix what it names (or `graph.edit ... save=true`) → `asset.check` over the project (the build
+runs the same checks) → the module build.
 
 ## 5. The outline format
 
 One line per node in topological order from the triggers. This is what
-`quest_open`, `quest_apply` and `quest_edit` return in the `outline` field.
+`graph.get`, `graph.edit` and `graph.arrange` return in the `outline` field. A disabled node
+ends its line with `; disabled`.
 
 ```
 quest dialog_branching "Долг вежливости" (active: auto; vars: agreed, asked; tasks: kill_boars)
@@ -255,7 +313,7 @@ How to read it:
 The catalog is supplied by **the game** (`configs\nq\catalog.ltx` +
 `configs\nq\kinds\*.ltx` of the linked install and of installed modules); the
 editor bundle (`gamedata\configs\nq\catalog.ltx`) is only the fallback when no
-game is linked. `quest_catalog` shows the source (`game` / `bundled`) and the
+game is linked. `asset.reference kind=quest` shows the source (`game` / `bundled`) and the
 version.
 
 The titles and descriptions below come from the catalog. Required parameters
@@ -432,7 +490,7 @@ and registers the implementations in its own `scripts\register.script` via
 `xms.registry.get("nq.kinds"):add("<kind>", { … })`. The editor scans the same
 folder of the linked game and of installed modules (both roots — `modules\` and
 `mods\`) and, last, of the open project itself - so a module's own kinds are in the
-dropdowns, the validator and `quest_catalog` while its author is still writing them,
+dropdowns, the validator and `asset.reference` while its author is still writing them,
 before any build; the installed copy of the project's own module is skipped (it is an
 older build of the same file). A change on disk is picked up with the content browser's
 refresh. The kind implementation contract — `NQ_RUNTIME.md` §4.3.
@@ -451,7 +509,7 @@ A problem line: `CODE node[slot]: message`, where the slot is `param:<name>`,
 | `E002` | the quest `id` is not `[a-z0-9_]` or taken by another quest | rename the `id`; it need not match the file name (a mismatch is only `W061`) |
 | `E003` | the file is not one declarative table | remove everything that is not data: calls, `local`, concatenation, a second `return`. The syntax error position is in the message |
 | `E004` | a node `id` is empty, not `[a-z0-9_]` or duplicated | give the nodes unique lowercase ids |
-| `E005` | an unknown kind, or a kind in the wrong position | check `quest_catalog`: the kind's `use` must contain `main`/`trigger` for a node, `extra` for `on_enter`/`on_exit`, `cond` for a condition |
+| `E005` | an unknown kind, or a kind in the wrong position | check `asset.reference kind=quest`: the kind's `use` must contain `main`/`trigger` for a node, `extra` for `on_enter`/`on_exit`, `cond` for a condition |
 | `E006` | a required parameter is missing / wrong type / outside the range or enum | look the type up in the catalog (§3, §6); the same code catches bad `activation`, `vars`, `tasks`, `once` |
 | `E007` | the pin is not declared on the kind; the edge target does not exist; the edge leads into a trigger | take pins from the catalog (for `wait.any`/`flow.*` the pins = case names); check the target id for a typo; a trigger can only be a source |
 | `E008` | not a single trigger, or no `nodes` list | add a `trigger.start` (or `trigger.when`) |
@@ -483,66 +541,71 @@ A problem line: `CODE node[slot]: message`, where the slot is `param:<name>`,
 
 ---
 
-## 8. The `quest_*` MCP tools
+## 8. The `graph.*` commands
 
-The editor listens on TCP `127.0.0.1:28016`, one JSON object per line.
-Structured arguments travel as **a string holding a Lua table**, responses are
-JSON. Common response fields: `ok`, on failure `error`. Most commands respond
-with `path`, `id`, `title`, `nodes`, `errors`, `warnings`, `problems`
-(a list of `{code, severity, node, slot, message}`), `outline`, `open`,
-`dirty`, `undo`, `redo`.
+A graph's file is the author's text: it is created, read and changed with file tools, checked
+with `asset.check` and searched with `asset.find`. The `graph.*` commands work on a graph the
+editor has open (opening it when it is not): one undo step per call, its tab brought up when there
+is a window; an editor without a window writes the file at once, since no tab holds the edit.
+`doc` names the graph: its tab (`quest:<path>`, `beh:<path>`) or its file, project-relative.
+MCP commands show no dialogs: what would lose unsaved work refuses with `unsaved` unless told
+`discard`.
 
-Destructiveness: MCP commands show no dialogs. `quest_close` on an unsaved
-document answers with an `unsaved` error unless `discard: true` is passed.
-
-| Tool | Arguments | Response |
+| Command | Arguments | What it does and answers |
 |---|---|---|
-| `grizzly_quest_catalog` | — | `source` (`game`/`bundled`), `version`, `api`, `files`, `count`, `kinds[]` — per kind: `id`, `group`, `title`, `desc`, `use[]`, `params[]` (`name`, `type`, `required`, `default`, `min`, `max`, `enum[]`), `pins[]`, `wait`, `once`, `event`, `impl`, `since` |
-| `grizzly_quest_open` | `path` | opens the document (reads the file, lays out `pos`-less nodes, validates) and answers the summary and the `outline`. Re-opening just returns the state; `disk_error`, `missing` and `conflicts` say what the file on disk did meanwhile |
-| `grizzly_quest_close` | `path`, `discard?` | `{ok:true}` |
-| `grizzly_quest_undo` / `grizzly_quest_redo` | `path` | undo/redo in the document's own ring (the scene undo is untouched). Error `nothing to undo` when empty |
-| `grizzly_quest_apply` | `path`, `ops` | applies the operation list (all or nothing, one undo step). The response + `applied` — how many operations went through |
-| `grizzly_quest_save` | `path` | `path`, `errors`, `warnings`. Writes only the values the document changed; a change the file took on disk meanwhile is merged first (the values both changed keep the document's) |
-| `grizzly_quest_reload` | `path` | re-reads the open document from disk (drops unsaved edits and the undo history) |
-| `grizzly_quest_layout` | `path`, `all?` | a deterministic pin-aware top-down layout: full bounds of nested branches and of exclusive trigger trees do not intersect, shared descendants take their own merge blocks between the incoming branches. `all:false` moves only `pos`-less nodes. Response: `moved`, `positions[]` (`id`, `x`, `y`, and `w`/`h` - the node's box as the canvas draws it, sized by its content) |
-| `grizzly_quest_view` | `path`, `frame?` (`"all"` or a node id), `zoom_level?` (0..9, 6 = 100%), `cx?`, `cy?`, `select?` (`"<node>"`/`"a,b"`/`"none"` — the Details panel follows), `slot?` (`"enter:0"`/`"exit:1"`/`"none"` — opens the action under the node in the Details panel), `graph_panel?`/`details?`/`keys?`/`problems?` (`"show"`/`"hide"`/`"toggle"` — the Graph panel, the Details panel, the Shortcuts card, the Problems drawer), `graph_width?`/`details_width?` (pt), `action_split?`/`vars_split?` (shares of their column), `scroll?` (`"top"`/`"bottom"` — the selected node's pane, or the Graph panel with nothing selected; `"action:top"`/`"action:bottom"` — the action pane; `"tasks"`/`"task:<id>"`/`"task:<id>/steps"`/`"variables"` — the Graph panel; an error when that pane is not on screen) | opens/focuses the graph tab and sets the view. The raw response: `path`, `zoom_level`, `zoom` (the level's factor) with `ui_scale` and `title_px`, `center`, `nodes`, `open_tabs`, `graph_panel` (`open`/`rail`/`overlay`/`hidden`), `details`, `drawer`, `minimap`, `panes` (pt; null when not drawn), `pending`; Frame All never goes below 0.75, where a title is 12 px at 100%. The answer describes the frames the call changed (a first `frame:all`, a selection, a slot, a pane, a split, a scroll): the MCP pump holds the request until they are drawn and answers from them, in one call, raw socket included (`answer_only: true` reads the view and applies nothing - the pump's own re-read). Then — `grizzly_screenshot_editor` |
-| `grizzly_quest_edit` | `path`, `op`, `nodes?` (instead of the current selection), `from`/`pin`/`to` | every graph edit the canvas can do, without a mouse: `connect`, `disconnect` (without `to` — the whole pin, without `pin` — all pins), `bypass` (the node stays, the chain closes over it: A→B→C becomes A→C), `delete`, `duplicate`, `connect_nearest`, `select_all`. The response carries the outline — the result reads without a screenshot |
-| `grizzly_quest_find` | `path`, `action?`, `query?`, `select?`, `limit?` | full-text node search over ids/kinds/parameters/conditions/actions/links/comments; `get` with `query` atomically changes the query without navigating, `next`/`previous` focus the result. Tokens are AND-joined, quotes keep a phrase, `-token` excludes |
-| `grizzly_quest_rename_task` | `path`, `from`, `to`, `ack_runtime_identity:true` | renames the task declaration and every catalog-proven `task_id` reference inside one document as one undo step. Refuses before the `Snapshot` on an unknown/Lua/malformed/partially read area. The ack is mandatory: the task id is stored in runtime/save state, old state does not migrate |
-| `grizzly_quest_bookmarks` | `path`, `action?`, `node?` | transient node bookmarks (`get/add/remove/toggle/next/previous/clear`); do not touch the asset/dirty/undo |
-| `grizzly_quest_history` | `path`, `action?` | the transient view history (`get/back/forward/clear`): center, zoom, selection and the Details slot |
-| `grizzly_quest_minimap` | `path`, `action?` | the interactive transient minimap (`get/show/hide/toggle`); `visible` is the toggle, `shown` what the last frame drew (only from 12 nodes, `min_nodes`); the response carries the graph and viewport bounds |
-| `game.lookup` | `type`, `query?`, `limit?` (default 50), `offset?`, `path?` | picker data (any list the game offers, `spawn_section` and `mode` too). `type`: `item_section`, `squad_section`, `level`, `smart`, `story_id`, `profile`, `community`, `info`, `spot_type` (from the linked game, cached) or the document-side `task_id`, `var_name`, `ref_name`, `node_id` (need `path`), `quest_id` (project quests). A `ref_name` entry carries its category (`squad`/`object`/`item`) in `extra`, the same hint the picker shows a human |
-| `asset.check` | `path?`, `fail_on?` (`error`/`warning`), `limit?`, `offset?` | every problem of a file, a folder or the project (the build's checks): `files`, `counts`, `total`, `problems[]` with `file`, `line`, `column`, `end_line`, `end_column`, `code`, `severity`, `text`, `fix`. With `fail_on` it fails with `failed` when it finds one; `Grizzly-Cmd.exe run asset.check fail_on=error` exits 1 then |
-| `asset.find` | `query?` or `refs_to?`, `path?`, `limit?`, `offset?` | the lines that hold a text, or the values and keys that name an id, in every asset of the project: `total`, `results[]` (`file`, `line`, `column`, `text`) |
-| `asset.reference` | `kind` | the format reference of a kind (this document for `quest` and `behaviour`) |
+| `graph.edit` | `doc`, `ops` (a list of operations, §8.1), `save?` | all or none, one undo step; answers `applied`, the selection, `status`, `errors`, `warnings`, the `outline`, `dirty`, `undo`/`redo` |
+| `graph.arrange` | `doc`, `action` (`layout`, `align`, `distribute`, `straighten`), `how?` (align: `left`/`centre`/`right`/`top`/`middle`/`bottom`; distribute: `horizontal`/`vertical`), `nodes?` (else the selection), `scope?` (layout: `all`, `selection`, `branch`), `flow?` (`right`/`down`: the graph flows this way from now on), `save?` | the auto layout lays a graph out in its flow and wraps wide fan-outs into blocks several rows deep; `selection` lays out the nodes alone where they were, `branch` the one node and what only it leads to. Answers `moved`, `flow` and every node's box |
+| `graph.get` | `doc`, `boxes?`, `wires?`, `view?`, `at?` (`[x, y]`) | the graph as its tab holds it: `outline`, `problems` (with their `sentence`), `flow`, `wire_style` (what is in force), `frames`, `routes`, `bookmarks`; `boxes` - every node's `x`, `y`, `w`, `h` (the node box, sized by its content, 180-360 pt wide), `collapsed`, `disabled`; `wires` - every wire's polyline in the style it is drawn in, and whether it goes back; `view` - zoom, centre, selection, the history, the minimap; `at` - the node, else the wire within 10 pt, under a world point (the canvas's hit test) |
+| `graph.find` | `doc?` (left out: every graph of the project), `query?`, `go?` (`first`/`next`/`previous`/`clear`), `limit?` | nodes by ids, kinds, parameters, conditions, actions, wires and comments; the words all match, quotes keep a phrase, `-word` leaves one out. In a graph the tab follows `go` |
+| `graph.view` | `doc?` (left out: the graph tab that is up), `frame?` (`all`, `selection`, a node id), `zoom_level?` (0 = 5% ... 16 = 1:1 ... 20 = 200%), `zoom?`, `center?`, `select?` (ids, `all`, `none`), `grow?` (`connected`/`upstream`/`downstream`), `slot?`, `history?`, `bookmark?` (a name or number, `next`, `previous`), `drawer?` (`none`/`problems`/`find`), `graph_panel?`/`details?`/`keys?`/`minimap?`/`roles_more?` (`show`/`hide`/`toggle`), `graph_width?`/`details_width?`, `action_split?`, `scroll?`, `menu?` (`node`/`wire`/`canvas`/`frame`/`picker`/`replace`/`none`), `from_pin?` (`node.pin`) / `into?` (a node) with `menu=picker`, `focus?` (`rename`), `wire?` (`remove_hovered`), `dialog?` (`find_in_project`), `answer_only?` | brings the tab up and sets its view; answers what the frames that show the change drew, in one call: `zoom`, `zoom_level`, `ui_scale`, `title_px`, `detail` (`full`/`header`/`block`: what the zoom lets a node show), `center`, `flow`, `wire_style`, `selected`, `slot`, `drawer`, `graph_panel` and `details` (`open`/`rail`/`overlay`/`hidden`), `minimap`, `menu`, `picker` (what it is for and every kind on it), `bookmarks`, `history`, `beyond`, `panes`, `pending` |
+| `doc.save` / `doc.undo` / `doc.redo` / `doc.reload` | `doc?` (`discard` for a reload over unsaved edits) | the shell's document commands, for a graph's tab as for any other |
+| `ui.tab` | `action=open kind=quest path=...` (or `kind=beh`), `action=close doc=... discard=true` | opens a graph's tab, closes it |
+| `asset.reference` | `kind` (`quest`, `behaviour`) | this document and the linked game's kinds |
+| `game.lookup` | `type`, `query?`, `limit?`, `offset?`, `path?` | picker data (any list the game offers): `item_section`, `squad_section`, `level`, `smart`, `story_id`, `profile`, `community`, `info`, `spot_type`, ... from the linked game, or the document-side `task_id`, `var_name`, `ref_name`, `node_id` (need `path`), `quest_id` |
+| `asset.check` | `path?`, `fail_on?`, `limit?`, `offset?` | every problem of a file, a folder or the project (the build's checks), each at its place in the file |
+| `asset.find` | `query?` or `refs_to?`, `path?` | the lines that hold a text, or the values and keys that name an id, in every asset of the project |
 | `asset.take_theirs` | `path` | an open document whose file changed on disk too takes the file's values where both changed |
 
-### 8.1 `quest_apply` operations
+### 8.1 `graph.edit` operations
 
-`ops` is the text of a Lua list (`return` optional). Indices are **1-based**.
+`ops` is a JSON list of `{"op": ..., ...}` objects (or one object, or the text of a Lua list).
+Indices are **1-based**; an operation that names no node acts on the selection the tab holds.
+`help about=graph-ops` lists them the same way.
 
-```lua
-{
-  { op = "add_node",     node = { id = "ask", kind = "dialog.actor_phrase",
-                                  params = { text = "А что дашь?" }, out = { next = "wolf_rich" } } },
-  { op = "set_node",     id = "ask", patch = { once = true, params = { … }, cond = { … },
-                                               on_enter = { … }, on_exit = { … }, out = { … },
-                                               kind = "…", pos = { 0, 160 }, comment = "…" } },
-  { op = "rename_node",  id = "ask", new_id = "ask_more" },   -- updates references
-  { op = "remove_node",  id = "ask" },                        -- drops the edges leading into it
-  { op = "connect",      from = "wolf_1", pin = "next", to = "ask_more" },
-  { op = "disconnect",   from = "wolf_1", pin = "next", to = "ask_more" }, -- without `to` — the whole pin
-  { op = "add_action",   id = "ask_more", slot = "exit", index = 1,
-                         action = { kind = "var.add", params = { name = "asked", delta = 1 } } },
-  { op = "set_action",   id = "ask_more", slot = "exit", index = 1, patch = { kind = "…", params = { … } } },
-  { op = "move_action",  id = "ask_more", slot = "exit", index = 1,
-                         to_id = "accept", to_slot = "enter", to_index = 1 },
-  { op = "remove_action",id = "ask_more", slot = "exit", index = 1 },
-  { op = "set_quest",    patch = { id = "…", title = "…", activation = "manual",
-                                   vars = { … }, tasks = { … } } },
-  { op = "set_pos",      id = "ask_more", x = 0, y = 320 },
-}
+| Operation | Arguments |
+|---|---|
+| `add` | `node={...}` (a node table) or `kind`, `id?`, `at=[x, y]` |
+| `remove` | `node` or `nodes` |
+| `rename` | `node`, `to` (references follow: wires, `node_done`, routes, bookmarks) |
+| `set` | `node`, `patch={kind, once, params, cond, on_enter, on_exit, out, pos, comment, collapsed, disabled}` |
+| `connect` / `disconnect` | `from`, `pin`, `to` (disconnect: no `to` - the whole pin, no `pin` - every pin) |
+| `cut` | `wires=[{from, pin, to}, ...]` |
+| `move` | `node`, `x`, `y`, or `nodes`, `by=[dx, dy]` |
+| `replace` | `node`, `kind`: another kind with the same id; parameters of the same name and wires of the same pin stay |
+| `insert_on_wire` | `from`, `pin`, `to`, `kind` (or `node={...}`), `at?`: A -> B becomes A -> N -> B, what follows moves aside; `existing=<id>`: a node without wires goes on the wire where it stands |
+| `add_action` / `set_action` / `remove_action` / `move_action` | `node`, `slot=enter\|exit`, `index`, `action={kind, params}` / `patch` / `to_id`, `to_slot`, `to_index` |
+| `set_graph` | `patch={id, title, activation, vars, tasks}` |
+| `set_task` | `task`, `patch={title, descr, type, target, icon, auto_complete, objectives}` or `remove=true` |
+| `set_var` | `name`, `value` (null removes) or `rename` |
+| `rename_task` | `from`, `to`, `ack_runtime_identity=true` - alone in its call: a task's id is kept in saves and old state does not migrate |
+| `frame` | `action=add` (around `nodes`, or `x`, `y`, `w`, `h`; `title`, `tone`), `set` (`index`, fields), `remove` (`index`), `move` (`index`, `by`: the nodes inside move with it) |
+| `route` | `from`, `pin`, `to`, `points=[[x, y], ...]` (empty: the wire's reroutes go) |
+| `bookmark` | `name`, `node` (`here=true`: the selected node; no node: the bookmark goes) |
+| `disable` / `collapse` | `nodes`, `on?` (left out: toggles) |
+| `duplicate` | `nodes`, `wires=true` (the copies keep the wires into the originals) |
+| `bypass` | `nodes`: A -> B -> C becomes A -> C |
+| `connect_nearest` | `node` |
+| `wires` | `style`, `diagonal`, `thickness`, `by_pin`, `dim`, `bubbles`, `arrows` (`null` or `"default"`: as in Preferences) |
+| `flow` | `flow=right\|down` (`graph.arrange action=layout flow=` also lays the graph out again) |
+| `paste` | `text` (a Lua fragment `return { nodes = { ... } }`), `at`: fresh ids, the wires inside the fragment kept; kinds this document may not carry (a quest's dialogue in a behaviour graph) are left out and named |
+
+```json
+[
+  {"op": "add", "node": {"id": "ask", "kind": "dialog.actor_phrase", "params": {"text": "А что дашь?"}, "out": {"next": "wolf_rich"}}},
+  {"op": "connect", "from": "wolf_1", "pin": "next", "to": "ask"},
+  {"op": "add_action", "node": "ask", "slot": "exit", "action": {"kind": "var.add", "params": {"name": "asked", "delta": 1}}},
+  {"op": "frame", "action": "add", "nodes": ["wolf_1", "ask"], "title": "The bargain", "tone": 7}
+]
 ```
 
 ---

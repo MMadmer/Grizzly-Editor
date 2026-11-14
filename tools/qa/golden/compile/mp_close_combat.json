@@ -1,0 +1,63 @@
+{
+ "cform": {
+  "triangles": 92659,
+  "vertices": 58043
+ },
+ "files": {
+  "build.cform": {
+   "sha256": "b4b69d61b8d99ec8d77430d165dce5c7857274ed8140363009203f96431c4a0a",
+   "size": 6955600
+  },
+  "build.lights": {
+   "sha256": "55dd2239f5a64ca78e2c1a357865e3b2dc8a9875d3e2617f58e4d254c41cf65d",
+   "size": 6056
+  },
+  "build.prj": {
+   "sha256": "a9e525faed51965c54a4a7b8cca5026dd2bb07442d05aff60d4ab2aaa11238a4",
+   "size": 5607117
+  },
+  "level": {
+   "sha256": "ea7d01e1d6cc1c1ec007dd54ecf62f3d3785360892adbea3bc4c0820e1bde5f4",
+   "size": 106183
+  },
+  "level.cform": {
+   "sha256": "737c77b1ca9b421713e42217e3d75bd624160e308ae2a19cd51640e4c5b10f7f",
+   "size": 2179096
+  },
+  "level.geom": {
+   "sha256": "56508205085d6870001acd7f299e185595b6822ce4dff52a18dafb695fd11973",
+   "size": 5156448
+  },
+  "level.geomx": {
+   "sha256": "42d3df39a3ebb472c7f644e7f4f5eec7627bbba1e8bfe3fed9e46dccd6ade6ab",
+   "size": 1108404
+  },
+  "level.hom": {
+   "sha256": "17bc861a2fe3755edc397341cff023bf494b0e451a8ac5f7ca5ba4f488116773",
+   "size": 29980
+  },
+  "level_lods.dds": {
+   "sha256": "d16b0b6155358cda5a636def476ccc3a38ceb4273f645e0ac0a02fdd018a1315",
+   "size": 2796332
+  },
+  "level_lods_nm.dds": {
+   "sha256": "5037e4e714de8692b0f9c321368a1d00262d5cde661880e8727eab94875f9a98",
+   "size": 2796332
+  },
+  "level_stat.tga": {
+   "sha256": "fc399c69fe4c624ea0409b3304190d894f65752652df7d8c3ac37608f514b7c5",
+   "size": 245034
+  },
+  "level_stat.txt": {
+   "sha256": "3d6d5c0825c65be4d3fdbf4c6f91535f29344720d624f8fc2707d59e26be4034",
+   "size": 172
+  }
+ },
+ "light_bytes": 756,
+ "lightmaps": [],
+ "portals": 0,
+ "quality": "draft",
+ "scene": "mp_close_combat",
+ "sectors": 1,
+ "visuals": 381
+}

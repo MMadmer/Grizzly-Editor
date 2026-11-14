@@ -6,17 +6,14 @@
 //! as [`MOD_MENU`] gives each its group and order. This package adds the actions whose targets it
 //! owns (Mod Settings, the builds, Package Release); the package that owns any other row adds its
 //! action and the row at its slot (`ShellBuilder::menu_action("Mod", group, order, id, label)`).
-//! Every row runs a command: the tabs open through `ui.tab`, the builds through `mod.build`.
-
-use std::sync::Arc;
+//! Every row runs a command: the tabs open through `ui.tab`, Build Into Game through `mod.build`
+//! (a person in the window is asked what the build needs), the dialogs of the other builds and of
+//! the packaging through `mod.view dialog=`.
 
 use gz_app::{Action, ActionCx, DocCx, Enabled, Scope, ShellBuilder, args};
-use gz_editor::{Editor, Origin, Registry, Reply, Spec, json};
 use gz_ui::{Icon, Kind, MenuItem, menu_item};
-use schemars::JsonSchema;
-use serde::Deserialize;
 
-use crate::build::{self, build_running, build_target_text, can_build_into_game, job_status_text};
+use crate::build::{build_running, build_target_text, can_build_into_game, job_status_text};
 
 pub const MOD_SETTINGS: &str = "mod.settings";
 pub const CHARACTERS: &str = "mod.characters";
@@ -70,8 +67,13 @@ pub fn row(b: &mut ShellBuilder, id: &str, label: Option<&str>) {
     b.menu_action("Mod", group, order, id, label);
 }
 
-fn build_to(to: &'static str) -> gz_editor::Args {
-    args(&[("to", to)])
+fn build_to(target: &'static str) -> gz_editor::Args {
+    args(&[("target", target)])
+}
+
+/// The window's dialog of a build or of the packaging, put up the way the menu does.
+fn dialog(name: &'static str) -> gz_editor::Args {
+    args(&[("dialog", name)])
 }
 
 pub(crate) fn install(b: &mut ShellBuilder) {
@@ -93,21 +95,21 @@ pub(crate) fn install(b: &mut ShellBuilder) {
             }),
     );
     b.action(
-        Action::new(BUILD_TO_FOLDER, "Build to Folder...", "Mod", "mod.build")
+        Action::new(BUILD_TO_FOLDER, "Build to Folder...", "Mod", "mod.view")
             .icon(Icon::GameFolder)
-            .args(|_| build_to("folder"))
+            .args(|_| dialog("build_to_folder"))
             .enabled(with_project),
     );
     b.action(
-        Action::new(EXPORT_FLAT, "Export Flat Gamedata...", "Mod", "mod.build")
+        Action::new(EXPORT_FLAT, "Export Flat Gamedata...", "Mod", "mod.view")
             .icon(Icon::FileArchive)
-            .args(|_| build_to("flat"))
+            .args(|_| dialog("export_flat"))
             .enabled(with_project),
     );
     b.action(
-        Action::new(PACKAGE, "Package Release...", "Mod", "mod.build")
+        Action::new(PACKAGE, "Package Release...", "Mod", "mod.view")
             .icon(Icon::Package)
-            .args(|_| build_to("release"))
+            .args(|_| dialog("package_release"))
             .enabled(with_project),
     );
     for id in [MOD_SETTINGS, BUILD_INTO_GAME, BUILD_TO_FOLDER, EXPORT_FLAT, PACKAGE] {
@@ -158,91 +160,6 @@ fn build_mod(tb: &mut gz_ui::Toolbar<'_, '_>, cx: &mut DocCx<'_>) {
     if let Some(id) = picked {
         cx.requests.action(id);
     }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-enum BuildTo {
-    /// Into the linked game, `<game>\modules\<id>`.
-    #[default]
-    Game,
-    /// Into a folder of the author's (`target`); the window asks for it.
-    Folder,
-    /// A flat `gamedata_<id>` in a folder (`target`); the window asks for it.
-    Flat,
-    /// The window's Package Release dialog (over MCP: `mod_package`).
-    Release,
-}
-
-#[derive(Debug, Default, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct BuildParams {
-    /// Where the module goes.
-    #[serde(default)]
-    to: BuildTo,
-    /// The folder for folder and flat over MCP (the window asks for it).
-    #[serde(default)]
-    target: Option<String>,
-}
-
-/// `mod.build`: from the window, the build flows with their card and result dialog (Build to
-/// Folder, Export Flat and Package Release open their dialogs); over MCP the build itself, its
-/// answer when it ended.
-async fn mod_build(ed: Arc<Editor>, p: BuildParams, origin: Origin) -> Reply {
-    ed.project()?;
-    let window = origin != Origin::Mcp && gz_app::UiQueue::of(&ed).is_ok();
-    if window {
-        let to = p.to;
-        gz_app::on_ui(&ed, move |shell, ctx| {
-            shell.with_cx(ctx, |cx| match to {
-                BuildTo::Game => build::request_build_into_game(cx),
-                BuildTo::Folder => build::request_export(cx, false),
-                BuildTo::Flat => build::request_export(cx, true),
-                BuildTo::Release => crate::package::request(cx),
-            });
-            Ok(())
-        })
-        .await?;
-        return Ok(json!({ "started": true }));
-    }
-    let mut a = gz_editor::Args::new();
-    match p.to {
-        BuildTo::Game => {}
-        BuildTo::Folder | BuildTo::Flat => {
-            let t = p
-                .target
-                .filter(|t| !t.is_empty())
-                .ok_or_else(|| gz_editor::CmdError::invalid("folder and flat take target="))?;
-            a.insert("target".into(), json!(t));
-            if p.to == BuildTo::Flat {
-                a.insert("flat".into(), json!(true));
-            }
-        }
-        BuildTo::Release => {
-            return Err(gz_editor::CmdError::new(
-                "refused",
-                "a release is packaged with mod_package over MCP",
-            ));
-        }
-    }
-    let reply = ed.call("mod_export", a, origin).await;
-    if reply.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
-        Ok(reply)
-    } else {
-        let why =
-            reply.get("error").and_then(serde_json::Value::as_str).unwrap_or("the build failed").to_owned();
-        Err(gz_editor::CmdError::new("failed", why))
-    }
-}
-
-/// Registers `mod.build`.
-pub(crate) fn register(reg: &mut Registry) {
-    reg.area("mod", "The module: its settings, building it, packaging it");
-    reg.cmd(
-        Spec::write("mod.build", "Builds the module into the linked game, a folder or a flat gamedata; the window asks what it needs.")
-            .example("to=game"),
-        mod_build,
-    );
 }
 
 #[cfg(test)]

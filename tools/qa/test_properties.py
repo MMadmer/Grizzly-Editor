@@ -3,14 +3,13 @@
 COPY of a project.
 
 What it proves:
-  A  Level Settings: property_inspector target=world lists its rows with the grid's label and help - a range left
-     the label for the help ("Hemisphere quality [0-3]" reads "Hemisphere quality", its help says "Range: 0-3.");
-     action=open raises the panel on the Level tab
-  B  property_set writes a row the way editing it does and property_inspector reads it back; a value a row does not
-     take is refused with what it takes, and nothing changes
-  C  a spawn's Details: its Visual row opens the chooser (###dlg.choose), ui_dialog closes it as Cancel would; the
-     three lists the C++ filled are picked from - Fixed bones the model's bones (several), an anomaly's Attack
-     animation its model's motions, a helicopter's Motion the game's .anm files - and an empty one says why
+  A  Level Settings: scene.get world=true lists the level's properties by their keys, with a label in Title Case, a
+     unit and a help that says the range ("Sky Light Quality", "Range: 0 to 3."); ui.panel raises the panel
+  B  scene.set writes a property the way editing it does and scene.get reads it back; a value a property does not
+     take is refused with what it takes, and nothing changes; an object's angles go in degrees
+  C  a spawn's properties: its playback buttons go by their names; scene.choices lists what a pick takes - the
+     models of Visual, Fixed Bones the model's bones (several), an anomaly's Attack Animation its model's motions, a
+     helicopter's Motion the game's .anm files - and an empty one says why
   D  Preferences opens as a tab, ui_audit finds nothing escaping it, and it closes
   E  shortcuts: app.keys lists the actions, bind (moved from the action that had it), clear - and every shortcut is back as it was
   F  the editor's preferences file and layout come back byte for byte
@@ -81,7 +80,7 @@ class Editor:
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
             try:
-                if mcp("mod_manifest", timeout=30).get("ok"):
+                if mcp("mod.info", timeout=30).get("ok"):
                     return
             except OSError:
                 pass
@@ -106,7 +105,7 @@ def wait_scene(level: str, seconds: float = 120) -> bool:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         try:
-            if level in (mcp("scene_info", timeout=60).get("scene") or "").lower():
+            if level in (mcp("scene.info", timeout=60).get("file") or "").lower():
                 return True
         except OSError:
             pass
@@ -114,8 +113,24 @@ def wait_scene(level: str, seconds: float = 120) -> bool:
     return False
 
 
-def rows(answer: dict) -> dict:
-    return {r.get("key"): r for r in answer.get("rows", [])} if isinstance(answer, dict) else {}
+def props(answer: dict) -> dict:
+    """The properties of an answer of scene.get (the level's, or the first object's), by key."""
+    if not isinstance(answer, dict):
+        return {}
+    if "properties" in answer:
+        found = answer.get("properties") or []
+    else:
+        found = ((answer.get("objects") or [{}])[0]).get("properties") or []
+    return {r.get("key"): r for r in found}
+
+
+def world() -> dict:
+    return props(mcp("scene.get", world=True))
+
+
+def mine(name: str, keys=None) -> dict:
+    extra = {"keys": keys} if keys else {}
+    return props(mcp("scene.get", objects=[name], **extra))
 
 
 def shot() -> None:
@@ -125,70 +140,59 @@ def shot() -> None:
 
 def placed_spawn(section: str) -> str:
     """A spawn of `section` placed and selected; its name, or "" (a FAIL says why)."""
-    placed = mcp("place_spawn", section=section, x=3, y=0, z=3)
+    placed = mcp("scene.place", kind="spawn", section=section, position=[3, 0, 3])
     name = (placed.get("object") or {}).get("name", "")
-    if check(placed.get("ok") and bool(name), f"C a {section} to pick for", json.dumps(placed)[:300]):
-        mcp("focus_object", name=name, select=True)
+    check(placed.get("ok") and bool(name), f"C a {section} to pick for", json.dumps(placed)[:300])
     return name
 
 
 def choosers(spawn: str) -> None:
-    """The three lists the C++ filled (EditorChooseEvents.h: FillSkeletonBones, FillSkeletonAnims,
-    FillGameAnim) are picked from, never typed: a model's bones, a model's motions, the game's .anm files."""
-    # the physic object wears a skeleton now (spawn_animation above gave it one): its bones, several at once
-    bones = mcp("property_choose", action="status", key="Fixed bones")
-    items = bones.get("items") or []
-    check(bones.get("ok") and bones.get("list") == "bones" and bones.get("total", 0) > 1 and bones.get("multi") is True,
-          f"C Fixed bones lists the bones of the spawn's model ({bones.get('total')}), several to pick",
+    """The lists a pick takes: a model's bones, a model's motions, the game's .anm files - picked, never typed."""
+    # the physic object wears a model now: its bones, several at once
+    bones = mcp("scene.choices", object=spawn, key="props.physic.fixed_bones")
+    items = bones.get("choices") or []
+    check(bones.get("ok") and bones.get("list") == "skeletonbones" and bones.get("total", 0) > 1
+          and bones.get("several") is True,
+          f"C Fixed Bones lists the bones of the spawn's model ({bones.get('total')}), several to pick",
           json.dumps(bones)[:300])
     if len(items) > 1:
         two = ",".join(items[:2])
-        opened = mcp("property_choose", action="open", key="Fixed bones")
-        shot()
-        dialogs = json.dumps(mcp("ui.dialog", action="list"))
-        check(opened.get("ok") and "dlg.choose" in dialogs and opened.get("total") == bones.get("total"),
-              "C its chooser opens on the same list", json.dumps(opened)[:300] + " / " + dialogs[:200])
-        mcp("property_choose", action="pick", item=two)
-        shot()
-        row = rows(mcp("property_inspector", target="selection", limit=500))
-        fixed = next((r for k, r in row.items() if k and k.endswith("\\Model\\Fixed bones")), {})
-        check(fixed.get("value") == two and len(fixed.get("choices") or []) == bones.get("total"),
-              "C the picked bones are the row's value, property_inspector lists the same bones", json.dumps(fixed)[:300])
-        mcp("property_set", target="selection", key=fixed.get("key", "Fixed bones"), value="")
+        mcp("scene.set", objects=[spawn], key="props.physic.fixed_bones", value=two)
+        fixed = mine(spawn, ["props.physic.fixed_bones"]).get("props.physic.fixed_bones") or {}
+        check(fixed.get("value") == two, "C the picked bones are the property's value", json.dumps(fixed)[:300])
+        mcp("scene.set", objects=[spawn], key="props.physic.fixed_bones", value="")
     # an object without a model has nothing to pick, and says so
     bare = placed_spawn("physic_object")
     if bare:
-        empty = mcp("property_choose", action="status", key="Fixed bones")
+        empty = mcp("scene.choices", object=bare, key="props.physic.fixed_bones")
         check(empty.get("total") == 0 and empty.get("empty") == "The object has no model.",
               "C an object without a model says it has none", json.dumps(empty)[:300])
-        mcp("delete_selected")
-    # an anomaly's Attack animation: the motions of its model
+        mcp("scene.delete", objects=[bare])
+    # an anomaly's Attack Animation: the motions of its model
     zone = placed_spawn("zone_burning_fuzz_weak")
     if zone:
-        motions = mcp("property_choose", action="status", key="Attack animation")
-        check(motions.get("list") == "motions" and "idle" in (motions.get("items") or []),
-              f"C Attack animation lists the motions of the anomaly's model ({motions.get('total')})",
+        motions = mcp("scene.choices", object=zone, key="props.zone.attack_animation")
+        check(motions.get("list") == "skeletonanims" and "idle" in (motions.get("choices") or []),
+              f"C Attack Animation lists the motions of the anomaly's model ({motions.get('total')})",
               json.dumps(motions)[:300])
-        mcp("delete_selected")
+        mcp("scene.delete", objects=[zone])
     # a helicopter's Motion: the game's .anm animations
     heli = placed_spawn("helicopter")
     if heli:
-        anims = mcp("property_choose", action="status", key="Motion", limit=5)
-        listed = anims.get("items") or []
-        check(anims.get("list") == "animations" and anims.get("total", 0) > 0
+        anims = mcp("scene.choices", object=heli, key="props.motion", limit=5)
+        listed = anims.get("choices") or []
+        check(anims.get("list") == "gameanim" and anims.get("total", 0) > 0
               and all(i.lower().endswith((".anm", ".anms")) for i in listed),
               f"C Motion lists the game's .anm animations ({anims.get('total')})", json.dumps(anims)[:300])
-        mcp("delete_selected")
-    # the spawn of the caller is selected again for what follows
-    mcp("focus_object", name=spawn, select=True)
+        mcp("scene.delete", objects=[heli])
 
 
 def run(project: str) -> None:
     ed = Editor()
     try:
         ed.start(project)
-        if "l01_escape" not in (mcp("scene_info").get("scene") or "").lower():
-            opened = mcp("open_scene", timeout=900, scene="l01_escape.level")
+        if "l01_escape" not in (mcp("scene.info").get("file") or "").lower():
+            opened = mcp("scene.open", timeout=900, path="rawdata/levels/l01_escape.level")
             if not check(opened.get("ok"), "the project's Escape scene opens", json.dumps(opened)[:200]):
                 # everything below stands on that scene: waiting for one that did not open only burns minutes
                 raise RuntimeError("the Escape scene did not open")
@@ -196,83 +200,85 @@ def run(project: str) -> None:
             raise RuntimeError("the Escape scene did not open")
 
         # ------------------------------------------------------------ A: Level Settings
-        opened = mcp("property_inspector", target="world", action="open", limit=500)
-        check(opened.get("ok") and opened.get("open"), "A property_inspector opens Level Settings", json.dumps(opened)[:300])
+        opened = mcp("ui.panel", id="level_settings", action="open")
+        check(opened.get("ok"), "A ui.panel opens Level Settings", json.dumps(opened)[:300])
         shot()
         panels = {p.get("id"): p for p in mcp("ui.list").get("panels", [])}
         check(panels.get("level_settings", {}).get("visible"), "A and raises it on the Level tab", json.dumps(panels.get("level_settings")))
-        world = rows(opened)
-        hemi = world.get("Scene\\Build options\\Lighting\\Hemisphere quality [0-3]", {})
-        check(hemi.get("label") == "Hemisphere quality", "A a range leaves the label", json.dumps(hemi))
-        check("Range: 0-3." in hemi.get("help", ""), "A and goes into the help", json.dumps(hemi))
-        quality = world.get("Scene\\Build options\\Quality", {})
-        check(bool(quality.get("help")), "A Quality says what it does", json.dumps(quality))
-        weld = world.get("Scene\\Build options\\Optimizing\\Weld distance (m)", {})
-        check(weld.get("label") == "Weld distance" and weld.get("unit") == "m", "A a unit leaves the label for the value",
+        level = world()
+        sky = level.get("build.sky_quality", {})
+        check(sky.get("label") == "Sky Light Quality" and sky.get("section") == "Build", "A a property has a plain label and its section",
+              json.dumps(sky))
+        check("Range: 0 to 3." in sky.get("help", ""), "A and its help says its range", json.dumps(sky))
+        quality = level.get("build.quality", {})
+        check(bool(quality.get("help")) and quality.get("choices") == ["Draft", "High", "Custom"],
+              "A Quality says what it does and offers its words", json.dumps(quality))
+        weld = level.get("build.weld_distance", {})
+        check(weld.get("label") == "Weld Distance" and weld.get("unit") == "m", "A a unit is the value's, not the label's",
               json.dumps(weld))
+        check(all(r.get("label") and r["label"][0].isupper() for r in level.values()), "A every label is in Title Case",
+              json.dumps([r.get("label") for r in level.values() if not (r.get("label") or " ")[0].isupper()]))
         audit = mcp("ui.audit", id="level_settings")
         check(audit.get("ok") and not audit.get("escaped"), "A nothing escapes Level Settings", json.dumps(audit.get("escaped"))[:400])
 
-        # ------------------------------------------------------------ B: property_set
-        key = "Scene\\Map version"
-        before = world.get(key, {}).get("value", "")
-        set_ = mcp("property_set", target="world", key=key, value="7.5")
-        check(set_.get("ok") and set_.get("value") == "7.5", "B property_set writes a text row", json.dumps(set_))
-        again = rows(mcp("property_inspector", target="world", limit=500)).get(key, {})
-        check(again.get("value") == "7.5", "B property_inspector reads it back", json.dumps(again))
-        # the lighting rows take a value under the Custom quality only (EScene::FillProp); the
-        # Escape scene is built at High
-        mcp("property_set", target="world", key="Scene\\Build options\\Quality", value="Custom")
-        bad = mcp("property_set", target="world", key="Scene\\Build options\\Lighting\\Hemisphere quality [0-3]", value="9")
+        # ------------------------------------------------------------ B: scene.set
+        key = "level.map_version"
+        before = level.get(key, {}).get("value", "")
+        set_ = mcp("scene.set", world=True, key=key, value="7.5")
+        check(set_.get("ok") and (set_.get("set") or {}).get(key) == "7.5", "B scene.set writes a text property", json.dumps(set_))
+        again = world().get(key, {})
+        check(again.get("value") == "7.5", "B scene.get reads it back", json.dumps(again))
+        # the lighting values take a value under the Custom quality only; Escape is built at High
+        mcp("scene.set", world=True, key="build.quality", value="Custom")
+        bad = mcp("scene.set", world=True, key="build.sky_quality", value=9)
         check(not bad.get("ok") and "0 to 3" in bad.get("error", ""), "B a number out of range is refused with the range",
               json.dumps(bad))
-        bad = mcp("property_set", target="world", key="Scene\\Name", value="x")
-        check(not bad.get("ok") and "cannot be set" in bad.get("error", ""), "B a caption is not set by text", json.dumps(bad))
-        mcp("property_set", target="world", key=key, value=before)
+        bad = mcp("scene.set", world=True, key="file", value="x")
+        check(not bad.get("ok") and "cannot be set" in bad.get("error", ""), "B what only shows a value is not set", json.dumps(bad))
+        mcp("scene.set", world=True, key=key, value=before)
+        # an object's rotation goes in degrees, both ways
+        lamp = (mcp("scene.place", kind="light", position=[2, 1, 2]).get("object") or {}).get("name", "")
+        turned = mcp("scene.set", objects=[lamp], rotation=[0, 90, 0])
+        rot = ((turned.get("objects") or [{}])[0]).get("rotation") or []
+        check(turned.get("ok") and len(rot) == 3 and abs(rot[1] - 90) < 1e-3, "B an object turns by degrees", json.dumps(turned)[:300])
+        mcp("scene.delete", objects=[lamp])
 
-        # ------------------------------------------------------------ C: the chooser
-        # a physics object has a Visual row: the one that opens the chooser
+        # ------------------------------------------------------------ C: a spawn's properties and its lists
         roster = mcp("game.lookup", type="spawn_section", query="physic_object", limit=20).get("entries") or []
         sections = [r.get("id", "") if isinstance(r, dict) else str(r) for r in roster]
         section = "physic_object" if "physic_object" in sections else next((s for s in sections if s), "")
-        placed = mcp("place_spawn", section=section, x=1, y=0, z=1) if section else {"error": "no physic_object section"}
+        placed = mcp("scene.place", kind="spawn", section=section, position=[1, 0, 1]) if section else {"error": "no physic_object section"}
         name = (placed.get("object") or {}).get("name", "")
         if check(placed.get("ok") and bool(name), "C a spawn to look at", json.dumps(placed)[:300]):
-            mcp("focus_object", name=name, select=True)
-            mcp("property_inspector", target="selection", action="open")
+            mcp("scene.select", objects=[name])
+            mcp("ui.panel", id="details", action="open")
             shot()
-            details = rows(mcp("property_inspector", target="selection", limit=500))
-            check(bool(details), "C its Details list rows", "")
-            # a spawn with a visual: its playback controls go by their names, and one is pressed by its name
-            anim = next((r for k, r in details.items() if k and (k.endswith("\\Model\\Animation") or
-                                                                   k.endswith("\\Model\\AnimationControl"))), None)
-            if anim:
-                check(anim.get("value") == "First Frame,Play,Pause,Stop,Last Frame", "C playback controls go by their names",
-                      json.dumps(anim))
-                pressed = mcp("property_set", target="selection", key=anim.get("key"), value="Pause")
-                check(pressed.get("ok"), "C a playback control is pressed by its name", json.dumps(pressed))
-            chooser = mcp("property_choose", action="open", key="Visual")
-            if check(chooser.get("ok"), "C the Visual row opens the chooser", json.dumps(chooser)):
-                shot()
-                dialogs = json.dumps(mcp("ui.dialog", action="list"))
-                check("dlg.choose" in dialogs, "C the chooser is the kit dialog ###dlg.choose", dialogs[:400])
-                closed = mcp("ui.dialog", action="close", id="choose")
-                check(closed.get("ok"), "C ui_dialog closes it", json.dumps(closed))
-                shot()
-                shot()
-                status = mcp("property_choose", action="status", key="Visual")
-                check(status.get("form_alive") is False and status.get("pending") is False, "C as Cancel: no chooser, no edit left",
-                      json.dumps(status))
+            details = mine(name)
+            check(bool(details), "C its properties are listed", "")
+            visuals = mcp("scene.choices", object=name, key="props.visual", limit=3)
+            check(visuals.get("ok") and visuals.get("list") == "visual" and visuals.get("total", 0) > 0,
+                  f"C Visual picks from the models ({visuals.get('total')})", json.dumps(visuals)[:300])
+            # a model of the game given: the spawn wears it, and its playback buttons go by their names
+            tried = []
+            # a model of many bones first: Fixed Bones picks several of them below
+            for visual in ("actors\\stalker_neutral\\stalker_neutral_1", "dynamics\\box\\box_wood_01", "physics\\box\\box_1a"):
+                r = mcp("scene.set", objects=[name], key="props.visual", value=visual)
+                tried.append(r)
+                if r.get("ok"):
+                    break
+            worn = mine(name, ["props.visual", "spawn.animation"])
+            check(any(t.get("ok") for t in tried) and worn.get("props.visual", {}).get("value"),
+                  "C scene.set gives the spawn a model of the game", json.dumps(tried)[:300])
+            anim = worn.get("spawn.animation") or {}
+            check(anim.get("choices") == ["First Frame", "Play", "Pause", "Stop", "Last Frame"],
+                  "C its playback buttons go by their names", json.dumps(anim))
+            pressed = mcp("scene.set", objects=[name], key="spawn.animation", value="Pause")
+            check(pressed.get("ok"), "C a playback button is pressed by its name", json.dumps(pressed))
+            refused = mcp("scene.set", objects=[name], key="props.visual", value="no\\such\\model")
+            check(not refused.get("ok") and refused.get("code") == "not_found", "C a model nobody has is refused",
+                  json.dumps(refused)[:300])
             # the spawn's playback over MCP: read, stopped, at its first frame; nothing of the scene changes
             sa = mcp("spawn_animation", object=name)
-            tried = []
-            for visual in ("actors\\stalker_neutral\\stalker_neutral_1", "dynamics\\box\\box_wood_01",
-                           "physics\\box\\box_1a"):
-                if sa.get("ok") or "model" not in sa.get("error", ""):
-                    break
-                tried.append(mcp("spawn_set_visual", name=name, visual=visual))
-                sa = mcp("spawn_animation", object=name)
-            sa["tried"] = tried
             check(sa.get("ok") and sa.get("object") == name and sa.get("state") in ("playing", "paused", "stopped"),
                   "C spawn_animation reads the spawn's playback", json.dumps(sa)[:300])
             stopped = mcp("spawn_animation", object=name, action="stop")
@@ -283,7 +289,7 @@ def run(project: str) -> None:
             none = mcp("spawn_animation", object="qa_no_such_object")
             check(not none.get("ok"), "C spawn_animation refuses an object that is not there", json.dumps(none)[:200])
             choosers(name)
-            mcp("delete_selected")
+            mcp("scene.delete", objects=[name])
 
         # ------------------------------------------------------------ D: Preferences
         tab = mcp("ui.tab", action="open", doc="preferences")

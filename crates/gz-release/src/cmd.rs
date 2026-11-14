@@ -1,61 +1,64 @@
-//! The commands. The wire is frozen by the C++ handlers reached from `LevelMcpMod.cpp`:
-//! `mod_package` (`EditorMod::McpPackage` / `AnswerPackage`) answers once its job has ended,
-//! while every other command goes on meanwhile; the author key actions of `mod_catalog`
-//! (`EditorCatalogSubmit::McpCatalog`: `status`, `key_create`, `key_use`, `key_unlock`) with the
-//! `key` object of its status.
-//!
-//! `mod_catalog` as a whole belongs to the Mod Browser area (`gz-catalog`), which registers it
-//! after this crate - the later handler wins - and calls [`key_action`] and [`key_state`] for
-//! the key. Until it does, the handler here answers the key actions and refuses the others.
+//! The commands: `mod.package` (the release files, a job the command waits for), `mod.thumbnail`
+//! (the Mod Browser's picture) and `release.key` (the author key). Like every command they ask
+//! nothing; a key password goes in and never comes out.
 
 use std::sync::Arc;
 
 use gz_base::Origin;
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Registry, Reply};
+use gz_editor::{CmdError, Editor, Registry, Reply, Spec};
+use gz_mod::{manifest_answer, open_manifest};
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
 use crate::keys::{AuthorKeys, KeyState};
 use crate::package::{PackageRequest, PackageResult, Releases};
 
-const AREA: &str = "gz-release";
-
 pub fn register(reg: &mut Registry) {
-    reg.add(AREA, "mod_package", mod_package);
-    reg.add(AREA, "mod_catalog", mod_catalog);
+    reg.cmd(
+        Spec::publish(
+            "mod.package",
+            "Packages a release: the descriptor, the file index and the zip the game's updater installs from.",
+        )
+        .example("path=releases/1.2.0"),
+        mod_package,
+    );
+    reg.cmd(
+        Spec::write(
+            "mod.thumbnail",
+            "Makes the Mod Browser's thumbnail.dds from a picture, or removes the one the editor made.",
+        )
+        .example("from=D:/Art/cover.png"),
+        mod_thumbnail,
+    );
+    reg.area(
+        "release",
+        "GitHub releases and the in-game Mod Browser: publish, list, edit, delete, the catalog, the keys",
+    );
+    reg.cmd(
+        Spec::write(
+            "release.key",
+            "The author key that signs releases: its state, a new key, another key file, opened with its password or locked.",
+        )
+        .example("action=open password=..."),
+        release_key,
+    );
 }
 
 fn refuse(message: impl Into<String>) -> CmdError {
     CmdError::new("refused", message)
 }
 
-/// A string argument the way `GetArg` read it: present means given, even empty.
-fn arg(args: &Args, key: &str) -> Option<String> {
-    match args.get(key)? {
-        Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        Value::Bool(b) => Some(b.to_string()),
-        _ => None,
-    }
-}
-
-/// A secret argument taken out of the request, so that the only copy is wiped when it goes.
-fn take_secret(args: &mut Args, key: &str) -> Option<Zeroizing<String>> {
-    match args.remove(key)? {
-        Value::String(s) => Some(Zeroizing::new(s)),
-        Value::Number(n) => Some(Zeroizing::new(n.to_string())),
-        Value::Bool(b) => Some(Zeroizing::new(b.to_string())),
-        _ => None,
-    }
-}
-
 fn wire(path: &str) -> String {
     path.replace('\\', "/")
 }
 
-/// The answer of a packaging that was held until it ended (`AnswerPackage`).
-fn answer(r: Option<Arc<PackageResult>>) -> Reply {
-    let Some(r) = r else { return Err(refuse("")) };
+/// The answer of a packaging that ended.
+pub fn package_answer(r: &PackageResult) -> Reply {
+    if r.cancelled {
+        return Err(CmdError::new("cancelled", "the packaging was stopped; nothing was written"));
+    }
     if !r.ok {
         return Err(refuse(r.err.clone()));
     }
@@ -84,74 +87,151 @@ fn answer(r: Option<Arc<PackageResult>>) -> Reply {
     }))
 }
 
-async fn mod_package(ed: Arc<Editor>, mut args: Args, _origin: Origin) -> Reply {
-    if args.flag("answer_only") {
-        return answer(Releases::of(&ed).last());
-    }
-    ed.project()?;
-    let out_dir = arg(&args, "out_dir").unwrap_or_default();
-    // absent = the linked game's version, present but empty = no requirement
-    let requires_game = arg(&args, "requires_game");
+// ---- mod.package ------------------------------------------------------------------------------
 
-    // the author key's password, when the key file has one; never echoed or logged
-    if let Some(password) = take_secret(&mut args, "password").filter(|p| !p.is_empty()) {
-        let keys = AuthorKeys::of(&ed);
-        ed.exec.io(move || keys.unlock(&password)).await.map_err(|e| refuse(format!("author key: {e}")))?;
-    }
-    // MCP is the programmatic path: it asks nothing, an earlier packaging of the same version is
-    // simply replaced
-    let id = Releases::start(&ed, PackageRequest { out_dir, requires_game })?;
-    ed.jobs.wait(id).await;
-    answer(Releases::of(&ed).result(id))
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PackageParams {
+    /// The output folder. Left out: `<project>\releases\<version>`; inside the project only a
+    /// folder under `releases\` is taken.
+    #[serde(default)]
+    path: Option<String>,
+    /// The lowest game version the release runs on (`1.4.2`). Left out: the linked game's
+    /// version; empty: no requirement.
+    #[serde(default)]
+    requires_game: Option<String>,
+    /// The author key's password, when its file has one. Never echoed or logged.
+    #[serde(default)]
+    password: Option<String>,
+    /// Wait for the packaging to end (true) or answer its job at once (false).
+    #[serde(default = "yes")]
+    wait: bool,
 }
 
-/// The author key as it stands: the `key` object of `mod_catalog`.
+const fn yes() -> bool {
+    true
+}
+
+/// Opens the author key with a password a caller sent; the text is wiped when it goes.
+pub async fn unlock_with(editor: &Editor, password: Option<String>) -> Result<(), CmdError> {
+    let Some(password) = password.map(Zeroizing::new).filter(|p| !p.is_empty()) else { return Ok(()) };
+    let keys = AuthorKeys::of(editor);
+    editor.exec.io(move || keys.unlock(&password)).await.map_err(|e| refuse(format!("author key: {e}")))
+}
+
+async fn mod_package(ed: Arc<Editor>, p: PackageParams, _origin: Origin) -> Reply {
+    ed.project()?;
+    unlock_with(&ed, p.password).await?;
+    // a command asks nothing: an earlier packaging of the same version is simply replaced
+    let req = PackageRequest { out_dir: p.path.unwrap_or_default(), requires_game: p.requires_game };
+    let id = Releases::start(&ed, req)?;
+    if !p.wait {
+        return Ok(json!({ "job": id.0 }));
+    }
+    ed.jobs.wait(id).await;
+    let r = Releases::of(&ed).result(id).ok_or_else(|| CmdError::internal("the packaging left no result"))?;
+    package_answer(&r)
+}
+
+// ---- mod.thumbnail ----------------------------------------------------------------------------
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ThumbnailParams {
+    /// A picture (PNG, JPG, TGA, BMP, DDS; absolute or project-relative): its middle square
+    /// becomes `thumbnail.dds` at the module root. A 256 x 256 DXT DDS of the project is named as
+    /// it is.
+    #[serde(default)]
+    from: Option<String>,
+    /// Takes the picture off the module; only a file the editor made is deleted.
+    #[serde(default)]
+    remove: bool,
+}
+
+async fn mod_thumbnail(ed: Arc<Editor>, p: ThumbnailParams, origin: Origin) -> Reply {
+    let value = match (p.from, p.remove) {
+        (Some(_), true) => return Err(CmdError::invalid("mod.thumbnail takes from or remove, not both")),
+        (Some(f), false) if !f.trim().is_empty() => f,
+        (_, true) => String::new(),
+        _ => return Err(CmdError::invalid("mod.thumbnail needs from=<picture> or remove=true")),
+    };
+    let (project, service) = open_manifest(&ed).await?;
+    let snap = service.snapshot();
+    let Some(m) = snap.manifest() else { return Err(refuse("the project has no mod.ltx: it is no module")) };
+    let (root, current) = (service.root().to_path_buf(), m.thumbnail.clone());
+    let thumbnail =
+        ed.exec.io(move || crate::browser::apply_thumbnail(&root, &value, &current)).await.map_err(refuse)?;
+    service.edit(vec![gz_mod::Edit::optional("module", "thumbnail", &thumbnail)], origin).await?;
+    let mut answer = manifest_answer(&ed, &project, &service).await?;
+    if let Value::Object(map) = &mut answer {
+        map.insert("thumbnail".into(), json!(wire(&thumbnail)));
+    }
+    Ok(answer)
+}
+
+// ---- release.key ------------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum KeyAction {
+    /// Where the key is, whether it is open or locked, its id and public key.
+    #[default]
+    Status,
+    /// A new key file (`path`, optional `password`). Never overwrites a file, never inside a
+    /// project.
+    Create,
+    /// Uses the key file at `path`, and/or opens the key with its `password`.
+    Open,
+    /// Locks the opened key: its secret is wiped from memory.
+    Lock,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct KeyParams {
+    #[serde(default)]
+    action: KeyAction,
+    /// The key file. Create: where it goes (left out: Documents\Grizzly Editor\Keys\author.xkey).
+    #[serde(default)]
+    path: Option<String>,
+    /// The key's password. Never echoed or logged.
+    #[serde(default)]
+    password: Option<String>,
+}
+
+/// The author key as it stands.
 pub async fn key_state(editor: &Arc<Editor>) -> KeyState {
     let keys = AuthorKeys::of(editor);
     editor.exec.io(move || keys.state()).await
 }
 
-/// One of the author key's actions of `mod_catalog`: `key_create` (`path`, `password`),
-/// `key_use` (`path`), `key_unlock` (`password`). `None` for any other action. The password is
-/// taken out of `args` and wiped.
-pub async fn key_action(editor: &Arc<Editor>, action: &str, args: &mut Args) -> Option<Result<(), CmdError>> {
-    let keys = AuthorKeys::of(editor);
-    let project = editor.project_root();
-    let done = match action {
-        "key_create" => {
-            let path = arg(args, "path").unwrap_or_default();
-            let password = take_secret(args, "password").unwrap_or_default();
-            editor.exec.io(move || keys.create(Some(&path), &password, project.as_deref())).await
+async fn release_key(ed: Arc<Editor>, p: KeyParams, _origin: Origin) -> Reply {
+    let keys = AuthorKeys::of(&ed);
+    let project = ed.project_root();
+    let password = p.password.map(Zeroizing::new);
+    match p.action {
+        KeyAction::Status => {}
+        KeyAction::Create => {
+            let path = p.path.unwrap_or_default();
+            let password = password.unwrap_or_default();
+            ed.exec
+                .io(move || keys.create(Some(&path), &password, project.as_deref()))
+                .await
+                .map_err(refuse)?;
         }
-        "key_use" => {
-            let Some(path) = args.text("path").map(str::to_owned) else {
-                return Some(Err(refuse("key_use needs 'path'")));
-            };
-            editor.exec.io(move || keys.use_file(&path, project.as_deref())).await
-        }
-        "key_unlock" => {
-            let Some(password) = take_secret(args, "password") else {
-                return Some(Err(refuse("key_unlock needs 'password'")));
-            };
-            editor.exec.io(move || keys.unlock(&password)).await
-        }
-        _ => return None,
-    };
-    Some(done.map_err(refuse))
-}
-
-async fn mod_catalog(ed: Arc<Editor>, mut args: Args, _origin: Origin) -> Reply {
-    ed.project()?;
-    let action = args.text("action").unwrap_or("status").to_owned();
-    if action != "status" {
-        match key_action(&ed, &action, &mut args).await {
-            Some(done) => done?,
-            None => {
-                return Err(refuse(
-                    "unknown action: status, key_create, key_use or key_unlock expected (the rest of Submit to Mod Browser is not in this editor yet)",
-                ));
+        KeyAction::Open => {
+            if p.path.is_none() && password.is_none() {
+                return Err(CmdError::invalid("release.key action=open needs path, password or both"));
+            }
+            if let Some(path) = p.path.filter(|s| !s.trim().is_empty()) {
+                let k = keys.clone();
+                ed.exec.io(move || k.use_file(&path, project.as_deref())).await.map_err(refuse)?;
+            }
+            if let Some(password) = password {
+                ed.exec.io(move || keys.unlock(&password)).await.map_err(refuse)?;
             }
         }
+        KeyAction::Lock => keys.lock(),
     }
     Ok(json!({ "key": key_state(&ed).await }))
 }

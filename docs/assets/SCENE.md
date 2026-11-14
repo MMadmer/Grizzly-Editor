@@ -1,0 +1,286 @@
+# The scene
+
+This file is generated from the editor's own tables of the scene's keys (`crates/gz-scene/src/format/`): the reader, the writer, the Details panel and this reference are one list, so they cannot drift apart. A test of `gz-scene` fails when this file is not what the tables say. The contract the format keeps is `docs/ASSETS.md` (sections 2, 3 and 7).
+
+## Layout
+
+A scene is `<name>.scene` and the folder `<name>\` beside it:
+
+```text
+escape.scene        the scene: header, level options, build settings, the sun, the camera, the kinds' eyes
+escape\
+  objects.lua       objects (Objects)
+  lights.lua        lights (Lights)
+  glows.lua         glows (Glows)
+  sounds.lua        sources (Sound Sources), environments (Sound Environments)
+  particles.lua     particles (Particle Effects)
+  shapes.lua        shapes (Shapes)
+  fog.lua           volumes (Fog Volumes)
+  spawns.lua        spawns (Spawn Points)
+  ways.lua          ways (Way Paths)
+  zones.lua         sectors (Sectors), portals (Portals)
+  groups.lua        groups (Groups)
+  ai_map.bin        the ai_map layer (binary)
+  details.bin       the details layer (binary)
+  wallmarks.bin     the wallmarks layer (binary)
+```
+
+Every file is Lua data (`return { ... }` of literals). The `.scene` starts with the header `scene = 1`; the files of the folder are parts of the scene and carry no header. A file of a kind the scene has no objects of does not exist. A key at its default is not written, and a key the editor does not know is kept where it is through every save. A save writes only what changed: an object nobody touched keeps its bytes and its comments.
+
+Positions are metres, angles degrees, colours `{ r, g, b }` from 0 to 1. Things are named, never numbered: an object's `name` is unique in the scene (in any case; the case written is kept), and whatever points at an object - a group's members, a sector's meshes, a portal's sectors, a way's links - names it. A number is the shortest text that reads back to the very value; the few values a number of the file cannot be are words: `"-0"`, `"nan"`, `"inf"`, `"-inf"`.
+
+## The .scene
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `level.path` | string | "level" | The folder of the built level under the game's `levels`. |
+| `level.prefix` | string | "level_prefix" | What the level's own names start with. |
+| `level.map_version` | string | "1.0" | The version the level's `level.ltx` gives in `[map_usage]`. |
+| `level.custom_data` | string | "" | Lines the build adds to the level's `level.ltx` as they are. |
+| `level.game_types` | a list of `"single"`, `"deathmatch"`, `"team_deathmatch"`, `"artefact_hunt"`, `"capture_the_artefact"`, `"domination_zone"`, `"team_domination_zone"` | every one | The game types the level is made for. |
+| `build.quality` | `"draft"` `"high"` `"custom"` | "high" | Draft and high set the values below; custom keeps them as they are set. |
+| `build.sky_quality` | integer | 3 | How finely the build samples the light of the sky. |
+| `build.sun_quality` | integer | 3 | How finely the build samples the sun. |
+| `build.pixels_per_meter` | number (px/m) | 10 | Lightmap pixels per metre of surface. |
+| `build.jitter_samples` | `"1"` `"4"` `"9"` | 9 | Light samples per lightmap pixel, 1, 4 or 9: more is smoother and slower to build. |
+| `build.smooth_angle` | number (deg) | 75 | Faces that meet at a smaller angle are shaded smooth. |
+| `build.weld_distance` | number (m) | 0.005 | Vertices closer than this are merged. |
+| `build.collapse_error` | integer | 4 | How much a lightmap may differ from a flat colour to be collapsed into one. |
+| `build.zero_error` | integer | 4 | How dark a lightmap may be to be dropped as black. |
+| `build.reserved` | a list of 6 whole numbers: the bits of the floats | none | Values of the build parameters no key names, kept bit for bit as an X-Ray SDK scene had them. |
+| `build.reserved_word` | integer | 0 | A word of the build parameters no key names. |
+| `sun.altitude` | number (deg) | -25 | How high the sun stands for the build's sun shadows. |
+| `sun.longitude` | number (deg) | 292 | Where the sun stands round the horizon. |
+| `light_controls` | a list of names | none | The scene's own groups of lights besides `$static`, `$hemi` and `$sun`; a light names its group in `control`. |
+| `camera.pos` | { x, y, z } (m) | { 0, 0, 0 } | Where the viewport's camera stood when the scene was saved. |
+| `camera.heading` | number (deg) | 0 | Where the camera looked, round the vertical. |
+| `camera.pitch` | number (deg) | 0 | How far the camera looked up or down. |
+| `camera.bank` | number (deg) | 0 | The camera's roll. |
+| `classes` | `{ <kind> = { hidden = true, locked = true } }` - kinds: `object`, `light`, `glow`, `sound`, `sound_env`, `particles`, `shape`, `fog`, `spawn`, `way`, `sector`, `portal`, `group`, `ai_map`, `details`, `wallmarks` | none | The kinds of objects that are hidden or locked in the viewport. |
+| `view_flags` | `{ <kind> = n }` | none | What the viewport draws of each kind (names, crosses, solid sectors), as the kinds' flags. |
+| `random_placement` | `{ on = true, scale = { {min}, {max} }, rotation = { {min}, {max} }, proportional = true, objects = { ref, ... } }` | off | What placing a library object picks at random: the object of a list, its scale and its rotation. |
+| `layers` | `{ ai_map = "ai_map.bin", details = "details.bin", wallmarks = "wallmarks.bin" }` | none | The painted layers' files in the scene's folder. |
+
+## Every object
+
+Each list of a folder's file holds one table per object, on its own line or block, `name` first:
+
+```lua
+return {
+objects = {
+{ name = "box_wood_01", ref = "props\\box_wood_01", pos = { 1, 0, 2 }, rot = { 0, 90, 0 } },
+},
+}
+```
+
+These keys belong to objects of every kind (the transform only to the kinds that have it):
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | string | - | Unique in the scene: quests, orders, sectors and groups call the object by it. |
+| `pos` | { x, y, z } (m) | { 0, 0, 0 } | Where it stands, in metres. |
+| `rot` | { x, y, z } (deg) | { 0, 0, 0 } | Pitch, heading and bank, in degrees. |
+| `scale` | { x, y, z } | { 1, 1, 1 } | A factor per axis. |
+| `authored` | boolean | false | The module adds this object to the base level: it ships in the module's level layers. |
+| `removed` | boolean | false | The module takes this spawn of the base level out of the game. |
+| `hidden` | boolean | false | Not drawn and not picked in the viewport; the build takes it all the same. |
+| `locked` | boolean | false | Drawn, but not picked or changed in the viewport. |
+| `group_editable` | boolean | false | A member of a group that is picked and changed by itself; reloading the group keeps it as it is. |
+| `draw_selected` | boolean | false | Drawn while it is selected even when its kind is hidden. |
+| `motion` | `{ data = "<hex>", time = s, auto_key = true, camera_view = true }`: the X-Ray SDK object motion (.anm body), hex | none | The path a dynamic object moves along, and where its playback stands. |
+| `flags` | integer | 0 | Bits of the object's flags no key above names, kept as they were. |
+
+## Objects - `objects` of `objects.lua`
+
+Static and dynamic objects of the library.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `ref` | string (object) | - | The library object (`props\box_wood_01`), or the game model it names in visual mode. |
+| `visual` | boolean | false | The reference names a game model (`meshes\...ogf`) instead of a library object. |
+| `surfaces` | a list of `{ name, texture, shader, compile, material }` | none | Surfaces of the reference with this object's own texture, shaders and material. |
+| `object_flags` | integer | 0 | Bits of the object's own flags no key names, kept as they were. |
+
+## Lights - `lights` of `lights.lua`
+
+The lights the build bakes and the game shines.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `kind` | `"point"` `"spot"` `"directional"` | "point" | How the light shines. |
+| `color` | { r, g, b } | { 1, 1, 1 } | The colour of its light. |
+| `brightness` | number | 1 | Multiplies the colour; below 0 the light darkens. |
+| `range` | number (m) | 8 | How far it reaches. |
+| `attenuation` | { x, y, z } | { 1, 0, 0 } | Its constant, linear and quadratic falloff over the range. |
+| `cone` | number (deg) | 22.5 | The opening of a spot light. |
+| `texture` | string (texture) | - | The picture a spot light throws. |
+| `virtual_size` | number (m) | 0 | The size of the light's source the shadows are soft by. |
+| `control` | string (light_control) | "$static" | The group of lights it is switched with: `$static`, `$hemi`, `$sun` or one of the scene's `light_controls`. |
+| `animation` | string (lightanim) | - | A colour animation of the game's light animations. |
+| `lightmap` | boolean | true | The build bakes it into the level's lightmaps. |
+| `dynamic` | boolean | false | The game lights objects with it as they move. |
+| `animated` | boolean | false | Its colour animation plays in the game. |
+| `breaking` | boolean | false | It flickers out now and then. |
+| `shadows` | boolean | false | Objects cast shadows in it. |
+| `fuzzy` | `{ shape = "sphere" \| "box", radius = m, box = { x, y, z }, points = { { x, y, z }, ... } }` | none | A point light spread over random points of a sphere or a box, for softer lightmaps. |
+| `viewport` | boolean | true | One of the lights the viewport's Lighting view mode shows. |
+| `light_flags` | integer | 0 | Bits of the light's flags no key names, kept as they were. |
+
+## Glows - `glows` of `glows.lua`
+
+Glows: light halos the game draws.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `texture` | string (texture) | - | The glow's picture. |
+| `shader` | string (e_shader) | "effects\\glow" | How it is drawn. |
+| `radius` | number (m) | 0.5 | How big it is. |
+| `fixed_size` | boolean | false | The same size on the screen at any distance. |
+| `glow_flags` | integer | 0 | Bits of the glow's flags no key names. |
+
+## Sound Sources - `sources` of `sounds.lua`
+
+Sound sources: a sound of the game played at a place.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `sound` | string (sound_source) | - | The game's sound it plays (`ambient\wind_1`). |
+| `volume` | number | 1 | How loud, from 0 to 1. |
+| `frequency` | number | 1 | Played faster (above 1) or slower. |
+| `min_distance` | number (m) | 1 | Up to this distance it is heard at its full volume. |
+| `max_distance` | number (m) | 300 | Beyond this distance it is not heard. |
+| `ai_distance` | number (m) | 300 | How far the game's characters hear it. |
+| `pause` | { from, to } (s) | { 0, 0 } | A random pause between plays, from and to; 0 plays it looped. |
+| `active` | { from, to } (s) | { 0, 0 } | The time of the game's day it plays in, from and to, in seconds after midnight; 0 to 0 is round the clock. |
+| `play` | { from, to } (s) | { 0, 0 } | How long each play lasts, from and to; 0 plays the sound once. |
+| `sound_flags` | integer | 1 | The source's flags, kept as they were. |
+
+## Sound Environments - `environments` of `sounds.lua`
+
+Sound environments: volumes that change how sound echoes.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `inner` | string (sound_env) | - | The sound environment inside the volume. |
+| `outer` | string (sound_env) | - | The sound environment outside the volume. |
+| `shapes` | a list of `{ kind = "sphere", center = { x, y, z }, radius = m }` and `{ kind = "box", x = {..}, y = {..}, z = {..}, center = {..} }` | one unit box | The spheres and boxes the volume is made of. |
+
+## Particle Effects - `particles` of `particles.lua`
+
+Particle effects placed in the level.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `ref` | string (particles) | - | The particle effect of the game (`fire\fire_01`). |
+| `game_types` | a list of `"single"`, `"deathmatch"`, `"team_deathmatch"`, `"artefact_hunt"`, `"capture_the_artefact"`, `"domination_zone"`, `"team_domination_zone"` | every one | The game types it plays in. |
+
+## Shapes - `shapes` of `shapes.lua`
+
+Shapes: volumes of spheres and boxes (and the level's bound).
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `shapes` | a list of `{ kind = "sphere", center = { x, y, z }, radius = m }` and `{ kind = "box", x = {..}, y = {..}, z = {..}, center = {..} }` | none | The spheres and boxes it is made of, in its own coordinates. |
+| `usage` | `"common"` `"level_bound"` `"ai_map_bounds"` | "common" | What the shape is for: a volume of its own, the bound of the level, or the AI Map Bounds the AI map is generated inside. |
+
+## Fog Volumes - `volumes` of `fog.lua`
+
+Fog volumes: one box each.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `kind` | `"emitter"` `"occlusion"` | "emitter" | An emitter fills its box with fog; an occlusion volume keeps fog out. |
+| `group` | integer | none | Volumes of one group are one fog. |
+| `profile` | string (fog_profile) | "environment\\fog\\default.ltx" | The fog's settings, a file of the game's configs. |
+
+## Spawn Points - `spawns` of `spawns.lua`
+
+Spawn points: what the game spawns, and the editor's own points.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `section` | string (spawn_section) | - | The game's section the spawned thing is made from (`game.lookup kind=spawn_section` lists them). |
+| `point` | `"player_start"` `"respawn"` `"env_mod"` | - | A point of the editor's own instead of a section: the module's Player Start, a respawn point of the multiplayer games, an environment modifier. |
+| `props` | the entity's named properties that differ from a new entity of the section (`story_id`, `custom_data`, `visual`, `trader = { money = 500 }`, ...); `asset.reference kind=scene` lists them | none | What this spawn says beyond its section's defaults. |
+| `raw` | string | none | The entity's spawn packet as hex, for an entity the named properties cannot carry (its class is not known, or it holds more than its class writes): written back as it was. |
+| `values` | a list of texts | none | The numbered values an X-Ray SDK text scene gave an entity whose class the linked game does not know: written back as they were. |
+| `respawn` | boolean | false | The multiplayer games spawn it again after it is gone. |
+| `spawn_flags` | integer | 0 | Bits of the spawn's flags no key names. |
+| `order` | `{ kind = "guard" \| "patrol" \| "wander" \| "follow", route = way, look = way, radius = m, target = name, distance = m, run = true, hostile = true }` | none | A placed stalker's standing order; the build writes it into the entity's custom data as `[xms_order]`. |
+| `respawn_point` | `{ team = 1, kind = "actor" \| "artefact" \| "item", game_types = {...}, profile = section }` | `{ team = 1, kind = "actor" }` | Who or what respawns there in the multiplayer games. |
+| `environment` | `{ radius = m, power, view_distance = m, fog_color = { r, g, b }, fog_density, ambient_color, sky_color, hemi_color, uses = { "view_distance", "fog_color", ... } }` | radius 10, power 1, view distance 300, every value used | How the weather looks within the modifier's radius. |
+| `shape` | `{ shapes = { ... } }` as in `shapes.lua`, `pos`, `rot`, `scale` where they are not the point's | none | The volume of a zone, a restrictor or a level changer. |
+
+## Way Paths - `ways` of `ways.lua`
+
+Way paths: named points and the links between them; orders and quests walk them.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `kind` | `"patrol"` | "patrol" | What the game takes the way for. |
+| `points` | a list of `{ name, pos = { x, y, z }, flags = n, links = { "point", { "point", probability }, ... } }` (a point whose name another point shares is linked by its number from 0) | one point | The points of the way and where each leads; orders and quests walk them by name. |
+
+## Sectors - `sectors` of `zones.lua`
+
+Sectors: the cells the level's visibility is divided into.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `color` | { r, g, b } | { 1, 1, 1 } | How the viewport shows it. |
+| `default` | boolean | false | The sector of everything no other sector holds. |
+| `items` | a list of `{ "object", "mesh" }` | none | The meshes of scene objects the sector is made of, by object and mesh name. |
+| `map` | integer | the default | The light map its faces go to. |
+
+## Portals - `portals` of `zones.lua`
+
+Portals: the openings between two sectors.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `front` | string | - | The sector in front of it. |
+| `back` | string | - | The sector behind it. |
+| `vertices` | a list of `{ x, y, z }` | none | Its polygon, in the level's coordinates. |
+
+## Groups - `groups` of `groups.lua`
+
+Groups: objects held together; the members stay in their own files.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `ref` | string (group) | - | The group asset or library group it was placed from. |
+| `members` | a list of object names | none | The objects the group holds, by name; each stays in its own file. |
+
+## Spawn properties
+
+`props` holds the named properties of the spawn's entity that differ from a new entity of its section - the fields of the game's server entity by name: the object's own (`story_id`, `spawn_story_id`, `custom_data = [[ ... ]]`, `graph_id`, `node_id`, `distance`, `alife_flags`), its model (`visual`, `visual_flags`, `startup_animation`), and a table per part of its class (`trader = { money = 500, specific_character = "..." }`, `creature = { health = 0.5 }`, `zone = { ... }`, `script = { ... }`, ...). `header` holds what the entity's header says beyond the object's name and transform. A part the entity lacks is `false`. The editor proves every save: the properties read back must give the very spawn packet the entity writes, or the spawn is kept as its packet (`raw`, hex) and `asset.check` names it. An entity of an X-Ray SDK text scene whose class the linked game does not know has no packet: it keeps the section's numbered values as they were (`values`).
+
+## The painted layers
+
+`ai_map.bin`, `details.bin` and `wallmarks.bin` start with the magic `GZLAYER\0`, the layer format's version and the layer's kind (little-endian 32-bit words), then the layer's data as the editor holds it.
+
+## The ground of the painted layers
+
+The AI map, the detail objects and the wallmarks lie on **the ground**: every static scene object the collision build takes (not in visual mode, its library object not dynamic, no sound occluder, no HOM). A layer narrows it only by:
+
+- an explicit list of object names - the AI map's and the details' own list, kept in their layer files (a list that names every static object is the same as none);
+- for the AI map, the **AI Map Bounds** volume: a shape of usage `ai_map_bounds` (2, beside `common` 0 and `level_bound` 1). With one or more such shapes the map is generated inside their box, without one over the whole ground.
+
+The AI map's generation parameters are the layer's own (`scene.ai_map action=set`). The build regenerates an AI map it generated itself when the ground, the bounds or the parameters moved, and keeps a map the author edited (`build.state` in the level folder says which). The detail objects are the game's 2 m slots, painted per mesh (`scene.details`); the layer keeps its meshes with their density, scale range and waving.
+
+## Zones: what the build does with `zones.lua`
+
+A level needs no hand-made zone. The build's geometry step completes what the scene holds and compiles the completed copy, never writing it back:
+
+- a scene without sectors is one cell - nothing is added;
+- a scene with sectors gets the **default sector** (`sector_default`, `default = true`) for every static mesh no sector's `items` hold - an existing `sector_default` is filled, else one is made;
+- between the sectors no portal joins, **portals are computed** from the sectors' faces; a pair of sectors the author joined by hand keeps the author's portals.
+
+`zones.lua` therefore holds only what the author made by hand (the Zones mode, `scene.zones`): a sector's `items` name a scene object and one mesh of its library object, compared without case; a portal's `front` and `back` name sectors; its `vertices` are its outline in order, at least three. `scene.zones action=compute` keeps in the scene what the build would add, and `action=list` answers `uncovered_meshes`, what the build would put into the default sector.
+
+## Object groups (.group)
+
+A `.group` asset is a set of objects saved for reuse: the header `group = 1`, then the same lists as the scene's folder files (`objects`, `lights`, `spawns`, ...) in one file, positions relative to the group's pivot. Placing it puts copies of its objects into the scene as one group.
+
+## The X-Ray SDK scene
+
+A `.level` with its folder of `.part` files is the X-Ray SDK's scene: the editor reads it and never writes it. Opening one converts it in memory; saving writes the `.scene` beside it. Its scene-wide Snap Objects list is not kept: placing and the wallmarks work on the whole level, and the AI map's and the detail objects' own lists stay with their layers.

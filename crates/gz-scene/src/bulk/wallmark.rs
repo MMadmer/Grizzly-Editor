@@ -1,10 +1,10 @@
-//! The Wallmark tool (`ESceneWallmarkTools.cpp`): the static marks of a level - each a piece of
+//! The wallmarks: the static marks of a level - each a piece of
 //! the geometry under it, clipped to a rectangle laid on the surface, with its shader and
-//! texture - and the tool's chunk, read and written as `LoadStream` / `SaveStream` do.
+//! texture - and the layer's chunk (an X-Ray format), read and written.
 //!
 //! A mark is made from the triangle a ray hits and the triangles round it that face the same way
-//! ([`build_mark`]: the C++ `AddWallmark_internal` with its collector, adjacency walk and 3D
-//! ortho-frustum), and goes into the slot of its shader and texture, replacing a mark there
+//! ([`build_mark`]: a collector, an adjacency walk and a 3D ortho-frustum), and goes into the
+//! slot of its shader and texture, replacing a mark there
 //! whose centre is within 2 cm ([`Wallmarks::insert`]).
 
 use std::sync::Arc;
@@ -293,7 +293,7 @@ impl Wallmarks {
         n
     }
 
-    /// `RemoveSelection`: each selected mark replaced by its slot's last one, as the C++ does.
+    /// Removes the selected marks: each replaced by its slot's last one.
     pub fn remove_selected(&mut self) -> usize {
         let mut n = 0;
         for slot in &mut self.slots {
@@ -429,9 +429,9 @@ pub fn build_matrix(n: Vec3, from: Vec3, lay: &Lay) -> M43 {
     view.mul_a_43(&M43::scale(inv_w, inv_h, inv_w.max(inv_h)))
 }
 
-/// `AddWallmark_internal` once the geometry is gathered: `hit` is the triangle the ray met and
+/// A mark once the geometry is gathered: `hit` is the triangle the ray met and
 /// `contact` the point on it; `around` the triangles of the box round it. `Err` names why no
-/// mark could be made (the C++ message).
+/// mark could be made.
 pub fn build_mark(hit: [Vec3; 3], contact: Vec3, around: &[[Vec3; 3]], lay: &Lay) -> Result<Mark, String> {
     let normal = xr::mknormal(hit[0], hit[1], hit[2]);
     let mut col = Collector::new();
@@ -518,15 +518,6 @@ pub fn build_mark(hit: [Vec3; 3], contact: Vec3, around: &[[Vec3; 3]], lay: &Lay
     })
 }
 
-/// The scene objects a mark is laid on: the scene's snap list when it is used (`GetSnapList(false)`
-/// of a tool without a list of its own).
-pub fn snap_objects(state: &SceneState) -> Result<Vec<ObjId>, String> {
-    if !state.tools.snap_use {
-        return Err("Fill and activate snap list.".into());
-    }
-    Ok(state.tools.snap.clone())
-}
-
 /// `RayQuery(OPT_ONLYNEAREST | OPT_CULL)` over scene objects: the nearest front face, its range
 /// and its world triangle.
 #[must_use]
@@ -591,7 +582,7 @@ pub fn box_triangles(state: &SceneState, lib: &Library, ids: &[ObjId], b: &Aabb)
     out
 }
 
-/// Everything `AddWallmark_internal` asks of the scene for a ray: the mark, or why there is none
+/// Everything a mark needs of the scene for a ray: the mark, or why there is none
 /// (`Ok(None)`: the ray hit nothing).
 pub fn mark_at(
     state: &SceneState,
@@ -601,7 +592,7 @@ pub fn mark_at(
     range: f32,
     lay: &Lay,
 ) -> Result<Option<Mark>, String> {
-    let ids = snap_objects(state)?;
+    let ids = super::ground::objects(state, lib, None, None);
     let Some((t, hit)) = ray_triangle(state, lib, &ids, start, dir, range) else { return Ok(None) };
     let contact = xr::mad(start, dir, t);
     let mut bbox = Aabb::new(contact, contact);

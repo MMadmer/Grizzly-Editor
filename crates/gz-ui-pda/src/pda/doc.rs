@@ -4,7 +4,6 @@
 //! (a bottom split) keep their size. The tab follows the file unless the Source pane holds
 //! edits; those are never lost silently.
 
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -118,8 +117,14 @@ impl PdaDoc {
                 opening.store(true, Ordering::SeqCst);
                 self.spawn(move |ed, tab| {
                     Box::pin(async move {
-                        if !super::load_file(&ed, &tab, &abs.replace('/', "\\")).await {
-                            ed.notices.error(format!("{rel} cannot be read"));
+                        let abs = abs.replace('/', "\\");
+                        if !super::load_file(&ed, &tab, &abs).await {
+                            let mut m = tab.m.lock();
+                            m.path.clone_from(&abs);
+                            m.rel.clone_from(&rel);
+                            m.read_ok = false;
+                            m.read_line = 0;
+                            m.read_err = format!("File not found: {rel}");
                         }
                         opening.store(false, Ordering::SeqCst);
                     })
@@ -347,15 +352,36 @@ impl PdaDoc {
         }
     }
 
+    /// The Source pane: the text with its gutter, then at its foot the status and Apply - where
+    /// the eye is when the edit is done.
     fn draw_source(&mut self, ui: &mut Ui, m: &mut Model) {
         let mut goto = false;
         let apply;
+        let full = ui.available_rect_before_wrap();
+        let bar_h = ToolbarStyle::Panel.height();
+        let text_rect =
+            Rect::from_min_max(full.min, pos2(full.max.x, (full.max.y - bar_h).max(full.min.y + 1.0)));
+        let error = if m.read_ok { 0 } else { m.read_line };
+        let mut goto_line = std::mem::take(&mut m.goto_line);
+        let out = {
+            let mut text_ui = ui.new_child(
+                UiBuilder::new()
+                    .id_salt("gz-ui-pda.source_text")
+                    .max_rect(text_rect)
+                    .layout(Layout::top_down(Align::Min)),
+            );
+            local_code_view(&mut text_ui, "pda_source", &mut m.text, error, &mut goto_line)
+        };
+        m.goto_line = goto_line;
         {
-            // the toolbar keeps the pane's margin; the text runs edge to edge under it
-            let w = ui.available_width();
-            let bar = Rect::from_min_size(
-                ui.cursor().min + Vec2::new(8.0, 0.0),
-                Vec2::new((w - 16.0).max(1.0), ToolbarStyle::Panel.height()),
+            let bar = Rect::from_min_max(
+                pos2(full.min.x + 8.0, text_rect.max.y),
+                pos2(full.max.x - 8.0, full.max.y),
+            );
+            let p = gz_ui::palette(ui.ctx());
+            ui.painter().line_segment(
+                [pos2(full.min.x, bar.min.y), pos2(full.max.x, bar.min.y)],
+                egui::Stroke::new(1.0, p.border_subtle),
             );
             let mut bar_ui = ui.new_child(
                 UiBuilder::new()
@@ -363,21 +389,15 @@ impl PdaDoc {
                     .max_rect(bar)
                     .layout(Layout::left_to_right(Align::Center)),
             );
-            ui.allocate_rect(
-                Rect::from_min_size(ui.cursor().min, Vec2::new(w, ToolbarStyle::Panel.height())),
-                Sense::hover(),
-            );
             let mut tb = Toolbar::begin(&mut bar_ui, "pda_source", ToolbarStyle::Panel);
-            tb.group(2);
-            apply = tb.action(
-                "apply",
-                Icon::Check,
-                "Apply",
-                "Show the text in the preview without saving it (Ctrl+Enter)",
-                true,
-                false,
-                Kind::Ghost,
-            );
+            tb.group(1);
+            if !m.read_ok {
+                tb.status(&m.read_err, Tone::Error);
+            } else if m.text_dirty {
+                tb.status("Unsaved edits", Tone::Warning);
+            } else {
+                tb.status("Saved", Tone::Muted);
+            }
             if !m.read_ok && m.read_line > 0 {
                 let label = format!("Line {}", m.read_line);
                 goto = tb.action(
@@ -391,23 +411,22 @@ impl PdaDoc {
                 );
             }
             tb.spring();
-            tb.group(1);
-            if !m.read_ok {
-                tb.status(&m.read_err, Tone::Error);
-            } else if m.text_dirty {
-                tb.status("Unsaved edits", Tone::Warning);
-            } else {
-                tb.status("Saved", Tone::Muted);
-            }
+            tb.group(2);
+            apply = tb.action(
+                "apply",
+                Icon::Check,
+                "Apply",
+                "Show the text in the preview without saving it (Ctrl+Enter)",
+                true,
+                false,
+                Kind::Secondary,
+            );
             tb.end();
         }
+        ui.allocate_rect(full, Sense::hover());
         if goto {
             m.goto_line = m.read_line;
         }
-        let error = if m.read_ok { 0 } else { m.read_line };
-        let mut goto_line = std::mem::take(&mut m.goto_line);
-        let out = local_code_view(ui, "pda_source", &mut m.text, error, &mut goto_line);
-        m.goto_line = goto_line;
         if out.changed {
             m.text_dirty = m.text != m.disk;
         }
@@ -639,8 +658,10 @@ impl Document for PdaDoc {
             self.reload_all_async();
         }
 
-        // in the overflow each of these is a set of radio items
+        // three groups, each a caption and its choice; in the overflow each is a set of radio items
+        let ctx = cx.ctx.clone();
         tb.group(5);
+        crate::screens::doc::caption(tb, &ctx, "aspect_caption", "Aspect");
         let mut aspect = usize::from(wide);
         if tb.segmented(
             "aspect",
@@ -652,6 +673,8 @@ impl Document for PdaDoc {
         ) {
             self.tab.m.lock().preview.aspect = if aspect == 1 { Aspect::Wide } else { Aspect::Standard };
         }
+        tb.group(5);
+        crate::screens::doc::caption(tb, &ctx, "lang_caption", "Language");
         let mut lang_i = usize::from(lang == "eng");
         if tb.segmented(
             "lang",
@@ -671,6 +694,8 @@ impl Document for PdaDoc {
         } else {
             usize::MAX
         };
+        tb.group(5);
+        crate::screens::doc::caption(tb, &ctx, "zoom_caption", "Zoom");
         if tb.segmented(
             "zoom",
             "Zoom",
@@ -996,10 +1021,8 @@ pub fn install(b: &mut ShellBuilder) {
                 if !is_pda_path(&abs) {
                     return Err(format!("{p} is not a PDA interface (.pdaasset)"));
                 }
-                // a tab the session restores whose file is gone shows "File not found"
-                if !Path::new(&abs).is_file() {
-                    return Err("File not found".to_owned());
-                }
+                // whether the file is there is the tab's first read, on the pools: a tab the session
+                // restores whose file is gone opens and says "File not found"
                 Target::Path(project_relative(&tab.root, &abs))
             }
             None => Target::Module,

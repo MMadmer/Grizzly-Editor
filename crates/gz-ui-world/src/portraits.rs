@@ -6,16 +6,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::{
-    Align2, ColorImage, CornerRadius, Id, Popup, Rect, Response, ScrollArea, Sense, Stroke, StrokeKind,
+    ColorImage, CornerRadius, Id, Popup, Rect, Response, ScrollArea, Sense, Stroke, StrokeKind,
     TextureHandle, TextureId, TextureOptions, Ui, Vec2, pos2,
 };
 use gz_editor::Editor;
 use gz_game::GameLink;
 use gz_nq::PickerEntry;
 use gz_ui::menu::menu_popup;
-use gz_ui::text::{self, Clip};
+use gz_ui::text;
 use gz_ui::units::em;
-use gz_ui::{Font, Icon, MenuItem, SearchField, Tone, icons, menu_item, palette};
+use gz_ui::{Icon, MenuItem, SearchField, Tone, icons, menu_item, palette};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
@@ -228,7 +228,7 @@ pub fn local_portrait_gallery(
     } else {
         resp
     };
-    // a click toggles it; `characters_view show=icon` puts it up to be looked at
+    // a click toggles it; `characters.view show=icon` puts it up to be looked at
     let asked = lists.loaded && gz_ui::menu::take_popup_request(&ctx, salt);
     if (resp.clicked() && !Popup::is_id_open(&ctx, id)) || asked {
         ctx.data_mut(|d| {
@@ -250,7 +250,7 @@ pub fn local_portrait_gallery(
         ui.set_width(width);
         let mut query = ctx.data(|d| d.get_temp::<String>(id.with("search"))).unwrap_or_default();
         let field = SearchField::new(&mut query)
-            .hint("Type to filter")
+            .hint("Search portraits")
             .width(width)
             .id_salt("gz-ui-world.gallery_search")
             .show(ui);
@@ -319,16 +319,15 @@ pub fn local_portrait_gallery(
                                     Some((texture, uv)) => {
                                         ui.painter().image(texture, r.shrink(2.0), uv, egui::Color32::WHITE);
                                     }
+                                    // its sheet is still on its way (or does not read): the frame
+                                    // the player would see, never the id in place of a face
                                     None => {
-                                        text::paint(
+                                        let glyph = (r.height() * 0.4).min(28.0);
+                                        icons::draw(
                                             ui.painter(),
-                                            &Font::Small.id(),
-                                            r.center(),
-                                            Align2::CENTER_CENTER,
-                                            p.text_secondary,
-                                            &e.id,
-                                            Some(r.width() - 6.0),
-                                            Clip::Middle,
+                                            Icon::Person,
+                                            Rect::from_center_size(r.center(), Vec2::splat(glyph)),
+                                            p.text_muted,
                                         );
                                     }
                                 }

@@ -1,7 +1,4 @@
-//! The tools of sectors, portals, ways, shapes, lights and fog volumes (`UISectorTool`,
-//! `UIPortalTool`, `UIWayTool`, `UIShapeTool`, `UILightTool`, `UIFogVolTool` and the logic
-//! under them: `sector.cpp`, `portalutils.cpp`, `portal.cpp`, `WayPoint.cpp`, `EShape.cpp`,
-//! `ESceneShapeTools.cpp`, `ESceneLightTools.cpp`, `ESceneFogVolumeTools.cpp`).
+//! The tools of sectors, portals, ways, shapes, lights and fog volumes, and the logic under them.
 //!
 //! - [`ObjToolState`] is what the panels switch (the Sector tool's mesh mode and box pick, the
 //!   Way tool's Points mode and Auto Link, the Shape tool's shape, Attach on Click and Edit Level
@@ -12,8 +9,8 @@
 //!   edit of a way's points the store applies directly (the viewport's gestures).
 //! - The geometry ([`sector`], [`portal`], [`shape`]) is pure, over a snapshot and the library;
 //!   the long parts run as jobs on the CPU pool ([`cmd`]).
-//! - [`cmd::register`] adds `sector_tool`, `portal_tool`, `way_tool`, `shape_tool`, `light_tool`
-//!   and `fog_tool`.
+//! - [`cmd::register`] adds `way_tool`, `shape_tool`, `light_tool` and `fog_tool`; [`zones`] the
+//!   visibility cells' `scene.zones` and what the build completes of them.
 
 pub mod cmd;
 pub mod geom;
@@ -21,6 +18,7 @@ pub mod portal;
 pub mod sector;
 pub mod shape;
 pub mod way;
+pub mod zones;
 
 use std::sync::Arc;
 
@@ -58,8 +56,6 @@ impl Default for SectorMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ObjToolState {
     pub sector: SectorMode,
-    /// The Way tool selects points (`estWayModePoint`), not whole ways.
-    pub way_points: bool,
     pub auto_link: bool,
     /// A click of the Shape tool adds a sphere (else a box).
     pub shape_sphere: bool,
@@ -75,9 +71,8 @@ impl Default for ObjToolState {
     fn default() -> Self {
         Self {
             sector: SectorMode::default(),
-            way_points: false,
             auto_link: true,
-            // oracle: `m_SphereMode` is never initialised in the C++; a click adds a box here
+            // a click adds a box until a sphere is asked for
             shape_sphere: false,
             attach_on_click: false,
             spawn_attach: false,
@@ -231,8 +226,11 @@ fn name_by(state: &SceneState, rule: &NameRule) -> String {
     match rule {
         NameRule::Gen(pref) => state.gen_name(pref.as_deref()),
         NameRule::Fixed(n) => {
-            let n = n.to_lowercase();
-            if state.name_used(&n) { state.gen_name(Some(&n)) } else { n }
+            if state.name_used(n) {
+                state.gen_name(Some(n))
+            } else {
+                n.clone()
+            }
         }
     }
 }
@@ -304,7 +302,7 @@ fn apply_batch(state: &mut SceneState, b: Batch, cx: &mut Apply) -> Result<Scene
     })
 }
 
-/// `CEditShape::OnFrame`: a level bound shape is seen only while Edit Level Bound is on.
+/// A level bound shape is seen only while Edit Level Bound is on.
 pub(crate) fn show_level_bounds(state: &mut SceneState, on: bool) {
     let ids: Vec<ObjId> = state
         .of_class(ObjClass::Shape)
@@ -470,7 +468,7 @@ mod tests {
         b.select_added = true;
         let Ok(SceneReply::Id(id)) = send(b) else { panic!() };
         let st = store.snapshot();
-        assert_eq!(st.get(id).unwrap().name, "01");
+        assert_eq!(st.get(id).unwrap().name, "object_01");
         assert!(st.is_selected(id));
         assert!(store.is_dirty());
     }

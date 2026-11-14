@@ -22,7 +22,9 @@ use gz_ui::splitter::splitter_tail;
 use gz_ui::state::{badge, banner, busy_line, empty_state};
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
-use gz_ui::{Font, Icon, Kind, PropFlags, PropertyGrid, Tone, Toolbar, ToolbarStyle, metrics, palette};
+use gz_ui::{
+    Button, Font, Icon, Kind, PropFlags, PropertyGrid, Tone, Toolbar, ToolbarStyle, metrics, palette,
+};
 use parking_lot::Mutex;
 
 use crate::local::{cell, local_fold, local_table_head};
@@ -298,7 +300,7 @@ impl ReleasesDoc {
         self.editor.exec.spawn(async move {
             let started = ReleaseList::of(&ed).start(&ed, ManageRequest::default()).await;
             match started {
-                Ok(()) => {
+                Ok(_) => {
                     slot.lock().setup = Setup::Ok;
                     error.lock().clear();
                 }
@@ -561,32 +563,35 @@ impl ReleasesDoc {
             text::prose(ui, &r.title);
         }
         ui.add_space(4.0);
-        PropertyGrid::new("release").label_frac(0.35).show(ui, |g| {
-            let published = if r.published.is_empty() {
-                "Not published (draft)".to_owned()
-            } else {
-                local_time(&r.published)
-            };
-            g.row(
-                "Published",
-                "In your local time. A draft is not published: players never see it.",
-                PropFlags::READ_ONLY,
-                0,
-                |ui| {
-                    read_only(ui, &published, Clip::End);
-                },
-            );
-            let files = files_text(r);
-            g.row(
-                "Files",
-                "What the release holds: the packages, the file index and the descriptor.",
-                PropFlags::READ_ONLY,
-                0,
-                |ui| {
-                    read_only(ui, &files, Clip::End);
-                },
-            );
-        });
+        PropertyGrid::new("release").label_frac(gz_ui::units::em(8.0) / ui.available_width().max(1.0)).show(
+            ui,
+            |g| {
+                let published = if r.published.is_empty() {
+                    "Not published (draft)".to_owned()
+                } else {
+                    local_time(&r.published)
+                };
+                g.row(
+                    "Published",
+                    "In your local time. A draft is not published: players never see it.",
+                    PropFlags::READ_ONLY,
+                    0,
+                    |ui| {
+                        read_only(ui, &published, Clip::End);
+                    },
+                );
+                let files = files_text(r);
+                g.row(
+                    "Files",
+                    "What the release holds: the packages, the file index and the descriptor.",
+                    PropFlags::READ_ONLY,
+                    0,
+                    |ui| {
+                        read_only(ui, &files, Clip::End);
+                    },
+                );
+            },
+        );
         ui.indent("release_files", |ui| {
             for name in &r.assets {
                 text::label(ui, name, Font::Body, p.text_secondary, Clip::Middle);
@@ -641,6 +646,14 @@ fn state_cell(ui: &mut Ui, r: &ReleaseInfo) {
 
 fn web_of(editor: &Editor) -> String {
     gz_github::Github::of(editor).endpoints().web.clone()
+}
+
+/// An empty state whose action is a Secondary button: the tab's row holds Build Mod, the one
+/// Primary of every tab.
+fn empty_with(ui: &mut Ui, icon: Icon, title: &str, text_: &str, action: Option<&str>) -> bool {
+    empty_state(ui, icon, title, text_, None);
+    let Some(action) = action else { return false };
+    ui.vertical_centered(|ui| Button::new(action).show(ui).clicked()).inner
 }
 
 impl Document for ReleasesDoc {
@@ -731,7 +744,7 @@ impl Document for ReleasesDoc {
                 return;
             }
             Setup::NoRepo => {
-                if empty_state(
+                if empty_with(
                     ui,
                     Icon::Releases,
                     "No GitHub repository",
@@ -743,7 +756,7 @@ impl Document for ReleasesDoc {
                 return;
             }
             Setup::NoAccount => {
-                if empty_state(
+                if empty_with(
                     ui,
                     Icon::Link,
                     "Not signed in to GitHub",
@@ -791,7 +804,7 @@ impl Document for ReleasesDoc {
             return;
         }
         if view.releases.is_empty() {
-            if empty_state(
+            if empty_with(
                 ui,
                 Icon::Releases,
                 "No releases yet",

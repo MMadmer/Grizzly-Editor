@@ -220,7 +220,7 @@ impl AiMapCache {
             self.tiles.clear();
             return;
         };
-        if state.tools.target == ObjClass::AiMap
+        if state.tools.mode == gz_scene::SceneMode::AiMap
             && let Some(b) = ga(&part.header.bbox)
         {
             built.list.helpers.shape(

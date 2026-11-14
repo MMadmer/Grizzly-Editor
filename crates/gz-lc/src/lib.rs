@@ -1,22 +1,23 @@
-//! The level compiler (`XrLC`) and the detail compiler's pipeline (`xrDO_Light`), on the model
-//! and the light of `gz-lc-light`.
+//! The level compiler (geometry, collision and light) and the detail compiler, on the model and
+//! the light of `gz-lc-light`.
 //!
 //! ```text
-//! compile(&Input, &Options, &Ctl) -> Report        CBuild::Load + CBuild::Run: build.prj in,
-//!                                                   level, level.geom, level.geomx, level.cform,
-//!                                                   build.lights, build.cform, the lightmaps out
-//! compile_details(&Input, &Ctl) -> Report          xrCompileDO: level.details out
+//! compile(&Input, &Options, &Ctl) -> Report        a level folder's build.prj in; level, level.geom,
+//!                                                   level.geomx, level.cform, build.lights,
+//!                                                   build.cform and the light maps out
+//! compile_details(&Input, &Ctl) -> Report          the detail slots lit: level.details out
 //! compile_project(&BuildProject, Shaders, textures, &Options, &Ctl) -> Output
 //!                                                   the same in memory, for a caller with its data
-//! Options::parse(flags)                             the command line of XrLC
+//! Options::parse(flags)                             the compiler's switches from a command line
 //! ```
 //!
-//! **Modules**: `load` (`CBuild::Load`), `geom` (`PreOptimize`, `CorrectTJunctions`,
-//! `xrPhase_AdaptiveHT`, `xrPhase_TangentBasis`), `cform` (`BuildCForm`, `SimplifyCFORM`),
-//! `qslim` (`XrQSlim`), `mender` (`NVMeshMenderTwo`), `split` (`ResolveMaterials`, `UVmap`,
-//! `Subdivide`, `MergeGeometry`), `ogf` (`OGF_Face*`), `stripify` (`NvTriStrip`), `sphere`
-//! (`CalcBounds`, the miniball, `Mgc::MinSphere`), `tree` (`Flex2OGF`, the MU visuals, the sectors,
-//! the savers), `details` (`xrCompileDO`).
+//! **Modules**: `load` (the build project into the compiler's model), `geom` (optimising, the
+//! T-junctions, the adaptive tessellation, the tangent basis), `cform` (the collision form and its
+//! simplification), `qslim` (the progressive meshes), `mender` (the normal and tangent mender),
+//! `split` (the materials resolved, the UV maps, the subdivision, the merge), `ogf` (the visuals'
+//! faces), `stripify` (the triangle strips), `sphere` (the bounds and the minimal spheres), `tree`
+//! (the visuals' tree, the multiple-usage models, the sectors, the savers), `details` (the detail
+//! light).
 //!
 //! Every phase runs on the caller's rayon pool and gives the same bytes on any number of
 //! threads and on every run; nothing here holds a global, and nothing makes a pool but the
@@ -77,7 +78,7 @@ impl Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// The command line of `XrLC` and `xrDO_Light`, as far as it reaches the compile.
+/// The compiler's switches. `level.compile` and `level.build` take them as named parameters.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Options {
     /// `-nosun`: no sun light.
@@ -93,8 +94,7 @@ pub struct Options {
     /// `-att`: point lights fall off linearly.
     pub linear: bool,
     /// `-threads=<n>`: the compile on a pool of its own of `n` threads instead of the caller's.
-    /// No option of the C++; the proof that the result does not depend on the number of threads
-    /// (`tools/qa/diff_compile.py`) compiles on one.
+    /// The result does not depend on the number of threads: a test compiles on one to prove it.
     pub threads: Option<usize>,
 }
 
@@ -139,8 +139,7 @@ impl Options {
     }
 }
 
-/// The compile's log: the phases with their seconds, as the C++ log window lists them, and the
-/// lines it prints.
+/// The compile's log: the phases with their seconds and the lines it prints.
 #[derive(Default)]
 pub struct Log {
     pub lines: Vec<String>,
@@ -173,23 +172,23 @@ impl Log {
         self.lines.push(s);
     }
 
-    /// `clMsg`.
+    /// A line of a phase.
     pub fn msg(&mut self, s: String) {
         self.push(format!("    |    | {s}"));
     }
 
-    /// A `clMsg` the author should look at: in the log and in the report's warnings.
+    /// A line the author should look at: in the log and in the report's warnings.
     pub fn warn(&mut self, s: String) {
         self.msg(s.clone());
         self.warnings.push(s);
     }
 
-    /// `Status`.
+    /// What the phase works on now.
     pub fn status(&mut self, s: String) {
         self.push(format!("    | {s}"));
     }
 
-    /// `Phase`: the one before ends with its seconds.
+    /// A new phase: the one before ends with its seconds.
     pub fn phase(&mut self, name: &str) {
         self.end_phase();
         self.push(format!("* New phase started: {name}"));
@@ -209,7 +208,7 @@ impl Log {
 #[derive(Clone, Debug, Default)]
 pub struct Output {
     pub files: Vec<(String, Vec<u8>)>,
-    /// The faces `Face::Verify` refused (kept under `-no_invalidefaces`; their corners are in
+    /// The faces the compiler refused as degenerate (kept under `-no_invalidefaces`; their corners are in
     /// `build.err`).
     pub invalid_faces: u32,
 }
@@ -243,8 +242,8 @@ fn adapt(e: LcError) -> Error {
     Error::Light(e)
 }
 
-/// The whole compile in memory: `CBuild::Load` of a read `build.prj` with the given shaders and
-/// prepared textures, then `CBuild::Run`. `log` follows it phase by phase.
+/// The whole compile in memory: a read `build.prj` with the given shaders and prepared textures
+/// loaded into the compiler's model, then every phase. `log` follows it phase by phase.
 pub fn compile_project(
     prj: &BuildProject,
     shaders: Shaders,
@@ -512,8 +511,8 @@ fn write_all(dir: &Path, out: &Output, pages: bool, report: &mut Report) -> Resu
     Ok(())
 }
 
-/// `XrLC -f <level>`: the level folder's `build.prj` compiled, the files written beside it
-/// (`build.err` too: the C++ writes it to its logs).
+/// A level folder's `build.prj` compiled, the files written beside it, `build.err` (the faces the
+/// compiler refused, which the viewport draws) among them.
 pub fn compile(input: &Input, opts: &Options, ctl: &Ctl<'_>, log: &mut Log) -> Result<Report> {
     if let Some(n) = opts.threads {
         let pool = rayon::ThreadPoolBuilder::new()
@@ -534,7 +533,7 @@ pub fn compile(input: &Input, opts: &Options, ctl: &Ctl<'_>, log: &mut Log) -> R
     let out = match compile_project(&prj, shaders, textures, opts, ctl, log) {
         Ok(out) => out,
         Err(Error::InvalidFaces(n, err)) => {
-            // `err_save` before the abort: the author finds the faces in the viewport from it
+            // written before the refusal: the author finds the faces in the viewport from it
             let path = input.level.join("build.err");
             std::fs::write(&path, &err)
                 .map_err(|e| Error::Io(format!("{} could not be written: {e}", path.display())))?;
@@ -551,7 +550,7 @@ pub fn compile(input: &Input, opts: &Options, ctl: &Ctl<'_>, log: &mut Log) -> R
     Ok(report)
 }
 
-/// `xrDO_Light -f <level>`: `build.details` lit into `level.details` from `build.cform`,
+/// The detail slots of a level folder lit: `build.details` into `level.details` from `build.cform`,
 /// `build.lights` and `build.prj` of the level folder.
 pub fn compile_details(input: &Input, ctl: &Ctl<'_>, log: &mut Log) -> Result<Report> {
     let t = Instant::now();

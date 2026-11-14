@@ -1,15 +1,15 @@
-//! The drawing of the Characters tab: the list and the form (`DrawList`, `DrawForm` and their
-//! parts in `EditorCharacters.cpp`).
+//! The drawing of the Characters tab: the list, the form and the preview of the character as
+//! the game will show it.
 
 use egui::{Align, Align2, Layout, Rect, Ui, UiBuilder, Vec2, pos2};
 use gz_characters::{Character, Supply, Trade, TradeRow, game_id, text_in, text_raw};
 use gz_ui::grid::{Grid, integer, number, switch, text_block};
 use gz_ui::list::{Column, list, table_headers};
 use gz_ui::text::{self, Clip};
-use gz_ui::units::{button_width, em};
+use gz_ui::units::em;
 use gz_ui::{
-    Button, Font, Icon, Kind, PropFlags, PropertyGrid, SearchField, Tone, icon_button, icons, metrics,
-    palette,
+    Button, Col, Font, Icon, ItemRows, PropFlags, PropertyGrid, SearchField, Tone, icon_button, icons,
+    metrics, palette,
 };
 
 use crate::characters::{Action, CharactersDoc, field_of, problem_text, problem_tone};
@@ -22,6 +22,8 @@ const ROLE: &str = "character";
 const LABEL_FRAC: f32 = 0.30;
 /// A table row: a field and a little air.
 const TABLE_ROW: f32 = 26.0;
+/// The portrait at the head of a list row: a 22 pt face, as wide as a portrait is.
+const THUMB_W: f32 = 30.0;
 
 /// A row's flags with Invalid when one of its problems is an error (`RowFlags`).
 /// "name.eng: here "Ivan", on disk "Petro"": one value both the form and the file changed.
@@ -134,6 +136,7 @@ impl CharactersDoc {
         let mut picked: Option<String> = None;
         let shown = &self.shown.2;
         let filtering = !self.list_filter.trim().is_empty();
+        let (lists, sheets, editor) = (&self.lists, self.sheets.clone(), self.editor.clone());
         list(ui, "gz-ui-world.characters.list", Vec2::new(0.0, -foot), |l| {
             // a new character nobody saved yet heads the list
             if fresh {
@@ -166,21 +169,38 @@ impl CharactersDoc {
                 let Some(c) = roster.raw.get(i) else { continue };
                 let selected = sel == Some(i);
                 let name = text_in(&c.name, "rus");
+                // the face the player sees; the kind's glyph while there is none (yet)
+                let face = (!c.icon.is_empty())
+                    .then(|| lists.icons.get(&c.icon))
+                    .flatten()
+                    .zip(sheets.as_ref())
+                    .and_then(|(e, sh)| sh.portrait(&editor, e));
                 let resp = l.row(&c.file, selected, |ui| {
                     let r = ui.max_rect();
                     let cy = r.center().y;
-                    let icon = if c.is_abstract { Icon::CharacterTemplate } else { Icon::Character };
-                    icons::draw(
-                        ui.painter(),
-                        icon,
-                        Rect::from_min_size(pos2(r.min.x, cy - 7.0), Vec2::splat(metrics::GLYPH_ROW)),
-                        if selected { p.accent_bright } else { p.text_secondary },
+                    let thumb = Rect::from_min_size(
+                        pos2(r.min.x, r.min.y + 1.0),
+                        Vec2::new(THUMB_W, r.height() - 2.0),
                     );
+                    match face {
+                        Some((texture, uv)) => {
+                            ui.painter().image(texture, thumb, uv, egui::Color32::WHITE);
+                        }
+                        None => {
+                            let icon = if c.is_abstract { Icon::CharacterTemplate } else { Icon::Character };
+                            icons::draw(
+                                ui.painter(),
+                                icon,
+                                Rect::from_center_size(thumb.center(), Vec2::splat(metrics::GLYPH_ROW)),
+                                if selected { p.accent_bright } else { p.text_secondary },
+                            );
+                        }
+                    }
                     // what sits at the right end: the template mark, the dot of unsaved edits
                     let right = if c.is_abstract { em(4.5) } else { 0.0 }
                         + if selected && dirty { 16.0 } else { 0.0 }
                         + 6.0;
-                    let x = r.min.x + 20.0;
+                    let x = r.min.x + THUMB_W + 6.0;
                     let room = (r.max.x - x - right).max(0.0);
                     let font = Font::Body.id();
                     let id_w = text::width(ui.ctx(), &font, &c.id).min(room);
@@ -262,14 +282,13 @@ impl CharactersDoc {
 
     // ---- the form -------------------------------------------------------------------------------
 
-    /// The portrait, the name the player reads, the game's name for it, the file; Delete... at the
-    /// right; the problems that belong to no field (`DrawHeader`).
+    /// The portrait, the name the player reads, the game's name for it, the file; the problems
+    /// that belong to no field. Save, Revert and Delete... are the toolbar's.
     fn draw_header(&mut self, ui: &mut Ui, width: f32) {
         let ctx = ui.ctx().clone();
         let p = palette(&ctx);
         let portrait = 64.0;
-        let delete_w = button_width(&ctx, "Delete...", Kind::GhostDanger, false, 0.0);
-        let text_w = (width - portrait * 1.42 - 12.0 - delete_w - 8.0).max(em(4.0));
+        let text_w = (width - portrait * 1.42 - 12.0 - 8.0).max(em(4.0));
         let mut title = if self.name_eng.is_empty() { self.name_rus.clone() } else { self.name_eng.clone() };
         if title.is_empty() {
             title = if self.edit.id.is_empty() { "New character".to_owned() } else { self.edit.id.clone() };
@@ -281,7 +300,6 @@ impl CharactersDoc {
         };
         let file =
             if self.edit.file.is_empty() { "Not saved yet".to_owned() } else { self.edit.file.clone() };
-        let mut delete = false;
         ui.horizontal_top(|ui| {
             let _ = draw_portrait(ui, &self.editor, self.sheets.as_ref(), &self.lists, &self.edit.icon, portrait);
             ui.add_space(12.0);
@@ -295,15 +313,7 @@ impl CharactersDoc {
                     gz_ui::state::badge(ui, "Template", Tone::Muted);
                 }
             });
-            let used = ui.min_rect().width();
-            ui.add_space((width - used - delete_w).max(0.0));
-            if Button::new("Delete...").kind(Kind::GhostDanger).enabled(!self.edit.file.is_empty(), "Not saved yet: nothing to delete").show(ui).clicked() {
-                delete = true;
-            }
         });
-        if delete {
-            self.actions.push(Action::Delete);
-        }
         for problem in self.own.iter().filter(|x| field_of(x).is_empty()) {
             let _ = text::status(ui, problem_tone(problem), &problem_text(problem));
         }
@@ -653,8 +663,9 @@ fn money_row(ui: &mut Ui, edit: &mut Character, inherited: Option<&Character>) -
     changed
 }
 
-/// The starting kit: what the base already gives (shown, not editable), then this character's
-/// rows; Add Item (`DrawKit`). True when something changed.
+/// The starting kit as the kit's one table: what the base already gives, muted with where it
+/// comes from (its cross takes it out with a count of 0), then this character's own rows. True
+/// when something changed.
 fn draw_kit(
     ui: &mut Ui,
     edit: &mut Character,
@@ -665,77 +676,89 @@ fn draw_kit(
 ) -> bool {
     let p = palette(ui.ctx());
     let mut changed = false;
-    let given: &[Supply] = inherited.map_or(&[], |b| b.supplies.as_slice());
-    if given.is_empty() && edit.supplies.is_empty() {
-        let _ =
-            text::status(ui, Tone::Muted, "No starting kit: the NPC spawns with what its community gives.");
-    } else {
-        let total = ui.available_width();
-        let (count_w, action_w) = (em(5.0), metrics::ICON_BUTTON);
-        let item_w = (total - count_w - action_w - 16.0).max(em(6.0));
-        let _ = table_headers(
-            ui,
-            &[
-                Column::new("Item", item_w + 8.0),
-                Column::new("Count", count_w + 8.0),
-                Column::new("", action_w),
-            ],
-        );
-        for (i, row) in given.iter().enumerate() {
-            ui.push_id(("inherited", i), |ui| {
-                ui.horizontal(|ui| {
-                    ui.set_height(TABLE_ROW);
-                    let label = format!("{}  - from {base}", item_label(&lists.items, &row.section));
-                    cell(ui, item_w, |ui| {
-                        let _ = text::label(ui, &label, Font::Body, p.text_muted, Clip::End)
-                            .on_hover_text(format!("From {base}. A row of the same item below changes the count; a count of 0 takes it out."));
-                    });
-                    cell(ui, count_w, |ui| {
-                        let _ = text::label(ui, &row.count.to_string(), Font::Body, p.text_muted, Clip::End);
-                    });
-                });
-                row_rule(ui);
-            });
-        }
-        let mut remove = None;
-        let inherits = !given.is_empty();
-        for (i, row) in edit.supplies.iter_mut().enumerate() {
-            ui.push_id(("own", i), |ui| {
-                ui.horizontal(|ui| {
-                    ui.set_height(TABLE_ROW);
-                    if cell(ui, item_w, |ui| {
-                        item_picker(ui, &format!("character.kit.{i}"), &mut row.section, lists, None)
-                    }) {
-                        changed = true;
+    let given: Vec<Supply> = inherited.map_or_else(Vec::new, |b| b.supplies.clone());
+    // an own row of an inherited item changes that row: it is drawn there
+    let inherited_rows: Vec<&Supply> =
+        given.iter().filter(|g| !edit.supplies.iter().any(|o| o.section == g.section)).collect();
+    let n_given = inherited_rows.len();
+    let inherits = !given.is_empty();
+    let columns = [Col::new("Item", em(18.0)), Col::new("Count", em(6.0))];
+    let from = format!("from {base}");
+    let mut picked: Option<(usize, String)> = None;
+    let mut counted: Option<(usize, i32)> = None;
+    let supplies = &edit.supplies;
+    let rows = n_given + supplies.len();
+    let result = ui
+        .scope(|ui| {
+            // the count needs a few digits: the table keeps to the width its items read at
+            ui.set_max_width(em(32.0));
+            ItemRows::new("character.kit", &columns, rows)
+                .add_label("Add Item")
+                .empty_text("No starting kit: the NPC spawns with what its community gives.")
+                .show(ui, |ui, row, col| {
+                    if let Some(g) = inherited_rows.get(row) {
+                        if col == 0 {
+                            let label = format!("{}  ·  {from}", item_label(&lists.items, &g.section));
+                            let _ =
+                        text::label(ui, &label, Font::Body, p.text_muted, Clip::End).on_hover_text(format!(
+                            "From {base}. Its cross takes it out of this character's kit (a count of 0)."
+                        ));
+                        } else {
+                            let _ =
+                                text::label(ui, &g.count.to_string(), Font::Body, p.text_muted, Clip::End);
+                        }
+                        return;
                     }
-                    if cell(ui, count_w, |ui| integer(ui, &mut row.count, 0.1, "").changed()) {
-                        changed = true;
+                    let Some(own_row) = supplies.get(row - n_given) else { return };
+                    if col == 0 {
+                        let mut section = own_row.section.clone();
+                        let none = own_row.section.is_empty().then_some("Pick an item...");
+                        if item_picker(ui, &format!("character.kit.{row}"), &mut section, lists, none) {
+                            picked = Some((row - n_given, section));
+                        }
+                    } else {
+                        let mut count = own_row.count;
+                        if integer(ui, &mut count, 0.1, "").changed() {
+                            // 0 stays: with a base it means "not this one"
+                            counted =
+                                Some((row - n_given, if inherits { count.max(0) } else { count.max(1) }));
+                        }
                     }
-                    // 0 stays: with a base it means "not this one". Below zero never meant anything
-                    row.count = row.count.max(0);
-                    if row.count == 0 && !inherits {
-                        row.count = 1;
-                    }
-                    if icon_button(ui, Icon::Delete, "Take the row out", false, true).clicked() {
-                        remove = Some(i);
-                    }
-                });
-                row_rule(ui);
-            });
-        }
-        if let Some(i) = remove
-            && i < edit.supplies.len()
-        {
-            edit.supplies.remove(i);
-            changed = true;
-        }
+                })
+        })
+        .inner;
+    if let Some((i, section)) = picked
+        && let Some(r) = edit.supplies.get_mut(i)
+    {
+        r.section = section;
+        changed = true;
     }
-    status_lines(ui, own, "kit");
-    ui.add_space(2.0);
-    if Button::new("Add Item").show(ui).clicked() {
+    if let Some((i, count)) = counted
+        && let Some(r) = edit.supplies.get_mut(i)
+    {
+        r.count = count;
+        changed = true;
+    }
+    if let Some(row) = result.removed {
+        if let Some(g) = inherited_rows.get(row) {
+            edit.supplies.push(Supply::new(&g.section, 0));
+        } else if row - n_given < edit.supplies.len() {
+            edit.supplies.remove(row - n_given);
+        }
+        changed = true;
+    }
+    if let Some((from_row, to_row)) = result.moved
+        && from_row >= n_given
+        && to_row >= n_given
+    {
+        gz_ui::rows::apply_move(&mut edit.supplies, from_row - n_given, to_row - n_given);
+        changed = true;
+    }
+    if result.added {
         edit.supplies.push(Supply::new("", 1));
         changed = true;
     }
+    status_lines(ui, own, "kit");
     changed
 }
 

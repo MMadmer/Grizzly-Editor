@@ -31,35 +31,6 @@ use crate::local::local_panel_header;
 pub const SELECTION: usize = 0;
 pub const WORLD: usize = 1;
 
-/// What Level Settings says of its rows the label alone does not explain (`kWorldHelp`).
-const WORLD_HELP: &[(&str, &str)] = &[
-    ("Scene\\Name", "The scene file this level is saved to."),
-    ("Scene\\Build options\\Level path", "The folder of the built level under the game's levels folder."),
-    ("Scene\\Build options\\Custom data", "Lines the build adds to the level's level.ltx as they are."),
-    (
-        "Scene\\Build options\\Quality",
-        "Draft and High fill in the build options below; Custom lets them be set one by one.",
-    ),
-    (
-        "Scene\\Build options\\Lighting\\Hemisphere quality [0-3]",
-        "How finely the build samples the sky light.",
-    ),
-    ("Scene\\Build options\\Lighting\\Sun shadow quality [0-3]", "How finely the build samples the sun."),
-    ("Scene\\Build options\\Lighting\\Pixel per meter", "Lightmap pixels per metre of surface."),
-    (
-        "Scene\\Build options\\Lighting\\Jitter samples",
-        "Samples per lightmap pixel: more is smoother and slower to build.",
-    ),
-    (
-        "Scene\\Build options\\Optimizing\\Normal smooth angle",
-        "Faces that meet at a smaller angle than this are shaded smooth.",
-    ),
-    ("Scene\\Build options\\Optimizing\\Weld distance (m)", "Vertices closer than this are merged."),
-    ("Scene\\Map version", "The version the level's level.ltx gives in [map_usage]."),
-];
-
-const QUALITY_KEY: &str = "Scene\\Build options\\Quality";
-
 /// A level of the grid: its own rows, then its categories, each in the order met.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Node {
@@ -76,8 +47,6 @@ pub struct Prepared {
     pub icon: Icon,
     pub name: String,
     pub kind: String,
-    /// Level Settings: the build quality preset (0 Draft, 1 High, 2 Custom).
-    pub quality: usize,
 }
 
 /// `rows_of` of `gz-scene`'s `property_inspector`: the merged rows of the selected objects of
@@ -89,18 +58,7 @@ pub fn rows(
     target: usize,
     ctx: &PropContext,
 ) -> Vec<MergedRow> {
-    if target == WORLD {
-        return props::tree_order(props::merge(vec![props::world_rows(state)]));
-    }
-    let cx = PropCx { lib: Some(lib), entity: ctx };
-    let class = state.tools.target;
-    props::tree_order(props::merge(
-        state
-            .of_class(class)
-            .filter(|o| state.is_selected(o.id))
-            .map(|o| props::object_rows(state, o, &cx))
-            .collect(),
-    ))
+    gz_scene::selection_rows(state, lib, target == WORLD, ctx)
 }
 
 fn insert(nodes: &mut Vec<Node>, path: &[&str], row: MergedRow) {
@@ -147,11 +105,12 @@ pub fn prepare(
     let mut nodes = Vec::new();
     let mut visible = 0;
     for r in &all {
-        if !f.is_empty() && !r.row.key.to_lowercase().contains(&f) {
+        if !f.is_empty() && !r.row.key.to_lowercase().contains(&f) && !r.row.label.to_lowercase().contains(&f)
+        {
             continue;
         }
         visible += 1;
-        let parts: Vec<&str> = r.row.key.split('\\').collect();
+        let parts: Vec<&str> = r.row.path.split('\\').collect();
         let dirs = parts.split_last().map_or(&[][..], |(_, d)| d);
         insert(&mut nodes, dirs, r.clone());
     }
@@ -167,23 +126,15 @@ pub fn prepare(
     } else {
         header(state)
     };
-    Prepared {
-        nodes,
-        total: all.len(),
-        visible,
-        icon,
-        name,
-        kind,
-        quality: usize::from(state.meta.level.build.quality.min(2)),
-    }
+    Prepared { nodes, total: all.len(), visible, icon, name, kind }
 }
 
 /// `RefreshHeader`: one object names itself, several say how many and of what kind.
 fn header(state: &SceneState) -> (Icon, String, String) {
-    let class = state.tools.target;
-    let selected: Vec<_> = state.of_class(class).filter(|o| state.is_selected(o.id)).collect();
+    let class = state.tools.placing;
+    let selected: Vec<_> = state.selected_in_order().iter().filter_map(|id| state.get(*id)).collect();
     match selected.as_slice() {
-        [] => (crate::classes::icon(class), class.desc().to_owned(), "Tool".to_owned()),
+        [] => (crate::classes::icon(class), "Nothing Selected".to_owned(), String::new()),
         [one] => (crate::classes::icon(one.class), one.name.to_string(), one.class.desc().to_owned()),
         many => {
             let first = many.first().map_or(class, |o| o.class);
@@ -200,12 +151,11 @@ fn header(state: &SceneState) -> (Icon, String, String) {
 
 /// A multi-line value: shown as its first line with Edit.
 fn multi_line(key: &str, text: &str) -> bool {
-    let leaf = key.rsplit('\\').next().unwrap_or(key).to_ascii_lowercase();
-    text.contains('\n') || leaf.starts_with("custom data") || leaf.starts_with("user data")
+    text.contains('\n') || key.ends_with("custom_data")
 }
 
 fn is_transform(key: &str) -> bool {
-    matches!(key, "Transform\\Position" | "Transform\\Rotation" | "Transform\\Scale")
+    matches!(key, "pos" | "rot" | "scale")
 }
 
 fn argb_of(c: Color32) -> u32 {
@@ -249,11 +199,11 @@ pub async fn set_value(
     let all = rows(&snap, &svc.library, target, &svc.prop_cx());
     let row = props::find(&all, key).ok_or_else(|| format!("no row '{key}'"))?.clone();
     let k = row.row.key.clone();
-    let parsed = props::parse(&row.row, text).map_err(|e| format!("{} {e}", props::label_of(&k)))?;
+    let parsed = props::parse(&row.row, text).map_err(|e| format!("{} {e}", row.row.label))?;
     let origin = editor.ui_origin();
     if target == WORLD {
         let (level, tools) =
-            props::set_world(&snap, &k, &parsed).map_err(|e| format!("{} {e}", props::label_of(&k)))?;
+            props::set_world(&snap, &k, &parsed).map_err(|e| format!("{} {e}", row.row.label))?;
         svc.store
             .send(
                 SceneCmd::SetWorld {
@@ -268,15 +218,12 @@ pub async fn set_value(
             .map_err(|e| e.message)?;
         return Ok(());
     }
-    let ctx = PropContext::default();
+    let ctx = svc.prop_cx();
     let cx = PropCx { lib: Some(&svc.library), entity: &ctx };
-    let class = snap.tools.target;
     let mut objects = Vec::new();
     let mut transforms = Vec::new();
-    for obj in snap.of_class(class).filter(|o| snap.is_selected(o.id)) {
-        match props::set_object(&snap, obj, &k, &parsed, &cx)
-            .map_err(|e| format!("{} {e}", props::label_of(&k)))?
-        {
+    for obj in snap.selected_in_order().iter().filter_map(|id| snap.get(*id)) {
+        match props::set_object(&snap, obj, &k, &parsed, &cx).map_err(|e| format!("{} {e}", row.row.label))? {
             Effect::Object(n) => objects.push(n),
             Effect::Objects(list) => objects.extend(list),
             Effect::Transform(e) => transforms.push((obj.id, e)),
@@ -435,7 +382,6 @@ impl PropsPanel {
                             commits: &mut commits,
                             pick: &mut pick,
                             open_text: &mut open_text,
-                            quality: prep.quality,
                             expanded,
                         };
                         for n in &prep.nodes {
@@ -478,7 +424,7 @@ impl PropsPanel {
                 v.choosing = Some(key.clone());
                 v.chosen.clear();
             }
-            let items = owner_items(&snap, &key);
+            let items = owner_items(&snap, &choice);
             let list = ListKey::of_choose(&choice);
             let mut c = several(
                 Chooser::new(Purpose::Property { target: t, key: key.clone() }, &label, list, &current),
@@ -491,8 +437,7 @@ impl PropsPanel {
             *chooser = Some(c);
         }
         if let Some((key, label, text)) = open_text {
-            let ids =
-                snap.of_class(snap.tools.target).filter(|o| snap.is_selected(o.id)).map(|o| o.id).collect();
+            let ids = snap.selected_in_order();
             self.edit_text = Some(EditText { key, label, text, serial_target: ids });
         }
         self.draw_edit_text(ui, editor, &snap);
@@ -570,8 +515,7 @@ impl PropsPanel {
             },
         );
         if ok {
-            let now: Vec<_> =
-                snap.of_class(snap.tools.target).filter(|o| snap.is_selected(o.id)).map(|o| o.id).collect();
+            let now: Vec<_> = snap.selected_in_order();
             if self.target == WORLD || now == et.serial_target {
                 send(editor, self.target, Commit { key: et.key.clone(), text: et.text.clone(), live: false });
             } else {
@@ -599,7 +543,7 @@ fn val_text(v: &Val) -> String {
         Val::Num(n) => grid::format_number(*n, 6),
         Val::Vec3(v) => vec_text([v.x, v.y, v.z]),
         Val::Color(c) => format!("0x{c:08X}"),
-        Val::FColor(c) => format!("0x{:08X}", fcolor_argb(*c)),
+        Val::FColor(c) => format!("#{:06X}", fcolor_argb(*c) & 0x00ff_ffff),
     }
 }
 
@@ -609,7 +553,6 @@ struct RowCx<'a> {
     commits: &'a mut Vec<Commit>,
     pick: &'a mut Option<(String, String, props::Choice, String)>,
     open_text: &'a mut Option<(String, String, String)>,
-    quality: usize,
     expanded: bool,
 }
 
@@ -627,28 +570,20 @@ fn draw_node(g: &mut grid::Grid<'_>, n: &Node, depth: u32, cx: &mut RowCx<'_>) {
     }
 }
 
-fn help_of(target: usize, row: &MergedRow) -> String {
-    if target == WORLD
-        && let Some((_, h)) = WORLD_HELP.iter().find(|(k, _)| *k == row.row.key)
-    {
-        return (*h).to_owned();
-    }
+fn help_of(row: &MergedRow) -> String {
     props::help_of(&row.row)
 }
 
-fn unit_of(target: usize, row: &MergedRow) -> String {
-    if target == WORLD && row.row.key == "Scene\\Build options\\Optimizing\\Normal smooth angle" {
-        return "\u{b0}".to_owned();
-    }
+fn unit_of(row: &MergedRow) -> String {
     props::unit_of(&row.row)
 }
 
 fn draw_row(g: &mut grid::Grid<'_>, r: &MergedRow, depth: u32, cx: &mut RowCx<'_>) {
     let target = cx.panel.target;
     let key = r.row.key.clone();
-    let label = props::label_of(&key);
-    let help = help_of(target, r);
-    let unit = unit_of(target, r);
+    let label = r.row.label.clone();
+    let help = help_of(r);
+    let unit = unit_of(r);
     let mut flags = PropFlags::NONE;
     if !r.row.enabled || matches!(r.row.kind, RowKind::Caption) {
         flags = flags | PropFlags::READ_ONLY;
@@ -671,7 +606,7 @@ fn draw_row(g: &mut grid::Grid<'_>, r: &MergedRow, depth: u32, cx: &mut RowCx<'_
         match (&r.row.kind, &value) {
             (RowKind::Caption, _) => {
                 let text = r.row.text();
-                if target == WORLD && key == "Scene\\Name" && text.is_empty() {
+                if target == WORLD && key == "file" && text.is_empty() {
                     gz_ui::text::label(
                         ui,
                         "Not saved yet",
@@ -743,8 +678,9 @@ fn draw_row(g: &mut grid::Grid<'_>, r: &MergedRow, depth: u32, cx: &mut RowCx<'_
                     edited = Some(Val::Color(argb_of(col)));
                 }
             }
+            // a colour of 0 to 1 has no alpha to show
             (RowKind::FColor, Val::FColor(c)) => {
-                let mut col = color_of(fcolor_argb(*c));
+                let mut col = color_of(fcolor_argb(*c) | 0xff00_0000);
                 if grid::color(ui, &mut col).changed() {
                     edited = Some(Val::Color(argb_of(col)));
                 }
@@ -756,16 +692,6 @@ fn draw_row(g: &mut grid::Grid<'_>, r: &MergedRow, depth: u32, cx: &mut RowCx<'_
                     && let Some(name) = names.get(cur)
                 {
                     commit_now = Some((*name).to_owned());
-                }
-            }
-            (RowKind::Button(captions), _)
-                if target == WORLD && key == QUALITY_KEY && captions.len() == 3 =>
-            {
-                let mut cur = cx.quality.min(2);
-                if gz_ui::segmented(ui, &mut cur, &["Draft", "High", "Custom"], None)
-                    && let Some(c) = captions.get(cur)
-                {
-                    commit_now = Some(c.to_string());
                 }
             }
             (RowKind::Button(captions), _) => {
@@ -843,7 +769,7 @@ pub fn chooser_for(
     let text = r.row.text();
     let c = Chooser::new(
         Purpose::Property { target: SELECTION, key: r.row.key.clone() },
-        &props::label_of(&r.row.key),
+        &r.row.label,
         ListKey::of_choose(choice),
         if text == "<none>" { "" } else { &text },
     );
@@ -874,46 +800,8 @@ fn several(c: Chooser, key: &str, choice: &props::Choice) -> Chooser {
 /// `OnFillOrderTargets`) pick the scene's ways, and the player and the story ids of the scene's
 /// spawns.
 #[must_use]
-pub fn owner_items(snap: &SceneState, key: &str) -> Option<Vec<String>> {
-    if key.ends_with("Order\\Look path") || key.ends_with("Order\\Route") {
-        Some(snap.of_class(ObjClass::Way).map(|o| o.name.to_string()).collect())
-    } else if key.ends_with("Order\\Target") {
-        let mut v = vec!["actor".to_owned()];
-        v.extend(scene_story_ids(snap));
-        Some(v)
-    } else {
-        None
-    }
-}
-
-/// The story ids of the scene's spawns (`CollectSceneStories`): `story_id = X` under
-/// `[story_object]` of the custom data, or the bare id right under the header.
-fn scene_story_ids(snap: &gz_scene::SceneState) -> Vec<String> {
-    let mut out = Vec::new();
-    for o in snap.of_class(ObjClass::SpawnPoint) {
-        let gz_scene::ObjData::Spawn(sd) = &o.data else { continue };
-        let Some(ini) = sd.entity.as_ref().and_then(|e| e.entity()).and_then(|e| e.custom_data()) else {
-            continue;
-        };
-        let Some(at) = ini.find("[story_object]") else { continue };
-        for line in ini[at + "[story_object]".len()..].lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            if line.starts_with('[') {
-                break;
-            }
-            match line.split_once('=') {
-                Some((k, v)) if k.trim() == "story_id" => out.push(v.trim().to_owned()),
-                Some(_) => {}
-                None => out.push(line.to_owned()),
-            }
-            break;
-        }
-    }
-    out.retain(|s| !s.is_empty());
-    out
+pub fn owner_items(snap: &SceneState, choice: &props::Choice) -> Option<Vec<String>> {
+    props::scene_items(snap, &choice.list)
 }
 
 /// Whether the class has a chooser-worthy target: the tools whose selection Details shows.
@@ -930,6 +818,9 @@ mod tests {
         MergedRow {
             row: props::Row {
                 key: key.into(),
+                path: key.into(),
+                label: key.rsplit('\\').next().unwrap_or(key).into(),
+                unit: "",
                 kind: RowKind::Text,
                 value: Val::Text(String::new()),
                 enabled: true,
@@ -958,7 +849,7 @@ mod tests {
         assert_eq!(val_text(&Val::Bool(true)), "true");
         assert_eq!(val_text(&Val::Num(1.5)), "1.5");
         assert_eq!(val_text(&Val::Color(0xff11_2233)), "0xFF112233");
-        assert!(multi_line("Spawn\\Custom data", "x"));
+        assert!(multi_line("props.custom_data", "x"));
         assert!(!multi_line("Name", "x"));
     }
 }

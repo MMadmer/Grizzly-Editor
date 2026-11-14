@@ -2,7 +2,7 @@
 //! columns, each [icon][label][eye]; the active tool filled with the accent; a sticky
 //! "<Tool> Tool" header over the panel's own scroll; the tool's form - a tool with a list
 //! (Object, Spawn, Particles) draws the search and the list first, its other sections start
-//! closed; Snap Objects as a closed section. Detail Objects opens the L dialog
+//! closed. Detail Objects opens the L dialog
 //! `dlg.detail_objects`.
 //!
 //! What a tool has picked to add (the Object tool's object, the Spawn tool's section, the
@@ -15,14 +15,10 @@ use egui::{Align2, CornerRadius, Id, Rect, Ui, Vec2, pos2};
 use gz_base::{Origin, SmolStr};
 use gz_editor::{Args, Editor, Value};
 use gz_scene::apply::SelectMode;
-use gz_scene::snap::SnapAction;
 use gz_scene::tools::{FL_APPEND_RANDOM, ToolOpts};
 use gz_scene::{ObjClass, ObjId, SceneCmd, SceneService, SceneState};
 use gz_ui::text::{self, Clip};
-use gz_ui::{
-    Answer, Asker, ConfirmSpec, Dialog, DialogSize, Font, Icon, Kind, SearchField, Tone, metrics, palette,
-    state,
-};
+use gz_ui::{Asker, Dialog, DialogSize, Font, Icon, Kind, SearchField, Tone, metrics, palette, state};
 use parking_lot::Mutex;
 
 use crate::choose::{Chooser, Purpose};
@@ -59,7 +55,6 @@ pub struct ToolsPanel {
     search: [String; 3],
     percent: f32,
     add_percent: bool,
-    snap_row: Option<usize>,
     random: Option<RandomSettings>,
     /// The Detail Objects dialog asked for.
     pub want_detail_objects: bool,
@@ -94,7 +89,6 @@ impl ToolsPanel {
             search: Default::default(),
             percent: 50.0,
             add_percent: false,
-            snap_row: None,
             random: None,
             want_detail_objects: false,
             bulk: crate::tools_bulk::BulkPanels::default(),
@@ -118,15 +112,13 @@ impl ToolsPanel {
         let origin = editor.ui_origin();
         self.tiles(ui, &svc, &snap, origin);
         ui.add_space(4.0);
-        let target = snap.tools.target;
+        let target = snap.tools.mode_kind();
         header(ui, target);
         ui.add_space(4.0);
         egui::ScrollArea::vertical().id_salt("gz-ui-level.tool_body").auto_shrink([false, false]).show(
             ui,
             |ui| {
                 ui.push_id(target.id(), |ui| self.body(ui, editor, &svc, &snap, target, chooser));
-                ui.add_space(6.0);
-                self.snap_objects(ui, editor, &svc, &snap);
             },
         );
         self.draw_random(ui, &svc, chooser);
@@ -146,7 +138,7 @@ impl ToolsPanel {
             );
             let rect = Rect::from_min_size(pos, Vec2::new(tile_w, TILE_H));
             let part = snap.tools.part(c.class);
-            let active = snap.tools.target == c.class;
+            let active = snap.tools.mode_kind() == c.class;
             let click = local_tool_tile(
                 ui,
                 Id::unique(("gz-ui-level.tile", c.class.id())),
@@ -159,11 +151,11 @@ impl ToolsPanel {
             );
             if click.eye {
                 svc.store.post(
-                    SceneCmd::ToolFlags { class: c.class, visible: Some(!part.visible), readonly: None },
+                    SceneCmd::ClassView { class: c.class, visible: Some(!part.visible), locked: None },
                     origin,
                 );
             } else if click.tile && !active {
-                svc.store.post(SceneCmd::SetTarget(c.class), origin);
+                svc.store.post(SceneCmd::Arm(c.class), origin);
             }
         }
     }
@@ -375,11 +367,7 @@ impl ToolsPanel {
                     ),
                 ],
             ) {
-                Some(0) => tool_call(
-                    editor,
-                    "object_tool",
-                    &[("action", Value::String("reset_surfaces".into())), ("selected", Value::Bool(true))],
-                ),
+                Some(0) => tool_call(editor, "scene.set", &[("set", reset_surfaces())]),
                 Some(1) => ask_reset_all(editor, ui.ctx(), asker(editor)),
                 _ => {}
             }
@@ -430,11 +418,7 @@ impl ToolsPanel {
                     )
                     .changed()
                 {
-                    tool_call(
-                        editor,
-                        "spawn_attach",
-                        &[("action", Value::String("on_click".into())), ("on", Value::Bool(on))],
-                    );
+                    tool_call(editor, "scene.attach", &[("on_click", Value::Bool(on))]);
                     if on {
                         gz_ui_viewport::Viewport::of(editor)
                             .with(|s| s.tool.action = gz_ui_viewport::Action::Place);
@@ -470,7 +454,7 @@ impl ToolsPanel {
                 let ed = editor.clone();
                 let line = gz_ui::dialog::confirm(ui.ctx(), asker(editor), spec, move |a| {
                     if a == gz_ui::Answer::Yes {
-                        tool_call(&ed, "spawn_attach", &[("action", Value::String("detach".into()))]);
+                        tool_call(&ed, "scene.attach", &[("detach", Value::Bool(true))]);
                     }
                 });
                 if let Some(l) = line {
@@ -588,7 +572,7 @@ impl ToolsPanel {
                 ],
             ) {
                 Some(0) => {
-                    tool_call(editor, "group_tool", &[("action", Value::String("center_pivot".into()))])
+                    tool_call(editor, "scene.group", &[("action", Value::String("center_pivot".into()))])
                 }
                 Some(1) => {
                     if let Some(c) = pivot_chooser(snap) {
@@ -629,7 +613,7 @@ impl ToolsPanel {
                 .when(groups, "Select a group first")],
             ) == Some(0)
             {
-                tool_call(editor, "group_tool", &[("action", Value::String("reload".into()))]);
+                tool_call(editor, "scene.group", &[("action", Value::String("reload".into()))]);
             }
         }
         self.select_by_reference(ui, editor, svc, snap, ObjClass::Group, &current, "group");
@@ -704,123 +688,6 @@ impl ToolsPanel {
                 let ids = percent_of_same(snap, class, self.percent, now_seed());
                 let mode = if self.add_percent { SelectMode::Add } else { SelectMode::Set };
                 svc.store.post(SceneCmd::Select { ids, mode }, editor.ui_origin());
-            }
-        });
-    }
-
-    fn snap_objects(
-        &mut self,
-        ui: &mut Ui,
-        editor: &Arc<Editor>,
-        svc: &Arc<SceneService>,
-        snap: &SceneState,
-    ) {
-        let list = gz_scene::snap::tool_list(snap);
-        let count = list.len();
-        let title = if count > 0 { format!("Snap Objects ({count})") } else { "Snap Objects".to_owned() };
-        if !gz_ui_app::local::local_section(ui, "tool_snap_objects", &title, false) {
-            return;
-        }
-        let p = palette(ui.ctx());
-        let origin = editor.ui_origin();
-        for (label, tip, on, use_list) in [
-            (
-                "Snap to Listed Objects",
-                "Object snap uses only the objects in this list, and the viewport highlights them",
-                snap.tools.snap_use,
-                true,
-            ),
-            (
-                "Pick in Viewport",
-                "A click on a scene object adds it to the list; Ctrl+click takes a listed one out",
-                snap.tools.snap_pick,
-                false,
-            ),
-        ] {
-            ui.horizontal(|ui| {
-                let mut v = on;
-                if gz_ui::grid::switch(ui, &mut v).on_hover_text(tip).changed() {
-                    let cmd = if use_list {
-                        SceneCmd::Snap { action: None, use_list: Some(v), pick: None }
-                    } else {
-                        SceneCmd::Snap { action: None, use_list: None, pick: Some(v) }
-                    };
-                    svc.store.post(cmd, origin);
-                }
-                text::label(ui, label, Font::Body, p.text, Clip::End);
-            });
-        }
-        let pressed = local_button_flow(
-            ui,
-            &[
-                LocalButton::new("Set From Selection", "Replace the list with the selected objects"),
-                LocalButton::new("Add Selection", "Add the selected objects to the list"),
-                LocalButton::new("Remove Selection", "Take the selected objects out of the list"),
-                LocalButton::new("Select Listed", "Select the objects in the list")
-                    .when(count > 0, "The list is empty"),
-                LocalButton::new("Clear...", "Empty the list").when(count > 0, "The list is empty"),
-            ],
-        );
-        let action = |name: &str| SnapAction::parse(name);
-        match pressed {
-            Some(0) => svc.store.post(
-                SceneCmd::Snap { action: action("set_from_selection"), use_list: None, pick: None },
-                origin,
-            ),
-            Some(1) => svc
-                .store
-                .post(SceneCmd::Snap { action: action("add_selection"), use_list: None, pick: None }, origin),
-            Some(2) => svc.store.post(
-                SceneCmd::Snap { action: action("remove_selection"), use_list: None, pick: None },
-                origin,
-            ),
-            Some(3) => svc
-                .store
-                .post(SceneCmd::Snap { action: action("select"), use_list: None, pick: None }, origin),
-            Some(4) => {
-                let names: Vec<String> =
-                    list.iter().filter_map(|id| snap.get(*id)).take(10).map(|o| o.name.to_string()).collect();
-                let spec = ConfirmSpec {
-                    id: "clear_snap_list".into(),
-                    title: "Clear Snap Objects".into(),
-                    headline: "Take every object out of the snap list?".into(),
-                    items: names,
-                    total: count,
-                    consequence: "The objects stay in the scene.".into(),
-                    action: "Clear".into(),
-                    destructive: false,
-                };
-                let store = svc.store.clone();
-                let line = gz_ui::dialog::confirm(ui.ctx(), asker(editor), spec, move |answer| {
-                    if answer == Answer::Yes {
-                        store.post(
-                            SceneCmd::Snap { action: SnapAction::parse("clear"), use_list: None, pick: None },
-                            origin,
-                        );
-                    }
-                });
-                if let Some(line) = line {
-                    editor.log.plain(line);
-                }
-            }
-            _ => {}
-        }
-        if count == 0 {
-            gz_ui::text::status(ui, Tone::Muted, "Empty. Select objects, then Set From Selection.");
-            return;
-        }
-        let h = count as f32 * metrics::ROW + 10.0;
-        gz_ui::list::list(ui, "snap_list", Vec2::new(0.0, h), |l| {
-            for (i, id) in list.iter().enumerate() {
-                let Some(o) = snap.get(*id) else { continue };
-                let name = o.name.to_string();
-                if l.row(&format!("snap_{}", id.0), self.snap_row == Some(i), |ui| {
-                    text::label(ui, &name, Font::Body, p.text, Clip::End);
-                })
-                .clicked()
-                {
-                    self.snap_row = Some(i);
-                }
             }
         });
     }
@@ -1011,7 +878,7 @@ pub(crate) fn pivot_chooser(snap: &gz_scene::SceneState) -> Option<Chooser> {
         gd.members.iter().filter_map(|m| snap.get(*m)).map(|o| o.name.to_string()).collect();
     Some(
         Chooser::new(
-            Purpose::ToolCommand { cmd: "group_tool", action: "align_pivot", arg: "object" },
+            Purpose::ToolCommand { cmd: "scene.group", action: "pivot_to", arg: "object" },
             "Object",
             None,
             "",
@@ -1110,12 +977,18 @@ pub fn percent_of_same(snap: &SceneState, class: ObjClass, percent: f32, seed: u
 pub fn add_several(editor: &Arc<Editor>, items: &[String]) {
     for item in items {
         let mut args = Args::new();
+        args.insert("kind".into(), Value::String("object".into()));
         args.insert("ref".into(), Value::String(item.clone()));
-        for k in ["x", "y", "z"] {
-            args.insert(k.into(), Value::from(0.0));
-        }
-        editor.post("place_object", args);
+        args.insert("position".into(), serde_json::json!([0.0, 0.0, 0.0]));
+        editor.post("scene.place", args);
     }
+}
+
+/// `scene.set`'s Reset of the surfaces rows.
+fn reset_surfaces() -> Value {
+    let mut set = serde_json::Map::new();
+    set.insert("surfaces.reset".into(), Value::String("Reset".into()));
+    Value::Object(set)
 }
 
 /// Runs a tool command off the UI thread; its error goes to the notices.
@@ -1143,8 +1016,8 @@ fn save_group_as(editor: &Arc<Editor>, ctx: &egui::Context, svc: &SceneService, 
         .find(|o| o.class == ObjClass::Group)
         .and_then(|g| g.ref_name().map(str::to_owned))
         .unwrap_or_else(|| "group".to_owned());
-    let dir = svc.root.join("rawdata").join("groups");
-    let leaf = name.rsplit('\\').next().unwrap_or("group").to_owned();
+    let dir = svc.root.join("groups");
+    let leaf = name.rsplit(['\\', '/']).next().unwrap_or("group").trim_end_matches(".group").to_owned();
     let ed = editor.clone();
     let request = gz_ui::file_dialog::FileRequest::save("Save Group As", &format!("{leaf}.group"))
         .filter("Group", &["group"])
@@ -1153,8 +1026,8 @@ fn save_group_as(editor: &Arc<Editor>, ctx: &egui::Context, svc: &SceneService, 
     let picked = gz_ui::file_dialog::pick(Some(ctx), asker(editor), request, move |f| {
         tool_call(
             &ed,
-            "group_tool",
-            &[("action", Value::String("save_as".into())), ("file", Value::String(f.display().to_string()))],
+            "scene.group",
+            &[("action", Value::String("save".into())), ("path", Value::String(f.display().to_string()))],
         );
     });
     if let Err(line) = picked {
@@ -1166,7 +1039,12 @@ fn save_group_as(editor: &Arc<Editor>, ctx: &egui::Context, svc: &SceneService, 
 pub(crate) fn ask_reset_all(editor: &Arc<Editor>, ctx: &egui::Context, who: gz_ui::Asker) {
     let Some(svc) = editor.project_opt().and_then(|s| s.services.get::<SceneService>()) else { return };
     let snap = svc.store.snapshot();
-    let count = snap.of_class(ObjClass::SceneObject).filter(|o| o.flags.visible).count();
+    let names: Vec<Value> = snap
+        .of_class(ObjClass::SceneObject)
+        .filter(|o| o.flags.visible)
+        .map(|o| Value::String(o.name.to_string()))
+        .collect();
+    let count = names.len();
     let spec = gz_ui::ConfirmSpec {
         id: "reset_surfaces".into(),
         title: "Reset Surfaces".into(),
@@ -1180,11 +1058,7 @@ pub(crate) fn ask_reset_all(editor: &Arc<Editor>, ctx: &egui::Context, who: gz_u
     let ed = editor.clone();
     let line = gz_ui::dialog::confirm(ctx, who, spec, move |a| {
         if a == gz_ui::Answer::Yes {
-            tool_call(
-                &ed,
-                "object_tool",
-                &[("action", Value::String("reset_surfaces".into())), ("selected", Value::Bool(false))],
-            );
+            tool_call(&ed, "scene.set", &[("objects", Value::Array(names)), ("set", reset_surfaces())]);
         }
     });
     if let Some(l) = line {

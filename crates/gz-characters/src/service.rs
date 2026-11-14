@@ -139,6 +139,8 @@ pub struct Checker {
     pub pickers: Option<Arc<Pickers>>,
     pub trade_categories: Arc<Vec<String>>,
     models: Option<GameModels>,
+    /// The sections the module itself brings: an item of the module is no unknown item.
+    pub own: Option<Arc<gz_mod::SectionSet>>,
 }
 
 impl Checker {
@@ -155,6 +157,7 @@ impl Checker {
             pickers: self.pickers.as_deref().map(|p| p as &dyn Lookups),
             trade_categories: &self.trade_categories,
             models: self.models.as_ref().map(|m| m as &dyn Models),
+            own: self.own.as_deref(),
         };
         validate(c, &cx, problems);
     }
@@ -457,8 +460,10 @@ impl Characters {
             }
             b.1.clone()
         };
+        let own = Some(gz_mod::own_sections(editor).await);
         Checker {
             linked: true,
+            own,
             pickers,
             trade_categories: trade,
             models: Some(GameModels { files, damage, cache }),

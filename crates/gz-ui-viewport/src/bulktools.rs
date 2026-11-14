@@ -1,7 +1,6 @@
-//! The viewport's gestures of the AI Map, Detail Objects and Wallmark tools
-//! (`TUI_ControlAIMapNodeAdd`, `TUI_ControlAIMapNodeSelect`, `TUI_ControlDOToolsSelect`,
-//! `TUI_ControlWallmarkAdd` and the tools' `RaySelect` / `FrustumSelect`). Each sends the command
-//! function `aimap_tool`, `details_tool` or `wallmark_tool` calls for the same action; a stroke
+//! The viewport's gestures of the painted layers - the AI map's brush and node picking, the
+//! detail slots' picking, laying and picking wallmarks. Each sends the command
+//! function `scene.ai_map`, `scene.details` or `scene.wallmarks` calls for the same action; a stroke
 //! or a drag is one merged undo step sealed on release.
 
 use std::sync::Arc;
@@ -72,7 +71,7 @@ pub(crate) enum BulkGesture {
     None,
 }
 
-/// `TUI_ControlAIMapNodeAdd::Start` / `TUI_ControlWallmarkAdd::Start`.
+/// A press that paints AI map nodes or lays a wallmark.
 pub(crate) fn place_press(
     editor: &Arc<Editor>,
     vp: &Arc<Viewport>,
@@ -81,7 +80,7 @@ pub(crate) fn place_press(
     serial: u64,
 ) -> BulkGesture {
     let Some(s) = svc(editor) else { return BulkGesture::None };
-    match s.store.snapshot().tools.target {
+    match s.store.snapshot().tools.mode_kind() {
         ObjClass::AiMap => {
             let paint = Paint {
                 merge: SmolStr::new(format!("viewport.aimap.{serial}")),
@@ -137,15 +136,8 @@ pub(crate) fn ai_step(
                 };
                 report(&ed, bulk::add_nodes(&ed, &s, origin, req).await);
             }
-            None if first
-                && s.store
-                    .snapshot()
-                    .bulk
-                    .ai_map
-                    .as_ref()
-                    .is_none_or(|a| a.header.snap_objects.is_empty()) =>
-            {
-                ed.log.info("Fill object list and try again.");
+            None if first => {
+                ed.log.info("The click met no ground the AI map lies on.");
             }
             None => {}
         }
@@ -286,7 +278,7 @@ pub(crate) fn rotate_nodes(editor: &Arc<Editor>, about_x: bool, angle: f32, merg
 /// took the key.
 pub(crate) fn key(editor: &Arc<Editor>, which: &'static str) -> bool {
     let Some(s) = svc(editor) else { return false };
-    if !is_bulk(s.store.snapshot().tools.target) {
+    if s.store.snapshot().tools.mode.layer().is_none() {
         return false;
     }
     let ed = editor.clone();

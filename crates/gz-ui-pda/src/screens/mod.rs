@@ -1,4 +1,4 @@
-//! Screens & Music (`EditorScreens.cpp`): the tab ([`doc`]), `screens_view` ([`cmd`]) and what
+//! Screens & Music (`EditorScreens.cpp`): the tab ([`doc`]), `screens.view` ([`cmd`]) and what
 //! both keep - which surface the tab edits, what is selected, the last status - plus the one way
 //! an edit is saved: the manifest is read again, the change made to what it holds and written
 //! through `gz-mod`'s store (`Commit`), and the one way a file arrives: `gz_screens::import` off
@@ -18,7 +18,7 @@ use gz_screens::model::{LOADING, MENU, PAUSE};
 use gz_screens::{FileKind, Layer, Screen, Screens, Track, file_kind};
 use parking_lot::Mutex;
 
-/// What the tab shows and `screens_view` reports.
+/// What the tab shows and `screens.view` reports.
 #[derive(Clone, Debug, Default)]
 pub struct View {
     pub open: bool,

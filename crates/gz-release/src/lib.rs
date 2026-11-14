@@ -1,10 +1,7 @@
 //! Packaging a release: what turns a module into the files the game's updater and the Mod
 //! Browser install from - and the author key that vouches for them.
 //!
-//! The C++ specification is `EditorModManifest.cpp` from "release packaging" to the thumbnail
-//! and the tags (`PackageRelease`, `ReadPackageLayout`, `FinishRelease`, `ApplyThumbnail`,
-//! `ApplyTags`) and the non-drawing half of `EditorCatalog.cpp` (the key file, signing, the card,
-//! the content rules and the script report). **The formats are FROZEN**: the normative texts are
+//! **The formats are FROZEN**: the normative texts are
 //! the game repository's `docs/dead-air/MOD_UPDATES.md` (section 2) and `MOD_CATALOG.md`
 //! (3, 4, 4.1, 6, 8, 10.3).
 //!
@@ -13,7 +10,7 @@
 //! - [`format`] - the asset names ([`format::descriptor_name`], [`format::index_name`],
 //!   [`format::package_name`]), [`format::package_path_ok`], [`format::release_gate`],
 //!   [`format::resolve_release_dir`], [`format::split_parts`] (512 MiB of input per package),
-//!   [`format::index_text`] and [`format::descriptor_head`] - text exactly as the C++ writes it.
+//!   [`format::index_text`] and [`format::descriptor_head`] - the frozen texts.
 //! - [`zip`] - the package: [`zip::ZipWriter`] (level 9 raw deflate, UTF-8 names flagged, ZIP64
 //!   where needed) and [`zip::read_layout`] - the central directory and every local header read
 //!   back, so the index states what is ON DISK.
@@ -40,9 +37,9 @@
 //!   time), its Task Center row ([`Releases::status`]) and its answers; [`run_package`] is what
 //!   Publish Release calls inside its own job; [`packaged_files`] - what an earlier packaging
 //!   of the version left, the data of the window's "replace?" question.
-//! - [`install`] - fills `gz_mod::ManifestArgs` (`tags`, `thumbnail` of `mod_set_manifest`).
-//! - [`register`] - `mod_package`, and `mod_catalog` for the author key until the Mod Browser area
-//!   replaces it; [`key_action`] / [`key_state`] are its key half for that area.
+//! - [`install`] - fills `gz_mod::ManifestArgs` (`tags` of `mod.set`).
+//! - [`register`] - `mod.package`, `mod.thumbnail`, `release.key`; [`key_state`] is the key half
+//!   the Mod Browser area answers with.
 
 pub mod b64;
 pub mod browser;
@@ -59,13 +56,12 @@ mod package;
 pub mod signed;
 pub mod zip;
 
-pub use cmd::{key_action, key_state, register};
+pub use cmd::{key_state, package_answer, register, unlock_with};
 pub use format::Asset;
 pub use keys::{AuthorKeys, KeyState};
 pub use package::{PackageRequest, PackageResult, Releases, packaged_files, run_package};
 
-/// What this area plugs into the others once the editor exists: the `tags` and `thumbnail`
-/// arguments of `mod_set_manifest`.
+/// What this area plugs into the others once the editor exists: the `tags` of `mod.set`.
 pub fn install(editor: &gz_editor::Editor) {
     browser::install_manifest_args(editor);
 }

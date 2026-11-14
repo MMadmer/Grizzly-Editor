@@ -31,23 +31,21 @@
 //!   the layouts (a `Query` keyed by the file, the language, the reader's and the text's
 //!   revisions, computed on the CPU pool), the textures `W320` asks about, the project's layouts
 //!   ([`PdaService::list`]), `[pda] layout` ([`PdaService::used_layout`],
-//!   [`PdaService::use_layout`] through `gz-mod`'s manifest store).
+//!   [`PdaService::use_layout`] through `gz-mod`'s manifest store; `mod.set` reaches it as
+//!   `set={"pda": {"layout": ...}}`).
 //! - [`validate_for_build`] and the `BuildCheck` [`install`] registers: a used layout with an
 //!   error, a missing file or one the build leaves out refuses the build. [`install`] also
 //!   gives `file.create kind=pda` its template, adds the PDA kind of `gz-asset` ([`kind`]), whose
 //!   `asset.check` runs the game's reader and puts its problems where the file says what they
 //!   are about, and makes the first layout that appears in a module using none the module's
 //!   layout.
-//! - [`register`] registers `pda_use`.
 
-mod cmd;
 pub mod kind;
 pub mod layout;
 pub mod preview;
 pub mod read;
 mod service;
 
-pub use cmd::register;
 pub use layout::{InnerSpot, Item, Layout, MapSpot, Marker, Page, PdaProblem};
 pub use preview::{Aspect, Clock, Hit, ItemBox, Preview, VisibleItem};
 pub use read::{BUNDLED_READER, GAME_READER, ReadError, Reader, base_name, evaluate, is_pda_path, template};

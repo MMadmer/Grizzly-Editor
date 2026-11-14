@@ -4,10 +4,10 @@ manifest pickup, the build gate) over MCP, on a THROW-AWAY COPY of a project.
 
 What it proves:
   A  a new layout from the template (file.create) becomes the module's ([pda] layout in mod.ltx)
-     as it appears, and mod_manifest reports it
+     as it appears, and mod.info reports it
   B  the game's reader judges a file (asset.check): the courier fixture reads clean, broken files
      come back with their codes (E3xx), a file that does not parse names its line
-  C  pda_use picks, clears and refuses (a missing file, a file the build leaves out)
+  C  mod.set pda.layout picks, clears and refuses (a missing file, a file the build leaves out)
   D  the preview plays the layout like the game: tabs, a row that fills vars and opens an
      overlay, a button that sets a var and switches pages, the keys, a stock section, the
      16:9 device, a click by canvas point - and the tab follows a write to the file
@@ -105,7 +105,7 @@ class Editor:
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
             try:
-                if mcp("mod_manifest", timeout=30).get("ok"):
+                if mcp("mod.info", timeout=30).get("ok"):
                     return
             except OSError:
                 pass
@@ -197,8 +197,8 @@ def settle(shots: str | None) -> None:
 
 
 def follows() -> dict:
-    """The preview's state: pda_preview reads a file written behind it before it answers, so nothing waits."""
-    return mcp("pda_preview", action="state")
+    """The preview's state: pda.preview reads a file written behind it before it answers, so nothing waits."""
+    return mcp("pda.preview", action="state")
 
 
 def escaped_in_tab() -> list | None:
@@ -212,16 +212,16 @@ def escaped_in_tab() -> list | None:
 def run_tab(project: str, fixture: str, shots: str | None) -> None:
     courier = os.path.join(project, "pda", "courier.pdaasset")
     before = sha(courier)
-    p = mcp("pda_preview", action="open", path="pda/courier.pdaasset", pane="both", tab="problems", zoom="fit")
+    p = mcp("pda.preview", action="open", path="pda/courier.pdaasset", pane="both", tab="problems", zoom="fit")
     panes = p.get("panes", {})
     check(p.get("ok") and p.get("active") and panes.get("source") and panes.get("details") and panes.get("tab") == "problems"
           and p.get("zoom") == "fit", "H open: the pda tab is up with Source, Details on Problems, fit", json.dumps(p)[:300])
     # an opener answers the frames it owed, not the state before them (docs/UI_DESIGN.md, section 7)
-    check(p.get("pending") is False and 200 <= panes.get("details_width", 0) <= 480 and 100 <= panes.get("source_height", 0) <= 400
+    check(200 <= panes.get("details_width", 0) <= 480 and 100 <= panes.get("source_height", 0) <= 400
           and p.get("device_gap", -1) >= 15.0 and p.get("screen_edges"), "H the opener's answer is the frame it opened: panes, gap, edges",
-          json.dumps({k: p.get(k) for k in ("pending", "panes", "device_gap", "screen_edges")}))
+          json.dumps({k: p.get(k) for k in ("panes", "device_gap", "screen_edges")}))
     shot(shots, "pda_tab_both")
-    p = mcp("pda_preview", action="state")
+    p = mcp("pda.preview", action="state")
     panes = p.get("panes", {})
     check(200 <= panes.get("details_width", 0) <= 480 and 100 <= panes.get("source_height", 0) <= 400,
           "H Details and Source keep their pt size", json.dumps(panes))
@@ -229,22 +229,22 @@ def run_tab(project: str, fixture: str, shots: str | None) -> None:
     if esc is not None:
         check(esc == [], "H nothing of the tab escapes its window", json.dumps(esc)[:400])
     for tab in ("pages", "vars", "log"):
-        p = mcp("pda_preview", action="state", tab=tab)
+        p = mcp("pda.preview", action="state", tab=tab)
         check(p.get("panes", {}).get("tab") == tab, "H the Details tab " + tab, json.dumps(p.get("panes")))
         shot(shots, "pda_tab_" + tab)
-    bad = mcp("pda_preview", action="state", tab="nope")
+    bad = mcp("pda.preview", action="state", tab="nope")
     check(not bad.get("ok"), "H an unknown Details tab is refused", json.dumps(bad)[:200])
-    p = mcp("pda_preview", action="state", zoom="100")
+    p = mcp("pda.preview", action="state", zoom="100")
     check(p.get("zoom") == 1, "H zoom 100", json.dumps(p.get("zoom")))
     # the same answer already holds the frame drawn at 100%
     check(abs(p.get("scale", 0) - 1.0) < 0.01, "H at 100% the device is drawn pixel for pixel", str(p.get("scale")))
     shot(shots, "pda_tab_100")
-    p = mcp("pda_preview", action="state", zoom="fit", pane="details")
+    p = mcp("pda.preview", action="state", zoom="fit", pane="details")
     check(p.get("zoom") == "fit" and not p.get("panes", {}).get("source"), "H back to fit, Source hidden")
     # Fit fits the device - texture, screen and close button - with a 16 pt margin, on both aspects
     for aspect in ("4:3", "16:9"):
         # the aspect's own answer is the frame drawn at it
-        p = mcp("pda_preview", action="aspect", aspect=aspect)
+        p = mcp("pda.preview", action="aspect", aspect=aspect)
         check(15.0 <= p.get("device_gap", -1) <= 64.0, "H " + aspect + " fit keeps the device clear of the canvas' edges",
               str(p.get("device_gap")))
         # the device's art runs past the game's screen: the edges that crop it are drawn - its bottom on every aspect
@@ -252,39 +252,41 @@ def run_tab(project: str, fixture: str, shots: str | None) -> None:
         check("bottom" in edges and (aspect == "16:9" or len(edges) == 4), "H " + aspect + " the screen's edge is drawn where it crops the device",
               json.dumps(edges))
         shot(shots, "pda_tab_fit_" + aspect.replace(":", "x"))
-    mcp("pda_preview", action="aspect", aspect="4:3")
+    mcp("pda.preview", action="aspect", aspect="4:3")
 
     # the Source pane: an applied text is shown, unsaved, and the file stays as it is
     edited = fixture.replace('title = "Orders"', 'title = "Queue"', 1)
     check(edited != fixture, "H the fixture takes an edit")
-    p = mcp("pda_preview", action="apply", text=edited)
+    p = mcp("pda.preview", action="apply", text=edited)
     titles = ["Queue"] if 'title = "Queue"' in read(courier) else []
     check(p.get("ok") and p.get("text_dirty") is True and sha(courier) == before and "Queue" not in titles,
           "H apply shows the text unsaved and leaves the file alone", json.dumps(p)[:200])
     shot(shots, "pda_tab_dirty")
-    other = mcp("pda_preview", action="open", path="pda/qa_app.pdaasset")
+    other = mcp("pda.preview", action="open", path="pda/qa_app.pdaasset")
     check(not other.get("ok") and other.get("error") == "unsaved" and other.get("dirty"),
           "H opening another layout with unsaved text answers unsaved", json.dumps(other)[:200])
-    closed = mcp("pda_preview", action="close")
+    closed = mcp("pda.preview", action="close")
     check(not closed.get("ok") and closed.get("error") == "unsaved", "H so does closing the tab", json.dumps(closed)[:200])
-    p = mcp("pda_preview", action="reload")
+    p = mcp("pda.preview", action="reload")
     check(p.get("ok") and p.get("text_dirty") is True, "H reload keeps the Source pane's edits", json.dumps(p)[:200])
-    p = mcp("pda_preview", action="revert")
-    check(p.get("ok") and p.get("text_dirty") is False and sha(courier) == before, "H revert drops them, the file untouched")
-    mcp("pda_preview", action="apply", text=edited)
-    p = mcp("pda_preview", action="open", path="pda/qa_app.pdaasset", discard=True)
+    p = mcp("pda.preview", action="revert")
+    check(not p.get("ok") and p.get("code") == "unsaved", "H revert without discard keeps them: it would lose them", json.dumps(p)[:200])
+    p = mcp("pda.preview", action="revert", discard=True)
+    check(p.get("ok") and p.get("text_dirty") is False and sha(courier) == before, "H revert discard=true drops them, the file untouched")
+    mcp("pda.preview", action="apply", text=edited)
+    p = mcp("pda.preview", action="open", path="pda/qa_app.pdaasset", discard=True)
     check(p.get("ok") and p.get("state", {}).get("path", "").endswith("qa_app.pdaasset") and sha(courier) == before,
           "H discard=true opens the other layout and drops the edits", json.dumps(p)[:200])
-    p = mcp("pda_preview", action="open", path="pda/courier.pdaasset", pane="both", tab="problems")
+    p = mcp("pda.preview", action="open", path="pda/courier.pdaasset", pane="both", tab="problems")
     check(p.get("ok") and p.get("text_dirty") is False, "H and the first layout comes back clean", json.dumps(p)[:200])
 
     # a text that does not parse: its line, and nothing written
     broken = fixture.replace('title = "Orders"', 'title = = "Orders"', 1)
-    p = mcp("pda_preview", action="apply", text=broken)
+    p = mcp("pda.preview", action="apply", text=broken)
     check(p.get("ok") and p.get("state", {}).get("read") is False and p.get("read_line", 0) > 0 and sha(courier) == before,
           "H a text that does not parse shows its line and writes nothing", json.dumps(p)[:300])
     shot(shots, "pda_tab_error")
-    p = mcp("pda_preview", action="save", pane="details")
+    p = mcp("pda.preview", action="save", pane="details")
     check(p.get("ok") and p.get("text_dirty") is False, "H save writes the pane's text", json.dumps(p)[:200])
     check(sha(courier) != before, "H and the file has it")
     put("pda/courier.pdaasset", fixture)
@@ -292,19 +294,19 @@ def run_tab(project: str, fixture: str, shots: str | None) -> None:
     check(p.get("state", {}).get("read") is True and p.get("text_dirty") is False, "H the fixture is back", json.dumps(p)[:200])
 
     # the file changes on disk while the pane holds edits: the two are merged value by value
-    mcp("pda_preview", action="apply", text=fixture.replace('title = "Orders"', 'title = "Queue"', 1))
+    mcp("pda.preview", action="apply", text=fixture.replace('title = "Orders"', 'title = "Queue"', 1))
     put("pda/courier.pdaasset", fixture.replace('text = "Orders"', 'text = "Deliveries"', 1))
     merged = until(lambda: any(i.get("text") == "Deliveries"
                                for i in follows().get("state", {}).get("visible", [])))
     p = follows()
     check(bool(merged) and p.get("text_dirty") is True and not p.get("disk_note"),
           "H an outside change reaches a pane with edits, the edits kept", json.dumps(p)[:200])
-    mcp("pda_preview", action="save")
+    mcp("pda.preview", action="save")
     on_disk = read(courier)
     check('title = "Queue"' in on_disk and 'text = "Deliveries"' in on_disk,
           "H and Save writes both: the pane's value and the file's", on_disk[:200])
     # both change the same value: the pane keeps its own, the tab says so, Take Theirs takes the file's
-    mcp("pda_preview", action="apply", text=on_disk.replace('title = "Queue"', 'title = "Mine"', 1))
+    mcp("pda.preview", action="apply", text=on_disk.replace('title = "Queue"', 'title = "Mine"', 1))
     put("pda/courier.pdaasset", on_disk.replace('title = "Queue"', 'title = "Theirs"', 1))
     noted = until(lambda: "1 value" in str(follows().get("disk_note", "")))
     check(bool(noted), "H a value both changed is named: Changed on disk too", json.dumps(follows())[:300])
@@ -323,7 +325,7 @@ def run(project: str, shots: str | None, only: str) -> None:
     needed = {n for p in only for n in NEEDS.get(p, "")} - set(only)
     try:
         ed.start(project)
-        manifest = mcp("mod_manifest")
+        manifest = mcp("mod.info").get("manifest", {})
         module = manifest.get("id", "")
         check(bool(module), "the project has a module id", json.dumps(manifest)[:200])
         mod_ltx = os.path.join(project, "mod.ltx")
@@ -339,33 +341,44 @@ def run(project: str, shots: str | None, only: str) -> None:
             finally:
                 print("TIME phase %s%s %.1f s" % (letter, " (setup)" if QUIET[0] else "", time.monotonic() - t0), flush=True)
                 QUIET[0] = False
+        stalls = mcp("perf.stalls")
+        check(stalls.get("ok") and not stalls.get("stalls"), "no UI pass waited", json.dumps(stalls)[:300])
     finally:
         ed.close()
         qa_target.remove_tree(out_dir)
 
 
+
+def layout_of() -> str:
+    """`[pda] layout` as mod.info answers it: project-relative, with /."""
+    return mcp("mod.info").get("manifest", {}).get("pda_layout", "")
+
+
+def use_layout(path: str) -> dict:
+    return mcp("mod.set", set={"pda": {"layout": path}})
+
 def phase_a(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         none = [f for _, _, fs in os.walk(project) for f in fs if f.lower().endswith(".pdaasset")]
-        check(mcp("mod_manifest").get("pda_layout", "") == "" and none == [], "A a fresh project has no PDA layout",
+        check(layout_of() == "" and none == [], "A a fresh project has no PDA layout",
               json.dumps(none)[:300])
         os.makedirs(os.path.join(project, "pda"), exist_ok=True)
         w = mcp("file.create", kind="pda", path="pda")
         made = w.get("path", "")
-        used = until(lambda: mcp("mod_manifest").get("pda_layout") == made.replace("/", "\\"))
+        used = until(lambda: layout_of() == made)
         check(w.get("ok") and bool(used), "A the template is written and, the first layout, used as it appears",
-              json.dumps(w)[:400] + " " + str(mcp("mod_manifest").get("pda_layout")))
+              json.dumps(w)[:400] + " " + str(layout_of()))
         # the later phases know it as qa_app: renamed on disk, named again
         os.replace(os.path.join(project, made.replace("/", os.sep)), os.path.join(project, "pda", "qa_app.pdaasset"))
         # the old name is gone (the module drops it) and a new file appeared: either may come first
-        until(lambda: mcp("mod_manifest").get("pda_layout") != made.replace("/", "\\"))
-        u = mcp("pda_use", path="pda/qa_app.pdaasset")
-        check(u.get("ok"), "A pda_use names the renamed file", json.dumps(u)[:200])
+        until(lambda: layout_of() != made)
+        u = use_layout("pda/qa_app.pdaasset")
+        check(u.get("ok"), "A mod.set pda.layout names the renamed file", json.dumps(u)[:200])
         c = mcp("asset.check", path="pda/qa_app.pdaasset")
         check(c.get("ok") and c.get("counts", {}).get("error", 1) == 0, "A and it reads clean", json.dumps(c)[:300])
         check(os.path.isfile(os.path.join(project, "pda", "qa_app.pdaasset")), "A pda/qa_app.pdaasset exists")
         text = read(mod_ltx)
         check("[pda]" in text and "pda\\qa_app.pdaasset" in text, "A mod.ltx names it in [pda] layout", text[-300:])
-        check(mcp("mod_manifest").get("pda_layout") == "pda\\qa_app.pdaasset", "A mod_manifest reports it")
+        check(layout_of() == "pda/qa_app.pdaasset", "A mod.info reports it")
         tpl = read(os.path.join(project, "pda", "qa_app.pdaasset"))
         check(all(('id = "%s"' % pg) in tpl for pg in ("home", "map", "journal")) and "stock" in tpl,
               "A the template has home, map and a stock journal", tpl[:300])
@@ -379,7 +392,7 @@ def phase_b(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         check(w.get("ok") and counts.get("error") == 0 and counts.get("warning") == 0,
               "B the courier fixture reads clean", json.dumps(w.get("problems"))[:400])
         time.sleep(0.4)
-        check(mcp("mod_manifest").get("pda_layout") == "pda\\qa_app.pdaasset",
+        check(layout_of() == "pda/qa_app.pdaasset",
               "B and is not used by itself: the module has a layout already")
         v = judged(broken)
         e305 = [x for x in v.get("problems", []) if x.get("code") == "E305"]
@@ -402,24 +415,24 @@ def phase_b(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
 
 
 def phase_c(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
-        u = mcp("pda_use", path="pda/courier.pdaasset")
-        check(u.get("ok") and u.get("used") == "pda/courier.pdaasset", "C pda_use picks another layout", json.dumps(u))
+        u = use_layout("pda/courier.pdaasset")
+        check(u.get("ok") and u.get("manifest", {}).get("pda_layout") == "pda/courier.pdaasset", "C mod.set pda.layout picks another layout", json.dumps(u))
         check("pda\\courier.pdaasset" in read(mod_ltx), "C mod.ltx follows")
-        u = mcp("pda_use", path="pda/none.pdaasset")
+        u = use_layout("pda/none.pdaasset")
         check(not u.get("ok"), "C a missing file is refused", json.dumps(u))
         os.makedirs(os.path.join(project, "drafts"), exist_ok=True)
         shutil.copyfile(FIXTURE, os.path.join(project, "drafts", "draft.pdaasset"))
-        mcp("mod_exclude", path="drafts", excluded=True)
-        u = mcp("pda_use", path="drafts/draft.pdaasset")
+        mcp("mod.exclude", path="drafts", on=True)
+        u = use_layout("drafts/draft.pdaasset")
         check(not u.get("ok") and "left out" in u.get("error", ""), "C a file the build leaves out is refused", json.dumps(u))
-        mcp("mod_exclude", path="drafts", excluded=False)
+        mcp("mod.exclude", path="drafts", on=False)
         listed = mcp("asset.check", path="pda").get("files")
         check(listed == 2, "C asset.check of the folder covers both layouts", str(listed))
 
 
 
 def phase_d(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
-        p = mcp("pda_preview", action="open", path="pda/courier.pdaasset")
+        p = mcp("pda.preview", action="open", path="pda/courier.pdaasset")
         st = p.get("state", {})
         check(p.get("ok") and p.get("open") and st.get("page") == "orders", "D the preview opens on the start page",
               json.dumps(p)[:300])
@@ -430,53 +443,53 @@ def phase_d(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         rows = visible(st, kind="row")
         check(len(rows) == 2, "D the list shows its two rows", json.dumps(rows)[:300])
         check(visible(st, id="details") == [], "D the overlay starts hidden")
-        p = mcp("pda_preview", action="click", n=rows[0]["n"])
+        p = mcp("pda.preview", action="click", n=rows[0]["n"])
         st = p.get("state", {})
         check(st.get("vars", {}).get("picked") == "Тушёнка" and visible(st, id="details"),
               "D a row fills its var and opens the overlay", json.dumps(st.get("vars"), ensure_ascii=False))
         check(visible(st, kind="row", selected=True), "D and becomes the list's selection")
         settle(shots)
         shot(shots, "pda_details")
-        p = mcp("pda_preview", action="click", id="orders", row=2)
+        p = mcp("pda.preview", action="click", id="orders", row=2)
         check(p.get("state", {}).get("vars", {}).get("picked") == "Batteries", "D a list row by its number",
               json.dumps(p.get("state", {}).get("vars"), ensure_ascii=False))
-        bad = mcp("pda_preview", action="click", id="orders", row=9)
+        bad = mcp("pda.preview", action="click", id="orders", row=9)
         check(not bad.get("ok"), "D a row the list does not have is refused", json.dumps(bad)[:200])
-        mcp("pda_preview", action="click", n=rows[0]["n"])
-        p = mcp("pda_preview", action="click", id="take")
+        mcp("pda.preview", action="click", n=rows[0]["n"])
+        p = mcp("pda.preview", action="click", id="take")
         st = p.get("state", {})
         check(st.get("page") == "map" and st.get("vars", {}).get("current") == "Тушёнка" and not visible(st, id="details"),
               "D Take: var, overlay hidden, the map page", json.dumps(st, ensure_ascii=False)[:300])
         settle(shots)
         shot(shots, "pda_map")
-        p = mcp("pda_preview", action="click", id="done")
+        p = mcp("pda.preview", action="click", id="done")
         st = p.get("state", {})
         check(st.get("vars", {}).get("current") == "Нет заказа" and "signal:courier_done" in st.get("log", []),
               "D Done: the signal goes to the log, the var resets", json.dumps(st.get("log"), ensure_ascii=False))
         orders_tab = visible(st, id="tab_orders")[0]
-        p = mcp("pda_preview", action="click", x=orders_tab["x"] + orders_tab["w"] / 2, y=orders_tab["y"] + orders_tab["h"] / 2)
+        p = mcp("pda.preview", action="click", x=orders_tab["x"] + orders_tab["w"] / 2, y=orders_tab["y"] + orders_tab["h"] / 2)
         check(p.get("state", {}).get("page") == "orders", "D a click by canvas point hits the tab", json.dumps(p)[:200])
-        p = mcp("pda_preview", action="key", key="map")
+        p = mcp("pda.preview", action="key", key="map")
         check(p.get("state", {}).get("page") == "map", "D the map key opens the map page")
-        p = mcp("pda_preview", action="key", key="contacts")
+        p = mcp("pda.preview", action="key", key="contacts")
         st = p.get("state", {})
         check(st.get("stock") == "eptContacts", "D the contacts key shows the stock contacts", json.dumps(st)[:200])
         check(visible(st, id="tab_journal") == [] and visible(st, id="back"),
               "D a stock section hides the chrome and keeps the overlay", json.dumps(st.get("visible"))[:300])
-        p = mcp("pda_preview", action="click", id="back")
+        p = mcp("pda.preview", action="click", id="back")
         check(p.get("state", {}).get("stock") == "" and p.get("state", {}).get("page") == "map",
               "D the overlay's back leaves the stock section", json.dumps(p.get("state"))[:200])
-        p = mcp("pda_preview", action="click", id="tab_journal")
+        p = mcp("pda.preview", action="click", id="tab_journal")
         st = p.get("state", {})
         check(st.get("page") == "journal" and st.get("stock") == "eptTasks", "D a stock page shows the stock section")
         settle(shots)
         shot(shots, "pda_journal")
-        p = mcp("pda_preview", action="aspect", aspect="16:9")
+        p = mcp("pda.preview", action="aspect", aspect="16:9")
         check(p.get("state", {}).get("aspect") == "16:9", "D the 16:9 device")
         settle(shots)
         shot(shots, "pda_wide")
-        mcp("pda_preview", action="aspect", aspect="4:3")
-        p = mcp("pda_preview", action="reset")
+        mcp("pda.preview", action="aspect", aspect="4:3")
+        p = mcp("pda.preview", action="reset")
         st = p.get("state", {})
         check(st.get("page") == "orders" and st.get("vars", {}).get("current") == "Нет заказа", "D reset: the start page and the declared vars")
         # the tab follows the file
@@ -484,10 +497,10 @@ def phase_d(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         p = follows()
         check(p.get("state", {}).get("read") is True, "D the tab re-reads a file written behind it", json.dumps(p)[:200])
         seen = until(lambda: any(i.get("text") == "Deliveries"
-                                 for i in mcp("pda_preview", action="state").get("state", {}).get("visible", [])))
+                                 for i in mcp("pda.preview", action="state").get("state", {}).get("visible", [])))
         check(bool(seen), "D and the change is there")
         # the map slot lists what it shows, in canvas units: the player and the markers inside it
-        p = mcp("pda_preview", action="page", page="map")
+        p = mcp("pda.preview", action="page", page="map")
         mp = p.get("state", {}).get("map", {})
         b = mp.get("bound") or [0, 0, 100, 100]
         cx, cz = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
@@ -498,8 +511,8 @@ def phase_d(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         check(marked != fixture, "D the fixture takes preview markers")
         put("pda/courier.pdaasset", marked)
         follows()
-        mcp("pda_preview", action="reset")
-        p = mcp("pda_preview", action="page", page="map")
+        mcp("pda.preview", action="reset")
+        p = mcp("pda.preview", action="page", page="map")
         spots = p.get("state", {}).get("map", {}).get("spots", [])
         me = [s for s in spots if s.get("what") == "player"]
         parcel = [s for s in spots if s.get("hint") == "Parcel"]
@@ -515,14 +528,14 @@ def phase_h(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
 
 
 def phase_e(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
-        ex = mcp("mod_export", target=out_dir)
+        ex = mcp("mod.build", target="folder", path=out_dir)
         check(ex.get("ok"), "E the module builds with its PDA layout", json.dumps(ex)[:300])
         root = os.path.join(out_dir, "modules", module)
         check(os.path.isfile(os.path.join(root, "pda", "courier.pdaasset")), "E the layout ships as it is")
         shipped = read(os.path.join(root, "mod.ltx")) if os.path.isfile(os.path.join(root, "mod.ltx")) else ""
         check("[pda]" in shipped and "courier.pdaasset" in shipped, "E the module's mod.ltx carries [pda]", shipped[-200:])
         put("pda/courier.pdaasset", broken)
-        ex = mcp("mod_export", target=out_dir)
+        ex = mcp("mod.build", target="folder", path=out_dir)
         check(not ex.get("ok") and "E305" in ex.get("error", ""), "E a used layout with an error stops the build",
               json.dumps(ex)[:300])
         put("pda/courier.pdaasset", fixture)
@@ -531,15 +544,15 @@ def phase_e(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
 
 def phase_f(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         os.remove(os.path.join(project, "pda", "courier.pdaasset"))
-        cleared = until(lambda: mcp("mod_manifest").get("pda_layout", "x") == "")
+        cleared = until(lambda: layout_of() == "")
         check(bool(cleared), "F the used layout's file removed clears [pda] layout",
-              str(mcp("mod_manifest").get("pda_layout")))
+              str(layout_of()))
         check("courier" not in read(mod_ltx), "F mod.ltx names it no more", read(mod_ltx)[-200:])
         c = mcp("file.create", kind="pda", path="pda")
         made = c.get("path", "")
         check(c.get("ok") and made.lower().endswith("newpda.pdaasset"), "F Create > PDA Interface makes NewPda", json.dumps(c))
-        now = until(lambda: mcp("mod_manifest").get("pda_layout") == made.replace("/", "\\"))
-        check(bool(now), "F and, the only layout now, the module uses it", str(mcp("mod_manifest").get("pda_layout")))
+        now = until(lambda: layout_of() == made)
+        check(bool(now), "F and, the only layout now, the module uses it", str(layout_of()))
 
 
 

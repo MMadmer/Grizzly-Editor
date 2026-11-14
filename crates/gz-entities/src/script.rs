@@ -10,6 +10,7 @@
 //! back as nothing. A new entity gets the fields the scripts write for an object that has
 //! never been in the game.
 
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 use crate::class::ScriptKind;
@@ -18,7 +19,7 @@ use crate::packet::{NetReader, NetWriter, PacketResult};
 const NIL: SmolStr = SmolStr::new_static("nil");
 
 /// `se_heli`: written only for a helicopter that has a respawn point.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HeliExt {
     pub assigned_target_id: u16,
     pub current_target_id: u16,
@@ -29,7 +30,8 @@ pub struct HeliExt {
 
 /// `se_artefact`: the condition and the sixteen generated properties, in packet order
 /// (weight, the five restore speeds, the additional weight, the nine immunities).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ArtefactExt {
     pub offline_condition: f32,
     pub properties: [f32; 16],
@@ -45,7 +47,7 @@ impl Default for ArtefactExt {
 }
 
 /// One job row of a smart terrain.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TerrainJob {
     pub npc_id: u16,
     pub job_section: SmolStr,
@@ -54,14 +56,15 @@ pub struct TerrainJob {
 }
 
 /// `utils.w_CTime`: year - 2000, month, day, hour, minute, second, milliseconds.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScriptTime {
     pub date: [u8; 6],
     pub ms: u16,
 }
 
 /// The respawn state of a smart terrain.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TerrainRespawn {
     /// Respawn sections and how many of each were spawned.
     pub spawned: Vec<(SmolStr, u8)>,
@@ -69,7 +72,8 @@ pub struct TerrainRespawn {
 }
 
 /// `se_smart_terrain`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TerrainExt {
     pub arriving_npc: Vec<u16>,
     pub jobs: Vec<TerrainJob>,
@@ -92,7 +96,8 @@ impl Default for TerrainExt {
 }
 
 /// `sim_squad_scripted`: every field is the `tostring` of a number, a string or `nil`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SquadExt {
     pub current_target_id: SmolStr,
     pub assigned_target_id: SmolStr,
@@ -116,7 +121,8 @@ impl Default for SquadExt {
 }
 
 /// The script fields of an entity.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Script {
     /// The class writes none, or the block ended before them.
     #[default]

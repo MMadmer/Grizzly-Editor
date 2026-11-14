@@ -311,12 +311,16 @@ impl Models for FakeModels {
 }
 
 fn problems_of(text: &str, linked: bool) -> Vec<String> {
+    problems_with(text, linked, None)
+}
+
+fn problems_with(text: &str, linked: bool, own: Option<&gz_mod::SectionSet>) -> Vec<String> {
     let mut all = vec![ch(text, "characters/x.npcasset")];
     let mut problems = Vec::new();
     resolve(&mut all, &mut problems);
     let models = FakeModels { damage: vec!["eye_left".into(), "jaw_1".into()] };
     let cats = vec!["food".to_owned(), "weapon".to_owned()];
-    let cx = Cx { linked, pickers: Some(&FakeLookups), trade_categories: &cats, models: Some(&models) };
+    let cx = Cx { linked, pickers: Some(&FakeLookups), trade_categories: &cats, models: Some(&models), own };
     validate(&all[0], &cx, &mut problems);
     problems
 }
@@ -377,6 +381,19 @@ fn every_code_on_its_fixture() {
     );
     assert_eq!(codes(&p), ["W115", "W116", "W117"]);
     assert_eq!(p[1], "W116 characters/x.npcasset: no dialog 'nope' in the linked game or the project");
+    // an item the module brings itself is no unknown item
+    let mut own = gz_mod::SectionSet::default();
+    own.add_text(
+        "[nope]
+inv_name = x
+",
+    );
+    let p = problems_with(
+        r#"return { id = "x", name = "a", visual = "actors\\s", icon = "nope", start_dialog = "nope", supplies = { "nope" } }"#,
+        true,
+        Some(&own),
+    );
+    assert_eq!(codes(&p), ["W115", "W116"]);
 
     let p = problems_of(r#"return { id = "x", name = "Привет ★", visual = "v" }"#, false);
     assert_eq!(p, ["W107 characters/x.npcasset: '★' does not exist in cp1251 and will not reach the player"]);

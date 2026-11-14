@@ -1,17 +1,25 @@
-//! What the level build keeps while a project is open: the scene's derived data and what it
-//! was built from, and the process that runs.
+//! What the level build keeps while a project is open: the record of the level's builds and what
+//! it says about the scene there is now, the problems of the last build, the graphs it made, the
+//! process that runs.
+//!
+//! The status is a [`Query`] keyed on the scene's revision and the record's: the status bar and
+//! `level.status` read it, nothing polls it, and it is computed on the CPU pool once per change.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 
-use gz_editor::{JobId, ProjectSession};
-use gz_fmt_level::{CForm, LevelGraph};
-use gz_scene::{ObjClass, SceneState};
+use gz_base::{Rev, RevCounter, Severity};
+use gz_editor::{Editor, JobId, ProjectSession};
+use gz_fmt_level::LevelGraph;
+use gz_query::{Answer, Query};
+use gz_scene::{SceneService, SceneState};
 use parking_lot::Mutex;
 use serde::Serialize;
 
+use crate::fingerprint::{self, HashCache, Objects};
 use crate::graph::LevelGameGraph;
+use crate::state::BuildState;
+use crate::steps::{Options, Quality, Step};
 
 /// What holds the `level_run` job: the level compiler in the editor's process, or the game.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,97 +29,137 @@ pub enum Running {
 }
 
 impl Running {
-    /// The name `level_build status` answers in `running`.
+    /// The name `level.status` answers in `running`.
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
-            Self::Compile => "gz-lc",
-            Self::Game => "Xr3DA.exe",
+            Self::Compile => "compiler",
+            Self::Game => "game",
         }
     }
 }
 
-/// What of the scene's derived data is missing or older than the scene: the status bar's
-/// Rebuild chip.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
-pub struct Rebuild {
-    pub cform: bool,
-    pub ai_map: bool,
-    pub game_graph: bool,
+/// Where a step stands for the scene there is now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StepState {
+    /// Built from what the scene holds now.
+    Fresh,
+    /// Built, but from something that has changed since.
+    Stale,
+    /// Never built for this level (or its record is gone).
+    Never,
+    /// Its last run failed.
+    Failed,
+    /// The scene has nothing this step makes (no detail objects).
+    NotNeeded,
 }
 
-impl Rebuild {
+/// One step's state, with why it is not fresh.
+#[derive(Clone, Debug, Serialize)]
+pub struct StepStatus {
+    pub step: Step,
+    pub title: &'static str,
+    pub state: StepState,
+    /// What changed, why it failed, or what it lacks; empty when fresh.
+    pub why: String,
+    /// When it last ran, local time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<Quality>,
+}
+
+/// The level build's state for one scene version.
+#[derive(Clone, Debug, Serialize)]
+pub struct Status {
+    /// The level the scene builds (Level Settings' level path).
+    pub level: String,
+    pub steps: Vec<StepStatus>,
+}
+
+impl Status {
+    /// The steps a build without arguments would run.
     #[must_use]
-    pub fn any(&self) -> bool {
-        self.cform || self.ai_map || self.game_graph
+    pub fn to_build(&self) -> Vec<Step> {
+        self.steps
+            .iter()
+            .filter(|s| matches!(s.state, StepState::Stale | StepState::Never | StepState::Failed))
+            .map(|s| s.step)
+            .collect()
     }
 
-    /// The chip's text: what `NEED REBUILD` listed.
+    /// The status bar's words: the steps to build, by name.
     #[must_use]
     pub fn text(&self) -> String {
-        let mut parts = Vec::new();
-        if self.cform {
-            parts.push("Collision");
-        }
-        if self.ai_map {
-            parts.push("AI Map");
-        }
-        if self.game_graph {
-            parts.push("Game Graph");
-        }
-        parts.join(", ")
+        self.to_build().iter().map(|s| s.title()).collect::<Vec<_>>().join(" \u{b7} ")
+    }
+
+    #[must_use]
+    pub fn get(&self, step: Step) -> Option<&StepStatus> {
+        self.steps.iter().find(|s| s.step == step)
     }
 }
 
-/// A built piece and the fingerprint of the scene data it was built from.
-#[derive(Clone)]
-pub(crate) struct Built<T> {
-    pub key: u64,
-    pub value: Arc<T>,
+/// A finding of a build: what is wrong, on which object, from which step.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LevelProblem {
+    pub step: Step,
+    pub code: &'static str,
+    pub severity: Severity,
+    pub text: String,
+    /// The scene object it is about.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object: Option<String>,
+    /// Where in the level, in metres.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<[f32; 3]>,
 }
 
+/// The record of the level the scene builds, as read from its folder.
 #[derive(Default)]
-pub(crate) struct State {
-    pub cform: Option<Built<CForm>>,
-    pub level_graph: Option<Built<LevelGraph>>,
-    pub game_graph: Option<Built<LevelGameGraph>>,
+struct RecordSlot {
+    level: String,
+    state: Option<Arc<BuildState>>,
+    loading: bool,
+    /// Read for the level once (found or not).
+    loaded: bool,
+}
+
+/// The graphs the last build made, by the fingerprint they were made for.
+#[derive(Default)]
+pub(crate) struct Graphs {
+    pub level: Option<(u64, Arc<LevelGraph>)>,
+    pub game: Option<(u64, Arc<LevelGameGraph>)>,
 }
 
 /// The level build of the open project.
 #[derive(Default)]
 pub struct LevelBuild {
-    pub(crate) state: Mutex<State>,
     /// The compile or the game that runs, and its job.
     pub(crate) running: Mutex<Option<(Running, JobId)>>,
+    record: Mutex<RecordSlot>,
+    record_rev: RevCounter,
+    pub(crate) hashes: HashCache,
+    status: OnceLock<Query<(), Status>>,
+    pub(crate) problems: Mutex<Vec<LevelProblem>>,
+    pub(crate) graphs: Mutex<Graphs>,
 }
 
-fn fingerprint<'a>(items: impl Iterator<Item = &'a Arc<gz_scene::Object>>) -> u64 {
-    let mut h = DefaultHasher::new();
-    for o in items {
-        o.id.hash(&mut h);
-        (Arc::as_ptr(o) as usize).hash(&mut h);
-    }
-    h.finish()
+/// The project's `gamedata\levels`: a level build lands in the project, never in the editor or
+/// the game.
+#[must_use]
+pub fn levels_root(session: &ProjectSession) -> PathBuf {
+    session.root.join("gamedata").join("levels")
 }
 
-/// What the collision form is made of: the scene objects.
-pub(crate) fn cform_key(s: &SceneState) -> u64 {
-    fingerprint(s.of_class(ObjClass::SceneObject))
-}
-
-/// What the level graph is made of: the AI Map tool's nodes.
-pub(crate) fn ai_key(s: &SceneState) -> u64 {
-    let mut h = DefaultHasher::new();
-    s.bulk.ai_map.as_ref().map(|a| Arc::as_ptr(a) as usize).hash(&mut h);
-    h.finish()
-}
-
-/// What the game graph is made of: the level graph and the spawn points (its graph points).
-pub(crate) fn graph_key(s: &SceneState) -> u64 {
-    let mut h = DefaultHasher::new();
-    ai_key(s).hash(&mut h);
-    fingerprint(s.of_class(ObjClass::SpawnPoint)).hash(&mut h);
-    h.finish()
+/// The options a build without arguments uses: the level's own settings, no compiler flags.
+#[must_use]
+pub fn default_options(editor: &Editor) -> Options {
+    let game = gz_project::Project::of(editor).map(|(_, p)| p.game_root()).unwrap_or_default();
+    Options { quality: Quality::Standard, flags: String::new(), game }
 }
 
 impl LevelBuild {
@@ -120,21 +168,349 @@ impl LevelBuild {
         session.services.get_or_init(Self::default)
     }
 
-    /// What needs building again for the scene there is now.
-    #[must_use]
-    pub fn rebuild(&self, scene: &SceneState) -> Rebuild {
-        let st = self.state.lock();
-        let stale = |key: Option<u64>, now: u64| key != Some(now);
-        Rebuild {
-            cform: stale(st.cform.as_ref().map(|b| b.key), cform_key(scene)),
-            ai_map: stale(st.level_graph.as_ref().map(|b| b.key), ai_key(scene)),
-            game_graph: stale(st.game_graph.as_ref().map(|b| b.key), graph_key(scene)),
-        }
-    }
-
     /// The compile or the game that runs.
     #[must_use]
     pub fn running(&self) -> Option<Running> {
         self.running.lock().map(|(p, _)| p)
+    }
+
+    /// The record of `level` when it has been read; starts the read the first time a level is
+    /// asked about. `None` while it is read.
+    pub(crate) fn record(
+        &self,
+        editor: &Arc<Editor>,
+        session: &ProjectSession,
+        level: &str,
+    ) -> Option<Option<Arc<BuildState>>> {
+        let mut slot = self.record.lock();
+        if slot.level != level {
+            *slot = RecordSlot { level: level.to_owned(), ..RecordSlot::default() };
+        }
+        if slot.loaded {
+            return Some(slot.state.clone());
+        }
+        if !slot.loading {
+            slot.loading = true;
+            let dir = crate::folder::level_folder(&levels_root(session), level).ok();
+            let (ed, lb, lv) = (editor.clone(), Self::of(session), level.to_owned());
+            editor.exec.spawn_io(move || {
+                let state = dir.and_then(|d| BuildState::load(&d)).filter(|s| s.level == lv).map(Arc::new);
+                let mut slot = lb.record.lock();
+                if slot.level == lv {
+                    slot.state = state;
+                    slot.loading = false;
+                    slot.loaded = true;
+                }
+                drop(slot);
+                lb.record_rev.bump();
+                ed.exec.wake().ping();
+            });
+        }
+        None
+    }
+
+    /// The record of `level`, read now when it has not been.
+    pub(crate) async fn record_now(
+        &self,
+        editor: &Arc<Editor>,
+        session: &ProjectSession,
+        level: &str,
+    ) -> Option<Arc<BuildState>> {
+        if let Some(r) = self.record(editor, session, level) {
+            return r;
+        }
+        // the read `record` started may still be on its way: read here too and keep the first
+        let dir = crate::folder::level_folder(&levels_root(session), level).ok();
+        let lv = level.to_owned();
+        let state = editor
+            .exec
+            .io(move || dir.and_then(|d| BuildState::load(&d)).filter(|s| s.level == lv).map(Arc::new))
+            .await;
+        let mut slot = self.record.lock();
+        if slot.level != level {
+            return state;
+        }
+        if !slot.loaded {
+            slot.state = state;
+            slot.loading = false;
+            slot.loaded = true;
+            let out = slot.state.clone();
+            drop(slot);
+            self.record_rev.bump();
+            return out;
+        }
+        slot.state.clone()
+    }
+
+    /// A build wrote a new record.
+    pub(crate) fn set_record(&self, state: Arc<BuildState>) {
+        let mut slot = self.record.lock();
+        *slot = RecordSlot { level: state.level.clone(), state: Some(state), loading: false, loaded: true };
+        drop(slot);
+        self.record_rev.bump();
+    }
+
+    /// The status of the open scene without waiting: fresh, the last one while a new one is
+    /// worked out, or nothing yet. What the status bar draws.
+    #[must_use]
+    pub fn status_now(editor: &Arc<Editor>) -> Option<Arc<Status>> {
+        let session = editor.project_opt()?;
+        let svc = session.services.get::<SceneService>()?;
+        let snap = svc.store.snapshot();
+        if !snap.valid || snap.objects.is_empty() {
+            return None;
+        }
+        let lb = Self::of(&session);
+        let level = snap.meta.level.level_path.to_string();
+        let record = lb.record(editor, &session, &level)?;
+        let opts = default_options(editor);
+        let rev = svc.store.rev().mix(lb.record_rev.get()).mix(Rev(fingerprint::text_hash(&opts.game)));
+        let query = lb.status.get_or_init(|| Query::new(editor.exec.clone()));
+        let lb2 = lb.clone();
+        match query.get(&(), rev, move || status_of(&snap, &lb2.hashes, record.as_deref(), &opts)) {
+            Answer::Fresh(s) | Answer::Stale(s) => Some(s),
+            Answer::Pending => None,
+        }
+    }
+
+    /// The status of the open scene, computed now when it is not.
+    pub async fn status(
+        editor: &Arc<Editor>,
+        session: &Arc<ProjectSession>,
+        scene: Arc<gz_store::Snap<SceneState>>,
+        rev: Rev,
+    ) -> Arc<Status> {
+        let lb = Self::of(session);
+        let level = scene.meta.level.level_path.to_string();
+        let record = lb.record_now(editor, session, &level).await;
+        let opts = default_options(editor);
+        let rev = rev.mix(lb.record_rev.get()).mix(Rev(fingerprint::text_hash(&opts.game)));
+        let query = lb.status.get_or_init(|| Query::new(editor.exec.clone()));
+        let lb2 = lb.clone();
+        query.fresh(&(), rev, move || status_of(&scene, &lb2.hashes, record.as_deref(), &opts)).await
+    }
+}
+
+/// Whether the scene has what a step makes.
+#[must_use]
+pub fn needed(scene: &SceneState, step: Step) -> bool {
+    match step {
+        Step::Details | Step::DetailLight => {
+            scene.bulk.details.as_ref().is_some_and(|d| !d.model.slots.is_empty())
+        }
+        _ => true,
+    }
+}
+
+/// Every step's state for one scene version and the record of the level.
+#[must_use]
+pub fn status_of(
+    scene: &SceneState,
+    hashes: &HashCache,
+    record: Option<&BuildState>,
+    opts: &Options,
+) -> Status {
+    let objects = hashes.objects(scene);
+    status_with(scene, &objects, record, opts)
+}
+
+pub(crate) fn status_with(
+    scene: &SceneState,
+    objects: &Objects,
+    record: Option<&BuildState>,
+    opts: &Options,
+) -> Status {
+    let fps = fingerprint::steps(scene, objects, opts);
+    let mut steps: Vec<StepStatus> = Vec::with_capacity(Step::ORDER.len());
+    for step in Step::ORDER {
+        let rec = record.and_then(|r| r.steps.get(&step));
+        let mut st = StepStatus {
+            step,
+            title: step.title(),
+            state: StepState::Fresh,
+            why: String::new(),
+            time: rec.map(|r| r.time.clone()),
+            seconds: rec.map(|r| r.seconds),
+            quality: rec.map(|r| r.quality),
+        };
+        if !needed(scene, step) {
+            st.state = StepState::NotNeeded;
+            st.why = "The scene has no detail objects.".to_owned();
+            steps.push(st);
+            continue;
+        }
+        match rec {
+            None => {
+                st.state = StepState::Never;
+                st.why = "Never built.".to_owned();
+            }
+            Some(r) if r.failed.is_some() => {
+                st.state = StepState::Failed;
+                st.why = r.failed.clone().unwrap_or_default();
+            }
+            Some(r) if Some(&r.fingerprint) == fps.get(&step) => {}
+            Some(r) => {
+                st.state = StepState::Stale;
+                st.why = why_stale(scene, objects, record, opts, step, r, &steps);
+            }
+        }
+        steps.push(st);
+    }
+    Status { level: scene.meta.level.level_path.to_string(), steps }
+}
+
+/// Why a stale step is stale, in a sentence.
+fn why_stale(
+    scene: &SceneState,
+    objects: &Objects,
+    record: Option<&BuildState>,
+    opts: &Options,
+    step: Step,
+    rec: &crate::state::StepRecord,
+    before: &[StepStatus],
+) -> String {
+    if let Some(n) =
+        step.needs().iter().find_map(|n| before.iter().find(|s| s.step == *n && s.state != StepState::Fresh))
+    {
+        return format!("{} is not fresh.", n.title);
+    }
+    if (rec.quality != opts.quality || rec.flags != opts.flags)
+        && matches!(step, Step::Geometry | Step::Light)
+    {
+        let then = Options { quality: rec.quality, flags: rec.flags.clone(), ..opts.clone() };
+        let fps = fingerprint::steps(scene, objects, &then);
+        if Some(rec.fingerprint) == fps.get(&step).copied() {
+            let mut how = Vec::new();
+            if rec.quality != opts.quality {
+                how.push(format!("at {} quality", capital(rec.quality.name())));
+            }
+            if rec.flags != opts.flags {
+                how.push(format!("with the compiler's {}", rec.flags));
+            }
+            return format!("Built {}.", how.join(" and "));
+        }
+    }
+    let moved = record.map(|r| fingerprint::changes(step, &r.objects, objects)).unwrap_or_default();
+    if !moved.is_empty() {
+        return format!("{}.", capital(&moved));
+    }
+    match step {
+        Step::AiMap => "The AI map or its settings changed.".to_owned(),
+        Step::Details => "The detail objects changed.".to_owned(),
+        Step::Geometry => "The level's build settings, lights or wallmarks changed.".to_owned(),
+        Step::Game => "The level's settings changed.".to_owned(),
+        Step::Spawn => "The linked game changed.".to_owned(),
+        _ => "What it is made of changed.".to_owned(),
+    }
+}
+
+fn capital(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::state::StepRecord;
+    use gz_scene::objects::{GlowData, LightData};
+    use gz_scene::{ObjClass, ObjData, Object};
+
+    fn scene() -> (SceneState, gz_scene::ObjId) {
+        let mut s = SceneState::default();
+        let lamp = s.insert(Object::new(ObjClass::Light, "lamp", ObjData::Light(LightData::default())));
+        s.insert(Object::new(ObjClass::Glow, "glow", ObjData::Glow(GlowData::default())));
+        (s, lamp)
+    }
+
+    /// The record of a build of everything `scene` holds now.
+    fn built(s: &SceneState, cache: &HashCache, opts: &Options) -> BuildState {
+        let objects = cache.objects(s);
+        let fps = fingerprint::steps(s, &objects, opts);
+        let mut r = BuildState::new("lvl");
+        for step in Step::ORDER.into_iter().filter(|st| needed(s, *st)) {
+            r.steps.insert(
+                step,
+                StepRecord {
+                    fingerprint: fps[&step],
+                    time: String::new(),
+                    seconds: 0.0,
+                    quality: opts.quality,
+                    flags: opts.flags.clone(),
+                    failed: None,
+                },
+            );
+        }
+        r.objects = objects;
+        r
+    }
+
+    #[test]
+    fn a_moved_object_makes_stale_exactly_the_steps_that_read_it() {
+        let (mut s, lamp) = scene();
+        let (cache, opts) = (HashCache::default(), Options::default());
+        let record = built(&s, &cache, &opts);
+        let st = status_of(&s, &cache, Some(&record), &opts);
+        assert!(st.to_build().is_empty(), "{:?}", st.to_build());
+        assert_eq!(st.get(Step::Details).unwrap().state, StepState::NotNeeded);
+        // the lamp moves: the geometry reads lights, the light reads the geometry, the spawn layer
+        // reads everything; the game files, the AI map and the graphs read no light
+        let mut o = (**s.get(lamp).unwrap()).clone();
+        o.xform.position.x += 1.0;
+        s.replace(o);
+        let st = status_of(&s, &cache, Some(&record), &opts);
+        assert_eq!(st.to_build(), [Step::SpawnLayer, Step::Geometry, Step::Light]);
+        assert_eq!(st.get(Step::Geometry).unwrap().why, "1 object moved.");
+        assert_eq!(st.get(Step::Light).unwrap().why, "Geometry is not fresh.");
+        assert_eq!(st.get(Step::Game).unwrap().state, StepState::Fresh);
+    }
+
+    #[test]
+    fn the_status_survives_the_record_being_written_and_read() {
+        let (s, _) = scene();
+        let (cache, opts) = (HashCache::default(), Options::default());
+        let record = built(&s, &cache, &opts);
+        let again = BuildState::read(&record.write()).unwrap();
+        // a new session: no hash is cached, every one is worked out again from the content
+        let fresh = HashCache::default();
+        assert!(status_of(&s, &fresh, Some(&again), &opts).to_build().is_empty());
+        // without a record everything is to build
+        assert_eq!(status_of(&s, &fresh, None, &opts).to_build().len(), Step::ORDER.len() - 2);
+    }
+
+    #[test]
+    fn a_stop_keeps_what_ended_before_it() {
+        // what the pipeline records when Stop comes after the quick steps: those steps' records,
+        // and none for the step that was stopped
+        let (s, _) = scene();
+        let (cache, opts) = (HashCache::default(), Options::default());
+        let mut record = built(&s, &cache, &opts);
+        record.steps.remove(&Step::Light);
+        record.steps.remove(&Step::DetailLight);
+        let st = status_of(&s, &cache, Some(&record), &opts);
+        assert_eq!(st.get(Step::Geometry).unwrap().state, StepState::Fresh);
+        assert_eq!(st.get(Step::Light).unwrap().state, StepState::Never);
+        assert_eq!(st.to_build(), [Step::Light]);
+    }
+
+    #[test]
+    fn a_draft_build_says_so_and_a_failed_step_is_never_fresh() {
+        let (s, _) = scene();
+        let cache = HashCache::default();
+        let draft = Options { quality: Quality::Draft, ..Options::default() };
+        let mut record = built(&s, &cache, &draft);
+        let st = status_of(&s, &cache, Some(&record), &Options::default());
+        assert_eq!(st.get(Step::Geometry).unwrap().why, "Built at Draft quality.");
+        let noise = Options { flags: "-noise".into(), ..Options::default() };
+        let record2 = built(&s, &cache, &noise);
+        let st = status_of(&s, &cache, Some(&record2), &Options::default());
+        assert_eq!(st.get(Step::Light).unwrap().why, "Built with the compiler's -noise.");
+        assert_eq!(st.get(Step::Geometry).unwrap().state, StepState::Fresh);
+        assert_eq!(st.get(Step::Game).unwrap().state, StepState::Fresh);
+        record.steps.get_mut(&Step::Game).unwrap().failed = Some("The scene has no spawn point.".into());
+        let st = status_of(&s, &cache, Some(&record), &draft);
+        assert_eq!(st.get(Step::Game).unwrap().state, StepState::Failed);
+        assert_eq!(st.get(Step::Game).unwrap().why, "The scene has no spawn point.");
     }
 }

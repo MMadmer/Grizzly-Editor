@@ -1,7 +1,5 @@
 //! The build: what turns a project into a module of the game.
 //!
-//! The C++ specification is `EditorModManifest.cpp` from `SBuildWalk` to `StartJob` (the walk,
-//! the checks, the target's refusals, the clean build beside the last one, the flat export).
 //! A build generates nothing: it ships the author's files.
 //!
 //! - [`walk`] - [`BuildWalk`]: ONE list of what a build writes, made from the project's
@@ -19,8 +17,9 @@
 //! - [`job`] - [`BuildRequest`] / [`BuildResult`], [`run_build`] (what `gz-release` stages a
 //!   package through), [`Builds`]: the `build` job (one at a time), the results, the Task
 //!   Center's [`BuildStatus`] and the clean-target question as data ([`CleanQuestion`]).
-//! - [`register`] - `mod_export`; it answers once the job has ended, while every other command
-//!   goes on.
+//! - [`register`] - `mod.info` (the manifest, its problems, what a build ships) and `mod.build`
+//!   (a job the command waits for unless `wait=false`); [`WindowBuilds`] - the window's Build
+//!   Into Game for a person, who is asked what the build needs.
 
 pub mod check;
 mod cmd;
@@ -30,6 +29,6 @@ pub mod target;
 pub mod walk;
 
 pub use check::{BakeHook, BuildCheck, BuildChecks, problem_line};
-pub use cmd::register;
+pub use cmd::{BuildTarget, WindowBuilds, build_answer, register};
 pub use job::{BuildKind, BuildRequest, BuildResult, BuildStatus, Builds, CleanQuestion, run_build};
 pub use walk::{BuildFile, BuildWalk, LeftOut, LeftOutReason, WalkScope};

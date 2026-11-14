@@ -253,7 +253,7 @@ fn every_world_code() {
             "W205 world: the Player Start stands on moon, outside the playable area",
             "E207 world: start kit item 'wpn_knife' has a count of 0 - at least 1",
             "E207 world: start kit item 'bread' is listed twice - one row says how many",
-            "W208 world: start kit item 'toy' is not an item of the linked game - a new game leaves it out unless the module brings it",
+            "W208 world: start kit item 'toy' is an item of neither the linked game nor the module - a new game leaves it out",
         ]
     );
     let area_only = World { area: vec!["l01_escape".into()], ..World::default() };

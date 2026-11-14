@@ -32,12 +32,27 @@ pub struct CardPump {
     published: Mutex<BTreeMap<JobId, Value>>,
 }
 
-/// Starts the pump once.
+/// Starts the pump once, and hands the build command the window's Build Into Game: a person
+/// who clicks it is asked what the build needs and sees its result.
 pub fn ensure(editor: &Arc<Editor>) {
     let pump = editor.services.get_or_init(CardPump::default);
     if pump.started.swap(true, Ordering::SeqCst) {
         return;
     }
+    gz_build::WindowBuilds::of(editor).provide(|ed| {
+        if gz_app::UiQueue::of(ed).is_err() {
+            return false;
+        }
+        let ed = ed.clone();
+        let _task = ed.exec.clone().spawn(async move {
+            let _ = gz_app::on_ui(&ed, |shell, ctx| {
+                shell.with_cx(ctx, crate::build::request_build_into_game);
+                Ok(())
+            })
+            .await;
+        });
+        true
+    });
     let weak = Arc::downgrade(editor);
     let _task = editor.exec.spawn(async move {
         loop {

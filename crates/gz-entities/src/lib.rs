@@ -23,8 +23,10 @@
 
 pub mod class;
 mod create;
+mod display;
 mod entity;
 pub mod model;
+mod named;
 pub mod packet;
 mod props;
 pub mod script;
@@ -35,11 +37,13 @@ mod update;
 use smol_str::SmolStr;
 
 pub use class::{Class, ClassInfo, ScriptKind, class_by_clsid, class_of_section, class_table};
+pub use display::{title_case, word_of};
 pub use entity::{
     Entity, Header, LevelChangerDestination, M_SPAWN_OBJECT_ASPLAYER, M_SPAWN_OBJECT_LOCAL, M_SPAWN_VERSION,
     Opaque, OpaqueReason, SPAWN_VERSION,
 };
 pub use model::{Object, Shape};
+pub use named::{HEADER, Named, Placement, diff as named_diff, overlay as named_overlay};
 pub use packet::{IniSource, IniValue, NetReader, NetWriter, PacketError, TextEncoding};
 pub use props::{ChooseKind, CoverDescription, ListKind, Prop, PropContext, PropKind, PropValue, SetEffect};
 pub use settings::{MapSettings, Settings};

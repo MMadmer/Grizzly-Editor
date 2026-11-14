@@ -130,6 +130,7 @@ impl NqService {
         };
         let catalog = self.catalog(editor).await;
         let (mut graph, shape) = asset::graph_from_value(&catalog, &asset.doc.value());
+        take_default_flow(editor, &mut graph);
         if asset.headerless {
             // the header the next save writes
             graph.nq = i32::try_from(ops.version).unwrap_or(1);
@@ -227,6 +228,8 @@ impl NqService {
         };
         let new = save_value(&catalog, &snap.graph, &on.auto, &on.base);
         let kept = on.asset.clone();
+        let kept_base = on.base.clone();
+        take_renames(&mut on.asset.doc, &mut on.base, &snap.renames);
         let written = match on.asset.apply(&on.base, &new) {
             Ok(_) => gz_asset::write(editor, &mut on.asset).await,
             Err(e) => Err(e),
@@ -247,6 +250,7 @@ impl NqService {
             }
             Err(e) => {
                 on.asset = kept;
+                on.base = kept_base;
                 *doc.on_disk.lock() = Some(on);
                 Err(e.message)
             }
@@ -355,6 +359,7 @@ impl NqService {
         };
         let catalog = self.catalog(editor).await;
         let (mut tgraph, tshape) = asset::graph_from_value(&catalog, &theirs.doc.value());
+        take_default_flow(editor, &mut tgraph);
         if theirs.headerless {
             tgraph.nq = i32::try_from(ops.version).unwrap_or(1);
         }
@@ -452,6 +457,67 @@ fn place_like(catalog: &Catalog, v: &Value, shown: &Graph) -> (Graph, AutoPos) {
     (g, auto)
 }
 
+/// Renames the nodes `renames` names in the file and in the model's value of it, in order: a
+/// renamed node is then matched by its new id and keeps its comments and the keys the editor
+/// does not know. A node the file does not hold, or a new id it holds already, is left.
+pub(crate) fn take_renames(doc: &mut LuaDoc, base: &mut Value, renames: &[(SmolStr, SmolStr)]) {
+    use gz_luadata::Seg;
+    for (old, renamed) in renames {
+        let at = [Seg::key("nodes"), Seg::item("id", old), Seg::key("id")];
+        let taken = gz_luadata::get_at(base, &[Seg::key("nodes"), Seg::item("id", renamed)]).is_some();
+        if !taken
+            && gz_luadata::get_at(base, &at).is_some()
+            && doc.set(&at, &Value::from(renamed.as_str())).is_ok()
+        {
+            set_at(base, &at, Value::from(renamed.as_str()));
+        }
+    }
+}
+
+/// A graph whose file says neither its flow nor where its nodes are flows the way the author's
+/// preference says.
+fn take_default_flow(editor: &Editor, g: &mut Graph) {
+    if g.canvas.flow.is_none() && !g.nodes.iter().any(|n| n.has_pos) {
+        g.canvas.implied = crate::defaults::GraphDefaults::of(editor).flow();
+    }
+}
+
 fn file_time(path: &std::path::Path) -> Option<std::time::SystemTime> {
     std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_renamed_node_keeps_what_the_editor_does_not_know() {
+        let cat = Catalog::empty();
+        let text = "return {
+  nq = 1,
+  id = \"q\",
+  nodes = {
+    { id = \"a\", kind = \"trigger.start\", out = { next = \"b\" } },
+    -- the ambush
+    { id = \"b\", kind = \"flow.step\", colour = \"red\" },
+  },
+}
+";
+        let mut doc = LuaDoc::parse(text).unwrap_or_else(|e| panic!("{e}"));
+        let (g, _) = asset::graph_from_value(&cat, &doc.value());
+        let mut base = asset::model_value(&cat, &g, &AutoPos::default());
+        let mut edited = g.clone();
+        if let Some(n) = edited.find_node_mut("b") {
+            n.id = SmolStr::new("trap");
+        }
+        if let Some(n) = edited.find_node_mut("a") {
+            n.out = vec![asset::Pin { name: "next".into(), targets: vec!["trap".into()] }];
+        }
+        let new = asset::model_value(&cat, &edited, &AutoPos::default());
+        take_renames(&mut doc, &mut base, &[(SmolStr::new("b"), SmolStr::new("trap"))]);
+        assert!(doc.apply_diff(&base, &new, &asset::diff_rules()).unwrap_or(false));
+        let out = doc.text();
+        assert!(out.contains("colour = \"red\"") && out.contains("-- the ambush"), "{out}");
+        assert!(out.contains("id = \"trap\"") && out.contains("next = \"trap\""), "{out}");
+    }
 }

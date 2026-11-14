@@ -1,7 +1,7 @@
-//! Recovery snapshots (`EditorRecovery`): the scene's undo stream written now and then into
-//! `<project>\backup\recovery`, with a manifest that names the snapshots kept, and a session
-//! marker that tells the next start whether the last session ended cleanly. The file layout and
-//! the manifest are the C++ editor's, so either editor offers the other's snapshot.
+//! Recovery snapshots: the scene written now and then in its own format into
+//! `<project>\backup\recovery\<stamp>\` (the `.scene` and its folder), with a manifest that
+//! names the snapshots kept and the scene each is of (project-relative), and a session marker
+//! that tells the next start whether the last session ended cleanly.
 //!
 //! Every function here touches files and blocks: call it on the IO pool.
 
@@ -12,7 +12,60 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
-use crate::io;
+/// A snapshot to write: the scene's files by their path inside the snapshot's folder
+/// (`escape.scene`, `escape/objects.lua`, ...).
+#[derive(Clone, Debug, Default)]
+pub struct Snapshot {
+    pub files: Vec<(String, Vec<u8>)>,
+}
+
+impl Snapshot {
+    fn size(&self) -> u64 {
+        self.files.iter().map(|(_, b)| b.len() as u64).sum()
+    }
+
+    /// FNV-1a over every file's path and bytes, in the order of their paths.
+    fn hash(&self) -> u64 {
+        let mut all: Vec<&(String, Vec<u8>)> = self.files.iter().collect();
+        all.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut joined = Vec::new();
+        for (p, b) in all {
+            joined.extend_from_slice(p.as_bytes());
+            joined.push(0);
+            joined.extend_from_slice(b);
+        }
+        fnv1a(&joined)
+    }
+
+    /// The snapshot a folder holds.
+    fn read(dir: &Path) -> std::io::Result<Self> {
+        let mut files = Vec::new();
+        let mut stack = vec![(dir.to_path_buf(), String::new())];
+        while let Some((d, rel)) = stack.pop() {
+            for e in std::fs::read_dir(&d)? {
+                let e = e?;
+                let name = e.file_name().to_string_lossy().into_owned();
+                let r = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
+                if e.file_type()?.is_dir() {
+                    stack.push((e.path(), r));
+                } else {
+                    files.push((r, std::fs::read(e.path())?));
+                }
+            }
+        }
+        Ok(Self { files })
+    }
+
+    /// The `.scene` the snapshot holds.
+    #[must_use]
+    pub fn scene_file(dir: &Path) -> Option<PathBuf> {
+        std::fs::read_dir(dir)
+            .ok()?
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case(crate::format::EXT)))
+    }
+}
 
 pub const MANIFEST_VERSION: u32 = 1;
 pub const MAX_ENTRIES: usize = 64;
@@ -404,15 +457,12 @@ impl Recovery {
         self.inner.lock().next_save = Instant::now() + RETRY_DELAY;
     }
 
-    /// `SaveNow`: writes `stream` as a snapshot of `source`.
-    pub fn save_now(&self, stream: &[u8], source: &str) -> Result<(), String> {
+    /// Writes `snap` as a snapshot of the scene `source`, in a folder of its own.
+    pub fn save_now(&self, snap: &Snapshot, source: &str) -> Result<(), String> {
         let root = self.inner.lock().bound.clone().ok_or("recovery session is not available")?;
         let dir = Self::dir_of(&root);
-        if stream.is_empty() {
-            return Err("recovery serializer produced an empty snapshot".into());
-        }
-        if let Err(why) = io::scene_kind(stream) {
-            return Err(format!("recovery snapshot validation failed: {why}"));
+        if !snap.files.iter().any(|(p, _)| p.ends_with(&format!(".{}", crate::format::EXT))) {
+            return Err("the recovery snapshot holds no scene".into());
         }
         let saved_at = file_time_now();
         let seq = {
@@ -420,17 +470,30 @@ impl Recovery {
             s.sequence += 1;
             s.sequence
         };
-        let name = format!("snapshot-{saved_at:016x}-{:08x}-{seq:04}.recovery", std::process::id());
+        let name = format!("snapshot-{saved_at:016x}-{:08x}-{seq:04}", std::process::id());
         let path = dir.join(&name);
-        gz_editor::fsx::write_atomic(&path, stream)
-            .map_err(|e| format!("cannot write recovery file '{}' ({e})", path.display()))?;
+        let temp = dir.join(format!("{name}.tmp.dir"));
+        let _ = std::fs::remove_dir_all(&temp);
+        for (rel, bytes) in &snap.files {
+            let p = temp.join(rel.replace('/', "\\"));
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("cannot write recovery folder '{}' ({e})", parent.display()))?;
+            }
+            std::fs::write(&p, bytes)
+                .map_err(|e| format!("cannot write recovery file '{}' ({e})", p.display()))?;
+        }
+        std::fs::rename(&temp, &path).map_err(|e| {
+            let _ = std::fs::remove_dir_all(&temp);
+            format!("cannot write recovery folder '{}' ({e})", path.display())
+        })?;
         let (source_mtime, source_size) = file_meta(Path::new(source)).unwrap_or((0, 0));
         let fresh = Entry {
             snapshot: name.clone(),
             source: relative_to(&root, source),
             saved_at,
-            snapshot_size: stream.len() as u64,
-            snapshot_hash: fnv1a(stream),
+            snapshot_size: snap.size(),
+            snapshot_hash: snap.hash(),
             source_mtime,
             source_size,
         };
@@ -446,7 +509,7 @@ impl Recovery {
         let retention = self.prefs.lock().retention.clamp(2, MAX_ENTRIES as u32) as usize;
         kept.truncate(retention);
         if let Err(e) = gz_editor::fsx::write_atomic(&manifest, build_manifest(&kept).as_bytes()) {
-            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir_all(&path);
             return Err(format!("cannot commit recovery metadata '{}' ({e})", manifest.display()));
         }
         delete_snapshots_not_in(&dir, &kept);
@@ -462,11 +525,11 @@ impl Recovery {
         Ok(())
     }
 
-    /// `SnapshotNow`: a snapshot on request; answers the operation id.
-    pub fn snapshot_now(&self, stream: &[u8], source: &str, game_linked: bool) -> Result<u64, String> {
+    /// A snapshot on request; answers the operation id.
+    pub fn snapshot_now(&self, snap: &Snapshot, source: &str, game_linked: bool) -> Result<u64, String> {
         self.can_snapshot(game_linked)?;
         let id = self.begin(OpState::SnapshotCreated);
-        match self.save_now(stream, source) {
+        match self.save_now(snap, source) {
             Ok(()) => Ok(id),
             Err(e) => {
                 let mut s = self.inner.lock();
@@ -678,15 +741,15 @@ impl Recovery {
 }
 
 fn validate(e: &Entry, path: &Path) -> Result<(), String> {
-    if e.snapshot_size == 0 || e.snapshot_hash == 0 {
+    if e.snapshot_hash == 0 {
         return Err("missing size or checksum metadata".into());
     }
-    let bytes = std::fs::read(path)
-        .map_err(|err| format!("cannot read recovery file '{}' ({err})", path.display()))?;
-    if bytes.len() as u64 != e.snapshot_size || fnv1a(&bytes) != e.snapshot_hash {
+    let snap = Snapshot::read(path)
+        .map_err(|err| format!("cannot read recovery folder '{}' ({err})", path.display()))?;
+    if snap.size() != e.snapshot_size || snap.hash() != e.snapshot_hash {
         return Err("size or checksum mismatch".into());
     }
-    io::scene_kind(&bytes).map(|_| ())
+    Snapshot::scene_file(path).map(|_| ()).ok_or_else(|| "the snapshot holds no scene".to_owned())
 }
 
 fn select_startup(dir: &Path) -> Option<Entry> {
@@ -699,19 +762,26 @@ fn remove_temporary(dir: &Path) {
     for e in rd.flatten() {
         let n = e.file_name().to_string_lossy().into_owned();
         if n.contains(".tmp.") || n.ends_with(".gz~") {
-            let _ = std::fs::remove_file(e.path());
+            let p = e.path();
+            if p.is_dir() {
+                let _ = std::fs::remove_dir_all(p);
+            } else {
+                let _ = std::fs::remove_file(p);
+            }
         }
     }
 }
 
+/// Every snapshot folder (`snapshot-*`) the manifest does not keep goes.
 fn delete_snapshots_not_in(dir: &Path, keep: &[Entry]) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let n = e.file_name().to_string_lossy().into_owned();
-        if n.to_ascii_lowercase().ends_with(".recovery")
+        if n.starts_with("snapshot-")
+            && e.path().is_dir()
             && !keep.iter().any(|k| k.snapshot.eq_ignore_ascii_case(&n))
         {
-            let _ = std::fs::remove_file(e.path());
+            let _ = std::fs::remove_dir_all(e.path());
         }
     }
 }
@@ -736,8 +806,8 @@ mod tests {
     #[test]
     fn the_manifest_round_trips() {
         let e = Entry {
-            snapshot: "snapshot-1.recovery".into(),
-            source: "C:\\a.level".into(),
+            snapshot: "snapshot-1".into(),
+            source: "levels/a.scene".into(),
             saved_at: 5,
             snapshot_size: 10,
             snapshot_hash: 11,
@@ -748,6 +818,32 @@ mod tests {
         assert!(text.starts_with("[recovery]\r\nversion=1\r\ncount=1\r\n\r\n[entry_0]\r\n"));
         assert_eq!(read_manifest(&text), vec![e]);
         assert!(read_manifest("[recovery]\r\nversion=2\r\ncount=1\r\n").is_empty());
+    }
+
+    #[test]
+    fn a_snapshot_is_the_scene_in_a_folder_and_checks_itself() {
+        let dir = std::env::temp_dir().join(format!("gz-recovery-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("backup")).unwrap();
+        let rec = Recovery::new();
+        rec.bind(&dir);
+        let snap = Snapshot {
+            files: vec![
+                ("a.scene".into(), b"return { scene = 1 }".to_vec()),
+                ("a/objects.lua".into(), b"return {}".to_vec()),
+            ],
+        };
+        rec.save_now(&snap, &dir.join("levels").join("a.scene").display().to_string()).unwrap();
+        let text = std::fs::read_to_string(Recovery::dir_of(&dir).join("manifest.ltx")).unwrap();
+        let entries = read_manifest(&text);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source, "levels/a.scene");
+        let folder = Recovery::dir_of(&dir).join(&entries[0].snapshot);
+        assert!(validate(&entries[0], &folder).is_ok());
+        std::fs::write(folder.join("a").join("objects.lua"), b"return { x = 1 }").unwrap();
+        assert!(validate(&entries[0], &folder).is_err());
+        rec.end(false);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

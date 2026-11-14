@@ -110,8 +110,8 @@
 
 - **Architect**: `crates/grizzly/src/main.rs` (L1b's `-compile` removal) fails `check.sh`'s fmt at line 55; the
   release build in `Bin\x64\Release` is older than the sources, so `check.sh`'s command-line step stops - I did not
-  run `Build.ps1` while other streams' suites may hold that folder's programs. An `asset.migrate` hook could run
-  `scene.convert` for the SDK scenes of a project.
+  run `Build.ps1` while other streams' suites may hold that folder's programs. `grizzly`'s card test fails on other
+  streams' commands (Proof). An `asset.migrate` hook could run `scene.convert` for the SDK scenes of a project.
 - **A2**: a way to note a scene as recent when it opens: `Project::edit_state` is `pub(crate)`, so
   `ProjectState::recent_scenes` gets only the scene open at the project's close.
 - **S**: the content browser could show a `.level` as an imported SDK scene that `scene.open` converts.
@@ -133,7 +133,8 @@ the harness on copies of `D:\XFinedProjects\Test` in the temp folder, port 28961
 - Corpus (`gz-scene` `tests/corpus.rs`, the linked game's configs): the 35 base scenes of `rawdata\levels` import,
   are written as `.scene`, read back equal (objects by name: kind, transform, flags, marks, motion, data; every spawn
   packet byte for byte and the kept values of packetless entities; groups; level options; the layers bit for bit;
-  the kinds' settings) and written again unchanged: 35 checked in 3.2 s, 0 failed.
+  the kinds' settings) and written again unchanged: 35 checked in 3.2 s, 0 failed. Converted by `scene.convert` on
+  a copy, their 21 186 spawn entities are kept as 21 082 named, 99 packets (`raw`) and 5 kept values (`mp_test`).
 - Unit tests: `gz-scene` 96 (save as difference, comments and unknown keys kept, a removed kind's file goes, a newer
   scene refused, the reference document, every key labelled and explained, a light and a glow deleted together,
   names keep case, set from text, ...), `gz-entities` 55 + 2 corpus.
@@ -146,5 +147,9 @@ the harness on copies of `D:\XFinedProjects\Test` in the temp folder, port 28961
 - Speed (dev profile, Jupiter, 10 337 objects): before - read 25-26 ms, read and parse 292-305 ms, serialise
   126-140 ms (31 files); after - read 20-26 ms, read and parse 267-289 ms, a save of one moved object 33-35 ms (one
   file), a whole write 433-468 ms (15 files, the per-spawn proof included).
-- `bash tools/rust/check.sh`: clippy clean, unsafe only in gz-win, encoding clean, notices current, test files clean;
-  fmt and the command-line step as under Requests.
+- `bash tools/rust/test.sh` (the binaries changed since green): 44 run, 1333 tests green; one failure not mine -
+  `grizzly`'s `every_card_is_worth_reading`: `release.key`, `release.account`, `release.catalog_status`,
+  `release.catalog` (`action`), `screens.set` (`action`) and `world.lookup` (`type`) have parameters without a doc
+  comment.
+- `bash tools/rust/check.sh`: clippy clean, unsafe only in gz-win, encoding clean, notices current, test files clean
+  (after `format/doc.rs`'s message stopped naming a program); fmt and the command-line step as under Requests.

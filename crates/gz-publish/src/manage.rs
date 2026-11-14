@@ -1,13 +1,13 @@
 //! The releases that are already out (the Releases tab's data): the list, drafts included,
-//! editing the title and the notes of one, deleting one together with its git tag. The work runs
-//! on a task of its own; the answer is pending until `status` says otherwise. Publishing and this
-//! never run side by side.
+//! editing the title and the notes of one, deleting one together with its git tag. The work is a
+//! job of the project (`releases`): a command waits for it, the Task Center can stop it, and the
+//! project closing stops it. Publishing and this never run side by side.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use gz_editor::{Cancel, Editor, Executors};
+use gz_editor::{Cancel, Editor, Executors, JobError, JobId};
 use gz_github::{Github, ReleaseInfo, Secret};
 use gz_mod::ManifestService;
 use parking_lot::Mutex;
@@ -93,7 +93,8 @@ pub enum Setup {
 #[derive(Default)]
 pub struct ReleaseList {
     view: Mutex<ManageView>,
-    cancel: Mutex<Cancel>,
+    /// The job of the request in flight.
+    job: Mutex<Option<JobId>>,
     /// The release the tab's details show; 0 = none.
     selected: AtomicU64,
     tab_open: AtomicBool,
@@ -123,9 +124,18 @@ impl ReleaseList {
         self.view.lock().clone()
     }
 
-    pub fn cancel(&self) {
-        if self.running() {
-            self.cancel.lock().cancel();
+    /// The job of the request in flight, while one runs.
+    #[must_use]
+    pub fn running_job(&self) -> Option<JobId> {
+        if self.running() { *self.job.lock() } else { None }
+    }
+
+    /// Stops the request in flight at its next step.
+    pub fn cancel(&self, editor: &Editor) {
+        if self.running()
+            && let Some(id) = *self.job.lock()
+        {
+            editor.jobs.cancel(id);
         }
     }
 
@@ -160,7 +170,7 @@ impl ReleaseList {
         let matches: Vec<&ReleaseInfo> =
             view.releases.iter().filter(|r| if id != 0 { r.id == id } else { r.tag == tag }).collect();
         if !view.listed {
-            return Err("the list is not read yet: mod_releases action=list first".to_owned());
+            return Err("the list is not read yet: release.list first".to_owned());
         }
         let found = match matches.as_slice() {
             [] if id != 0 => return Err(format!("no release has the id {id}")),
@@ -178,12 +188,12 @@ impl ReleaseList {
         Ok(())
     }
 
-    /// Starts a request: the checks, then the work on a task of its own.
+    /// Starts a request: the checks, then the work as a job. Answers the job.
     pub async fn start(
         self: &Arc<Self>,
         editor: &Arc<Editor>,
         rq: ManageRequest,
-    ) -> Result<(), (String, Setup)> {
+    ) -> Result<JobId, (String, Setup)> {
         let Ok(session) = editor.project() else {
             return Err(("no active project".to_owned(), Setup::NoProject));
         };
@@ -191,7 +201,21 @@ impl ReleaseList {
             return Err(("a release is being published - wait for it to finish".to_owned(), Setup::Ok));
         }
         if self.running() {
-            return Err(("the release list is busy - try again in a moment".to_owned(), Setup::Ok));
+            // a read asked for while one is on its way is that read
+            if rq.op == ManageOp::List {
+                for _ in 0..100 {
+                    if let Some(id) = self.running_job() {
+                        return Ok(id);
+                    }
+                    if !self.running() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            }
+            if self.running() {
+                return Err(("the release list is busy - try again in a moment".to_owned(), Setup::Ok));
+            }
         }
         let manifest =
             ManifestService::of_session(editor, &session).await.map_err(|e| (e.message, Setup::NoRepo))?;
@@ -200,7 +224,7 @@ impl ReleaseList {
             return Err(("mod.ltx not found in the project".to_owned(), Setup::NoRepo));
         };
         if repo.is_empty() || !gz_mod::validate_github_repo(&repo) {
-            return Err(("no GitHub repository in the manifest: set it in Mod Settings (MCP: mod_set_manifest github=owner/repo)".to_owned(), Setup::NoRepo));
+            return Err(("no GitHub repository in the manifest: set it in Mod Settings (mod.set set={\"update\":{\"github\":\"owner/repo\"}})".to_owned(), Setup::NoRepo));
         }
         let gh = Github::of(editor);
         let account = gh.resolve_account().await;
@@ -211,7 +235,17 @@ impl ReleaseList {
             ));
         }
 
-        let cancel = Cancel::new();
+        let title = match rq.op {
+            ManageOp::List => "Reading the Releases",
+            ManageOp::Delete => "Deleting a Release",
+            ManageOp::Edit => "Saving a Release",
+        };
+        let tags_file = deleted_tags_file(&session.root);
+        let (me, exec) = (self.clone(), editor.exec.clone());
+        let op = rq.op;
+        let which = if rq.id != 0 { format!("#{}", rq.id) } else { rq.tag.clone() };
+        let log = editor.log.clone();
+        let repo_job = repo.clone();
         {
             let mut v = self.view.lock();
             // another repository's releases are not this one's
@@ -227,19 +261,36 @@ impl ReleaseList {
             v.note.clear();
             v.tag_kept = false;
             v.generation += 1;
-            *self.cancel.lock() = cancel.clone();
         }
-        if rq.op != ManageOp::List {
-            let which = if rq.id != 0 { format!("#{}", rq.id) } else { rq.tag.clone() };
-            let verb = if rq.op == ManageOp::Delete { "deleting" } else { "editing" };
-            editor.log.info(format!("[XMS] {verb} release {which} in {repo}"));
+        // the last request's job says it is over a moment after its view did
+        if let Some(last) = editor.jobs.running_in("releases") {
+            editor.jobs.wait(last.id).await;
         }
-        let tags_file = deleted_tags_file(&session.root);
-        let (me, exec) = (self.clone(), editor.exec.clone());
-        editor
-            .exec
-            .spawn(async move { me.work(&gh, &exec, repo, account.token, rq, tags_file, cancel).await });
-        Ok(())
+        let started = editor.jobs.start("releases", Some("releases"), title, move |ctx| async move {
+            ctx.stage(format!("Waiting for GitHub: {repo_job}"));
+            me.work(&gh, &exec, repo_job, account.token, rq, tags_file, ctx.cancel.clone()).await;
+            let v = me.view();
+            if v.state == ManageState::Failed {
+                if ctx.cancel.is_cancelled() {
+                    return Err(JobError::from(gz_task::Cancelled));
+                }
+                return Err(JobError::new(v.error_text.clone()));
+            }
+            Ok(json!({ "releases": v.releases.len(), "note": v.note }))
+        });
+        let id = match started {
+            Ok(id) => id,
+            Err(_) => {
+                self.view.lock().state = ManageState::Idle;
+                return Err(("the release list is busy - try again in a moment".to_owned(), Setup::Ok));
+            }
+        };
+        *self.job.lock() = Some(id);
+        if op != ManageOp::List {
+            let verb = if op == ManageOp::Delete { "deleting" } else { "editing" };
+            log.info(format!("[XMS] {verb} release {which} in {repo}"));
+        }
+        Ok(id)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -342,7 +393,7 @@ impl ReleaseList {
         v.generation += 1;
     }
 
-    /// `mod_releases`'s answer; `ok` is false when the last request failed.
+    /// The list's answer; `ok` is false when the last request failed.
     #[must_use]
     pub fn json(&self) -> (bool, Value) {
         let v = self.view();
@@ -369,7 +420,6 @@ impl ReleaseList {
             v.state != ManageState::Failed,
             json!({
                 "state": v.state.text(),
-                "pending": v.state == ManageState::Running,
                 "repo": v.repo,
                 "note": v.note,
                 "tag_kept": v.tag_kept,

@@ -8,7 +8,6 @@
 
 mod cli;
 mod commandlet;
-mod compile;
 mod core_cmds;
 mod launch;
 mod startup;
@@ -54,15 +53,10 @@ fn main() -> ExitCode {
     let paths = app_paths(&cli);
 
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "user".to_owned()).to_lowercase();
-    // A compile run and a commandlet keep logs of their own: neither takes the log of an editor
-    // that is open on the same home.
-    let log_name = if cli.compile.is_some() {
-        format!("grizzly_compile_{user}.log")
-    } else if cli.commandlet() {
-        format!("grizzly_cmd_{user}.log")
-    } else {
-        format!("grizzly_{user}.log")
-    };
+    // A commandlet keeps a log of its own: it never takes the log of an editor that is open on
+    // the same home.
+    let log_name =
+        if cli.commandlet() { format!("grizzly_cmd_{user}.log") } else { format!("grizzly_{user}.log") };
     let log_file = paths.logs.join(log_name);
     let (log, _log_guard) = match Log::start(Some(log_file.as_path()), cli.echo) {
         Ok(started) => started,
@@ -86,9 +80,6 @@ fn main() -> ExitCode {
     }
     if cli.bad_ui_scale {
         log.warn("-uiscale wants a scale from 0.5 to 4, e.g. -uiscale 1.5");
-    }
-    if let Some((what, folder, flags)) = &cli.compile {
-        return compile::run(*what, folder, flags, &paths.root, &log);
     }
     // one editor per home: a second start hands its project to the editor that holds the home
     // (an update's restart takes over from the one that is ending, and never hands back)
@@ -133,6 +124,7 @@ fn main() -> ExitCode {
     gz_screens::install(&editor);
     gz_characters::install(&editor);
     gz_world::install(&editor);
+    gz_catalog::install(&editor);
     // the editor's own updates: a finished one tidied up, a download continued
     let start = gz_update::Start {
         updated_from: cli.updated.clone(),
@@ -256,17 +248,16 @@ fn build_registry() -> Registry {
     gz_update::register(&mut registry);
     // after gz-release: the real mod_catalog replaces its key-only stand-in
     gz_catalog::register(&mut registry);
-    gz_pda::register(&mut registry);
     gz_screens::register(&mut registry);
     gz_world::register(&mut registry);
     gz_scene::register(&mut registry);
-    gz_export_level::register(&mut registry);
     gz_levelbuild::register(&mut registry);
     gz_ui_app::register(&mut registry);
     gz_ui_mod::register(&mut registry);
     gz_ui_content::register(&mut registry);
     gz_ui_previews::register(&mut registry);
     gz_ui_pda::register(&mut registry);
+    gz_ui_release::register(&mut registry);
     // after gz-scene: it wraps property_inspector with the panels' side
     gz_ui_level::register(&mut registry);
     gz_ui_viewport::register(&mut registry);

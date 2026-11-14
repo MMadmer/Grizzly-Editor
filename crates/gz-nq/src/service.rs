@@ -120,6 +120,19 @@ impl DocHandle {
         d.rev += 1;
     }
 
+    /// Problems of the document at their places in its file (as it was last read or saved).
+    #[must_use]
+    pub fn positioned(&self, problems: &[crate::NqProblem]) -> Vec<Problem> {
+        let on = self.on_disk.lock();
+        problems
+            .iter()
+            .map(|p| match on.as_ref() {
+                Some(o) => crate::kind::positioned(p, &o.asset),
+                None => Problem::warning(p.code.clone(), p.message.clone()),
+            })
+            .collect()
+    }
+
     /// What reading the file found that the graph's own check does not say: the header, a byte
     /// order mark, an old version.
     #[must_use]
@@ -175,6 +188,8 @@ pub struct ValidateEnv {
     pub globals: Vec<String>,
     pub level: Option<String>,
     pub index: Arc<IndexSnapshot>,
+    /// The sections the module itself brings.
+    pub own_sections: Arc<gz_mod::SectionSet>,
     /// The fingerprint of all of it.
     pub rev: Rev,
 }
@@ -194,6 +209,7 @@ impl ValidateEnv {
             caps: self.caps.as_deref(),
             characters: &self.characters,
             globals: &self.globals,
+            own_sections: Some(&self.own_sections),
         };
         validate::run(g, &self.catalog, &ctx)
     }
@@ -709,14 +725,16 @@ impl NqService {
         let (grev, globals, _) = self.globals(editor).await;
         let level = self.scene_lookup().and_then(|s| s.level());
         let index = self.index(editor, overlay).await;
+        let own_sections = gz_mod::own_sections(editor).await;
         let rev = Rev(u64::from(catalog.generation))
+            .mix(Rev(own_sections.generation()))
             .mix(self.project.game_rev())
             .mix(self.tree().rev())
             .mix(self.scene_lookup().map_or(Rev::ZERO, |s| s.rev()))
             .mix(crev)
             .mix(grev)
             .mix(Rev(index.fingerprint));
-        Arc::new(ValidateEnv { catalog, pickers, caps, characters, globals, level, index, rev })
+        Arc::new(ValidateEnv { catalog, pickers, caps, characters, globals, level, index, own_sections, rev })
     }
 
     /// The problems of an open document (`NqDoc::Validate`): computed once per content and per
@@ -866,7 +884,11 @@ fn stamp(tree: &FileTree, dirs: &[(&str, &str)]) -> Rev {
 /// What reading a file found, as a problem of the graph.
 fn read_problem(p: &Problem) -> NqProblem {
     NqProblem {
-        severity: if p.is_error() { validate::Severity::Error } else { validate::Severity::Warning },
+        severity: match p.severity {
+            gz_base::Severity::Error => validate::Severity::Error,
+            gz_base::Severity::Note => validate::Severity::Note,
+            _ => validate::Severity::Warning,
+        },
         code: p.code.clone(),
         node: String::new(),
         slot: String::new(),

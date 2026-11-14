@@ -21,7 +21,7 @@
 //!   several files imports them in parallel, and two imports at once never write over each
 //!   other.
 //! - [`validate()`] - `E401`..`W411` with the C++ texts.
-//! - [`register`]: `screens_get`, `screens_set`; [`install`]: the build's check (an `E4xx`
+//! - [`register`]: `screens.info`, `screens.set`, `screens.import`; [`install`]: the build's check (an `E4xx`
 //!   refuses the build); [`GameLevels`]: where the world area hangs the linked game's levels
 //!   for `W407`; [`answer`] - the reply both commands give.
 

@@ -5,10 +5,10 @@
 //! the same arguments and its own streams, waits for it and ends with its exit code:
 //!
 //! ```text
-//! Grizzly-Cmd.exe -headless -compile <level folder> > compile.log
+//! Grizzly-Cmd.exe run level.compile folder=D:/Levels/l01_escape > compile.log
 //! ```
 //!
-//! A run without a window (a compile, a dump, a headless editor) lives in this console: the
+//! A run without a window (a commandlet, a dump, a headless editor) lives in this console: the
 //! editor joins it, closes what it has open when the console ends (Ctrl+C, the console closed)
 //! and never outlives this program. A run with a window is the editor as Explorer starts it:
 //! this program waits for it, and the console's end ends only this program - no console can end

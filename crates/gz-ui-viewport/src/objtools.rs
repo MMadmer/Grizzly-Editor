@@ -1,7 +1,6 @@
-//! The viewport's gestures of the Sector, Way and Shape tools (`TUI_ControlSectorAdd`,
-//! `TUI_ControlWayPointAdd`, `CWayObject::RaySelect` / `FrustumSelect` / `Move` in Points mode,
-//! `TUI_ControlShapeAdd`). Each reads a snapshot, picks on the CPU pool and sends one of
-//! `gz-scene`'s object tool edits - the same functions `sector_tool`, `way_tool` and `shape_tool`
+//! The viewport's gestures of the zones, the way paths (adding, picking, boxing and moving
+//! points in Points mode) and the shapes. Each reads a snapshot, picks on the CPU pool and sends one of
+//! `gz-scene`'s object tool edits - the same functions `scene.zones`, `way_tool` and `shape_tool`
 //! call; a drag is one merged undo step sealed on release.
 
 use std::sync::Arc;
@@ -70,7 +69,7 @@ pub(crate) fn place_press(
     let Some(svc) = svc(editor) else { return ToolGesture::None };
     let snap = svc.store.snapshot();
     let t = snap.tools.obj;
-    match snap.tools.target {
+    match snap.tools.mode_kind() {
         ObjClass::Sector => {
             if t.sector.create_single {
                 sector_new(editor, vp, ray, b, false);
@@ -100,7 +99,8 @@ pub(crate) fn place_press(
             paint_step(editor, vp, &paint, ray);
             ToolGesture::Paint(paint)
         }
-        ObjClass::Way if t.way_points => {
+        // with a way path selected, Place adds points to it
+        ObjClass::Way if !objtools::selected_of(&snap, ObjClass::Way).is_empty() => {
             way_add_point(editor, vp, ray, b);
             ToolGesture::Done
         }
@@ -215,7 +215,7 @@ pub fn rect_planes(cam: &gz_render::Camera, size: [u32; 2], a: G2, b: G2) -> Opt
     Some(gz_render::Frustum::from_view_proj(&(s * cam.view_proj(size))).planes)
 }
 
-/// The end of a box pick (`TUI_ControlSectorAdd::End`): the meshes in the box added to or taken
+/// The end of a box pick: the meshes in the box added to or taken
 /// from the selected sector.
 pub(crate) fn box_pick_end(editor: &Arc<Editor>, vp: &Viewport, size: [u32; 2], a: G2, b: G2) {
     let Some(svc) = svc(editor) else { return };
@@ -253,7 +253,7 @@ pub(crate) fn box_pick_end(editor: &Arc<Editor>, vp: &Viewport, size: [u32; 2], 
     });
 }
 
-/// `TUI_ControlWayPointAdd::Start`: a point of the one selected way where the ground is hit,
+/// A point of the one selected way where the ground is hit,
 /// linked from its selected point with Auto Link; Alt keeps adding.
 fn way_add_point(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
     let Some(svc) = svc(editor) else { return };
@@ -339,7 +339,7 @@ fn shape_attach(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) 
     });
 }
 
-/// The Spawn tool's Attach on Click (`TUI_ControlSpawnAdd::Start`): the object under the mouse
+/// Attach on Click: the object under the mouse
 /// attaches to the one selected spawn point; the switch goes off after one unless Alt is held.
 fn spawn_attach(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
     let Some(svc) = svc(editor) else { return };
@@ -363,9 +363,8 @@ fn spawn_attach(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) 
             return;
         };
         let mut a = gz_editor::Args::new();
-        a.insert("action".into(), Value::String("attach".into()));
         a.insert("object".into(), Value::String(name));
-        let r = ed.call("spawn_attach", a, origin).await;
+        let r = ed.call("scene.attach", a, origin).await;
         if r.get("ok").and_then(Value::as_bool) != Some(true) {
             ed.log.error(r.get("error").and_then(Value::as_str).unwrap_or("Attach impossible.").to_owned());
         } else if !b.alt {
@@ -383,16 +382,19 @@ pub fn new_shape(editor: &Arc<Editor>) -> ObjData {
     ObjData::Shape(shape::new_shape_data(sphere))
 }
 
-/// Whether the Way tool works on points now (Points mode with the Way tool current).
+/// Whether clicks work on way points now: Place mode with way paths armed and one selected (its
+/// points are picked, added and moved like objects).
 #[must_use]
 pub fn way_points_mode(editor: &Arc<Editor>) -> bool {
     svc(editor).is_some_and(|s| {
         let snap = s.store.snapshot();
-        snap.tools.target == ObjClass::Way && snap.tools.obj.way_points
+        snap.tools.mode == gz_scene::SceneMode::Place
+            && snap.tools.placing == ObjClass::Way
+            && !objtools::selected_of(&snap, ObjClass::Way).is_empty()
     })
 }
 
-/// A click of the selection in Points mode (`CWayObject::RaySelect`): without Ctl the points of
+/// A click of the selection in Points mode: without Ctl the points of
 /// the selected ways are let go first; the nearest point of a visible way is selected (Ctrl
 /// toggles it).
 pub(crate) fn way_point_click(editor: &Arc<Editor>, vp: &Viewport, ray: Ray, b: Buttons) {
@@ -405,10 +407,13 @@ pub(crate) fn way_point_click(editor: &Arc<Editor>, vp: &Viewport, ray: Ray, b: 
         let snap = svc.store.snapshot();
         if !b.ctrl {
             if any {
-                for c in ObjClass::ALL.iter().copied().filter(|c| *c != ObjClass::Way) {
-                    let _ =
-                        svc.store.send(SceneCmd::SelectClass { class: Some(c), select: false }, origin).await;
-                }
+                let others: Vec<_> = snap
+                    .selected_in_order()
+                    .into_iter()
+                    .filter(|id| snap.get(*id).is_some_and(|o| o.class != ObjClass::Way))
+                    .collect();
+                let _ =
+                    svc.store.send(SceneCmd::Select { ids: others, mode: SelectMode::Remove }, origin).await;
             }
             for id in objtools::selected_of(&snap, ObjClass::Way) {
                 let _ = svc
@@ -448,7 +453,7 @@ pub(crate) fn way_point_click(editor: &Arc<Editor>, vp: &Viewport, ray: Ray, b: 
     });
 }
 
-/// A marquee in Points mode (`CWayObject::FrustumSelect`): the points of the selected ways inside
+/// A marquee in Points mode: the points of the selected ways inside
 /// the box are selected.
 pub(crate) fn way_points_marquee(editor: &Arc<Editor>, vp: &Viewport, size: [u32; 2], a: G2, b: G2) {
     let Some(svc) = svc(editor) else { return };
@@ -510,7 +515,7 @@ pub fn held_points(editor: &Arc<Editor>, ways: &[ObjId]) -> Vec<(ObjId, Vec<(usi
         .collect()
 }
 
-/// `CWayObject::Move` in Points mode: the held points moved by `delta`, one merged undo step.
+/// A drag in Points mode: the held points moved by `delta`, one merged undo step.
 pub(crate) fn move_points(
     svc: &SceneService,
     held: &[(ObjId, Vec<(usize, Vec3)>)],

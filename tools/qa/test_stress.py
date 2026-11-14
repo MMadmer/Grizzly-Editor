@@ -124,10 +124,10 @@ class Load:
     # ---- the workers -------------------------------------------------------------------------
     def reader(self, seed: int) -> None:
         rnd = random.Random(seed)
-        reads = [("state", {}), ("scene_info", {}), ("list_objects", {"class": "spawn", "limit": 20}),
-                 ("game.lookup", {"type": "quest_id"}), ("mod_manifest", {}), ("ui.tasks", {}), ("frame_pacing", {}),
-                 ("camera_get", {}), ("ui.list", {}), ("scene_stats", {}), ("selection", {}),
-                 ("list_commands", {}), ("asset.check", {"path": "mod.ltx"}), ("world_get", {}), ("scene_load_status", {})]
+        reads = [("state", {}), ("scene.info", {}), ("scene.objects", {"classes": ["spawn"], "limit": 20}),
+                 ("game.lookup", {"type": "quest_id"}), ("mod.info", {}), ("ui.tasks", {}), ("frame_pacing", {}),
+                 ("camera_get", {}), ("ui.list", {}), ("scene.get", {}), ("scene.objects", {"selected": True}),
+                 ("list_commands", {}), ("asset.check", {"path": "mod.ltx"}), ("world.info", {}), ("scene.info", {"summary": False})]
         while self.running():
             cmd, args = rnd.choice(reads)
             a, dt, why = call(cmd, **args)
@@ -137,13 +137,14 @@ class Load:
         rnd = random.Random(seed)
         while self.running():
             x, z = rnd.uniform(-250, -200), rnd.uniform(-180, -140)
-            a, dt, why = call("place_spawn", section="graph_point", x=x, y=-20.0, z=z, snap_to_ground=False)
-            self.note("place_spawn", a, dt, why)
+            a, dt, why = call("scene.place", kind="spawn", section="graph_point", position=[x, -20.0, z])
+            self.note("scene.place", a, dt, why)
             name = ((a or {}).get("object") or {}).get("name", "graph_point")
             for cmd, args in (("camera_set", {"x": x, "y": 10.0, "z": z}),
-                              ("select_objects", {"names": name}),
-                              ("object_set_position", {"name": name, "x": x, "y": -19.0, "z": z}),
-                              ("undo", {}), ("redo", {}), ("deselect_all", {})):
+                              ("scene.select", {"objects": [name]}),
+                              ("scene.set", {"objects": [name], "position": [x, -19.0, z]}),
+                              ("doc.undo", {"doc": "level"}), ("doc.redo", {"doc": "level"}),
+                              ("scene.select", {"none": True})):
                 a, dt, why = call(cmd, **args)
                 self.note(cmd, a, dt, why)
 
@@ -165,8 +166,8 @@ class Load:
         while self.running():
             self.builds[0] += 1
             # a build of this module takes a second or two: twenty is a hang
-            a, dt, why = call("mod_export", timeout=20, target=self.target)
-            self.note("mod_export", a, dt, why)
+            a, dt, why = call("mod.build", timeout=20, target="folder", path=self.target)
+            self.note("mod.build", a, dt, why)
             if a and a.get("ok"):
                 self.builds[1] += 1
             elif a:
@@ -175,8 +176,8 @@ class Load:
     def loader(self) -> None:
         while self.running():
             self.loads[0] += 1
-            a, dt, why = call("open_scene", timeout=20, scene="l01_escape.level", discard=True)
-            self.note("open_scene", a, dt, why)
+            a, dt, why = call("scene.open", timeout=20, path="rawdata/levels/l01_escape.level", discard=True)
+            self.note("scene.open", a, dt, why)
             if a and a.get("ok"):
                 self.loads[1] += 1
 
@@ -200,7 +201,7 @@ def run(project: str, seconds: float, out_dir: str) -> None:
     try:
         end = time.monotonic() + 60
         while time.monotonic() < end:
-            a, _, _ = call("scene_load_status", timeout=5)
+            a, _, _ = call("scene.info", timeout=5)
             if a and a.get("loaded"):
                 break
             if proc.poll() is not None:

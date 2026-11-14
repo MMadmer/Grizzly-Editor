@@ -392,8 +392,8 @@ def phase_c(project, shots, ed, before_scale, contract) -> None:
               "C from the quest tab to Level and back, no tab moves", json.dumps({"quest": on_quest, "level": on_level}))
         with open(os.path.join(project, rel), "rb") as f:
             on_disk = f.read()
-        mcp("quest_edit", path=rel, op="select_all")
-        mcp("quest_edit", path=rel, op="duplicate")
+        mcp("graph.view", doc=quest, select="all")
+        mcp("graph.edit", doc=quest, ops=[{"op": "duplicate"}])
         info = mcp("ui.tab", action="list")
         dirty = any(t.get("id") == quest and t.get("dirty") for t in info.get("tabs", []))
         if check(dirty, "C an edit leaves the quest tab dirty", short(info)):
@@ -672,7 +672,7 @@ def phase_j(project, shots, ed, before_scale, contract) -> None:
         o = mcp("ui.tab", action="open", kind="quest", path=rel)
         if check(o.get("ok"), "J a quest tab opens", short(o)):
             opened.append((o.get("tab") or {}).get("id"))
-            mcp("quest_view", path=rel, frame="all")
+            mcp("graph.view", doc="quest:" + rel.replace("\\", "/"), frame="all")
             shot(shots, "frame_graph")
     beh = mcp("file.create", kind="behaviour")
     brel = (beh.get("path") or "").replace("/", "\\")

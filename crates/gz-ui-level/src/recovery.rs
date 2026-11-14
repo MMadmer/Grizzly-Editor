@@ -102,7 +102,7 @@ fn post(editor: &Arc<Editor>, action: &str) {
     editor.exec.spawn(async move {
         let mut args = Args::new();
         args.insert("action".into(), Value::String(action));
-        let reply = ed.call("recovery", args, ed.ui_origin()).await;
+        let reply = ed.call("scene.recover", args, ed.ui_origin()).await;
         if reply.get("ok").and_then(Value::as_bool) != Some(true) {
             let e = reply
                 .get("error")

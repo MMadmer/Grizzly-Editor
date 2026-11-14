@@ -280,7 +280,11 @@ impl WorldService {
         } else {
             None
         };
-        let known = pickers.as_ref().map(|p| move |id: &str| p.known(PickerType::Item, id));
+        // an item the module brings itself is known too
+        let own = if pickers.is_some() { Some(gz_mod::own_sections(editor).await) } else { None };
+        let known = pickers.as_ref().map(|p| {
+            move |id: &str| p.known(PickerType::Item, id) || own.as_ref().is_some_and(|o| o.has(id))
+        });
         let problems =
             validate(w, k, &starts, Some(&game), known.as_ref().map(|f| f as &dyn Fn(&str) -> bool));
         (starts, problems)

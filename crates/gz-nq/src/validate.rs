@@ -17,6 +17,8 @@ use crate::text::{self, cp1251_covers, id_from_name, split, trim, valid_id};
 pub enum Severity {
     Error,
     Warning,
+    /// Worth knowing, nothing wrong: a disabled node.
+    Note,
 }
 
 /// One problem: `CODE node[slot]: message` (`SNqProblem`).
@@ -38,6 +40,21 @@ impl NqProblem {
         self.severity == Severity::Error
     }
 
+    #[must_use]
+    pub fn is_note(&self) -> bool {
+        self.severity == Severity::Note
+    }
+
+    /// `error`, `warning` or `note`.
+    #[must_use]
+    pub fn severity_word(&self) -> &'static str {
+        match self.severity {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+            Severity::Note => "note",
+        }
+    }
+
     /// `E007 node[slot]: message`.
     #[must_use]
     pub fn text(&self) -> String {
@@ -56,14 +73,32 @@ impl NqProblem {
         s
     }
 
+    /// The message as the author reads it: a sentence, capitalised and ended; the code stays in
+    /// the tooltip and in commands.
+    #[must_use]
+    pub fn sentence(&self) -> String {
+        let m = self.message.trim();
+        let mut out = String::with_capacity(m.len() + 1);
+        let mut chars = m.chars();
+        if let Some(c) = chars.next() {
+            out.extend(c.to_uppercase());
+            out.push_str(chars.as_str());
+        }
+        if !out.ends_with(['.', '!', '?']) {
+            out.push('.');
+        }
+        out
+    }
+
     #[must_use]
     pub fn to_json(&self) -> Json {
         json!({
             "code": self.code,
-            "severity": if self.is_error() { "error" } else { "warning" },
+            "severity": self.severity_word(),
             "node": self.node,
             "slot": self.slot,
             "message": self.message,
+            "sentence": self.sentence(),
         })
     }
 }
@@ -90,7 +125,7 @@ pub fn count_errors(v: &[NqProblem]) -> usize {
 
 #[must_use]
 pub fn count_warnings(v: &[NqProblem]) -> usize {
-    v.iter().filter(|p| !p.is_error()).count()
+    v.iter().filter(|p| p.severity == Severity::Warning).count()
 }
 
 #[must_use]
@@ -144,6 +179,8 @@ pub struct Context<'a> {
     pub characters: &'a [CharacterBrief],
     /// The module's global variables (`mod.ltx [vars]`).
     pub globals: &'a [String],
+    /// The sections the module itself brings (`W060`: an item of the module is known).
+    pub own_sections: Option<&'a gz_mod::SectionSet>,
 }
 
 struct RefSite {
@@ -307,6 +344,12 @@ impl<'a> V<'a> {
     fn check_indexed(&mut self, t: Option<PickerType>, value: &str, node: Option<&str>, slot: &str) {
         let (Some(p), Some(t)) = (self.pickers, t) else { return };
         if value.is_empty() || p.entries(t).is_empty() || p.known(t, value) {
+            return;
+        }
+        // a section the module brings itself is no unknown section of the game with it on
+        if matches!(t, PickerType::Item | PickerType::Squad | PickerType::SpawnSection)
+            && self.ctx.own_sections.is_some_and(|o| o.has(value))
+        {
             return;
         }
         // restrictors are the one index the project fills, not the game
@@ -2317,6 +2360,20 @@ pub fn run(q: &Graph, catalog: &Catalog, ctx: &Context<'_>) -> Vec<NqProblem> {
     for (i, n) in q.nodes.iter().enumerate() {
         if !reach.get(i).copied().unwrap_or(false) && !catalog.is_trigger(&n.kind) {
             v.warn("W020", Some(&n.id), "", "node is not reachable from any trigger".into());
+        }
+        if n.disabled {
+            let what = if catalog.is_trigger(&n.kind) {
+                "the trigger is disabled: it never fires"
+            } else {
+                "the node is disabled: the game passes it through without running it"
+            };
+            v.out.push(NqProblem {
+                severity: Severity::Note,
+                code: "disabled".into(),
+                node: n.id.to_string(),
+                slot: String::new(),
+                message: what.into(),
+            });
         }
     }
     v.check_dialogs();

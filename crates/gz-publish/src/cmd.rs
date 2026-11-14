@@ -1,205 +1,336 @@
-//! The commands. The wire is frozen by the C++ handlers reached from `LevelMcpMod.cpp`:
-//! `mod_publish` (`EditorPublish::McpPublish`) and `mod_releases` (`EditorPublish::McpReleases`).
-//! `mod_publish start` answers once the packaging has ended - the upload then runs and `status`
-//! follows it - while every other command goes on meanwhile. The MCP path asks nothing: a caller
-//! that wants a permission asks for it on its own side. A token goes in through `save_token` and
-//! never comes out.
+//! The commands: `release.publish` (package, scan a listed module, put the release on GitHub - a
+//! job the command waits for), `release.account` (where the GitHub account comes from, a token
+//! stored, the device sign-in), `release.list`, `release.edit` and `release.delete` (what the
+//! repository holds). They ask nothing: a caller that wants a permission asks for it on its own
+//! side. A token goes in and never comes out.
 
 use std::sync::Arc;
 
 use gz_base::Origin;
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Registry, Reply};
+use gz_editor::{CmdError, Editor, JobId, Registry, Reply, Spec};
 use gz_github::{Github, Secret};
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
-use crate::job::{MAX_NOTES, PublishOptions, Publisher, reply};
+use crate::job::{MAX_NOTES, PublishOptions, PublishState, Publisher, reply};
 use crate::manage::{ManageOp, ManageRequest, ReleaseList};
 
-const AREA: &str = "gz-publish";
-
 pub fn register(reg: &mut Registry) {
-    reg.add(AREA, "mod_publish", mod_publish);
-    reg.add(AREA, "mod_releases", mod_releases);
+    reg.cmd(
+        Spec::publish(
+            "release.publish",
+            "Packages the module and publishes it as the latest GitHub release of [update] github; answers when it is out.",
+        )
+        .example("notes=\"Fixes the night shift.\""),
+        release_publish,
+    );
+    reg.cmd(
+        Spec::write(
+            "release.account",
+            "The GitHub account and the VirusTotal key: where they come from, a token or key stored, the device sign-in, signing out.",
+        )
+        .example("action=status"),
+        release_account,
+    );
+    reg.cmd(
+        Spec::read("release.list", "The releases the module's GitHub repository holds, drafts included."),
+        release_list,
+    );
+    reg.cmd(
+        Spec::write("release.edit", "Changes the title or the notes of a release on GitHub.")
+            .example("tag=v1.2.0 notes=\"...\""),
+        release_edit,
+    );
+    reg.cmd(
+        Spec::destroy(
+            "release.delete",
+            "Deletes a release and its git tag on GitHub for good; players are then served the release before it.",
+        )
+        .example("tag=v1.2.0"),
+        release_delete,
+    );
 }
 
 fn refuse(message: impl Into<String>) -> CmdError {
     CmdError::new("refused", message)
 }
 
-/// A string argument the way `GetArg` read it: present means given, even empty.
-fn arg(args: &Args, key: &str) -> Option<String> {
-    match args.get(key)? {
-        Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        Value::Bool(b) => Some(b.to_string()),
-        _ => None,
-    }
+const fn yes() -> bool {
+    true
 }
 
-/// A secret argument taken out of the request, so that the only copy is wiped when it goes.
-fn take_secret(args: &mut Args, key: &str) -> Option<Zeroizing<String>> {
-    match args.remove(key)? {
-        Value::String(s) => Some(Zeroizing::new(s)),
-        Value::Number(n) => Some(Zeroizing::new(n.to_string())),
-        Value::Bool(b) => Some(Zeroizing::new(b.to_string())),
-        _ => None,
-    }
+// ---- release.publish --------------------------------------------------------------------------
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PublishParams {
+    /// The release notes (Markdown).
+    #[serde(default)]
+    notes: String,
+    /// The git tag. Left out: `v<version>`, or `v<version>-rN` while a plainer one was deleted
+    /// within the hour.
+    #[serde(default)]
+    tag: String,
+    /// The title. Left out: `<name> <version>`.
+    #[serde(default)]
+    title: String,
+    /// The lowest game version the release runs on. Left out: the linked game's version; empty:
+    /// no requirement.
+    #[serde(default)]
+    requires_game: Option<String>,
+    /// Marks the release a pre-release: it never becomes the latest.
+    #[serde(default)]
+    prerelease: bool,
+    /// Makes it the latest release - the one players are served.
+    #[serde(default = "yes")]
+    latest: bool,
+    /// The author key's password, when its file has one. Never echoed or logged.
+    #[serde(default)]
+    password: Option<String>,
+    /// Wait until the release is out or refused (true), or answer the packaging's job at once
+    /// (false; its result names the upload's job, `job.wait` with no job waits for both).
+    #[serde(default = "yes")]
+    wait: bool,
 }
 
-/// `"id"` as a bare number or a quoted one; 0 when absent.
-fn arg_u64(args: &Args, key: &str) -> u64 {
-    match args.get(key) {
-        Some(Value::Number(n)) => n.as_u64().unwrap_or(0),
-        Some(Value::String(s)) => {
-            let digits = s.trim_start().bytes().take_while(u8::is_ascii_digit).count();
-            s.trim_start().get(..digits).and_then(|d| d.parse().ok()).unwrap_or(0)
-        }
-        _ => 0,
-    }
-}
-
-/// The source alone: a token goes in through MCP (`save_token`) and never comes out.
-async fn account_json(ed: &Arc<Editor>) -> Reply {
-    let gh = Github::of(ed);
-    let account = gh.resolve_account().await;
-    Ok(json!({
-        "signed_in": account.signed_in(),
-        "source": account.source.text(),
-        "device_sign_in": gh.endpoints().device_sign_in(),
-    }))
-}
-
-async fn mod_publish(ed: Arc<Editor>, mut args: Args, _origin: Origin) -> Reply {
-    let action = args.text("action").unwrap_or("start").to_owned();
+async fn release_publish(ed: Arc<Editor>, p: PublishParams, _origin: Origin) -> Reply {
     let publisher = Publisher::of(&ed);
-    match action.as_str() {
-        "status" => {
-            let (ok, v) = publisher.status_json();
-            return reply(ok, v);
-        }
-        "cancel" => {
-            publisher.cancel(&ed);
-            let (ok, v) = publisher.status_json();
-            return reply(ok, v);
-        }
-        "account" => return account_json(&ed).await,
-        "sign_in_status" => {
-            let (ok, v) = publisher.sign_json();
-            return reply(ok, v);
-        }
-        "sign_in" => {
-            if !Github::of(&ed).endpoints().device_sign_in() {
-                return Err(refuse(
-                    "the device sign-in is not set up in this build: use a token, GH_TOKEN or the GitHub CLI",
-                ));
-            }
-            // the caller hands the code over; no clipboard, no browser behind its back
-            publisher.sign_in(&ed);
-            let (ok, v) = publisher.sign_json();
-            return reply(ok, v);
-        }
-        "save_token" => {
-            // The one request that carries a token. It goes into the Credential Manager and
-            // nowhere else: not into the answer, not into the log.
-            let Some(token) = take_secret(&mut args, "token") else {
-                return Err(refuse("save_token needs 'token'"));
-            };
-            Github::of(&ed).save_token(Secret::from(token)).await.map_err(refuse)?;
-            return account_json(&ed).await;
-        }
-        "sign_out" => {
-            publisher.sign_stop();
-            Github::of(&ed).forget_token().await;
-            return account_json(&ed).await;
-        }
-        "start" => {}
-        _ => {
-            return Err(refuse(
-                "unknown action: start, status, cancel, account, save_token, sign_in, sign_in_status or sign_out expected",
-            ));
-        }
-    }
-    if args.flag("answer_only") {
-        let (ok, v) = publisher.started_json();
-        return reply(ok, v);
-    }
-
-    // the author key's password, when the key file has one; never echoed or logged
-    if let Some(password) = take_secret(&mut args, "password").filter(|p| !p.is_empty()) {
-        let keys = gz_release::AuthorKeys::of(&ed);
-        ed.exec.io(move || keys.unlock(&password)).await.map_err(|e| refuse(format!("author key: {e}")))?;
-    }
+    gz_release::unlock_with(&ed, p.password).await?;
     let options = PublishOptions {
-        tag: arg(&args, "tag").unwrap_or_default(),
-        title: arg(&args, "title").unwrap_or_default(),
-        notes: arg(&args, "notes").unwrap_or_default(),
-        // absent = the linked game's version, present but empty = no requirement
-        requires_game: arg(&args, "requires_game"),
-        prerelease: args.bool("prerelease").unwrap_or(false),
-        latest: args.bool("latest").unwrap_or(true),
+        tag: p.tag,
+        title: p.title,
+        notes: p.notes,
+        requires_game: p.requires_game,
+        prerelease: p.prerelease,
+        latest: p.latest,
     };
     let id = publisher.start(&ed, options, false).await.map_err(refuse)?;
-    // held until the packaging ended: the upload is on its way, or the release was refused
+    if !p.wait {
+        return Ok(json!({ "job": id.0 }));
+    }
     ed.jobs.wait(id).await;
-    let (ok, v) = publisher.started_json();
+    if let Some(upload) = publisher.upload_job() {
+        ed.jobs.wait(upload).await;
+    }
+    let (ok, mut v) = publisher.started_json();
+    // a state the jobs left behind them: never "still running" once both ended
+    if ok
+        && publisher.view().state.running()
+        && let Value::Object(map) = &mut v
+    {
+        map.insert("state".into(), json!(PublishState::Failed.text()));
+    }
     reply(ok, v)
 }
 
-async fn mod_releases(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
-    let action = args.text("action").unwrap_or("list").to_owned();
-    let list = ReleaseList::of(&ed);
-    let answer = |list: &ReleaseList| {
-        let (ok, v) = list.json();
-        reply(ok, v)
-    };
-    let op = match action.as_str() {
-        "status" => return answer(&list),
-        "cancel" => {
-            list.cancel();
-            return answer(&list);
-        }
-        "delete" => ManageOp::Delete,
-        "edit" => ManageOp::Edit,
-        "list" | "select" => ManageOp::List,
-        _ => return Err(refuse("unknown action: list, edit, delete, select, status or cancel expected")),
-    };
-    let select = action == "select";
+// ---- release.account --------------------------------------------------------------------------
 
-    // MCP is the programmatic path: the caller has decided, nothing is asked
-    let mut rq = ManageRequest { op, ..ManageRequest::default() };
-    if op != ManageOp::List || select {
-        rq.tag = arg(&args, "tag").unwrap_or_default();
-        rq.id = arg_u64(&args, "id");
-        if rq.id == 0 && rq.tag.is_empty() {
-            return Err(refuse("name the release: 'id' or 'tag'"));
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum AccountAction {
+    /// Whether a GitHub account and a VirusTotal key are there, and where they come from.
+    #[default]
+    Status,
+    /// Stores a GitHub token (`token`) in the Credential Manager.
+    SaveToken,
+    /// The device sign-in: answers the code to confirm on GitHub and the job that waits for it.
+    SignIn,
+    /// Forgets the stored GitHub token (and stops a sign-in in flight).
+    SignOut,
+    /// Stores a VirusTotal API key (`key`) in the Credential Manager.
+    SaveVtKey,
+    /// Forgets the stored VirusTotal key. The author key is never touched.
+    ForgetVtKey,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AccountParams {
+    #[serde(default)]
+    action: AccountAction,
+    /// A GitHub token, for `save_token`. Stored, never echoed or logged.
+    #[serde(default)]
+    token: Option<String>,
+    /// A VirusTotal API key, for `save_vt_key`. Stored, never echoed or logged.
+    #[serde(default)]
+    key: Option<String>,
+}
+
+/// The sources alone: a token goes in and never comes out.
+async fn account_json(ed: &Arc<Editor>) -> Value {
+    let gh = Github::of(ed);
+    let account = gh.resolve_account().await;
+    let vt = gh.read_vt_key().await.is_some();
+    json!({
+        "signed_in": account.signed_in(),
+        "source": account.source.text(),
+        "device_sign_in": gh.endpoints().device_sign_in(),
+        "vt_key": vt,
+    })
+}
+
+async fn release_account(ed: Arc<Editor>, p: AccountParams, _origin: Origin) -> Reply {
+    let publisher = Publisher::of(&ed);
+    let gh = Github::of(&ed);
+    let mut extra: Option<(JobId, String, String)> = None;
+    match p.action {
+        AccountAction::Status => {}
+        AccountAction::SaveToken => {
+            let Some(token) = p.token.map(Zeroizing::new).filter(|t| !t.is_empty()) else {
+                return Err(CmdError::invalid("save_token needs token"));
+            };
+            gh.save_token(Secret::from(token)).await.map_err(refuse)?;
         }
-        if op == ManageOp::Edit {
-            // a field that is absent keeps its value; an empty one clears it
-            rq.title = arg(&args, "title");
-            rq.notes = arg(&args, "notes");
-            if rq.title.is_none() && rq.notes.is_none() {
-                return Err(refuse("edit needs 'title' or 'notes'"));
+        AccountAction::SignOut => {
+            publisher.sign_stop();
+            gh.forget_token().await;
+        }
+        AccountAction::SaveVtKey => {
+            let Some(key) = p.key.map(Zeroizing::new).filter(|k| !k.is_empty()) else {
+                return Err(CmdError::invalid("save_vt_key needs key"));
+            };
+            gh.save_vt_key(Secret::from(key)).await.map_err(refuse)?;
+        }
+        AccountAction::ForgetVtKey => gh.forget_vt_key().await,
+        AccountAction::SignIn => {
+            if !gh.endpoints().device_sign_in() {
+                return Err(refuse(
+                    "the device sign-in is not set up in this build: store a token (action=save_token), set GH_TOKEN or sign in to the GitHub CLI (gh auth login)",
+                ));
             }
-            if rq.title.as_ref().is_some_and(|t| t.len() > 200)
-                || rq.notes.as_ref().is_some_and(|n| n.len() > MAX_NOTES)
-            {
-                return Err(refuse("the title takes 200 characters, the notes 120 000"));
+            let Some(job) = publisher.sign_in(&ed) else {
+                return Err(CmdError::busy("a sign-in is under way already"));
+            };
+            // the caller hands the code over: no clipboard, no browser behind its back
+            loop {
+                let s = publisher.sign_view();
+                if !s.user_code.is_empty() {
+                    extra = Some((job, s.user_code, s.uri));
+                    break;
+                }
+                if ed.jobs.get(job).is_none_or(|j| !j.running()) {
+                    let info = ed.jobs.wait(job).await;
+                    let why =
+                        info.and_then(|i| i.error).unwrap_or_else(|| "the sign-in did not start".to_owned());
+                    return Err(refuse(why));
+                }
+                // GitHub answers the code in a moment; the job's own deadline ends the wait
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
         }
     }
-    // the release the tab's details are about, from the list as it was last read: nothing goes
-    // to GitHub; show=edit puts the edit dialog up for that release, to be looked at
-    if select {
-        let show = arg(&args, "show").unwrap_or_default();
-        if !show.is_empty() && show != "edit" {
-            return Err(refuse("show: edit expected"));
-        }
-        list.select_release(rq.id, &rq.tag, show == "edit").map_err(refuse)?;
-        return answer(&list);
+    let mut answer = account_json(&ed).await;
+    if let (Some((job, code, uri)), Value::Object(map)) = (extra, &mut answer) {
+        map.insert("job".into(), json!(job.0));
+        map.insert("user_code".into(), json!(code));
+        map.insert("verification_uri".into(), json!(uri));
     }
-    list.start(&ed, rq).await.map_err(|(e, _)| refuse(e))?;
-    answer(&list)
+    Ok(answer)
+}
+
+// ---- release.list / edit / delete -------------------------------------------------------------
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ListParams {
+    /// Wait for GitHub's answer (true) or answer the job at once (false).
+    #[serde(default = "yes")]
+    wait: bool,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct EditParams {
+    /// The release's id, as `release.list` answers it.
+    #[serde(default)]
+    id: Option<u64>,
+    /// Its tag, when that is what the caller knows (a draft may share a tag: then name the id).
+    #[serde(default)]
+    tag: Option<String>,
+    /// The new title (200 characters at most). Left out: kept; empty: cleared.
+    #[serde(default)]
+    title: Option<String>,
+    /// The new notes. Left out: kept; empty: cleared.
+    #[serde(default)]
+    notes: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DeleteParams {
+    /// The release's id, as `release.list` answers it.
+    #[serde(default)]
+    id: Option<u64>,
+    /// Its tag, when that is what the caller knows (a draft may share a tag: then name the id).
+    #[serde(default)]
+    tag: Option<String>,
+}
+
+/// Runs a request of the list as a job and answers what GitHub holds after it.
+async fn run_list(ed: &Arc<Editor>, rq: ManageRequest, wait: bool) -> Reply {
+    let list = ReleaseList::of(ed);
+    // a read already on its way (the tab or the dialog asked) is the answer to wait for; a
+    // request is marked running a moment before its job has an id
+    let mut in_flight = list.running_job();
+    for _ in 0..100 {
+        if in_flight.is_some() || !list.running() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        in_flight = list.running_job();
+    }
+    if rq.op == ManageOp::List
+        && let Some(id) = in_flight
+    {
+        if !wait {
+            return Ok(json!({ "job": id.0 }));
+        }
+        ed.jobs.wait(id).await;
+        let (ok, v) = list.json();
+        return reply(ok, v);
+    }
+    let id = list.start(ed, rq).await.map_err(|(e, _)| refuse(e))?;
+    if !wait {
+        return Ok(json!({ "job": id.0 }));
+    }
+    ed.jobs.wait(id).await;
+    let (ok, v) = list.json();
+    reply(ok, v)
+}
+
+fn named(id: Option<u64>, tag: Option<String>) -> Result<(u64, String), CmdError> {
+    let id = id.unwrap_or(0);
+    let tag = tag.unwrap_or_default();
+    if id == 0 && tag.is_empty() {
+        return Err(CmdError::invalid("name the release: id or tag"));
+    }
+    Ok((id, tag))
+}
+
+async fn release_list(ed: Arc<Editor>, p: ListParams, _origin: Origin) -> Reply {
+    run_list(&ed, ManageRequest { op: ManageOp::List, ..ManageRequest::default() }, p.wait).await
+}
+
+async fn release_edit(ed: Arc<Editor>, p: EditParams, _origin: Origin) -> Reply {
+    let (id, tag) = named(p.id, p.tag)?;
+    if p.title.is_none() && p.notes.is_none() {
+        return Err(CmdError::invalid("release.edit needs title or notes"));
+    }
+    if p.title.as_ref().is_some_and(|t| t.len() > 200)
+        || p.notes.as_ref().is_some_and(|n| n.len() > MAX_NOTES)
+    {
+        return Err(refuse("the title takes 200 characters, the notes 120 000"));
+    }
+    let rq = ManageRequest { op: ManageOp::Edit, id, tag, title: p.title, notes: p.notes };
+    run_list(&ed, rq, true).await
+}
+
+async fn release_delete(ed: Arc<Editor>, p: DeleteParams, _origin: Origin) -> Reply {
+    let (id, tag) = named(p.id, p.tag)?;
+    let rq = ManageRequest { op: ManageOp::Delete, id, tag, ..ManageRequest::default() };
+    run_list(&ed, rq, true).await
 }
 
 #[cfg(test)]
@@ -208,22 +339,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ids_bare_or_quoted() {
-        let mut a = Args::new();
-        a.insert("id".to_owned(), json!(42));
-        assert_eq!(arg_u64(&a, "id"), 42);
-        a.insert("id".to_owned(), json!("17"));
-        assert_eq!(arg_u64(&a, "id"), 17);
-        a.insert("id".to_owned(), json!("x"));
-        assert_eq!(arg_u64(&a, "id"), 0);
-        assert_eq!(arg_u64(&Args::new(), "id"), 0);
+    fn failed_answers_keep_their_fields() {
+        let e = reply(false, json!({ "state": "failed", "error": "why" })).unwrap_err();
+        assert_eq!(e.message, "why");
+        assert_eq!(e.data, Some(json!({ "state": "failed" })));
+        assert_eq!(reply(true, json!({ "state": "done" })).ok(), Some(json!({ "state": "done" })));
+    }
+
+    /// The doors: a deletion goes only through the destroy door, a release and a package only through
+    /// the release door; the ordinary door names the right one.
+    #[test]
+    fn the_cards_keep_their_doors() {
+        use gz_editor::{EditorOptions, Gate, Log, Registry};
+        use gz_task::{ExecOptions, Runtime};
+        let rt = Runtime::start(ExecOptions { async_threads: 2, cpu_threads: 1, io_threads: 1 }).unwrap();
+        let (log, _guard) = Log::start(None, false).unwrap();
+        let mut reg = Registry::new();
+        register(&mut reg);
+        gz_release::register(&mut reg);
+        let ed = gz_editor::Editor::new(EditorOptions::default(), rt.exec(), log, reg);
+        let call = |name: &str, a: Value, gate: Gate| {
+            let args = a.as_object().cloned().unwrap_or_default();
+            rt.block_on(ed.call_gated(name, args, Origin::Mcp, gate))
+        };
+        let code = |v: &Value| v.get("code").and_then(Value::as_str).unwrap_or("").to_owned();
+        let refused = call("release.delete", json!({ "tag": "v1.0.0" }), Gate::Run);
+        assert_eq!(code(&refused), "gate");
+        assert!(refused["error"].as_str().unwrap().contains("grizzly_destroy"));
+        assert_ne!(code(&call("release.delete", json!({ "tag": "v1.0.0" }), Gate::Destroy)), "gate");
+        for name in ["release.publish", "mod.package"] {
+            let refused = call(name, json!({}), Gate::Run);
+            assert_eq!(code(&refused), "gate", "{name}");
+            assert!(refused["error"].as_str().unwrap().contains("grizzly_release"));
+            assert_eq!(code(&call(name, json!({}), Gate::Destroy)), "gate", "{name}");
+            assert_ne!(code(&call(name, json!({}), Gate::Publish)), "gate", "{name}");
+        }
+        // the reads and the writes pass the ordinary door
+        assert_ne!(code(&call("release.account", json!({}), Gate::Run)), "gate");
+        assert_ne!(code(&call("release.list", json!({ "wait": false }), Gate::Run)), "gate");
+        // an unknown parameter never reaches the command
+        assert_eq!(code(&call("release.list", json!({ "watt": true }), Gate::Run)), "invalid");
     }
 
     #[test]
-    fn failed_answers_keep_their_fields() {
-        let e = reply(false, json!({ "state": "failed", "error": "why", "pending": false })).unwrap_err();
-        assert_eq!(e.message, "why");
-        assert_eq!(e.data, Some(json!({ "state": "failed", "pending": false })));
-        assert_eq!(reply(true, json!({ "state": "done" })).ok(), Some(json!({ "state": "done" })));
+    fn a_release_is_named() {
+        assert!(named(None, None).is_err());
+        assert_eq!(named(Some(4), None).unwrap(), (4, String::new()));
     }
 }

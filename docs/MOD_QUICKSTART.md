@@ -1,15 +1,22 @@
 # Building and shipping a mod
 
-Short version: press **Build Mod** (or `Ctrl+B`). Everything below is why that works
-and what to do when it refuses.
+Short version: press **Build Mod** (or `Ctrl+B`), or run `Grizzly-Cmd.exe build` in the project folder.
+Everything below is why that works and what to do when it refuses.
+
+**Files first.** Every part of a module is a text file of the project - `mod.ltx`, the quests and
+behaviour graphs, the characters, the PDA interface. Edit them in the editor's tabs, in any text
+editor or with an AI agent's own file tools; the editor follows the files. From a shell:
+`Grizzly-Cmd.exe check` (every problem, with its file and line), `Grizzly-Cmd.exe build`
+(`build folder path=<folder>`, `build flat path=<folder>`), `Grizzly-Cmd.exe package`. An agent
+drives the window over MCP (`grizzly_help` lists the commands; `grizzly_run` runs them).
 
 ---
 
 ## 1. Once per project
 
 **Mod → Mod Settings** — this is the only mandatory setup. It opens as a tab of its
-own (General, Mod Browser, Game Mode, Relations, Build Contents, PDA) and writes
-`mod.ltx` when you press Save.
+own (General, Mod Browser, Game Mode, Relations, Build Contents, PDA, Commands) and
+writes `mod.ltx` as you edit (MCP: `mod.info`, `mod.set`).
 
 | Field | What it is |
 |---|---|
@@ -61,8 +68,8 @@ as base — re-mark them once.
 
 **Taking a stock object out:** a spawn object of the base level (a barrel, a box,
 a lamp, a stock NPC) can be removed from the game without touching the level:
-tick **Mod → Removed from the game** in its properties (MCP: `mark_removed` on the
-selection). The object stays in the scene, and the build writes a remove op for it
+tick **Mod → Removed from the game** in its properties (MCP: `scene.set key=removed value=true` on
+the selection). The object stays in the scene, and the build writes a remove op for it
 (`[obj:base:<level>/<name>] op = remove`, gated by the module's mode), so a new game
 of the mode starts without it. Level geometry is not a spawn object and cannot be
 removed this way; a save already carries its own copy, so it applies to new games.
@@ -76,10 +83,10 @@ model lacks is dropped with a warning (the game would assert `wrong fixed bone` 
 object comes online).
 
 **Furnishing by MCP:** `view_mode helpers=false` draws spawn objects as models only (no
-restrictor shapes, cover gizmos, icons or labels) for clean screenshots; `scan_walls` is a
-horizontal lidar slice of the level's static geometry (walls, columns, stock furniture) over an
-area at one height; `probe_vertical` answers the ceiling and the floor over a point. Both pick
-the whole level, not only what the camera sees.
+restrictor shapes, cover gizmos, icons or labels) for clean screenshots; `scene.query action=walls`
+is a horizontal lidar slice of the level's static geometry (walls, columns, stock furniture) over
+an area at one height; `scene.query action=ground` answers the ceiling and the floor over a point.
+Both pick the whole level, not only what the camera sees.
 
 **Lighting a place:** View > Game Lighting (MCP `game_lighting`, `view_mode preset=game`) lights
 the viewport the way the game will at an hour and weather of the linked game - the first night of
@@ -96,7 +103,8 @@ you. If the target already holds files this project didn't put there (someone
 else's module sharing your id), the build stops and asks before deleting
 anything: the question names up to ten of those files, and Cancel is the default.
 A build started from the editor reports in one result window - what was written,
-what was left out, the warnings; over MCP the answer says the same.
+what was left out, the warnings; `mod.build` (MCP or `Grizzly-Cmd.exe build`) answers the same, and
+`mod.info` says beforehand what a build would ship and leave out.
 
 **What ships.** The project folder is yours to work in: a git repository, design
 notes, reference pictures can all sit beside the mod. The build leaves out on its
@@ -174,7 +182,7 @@ enabling and disabling never touches the module's own files.
 
 ## 4. Shipping it to other people
 
-**Mod → Package Release…** (MCP: `grizzly_mod_package`) builds the module and
+**Mod → Package Release…** (`mod.package`, `Grizzly-Cmd.exe package`) builds the module and
 writes a release into `<project>\releases\<version>\`:
 
 | File | What it is |
@@ -195,8 +203,8 @@ just deleting that folder.
 **Updates through the game.** The first install is the zip above. After that the
 game's Mods menu offers every later version, as long as the releases are on
 GitHub. The editor publishes them itself: **Publish Release** on the toolbar,
-next to **Build Mod** (also **Mod → Publish Release…**, MCP:
-`grizzly_mod_publish`).
+next to **Build Mod** (also **Mod → Publish Release…**; `release.publish`, through
+`grizzly_release` over MCP).
 
 Once:
 
@@ -246,8 +254,8 @@ Browser…** (a free account at virustotal.com has one). A module the Mod Browse
 does not list is published without a scan.
 
 **The releases that are out.** **Releases** on the toolbar (**Mod → Releases**, a
-tab of its own; MCP: `grizzly_mod_releases`, `grizzly_mod_release_edit`,
-`grizzly_mod_release_delete`) lists what the repository holds in a sortable table -
+tab of its own; `release.list`, `release.edit`, `release.delete`) lists what the repository
+holds in a sortable table -
 Tag, Title, State, Published (local time), Files - drafts included, and marks the
 one release the game reads; the selected release's details sit beside it.
 **Edit…** changes the title and the notes of the selected release and nothing
@@ -317,8 +325,8 @@ These write into the project. The next build ships them.
 
 ## 5a. Characters — the mod's own NPCs
 
-**Mod → Characters** (a tab) · content browser **Add → Character** ·
-`grizzly_characters_write`
+**Mod → Characters** (a tab) · content browser **Add → Character** · the `.npcasset` file
+itself, checked with `asset.check`
 
 A story needs stalkers of its own. One `.npcasset` file per character:
 
@@ -412,7 +420,8 @@ NPC's damage section names bones of the stalker skeleton - the head and the face
 among them - and the game stops the moment the NPC comes online if one is
 missing (Clear Sky's Forester, `actors\stalker_lesnik\stalker_lesnik_1`, has no
 eyes and no jaw). The Characters tab shows each problem as a sentence under its
-field; `characters_write`, `characters_view` and the build keep the code.
+field; `asset.check` and the build keep the code. An item the module brings itself (a
+section of its own `gamedata\configs`) is no unknown item.
 
 ### One kit, many characters
 
@@ -512,7 +521,7 @@ profile at all.
 
 A quest is a node graph in its own file. Make one in the Content Browser —
 **Add → Quest** (the toolbar's [+ Add], or right-click the empty grid) — or over
-MCP with `grizzly_quest_new`. Either way you get a working stub
+`file.create kind=quest path=<file>`. Either way you get a working stub
 (`trigger.start → flow.end`) and a tab of its own.
 
 Edit it whichever way suits you. The tab is an infinite canvas between two
@@ -523,14 +532,13 @@ quest's header, tasks and variables; the **Details** panel on the right edits th
 selected node and action, its rows built from the kind catalog the linked game
 ships. The
 file itself is plain declarative Lua (`return { … }`), so writing or patching it
-as text is a first-class path — `grizzly_quest_get` hands back the canonical text
-plus a readable outline of the graph, `grizzly_quest_write` replaces it whole,
-`grizzly_quest_apply` does surgical edits. Node coordinates are optional; leave
-`pos` out and **Auto Layout** (or `grizzly_quest_layout`) places everything.
+as text is a first-class path: write the file with any editor and the open tab takes the
+change in; the editor writes back only what it changed. Node coordinates are optional;
+leave `pos` out and **Auto Layout** places everything.
 
 Validation runs as you edit; the toolbar's **Validate** opens the **Problems**
 drawer under the canvas — click a problem to jump to the node. Errors (`E…`) block, warnings (`W…`) do
-not. `grizzly_quest_check_all` runs exactly the gate the build runs.
+not. `asset.check` (`Grizzly-Cmd.exe check`) runs exactly the gate the build runs.
 
 Then press **Build** (`Ctrl+B`). If any quest in the project has an error the
 build **refuses** with `quest graph errors: N (see log)` and the log lists them
@@ -567,7 +575,7 @@ suspect     = "nobody"
 ```
 
 In the graph tab they sit in the Variables pane under **Global** - add, rename, type and default,
-saved into `mod.ltx` as you edit (MCP: `grizzly_mod_set_manifest vars=`). Any quest or behaviour
+saved into `mod.ltx` as you edit (`mod.set set={"vars":{...}}`, or `[vars]` of the file). Any quest or behaviour
 graph writes them with `global.set` / `global.add`, waits on them with the `global` condition
 (`trigger.when`, `wait.when`, a branch), and shows one with `{global:suspect}` in a text. A save
 keeps their values; a new game starts from the defaults. Naming one the manifest does not declare
@@ -614,8 +622,8 @@ a dead id.
 
 ## 6a. NPC behaviour graphs
 
-**Content browser → Add → Behaviour Graph** · `grizzly_quest_new` with a
-`.behasset` path · `grizzly_quest_write`
+**Content browser → Add → Behaviour Graph** · `file.create kind=behaviour` · the
+`.behasset` file itself
 
 A quest tracks the player; a **behaviour graph** drives NPCs. It is its own
 asset - a `.behasset`, its own icon, its own tab - on the node graph you
@@ -685,9 +693,8 @@ Full reference: `docs/nq/NQ_FORMAT.md` §10.
 
 ## 6b. The mode's world - an empty map of your own
 
-**Mod → World Rules** (a tab) · `grizzly_world_get` / `grizzly_world_set` /
-`grizzly_world_transitions` · Spawn tool → **Player Start** · a stalker's
-**Order** properties · `grizzly_spawn_order`
+**Mod → World Rules** (a tab) · `world.info` / `world.set` / `world.lookup` · Spawn tool →
+**Player Start** · a stalker's **Order** properties
 
 A story mod on one map wants the map to itself. Say: only НИИ Агропром (and its
 underground), the player starts at your spot with the kit you gave, nobody of the
@@ -729,7 +736,7 @@ binoculars) and you change it from there - items with a count, the money, and
 whether the perks picked on the new-game screen stay. A new game of your mode then
 begins with exactly that: the loadout and the extra kits the screen handed out are
 taken away, while the PDA and the bolt always stay. `mod.ltx [start_kit]`,
-`grizzly_world_set` `start_kit` / `start_money` / `start_perks`.
+`world.set` `start_kit` / `start_money` / `start_perks`.
 
 **5. Your NPCs.** Place stalkers of your characters with the Spawn tool. Each
 one's Properties have an **Order** group: *Guard* (holds the spot, optionally
@@ -774,8 +781,8 @@ Start is not in (`W203`-`W206`) and about a kit item the linked game lacks (`W20
 
 ## 6c. The PDA interface - your own app in the PDA
 
-**Mod → PDA Interface** · Content browser → **Add → PDA Interface** ·
-`grizzly_pda_*`
+**Mod → PDA Interface** · Content browser → **Add → PDA Interface** · the
+`.pdaasset` file · `pda.preview`
 
 Your mod can put its own screens into the PDA: a courier app, a hacked military
 terminal, a scanner - pages, buttons, lists, pop-up menus, and the live map
@@ -789,8 +796,9 @@ can show any stock section.
    fonts. Click through it - buttons, tabs, lists and menus work as in the game;
    a quest signal or a script call shows as a note and goes into the action log.
 2. Edit the file (the toolbar's **Source** pane → Apply (`Ctrl+Enter`) / Save, any
-   text editor, or an AI agent with `grizzly_pda_write`): the tab follows the file
-   unless the Source pane holds edits, and never drops those without asking. The format is
+   text editor, or an AI agent's own file tools): the tab follows the file and
+   merges an outside change into the Source pane's edits, never dropping them without
+   asking. The format is
    `docs/pda/PDA_FORMAT.md` - a canvas of 960x680, `chrome` under every page,
    `pages`, an `overlay` on top, widgets `rect`, `image`, `text`, `button`,
    `list`, `group`, `map`, and actions like `page:map`, `show:menu`,
@@ -813,7 +821,7 @@ Things that bite: Dead Air's fonts draw `—` and `–` blank and have no `→` 
 
 ## 6d. Console commands - your own commands in the game console
 
-**Mod → Mod Settings → Commands** · `grizzly_mod_commands`
+**Mod → Mod Settings → Commands** · `[commands]` of `mod.ltx` · `mod.set set={"commands":{...}}`
 
 A mod can add console commands: a status line for the player, a switch for you
 while you test, a cheat for your testers. A command is a name the player types and

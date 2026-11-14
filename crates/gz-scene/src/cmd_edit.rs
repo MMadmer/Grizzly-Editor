@@ -1,362 +1,1056 @@
-//! The commands of the scene's edits through files and of its parts: `scene_edit` (cut, copy,
-//! paste, duplicate), `selection_file` (save, open), `rename_objects`, `level_parts`,
-//! `scene_new`. The C++ reached these through `exec_command` only; these are their own wire.
+//! The scene's commands that make, remove or move objects: `scene.place`, `scene.delete`,
+//! `scene.duplicate`, `scene.copy`, `scene.paste`, `scene.group`, `scene.ungroup`,
+//! `scene.align`, `scene.query`, `scene.attach`, `scene.motion`; and the Summary Info a
+//! `scene.info summary=true` collects.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gz_base::Origin;
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Registry, Reply, Value, json};
+use gz_base::{Origin, RelPath, SmolStr};
+use gz_editor::{CmdError, Editor, JsonSchema, Registry, Reply, Spec};
+use gz_entities::Entity;
+use serde::Deserialize;
+use serde_json::{Value, json};
 
-use crate::apply::{SceneCmd, SceneReply};
+use crate::apply::{SceneCmd, SceneReply, SelectMode, TransformEdit};
 use crate::class::ObjClass;
+use crate::cmd::{brief, r4, v3, wire};
 use crate::edit;
+use crate::format::{fields, group, values};
+use crate::landing::{DROP_REACH, drop_to_ground};
+use crate::library::normalize;
+use crate::math::{Transform, Vec3};
+use crate::model::{ObjData, ObjId, Object, SceneState};
+use crate::objects::{
+    PointKind, SceneObjectData, ShapeData, ShapeDef, SpawnData, SpawnEntity, WayData, default_data,
+};
+use crate::pick::ray_scene_objects;
 use crate::service::{self, SceneService};
 
-const AREA: &str = "gz-scene";
-
 pub(crate) fn register(reg: &mut Registry) {
-    reg.add(AREA, "scene_edit", scene_edit);
-    reg.add(AREA, "selection_file", selection_file);
-    reg.add(AREA, "rename_objects", rename_objects);
-    reg.add(AREA, "level_parts", level_parts);
-    reg.add(AREA, "scene_new", scene_new);
-    reg.add(AREA, "scene_summary", scene_summary);
-    reg.add(AREA, "compiler_errors", compiler_errors);
-    reg.add(AREA, "object_motion", object_motion);
-    reg.add(AREA, "object_tool", object_tool);
-    reg.add(AREA, "spawn_attach", spawn_attach);
-    reg.add(AREA, "group_tool", group_tool);
+    reg.cmd(
+        Spec::write(
+            "scene.place",
+            "Places an object, a light, a spawn point, a way path or another thing in the scene.",
+        )
+        .example("kind=object ref=props\\box_wood_01 position=1,0,2 on_surface=true"),
+        scene_place,
+    );
+    reg.cmd(
+        Spec::write(
+            "scene.delete",
+            "Removes objects (the selection without objects) from the scene; one undo step.",
+        ),
+        scene_delete,
+    );
+    reg.cmd(
+        Spec::write(
+            "scene.duplicate",
+            "Adds a copy of objects (the selection without objects) under free names.",
+        )
+        .example("offset=2,0,0"),
+        scene_duplicate,
+    );
+    reg.cmd(
+        Spec::write(
+            "scene.copy",
+            "Copies objects (the selection without objects) to the project's clipboard file.",
+        ),
+        scene_copy,
+    );
+    reg.cmd(
+        Spec::write("scene.paste", "Adds the clipboard's objects under free names and selects them.")
+            .example("offset=0,0,5"),
+        scene_paste,
+    );
+    reg.cmd(
+        Spec::write(
+            "scene.group",
+            "Groups objects in place, saves them as a .group asset, moves a group's pivot or reloads groups from their asset.",
+        )
+        .example("objects=tent_01,fire_01 name=camp"),
+        scene_group,
+    );
+    reg.cmd(
+        Spec::write(
+            "scene.ungroup",
+            "Ungroups groups (the selected ones without objects); their objects stay.",
+        ),
+        scene_ungroup,
+    );
+    reg.cmd(
+        Spec::write("scene.align", "Drops objects onto what is below them, or stands them on the surface.")
+            .example("action=surface objects=barrel_01"),
+        scene_align,
+    );
+    reg.cmd(
+        Spec::read(
+            "scene.query",
+            "Casts rays into the scene: the floor and ceiling at a point, or the walls of an area.",
+        )
+        .example("action=ground position=10,5,3"),
+        scene_query,
+    );
+    reg.cmd(
+        Spec::write(
+            "scene.attach",
+            "Makes a shape a spawn point's own, or gives a spawn point's shape back to the scene.",
+        )
+        .example("spawn=anomaly_01 object=shape_03"),
+        scene_attach,
+    );
+    reg.cmd(
+        Spec::write(
+            "scene.motion",
+            "The motion a dynamic object moves along: its keys, its range, the playback, import and export of .anm.",
+        )
+        .example("object=door_01 action=add_key"),
+        scene_motion,
+    );
 }
 
-/// The class a command works on: `class=` by its name, else the current tool's.
-pub(crate) fn class_arg(a: &Args, svc: &SceneService) -> Result<ObjClass, CmdError> {
-    match a.text("class") {
-        Some(name) => ObjClass::by_name(name)
-            .or_else(|| ObjClass::ALL.iter().copied().find(|c| c.desc().eq_ignore_ascii_case(name)))
-            .ok_or_else(|| CmdError::invalid(format!("unknown class '{name}'"))),
-        None => Ok(svc.store.snapshot().tools.target),
+/// The objects a command means, selected first when the caller named them (the commands of
+/// the store work on the selection).
+async fn select_named(
+    svc: &SceneService,
+    names: Option<&[String]>,
+    o: Origin,
+) -> Result<Vec<ObjId>, CmdError> {
+    let s = svc.store.snapshot();
+    let ids = edit::ids_of(&s, names)?;
+    if names.is_some_and(|n| !n.is_empty()) {
+        svc.store.send(SceneCmd::Select { ids: ids.clone(), mode: SelectMode::Set }, o).await?;
     }
+    Ok(ids)
 }
 
-fn path_json(p: &std::path::Path) -> Value {
-    Value::String(p.display().to_string().replace('\\', "/"))
+/// Where a placed thing lands without a position: ten metres in front of the camera.
+fn in_front(s: &SceneState) -> Vec3 {
+    let hpb = s.meta.camera_hpb;
+    let (sh, ch) = hpb.x.sin_cos();
+    let (sp, cp) = hpb.y.sin_cos();
+    s.meta.camera_pos + Vec3::new(-cp * sh, sp, cp * ch) * 10.0
 }
 
-async fn scene_edit(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
-    let svc = SceneService::of(&ed)?;
-    let action = a.need("action")?.to_ascii_lowercase();
-    let class = class_arg(&a, &svc)?;
-    match action.as_str() {
-        "copy" => {
-            let file = edit::copy(&ed, &svc, class).await?;
-            let n = svc
-                .store
-                .snapshot()
-                .of_class(class)
-                .filter(|x| svc.store.snapshot().is_selected(x.id))
-                .count();
-            Ok(json!({ "action": "copy", "class": class.name(), "copied": n, "file": path_json(&file) }))
-        }
-        "cut" => {
-            let (file, n) = edit::cut(&ed, &svc, class, o).await?;
-            Ok(json!({ "action": "cut", "class": class.name(), "removed": n, "file": path_json(&file) }))
-        }
-        "paste" => {
-            let added = edit::paste(&ed, &svc, o).await?;
-            Ok(json!({ "action": "paste", "added": added.objects, "warnings": added.warnings }))
-        }
-        "duplicate" => {
-            let added = edit::duplicate(&ed, &svc, class, o).await?;
-            Ok(
-                json!({ "action": "duplicate", "class": class.name(), "added": added.objects, "warnings": added.warnings }),
-            )
-        }
-        other => Err(CmdError::invalid(format!("unknown action '{other}' (cut, copy, paste, duplicate)"))),
-    }
-}
-
-async fn selection_file(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
-    let svc = SceneService::of(&ed)?;
-    let action = a.need("action")?.to_ascii_lowercase();
-    let file = edit::maps_file(&svc, a.need("file")?, "level");
-    match action.as_str() {
-        "save" => {
-            let class = class_arg(&a, &svc)?;
-            edit::save_selection(&ed, &svc, Some(class), file.clone()).await?;
-            Ok(json!({ "action": "save", "class": class.name(), "file": path_json(&file) }))
-        }
-        "open" => {
-            let added = edit::load_selection(&ed, &svc, file.clone(), "Open Selection", o).await?;
-            Ok(
-                json!({ "action": "open", "file": path_json(&file), "added": added.objects, "warnings": added.warnings }),
-            )
-        }
-        other => Err(CmdError::invalid(format!("unknown action '{other}' (save, open)"))),
-    }
-}
-
-async fn rename_objects(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
-    let svc = SceneService::of(&ed)?;
-    let class = class_arg(&a, &svc)?;
-    let snap = svc.store.snapshot();
-    if !snap.of_class(class).any(|x| snap.is_selected(x.id)) {
-        ed.log.info("Nothing is selected: no object is renamed.");
-        return Ok(json!({ "class": class.name(), "renamed": 0 }));
-    }
-    let SceneReply::Count(n) = svc.store.send(SceneCmd::MultiRename(class), o).await? else {
-        return Err(CmdError::internal("rename_objects"));
-    };
-    ed.log.info(format!("Objects renamed: {n}."));
-    Ok(json!({ "class": class.name(), "renamed": n }))
-}
-
-/// The scene with unsaved changes is saved first (`save=true`), its changes lost
-/// (`discard=true`), or the command answers `unsaved`.
-pub(crate) async fn settle_scene(
-    ed: &Arc<Editor>,
-    svc: &Arc<SceneService>,
-    a: &Args,
-) -> Result<(), CmdError> {
-    if !svc.store.is_dirty() || a.flag("discard") {
-        return Ok(());
-    }
-    if a.flag("save") {
-        let file = svc.store.snapshot().meta.file.clone().ok_or_else(|| {
-            CmdError::invalid("scene has no file yet - pass 'file' or Save As in the editor")
-        })?;
-        return service::save_scene(ed, svc, file).await.map_err(CmdError::io);
-    }
-    let snap = svc.store.snapshot();
-    let name = snap.meta.name();
-    Err(CmdError::unsaved(json!([{
-        "kind": "scene",
-        "name": if name.is_empty() { "Untitled scene".to_owned() } else { name },
-        "path": snap.meta.file.as_ref().map(|f| f.display().to_string()),
-    }])))
-}
-
-fn parts_json(svc: &SceneService) -> Value {
-    let snap = svc.store.snapshot();
-    Value::Array(
-        ObjClass::ALL
-            .iter()
-            .map(|c| {
-                let t = snap.tools.part(*c);
-                json!({
-                    "class": c.name(),
-                    "title": c.desc(),
-                    "enabled": t.enabled,
-                    "readonly": t.readonly,
-                    "visible": t.visible,
-                    "objects": if c.is_object_tool() { snap.count(*c) } else { 0 },
-                    "can_disable": *c != ObjClass::SceneObject,
-                })
-            })
-            .collect(),
+/// Degrees as the model's radians.
+fn radians3(d: [f32; 3]) -> Vec3 {
+    Vec3::new(
+        values::radians(f64::from(d[0])),
+        values::radians(f64::from(d[1])),
+        values::radians(f64::from(d[2])),
     )
 }
 
-/// `level_parts`: every class's part of the scene; `class=` with `enabled=` loads or unloads it
-/// (`CommandEnableTarget`; unloading unsaved work needs `save=` / `discard=`), `readonly=` locks
-/// it (`flForceReadonly`: its objects cannot be changed and its part is not saved over).
-async fn level_parts(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
-    let svc = SceneService::of(&ed)?;
-    if a.has("class") {
-        let class = class_arg(&a, &svc)?;
-        if let Some(r) = a.bool("readonly") {
-            svc.store.send(SceneCmd::ToolFlags { class, visible: None, readonly: Some(r) }, o).await?;
+fn finite(v: [f32; 3], what: &str) -> Result<Vec3, CmdError> {
+    let v = Vec3::from_array(v);
+    if v.is_finite() { Ok(v) } else { Err(CmdError::invalid(format!("{what} takes finite numbers"))) }
+}
+
+/// Drops objects onto what is below them (a box under each, or the line under its pivot);
+/// answers how many landed.
+async fn drop_ids(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    ids: &[ObjId],
+    align: bool,
+    line: bool,
+    o: Origin,
+) -> Result<usize, CmdError> {
+    let snap = svc.store.snapshot();
+    svc.prefetch_library(ed, &snap).await;
+    let (snap, pick) = svc.pick().await;
+    let lib = svc.library.clone();
+    let ids = ids.to_vec();
+    let s = snap.clone();
+    let landings = ed.exec.cpu(move || drop_to_ground(&s, &lib, &pick, &ids, align, line)).await;
+    if landings.is_empty() {
+        return Ok(0);
+    }
+    let n = landings.len();
+    let items = landings
+        .into_iter()
+        .map(|l| (l.id, TransformEdit::Land { position: l.position, rotation: l.rotation }))
+        .collect();
+    let label = if align { "Align to Surface" } else { "Drop to Ground" };
+    svc.store
+        .send(SceneCmd::Transform { items, members: false, label: label.into(), merge: None }, o)
+        .await?;
+    Ok(n)
+}
+
+// ---------------------------------------------------------------- place
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum PlaceKind {
+    /// A library object (`ref`).
+    Object,
+    /// A `.group` asset of the project or a group of the library (`ref`).
+    Group,
+    Light,
+    Glow,
+    /// A sound source (`ref`: the sound).
+    Sound,
+    /// A sound environment volume.
+    SoundEnv,
+    /// A particle effect (`ref`: the effect).
+    Particles,
+    /// A shape: a sphere, or a box with `box=true`.
+    Shape,
+    /// A fog volume.
+    Fog,
+    /// A spawn point (`section`: a spawn section of the game, or `player_start`, `env_mod`,
+    /// `rpoint`).
+    Spawn,
+    /// A way path through `points`.
+    Way,
+}
+
+impl PlaceKind {
+    fn class(self) -> ObjClass {
+        match self {
+            Self::Object => ObjClass::SceneObject,
+            Self::Group => ObjClass::Group,
+            Self::Light => ObjClass::Light,
+            Self::Glow => ObjClass::Glow,
+            Self::Sound => ObjClass::SoundSrc,
+            Self::SoundEnv => ObjClass::SoundEnv,
+            Self::Particles => ObjClass::Particles,
+            Self::Shape => ObjClass::Shape,
+            Self::Fog => ObjClass::FogVolume,
+            Self::Spawn => ObjClass::SpawnPoint,
+            Self::Way => ObjClass::Way,
         }
-        if let Some(on) = a.bool("enabled") {
-            let now = svc.store.snapshot().tools.part(class).enabled;
-            if on != now {
-                if class == ObjClass::SceneObject && !on {
-                    return Err(CmdError::invalid("the scene objects' part is always loaded"));
-                }
-                if !on {
-                    settle_scene(&ed, &svc, &a).await?;
-                }
-                edit::set_part_enabled(&ed, &svc, class, on, o).await?;
-            }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PlaceParams {
+    /// What to place.
+    kind: PlaceKind,
+    /// The library object, the group, the sound or the effect, as its library spells it.
+    #[serde(default)]
+    r#ref: Option<String>,
+    /// The spawn section (kind=spawn).
+    #[serde(default)]
+    section: Option<String>,
+    /// Its name; left out: one made from what it is (`box_wood_01`).
+    #[serde(default)]
+    name: Option<String>,
+    /// Metres; left out: ten metres in front of the camera.
+    #[serde(default)]
+    position: Option<[f32; 3]>,
+    /// Drop it onto what is below the position.
+    #[serde(default)]
+    on_surface: bool,
+    /// With on_surface: stand it on the surface's slope as well.
+    #[serde(default)]
+    align: bool,
+    /// Degrees.
+    #[serde(default)]
+    rotation: Option<[f32; 3]>,
+    /// A factor per axis.
+    #[serde(default)]
+    scale: Option<[f32; 3]>,
+    /// The way path's points, in metres (kind=way).
+    #[serde(default)]
+    points: Option<Vec<[f32; 3]>>,
+    /// The way path leads from its last point back to its first (kind=way; default true).
+    #[serde(default)]
+    closed: Option<bool>,
+    /// A box instead of a sphere (kind=shape).
+    #[serde(default)]
+    r#box: bool,
+    /// What the shape is for (kind=shape): common (a volume of its own; the default), level_bound,
+    /// ai_map_bounds (the AI map is generated inside it).
+    #[serde(default)]
+    usage: Option<String>,
+}
+
+/// The name a placed thing gets: the one asked for (refused when taken), or one made from `pref`.
+fn name_for(s: &SceneState, asked: Option<&str>, pref: &str) -> Result<String, CmdError> {
+    match asked.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) if s.find_any(n).is_some() => {
+            Err(CmdError::invalid(format!("'{n}' is the name of another object")))
+        }
+        Some(n) => Ok(n.to_owned()),
+        None => Ok(s.gen_name(Some(pref))),
+    }
+}
+
+async fn place_reply(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    id: ObjId,
+    p: &PlaceParams,
+    o: Origin,
+) -> Reply {
+    let mut landed = false;
+    if p.on_surface && p.kind != PlaceKind::Way {
+        landed = drop_ids(ed, svc, &[id], p.align, false, o).await? > 0;
+    }
+    let s = svc.store.snapshot();
+    let obj = s.get(id).ok_or_else(|| CmdError::internal("the placed object is gone"))?;
+    let mut out = json!({ "object": brief(&s, obj) });
+    if let Value::Object(m) = &mut out {
+        if p.on_surface {
+            m.insert("landed".into(), json!(landed));
+        }
+        if let ObjData::Way(w) = &obj.data {
+            m.insert("points".into(), json!(w.points.len()));
         }
     }
-    Ok(json!({ "parts": parts_json(&svc) }))
+    Ok(out)
 }
 
-/// `scene_new`: `CommandClear` (unsaved work needs `save=` / `discard=`).
-async fn scene_new(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
-    let svc = SceneService::of(&ed)?;
-    if let Err(e) = svc.recovery.can_replace_scene() {
-        return Err(CmdError::invalid(e));
-    }
-    settle_scene(&ed, &svc, &a).await?;
-    edit::new_scene(&ed, &svc, o).await?;
-    Ok(json!({ "scene": "" }))
-}
-
-// ---- reports: the compiler's error list, the summary ----------------------------------------
-
-/// The summary of the last collect (`s_summary`): the Scene > Summary Info sheet reads it.
-#[derive(Default)]
-pub struct SummaryStore {
-    pub summary: parking_lot::Mutex<Option<Arc<crate::summary::Summary>>>,
-}
-
-impl SummaryStore {
-    #[must_use]
-    pub fn of(session: &gz_editor::ProjectSession) -> Arc<SummaryStore> {
-        session.services.get_or_init(SummaryStore::default)
-    }
-}
-
-/// Where a texture's description and its animation are: the project's and the editor's
-/// `rawdata\textures\<name>.thm`, `gamedata\textures\<name>.seq`.
-fn texture_info(roots: &[std::path::PathBuf], name: &str) -> Option<(gz_fmt_tex::TextureParams, u32)> {
-    let rel = name.replace('/', "\\");
-    let thm = roots
-        .iter()
-        .find_map(|r| std::fs::read(r.join("rawdata\\textures").join(format!("{rel}.thm"))).ok())?;
-    let params = gz_fmt_tex::read_texture_thm(&thm).ok()?.params;
-    // `MemoryUsage`: the `.seq` holds a line per frame after its first
-    let frames = roots
-        .iter()
-        .find_map(|r| std::fs::read(r.join("gamedata\\textures").join(format!("{rel}.seq"))).ok())
-        .map_or(1, |b| {
-            let text = String::from_utf8_lossy(&b);
-            let n = text.lines().count().saturating_sub(1) as u32;
-            n.max(1)
-        });
-    Some((params, frames))
-}
-
-/// `scene_summary`: action collect (clear, collect and keep; the default) | show (what was
-/// collected, as the sheet's rows) | export (file=, the C++ text) | clear.
-async fn scene_summary(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
-    let svc = SceneService::of(&ed)?;
-    let session = ed.project()?;
-    let store = SummaryStore::of(&session);
-    let action = a.str("action").unwrap_or("collect").to_ascii_lowercase();
-    let rows_json = |s: &crate::summary::Summary| {
-        Value::Array(s.rows().into_iter().map(|(k, v)| json!({ "key": k, "value": v })).collect())
+async fn scene_place(ed: Arc<Editor>, p: PlaceParams, o: Origin) -> Reply {
+    let svc = service::need_scene(&ed).await?;
+    let snap = svc.store.snapshot();
+    let pos = match p.position {
+        Some(v) => finite(v, "position")?,
+        None => in_front(&snap),
     };
-    match action.as_str() {
-        "clear" => {
-            *store.summary.lock() = None;
-            Ok(json!({ "cleared": true }))
-        }
-        "collect" => {
-            let snap = svc.store.snapshot();
-            if !snap.valid {
-                return Err(CmdError::new("no_scene", "no scene"));
-            }
-            svc.prefetch_library(&ed, &snap).await;
+    let rot = p.rotation.map(|r| finite(r, "rotation").map(|_| radians3(r))).transpose()?;
+    let scale = p.scale.map(|s| finite(s, "scale")).transpose()?;
+    if scale.is_some_and(|s| s.x.abs() < 1e-6 || s.y.abs() < 1e-6 || s.z.abs() < 1e-6) {
+        return Err(CmdError::invalid("a scale of zero"));
+    }
+    let class = p.kind.class();
+    let caps = class.caps();
+    if rot.is_some() && !caps.rotates {
+        return Err(CmdError::invalid(format!(
+            "a {} does not turn: it takes no rotation",
+            class.label().to_lowercase()
+        )));
+    }
+    if scale.is_some() && !caps.scales {
+        return Err(CmdError::invalid(format!("a {} takes no scale", class.label().to_lowercase())));
+    }
+    let reference = p.r#ref.as_deref().map(|r| r.trim().replace('/', "\\")).filter(|r| !r.is_empty());
+    let mut obj = match p.kind {
+        PlaceKind::Object => {
+            let reference =
+                reference.ok_or_else(|| CmdError::invalid("kind=object takes ref: a library object"))?;
             let lib = svc.library.clone();
-            let roots = vec![svc.root.clone(), svc.editor_root.clone()];
-            let (summary, log) = ed
+            let key = normalize(&reference);
+            if ed.exec.io(move || lib.load(&key)).await.is_err() {
+                return Err(CmdError::not_found(format!("there is no library object {reference}")));
+            }
+            // an object of the editor's library is copied into the project as it is placed
+            let (root, library, r) = (svc.root.clone(), gz_project::library_root(&ed), reference.clone());
+            let only_library =
+                ed.exec.io(move || gz_project::library::resolve_object(&root, &library, &r)).await
+                    == gz_project::library::Resolves::Library;
+            if only_library && let Err(e) = gz_project::library::bring_in(&ed, vec![reference.clone()]) {
+                ed.log.warn(format!("{reference} could not be copied into the project: {}", e.message));
+            }
+            let name = name_for(&snap, p.name.as_deref(), &reference)?;
+            Object::new(class, &name, ObjData::SceneObject(SceneObjectData::library(&reference)))
+        }
+        PlaceKind::Group => {
+            let reference = reference.ok_or_else(|| {
+                CmdError::invalid("kind=group takes ref: a .group of the project or the library")
+            })?;
+            return place_group(&ed, &svc, &reference, p.name.as_deref(), pos, o).await;
+        }
+        PlaceKind::Spawn => {
+            let section = p.section.as_deref().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| {
+                CmdError::invalid("kind=spawn takes section: a spawn section (game.lookup type=spawn_section), player_start, env_mod or rpoint")
+            })?;
+            spawn_object(&ed, &snap, section, p.name.as_deref(), pos).await?
+        }
+        PlaceKind::Way => {
+            let points = p
+                .points
+                .as_deref()
+                .filter(|l| !l.is_empty())
+                .ok_or_else(|| CmdError::invalid("kind=way takes points: [[x,y,z], ...]"))?;
+            let mut pts = points.iter().map(|v| finite(*v, "points")).collect::<Result<Vec<_>, _>>()?;
+            if p.on_surface {
+                svc.prefetch_library(&ed, &snap).await;
+                let (s, pick) = svc.pick().await;
+                let lib = svc.library.clone();
+                pts = ed
+                    .exec
+                    .cpu(move || {
+                        pts.into_iter()
+                            .map(|q| {
+                                match ray_scene_objects(
+                                    &pick,
+                                    &s,
+                                    &lib,
+                                    q + Vec3::Y * 2.0,
+                                    Vec3::NEG_Y,
+                                    DROP_REACH,
+                                    None,
+                                ) {
+                                    Some(h) if h.point.is_finite() => h.point,
+                                    _ => q,
+                                }
+                            })
+                            .collect()
+                    })
+                    .await;
+            }
+            let name = name_for(&snap, p.name.as_deref(), "way")?;
+            Object::new(class, &name, ObjData::Way(WayData::build(&pts, p.closed.unwrap_or(true))))
+        }
+        _ => {
+            let name = name_for(&snap, p.name.as_deref(), reference.as_deref().unwrap_or(class.key()))?;
+            let mut n = Object::new(class, &name, default_data(class));
+            if let Some(r) = &reference {
+                let key = match p.kind {
+                    PlaceKind::Sound => "sound",
+                    PlaceKind::Particles => "ref",
+                    _ => return Err(CmdError::invalid(format!("kind={} takes no ref", class.key()))),
+                };
+                if let Some(f) = fields::object_field(class, key) {
+                    (f.set)(&mut n, &values::text(r)).map_err(CmdError::invalid)?;
+                }
+            }
+            if p.kind == PlaceKind::Shape
+                && p.r#box
+                && let ObjData::Shape(d) = &mut n.data
+            {
+                d.shapes = vec![ShapeDef::boxed(&crate::math::Mat4::IDENTITY)];
+            }
+            if let Some(u) = &p.usage {
+                let f = fields::object_field(class, "usage")
+                    .filter(|_| p.kind == PlaceKind::Shape)
+                    .ok_or_else(|| CmdError::invalid(format!("kind={} takes no usage", class.key())))?;
+                (f.set)(&mut n, &values::text(u)).map_err(|e| CmdError::invalid(format!("usage {e}")))?;
+            }
+            n
+        }
+    };
+    if p.kind != PlaceKind::Way {
+        let mut x = Transform { position: pos, rotation: obj.xform.rotation, scale: obj.xform.scale };
+        if let Some(r) = rot {
+            x.rotation = r;
+        }
+        if let Some(s) = scale {
+            x.scale = s;
+        }
+        obj.xform = x;
+        if let ObjData::Spawn(d) = &mut obj.data
+            && let Some(a) = &mut d.attached
+        {
+            Arc::make_mut(a).xform.position = pos;
+        }
+        if let ObjData::SoundSrc(d) = &mut obj.data {
+            d.position = pos;
+        }
+    }
+    let SceneReply::Id(id) = svc.store.send(SceneCmd::Place(Box::new(obj)), o).await? else {
+        return Err(CmdError::internal("the place gave no object"));
+    };
+    place_reply(&ed, &svc, id, &p, o).await
+}
+
+/// A spawn point of a section (or one of the editor's points), made as the game's factory makes
+/// it, with its shape when its class has one.
+async fn spawn_object(
+    ed: &Arc<Editor>,
+    snap: &SceneState,
+    section: &str,
+    name: Option<&str>,
+    pos: Vec3,
+) -> Result<Object, CmdError> {
+    use crate::objects::{ENVMOD_CHOOSE_NAME, PLAYERSTART_CHOOSE_NAME, RPOINT_CHOOSE_NAME};
+    let point = [PLAYERSTART_CHOOSE_NAME, ENVMOD_CHOOSE_NAME, RPOINT_CHOOSE_NAME]
+        .into_iter()
+        .find(|p| p.eq_ignore_ascii_case(section) || p[1..].eq_ignore_ascii_case(section));
+    let data = match point {
+        Some(PLAYERSTART_CHOOSE_NAME) => SpawnData::of_kind(PointKind::PlayerStart),
+        Some(ENVMOD_CHOOSE_NAME) => SpawnData::of_kind(PointKind::EnvMod),
+        Some(_) => SpawnData::of_kind(PointKind::RPoint),
+        None => {
+            let why = format!(
+                "{section} is no spawn section of the linked game (game.lookup type=spawn_section lists them)"
+            );
+            let refused = move || CmdError::not_found(why.clone());
+            let settings = crate::game::settings(ed).await.ok_or_else(|| {
+                CmdError::invalid("spawn points need the linked game's configs: link the game first")
+            })?;
+            let sec = section.to_owned();
+            let (entity, def_sphere, needs_shape) = ed
                 .exec
-                .io(move || {
-                    let mut s = crate::summary::collect(&snap, &lib);
-                    let log = s.prepare(&lib, &|n| texture_info(&roots, n));
-                    (s, log)
+                .io(move || -> Result<(Entity, Option<f32>, bool), CmdError> {
+                    use gz_entities::Settings;
+                    if !settings.section_exist(&sec) || !settings.line_exist(&sec, "$spawn") {
+                        return Err(refused());
+                    }
+                    let e = Entity::create_spawn_point(&sec, settings.as_ref()).map_err(|e| {
+                        CmdError::invalid(format!("the section {sec} makes no spawn point: {e}"))
+                    })?;
+                    let def = settings.r_float(&sec, "$def_sphere");
+                    let needs = e.class_info().is_some_and(|c| c.class.has_shape());
+                    Ok((e, def, needs))
+                })
+                .await?;
+            let mut d = SpawnData::of_kind(PointKind::Spawn);
+            d.entity = Some(SpawnEntity::Decoded(Arc::new(entity)));
+            if def_sphere.is_some() || needs_shape {
+                let shape = Object::new(
+                    ObjClass::Shape,
+                    "",
+                    ObjData::Shape(ShapeData {
+                        shapes: vec![ShapeDef::sphere(Vec3::ZERO, def_sphere.unwrap_or(5.0))],
+                        usage: 0,
+                    }),
+                );
+                d.attached = Some(Arc::new(shape));
+            }
+            d
+        }
+    };
+    let pref = point.map_or(section, |p| &p[1..]);
+    let name = name_for(snap, name, pref)?;
+    let mut obj = Object::new(ObjClass::SpawnPoint, &name, ObjData::Spawn(Box::new(data)));
+    obj.xform.position = pos;
+    Ok(obj)
+}
+
+/// The `.group` asset of the project a reference names, when there is one.
+fn project_group(root: &Path, reference: &str) -> Option<(PathBuf, RelPath)> {
+    let p = PathBuf::from(reference.replace('/', "\\"));
+    let p = if p.extension().is_none() { p.with_extension(group::EXT) } else { p };
+    let full = if p.is_absolute() { p } else { root.join(p) };
+    let rel = RelPath::from_fs(root, &full)?;
+    full.is_file().then_some((full, rel))
+}
+
+/// A `.group` placed: the project's asset as one undo step of its objects, else a group of the
+/// library read as the X-Ray SDK writes it.
+async fn place_group(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    reference: &str,
+    name: Option<&str>,
+    pos: Vec3,
+    o: Origin,
+) -> Reply {
+    let root = svc.root.clone();
+    let r = reference.to_owned();
+    if let Some((file, rel)) = ed.exec.io(move || project_group(&root, &r)).await {
+        let (mut bundle, warnings) = edit::read_group_file(ed, file, rel.clone()).await?;
+        for w in &warnings {
+            ed.log.warn(w);
+        }
+        // a group saved whole becomes a group that names its asset
+        if let [(gi, _)] = bundle.groups.as_slice()
+            && let Some(g) = bundle.objects.get_mut(*gi)
+            && let ObjData::Group(d) = &mut g.data
+        {
+            d.reference = SmolStr::new(rel.as_str());
+            if let Some(n) = name {
+                g.name = SmolStr::new(n);
+            }
+        }
+        let reply = svc
+            .store
+            .send(SceneCmd::Paste { bundle: Box::new(bundle), offset: pos, label: "Place Group".into() }, o)
+            .await?;
+        let n = if let SceneReply::Count(n) = reply { n } else { 0 };
+        let s = svc.store.snapshot();
+        let placed: Vec<Value> =
+            s.selected_in_order().iter().filter_map(|id| s.get(*id)).map(|x| brief(&s, x)).collect();
+        return Ok(json!({ "objects": placed, "added": n, "warnings": warnings }));
+    }
+    let snap = svc.store.snapshot();
+    let mut loaded = edit::library_group(ed, svc, reference).await?;
+    loaded.obj.name = name_for(&snap, name, reference)?.into();
+    if let ObjData::Group(g) = &mut loaded.obj.data {
+        g.reference = reference.into();
+    }
+    let reply =
+        svc.store.send(SceneCmd::PlaceGroup { loaded: Box::new(loaded), at: Transform::at(pos) }, o).await?;
+    let SceneReply::Id(id) = reply else { return Err(CmdError::internal("the place gave no group")) };
+    let s = svc.store.snapshot();
+    let g = s.get(id).ok_or_else(|| CmdError::internal("the placed group is gone"))?;
+    Ok(json!({ "object": brief(&s, g) }))
+}
+
+// ---------------------------------------------------------------- delete, duplicate, copy, paste
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ObjectsParams {
+    /// The objects by name. Left out: the selection.
+    #[serde(default)]
+    objects: Option<Vec<String>>,
+}
+
+async fn scene_delete(ed: Arc<Editor>, p: ObjectsParams, o: Origin) -> Reply {
+    let svc = service::need_scene(&ed).await?;
+    let before = svc.store.snapshot().objects.len();
+    select_named(&svc, p.objects.as_deref(), o).await?;
+    if svc.store.snapshot().selection.is_empty() {
+        return Err(CmdError::invalid("nothing is selected to delete"));
+    }
+    svc.store.send(SceneCmd::RemoveSelection { label: "Delete".into() }, o).await?;
+    let after = svc.store.snapshot().objects.len();
+    Ok(json!({ "removed": before.saturating_sub(after) }))
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DuplicateParams {
+    /// The objects by name. Left out: the selection.
+    #[serde(default)]
+    objects: Option<Vec<String>>,
+    /// Metres the copies are moved by (left out: they stand where the objects stand).
+    #[serde(default)]
+    offset: Option<[f32; 3]>,
+}
+
+fn added_reply(svc: &SceneService, added: &edit::Added) -> Value {
+    let s = svc.store.snapshot();
+    let objects: Vec<Value> =
+        s.selected_in_order().iter().filter_map(|id| s.get(*id)).map(|x| brief(&s, x)).collect();
+    json!({ "added": added.objects, "objects": objects, "warnings": added.warnings })
+}
+
+async fn scene_duplicate(ed: Arc<Editor>, p: DuplicateParams, o: Origin) -> Reply {
+    let svc = service::need_scene(&ed).await?;
+    let ids = edit::ids_of(&svc.store.snapshot(), p.objects.as_deref())?;
+    let offset = p.offset.map(|v| finite(v, "offset")).transpose()?.unwrap_or(Vec3::ZERO);
+    let added = edit::duplicate(&svc, ids, offset, o).await?;
+    Ok(added_reply(&svc, &added))
+}
+
+async fn scene_copy(ed: Arc<Editor>, p: ObjectsParams, _o: Origin) -> Reply {
+    let svc = service::need_scene(&ed).await?;
+    let ids = edit::ids_of(&svc.store.snapshot(), p.objects.as_deref())?;
+    let n = edit::copy(&ed, &svc, ids).await?;
+    Ok(json!({ "copied": n, "file": wire(&svc.root, &edit::clipboard_file(&svc)) }))
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PasteParams {
+    /// Metres the pasted objects are moved by from where they were copied.
+    #[serde(default)]
+    offset: Option<[f32; 3]>,
+}
+
+async fn scene_paste(ed: Arc<Editor>, p: PasteParams, o: Origin) -> Reply {
+    let svc = service::need_scene(&ed).await?;
+    let offset = p.offset.map(|v| finite(v, "offset")).transpose()?.unwrap_or(Vec3::ZERO);
+    let added = edit::paste(&ed, &svc, offset, o).await?;
+    Ok(added_reply(&svc, &added))
+}
+
+// ---------------------------------------------------------------- groups
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum GroupAction {
+    /// The objects become one group, where they stand.
+    #[default]
+    Group,
+    /// The objects (a group with its members) are written as a `.group` asset (`path`).
+    Save,
+    /// Each group's pivot moves to the middle of its objects.
+    CenterPivot,
+    /// The groups' pivot moves to their object `object`.
+    PivotTo,
+    /// The groups are made again from the `.group` they name.
+    Reload,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GroupParams {
+    #[serde(default)]
+    action: GroupAction,
+    /// The objects by name. Left out: the selection.
+    #[serde(default)]
+    objects: Option<Vec<String>>,
+    /// The new group's name (action=group).
+    #[serde(default)]
+    name: Option<String>,
+    /// The `.group` file (action=save): project-relative or absolute.
+    #[serde(default)]
+    path: Option<String>,
+    /// The member the pivot moves to (action=pivot_to).
+    #[serde(default)]
+    object: Option<String>,
+}
+
+fn groups_of(s: &SceneState, ids: &[ObjId]) -> Vec<Arc<Object>> {
+    ids.iter().filter_map(|id| s.get(*id)).filter(|o| o.class == ObjClass::Group).cloned().collect()
+}
+
+async fn scene_group(ed: Arc<Editor>, p: GroupParams, o: Origin) -> Reply {
+    let svc = service::need_scene(&ed).await?;
+    match p.action {
+        GroupAction::Group => {
+            let ids = select_named(&svc, p.objects.as_deref(), o).await?;
+            if ids.is_empty() {
+                return Err(CmdError::invalid("nothing is selected to group"));
+            }
+            let s = svc.store.snapshot();
+            let name = name_for(&s, p.name.as_deref(), "group")?;
+            let reply = svc.store.send(SceneCmd::Group { name: name.as_str().into() }, o).await?;
+            let SceneReply::Id(id) = reply else { return Err(CmdError::invalid("nothing could be grouped")) };
+            let s = svc.store.snapshot();
+            let g = s.get(id).ok_or_else(|| CmdError::internal("the group is gone"))?;
+            let members = match &g.data {
+                ObjData::Group(d) => d.members.len(),
+                _ => 0,
+            };
+            Ok(json!({ "object": brief(&s, g), "members": members }))
+        }
+        GroupAction::Save => {
+            let path = p
+                .path
+                .as_deref()
+                .map(str::trim)
+                .filter(|x| !x.is_empty())
+                .ok_or_else(|| CmdError::invalid("action=save takes path: the .group file"))?;
+            let s = svc.store.snapshot();
+            let ids = edit::ids_of(&s, p.objects.as_deref())?;
+            if ids.is_empty() {
+                return Err(CmdError::invalid("nothing is selected to save"));
+            }
+            let raw = PathBuf::from(path.replace('/', "\\"));
+            let file = if raw.is_absolute() { raw } else { svc.root.join(raw) };
+            let file = if file.extension().is_none() { file.with_extension(group::EXT) } else { file };
+            // positions about the first object (a group: its pivot)
+            let pivot = s.get(ids[0]).map_or(Vec3::ZERO, |x| x.position());
+            let n = edit::save_group(&ed, &svc, ids.clone(), pivot, file.clone()).await?;
+            // a group saved whole names its asset from now on
+            let groups = groups_of(&s, &ids);
+            if let ([g], Some(rel)) = (groups.as_slice(), RelPath::from_fs(&svc.root, &file)) {
+                let mut n2 = (**g).clone();
+                if let ObjData::Group(d) = &mut n2.data {
+                    d.reference = SmolStr::new(rel.as_str());
+                }
+                svc.store
+                    .send(
+                        SceneCmd::ReplaceObjects {
+                            objects: vec![n2],
+                            serial: s.serial,
+                            label: "Save Group".into(),
+                        },
+                        o,
+                    )
+                    .await?;
+            }
+            Ok(json!({ "file": wire(&svc.root, &file), "objects": n }))
+        }
+        GroupAction::CenterPivot | GroupAction::PivotTo => {
+            let s = svc.store.snapshot();
+            let ids = edit::ids_of(&s, p.objects.as_deref())?;
+            let target = p.object.as_deref().map(str::trim);
+            if p.action == GroupAction::PivotTo && target.is_none() {
+                return Err(CmdError::invalid("action=pivot_to takes object: a member of the group"));
+            }
+            let mut objects = Vec::new();
+            for g in groups_of(&s, &ids) {
+                let ObjData::Group(gd) = &g.data else { continue };
+                let members: Vec<_> = gd.members.iter().filter_map(|m| s.get(*m)).collect();
+                if members.is_empty() {
+                    continue;
+                }
+                let mut n = (*g).clone();
+                if p.action == GroupAction::CenterPivot {
+                    let sum = members.iter().fold(Vec3::ZERO, |acc, m| acc + m.position());
+                    n.xform.position = sum / members.len() as f32;
+                    n.xform.rotation = Vec3::ZERO;
+                } else if let Some(m) =
+                    members.iter().find(|m| target.is_some_and(|t| m.name.eq_ignore_ascii_case(t)))
+                {
+                    n.xform.position = m.position();
+                    n.xform.rotation = m.rotation();
+                } else {
+                    continue;
+                }
+                objects.push(n);
+            }
+            if objects.is_empty() {
+                return Err(CmdError::invalid("no group is selected (or none holds that object)"));
+            }
+            let changed = objects.len();
+            svc.store
+                .send(SceneCmd::ReplaceObjects { objects, serial: s.serial, label: "Group Pivot".into() }, o)
+                .await?;
+            Ok(json!({ "changed": changed }))
+        }
+        GroupAction::Reload => {
+            let s = svc.store.snapshot();
+            let ids = edit::ids_of(&s, p.objects.as_deref())?;
+            let groups = groups_of(&s, &ids);
+            if groups.is_empty() {
+                return Err(CmdError::invalid("no group is selected"));
+            }
+            let mut loaded = Vec::new();
+            for g in &groups {
+                let ObjData::Group(gd) = &g.data else { continue };
+                if gd.reference.is_empty() {
+                    return Err(CmdError::invalid(format!("{} names no .group to reload from", g.name)));
+                }
+                let l = edit::group_asset(&ed, &svc, &gd.reference).await?;
+                if l.members.len() != gd.members.len() && !gd.members.is_empty() {
+                    ed.log.warn(format!(
+                        "{}: the .group holds another number of objects; the members were made again",
+                        g.name
+                    ));
+                }
+                loaded.push((g.id, Box::new(l)));
+            }
+            let n = loaded.len();
+            svc.store.send(SceneCmd::ReloadGroups { groups: loaded }, o).await?;
+            Ok(json!({ "reloaded": n }))
+        }
+    }
+}
+
+async fn scene_ungroup(ed: Arc<Editor>, p: ObjectsParams, o: Origin) -> Reply {
+    let svc = service::need_scene(&ed).await?;
+    let ids = select_named(&svc, p.objects.as_deref(), o).await?;
+    let n = groups_of(&svc.store.snapshot(), &ids).len();
+    if n == 0 {
+        return Err(CmdError::invalid("no group is selected"));
+    }
+    svc.store.send(SceneCmd::Ungroup, o).await?;
+    Ok(json!({ "ungrouped": n }))
+}
+
+// ---------------------------------------------------------------- align, query
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum AlignAction {
+    /// Down onto what is below each object (under its whole box, or its pivot with line=true).
+    Drop,
+    /// Down onto the surface and turned to stand on its slope.
+    Surface,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AlignParams {
+    action: AlignAction,
+    /// The objects by name. Left out: the selection.
+    #[serde(default)]
+    objects: Option<Vec<String>>,
+    /// Drop along the line under each pivot instead of under the whole box.
+    #[serde(default)]
+    line: bool,
+}
+
+async fn scene_align(ed: Arc<Editor>, p: AlignParams, o: Origin) -> Reply {
+    let svc = service::need_scene(&ed).await?;
+    let ids = edit::ids_of(&svc.store.snapshot(), p.objects.as_deref())?;
+    if ids.is_empty() {
+        return Err(CmdError::invalid("nothing is selected to drop"));
+    }
+    let n = drop_ids(&ed, &svc, &ids, p.action == AlignAction::Surface, p.line, o).await?;
+    Ok(json!({ "requested": ids.len(), "landed": n }))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum QueryAction {
+    /// The floor below and the ceiling above `position`.
+    Ground,
+    /// The walls of `area` at the height `position` names: the grid cells rays hit.
+    Walls,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct QueryParams {
+    action: QueryAction,
+    /// Metres. action=walls reads its height.
+    position: [f32; 3],
+    /// How far the rays reach, metres (ground: 30, walls: 6).
+    #[serde(default)]
+    reach: Option<f32>,
+    /// action=walls: the area, `[x0, z0, x1, z1]` in metres, at most 80 x 80.
+    #[serde(default)]
+    area: Option<[f32; 4]>,
+    /// action=walls: metres between the points rays start from (0.5).
+    #[serde(default)]
+    step: Option<f32>,
+    /// action=walls: the size of a grid cell, metres (0.1).
+    #[serde(default)]
+    cell: Option<f32>,
+    /// action=walls: rays around each point (24).
+    #[serde(default)]
+    rays: Option<usize>,
+}
+
+async fn scene_query(ed: Arc<Editor>, p: QueryParams, _o: Origin) -> Reply {
+    let svc = service::need_scene(&ed).await?;
+    let at = finite(p.position, "position")?;
+    let snap = svc.store.snapshot();
+    svc.prefetch_library(&ed, &snap).await;
+    let (snap, pick) = svc.pick().await;
+    let lib = svc.library.clone();
+    match p.action {
+        QueryAction::Ground => {
+            let reach = p.reach.unwrap_or(30.0).max(0.1);
+            let (up, down) = ed
+                .exec
+                .cpu(move || {
+                    let cast = |d: Vec3| {
+                        ray_scene_objects(&pick, &snap, &lib, at, d, reach, None)
+                            .map(|h| h.point)
+                            .filter(|p| p.is_finite())
+                            .map(|p| p.y)
+                    };
+                    (cast(Vec3::Y), cast(Vec3::NEG_Y))
                 })
                 .await;
-            for l in log {
-                ed.log.warn(l);
+            Ok(json!({ "floor": down.map(r4), "ceiling": up.map(r4) }))
+        }
+        QueryAction::Walls => {
+            let [x0, z0, x1, z1] =
+                p.area.ok_or_else(|| CmdError::invalid("action=walls takes area: [x0, z0, x1, z1]"))?;
+            if x1 <= x0 || z1 <= z0 || (x1 - x0) > 80.0 || (z1 - z0) > 80.0 {
+                return Err(CmdError::invalid("the area must be non-empty and at most 80 x 80 m"));
             }
-            let s = Arc::new(summary);
-            *store.summary.lock() = Some(s.clone());
-            Ok(json!({ "rows": rows_json(&s) }))
-        }
-        "show" => {
-            let s = store
-                .summary
-                .lock()
-                .clone()
-                .ok_or_else(|| CmdError::invalid("nothing collected yet: action=collect first"))?;
-            Ok(json!({ "rows": rows_json(&s) }))
-        }
-        "export" => {
-            let s = store
-                .summary
-                .lock()
-                .clone()
-                .ok_or_else(|| CmdError::invalid("nothing collected yet: action=collect first"))?;
-            let file = edit::maps_file(&svc, a.need("file")?, "txt");
-            let text = s.export();
-            edit::writable(&ed, &file)?;
-            let f2 = file.clone();
-            ed.exec
-                .io(move || {
-                    if let Some(d) = f2.parent() {
-                        std::fs::create_dir_all(d)?;
-                    }
-                    std::fs::write(&f2, text.as_bytes())
+            let step = p.step.unwrap_or(0.5).max(0.1);
+            let reach = p.reach.unwrap_or(6.0).max(0.5);
+            let res = p.cell.unwrap_or(0.1).max(0.02);
+            let rays = p.rays.unwrap_or(24).max(4);
+            let y = at.y;
+            let w = ((x1 - x0) / res).ceil() as u32;
+            let h = ((z1 - z0) / res).ceil() as u32;
+            let mut origins = Vec::new();
+            let mut ox = x0;
+            while ox <= x1 {
+                let mut oz = z0;
+                while oz <= z1 {
+                    origins.push(Vec3::new(ox, y, oz));
+                    oz += step;
+                }
+                ox += step;
+            }
+            let cast = origins.len() * rays;
+            let mut cells = ed
+                .exec
+                .cpu(move || {
+                    use rayon::prelude::*;
+                    origins
+                        .par_iter()
+                        .flat_map_iter(|o| {
+                            let (snap, pick, lib) = (&snap, &pick, &lib);
+                            (0..rays).filter_map(move |i| {
+                                let ang = std::f32::consts::TAU * i as f32 / rays as f32;
+                                let dir = Vec3::new(ang.sin(), 0.0, ang.cos());
+                                let hit = ray_scene_objects(pick, snap, lib, *o, dir, reach, None)?;
+                                let q = hit.point;
+                                if !q.is_finite() || q.x < x0 || q.x >= x1 || q.z < z0 || q.z >= z1 {
+                                    return None;
+                                }
+                                let ix = (((q.x - x0) / res) as u32).min(w - 1);
+                                let iz = (((q.z - z0) / res) as u32).min(h - 1);
+                                Some(iz * w + ix)
+                            })
+                        })
+                        .collect::<Vec<u32>>()
                 })
-                .await
-                .map_err(|e| CmdError::io(format!("Export failed. ({e})")))?;
-            Ok(json!({ "file": path_json(&file) }))
+                .await;
+            cells.sort_unstable();
+            cells.dedup();
+            Ok(
+                json!({ "area": [r4(x0), r4(z0), r4(x1), r4(z1)], "cell": r4(res), "width": w, "height": h, "rays": cast, "cells": cells }),
+            )
         }
-        other => Err(CmdError::invalid(format!("unknown action '{other}' (collect, show, export, clear)"))),
     }
 }
 
-/// `compiler_errors`: action import (file=) | export (file=) | clear | state: the compiler's
-/// error list drawn in the viewport (Build > Import / Export / Clear Error List).
-async fn compiler_errors(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
-    let svc = SceneService::of(&ed)?;
-    let action = a.str("action").unwrap_or("state").to_ascii_lowercase();
-    let state = |d: &crate::debug::DebugDraw| json!({ "points": d.points.len(), "lines": d.lines.len(), "faces": d.wire_faces.len() });
-    // `$logs$` of the project
-    let logs = svc.root.join("logs");
-    let file_of = |a: &Args| -> Result<std::path::PathBuf, CmdError> {
-        let f = std::path::PathBuf::from(a.need("file")?.replace('/', "\\"));
-        Ok(if f.is_absolute() { f } else { logs.join(f) })
+// ---------------------------------------------------------------- attach
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AttachParams {
+    /// The spawn point. Left out: the selected one.
+    #[serde(default)]
+    spawn: Option<String>,
+    /// The shape that becomes the spawn point's own (it takes the shape's place).
+    #[serde(default)]
+    object: Option<String>,
+    /// Give the spawn point's shape back to the scene instead (every selected point without spawn).
+    #[serde(default)]
+    detach: bool,
+    /// The viewport's next click attaches the shape it hits (Attach on Click).
+    #[serde(default)]
+    on_click: Option<bool>,
+}
+
+async fn scene_attach(ed: Arc<Editor>, p: AttachParams, o: Origin) -> Reply {
+    let svc = service::need_scene(&ed).await?;
+    if let Some(on) = p.on_click {
+        let st = crate::objtools::set_state(&svc, o, |st| st.spawn_attach = on).await?;
+        return Ok(json!({ "on_click": st.spawn_attach }));
+    }
+    let s = svc.store.snapshot();
+    let spawn_named = |n: &str| {
+        s.find_any(n)
+            .filter(|x| x.class == ObjClass::SpawnPoint)
+            .cloned()
+            .ok_or_else(|| CmdError::not_found(format!("no spawn point is named {n}")))
     };
-    match action.as_str() {
-        "state" => Ok(state(&svc.store.snapshot().tools.debug)),
-        "clear" => {
-            let d = Arc::new(crate::debug::DebugDraw::default());
-            svc.store.send(SceneCmd::DebugDraw(d.clone()), o).await?;
-            Ok(state(&d))
+    if p.detach {
+        let spawns: Vec<Arc<Object>> = match p.spawn.as_deref() {
+            Some(n) => vec![spawn_named(n)?],
+            None => s
+                .selected_in_order()
+                .iter()
+                .filter_map(|id| s.get(*id))
+                .filter(|x| x.class == ObjClass::SpawnPoint)
+                .cloned()
+                .collect(),
+        };
+        let with: Vec<ObjId> = spawns
+            .iter()
+            .filter(|x| matches!(&x.data, ObjData::Spawn(d) if d.attached.is_some()))
+            .map(|x| x.id)
+            .collect();
+        for id in &with {
+            svc.store.send(SceneCmd::SpawnAttach { spawn: *id, object: None }, o).await?;
         }
-        "import" => {
-            let file = file_of(&a)?;
-            let shown = file.display().to_string();
-            let bytes = ed.exec.io(move || std::fs::read(&file)).await.map_err(|e| {
-                CmdError::not_found(format!("the error list could not be read: {shown} ({e})"))
-            })?;
-            let d =
-                crate::debug::read_compiler_error(&bytes).map_err(|e| CmdError::invalid(e.to_string()))?;
-            let d = Arc::new(d);
-            svc.store.send(SceneCmd::DebugDraw(d.clone()), o).await?;
-            Ok(state(&d))
-        }
-        "export" => {
-            let file = file_of(&a)?;
-            let bytes = crate::debug::write_compiler_error(&svc.store.snapshot().tools.debug);
-            edit::writable(&ed, &file)?;
-            let f2 = file.clone();
-            ed.exec
-                .io(move || {
-                    if let Some(d) = f2.parent() {
-                        std::fs::create_dir_all(d)?;
-                    }
-                    std::fs::write(&f2, &bytes)
-                })
-                .await
-                .map_err(|e| CmdError::io(format!("the error list could not be written: {e}")))?;
-            Ok(json!({ "file": path_json(&file) }))
-        }
-        other => Err(CmdError::invalid(format!("unknown action '{other}' (import, export, clear, state)"))),
+        return Ok(json!({ "detached": with.len() }));
     }
+    let object =
+        p.object.as_deref().ok_or_else(|| CmdError::invalid("scene.attach takes object (or detach=true)"))?;
+    let spawn = match p.spawn.as_deref() {
+        Some(n) => spawn_named(n)?,
+        None => {
+            let sel: Vec<_> = s
+                .selected_in_order()
+                .iter()
+                .filter_map(|id| s.get(*id))
+                .filter(|x| x.class == ObjClass::SpawnPoint)
+                .cloned()
+                .collect();
+            match sel.as_slice() {
+                [one] => one.clone(),
+                _ => return Err(CmdError::invalid("select one spawn point, or name it in spawn")),
+            }
+        }
+    };
+    let shape = s
+        .find_any(object)
+        .cloned()
+        .ok_or_else(|| CmdError::not_found(format!("no object is named {object}")))?;
+    svc.store.send(SceneCmd::SpawnAttach { spawn: spawn.id, object: Some(shape.id) }, o).await?;
+    Ok(json!({ "attached": shape.name.as_str(), "spawn": spawn.name.as_str() }))
 }
 
-// ---- the motion of a dynamic scene object --------------------------------------------------------
+// ---------------------------------------------------------------- motion
 
-/// A motion playing (`SAnimParams::bPlay`): which object, from which time, since when. The
-/// viewport poses the object from it on its own frames; Pause makes the pose a scene change.
+/// A motion playing: which object, from which time, since when. The viewport poses the object
+/// from it on its own frames; Pause makes the pose a scene change.
 #[derive(Clone, Copy, Debug)]
 pub struct Play {
-    pub id: crate::model::ObjId,
+    pub id: ObjId,
     pub from: f32,
     pub started: std::time::Instant,
 }
@@ -373,8 +1067,7 @@ impl MotionPlayback {
         session.services.get_or_init(MotionPlayback::default)
     }
 
-    /// The time of a playing motion now (`SAnimParams::Update` with loop: past the end it wraps
-    /// to the start).
+    /// The time of a playing motion now: past the end it wraps to the start.
     #[must_use]
     pub fn time_of(play: &Play, min_t: f32, max_t: f32) -> f32 {
         let mut t = play.from + play.started.elapsed().as_secs_f32();
@@ -392,9 +1085,9 @@ impl MotionPlayback {
 }
 
 /// Sends a motion edit of one object as its scene command.
-async fn send_motion(
+pub async fn send_motion(
     svc: &SceneService,
-    o: &crate::model::Object,
+    o: &Object,
     edit: &crate::objmotion::MotionEdit,
     origin: Origin,
 ) -> Result<(), CmdError> {
@@ -407,7 +1100,7 @@ async fn send_motion(
                 flags: e.flags,
                 pose: e.pose,
                 label: e.label.to_owned(),
-                merge: e.merge.then(|| gz_base::SmolStr::new_static("motion_frame")),
+                merge: e.merge.then(|| SmolStr::new_static("motion_frame")),
             },
             origin,
         )
@@ -415,47 +1108,130 @@ async fn send_motion(
     Ok(())
 }
 
-/// `object_motion name= action=`: state (the default) | motionable (on=) | import / export
-/// (file=, an `.anm`; relative to the project's `gamedata\anims`) | add_key | delete_key |
-/// scale_keys (from, to, scale) | normalize_keys (from, to, speed) | clamp | first | prev_key |
-/// prev_frame | play | pause | next_frame | next_key | last | auto_key (on=) | camera_view (on=)
-/// | range (min, max) | current (t) | key_time (t).
-async fn object_motion(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum MotionAction {
+    /// What the motion is.
+    #[default]
+    State,
+    /// The object moves along a motion, or not (`on`).
+    Motionable,
+    /// Reads a motion from an `.anm` (`path`, relative to the project's gamedata\anims).
+    Import,
+    /// Writes the motion as an `.anm` (`path`).
+    Export,
+    AddKey,
+    DeleteKey,
+    /// Scales the keys between `from` and `to` by `scale`.
+    ScaleKeys,
+    /// Spaces the keys between `from` and `to` for a `speed` in metres a second.
+    NormalizeKeys,
+    /// Cuts the range to the keys.
+    Clamp,
+    First,
+    PreviousKey,
+    PreviousFrame,
+    Play,
+    Pause,
+    NextFrame,
+    NextKey,
+    Last,
+    /// A move of the object makes a key (`on`).
+    AutoKey,
+    /// The viewport looks through the object (`on`).
+    CameraView,
+    /// The range: `min`, `max` in seconds.
+    Range,
+    /// The time the object stands at (`time`).
+    Current,
+    /// Moves the key at the current time to `time`.
+    KeyTime,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct MotionParams {
+    /// The object.
+    object: String,
+    /// What to do with the object's motion: read it (`state`), change its keys or its range, move
+    /// the time, play it.
+    #[serde(default)]
+    action: MotionAction,
+    /// The `.anm` (import, export).
+    #[serde(default)]
+    path: Option<String>,
+    /// motionable, auto_key, camera_view (default true).
+    #[serde(default)]
+    on: Option<bool>,
+    /// Seconds (scale_keys, normalize_keys).
+    #[serde(default)]
+    from: Option<f32>,
+    /// Seconds: the end of the span `from` starts (scale_keys, normalize_keys).
+    #[serde(default)]
+    to: Option<f32>,
+    /// The factor the keys' times are multiplied by (scale_keys).
+    #[serde(default)]
+    scale: Option<f32>,
+    /// Metres a second (normalize_keys).
+    #[serde(default)]
+    speed: Option<f32>,
+    /// Seconds (current, key_time).
+    #[serde(default)]
+    time: Option<f32>,
+    /// Seconds (range).
+    #[serde(default)]
+    min: Option<f32>,
+    /// Seconds: the end of the range `min` starts (range).
+    #[serde(default)]
+    max: Option<f32>,
+}
+
+fn need(v: Option<f32>, what: &str) -> Result<f32, CmdError> {
+    v.ok_or_else(|| CmdError::invalid(format!("this action takes {what}")))
+}
+
+async fn scene_motion(ed: Arc<Editor>, p: MotionParams, o: Origin) -> Reply {
     use crate::objmotion::MotionEdit as E;
-    let svc = SceneService::of(&ed)?;
+    let svc = service::need_scene(&ed).await?;
     let session = ed.project()?;
-    let name = a.need("name")?;
     let snap = svc.store.snapshot();
-    let obj = snap.find_relaxed(name).ok_or_else(|| CmdError::not_found("object not found"))?.clone();
+    let obj = snap
+        .find_any(&p.object)
+        .ok_or_else(|| CmdError::not_found(format!("no object is named {}", p.object)))?
+        .clone();
     let playback = MotionPlayback::of(&session);
-    let action = a.str("action").unwrap_or("state").to_ascii_lowercase();
-    let f = |k: &str| a.f32(k).ok_or_else(|| CmdError::invalid(format!("missing '{k}' argument")));
     let anims = svc.root.join("gamedata").join("anims");
-    let file_of = |a: &Args| -> Result<std::path::PathBuf, CmdError> {
-        let p = std::path::PathBuf::from(a.need("file")?.replace('/', "\\"));
-        let p = if p.is_absolute() { p } else { anims.join(p) };
-        Ok(if p.extension().is_none() { p.with_extension("anm") } else { p })
+    let file_of = |path: Option<&str>| -> Result<PathBuf, CmdError> {
+        let raw = path.ok_or_else(|| CmdError::invalid("this action takes path: the .anm"))?;
+        let f = PathBuf::from(raw.replace('/', "\\"));
+        let f = if f.is_absolute() { f } else { anims.join(f) };
+        Ok(if f.extension().is_none() { f.with_extension("anm") } else { f })
     };
-    let edit = match action.as_str() {
-        "state" => None,
-        "motionable" => Some(E::Motionable(a.bool("on").unwrap_or(true))),
-        "import" => {
-            let file = file_of(&a)?;
+    let on = p.on.unwrap_or(true);
+    let model = |o: &Object| {
+        let raw = o.motion.as_ref().ok_or_else(|| CmdError::invalid(format!("{} has no motion", o.name)))?;
+        let m = raw
+            .model()
+            .ok_or_else(|| CmdError::invalid("the motion is of a version this editor does not read"))?;
+        Ok::<_, CmdError>((crate::objmotion::params(&m, raw), m))
+    };
+    let edit = match p.action {
+        MotionAction::State => None,
+        MotionAction::Motionable => Some(E::Motionable(on)),
+        MotionAction::Import => {
+            let file = file_of(p.path.as_deref())?;
             let shown = file.display().to_string();
             let bytes =
                 ed.exec.io(move || std::fs::read(&file)).await.map_err(|e| {
                     CmdError::not_found(format!("the motion could not be read: {shown} ({e})"))
                 })?;
-            let m = gz_fmt_object::read_anm(&bytes).map_err(|e| CmdError::invalid(e.to_string()))?;
-            Some(E::Import(Box::new(m)))
+            Some(E::Import(Box::new(
+                gz_fmt_object::read_anm(&bytes).map_err(|e| CmdError::invalid(e.to_string()))?,
+            )))
         }
-        "export" => {
-            let file = file_of(&a)?;
-            let m = obj
-                .motion
-                .as_ref()
-                .and_then(|r| r.model())
-                .ok_or_else(|| CmdError::invalid(format!("'{}' has no motion to export", obj.name)))?;
+        MotionAction::Export => {
+            let file = file_of(p.path.as_deref())?;
+            let (_, m) = model(&obj)?;
             let bytes = gz_fmt_object::write_anm(&m);
             edit::writable(&ed, &file)?;
             let f2 = file.clone();
@@ -464,569 +1240,160 @@ async fn object_motion(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                     if let Some(d) = f2.parent() {
                         std::fs::create_dir_all(d)?;
                     }
-                    std::fs::write(&f2, &bytes)
+                    gz_editor::fsx::write_atomic(&f2, &bytes)
                 })
                 .await
-                .map_err(|e| CmdError::io(format!("!Can't save object motion: {} ({e})", file.display())))?;
+                .map_err(|e| {
+                    CmdError::io(format!("the motion could not be written: {} ({e})", file.display()))
+                })?;
             None
         }
-        "add_key" => Some(E::AddKey),
-        "delete_key" => Some(E::DeleteKey),
-        "scale_keys" => Some(E::ScaleKeys { from: f("from")?, to: f("to")?, scale: f("scale")? }),
-        "normalize_keys" => Some(E::NormalizeKeys { from: f("from")?, to: f("to")?, speed: f("speed")? }),
-        "clamp" => Some(E::Clamp),
-        "first" => Some(E::FirstFrame),
-        "prev_key" => Some(E::PreviousKey),
-        "prev_frame" => Some(E::PreviousFrame),
-        "next_frame" => Some(E::NextFrame),
-        "next_key" => Some(E::NextKey),
-        "last" => Some(E::LastFrame),
-        "auto_key" => Some(E::AutoKey(a.bool("on").unwrap_or(true))),
-        "camera_view" => Some(E::CameraView(a.bool("on").unwrap_or(true))),
-        "range" => Some(E::Range { min_t: a.f32("min"), max_t: a.f32("max") }),
-        "current" => Some(E::Current(f("t")?)),
-        "key_time" => Some(E::KeyTime(f("t")?)),
-        "play" => {
-            let raw = obj
-                .motion
-                .as_ref()
-                .ok_or_else(|| CmdError::invalid(format!("'{}' has no motion", obj.name)))?;
-            let m = raw
-                .model()
-                .ok_or_else(|| CmdError::invalid("the motion has a version this editor does not read"))?;
-            let p = crate::objmotion::params(&m, raw);
+        MotionAction::AddKey => Some(E::AddKey),
+        MotionAction::DeleteKey => Some(E::DeleteKey),
+        MotionAction::ScaleKeys => Some(E::ScaleKeys {
+            from: need(p.from, "from")?,
+            to: need(p.to, "to")?,
+            scale: need(p.scale, "scale")?,
+        }),
+        MotionAction::NormalizeKeys => Some(E::NormalizeKeys {
+            from: need(p.from, "from")?,
+            to: need(p.to, "to")?,
+            speed: need(p.speed, "speed")?,
+        }),
+        MotionAction::Clamp => Some(E::Clamp),
+        MotionAction::First => Some(E::FirstFrame),
+        MotionAction::PreviousKey => Some(E::PreviousKey),
+        MotionAction::PreviousFrame => Some(E::PreviousFrame),
+        MotionAction::NextFrame => Some(E::NextFrame),
+        MotionAction::NextKey => Some(E::NextKey),
+        MotionAction::Last => Some(E::LastFrame),
+        MotionAction::AutoKey => Some(E::AutoKey(on)),
+        MotionAction::CameraView => Some(E::CameraView(on)),
+        MotionAction::Range => Some(E::Range { min_t: p.min, max_t: p.max }),
+        MotionAction::Current => Some(E::Current(need(p.time, "time")?)),
+        MotionAction::KeyTime => Some(E::KeyTime(need(p.time, "time")?)),
+        MotionAction::Play => {
+            let (prm, _) = model(&obj)?;
             *playback.playing.lock() =
-                Some(Play { id: obj.id, from: p.t_current, started: std::time::Instant::now() });
+                Some(Play { id: obj.id, from: prm.t_current, started: std::time::Instant::now() });
             ed.exec.wake().ping();
             None
         }
-        "pause" => {
+        MotionAction::Pause => {
             let play = playback.playing.lock().take();
             match play {
                 Some(play) if play.id == obj.id => {
-                    let raw = obj.motion.as_ref().ok_or_else(|| CmdError::invalid("no motion"))?;
-                    let m = raw.model().ok_or_else(|| {
-                        CmdError::invalid("the motion has a version this editor does not read")
-                    })?;
-                    let p = crate::objmotion::params(&m, raw);
-                    Some(E::At(MotionPlayback::time_of(&play, p.min_t, p.max_t)))
+                    let (prm, _) = model(&obj)?;
+                    Some(E::At(MotionPlayback::time_of(&play, prm.min_t, prm.max_t)))
                 }
                 _ => None,
             }
         }
-        other => return Err(CmdError::invalid(format!("unknown action '{other}'"))),
     };
     if let Some(edit) = edit {
-        // a control stops the playback, as `bPlay = FALSE`
+        // a control stops the playback
         if !matches!(edit, E::AutoKey(_) | E::CameraView(_)) {
-            let mut p = playback.playing.lock();
-            if p.is_some_and(|p| p.id == obj.id) {
-                *p = None;
+            let mut pl = playback.playing.lock();
+            if pl.is_some_and(|x| x.id == obj.id) {
+                *pl = None;
             }
         }
         send_motion(&svc, &obj, &edit, o).await?;
     }
     let snap = svc.store.snapshot();
-    let o2 = snap.get(obj.id).ok_or_else(|| CmdError::not_found("object not found"))?;
-    let playing = playback.playing.lock().is_some_and(|p| p.id == o2.id);
+    let o2 = snap.get(obj.id).ok_or_else(|| CmdError::not_found("the object is gone"))?;
+    let playing = playback.playing.lock().is_some_and(|x| x.id == o2.id);
     let state = match o2.motion.as_ref().and_then(|r| r.model().map(|m| (m, r.clone()))) {
         Some((m, raw)) if o2.co_flags() & crate::model::co::MOTION != 0 => {
-            let p = crate::objmotion::params(&m, &raw);
+            let prm = crate::objmotion::params(&m, &raw);
             json!({
-                "motionable": true,
+                "on": true,
                 "keys": m.envelopes[0].keys.len(),
-                "length": crate::objmotion::length(&m).0,
-                "start": p.min_t,
-                "end": p.max_t,
-                "current": p.t_current,
+                "length": r4(crate::objmotion::length(&m).0),
+                "start": r4(prm.min_t),
+                "end": r4(prm.max_t),
+                "current": r4(prm.t_current),
                 "auto_key": o2.co_flags() & crate::objmotion::AUTO_KEY != 0,
                 "camera_view": o2.co_flags() & crate::objmotion::CAMERA_VIEW != 0,
                 "playing": playing,
             })
         }
-        _ => json!({ "motionable": false }),
+        _ => json!({ "on": false }),
     };
-    Ok(json!({ "name": o2.name.as_str(), "motion": state }))
+    Ok(json!({ "object": o2.name.as_str(), "motion": state, "position": v3(o2.position()) }))
 }
 
-// ---- the Object, Spawn and Group tools' commands -----------------------------------------------
+// ---------------------------------------------------------------- the summary
 
-/// Three numbers: `[x, y, z]` or `"x, y, z"`; one number stands for all three.
-fn vec3_arg(a: &Args, key: &str) -> Result<Option<crate::math::Vec3>, CmdError> {
-    let bad = || CmdError::invalid(format!("'{key}' must be three numbers"));
-    let Some(v) = a.get(key) else { return Ok(None) };
-    let nums: Vec<f32> = match v {
-        Value::Array(xs) => {
-            xs.iter().map(|x| x.as_f64().map(|f| f as f32)).collect::<Option<_>>().ok_or_else(bad)?
-        }
-        Value::String(s) => {
-            s.split(',').map(|p| p.trim().parse::<f32>().ok()).collect::<Option<_>>().ok_or_else(bad)?
-        }
-        Value::Number(n) => vec![n.as_f64().ok_or_else(bad)? as f32],
-        _ => return Err(bad()),
-    };
-    match nums.as_slice() {
-        [x] if x.is_finite() => Ok(Some(crate::math::Vec3::splat(*x))),
-        [x, y, z] if x.is_finite() && y.is_finite() && z.is_finite() => {
-            Ok(Some(crate::math::Vec3::new(*x, *y, *z)))
-        }
-        _ => Err(bad()),
+/// The summary of the last collect: the Scene > Summary Info sheet reads it.
+#[derive(Default)]
+pub struct SummaryStore {
+    pub summary: parking_lot::Mutex<Option<Arc<crate::summary::Summary>>>,
+}
+
+impl SummaryStore {
+    #[must_use]
+    pub fn of(session: &gz_editor::ProjectSession) -> Arc<SummaryStore> {
+        session.services.get_or_init(SummaryStore::default)
     }
 }
 
-/// The Object tool's Randomize Added Objects and its Random Settings, as `object_tool
-/// action=random` answers them (rotations in degrees).
-fn random_json(part: &crate::tools::ToolPart) -> Value {
-    use crate::tools::{
-        FL_APPEND_RANDOM, FL_APPEND_RANDOM_PROPORTIONAL, FL_APPEND_RANDOM_ROTATION, FL_APPEND_RANDOM_SCALE,
-    };
-    let r = |v: f32| (f64::from(v) * 1000.0).round() / 1000.0;
-    let v = |x: crate::math::Vec3| json!([r(x.x), r(x.y), r(x.z)]);
-    let deg = |x: crate::math::Vec3| json!([r(x.x.to_degrees()), r(x.y.to_degrees()), r(x.z.to_degrees())]);
-    let crate::tools::ToolOpts::Objects(o) = &part.opts else { return json!({ "on": false }) };
-    json!({
-        "on": part.flags & FL_APPEND_RANDOM != 0,
-        "objects": o.objects.iter().map(|x| x.as_str()).collect::<Vec<_>>(),
-        "scale": part.flags & FL_APPEND_RANDOM_SCALE != 0,
-        "proportional": part.flags & FL_APPEND_RANDOM_PROPORTIONAL != 0,
-        "min_scale": v(o.min_scale),
-        "max_scale": v(o.max_scale),
-        "rotate": part.flags & FL_APPEND_RANDOM_ROTATION != 0,
-        "min_rotation": deg(o.min_rotation),
-        "max_rotation": deg(o.max_rotation),
-    })
+/// Where a texture's description and its animation are: the project's and the editor's
+/// `rawdata\textures\<name>.thm`, `gamedata\textures\<name>.seq`.
+fn texture_info(roots: &[PathBuf], name: &str) -> Option<(gz_fmt_tex::TextureParams, u32)> {
+    let rel = name.replace('/', "\\");
+    let thm = roots
+        .iter()
+        .find_map(|r| std::fs::read(r.join("rawdata\\textures").join(format!("{rel}.thm"))).ok())?;
+    let params = gz_fmt_tex::read_texture_thm(&thm).ok()?.params;
+    // the `.seq` holds a line per frame after its first
+    let frames = roots
+        .iter()
+        .find_map(|r| std::fs::read(r.join("gamedata\\textures").join(format!("{rel}.seq"))).ok())
+        .map_or(1, |b| String::from_utf8_lossy(&b).lines().count().saturating_sub(1).max(1) as u32);
+    Some((params, frames))
 }
 
-/// `object_tool action=random [on=] [objects=] [scale=] [proportional=] [min_scale=] [max_scale=]
-/// [rotate=] [min_rotation=] [max_rotation=]`: Randomize Added Objects and the Random Append
-/// sheet (`FillAppendRandomProperties`). What is left out keeps its value; rotations are degrees;
-/// `objects` (a list, at most 32) is what a click of Place picks from. One undo step.
-async fn object_random(ed: &Arc<Editor>, svc: &SceneService, a: &Args, o: Origin) -> Reply {
-    use crate::tools::{
-        FL_APPEND_RANDOM, FL_APPEND_RANDOM_PROPORTIONAL, FL_APPEND_RANDOM_ROTATION, FL_APPEND_RANDOM_SCALE,
-    };
-    let snap = svc.store.snapshot();
-    let mut t = snap.tools.part(ObjClass::SceneObject).clone();
-    let before = t.clone();
-    for (key, bit) in [
-        ("on", FL_APPEND_RANDOM),
-        ("scale", FL_APPEND_RANDOM_SCALE),
-        ("proportional", FL_APPEND_RANDOM_PROPORTIONAL),
-        ("rotate", FL_APPEND_RANDOM_ROTATION),
-    ] {
-        if let Some(on) = a.bool(key) {
-            t.flags = if on { t.flags | bit } else { t.flags & !bit };
-        }
-    }
-    let objects: Option<Vec<gz_base::SmolStr>> = match a.get("objects") {
-        None => None,
-        Some(Value::Array(xs)) => {
-            Some(xs.iter().filter_map(Value::as_str).map(gz_base::SmolStr::new).collect())
-        }
-        Some(Value::String(s)) => Some(
-            s.split([',', ';']).map(str::trim).filter(|x| !x.is_empty()).map(gz_base::SmolStr::new).collect(),
-        ),
-        Some(_) => return Err(CmdError::invalid("'objects' must be a list of library objects")),
-    };
-    let (min_s, max_s) = (vec3_arg(a, "min_scale")?, vec3_arg(a, "max_scale")?);
-    let (min_r, max_r) = (vec3_arg(a, "min_rotation")?, vec3_arg(a, "max_rotation")?);
-    if let crate::tools::ToolOpts::Objects(opts) = &mut t.opts {
-        if let Some(list) = objects {
-            // every one has to load: a click would log "Can't load reference object" otherwise
-            for name in &list {
-                let (lib, key) = (svc.library.clone(), crate::library::normalize(name));
-                if ed.exec.io(move || lib.load(&key)).await.is_err() {
-                    return Err(CmdError::not_found(format!("no library object '{name}'")));
-                }
-            }
-            opts.objects = list.into_iter().take(32).collect();
-        }
-        let rad = |v: crate::math::Vec3| {
-            crate::math::Vec3::new(v.x.to_radians(), v.y.to_radians(), v.z.to_radians())
-        };
-        if let Some(v) = min_s {
-            opts.min_scale = v;
-        }
-        if let Some(v) = max_s {
-            opts.max_scale = v;
-        }
-        if let Some(v) = min_r {
-            opts.min_rotation = rad(v);
-        }
-        if let Some(v) = max_r {
-            opts.max_rotation = rad(v);
-        }
-    }
-    if t != before {
-        svc.store
-            .send(
-                SceneCmd::SetWorld {
-                    level: Box::new(snap.meta.level.clone()),
-                    tools: vec![t],
-                    serial: snap.serial,
-                    label: "Random Settings".into(),
-                },
-                o,
-            )
-            .await?;
-    }
-    Ok(json!({ "random": random_json(svc.store.snapshot().state.tools.part(ObjClass::SceneObject)) }))
-}
-
-/// `object_tool action=reset_surfaces [selected=true]`: `UIObjectTool::ClearSurface` - the
-/// visible scene objects (the selected ones with `selected`) wear their reference's surfaces
-/// again. One undo step. `action=random`: see [`object_random`].
-async fn object_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
-    let svc = SceneService::of(&ed)?;
-    let action = a.need("action")?.to_ascii_lowercase();
-    if action == "random" {
-        return object_random(&ed, &svc, &a, o).await;
-    }
-    if action != "reset_surfaces" {
-        return Err(CmdError::invalid(format!("unknown action '{action}' (reset_surfaces, random)")));
-    }
-    let selected = a.bool("selected").unwrap_or(true);
-    let snap = svc.store.snapshot();
-    let mut objects = Vec::new();
-    for obj in snap.of_class(ObjClass::SceneObject) {
-        if !obj.flags.visible || (selected && !snap.is_selected(obj.id)) {
-            continue;
-        }
-        let crate::model::ObjData::SceneObject(d) = &obj.data else { continue };
-        if d.flags & crate::objects::SO_USE_SURFACE == 0 && d.surfaces.is_empty() {
-            continue;
-        }
-        let mut n = (**obj).clone();
-        if let crate::model::ObjData::SceneObject(d) = &mut n.data {
-            d.flags &= !crate::objects::SO_USE_SURFACE;
-            d.surfaces.clear();
-        }
-        objects.push(n);
-    }
-    let n = objects.len();
-    if n > 0 {
-        svc.store
-            .send(
-                SceneCmd::ReplaceObjects { objects, serial: snap.serial, label: "Reset Surfaces".into() },
-                o,
-            )
-            .await?;
-    }
-    Ok(json!({ "reset": n }))
-}
-
-/// `spawn_attach action=attach spawn= object=` | `detach`: `CSpawnPoint::AttachObject` - a shape
-/// becomes the selected spawn point's own (the point takes its place, rotation and scale); detach
-/// gives the selected points' shapes back to the scene. One undo step.
-async fn spawn_attach(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
-    let svc = SceneService::of(&ed)?;
-    let action = a.need("action")?.to_ascii_lowercase();
-    let snap = svc.store.snapshot();
-    match action.as_str() {
-        "attach" => {
-            let spawn = match a.text("spawn") {
-                Some(n) => snap.find(ObjClass::SpawnPoint, &n.to_lowercase()).cloned(),
-                None => {
-                    let sel: Vec<_> =
-                        snap.of_class(ObjClass::SpawnPoint).filter(|x| snap.is_selected(x.id)).collect();
-                    if sel.len() != 1 {
-                        return Err(CmdError::invalid("Select one shape."));
-                    }
-                    sel.first().map(|x| (*x).clone())
-                }
-            }
-            .ok_or_else(|| CmdError::not_found("spawn point not found"))?;
-            let shape = snap
-                .find_relaxed(a.need("object")?)
-                .cloned()
-                .ok_or_else(|| CmdError::not_found("object not found"))?;
-            svc.store.send(SceneCmd::SpawnAttach { spawn: spawn.id, object: Some(shape.id) }, o).await?;
-            Ok(json!({ "attached": shape.name.as_str(), "spawn": spawn.name.as_str() }))
-        }
-        "detach" => {
-            let ids: Vec<_> = snap
-                .of_class(ObjClass::SpawnPoint)
-                .filter(|x| snap.is_selected(x.id))
-                .filter(|x| matches!(&x.data, crate::model::ObjData::Spawn(s) if s.attached.is_some()))
-                .map(|x| x.id)
-                .collect();
-            for id in &ids {
-                svc.store.send(SceneCmd::SpawnAttach { spawn: *id, object: None }, o).await?;
-            }
-            Ok(json!({ "detached": ids.len() }))
-        }
-        // Attach on Click: the next click in the viewport attaches what it hits
-        "on_click" => {
-            let on = a.bool("on").unwrap_or(true);
-            let s = crate::objtools::set_state(&svc, o, |st| st.spawn_attach = on).await?;
-            Ok(json!({ "attach_on_click": s.spawn_attach }))
-        }
-        other => Err(CmdError::invalid(format!("unknown action '{other}' (attach, detach, on_click)"))),
-    }
-}
-
-/// `group_tool action=center_pivot` (`CenterToGroup`: every group's pivot to the middle of its
-/// objects) | `align_pivot object=` (the selected groups' pivot to that object of theirs) |
-/// `save_as file=` (the selected group as a library `.group`, `SaveSelectedObject`) |
-/// `reload` (`ReloadRefsSelectedObject`: the selected groups made again from their library
-/// `.group`).
-async fn group_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
-    let svc = SceneService::of(&ed)?;
-    let action = a.need("action")?.to_ascii_lowercase();
-    let snap = svc.store.snapshot();
-    match action.as_str() {
-        // the panel's Group and Ungroup buttons
-        "group" => {
-            if snap.selected_in_order().is_empty() {
-                return Err(CmdError::invalid("No object(s) selected."));
-            }
-            let name = match a.text("name") {
-                Some(n) => n.to_owned(),
-                None => snap.gen_name(Some("group")),
-            };
-            let reply = svc.store.send(SceneCmd::Group { name: name.as_str().into() }, o).await?;
-            let id = match reply {
-                SceneReply::Id(id) => id.0,
-                _ => 0,
-            };
-            let snap = svc.store.snapshot();
-            let members = match snap.get(crate::model::ObjId(id)).map(|g| &g.data) {
-                Some(crate::model::ObjData::Group(g)) => g.members.len(),
-                _ => 0,
-            };
-            Ok(json!({ "object": { "name": name, "id": id }, "members": members }))
-        }
-        "ungroup" => {
-            let n = snap.of_class(ObjClass::Group).filter(|g| snap.is_selected(g.id)).count();
-            if n == 0 {
-                return Err(CmdError::invalid("No group selected."));
-            }
-            svc.store.send(SceneCmd::Ungroup, o).await?;
-            Ok(json!({ "ungrouped": n }))
-        }
-        "center_pivot" | "align_pivot" => {
-            let target = a.text("object").map(str::to_lowercase);
-            if action == "align_pivot" && target.is_none() {
-                return Err(CmdError::invalid("missing 'object' argument"));
-            }
-            let mut objects = Vec::new();
-            for g in snap.of_class(ObjClass::Group) {
-                // oracle: Center to Group takes every group of the tool, selected or not
-                if action == "align_pivot" && !snap.is_selected(g.id) {
-                    continue;
-                }
-                let crate::model::ObjData::Group(gd) = &g.data else { continue };
-                let members: Vec<_> = gd.members.iter().filter_map(|m| snap.get(*m)).collect();
-                if members.is_empty() {
-                    continue;
-                }
-                let mut n = (**g).clone();
-                if action == "center_pivot" {
-                    let sum = members.iter().fold(crate::math::Vec3::ZERO, |acc, m| acc + m.position());
-                    n.xform.position = sum / members.len() as f32;
-                    n.xform.rotation = crate::math::Vec3::ZERO;
-                } else if let Some(m) = members.iter().find(|m| Some(m.name.to_string()) == target) {
-                    n.xform.position = m.position();
-                    n.xform.rotation = m.rotation();
-                } else {
-                    continue;
-                }
-                objects.push(n);
-            }
-            if objects.is_empty() {
-                ed.log.error("Nothing selected.");
-                return Ok(json!({ "changed": 0 }));
-            }
-            let count = objects.len();
-            svc.store
-                .send(
-                    SceneCmd::ReplaceObjects { objects, serial: snap.serial, label: "Group Pivot".into() },
-                    o,
-                )
-                .await?;
-            Ok(json!({ "changed": count }))
-        }
-        "save_as" => {
-            let sel: Vec<_> = snap.of_class(ObjClass::Group).filter(|g| snap.is_selected(g.id)).collect();
-            let Some(g) = sel.first() else {
-                return Err(CmdError::invalid("No object(s) selected."));
-            };
-            let raw = std::path::PathBuf::from(a.need("file")?.replace('/', "\\"));
-            let groups = svc.root.join("rawdata").join("groups");
-            let file = if raw.is_absolute() { raw } else { groups.join(raw) };
-            let file = if file.extension().is_none() { file.with_extension("group") } else { file };
-            // `CGroupObject::SaveStream`: the object's body, without the scene's class wrapper
-            let mut w = gz_chunk::Writer::new();
-            crate::objects::write_stream(&mut w, g, &snap, 0)
-                .map_err(|e| CmdError::invalid(e.to_string()))?;
-            let bytes = w.into_bytes();
-            let body = gz_chunk::Reader::new(&bytes)
-                .find_chunk(crate::objects::CHUNK_OBJECT_BODY)
-                .map(|(b, _)| b.to_vec())
-                .ok_or_else(|| CmdError::internal("the group wrote no body"))?;
-            edit::writable(&ed, &file)?;
-            let f2 = file.clone();
-            ed.exec
-                .io(move || {
-                    if let Some(d) = f2.parent() {
-                        std::fs::create_dir_all(d)?;
-                    }
-                    std::fs::write(&f2, &body)
-                })
-                .await
-                .map_err(|e| CmdError::io(format!("Cant write file [{}] ({e})", file.display())))?;
-            Ok(json!({ "file": path_json(&file) }))
-        }
-        "reload" => {
-            let sel: Vec<_> =
-                snap.of_class(ObjClass::Group).filter(|g| snap.is_selected(g.id)).cloned().collect();
-            if sel.is_empty() {
-                ed.log.error("Nothing selected.");
-                return Ok(json!({ "reloaded": 0 }));
-            }
-            let mut groups = Vec::new();
-            for g in &sel {
-                let crate::model::ObjData::Group(gd) = &g.data else { continue };
-                if gd.reference.is_empty() {
-                    return Err(CmdError::invalid(format!("ERROR: '{}' - has empty reference.", g.name)));
-                }
-                let loaded = library_group(&ed, &svc, &gd.reference).await?;
-                if loaded.members.len() != gd.members.len() && !gd.members.is_empty() {
-                    ed.log.error(format!("Not all objects synchronised correctly ({}).", g.name));
-                }
-                groups.push((g.id, Box::new(loaded)));
-            }
-            let n = groups.len();
-            svc.store.send(SceneCmd::ReloadGroups { groups }, o).await?;
-            Ok(json!({ "reloaded": n }))
-        }
-        "place" => {
-            let reference = a.need("ref")?.replace('/', "\\");
-            let mut at = crate::math::Transform::at(crate::cmd::in_front(&snap));
-            for (i, k) in ["x", "y", "z"].iter().enumerate() {
-                if let Some(v) = a.f32(k) {
-                    at.position[i] = v;
-                }
-            }
-            if !at.position.is_finite() {
-                return Err(CmdError::invalid("non-finite position"));
-            }
-            let mut loaded = library_group(&ed, &svc, &reference).await?;
-            // `GenObjectName` from the library name, the reference the one asked for
-            loaded.obj.name = snap.gen_name(Some(&reference)).into();
-            if let crate::model::ObjData::Group(g) = &mut loaded.obj.data {
-                g.reference = reference.as_str().into();
-            }
-            let name = loaded.obj.name.to_string();
-            let reply = svc.store.send(SceneCmd::PlaceGroup { loaded: Box::new(loaded), at }, o).await?;
-            let id = match reply {
-                crate::apply::SceneReply::Id(id) => id.0,
-                _ => 0,
-            };
-            Ok(json!({ "object": { "name": name, "id": id } }))
-        }
-        other => Err(CmdError::invalid(format!(
-            "unknown action '{other}' (group, ungroup, center_pivot, align_pivot, save_as, reload, place)"
-        ))),
-    }
-}
-
-/// A group body's chunks with the reference chunk (`GROUPOBJ_CHUNK_REFERENCE`, 4) naming
-/// `reference`; a body that does not parse as chunks is given back as it is.
-fn with_reference(body: &[u8], reference: &str) -> Vec<u8> {
-    const CHUNK_REFERENCE: u32 = 4;
-    let chunk = |out: &mut Vec<u8>| {
-        out.extend_from_slice(&CHUNK_REFERENCE.to_le_bytes());
-        out.extend_from_slice(&u32::try_from(reference.len() + 1).unwrap_or(u32::MAX).to_le_bytes());
-        out.extend_from_slice(reference.as_bytes());
-        out.push(0);
-    };
-    let mut out = Vec::with_capacity(body.len() + reference.len() + 9);
-    let mut at = 0;
-    let mut written = false;
-    while at + 8 <= body.len() {
-        let id = u32::from_le_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]]);
-        let size = u32::from_le_bytes([body[at + 4], body[at + 5], body[at + 6], body[at + 7]]) as usize;
-        let Some(end) = (at + 8).checked_add(size).filter(|e| *e <= body.len()) else {
-            return body.to_vec();
-        };
-        if id != CHUNK_REFERENCE {
-            out.extend_from_slice(&body[at..end]);
-        } else if !written {
-            chunk(&mut out);
-            written = true;
-        }
-        at = end;
-    }
-    if at != body.len() {
-        return body.to_vec();
-    }
-    if !written {
-        chunk(&mut out);
-    }
-    out
-}
-
-/// A library group (`$groups$\<reference>.group`, the project's first) read as the scene reads a
-/// group: `CGroupObject::LoadStream` of `UpdateReference`.
-async fn library_group(
+/// Collects the Summary Info (kept for the sheet), writes it as text into `path` when given,
+/// and answers its rows.
+pub(crate) async fn collect_summary(
     ed: &Arc<Editor>,
-    svc: &SceneService,
-    reference: &str,
-) -> Result<crate::objects::Loaded, CmdError> {
-    let rel = format!("{}.group", reference.replace('/', "\\"));
-    let files = [
-        svc.root.join("rawdata").join("groups").join(&rel),
-        gz_project::library_root(ed).join("rawdata").join("groups").join(&rel),
-    ];
-    let shown = files[0].display().to_string();
-    let body = ed
+    svc: &Arc<SceneService>,
+    path: Option<String>,
+) -> Result<Value, CmdError> {
+    let session = ed.project()?;
+    let snap = svc.store.snapshot();
+    svc.prefetch_library(ed, &snap).await;
+    let lib = svc.library.clone();
+    let roots = vec![svc.root.clone(), svc.editor_root.clone()];
+    let (summary, log) = ed
         .exec
-        .io(move || files.iter().find_map(|f| std::fs::read(f).ok()))
-        .await
-        .ok_or_else(|| CmdError::invalid(format!("ERROR: Can't open group file: '{shown}'.")))?;
-    // the file is `CGroupObject::SaveStream`: the body without the class wrapper, its reference
-    // chunk empty - `UpdateReference` sets the name it was opened by
-    let mut w = gz_chunk::Writer::new();
-    w.open_chunk(crate::objects::CHUNK_OBJECT_CLASS);
-    w.w_u32(ObjClass::Group.id());
-    w.close_chunk();
-    w.open_chunk(crate::objects::CHUNK_OBJECT_BODY);
-    w.w(&with_reference(&body, reference));
-    w.close_chunk();
-    let bytes = w.into_bytes();
-    let settings = crate::game::settings(ed).await;
-    let mut cx = crate::objects::ReadCx::new(settings.as_deref().map(|s| s as &dyn gz_entities::Settings));
-    let loaded = crate::objects::read_stream(&gz_chunk::Reader::new(&bytes), &mut cx)
-        .map_err(|e| CmdError::invalid(format!("Can't load group '{reference}': {e}")))?;
-    for w in cx.warnings {
-        ed.log.warn(w);
+        .io(move || {
+            let mut s = crate::summary::collect(&snap, &lib);
+            let log = s.prepare(&lib, &|n| texture_info(&roots, n));
+            (s, log)
+        })
+        .await;
+    for l in log {
+        ed.log.warn(l);
     }
-    if !matches!(loaded.obj.data, crate::model::ObjData::Group(_)) {
-        return Err(CmdError::invalid(format!("Can't load group '{reference}': it holds no objects.")));
+    let s = Arc::new(summary);
+    *SummaryStore::of(&session).summary.lock() = Some(s.clone());
+    if let Some(path) = path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        let raw = PathBuf::from(path.replace('/', "\\"));
+        let file = if raw.is_absolute() { raw } else { svc.root.join(raw) };
+        edit::writable(ed, &file)?;
+        let text = s.export();
+        let f2 = file.clone();
+        ed.exec
+            .io(move || {
+                if let Some(d) = f2.parent() {
+                    std::fs::create_dir_all(d)?;
+                }
+                gz_editor::fsx::write_atomic(&f2, text.as_bytes())
+            })
+            .await
+            .map_err(|e| CmdError::io(format!("the summary could not be written: {e}")))?;
     }
-    Ok(loaded)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::with_reference;
-
-    fn chunk(id: u32, body: &[u8]) -> Vec<u8> {
-        let mut v = id.to_le_bytes().to_vec();
-        v.extend_from_slice(&u32::try_from(body.len()).unwrap().to_le_bytes());
-        v.extend_from_slice(body);
-        v
-    }
-
-    #[test]
-    fn a_library_group_gets_the_reference_it_was_opened_by() {
-        let body = [chunk(0, &[0x11, 0]), chunk(4, &[0]), chunk(1, &[1, 2, 3])].concat();
-        let want = [chunk(0, &[0x11, 0]), chunk(4, b"doors\0"), chunk(1, &[1, 2, 3])].concat();
-        assert_eq!(with_reference(&body, "doors"), want);
-        // no reference chunk: one is added; a torn body is left as it is
-        let bare = chunk(0, &[0x11, 0]);
-        assert_eq!(with_reference(&bare, "a"), [bare.clone(), chunk(4, b"a\0")].concat());
-        assert_eq!(with_reference(&bare[..5], "a"), bare[..5].to_vec());
-    }
+    Ok(Value::Array(s.rows().into_iter().map(|(k, v)| json!({ "key": k, "value": v })).collect()))
 }

@@ -633,7 +633,7 @@ impl Outliner {
             visible,
             if visible { "Hide this class in the viewport" } else { "Show this class in the viewport" },
         ) {
-            svc.store.post(SceneCmd::ToolFlags { class, visible: Some(!visible), readonly: None }, origin);
+            svc.store.post(SceneCmd::ClassView { class, visible: Some(!visible), locked: None }, origin);
         }
         let cy = rect.center().y;
         let x0 = eye.max.x + 4.0;
@@ -744,9 +744,11 @@ impl Outliner {
             }
             RowMenu::SelectClass(c) => {
                 self.skip_scroll = true;
-                svc.store.post(SceneCmd::SelectClass { class: None, select: false }, origin);
-                svc.store.post(SceneCmd::SelectClass { class: Some(c), select: true }, origin);
-                svc.store.post(SceneCmd::SetTarget(c), origin);
+                svc.store.post(SceneCmd::SelectAll { classes: None, select: false, invert: false }, origin);
+                svc.store.post(
+                    SceneCmd::SelectAll { classes: Some(vec![c]), select: true, invert: false },
+                    origin,
+                );
             }
             RowMenu::Toggle(id, visible) => svc.store.post(SceneCmd::Show { ids: vec![id], visible }, origin),
             RowMenu::Rename(id) => {
@@ -918,15 +920,9 @@ fn row_menu(ui: &mut Ui, snap: &SceneState, o: &gz_scene::Object) -> Option<RowM
     out
 }
 
-/// `PickObject`: the object alone selected, its class the target.
-pub fn pick(svc: &SceneService, editor: &Editor, snap: &SceneState, id: ObjId) {
-    let origin = editor.ui_origin();
-    svc.store.post(SceneCmd::Select { ids: vec![id], mode: SelectMode::Set }, origin);
-    if let Some(o) = snap.get(id)
-        && snap.tools.target != o.class
-    {
-        svc.store.post(SceneCmd::SetTarget(o.class), origin);
-    }
+/// `PickObject`: the object alone selected.
+pub fn pick(svc: &SceneService, editor: &Editor, _snap: &SceneState, id: ObjId) {
+    svc.store.post(SceneCmd::Select { ids: vec![id], mode: SelectMode::Set }, editor.ui_origin());
 }
 
 /// `AskDelete`: the kit's confirmation names the object; Yes deletes it (Undo brings it back).
@@ -1000,7 +996,7 @@ pub fn show_objects(
     let (ids, classes) = plan_show(&snap, selected_only, visible);
     let n = ids.len();
     for c in classes {
-        svc.store.post(SceneCmd::ToolFlags { class: c, visible: Some(true), readonly: None }, origin);
+        svc.store.post(SceneCmd::ClassView { class: c, visible: Some(true), locked: None }, origin);
     }
     if !ids.is_empty() {
         svc.store.post(SceneCmd::Show { ids, visible }, origin);

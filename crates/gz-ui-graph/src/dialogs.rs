@@ -1,7 +1,7 @@
 //! The graph tab's dialogs: Find in Project (`dlg.nq_project_find`), Rename Task
 //! (`dlg.nq_task_rename`), Task References (`dlg.nq_task_references`) and Edit Text / Edit Lua
 //! (`dlg.nq_text`). What they ask runs off the UI thread (the graph area's project search and
-//! references, `quest_rename_task`); the answer lands on a later frame.
+//! references, `graph.edit`'s `rename_task`); the answer lands on a later frame.
 
 use std::cell::Cell;
 use std::sync::Arc;
@@ -103,7 +103,7 @@ impl ProjectFind {
         ask(
             editor,
             ctx,
-            gz_nq::tab_handlers::project_find,
+            gz_nq::project_find,
             args(&[("query", Json::from(self.query.clone()))]),
             self.reply.clone(),
         );
@@ -324,13 +324,14 @@ impl TaskRename {
         self.open = open && !cancel.get();
         if rename.get() {
             self.busy = true;
-            let a = args(&[
-                ("path", Json::from(path)),
-                ("from", Json::from(self.from.clone())),
-                ("to", Json::from(to)),
-                ("ack_runtime_identity", Json::Bool(true)),
-            ]);
-            call(editor, &ctx, "quest_rename_task", a, self.reply.clone());
+            let op = serde_json::json!([{
+                "op": "rename_task",
+                "from": self.from.clone(),
+                "to": to,
+                "ack_runtime_identity": true,
+            }]);
+            let a = args(&[("doc", Json::from(path)), ("ops", op)]);
+            call(editor, &ctx, "graph.edit", a, self.reply.clone());
         }
     }
 }
@@ -370,7 +371,7 @@ impl TaskRefs {
         self.busy = true;
         let a =
             args(&[("type", Json::from("task_id")), ("value", Json::from(id)), ("path", Json::from(path))]);
-        ask(editor, ctx, gz_nq::tab_handlers::references, a, self.reply.clone());
+        ask(editor, ctx, gz_nq::references, a, self.reply.clone());
     }
 
     /// Draws the dialog; the reference picked: (node, slot of an action or empty).

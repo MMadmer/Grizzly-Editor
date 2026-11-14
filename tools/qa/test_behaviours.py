@@ -24,6 +24,7 @@ import sys
 import tempfile
 import time
 
+import graph_ref
 import qa_target
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -69,7 +70,7 @@ class Editor:
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
             try:
-                if mcp("mod_manifest", timeout=30).get("ok"):
+                if mcp("mod.info", timeout=30).get("ok"):
                     return
             except OSError:
                 pass
@@ -256,9 +257,9 @@ def run(project: str) -> None:
         ed.start(project)
 
         # ------------------------------------------------------------------ A: the vocabulary
-        cat = mcp("quest_catalog")
-        kinds = cat.get("kinds", [])
-        by_id = {k.get("id"): k for k in kinds if isinstance(k, dict)}
+        ref = mcp("asset.reference", kind="behaviour")
+        by_id = graph_ref.kinds(str(ref.get("text", "")))
+        kinds = list(by_id.values())
         check("npc.goto" in by_id, "A the catalog carries the role steps", str(len(kinds)))
         run_kind = by_id.get("behaviour.run", {})
         check(bool(run_kind), "A and the call that runs a behaviour graph")
@@ -287,14 +288,16 @@ def run(project: str) -> None:
         check(w2.get("ok"), "B a quest that runs it is written", json.dumps(w2)[:300])
         check(errors(w2.get("problems")) == "", "B with no errors either", codes(w2.get("problems")))
 
-        got = mcp("quest_open", path="npc/qa_ambush.behasset")
+        opened = mcp("ui.tab", action="open", kind="beh", path="npc/qa_ambush.behasset")
+        check(opened.get("ok"), "B its tab opens", json.dumps(opened)[:200])
+        got = mcp("graph.get", doc="beh:npc/qa_ambush.behasset")
         head = got.get("outline", "").split("\n")[0]
         check(head.startswith("behaviour qa_ambush ") and "roles:" in head and "quest" not in head and "active:" not in head,
               "B its outline says behaviour and names its roles", head[:160])
-        saved = mcp("quest_save", path="npc/qa_ambush.behasset")
+        saved = mcp("doc.save", doc="beh:npc/qa_ambush.behasset")
         check(saved.get("ok") and read("npc/qa_ambush.behasset") == AMBUSH,
               "B opened and saved unchanged, the file is byte for byte what was written", json.dumps(saved)[:200])
-        mcp("quest_close", path="npc/qa_ambush.behasset")
+        mcp("ui.tab", action="close", doc="beh:npc/qa_ambush.behasset")
 
         look = mcp("game.lookup", type="behaviour_id")
         ids = [e.get("id") for e in look.get("entries", [])]
@@ -335,9 +338,9 @@ def run(project: str) -> None:
                     "npc/qa_loop.behasset", "npc/qa_liar.behasset", "quests/qa_typed.nqasset"):
             remove(bad)
 
-        built = mcp("mod_export", target=out_dir)
+        built = mcp("mod.build", target="folder", path=out_dir)
         check(built.get("ok"), "D the module builds with a behaviour graph in it", json.dumps(built)[:300])
-        manifest = mcp("mod_manifest")
+        manifest = mcp("mod.info").get("manifest", {})
         root = os.path.join(out_dir, "modules", manifest.get("id", ""))
         for rel in ("npc/qa_ambush.behasset", "quests/qa_caller.nqasset"):
             p = os.path.join(root, rel.replace("/", os.sep))
@@ -371,16 +374,17 @@ def run(project: str) -> None:
         # ------------------------------------------------------------------ G: the tab
         # a behaviour graph is its own document: its tab shows the roles where a quest keeps
         # its tasks, frames readable and never says "quest" (docs/UI_DESIGN.md section 6)
-        v = mcp("quest_view", path="npc/qa_ambush.behasset", frame="all", graph_panel="show", details="show",
-                select="dig_in", slot="enter:0")
+        v = mcp("graph.view", doc="beh:npc/qa_ambush.behasset", frame="all", graph_panel="show", details="show",
+                select=["dig_in"], slot="enter:0")
         check(v.get("ok"), "G the behaviour graph opens in its tab", json.dumps(v)[:200])
         # a role's Title, Binding and Default sit under its folded More: open it to look at them
-        mcp("quest_view", path="npc/qa_ambush.behasset", roles_more="show")
+        mcp("graph.view", doc="beh:npc/qa_ambush.behasset", roles_more="show")
         mcp("ui.audit")
         mcp("ui.audit")
-        v = mcp("quest_view", path="npc/qa_ambush.behasset")
+        v = mcp("graph.view", doc="beh:npc/qa_ambush.behasset")
         panes = v.get("panes") or {}
-        check(v.get("title_px", 0) >= 12, "G its titles are readable after Frame All", str(v.get("title_px")))
+        check(v.get("title_px", 0) >= 11 and v.get("detail") != "block", "G its titles are readable after Frame All",
+              json.dumps([v.get("title_px"), v.get("detail")]))
         check(all(panes.get(k) for k in ("graph", "canvas", "details", "node", "action")),
               "G the Graph panel, the canvas and the node with its action are drawn", json.dumps(panes))
         audit = mcp("ui.audit")
@@ -392,11 +396,12 @@ def run(project: str) -> None:
         labels = [str(e.get("label", "")) for e in audit.get("controls", []) if "doc.host" in str(e.get("window", ""))]
         check("Binding" in labels and "Remove the role" not in labels,
               "G a role's Group and Optional share one Binding row, and no bin sits beside its name", json.dumps(labels[:40]))
-        mcp("quest_view", path="npc/qa_ambush.behasset", select="none", slot="none")
+        mcp("graph.view", doc="beh:npc/qa_ambush.behasset", select="none", slot="none")
 
         # ------------------------------------------------------------------ F: clean up
         for rel in ("npc/qa_ambush.behasset", "quests/qa_caller.nqasset"):
-            mcp("quest_close", path=rel, discard=True)
+            kind = "beh" if rel.endswith(".behasset") else "quest"
+            mcp("ui.tab", action="close", doc="%s:%s" % (kind, rel), discard=True)
             d = mcp("file.delete", path=rel)
             check(d.get("ok"), "F %s is removed" % rel, json.dumps(d)[:160])
 

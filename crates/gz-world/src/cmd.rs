@@ -1,15 +1,18 @@
-//! The world's commands (`EditorWorld::McpGet` / `McpSet` / `McpTransitions`) and what the area
-//! hangs on the editor.
+//! The world's commands - `world.info` (the rules, the start kit, the starts and their problems),
+//! `world.set` (a change of them, checked) and `world.lookup` (the linked game's levels,
+//! transitions and patrol paths, read only) - and what the area hangs on the editor.
 
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
 use gz_base::{Origin, Problem};
 use gz_build::{BuildCheck, BuildChecks, BuildWalk};
-use gz_editor::{Args, CmdError, Editor, ProjectSession, Registry, Reply};
+use gz_editor::{Args, CmdError, Editor, NoParams, ProjectSession, Registry, Reply, Spec};
 use gz_mod::{Edit, Manifest, ManifestDoc, ManifestFields};
 use gz_project::ProjectHooks;
 use gz_screens::GameLevels;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::game::GameWorld;
@@ -17,18 +20,145 @@ use crate::model::{KitItem, MAX_PLAYER_CHOICES, RULES, StartKit, World, base_kit
 use crate::service::WorldService;
 use crate::starts::{Start, fixed3, starts_json};
 
-const AREA: &str = "gz-world";
-
 /// The game file the base kit comes from.
 const FACTION_LOADOUTS: &str = "configs\\plugins\\faction_loadouts.ltx";
 
 pub fn register(reg: &mut Registry) {
-    reg.add(AREA, "world_get", world_get);
-    reg.add(AREA, "world_set", world_set);
-    reg.add(AREA, "world_transitions", world_transitions);
+    reg.area("world", "What the module's mode keeps of the original game, its start kit and its starts ([world] of mod.ltx)");
+    reg.cmd(
+        Spec::read("world.info", "The world rules, the start kit, the Player Starts and their problems."),
+        world_info,
+    );
+    reg.cmd(
+        Spec::write(
+            "world.set",
+            "Changes the world rules or the start kit, checked; preset=empty is the one-click empty world.",
+        )
+        .example("preset=empty"),
+        world_set,
+    );
+    reg.cmd(
+        Spec::read(
+            "world.lookup",
+            "The linked game's levels, level transitions or patrol paths, read from its all.spawn.",
+        ),
+        world_lookup,
+    );
 }
 
-/// What the area hangs on the editor: the `world` field of `mod_manifest`, the levels
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum Preset {
+    /// The game as it is: every rule keeps.
+    Stock,
+    /// Nothing of the original game.
+    Empty,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SetParams {
+    /// Starts from a preset; the fields below go on top.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preset: Option<Preset>,
+    /// Keep the original game's placed NPCs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    original_npcs: Option<bool>,
+    /// Keep the random stalkers the simulation sends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    random_stalkers: Option<bool>,
+    /// Keep the mutants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mutants: Option<bool>,
+    /// Keep the NPCs' quests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    npc_quests: Option<bool>,
+    /// Keep the story quests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    story_quests: Option<bool>,
+    /// The rules the new-game screen lets the player decide (three at most), the whole list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    player_choice: Option<Vec<String>>,
+    /// The levels the rules apply on; empty: every level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    levels: Option<Vec<String>>,
+    /// The playable area: its levels; empty: the whole zone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    area: Option<Vec<String>>,
+    /// Levels whose every transition starts closed, the whole list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    locked_levels: Option<Vec<String>>,
+    /// Transitions that start closed, the whole list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    locked: Option<Vec<String>>,
+    /// Closes these transitions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lock: Option<Vec<String>>,
+    /// Opens these transitions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unlock: Option<Vec<String>>,
+    /// Closes every transition of these levels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lock_level: Option<Vec<String>>,
+    /// Opens the transitions of these levels again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unlock_level: Option<Vec<String>>,
+    /// Adds levels to the playable area.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    area_add: Option<Vec<String>>,
+    /// Takes levels out of the playable area.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    area_remove: Option<Vec<String>>,
+    /// The start kit, the whole list: `section` or `section=N` per item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start_kit: Option<Vec<String>>,
+    /// The start money; below 0: the game's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start_money: Option<i64>,
+    /// Whether the new-game screen's perks stay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start_perks: Option<bool>,
+    /// Takes the start kit out of the module: the game's own applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start_kit_remove: Option<bool>,
+    /// Starts the kit from the linked game's own (its rows and money), the fields above on top.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start_kit_base: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum LookupType {
+    /// The levels of the game graph, with their captions and transition counts.
+    #[default]
+    Levels,
+    /// The level changers: where each leads and whether the module closes it.
+    Transitions,
+    /// The game's own patrol paths: routes an order may walk, names a module path must not take.
+    Patrols,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct LookupParams {
+    #[serde(default, rename = "type")]
+    kind: LookupType,
+    /// Transitions: only those on this level.
+    #[serde(default)]
+    level: Option<String>,
+    /// Patrols: a part of the name.
+    #[serde(default)]
+    query: Option<String>,
+    /// Patrols: at most this many.
+    #[serde(default = "patrol_limit")]
+    limit: usize,
+}
+
+const fn patrol_limit() -> usize {
+    200
+}
+
+/// What the area hangs on the editor: the `world` field of the manifest's answer, the levels
 /// `gz-screens` checks `W407` against, the build's check, and the service made when a project
 /// opens, so that `gz_nq`'s pickers know the level changers and the patrols.
 pub fn install(editor: &Editor) {
@@ -56,7 +186,7 @@ fn refuse(message: impl Into<String>) -> CmdError {
     CmdError::new("refused", message)
 }
 
-// ---- arguments the way GrizzlyMCP read them -------------------------------------------------
+// ---- the request as the changes read it -------------------------------------------------
 
 /// `ArgString`: present means given, even empty; a bare number or flag is its text.
 fn arg(args: &Args, key: &str) -> Option<String> {
@@ -122,7 +252,7 @@ fn game_json(g: &GameWorld) -> Value {
     json!({ "available": g.ok, "levels": g.levels.len(), "transitions": g.transitions.len(), "error": g.error })
 }
 
-/// The answer of `world_get` and `world_set` (`WorldAnswer`).
+/// The answer of `world.info` and `world.set`.
 pub async fn world_answer(editor: &Editor, svc: &WorldService, m: &Manifest, doc: &ManifestDoc) -> Value {
     let w = World::parse(doc);
     let k = StartKit::parse(doc);
@@ -147,16 +277,16 @@ async fn open(ed: &Editor) -> Result<Arc<WorldService>, CmdError> {
     Ok(svc)
 }
 
-async fn world_get(ed: Arc<Editor>, _args: Args, _origin: Origin) -> Reply {
+async fn world_info(ed: Arc<Editor>, _p: NoParams, _origin: Origin) -> Reply {
     let svc = open(&ed).await?;
     let snap = svc.manifest().snapshot();
     let (Some(doc), Some(m)) = (snap.doc(), snap.manifest()) else {
-        return Err(refuse("mod.ltx not found in the project"));
+        return Err(refuse("the project has no mod.ltx: it is no module"));
     };
     Ok(world_answer(&ed, &svc, m, doc).await)
 }
 
-/// The changes of `world_set` to a world; `Err` refuses the whole call before anything is
+/// The changes of `world.set` to a world; `Err` refuses the whole call before anything is
 /// written.
 pub(crate) fn set_world(args: &Args, mut w: World) -> Result<World, String> {
     if let Some(preset) = arg(args, "preset") {
@@ -219,7 +349,7 @@ pub(crate) fn set_world(args: &Args, mut w: World) -> Result<World, String> {
     Ok(w)
 }
 
-/// The changes of `world_set` to the start kit: any of its fields declares it,
+/// The changes of `world.set` to the start kit: any of its fields declares it,
 /// `start_kit_remove` takes it out; `base` is the linked game's own kit when asked for.
 pub(crate) fn set_kit(
     args: &Args,
@@ -271,10 +401,14 @@ pub(crate) fn set_kit(
     Ok(k)
 }
 
-async fn world_set(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
+async fn world_set(ed: Arc<Editor>, p: SetParams, origin: Origin) -> Reply {
+    let args = match serde_json::to_value(&p) {
+        Ok(Value::Object(map)) => map,
+        _ => Args::new(),
+    };
     let svc = open(&ed).await?;
     let snap = svc.manifest().snapshot();
-    let Some(doc) = snap.doc() else { return Err(refuse("mod.ltx not found in the project")) };
+    let Some(doc) = snap.doc() else { return Err(refuse("the project has no mod.ltx: it is no module")) };
     let before_world = World::parse(doc);
     let before_kit = StartKit::parse(doc);
     let w = set_world(&args, before_world.clone()).map_err(refuse)?;
@@ -300,7 +434,7 @@ async fn world_set(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
     }
     let snap = svc.manifest().snapshot();
     let (Some(doc), Some(m)) = (snap.doc(), snap.manifest()) else {
-        return Err(refuse("mod.ltx not found in the project"));
+        return Err(refuse("the project has no mod.ltx: it is no module"));
     };
     Ok(world_answer(&ed, &svc, m, doc).await)
 }
@@ -313,54 +447,56 @@ async fn game_base_kit(ed: &Editor) -> Option<StartKit> {
     base_kit(&gz_base::text::cp1251_to_utf8(&text))
 }
 
-async fn world_transitions(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
+async fn world_lookup(ed: Arc<Editor>, p: LookupParams, _origin: Origin) -> Reply {
     let svc = open(&ed).await?;
     let game = svc.game().await;
     if !game.ok {
-        return Err(refuse(format!("the linked game's transitions are not available: {}", game.error)));
+        return Err(refuse(format!("the linked game's world is not available: {}", game.error)));
     }
-    let w = svc.manifest().snapshot().doc().map(World::parse).unwrap_or_default();
-    let level = arg(&args, "level").unwrap_or_default();
-    let captions = svc.captions(&ed).await;
-    let caption = |l: &str| captions.get(l).cloned().unwrap_or_else(|| l.to_owned());
-
-    let levels: Vec<Value> = game
-        .levels
-        .iter()
-        .map(|l| json!({ "name": l, "caption": captions.get(l).cloned().unwrap_or_default(), "transitions": game.transitions_on(l) }))
-        .collect();
-    let transitions: Vec<Value> = game
-        .transitions
-        .iter()
-        .filter(|t| level.is_empty() || t.level == level)
-        .map(|t| {
-            let by = w.closed_by(&t.name, &t.level, &t.to_level);
-            json!({
-                "name": t.name,
-                "level": t.level,
-                "to": t.to_level,
-                "to_caption": caption(&t.to_level),
-                "closed": !by.is_empty(),
-                "closed_by": by,
-                "position": fixed3(t.position, 2),
-            })
-        })
-        .collect();
     let mut out = serde_json::Map::new();
-    out.insert("levels".into(), Value::Array(levels));
-    out.insert("transitions".into(), Value::Array(transitions));
-    // the game's own patrol paths, by a part of the name: routes an order may walk, and names a
-    // module path must not take
-    if let Some(filter) = arg(&args, "patrols") {
-        let limit = usize::try_from(arg_int(&args, "limit").unwrap_or(200)).unwrap_or(0);
-        let patrols: Vec<&String> = game
-            .patrols
-            .iter()
-            .filter(|p| filter.is_empty() || p.contains(filter.as_str()))
-            .take(limit)
-            .collect();
-        out.insert("patrols".into(), json!(patrols));
-        out.insert("patrols_total".into(), json!(game.patrols.len()));
+    match p.kind {
+        LookupType::Levels => {
+            let captions = svc.captions(&ed).await;
+            let levels: Vec<Value> = game
+                .levels
+                .iter()
+                .map(|l| json!({ "name": l, "caption": captions.get(l).cloned().unwrap_or_default(), "transitions": game.transitions_on(l) }))
+                .collect();
+            out.insert("total".into(), json!(levels.len()));
+            out.insert("levels".into(), Value::Array(levels));
+        }
+        LookupType::Transitions => {
+            let w = svc.manifest().snapshot().doc().map(World::parse).unwrap_or_default();
+            let level = p.level.unwrap_or_default();
+            let captions = svc.captions(&ed).await;
+            let caption = |l: &str| captions.get(l).cloned().unwrap_or_else(|| l.to_owned());
+            let transitions: Vec<Value> = game
+                .transitions
+                .iter()
+                .filter(|t| level.is_empty() || t.level == level)
+                .map(|t| {
+                    let by = w.closed_by(&t.name, &t.level, &t.to_level);
+                    json!({
+                        "name": t.name,
+                        "level": t.level,
+                        "to": t.to_level,
+                        "to_caption": caption(&t.to_level),
+                        "closed": !by.is_empty(),
+                        "closed_by": by,
+                        "position": fixed3(t.position, 2),
+                    })
+                })
+                .collect();
+            out.insert("total".into(), json!(transitions.len()));
+            out.insert("transitions".into(), Value::Array(transitions));
+        }
+        LookupType::Patrols => {
+            let filter = p.query.unwrap_or_default();
+            let matching: Vec<&String> =
+                game.patrols.iter().filter(|n| filter.is_empty() || n.contains(filter.as_str())).collect();
+            out.insert("total".into(), json!(matching.len()));
+            out.insert("patrols".into(), json!(matching.into_iter().take(p.limit).collect::<Vec<_>>()));
+        }
     }
     Ok(Value::Object(out))
 }

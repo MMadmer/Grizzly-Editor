@@ -12,9 +12,10 @@
 //! - [`install`] - the Publish Release dialog (`publish_release`, with `dlg.edit_release` and the
 //!   publish result), the Releases tab (document kind `releases`), the Submit to Mod Browser
 //!   dialog (`submit`, with the sheet `dlg.catalog_withdraw`), the toolbar's Publish Release and
-//!   Releases, the Mod menu's Publish Release..., Releases and Submit to Mod Browser...
-//! - The author key row of Publish Release is `gz_ui_mod::KeyLine` (`EditorCatalog::DrawKeyLine`),
-//!   the one Package Release draws; the Mod menu's rows go where `gz_ui_mod::mod_menu_slot` puts
+//!   Releases, the Mod menu's Publish Release..., Releases and Submit to Mod Browser...;
+//!   [`register`] - `release.view`.
+//! - The author key row of Publish Release is `gz_ui_mod::KeyLine`, the one Package Release
+//!   draws; the Mod menu's rows go where `gz_ui_mod::mod_menu_slot` puts
 //!   them.
 //!
 //! Widgets the kit lacks, local to this crate (`local`): `local_secret_field` (a one-line field
@@ -27,6 +28,7 @@ mod local;
 mod publish;
 mod releases;
 mod submit;
+mod view_cmd;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -38,7 +40,7 @@ use gz_ui::{Asker, Icon, Kind};
 /// The Publish Release dialog: its MCP id and its window.
 pub const PUBLISH_ID: &str = "publish_release";
 pub const PUBLISH_WINDOW: &str = "Publish Release###dlg.publish_release";
-/// The edit dialog of a release, raised from the Releases tab or by `mod_releases select show=edit`.
+/// The edit dialog of a release, raised from the Releases tab or by `release.view select= edit=true`.
 pub const EDIT_WINDOW: &str = "Edit Release###dlg.edit_release";
 /// The Submit to Mod Browser dialog: its MCP id and its window.
 pub const SUBMIT_ID: &str = "submit";
@@ -94,6 +96,11 @@ pub(crate) fn sentence(text: &str) -> String {
         Some(first) => format!("{}{}.", first.to_uppercase(), chars.as_str()),
         None => String::new(),
     }
+}
+
+/// The commands of this package: `release.view`.
+pub fn register(reg: &mut gz_editor::Registry) {
+    view_cmd::register(reg);
 }
 
 /// Plugs the windows into the shell.

@@ -1,22 +1,19 @@
-//! `EScene::Validate`: what a scene must hold before it is built, with the C++ messages.
+//! What a scene must hold before it is built, and the messages that say what is missing.
 //!
-//! In the C++ order: each tool's own check in class order (`ESceneCustomOTool::Validate` -
-//! every scene object resolves and its surfaces have a texture and a shader, every sector has
+//! In this order: each kind's own check in class order (every scene object resolves and its surfaces have a texture and a shader, every sector has
 //! its faces, compiler shaders and something to render, each stopping at the first object that
 //! fails; the scene objects' duplicate positions per reference and, in a full test, the LOD
 //! textures of the multiple-usage objects; the lights' controls and that there is a light; the
-//! wallmarks' engine shaders), the portal test (`CPortalUtils::Validate`: no static mesh without
+//! wallmarks' engine shaders), the portal test (no static mesh without
 //! a sector, every sector sound) when the scene has sectors or portals, the HOM note, that there
 //! are spawn points, lights and scene objects (and glows when asked), duplicate names, the
 //! engine and compiler shaders of the static objects and whether they agree, the sound library
-//! (`CLevelSoundManager::Validate`: sound environments, sound sources) and the particle
+//! (sound environments, sound sources) and the particle
 //! systems' references.
 //!
-//! What differs from the C++: a scene object in visual mode passes (the C++ asks whether its
-//! visual loaded); a particle system is checked for a reference, not for one the particle
-//! library knows; a LOD texture counts as there when the linked game or the editor's own
-//! `gamedata` has it, and its message names the editor's `gamedata\textures` path, which the C++
-//! `$game_textures$` is.
+//! A scene object in visual mode passes; a particle system is checked for a reference, not for
+//! one the particle library knows; a LOD texture counts as there when the linked game or the
+//! editor's own `gamedata` has it, and its message names the editor's `gamedata\textures` path.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -89,7 +86,7 @@ pub fn is_mu_static(lo: &LibraryObject) -> bool {
         && f.contains(ObjectFlags::MULTIPLE_USAGE)
 }
 
-/// `ESceneObjectTool::Validate(full_test)`.
+/// The scene objects' check; `full` adds the LOD textures.
 fn scene_objects(
     snap: &SceneState,
     look: &dyn Fn(&str) -> Option<Arc<LibraryObject>>,
@@ -98,7 +95,7 @@ fn scene_objects(
     log: &mut Vec<String>,
 ) -> bool {
     let objects: Vec<_> = snap.of_class(ObjClass::SceneObject).collect();
-    // `inherited::Validate`: `CSceneObject::Validate` of each, the first failing one ends it
+    // each object resolves and its surfaces are complete; the first failing one ends it
     let mut good = true;
     for o in &objects {
         let ObjData::SceneObject(d) = &o.data else { continue };
@@ -109,7 +106,7 @@ fn scene_objects(
             good = false;
             break;
         };
-        // `CEditableObject::Validate`: every surface has a texture and a shader
+        // every surface has a texture and a shader
         let mut surfaces_good = true;
         for s in &lo.object.surfaces {
             if s.texture.is_empty() || s.shader.is_empty() {
@@ -163,7 +160,7 @@ fn scene_objects(
     good
 }
 
-/// `ESceneWallmarkTool::Validate`: the engine shader of every slot with marks.
+/// The wallmarks' check: the engine shader of every slot with marks.
 fn wallmarks(snap: &SceneState, engine: &Engine, log: &mut Vec<String>) -> bool {
     let slots = snap.bulk.wallmarks.as_ref().map(|w| crate::wallmarks::read(&w.raw)).unwrap_or_default();
     let mut good = true;
@@ -179,7 +176,7 @@ fn wallmarks(snap: &SceneState, engine: &Engine, log: &mut Vec<String>) -> bool 
     good
 }
 
-/// `CLevelSoundManager::Validate`: the first sound environment with the same inner and outer
+/// The sounds' check: the first sound environment with the same inner and outer
 /// environment, or the first sound source without a wave, fails it.
 fn sounds(snap: &SceneState, log: &mut Vec<String>) -> bool {
     for o in snap.of_class(ObjClass::SoundEnv) {
@@ -233,7 +230,7 @@ pub fn validate(
                 }
                 good
             }
-            // `CSector::Validate(true)` of each sector, the first failing one ends it
+            // each sector's own check, the first failing one ends it
             ObjClass::Sector => {
                 let mut good = true;
                 for s in snap.of_class(class) {
@@ -313,7 +310,7 @@ pub fn validate(
             if !checked.insert(d.reference.to_ascii_lowercase()) {
                 continue;
             }
-            // `CEditableObject::CheckShaderCompatible`
+            // the engine and compiler shaders of each surface must agree
             for s in &lo.object.surfaces {
                 let xrlc = engine.xrlc_flags(&s.shader_xrlc);
                 match (engine.has_shader(&s.shader), xrlc) {
@@ -455,7 +452,7 @@ mod tests {
         });
         let mut part = Writer::new();
         part.chunk(1, |w| w.w_u16(3));
-        // the flags and the tool's parameters are required (`ESceneWallmarkTool::LoadStream`)
+        // the flags and the tool's parameters are required chunks of the wallmarks' stream
         part.chunk(2, |w| w.w_u32(0));
         part.chunk(3, |w| {
             for _ in 0..3 {
@@ -470,6 +467,7 @@ mod tests {
         let r = run(&s, Tests::MAKE_GAME);
         let l = lines(&r);
         assert!(l.iter().any(|x| x == "Wallmarks: Invalid or missing shader 'effects\\wallmark'."));
-        assert!(l.iter().any(|x| x == "ERROR: Validate 'Wallmark' failed!"));
+        let failed = format!("ERROR: Validate '{}' failed!", ObjClass::Wallmark.desc());
+        assert!(l.contains(&failed), "{l:?}");
     }
 }

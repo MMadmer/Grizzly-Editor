@@ -4,7 +4,7 @@
 //! `E201` more than one Player Start, `E202` more than three player choices, `W203` a level the
 //! linked game lacks, `W204` a transition the linked game lacks, `W205` the player starts outside
 //! the area, `W206` an area without a Player Start, `E207` a start kit row with no item or a
-//! count below 1, or an item listed twice, `W208` a start kit item the linked game lacks.
+//! count below 1, or an item listed twice, `W208` a start kit item neither the linked game nor the module has.
 
 use crate::game::GameWorld;
 use crate::model::{MAX_PLAYER_CHOICES, StartKit, World};
@@ -93,7 +93,7 @@ pub fn validate(
                 && !known(&it.section)
             {
                 problems.push(format!(
-                    "W208 world: start kit item '{}' is not an item of the linked game - a new game leaves it out unless the module brings it",
+                    "W208 world: start kit item '{}' is an item of neither the linked game nor the module - a new game leaves it out",
                     it.section
                 ));
             }

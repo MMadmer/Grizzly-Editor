@@ -1,7 +1,7 @@
 //! The motion rows' buttons that need more than a value (`CCustomObject::OnMotionControlClick`,
 //! `OnMotionFilesClick`, `OnMotionCommandsClick`): Play and Pause on the viewport's frames, the
 //! `.anm` files through the system's dialogs, and the Scale Keys / Normalize Keys sheets
-//! (`dlg.scale_keys`, `dlg.normalize_keys`). Each ends in `object_motion`.
+//! (`dlg.scale_keys`, `dlg.normalize_keys`). Each ends in `scene.motion`.
 
 use std::sync::Arc;
 
@@ -31,10 +31,10 @@ fn state(editor: &Editor) -> Arc<Mutex<MotionUi>> {
 }
 
 fn motion_call(editor: &Arc<Editor>, object: &str, mut a: Args) {
-    a.insert("name".into(), json!(object));
+    a.insert("object".into(), json!(object));
     let ed = editor.clone();
     editor.exec.spawn(async move {
-        let r = ed.call("object_motion", a, ed.ui_origin()).await;
+        let r = ed.call("scene.motion", a, ed.ui_origin()).await;
         if r.get("ok").and_then(Value::as_bool) != Some(true) {
             ed.notices.error(
                 r.get("error").and_then(Value::as_str).unwrap_or("The motion command failed.").to_owned(),
@@ -43,12 +43,11 @@ fn motion_call(editor: &Arc<Editor>, object: &str, mut a: Args) {
     });
 }
 
-/// The first selected object of the current tool: the one the motion rows are about.
+/// The first selected object: the one the motion rows are about.
 fn selected_object(editor: &Editor) -> Option<(String, Option<(f32, f32)>)> {
     let svc = editor.project_opt()?.services.get::<SceneService>()?;
     let snap = svc.store.snapshot();
-    let class = snap.tools.target;
-    let o = snap.of_class(class).find(|o| snap.is_selected(o.id))?;
+    let o = snap.selected_in_order().first().and_then(|id| snap.get(*id)).cloned()?;
     let range = o
         .motion
         .as_ref()
@@ -85,9 +84,9 @@ pub fn press(editor: &Arc<Editor>, key: &str, caption: &str) -> bool {
         args
     };
     match (key, caption) {
-        ("Motion\\Controls", "Play") => motion_call(editor, &object, action("play")),
-        ("Motion\\Controls", "Pause") => motion_call(editor, &object, action("pause")),
-        ("Motion\\Files", "Import" | "Export") => {
+        ("motion.controls", "Play") => motion_call(editor, &object, action("play")),
+        ("motion.controls", "Pause") => motion_call(editor, &object, action("pause")),
+        ("motion.files", "Import" | "Export") => {
             let import = caption == "Import";
             let Some(root) = editor.project_root() else { return true };
             let dir = root.join("gamedata").join("anims");
@@ -103,14 +102,14 @@ pub fn press(editor: &Arc<Editor>, key: &str, caption: &str) -> bool {
             let picked = gz_ui::file_dialog::pick(None, crate::tools::asker(editor), request, move |f| {
                 let mut a = Args::new();
                 a.insert("action".into(), json!(if import { "import" } else { "export" }));
-                a.insert("file".into(), json!(f.display().to_string()));
+                a.insert("path".into(), json!(f.display().to_string()));
                 motion_call(&ed, &object, a);
             });
             if let Err(line) = picked {
                 editor.log.plain(line);
             }
         }
-        ("Motion\\Commands", "Scale Keys..." | "Normalize Keys...") => {
+        ("motion.commands", "Scale Keys..." | "Normalize Keys...") => {
             let (from, to) = range.unwrap_or((0.0, 0.0));
             let scale = caption == "Scale Keys...";
             state(editor).lock().sheet =

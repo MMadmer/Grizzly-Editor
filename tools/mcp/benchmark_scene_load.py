@@ -66,7 +66,7 @@ def summarize(samples: list[float]) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("scene", help="scene path accepted by grizzly_open_scene")
+    parser.add_argument("scene", help="scene path scene.open takes (project-relative or absolute)")
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--expected-total", type=int)
@@ -85,11 +85,11 @@ def main() -> int:
     object_total = 0
     for index in range(args.warmup + args.repeats):
         started = time.perf_counter()
-        checked_call(args.host, args.port, args.timeout, {"cmd": "open_scene", "scene": args.scene})
+        checked_call(args.host, args.port, args.timeout, {"cmd": "scene.open", "path": args.scene})
         load_ms = (time.perf_counter() - started) * 1000.0
-        info = checked_call(args.host, args.port, args.timeout, {"cmd": "scene_info"})
+        info = checked_call(args.host, args.port, args.timeout, {"cmd": "scene.info"})
         ready_ms = (time.perf_counter() - started) * 1000.0
-        object_total = sum(tool.get("objects", 0) for tool in info.get("tools", []))
+        object_total = info.get("objects", 0)
         if args.expected_total is not None and object_total != args.expected_total:
             raise RuntimeError(f"object total changed: expected {args.expected_total}, got {object_total}")
         if index >= args.warmup:

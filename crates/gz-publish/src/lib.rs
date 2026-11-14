@@ -2,11 +2,9 @@
 //! the manifest's `[update] github` repository - what the game's Mods menu updates from - and
 //! what that repository already holds.
 //!
-//! The C++ specification is the non-drawing half of `EditorModPublish.cpp`: the publish job
-//! (packaging through `gz-release`, `ScanFirst`, then `EditorGithub::Publish`: draft, every
-//! stored asset checked against the package, latest), `FreshTag` and `releases\deleted.tags`, the
-//! device sign-in, listing / editing / deleting releases, and the handlers `mod_publish` and
-//! `mod_releases` (`McpPublish`, `McpReleases`). The network is `gz-github`.
+//! The publish job packages through `gz-release`, scans a listed module's packages, then puts a
+//! draft on GitHub, checks every stored asset against the package and makes it the latest; the
+//! network is `gz-github`.
 //!
 //! The domain (pure):
 //!
@@ -24,7 +22,8 @@
 //!   [`ReleaseList::json`], the Releases tab's selection and the bits the UI sets
 //!   ([`ReleaseList::set_tab_open`], [`ReleaseList::set_publish_dialog_open`],
 //!   [`ReleaseList::take_edit_request`]).
-//! - [`register`] - `mod_publish`, `mod_releases`. The MCP path asks nothing.
+//! - [`register`] - `release.publish`, `release.account`, `release.list`, `release.edit`,
+//!   `release.delete`. They ask nothing.
 
 mod cmd;
 mod job;

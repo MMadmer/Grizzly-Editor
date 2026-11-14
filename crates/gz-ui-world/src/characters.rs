@@ -1,7 +1,9 @@
 //! Characters: the `characters` singleton tab (docs/UI_DESIGN.md, section 6, "Characters").
 //!
-//! A list of the project's characters (as their files say, sorted by id) and the form of the one
-//! selected. The tab keeps VIEW state and the character being edited: the roster comes from
+//! Three columns: a list of the project's characters (their faces, as their files say, sorted by
+//! id), the form of the one selected, and - where there is room - the character as the game will
+//! show it: its model in the model viewer, its portrait, its name and community. The toolbar holds
+//! Save (the one Primary while the form has edits), Revert and Delete... The tab keeps VIEW state and the character being edited: the roster comes from
 //! `gz_characters::Characters` on the pools; a save is `Characters::save` - the difference
 //! between the character as the tab read it and as it is now, written into the file's own text
 //! (a new character's file is written canonically); a deletion is `file.delete`. The form binds
@@ -11,23 +13,27 @@
 
 use std::sync::Arc;
 
-use egui::{Align, Layout, Rect, ScrollArea, Ui, UiBuilder, pos2};
-use gz_app::{DocCx, Document, ShellBuilder};
+use egui::{Align, CornerRadius, Layout, Rect, ScrollArea, Ui, UiBuilder, Vec2, pos2};
+use gz_app::{DocCx, Document, OpenRequest, ShellBuilder};
 use gz_base::{RelPath, Rev};
 use gz_characters::resolve::resolve;
-use gz_characters::{Character, Characters, Checker, Roster, text_collapse, text_raw, text_set};
+use gz_characters::{Character, Characters, Checker, Roster, text_collapse, text_in, text_raw, text_set};
 use gz_editor::{Editor, Value, json};
 use gz_luadata::Value as LuaValue;
 use gz_luadata::{Conflict, Limits, LuaDoc, set_at};
 use gz_mod::ManifestService;
 use gz_project::Project;
 use gz_ui::dialog::{Answer, ConfirmSpec, confirm, unsaved_prompt};
-use gz_ui::{Icon, Kind, Tone, Toolbar};
+use gz_ui::text::{self, Clip};
+use gz_ui::{Font, Icon, Kind, Tone, Toolbar, palette};
 use parking_lot::Mutex;
 
 use crate::call::{self, args, s};
 use crate::lists::{Lists, ListsView};
-use crate::portraits::Sheets;
+use crate::portraits::{Sheets, draw_portrait};
+
+/// The narrowest the preview column is drawn; under it the form keeps the room.
+const PREVIEW_MIN: f32 = 300.0;
 
 /// The tab's id and kind.
 pub const TAB: &str = "characters";
@@ -263,6 +269,8 @@ pub struct CharactersDoc {
     pub(crate) actions: Vec<Action>,
     /// How far the form scrolled at most, the last frame: where `ui_scroll to=bottom` goes.
     scroll_max: f32,
+    /// The model viewer of the preview, by `source|visual`.
+    model: Option<(String, Box<dyn Document>)>,
 }
 
 impl CharactersDoc {
@@ -301,6 +309,7 @@ impl CharactersDoc {
             sheets: None,
             actions: Vec::new(),
             scroll_max: 0.0,
+            model: None,
         }
     }
 
@@ -522,7 +531,7 @@ impl CharactersDoc {
         self.own_gen = self.edit_gen;
     }
 
-    /// What `characters_view` validates: the roster, the selection, the character.
+    /// What `characters.view` validates: the roster, the selection, the character.
     pub(crate) fn validation_input(&self) -> Option<(Arc<Roster>, Option<usize>, Character)> {
         Some((self.roster.clone()?, self.sel, self.edit.clone()))
     }
@@ -792,7 +801,7 @@ impl CharactersDoc {
 
     // ---- MCP ------------------------------------------------------------------------------------
 
-    /// The `characters_view` answer of the open tab.
+    /// The `characters.view` answer of the open tab.
     #[must_use]
     pub fn view_json(&self, active: bool) -> Value {
         let selected = if self.sel.is_some() || self.dirty { self.edit.id.clone() } else { String::new() };
@@ -822,7 +831,113 @@ impl CharactersDoc {
 
     // ---- drawing --------------------------------------------------------------------------------
 
-    fn draw_body(&mut self, ui: &mut Ui) {
+    /// The character as the game will show it: the model in the model viewer, the portrait at a
+    /// readable size, the name and the community the player reads.
+    fn draw_preview(&mut self, ui: &mut Ui, cx: &mut DocCx<'_>) {
+        let p = palette(ui.ctx());
+        if self.sel.is_none() && !self.dirty {
+            return;
+        }
+        let c = self.resolved_view();
+        let visual = c.visual.clone();
+        let source = if self.lists.visuals.get(&visual.to_lowercase()).is_some_and(|e| e.extra == "project") {
+            "visual"
+        } else {
+            "darf"
+        };
+        let want = format!("{source}|{visual}");
+        if self.model.as_ref().is_none_or(|(k, _)| *k != want) {
+            self.model = (!visual.is_empty())
+                .then(|| {
+                    let mut req = OpenRequest::file("model", &visual);
+                    req.arg = Some(source.to_owned());
+                    let doc = gz_ui_previews::model::factory(&self.editor, &req).ok().map(|mut d| {
+                        if let Some(m) =
+                            d.as_any_mut().and_then(|a| a.downcast_mut::<gz_ui_previews::model::ModelDoc>())
+                        {
+                            m.show_details = false;
+                        }
+                        d
+                    });
+                    (want.clone(), doc)
+                })
+                .and_then(|(k, d)| d.map(|d| (k, d)));
+        }
+        let full = ui.max_rect();
+        let model_h = (full.height() * 0.6).clamp(180.0, 520.0);
+        let model_rect = Rect::from_min_size(full.min, Vec2::new(full.width(), model_h));
+        match self.model.as_mut() {
+            Some((_, doc)) => {
+                let mut child = ui
+                    .new_child(UiBuilder::new().id_salt("gz-ui-world.characters.model").max_rect(model_rect));
+                doc.body(&mut child, cx);
+            }
+            None => {
+                ui.painter().rect_filled(model_rect, CornerRadius::same(4), p.canvas);
+                let mut child = ui
+                    .new_child(UiBuilder::new().max_rect(model_rect).layout(Layout::top_down(Align::Center)));
+                let _ = gz_ui::state::empty_state(
+                    &mut child,
+                    Icon::FileModel,
+                    "No model",
+                    "Pick one under Appearance.",
+                    None,
+                );
+            }
+        }
+        let below = Rect::from_min_max(pos2(full.min.x, model_rect.max.y + 12.0), full.max);
+        let mut info = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-ui-world.characters.seen")
+                .max_rect(below)
+                .layout(Layout::top_down(Align::Min)),
+        );
+        let _ = text::label(&mut info, "In the Game", Font::Strong, p.text, Clip::End);
+        info.add_space(6.0);
+        info.horizontal(|ui| {
+            let _ = draw_portrait(ui, &self.editor, self.sheets.as_ref(), &self.lists, &c.icon, 96.0);
+            ui.add_space(12.0);
+            ui.vertical(|ui| {
+                let name = text_in(&c.name, "rus");
+                let shown = if name.is_empty() { "No name".to_owned() } else { name };
+                let _ = text::label(ui, &shown, Font::Title, p.text, Clip::End);
+                let community =
+                    if c.community.is_empty() { "stalker".to_owned() } else { c.community.clone() };
+                let caption = self
+                    .lists
+                    .communities
+                    .get(&community)
+                    .map(|e| e.name.clone())
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or(community);
+                let _ = text::label(ui, &caption, Font::Body, p.text_secondary, Clip::End);
+                let eng = text_in(&c.name, "eng");
+                if !eng.is_empty() {
+                    let _ = text::label(ui, &eng, Font::Small, p.text_muted, Clip::End);
+                }
+            });
+        });
+    }
+
+    /// The character as the form shows it, its base's values where it sets none.
+    fn resolved_view(&self) -> gz_characters::Character {
+        let mut c = self.edit.clone();
+        if let Some(b) = &self.inherited {
+            for (mine, theirs) in
+                [(&mut c.visual, &b.visual), (&mut c.icon, &b.icon), (&mut c.community, &b.community)]
+            {
+                if mine.is_empty() {
+                    mine.clone_from(theirs);
+                }
+            }
+            if text_in(&c.name, "rus").is_empty() {
+                c.name = b.name.clone();
+            }
+        }
+        c
+    }
+
+    fn draw_body(&mut self, ui: &mut Ui, cx: &mut DocCx<'_>) {
         let ctx = ui.ctx().clone();
         let full = ui.max_rect();
         let mut head = ui.new_child(
@@ -835,8 +950,24 @@ impl CharactersDoc {
         let gap = head.spacing().item_spacing.x;
         let list_rect =
             Rect::from_min_max(full.min, pos2((full.min.x + split.size).min(full.max.x), full.max.y));
-        let form_rect =
+        let mut form_rect =
             Rect::from_min_max(pos2((list_rect.max.x + gap).min(full.max.x), full.min.y), full.max);
+        // the preview takes the room the form leaves, while there is enough of it
+        let form_w = gz_ui::metrics::FORM_W + 24.0;
+        if form_rect.width() >= form_w + PREVIEW_MIN {
+            let preview = Rect::from_min_max(
+                pos2(form_rect.min.x + form_w + gap, full.min.y + 8.0),
+                pos2(full.max.x - 12.0, full.max.y - 8.0),
+            );
+            form_rect.max.x = form_rect.min.x + form_w;
+            let mut side = ui.new_child(
+                UiBuilder::new()
+                    .id_salt("gz-ui-world.characters.preview")
+                    .max_rect(preview)
+                    .layout(Layout::top_down(Align::Min)),
+            );
+            self.draw_preview(&mut side, cx);
+        }
 
         let mut left = ui.new_child(
             UiBuilder::new()
@@ -909,6 +1040,43 @@ impl Document for CharactersDoc {
 
     fn toolbar<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>, cx: &mut DocCx<'_>) {
         let project = cx.editor.project_opt().is_some();
+        let some = self.sel.is_some() && !self.edit.file.is_empty();
+        tb.group(3);
+        let kind = if self.dirty { Kind::Primary } else { Kind::Ghost };
+        if tb.action(
+            "save",
+            Icon::Save,
+            "Save",
+            "Write the character into its file (Ctrl+S)",
+            self.dirty,
+            false,
+            kind,
+        ) && let Err(e) = self.start_save(Then::Nothing)
+        {
+            self.status = e;
+        }
+        if tb.action(
+            "revert",
+            Icon::Undo,
+            "Revert",
+            "Drop the edits: the character as its file says",
+            self.dirty,
+            false,
+            Kind::Ghost,
+        ) {
+            self.discard_edits();
+        }
+        if tb.action(
+            "delete",
+            Icon::Delete,
+            "Delete...",
+            "Delete the character's file for good",
+            some,
+            false,
+            Kind::GhostDanger,
+        ) {
+            self.actions.push(Action::Delete);
+        }
         tb.group(1);
         if tb.action(
             "reload",
@@ -948,7 +1116,7 @@ impl Document for CharactersDoc {
             self.sheets = Sheets::of(cx.editor);
         }
         self.revalidate();
-        self.draw_body(ui);
+        self.draw_body(ui, cx);
         self.run_actions(&ctx);
     }
 
@@ -974,7 +1142,7 @@ impl Document for CharactersDoc {
     }
 }
 
-/// The `characters_view` answer of a tab that is not open.
+/// The `characters.view` answer of a tab that is not open.
 #[must_use]
 pub fn closed_json() -> Value {
     json!({ "tab": TAB, "open": false, "active": false, "selected": "", "file": "", "dirty": false, "count": 0, "problems": [] })

@@ -5,7 +5,7 @@ Drives the editor over MCP on a THROW-AWAY COPY of a project: writes characters 
 way an agent does), checks them with asset.check, builds the module into a temporary folder and
 verifies that the assets ship as they are and nothing is made of them: what the game makes of a
 character is the game repo's Run-ScreensQa.ps1 -Part Descriptions. Phase U opens the
-Characters tab on a character over MCP (characters_view) and wants its form drawn
+Characters tab on a character over MCP (characters.view) and wants its form drawn
 whole, with nothing escaping its window.
 
     python tools/qa/test_characters.py --project <project>
@@ -70,7 +70,7 @@ class Editor:
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
             try:
-                if mcp("mod_manifest", timeout=30).get("ok"):
+                if mcp("mod.info", timeout=30).get("ok"):
                     return
             except OSError:
                 pass
@@ -313,8 +313,8 @@ def run_spawn_checks(mcp, check, module, out_dir, os, json):
     char_write(QA_TPL)
     char_write(QA_RUNNER)
     until(lambda: "qa_runner" in char_ids())
-    cat = mcp("quest_catalog")
-    by_id = {k.get("id"): k for k in cat.get("kinds", []) if isinstance(k, dict)}
+    import graph_ref
+    by_id = graph_ref.kinds(str(mcp("asset.reference", kind="quest").get("text", "")))
     kind = by_id.get("spawn.npc", {})
     check(bool(kind), "F the catalog carries spawn.npc")
     rows = [r.get("name") for r in kind.get("rows", [])] if isinstance(kind.get("rows"), list) else []
@@ -337,7 +337,7 @@ def run_spawn_checks(mcp, check, module, out_dir, os, json):
     refs = mcp("game.lookup", type="ref_name", path="quests/qa_spawner.nqasset")
     names = sorted(e.get("id") for e in refs.get("entries", []))
     check(names == ["courier", "extra", "guard"], "F every row's ref is a ref of the graph", json.dumps(names))
-    outline = str(mcp("quest_open", path="quests/qa_spawner.nqasset").get("outline", ""))
+    outline = str(mcp("graph.get", doc="quests/qa_spawner.nqasset").get("outline", ""))
     check("npcs={qa_courier" in outline, "F the outline reads a row as who it creates, not as the ref it keeps", outline[:300])
 
     b = quest_write("quests/qa_spawner_bad.nqasset", SPAWNER_BAD)
@@ -348,7 +348,7 @@ def run_spawn_checks(mcp, check, module, out_dir, os, json):
     check("unknown key 'uniqe'" in text, "F a misspelt key is an error, not a silent no-op", text[:300])
     remove("quests/qa_spawner_bad.nqasset")
 
-    built = mcp("mod_export", target=out_dir)
+    built = mcp("mod.build", target="folder", path=out_dir)
     check(built.get("ok"), "F the module builds with the spawner in it", json.dumps(built)[:200])
     shipped = os.path.join(out_dir, "modules", module, "quests", "qa_spawner.nqasset")
     check(os.path.isfile(shipped), "F and the quest ships", shipped)
@@ -364,7 +364,6 @@ def run_spawn_checks(mcp, check, module, out_dir, os, json):
     check("qa_runner" in text and "not a character" in text, "F a deleted character is an error in the quest that names it", text[:300])
 
     char_delete("qa_tpl")
-    mcp("quest_close", path="quests/qa_spawner.nqasset", discard=True)
     remove("quests/qa_spawner.nqasset")
 
 
@@ -385,7 +384,7 @@ def run_base_checks(mcp, check, read, module, out_dir, os, json):
     check(g.get("problems") == [], "E with no problems: its name and model come from the base",
           json.dumps(g.get("problems")))
 
-    built = mcp("mod_export", target=out_dir)
+    built = mcp("mod.build", target="folder", path=out_dir)
     check(built.get("ok"), "E the module builds", json.dumps(built)[:200])
     root = os.path.join(out_dir, "modules", module)
     for name in ("qa_kit", "qa_kitguard"):
@@ -409,9 +408,9 @@ def run_base_checks(mcp, check, read, module, out_dir, os, json):
 
 def run_ui_checks(mcp, check, json):
     """The Characters tab: opened on a character over MCP, looked at, and nothing of it leaves its window."""
-    v = mcp("characters_view")
-    check(v.get("ok") and v.get("tab") == "characters", "U characters_view answers", json.dumps(v)[:300])
-    v = mcp("characters_view", select="qa_courier")
+    v = mcp("characters.view")
+    check(v.get("ok") and v.get("tab") == "characters", "U characters.view answers", json.dumps(v)[:300])
+    v = mcp("characters.view", select="qa_courier")
     check(v.get("ok") and v.get("active") and v.get("selected") == "qa_courier", "U it opens the tab on a character",
           json.dumps(v)[:300])
     check(v.get("dirty") is False and v.get("problems") == [], "U with nothing unsaved and no problems", json.dumps(v)[:300])
@@ -422,22 +421,27 @@ def run_ui_checks(mcp, check, json):
     check(audit.get("ok") and not audit.get("escaped"), "U nothing escapes the Characters tab",
           json.dumps(audit.get("escaped"))[:400])
     labels = {c.get("label") for c in audit.get("controls", [])}
-    for want in ("Identity", "Name and Bio", "Delete..."):
+    for want in ("Identity", "Name and Bio"):
         check(want in labels, "U the form draws " + want, json.dumps(sorted(x for x in labels if x))[:400])
+    toolbar = {c.get("label") for c in mcp("ui.audit", id="##toolbar").get("controls", [])}
+    check({"Save", "Revert", "Delete..."} <= toolbar, "U its toolbar holds Save, Revert and Delete...",
+          json.dumps(sorted(x for x in toolbar if x))[:400])
+    frame = mcp("shot.window")
+    check(frame.get("ok"), "U the tab is drawn with its preview column", json.dumps({k: frame.get(k) for k in ("width", "height")}))
     # what is below the fold is drawn once the form scrolls to it
     scrolled = mcp("ui.scroll", id="characters", to="bottom")
     check(scrolled.get("ok"), "U the form scrolls", json.dumps(scrolled)[:300])
     labels = {c.get("label") for c in mcp("ui.audit", id="characters").get("controls", [])}
     for want in ("Starting Kit", "Add Item"):
         check(want in labels, "U the form draws " + want, json.dumps(sorted(x for x in labels if x))[:400])
-    v = mcp("characters_view", path="characters/qa_guard.npcasset")
+    v = mcp("characters.view", path="characters/qa_guard.npcasset")
     check(v.get("ok") and v.get("selected") == "qa_guard", "U a character is found by its path too", json.dumps(v)[:300])
-    gone = mcp("characters_view", select="qa_nobody")
+    gone = mcp("characters.view", select="qa_nobody")
     check(not gone.get("ok") and "qa_nobody" in gone.get("error", ""), "U one that does not exist is refused by name",
           json.dumps(gone))
     closed = mcp("ui.tab", action="close", doc="characters")
     check(closed.get("ok"), "U the tab closes when nothing is unsaved", json.dumps(closed)[:300])
-    check(mcp("characters_view").get("open") is False, "U and characters_view says it is closed")
+    check(mcp("characters.view").get("open") is False, "U and characters.view says it is closed")
 
 
 def read(path: str) -> str:
@@ -451,7 +455,7 @@ def run(project: str) -> None:
     try:
         ed.start(project)
 
-        manifest = mcp("mod_manifest")
+        manifest = mcp("mod.info").get("manifest", {})
         module = manifest.get("id", "")
         check(bool(module), "A the project has a module id", json.dumps(manifest)[:200])
 
@@ -533,7 +537,7 @@ def run(project: str) -> None:
         run_ui_checks(mcp, check, json)
 
         # ---------------------------------------------------------------- C: the build
-        built = mcp("mod_export", target=out_dir)
+        built = mcp("mod.build", target="folder", path=out_dir)
         check(built.get("ok"), "C the module builds", json.dumps(built)[:300])
 
         root = os.path.join(out_dir, "modules", module)
@@ -556,7 +560,7 @@ def run(project: str) -> None:
         check(char_delete("qa_courier"), "D and so is the last one")
         until(lambda: char_ids() == [])
 
-        built2 = mcp("mod_export", target=out_dir)
+        built2 = mcp("mod.build", target="folder", path=out_dir)
         check(built2.get("ok"), "D the module builds again", json.dumps(built2)[:200])
         gone = [os.path.join(b, f) for b, _, fs in os.walk(root) for f in fs if f.lower().endswith(".npcasset")]
         check(not gone, "D and with them what the module ships", json.dumps(gone)[:200])
@@ -564,6 +568,24 @@ def run(project: str) -> None:
         # the copy is left without characters, as it started
         left = char_ids()
         check(left == [], "D no character is left in the project", str(left))
+
+        # ------------------------------------------------------------------ S: the module's own sections
+        own = os.path.join(project, "gamedata", "configs", "qa_own_items.ltx")
+        os.makedirs(os.path.dirname(own), exist_ok=True)
+        with open(own, "w", encoding="utf-8") as f:
+            f.write("[qa_own_parcel]:identity_immunities\ninv_name = qa\n")
+        time.sleep(0.4)
+        r = char_write('return { npc = 1, id = "qa_own", name = "Own", visual = "actors\\\\stalker_neutral\\\\stalker_neutral_1", '
+                       'supplies = { { section = "qa_own_parcel", count = 1 }, { section = "qa_nowhere_item", count = 1 } } }\n')
+        lines = r.get("problems", [])
+        check(not any("qa_own_parcel" in l for l in lines), "S an item the module brings itself is no unknown item",
+              json.dumps(lines)[:400])
+        check(any(l.startswith("W117") and "qa_nowhere_item" in l for l in lines),
+              "S one neither the game nor the module has is still W117", json.dumps(lines)[:400])
+        char_delete("qa_own")
+        os.remove(own)
+        stalls = mcp("perf.stalls")
+        check(stalls.get("ok") and not stalls.get("stalls"), "S no UI pass waited", json.dumps(stalls)[:300])
 
     finally:
         ed.close()

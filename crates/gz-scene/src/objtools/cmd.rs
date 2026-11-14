@@ -1,70 +1,59 @@
-//! `sector_tool`, `portal_tool`, `way_tool`, `shape_tool`, `light_tool`, `fog_tool`: every
-//! button, switch and gesture of the six panels as `action=`. The panels post these; the
-//! viewport's gestures call the same functions.
+//! What the way paths, the shapes and the fog volumes do beyond their properties (`scene.set`)
+//! and their placing (`scene.place`): `scene.way` edits a way's points and links, `scene.shape`
+//! joins and splits shapes and makes the level bound, `scene.fog_group` puts fog volumes in one
+//! group. The visibility cells are `scene.zones` ([`super::zones`]). The viewport's gestures
+//! call the same functions.
 
 use std::sync::Arc;
 
 use gz_base::Origin;
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Registry, Reply, Value, json};
-use gz_fmt_xr::ShadersXrlc;
+use gz_editor::{CmdError, Editor, JsonSchema, Registry, Reply, Spec, Value, json};
+use serde::Deserialize;
 
-use super::sector::{self, DEFAULT_SECTOR};
 use super::way::{self, LinkOp};
-use super::{
-    Batch, ObjToolState, Outcome, ToolEdit, commit, commit_job, portal, selected_of, set_state, shape,
-};
+use super::{Batch, Ctl, ObjToolState, Outcome, ToolEdit, commit, commit_job, selected_of, set_state, shape};
 use crate::apply::{SceneCmd, SelectMode};
 use crate::class::ObjClass;
-use crate::library::Library;
 use crate::math::Vec3;
 use crate::model::{ObjData, ObjId, Object, SceneState};
 use crate::objects::{FV_EMITTER, WayData};
-use crate::service::SceneService;
+use crate::service::{self, SceneService};
 
-const AREA: &str = "gz-scene";
-
-/// Registers the six tool commands.
+/// Registers `scene.way`, `scene.shape`, `scene.fog_group` and the zones.
 pub fn register(reg: &mut Registry) {
-    reg.add(AREA, "sector_tool", sector_tool);
-    reg.add(AREA, "portal_tool", portal_tool);
-    reg.add(AREA, "way_tool", way_tool);
-    reg.add(AREA, "shape_tool", shape_tool);
-    reg.add(AREA, "light_tool", light_tool);
-    reg.add(AREA, "fog_tool", fog_tool);
+    reg.cmd(
+        Spec::write(
+            "scene.way",
+            "Edits a way path's points and links: add, select, move and remove points, link them one way or both ways.",
+        )
+        .example("way=patrol_01 action=add_point position=12,0,4"),
+        |ed, p: WayParams, o| async move { scene_way(ed, p, o).await },
+    );
+    reg.cmd(
+        Spec::write(
+            "scene.shape",
+            "Joins shapes into one, gives a shape's parts back as shapes of their own, or makes the level's bound.",
+        )
+        .example("action=join objects=shape_01,shape_02"),
+        |ed, p: ShapeParams, o| async move { scene_shape(ed, p, o).await },
+    );
+    reg.cmd(
+        Spec::write(
+            "scene.fog_group",
+            "Puts fog volumes into one group of their own, or takes them out of theirs.",
+        )
+        .example("objects=fog_01,fog_02"),
+        |ed, p: FogParams, o| async move { scene_fog_group(ed, p, o).await },
+    );
+    super::zones::register(reg);
 }
 
-fn scene(ed: &Arc<Editor>) -> Result<Arc<SceneService>, CmdError> {
-    let svc = SceneService::of(ed)?;
-    if !svc.store.snapshot().valid {
-        return Err(CmdError::new("no_scene", "no scene"));
-    }
-    Ok(svc)
-}
-
-/// The scene, with the tool made the current one first when `show=true` (the Tools panel then
-/// shows its form).
-async fn scene_for(
-    ed: &Arc<Editor>,
-    a: &Args,
-    o: Origin,
-    class: ObjClass,
-) -> Result<Arc<SceneService>, CmdError> {
-    let svc = scene(ed)?;
-    if a.flag("show") && svc.store.snapshot().tools.target != class {
-        svc.store.send(SceneCmd::SetTarget(class), o).await?;
-    }
-    Ok(svc)
-}
-
-fn unknown(action: &str, known: &str) -> CmdError {
-    CmdError::invalid(format!("unknown action '{action}' (one of {known})"))
-}
-
-/// An object of a class by name (names are kept lower case).
-fn named(s: &SceneState, class: ObjClass, name: &str, what: &str) -> Result<ObjId, CmdError> {
-    s.find(class, &name.to_lowercase())
-        .map(|o| o.id)
-        .ok_or_else(|| CmdError::not_found(format!("{what} '{name}' not found")))
+/// A seed from the clock.
+#[must_use]
+pub fn time_seed() -> i32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1, |d| (d.as_nanos() & 0x7fff_ffff) as i32)
 }
 
 fn merge(mut a: Value, b: Value) -> Value {
@@ -74,378 +63,14 @@ fn merge(mut a: Value, b: Value) -> Value {
     a
 }
 
-/// The compiler shader library of the linked game (or the editor's own copy).
-async fn shaders(ed: &Arc<Editor>) -> Option<Arc<ShadersXrlc>> {
-    let (bytes, _) = gz_game::read_game_or_bundled(ed, "shaders_xrlc.xr").await.ok()?;
-    ShadersXrlc::read(&bytes).ok().map(Arc::new)
-}
-
-fn log_lines(ed: &Editor, lines: &[String], error: bool) {
-    for l in lines {
-        if error || l.starts_with("*ERROR") || l.starts_with('!') {
-            ed.log.error(l.clone());
-        } else {
-            ed.log.warn(l.clone());
-        }
-    }
-}
-
-// ---- sector_tool --------------------------------------------------------------------------------
-
-fn sector_mode_json(m: &super::SectorMode) -> Value {
-    json!({
-        "create_single": m.create_single,
-        "create_multiple": m.create_multiple,
-        "mesh_mode": if m.mesh_add { "add" } else { "remove" },
-        "box_pick": m.box_pick,
+/// An object of a kind by name.
+fn named(s: &SceneState, class: ObjClass, name: &str) -> Result<ObjId, CmdError> {
+    s.find_any(name).filter(|o| o.class == class).map(|o| o.id).ok_or_else(|| {
+        CmdError::not_found(format!("there is no {} named {name}", class.label().to_lowercase()))
     })
 }
 
-fn sector_state(s: &SceneState, lib: &Library) -> Value {
-    let sectors: Vec<Value> = s.of_class(ObjClass::Sector).map(|o| sector::sector_json(s, lib, o)).collect();
-    json!({
-        "mode": sector_mode_json(&s.tools.obj.sector),
-        "has_default": s.find(ObjClass::Sector, DEFAULT_SECTOR).is_some(),
-        "sectors": sectors,
-    })
-}
-
-/// The sector an action works on: `sector=`, or the one selected.
-fn target_sector(s: &SceneState, a: &Args) -> Result<ObjId, CmdError> {
-    match a.str("sector") {
-        Some(n) => named(s, ObjClass::Sector, n, "sector"),
-        None => sector::selected_sector(s)?.ok_or_else(|| CmdError::invalid("Select a sector first")),
-    }
-}
-
-/// A scene object and one of its meshes, by name or index.
-fn object_mesh(
-    s: &SceneState,
-    lib: &Library,
-    object: &str,
-    mesh: Option<&str>,
-) -> Result<(ObjId, Option<usize>), CmdError> {
-    let id = named(s, ObjClass::SceneObject, object, "object")?;
-    let Some(mesh) = mesh else { return Ok((id, None)) };
-    let o = s.get(id).ok_or_else(|| CmdError::not_found("object not found"))?;
-    let ObjData::SceneObject(d) = &o.data else {
-        return Err(CmdError::invalid("the object is not a scene object"));
-    };
-    let lo = lib
-        .cached(&d.reference)
-        .ok_or_else(|| CmdError::invalid("the object's library object could not be loaded"))?;
-    let i = super::geom::mesh_index(&lo, mesh)
-        .or_else(|| mesh.parse::<usize>().ok().filter(|i| *i < lo.object.meshes.len()))
-        .ok_or_else(|| CmdError::not_found(format!("the object has no mesh '{mesh}'")))?;
-    Ok((id, Some(i)))
-}
-
-async fn sector_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
-    let svc = scene_for(&ed, &a, o, ObjClass::Sector).await?;
-    let action = a.str_or("action", "state").to_owned();
-    match action.as_str() {
-        "state" => {
-            let snap = svc.store.snapshot();
-            svc.prefetch_library(&ed, &snap).await;
-            Ok(sector_state(&snap, &svc.library))
-        }
-        "set" => {
-            let s = set_state(&svc, o, |st| {
-                let m = &mut st.sector;
-                if let Some(v) = a.bool("create_single") {
-                    m.create_single = v;
-                    if v {
-                        m.create_multiple = false;
-                    }
-                }
-                if let Some(v) = a.bool("create_multiple") {
-                    m.create_multiple = v;
-                    if v {
-                        m.create_single = false;
-                    }
-                }
-                if let Some(v) = a.str("mesh_mode") {
-                    m.mesh_add = !v.eq_ignore_ascii_case("remove");
-                }
-                if let Some(v) = a.bool("box_pick") {
-                    m.box_pick = v;
-                }
-                // "Not while a new sector is being made"
-                if m.create_single || m.create_multiple {
-                    m.box_pick = false;
-                }
-            })
-            .await?;
-            Ok(json!({ "mode": sector_mode_json(&s.sector) }))
-        }
-        "validate" => {
-            let sh = shaders(&ed).await;
-            let note = sh.is_none().then_some(
-                "The compiler shaders (shaders_xrlc.xr) could not be read: the shader checks were left out.",
-            );
-            let out = commit_job(&ed, &svc, o, "Validating the sectors", move |s, lib, _| {
-                let (valid, problems) = sector::validate(s, lib, sh.as_deref());
-                Ok((Batch::new("Validate", s.serial), json!({ "valid": valid, "problems": problems })))
-            })
-            .await?;
-            if let Some(p) = out.get("problems").and_then(Value::as_array) {
-                let lines: Vec<String> = p.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect();
-                log_lines(&ed, &lines, false);
-            }
-            let mut out = out;
-            if let (Some(n), Value::Object(m)) = (note, &mut out) {
-                m.insert("note".into(), json!(n));
-            }
-            Ok(out)
-        }
-        "create_default" => {
-            commit_job(&ed, &svc, o, "Creating the default sector", |s, lib, _| {
-                sector::create_default(s, lib)
-            })
-            .await
-        }
-        "remove_default" => {
-            commit(&ed, &svc, o, super::Ctl::default(), |s, _, _| sector::remove_default(s)).await
-        }
-        "capture_volume" => {
-            let id = target_sector(&svc.store.snapshot(), &a)?;
-            commit_job(&ed, &svc, o, "Capturing the sector's volume", move |s, lib, _| {
-                sector::capture_volume(s, lib, id)
-            })
-            .await
-        }
-        "distribute" | "distribute_objects" => {
-            let s = svc.store.snapshot();
-            let id = target_sector(&s, &a)?;
-            let name = s.get(id).map(|x| x.name.to_string()).unwrap_or_default();
-            // oracle: `CSector::DistributeInsideObjects` is commented out in the C++: it changes nothing
-            Ok(
-                json!({ "sector": name, "changed": 0, "note": "Distribute Objects changes nothing in this version." }),
-            )
-        }
-        "add_mesh" | "remove_mesh" | "add_meshes" | "remove_meshes" => {
-            let add = action.starts_with("add");
-            let snap = svc.store.snapshot();
-            svc.prefetch_library(&ed, &snap).await;
-            let id = target_sector(&snap, &a)?;
-            let mut picks = Vec::new();
-            if let Some(items) = a.list("items") {
-                for it in items {
-                    let (obj, mesh) = it
-                        .split_once(':')
-                        .ok_or_else(|| CmdError::invalid(format!("an item is not object:mesh: {it}")))?;
-                    let (oid, m) = object_mesh(&snap, &svc.library, obj, Some(mesh))?;
-                    picks.push((oid, m.unwrap_or(0)));
-                }
-            } else {
-                let obj = a.need("object")?;
-                let (oid, m) = object_mesh(&snap, &svc.library, obj, Some(a.need("mesh")?))?;
-                picks.push((oid, m.unwrap_or(0)));
-            }
-            let boxed = a.flag("box");
-            let label = if add { "Add Mesh" } else { "Remove Mesh" };
-            let out = commit(&ed, &svc, o, super::Ctl::default(), move |s, lib, _| {
-                sector::edit_meshes(s, lib, id, &picks, add, boxed && !add, label)
-            })
-            .await?;
-            if let Some(n) = out.get("note").and_then(Value::as_str) {
-                ed.log.info(n.to_owned());
-            }
-            Ok(out)
-        }
-        "new_from_mesh" => {
-            let snap = svc.store.snapshot();
-            svc.prefetch_library(&ed, &snap).await;
-            let (oid, m) = object_mesh(&snap, &svc.library, a.need("object")?, Some(a.need("mesh")?))?;
-            let mesh = m.unwrap_or(0);
-            commit(&ed, &svc, o, super::Ctl::default(), move |s, lib, _| {
-                sector::new_from_mesh(s, lib, oid, mesh)
-            })
-            .await
-        }
-        "new_from_object" => {
-            let snap = svc.store.snapshot();
-            svc.prefetch_library(&ed, &snap).await;
-            let (oid, _) = object_mesh(&snap, &svc.library, a.need("object")?, None)?;
-            let seed = a.i64("seed").map_or_else(time_seed, |v| v as i32);
-            commit(&ed, &svc, o, super::Ctl::default(), move |s, lib, _| {
-                sector::new_from_object(s, lib, oid, seed)
-            })
-            .await
-        }
-        other => Err(unknown(
-            other,
-            "state, set, validate, create_default, remove_default, capture_volume, distribute, add_mesh, remove_mesh, add_meshes, remove_meshes, new_from_mesh, new_from_object",
-        )),
-    }
-}
-
-/// A seed from the clock, as `Random` is seeded.
-#[must_use]
-pub fn time_seed() -> i32 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(1, |d| (d.as_nanos() & 0x7fff_ffff) as i32)
-}
-
-// ---- portal_tool --------------------------------------------------------------------------------
-
-fn portal_state(s: &SceneState) -> Value {
-    let portals: Vec<Value> = s
-        .of_class(ObjClass::Portal)
-        .filter_map(|o| match &o.data {
-            ObjData::Portal(p) => Some(json!({
-                "name": o.name.as_str(),
-                "front": p.front.as_str(),
-                "back": p.back.as_str(),
-                "vertices": p.vertices.len(),
-                "selected": s.is_selected(o.id),
-            })),
-            _ => None,
-        })
-        .collect();
-    json!({
-        "portals": portals,
-        "selected_sectors": selected_of(s, ObjClass::Sector).len(),
-        "sectors": s.count(ObjClass::Sector),
-    })
-}
-
-/// The new portals' names: `GenObjectName(OBJCLASS_PORTAL)` once the old ones are gone.
-fn name_gen<'a>(s: &'a SceneState, removed: &[ObjId]) -> impl FnMut() -> String + use<'a> {
-    let gone: Vec<String> = removed.iter().filter_map(|id| s.get(*id)).map(|o| o.name.to_string()).collect();
-    let mut taken: Vec<String> = Vec::new();
-    move || {
-        for i in 0u32.. {
-            let n = format!("{i:02}");
-            if (!s.name_used(&n) || gone.contains(&n)) && !taken.contains(&n) {
-                taken.push(n.clone());
-                return n;
-            }
-        }
-        String::new()
-    }
-}
-
-/// `CalculateAllPortals` / `CalculateSelectedPortals`.
-fn compute_portals(
-    s: &SceneState,
-    lib: &Library,
-    ctl: &super::Ctl,
-    selected: bool,
-    shaders: Option<&ShadersXrlc>,
-) -> Result<Outcome, CmdError> {
-    ctl.stage("Validating the sectors");
-    let (valid, _) = sector::validate(s, lib, shaders);
-    if !valid {
-        return Err(CmdError::invalid(if selected {
-            "*ERROR: Scene has non associated face (face without sector)!"
-        } else {
-            "*ERROR: Sector validation failed."
-        }));
-    }
-    let (sectors, removed): (Vec<ObjId>, Vec<ObjId>) = if selected {
-        let sel: Vec<ObjId> =
-            s.of_class(ObjClass::Sector).filter(|o| s.is_selected(o.id)).map(|o| o.id).collect();
-        if sel.len() < 2 {
-            return Err(CmdError::invalid("Select at least 2 sectors."));
-        }
-        let names: Vec<String> = sel.iter().filter_map(|id| s.get(*id)).map(|o| o.name.to_string()).collect();
-        let has = |n: &str| names.iter().any(|x| x.eq_ignore_ascii_case(n));
-        let old = s
-            .of_class(ObjClass::Portal)
-            .filter(|p| matches!(&p.data, ObjData::Portal(d) if has(&d.front) && has(&d.back)))
-            .map(|p| p.id)
-            .collect();
-        (sel, old)
-    } else {
-        (
-            s.of_class(ObjClass::Sector).map(|o| o.id).collect(),
-            s.of_class(ObjClass::Portal).map(|p| p.id).collect(),
-        )
-    };
-    let mut names = name_gen(s, &removed);
-    let stop = || ctl.stopped();
-    let stage = |t: &str| ctl.stage(t);
-    let c = portal::compute(s, lib, &sectors, &mut names, &stop, &stage).map_err(|_| super::stopped())?;
-    let mut b =
-        Batch::new(if selected { "Compute Selected Portals" } else { "Compute All Portals" }, s.serial);
-    b.remove = removed.clone();
-    let created = c.portals.len();
-    let mut names = name_gen(s, &removed);
-    for p in c.portals {
-        let name = names();
-        b.add.push((Object::new(ObjClass::Portal, &name, ObjData::Portal(p)), super::NameRule::Fixed(name)));
-    }
-    Ok((
-        b,
-        json!({
-            "computed": c.loops,
-            "created": created,
-            "removed": removed.len(),
-            "messages": c.log,
-        }),
-    ))
-}
-
-async fn portal_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
-    let svc = scene_for(&ed, &a, o, ObjClass::Portal).await?;
-    let action = a.str_or("action", "state").to_owned();
-    match action.as_str() {
-        "state" => Ok(portal_state(&svc.store.snapshot())),
-        "compute_all" | "compute_selected" => {
-            let selected = action == "compute_selected";
-            let sh = shaders(&ed).await;
-            let out = commit_job(
-                &ed,
-                &svc,
-                o,
-                if selected { "Computing the selected portals" } else { "Computing the portals" },
-                move |s, lib, ctl| compute_portals(s, lib, ctl, selected, sh.as_deref()),
-            )
-            .await?;
-            if let Some(m) = out.get("messages").and_then(Value::as_array) {
-                let lines: Vec<String> = m.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect();
-                log_lines(&ed, &lines, true);
-            }
-            let n = out.get("computed").and_then(Value::as_u64).unwrap_or(0);
-            Ok(merge(
-                out,
-                json!({ "message": format!("Computed {n} portal{}", if n == 1 { "" } else { "s" }) }),
-            ))
-        }
-        "remove_duplicates" => {
-            let out = commit(&ed, &svc, o, super::Ctl::default(), |s, _, _| {
-                let gone = portal::similar_portals(s);
-                let n = gone.len();
-                let mut b = Batch::new("Remove Duplicate Portals", s.serial);
-                b.remove = gone;
-                Ok((b, json!({ "removed": n, "message": format!("Removed '{n}' portal(s).") })))
-            })
-            .await?;
-            Ok(out)
-        }
-        "invert" | "invert_orientation" => {
-            commit(&ed, &svc, o, super::Ctl::default(), |s, _, _| {
-                let mut b = Batch::new("Invert Orientation", s.serial);
-                for id in selected_of(s, ObjClass::Portal) {
-                    let Some(p) = s.get(id) else { continue };
-                    let mut p = (**p).clone();
-                    if let ObjData::Portal(d) = &mut p.data {
-                        d.vertices.reverse();
-                    }
-                    b.replace.push(p);
-                }
-                let n = b.replace.len();
-                Ok((b, json!({ "inverted": n })))
-            })
-            .await
-        }
-        other => Err(unknown(other, "state, compute_all, compute_selected, remove_duplicates, invert")),
-    }
-}
-
-// ---- way_tool -----------------------------------------------------------------------------------
+// ---------------------------------------------------------------- way paths
 
 fn way_json(s: &SceneState, o: &Object, w: &WayData) -> Value {
     let points: Vec<Value> = w
@@ -455,14 +80,12 @@ fn way_json(s: &SceneState, o: &Object, w: &WayData) -> Value {
             let links: Vec<Value> = p
                 .links
                 .iter()
-                .map(|(t, pr)| {
-                    json!({ "to": w.points.get(*t as usize).map_or("", |q| q.name.as_str()), "probability": pr })
-                })
+                .map(|(t, pr)| json!({ "to": w.points.get(*t as usize).map_or("", |q| q.name.as_str()), "probability": pr }))
                 .collect();
             json!({
                 "name": p.name.as_str(),
                 "selected": p.selected,
-                "position": [p.position.x, p.position.y, p.position.z],
+                "position": crate::cmd::v3(p.position),
                 "links": links,
             })
         })
@@ -470,43 +93,19 @@ fn way_json(s: &SceneState, o: &Object, w: &WayData) -> Value {
     json!({ "name": o.name.as_str(), "selected": s.is_selected(o.id), "points": points })
 }
 
-fn way_state(s: &SceneState) -> Value {
-    let ways: Vec<Value> = s
-        .of_class(ObjClass::Way)
-        .filter(|o| s.is_selected(o.id))
-        .filter_map(|o| match &o.data {
-            ObjData::Way(w) => Some(way_json(s, o, w)),
-            _ => None,
-        })
-        .collect();
-    json!({
-        "mode": if s.tools.obj.way_points { "points" } else { "ways" },
-        "auto_link": s.tools.obj.auto_link,
-        "ways": s.count(ObjClass::Way),
-        "selected": ways,
-    })
-}
-
-/// The way an action works on: `way=`, or the one selected (`Select one WayObject.`).
-fn target_way(s: &SceneState, a: &Args) -> Result<ObjId, CmdError> {
-    if let Some(n) = a.str("way") {
-        return named(s, ObjClass::Way, n, "way");
-    }
-    let sel: Vec<ObjId> = s.of_class(ObjClass::Way).filter(|o| s.is_selected(o.id)).map(|o| o.id).collect();
-    match sel.as_slice() {
-        [one] => Ok(*one),
-        _ => Err(CmdError::invalid("Select one WayObject.")),
-    }
-}
-
-/// `EditSelectedWays`: a link edit of every selected way.
+/// `EditSelectedWays`: a link edit of every selected way, on its selected points.
 pub fn link_batch(s: &SceneState, op: LinkOp) -> Result<Outcome, CmdError> {
-    if op.needs_points() && !s.tools.obj.way_points {
-        return Err(CmdError::invalid("Switch Select to Points first"));
+    let ways = selected_of(s, ObjClass::Way);
+    let any_point = ways
+        .iter()
+        .filter_map(|id| s.get(*id))
+        .any(|o| matches!(&o.data, ObjData::Way(w) if w.points.iter().any(|p| p.selected)));
+    if op.needs_points() && !any_point {
+        return Err(CmdError::invalid("select points of the way first"));
     }
     let mut b = Batch::new(op.label(), s.serial);
     let mut changed = Vec::new();
-    for id in selected_of(s, ObjClass::Way) {
+    for id in ways {
         let Some(o) = s.get(id) else { continue };
         let ObjData::Way(w) = &o.data else { continue };
         let mut w2 = w.clone();
@@ -520,10 +119,10 @@ pub fn link_batch(s: &SceneState, op: LinkOp) -> Result<Outcome, CmdError> {
     Ok((b, json!({ "action": op.label(), "changed": changed })))
 }
 
-/// Adds a point to a way at `at` (`TUI_ControlWayPointAdd::Start`).
+/// Adds a point to a way at `at`, linked to the selected points when auto link is on.
 pub fn add_point_batch(s: &SceneState, way_id: ObjId, at: Vec3) -> Result<Outcome, CmdError> {
-    let o = s.get(way_id).ok_or_else(|| CmdError::not_found("way not found"))?;
-    let ObjData::Way(w) = &o.data else { return Err(CmdError::invalid("the object is not a way")) };
+    let o = s.get(way_id).ok_or_else(|| CmdError::not_found("the way path is gone"))?;
+    let ObjData::Way(w) = &o.data else { return Err(CmdError::invalid("the object is no way path")) };
     let mut w2 = w.clone();
     let i = way::add_point(&mut w2, at, s.tools.obj.auto_link);
     let name = w2.points.get(i).map(|p| p.name.to_string()).unwrap_or_default();
@@ -534,7 +133,7 @@ pub fn add_point_batch(s: &SceneState, way_id: ObjId, at: Vec3) -> Result<Outcom
     Ok((b, json!({ "way": o.name.as_str(), "point": name })))
 }
 
-/// Removes the selected points of ways; a way left without points goes (`OnSelectionRemove`).
+/// Removes the selected points of ways; a way left without points goes.
 pub fn remove_points_batch(s: &SceneState, ways: &[ObjId]) -> Outcome {
     let mut b = Batch::new("Remove Points", s.serial);
     let mut removed = 0;
@@ -558,305 +157,312 @@ pub fn remove_points_batch(s: &SceneState, ways: &[ObjId]) -> Outcome {
     (b, json!({ "removed": removed }))
 }
 
-fn point_keys(w: &WayData, a: &Args) -> Result<Vec<usize>, CmdError> {
-    let keys = a
-        .list("points")
-        .or_else(|| a.str("point").map(|p| vec![p.to_owned()]))
-        .ok_or_else(|| CmdError::invalid("missing 'points' argument"))?;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum WayAction {
+    /// The way's points and links.
+    #[default]
+    Get,
+    /// A point at `position`, linked from the selected points when auto link is on.
+    AddPoint,
+    /// Selects `points` (with `mode`).
+    SelectPoints,
+    /// Moves `points` to `position`.
+    MovePoint,
+    /// Removes the selected points (`points` selects them first).
+    RemovePoints,
+    /// Links the selected points one way, in the order they were selected.
+    LinkOneWay,
+    /// Links the selected points both ways.
+    LinkBothWays,
+    /// Makes the links of the selected ways one way.
+    MakeOneWay,
+    /// Makes the links of the selected ways both ways.
+    MakeBothWays,
+    /// Turns the selected points' links round.
+    InvertLinks,
+    /// Removes the selected points' links.
+    Unlink,
+    /// Whether a new point is linked from the selected ones (`on`).
+    AutoLink,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum PointSelect {
+    /// Only these points.
+    #[default]
+    Set,
+    Add,
+    Remove,
+    Toggle,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct WayParams {
+    #[serde(default)]
+    action: WayAction,
+    /// The way path. Left out: the selected one.
+    #[serde(default)]
+    way: Option<String>,
+    /// Its points by name (`p0`, ...) or number.
+    #[serde(default)]
+    points: Option<Vec<String>>,
+    /// Metres (add_point, move_point).
+    #[serde(default)]
+    position: Option<[f32; 3]>,
+    /// select_points: how the points join the selection.
+    #[serde(default)]
+    mode: PointSelect,
+    /// auto_link.
+    #[serde(default)]
+    on: Option<bool>,
+}
+
+/// The way an action works on: named, or the one selected.
+fn target_way(s: &SceneState, way: Option<&str>) -> Result<ObjId, CmdError> {
+    if let Some(n) = way {
+        return named(s, ObjClass::Way, n);
+    }
+    match selected_of(s, ObjClass::Way).as_slice() {
+        [one] => Ok(*one),
+        _ => Err(CmdError::invalid("select one way path, or name it in way")),
+    }
+}
+
+fn point_keys(w: &WayData, keys: Option<&[String]>) -> Result<Vec<usize>, CmdError> {
+    let keys = keys.filter(|k| !k.is_empty()).ok_or_else(|| CmdError::invalid("this action takes points"))?;
     keys.iter()
         .map(|k| {
-            way::point_index(w, k).ok_or_else(|| CmdError::not_found(format!("the way has no point '{k}'")))
+            way::point_index(w, k.trim())
+                .ok_or_else(|| CmdError::not_found(format!("the way has no point {k}")))
         })
         .collect()
 }
 
-async fn way_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
-    let svc = scene_for(&ed, &a, o, ObjClass::Way).await?;
-    let action = a.str_or("action", "state").to_owned();
-    if let Some(op) = LinkOp::parse(&action) {
-        return commit(&ed, &svc, o, super::Ctl::default(), move |s, _, _| link_batch(s, op)).await;
+async fn select_points(
+    svc: &SceneService,
+    id: ObjId,
+    keys: &[String],
+    mode: SelectMode,
+    o: Origin,
+) -> Result<(), CmdError> {
+    let snap = svc.store.snapshot();
+    let Some(ObjData::Way(w)) = snap.get(id).map(|x| &x.data) else {
+        return Err(CmdError::invalid("the object is no way path"));
+    };
+    let points = point_keys(w, Some(keys))?;
+    if !snap.is_selected(id) {
+        svc.store.send(SceneCmd::Select { ids: vec![id], mode: SelectMode::Add }, o).await?;
     }
-    match action.as_str() {
-        "state" => Ok(way_state(&svc.store.snapshot())),
-        "mode" | "select_mode" => {
-            let m = a.need("mode")?;
-            let points = match m {
-                "points" | "point" => true,
-                "ways" | "way" => false,
-                _ => return Err(CmdError::invalid("mode is ways or points")),
-            };
-            let s = set_state(&svc, o, |st| st.way_points = points).await?;
-            Ok(json!({ "mode": if s.way_points { "points" } else { "ways" } }))
-        }
-        "auto_link" => {
-            let on = a.bool("on").ok_or_else(|| CmdError::invalid("missing 'on' argument"))?;
-            let s = set_state(&svc, o, |st| st.auto_link = on).await?;
-            Ok(json!({ "auto_link": s.auto_link }))
-        }
-        "add_point" => {
-            let p = a.vec3("position").ok_or_else(|| CmdError::invalid("missing 'position': x,y,z"))?;
-            let at = Vec3::from_array(p);
-            if !at.is_finite() {
-                return Err(CmdError::invalid("non-finite position"));
+    svc.store.send(SceneCmd::ObjTool(Box::new(ToolEdit::SelectPoints { way: id, points, mode })), o).await?;
+    Ok(())
+}
+
+fn way_reply(svc: &SceneService, id: ObjId) -> Value {
+    let s = svc.store.snapshot();
+    let out = s.get(id).and_then(|x| match &x.data {
+        ObjData::Way(w) => Some(way_json(&s, x, w)),
+        _ => None,
+    });
+    json!({ "way": out, "auto_link": s.tools.obj.auto_link })
+}
+
+async fn scene_way(ed: Arc<Editor>, p: WayParams, o: Origin) -> Reply {
+    let svc = service::need_scene(&ed).await?;
+    let snap = svc.store.snapshot();
+    let op = match p.action {
+        WayAction::LinkOneWay => Some(LinkOp::Create1),
+        WayAction::LinkBothWays => Some(LinkOp::Create2),
+        WayAction::MakeOneWay => Some(LinkOp::Convert1),
+        WayAction::MakeBothWays => Some(LinkOp::Convert2),
+        WayAction::InvertLinks => Some(LinkOp::Invert),
+        WayAction::Unlink => Some(LinkOp::Remove),
+        _ => None,
+    };
+    if let Some(op) = op {
+        if p.way.is_some() || p.points.is_some() {
+            let id = target_way(&snap, p.way.as_deref())?;
+            if let Some(keys) = &p.points {
+                select_points(&svc, id, keys, SelectMode::Set, o).await?;
+            } else {
+                svc.store.send(SceneCmd::Select { ids: vec![id], mode: SelectMode::Set }, o).await?;
             }
-            let id = target_way(&svc.store.snapshot(), &a)?;
-            commit(&ed, &svc, o, super::Ctl::default(), move |s, _, _| add_point_batch(s, id, at)).await
         }
-        "select_points" => {
-            let snap = svc.store.snapshot();
-            let id = target_way(&snap, &a)?;
-            let Some(ObjData::Way(w)) = snap.get(id).map(|x| &x.data) else {
-                return Err(CmdError::invalid("the object is not a way"));
-            };
-            let points = point_keys(w, &a)?;
-            let mode = match a.str_or("mode", "set") {
-                "add" => SelectMode::Add,
-                "remove" => SelectMode::Remove,
-                "toggle" => SelectMode::Toggle,
-                _ => SelectMode::Set,
-            };
-            svc.store
-                .send(SceneCmd::ObjTool(Box::new(ToolEdit::SelectPoints { way: id, points, mode })), o)
-                .await?;
-            let s = svc.store.snapshot();
-            let out = s.get(id).and_then(|x| match &x.data {
-                ObjData::Way(w) => Some(way_json(&s, x, w)),
-                _ => None,
-            });
-            Ok(json!({ "way": out }))
+        return commit(&ed, &svc, o, Ctl::default(), move |s, _, _| link_batch(s, op)).await;
+    }
+    match p.action {
+        WayAction::Get => {
+            let id = target_way(&snap, p.way.as_deref())?;
+            Ok(way_reply(&svc, id))
         }
-        "move_point" => {
-            let snap = svc.store.snapshot();
-            let id = target_way(&snap, &a)?;
-            let Some(ObjData::Way(w)) = snap.get(id).map(|x| &x.data) else {
-                return Err(CmdError::invalid("the object is not a way"));
+        WayAction::AutoLink => {
+            let on = p.on.ok_or_else(|| CmdError::invalid("auto_link takes on"))?;
+            let st = set_state(&svc, o, |st| st.auto_link = on).await?;
+            Ok(json!({ "auto_link": st.auto_link }))
+        }
+        WayAction::AddPoint => {
+            let at =
+                Vec3::from_array(p.position.ok_or_else(|| CmdError::invalid("add_point takes position"))?);
+            if !at.is_finite() {
+                return Err(CmdError::invalid("position takes finite numbers"));
+            }
+            let id = target_way(&snap, p.way.as_deref())?;
+            let out = commit(&ed, &svc, o, Ctl::default(), move |s, _, _| add_point_batch(s, id, at)).await?;
+            Ok(merge(out, way_reply(&svc, id)))
+        }
+        WayAction::SelectPoints => {
+            let id = target_way(&snap, p.way.as_deref())?;
+            let mode = match p.mode {
+                PointSelect::Set => SelectMode::Set,
+                PointSelect::Add => SelectMode::Add,
+                PointSelect::Remove => SelectMode::Remove,
+                PointSelect::Toggle => SelectMode::Toggle,
             };
-            let points = point_keys(w, &a)?;
-            let p = Vec3::from_array(
-                a.vec3("position").ok_or_else(|| CmdError::invalid("missing 'position': x,y,z"))?,
-            );
-            let moves = points.into_iter().map(|i| (i, p)).collect();
+            select_points(&svc, id, p.points.as_deref().unwrap_or_default(), mode, o).await?;
+            Ok(way_reply(&svc, id))
+        }
+        WayAction::MovePoint => {
+            let id = target_way(&snap, p.way.as_deref())?;
+            let Some(ObjData::Way(w)) = snap.get(id).map(|x| &x.data) else {
+                return Err(CmdError::invalid("the object is no way path"));
+            };
+            let points = point_keys(w, p.points.as_deref())?;
+            let at =
+                Vec3::from_array(p.position.ok_or_else(|| CmdError::invalid("move_point takes position"))?);
+            if !at.is_finite() {
+                return Err(CmdError::invalid("position takes finite numbers"));
+            }
+            let moves = points.into_iter().map(|i| (i, at)).collect();
             svc.store
                 .send(
                     SceneCmd::ObjTool(Box::new(ToolEdit::MovePoints { way: id, points: moves, merge: None })),
                     o,
                 )
                 .await?;
-            Ok(json!({ "moved": true }))
+            Ok(way_reply(&svc, id))
         }
-        "remove_points" => {
-            let ids = match a.str("way") {
-                Some(_) => vec![target_way(&svc.store.snapshot(), &a)?],
-                None => selected_of(&svc.store.snapshot(), ObjClass::Way),
+        WayAction::RemovePoints => {
+            let ids = match (&p.way, &p.points) {
+                (_, Some(keys)) => {
+                    let id = target_way(&snap, p.way.as_deref())?;
+                    select_points(&svc, id, keys, SelectMode::Set, o).await?;
+                    vec![id]
+                }
+                (Some(_), None) => vec![target_way(&snap, p.way.as_deref())?],
+                (None, None) => selected_of(&snap, ObjClass::Way),
             };
-            commit(&ed, &svc, o, super::Ctl::default(), move |s, _, _| Ok(remove_points_batch(s, &ids))).await
+            commit(&ed, &svc, o, Ctl::default(), move |s, _, _| Ok(remove_points_batch(s, &ids))).await
         }
-        other => Err(unknown(
-            other,
-            "state, mode, auto_link, create_1link, create_2link, convert_1link, convert_2link, invert_link, remove_link, add_point, select_points, move_point, remove_points",
-        )),
+        _ => Err(CmdError::internal("a link action was not taken")),
     }
 }
 
-// ---- shape_tool ---------------------------------------------------------------------------------
+// ---------------------------------------------------------------- shapes
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ShapeAction {
+    /// The shapes `objects` names (or the selected ones) become parts of the first.
+    Join,
+    /// The selected shapes' parts become shapes of their own.
+    Split,
+    /// The level's bound: made around what the scene holds (`on=true`), made again
+    /// (`recalculate=true`), or left alone (`on=false`).
+    LevelBound,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ShapeParams {
+    action: ShapeAction,
+    /// The shapes by name. Left out: the selection.
+    #[serde(default)]
+    objects: Option<Vec<String>>,
+    /// level_bound: edit the bound (true) or stop editing it (false).
+    #[serde(default)]
+    on: Option<bool>,
+    /// level_bound: make the bound again around what the scene holds now.
+    #[serde(default)]
+    recalculate: bool,
+}
 
 fn shape_state(s: &SceneState) -> Value {
-    let t = &s.tools.obj;
-    let selected: Vec<Value> = selected_of(s, ObjClass::Shape)
-        .iter()
-        .filter_map(|id| s.get(*id))
-        .map(|o| {
-            let parts = match &o.data {
-                ObjData::Shape(d) => d.shapes.len(),
-                _ => 0,
-            };
-            json!({ "name": o.name.as_str(), "parts": parts })
-        })
-        .collect();
     let bound = s
         .of_class(ObjClass::Shape)
         .find(|o| matches!(&o.data, ObjData::Shape(d) if d.usage == crate::objects::SHAPE_LEVEL_BOUND))
         .map(|o| o.name.to_string());
-    json!({
-        "shape": if t.shape_sphere { "sphere" } else { "box" },
-        "attach_on_click": t.attach_on_click,
-        "edit_level_bound": t.edit_level_bound,
-        "level_bound": bound,
-        "selected": selected,
-    })
+    json!({ "edit_level_bound": s.tools.obj.edit_level_bound, "level_bound": bound })
 }
 
-async fn shape_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
-    let svc = scene_for(&ed, &a, o, ObjClass::Shape).await?;
-    let action = a.str_or("action", "state").to_owned();
-    match action.as_str() {
-        "state" => Ok(shape_state(&svc.store.snapshot())),
-        "set" => {
-            let shape = a.str("shape").map(|v| v.eq_ignore_ascii_case("sphere"));
-            let attach = a.bool("attach_on_click");
-            set_state(&svc, o, |st| {
-                if let Some(v) = shape {
-                    st.shape_sphere = v;
-                }
-                if let Some(v) = attach {
-                    st.attach_on_click = v;
-                }
-            })
-            .await?;
-            Ok(shape_state(&svc.store.snapshot()))
-        }
-        "attach" => {
-            let snap = svc.store.snapshot();
-            let from = named(&snap, ObjClass::Shape, a.need("from")?, "shape")?;
-            let to = match a.str("to") {
-                Some(n) => Some(named(&snap, ObjClass::Shape, n, "shape")?),
-                None => None,
+async fn scene_shape(ed: Arc<Editor>, p: ShapeParams, o: Origin) -> Reply {
+    let svc = service::need_scene(&ed).await?;
+    let snap = svc.store.snapshot();
+    match p.action {
+        ShapeAction::Join => {
+            let ids: Vec<ObjId> = crate::edit::ids_of(&snap, p.objects.as_deref())?
+                .into_iter()
+                .filter(|id| snap.get(*id).is_some_and(|x| x.class == ObjClass::Shape))
+                .collect();
+            let [base, rest @ ..] = ids.as_slice() else {
+                return Err(CmdError::invalid("join takes two shapes or more"));
             };
-            commit(&ed, &svc, o, super::Ctl::default(), move |s, _, _| match to {
-                Some(t) => shape::attach(s, t, from),
-                None => shape::attach_to_selected(s, from),
-            })
-            .await
-        }
-        "add" => {
-            // a Place click's command form (`DefaultAddObject` with the shape of the switch)
-            let p = Vec3::from_array(
-                a.vec3("position").ok_or_else(|| CmdError::invalid("missing 'position': x,y,z"))?,
-            );
-            if !p.is_finite() {
-                return Err(CmdError::invalid("non-finite position"));
+            if rest.is_empty() {
+                return Err(CmdError::invalid("join takes two shapes or more"));
             }
-            let sphere = a.str("shape").map(|v| v.eq_ignore_ascii_case("sphere"));
-            commit(&ed, &svc, o, super::Ctl::default(), move |s, _, _| {
-                let mut obj = Object::new(
-                    ObjClass::Shape,
-                    "",
-                    ObjData::Shape(shape::new_shape_data(sphere.unwrap_or(s.tools.obj.shape_sphere))),
-                );
-                obj.xform.position = p;
-                let mut b = Batch::new("Add Object", s.serial);
-                b.add.push((obj, super::NameRule::Gen(Some(ObjClass::Shape.name().to_owned()))));
-                b.select_added = true;
-                Ok((b, json!({ "added": true })))
-            })
-            .await?;
+            let base = *base;
+            for from in rest.iter().copied() {
+                commit(&ed, &svc, o, Ctl::default(), move |s, _, _| shape::attach(s, base, from)).await?;
+            }
             let s = svc.store.snapshot();
-            let added =
-                selected_of(&s, ObjClass::Shape).last().and_then(|id| s.get(*id)).map(|x| x.name.to_string());
-            Ok(merge(json!({ "shape": added }), shape_state(&s)))
+            Ok(json!({ "shape": s.get(base).map(|x| x.name.to_string()), "joined": rest.len() }))
         }
-        "detach" => commit(&ed, &svc, o, super::Ctl::default(), |s, _, _| shape::detach_selected(s)).await,
-        "edit_level_bound" => {
-            let on = a.bool("on").ok_or_else(|| CmdError::invalid("missing 'on' argument"))?;
-            let mut st: ObjToolState = svc.store.snapshot().tools.obj;
-            st.edit_level_bound = on;
-            if !on {
-                set_state(&svc, o, |x| x.edit_level_bound = false).await?;
-                return Ok(shape_state(&svc.store.snapshot()));
+        ShapeAction::Split => {
+            if p.objects.is_some() {
+                let ids = crate::edit::ids_of(&snap, p.objects.as_deref())?;
+                svc.store.send(SceneCmd::Select { ids, mode: SelectMode::Set }, o).await?;
             }
-            let out = commit_job(&ed, &svc, o, "Editing the level bound", move |s, lib, _| {
-                shape::edit_level_bound(s, lib, false, Some(st))
-            })
-            .await?;
-            Ok(merge(out, shape_state(&svc.store.snapshot())))
+            commit(&ed, &svc, o, Ctl::default(), |s, _, _| shape::detach_selected(s)).await
         }
-        "recalculate" | "recalculate_level_bound" => {
-            if !svc.store.snapshot().tools.obj.edit_level_bound {
-                return Err(CmdError::invalid("Turn Edit Level Bound on first"));
+        ShapeAction::LevelBound => {
+            if p.recalculate {
+                let out = commit_job(&ed, &svc, o, "Making the level bound", |s, lib, _| {
+                    let mut st: ObjToolState = s.tools.obj;
+                    st.edit_level_bound = true;
+                    shape::edit_level_bound(s, lib, true, Some(st))
+                })
+                .await?;
+                return Ok(merge(out, shape_state(&svc.store.snapshot())));
             }
-            commit_job(&ed, &svc, o, "Recalculating the level bound", |s, lib, _| {
-                shape::edit_level_bound(s, lib, true, None)
-            })
-            .await
+            match p.on {
+                Some(false) => {
+                    set_state(&svc, o, |x| x.edit_level_bound = false).await?;
+                    Ok(shape_state(&svc.store.snapshot()))
+                }
+                Some(true) => {
+                    let mut st: ObjToolState = snap.tools.obj;
+                    st.edit_level_bound = true;
+                    let out = commit_job(&ed, &svc, o, "Editing the level bound", move |s, lib, _| {
+                        shape::edit_level_bound(s, lib, false, Some(st))
+                    })
+                    .await?;
+                    Ok(merge(out, shape_state(&svc.store.snapshot())))
+                }
+                None => Ok(shape_state(&snap)),
+            }
         }
-        other => Err(unknown(other, "state, set, add, attach, detach, edit_level_bound, recalculate")),
     }
 }
 
-// ---- light_tool ---------------------------------------------------------------------------------
+// ---------------------------------------------------------------- fog volumes
 
-fn light_state(s: &SceneState) -> Value {
-    let lights: Vec<Value> = s
-        .of_class(ObjClass::Light)
-        .filter_map(|o| match &o.data {
-            ObjData::Light(l) => Some(
-                json!({ "name": o.name.as_str(), "selected": s.is_selected(o.id), "viewport": l.use_in_d3d }),
-            ),
-            _ => None,
-        })
-        .collect();
-    json!({ "lights": lights })
-}
-
-/// `UILightTool::UseInD3D(all, flag)`: which lights light the viewport.
-pub fn use_in_viewport(s: &SceneState, all: bool, on: bool) -> Outcome {
-    let label = match (all, on) {
-        (false, true) => "Enable Selected",
-        (true, true) => "Enable All",
-        (false, false) => "Disable Selected",
-        (true, false) => "Disable All",
-    };
-    let mut b = Batch::new(label, s.serial);
-    for o in s.of_class(ObjClass::Light) {
-        if !all && !(s.is_selected(o.id) && o.flags.visible) {
-            continue;
-        }
-        if let ObjData::Light(l) = &o.data
-            && l.use_in_d3d != on
-        {
-            let mut n = (**o).clone();
-            if let ObjData::Light(nl) = &mut n.data {
-                nl.use_in_d3d = on;
-            }
-            b.replace.push(n);
-        }
-    }
-    let n = b.replace.len();
-    (b, json!({ "action": label, "changed": n }))
-}
-
-async fn light_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
-    let svc = scene_for(&ed, &a, o, ObjClass::Light).await?;
-    let action = a.str_or("action", "state").to_owned();
-    let (all, on) = match action.as_str() {
-        "state" => return Ok(light_state(&svc.store.snapshot())),
-        "enable_selected" => (false, true),
-        "enable_all" => (true, true),
-        "disable_selected" => (false, false),
-        "disable_all" => (true, false),
-        other => {
-            return Err(unknown(other, "state, enable_selected, enable_all, disable_selected, disable_all"));
-        }
-    };
-    let out =
-        commit(&ed, &svc, o, super::Ctl::default(), move |s, _, _| Ok(use_in_viewport(s, all, on))).await?;
-    Ok(merge(out, light_state(&svc.store.snapshot())))
-}
-
-// ---- fog_tool -----------------------------------------------------------------------------------
-
-fn fog_state(s: &SceneState) -> Value {
-    let vols: Vec<Value> = s
-        .of_class(ObjClass::FogVolume)
-        .filter_map(|o| match &o.data {
-            ObjData::FogVolume(f) => Some(json!({
-                "name": o.name.as_str(),
-                "selected": s.is_selected(o.id),
-                "group": if f.group_id == u32::MAX { Value::Null } else { json!(f.group_id) },
-                "type": if f.kind == FV_EMITTER { "emitter" } else { "occlusion" },
-            })),
-            _ => None,
-        })
-        .collect();
-    json!({ "volumes": vols })
-}
-
-/// `GroupSelected` / `UnGroupCurrent`.
+/// The selected fog volumes into a group of their own (`group`), or out of theirs.
 pub fn fog_group(s: &SceneState, group: bool) -> Outcome {
-    let mut b = Batch::new(if group { "Group Selected" } else { "Ungroup Current" }, s.serial);
+    let mut b = Batch::new(if group { "Group Fog Volumes" } else { "Ungroup Fog Volumes" }, s.serial);
     let mut st = s.tools.obj;
-    // `RegisterGroup`: the counter is at least every group read or set; oracle: an ungrouped
-    // volume registers u32::MAX, so the next group wraps round to 0 as in the C++
+    // the counter is at least every group read or set; an ungrouped volume holds u32::MAX, so
+    // the next group wraps round to 0
     let mut counter = st.fog_group_counter;
     for o in s.of_class(ObjClass::FogVolume) {
         if let ObjData::FogVolume(f) = &o.data {
@@ -889,26 +495,48 @@ pub fn fog_group(s: &SceneState, group: bool) -> Outcome {
     (b, json!({ "changed": n, "group": if group { json!(id) } else { Value::Null } }))
 }
 
-async fn fog_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
-    let svc = scene_for(&ed, &a, o, ObjClass::FogVolume).await?;
-    let action = a.str_or("action", "state").to_owned();
-    let group = match action.as_str() {
-        "state" => return Ok(fog_state(&svc.store.snapshot())),
-        "group" | "group_selected" => true,
-        "ungroup" | "ungroup_current" => false,
-        other => return Err(unknown(other, "state, group, ungroup")),
-    };
-    let out = commit(&ed, &svc, o, super::Ctl::default(), move |s, _, _| Ok(fog_group(s, group))).await?;
-    Ok(merge(out, fog_state(&svc.store.snapshot())))
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FogParams {
+    /// The fog volumes by name. Left out: the selection.
+    #[serde(default)]
+    objects: Option<Vec<String>>,
+    /// Take them out of their group instead.
+    #[serde(default)]
+    ungroup: bool,
+}
+
+async fn scene_fog_group(ed: Arc<Editor>, p: FogParams, o: Origin) -> Reply {
+    let svc = service::need_scene(&ed).await?;
+    if p.objects.is_some() {
+        let ids = crate::edit::ids_of(&svc.store.snapshot(), p.objects.as_deref())?;
+        svc.store.send(SceneCmd::Select { ids, mode: SelectMode::Set }, o).await?;
+    }
+    let group = !p.ungroup;
+    let out = commit(&ed, &svc, o, Ctl::default(), move |s, _, _| Ok(fog_group(s, group))).await?;
+    let s = svc.store.snapshot();
+    let volumes: Vec<Value> = s
+        .of_class(ObjClass::FogVolume)
+        .filter(|x| s.is_selected(x.id))
+        .filter_map(|x| match &x.data {
+            ObjData::FogVolume(f) => Some(json!({
+                "name": x.name.as_str(),
+                "group": if f.group_id == u32::MAX { Value::Null } else { json!(f.group_id) },
+                "kind": if f.kind == FV_EMITTER { "emitter" } else { "occlusion" },
+            })),
+            _ => None,
+        })
+        .collect();
+    Ok(merge(out, json!({ "volumes": volumes })))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::objects::{FogData, LightData};
+    use crate::objects::FogData;
 
     #[test]
-    fn grouping_fog_wraps_as_the_cpp_counter_does() {
+    fn grouping_fog_wraps_round_to_the_first_group() {
         let mut s = SceneState::default();
         let a = s.insert(Object::new(ObjClass::FogVolume, "a", ObjData::FogVolume(FogData::default())));
         s.selection.insert(a);
@@ -918,23 +546,11 @@ mod tests {
     }
 
     #[test]
-    fn only_selected_lights_change_with_selected() {
-        let mut s = SceneState::default();
-        let a = s.insert(Object::new(ObjClass::Light, "a", ObjData::Light(LightData::default())));
-        s.insert(Object::new(ObjClass::Light, "b", ObjData::Light(LightData::default())));
-        s.selection.insert(a);
-        let (b, _) = use_in_viewport(&s, false, false);
-        assert_eq!(b.replace.len(), 1);
-        let (b, _) = use_in_viewport(&s, true, true);
-        assert!(b.replace.is_empty());
-    }
-
-    #[test]
     fn link_commands_that_need_points_say_so() {
         let s = SceneState::default();
         assert_eq!(
             link_batch(&s, LinkOp::Create1).err().map(|e| e.message),
-            Some("Switch Select to Points first".into())
+            Some("select points of the way first".into())
         );
         assert!(link_batch(&s, LinkOp::Convert1).is_ok());
     }

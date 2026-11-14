@@ -1,6 +1,7 @@
-//! The screens' commands, the build's check and the slot for the linked game's levels. The wire
-//! is the C++ handlers' (`EditorScreens::McpGet`, `McpSet`): `screens_get`, `screens_set`.
-//! `screens_view` is the tab's.
+//! The screens' commands, the build's check and the slot for the linked game's levels:
+//! `screens.info` (the screens and music as data, with their problems), `screens.set` (one change
+//! of them, checked) and `screens.import` (files brought from anywhere, put where they go).
+//! `screens.view` is the tab's. An agent may equally edit `mod.ltx` itself.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -8,10 +9,12 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use gz_base::{Origin, Problem};
 use gz_build::{BuildCheck, BuildChecks, BuildWalk};
-use gz_editor::{Args, CmdError, Editor, Executors, ProjectSession, Registry, Reply};
+use gz_editor::{Args, CmdError, Editor, Executors, NoParams, ProjectSession, Registry, Reply, Spec};
 use gz_mod::ManifestService;
 use gz_project::Project;
 use parking_lot::RwLock;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::import::{FileKind, file_kind, import, stem};
@@ -21,11 +24,148 @@ use crate::model::{
 };
 use crate::validate::validate;
 
-const AREA: &str = "gz-screens";
-
 pub fn register(reg: &mut Registry) {
-    reg.add(AREA, "screens_get", screens_get);
-    reg.add(AREA, "screens_set", screens_set);
+    reg.area("screens", "The module's loading and menu screens and their music ([screens] of mod.ltx)");
+    reg.cmd(
+        Spec::read(
+            "screens.info",
+            "The module's screens, layers and music tracks as data, with their problems.",
+        ),
+        screens_info,
+    );
+    reg.cmd(
+        Spec::write(
+            "screens.set",
+            "One change of the screens or the music: a screen, a layer, a track, the policy.",
+        )
+        .example("action=layer_set id=night index=0 opacity=0.5"),
+        screens_set,
+    );
+    reg.cmd(
+        Spec::write(
+            "screens.import",
+            "Brings files into the screens: a picture or a video becomes a screen or a layer, an .ogg a track.",
+        )
+        .example("path=D:/Art/night.mp4 screen=night"),
+        screens_import,
+    );
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum SetAction {
+    /// What a surface's screens and music do with the game's own: `surface`, `screens` (only or
+    /// mix), `music` (only or mix), `end` (loop or next).
+    Policy,
+    /// A new screen `id` (made unique) with the screen's fields, and a first layer with `file`.
+    ScreenAdd,
+    /// Changes the screen `id`: show, levels, modes, weight, music, hide, new_id.
+    ScreenSet,
+    /// Removes the screen `id`.
+    ScreenRemove,
+    /// A new layer of the screen `id` at `index` (left out: on top) with the layer's fields.
+    LayerAdd,
+    /// Changes the layer `index` of the screen `id`: file, texture, fit, opacity, rect, sound.
+    LayerSet,
+    /// Removes the layer `index` of the screen `id`.
+    LayerRemove,
+    /// Moves the layer `index` of the screen `id` to `to`.
+    LayerMove,
+    /// A new track `id` with `file`, play, weight, volume.
+    TrackAdd,
+    /// Changes the track `id`.
+    TrackSet,
+    /// Removes the track `id`.
+    TrackRemove,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SetParams {
+    action: SetAction,
+    /// The screen or the track; for screen_add and track_add the wanted id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    /// Policy: loading or menu.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    surface: Option<String>,
+    /// Policy: only (the module's screens alone) or mix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    screens: Option<String>,
+    /// Policy: only or mix. A screen: any, none, video, or the tracks it plays (comma separated).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    music: Option<String>,
+    /// Policy: loop or next (what the music does at the end of a track).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    end: Option<String>,
+    /// A screen: the surfaces it shows on (loading, menu, pause).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    show: Option<String>,
+    /// A screen: the levels it shows for; empty: every level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    levels: Option<Vec<String>>,
+    /// A screen: the game modes it shows in; empty: every mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    modes: Option<Vec<String>>,
+    /// A screen or a track: how often it is picked beside the others.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    weight: Option<f32>,
+    /// A screen: what of the game's loading screen it hides (bar, percent, stage, tip).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hide: Option<String>,
+    /// A screen: its new id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    new_id: Option<String>,
+    /// A layer or a track: its file, from anywhere (brought into screens\ when it is outside the
+    /// project); empty clears a layer's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    file: Option<String>,
+    /// A shader layer: its texture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    texture: Option<String>,
+    /// A layer: cover, contain, stretch or none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fit: Option<String>,
+    /// A layer: 0..1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    opacity: Option<f32>,
+    /// A layer: its rectangle x, y, w, h in shares of the screen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rect: Option<[f32; 4]>,
+    /// A video layer: whether its sound plays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sound: Option<bool>,
+    /// A layer: its index, 0 the bottom one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    index: Option<i64>,
+    /// layer_move: where the layer goes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    to: Option<i64>,
+    /// A track: the surfaces it plays on (loading, menu, pause).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    play: Option<String>,
+    /// A track: 0..1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    volume: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ImportParams {
+    /// The files, from anywhere: absolute or project-relative.
+    path: Vec<String>,
+    /// The screen they land on (each a layer of it); left out: each becomes a new screen.
+    #[serde(default)]
+    screen: Option<String>,
+    /// On that screen: the layer whose file they replace; left out: new layers on top.
+    #[serde(default)]
+    layer: Option<i64>,
+    /// Into the music: only .ogg files are taken.
+    #[serde(default)]
+    music: bool,
+    /// What a new screen or track shows on: loading or menu (left out: what the open tab shows).
+    #[serde(default)]
+    surface: Option<String>,
 }
 
 /// The linked game's levels, as the world area reads them (`EditorWorld::LevelExists`).
@@ -290,10 +430,10 @@ async fn drop_surface(ed: &Arc<Editor>, args: &Args) -> bool {
     if let Some(v) = arg(args, "surface") {
         return v == "menu";
     }
-    if !ed.registry().has("screens_view") {
+    if !ed.registry().has("screens.view") {
         return false;
     }
-    let view = ed.call("screens_view", Args::new(), Origin::Mcp).await;
+    let view = ed.call("screens.view", Args::new(), Origin::Mcp).await;
     view.get("open").and_then(Value::as_bool) == Some(true)
         && view.get("surface").and_then(Value::as_str) == Some("menu")
 }
@@ -452,7 +592,7 @@ impl Cx<'_> {
 
 const ACTIONS: &str = "action must be policy, screen_add, screen_set, screen_remove, layer_add, layer_set, layer_remove, layer_move, track_add, track_set, track_remove or drop";
 
-/// Runs one `screens_set` action on the model. `Err`: the call is refused before anything is
+/// Runs one `screens.set` action on the model. `Err`: the call is refused before anything is
 /// done to the model (`surface`, `action`); `Ok(err)`: the action ran, and a non-empty `err`
 /// refuses the save.
 fn run(cx: &mut Cx<'_>, s: &mut Screens) -> Result<(), String> {
@@ -588,19 +728,55 @@ async fn open(ed: &Arc<Editor>) -> Result<(Arc<Project>, Arc<ManifestService>), 
     Ok((project, service))
 }
 
-async fn screens_get(ed: Arc<Editor>, _args: Args, _origin: Origin) -> Reply {
+async fn screens_info(ed: Arc<Editor>, _p: NoParams, _origin: Origin) -> Reply {
     let (project, manifest) = open(&ed).await?;
     let snap = manifest.snapshot();
-    let Some(doc) = snap.doc() else { return Err(refuse("mod.ltx not found in the project")) };
+    let Some(doc) = snap.doc() else { return Err(refuse("the project has no mod.ltx: it is no module")) };
     let s = Screens::parse(doc);
     let found = problems(&ed, PathBuf::from(project.root()), &manifest, s.clone()).await;
     Ok(answer(&s, &found))
 }
 
-async fn screens_set(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
+/// The parameters as the request map the actions read.
+fn as_args(value: impl Serialize) -> Args {
+    match serde_json::to_value(value) {
+        Ok(Value::Object(map)) => map,
+        _ => Args::new(),
+    }
+}
+
+async fn screens_set(ed: Arc<Editor>, p: SetParams, origin: Origin) -> Reply {
+    let mut args = as_args(&p);
+    if let Some(r) = p.rect {
+        args.insert("rect".into(), json!(r.iter().map(f32::to_string).collect::<Vec<_>>().join(" ")));
+    }
+    apply(ed, args, origin).await
+}
+
+async fn screens_import(ed: Arc<Editor>, p: ImportParams, origin: Origin) -> Reply {
+    if p.path.is_empty() {
+        return Err(CmdError::invalid("screens.import needs path: one file or a list"));
+    }
+    let mut args = Args::new();
+    args.insert("action".into(), json!("drop"));
+    args.insert("files".into(), json!(p.path.join("|")));
+    if let Some(id) = p.screen {
+        args.insert("id".into(), json!(id));
+    }
+    if let Some(layer) = p.layer {
+        args.insert("index".into(), json!(layer));
+    }
+    args.insert("music".into(), json!(p.music));
+    if let Some(surface) = p.surface {
+        args.insert("surface".into(), json!(surface));
+    }
+    apply(ed, args, origin).await
+}
+
+async fn apply(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
     let (project, manifest) = open(&ed).await?;
     let snap = manifest.snapshot();
-    let Some(doc) = snap.doc() else { return Err(refuse("mod.ltx not found in the project")) };
+    let Some(doc) = snap.doc() else { return Err(refuse("the project has no mod.ltx: it is no module")) };
     let mut s = Screens::parse(doc);
     let root = project.root().to_owned();
     let exec = ed.exec.clone();
@@ -623,7 +799,7 @@ async fn screens_set(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
     project.tree.mark_fs(&PathBuf::from(project.root()).join("screens"));
     let edits = {
         let now = manifest.snapshot();
-        let Some(doc) = now.doc() else { return Err(refuse("mod.ltx not found in the project")) };
+        let Some(doc) = now.doc() else { return Err(refuse("the project has no mod.ltx: it is no module")) };
         s.edits(doc)
     };
     manifest

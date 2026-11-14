@@ -200,7 +200,7 @@ pub fn local_list_picker(
             open_popup(&ctx, id);
         }
     }
-    // put up from outside to be looked at (`characters_view show=`)
+    // put up from outside to be looked at (`characters.view show=`)
     if !busy && gz_ui::menu::take_popup_request(&ctx, salt) {
         open_popup(&ctx, id);
     }

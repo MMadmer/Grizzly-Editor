@@ -420,6 +420,198 @@ pub fn kind_title(catalog: &crate::Catalog, kind: &str, behaviour: bool) -> Stri
     regraph(&title)
 }
 
+/// What a node's body names by name rather than by id: the linked game's items and the project's
+/// characters. The canvas has them; the layout measures ids.
+pub trait Names {
+    /// The in-game name of an item section.
+    fn item(&self, section: &str) -> Option<String>;
+    /// The name of a character of the project.
+    fn character(&self, id: &str) -> Option<String>;
+}
+
+fn name_of(names: Option<&dyn Names>, f: impl Fn(&dyn Names) -> Option<String>, id: &str) -> String {
+    names.and_then(f).filter(|n| !n.is_empty()).unwrap_or_else(|| id.to_owned())
+}
+
+fn number(v: f64) -> String {
+    Value::Number(v).to_text("")
+}
+
+/// Who or where a reference value names, in words: a character by its name, a story id, a
+/// restrictor, "the player".
+#[must_use]
+pub fn readable_ref(v: &Value, names: Option<&dyn Names>) -> String {
+    match v {
+        Value::String(s) => return s.to_string(),
+        Value::Table(_) => {}
+        other => return other.to_text(""),
+    }
+    if v.get("actor").and_then(Value::as_bool) == Some(true) {
+        return "the player".to_owned();
+    }
+    if let Some(c) = v.get("character").and_then(Value::as_str) {
+        return name_of(names, |n| n.character(c), c);
+    }
+    if let Some(sp) = v.get("spawn") {
+        return sp.get_string("section", "");
+    }
+    for key in ["story", "ref", "role", "restrictor", "smart", "path", "profile"] {
+        if let Some(s) = v.get(key).and_then(Value::as_str) {
+            return s.to_owned();
+        }
+    }
+    if let Some(c) = v.get("community").and_then(Value::as_str) {
+        return match v.get("level").and_then(Value::as_str) {
+            Some(l) => format!("{c} on {l}"),
+            None => c.to_owned(),
+        };
+    }
+    if let Some(l) = v.get("level").and_then(Value::as_str) {
+        return l.to_owned();
+    }
+    if v.has("seconds") || v.has("game_hours") || v.has("game_minutes") || v.has("game_seconds") {
+        return duration_text(v);
+    }
+    if let Some(inner) = ["place", "into", "npc"].iter().find_map(|k| v.get(k)) {
+        return readable_ref(inner, names);
+    }
+    if let Some(s) = v.get("stash") {
+        return format!("a stash {}", s.get_string("pick", "")).trim_end().to_owned();
+    }
+    String::new()
+}
+
+fn duration_text(v: &Value) -> String {
+    if let Value::Number(n) = v {
+        return format!("{} s", number(*n));
+    }
+    for (key, unit) in [
+        ("seconds", "s"),
+        ("game_seconds", "s game time"),
+        ("game_minutes", "min game time"),
+        ("game_hours", "h game time"),
+    ] {
+        if let Some(Value::Number(n)) = v.get(key) {
+            return format!("{} {unit}", number(*n));
+        }
+    }
+    String::new()
+}
+
+fn item_rows(v: &Value, names: Option<&dyn Names>) -> String {
+    let rows = v.arr();
+    let mut parts: Vec<String> = Vec::new();
+    for r in rows.iter().take(2) {
+        if let Some(s) = r.get("section").and_then(Value::as_str) {
+            let mut p = name_of(names, |n| n.item(s), s);
+            match r.get("count") {
+                Some(Value::Number(c)) => p.push_str(&format!(" \u{d7}{}", number(*c))),
+                Some(Value::String(c)) if c.as_str() == "all" => p.push_str(" \u{d7}all"),
+                _ => p.push_str(" \u{d7}1"),
+            }
+            parts.push(p);
+        } else if let Some(c) = r.get("character").and_then(Value::as_str) {
+            parts.push(name_of(names, |n| n.character(c), c));
+        } else if let Some(item) = r.get("item") {
+            parts.push(readable_ref(item, names));
+        }
+    }
+    let mut out = parts.join(", ");
+    if rows.len() > 2 {
+        out.push_str(&format!(" +{}", rows.len() - 2));
+    }
+    out
+}
+
+/// One parameter's value in words, by its catalog type: a text in quotes, an item by its in-game
+/// name, a character by its name, a number with its unit. Empty when there is nothing to say.
+#[must_use]
+pub fn param_text(p: &crate::Param, v: &Value, names: Option<&dyn Names>) -> String {
+    if v.is_nil() {
+        return String::new();
+    }
+    match p.ty.as_str() {
+        "text" => {
+            let t = gz_luadata::one_line(&preview(v));
+            if t.is_empty() { String::new() } else { format!("\u{ab}{t}\u{bb}") }
+        }
+        "lua" => "Lua".to_owned(),
+        "item_section" => v.as_str().map(|s| name_of(names, |n| n.item(s), s)).unwrap_or_default(),
+        "character_id" => v.as_str().map(|s| name_of(names, |n| n.character(s), s)).unwrap_or_default(),
+        "duration" => duration_text(v),
+        "bool" => {
+            if v.as_bool() == Some(true) {
+                pretty_lower(&p.name)
+            } else {
+                String::new()
+            }
+        }
+        "item_list" | "npc_list" => item_rows(v, names),
+        "cases_cond" | "cases_weight" => {
+            v.arr().iter().map(|c| c.get_string("name", "?")).collect::<Vec<_>>().join(" | ")
+        }
+        "cond_list" => v.arr().iter().map(|c| c.get_string("kind", "?")).collect::<Vec<_>>().join(" or "),
+        "int" | "float" => match v {
+            Value::Number(n) if p.name == "count" => format!("\u{d7}{}", number(*n)),
+            Value::Number(n) if matches!(p.name.as_str(), "radius" | "distance" | "spread") => {
+                format!("{} m", number(*n))
+            }
+            other => other.to_text(""),
+        },
+        "count_or_all" => format!("\u{d7}{}", v.to_text("")),
+        _ => match v {
+            Value::Table(_) => readable_ref(v, names),
+            other => other.to_text(""),
+        },
+    }
+}
+
+/// `spot_task` -> `spot task`: a parameter's name in a sentence.
+#[must_use]
+pub fn pretty_lower(name: &str) -> String {
+    name.replace('_', " ")
+}
+
+/// What tells a node or an action of a kind apart at a glance: the parameters its catalog entry
+/// names in `summary` (without one, the first required parameter that is set, else the first
+/// that is set), in words. Never a Lua table.
+#[must_use]
+pub fn summary(catalog: &crate::Catalog, kind: &str, params: &Value, names: Option<&dyn Names>) -> String {
+    let Some(k) = catalog.find(kind) else {
+        // a kind the catalog does not know: its first plain value
+        return params
+            .fields()
+            .iter()
+            .find_map(|(_, v)| v.as_str().map(gz_luadata::one_line))
+            .unwrap_or_default();
+    };
+    let set = |p: &&crate::Param| params.get(&p.name).is_some_and(|v| !v.is_nil() && !v.is_empty());
+    let chosen: Vec<&crate::Param> = if k.summary.is_empty() {
+        k.params
+            .iter()
+            .filter(|p| p.required)
+            .find(set)
+            .or_else(|| k.params.iter().find(set))
+            .into_iter()
+            .collect()
+    } else {
+        k.summary.iter().filter_map(|n| k.param(n)).collect()
+    };
+    let mut out = String::new();
+    for p in chosen {
+        let Some(v) = params.get(&p.name) else { continue };
+        let t = param_text(p, v, names);
+        if t.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&t);
+    }
+    out
+}
+
 /// What the document is called in a sentence: `quest` or `graph` (`NqLook::DocNoun`).
 #[must_use]
 pub fn doc_noun(behaviour: bool) -> &'static str {

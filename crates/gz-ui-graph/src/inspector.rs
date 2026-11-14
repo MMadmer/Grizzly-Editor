@@ -1,6 +1,6 @@
 //! The two side panels of a graph tab (`NqInspector`): the Graph panel (the document's own
-//! settings: its header, its tasks or roles, its variables under a splitter, then the module's
-//! globals) and the Details panel (the selected node, its selected action under a splitter, the
+//! settings in one scroll: its header, its tasks or roles, its variables, then the module's
+//! globals - each a section with a + on its header) and the Details panel (the selected node, its selected action under a splitter, the
 //! help footer). Edits are staged on a copy while a widget is worked and committed as one
 //! document command once it is let go of.
 
@@ -22,9 +22,9 @@ use crate::derived::DocData;
 use crate::local;
 use crate::look;
 use crate::params::{self, ParamCx, PickState, Row, TextEdit};
+use gz_ui::section::{self, Section};
 
 pub const ACTION_SPLIT: &str = "graph.action_split";
-pub const VARS_SPLIT: &str = "graph.vars_split";
 const ROLE_HEADER: &str = "graph_header";
 const ROLE_TASKS: &str = "graph_tasks";
 const ROLE_ROLES: &str = "graph_roles";
@@ -178,9 +178,7 @@ pub struct Inspector {
     pub action_share: f32,
     pub vars_share: f32,
     details_column: f32,
-    graph_column: f32,
     pending_action: Option<f32>,
-    pending_vars: Option<f32>,
     /// quest_view scroll=: taken by the pane it names.
     pub scroll: Option<String>,
     /// A pane to scroll to its end on the next frame, once its content is measured.
@@ -246,21 +244,42 @@ fn rename_var_in(v: &mut Value, from: &str, to: &str) {
     }
 }
 
+/// A fold header of the panels: the kit's section, with one action on its header.
+fn fold(
+    ui: &mut Ui,
+    key: &str,
+    title: &str,
+    count: Option<&str>,
+    open: bool,
+    action: Option<(Icon, &str)>,
+) -> (bool, bool) {
+    let mut sec = Section::new(key, title).default_open(open);
+    if let Some(c) = count {
+        sec = sec.count(c);
+    }
+    if let Some((icon, tip)) = action {
+        sec = sec.action(icon, tip);
+    }
+    let r = sec.show(ui);
+    (r.open, r.action == Some(0))
+}
+
 impl Inspector {
     #[must_use]
     pub fn new(scope: &str) -> Self {
         Self { action_share: 0.5, vars_share: 0.38, scope: scope.to_owned(), ..Self::default() }
     }
 
-    /// A key of this tab's own: fold states are the tab's.
+    /// A section's key: what is folded stays folded in every graph.
     fn key(&self, k: &str) -> String {
-        format!("{}|{k}", self.scope)
+        let _ = &self.scope;
+        format!("graph.{k}")
     }
 
-    /// Opens or folds every role's More (`quest_view roles_more=`).
+    /// Opens or folds every role's More (`graph.view roles_more=`).
     pub fn set_roles_more(&self, ctx: &egui::Context, open: bool) {
         for i in 0..self.header.roles.len() {
-            local::set_fold(ctx, &self.key(&format!("role{i}/more")), open);
+            section::set_open(ctx, &self.key(&format!("role{i}/more")), open);
         }
     }
 
@@ -270,8 +289,8 @@ impl Inspector {
         view.selection.len() == 1 && split_slot(&view.slot).is_some()
     }
 
-    /// The two splits for a caller without a mouse, as shares of their column (`SetSplit`).
-    pub fn set_split(&mut self, ctx: &egui::Context, action: Option<f32>, vars: Option<f32>) {
+    /// The Details panel's split for a caller without a mouse, as a share of its column.
+    pub fn set_split(&mut self, ctx: &egui::Context, action: Option<f32>) {
         if let Some(f) = action {
             let f = f.clamp(0.1, 0.9);
             if self.details_column > 0.0 {
@@ -280,16 +299,6 @@ impl Inspector {
                 self.pending_action = Some(f);
             }
             self.action_share = f;
-        }
-        if let Some(f) = vars {
-            let f = f.clamp(0.1, 0.9);
-            // the stored size is the pane above the Variables
-            if self.graph_column > 0.0 {
-                gz_ui::layout::set(ctx, VARS_SPLIT, (1.0 - f) * self.graph_column);
-            } else {
-                self.pending_vars = Some(f);
-            }
-            self.vars_share = f;
         }
     }
 
@@ -450,42 +459,20 @@ impl Inspector {
 
     // ---- the Graph panel ----------------------------------------------------------------------
 
-    /// The Graph panel into `rect` (`DrawGraphPanel`).
+    /// The Graph panel into `rect`: the header, the tasks or roles, the variables and the
+    /// module's globals in one scroll, each section with a + on its header.
     pub fn draw_graph_panel(&mut self, ui: &mut Ui, rect: Rect, cx: &mut PanelCx<'_>) {
         self.sync_header(cx);
         let ctx = ui.ctx().clone();
-        let spacing = 4.0;
-        let head = gz_ui::theme::metrics::SECTION_HEADER;
-        self.graph_column = (rect.height() - spacing).max(1.0);
-        if let Some(f) = self.pending_vars.take() {
-            gz_ui::layout::set(&ctx, VARS_SPLIT, (1.0 - f) * self.graph_column);
-        }
         let mut child = ui.new_child(UiBuilder::new().id_salt("gz-ui-graph.graph_panel").max_rect(rect));
         child.set_clip_rect(rect.intersect(ui.clip_rect()));
-        child.spacing_mut().item_spacing.y = spacing;
+        child.spacing_mut().item_spacing.y = 4.0;
+        self.graph_pane = Some(rect);
         if self.scroll.as_deref() == Some("variables") {
-            local::local_fold_set(&child, &self.key("vars"), true);
+            section::set_open(&ctx, &self.key("vars"), true);
         }
-        let vars_open = local::local_fold_open(&child, &self.key("vars"), true);
-        let top_h = if vars_open {
-            gz_ui::splitter::splitter(
-                &mut child,
-                VARS_SPLIT,
-                false,
-                120.0,
-                90.0,
-                (self.graph_column * 0.62).max(120.0),
-            )
-            .size
-        } else {
-            (rect.height() - head - spacing).max(1.0)
-        };
-        let top = Rect::from_min_size(rect.min, vec2(rect.width(), top_h));
-        self.graph_pane = Some(top);
-        let mut top_ui = child.new_child(UiBuilder::new().id_salt("top").max_rect(top));
-        top_ui.set_clip_rect(top.intersect(child.clip_rect()));
         let mine = cx.view.selection.len() != 1;
-        let mut sa = ScrollArea::vertical().id_salt("gz-ui-graph.graph_top").auto_shrink([false, false]);
+        let mut sa = ScrollArea::vertical().id_salt("gz-ui-graph.graph_scroll").auto_shrink([false, false]);
         if self.bottom_next == Some("graph") {
             sa = sa.vertical_scroll_offset(f32::MAX / 4.0);
             self.bottom_next = None;
@@ -497,7 +484,7 @@ impl Inspector {
                 sa = sa.vertical_scroll_offset(0.0);
                 taken = true;
             }
-            Some(w) if w == "tasks" || w.starts_with("task:") => {
+            Some(w) if w == "tasks" || w == "variables" || w.starts_with("task:") => {
                 if let Some((_, y)) = self.anchors.iter().find(|(k, _)| k == w) {
                     sa = sa.vertical_scroll_offset(*y);
                     taken = true;
@@ -505,15 +492,39 @@ impl Inspector {
                     // a task's header opens on the way
                     let id = w.trim_start_matches("task:");
                     let id = id.split('/').next().unwrap_or(id);
-                    local::local_fold_set(&top_ui, &self.key(&format!("task:{id}")), true);
+                    section::set_open(&ctx, &self.key(&format!("task:{id}")), true);
                 }
             }
             _ => {}
         }
         let mut anchors = Vec::new();
-        let out = sa.show(&mut top_ui, |ui| {
+        let mut vars_span = (0.0, 0.0);
+        let out = sa.show(&mut child, |ui| {
             let origin = ui.max_rect().top();
             self.draw_header_pane(ui, cx, origin, &mut anchors);
+            ui.add_space(4.0);
+            anchors.push(("variables".to_owned(), ui.cursor().min.y - origin));
+            let top = ui.cursor().min.y;
+            let count = self.header.vars.len().to_string();
+            let vars = Section::new(&self.key("vars"), "Variables")
+                .count(if self.header.vars.is_empty() { "" } else { &count })
+                .action(Icon::Plus, "Add a variable")
+                .tip(if cx.graph.is_behaviour() { "The graph's own variables" } else { "The quest's own variables" })
+                .show(ui);
+            if vars.open || vars.action.is_some() {
+                self.draw_vars(ui, cx, vars.action.is_some());
+            }
+            ui.add_space(4.0);
+            let gcount = self.globals.len().to_string();
+            let globals = Section::new(&self.key("globals"), "Global")
+                .count(if self.globals.is_empty() { "" } else { &gcount })
+                .action(Icon::Plus, "Add a global variable")
+                .tip("The module's variables, shared by every graph of it: declared in mod.ltx [vars] and saved there as you edit. global.set and global.add write one, the global condition reads it, {global:name} shows it in a text.")
+                .show(ui);
+            if globals.open || globals.action.is_some() {
+                self.draw_globals(ui, cx, globals.action.is_some());
+            }
+            vars_span = (top, ui.cursor().min.y);
         });
         if req.as_deref() == Some("bottom") && mine {
             self.bottom_next = Some("graph");
@@ -525,37 +536,10 @@ impl Inspector {
         self.anchors = anchors;
         self.graph_scroll =
             [out.state.clamped_offset().y, (out.content_size.y - out.inner_rect.height()).max(0.0)];
-
-        // the Variables, under the splitter: their header stays while the list scrolls
-        let vars_y = rect.min.y + top_h + spacing;
-        let vars_rect = Rect::from_min_max(pos2(rect.min.x, vars_y), rect.max);
-        let mut vui = child.new_child(UiBuilder::new().id_salt("vars").max_rect(vars_rect));
-        vui.set_clip_rect(vars_rect.intersect(child.clip_rect()));
-        let count = (!self.header.vars.is_empty()).then(|| self.header.vars.len().to_string());
-        let (open, _) =
-            local::local_fold_header(&mut vui, &self.key("vars"), "Variables", count.as_deref(), true, None);
-        if open {
-            let body = Rect::from_min_max(pos2(vars_rect.min.x, vui.cursor().min.y), vars_rect.max);
-            let mut bui = vui.new_child(UiBuilder::new().id_salt("vars_body").max_rect(body));
-            bui.set_clip_rect(body.intersect(vui.clip_rect()));
-            let mut sa = ScrollArea::vertical().id_salt("gz-ui-graph.graph_vars").auto_shrink([false, false]);
-            if self.scroll.as_deref() == Some("variables") {
-                sa = sa.vertical_scroll_offset(0.0);
-                self.scroll = None;
-            }
-            let out = sa.show(&mut bui, |ui| {
-                self.draw_vars(ui, cx);
-                ui.add_space(6.0);
-                self.draw_globals(ui, cx);
-            });
-            self.vars_scroll =
-                [out.state.clamped_offset().y, (out.content_size.y - out.inner_rect.height()).max(0.0)];
-        } else {
-            self.vars_scroll = [0.0, 0.0];
-        }
-        let vars_h = if open { (rect.max.y - vars_y).max(head) } else { head };
-        self.vars_pane = Some(Rect::from_min_size(pos2(rect.min.x, vars_y), vec2(rect.width(), vars_h)));
-        self.vars_share = vars_h / rect.height().max(1.0);
+        self.vars_scroll = self.graph_scroll;
+        let (a, b) = (vars_span.0.max(rect.min.y), vars_span.1.min(rect.max.y));
+        self.vars_pane = (b > a).then(|| Rect::from_min_max(pos2(rect.min.x, a), pos2(rect.max.x, b)));
+        self.vars_share = ((b - a) / rect.height().max(1.0)).max(0.0);
         ui.allocate_rect(rect, egui::Sense::hover());
     }
 
@@ -568,7 +552,7 @@ impl Inspector {
     ) {
         let behaviour = cx.graph.is_behaviour();
         let mut ch = false;
-        let (open, _) = local::local_fold_header(
+        let (open, _) = fold(
             ui,
             &self.key("head"),
             if behaviour { "Behaviour Graph" } else { "Quest" },
@@ -596,8 +580,7 @@ impl Inspector {
                     });
                     ch |= changed;
                 }
-                let (more, _) =
-                    local::local_fold_header(ui, &self.key("head_more"), "More", None, false, None);
+                let (more, _) = fold(ui, &self.key("head_more"), "More", None, false, None);
                 if more {
                     let h = if behaviour {
                         "The graph's id: what behaviour.run names. a-z, 0-9 and _"
@@ -638,14 +621,7 @@ impl Inspector {
         anchors: &mut Vec<(String, f32)>,
     ) -> bool {
         let mut ch = false;
-        let (open, add) = local::local_fold_header(
-            ui,
-            &self.key("tasks"),
-            "Tasks",
-            None,
-            true,
-            Some((Icon::Plus, "Add a task")),
-        );
+        let (open, add) = fold(ui, &self.key("tasks"), "Tasks", None, true, Some((Icon::Plus, "Add a task")));
         if add {
             let mut n = 1;
             while self.header.tasks.iter().any(|t| t.id == format!("task{n}")) {
@@ -671,7 +647,7 @@ impl Inspector {
             let head = if t.id.is_empty() { "(no id)".to_owned() } else { t.id.clone() };
             let (topen, x) = ui
                 .push_id(i, |ui| {
-                    local::local_fold_header(
+                    fold(
                         ui,
                         &self.key(&format!("task:{}", t.id)),
                         &head,
@@ -813,14 +789,7 @@ impl Inspector {
     /// The cast of a behaviour graph: named slots its caller fills (`DrawRolesSection`).
     fn draw_roles(&mut self, ui: &mut Ui, cx: &mut PanelCx<'_>) -> bool {
         let mut ch = false;
-        let (open, add) = local::local_fold_header(
-            ui,
-            &self.key("roles"),
-            "Roles",
-            None,
-            true,
-            Some((Icon::Plus, "Add a role")),
-        );
+        let (open, add) = fold(ui, &self.key("roles"), "Roles", None, true, Some((Icon::Plus, "Add a role")));
         if add {
             let mut n = 1;
             while self.header.roles.iter().any(|r| r.name == format!("role{n}")) {
@@ -846,7 +815,7 @@ impl Inspector {
             );
             let (ropen, x) = ui
                 .push_id(i, |ui| {
-                    local::local_fold_header(
+                    fold(
                         ui,
                         &self.key(&format!("role{i}")),
                         &head,
@@ -869,7 +838,7 @@ impl Inspector {
                     r.name = name;
                     r_ch = true;
                 }
-                let (more, _) = local::local_fold_header(ui, &self.key(&format!("role{i}/more")), "More", None, false, None);
+                let (more, _) = fold(ui, &self.key(&format!("role{i}/more")), "More", None, false, None);
                 if more {
                     let mut pcx = self.param_cx(ui, cx, ROLE_ROLES, true);
                     r_ch |= params::draw_text(ui, &mut pcx, "title", &Row::new("Title", "For the author: shown where the caller binds the role. Never seen by the player", 2), &mut r.title, false);
@@ -877,9 +846,9 @@ impl Inspector {
                     let mut b_ch = false;
                     params::grid(ui, ROLE_ROLES, "binding", |g| {
                         g.row("Binding", "Group: the role may hold several NPCs - a squad, a list. Optional: bound to nobody is not an error", PropFlags::NONE, 2, |ui| {
-                            b_ch |= local::local_check(ui, "Group", &mut many, "The role may hold several NPCs - a squad, a list. Off: exactly one");
+                            b_ch |= gz_ui::Switch::new(&mut many, "Group").tip("The role may hold several NPCs - a squad, a list. Off: exactly one").show(ui).changed();
                             ui.add_space(16.0);
-                            b_ch |= local::local_check(ui, "Optional", &mut optional, "Bound to nobody is not an error: steps addressed to it do nothing");
+                            b_ch |= gz_ui::Switch::new(&mut optional, "Optional").tip("Bound to nobody is not an error: steps addressed to it do nothing").show(ui).changed();
                         });
                     });
                     if b_ch {
@@ -902,12 +871,13 @@ impl Inspector {
         ch
     }
 
-    /// The graph's variables: a list, the one picked in a form under it (`DrawVarsSection`).
-    fn draw_vars(&mut self, ui: &mut Ui, cx: &mut PanelCx<'_>) {
+    /// The graph's variables: a list, the one picked in a form under it titled by its name; `add`:
+    /// the section's + was pressed.
+    fn draw_vars(&mut self, ui: &mut Ui, cx: &mut PanelCx<'_>, add_now: bool) {
         let mut ch = false;
-        let add;
+        let mut add = add_now;
         if self.header.vars.is_empty() {
-            add = gz_ui::state::empty_state(
+            add |= gz_ui::state::empty_state(
                 ui,
                 Icon::Variable,
                 "No variables",
@@ -947,9 +917,10 @@ impl Inspector {
                 self.var_sel = self.var_sel.min(self.header.vars.len().saturating_sub(1));
                 ch = true;
             }
-            add = gz_ui::Button::new("Add Variable").kind(gz_ui::Kind::Ghost).show(ui).clicked();
             if let Some(var) = self.header.vars.get(self.var_sel).cloned() {
                 let i = self.var_sel;
+                ui.add_space(4.0);
+                gz_ui::text::label(ui, &var.name, Font::Strong, palette(ui.ctx()).text, Clip::End);
                 if self.var_name_buf.is_empty() || !ui.ctx().egui_wants_keyboard_input() {
                     self.var_name_buf.clone_from(&var.name);
                 }
@@ -1095,27 +1066,24 @@ impl Inspector {
         true
     }
 
-    /// The module's global variables under the graph's own (`DrawGlobalsSection`).
+    /// The module's global variables under the graph's own: a list, the one picked in a form
+    /// titled by its name; `add_now`: the section's + was pressed.
     #[allow(clippy::too_many_lines)]
-    fn draw_globals(&mut self, ui: &mut Ui, cx: &mut PanelCx<'_>) {
+    fn draw_globals(&mut self, ui: &mut Ui, cx: &mut PanelCx<'_>, add_now: bool) {
         if self.globals_rev != Some(cx.data.globals_rev) && !self.globals_dirty {
             self.globals_rev = Some(cx.data.globals_rev);
             self.globals = cx.data.globals.iter().map(|(n, v)| (n.clone(), global_value(v))).collect();
         }
-        let p = palette(ui.ctx());
-        gz_ui::text::label(ui, "Global", Font::Strong, p.text, Clip::End).on_hover_text(
-            "Variables every quest and behaviour graph of the module shares, declared in mod.ltx [vars] and saved there as you edit. global.set and global.add write one, the global condition reads it, {global:name} shows it in a text.",
-        );
         let mut ch = false;
-        let mut add = false;
+        let mut add = add_now && cx.data.has_project;
         if !cx.data.has_project {
             gz_ui::text::status(ui, Tone::Muted, "No project: nowhere to keep them.");
         } else if self.globals.is_empty() {
-            add = gz_ui::state::empty_state(
+            add |= gz_ui::state::empty_state(
                 ui,
                 Icon::Variable,
                 "No global variables",
-                "A value every quest of the module sees - the night, a flag, a count.",
+                "A value every graph of the module sees - the night, a flag, a count.",
                 Some("Add Global"),
             );
         } else {
@@ -1136,7 +1104,7 @@ impl Inspector {
                     }
                     if l.row_actions(
                         &[Icon::Delete],
-                        &["Remove the global variable - the quests that name it are E030 until they stop"],
+                        &["Remove the global variable - the graphs that name it show an error until they stop"],
                     ) == Some(0)
                     {
                         drop = Some(i);
@@ -1151,9 +1119,10 @@ impl Inspector {
                 self.global_sel = self.global_sel.min(self.globals.len().saturating_sub(1));
                 ch = true;
             }
-            add = gz_ui::Button::new("Add Global").kind(gz_ui::Kind::Ghost).show(ui).clicked();
             if let Some((name, value)) = self.globals.get(self.global_sel).cloned() {
                 let i = self.global_sel;
+                ui.add_space(4.0);
+                gz_ui::text::label(ui, &name, Font::Strong, palette(ui.ctx()).text, Clip::End);
                 if self.global_name_buf.is_empty() || !ui.ctx().egui_wants_keyboard_input() {
                     self.global_name_buf.clone_from(&name);
                 }
@@ -1161,7 +1130,7 @@ impl Inspector {
                 let mut commit = false;
                 ui.push_id(("global", i), |ui| {
                     params::grid(ui, ROLE_GLOBALS, "name", |g| {
-                        g.row("Name", "Letters, digits and _. A rename changes the declaration only: every quest that names the old one is E030 until it names the new one", PropFlags::NONE, 0, |ui| {
+                        g.row("Name", "Letters, digits and _. A rename changes the declaration only: every graph that names the old one shows an error until it names the new one", PropFlags::NONE, 0, |ui| {
                             commit = grid::text_field(ui, &mut buf).lost_focus();
                         });
                     });
@@ -1218,7 +1187,7 @@ impl Inspector {
                             "default",
                             &Row::new(
                                 "Default",
-                                "The value a new game starts with; a save keeps what the quests made of it",
+                                "The value a new game starts with; a save keeps what the graphs made of it",
                                 0,
                             ),
                             &mut v,
@@ -1440,7 +1409,7 @@ impl Inspector {
             gz_ui::text::status(ui, if pr.is_error() { Tone::Error } else { Tone::Warning }, &pr.text());
         }
         let mut ch = false;
-        let (open, _) = local::local_fold_header(ui, &self.key("node"), "Node", None, true, None);
+        let (open, _) = fold(ui, &self.key("node"), "Node", None, true, None);
         if open {
             // the id: renamed through the document so references follow
             if self.id_buf_of != self.node_id || !ui.ctx().egui_wants_keyboard_input() {
@@ -1494,7 +1463,7 @@ impl Inspector {
                     PropFlags::NONE,
                     0,
                     |ui| {
-                        local::local_kind_combo(
+                        look::kind_combo(
                             ui,
                             "node_kind",
                             cat,
@@ -1570,8 +1539,7 @@ impl Inspector {
 
         // the conditions: all main and trigger kinds may carry them
         let count = (!self.node.cond.is_empty()).then(|| self.node.cond.len().to_string());
-        let (copen, _) =
-            local::local_fold_header(ui, &self.key("conds"), "Conditions", count.as_deref(), true, None);
+        let (copen, _) = fold(ui, &self.key("conds"), "Conditions", count.as_deref(), true, None);
         if copen {
             let mut conds = self.node.cond.clone();
             let mut pcx = self.param_cx(ui, cx, ROLE_NODE, false);
@@ -1585,12 +1553,11 @@ impl Inspector {
         if !trig {
             let total = self.node.on_enter.len() + self.node.on_exit.len();
             if self.reveal_open {
-                local::local_fold_set(ui, &self.key("acts"), true);
+                section::set_open(ui.ctx(), &self.key("acts"), true);
                 self.reveal_open = false;
             }
             let count = (total > 0).then(|| total.to_string());
-            let (aopen, _) =
-                local::local_fold_header(ui, &self.key("acts"), "Actions", count.as_deref(), true, None);
+            let (aopen, _) = fold(ui, &self.key("acts"), "Actions", count.as_deref(), true, None);
             if aopen {
                 for (exit, list) in [(false, &self.node.on_enter), (true, &self.node.on_exit)] {
                     for (i, a) in list.iter().enumerate() {
@@ -1663,7 +1630,7 @@ impl Inspector {
 
         // where the pins lead: read here, wired on the canvas
         if self.node.out.iter().any(|p| !p.targets.is_empty()) || !self.node.out.is_empty() {
-            let (oopen, _) = local::local_fold_header(ui, &self.key("outs"), "Outputs", None, false, None);
+            let (oopen, _) = fold(ui, &self.key("outs"), "Outputs", None, false, None);
             if oopen {
                 for (i, pin) in self.node.out.iter().enumerate() {
                     let tg = pin.targets.iter().map(SmolStr::as_str).collect::<Vec<_>>().join(", ");
@@ -1769,7 +1736,7 @@ impl Inspector {
                     if focus {
                         ui.memory_mut(|m| m.request_focus(ui.next_auto_id()));
                     }
-                    local::local_kind_combo(ui, "action_kind", cat, USE_EXTRA, behaviour, &mut kind)
+                    look::kind_combo(ui, "action_kind", cat, USE_EXTRA, behaviour, &mut kind)
                 },
             )
             .unwrap_or(false)

@@ -105,7 +105,7 @@ impl Run {
                 "Not signed in to GitHub: sign in from Mod > Publish Release.".to_owned(),
             );
         } else {
-            self.stage("Reading the GitHub account");
+            self.stage("Waiting for GitHub: the account");
             let owner = owner(&m.update_github);
             match self.gh.account_login(&input.token, self.cancel()).await {
                 Err(err) => {
@@ -137,7 +137,7 @@ impl Run {
         // the release, fetched the way the game fetches it
         let mut have = false;
         if repo_ok {
-            self.stage("Reading the latest release");
+            self.stage("Waiting for GitHub: the latest release");
             match self.fetch_release(input).await {
                 Ok(rel) => {
                     seen.rel = rel;
@@ -250,7 +250,7 @@ impl Run {
         } else if self.gh.qa() {
             check.add(Level::Note, "website", format!("Website {website} - not opened in a QA run."));
         } else {
-            self.stage("Opening the website");
+            self.stage("Waiting for the module's website");
             match self.gh.fetch_public(&website, 8 << 20, self.cancel()).await {
                 Ok((200, _)) => check.add(Level::Ok, "website", format!("Website {website} answers.")),
                 Ok((403 | 429 | 503, _)) if moddb => {
@@ -283,7 +283,7 @@ impl Run {
         }
 
         // the catalog: is the id free, or already this key's (7.7) - a withdrawn one stays bound to its key
-        self.stage("Reading the Mod Browser catalog");
+        self.stage("Waiting for the Mod Browser catalog");
         let index = self.gh.fetch_catalog_index(self.cancel()).await;
         if let Some(index) = &index {
             seen.policy = VtPolicy::read(index);
@@ -380,7 +380,7 @@ impl Run {
 
         // and where the submission and a withdrawal stand
         if input.signed_in {
-            self.stage("Reading the submission");
+            self.stage("Waiting for GitHub: the submission");
             match self.gh.catalog_issue(&m.id, &input.token, IssueKind::Submission, self.cancel()).await {
                 Ok(issue) => {
                     standing.submission = issue;
@@ -414,7 +414,7 @@ impl Run {
 
     /// `vt`: the scan of the latest release's packages.
     pub(crate) async fn vt(&self, input: &Input) -> (Scan, Result<(), String>) {
-        self.stage("Reading the latest release");
+        self.stage("Waiting for GitHub: the latest release");
         let rel = match self.fetch_release(input).await {
             Ok(rel) => rel,
             Err((status, err)) => {
@@ -430,7 +430,7 @@ impl Run {
                 return (Scan::default(), Err(err));
             }
         };
-        self.stage("Reading the Mod Browser catalog");
+        self.stage("Waiting for the Mod Browser catalog");
         let policy = self
             .gh
             .fetch_catalog_index(self.cancel())
@@ -519,7 +519,7 @@ impl Run {
 
     /// The published index's word on the module.
     async fn read_listing_now(&self, input: &Input, standing: &mut Standing) {
-        self.stage("Reading the Mod Browser catalog");
+        self.stage("Waiting for the Mod Browser catalog");
         let index = self.gh.fetch_catalog_index(self.cancel()).await;
         standing.listing = read_listing(index.as_deref(), &input.manifest.id, &input.key.public_key);
     }
@@ -527,11 +527,11 @@ impl Run {
     /// `submission`: where the submission, a withdrawal and the listing stand.
     pub(crate) async fn standing(&self, input: &Input, standing: &mut Standing) -> Result<(), String> {
         let id = &input.manifest.id;
-        self.stage("Reading the submission");
+        self.stage("Waiting for GitHub: the submission");
         standing.submission =
             self.gh.catalog_issue(id, &input.token, IssueKind::Submission, self.cancel()).await?;
         standing.submission_read = true;
-        self.stage("Reading the withdrawal");
+        self.stage("Waiting for GitHub: the withdrawal");
         standing.withdrawal =
             self.gh.catalog_issue(id, &input.token, IssueKind::Withdrawal, self.cancel()).await?;
         self.read_listing_now(input, standing).await;
@@ -551,7 +551,7 @@ impl Run {
         standing.withdrawal = self.gh.catalog_withdraw(&rq, self.cancel(), &stage).await?;
         drop(rq);
         self.svc.set_login(&standing.withdrawal.login);
-        self.stage("Reading the submission");
+        self.stage("Waiting for GitHub: the submission");
         match self.gh.catalog_issue(&m.id, &input.token, IssueKind::Submission, self.cancel()).await {
             Ok(issue) => {
                 standing.submission = issue;

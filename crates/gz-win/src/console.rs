@@ -2,7 +2,7 @@
 //!
 //! `Grizzly.exe` is linked for the Windows subsystem: started from Explorer, a shortcut or the
 //! taskbar it gets no console, so none can end it behind the author's back. A run without a
-//! window (`-dump_commands`, `-compile`, `-headless`, ...) still lives in its launcher's console
+//! window (`-dump_commands`, a commandlet, `-headless`, ...) still lives in its launcher's console
 //! the way a console program does:
 //! - [`attach_parent_console`] joins the console of the parent process, when it has one. A stream
 //!   the launcher redirected (a pipe, a file) is kept as it is, and only a stream that is missing

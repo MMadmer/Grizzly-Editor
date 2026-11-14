@@ -1,6 +1,6 @@
 //! The Tools panel's forms of the Sector, Portal, Way, Shape, Light and Fog Volume tools
 //! (`UISectorTool`, `UIPortalTool`, `UIWayTool`, `UIShapeTool`, `UILightTool`,
-//! `UIFogVolTool`). A form reads the scene's snapshot and posts `sector_tool`, `portal_tool`,
+//! `UIFogVolTool`). A form reads the scene's snapshot and posts `scene.zones`,
 //! `way_tool`, `shape_tool`, `light_tool` or `fog_tool`; it never changes the scene itself. What a
 //! command answers comes back as a note (its `message`) or an error.
 //!
@@ -23,8 +23,25 @@ use crate::tools::asker;
 /// Runs a tool command off the UI thread; its `message` (or the first `messages` line) becomes a
 /// note, a refusal an error.
 fn run(editor: &Arc<Editor>, cmd: &'static str, action: &str, extra: &[(&str, Value)]) {
+    let mut all = vec![("action", Value::String(action.to_owned()))];
+    all.extend(extra.iter().cloned());
+    call(editor, cmd, &all);
+}
+
+/// Sets switches of the panels, which only the window reads.
+fn set_state(editor: &Arc<Editor>, f: impl FnOnce(&mut gz_scene::objtools::ObjToolState) + Send + 'static) {
+    let Some(svc) = editor.project_opt().and_then(|s| s.services.get::<gz_scene::SceneService>()) else {
+        return;
+    };
+    let origin = editor.ui_origin();
+    editor.exec.spawn(async move {
+        let _ = gz_scene::objtools::set_state(&svc, origin, f).await;
+    });
+}
+
+/// Runs a command with these arguments off the UI thread, as [`run`] does.
+fn call(editor: &Arc<Editor>, cmd: &'static str, extra: &[(&str, Value)]) {
     let mut args = Args::new();
-    args.insert("action".into(), Value::String(action.to_owned()));
     for (k, v) in extra {
         args.insert((*k).into(), v.clone());
     }
@@ -125,7 +142,12 @@ pub(crate) fn sector_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
             true,
             "",
         ) {
-            run(editor, "sector_tool", "set", &[("create_single", Value::Bool(v))]);
+            run(
+                editor,
+                "scene.zones",
+                "mode",
+                &[("click", Value::String(if v { "new_from_mesh" } else { "edit" }.into()))],
+            );
         }
         if let Some(v) = local_switch_row(
             ui,
@@ -135,7 +157,12 @@ pub(crate) fn sector_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
             true,
             "",
         ) {
-            run(editor, "sector_tool", "set", &[("create_multiple", Value::Bool(v))]);
+            run(
+                editor,
+                "scene.zones",
+                "mode",
+                &[("click", Value::String(if v { "new_from_object" } else { "edit" }.into()))],
+            );
         }
         PropertyGrid::new("tools").show(ui, |g| {
             g.row(
@@ -148,9 +175,9 @@ pub(crate) fn sector_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
                     if gz_ui::segmented(ui, &mut cur, &["Add", "Remove"], None) {
                         run(
                             editor,
-                            "sector_tool",
-                            "set",
-                            &[("mesh_mode", Value::String(if cur == 0 { "add" } else { "remove" }.into()))],
+                            "scene.zones",
+                            "mode",
+                            &[("meshes", Value::String(if cur == 0 { "add" } else { "remove" }.into()))],
                         );
                     }
                 },
@@ -165,7 +192,7 @@ pub(crate) fn sector_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
             !creating,
             "Not while a new sector is being made",
         ) {
-            run(editor, "sector_tool", "set", &[("box_pick", Value::Bool(v))]);
+            run(editor, "scene.zones", "mode", &[("box_pick", Value::Bool(v))]);
         }
     }
     if gz_ui_app::local::local_section(ui, "tool_sector_commands", "Commands", true) {
@@ -179,15 +206,23 @@ pub(crate) fn sector_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
                 LocalButton::new("Capture Volume", "Grow the selected sector over the objects inside it")
                     .when(selected == 1, one_why),
                 LocalButton::new(
-                    "Create Default",
-                    "Create the sector that holds whatever no other sector does",
-                )
-                .when(!has_default, "The default sector is there already"),
+                    "Compute",
+                    "Put the meshes no sector holds into the default sector and compute the portals - what the build does by itself",
+                ),
             ],
         ) {
-            Some(0) => run(editor, "sector_tool", "validate", &[]),
-            Some(1) => run(editor, "sector_tool", "capture_volume", &[]),
-            Some(2) => run(editor, "sector_tool", "create_default", &[]),
+            Some(0) => run(editor, "scene.zones", "validate", &[]),
+            Some(1) => {
+                if let Some(name) = selected_names(snap, ObjClass::Sector).first() {
+                    run(
+                        editor,
+                        "scene.zones",
+                        "assign",
+                        &[("sector", Value::String(name.clone())), ("inside", Value::Bool(true))],
+                    );
+                }
+            }
+            Some(2) => run(editor, "scene.zones", "compute", &[]),
             _ => {}
         }
         if danger(
@@ -213,15 +248,15 @@ pub(crate) fn sector_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
                 destructive: true,
             };
             let ed = editor.clone();
-            confirm(ui, editor, spec, move || run(&ed, "sector_tool", "remove_default", &[]));
+            confirm(ui, editor, spec, move || {
+                run(
+                    &ed,
+                    "scene.zones",
+                    "remove",
+                    &[("objects", Value::Array(vec![Value::String(DEFAULT_SECTOR.into())]))],
+                )
+            });
         }
-    }
-    if gz_ui_app::local::local_section(ui, "tool_sector_more", "More", false) {
-        local_button_flow(
-            ui,
-            &[LocalButton::new("Distribute Objects", "Hand the objects inside the selected sector to it")
-                .when(false, "Distribute Objects is not available in this version")],
-        );
     }
 }
 
@@ -240,7 +275,7 @@ pub(crate) fn portal_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
             .when(any_portal_selected, "Select portals first")],
     ) == Some(0)
     {
-        run(editor, "portal_tool", "invert", &[]);
+        run(editor, "scene.zones", "invert", &[]);
     }
     ui.horizontal_wrapped(|ui| {
         if danger(
@@ -261,7 +296,7 @@ pub(crate) fn portal_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
                 destructive: true,
             };
             let ed = editor.clone();
-            confirm(ui, editor, spec, move || run(&ed, "portal_tool", "compute_all", &[]));
+            confirm(ui, editor, spec, move || run(&ed, "scene.zones", "compute", &[]));
         }
         if danger(
             ui,
@@ -282,31 +317,12 @@ pub(crate) fn portal_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
                 destructive: true,
             };
             let ed = editor.clone();
-            confirm(ui, editor, spec, move || run(&ed, "portal_tool", "compute_selected", &[]));
+            let names: Vec<Value> = sectors.iter().map(|n| Value::String(n.clone())).collect();
+            confirm(ui, editor, spec, move || {
+                run(&ed, "scene.zones", "compute", &[("objects", Value::Array(names))])
+            });
         }
     });
-    if gz_ui_app::local::local_section(ui, "tool_portal_more", "More", false)
-        && danger(
-            ui,
-            "Remove Duplicates...",
-            "Remove the portals that repeat another one",
-            portals > 0,
-            "There are no portals",
-        )
-    {
-        let spec = ConfirmSpec {
-            id: "remove_duplicate_portals".into(),
-            title: "Remove Duplicate Portals".into(),
-            headline: "Remove every portal that repeats another one?".into(),
-            items: vec![format!("{} in the level are looked at", plural(portals, "portal"))],
-            total: 1,
-            consequence: "Undo brings them back.".into(),
-            action: "Remove".into(),
-            destructive: true,
-        };
-        let ed = editor.clone();
-        confirm(ui, editor, spec, move || run(&ed, "portal_tool", "remove_duplicates", &[]));
-    }
 }
 
 // ---- Way ----------------------------------------------------------------------------------------
@@ -314,22 +330,11 @@ pub(crate) fn portal_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
 pub(crate) fn way_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) {
     let t = snap.tools.obj;
     if gz_ui_app::local::local_section(ui, "tool_way_edit", "Edit", true) {
-        PropertyGrid::new("tools").show(ui, |g| {
-            g.row("Select", "Pick whole ways, or the points of a way", PropFlags::NONE, 0, |ui| {
-                let mut cur = usize::from(t.way_points);
-                if gz_ui::segmented(ui, &mut cur, &["Ways", "Points"], None) {
-                    run(
-                        editor,
-                        "way_tool",
-                        "mode",
-                        &[("mode", Value::String(if cur == 1 { "points" } else { "ways" }.into()))],
-                    );
-                }
-            });
-        });
-        if t.way_points {
-            gz_ui::text::status(ui, Tone::Muted, "With Place, a click adds a point to the selected way.");
-        }
+        gz_ui::text::status(
+            ui,
+            Tone::Muted,
+            "With Place, a click adds a point to the selected way path; its points are picked and moved like objects.",
+        );
     }
     if gz_ui_app::local::local_section(ui, "tool_way_links", "Links", true) {
         if let Some(v) = local_switch_row(
@@ -340,10 +345,13 @@ pub(crate) fn way_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) {
             true,
             "",
         ) {
-            run(editor, "way_tool", "auto_link", &[("on", Value::Bool(v))]);
+            run(editor, "scene.way", "auto_link", &[("on", Value::Bool(v))]);
         }
-        let why = "Switch Select to Points first";
-        let pts = t.way_points;
+        let why = "Select points of the way path first";
+        let pts = snap.of_class(ObjClass::Way).any(|o| {
+            snap.is_selected(o.id)
+                && matches!(&o.data, ObjData::Way(w) if w.points.iter().any(|p| p.selected))
+        });
         let pressed = local_button_flow(
             ui,
             &[
@@ -358,15 +366,15 @@ pub(crate) fn way_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) {
             ],
         );
         let action = match pressed {
-            Some(0) => "create_1link",
-            Some(1) => "create_2link",
-            Some(2) => "convert_1link",
-            Some(3) => "convert_2link",
-            Some(4) => "invert_link",
-            Some(5) => "remove_link",
+            Some(0) => "link_one_way",
+            Some(1) => "link_both_ways",
+            Some(2) => "make_one_way",
+            Some(3) => "make_both_ways",
+            Some(4) => "invert_links",
+            Some(5) => "unlink",
             _ => return,
         };
-        run(editor, "way_tool", action, &[]);
+        run(editor, "scene.way", action, &[]);
     }
 }
 
@@ -379,12 +387,7 @@ pub(crate) fn shape_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) {
             g.row("Shape", "What a click in the viewport adds", PropFlags::NONE, 0, |ui| {
                 let mut cur = usize::from(!t.shape_sphere);
                 if gz_ui::segmented(ui, &mut cur, &["Sphere", "Box"], None) {
-                    run(
-                        editor,
-                        "shape_tool",
-                        "set",
-                        &[("shape", Value::String(if cur == 0 { "sphere" } else { "box" }.into()))],
-                    );
+                    set_state(editor, move |st| st.shape_sphere = cur == 0);
                 }
             });
         });
@@ -398,7 +401,7 @@ pub(crate) fn shape_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) {
             true,
             "",
         ) {
-            run(editor, "shape_tool", "set", &[("attach_on_click", Value::Bool(v))]);
+            set_state(editor, move |st| st.attach_on_click = v);
             if v {
                 gz_ui_viewport::set_placing(editor, true);
             }
@@ -423,7 +426,7 @@ pub(crate) fn shape_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) {
                 destructive: true,
             };
             let ed = editor.clone();
-            confirm(ui, editor, spec, move || run(&ed, "shape_tool", "detach", &[]));
+            confirm(ui, editor, spec, move || run(&ed, "scene.shape", "split", &[]));
         }
     }
     if gz_ui_app::local::local_section(ui, "tool_shape_bound", "Level Bound", true) {
@@ -435,7 +438,7 @@ pub(crate) fn shape_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) {
             true,
             "",
         ) {
-            run(editor, "shape_tool", "edit_level_bound", &[("on", Value::Bool(v))]);
+            run(editor, "scene.shape", "level_bound", &[("on", Value::Bool(v))]);
         }
         let has = snap
             .of_class(ObjClass::Shape)
@@ -446,7 +449,7 @@ pub(crate) fn shape_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) {
                 .when(t.edit_level_bound && has, "Turn Edit Level Bound on first")],
         ) == Some(0)
         {
-            run(editor, "shape_tool", "recalculate", &[]);
+            run(editor, "scene.shape", "level_bound", &[("recalculate", Value::Bool(true))]);
         }
     }
 }
@@ -475,14 +478,22 @@ pub(crate) fn light_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) {
             LocalButton::new("Disable All", "No light lights the viewport"),
         ],
     );
-    let action = match pressed {
-        Some(0) => "enable_selected",
-        Some(1) => "enable_all",
-        Some(2) => "disable_selected",
-        Some(3) => "disable_all",
+    let (all, on) = match pressed {
+        Some(0) => (false, true),
+        Some(1) => (true, true),
+        Some(2) => (false, false),
+        Some(3) => (true, false),
         _ => return,
     };
-    run(editor, "light_tool", action, &[]);
+    // the lights' own property: the selected ones, or every one by name
+    let mut set = serde_json::Map::new();
+    set.insert("viewport".into(), Value::Bool(on));
+    let mut extra = vec![("set", Value::Object(set))];
+    if all {
+        let names = snap.of_class(ObjClass::Light).map(|o| Value::String(o.name.to_string())).collect();
+        extra.push(("objects", Value::Array(names)));
+    }
+    call(editor, "scene.set", &extra);
 }
 
 // ---- Fog Volume ---------------------------------------------------------------------------------
@@ -498,8 +509,8 @@ pub(crate) fn fog_tool(ui: &mut Ui, editor: &Arc<Editor>, _snap: &SceneState) {
             LocalButton::new("Ungroup Current", "Break the current fog volume group up"),
         ],
     ) {
-        Some(0) => run(editor, "fog_tool", "group", &[]),
-        Some(1) => run(editor, "fog_tool", "ungroup", &[]),
+        Some(0) => call(editor, "scene.fog_group", &[]),
+        Some(1) => call(editor, "scene.fog_group", &[("ungroup", Value::Bool(true))]),
         _ => {}
     }
 }

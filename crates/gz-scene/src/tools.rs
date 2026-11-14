@@ -1,24 +1,17 @@
-//! What the scene keeps per class tool (`ESceneToolBase` and its subclasses' settings), the
-//! level options (`st_LevelOptions`) and the bulk data of the AI map, detail objects and
-//! wallmarks - with their part of the files.
+//! What the scene keeps per kind of object (its eye and lock, its viewport flags, the light
+//! controls, the random placement), the editor's mode, the level options and the painted
+//! layers' data (the AI map, the detail objects, the wallmarks).
 
 use std::sync::Arc;
 
 use gz_base::{Blob, SmolStr};
-use gz_chunk::{Reader, Writer};
 use gz_fmt_level::{AiMapNode, SceneAiMap, SceneAiNode, SceneDetails};
+use serde::{Deserialize, Serialize};
 
 use crate::SceneError;
 use crate::class::{CLASSES, ObjClass};
-use crate::ltx::{IniReader, IniWriter};
-use crate::model::ObjId;
 
-/// `CURRENT_LEVELOP_VERSION`.
-pub const LEVELOP_VERSION: u32 = 0x0C;
-/// `CURRENT_LEVELOP_BP_VERSION`.
-pub const LEVELOP_BP_VERSION: u32 = 9;
-
-/// `b_params`: the compiler's build parameters (52 bytes in the binary files).
+/// The compiler's build parameters.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BuildParams {
     pub sm_angle: f32,
@@ -27,14 +20,14 @@ pub struct BuildParams {
     pub lm_jitter_samples: u32,
     pub lm_rms_zero: u32,
     pub lm_rms: u32,
-    /// `ebqDraft` 0, `ebqHigh` 1, `ebqCustom` 2.
+    /// Draft 0, high 1, custom 2.
     pub quality: u16,
     pub u_reserved: u16,
     pub f_reserved: [f32; 6],
 }
 
 impl Default for BuildParams {
-    /// `Init()` then `setHighQuality()`.
+    /// The high quality preset.
     fn default() -> Self {
         Self {
             sm_angle: 75.0,
@@ -50,86 +43,22 @@ impl Default for BuildParams {
     }
 }
 
-impl BuildParams {
-    fn read_bin(r: &mut Reader<'_>) -> Result<Self, SceneError> {
-        Ok(Self {
-            sm_angle: r.r_f32()?,
-            weld_distance: r.r_f32()?,
-            lm_pixels_per_meter: r.r_f32()?,
-            lm_jitter_samples: r.r_u32()?,
-            lm_rms_zero: r.r_u32()?,
-            lm_rms: r.r_u32()?,
-            quality: r.r_u16()?,
-            u_reserved: r.r_u16()?,
-            f_reserved: [r.r_f32()?, r.r_f32()?, r.r_f32()?, r.r_f32()?, r.r_f32()?, r.r_f32()?],
-        })
-    }
-
-    fn write_bin(&self, w: &mut Writer) {
-        w.w_f32(self.sm_angle);
-        w.w_f32(self.weld_distance);
-        w.w_f32(self.lm_pixels_per_meter);
-        w.w_u32(self.lm_jitter_samples);
-        w.w_u32(self.lm_rms_zero);
-        w.w_u32(self.lm_rms);
-        w.w_u16(self.quality);
-        w.w_u16(self.u_reserved);
-        for f in self.f_reserved {
-            w.w_f32(f);
-        }
-    }
-
-    fn write_ltx(&self, w: &mut IniWriter) {
-        let s = "build_params";
-        w.w_float(s, "smooth_angle", self.sm_angle);
-        w.w_float(s, "weld_distance", self.weld_distance);
-        w.w_float(s, "light_pixel_per_meter", self.lm_pixels_per_meter);
-        w.w_u32(s, "light_jitter_samples", self.lm_jitter_samples);
-        w.w_u32(s, "light_rms_zero", self.lm_rms_zero);
-        w.w_u32(s, "light_rms", self.lm_rms);
-        w.w_u16(s, "light_quality", self.quality);
-        w.w_u16(s, "light_quality_reserved", self.u_reserved);
-        for (i, f) in self.f_reserved.iter().enumerate() {
-            w.w_float(s, &format!("reserved_{i}"), *f);
-        }
-    }
-
-    fn read_ltx(r: &IniReader) -> Result<Self, SceneError> {
-        let s = "build_params";
-        let mut f_reserved = [0.0; 6];
-        for (i, f) in f_reserved.iter_mut().enumerate() {
-            *f = r.r_float(s, &format!("reserved_{i}"))?;
-        }
-        Ok(Self {
-            sm_angle: r.r_float(s, "smooth_angle")?,
-            weld_distance: r.r_float(s, "weld_distance")?,
-            lm_pixels_per_meter: r.r_float(s, "light_pixel_per_meter")?,
-            lm_jitter_samples: r.r_u32(s, "light_jitter_samples")?,
-            lm_rms_zero: r.r_u32(s, "light_rms_zero")?,
-            lm_rms: r.r_u32(s, "light_rms")?,
-            quality: r.r_u16(s, "light_quality")?,
-            u_reserved: r.r_u16(s, "light_quality_reserved")?,
-            f_reserved,
-        })
-    }
-}
-
-/// `st_LevelOptions`.
+/// The level's options.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LevelOptions {
     pub level_path: SmolStr,
     pub level_prefix: SmolStr,
+    /// Lines the build adds to the level's `level.ltx`.
     pub bop: String,
     pub map_version: SmolStr,
     pub light_hemi_quality: u8,
     pub light_sun_quality: u8,
     pub build: BuildParams,
-    /// `m_mapUsage`: the game types, one bit each.
+    /// The game types, one bit each.
     pub map_usage: u16,
 }
 
 impl Default for LevelOptions {
-    /// `Reset()`.
     fn default() -> Self {
         Self {
             level_path: SmolStr::new_static("level"),
@@ -144,26 +73,8 @@ impl Default for LevelOptions {
     }
 }
 
-const LO_VERSION: u32 = 0x7801;
-const LO_NAMES: u32 = 0x7802;
-const LO_BOP: u32 = 0x7803;
-const LO_PREFIX: u32 = 0x7804;
-const LO_BP_VERSION: u32 = 0x7849;
-const LO_BUILD_PARAMS: u32 = 0x7850;
-const LO_LIGHT_QUALITY: u32 = 0x7851;
-const LO_MAP_USAGE: u32 = 0x7852;
-const LO_MAP_VER: u32 = 0x7853;
-
-// game-type bits of the old `usage_*` keys
-const GT_DEATHMATCH: u16 = 1 << 1;
-const GT_TEAM_DEATHMATCH: u16 = 1 << 2;
-const GT_ARTEFACT_HUNT: u16 = 1 << 3;
-const GT_CAPTURE: u16 = 1 << 4;
-const GT_DOMINATION: u16 = 1 << 5;
-const GT_TEAM_DOMINATION: u16 = 1 << 6;
-
 impl LevelOptions {
-    /// `SetDraftQuality` / `SetHighQuality` / `SetCustomQuality`: the Quality buttons.
+    /// The quality presets: draft (0) and high (1) set the values; custom (2) keeps them.
     pub fn set_quality(&mut self, q: u16) {
         match q {
             0 => {
@@ -183,179 +94,9 @@ impl LevelOptions {
             _ => self.build.quality = 2,
         }
     }
-
-    /// `SaveLTX`.
-    pub fn write_ltx(&self, w: &mut IniWriter) {
-        let s = "level_options";
-        w.w_u32(s, "version", LEVELOP_VERSION);
-        w.w_string(s, "level_path", &self.level_path);
-        w.w_string(s, "level_prefix", &self.level_prefix);
-        w.w_string(s, "bop", &format!("\"{}\"", self.bop));
-        w.w_string(s, "map_version", &self.map_version);
-        w.w_u32(s, "version_bp", LEVELOP_BP_VERSION);
-        self.build.write_ltx(w);
-        w.w_u8(s, "light_hemi_quality", self.light_hemi_quality);
-        w.w_u8(s, "light_sun_quality", self.light_sun_quality);
-        w.w_u16(s, "game_type", self.map_usage);
-    }
-
-    /// `ReadLTX`: `false` (here `Err`) for a section that is incomplete.
-    pub fn read_ltx(r: &IniReader) -> Result<Self, SceneError> {
-        let s = "level_options";
-        let bad = || SceneError::load(format!("Invalid LTX level options: {}", r.file()));
-        for key in ["version", "level_path", "level_prefix", "bop", "light_hemi_quality", "light_sun_quality"]
-        {
-            if !r.line_exist(s, key) {
-                return Err(bad());
-            }
-        }
-        let version = r.r_u32(s, "version")?;
-        if version < 8 {
-            return Err(bad());
-        }
-        let build = BuildParams::read_ltx(r).map_err(|_| bad())?;
-        if (version > 0x0B && !r.line_exist(s, "map_version"))
-            || (version > 0x0A && !r.line_exist(s, "game_type"))
-        {
-            return Err(bad());
-        }
-        let mut map_usage = 0xffff_u16;
-        if version > 0x0A {
-            map_usage = r.r_u16(s, "game_type")?;
-        } else {
-            let mut set = |bit: u16, key: &str| -> Result<(), SceneError> {
-                if !r.line_exist(s, key) {
-                    return Err(bad());
-                }
-                if r.r_s32(s, key)? != 0 {
-                    map_usage |= bit;
-                } else {
-                    map_usage &= !bit;
-                }
-                Ok(())
-            };
-            set(GT_DEATHMATCH, "usage_deathmatch")?;
-            set(GT_TEAM_DEATHMATCH, "usage_teamdeathmatch")?;
-            set(GT_ARTEFACT_HUNT, "usage_artefacthunt")?;
-            if version > 8 {
-                set(GT_CAPTURE, "usage_captretheartefact")?;
-                set(GT_TEAM_DOMINATION, "usage_team_domination_zone")?;
-                set(GT_DOMINATION, if version == 9 { "domination_zone" } else { "usage_domination_zone" })?;
-            }
-        }
-        Ok(Self {
-            level_path: r.r_string(s, "level_path")?.into(),
-            level_prefix: r.r_string(s, "level_prefix")?.into(),
-            bop: r.r_string_wb(s, "bop")?,
-            map_version: if version > 0x0B {
-                r.r_string(s, "map_version")?.into()
-            } else {
-                SmolStr::new_static("1.0")
-            },
-            light_hemi_quality: r.r_u8(s, "light_hemi_quality")?,
-            light_sun_quality: r.r_u8(s, "light_sun_quality")?,
-            build,
-            map_usage,
-        })
-    }
-
-    /// `Save(IWriter&)`.
-    pub fn write_bin(&self, w: &mut Writer) {
-        w.chunk(LO_VERSION, |w| w.w_u32(LEVELOP_VERSION));
-        w.chunk(LO_NAMES, |w| w.w_stringz(&self.level_path));
-        w.chunk(LO_PREFIX, |w| w.w_stringz(&self.level_prefix));
-        w.chunk(LO_BOP, |w| w.w_stringz(&self.bop));
-        w.chunk(LO_MAP_VER, |w| {
-            w.w_stringz(if self.map_version.is_empty() { "1.0" } else { &self.map_version })
-        });
-        w.chunk(LO_BP_VERSION, |w| w.w_u32(LEVELOP_BP_VERSION));
-        w.chunk(LO_BUILD_PARAMS, |w| self.build.write_bin(w));
-        w.chunk(LO_LIGHT_QUALITY, |w| {
-            w.w_u8(self.light_hemi_quality);
-            w.w_u8(self.light_sun_quality);
-        });
-        w.chunk(LO_MAP_USAGE, |w| w.w_u16(self.map_usage));
-    }
-
-    /// `Read(IReader&)`.
-    pub fn read_bin(r: &Reader<'_>) -> Result<Self, SceneError> {
-        let bad = || SceneError::load("Invalid binary level options");
-        let mut out = Self::default();
-        let v = r.find_chunk(LO_VERSION).ok_or_else(bad)?;
-        if v.0.len() != 4 || u32::from_le_bytes([v.0[0], v.0[1], v.0[2], v.0[3]]) < 8 {
-            return Err(bad());
-        }
-        let string = |id: u32, required: bool| -> Result<Option<String>, SceneError> {
-            match r.open_chunk(id)? {
-                None if required => Err(bad()),
-                None => Ok(None),
-                Some(c) => {
-                    if !c.bytes().contains(&0) {
-                        return Err(bad());
-                    }
-                    Ok(Some(c.reader().r_stringz()?))
-                }
-            }
-        };
-        if let Some(s) = string(LO_NAMES, true)? {
-            out.level_path = s.into();
-        }
-        if let Some(s) = string(LO_PREFIX, false)? {
-            out.level_prefix = s.into();
-        }
-        if let Some(s) = string(LO_BOP, true)? {
-            out.bop = s;
-        }
-        if let Some(s) = string(LO_MAP_VER, false)? {
-            out.map_version = s.into();
-        }
-        let mut bp_version = 0;
-        if let Some(c) = r.open_chunk(LO_BP_VERSION)? {
-            if c.bytes().len() != 4 {
-                return Err(bad());
-            }
-            bp_version = c.reader().r_u32()?;
-        }
-        if bp_version == LEVELOP_BP_VERSION {
-            let c = r.open_chunk(LO_BUILD_PARAMS)?.ok_or_else(bad)?;
-            if c.bytes().len() != 52 {
-                return Err(bad());
-            }
-            out.build = BuildParams::read_bin(&mut c.reader())?;
-        }
-        if let Some(c) = r.open_chunk(LO_LIGHT_QUALITY)? {
-            if c.bytes().len() != 2 {
-                return Err(bad());
-            }
-            let mut q = c.reader();
-            out.light_hemi_quality = q.r_u8()?;
-            out.light_sun_quality = q.r_u8()?;
-        }
-        if let Some(c) = r.open_chunk(LO_MAP_USAGE)? {
-            let mut q = c.reader();
-            if bp_version > 8 {
-                if c.bytes().len() != 2 {
-                    return Err(bad());
-                }
-                out.map_usage = q.r_u16()?;
-            } else {
-                if c.bytes().len() != 12 {
-                    return Err(bad());
-                }
-                let mut m = 0;
-                for bit in [GT_DEATHMATCH, GT_TEAM_DEATHMATCH, GT_ARTEFACT_HUNT] {
-                    if q.r_i32()? != 0 {
-                        m |= bit;
-                    }
-                }
-                out.map_usage = m;
-            }
-        }
-        Ok(out)
-    }
 }
 
-/// `ESceneLightTool`'s settings.
+/// The lights' settings: the sun's direction and the light controls.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LightTool {
     /// Altitude, longitude (radians).
@@ -366,7 +107,6 @@ pub struct LightTool {
 }
 
 impl Default for LightTool {
-    /// `Clear()`.
     fn default() -> Self {
         Self {
             sun_shadow_dir: [(-25.0f32).to_radians(), 292.0f32.to_radians()],
@@ -381,7 +121,7 @@ impl Default for LightTool {
 }
 
 impl LightTool {
-    /// `AppendLightControl`: a name already there is kept as it is.
+    /// Adds a control; a name already there is kept as it is.
     pub fn append(&mut self, name: &str, idx: Option<u32>) {
         let name = name.trim();
         if name.is_empty() || self.lcontrols.iter().any(|(n, _)| n == name) {
@@ -394,14 +134,14 @@ impl LightTool {
         self.lcontrols.push((SmolStr::new(name), id));
     }
 
-    /// The name of a control id (`GetLControlName`).
+    /// The name of a control id.
     #[must_use]
     pub fn name_of(&self, id: u32) -> Option<&str> {
         self.lcontrols.iter().find(|(_, i)| *i == id).map(|(n, _)| n.as_str())
     }
 }
 
-/// `ESceneObjectTool`'s Append Random settings.
+/// What placing a library object picks at random.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ObjectTool {
     pub min_scale: glam::Vec3,
@@ -423,16 +163,17 @@ impl Default for ObjectTool {
     }
 }
 
-/// `flAppendRandom`: cleared on every load.
+/// Random placement is on.
 pub const FL_APPEND_RANDOM: u32 = 1 << 29;
-/// `flAppendRandomScaleProportional`: one random factor for the three axes.
+/// One random factor for the three axes.
 pub const FL_APPEND_RANDOM_PROPORTIONAL: u32 = 1 << 28;
-/// `flAppendRandomScale`.
 pub const FL_APPEND_RANDOM_SCALE: u32 = 1 << 30;
-/// `flAppendRandomRotation`.
 pub const FL_APPEND_RANDOM_ROTATION: u32 = 1 << 31;
+/// Every bit of the random placement in the objects' flags.
+pub const FL_APPEND_RANDOM_ALL: u32 =
+    FL_APPEND_RANDOM | FL_APPEND_RANDOM_PROPORTIONAL | FL_APPEND_RANDOM_SCALE | FL_APPEND_RANDOM_ROTATION;
 
-/// The class-specific settings of a tool.
+/// The class-specific settings of a kind.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub enum ToolOpts {
     #[default]
@@ -441,29 +182,18 @@ pub enum ToolOpts {
     Objects(ObjectTool),
 }
 
-/// One class's tool.
+/// One kind's settings.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolPart {
     pub class: ObjClass,
-    /// `flEnable`.
-    pub enabled: bool,
-    /// `flVisible`: the class's eye in the Tools panel and the Outliner.
+    /// The kind's eye: its objects are drawn and picked.
     pub visible: bool,
-    /// `flReadonly`.
-    pub readonly: bool,
-    /// `m_ModifName` / `m_ModifTime`.
-    pub modif_name: SmolStr,
-    pub modif_time: u32,
-    /// The tool's `m_Flags` (glow, light, portal, sector, spawn, scene objects).
+    /// The kind's lock: its objects are not picked or changed.
+    pub locked: bool,
+    /// What the viewport draws of the kind (names, crosses, solid sectors) and, for objects,
+    /// the random placement's switches.
     pub flags: u32,
     pub opts: ToolOpts,
-    /// LTX lines of the part this crate does not read: section, key, value.
-    pub kept_ltx: Vec<(String, String, String)>,
-    /// Chunks of the tool's stream this crate does not read.
-    pub kept_chunks: Vec<(u32, Blob)>,
-    /// The LTX part was cp1251 (not UTF-8): it is written back in it, as the C++ `CInifile`
-    /// writes back the bytes it read.
-    pub cp1251: bool,
 }
 
 impl ToolPart {
@@ -474,25 +204,13 @@ impl ToolPart {
             ObjClass::SceneObject => ToolOpts::Objects(ObjectTool::default()),
             _ => ToolOpts::Plain,
         };
-        Self {
-            class,
-            enabled: true,
-            visible: true,
-            readonly: false,
-            modif_name: SmolStr::default(),
-            modif_time: 0,
-            flags: 0,
-            opts,
-            kept_ltx: Vec::new(),
-            kept_chunks: Vec::new(),
-            cp1251: false,
-        }
+        Self { class, visible: true, locked: false, flags: 0, opts }
     }
 
-    /// `IsEditable`.
+    /// Whether the kind's objects may be changed.
     #[must_use]
     pub fn editable(&self) -> bool {
-        !self.readonly
+        !self.locked
     }
 
     #[must_use]
@@ -503,287 +221,72 @@ impl ToolPart {
         }
     }
 
-    fn has_flags(&self) -> bool {
-        matches!(
-            self.class,
-            ObjClass::Glow
-                | ObjClass::Light
-                | ObjClass::Portal
-                | ObjClass::Sector
-                | ObjClass::SpawnPoint
-                | ObjClass::SceneObject
-        )
-    }
-
-    fn version_key(&self) -> &'static str {
-        if self.class == ObjClass::Glow { "glow_tool_version" } else { "version" }
-    }
-
-    /// The tool's own keys of an LTX part (`ESceneXxxTool::SaveLTX` without the objects).
-    pub fn write_ltx(&self, w: &mut IniWriter) {
-        w.w_string("modif", "name", &self.modif_name);
-        w.w_u32("modif", "time", self.modif_time);
-        if self.class == ObjClass::Group {
-            w.w_u16("main", "version", 0);
-        } else {
-            w.w_u32("main", self.version_key(), 0);
-        }
-        if self.has_flags() {
-            w.w_u32("main", "flags", self.flags);
-        }
-        match &self.opts {
-            ToolOpts::Light(l) => {
-                w.w_fvector2("main", "sun_shadow_dir", l.sun_shadow_dir);
-                w.w_u32("main", "lcontrol_last_idx", l.lcontrol_last_idx);
-                for (name, id) in &l.lcontrols {
-                    w.w_u32("lcontrols", name, *id);
-                }
-            }
-            ToolOpts::Objects(o) => {
-                let s = "AppendRandom";
-                w.w_fvector3(s, "AppendRandomMinScale", o.min_scale);
-                w.w_fvector3(s, "AppendRandomMaxScale", o.max_scale);
-                w.w_fvector3(s, "AppendRandomMinRotation", o.min_rotation);
-                w.w_fvector3(s, "AppendRandomMaxRotation", o.max_rotation);
-                w.w_u32(s, "AppendRandomObjects_size", u32::try_from(o.objects.len()).unwrap_or(u32::MAX));
-                for (i, n) in o.objects.iter().enumerate() {
-                    w.w_string(s, &format!("object_name_{i}"), n);
-                }
-            }
-            ToolOpts::Plain => {}
-        }
-        for (s, k, v) in &self.kept_ltx {
-            w.w_raw(s, k, v);
-        }
-    }
-
-    /// The tool's own keys of an LTX part. Returns the `[main]` keys it read, so the caller
-    /// can keep the rest.
-    pub fn read_ltx(&mut self, r: &IniReader) -> Result<Vec<&'static str>, SceneError> {
-        let desc = self.class.desc();
-        let bad = |what: &str| SceneError::load(format!("{desc} tools: {what} ({})", r.file()));
-        let vk = self.version_key();
-        if !r.line_exist("main", vk) {
-            return Err(bad("required metadata is missing"));
-        }
-        if r.r_u32("main", vk)? != 0 {
-            return Err(bad("Unsupported version."));
-        }
-        // the base tool's metadata: the C++ refuses a part without it
-        if !r.line_exist("modif", "name") || !r.line_exist("modif", "time") {
-            return Err(bad("required metadata is missing"));
-        }
-        self.modif_name = r.r_string("modif", "name")?.into();
-        self.modif_time = r.r_u32("modif", "time")?;
-        let mut used = vec![vk, "objects_count"];
-        if self.has_flags() {
-            if !r.line_exist("main", "flags") {
-                return Err(bad("required metadata is missing"));
-            }
-            self.flags = r.r_u32("main", "flags")?;
-            used.push("flags");
-        }
+    pub fn light_mut(&mut self) -> Option<&mut LightTool> {
         match &mut self.opts {
-            ToolOpts::Light(l) => {
-                if !r.line_exist("main", "sun_shadow_dir")
-                    || !r.line_exist("main", "lcontrol_last_idx")
-                    || !r.section_exist("lcontrols")
-                {
-                    return Err(bad("required metadata is missing"));
-                }
-                l.sun_shadow_dir = r.r_fvector2("main", "sun_shadow_dir")?;
-                l.lcontrol_last_idx = r.r_u32("main", "lcontrol_last_idx")?;
-                for (k, _) in r.lines("lcontrols") {
-                    let id = r.r_u32("lcontrols", &k)?;
-                    l.append(&k, Some(id));
-                }
-                used.extend(["sun_shadow_dir", "lcontrol_last_idx"]);
-            }
-            ToolOpts::Objects(o) => {
-                let s = "appendrandom";
-                for key in [
-                    "AppendRandomMinScale",
-                    "AppendRandomMaxScale",
-                    "AppendRandomMinRotation",
-                    "AppendRandomMaxRotation",
-                    "AppendRandomObjects_size",
-                ] {
-                    if !r.line_exist(s, key) {
-                        return Err(bad("required settings are missing"));
-                    }
-                }
-                o.min_scale = r.r_fvector3(s, "AppendRandomMinScale")?;
-                o.max_scale = r.r_fvector3(s, "AppendRandomMaxScale")?;
-                o.min_rotation = r.r_fvector3(s, "AppendRandomMinRotation")?;
-                o.max_rotation = r.r_fvector3(s, "AppendRandomMaxRotation")?;
-                let n = r.r_u32(s, "AppendRandomObjects_size")?;
-                o.objects.clear();
-                for i in 0..n {
-                    let key = format!("object_name_{i}");
-                    if !r.line_exist(s, &key) {
-                        return Err(bad(&format!("required setting '{key}' is missing")));
-                    }
-                    o.objects.push(r.r_string(s, &key)?.into());
-                }
-                self.flags &= !FL_APPEND_RANDOM;
-            }
-            ToolOpts::Plain => {}
+            ToolOpts::Light(l) => Some(l),
+            _ => None,
         }
-        Ok(used)
-    }
-
-    /// The sections of an LTX part the tool itself owns (besides `main` and the objects).
-    #[must_use]
-    pub fn own_sections(&self) -> &'static [&'static str] {
-        match self.opts {
-            ToolOpts::Light(_) => &["modif", "main", "guid", "lcontrols"],
-            ToolOpts::Objects(_) => &["modif", "main", "guid", "appendrandom"],
-            ToolOpts::Plain => &["modif", "main", "guid"],
-        }
-    }
-
-    /// The tool's chunks after the object list (`SaveStream`'s tail).
-    pub fn write_stream_tail(&self, w: &mut Writer) {
-        w.w_chunk(0x1001, &0u16.to_le_bytes());
-        match self.class {
-            ObjClass::Glow | ObjClass::Portal | ObjClass::Sector | ObjClass::SpawnPoint => {
-                w.chunk(0x1002, |w| w.w_u32(self.flags));
-            }
-            ObjClass::Light => {
-                w.chunk(0x1004, |w| w.w_u32(self.flags));
-                if let ToolOpts::Light(l) = &self.opts {
-                    w.chunk(0x1006, |w| {
-                        w.w_u8(0);
-                        w.w_f32(l.sun_shadow_dir[0]);
-                        w.w_f32(l.sun_shadow_dir[1]);
-                    });
-                    w.chunk(0x1003, |w| w.w_u32(l.lcontrol_last_idx));
-                    w.chunk(0x1002, |w| {
-                        for (n, id) in &l.lcontrols {
-                            w.w_stringz(n);
-                            w.w_u32(*id);
-                        }
-                    });
-                }
-            }
-            ObjClass::SceneObject => {
-                w.chunk(0x1003, |w| w.w_u32(self.flags));
-                if let ToolOpts::Objects(o) = &self.opts {
-                    w.chunk(0x1002, |w| {
-                        w.w_vec3(o.min_scale);
-                        w.w_vec3(o.max_scale);
-                        w.w_vec3(o.min_rotation);
-                        w.w_vec3(o.max_rotation);
-                        w.w_u32(u32::try_from(o.objects.len()).unwrap_or(u32::MAX));
-                        for n in &o.objects {
-                            w.w_stringz(n);
-                        }
-                    });
-                }
-            }
-            _ => {}
-        }
-        for (id, body) in &self.kept_chunks {
-            w.w_chunk(*id, body);
-        }
-    }
-
-    /// The tool's chunks of a stream (`LoadStream` without the objects); unknown chunks kept.
-    pub fn read_stream(&mut self, r: &Reader<'_>) -> Result<(), SceneError> {
-        let desc = self.class.desc();
-        if let Some(c) = r.open_chunk(0x1001)? {
-            let v = c.reader().r_u16()?;
-            if v != 0 {
-                return Err(SceneError::load(format!("{desc} tools: Unsupported version.")));
-            }
-        }
-        if let Some(c) = r.open_chunk(0x7777)? {
-            let mut q = c.reader();
-            self.modif_name = q.r_stringz()?.into();
-            self.modif_time = q.r_u32()?;
-        }
-        let mut known: Vec<u32> = vec![0x1001, 0x7777, 2, 3];
-        match self.class {
-            ObjClass::Glow | ObjClass::Portal | ObjClass::Sector | ObjClass::SpawnPoint => {
-                if let Some(c) = r.open_chunk(0x1002)? {
-                    self.flags = c.reader().r_u32()?;
-                }
-                known.push(0x1002);
-            }
-            ObjClass::Light => {
-                if let Some(c) = r.open_chunk(0x1004)? {
-                    self.flags = c.reader().r_u32()?;
-                }
-                if let ToolOpts::Light(l) = &mut self.opts {
-                    if let Some(c) = r.open_chunk(0x1006)? {
-                        let mut q = c.reader();
-                        q.r_u8()?;
-                        l.sun_shadow_dir = [q.r_f32()?, q.r_f32()?];
-                    }
-                    if let Some(c) = r.open_chunk(0x1003)? {
-                        l.lcontrol_last_idx = c.reader().r_u32()?;
-                    }
-                    if let Some(c) = r.open_chunk(0x1002)? {
-                        let mut q = c.reader();
-                        while !q.eof() {
-                            let name = q.r_stringz()?;
-                            let id = q.r_u32()?;
-                            l.append(&name, Some(id));
-                        }
-                    }
-                }
-                known.extend([0x1002, 0x1003, 0x1004, 0x1006, 0x1005, 0x1007]);
-            }
-            ObjClass::SceneObject => {
-                if let Some(c) = r.open_chunk(0x1003)? {
-                    self.flags = c.reader().r_u32()?;
-                }
-                if let ToolOpts::Objects(o) = &mut self.opts
-                    && let Some(c) = r.open_chunk(0x1002)?
-                {
-                    let mut q = c.reader();
-                    o.min_scale = q.r_vec3()?;
-                    o.max_scale = q.r_vec3()?;
-                    o.min_rotation = q.r_vec3()?;
-                    o.max_rotation = q.r_vec3()?;
-                    let n = q.r_u32()?;
-                    o.objects.clear();
-                    for _ in 0..n {
-                        o.objects.push(q.r_stringz()?.into());
-                    }
-                }
-                self.flags &= !FL_APPEND_RANDOM;
-                known.extend([0x1002, 0x1003]);
-            }
-            _ => {}
-        }
-        self.kept_chunks = r
-            .chunks()
-            .filter(|(id, _, _)| !known.contains(id))
-            .map(|(id, compressed, body)| {
-                (if compressed { id | gz_chunk::COMPRESSED } else { id }, Blob::from(body))
-            })
-            .collect();
-        Ok(())
     }
 }
 
-/// Every class's tool, the current target class and the snap list.
+/// What the viewport's clicks do: select (and move what is selected), place what the Place
+/// panel armed, paint one of the painted layers, edit the visibility cells. A mode owns the
+/// clicks while it is on; it never decides what may be selected.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneMode {
+    #[default]
+    Select,
+    Place,
+    /// Paint the AI map's nodes.
+    AiMap,
+    /// Paint the detail objects (foliage).
+    Details,
+    /// Lay wallmarks.
+    Wallmarks,
+    /// Draw sectors and portals by hand.
+    Zones,
+}
+
+impl SceneMode {
+    /// The painted layer the mode paints.
+    #[must_use]
+    pub fn layer(self) -> Option<ObjClass> {
+        match self {
+            Self::AiMap => Some(ObjClass::AiMap),
+            Self::Details => Some(ObjClass::DetailObjects),
+            Self::Wallmarks => Some(ObjClass::Wallmark),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Select => "select",
+            Self::Place => "place",
+            Self::AiMap => "ai_map",
+            Self::Details => "details",
+            Self::Wallmarks => "wallmarks",
+            Self::Zones => "zones",
+        }
+    }
+}
+
+/// Every kind's settings and the mode.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolSettings {
     pub parts: [ToolPart; CLASSES],
-    /// `LTools->CurrentClassID()`: the class the Details panel and the snap list are about.
-    pub target: ObjClass,
-    /// `m_ESO_SnapObjects`: scene objects other objects snap to. Saved with the scene.
-    pub snap: Vec<ObjId>,
-    /// The Tools panel's Snap Objects switches: use the list, pick into it.
-    pub snap_use: bool,
-    pub snap_pick: bool,
-    /// The switches of the sector, way, shape and fog volume tools' panels (not saved).
+    /// What the viewport's clicks do (view state, not saved).
+    pub mode: SceneMode,
+    /// The kind of thing a click of Place mode places (and whose settings the Place panel
+    /// shows). Nothing else reads it: selection, deletion and the gizmo take any kind.
+    pub placing: ObjClass,
+    /// The switches of the sector, way, shape and fog volume panels (not saved).
     pub obj: crate::objtools::ObjToolState,
     /// The switches of the AI map panel and the detail slots' selection (not saved).
     pub bulk: crate::bulk::BulkToolState,
-    /// The compiler's error list the viewport draws (not saved; Build > Import Error List).
+    /// The compiler's error list the viewport draws (not saved).
     pub debug: Arc<crate::debug::DebugDraw>,
 }
 
@@ -791,10 +294,8 @@ impl Default for ToolSettings {
     fn default() -> Self {
         Self {
             parts: ObjClass::ALL.map(ToolPart::new),
-            target: ObjClass::SceneObject,
-            snap: Vec::new(),
-            snap_use: false,
-            snap_pick: false,
+            mode: SceneMode::default(),
+            placing: ObjClass::SceneObject,
             obj: crate::objtools::ObjToolState::default(),
             bulk: crate::bulk::BulkToolState::default(),
             debug: Arc::new(crate::debug::DebugDraw::default()),
@@ -803,6 +304,16 @@ impl Default for ToolSettings {
 }
 
 impl ToolSettings {
+    /// The kind the mode's clicks work with: a painting mode's layer, the cells in Zones, else
+    /// the kind Place places.
+    #[must_use]
+    pub fn mode_kind(&self) -> ObjClass {
+        self.mode.layer().unwrap_or(match self.mode {
+            SceneMode::Zones => ObjClass::Sector,
+            _ => self.placing,
+        })
+    }
+
     #[must_use]
     pub fn part(&self, class: ObjClass) -> &ToolPart {
         &self.parts[class.index()]
@@ -816,17 +327,17 @@ impl ToolSettings {
 /// Nodes per tile of the AI map: an edit replaces one tile.
 pub const AI_TILE: usize = 4096;
 
-/// The AI Map tool's data: the nodes as the tool works on them, and packed as the files hold
+/// The AI map's data: the nodes as the editor works on them, and packed as the layer holds
 /// them, both in tiles of [`AI_TILE`] that an edit shares where it left them alone.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AiMapPart {
-    /// The chunk as read; written back while nothing changed.
+    /// The data as read; written back while nothing changed.
     pub raw: Option<Blob>,
     /// Everything but the nodes.
     pub header: SceneAiMap,
-    /// The nodes packed over `header.bbox` (`SaveStream`'s arithmetic).
+    /// The nodes packed over `header.bbox`.
     pub tiles: Vec<Arc<[SceneAiNode]>>,
-    /// The tool's nodes: exact positions and planes, links by index.
+    /// The nodes: exact positions and planes, links by index.
     pub nodes: Vec<Arc<[AiMapNode]>>,
 }
 
@@ -879,7 +390,7 @@ impl AiMapPart {
         self.nodes.iter().map(|t| t.len()).sum()
     }
 
-    /// The tool's nodes in order.
+    /// The nodes in order.
     #[must_use]
     pub fn all_nodes(&self) -> Vec<AiMapNode> {
         let mut out = Vec::with_capacity(self.node_count());
@@ -889,7 +400,7 @@ impl AiMapPart {
         out
     }
 
-    /// The tool's chunk: the bytes as read, or the model written again.
+    /// The layer's data: the bytes as read, or the model written again.
     #[must_use]
     pub fn write(&self) -> Vec<u8> {
         if let Some(raw) = &self.raw {
@@ -901,7 +412,7 @@ impl AiMapPart {
     }
 }
 
-/// The Detail Objects tool's data.
+/// The detail objects' data.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DetailsPart {
     pub raw: Option<Blob>,
@@ -920,8 +431,8 @@ impl DetailsPart {
     }
 }
 
-/// The Wallmark tool's data: the chunk as written, the marks in it, and the model the tool edits
-/// (`None` for a chunk this crate cannot read: kept as it is, never edited).
+/// The wallmarks' data: the bytes as written, the marks in them, and the model the editor edits
+/// (`None` for data this crate cannot read: kept as it is, never edited).
 #[derive(Clone, Debug, PartialEq)]
 pub struct WallmarkPart {
     pub raw: Blob,
@@ -936,13 +447,13 @@ impl WallmarkPart {
         Ok(Self { raw: Blob::from(bytes), count: model.count(), model: Some(Arc::new(model)) })
     }
 
-    /// The part of an edited model: its chunk written again.
+    /// The part of an edited model: its data written again.
     #[must_use]
     pub fn of_model(model: crate::bulk::wallmark::Wallmarks) -> Self {
         Self { raw: Blob::from(model.write()), count: model.count(), model: Some(Arc::new(model)) }
     }
 
-    /// What an empty tool writes (`SaveStream` with no marks and the defaults of `Clear`).
+    /// What empty wallmarks write.
     #[must_use]
     pub fn empty_stream() -> Vec<u8> {
         crate::bulk::wallmark::Wallmarks::default().write()
@@ -958,7 +469,7 @@ pub struct BulkData {
 }
 
 impl BulkData {
-    /// The chunk a bulk tool writes; a tool without data writes its empty state.
+    /// A layer's data; a layer without data writes its empty state.
     #[must_use]
     pub fn stream_of(&self, class: ObjClass) -> Vec<u8> {
         match class {
@@ -975,12 +486,11 @@ impl BulkData {
         }
     }
 
-    /// `IsNeedSave` of a bulk tool.
+    /// Whether a layer holds anything to keep: nodes or a snap list; slots, objects, a base
+    /// texture or a snap list; any wallmark.
     #[must_use]
     pub fn needs_save(&self, class: ObjClass) -> bool {
         match class {
-            // `IsNeedSave`: nodes or a snap list; slots, objects, a base texture or a snap list;
-            // any slot of marks
             ObjClass::AiMap => {
                 self.ai_map.as_ref().is_some_and(|a| a.node_count() > 0 || !a.header.snap_objects.is_empty())
             }
@@ -999,7 +509,7 @@ impl BulkData {
         }
     }
 
-    /// Takes a bulk tool's chunk; a chunk that does not decode is kept as it is.
+    /// Takes a layer's data; data that does not decode is kept as it is.
     pub fn set_stream(&mut self, class: ObjClass, bytes: &[u8]) -> Option<String> {
         match class {
             ObjClass::AiMap => match AiMapPart::read(bytes) {
@@ -1029,47 +539,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn level_options_round_trip_both_ways() {
-        let lo =
-            LevelOptions { level_path: "l01_escape".into(), bop: "a b".into(), ..LevelOptions::default() };
-        let mut w = IniWriter::new();
-        lo.write_ltx(&mut w);
-        let r = IniReader::parse(&w.save(), "t").unwrap();
-        assert_eq!(LevelOptions::read_ltx(&r).unwrap(), lo);
-
-        let mut b = Writer::new();
-        lo.write_bin(&mut b);
-        let bytes = b.into_bytes();
-        assert_eq!(LevelOptions::read_bin(&Reader::new(&bytes)).unwrap(), lo);
-    }
-
-    #[test]
-    fn tool_settings_round_trip() {
-        let mut t = ToolPart::new(ObjClass::Light);
-        t.flags = 1 << 31;
-        if let ToolOpts::Light(l) = &mut t.opts {
-            l.append("my_control", None);
-        }
-        let mut w = IniWriter::new();
-        t.write_ltx(&mut w);
-        let r = IniReader::parse(&w.save(), "t").unwrap();
-        let mut back = ToolPart::new(ObjClass::Light);
-        back.read_ltx(&r).unwrap();
-        assert_eq!(back.flags, t.flags);
-        assert_eq!(back.light().unwrap().name_of(3), Some("my_control"));
-
-        let mut s = Writer::new();
-        t.write_stream_tail(&mut s);
-        let bytes = s.into_bytes();
-        let mut back = ToolPart::new(ObjClass::Light);
-        back.read_stream(&Reader::new(&bytes)).unwrap();
-        assert_eq!(back.light(), t.light());
-        assert!(back.kept_chunks.is_empty());
-    }
-
-    #[test]
     fn empty_wallmarks_read_back() {
         let w = WallmarkPart::read(&WallmarkPart::empty_stream()).unwrap();
         assert_eq!(w.count, 0);
+    }
+
+    #[test]
+    fn a_light_control_name_is_kept_once() {
+        let mut l = LightTool::default();
+        l.append("my_control", None);
+        l.append("my_control", None);
+        assert_eq!(l.name_of(3), Some("my_control"));
+        assert_eq!(l.lcontrols.len(), 4);
     }
 }

@@ -299,14 +299,27 @@ impl PdaService {
         manifest.snapshot().manifest().map(|m| m.pda_layout.clone()).unwrap_or_default()
     }
 
-    /// Sets (`rel`) or clears (`""`) `[pda] layout` and saves `mod.ltx` at once (`EditorPda::Use`).
+    /// Sets (`rel`) or clears (`""`) `[pda] layout` and saves `mod.ltx` at once.
     pub async fn use_layout(&self, editor: &Editor, rel: &str, origin: Origin) -> Result<(), String> {
+        let (session, _) = Project::of(editor).map_err(|_| "no active project".to_owned())?;
+        let manifest = ManifestService::of_session(editor, &session).await.map_err(|e| e.message)?;
+        if !manifest.snapshot().exists() {
+            return Err("the project has no mod.ltx: it is no module".to_owned());
+        }
+        let edit = self.layout_edit(editor, rel).await?;
+        manifest
+            .edit(vec![edit], origin)
+            .await
+            .map_err(|e| if e.code == "io" { "mod.ltx cannot be written".to_owned() } else { e.message })?;
+        Ok(())
+    }
+
+    /// The edit of `[pda] layout` that names `rel` (`""` clears it), after the checks: a
+    /// `.pdaasset` of the project that exists and that the build ships.
+    pub async fn layout_edit(&self, editor: &Editor, rel: &str) -> Result<Edit, String> {
         let (session, project) = Project::of(editor).map_err(|_| "no active project".to_owned())?;
         let manifest = ManifestService::of_session(editor, &session).await.map_err(|e| e.message)?;
-        let _ = manifest.sync().await;
-        if !manifest.snapshot().exists() {
-            return Err("mod.ltx not found in the project".to_owned());
-        }
+        let rel = rel.trim();
         let mut value = String::new();
         if !rel.is_empty() {
             let abs = gz_project::ops::resolve_in_project(project.root(), rel)?;
@@ -325,12 +338,7 @@ impl PdaService {
             }
         }
         // one spelling in mod.ltx, whatever separators the caller used
-        let value = value.replace('/', "\\");
-        manifest
-            .edit(vec![Edit::optional("pda", "layout", &value)], origin)
-            .await
-            .map_err(|e| if e.code == "io" { "mod.ltx cannot be written".to_owned() } else { e.message })?;
-        Ok(())
+        Ok(Edit::optional("pda", "layout", &value.replace('/', "\\")))
     }
 }
 
@@ -427,6 +435,13 @@ impl BuildCheck for PdaCheck {
 /// used layout's file going away clearing `[pda] layout`.
 pub fn install(editor: &Editor) {
     BuildChecks::of(editor).add(Arc::new(PdaCheck));
+    // `mod.set set={"pda": {"layout": ...}}`
+    gz_mod::ManifestArgs::of(editor).provide("pda.layout", |cx: gz_mod::ArgCx| {
+        Box::pin(async move {
+            let service = PdaService::of(&cx.editor).map_err(|e| e.message)?;
+            service.layout_edit(&cx.editor, &cx.value).await.map(|e| vec![e])
+        })
+    });
     AssetTemplates::of(editor).provide(TemplateKind::Pda, |cx| {
         let id = if cx.n <= 1 { "new_pda".to_owned() } else { format!("new_pda{}", cx.n) };
         Ok(template(&id, "New PDA").into_bytes())

@@ -194,6 +194,13 @@ enum Act {
     Page(String),
 }
 
+/// A sentence in a tone's colour, wrapped at the card's width (prose wraps at 36 em: a card of
+/// an L dialog is wider, and the rest of its line would stay empty).
+fn wide_status(ui: &mut Ui, tone: Tone, text_: &str) -> egui::Response {
+    let color = palette(ui.ctx()).tone(tone);
+    ui.add(egui::Label::new(egui::RichText::new(text_).font(Font::Body.id()).color(color)).wrap())
+}
+
 pub(crate) struct SubmitUi {
     open: bool,
     was_open: bool,
@@ -482,7 +489,7 @@ impl SubmitUi {
                         text::label(ui, &id, Font::Body, p.text_muted, Clip::End);
                     }
                 });
-                text::status(
+                wide_status(
                     ui,
                     Tone::Muted,
                     "Lists the module in the Mod Browser of Dead Air: Refined. The catalog judges every submission by itself and lists the ones that pass its checks.",
@@ -503,12 +510,14 @@ impl SubmitUi {
             |f| {
                 f.status(&status, Tone::Warning);
                 // the stage on the left, in what the buttons leave; the job's Stop is the first button, named after the job
+                // while a job runs: its stage and its one Stop; the title's cross hides the window
                 if running {
                     f.busy(&stage);
                     stop = f.button_set(stop_name, &STOP_LABELS, Kind::Secondary, false, !stopping, "Stopping at the next step.");
+                } else {
+                    submit = f.button_set(submit_name, &SUBMIT_LABELS, Kind::Primary, false, ready, why);
+                    close = f.button("Close", Kind::Secondary, false, true, "");
                 }
-                submit = f.button_set(submit_name, &SUBMIT_LABELS, Kind::Primary, false, ready, why);
-                close = f.button_set(if running { "Hide" } else { "Close" }, &["Close", "Hide"], Kind::Secondary, false, true, "");
             },
         );
         if stop {
@@ -561,7 +570,7 @@ impl SubmitUi {
     ) {
         let Some(key) = key else {
             card(ui, "card_key", "Author Key", Tone::Muted, false, |ui| {
-                text::status(ui, Tone::Muted, "Reading the author key...");
+                wide_status(ui, Tone::Muted, "Reading the author key...");
             });
             return;
         };
@@ -577,14 +586,14 @@ impl SubmitUi {
             let badge = readable.then_some((if key.locked { "Locked" } else { "Ready" }, tone));
             local_card_title(ui, "Author Key", tone, false, badge, None);
             if !key.exists {
-                text::status(
+                wide_status(
                     ui,
                     Tone::Muted,
                     "No author key yet. It signs every release of the module, and the Mod Browser lists signed releases only. It is a file you keep - never part of the project.",
                 );
                 let differ = *self.password != *self.repeat;
                 let target = self.key_target.clone();
-                PropertyGrid::new("catalog_key").show(ui, |g| {
+                PropertyGrid::new("catalog_key").label_frac(gz_ui::units::em(8.0) / ui.available_width().max(1.0)).show(ui, |g| {
                     g.row("Key File", "Where Create Key writes the new key file. It never replaces a file that is there.", PropFlags::NONE, 0, |ui| {
                         read_only(ui, &target, Clip::Start);
                     });
@@ -623,12 +632,18 @@ impl SubmitUi {
                     }
                 });
             } else if !key.error.is_empty() {
-                text::status(ui, Tone::Error, &format!("The key file does not read: {}.", key.error));
-                PropertyGrid::new("catalog_key").show(ui, |g| {
-                    g.row("Key File", "The key file the editor remembers.", PropFlags::READ_ONLY, 0, |ui| {
-                        read_only(ui, &key.path, Clip::Start)
+                wide_status(ui, Tone::Error, &format!("The key file does not read: {}.", key.error));
+                PropertyGrid::new("catalog_key")
+                    .label_frac(gz_ui::units::em(8.0) / ui.available_width().max(1.0))
+                    .show(ui, |g| {
+                        g.row(
+                            "Key File",
+                            "The key file the editor remembers.",
+                            PropFlags::READ_ONLY,
+                            0,
+                            |ui| read_only(ui, &key.path, Clip::Start),
+                        );
                     });
-                });
                 if Button::new("Use Another Key File...")
                     .enabled(!picking, "A file dialog is open.")
                     .show(ui)
@@ -644,7 +659,7 @@ impl SubmitUi {
                 });
             }
             if !key_error.is_empty() {
-                text::status(ui, Tone::Error, key_error);
+                wide_status(ui, Tone::Error, key_error);
             }
         });
     }
@@ -657,22 +672,24 @@ impl SubmitUi {
         picking: bool,
         acts: &mut Vec<Act>,
     ) {
-        PropertyGrid::new("catalog_key").show(ui, |g| {
-            g.row("Key", "The key's id: what a signed release names.", PropFlags::READ_ONLY, 0, |ui| {
-                read_only(ui, &key.key_id, Clip::End)
-            });
-            g.row("Key File", "The key file this computer signs with.", PropFlags::READ_ONLY, 0, |ui| {
-                read_only(ui, &key.path, Clip::Start)
-            });
-            if key.locked {
-                // the author key row Package Release and Publish Release draw: the password, once per session
-                let help = "The key file is protected: its password opens it until the editor closes.";
-                g.row("Password", help, PropFlags::REQUIRED, 0, |ui| {
-                    self.key_line.draw(ui, editor, "submit")
+        PropertyGrid::new("catalog_key")
+            .label_frac(gz_ui::units::em(8.0) / ui.available_width().max(1.0))
+            .show(ui, |g| {
+                g.row("Key", "The key's id: what a signed release names.", PropFlags::READ_ONLY, 0, |ui| {
+                    read_only(ui, &key.key_id, Clip::End)
                 });
-            }
-        });
-        text::status(
+                g.row("Key File", "The key file this computer signs with.", PropFlags::READ_ONLY, 0, |ui| {
+                    read_only(ui, &key.path, Clip::Start)
+                });
+                if key.locked {
+                    // the author key row Package Release and Publish Release draw: the password, once per session
+                    let help = "The key file is protected: its password opens it until the editor closes.";
+                    g.row("Password", help, PropFlags::REQUIRED, 0, |ui| {
+                        self.key_line.draw(ui, editor, "submit")
+                    });
+                }
+            });
+        wide_status(
             ui,
             if self.key_created { Tone::Warning } else { Tone::Muted },
             "Keep a copy of this file somewhere safe - a USB stick, a password manager. Without it no update of this module can be signed.",
@@ -723,14 +740,14 @@ impl SubmitUi {
             local_card_title(ui, "VirusTotal (required)", tone, !settled, None, None);
             match vt_known {
                 None => {
-                    text::status(
+                    wide_status(
                         ui,
                         Tone::Required,
                         "Required: every package of the release needs a VirusTotal report before the module is listed.",
                     );
                 }
                 Some(false) => {
-                    text::status(
+                    wide_status(
                         ui,
                         Tone::Required,
                         "Required: the catalog lists a package only when VirusTotal knows it, and every release is scanned with your own VirusTotal key. A free account at virustotal.com has one.",
@@ -747,7 +764,7 @@ impl SubmitUi {
                     ) {
                         acts.push(Act::SaveVtKey);
                     }
-                    text::status(
+                    wide_status(
                         ui,
                         Tone::Muted,
                         "Kept in the Windows Credential Manager - never in the project.",
@@ -757,26 +774,26 @@ impl SubmitUi {
                     // a check looks the packages up: until it has, "not scanned" would be a guess
                     let looking = running && view.job == Job::Check && packages.is_empty();
                     if scanning {
-                        text::status(ui, Tone::Muted, "Scanning...");
+                        wide_status(ui, Tone::Muted, "Scanning...");
                     } else if looking {
-                        text::status(ui, Tone::Muted, "Looking the packages up on VirusTotal...");
+                        wide_status(ui, Tone::Muted, "Looking the packages up on VirusTotal...");
                     }
                     // the requirement stays in sight until every package has a report
                     if packages.is_empty() && !looking {
-                        text::status(
+                        wide_status(
                             ui,
                             Tone::Required,
                             "Not scanned yet. Every package needs a VirusTotal report before the module is listed: Scan runs it now, and Submit scans first.",
                         );
                     } else if !packages.is_empty() && !settled {
-                        text::status(
+                        wide_status(
                             ui,
                             Tone::Required,
                             "Not every package has a VirusTotal report yet: the module is not submitted without one.",
                         );
                     }
                     for r in packages {
-                        text::status(
+                        wide_status(
                             ui,
                             level_tone(vt_level(&r.state, view.vt_scanned)),
                             &format!("{}.", describe(r)),
@@ -803,7 +820,7 @@ impl SubmitUi {
                 }
             }
             if !vt_error.is_empty() {
-                text::status(ui, Tone::Error, vt_error);
+                wide_status(ui, Tone::Error, vt_error);
             }
         });
     }
@@ -840,10 +857,10 @@ impl SubmitUi {
                     ui.add(egui::Label::new(egui::RichText::new(&headline).font(Font::Strong.id()).color(p.text)).wrap());
                 });
                 ui.add_space(4.0);
-                text::status(ui, Tone::Warning, "The Mod Browser stops offering it, and players who installed it there get no more updates.");
-                text::status(ui, Tone::Muted, "Installed copies keep working.");
-                text::status(ui, Tone::Muted, "The id stays bound to your author key: submitting the module again lists it again.");
-                text::status(ui, Tone::Muted, &where_);
+                wide_status(ui, Tone::Warning, "The Mod Browser stops offering it, and players who installed it there get no more updates.");
+                wide_status(ui, Tone::Muted, "Installed copies keep working.");
+                wide_status(ui, Tone::Muted, "The id stays bound to your author key: submitting the module again lists it again.");
+                wide_status(ui, Tone::Muted, &where_);
             },
             |f| {
                 go = f.button("Withdraw", Kind::Danger, false, can, if signed_in { BUSY_WHY } else { SIGN_IN_WHY });
@@ -975,25 +992,25 @@ fn requirements_card(ui: &mut Ui, view: &View, start_error: &str, acts: &mut Vec
             acts.push(Act::Check);
         }
         if checking {
-            text::status(ui, Tone::Muted, "Checking...");
+            wide_status(ui, Tone::Muted, "Checking...");
         } else if !view.check.done {
-            text::status(ui, Tone::Muted, "Not checked yet.");
+            wide_status(ui, Tone::Muted, "Not checked yet.");
         }
         for f in &open {
-            text::status(ui, level_tone(f.level), &f.text);
+            wide_status(ui, level_tone(f.level), &f.text);
         }
         if view.check.done && open.is_empty() && !checking {
-            text::status(ui, Tone::Success, "Every requirement is met.");
+            wide_status(ui, Tone::Success, "Every requirement is met.");
         }
         if !met.is_empty() {
             local_fold(ui, "catalog_met", &format!("Met ({})", met.len()), false, |ui| {
                 for f in &met {
-                    text::status(ui, Tone::Success, &f.text);
+                    wide_status(ui, Tone::Success, &f.text);
                 }
             });
         }
         if !start_error.is_empty() {
-            text::status(ui, Tone::Error, start_error);
+            wide_status(ui, Tone::Error, start_error);
         }
     });
 }
@@ -1005,18 +1022,18 @@ fn submission_card(ui: &mut Ui, view: &View, signed_in: bool, catalog_repo: &str
         // "not submitted" only once GitHub said so: every job but the scan looks the submission up
         if !view.submission_read {
             if signed_in && view.state == JobState::Running && view.job != Job::Vt {
-                text::status(ui, Tone::Muted, "Looking up the submission...");
+                wide_status(ui, Tone::Muted, "Looking up the submission...");
             } else if signed_in && !view.submission_error.is_empty() {
-                text::status(
+                wide_status(
                     ui,
                     Tone::Warning,
                     &format!("The submission could not be looked up: {}.", reason(&view.submission_error)),
                 );
             } else if signed_in {
-                text::status(ui, Tone::Muted, "Not looked up yet: Check Again reads where it stands.");
+                wide_status(ui, Tone::Muted, "Not looked up yet: Check Again reads where it stands.");
             }
         } else if submission.number == 0 {
-            text::status(ui, Tone::Muted, "Not submitted yet.");
+            wide_status(ui, Tone::Muted, "Not submitted yet.");
         } else {
             for (tone, line) in issue_lines(
                 submission,
@@ -1024,10 +1041,10 @@ fn submission_card(ui: &mut Ui, view: &View, signed_in: bool, catalog_repo: &str
                 "was accepted: the module is in the Mod Browser.",
                 "was accepted: the module appears in the Mod Browser within minutes.",
             ) {
-                text::status(ui, tone, &line);
+                wide_status(ui, tone, &line);
             }
             if !submission.note.is_empty() {
-                text::status(ui, Tone::Muted, &submission.note);
+                wide_status(ui, Tone::Muted, &submission.note);
             }
             if Button::new("Open Submission").show(ui).clicked() {
                 acts.push(Act::Page(submission.url.clone()));
@@ -1035,7 +1052,7 @@ fn submission_card(ui: &mut Ui, view: &View, signed_in: bool, catalog_repo: &str
         }
         let from = if view.login.is_empty() { String::new() } else { format!(" from {}", view.login) };
         let where_ = format!("Submitting opens a public issue at github.com/{catalog_repo}{from}.");
-        text::status(
+        wide_status(
             ui,
             Tone::Muted,
             if signed_in {
@@ -1045,7 +1062,7 @@ fn submission_card(ui: &mut Ui, view: &View, signed_in: bool, catalog_repo: &str
             },
         );
         if view.state == JobState::Failed && !view.error.is_empty() && view.job != Job::Withdraw {
-            text::status(ui, Tone::Error, &view.error);
+            wide_status(ui, Tone::Error, &view.error);
         }
     });
 }
@@ -1064,7 +1081,7 @@ fn withdrawal_card(ui: &mut Ui, view: &View, signed_in: bool, acts: &mut Vec<Act
     let running = view.state == JobState::Running;
     card(ui, "card_withdrawal", "Withdrawal", tone, failed, |ui| {
         if running && view.job == Job::Withdraw {
-            text::status(ui, Tone::Muted, "Withdrawing...");
+            wide_status(ui, Tone::Muted, "Withdrawing...");
         }
         if w.number != 0 {
             for (tone, line) in issue_lines(
@@ -1073,23 +1090,23 @@ fn withdrawal_card(ui: &mut Ui, view: &View, signed_in: bool, acts: &mut Vec<Act
                 "was accepted: the module is withdrawn from the Mod Browser.",
                 "was accepted: the module leaves the Mod Browser within minutes.",
             ) {
-                text::status(ui, tone, &line);
+                wide_status(ui, tone, &line);
             }
         }
         if !w.note.is_empty() {
-            text::status(ui, Tone::Muted, &w.note);
+            wide_status(ui, Tone::Muted, &w.note);
         }
         if withdrawn && w.number != 0 && w.verdict == "accepted" {
-            text::status(ui, Tone::Muted, "Submitting the module again lists it again.");
+            wide_status(ui, Tone::Muted, "Submitting the module again lists it again.");
         } else if withdrawn {
-            text::status(
+            wide_status(
                 ui,
                 Tone::Muted,
                 "Not in the Mod Browser: its author withdrew it. Submitting lists it again.",
             );
         }
         if listed {
-            text::status(
+            wide_status(
                 ui,
                 Tone::Muted,
                 "Withdrawing takes the module out of the Mod Browser: it is no longer offered, and players who installed it there get no more updates. Installed copies keep working.",
@@ -1099,7 +1116,7 @@ fn withdrawal_card(ui: &mut Ui, view: &View, signed_in: bool, acts: &mut Vec<Act
         let owner = owner(&view.listing.github);
         let other_account = listed && !view.login.is_empty() && !owner.eq_ignore_ascii_case(&view.login);
         if other_account {
-            text::status(
+            wide_status(
                 ui,
                 Tone::Warning,
                 &format!("Only {owner}, the owner of {}, can withdraw it.", view.listing.github),
@@ -1126,7 +1143,7 @@ fn withdrawal_card(ui: &mut Ui, view: &View, signed_in: bool, acts: &mut Vec<Act
             }
         });
         if failed {
-            text::status(ui, Tone::Error, &view.error);
+            wide_status(ui, Tone::Error, &view.error);
         }
     });
 }

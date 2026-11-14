@@ -1,17 +1,19 @@
-//! What the canvas draws, built once per graph revision on the CPU pool (`NqCanvas::BuildGeometry`,
-//! `BuildLinks`, `RouteBack`, `Extent`): every node's box from `gz_nq::layout` (the ONE source of
-//! a node's rectangle), its texts, its pins; every link as a bezier or, for an edge that climbs
-//! back up, a route around the nodes through a free channel; a uniform grid index so a frame
-//! touches only the cells the view covers; the extents Frame All fits; the edges sorted for the
-//! `beyond` counts; the minimap's mesh. Units are world pt (pt at zoom 1).
+//! What the canvas draws, built once per graph revision (and wire style) on the CPU pool: every
+//! node's box from `gz_nq::layout` (the ONE source of a node's rectangle), its texts in words,
+//! its pins with what they mean; every wire as the polyline `gz_nq::wires` builds in its style -
+//! the same one the hit tests and `graph.get` read; the comment frames; a uniform grid index so a
+//! frame touches only the cells the view covers; the extent Frame All fits; the edges sorted for
+//! the `beyond` counts; the minimap's mesh. Units are world pt (pt at zoom 1).
 
 use std::sync::Arc;
 
 use egui::epaint::Mesh;
 use egui::{Color32, Pos2, Rect, Vec2, pos2};
 use gz_nq::asset::Graph;
-use gz_nq::layout::{self, Line, NodeBox};
-use gz_nq::{Catalog, text};
+use gz_nq::canvas::{Flow, WireSettings};
+use gz_nq::layout::{self, BoxCx, Line, NodeBox};
+use gz_nq::text::Names;
+use gz_nq::{Catalog, text, wires};
 use gz_ui::{Icon, Palette};
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
@@ -22,20 +24,30 @@ use crate::look::{self, Family};
 pub const CELL: f32 = 512.0;
 /// A link spanning more cells than this is kept on a list every query looks at.
 const MAX_LINK_CELLS: i64 = 256;
-pub const LINK_TANGENT: f32 = 48.0;
-/// An edge that goes back up: the straight run out of the pin and into the input.
-pub const BACK_STUB: f32 = 24.0;
-/// How far its channel keeps from a node.
-const BACK_CLEAR: f32 = 24.0;
-/// Between two edges that share a channel.
-const BACK_LANE: f32 = 12.0;
-/// The radius of its corners.
-const BACK_CORNER: f32 = 12.0;
 /// World pt Frame All keeps around what it shows.
 pub const FRAME_MARGIN: f32 = 32.0;
 /// The minimap's box, pt.
 pub const MINIMAP_W: f32 = 180.0;
 pub const MINIMAP_H: f32 = 120.0;
+
+/// What a pin's wire is: the flow going on, a failure, or one of the other ways out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PinRole {
+    Default,
+    Failure,
+    /// The n-th pin that is neither.
+    Other(usize),
+}
+
+/// One output pin of a node.
+#[derive(Clone, Debug)]
+pub struct PinInfo {
+    pub name: String,
+    pub role: PinRole,
+    /// What the catalog says it means.
+    pub desc: String,
+    pub connected: bool,
+}
 
 /// One action row of a node: what it does, in words.
 #[derive(Clone, Debug)]
@@ -65,18 +77,24 @@ pub struct SceneNode {
     pub family: Family,
     /// The `once` badge.
     pub once: bool,
+    pub collapsed: bool,
+    pub disabled: bool,
+    /// The comment's first line.
+    pub comment: String,
     pub lines: Vec<Line>,
     pub actions: Vec<ActionRow>,
     /// The first action the node has no row for: what `+N more` opens.
     pub more_target: Option<(bool, usize)>,
     /// Output pins in draw order; `pins[..declared]` come from the catalog.
-    pub pins: Vec<String>,
+    pub pins: Vec<PinInfo>,
     pub declared: usize,
     pub reachable: bool,
     /// The first line, for the tooltip of a node too small to read.
     pub summary: String,
-    /// It takes an input edge (Q's `CanTakeInput`).
+    /// It takes an input edge.
     pub takes_input: bool,
+    /// What the kind does, for the header's tooltip.
+    pub desc: String,
 }
 
 impl SceneNode {
@@ -85,62 +103,45 @@ impl SceneNode {
         [self.pos[0], self.pos[1], self.pos[0] + self.size[0], self.pos[1] + self.size[1]]
     }
 
-    #[must_use]
-    pub fn input_pin(&self) -> [f32; 2] {
-        layout::input_pin(self.pos, self.size)
-    }
-
-    #[must_use]
-    pub fn output_pin(&self, pin: usize) -> [f32; 2] {
-        layout::output_pin(self.pos, self.size, pin, self.pins.len())
-    }
-
-    /// The action at a row, top to bottom (`ActionAtRow`).
+    /// The action at a row, top to bottom.
     #[must_use]
     pub fn action_at(&self, row: usize) -> Option<&ActionRow> {
         self.actions.get(row)
     }
+
+    /// The index of a pin by its name.
+    #[must_use]
+    pub fn pin_index(&self, name: &str) -> Option<usize> {
+        self.pins.iter().position(|p| p.name == name)
+    }
 }
 
-/// One link, world pt.
+/// One wire, world pt.
 #[derive(Clone, Debug)]
 pub struct SceneLink {
     pub from: u32,
     pub to: u32,
     pub pin: SmolStr,
-    pub p0: [f32; 2],
-    pub p3: [f32; 2],
-    /// The route of an edge that climbs back up; empty for a bezier.
-    pub path: Vec<[f32; 2]>,
+    pub pin_index: usize,
+    pub role: PinRole,
+    /// The polyline the wire is drawn and hit along.
+    pub points: Vec<[f32; 2]>,
+    pub back: bool,
+    /// Its waypoints (reroutes), as the file keeps them.
+    pub via: Vec<[f32; 2]>,
+    /// The pin's name on the wire's first stretch, when it is not the default way on.
+    pub label: Option<String>,
     pub bmin: [f32; 2],
     pub bmax: [f32; 2],
 }
 
-impl SceneLink {
-    /// The bezier's inner control points (world).
-    #[must_use]
-    pub fn controls(p0: [f32; 2], p3: [f32; 2]) -> ([f32; 2], [f32; 2]) {
-        let d = LINK_TANGENT.max((p3[1] - p0[1]).abs() * 0.4);
-        ([p0[0], p0[1] + d], [p3[0], p3[1] - d])
-    }
-
-    /// Whether an edge between these pins has to be routed back up.
-    #[must_use]
-    pub fn goes_back(p0: [f32; 2], p3: [f32; 2]) -> bool {
-        p3[1] - p0[1] < BACK_STUB * 2.0
-    }
-}
-
-/// The vertical run of a routed edge: the next one keeps clear of it.
-#[derive(Clone, Copy, Debug)]
-pub struct Lane {
-    x: f32,
-    top: f32,
-    bottom: f32,
-    from: [f32; 2],
-    to: [f32; 2],
-    side_from: f32,
-    side_to: f32,
+/// A comment frame as drawn.
+#[derive(Clone, Debug)]
+pub struct SceneFrame {
+    pub index: usize,
+    pub title: String,
+    pub tone: u8,
+    pub rect: [f32; 4],
 }
 
 /// The minimap's static picture: nodes and edges fitted into the 180 x 120 box, in box-local pt.
@@ -187,19 +188,19 @@ pub struct Scene {
     pub edit: u64,
     pub generation: u32,
     pub behaviour: bool,
+    pub flow: Flow,
+    pub wires: WireSettings,
     pub nodes: Vec<SceneNode>,
     pub links: Vec<SceneLink>,
+    pub frames: Vec<SceneFrame>,
     pub index: FxHashMap<SmolStr, u32>,
     node_cells: FxHashMap<(i32, i32), Vec<u32>>,
     link_cells: FxHashMap<(i32, i32), Vec<u32>>,
     big_links: Vec<u32>,
     /// The node boxes.
     pub bounds: Option<[f32; 4]>,
-    /// The node boxes and the routed edges: what Frame All fits.
+    /// The node boxes, the routed wires and the frames: what Frame All fits.
     pub extent: Option<[f32; 4]>,
-    /// The start (the trigger, every root without one) and two levels under it, with their edges.
-    pub start_extent: Option<[f32; 4]>,
-    pub anchor: Option<u32>,
     tops: Edges,
     bottoms: Edges,
     lefts: Edges,
@@ -223,195 +224,16 @@ fn grow(b: &mut Option<[f32; 4]>, p: [f32; 2]) {
     }
 }
 
-fn dist2(a: [f32; 2], b: [f32; 2]) -> f32 {
-    (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1])
-}
-
-/// The x of a free vertical channel: outside every span, as short a detour for a run from `x0`
-/// to `x3` as there is; between the two every x costs the same, so the middle of what is free
-/// there. A tie goes to `x0`'s side (`PickChannel`).
-#[must_use]
-pub fn pick_channel(spans: &mut [(f32, f32)], x0: f32, x3: f32) -> f32 {
-    spans.sort_by(|l, r| l.0.total_cmp(&r.0));
-    let (lo, hi) = (x0.min(x3), x0.max(x3));
-    let mut best = x0;
-    let mut best_cost = f32::MAX;
-    let mut consider = |from: f32, to: f32| {
-        if from > to {
-            return;
-        }
-        let x = if to < lo {
-            to
-        } else if from > hi {
-            from
-        } else {
-            (from.max(lo) + to.min(hi)) * 0.5
-        };
-        let cost = (x - x0).abs() * 1.001 + (x - x3).abs();
-        if cost < best_cost {
-            best_cost = cost;
-            best = x;
-        }
-    };
-    let mut free_from = -f32::MAX;
-    for s in spans.iter() {
-        consider(free_from, s.0);
-        free_from = free_from.max(s.1);
-    }
-    consider(free_from, f32::MAX);
-    best
-}
-
-/// The route of an edge from pin `p0` up to input `p3` (`RouteBack`): a slant down and aside out
-/// of the pin, sideways to a free vertical channel, up it, over the target and a slant down into
-/// its input; the channel keeps clear of every node between the two heights and of the lanes
-/// routed before. `boxes` are the node rectangles.
-pub fn route_back(boxes: &[[f32; 4]], p0: [f32; 2], p3: [f32; 2], lanes: &mut Vec<Lane>) -> Vec<[f32; 2]> {
-    let mut below = p0[1] + BACK_STUB;
-    let mut above = p3[1] - BACK_STUB;
-    let mut x = p0[0];
-    let (mut drop, mut rise) = (BACK_STUB, BACK_STUB);
-    let (mut side0, mut side3) = (1.0f32, 1.0f32);
-    let mut spans: Vec<(f32, f32)> = Vec::new();
-    for _ in 0..4 {
-        spans.clear();
-        for g in boxes {
-            if g[1] - BACK_CLEAR < below && g[3] + BACK_CLEAR > above {
-                spans.push((g[0] - BACK_CLEAR, g[2] + BACK_CLEAR));
-            }
-        }
-        for lane in lanes.iter() {
-            if lane.top < below && lane.bottom > above {
-                spans.push((lane.x - BACK_LANE, lane.x + BACK_LANE));
-            }
-        }
-        x = pick_channel(&mut spans, p0[0], p3[0]);
-        let mut moved = false;
-        side0 = if x < p0[0] { -1.0 } else { 1.0 };
-        side3 = if x < p3[0] { -1.0 } else { 1.0 };
-        let mut out_before = 0usize;
-        let mut in_before = 0usize;
-        #[allow(clippy::float_cmp)]
-        for lane in lanes.iter() {
-            if lane.from == p0 && lane.side_from == side0 {
-                out_before += 1;
-            }
-            if lane.to == p3 && lane.side_to == side3 {
-                in_before += 1;
-            }
-        }
-        drop = BACK_STUB + BACK_LANE * out_before as f32;
-        rise = BACK_STUB + BACK_LANE * in_before as f32;
-        if below < p0[1] + drop {
-            below = p0[1] + drop;
-            moved = true;
-        }
-        if above > p3[1] - rise {
-            above = p3[1] - rise;
-            moved = true;
-        }
-        let crosses = |g: &[f32; 4], y: f32, x0: f32, x1: f32| {
-            let margin = BACK_STUB * 0.5;
-            y > g[1] - margin && y < g[3] + margin && g[0] < x0.max(x1) && g[2] > x0.min(x1)
-        };
-        for g in boxes {
-            if crosses(g, below, p0[0], x) {
-                below = below.max(g[3] + BACK_STUB);
-                moved = true;
-            }
-            if crosses(g, above, x, p3[0]) {
-                above = above.min(g[1] - BACK_STUB);
-                moved = true;
-            }
-        }
-        if !moved {
-            break;
-        }
-    }
-    lanes.push(Lane { x, top: above, bottom: below, from: p0, to: p3, side_from: side0, side_to: side3 });
-
-    let xs = p0[0] + side0 * BACK_STUB;
-    let xe = p3[0] + side3 * BACK_STUB;
-    let mut corners: Vec<[f32; 2]> = Vec::with_capacity(8);
-    corners.push(p0);
-    corners.push([xs, p0[1] + drop]);
-    if below > p0[1] + drop + 0.5 {
-        corners.push([xs, below]);
-    }
-    corners.push([x, below]);
-    corners.push([x, above]);
-    corners.push([xe, above]);
-    if above < p3[1] - rise - 0.5 {
-        corners.push([xe, p3[1] - rise]);
-    }
-    corners.push(p3);
-
-    let mut out: Vec<[f32; 2]> = Vec::with_capacity(corners.len() * 5 + 2);
-    out.push(p0);
-    for k in 1..corners.len().saturating_sub(1) {
-        let (Some(&from), Some(&c), Some(&to)) = (corners.get(k - 1), corners.get(k), corners.get(k + 1))
-        else {
-            continue;
-        };
-        let inn = dist2(from, c).sqrt();
-        let next = dist2(c, to).sqrt();
-        let r = BACK_CORNER.min(inn.min(next) * 0.5);
-        if r < 0.5 {
-            if out.last().is_none_or(|l| dist2(*l, c) > 0.01) {
-                out.push(c);
-            }
-            continue;
-        }
-        // a quadratic corner: from r before it, through it, to r after it
-        let u = [c[0] + (from[0] - c[0]) / inn * r, c[1] + (from[1] - c[1]) / inn * r];
-        let v = [c[0] + (to[0] - c[0]) / next * r, c[1] + (to[1] - c[1]) / next * r];
-        for step in 0..=4 {
-            let f = step as f32 / 4.0;
-            let e = 1.0 - f;
-            out.push([
-                e * e * u[0] + 2.0 * e * f * c[0] + f * f * v[0],
-                e * e * u[1] + 2.0 * e * f * c[1] + f * f * v[1],
-            ]);
-        }
-    }
-    out.push(p3);
-    out
-}
-
-/// Builds the link of an edge: a bezier, or a route with its lane.
-pub fn make_link(
-    boxes: &[[f32; 4]],
-    from: u32,
-    to: u32,
-    pin: &str,
-    p0: [f32; 2],
-    p3: [f32; 2],
-    lanes: &mut Vec<Lane>,
-) -> SceneLink {
-    let mut l = SceneLink { from, to, pin: SmolStr::new(pin), p0, p3, path: Vec::new(), bmin: p0, bmax: p0 };
-    if SceneLink::goes_back(p0, p3) {
-        l.path = route_back(boxes, p0, p3, lanes);
-        for p in &l.path {
-            l.bmin = [l.bmin[0].min(p[0]), l.bmin[1].min(p[1])];
-            l.bmax = [l.bmax[0].max(p[0]), l.bmax[1].max(p[1])];
-        }
-    } else {
-        let (c1, c2) = SceneLink::controls(p0, p3);
-        // a bezier stays inside the hull of its control points
-        for p in [c1, c2, p3] {
-            l.bmin = [l.bmin[0].min(p[0]), l.bmin[1].min(p[1])];
-            l.bmax = [l.bmax[0].max(p[0]), l.bmax[1].max(p[1])];
-        }
-    }
-    l
-}
-
 /// What `Scene::build` reads.
 pub struct SceneInput<'a> {
     pub graph: &'a Graph,
     pub catalog: &'a Catalog,
     pub edit: u64,
     pub palette: &'a Palette,
+    /// The wire options in force: the preferences with the graph's own over them.
+    pub wires: WireSettings,
+    /// In-game names of items, names of characters.
+    pub names: Option<&'a dyn Names>,
 }
 
 fn action_rows(
@@ -419,6 +241,7 @@ fn action_rows(
     n: &gz_nq::Node,
     behaviour: bool,
     rows: usize,
+    names: Option<&dyn Names>,
 ) -> (Vec<ActionRow>, Option<(bool, usize)>) {
     let mut out = Vec::with_capacity(rows);
     let all = n
@@ -434,10 +257,6 @@ fn action_rows(
             break;
         }
         let icon = look::kind_icon(cat, &a.kind);
-        let mut summary = text::value_summary(&a.params, 64);
-        if summary == "{}" {
-            summary.clear();
-        }
         out.push(ActionRow {
             exit,
             index,
@@ -445,10 +264,42 @@ fn action_rows(
             icon,
             family: look::family_of(icon),
             title: look::kind_title(cat, &a.kind, behaviour),
-            summary,
+            summary: text::summary(cat, &a.kind, &a.params, names),
         });
     }
     (out, more)
+}
+
+/// The roles of a node's pins: its default way on, its failures, the others by number.
+fn pin_infos(cat: &Catalog, n: &gz_nq::Node, behaviour: bool) -> (Vec<PinInfo>, usize) {
+    let (names, declared) = layout::pins(cat, n);
+    let kind = cat.find(&n.kind);
+    // a node of cases has no one way on: every case is named on its wire
+    let default = if kind.is_some_and(|k| k.pins_from_cases) {
+        None
+    } else {
+        layout::default_pin(&names).map(str::to_owned)
+    };
+    let mut other = 0;
+    let pins = names
+        .into_iter()
+        .map(|name| {
+            let role = if Some(&name) == default.as_ref() {
+                PinRole::Default
+            } else if layout::is_failure_pin(&name) {
+                PinRole::Failure
+            } else {
+                other += 1;
+                PinRole::Other(other - 1)
+            };
+            let desc = kind
+                .and_then(|k| k.pin_text(&name))
+                .map_or_else(String::new, |d| if behaviour { text::regraph(d) } else { d.to_owned() });
+            let connected = n.targets(&name).is_some_and(|t| !t.is_empty());
+            PinInfo { name, role, desc, connected }
+        })
+        .collect();
+    (pins, declared)
 }
 
 impl Scene {
@@ -459,26 +310,34 @@ impl Scene {
         let g = inp.graph;
         let cat = inp.catalog;
         let behaviour = g.is_behaviour();
+        let cx = BoxCx::of(cat, g);
         let reach = g.reachable(cat, None);
         let mut nodes: Vec<SceneNode> = Vec::with_capacity(g.nodes.len());
         let mut index: FxHashMap<SmolStr, u32> = FxHashMap::default();
         index.reserve(g.nodes.len());
         for (i, n) in g.nodes.iter().enumerate() {
-            let b = layout::node_box(cat, n);
-            let mut lines = layout::lines(cat, n);
-            // a condition is named the way the document speaks: a behaviour graph never says "quest"
-            for line in &mut lines {
-                if !line.cond.is_empty() {
-                    line.key = layout::cond_key(&look::kind_title(cat, &line.cond, behaviour), line.negate);
+            let b = layout::node_box(&cx, n);
+            let mut lines = layout::lines(cat, n, behaviour);
+            // what a line names is said with names where they are known
+            if let Some(k) = cat.find(&n.kind) {
+                for line in lines.iter_mut().filter(|l| l.cond.is_empty() && !l.key.is_empty()) {
+                    if let Some(p) = k.params.iter().find(|p| text::pretty_lower(&p.name) == line.key)
+                        && let Some(v) = n.params.get(&p.name)
+                    {
+                        line.value = text::param_text(p, v, inp.names);
+                    }
                 }
             }
-            let (pins, declared) = layout::pins(cat, n);
+            let (pins, declared) = pin_infos(cat, n, behaviour);
             let trigger = cat.is_trigger(&n.kind);
             let icon = look::kind_icon(cat, &n.kind);
             let kind = cat.find(&n.kind);
             let once = !trigger && if n.once_set { n.once } else { kind.is_some_and(|k| k.once_default) };
-            let (actions, more_target) =
-                if trigger { (Vec::new(), None) } else { action_rows(cat, n, behaviour, b.action_rows) };
+            let (actions, more_target) = if trigger || n.collapsed {
+                (Vec::new(), None)
+            } else {
+                action_rows(cat, n, behaviour, b.action_rows, inp.names)
+            };
             let summary = lines.first().map_or_else(String::new, |l| {
                 format!(
                     "{}{}{}",
@@ -500,6 +359,9 @@ impl Scene {
                 icon,
                 family: look::family_of(icon),
                 once,
+                collapsed: n.collapsed,
+                disabled: n.disabled,
+                comment: n.comment.lines().next().unwrap_or("").to_owned(),
                 lines,
                 actions,
                 more_target,
@@ -508,46 +370,76 @@ impl Scene {
                 reachable: reach.get(i).copied().unwrap_or(true),
                 summary,
                 takes_input,
+                desc: look::kind_desc(cat, &n.kind, behaviour),
             });
         }
         let boxes: Vec<[f32; 4]> = nodes.iter().map(SceneNode::rect).collect();
 
-        // the links, in the order the C++ routes them: the lanes routed before an edge move it
+        // the wires, through the one builder: what is drawn is what is hit
+        let wcx = wires::WireCx { flow: cx.flow, style: inp.wires.style, diagonal: inp.wires.diagonal };
         let mut links: Vec<SceneLink> = Vec::new();
-        let mut lanes: Vec<Lane> = Vec::new();
+        let mut lanes = Vec::new();
         for (i, n) in g.nodes.iter().enumerate() {
             let Some(sn) = nodes.get(i) else { continue };
-            for p in &n.out {
-                let Some(pin) = sn.pins.iter().position(|x| x == p.name.as_str()) else { continue };
-                for t in &p.targets {
+            let count: usize = n.out.iter().map(|p| p.targets.len()).sum();
+            let mut k = 0;
+            for (pi, pin) in sn.pins.iter().enumerate() {
+                let Some(p) = n.out.iter().find(|p| p.name.as_str() == pin.name) else { continue };
+                for (ti, t) in p.targets.iter().enumerate() {
                     let Some(&to) = index.get(t) else { continue };
                     let Some(tn) = nodes.get(to as usize) else { continue };
-                    links.push(make_link(
-                        &boxes,
-                        i as u32,
+                    let p0 = layout::output_pin(cx.flow, sn.pos, sn.size, pi, sn.pins.len());
+                    let p3 = layout::input_pin(cx.flow, tn.pos, tn.size);
+                    let via =
+                        g.canvas.route(&n.id, &pin.name, t).map(<[[f32; 2]]>::to_vec).unwrap_or_default();
+                    let lanes_of = wires::Lanes { index: k, count, track: ti, tracks: p.targets.len() };
+                    let w = wires::build(&wcx, p0, p3, &via, lanes_of, &boxes, &mut lanes);
+                    k += 1;
+                    let mut bmin = p0;
+                    let mut bmax = p0;
+                    for q in &w.points {
+                        bmin = [bmin[0].min(q[0]), bmin[1].min(q[1])];
+                        bmax = [bmax[0].max(q[0]), bmax[1].max(q[1])];
+                    }
+                    links.push(SceneLink {
+                        from: i as u32,
                         to,
-                        &p.name,
-                        sn.output_pin(pin),
-                        tn.input_pin(),
-                        &mut lanes,
-                    ));
+                        pin: p.name.clone(),
+                        pin_index: pi,
+                        role: pin.role,
+                        points: w.points,
+                        back: w.back,
+                        via,
+                        label: (pin.role != PinRole::Default && !sn.trigger).then(|| pin.name.clone()),
+                        bmin,
+                        bmax,
+                    });
                 }
             }
         }
+        let frames: Vec<SceneFrame> = g
+            .canvas
+            .frames
+            .iter()
+            .enumerate()
+            .map(|(index, f)| SceneFrame { index, title: f.title.clone(), tone: f.tone, rect: f.rect() })
+            .collect();
 
-        // what Frame All fits, and where reading starts
+        // what Frame All fits
         let mut bounds: Option<[f32; 4]> = None;
         for b in &boxes {
             grow(&mut bounds, [b[0], b[1]]);
             grow(&mut bounds, [b[2], b[3]]);
         }
         let mut extent = bounds;
-        for l in &links {
-            for p in &l.path {
-                grow(&mut extent, *p);
-            }
+        for l in links.iter().filter(|l| l.back || !l.via.is_empty()) {
+            grow(&mut extent, l.bmin);
+            grow(&mut extent, l.bmax);
         }
-        let (start_extent, anchor) = start_region(g, cat, &nodes, &boxes, &links, &index);
+        for f in &frames {
+            grow(&mut extent, [f.rect[0], f.rect[1]]);
+            grow(&mut extent, [f.rect[2], f.rect[3]]);
+        }
 
         // the grid
         let mut node_cells: FxHashMap<(i32, i32), Vec<u32>> = FxHashMap::default();
@@ -592,16 +484,17 @@ impl Scene {
             edit: inp.edit,
             generation: cat.generation,
             behaviour,
+            flow: cx.flow,
+            wires: inp.wires,
             nodes,
             links,
+            frames,
             index,
             node_cells,
             link_cells,
             big_links,
             bounds,
             extent,
-            start_extent,
-            anchor,
             tops,
             bottoms,
             lefts,
@@ -658,7 +551,7 @@ impl Scene {
     }
 
     /// The nodes wholly beyond each edge of a view (above, below, left, right) and the nearest
-    /// of each: the one the least pan brings in (`DrawBeyond`'s counts).
+    /// of each: the one the least pan brings in.
     #[must_use]
     pub fn beyond(&self, view: [f32; 4]) -> ([usize; 4], [Option<u32>; 4]) {
         let n = self.nodes.len();
@@ -675,74 +568,6 @@ impl Scene {
         ];
         (counts, near)
     }
-}
-
-/// The trigger (every root without one, the first node without those) and two levels of what
-/// follows it, with the routed edges between them (`FrameAll`'s `keep`).
-fn start_region(
-    g: &Graph,
-    cat: &Catalog,
-    nodes: &[SceneNode],
-    boxes: &[[f32; 4]],
-    links: &[SceneLink],
-    index: &FxHashMap<SmolStr, u32>,
-) -> (Option<[f32; 4]>, Option<u32>) {
-    if nodes.is_empty() {
-        return (None, None);
-    }
-    let mut keep = vec![false; nodes.len()];
-    let mut front: Vec<usize> =
-        (0..nodes.len()).filter(|&i| g.nodes.get(i).is_some_and(|n| cat.is_trigger(&n.kind))).collect();
-    if front.is_empty() {
-        front =
-            (0..nodes.len()).filter(|&i| g.nodes.get(i).is_some_and(|n| g.in_degree(&n.id) == 0)).collect();
-    }
-    if front.is_empty() {
-        front.push(0);
-    }
-    let anchor = front.first().map(|&i| i as u32);
-    for _ in 0..=2 {
-        if front.is_empty() {
-            break;
-        }
-        let mut next = Vec::new();
-        for &i in &front {
-            if keep.get(i).copied().unwrap_or(true) {
-                continue;
-            }
-            if let Some(k) = keep.get_mut(i) {
-                *k = true;
-            }
-            let Some(n) = g.nodes.get(i) else { continue };
-            for p in &n.out {
-                for t in &p.targets {
-                    if let Some(&to) = index.get(t)
-                        && !keep.get(to as usize).copied().unwrap_or(true)
-                    {
-                        next.push(to as usize);
-                    }
-                }
-            }
-        }
-        front = next;
-    }
-    let mut ext: Option<[f32; 4]> = None;
-    for (i, b) in boxes.iter().enumerate() {
-        if keep.get(i).copied().unwrap_or(false) {
-            grow(&mut ext, [b[0], b[1]]);
-            grow(&mut ext, [b[2], b[3]]);
-        }
-    }
-    for l in links {
-        if keep.get(l.from as usize).copied().unwrap_or(false)
-            && keep.get(l.to as usize).copied().unwrap_or(false)
-        {
-            for p in &l.path {
-                grow(&mut ext, *p);
-            }
-        }
-    }
-    (ext, anchor)
 }
 
 /// A line as a quad of a mesh.
@@ -762,8 +587,8 @@ fn mesh_line(mesh: &mut Mesh, a: Pos2, b: Pos2, w: f32, color: Color32) {
     mesh.add_triangle(i, i + 2, i + 3);
 }
 
-/// The minimap's picture in box-local pt: the edges centre to centre, the nodes in their family
-/// colours. Built with the scene, so a frame only translates a copy of it (`DrawMinimap`).
+/// The minimap's picture in box-local pt: the wires as their polylines, the nodes in their family
+/// colours. Built with the scene, so a frame only translates a copy of it.
 fn build_minimap(p: &Palette, nodes: &[SceneNode], links: &[SceneLink], b: [f32; 4]) -> Minimap {
     let pad = 6.0;
     let avail = [(MINIMAP_W - pad * 2.0).max(8.0), (MINIMAP_H - pad * 2.0).max(8.0)];
@@ -775,102 +600,60 @@ fn build_minimap(p: &Palette, nodes: &[SceneNode], links: &[SceneLink], b: [f32;
     let fitted = Vec2::new(world_w * scale, world_h * scale);
     let min = pos2((MINIMAP_W - fitted.x) * 0.5, (MINIMAP_H - fitted.y) * 0.5);
     let mut m = Minimap { mesh: Mesh::default(), world_min, scale, fitted: Rect::from_min_size(min, fitted) };
-    let edge = Palette::alpha(p.text_muted, 0.5);
-    let centre = |n: &SceneNode| [n.pos[0] + n.size[0] * 0.5, n.pos[1] + n.size[1] * 0.5];
+    let edge = Palette::alpha(p.wire_base, 0.5);
     let mut mesh = Mesh::default();
     for l in links {
-        let (Some(a), Some(z)) = (nodes.get(l.from as usize), nodes.get(l.to as usize)) else { continue };
-        mesh_line(&mut mesh, m.to_local(centre(a)), m.to_local(centre(z)), 1.0, edge);
+        // a few points of the polyline are enough at this size
+        let step = (l.points.len() / 6).max(1);
+        let pts: Vec<Pos2> =
+            l.points.iter().step_by(step).chain(l.points.last()).map(|q| m.to_local(*q)).collect();
+        for w in pts.windows(2) {
+            mesh_line(&mut mesh, w[0], w[1], 1.0, edge);
+        }
     }
     let dot = 2.0;
     for n in nodes {
         let a = m.to_local(n.pos);
         let z = m.to_local([n.pos[0] + n.size[0], n.pos[1] + n.size[1]]);
         let r = Rect::from_min_max(a, pos2(z.x.max(a.x + dot), z.y.max(a.y + dot)));
-        mesh.add_colored_rect(r, look::family_color(p, n.family, 0.85));
+        mesh.add_colored_rect(r, look::family_color(p, n.family, if n.disabled { 0.35 } else { 0.85 }));
     }
     m.mesh = mesh;
     m
 }
 
-/// Where a Frame All lands: the zoom level and the centre, and the status when the graph is
-/// framed from its start.
+/// Where a Frame All lands: the zoom level and the centre.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Framed {
     pub zoom: i32,
     pub center: [f32; 2],
-    pub status: Option<String>,
 }
 
-/// The centre of a view `len` long on one axis of the graph `[a0, a1]`: the middle when it all
-/// fits; else `prefer`, moved as little as it takes to keep `[k0, k1]` in view (`fallback` when
-/// that does not fit either), never past an end of the graph (`Along`).
-#[must_use]
-pub fn along(a0: f32, a1: f32, k0: f32, k1: f32, len: f32, prefer: f32, fallback: f32) -> f32 {
-    if a1 - a0 <= len {
-        return (a0 + a1) * 0.5;
-    }
-    let half = len * 0.5;
-    if k1 - k0 > len {
-        return (a0 + half).max(fallback.min(a1 - half));
-    }
-    let c = (a0 + half).max(prefer.min(a1 - half));
-    (k1 - half).max(c.min(k0 + half))
-}
-
-/// Frame All (`NqCanvas::FrameAll`): the highest level up to 1:1, never below the floor, that
-/// holds the whole extent; a graph that does not fit there is shown AT the floor from its start.
-/// `view` is the canvas in pt.
+/// Frame All: the highest level up to 1:1 that holds the whole extent, whatever scale that
+/// takes. `view` is the canvas in pt.
 #[must_use]
 pub fn frame_all(s: &Scene, view: [f32; 2]) -> Framed {
     let Some(e) = s.extent.filter(|_| !s.nodes.is_empty()) else {
-        return Framed { zoom: gz_nq::doc::ZOOM_DEFAULT, center: [0.0, 0.0], status: None };
+        return Framed { zoom: gz_nq::doc::ZOOM_DEFAULT, center: [0.0, 0.0] };
     };
-    let (mn, mx) = ([e[0] - FRAME_MARGIN, e[1] - FRAME_MARGIN], [e[2] + FRAME_MARGIN, e[3] + FRAME_MARGIN]);
-    for z in (gz_nq::doc::ZOOM_FRAME_MIN..=gz_nq::doc::ZOOM_DEFAULT).rev() {
-        let k = gz_nq::doc::zoom_of(z);
-        if (mx[0] - mn[0]) * k <= view[0] && (mx[1] - mn[1]) * k <= view[1] {
-            return Framed {
-                zoom: z,
-                center: [layout::sane((mn[0] + mx[0]) * 0.5), layout::sane((mn[1] + mx[1]) * 0.5)],
-                status: None,
-            };
-        }
-    }
-    let k = gz_nq::doc::zoom_of(gz_nq::doc::ZOOM_FRAME_MIN);
-    let v = [view[0] / k, view[1] / k];
-    let se = s.start_extent.unwrap_or(e);
-    let (kmn, kmx) =
-        ([se[0] - FRAME_MARGIN, se[1] - FRAME_MARGIN], [se[2] + FRAME_MARGIN, se[3] + FRAME_MARGIN]);
-    let a = s.anchor.and_then(|i| s.nodes.get(i as usize));
-    let ax = a.map_or((mn[0] + mx[0]) * 0.5, |a| a.pos[0] + a.size[0] * 0.5);
-    let ay = a.map_or(mn[1], |a| a.pos[1]);
-    let cx = along(mn[0], mx[0], kmn[0], kmx[0], v[0], (mn[0] + mx[0]) * 0.5, ax);
-    let cy = along(mn[1], mx[1], kmn[1], kmx[1], v[1], kmn[1] + v[1] * 0.5, ay - FRAME_MARGIN + v[1] * 0.5);
-    let pct = (k * 100.0 + 0.5) as i32;
-    Framed {
-        zoom: gz_nq::doc::ZOOM_FRAME_MIN,
-        center: [layout::sane(cx), layout::sane(cy)],
-        status: Some(format!(
-            "The {} is larger than the view at {pct}%: framed from its start",
-            look::doc_noun(s.behaviour)
-        )),
-    }
+    let r = [e[0] - FRAME_MARGIN, e[1] - FRAME_MARGIN, e[2] + FRAME_MARGIN, e[3] + FRAME_MARGIN];
+    let (z, c) = fit_rect(r, view, gz_nq::doc::ZOOM_DEFAULT);
+    Framed { zoom: z, center: c }
 }
 
-/// Frames a world rectangle (`FrameRect`): the highest level that holds it with a gap around,
-/// never closer than 1:1.
+fn fit_rect(r: [f32; 4], view: [f32; 2], top: i32) -> (i32, [f32; 2]) {
+    let (w, h) = ((r[2] - r[0]).max(1.0), (r[3] - r[1]).max(1.0));
+    let fit = if view[0] > 0.0 && view[1] > 0.0 { (view[0] / w).min(view[1] / h) } else { 1.0 };
+    let z = gz_nq::doc::level_at_most(fit).min(top);
+    (z, [layout::sane((r[0] + r[2]) * 0.5), layout::sane((r[1] + r[3]) * 0.5)])
+}
+
+/// Frames a world rectangle: the highest level that holds it with a gap around, never closer
+/// than 1:1.
 #[must_use]
 pub fn frame_rect(r: [f32; 4], view: [f32; 2]) -> (i32, [f32; 2]) {
-    let w = (r[2] - r[0] + 2.0 * layout::GAP_X).max(1.0);
-    let h = (r[3] - r[1] + 2.0 * layout::GAP_Y).max(1.0);
-    let mut z = gz_nq::doc::ZOOM.len() as i32 - 1;
-    if view[0] > 0.0 && view[1] > 0.0 {
-        while z > 0 && (w * gz_nq::doc::zoom_of(z) > view[0] || h * gz_nq::doc::zoom_of(z) > view[1]) {
-            z -= 1;
-        }
-    }
-    (z.min(gz_nq::doc::ZOOM_DEFAULT), [layout::sane((r[0] + r[2]) * 0.5), layout::sane((r[1] + r[3]) * 0.5)])
+    let pad = 64.0;
+    fit_rect([r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad], view, gz_nq::doc::ZOOM_DEFAULT)
 }
 
 /// A scene shared by the frames that draw it.
@@ -883,6 +666,7 @@ mod tests {
 
     fn graph() -> (Graph, Catalog) {
         let mut g = Graph::default();
+        g.canvas.flow = Some(Flow::Down);
         let mut s = Node::new("s", "trigger.start");
         s.pos = [0.0, 0.0];
         s.has_pos = true;
@@ -902,14 +686,25 @@ mod tests {
         (g, Catalog::empty())
     }
 
+    fn scene(g: &Graph, cat: &Catalog) -> Scene {
+        let p = Palette::new(gz_ui::Accent::default());
+        Scene::build(&SceneInput {
+            graph: g,
+            catalog: cat,
+            edit: 1,
+            palette: &p,
+            wires: WireSettings::default(),
+            names: None,
+        })
+    }
+
     #[test]
     fn builds_links_and_routes() {
         let (g, cat) = graph();
-        let p = Palette::new(gz_ui::Accent::default());
-        let s = Scene::build(&SceneInput { graph: &g, catalog: &cat, edit: 1, palette: &p });
+        let s = scene(&g, &cat);
         assert_eq!(s.nodes.len(), 3);
         assert_eq!(s.links.len(), 3);
-        assert!(s.links.iter().filter(|l| !l.path.is_empty()).count() == 1);
+        assert_eq!(s.links.iter().filter(|l| l.back).count(), 1);
         // the routed edge widens the extent past the boxes
         let (b, e) = (s.bounds.unwrap_or_default(), s.extent.unwrap_or_default());
         assert!(e[0] < b[0] || e[2] > b[2]);
@@ -921,8 +716,7 @@ mod tests {
     #[test]
     fn beyond_counts() {
         let (g, cat) = graph();
-        let p = Palette::new(gz_ui::Accent::default());
-        let s = Scene::build(&SceneInput { graph: &g, catalog: &cat, edit: 1, palette: &p });
+        let s = scene(&g, &cat);
         let (c, near) = s.beyond([-100.0, 150.0, 400.0, 350.0]);
         assert_eq!(c[0], 1);
         assert_eq!(c[1], 1);
@@ -931,18 +725,13 @@ mod tests {
     }
 
     #[test]
-    fn framing() {
+    fn frame_all_takes_whatever_scale_it_needs() {
         let (g, cat) = graph();
-        let p = Palette::new(gz_ui::Accent::default());
-        let s = Scene::build(&SceneInput { graph: &g, catalog: &cat, edit: 1, palette: &p });
+        let s = scene(&g, &cat);
         let f = frame_all(&s, [1600.0, 1000.0]);
-        assert_eq!(f.zoom, 6);
-        assert!(f.status.is_none());
-        let small = frame_all(&s, [200.0, 150.0]);
-        assert_eq!(small.zoom, 5);
-        assert!(small.status.is_some());
-        assert_eq!(along(0.0, 100.0, 0.0, 10.0, 200.0, 5.0, 5.0), 50.0);
-        let mut spans = vec![(-10.0, 10.0)];
-        assert_eq!(pick_channel(&mut spans, 0.0, 0.0), -10.0);
+        assert_eq!(f.zoom, gz_nq::doc::ZOOM_DEFAULT);
+        // a small view goes as far out as it takes: below the old floor of 75%
+        let small = frame_all(&s, [120.0, 90.0]);
+        assert!(gz_nq::doc::zoom_of(small.zoom) < 0.3, "{}", gz_nq::doc::zoom_of(small.zoom));
     }
 }

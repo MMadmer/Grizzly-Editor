@@ -1,14 +1,14 @@
-//! The Level tab's commands; the wire is `LevelMcpScene.cpp` (`outliner_show`,
-//! `outliner_filter`, `scene_visibility`) and `LevelMcpProps.cpp` (`property_inspector`).
+//! The Level tab's commands: `outliner_show`, `outliner_filter`, `scene_visibility`, and
+//! `scene.choices` with the lists this crate reads.
 
 use std::sync::Arc;
 
 use gz_app::on_ui;
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Origin, Registry, Reply, Value, json};
+use gz_editor::{Args, ArgsExt, CmdError, Editor, JsonSchema, Origin, Registry, Reply, Spec, Value, json};
 use gz_scene::props;
 use gz_scene::{ObjClass, SceneCmd, SceneService};
+use serde::Deserialize;
 
-use crate::details::{self, SELECTION, WORLD};
 use crate::doc::with_level;
 use crate::layout::PanelId;
 use crate::outliner_model::{Filter, Folds, Group, Sort, Visibility, compute, types_to_hide};
@@ -18,82 +18,53 @@ pub(crate) fn register(reg: &mut Registry) {
     reg.add(AREA, "outliner_show", outliner_show);
     reg.add(AREA, "outliner_filter", outliner_filter);
     reg.add(AREA, "scene_visibility", scene_visibility);
-    reg.add(AREA, "property_inspector", property_inspector);
-    reg.add(AREA, "property_choose", property_choose);
+    // over the scene's own: with the lists the Level tab reads (textures, shaders, models, motions)
+    reg.cmd(
+        Spec::read("scene.choices", "What a property picks from: its words, or the items of its list.")
+            .example("object=stalker_01 key=props.visual query=bandit"),
+        scene_choices,
+    );
 }
 
-/// A choose row's list in `property_inspector`: what it lists, and the items of an object's own.
-type RowList = (String, Option<Arc<Vec<String>>>);
-
-/// What a choose row picks from, as its chooser shows it: the owner's items or the list.
-struct Pickable {
-    /// What the list is of (`motions`, `bones`, `textures`, ...).
-    noun: String,
-    items: Arc<Vec<String>>,
-    /// The sentence of an empty list.
-    empty: String,
-    multi: bool,
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ChoicesParams {
+    /// The object (left out: the first selected one).
+    #[serde(default)]
+    object: Option<String>,
+    /// The property's key.
+    key: String,
+    /// A property of the level instead of an object's.
+    #[serde(default)]
+    world: bool,
+    /// Only items that hold this text (any case).
+    #[serde(default)]
+    query: Option<String>,
+    /// At most this many (default 500).
+    #[serde(default)]
+    limit: Option<usize>,
 }
 
-/// The list of the choose row `key` (Details' rows), read now when nobody has read it yet.
-async fn pickable(ed: &Arc<Editor>, svc: &SceneService, key: &str) -> Option<Pickable> {
-    let snap = svc.store.snapshot();
-    let ctx = gz_scene::prop_context(ed).await;
-    let rows = details::rows(&snap, &svc.library, SELECTION, &ctx);
-    let row = props::find(&rows, key)?;
-    let props::Kind::Choose(choice) = &row.row.kind else { return None };
-    let list = crate::lists::ListKey::of_choose(choice);
-    let multi = crate::details::takes_several(&row.row.key, choice, list.as_ref());
-    if let Some(items) = details::owner_items(&snap, &row.row.key) {
-        let empty = "Nothing to pick: the scene has none.".to_owned();
-        return Some(Pickable { noun: choice.list.to_string(), items: Arc::new(items), empty, multi });
-    }
-    match list {
-        Some(list) => Some(Pickable {
-            noun: list.noun().to_owned(),
-            items: crate::lists::Lists::wait(ed, &list).await,
-            empty: list.empty_text(),
-            multi,
-        }),
-        None => Some(Pickable {
-            noun: choice.list.to_string(),
-            items: Arc::new(Vec::new()),
-            empty: "No items were found.".to_owned(),
-            multi,
-        }),
-    }
-}
-
-/// `property_choose`: `gz-scene`'s chooser, and with `open` and `status` the list it shows -
-/// `list` (what it lists), `total`, `items` (those holding `search`, `limit` of them, default
-/// 500), `multi` (a comma list of several), `empty` (the sentence of a list with nothing in it).
-async fn property_choose(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
-    let svc = SceneService::of(&ed)?;
-    let action = a.str("action").unwrap_or("").to_ascii_lowercase();
-    let reply = gz_scene::property_choose(ed.clone(), a.clone(), o).await?;
-    if !matches!(action.as_str(), "open" | "status" | "") {
-        return Ok(reply);
-    }
-    let open = svc.view.lock().choosing.clone();
-    let key = open.unwrap_or_else(|| a.text("key").unwrap_or("Visual").to_owned());
-    let Some(p) = pickable(&ed, &svc, &key).await else { return Ok(reply) };
-    let search = a.str("search").unwrap_or("").to_lowercase();
-    let limit = a.i64("limit").unwrap_or(500).max(0) as usize;
-    let matching: Vec<&String> =
-        p.items.iter().filter(|i| search.is_empty() || i.to_lowercase().contains(&search)).collect();
-    let mut out = match reply {
-        Value::Object(m) => m,
-        other => return Ok(other),
+/// `scene.choices`: the scene's answer, with the items of the lists only this crate reads.
+async fn scene_choices(ed: Arc<Editor>, p: ChoicesParams, _o: Origin) -> Reply {
+    let (row, items) = gz_scene::choices(&ed, p.object.as_deref(), &p.key, p.world).await?;
+    let list = match &row.kind {
+        props::Kind::Choose(choice) => crate::lists::ListKey::of_choose(choice),
+        _ => None,
     };
-    out.insert("list".into(), json!(p.noun));
-    out.insert("total".into(), json!(p.items.len()));
-    out.insert("matching".into(), json!(matching.len()));
-    out.insert("items".into(), json!(matching.into_iter().take(limit).collect::<Vec<_>>()));
-    out.insert("multi".into(), json!(p.multi));
-    if p.items.is_empty() {
-        out.insert("empty".into(), json!(p.empty));
+    let items = match (items, &list) {
+        (Some(items), _) => items,
+        (None, Some(list)) => crate::lists::Lists::wait(&ed, list).await.as_ref().clone(),
+        (None, None) => Vec::new(),
+    };
+    let mut reply = gz_scene::choices_reply(&row, &items, p.query.as_deref(), p.limit);
+    // an empty list says what is missing, of the thing it is missing from
+    if items.is_empty()
+        && let (Some(list), Value::Object(m)) = (&list, &mut reply)
+    {
+        m.insert("empty".into(), json!(list.empty_text()));
     }
-    Ok(Value::Object(out))
+    Ok(reply)
 }
 
 /// `GetArgBool`: true / false, 1 / 0, the words, or the fallback.
@@ -260,7 +231,7 @@ async fn scene_visibility(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         };
         if snap.tools.part(tool).visible != visible {
             svc.store
-                .send(SceneCmd::ToolFlags { class: tool, visible: Some(visible), readonly: None }, o)
+                .send(SceneCmd::ClassView { class: tool, visible: Some(visible), locked: None }, o)
                 .await?;
             changed = 1;
         }
@@ -276,7 +247,7 @@ async fn scene_visibility(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         let (ids, classes_) = outliner::plan_show(&snap, selection, visible);
         changed = ids.len();
         for c in classes_ {
-            svc.store.send(SceneCmd::ToolFlags { class: c, visible: Some(true), readonly: None }, o).await?;
+            svc.store.send(SceneCmd::ClassView { class: c, visible: Some(true), locked: None }, o).await?;
         }
         if !ids.is_empty() {
             svc.store.send(SceneCmd::Show { ids, visible }, o).await?;
@@ -291,116 +262,4 @@ async fn scene_visibility(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         })
         .collect();
     Ok(json!({ "changed": changed, "classes": list }))
-}
-
-fn target_index(t: &str) -> Result<usize, CmdError> {
-    match t {
-        "selection" => Ok(SELECTION),
-        "world" => Ok(WORLD),
-        _ => Err(CmdError::invalid("target must be selection or world")),
-    }
-}
-
-/// `property_inspector`: `gz-scene`'s answer, with the panels' side - `open` brings the Level
-/// tab up with the panel in front, `close` closes it, `expand` / `collapse` fold its grid.
-async fn property_inspector(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
-    let svc = SceneService::of(&ed)?;
-    let filter_arg = a.str("filter").unwrap_or("").to_owned();
-    let action = a
-        .text("action")
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_else(|| if filter_arg.is_empty() { "get".into() } else { "filter".into() });
-    let target_name = a.text("target").unwrap_or("selection").to_ascii_lowercase();
-    let t = target_index(&target_name)?;
-    if !matches!(action.as_str(), "get" | "filter" | "expand" | "collapse" | "open" | "close") {
-        return Err(CmdError::invalid("action must be get, filter, expand, collapse, open, or close"));
-    }
-    if action == "filter"
-        && let Some(f) = svc.view.lock().filter.get_mut(t)
-    {
-        f.clone_from(&filter_arg);
-    }
-    let panel = if t == WORLD { PanelId::LevelSettings } else { PanelId::Details };
-    if matches!(action.as_str(), "open" | "close" | "expand" | "collapse") {
-        let act = action.clone();
-        let shown = on_ui(&ed, move |shell, ctx| {
-            if act == "open" {
-                shell.activate(ctx, LEVEL);
-            }
-            Ok(with_level(shell, |doc| {
-                match act.as_str() {
-                    "open" => doc.open_panel(ctx, panel),
-                    "close" => doc.close_panel(ctx, panel),
-                    "expand" => doc.fold(t, true),
-                    _ => doc.fold(t, false),
-                }
-                doc.panel_open(panel)
-            }))
-        })
-        .await;
-        let open = match shown {
-            Ok(Some(o)) => o,
-            // without a window the view keeps the flag, as the C++ forms did
-            _ => {
-                action == "open"
-                    || (action != "close" && svc.view.lock().open.get(t).copied().unwrap_or(false))
-            }
-        };
-        if let Some(o) = svc.view.lock().open.get_mut(t) {
-            *o = open;
-        }
-    }
-    let (filter, open) = {
-        let v = svc.view.lock();
-        (v.filter.get(t).cloned().unwrap_or_default(), v.open.get(t).copied().unwrap_or(false))
-    };
-    let snap = svc.store.snapshot();
-    let lib = svc.library.clone();
-    let ctx = gz_scene::prop_context(&ed).await;
-    let rows = ed.exec.cpu(move || details::rows(&snap, &lib, t, &ctx)).await;
-    let f = filter.to_lowercase();
-    let visible = rows.iter().filter(|r| f.is_empty() || r.row.key.to_lowercase().contains(&f)).count();
-    let limit = a.i64("limit").unwrap_or(200).max(0) as usize;
-    // a choose row names its list; one of the object's own (its model's motions or bones) is
-    // answered whole, any other through property_choose
-    let mut lists: rustc_hash::FxHashMap<String, RowList> = Default::default();
-    for m in rows.iter().take(limit) {
-        let props::Kind::Choose(choice) = &m.row.kind else { continue };
-        let key = crate::lists::ListKey::of_choose(choice);
-        let noun = key.as_ref().map_or_else(|| choice.list.to_string(), |k| k.noun().to_owned());
-        let own = match &key {
-            Some(
-                k @ (crate::lists::ListKey::SkeletonMotions(_) | crate::lists::ListKey::SkeletonBones(_)),
-            ) => Some(crate::lists::Lists::wait(&ed, k).await),
-            _ => None,
-        };
-        lists.insert(m.row.key.clone(), (noun, own));
-    }
-    let out: Vec<Value> = rows
-        .iter()
-        .take(limit)
-        .map(|m| {
-            let mut o = serde_json::Map::new();
-            o.insert("key".into(), json!(m.row.key));
-            o.insert("label".into(), json!(props::label_of(&m.row.key)));
-            o.insert("value".into(), json!(if m.mixed { "(mixed)".to_owned() } else { m.row.text() }));
-            o.insert("enabled".into(), json!(m.row.enabled));
-            o.insert("mixed".into(), json!(m.mixed));
-            o.insert("help".into(), json!(props::help_of(&m.row)));
-            let unit = props::unit_of(&m.row);
-            if !unit.is_empty() {
-                o.insert("unit".into(), json!(unit));
-            }
-            if let Some((noun, own)) = lists.get(&m.row.key) {
-                o.insert("list".into(), json!(noun));
-                if let Some(items) = own {
-                    o.insert("choices".into(), json!(items.as_ref()));
-                }
-            }
-            Value::Object(o)
-        })
-        .collect();
-    Ok(
-        json!({ "target": target_name, "filter": filter, "visible": visible, "total": rows.len(), "open": open, "rows": out }),
-    )
 }

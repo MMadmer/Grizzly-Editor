@@ -98,7 +98,6 @@ impl LevelDoc {
                 .on_before_close(|ed, _session| async move { write_preview(&ed).await });
             PreviewOnClose
         });
-        crate::level_cmds::hook_recent(editor);
         Self {
             editor: editor.clone(),
             pane: None,
@@ -339,17 +338,13 @@ impl LevelDoc {
                             v.chosen.clone_from(&first);
                         }
                         let mut args = Args::new();
-                        args.insert(
-                            "target".into(),
-                            Value::String(
-                                if *target == details::WORLD { "world" } else { "selection" }.into(),
-                            ),
-                        );
-                        args.insert("key".into(), Value::String(key.clone()));
+                        args.insert("world".into(), Value::Bool(*target == details::WORLD));
                         // a multi-select row (a respawn point's profiles) takes the list
                         let value = if c.multi { items.join(",") } else { first };
-                        args.insert("value".into(), Value::String(value));
-                        editor.post("property_set", args);
+                        let mut set = serde_json::Map::new();
+                        set.insert(key.clone(), Value::String(value));
+                        args.insert("set".into(), Value::Object(set));
+                        editor.post("scene.set", args);
                     }
                     Purpose::ToolObject if c.multi => crate::tools::add_several(&editor, &items),
                     Purpose::ToolObject => {
@@ -621,8 +616,8 @@ impl LevelDoc {
         match snap.meta.file.clone() {
             Some(file) => {
                 let mut args = Args::new();
-                args.insert("file".into(), Value::String(file.display().to_string()));
-                self.editor.post("save_scene", args);
+                args.insert("path".into(), Value::String(file.display().to_string()));
+                self.editor.post("scene.save", args);
             }
             None => {
                 let _ = crate::level_cmds::save_as(&self.editor, ctx);

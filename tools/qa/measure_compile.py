@@ -9,9 +9,9 @@ On a THROW-AWAY COPY of the Test project with the scene copied in from rawdata\\
 unless --exe names another) starts on a hidden desktop (the game repository's Start-DetachedHiddenDesktopProcess.ps1,
 so no window reaches the author's screen and the window still draws), opens the scene, runs Make All, then
   idle      ten seconds of the Level tab with a frame asked for every quarter second (ui_list holds for one);
-  pairs     --pairs times (--fresh: a new editor for each): level_build compile (wait=false) with the same frames asked for until the job ends
+  pairs     --pairs times (--fresh: a new editor for each): level.compile of the level folder (wait=false) with the same frames asked for until the job ends
             (--no-frames: none; the window then draws what the job's progress wakes it for), then the same level
-            folder compiled headless right after (`Grizzly.exe -compile <folder>`, a process of its own, the editor
+            folder compiled headless right after (`Grizzly-Cmd.exe run level.compile folder=<folder>`, a process of its own, the editor
             idle beside it);
   card      with --card, one more compile in the editor with the Task Center's card up (its spinner animates);
   orbit     with --orbit, one more compile in the editor while the camera orbits (viewport_gesture: an Alt+left
@@ -30,7 +30,6 @@ import ctypes
 import ctypes.wintypes as wt
 import json
 import os
-import re
 import shutil
 import socket
 import subprocess
@@ -151,11 +150,12 @@ def window(handle, until, frames: bool = True, step=None) -> dict:
 
 
 def headless(exe: str, folder: str, home: str) -> dict:
-    """The level folder compiled by `exe -compile`, a process of its own: the compiler's seconds, the wall time and
-    the process's load."""
+    """The level folder compiled by the commandlet (`level.compile`), a process of its own: the compiler's seconds,
+    the wall time and the process's load."""
     clock = Clock()
     t0 = time.monotonic()
-    p = subprocess.Popen([exe, "-home", home, "-nodlg", "-compile", folder], stdout=subprocess.PIPE,
+    cmd = os.path.join(os.path.dirname(exe), "Grizzly-Cmd.exe")
+    p = subprocess.Popen([cmd, "run", "level.compile", "folder=" + folder, "-home", home, "-json"], stdout=subprocess.PIPE,
                          stderr=subprocess.STDOUT, cwd=os.path.dirname(exe),
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     handle = k32.OpenProcess(0x1000 | 0x0010, False, p.pid)
@@ -170,10 +170,16 @@ def headless(exe: str, folder: str, home: str) -> dict:
     k32.CloseHandle(handle)
     wall = time.monotonic() - t0
     clock_percent = clock.done()
-    m = next((re.search(r"Time elapsed: ([0-9.]+)", l) for l in reversed(out) if "Time elapsed" in l), None)
-    phases = [[g.group(2).strip(), round(float(g.group(1)), 2)] for g in
-              (re.search(r"\* phase +([0-9.]+) s  (.*)$", l) for l in out) if g]
-    return {"code": p.returncode, "compiler_seconds": float(m.group(1)) if m else None, "seconds": round(wall, 3),
+    answer = {}
+    for line in reversed(out):
+        try:
+            answer = json.loads(line)
+            break
+        except ValueError:
+            continue
+    parts = (answer.get("parts") or [{}])
+    phases = [[ph.get("name"), round(float(ph.get("seconds", 0)), 2)] for ph in parts[0].get("phases", [])]
+    return {"code": p.returncode, "compiler_seconds": answer.get("seconds"), "seconds": round(wall, 3),
             "load": round(cpu / max(wall, 1e-6), 3), "memory": memory, "clock_percent": clock_percent, "phases": phases,
             "last": out[-1] if out else ""}
 
@@ -276,7 +282,7 @@ def main() -> int:
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
             try:
-                if mcp("mod_manifest", timeout=30).get("ok"):
+                if mcp("mod.info", timeout=30).get("ok"):
                     break
             except OSError:
                 time.sleep(0.2)
@@ -288,14 +294,14 @@ def main() -> int:
             ok = k32.SetProcessInformation(ed["handle"], 4, ctypes.byref(state), ctypes.sizeof(state))
             log(f"  the editor out of power throttling: {bool(ok)}")
         log(f"{args.scene}: editor {exe} pid {ed['pid']}")
-        a = mcp("open_scene", scene=args.scene + ".level", timeout=300)
+        a = mcp("scene.open", path="rawdata/levels/" + args.scene + ".level", timeout=300)
         mcp("ui.tab", action="open", doc="level")
         if not a.get("ok"):
-            log(f"! open_scene: {a}")
+            log(f"! scene.open: {a}")
             return False
         t = time.monotonic()
-        a = mcp("level_build", action="make_all", timeout=1800)
-        log(f"  Make All: {a.get('ok')} {time.monotonic() - t:.1f} s")
+        a = mcp("level.build", only="geometry", force=True, timeout=1800)
+        log(f"  The geometry step: {a.get('ok')} {time.monotonic() - t:.1f} s")
         if not a.get("ok"):
             return False
         # the pictures of the scene loaded before anything is measured (a window's)
@@ -325,7 +331,8 @@ def main() -> int:
 
     def compile_in_editor(label: str, step=None, card: bool = False) -> tuple[dict, dict]:
         quiet = settle(label)
-        started = mcp("level_build", action="compile", wait=False)
+        level = mcp("level.status").get("level", args.scene)
+        started = mcp("level.compile", folder=os.path.join(project, "gamedata", "levels", level), wait=False)
         job = started.get("job")
         log(f"  {label}: compile started: {started}")
         if card:

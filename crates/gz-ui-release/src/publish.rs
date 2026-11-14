@@ -21,11 +21,12 @@ use gz_github::{AccountSource, Github, ReleaseInfo, Secret};
 use gz_mod::ManifestService;
 use gz_publish::{
     ManageOp, ManageRequest, ManageState, ManageView, PublishOptions, PublishState, Publisher, ReleaseList,
-    tags,
+    SignState, tags,
 };
 use gz_ui::dialog::{self, ResultAction, ResultSpec};
 use gz_ui::grid::{read_only, switch, text_block, text_field};
 use gz_ui::text::{self, Clip};
+use gz_ui::units::em;
 use gz_ui::{Button, Dialog, DialogSize, Font, Icon, Kind, PropFlags, PropertyGrid, Tone, palette};
 use parking_lot::Mutex;
 use zeroize::Zeroizing;
@@ -106,8 +107,6 @@ pub(crate) struct ProblemInput<'a> {
     pub tag: &'a str,
     pub title: &'a str,
     pub clash: &'a Clash,
-    /// The account is known and there is none.
-    pub signed_out: bool,
     /// A release is being deleted or edited.
     pub managing: bool,
 }
@@ -159,9 +158,6 @@ pub(crate) fn problems(i: &ProblemInput<'_>) -> (Vec<String>, u8) {
     }
     if i.title.len() > MAX_TITLE {
         out.push("The title is longer than 200 characters.".to_owned());
-    }
-    if i.signed_out {
-        out.push("Not signed in to GitHub: sign in or save a token below.".to_owned());
     }
     if i.managing {
         out.push("A release is being deleted or edited: wait for it to finish.".to_owned());
@@ -443,13 +439,20 @@ impl PublishDialog {
         if !self.signing {
             return;
         }
-        let (_, v) = Publisher::of(editor).sign_json();
-        let field = |k: &str| v.get(k).and_then(serde_json::Value::as_str).unwrap_or("").to_owned();
+        let v = Publisher::of(editor).sign_view();
+        let waiting = v.state == SignState::Waiting;
         self.sign = Sign {
-            state: field("state"),
-            code: field("user_code"),
-            uri: field("verification_uri"),
-            error: field("error"),
+            state: match v.state {
+                SignState::Idle => "idle",
+                SignState::Starting => "starting",
+                SignState::Waiting => "waiting",
+                SignState::Done => "done",
+                SignState::Failed => "failed",
+            }
+            .to_owned(),
+            code: if waiting { v.user_code } else { String::new() },
+            uri: if waiting { v.uri } else { String::new() },
+            error: v.error,
         };
         match self.sign.state.as_str() {
             "done" => {
@@ -547,7 +550,6 @@ impl PublishDialog {
             tag: &self.tag,
             title: &self.title,
             clash: &clash,
-            signed_out: account.is_some() && source == AccountSource::None,
             managing: view.state == ManageState::Running && view.op != ManageOp::List,
         });
         let replaced =
@@ -561,13 +563,18 @@ impl PublishDialog {
         } else {
             "Packages, uploads a draft, checks every file, then publishes."
         };
-        let can = problems.is_empty() && !reading && !self.queued.load(Ordering::Relaxed);
+        // not signed in is said once, in the Account row beside its action; it still stops Publish
+        let signed_out = account.is_some() && source == AccountSource::None;
+        let can = problems.is_empty() && !signed_out && !reading && !self.queued.load(Ordering::Relaxed);
         let why = problems
             .first()
-            .map_or(
-                if reading { "Reading the releases on GitHub first." } else { "Publishing is starting." },
-                String::as_str,
-            )
+            .map(String::as_str)
+            .or(signed_out.then_some("Not signed in to GitHub: sign in or save a token in the Account row."))
+            .unwrap_or(if reading {
+                "Reading the releases on GitHub first."
+            } else {
+                "Publishing is starting."
+            })
             .to_owned();
         let mut publish = false;
         let mut cancel = false;
@@ -663,7 +670,9 @@ impl PublishDialog {
         let signed_in = source != AccountSource::None || account.is_none();
         let tag_wrong =
             !tags::valid_tag(&self.tag) || (clash.found && !clash.version) || self.title.len() > MAX_TITLE;
-        PropertyGrid::new("publish").show(ui, |g| {
+        // a label column in em: the labels are a word or two, the values take the rest
+        let frac = em(9.0) / ui.available_width().max(1.0);
+        PropertyGrid::new("publish").label_frac(frac).show(ui, |g| {
             // what goes out in one line, what to say about it, and everything with a good default under More
             let flags = if repo_ok && version_ok { PropFlags::READ_ONLY } else { PropFlags::READ_ONLY | PropFlags::INVALID };
             let name = if module.name.is_empty() { &module.id } else { &module.name };
@@ -677,7 +686,32 @@ impl PublishDialog {
                 acts.push(Act::RepoPage(module.repo.clone()));
             }
             g.block(|ui| {
-                text_block(ui, "Notes", "What changed, shown on the release page. Markdown.", &mut self.notes, 5);
+                let p = palette(ui.ctx());
+                ui.horizontal(|ui| {
+                    ui.add_space(6.0);
+                    let _ = text::label(ui, "Notes", Font::Body, p.text_secondary, Clip::End)
+                        .on_hover_text("What changed, shown on the release page. Markdown.");
+                });
+                let w = ui.available_width().max(1.0);
+                let resp = ui.add(
+                    egui::TextEdit::multiline(&mut self.notes)
+                        .font(Font::Body.id())
+                        .margin(egui::Margin::symmetric(8, 6))
+                        .hint_text("What changed in this release - players read it on the release page. Markdown.")
+                        .desired_rows(5)
+                        .desired_width(w),
+                );
+                // an input reads as one: its outline, the focus ring while it has the keys
+                let stroke = if resp.has_focus() {
+                    egui::Stroke::new(2.0, p.accent_bright)
+                } else if resp.hovered() {
+                    egui::Stroke::new(1.0, p.border)
+                } else {
+                    egui::Stroke::new(1.0, p.border_subtle)
+                };
+                ui.painter().rect_stroke(resp.rect, egui::CornerRadius::same(4), stroke, egui::StrokeKind::Inside);
+                gz_ui::audit::control(ui.ctx(), "Notes", true, None, Some("What changed, shown on the release page. Markdown."), resp.rect);
+                ui.add_space(6.0);
             });
             // what has to be dealt with before this can go is never folded away
             if key_locked {
@@ -712,7 +746,7 @@ impl PublishDialog {
                 });
                 g.row(
                     "Requires Game",
-                    "The lowest Dead Air: Refined version this release runs on: the version of the linked game. Over MCP, mod_publish requires_game= names another one.",
+                    "The lowest Dead Air: Refined version this release runs on: the version of the linked game. release.publish requires_game= names another one.",
                     PropFlags::READ_ONLY,
                     0,
                     |ui| read_only(ui, if requires.is_empty() { "Any version" } else { requires }, Clip::End),
@@ -747,7 +781,7 @@ impl PublishDialog {
         let signing = matches!(self.sign.state.as_str(), "starting" | "waiting") && self.signing;
         let text_ = match account {
             None => "Reading the account...".to_owned(),
-            Some(_) if !signed_in => "Not signed in".to_owned(),
+            Some(_) if !signed_in => "Not signed in to GitHub: sign in or save a token".to_owned(),
             Some((s, detail)) if detail.is_empty() => s.text().to_owned(),
             Some((s, detail)) => format!("{} ({detail})", s.text()),
         };
@@ -841,7 +875,7 @@ impl PublishDialog {
             }
             Act::Publish => self.start(cx, editor, game_version),
             Act::SignIn => {
-                Publisher::of(editor).sign_in(editor);
+                let _job = Publisher::of(editor).sign_in(editor);
                 self.signing = true;
                 self.sign_shown = false;
                 self.sign = Sign { state: "starting".to_owned(), ..Sign::default() };
@@ -1131,7 +1165,7 @@ impl ReleaseUi {
             Github::of(&editor).warm_account();
         }
         let list = ReleaseList::of(&editor);
-        // mod_releases select show=edit: the edit dialog, to be looked at
+        // release.view select= edit=true: the edit dialog, to be looked at
         if let Some(target) = list.take_edit_request() {
             self.open_edit(target);
         }
@@ -1197,7 +1231,6 @@ mod tests {
             tag: "v1.2.0",
             title: "OD 1.2.0",
             clash: &clash,
-            signed_out: true,
             managing: false,
         };
         let (out, fixes) = problems(&i);
@@ -1206,16 +1239,10 @@ mod tests {
         assert!(out[1].contains("already published as v1.2.0"));
         assert!(out[2].contains("1.4 is not MAJOR.MINOR.PATCH"));
         assert!(out[3].starts_with("The author key is locked"));
-        assert!(out.last().is_some_and(|l| l.starts_with("Not signed in")));
+        // the account row says it, with its action beside it: not a second time at the top
+        assert!(!out.iter().any(|l| l.starts_with("Not signed in")));
         let none = Clash::default();
-        let ok = ProblemInput {
-            repo: "me/od",
-            requires: "1.4.2",
-            key_locked: false,
-            signed_out: false,
-            clash: &none,
-            ..i
-        };
+        let ok = ProblemInput { repo: "me/od", requires: "1.4.2", key_locked: false, clash: &none, ..i };
         assert_eq!(problems(&ok), (Vec::new(), 0));
     }
 

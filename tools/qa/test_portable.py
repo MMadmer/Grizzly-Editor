@@ -110,9 +110,9 @@ def wait_scene(port: int, seconds: float = 300) -> str:
     while time.monotonic() < deadline:
         # a minimised editor draws only when asked: the frame that reopens the scene is drawn here
         mcp(port, "ui.list")
-        info = mcp(port, "scene_info", timeout=60)
-        if SCENE in (info.get("scene") or "").lower():
-            return info.get("scene") or ""
+        info = mcp(port, "scene.info", timeout=60)
+        if SCENE in (info.get("file") or "").lower():
+            return info.get("file") or ""
         time.sleep(1)
     return ""
 

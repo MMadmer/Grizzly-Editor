@@ -91,10 +91,10 @@ impl KeyLine {
         bytes.fill(0);
         self.unlocking = true;
         let (ed, inbox) = (editor.clone(), self.inbox.clone());
-        let a = args([("action", s("key_unlock")), ("password", s(&password))]);
+        let a = args([("action", s("open")), ("password", s(&password))]);
         drop(password);
         let _task = editor.exec.spawn(async move {
-            let reply = ed.call("mod_catalog", a, ed.ui_origin()).await;
+            let reply = ed.call("release.key", a, ed.ui_origin()).await;
             let problem = if call::ok(&reply) { String::new() } else { call::error_text(&reply) };
             let state = gz_release::key_state(&ed).await;
             let mut inbox = inbox.lock();
@@ -461,7 +461,7 @@ impl PackageDialog {
                         call::log_lines(&editor, line);
                     }
                 }
-                PropertyGrid::new("package_dialog").label_frac(0.32).show(ui, |g| {
+                PropertyGrid::new("package_dialog").label_frac(em(9.0) / ui.available_width().max(1.0)).show(ui, |g| {
                     g.row("Release", "The module id and the version from Mod Settings.", PropFlags::READ_ONLY, 0, |ui| read_only(ui, &release, Clip::End));
                     g.section("More", out_dir.trim().is_empty() || !requires_ok, None, |g| {
                         let action = g.row(

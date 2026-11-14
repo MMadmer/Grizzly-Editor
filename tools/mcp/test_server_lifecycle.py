@@ -151,15 +151,16 @@ def test_json_arguments(host: str, port: int, timeout: float) -> None:
     if response.get("query") == "sentinel":
         raise AssertionError(f"non-string value captured the next field: {response!r}")
 
+    # a nested object is no parameter of its own: the request is refused, naming it, and the top-level
+    # argument of the same name is never taken from inside it
     response = one_wire_request(
         host,
         port,
-        b'{"cmd":"property_inspector","meta":{"filter":"wrong"},"action":"filter",'
-        b'"target":"world","filter":"lighting"}',
+        b'{"cmd":"ui.palette","meta":{"query":"wrong"},"action":"query","query":"lighting"}',
         timeout,
     )
-    if not response.get("ok") or response.get("filter") != "lighting":
-        raise AssertionError(f"nested field shadowed a top-level argument: {response!r}")
+    if response.get("ok") or "meta" not in response.get("error", "") or response.get("query") == "wrong":
+        raise AssertionError(f"a nested field was taken for an argument: {response!r}")
 
     require_ping(host, port, timeout)
 
@@ -175,10 +176,10 @@ def test_overflow(host: str, port: int, timeout: float) -> None:
 
 def test_timeout(host: str, port: int, timeout: float, scene: str, recovery_timeout: float) -> None:
     with connect(host, port, recovery_timeout) as client:
-        response = send_request(client, {"cmd": "open_scene", "scene": scene}, recovery_timeout)
+        response = send_request(client, {"cmd": "scene.open", "path": scene}, recovery_timeout)
         if response.get("ok") or "timeout" not in response.get("error", ""):
             raise AssertionError(
-                "open_scene did not time out; launch with "
+                "scene.open did not time out; launch with "
                 f"GRIZZLY_MCP_REQUEST_TIMEOUT_MS below the scene load time: {response!r}"
             )
 

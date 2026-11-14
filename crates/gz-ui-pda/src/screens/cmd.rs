@@ -1,8 +1,7 @@
-//! `screens_view` (`EditorScreens::McpView`, frozen wire): opens or reports the Screens & Music
-//! tab - `open`, `surface`, `screen` / `track` / `layer` - and lands files at a window point the
-//! way a drop from Explorer does (`simulate_drop`, `x`, `y` in pixels). Answers `{tab, open,
-//! active, surface, screen, track, layer, status}`; the data path stays `screens_get` /
-//! `screens_set`.
+//! `screens.view`: opens or reports the Screens & Music tab - `open`, `surface`, `screen` /
+//! `track` / `layer` - and lands files at a window point the way a drop from Explorer does
+//! (`simulate_drop`, `x`, `y` in pixels). Answers `{tab, open, active, surface, screen, track,
+//! layer, status}`; the data is `screens.info` / `screens.set` / `screens.import`.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -10,6 +9,8 @@ use std::time::{Duration, Instant};
 
 use gz_base::Origin;
 use gz_editor::{Args, Editor, Reply};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::screens::ScreensTab;
@@ -58,7 +59,41 @@ fn arg_int(args: &Args, key: &str, def: i64) -> i64 {
     }
 }
 
-pub async fn screens_view(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ViewParams {
+    /// Brings the tab up.
+    #[serde(default)]
+    open: bool,
+    /// The surface the tab shows: loading or menu.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    surface: Option<String>,
+    /// Selects a screen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    screen: Option<String>,
+    /// With `screen`: selects its layer (0 the bottom one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    layer: Option<i64>,
+    /// Selects a track.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    track: Option<String>,
+    /// Files (separated by |) dropped at the window point `x`, `y` (px), the way a drop from
+    /// Explorer lands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    simulate_drop: Option<String>,
+    /// The window point of `simulate_drop`, from the left, in pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    x: Option<f32>,
+    /// The window point of `simulate_drop`, from the top, in pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    y: Option<f32>,
+}
+
+pub async fn screens_view(editor: Arc<Editor>, p: ViewParams, _origin: Origin) -> Reply {
+    let args = match serde_json::to_value(&p) {
+        Ok(Value::Object(map)) => map,
+        _ => Args::new(),
+    };
     let session = editor.project_opt();
     let tab = session.as_ref().map(|s| ScreensTab::of_session(s));
     if arg_bool(&args, "open") && tab.is_some() {

@@ -27,7 +27,7 @@ pub enum Purpose {
     DetailObjects,
     /// The objects a colour index scatters (several), by the index's position.
     ColorIndexObjects(usize),
-    /// A tool command takes the pick as an argument (`aimap_tool action=ignore_material name=`).
+    /// A tool command takes the pick as an argument (`scene.ai_map action=set ignore_materials=`).
     ToolCommand { cmd: &'static str, action: &'static str, arg: &'static str },
     /// The Random Settings sheet's Objects (several).
     RandomObjects,

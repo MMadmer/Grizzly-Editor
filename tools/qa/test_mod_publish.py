@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end check of Mod > Publish Release against tools/qa/github_mock (Go).
 
-Starts the editor with -qa_github on a project, drives mod_publish over the MCP
+Starts the editor with -qa_github on a project, drives release.publish over the MCP
 socket and takes every verdict from the mock's own state. Never talks to GitHub:
 in QA mode the editor reads only GRIZZLY_GITHUB_TOKEN and a separate QA
 credential, so the real account cannot leak into a test either.
@@ -157,7 +157,7 @@ class Editor:
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
             try:
-                if mcp("mod_manifest", timeout=30).get("ok"):
+                if mcp("mod.info", timeout=30).get("ok"):
                     return
             except OSError:
                 pass
@@ -178,56 +178,44 @@ class Editor:
             print("! the editor did not close on its own - leaving it to the operator", flush=True)
 
 
+def set_release(version: str) -> dict:
+    return mcp("mod.set", set={"module": {"version": version}, "update": {"github": GITHUB_REPO}})
+
+
 def publish(version: str, wait_seconds: float = 180.0, **extra) -> dict:
-    """mod_set_manifest + mod_publish, followed to the end."""
-    set_result = mcp("mod_set_manifest", version=version, github=GITHUB_REPO)
+    """mod.set the version, then release.publish, which answers once the release is out or refused."""
+    set_result = set_release(version)
     if not set_result.get("ok"):
         return set_result
-    t0 = time.monotonic()
-    data = mcp("mod_publish", **extra)
-    deadline = time.monotonic() + wait_seconds
-    seen = []
-    while data.get("ok") and data.get("pending") and time.monotonic() < deadline:
-        time.sleep(0.05)
-        data = mcp("mod_publish", action="status")
-        st = str(data.get("state")) + "|" + str(data.get("step") or data.get("stage") or data.get("detail") or data.get("progress"))
-        if os.environ.get("QA_STAGES") and not seen:
-            print("STATUS", json.dumps(data)[:600], flush=True)
-        if os.environ.get("QA_STAGES") and (not seen or seen[-1][1] != st):
-            seen.append((round(time.monotonic() - t0, 2), st))
-    if seen:
-        print("STAGES", version, seen, round(time.monotonic() - t0, 2), flush=True)
-    return data
+    return mcp("release.publish", timeout=wait_seconds + 30, **extra)
 
 
-def releases(wait_seconds: float = 60.0, **extra) -> dict:
-    """mod_releases, followed until the worker is done."""
-    data = mcp("mod_releases", **extra)
-    deadline = time.monotonic() + wait_seconds
-    while data.get("ok") and data.get("pending") and time.monotonic() < deadline:
-        time.sleep(0.05)
-        data = mcp("mod_releases", action="status")
-    return data
+def releases(**extra) -> dict:
+    """release.list / release.edit / release.delete by the old action words; each answers when GitHub did."""
+    action = extra.pop("action", "list")
+    cmd = {"list": "release.list", "status": "release.list", "edit": "release.edit", "delete": "release.delete"}[action]
+    return mcp(cmd, **extra)
 
 
 def ui_phase(mock: "Mock") -> None:
     """U: the Releases tab (a document of its own) and the Publish Release dialog, opened, looked at and closed over
     MCP. Nothing in them is clicked: a look never publishes, edits or deletes anything."""
     window = str((mcp("ui.contract").get("dialogs") or {}).get("publish_release") or "Publish Release###dlg.publish_release")
-    dialog = window.partition("###")[2] or window
+    # the dialog on top is answered by its short id
+    dialog = (window.partition("###")[2] or window).removeprefix("dlg.")
     before = [(r["id"], r["name"], r["draft"]) for r in mock.state()["releases"]]
 
     opened = mcp("ui.tab", action="open", kind="releases")
     check(opened.get("ok") and (opened.get("tab") or {}).get("id") == "releases",
           "U the Releases tab opens as a document of its own, the active one", str(opened))
-    data = releases(action="status")
+    data = releases()
     check(data.get("ok") and data.get("listed") and data.get("tab") is True,
-          "U the tab reads the list, and mod_releases says the tab is up", str(data)[:300])
+          "U the tab reads the list, and release.list says the tab is up", str(data)[:300])
     latest = next((r for r in data.get("releases", []) if r.get("latest")), {})
-    picked = mcp("mod_releases", action="select", tag=latest.get("tag", ""))
-    check(picked.get("ok") and picked.get("selected") == latest.get("id") and not picked.get("pending"),
+    picked = mcp("release.view", select=latest.get("tag", ""))
+    check(picked.get("ok") and picked.get("selected") == latest.get("id"),
           "U select marks the release the details show, and asks GitHub nothing", str(picked)[:300])
-    refused = mcp("mod_releases", action="select", tag="v7.7.7")
+    refused = mcp("release.view", select="v7.7.7")
     check(not refused.get("ok") and "no release carries the tag" in str(refused.get("error")),
           "U selecting a tag the list does not hold is refused", str(refused))
     pic = mcp("shot.window")
@@ -242,10 +230,10 @@ def ui_phase(mock: "Mock") -> None:
           str(audit.get("escaped")) + " " + str(sorted(controls)))
 
     # the edit dialog, put up to be looked at: only a click in it would save anything
-    shown = mcp("mod_releases", action="select", tag=latest.get("tag", ""), show="edit")
+    shown = mcp("release.view", select=latest.get("tag", ""), edit=True)
     pic = mcp("shot.window")
     check(shown.get("ok") and (pic.get("modal") or {}).get("id") == "dlg.edit_release",
-          "U select show=edit puts the release's edit dialog up", str(pic.get("modal")))
+          "U release.view select= edit=true puts the release's edit dialog up", str(pic.get("modal")))
     audit = mcp("ui.audit", id="dlg.edit_release")
     labels = [c.get("label") for c in audit.get("controls") or []]
     check("Save" in labels and "Cancel" in labels and not audit.get("escaped"),
@@ -256,11 +244,11 @@ def ui_phase(mock: "Mock") -> None:
     # The manifest still names 0.9.11, which is out: the dialog reads the releases as it opens and lists that before
     # the click, where GitHub would refuse it only after the packaging.
     opened = mcp("ui.dialog", action="open", id="publish_release")
-    listed = releases(action="status")
+    listed = releases()
     pic = mcp("shot.window")
     modal = pic.get("modal") or {}
     check(opened.get("ok") and modal.get("id") == dialog, "U Publish Release opens as the dialog " + dialog, str(modal))
-    check(listed.get("ok") and listed.get("listed") and not listed.get("pending"), "U the dialog reads the releases as it opens",
+    check(listed.get("ok") and listed.get("listed"), "U the dialog reads the releases as it opens",
           str(listed)[:300])
     audit = mcp("ui.audit", id="publish_release")
     controls = {c.get("label"): c for c in audit.get("controls") or []}
@@ -270,7 +258,7 @@ def ui_phase(mock: "Mock") -> None:
           str(publish_button))
     check("Open Mod Settings" in controls and "Open Releases" in controls,
           "U the problem names where it is fixed: Open Mod Settings, Open Releases", str(sorted(controls)))
-    raised = mcp("mod_set_manifest", version="0.9.99", github=GITHUB_REPO)
+    raised = set_release("0.9.99")
     mcp("shot.window")
     audit = mcp("ui.audit", id="publish_release")
     controls = {c.get("label"): c for c in audit.get("controls") or []}
@@ -283,8 +271,8 @@ def ui_phase(mock: "Mock") -> None:
     check(closed.get("ok") and not pic.get("modal"), "U ui_dialog close takes it down, as Esc would", str(pic.get("modal")))
 
     closed = mcp("ui.tab", action="close", doc="releases")
-    data = mcp("mod_releases", action="status")
-    check(closed.get("ok") and data.get("tab") is False, "U the tab closes; the list stays readable over MCP", str(closed))
+    data = mcp("release.view")
+    check(closed.get("ok") and data.get("releases_tab") is False, "U the tab closes; release.view says so", str(data))
     after = [(r["id"], r["name"], r["draft"]) for r in mock.state()["releases"]]
     check(after == before, "U looking changed nothing on GitHub", f"{before} -> {after}")
 
@@ -349,7 +337,7 @@ def write_seed(folder: str, module_id: str | None, withdrawn: bool = False) -> s
 def vt_forget_key() -> None:
     """The QA VirusTotal credential goes with the run - and with a run before it that stopped halfway."""
     try:
-        mcp("mod_catalog", action="vt_key_forget")
+        mcp("release.account", action="forget_vt_key")
     except (OSError, ValueError):
         pass
 
@@ -402,7 +390,7 @@ class Run:
         self.token_editor = with_token
         vt_forget_key()
         if not self.module_id:
-            manifest = mcp("mod_manifest")
+            manifest = mcp("mod.info").get("manifest", {})
             self.module_id = manifest["id"]
             # a release is titled "<module name> <version>" - whatever project the run is given
             self.module_name = manifest.get("name") or self.module_id
@@ -429,7 +417,7 @@ class Run:
         c = self.check
         self.new_mock()
         self.ensure_editor(True)
-        account = mcp("mod_publish", action="account")
+        account = mcp("release.account")
         c(account.get("signed_in") and account.get("source") == "environment variable", "A account: the environment token is in effect", str(account))
         c(account.get("device_sign_in") is True, "A account: the device sign-in is on offer in QA mode", str(account))
         data = publish("0.9.1", notes="First line.\nSecond line with \"quotes\" and a \\ backslash.", title="QA release 0.9.1")
@@ -528,23 +516,26 @@ class Run:
         os.makedirs(os.path.dirname(weight_file), exist_ok=True)
         with open(weight_file, "wb") as fh:
             fh.write(os.urandom(6 << 20))
-        mcp("mod_set_manifest", version="0.9.6", github=GITHUB_REPO)
-        packaged = mcp("mod_package")
+        set_release("0.9.6")
+        packaged = mcp("mod.package")
         weight = sum(p.get("size", 0) for p in packaged.get("packages", [])) + (packaged.get("index") or {}).get("size", 0)
         kbps = max(2, weight * 8 * 2 // 1000 // 3)
         self.new_mock("--throttle-kbps", str(kbps))
-        data = mcp("mod_publish")
-        check(data.get("ok") and data.get("pending"), "I the upload starts and the editor answers at once", str(data))
-        time.sleep(0.4)
-        mcp("mod_publish", action="cancel")
+        started = mcp("release.publish", wait=False)
+        check(started.get("ok") and started.get("job"), "I wait=false answers the job at once", str(started))
+        # the packaging, then the upload: the second job is the one to stop
+        upload = None
         deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            data = mcp("mod_publish", action="status")
-            if not data.get("pending"):
-                break
+        while time.monotonic() < deadline and upload is None:
+            running = [j for j in mcp("job.list", running=True).get("jobs", []) if j.get("group") == "publish"]
+            upload = running[0] if running else None
             time.sleep(0.05)
+        time.sleep(0.4)
+        stopped = mcp("job.stop", job=(upload or {}).get("id", 0))
+        ended = mcp("job.wait", job=(upload or {}).get("id", 0), timeout=90)
         state = self.mock.state()
-        check(data.get("state") == "cancelled", "I cancel ends the job as 'cancelled'", str(data))
+        check(stopped.get("ok") and ended.get("state") == "cancelled", "I job.stop ends the upload as 'cancelled'",
+              json.dumps(ended)[:300])
         check(len(drafts(state)) == 1 and not published(state), "I nothing is published and the draft stays")
         # the throttled mock drains what the socket had buffered before it meets the closed connection
         stubs = []
@@ -626,8 +617,8 @@ class Run:
         draft = next((r for r in state["releases"] if r["id"] == draft_id), {})
         c(data.get("ok") and draft.get("name") == "Left behind, renamed" and draft.get("draft") is True,
           "R a draft is edited by id and stays a draft", str(draft))
-        refused = mcp("mod_releases", action="edit", tag="v0.9.10")
-        c(not refused.get("ok") and "'title' or 'notes'" in str(refused.get("error")), "R an edit that changes nothing is refused", str(refused))
+        refused = mcp("release.edit", tag="v0.9.10")
+        c(not refused.get("ok") and "title or notes" in str(refused.get("error")), "R an edit that changes nothing is refused", str(refused))
         refused = releases(action="edit", tag="v7.7.7", title="x")
         c(not refused.get("ok") and "no release carries the tag" in str(refused.get("error")), "R an edit of an unknown tag is refused", str(refused))
         return listed
@@ -684,8 +675,8 @@ class Run:
               "R a fresh tag is no way around a version that is out", str(data))
         data = releases(action="delete", tag="v7.7.7")
         check(not data.get("ok") and "no release carries the tag" in str(data.get("error")), "R an unknown tag is refused", str(data))
-        data = mcp("mod_releases", action="delete")
-        check(not data.get("ok") and "'id' or 'tag'" in str(data.get("error")), "R delete without a target is refused", str(data))
+        data = mcp("release.delete")
+        check(not data.get("ok") and "id or tag" in str(data.get("error")), "R delete without a target is refused", str(data))
         check(len(mock.state()["releases"]) == 2, "R and nothing else was deleted")
         mock = self.new_mock("--protect-tags")
         data = publish("0.9.13")
@@ -700,7 +691,7 @@ class Run:
     def v(self) -> None:
         self.ensure_editor(True)
         mock = self.new_mock("--vt-hide-new", catalog="listed")
-        stored = mcp("mod_catalog", action="vt_key", key=VT_KEY)
+        stored = mcp("release.account", action="save_vt_key", key=VT_KEY)
         check(stored.get("ok") and stored.get("vt_key") is True and VT_KEY not in json.dumps(stored),
               "V the author's VirusTotal key is stored, and not echoed", str(stored))
         data = publish("0.9.30")
@@ -734,7 +725,7 @@ class Run:
         check(not vt_requests(state) and (data.get("virustotal") or {}).get("state") == "no_key",
               "V and VirusTotal was not asked", str(vt_requests(state)))
 
-        mcp("mod_catalog", action="vt_key", key=VT_KEY)
+        mcp("release.account", action="save_vt_key", key=VT_KEY)
         mock = self.new_mock("--vt-upload-results", json.dumps({TRUSTED: "malicious", "EngineA": "undetected"}), catalog="listed")
         data = publish("0.9.32")
         state = mock.state()
@@ -780,7 +771,7 @@ class Run:
               "did not answer" in str(data.get("warnings")) and "once VirusTotal knows" in str(data.get("warnings")),
               "V the catalog does not answer and there is no key: published, with a note", str(data))
 
-        mcp("mod_catalog", action="vt_key", key=VT_KEY)
+        mcp("release.account", action="save_vt_key", key=VT_KEY)
         mock = self.new_mock()
         data = publish("0.9.36")
         state = mock.state()
@@ -791,62 +782,56 @@ class Run:
 
     def k(self) -> None:
         self.ensure_editor(True)
-        bad = mcp("mod_publish", tag="bad tag")
+        bad = mcp("release.publish", tag="bad tag")
         check(not bad.get("ok") and "invalid tag" in str(bad.get("error")), "K an invalid tag is refused", str(bad))
         open(self.manifest_path, "wb").write(self.original)
         if b"github" not in self.original:
-            data = mcp("mod_publish")
+            data = mcp("release.publish")
             check(not data.get("ok") and "no GitHub repository" in str(data.get("error")), "K a manifest without a repository is refused", str(data))
 
     # -- phase 2: no environment token - the device sign-in and the saved credential
     def l(self) -> None:
         self.new_mock("--device-approve-after", "2", "--device-interval", "1")
         self.ensure_editor(False)
-        mcp("mod_publish", action="sign_out")
-        account = mcp("mod_publish", action="account")
+        mcp("release.account", action="sign_out")
+        account = mcp("release.account")
         check(account.get("signed_in") is False, "L without a token the editor is not signed in", str(account))
         data = publish("0.9.8")
         check(not data.get("ok") and "not signed in" in str(data.get("error")), "L and publishing says so before it packages anything", str(data))
         check(not os.path.isdir(os.path.join(self.releases_root, "0.9.8")), "L nothing was packaged for it")
-        data = mcp("mod_releases")
+        data = mcp("release.list")
         check(not data.get("ok") and "not signed in" in str(data.get("error")), "L the release list asks for a sign-in too", str(data))
 
     def n(self) -> None:
         self.new_mock("--device-approve-after", "2", "--device-interval", "1")
         self.ensure_editor(False)
         # the account over MCP alone: what a window's Save Token does, without the window
-        account = mcp("mod_publish", action="save_token", token=TOKEN)
+        account = mcp("release.account", action="save_token", token=TOKEN)
         check(account.get("signed_in") is True and account.get("source") == "token saved by the editor" and
               TOKEN not in json.dumps(account), "N save_token signs the editor in and echoes nothing", str(account))
-        refused = mcp("mod_publish", action="save_token", token="not a token")
+        refused = mcp("release.account", action="save_token", token="not a token")
         check(not refused.get("ok") and "does not look like" in str(refused.get("error")), "N a string that is no token is refused", str(refused))
-        refused = mcp("mod_publish", action="save_token")
-        check(not refused.get("ok") and "needs 'token'" in str(refused.get("error")), "N save_token without a token is refused", str(refused))
+        refused = mcp("release.account", action="save_token")
+        check(not refused.get("ok") and "needs token" in str(refused.get("error")), "N save_token without a token is refused", str(refused))
         data = publish("0.9.14")
         check(data.get("state") == "done" and data.get("served") is True, "N publishing works with the token saved over MCP", str(data))
         data = releases(action="delete", tag="v0.9.14")
         check(data.get("ok") and "and its tag are deleted" in str(data.get("note")), "N and so does deleting", str(data))
-        account = mcp("mod_publish", action="sign_out")
+        account = mcp("release.account", action="sign_out")
         check(account.get("signed_in") is False, "N sign_out forgets the saved token", str(account))
 
     def m(self) -> None:
         # the first poll after the code is handed out finds it confirmed
         self.new_mock("--device-approve-after", "1", "--device-interval", "1")
         self.ensure_editor(False)
-        mcp("mod_publish", action="sign_out")
-        data = mcp("mod_publish", action="sign_in")
-        deadline = time.monotonic() + 30
-        while data.get("state") == "starting" and time.monotonic() < deadline:
-            time.sleep(0.05)
-            data = mcp("mod_publish", action="sign_in_status")
-        check(data.get("state") == "waiting" and data.get("user_code") == "WDJB-MJHT", "M the sign-in hands out the code for the person", str(data))
+        mcp("release.account", action="sign_out")
+        data = mcp("release.account", action="sign_in")
+        check(data.get("ok") and data.get("user_code") == "WDJB-MJHT" and data.get("job"),
+              "M the sign-in hands out the code for the person, and the job that waits for it", str(data))
         check(TOKEN not in json.dumps(data), "M and no token")
-        deadline = time.monotonic() + 60
-        while data.get("pending") and time.monotonic() < deadline:
-            time.sleep(0.1)
-            data = mcp("mod_publish", action="sign_in_status")
-        check(data.get("state") == "done", "M the confirmation on GitHub completes it", str(data))
-        account = mcp("mod_publish", action="account")
+        done = mcp("job.wait", job=data.get("job", 0), timeout=90)
+        check(done.get("state") == "done", "M the confirmation on GitHub completes it", str(done))
+        account = mcp("release.account")
         check(account.get("source") == "token saved by the editor" and TOKEN not in json.dumps(account),
               "M the token sits in the credential store, not in an answer", str(account))
         data = publish("0.9.8")
@@ -854,7 +839,7 @@ class Run:
         sign_in_traffic = [r for r in self.mock.state()["requests"] if r["path"].startswith("/login/")]
         check(sign_in_traffic and all(not r["authorized"] for r in sign_in_traffic),
               "M the sign-in itself carries no token", str(sign_in_traffic))
-        account = mcp("mod_publish", action="sign_out")
+        account = mcp("release.account", action="sign_out")
         check(account.get("signed_in") is False, "M sign_out forgets it", str(account))
 
 
@@ -890,6 +875,8 @@ def main() -> int:
                         run.quiet = False
             getattr(run, p.lower() + ("_" if p == "C" else ""))()
             print("TIME phase %s %.1f s" % (p, time.monotonic() - t), flush=True)
+        stalls = mcp("perf.stalls")
+        check(stalls.get("ok") and not stalls.get("stalls"), "Z no UI pass waited", json.dumps(stalls)[:300])
     finally:
         run.close()
         qa_target.remove_tree(work)

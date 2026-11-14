@@ -1,35 +1,87 @@
-//! `mod_settings_view`: the Mod Settings tab for whoever looks at it (`EditorMod::McpSettingsView`).
-//! A `page` opens the tab on that page, `ask_game_updates` puts the Disable Game Updates question
-//! up on its next frame; without either this only reports. The data path stays `mod_manifest` /
-//! `mod_set_manifest`.
+//! `mod.view`: the Mod Settings tab, and the dialogs of the builds and of the packaging, for
+//! whoever looks at them. A `page` opens the tab on that page, `ask_game_updates` puts the Disable
+//! Game Updates question up, `dialog` puts a build's or the packaging's dialog up the way the Mod
+//! menu does; without any of them this only reports. The data is `mod.info` / `mod.set`.
 
 use std::sync::Arc;
 
 use gz_app::on_ui;
 use gz_base::Origin;
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Reply};
+use gz_editor::{CmdError, Editor, Registry, Reply, Spec};
+use schemars::JsonSchema;
+use serde::Deserialize;
 
 use crate::call::{args, ok, s};
 use crate::form::{self, PAGES};
 use crate::settings::{ModSettingsDoc, TAB, view_json};
 
-pub(crate) async fn mod_settings_view(ed: Arc<Editor>, a: Args, origin: Origin) -> Reply {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum Dialog {
+    /// Build to Folder.
+    BuildToFolder,
+    /// Export Flat Gamedata.
+    ExportFlat,
+    /// Package Release.
+    PackageRelease,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ViewParams {
+    /// Opens the tab on a page: general, mod_browser, game_mode, relations, build_contents, pda,
+    /// commands.
+    #[serde(default)]
+    page: Option<String>,
+    /// Puts the Disable Game Updates question up on the General page, to be looked at.
+    #[serde(default)]
+    ask_game_updates: bool,
+    /// Puts a build's or the packaging's dialog up, as the Mod menu does.
+    #[serde(default)]
+    dialog: Option<Dialog>,
+}
+
+pub(crate) fn register(reg: &mut Registry) {
+    reg.cmd(
+        Spec::view("mod.view", "Puts Mod Settings up on a page, or a build's or the packaging's dialog, and answers what it shows.")
+            .example("page=commands"),
+        mod_view,
+    );
+}
+
+async fn mod_view(ed: Arc<Editor>, p: ViewParams, origin: Origin) -> Reply {
     ed.project()?;
     crate::cards::ensure(&ed);
-    let page = match a.text("page") {
+    if let Some(dialog) = p.dialog {
+        on_ui(&ed, move |shell, ctx| {
+            shell.with_cx(ctx, |cx| match dialog {
+                Dialog::BuildToFolder => crate::build::request_export(cx, false),
+                Dialog::ExportFlat => crate::build::request_export(cx, true),
+                Dialog::PackageRelease => crate::package::request(cx),
+            });
+            Ok(())
+        })
+        .await?;
+        return Ok(serde_json::json!({ "dialog": match dialog {
+            Dialog::BuildToFolder => "build_to_folder",
+            Dialog::ExportFlat => "export_flat",
+            Dialog::PackageRelease => "package_release",
+        } }));
+    }
+    let page = match p.page.as_deref() {
         Some(id) => Some(form::page_index(id).ok_or_else(|| {
             let ids: Vec<&str> = PAGES.iter().map(|p| p.id).collect();
             CmdError::invalid(format!("page must be one of: {}", ids.join(", ")))
         })?),
         None => None,
     };
-    let ask = a.flag("ask_game_updates");
+    let ask = p.ask_game_updates;
     if page.is_some() || ask {
         let reply = ed.call("ui.tab", args([("action", s("open")), ("kind", s(TAB))]), origin).await;
-        if !ok(&reply)
-            && reply.get("error").and_then(serde_json::Value::as_str)
-                != Some("the editor runs without a window")
-        {
+        let windowless = reply.get("code").and_then(serde_json::Value::as_str) == Some("no_window")
+            || reply.get("error").and_then(serde_json::Value::as_str)
+                == Some("the editor runs without a window");
+        if !ok(&reply) && !windowless {
             return Err(CmdError::new("refused", crate::call::error_text(&reply)));
         }
     }

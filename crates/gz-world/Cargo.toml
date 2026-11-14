@@ -32,3 +32,5 @@ parking_lot.workspace = true
 rayon.workspace = true
 rustc-hash.workspace = true
 serde_json.workspace = true
+serde.workspace = true
+schemars.workspace = true

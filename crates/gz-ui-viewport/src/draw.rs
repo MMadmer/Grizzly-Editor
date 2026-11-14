@@ -51,8 +51,6 @@ const GROUP_SEL: u32 = 0xFF70_70FF;
 /// `glow.cpp`'s romboid, `EParticlesObject`'s cross.
 pub(crate) const GLOW_COLOR: u32 = 0x00FF_8507;
 const PARTICLES_COLOR: u32 = 0xFFFF_EBAA;
-/// A scene object of the snap list (`RenderSnapList` draws it with the selection shader).
-const SNAP_TINT: Color = Color::rgb(150, 210, 255);
 
 /// What a frame shows besides the scene's surfaces.
 #[derive(Clone, Debug)]
@@ -202,8 +200,6 @@ fn rpoint_color(team: u8) -> Color {
 pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOptions) -> Built {
     let mut out = Built::default();
     let tools = &state.tools;
-    let snap: rustc_hash::FxHashSet<ObjId> =
-        if tools.snap_use { tools.snap.iter().copied().collect() } else { rustc_hash::FxHashSet::default() };
     let h = &mut out.list.helpers;
     for o in state.objects.values() {
         if !(o.flags.visible && tools.part(o.class).visible) {
@@ -218,9 +214,6 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
             let mut i = Instance::new(mesh, transform).with_id(o.id.0);
             if selected {
                 i = i.with_flags(InstanceFlags::SELECTED);
-            }
-            if snap.contains(&o.id) {
-                i.tint = SNAP_TINT;
             }
             i.bounds = bounds;
             out.list.instances.push(i);
@@ -660,7 +653,7 @@ pub fn frustum_select(
     size: [u32; 2],
     a: glam::Vec2,
     b: glam::Vec2,
-    class: ObjClass,
+    class: Option<ObjClass>,
     depth: Option<f32>,
 ) -> Vec<ObjId> {
     let (w, h) = (size[0].max(1) as f32, size[1].max(1) as f32);
@@ -703,9 +696,16 @@ pub fn frustum_select(
             n.dot(Vec3::select(n.cmpge(Vec3::ZERO), b.max, b.min)) + pl.w >= 0.0
         })
     };
+    // every kind the viewport may pick, or the one asked for
     state
-        .of_class(class)
-        .filter(|o| o.flags.visible && o.editable())
+        .objects
+        .values()
+        .filter(|o| {
+            class.is_none_or(|c| o.class == c)
+                && o.class.is_object_tool()
+                && state.pickable(o)
+                && o.editable()
+        })
         .filter(|o| match &o.data {
             // lights, sounds, glows and particles test their mark, not their range
             ObjData::Light(_) | ObjData::SoundSrc(_) => {
@@ -749,6 +749,44 @@ pub fn object_box(state: &SceneState, lib: &Library, o: &Object) -> Aabb {
         let p = o.position();
         Aabb::new(p - Vec3::splat(2.0), p + Vec3::splat(2.0))
     })
+}
+
+/// The box Frame frames: the painted layer of its mode, else every visible object of every kind
+/// (the selected ones with `selected_only`).
+#[must_use]
+pub fn scene_box(state: &SceneState, lib: &Library, selected_only: bool) -> Option<Aabb> {
+    if let Some(layer) = state.tools.mode.layer() {
+        return class_box(state, lib, layer, selected_only);
+    }
+    let mut b = Aabb::EMPTY;
+    for o in state.objects.values() {
+        if !o.flags.visible
+            || o.owner.is_some() && !selected_only
+            || (selected_only && !state.is_selected(o.id))
+        {
+            continue;
+        }
+        if let Some(ob) = world_box(state, lib, o) {
+            b = b.union(&ob);
+        }
+    }
+    (!b.is_empty()).then_some(b)
+}
+
+/// What the gizmo of the selection stands on: the AI map's selected nodes in its mode, else
+/// every selected, visible, unlocked object of any kind.
+#[must_use]
+pub fn selection_gizmo_points(state: &SceneState, lib: &Library) -> Vec<(Vec3, Vec3, Option<Aabb>)> {
+    if state.tools.mode == gz_scene::SceneMode::AiMap {
+        return gizmo_points(state, lib, ObjClass::AiMap);
+    }
+    state
+        .selected_in_order()
+        .iter()
+        .filter_map(|id| state.get(*id))
+        .filter(|o| o.flags.visible && o.editable() && state.changeable(o))
+        .map(|o| (o.position(), o.rotation(), world_box(state, lib, o)))
+        .collect()
 }
 
 /// What the gizmo of the current class's selection stands on: each selected, visible, editable
@@ -876,7 +914,7 @@ mod tests {
             size,
             glam::Vec2::new(350.0, 250.0),
             glam::Vec2::new(450.0, 350.0),
-            ObjClass::Light,
+            Some(ObjClass::Light),
             None,
         );
         assert_eq!(hit.len(), 1);
@@ -887,14 +925,14 @@ mod tests {
             size,
             glam::Vec2::new(0.0, 0.0),
             glam::Vec2::new(50.0, 50.0),
-            ObjClass::Light,
+            Some(ObjClass::Light),
             None,
         );
         assert!(miss.is_empty());
         // Limited Depth: the light is 13 m out; a box 5 m deep stops short of it, 20 m reaches it
         let (a, b) = (glam::Vec2::new(350.0, 250.0), glam::Vec2::new(450.0, 350.0));
-        assert!(frustum_select(&s, &lib, &cam, size, a, b, ObjClass::Light, Some(5.0)).is_empty());
-        assert_eq!(frustum_select(&s, &lib, &cam, size, a, b, ObjClass::Light, Some(20.0)).len(), 1);
+        assert!(frustum_select(&s, &lib, &cam, size, a, b, Some(ObjClass::Light), Some(5.0)).is_empty());
+        assert_eq!(frustum_select(&s, &lib, &cam, size, a, b, Some(ObjClass::Light), Some(20.0)).len(), 1);
         // nothing under the corners: no depth, the whole view
         let pick = ScenePick::build(&s, &lib);
         assert_eq!(box_depth(&s, &lib, &pick, &cam, size, (a, b), (0.1, 1500.0, 0.1)), None);

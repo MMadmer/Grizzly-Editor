@@ -1,0 +1,1758 @@
+-- The editor's layout fixture: a quest of 110 nodes (a long trunk, a dialog of ten evidence replies and
+-- thirty answers that loop back to them), its story replaced by placeholders.
+return {
+  nq = 1,
+  id = "n7_control",
+  title = "Ipsum dolor sit ame",
+  activation = "manual",
+  vars = {
+    e_filin = 0,
+    e_journal = 0,
+    e_lev = 0,
+    e_notes = 0,
+    e_pda = 0,
+    e_pdas = 0,
+    e_photo = 0,
+    e_polnoch = 0,
+    e_uniform = 0,
+    evidence = 0,
+    in_vault = 0,
+  },
+  tasks = {
+    silence = {
+      title = "Dolor sit amet",
+      descr = "Sit amet consectetur adipiscing elit sed do eiusmod tempo",
+      type = "storyline",
+      target = { restrictor = "od_radio" },
+    },
+    store = {
+      title = "Amet cons",
+      descr = "Consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna lore",
+      type = "storyline",
+      target = { restrictor = "od_warehouse" },
+    },
+    trial = {
+      title = "Adipisc",
+      descr = "Elit sed do eiusmod tempor ",
+      type = "storyline",
+      target = { character = "major" },
+    },
+    vault = {
+      title = "Sed do eiusmod ",
+      descr = "Do eiusmod tempor incididunt ut labore et dolore magna lorem ",
+      type = "storyline",
+      target = { restrictor = "od_hatch" },
+    },
+  },
+  nodes = {
+    { id = "start", kind = "trigger.start", out = { next = "open" } },
+
+    { id = "open", kind = "wait.timer",
+      params = { duration = { seconds = 6 } },
+      on_enter = {
+        { kind = "od.night", params = { n = 7 } },
+        {
+          kind = "od.notify",
+          params = {
+            text = "Eiusmod tempor incididunt ut labore et",
+            from = "shmyandex",
+          },
+        },
+        {
+          kind = "od.notify",
+          params = {
+            text = "Tempor incididunt ut labore et dolore magna l",
+            from = "migozaim",
+          },
+        },
+        {
+          kind = "od.radio",
+          params = {
+            text = "Incididunt ut labore et dolore magna lorem ipsum dolor sit amet consectetur ",
+          },
+        },
+        { kind = "od.sound", params = { sound = "soundtrack\\static\\static_02" } },
+        { kind = "npc.remove", params = { npc = { character = "polnoch" } } },
+        { kind = "npc.remove", params = { npc = { character = "mukhin" } } },
+        {
+          kind = "od.notify",
+          params = { text = "Ut labore et dolore ma", from = "pvz" },
+        },
+        {
+          kind = "spawn.npc",
+          params = {
+            place = { level = "l03_agroprom", pos = { -38.5, -3.97, 21.8 }, radius = 0.5 },
+            npcs = { { character = "mukhin_lair" } },
+          },
+        },
+        {
+          kind = "order.guard",
+          params = {
+            who = { character = "mukhin_lair" },
+            place = { level = "l03_agroprom", pos = { -38.5, -3.97, 21.8 }, radius = 1 },
+            radius = 2,
+          },
+        },
+      },
+      out = { done = "silence" } },
+
+    { id = "silence", kind = "flow.step",
+      on_enter = { { kind = "task.give", params = { task = "silence" } } },
+      out = { next = "booth" } },
+
+    { id = "booth", kind = "objective.reach",
+      params = { place = { restrictor = "od_radio" }, spot_task = "silence", spot_done = false },
+      out = { done = "booth_seen" } },
+
+    { id = "booth_seen", kind = "flow.step",
+      on_enter = {
+        {
+          kind = "od.clue",
+          params = {
+            text = "Labore et dolore magna lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labor",
+            title = "Et dolore magna l",
+            id = "empty_booth",
+          },
+        },
+        {
+          kind = "task.set_target",
+          params = { task = "silence", target = { restrictor = "od_plot6" } },
+        },
+        {
+          kind = "task.set_text",
+          params = {
+            task = "silence",
+            new_descr = "Dolore magna lorem ipsum dolor sit amet consectetur adipis",
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 51.8, 0.15, 37.8 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 52.5, 0.15, 37.8 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 53.2, 0.15, 37.8 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 54.6, 0.15, 37.8 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 55.3, 0.15, 37.8 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 56, 0.15, 37.8 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 56.7, 0.15, 37.8 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 57.4, 0.15, 37.8 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 58.8, 0.15, 37.8 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 59.5, 0.15, 37.8 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 60.2, 0.15, 37.8 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 60.2, 0.15, 37.8 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 65.8, 0.15, 37.8 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 64.4, 0.15, 39.2 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 64.4, 0.15, 39.2 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 63, 0.15, 39.2 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 62.3, 0.15, 39.2 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 62.3, 0.15, 38.5 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 63, 0.15, 36.4 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 63, 0.15, 36.4 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 64.4, 0.15, 36.4 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bolt",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 65.1, 0.15, 36.4 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "spawn.object",
+          params = {
+            section = "kukla",
+            place = { level = "l03_agroprom", pos = { 64.1, 0.3, 38 }, radius = 0.2 },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "bread",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 64.6, 0.2, 37.8 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "device_kerosinka",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 63.7, 0.2, 39 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "device_kerosinka",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 63.7, 0.2, 36.6 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "rope",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 64.6, 0.2, 37.1 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "od_karavai",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 66.3, 0.2, 37.8 }, radius = 0.4 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "od_tag_6",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { 64, 0.2, 37.8 }, radius = 0.2 } },
+          },
+        },
+      },
+      out = { next = "plot6_reach" } },
+
+    { id = "plot6_reach", kind = "objective.reach",
+      params = { place = { restrictor = "od_plot6" }, spot_task = "silence", spot_done = false },
+      out = { done = "plot6_seen" } },
+
+    { id = "plot6_seen", kind = "flow.step",
+      on_enter = {
+        {
+          kind = "news.tip",
+          params = {
+            text = "Magna lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore",
+          },
+        },
+        {
+          kind = "od.clue",
+          params = {
+            text = "Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna lorem ipsum dolor sit amet consectetur adipiscing elit sed ",
+            title = "Ipsum dolo",
+            id = "plot6",
+          },
+        },
+        { kind = "task.complete", params = { task = "silence" } },
+      },
+      out = {
+        next = { "p6", "p6_timer", "call_wait", "lev_hint", "lock_pick", "store_locked", "hatch" },
+      } },
+
+    { id = "p6", kind = "od.order",
+      params = {
+        descr = "Dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut",
+        to = { restrictor = "od_plot6" },
+        accept = "auto",
+        call = true,
+        caption = "Sit ame",
+        category = "place",
+        client = "Amet consectetur adipisci",
+        mode = "recipient",
+        order = "p6",
+        parcel = "od_mirror",
+        pay = 2400,
+        to_text = "Consectetur adipiscing elit sed ",
+      },
+      out = { done = "p6_done" } },
+
+    { id = "p6_timer", kind = "wait.timer",
+      params = { duration = { seconds = 1500 } },
+      out = { done = "p6_check" } },
+
+    { id = "call_wait", kind = "wait.when",
+      cond = { { kind = "event.signal", params = { name = "od_call_p6" } } },
+      out = { done = "call_where" } },
+
+    { id = "lev_hint", kind = "dialog.topic", once = true,
+      params = {
+        npc = { character = "lev" },
+        text = "Adipiscing elit sed do eiusmod te",
+      },
+      cond = { { kind = "global", params = { name = "lev_alive", op = "eq", value = true } } },
+      out = { next = "lh1" } },
+
+    { id = "lock_pick", kind = "dialog.topic", once = true,
+      params = {
+        npc = { character = "payalnik" },
+        text = "Elit sed do eiusmod tempor incididunt ut l",
+      },
+      out = { next = "lp1" } },
+
+    { id = "store_locked", kind = "wait.when",
+      cond = { { kind = "actor_in_place", params = { place = { restrictor = "od_warehouse" } } } },
+      out = { done = "store_try" } },
+
+    { id = "hatch", kind = "objective.reach",
+      params = { place = { restrictor = "od_hatch" }, spot_task = "vault", spot_done = false },
+      out = { done = "vault_setup" } },
+
+    { id = "p6_done", kind = "flow.step" },
+
+    { id = "p6_check", kind = "flow.branch",
+      params = {
+        cases = {
+          { name = "late", cond = { { kind = "var", params = { name = "in_vault", value = 0 } } } },
+        },
+      },
+      out = { late = "p6_late", ["else"] = "p6_ok" } },
+
+    { id = "p6_late", kind = "flow.step",
+      on_enter = {
+        { kind = "global.set", params = { name = "polnoch_alive", value = false } },
+        {
+          kind = "spawn.npc",
+          params = {
+            place = { level = "l03_agroprom", pos = { 63.7, 0.1, 37.8 }, radius = 0.5 },
+            npcs = { { character = "polnoch", dead = true } },
+          },
+        },
+        { kind = "od.cancel", params = { order = "p6", quiet = true } },
+        {
+          kind = "od.clue",
+          params = {
+            text = "Sed do eiusmod tempor incididunt ut labore et dolore magna lorem ipsum dolor ",
+            title = "Do eiusm",
+            id = "p6_late",
+          },
+        },
+      } },
+
+    { id = "p6_ok", kind = "flow.step" },
+
+    { id = "call_where", kind = "flow.branch",
+      params = {
+        cases = {
+          {
+            name = "near",
+            cond = {
+              {
+                kind = "any",
+                params = {
+                  of = {
+                    { kind = "actor_in_place", params = { place = { restrictor = "od_pvz" } } },
+                    { kind = "actor_in_place", params = { place = { restrictor = "od_hall" } } },
+                    {
+                      kind = "actor_in_place",
+                      params = { place = { restrictor = "od_courier_room" } },
+                    },
+                    {
+                      kind = "actor_in_place",
+                      params = { place = { restrictor = "od_warehouse" } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      out = { near = "ring", ["else"] = "call_far" } },
+
+    { id = "ring", kind = "flow.step",
+      on_enter = {
+        { kind = "od.ring", params = { place = { restrictor = "od_warehouse" }, times = 3 } },
+        {
+          kind = "news.tip",
+          params = {
+            text = "Eiusmod tempor incididunt ut labore et dolore magna lorem ipsum dolor sit amet consectetur adipiscin",
+          },
+        },
+      },
+      out = { next = "ring_after" } },
+
+    { id = "call_far", kind = "flow.step",
+      on_enter = {
+        {
+          kind = "od.notify",
+          params = {
+            text = "Tempor incididunt ut labore et dolore magna lore",
+            from = "shmyandex",
+          },
+        },
+      },
+      out = { next = "call_wait" } },
+
+    { id = "ring_after", kind = "wait.timer",
+      params = { duration = { seconds = 7 } },
+      out = { done = "ring_voice" } },
+
+    { id = "ring_voice", kind = "flow.step",
+      on_enter = {
+        {
+          kind = "news.tip",
+          params = {
+            text = "Incididunt ut labore et dolore magna lorem ipsum dolor sit amet consec",
+            sender = { character = "mukhin_lair" },
+          },
+        },
+        {
+          kind = "od.clue",
+          params = {
+            text = "Ut labore et dolore magna lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut ",
+            title = "Labore et dolore m",
+            id = "call_sign",
+          },
+        },
+        { kind = "task.give", params = { task = "store" } },
+      } },
+
+    { id = "lh1", kind = "dialog.npc_phrase",
+      params = {
+        text = "Et dolore magna lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod te",
+      },
+      on_exit = {
+        {
+          kind = "od.clue",
+          params = {
+            text = "Dolore magna lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod",
+            title = "Magna lorem ips",
+            id = "vault_hint",
+          },
+        },
+      },
+      out = { next = "lh_r" } },
+
+    { id = "lh_r", kind = "dialog.actor_phrase", params = { text = "Lorem ip" } },
+
+    { id = "lp1", kind = "dialog.npc_phrase",
+      params = {
+        text = "Ipsum dolor sit amet consectetur adipiscing elit sed do eiusm",
+      },
+      on_exit = { { kind = "item.give", params = { section = "od_lockpick", count = 1 } } },
+      out = { next = "lp_r" } },
+
+    { id = "lp_r", kind = "dialog.actor_phrase", params = { text = "Dolor si" } },
+
+    { id = "store_try", kind = "flow.branch",
+      params = {
+        cases = {
+          {
+            name = "tool",
+            cond = {
+              {
+                kind = "any",
+                params = {
+                  of = {
+                    { kind = "has_item", params = { section = "wpn_hand_crowbar", count = 1 } },
+                    { kind = "has_item", params = { section = "od_lockpick", count = 1 } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      out = { tool = "store_open", ["else"] = "store_no" } },
+
+    { id = "store_open", kind = "flow.step",
+      on_enter = {
+        { kind = "od.fade" },
+        { kind = "news.tip", params = { text = "Sit amet consectetur adip" } },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "od_lekha_uniform",
+            count = 1,
+            where = { place = { restrictor = "od_warehouse" } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "od_victim_pda",
+            count = 3,
+            where = { place = { restrictor = "od_warehouse" } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "od_seeds",
+            count = 3,
+            where = { place = { restrictor = "od_warehouse" } },
+          },
+        },
+      },
+      out = { next = "store_seen" } },
+
+    { id = "store_no", kind = "flow.step",
+      on_enter = {
+        {
+          kind = "news.tip",
+          params = {
+            text = "Amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magn",
+          },
+        },
+      },
+      out = { next = "store_locked" } },
+
+    { id = "store_seen", kind = "flow.step",
+      on_enter = {
+        {
+          kind = "od.clue",
+          params = {
+            text = "Consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna lorem ipsum dolor sit amet consectetur adipiscing elit sed do",
+            title = "Adipiscin",
+            id = "store",
+          },
+        },
+        { kind = "task.complete", params = { task = "store" } },
+        { kind = "task.give", params = { task = "vault" } },
+      } },
+
+    { id = "vault_setup", kind = "flow.step",
+      on_enter = {
+        {
+          kind = "item.spawn",
+          params = {
+            section = "od_journal",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { -38, -3.47, 29.8 }, radius = 0.2 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "od_appendix3",
+            count = 1,
+            where = {
+              place = { level = "l03_agroprom", pos = { -38.9, -3.47, 29.5 }, radius = 0.2 },
+            },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "af_medusa",
+            count = 1,
+            where = {
+              place = { level = "l03_agroprom", pos = { -37.7, -3.47, 29.2 }, radius = 0.2 },
+            },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "af_vyvert",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { -37.4, -3.47, 29 }, radius = 0.2 } },
+          },
+        },
+        {
+          kind = "spawn.object",
+          params = {
+            section = "kukla",
+            place = { level = "l03_agroprom", pos = { -39.3, -3.77, 32.3 }, radius = 0.2 },
+          },
+        },
+        {
+          kind = "spawn.object",
+          params = {
+            section = "kukla",
+            place = { level = "l03_agroprom", pos = { -39.5, -3.77, 33 }, radius = 0.2 },
+          },
+        },
+        {
+          kind = "spawn.object",
+          params = {
+            section = "kukla",
+            place = { level = "l03_agroprom", pos = { -39.7, -3.77, 33.7 }, radius = 0.2 },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "device_kerosinka",
+            ref = "lamp",
+            count = 1,
+            where = {
+              place = { level = "l03_agroprom", pos = { -38.5, -3.77, 25.8 }, radius = 0.2 },
+            },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "mirror",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { -37.9, -3.77, 34 }, radius = 0.2 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "rope",
+            count = 1,
+            where = { place = { level = "l03_agroprom", pos = { -39, -3.77, 34.4 }, radius = 0.2 } },
+          },
+        },
+        {
+          kind = "item.spawn",
+          params = {
+            section = "od_victim_pda",
+            count = 2,
+            where = {
+              place = { level = "l03_agroprom", pos = { -38.2, -3.47, 28.6 }, radius = 0.3 },
+            },
+          },
+        },
+        {
+          kind = "news.tip",
+          params = {
+            text = "Elit sed do eiusmod tempor incididunt ut labore et dolore magna lorem ipsum dolor",
+          },
+        },
+      },
+      out = { next = { "vault_in", "polnoch_tied", "trap" } } },
+
+    { id = "vault_in", kind = "objective.reach",
+      params = { place = { restrictor = "od_lair" }, spot_task = "vault", spot_done = false },
+      on_exit = { { kind = "var.set", params = { name = "in_vault", value = 1 } } },
+      out = { done = "control" } },
+
+    { id = "polnoch_tied", kind = "flow.branch",
+      params = {
+        cases = {
+          {
+            name = "alive",
+            cond = {
+              { kind = "global", params = { name = "polnoch_alive", op = "eq", value = true } },
+            },
+          },
+        },
+      },
+      out = { alive = "polnoch_there" } },
+
+    { id = "trap", kind = "objective.reach",
+      params = { place = { restrictor = "od_lair_door" } },
+      on_exit = {
+        {
+          kind = "od.sound",
+          params = { place = { restrictor = "od_lair_door" }, sound = "anomaly\\electra_blast1" },
+        },
+        {
+          kind = "lua",
+          params = {
+            code = "local h = hit() h.type = hit.shock h.power = 0.18 h.impulse = 0 h.direction = vector():set(0, 0, 1) h.draftsman = db.actor db.actor:hit(h)",
+          },
+        },
+        {
+          kind = "news.tip",
+          params = {
+            text = "Sed do eiusmod tempor incididunt ut labore et ",
+          },
+        },
+      },
+      out = { done = "trap_done" } },
+
+    { id = "control", kind = "flow.step",
+      on_enter = {
+        {
+          kind = "od.notify",
+          params = {
+            text = "Do eiusmod tempor incididunt ut labore et dolore magn",
+            from = "shmyandex",
+          },
+        },
+        {
+          kind = "od.clue",
+          params = {
+            text = "Eiusmod tempor incididunt ut labore et dolore magna lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusm",
+            title = "Tempor incidid",
+            id = "journal_seen",
+          },
+        },
+        {
+          kind = "dialog.force",
+          params = { npc = { character = "mukhin_lair" }, allow_break = false },
+        },
+      },
+      out = { next = { "c17_order", "monologue" } } },
+
+    { id = "c17_order", kind = "od.order",
+      params = {
+        descr = "Incididunt ut labor",
+        spot = false,
+        to = { restrictor = "od_lair" },
+        accept = "auto",
+        caption = "Ut labore et dolore",
+        category = "story",
+        client = "Labore et dolore m",
+        mode = "quest",
+        order = "c17",
+        pay = 0,
+        quiet = true,
+        to_text = "Et dolore magna",
+      },
+      out = { failed = "c17_gone" } },
+
+    { id = "monologue", kind = "dialog.topic", once = true,
+      params = {
+        npc = { character = "mukhin_lair" },
+        text = "Dolore magna lorem ip",
+      },
+      out = { next = "mk1" } },
+
+    { id = "c17_gone", kind = "flow.step" },
+
+    { id = "mk1", kind = "dialog.npc_phrase",
+      params = {
+        text = "Magna lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor in",
+      },
+      out = { next = "mk_r1" } },
+
+    { id = "mk_r1", kind = "dialog.actor_phrase",
+      params = { text = "Lorem " },
+      out = { next = "mk2" } },
+
+    { id = "mk2", kind = "dialog.npc_phrase",
+      params = {
+        text = "Ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor i",
+      },
+      out = { next = "mk_r2" } },
+
+    { id = "mk_r2", kind = "dialog.actor_phrase",
+      params = { text = "Dolor sit amet con" },
+      out = { next = "mk3" } },
+
+    { id = "mk3", kind = "dialog.npc_phrase",
+      params = {
+        text = "Sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna lorem ipsum dolor sit amet consect",
+      },
+      out = { next = "mk_r3" } },
+
+    { id = "mk_r3", kind = "dialog.actor_phrase",
+      params = { text = "Amet conse" },
+      out = { next = "mk4" } },
+
+    { id = "mk4", kind = "dialog.npc_phrase",
+      params = {
+        text = "Consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et",
+      },
+      out = { next = "mk_r4" } },
+
+    { id = "mk_r4", kind = "dialog.actor_phrase",
+      params = { text = "..." },
+      out = { next = "fight" } },
+
+    { id = "polnoch_there", kind = "flow.step",
+      on_enter = {
+        {
+          kind = "spawn.npc",
+          params = {
+            place = { level = "l03_agroprom", pos = { -37, -3.97, 31.8 }, radius = 0.5 },
+            npcs = { { character = "polnoch" } },
+          },
+        },
+        {
+          kind = "order.guard",
+          params = {
+            who = { character = "polnoch" },
+            place = { level = "l03_agroprom", pos = { -37, -3.97, 31.8 }, radius = 1 },
+            radius = 1,
+          },
+        },
+      } },
+
+    { id = "trap_done", kind = "flow.step" },
+
+    { id = "fight", kind = "flow.step",
+      on_enter = {
+        { kind = "object.remove", params = { target = { ref = "lamp" } } },
+        {
+          kind = "order.attack",
+          params = { who = { character = "mukhin_lair" }, target = { actor = true } },
+        },
+        {
+          kind = "news.tip",
+          params = {
+            text = "Adipiscing elit sed do eiusmod tempor incididunt ut",
+          },
+        },
+      },
+      out = { next = "kill" } },
+
+    { id = "kill", kind = "objective.kill",
+      params = { target = { character = "mukhin_lair" }, spot_task = "vault" },
+      out = { done = "after" } },
+
+    { id = "after", kind = "flow.step",
+      on_enter = {
+        {
+          kind = "od.cancel",
+          params = {
+            text = "Elit sed do eiusmod tempor incididunt ut labore et dolore magna lorem",
+            order = "c17",
+          },
+        },
+        { kind = "od.cancel", params = { order = "p6", quiet = true } },
+        { kind = "global.set", params = { name = "maniac_dead", value = true } },
+        { kind = "task.complete", params = { task = "vault" } },
+        {
+          kind = "od.clue",
+          params = {
+            text = "Sed do eiusmod tempor incididunt ut labore et dolore magna lorem ipsum dolor sit amet consecte",
+            title = "Do eiu",
+            id = "mukhin",
+          },
+        },
+      },
+      out = { next = { "polnoch_help", "climb" } } },
+
+    { id = "polnoch_help", kind = "dialog.topic", once = true,
+      params = { npc = { character = "polnoch" }, text = "Eiusmod tempor " },
+      cond = { { kind = "global", params = { name = "polnoch_alive", op = "eq", value = true } } },
+      out = { next = { "ph_ok", "ph_no" } } },
+
+    { id = "climb", kind = "objective.reach",
+      params = { place = { restrictor = "od_hatch" } },
+      out = { done = "trial_setup" } },
+
+    { id = "ph_ok", kind = "dialog.npc_phrase",
+      params = {
+        text = "Tempor incididunt ut labore et dolore magna lorem ipsum dolor sit amet consectetur adip",
+      },
+      cond = {
+        {
+          kind = "any",
+          params = {
+            of = {
+              { kind = "has_item", params = { section = "medkit", count = 1 } },
+              { kind = "has_item", params = { section = "medkit_army", count = 1 } },
+            },
+          },
+        },
+      },
+      on_exit = { { kind = "item.take", params = { section = "medkit", count = 1 } } },
+      out = { next = "ph_ok_r" } },
+
+    { id = "ph_no", kind = "dialog.npc_phrase",
+      params = {
+        text = "Incididunt ut labore et dolore magna lorem ip",
+      },
+      out = { next = "ph_no_r" } },
+
+    { id = "ph_ok_r", kind = "dialog.actor_phrase",
+      params = { text = "Ut labore et dolo" },
+      on_exit = {
+        {
+          kind = "order.follow",
+          params = { who = { character = "polnoch" }, target = { actor = true }, distance = 3 },
+        },
+      } },
+
+    { id = "ph_no_r", kind = "dialog.actor_phrase",
+      params = { text = "Labore et dolore magn" } },
+
+    { id = "trial_setup", kind = "flow.step",
+      on_enter = {
+        {
+          kind = "spawn.npc",
+          params = {
+            place = { restrictor = "od_hatch" },
+            npcs = { { character = "post_1" }, { character = "post_2" }, { character = "major" } },
+            spread = 4,
+          },
+        },
+        {
+          kind = "order.guard",
+          params = {
+            who = { character = "post_1" },
+            place = { restrictor = "od_hatch" },
+            radius = 4,
+          },
+        },
+        {
+          kind = "order.guard",
+          params = {
+            who = { character = "post_2" },
+            place = { restrictor = "od_hatch" },
+            radius = 4,
+          },
+        },
+        {
+          kind = "order.guard",
+          params = {
+            who = { character = "major" },
+            place = { restrictor = "od_hatch" },
+            radius = 3,
+          },
+        },
+        {
+          kind = "spawn.npc",
+          params = {
+            place = { restrictor = "od_hatch" },
+            npcs = { { character = "bury" }, { character = "igla" } },
+            spread = 6,
+          },
+        },
+        {
+          kind = "news.tip",
+          params = {
+            text = "Et dolore magna lore",
+            sender = { character = "bury" },
+          },
+        },
+        {
+          kind = "news.tip",
+          params = {
+            text = "Dolore magna lorem ip",
+            sender = { character = "post_1" },
+          },
+        },
+        { kind = "od.disarm" },
+        { kind = "task.give", params = { task = "trial" } },
+      },
+      out = { next = { "trial", "trial_force" } } },
+
+    { id = "trial", kind = "dialog.topic", once = true,
+      params = {
+        npc = { character = "major" },
+        text = "Magna lorem ipsum dolor s",
+      },
+      out = { next = "tr1" } },
+
+    { id = "trial_force", kind = "wait.timer",
+      params = { duration = { seconds = 2 } },
+      on_exit = {
+        { kind = "dialog.force", params = { npc = { character = "major" }, allow_break = false } },
+      },
+      out = { done = "trial_forced" } },
+
+    { id = "tr1", kind = "dialog.npc_phrase",
+      params = {
+        text = "Lorem ipsum dolor sit amet consectetur ad",
+      },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "e_journal", kind = "dialog.actor_phrase",
+      params = { text = "Ipsum dolor sit amet consecte" },
+      out = { next = { "j_have", "j_rep", "j_send" } } },
+
+    { id = "e_pda", kind = "dialog.actor_phrase",
+      params = {
+        text = "Dolor sit amet consectetur adipiscing elit sed do eiusmod tempor inci",
+      },
+      out = { next = { "ey_pda", "er_pda" } } },
+
+    { id = "e_uniform", kind = "dialog.actor_phrase",
+      params = { text = "Sit amet consectetur adipiscing eli" },
+      out = { next = { "ey_uniform", "en_uniform", "er_uniform" } } },
+
+    { id = "e_pdas", kind = "dialog.actor_phrase",
+      params = { text = "Amet consectetur adipiscing elit s" },
+      out = { next = { "ey_pdas", "en_pdas", "er_pdas" } } },
+
+    { id = "e_photo", kind = "dialog.actor_phrase",
+      params = {
+        text = "Consectetur adipiscing elit sed do eiusmod tempor inci",
+      },
+      out = { next = { "ey_photo", "en_photo", "er_photo" } } },
+
+    { id = "e_notes", kind = "dialog.actor_phrase",
+      params = {
+        text = "Adipiscing elit sed do eiusmod tempor inci",
+      },
+      out = { next = { "ey_notes", "en_notes", "er_notes" } } },
+
+    { id = "e_polnoch", kind = "dialog.actor_phrase",
+      params = { text = "Elit sed do eiusmod tempor" },
+      out = { next = { "ey_polnoch", "en_polnoch", "er_polnoch" } } },
+
+    { id = "e_lev", kind = "dialog.actor_phrase",
+      params = { text = "Sed do eiusmod tempor inci" },
+      out = { next = { "ey_lev", "en_lev", "er_lev" } } },
+
+    { id = "e_filin", kind = "dialog.actor_phrase",
+      params = { text = "Do eiusmod tempor incididunt u" },
+      out = { next = { "ey_filin", "en_filin", "er_filin" } } },
+
+    { id = "e_done", kind = "dialog.actor_phrase",
+      params = { text = "Eiusmod tempor inc" },
+      out = { next = { "verdict_no_journal", "verdict" } } },
+
+    { id = "j_have", kind = "dialog.npc_phrase",
+      params = {
+        text = "Tempor incididunt ut labore et dolore magna lorem ip",
+      },
+      cond = {
+        { kind = "var", params = { name = "e_journal", value = 0 } },
+        { kind = "has_item", params = { section = "od_journal", count = 1 } },
+      },
+      on_exit = {
+        { kind = "item.take", params = { section = "od_journal", count = 1 } },
+        { kind = "var.set", params = { name = "e_journal", value = 1 } },
+        { kind = "var.add", params = { name = "evidence", delta = 1 } },
+        { kind = "global.set", params = { name = "journal_found", value = true } },
+      },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "j_rep", kind = "dialog.npc_phrase",
+      params = { text = "Incididunt ut labore e" },
+      cond = { { kind = "var", params = { name = "e_journal", value = 1 } } },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "j_send", kind = "dialog.npc_phrase",
+      params = {
+        text = "Ut labore et dolore magna lorem ipsum dolor sit amet consectetur adipiscing elit se",
+      },
+      on_exit = {
+        { kind = "var.set", params = { name = "e_journal", value = 1 } },
+        { kind = "var.add", params = { name = "evidence", delta = 1 } },
+        { kind = "global.set", params = { name = "journal_found", value = true } },
+      },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "ey_pda", kind = "dialog.npc_phrase",
+      params = {
+        text = "Labore et dolore magna lorem ipsum dolor sit",
+      },
+      cond = { { kind = "var", params = { name = "e_pda", value = 0 } } },
+      on_exit = {
+        { kind = "var.set", params = { name = "e_pda", value = 1 } },
+        { kind = "var.add", params = { name = "evidence", delta = 1 } },
+      },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "er_pda", kind = "dialog.npc_phrase",
+      params = { text = "Et dolore magna l" },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "ey_uniform", kind = "dialog.npc_phrase",
+      params = {
+        text = "Dolore magna lorem ipsum dolor sit amet consectetur adipiscing ",
+      },
+      cond = {
+        { kind = "var", params = { name = "e_uniform", value = 0 } },
+        { kind = "has_item", params = { section = "od_lekha_uniform", count = 1 } },
+      },
+      on_exit = {
+        { kind = "var.set", params = { name = "e_uniform", value = 1 } },
+        { kind = "var.add", params = { name = "evidence", delta = 1 } },
+      },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "en_uniform", kind = "dialog.npc_phrase",
+      params = { text = "Magna lorem ips" },
+      cond = { { kind = "var", params = { name = "e_uniform", value = 0 } } },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "er_uniform", kind = "dialog.npc_phrase",
+      params = { text = "Lorem ipsum dolor" },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "ey_pdas", kind = "dialog.npc_phrase",
+      params = { text = "Ipsum dolor sit amet consectetur adipisc" },
+      cond = {
+        { kind = "var", params = { name = "e_pdas", value = 0 } },
+        { kind = "has_item", params = { section = "od_victim_pda", count = 1 } },
+      },
+      on_exit = {
+        { kind = "var.set", params = { name = "e_pdas", value = 1 } },
+        { kind = "var.add", params = { name = "evidence", delta = 1 } },
+      },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "en_pdas", kind = "dialog.npc_phrase",
+      params = { text = "Dolor sit amet consec" },
+      cond = { { kind = "var", params = { name = "e_pdas", value = 0 } } },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "er_pdas", kind = "dialog.npc_phrase",
+      params = { text = "Sit amet consecte" },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "ey_photo", kind = "dialog.npc_phrase",
+      params = { text = "Amet consectetur adipiscing elit sed d" },
+      cond = {
+        { kind = "var", params = { name = "e_photo", value = 0 } },
+        { kind = "has_item", params = { section = "od_photo_back", count = 1 } },
+      },
+      on_exit = {
+        { kind = "var.set", params = { name = "e_photo", value = 1 } },
+        { kind = "var.add", params = { name = "evidence", delta = 1 } },
+      },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "en_photo", kind = "dialog.npc_phrase",
+      params = { text = "Consectetur adipiscing " },
+      cond = { { kind = "var", params = { name = "e_photo", value = 0 } } },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "er_photo", kind = "dialog.npc_phrase",
+      params = { text = "Adipiscing elit s" },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "ey_notes", kind = "dialog.npc_phrase",
+      params = {
+        text = "Elit sed do eiusmod tempor incididunt ut labore et dolore magna",
+      },
+      cond = {
+        { kind = "var", params = { name = "e_notes", value = 0 } },
+        { kind = "has_item", params = { section = "od_cyclops_notes", count = 1 } },
+      },
+      on_exit = {
+        { kind = "var.set", params = { name = "e_notes", value = 1 } },
+        { kind = "var.add", params = { name = "evidence", delta = 1 } },
+      },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "en_notes", kind = "dialog.npc_phrase",
+      params = { text = "Sed do eiusmo" },
+      cond = { { kind = "var", params = { name = "e_notes", value = 0 } } },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "er_notes", kind = "dialog.npc_phrase",
+      params = { text = "Do eiusmod tempor" },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "ey_polnoch", kind = "dialog.npc_phrase",
+      params = {
+        text = "Eiusmod tempor incididunt ut labore et dolore magna lo",
+      },
+      cond = {
+        { kind = "var", params = { name = "e_polnoch", value = 0 } },
+        { kind = "global", params = { name = "polnoch_alive", op = "eq", value = true } },
+      },
+      on_exit = {
+        { kind = "var.set", params = { name = "e_polnoch", value = 1 } },
+        { kind = "var.add", params = { name = "evidence", delta = 1 } },
+      },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "en_polnoch", kind = "dialog.npc_phrase",
+      params = { text = "Tempor incididunt ut labor" },
+      cond = { { kind = "var", params = { name = "e_polnoch", value = 0 } } },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "er_polnoch", kind = "dialog.npc_phrase",
+      params = { text = "Incididunt ut lab" },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "ey_lev", kind = "dialog.npc_phrase",
+      params = { text = "Ut labore et dolore magna lorem ipsu" },
+      cond = {
+        { kind = "var", params = { name = "e_lev", value = 0 } },
+        { kind = "global", params = { name = "lev_alive", op = "eq", value = true } },
+        { kind = "global", params = { name = "lev_race", op = "eq", value = "saved" } },
+      },
+      on_exit = {
+        { kind = "var.set", params = { name = "e_lev", value = 1 } },
+        { kind = "var.add", params = { name = "evidence", delta = 1 } },
+      },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "en_lev", kind = "dialog.npc_phrase",
+      params = { text = "Labore et dolore magna l" },
+      cond = { { kind = "var", params = { name = "e_lev", value = 0 } } },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "er_lev", kind = "dialog.npc_phrase",
+      params = { text = "Et dolore magna l" },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "ey_filin", kind = "dialog.npc_phrase",
+      params = {
+        text = "Dolore magna lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod t",
+      },
+      cond = {
+        { kind = "var", params = { name = "e_filin", value = 0 } },
+        { kind = "global", params = { name = "h7_done", op = "eq", value = true } },
+      },
+      on_exit = {
+        { kind = "var.set", params = { name = "e_filin", value = 1 } },
+        { kind = "var.add", params = { name = "evidence", delta = 1 } },
+      },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "en_filin", kind = "dialog.npc_phrase",
+      params = { text = "Magna lorem ipsum dolor " },
+      cond = { { kind = "var", params = { name = "e_filin", value = 0 } } },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "er_filin", kind = "dialog.npc_phrase",
+      params = { text = "Lorem ipsum dolor" },
+      out = {
+        next = {
+          "e_journal",
+          "e_pda",
+          "e_uniform",
+          "e_pdas",
+          "e_photo",
+          "e_notes",
+          "e_polnoch",
+          "e_lev",
+          "e_filin",
+          "e_done",
+        },
+      } },
+
+    { id = "verdict_no_journal", kind = "dialog.npc_phrase",
+      params = {
+        text = "Ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod ",
+      },
+      cond = { { kind = "var", params = { name = "e_journal", value = 0 } } },
+      on_exit = {
+        { kind = "var.set", params = { name = "e_journal", value = 1 } },
+        { kind = "global.set", params = { name = "journal_found", value = true } },
+      },
+      out = { next = "v_r0" } },
+
+    { id = "verdict", kind = "dialog.npc_phrase",
+      params = {
+        text = "Dolor sit amet consectetur adipiscing elit ",
+      },
+      out = { next = "v_r1" } },
+
+    { id = "v_r0", kind = "dialog.actor_phrase",
+      params = { text = "..." },
+      out = { next = "verdict2" } },
+
+    { id = "verdict2", kind = "dialog.npc_phrase",
+      params = {
+        text = "Sit amet consectetur adipiscing elit sed do",
+      },
+      out = { next = "v_r1" } },
+
+    { id = "v_r1", kind = "dialog.actor_phrase",
+      params = { text = "Amet consectetur adi" },
+      out = { next = "v2" } },
+
+    { id = "v2", kind = "dialog.npc_phrase",
+      params = {
+        text = "Consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut la",
+      },
+      out = { next = "v_r2" } },
+
+    { id = "v_r2", kind = "dialog.actor_phrase", params = { text = "..." }, out = { next = "v3" } },
+
+    { id = "v3", kind = "dialog.npc_phrase",
+      params = {
+        text = "Adipiscing elit sed do eiusmod tempor incididunt ut l",
+      },
+      on_exit = {
+        { kind = "od.disarm", params = { restore = true } },
+        { kind = "global.set", params = { name = "acquitted", value = true } },
+        { kind = "global.set", params = { name = "rumor_phase", value = 7 } },
+        { kind = "task.complete", params = { task = "trial" } },
+      },
+      out = { next = "v_r3" } },
+
+    { id = "v_r3", kind = "dialog.actor_phrase",
+      params = { text = "Elit sed do eiusmod tem" },
+      out = { next = "after_trial" } },
+
+    { id = "trial_forced", kind = "flow.step" },
+
+    { id = "after_trial", kind = "flow.step",
+      on_enter = {
+        {
+          kind = "news.tip",
+          params = { text = "Sed do eiusmod te", sender = { character = "bury" } },
+        },
+        {
+          kind = "news.tip",
+          params = {
+            text = "Do eiusmod tempor incididunt ut labore et dolore magna lorem ipsum dolor sit amet consec",
+          },
+        },
+        {
+          kind = "order.guard",
+          params = {
+            who = { character = "major" },
+            place = { restrictor = "od_courtyard" },
+            radius = 4,
+          },
+        },
+        { kind = "quest.activate", params = { quest = "n8_epilogue" } },
+      },
+      out = { next = "finish" } },
+
+    { id = "finish", kind = "flow.end" },
+  },
+}

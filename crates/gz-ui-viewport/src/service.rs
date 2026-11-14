@@ -1203,7 +1203,7 @@ impl Viewport {
                     }
                     None => gz_render::build_packet(&built.list, &view, &assets),
                 };
-                let anchor = Anchor::of(&draw::gizmo_points(state, library, state.tools.target));
+                let anchor = Anchor::of(&draw::selection_gizmo_points(state, library));
                 let animating = animating || poses.playing;
                 (Arc::new(packet), anchor, roof, baked, gathered, animating)
             })

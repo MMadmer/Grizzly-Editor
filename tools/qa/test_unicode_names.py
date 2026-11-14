@@ -95,7 +95,7 @@ class Editor:
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
             try:
-                if mcp("mod_manifest", timeout=30).get("ok"):
+                if mcp("mod.info", timeout=30).get("ok"):
                     return
             except OSError:
                 pass
@@ -142,7 +142,7 @@ def run(project: str, shot: str | None) -> None:
     started = time.time()
     try:
         ed.start(project)
-        module = mcp("mod_manifest").get("id", "")
+        module = mcp("mod.info").get("manifest", {}).get("id", "")
 
         # ------------------------------------------------------------------ B: the browser
         r = mcp("content_browser_open", name=f"gamedata/{FOLDER}", source="project")
@@ -199,7 +199,7 @@ def run(project: str, shot: str | None) -> None:
               "D a quest with a Cyrillic file name is found under that name", repr(quests)[:240])
 
         # ------------------------------------------------------------------ E: the build
-        built = mcp("mod_export", target=target.replace("\\", "/"))
+        built = mcp("mod.build", target="folder", path=target.replace("\\", "/"))
         shipped = os.path.join(target, "modules", module, "gamedata", FOLDER)
         names = sorted(os.listdir(shipped)) if os.path.isdir(shipped) else []
         check(built.get("ok") and RENAMED in names and BEYOND in names,
@@ -216,7 +216,7 @@ def run(project: str, shot: str | None) -> None:
               "E the build warns about the two names outside cp1251, and only those", warned[-300:])
 
         # ------------------------------------------------------------------ F: the release package
-        pk = mcp("mod_package", out_dir=pkg.replace("\\", "/"))
+        pk = mcp("mod.package", path=pkg.replace("\\", "/"))
         zips = sorted(glob.glob(os.path.join(pkg, "*.zip")))
         entries: dict[str, zipfile.ZipInfo] = {}
         for z in zips:
@@ -257,6 +257,8 @@ def run(project: str, shot: str | None) -> None:
             check(r.get("ok") and moved in on_disk and made not in on_disk,
                   "G and the editor's rename writes such a name to disk as it is",
                   json.dumps(r, ensure_ascii=False)[:160] + " disk=" + repr(on_disk))
+        stalls = mcp("perf.stalls")
+        check(stalls.get("ok") and not stalls.get("stalls"), "no UI pass waited", json.dumps(stalls)[:300])
     finally:
         ed.close()
         for d in (target, pkg):

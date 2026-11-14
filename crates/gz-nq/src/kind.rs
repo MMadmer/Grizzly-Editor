@@ -118,6 +118,7 @@ pub fn positioned(p: &NqProblem, file: &AssetFile) -> Problem {
     let base = match p.severity {
         Severity::Error => Problem::error(p.code.clone(), p.message.clone()),
         Severity::Warning => Problem::warning(p.code.clone(), p.message.clone()),
+        Severity::Note => Problem::note(p.code.clone(), p.message.clone()),
     };
     let mut base = base;
     if !p.node.is_empty() {
@@ -273,10 +274,22 @@ pub fn catalog_text(catalog: &Catalog, behaviour: bool) -> String {
         if !k.rows.is_empty() {
             let _ = writeln!(out, "  each row: {}", k.rows.iter().map(param).collect::<Vec<_>>().join("; "));
         }
+        let pin = |p: &String| match k.pin_text(p) {
+            Some(d) => format!("{p} ({d})"),
+            None => p.clone(),
+        };
         if k.pins_from_cases {
-            let _ = writeln!(out, "  pins: one per entry of params.cases");
+            let rest: Vec<String> = k.pins.iter().filter(|p| p.as_str() != "cases").map(pin).collect();
+            let _ = if rest.is_empty() {
+                writeln!(out, "  pins: one per entry of params.cases")
+            } else {
+                writeln!(out, "  pins: one per entry of params.cases, {}", rest.join(", "))
+            };
         } else if !k.pins.is_empty() {
-            let _ = writeln!(out, "  pins: {}", k.pins.join(", "));
+            let _ = writeln!(out, "  pins: {}", k.pins.iter().map(pin).collect::<Vec<_>>().join(", "));
+        }
+        if !k.summary.is_empty() {
+            let _ = writeln!(out, "  summary: {}", k.summary.join(", "));
         }
         let mut uses = Vec::new();
         if k.in_quest {

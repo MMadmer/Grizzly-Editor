@@ -307,6 +307,8 @@ impl Kind {
 pub struct Aux {
     /// `<script>.<function>` of the project's scripts.
     pub functions: Vec<String>,
+    /// The scripts were read: before that a function is not known to be missing.
+    pub functions_read: bool,
     /// `(command, module id)` of the linked game's other modules.
     pub taken: Vec<(String, String)>,
     /// The project's `.pdaasset` files, project-relative with `\`.
@@ -315,7 +317,7 @@ pub struct Aux {
     pub picture_error: String,
 }
 
-/// A problem of the form, shown under its field, as a dot on its page and in `mod_settings_view`.
+/// A problem of the form, shown under its field, as a dot on its page and in `mod.view`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Problem {
     pub page: usize,
@@ -470,7 +472,7 @@ fn check_commands(f: &Form, aux: &Aux, out: &mut Vec<Problem>) {
             );
         } else if !valid_command_function(&c.function) {
             add("function", Tone::Error, true, "<script>.<function>, e.g. my_mod.status.".to_owned());
-        } else if !has_script_function(&aux.functions, &c.function) {
+        } else if aux.functions_read && !has_script_function(&aux.functions, &c.function) {
             add(
                 "function",
                 Tone::Warning,
@@ -635,7 +637,7 @@ pub fn page_tone(problems: &[Problem], page: usize) -> Option<Tone> {
     problems.iter().filter(|p| p.page == page).max_by_key(|p| rank(p.tone)).map(|p| p.tone)
 }
 
-/// A tone as `mod_settings_view` names it (`ToneName`).
+/// A tone as `mod.view` names it.
 #[must_use]
 pub fn tone_name(tone: Tone) -> &'static str {
     match tone {
@@ -646,19 +648,33 @@ pub fn tone_name(tone: Tone) -> &'static str {
     }
 }
 
-/// What an edit sends: one `mod_set_manifest`, then a `mod_commands` per changed command, then
-/// `pda_use` - each a command that exists, in that order.
+/// What an edit sends: the `set` of one `mod.set` - every change of the form in one request,
+/// written all or none.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Plan {
-    pub manifest: Option<Args>,
-    pub commands: Vec<Args>,
-    pub pda: Option<String>,
+    pub set: serde_json::Map<String, Value>,
 }
 
 impl Plan {
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.manifest.is_none() && self.commands.is_empty() && self.pda.is_none()
+        self.set.is_empty()
+    }
+
+    /// The arguments of `mod.set`.
+    #[must_use]
+    pub fn args(&self) -> Args {
+        let mut a = Args::new();
+        a.insert("set".to_owned(), Value::Object(self.set.clone()));
+        a
+    }
+
+    fn key(&mut self, section: &str, key: &str, value: Value) {
+        let entry =
+            self.set.entry(section.to_owned()).or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if let Value::Object(map) = entry {
+            map.insert(key.to_owned(), value);
+        }
     }
 }
 
@@ -666,51 +682,70 @@ fn s(v: &str) -> Value {
     Value::String(v.to_owned())
 }
 
-/// The commands that make `mod.ltx` say what `form` says, where `base` is what it says now.
+fn list(v: &[String]) -> Value {
+    Value::Array(v.iter().map(|x| s(x)).collect())
+}
+
+/// The changes that make `mod.ltx` say what `form` says, where `base` is what it says now.
 #[must_use]
 pub fn plan(base: &Form, form: &Form) -> Plan {
-    let mut a = Args::new();
+    let mut p = Plan::default();
     macro_rules! text {
-        ($($f:ident => $key:literal),*) => {
-            $(if form.$f != base.$f { a.insert($key.to_owned(), s(&form.$f)); })*
+        ($section:literal: $($f:ident => $key:literal),*) => {
+            $(if form.$f != base.$f { p.key($section, $key, s(&form.$f)); })*
         };
     }
-    text!(id => "id", name => "name", version => "version", author => "author", description => "description", website => "website", github => "github", mode => "mode", pmode_id => "provides_mode_id", pmode_title => "provides_mode_title");
-    macro_rules! list {
-        ($($f:ident => $key:literal),*) => {
-            $(if form.$f != base.$f { a.insert($key.to_owned(), s(&form.$f.join(","))); })*
-        };
+    text!("module": id => "id", name => "name", version => "version", author => "author", description => "description", website => "website", mode => "mode");
+    text!("update": github => "github");
+    if form.after != base.after {
+        p.key("order", "after", list(&form.after));
     }
-    list!(requires => "requires", after => "after", before => "before", conflicts => "conflicts", tags => "tags");
-    if form.exclude_rules() != base.exclude_rules() {
-        a.insert("exclude".to_owned(), s(&form.exclude_rules().join("\n")));
+    if form.before != base.before {
+        p.key("order", "before", list(&form.before));
+    }
+    if form.tags != base.tags {
+        p.key("module", "tags", list(&form.tags));
     }
     if form.updates_off != base.updates_off {
-        a.insert("disable_game_updates".to_owned(), Value::Bool(form.updates_off));
+        p.key("module", "disable_game_updates", Value::Bool(form.updates_off));
+    }
+    for (section, now, was) in
+        [("requires", &form.requires, &base.requires), ("conflicts", &form.conflicts, &base.conflicts)]
+    {
+        if now != was {
+            p.set.insert(section.to_owned(), list(now));
+        }
+    }
+    if form.exclude_rules() != base.exclude_rules() {
+        p.set.insert("exclude".to_owned(), list(&form.exclude_rules()));
+    }
+    if form.pmode_id != base.pmode_id || form.pmode_title != base.pmode_title {
+        p.key("provides_mode", "id", s(&form.pmode_id));
+        p.key("provides_mode", "title", s(&form.pmode_title));
+    }
+    let commands = command_ops(&base.commands, &form.commands);
+    if !commands.is_empty() {
+        p.set.insert("commands".to_owned(), Value::Object(commands));
+    }
+    if form.pda != base.pda {
+        p.key("pda", "layout", s(&form.pda));
     }
     // the targeting choice is always stated: left out, the command would read it off the mode
     let stated = ["default", "existing", "new"].iter().any(|t| t.eq_ignore_ascii_case(&form.target));
-    if stated && (form.target != base.target || !a.is_empty()) {
-        a.insert("target".to_owned(), s(&form.target.to_ascii_lowercase()));
+    if stated && (form.target != base.target || !p.is_empty()) {
+        p.key("module", "target", s(&form.target.to_ascii_lowercase()));
     }
-    Plan {
-        manifest: (!a.is_empty()).then_some(a),
-        commands: command_ops(&base.commands, &form.commands),
-        pda: (form.pda != base.pda).then(|| form.pda.clone()),
-    }
+    p
 }
 
-/// The `mod_commands` calls that turn `base` into `form`: the commands gone first, then every
-/// command that is new or changed. A renamed command is the old one gone and a new one.
+/// The `commands` of `mod.set` that turn `base` into `form`: a command gone is null, a new or
+/// changed one its fields. A renamed command is the old one gone and a new one.
 #[must_use]
-pub fn command_ops(base: &[Command], form: &[Command]) -> Vec<Args> {
-    let mut out = Vec::new();
+pub fn command_ops(base: &[Command], form: &[Command]) -> serde_json::Map<String, Value> {
+    let mut out = serde_json::Map::new();
     for b in base {
         if !form.iter().any(|c| c.name.eq_ignore_ascii_case(&b.name)) {
-            let mut a = Args::new();
-            a.insert("name".to_owned(), s(&b.name));
-            a.insert("remove".to_owned(), Value::Bool(true));
-            out.push(a);
+            out.insert(b.name.clone(), Value::Null);
         }
     }
     for c in form {
@@ -725,13 +760,12 @@ pub fn command_ops(base: &[Command], form: &[Command]) -> Vec<Args> {
         }) {
             continue;
         }
-        let mut a = Args::new();
-        a.insert("name".to_owned(), s(&c.name));
-        a.insert("function".to_owned(), s(&c.function));
-        a.insert("help".to_owned(), s(&c.help));
-        a.insert("args".to_owned(), s(&c.args));
-        a.insert("cheat".to_owned(), Value::Bool(c.cheat));
-        out.push(a);
+        let mut fields = serde_json::Map::new();
+        fields.insert("function".to_owned(), s(&c.function));
+        fields.insert("help".to_owned(), s(&c.help));
+        fields.insert("args".to_owned(), s(&c.args));
+        fields.insert("cheat".to_owned(), Value::Bool(c.cheat));
+        out.insert(c.name.clone(), Value::Object(fields));
     }
     out
 }
@@ -897,7 +931,7 @@ mod tests {
             commands: vec![c("", ""), c("save", "od.x"), c("od_s", "od.missing"), c("OD_S", "od.ok")],
             ..form()
         };
-        let aux = Aux { functions: vec!["od.ok".into()], ..Aux::default() };
+        let aux = Aux { functions: vec!["od.ok".into()], functions_read: true, ..Aux::default() };
         let p = check(&f, &aux);
         let fields: Vec<&str> = p.iter().map(|p| p.field.as_str()).collect();
         assert_eq!(
@@ -946,13 +980,12 @@ mod tests {
             ..base.clone()
         };
         let p = plan(&base, &f);
-        let a = p.manifest.unwrap();
-        assert_eq!(a.get("name"), Some(&s("OD")));
-        assert_eq!(a.get("requires"), Some(&s("a,b = 1.0")));
-        assert_eq!(a.get("exclude"), Some(&s("docs\n*.psd")));
-        assert_eq!(a.get("target"), Some(&s("default")));
+        assert_eq!(p.set["module"]["name"], s("OD"));
+        assert_eq!(p.set["requires"], serde_json::json!(["a", "b = 1.0"]));
+        assert_eq!(p.set["exclude"], serde_json::json!(["docs", "*.psd"]));
+        assert_eq!(p.set["module"]["target"], s("default"));
         let f = Form { pda: "pda\\x.pdaasset".into(), ..base.clone() };
-        assert_eq!(plan(&base, &f).pda.as_deref(), Some("pda\\x.pdaasset"));
+        assert_eq!(plan(&base, &f).set["pda"]["layout"], s("pda\\x.pdaasset"));
     }
 
     #[test]
@@ -960,8 +993,8 @@ mod tests {
         let base = Form { target: "any".into(), mode: "*".into(), ..form() };
         assert_eq!(base.kind(), Some(Kind::Any));
         let f = Form { name: "Weapons".into(), ..base.clone() };
-        let a = plan(&base, &f).manifest.unwrap();
-        assert!(a.get("target").is_none() && a.get("mode").is_none());
+        let p = plan(&base, &f);
+        assert!(p.set["module"].get("target").is_none() && p.set["module"].get("mode").is_none());
         let mut back = base.clone();
         back.set_kind(Kind::Plain, None);
         back.set_kind(Kind::Any, None);
@@ -969,14 +1002,14 @@ mod tests {
     }
 
     #[test]
-    fn commands_plan_removes_then_sets() {
+    fn commands_plan_removes_and_sets() {
         let c = |name: &str| Command { name: name.into(), function: "od.x".into(), ..Command::default() };
         let base = vec![c("a"), c("b")];
         let form = vec![c("a"), c("c")];
         let ops = command_ops(&base, &form);
         assert_eq!(ops.len(), 2);
-        assert_eq!(ops[0].get("remove"), Some(&Value::Bool(true)));
-        assert_eq!(ops[1].get("name"), Some(&s("c")));
+        assert_eq!(ops["b"], Value::Null);
+        assert_eq!(ops["c"]["function"], s("od.x"));
     }
 
     #[test]

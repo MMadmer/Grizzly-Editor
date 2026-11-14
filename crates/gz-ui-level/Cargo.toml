@@ -16,6 +16,7 @@ gz-store.workspace = true
 gz-query.workspace = true
 gz-editor.workspace = true
 gz-scene.workspace = true
+gz-levelbuild.workspace = true
 gz-game.workspace = true
 gz-vfs.workspace = true
 gz-project.workspace = true
@@ -30,6 +31,8 @@ gz-ui-viewport = { path = "../gz-ui-viewport" }
 egui.workspace = true
 parking_lot.workspace = true
 rustc-hash.workspace = true
+serde.workspace = true
+schemars.workspace = true
 serde_json.workspace = true
 time.workspace = true
 # a spawn's model: its bones and motions for the choosers

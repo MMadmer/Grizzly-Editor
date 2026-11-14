@@ -1,7 +1,7 @@
 //! The preview's running interface as data (`EditorPdaPreview.cpp`, `SPreview`): which page
 //! shows, what actions changed, the log of what ran - and how a click, a key or an action
 //! changes it, the way the game's `CUIPdaLayout` plays them. Everything here is in canvas
-//! units; the tab only scales it and draws, `pda_preview` only forwards.
+//! units; the tab only scales it and draws, `pda.preview` only forwards.
 //!
 //! What cannot run outside the game is said instead: `signal:` and `lua:` are a toast and a
 //! line of the log, `close` a toast.
@@ -519,7 +519,7 @@ impl Preview {
         }
     }
 
-    /// Opens a page by its id (`pda_preview action=page`).
+    /// Opens a page by its id (`pda.preview action=page`).
     pub fn go_to_page(&mut self, id: &str) -> Result<(), String> {
         if self.find_page(id).is_none() {
             return Err(format!("there is no page '{id}'"));

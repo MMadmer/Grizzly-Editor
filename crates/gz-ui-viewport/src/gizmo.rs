@@ -43,6 +43,20 @@ pub fn supports(class: ObjClass) -> [bool; 3] {
     }
 }
 
+/// What the gizmo may do with the selection: what every selected object allows (the AI map's
+/// nodes in its mode).
+#[must_use]
+pub fn supports_of(state: &gz_scene::SceneState) -> [bool; 3] {
+    if state.tools.mode == gz_scene::SceneMode::AiMap {
+        return supports(ObjClass::AiMap);
+    }
+    if state.selection.is_empty() {
+        return [true; 3];
+    }
+    let c = state.selection_caps();
+    [c.moves, c.rotates, c.scales]
+}
+
 /// `snapto`.
 #[must_use]
 pub fn snapto(value: f32, snap: f32) -> f32 {

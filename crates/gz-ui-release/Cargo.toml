@@ -24,6 +24,8 @@ gz-app.workspace = true
 egui.workspace = true
 parking_lot.workspace = true
 serde_json.workspace = true
+serde.workspace = true
+schemars.workspace = true
 time.workspace = true
 zeroize = "1"
 # the system's file dialog (where a new author key goes, another key file)

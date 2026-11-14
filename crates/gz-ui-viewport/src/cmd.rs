@@ -15,7 +15,6 @@ use crate::camera::Target;
 use crate::gizmo::{self, GizmoType};
 use crate::lighting::{self, hour_text};
 use crate::menus;
-use crate::pane::tool_title;
 use crate::service::{Action, Fill, Viewport};
 
 const AREA: &str = "gz-ui-viewport";
@@ -130,12 +129,8 @@ async fn focus_object(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let snap = svc.store.snapshot();
     let obj = snap.find_relaxed(name).ok_or_else(|| CmdError::not_found("object not found"))?.clone();
     if a.bool("select").unwrap_or(false) {
-        // exactly like a manual pick: clear, select, switch the target
-        svc.store.send(SceneCmd::SelectClass { class: None, select: false }, o).await?;
-        svc.store.send(SceneCmd::Select { ids: vec![obj.id], mode: SelectMode::Add }, o).await?;
-        if snap.tools.target != obj.class {
-            svc.store.send(SceneCmd::SetTarget(obj.class), o).await?;
-        }
+        // exactly like a manual pick
+        svc.store.send(SceneCmd::Select { ids: vec![obj.id], mode: SelectMode::Set }, o).await?;
     }
     let lib = svc.library.clone();
     let s = snap.clone();
@@ -183,11 +178,10 @@ fn viewport_controls(ed: &Arc<Editor>, a: &Args) -> Reply {
     let vp = Viewport::of(ed);
     // the snap steps are the Preferences' own: read what was set there since the last pass
     vp.sync(ed);
-    let class = ed
+    let [sup_move, sup_rotate, sup_scale] = ed
         .project_opt()
         .and_then(|s| s.services.get::<SceneService>())
-        .map_or(gz_scene::ObjClass::SceneObject, |svc| svc.store.snapshot().tools.target);
-    let [sup_move, sup_rotate, sup_scale] = gizmo::supports(class);
+        .map_or([true; 3], |svc| gizmo::supports_of(&svc.store.snapshot()));
     let tool_arg = a.str("tool").filter(|t| !t.is_empty());
     let (mut action, mut kind) = vp.read(|s| (s.tool.action, s.tool.gizmo));
     if let Some(t) = tool_arg {
@@ -211,7 +205,9 @@ fn viewport_controls(ed: &Arc<Editor>, a: &Args) -> Reply {
             return Err(CmdError::invalid("tool must be select, place, move, rotate or scale"));
         };
         if !supported {
-            return Err(CmdError::invalid(format!("the {} tool cannot {t} objects", tool_title(class))));
+            return Err(CmdError::invalid(format!(
+                "the selection cannot {t}: not every selected object takes it"
+            )));
         }
     }
     let snaps = [

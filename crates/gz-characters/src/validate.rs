@@ -51,6 +51,14 @@ pub struct Cx<'a> {
     /// The linked game's trade categories; empty without one.
     pub trade_categories: &'a [String],
     pub models: Option<&'a dyn Models>,
+    /// The sections the module itself brings (its `gamedata\configs`): an item named there is
+    /// known whatever the linked game says.
+    pub own: Option<&'a gz_mod::SectionSet>,
+}
+
+/// Whether the module itself brings `section`.
+fn own_has(cx: &Cx<'_>, section: &str) -> bool {
+    cx.own.is_some_and(|o| o.has(section))
 }
 
 /// Whether every character of a text has a cp1251 form; the first six that do not.
@@ -139,9 +147,9 @@ pub fn validate(c: &Character, cx: &Cx<'_>, problems: &mut Vec<String>) {
             ));
         }
         for s in &c.supplies {
-            if !s.section.is_empty() && !p.known(PickerType::Item, &s.section) {
+            if !s.section.is_empty() && !p.known(PickerType::Item, &s.section) && !own_has(cx, &s.section) {
                 problems.push(format!(
-                    "W117 {place}: the linked game has no item '{}' - right only when the module brings that section, otherwise the game stops when the NPC spawns",
+                    "W117 {place}: neither the linked game nor the module has an item '{}' - the game stops when the NPC spawns",
                     s.section
                 ));
             }
@@ -234,8 +242,12 @@ fn validate_trade(
         check(&t.buys, "buys");
         if let Some(p) = pickers {
             for r in &t.stock {
-                if !r.section.is_empty() && !p.known(PickerType::Item, &r.section) {
-                    problems.push(format!("W121 {place}: the linked game has no item '{}' for the stock - right only when the module brings that section", r.section));
+                if !r.section.is_empty() && !p.known(PickerType::Item, &r.section) && !own_has(cx, &r.section)
+                {
+                    problems.push(format!(
+                        "W121 {place}: neither the linked game nor the module has an item '{}' for the stock",
+                        r.section
+                    ));
                 }
             }
         }

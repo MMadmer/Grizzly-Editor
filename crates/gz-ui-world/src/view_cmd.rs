@@ -1,21 +1,22 @@
-//! `characters_view` and `world_view`: the two tabs for whoever looks at them
-//! (`EditorCharacters::McpView`, `EditorWorld::McpView`). Anything to show opens the tab on it;
-//! without one they only report. The data paths stay `characters_*` and `world_get` /
-//! `world_set`.
+//! `characters.view` and `world.view`: the two tabs for whoever looks at them. Anything to show
+//! opens the tab on it; without one they only report. The data is the character files themselves
+//! (`asset.check`) and `world.info` / `world.set`.
 
 use std::sync::Arc;
 
 use gz_app::{ShellState, on_ui};
 use gz_base::Origin;
 use gz_characters::Characters;
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Reply, json};
+use gz_editor::{CmdError, Editor, Registry, Reply, Spec, json};
 use gz_world::{StartKit, World, WorldService};
+use schemars::JsonSchema;
+use serde::Deserialize;
 
 use crate::call::{args, error_text, ok, s};
 use crate::characters::{self, CharactersDoc, SavePlan, Then, problems_of, run_save};
 use crate::world::{self, WorldDoc};
 
-/// The pickers of the form `characters_view show=` puts up.
+/// The pickers of the form `characters.view show=` puts up.
 const SHOWN_PICKERS: [&str; 8] = ["base", "visual", "icon", "community", "rank", "dialog", "sells", "buys"];
 
 fn characters_doc(shell: &mut ShellState) -> Option<&mut CharactersDoc> {
@@ -61,22 +62,84 @@ fn gone() -> CmdError {
     CmdError::new("refused", "the Characters tab closed meanwhile")
 }
 
-pub(crate) async fn characters_view(ed: Arc<Editor>, a: Args, origin: Origin) -> Reply {
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CharactersView {
+    /// Selects the character with this id.
+    #[serde(default)]
+    select: Option<String>,
+    /// Selects the character of this file (project-relative).
+    #[serde(default)]
+    path: Option<String>,
+    /// Saves the edits in progress before another character is selected.
+    #[serde(default)]
+    save: bool,
+    /// Drops the edits in progress before another character is selected.
+    #[serde(default)]
+    discard: bool,
+    /// Puts a picker of the form up to be looked at: base, visual, icon, community, rank,
+    /// dialog, sells, buys.
+    #[serde(default)]
+    show: Option<String>,
+    /// Opens the tab without selecting anything.
+    #[serde(default)]
+    open: bool,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WorldView {
+    /// Opens or closes the problems drawer: open or close.
+    #[serde(default)]
+    drawer: Option<String>,
+    /// The level the Transitions table shows.
+    #[serde(default)]
+    level: Option<String>,
+    /// The Transitions table's filter.
+    #[serde(default)]
+    filter: Option<String>,
+    /// Unfolds More.
+    #[serde(default)]
+    more: bool,
+    /// Opens the tab.
+    #[serde(default)]
+    open: bool,
+}
+
+pub(crate) fn register(reg: &mut Registry) {
+    reg.area("characters", "The module's own characters: the tab that edits them");
+    reg.cmd(
+        Spec::view(
+            "characters.view",
+            "Puts the Characters tab up on a character, or a picker of its form, and answers what it shows.",
+        )
+        .example("select=courier")
+        .destroys_with(&["discard"]),
+        characters_view,
+    );
+    reg.cmd(
+        Spec::view("world.view", "Puts the World Rules tab up - its drawer, a level of its transitions - and answers what it shows.")
+            .example("more=true"),
+        world_view,
+    );
+}
+
+pub(crate) async fn characters_view(ed: Arc<Editor>, a: CharactersView, origin: Origin) -> Reply {
     if ed.project_opt().is_none() {
         return Err(CmdError::no_project());
     }
-    let id = a.text("select").map(str::to_owned);
-    let path = a.text("path").map(str::to_owned);
-    let (save, discard) = (a.flag("save"), a.flag("discard"));
-    // a picker of the form put up to be looked at, never to act (not in the C++ wire)
-    let show = a.text("show").map(str::to_owned);
+    let id = a.select.filter(|v| !v.is_empty());
+    let path = a.path.filter(|v| !v.is_empty());
+    let (save, discard) = (a.save, a.discard);
+    // a picker of the form put up to be looked at, never to act
+    let show = a.show.filter(|v| !v.is_empty());
     if let Some(name) = &show
         && !SHOWN_PICKERS.contains(&name.as_str())
     {
         return Err(CmdError::invalid(format!("show must be one of: {}", SHOWN_PICKERS.join(", "))));
     }
     // anything to show opens the tab on it; without one this only looks
-    if id.is_some() || path.is_some() || show.is_some() || a.flag("open") {
+    if id.is_some() || path.is_some() || show.is_some() || a.open {
         open_tab(&ed, characters::TAB, origin).await?;
     }
     if !is_open(&ed, characters::TAB).await? {
@@ -176,30 +239,30 @@ pub(crate) async fn characters_view(ed: Arc<Editor>, a: Args, origin: Origin) ->
     .await
 }
 
-pub(crate) async fn world_view(ed: Arc<Editor>, a: Args, origin: Origin) -> Reply {
-    // over MCP, what it asks for is under More
-    let more = a.flag("more") || a.has("level") || a.has("filter");
+pub(crate) async fn world_view(ed: Arc<Editor>, a: WorldView, origin: Origin) -> Reply {
+    // what it asks for is under More
+    let more = a.more || a.level.is_some() || a.filter.is_some();
     if ed.project_opt().is_none() {
         return Err(CmdError::no_project());
     }
-    let drawer = a.text("drawer").map(str::to_owned);
+    let drawer = a.drawer.filter(|d| !d.is_empty());
     if drawer.as_deref().is_some_and(|d| d != "open" && d != "close") {
         return Err(CmdError::invalid("drawer must be open or close"));
     }
-    let level = a.text("level").map(str::to_owned);
-    let filter = a.str("filter").map(str::to_owned);
+    let level = a.level.filter(|l| !l.is_empty());
+    let filter = a.filter;
     let svc = WorldService::of(&ed).await?;
     if let Some(level) = &level {
         let game = svc.game().await;
         if !game.level_exists(level) {
             return Err(CmdError::new(
                 "refused",
-                format!("the linked game has no level '{level}' (world_transitions lists them)"),
+                format!("the linked game has no level '{level}' (world.lookup lists them)"),
             ));
         }
     }
     // anything to set opens the tab on it; without one this only looks
-    if drawer.is_some() || level.is_some() || filter.is_some() || a.flag("open") {
+    if drawer.is_some() || level.is_some() || filter.is_some() || a.open {
         open_tab(&ed, world::TAB, origin).await?;
     }
     let _ = svc.manifest().sync().await;

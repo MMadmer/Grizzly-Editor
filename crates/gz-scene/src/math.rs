@@ -219,9 +219,47 @@ pub fn tri_normal(a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
     (b - a).cross(c - a).normalize_or_zero()
 }
 
+/// C's `%g`: how the game's configs spell a number (the custom data the bake writes).
+#[must_use]
+pub fn fmt_g(v: f32) -> String {
+    let v = f64::from(v);
+    if v == 0.0 {
+        return "0".to_owned();
+    }
+    if !v.is_finite() {
+        return if v.is_nan() {
+            "nan".to_owned()
+        } else if v < 0.0 {
+            "-inf".to_owned()
+        } else {
+            "inf".to_owned()
+        };
+    }
+    let trim = |s: &str| -> String {
+        if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_owned() } else { s.to_owned() }
+    };
+    let exp = v.abs().log10().floor() as i32;
+    if !(-5..6).contains(&exp) {
+        let s = format!("{v:.5e}");
+        let (mant, e) = s.split_once('e').unwrap_or((&s, "0"));
+        let e: i32 = e.parse().unwrap_or(0);
+        return format!("{}e{}{:02}", trim(mant), if e < 0 { '-' } else { '+' }, e.abs());
+    }
+    let decimals = usize::try_from(5 - exp).unwrap_or(0);
+    trim(&format!("{v:.decimals$}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn g_formats_like_c() {
+        assert_eq!(fmt_g(20.0), "20");
+        assert_eq!(fmt_g(3.5), "3.5");
+        assert_eq!(fmt_g(0.1), "0.1");
+        assert_eq!(fmt_g(1.0e7), "1e+07");
+    }
 
     #[test]
     fn euler_angles_read_back() {

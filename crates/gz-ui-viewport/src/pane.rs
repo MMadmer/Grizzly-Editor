@@ -628,10 +628,10 @@ impl ViewportPane {
             Click::Place { ray, b } => place(&self.editor, &self.vp, ray, b),
             Click::Select { ray, b, target } => {
                 if crate::bulktools::click(&self.editor, &self.vp, ray, b, target) {
-                } else if target == ObjClass::Way && crate::objtools::way_points_mode(&self.editor) {
+                } else if crate::objtools::way_points_mode(&self.editor) {
                     crate::objtools::way_point_click(&self.editor, &self.vp, ray, b);
                 } else {
-                    click_select(&self.editor, &self.vp, ray, b, target);
+                    click_select(&self.editor, &self.vp, ray, b);
                 }
             }
         }
@@ -1106,12 +1106,13 @@ impl ViewportPane {
     }
 }
 
-/// The class the tools work on now (`LTools->CurrentClassID()`).
+/// The kind the mode's clicks work with (a painting mode's layer, the cells, the kind Place
+/// places); selecting takes any kind.
 fn scene_target(editor: &Editor) -> Option<ObjClass> {
     editor
         .project_opt()
         .and_then(|s| s.services.get::<SceneService>())
-        .map(|svc| svc.store.snapshot().tools.target)
+        .map(|svc| svc.store.snapshot().tools.mode_kind())
 }
 
 /// The Tools panel's title of a class (`kToolClasses`).
@@ -1254,12 +1255,11 @@ fn accept(o: &Object, state: &gz_scene::SceneState, filter: Option<ObjClass>) ->
         && (o.owner.is_none() || o.editable())
 }
 
-/// A click of the selection tool (`SelectStart`): Ctrl adds to what is selected, toggling the
-/// object hit; without it the click replaces the selection. Picking any class makes the class
-/// hit the tools' target.
-fn click_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons, target: ObjClass) {
+/// A click of the selection (`SelectStart`): Ctrl adds to what is selected, toggling the object
+/// hit; without it the click replaces the selection. Any kind is picked; a member of a group
+/// that is not editable by itself picks its group.
+fn click_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
     let Ok(svc) = SceneService::of(editor) else { return };
-    let any = vp.read(|s| s.settings.pick_any_class);
     let far = vp.read(|s| s.nav.far);
     let ed = editor.clone();
     let origin = ed.ui_origin();
@@ -1267,15 +1267,12 @@ fn click_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons, 
         if !b.ctrl {
             let _ = svc
                 .store
-                .send(
-                    SceneCmd::SelectClass { class: if any { None } else { Some(target) }, select: false },
-                    origin,
-                )
+                .send(SceneCmd::SelectAll { classes: None, select: false, invert: false }, origin)
                 .await;
         }
         let (snap, pick) = svc.pick().await;
         let lib = svc.library.clone();
-        let filter = if any { None } else { Some(target) };
+        let filter = None;
         let s = snap.clone();
         let hit = ed
             .exec
@@ -1289,7 +1286,6 @@ fn click_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons, 
             Some(owner) if !obj.editable() => owner,
             _ => obj.id,
         };
-        let class = snap.get(id).map_or(obj.class, |o| o.class);
         let _ = svc
             .store
             .send(
@@ -1300,14 +1296,11 @@ fn click_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons, 
                 origin,
             )
             .await;
-        if any && class != target {
-            let _ = svc.store.send(SceneCmd::SetTarget(class), origin).await;
-        }
         ed.exec.wake().ping();
     });
 }
 
-/// The end of a marquee (`FrustumSelect`): what the box holds of the current class is added.
+/// The end of a marquee (`FrustumSelect`): what the box holds of any kind is added.
 fn marquee_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, size: [u32; 2], a: G2, b: G2) {
     let Ok(svc) = SceneService::of(editor) else { return };
     let (cam, prefs, far) = vp.read(|s| (s.nav.camera(), s.prefs, s.nav.far));
@@ -1315,7 +1308,6 @@ fn marquee_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, size: [u32; 2], a: G
     crate::gesture::spawn(editor, async move {
         let (snap, pick) = svc.pick().await;
         let lib = svc.library.clone();
-        let class = snap.tools.target;
         let ids = ed
             .exec
             .cpu(move || {
@@ -1330,7 +1322,7 @@ fn marquee_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, size: [u32; 2], a: G
                         (prefs.near, far, prefs.bp_depth_tolerance),
                     )
                 });
-                crate::draw::frustum_select(&snap, &lib, &cam, size, a, b, class, depth.flatten())
+                crate::draw::frustum_select(&snap, &lib, &cam, size, a, b, None, depth.flatten())
             })
             .await;
         if !ids.is_empty() {
@@ -1440,8 +1432,7 @@ fn apply_drag(vp: &Viewport, d: &mut Drag, ray: &Ray, dx: f32, dy: f32, editor: 
 }
 
 /// Where a placed object lands (`PickGround`): with Object Snap on the surface of a scene
-/// object or a spawn point (the snap list's objects only when it is used), otherwise the grid's
-/// plane, on the grid's steps when the grid snap is on. The surface's normal comes with it.
+/// object or a spawn point, otherwise the grid's plane, on the grid's steps when the grid snap is on. The surface's normal comes with it.
 pub(crate) async fn pick_ground(
     editor: &Arc<Editor>,
     svc: &Arc<SceneService>,
@@ -1456,11 +1447,8 @@ pub(crate) async fn pick_ground(
         let hit = editor
             .exec
             .cpu(move || {
-                let only: Option<Vec<ObjId>> = snap.tools.snap_use.then(|| snap.tools.snap.clone());
                 pick.ray_pick(&snap, &lib, ray.origin, ray.dir, far, &|o: &Object| {
-                    matches!(o.class, ObjClass::SceneObject | ObjClass::SpawnPoint)
-                        && o.flags.visible
-                        && only.as_ref().is_none_or(|l| l.contains(&o.id))
+                    matches!(o.class, ObjClass::SceneObject | ObjClass::SpawnPoint) && o.flags.visible
                 })
             })
             .await;
@@ -1492,7 +1480,7 @@ fn place(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
             s.nav.far,
         )
     });
-    let class = svc.store.snapshot().tools.target;
+    let class = svc.store.snapshot().tools.placing;
     let item = vp.read(|s| s.place.get(&class).cloned());
     let ed = editor.clone();
     let vp = vp.clone();
@@ -1509,12 +1497,10 @@ fn place(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
                     return;
                 };
                 let mut args = gz_editor::Args::new();
-                args.insert("action".into(), Value::String("place".into()));
+                args.insert("kind".into(), Value::String("group".into()));
                 args.insert("ref".into(), Value::String(reference.to_string()));
-                for (k, v) in [("x", at.x), ("y", at.y), ("z", at.z)] {
-                    args.insert(k.into(), json!(v));
-                }
-                let reply = ed.call("group_tool", args, origin).await;
+                args.insert("position".into(), json!([at.x, at.y, at.z]));
+                let reply = ed.call("scene.place", args, origin).await;
                 if reply.get("ok").and_then(Value::as_bool) != Some(true) {
                     ed.log.error(
                         reply
@@ -1525,9 +1511,14 @@ fn place(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
                     );
                     return;
                 }
-                let name =
-                    reply.get("object").and_then(|o| o.get("name")).and_then(Value::as_str).unwrap_or("");
-                svc.store.snapshot().find(ObjClass::Group, name).map(|o| o.id)
+                // a library group answers its object, a `.group` asset the objects it placed
+                let name = reply
+                    .get("object")
+                    .or_else(|| reply.get("objects").and_then(|l| l.get(0)))
+                    .and_then(|o| o.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                svc.store.snapshot().find_any(name).map(|o| o.id)
             }
             ObjClass::SpawnPoint => {
                 let Some(section) = item else {
@@ -1535,11 +1526,10 @@ fn place(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
                     return;
                 };
                 let mut args = gz_editor::Args::new();
+                args.insert("kind".into(), Value::String("spawn".into()));
                 args.insert("section".into(), Value::String(section.to_string()));
-                for (k, v) in [("x", at.x), ("y", at.y), ("z", at.z)] {
-                    args.insert(k.into(), json!(v));
-                }
-                let reply = ed.call("place_spawn", args, origin).await;
+                args.insert("position".into(), json!([at.x, at.y, at.z]));
+                let reply = ed.call("scene.place", args, origin).await;
                 if reply.get("ok").and_then(Value::as_bool) != Some(true) {
                     ed.log.error(
                         reply

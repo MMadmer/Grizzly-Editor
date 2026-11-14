@@ -40,7 +40,7 @@ pub struct SpawnInput<'a> {
     pub old_text: &'a str,
 }
 
-/// The counts and lines the result dialog and `mod_export_spawn` report.
+/// The counts and lines the result dialog and `level.export kind=spawn` report.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SpawnResult {
     pub exported: u32,
@@ -75,7 +75,7 @@ pub struct SpawnBake {
     pub custom_data: Vec<(String, String)>,
     /// Models to stage: source file -> `gamedata\meshes\<visual>.ogf`.
     pub stage: Vec<(PathBuf, String)>,
-    /// The log lines of the C++ (`! [XMS] spawn export: ...`).
+    /// The log lines (`! [XMS] spawn export: ...`).
     pub log: Vec<String>,
 }
 
@@ -277,17 +277,17 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
             match found {
                 Found::Staged | Found::Game | Found::Project(_) => {}
                 Found::Sdk(src) => {
-                    // the chooser lists the SDK's own meshes too: a model picked there is staged
+                    // the chooser lists the editor's own meshes too: a model picked there is staged
                     // into the project, so the module carries it like any project mesh
                     out.stage.push((src, vname.clone()));
                     out.log.push(format!(
-                        "* [XMS] spawn export: staged SDK model -> gamedata\\meshes\\{vname}.ogf"
+                        "* [XMS] spawn export: staged an editor model -> gamedata\\meshes\\{vname}.ogf"
                     ));
                     staged_now.insert(vname.clone());
                 }
                 Found::Missing => {
                     out.log.push(format!(
-                        "! [XMS] spawn export: visual '{vname}' of '{op}' exists neither in the game, the project, nor the SDK - op skipped, it would crash the game"
+                        "! [XMS] spawn export: visual '{vname}' of '{op}' exists neither in the game, the project, nor the editor's data - op skipped, it would crash the game"
                     ));
                     out.result.missing += 1;
                     out.result.skipped += 1;
@@ -513,7 +513,7 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
         out.result.exported += 1;
     }
 
-    // oracle: base spawns taken out are not counted in `exported`, so a scene that only removes
+    // base spawns taken out are not counted in `exported`, so a scene that only removes
     // base spawns is "empty": its mirror pass deletes the file and a merge export refuses.
     if out.result.exported == 0 {
         if input.mirror {
@@ -523,7 +523,7 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
             return Ok(out);
         }
         return Err(ExportError::new(if input.selected_only {
-            "no scene objects selected"
+            "none of the objects chosen is one the module adds: the spawn layer holds only those"
         } else {
             "the scene has no placeable objects"
         }));
@@ -728,7 +728,7 @@ mod tests {
         assert_eq!(
             bake.custom_data,
             // a new stalker's custom data is `CSE_ALifeTraderAbstract`'s "\r\n[game_info]\r\n",
-            // which the C++ writes as it is before the order (EditorModScene.cpp)
+            // which is written as it is before the order
             [(
                 "l01_escape_guard.ltx".to_owned(),
                 "\r\n[game_info]\r\n[xms_order]\r\norder = patrol\r\nroute = walk_1\r\nmove = run\r\n"

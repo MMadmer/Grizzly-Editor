@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
-"""The viewport's gestures and the scene tools' pictures, over MCP on a THROW-AWAY COPY of a project with the Escape
-scene (rawdata\\levels\\l01_escape.level).
+"""The scene's files, its commands, the viewport's gestures and the scene tools' pictures, over MCP on a THROW-AWAY
+COPY of a project with the Escape scene (rawdata\\levels\\l01_escape.level, an X-Ray SDK scene).
+
+The scene's own files (docs/assets/SCENE.md):
+
+  F  the X-Ray SDK scene opens (imported), saves as rawdata\\levels\\l01_escape.scene with its folder, and opens
+     again from those files with the same objects where they stood
+  O  objects.lua edited from OUTSIDE (an object added, with a comment): the open scene takes it at once, as one undo
+     step (Undo takes it out again, Redo brings it back)
+  K  one object moved in the editor and saved: the comment is still there and only that object's line changed
+  X  a light and a glow selected together are deleted together, in one undo step, and a locked object is not
 
 Every gesture goes through viewport_gesture, which feeds the viewport's own input - the same code a mouse reaches:
 
@@ -13,21 +22,13 @@ Every gesture goes through viewport_gesture, which feeds the viewport's own inpu
   G  a move drag on the gizmo's X arrow moves the selection along X alone
   P  the Group tool's Pivot chooser (ui_dialog id=group_pivot) lists the group's objects; align_pivot is its pick
   V  a motion's playback with Camera View: the camera rides on the object while it plays, and stops with it
-  D  detail objects drawn: a snap list, a detail object list, a base texture, First Initialize, Reinitialize - the
-     viewport's picture differs over the ground against the same view with the details hidden
-  W  a wallmark of a texture the game has, laid on the ground: the picture differs where it lies, and only there
+  D  detail objects painted on the ground (scene.details): two meshes, a stroke - the viewport's picture differs
+     over the ground where they stand -, the eraser, a colour-index picture imported
+  W  a wallmark of a texture the game has, laid on the ground (scene.wallmarks): the picture differs where it lies,
+     and only there
   S  a screenshot is current: the scene opened again, ONE screenshot_editor and ONE screenshot_viewport right after it
      show the scene (the viewport is not flat) and say nothing is pending
-  C  the level compiler in the editor's process: mp_test (the repository's smallest scene) built by Make All, a
-     compile started without waiting and stopped (the job ends cancelled), then compiled whole over MCP (the job
-     ends done, its report names the phases and the files, the files are in the level folder)
-  Y  Play takes no folder it did not make: play_clean, play_root and play name as root= a throw-away project folder
-     (its own gamedata, fsgame.ltx, a level), a folder inside it, a folder that holds a file, a folder inside the open
-     project, the editor's own folder and a relative path - every one refused before anything is built or written,
-     and a listing of the work folder before and after is equal; no game is started. Then a root Play makes
-     itself (play_root in an empty temp folder) - for the linked game's engine in place, so no program and no link
-     in it - gets a project in its gamedata: play_root, play_clean and play refuse it, naming the project, and its
-     listing is unchanged
+  (The level compiler and Play's roots are test_level_commands.py's.)
 
     python tools/qa/test_scene_tools.py --project <project> [--only R,A,...] [--shots <folder>]
 
@@ -41,7 +42,7 @@ import io
 import json
 import math
 import os
-import shutil
+import re
 import socket
 import subprocess
 import sys
@@ -52,7 +53,9 @@ import qa_target
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MCP = qa_target.MCP
-PHASES = "RALMGPVDWSCY"
+PHASES = "FOKXRALMGPVDWS"
+SCENE = "rawdata/levels/l01_escape.scene"
+LEVEL = "rawdata/levels/l01_escape.level"
 # open ground of Escape east of the village, no tree over it; every phase works round a point of its own
 SPOTS = {"R": (-119.0, -162.0), "A": (-130.0, -147.0), "L": (-125.0, -156.0), "M": (-100.0, -154.0), "G": (-119.0, -136.0),
          "P": (-101.0, -136.0), "V": (-130.0, -166.0), "D": (-110.0, -190.0), "W": (-110.0, -190.0)}
@@ -155,16 +158,15 @@ CTX = Ctx()
 
 def ground_y(x: float, z: float) -> float:
     """The terrain's height at (x, z): a box set on it and taken away."""
-    placed = mcp("place_object", ref=BOX, x=x, y=200.0, z=z, snap_to_ground=True)
-    name = (placed.get("object") or {}).get("name")
-    y = position(name)[1]
-    mcp("select_objects", names=name)
-    mcp("delete_selected")
-    return float(y)
+    placed = mcp("scene.place", kind="object", ref=BOX, position=[x, 200.0, z], on_surface=True)
+    o = placed.get("object") or {}
+    mcp("scene.delete", objects=[o.get("name")])
+    return float((o.get("position") or [0.0, 0.0, 0.0])[1])
 
 
 def position(name: str) -> list[float]:
-    return (mcp("object_info", name=name).get("object") or {}).get("position") or [0.0, 0.0, 0.0]
+    found = mcp("scene.get", objects=[name], keys=["pos"]).get("objects") or [{}]
+    return found[0].get("position") or [0.0, 0.0, 0.0]
 
 
 def look_down(phase: str, height: float = 12.0) -> tuple[float, float, float]:
@@ -177,8 +179,9 @@ def look_down(phase: str, height: float = 12.0) -> tuple[float, float, float]:
     return x, y, z
 
 
-def target(class_id: int) -> None:
-    mcp("exec_command", name="COMMAND_CHANGE_TARGET", p1i=class_id)
+def arm(kind: str) -> None:
+    """Place mode with `kind` armed: what a click of Place adds."""
+    mcp("scene.mode", mode="place", kind=kind)
 
 
 def gesture(**kw) -> dict:
@@ -188,26 +191,189 @@ def gesture(**kw) -> dict:
     return r
 
 
-def place(ref: str, x: float, y: float, z: float, **kw) -> str:
-    r = mcp("place_object", ref=ref, x=x, y=y, z=z, **kw)
-    return (r.get("object") or {}).get("name") or r.get("name") or ""
+def place(ref: str, x: float, y: float, z: float, ground: bool = False, rotation=None) -> str:
+    extra = {"rotation": rotation} if rotation else {}
+    r = mcp("scene.place", kind="object", ref=ref, position=[x, y, z], on_surface=ground, **extra)
+    return (r.get("object") or {}).get("name") or ""
 
 
 def deselect() -> None:
-    mcp("deselect_all")
+    mcp("scene.select", none=True)
+
+
+def random_placement(**fields) -> dict:
+    """The scene objects' random placement (`random_placement` of the .scene)."""
+    return mcp("scene.set", world=True, set={"random_placement": fields})
+
+
+# ---- F: the scene's own files ---------------------------------------------------------------------------------------
+
+def folder(name: str) -> str:
+    return os.path.join(CTX.project, "rawdata", "levels", "l01_escape", name)
+
+
+def read(name: str) -> str:
+    with open(folder(name), encoding="utf-8") as f:
+        return f.read()
+
+
+def write(name: str, text: str) -> None:
+    with open(folder(name), "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+
+
+def listing() -> dict:
+    """Every object of the scene by name: its kind and position."""
+    out = {}
+    offset = 0
+    while True:
+        page = mcp("scene.objects", limit=2000, offset=offset)
+        for o in page.get("objects") or []:
+            out[o["name"]] = (o.get("kind"), tuple(o.get("position") or ()))
+        offset += 2000
+        if offset >= page.get("total", 0):
+            return out
+
+
+def phase_f() -> None:
+    info = mcp("scene.info")
+    check(info.get("imported") == LEVEL and info.get("file") == SCENE,
+          "F the X-Ray SDK scene opens as an import that saves as its .scene", short(info))
+    before = listing()
+    saved = mcp("scene.save", timeout=300)
+    main = os.path.join(CTX.project, *SCENE.split("/"))
+    check(saved.get("ok") and saved.get("file") == SCENE and os.path.isfile(main),
+          "F Save writes the .scene", short(saved))
+    files = sorted(os.listdir(os.path.dirname(folder("x"))))
+    check({"objects.lua", "lights.lua", "spawns.lua", "ways.lua"} <= set(files),
+          "F and its folder holds a Lua file per kind", short(files))
+    with open(main, encoding="utf-8") as f:
+        head = f.read()
+    check(head.lstrip().startswith("return") and "scene = 1" in head, "F the .scene is Lua data with its version",
+          head[:200])
+    opened = mcp("scene.open", path=SCENE, timeout=300)
+    check(opened.get("ok") and opened.get("imported") is None and opened.get("file") == SCENE,
+          "F the .scene opens from its own files", short(opened))
+    after = listing()
+    moved = [n for n, (k, p) in before.items() if after.get(n) != (k, p)]
+    check(len(after) == len(before) and not moved, "F with every object of the import where it stood (%d)" % len(after),
+          short(moved[:5]))
+
+
+def own_files() -> None:
+    """The scene in its own files (a phase run alone after the import): saved and opened from them."""
+    if mcp("scene.info").get("imported"):
+        mcp("scene.save", timeout=300)
+        mcp("scene.open", path=SCENE, timeout=300)
+
+
+# ---- O: an edit from outside ----------------------------------------------------------------------------------------
+
+OUTSIDE = "qa_outside_01"
+NOTE = "-- added by the QA from outside the editor"
+
+
+def object_line(text: str, name: str) -> int:
+    lines = text.split("\n")
+    return next((i for i, l in enumerate(lines) if 'name = "%s"' % name in l), -1)
+
+
+def wait_for(name: str, present: bool, seconds: float = 15.0) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        hit = any(o.get("name") == name for o in mcp("scene.objects", query=name).get("objects") or [])
+        if hit == present:
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def add_outside() -> bool:
+    """objects.lua edited as another program would: a copy of its first object under a new name, a comment above it.
+    `True` once the open scene holds it."""
+    text = read("objects.lua")
+    lines = text.split("\n")
+    first = next((i for i, l in enumerate(lines) if 'name = "' in l and "ref = " in l), -1)
+    if first < 0:
+        return False
+    copy = re.sub(r'name = "[^"]*"', 'name = "%s"' % OUTSIDE, lines[first], count=1)
+    indent = lines[first][:len(lines[first]) - len(lines[first].lstrip())]
+    lines[first + 1:first + 1] = [indent + NOTE, copy]
+    write("objects.lua", "\n".join(lines))
+    return wait_for(OUTSIDE, True)
+
+
+def phase_o() -> None:
+    own_files()
+    count = mcp("scene.info").get("objects", 0)
+    check(add_outside(), "O the object added in objects.lua from outside comes into the open scene")
+    info = mcp("scene.info")
+    check(info.get("objects") == count + 1 and not info.get("modified"),
+          "O as the files hold it: nothing unsaved", short({k: info.get(k) for k in ("objects", "modified")}))
+    undo = mcp("doc.undo", doc="level")
+    check(undo.get("ok") and wait_for(OUTSIDE, False, 5.0), "O one Undo takes the outside change back", short(undo))
+    redo = mcp("doc.redo", doc="level")
+    check(redo.get("ok") and wait_for(OUTSIDE, True, 5.0), "O and Redo brings it back", short(redo))
+
+
+# ---- K: a save keeps what nobody changed ----------------------------------------------------------------------------
+
+def phase_k() -> None:
+    own_files()
+    if NOTE not in read("objects.lua"):
+        add_outside()
+    before = read("objects.lua")
+    lines = before.split("\n")
+    # the name as the file spells it, its backslashes escaped
+    name = next((re.search(r'name = "([^"]*)"', l).group(1).replace("\\\\", "\\") for l in lines
+                 if 'name = "' in l and "ref = " in l and OUTSIDE not in l), "")
+    if not check(name and NOTE in before, "K the outside object and its comment are in objects.lua", name):
+        return
+    p = position(name)
+    moved = mcp("scene.set", objects=[name], position=[p[0] + 1.5, p[1], p[2]])
+    saved = mcp("scene.save", timeout=300)
+    check(moved.get("ok") and saved.get("ok"), "K an object moved and the scene saved", short(moved) + short(saved))
+    after = read("objects.lua")
+    check(NOTE in after and OUTSIDE in after, "K the comment and the outside object are still there")
+    a, b = before.split("\n"), after.split("\n")
+    changed = [(x, y) for x, y in zip(a, b) if x != y]
+    check(len(a) == len(b) and len(changed) == 1 and name.replace("\\", "\\\\") in changed[0][1],
+          "K only the moved object's line changed", short(changed[:3]))
+    check(saved.get("written") == 1, "K and the save wrote that one file", short(saved))
+
+
+# ---- X: a selection of several kinds --------------------------------------------------------------------------------
+
+def phase_x() -> None:
+    light = (mcp("scene.place", kind="light", position=[5.0, 2.0, 5.0]).get("object") or {}).get("name")
+    glow = (mcp("scene.place", kind="glow", position=[5.0, 2.0, 7.0]).get("object") or {}).get("name")
+    kept = (mcp("scene.place", kind="glow", position=[5.0, 2.0, 9.0]).get("object") or {}).get("name")
+    mcp("scene.set", objects=[kept], locked=True)
+    picked = mcp("scene.select", objects=[light, glow, kept])
+    check(picked.get("selected") == 3, "X a light and two glows are selected together", short(picked))
+    gone = mcp("scene.delete")
+    left = {o.get("name") for o in mcp("scene.objects", classes=["light", "glow"], limit=5000).get("objects") or []}
+    check(gone.get("removed") == 2 and light not in left and glow not in left,
+          "X Delete removes the light and the glow at once", short(gone))
+    check(kept in left, "X and leaves the locked glow alone")
+    undo = mcp("doc.undo", doc="level")
+    back = {o.get("name") for o in mcp("scene.objects", classes=["light", "glow"], limit=5000).get("objects") or []}
+    check(undo.get("ok") and light in back and glow in back, "X one Undo brings both back", short(undo))
+    mcp("scene.set", objects=[kept], locked=False)
+    mcp("scene.delete", objects=[light, glow, kept])
 
 
 # ---- R: Random Append -----------------------------------------------------------------------------------------------
 
 def phase_r() -> None:
     look_down("R", height=5.0)
-    target(2)
+    arm("object")
     deselect()
-    rnd = mcp("object_tool", action="random", on=True, objects=[BOX, CABINET], scale=True, proportional=True,
-              min_scale=0.5, max_scale=2.0, rotate=True, min_rotation=[0, 0, 0], max_rotation=[0, 180, 0])
-    r = rnd.get("random") or {}
-    check(rnd.get("ok") and r.get("on") and r.get("objects") == [BOX, CABINET] and r.get("max_rotation") == [0, 180, 0],
-          "R object_tool action=random sets Randomize Added Objects and its ranges", short(rnd))
+    rnd = random_placement(on=True, objects=[BOX, CABINET], random_scale=True, proportional=True,
+                           scale=[[0.5, 0.5, 0.5], [2, 2, 2]], random_rotation=True, rotation=[[0, 0, 0], [0, 180, 0]])
+    r = (rnd.get("set") or {}).get("random_placement") or {}
+    check(rnd.get("ok") and r.get("on") and r.get("objects") == [BOX, CABINET] and r.get("rotation") == [[0, 0, 0], [0, 180, 0]],
+          "R random_placement of the scene sets Randomize Added Objects and its ranges", short(rnd))
     # the object stands upright: the terrain's normal would tilt it (Normal Align)
     mcp("viewport_controls", tool="place", object_snap=True, grid_snap=False, normal_align=False)
     before = picture("r_before")
@@ -228,7 +394,7 @@ def phase_r() -> None:
     middle = (w // 2 - h // 16, h // 2 - h // 16, w // 2 + h // 16, h // 2 + h // 16)
     _, near = until_changed("r_after", before, middle, share=0.1)
     check(near > 0.1, "R the picture shows it where it was clicked (%.1f %% of the middle changed)" % (near * 100))
-    mcp("object_tool", action="random", on=False)
+    random_placement()
     mcp("viewport_controls", normal_align=True)
 
 
@@ -237,15 +403,16 @@ def phase_r() -> None:
 def phase_a() -> None:
     x, y, z = look_down("A")
     deselect()
-    shape = mcp("shape_tool", action="add", position="%f,%f,%f" % (x, y + 0.5, z), shape="box", show=True)
-    shape_name = next((s.get("name") for s in (shape.get("selected") or [])), "")
-    spawn = mcp("place_spawn", section="space_restrictor", x=x + 3.0, y=y, z=z)
+    shape = mcp("scene.place", kind="shape", position=[x, y + 0.5, z], box=True)
+    shape_name = (shape.get("object") or {}).get("name") or ""
+    spawn = mcp("scene.place", kind="spawn", section="space_restrictor", position=[x + 3.0, y, z])
     spawn_name = (spawn.get("object") or {}).get("name") or ""
     check(shape.get("ok") and spawn.get("ok") and spawn_name, "A a shape and a spawn point to attach it to",
           short(shape) + " " + short(spawn))
-    mcp("select_objects", names=spawn_name)
-    on = mcp("spawn_attach", action="on_click", on=True)
-    check(on.get("attach_on_click") is True, "A spawn_attach action=on_click turns Attach on Click on", short(on))
+    mcp("scene.select", objects=[spawn_name])
+    arm("spawn")
+    on = mcp("scene.attach", on_click=True)
+    check(on.get("on_click") is True, "A scene.attach on_click=true turns Attach on Click on", short(on))
     mcp("viewport_controls", tool="place")
     g = gesture(kind="click", at=CTX.centre())
     att = [c for c in (g.get("moved") or []) + (g.get("changed") or []) if c.get("name") == spawn_name]
@@ -258,7 +425,7 @@ def phase_a() -> None:
     back = g.get("placed") or []
     check(len(back) == 1 and back[0].get("class") == "shape" and back[0].get("name"),
           "A the point's own sphere goes back into the scene under a name of its own (DetachObject)", short(back))
-    check(g.get("tool") == "select" and not mcp("spawn_attach", action="on_click", on=False).get("attach_on_click"),
+    check(g.get("tool") == "select" and not mcp("scene.attach", on_click=False).get("on_click"),
           "A the tool goes back to Select and Attach on Click goes off", str(g.get("tool")))
 
 
@@ -266,8 +433,8 @@ def phase_a() -> None:
 
 def phase_l() -> None:
     x, y, z = look_down("L")
-    target(2)
-    box = place(BOX, x, y, z, snap_to_ground=True)
+    arm("object")
+    box = place(BOX, x, y, z, ground=True)
     deselect()
     mcp("viewport_controls", tool="select")
     cx, cy = CTX.centre()
@@ -280,21 +447,20 @@ def phase_l() -> None:
           "L a click on it selects it when the button comes up", short(g))
     # Place: the object goes down on the click, and a drag places nothing
     deselect()
-    mcp("object_tool", action="random", on=True, objects=[BOX])
+    random_placement(on=True, objects=[BOX])
     mcp("viewport_controls", tool="place", object_snap=True, grid_snap=False)
     look_down("L")
     g = gesture(kind="drag", at=[cx - CTX.size[1] * 0.1, cy], to=[cx + CTX.size[1] * 0.1, cy])
     check(g.get("ok") and g.get("camera_moved") and not g.get("placed"),
           "L in Place a left drag moves the camera and places nothing", short(g))
-    mcp("object_tool", action="random", on=False)
+    random_placement()
     mcp("viewport_controls", tool="select")
 
 
 def phase_m() -> None:
     x, y, z = look_down("M")
-    target(2)
-    names = [place(BOX, x + dx, y, z, snap_to_ground=True) for dx in (-1.5, 1.5)]
-    far = place(BOX, x + 9.0, y, z, snap_to_ground=True)
+    names = [place(BOX, x + dx, y, z, ground=True) for dx in (-1.5, 1.5)]
+    far = place(BOX, x + 9.0, y, z, ground=True)
     deselect()
     mcp("viewport_controls", tool="select")
     cx, cy = CTX.centre()
@@ -311,9 +477,8 @@ def phase_m() -> None:
 
 def phase_g() -> None:
     x, y, z = look_down("G")
-    target(2)
-    name = place(BOX, x, y, z, snap_to_ground=True)
-    mcp("select_objects", names=name)
+    name = place(BOX, x, y, z, ground=True)
+    mcp("scene.select", objects=[name])
     mcp("viewport_controls", tool="move", grid_snap=False)
     h = gesture(kind="hover", at=CTX.centre())
     gz = h.get("gizmo") or {}
@@ -333,7 +498,7 @@ def phase_g() -> None:
           short(g))
     check(moved and abs(b[1] - a[1]) < 1e-3 and abs(b[2] - a[2]) < 1e-3, "G and along X alone", "%s -> %s" % (a, b))
     check(not g.get("camera_moved") and not g.get("placed"), "G the camera stays and nothing is added", short(g))
-    undo = mcp("undo")
+    undo = mcp("doc.undo", doc="level")
     back = position(name)
     check(undo.get("ok") and abs(back[0] - a[0]) < 1e-3, "G the drag is one undo step", short(undo) + " " + short(back))
     mcp("viewport_controls", tool="select")
@@ -343,13 +508,12 @@ def phase_g() -> None:
 
 def phase_p() -> None:
     x, y, z = look_down("P")
-    a = place(BOX, x - 2.0, y, z, snap_to_ground=True)
-    b = place(BOX, x + 2.0, y, z, snap_to_ground=True, ry=0.5)
-    mcp("select_objects", names="%s,%s" % (a, b))
-    grp = mcp("group_tool", action="group")
+    a = place(BOX, x - 2.0, y, z, ground=True)
+    b = place(BOX, x + 2.0, y, z, ground=True, rotation=[0.0, 28.6, 0.0])
+    grp = mcp("scene.group", objects=[a, b])
     gname = (grp.get("object") or {}).get("name") or ""
-    check(grp.get("ok") and grp.get("members") == 2, "P group_tool action=group makes a group of the two", short(grp))
-    mcp("select_objects", names=gname)
+    check(grp.get("ok") and grp.get("members") == 2, "P scene.group makes a group of the two", short(grp))
+    mcp("scene.select", objects=[gname])
     opened = mcp("ui.dialog", action="open", id="group_pivot")
     pic = mcp("shot.window")
     modal = pic.get("modal") or {}
@@ -368,11 +532,11 @@ def phase_p() -> None:
           short(refused))
     mcp("ui.dialog", action="close", id="dlg.choose")
     check(not mcp("shot.window").get("modal"), "P it closes as Cancel does")
-    aligned = mcp("group_tool", action="align_pivot", object=b)
+    aligned = mcp("scene.group", action="pivot_to", objects=[gname], object=b)
     gp, bp = position(gname), position(b)
     check(aligned.get("changed") == 1 and all(abs(p - q) < 1e-3 for p, q in zip(gp, bp)),
-          "P its pick, align_pivot object=, puts the group's pivot on that object", "%s vs %s" % (gp, bp))
-    no_group = mcp("deselect_all") and mcp("ui.dialog", action="open", id="group_pivot")
+          "P its pick, scene.group action=pivot_to object=, puts the group's pivot on that object", "%s vs %s" % (gp, bp))
+    no_group = mcp("scene.select", none=True) and mcp("ui.dialog", action="open", id="group_pivot")
     check(not no_group.get("ok") and "Select a group" in str(no_group.get("error")),
           "P without a selected group it says so", short(no_group))
 
@@ -384,20 +548,20 @@ def phase_v() -> None:
     name = place(BOX, x, y + 1.0, z)
     # a key where it stands at 0 s; then at 2 s, 10 m east and 3 m up (a frame change poses the object by the
     # motion, so the key comes first and the move after it)
-    steps = [mcp("object_motion", name=name, action="motionable", on=True),
-             mcp("object_motion", name=name, action="add_key"),
-             mcp("object_motion", name=name, action="current", t=2.0)]
-    steps.append(mcp("object_set_position", name=name, x=x + 10.0, y=y + 4.0, z=z))
-    steps += [mcp("object_motion", name=name, action="add_key"),
-              mcp("object_motion", name=name, action="range", min=0.0, max=2.0),
-              mcp("object_motion", name=name, action="first")]
-    st = mcp("object_motion", name=name)
+    steps = [mcp("scene.motion", object=name, action="motionable", on=True),
+             mcp("scene.motion", object=name, action="add_key"),
+             mcp("scene.motion", object=name, action="current", time=2.0)]
+    steps.append(mcp("scene.set", objects=[name], position=[x + 10.0, y + 4.0, z]))
+    steps += [mcp("scene.motion", object=name, action="add_key"),
+              mcp("scene.motion", object=name, action="range", min=0.0, max=2.0),
+              mcp("scene.motion", object=name, action="first")]
+    st = mcp("scene.motion", object=name)
     check(all(s.get("ok") for s in steps) and (st.get("motion") or {}).get("keys", 0) >= 2,
           "V a motion of two keys, two seconds long", short([s for s in steps if not s.get("ok")] or st))
     cam0 = (mcp("camera_get").get("camera") or {}).get("position")
     still = picture("v_still")
-    on = mcp("object_motion", name=name, action="camera_view", on=True)
-    play = mcp("object_motion", name=name, action="play")
+    on = mcp("scene.motion", object=name, action="camera_view", on=True)
+    play = mcp("scene.motion", object=name, action="play")
     check(on.get("ok") and (play.get("motion") or {}).get("playing") and (play.get("motion") or {}).get("camera_view"),
           "V Camera View on, the motion plays", short(play))
     time.sleep(0.6)
@@ -407,7 +571,7 @@ def phase_v() -> None:
     check(cam1 != cam0 and x < cam1[0] < x + 10.0, "V the camera rides on the playing object", "%s -> %s" % (cam0, cam1))
     check(abs(obj[0] - x) < 1e-3, "V and the scene keeps the object where it stands until the pause", str(obj))
     check(view > 0.2, "V the viewport shows the view from the object (%.0f %% changed)" % (view * 100))
-    paused = mcp("object_motion", name=name, action="pause")
+    paused = mcp("scene.motion", object=name, action="pause")
     cam2 = (mcp("camera_get").get("camera") or {}).get("position")
     time.sleep(0.3)
     cam3 = (mcp("camera_get").get("camera") or {}).get("position")
@@ -415,7 +579,7 @@ def phase_v() -> None:
     check(paused.get("ok") and not m.get("playing") and 0.0 < m.get("current", 0) <= 2.0,
           "V pause stops it at the time it reached", short(paused))
     check(cam2 == cam3, "V and the camera stops with it", "%s -> %s" % (cam2, cam3))
-    mcp("object_motion", name=name, action="camera_view", on=False)
+    mcp("scene.motion", object=name, action="camera_view", on=False)
 
 
 # ---- D: detail objects drawn ----------------------------------------------------------------------------------------
@@ -431,66 +595,47 @@ def dds(path: str, size: int, argb: int) -> None:
 
 
 def phase_d() -> None:
-    look_down("D", height=6.0)
-    # a pick makes the picked object's tool current: the Detail Objects tool comes after it
-    mcp("select_objects", names=TERRAIN)
-    mcp("details_tool", show=True)
-    snap = mcp("snap_objects", action="set_from_selection")
-    deselect()
-    check(snap.get("ok") and TERRAIN in (snap.get("objects") or []), "D the Detail Objects' snap list holds the terrain",
-          short(snap))
-    # the base texture: one opaque colour over the whole level, which the two grasses scatter
-    dds(os.path.join(CTX.project, "gamedata", "textures", "qa", "qa_detail_base.dds"), 64, 0xFF00FF00)
+    x, y, z = look_down("D", height=6.0)
+    # the details lie on the ground - every static object - by themselves: two grasses painted round the spot
     objects = ["detail\\trava_green", "detail\\trava_black"]
-    added = mcp("details_tool", action="add_objects", objects=objects)
-    base = mcp("details_tool", action="set", base_texture="qa\\qa_detail_base", draw_objects=False)
-    first = mcp("details_tool", action="first_initialize", seed=7, timeout=120)
-    colour = mcp("details_tool", action="set_color", color="ff00ff00", objects=objects)
-    state = mcp("details_tool")
-    check(added.get("ok") and base.get("ok") and colour.get("ok") and set(objects) <= set(state.get("objects") or [])
-          and state.get("base_texture") == "qa\\qa_detail_base", "D a detail object list, a base texture and its colour",
-          short(state))
-    check(first.get("ok") and first.get("slots", 0) > 0, "D First Initialize lays the slots", short(first))
-    again = mcp("details_tool", action="reinitialize", seed=7, timeout=120)
-    check(again.get("ok") and again.get("filled", 0) == again.get("slots", -1),
-          "D Reinitialize gives every slot its objects", short(again))
+    added = mcp("scene.details", action="add", objects=objects)
+    listed = mcp("scene.details", action="list")
+    names = [m.get("object") for m in listed.get("meshes") or []]
+    check(added.get("ok") and set(objects) <= set(names), "D two detail meshes are the layer's", short(listed))
     hidden = picture("d_no_details")
-    shown_on = mcp("details_tool", action="update_renderer")
+    painted = mcp("scene.details", action="paint", object=objects[0], position=[x, y, z], radius=6.0, timeout=120)
+    check(painted.get("ok") and painted.get("slots", painted.get("slots_changed", 0)) > 0,
+          "D a stroke paints the first mesh on the ground (the slot grid laid over it first)", short(painted))
+    info = mcp("scene.details")
+    check(info.get("ok") and info.get("filled", 0) > 0 and (info.get("slots_per_mesh") or [0])[0] > 0,
+          "D the slots under the brush hold the mesh", short(info))
     w, h = hidden.size
-    _, share = until_changed("d_details", hidden, (0, h // 4, w, h), level=8, share=0.2)
-    check(shown_on.get("draw_objects") is True and share > 0.2,
-          "D the picture differs over the ground where the details stand (%.0f %%)" % (share * 100))
-    mcp("details_tool", action="set", draw_base_texture=True)
-    deadline = time.monotonic() + 6.0
-    while True:
-        small = picture("d_base_texture").resize((64, 64))
-        green = sum(1 for y in range(64) for x in range(64)
-                    if (lambda px: px[1] > 200 and px[0] < 80 and px[2] < 80)(small.getpixel((x, y))))
-        # the texture loads beside the pass
-        if green > 64 * 64 * 0.05 or time.monotonic() > deadline:
-            break
-        time.sleep(0.1)
-    mcp("details_tool", action="set", draw_base_texture=False, draw_objects=False)
-    check(green > 64 * 64 * 0.05, "D the base texture is drawn over the ground in its colour (%d of 4096)" % green)
+    _, share = until_changed("d_details", hidden, (0, h // 4, w, h), level=8, share=0.05)
+    check(share > 0.05, "D the picture differs over the ground where the details stand (%.0f %%)" % (share * 100))
+    erased = mcp("scene.details", action="erase", position=[x, y, z], radius=6.0)
+    after = mcp("scene.details")
+    check(erased.get("ok") and after.get("filled", 1) == 0, "D the eraser takes them away again", short(after))
+    # a colour-index picture is an import: one opaque colour scatters both meshes over the whole ground
+    dds(os.path.join(CTX.project, "gamedata", "textures", "qa", "qa_detail_base.dds"), 64, 0xFF00FF00)
+    imported = mcp("scene.details", action="import_texture", texture="qa\\qa_detail_base",
+                   colors={"00ff00": objects}, seed=7, timeout=120)
+    check(imported.get("ok") and imported.get("filled", 0) > 0, "D a colour-index picture imports as painted slots",
+          short(imported))
+    mcp("scene.details", action="clear")
 
 
 # ---- W: a wallmark drawn --------------------------------------------------------------------------------------------
 
 def phase_w() -> None:
     x, y, z = look_down("W", height=6.0)
-    # the marks lie on the scene's snap list: the terrain, with the Object tool current
-    mcp("select_objects", names=TERRAIN)
-    target(2)
-    mcp("snap_objects", action="set_from_selection")
-    mcp("snap_objects", use=True)
-    deselect()
-    st = mcp("wallmark_tool", action="set", show=True, texture="wm\\wm_anarh1", width=2.0, height=2.0, draw=True)
+    # the marks lie on the ground - every static object - by themselves
+    st = mcp("scene.wallmarks", action="set", texture="wm\\wm_anarh1", width=2.0, height=2.0, draw=True)
     check(st.get("ok") and st.get("texture") == "wm\\wm_anarh1", "W the Wallmark tool makes marks of a game texture",
           short(st))
     without = picture("w_without")
-    added = mcp("wallmark_tool", action="add", start="%f,%f,%f" % (x, y + 5.0, z), dir="0,-1,0")
+    added = mcp("scene.wallmarks", action="add", start=[x, y + 5.0, z], dir=[0, -1, 0])
     check(added.get("ok") and added.get("added"), "W a mark is laid on the ground under the spot", short(added))
-    mcp("wallmark_tool", action="deselect_all")
+    mcp("scene.wallmarks", action="select", what="none")
     w, h = without.size
     # 2 m from 6 m up with a 60 degree field: about 0.29 of the height round the middle; the poster fills the
     # middle of its square
@@ -500,11 +645,11 @@ def phase_w() -> None:
     outer = changed(without, shown, (0, 0, w, h // 4), level=8)
     check(inner > 0.3, "W the picture shows the mark where it lies (%.0f %% of it changed)" % (inner * 100))
     check(outer < 0.01, "W and nothing else changed (%.2f %% of the top)" % (outer * 100))
-    mcp("wallmark_tool", action="set", draw=False)
+    mcp("scene.wallmarks", action="set", draw=False)
     hidden = picture("w_hidden")
     check(changed(without, hidden, (w // 2 - r, h // 2 - r, w // 2 + r, h // 2 + r), level=8) < 0.02,
           "W draw=false hides it again")
-    mcp("wallmark_tool", action="set", draw=True)
+    mcp("scene.wallmarks", action="set", draw=True)
 
 
 def flat(img, box=None) -> float:
@@ -521,7 +666,8 @@ ESCAPE_VIEW = {"x": 0.0, "y": 3.0, "z": -10.0, "h": 0.0, "p": 0.0, "b": 0.0}
 
 def phase_s() -> None:
     from PIL import Image
-    opened = mcp("open_scene", scene="l01_escape.level", discard=True, timeout=300)
+    own_files()
+    opened = mcp("scene.open", path=SCENE, discard=True, timeout=300)
     check(opened.get("ok"), "S the scene opens again", short(opened))
     mcp("ui.tab", action="open", doc="level")
     # the view a fresh load of Escape has (the phases before moved it): the picture must be of it
@@ -542,7 +688,7 @@ def phase_s() -> None:
     check(shot.get("ok") and not shot.get("pending") and spread > 8.0,
           "S the first screenshot_editor after the load shows the scene in the viewport (spread %.1f)" % spread,
           short({k: v for k, v in shot.items() if k != "png_base64"}))
-    opened = mcp("open_scene", scene="l01_escape.level", discard=True, timeout=300)
+    opened = mcp("scene.open", path=SCENE, discard=True, timeout=300)
     mcp("camera_set", **ESCAPE_VIEW)
     pic = mcp("screenshot_viewport", timeout=60)
     data = base64.b64decode(pic.get("png_base64") or b"")
@@ -556,156 +702,8 @@ def job_of(job_id: int) -> dict:
     return next((j for j in mcp("job.list").get("jobs", []) if j.get("id") == job_id), {})
 
 
-def phase_c() -> None:
-    scene = "mp_test"
-    levels = os.path.join(CTX.project, "rawdata", "levels")
-    shutil.copy2(os.path.join(qa_target.REPO, "rawdata", "levels", scene + ".level"), levels)
-    shutil.copytree(os.path.join(qa_target.REPO, "rawdata", "levels", scene), os.path.join(levels, scene),
-                    dirs_exist_ok=True)
-    opened = mcp("open_scene", scene=scene + ".level", discard=True, timeout=120)
-    if not check(opened.get("ok"), "C the small scene opens", short(opened)):
-        return
-    built = mcp("level_build", action="make_all", timeout=120)
-    if not check(built.get("ok"), "C Make All writes its build", short(built)):
-        return
-    started = mcp("level_compile", wait=False)
-    stopped = mcp("level_build", action="stop")
-    job = started.get("job")
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline and job_of(job).get("state") == "running":
-        time.sleep(0.1)
-    j = job_of(job)
-    check(started.get("ok") and started.get("started") and stopped.get("stopped") and j.get("state") == "cancelled",
-          "C a compile started without waiting is stopped by the level build's stop (state %s)" % j.get("state"),
-          short({"started": started, "stopped": stopped, "job": j}))
-    t = time.monotonic()
-    done = mcp("level_build", action="compile", timeout=120)
-    seconds = time.monotonic() - t
-    report = done.get("report") or {}
-    parts = report.get("parts") or [{}]
-    phases = [p.get("name") for p in parts[0].get("phases", [])]
-    files = {f.get("name") for f in parts[0].get("files", [])}
-    level_dir = os.path.join(CTX.project, "gamedata", "levels", scene)
-    there = all(os.path.isfile(os.path.join(level_dir, n)) for n in ("level", "level.geom", "level.geomx",
-                                                                     "level.cform", "build.cform", "build.lights"))
-    j = job_of(done.get("job"))
-    check(done.get("ok") and j.get("state") == "done" and report.get("threads", 0) >= 1,
-          "C the compile over MCP ends done (%.1f s, %s threads)" % (seconds, report.get("threads")),
-          short({k: v for k, v in done.items() if k != "report"}))
-    check("LIGHT: LMaps..." in phases and "Converting to OGFs..." in phases and {"level", "level.geom"} <= files,
-          "C its report names the compiler's phases and the files (%d phases, %d files)" % (len(phases), len(files)),
-          short(parts[0]))
-    check(there, "C the level's files are in the project's level folder",
-          ", ".join(sorted(os.listdir(level_dir))) if os.path.isdir(level_dir) else "no folder")
-
-
-# ---- Y: Play takes no folder it did not make --------------------------------------------------------------------------
-
-def tree_of(top: str) -> dict:
-    """Every entry under `top` with its size and write time; a link is listed, never followed."""
-    out = {}
-    for d, dirs, files in os.walk(top):
-        keep = []
-        for n in dirs:
-            p = os.path.join(d, n)
-            st = os.lstat(p)
-            out[os.path.relpath(p, top)] = (0, st.st_mtime_ns)
-            if not (os.path.islink(p) or getattr(st, "st_reparse_tag", 0)):
-                keep.append(n)
-        dirs[:] = keep
-        for n in files:
-            st = os.lstat(os.path.join(d, n))
-            out[os.path.relpath(os.path.join(d, n), top)] = (st.st_size, st.st_mtime_ns)
-    return out
-
-
-def phase_y() -> None:
-    work = os.path.dirname(CTX.project)
-    # the reviewer's stand-in for a project named as root=: its own gamedata, fsgame.ltx and a level
-    victim = os.path.join(work, "victim")
-    os.makedirs(os.path.join(victim, "gamedata", "levels", "my_level"))
-    for rel, text in (("mod.ltx", "[module]\nid = victim\nname = Victim\n"), ("fsgame.ltx", "; the folder's own\n"),
-                      ("gamedata\\precious.txt", "the author's work\n"),
-                      ("gamedata\\levels\\my_level\\level.ltx", "the author's level\n")):
-        with open(os.path.join(victim, rel), "w") as f:
-            f.write(text)
-    # a folder that is no project but holds something, and a folder inside the open project
-    busy = os.path.join(work, "busy")
-    os.makedirs(busy)
-    with open(os.path.join(busy, "notes.txt"), "w") as f:
-        f.write("mine\n")
-    inside = os.path.join(CTX.project, "temp", "play_here")
-    # the folders named (the project itself is the editor's to write meanwhile)
-    listed = lambda: {k: tree_of(k) for k in (victim, busy)}  # noqa: E731
-    before = listed()
-    cases = (
-        (victim, "it is a project folder"),
-        (os.path.join(victim, "gamedata"), "it lies inside the project"),
-        (busy, "is not a Play root: choose an empty folder"),
-        (inside, "it lies inside the project"),
-        (qa_target.REPO, "the editor"),
-        ("relative\\root", "by a full path"),
-    )
-    for root, said in cases:
-        for action in ("play_clean", "play_root", "play"):
-            a = mcp("level_build", action=action, root=root, timeout=60)
-            check(not a.get("ok") and said in str(a.get("error")),
-                  "Y level_build %s root=<%s> is refused (%s)" % (action, os.path.basename(root), said), short(a))
-    after = listed()
-    differ = sorted("%s\\%s" % (os.path.basename(top), k) for top in before
-                    for k in set(before[top]) | set(after[top]) if before[top].get(k) != after[top].get(k))
-    count = sum(len(v) for v in before.values())
-    check(not differ and not os.path.exists(inside),
-          "Y the folders are as they were (%d entries listed before and after)" % count, ", ".join(differ[:10]))
-    st = mcp("level_build", action="status")
-    check(st.get("ok") and not st.get("running") and not st.get("building"), "Y nothing was started", short(st))
-    phase_y_marked()
-
-
-def phase_y_marked() -> None:
-    """A root Play made (it carries play_root.txt) that holds a project inside its gamedata: refused, untouched."""
-    root = tempfile.mkdtemp(prefix="gzpr_")
-    try:
-        made = mcp("level_build", action="play_root", root=root, timeout=120)
-        if not check(made.get("ok") and made.get("was") == "empty",
-                     "Y play_root makes Play's root in an empty folder (paths up to %s)" % made.get("path_limit"),
-                     short(made)):
-            return
-        # the installed engine runs in place: the root holds no program and no link
-        top = sorted(os.listdir(root))
-        programs = [n for n in top if n.lower().endswith((".exe", ".dll"))]
-        check(not any(k in made for k in ("play", "play_reason", "programs", "program_bytes")) and not programs
-              and not os.path.lexists(os.path.join(root, "database"))
-              and made.get("exe_path", "").lower().endswith("/xrengine.exe")
-              and not made.get("exe_path", "").lower().startswith(root.replace("\\", "/").lower()),
-              "Y the root is for the installed engine in place: no program, no link (%s)" % ", ".join(top), short(made))
-        again = mcp("level_build", action="play_root", root=root, timeout=120)
-        check(again.get("ok") and again.get("was") == "play_root" and again.get("walked", 0) > 0,
-              "Y the root again: its gamedata walked for a project before it is cleared (%s entries, %s ms)"
-              % (again.get("walked"), again.get("walk_ms")), short(again))
-        nested = os.path.join(root, "gamedata", "mods", "my_mod")
-        os.makedirs(nested)
-        with open(os.path.join(nested, "mod.ltx"), "w") as f:
-            f.write("[module]\nid = my_mod\n")
-        before = tree_of(root)
-        for action in ("play_root", "play_clean", "play"):
-            a = mcp("level_build", action=action, root=root, timeout=60)
-            check(not a.get("ok") and "it holds a project" in str(a.get("error")) and "my_mod" in str(a.get("error")),
-                  "Y level_build %s on a Play root whose gamedata holds a project is refused" % action, short(a))
-        after = tree_of(root)
-        differ = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
-        check(not differ, "Y the root is as it was (%d entries listed before and after)" % len(before),
-              ", ".join(differ[:10]))
-    finally:
-        link = os.path.join(root, "database")
-        if os.path.lexists(link):
-            # a junction to the game's archives: the link goes, the archives stay
-            os.rmdir(link)
-        qa_target.remove_tree(root)
-
-
-STEPS = {"R": phase_r, "A": phase_a, "L": phase_l, "M": phase_m, "G": phase_g, "P": phase_p, "V": phase_v, "D": phase_d,
-         "W": phase_w, "S": phase_s, "C": phase_c, "Y": phase_y}
+STEPS = {"F": phase_f, "O": phase_o, "K": phase_k, "X": phase_x, "R": phase_r, "A": phase_a, "L": phase_l, "M": phase_m, "G": phase_g, "P": phase_p, "V": phase_v, "D": phase_d,
+         "W": phase_w, "S": phase_s}
 
 
 def main() -> int:
@@ -749,7 +747,7 @@ def main() -> int:
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
             try:
-                if mcp("mod_manifest", timeout=30).get("ok"):
+                if mcp("mod.info", timeout=30).get("ok"):
                     break
             except OSError:
                 pass
@@ -757,7 +755,8 @@ def main() -> int:
                 raise RuntimeError("the editor exited during startup")
             time.sleep(0.05)
         qa_target.mark("editor start")
-        opened = mcp("open_scene", scene="l01_escape.level", timeout=300)
+        # the copy's own X-Ray SDK scene: what Save writes lands in the copy
+        opened = mcp("scene.open", path=LEVEL, timeout=300)
         mcp("ui.tab", action="open", doc="level")
         if not check(opened.get("ok"), "the Escape scene is open", short(opened)):
             return 1

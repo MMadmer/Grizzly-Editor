@@ -148,9 +148,7 @@ async fn run_batch(
 /// Where a job of a kind is followed besides `jobs`.
 fn follow_of(kind: &str) -> Option<&'static str> {
     match kind {
-        "level_build" | "level_run" => Some("level_build action=status"),
-        "publish" => Some("mod_publish action=status"),
-        "catalog" => Some("mod_catalog action=status"),
+        "catalog" => Some("release.catalog_status"),
         _ => None,
     }
 }
@@ -365,7 +363,7 @@ mod tests {
         assert_eq!(reply["job"], reply["jobs"][0]["id"]);
         assert_eq!(reply["jobs"][0]["kind"], "level_build");
         assert_eq!(reply["jobs"][0]["stage"], "Compiling");
-        assert_eq!(reply["follow"], json!(["job.wait", "level_build action=status"]));
+        assert_eq!(reply["follow"], json!(["job.wait"]));
         let error = reply["error"].as_str().unwrap();
         assert!(error.starts_with("slow_build is still running: its job level_build #"), "{error}");
         assert!(!error.contains("busy"));

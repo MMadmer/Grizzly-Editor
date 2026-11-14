@@ -29,6 +29,7 @@ use gz_ui::{
     Button, Font, Icon, Kind, PropFlags, PropertyGrid, SearchField, Tone, Toolbar, icon_button, metrics,
     palette, segmented,
 };
+use gz_ui::{Col, ItemRows};
 use gz_world::{
     GameWorld, KitItem, MAX_PLAYER_CHOICES, RULES, SceneStarts, Start, StartKit, World, WorldService,
 };
@@ -49,6 +50,8 @@ pub const TAB: &str = "world_rules";
 pub const SAVED: &str = "Saved to mod.ltx as you edit";
 /// The More section's key.
 const MORE: &str = "world.more";
+/// The three states of a rule, as its segmented control names them.
+const RULE_STATES: [&str; 3] = ["Remove", "Keep", "Player Decides"];
 const HOST: &str = crate::characters::HOST;
 const COLUMN_W: f32 = 900.0;
 const TABLE_ROW: f32 = 26.0;
@@ -199,6 +202,8 @@ pub struct WorldDoc {
     /// The rows of the transitions table: (level, filter, game generation, rows).
     trans_memo: (String, String, u64, Vec<usize>),
     kit_dirty: bool,
+    /// The kit Remove Kit took away: Edit > Undo puts it back.
+    undo_kit: Option<StartKit>,
     service_asked: bool,
     outbox: Arc<Outbox>,
     inbox: Arc<Mutex<Inbox>>,
@@ -242,6 +247,7 @@ impl WorldDoc {
             level_rows: Vec::new(),
             trans_memo: (String::new(), String::new(), u64::MAX, Vec::new()),
             kit_dirty: false,
+            undo_kit: None,
             service_asked: false,
             outbox: Arc::new(Outbox::default()),
             inbox: Arc::new(Mutex::new(Inbox::default())),
@@ -460,7 +466,7 @@ impl WorldDoc {
                     let (outbox, inbox) = (self.outbox.clone(), self.inbox.clone());
                     call::call_then(
                         &self.editor,
-                        "world_set",
+                        "world.set",
                         args([("start_kit_base", Value::Bool(true))]),
                         move |reply, _| {
                             if !call::ok(reply) {
@@ -474,7 +480,7 @@ impl WorldDoc {
                     let inbox = self.inbox.clone();
                     call::call_then(
                         &self.editor,
-                        "world_set",
+                        "world.set",
                         args([("start_kit_base", Value::Bool(true))]),
                         move |reply, ctx| {
                             if call::ok(reply) {
@@ -493,8 +499,8 @@ impl WorldDoc {
                     let inbox = self.inbox.clone();
                     call::call_then(
                         &self.editor,
-                        "place_spawn",
-                        args([("section", s("player_start"))]),
+                        "scene.place",
+                        args([("kind", s("spawn")), ("section", s("player_start"))]),
                         move |reply, _| {
                             inbox.lock().status = Some(if call::ok(reply) {
                                 String::new()
@@ -573,7 +579,7 @@ impl WorldDoc {
         filter.clone_into(&mut self.trans_filter);
     }
 
-    /// The `world_view` answer of the open tab, the problems as the manifest has them.
+    /// The `world.view` answer of the open tab, the problems as the manifest has them.
     #[must_use]
     pub(crate) fn view_json(&self, active: bool, problems: &[String]) -> Value {
         json!({
@@ -594,76 +600,61 @@ impl WorldDoc {
         level_label(&self.captions, level)
     }
 
+    /// One segmented control per rule beside its label - Remove, Keep, Player Decides - so the
+    /// state a person cannot mean (the player decides a rule the mode removes) cannot be made.
     fn draw_rules(&mut self, ui: &mut Ui) {
         let choices = self.world.choice_count();
-        let total = ui.available_width();
-        let (keep_w, choice_w) = (em(5.0), em(8.0));
-        let rule_w = (total - keep_w - choice_w).max(em(8.0));
-        let columns = [
-            Column::new("Rule", rule_w),
-            Column { centred: true, ..Column::new("Keep", keep_w) },
-            Column { centred: true, ..Column::new("Player Decides", choice_w) },
-        ];
-        let _ = table_headers(ui, &columns);
         let p = palette(ui.ctx());
+        let label_w = em(12.0);
         for (i, (caption, hint)) in RULE_TEXT.iter().enumerate() {
             let key = RULES.get(i).copied().unwrap_or("");
-            ui.push_id(i, |ui| {
+            let keep = self.world.keep.get(i).copied().unwrap_or(true);
+            let choice = self.world.player_choice.get(i).copied().unwrap_or(false);
+            let mut state = if choice { 2 } else { usize::from(keep) };
+            ui.push_id(("rule", i), |ui| {
                 ui.horizontal(|ui| {
                     ui.set_height(TABLE_ROW);
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    local_cell(
-                        ui,
-                        Vec2::new(rule_w, metrics::FRAME),
-                        Layout::left_to_right(Align::Center),
-                        |ui| {
-                            ui.add_space(6.0);
-                            let _ = text::label(ui, caption, Font::Body, p.text, Clip::End)
-                                .on_hover_text(format!("{hint}\nmod.ltx: {key}"));
-                        },
-                    );
-                    let mut keep = self.world.keep.get(i).copied().unwrap_or(true);
-                    let tip = if keep { "Kept in the mode" } else { "Taken out of the mode" };
-                    if local_cell_check(ui, &format!("world.keep.{i}"), &mut keep, keep_w, true, tip) {
+                    local_cell(ui, Vec2::new(label_w, metrics::FRAME), Layout::left_to_right(Align::Center), |ui| {
+                        let _ = text::label(ui, caption, Font::Body, p.text, Clip::End)
+                            .on_hover_text(format!("{hint}\nmod.ltx: {key}"));
+                    });
+                    let before = state;
+                    if segmented(ui, &mut state, &RULE_STATES, None) && state != before {
+                        if state == 2 && choices >= MAX_PLAYER_CHOICES {
+                            self.status = "The new-game screen has room for three rules: let the player decide another one less first.".to_owned();
+                            return;
+                        }
+                        let keep_now = state != 0;
                         if let Some(k) = self.world.keep.get_mut(i) {
-                            *k = keep;
+                            *k = keep_now;
                         }
-                        self.actions.push(Action::Send(args([(key, Value::Bool(keep))])));
-                    }
-                    let mut choice = self.world.player_choice.get(i).copied().unwrap_or(false);
-                    let full = !choice && choices >= MAX_PLAYER_CHOICES;
-                    let tip = if full {
-                        "The new-game screen has room for three: clear another one first."
-                    } else {
-                        "A checkbox on the new-game screen, set to what Keep says: the player may change it."
-                    };
-                    if local_cell_check(ui, &format!("world.choice.{i}"), &mut choice, choice_w, !full, tip) {
                         if let Some(c) = self.world.player_choice.get_mut(i) {
-                            *c = choice;
+                            *c = state == 2;
                         }
-                        self.actions.push(Action::Send(args([(
-                            "player_choice",
-                            s(&self.world.choices().join(",")),
-                        )])));
+                        let mut a = args([(key, Value::Bool(keep_now))]);
+                        if (state == 2) != choice {
+                            a.insert("player_choice".to_owned(), json!(self.world.choices()));
+                        }
+                        self.actions.push(Action::Send(a));
                     }
-                });
+                })
+                .response
+                .on_hover_text("Remove: not in the mode's world. Keep: as in the original game. Player Decides: a choice on the new-game screen, kept unless the player turns it off.");
             });
         }
-        ui.add_space(2.0);
-        let _ = text::prose(
-            ui,
-            &format!("{choices} of {MAX_PLAYER_CHOICES} rules offered on the new-game screen."),
-        );
-        let all = self.world.keep.iter().all(|k| *k);
+        ui.add_space(4.0);
+        let all = self.world.keep.iter().all(|k| *k) && self.world.choice_count() == 0;
         if Button::new("Keep Everything").enabled(!all, "Everything is kept already").show(ui).clicked() {
             self.world.keep = [true; 5];
-            let a = args([
+            self.world.player_choice = [false; 5];
+            let mut a = args([
                 (RULES[0], Value::Bool(true)),
                 (RULES[1], Value::Bool(true)),
                 (RULES[2], Value::Bool(true)),
                 (RULES[3], Value::Bool(true)),
                 (RULES[4], Value::Bool(true)),
             ]);
+            a.insert("player_choice".to_owned(), json!(Vec::<String>::new()));
             self.actions.push(Action::Send(a));
         }
     }
@@ -759,78 +750,79 @@ impl WorldDoc {
             }
         });
         ui.add_space(2.0);
-        if self.kit.items.is_empty() {
-            let _ =
-                text::status(ui, Tone::Muted, "No items: the player begins with the PDA and nothing else.");
-        } else {
-            let total = ui.available_width();
-            let (count_w, action_w) = (em(5.0), metrics::ICON_BUTTON);
-            let item_w = (total - count_w - action_w - 16.0).max(em(6.0));
-            let _ = table_headers(
-                ui,
-                &[
-                    Column::new("Item", item_w + 8.0),
-                    Column::new("Count", count_w + 8.0),
-                    Column::new("", action_w),
-                ],
-            );
-            let mut remove = None;
-            let lists = &self.lists;
-            for (i, it) in self.kit.items.iter_mut().enumerate() {
-                ui.push_id(i, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.set_height(TABLE_ROW);
-                        let mut section = it.section.clone();
-                        let picked = local_cell(
-                            ui,
-                            Vec2::new(item_w, metrics::FRAME),
-                            Layout::left_to_right(Align::Center),
-                            |ui| item_picker(ui, &format!("world.kit.{i}"), &mut section, lists, None),
-                        )
-                        .inner;
-                        if picked && !section.is_empty() {
-                            it.section = section;
-                            self.kit_dirty = true;
-                        }
-                        let changed = ui
-                            .allocate_ui_with_layout(
-                                Vec2::new(count_w, metrics::FRAME),
-                                Layout::left_to_right(Align::Center),
-                                |ui| gz_ui::grid::integer(ui, &mut it.count, 0.1, "").changed(),
-                            )
-                            .inner;
-                        if changed {
-                            it.count = it.count.max(1);
-                            self.kit_dirty = true;
-                        }
-                        if icon_button(ui, Icon::Delete, "Take the row out", false, true).clicked() {
-                            remove = Some(i);
+        let columns = [Col::new("Item", em(18.0)), Col::new("Count", em(6.0))];
+        let lists = &self.lists;
+        let mut picked: Option<(usize, String)> = None;
+        let mut counted: Option<(usize, i32)> = None;
+        let rows = self.kit.items.len();
+        let items = &self.kit.items;
+        let edit = ui
+            .scope(|ui| {
+                // the count needs a few digits: the table keeps to the width its items read at
+                ui.set_max_width(em(32.0));
+                ItemRows::new("world.kit", &columns, rows)
+                    .add_label("Add Item")
+                    .empty_text("No items: the player begins with the PDA and nothing else.")
+                    .show(ui, |ui, row, col| {
+                        let Some(it) = items.get(row) else { return };
+                        if col == 0 {
+                            let mut section = it.section.clone();
+                            let none = it.section.is_empty().then_some("Pick an item...");
+                            if item_picker(ui, &format!("world.kit.{row}"), &mut section, lists, none)
+                                && !section.is_empty()
+                            {
+                                picked = Some((row, section));
+                            }
+                        } else {
+                            let mut count = it.count;
+                            if gz_ui::grid::integer(ui, &mut count, 0.1, "").changed() {
+                                counted = Some((row, count.max(1)));
+                            }
                         }
                     })
-                    .response
-                    .on_hover_text("How many of it; ammo counts in boxes.");
-                });
+            })
+            .inner;
+        if let Some((row, section)) = picked {
+            // a section already in the kit takes the row's count instead of a second row
+            let dup = self.kit.items.iter().position(|i| i.section == section).filter(|&d| d != row);
+            match dup {
+                Some(d) => {
+                    let extra = self.kit.items.get(row).map_or(1, |i| i.count);
+                    if let Some(it) = self.kit.items.get_mut(d) {
+                        it.count += extra;
+                    }
+                    self.kit.items.remove(row);
+                }
+                None => {
+                    if let Some(it) = self.kit.items.get_mut(row) {
+                        it.section = section;
+                    }
+                }
             }
-            if let Some(i) = remove
-                && i < self.kit.items.len()
-            {
-                self.kit.items.remove(i);
-                self.kit_dirty = true;
-            }
+            self.kit_dirty = true;
+        }
+        if let Some((row, count)) = counted
+            && let Some(it) = self.kit.items.get_mut(row)
+        {
+            it.count = count;
+            self.kit_dirty = true;
+        }
+        if let Some(row) = edit.removed
+            && row < self.kit.items.len()
+        {
+            self.kit.items.remove(row);
+            self.kit_dirty = true;
+        }
+        if let Some((from, to)) = edit.moved {
+            gz_ui::rows::apply_move(&mut self.kit.items, from, to);
+            self.kit_dirty = true;
+        }
+        if edit.added {
+            // the row is sent once it has its item: a row without one is no row of the file
+            self.kit.items.push(KitItem { section: String::new(), count: 1 });
         }
         ui.add_space(2.0);
         ui.horizontal(|ui| {
-            // a row is born with its item: the tab saves at once, and a row without one would not
-            // survive the save
-            let mut add = String::new();
-            let picked = local_cell(ui, Vec2::new(em(18.0), metrics::FRAME), Layout::left_to_right(Align::Center), |ui| item_picker(ui, "world.kit.add", &mut add, &self.lists, Some("Add an item..."))).inner;
-            if picked && !add.is_empty() {
-                match self.kit.items.iter_mut().find(|i| i.section == add) {
-                    Some(it) => it.count += 1,
-                    None => self.kit.items.push(KitItem { section: add, count: 1 }),
-                }
-                self.kit_dirty = true;
-            }
             let resp = Button::new("Game's Base Kit")
                 .enabled(self.lists.linked, "Link a game to read its kit")
                 .tip("In place of these rows and the money: what every faction starts with in the linked game ([shared] of plugins\\faction_loadouts.ltx).")
@@ -838,7 +830,9 @@ impl WorldDoc {
             if resp.clicked() {
                 self.actions.push(Action::BaseKit);
             }
-            if Button::new("Remove Kit").kind(Kind::GhostDanger).tip("No kit of the mode's own: the new-game screen's loadout decides again.").show(ui).clicked() {
+            // an ordinary action: Edit > Undo (Ctrl+Z) on this tab puts the kit back
+            if Button::new("Remove Kit").tip("No kit of the mode's own: the new-game screen's loadout decides again. Undo puts it back.").show(ui).clicked() {
+                self.undo_kit = Some(self.kit.clone());
                 self.kit = StartKit::default();
                 self.kit_dirty = false;
                 self.actions.push(Action::Send(args([("start_kit_remove", Value::Bool(true))])));
@@ -1119,7 +1113,8 @@ impl WorldDoc {
         let text_ = self.manifest.as_ref().map_or_else(String::new, |m| mode_text(m, self.modes.as_deref()));
         let _ = text::prose(ui, &text_).on_hover_text("A new game reads these rules once and keeps them in its saves. Quests change them while the game runs.");
         ui.add_space(6.0);
-        if local_section(ui, "world.original", "Original Game", true, None) {
+        let offered = format!("{} of {MAX_PLAYER_CHOICES} offered", self.world.choice_count());
+        if local_section(ui, "world.original", "Original Game", true, Some(&offered)) {
             self.draw_rules(ui);
             ui.add_space(8.0);
         }
@@ -1275,7 +1270,7 @@ fn run_outbox(editor: &Arc<Editor>, outbox: &Arc<Outbox>, inbox: &Arc<Mutex<Inbo
                 }
                 continue;
             };
-            let reply = ed.call("world_set", a, origin).await;
+            let reply = ed.call("world.set", a, origin).await;
             inbox.lock().status = Some(if call::ok(&reply) {
                 String::new()
             } else {
@@ -1290,6 +1285,17 @@ fn run_outbox(editor: &Arc<Editor>, outbox: &Arc<Outbox>, inbox: &Arc<Mutex<Inbo
 impl Document for WorldDoc {
     fn id(&self) -> &str {
         TAB
+    }
+    fn edit(&mut self, _cx: &mut DocCx<'_>, action: gz_app::EditAction, run: bool) -> bool {
+        if action != gz_app::EditAction::Undo || self.undo_kit.is_none() {
+            return false;
+        }
+        if run && let Some(kit) = self.undo_kit.take() {
+            self.kit = kit;
+            self.kit.declared = true;
+            self.kit_dirty = true;
+        }
+        true
     }
     fn kind(&self) -> &'static str {
         TAB
@@ -1406,7 +1412,7 @@ pub(crate) fn open_more(ctx: &egui::Context) {
     set_section_open(ctx, MORE, true);
 }
 
-/// The `world_view` answer of a tab that is not open.
+/// The `world.view` answer of a tab that is not open.
 #[must_use]
 pub fn closed_json(problems: &[String]) -> Value {
     json!({ "tab": TAB, "open": false, "active": false, "drawer": "close", "level": "", "filter": "", "status": SAVED, "problems": problems })

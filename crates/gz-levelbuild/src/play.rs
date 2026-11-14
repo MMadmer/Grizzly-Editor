@@ -26,9 +26,11 @@
 //! writes into its root, and the only things it clears there:
 //! - the marker (`play_root.txt`) and its `entry = ` lines;
 //! - `fsgame.ltx`, the game's with its `$arch_dir$` naming the game's archives, overwritten;
-//! - `gamedata\`, the game's loose gamedata copied anew every time - the old copy removed (a link
-//!   in it unlinked) only when the marker listed it and no `project.ltx` / `mod.ltx` lies inside
-//!   it, walked again right before -, and the staged level in it;
+//! - `gamedata\`, the game's loose gamedata mirrored ([`mirror_tree`]): a file the root holds at
+//!   the game's size and write time stays, another is a hard link to the game's file where the
+//!   volume allows and a copy where it does not, and what the game no longer has goes - only when
+//!   the marker listed the folder and no project file lies inside it, walked again right before -;
+//!   the staged level in it, linked from the project's level folder the same way;
 //! - `appdata\` (logs, saves, screenshots, the player's `user.ltx`, the caches and the game's
 //!   content records, seeded once and never cleared), `modules\` (empty).
 //!
@@ -38,12 +40,12 @@
 //!
 //! The depth of a root is what the engine takes ([`path_limit`]): a `long-paths` engine 519
 //! characters where Windows long paths are on (else `MAX_PATH`, 259), one without the word 255
-//! (`CLocatorAPI::Register` copied every path it indexed into a `string256`) - for every path the
+//! (its file system copied every path it indexed into 256 bytes) - for every path the
 //! root holds; the root itself is the game's working folder, which Windows takes up to 258
 //! characters ([`WORKING_FOLDER_LIMIT`]).
 //!
-//! The editor's C++ Play ran IXRay's `Xr3DA.exe`, which read `level.ai.temp` under `-editor_scene`;
-//! Dead Air Refined's engine reads `level.ai`, so the staged level folder names it so.
+//! The game reads a level's AI map as `level.ai`: the build's AI map step writes it into the level
+//! folder, and Play stages that folder as it is.
 
 use std::fs;
 use std::io::Write;
@@ -208,6 +210,124 @@ pub struct PlayRoot {
     pub walked: u32,
     /// How long that walk took, in milliseconds.
     pub walk_ms: u64,
+    /// The game's files the root's gamedata got as hard links this time.
+    pub linked: u32,
+    /// The ones it got as copies (another volume, or links refused).
+    pub copied: u32,
+}
+
+/// What a mirror of a folder did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Mirrored {
+    pub linked: u32,
+    pub copied: u32,
+    /// Files that were there already, at the same size and write time.
+    pub kept: u32,
+    /// Files and folders the source no longer holds.
+    pub removed: u32,
+}
+
+/// The read-only mark of a file Play is about to replace goes first. A file Play holds as a link
+/// to the game's is only ever replaced after the game's own was replaced, so the mark it clears
+/// is never the game's.
+fn clear_readonly(p: &Path) {
+    if let Ok(md) = fs::symlink_metadata(p) {
+        let mut perm = md.permissions();
+        if perm.readonly() {
+            #[allow(clippy::permissions_set_readonly_false)]
+            perm.set_readonly(false);
+            let _ = fs::set_permissions(p, perm);
+        }
+    }
+}
+
+/// Whether two files are the same file as far as a mirror can tell: size and write time.
+fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    a.len() == b.len() && a.modified().ok().is_some() && a.modified().ok() == b.modified().ok()
+}
+
+/// `dst` made the same as `src`: a file `dst` holds at the source's size and write time stays,
+/// another becomes a hard link to the source where the volume allows and a copy (which keeps the
+/// write time) where it does not; what `src` does not hold goes, except the paths `keep` names
+/// (relative to `dst`, backslashes, any case). Links in `src` are not followed; a link in `dst`
+/// goes as a link. Blocking.
+pub fn mirror_tree(src: &Path, dst: &Path, keep: &[String], m: &mut Mirrored) -> Result<(), String> {
+    mirror_below(src, dst, "", keep, m)
+}
+
+fn mirror_below(src: &Path, dst: &Path, rel: &str, keep: &[String], m: &mut Mirrored) -> Result<(), String> {
+    fs::create_dir_all(dst).map_err(|e| format!("{} could not be made: {e}", dst.display()))?;
+    let kept = |name: &str| {
+        let path = if rel.is_empty() { name.to_owned() } else { format!("{rel}\\{name}") };
+        keep.iter().any(|k| k.eq_ignore_ascii_case(&path))
+    };
+    let entries = fs::read_dir(src).map_err(|e| format!("{} could not be read: {e}", src.display()))?;
+    let mut seen: Vec<std::ffi::OsString> = Vec::new();
+    for e in entries.flatten() {
+        let Ok(t) = e.file_type() else { continue };
+        let name = e.file_name();
+        let text = name.to_string_lossy().into_owned();
+        seen.push(name.clone());
+        if kept(&text) {
+            continue;
+        }
+        let to = dst.join(&name);
+        if t.is_dir() {
+            if fs::symlink_metadata(&to)
+                .is_ok_and(|md| !md.is_dir() || md.file_type().is_symlink() || is_junction(&to))
+            {
+                remove_tree(&to);
+                let _ = fs::remove_file(&to);
+            }
+            let sub = if rel.is_empty() { text } else { format!("{rel}\\{text}") };
+            mirror_below(&e.path(), &to, &sub, keep, m)?;
+        } else if t.is_file() {
+            let from = e.path();
+            if let (Ok(a), Ok(b)) = (fs::metadata(&from), fs::symlink_metadata(&to))
+                && b.is_file()
+                && same_file(&a, &b)
+            {
+                m.kept += 1;
+                continue;
+            }
+            if fs::symlink_metadata(&to).is_ok() {
+                if fs::symlink_metadata(&to).is_ok_and(|md| md.is_dir()) {
+                    remove_tree(&to);
+                } else {
+                    clear_readonly(&to);
+                    let _ = fs::remove_file(&to);
+                }
+            }
+            if fs::hard_link(&from, &to).is_ok() {
+                m.linked += 1;
+            } else {
+                fs::copy(&from, &to)
+                    .map_err(|err| format!("{} could not be copied: {err}", from.display()))?;
+                m.copied += 1;
+            }
+        }
+    }
+    // what the source no longer holds
+    let Ok(listing) = fs::read_dir(dst) else { return Ok(()) };
+    for e in listing.flatten() {
+        let name = e.file_name();
+        if seen.iter().any(|s| s.eq_ignore_ascii_case(&name)) || kept(&name.to_string_lossy()) {
+            continue;
+        }
+        let p = e.path();
+        if fs::symlink_metadata(&p).is_ok_and(|md| md.is_dir() && !md.file_type().is_symlink())
+            && !is_junction(&p)
+        {
+            remove_tree(&p);
+        } else {
+            clear_readonly(&p);
+            if fs::remove_file(&p).is_err() {
+                let _ = fs::remove_dir(&p);
+            }
+        }
+        m.removed += 1;
+    }
+    Ok(())
 }
 
 impl PlayRoot {
@@ -417,10 +537,17 @@ fn prepare_checked(
         let t = std::time::Instant::now();
         walked = play_root::nothing_to_lose(root, &old_entries)?;
         walk_ms = u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX);
-        remove_tree(&gamedata);
     }
+    let mut mirrored = Mirrored::default();
     if game.join("gamedata").is_dir() {
-        copy_tree(&game.join("gamedata"), &gamedata)?;
+        // the staged level and spawn are the level's, not the game's
+        let keep: Vec<String> = input
+            .level
+            .map(|(l, _)| vec![format!("levels\\{l}"), "spawns\\editor.spawn".to_owned()])
+            .unwrap_or_default();
+        mirror_tree(&game.join("gamedata"), &gamedata, &keep, &mut mirrored)?;
+    } else if listed("gamedata") {
+        remove_tree(&gamedata);
     }
     // an appdata of its own: the player's settings, the caches once, no save; nothing in it is
     // ever removed or overwritten
@@ -464,11 +591,13 @@ fn prepare_checked(
         was: state.name(),
         walked,
         walk_ms,
+        linked: mirrored.linked,
+        copied: mirrored.copied,
     })
 }
 
-/// The longest file path an engine that is not long-path aware takes: its `CLocatorAPI::Register`
-/// copied every path it indexes into a `string256`, and a longer one stopped the game at its start
+/// The longest file path an engine that is not long-path aware takes: its file system copied
+/// every path it indexes into 256 bytes, and a longer one stopped the game at its start
 /// (a breakpoint in xrCore, before its log opens - what a root inside a project folder, or a deep
 /// temp folder, did).
 pub const GAME_PATH_LIMIT: usize = 255;
@@ -568,16 +697,10 @@ fn check_path_lengths(root: &Path, longest: &str, limit: usize) -> Result<(), St
     Ok(())
 }
 
-/// The built level (`level_dir`, every file of it) into the root's `gamedata\levels\<level>`,
-/// `level.ai` among them, and the spawn as `gamedata\spawns\editor.spawn`. Only into a root
-/// Play made (its marker). Blocking.
-pub fn stage_level(
-    root: &Path,
-    level: &str,
-    level_dir: &Path,
-    level_ai: &[u8],
-    spawn: &[u8],
-) -> Result<(), String> {
+/// The built level (`level_dir`, every file of it, `level.ai` among them) mirrored into the root's
+/// `gamedata\levels\<level>`, and the spawn file `spawn` as `gamedata\spawns\editor.spawn` -
+/// hard links where the volume allows. Only into a root Play made (its marker). Blocking.
+pub fn stage_level(root: &Path, level: &str, level_dir: &Path, spawn: &Path) -> Result<Mirrored, String> {
     // only into the gamedata a Play root's marker lists: the copy Play made of the game's
     if !play_root::read_marker(root).is_some_and(|(_, entries)| entries.iter().any(|e| e == "gamedata")) {
         return Err(format!("{} is not a Play root: its {MARKER} does not list gamedata.", root.display()));
@@ -586,13 +709,20 @@ pub fn stage_level(
         return Err(format!("{level} is not a level name"));
     }
     let dst = root.join("gamedata").join("levels").join(level);
-    remove_tree(&dst);
-    copy_tree(level_dir, &dst)?;
-    fs::write(dst.join("level.ai"), level_ai).map_err(|e| format!("level.ai could not be staged: {e}"))?;
+    let mut m = Mirrored::default();
+    mirror_tree(level_dir, &dst, &[], &mut m)?;
     let spawns = root.join("gamedata").join("spawns");
     fs::create_dir_all(&spawns).map_err(|e| format!("{} could not be made: {e}", spawns.display()))?;
-    fs::write(spawns.join("editor.spawn"), spawn)
-        .map_err(|e| format!("editor.spawn could not be staged: {e}"))
+    let to = spawns.join("editor.spawn");
+    clear_readonly(&to);
+    let _ = fs::remove_file(&to);
+    if fs::hard_link(spawn, &to).is_ok() {
+        m.linked += 1;
+    } else {
+        fs::copy(spawn, &to).map_err(|e| format!("editor.spawn could not be staged: {e}"))?;
+        m.copied += 1;
+    }
+    Ok(m)
 }
 
 #[cfg(test)]
@@ -690,17 +820,25 @@ mod tests {
         let level = base.path().join("built");
         fs::create_dir_all(&level).unwrap();
         fs::write(level.join("level"), b"geometry").unwrap();
-        stage_level(&root, "qa_level", &level, b"ai", b"spawn").unwrap();
+        fs::write(level.join("level.ai"), b"ai").unwrap();
+        let spawn = base.path().join("editor.spawn");
+        fs::write(&spawn, b"spawn").unwrap();
+        let m = stage_level(&root, "qa_level", &level, &spawn).unwrap();
         let staged = root.join("gamedata").join("levels").join("qa_level");
         assert_eq!(fs::read(staged.join("level")).unwrap(), b"geometry");
         assert_eq!(fs::read(staged.join("level.ai")).unwrap(), b"ai");
         assert_eq!(fs::read(root.join("gamedata").join("spawns").join("editor.spawn")).unwrap(), b"spawn");
+        // one volume: links, no copies
+        assert_eq!((m.linked, m.copied), (3, 0));
+        // the game's files are linked, not copied, and a second run keeps them
+        assert!(p.linked > 0 && p.copied == 0, "{} linked, {} copied", p.linked, p.copied);
 
         // again, after the author left a file in the root: it and the root's settings stay
         fs::write(root.join("notes.txt"), b"mine").unwrap();
         fs::write(root.join("appdata").join("user.ltx"), b"vid_mode 1024x768").unwrap();
         let again = prepare_with(&input(&game, &root, &cx), &PROGRAMS).unwrap();
         assert_eq!(again.was, "play_root");
+        assert_eq!((again.linked, again.copied), (0, 0), "the files of the last Play are kept");
         assert_eq!(fs::read(root.join("notes.txt")).unwrap(), b"mine");
         assert_eq!(fs::read(root.join("appdata").join("user.ltx")).unwrap(), b"vid_mode 1024x768");
         assert!(!root.join("gamedata").join("levels").exists(), "a new Play stages its level anew");
@@ -827,9 +965,9 @@ mod tests {
         // a level is staged only into a root Play made
         let level = base.path().join("built");
         fs::create_dir_all(&level).unwrap();
-        assert!(
-            stage_level(&work, "qa_level", &level, b"ai", b"spawn").unwrap_err().contains("not a Play root")
-        );
+        let spawn = base.path().join("editor.spawn");
+        fs::write(&spawn, b"spawn").unwrap();
+        assert!(stage_level(&work, "qa_level", &level, &spawn).unwrap_err().contains("not a Play root"));
         assert!(!work.join("gamedata").join("levels").exists());
     }
 

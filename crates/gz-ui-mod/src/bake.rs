@@ -1,43 +1,37 @@
 //! Mod > Bake Scene Layer: each row bakes the selection of the open scene into a level delta of
-//! the module at once - the four are actions over `mod_export_spawn`, `mod_export_xcform`,
-//! `mod_export_ogf_probe` and `mod_export_cut` - and reports in the kit's one Result dialog,
-//! `dlg.bake_result`, with Open Folder.
+//! the module at once - the four are actions over `level.export` (`kind=spawn`, `collision`,
+//! `visuals`, `cut`) - and reports in the kit's one Result dialog, `dlg.bake_result`, with Open
+//! Folder.
 
 use std::sync::Arc;
 
-use gz_app::{Action, ReplyCx, ShellBuilder};
-use gz_editor::Value;
+use gz_app::{Action, ActionCx, ReplyCx, ShellBuilder};
+use gz_editor::{Args, Value};
 use gz_ui::Icon;
 use gz_ui::Tone;
 use gz_ui::dialog::{ResultAction, ResultSpec};
 
 use crate::call;
 
-/// The four bakes: the action, the menu row, the action's title, the editor command and what a
-/// failure is called.
+/// The four bakes: the action, the menu row, the action's title, the layer (`level.export kind=`)
+/// and what a failure is called.
 const BAKES: [(&str, &str, &str, &str, &str); 4] = [
-    (
-        "mod.bake_spawn",
-        "Spawn Layer...",
-        "Bake Spawn Layer",
-        "mod_export_spawn",
-        "The spawn layer was not written",
-    ),
+    ("mod.bake_spawn", "Spawn Layer...", "Bake Spawn Layer", "spawn", "The spawn layer was not written"),
     (
         "mod.bake_collision",
         "Collision Overlay...",
         "Bake Collision Overlay",
-        "mod_export_xcform",
+        "collision",
         "The collision overlay was not written",
     ),
     (
         "mod.bake_visuals",
         "Visual Overlay...",
         "Bake Visual Overlay",
-        "mod_export_ogf_probe",
+        "visuals",
         "The visual overlay was not written",
     ),
-    ("mod.bake_cut", "Level Cut...", "Bake Level Cut", "mod_export_cut", "The level cut was not written"),
+    ("mod.bake_cut", "Level Cut...", "Bake Level Cut", "cut", "The level cut was not written"),
 ];
 
 fn num(reply: &Value, key: &str) -> i64 {
@@ -54,7 +48,7 @@ fn count_line(n: i64, rest: &str) -> Option<String> {
 }
 
 /// What a bake's answer says, as `BakeDone` / `BakeFailed` show it.
-fn report(command: &str, failed: &str, reply: &Value) -> (ResultSpec, String) {
+fn report(kind: &str, failed: &str, reply: &Value) -> (ResultSpec, String) {
     if !call::ok(reply) {
         let spec = ResultSpec::new(
             "bake_result",
@@ -66,8 +60,8 @@ fn report(command: &str, failed: &str, reply: &Value) -> (ResultSpec, String) {
     }
     let mut rows: Vec<(String, String)> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
-    let (headline, folder) = match command {
-        "mod_export_spawn" => {
+    let (headline, folder) = match kind {
+        "spawn" => {
             let path = text(reply, "path");
             rows.push(("File".into(), path.clone()));
             rows.push(("Skipped".into(), num(reply, "skipped").to_string()));
@@ -96,7 +90,7 @@ fn report(command: &str, failed: &str, reply: &Value) -> (ResultSpec, String) {
                 parent(&path),
             )
         }
-        "mod_export_xcform" => {
+        "collision" => {
             let path = text(reply, "path");
             rows.push(("File".into(), path.clone()));
             rows.push(("Vertices".into(), num(reply, "vertices").to_string()));
@@ -104,7 +98,7 @@ fn report(command: &str, failed: &str, reply: &Value) -> (ResultSpec, String) {
             rows.push(("Materials".into(), num(reply, "materials").to_string()));
             ("The collision overlay of the selection is written.".to_owned(), parent(&path))
         }
-        "mod_export_ogf_probe" => {
+        "visuals" => {
             let dir = text(reply, "dir");
             rows.push(("Folder".into(), dir.clone()));
             rows.push(("Models".into(), num(reply, "exported").to_string()));
@@ -144,8 +138,8 @@ fn parent(path: &str) -> String {
 /// Runs a bake as the window does and shows what it came to.
 /// The kit's result of a bake, from its answer.
 fn show_bake(r: &ReplyCx<'_>, n: usize) {
-    let Some((_, _, _, command, failed)) = BAKES.get(n) else { return };
-    let (mut spec, folder) = report(command, failed, r.reply);
+    let Some((_, _, _, kind, failed)) = BAKES.get(n) else { return };
+    let (mut spec, folder) = report(kind, failed, r.reply);
     if !folder.is_empty() {
         spec.action = Some(ResultAction {
             label: "Open Folder".to_owned(),
@@ -159,9 +153,16 @@ pub(crate) fn install(b: &mut ShellBuilder) {
     let (group, order) = crate::menu::mod_menu_slot(crate::menu::BAKE_SCENE_LAYER).unwrap_or((1, 3));
     let shows: [fn(&ReplyCx<'_>); 4] =
         [|r| show_bake(r, 0), |r| show_bake(r, 1), |r| show_bake(r, 2), |r| show_bake(r, 3)];
-    for (k, ((id, row, label, command, _), show)) in BAKES.into_iter().zip(shows).enumerate() {
+    let kinds: [fn(&ActionCx<'_>) -> Args; 4] = [
+        |_| gz_app::actions::args(&[("kind", "spawn")]),
+        |_| gz_app::actions::args(&[("kind", "collision")]),
+        |_| gz_app::actions::args(&[("kind", "visuals")]),
+        |_| gz_app::actions::args(&[("kind", "cut")]),
+    ];
+    for (k, (((id, row, label, _, _), show), kind)) in BAKES.into_iter().zip(shows).zip(kinds).enumerate() {
         b.action(
-            Action::new(id, label, "Mod", command)
+            Action::new(id, label, "Mod", "level.export")
+                .args(kind)
                 .icon(Icon::Level)
                 .enabled(crate::menu::with_project)
                 .reply(show),
@@ -185,7 +186,7 @@ mod tests {
     #[test]
     fn a_spawn_bake_reads_like_bake_done() {
         let reply = json!({ "ok": true, "exported": 3, "skipped": 1, "scaled": 2, "invisible": 0, "starts": 1, "paths": 0, "orders": 0, "path": "C:/m/spawn/l01.xspawn", "warnings": ["w"] });
-        let (spec, folder) = report("mod_export_spawn", "x", &reply);
+        let (spec, folder) = report("spawn", "x", &reply);
         assert_eq!(spec.headline, "The spawn layer holds 3 op(s) of the selection.");
         assert_eq!(spec.tone, Tone::Warning);
         assert_eq!(spec.warnings.len(), 2);
@@ -195,7 +196,7 @@ mod tests {
     #[test]
     fn a_refusal_is_bake_failed() {
         let reply = json!({ "ok": false, "error": "no scene" });
-        let (spec, folder) = report("mod_export_cut", "The level cut was not written", &reply);
+        let (spec, folder) = report("cut", "The level cut was not written", &reply);
         assert_eq!(spec.title, "Bake Failed");
         assert_eq!(spec.headline, "The level cut was not written: no scene");
         assert!(folder.is_empty());

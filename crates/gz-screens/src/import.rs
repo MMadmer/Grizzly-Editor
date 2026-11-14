@@ -22,7 +22,7 @@ pub enum FileKind {
 }
 
 impl FileKind {
-    /// What the tab and `screens_get` call a layer of this kind.
+    /// What the tab and `screens.info` call a layer of this kind.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {

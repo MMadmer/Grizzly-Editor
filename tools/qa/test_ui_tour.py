@@ -100,7 +100,7 @@ class Tour:
                 self.quest = rel
             else:
                 self.beh = rel
-        v = mcp("quest_view", path=rel, frame="all")
+        v = mcp("graph.view", doc=rel.replace("\\", "/"), frame="all")
         if not v.get("ok"):
             raise Skip("the graph does not open: " + short(v))
         return rel
@@ -143,23 +143,22 @@ def _2(t: Tour):
 @issue(3, "the quest graph at the small size: nothing escapes, the canvas keeps its minimum")
 def _3(t: Tour):
     rel = t.open_graph("quest")
-    v = mcp("quest_view", path=rel, frame="all")
+    v = mcp("graph.view", doc=rel.replace("\\", "/"), frame="all")
     canvas = (v.get("panes") or {}).get("canvas") or [0, 0, 400, 260]
     esc = t.escaped(mcp("ui.list").get("active_tab", ""))
     t.shot(3)
     return not esc and canvas[2] >= 399 and canvas[3] >= 259, short({"escaped": esc, "canvas": canvas})
 
 
-@issue(4, "Frame All never zooms below 0.75: node text stays readable")
+@issue(4, "Frame All keeps node text readable: never under 11 px")
 def _4(t: Tour):
     rel = t.open_graph("quest")
-    v = mcp("quest_view", path=rel, frame="all")
-    zoom = v.get("zoom")
-    factor = zoom.get("factor") if isinstance(zoom, dict) else zoom if isinstance(zoom, (int, float)) else None
+    v = mcp("graph.view", doc=rel.replace("\\", "/"), frame="all")
+    px = v.get("title_px")
     t.shot(4)
-    if factor is None:
-        raise Skip("quest_view answers no zoom factor: " + short(v))
-    return float(factor) >= 0.75 - 1e-3, short({"zoom": zoom})
+    if px is None:
+        raise Skip("graph.view answers no title size: " + short(v))
+    return float(px) >= 11 and v.get("detail") != "block", short({"title_px": px, "detail": v.get("detail")})
 
 
 @issue(5, "Details: rows are there and nothing escapes the panel")
@@ -168,14 +167,14 @@ def _5(t: Tour):
     sections = mcp("game.lookup", type="spawn_section", query="stalker", limit=1).get("entries") or []
     name = (sections[0].get("id") if sections and isinstance(sections[0], dict) else sections[0]) if sections else ""
     if name:
-        placed = mcp("place_spawn", section=name, x=0, y=0, z=4)
+        placed = mcp("scene.place", kind="spawn", section=name, position=[0, 0, 4])
         if placed.get("name"):
-            mcp("select_objects", names=placed["name"])
+            mcp("scene.select", objects=[(placed.get("object") or {}).get("name", "")])
     mcp("ui.panel", action="focus", id="details")
-    p = mcp("property_inspector", action="get", target="selection", limit=20)
+    p = mcp("scene.get")
     esc = t.escaped("details")
     t.shot(5)
-    return not esc, short({"escaped": esc, "rows": len(p.get("rows") or [])})
+    return not esc, short({"escaped": esc, "rows": len(((p.get("objects") or [{}])[0]).get("properties") or [])})
 
 
 @issue(6, "no panel leaves the editor's window")
@@ -261,12 +260,12 @@ def _12(t: Tour):
 @issue(13, "the minimap stays hidden under 12 nodes")
 def _13(t: Tour):
     rel = t.open_graph("beh")
-    m = mcp("quest_minimap", path=rel, action="get")
+    m = (mcp("graph.get", doc=rel.replace("\\", "/"), view=True).get("view") or {}).get("minimap") or {}
     t.shot(13)
     # "shown" is what the canvas draws; "visible" is the author's toggle, on until turned off
     shown = m.get("shown", m.get("visible"))
     if shown is None:
-        raise Skip("quest_minimap answers no visibility: " + short(m))
+        raise Skip("graph.get answers no minimap: " + short(m))
     return not shown, short(m)
 
 
@@ -340,7 +339,7 @@ def _20(t: Tour):
 @issue(21, "Level Settings comes up on target=world, nothing escapes")
 def _21(t: Tour):
     t.level()
-    mcp("property_inspector", action="open", target="world")
+    mcp("ui.panel", id="level_settings", action="open")
     lst = mcp("ui.list")
     ls = next((p for p in lst.get("panels", []) if p.get("id") == "level_settings"), {})
     esc = t.escaped("level_settings")
@@ -371,7 +370,7 @@ def _23(t: Tour):
 @issue(24, "the PDA preview fits both axes, nothing escapes")
 def _24(t: Tour):
     t.level()
-    o = mcp("pda_preview", action="open", zoom="fit", pane="both", tab="problems")
+    o = mcp("pda.preview", action="open", zoom="fit", pane="both", tab="problems")
     if not o.get("ok"):
         raise Skip(short(o))
     # the opener answers the frame it opened: its panes, gap and edges were laid out by that frame, no second call
@@ -383,12 +382,12 @@ def _24(t: Tour):
     # Fit fits the device itself with a 16 pt margin: nothing of it is cut, on either aspect (a screenshot draws the frame read)
     gaps, edges = {}, {}
     for aspect in ("16:9", "4:3"):
-        mcp("pda_preview", action="aspect", aspect=aspect)
+        mcp("pda.preview", action="aspect", aspect=aspect)
         mcp("shot.window")
-        state = mcp("pda_preview", action="state")
+        state = mcp("pda.preview", action="state")
         gaps[aspect] = state.get("device_gap", -1)
         edges[aspect] = state.get("screen_edges") or []
-    mcp("pda_preview", action="close")
+    mcp("pda.preview", action="close")
     # the device's art runs past the game's screen: the preview shows that edge, the bottom on both aspects
     cut_shown = all("bottom" in e for e in edges.values()) and len(edges.get("4:3", [])) == 4
     return opened and not esc and all(g >= 15 for g in gaps.values()) and cut_shown, \
@@ -454,7 +453,7 @@ def _28(t: Tour):
     qa_target.guard_project(t.project)
     back = mcp("project.open", path=t.project, timeout=600)
     deadline = time.monotonic() + 300
-    while time.monotonic() < deadline and not mcp("mod_manifest").get("ok"):
+    while time.monotonic() < deadline and not mcp("mod.info").get("ok"):
         time.sleep(0.05)
     return b.get("ok") and back.get("ok"), short(b)
 
@@ -522,20 +521,20 @@ def _33(t: Tour):
 @issue(34, "a confirmation raised from a dialog is a sheet in it: one dialog on top")
 def _34(t: Tour):
     t.level()
-    o = mcp("mod_catalog", action="show", confirm="withdraw")
+    o = mcp("release.view", submit=True, withdraw_question=True)
     if not o.get("ok"):
         raise Skip(short(o))
     pic = t.shot(34)
     lst = mcp("ui.list")
-    mcp("mod_catalog", action="hide")
+    mcp("release.view", submit=False)
     return pic.get("modal") is not None and len(lst.get("dialogs") or []) >= 1, short({"modal": pic.get("modal")})
 
 
-@issue(35, "property_inspector target=world raises Level Settings in its dock node")
+@issue(35, "Level Settings comes up in its dock node")
 def _35(t: Tour):
     t.level()
     mcp("ui.panel", action="focus", id="details")
-    mcp("property_inspector", action="open", target="world")
+    mcp("ui.panel", id="level_settings", action="open")
     lst = mcp("ui.list")
     ls = next((p for p in lst.get("panels", []) if p.get("id") == "level_settings"), {})
     t.shot(35)
@@ -555,7 +554,7 @@ def start_editor(project: str) -> subprocess.Popen:
     deadline = time.monotonic() + 600
     while time.monotonic() < deadline:
         try:
-            if mcp("mod_manifest", timeout=30).get("ok"):
+            if mcp("mod.info", timeout=30).get("ok"):
                 return proc
         except OSError:
             pass

@@ -110,8 +110,8 @@ cat = None
 results: list[tuple[bool, str]] = []
 # a phase run for another's sake records nothing
 QUIET = [False]
-PHASES = "ABCDEFGHWIJ"
-NEEDS = {"C": "B", "D": "AB", "E": "AB", "F": "ABE", "G": "ABE", "H": "ABEG", "W": "ABEGH", "J": "AB"}
+PHASES = "ABCDEFGHWLIJ"
+NEEDS = {"C": "B", "D": "AB", "E": "AB", "F": "ABE", "G": "ABE", "H": "ABEG", "W": "ABEGH", "J": "AB", "L": "AB"}
 # every MCP answer, for the secret scan
 answers: list[str] = []
 
@@ -169,6 +169,22 @@ def mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
     answers.append(json.dumps(data, ensure_ascii=False))
     return data
 
+
+
+def manifest_now() -> dict:
+    """The manifest as mod.info answers it (`manifest`), its problems beside it."""
+    info = mcp("mod.info")
+    return {**info.get("manifest", {}), "ok": info.get("ok"), "error": info.get("error")}
+
+
+def set_fields(fields: dict) -> dict:
+    module = {k: v for k, v in fields.items() if k != "github"}
+    update = {"github": fields["github"]} if "github" in fields else {}
+    return mcp("mod.set", set={"module": module, **({"update": update} if update else {})})
+
+
+def thumbnail_from(picture: str) -> dict:
+    return mcp("mod.thumbnail", **{"from": picture})
 
 def mcp_up() -> bool:
     try:
@@ -310,7 +326,7 @@ class Editor:
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
             try:
-                if mcp("mod_manifest", timeout=30).get("ok"):
+                if mcp("mod.info", timeout=30).get("ok"):
                     return
             except OSError:
                 pass
@@ -332,18 +348,68 @@ class Editor:
 
 # ---- MCP helpers ---------------------------------------------------------------------------------
 
+def wait_catalog(seconds: float = JOB_SECONDS) -> None:
+    """Waits for a Mod Browser job the window started (Submit's own check) to end."""
+    for j in mcp("job.list", running=True).get("jobs", []):
+        if j.get("group") == "catalog":
+            mcp("job.wait", job=j.get("id"), timeout=seconds + 30)
+
+
+def status() -> dict:
+    return mcp("release.catalog_status")
+
+
 def follow(data: dict, seconds: float = JOB_SECONDS) -> dict:
-    """A mod_catalog answer, followed through action=status until its job is over."""
-    deadline = time.monotonic() + seconds
-    while data.get("ok") and (data.get("job") or {}).get("pending") and time.monotonic() < deadline:
-        time.sleep(0.05)
-        data = mcp("mod_catalog", action="status")
-    return data
+    """An answer of a look at the window: what the Mod Browser area says once its job is over."""
+    if not data.get("ok"):
+        return data
+    wait_catalog(seconds)
+    return status()
+
+
+def catalog(action: str = "status", seconds: float = JOB_SECONDS, **extra) -> dict:
+    """The Mod Browser's commands by what they do. A key's or an account's change answers the area's status, as the
+    window reads it next."""
+    reads = {"status": "status", "check": "check", "submission": "submission"}
+    reaches = {"vt": "scan", "submit": "submit", "withdraw": "withdraw"}
+    if action in reads:
+        return mcp("release.catalog_status", action=reads[action], timeout=seconds + 30, **extra)
+    if action in reaches:
+        return mcp("release.catalog", action=reaches[action], timeout=seconds + 30, **extra)
+    if action == "show":
+        r = mcp("release.view", submit=True, withdraw_question=extra.get("confirm") == "withdraw")
+        if not r.get("ok"):
+            return r
+        # the window checks the requirements as it opens: its job, once it is there
+        deadline = time.monotonic() + 5
+        st = status()
+        while time.monotonic() < deadline and (st.get("job") or {}).get("kind") != "check":
+            time.sleep(0.05)
+            st = status()
+        return st
+    if action == "hide":
+        r = mcp("release.view", submit=False)
+        return {**status(), "ok": r.get("ok")} if r.get("ok") else r
+    if action == "cancel":
+        for j in mcp("job.list", running=True).get("jobs", []):
+            if j.get("group") == "catalog":
+                mcp("job.stop", job=j.get("id"))
+        return status()
+    if action.startswith("key_"):
+        how = {"key_create": "create", "key_use": "open", "key_unlock": "open"}[action]
+        r = mcp("release.key", action=how, **extra)
+    elif action == "vt_key":
+        r = mcp("release.account", action="save_vt_key", **extra)
+    elif action == "vt_key_forget":
+        r = mcp("release.account", action="forget_vt_key")
+    else:
+        raise ValueError("no such Mod Browser action: " + action)
+    return {**status(), **r} if r.get("ok") else r
 
 
 def job(action: str, seconds: float = JOB_SECONDS, **extra) -> dict:
-    """mod_catalog <action> on its worker, followed until the job is over."""
-    return follow(mcp("mod_catalog", action=action, **extra), seconds)
+    """A Mod Browser job; the command answers once it is over."""
+    return catalog(action, seconds, **extra)
 
 
 def shot(folder: str | None, name: str) -> dict:
@@ -388,11 +454,17 @@ def resize_editor(pid: int, width: int, height: int) -> bool:
     return bool(user32.SetWindowPos(hwnd, 0, 60, 40, width, height, 0x0014))  # SWP_NOZORDER | SWP_NOACTIVATE
 
 
+def mrect(modal: dict) -> tuple[int, int, int, int]:
+    """The modal's rectangle in the picture's px, as shot.window answers it: `rect` [x, y, w, h]."""
+    r = modal.get("rect") or [-1, -1, -1, -1]
+    return int(r[0]), int(r[1]), int(r[2]), int(r[3])
+
+
 def centred(pic: dict) -> str:
     """Why the modal on top is not centred across the picture - '' when it is (the work area spans the width)."""
     modal = pic.get("modal") or {}
     size = png_size(base64.b64decode(pic.get("png_base64", ""))) if pic.get("png_base64") else (0, 0)
-    x, w = int(modal.get("x", -1)), int(modal.get("w", -1))
+    x, _, w, _ = mrect(modal)
     if not size[0] or x < 0 or w <= 0:
         return "no modal or no picture: " + short(modal)
     off = abs(x + w / 2 - size[0] / 2)
@@ -468,7 +540,7 @@ def png_rows(data: bytes, count: int) -> tuple[int, int, int, list[bytes]]:
 def window_drawn(data: bytes, modal: dict) -> str:
     """Why the picture does not hold a drawn window where the editor says the modal is - '' when it does: inside
     the picture, and more than a flat fill there (a window has a frame, a title and text)."""
-    x, y, w, h = (int(modal.get(k, -1)) for k in ("x", "y", "w", "h"))
+    x, y, w, h = mrect(modal)
     try:
         # Pillow decodes a picture in milliseconds; the decoder below is the fallback where it is missing
         from PIL import Image
@@ -502,17 +574,17 @@ def stale_layout(layout: bytes, title: str, y: int) -> bytes:
 
 
 def submit_names() -> tuple[str, str]:
-    """The Submit window's title and its dialog id (dlg.<name>), from the running editor's ui_contract."""
+    """The Submit window's title and the id the dialog on top is answered by, from the running editor's ui_contract."""
     window = str((mcp("ui.contract").get("dialogs") or {}).get("submit") or SUBMIT_WINDOW)
-    title, _, name = window.partition("###")
-    return title, name
+    title, _, _ = window.partition("###")
+    return title, "submit"
 
 
 def inside(rect, modal: dict) -> bool:
     """An audit rect [x, y, w, h] lies within the modal's rect (px of the same picture)."""
     try:
         x, y, w, h = (float(v) for v in rect)
-        mx, my, mw, mh = (float(modal[k]) for k in ("x", "y", "w", "h"))
+        mx, my, mw, mh = (float(v) for v in mrect(modal))
     except (KeyError, TypeError, ValueError):
         return False
     return x >= mx - 1 and y >= my - 1 and x + w <= mx + mw + 1 and y + h <= my + mh + 1
@@ -524,7 +596,7 @@ def job_state(data: dict) -> str:
 
 def job_done(data: dict, kind: str) -> bool:
     j = data.get("job") or {}
-    return bool(data.get("ok")) and j.get("kind") == kind and j.get("state") == "done" and not j.get("pending")
+    return bool(data.get("ok")) and j.get("kind") == kind and j.get("state") == "done"
 
 
 def job_failed(data: dict) -> bool:
@@ -562,13 +634,8 @@ def texts(data: dict, code: str) -> list[str]:
 
 
 def publish(wait_seconds: float = 240.0) -> dict:
-    """mod_publish with the manifest as it is, followed to the end."""
-    data = mcp("mod_publish")
-    deadline = time.monotonic() + wait_seconds
-    while data.get("ok") and data.get("pending") and time.monotonic() < deadline:
-        time.sleep(0.3)
-        data = mcp("mod_publish", action="status")
-    return data
+    """release.publish with the manifest as it is; it answers when the release is out or refused."""
+    return mcp("release.publish", timeout=wait_seconds + 30)
 
 
 # ---- files ----------------------------------------------------------------------------------------
@@ -867,13 +934,13 @@ class Run:
         if not self.shots:
             return
         # like the menu, show checks at once - and the check reads the submission too
-        follow(mcp("mod_catalog", action="show"))
+        follow(catalog("show"))
         self.window_in_shot(shot(self.shots, name), "shot %s holds the window" % name)
-        mcp("mod_catalog", action="hide")
+        catalog("hide")
 
     # ------------------------------------------------------------------------------ run 1: an author
     def author(self) -> None:
-        if not set(ONLY[0] + NEEDED[0]) & set("ABCDEFGHW"):
+        if not set(ONLY[0] + NEEDED[0]) & set("ABCDEFGHWL"):
             return
         port = free_port()
         mock = Mock(port, self.work, "mock_author", "--catalog-seed", self.seed)
@@ -892,11 +959,12 @@ class Run:
             phase("G", self.virustotal, mock)
             phase("H", self.submission, mock)
             phase("W", self.withdrawal, mock)
+            phase("L", self.lifecycle, mock)
         finally:
             if editor:
                 # the QA credential goes with the run
                 try:
-                    mcp("mod_catalog", action="vt_key_forget")
+                    catalog("vt_key_forget")
                 except (OSError, ValueError):
                     pass
                 editor.close()
@@ -905,7 +973,7 @@ class Run:
 
     # ------------------------------------------------------------------------------ A: the author key
     def keys(self) -> None:
-        st = mcp("mod_catalog")
+        st = catalog()
         key = st.get("key") or {}
         if not check(st.get("ok"), "A mod_catalog answers with the status", short(st)):
             raise Abort("mod_catalog does not answer - this editor build has no Submit to Mod Browser")
@@ -920,7 +988,7 @@ class Run:
               (st.get("submission") or {}).get("number") == 0 and not (st.get("check") or {}).get("done"),
               "A no job, no check and no submission yet", short(st))
 
-        st = mcp("mod_catalog", action="key_create", password=PASSWORD)
+        st = catalog("key_create", password=PASSWORD)
         key = st.get("key") or {}
         check(st.get("ok") and key.get("exists") is True and key.get("locked") is False,
               "A key_create makes a key that is open for the session", short(st))
@@ -947,9 +1015,9 @@ class Run:
         self.key_public, self.key_id = key.get("public", ""), key.get("key_id", "")
 
         before = read_bytes(self.key_path)
-        again = mcp("mod_catalog", action="key_create", password="something else")
+        again = catalog("key_create", password="something else")
         check(not again.get("ok") and read_bytes(self.key_path) == before, "A a key file is never overwritten", short(again))
-        wrong = mcp("mod_catalog", action="key_unlock", password="not the password")
+        wrong = catalog("key_unlock", password="not the password")
         check(not wrong.get("ok") and "wrong password" in str(wrong.get("error")), "A a wrong password is refused as such",
               short(wrong))
 
@@ -959,40 +1027,40 @@ class Run:
         d2 = xc.new_private()
         xc.write_key_file(other, d2, PASSWORD2)
         other_id = xc.key_id(xc.public_of(d2))
-        st = mcp("mod_catalog", action="key_use", path=other)
+        st = catalog("key_use", path=other)
         key = st.get("key") or {}
         check(st.get("ok") and same_path(key.get("path", ""), other) and key.get("locked") is True and
               key.get("key_id") == other_id, "A key_use takes another key file; a protected one starts locked", short(st))
         remembered = (read_bytes(os.path.join(self.home, "catalog.ltx")) or b"").decode("utf-8", "replace")
         check("second.xkey" in remembered, "A catalog.ltx remembers the key file in use", remembered)
-        st = mcp("mod_catalog", action="key_unlock", password=PASSWORD2)
+        st = catalog("key_unlock", password=PASSWORD2)
         key = st.get("key") or {}
         check(st.get("ok") and key.get("locked") is False and key.get("key_id") == other_id and
               key.get("public") == xc.key_text(xc.public_of(d2)),
               "A key_unlock opens a key file xms_catalog.py wrote: same id, same public key", short(st))
 
-        st = mcp("mod_catalog", action="key_use", path=self.key_path)
-        st = mcp("mod_catalog", action="key_unlock", password=PASSWORD) if st.get("ok") else st
+        st = catalog("key_use", path=self.key_path)
+        st = catalog("key_unlock", password=PASSWORD) if st.get("ok") else st
         key = st.get("key") or {}
         check(st.get("ok") and key.get("locked") is False and key.get("key_id") == self.key_id and
               same_path(key.get("path", ""), self.key_path), "A back to the first key, unlocked", short(st))
 
     # ------------------------------------------------------------------------------ B: thumbnail and tags
     def manifest(self) -> None:
-        current = mcp("mod_manifest")
+        current = manifest_now()
         fields = {"id": MODULE_ID, "name": MODULE_NAME, "version": VERSION, "author": AUTHOR,
                   "description": DESCRIPTION, "website": WEBSITE, "github": GITHUB_REPO}
         if not current.get("target"):
             fields["target"] = "default"
-        r = mcp("mod_set_manifest", **fields)
+        r = set_fields(fields)
         check(r.get("ok"), "B the manifest takes id, name, version, author, website and github", short(r))
         self.plain_mode = not current.get("mode")
 
         thumb = os.path.join(self.copy, "thumbnail.dds")
         opaque = os.path.join(self.work, "pictures", "qa_opaque.png")
         write_bytes(opaque, opaque_picture())
-        r = mcp("mod_set_manifest", thumbnail=opaque)
-        m = mcp("mod_manifest")
+        r = thumbnail_from(opaque)
+        m = manifest_now()
         data = read_bytes(thumb)
         info = dds_info(data)
         check(r.get("ok") and m.get("thumbnail") == "thumbnail.dds" and data is not None,
@@ -1005,59 +1073,59 @@ class Run:
 
         alpha = os.path.join(self.copy, "qa_alpha.png")
         write_bytes(alpha, transparent_picture())
-        r = mcp("mod_set_manifest", thumbnail="qa_alpha.png")
+        r = thumbnail_from("qa_alpha.png")
         data = read_bytes(thumb)
         info = dds_info(data)
         os.remove(alpha)
-        check(r.get("ok") and mcp("mod_manifest").get("thumbnail") == "thumbnail.dds",
+        check(r.get("ok") and manifest_now().get("thumbnail") == "thumbnail.dds",
               "B a PNG with transparency, relative to the project, is taken too", short(r))
         check(data is not None and cat.valid_thumbnail(data) and info.get("fourcc") == "DXT5" and
               info.get("mips") == 9 and info.get("size") == 87536, "B and becomes DXT5 with the full mip chain", str(info))
 
         junk = os.path.join(self.work, "pictures", "qa_not_a_picture.png")
         write_bytes(junk, b"this is not a picture\n")
-        r = mcp("mod_set_manifest", thumbnail=junk)
-        check(not r.get("ok") and r.get("error") and mcp("mod_manifest").get("thumbnail") == "thumbnail.dds" and
+        r = thumbnail_from(junk)
+        check(not r.get("ok") and r.get("error") and manifest_now().get("thumbnail") == "thumbnail.dds" and
               read_bytes(thumb) == data, "B a picture that cannot be read is refused and changes nothing", short(r))
 
         # a DDS that already is a thumbnail is taken as it is - wherever the key ends up pointing
         ready = os.path.join(self.copy, "art", "qa_ready.dds")
         write_bytes(ready, data)
-        r = mcp("mod_set_manifest", thumbnail="art/qa_ready.dds")
-        named = str(mcp("mod_manifest").get("thumbnail", "")).replace("\\", "/")
+        r = thumbnail_from("art/qa_ready.dds")
+        named = str(manifest_now().get("thumbnail", "")).replace("\\", "/")
         check(r.get("ok") and named in ("art/qa_ready.dds", "thumbnail.dds") and
               read_bytes(os.path.join(self.copy, *named.split("/"))) == data and read_bytes(ready) == data,
               "B a valid thumbnail DDS inside the project is used as is", f"{short(r)} {named}")
-        r = mcp("mod_set_manifest", thumbnail="")
-        m = mcp("mod_manifest")
+        r = mcp("mod.thumbnail", remove=True)
+        m = manifest_now()
         check(r.get("ok") and m.get("thumbnail") == "" and os.path.isfile(ready) and
               os.path.isfile(thumb) == (named != "thumbnail.dds"),
               "B clearing deletes thumbnail.dds only when that is the file the key named", f"{short(r)} {named}")
         qa_target.remove_tree(os.path.join(self.copy, "art"))
 
-        r = mcp("mod_set_manifest", thumbnail=opaque)
+        r = thumbnail_from(opaque)
         check(r.get("ok") and os.path.isfile(thumb), "B the opaque picture again", short(r))
-        r = mcp("mod_set_manifest", thumbnail="")
-        m = mcp("mod_manifest")
+        r = mcp("mod.thumbnail", remove=True)
+        m = manifest_now()
         check(r.get("ok") and m.get("thumbnail") == "" and not os.path.exists(thumb),
               "B thumbnail '' clears the key and deletes the thumbnail.dds it named", f"{short(r)} {m.get('thumbnail')}")
         ltx = (read_bytes(os.path.join(self.copy, "mod.ltx")) or b"").decode("utf-8", "replace")
         check(not [line for line in ltx.splitlines() if line.strip().startswith("thumbnail")],
               "B mod.ltx no longer names a thumbnail", ltx)
-        r = mcp("mod_set_manifest", thumbnail=opaque)
+        r = thumbnail_from(opaque)
         check(r.get("ok") and dds_info(read_bytes(thumb)).get("fourcc") == "DXT1", "B and the opaque one for the release",
               short(r))
 
-        r = mcp("mod_set_manifest", tags="story,quests")
-        check(r.get("ok") and mcp("mod_manifest").get("tags") == ["story", "quests"], "B tags story,quests are kept in order",
+        r = mcp("mod.set", set={"module": {"tags": "story,quests"}})
+        check(r.get("ok") and manifest_now().get("tags") == ["story", "quests"], "B tags story,quests are kept in order",
               short(r))
-        r = mcp("mod_set_manifest", tags="story,nonsense")
+        r = mcp("mod.set", set={"module": {"tags": "story,nonsense"}})
         check(not r.get("ok") and "unknown tag" in str(r.get("error")) and "nonsense" in str(r.get("error")),
               "B a word outside the vocabulary is refused and named", short(r))
-        check(mcp("mod_manifest").get("tags") == ["story", "quests"], "B and the tags stay as they were")
-        r = mcp("mod_set_manifest", tags="")
-        check(r.get("ok") and mcp("mod_manifest").get("tags") == [], "B tags '' clears them", short(r))
-        mcp("mod_set_manifest", tags="story,quests")
+        check(manifest_now().get("tags") == ["story", "quests"], "B and the tags stay as they were")
+        r = mcp("mod.set", set={"module": {"tags": ""}})
+        check(r.get("ok") and manifest_now().get("tags") == [], "B tags '' clears them", short(r))
+        mcp("mod.set", set={"module": {"tags": "story,quests"}})
 
     # ------------------------------------------------------------------------------ C: content policy
     def content(self) -> None:
@@ -1072,7 +1140,7 @@ class Run:
         for path, data in planted.items():
             write_bytes(path, data)
         try:
-            r = mcp("mod_package")
+            r = mcp("mod.package")
             content = r.get("catalog_content") or []
             blocked = [c.get("text", "") for c in content if c.get("level") == "block"]
             reviewed = [c.get("text", "") for c in content if c.get("level") == "review"]
@@ -1090,7 +1158,7 @@ class Run:
             index = read_index(os.path.join(self.copy, "releases", VERSION, index_name))
             check(index and not [p for p in index if p.lower().endswith(".xkey")], "C and it is in no package",
                   short(sorted(index)))
-            inside = mcp("mod_catalog", action="key_create", path=os.path.join(self.copy, "qa_keys", "made_here.xkey"))
+            inside = catalog("key_create", path=os.path.join(self.copy, "qa_keys", "made_here.xkey"))
             check(not inside.get("ok") and "inside a project" in str(inside.get("error", "")) and
                   not os.path.exists(os.path.join(self.copy, "qa_keys", "made_here.xkey")),
                   "C a key file is never made inside the project", short(inside))
@@ -1103,7 +1171,7 @@ class Run:
 
     # ------------------------------------------------------------------------------ D: the signed descriptor
     def descriptor(self) -> None:
-        r = mcp("mod_package")
+        r = mcp("mod.package")
         check(r.get("ok") and r.get("signed") is True and r.get("key_id") == self.key_id,
               "D the package is signed with the author key", short(r))
         check(not [c for c in r.get("catalog_content") or [] if c.get("level") == "block"],
@@ -1157,7 +1225,7 @@ class Run:
     # ------------------------------------------------------------------------------ F: the listing requirements
     def listing_check(self, mock: Mock) -> None:
         # the scan is the author's: without a key the check blocks, so the key is there from here on (G takes it away)
-        st = mcp("mod_catalog", action="vt_key", key=VT_KEY)
+        st = catalog("vt_key", key=VT_KEY)
         check(st.get("ok") and st.get("vt_key") is True, "F the VirusTotal key is stored for the checks", short(st))
         data = job("check")
         c = data.get("check") or {}
@@ -1203,7 +1271,7 @@ class Run:
         check("ok" in levels(data, "catalog") and not blocks(data), "F and the index as it was clears it", short(blocks(data)))
 
         # the window, for whoever looks from outside: like the menu, show checks at once
-        data = mcp("mod_catalog", action="show")
+        data = catalog("show")
         check(data.get("ok") and (data.get("job") or {}).get("kind") == "check",
               "F show opens the window and starts a check", short(data.get("job")))
         # the dialog fits itself once, when it opens: a check that ends later scrolls inside it instead of growing it
@@ -1216,9 +1284,9 @@ class Run:
         self.window_in_shot(pic, "F the window opens inside the editor, and a screenshot holds it, wherever the layout "
                             "saved it")
         late = pic.get("modal") or {}
-        check(int(early.get("h", 0)) > 0 and abs(int(early.get("h", 0)) - int(late.get("h", -1))) <= 1,
-              "F the window keeps its height while the check runs and after it ends",
-              "%s -> %s" % (early.get("h"), late.get("h")))
+        h0, h1 = mrect(early)[3], mrect(late)[3]
+        check(h0 > 0 and abs(h0 - h1) <= 1, "F the window keeps its height while the check runs and after it ends",
+              "%s -> %s" % (h0, h1))
         audit = mcp("ui.audit", id="submit")
         controls = audit.get("controls") or []
         submit = [c for c in controls if c.get("label") in ("Scan and Submit", "Scan and Update", "Update Submission", "Submit")]
@@ -1227,13 +1295,13 @@ class Run:
               "F the footer holds the submit button and Close inside the window, and nothing of it leaves its window",
               short(audit.get("escaped")) + " " + short([(c.get("label"), c.get("rect")) for c in submit]))
         shot(self.shots, "catalog_window")
-        hidden = mcp("mod_catalog", action="hide")
+        hidden = catalog("hide")
         check(hidden.get("ok") and not (hidden.get("job") or {}).get("pending"), "F hide closes it and starts nothing",
               short(hidden.get("job")))
         shot(self.shots, "catalog_hidden")
 
         # the editor's window resized under it: the work area moves, and the window is centred in the new one
-        follow(mcp("mod_catalog", action="show"))
+        follow(catalog("show"))
         check(resize_editor(self.pid, 1500, 1000), "F the editor's window takes another size")
         time.sleep(0.5)
         pic = mcp("shot.window")
@@ -1241,24 +1309,24 @@ class Run:
         why = centred(pic)
         check(not why, "F after the resize the window is centred in the editor", why)
         shot(self.shots, "catalog_window_resized")
-        mcp("mod_catalog", action="hide")
+        catalog("hide")
 
         # a minimized editor has no client area, and ImGui draws nothing of a minimized window: a screenshot of it
         # was one flat colour. It stays minimized from here on, so every later picture is taken of a minimized editor
         st = mcp("app.window", action="minimize")
         check(st.get("ok") and st.get("minimized") is True, "F the editor is minimized", short(st))
-        follow(mcp("mod_catalog", action="show"))
+        follow(catalog("show"))
         pic = mcp("shot.window")
         self.window_in_shot(pic, "F a screenshot of the minimized editor holds the window as well")
         why = centred(pic)
         check(not why, "F the minimized editor's picture has the window centred", why)
         shot(self.shots, "catalog_window_minimized")
-        mcp("mod_catalog", action="hide")
+        catalog("hide")
 
     # ------------------------------------------------------------------------------ G: VirusTotal
     def virustotal(self, mock: Mock) -> None:
         name, size, sha = self.package
-        st = mcp("mod_catalog", action="vt_key_forget")
+        st = catalog("vt_key_forget")
         check(st.get("ok") and st.get("vt_key") is False, "G without a saved key or a variable there is no VirusTotal key",
               short(st))
         refused = job("vt")
@@ -1269,10 +1337,10 @@ class Run:
               vt_state(data) == "no_key",
               "G without a key the check blocks, and says where a key comes from and where it goes",
               short(texts(data, "virustotal")))
-        refused = mcp("mod_catalog", action="submit")
+        refused = catalog("submit")
         check(job_failed(refused) and "no VirusTotal key" in job_error(refused) and not issues(mock.catalog()),
               "G submit without a key sends nothing", short(refused))
-        st = mcp("mod_catalog", action="vt_key", key=VT_KEY)
+        st = catalog("vt_key", key=VT_KEY)
         check(st.get("ok") and st.get("vt_key") is True and VT_KEY not in json.dumps(st),
               "G vt_key stores the key and echoes nothing", short(st))
 
@@ -1442,7 +1510,7 @@ class Run:
         # the question before a withdrawal, put up to be looked at: a sheet over the window - only a click in it
         # withdraws anything
         posted = len(api_requests(mock, "POST", "/issues"))
-        follow(mcp("mod_catalog", action="show", confirm="withdraw"))
+        follow(catalog("show", confirm="withdraw"))
         pic = mcp("shot.window")
         modal = pic.get("modal") or {}
         check(modal.get("id") == WITHDRAW_SHEET, "W show confirm=withdraw puts the withdrawal's question on top", short(modal))
@@ -1452,7 +1520,7 @@ class Run:
               "W the question offers Withdraw and Cancel, and nothing of it leaves its window",
               short(audit.get("escaped")) + " " + short(labels))
         shot(self.shots, "catalog_withdraw_sheet")
-        mcp("mod_catalog", action="hide")
+        catalog("hide")
         pic = mcp("shot.window")
         check(not pic.get("modal") and len(api_requests(mock, "POST", "/issues")) == posted and
               not submissions(mock.catalog(), "QaOwner", WITHDRAW_TITLE),
@@ -1561,6 +1629,28 @@ class Run:
         check(not leaked, "I %s: no log, project file or key file holds one either" % run, str(leaked))
 
     # ------------------------------------------------------------------------------ run 2 / J: the maintainer
+    def lifecycle(self, mock: Mock) -> None:
+        """L: a Mod Browser job is the project's - closing the project stops it, and nothing starts it again."""
+        started = mcp("release.catalog_status", action="check", wait=False)
+        check(started.get("ok") and started.get("job"), "L a check starts as a job", short(started))
+        closed = mcp("project.close", discard=True)
+        check(closed.get("ok"), "L the project closes", short(closed))
+        deadline = time.monotonic() + 10
+        running = ["?"]
+        while time.monotonic() < deadline:
+            running = [j for j in mcp("job.list", running=True).get("jobs", []) if j.get("group") == "catalog"]
+            if not running:
+                break
+            time.sleep(0.1)
+        check(not running, "L job.list running=true holds no Mod Browser job once the project closed", short(running))
+        time.sleep(1.0)
+        again = [j for j in mcp("job.list", running=True).get("jobs", []) if j.get("group") == "catalog"]
+        check(not again, "L and none starts again", short(again))
+        reopened = mcp("project.open", path=self.copy, timeout=120)
+        check(reopened.get("ok"), "L the project opens again", short(reopened))
+        stalls = mcp("perf.stalls")
+        check(stalls.get("ok") and not stalls.get("stalls"), "L no UI pass waited", short(stalls))
+
     def maintainer(self) -> None:
         if "J" not in ONLY[0]:
             return
@@ -1583,14 +1673,14 @@ class Run:
         phase("I", self.hygiene, mock, "maintainer")
 
     def own_listing(self, mock: Mock) -> None:
-        st = mcp("mod_catalog")
+        st = catalog()
         key = st.get("key") or {}
         check(st.get("ok") and key.get("exists") is True and key.get("locked") is True and key.get("key_id") == self.key_id,
               "J a new session finds the remembered key, locked", short(key))
         check(st.get("vt_key") is True, "J GRIZZLY_VT_KEY is a VirusTotal key too", short(st))
-        r = mcp("mod_set_manifest", github=MAINTAINER_REPO)
+        r = mcp("mod.set", set={"update": {"github": MAINTAINER_REPO}})
         check(r.get("ok"), "J the module moves to the maintainer's repository", short(r))
-        st = mcp("mod_catalog", action="key_unlock", password=PASSWORD)
+        st = catalog("key_unlock", password=PASSWORD)
         check(st.get("ok") and (st.get("key") or {}).get("locked") is False, "J unlocked", short(st))
         data = publish()
         check(data.get("state") == "done", "J published to the maintainer's repository", short(data))

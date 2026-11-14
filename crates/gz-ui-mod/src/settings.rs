@@ -2,12 +2,10 @@
 //!
 //! A nav of 200 pt - one row per page with its icon and the dot of its worst problem - and the
 //! page: its title, what it is for, then one label-left grid of up to 44 em with each field's
-//! problem as a sentence under it. The tab saves as it is edited: once no field is being typed
-//! in and nothing blocks, the form's changes go out as `mod_set_manifest` / `mod_commands` /
-//! `pda_use` (the footer says so); a change of `mod.ltx` made elsewhere reaches every field the
-//! author has not touched. The C++ specification is `EditorModManifest.cpp` from
-//! `DrawGameUpdatesRow` to `ShowSettingsTab`, `EditorGameModes` (the Game Mode picker) and the
-//! picture and tags rows.
+//! problem as a sentence under it, on a card. The tab saves as it is edited: once no field is
+//! being typed in and nothing blocks, the form's changes go out as one `mod.set` (the toolbar
+//! row says so); a change of `mod.ltx` made elsewhere reaches every field the author has not
+//! touched. Commands is one table of the console commands, the selected one's help under it.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -28,7 +26,8 @@ use gz_ui::list::list;
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
 use gz_ui::{
-    Button, Font, Icon, Kind, NavRowSpec, PropFlags, PropertyGrid, Tone, nav_row, palette, segmented,
+    Button, Col, Font, Icon, ItemRows, Kind, NavRowSpec, PropFlags, PropertyGrid, Tone, icon_button, metrics,
+    nav_row, palette, segmented,
 };
 use parking_lot::Mutex;
 
@@ -71,7 +70,6 @@ const PAGE_ICONS: [Icon; 7] =
 const ROLE: &str = "mod_settings";
 const LABEL_FRAC: f32 = 0.28;
 const PICTURE_SIDE: f32 = 96.0;
-const FOOTER_H: f32 = 48.0;
 const NAV_W: f32 = 200.0;
 /// The largest picture read for the preview.
 const PICTURE_READ_LIMIT: u64 = 64 << 20;
@@ -161,6 +159,10 @@ pub struct ModSettingsDoc {
     gated: (usize, usize),
     search: String,
     pick_focus: Option<Id>,
+    /// The command whose help shows under the table.
+    command_sel: usize,
+    /// The project's scripts were asked for since the project opened.
+    scripts_asked: bool,
     picture: PictureView,
     ask_updates: bool,
     service_asked: bool,
@@ -192,6 +194,8 @@ impl ModSettingsDoc {
             gated: (0, 0),
             search: String::new(),
             pick_focus: None,
+            command_sel: 0,
+            scripts_asked: false,
             picture: PictureView::default(),
             ask_updates: false,
             service_asked: false,
@@ -218,6 +222,8 @@ impl ModSettingsDoc {
         self.aux_gen += 1;
         // the reads that need the module id and its exclude rules wait for the first snapshot
         self.load_modes(false);
+        // the scripts are read on open: a page's dot never claims what nobody looked at
+        self.scripts_asked = false;
         if self.page == form::RELATIONS {
             self.load_installed();
         }
@@ -278,6 +284,7 @@ impl ModSettingsDoc {
             self.installed = Some(list);
         }
         if let Some((functions, taken)) = inbox.commands.take() {
+            self.aux.functions_read = true;
             self.aux.functions = functions;
             self.aux.taken = taken;
             self.aux_gen += 1;
@@ -371,8 +378,8 @@ impl ModSettingsDoc {
         });
     }
 
-    /// The project's script functions and the linked game's other commands, read when Commands
-    /// is picked or Refresh is pressed.
+    /// The project's script functions and the linked game's other commands, read when the tab
+    /// opens, when Commands is picked and when the scripts are read again.
     fn load_commands(&self) {
         let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
         let exclude = self.form.exclude_rules();
@@ -528,7 +535,12 @@ impl ModSettingsDoc {
                 }
                 None => String::new(),
             };
-            let reply = ed.call("mod_set_manifest", args([("thumbnail", s(&value))]), origin).await;
+            let a = if value.is_empty() {
+                args([("remove", serde_json::Value::Bool(true))])
+            } else {
+                args([("from", s(&value))])
+            };
+            let reply = ed.call("mod.thumbnail", a, origin).await;
             let mut i = inbox.lock();
             i.picture_done = Some(if call::ok(&reply) { Ok(()) } else { Err(call::error_text(&reply)) });
             i.picture_pending = Some(Err(String::new()));
@@ -570,7 +582,7 @@ impl ModSettingsDoc {
         }
     }
 
-    /// `mod_settings_view ask_game_updates=true`: the question goes up on the tab's next frame.
+    /// `mod.view ask_game_updates=true`: the question goes up on the tab's next frame.
     pub fn ask_game_updates_later(&mut self) {
         self.page = form::GENERAL;
         self.ask_updates = true;
@@ -600,22 +612,8 @@ impl ModSettingsDoc {
         let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
         let origin = self.editor.ui_origin();
         let _task = self.editor.exec.spawn(async move {
-            let mut calls: Vec<(&'static str, gz_editor::Args)> = Vec::new();
-            if let Some(a) = plan.manifest {
-                calls.push(("mod_set_manifest", a));
-            }
-            calls.extend(plan.commands.into_iter().map(|a| ("mod_commands", a)));
-            if let Some(pda) = plan.pda {
-                calls.push(("pda_use", args([("path", s(&pda))])));
-            }
-            let mut result = Ok(());
-            for (name, a) in calls {
-                let reply = ed.call(name, a, origin).await;
-                if !call::ok(&reply) {
-                    result = Err(call::error_text(&reply));
-                    break;
-                }
-            }
+            let reply = ed.call("mod.set", plan.args(), origin).await;
+            let result = if call::ok(&reply) { Ok(()) } else { Err(call::error_text(&reply)) };
             inbox.lock().saved = Some(result);
             call::wake_ui(&ed);
         });
@@ -665,7 +663,7 @@ impl ModSettingsDoc {
 
     // ---- MCP ------------------------------------------------------------------------------------
 
-    /// The `mod_settings_view` answer of the open tab.
+    /// The `mod.view` answer of the open tab.
     #[must_use]
     pub fn view_json(&self, active: bool) -> Value {
         view_json(true, active, self.page, self.dirty(), &self.problems)
@@ -722,7 +720,10 @@ impl ModSettingsDoc {
         let _ = text::label(ui, info.label, Font::Title, p.text, Clip::End);
         let _ = text::prose(ui, info.about);
         ui.add_space(8.0);
-        match self.page {
+        // a page of the kit's cards: the page's fields in one raised box
+        let tone = form::page_tone(&self.problems, self.page);
+        let attention = tone.is_some_and(|t| matches!(t, Tone::Error | Tone::Required));
+        gz_ui::card::card(ui, info.id, "", tone.unwrap_or(Tone::Muted), attention, |ui| match self.page {
             form::GENERAL => self.general_page(ui),
             form::BROWSER => self.browser_page(ui),
             form::MODE => self.mode_page(ui),
@@ -730,7 +731,7 @@ impl ModSettingsDoc {
             form::CONTENTS => self.contents_page(ui),
             form::PDA => self.pda_page(ui),
             _ => self.commands_page(ui),
-        }
+        });
     }
 
     fn general_page(&mut self, ui: &mut Ui) {
@@ -1171,97 +1172,144 @@ impl ModSettingsDoc {
     fn commands_page(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let layer = ui.layer_id();
-        let mut remove = None;
-        let mut pick_at: Vec<(usize, Rect)> = Vec::new();
+        let mut pick_at: Option<(usize, Rect)> = None;
         let mut opened = None;
-        let mut rescan = false;
-        {
+        let mut selected = self.command_sel.min(self.form.commands.len().saturating_sub(1));
+        let columns = [
+            Col::new("Name", em(10.0)),
+            Col::new("Function", em(12.0)),
+            Col::new("Arguments", em(9.0)),
+            Col::new("Cheat", em(4.0)).centred(),
+        ];
+        let edit = {
             let Self { form, problems, .. } = self;
-            for (i, c) in form.commands.iter_mut().enumerate() {
-                ui.push_id(("command", i), |ui| {
-                    let title = if c.name.is_empty() { "New Command".to_owned() } else { c.name.clone() };
-                    PropertyGrid::new(ROLE).label_frac(LABEL_FRAC).show(ui, |g| {
-                        g.section(&title, true, c.cheat.then_some("cheat"), |g| {
-                            let f = |part: &str| format!("commands.{i}.{part}");
-                            g.row(
-                                "Name",
-                                "What the player types in the console: a-z, 0-9 and _. A name the game has, or that a module loading earlier took, is refused by the game.",
-                                flags(problems, &f("name"), PropFlags::REQUIRED),
-                                1,
-                                |ui| local_text_field(ui, "name", &mut c.name, "my_mod_status"),
-                            );
-                            if g.trailing(Icon::Delete, "Take the command out") {
-                                remove = Some(i);
-                            }
-                            messages(g, problems, &f("name"));
-                            let field = g.row(
-                                "Function",
-                                "<script>.<function> of the project's gamedata\\scripts. The game calls it with the text typed after the name, the module id and the command's name, and prints the string it returns.",
-                                flags(problems, &f("function"), PropFlags::REQUIRED),
-                                1,
-                                |ui| local_text_field(ui, "function", &mut c.function, "my_mod.status"),
-                            );
-                            if let Some(resp) = &field {
-                                if resp.changed() {
-                                    c.declared = true;
+            let commands = &mut form.commands;
+            let rows = commands.len();
+            let mut cell_edit = |ui: &mut Ui, row: usize, col: usize| {
+                let Some(c) = commands.get_mut(row) else { return };
+                let f = |part: &str| format!("commands.{row}.{part}");
+                let bad = |part: &str| problems.iter().any(|p| p.field == f(part) && p.blocks);
+                let resp = match col {
+                    0 => Some(local_text_field(ui, &format!("name.{row}"), &mut c.name, "my_mod_status")),
+                    1 => {
+                        let w = ui.available_width() - metrics::ICON_BUTTON - 2.0;
+                        let r = ui
+                            .horizontal(|ui| {
+                                ui.set_width(ui.available_width());
+                                let r = ui.allocate_ui(Vec2::new(w, metrics::FRAME), |ui| {
+                                    local_text_field(
+                                        ui,
+                                        &format!("function.{row}"),
+                                        &mut c.function,
+                                        "my_mod.status",
+                                    )
+                                });
+                                if icon_button(
+                                    ui,
+                                    Icon::ChevronDown,
+                                    "Pick a function of the project's scripts",
+                                    false,
+                                    true,
+                                )
+                                .clicked()
+                                {
+                                    opened = Some(row);
                                 }
-                                pick_at.push((i, resp.rect));
-                            }
-                            if g.trailing(Icon::ChevronDown, "Pick a function of the project's scripts") {
-                                opened = Some(i);
-                            }
-                            if g.trailing(Icon::Refresh, "Read the project's scripts again") {
-                                rescan = true;
-                            }
-                            messages(g, problems, &f("function"));
-                            g.row("Help", "The line the console's help shows for it. Plain text or a string table id.", flags(problems, &f("help"), PropFlags::NONE), 1, |ui| {
-                                local_text_field(ui, "help", &mut c.help, "")
-                            });
-                            messages(g, problems, &f("help"));
-                            g.row(
-                                "Arguments",
-                                "What it takes after the name, e.g. <night 1-7>: shown by help and as the hint while typing. The function reads them from its first argument (xms.command_args splits them into words).",
-                                flags(problems, &f("args"), PropFlags::NONE),
-                                1,
-                                |ui| local_text_field(ui, "args", &mut c.args, "none"),
-                            );
-                            messages(g, problems, &f("args"));
-                            g.row("Cheat", "Runs only in Dead Air's debug mode (the game started with -dbg); otherwise the console says so and nothing runs.", PropFlags::INLINE, 1, |ui| {
-                                let _ = switch(ui, &mut c.cheat);
-                            });
-                        });
-                    });
-                });
-            }
-        }
-        if let Some(i) = remove
+                                r.inner
+                            })
+                            .inner;
+                        if r.changed() {
+                            c.declared = true;
+                        }
+                        pick_at = pick_at.or(Some((row, r.rect)));
+                        Some(r)
+                    }
+                    2 => Some(local_text_field(ui, &format!("args.{row}"), &mut c.args, "none")),
+                    _ => {
+                        let r = ui
+                            .vertical_centered(|ui| {
+                                gz_ui::Check::new(&mut c.cheat, "").width(metrics::FRAME).show(ui)
+                            })
+                            .inner;
+                        Some(r.on_hover_text(
+                            "Runs only in Dead Air's debug mode (the game started with -dbg).",
+                        ))
+                    }
+                };
+                if let Some(r) = resp {
+                    if r.has_focus() || r.clicked() {
+                        selected = row;
+                    }
+                    let part = ["name", "function", "args", "cheat"].get(col).copied().unwrap_or("name");
+                    if bad(part) {
+                        ui.painter().rect_stroke(
+                            r.rect,
+                            egui::CornerRadius::same(4),
+                            egui::Stroke::new(1.0, palette(ui.ctx()).tone(Tone::Error)),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                }
+            };
+            ItemRows::new("mod_settings.commands", &columns, rows)
+                .add_label("Add Command")
+                .empty_text("No commands. A command is a line of [commands] in mod.ltx: the name the player types and the function it calls.")
+                .show(ui, |ui, row, col| cell_edit(ui, row, col))
+        };
+        if let Some(i) = edit.removed
             && i < self.form.commands.len()
         {
             self.form.commands.remove(i);
         }
-        if rescan {
+        if let Some((from, to)) = edit.moved {
+            gz_ui::rows::apply_move(&mut self.form.commands, from, to);
+        }
+        if edit.added {
+            self.form.commands.push(Command::default());
+            selected = self.form.commands.len() - 1;
+        }
+        self.command_sel = selected;
+        // the selected command's help and what is wrong with it, under the table
+        if let Some(i) =
+            (!self.form.commands.is_empty()).then_some(selected.min(self.form.commands.len() - 1))
+        {
+            ui.add_space(8.0);
+            let Self { form, problems, .. } = self;
+            if let Some(c) = form.commands.get_mut(i) {
+                let title = if c.name.is_empty() { "New Command".to_owned() } else { c.name.clone() };
+                PropertyGrid::new(ROLE).label_frac(LABEL_FRAC).show(ui, |g| {
+                    g.section(&title, true, c.cheat.then_some("cheat"), |g| {
+                        let f = |part: &str| format!("commands.{i}.{part}");
+                        g.row(
+                            "Help",
+                            "The line the console's help shows for it. Plain text or a string table id.",
+                            flags(problems, &f("help"), PropFlags::NONE),
+                            0,
+                            |ui| local_text_field(ui, "help", &mut c.help, ""),
+                        );
+                        for part in ["name", "function", "args", "help"] {
+                            messages(g, problems, &f(part));
+                        }
+                    });
+                });
+            }
+        }
+        ui.add_space(4.0);
+        if Button::new("Read the Scripts Again")
+            .kind(Kind::Ghost)
+            .tip("The functions the Function picker offers come from the project's gamedata\\scripts.")
+            .show(ui)
+            .clicked()
+        {
             self.actions.push(Action::ReadScripts);
         }
-        if self.form.commands.is_empty() {
-            let _ = text::prose(
-                ui,
-                "No commands. A command is a line of [commands] in mod.ltx: the name the player types and the function it calls.",
-            );
-        }
-        ui.add_space(2.0);
-        ui.horizontal(|ui| {
-            ui.add_space(6.0);
-            if Button::new("Add Command").show(ui).clicked() {
-                self.form.commands.push(Command::default());
-            }
-        });
         if let Some(i) = opened {
             let id = function_picker_id(i);
             self.search.clear();
             Popup::open_id(&ctx, id);
             self.pick_focus = Some(id);
         }
-        for (i, anchor) in pick_at {
+        if let Some((i, anchor)) = pick_at.or_else(|| opened.map(|i| (i, Rect::NOTHING))) {
             let popup = function_picker_id(i);
             let focus = self.pick_focus.take_if(|f| *f == popup).is_some();
             let functions = &self.aux.functions;
@@ -1335,38 +1383,6 @@ impl ModSettingsDoc {
             None => ("Saved to mod.ltx as you edit".to_owned(), Tone::Muted),
         }
     }
-
-    fn draw_footer(&self, ui: &mut Ui, rect: Rect) {
-        let p = palette(ui.ctx());
-        ui.painter()
-            .line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, p.border_subtle));
-        let (status, tone) = self.save_status();
-        let r = Rect::from_min_max(pos2(rect.min.x, rect.min.y + 4.0), rect.max);
-        let mut child = ui.new_child(
-            UiBuilder::new()
-                .id_salt("gz-ui-mod.settings.footer")
-                .max_rect(r)
-                .layout(Layout::top_down(Align::Min)),
-        );
-        let mut tb = gz_ui::Toolbar::begin(&mut child, "mod_settings_footer", gz_ui::ToolbarStyle::Row);
-        tb.group(1);
-        tb.status(&status, tone);
-        if self.picture_waits() {
-            tb.group(2);
-            if tb.action(
-                "save",
-                Icon::Save,
-                "Save",
-                "Save the picture into the module (Ctrl+S)",
-                !self.picture.making,
-                false,
-                Kind::Primary,
-            ) {
-                self.inbox.lock().save_asked = true;
-            }
-        }
-        tb.end();
-    }
 }
 
 impl Document for ModSettingsDoc {
@@ -1393,6 +1409,28 @@ impl Document for ModSettingsDoc {
         Some(self.save_status().0)
     }
 
+    fn toolbar<'a>(&'a mut self, tb: &mut gz_ui::Toolbar<'_, 'a>, _cx: &mut DocCx<'_>) {
+        // the fields save as they are edited; only a picture waits for a Save
+        if !self.picture_waits() {
+            return;
+        }
+        tb.group(2);
+        if tb.action(
+            "save",
+            Icon::Save,
+            "Save",
+            "Save the picture into the module (Ctrl+S)",
+            !self.picture.making,
+            false,
+            Kind::Primary,
+        ) {
+            self.inbox.lock().save_asked = true;
+        }
+        let (status, tone) = self.save_status();
+        tb.group(1);
+        tb.status(&status, tone);
+    }
+
     fn body(&mut self, ui: &mut Ui, cx: &mut DocCx<'_>) {
         crate::cards::ensure(cx.editor);
         let ctx = ui.ctx().clone();
@@ -1408,6 +1446,11 @@ impl Document for ModSettingsDoc {
             return;
         }
         self.sync();
+        // the scripts are read when the tab opens (on the pools), not when Commands is picked
+        if !self.scripts_asked && self.exists && self.base_rev.is_some() {
+            self.scripts_asked = true;
+            self.load_commands();
+        }
         if self.ask_updates {
             self.ask_updates = false;
             // put up over MCP to be looked at: it shows whatever -nodlg says
@@ -1417,7 +1460,7 @@ impl Document for ModSettingsDoc {
 
         let full = ui.max_rect();
         let nav_w = NAV_W.min(full.width() * 0.3).max(1.0);
-        let body_bottom = (full.max.y - FOOTER_H).max(full.min.y + 1.0);
+        let body_bottom = full.max.y;
         let nav = Rect::from_min_max(full.min, pos2(full.min.x + nav_w, body_bottom));
         let mut left = ui.new_child(
             UiBuilder::new()
@@ -1442,14 +1485,12 @@ impl Document for ModSettingsDoc {
             .auto_shrink([false, false])
             .show(&mut right, |ui| {
                 egui::Frame::new().inner_margin(egui::Margin::symmetric(16, 8)).show(ui, |ui| {
-                    let column = ui.available_width().min(em(44.0)).max(1.0);
+                    let column = ui.available_width().clamp(1.0, gz_ui::metrics::FORM_W);
                     ui.set_max_width(column);
                     ui.set_min_width(column);
                     self.draw_page(ui);
                 });
             });
-        let footer = Rect::from_min_max(pos2(full.min.x, body_bottom), full.max);
-        self.draw_footer(ui, footer);
         ui.allocate_rect(full, egui::Sense::hover());
 
         self.run_actions(cx);
@@ -1487,7 +1528,7 @@ impl Document for ModSettingsDoc {
     }
 }
 
-/// The `mod_settings_view` answer (`McpSettingsView`).
+/// The `mod.view` answer.
 #[must_use]
 pub fn view_json(open: bool, active: bool, page: usize, dirty: bool, problems: &[Problem]) -> Value {
     let pages: Vec<Value> = PAGES

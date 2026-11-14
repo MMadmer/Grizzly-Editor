@@ -27,21 +27,21 @@ use gz_ui::list::{NavRowSpec, nav_row};
 use gz_ui::state::{busy_line, empty_state};
 use gz_ui::text::{self, Clip};
 use gz_ui::{
-    Font, Icon, Kind, MenuItem, PickAction, PropFlags, PropertyGrid, Tone, Toolbar, icon_button_sized, icons,
-    menu_item, metrics, palette, segmented,
+    Combo, Font, Icon, Kind, MenuItem, PickAction, PickItem, PickList, PropFlags, PropertyGrid, Tone,
+    Toolbar, icon_button_sized, icons, menu_item, metrics, palette, segmented,
 };
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
 use crate::drop::{begin_drops, local_file_drop_zone};
-use crate::local::{local_check, local_drop_mark, local_list_header, local_multi_combo, local_toggle_row};
+use crate::local::{local_check, local_drop_mark, local_list_header};
 use crate::screens::{
     Change, ScreensTab, Selection, View, commit, default_show, surface_mask, take_drop, take_one,
 };
 
 /// pt (docs/UI_DESIGN.md, section 6).
 const LEFT_W: f32 = 260.0;
-const COLUMN_W: f32 = 640.0;
+const COLUMN_W: f32 = 1040.0;
 const PREVIEW_W: f32 = 520.0;
 const LAYER_ROW: f32 = 28.0;
 /// A picture is uploaded at most this wide: the preview never shows it larger.
@@ -445,7 +445,7 @@ impl ScreensDoc {
         self.spawn_busy(async move { commit(&ed, &tab, c).await });
     }
 
-    /// Work on its way to `mod.ltx`, counted from before it starts: `screens_view` waits for it.
+    /// Work on its way to `mod.ltx`, counted from before it starts: `screens.view` waits for it.
     fn spawn_busy(&self, fut: impl std::future::Future<Output = ()> + Send + 'static) {
         self.tab.busy.fetch_add(1, Ordering::SeqCst);
         let tab = self.tab.clone();
@@ -969,49 +969,53 @@ impl Frame<'_> {
         }
     }
 
+    /// What plays with the screen: the kit's combo over Any Track, Silence, the video's own sound
+    /// and the tracks of the surface; a track is ticked on and off.
     fn music_combo(&mut self, ui: &mut Ui, d: &Screen) {
         let id = d.id.clone();
         let loading = self.view.surface == 0;
-        let tracks: Vec<String> = self.s.tracks.iter().map(|t| t.id.clone()).collect();
-        let mut picked: Option<Change> = None;
-        local_multi_combo(ui, "music", &music_label(d), |ui| {
-            let mut simple = |ui: &mut Ui, label: &str, value: &'static str| {
-                if menu_item(ui, label, MenuItem { selected: d.music == value, ..MenuItem::default() }) {
-                    picked = Some(set_screen(&id, move |d| {
-                        value.clone_into(&mut d.music);
-                        d.tracks.clear();
-                    }));
-                }
-            };
-            simple(ui, "Any Track", "any");
-            simple(ui, "Silence", "none");
-            if loading {
-                simple(ui, "The Video's Own Sound", "video");
-            }
-            if !tracks.is_empty() {
-                ui.separator();
-            }
-            for t in &tracks {
-                let on = d.music == "tracks" && d.tracks.contains(t);
-                if local_toggle_row(ui, t, on) {
-                    let t = t.clone();
-                    picked = Some(set_screen(&id, move |d| {
-                        if d.music != "tracks" {
-                            d.tracks.clear();
-                        }
-                        if on {
-                            d.tracks.retain(|x| *x != t);
-                        } else if !d.tracks.contains(&t) {
-                            d.tracks.push(t.clone());
-                        }
-                        d.music = if d.tracks.is_empty() { "any" } else { "tracks" }.to_owned();
-                    }));
-                }
-            }
-        });
-        if let Some(c) = picked {
-            self.out.changes.push(c);
+        let mut items = vec![PickItem::new("any", "Any Track"), PickItem::new("none", "Silence")];
+        if loading {
+            items.push(PickItem::new("video", "The Video's Own Sound"));
         }
+        let simple = items.len();
+        for t in &self.s.tracks {
+            let on = d.music == "tracks" && d.tracks.contains(&t.id);
+            let label = if on { format!("\u{2713} {}", t.id) } else { format!("   {}", t.id) };
+            items.push(PickItem::new(t.id.clone(), label).icon(Icon::FileSound).detail(if on {
+                "Plays with this screen: pick to take it off"
+            } else {
+                "Pick to play it with this screen"
+            }));
+        }
+        let current = if d.music == "tracks" { String::new() } else { d.music.clone() };
+        let picked = Combo::new(("gz-ui-pda.music", &id), &music_label(d)).show(
+            ui,
+            PickList::new(("gz-ui-pda.music_list", &id), &items).current(&current).without_search(),
+        );
+        let Some(i) = picked else { return };
+        let change = if i < simple {
+            let value = items.get(i).map(|it| it.id.clone()).unwrap_or_default();
+            set_screen(&id, move |d| {
+                d.music.clone_from(&value);
+                d.tracks.clear();
+            })
+        } else {
+            let Some(t) = items.get(i).map(|it| it.id.clone()) else { return };
+            let on = d.music == "tracks" && d.tracks.contains(&t);
+            set_screen(&id, move |d| {
+                if d.music != "tracks" {
+                    d.tracks.clear();
+                }
+                if on {
+                    d.tracks.retain(|x| *x != t);
+                } else if !d.tracks.contains(&t) {
+                    d.tracks.push(t.clone());
+                }
+                d.music = if d.tracks.is_empty() { "any" } else { "tracks" }.to_owned();
+            })
+        };
+        self.out.changes.push(change);
     }
 
     fn levels_row(&mut self, ui: &mut Ui, d: &Screen) {
@@ -1229,7 +1233,8 @@ impl Document for ScreensDoc {
             && self.editor.project_opt().is_some_and(|s| s.root.display().to_string() == self.tab.root)
     }
 
-    fn toolbar<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>, _cx: &mut DocCx<'_>) {
+    fn toolbar<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>, cx: &mut DocCx<'_>) {
+        let ctx = cx.ctx.clone();
         let (surface, status) = {
             let v = self.tab.v.lock();
             (v.surface.min(1), v.status.clone())
@@ -1250,7 +1255,7 @@ impl Document for ScreensDoc {
         }
         tb.separator();
         tb.group(1);
-        tb.status("Screens", Tone::Muted);
+        caption(tb, &ctx, "screens_caption", "Screens");
         let mut screens = usize::from(only_s);
         if tb.segmented(
             "policy_screens",
@@ -1268,7 +1273,8 @@ impl Document for ScreensDoc {
                 Selection::default()
             }));
         }
-        tb.status("Music", Tone::Muted);
+        tb.group(1);
+        caption(tb, &ctx, "music_caption", "Music");
         let mut music = usize::from(only_m);
         if tb.segmented(
             "policy_music",
@@ -1463,4 +1469,23 @@ impl Drop for ReleasePick {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
     }
+}
+
+/// A toolbar caption before its segmented control: muted, with the room of a group gap after it
+/// so the two read as one ("Screens  [Mix In | Only Mine]"). The overflow names the control by
+/// the same caption.
+pub(crate) fn caption(tb: &mut Toolbar<'_, '_>, ctx: &egui::Context, id: &str, text_: &str) {
+    let font = Font::Small.id();
+    let w = gz_ui::text::width(ctx, &font, text_) + 8.0;
+    tb.widget(id, w, |ui| {
+        let p = gz_ui::palette(ui.ctx());
+        let r = ui.max_rect();
+        ui.painter().text(
+            pos2(r.min.x, r.center().y),
+            egui::Align2::LEFT_CENTER,
+            text_,
+            font.clone(),
+            p.text_muted,
+        );
+    });
 }

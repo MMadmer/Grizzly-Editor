@@ -732,7 +732,8 @@ struct StallsParams {
 
 fn perf_stalls(editor: &Editor, p: &StallsParams, _origin: Origin) -> Reply {
     let s = crate::stalls::Stalls::of(editor);
-    let out = json!({ "stalls": s.list(), "worst_ms": (s.worst_ms() * 10.0).round() / 10.0, "limit_ms": crate::stalls::STALL_MS });
+    let out = json!({ "stalls": s.list(), "worst_ms": (s.worst_ms() * 10.0).round() / 10.0,
+                      "limit_ms": crate::stalls::STALL_MS, "starved": s.starved() });
     if p.clear {
         s.clear();
     }

@@ -167,6 +167,15 @@ impl Catalog {
         self.want_withdraw.store(shown, Ordering::Relaxed);
     }
 
+    /// The project closed: its job stops, the window goes and what the results were about with it.
+    pub fn forget(&self, editor: &Editor) {
+        self.cancel(editor);
+        self.set_window(false);
+        if !self.running() {
+            *self.view.lock() = View::default();
+        }
+    }
+
     /// Stops the running job at its next step.
     pub fn cancel(&self, editor: &Editor) {
         if self.running()
@@ -264,13 +273,13 @@ impl Catalog {
         *self.account.lock() = Some((account.source, Instant::now()));
         let signed_in = account.signed_in();
         if matches!(job, Job::Submit | Job::Submission | Job::Withdraw) && !signed_in {
-            return Err("not signed in to GitHub: sign in from Mod > Publish Release (MCP: mod_publish action=sign_in or save_token)".to_owned());
+            return Err("not signed in to GitHub: sign in from Mod > Publish Release (release.account action=save_token or sign_in)".to_owned());
         }
         // a withdrawal needs neither key: only the account that owns the listing counts
         let vt_key =
             if matches!(job, Job::Submission | Job::Withdraw) { None } else { gh.read_vt_key().await };
         if matches!(job, Job::Vt | Job::Submit) && vt_key.is_none() {
-            return Err("no VirusTotal key: the catalog lists a package only when VirusTotal knows it, and the packages are scanned with your own key - a free account at virustotal.com has one (MCP: mod_catalog action=vt_key)".to_owned());
+            return Err("no VirusTotal key: the catalog lists a package only when VirusTotal knows it, and the packages are scanned with your own key - a free account at virustotal.com has one (release.account action=save_vt_key)".to_owned());
         }
         let input = Input {
             root: session.root.clone(),
@@ -390,7 +399,7 @@ impl Catalog {
         }
     }
 
-    /// `mod_catalog status`.
+    /// What `release.catalog_status` and `release.catalog` answer.
     pub async fn status_json(&self, editor: &Arc<Editor>) -> Value {
         self.drop_stale(editor).await;
         let v = self.view();
@@ -434,7 +443,6 @@ impl Catalog {
             "job": {
                 "kind": v.job.name(),
                 "state": v.state.name(),
-                "pending": v.state == JobState::Running,
                 "stage": v.stage,
                 "error": v.error,
             },

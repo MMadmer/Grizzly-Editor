@@ -1,17 +1,11 @@
 //! Mod Settings and the build dialogs (docs/UI_DESIGN.md, section 6, "Mod Settings" and "Build
 //! dialogs"; section 5, the Mod menu and the project toolbar).
 //!
-//! The C++ specification is the drawing half of `EditorModManifest.cpp` (the Mod Settings tab and
-//! its pages, Build to Folder, Export Flat, Package Release, the result dialogs, the clean-target
-//! question, Disable Game Updates), `EditorCatalog::DrawKeyLine`, the Game Mode picker of
-//! `EditorGameModes.cpp`, the Mod menu of `UIMainMenuForm.cpp` and the Build Mod split of
-//! `UITopBarForm.cpp`.
-//!
 //! - **Mod Settings** ([`settings`]): the `mod_settings` singleton tab - a nav of seven pages
 //!   (General, Mod Browser, Game Mode, Relations, Build Contents, PDA, Commands), each a row with
 //!   its icon and a problem dot, and a form of up to 44 em with the problem of a field as a
 //!   sentence under it. The form ([`form`]) follows `gz-mod`'s store; an edit is saved once the
-//!   field being typed in lets go, through `mod_set_manifest`, `mod_commands` and `pda_use`.
+//!   field being typed in lets go, as one `mod.set`.
 //!   What the checks and the pickers read (the linked game's modes and modules, the project's
 //!   script functions, its PDA layouts) is read when a page is picked, never per frame.
 //! - **The builds** ([`build`]): Build Into Game, the Build to Folder and Export Flat dialogs, the
@@ -26,9 +20,9 @@
 //!   PDA Interface, Bake Scene Layer, Publish Release, Releases and Submit add theirs in place),
 //!   and the Build Mod split at the right end of every toolbar.
 //! - **Bake Scene Layer** (`bake`): Spawn Layer..., Collision Overlay..., Visual Overlay...,
-//!   Level Cut... - faces of `mod_export_spawn`, `mod_export_xcform`, `mod_export_ogf_probe`
-//!   and `mod_export_cut`, reporting in `dlg.bake_result`.
-//! - [`register`] - `mod_settings_view`.
+//!   Level Cut... - faces of `level.export` (`kind=spawn`, `collision`, `visuals`, `cut`),
+//!   reporting in `dlg.bake_result`.
+//! - [`register`] - `mod.view` (the tab put up to be looked at).
 //!
 //! Widgets the kit lacks, local to this crate ([`local`]): `local_text_field` (a one-line field
 //! with a hint), `local_password_field`, `local_check` (a switch with its label, the tags'
@@ -37,8 +31,8 @@
 //! the Function picker).
 //!
 //! Nothing here writes a file or computes inside a frame: every action is a command that already
-//! exists (`mod_set_manifest`, `mod_commands`, `pda_use`, the PDA tab's opener, `mod_catalog
-//! action=key_unlock`) or the job the build and the packaging commands start, and what a frame
+//! exists (`mod.set`, `mod.thumbnail`, the PDA tab's opener, `release.key action=open`) or the
+//! job the build and the packaging commands start, and what a frame
 //! shows comes from snapshots and from data read on the pools.
 
 #![forbid(unsafe_code)]
@@ -60,9 +54,6 @@ use gz_editor::Registry;
 pub use menu::{MOD_MENU, mod_menu_slot};
 pub use package::KeyLine;
 
-/// The crate's name, as the registry records who registered a command.
-const AREA: &str = "gz-ui-mod";
-
 /// Plugs Mod Settings, the build and package dialogs, the Mod menu's rows and the Build Mod split
 /// into the shell.
 pub fn install(b: &mut ShellBuilder) {
@@ -73,8 +64,7 @@ pub fn install(b: &mut ShellBuilder) {
     bake::install(b);
 }
 
-/// The commands of this package: `mod_settings_view`.
+/// The commands of this package: `mod.view`.
 pub fn register(reg: &mut Registry) {
-    reg.add(AREA, "mod_settings_view", view_cmd::mod_settings_view);
-    menu::register(reg);
+    view_cmd::register(reg);
 }

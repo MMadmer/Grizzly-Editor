@@ -1,5 +1,5 @@
 //! What the browser does: every action is an editor command (`content_rename`, `content_move`,
-//! `content_copy`, `content_delete`, `content_mkdir`, `content_create`, `mod_exclude`,
+//! `content_copy`, `content_delete`, `content_mkdir`, `content_create`, `mod.exclude`,
 //! `darf_copy`, `ui_tab`, `open_scene`, `place_object`, `game_link`), so the window and MCP share
 //! one code path. The browser changes no file itself.
 
@@ -104,9 +104,9 @@ pub(crate) fn what_opens(
         return Err("empty asset name".into());
     }
     let ext = icons::extension(path).map(str::to_ascii_lowercase).unwrap_or_default();
-    // a level IS the scene: opening one loads it
+    // a scene (or an X-Ray SDK level to import) opens in the Level tab
     let editor_level = source == Source::Editor && cat == LEVELS;
-    if ext == ".level" || editor_level {
+    if ext == ".scene" || ext == ".level" || editor_level {
         let scene = match (source, root) {
             (Source::Project, Some(r)) => r.join(path).display().to_string(),
             (Source::Editor, Some(r)) => {
@@ -198,7 +198,7 @@ pub(crate) fn open_entry(
 fn open_asset(cx: &mut DocCx<'_>, source: Source, cat: usize, path: &str, root: Option<&std::path::Path>) {
     match what_opens(source, cat, path, root) {
         Ok(Open::Doc(req)) => cx.requests.open(req),
-        Ok(Open::Scene(scene)) => cx.editor.post("open_scene", args(&[("scene", json!(scene))])),
+        Ok(Open::Scene(scene)) => cx.editor.post("scene.open", args(&[("path", json!(scene))])),
         Err(e) if e.starts_with("no viewer") => {
             cx.editor.notices.note(format!("No viewer for this kind of file yet: '{path}'"))
         }
@@ -226,7 +226,7 @@ pub(crate) async fn open_for_mcp(
             call(editor, "ui.tab", &pairs).await.map(|_| ()).map_err(|(e, _)| format!("{path}: {e}"))
         }
         Open::Scene(scene) => {
-            call(editor, "open_scene", &[("scene", json!(scene))]).await.map(|_| ()).map_err(|(e, _)| e)
+            call(editor, "scene.open", &[("path", json!(scene))]).await.map(|_| ()).map_err(|(e, _)| e)
         }
     }
 }
@@ -755,13 +755,13 @@ pub(crate) fn build_toggle(rules: &[String], entries: &[Entry]) -> BuildToggle {
     }
 }
 
-/// Exclude from Build / Include in Build through `mod_exclude`, one entry after another.
+/// Exclude from Build / Include in Build through `mod.exclude`, one entry after another.
 pub(crate) fn set_excluded(editor: &Arc<Editor>, paths: Vec<String>, excluded: bool) {
     let ed = editor.clone();
     editor.exec.spawn(async move {
         for p in paths {
             if let Err((e, _)) =
-                call(&ed, "mod_exclude", &[("path", json!(p)), ("excluded", json!(excluded))]).await
+                call(&ed, "mod.exclude", &[("path", json!(p)), ("on", json!(excluded))]).await
             {
                 ed.notices.error(format!("Build Contents: {e}"));
                 break;
@@ -823,9 +823,9 @@ pub(crate) fn link_game(editor: &Arc<Editor>) {
     }
 }
 
-/// Place in Scene: the scene's `place_object` with the entry's library reference.
+/// Place in Scene: `scene.place` with the entry's library reference.
 pub(crate) fn place(editor: &Arc<Editor>, reference: String) {
-    editor.post("place_object", args(&[("ref", json!(reference))]));
+    editor.post("scene.place", args(&[("kind", json!("object")), ("ref", json!(reference))]));
 }
 
 // ---- reaching the browser -------------------------------------------------------------------------

@@ -1,7 +1,7 @@
-//! The level compilers in the editor's process (phase 8): `gz_lc::compile` (the geometry and the
-//! light, `XrLC`) and `gz_lc::compile_details` (the detail objects' light, `xrDO_Light`) on a
-//! level folder of the open project, as the job `level_run` of the group `game` - one at a time
-//! with a running game, on the editor's CPU pool (every core), stopped by the job's Stop.
+//! The level compilers in the editor's process: `gz_lc::compile` (the geometry and the light) and
+//! `gz_lc::compile_details` (the detail objects' light) on a level folder, inside the job that
+//! runs them - a step of the level build, or `level.compile` - on the editor's CPU pool (every
+//! core), stopped by the job's Stop.
 //!
 //! The compile reads the editor's own data (`shaders_xrlc.xr`, the textures and their `.thm`, as
 //! the editor's `fsgame.ltx` names them) and the level folder's build files, and writes the level
@@ -21,9 +21,9 @@ use gz_lc_light::{Ctl, Report as Progress};
 /// What a compile runs, in this order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Part {
-    /// The geometry and the light (`XrLC -f <level>`).
+    /// The geometry, the collision and the light.
     Level,
-    /// The detail objects' light (`xrDO_Light -f <level>`).
+    /// The detail objects' light.
     Details,
 }
 

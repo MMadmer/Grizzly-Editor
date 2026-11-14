@@ -32,8 +32,8 @@
 //!   made (on project open) it fills `gz_nq`'s `WorldLookup` slot.
 //! - [`SceneStarts`] (editor scope) - the slot the scene area fills: its level and the Player
 //!   Starts placed in it.
-//! - [`register`] - `world_get`, `world_set`, `world_transitions` (`world_view` is the tab's: not
-//!   here); [`install`] - the `world` field of `mod_manifest`, `gz-screens`' `GameLevels`, the
+//! - [`register`] - `world.info`, `world.set`, `world.lookup` (`world.view` is the tab's: not
+//!   here); [`install`] - the `world` field of the manifest's answer, `gz-screens`' `GameLevels`, the
 //!   build check, the service made on project open.
 
 mod cmd;

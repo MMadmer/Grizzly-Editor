@@ -1,35 +1,78 @@
-//! How the graph names and colours a kind (`NqLook`): shared by the canvas and the panels, and
-//! aware of the document - a behaviour graph never says "quest".
+//! How the graph names and colours a kind: shared by the canvas and the panels, and aware of the
+//! document - a behaviour graph never says "quest".
 
-use egui::Color32;
+use std::sync::Arc;
+
+use egui::{Color32, Id, Ui};
 use gz_nq::Catalog;
-use gz_ui::{Icon, Palette};
+use gz_ui::{Combo, Icon, Palette, PickItem, PickList, palette};
 
-/// The family a kind belongs to: what colours its strip and its icon.
+/// The family a kind belongs to: what colours its header, its icon and its block on the minimap.
+/// A family says what a node is, never its state - state is the status tones'.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Family {
     #[default]
     Muted,
     Trigger,
-    End,
     Flow,
     Wait,
     Dialog,
     Task,
     Role,
     Item,
+    World,
+    Logic,
 }
 
-/// The icon of a kind (`NqLook::KindIcon`): its catalog group, else its name's prefix.
+impl Family {
+    /// Where a family stands in a list of kinds: what starts a graph first, what decides its way,
+    /// what it waits for and says, then what it does.
+    #[must_use]
+    pub fn order(self) -> usize {
+        match self {
+            Family::Trigger => 0,
+            Family::Flow => 1,
+            Family::Wait => 2,
+            Family::Dialog => 3,
+            Family::Task => 4,
+            Family::Item => 5,
+            Family::World => 6,
+            Family::Role => 7,
+            Family::Logic => 8,
+            Family::Muted => 9,
+        }
+    }
+
+    /// Its colour among the theme's `graph.family.*` hues; none for a kind nobody knows.
+    #[must_use]
+    pub fn index(self) -> Option<usize> {
+        match self {
+            Family::Muted => None,
+            Family::Task => Some(1),
+            Family::Wait => Some(2),
+            Family::Item => Some(3),
+            Family::Trigger => Some(4),
+            Family::World => Some(5),
+            Family::Logic => Some(6),
+            Family::Dialog => Some(7),
+            Family::Flow => Some(8),
+            Family::Role => Some(9),
+        }
+    }
+}
+
+/// The icon of a kind: its catalog group, else its name's prefix, else the family's glyph - a
+/// row is never a bare dot.
 #[must_use]
 pub fn kind_icon(cat: &Catalog, kind: &str) -> Icon {
     if kind.is_empty() {
-        return Icon::Dot;
+        return Icon::Flow;
     }
     match kind {
         "flow.end" => return Icon::End,
         "behaviour.run" => return Icon::Behaviour,
         "lua" => return Icon::FileScript,
+        "wait.timer" => return Icon::Timer,
         _ => {}
     }
     if gz_nq::text::is_trigger_kind(kind) {
@@ -71,13 +114,14 @@ pub fn kind_icon(cat: &Catalog, kind: &str) -> Icon {
         return *icon;
     }
     // a module's own group: the kind's name still says what it is
-    const PREFIXES: [(&str, Icon); 15] = [
+    const PREFIXES: [(&str, Icon); 18] = [
         ("flow.", Icon::Flow),
         ("wait.", Icon::Wait),
         ("dialog.", Icon::Dialog),
         ("objective.", Icon::Task),
         ("task.", Icon::Task),
         ("var.", Icon::Variable),
+        ("global.", Icon::Variable),
         ("item.", Icon::Item),
         ("money.", Icon::Money),
         ("spawn.", Icon::SpawnNpc),
@@ -86,25 +130,26 @@ pub fn kind_icon(cat: &Catalog, kind: &str) -> Icon {
         ("relation.", Icon::Relation),
         ("squad.", Icon::Squad),
         ("pda.", Icon::PdaMsg),
+        ("news.", Icon::PdaMsg),
         ("actor.", Icon::Person),
+        ("world.", Icon::World),
     ];
-    PREFIXES.iter().find(|(p, _)| kind.starts_with(p)).map_or(Icon::Dot, |(_, i)| *i)
+    PREFIXES.iter().find(|(p, _)| kind.starts_with(p)).map_or(Icon::Flow, |(_, i)| *i)
 }
 
-/// The family of an icon (`NqLook::FamilyColor`'s switch).
+/// The family of an icon.
 #[must_use]
 pub fn family_of(icon: Icon) -> Family {
     match icon {
         Icon::Trigger => Family::Trigger,
-        Icon::End => Family::End,
-        Icon::Flow => Family::Flow,
-        Icon::Wait => Family::Wait,
+        Icon::End | Icon::Flow => Family::Flow,
+        Icon::Wait | Icon::Timer => Family::Wait,
         Icon::Dialog => Family::Dialog,
         Icon::Task | Icon::Quest | Icon::PdaMsg => Family::Task,
-        Icon::Role | Icon::Behaviour | Icon::Order | Icon::Squad | Icon::Relation | Icon::Person => {
-            Family::Role
-        }
-        Icon::Item | Icon::Money | Icon::SpawnNpc | Icon::World => Family::Item,
+        Icon::Role | Icon::Behaviour | Icon::Order | Icon::Relation | Icon::Person => Family::Role,
+        Icon::Item | Icon::Money => Family::Item,
+        Icon::SpawnNpc | Icon::Squad | Icon::World => Family::World,
+        Icon::Variable | Icon::FileScript | Icon::Condition | Icon::FileSound => Family::Logic,
         _ => Family::Muted,
     }
 }
@@ -112,17 +157,7 @@ pub fn family_of(icon: Icon) -> Family {
 /// The colour of a family, at `alpha` of its own.
 #[must_use]
 pub fn family_color(p: &Palette, f: Family, alpha: f32) -> Color32 {
-    let c = match f {
-        Family::Muted => p.text_muted,
-        Family::Trigger => p.success,
-        Family::End => p.error,
-        Family::Flow => p.text_secondary,
-        Family::Wait => p.warning,
-        Family::Dialog => p.axis_z,
-        Family::Task => p.required,
-        Family::Role => p.accent_bright,
-        Family::Item => p.accent,
-    };
+    let c = f.index().map_or(p.text_muted, |i| p.family(i));
     Palette::alpha(c, alpha)
 }
 
@@ -145,6 +180,72 @@ pub fn kind_desc(cat: &Catalog, kind: &str, behaviour: bool) -> String {
         None => String::new(),
         Some(k) if behaviour => gz_nq::text::regraph(&k.desc),
         Some(k) => k.desc.clone(),
+    }
+}
+
+/// The kinds of a use mask as the kit's pick list rows, grouped by family: worked out once per
+/// catalog and kept.
+fn kind_items(ui: &Ui, cat: &Catalog, mask: u8, behaviour: bool) -> Arc<Vec<PickItem>> {
+    let id = Id::unique(("gz-ui-graph.kind_items", cat.generation, mask, behaviour));
+    if let Some(v) = ui.ctx().data(|d| d.get_temp::<Arc<Vec<PickItem>>>(id)) {
+        return v;
+    }
+    let p = palette(ui.ctx());
+    let mut rows: Vec<(usize, PickItem)> = cat
+        .kinds_for(mask, behaviour)
+        .into_iter()
+        .map(|k| {
+            let icon = kind_icon(cat, &k.id);
+            let family = family_of(icon);
+            let first = first_sentence(&kind_desc(cat, &k.id, behaviour));
+            let item = PickItem::new(k.id.clone(), kind_title(cat, &k.id, behaviour))
+                .icon(icon)
+                .tint(family_color(&p, family, 1.0))
+                .detail(if first.is_empty() { k.id.clone() } else { first });
+            (family.order(), item)
+        })
+        .collect();
+    rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.label.cmp(&b.1.label)));
+    let v: Arc<Vec<PickItem>> = Arc::new(rows.into_iter().map(|(_, it)| it).collect());
+    ui.ctx().data_mut(|d| d.insert_temp(id, v.clone()));
+    v
+}
+
+/// The first sentence of a description: the second line of a pick list's row.
+#[must_use]
+pub fn first_sentence(desc: &str) -> String {
+    let line = desc.lines().next().unwrap_or("").trim();
+    match line.find(". ") {
+        Some(i) => line[..=i].to_owned(),
+        None => line.to_owned(),
+    }
+}
+
+/// A kind picked from the kinds of a use mask: the kit's combo over its pick list, under the
+/// names the document speaks. Returns whether the kind changed.
+pub fn kind_combo(
+    ui: &mut Ui,
+    id_salt: &str,
+    cat: &Catalog,
+    mask: u8,
+    behaviour: bool,
+    kind: &mut String,
+) -> bool {
+    let items = kind_items(ui, cat, mask, behaviour);
+    let shown = kind_title(cat, kind, behaviour);
+    let w = ui.available_width();
+    let current = kind.clone();
+    let list = PickList::new(("gz-ui-graph.kind", id_salt), &items).current(&current).hint("Search kinds");
+    let picked = Combo::new(("gz-ui-graph.kind_combo", id_salt), &shown)
+        .icon(kind_icon(cat, kind))
+        .width(w)
+        .show(ui, list);
+    match picked.and_then(|i| items.get(i)) {
+        Some(it) if it.id != *kind => {
+            kind.clone_from(&it.id);
+            true
+        }
+        _ => false,
     }
 }
 
@@ -186,7 +287,7 @@ pub fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-/// `%g` of the C++: the shortest plain form of a number.
+/// The shortest plain form of a number.
 #[must_use]
 pub fn num(v: f64) -> String {
     gz_luadata::Value::Number(v).to_text("")
@@ -213,7 +314,7 @@ mod tests {
         assert_eq!(kind_icon(&cat, "trigger.start"), Icon::Trigger);
         assert_eq!(kind_icon(&cat, "flow.end"), Icon::End);
         assert_eq!(kind_icon(&cat, "var.set"), Icon::Variable);
-        assert_eq!(kind_icon(&cat, "mystery"), Icon::Dot);
+        assert_eq!(kind_icon(&cat, "mystery"), Icon::Flow);
         assert_eq!(family_of(Icon::Wait), Family::Wait);
     }
 }

@@ -1,45 +1,33 @@
-//! The `quest_*` commands of open documents and the graph tab (edit, find, bookmarks, history,
-//! minimap). A graph's file is the author's: it is created, read and changed with file tools,
-//! checked with `asset.check` and searched with `asset.find`; these commands work on what the
-//! editor has open.
+//! The `graph.*` commands of open documents: `graph.edit` (every edit the canvas can make, one
+//! undo step), `graph.arrange` (layout, align, distribute, straighten), `graph.get` (the graph as
+//! the tab holds it) and `graph.find`. A graph's file is the author's: it is created, read and
+//! changed with file tools, checked with `asset.check` and searched with `asset.find`; these
+//! commands work on what the editor has open. `graph.view` is the tab's own (`gz-ui-graph`).
 
 use std::sync::Arc;
 
 use gz_base::Origin;
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Registry, Reply};
+use gz_editor::{Args, CmdError, Editor, Registry, Reply, Spec, Topic};
 use gz_project::{AssetTemplates, ProjectHooks, TemplateKind};
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use crate::arrange::{Align, Scope};
 use crate::asset::{self, Graph};
+use crate::canvas::Flow;
 use crate::check;
-use crate::doc::{self, CanvasOp, DocOp, ViewOp, zoom_of};
-use crate::layout;
+use crate::defaults::GraphDefaults;
+use crate::doc::{self, Arrange, ArrangeAction, DocOp, ViewOp};
+use crate::layout::{self, BoxCx};
 use crate::pickers::{PickerEntry, PickerType};
 use crate::service::{DocHandle, NqDirty, NqService};
 use crate::text::{self, contains_no_case};
 use crate::validate::{self, NqProblem};
-
-const AREA: &str = "gz-nq";
-const NEED_PATH: &str =
-    "missing 'path' (project-relative, e.g. quests/wolf_debt.nqasset or npc/ambush.behasset)";
+use crate::wires;
 
 fn refused(message: impl Into<String>) -> CmdError {
     CmdError::new("refused", message)
-}
-
-/// A string argument the way `NqUtil::ArgString` read it: present means given, even empty; a
-/// bare number or flag is its text.
-fn arg(args: &Args, key: &str) -> Option<String> {
-    match args.get(key)? {
-        Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        Value::Bool(b) => Some(b.to_string()),
-        _ => None,
-    }
-}
-
-fn need_path(args: &Args) -> Result<String, CmdError> {
-    arg(args, "path").filter(|p| !p.is_empty()).ok_or_else(|| refused(NEED_PATH))
 }
 
 fn service(ed: &Editor) -> Result<Arc<NqService>, CmdError> {
@@ -50,202 +38,598 @@ fn r1(v: f32) -> Value {
     json!((f64::from(v) * 10.0).round() / 10.0)
 }
 
-/// `path`, `id`, `title`, `nodes`, `errors`, `warnings`, `problems` [, `outline`].
-fn summary(
-    out: &mut Map<String, Value>,
-    catalog: &crate::Catalog,
-    wire: &str,
-    g: &Graph,
-    problems: &[NqProblem],
-    with_outline: bool,
-) {
-    out.insert("path".into(), json!(wire));
-    out.insert("id".into(), json!(g.id));
-    out.insert("title".into(), json!(text::preview(&g.title)));
-    out.insert("nodes".into(), json!(g.nodes.len()));
-    out.insert("errors".into(), json!(validate::count_errors(problems)));
-    out.insert("warnings".into(), json!(validate::count_warnings(problems)));
-    out.insert("problems".into(), validate::to_json(problems));
-    if with_outline {
-        let mut ol = asset::outline(catalog, g);
-        ol.push_str(&validate::to_text(problems));
-        out.insert("outline".into(), json!(ol));
+/// The file of a graph a `doc` names: its tab's id (`quest:<path>`, `beh:<path>`) or the path.
+#[must_use]
+pub fn doc_path(doc: &str) -> &str {
+    doc.strip_prefix("quest:").or_else(|| doc.strip_prefix("beh:")).unwrap_or(doc)
+}
+
+/// The tab id of a graph's file.
+#[must_use]
+pub fn doc_id(wire: &str) -> String {
+    let wire = wire.replace('\\', "/");
+    if asset::is_behaviour_path(&wire) { format!("beh:{wire}") } else { format!("quest:{wire}") }
+}
+
+/// Opens (or finds) the document a `doc` names.
+async fn open_doc(ed: &Arc<Editor>, svc: &NqService, doc: &str) -> Result<Arc<DocHandle>, CmdError> {
+    let path = doc_path(doc);
+    if path.is_empty() {
+        return Err(CmdError::invalid("doc names the graph: quest:<path>, beh:<path> or its file"));
+    }
+    svc.open(ed, path)
+        .await
+        .map_err(|e| if e.starts_with("file does not exist") { CmdError::not_found(e) } else { refused(e) })
+}
+
+/// The graph's tab brought up, when there is a window: an edit is seen where it is made, and the
+/// tab's Save and Undo reach it.
+async fn bring_up(ed: &Arc<Editor>, d: &DocHandle) {
+    if !ed.frames.has_window() {
+        return;
+    }
+    let wire = d.path().wire;
+    let id = doc_id(&wire);
+    let mut a = Args::new();
+    a.insert("action".into(), json!("open"));
+    a.insert("doc".into(), json!(id));
+    a.insert("kind".into(), json!(id.split(':').next().unwrap_or("quest")));
+    a.insert("path".into(), json!(wire));
+    let reply = ed.call("ui.tab", a, ed.ui_origin()).await;
+    if reply.get("ok").and_then(Value::as_bool) != Some(true) {
+        ed.log.detail(format!(
+            "[nq] the tab of {wire} did not come up: {}",
+            reply.get("error").and_then(Value::as_str).unwrap_or("")
+        ));
     }
 }
 
-/// `open`, `dirty` [, `undo`, `redo`], and what the file on disk says the document does not
+/// Saves when asked, and always in an editor without a window: there no tab holds the edit.
+async fn settle(ed: &Arc<Editor>, svc: &NqService, d: &DocHandle, save: bool) -> Result<bool, CmdError> {
+    if !(save || !ed.frames.has_window()) || !d.is_dirty() {
+        return Ok(false);
+    }
+    svc.save(ed, d).await.map_err(|e| CmdError::new("io", e))?;
+    Ok(true)
+}
+
+/// The problems of a document: their sentence, their code, the node and field, their place in
+/// the file.
+fn problems_json(d: &DocHandle, problems: &[NqProblem]) -> Value {
+    let placed = d.positioned(problems);
+    Value::Array(
+        problems
+            .iter()
+            .zip(placed)
+            .map(|(p, q)| {
+                let mut o = serde_json::to_value(&q).unwrap_or_else(|_| json!({}));
+                if let Some(m) = o.as_object_mut() {
+                    m.insert("node".into(), json!(p.node));
+                    m.insert("slot".into(), json!(p.slot));
+                }
+                o
+            })
+            .collect(),
+    )
+}
+
+/// `doc`, `path`, `dirty`, `undo`, `redo` and what the file on disk says the document does not
 /// show: `disk_error`, `missing`, `conflicts`.
-fn doc_state(out: &mut Map<String, Value>, d: Option<&DocHandle>) {
-    out.insert("open".into(), json!(d.is_some()));
-    out.insert("dirty".into(), json!(d.is_some_and(DocHandle::is_dirty)));
-    if let Some(d) = d {
-        let h = d.store.history();
-        out.insert("undo".into(), json!(h.undo.len()));
-        out.insert("redo".into(), json!(h.redo.len()));
-        let disk = d.disk();
-        if let Some(e) = disk.error {
-            out.insert("disk_error".into(), json!(e));
-        }
-        if disk.missing {
-            out.insert("missing".into(), json!(true));
-        }
-        if !disk.conflicts.is_empty() {
-            let list: Vec<Value> = disk
-                .conflicts
-                .iter()
-                .map(|c| {
-                    json!({
-                        "path": gz_luadata::path::show(&c.path),
-                        "mine": c.mine.as_ref().map(gz_luadata::to_json),
-                        "theirs": c.theirs.as_ref().map(gz_luadata::to_json),
-                        "line": c.span.map(|s| s.line),
-                    })
+fn doc_state(out: &mut Map<String, Value>, d: &DocHandle) {
+    let p = d.path();
+    out.insert("doc".into(), json!(doc_id(&p.wire)));
+    out.insert("path".into(), json!(p.wire));
+    out.insert("dirty".into(), json!(d.is_dirty()));
+    let h = d.store.history();
+    out.insert("undo".into(), json!(h.undo.len()));
+    out.insert("redo".into(), json!(h.redo.len()));
+    let disk = d.disk();
+    if let Some(e) = disk.error {
+        out.insert("disk_error".into(), json!(e));
+    }
+    if disk.missing {
+        out.insert("missing".into(), json!(true));
+    }
+    if !disk.conflicts.is_empty() {
+        let list: Vec<Value> = disk
+            .conflicts
+            .iter()
+            .map(|c| {
+                json!({
+                    "path": gz_luadata::path::show(&c.path),
+                    "mine": c.mine.as_ref().map(gz_luadata::to_json),
+                    "theirs": c.theirs.as_ref().map(gz_luadata::to_json),
+                    "line": c.span.map(|s| s.line),
                 })
-                .collect();
-            out.insert("conflicts".into(), Value::Array(list));
-        }
+            })
+            .collect();
+        out.insert("conflicts".into(), Value::Array(list));
     }
 }
 
-async fn respond_doc(ed: &Editor, svc: &NqService, d: &DocHandle, with_outline: bool) -> Map<String, Value> {
+/// What an edit or an arrangement answers: the document's state, the selection, the status, the
+/// outline and the counts of its problems.
+async fn after_edit(ed: &Arc<Editor>, svc: &NqService, d: &DocHandle, saved: bool) -> Map<String, Value> {
     let catalog = svc.catalog(ed).await;
     let problems = svc.problems(ed, d).await;
     let snap = d.store.snapshot();
     let mut out = Map::new();
-    summary(&mut out, &catalog, &d.path().wire, &snap.graph, &problems, with_outline);
-    doc_state(&mut out, Some(d));
+    doc_state(&mut out, d);
+    out.insert("saved".into(), json!(saved));
+    out.insert("selected".into(), json!(snap.view.selection));
+    out.insert("status".into(), json!(snap.view.status));
+    out.insert("errors".into(), json!(validate::count_errors(&problems)));
+    out.insert("warnings".into(), json!(validate::count_warnings(&problems)));
+    out.insert("outline".into(), json!(asset::outline(&catalog, &snap.graph)));
     out
 }
 
-/// A document that exists on disk opens on demand: MCP works without a canvas.
-async fn open_for_edit(ed: &Arc<Editor>, svc: &NqService, path: &str) -> Result<Arc<DocHandle>, CmdError> {
-    svc.open(ed, path).await.map_err(refused)
+// ---- graph.edit -------------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct EditParams {
+    /// The graph: its tab (`quest:<path>`, `beh:<path>`) or its file, project-relative.
+    doc: String,
+    /// The operations, in order, all or nothing, one undo step: a list of `{"op": ..., ...}`
+    /// (`help about=graph-ops` lists them), one such object, or the text of a Lua list.
+    ops: Value,
+    /// Writes the file right after. An editor without a window always does: no tab holds the
+    /// edit there.
+    #[serde(default)]
+    save: bool,
 }
 
-/// Lua table text may come with or without `return` (`AsChunk`).
-fn as_chunk(text: &str) -> String {
-    let t = text::trim(text);
-    if t.starts_with('{') { format!("return {t}") } else { text.to_owned() }
-}
-
-// ---- the commands -----------------------------------------------------------------------------
-
-async fn quest_catalog(ed: Arc<Editor>, _args: Args, _o: Origin) -> Reply {
-    let svc = service(&ed)?;
-    svc.catalog(&ed).await.to_json().map_err(refused)
-}
-
-/// Opens a document and answers its summary.
-pub async fn quest_open(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
-    let path = need_path(&args)?;
-    let svc = service(&ed)?;
-    let d = open_for_edit(&ed, &svc, &path).await?;
-    Ok(Value::Object(respond_doc(&ed, &svc, &d, true).await))
-}
-
-async fn quest_close(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
-    let path = need_path(&args)?;
-    let svc = service(&ed)?;
-    match svc.close(&path, args.flag("discard")) {
-        Ok(()) => Ok(Value::Null),
-        Err(e) if e == "unsaved" => Err(CmdError::new("unsaved", "unsaved")),
-        Err(e) => Err(refused(e)),
+fn ops_value(ops: &Value) -> Result<gz_luadata::Value, CmdError> {
+    match ops {
+        Value::String(s) => {
+            let t = text::trim(s);
+            let chunk = if t.starts_with('{') { format!("return {t}") } else { t.to_owned() };
+            asset::parse_value(&chunk, "ops")
+                .map_err(|e| CmdError::invalid(format!("ops: {}", e.with_line())))
+        }
+        Value::Array(_) | Value::Object(_) => Ok(gz_luadata::from_json(ops)),
+        _ => Err(CmdError::invalid("ops is a list of operations: [{\"op\": \"add\", ...}, ...]")),
     }
 }
 
-async fn undo_redo(ed: Arc<Editor>, args: Args, undo: bool) -> Reply {
-    let path = need_path(&args)?;
+async fn graph_edit(ed: Arc<Editor>, p: EditParams, o: Origin) -> Reply {
     let svc = service(&ed)?;
-    let d = svc.get_doc(&path).ok_or_else(|| refused("not open"))?;
-    let done = if undo { d.store.undo().await } else { d.store.redo().await };
-    if done.is_none() {
-        return Err(refused(if undo { "nothing to undo" } else { "nothing to redo" }));
+    let d = open_doc(&ed, &svc, &p.doc).await?;
+    let ops = ops_value(&p.ops)?;
+    let list: Vec<gz_luadata::Value> =
+        if ops.arr().is_empty() && ops.has("op") { vec![ops.clone()] } else { ops.arr().to_vec() };
+    // a task's id is kept in saves: its rename is a step of its own, acknowledged
+    if let Some(rt) = list.iter().find(|op| op.get_string("op", "") == "rename_task") {
+        if list.len() > 1 {
+            return Err(CmdError::invalid("rename_task runs alone: one operation in its graph.edit"));
+        }
+        if !rt.get_bool("ack_runtime_identity", false) {
+            return Err(refused(
+                "a task's id is kept in the game's saves: a rename leaves the old state behind - pass ack_runtime_identity=true",
+            ));
+        }
+        let wire = d.path().wire;
+        let reply = svc
+            .send(
+                &ed,
+                &d,
+                DocOp::RenameTask {
+                    from: rt.get_string("from", ""),
+                    to: rt.get_string("to", ""),
+                    path: wire,
+                },
+                o,
+            )
+            .await?;
+        bring_up(&ed, &d).await;
+        let saved = settle(&ed, &svc, &d, p.save).await?;
+        let mut out = after_edit(&ed, &svc, &d, saved).await;
+        out.insert("references_updated".into(), json!(reply.count));
+        return Ok(Value::Object(out));
     }
-    Ok(Value::Object(respond_doc(&ed, &svc, &d, true).await))
-}
-
-async fn quest_undo(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
-    undo_redo(ed, args, true).await
-}
-
-async fn quest_redo(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
-    undo_redo(ed, args, false).await
-}
-
-async fn quest_apply(ed: Arc<Editor>, args: Args, o: Origin) -> Reply {
-    let path = need_path(&args)?;
-    let Some(ops) = arg(&args, "ops").filter(|s| !s.is_empty()) else {
-        return Err(refused(
-            "missing 'ops' (Lua list of operations: { { op = \"add_node\", node = { ... } }, ... })",
-        ));
-    };
-    let svc = service(&ed)?;
-    let d = open_for_edit(&ed, &svc, &path).await?;
-    let v =
-        asset::parse_value(&as_chunk(&ops), "ops").map_err(|e| refused(format!("ops: {}", e.with_line())))?;
-    let reply = svc.send(&ed, &d, DocOp::ApplyOps(v), o).await?;
-    let mut out = Map::new();
+    let reply = svc.send(&ed, &d, DocOp::ApplyOps(ops), o).await?;
+    bring_up(&ed, &d).await;
+    let saved = settle(&ed, &svc, &d, p.save).await?;
+    let mut out = after_edit(&ed, &svc, &d, saved).await;
     out.insert("applied".into(), json!(reply.count));
-    out.extend(respond_doc(&ed, &svc, &d, true).await);
     Ok(Value::Object(out))
 }
 
-async fn quest_save(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
-    let path = need_path(&args)?;
-    let svc = service(&ed)?;
-    let d = svc.get_doc(&path).ok_or_else(|| refused("not open"))?;
-    svc.save(&ed, &d).await.map_err(refused)?;
-    let problems = svc.problems(&ed, &d).await;
-    Ok(json!({
-        "path": d.path().wire,
-        "errors": validate::count_errors(&problems),
-        "warnings": validate::count_warnings(&problems),
-    }))
+// ---- graph.arrange ----------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ArrangeWhat {
+    Layout,
+    Align,
+    Distribute,
+    Straighten,
 }
 
-async fn quest_reload(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
-    let path = need_path(&args)?;
-    let svc = service(&ed)?;
-    let d = svc.get_doc(&path).ok_or_else(|| refused("not open"))?;
-    svc.reload(&ed, &d).await.map_err(refused)?;
-    Ok(Value::Object(respond_doc(&ed, &svc, &d, true).await))
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ScopeWhat {
+    All,
+    Selection,
+    Branch,
 }
 
-async fn quest_layout(ed: Arc<Editor>, args: Args, o: Origin) -> Reply {
-    let path = need_path(&args)?;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum FlowWhat {
+    Right,
+    Down,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ArrangeParams {
+    /// The graph: its tab (`quest:<path>`, `beh:<path>`) or its file, project-relative.
+    doc: String,
+    /// layout (the auto layout), align, distribute or straighten (the successors of the nodes
+    /// move so their wires run straight).
+    action: ArrangeWhat,
+    /// For align: left, centre, right, top, middle or bottom. For distribute: horizontal or
+    /// vertical.
+    #[serde(default)]
+    how: Option<String>,
+    /// The nodes, by id. Left out: the selection.
+    #[serde(default)]
+    nodes: Option<Vec<String>>,
+    /// For layout: all (default), selection (the nodes alone, where they were) or branch (the one
+    /// node given and what only it leads to, from where it stands).
+    #[serde(default)]
+    scope: Option<ScopeWhat>,
+    /// For layout: the graph flows this way from now on (right or down), laid out again.
+    #[serde(default)]
+    flow: Option<FlowWhat>,
+    /// Writes the file right after (always without a window).
+    #[serde(default)]
+    save: bool,
+}
+
+async fn graph_arrange(ed: Arc<Editor>, p: ArrangeParams, o: Origin) -> Reply {
     let svc = service(&ed)?;
-    let d = open_for_edit(&ed, &svc, &path).await?;
-    let reply =
-        svc.send(&ed, &d, DocOp::Layout { only_missing: !args.bool("all").unwrap_or(true) }, o).await?;
+    let d = open_doc(&ed, &svc, &p.doc).await?;
+    let how = p.how.clone().unwrap_or_default();
+    let action = match p.action {
+        ArrangeWhat::Layout => ArrangeAction::Layout,
+        ArrangeWhat::Align => ArrangeAction::Align(Align::parse(&how).ok_or_else(|| {
+            CmdError::invalid("how says where to align: left, centre, right, top, middle or bottom")
+        })?),
+        ArrangeWhat::Distribute => ArrangeAction::Distribute {
+            horizontal: match how.as_str() {
+                "" | "horizontal" | "horizontally" => true,
+                "vertical" | "vertically" => false,
+                _ => return Err(CmdError::invalid("how is horizontal or vertical")),
+            },
+        },
+        ArrangeWhat::Straighten => ArrangeAction::Straighten,
+    };
+    let scope = match p.scope.unwrap_or(ScopeWhat::All) {
+        ScopeWhat::All => Scope::All,
+        ScopeWhat::Selection => Scope::Selection,
+        ScopeWhat::Branch => Scope::Branch,
+    };
+    let flow = p.flow.map(|f| if f == FlowWhat::Down { Flow::Down } else { Flow::Right });
+    let arr = Arrange { action, nodes: p.nodes.unwrap_or_default(), scope, flow };
+    let reply = svc.send(&ed, &d, DocOp::Arrange(arr), o).await?;
+    bring_up(&ed, &d).await;
+    let saved = settle(&ed, &svc, &d, p.save).await?;
     let catalog = svc.catalog(&ed).await;
     let snap = d.store.snapshot();
-    let positions: Vec<Value> = snap
-        .graph
+    let mut out = Map::new();
+    doc_state(&mut out, &d);
+    out.insert("saved".into(), json!(saved));
+    out.insert("moved".into(), json!(reply.count));
+    out.insert("flow".into(), json!(snap.graph.flow().key()));
+    out.insert("boxes".into(), boxes_json(&catalog, &snap.graph));
+    Ok(Value::Object(out))
+}
+
+/// Every node's box as the canvas draws it: content-sized, the same one the layout made room for.
+fn boxes_json(catalog: &crate::Catalog, g: &Graph) -> Value {
+    let cx = BoxCx::of(catalog, g);
+    Value::Array(
+        g.nodes
+            .iter()
+            .map(|n| {
+                let s = layout::node_size(&cx, n);
+                json!({
+                    "id": n.id, "kind": n.kind, "x": r1(n.pos[0]), "y": r1(n.pos[1]), "w": r1(s[0]), "h": r1(s[1]),
+                    "collapsed": n.collapsed, "disabled": n.disabled,
+                })
+            })
+            .collect(),
+    )
+}
+
+// ---- graph.get --------------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GetParams {
+    /// The graph: its tab (`quest:<path>`, `beh:<path>`) or its file, project-relative.
+    doc: String,
+    /// Every node's box (x, y, w, h in world pt).
+    #[serde(default)]
+    boxes: bool,
+    /// Every wire's polyline in the style it is drawn in, and whether it goes back.
+    #[serde(default)]
+    wires: bool,
+    /// The view the tab holds: zoom, centre, selection, the history, the minimap.
+    #[serde(default)]
+    view: bool,
+    /// What is under a world point `[x, y]`: the node whose box holds it, else the wire nearest to
+    /// it within 10 pt - the canvas's hit test, on the same boxes and polylines.
+    #[serde(default)]
+    at: Option<[f32; 2]>,
+}
+
+/// The node, else the wire, under a world point.
+fn hit_at(
+    catalog: &crate::Catalog,
+    g: &Graph,
+    defaults: &crate::canvas::WireSettings,
+    at: [f32; 2],
+) -> Value {
+    let cx = BoxCx::of(catalog, g);
+    // the last drawn is on top
+    let node = g.nodes.iter().rev().find(|n| {
+        let s = layout::node_size(&cx, n);
+        at[0] >= n.pos[0] && at[0] <= n.pos[0] + s[0] && at[1] >= n.pos[1] && at[1] <= n.pos[1] + s[1]
+    });
+    if let Some(n) = node {
+        return json!({ "node": n.id, "wire": Value::Null });
+    }
+    let mut best = 10.0f32;
+    let mut wire = Value::Null;
+    for (from, pin, to, w) in wires_of(catalog, g, defaults) {
+        let d = wires::distance(&w.points, at);
+        if d <= best {
+            best = d;
+            wire = json!({ "from": from, "pin": pin, "to": to, "distance": r1(d) });
+        }
+    }
+    json!({ "node": Value::Null, "wire": wire })
+}
+
+/// Every wire of a graph as the canvas draws it: its pins, its style, its waypoints.
+#[must_use]
+pub fn wires_of(
+    catalog: &crate::Catalog,
+    g: &Graph,
+    defaults: &crate::canvas::WireSettings,
+) -> Vec<(String, String, String, wires::Wire)> {
+    let cx = BoxCx::of(catalog, g);
+    let set = g.canvas.wires.over(defaults);
+    let wcx = wires::WireCx { flow: cx.flow, style: set.style, diagonal: set.diagonal };
+    let boxes: Vec<[f32; 4]> = g
         .nodes
         .iter()
         .map(|n| {
-            // the box the canvas draws: content-sized, the same one the layout made room for
-            let s = layout::node_size(&catalog, n);
-            json!({ "id": n.id, "x": n.pos[0], "y": n.pos[1], "w": s[0], "h": s[1] })
+            let s = layout::node_size(&cx, n);
+            [n.pos[0], n.pos[1], n.pos[0] + s[0], n.pos[1] + s[1]]
         })
         .collect();
+    let index = g.index();
+    let mut lanes = Vec::new();
+    let mut out = Vec::new();
+    for n in &g.nodes {
+        let size = layout::node_size(&cx, n);
+        let (pins, _) = layout::pins(catalog, n);
+        let count: usize = n.out.iter().map(|p| p.targets.len()).sum();
+        let mut k = 0;
+        for (pi, pin) in pins.iter().enumerate() {
+            let Some(p) = n.out.iter().find(|p| p.name.as_str() == pin) else { continue };
+            for (ti, t) in p.targets.iter().enumerate() {
+                let Some(m) = index.get(t.as_str()).and_then(|&j| g.nodes.get(j)) else { continue };
+                let p0 = layout::output_pin(cx.flow, n.pos, size, pi, pins.len());
+                let p3 = layout::input_pin(cx.flow, m.pos, layout::node_size(&cx, m));
+                let via = g.canvas.route(&n.id, pin, t).unwrap_or(&[]);
+                let lanes_of = wires::Lanes { index: k, count, track: ti, tracks: p.targets.len() };
+                let w = wires::build(&wcx, p0, p3, via, lanes_of, &boxes, &mut lanes);
+                out.push((n.id.to_string(), pin.clone(), t.to_string(), w));
+                k += 1;
+            }
+        }
+    }
+    out
+}
+
+async fn graph_get(ed: Arc<Editor>, p: GetParams, _o: Origin) -> Reply {
+    let svc = service(&ed)?;
+    let d = open_doc(&ed, &svc, &p.doc).await?;
+    let catalog = svc.catalog(&ed).await;
+    let problems = svc.problems(&ed, &d).await;
+    let snap = d.store.snapshot();
+    let g = &snap.graph;
+    let defaults = GraphDefaults::of(&ed).wires();
+    let set = g.canvas.wires.over(&defaults);
     let mut out = Map::new();
-    out.insert("moved".into(), json!(reply.count));
-    out.insert("positions".into(), Value::Array(positions));
-    doc_state(&mut out, Some(&d));
+    doc_state(&mut out, &d);
+    out.insert("kind".into(), json!(if g.is_behaviour() { "behaviour" } else { "quest" }));
+    out.insert("id".into(), json!(g.id));
+    out.insert("title".into(), json!(text::preview(&g.title)));
+    out.insert("nodes".into(), json!(g.nodes.len()));
+    out.insert("flow".into(), json!(g.flow().key()));
+    out.insert(
+        "wire_style".into(),
+        json!({
+            "style": set.style.key(), "diagonal": set.diagonal.key(), "thickness": set.thickness,
+            "by_pin": set.by_pin, "dim": set.dim, "bubbles": set.bubbles, "arrows": set.arrows,
+            "own": g.canvas.wires.style.is_some(),
+        }),
+    );
+    out.insert("outline".into(), json!(asset::outline(&catalog, g)));
+    out.insert("errors".into(), json!(validate::count_errors(&problems)));
+    out.insert("warnings".into(), json!(validate::count_warnings(&problems)));
+    out.insert("problems".into(), problems_json(&d, &problems));
+    let frames: Vec<Value> = g
+        .canvas
+        .frames
+        .iter()
+        .map(|f| json!({ "title": f.title, "tone": f.tone, "x": r1(f.x), "y": r1(f.y), "w": r1(f.w), "h": r1(f.h) }))
+        .collect();
+    let routes: Vec<Value> = g
+        .canvas
+        .routes
+        .iter()
+        .map(|(k, pts)| json!({ "wire": k, "points": pts.iter().map(|p| json!([r1(p[0]), r1(p[1])])).collect::<Vec<_>>() }))
+        .collect();
+    let marks: Vec<Value> =
+        g.canvas.bookmarks.iter().map(|b| json!({ "name": b.name, "node": b.node })).collect();
+    out.insert("frames".into(), Value::Array(frames));
+    out.insert("routes".into(), Value::Array(routes));
+    out.insert("bookmarks".into(), Value::Array(marks));
+    if p.boxes {
+        out.insert("boxes".into(), boxes_json(&catalog, g));
+    }
+    if p.wires {
+        let list: Vec<Value> = wires_of(&catalog, g, &defaults)
+            .into_iter()
+            .map(|(from, pin, to, w)| {
+                json!({
+                    "from": from, "pin": pin, "to": to, "back": w.back,
+                    "points": w.points.iter().map(|q| json!([r1(q[0]), r1(q[1])])).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        out.insert("wires".into(), Value::Array(list));
+    }
+    if let Some(at) = p.at {
+        out.insert("hit".into(), hit_at(&catalog, g, &defaults, at));
+    }
+    if p.view {
+        let v = &snap.view;
+        let h = d.store.history();
+        let state = |s: &doc::ViewState| json!({ "center": [r1(s.center[0]), r1(s.center[1])], "zoom": doc::zoom_of(s.zoom), "selected": s.selection, "slot": s.slot });
+        out.insert(
+            "view".into(),
+            json!({
+                "zoom": doc::zoom_of(v.zoom), "zoom_level": v.zoom, "center": [r1(v.center[0]), r1(v.center[1])],
+                "selected": v.selection, "slot": v.slot, "drawer": v.drawer,
+                "minimap": { "visible": v.minimap, "shown": v.minimap_shown, "available": g.nodes.len() >= doc::MINIMAP_MIN_NODES },
+                "back": v.back.iter().map(state).collect::<Vec<_>>(),
+                "forward": v.forward.iter().map(state).collect::<Vec<_>>(),
+                "undo_steps": h.undo, "redo_steps": h.redo,
+            }),
+        );
+    }
     Ok(Value::Object(out))
 }
 
-/// The nodes of the project's graphs a text names (the graph tab's Find in Project): the
-/// open documents with unsaved edits laid over their files. Files and lines that mention a
-/// text are `asset.find`'s.
+// ---- graph.find -------------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum FindGo {
+    First,
+    Next,
+    Previous,
+    Clear,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FindParams {
+    /// The graph: its tab (`quest:<path>`, `beh:<path>`) or its file. Left out: every graph of the
+    /// project.
+    #[serde(default)]
+    doc: Option<String>,
+    /// What to find: words over ids, kinds, parameters, conditions, actions, wires and comments.
+    /// Words all have to match; quotes keep a phrase; -word leaves a word out.
+    #[serde(default)]
+    query: Option<String>,
+    /// In a graph: the tab goes to the first, next or previous result, or clears the search.
+    #[serde(default)]
+    go: Option<FindGo>,
+    /// At most this many results (default 100).
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+async fn graph_find(ed: Arc<Editor>, p: FindParams, o: Origin) -> Reply {
+    let svc = service(&ed)?;
+    let limit = p.limit.unwrap_or(100).clamp(1, 1000);
+    let Some(doc) = p.doc.filter(|d| !d.is_empty()) else {
+        let query = p.query.unwrap_or_default();
+        let index = svc.index(&ed, true).await;
+        let catalog = svc.catalog(&ed).await;
+        let found = crate::index::find_nodes(&index, &catalog, &query);
+        let results: Vec<Value> = found
+            .results
+            .iter()
+            .take(limit)
+            .map(|(path, h, source)| json!({ "doc": doc_id(path), "path": path, "node": h.node, "kind": h.kind, "title": h.title, "match": h.matched, "source": source }))
+            .collect();
+        return Ok(
+            json!({ "query": query, "total": found.results.len(), "results": results, "complete": found.complete }),
+        );
+    };
+    let d = open_doc(&ed, &svc, &doc).await?;
+    if let Some(q) = &p.query {
+        if q.len() >= 256 {
+            return Err(CmdError::invalid("query is too long (at most 255 bytes)"));
+        }
+        svc.send(&ed, &d, DocOp::View(ViewOp::FindQuery(q.clone())), o).await?;
+    }
+    let catalog = svc.catalog(&ed).await;
+    let results_of = |d: &DocHandle| {
+        let snap = d.store.snapshot();
+        let r = doc::find_results(&catalog, &snap.graph, &snap.view.find_query);
+        let i = snap.find_index(&r);
+        (r, i)
+    };
+    match p.go {
+        Some(FindGo::First) => {
+            svc.send(&ed, &d, DocOp::View(ViewOp::FindGo(0)), o).await?;
+        }
+        Some(FindGo::Next | FindGo::Previous) => {
+            let (_, i) = results_of(&d);
+            let to = if p.go == Some(FindGo::Previous) { i - 1 } else { i + 1 };
+            svc.send(&ed, &d, DocOp::View(ViewOp::FindGo(to)), o).await?;
+        }
+        Some(FindGo::Clear) => {
+            svc.send(&ed, &d, DocOp::View(ViewOp::FindClear), o).await?;
+        }
+        None => {}
+    }
+    let (results, index) = results_of(&d);
+    let snap = d.store.snapshot();
+    let mut out = Map::new();
+    out.insert("doc".into(), json!(doc_id(&d.path().wire)));
+    out.insert("query".into(), json!(snap.view.find_query));
+    out.insert("total".into(), json!(results.len()));
+    out.insert("index".into(), json!(index));
+    out.insert(
+        "current".into(),
+        usize::try_from(index).ok().and_then(|i| results.get(i)).map_or(Value::Null, |r| json!(r.node)),
+    );
+    out.insert(
+        "results".into(),
+        Value::Array(
+            results
+                .iter()
+                .take(limit)
+                .map(|r| json!({ "node": r.node, "kind": r.kind, "title": r.title, "match": r.matched }))
+                .collect(),
+        ),
+    );
+    out.insert("selected".into(), json!(snap.view.selection));
+    Ok(Value::Object(out))
+}
+
+/// The nodes of the project's graphs a text names (the tab's Find in Project): the open documents
+/// with unsaved edits laid over their files.
 pub async fn project_find(ed: Arc<Editor>, args: Args) -> Reply {
-    let Some(query) = arg(&args, "query") else { return Err(refused("missing 'query'")) };
+    let query = args.get("query").and_then(Value::as_str).unwrap_or("").to_owned();
     let svc = service(&ed)?;
     let index = svc.index(&ed, true).await;
     let catalog = svc.catalog(&ed).await;
     let found = crate::index::find_nodes(&index, &catalog, &query);
-    let limit = usize::try_from(args.i64("limit").unwrap_or(200).clamp(1, 1000)).unwrap_or(200);
+    let limit = args.get("limit").and_then(Value::as_u64).map_or(200, |l| l.clamp(1, 1000) as usize);
     let count = limit.min(found.results.len());
     let results: Vec<Value> = found
         .results
@@ -267,24 +651,22 @@ pub async fn project_find(ed: Arc<Editor>, args: Args) -> Reply {
 }
 
 /// Where the project's graphs name a thing of a type the catalog knows (a task, a variable, a
-/// character...), with the node and slot (the graph tab's References).
+/// character...), with the node and slot (the tab's References).
 pub async fn references(ed: Arc<Editor>, args: Args) -> Reply {
-    let Some(ty) = arg(&args, "type").filter(|s| !s.is_empty()) else {
-        return Err(refused("missing 'type'"));
-    };
-    let Some(value) = arg(&args, "value").filter(|s| !s.is_empty()) else {
-        return Err(refused("missing 'value'"));
-    };
+    let get = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+    let (ty, value) = (get("type"), get("value"));
+    if ty.is_empty() || value.is_empty() {
+        return Err(CmdError::invalid("type and value name what to look for"));
+    }
     let svc = service(&ed)?;
-    let scope = match arg(&args, "path").filter(|s| !s.is_empty()) {
-        Some(p) => Some(svc.resolve(&p, false).map_err(refused)?.wire),
-        None => None,
+    let scope = match get("path") {
+        p if p.is_empty() => None,
+        p => Some(svc.resolve(&p, false).map_err(refused)?.wire),
     };
     let index = svc.index(&ed, true).await;
     let catalog = svc.catalog(&ed).await;
     let r = crate::references::find(&index, &catalog, &ty, &value, scope.as_deref()).map_err(refused)?;
-    let limit = usize::try_from(args.i64("limit").unwrap_or(500).clamp(1, 2000)).unwrap_or(500);
-    let count = limit.min(r.references.len());
+    let count = r.references.len().min(2000);
     Ok(json!({
         "type": ty,
         "value": value,
@@ -301,30 +683,7 @@ pub async fn references(ed: Arc<Editor>, args: Args) -> Reply {
     }))
 }
 
-async fn quest_rename_task(ed: Arc<Editor>, args: Args, o: Origin) -> Reply {
-    if !args.flag("ack_runtime_identity") {
-        return Err(refused(
-            "task rename changes runtime/save identity; pass ack_runtime_identity=true explicitly",
-        ));
-    }
-    let path = need_path(&args)?;
-    let Some(from) = arg(&args, "from").filter(|s| !s.is_empty()) else {
-        return Err(refused("missing 'from'"));
-    };
-    let Some(to) = arg(&args, "to").filter(|s| !s.is_empty()) else { return Err(refused("missing 'to'")) };
-    let svc = service(&ed)?;
-    let d = open_for_edit(&ed, &svc, &path).await?;
-    let wire = d.path().wire;
-    let reply =
-        svc.send(&ed, &d, DocOp::RenameTask { from: from.clone(), to: to.clone(), path: wire }, o).await?;
-    let mut out = Map::new();
-    out.insert("from".into(), json!(from));
-    out.insert("to".into(), json!(to));
-    out.insert("references_updated".into(), json!(reply.count));
-    out.insert("runtime_identity_changed".into(), json!(true));
-    out.extend(respond_doc(&ed, &svc, &d, true).await);
-    Ok(Value::Object(out))
-}
+// ---- game.lookup ------------------------------------------------------------------------------
 
 /// The lists of the project's documents `game.lookup` serves beside the pickers' own.
 const DOCUMENT_LISTS: [&str; 10] = [
@@ -340,8 +699,8 @@ const DOCUMENT_LISTS: [&str; 10] = [
     "node_id",
 ];
 
-/// Every list the quest editor serves through `game.lookup`: the pickers' lists over the game's
-/// data and the project's documents.
+/// Every list the graphs serve through `game.lookup`: the pickers' lists over the game's data
+/// and the project's documents.
 fn lookup_types() -> Vec<&'static str> {
     PickerType::ALL.iter().map(|t| t.name()).chain(DOCUMENT_LISTS).collect()
 }
@@ -387,7 +746,7 @@ async fn lookup(ed: Arc<Editor>, q: gz_game::LookupQuery) -> Result<gz_game::Loo
                 if path.is_empty() {
                     return Err(refused(format!("the list {ty} is a document's: give its path")));
                 }
-                let (g, _) = svc.read_graph(&ed, &path).await.map_err(refused)?;
+                let (g, _) = svc.read_graph(&ed, doc_path(&path)).await.map_err(refused)?;
                 match ty.as_str() {
                     "role" => {
                         for r in &g.roles {
@@ -450,322 +809,76 @@ async fn lookup(ed: Arc<Editor>, q: gz_game::LookupQuery) -> Result<gz_game::Loo
     Ok(gz_game::LookupAnswer { available, total, entries })
 }
 
-// ---- the graph tab's operations ---------------------------------------------------------------
+const OPS_TOPIC: &str = "graph.edit takes a list of operations, all applied or none, one undo step. Nodes are named by \
+id; an operation that names none acts on the selection the tab holds.
 
-/// `zoom_level`, `zoom`, `center`, `selected`, `slot` (`AppendViewState`).
-fn view_state(out: &mut Map<String, Value>, v: &doc::View) {
-    out.insert("zoom_level".into(), json!(v.zoom));
-    out.insert("zoom".into(), json!((f64::from(zoom_of(v.zoom)) * 1000.0).round() / 1000.0));
-    out.insert("center".into(), json!([r1(v.center[0]), r1(v.center[1])]));
-    out.insert("selected".into(), json!(v.selection));
-    out.insert("slot".into(), json!(v.slot));
-}
+  add            node={...} (a node table) or kind=..., id=..., at=[x,y]
+  remove         node= | nodes=[...]
+  rename         node=, to=
+  set            node=, patch={kind, once, params, cond, on_enter, on_exit, out, pos, comment, collapsed, disabled}
+  connect        from=, pin=, to=
+  disconnect     from=, pin= (left out: every pin), to= (left out: the whole pin)
+  cut            wires=[{from, pin, to}, ...]
+  move           node=, x=, y=  |  nodes=[...], by=[dx, dy]
+  replace        node=, kind=: another kind, the same id; parameters of the same name and wires of the same pin stay
+  insert_on_wire from=, pin=, to=, kind= (or node={...}), at=[x,y]: A -> B becomes A -> N -> B;
+                 existing=<id>: a node without wires goes on the wire where it stands
+  add_action     node=, slot=enter|exit, index= (1-based), action={kind, params}
+  set_action     node=, slot=, index=, patch={kind, params}
+  remove_action  node=, slot=, index=
+  move_action    node=, slot=, index=, to_id=, to_slot=, to_index=
+  set_graph      patch={id, title, activation, vars, tasks}
+  set_task       task=, patch={title, descr, type, target, icon, auto_complete, objectives} | remove=true
+  set_var        name=, value= (null removes) | rename=
+  rename_task    from=, to=, ack_runtime_identity=true (alone in its call: the id is kept in saves)
+  frame          action=add (around nodes=, or x, y, w, h), set (index=, title, tone, x, y, w, h), remove (index=),
+                 move (index=, by=[dx, dy]: the nodes inside move with it)
+  route          from=, pin=, to=, points=[[x, y], ...] (empty: the wire goes straight again)
+  bookmark       name=, node= (here=true: the selected node; left out: the bookmark goes)
+  disable        nodes=, on= (left out: toggles) - the game passes a disabled node through
+  collapse       nodes=, on= - header and pins alone
+  duplicate      nodes=, wires=true (the copies keep the wires into the originals)
+  bypass         nodes=: A -> B -> C becomes A -> C
+  connect_nearest node=
+  wires          style=curved|straight|circuit|angled|subway, diagonal=start|middle|end, thickness=1-4, by_pin, dim,
+                 bubbles, arrows (null: as in Preferences)
+  flow           flow=right|down (graph.arrange action=layout flow= also lays the graph out again)
+  paste          text= (a Lua fragment: return { nodes = { ... } }), at=[x,y]";
 
-/// The tab's document (`OpenMcpWindow`): opened on demand.
-async fn tab_doc(ed: &Arc<Editor>, svc: &NqService, args: &Args) -> Result<Arc<DocHandle>, CmdError> {
-    let Some(path) = arg(args, "path").filter(|p| !p.is_empty()) else {
-        return Err(refused("path is required"));
-    };
-    svc.open(ed, &path).await.map_err(refused)
-}
-
-fn split_ids(list: &str) -> Vec<String> {
-    list.split(',').map(text::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect()
-}
-
-/// The handler of `quest_edit`, for the UI area that brings the tab up first.
-pub async fn quest_edit(ed: Arc<Editor>, args: Args, o: Origin) -> Reply {
-    const OPS: &str = "connect, disconnect, bypass, delete, duplicate, connect_nearest, select_all";
-    let svc = service(&ed)?;
-    let d = tab_doc(&ed, &svc, &args).await?;
-    let Some(op) = arg(&args, "op").filter(|s| !s.is_empty()) else {
-        return Err(refused(format!("missing 'op': {OPS}")));
-    };
-    // `nodes` overrides the selection for the ops that take one: a caller never selects first
-    if let Some(nodes) = arg(&args, "nodes").filter(|s| !s.is_empty()) {
-        let snap = d.store.snapshot();
-        let ids = split_ids(&nodes);
-        if let Some(missing) = ids.iter().find(|id| snap.graph.find_node(id).is_none()) {
-            return Err(refused(format!("no node '{missing}' in this graph")));
-        }
-        svc.send(&ed, &d, DocOp::View(ViewOp::Select(ids)), o).await?;
-    }
-    let from = arg(&args, "from").unwrap_or_default();
-    let pin = arg(&args, "pin").unwrap_or_default();
-    let to = arg(&args, "to").unwrap_or_default();
-    match op.as_str() {
-        "connect" => {
-            if from.is_empty() || pin.is_empty() || to.is_empty() {
-                return Err(refused("connect needs 'from', 'pin' and 'to'"));
-            }
-            let catalog = svc.catalog(&ed).await;
-            doc::can_link(&catalog, &d.store.snapshot().graph, &from, &to).map_err(refused)?;
-            svc.send(&ed, &d, DocOp::Connect { from, pin, to }, o).await?;
-        }
-        "disconnect" => {
-            // no 'to' drops every target of the pin, no 'pin' every pin
-            if from.is_empty() {
-                return Err(refused("disconnect needs 'from' (plus 'pin' and 'to' to name one link)"));
-            }
-            svc.send(&ed, &d, DocOp::Disconnect { from, pin, to }, o).await?;
-        }
-        "bypass" => {
-            svc.send(&ed, &d, DocOp::Canvas(CanvasOp::Bypass), o).await?;
-        }
-        "delete" => {
-            svc.send(&ed, &d, DocOp::Canvas(CanvasOp::Delete), o).await?;
-        }
-        "duplicate" => {
-            svc.send(&ed, &d, DocOp::Canvas(CanvasOp::Duplicate), o).await?;
-        }
-        "connect_nearest" => {
-            svc.send(&ed, &d, DocOp::Canvas(CanvasOp::ConnectNearest), o).await?;
-        }
-        "select_all" => {
-            svc.send(&ed, &d, DocOp::Canvas(CanvasOp::SelectAll), o).await?;
-        }
-        other => return Err(refused(format!("unknown op '{other}': {OPS}"))),
-    }
-    let catalog = svc.catalog(&ed).await;
-    let snap = d.store.snapshot();
-    let p = d.path();
-    // the outline is how a caller sees what the edit did, without a screenshot
-    // oracle: the C++ answered this command's path as the absolute file, not project-relative
-    Ok(json!({
-        "path": p.abs.to_string_lossy().replace('\\', "/"),
-        "op": op,
-        "selected": snap.view.selection,
-        "status": snap.view.status,
-        "outline": asset::outline(&catalog, &snap.graph),
-    }))
-}
-
-/// The handler of `quest_find`, for the UI area that brings the tab up first.
-pub async fn quest_find(ed: Arc<Editor>, args: Args, o: Origin) -> Reply {
-    let svc = service(&ed)?;
-    let d = tab_doc(&ed, &svc, &args).await?;
-    let query = arg(&args, "query");
-    let action = arg(&args, "action")
-        .filter(|a| !a.is_empty())
-        .unwrap_or_else(|| (if query.is_some() { "set" } else { "get" }).to_owned());
-    if query.as_ref().is_some_and(|q| q.len() >= 256) {
-        return Err(refused("query is too long (max 255 UTF-8 bytes)"));
-    }
-    let catalog = svc.catalog(&ed).await;
-    let results_of = |d: &DocHandle| {
-        let snap = d.store.snapshot();
-        let r = doc::find_results(&catalog, &snap.graph, &snap.view.find_query);
-        let i = snap.find_index(&r);
-        (r, i)
-    };
-    match action.as_str() {
-        "set" => {
-            svc.send(&ed, &d, DocOp::View(ViewOp::FindQuery(query.clone().unwrap_or_default())), o).await?;
-            if args.flag("select") {
-                svc.send(&ed, &d, DocOp::View(ViewOp::FindGo(0)), o).await?;
-            }
-        }
-        "next" | "previous" => {
-            if let Some(q) = &query {
-                svc.send(&ed, &d, DocOp::View(ViewOp::FindQuery(q.clone())), o).await?;
-            }
-            let (_, i) = results_of(&d);
-            let to = if action == "previous" { i - 1 } else { i + 1 };
-            svc.send(&ed, &d, DocOp::View(ViewOp::FindGo(to)), o).await?;
-        }
-        "clear" => {
-            svc.send(&ed, &d, DocOp::View(ViewOp::FindClear), o).await?;
-        }
-        "get" => {
-            if let Some(q) = &query {
-                svc.send(&ed, &d, DocOp::View(ViewOp::FindQuery(q.clone())), o).await?;
-            }
-        }
-        _ => return Err(refused("action must be get, set, next, previous or clear")),
-    }
-    let (results, index) = results_of(&d);
-    let snap = d.store.snapshot();
-    let limit = usize::try_from(args.i64("limit").unwrap_or(100).clamp(1, 500)).unwrap_or(100);
-    let count = limit.min(results.len());
-    let mut out = Map::new();
-    out.insert("path".into(), json!(d.path().wire));
-    out.insert("query".into(), json!(snap.view.find_query));
-    out.insert("count".into(), json!(results.len()));
-    out.insert("index".into(), json!(index));
-    out.insert(
-        "current".into(),
-        usize::try_from(index).ok().and_then(|i| results.get(i)).map_or(Value::Null, |r| json!(r.node)),
-    );
-    out.insert(
-        "results".into(),
-        Value::Array(
-            results
-                .iter()
-                .take(count)
-                .map(|r| json!({ "node": r.node, "kind": r.kind, "title": r.title, "match": r.matched }))
-                .collect(),
-        ),
-    );
-    out.insert("truncated".into(), json!(count < results.len()));
-    out.insert("drawer".into(), json!(snap.view.drawer));
-    view_state(&mut out, &snap.view);
-    Ok(Value::Object(out))
-}
-
-/// The handler of `quest_bookmarks`, for the UI area that brings the tab up first.
-pub async fn quest_bookmarks(ed: Arc<Editor>, args: Args, o: Origin) -> Reply {
-    let svc = service(&ed)?;
-    let d = tab_doc(&ed, &svc, &args).await?;
-    let action = arg(&args, "action").filter(|a| !a.is_empty()).unwrap_or_else(|| "get".to_owned());
-    let snap = d.store.snapshot();
-    let mut node = arg(&args, "node").unwrap_or_default();
-    if node.is_empty()
-        && let [one] = snap.view.selection.as_slice()
-    {
-        node = one.to_string();
-    }
-    match action.as_str() {
-        "add" | "remove" | "toggle" => {
-            if node.is_empty() {
-                return Err(refused("node is required unless exactly one node is selected"));
-            }
-            if action != "remove" && snap.graph.find_node(&node).is_none() {
-                return Err(refused("node not found"));
-            }
-            let marked = snap.view.bookmarks.iter().any(|b| *b == node);
-            let on = action == "add" || (action == "toggle" && !marked);
-            svc.send(&ed, &d, DocOp::View(ViewOp::Bookmark { node, on }), o).await?;
-        }
-        "next" | "previous" => {
-            svc.send(
-                &ed,
-                &d,
-                DocOp::View(ViewOp::BookmarkJump(if action == "previous" { -1 } else { 1 })),
-                o,
-            )
-            .await?;
-        }
-        "clear" => {
-            svc.send(&ed, &d, DocOp::View(ViewOp::BookmarksClear), o).await?;
-        }
-        "get" => {}
-        _ => return Err(refused("action must be get, add, remove, toggle, next, previous or clear")),
-    }
-    let snap = d.store.snapshot();
-    let marks: Vec<&str> = snap
-        .view
-        .bookmarks
-        .iter()
-        .filter(|b| snap.graph.find_node(b).is_some())
-        .map(|b| b.as_str())
-        .collect();
-    let mut out = Map::new();
-    out.insert("path".into(), json!(d.path().wire));
-    out.insert("bookmarks".into(), json!(marks));
-    out.insert("count".into(), json!(marks.len()));
-    view_state(&mut out, &snap.view);
-    Ok(Value::Object(out))
-}
-
-fn history_state(s: &doc::ViewState) -> Value {
-    json!({ "center": [r1(s.center[0]), r1(s.center[1])], "zoom_level": s.zoom, "selected": s.selection, "slot": s.slot })
-}
-
-/// The handler of `quest_history`, for the UI area that brings the tab up first.
-pub async fn quest_history(ed: Arc<Editor>, args: Args, o: Origin) -> Reply {
-    let svc = service(&ed)?;
-    let d = tab_doc(&ed, &svc, &args).await?;
-    let action = arg(&args, "action").filter(|a| !a.is_empty()).unwrap_or_else(|| "get".to_owned());
-    let op = match action.as_str() {
-        "back" => Some(ViewOp::HistoryBack),
-        "forward" => Some(ViewOp::HistoryForward),
-        "clear" => Some(ViewOp::HistoryClear),
-        "get" => None,
-        _ => return Err(refused("action must be get, back, forward or clear")),
-    };
-    let moved = match op {
-        Some(op) => svc.send(&ed, &d, DocOp::View(op), o).await?.moved,
-        None => false,
-    };
-    let snap = d.store.snapshot();
-    let h = d.store.history();
-    let v = &snap.view;
-    Ok(json!({
-        "path": d.path().wire,
-        "moved": moved,
-        "back_count": v.back.len(),
-        "forward_count": v.forward.len(),
-        "back": v.back.iter().map(history_state).collect::<Vec<_>>(),
-        "forward": v.forward.iter().map(history_state).collect::<Vec<_>>(),
-        "current": history_state(&v.current()),
-        // the document's own history, newest first: what quest_undo / quest_redo take
-        "undo_steps": h.undo,
-        "redo_steps": h.redo,
-    }))
-}
-
-/// The handler of `quest_minimap`, for the UI area that brings the tab up first.
-pub async fn quest_minimap(ed: Arc<Editor>, args: Args, o: Origin) -> Reply {
-    let svc = service(&ed)?;
-    let d = tab_doc(&ed, &svc, &args).await?;
-    let action = arg(&args, "action").filter(|a| !a.is_empty()).unwrap_or_else(|| "get".to_owned());
-    let visible = d.store.snapshot().view.minimap;
-    let set = match action.as_str() {
-        "show" => Some(true),
-        "hide" => Some(false),
-        "toggle" => Some(!visible),
-        "get" => None,
-        _ => return Err(refused("action must be get, show, hide or toggle")),
-    };
-    if let Some(on) = set {
-        svc.send(&ed, &d, DocOp::View(ViewOp::Minimap(on)), o).await?;
-    }
-    let catalog = svc.catalog(&ed).await;
-    let snap = d.store.snapshot();
-    let v = &snap.view;
-    let bounds = |b: [f32; 4]| json!([r1(b[0]), r1(b[1]), r1(b[2]), r1(b[3])]);
-    let viewport = v.canvas.filter(|c| c[0] > 0.0 && c[1] > 0.0).map(|c| {
-        let s = zoom_of(v.zoom) * v.dpi;
-        [
-            v.center[0] - c[0] / (2.0 * s),
-            v.center[1] - c[1] / (2.0 * s),
-            v.center[0] + c[0] / (2.0 * s),
-            v.center[1] + c[1] / (2.0 * s),
-        ]
-    });
-    let mut out = Map::new();
-    out.insert("path".into(), json!(d.path().wire));
-    out.insert("visible".into(), json!(v.minimap));
-    // what the last frame drew: the toggle asks, a small graph or a small canvas shows none
-    out.insert("shown".into(), json!(v.minimap_shown));
-    out.insert("min_nodes".into(), json!(doc::MINIMAP_MIN_NODES));
-    out.insert("available".into(), json!(snap.graph.nodes.len() >= doc::MINIMAP_MIN_NODES));
-    out.insert(
-        "graph_bounds".into(),
-        layout::graph_bounds(&catalog, &snap.graph).map_or(Value::Null, bounds),
-    );
-    out.insert("viewport_bounds".into(), viewport.map_or(Value::Null, bounds));
-    view_state(&mut out, v);
-    Ok(Value::Object(out))
-}
-
-/// Every `quest_*` command of the bridge except `quest_view`, the graph tab's own.
+/// The `graph.*` commands of open documents (`graph.view` is the tab's own).
 pub fn register(reg: &mut Registry) {
-    reg.add(AREA, "quest_catalog", quest_catalog);
-    reg.add(AREA, "quest_open", quest_open);
-    reg.add(AREA, "quest_close", quest_close);
-    reg.add(AREA, "quest_undo", quest_undo);
-    reg.add(AREA, "quest_redo", quest_redo);
-    reg.add(AREA, "quest_apply", quest_apply);
-    reg.add(AREA, "quest_save", quest_save);
-    reg.add(AREA, "quest_reload", quest_reload);
-    reg.add(AREA, "quest_layout", quest_layout);
-    reg.add(AREA, "quest_rename_task", quest_rename_task);
-    reg.add(AREA, "quest_edit", quest_edit);
-    reg.add(AREA, "quest_find", quest_find);
-    reg.add(AREA, "quest_bookmarks", quest_bookmarks);
-    reg.add(AREA, "quest_history", quest_history);
-    reg.add(AREA, "quest_minimap", quest_minimap);
+    reg.area("graph", "An open quest or behaviour graph: edit operations, layout, find, its view");
+    reg.cmd(
+        Spec::write("graph.edit", "Edits an open graph: a list of operations, all or none, one undo step.")
+            .example("doc=quest:quests/wolf.nqasset ops=[{\"op\":\"connect\",\"from\":\"a\",\"pin\":\"next\",\"to\":\"b\"}]"),
+        graph_edit,
+    );
+    reg.cmd(
+        Spec::write(
+            "graph.arrange",
+            "Lays a graph out (all, the selection, a branch; in a flow), or aligns, distributes or straightens nodes.",
+        )
+        .example("doc=quest:quests/wolf.nqasset action=layout flow=right"),
+        graph_arrange,
+    );
+    reg.cmd(
+        Spec::read("graph.get", "A graph as its tab holds it: the outline, problems, frames, routes, bookmarks; boxes and wires on request.")
+            .example("doc=quest:quests/wolf.nqasset boxes=true wires=true"),
+        graph_get,
+    );
+    reg.cmd(
+        Spec::view(
+            "graph.find",
+            "Finds nodes in a graph (the tab follows the results) or in every graph of the project.",
+        )
+        .example("doc=quest:quests/wolf.nqasset query=wolf go=first"),
+        graph_find,
+    );
+    reg.topic(Topic {
+        name: "graph-ops",
+        summary: "The operations graph.edit takes",
+        text: |_| OPS_TOPIC.to_owned(),
+    });
 }
 
 /// What the area hangs on the editor: the `file.create` templates of a quest and a
@@ -788,8 +901,8 @@ pub fn install(editor: &Editor) {
             svc.retarget(ed, from, to);
         }
     });
-    // the graphs die with the project, the work in them does not (`NqDocs::SaveDirty` before
-    // the tabs go): whatever is still unsaved when nothing settled it is written first
+    // the graphs die with the project, the work in them does not: whatever is still unsaved when
+    // nothing settled it is written first
     ProjectHooks::of(editor).on_before_close(|ed, session| async move {
         if let Some(svc) = NqService::get(&session) {
             let saved = svc.save_dirty(&ed).await;

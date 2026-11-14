@@ -67,6 +67,8 @@ SUITES: dict[str, dict] = {
     "test_properties": {"args": ["--project", TEST], "timeout": 180},
     "test_scene_tools": {"args": ["--project", TEST], "timeout": 120},
     "test_level_commands": {"args": ["--project", TEST], "timeout": 300},
+    # the compiler's regression net: two small scenes at draft quality from a cold start, against tools/qa/golden
+    "test_level_compile": {"args": ["--project", TEST], "timeout": 240},
     "test_previews": {"args": ["--project", OD], "timeout": 180},
     "test_mod_publish": {"args": ["--project", OD], "timeout": 240},
     "test_mod_catalog": {"args": ["--project", OD], "timeout": 300},

@@ -26,7 +26,7 @@ pub(crate) async fn scan_first(
     stage: &(dyn Fn(&str) + Send + Sync),
     set_scan: &(dyn Fn(PublishState, &Scan) + Send + Sync),
 ) -> Result<String, String> {
-    stage("Reading the Mod Browser catalog");
+    stage("Waiting for the Mod Browser catalog");
     let index = gh.fetch_catalog_index(cancel).await;
     if cancel.is_cancelled() {
         return Err(gz_github::CANCELLED.to_owned());

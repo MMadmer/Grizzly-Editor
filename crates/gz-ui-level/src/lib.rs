@@ -12,7 +12,7 @@
 //!   keys), which the editor's settings file keeps.
 //! - **Panels**: the World Outliner ([`outliner`], rows from a `Query` keyed by the scene's
 //!   revision and the filter, laid out only where they show), Tools ([`tools`]: tiles, the
-//!   active tool's form, Snap Objects; the Detail Objects dialog [`detail_objects`]; the Sector,
+//!   active tool's form; the Detail Objects dialog [`detail_objects`]; the Sector,
 //!   Portal, Way, Shape, Light and Fog Volume forms in `tools_objects`, posting their tools'
 //!   commands), Details and
 //!   Level Settings ([`details`]: the kit's property grid over `gz-scene`'s rows, choosers

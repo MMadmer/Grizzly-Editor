@@ -26,18 +26,20 @@ gz-fmt-level.workspace = true
 gz-fmt-xr.workspace = true
 gz-fmt-tex.workspace = true
 gz-entities.workspace = true
+gz-luadata.workspace = true
+gz-asset.workspace = true
 glam.workspace = true
 imbl.workspace = true
 rayon.workspace = true
 parking_lot.workspace = true
 rustc-hash.workspace = true
 serde.workspace = true
+schemars.workspace = true
 serde_json.workspace = true
 smol_str.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-# the C++ editor's clipboard record of a copied selection
-clipboard-win = "5.4"
+futures.workspace = true
 
 [dev-dependencies]
 gz-corpus.workspace = true

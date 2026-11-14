@@ -196,7 +196,7 @@ impl Github {
                 Err((429, _)) if attempt < 3 && !cancel.is_cancelled() => {}
                 _ => return r,
             }
-            stage("Waiting for VirusTotal's rate limit");
+            stage("Waiting for VirusTotal: its rate limit (4 requests a minute)");
             crate::http::pause(cancel, self.vt_waits().rate_wait.as_millis() as u64).await;
             attempt += 1;
         }
@@ -216,7 +216,7 @@ impl Github {
                 Err((429, _)) if attempt < 3 && !cancel.is_cancelled() => {}
                 _ => return r,
             }
-            stage("Waiting for VirusTotal's rate limit");
+            stage("Waiting for VirusTotal: its rate limit (4 requests a minute)");
             crate::http::pause(cancel, self.vt_waits().rate_wait.as_millis() as u64).await;
             attempt += 1;
         }
@@ -297,7 +297,12 @@ impl Github {
                 continue;
             }
             let package = r.package.clone();
-            stage(&format!("Looking up {} on VirusTotal", package.name));
+            let n = out.packages.len();
+            stage(&format!(
+                "Waiting for VirusTotal: looking up {} of {n} packages ({})",
+                i + 1,
+                package.name
+            ));
             let report = match self.look(&package.sha256, key, cancel, stage).await {
                 Ok(report) => report,
                 Err((status, err)) => {
@@ -336,7 +341,11 @@ impl Github {
                     }
                     continue;
                 }
-                stage(&format!("Uploading {} to VirusTotal", package.name));
+                stage(&format!(
+                    "Waiting for VirusTotal: uploading {} of {n} packages ({})",
+                    i + 1,
+                    package.name
+                ));
                 if let Err((status, err)) = self.upload_within_rate(&package.path, key, cancel, stage).await {
                     fail(&mut out, i, status, &err);
                     continue;
@@ -358,8 +367,10 @@ impl Github {
                 if r.state.is_empty() {
                     let (name, sha) = (r.package.name.clone(), r.package.sha256.clone());
                     let seconds = start.elapsed().as_secs();
+                    let n = out.packages.len();
                     stage(&format!(
-                        "Waiting for VirusTotal's report on {name} ({}:{:02})",
+                        "Waiting for VirusTotal: the report on {} of {n} packages ({name}, {}:{:02})",
+                        i + 1,
                         seconds / 60,
                         seconds % 60
                     ));

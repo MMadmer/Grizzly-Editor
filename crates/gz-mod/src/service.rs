@@ -4,20 +4,20 @@
 //! manifest - Mod Settings, World Rules, Screens & Music, the graph tab's globals, Exclude from
 //! Build - sends its edits here; [`gz_editor::AutoSave`] puts each published state on disk, and
 //! the store's revision is the manifest generation tabs follow. The file may change behind the
-//! editor (a git checkout, an agent writing it): before every command, and whenever the
-//! project's file tree sees `mod.ltx` move, the file is read and, when its text is not the
-//! store's, loaded as a new document.
+//! editor (a git checkout, an agent writing it): the project's watcher says so, the file is read
+//! and, when its text is not the store's, loaded as a new document - every tab that follows the
+//! revision shows it at once. A command that answers what the file says now calls
+//! [`ManifestService::sync`], which reads the disk.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use futures::future::BoxFuture;
 use gz_base::{Origin, Problem, RelPath, Rev};
 use gz_editor::{AutoSave, CmdError, Editor, Executors, ProjectSession, Store};
-use gz_project::{EntryKind, FileTree, Project};
+use gz_project::{Filter, Project, ProjectWatch};
 use gz_store::{Apply, Snap, State, StoreOptions};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use serde_json::Value;
 
 use crate::doc::ManifestDoc;
@@ -151,6 +151,8 @@ pub struct ManifestService {
     exec: Executors,
     /// One sync-and-edit at a time.
     lock: tokio::sync::Mutex<()>,
+    /// The project's watcher, once it is followed.
+    watched: Mutex<Option<ProjectWatch>>,
 }
 
 /// Guards the first use, so that one store is made per project.
@@ -158,12 +160,6 @@ struct InitLock(tokio::sync::Mutex<()>);
 
 fn write_error() -> CmdError {
     CmdError::io("can't write mod.ltx")
-}
-
-/// Where `mod.ltx` stands in the project's file tree: what tells a change from the disk.
-fn manifest_entry(tree: &FileTree) -> Option<EntryKind> {
-    let rel = RelPath::new(FILE).ok()?;
-    tree.entry(&rel).map(|e| e.kind)
 }
 
 async fn read_text(exec: &Executors, root: &Path) -> Result<Option<String>, CmdError> {
@@ -222,35 +218,33 @@ impl ManifestService {
             saver,
             exec: editor.exec.clone(),
             lock: tokio::sync::Mutex::new(()),
+            watched: Mutex::new(None),
         }
     }
 
-    /// Follows the project's file tree: when `mod.ltx` moves there, the disk is compared.
+    /// Follows the project's watcher: when `mod.ltx` changes behind the editor (git, an agent,
+    /// another program), the disk is read and the store takes it in. The editor's own writes come
+    /// back as the text the store already holds and change nothing.
     fn watch(self: &Arc<Self>, session: &ProjectSession) {
         let Some(project) = session.services.get::<Project>() else { return };
+        let Ok(rel) = RelPath::new(FILE) else { return };
+        let mut rx = project.tree.changes().subscribe(Filter::Path(rel));
+        *self.watched.lock() = Some(project.tree.changes().clone());
         let me = Arc::downgrade(self);
-        let tree_of = Arc::downgrade(&project);
-        let mut seen_rev = project.tree.rev();
-        let mut seen = manifest_entry(&project.tree.snapshot());
         drop(project);
         self.exec.spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_millis(250)).await;
-                let (Some(me), Some(project)) = (me.upgrade(), tree_of.upgrade()) else { break };
-                let rev = project.tree.rev();
-                if rev == seen_rev {
-                    continue;
-                }
-                seen_rev = rev;
-                let now = manifest_entry(&project.tree.snapshot());
-                if now == seen {
-                    continue;
-                }
-                seen = now;
-                // a file that cannot be read now is read again by the next command
+            while rx.recv().await.is_some() {
+                let Some(me) = me.upgrade() else { break };
+                // a file that cannot be read now is read again on its next change
                 let _ = me.sync().await;
             }
         });
+    }
+
+    /// Whether the project's watcher keeps the store current; without one an edit reads the
+    /// disk first.
+    fn watched(&self) -> bool {
+        self.watched.lock().as_ref().is_some_and(ProjectWatch::live)
     }
 
     #[must_use]
@@ -295,10 +289,14 @@ impl ManifestService {
         Ok(())
     }
 
-    /// Applies edits to what the disk holds now and answers once they are on disk.
+    /// Applies edits to the manifest and answers once they are on disk. The store is what the
+    /// disk holds: the watcher brings outside changes in, and without a watcher the disk is read
+    /// first.
     pub async fn edit(&self, edits: Vec<Edit>, origin: Origin) -> Result<bool, CmdError> {
         let _one = self.lock.lock().await;
-        self.sync_locked().await?;
+        if !self.watched() {
+            self.sync_locked().await?;
+        }
         let changed = self.store.send(ManifestCmd::Edit(edits), origin).await?;
         self.saver.flush(self.store.rev()).await.map_err(|_| write_error())?;
         Ok(changed)
@@ -369,10 +367,10 @@ pub async fn command_check(
         .await
 }
 
-/// Makes a field of the `mod_manifest` answer from the state: the world area fills `world`.
+/// Makes a field of the manifest's answer from the state: the world area fills `world`.
 pub type FieldHook = Arc<dyn Fn(&ManifestState) -> Value + Send + Sync>;
 
-/// The fields of `mod_manifest` that other areas own (`world`). Lives in `editor.services`.
+/// The fields of the manifest's answer that other areas own (`world`). Lives in `editor.services`.
 #[derive(Default)]
 pub struct ManifestFields {
     hooks: RwLock<Vec<(&'static str, FieldHook)>>,
@@ -397,7 +395,7 @@ impl ManifestFields {
     }
 }
 
-/// What an argument hook of `mod_set_manifest` is given.
+/// What a key hook of `mod.set` is given.
 pub struct ArgCx {
     pub editor: Arc<Editor>,
     /// The project folder.
@@ -412,7 +410,7 @@ pub struct ArgCx {
 /// whole call before anything is written. May do file work (the thumbnail is converted).
 pub type ArgHook = Arc<dyn Fn(ArgCx) -> BoxFuture<'static, Result<Vec<Edit>, String>> + Send + Sync>;
 
-/// The arguments of `mod_set_manifest` that other areas own: `tags` and `thumbnail` (the Mod
+/// The keys of `mod.set` that other areas own: `tags` and `pda.layout` (the Mod
 /// Browser's vocabulary and picture). Lives in `editor.services`.
 #[derive(Default)]
 pub struct ManifestArgs {

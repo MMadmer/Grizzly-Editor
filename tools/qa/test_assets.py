@@ -10,7 +10,7 @@ the way an agent's own file tools write it:
   of a newer version is refused with the sentence;
 - C: an open quest follows its file: a comment, an unknown key and a new title written outside
   show in the tab, and the file is still exactly what was written;
-- D: an unsaved edit in the tab (quest_apply) and another value changed outside: Save writes
+- D: an unsaved edit in the tab (graph.edit) and another value changed outside: Save writes
   both, with the comment and the unknown key;
 - E: both sides change the same value: the tab keeps its own and lists the conflict;
   asset.take_theirs takes the file's;
@@ -79,7 +79,7 @@ class Editor:
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
             try:
-                if mcp("mod_manifest", timeout=30).get("ok"):
+                if mcp("mod.info", timeout=30).get("ok"):
                     return
             except OSError:
                 pass
@@ -188,7 +188,7 @@ def phase_b(project: str) -> None:
     newer = [p for p in n.get("problems", []) if p.get("code") == "newer_version"]
     check(bool(newer) and "newer Grizzly Editor" in newer[0].get("text", "") and newer[0].get("line") == 2,
           "B a newer version is refused with the sentence, at its header", json.dumps(n)[:300])
-    o = mcp("quest_open", path="quests/qa_newer.nqasset")
+    o = mcp("graph.get", doc="quests/qa_newer.nqasset")
     check(o.get("ok") is False and "newer Grizzly Editor" in o.get("error", ""), "B and opens nothing",
           json.dumps(o)[:300])
     for rel in ("quests/qa_check.nqasset", "quests/qa_newer.nqasset"):
@@ -196,7 +196,7 @@ def phase_b(project: str) -> None:
 
 
 def summary() -> dict:
-    return mcp("quest_open", path=Q)
+    return mcp("graph.get", doc=Q)
 
 
 def phase_c(project: str) -> None:
@@ -213,12 +213,12 @@ def phase_c(project: str) -> None:
 
 def phase_d(project: str) -> None:
     before = read(project, Q)
-    a = mcp("quest_apply", path=Q, ops='{ op = "set_node", id = "talk", patch = { comment = "mine" } }')
+    a = mcp("graph.edit", doc=Q, ops='{ op = "set", node = "talk", patch = { comment = "mine" } }')
     check(a.get("ok") and a.get("dirty") is True, "D an unsaved edit in the tab", json.dumps(a)[:300])
     outside = before.replace('params = { status = "completed" }', 'params = { status = "failed" }')
     # whether the watcher delivered it yet or not: Save takes in what the file holds first
     write(project, Q, outside)
-    s = mcp("quest_save", path=Q)
+    s = mcp("doc.save", doc="quest:" + Q)
     check(s.get("ok"), "D Save", json.dumps(s)[:300])
     text = read(project, Q)
     check('comment = "mine"' in text, "D the tab's edit is in the file", text)
@@ -237,15 +237,15 @@ def phase_d(project: str) -> None:
 
 def phase_e(project: str) -> None:
     before = read(project, Q)
-    mcp("quest_apply", path=Q, ops='{ op = "set_node", id = "talk", patch = { comment = "here" } }')
+    mcp("graph.edit", doc=Q, ops='{ op = "set", node = "talk", patch = { comment = "here" } }')
     write(project, Q, before.replace('comment = "mine"', 'comment = "there"'))
-    got = until(lambda: mcp("quest_open", path=Q).get("conflicts"))
+    got = until(lambda: mcp("graph.get", doc=Q).get("conflicts"))
     check(bool(got) and got[0].get("path") == "nodes[id=talk].comment" and got[0].get("mine") == "here"
           and got[0].get("theirs") == "there", "E both sides changed the comment: the tab keeps its own and lists it",
           json.dumps(got)[:300])
     t = mcp("asset.take_theirs", path=Q, index=0)
     check(t.get("ok") and t.get("conflicts_left") == 0, "E asset.take_theirs takes the file's value", json.dumps(t)[:300])
-    mcp("quest_save", path=Q)
+    mcp("doc.save", doc="quest:" + Q)
     check('comment = "there"' in read(project, Q), "E and Save writes it", read(project, Q))
 
 
@@ -253,14 +253,14 @@ def phase_f(project: str) -> None:
     good = read(project, Q)
     broken = good.replace('  title = ', '  title = = ', 1)
     write(project, Q, broken)
-    got = until(lambda: mcp("quest_open", path=Q).get("disk_error"))
+    got = until(lambda: mcp("graph.get", doc=Q).get("disk_error"))
     line = line_of(broken, "title = =")
     check(bool(got) and ("line %d:" % line) in got, "F a file that stops reading says why, with its line and column",
           str(got))
-    check(mcp("quest_open", path=Q).get("nodes") == 3, "F the tab keeps the last good state")
+    check(mcp("graph.get", doc=Q).get("nodes") == 3, "F the tab keeps the last good state")
     write(project, Q, good)
-    back = until(lambda: "disk_error" not in mcp("quest_open", path=Q))
-    check(bool(back), "F it comes back by itself once the file reads", json.dumps(mcp("quest_open", path=Q))[:300])
+    back = until(lambda: "disk_error" not in mcp("graph.get", doc=Q))
+    check(bool(back), "F it comes back by itself once the file reads", json.dumps(mcp("graph.get", doc=Q))[:300])
 
 
 def phase_g(project: str) -> None:
@@ -317,7 +317,7 @@ def run(project: str, only: set[str]) -> None:
             phase_e(project)
         if wanted("F"):
             phase_f(project)
-        mcp("quest_close", path=Q, discard=True)
+        mcp("ui.tab", action="close", doc="quest:" + Q, discard=True)
     finally:
         ed.close()
     if not only or "G" in only:

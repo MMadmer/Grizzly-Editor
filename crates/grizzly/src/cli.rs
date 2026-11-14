@@ -70,10 +70,6 @@ pub struct Cli {
     pub bad_ui_scale: bool,
     /// Options nobody knows: named in the log, never fatal.
     pub unknown: Vec<String>,
-    /// `-compile <level folder> [flags]`: the level compiler on the folder's `build.prj`, then
-    /// exit (`-compile_details`: the detail compiler). Every option after the folder is the
-    /// compiler's.
-    pub compile: Option<(CompileWhat, PathBuf, Vec<String>)>,
     /// The commandlet this run is, when it is one.
     pub verb: Option<Verb>,
     /// `-json`: a commandlet prints every answer as one line of JSON.
@@ -86,13 +82,6 @@ pub struct Cli {
     pub usage: Option<String>,
     /// `-updated <version>`: this run is the new version an update restarted into, from that one.
     pub updated: Option<String>,
-}
-
-/// Which compiler `-compile` runs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CompileWhat {
-    Level,
-    Details,
 }
 
 impl Cli {
@@ -124,15 +113,6 @@ impl Cli {
                 "quiet" => cli.quiet = true,
                 "keep_going" | "keep-going" => cli.keep_going = true,
                 "updated" => cli.updated = it.next(),
-                "compile" | "compile_details" => {
-                    let what = if name == "compile" { CompileWhat::Level } else { CompileWhat::Details };
-                    if let Some(folder) = it.next() {
-                        let flags: Vec<String> = it.by_ref().collect();
-                        cli.compile = Some((what, PathBuf::from(folder), flags));
-                    } else {
-                        cli.unknown.push(arg);
-                    }
-                }
                 "uiscale" => match it.next().and_then(|v| v.trim().parse::<f32>().ok()) {
                     Some(v) if (0.5..=4.0).contains(&v) => cli.ui_scale = Some(v),
                     _ => cli.bad_ui_scale = true,
@@ -216,13 +196,13 @@ impl Cli {
             || matches!(self.verb, Some(Verb::Run { .. } | Verb::Script { .. } | Verb::Help { .. }))
     }
 
-    /// Whether this run has no window: a commandlet, a compiler, a headless editor. Such a run
+    /// Whether this run has no window: a commandlet or a headless editor. Such a run
     /// lives in its launcher's console the way a console program does - it prints there what the
     /// launcher did not redirect, and the console's end is its end. A run with a window keeps
     /// out of every console, `-log_echo` or not (its echo goes to the streams it was given): no
     /// console can end it past the unsaved-work question.
     pub fn windowless(&self) -> bool {
-        self.commandlet() || self.compile.is_some() || self.headless
+        self.commandlet() || self.headless
     }
 
     /// The home: `-home`, else `env_home` (the value of [`HOME_VAR`]) when it is not blank, else the
@@ -261,18 +241,8 @@ mod tests {
     }
 
     #[test]
-    fn the_compiler_takes_every_option_after_its_folder() {
-        let c = cli(&["-headless", "-compile", "D:/levels/x", "-nosun", "-noise"]);
-        let (what, folder, flags) = c.compile.unwrap();
-        assert_eq!(what, CompileWhat::Level);
-        assert_eq!(folder, PathBuf::from("D:/levels/x"));
-        assert_eq!(flags, vec!["-nosun".to_owned(), "-noise".to_owned()]);
-        assert!(c.headless);
-    }
-
-    #[test]
     fn only_a_run_without_a_window_lives_in_a_console() {
-        for args in [&["help"][..], &["run", "ping"], &["-headless"], &["serve"], &["-compile", "D:/x"]] {
+        for args in [&["help"][..], &["run", "ping"], &["-headless"], &["serve"]] {
             assert!(cli(args).windowless(), "{args:?}");
         }
         assert!(cli(&["-headless", "-log_echo"]).windowless());

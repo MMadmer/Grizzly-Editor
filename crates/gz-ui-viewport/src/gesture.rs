@@ -244,7 +244,7 @@ fn scene_diff(before: &SceneState, after: &SceneState) -> serde_json::Map<String
     out.insert("moved".into(), Value::Array(moved.into_iter().take(LIMIT).collect()));
     out.insert("changed".into(), Value::Array(changed.into_iter().take(LIMIT).collect()));
     out.insert("removed".into(), Value::Array(removed.into_iter().take(LIMIT).collect()));
-    out.insert("target".into(), json!(after.tools.target.name()));
+    out.insert("mode".into(), json!(after.tools.mode.word()));
     // the bulk tools' own data
     let ai = |s: &SceneState| {
         s.bulk

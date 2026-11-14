@@ -617,10 +617,10 @@ impl Draw<'_> {
     }
 
     /// The device's art runs on past the game's screen; each side of the device that lies on the
-    /// screen's edge gets that edge drawn, a little longer than the device. True when the
-    /// pointer is on one of the lines.
+    /// screen's edge gets that edge drawn along the device and no further - a line beyond it
+    /// would read as a glitch. True when the pointer is on one of the lines.
     fn screen_edge(&self, dr: FRect, edges: u8) -> bool {
-        let (ext, reach) = (12.0, 4.0);
+        let (ext, reach) = (0.0, 4.0);
         let stroke = Stroke::new(1.0, self.p.border_strong);
         let (a, b) = (self.g.at(dr.x1, dr.y1), self.g.at(dr.x2, dr.y2));
         let m = self.pointer;

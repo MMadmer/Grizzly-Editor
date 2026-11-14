@@ -5,9 +5,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gz_editor::{Cancel, Editor};
+use gz_editor::{Cancel, Editor, JobError, JobId};
 use gz_github::{DevicePoll, Github};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::job::Publisher;
 
@@ -22,16 +22,6 @@ pub enum SignState {
 }
 
 impl SignState {
-    fn text(self) -> &'static str {
-        match self {
-            Self::Idle => "idle",
-            Self::Starting => "starting",
-            Self::Waiting => "waiting",
-            Self::Done => "done",
-            Self::Failed => "failed",
-        }
-    }
-
     fn pending(self) -> bool {
         matches!(self, Self::Starting | Self::Waiting)
     }
@@ -60,20 +50,47 @@ impl Publisher {
         self.sign_set(SignState::Idle, "");
     }
 
-    /// Starts the device sign-in unless one is under way.
-    pub fn sign_in(self: &Arc<Self>, editor: &Arc<Editor>) {
+    /// Starts the device sign-in unless one is under way: a job of the editor (the account is
+    /// not a project's) that waits for the code to be confirmed on GitHub. Answers the job.
+    pub fn sign_in(self: &Arc<Self>, editor: &Arc<Editor>) -> Option<JobId> {
         if self.sign.lock().state.pending() {
-            return;
+            return *self.sign_job.lock();
         }
         self.sign_stop();
-        let cancel = Cancel::new();
-        *self.sign_cancel.lock() = Some(cancel.clone());
         *self.sign.lock() = SignView { state: SignState::Starting, ..SignView::default() };
         let (me, ed) = (self.clone(), editor.clone());
-        editor.exec.spawn(async move { me.sign_worker(&ed, cancel).await });
+        let started = editor.jobs.start_for_editor(
+            "sign_in",
+            Some("sign_in"),
+            "Signing In to GitHub",
+            move |ctx| async move {
+                *me.sign_cancel.lock() = Some(ctx.cancel.clone());
+                ctx.stage("Waiting for GitHub");
+                me.sign_worker(&ed, ctx.cancel.clone(), &ctx).await;
+                let s = me.sign.lock().clone();
+                match s.state {
+                    SignState::Done => Ok(json!({ "signed_in": true })),
+                    _ if ctx.cancel.is_cancelled() => Err(JobError::from(gz_task::Cancelled)),
+                    _ => Err(JobError::new(if s.error.is_empty() {
+                        "The sign-in did not finish.".to_owned()
+                    } else {
+                        s.error
+                    })),
+                }
+            },
+        );
+        let id = started.ok();
+        *self.sign_job.lock() = id;
+        id
     }
 
-    async fn sign_worker(&self, editor: &Editor, cancel: Cancel) {
+    /// The device code while the sign-in waits for it to be confirmed.
+    #[must_use]
+    pub fn sign_view(&self) -> SignView {
+        self.sign.lock().clone()
+    }
+
+    async fn sign_worker(&self, editor: &Editor, cancel: Cancel, ctx: &gz_editor::JobCtx) {
         let gh = Github::of(editor);
         let mut code = match gh.device_begin(&cancel).await {
             Ok(code) => code,
@@ -90,6 +107,10 @@ impl Publisher {
             s.user_code = code.user_code.clone();
             s.uri = code.verification_uri.clone();
         }
+        ctx.stage(format!(
+            "Waiting for the code {} to be confirmed at {}",
+            code.user_code, code.verification_uri
+        ));
         let started = Instant::now();
         loop {
             // a poll that comes early is answered with slow_down and a longer interval
@@ -122,23 +143,5 @@ impl Publisher {
                 }
             }
         }
-    }
-
-    /// `sign_in_status`: the code while it waits. A finished sign-in is reported once.
-    pub fn sign_json(&self) -> (bool, Value) {
-        let s = self.sign.lock().clone();
-        let waiting = s.state == SignState::Waiting;
-        let answer = json!({
-            "state": s.state.text(),
-            "pending": s.state.pending(),
-            "user_code": if waiting { s.user_code.as_str() } else { "" },
-            "verification_uri": if waiting { s.uri.as_str() } else { "" },
-            "error": s.error,
-        });
-        if matches!(s.state, SignState::Done | SignState::Failed) {
-            *self.sign_cancel.lock() = None;
-            self.sign_set(SignState::Idle, "");
-        }
-        (s.state != SignState::Failed, answer)
     }
 }

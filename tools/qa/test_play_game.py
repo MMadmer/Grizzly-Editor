@@ -8,18 +8,20 @@ What it does:
   1. copies the project into the system temp folder and puts a scene of the repository into it (--scene, SCENES:
      mp_test by default - one arena, one light -, l03u_agr_underground - multiple-usage models with their LODs,
      sectors and portals -, or mp_close_combat - terrain with implicit light and multiple-usage models); its spawns
-     give way to an actor and a graph point, an AI map is generated where the scene has none, a scene named like a
-     level of the game gets a level path of its own, and the scene is saved and built (Make All);
-  2. compiles the geometry with the editor's own level compiler, in its process (level_build compile_geometry: a
-     job on every core, into the project's level folder; the command answers when it ends, with its report);
-  3. makes Play's game root in an empty temp folder of its own (level_build play_root root=; Play takes only a
+     give way to an actor and a graph point, a scene named like a level of the game gets a level path of its own,
+     and the scene is saved;
+  2. builds the level (level.build: every step in order as one job on every core - the AI map generated over the
+     ground from the actor and the graph point, the editor's own level compiler in its process - into the project's
+     level folder; the command answers when it ends);
+  3. makes Play's game root in an empty temp folder of its own (level.play action=root root=; Play takes only a
      missing or empty folder or one carrying its play_root.txt, as deep as the linked game takes - its engine says
      so; without root= an editor with a home of its own, as every suite's, plays in <home>\\play\\<id> - never in
      the user's profile) - the linked game's engine says it runs in place (EngineAbilities), so the root holds no
-     program and no link -, writes the root's own settings, then starts Play: the editor builds the collision, the
-     AI map, the game graph (joined onto the linked game's, whose vertex numbers the game's start scripts name) and
-     editor.spawn, stages the level into the root's copy of the loose gamedata, and runs the INSTALLED engine where
-     it is with -fsltx <root>\\fsgame.ltx -start server(editor/single/alife/new);
+     program and no link -, writes the root's own settings, then starts Play (level.play): what is stale is built
+     (nothing, here), the level and editor.spawn (its game graph joined onto the linked game's, whose vertex numbers
+     the game's start scripts name) are staged into the root's mirror of the loose gamedata - hard links where the
+     volume allows -, and the INSTALLED engine runs where it is with -fsltx <root>\\fsgame.ltx
+     -start server(editor/single/alife/new);
   4. reads the game's log until the level is loaded (LOADED, below), with no assert and no crash dump;
   5. stops the game (Play's stop; one left running is ended and fails the run);
   6. closes the editor over MCP, removes the copy and the root.
@@ -72,9 +74,7 @@ MP_SPAWNS = ("tdm_blue_0001,tdm_green_0001,ah_cta_blue_0001,ah_cta_green_0001,ah
              "tdm_weapons_0000,cta_wpn_toz34,cta_medkit,cta_ammo_12x76_zhekan,cta_ammo_12x76_zhekan_0000,"
              "cta_ammo_12x76_zhekan_0001")
 # The quickest light the level compiler makes: one arena does not need the scene's own sun and sky at quality 3
-QUICK_LIGHT = {"Scene\\Build options\\Quality": "Custom", "Scene\\Build options\\Lighting\\Hemisphere quality [0-3]": "0",
-               "Scene\\Build options\\Lighting\\Sun shadow quality [0-3]": "0",
-               "Scene\\Build options\\Lighting\\Pixel per meter": "1"}
+QUICK_LIGHT = {"build.quality": "custom", "build.sky_quality": 0, "build.sun_quality": 0, "build.pixels_per_meter": 1}
 # What Play needs of a scene the suite takes (--scene): its spawns given way to an actor and a graph point, an AI
 # map, a level path the linked game does not have (a level of the game's own name keeps a one-level graph, whose
 # vertices the game's start scripts do not find), build options that keep the compile short, the compiler's flags.
@@ -85,26 +85,22 @@ SCENES = {
                 "level": "mp_test", "options": QUICK_LIGHT, "flags": ""},
     # Agroprom's underground: multiple-usage models with their LODs, 31 sectors and 68 portals, its own AI map.
     # Its 301 spawns (smart terrains, restrictors, the old game's logic) go; the actor and a graph point stand where
-    # the scene's own actor graph point is. The light at diff_compile.py's options for it (4 px/m, one jitter
-    # sample) and -noise: the static visuals without progressive meshes, the MU models keep theirs.
+    # the scene's own actor graph point is. The light at 4 px/m and one sample per pixel, and -noise: the static
+    # visuals without progressive meshes, the MU models keep theirs.
     "l03u_agr_underground": {"remove": "*", "actor": (81.035, -20.411, -181.991),
                              "graph": (81.035, -20.411, -181.991), "aimap": None, "level": "qa_l03u",
-                             "options": {**QUICK_LIGHT, "Scene\\Build options\\Lighting\\Pixel per meter": "4",
-                                         "Scene\\Build options\\Lighting\\Jitter samples": "1 - Low"},
+                             "options": {**QUICK_LIGHT, "build.pixels_per_meter": 4, "build.jitter_samples": "1"},
                              "flags": "-noise"},
-    # terrain with implicit light AND multiple-usage models in one level: the compile comparison holds that pair to
-    # the C++ record (diff_compile.py's mp_close_combat_whole), and here the game loads it (the run on the final
-    # tree: the level in 19 s after Play). Its 124 spawns go; the actor and a graph point stand on a team spawn of
-    # the arena; an AI map is generated over the terrain from there. The light at diff_compile.py's options for its
-    # implicit record: the scene's own 10 px/m and quality, one jitter sample (at nine the compile passes the three
-    # minutes an MCP command waits); a level path of its own.
+    # terrain with implicit light AND multiple-usage models in one level, which the game loads (the level in 19 s
+    # after Play). Its 124 spawns go; the actor and a graph point stand on a team spawn of the arena; an AI map is
+    # generated over the terrain from there. The light at the scene's own 10 px/m and quality, one sample per pixel
+    # (at nine the compile passes the three minutes an MCP command waits); a level path of its own.
     "mp_close_combat": {"remove": "*", "actor": (-423.07376, 1.0, -391.087648), "graph": (-423.07376, 1.0, -391.087648),
                         "aimap": {"objects": "scenes\\mp_close_combat\\mp_close_combat_conteiners_terrain",
                                   "seed": (-423.07376, 1.0, -391.087648)},
                         "level": "qa_mpcc",
-                        "options": {"Scene\\Build options\\Quality": "Custom",
-                                    "Scene\\Build options\\Lighting\\Pixel per meter": "10",
-                                    "Scene\\Build options\\Lighting\\Jitter samples": "1 - Low"}, "flags": ""},
+                        "options": {"build.quality": "custom", "build.pixels_per_meter": 10,
+                                    "build.jitter_samples": "1"}, "flags": ""},
 }
 SCENE = "mp_test"
 # the settings the game's own QA forces (Run-NqQa.ps1, Update-QaUserLtx): a window, no sound, no pause
@@ -150,11 +146,11 @@ def short(a: dict) -> str:
 
 
 def wait_idle(limit: float) -> dict:
-    """Until no compiler or game runs (level_build status), or `limit` seconds."""
+    """Until no build, compiler or game runs (level.play action=status), or `limit` seconds."""
     deadline = time.monotonic() + limit
     st = {}
     while time.monotonic() < deadline:
-        st = mcp("level_build", action="status")
+        st = mcp("level.play", action="status")
         if not st.get("running") and not st.get("building"):
             return st
         time.sleep(0.5)
@@ -310,28 +306,26 @@ def listing(top: str) -> dict[str, tuple[int, int]]:
 def prepare_scene(scene: str) -> bool:
     """The scene opened and made ready for Play (SCENES), saved."""
     cfg = SCENES[scene]
-    opened = mcp("open_scene", scene=scene + ".level", discard=True)
+    opened = mcp("scene.open", path="rawdata/levels/%s.level" % scene, discard=True)
     if not check(opened.get("ok"), "the scene opens", short(opened)):
         return False
     remove = cfg["remove"]
     if remove == "*":
-        listed = mcp("list_objects", **{"class": "spawn", "limit": 100000}).get("objects", [])
-        remove = ",".join(o["name"] for o in listed)
-    steps = [("select_objects", {"names": remove}), ("delete_selected", {}),
-             ("place_spawn", {"section": "actor", "x": cfg["actor"][0], "y": cfg["actor"][1], "z": cfg["actor"][2]}),
-             ("place_spawn", {"section": "graph_point", "x": cfg["graph"][0], "y": cfg["graph"][1],
-                              "z": cfg["graph"][2]})]
+        listed = mcp("scene.objects", classes=["spawn"], limit=100000).get("objects", [])
+        names = [o["name"] for o in listed]
+    else:
+        names = remove.split(",")
+    steps = [("scene.delete", {"objects": names}),
+             ("scene.place", {"kind": "spawn", "section": "actor", "position": list(cfg["actor"])}),
+             ("scene.place", {"kind": "spawn", "section": "graph_point", "position": list(cfg["graph"])})]
     if cfg["aimap"]:
-        seed = list(cfg["aimap"]["seed"])
-        steps += [("select_objects", {"names": cfg["aimap"]["objects"]}), ("aimap_tool", {"show": True}),
-                  ("snap_objects", {"action": "set_from_selection"}),
-                  ("aimap_tool", {"action": "add_nodes", "position": seed}),
-                  ("aimap_tool", {"action": "generate", "timeout": 120})]
+        # the AI map lies on the arena's ground alone: the build generates it there from the spawn points
+        steps.append(("scene.ai_map", {"action": "set", "objects": cfg["aimap"]["objects"].split(",")}))
+    world = dict(cfg["options"])
     if cfg["level"] != scene:
-        steps.append(("property_set", {"target": "world", "key": "Scene\\Build options\\Level path",
-                                       "value": cfg["level"]}))
-    steps += [("property_set", {"target": "world", "key": k, "value": v}) for k, v in cfg["options"].items()]
-    steps.append(("save_scene", {}))
+        world["level.path"] = cfg["level"]
+    steps.append(("scene.set", {"world": True, "set": world}))
+    steps.append(("scene.save", {}))
     for cmd, args in steps:
         a = mcp(cmd, **args)
         if not check(a.get("ok"), f"{cmd} answers ok", short(a)):
@@ -349,17 +343,16 @@ def run(project: str, root: str, scene: str, keep_log: str | None) -> None:
                     dirs_exist_ok=True)
     if not prepare_scene(scene):
         return
-    built = mcp("level_build", action="make_all")
-    if not check(built.get("ok"), "Make All builds the level", short(built)):
-        return
     t = time.monotonic()
-    done = mcp("level_build", action="compile_geometry", params=cfg["flags"], timeout=280)
-    report = done.get("report") or {}
+    flags = {f.lstrip("-"): True for f in cfg["flags"].split()}
+    done = mcp("level.build", timeout=280, **flags)
+    ran = {r.get("step"): r for r in done.get("ran") or []}
+    report = (ran.get("light") or {}).get("note") or {}
     compile_secs = time.monotonic() - t
-    check(done.get("ok") and report.get("parts"), "the editor's level compiler compiled the level in its process "
-          "(%.1f s, %s threads)" % (compile_secs, report.get("threads")),
-          short({k: v for k, v in done.items() if k != "report"}))
-    print("TIME compile %.1f s" % compile_secs, flush=True)
+    check(done.get("ok") and report.get("parts") and "ai_map" in ran and "spawn" in ran,
+          "level.build builds the level, the editor's level compiler in its process (%.1f s, %s threads)"
+          % (compile_secs, report.get("threads")), short({k: v for k, v in done.items() if k != "ran"}))
+    print("TIME build %.1f s" % compile_secs, flush=True)
     wait_idle(30)
     level_dir = os.path.join(project, "gamedata", "levels", level)
     compiled = os.path.isdir(level_dir) and all(os.path.isfile(os.path.join(level_dir, f))
@@ -387,12 +380,12 @@ def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str |
     # Play makes its root only in an empty folder (play_root.txt marks it its own): made first, then the root's own
     # settings written into it, then Play
     t = time.monotonic()
-    made = mcp("level_build", action="play_root", root=root)
+    made = mcp("level.play", action="root", root=root)
     engine = os.path.join(GAME, "xrEngine.exe").replace("\\", "/")
     check(made.get("ok") and made.get("was") == "empty" and made.get("exe_path", "").lower() == engine.lower(),
           "Play makes its root in the empty folder for the installed engine in place (%.1f s, paths up to %s)"
           % (time.monotonic() - t, made.get("path_limit")), short(made))
-    check(made.get("ok") and not no_way_named(made), "play_root's answer names no way to run the game",
+    check(made.get("ok") and not no_way_named(made), "action=root's answer names no way to run the game",
           str(no_way_named(made)))
     top = sorted(os.listdir(root)) if os.path.isdir(root) else []
     check(top == ["appdata", "fsgame.ltx", "gamedata", "modules", "play_root.txt"] and not programs_in(root)
@@ -404,9 +397,8 @@ def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str |
           "the root's fsgame.ltx names the installed archives: " + arch.strip())
     user_ltx(root)
     t0, play_wall = time.monotonic(), time.time()
-    play = mcp("level_build", action="play", root=root, params="-i -always_active -silent_error_mode -force_flushlog")
-    if not check(play.get("ok") and play.get("run", {}).get("started")
-                 and play.get("run", {}).get("exe", "").lower() == engine.lower(),
+    play = mcp("level.play", action="start", root=root, params="-i -always_active -silent_error_mode -force_flushlog")
+    if not check(play.get("ok") and play.get("started") and play.get("exe", "").lower() == engine.lower(),
                  "Play starts the installed engine in place on its root", short(play)):
         return False
     check(not no_way_named(play), "Play's answer names no way to run the game", str(no_way_named(play)))
@@ -424,7 +416,7 @@ def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str |
             time.sleep(5)
             text = engine_log(root)
             break
-        if not mcp("level_build", action="status").get("running"):
+        if not mcp("level.play", action="status").get("running"):
             text = engine_log(root)
             break
         if not text and time.monotonic() - t0 > 60:
@@ -432,8 +424,8 @@ def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str |
             break
         time.sleep(1)
     seconds = time.monotonic() - t0
-    still = mcp("level_build", action="status").get("running")
-    mcp("level_build", action="play_stop")
+    still = mcp("level.play", action="status").get("running")
+    mcp("level.play", action="stop")
     wait_idle(30)
     left = games_in(root)
     for pid in left:
@@ -526,7 +518,7 @@ def main() -> int:
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             try:
-                if mcp("mod_manifest", timeout=30).get("ok"):
+                if mcp("mod.info", timeout=30).get("ok"):
                     break
             except OSError:
                 time.sleep(0.1)
@@ -534,7 +526,7 @@ def main() -> int:
         run(project, root, args.scene, args.keep_log)
     finally:
         try:
-            mcp("level_build", action="play_stop", timeout=30)
+            mcp("level.play", action="stop", timeout=30)
             mcp("app.quit", discard=True, timeout=30)
         except OSError:
             pass

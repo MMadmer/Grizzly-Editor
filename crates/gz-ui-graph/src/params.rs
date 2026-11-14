@@ -16,11 +16,10 @@ use gz_nq::catalog::{self, Catalog, Kind, Param, USE_COND};
 use gz_nq::{PickerType, text};
 use gz_ui::grid::{self, Grid, PropFlags};
 use gz_ui::menu::menu_popup;
-use gz_ui::{Clip, Font, Icon, PropertyGrid, Tone, palette};
+use gz_ui::{Clip, Font, Icon, PickItem, PickList, PropertyGrid, Tone, palette};
 use smol_str::SmolStr;
 
 use crate::derived::DocData;
-use crate::local::{self, PickRow};
 use crate::look;
 
 /// What the next row says of itself.
@@ -94,14 +93,12 @@ impl TextEdit {
     }
 }
 
-/// The picker popup that is up: its search and where it hangs.
+/// The picker popup that is up: where it hangs and its rows, gathered once when it opens.
 #[derive(Clone, Debug, Default)]
 pub struct PickState {
-    pub search: String,
-    pub focus: bool,
     pub anchor: Pos2,
-    /// The rows of the last search, by popup and query: the list is gathered once per change.
-    cache: Option<(Id, String, Vec<PickRow>, String)>,
+    /// The rows of the popup that is up and the note of an empty one.
+    cache: Option<(Id, Vec<PickItem>, String)>,
 }
 
 /// What the editors read and where they keep their transient state.
@@ -358,24 +355,15 @@ impl ParamCx<'_> {
     }
 
     fn open_picker(&mut self, id: Id) {
-        self.pick.search.clear();
-        self.pick.focus = true;
         self.pick.cache = None;
         self.pick.anchor = self.ctx.input(|i| i.pointer.interact_pos()).unwrap_or(Pos2::ZERO);
         egui::Popup::open_id(&self.ctx, id);
     }
 
-    /// The rows a picker of a type offers for the current search, and the note of an empty one
-    /// (`PickerPopup`'s gathering).
-    fn pick_rows(&self, ty: &str) -> (Vec<PickRow>, String) {
-        let q = self.pick.search.as_str();
-        let m = |id: &str| q.is_empty() || gz_ui::search::matches(q, id);
-        let mut rows: Vec<PickRow> = Vec::new();
-        let row = |id: &str, extra: &str| PickRow {
-            label: id.to_owned(),
-            value: id.to_owned(),
-            extra: extra.to_owned(),
-        };
+    /// The rows a picker of a type offers, and the note of an empty one (`PickerPopup`'s
+    /// gathering): every entry, once; the kit's list ranks them as the author types.
+    fn pick_rows(&self, ty: &str) -> (Vec<PickItem>, String) {
+        let mut rows: Vec<PickItem> = Vec::new();
         let doc_scoped = matches!(
             ty,
             "task_id"
@@ -390,13 +378,7 @@ impl ParamCx<'_> {
                 | "global_name"
         );
         if doc_scoped {
-            let mut any = false;
-            let mut push = |id: &str, extra: &str| {
-                any = true;
-                if m(id) {
-                    rows.push(row(id, extra));
-                }
-            };
+            let mut push = |id: &str, extra: &str| rows.push(PickItem::new(id, id).detail(extra));
             match ty {
                 "task_id" => self.graph.tasks.iter().for_each(|t| push(&t.id, "")),
                 "var_name" => self.graph.vars.iter().for_each(|v| push(&v.name, "")),
@@ -415,7 +397,7 @@ impl ParamCx<'_> {
                         .iter()
                         .filter(|g| g.behaviour == want && g.readable && !g.id.is_empty())
                     {
-                        push(&g.id, "");
+                        push(&g.id, &g.path);
                     }
                 }
                 "role" => self.graph.roles.iter().for_each(|r| push(&r.name, "")),
@@ -435,17 +417,13 @@ impl ParamCx<'_> {
             }
             let note = if !rows.is_empty() {
                 String::new()
-            } else if any {
-                "Nothing matches".to_owned()
             } else {
                 match ty {
                     "way_path" => "No way paths in the open scene - draw one with the Way tool",
                     "behaviour_id" => "No behaviour graphs in this project",
                     "role" => "This graph declares no roles",
                     "character_id" => "No characters in this project - Create > Character",
-                    "global_name" => {
-                        "The module declares no global variables - add one under Global in the Variables"
-                    }
+                    "global_name" => "The module declares no global variables - add one under Global",
                     _ if self.behaviour => "Nothing declared in this graph",
                     _ => "Nothing declared in this quest",
                 }
@@ -459,11 +437,11 @@ impl ParamCx<'_> {
         let Some(p) = self.pickers().filter(|p| p.available()) else {
             return (rows, "Link a game to get suggestions".to_owned());
         };
-        for e in p.search(t, q, 200) {
+        for e in p.entries(t) {
             let label = if e.name.is_empty() { e.id.clone() } else { format!("{}  -  {}", e.id, e.name) };
-            rows.push(PickRow { label, value: e.id.clone(), extra: e.extra.clone() });
+            rows.push(PickItem::new(e.id.clone(), label).detail(e.extra.clone()));
         }
-        let note = if rows.is_empty() { "Nothing matches".to_owned() } else { String::new() };
+        let note = if rows.is_empty() { "The linked game has none".to_owned() } else { String::new() };
         (rows, note)
     }
 
@@ -472,23 +450,22 @@ impl ParamCx<'_> {
         if !egui::Popup::is_id_open(&self.ctx, id) {
             return None;
         }
-        let stale =
-            self.pick.cache.as_ref().is_none_or(|(cid, q, _, _)| *cid != id || *q != self.pick.search);
-        if stale {
+        if self.pick.cache.as_ref().is_none_or(|(cid, _, _)| *cid != id) {
             let (rows, note) = self.pick_rows(ty);
-            self.pick.cache = Some((id, self.pick.search.clone(), rows, note));
+            PickList::reset(&self.ctx, ("gz-ui-graph.param_pick", id));
+            self.pick.cache = Some((id, rows, note));
         }
-        let (rows, note) = self.pick.cache.clone().map(|(_, _, r, n)| (r, n)).unwrap_or_default();
+        let (rows, note) = self.pick.cache.clone().map(|(_, r, n)| (r, n)).unwrap_or_default();
         let anchor = Rect::from_min_size(self.pick.anchor, Vec2::ZERO);
-        let (search, focus) = (&mut self.pick.search, &mut self.pick.focus);
-        let picked = menu_popup(&self.ctx, id, anchor, ui.layer_id(), |ui| {
-            local::local_pick_list(ui, &rows, &note, search, focus)
-        })
-        .flatten();
-        if picked.is_some() {
-            egui::Popup::close_id(&self.ctx, id);
+        if rows.is_empty() {
+            menu_popup(&self.ctx, id, anchor, ui.layer_id(), |ui| {
+                gz_ui::text::label(ui, &note, Font::Body, palette(ui.ctx()).text_disabled, Clip::End);
+            });
+            return None;
         }
-        picked
+        let list = PickList::new(("gz-ui-graph.param_pick", id), &rows).width(gz_ui::units::em(22.0));
+        gz_ui::pick::pick_popup(&self.ctx, id, anchor, ui.layer_id(), list)
+            .and_then(|i| rows.get(i).map(|r| r.id.clone()))
     }
 }
 
@@ -1368,41 +1345,9 @@ pub fn who(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Val
     let mut ch = false;
     grid(ui, cx.role, salt, |g| {
         g.row(&row.label, &row.help, flags, row.depth, |ui| {
-            let preview = if picked_roles.is_empty() {
-                if roles.is_empty() { "(no roles declared)".to_owned() } else { "(nobody)".to_owned() }
-            } else {
-                picked_roles.join(", ")
-            };
-            let w = ui.available_width();
-            egui::ComboBox::from_id_salt("who").selected_text(preview).width(w).show_ui(ui, |ui| {
-                for r in roles {
-                    let on = picked_roles.contains(&r.name);
-                    let cap = if r.many { format!("{}  (group)", r.name) } else { r.name.clone() };
-                    if gz_ui::menu_item(
-                        ui,
-                        &cap,
-                        gz_ui::MenuItem { selected: on, ..gz_ui::MenuItem::default() },
-                    ) {
-                        if on {
-                            picked_roles.retain(|p| *p != r.name);
-                        } else {
-                            picked_roles.push(r.name.clone());
-                        }
-                        ch = true;
-                    }
-                }
-                // a stray name can still be unticked
-                for s in &stray {
-                    if gz_ui::menu_item(
-                        ui,
-                        &format!("{s}  (not a role of this graph)"),
-                        gz_ui::MenuItem { selected: true, ..gz_ui::MenuItem::default() },
-                    ) {
-                        picked_roles.retain(|p| p != s);
-                        ch = true;
-                    }
-                }
-                if roles.is_empty() {
+            // a few roles: each one a box of its own on the row, ticked where it is picked
+            ui.horizontal_wrapped(|ui| {
+                if roles.is_empty() && stray.is_empty() {
                     gz_ui::text::label(
                         ui,
                         "Declare a role in the Graph panel first",
@@ -1410,6 +1355,27 @@ pub fn who(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Val
                         palette(ui.ctx()).text_disabled,
                         Clip::End,
                     );
+                }
+                for r in roles {
+                    let mut on = picked_roles.contains(&r.name);
+                    let cap = if r.many { format!("{} (group)", r.name) } else { r.name.clone() };
+                    if gz_ui::Check::new(&mut on, &cap).show(ui).changed() {
+                        if on {
+                            picked_roles.push(r.name.clone());
+                        } else {
+                            picked_roles.retain(|p| *p != r.name);
+                        }
+                        ch = true;
+                    }
+                }
+                // a stray name can still be unticked
+                for st in &stray {
+                    let mut on = true;
+                    let cap = format!("{st} (not a role)");
+                    if gz_ui::Check::new(&mut on, &cap).show(ui).changed() && !on {
+                        picked_roles.retain(|p| p != st);
+                        ch = true;
+                    }
                 }
             });
         });
@@ -1955,7 +1921,7 @@ fn upgrades(
             for id in &item_caps.upgrades {
                 let mut on = chosen.iter().any(|c| c == id);
                 ui.horizontal(|ui| {
-                    if local::local_check(ui, id, &mut on, "") {
+                    if gz_ui::Check::new(&mut on, id).show(ui).changed() {
                         toggled = Some((id.clone(), on));
                     }
                 });
@@ -2766,11 +2732,15 @@ pub fn cond_list(
         let behaviour = cx.behaviour;
         grid(ui, cx.role, (salt, i, "cond"), |g| {
             g.row(if i == 0 { "If" } else { "And" }, &help, PropFlags::NONE, row_depth, |ui| {
-                if local::local_check(ui, "not", &mut negate, "Holds when the condition does not") {
+                if gz_ui::Switch::new(&mut negate, "not")
+                    .tip("Holds when the condition does not")
+                    .show(ui)
+                    .changed()
+                {
                     ch = true;
                 }
                 ui.add_space(4.0);
-                if local::local_kind_combo(ui, "kind", cat, USE_COND, behaviour, &mut kind) {
+                if look::kind_combo(ui, "kind", cat, USE_COND, behaviour, &mut kind) {
                     kind_ch = true;
                 }
             });

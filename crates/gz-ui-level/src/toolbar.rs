@@ -1,10 +1,8 @@
-//! The Level toolbar (`UITopBarForm::DrawLevel`), lowest priority first: Save | Undo, Redo;
-//! Build Collision, Build AI Map, Build Game Graph, Build All; Play v, Play in Game, Play
-//! Clean, Stop; Reload Configs, Game Folder.
+//! The Level toolbar, lowest priority first: Save | Undo, Redo; Build Level; Play v, Play Clean,
+//! Stop; Reload Configs, Game Folder.
 //!
-//! Each button is a command of the registry; a button whose command is not registered is not
-//! added. The level builds and the runs are `gz-levelbuild`'s ([`LEVEL_ACTIONS`] names the
-//! commands it registers).
+//! Each button is a command of the registry with its arguments; a button whose command is not
+//! registered is not added. The level builds and the runs are `gz-levelbuild`'s.
 
 use std::sync::Arc;
 
@@ -15,7 +13,7 @@ use gz_ui::{Icon, Kind, MenuItem, Toolbar, menu_item};
 /// A button of the level builds and runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LevelAction {
-    /// The toolbar item's id (the C++ one).
+    /// The toolbar item's id.
     pub id: &'static str,
     pub icon: Icon,
     /// Shown beside the icon; empty for an icon-only button.
@@ -25,10 +23,13 @@ pub struct LevelAction {
     pub tip: &'static str,
     /// The registry command it runs.
     pub command: &'static str,
+    /// The command's arguments.
+    pub args: &'static [(&'static str, &'static str)],
     /// The toolbar group, lowest priority first.
     pub group: i32,
 }
 
+#[allow(clippy::too_many_arguments)]
 const fn act(
     id: &'static str,
     icon: Icon,
@@ -36,47 +37,22 @@ const fn act(
     name: &'static str,
     tip: &'static str,
     command: &'static str,
+    args: &'static [(&'static str, &'static str)],
     group: i32,
 ) -> LevelAction {
-    LevelAction { id, icon, label, name, tip, command, group }
+    LevelAction { id, icon, label, name, tip, command, args, group }
 }
 
 /// The level builds and the runs, as `gz-levelbuild` registers them.
-pub const LEVEL_ACTIONS: [LevelAction; 9] = [
+pub const LEVEL_ACTIONS: [LevelAction; 5] = [
     act(
-        "build_cform",
-        Icon::BuildCollision,
-        "",
-        "Build Collision",
-        "Build the collision geometry (CForm) of this scene",
-        "build_cform",
-        1,
-    ),
-    act(
-        "build_aimap",
-        Icon::BuildAIMap,
-        "",
-        "Build AI Map",
-        "Build the AI map of this scene",
-        "build_aimap",
-        1,
-    ),
-    act(
-        "build_ggraph",
-        Icon::BuildGameGraph,
-        "",
-        "Build Game Graph",
-        "Build the game graph of this scene",
-        "build_game_graph",
-        1,
-    ),
-    act(
-        "build_all",
+        "build_level",
         Icon::BuildAll,
-        "",
-        "Build All",
-        "Make the level build and compile it: geometry and light",
-        "build_all",
+        "Build Level",
+        "Build Level",
+        "Build what the scene's changes left stale, step by step",
+        "level.build",
+        &[],
         1,
     ),
     act(
@@ -84,17 +60,9 @@ pub const LEVEL_ACTIONS: [LevelAction; 9] = [
         Icon::Play,
         "Play",
         "Play",
-        "Play the scene: build what it needs and launch the game on it",
-        "play",
-        2,
-    ),
-    act(
-        "play_game",
-        Icon::PlayGame,
-        "",
-        "Play in Game",
-        "Build the scene for play and launch the game on it",
-        "play_game",
+        "Build what is stale and start the game on the level",
+        "level.play",
+        &[("action", "start")],
         2,
     ),
     act(
@@ -102,18 +70,29 @@ pub const LEVEL_ACTIONS: [LevelAction; 9] = [
         Icon::PlayClean,
         "",
         "Play Clean",
-        "Launch the game as it is, without building anything",
-        "play_clean",
+        "Start the game as it is, without the scene and without building anything",
+        "level.play",
+        &[("action", "start"), ("clean", "true")],
         2,
     ),
-    act("stop", Icon::Stop, "", "Stop", "Stop the compiler or the game that is running", "play_stop", 2),
+    act(
+        "stop",
+        Icon::Stop,
+        "",
+        "Stop",
+        "Stop the build, the compiler or the game that is running",
+        "level.play",
+        &[("action", "stop")],
+        2,
+    ),
     act(
         "reload_configs",
         Icon::ReloadConfigs,
         "",
         "Reload Configs",
-        "Re-read the game configs from disk (system.ltx, game.ltx)",
-        "reload_configs",
+        "Read the linked game's configs again (system.ltx, game.ltx)",
+        "level.play",
+        &[("action", "reload_configs")],
         3,
     ),
 ];
@@ -135,16 +114,19 @@ pub fn action(id: &str) -> Option<&'static LevelAction> {
     LEVEL_ACTIONS.iter().find(|a| a.id == id)
 }
 
-/// Runs a level action's command when it is registered.
-pub fn run(editor: &Arc<Editor>, a: &LevelAction, args: Args) -> bool {
+/// Runs a level action's command when it is registered, its own arguments under `args`.
+pub fn run(editor: &Arc<Editor>, a: &LevelAction, mut args: Args) -> bool {
     if !editor.registry().has(a.command) {
         return false;
+    }
+    for (k, v) in a.args {
+        args.entry((*k).to_owned()).or_insert_with(|| Value::String((*v).to_owned()));
     }
     editor.post(a.command, args);
     true
 }
 
-/// The toolbar's state the C++ kept on the form.
+/// What the Play button's menu sets.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ToolbarState {
     pub verify_restrictors: bool,
@@ -160,29 +142,25 @@ pub fn draw(tb: &mut Toolbar<'_, '_>, editor: &Arc<Editor>, st: &mut ToolbarStat
         history.as_ref().map_or((false, false), |h| (!h.undo.is_empty(), !h.redo.is_empty()));
 
     tb.group(0);
-    if has("save_scene")
+    if has("scene.save")
         && tb.action("save", Icon::Save, "", "Save the scene (Ctrl+S)", true, false, Kind::Ghost)
     {
         *save = true;
     }
     tb.separator();
-    if has("undo")
-        && tb.action("undo", Icon::Undo, "", "Undo the last change (Ctrl+Z)", can_undo, false, Kind::Ghost)
-    {
-        editor.post("undo", Args::new());
+    if tb.action("undo", Icon::Undo, "", "Undo the last change (Ctrl+Z)", can_undo, false, Kind::Ghost) {
+        editor.post("doc.undo", Args::from_iter([("doc".to_owned(), gz_editor::Value::from("level"))]));
     }
-    if has("redo")
-        && tb.action(
-            "redo",
-            Icon::Redo,
-            "",
-            "Redo the change that was undone (Ctrl+Y)",
-            can_redo,
-            false,
-            Kind::Ghost,
-        )
-    {
-        editor.post("redo", Args::new());
+    if tb.action(
+        "redo",
+        Icon::Redo,
+        "",
+        "Redo the change that was undone (Ctrl+Y)",
+        can_redo,
+        false,
+        Kind::Ghost,
+    ) {
+        editor.post("doc.redo", Args::from_iter([("doc".to_owned(), gz_editor::Value::from("level"))]));
     }
 
     let mut group = 0;
@@ -263,6 +241,9 @@ mod tests {
     fn the_actions_are_in_toolbar_order() {
         let groups: Vec<i32> = LEVEL_ACTIONS.iter().map(|a| a.group).collect();
         assert!(groups.windows(2).all(|w| w[0] <= w[1]));
-        assert_eq!(action("stop").map(|a| a.command), Some("play_stop"));
+        assert_eq!(
+            action("stop").map(|a| (a.command, a.args)),
+            Some(("level.play", &[("action", "stop")][..]))
+        );
     }
 }

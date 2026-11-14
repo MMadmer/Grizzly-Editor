@@ -130,30 +130,30 @@ impl Opaque {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct Known {
-    header: Header,
-    info: &'static ClassInfo,
-    object: Object,
+pub(crate) struct Known {
+    pub(crate) header: Header,
+    pub(crate) info: &'static ClassInfo,
+    pub(crate) object: Object,
     /// The packets it was read from, until it is changed.
-    raw_spawn: Option<Arc<[u8]>>,
-    raw_update: Option<Arc<[u8]>>,
+    pub(crate) raw_spawn: Option<Arc<[u8]>>,
+    pub(crate) raw_update: Option<Arc<[u8]>>,
     /// What the state block holds after the fields its class reads: bytes an older script's
     /// `STATE_Write` added (Call of Pripyat's zones write a time marker the spawn compiler left
     /// in Dead Air's `all.spawn`). The engine skips them by the size word; they are written back.
-    tail: Arc<[u8]>,
+    pub(crate) tail: Arc<[u8]>,
     /// The same for a scene's LTX section: the numbered values after the ones its class reads
     /// (the C++ editor runs the repository's Call of Pripyat scripts, whose zones write a
     /// `last_spawn_time` byte). Written back after the state.
-    ini_tail: Arc<[SmolStr]>,
+    pub(crate) ini_tail: Arc<[SmolStr]>,
     /// The numbered values a scene section held, until it is changed: written back as they
     /// were, as `raw_spawn` is for a packet (a value the C++ wrote as a number where this
     /// layout reads a string keeps its spelling).
-    raw_ini: Option<Arc<[SmolStr]>>,
+    pub(crate) raw_ini: Option<Arc<[SmolStr]>>,
     /// Made here (`create`) or read from a scene section: the editor's scripts read nothing of
     /// their part from a scene (`STATE_Read` returns early in the editor), so a packet written anew
     /// carries the part they write ([`write_editor_script`]). Read from a packet (`all.spawn`), the
     /// part is written back as read.
-    made: bool,
+    pub(crate) made: bool,
 }
 
 impl Known {
@@ -166,7 +166,7 @@ impl Known {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum Inner {
+pub(crate) enum Inner {
     Known(Box<Known>),
     Opaque(Box<Opaque>),
 }
@@ -174,7 +174,7 @@ enum Inner {
 /// A server entity.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entity {
-    inner: Inner,
+    pub(crate) inner: Inner,
 }
 
 /// Where a level changer leads.
@@ -345,7 +345,10 @@ impl Entity {
         let info = class_of_section(section, settings)
             .ok_or_else(|| EntityError::UnknownClass(SmolStr::new(section)))?;
         // a group template is named after its monster section, as the C++ names it
-        let (header, object) = construct(info, section, settings)?;
+        let (mut header, object) = construct(info, section, settings)?;
+        // the layout it is written in, as the header of its packet read back says
+        header.version = SPAWN_VERSION;
+        header.script_version = header.write_script_version;
         Ok(Self {
             inner: Inner::Known(Box::new(Known {
                 header,

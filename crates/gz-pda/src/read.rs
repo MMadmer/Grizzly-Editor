@@ -151,7 +151,7 @@ pub fn template(id: &str, title: &str) -> String {
 }
 
 const TEMPLATE: &str = r##"-- The PDA interface of this module: what the PDA shows instead of its stock tabs.
--- Pick it in Mod > PDA Interface (or MCP pda_use). Format: docs/pda/PDA_FORMAT.md.
+-- Pick it in Mod > PDA Interface (or mod.set set={"pda":{"layout":...}}). Format: docs/pda/PDA_FORMAT.md.
 return {
   pda = 1,
   id = "@ID@",

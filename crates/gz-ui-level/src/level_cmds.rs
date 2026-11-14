@@ -1,33 +1,32 @@
-//! The scene's rows of the C++ command table and the Level tab's commands that open a file
-//! dialog or ask first (`UI_LevelMain.cpp` `CLevelMain::RegisterCommands`): New Scene, Open
-//! Scene..., Recent Scene, Save As..., the tools by their keys, Cut / Copy / Paste, the selection
-//! files, the level parts, the reports (Validate, Summary Info, the compiler's error list) and
-//! the level builds behind `ConfirmLevelBuild`.
+//! The scene's rows of the command table and the Level tab's commands that open a file
+//! dialog or ask first: New Scene, Open
+//! Scene..., Recent Scene, Save As..., the tools by their keys, Cut / Copy / Paste, the groups of
+//! the project and the reports (Validate, Summary Info, the build's problems).
 //!
-//! Every action ends in an editor command (`scene_edit`, `selection_file`, `level_parts`,
-//! `scene_summary`, `compiler_errors`, `scene_validate`, `make_*` ...): the menus, the keys, the
-//! palette, `exec_command` and MCP run the same thing. File dialogs open on a thread of their own.
+//! Every action ends in an editor command (`scene.copy`, `scene.group`, `scene.info`,
+//! `level.problems`, `level.validate`, `level.export` ...): the menus, the keys,
+//! the palette, `exec_command` and MCP run the same thing. File dialogs open on a thread of their
+//! own.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::Context;
 use gz_app::{
-    CommandVar, CppAction, CppCommand, CppSub, DialogDesc, DocCx, EditorSettings, MenuContent, MenuEntry,
-    ShellBuilder,
+    CommandVar, CppAction, CppCommand, CppSub, DialogDesc, DocCx, MenuContent, MenuEntry, ShellBuilder,
 };
 use gz_editor::{Args, Editor, SmolStr, Value, json};
 use gz_scene::{ObjClass, SceneCmd, SceneService};
 use gz_ui::dialog::ResultSpec;
 use gz_ui::file_dialog::FileRequest;
 use gz_ui::theme::Tone;
-use gz_ui::{Answer, ConfirmSpec, Dialog, DialogSize, Icon, MenuItem, menu_item};
+use gz_ui::{Answer, Dialog, DialogSize, Icon, MenuItem, menu_item};
 use parking_lot::Mutex;
 
 use crate::tools::asker;
 
 /// The keys the rows of this file default to (the repository's `level.ini [shortcuts]`).
-pub const DEFAULT_KEYS: [(&str, &str); 24] = [
+pub const DEFAULT_KEYS: [(&str, &str); 22] = [
     ("COMMAND_CHANGE_TARGET.\"Object\"", "1"),
     ("COMMAND_CHANGE_TARGET.\"Light\"", "2"),
     ("COMMAND_CHANGE_TARGET.\"Sound Source\"", "3"),
@@ -50,11 +49,9 @@ pub const DEFAULT_KEYS: [(&str, &str); 24] = [
     ("COMMAND_LOAD", "Ctrl+L"),
     ("COMMAND_LOAD_FIRSTRECENT", "Ctrl+R"),
     ("COMMAND_SAVE.\"Save As\"", "Ctrl+Shift+S"),
-    ("COMMAND_BUILD", "F9"),
-    ("COMMAND_MAKE_GAME", "F5"),
 ];
 
-/// `CLevelMain::RegisterCommands`'s Change Target: the face, the class, the way mode.
+/// Change Target: the face, the class, the way mode.
 const TARGETS: [(&str, ObjClass, u32); 18] = [
     ("Object", ObjClass::SceneObject, 0),
     ("Light", ObjClass::Light, 0),
@@ -75,89 +72,6 @@ const TARGETS: [(&str, ObjClass, u32); 18] = [
     ("Static Wallmark", ObjClass::Wallmark, 0),
     ("Fog Volume", ObjClass::FogVolume, 0),
 ];
-
-/// A level build of the Build menu and the C++ command table.
-struct Make {
-    command: &'static str,
-    id: u32,
-    name: &'static str,
-    title: &'static str,
-    headline: &'static str,
-    consequence: &'static str,
-    /// The command table's description.
-    desc: &'static str,
-    destructive: bool,
-}
-
-/// The level builds: their command, C++ id, row and question.
-const MAKES: [Make; 6] = [
-    Make {
-        command: "make_all",
-        id: 87,
-        name: "COMMAND_BUILD",
-        title: "Make All",
-        headline: "Empty the level folder and build every level file of this scene into it?",
-        consequence: "Everything in the folder is deleted for good first, then built anew.",
-        desc: "Compile\\Build",
-        destructive: true,
-    },
-    Make {
-        command: "make_game",
-        id: 88,
-        name: "COMMAND_MAKE_GAME",
-        title: "Make Game",
-        headline: "Write the game files of this scene into its level folder?",
-        consequence: "Files of the same name there are replaced.",
-        desc: "Compile\\Make Game",
-        destructive: false,
-    },
-    Make {
-        command: "make_details",
-        id: 89,
-        name: "COMMAND_MAKE_DETAILS",
-        title: "Make Details",
-        headline: "Export the detail objects of this scene into its level folder?",
-        consequence: "The detail objects there are replaced.",
-        desc: "Compile\\Make Details",
-        destructive: false,
-    },
-    Make {
-        command: "make_hom",
-        id: 90,
-        name: "COMMAND_MAKE_HOM",
-        title: "Make HOM",
-        headline: "Build the occlusion model (HOM) of this scene into its level folder?",
-        consequence: "The occlusion model there is replaced.",
-        desc: "Compile\\Make HOM",
-        destructive: false,
-    },
-    Make {
-        command: "make_som",
-        id: 91,
-        name: "COMMAND_MAKE_SOM",
-        title: "Make SOM",
-        headline: "Build the sound occlusion model (SOM) of this scene into its level folder?",
-        consequence: "The sound occlusion model there is replaced.",
-        desc: "Compile\\Make SOM",
-        destructive: false,
-    },
-    Make {
-        command: "make_aimap",
-        id: 92,
-        name: "COMMAND_MAKE_AIMAP",
-        title: "Make AI Map",
-        headline: "Export the AI map of this scene into its level folder?",
-        consequence: "The AI map there is replaced.",
-        desc: "Compile\\Make AI Map",
-        destructive: false,
-    },
-];
-
-/// The table row of a level build's command (`make_all` -> `COMMAND_BUILD`).
-#[must_use]
-pub fn make_id(command: &str) -> Option<&'static str> {
-    MAKES.iter().find(|m| m.command == command).map(|m| m.name)
-}
 
 fn scene(editor: &Editor) -> Option<Arc<SceneService>> {
     editor.project_opt().and_then(|s| s.services.get::<SceneService>()).filter(|s| s.store.snapshot().valid)
@@ -241,18 +155,18 @@ fn settle_then(editor: &Arc<Editor>, ctx: &Context, go: impl FnOnce(&Arc<Editor>
 
 /// File > New Scene (`CommandClear`).
 pub fn new_scene(editor: &Arc<Editor>, ctx: &Context) {
-    settle_then(editor, ctx, |ed, a| run(ed, "scene_new", a));
+    settle_then(editor, ctx, |ed, a| run(ed, "scene.new", a));
 }
 
 /// Opens a scene file, asking about unsaved work first.
 pub fn open_scene_file(editor: &Arc<Editor>, ctx: &Context, file: String) {
     settle_then(editor, ctx, move |ed, mut a| {
-        a.insert("scene".into(), Value::String(file));
+        a.insert("path".into(), Value::String(file));
         // a scene saved on the way is clean: what is left is discarded on purpose
         let ed = ed.clone();
         ed.clone().exec.spawn(async move {
             if a.get("save").and_then(Value::as_bool) == Some(true) {
-                let r = ed.call("save_scene", Args::new(), ed.ui_origin()).await;
+                let r = ed.call("scene.save", Args::new(), ed.ui_origin()).await;
                 if r.get("ok").and_then(Value::as_bool) != Some(true) {
                     ed.notices.error(
                         r.get("error")
@@ -265,7 +179,7 @@ pub fn open_scene_file(editor: &Arc<Editor>, ctx: &Context, file: String) {
             }
             a.remove("save");
             a.insert("discard".into(), Value::Bool(true));
-            let r = ed.call("open_scene", a, ed.ui_origin()).await;
+            let r = ed.call("scene.open", a, ed.ui_origin()).await;
             if r.get("ok").and_then(Value::as_bool) != Some(true) {
                 ed.notices.error(
                     r.get("error").and_then(Value::as_str).unwrap_or("The scene did not open.").to_owned(),
@@ -281,14 +195,15 @@ pub const NAME_THE_SCENE: &str =
 /// What `COMMAND_SAVE`'s Save As, or a Save of a scene without a file, answers such a caller.
 pub const NAME_THE_SAVE: &str = "p1s names the file to save the scene as (COMMAND_SAVE p1s=<file>): no Save Scene As dialog opens for this caller";
 
-/// File > Open Scene... (`CommandLoad` without a scene): the system's dialog in `$maps$`.
+/// File > Open Scene...: the system's dialog in the project (a `.scene`, or an X-Ray SDK
+/// `.level` to import).
 pub fn open_scene_dialog(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
     let Some(svc) = editor.project_opt().and_then(|s| s.services.get::<SceneService>()) else {
         return Ok(());
     };
-    let dir = svc.maps_dir();
+    let dir = svc.root.clone();
     let cx = ctx.clone();
-    file_dialog(editor, ctx, "Open Scene", ("Level", &["level"]), dir, None, move |ed, f| {
+    file_dialog(editor, ctx, "Open Scene", ("Scene", &["scene", "level"]), dir, None, move |ed, f| {
         open_scene_file(ed, &cx, f.display().to_string());
     })
 }
@@ -302,54 +217,74 @@ pub fn save_as(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
         .file
         .as_ref()
         .and_then(|f| f.file_name())
-        .map_or_else(|| "level.level".to_owned(), |n| n.to_string_lossy().into_owned());
-    file_dialog(editor, ctx, "Save Scene As", ("Level", &["level"]), svc.maps_dir(), Some(name), |ed, f| {
-        run(ed, "save_scene", args(&[("file", path_text(&f))]));
+        .map_or_else(|| "level.scene".to_owned(), |n| n.to_string_lossy().into_owned());
+    file_dialog(editor, ctx, "Save Scene As", ("Scene", &["scene"]), svc.root.clone(), Some(name), |ed, f| {
+        run(ed, "scene.save", args(&[("path", path_text(&f))]));
     })
 }
 
-/// File > Recent Scene's list (`scene_recent_list`).
+/// File > Recent Scene's list: the project's scenes opened last on this machine, project-relative.
 #[must_use]
 pub fn recent(editor: &Editor) -> Vec<String> {
-    EditorSettings::of(editor).recent_scenes()
+    gz_project::Project::of(editor).map(|(_, p)| p.state().recent_scenes()).unwrap_or_default()
 }
 
 // ---- Edit and Scene -----------------------------------------------------------------------------
 
-/// Edit > Cut / Copy / Paste / Duplicate: `scene_edit` on the current tool's class.
+/// Edit > Cut / Copy / Paste / Duplicate of the selection, whatever kinds it holds; Cut is a
+/// copy, then the delete.
 pub fn edit(editor: &Arc<Editor>, action: &'static str) {
-    run(editor, "scene_edit", args(&[("action", Value::String(action.into()))]));
+    match action {
+        "copy" => run(editor, "scene.copy", Args::new()),
+        "paste" => run(editor, "scene.paste", Args::new()),
+        "duplicate" => run(editor, "scene.duplicate", Args::new()),
+        _ => {
+            let ed = editor.clone();
+            editor.exec.spawn(async move {
+                let r = ed.call("scene.copy", Args::new(), ed.ui_origin()).await;
+                let r = if r.get("ok").and_then(Value::as_bool) == Some(true) {
+                    ed.call("scene.delete", Args::new(), ed.ui_origin()).await
+                } else {
+                    r
+                };
+                if r.get("ok").and_then(Value::as_bool) != Some(true) {
+                    let text = r.get("error").and_then(Value::as_str).unwrap_or("The cut failed.");
+                    ed.notices.error(text.to_owned());
+                }
+            });
+        }
+    }
 }
 
-/// Scene > Open Selection... (`CommandLoadSelection`).
-pub fn open_selection(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
+/// Scene > Place Group...: a `.group` of the project placed in front of the camera.
+pub fn place_group(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
     let Some(svc) = scene(editor) else { return Ok(()) };
-    file_dialog(editor, ctx, "Open Selection", ("Level", &["level"]), svc.maps_dir(), None, |ed, f| {
-        run(ed, "selection_file", args(&[("action", Value::String("open".into())), ("file", path_text(&f))]));
+    file_dialog(editor, ctx, "Place Group", ("Group", &["group"]), svc.root.clone(), None, |ed, f| {
+        run(ed, "scene.place", args(&[("kind", Value::String("group".into())), ("ref", path_text(&f))]));
     })
 }
 
-/// Scene > Save Selection As... (`CommandSaveSelection`).
-pub fn save_selection(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
+/// Scene > Save Selection as Group...: the selection as a `.group` of the project.
+pub fn save_group(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
     let Some(svc) = scene(editor) else { return Ok(()) };
     file_dialog(
         editor,
         ctx,
-        "Save Selection As",
-        ("Level", &["level"]),
-        svc.maps_dir(),
-        Some("selection.level".into()),
+        "Save Selection as Group",
+        ("Group", &["group"]),
+        svc.root.join("groups"),
+        Some("selection.group".into()),
         |ed, f| {
             run(
                 ed,
-                "selection_file",
-                args(&[("action", Value::String("save".into())), ("file", path_text(&f))]),
+                "scene.group",
+                args(&[("action", Value::String("save".into())), ("path", path_text(&f))]),
             );
         },
     )
 }
 
-/// Scene > Export Scene / Selection as OBJ... (`EScene::ExportObj`: the name asked in `$import$`).
+/// Scene > Export Scene / Selection as OBJ... (the name asked in `$import$`).
 pub fn export_obj(editor: &Arc<Editor>, ctx: &Context, selected: bool) -> Result<(), String> {
     let Some(root) = editor.project_root() else { return Ok(()) };
     file_dialog(
@@ -362,78 +297,48 @@ pub fn export_obj(editor: &Arc<Editor>, ctx: &Context, selected: bool) -> Result
         move |ed, f| {
             run(
                 ed,
-                "scene_export_obj",
-                args(&[("file", path_text(&f)), ("selected", Value::Bool(selected))]),
+                "level.export",
+                args(&[
+                    ("kind", Value::String("obj".into())),
+                    ("path", path_text(&f)),
+                    ("all", Value::Bool(!selected)),
+                ]),
             );
         },
     )
 }
 
-/// `CommandMultiRenameObjects`: asks, naming the objects.
-pub fn rename_objects(editor: &Arc<Editor>, ctx: &Context) {
-    rename_objects_as(editor, ctx, asker(editor));
-}
-
-fn rename_objects_as(editor: &Arc<Editor>, ctx: &Context, who: gz_ui::Asker) {
-    let Some(svc) = scene(editor) else { return };
-    let snap = svc.store.snapshot();
-    let class = snap.tools.target;
-    let sel: Vec<_> = snap.of_class(class).filter(|o| snap.is_selected(o.id)).collect();
-    if sel.is_empty() {
-        editor.log.info("Nothing is selected: no object is renamed.");
-        return;
-    }
-    let spec = ConfirmSpec {
-        id: "rename_objects".into(),
-        title: "Rename Objects".into(),
-        headline: format!("Rename the {} selected object(s) after their references?", sel.len()),
-        items: sel.iter().take(10).map(|o| o.name.to_string()).collect(),
-        total: sel.len(),
-        consequence: "Each one takes the next free name made from its reference. Undo puts the names back."
-            .into(),
-        action: "Rename".into(),
-        destructive: false,
-    };
-    let ed = editor.clone();
-    let line = gz_ui::dialog::confirm(ctx, who, spec, move |a| {
-        if a == Answer::Yes {
-            run(&ed, "rename_objects", Args::new());
-        }
-    });
-    if let Some(l) = line {
-        editor.log.plain(l);
-    }
-}
-
-/// Scene > Validate (`CommandValidateScene`): the findings in the kit's Result dialog.
+/// Scene > Validate: the scene checked as a build checks it, the findings in the kit's Result
+/// dialog.
 pub fn validate(editor: &Arc<Editor>, ctx: &Context) {
     let ed = editor.clone();
     let ctx = ctx.clone();
     editor.exec.spawn(async move {
-        let r = ed.call("scene_validate", Args::new(), ed.ui_origin()).await;
+        let r = ed.call("level.validate", Args::new(), ed.ui_origin()).await;
         let ok = r.get("ok").and_then(Value::as_bool) == Some(true);
-        let passed = ok && r.get("ok").is_some() && r.get("lines").is_some() && {
-            // the reply's own `ok` is the command's; the validation's is the last line
-            r.get("lines").and_then(Value::as_array).and_then(|l| l.last()).and_then(Value::as_str)
-                == Some("Validation OK!")
-        };
+        let valid = r.get("valid").and_then(Value::as_bool) == Some(true);
         let lines: Vec<String> = r
-            .get("lines")
+            .get("problems")
             .and_then(Value::as_array)
-            .map(|l| l.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+            .map(|l| {
+                l.iter().filter_map(|p| p.get("text").and_then(Value::as_str)).map(str::to_owned).collect()
+            })
             .unwrap_or_default();
         let (tone, headline) = if !ok {
             (
                 Tone::Error,
-                r.get("error").and_then(Value::as_str).unwrap_or("The scene was not validated.").to_owned(),
+                r.get("error").and_then(Value::as_str).unwrap_or("The scene was not checked.").to_owned(),
             )
-        } else if passed {
-            (Tone::Success, "Validation OK!".to_owned())
+        } else if valid {
+            (
+                if lines.is_empty() { Tone::Success } else { Tone::Warning },
+                "The scene passes its checks.".to_owned(),
+            )
         } else {
-            (Tone::Error, "Validation FAILED!".to_owned())
+            (Tone::Error, "The scene does not pass its checks.".to_owned())
         };
         let mut spec = ResultSpec::new("validate_result", "Validate", tone, &headline);
-        spec.warnings = lines.into_iter().filter(|l| !l.starts_with("Validation ")).collect();
+        spec.warnings = lines;
         let line = gz_ui::dialog::result(&ctx, asker(&ed), spec);
         if let Some(l) = line {
             ed.log.plain(l);
@@ -442,74 +347,7 @@ pub fn validate(editor: &Arc<Editor>, ctx: &Context) {
     });
 }
 
-/// Build > Compile > Geometry & Light / Detail Object Light: the compile in the editor's process,
-/// its card in the Task Center (Stop stops it), its report in the kit's Result dialog
-/// (`dlg.compile_result`): the seconds, the files, the warnings, the invalid faces.
-pub fn compile(editor: &Arc<Editor>, ctx: &Context, command: &'static str) {
-    let ed = editor.clone();
-    let ctx = ctx.clone();
-    editor.exec.spawn(async move {
-        let r = ed.call(command, Args::new(), ed.ui_origin()).await;
-        let spec = compile_result(&r);
-        let line = gz_ui::dialog::result(&ctx, asker(&ed), spec);
-        if let Some(l) = line {
-            ed.log.plain(l);
-        }
-        ctx.request_repaint();
-    });
-}
-
-/// The Result dialog of a compile's reply.
-fn compile_result(r: &Value) -> ResultSpec {
-    let ok = r.get("ok").and_then(Value::as_bool) == Some(true);
-    if !ok {
-        let why = r.get("error").and_then(Value::as_str).unwrap_or("The compile did not run.");
-        let tone = if why == "Stopped." { Tone::Warning } else { Tone::Error };
-        let headline = if why == "Stopped." { "The compile was stopped." } else { why };
-        return ResultSpec::new("compile_result", "Compile", tone, headline);
-    }
-    let report = r.get("report").cloned().unwrap_or(json!({}));
-    let level = report.get("level").and_then(Value::as_str).unwrap_or_default();
-    let parts = report.get("parts").and_then(Value::as_array).cloned().unwrap_or_default();
-    let mut warnings = Vec::new();
-    let mut invalid = 0;
-    let mut files = 0;
-    for p in &parts {
-        warnings.extend(
-            p.get("warnings")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .map(str::to_owned),
-        );
-        invalid += p.get("invalid_faces").and_then(Value::as_u64).unwrap_or(0);
-        files += p.get("files").and_then(Value::as_array).map_or(0, Vec::len);
-    }
-    let tone = if warnings.is_empty() { Tone::Success } else { Tone::Warning };
-    let mut spec = ResultSpec::new("compile_result", "Compile", tone, &format!("{level} is compiled."));
-    let seconds = report.get("seconds").and_then(Value::as_f64).unwrap_or(0.0);
-    spec.rows.push(("Time".to_owned(), format!("{seconds:.1} s")));
-    for p in &parts {
-        let name = match p.get("part").and_then(Value::as_str) {
-            Some("details") => "Detail Object Light",
-            _ => "Geometry & Light",
-        };
-        let s = p.get("seconds").and_then(Value::as_f64).unwrap_or(0.0);
-        spec.rows.push((name.to_owned(), format!("{s:.1} s")));
-    }
-    spec.rows.push(("Files Written".to_owned(), files.to_string()));
-    if let Some(t) = report.get("threads").and_then(Value::as_u64) {
-        spec.rows.push(("Threads".to_owned(), t.to_string()));
-    }
-    if invalid > 0 {
-        spec.rows.push(("Invalid Faces".to_owned(), format!("{invalid} (build.err)")));
-    }
-    spec.warnings = warnings;
-    spec
-}
-
-/// The Summary Info sheet's rows (`SSceneSummary::FillProp`), shown in `dlg.scene_summary`.
+/// The Summary Info sheet's rows, shown in `dlg.scene_summary`.
 #[derive(Default)]
 struct SummarySheet {
     open: bool,
@@ -532,14 +370,9 @@ pub fn summary(editor: &Arc<Editor>) {
     }
     let ed = editor.clone();
     editor.exec.spawn(async move {
-        let _ = ed
-            .call("scene_summary", args(&[("action", Value::String("clear".into()))]), ed.ui_origin())
-            .await;
-        let r = ed
-            .call("scene_summary", args(&[("action", Value::String("collect".into()))]), ed.ui_origin())
-            .await;
+        let r = ed.call("scene.info", args(&[("summary", Value::Bool(true))]), ed.ui_origin()).await;
         let rows: Vec<(String, String)> = r
-            .get("rows")
+            .get("summary")
             .and_then(Value::as_array)
             .map(|l| {
                 l.iter()
@@ -623,11 +456,7 @@ fn draw_summary(ui: &mut egui::Ui, editor: &Arc<Editor>) {
                 root.join("import"),
                 Some(format!("{level}.txt")),
                 |ed, f| {
-                    run(
-                        ed,
-                        "scene_summary",
-                        args(&[("action", Value::String("export".into())), ("file", path_text(&f))]),
-                    );
+                    run(ed, "scene.info", args(&[("summary", Value::Bool(true)), ("path", path_text(&f))]));
                 },
             );
         }
@@ -635,89 +464,13 @@ fn draw_summary(ui: &mut egui::Ui, editor: &Arc<Editor>) {
     s.lock().open = open && !close;
 }
 
-/// Build > Import / Export / Clear Error List and Scene > Clear Debug Draw.
-pub fn import_errors(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
-    let Some(root) = editor.project_root() else { return Ok(()) };
-    file_dialog(
-        editor,
-        ctx,
-        "Import Error List",
-        ("Error list", &["err", "*"]),
-        root.join("logs"),
-        None,
-        |ed, f| {
-            run(
-                ed,
-                "compiler_errors",
-                args(&[("action", Value::String("import".into())), ("file", path_text(&f))]),
-            );
-        },
-    )
-}
-
-pub fn export_errors(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
-    let Some(root) = editor.project_root() else { return Ok(()) };
-    file_dialog(
-        editor,
-        ctx,
-        "Export Error List",
-        ("Error list", &["err"]),
-        root.join("logs"),
-        Some("build.err".into()),
-        |ed, f| {
-            run(
-                ed,
-                "compiler_errors",
-                args(&[("action", Value::String("export".into())), ("file", path_text(&f))]),
-            );
-        },
-    )
-}
-
+/// Scene > Clear Debug Draw and Build > Clear Problems: the build's problems and the compiler's
+/// errors the viewport draws go.
 pub fn clear_debug_draw(editor: &Arc<Editor>) {
-    run(editor, "compiler_errors", args(&[("action", Value::String("clear".into()))]));
+    run(editor, "level.problems", args(&[("clear", Value::Bool(true))]));
 }
 
-/// `ConfirmLevelBuild`: the level folder named, then the build. A scene that names no folder is
-/// not asked about - the build stops with its own error.
-pub fn ask_make(editor: &Arc<Editor>, ctx: &Context, command: &'static str) {
-    ask_make_as(editor, ctx, command, asker(editor));
-}
-
-/// [`ask_make`] answered by `who`: `ui_dialog open id=make_question` puts the question up to be
-/// looked at whatever `-nodlg` says.
-fn ask_make_as(editor: &Arc<Editor>, ctx: &Context, command: &'static str, who: gz_ui::Asker) {
-    let Some(m) = MAKES.iter().find(|m| m.command == command) else { return };
-    let level =
-        scene(editor).map(|s| s.store.snapshot().meta.level.level_path.to_string()).unwrap_or_default();
-    if level.is_empty() {
-        run(editor, command, Args::new());
-        return;
-    }
-    // `$game_levels$\<level>`: where the build writes
-    let folder = editor.paths.root.join("gamedata").join("levels").join(&level);
-    let spec = ConfirmSpec {
-        id: m.command.into(),
-        title: m.title.into(),
-        headline: m.headline.into(),
-        items: vec![folder.display().to_string()],
-        total: 1,
-        consequence: m.consequence.into(),
-        action: m.title.into(),
-        destructive: m.destructive,
-    };
-    let ed = editor.clone();
-    let line = gz_ui::dialog::confirm(ctx, who, spec, move |a| {
-        if a == Answer::Yes {
-            run(&ed, command, Args::new());
-        }
-    });
-    if let Some(l) = line {
-        editor.log.plain(l);
-    }
-}
-
-// ---- the C++ rows ----------------------------------------------------------------------------------
+// ---- the command table's rows -----------------------------------------------------------------------
 
 fn ok() -> Result<CommandVar, String> {
     Ok(CommandVar::Int(1))
@@ -733,7 +486,7 @@ fn need_scene(cx: &DocCx<'_>) -> Result<Arc<SceneService>, String> {
 
 /// The table's rows of the scene, the File menu's rows and the Summary Info sheet.
 pub(crate) fn install(b: &mut ShellBuilder) {
-    // Change Target: the tool of a class, its keys
+    // the tools by their keys: Place with that kind armed (a painted layer's or the cells' mode)
     let subs: Vec<CppSub> = TARGETS
         .iter()
         .map(|(name, class, sub)| {
@@ -747,27 +500,10 @@ pub(crate) fn install(b: &mut ShellBuilder) {
             57,
             "COMMAND_CHANGE_TARGET",
             "Change Target",
-            CppAction::shell(|cx, p1, p2| {
+            CppAction::shell(|cx, p1, _| {
                 let svc = need_scene(cx)?;
                 let class = p1.int().and_then(ObjClass::from_id).ok_or("no such class")?;
-                // `CommandChangeTarget`: a part that is not loaded has no tool
-                if !svc.store.snapshot().tools.part(class).enabled {
-                    return Ok(CommandVar::Int(0));
-                }
-                svc.store.post(SceneCmd::SetTarget(class), cx.editor.ui_origin());
-                if class == ObjClass::Way {
-                    let now = svc.store.snapshot().tools.obj.way_points;
-                    let points = match p2.int() {
-                        Some(1) => Some(true),
-                        Some(2) => Some(!now),
-                        Some(0) => Some(false),
-                        _ => None,
-                    };
-                    if let Some(p) = points {
-                        let mode = if p { "points" } else { "ways" };
-                        run(cx.editor, "way_tool", args(&[("action", json!("mode")), ("mode", json!(mode))]));
-                    }
-                }
+                svc.store.post(SceneCmd::Arm(class), cx.editor.ui_origin());
                 ok()
             }),
         )
@@ -775,84 +511,26 @@ pub(crate) fn install(b: &mut ShellBuilder) {
         .face("Tools", "Tool", Icon::None)
         .enabled(has_scene),
     );
-    // the parts: Enable, Read Only, Show (`p1` class, `p2` on)
-    for (id, name, key) in
-        [(58, "COMMAND_ENABLE_TARGET", "enabled"), (59, "COMMAND_READONLY_TARGET", "readonly")]
-    {
+    // a kind's eye and lock (`p1` the kind, `p2` on)
+    for (id, name, lock) in [(59, "COMMAND_READONLY_TARGET", true), (60, "COMMAND_SHOW_TARGET", false)] {
         b.cpp_command(
             CppCommand::new(
                 id,
                 name,
                 "",
-                CppAction::editor("level_parts", move |p1, p2| {
-                    let class = p1.int().and_then(ObjClass::from_id).ok_or("p1 names the class by its id")?;
-                    let mut a = args(&[("class", json!(class.name())), (key, json!(p2.truthy()))]);
-                    // the editor's own run unloads only what is saved (`IfModified` asked first)
-                    a.insert("save".into(), json!(true));
-                    Ok(a)
+                CppAction::shell(move |cx, p1, p2| {
+                    let svc = need_scene(cx)?;
+                    let class = p1.int().and_then(ObjClass::from_id).ok_or("no such class")?;
+                    let on = p2.truthy();
+                    let (visible, locked) = if lock { (None, Some(on)) } else { (Some(on), None) };
+                    svc.store.post(SceneCmd::ClassView { class, visible, locked }, cx.editor.ui_origin());
+                    ok()
                 }),
             )
             .editable(false)
             .enabled(has_scene),
         );
     }
-    b.cpp_command(
-        CppCommand::new(
-            60,
-            "COMMAND_SHOW_TARGET",
-            "",
-            CppAction::shell(|cx, p1, p2| {
-                let svc = need_scene(cx)?;
-                let class = p1.int().and_then(ObjClass::from_id).ok_or("no such class")?;
-                svc.store.post(
-                    SceneCmd::ToolFlags { class, visible: Some(p2.truthy()), readonly: None },
-                    cx.editor.ui_origin(),
-                );
-                ok()
-            }),
-        )
-        .editable(false)
-        .enabled(has_scene),
-    );
-    for (id, name, part) in [(79, "COMMAND_LOAD_LEVEL_PART", true), (80, "COMMAND_UNLOAD_LEVEL_PART", false)]
-    {
-        b.cpp_command(
-            CppCommand::new(
-                id,
-                name,
-                "",
-                CppAction::editor("level_parts", move |p1, _| {
-                    let class = p1.int().and_then(ObjClass::from_id).ok_or("p1 names the class by its id")?;
-                    Ok(args(&[
-                        ("class", json!(class.name())),
-                        ("enabled", json!(part)),
-                        ("discard", json!(true)),
-                    ]))
-                }),
-            )
-            .editable(false)
-            .enabled(has_scene),
-        );
-    }
-    b.cpp_command(
-        CppCommand::new(
-            62,
-            "COMMAND_MULTI_RENAME_OBJECTS",
-            "",
-            CppAction::shell(|cx, _, p2| {
-                // `CommandConfirmed(p2)`: a confirmed call asks nothing
-                if p2.truthy() {
-                    run(cx.editor, "rename_objects", Args::new());
-                } else {
-                    rename_objects(cx.editor, cx.ctx);
-                }
-                ok()
-            }),
-        )
-        .editable(false)
-        .face("Scene", "Rename Objects After References", Icon::None)
-        .enabled(has_scene),
-    );
     b.cpp_command(
         CppCommand::new(
             44,
@@ -916,9 +594,9 @@ pub(crate) fn install(b: &mut ShellBuilder) {
                 }
                 let file = p1.text().filter(|f| !f.is_empty()).map(str::to_owned);
                 match file {
-                    Some(f) => run(cx.editor, "save_scene", args(&[("file", json!(f))])),
+                    Some(f) => run(cx.editor, "scene.save", args(&[("path", json!(f))])),
                     None => match scene(cx.editor).and_then(|s| s.store.snapshot().meta.file.clone()) {
-                        Some(_) => run(cx.editor, "save_scene", Args::new()),
+                        Some(_) => run(cx.editor, "scene.save", Args::new()),
                         None => ask_file(cx)?,
                     },
                 }
@@ -947,7 +625,7 @@ pub(crate) fn install(b: &mut ShellBuilder) {
         )
         .keys("Ctrl+R")
         .face("File", "Open Last Scene", Icon::None)
-        .enabled(|ed, _| ed.project_opt().is_some() && !EditorSettings::of(ed).recent_scenes().is_empty()),
+        .enabled(|ed, _| ed.project_opt().is_some() && !recent(ed).is_empty()),
     );
     // Edit
     for (id, name, desc, action, label) in [
@@ -977,18 +655,16 @@ pub(crate) fn install(b: &mut ShellBuilder) {
             "",
             CppAction::shell(|cx, p1, _| {
                 match p1.text() {
-                    Some(f) => run(
-                        cx.editor,
-                        "selection_file",
-                        args(&[("action", json!("open")), ("file", json!(f))]),
-                    ),
-                    None => open_selection(cx.editor, cx.ctx)?,
+                    Some(f) => {
+                        run(cx.editor, "scene.place", args(&[("kind", json!("group")), ("ref", json!(f))]))
+                    }
+                    None => place_group(cx.editor, cx.ctx)?,
                 }
                 ok()
             }),
         )
         .editable(false)
-        .face("Scene", "Open Selection...", Icon::None)
+        .face("Scene", "Place Group...", Icon::None)
         .enabled(has_scene),
     );
     b.cpp_command(
@@ -998,18 +674,16 @@ pub(crate) fn install(b: &mut ShellBuilder) {
             "",
             CppAction::shell(|cx, p1, _| {
                 match p1.text() {
-                    Some(f) => run(
-                        cx.editor,
-                        "selection_file",
-                        args(&[("action", json!("save")), ("file", json!(f))]),
-                    ),
-                    None => save_selection(cx.editor, cx.ctx)?,
+                    Some(f) => {
+                        run(cx.editor, "scene.group", args(&[("action", json!("save")), ("path", json!(f))]))
+                    }
+                    None => save_group(cx.editor, cx.ctx)?,
                 }
                 ok()
             }),
         )
         .editable(false)
-        .face("Scene", "Save Selection As...", Icon::None)
+        .face("Scene", "Save Selection as Group...", Icon::None)
         .enabled(has_scene),
     );
     b.cpp_command(
@@ -1017,52 +691,10 @@ pub(crate) fn install(b: &mut ShellBuilder) {
             69,
             "COMMAND_CLEAR_DEBUG_DRAW",
             "",
-            CppAction::editor("compiler_errors", |_, _| Ok(args(&[("action", json!("clear"))]))),
+            CppAction::editor("level.problems", |_, _| Ok(args(&[("clear", json!(true))]))),
         )
         .editable(false)
         .face("Scene", "Clear Debug Draw", Icon::None)
-        .enabled(has_scene),
-    );
-    b.cpp_command(
-        CppCommand::new(
-            70,
-            "COMMAND_IMPORT_COMPILER_ERROR",
-            "",
-            CppAction::shell(|cx, p1, _| {
-                match p1.text() {
-                    Some(f) => run(
-                        cx.editor,
-                        "compiler_errors",
-                        args(&[("action", json!("import")), ("file", json!(f))]),
-                    ),
-                    None => import_errors(cx.editor, cx.ctx)?,
-                }
-                ok()
-            }),
-        )
-        .editable(false)
-        .face("Build", "Import Error List...", Icon::None)
-        .enabled(has_scene),
-    );
-    b.cpp_command(
-        CppCommand::new(
-            71,
-            "COMMAND_EXPORT_COMPILER_ERROR",
-            "",
-            CppAction::shell(|cx, p1, _| {
-                match p1.text() {
-                    Some(f) => run(
-                        cx.editor,
-                        "compiler_errors",
-                        args(&[("action", json!("export")), ("file", json!(f))]),
-                    ),
-                    None => export_errors(cx.editor, cx.ctx)?,
-                }
-                ok()
-            }),
-        )
-        .editable(false)
-        .face("Build", "Export Error List...", Icon::None)
         .enabled(has_scene),
     );
     b.cpp_command(
@@ -1079,20 +711,16 @@ pub(crate) fn install(b: &mut ShellBuilder) {
         .face("Scene", "Validate", Icon::None)
         .enabled(has_scene),
     );
-    for (id, name, action) in
-        [(81, "COMMAND_CLEAR_SCENE_SUMMARY", "clear"), (82, "COMMAND_COLLECT_SCENE_SUMMARY", "collect")]
-    {
-        b.cpp_command(
-            CppCommand::new(
-                id,
-                name,
-                "",
-                CppAction::editor("scene_summary", move |_, _| Ok(args(&[("action", json!(action))]))),
-            )
-            .editable(false)
-            .enabled(has_scene),
-        );
-    }
+    b.cpp_command(
+        CppCommand::new(
+            82,
+            "COMMAND_COLLECT_SCENE_SUMMARY",
+            "",
+            CppAction::editor("scene.info", |_, _| Ok(args(&[("summary", json!(true))]))),
+        )
+        .editable(false)
+        .enabled(has_scene),
+    );
     b.cpp_command(
         CppCommand::new(
             83,
@@ -1112,55 +740,14 @@ pub(crate) fn install(b: &mut ShellBuilder) {
             84,
             "COMMAND_EXPORT_SCENE_SUMMARY",
             "",
-            CppAction::editor("scene_summary", |p1, _| {
+            CppAction::editor("scene.info", |p1, _| {
                 let f = p1.text().ok_or("p1s names the file")?;
-                Ok(args(&[("action", json!("export")), ("file", json!(f))]))
+                Ok(args(&[("summary", json!(true)), ("path", json!(f))]))
             }),
         )
         .editable(false)
         .enabled(has_scene),
     );
-    // the level builds behind `ConfirmLevelBuild` (p2 confirmed asks nothing)
-    for Make { command, id, name, title, desc, .. } in MAKES {
-        let keys = DEFAULT_KEYS.iter().find(|(i, _)| *i == name).map_or("", |(_, k)| *k);
-        b.cpp_command(
-            CppCommand::new(
-                id,
-                name,
-                desc,
-                CppAction::shell(move |cx, _, p2| {
-                    if p2.truthy() {
-                        run(cx.editor, command, Args::new());
-                    } else {
-                        ask_make(cx.editor, cx.ctx, command);
-                    }
-                    ok()
-                }),
-            )
-            .keys(keys)
-            .face("Build", &format!("{title}..."), Icon::None)
-            .enabled(|ed, _| has_scene(ed, "") && ed.registry().has("make_all")),
-        );
-    }
-    // the snap list
-    for (id, name, action) in [
-        (100, "COMMAND_SET_SNAP_OBJECTS", "set"),
-        (101, "COMMAND_ADD_SEL_SNAP_OBJECTS", "add"),
-        (102, "COMMAND_DEL_SEL_SNAP_OBJECTS", "remove"),
-        (103, "COMMAND_CLEAR_SNAP_OBJECTS", "clear"),
-        (104, "COMMAND_SELECT_SNAP_OBJECTS", "select"),
-    ] {
-        b.cpp_command(
-            CppCommand::new(
-                id,
-                name,
-                "",
-                CppAction::editor("snap_objects", move |_, _| Ok(args(&[("action", json!(action))]))),
-            )
-            .editable(false)
-            .enabled(has_scene),
-        );
-    }
     // File menu: New Scene, Open Scene..., Recent Scene above Save; Save As... below it
     b.menu_entry(MenuEntry {
         menu: SmolStr::new("File"),
@@ -1176,28 +763,6 @@ pub(crate) fn install(b: &mut ShellBuilder) {
         order: 50,
         content: MenuContent::Custom(Box::new(|ui, cx| file_rows(ui, cx, false))),
     });
-    // the questions a click raises, put up to be looked at (the window's own, answered there):
-    // Make Game's level folder, Rename Objects After References, Reset All Surfaces
-    b.dialog(DialogDesc {
-        id: SmolStr::new("make_question"),
-        window: SmolStr::new("Make Game###dlg.make_game"),
-        needs_project: true,
-        open: Box::new(|cx| {
-            ask_make_as(cx.editor, cx.ctx, "make_game", gz_ui::Asker::Ui);
-            Ok(())
-        }),
-        draw: Box::new(|_, _| {}),
-    });
-    b.dialog(DialogDesc {
-        id: SmolStr::new("rename_question"),
-        window: SmolStr::new("Rename Objects###dlg.rename_objects"),
-        needs_project: true,
-        open: Box::new(|cx| {
-            rename_objects_as(cx.editor, cx.ctx, gz_ui::Asker::Ui);
-            Ok(())
-        }),
-        draw: Box::new(|_, _| {}),
-    });
     b.dialog(DialogDesc {
         id: SmolStr::new("reset_surfaces_question"),
         window: SmolStr::new("Reset Surfaces###dlg.reset_surfaces"),
@@ -1209,7 +774,7 @@ pub(crate) fn install(b: &mut ShellBuilder) {
         draw: Box::new(|_, _| {}),
     });
     // the Group tool's Align to Object...: the chooser of the selected group's objects, to be
-    // looked at; `group_tool action=align_pivot object=` is the pick
+    // looked at; `scene.group action=pivot_to object=` is the pick
     b.dialog(DialogDesc {
         id: SmolStr::new("group_pivot"),
         window: SmolStr::new("Select Object###dlg.choose"),
@@ -1234,27 +799,6 @@ pub(crate) fn install(b: &mut ShellBuilder) {
             Ok(())
         }),
         draw: Box::new(|ui, cx| draw_summary(ui, cx.editor)),
-    });
-}
-
-/// Marks File > Recent Scene's hook as registered.
-struct RecentHooked;
-
-/// File > Recent Scene follows every load and save (`AppendRecentFile`, the path lower-cased).
-pub(crate) fn hook_recent(editor: &Editor) {
-    editor.services.get_or_init(|| {
-        gz_scene::SceneFileHooks::of(editor).on_file(|ed, file| {
-            let settings = EditorSettings::of(ed);
-            settings.add_recent_scene(&file.display().to_string().to_lowercase());
-            settings.save_soon(ed);
-        });
-        // a scene the project opened before the Level tab was made counts too
-        if let Some(svc) = scene(editor)
-            && let Some(file) = svc.store.snapshot().meta.file.clone()
-        {
-            EditorSettings::of(editor).add_recent_scene(&file.display().to_string().to_lowercase());
-        }
-        RecentHooked
     });
 }
 

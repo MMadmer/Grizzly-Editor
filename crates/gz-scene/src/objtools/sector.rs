@@ -1,6 +1,4 @@
-//! Sectors: their meshes, their volume, the default sector and the checks
-//! (`sector.cpp`, `portalutils.cpp`'s `Validate` / `CreateDefaultSector` / `FindSector`,
-//! `ESceneSectorControls.cpp`).
+//! Sectors: their meshes, their volume, the default sector and the checks.
 
 use std::sync::Arc;
 
@@ -28,7 +26,7 @@ pub struct Item {
     pub mesh: usize,
 }
 
-/// `CSectorItem::IsItem`: names compared without case.
+/// Whether an item is the mesh: names compared without case.
 #[must_use]
 pub fn is_item(item: &(SmolStr, SmolStr), object: &str, mesh: &str) -> bool {
     item.0.eq_ignore_ascii_case(object) && item.1.eq_ignore_ascii_case(mesh)
@@ -56,7 +54,7 @@ pub fn items(state: &SceneState, lib: &Library, s: &SectorData) -> Vec<Item> {
         .collect()
 }
 
-/// `CPortalUtils::FindSector`: the first sector holding the mesh.
+/// The first sector holding the mesh.
 #[must_use]
 pub fn find_sector(state: &SceneState, object: &str, mesh: &str) -> Option<ObjId> {
     state
@@ -65,7 +63,7 @@ pub fn find_sector(state: &SceneState, object: &str, mesh: &str) -> Option<ObjId
         .map(|s| s.id)
 }
 
-/// `CSector::UpdateVolume`: the box of the items' meshes and its sphere.
+/// The box of the items' meshes and its sphere.
 #[derive(Clone, Copy, Debug)]
 pub struct Volume {
     pub bounds: Aabb,
@@ -96,7 +94,7 @@ pub enum Visible {
 }
 
 impl Volume {
-    /// `CSector::Intersect(center, radius)`.
+    /// Whether the volume meets a sphere.
     #[must_use]
     pub fn intersect_sphere(&self, center: Vec3, radius: f32) -> Visible {
         let dist = self.center.distance(center);
@@ -111,7 +109,7 @@ impl Volume {
         }
     }
 
-    /// `CSector::Intersect(box)`.
+    /// Whether the volume meets a box.
     #[must_use]
     pub fn intersect_box(&self, b: &Aabb) -> Visible {
         if boxes_meet(&self.bounds, b) {
@@ -160,10 +158,20 @@ pub fn selected_sector(state: &SceneState) -> Result<Option<ObjId>, CmdError> {
     }
 }
 
+/// Every mesh some sector holds, as lower-case `(object, mesh)`.
+fn covered(state: &SceneState) -> rustc_hash::FxHashSet<(String, String)> {
+    state
+        .of_class(ObjClass::Sector)
+        .filter_map(|s| data(s))
+        .flat_map(|d| d.items.iter().map(|(o, m)| (o.to_lowercase(), m.to_lowercase())))
+        .collect()
+}
+
 /// `CaptureAllUnusedMeshes`: every mesh of a static scene object no sector holds, in scene
 /// order, with its face count.
 #[must_use]
 pub fn unused_meshes(state: &SceneState, lib: &Library) -> Vec<(Arc<Object>, Arc<LibraryObject>, usize)> {
+    let held = covered(state);
     let mut out = Vec::new();
     for o in state.of_class(ObjClass::SceneObject) {
         let ObjData::SceneObject(d) = &o.data else { continue };
@@ -171,8 +179,9 @@ pub fn unused_meshes(state: &SceneState, lib: &Library) -> Vec<(Arc<Object>, Arc
         if !is_static_any(&lo) {
             continue;
         }
+        let name = o.name.to_lowercase();
         for (i, m) in lo.object.meshes.iter().enumerate() {
-            if find_sector(state, &o.name, &m.name).is_none() {
+            if !held.contains(&(name.clone(), m.name.to_lowercase())) {
                 out.push((o.clone(), lo.clone(), i));
             }
         }
@@ -200,7 +209,7 @@ fn shader<'a>(lib: &'a ShadersXrlc, name: &str) -> Option<&'a ShaderXrlc> {
     lib.shaders.iter().find(|s| s.name().eq_ignore_ascii_case(name))
 }
 
-/// `CSector::Validate(true)`: what is wrong with one sector, in the C++ words.
+/// What is wrong with one sector.
 #[must_use]
 pub fn validate_sector(name: &str, items: &[Item], shaders: Option<&ShadersXrlc>) -> Vec<String> {
     let mut out = Vec::new();
@@ -229,8 +238,7 @@ pub fn validate_sector(name: &str, items: &[Item], shaders: Option<&ShadersXrlc>
     out
 }
 
-/// `CPortalUtils::Validate(bMsg)`: whether every static mesh has a sector and every sector is
-/// sound, and the C++ messages. `shaders` is the compiler shader library (`None`: not readable,
+/// Whether every static mesh has a sector and every sector is sound, and the messages. `shaders` is the compiler shader library (`None`: not readable,
 /// the shader checks are left out).
 #[must_use]
 pub fn validate(state: &SceneState, lib: &Library, shaders: Option<&ShadersXrlc>) -> (bool, Vec<String>) {
@@ -303,7 +311,7 @@ pub fn create_default(state: &SceneState, lib: &Library) -> Result<Outcome, CmdE
     Ok((b, json!({ "sector": DEFAULT_SECTOR, "meshes": n, "faces": faces })))
 }
 
-/// `RemoveDefaultSector`, with the portals of it (`CSector::OnDestroy`).
+/// Removes the default sector with its portals.
 pub fn remove_default(state: &SceneState) -> Result<Outcome, CmdError> {
     let s = state
         .find(ObjClass::Sector, DEFAULT_SECTOR)
@@ -315,7 +323,7 @@ pub fn remove_default(state: &SceneState) -> Result<Outcome, CmdError> {
     Ok((b, json!({ "removed": DEFAULT_SECTOR, "portals_removed": portals.len() })))
 }
 
-/// `CSector::CaptureInsideVolume`: the meshes of the static scene objects whose boxes are fully
+/// The meshes of the static scene objects whose boxes are fully
 /// or partly inside the sector's volume join it.
 pub fn capture_volume(state: &SceneState, lib: &Library, id: ObjId) -> Result<Outcome, CmdError> {
     let sector = state.get(id).ok_or_else(|| CmdError::not_found("sector not found"))?;
@@ -439,7 +447,7 @@ pub fn edit_meshes(
     Ok((b, out))
 }
 
-/// `TUI_ControlSectorAdd::AddSector`: a new sector of one mesh, selected.
+/// A new sector of one mesh, selected.
 pub fn new_from_mesh(
     state: &SceneState,
     lib: &Library,
@@ -471,7 +479,7 @@ pub fn valid_color(r: u32, g: u32, b: u32) -> bool {
     !matches!((r, g, b), (255, 255, 255) | (127, 127, 127) | (0, 0, 0) | (255, 0, 0) | (127, 0, 0))
 }
 
-/// `TUI_ControlSectorAdd::AddSectors`: a sector of each mesh of the object, each in a colour of
+/// A sector of each mesh of the object, each in a colour of
 /// its own; the last one stays selected.
 pub fn new_from_object(
     state: &SceneState,

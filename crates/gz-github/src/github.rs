@@ -1083,9 +1083,9 @@ impl Github {
     ) -> Result<CatalogIssue, String> {
         let api = self.api(&rq.token, cancel);
         let mut out = CatalogIssue::default();
-        stage("Reading the GitHub account");
+        stage("Waiting for GitHub: the account");
         out.login = read_login(&api).await?;
-        stage("Reading the submission");
+        stage("Waiting for GitHub: the submission");
         self.find_issue(&api, &out.login.clone(), &rq.module_id, IssueKind::Submission, &mut out).await?;
 
         // Nothing to send when the catalog's default branch already holds this very file - a
@@ -1135,11 +1135,11 @@ impl Github {
         let api = self.api(&rq.token, cancel);
         let catalog = self.endpoints().catalog_repo.clone();
         let mut out = CatalogIssue::default();
-        stage("Reading the GitHub account");
+        stage("Waiting for GitHub: the account");
         out.login = read_login(&api).await?;
 
         // the catalog judges by the file on its default branch, not by an index a mirror may still hold
-        stage("Reading the listing");
+        stage("Waiting for GitHub: the listing");
         let (r, listing) = self.listing(&api, &rq.module_id).await;
         if cancel.is_cancelled() {
             return cancelled();
@@ -1167,7 +1167,7 @@ impl Github {
             ));
         }
 
-        stage("Reading the withdrawal");
+        stage("Waiting for GitHub: the withdrawal");
         self.find_issue(&api, &out.login.clone(), &rq.module_id, IssueKind::Withdrawal, &mut out).await?;
         if !withdrawn.is_empty() {
             out.note = format!("The catalog has withdrawn {} already - nothing was sent.", rq.module_id);

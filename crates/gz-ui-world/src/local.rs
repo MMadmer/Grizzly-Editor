@@ -5,7 +5,7 @@ use std::f32::consts::TAU;
 
 use egui::{
     Align2, Context, CornerRadius, Id, LayerId, Margin, Painter, Pos2, Rect, Response, ScrollArea, Sense,
-    Shape, Stroke, TextEdit, Ui, UiBuilder, Vec2, pos2,
+    Shape, Stroke, TextEdit, Ui, Vec2, pos2,
 };
 use gz_ui::menu::menu_popup;
 use gz_ui::text::{self, Clip};
@@ -24,22 +24,15 @@ pub fn local_spinner_at(ctx: &Context, painter: &Painter, rect: Rect) {
     ctx.request_repaint();
 }
 
-/// The id a [`local_section`] keeps its state under.
-#[must_use]
-pub fn section_id(key: &str) -> Id {
-    Id::unique(("gz-ui-world.section", key))
-}
-
-/// Opens or folds a [`local_section`] from outside (MCP: what it asks for is under More).
+/// Opens or folds a section from outside (MCP: what it asks for is under More).
 pub fn set_section_open(ctx: &Context, key: &str, open: bool) {
-    ctx.data_mut(|d| d.insert_temp(section_id(key), open));
+    gz_ui::section::set_open(ctx, key, open);
 }
 
-/// A folding header outside a property grid (the C++ `XUI::Section`): a chevron, the title, and
-/// at the right what it holds in a few words; the whole row a click target. `open` is its state
-/// until it is clicked. Returns whether it is open.
+/// The kit's `Section` header: the title, what it holds in a few words as its count. `open` is
+/// its state until it is clicked. Returns whether it is open.
 pub fn local_section(ui: &mut Ui, key: &str, title: &str, open: bool, right: Option<&str>) -> bool {
-    let is_open = gz_ui::form::raised_section(ui, section_id(key), title, open, right);
+    let is_open = gz_ui::Section::new(key, title).default_open(open).count(right.unwrap_or("")).show(ui).open;
     if is_open {
         ui.add_space(4.0);
     }
@@ -94,13 +87,17 @@ pub fn local_number_text(
     Some(if clean.is_empty() { None } else { clean.parse::<i64>().ok().map(|v| v.min(i64::from(i32::MAX))) })
 }
 
-/// A box with its label after it; a click on either flips it. `width` is the room it takes. A
-/// disabled `Ui` draws it dimmed and takes no click.
+/// The kit's `Check` with its label after it; `width` is the room it takes. A disabled `Ui` draws
+/// it dimmed and takes no click.
 pub fn local_check(ui: &mut Ui, salt: &str, label: &str, value: &mut bool, width: f32) -> bool {
-    gz_ui::form::check(ui, Id::unique(("gz-ui-world.check", salt)), label, value, width)
+    ui.push_id(("gz-ui-world.check", salt), |ui| {
+        gz_ui::Check::new(value, label).width(width).show(ui).changed()
+    })
+    .inner
 }
 
-/// A box in the middle of a table cell `width` wide; `tip` on hover. Returns whether it flipped.
+/// The kit's `Check` in the middle of a table cell `width` wide; `tip` on hover. Returns whether
+/// it flipped.
 pub fn local_cell_check(
     ui: &mut Ui,
     salt: &str,
@@ -111,13 +108,12 @@ pub fn local_cell_check(
 ) -> bool {
     let (cell, _) = ui.allocate_exact_size(Vec2::new(width, metrics::FRAME), Sense::hover());
     let r = Rect::from_center_size(cell.center(), Vec2::splat(metrics::FRAME));
-    let mut child = ui.new_child(UiBuilder::new().id_salt(("gz-ui-world.cell_check", salt)).max_rect(r));
-    if !enabled {
-        child.disable();
-    }
-    let changed = local_check(&mut child, salt, "", value, metrics::FRAME);
+    let mut child =
+        ui.new_child(egui::UiBuilder::new().id_salt(("gz-ui-world.cell_check", salt)).max_rect(r));
+    let resp = gz_ui::Check::new(value, "").width(metrics::FRAME).enabled(enabled, tip).show(&mut child);
+    let changed = resp.changed();
     if !tip.is_empty() {
-        ui.interact(r, Id::unique(("gz-ui-world.cell_tip", salt)), Sense::hover()).on_hover_text(tip);
+        let _ = resp.on_hover_text(tip);
     }
     changed
 }

@@ -1,12 +1,9 @@
 //! The module's level layer: what a scene adds to, takes from and lays over a level of the
 //! game, without a single base file of the game rewritten.
 //!
-//! The C++ specification is `LevelEditor/Editor/EditorModScene.cpp` (the four exports, the
-//! pre-build bake, every warning) with `EditorWorld::Starts` / `Validate`'s `E201` and
-//! `CWayObject::ExportPath`. The files are part of the contract with the game
-//! (`docs/RUST_MIGRATION.md` section 9) and come out byte for byte as the C++ writes them:
-//! `\r\n` line ends, the C++ key order, `%f` / `%g` / `%u` / `%08x` as the C runtime prints them
-//! ([`cfmt`]).
+//! The files are part of the contract with the game (`docs/RUST_MIGRATION.md` section 9) and are
+//! written as the game reads them: `\r\n` line ends, a fixed key order, `%f` / `%g` / `%u` /
+//! `%08x` as the C runtime prints them ([`cfmt`]).
 //!
 //! # The domain (pure)
 //!
@@ -37,9 +34,11 @@
 //! - [`gather`] - the reads an export needs, on the IO pool, in parallel ([`gather::Gathered`]),
 //!   and [`gather::apply`] - the writes, after the CPU work. Nothing of the game is ever
 //!   written, and nothing of another module is read or written.
-//! - [`register`] - `mod_export_spawn`, `mod_export_xcform`, `mod_export_cut`,
-//!   `mod_export_ogf_probe` with the C++ wire; [`install`] fills `gz-build`'s bake slot (the
-//!   mirror pass of the open scene, run before a build) and `gz-world`'s `SceneStarts` slot.
+//! - [`export_spawn`], [`export_collision`], [`export_cut`], [`export_visuals`] - the layers of a
+//!   selection (or of objects named, or of the whole scene, [`Layer`]) as `level.export` runs
+//!   them; [`bake_layer`] - the spawn layer of the whole scene, a step of the level build;
+//!   [`install`] fills `gz-build`'s bake slot (the same pass, run before a module build) and
+//!   `gz-world`'s `SceneStarts` slot.
 //! - [`lookup::LiveScene`] - `gz-nq`'s `SceneLookup` (the scene's restrictors, story ids, way
 //!   paths and level for the quest pickers), set when a project opens.
 //! - [`ExportService`] - the linked game's patrol names (`gz-world` reads `all.spawn`).
@@ -57,11 +56,10 @@ pub mod spawn;
 pub mod starts;
 pub mod visuals;
 
-pub use cmd::{install, register};
+pub use cmd::{Layer, bake_layer, export_collision, export_cut, export_spawn, export_visuals, install};
 pub use service::ExportService;
 
-/// Why an export did not write its files. The texts are the C++ error strings the MCP answers
-/// carry.
+/// Why an export did not write its files: a sentence for the author.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
 pub struct ExportError(pub String);

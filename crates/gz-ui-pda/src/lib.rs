@@ -7,25 +7,25 @@
 //!   interface is `gz_pda`'s `Preview`. This crate draws the flat item list and forwards clicks,
 //!   keys and the wheel - it interprets nothing of its own. Drawing is egui meshes with the
 //!   game's textures and BITMAP fonts ([`assets`], [`bitmap`]): a text is as wide here as in the
-//!   game, canvas units scale per axis, the button placement rule is the game's. `pda_preview`
+//!   game, canvas units scale per axis, the button placement rule is the game's. `pda.preview`
 //!   answers in canvas units and waits for the frame it changed.
 //! - **Screens & Music** ([`screens`]): the `screens` document - the screens and music of one
 //!   surface, the selected one's preview, layers and settings - saved to `mod.ltx` as it is
 //!   edited through `gz-mod`'s store; files arrive by drag and drop ([`drop`]) and go through
-//!   `gz_screens::import` off the UI thread. `screens_view` opens or reports it.
-//! - [`gamefile`]: what the preview reads of the game's own files, as the C++ read them -
+//!   `gz_screens::import` off the UI thread. `screens.view` opens or reports it.
+//! - [`gamefile`]: what the preview reads of the game's own files -
 //!   `pda.xml`, a level's map, plain ltx values; [`bitmap`]: the game's fonts and how a label
 //!   lays out in them. Both pure.
 //!
-//! [`install`] plugs both tabs and their Mod menu commands (`COMMAND_MOD_SCREENS`,
-//! `COMMAND_MOD_PDA`) into the shell, the rows at the slots `gz-ui-mod`'s `MOD_MENU` keeps; [`register`] adds `pda_preview` and `screens_view`.
+//! [`install`] plugs both tabs and their Mod menu actions into the shell, the rows at the slots
+//! `gz-ui-mod`'s `MOD_MENU` keeps; [`register`] adds `pda.preview`, `screens.view` and `pda.open`.
 //!
 //! Widgets the kit lacks, local to this crate ([`local`], [`drop`]): `local_file_drop_zone` (a
 //! place files are dropped on), `local_list_header` (a list's title with its +),
-//! `local_section` (a folding header outside a grid), `local_tab_strip` (a panel's tabs),
-//! `local_check` (a switch with its label), `local_multi_combo` and `local_toggle_row` (a set
-//! picked from a list that stays open), `local_code_view` (Mono text with a gutter and an
-//! error line), `local_drop_mark` (where a dragged row lands).
+//! `local_tab_strip` (a panel's tabs), `local_code_view` (Mono text with a gutter, Lua data
+//! coloured, the reader's error line underlined), `local_drop_mark` (where a dragged row lands);
+//! `local_section` and `local_check` are the kit's `Section` and `Switch` under the names the
+//! surfaces call.
 //!
 //! Nothing here touches a file or computes inside a frame: files are read, decoded and written
 //! on the pools; a frame draws from the model and the caches and starts what it needs.
@@ -49,9 +49,6 @@ use gz_editor::Registry;
 
 pub use drop::{begin_drops, local_file_drop_zone, simulate_drop};
 
-/// The crate's name, as the registry records who registered a command.
-const AREA: &str = "gz-ui-pda";
-
 /// Plugs the `pda` and `screens` tabs and their Mod menu commands into the shell.
 pub fn install(b: &mut ShellBuilder) {
     pda::doc::install(b);
@@ -62,9 +59,22 @@ pub fn install(b: &mut ShellBuilder) {
     }
 }
 
-/// The commands of this package: `pda_preview`, `screens_view`.
+/// The commands of this package: `pda.preview`, `screens.view`, `pda.open`.
 pub fn register(reg: &mut Registry) {
-    reg.add(AREA, "pda_preview", pda::cmd::pda_preview);
-    reg.add(AREA, "screens_view", screens::cmd::screens_view);
+    reg.area("pda", "The module's PDA interface: the preview tab that runs it the way the game does");
+    reg.cmd(
+        gz_editor::Spec::view(
+            "pda.preview",
+            "Runs the PDA preview: opens a layout, clicks, pages, keys, aspect, language; answers its state in canvas units.",
+        )
+        .example("action=click id=tasks")
+        .destroys_with(&["discard"]),
+        pda::cmd::pda_preview,
+    );
+    reg.cmd(
+        gz_editor::Spec::view("screens.view", "Puts the Screens & Music tab up on a surface, a screen, a layer or a track, and answers what it shows.")
+            .example("surface=menu screen=night"),
+        screens::cmd::screens_view,
+    );
     pda::doc::register(reg);
 }

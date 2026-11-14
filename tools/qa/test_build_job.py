@@ -8,7 +8,7 @@ Over MCP on a THROW-AWAY COPY of a project, with a gigabyte of payload so that a
   * Stop leaves the last build exactly as it was, and no scratch folder beside it;
   * a build reuses what the last one already holds (the very same file on disk) and takes what changed;
   * a module the game holds open is refused with its name, and stays whole;
-  * a packaging runs the same way and answers what mod_package always answered;
+  * a packaging runs the same way and answers what mod.package answers;
   * the UI's frames keep their own time while a build runs (frame_pacing: the frame's work apart from the wait for
     the presentation, View > Real Time on so that the editor draws every frame);
   * T: with a request timeout of 0.3 s (GRIZZLY_MCP_REQUEST_TIMEOUT_MS, an editor started for it) a build is answered
@@ -87,7 +87,7 @@ def start_editor(project: str, env: dict | None = None) -> subprocess.Popen:
     deadline = time.monotonic() + 240
     while time.monotonic() < deadline:
         try:
-            if mcp("mod_manifest", timeout=30).get("ok"):
+            if mcp("mod.info", timeout=30).get("ok"):
                 return proc
         except OSError:
             pass
@@ -120,7 +120,7 @@ class Job(threading.Thread):
 
 
 def job_row() -> dict:
-    rows = mcp("ui.tasks").get("background") or []
+    rows = mcp("ui.tasks").get("running") or []
     return next((r for r in rows if r.get("key")), {})
 
 
@@ -148,7 +148,7 @@ class Run:
     def ensure_built(self) -> None:
         """What B, C and D start from: a module built from the payload as it was written."""
         if not self.built:
-            r = mcp("mod_export", target=self.target, timeout=590.0)
+            r = mcp("mod.build", target="folder", path=self.target, timeout=590.0)
             self.built = bool(r.get("ok"))
             check(self.built, "the module is built for the phase", json.dumps(r)[:300])
 
@@ -157,13 +157,13 @@ class Run:
         mcp("ui.tab", action="open", doc="level")
         mcp("view_mode", real_time=True)
         mcp("frame_pacing")
-        job = Job("mod_export", target=self.target)
+        job = Job("mod.build", target="folder", path=self.target)
         row = wait_for_copy(job)
         check(bool(row), "A the Task Center follows the build's copying", json.dumps(job_row())[:300])
         check("Check, Copy, Install" == row.get("steps"), "A it names the steps", json.dumps(row)[:300])
         check(" of " in row.get("numbers", "") and "files" in row.get("numbers", ""), "A it says how far in bytes and files",
               json.dumps(row)[:300])
-        refused = mcp("mod_export", target=self.target) if job.is_alive() else {"error": "the build ended first"}
+        refused = mcp("mod.build", target="folder", path=self.target) if job.is_alive() else {"error": "the build ended first"}
         check("running" in refused.get("error", ""), "A a second build is refused while one runs", json.dumps(refused)[:300])
         worst = 0.0
         copying = 0
@@ -202,12 +202,12 @@ class Run:
         for i in range(PAYLOAD_FILES):
             with open(os.path.join(self.payload, f"p_{i:02}.dds"), "r+b") as f:
                 f.write((i + 1000).to_bytes(4, "little"))
-        job = Job("mod_export", target=self.target)
+        job = Job("mod.build", target="folder", path=self.target)
         check(bool(wait_for_copy(job)), "B the changed files are being copied")
         running = [j for j in mcp("job.list", running=True).get("jobs", []) if j.get("kind") == "build"] or             mcp("job.list", running=True).get("jobs", [])
         stopped = mcp("job.stop", job=running[0].get("id")) if running else {"ok": False, "error": "no job runs"}
         job.join()
-        check(stopped.get("ok") and job.answer.get("error") == "cancelled", "B Stop ends the build", json.dumps(job.answer)[:300])
+        check(stopped.get("ok") and job.answer.get("code") == "cancelled", "B Stop ends the build", json.dumps(job.answer)[:300])
         check(fingerprint(self.module) == before, "B the last build is exactly as it was")
         check(not os.path.exists(self.scratch), "B and nothing is left beside it")
         # the payload as it was written: the next phase starts from it
@@ -218,13 +218,13 @@ class Run:
     # ---- C: what the last build holds is not written again ----------------------------------------------------------
     def c(self) -> None:
         self.ensure_built()
-        built = mcp("mod_export", target=self.target, timeout=590.0)
+        built = mcp("mod.build", target="folder", path=self.target, timeout=590.0)
         check(built.get("ok"), "C a build after that goes through", json.dumps(built)[:300])
         again_ids = {n: os.stat(os.path.join(self.module, n)).st_ino for n in fingerprint(self.module) if n.endswith(".dds")}
         with open(os.path.join(self.payload, "p_05.dds"), "r+b") as f:
             f.write(b"NEW!")
         began = time.monotonic()
-        built = mcp("mod_export", target=self.target, timeout=590.0)
+        built = mcp("mod.build", target="folder", path=self.target, timeout=590.0)
         spent = time.monotonic() - began
         rel = os.path.join("gamedata", "textures", "qa_job", "p_05.dds")
         now = {n: os.stat(os.path.join(self.module, n)).st_ino for n in again_ids}
@@ -241,7 +241,7 @@ class Run:
         before = fingerprint(self.module)
         held = open(os.path.join(self.module, rel), "rb")
         try:
-            refused = mcp("mod_export", target=self.target, timeout=590.0)
+            refused = mcp("mod.build", target="folder", path=self.target, timeout=590.0)
         finally:
             held.close()
         check("in use" in refused.get("error", ""), "D a module in use is refused and named", json.dumps(refused)[:300])
@@ -254,14 +254,14 @@ class Run:
         try:
             target = os.path.join(os.path.dirname(self.game), "game_t").replace("\\", "/")
             began = time.monotonic()
-            a = mcp("mod_export", target=target, timeout=60)
+            a = mcp("mod.build", target="folder", path=target, timeout=60)
             took = time.monotonic() - began
             jobs = a.get("jobs") or [{}]
             check(a.get("ok") is False and a.get("running") is True and jobs[0].get("kind") == "build"
-                  and "jobs" in (a.get("follow") or []) and "busy" not in a.get("error", ""),
+                  and "job.wait" in (a.get("follow") or []) and "busy" not in a.get("error", ""),
                   "T a build past the 0.3 s timeout is answered as still running, naming its job (%.2f s)" % took,
                   json.dumps(a)[:400])
-            check(a.get("error", "").startswith("mod_export is still running") and "not its result" in a.get("error", ""),
+            check(a.get("error", "").startswith("mod.build is still running") and "not its result" in a.get("error", ""),
                   "T its error says so in words", a.get("error", ""))
             job_id = jobs[0].get("id")
             deadline = time.monotonic() + 240
@@ -272,7 +272,7 @@ class Run:
                     break
                 time.sleep(0.2)
             check(info.get("state") == "done", "T the job ends by itself, done, as jobs shows", json.dumps(info)[:300])
-            quick = mcp("mod_manifest")
+            quick = mcp("mod.info")
             check(quick.get("ok") and "running" not in quick, "T a command that ends in time answers as before",
                   json.dumps(quick)[:200])
         finally:
@@ -284,7 +284,7 @@ class Run:
             p = os.path.join(self.payload, f"p_{i:02}.dds")
             if os.path.exists(p):
                 os.remove(p)
-        job = Job("mod_package", out_dir=self.release.replace("\\", "/"), requires_game="")
+        job = Job("mod.package", path=self.release.replace("\\", "/"), requires_game="")
         seen_pack = False
         worst = 0.0
         while job.is_alive():
@@ -341,11 +341,13 @@ def main() -> int:
             proc = start_editor(project, env)
 
         run.restart = restart
-        run.module = os.path.join(game, "modules", mcp("mod_manifest").get("id"))
+        run.module = os.path.join(game, "modules", mcp("mod.info").get("manifest", {}).get("id"))
         for p in only:
             t = time.monotonic()
             getattr(run, p.lower())()
             print("TIME phase %s %.1f s" % (p, time.monotonic() - t), flush=True)
+        stalls = mcp("perf.stalls")
+        check(stalls.get("ok") and not stalls.get("stalls"), "no UI pass waited", json.dumps(stalls)[:300])
     finally:
         if proc:
             try:

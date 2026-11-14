@@ -205,8 +205,8 @@ def run(project: str) -> None:
             opened = as_json(bridge.call("grizzly_ui_tab", action="open", kind="quest", path=rel))
             tab = (opened.get("tab") or {}).get("id", "")
             on_disk = open(os.path.join(project, rel), "rb").read()
-            bridge.call("grizzly_quest_edit", path=rel, op="select_all")
-            bridge.call("grizzly_quest_edit", path=rel, op="duplicate")
+            bridge.call("grizzly_run", command="graph.view", args={"doc": tab, "select": "all"})
+            bridge.call("grizzly_run", command="graph.edit", args={"doc": tab, "ops": [{"op": "duplicate"}]})
             plain = as_json(bridge.call("grizzly_ui_tab", action="close", id=tab))
             check(not plain.get("ok") and plain.get("error") == "unsaved",
                   "E a dirty tab refuses grizzly_ui_tab's plain close", json.dumps(plain)[:300])

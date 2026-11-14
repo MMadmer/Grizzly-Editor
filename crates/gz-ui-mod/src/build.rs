@@ -450,7 +450,7 @@ impl ExportDialog {
                     },
                 );
                 ui.add_space(8.0);
-                PropertyGrid::new("build_dialog").label_frac(0.30).show(ui, |g| {
+                PropertyGrid::new("build_dialog").label_frac(gz_ui::units::em(8.0) / ui.available_width().max(1.0)).show(ui, |g| {
                     let action = g.row(
                         if flat { "Folder" } else { "Game Folder" },
                         if flat { "The folder the gamedata_<id> folder is made in." } else { "The game folder, or any folder that stands in for one." },

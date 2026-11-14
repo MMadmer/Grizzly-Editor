@@ -1,5 +1,5 @@
-//! The AI Map, Detail Objects and Wallmark tools (`UIAIMapTool`, `UIDOTool` and the logic under
-//! them: `ESceneAIMapTools*.cpp`, `ESceneDOTools*.cpp`, `ESceneWallmarkTools.cpp`).
+//! The painted layers of the level: the AI map, the detail objects, the wallmarks - all lying on
+//! the ground ([`ground`]: every static scene object, narrowed only by a volume or a list).
 //!
 //! - The data is the scene's [`crate::BulkData`]: the AI map in tiles ([`crate::tools::AiMapPart`],
 //!   exact nodes and the packed ones the files hold), the details, the wallmarks.
@@ -12,12 +12,13 @@
 //!   does not take them back.
 //! - The work is pure ([`aimap`], [`motion`], [`collide`], [`details`], [`wallmark`]) and runs on
 //!   the CPU pool; the generations are jobs of the Task Center (group `scene`).
-//! - [`cmd::register`] adds `aimap_tool`, `details_tool` and `wallmark_tool`.
+//! - [`cmd::register`] adds `scene.ai_map`, `scene.details` and `scene.wallmarks`.
 
 pub mod aimap;
 pub mod cmd;
 pub mod collide;
 pub mod details;
+pub mod ground;
 pub mod motion;
 pub mod wallmark;
 pub mod xr;
@@ -187,7 +188,7 @@ where
     for _ in 0..4 {
         let snap = svc.store.snapshot();
         if !snap.valid {
-            return Err(CmdError::new("no_scene", "no scene"));
+            return Err(CmdError::not_found("No scene is open."));
         }
         let lib = svc.library.clone();
         let g = f.clone();

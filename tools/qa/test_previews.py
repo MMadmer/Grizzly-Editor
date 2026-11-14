@@ -83,7 +83,7 @@ class Editor:
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
             try:
-                if mcp("mod_manifest", timeout=30).get("ok"):
+                if mcp("mod.info", timeout=30).get("ok"):
                     return
             except OSError:
                 pass

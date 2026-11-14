@@ -13,8 +13,13 @@
 //!   the outline ([`asset::outline`]), the topological order, the templates.
 //! - [`catalog`] - the kind catalog: [`Catalog`], [`Kind`], [`Param`]; [`catalog::parse_text`]
 //!   reads one catalog file and [`Catalog::assemble`] folds the files in order.
-//! - [`layout`] - [`layout::node_box`], the ONE source of a node's rectangle, and the auto
-//!   layout ([`layout::run`], [`layout::ensure_positions`]).
+//! - [`canvas`] - what the file keeps for the editor (`canvas = { ... }`): the flow, the wire
+//!   options, comment frames, reroutes, bookmarks.
+//! - [`layout`] - [`layout::node_box`], the ONE source of a node's rectangle, sized by its text
+//!   ([`measure`]), and the places of its pins in either flow.
+//! - [`arrange`] - the auto layout (both flows, wrapped fan-outs, folded chains) and align,
+//!   distribute, straighten.
+//! - [`wires`] - the one builder of a wire's polyline in its style, and its hit test.
 //! - [`validate`] - [`validate::run`]: `(graph, catalog, context) -> problems`; [`NqProblem`].
 //! - [`references`] - catalog-typed reference discovery and the task rename.
 //! - [`index`] - the project's graphs as one [`index::IndexSnapshot`] and the node search.
@@ -33,39 +38,38 @@
 //!   the file through the project's watcher), the catalog, the pickers, the item capabilities
 //!   and the project index as `Query`s keyed by the revisions they read; the slots other areas
 //!   fill ([`CharacterLookup`], [`SceneLookup`], [`WorldLookup`]).
-//! - [`register`] - the `quest_*` commands of open documents (`quest_view` is the graph tab's
+//! - [`register`] - the `graph.*` commands of open documents (`graph.view` is the graph tab's
 //!   own; the UI registers it); [`install`] - the `file.create` templates, the rename hook, the
 //!   build check, the kinds of `gz-asset` and the unsaved-work source.
+//! - [`defaults`] - what a graph takes from the author's preferences (the flow, the wires).
 
 #![forbid(unsafe_code)]
 
+pub mod arrange;
 pub mod asset;
+pub mod canvas;
 pub mod caps;
 pub mod catalog;
 mod check;
 mod cmd;
+pub mod defaults;
 mod disk;
 pub mod doc;
 pub mod index;
 pub mod kind;
 pub mod layout;
+pub mod measure;
+mod metrics_table;
 pub mod pickers;
 pub mod references;
 mod service;
 pub mod text;
 pub mod validate;
+pub mod wires;
 
 pub use asset::{Action, Cond, DocKind, Graph, Node, Objective, Pin, Role, Task, Var};
 pub use catalog::{Catalog, Kind, Param};
-pub use cmd::{install, register};
-/// The tab commands whose C++ handlers bring the graph's tab up (`OpenMcpWindow`): `gz-ui-graph`
-/// registers over them and calls these after it did.
-pub mod tab_handlers {
-    pub use crate::cmd::{
-        project_find, quest_bookmarks, quest_edit, quest_find, quest_history, quest_minimap, quest_open,
-        references,
-    };
-}
+pub use cmd::{doc_id, doc_path, install, project_find, references, register, wires_of};
 pub use disk::DiskState;
 pub use pickers::{PickerEntry, PickerType, Pickers};
 pub use service::{

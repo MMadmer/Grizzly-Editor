@@ -9,9 +9,8 @@ use gz_store::{Apply, CmdError, State};
 use crate::class::ObjClass;
 use crate::math::{Vec3, normal_align, rotation_matrix};
 use crate::model::{ObjData, ObjId, Object, SceneState, co};
-use crate::objects::{GroupData, XmsOrder};
-use crate::snap::SnapAction;
-use crate::tools::{BulkData, LevelOptions, ToolPart};
+use crate::objects::{GroupData, SpawnEntity, XmsOrder};
+use crate::tools::{BulkData, LevelOptions, SceneMode, ToolPart};
 
 /// One edit of a transform, with the class rules of `SetPosition`, `SetRotation`, `SetScale`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -50,17 +49,26 @@ pub enum ReplaceKind {
     Recovered,
 }
 
+/// Moves an object by `d`: a way path with its points, a sound source with its sound, a spawn
+/// point with its shape.
+pub fn translate(o: &mut Object, d: Vec3) {
+    if d == Vec3::ZERO {
+        return;
+    }
+    let p = o.position() + d;
+    set_position(o, p);
+}
+
 /// Every change of the scene.
 #[derive(Clone, Debug)]
 pub enum SceneCmd {
     /// A loaded (or new) scene takes the place of the open one.
     Replace(Box<SceneState>, ReplaceKind),
-    /// `AppendObject(obj, true)`: the object is the author's and becomes the selection of its
-    /// class (`SelectObjects(false, cls)` first). The name must be free.
+    /// A new object: the author's, and the selection. The name must be free.
     Place(Box<Object>),
     /// Removes objects (a group's members are removed with it).
     Delete(Vec<ObjId>),
-    /// `RemoveSelection(OBJCLASS_DUMMY)`: every selected object not inside a group.
+    /// Every selected object that is not inside a group and not locked.
     DeleteSelected,
     Rename {
         id: ObjId,
@@ -78,25 +86,35 @@ pub enum SceneCmd {
         ids: Vec<ObjId>,
         mode: SelectMode,
     },
-    /// `SelectObjects(flag, cls)`: `None` is every class. Only visible objects are selected.
-    SelectClass {
-        class: Option<ObjClass>,
+    /// Selects (or deselects, or inverts the selection of) every object the viewport may pick,
+    /// of the kinds `classes` names (`None`: of every kind).
+    SelectAll {
+        classes: Option<Vec<ObjClass>>,
         select: bool,
+        invert: bool,
     },
-    /// The current target class.
-    SetTarget(ObjClass),
-    /// `Show`: a hidden object is deselected.
+    /// What the viewport's clicks do.
+    SetMode(SceneMode),
+    /// Place mode with a kind of thing to place (a painted layer's kind, or a cell's or a
+    /// portal's, puts up that layer's mode instead).
+    Arm(ObjClass),
+    /// Objects' eyes: a hidden object is deselected. Kept with the scene, no undo step.
     Show {
         ids: Vec<ObjId>,
         visible: bool,
     },
-    /// A tool's eye or its read-only switch.
-    ToolFlags {
+    /// Objects' locks. Kept with the scene, no undo step.
+    Lock {
+        ids: Vec<ObjId>,
+        locked: bool,
+    },
+    /// A kind's eye or lock.
+    ClassView {
         class: ObjClass,
         visible: Option<bool>,
-        readonly: Option<bool>,
+        locked: Option<bool>,
     },
-    /// `GroupObjects`: the selected visible objects not in a group, into a new group.
+    /// The selected visible objects not in a group, into a new group.
     Group {
         name: SmolStr,
     },
@@ -124,12 +142,6 @@ pub enum SceneCmd {
         id: ObjId,
         order: XmsOrder,
     },
-    /// The Snap Objects buttons and switches.
-    Snap {
-        action: Option<SnapAction>,
-        use_list: Option<bool>,
-        pick: Option<bool>,
-    },
     /// New bulk data (an AI map tile, details, wallmarks).
     SetBulk(Box<BulkData>),
     /// The scene is on disk as `file`.
@@ -145,26 +157,25 @@ pub enum SceneCmd {
     ObjTool(Box<crate::objtools::ToolEdit>),
     /// An edit of the AI map, detail objects and wallmark tools.
     Bulk(Box<crate::bulk::BulkEdit>),
-    /// `RemoveSelection(classfilter)`: the selected objects of a class (`None`: of every class)
-    /// that are not inside a group; one undo step under `label` (Delete, Cut).
+    /// The selected objects that are not inside a group and not locked; one undo step under
+    /// `label` (Delete, Cut).
     RemoveSelection {
-        class: Option<ObjClass>,
         label: String,
     },
-    /// `LoadSelection`: a selection file's objects added (Paste, Open Selection); one undo step.
+    /// A set of objects added under free names, moved by `offset`, and made the selection
+    /// (Paste, Duplicate, a `.group` placed); one undo step under `label`.
     Paste {
-        selection: Box<crate::selection::Selection>,
+        bundle: Box<crate::format::group::Bundle>,
+        offset: Vec3,
         label: String,
     },
-    /// `MultiRenameObjects` of a class: each selected object takes the next free name made from
-    /// its reference.
-    MultiRename(ObjClass),
-    /// A level part loaded again or unloaded (Scene Targets' Enable): the class's objects and
-    /// tool data replaced by `part`, or cleared with `None`.
-    LevelPart {
-        class: ObjClass,
-        enabled: bool,
-        part: Option<Box<crate::io::PartLoad>>,
+    /// The scene's content as its files hold it now (another program changed them): one undo
+    /// step, the selection and the view kept.
+    Reload {
+        state: Box<SceneState>,
+        label: String,
+        /// The files now hold the scene: nothing of it is unsaved.
+        clean: bool,
     },
     /// `CSpawnPoint::AttachObject` (a shape of the scene becomes the point's own) or, with no
     /// object, `DetachObject` (the point's shape goes back into the scene). One undo step.
@@ -224,6 +235,9 @@ fn set_position(o: &mut Object, p: Vec3) {
             if let Some(a) = &mut s.attached {
                 Arc::make_mut(a).xform.position = p;
             }
+            if let Some(SpawnEntity::Decoded(e)) = &mut s.entity {
+                let _ = Arc::make_mut(e).set_position(p);
+            }
         }
         _ => o.xform.position = p,
     }
@@ -231,10 +245,13 @@ fn set_position(o: &mut Object, p: Vec3) {
 
 fn set_rotation(o: &mut Object, r: Vec3) {
     o.xform.rotation = r;
-    if let ObjData::Spawn(s) = &mut o.data
-        && let Some(a) = &mut s.attached
-    {
-        Arc::make_mut(a).xform.rotation = r;
+    if let ObjData::Spawn(s) = &mut o.data {
+        if let Some(a) = &mut s.attached {
+            Arc::make_mut(a).xform.rotation = r;
+        }
+        if let Some(SpawnEntity::Decoded(e)) = &mut s.entity {
+            let _ = Arc::make_mut(e).set_angle(r);
+        }
     }
 }
 
@@ -293,12 +310,13 @@ impl SceneState {
         self.serial += 1;
     }
 
-    /// A read-only part's objects are not changed (`flForceReadonly`, the Outliner's text).
+    /// A locked object (or one of a locked kind) is not changed.
     fn check_editable(&self, id: ObjId) -> Result<(), CmdError> {
         match self.get(id) {
-            Some(o) if !self.tools.part(o.class).editable() => {
-                Err(CmdError::invalid(format!("The object '{}' is read only.", o.name)))
-            }
+            Some(o) if !self.changeable(o) => Err(CmdError::new(
+                "refused",
+                format!("'{}' is locked: unlock it (or its kind) to change it", o.name),
+            )),
             _ => Ok(()),
         }
     }
@@ -347,7 +365,7 @@ impl SceneState {
         Ok(())
     }
 
-    /// `GroupObjects` with `UpdatePivot(0, false)`.
+    /// The selection into a new group, its pivot where its first object stands.
     fn group_selection(&mut self, name: SmolStr) -> Result<ObjId, CmdError> {
         let ids: Vec<ObjId> = self
             .selected_in_order()
@@ -393,6 +411,7 @@ impl SceneState {
         Ok(gid)
     }
 
+    /// Every selected group let go of its members, which become the selection.
     fn ungroup_selection(&mut self) -> usize {
         let groups: Vec<ObjId> = self
             .selected_in_order()
@@ -424,7 +443,7 @@ impl SceneState {
         loaded: crate::objects::Loaded,
         at: crate::math::Transform,
     ) -> Result<ObjId, CmdError> {
-        let gid = crate::io::insert_loaded(self, loaded);
+        let gid = crate::sdk::insert_loaded(self, loaded);
         for e in [
             TransformEdit::Position(at.position),
             TransformEdit::Rotation(at.rotation),
@@ -478,7 +497,7 @@ impl SceneState {
     }
 
     /// Removes an object; a group takes its members along, a member leaves its group. A scene
-    /// object's meshes leave the sectors that hold them (`ESceneSectorTool::OnObjectRemove`).
+    /// object's meshes leave the sectors that hold them.
     fn delete(&mut self, id: ObjId) {
         if let Some(o) = self.get(id).cloned()
             && let ObjData::Group(g) = &o.data
@@ -492,8 +511,7 @@ impl SceneState {
         self.remove(id);
     }
 
-    /// `CSector::DelMesh` for every mesh of a scene object: a sector left without a mesh goes
-    /// too ("Sector has no meshes and will be removed.").
+    /// A scene object's meshes out of every sector: a sector left without a mesh goes too.
     fn forget_in_sectors(&mut self, id: ObjId) {
         let Some(o) = self.get(id) else { return };
         if o.class != ObjClass::SceneObject {
@@ -521,99 +539,65 @@ impl SceneState {
         }
     }
 
-    /// `RemoveSelection(classfilter)`: what goes, as `DeleteSelected` takes it.
-    fn remove_selection(&mut self, class: Option<ObjClass>) -> usize {
-        let sel: Vec<ObjId> = self
-            .selected_in_order()
-            .into_iter()
-            .filter(|id| class.is_none_or(|c| self.get(*id).is_some_and(|o| o.class == c)))
-            .collect();
-        let count = sel.len();
+    /// What a delete of the selection takes: every selected object that is not inside a group
+    /// and not locked; a way of which points are selected loses those points and goes only when
+    /// none are left.
+    fn remove_selection(&mut self) -> usize {
+        let sel = self.selected_in_order();
+        let mut count = 0;
         for id in sel {
             let Some(o) = self.get(id) else { continue };
-            if o.flags.co & co::IN_GROUP != 0 || !self.tools.part(o.class).editable() {
+            if o.flags.co & co::IN_GROUP != 0 || !self.changeable(o) {
                 continue;
             }
-            // `CWayObject::OnSelectionRemove`: in Points mode a way loses its selected points
-            // and goes only when none are left
-            if self.tools.obj.way_points
-                && let ObjData::Way(w) = &o.data
+            if let ObjData::Way(w) = &o.data
+                && w.points.iter().any(|p| p.selected)
+                && w.points.iter().any(|p| !p.selected)
             {
                 let mut w2 = w.clone();
-                if crate::objtools::way::remove_selected_points(&mut w2) == 0 && !w2.points.is_empty() {
-                    continue;
-                }
-                if !w2.points.is_empty() {
-                    let mut n = (**o).clone();
-                    n.data = ObjData::Way(w2);
-                    self.replace(n);
-                    continue;
-                }
+                crate::objtools::way::remove_selected_points(&mut w2);
+                let mut n = (**o).clone();
+                n.data = ObjData::Way(w2);
+                self.replace(n);
+                count += 1;
+                continue;
             }
             self.delete(id);
+            count += 1;
         }
         count
     }
 
-    /// `LoadSelection`'s appends: names made free with `GenObjectName`, the tools that are not
-    /// enabled or are read-only left out, a bulk tool's data replaced. Returns the objects added.
-    fn paste(&mut self, sel: crate::selection::Selection) -> usize {
-        use crate::selection::ToolSelection;
-        // `SelectObjects(false)`
+    /// A set of objects added: free names, the author's, the selection. Answers how many.
+    fn paste(&mut self, bundle: crate::format::group::Bundle, offset: Vec3) -> usize {
         self.selection.clear();
-        let mut n = 0;
-        for l in sel.legacy {
-            // `EScene::OnLoadSelectionAppendObject`: the author's, and selected
-            let id = crate::io::insert_loaded(self, l);
-            if let Some(o) = self.get(id).cloned() {
-                let mut o = (*o).clone();
+        let ids = crate::format::group::insert(self, bundle, offset);
+        for id in &ids {
+            if let Some(o) = self.get(*id) {
+                let mut o = (**o).clone();
                 o.marks.authored = true;
+                let top = o.owner.is_none();
                 self.replace(o);
-            }
-            self.selection.insert(id);
-            n += 1;
-        }
-        for (class, part) in sel.tools {
-            let t = self.tools.part(class);
-            if !t.enabled || !t.editable() {
-                continue;
-            }
-            match part {
-                // oracle: `ESceneCustomOTool::OnLoadSelectionAppendObject` neither selects the
-                // object nor marks it the author's: the copy keeps the flags it was copied with
-                ToolSelection::Objects(objs) => {
-                    for l in objs {
-                        crate::io::insert_loaded(self, l);
-                        n += 1;
-                    }
-                }
-                ToolSelection::Bulk(bytes) => {
-                    let _ = self.bulk.set_stream(class, &bytes);
+                if top {
+                    self.selection.insert(*id);
                 }
             }
         }
-        n
+        ids.len()
     }
 
-    /// `ESceneCustomOTool::MultiRenameObjects`.
-    fn multi_rename(&mut self, class: ObjClass) -> usize {
-        let mut n = 0;
-        for id in self.by_class[class.index()].clone() {
-            if !self.selection.contains(&id) {
-                continue;
-            }
-            let Some(o) = self.get(id).cloned() else { continue };
-            // oracle: the object's own name counts as used, so a name equal to its reference
-            // becomes `<ref>_00`
-            let name = self.gen_name(o.ref_name());
-            if !o.name.eq_ignore_ascii_case(&name) {
-                let mut o2 = (*o).clone();
-                o2.name = SmolStr::new(name);
-                self.replace(o2);
-                n += 1;
-            }
+    /// A spawn's entity says what its object says: its name, where it stands and how it turns.
+    fn sync_entity(o: &mut Object) {
+        let (name, p, r) = (o.name.clone(), o.xform.position, o.xform.rotation);
+        if let ObjData::Spawn(s) = &mut o.data
+            && let Some(SpawnEntity::Decoded(e)) = &mut s.entity
+            && (e.name() != name || e.position() != p || e.angle() != r)
+        {
+            let e = Arc::make_mut(e);
+            let _ = e.set_name(&name);
+            let _ = e.set_position(p);
+            let _ = e.set_angle(r);
         }
-        n
     }
 }
 
@@ -639,21 +623,21 @@ impl State for SceneState {
                 Ok(SceneReply::None)
             }
             SceneCmd::Place(obj) => {
-                if self.name_used(&obj.name) {
-                    return Err(CmdError::invalid("object name already used"));
+                if !self.name_free(&obj.name) {
+                    return Err(CmdError::invalid(format!("an object is named '{}' already", obj.name)));
                 }
-                if !self.tools.part(obj.class).editable() {
-                    return Err(CmdError::invalid(format!("The object '{}' is read only.", obj.name)));
+                if self.tools.part(obj.class).locked {
+                    return Err(CmdError::new(
+                        "refused",
+                        format!("the {} are locked: unlock them to add one", obj.class.label_plural()),
+                    ));
                 }
-                let class = obj.class;
-                for id in self.by_class[class.index()].clone() {
-                    self.selection.remove(&id);
-                }
+                self.selection.clear();
                 let mut obj = *obj;
                 obj.marks.authored = true;
+                Self::sync_entity(&mut obj);
                 let id = self.insert(obj);
                 self.selection.insert(id);
-                self.tools.target = class;
                 self.bump();
                 cx.undoable("Add Object");
                 Ok(SceneReply::Id(id))
@@ -661,9 +645,7 @@ impl State for SceneState {
             SceneCmd::Delete(ids) => {
                 let mut n = 0;
                 for id in ids {
-                    if self.get(id).is_some()
-                        && self.tools.part(self.get(id).map_or(ObjClass::Group, |o| o.class)).editable()
-                    {
+                    if self.get(id).is_some_and(|o| self.changeable(o)) {
                         self.delete(id);
                         n += 1;
                     }
@@ -675,18 +657,23 @@ impl State for SceneState {
                 Ok(SceneReply::Count(n))
             }
             SceneCmd::DeleteSelected => {
-                let count = self.remove_selection(None);
+                let count = self.remove_selection();
                 self.bump();
                 cx.undoable("Delete");
                 Ok(SceneReply::Count(count))
             }
             SceneCmd::Rename { id, name } => {
-                let name = SmolStr::new(name.to_lowercase());
+                if name.trim().is_empty() {
+                    return Err(CmdError::invalid("a name cannot be empty"));
+                }
                 if self.find_any(&name).is_some_and(|o| o.id != id) {
-                    return Err(CmdError::invalid("new name already used"));
+                    return Err(CmdError::invalid(format!("an object is named '{name}' already")));
                 }
                 self.check_editable(id)?;
-                self.edit_object(id, |o| o.name = name)?;
+                self.edit_object(id, |o| {
+                    o.name = name;
+                    Self::sync_entity(o);
+                })?;
                 self.bump();
                 cx.undoable("Rename");
                 Ok(SceneReply::None)
@@ -744,32 +731,47 @@ impl State for SceneState {
                 }
                 Ok(SceneReply::Count(n))
             }
-            SceneCmd::SelectClass { class, select } => {
-                let classes: Vec<ObjClass> = class.map_or_else(|| ObjClass::ALL.to_vec(), |c| vec![c]);
+            SceneCmd::SelectAll { classes, select, invert } => {
+                let classes: Vec<ObjClass> = classes.unwrap_or_else(|| ObjClass::ALL.to_vec());
+                let mut n = 0;
                 for c in classes {
                     for id in self.by_class[c.index()].clone() {
-                        let visible = self.get(id).is_some_and(|o| o.flags.visible);
-                        if select && visible {
+                        let Some(o) = self.get(id) else { continue };
+                        if !self.pickable(o) || o.flags.co & co::IN_GROUP != 0 && !o.editable() {
+                            continue;
+                        }
+                        let on = if invert { !self.selection.contains(&id) } else { select };
+                        if on {
                             self.selection.insert(id);
-                        } else if !select && visible {
+                            n += 1;
+                        } else {
                             self.selection.remove(&id);
                         }
                     }
                 }
-                Ok(SceneReply::None)
+                Ok(SceneReply::Count(n))
             }
-            SceneCmd::SetTarget(class) => {
-                // `ESceneShapeTool::OnActivate` / `OnDeactivate`: Edit Level Bound goes off
-                let before = self.tools.target;
-                if before != class
-                    && (before == ObjClass::Shape || class == ObjClass::Shape)
-                    && self.tools.obj.edit_level_bound
-                {
+            SceneCmd::SetMode(mode) => {
+                // drawing the level's bound by hand belongs to the zones
+                if mode != SceneMode::Zones && self.tools.obj.edit_level_bound {
                     self.tools.obj.edit_level_bound = false;
                     crate::objtools::show_level_bounds(self, false);
                 }
-                self.tools.target = class;
+                self.tools.mode = mode;
                 Ok(SceneReply::None)
+            }
+            SceneCmd::Arm(class) => {
+                let mode = match class {
+                    ObjClass::AiMap => SceneMode::AiMap,
+                    ObjClass::DetailObjects => SceneMode::Details,
+                    ObjClass::Wallmark => SceneMode::Wallmarks,
+                    ObjClass::Sector | ObjClass::Portal => SceneMode::Zones,
+                    _ => SceneMode::Place,
+                };
+                if class.is_object_tool() {
+                    self.tools.placing = class;
+                }
+                self.apply(SceneCmd::SetMode(mode), cx)
             }
             SceneCmd::Show { ids, visible } => {
                 let mut n = 0;
@@ -782,9 +784,25 @@ impl State for SceneState {
                         self.selection.remove(&id);
                     }
                 }
+                if n > 0 {
+                    cx.content_changed();
+                }
                 Ok(SceneReply::Count(n))
             }
-            SceneCmd::ToolFlags { class, visible, readonly } => {
+            SceneCmd::Lock { ids, locked } => {
+                let mut n = 0;
+                for id in ids {
+                    if self.get(id).is_some_and(|o| o.flags.locked != locked) {
+                        self.edit_object(id, |o| o.flags.locked = locked)?;
+                        n += 1;
+                    }
+                }
+                if n > 0 {
+                    cx.content_changed();
+                }
+                Ok(SceneReply::Count(n))
+            }
+            SceneCmd::ClassView { class, visible, locked } => {
                 let p = self.tools.part_mut(class);
                 let mut changed = 0;
                 if let Some(v) = visible
@@ -793,11 +811,21 @@ impl State for SceneState {
                     p.visible = v;
                     changed += 1;
                 }
-                if let Some(r) = readonly
-                    && p.readonly != r
+                if let Some(l) = locked
+                    && p.locked != l
                 {
-                    p.readonly = r;
+                    p.locked = l;
                     changed += 1;
+                }
+                if visible == Some(false) || locked == Some(true) {
+                    for id in self.by_class[class.index()].clone() {
+                        if visible == Some(false) {
+                            self.selection.remove(&id);
+                        }
+                    }
+                }
+                if changed > 0 {
+                    cx.content_changed();
                 }
                 Ok(SceneReply::Count(changed))
             }
@@ -900,22 +928,6 @@ impl State for SceneState {
                 cx.undoable("Order");
                 Ok(SceneReply::None)
             }
-            SceneCmd::Snap { action, use_list, pick } => {
-                if let Some(u) = use_list {
-                    self.tools.snap_use = u;
-                }
-                if let Some(p) = pick {
-                    self.tools.snap_pick = p;
-                }
-                if let Some(a) = action
-                    && crate::snap::apply_snap(self, a)
-                    && a != SnapAction::Select
-                {
-                    self.bump();
-                    cx.undoable("Snap List");
-                }
-                Ok(SceneReply::Count(self.tools.snap.len()))
-            }
             SceneCmd::SetBulk(bulk) => {
                 self.bulk = *bulk;
                 self.bump();
@@ -933,56 +945,32 @@ impl State for SceneState {
             }
             SceneCmd::ObjTool(edit) => crate::objtools::apply(self, *edit, cx),
             SceneCmd::Bulk(edit) => crate::bulk::apply(self, *edit, cx),
-            SceneCmd::RemoveSelection { class, label } => {
-                let n = self.remove_selection(class);
+            SceneCmd::RemoveSelection { label } => {
+                let n = self.remove_selection();
                 self.bump();
                 cx.undoable(label);
                 Ok(SceneReply::Count(n))
             }
-            SceneCmd::Paste { selection, label } => {
-                let n = self.paste(*selection);
+            SceneCmd::Paste { bundle, offset, label } => {
+                let n = self.paste(*bundle, offset);
                 self.bump();
                 cx.undoable(label);
                 Ok(SceneReply::Count(n))
             }
-            SceneCmd::MultiRename(class) => {
-                let n = self.multi_rename(class);
-                if n == 0 {
-                    cx.unchanged();
-                    return Ok(SceneReply::Count(0));
+            SceneCmd::Reload { state, label, clean } => {
+                let view = (self.selection.clone(), self.tools.mode, self.meta.file.clone());
+                let serial = self.serial + 1;
+                let next = self.next_id.max(state.next_id);
+                *self = *state;
+                self.serial = serial;
+                self.next_id = next;
+                self.selection = view.0.into_iter().filter(|id| self.objects.contains_key(id)).collect();
+                self.tools.mode = view.1;
+                self.meta.file = view.2;
+                cx.undoable(label);
+                if clean {
+                    cx.mark_saved();
                 }
-                self.bump();
-                cx.undoable("Rename Objects");
-                Ok(SceneReply::Count(n))
-            }
-            SceneCmd::LevelPart { class, enabled, part } => {
-                for id in self.by_class[class.index()].clone() {
-                    self.remove(id);
-                }
-                match class {
-                    ObjClass::AiMap => self.bulk.ai_map = None,
-                    ObjClass::DetailObjects => self.bulk.details = None,
-                    ObjClass::Wallmark => self.bulk.wallmarks = None,
-                    _ => {}
-                }
-                let keep = (self.tools.part(class).visible, self.tools.part(class).readonly);
-                *self.tools.part_mut(class) = crate::tools::ToolPart::new(class);
-                if let Some(p) = part {
-                    let p = *p;
-                    *self.tools.part_mut(class) = p.tool;
-                    if let Some(b) = &p.bulk {
-                        let _ = self.bulk.set_stream(class, b);
-                    }
-                    for o in p.objects {
-                        crate::io::insert_loaded(self, o);
-                    }
-                }
-                let t = self.tools.part_mut(class);
-                t.enabled = enabled;
-                (t.visible, t.readonly) = keep;
-                self.bump();
-                // the part's file is what it was: published, nothing of it unsaved
-                let _ = cx;
                 Ok(SceneReply::None)
             }
             SceneCmd::ReloadGroups { groups } => {
@@ -998,11 +986,14 @@ impl State for SceneState {
                 Ok(SceneReply::Count(n))
             }
             SceneCmd::PlaceGroup { loaded, at } => {
-                if !self.tools.part(ObjClass::Group).editable() {
-                    return Err(CmdError::invalid(format!("The object '{}' is read only.", loaded.obj.name)));
+                if self.tools.part(ObjClass::Group).locked {
+                    return Err(CmdError::new("refused", "the groups are locked: unlock them to add one"));
                 }
                 if self.name_used(&loaded.obj.name) {
-                    return Err(CmdError::invalid("object name already used"));
+                    return Err(CmdError::invalid(format!(
+                        "an object is named '{}' already",
+                        loaded.obj.name
+                    )));
                 }
                 let mut l = *loaded;
                 l.obj.marks.authored = true;
@@ -1011,12 +1002,9 @@ impl State for SceneState {
                     m.obj.flags.co &= !co::IN_GROUP_UNIQUE;
                     m.obj.marks.authored = true;
                 }
-                for id in self.by_class[ObjClass::Group.index()].clone() {
-                    self.selection.remove(&id);
-                }
+                self.selection.clear();
                 let gid = self.insert_group_at(l, at)?;
                 self.selection.insert(gid);
-                self.tools.target = ObjClass::Group;
                 self.bump();
                 cx.undoable("Add Object");
                 Ok(SceneReply::Id(gid))
@@ -1089,42 +1077,21 @@ impl State for SceneState {
         }
     }
 
-    /// Undo brings the content back; the selection of objects that still exist, the target
-    /// class, the tools' eyes and switches and the file name stay.
+    /// Undo brings the content back; the selection of objects that still exist, the mode, the
+    /// kinds' eyes and locks, the panels' switches and the file name stay.
     fn restored(&self, current: &Self) -> Self {
         let mut s = self.clone();
         s.selection = current.selection.iter().copied().filter(|id| s.objects.contains_key(id)).collect();
-        s.tools.target = current.tools.target;
-        s.tools.snap_use = current.tools.snap_use;
-        s.tools.snap_pick = current.tools.snap_pick;
+        s.tools.mode = current.tools.mode;
+        s.tools.placing = current.tools.placing;
         for c in ObjClass::ALL {
             s.tools.part_mut(c).visible = current.tools.part(c).visible;
-            s.tools.part_mut(c).readonly = current.tools.part(c).readonly;
+            s.tools.part_mut(c).locked = current.tools.part(c).locked;
         }
         s.meta.file = current.meta.file.clone();
+        s.meta.imported = current.meta.imported.clone();
         s.serial = current.serial + 1;
         s.tools.obj = current.tools.obj;
-        // a level part loaded or unloaded since is not undone: the class is taken as it is now
-        for c in ObjClass::ALL {
-            if s.tools.part(c).enabled == current.tools.part(c).enabled {
-                continue;
-            }
-            for id in s.by_class[c.index()].clone() {
-                s.remove(id);
-            }
-            for o in current.of_class(c) {
-                s.by_class[c.index()].insert(o.id);
-                s.names.insert((o.class, o.name.clone()), o.id);
-                s.objects.insert(o.id, o.clone());
-            }
-            *s.tools.part_mut(c) = current.tools.part(c).clone();
-            match c {
-                ObjClass::AiMap => s.bulk.ai_map.clone_from(&current.bulk.ai_map),
-                ObjClass::DetailObjects => s.bulk.details.clone_from(&current.bulk.details),
-                ObjClass::Wallmark => s.bulk.wallmarks.clone_from(&current.bulk.wallmarks),
-                _ => {}
-            }
-        }
         s.next_id = s.next_id.max(current.next_id);
         s.tools.bulk = current.tools.bulk.clone();
         s.tools.debug = current.tools.debug.clone();
@@ -1202,13 +1169,35 @@ mod tests {
         s.selection.insert(a);
         let t = T::new(s);
         assert!(matches!(
-            t.send(SceneCmd::RemoveSelection { class: Some(ObjClass::SceneObject), label: "Delete".into() }),
+            t.send(SceneCmd::RemoveSelection { label: "Delete".into() }),
             Ok(SceneReply::Count(1))
         ));
         let s = t.state();
         assert!(s.find_relaxed("s1").is_none(), "the sector left without a mesh goes");
         let Some(ObjData::Sector(d)) = s.get(s2).map(|o| &o.data) else { panic!("s2 stays") };
         assert_eq!(d.items, vec![(SmolStr::new("b"), SmolStr::new("m"))]);
+    }
+
+    #[test]
+    fn a_light_and_a_glow_are_deleted_together_and_a_locked_object_stays() {
+        let mut s = SceneState::default();
+        let l = s.insert(Object::new(ObjClass::Light, "lamp", ObjData::Light(LightData::default())));
+        let g = s.insert(Object::new(ObjClass::Glow, "halo", ObjData::Glow(GlowData::default())));
+        let mut kept = Object::new(ObjClass::Glow, "kept", ObjData::Glow(GlowData::default()));
+        kept.flags.locked = true;
+        let k = s.insert(kept);
+        s.selection.insert(l);
+        s.selection.insert(g);
+        s.selection.insert(k);
+        let t = T::new(s);
+        t.send(SceneCmd::RemoveSelection { label: "Delete".into() }).unwrap();
+        let s = t.state();
+        assert!(s.get(l).is_none() && s.get(g).is_none(), "both kinds go in one step");
+        assert!(s.get(k).is_some(), "a locked object is not changed");
+        // one undo step brings both back
+        assert_eq!(t.rt.block_on(t.store.undo()).as_deref(), Some("Delete"));
+        let s = t.state();
+        assert!(s.get(l).is_some() && s.get(g).is_some());
     }
 
     #[test]

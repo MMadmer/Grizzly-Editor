@@ -1,10 +1,9 @@
 //! The Mod Browser's picture and tags (MOD_CATALOG 6): `[module] thumbnail` - a 256 x 256
 //! DXT1/DXT5 DDS the editor makes as `thumbnail.dds` at the module root from any picture - and
-//! `[module] tags` from the fixed vocabulary. They are the `tags` and `thumbnail` arguments of
-//! `mod_set_manifest`, plugged into `gz_mod::ManifestArgs` by [`crate::install`].
+//! `[module] tags` from the fixed vocabulary. `mod.thumbnail` makes the picture; the tags are the `tags` key of
+//! `mod.set`, plugged into `gz_mod::ManifestArgs` by [`crate::install`].
 
 use std::path::Path;
-use std::sync::Arc;
 
 use futures::FutureExt;
 use gz_editor::Editor;
@@ -115,7 +114,7 @@ fn is_own_thumbnail(thumbnail: &str) -> bool {
     thumbnail.eq_ignore_ascii_case(THUMBNAIL_NAME)
 }
 
-/// `thumbnail=` of `mod_set_manifest` (`ApplyThumbnail`): what `[module] thumbnail` becomes.
+/// What `mod.thumbnail` makes `[module] thumbnail`:
 ///
 /// - empty: no thumbnail; the editor's own `thumbnail.dds` goes with it (one the author pointed
 ///   at elsewhere in the module is theirs and stays);
@@ -183,20 +182,10 @@ fn clear_readonly(path: &Path) {
     }
 }
 
-/// Plugs `tags` and `thumbnail` into `mod_set_manifest`.
+/// Plugs `tags` into `mod.set`.
 pub fn install_manifest_args(editor: &Editor) {
     let args = ManifestArgs::of(editor);
     args.provide("tags", |cx: ArgCx| async move { tags_edit(&cx.value).map(|e| vec![e]) }.boxed());
-    args.provide("thumbnail", |cx: ArgCx| {
-        async move {
-            let ArgCx { editor, root, value, manifest } = cx;
-            let current = manifest.thumbnail;
-            let ed: Arc<Editor> = editor;
-            let thumbnail = ed.exec.io(move || apply_thumbnail(&root, &value, &current)).await?;
-            Ok(vec![Edit::optional("module", "thumbnail", &thumbnail)])
-        }
-        .boxed()
-    });
 }
 
 #[cfg(test)]

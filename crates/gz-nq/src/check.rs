@@ -80,7 +80,7 @@ pub(crate) async fn run(editor: &Editor, svc: &NqService) -> Report {
             report.log.push(format!("{rel}: E003 {err}"));
             continue;
         }
-        for p in &problems {
+        for p in problems.iter().filter(|p| !p.is_note()) {
             if p.is_error() {
                 report.errors += 1;
             } else {

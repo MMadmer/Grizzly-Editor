@@ -1,0 +1,51 @@
+{
+ "cform": {
+  "triangles": 152,
+  "vertices": 79
+ },
+ "files": {
+  "build.cform": {
+   "sha256": "eca8fd02e8b7d4c9aee0df42273bbba3f1c6d3d1d18520a58b02cd9e66edf2a0",
+   "size": 8904
+  },
+  "build.lights": {
+   "sha256": "6687d3d87e83d14ebbed7b6851f8bee705daa4fc8e9692cef89602fae46d9827",
+   "size": 336
+  },
+  "build.prj": {
+   "sha256": "77fa2ee5508af32e60dfbca3f5195bc49a3b55d1fb0f355691923f6a8c0e6b1a",
+   "size": 3096
+  },
+  "level": {
+   "sha256": "a3c047edc5e02bd8de675ed6709039cd699ad623a60e31a19194f305ff6bc472",
+   "size": 679
+  },
+  "level.cform": {
+   "sha256": "ab963baf3a9573b9350353e8a2ba6a6efa74760ade417ec645f2f46682338bbb",
+   "size": 3416
+  },
+  "level.geom": {
+   "sha256": "b04ee6ea459d4c957a631677ce4a2c97ec8223e4ede2295505e3a0a59617a0e1",
+   "size": 5376
+  },
+  "level.geomx": {
+   "sha256": "8f88d13db868ea0a5d9e76d62643aa482930feeb8d427d28ffbcec3dddec60ab",
+   "size": 1944
+  },
+  "level_stat.tga": {
+   "sha256": "aa05db69845f096d3a319dbcc4b93a9dd7655f3b591b2be76615f8ec54195bda",
+   "size": 3862
+  },
+  "level_stat.txt": {
+   "sha256": "40f33a99bccbe92a15f17f4250c8af356e16d6778ab558ae7cf0daf2a7abc93b",
+   "size": 159
+  }
+ },
+ "light_bytes": 108,
+ "lightmaps": [],
+ "portals": 0,
+ "quality": "draft",
+ "scene": "mp_test",
+ "sectors": 1,
+ "visuals": 3
+}

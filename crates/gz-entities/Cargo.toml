@@ -17,9 +17,9 @@ smol_str.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 rustc-hash.workspace = true
 gz-corpus.workspace = true
 gz-ltx.workspace = true
