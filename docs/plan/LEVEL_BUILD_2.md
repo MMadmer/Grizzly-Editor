@@ -186,7 +186,7 @@ Sources: Ylitie, Karras, Laine, "Efficient Incoherent Ray Traversal on GPUs Thro
 2017); tinybvh (MIT; BVH2 / CWBVH builders and GPU traversal kernels); the `obvhs` crate (MIT / Apache; PLOC
 BVH2, CWBVH, SIMD traversal); Benthin et al. 2018 on wide BVHs (Embree); Unity's GPU lightmapper deep dive;
 Frostbite's Flux (GDC 2018, Ray Tracing Gems 23); Bakery's "Baking artifact-free lightmaps"; xatlas; Unreal's
-World Partition builders and Derived Data Cache; IXRay's `xrLC/Light` (Embree, CUDA and Vulkan back ends).
+World Partition builders and Derived Data Cache; IXRay's level compiler's light (Embree, CUDA and Vulkan back ends).
 
 - **A software BVH in a WGSL compute shader is fast enough**: the one measured WGSL data point is about
   2.8 billion shadow rays a second on an RTX 4090 on a small scene; for a million triangles on this machine
