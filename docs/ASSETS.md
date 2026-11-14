@@ -97,7 +97,8 @@ A project is a folder of plain files. An agent (or any tool) works on it directl
 2. Edit or create the files.
 3. `Grizzly-Cmd.exe check [path]` - every problem of the project, or of one file, with positions; exit code 1
    when an error is among them. No window, a second or two.
-4. `Grizzly-Cmd.exe reference <kind>` - the format reference of a kind, with what the linked game adds.
+4. `Grizzly-Cmd.exe reference <kind>` - the format reference of a kind, with what the linked game adds;
+   `reference manifest` is `mod.ltx`'s, every section and key with its values.
 5. `Grizzly-Cmd.exe build` / `package` - the same builds the editor's buttons run.
 
 An editor that has the project open follows every such change (section 4): the two can work on one project at
@@ -108,7 +109,7 @@ once. MCP is for what files cannot do - looking at the editor, driving its UI, t
 | Kind | File | Header | Read by | Reference |
 |---|---|---|---|---|
 | Project | `<Name>.grizzly` | `grizzly` | the editor | `docs/assets/PROJECT.md` |
-| Module manifest | `mod.ltx` | `[module] api` | the game, the editor | the game's `MODDING.md` |
+| Module manifest | `mod.ltx` | `[module] api` | the game, the editor | `asset.reference kind=manifest`; the game's `MODDING.md` is the normative text |
 | Quest | `*.nqasset` | `nq` | the game, the editor | `docs/nq/NQ_FORMAT.md` |
 | Behaviour graph | `*.behasset` | `beh` | the game, the editor | `docs/nq/NQ_FORMAT.md` section 10 |
 | Character | `*.npcasset` | `npc` | the game, the editor | `docs/assets/CHARACTER.md` |

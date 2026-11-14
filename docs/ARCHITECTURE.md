@@ -164,7 +164,7 @@ last one. The game knows modules and nothing of this editor.
 
 | Artifact | Normative text | Proof |
 |---|---|---|
-| `mod.ltx`, all sections | game `MODDING.md`, `XMS_ARCHITECTURE.md` | lossless round trip over the corpus; `asset.check` |
+| `mod.ltx`, all sections | game `MODDING.md`, `XMS_ARCHITECTURE.md` | lossless round trip over the corpus; `asset.check`; its reference (`gz-mod`'s `reference.rs`) held to every reader of the manifest by `gz-mod`'s test and `grizzly`'s `manifest_reference` |
 | `.nqasset`, `.behasset` | `docs/nq/NQ_FORMAT.md`, game `NQ_RUNTIME.md` | the game's `run_lua.py test_examples.lua`; the catalogue parity test of the game; `test_graph_ui.py`, `test_behaviours.py` |
 | `.npcasset` | game `MODDING.md`, "A module's characters" | `test_characters.py`; the game's `Run-ScreensQa.ps1 -Part Descriptions` |
 | `.pdaasset` | `docs/pda/PDA_FORMAT.md` | the game's `xms_pda_layout.script` executed unchanged; `test_pda.py`; the game's `test_pda_layout.lua` |

@@ -151,3 +151,50 @@ build of 13:32 (older than the tree by the round-2 fixes; it is rebuilt at the v
 others).
 
 Write `docs/plan/reports/CRITIC.md` (round 3) and answer with the same text, in the form of the earlier rounds.
+
+## Round 4
+
+Round 3's report is `docs/plan/reports/CRITIC-3.md` (one blocker, two `should`, a list of `minor`); rounds 1 and 2
+are `CRITIC-1.md` and `CRITIC-2.md`. Since round 3 (`git log --oneline fc95c3b0..HEAD`) the architect and one
+engineer changed the tree; the engineer's report is `docs/plan/reports/E6.md` (the manifest's reference, the first
+problem's sentence, `mod.set`'s card, `AGENTS.md`). You are a new reader: you wrote none of the earlier rounds.
+The sections above describe the task; yours is the same one step on:
+
+1. **Is each finding of round 3 closed?** In the code and the documents as they are now, the blocker hardest: a
+   tab's save asked by a command. Read `gz-app`'s `save_tab` (`shell.rs`), `save_tabs` (`unsaved.rs`),
+   `ShellRequests::by_caller` and `Document::save_failed` (`doc.rs`), then EVERY `Document::save` of the workspace
+   (`fn save(&mut self, cx`): can `doc.save`, `ui.tab action=close save=true`, `ui.tab action=open save=true`,
+   `app.quit save=true` or `app.switch_project save=true` still reach a question, the system's file dialog, a
+   notice left up, or a wait for an answer nobody gives? Does a save that fails after `save` returned (a write on
+   the pools, a job) reach the command's answer, or end as two minutes of "did not finish"? Does any of those
+   commands go on (close the tab, the project, the editor) before the save it asked for has finished? The window's
+   Exit with Save now waits for the saves: is there a path where the editor ends over unsaved work, or never ends?
+   Then the game test (`gz_project::games::holds_a_game`): does every place that decides "a game and no library"
+   use it, can a library that is a game be written by any path, is a folder laid out like the editor's own taken?
+   Then finding 3 as round 3 walked it: a project from nothing with nothing but the editor's answers -
+   `project.create`, `check`, `help mod.set`, `mod.set`, `file.create kind=quest path=<a new folder>`, `reference
+   manifest`, `mod.build target=folder` - where does an agent still have to guess? Read the page
+   (`Grizzly-Cmd.exe reference manifest`) against `crates/gz-mod/src/model.rs` and the other readers of the
+   manifest (`gz-world`, `gz-screens`, `gz-build`, `gz-release`): a sentence that says what the code does not do,
+   or a key the code reads that the page lacks, is a finding.
+2. **The work since round 3, by the same measure**: `check_words.py`'s dotted call (run it; then look for what it
+   still cannot see); `file.create` making its folder (can it make one outside the project, under a tooling name,
+   through a link?); the note of a check that finds nothing new, now a toast; the PDA tab's save (dirty until
+   written, the text as Save found it); the libraries' saves answering a caller with their job's failure.
+3. **The request against the result, as a whole** - the ten points at the top of this brief. Three rounds looked
+   at parts and at the whole once. Is there a point of the ten the author would say is not done, or not quality?
+   Say so only where you can show it in the code, a command's answer, a document or a picture.
+
+Since round 3 the architect also found and closed, on the way: every command that saves tabs now waits for the
+saves (`save_tabs`); the tabs that save off the UI thread (a graph, Mod Settings, Characters, Light Animations, the
+libraries' jobs) answer a failed save; the PDA tab's `discard` reads nothing from the disk (a retarget raced two
+loads); `tools/rust/test.sh` ran every executable of the build and, with `grizzly`'s first integration test,
+started the editor itself - it takes only test artifacts now. Judge these like the rest.
+
+Pictures as they are now: `Intermediate/plan/tour/*.png` and `Intermediate/plan/tour/small/*.png` (taken on this
+tree). The last runs on this tree, each once and bounded: `check.sh` clean, 1412 unit tests green, the 26 QA
+suites green on the debug build (`test_pda` on a second run alone, after the fix of the race its new check
+found). The release build is older than the tree and is rebuilt at the very end.
+
+Write `docs/plan/reports/CRITIC.md` (round 4) and answer with the same text, in the form of the earlier rounds. If
+nothing is open, say "Nothing open." and list what you checked.

@@ -46,7 +46,11 @@ reg.cmd(
   (`action=discard`), is named in the card (`destroys_with`): with it the call counts as `destroy`. A `read`
   command writes no file: where the same thing can be read and written, they are two commands (`scene.info`
   answers a scene's summary, `scene.summary` writes it as text).
-- A command never opens a question. It did what it was asked, or it says why not.
+- A command never opens a question. It did what it was asked, or it says why not. A tab's save that a command
+  asks for (`doc.save`, `ui.tab action=close save=true`, `app.quit save=true`) is held to it: what the window's
+  Save would ask is refused, naming the command that takes the answer as a parameter - `scene.save path=` for a
+  scene without a file; `library.import overwrite=true`, code `exists`, for New Textures that would replace a
+  texture - and a save that fails on the pools is the command's answer, with its code.
 
 ## 2. Parameter names
 

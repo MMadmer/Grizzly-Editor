@@ -88,7 +88,8 @@ A change of plan is a change of its document first.
   file dialog function, the build answering `help` from a shell, every command with a card and none registered
   without its type, the text encodings, no test writing a program file, the icon and the console twin of the
   release binaries, the notices, no word of another program - `check_words.py`), `bash tools/rust/test.sh` (only the test
-  binaries that changed since they were green; `--all` for everything and the whole corpus), `python
+  binaries that changed since they were green - what cargo built as a test, never a program of the editor;
+  `--all` for everything and the whole corpus), `python
   tools/qa/run_all.py` (the QA suites side by side; `--with-game` adds the one that starts the real game).
   `GRIZZLY_QA_EXE` points the suites and `check.sh` at another binary (`Bin\x64\Release\Grizzly.exe`, the release
   build). Nothing that already passed is run again to check something new: one crate, one suite or one phase
@@ -133,6 +134,14 @@ A change of plan is a change of its document first.
 - **A command never asks a question.** It did what it was asked or says why not, with a `code` to branch on:
   `unsaved` wants `save` or `discard`, `busy` names the job, `gate` the door. The window's action asks a person
   (Save / Don't Save / Cancel) and sends the command again with the answer.
+- **A tab's save knows who asked** (`gz-app`'s `save_tab`, `ShellRequests::by_caller`). For a person the tab may
+  ask - where a scene without a file goes (Save As), whether an import may replace textures. For a command
+  (`doc.save`, `ui.tab action=close save=true`, `app.quit save=true`) it asks nothing: what would need an answer
+  is refused in a sentence naming the command to use (`scene.save path=`; `library.import overwrite=true`, code
+  `exists`), a write that fails off the UI thread is the command's answer (`Document::save_failed`), never a
+  dialog, and a tab that writes on the pools stays dirty until its file is written. Every command that saves
+  tabs waits for the saves (`save_tabs`) before it goes on: no tab, project or editor closes over a write
+  under way.
 - **The effect decides the door.** Over MCP the bridge `grizzly-mcp.exe` has six tools: `grizzly_help`,
   `grizzly_state`, `grizzly_run` (read, view, write; `batch` runs several), `grizzly_destroy` (loses data for good:
   `destructiveHint`, so a client asks its user on exactly those calls), `grizzly_release` (reaches players),
@@ -171,7 +180,9 @@ A change of plan is a change of its document first.
   list is a tab's Problems, `asset.check` and `Grizzly-Cmd.exe check` (exit code 1 on an error).
 - **`gz-asset` is the one list of kinds** (extension, header key, version, migrations, validator, reference,
   template, icon). The content browser, `asset.*`, the watcher and the build read it; a new kind is one entry
-  there. `asset.reference <kind>` prints the format with what only the linked game knows.
+  there. `asset.reference <kind>` prints the format with what only the linked game knows; `kind=manifest` prints
+  `mod.ltx`'s (`gz-mod`'s `reference.rs`, a page of its own outside the kind table, held to the manifest's
+  readers by tests: a key the editor reads has its words there).
 - **A project is `<Name>.grizzly`** at the root of its folder (`docs/assets/PROJECT.md`): an `id`, the scene that
   opens with it, what its scenes take from outside it. **Nothing in a project names a place outside it** - no
   absolute path, no machine name: the folder is moved, renamed, copied to another computer or cloned and opens the
@@ -183,8 +194,8 @@ A change of plan is a change of its document first.
   this machine's state. The Link Game card shows only when no valid game is known.
 - **A project stands alone**: what the author places from the editor's library is copied into the project as it is
   placed; a base scene imported whole lists what it takes in the project file's `library`, and `project.collect`
-  copies it all in. `AGENTS.md` at the root (written once) tells an agent what the project holds and the three
-  commands it needs.
+  copies it all in. `AGENTS.md` at the root (written once) tells an agent what the project holds, the three
+  commands it needs (`reference manifest` among the kinds) and that a module states its target first.
 - **One editor per home**: a second start on a project hands the request to the running editor (`editor.lock`) and
   exits.
 - **The scene** is `<name>.scene` and a folder of Lua data files, one per kind family, with the painted layers as
@@ -367,7 +378,8 @@ A change of plan is a change of its document first.
   action over one. The pending edits are a service (`LibraryStores`), not the tab's. The Texture Library
   reads the `.tga` sources of `$textures$` (rawdata\textures) and takes pictures dropped on it; Check New Textures
   turns a library tab without unsaved changes into New Textures (from `$import$`)
-  and the finished import brings the library back. An empty library says what it
+  and the finished import brings the library back; a check that finds nothing says so in a toast, never a
+  dialog. An empty library says what it
   reads (rawdata\sounds, gamedata\lanims.xr).
 - QA (each on a COPY, in a home of its own, ending on `perf.stalls`): `python tools/qa/run_all.py` lists the suites;
   `tools/qa/test_ui_shell.py` holds the frame, `test_tour.py` every tab kind, dialog and menu
@@ -517,7 +529,9 @@ A change of plan is a change of its document first.
   project (`gamedata\levels\<level>`, `gamedata\spawns`), never into the game. The editor's library has a guard of
   its own, with no exception: its writers (descriptions, game textures and sounds, `lanims.xr`, imports) pass
   `gz_project::library_guard`, nothing under any game this editor knows is written, and a game's folder is
-  refused as the library's.
+  refused as the library's. A game is told by what only a game has - the engine's program or `database\`
+  (`gz_project::games::holds_a_game`) - never by `fsgame.ltx` and `gamedata`, which the editor's own folder
+  holds too: a library folder that is such a game is never written, whether this home ever linked it or not.
 
 ## Classic mods
 
@@ -1270,6 +1284,9 @@ A change of plan is a change of its document first.
   what its marker listed or this run wrote, and never when a project lies anywhere inside what it would clear. Every
   refusal comes before a byte is written or removed. An editor started with a home of its own (`-home`) keeps its
   default root under that home; only the author's own uses `%LOCALAPPDATA%\GrizzlyPlay`.
+- **Exit with Save ends the editor only when every save has finished**: a write under way and the Save dialog
+  of a scene without a file are waited for (`save_tabs`), and a save that fails keeps the editor open and says
+  why.
 - A command shows NO confirmation (its caller already decided, and a call that loses data came through the
   destroy door) and never hangs on a modal — the window's path and the command
   share the implementation, but not the dialog.

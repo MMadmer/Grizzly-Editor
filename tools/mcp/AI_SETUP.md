@@ -12,7 +12,8 @@ Two ways to work on a Grizzly project, and they combine:
 ```text
 Grizzly-Cmd.exe check [path]          every problem of the project (or of one file) with file, line and column;
                                       exit code 1 when an error is among them
-Grizzly-Cmd.exe reference <kind>      the format of a kind (quest, behaviour, character, pda, scene, project),
+Grizzly-Cmd.exe reference <kind>      the format of a kind (quest, behaviour, character, pda, scene, project,
+                                      manifest - mod.ltx),
                                       with what the linked game adds: node kinds, their parameters and pins
 Grizzly-Cmd.exe help [about]          every command of the editor; `help assets` is the page on files
 Grizzly-Cmd.exe build | package       the module into the game; the release files

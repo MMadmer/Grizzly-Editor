@@ -105,7 +105,8 @@ The first open of a folder by this editor:
 
 A page at the root for whoever works on the files without the editor: what the project is (its file, its id, its
 module), the kinds of assets it holds and where, the syntax in three lines, the commands of `Grizzly-Cmd.exe`
-(`check`, `reference <kind>`, `build`) and that MCP is for the window and the 3D scene. It names no place outside
+(`check`, `reference <kind>` with `manifest` among the kinds, `build`), that a module states its target first,
+and that MCP is for the window and the 3D scene. It names no place outside
 the project. The editor writes it when a project is created and once when it first opens a project that has none;
 it never writes it again by itself - a deleted or edited page stays so. `project.guide` writes it anew. Like
 `CLAUDE.md`, it is never exported or packaged.

@@ -39,6 +39,14 @@ What the suites hold, beyond what their names say:
 - **No suite reaches a real service** (`qa.py`, `test_cli`, `gz-github`'s endpoint tests): every program a suite
   starts is a QA run by its environment, a QA run's addresses are this computer's or nowhere, its keys are
   its home's, and the client refuses an editor whose `ping` does not say `qa`.
+- **A tab's save asked by a command** (`test_scene_tools` Z, `test_previews` K): `doc.save` on a scene without a
+  file is refused inside a second, naming `scene.save path=`, with no dialog and no window outside; on New
+  Textures that would replace a texture it answers `exists`, naming the texture and `library.import
+  overwrite=true`, and nothing is imported; a check that finds nothing leaves a toast and no dialog.
+- **The manifest from the editor alone** (`test_cli` J, `test_assets`; `gz-mod`'s tests and `grizzly`'s
+  `manifest_reference`): a project made from nothing fails its first `check` on one error that names the key,
+  its values and the command; `help mod.set` is enough to set it; the second `check` is clean; `reference
+  manifest` prints the page, and a key a reader of the manifest takes without its words there fails a test.
 - **Releases and the Mod Browser** (`test_mod_publish`, `test_mod_catalog`, the mock only): the whole path, the
   doors (`release.delete` only through the destroy door, `release.publish` and `mod.package` only through the
   release door), a check that a closed project's jobs do not start again.
@@ -58,6 +66,10 @@ What the suites hold, beyond what their names say:
   zones (`simulate_drop`), never through the system's drag.
 - The editor's update against GitHub: by rule it only ever meets the mock.
 - The sound preview's playback in the chooser.
+- What the manifest's reference says a key of `[world]`, `[start_kit]` or `[screens]` does in the game: it is
+  read from the readers' code and the game's document, not from a run of the game.
+- The window's Exit with Save over a scene that has no file: the Save dialog is the system's, and no suite
+  answers it.
 
 ## 3. Decisions
 
@@ -74,6 +86,30 @@ What the suites hold, beyond what their names say:
   dialog), from a caller nothing. `release.publish` waits for both of its jobs, the packaging and the upload.
 - `mod.info` lives in `gz-build` (it walks what a build ships); `mod.set` refuses a key it does not know with "edit
   mod.ltx for anything else".
+- A tab's save knows who asked (`ShellRequests::by_caller`). A person may be asked; a command is refused in a
+  sentence that names the command to use, and a save that goes on after the tab's `save` returned - a write on
+  the pools, a job - leaves its failure for that command's answer (`Document::save_failed`, with its code).
+  Whatever a tab raises all the same during a command's save gets the logged answers (`dialog::answer_as`):
+  No for a question, never Yes - what loses data comes through the destroy door.
+- A tab that writes on the pools (the PDA source) stays dirty until its file holds the text, and the write
+  takes the file and the text as Save found them: by the time it runs the tab may show another file.
+- The window's Exit with Save waits for every save and then ends the editor; before, it ended under a write
+  that had only begun, and under the Save dialog of a scene without a file. The commands do the same
+  (`app.quit save=true`, `app.switch_project save=true`, `ui.tab action=close|open save=true`): each waits in
+  `save_tabs` until the tabs are clean or one of them answers why not.
+- A tab that learns of its save only as it draws (Mod Settings, Characters) takes the save's answer when the
+  shell asks `save_failed` too: a tab that is not the active one is not drawn, and its save would never end.
+  A save under way counts as unsaved (Characters).
+- `test.sh` runs only what cargo built as a test. A package with an integration test makes cargo build the
+  package's programs as well, and the runner took every executable of the build: it started the editor itself,
+  with a window, on the author's home (seen once, on the day `grizzly` got its first integration test). An
+  example is no test either.
+- `file.create` makes the folder it is asked to put the asset into, the way `file.mkdir` makes one: its own
+  example works on a new project.
+- The manifest's reference is one page of `gz-mod` (`reference.rs`), asked by name before the kind table:
+  `[world]`, `[start_kit]` and `[screens]` are described there and held to their readers by a test of
+  `grizzly`, which sees every crate - not by a hook each of those crates would have to offer. The first
+  problem of a new project names the key, its values and the command, and the window last.
 
 ### Assets and projects
 
@@ -197,7 +233,10 @@ What the suites hold, beyond what their names say:
   an empty `loading` first, and the tour does and fails on an error state - it found the stall above by staying
   on a tab until it was ready.
 - A library is never a game: its writers pass a guard built from every game this editor knows, and a game's
-  folder is refused as the library's. A synchronisation asks nothing (it loses nothing); retiring the game
+  folder is refused as the library's. A game is what holds the engine's program or `database\`
+  (`holds_a_game`): `fsgame.ltx` and `gamedata` are the editor's own layout too, so another editor's folder is
+  taken as a library, and a library folder that is a game is not written even when this home never linked it.
+  A synchronisation asks nothing (it loses nothing); retiring the game
   sounds that lost their source and rewriting the descriptions are asked by the window's action, never by
   the command.
 - The libraries' pending edits are a service of the editor, so a command edits what a person edits and needs

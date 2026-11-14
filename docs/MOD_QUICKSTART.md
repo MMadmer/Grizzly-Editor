@@ -521,7 +521,7 @@ profile at all.
 
 A quest is a node graph in its own file. Make one in the Content Browser —
 **Add → Quest** (the toolbar's [+ Add], or right-click the empty grid) — or over
-`file.create kind=quest path=<file>`. Either way you get a working stub
+`file.create kind=quest path=<folder>` (a folder that is not there yet is made). Either way you get a working stub
 (`trigger.start → flow.end`) and a tab of its own.
 
 Edit it whichever way suits you. The tab is an infinite canvas between two
@@ -870,7 +870,7 @@ command of the game (`E406`) stop the build; a name of one of the game's own fam
 
 | Message | Fix |
 |---|---|
-| `no target game mode` | Mod → Mod Settings, Game Mode: pick a mode. |
+| `no target game mode` | Write `target = default` under `[module]` in `mod.ltx` (or `mode = <id>`, or a `[provides_mode]` section), or run `mod.set`; in the window, Mod → Mod Settings, Game Mode. |
 | `Module id is missing or invalid` | Mod → Mod Settings, General: **Module ID** must be `a-z 0-9 _ . -`. |
 | `No linked game` | Link a game — the build target is that install. |
 | `target already holds a module: N file(s) there are not in this project` | Something else owns that folder. The question names up to ten of those files; confirm only if you're sure they are yours. |
