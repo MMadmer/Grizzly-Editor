@@ -27,6 +27,45 @@ pub enum Reader {
     Files,
 }
 
+/// How a key's value is judged: what the editor refuses to save and what the check reports for a
+/// file written by hand. The words a key takes are its [`KeyDoc::values`]; a list here is the
+/// same words as that text, and a test holds the two together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Check {
+    /// Any text.
+    Free,
+    /// A module id.
+    Id,
+    /// [`crate::validate_version`].
+    Version,
+    /// [`crate::validate_website`].
+    Website,
+    /// Words of the Mod Browser's vocabulary ([`crate::rules::TAG_VOCABULARY`]), lower case.
+    Tags,
+    /// One of the four targets.
+    Target,
+    /// A game mode id or `*`.
+    Mode,
+    /// The id of a mode the module adds: no `*`, 64 characters at most.
+    OwnModeId,
+    /// [`crate::validate_github_repo`].
+    Repo,
+    /// Room for the game's string buffer.
+    Description,
+    /// `true`, `false`, `1`, `0`, `yes`, `no`, `on`, `off`.
+    Flag,
+    /// One of these words.
+    Choice(&'static [&'static str]),
+    /// Comma separated words, each one of these.
+    Words(&'static [&'static str]),
+    /// A number.
+    Number,
+    /// A whole number.
+    Count,
+    /// Four numbers: x, y, width, height.
+    Rect,
+}
+
 /// One key of a section.
 #[derive(Clone, Copy, Debug)]
 pub struct KeyDoc {
@@ -38,6 +77,8 @@ pub struct KeyDoc {
     pub default: &'static str,
     /// One line in words.
     pub meaning: &'static str,
+    /// How a value is judged.
+    pub check: Check,
 }
 
 /// One section of the manifest.
@@ -57,13 +98,29 @@ const fn key(
     default: &'static str,
     meaning: &'static str,
 ) -> KeyDoc {
-    KeyDoc { key, values, default, meaning }
+    KeyDoc { key, values, default, meaning, check: Check::Free }
+}
+
+impl KeyDoc {
+    /// The same key, its value judged by `check`.
+    const fn judged(mut self, check: Check) -> Self {
+        self.check = check;
+        self
+    }
 }
 
 /// The tags the Mod Browser knows (`[module] tags`).
 const TAGS: &str = "story, quests, gameplay, weapons, equipment, npcs, mutants, locations, graphics, audio, interface, fixes";
 
 const SURFACES: &str = "loading, menu, pause";
+const SURFACE_WORDS: &[&str] = &["loading", "menu", "pause"];
+const MIX_ONLY: &[&str] = &["mix", "only"];
+const LOOP_NEXT: &[&str] = &["loop", "next"];
+const FIT_WORDS: &[&str] = &["cover", "contain", "stretch"];
+const HIDE_WORDS: &[&str] = &["bar", "percent", "stage", "tip"];
+/// The five rules of `[world]`, as `gz-world` reads them.
+pub const WORLD_RULES: &[&str] =
+    &["original_npcs", "random_stalkers", "mutants", "npc_quests", "story_quests"];
 
 /// Every section the editor reads or writes, in the order the page tells them.
 pub const SECTIONS: &[SectionDoc] = &[
@@ -78,7 +135,7 @@ pub const SECTIONS: &[SectionDoc] = &[
                 "required",
                 "The module's id: its folder under the game's modules folder, and what other modules and \
                  mode gates call it. A project's folder name seeds it.",
-            ),
+            ).judged(Check::Id),
             key(
                 "name",
                 "text",
@@ -90,21 +147,21 @@ pub const SECTIONS: &[SectionDoc] = &[
                 "1 to 4 numbers separated by dots, 32 characters at most (1.2.0)",
                 "1.0.0 in a new project",
                 "The release number: the game's updater orders releases by it.",
-            ),
+            ).judged(Check::Version),
             key("author", "text", "empty", "Who made it, shown in the Mods menu."),
             key(
                 "description",
                 "text, 4095 bytes at most, line breaks allowed (quote it)",
                 "empty",
                 "What the module is, shown in the Mods menu.",
-            ),
+            ).judged(Check::Description),
             key(
                 "website",
                 "an https link on ap-pro.ru or moddb.com",
                 "empty",
-                "The module's page, opened from the Mods menu. Any other host is refused by the editor and \
-                 ignored by the game.",
-            ),
+                "The module's page, opened from the Mods menu. Any other host is refused by the editor \
+                 (mod.set, the check, the build) and ignored by the game.",
+            ).judged(Check::Website),
             key(
                 "thumbnail",
                 "a project-relative path to a 256 x 256 DXT1 or DXT5 .dds",
@@ -116,8 +173,9 @@ pub const SECTIONS: &[SectionDoc] = &[
                 "tags",
                 TAGS,
                 "empty",
-                "Words the Mod Browser filters by, comma separated; any other word is refused.",
-            ),
+                "Words the Mod Browser filters by, comma separated, in lower case. A word outside the list is \
+                 refused by mod.set and is an error of the check and of the build.",
+            ).judged(Check::Tags),
             key(
                 "api",
                 "1",
@@ -133,22 +191,23 @@ pub const SECTIONS: &[SectionDoc] = &[
                  ([provides_mode]). any: every game, for a classic mod (mode = *). A mode or a \
                  [provides_mode] section also answers the question; target = default is how the ordinary \
                  game is chosen on purpose.",
-            ),
+            ).judged(Check::Target),
             key(
                 "mode",
-                "a game mode id, or *",
+                "a game mode id (a-z 0-9 _ . -), or *",
                 "empty: the ordinary game only",
                 "Limits the module's work on levels (spawns, level overlays, the AI map, the game graph) \
                  to one game mode; * lifts the limit. Files, configs and scripts mount in every game \
                  whatever the mode. The ids the linked game has are listed at the end of this page.",
-            ),
+            ).judged(Check::Mode),
             key(
                 "disable_game_updates",
-                "true | false",
+                "true | false | 1 | 0",
                 "false",
                 "A last resort: turns off the game's own updates and bug reports for everyone who has the \
-                 module. The check warns about it.",
-            ),
+                 module. The game takes true (or 1) as on and anything else as off, so no other word is \
+                 accepted.",
+            ).judged(Check::Choice(&["true", "false", "1", "0"])),
         ],
     },
     SectionDoc {
@@ -162,7 +221,7 @@ pub const SECTIONS: &[SectionDoc] = &[
                 "required",
                 "The mode's id. The game turns new_game_<id>_mode back into it, and mode = <id> and the \
                  quests' mode checks compare against it.",
-            ),
+            ).judged(Check::OwnModeId),
             key(
                 "title",
                 "text or a string table id",
@@ -213,7 +272,7 @@ pub const SECTIONS: &[SectionDoc] = &[
             "empty: no updates",
             "The repository whose latest release carries the module. A pasted github.com address is \
              shortened by mod.set. Publish Release writes to it.",
-        )],
+        ).judged(Check::Repo)],
     },
     SectionDoc {
         name: "exclude",
@@ -299,22 +358,22 @@ pub const SECTIONS: &[SectionDoc] = &[
                 "true | false",
                 "true",
                 "Keep the characters the game placed by story id (traders, story people, their squads).",
-            ),
-            key("random_stalkers", "true | false", "true", "Keep the simulation's stalker squads."),
-            key("mutants", "true | false", "true", "Keep the simulation's mutant squads."),
-            key("npc_quests", "true | false", "true", "Keep the jobs squad leaders offer."),
+            ).judged(Check::Flag),
+            key("random_stalkers", "true | false", "true", "Keep the simulation's stalker squads.").judged(Check::Flag),
+            key("mutants", "true | false", "true", "Keep the simulation's mutant squads.").judged(Check::Flag),
+            key("npc_quests", "true | false", "true", "Keep the jobs squad leaders offer.").judged(Check::Flag),
             key(
                 "story_quests",
                 "true | false",
                 "true",
                 "Keep the tasks of named characters and the storylines.",
-            ),
+            ).judged(Check::Flag),
             key(
                 "player_choice",
-                "rule names, comma separated, three at most",
+                "rule names (original_npcs, random_stalkers, mutants, npc_quests, story_quests), comma separated, three at most",
                 "empty",
                 "The rules the new-game screen lets the player change.",
-            ),
+            ).judged(Check::Words(WORLD_RULES)),
             key("levels", "level names, comma separated", "empty: everywhere", "Where the rules apply."),
             key(
                 "area",
@@ -336,14 +395,14 @@ pub const SECTIONS: &[SectionDoc] = &[
         reader: Reader::World,
         summary: "What a new game of the module's mode begins with; it replaces the new-game screen's loadout. The section's presence declares a kit: an empty one starts the player with the PDA alone. world.set edits it.",
         keys: &[
-            key("money", "a number", "the new-game screen's money", "The starting money."),
-            key("perks", "true | false", "true", "Whether the perks picked on the new-game screen stay."),
+            key("money", "a number", "the new-game screen's money", "The starting money.").judged(Check::Count),
+            key("perks", "true | false", "true", "Whether the perks picked on the new-game screen stay.").judged(Check::Flag),
             key(
                 "<item section>",
                 "a count",
                 "1",
                 "An item of the game by its section name: item_section = 3. A bare name is one. Ammunition counts in boxes.",
-            ),
+            ).judged(Check::Count),
         ],
     },
     SectionDoc {
@@ -356,17 +415,17 @@ pub const SECTIONS: &[SectionDoc] = &[
                 "mix | only",
                 "mix",
                 "only: this module's loading screens are the whole pool.",
-            ),
-            key("menu_screens", "mix | only", "mix", "As loading_screens, for the menus."),
-            key("loading_music", "mix | only", "mix", "only: this module's tracks are the loading music."),
-            key("menu_music", "mix | only", "mix", "As loading_music, for the menus."),
+            ).judged(Check::Choice(MIX_ONLY)),
+            key("menu_screens", "mix | only", "mix", "As loading_screens, for the menus.").judged(Check::Choice(MIX_ONLY)),
+            key("loading_music", "mix | only", "mix", "only: this module's tracks are the loading music.").judged(Check::Choice(MIX_ONLY)),
+            key("menu_music", "mix | only", "mix", "As loading_music, for the menus.").judged(Check::Choice(MIX_ONLY)),
             key(
                 "loading_music_end",
                 "loop | next",
                 "loop",
                 "What a loading track does at its end: start again, or give way to another one of the list.",
-            ),
-            key("menu_music_end", "loop | next", "loop", "As loading_music_end, for the menus."),
+            ).judged(Check::Choice(LOOP_NEXT)),
+            key("menu_music_end", "loop | next", "loop", "As loading_music_end, for the menus.").judged(Check::Choice(LOOP_NEXT)),
         ],
     },
     SectionDoc {
@@ -379,7 +438,7 @@ pub const SECTIONS: &[SectionDoc] = &[
                 SURFACES,
                 "all three",
                 "The surfaces it shows on; pause is the menu over a loaded level.",
-            ),
+            ).judged(Check::Words(SURFACE_WORDS)),
             key(
                 "levels",
                 "level names, comma separated",
@@ -392,7 +451,7 @@ pub const SECTIONS: &[SectionDoc] = &[
                 "a number",
                 "1",
                 "How often it comes up against the others of the pool; the game's own screen weighs 1.",
-            ),
+            ).judged(Check::Number),
             key(
                 "music",
                 "any | none | video | track ids, comma separated",
@@ -405,7 +464,7 @@ pub const SECTIONS: &[SectionDoc] = &[
                 "bar, percent, stage, tip",
                 "empty",
                 "What of the loading screen's interface it leaves out.",
-            ),
+            ).judged(Check::Words(HIDE_WORDS)),
             key(
                 "layer",
                 "a project-relative file",
@@ -419,11 +478,11 @@ pub const SECTIONS: &[SectionDoc] = &[
                 "cover | contain | stretch",
                 "cover",
                 "How a picture fills its place: cut to fit, whole, or pulled.",
-            ),
-            key("opacity", "0 to 1", "1", "How solid the layer is."),
-            key("rect", "x y width height, per cent of the screen", "0 0 100 100", "The layer's place."),
+            ).judged(Check::Choice(FIT_WORDS)),
+            key("opacity", "0 to 1", "1", "How solid the layer is.").judged(Check::Number),
+            key("rect", "x y width height, per cent of the screen", "0 0 100 100", "The layer's place.").judged(Check::Rect),
             key("texture", "a project-relative .dds", "empty", "What a shader layer gets as its picture."),
-            key("sound", "true | false", "true", "False keeps a video layer quiet."),
+            key("sound", "true | false", "true", "False keeps a video layer quiet.").judged(Check::Flag),
         ],
     },
     SectionDoc {
@@ -437,12 +496,32 @@ pub const SECTIONS: &[SectionDoc] = &[
                 SURFACES,
                 "empty: only where a screen names it",
                 "The surfaces whose shuffle it joins.",
-            ),
-            key("weight", "a number", "1", "How often it comes up against the others."),
-            key("volume", "a number", "1", "How loud."),
+            ).judged(Check::Words(SURFACE_WORDS)),
+            key("weight", "a number", "1", "How often it comes up against the others.").judged(Check::Number),
+            key("volume", "a number", "1", "How loud.").judged(Check::Number),
         ],
     },
 ];
+
+/// The key of `section` a written key is, as the reader spells it (exactly, and `[world]`'s five
+/// rules in any case); a `<...>` key takes any other name.
+#[must_use]
+pub fn key_of(section: &'static SectionDoc, key: &str) -> Option<&'static KeyDoc> {
+    let exact = section.keys.iter().find(|k| k.key == key);
+    let rule = || {
+        (section.name == "world" && WORLD_RULES.iter().any(|r| r.eq_ignore_ascii_case(key)))
+            .then(|| section.keys.iter().find(|k| k.key.eq_ignore_ascii_case(key)))
+            .flatten()
+    };
+    exact.or_else(rule).or_else(|| section.keys.iter().find(|k| k.key.starts_with('<')))
+}
+
+/// The section and the key of the reference a written `[section] key` is.
+#[must_use]
+pub fn key_doc(section: &str, key: &str) -> Option<(&'static SectionDoc, &'static KeyDoc)> {
+    let s = section_named(section)?;
+    key_of(s, key).map(|k| (s, k))
+}
 
 /// The section's description for a name as written in a file (`screen.night` is `screen.<id>`).
 #[must_use]
@@ -510,6 +589,11 @@ Writing it
     per line.
   - Edit the file with your own tools, or run mod.set for the sections it takes (help mod.set); check
     it with asset.check path=mod.ltx (Grizzly-Cmd.exe check mod.ltx).
+  - The check reads every value this page lists. A wrong one is an error at its line, and the build
+    refuses it. A key that [world], [start_kit], [screens], [screen.<id>] or [track.<id>] do not read,
+    and a value they do not read as written, are warnings: the build goes on and the game ignores
+    them. What is written in a section the editor keeps ([budget], [redirects], any other) is left
+    as it is and never reported.
 
 First, the target: a module is for ONE game
   A finished module states which game it is for, and the build refuses one that does not. Pick one:
@@ -644,7 +728,7 @@ pub fn is_manifest_word(word: &str) -> bool {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::{Manifest, ManifestDoc, validate};
+    use crate::{Manifest, ManifestDoc, accepts, validate};
 
     /// The string literals a source line opens a match arm with (`"id" =>`, `"x" if ...`).
     fn arm_literal(line: &str) -> Option<&str> {
@@ -721,7 +805,8 @@ mod tests {
     #[test]
     fn the_example_is_a_valid_manifest_of_every_section_it_shows() {
         let m = Manifest::parse(&ManifestDoc::parse(EXAMPLE));
-        assert!(validate(&m).is_empty(), "{:?}", validate(&m));
+        let found = validate(&ManifestDoc::parse(EXAMPLE));
+        assert!(found.is_empty(), "{found:?}");
         assert_eq!(m.id, "night_watch");
         assert_eq!(m.target, "new");
         assert_eq!(m.provides_modes.len(), 1);
@@ -749,5 +834,43 @@ mod tests {
         assert_eq!(section_named("screen.night").map(|s| s.name), Some("screen.<id>"));
         assert_eq!(section_named("World").map(|s| s.name), Some("world"));
         assert!(section_named("nothing").is_none());
+    }
+
+    #[test]
+    fn the_lists_of_the_checks_are_the_words_of_the_page() {
+        // the tags' text is the vocabulary the check and the hook of gz-release judge by
+        assert_eq!(TAGS, crate::rules::TAG_VOCABULARY.join(", "));
+        assert_eq!(SURFACES, SURFACE_WORDS.join(", "));
+        assert_eq!(HIDE_WORDS.join(", "), "bar, percent, stage, tip");
+        for s in SECTIONS {
+            for k in s.keys {
+                match k.check {
+                    Check::Choice(words) => {
+                        assert_eq!(k.values, words.join(" | "), "[{}] {}", s.name, k.key);
+                    }
+                    Check::Words(words) => {
+                        for w in words {
+                            assert!(k.values.contains(w), "[{}] {}: {w}", s.name, k.key);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // the player's rules, the surfaces and the flags are what the readers' own tables say
+        assert!(
+            accepts(Check::Words(WORLD_RULES), "mutants, npc_quests")
+                && !accepts(Check::Words(WORLD_RULES), "mutant")
+        );
+        assert!(accepts(Check::Flag, "off") && !accepts(Check::Flag, "Off"));
+    }
+
+    #[test]
+    fn a_key_is_found_as_its_reader_spells_it() {
+        assert_eq!(key_doc("world", "Mutants").map(|(_, k)| k.key), Some("mutants"));
+        assert!(key_doc("world", "Levels").is_none());
+        assert_eq!(key_doc("start_kit", "wpn_ak74").map(|(_, k)| k.key), Some("<item section>"));
+        assert_eq!(key_doc("screen.night", "show").map(|(s, _)| s.name), Some("screen.<id>"));
+        assert!(key_doc("screens", "nothing").is_none() && key_doc("nowhere", "x").is_none());
     }
 }

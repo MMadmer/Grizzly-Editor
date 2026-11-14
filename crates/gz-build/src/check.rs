@@ -100,13 +100,10 @@ pub(crate) struct Verdict {
 }
 
 impl Verdict {
-    /// `first_only`: the manifest's check refused with its first error alone.
-    pub(crate) fn of(problems: &[Problem], headline: Option<&str>, first_only: bool) -> Self {
-        let mut errors: Vec<String> =
+    /// Every error refuses, one a line; the warnings are reported.
+    pub(crate) fn of(problems: &[Problem], headline: Option<&str>) -> Self {
+        let errors: Vec<String> =
             problems.iter().filter(|p| p.severity == Severity::Error).map(problem_line).collect();
-        if first_only {
-            errors.truncate(1);
-        }
         let warnings =
             problems.iter().filter(|p| p.severity == Severity::Warning).map(problem_line).collect();
         let err = match (errors.is_empty(), headline) {
@@ -129,14 +126,14 @@ mod tests {
         let warn = Problem::warning("W301", "a texture");
         assert_eq!(problem_line(&coded), "E404 commands: 'x': no function");
         assert_eq!(problem_line(&plain), "module id missing");
-        let v = Verdict::of(
-            &[coded.clone(), warn.clone(), plain.clone()],
-            Some("The PDA layout has errors:"),
-            false,
-        );
+        let v =
+            Verdict::of(&[coded.clone(), warn.clone(), plain.clone()], Some("The PDA layout has errors:"));
         assert_eq!(v.err, "The PDA layout has errors:\nE404 commands: 'x': no function\nmodule id missing");
         assert_eq!(v.warnings, ["W301 a texture"]);
-        assert_eq!(Verdict::of(&[plain, coded], None, true).err, "module id missing");
-        assert!(Verdict::of(&[warn], None, false).err.is_empty());
+        assert_eq!(
+            Verdict::of(&[plain, coded], None).err,
+            "module id missing\nE404 commands: 'x': no function"
+        );
+        assert!(Verdict::of(&[warn], None).err.is_empty());
     }
 }

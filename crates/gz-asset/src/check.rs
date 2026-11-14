@@ -7,7 +7,7 @@ use std::sync::Arc;
 use gz_base::{Problem, RelPath, Severity};
 use gz_build::{BuildChecks, BuildWalk, WalkScope};
 use gz_editor::{CmdError, Editor};
-use gz_project::{Project, is_tooling_entry};
+use gz_project::{Project, is_editor_only_entry, is_tooling_entry};
 use serde::Serialize;
 
 use crate::file;
@@ -48,11 +48,19 @@ pub struct Report {
     pub problems: Vec<Problem>,
 }
 
+/// Whether `path` lies in the editor's own scratch (`temp\`, `releases\`, the other folders the
+/// project's rules call editor-only, at the project root): what a crashed packaging leaves there
+/// is no quest of the module. A check that was asked for such a folder looks into it.
+fn in_editor_scratch(under: &RelPath, path: &RelPath) -> bool {
+    let first = |p: &RelPath| p.segments().next().is_some_and(is_editor_only_entry);
+    first(path) && !first(under)
+}
+
 fn walk_disk(root: &Path, rel: &RelPath, out: &mut Vec<RelPath>) {
     let Ok(rd) = std::fs::read_dir(rel.to_fs(root)) else { return };
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        if is_tooling_entry(&name) {
+        if is_tooling_entry(&name) || (rel.is_root() && is_editor_only_entry(&name)) {
             continue;
         }
         let Ok(child) = rel.join(&name) else { continue };
@@ -105,6 +113,7 @@ pub async fn targets(editor: &Arc<Editor>, path: Option<&RelPath>) -> Result<Vec
     };
     let mut out: Vec<RelPath> = files
         .into_iter()
+        .filter(|p| !in_editor_scratch(&under, p))
         .filter(|p| {
             kinds.of_file(p.file_name()).is_some()
                 || (p.parent().is_some_and(|d| d.is_root()) && p.file_name().eq_ignore_ascii_case(MANIFEST))
@@ -206,8 +215,9 @@ pub async fn check_manifest(editor: &Arc<Editor>) -> Vec<Problem> {
     let _ = service.sync().await;
     let snap = service.snapshot();
     let Some(m) = snap.manifest() else { return Vec::new() };
-    let mut out: Vec<Problem> =
-        gz_mod::validate(m).into_iter().map(|p| place_manifest(p, &text, "module")).collect();
+    // the manifest's own problems come placed: each at its line
+    let doc = snap.doc().cloned().unwrap_or_default();
+    let mut out: Vec<Problem> = gz_mod::validate(&doc);
     let (_, commands) = gz_mod::command_check(editor, &session, m).await;
     out.extend(commands.into_iter().map(|p| place_manifest(p, &text, "commands")));
     for check in Kinds::of(editor).manifest_checks() {
@@ -263,4 +273,24 @@ pub async fn run(editor: &Arc<Editor>, path: Option<&RelPath>) -> Result<Report,
             .then(a.severity.cmp(&b.severity))
     });
     Ok(Report { files: files.len(), problems })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_editors_scratch_is_no_content_unless_asked_for() {
+        let rel = |p: &str| RelPath::new(p).unwrap();
+        let stage = rel("temp/release_stage_1/modules/od/quests/q.nqasset");
+        assert!(in_editor_scratch(&RelPath::root(), &stage));
+        assert!(in_editor_scratch(&rel("quests"), &stage));
+        assert!(in_editor_scratch(&RelPath::root(), &rel("releases/1.0.0/q.nqasset")));
+        // a check asked for the folder itself looks into it
+        assert!(!in_editor_scratch(&rel("temp"), &stage));
+        // the author's folders are checked, whatever a build leaves out
+        assert!(!in_editor_scratch(&RelPath::root(), &rel("quests/q.nqasset")));
+        assert!(!in_editor_scratch(&RelPath::root(), &rel("rawdata/q.nqasset")));
+    }
 }

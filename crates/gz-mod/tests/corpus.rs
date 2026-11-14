@@ -1,5 +1,6 @@
 //! Every `mod.ltx` there is: the projects' and the installed modules' of the game. Each parses,
-//! writes back its own bytes and reads as a manifest.
+//! writes back its own bytes, reads as a manifest and passes the manifest's value rules: a shipped
+//! module that fails one is a finding, not something to loosen the rule for.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -28,6 +29,19 @@ fn round_trip(bytes: &[u8]) -> Result<(), String> {
     let m = Manifest::parse(&doc);
     if m.id.is_empty() {
         return Err("no module id".into());
+    }
+    // a manifest without a target is the first problem of a new project, not a shipped module's
+    let errors: Vec<String> = gz_mod::validate(&doc)
+        .iter()
+        .filter(|p| p.is_error() && p.code != "mod.target")
+        .map(|p| format!("{}:{} {}", p.line.unwrap_or(0), p.code, p.message))
+        .collect();
+    if !errors.is_empty() {
+        return Err(errors.join(" | "));
+    }
+    // warnings are listed, not failed: a shipped module may keep a key nobody reads
+    for p in gz_mod::validate(&doc).iter().filter(|p| !p.is_error() || p.code == "mod.target") {
+        println!("not failed {}:{} {}", p.line.unwrap_or(0), p.code, p.message);
     }
     Ok(())
 }

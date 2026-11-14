@@ -26,7 +26,10 @@ What it proves:
   J  a module from nothing, as an agent meets it: project.create in a temp folder, `check` says what to write in
      mod.ltx (the key, its values, the command) at the line of the section, `help mod.set` names the target's values,
      mod.set sets one, `check` is clean (exit 0), `reference manifest` prints the format, mod.build target=folder
-     builds it - no game is needed
+     builds it - no game is needed; then a mod.ltx written by hand with one wrong value per rule: `check` is exit 1
+     and names each with its line, mod.build refuses and says them, the warnings alone (a key or a value no reader
+     takes) are exit 0 and listed, a manifest put right is clean; a quest a crashed packaging left under
+     temp\release_stage_N is no quest of the project
 
     python tools/qa/test_cli.py --project <project>
 """
@@ -44,6 +47,7 @@ import time
 
 import qa
 from qa import check, until
+from test_assets import QUEST
 from test_previews import write_tga
 
 CLI = os.path.join(os.path.dirname(qa.exe()), "Grizzly-Cmd.exe")
@@ -436,6 +440,117 @@ def phase_j(work: str) -> None:
     agents = qa.read(os.path.join(project, "AGENTS.md"))
     check("reference manifest" in agents and "target = default" in agents,
           "J the project's AGENTS.md names the manifest's reference and the target", agents[:400])
+    manifest_values(work, home, project)
+    editors_scratch(work, home, project)
+
+
+# one wrong value per rule, written the way an agent writes a file: (the line, the code, what the sentence names)
+WRONG = [
+    ("version     = v1.2-beta", "mod.version", "version takes 1 to 4 numbers"),
+    ("website     = http://evil.example/x", "mod.website", "website takes an https link on ap-pro.ru or moddb.com"),
+    ("tags        = banana, Story", "mod.tags", "'banana' is no tag"),
+    ('description = "%s"' % ("x" * 4100), "mod.description", "description takes text, 4095 bytes at most"),
+    ("target      = sideways", "mod.target_value", "default | existing | new | any"),
+    ("mode        = Not A Mode!", "mod.mode", "mode takes a game mode id"),
+    ("github      = not a repo", "mod.github", "github takes owner/repo"),
+    ("bad-name    = 1", "mod.var_name", "letters, digits and _"),
+    ("kills       = 1", "mod.var_twice", "declared twice"),
+]
+# what the editor does not refuse but says: a key no reader takes, a value none of them reads as written
+WARNED = [
+    ("bogus_rule  = true", "mod.key", "no reader takes this key"),
+    ("mutants     = maybe", "mod.value", "mutants takes true | false"),
+    ("loading_screens = sometimes", "mod.value", "loading_screens takes mix | only"),
+]
+
+
+def hand_written(wrong: bool, warned: bool) -> str:
+    """A mod.ltx of the project, the lines in the order a person writes them."""
+    lines = ["[module]", "id          = qamanifest", "name        = QaManifest"]
+    if wrong:
+        lines += [WRONG[0][0], WRONG[1][0], WRONG[2][0], WRONG[3][0], "api         = 1", WRONG[4][0], WRONG[5][0],
+                  "[update]", WRONG[6][0], "[vars]", WRONG[7][0], "kills       = 0", WRONG[8][0]]
+    else:
+        lines += ["version     = 1.0.0", "api         = 1", "target      = default"]
+    if warned:
+        lines += ["[world]", WARNED[0][0], WARNED[1][0], "[screens]", WARNED[2][0]]
+    return "\r\n".join(lines) + "\r\n"
+
+
+def manifest_values(work: str, home: str, project: str) -> None:
+    path = os.path.join(project, "mod.ltx")
+    good = qa.read(path)
+
+    def found() -> tuple[int, list[dict], str]:
+        code, out, err = cli("check", "-project", project, "-json", home=home)
+        return code, (jsons(out) or [{}])[0].get("problems", []), err
+
+    # the wrong values, each named with its line
+    text = hand_written(True, True)
+    qa.write(path, text)
+    code, problems, err = found()
+    check(code == 1, "J a mod.ltx with a wrong value per rule is exit 1", (code, err[:200]))
+    lines = text.splitlines()
+    for row, name, says in WRONG + WARNED:
+        want = lines.index(row) + 1
+        hit = [p for p in problems if p.get("code") == name and p.get("line") == want]
+        check(len(hit) >= 1 and hit[0].get("file") == "mod.ltx" and says in hit[0].get("text", ""),
+              "J check names %s at line %d of mod.ltx" % (name, want), json.dumps(problems)[:600])
+    wrong_codes = {name for _, name, _ in WRONG}
+    check(all(p.get("severity") == "error" for p in problems if p.get("code") in wrong_codes)
+          and all(p.get("severity") == "warning" for p in problems if p.get("code") in ("mod.key", "mod.value")),
+          "J the wrong values are errors, the key and the values nobody reads are warnings", json.dumps(problems)[:300])
+    case = [p for p in problems if p.get("code") == "mod.tags_case"]
+    check(len(case) == 1 and case[0].get("severity") == "warning" and "'Story'" in case[0].get("text", ""),
+          "J a tag in the wrong case is a warning of its own", json.dumps(case))
+
+    # the build follows: it refuses the errors with the sentences, and builds nothing
+    out_dir = os.path.join(work, "built_wrong")
+    code, out, err = cli("run", "mod.build", "target=folder", "path=" + out_dir, "-project", project, home=home)
+    check(code == 1 and "version takes 1 to 4 numbers" in err and "mode takes a game mode id" in err
+          and not os.path.isdir(os.path.join(out_dir, "modules", "qamanifest")),
+          "J mod.build refuses the wrong values and says them", (code, err[:400]))
+    code, out, err = cli("run", "mod.info", "-project", project, "-json", home=home)
+    info = (jsons(out) or [{}])[0]
+    listed = {p.get("code") for p in info.get("problems", [])}
+    check(code == 0 and wrong_codes <= listed and {"mod.key", "mod.value"} <= listed,
+          "J mod.info lists the same problems", (code, sorted(listed)))
+
+    # the warnings alone: exit 0, listed, and the build goes through and reports them
+    qa.write(path, hand_written(False, True))
+    code, problems, err = found()
+    kinds = sorted(p.get("code") for p in problems)
+    check(code == 0 and kinds == ["mod.key", "mod.value", "mod.value"]
+          and all(p.get("severity") == "warning" for p in problems),
+          "J a key or a value no reader takes is a warning: exit 0 and listed", (code, kinds, err[:200]))
+    code, out, err = cli("run", "mod.build", "target=folder", "path=" + out_dir, "-project", project, "-json",
+                         home=home)
+    answer = (jsons(out) or [{}])[0]
+    said = json.dumps(answer)
+    check(code == 0 and answer.get("ok") and "bogus_rule" in said and "loading_screens" in said,
+          "J mod.build builds it and reports the warnings", (code, said[:500], err[:200]))
+
+    # put right: clean
+    qa.write(path, good)
+    code, problems, err = found()
+    check(code == 0 and not problems, "J the manifest put right is clean", (code, json.dumps(problems)[:300]))
+
+
+def editors_scratch(work: str, home: str, project: str) -> None:
+    """What a crashed packaging leaves under temp\\ is no quest of the module: a check of the project does not read
+    it, a check asked for that folder does."""
+    qa.write(os.path.join(project, "quests", "qa_assets.nqasset"), QUEST)
+    stage = "temp/release_stage_1/modules/qamanifest/quests"
+    qa.write(os.path.join(project, stage, "qa_assets.nqasset"), QUEST)
+    qa.write(os.path.join(project, "releases", "1.0.0", "qa_assets.nqasset"), QUEST)
+    code, out, err = cli("check", "-project", project, "-json", home=home)
+    problems = (jsons(out) or [{}])[0].get("problems", [])
+    check(code == 0 and not problems, "J a quest in temp\\release_stage_1 and one in releases\\ fail no check of the project",
+          (code, json.dumps(problems)[:400]))
+    code, out, err = cli("check", stage, "-project", project, "-json", home=home)
+    check((jsons(out) or [{}])[0].get("files") == 1, "J a check asked for that folder reads it", (code, out[:300], err[:200]))
+    code, out, err = cli("check", "quests", "-project", project, home=home)
+    check(code == 0, "J the project's own quest passes", (code, out[:300], err[:200]))
 
 
 def run(ctx: qa.Run) -> None:

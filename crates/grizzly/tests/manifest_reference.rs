@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use gz_mod::reference::{Reader, SECTIONS, section_named};
+use gz_mod::reference::{Check, Reader, SECTIONS, WORLD_RULES, key_doc, section_named};
 use gz_mod::{Manifest, ManifestDoc};
 
 const WORLD_SRC: &str = include_str!("../../gz-world/src/model.rs");
@@ -116,4 +116,90 @@ fn every_section_of_the_page_has_a_reader_and_the_example_parses() {
     // the readers of the model's sections are the model: nothing here is kept as an unknown line
     let m = Manifest::parse(&ManifestDoc::parse(gz_mod::reference::EXAMPLE));
     assert_eq!(m.id, "night_watch");
+}
+
+/// The words a `Check::Choice` or `Check::Words` of a documented key takes.
+fn words(section: &str, key: &str) -> Vec<&'static str> {
+    match key_doc(section, key).unwrap_or_else(|| panic!("[{section}] {key} is not in the page")).1.check {
+        Check::Choice(w) | Check::Words(w) => w.to_vec(),
+        other => panic!("[{section}] {key} is judged by {other:?}"),
+    }
+}
+
+#[test]
+fn the_values_the_check_takes_are_the_values_the_readers_give_a_meaning() {
+    // [world]: the five rules, and what the engine reads as no and as yes
+    assert_eq!(WORLD_RULES, gz_world::RULES);
+    for w in ["false", "0", "no", "off"] {
+        assert!(gz_mod::accepts(Check::Flag, w));
+        assert!(!gz_world::World::from_lines([format!("mutants = {w}").as_str()]).keep[2], "{w}");
+        assert!(!gz_world::StartKit::from_lines([format!("perks = {w}").as_str()]).perks, "{w}");
+    }
+    for w in ["true", "1", "yes", "on"] {
+        assert!(gz_mod::accepts(Check::Flag, w));
+        assert!(gz_world::World::from_lines([format!("mutants = {w}").as_str()]).keep[2], "{w}");
+    }
+    // player_choice names the five rules, and a word that is none is not a choice
+    for r in words("world", "player_choice") {
+        assert!(gz_world::rule_index(r).is_some(), "{r}");
+    }
+    assert!(gz_world::World::from_lines(["player_choice = mutant"]).choices().is_empty());
+
+    // [screens]: only and next are the words that change anything
+    let screens = |text: &str| gz_screens::Screens::parse(&ManifestDoc::parse(text));
+    for (key, at) in [("loading_screens", 0), ("menu_screens", 1)] {
+        assert_eq!(words("screens", key), ["mix", "only"]);
+        let on = screens(&format!("[screens]\r\n{key} = only\r\n"));
+        let off = screens(&format!("[screens]\r\n{key} = mix\r\n"));
+        assert!(on.only_screens[at] && !off.only_screens[at], "{key}");
+    }
+    for (key, at) in [("loading_music_end", 0), ("menu_music_end", 1)] {
+        assert_eq!(words("screens", key), ["loop", "next"]);
+        assert!(screens(&format!("[screens]\r\n{key} = next\r\n")).next_track[at], "{key}");
+    }
+    // the surfaces, the hidden parts and the fits: every word is read, any other is not
+    for w in words("screen.<id>", "show") {
+        let s = screens(&format!("[screen.a]\r\nshow = {w}\r\n[track.a]\r\nplay = {w}\r\n"));
+        assert!(s.screens[0].show != 0 && s.tracks[0].play != 0, "{w}");
+    }
+    let none = screens("[screen.a]\r\nshow = nowhere\r\nhide = nothing\r\n");
+    assert_eq!((none.screens[0].show, none.screens[0].hide), (0, 0));
+    for w in words("screen.<id>", "hide") {
+        assert!(screens(&format!("[screen.a]\r\nhide = {w}\r\n")).screens[0].hide != 0, "{w}");
+    }
+    for w in words("screen.<id>", "fit") {
+        assert_eq!(gz_screens::Fit::parse(w).name(), w);
+    }
+    assert_eq!(words("track.<id>", "play"), words("screen.<id>", "show"));
+}
+
+#[test]
+fn the_tags_of_the_check_are_the_tags_of_the_hook() {
+    assert_eq!(gz_release::browser::TAG_VOCABULARY, gz_mod::TAG_VOCABULARY);
+    for tag in gz_mod::TAG_VOCABULARY {
+        assert!(gz_release::browser::parse_tags(tag).is_ok());
+    }
+    // a tag the hook refuses is one the check names
+    assert!(gz_release::browser::parse_tags("banana").is_err() && !gz_mod::accepts(Check::Tags, "banana"));
+}
+
+#[test]
+fn every_documented_key_of_the_areas_with_a_value_it_takes_passes_the_check() {
+    // one line per documented key of the sections an area reads, with the first value it takes
+    let mut text = String::from("[module]\r\nid = od\r\ntarget = default\r\n");
+    for s in SECTIONS.iter().filter(|s| matches!(s.reader, Reader::World | Reader::Screens)) {
+        text.push_str(&format!("[{}]\r\n", s.name.replace("<id>", "x")));
+        for k in s.keys.iter().filter(|k| !k.key.starts_with('<')) {
+            let value = match k.check {
+                Check::Flag => "true".to_owned(),
+                Check::Choice(w) | Check::Words(w) => w[0].to_owned(),
+                Check::Number | Check::Count => "1".to_owned(),
+                Check::Rect => "0 0 100 100".to_owned(),
+                _ => "a".to_owned(),
+            };
+            text.push_str(&format!("{} = {value}\r\n", k.key));
+        }
+    }
+    let found = gz_mod::validate(&ManifestDoc::parse(&text));
+    assert!(found.is_empty(), "{found:?}\n{text}");
 }

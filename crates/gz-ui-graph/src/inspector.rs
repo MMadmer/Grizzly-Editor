@@ -1138,10 +1138,14 @@ impl Inspector {
                 if commit {
                     let want = self.global_name_buf.trim().to_owned();
                     if !want.is_empty() && want != name {
-                        if !gz_mod::valid_global_name(&want) {
-                            self.notes.push(format!(
-                                "A global variable is named by letters, digits and _: '{want}'"
-                            ));
+                        if let Some(why) = gz_mod::global_name_refusal(&want) {
+                            // the manifest's own sentence, as a sentence of the panel
+                            let mut note = why;
+                            if let Some(first) = note.get(..1) {
+                                let upper = first.to_uppercase();
+                                note.replace_range(..1, &upper);
+                            }
+                            self.notes.push(note);
                         } else if self.globals.iter().any(|(n, _)| *n == want) {
                             self.notes.push(format!("The global variable '{want}' already exists"));
                         } else if let Some(slot) = self.globals.get_mut(i) {

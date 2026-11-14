@@ -520,7 +520,7 @@ async fn check_module(
     let snap = manifest.snapshot();
     let m = snap.manifest().ok_or_else(|| "mod.ltx not found in the project".to_owned())?.clone();
     feeder.builds.subtitle(format!("{} \u{b7} {}", m.title(), req.target));
-    let own = Verdict::of(&validate(&m), None, true);
+    let own = Verdict::of(&validate(&snap.doc().cloned().unwrap_or_default()), None);
     warnings.extend(own.warnings);
     if !own.err.is_empty() {
         return Err(own.err);
@@ -551,7 +551,7 @@ async fn check_module(
         )
         .await;
         for (check, problems) in areas.iter().zip(found) {
-            let v = Verdict::of(&problems, check.headline(), false);
+            let v = Verdict::of(&problems, check.headline());
             warnings.extend(v.warnings);
             if !v.err.is_empty() {
                 return Err(v.err);
@@ -562,7 +562,7 @@ async fn check_module(
 
     // the game refuses a bad name, a taken one or a function it cannot call
     let (_, problems) = command_check(editor, session, &m).await;
-    let v = Verdict::of(&problems, None, false);
+    let v = Verdict::of(&problems, None);
     warnings.extend(v.warnings);
     if !v.err.is_empty() {
         return Err(v.err);

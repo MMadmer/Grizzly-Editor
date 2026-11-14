@@ -99,7 +99,8 @@ pub struct Manifest {
     /// `[update] github`: owner/repo.
     pub update_github: String,
     pub api: String,
-    /// `[module] mode`: the game mode the module is limited to; empty = all modes.
+    /// `[module] mode`: the game mode the module's work on levels is limited to; `*` lifts the
+    /// limit (a classic module's); empty = the ordinary game only.
     pub mode: String,
     /// `default`, `existing`, `new` (`any` for a classic mod): the targeting choice. Empty =
     /// never decided, and the build refuses that.
@@ -200,7 +201,10 @@ impl Manifest {
                     "author" => m.author = text_value(value),
                     "description" => m.description = text_value(value),
                     "website" => m.website = value.to_owned(),
-                    "disable_game_updates" => m.disable_game_updates = value == "true" || value == "1",
+                    // as the game reads it: true in any case, or 1
+                    "disable_game_updates" => {
+                        m.disable_game_updates = value.eq_ignore_ascii_case("true") || value == "1";
+                    }
                     "thumbnail" => m.thumbnail = value.to_owned(),
                     "tags" => m.tags = split_list(value, ','),
                     "api" => m.api = value.to_owned(),

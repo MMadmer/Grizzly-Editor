@@ -10,29 +10,12 @@ use gz_editor::Editor;
 use gz_mod::text::split_list;
 use gz_mod::{ArgCx, Edit, ManifestArgs};
 
-/// MOD_CATALOG 6.2, in its order.
-pub const TAG_VOCABULARY: &[&str] = &[
-    "story",
-    "quests",
-    "gameplay",
-    "weapons",
-    "equipment",
-    "npcs",
-    "mutants",
-    "locations",
-    "graphics",
-    "audio",
-    "interface",
-    "fixes",
-];
+/// The Mod Browser's tags (MOD_CATALOG 6.2, in its order) and their test: the manifest's rules
+/// hold the one list.
+pub use gz_mod::{TAG_VOCABULARY, known_tag};
 
 /// The thumbnail the editor makes, at the project root.
 pub const THUMBNAIL_NAME: &str = "thumbnail.dds";
-
-#[must_use]
-pub fn known_tag(tag: &str) -> bool {
-    TAG_VOCABULARY.contains(&tag)
-}
 
 /// A tag's English label for the editor's UI.
 #[must_use]

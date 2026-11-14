@@ -17,8 +17,9 @@
 //! - [`reference`] - the format of `mod.ltx` as text ([`reference_text`], what
 //!   `asset.reference kind=manifest` answers), held to the model by its tests.
 //! - [`rules`] - the metadata rules the game enforces too ([`validate_id`], [`validate_version`],
-//!   [`validate_website`], [`validate_github_repo`], [`normalize_github_repo`], ...), and
-//!   [`validate`]: the manifest's own check before a build.
+//!   [`validate_website`], [`validate_github_repo`], [`normalize_github_repo`], ...), the
+//!   values the reference judges ([`accepts`], [`refusal`]: what `mod.set` and the form turn away
+//!   with), and [`validate`]: the manifest's own check, at its lines, before a build.
 //! - [`commands`] - console commands: [`valid_command_name`], [`scan_script_functions`],
 //!   [`validate_commands`] (`E401`..`E406`, `W406`..`W408`).
 //! - [`exclude`] - what the build leaves out: [`exclude_match`], [`outside_build`],
@@ -62,10 +63,14 @@ pub use edit::Edit;
 pub use exclude::{ShipState, exclude_match, normalize_rel, outside_build, set_excluded, ship_state};
 pub use io::{installed_commands, read_manifest_file, scaffold, script_functions};
 pub use model::{Command, FILE, GlobalVar, Manifest, ProvidesMode, derive_id, scaffold_text};
-pub use reference::{KeyDoc, Reader, SectionDoc, is_manifest_word, reference, reference_text};
+pub use reference::{
+    Check, KeyDoc, Reader, SectionDoc, is_manifest_word, key_doc, key_of, reference, reference_text,
+};
 pub use rules::{
-    normalize_github_repo, valid_global_name, validate, validate_github_repo, validate_id, validate_mode_id,
-    validate_version, validate_website,
+    DESCRIPTION_ROOM, GLOBAL_NAME_TAKES, TAG_VOCABULARY, accepts, global_name_refusal, global_twice,
+    known_tag, normalize_github_repo, parse_flag, refusal, valid_global_name, validate, validate_github_repo,
+    validate_id, validate_mode_id, validate_mode_ref, validate_own_mode_id, validate_version,
+    validate_website,
 };
 pub use sections::{OwnSections, SectionSet, own_sections};
 pub use service::{

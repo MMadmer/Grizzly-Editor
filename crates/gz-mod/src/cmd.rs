@@ -13,19 +13,13 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::doc::entry_line;
+use crate::doc::{ManifestDoc, entry_line};
 use crate::edit::Edit;
 use crate::model::{Command, GlobalVar, Manifest, ProvidesMode};
-use crate::rules::{
-    normalize_github_repo, valid_global_name, validate, validate_github_repo, validate_id, validate_mode_id,
-    validate_version, validate_website,
-};
+use crate::rules::{global_name_refusal, global_twice, normalize_github_repo, parse_flag, refusal, validate};
 use crate::service::{ArgCx, ManifestArgs, ManifestFields, ManifestService, ManifestState, command_check};
 use crate::text::{display_value, split_list, trim};
 use crate::{commands, io};
-
-/// The room the Mod Settings form gives the description.
-const DESCRIPTION_ROOM: usize = 4096;
 
 pub fn register(reg: &mut Registry) {
     reg.area("mod", "The module: its manifest, what a build ships, building and packaging it");
@@ -135,10 +129,14 @@ pub fn manifest_json(editor: &Editor, state: &ManifestState, m: &Manifest, tree:
     })
 }
 
-/// The manifest's own problems and its commands', placed in `mod.ltx`.
-pub async fn manifest_problems(ed: &Arc<Editor>, m: &Manifest) -> (Vec<String>, Vec<Problem>) {
+/// The manifest's own problems, each at its line of `mod.ltx`, and its commands'.
+pub async fn manifest_problems(
+    ed: &Arc<Editor>,
+    doc: &ManifestDoc,
+    m: &Manifest,
+) -> (Vec<String>, Vec<Problem>) {
     let Ok(session) = ed.project() else { return (Vec::new(), Vec::new()) };
-    let mut problems = validate(m);
+    let mut problems = validate(doc);
     let (functions, commands) = command_check(ed, &session, m).await;
     problems.extend(commands);
     let file = RelPath::new(crate::model::FILE).ok();
@@ -157,7 +155,8 @@ pub async fn manifest_answer(ed: &Arc<Editor>, project: &Project, service: &Mani
     project.tree.refresh().await;
     let tree = project.tree.snapshot();
     let manifest = manifest_json(ed, &snap, m, &tree);
-    let (functions, problems) = manifest_problems(ed, m).await;
+    let doc = snap.doc().cloned().unwrap_or_default();
+    let (functions, problems) = manifest_problems(ed, &doc, m).await;
     Ok(json!({ "manifest": manifest, "problems": problems, "functions": functions }))
 }
 
@@ -212,11 +211,13 @@ fn flag_of(v: &Value) -> Result<bool, CmdError> {
         Value::Bool(b) => Ok(*b),
         Value::Null => Ok(false),
         Value::Number(n) => Ok(n.as_f64().is_some_and(|x| x != 0.0)),
-        Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
-            "true" | "1" | "yes" | "on" => Ok(true),
-            "" | "false" | "0" | "no" | "off" => Ok(false),
-            other => Err(refuse(format!("'{other}' is no flag: true or false expected"))),
-        },
+        Value::String(s) => {
+            let word = s.trim().to_ascii_lowercase();
+            if word.is_empty() {
+                return Ok(false);
+            }
+            parse_flag(&word).ok_or_else(|| refuse(format!("'{word}' is no flag: true or false expected")))
+        }
         _ => Err(refuse("a flag is true or false")),
     }
 }
@@ -251,11 +252,11 @@ fn parse_vars(v: &Value) -> Result<Vec<GlobalVar>, CmdError> {
         if name.is_empty() {
             continue;
         }
-        if !valid_global_name(&name) {
-            return Err(refuse(format!("a global variable is named by letters, digits and _: '{name}'")));
+        if let Some(why) = global_name_refusal(&name) {
+            return Err(refuse(why));
         }
         if vars.iter().any(|g| g.name == name) {
-            return Err(refuse(format!("the global variable '{name}' is declared twice")));
+            return Err(refuse(global_twice(&name)));
         }
         vars.push(GlobalVar { name, value: trim(&value).to_owned() });
     }
@@ -290,16 +291,16 @@ async fn module_edits(
         let text = text_of(v, ", ");
         match key.as_str() {
             "id" => {
-                if !validate_id(&text) {
-                    return Err(refuse("the module id takes a-z, 0-9, _ . and - only"));
+                if let Some(why) = refusal("module", "id", &text) {
+                    return Err(refuse(why));
                 }
                 edits.push(Edit::set("module", "id", text.as_str()));
                 id.clone_from(&text);
             }
             "name" => edits.push(Edit::set("module", "name", display_value(&text, false))),
             "version" => {
-                if !validate_version(&text) {
-                    return Err(refuse("the version is 1 to 4 numbers separated by dots, e.g. 1.2.0"));
+                if let Some(why) = refusal("module", "version", &text) {
+                    return Err(refuse(why));
                 }
                 edits.push(Edit::set("module", "version", text));
             }
@@ -310,8 +311,8 @@ async fn module_edits(
             }),
             "description" => {
                 let d = trim(&text);
-                if d.len() >= DESCRIPTION_ROOM {
-                    return Err(refuse("the description is too long: 4095 bytes at most"));
+                if let Some(why) = refusal("module", "description", d) {
+                    return Err(refuse(why));
                 }
                 // the one text that routinely holds ';' and line breaks: always quoted
                 edits.push(if d.is_empty() {
@@ -327,28 +328,22 @@ async fn module_edits(
             }),
             "website" => {
                 let w = trim(&text);
-                if !validate_website(w) {
-                    return Err(refuse(
-                        "the website is a https link to ap-pro.ru or moddb.com, nothing else",
-                    ));
+                if let Some(why) = refusal("module", "website", w) {
+                    return Err(refuse(why));
                 }
                 edits.push(Edit::optional("module", "website", w));
             }
             "mode" => {
                 // `*` is a classic module's: every mode
-                if text != "*" && !validate_mode_id(&text) {
-                    return Err(refuse(
-                        "a mode id takes a-z, 0-9, _ . and - only; * is every mode, empty the ordinary game",
-                    ));
+                if let Some(why) = refusal("module", "mode", &text) {
+                    return Err(refuse(why));
                 }
                 edits.push(Edit::optional("module", "mode", &text));
                 mode.clone_from(&text);
             }
             "target" => {
-                if !["default", "existing", "new", "any"].iter().any(|t| t.eq_ignore_ascii_case(&text)) {
-                    return Err(refuse(
-                        "target is default (the ordinary game), existing (a mode of the linked game, with mode), new (a mode the module adds, with provides_mode) or any (every game, with mode *)",
-                    ));
+                if let Some(why) = refusal("module", "target", &text) {
+                    return Err(refuse(why));
                 }
                 edits.push(Edit::set("module", "target", text));
                 target_given = true;
@@ -436,8 +431,8 @@ fn provides_mode_edit(cur: &Manifest, v: &Value) -> Result<Edit, CmdError> {
         }
         other => (text_of(other, ","), None),
     };
-    if !validate_mode_id(&id) {
-        return Err(refuse("a mode id takes a-z, 0-9, _ . and - only, or is empty"));
+    if let Some(why) = refusal("provides_mode", "id", &id) {
+        return Err(refuse(why));
     }
     if id.is_empty() {
         if !modes.is_empty() {
@@ -494,8 +489,8 @@ async fn mod_set(ed: Arc<Editor>, p: SetParams, origin: Origin) -> Reply {
                         return Err(unknown_key("update", key, &["github"]));
                     }
                     let repo = normalize_github_repo(&text_of(value, ","));
-                    if !validate_github_repo(&repo) {
-                        return Err(refuse("github is owner/repo, e.g. Madmer/agroprom-story"));
+                    if let Some(why) = refusal("update", "github", &repo) {
+                        return Err(refuse(why));
                     }
                     edits.push(Edit::optional("update", "github", &repo));
                 }
@@ -563,8 +558,8 @@ async fn mod_set(ed: Arc<Editor>, p: SetParams, origin: Origin) -> Reply {
         }
     }
 
-    if !validate_id(&id) {
-        return Err(refuse("the module id is missing or invalid: a-z, 0-9, _ . and - only"));
+    if let Some(why) = refusal("module", "id", &id) {
+        return Err(refuse(why));
     }
     let changed = service.edit(edits, origin).await?;
     let mut answer = manifest_answer(&ed, &project, &service).await?;
@@ -621,7 +616,7 @@ mod tests {
         assert_eq!(parse_vars(&json!({"kills": 0, "met": "yes"})).unwrap()[0].value, "0");
         assert_eq!(
             parse_vars(&json!("a-b = 1")).unwrap_err().message,
-            "a global variable is named by letters, digits and _: 'a-b'"
+            "a global variable's name takes letters, digits and _, not 'a-b'"
         );
         assert_eq!(
             parse_vars(&json!(["a=1", "a=2"])).unwrap_err().message,

@@ -8,9 +8,9 @@
 use gz_editor::{Args, Value};
 use gz_mod::text::outside_cp1251;
 use gz_mod::{
-    Command, Manifest, has_script_function, normalize_github_repo, valid_command_function,
-    valid_command_name, validate_github_repo, validate_id, validate_mode_id, validate_version,
-    validate_website,
+    Command, DESCRIPTION_ROOM, Manifest, has_script_function, normalize_github_repo, valid_command_function,
+    valid_command_name, validate_github_repo, validate_id, validate_mode_ref, validate_own_mode_id,
+    validate_version, validate_website,
 };
 use gz_ui::Tone;
 
@@ -74,9 +74,6 @@ pub const PAGES: [PageInfo; 7] = [
 pub fn page_index(id: &str) -> Option<usize> {
     PAGES.iter().position(|p| p.id == id)
 }
-
-/// The room the form gives the description (one byte for the terminator).
-const DESCRIPTION_ROOM: usize = 4096;
 
 /// What the tab shows of `mod.ltx`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -571,11 +568,17 @@ pub fn check(f: &Form, aux: &Aux) -> Vec<Problem> {
         _ => {}
     }
     // "*" is the engine's no-gate wildcard: legal for mode=, never for a mode of the module's own
-    if f.mode != "*" && !validate_mode_id(&f.mode) {
+    if !validate_mode_ref(&f.mode) {
         out.push(problem(MODE, "mode", Tone::Error, true, "Use a-z, 0-9, _ . and - only."));
     }
-    if !validate_mode_id(&f.pmode_id) {
-        out.push(problem(MODE, "pmode_id", Tone::Error, true, "Use a-z, 0-9, _ . and - only."));
+    if !validate_own_mode_id(&f.pmode_id) {
+        out.push(problem(
+            MODE,
+            "pmode_id",
+            Tone::Error,
+            true,
+            "Use a-z, 0-9, _ . and -, 64 characters at most.",
+        ));
     }
     // the caption ships in a cp1251 string table: anything outside that page reaches the
     // new-game screen as a look-alike or '?', while this field keeps showing the original
