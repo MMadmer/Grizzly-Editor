@@ -1423,7 +1423,8 @@ fn fly_key(key: Key) -> Option<FlyKey> {
     }
 }
 
-/// The labels the frame found visible, white on a black shadow.
+/// The labels the frame found visible, white on a black shadow. A label is laid out once, without
+/// a colour of its own, and painted twice.
 fn draw_labels(painter: &egui::Painter, rect: Rect, info: &gz_render::FrameInfo, ppp: f32) {
     let font = Font::Small.id();
     for l in info.labels.iter().filter(|l| l.visible) {
@@ -1432,8 +1433,11 @@ fn draw_labels(painter: &egui::Painter, rect: Rect, info: &gz_render::FrameInfo,
             continue;
         }
         let c = Color32::from_rgba_unmultiplied(l.color.0[0], l.color.0[1], l.color.0[2], 255);
-        painter.text(at + vec2(1.0, 1.0), Align2::LEFT_CENTER, l.text.as_str(), font.clone(), Color32::BLACK);
-        painter.text(at, Align2::LEFT_CENTER, l.text.as_str(), font.clone(), c);
+        let text = painter.layout_no_wrap(l.text.to_string(), font.clone(), Color32::PLACEHOLDER);
+        // the anchor is the label's left edge at mid-height
+        let corner = pos2(at.x, at.y - text.size().y * 0.5);
+        painter.galley(corner + vec2(1.0, 1.0), text.clone(), Color32::BLACK);
+        painter.galley(corner, text, c);
     }
 }
 

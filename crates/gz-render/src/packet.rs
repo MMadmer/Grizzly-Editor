@@ -26,8 +26,10 @@ use crate::view::{View, ViewFlags, ViewMode};
 
 /// The most lights the game-lighting mode draws, nearest first.
 pub(crate) const MAX_LIGHTS: usize = 128;
-/// The most labels a frame tests for depth.
-pub(crate) const MAX_LABEL_QUERIES: usize = 4096;
+/// The most labels a frame shows, nearest first, each tested for depth when it asks: a screen
+/// of more cannot be read, and every label is text the UI thread lays out (the names of a level's
+/// six thousand spawn points in view took its pass past the stall limit).
+pub(crate) const MAX_LABELS: usize = 256;
 /// Lists at least this long are culled and sorted in parallel.
 const PARALLEL: usize = 2048;
 /// `bones_at` of an instance that is not skinned.
@@ -613,17 +615,27 @@ pub fn build_packet_with(
     let mut label_points = Vec::new();
     if view.shows(ViewFlags::HELPERS) {
         tessellate(&list.helpers, &mut helpers);
-        for l in &list.helpers.labels {
-            let Some(p) = project(&view_proj, size, l.position) else { continue };
-            if p.x < 0.0
-                || p.y < 0.0
-                || p.x > size[0] as f32
-                || p.y > size[1] as f32
-                || !(0.0..=1.0).contains(&p.z)
-            {
-                continue;
-            }
-            let query = (l.depth_tested && label_points.len() < MAX_LABEL_QUERIES).then(|| {
+        // the labels in view, then the nearest of them
+        let mut in_view: Vec<_> = list
+            .helpers
+            .labels
+            .iter()
+            .filter_map(|l| {
+                let p = project(&view_proj, size, l.position)?;
+                let inside = p.x >= 0.0
+                    && p.y >= 0.0
+                    && p.x <= size[0] as f32
+                    && p.y <= size[1] as f32
+                    && (0.0..=1.0).contains(&p.z);
+                inside.then_some((p, l))
+            })
+            .collect();
+        if in_view.len() > MAX_LABELS {
+            in_view.select_nth_unstable_by(MAX_LABELS, |a, b| a.0.z.total_cmp(&b.0.z));
+            in_view.truncate(MAX_LABELS);
+        }
+        for (p, l) in in_view {
+            let query = l.depth_tested.then(|| {
                 label_points.push(l.position.extend(1.0).to_array());
                 label_points.len() as u32 - 1
             });

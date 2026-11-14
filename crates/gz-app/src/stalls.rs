@@ -17,8 +17,9 @@
 //! on time, and is one.
 //!
 //! **Where it waited** is asked for with `GRIZZLY_DEBUG_STALLS=1`: the heartbeat then stops the UI
-//! thread for a moment once a pass has run for the limit, reads its stack (`gz_win::thread_stack`),
-//! and the stall's log line names the functions it stood in.
+//! thread for a moment once a pass has run for half the limit - the middle of a pass that only
+//! just becomes a stall, and the same place as later in one that waits - reads its stack
+//! (`gz_win::thread_stack`), and the stall's log line names the functions it stood in.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Weak};
@@ -149,14 +150,14 @@ impl Stalls {
         Some(gz_win::symbol_names(&stack))
     }
 
-    /// The heartbeat's part: a pass that has run for the limit has its thread's stack read, once.
+    /// The heartbeat's part: a pass that has run for half the limit has its thread's stack read, once.
     fn sample_long_pass(&self, now: Instant) {
         let thread = {
             let pass = self.pass.lock();
             match pass.as_ref() {
                 Some(p)
                     if p.stack.is_none()
-                        && now.duration_since(p.began).as_secs_f32() * 1000.0 >= STALL_MS =>
+                        && now.duration_since(p.began).as_secs_f32() * 1000.0 >= STALL_MS * 0.5 =>
                 {
                     p.thread
                 }

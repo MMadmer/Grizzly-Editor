@@ -10,7 +10,7 @@ use rayon::prelude::*;
 
 use crate::assets::{Assets, GpuMesh};
 use crate::gpu::{Gpu, IdPipe, MeshPipe};
-use crate::packet::{Draw, FramePacket, MAX_LABEL_QUERIES};
+use crate::packet::{Draw, FramePacket, MAX_LABELS};
 use crate::targets::Targets;
 use crate::{RenderError, Result};
 
@@ -175,7 +175,7 @@ impl FrameResources {
         for i in 1..4 {
             helper_at[i] = helper_at[i - 1] + counts[i - 1];
         }
-        let mut queries = packet.label_points.len().min(MAX_LABEL_QUERIES) as u32;
+        let mut queries = packet.label_points.len().min(MAX_LABELS) as u32;
         self.labels
             .write(gpu, bytemuck::cast_slice(packet.label_points.get(..queries as usize).unwrap_or(&[])));
         if queries > 0 {

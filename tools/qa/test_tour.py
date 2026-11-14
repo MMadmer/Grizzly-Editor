@@ -9,7 +9,7 @@ For each of them:
   - `shot.window` is a picture with the editor's size, nothing outside the window, and the dialog on top as `modal`.
 
 The two sizes are the ones the design is held to (docs/UI_DESIGN.md): 1707 x 912 pt at UI scale 1.5 and 1280 x 720 pt
-at 1.0. --shots keeps the pictures of the first size.
+at 1.0. --shots keeps the pictures: the first size in the folder, the second in `small` inside it.
 
     python tools/qa/test_tour.py --project <project> [--shots <folder>] [--only A,B]
 
@@ -19,6 +19,7 @@ at 1.0. --shots keeps the pictures of the first size.
 """
 from __future__ import annotations
 
+import os
 import sys
 
 import qa
@@ -47,6 +48,13 @@ def audited(label: str) -> None:
     for t in cut:
         if t not in vanished:
             print("NOTE %s: '%s' is shown cut short" % (label, str(t.get("label"))[:60]), flush=True)
+
+
+def kept(shots: str | None, tag: str) -> str | None:
+    """Where the pictures of a size go: the folder itself for the first size, `small` inside it for the other."""
+    if not shots:
+        return None
+    return shots if tag == "max" else os.path.join(shots, "small")
 
 
 def pictured(label: str, shots: str | None, name: str, modal: str | None = None) -> None:
@@ -85,7 +93,7 @@ def phase_a(project: str, tag: str, shots: str | None, contract: dict) -> None:
               label + " comes up as the active tab", active)
         settled(label)
         audited(label)
-        pictured(label, shots if tag == "max" else None, "tab_%s" % kind.replace(":", "_"))
+        pictured(label, kept(shots, tag), "tab_%s" % kind.replace(":", "_"))
         opened.append(active)
     cmd("ui.tab", action="activate", doc="level")
     for doc in opened:
@@ -104,7 +112,7 @@ def phase_b(tag: str, shots: str | None, contract: dict) -> None:
         check(dialog_id in shown, label + " is listed among the open dialogs", shown)
         settled(label)
         audited(label)
-        pictured(label, shots if tag == "max" else None, "dialog_%s" % dialog_id, modal=dialog_id)
+        pictured(label, kept(shots, tag), "dialog_%s" % dialog_id, modal=dialog_id)
         cmd("ui.dialog", action="close", id=dialog_id)
         check(dialog_id not in [d.get("id") for d in cmd("ui.list").get("dialogs", [])], label + " closes")
 
@@ -117,7 +125,7 @@ def phase_c(tag: str, shots: str | None, contract: dict) -> None:
             check(isinstance(o.get("error"), str) and len(o["error"]) > 12, label + " is refused in a sentence", qa.short(o))
             continue
         audited(label)
-        pictured(label, shots if tag == "max" else None, "menu_%s" % menu)
+        pictured(label, kept(shots, tag), "menu_%s" % menu)
         cmd("ui.popup", show="none")
 
 

@@ -173,6 +173,9 @@ What the suites hold, beyond what their names say:
   editor it had not seen before. The read-back of a pictured frame is polled by one thread made with the window;
   a thread a surface needs on first use (the sound player's, the renderer's start, the image pass's) is made by
   a pool thread (`gz_task::Executors::thread`).
+- The viewport labels the nearest 256 of what is in view, each laid out once: a marquee over a whole level selected
+  its way paths, and the frame that named every point of them spent 80 ms on text.
+- A stall's stack is read at half the limit: the middle of a pass that works, the same place in one that waits.
 - `ui.audit` answers `loading`, the busy lines a frame shows: a caller that judges or pictures a surface waits
   for an empty list first, and the tour does - it found the stall above by staying on a tab until it was ready.
 - A resize configures the surface on the UI thread, which waits there for the frames in flight; the graphics
