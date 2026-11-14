@@ -35,6 +35,14 @@ const ALIASES: [Alias; 5] = [
     Alias { word: "update", command: "update.apply", bare: None, fixed: &[("restart", "false")] },
 ];
 
+/// Whether a bare word is a project to open: written as a path or a project file, or the name
+/// of something that is there.
+fn names_a_project(word: &str) -> bool {
+    word.contains(['/', '\\', ':'])
+        || word.to_ascii_lowercase().ends_with(".grizzly")
+        || std::path::Path::new(word).exists()
+}
+
 /// The command line. Options keep the single dash the editor has always taken (`-project`,
 /// `-nodlg`); a double dash is accepted too.
 #[derive(Clone, Debug, Default)]
@@ -125,7 +133,8 @@ impl Cli {
     }
 
     /// The words that are not options: a commandlet's verb with its own words, else a project
-    /// to open (what Explorer passes for a double-clicked project file).
+    /// to open (what Explorer passes for a double-clicked project file). A word that is neither
+    /// is a usage line: a mistyped verb must not open a window on a machine nobody watches.
     fn take_words(&mut self, words: Vec<String>) {
         let mut words = words.into_iter();
         let Some(first) = words.next() else { return };
@@ -161,11 +170,13 @@ impl Cli {
                         given.push(format!("{param}={value}"));
                     }
                     self.run(alias.command.to_owned(), alias.fixed, given);
-                } else if rest.is_empty() && self.project.is_none() {
+                } else if rest.is_empty() && self.project.is_none() && names_a_project(&first) {
                     self.project = Some(PathBuf::from(first));
                 } else {
-                    self.unknown.push(first);
-                    self.unknown.extend(rest);
+                    self.usage = Some(format!(
+                        "run | script | help | serve | {}   ('{first}' is none of them and no project to open)",
+                        ALIASES.map(|a| a.word).join(" | ")
+                    ));
                 }
             }
         }
@@ -294,5 +305,13 @@ mod tests {
         assert_eq!(cli(&["run", "a", "b"]).usage.as_deref(), Some("'b': write a parameter as name=value"));
         assert!(cli(&["script"]).usage.is_some());
         assert!(cli(&["run"]).commandlet());
+        // a mistyped verb is said so in the console: it opens no window and no project
+        for words in [&["chek"][..], &["chek", "quests/a.nqasset"], &["serve", "now"]] {
+            let c = cli(words);
+            assert!(c.usage.as_deref().is_some_and(|u| u.contains(words[0])), "{words:?}");
+            assert!(c.commandlet() && c.windowless() && c.project.is_none(), "{words:?}");
+        }
+        // a project file by its bare name is a project still
+        assert_eq!(cli(&["Mine.grizzly"]).project, Some(PathBuf::from("Mine.grizzly")));
     }
 }

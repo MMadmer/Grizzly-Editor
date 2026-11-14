@@ -123,7 +123,8 @@ A commandlet is the editor without a window: it opens the project (`-project <fo
 current folder when it is a project), waits until the project is ready, runs, waits for every job the commands
 started, prints and ends. It listens on no port, writes its own log, and never asks. `-json` prints the raw answer,
 `-quiet` drops the job progress it otherwise writes to stderr, `-keep_going` runs a script past a failure. Exit
-codes: 0 done, 1 a command failed, 2 the run could not start.
+codes: 0 done, 1 a command failed, 2 the run could not start. A first word that is neither a verb nor a project
+(a path, a project file, something that is there) is a usage line and code 2: a mistyped verb opens no window.
 
 **The socket** (127.0.0.1, the QA suites and the bridge): one JSON object a line - `{"cmd": "scene.place", ...the
 parameters beside it}` or `{"cmd": ..., "args": {...}}`; `"gate": "run" | "destroy" | "release"` when a door
