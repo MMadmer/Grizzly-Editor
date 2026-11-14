@@ -63,7 +63,8 @@ A change of plan is a change of its document first.
   It is measured, not promised: the window times every UI pass and event, one over 100 ms is a stall
   (`gz-app`'s `stalls.rs`, `perf.stalls`), and every QA suite ends on an empty list. A long pass during which no
   thread of the editor got a processor (the heartbeat thread was late too) is kept apart as `starved` and is no
-  stall. Work that takes time is a job (`gz-task`) with a stage the author can read and a Stop; a job belongs to the
+  stall. A stall's record says how much of it the UI thread spent on the processor (little: it waited), and with
+  `GRIZZLY_DEBUG_STALLS=1` the functions it stood in - read that before guessing what a stall was. Work that takes time is a job (`gz-task`) with a stage the author can read and a Stop; a job belongs to the
   editor or to the project that was open when it started, and closing the project stops it. A command that only
   reads the editor's state (`job.*`, `ui.tasks`, `state`) never waits for the UI thread or a frame.
 - **A thread that submits to the GPU passes the window's gate** (`gz_app::gpu_gate`, a `gz_task::Gate`): the window
