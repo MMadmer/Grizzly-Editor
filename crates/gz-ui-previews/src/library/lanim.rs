@@ -11,14 +11,16 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, Ui, Vec2, po
 use gz_app::{DocCx, Document, EditAction, OpenRequest};
 use gz_editor::{Args, CmdError, Editor, Origin, SmolStr};
 use gz_fmt_xr::{LightAnim, LightAnims};
-use gz_store::{Apply, State, Store, StoreOptions};
+use gz_store::{Apply, State, Store};
 use gz_ui::dialog::{self, Answer, ConfirmSpec};
 use gz_ui::grid::{color, integer, number, read_only};
 use gz_ui::text::{self, Clip};
 use gz_ui::{Font, Icon, Kind, PropFlags, PropertyGrid, Toolbar, ToolbarStyle, palette, state};
 use serde_json::{Map, Value, json};
 
+use super::keys;
 use super::list::{Empty, LibraryList, find, shown};
+use super::stores::{LanimFacts, LibraryFacts, LibraryStores};
 use super::{LibraryDoc, folder_text, pane, panes};
 use crate::local::{local_checker, local_ends, local_heading};
 use crate::paths::EditorDirs;
@@ -109,6 +111,31 @@ pub fn next_key(item: &LightAnim, frame: i32) -> i32 {
     item.keys.range(frame + 1..).next().or_else(|| item.keys.iter().next_back()).map_or(0, |(f, _)| *f)
 }
 
+/// A key added at `frame`.
+pub fn insert_key(item: &mut LightAnim, frame: i32, color: u32) -> Result<(), CmdError> {
+    if frame > item.frame_count || frame < 0 {
+        return Err(CmdError::invalid("the frame is past the animation's end"));
+    }
+    item.keys.insert(frame, color);
+    Ok(())
+}
+
+/// The key at `frame` taken away; `false` when nothing changed (the first key stays, an
+/// animation keeps at least one; no key was there).
+pub fn delete_key(item: &mut LightAnim, frame: i32) -> bool {
+    frame != 0 && item.keys.remove(&frame).is_some()
+}
+
+/// The key at `from` moved to `to`; `false` when there is no key at `from`.
+pub fn move_key(item: &mut LightAnim, from: i32, to: i32) -> Result<bool, CmdError> {
+    if from > item.frame_count || to > item.frame_count {
+        return Err(CmdError::invalid("the frame is past the animation's end"));
+    }
+    let Some(c) = item.keys.remove(&from) else { return Ok(false) };
+    item.keys.insert(to, c);
+    Ok(true)
+}
+
 impl State for LanimState {
     type Cmd = LanimCmd;
     type Reply = ();
@@ -135,32 +162,21 @@ impl State for LanimState {
                 cx.undoable("Frame Count");
             }
             LanimCmd::InsertKey { name, frame, color } => {
-                let item = item_mut(Arc::make_mut(&mut self.lib), &name)?;
-                if frame > item.frame_count || frame < 0 {
-                    return Err(CmdError::invalid("the frame is past the animation's end"));
-                }
-                item.keys.insert(frame, color);
+                insert_key(item_mut(Arc::make_mut(&mut self.lib), &name)?, frame, color)?;
                 cx.undoable("Add Key");
             }
             LanimCmd::DeleteKey { name, frame } => {
-                let item = item_mut(Arc::make_mut(&mut self.lib), &name)?;
-                // the first key stays: an animation keeps at least one
-                if frame == 0 || item.keys.remove(&frame).is_none() {
+                if !delete_key(item_mut(Arc::make_mut(&mut self.lib), &name)?, frame) {
                     cx.unchanged();
                     return Ok(());
                 }
                 cx.undoable("Delete Key");
             }
             LanimCmd::MoveKey { name, from, to } => {
-                let item = item_mut(Arc::make_mut(&mut self.lib), &name)?;
-                if from > item.frame_count || to > item.frame_count {
-                    return Err(CmdError::invalid("the frame is past the animation's end"));
-                }
-                let Some(c) = item.keys.remove(&from) else {
+                if !move_key(item_mut(Arc::make_mut(&mut self.lib), &name)?, from, to)? {
                     cx.unchanged();
                     return Ok(());
-                };
-                item.keys.insert(to, c);
+                }
                 cx.undoable("Move Key");
             }
             LanimCmd::SetKey { name, frame, color } => {
@@ -201,8 +217,7 @@ pub struct LanimDoc {
 impl LanimDoc {
     #[must_use]
     pub fn new(editor: &Arc<Editor>) -> Self {
-        let store =
-            Store::spawn("light animations", LanimState::default(), &editor.exec, StoreOptions::default());
+        let store = LibraryStores::of(editor).lanim.clone();
         let file = EditorDirs::of(editor).lanims();
         let doc = Self {
             editor: editor.clone(),
@@ -215,76 +230,49 @@ impl LanimDoc {
             render_alpha: false,
             pending_count: None,
         };
-        doc.reload_now();
+        // changes made before the tab opened (a command's) stay; a clean library is read again
+        if !doc.store.is_dirty() {
+            doc.reload_now();
+        }
         doc
     }
 
     /// Reads the file again (`LALib.Reload`) on the IO pool.
     fn reload_now(&self) {
-        let (store, file, exec) = (self.store.clone(), self.file.clone(), self.editor.exec.clone());
-        self.editor.exec.spawn(async move {
-            let read = exec.io(move || std::fs::read(&file)).await;
-            let (lib, error) = match read {
-                Ok(bytes) => match LightAnims::read(&bytes) {
-                    Ok(l) => (l, None),
-                    Err(e) => (LightAnims::default(), Some(format!("lanims.xr could not be read: {e}"))),
-                },
-                // no file yet: an empty library, written by the first save
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (LightAnims::default(), None),
-                Err(e) => (LightAnims::default(), Some(format!("lanims.xr could not be read: {e}"))),
-            };
-            let _ = store.send(LanimCmd::Load { lib, error }, Origin::Ui).await;
-        });
-    }
-
-    fn reload(&mut self, ctx: &egui::Context) {
-        if !self.store.is_dirty() {
-            self.reload_now();
-            return;
-        }
-        let spec = ConfirmSpec {
-            id: "reload_light_animations".to_owned(),
-            title: "Reload Light Animations".to_owned(),
-            headline: "Read the light animation library from disk again?".to_owned(),
-            items: vec!["Unsaved changes to the light animations".to_owned()],
-            total: 0,
-            consequence: "The changes made since the last save are lost.".to_owned(),
-            action: "Reload".to_owned(),
-            destructive: true,
-        };
-        let (store, file, exec) = (self.store.clone(), self.file.clone(), self.editor.exec.clone());
-        let asker = if self.editor.flags.unattended { dialog::Asker::Unattended } else { dialog::Asker::Ui };
-        let line = dialog::confirm(ctx, asker, spec, move |answer| {
-            if answer != Answer::Yes {
-                return;
-            }
-            let ex = exec.clone();
-            exec.spawn(async move {
-                let read = ex.io(move || std::fs::read(&file)).await;
-                let lib = read.ok().and_then(|b| LightAnims::read(&b).ok()).unwrap_or_default();
-                let _ = store.send(LanimCmd::Load { lib, error: None }, Origin::Ui).await;
-            });
-        });
-        if let Some(line) = line {
-            self.editor.log.finding(&line);
-        }
+        let editor = self.editor.clone();
+        self.editor.exec.spawn(async move { LibraryStores::reload_lanims(&editor).await });
     }
 
     /// Writes the library (`LALib.Save`) on the IO pool, then marks it saved.
     fn save_now(&self) {
-        let snap = self.store.snapshot();
-        let bytes = snap.lib.write();
-        let (store, file, exec, notices) =
-            (self.store.clone(), self.file.clone(), self.editor.exec.clone(), self.editor.clone());
+        let editor = self.editor.clone();
         self.editor.exec.spawn(async move {
-            let shown = file.clone();
-            match exec.io(move || gz_editor::fsx::write_atomic(&file, &bytes)).await {
-                Ok(()) => {
-                    let _ = store.send(LanimCmd::Saved, Origin::Ui).await;
-                }
-                Err(e) => notices.notices.error(format!("{} could not be written: {e}", shown.display())),
+            if let Err(e) = save_lanims(&editor).await {
+                editor.notices.error(e);
             }
         });
+    }
+
+    /// Plays the selected animation in real time, or stops it.
+    pub fn play(&mut self, play: bool, now: f64) -> Result<(), String> {
+        if !play {
+            self.playing = None;
+            return Ok(());
+        }
+        if self.selected.is_empty() {
+            return Err("Pick a light animation first.".to_owned());
+        }
+        self.playing = Some((now, self.pointer));
+        Ok(())
+    }
+
+    /// The frame the timeline points at.
+    pub fn set_pointer(&mut self, frame: i32) {
+        self.playing = None;
+        self.pointer = frame.max(0);
+        let snap = self.store.snapshot();
+        let item = self.current(&snap.lib);
+        self.clamp_pointer(item.as_ref());
     }
 
     fn keys(lib: &LightAnims) -> Vec<&str> {
@@ -311,7 +299,7 @@ impl LanimDoc {
         self.store.post(cmd, self.editor.ui_origin());
     }
 
-    fn draw_preview(&mut self, ui: &mut Ui, item: &LightAnim) {
+    fn draw_preview(&mut self, ui: &mut Ui, item: &LightAnim, cx: &mut DocCx<'_>) {
         let ctx = ui.ctx().clone();
         let p = palette(&ctx);
         // Play runs the animation in real time: frames are asked for while it plays
@@ -357,7 +345,7 @@ impl LanimDoc {
         resp.on_hover_text(tip);
         ui.add_space(12.0);
         self.draw_timeline(ui, item, 40.0);
-        self.draw_key_bar(ui, item);
+        self.draw_key_bar(ui, item, cx);
     }
 
     fn draw_timeline(&mut self, ui: &mut Ui, item: &LightAnim, height: f32) {
@@ -432,15 +420,25 @@ impl LanimDoc {
         self.post(LanimCmd::InsertKey { name: item.name.clone(), frame: self.pointer, color });
     }
 
-    fn draw_key_bar(&mut self, ui: &mut Ui, item: &LightAnim) {
+    fn draw_key_bar(&mut self, ui: &mut Ui, item: &LightAnim, cx: &mut DocCx<'_>) {
         let on_key = item.keys.contains_key(&self.pointer);
-        let now = ui.ctx().input(|i| i.time);
+        let free_before = (0..self.pointer).rev().find(|f| !item.keys.contains_key(f));
+        let free_after = (self.pointer + 1..item.frame_count).find(|f| !item.keys.contains_key(f));
+        LibraryFacts::of(&self.editor).set_lanim(LanimFacts {
+            selected: true,
+            pointer: self.pointer,
+            frames: item.frame_count,
+            on_key,
+            keys: item.keys.len(),
+            playing: self.playing.is_some(),
+            alpha: self.render_alpha,
+            color: item.color_at(self.pointer).unwrap_or(0),
+            free_before: free_before.filter(|_| on_key),
+            free_after: free_after.filter(|_| on_key),
+        });
         let mut tb = Toolbar::begin(ui, "light_animation_keys", ToolbarStyle::Panel);
         tb.group(3);
-        if tb.action("prev_key", Icon::ChevronLeft, "", "Go to the previous key", true, false, Kind::Ghost) {
-            self.playing = None;
-            self.pointer = prev_key(item, self.pointer);
-        }
+        gz_app::toolbar_button(&mut tb, cx, "library.previous_key", Kind::Ghost, Some(""));
         let last = (item.frame_count - 1).max(0);
         let pointer = &mut self.pointer;
         let playing = &mut self.playing;
@@ -451,82 +449,23 @@ impl LanimDoc {
             }
             r.on_hover_text("The frame the timeline points at; drag or type a number");
         });
-        if tb.action("next_key", Icon::ChevronRight, "", "Go to the next key", true, false, Kind::Ghost) {
-            self.playing = None;
-            self.pointer = next_key(item, self.pointer);
-        }
+        gz_app::toolbar_button(&mut tb, cx, "library.next_key", Kind::Ghost, Some(""));
         tb.group(2);
-        let add_tip = if on_key {
-            "There is a key at this frame already"
-        } else {
-            "Add a key at this frame, with the colour the frame has now"
-        };
-        if tb.action("add_key", Icon::Plus, "Add Key", add_tip, !on_key, false, Kind::Ghost) {
-            self.add_key(item);
-        }
-        let deletable = on_key && item.keys.len() > 1;
-        let del_tip = if deletable {
-            "Delete the key at this frame"
-        } else if on_key {
-            "An animation keeps at least one key"
-        } else {
-            "There is no key at this frame"
-        };
-        if tb.action("delete_key", Icon::Minus, "Delete Key", del_tip, deletable, false, Kind::Ghost) {
-            self.post(LanimCmd::DeleteKey { name: item.name.clone(), frame: self.pointer });
-        }
+        gz_app::toolbar_button(&mut tb, cx, "library.add_key", Kind::Ghost, None);
+        gz_app::toolbar_button(&mut tb, cx, "library.delete_key", Kind::Ghost, None);
         tb.group(1);
-        // a key moves one frame at a time, onto the next free frame
-        let left = on_key && self.pointer > 0;
-        let right = on_key && self.pointer < item.frame_count - 1;
-        if tb.action(
-            "key_earlier",
-            Icon::Back,
-            "",
-            if left {
-                "Move this key to the nearest free frame before it"
-            } else {
-                "There is no key here to move"
-            },
-            left,
-            false,
-            Kind::Ghost,
-        ) && let Some(to) = (0..self.pointer).rev().find(|f| !item.keys.contains_key(f))
-        {
-            self.post(LanimCmd::MoveKey { name: item.name.clone(), from: self.pointer, to });
-            self.pointer = to;
-        }
-        if tb.action(
-            "key_later",
-            Icon::Forward,
-            "",
-            if right {
-                "Move this key to the nearest free frame after it"
-            } else {
-                "There is no key here to move"
-            },
-            right,
-            false,
-            Kind::Ghost,
-        ) && let Some(to) = (self.pointer + 1..item.frame_count).find(|f| !item.keys.contains_key(f))
-        {
-            self.post(LanimCmd::MoveKey { name: item.name.clone(), from: self.pointer, to });
-            self.pointer = to;
-        }
+        gz_app::toolbar_button(&mut tb, cx, "library.key_earlier", Kind::Ghost, Some(""));
+        gz_app::toolbar_button(&mut tb, cx, "library.key_later", Kind::Ghost, Some(""));
         tb.spring();
         tb.group(4);
         let play = self.playing.is_some();
-        if tb.action(
-            "play",
-            if play { Icon::Stop } else { Icon::Play },
-            if play { "Stop" } else { "Play" },
-            if play { "Stop the animation" } else { "Play the animation in real time" },
-            true,
-            play,
+        gz_app::toolbar_button(
+            &mut tb,
+            cx,
+            if play { "library.stop_animation" } else { "library.play_animation" },
             Kind::Ghost,
-        ) {
-            self.playing = if play { None } else { Some((now, self.pointer)) };
-        }
+            None,
+        );
         tb.end();
     }
 
@@ -632,6 +571,7 @@ impl LanimDoc {
             out.insert("on_key".into(), json!(i.keys.contains_key(&self.pointer)));
         }
         out.insert("alpha".into(), json!(self.render_alpha));
+        out.insert("playing".into(), json!(self.playing.is_some()));
         out.insert("file".into(), json!(crate::paths::json_path(&self.file)));
         out
     }
@@ -658,6 +598,9 @@ impl LibraryDoc for LanimDoc {
         if let Some(s) = args.get("search").and_then(Value::as_str) {
             self.list.search = s.to_owned();
         }
+        if let Some(on) = args.get("alpha").and_then(Value::as_bool) {
+            self.render_alpha = on;
+        }
         if action == "select" {
             let item = args.get("item").and_then(Value::as_str).unwrap_or_default().to_owned();
             let snap = self.store.snapshot();
@@ -672,6 +615,18 @@ impl LibraryDoc for LanimDoc {
                 let item = self.current(&snap.lib);
                 self.clamp_pointer(item.as_ref());
             }
+        }
+        // the previous or the next key of the selected animation
+        if let Some(step) = args.get("key").and_then(Value::as_str) {
+            let snap = self.store.snapshot();
+            let Some(item) = self.current(&snap.lib) else {
+                return Err("Pick a light animation first.".to_owned());
+            };
+            self.playing = None;
+            self.pointer = match step {
+                "previous" => prev_key(&item, self.pointer),
+                _ => next_key(&item, self.pointer),
+            };
         }
         Ok(self.state())
     }
@@ -712,40 +667,20 @@ impl Document for LanimDoc {
             false,
             Kind::Ghost,
         ) {
-            self.save_now();
+            cx.requests.action("file.save");
         }
-        if tb.action(
-            "reload",
-            Icon::Reload,
-            "Reload",
-            "Read the light animation library from disk again",
-            true,
-            false,
-            Kind::Ghost,
-        ) {
-            self.reload(cx.ctx);
-        }
+        gz_app::toolbar_button(tb, cx, "library.reload_lanims", Kind::Ghost, None);
         tb.group(0);
-        if tb.action(
-            "alpha",
-            Icon::Eye,
-            "Alpha",
-            "Show the colours' alpha over a checkerboard",
-            true,
-            self.render_alpha,
-            Kind::Ghost,
-        ) {
-            self.render_alpha = !self.render_alpha;
-        }
+        gz_app::toolbar_button(tb, cx, "library.alpha", Kind::Ghost, None);
     }
 
-    fn body(&mut self, ui: &mut Ui, _cx: &mut DocCx<'_>) {
+    fn body(&mut self, ui: &mut Ui, cx: &mut DocCx<'_>) {
         let snap = self.store.snapshot();
         let keys = Self::keys(&snap.lib);
         // a library with nothing in it (or that cannot be read) says so once, over the whole tab
         if snap.loaded && keys.is_empty() {
             match &snap.error {
-                Some(e) => state::empty_state(ui, Icon::Warning, "The library cannot be read", e, None),
+                Some(e) => state::error_state(ui, "The library cannot be read", e, None),
                 None => {
                     let text_ = format!(
                         "lanims.xr in {} holds no light animation.",
@@ -783,13 +718,17 @@ impl Document for LanimDoc {
             self.select(&name);
         }
         let item = self.current(&snap.lib);
+        if item.is_none() {
+            LibraryFacts::of(&self.editor)
+                .set_lanim(LanimFacts { alpha: self.render_alpha, ..LanimFacts::default() });
+        }
         if let Some(e) = &snap.error {
             pane(ui, preview_r, "light_animations.preview", true, false, |ui| {
-                state::empty_state(ui, Icon::Warning, "The library cannot be read", e, None);
+                state::error_state(ui, "The library cannot be read", e, None);
             });
         } else {
             pane(ui, preview_r, "light_animations.preview", true, false, |ui| match &item {
-                Some(item) => self.draw_preview(ui, item),
+                Some(item) => self.draw_preview(ui, item, cx),
                 None => {
                     state::empty_state(
                         ui,
@@ -859,6 +798,196 @@ impl Document for LanimDoc {
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(self)
     }
+}
+
+/// Reload's answer in the window: a library with unsaved changes asks before they go, and Yes
+/// runs the command again with them dropped.
+pub fn reload_reply(r: &gz_app::ReplyCx<'_>) {
+    let code = r.reply.get("code").and_then(Value::as_str);
+    if code != Some("unsaved") {
+        if r.reply.get("ok").and_then(Value::as_bool) != Some(true) {
+            let text = r.reply.get("error").and_then(Value::as_str).unwrap_or("The command failed.");
+            r.editor.notices.error(text.to_owned());
+        }
+        return;
+    }
+    let spec = ConfirmSpec {
+        id: "reload_light_animations".to_owned(),
+        title: "Reload Light Animations".to_owned(),
+        headline: "Read the light animation library from disk again?".to_owned(),
+        items: vec!["Unsaved changes to the light animations".to_owned()],
+        total: 0,
+        consequence: "The changes made since the last save are lost.".to_owned(),
+        action: "Reload".to_owned(),
+        destructive: true,
+    };
+    let editor = r.editor.clone();
+    let asker = if editor.flags.unattended { dialog::Asker::Unattended } else { dialog::Asker::Ui };
+    let ed = editor.clone();
+    let line = dialog::confirm(r.ctx, asker, spec, move |answer| {
+        if answer != Answer::Yes {
+            return;
+        }
+        let mut a = Args::new();
+        a.insert("kind".into(), json!(KIND));
+        a.insert("discard".into(), json!(true));
+        ed.post("library.reload", a);
+    });
+    if let Some(line) = line {
+        editor.log.finding(&line);
+    }
+}
+
+/// Writes the library as the store holds it, then marks it saved.
+pub async fn save_lanims(editor: &Arc<Editor>) -> Result<(), String> {
+    let stores = LibraryStores::of(editor);
+    let bytes = stores.lanim.snapshot().lib.write();
+    let file = EditorDirs::of(editor).lanims();
+    let shown = file.clone();
+    editor
+        .exec
+        .io(move || gz_editor::fsx::write_atomic(&file, &bytes))
+        .await
+        .map_err(|e| format!("{} could not be written: {e}", shown.display()))?;
+    let _ = stores.lanim.send(LanimCmd::Saved, Origin::Ui).await;
+    Ok(())
+}
+
+/// The keys `library.set` takes of a light animation.
+pub const LANIM_KEYS: [(&str, &str); 4] = [
+    ("fps", "frames a second, 0.1 to 1000"),
+    (
+        "frames",
+        "how many frames it runs, 1 to 100000; growing moves the last key to the new end, shrinking drops the keys past it",
+    ),
+    (
+        "keys",
+        "an object of frame to colour (#RRGGBB or #AARRGGBB): a key added or recoloured; null deletes the key there",
+    ),
+    (
+        "move_key",
+        "an object {from, to}: the key at from moves to the free frame to; follow=true takes the timeline's pointer along",
+    ),
+];
+
+/// What a set of a light animation did: the changes, and the frame the pointer follows to.
+pub struct LanimSet {
+    pub changed: Vec<Value>,
+    pub follow: Option<i32>,
+}
+
+/// Applies `set` to the light animation `name`, all or none: checked on a copy first, then sent
+/// to the store as the edits a person's are.
+pub async fn set_lanim(
+    editor: &Arc<Editor>,
+    name: &str,
+    set: &Map<String, Value>,
+) -> Result<LanimSet, CmdError> {
+    let names: Vec<&str> = LANIM_KEYS.iter().map(|(k, _)| *k).collect();
+    if let Some(k) = set.keys().find(|k| !names.contains(&k.as_str())) {
+        return Err(CmdError::invalid(keys::unknown_key("a light animation", k, &names)));
+    }
+    let snap = LibraryStores::lanims_ready(editor).await;
+    if let Some(e) = &snap.error {
+        return Err(CmdError::new("failed", e.clone()));
+    }
+    let all: Vec<&str> = snap.lib.items.iter().map(|i| i.name.as_str()).collect();
+    let name = keys::exact("light animation", &all, name).map_err(CmdError::not_found)?.to_owned();
+    let mut work =
+        snap.lib.items.iter().find(|i| i.name == name).cloned().ok_or_else(|| CmdError::not_found(&name))?;
+    let (mut ops, mut changed, mut follow) = (Vec::new(), Vec::new(), None);
+    let bad = |text: String| CmdError::invalid(text);
+    let n: SmolStr = name.as_str().into();
+    if let Some(v) = set.get("fps") {
+        let fps =
+            v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad("fps takes a number".into()))? as f32;
+        let fps = fps.clamp(0.1, 1000.0);
+        changed.push(json!({ "key": "fps", "from": work.fps, "to": fps }));
+        work.fps = fps;
+        ops.push(LanimCmd::Fps { name: n.clone(), fps });
+    }
+    if let Some(v) = set.get("frames") {
+        let count = v
+            .as_i64()
+            .filter(|c| (1..=100_000).contains(c))
+            .ok_or_else(|| bad("frames takes a whole number, 1 to 100000".into()))?;
+        let count = i32::try_from(count).unwrap_or(1);
+        changed.push(json!({ "key": "frames", "from": work.frame_count, "to": count }));
+        resize(&mut work, count);
+        ops.push(LanimCmd::Frames { name: n.clone(), count });
+    }
+    if let Some(v) = set.get("keys") {
+        let Some(map) = v.as_object() else {
+            return Err(bad("keys takes an object of frame to colour".into()));
+        };
+        let mut at: Vec<(i32, &Value)> = Vec::new();
+        for (k, val) in map {
+            let frame =
+                k.trim().parse::<i32>().map_err(|_| bad(format!("keys: '{k}' is no frame number")))?;
+            at.push((frame, val));
+        }
+        at.sort_by_key(|(f, _)| *f);
+        for (frame, val) in at {
+            if val.is_null() {
+                if frame == 0 {
+                    return Err(bad("the first key stays: an animation keeps at least one".into()));
+                }
+                let was = work.keys.get(&frame).copied();
+                if !delete_key(&mut work, frame) {
+                    return Err(bad(format!("there is no key at frame {frame}")));
+                }
+                changed.push(
+                    json!({ "key": "keys", "frame": frame, "from": was.map(keys::color_text), "to": null }),
+                );
+                ops.push(LanimCmd::DeleteKey { name: n.clone(), frame });
+                continue;
+            }
+            let color = keys::color("keys", val).map_err(bad)?;
+            let was = work.keys.get(&frame).copied();
+            if was == Some(color) {
+                continue;
+            }
+            if was.is_some() {
+                work.keys.insert(frame, color);
+                ops.push(LanimCmd::SetKey { name: n.clone(), frame, color });
+            } else {
+                insert_key(&mut work, frame, color)?;
+                ops.push(LanimCmd::InsertKey { name: n.clone(), frame, color });
+            }
+            changed.push(json!({ "key": "keys", "frame": frame, "from": was.map(keys::color_text), "to": keys::color_text(color) }));
+        }
+    }
+    if let Some(v) = set.get("move_key") {
+        let Some(m) = v.as_object() else { return Err(bad("move_key takes {from, to}".into())) };
+        for k in m.keys() {
+            if !matches!(k.as_str(), "from" | "to" | "follow") {
+                return Err(bad(keys::unknown_key("move_key", k, &["from", "to", "follow"])));
+            }
+        }
+        let frame_of = |k: &str| -> Result<i32, CmdError> {
+            m.get(k)
+                .and_then(Value::as_i64)
+                .and_then(|f| i32::try_from(f).ok())
+                .ok_or_else(|| bad(format!("move_key takes {k} as a frame number")))
+        };
+        let (from, to) = (frame_of("from")?, frame_of("to")?);
+        if !work.keys.contains_key(&from) {
+            return Err(bad(format!("there is no key at frame {from}")));
+        }
+        if work.keys.contains_key(&to) {
+            return Err(bad(format!("frame {to} has a key already")));
+        }
+        move_key(&mut work, from, to)?;
+        if m.get("follow").and_then(Value::as_bool) == Some(true) {
+            follow = Some(to);
+        }
+        changed.push(json!({ "key": "move_key", "from": from, "to": to }));
+        ops.push(LanimCmd::MoveKey { name: n.clone(), from, to });
+    }
+    for op in ops {
+        LibraryStores::of(editor).lanim.send(op, Origin::Mcp).await?;
+    }
+    Ok(LanimSet { changed, follow })
 }
 
 /// The `light_animations` factory.

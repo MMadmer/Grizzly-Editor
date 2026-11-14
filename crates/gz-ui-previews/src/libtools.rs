@@ -137,7 +137,11 @@ fn start_rewrite(editor: &Arc<Editor>, files: Vec<(String, std::path::PathBuf)>)
 
 /// Cube Map \ Smaller Copy: `<name>.tga` of the texture sources made
 /// into `<name>#small.dds` of the game textures, 32 x 32 a face, as a job.
-pub fn smaller_cube_map(editor: &Arc<Editor>, dirs: &EditorDirs, name: &str) {
+pub fn smaller_cube_map(
+    editor: &Arc<Editor>,
+    dirs: &EditorDirs,
+    name: &str,
+) -> Result<gz_editor::JobId, String> {
     let (src, dst) =
         (dirs.textures.join(format!("{name}.tga")), dirs.game_textures.join(format!("{name}#small.dds")));
     let (ed, name) = (editor.clone(), name.to_owned());
@@ -190,9 +194,7 @@ pub fn smaller_cube_map(editor: &Arc<Editor>, dirs: &EditorDirs, name: &str) {
             }
         },
     );
-    if let Err(busy) = started {
-        editor.notices.error(format!("Smaller Copy waits: {busy}."));
-    }
+    started.map_err(|busy| format!("Smaller Copy waits: {busy}."))
 }
 
 /// The actions and rows of the Libraries menu's maintenance group.
@@ -233,18 +235,22 @@ enum LibraryKind {
     Textures,
     Sounds,
     Objects,
+    LightAnimations,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct KindParams {
-    /// textures or sounds (sync); textures or objects (reload).
+    /// textures or sounds (sync); textures, objects or light_animations (reload).
     kind: LibraryKind,
+    /// reload light_animations: drop the unsaved changes of the library.
+    #[serde(default)]
+    discard: bool,
 }
 
 /// `library.sync`: the library against its sources, as a job; the window asks first.
 async fn library_sync(ed: Arc<Editor>, p: KindParams, _origin: Origin) -> Reply {
-    if p.kind == LibraryKind::Objects {
+    if !matches!(p.kind, LibraryKind::Textures | LibraryKind::Sounds) {
         return Err(CmdError::invalid("kind must be textures or sounds"));
     }
     gz_app::on_ui(&ed, move |shell, ctx| {
@@ -266,7 +272,9 @@ fn library_reload(ed: &Editor, p: &KindParams, _origin: Origin) -> Reply {
             Ok(json!({ "reloaded": "textures" }))
         }
         LibraryKind::Objects => Err(CmdError::invalid("reload kind=objects runs from the window's thread")),
-        LibraryKind::Sounds => Err(CmdError::invalid("kind must be textures or objects")),
+        LibraryKind::Sounds | LibraryKind::LightAnimations => {
+            Err(CmdError::invalid("kind must be textures, objects or light_animations"))
+        }
     }
 }
 
@@ -274,6 +282,17 @@ async fn library_reload_any(ed: Arc<Editor>, p: KindParams, origin: Origin) -> R
     if p.kind == LibraryKind::Objects {
         reload_objects(&ed).map_err(|e| CmdError::new("refused", e))?;
         return Ok(json!({ "reloaded": "objects" }));
+    }
+    if p.kind == LibraryKind::LightAnimations {
+        let stores = crate::library::stores::LibraryStores::of(&ed);
+        if stores.lanim.is_dirty() && !p.discard {
+            return Err(CmdError::unsaved(
+                json!([{ "id": "light_animations", "label": "Light Animations" }]),
+            )
+            .with_data(json!({ "note": "pass discard=true" })));
+        }
+        crate::library::stores::LibraryStores::reload_lanims(&ed).await;
+        return Ok(json!({ "reloaded": "light_animations" }));
     }
     library_reload(&ed, &p, origin)
 }
@@ -295,7 +314,12 @@ pub fn register(reg: &mut Registry) {
         library_sync,
     );
     reg.cmd(
-        Spec::write("library.reload", "Reads the textures or the scene's objects again."),
+        Spec::write(
+            "library.reload",
+            "Reads the textures, the scene's objects or the light animations again.",
+        )
+        .destroys_with(&["discard"])
+        .example("kind=light_animations"),
         library_reload_any,
     );
     reg.cmd(

@@ -238,8 +238,6 @@ pub struct ModelDoc {
     editor: Arc<Editor>,
     name: String,
     source: ModelSource,
-    /// Where it was opened from: `project`, `library` or `game`.
-    opened_from: String,
     load: Option<Pending<ModelData>>,
     renderer: Option<Pending<Result<Arc<Renderer>, String>>>,
     /// The load the renderer holds the mesh of.
@@ -292,7 +290,6 @@ impl ModelDoc {
             editor: editor.clone(),
             name,
             source,
-            opened_from: String::new(),
             load,
             renderer,
             uploaded: 0,
@@ -590,7 +587,7 @@ impl ModelDoc {
     /// What `content.view` reveals the model by: an object of the Library or the project.
     fn reveal_args(&self, data: &ModelData) -> Option<gz_editor::Args> {
         let r = self.object_ref(data)?;
-        let in_project = self.opened_from == "project";
+        let in_project = self.source == ModelSource::Project;
         let path = format!("{r}.object");
         Some(if in_project {
             gz_app::args(&[
@@ -644,12 +641,11 @@ impl ModelDoc {
                 ui.new_child(UiBuilder::new().max_rect(rect).layout(Layout::top_down(Align::Center)));
             match failed {
                 Some(e) => {
-                    state::empty_state(&mut child, Icon::Warning, "The viewport cannot be drawn", &e, None);
+                    state::error_state(&mut child, "The viewport cannot be drawn", &e, None);
                 }
                 None if self.renderer.is_none() => {
-                    state::empty_state(
+                    state::error_state(
                         &mut child,
-                        Icon::Warning,
                         "The viewport cannot be drawn",
                         "The editor runs without a graphics device.",
                         None,
@@ -898,9 +894,8 @@ impl Document for ModelDoc {
                 ui.painter().rect_filled(canvas, CornerRadius::ZERO, p.canvas);
                 let mut child =
                     ui.new_child(UiBuilder::new().max_rect(canvas).layout(Layout::top_down(Align::Center)));
-                state::empty_state(
+                state::error_state(
                     &mut child,
-                    Icon::Warning,
                     "This model cannot be shown",
                     &format!("{}: {}", d.name, d.error),
                     None,
@@ -985,10 +980,21 @@ impl ModelPreload {
     }
 }
 
-/// The `model` factory: `path` is the model's name, `arg` its source (`visual` | `darf`).
+/// What opens a model tab on `name` from `source`: the request the shell's opener takes, built
+/// from the typed source so no caller spells the word.
+#[must_use]
+pub fn open_request(name: &str, source: ModelSource) -> OpenRequest {
+    let mut req = OpenRequest::file("model", name);
+    req.arg = Some(source.arg().to_owned());
+    req
+}
+
+/// The `model` factory: `path` is the model's name, `arg` its source (`project`, `library` or
+/// `game`; none is the library).
 pub fn factory(editor: &Arc<Editor>, req: &OpenRequest) -> Result<Box<dyn Document>, String> {
     let name = crate::paths::engine_name(req.path.as_deref().unwrap_or(""));
-    let source = ModelSource::parse(req.arg.as_deref().unwrap_or(""));
+    let source = ModelSource::parse(req.arg.as_deref().unwrap_or(""))
+        .ok_or_else(|| "source must be project, library or game".to_owned())?;
     if name.is_empty() {
         return Ok(Box::new(ModelDoc::new(editor, String::new(), source, None)));
     }
@@ -997,9 +1003,7 @@ pub fn factory(editor: &Arc<Editor>, req: &OpenRequest) -> Result<Box<dyn Docume
         let (ed, n) = (editor.clone(), name.clone());
         Pending::spawn(&editor.exec, load(ed, n, source))
     });
-    let mut doc = ModelDoc::new(editor, name, source, Some(load));
-    doc.opened_from = req.arg.clone().unwrap_or_default();
-    Ok(Box::new(doc))
+    Ok(Box::new(ModelDoc::new(editor, name, source, Some(load))))
 }
 
 #[cfg(test)]

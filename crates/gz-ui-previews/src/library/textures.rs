@@ -10,20 +10,20 @@ use std::sync::Arc;
 
 use egui::{Color32, CornerRadius, Rect, Sense, TextureHandle, Ui, Vec2, pos2};
 use gz_app::{DocCx, Document, EditAction, OpenRequest};
-use gz_editor::{Args, CmdError, Editor, Origin};
+use gz_editor::{Args, CmdError, Editor, JobId, Origin};
 use gz_fmt_tex::{
     BumpMode, MipFilterId, TextureFlags, TextureFormat, TextureMaterial, TextureParams, TextureType,
     read_texture_thm, texture_tile,
 };
-use gz_store::{Apply, State, Store, StoreOptions, imbl};
+use gz_store::{Apply, State, Store, imbl};
 use gz_ui::grid::{Grid, color, combo, number, read_only, switch};
 use gz_ui::text::{self, Clip};
-use gz_ui::{
-    Button, Font, Icon, Kind, MenuItem, PropFlags, PropertyGrid, Tone, Toolbar, menu_item, palette, state,
-};
+use gz_ui::{Button, Font, Icon, Kind, PropFlags, PropertyGrid, Tone, Toolbar, palette, state};
 use serde_json::{Map, Value, json};
 
+use super::keys::apply_texture;
 use super::list::{Empty, LibraryList, find, shown};
+use super::stores::{LibraryFacts, LibraryStores, TexFacts};
 use super::texsync::{import_picture, read_picture, sync_texture};
 use super::{LibraryDoc, LibraryLists, Settle, can_write, folder_text, pane, panes};
 use crate::local::{local_checker, local_heading};
@@ -69,7 +69,7 @@ pub fn list_library(dirs: &EditorDirs, pool: &gz_task::Executors) -> Vec<TexItem
 /// description of its own, the one a game texture of its name has, or a new picture's defaults.
 #[must_use]
 pub fn list_import(dirs: &EditorDirs) -> Vec<TexItem> {
-    let files = list_files(&dirs.import, &["tga", "bmp", "dds", "png", "jpg"], true, false);
+    let files = list_files(&dirs.import, &PICTURE_EXTS, true, false);
     files
         .into_iter()
         .map(|(name, path)| {
@@ -107,6 +107,10 @@ pub enum TexCmd {
         params: TextureParams,
         gesture: String,
     },
+    /// The edits of these entries dropped: a save of those alone wrote them.
+    Drop {
+        names: Vec<String>,
+    },
     /// Every edit dropped (a revert, a save that wrote them, a new list).
     Reset,
 }
@@ -120,6 +124,16 @@ impl State for TexEdits {
             TexCmd::Set { name, params, gesture } => {
                 self.edits.insert(name, params);
                 cx.undoable_merged("Texture Description", gesture);
+            }
+            TexCmd::Drop { names } => {
+                for n in &names {
+                    self.edits.remove(n);
+                }
+                if self.edits.is_empty() {
+                    cx.new_document();
+                } else {
+                    cx.content_changed();
+                }
             }
             TexCmd::Reset => {
                 self.edits = imbl::OrdMap::new();
@@ -156,7 +170,8 @@ pub struct TexLibDoc {
     preview: Option<Preview>,
 }
 
-const TYPE_NAMES: [&str; 5] = ["Images", "Cube Maps", "Bump Maps", "Normal Maps", "Terrain"];
+/// The words `library.view types=` takes, in the order of the type filter.
+pub const TYPE_WORDS: [&str; 5] = ["images", "cube_maps", "bump_maps", "normal_maps", "terrain"];
 
 impl TexLibDoc {
     #[must_use]
@@ -173,14 +188,10 @@ impl TexLibDoc {
         let (d, exec) = (dirs.clone(), editor.exec.clone());
         let new_pictures =
             Pending::spawn(&editor.exec, async move { exec.io(move || list_import(&d).len()).await });
+        let stores = LibraryStores::of(editor);
         let mut doc = Self {
             editor: editor.clone(),
-            store: Store::spawn(
-                "texture library",
-                TexEdits::default(),
-                &editor.exec,
-                StoreOptions::default(),
-            ),
+            store: stores.tex.clone(),
             dirs,
             import: None,
             list: LibraryList::default(),
@@ -188,7 +199,7 @@ impl TexLibDoc {
             filter: [true; 5],
             writable,
             new_pictures,
-            saving: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            saving: stores.tex_saving.clone(),
             preview: None,
         };
         if import {
@@ -302,8 +313,8 @@ impl TexLibDoc {
         }
     }
 
-    /// Writes what changed as a job: descriptions, then game textures; New
-    /// Textures copies its pictures into the library first.
+    /// Writes what changed as a job: descriptions, then game textures; New Textures copies its
+    /// pictures into the library first, after asking when that replaces a texture the library has.
     fn queue_save(&mut self) -> Result<(), String> {
         if self.read_only() {
             return Err("The texture folder cannot be written.".to_owned());
@@ -311,108 +322,41 @@ impl TexLibDoc {
         if self.saving() {
             return Ok(());
         }
-        let edits = self.store.snapshot().edits.clone();
-        let import: Option<Vec<TexItem>> =
-            self.import.as_ref().and_then(Pending::get).map(|i| i.as_ref().clone());
-        let library = self.items().map(|i| i.as_ref().clone()).unwrap_or_default();
-        let (dirs, saving, store) = (self.dirs.clone(), self.saving.clone(), self.store.clone());
-        let editor = self.editor.clone();
-        let importing = import.is_some();
-        saving.store(true, std::sync::atomic::Ordering::Release);
-        let title = if importing { "Importing New Textures" } else { "Saving the Texture Library" };
-        let started =
-            self.editor.jobs.start("texture_library", Some("libraries"), title, move |ctx| async move {
-                let exec = ctx.exec.clone();
-                let c = ctx.clone();
-                let result = exec
-                    .io(move || -> Result<(usize, Vec<String>), String> {
-                        let age = super::texsync::now();
-                        let mut failed = Vec::new();
-                        let mut done = 0usize;
-                        match import {
-                            Some(items) => {
-                                for (i, item) in items.iter().enumerate() {
-                                    c.check().map_err(|_| "Stopped.".to_owned())?;
-                                    c.stage(format!("Importing {}", item.name));
-                                    c.progress(i, items.len());
-                                    let params =
-                                        edits.get(&item.name).cloned().unwrap_or_else(|| item.params.clone());
-                                    match import_picture(&dirs, &item.name).and_then(|name| {
-                                        sync_texture(&dirs, &name, Some(&params), true, true, age)
-                                    }) {
-                                        Ok(s) => {
-                                            done += 1;
-                                            if s.low_gloss {
-                                                failed.push(format!("Invalid gloss mask '{}'.", item.name));
-                                            }
-                                        }
-                                        Err(e) => failed.push(e),
-                                    }
-                                }
-                            }
-                            None => {
-                                let total = edits.len();
-                                for (i, (name, params)) in edits.iter().enumerate() {
-                                    c.check().map_err(|_| "Stopped.".to_owned())?;
-                                    c.stage(format!("Building {name}"));
-                                    c.progress(i, total);
-                                    if !library.iter().any(|t| t.name == *name) {
-                                        continue;
-                                    }
-                                    match sync_texture(&dirs, name, Some(params), true, true, age) {
-                                        Ok(s) => {
-                                            done += 1;
-                                            if s.low_gloss {
-                                                failed.push(format!("Invalid gloss mask '{name}'."));
-                                            }
-                                        }
-                                        Err(e) => failed.push(e),
-                                    }
-                                }
-                            }
-                        }
-                        Ok((done, failed))
-                    })
-                    .await;
-                saving.store(false, std::sync::atomic::Ordering::Release);
-                LibraryLists::of(&editor).textures_rev.bump();
-                match result {
-                    Ok((done, failed)) => {
-                        for f in &failed {
-                            editor.log.error(f.clone());
-                        }
-                        let _ = store.send(TexCmd::Reset, Origin::Ui).await;
-                        if importing {
-                            // the new textures are in the library now: the library they stood in for comes back
-                            if let Ok(q) = gz_app::UiQueue::of(&editor) {
-                                q.post(|shell, _ctx| {
-                                    if let Some(doc) = shell
-                                        .document_mut(KIND)
-                                        .and_then(|d| d.as_any_mut())
-                                        .and_then(|a| a.downcast_mut::<TexLibDoc>())
-                                    {
-                                        doc.back_to_library();
-                                    }
-                                });
-                            }
-                        }
-                        if !failed.is_empty() {
-                            editor.notices.error(format!(
-                                "{} of the textures could not be built: {}",
-                                failed.len(),
-                                failed.join(" ")
-                            ));
-                        }
-                        Ok(json!({ "written": done, "failed": failed }))
-                    }
-                    Err(e) => Err(gz_task::JobError::new(e)),
-                }
-            });
-        if let Err(busy) = started {
-            self.saving.store(false, std::sync::atomic::Ordering::Release);
-            return Err(format!("The save could not be started: {busy}."));
-        }
+        let Some(items) = self.import.as_ref().and_then(Pending::get).map(|i| i.as_ref().clone()) else {
+            return start_texture_save(&self.editor, None, None).map(|_| ());
+        };
+        confirm_import(&self.editor, items);
         Ok(())
+    }
+
+    /// An import ended: New Textures gives way to the library, which counts what is still new.
+    fn after_import(&mut self) {
+        if self.import_mode() {
+            self.back_to_library();
+        } else {
+            let (d, exec) = (self.dirs.clone(), self.editor.exec.clone());
+            self.new_pictures =
+                Pending::spawn(
+                    &self.editor.exec,
+                    async move { exec.io(move || list_import(&d).len()).await },
+                );
+        }
+    }
+
+    /// Pictures dropped on the tab (from Explorer, or tiles of the Content Browser) are imported.
+    fn take_drop(&mut self, ui: &mut Ui, full: Rect) {
+        let takes = |p: &gz_ui::drop::Payload| p.files().iter().any(|f| is_picture(f));
+        let Some(dropped) = gz_ui::drop::Zone::new("Texture Library", full, &takes).catch_all().take(ui)
+        else {
+            return;
+        };
+        let files: Vec<String> =
+            dropped.files().iter().filter(|f| is_picture(f)).map(|f| f.display().to_string()).collect();
+        if !files.is_empty() {
+            let mut a = Args::new();
+            a.insert("from".into(), json!(files));
+            self.editor.post("library.import", a);
+        }
     }
 
     fn draw_preview(&mut self, ui: &mut Ui, item: &TexItem) {
@@ -664,8 +608,8 @@ impl TexLibDoc {
                         },
                     );
                 });
-                if make {
-                    crate::libtools::smaller_cube_map(&self.editor, &self.dirs, &item.name);
+                if make && let Err(e) = crate::libtools::smaller_cube_map(&self.editor, &self.dirs, &item.name) {
+                    self.editor.notices.error(e);
                 }
             }
         });
@@ -684,6 +628,9 @@ impl TexLibDoc {
         out.insert("first".into(), json!(rows.first().and_then(|&i| keys.get(i)).copied().unwrap_or("")));
         out.insert("items".into(), json!(items.len()));
         out.insert("import".into(), json!(self.import_mode()));
+        let shown_types: Vec<&str> =
+            TYPE_WORDS.iter().zip(self.filter).filter(|(_, on)| *on).map(|(w, _)| *w).collect();
+        out.insert("types".into(), json!(shown_types));
         out.insert("read_only".into(), json!(self.read_only()));
         out.insert("saving".into(), json!(self.saving()));
         out.insert("dirty".into(), json!(self.dirty_now()));
@@ -722,6 +669,21 @@ impl TexLibDoc {
         if let Some(s) = args.get("search").and_then(Value::as_str) {
             self.list.search = s.to_owned();
         }
+        if let Some(types) = args.get("types").and_then(Value::as_array) {
+            let mut filter = [false; 5];
+            for t in types.iter().filter_map(Value::as_str) {
+                let at = TYPE_WORDS
+                    .iter()
+                    .position(|w| *w == t)
+                    .ok_or_else(|| format!("types takes {}", TYPE_WORDS.join(", ")))?;
+                filter[at] = true;
+            }
+            self.filter = filter;
+        }
+        if action == "check" {
+            self.start_import();
+            return Ok(Map::new());
+        }
         if action == "select" {
             let item = args.get("item").and_then(Value::as_str).unwrap_or_default();
             let keys: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
@@ -735,19 +697,19 @@ impl TexLibDoc {
     }
 }
 
-const TYPE_TOKENS: [(u32, &str); 5] =
+pub(crate) const TYPE_TOKENS: [(u32, &str); 5] =
     [(0, "2D Texture"), (1, "Cube Map"), (2, "Bump Map"), (3, "Normal Map"), (4, "Terrain")];
-const BUMP_TOKENS: [(u32, &str); 3] = [(1, "None"), (2, "Use"), (3, "Use parallax")];
+pub(crate) const BUMP_TOKENS: [(u32, &str); 3] = [(1, "None"), (2, "Use"), (3, "Use parallax")];
 
-fn format_tokens() -> Vec<(u32, &'static str)> {
+pub(crate) fn format_tokens() -> Vec<(u32, &'static str)> {
     (0..=17).filter_map(|v| TextureFormat(v).label().map(|l| (v, l))).collect()
 }
 
-fn mip_tokens() -> Vec<(u32, &'static str)> {
+pub(crate) fn mip_tokens() -> Vec<(u32, &'static str)> {
     (0..=14).filter_map(|v| MipFilterId(v).label().map(|l| (v, l))).collect()
 }
 
-fn material_tokens() -> Vec<(u32, &'static str)> {
+pub(crate) fn material_tokens() -> Vec<(u32, &'static str)> {
     (0..=3).filter_map(|v| TextureMaterial(v).label().map(|l| (v, l))).collect()
 }
 
@@ -910,6 +872,420 @@ fn details(g: &mut Grid<'_>, ro: PropFlags, p: &mut TextureParams, names: &[&str
     });
 }
 
+/// The picture files the library imports, by extension.
+pub const PICTURE_EXTS: [&str; 5] = ["tga", "bmp", "dds", "png", "jpg"];
+
+/// Whether a file is a picture the library imports.
+#[must_use]
+pub fn is_picture(path: &std::path::Path) -> bool {
+    path.extension().is_some_and(|e| PICTURE_EXTS.iter().any(|p| e.eq_ignore_ascii_case(p)))
+}
+
+/// The library names an import of `items` would replace: the textures it has already.
+#[must_use]
+pub fn replaced_by_import(dirs: &EditorDirs, items: &[TexItem]) -> Vec<String> {
+    items
+        .iter()
+        .filter_map(|i| {
+            let name = texture_folder_name(crate::paths::strip_ext(&i.name));
+            dirs.textures.join(format!("{}.tga", name.replace('/', "\\"))).is_file().then_some(name)
+        })
+        .collect()
+}
+
+/// New Textures' Import: asks first when it replaces textures of the library, then starts.
+fn confirm_import(editor: &Arc<Editor>, items: Vec<TexItem>) {
+    let (dirs, ed) = (EditorDirs::of(editor), editor.clone());
+    let asker = if editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
+    editor.exec.clone().spawn(async move {
+        let (d, i) = (dirs, items.clone());
+        let replaced = ed.exec.io(move || replaced_by_import(&d, &i)).await;
+        let Ok(queue) = gz_app::UiQueue::of(&ed) else { return };
+        queue.post(move |_shell, ctx| {
+            let start = {
+                let (ed, items) = (ed.clone(), items);
+                move || {
+                    if let Err(e) = start_texture_save(&ed, Some(items), None) {
+                        ed.notices.error(e);
+                    }
+                }
+            };
+            if replaced.is_empty() {
+                start();
+                return;
+            }
+            let spec = gz_ui::ConfirmSpec {
+                id: "import_replaces".to_owned(),
+                title: "Import New Textures".to_owned(),
+                headline: "These pictures replace textures the library has:".to_owned(),
+                items: replaced.iter().take(10).cloned().collect(),
+                total: replaced.len(),
+                consequence: "Their source pictures are replaced and their game textures built again."
+                    .to_owned(),
+                action: "Replace".to_owned(),
+                destructive: true,
+            };
+            let line = gz_ui::dialog::confirm(ctx, asker, spec, move |answer| {
+                if answer == gz_ui::Answer::Yes {
+                    start();
+                }
+            });
+            if let Some(line) = line {
+                ed.log.finding(&line);
+            }
+        });
+    });
+}
+
+/// The pictures of `items` taken into the library and built, one after another.
+pub(crate) fn import_items(
+    dirs: &EditorDirs,
+    items: &[TexItem],
+    params_of: &dyn Fn(&TexItem) -> TextureParams,
+    c: &gz_task::JobCtx,
+) -> Result<(usize, Vec<String>), String> {
+    let age = super::texsync::now();
+    let (mut done, mut failed) = (0usize, Vec::new());
+    for (i, item) in items.iter().enumerate() {
+        c.check().map_err(|_| "Stopped.".to_owned())?;
+        c.stage(format!("Importing {}", item.name));
+        c.progress(i, items.len());
+        let params = params_of(item);
+        match import_picture(dirs, &item.name)
+            .and_then(|name| sync_texture(dirs, &name, Some(&params), true, true, age))
+        {
+            Ok(s) => {
+                done += 1;
+                if s.low_gloss {
+                    failed.push(format!("Invalid gloss mask '{}'.", item.name));
+                }
+            }
+            Err(e) => failed.push(e),
+        }
+    }
+    Ok((done, failed))
+}
+
+/// Writes the edited descriptions and builds their game textures - or, with `import`, takes
+/// those pictures into the library - as one job. `only` limits the edits written to those
+/// entries. The window's Save and `library.set` start it alike.
+pub fn start_texture_save(
+    editor: &Arc<Editor>,
+    import: Option<Vec<TexItem>>,
+    only: Option<Vec<String>>,
+) -> Result<JobId, String> {
+    let stores = LibraryStores::of(editor);
+    if stores.tex_saving.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return Err("The texture library is saving.".to_owned());
+    }
+    let edits: std::collections::BTreeMap<String, TextureParams> = stores
+        .tex
+        .snapshot()
+        .edits
+        .iter()
+        .filter(|(k, _)| only.as_ref().is_none_or(|o| o.contains(k)))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let partial = only.is_some();
+    let (dirs, ed, store, saving) =
+        (EditorDirs::of(editor), editor.clone(), stores.tex.clone(), stores.tex_saving.clone());
+    let importing = import.is_some();
+    let title = if importing { "Importing New Textures" } else { "Saving the Texture Library" };
+    let started = editor.jobs.start("texture_library", Some("libraries"), title, move |ctx| async move {
+        let library =
+            if importing { Vec::new() } else { TexLibDoc::items_now(&ed, None).await.as_ref().clone() };
+        let written: Vec<String> = edits.keys().cloned().collect();
+        let c = ctx.clone();
+        let result = ctx
+            .exec
+            .io(move || -> Result<(usize, Vec<String>), String> {
+                if let Some(items) = import {
+                    let params_of = |item: &TexItem| {
+                        edits.get(&item.name).cloned().unwrap_or_else(|| item.params.clone())
+                    };
+                    return import_items(&dirs, &items, &params_of, &c);
+                }
+                let age = super::texsync::now();
+                let (mut done, mut failed) = (0usize, Vec::new());
+                for (i, (name, params)) in edits.iter().enumerate() {
+                    c.check().map_err(|_| "Stopped.".to_owned())?;
+                    c.stage(format!("Building {name}"));
+                    c.progress(i, edits.len());
+                    if !library.iter().any(|t| t.name == *name) {
+                        continue;
+                    }
+                    match sync_texture(&dirs, name, Some(params), true, true, age) {
+                        Ok(s) => {
+                            done += 1;
+                            if s.low_gloss {
+                                failed.push(format!("Invalid gloss mask '{name}'."));
+                            }
+                        }
+                        Err(e) => failed.push(e),
+                    }
+                }
+                Ok((done, failed))
+            })
+            .await;
+        saving.store(false, std::sync::atomic::Ordering::Release);
+        LibraryLists::of(&ed).textures_rev.bump();
+        match result {
+            Ok((done, failed)) => {
+                for f in &failed {
+                    ed.log.error(f.clone());
+                }
+                let dropped = if partial { TexCmd::Drop { names: written } } else { TexCmd::Reset };
+                let _ = store.send(dropped, Origin::Ui).await;
+                if importing {
+                    after_import_ui(&ed);
+                }
+                if !failed.is_empty() {
+                    ed.notices.error(format!(
+                        "{} of the textures could not be built: {}",
+                        failed.len(),
+                        failed.join(" ")
+                    ));
+                }
+                Ok(json!({ "written": done, "failed": failed }))
+            }
+            Err(e) => Err(gz_task::JobError::new(e)),
+        }
+    });
+    started.map_err(|busy| {
+        stores.tex_saving.store(false, std::sync::atomic::Ordering::Release);
+        format!("The save could not be started: {busy}.")
+    })
+}
+
+/// The tab, when one is open, hears that an import ended.
+pub(crate) fn after_import_ui(editor: &Arc<Editor>) {
+    if let Ok(q) = gz_app::UiQueue::of(editor) {
+        q.post(|shell, _ctx| {
+            if let Some(doc) = shell
+                .document_mut(KIND)
+                .and_then(|d| d.as_any_mut())
+                .and_then(|a| a.downcast_mut::<TexLibDoc>())
+            {
+                doc.after_import();
+            }
+        });
+    }
+}
+
+/// What `library.import` brings in.
+pub struct ImportRequest {
+    /// Picture files anywhere on the disk; none: what the import folder already holds.
+    pub from: Vec<PathBuf>,
+    /// Description keys applied to every picture imported (`library.set`'s).
+    pub set: Map<String, Value>,
+    /// Replace what is there: a staged file of the same name, a texture of the library.
+    pub overwrite: bool,
+    /// Answer when the job ends; false answers the job at once.
+    pub wait: bool,
+}
+
+/// What an import would do: the copies into the import folder, the file names it imports, and
+/// what it would replace.
+struct ImportPlan {
+    copies: Vec<(PathBuf, PathBuf)>,
+    names: Vec<String>,
+    replaces: Vec<String>,
+}
+
+fn plan_import(dirs: &EditorDirs, from: &[PathBuf]) -> Result<ImportPlan, String> {
+    let mut plan = ImportPlan { copies: Vec::new(), names: Vec::new(), replaces: Vec::new() };
+    if from.is_empty() {
+        plan.names =
+            list_files(&dirs.import, &PICTURE_EXTS, true, false).into_iter().map(|(n, _)| n).collect();
+    }
+    for f in from {
+        if !f.is_file() {
+            return Err(format!("{} is no file", f.display()));
+        }
+        if !is_picture(f) {
+            return Err(format!(
+                "{} is no picture the library imports ({})",
+                f.display(),
+                PICTURE_EXTS.join(", ")
+            ));
+        }
+        let name = f.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let dest = dirs.import.join(&name);
+        let same = dest.to_string_lossy().eq_ignore_ascii_case(&f.to_string_lossy());
+        if !same {
+            if dest.exists() {
+                plan.replaces.push(format!("{name} (already in the import folder)"));
+            }
+            plan.copies.push((f.clone(), dest));
+        }
+        plan.names.push(name);
+    }
+    for n in &plan.names {
+        let lib = texture_folder_name(crate::paths::strip_ext(n));
+        if dirs.textures.join(format!("{}.tga", lib.replace('/', "\\"))).is_file() {
+            plan.replaces.push(lib);
+        }
+    }
+    Ok(plan)
+}
+
+/// `library.import`: pictures from anywhere (or the import folder as it is) copied into the
+/// import folder and taken into the library, as one job a person can read and stop.
+pub async fn import_pictures(editor: &Arc<Editor>, req: ImportRequest) -> Result<Value, CmdError> {
+    let dirs = EditorDirs::of(editor);
+    let d = dirs.clone();
+    if !editor.exec.io(move || can_write(&d.textures)).await {
+        return Err(CmdError::new("read_only", "The texture folder cannot be written."));
+    }
+    if !req.set.is_empty() {
+        apply_texture(&mut TextureParams::default(), &req.set).map_err(CmdError::invalid)?;
+    }
+    let (d, from) = (dirs.clone(), req.from.clone());
+    let plan = editor.exec.io(move || plan_import(&d, &from)).await.map_err(CmdError::invalid)?;
+    if plan.names.is_empty() {
+        return Ok(json!({
+            "imported": Vec::<String>::new(),
+            "failed": Vec::<String>::new(),
+            "note": format!("Nothing in {} is new to the library.", folder_text(editor, &dirs.import)),
+        }));
+    }
+    if !req.overwrite && !plan.replaces.is_empty() {
+        return Err(CmdError::new(
+            "exists",
+            format!(
+                "The import would replace: {}. Pass overwrite=true to replace them.",
+                plan.replaces.join(", ")
+            ),
+        )
+        .with_data(json!({ "replaces": plan.replaces })));
+    }
+    let stores = LibraryStores::of(editor);
+    if stores.tex_saving.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return Err(CmdError::busy("The texture library is saving: wait for it or stop its job."));
+    }
+    let (ed, saving, set) = (editor.clone(), stores.tex_saving.clone(), req.set.clone());
+    let only_listed = !req.from.is_empty();
+    let started = editor.jobs.start(
+        "texture_library",
+        Some("libraries"),
+        "Importing Textures",
+        move |ctx| async move {
+            let c = ctx.clone();
+            let d = dirs.clone();
+            let result = ctx
+                .exec
+                .io(move || -> Result<(Vec<String>, Vec<String>), String> {
+                    c.stage("Copying the pictures");
+                    let _ = std::fs::create_dir_all(&d.import);
+                    for (src, dest) in &plan.copies {
+                        c.check().map_err(|_| "Stopped.".to_owned())?;
+                        std::fs::copy(src, dest)
+                            .map_err(|e| format!("{} could not be copied: {e}", src.display()))?;
+                    }
+                    let mut failed = Vec::new();
+                    let mut items = Vec::new();
+                    for mut item in list_import(&d) {
+                        if only_listed && !plan.names.iter().any(|n| n.eq_ignore_ascii_case(&item.name)) {
+                            continue;
+                        }
+                        match apply_texture(&mut item.params, &set) {
+                            Ok(_) => items.push(item),
+                            Err(e) => failed.push(format!("{}: {e}", item.name)),
+                        }
+                    }
+                    let names: Vec<String> = items.iter().map(|i| i.name.clone()).collect();
+                    let (_, more) = import_items(&d, &items, &|i| i.params.clone(), &c)?;
+                    failed.extend(more);
+                    Ok((names, failed))
+                })
+                .await;
+            saving.store(false, std::sync::atomic::Ordering::Release);
+            LibraryLists::of(&ed).textures_rev.bump();
+            after_import_ui(&ed);
+            match result {
+                Ok((names, failed)) => {
+                    for f in &failed {
+                        ed.log.error(f.clone());
+                    }
+                    Ok(json!({ "imported": names, "failed": failed }))
+                }
+                Err(e) => Err(gz_task::JobError::new(e)),
+            }
+        },
+    );
+    let id = started.map_err(|busy| {
+        stores.tex_saving.store(false, std::sync::atomic::Ordering::Release);
+        CmdError::busy(format!("{busy}"))
+    })?;
+    if !req.wait {
+        return Ok(json!({ "job": id.0 }));
+    }
+    job_answer(editor, id).await
+}
+
+/// What a job of this library answered, as a command's answer: the job's own result, or why it
+/// failed.
+pub(crate) async fn job_answer(editor: &Arc<Editor>, id: JobId) -> Result<Value, CmdError> {
+    let info = editor.jobs.wait(id).await.ok_or_else(|| CmdError::internal("the job is gone"))?;
+    match info.state {
+        gz_editor::JobState::Done => {
+            let mut v = info.result.map_or(json!({}), |r| (*r).clone());
+            v["job"] = json!(id.0);
+            if let Some(failed) = v.get("failed").and_then(Value::as_array).filter(|f| !f.is_empty()) {
+                let text = failed.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ");
+                return Err(CmdError::new("failed", text).with_data(v));
+            }
+            Ok(v)
+        }
+        gz_editor::JobState::Cancelled => {
+            Err(CmdError::new("failed", "Stopped.").with_data(json!({ "job": id.0, "cancelled": true })))
+        }
+        _ => Err(CmdError::new("failed", info.error.unwrap_or_else(|| "The job failed.".into()))
+            .with_data(json!({ "job": id.0 }))),
+    }
+}
+
+/// Makes the game texture of `name` again from its source picture and description (the pending
+/// edit when `params` is given), as a job.
+pub fn start_texture_rebuild(
+    editor: &Arc<Editor>,
+    name: &str,
+    params: Option<TextureParams>,
+) -> Result<JobId, String> {
+    let stores = LibraryStores::of(editor);
+    if stores.tex_saving.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return Err("The texture library is saving.".to_owned());
+    }
+    let (dirs, ed, saving, name) =
+        (EditorDirs::of(editor), editor.clone(), stores.tex_saving.clone(), name.to_owned());
+    let started = editor.jobs.start(
+        "texture_library",
+        Some("libraries"),
+        "Rebuilding the Game Texture",
+        move |ctx| async move {
+            ctx.stage(format!("Building {name}"));
+            let n = name.clone();
+            let built = ctx
+                .exec
+                .io(move || sync_texture(&dirs, &n, params.as_ref(), false, true, super::texsync::now()))
+                .await;
+            saving.store(false, std::sync::atomic::Ordering::Release);
+            ed.exec.wake().ping();
+            match built {
+                Ok(s) if s.low_gloss => {
+                    Ok(json!({ "rebuilt": name, "failed": [format!("Invalid gloss mask '{name}'.")] }))
+                }
+                Ok(_) => Ok(json!({ "rebuilt": name })),
+                Err(e) => Err(gz_task::JobError::new(e)),
+            }
+        },
+    );
+    started.map_err(|busy| {
+        stores.tex_saving.store(false, std::sync::atomic::Ordering::Release);
+        format!("The rebuild could not be started: {busy}.")
+    })
+}
+
 impl LibraryDoc for TexLibDoc {
     fn mcp(&mut self, action: &str, args: &Args) -> Result<Map<String, Value>, String> {
         let items = self.items().unwrap_or_default();
@@ -958,6 +1334,13 @@ impl Document for TexLibDoc {
     fn toolbar<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>, cx: &mut DocCx<'_>) {
         let dirty = self.dirty_now();
         let import = self.import_mode();
+        LibraryFacts::of(&self.editor).set_tex(TexFacts {
+            read_only: self.read_only(),
+            saving: self.saving(),
+            dirty,
+            import,
+            types: self.filter,
+        });
         let on = !self.read_only() && !self.saving() && dirty;
         let tip = if import {
             "Import the new textures into the library and build their game textures"
@@ -974,6 +1357,7 @@ impl Document for TexLibDoc {
             "No unsaved changes"
         };
         tb.group(1);
+        // Save and Import are one action: the document's save
         if tb.action(
             "save",
             if import { Icon::Plus } else { Icon::Save },
@@ -982,17 +1366,11 @@ impl Document for TexLibDoc {
             on,
             false,
             Kind::Ghost,
-        ) && let Err(e) = self.queue_save()
-        {
-            let asker =
-                if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
-            if let Some(line) = gz_ui::dialog::notice(cx.ctx, asker, Tone::Error, "Save failed", &e) {
-                self.editor.log.finding(&line);
-            }
+        ) {
+            cx.requests.action("file.save");
         }
         if !import {
             tb.group(0);
-            let filter = &mut self.filter;
             tb.menu(
                 "types",
                 Icon::Filter,
@@ -1001,12 +1379,8 @@ impl Document for TexLibDoc {
                 Some("texture_library_types"),
                 true,
                 |ui| {
-                    for (i, name) in TYPE_NAMES.iter().enumerate() {
-                        if let Some(f) = filter.get_mut(i)
-                            && menu_item(ui, name, MenuItem { selected: *f, ..MenuItem::default() })
-                        {
-                            *f = !*f;
-                        }
+                    for id in crate::TYPE_ACTIONS {
+                        gz_app::menu_row(ui, cx, id, None);
                     }
                 },
             );
@@ -1018,9 +1392,6 @@ impl Document for TexLibDoc {
             tb.status("Saving...", Tone::Info);
         }
         tb.group(0);
-        let editor = self.editor.clone();
-        let mut check = false;
-        let writable = !self.read_only();
         tb.menu(
             "more",
             Icon::More,
@@ -1029,40 +1400,18 @@ impl Document for TexLibDoc {
             Some("texture_library_more"),
             true,
             |ui| {
-                let off = if writable { "" } else { "The texture folder cannot be written" };
-                if menu_item(
-                    ui,
-                    "Check New Textures",
-                    MenuItem { icon: Icon::Search, enabled: writable, tip: off, ..MenuItem::default() },
-                ) {
-                    check = true;
-                }
-                if menu_item(
-                    ui,
-                    "Synchronize Textures...",
-                    MenuItem { icon: Icon::Refresh, enabled: writable, tip: off, ..MenuItem::default() },
-                ) {
-                    editor.post("library.sync", gz_app::args(&[("kind", "textures")]));
-                }
-                if menu_item(
-                    ui,
-                    "Rewrite Texture Descriptions...",
-                    MenuItem { icon: Icon::Refresh, enabled: writable, tip: off, ..MenuItem::default() },
-                ) {
-                    editor.post("library.rewrite_descriptions", gz_editor::Args::new());
-                }
+                gz_app::menu_row(ui, cx, "library.check_textures", None);
+                gz_app::menu_row(ui, cx, "library.sync_textures", None);
+                gz_app::menu_row(ui, cx, "library.rewrite_descriptions", None);
                 ui.separator();
-                if menu_item(ui, "Reload Textures", MenuItem { icon: Icon::Reload, ..MenuItem::default() }) {
-                    editor.post("library.reload", gz_app::args(&[("kind", "textures")]));
-                }
+                gz_app::menu_row(ui, cx, "library.reload_textures", None);
             },
         );
-        if check && !import {
-            self.start_import();
-        }
     }
 
     fn body(&mut self, ui: &mut Ui, _cx: &mut DocCx<'_>) {
+        let full = ui.max_rect();
+
         // New Textures that found nothing gives way to the library, saying so
         if let Some(found) = self.import.as_ref().and_then(Pending::get)
             && found.is_empty()
@@ -1094,9 +1443,8 @@ impl Document for TexLibDoc {
             format!("Nothing in {} is new to the library.", folder_text(&self.editor, &self.dirs.import))
         } else {
             format!(
-                "The library lists the .tga images in {}. To add one, put the picture into {} and import it.",
-                folder_text(&self.editor, &self.dirs.textures),
-                folder_text(&self.editor, &self.dirs.import)
+                "The library lists the .tga images in {}. Drop pictures here to add them.",
+                folder_text(&self.editor, &self.dirs.textures)
             )
         };
         // a library with nothing in it says so once, over the whole tab, with what fills it
@@ -1106,11 +1454,12 @@ impl Document for TexLibDoc {
                 Icon::FileTexture,
                 "No textures",
                 &where_,
-                (!self.read_only()).then_some("Import New Textures"),
+                (!self.read_only()).then_some("Check New Textures"),
             );
             if act {
                 self.start_import();
             }
+            self.take_drop(ui, full);
             return;
         }
         let [list_r, preview_r, details_r] = panes(ui, KIND);
@@ -1135,7 +1484,7 @@ impl Document for TexLibDoc {
                     "{fresh} new {} in the import folder.",
                     if fresh == 1 { "picture" } else { "pictures" }
                 );
-                import_now = state::banner(ui, Tone::Info, &line, Some("Import"), None).is_some();
+                import_now = state::banner(ui, Tone::Info, &line, Some("Check"), None).is_some();
                 ui.add_space(4.0);
             }
             self.list.draw(ui, KIND, &keys, &rows, &selected, &empty)
@@ -1169,6 +1518,7 @@ impl Document for TexLibDoc {
             }
         });
         ui.allocate_rect(ui.max_rect(), Sense::hover());
+        self.take_drop(ui, full);
     }
 
     fn status(&mut self, ui: &mut Ui, _cx: &mut DocCx<'_>) {

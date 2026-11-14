@@ -21,6 +21,14 @@ What it proves:
   L  library.view: Light Animations, Texture Library and Sound Library open as tabs, count and search their items,
      select one, answer state without switching tabs, and stay clean; each names where it reads from
   S  with --sizes: every tab again at 1707x912 / ui scale 1.5 and 1280x720 / 1.0, nothing escaping its window
+  K  the library commands, in an editor whose data root is a library of the test's own (a texture, a sound and a copy
+     of lanims.xr in a temp folder; nothing of the real library is touched): library.set changes a texture's
+     description, a sound's parameters and a light animation's keys by named keys (a misspelt key is refused with the
+     nearest one, nothing changes on a failure), writes the files as the tab's Save does or leaves an unsaved edit;
+     library.rebuild makes a game texture and a game sound; library.import brings a picture in from anywhere (refusing
+     what it would replace without overwrite) and a picture dropped on the Texture Library tab runs it; library.view
+     check turns the tab into New Textures; library.play plays and stops; library.reload refuses to lose unsaved
+     keys; the tabs' toolbars press actions
 
     python tools/qa/test_previews.py --project <project> [--shots <folder>] [--sizes]
 """
@@ -29,8 +37,12 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import struct
 import sys
+import tempfile
 import time
+import wave
+import zlib
 
 import qa
 from qa import check, cmd, shot
@@ -230,6 +242,14 @@ def run_texture(project: str, shots: str | None) -> None:
         note("no linked game texture: the game source is not checked")
     bad = cmd("preview.texture", action="open", path="qa_previews/none.dds", source="project")
     check(not bad.get("ok"), "T a file that is not there is refused", json.dumps(bad)[:200])
+    # it says so in its own sentence (not "cannot be decoded"), the tab shows it as an error state, and ui.audit reports
+    # that state: what the tour fails on
+    check("was not found" in str(bad.get("error", "")) and "decode" not in str(bad.get("error", "")),
+          "T and says it was not found, with where it looked", json.dumps(bad)[:300])
+    shown = qa.until(lambda: cmd("ui.audit").get("errors"), 10)
+    check(bool(shown) and "was not found" in json.dumps(shown), "T the tab shows it as an error state that ui.audit reports",
+          json.dumps(shown)[:300])
+    shot(shots, "texture_not_found")
     t = cmd("preview.texture", action="close")
     check(t.get("ok") and t.get("open") is False, "T close frees the tab", json.dumps(t)[:200])
 
@@ -376,7 +396,232 @@ def run_sizes(project: str, shots: str | None) -> None:
     cmd("ui.scale", value=1.5)
 
 
-PHASES = "CTMLS"
+# ---------------------------------------------------------------------------------------------------- K
+def write_tga(path: str, side: int = 64) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    head = bytes([0, 0, 2]) + bytes(5) + struct.pack("<HHHH", 0, 0, side, side) + bytes([24, 0])
+    pixels = b"".join(bytes([(x * 4) % 256, (y * 4) % 256, 96]) for y in range(side) for x in range(side))
+    with open(path, "wb") as f:
+        f.write(head + pixels)
+
+
+def write_png(path: str, side: int = 64) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    rows = b"".join(b"\x00" + b"".join(bytes([(x * 4) % 256, 200, (y * 4) % 256]) for x in range(side))
+                    for y in range(side))
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", side, side, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+def write_wav(path: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(22050)
+        w.writeframes(b"".join(struct.pack("<h", int(12000 * (1 if (i // 40) % 2 else -1))) for i in range(4410)))
+
+
+def run_library_commands(project: str, shots: str | None) -> None:
+    """K: the library commands in an editor whose data root is a throw-away library."""
+    lib = os.path.realpath(tempfile.mkdtemp(prefix="grizzly_qa_lib_"))
+    art = os.path.realpath(tempfile.mkdtemp(prefix="grizzly_qa_art_"))
+    try:
+        for sub in ("rawdata/textures", "rawdata/sounds", "gamedata/textures", "gamedata/sounds", "import"):
+            os.makedirs(os.path.join(lib, sub), exist_ok=True)
+        shutil.copy(os.path.join(qa.REPO, "gamedata", "lanims.xr"), os.path.join(lib, "gamedata", "lanims.xr"))
+        write_tga(os.path.join(lib, "rawdata", "textures", "qa", "qa_swatch.tga"))
+        write_wav(os.path.join(lib, "rawdata", "sounds", "qa", "qa_tone.wav"))
+        png = os.path.join(art, "qa_import.png")
+        write_png(png)
+        write_png(os.path.join(art, "qa_drop.png"))
+        with open(os.path.join(art, "notes.txt"), "w") as f:
+            f.write("not a picture")
+        ed = qa.Editor(project, args=["-root", lib]).start()
+        try:
+            library_texture(lib, art, png)
+            library_sound(lib)
+            library_lanim(lib)
+        finally:
+            ed.close()
+    finally:
+        qa.remove_tree(lib)
+        qa.remove_tree(art)
+
+
+def exists(lib: str, rel: str) -> bool:
+    return os.path.isfile(os.path.join(lib, *rel.split("/")))
+
+
+def library_texture(lib: str, art: str, png: str) -> None:
+    item = "qa\\qa_swatch"
+    o = cmd("library.view", kind="texture_library", action="open")
+    check(o.get("ok") and o.get("items") == 1 and o.get("first") == item, "K the texture library lists the test's texture",
+          json.dumps(o)[:300])
+    # the description by named keys, written as the tab's Save writes it
+    s = cmd("library.set", kind="texture_library", item=item, set={"format": "dxt5", "mips": False})
+    check(s.get("ok") and s.get("saved") is True and {c["key"] for c in s.get("changed", [])} == {"format", "mips"},
+          "K library.set changes a texture's description by key and says what it changed", json.dumps(s)[:300])
+    check(exists(lib, "rawdata/textures/qa/qa_swatch.thm") and exists(lib, "gamedata/textures/qa/qa_swatch.dds"),
+          "K and writes the description and the game texture it asks for")
+    v = cmd("library.view", kind="texture_library", action="select", item=item)
+    check(v.get("format") == "DXT5" and v.get("dirty") is False, "K the tab reads the new description and is clean",
+          json.dumps(v)[:300])
+    bad = cmd("library.set", kind="texture_library", item=item, set={"formt": "DXT1"})
+    check(not bad.get("ok") and "did you mean 'format'" in str(bad.get("error")), "K a misspelt key is refused with the nearest one",
+          json.dumps(bad)[:300])
+    bad = cmd("library.set", kind="texture_library", item=item, set={"dither": False, "format": "nope"})
+    check(not bad.get("ok") and "DXT1" in str(bad.get("error")), "K a value that is none of the words is refused, listing them",
+          json.dumps(bad)[:300])
+    bad = cmd("library.set", kind="texture_library", item=item, set={"bump_height": 0.05})
+    check(not bad.get("ok") and "no row" in str(bad.get("error")), "K a key the type has no row for is refused", json.dumps(bad)[:300])
+    check(cmd("library.view", kind="texture_library", action="state").get("format") == "DXT5", "K a refused call changes nothing")
+    nobody = cmd("library.set", kind="texture_library", item="qa\\qa_swatc", set={"mips": True})
+    check(not nobody.get("ok") and "did you mean" in str(nobody.get("error")), "K an entry is named exactly; near ones are suggested",
+          json.dumps(nobody)[:300])
+    # unsaved: an edit of the tab, written by the document's save
+    e = cmd("library.set", kind="texture_library", item=item, set={"dither": False}, save=False)
+    check(e.get("ok") and e.get("saved") is False and e.get("dirty") is True, "K save=false leaves an unsaved edit of the tab",
+          json.dumps(e)[:300])
+    check(cmd("library.view", kind="texture_library", action="state").get("dirty") is True, "K and the tab is dirty")
+    sv = cmd("doc.save", doc="texture_library")
+    check(sv.get("ok") and qa.until(lambda: cmd("library.view", kind="texture_library", action="state").get("dirty") is False, 20),
+          "K doc.save writes it and the tab is clean", json.dumps(sv)[:300])
+    # the game texture again from its source
+    os.remove(os.path.join(lib, "gamedata", "textures", "qa", "qa_swatch.dds"))
+    r = cmd("library.rebuild", kind="texture_library", item=item)
+    check(r.get("ok") and exists(lib, "gamedata/textures/qa/qa_swatch.dds"), "K library.rebuild makes the game texture again",
+          json.dumps(r)[:300])
+    # import: from anywhere, refusing what it would replace
+    notpic = cmd("library.import", **{"from": [os.path.join(art, "notes.txt")]})
+    check(not notpic.get("ok") and "no picture" in str(notpic.get("error")), "K library.import refuses what is no picture",
+          json.dumps(notpic)[:300])
+    i = cmd("library.import", **{"from": [png], "set": {"format": "DXT1"}})
+    check(i.get("ok") and i.get("imported") == ["qa_import.png"] and exists(lib, "rawdata/textures/qa/qa_import.tga")
+          and exists(lib, "gamedata/textures/qa/qa_import.dds") and exists(lib, "rawdata/textures/qa/qa_import.thm"),
+          "K library.import takes a picture from anywhere into the library, built", json.dumps(i)[:300])
+    check(os.path.isfile(png), "K and leaves the picture where it was")
+    again = cmd("library.import", **{"from": [png]})
+    check(not again.get("ok") and again.get("code") == "exists", "K a second import would replace a texture: refused, named",
+          json.dumps(again)[:300])
+    again = cmd("library.import", **{"from": [png], "overwrite": True})
+    check(again.get("ok"), "K overwrite=true replaces it", json.dumps(again)[:300])
+    check(cmd("library.view", kind="texture_library", action="state").get("items") == 2, "K the library lists both")
+    # a picture dropped on the tab is imported by the same command
+    size = cmd("shot.window")
+    x, y = float(size.get("width", 1400)) / 2, float(size.get("height", 800)) / 2
+    d = cmd("library.view", kind="texture_library", action="state", simulate_drop=os.path.join(art, "qa_drop.png"), x=x, y=y)
+    check(d.get("ok") and d.get("items") == 3 and exists(lib, "rawdata/textures/qa/qa_drop.tga"),
+          "K a picture dropped on the Texture Library tab is imported", json.dumps(d)[:300])
+    # Check New Textures looks in the import folder
+    write_png(os.path.join(lib, "import", "qa_fresh.png"))
+    c = cmd("library.view", kind="texture_library", action="check")
+    check(c.get("ok") and c.get("import") is True and c.get("items") == 1, "K library.view check turns the tab into New Textures",
+          json.dumps(c)[:300])
+    audit = cmd("ui.audit")
+    labels = {x.get("label") for x in audit.get("controls", [])}
+    check({"Import", "More"} <= labels, "K New Textures offers Import and More", json.dumps(sorted(l for l in labels if l))[:300])
+    cmd("ui.tab", action="close", doc="texture_library", discard=True)
+    t = cmd("library.view", kind="texture_library", action="open", types=["images"])
+    check(t.get("types") == ["images"], "K the type filter is a parameter", json.dumps(t)[:300])
+    cmd("library.view", kind="texture_library", action="state", types=["images", "cube_maps", "bump_maps", "normal_maps", "terrain"])
+
+
+def library_sound(lib: str) -> None:
+    item = "qa\\qa_tone"
+    o = cmd("library.view", kind="sound_library", action="open")
+    check(o.get("ok") and o.get("items") == 1, "K the sound library lists the test's sound", json.dumps(o)[:300])
+    r = cmd("library.rebuild", kind="sound_library", item=item)
+    check(r.get("ok") and exists(lib, "gamedata/sounds/qa/qa_tone.ogg"), "K library.rebuild makes the game sound", json.dumps(r)[:300])
+    s = cmd("library.set", kind="sound_library", item=item, set={"min_dist": 2.0, "max_dist": 40.0, "game_type": "weapon shooting"})
+    check(s.get("ok") and s.get("saved") is True and len(s.get("changed", [])) == 3, "K library.set changes a sound's parameters",
+          json.dumps(s)[:300])
+    v = cmd("library.view", kind="sound_library", action="select", item=item)
+    check(v.get("min_dist") == 2.0 and v.get("max_dist") == 40.0 and v.get("game_sound") is True, "K the tab reads them",
+          json.dumps(v)[:300])
+    bad = cmd("library.set", kind="sound_library", item=item, set={"min_dst": 1})
+    check(not bad.get("ok") and "did you mean 'min_dist'" in str(bad.get("error")), "K a misspelt sound key is refused", json.dumps(bad)[:300])
+    a = cmd("library.view", kind="sound_library", auto_play=True)
+    check(a.get("auto_play") is True, "K auto play is a parameter", json.dumps(a)[:200])
+    cmd("library.view", kind="sound_library", auto_play=False)
+    p = cmd("library.play", kind="sound_library", item=item)
+    if p.get("ok"):
+        check(p.get("playing") is True, "K library.play plays the sound", json.dumps(p)[:300])
+        check(cmd("library.play", kind="sound_library", action="stop").get("playing") is False, "K and stops it")
+    else:
+        # a machine without an audio device says so instead of pretending
+        check("audio" in str(p.get("error", "")).lower() or "device" in str(p.get("error", "")).lower(),
+              "K library.play without a device says so", json.dumps(p)[:300])
+        note("no audio device: playing not checked")
+    labels = {x.get("label") for x in cmd("ui.audit", id="##toolbar").get("controls", [])}
+    check({"Play", "Stop", "Auto Play", "Rebuild", "Save", "More"} <= labels, "K the Sound Library's toolbar presses actions",
+          json.dumps(sorted(l for l in labels if l))[:300])
+    nowin = cmd("ui.tab", action="close", doc="sound_library", discard=True)
+    check(nowin.get("ok"), "K the sound tab closes")
+
+
+def library_lanim(lib: str) -> None:
+    o = cmd("library.view", kind="light_animations", action="open")
+    check(o.get("ok") and o.get("items", 0) > 0, "K light animations lists the copy of lanims.xr", json.dumps(o)[:300])
+    item = o.get("first", "")
+    s = cmd("library.view", kind="light_animations", action="select", item=item, frame=0)
+    frames, keys_before = s.get("frames", 0), s.get("keys", 0)
+    cmd("library.view", kind="light_animations", action="select", item=item, frame=0)
+    free = None
+    for f in range(1, frames):
+        v = cmd("library.view", kind="light_animations", action="select", item=item, frame=f)
+        if v.get("on_key") is False:
+            free = f
+            break
+    check(free is not None, "K the animation has a free frame to put a key on", json.dumps(s)[:200])
+    if free is None:
+        return
+    a = cmd("library.set", kind="light_animations", item=item, set={"keys": {str(free): "#FF8040"}}, save=False)
+    check(a.get("ok") and a.get("saved") is False and a.get("dirty") is True, "K a key added by library.set is an unsaved edit",
+          json.dumps(a)[:300])
+    v = cmd("library.view", kind="light_animations", action="state")
+    check(v.get("keys") == keys_before + 1 and v.get("on_key") is True, "K the tab shows the key", json.dumps(v)[:300])
+    labels = {x.get("label") for x in cmd("ui.audit").get("controls", [])}
+    check({"Add Key", "Delete Key", "Play", "Reload", "Alpha"} <= labels, "K the toolbars press actions",
+          json.dumps(sorted(l for l in labels if l))[:300])
+    m = cmd("library.set", kind="light_animations", item=item, set={"move_key": {"from": free, "to": free + 1 if free + 1 < frames else free - 1, "follow": True}}, save=False)
+    check(m.get("ok"), "K library.set moves a key", json.dumps(m)[:300])
+    moved = cmd("library.view", kind="light_animations", action="state")
+    check(moved.get("on_key") is True, "K and the timeline follows it", json.dumps(moved)[:300])
+    d = cmd("library.set", kind="light_animations", item=item, set={"keys": {str(moved.get("frame")): None}}, save=False)
+    check(d.get("ok") and cmd("library.view", kind="light_animations", action="state").get("keys") == keys_before,
+          "K a key is deleted with null", json.dumps(d)[:300])
+    first = cmd("library.set", kind="light_animations", item=item, set={"keys": {"0": None}}, save=False)
+    check(not first.get("ok") and "first key" in str(first.get("error")), "K the first key stays", json.dumps(first)[:300])
+    bad = cmd("library.set", kind="light_animations", item=item, set={"fpss": 3})
+    check(not bad.get("ok") and "did you mean 'fps'" in str(bad.get("error")), "K a misspelt key is refused", json.dumps(bad)[:300])
+    r = cmd("library.reload", kind="light_animations")
+    check(not r.get("ok") and r.get("code") == "unsaved", "K reload refuses to lose unsaved changes", json.dumps(r)[:300])
+    # written: the file changes
+    path = os.path.join(lib, "gamedata", "lanims.xr")
+    before = open(path, "rb").read()
+    w = cmd("library.set", kind="light_animations", item=item, set={"fps": 12.0})
+    check(w.get("ok") and w.get("saved") is True and open(path, "rb").read() != before, "K library.set writes lanims.xr",
+          json.dumps(w)[:300])
+    rr = cmd("library.reload", kind="light_animations", discard=True)
+    check(rr.get("ok"), "K reload with discard reads it again", json.dumps(rr)[:300])
+    v = cmd("library.view", kind="light_animations", action="select", item=item)
+    check(v.get("fps") == 12.0 and v.get("dirty") is False, "K and the saved fps is what the tab reads", json.dumps(v)[:300])
+    n = cmd("library.view", kind="light_animations", key="next")
+    check(n.get("ok"), "K the timeline goes to the next key", json.dumps(n)[:200])
+    pl = cmd("library.play", kind="light_animations")
+    check(pl.get("ok") and pl.get("playing") is True, "K library.play runs the animation", json.dumps(pl)[:300])
+    check(cmd("library.play", kind="light_animations", action="stop").get("playing") is False, "K and stops it")
+    check(cmd("library.view", kind="light_animations", alpha=True).get("alpha") is True, "K alpha is a parameter")
+    cmd("ui.tab", action="close", doc="light_animations", discard=True)
+
+
+PHASES = "CTMLSK"
 
 
 def run(ctx: qa.Run) -> None:
@@ -387,15 +632,21 @@ def run(ctx: qa.Run) -> None:
     session = os.path.join(project, "temp", "session.ltx")
     if os.path.isfile(session):
         os.remove(session)
-    only = ctx.only.upper().replace(",", "") or "CTML"
-    ed = qa.Editor(project).start()
-    try:
-        steps = {"C": lambda: run_content(project, shots), "T": lambda: run_texture(project, shots), "M": lambda: run_model(shots),
-                 "L": lambda: run_libraries(shots), "S": lambda: run_sizes(project, shots)}
-        # S, every tab at two sizes, runs when --sizes or --only asks for it
-        qa.run_phases(steps, only if sizes is False else only + "S")
-    finally:
-        ed.close()
+    only = ctx.only.upper().replace(",", "") or "CTMLK"
+    # K runs in an editor of its own: its data root is a library the test makes
+    phases = only.replace("K", "")
+    if phases or sizes:
+        ed = qa.Editor(project).start()
+        try:
+            steps = {"C": lambda: run_content(project, shots), "T": lambda: run_texture(project, shots),
+                     "M": lambda: run_model(shots), "L": lambda: run_libraries(shots),
+                     "S": lambda: run_sizes(project, shots)}
+            # S, every tab at two sizes, runs when --sizes or --only asks for it
+            qa.run_phases(steps, phases if sizes is False else phases + "S")
+        finally:
+            ed.close()
+    if "K" in only:
+        run_library_commands(project, shots)
 
 
 def main() -> int:

@@ -9,19 +9,18 @@ use std::sync::Arc;
 
 use egui::{CornerRadius, Pos2, Sense, Stroke, Ui, Vec2, pos2};
 use gz_app::{DocCx, Document, EditAction, OpenRequest};
-use gz_editor::{Args, CmdError, Editor, Origin};
+use gz_editor::{Args, CmdError, Editor, JobId, Origin};
 use gz_fmt_sound::{
     OggParams, Pcm, Peak, SoundThm, decode_ogg, encode_game_sound, read_sound_thm, read_wav, write_sound_thm,
 };
-use gz_store::{Apply, State, Store, StoreOptions, imbl};
+use gz_store::{Apply, State, Store, imbl};
 use gz_ui::grid::{Grid, combo, number, read_only};
 use gz_ui::text::{self, Clip};
-use gz_ui::{
-    Button, Font, Icon, Kind, MenuItem, PropFlags, PropertyGrid, Tone, Toolbar, menu_item, palette, state,
-};
+use gz_ui::{Button, Font, Icon, Kind, PropFlags, PropertyGrid, Tone, Toolbar, palette, state};
 use serde_json::{Map, Value, json};
 
 use super::list::{Empty, LibraryList, find, shown};
+use super::stores::{LibraryFacts, LibraryStores, SoundFacts};
 use super::{LibraryDoc, LibraryLists, Settle, can_write, folder_text, pane, panes};
 use crate::audio::Player;
 use crate::local::{local_ends, local_heading};
@@ -93,7 +92,15 @@ pub struct SoundEdits {
 }
 
 pub enum SoundCmd {
-    Set { name: String, thm: SoundThm, gesture: String },
+    Set {
+        name: String,
+        thm: SoundThm,
+        gesture: String,
+    },
+    /// The edits of these entries dropped: a save of those alone wrote them.
+    Drop {
+        names: Vec<String>,
+    },
     Reset,
 }
 
@@ -106,6 +113,16 @@ impl State for SoundEdits {
             SoundCmd::Set { name, thm, gesture } => {
                 self.edits.insert(name, thm);
                 cx.undoable_merged("Sound Description", gesture);
+            }
+            SoundCmd::Drop { names } => {
+                for n in &names {
+                    self.edits.remove(n);
+                }
+                if self.edits.is_empty() {
+                    cx.new_document();
+                } else {
+                    cx.content_changed();
+                }
             }
             SoundCmd::Reset => {
                 self.edits = imbl::OrdMap::new();
@@ -172,23 +189,19 @@ impl SoundLibDoc {
             }
             ok
         });
+        let stores = LibraryStores::of(editor);
         Self {
             editor: editor.clone(),
-            store: Store::spawn(
-                "sound library",
-                SoundEdits::default(),
-                &editor.exec,
-                StoreOptions::default(),
-            ),
+            store: stores.sound.clone(),
             dirs,
             list: LibraryList::default(),
             selected: String::new(),
             // a sound plays on a click only; picking one stays silent unless Auto Play is on
             auto_play: false,
             writable,
-            saving: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            saving: stores.sound_saving.clone(),
             game: None,
-            rebuilt: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            rebuilt: stores.sound_rebuilt.clone(),
         }
     }
 
@@ -262,8 +275,7 @@ impl SoundLibDoc {
         self.game = Some((name.to_owned(), pending));
     }
 
-    /// Writes the changed descriptions as a job: each `.thm`, and the parameters
-    /// of its game sound rewritten in place.
+    /// Writes the changed descriptions as a job.
     fn queue_save(&mut self) -> Result<(), String> {
         if self.read_only() {
             return Err("The sound folder cannot be written.".to_owned());
@@ -271,88 +283,28 @@ impl SoundLibDoc {
         if self.saving() {
             return Ok(());
         }
-        let edits = self.store.snapshot().edits.clone();
-        let (dirs, saving, store, editor) =
-            (self.dirs.clone(), self.saving.clone(), self.store.clone(), self.editor.clone());
         Player::of(&self.editor).stop();
-        saving.store(true, std::sync::atomic::Ordering::Release);
-        let started = self.editor.jobs.start(
-            "sound_library",
-            Some("libraries"),
-            "Saving the Sound Library",
-            move |ctx| async move {
-                let exec = ctx.exec.clone();
-                let c = ctx.clone();
-                let result = exec
-                    .io(move || -> Result<(usize, Vec<String>), String> {
-                        let age = super::texsync::now();
-                        let (mut done, mut notes) = (0usize, Vec::new());
-                        for (i, (name, thm)) in edits.iter().enumerate() {
-                            c.check().map_err(|_| "Stopped.".to_owned())?;
-                            c.stage(format!("Saving {name}"));
-                            c.progress(i, edits.len());
-                            match save_sound(&dirs, name, thm, age) {
-                                Ok(()) => done += 1,
-                                Err(e) => notes.push(e),
-                            }
-                        }
-                        Ok((done, notes))
-                    })
-                    .await;
-                saving.store(false, std::sync::atomic::Ordering::Release);
-                LibraryLists::of(&editor).sounds_rev.bump();
-                match result {
-                    Ok((done, notes)) => {
-                        for n in &notes {
-                            editor.log.warn(n.clone());
-                        }
-                        let _ = store.send(SoundCmd::Reset, Origin::Ui).await;
-                        Ok(json!({ "written": done, "notes": notes }))
-                    }
-                    Err(e) => Err(gz_task::JobError::new(e)),
-                }
-            },
-        );
-        if let Err(busy) = started {
-            self.saving.store(false, std::sync::atomic::Ordering::Release);
-            return Err(format!("The save could not be started: {busy}."));
-        }
-        Ok(())
+        start_sound_save(&self.editor, None).map(|_| ())
     }
 
-    /// Makes the selected sound's game file again from its `.wav`, as a job.
-    fn queue_rebuild(&mut self) -> Result<(), String> {
-        let items = self.items().unwrap_or_default();
-        let Some(item) = items.iter().find(|i| i.name == self.selected) else {
-            return Err("Pick a sound first.".to_owned());
-        };
-        let (name, thm) = (item.name.clone(), self.thm_of(item));
-        let (dirs, saving, rebuilt, editor) =
-            (self.dirs.clone(), self.saving.clone(), self.rebuilt.clone(), self.editor.clone());
-        Player::of(&self.editor).stop();
-        saving.store(true, std::sync::atomic::Ordering::Release);
-        let started = self.editor.jobs.start(
-            "sound_library",
-            Some("libraries"),
-            "Rebuilding the Game Sound",
-            move |ctx| async move {
-                editor.log.info(format!(
-                    "Rebuilding the game sound {}",
-                    dirs.game_sounds.join(format!("{name}.ogg")).display()
-                ));
-                ctx.stage(format!("Encoding {name}"));
-                let d = dirs.clone();
-                let result = ctx.exec.cpu(move || make_game_sound(&d, &name, &thm, None)).await;
-                saving.store(false, std::sync::atomic::Ordering::Release);
-                rebuilt.store(true, std::sync::atomic::Ordering::Release);
-                editor.exec.wake().ping();
-                result.map(|()| json!({ "rebuilt": true })).map_err(gz_task::JobError::new)
-            },
-        );
-        if let Err(busy) = started {
-            self.saving.store(false, std::sync::atomic::Ordering::Release);
-            return Err(format!("The rebuild could not be started: {busy}."));
+    /// Plays the selected sound's game sound, or stops what plays.
+    pub fn play(&mut self, play: bool) -> Result<(), String> {
+        let player = Player::of(&self.editor);
+        if !play {
+            player.stop();
+            return Ok(());
         }
+        if self.selected.is_empty() {
+            return Err("Pick a sound first.".to_owned());
+        }
+        let pcm = self.game_sound().as_deref().and_then(Option::as_ref).and_then(|g| g.pcm.clone());
+        let Some(pcm) = pcm else {
+            return Err("This description has no game sound (.ogg) yet.".to_owned());
+        };
+        if let Some(e) = player.error() {
+            return Err(e);
+        }
+        player.play(pcm);
         Ok(())
     }
 
@@ -571,6 +523,7 @@ impl SoundLibDoc {
         out.insert("saving".into(), json!(self.saving()));
         out.insert("dirty".into(), json!(self.store.is_dirty()));
         out.insert("auto_play".into(), json!(self.auto_play));
+        out.insert("playing".into(), json!(Player::of(&self.editor).is_playing()));
         out.insert("selected".into(), json!(self.selected));
         out.insert("folder".into(), json!(crate::paths::json_path(&self.dirs.sounds)));
         if let Some(item) = items.iter().find(|i| i.name == self.selected) {
@@ -595,6 +548,9 @@ impl SoundLibDoc {
         if let Some(s) = args.get("search").and_then(Value::as_str) {
             self.list.search = s.to_owned();
         }
+        if let Some(on) = args.get("auto_play").and_then(Value::as_bool) {
+            self.auto_play = on;
+        }
         if action == "select" {
             let item = args.get("item").and_then(Value::as_str).unwrap_or_default();
             let keys: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
@@ -606,6 +562,107 @@ impl SoundLibDoc {
         }
         Ok(self.state(items))
     }
+}
+
+/// Writes the edited descriptions and makes their game sounds again, as one job; `only` limits it
+/// to those entries. The window's Save and `library.set` start it alike.
+pub fn start_sound_save(editor: &Arc<Editor>, only: Option<Vec<String>>) -> Result<JobId, String> {
+    let stores = LibraryStores::of(editor);
+    if stores.sound_saving.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return Err("The sound library is saving.".to_owned());
+    }
+    let edits: std::collections::BTreeMap<String, SoundThm> = stores
+        .sound
+        .snapshot()
+        .edits
+        .iter()
+        .filter(|(k, _)| only.as_ref().is_none_or(|o| o.contains(k)))
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
+    let partial = only.is_some();
+    let (dirs, saving, store, ed) =
+        (EditorDirs::of(editor), stores.sound_saving.clone(), stores.sound.clone(), editor.clone());
+    let started = editor.jobs.start(
+        "sound_library",
+        Some("libraries"),
+        "Saving the Sound Library",
+        move |ctx| async move {
+            let written: Vec<String> = edits.keys().cloned().collect();
+            let c = ctx.clone();
+            let result = ctx
+                .exec
+                .io(move || -> Result<(usize, Vec<String>), String> {
+                    let age = super::texsync::now();
+                    let (mut done, mut notes) = (0usize, Vec::new());
+                    for (i, (name, thm)) in edits.iter().enumerate() {
+                        c.check().map_err(|_| "Stopped.".to_owned())?;
+                        c.stage(format!("Saving {name}"));
+                        c.progress(i, edits.len());
+                        match save_sound(&dirs, name, thm, age) {
+                            Ok(()) => done += 1,
+                            Err(e) => notes.push(e),
+                        }
+                    }
+                    Ok((done, notes))
+                })
+                .await;
+            saving.store(false, std::sync::atomic::Ordering::Release);
+            LibraryLists::of(&ed).sounds_rev.bump();
+            match result {
+                Ok((done, notes)) => {
+                    for n in &notes {
+                        ed.log.warn(n.clone());
+                    }
+                    let dropped = if partial { SoundCmd::Drop { names: written } } else { SoundCmd::Reset };
+                    let _ = store.send(dropped, Origin::Ui).await;
+                    Ok(json!({ "written": done, "failed": notes }))
+                }
+                Err(e) => Err(gz_task::JobError::new(e)),
+            }
+        },
+    );
+    started.map_err(|busy| {
+        stores.sound_saving.store(false, std::sync::atomic::Ordering::Release);
+        format!("The save could not be started: {busy}.")
+    })
+}
+
+/// Makes the game sound of `name` again from its `.wav` and `thm`, as a job.
+pub fn start_sound_rebuild(editor: &Arc<Editor>, name: &str, thm: SoundThm) -> Result<JobId, String> {
+    let stores = LibraryStores::of(editor);
+    if stores.sound_saving.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return Err("The sound library is saving.".to_owned());
+    }
+    let (dirs, saving, rebuilt, ed, name) = (
+        EditorDirs::of(editor),
+        stores.sound_saving.clone(),
+        stores.sound_rebuilt.clone(),
+        editor.clone(),
+        name.to_owned(),
+    );
+    let started = editor.jobs.start(
+        "sound_library",
+        Some("libraries"),
+        "Rebuilding the Game Sound",
+        move |ctx| async move {
+            ed.log.info(format!(
+                "Rebuilding the game sound {}",
+                dirs.game_sounds.join(format!("{name}.ogg")).display()
+            ));
+            ctx.stage(format!("Encoding {name}"));
+            let d = dirs.clone();
+            let n = name.clone();
+            let result = ctx.exec.cpu(move || make_game_sound(&d, &n, &thm, None)).await;
+            saving.store(false, std::sync::atomic::Ordering::Release);
+            rebuilt.store(true, std::sync::atomic::Ordering::Release);
+            ed.exec.wake().ping();
+            result.map(|()| json!({ "rebuilt": name })).map_err(gz_task::JobError::new)
+        },
+    );
+    started.map_err(|busy| {
+        stores.sound_saving.store(false, std::sync::atomic::Ordering::Release);
+        format!("The rebuild could not be started: {busy}.")
+    })
 }
 
 /// Makes the game sound of `name` from its `.wav`: Vorbis at the description's
@@ -831,21 +888,9 @@ impl Document for SoundLibDoc {
     }
 
     fn toolbar<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>, cx: &mut DocCx<'_>) {
-        let editor = self.editor.clone();
         let writable = !self.read_only();
-        tb.group(0);
-        tb.menu("more", Icon::More, "More", "Synchronize by hand", Some("sound_library_more"), true, |ui| {
-            let off = if writable { "" } else { "The sound folder cannot be written" };
-            if menu_item(
-                ui,
-                "Synchronize Sounds...",
-                MenuItem { icon: Icon::Refresh, enabled: writable, tip: off, ..MenuItem::default() },
-            ) {
-                editor.post("library.sync", gz_app::args(&[("kind", "sounds")]));
-            }
-        });
         let dirty = self.store.is_dirty();
-        let on = !self.read_only() && !self.saving() && dirty;
+        let on = writable && !self.saving() && dirty;
         let why = if self.read_only() {
             "The sound folder cannot be written"
         } else if self.saving() {
@@ -853,6 +898,19 @@ impl Document for SoundLibDoc {
         } else {
             "No unsaved changes"
         };
+        let game = self.game_sound();
+        let has_sound = game.as_deref().and_then(Option::as_ref).is_some_and(|g| g.pcm.is_some());
+        let player = Player::of(&self.editor);
+        let playing = player.is_playing();
+        LibraryFacts::of(&self.editor).set_sound(SoundFacts {
+            read_only: self.read_only(),
+            saving: self.saving(),
+            selected: !self.selected.is_empty(),
+            has_game_sound: has_sound,
+            playing,
+            auto_play: self.auto_play,
+        });
+        // the one More of the row, last like every other tab's
         tb.group(2);
         if tb.action(
             "save",
@@ -862,78 +920,15 @@ impl Document for SoundLibDoc {
             on,
             false,
             Kind::Ghost,
-        ) && let Err(e) = self.queue_save()
-        {
-            let asker =
-                if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
-            if let Some(line) = gz_ui::dialog::notice(cx.ctx, asker, Tone::Error, "Save failed", &e) {
-                self.editor.log.finding(&line);
-            }
+        ) {
+            cx.requests.action("file.save");
         }
         tb.group(3);
-        let game = self.game_sound();
-        let pcm = game.as_deref().and_then(Option::as_ref).and_then(|g| g.pcm.clone());
-        let one = !self.selected.is_empty();
-        let no_sound =
-            if one { "This description has no game sound (.ogg) yet" } else { "Pick a sound first" };
-        let player = Player::of(&self.editor);
-        let play_tip = player.error().unwrap_or_else(|| "Play the game sound".to_owned());
-        if tb.action(
-            "play",
-            Icon::Play,
-            "Play",
-            if pcm.is_some() { &play_tip } else { no_sound },
-            pcm.is_some(),
-            false,
-            Kind::Ghost,
-        ) && let Some(pcm) = pcm
-        {
-            player.play(pcm);
-        }
-        // Stop is there to stop something: off while nothing plays
-        let playing = player.is_playing();
-        if tb.action(
-            "stop",
-            Icon::Stop,
-            "Stop",
-            if playing { "Stop the sound" } else { "Nothing is playing" },
-            playing,
-            false,
-            Kind::Ghost,
-        ) {
-            player.stop();
-        }
-        if tb.action(
-            "auto_play",
-            Icon::SoundSource,
-            "Auto Play",
-            "Play every sound as it is picked in the list",
-            true,
-            self.auto_play,
-            Kind::Ghost,
-        ) {
-            self.auto_play = !self.auto_play;
-        }
+        gz_app::toolbar_button(tb, cx, "library.play_sound", Kind::Ghost, None);
+        gz_app::toolbar_button(tb, cx, "library.stop_sound", Kind::Ghost, None);
+        gz_app::toolbar_button(tb, cx, "library.auto_play", Kind::Ghost, None);
         tb.group(1);
-        let rebuild = !self.read_only() && !self.saving() && one;
-        let rebuild_tip = if rebuild {
-            "Build the game sound (.ogg) of this description again"
-        } else if self.read_only() {
-            "The sound folder cannot be written"
-        } else if self.saving() {
-            "The library is saving"
-        } else {
-            "Pick a sound first"
-        };
-        if tb.action("rebuild", Icon::Refresh, "Rebuild", rebuild_tip, rebuild, false, Kind::Ghost)
-            && let Err(e) = self.queue_rebuild()
-        {
-            let asker =
-                if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
-            if let Some(line) = gz_ui::dialog::notice(cx.ctx, asker, Tone::Error, "Rebuild failed", &e) {
-                self.editor.log.finding(&line);
-            }
-        }
+        gz_app::toolbar_button(tb, cx, "library.rebuild_sound", Kind::Ghost, None);
         if self.rebuilt.swap(false, std::sync::atomic::Ordering::AcqRel) && !self.selected.is_empty() {
             // the preview follows the new file
             let name = self.selected.clone();
@@ -945,6 +940,9 @@ impl Document for SoundLibDoc {
         } else if self.saving() {
             tb.status("Saving...", Tone::Info);
         }
+        tb.menu("more", Icon::More, "More", "Synchronize by hand", Some("sound_library_more"), true, |ui| {
+            gz_app::menu_row(ui, cx, "library.sync_sounds", None);
+        });
         if playing {
             cx.ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }

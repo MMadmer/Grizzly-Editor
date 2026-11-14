@@ -373,6 +373,29 @@ fn read(
     }
 }
 
+/// What the tab says of a file that is not there: and where it looked.
+#[must_use]
+pub fn not_found(sources: &Sources, name: &str, source: TexSource) -> String {
+    let editor_root = sources.dirs.root.clone();
+    let place =
+        |dir: &std::path::Path| crate::paths::folder_text(sources.project.as_deref(), &editor_root, dir);
+    match source {
+        TexSource::Game if sources.game.is_none() => "The file was not found: no game is linked.".to_owned(),
+        TexSource::Game => format!("The file was not found. Looked in the linked game's files for {name}."),
+        TexSource::Project => match &sources.project {
+            Some(root) => {
+                format!("The file was not found. Looked in {}.", place(&root.join(name)))
+            }
+            None => "The file was not found: no project is open.".to_owned(),
+        },
+        TexSource::Editor => format!(
+            "The file was not found. Looked in {} and {}.",
+            place(&sources.dirs.game_textures),
+            place(&sources.dirs.textures)
+        ),
+    }
+}
+
 /// Reads, decodes when it must, and uploads a texture: on the pools, never a frame.
 pub async fn load(editor: Arc<Editor>, name: String, source: TexSource) -> TexFile {
     let Some(gpu) = editor.services.get::<gz_app::WindowLink>().and_then(|l| l.gpu()) else {
@@ -380,9 +403,10 @@ pub async fn load(editor: Arc<Editor>, name: String, source: TexSource) -> TexFi
     };
     let sources = Sources::of(&editor).await;
     let n = name.clone();
+    let looked = sources.clone();
     let got = editor.exec.io(move || read(&sources, &n, source)).await;
     let Some((bytes, file, archive, origin)) = got else {
-        return TexFile::failed(&name, UNREADABLE);
+        return TexFile::failed(&name, &not_found(&looked, &name, source));
     };
     let n = name.clone();
     editor

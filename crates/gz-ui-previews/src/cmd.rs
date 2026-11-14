@@ -1,5 +1,5 @@
-//! The commands of the previews: `preview.model`, `preview.texture`, `library.view` and
-//! `shot.asset`.
+//! The commands of the previews: `preview.model`, `preview.texture`, `library.view`, `library.set`,
+//! `library.play`, `library.import`, `library.rebuild` and `shot.asset`.
 //!
 //! A command that changes what a tab draws applies itself, then waits for the frames that show
 //! it and reads the tab again: the answer is the frame it asked for.
@@ -143,11 +143,9 @@ async fn model_answer(editor: &Arc<Editor>) -> Reply {
 
 async fn preview_model(editor: Arc<Editor>, p: ModelParams, _origin: Origin) -> Reply {
     let name = engine_name(p.name.as_deref().unwrap_or_default());
-    let source_word = p.source.clone().unwrap_or_else(|| "library".to_owned());
-    if !matches!(source_word.as_str(), "library" | "project" | "game") {
+    let Some(source) = ModelSource::parse(p.source.as_deref().unwrap_or_default()) else {
         return Err(invalid("source takes library, project or game"));
-    }
-    let source = ModelSource::parse(&source_word);
+    };
     let lighting = p.lighting.map(|l| usize::from(l == Lighting::Unlit));
     let (wireframe, bones, details) = (p.wireframe, p.bones, p.details);
     let (frame, reset) = (p.frame, p.reset);
@@ -166,13 +164,13 @@ async fn preview_model(editor: Arc<Editor>, p: ModelParams, _origin: Origin) -> 
         if !showing {
             let pending = Pending::spawn(&editor.exec, load_model(editor.clone(), name.clone(), source));
             let loaded = pending.wait(LOAD_WAIT).await;
-            if source == ModelSource::Game
+            if source.is_game()
                 && loaded.as_ref().is_some_and(|d| d.error == "not found in the linked game install")
             {
                 return Err(invalid("not found in the linked game install"));
             }
             editor.services.get_or_init(ModelPreload::default).put(&name, source, pending);
-            open_tab(&editor, "model", Some(&name), Some(&source_word)).await?;
+            open_tab(&editor, "model", Some(&name), Some(source.arg())).await?;
         }
     } else {
         let open = on_ui(&editor, |shell, ctx| Ok(shell.activate(ctx, "model"))).await?;
@@ -373,7 +371,29 @@ async fn texture_preview(editor: Arc<Editor>, p: TextureParams, _origin: Origin)
     texture_answer(&editor).await
 }
 
-// ---- library.view ------------------------------------------------------------------------------
+// ---- the libraries -----------------------------------------------------------------------------
+
+/// The three libraries, as the tabs and the commands name them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum LibKind {
+    /// `gamedata\lanims.xr`.
+    LightAnimations,
+    /// The `.tga` sources of `rawdata\textures` with their descriptions.
+    TextureLibrary,
+    /// The `.wav` sources of `rawdata\sounds` with their descriptions.
+    SoundLibrary,
+}
+
+impl LibKind {
+    fn word(self) -> &'static str {
+        match self {
+            LibKind::LightAnimations => KINDS[0],
+            LibKind::TextureLibrary => KINDS[1],
+            LibKind::SoundLibrary => KINDS[2],
+        }
+    }
+}
 
 /// What `library.view` does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -386,13 +406,22 @@ enum LibraryAction {
     Open,
     /// Selects `item` in the tab's list.
     Select,
+    /// Texture library: looks in the import folder and turns the tab into New Textures.
+    Check,
+}
+
+/// The key of a light animation the timeline moves to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum KeyStep {
+    Previous,
+    Next,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct LibraryParams {
-    /// light_animations, texture_library or sound_library.
-    kind: String,
+    kind: LibKind,
     #[serde(default)]
     action: LibraryAction,
     /// select: the entry by its name (or a part of it).
@@ -404,98 +433,490 @@ struct LibraryParams {
     /// The list's search; empty clears it.
     #[serde(default)]
     query: Option<String>,
+    /// Light animations: show the colours' alpha over a checkerboard.
+    #[serde(default)]
+    alpha: Option<bool>,
+    /// Sound library: play every sound as it is picked in the list.
+    #[serde(default)]
+    auto_play: Option<bool>,
+    /// Texture library: the kinds of texture the list shows - images, cube_maps, bump_maps,
+    /// normal_maps, terrain. Empty shows none.
+    #[serde(default)]
+    types: Option<Vec<String>>,
+    /// Light animations: the timeline goes to the previous or the next key of the selected one.
+    #[serde(default)]
+    key: Option<KeyStep>,
+    /// Files (separated by |) dropped on the tab at the window point `x`, `y`, the way a drop from
+    /// Explorer lands. Pictures dropped on the Texture Library are imported.
+    #[serde(default)]
+    simulate_drop: Option<String>,
+    /// The window point of `simulate_drop`, from the left, in pixels.
+    #[serde(default)]
+    x: Option<f32>,
+    /// The window point of `simulate_drop`, from the top, in pixels.
+    #[serde(default)]
+    y: Option<f32>,
 }
 
-async fn library(editor: Arc<Editor>, p: LibraryParams, _origin: Origin) -> Reply {
-    let kind = p.kind.clone();
-    if !KINDS.contains(&kind.as_str()) {
-        return Err(invalid("kind must be light_animations, texture_library or sound_library"));
+fn doc_of_kind(shell: &mut gz_app::ShellState, kind: LibKind) -> Option<&mut dyn LibraryDoc> {
+    let k = kind.word();
+    match kind {
+        LibKind::LightAnimations => doc::<LanimDoc>(shell, k).map(|d| d as &mut dyn LibraryDoc),
+        LibKind::TextureLibrary => doc::<TexLibDoc>(shell, k).map(|d| d as &mut dyn LibraryDoc),
+        LibKind::SoundLibrary => doc::<SoundLibDoc>(shell, k).map(|d| d as &mut dyn LibraryDoc),
     }
-    let action = match p.action {
-        LibraryAction::State => "state",
-        LibraryAction::Open => "open",
-        LibraryAction::Select => "select",
-    }
-    .to_owned();
-    // what the tabs read: their own words for the same things
-    let mut args = Args::new();
-    if let Some(i) = &p.item {
-        args.insert("item".into(), json!(i));
-    }
-    if let Some(f) = p.frame {
-        args.insert("frame".into(), json!(f));
-    }
-    if let Some(q) = &p.query {
-        args.insert("search".into(), json!(q));
-    }
-    // open brings the tab up; state and select never switch tabs
-    if action == "open" {
-        let k = kind.clone();
-        let there =
-            on_ui(&editor, move |shell, ctx| Ok(shell.document_mut(&k).is_some() && shell.activate(ctx, &k)))
-                .await?;
-        if !there {
-            open_tab(&editor, &kind, None, None).await?;
-        }
-    }
-    let open = {
-        let k = kind.clone();
-        on_ui(&editor, move |shell, _| Ok(shell.document_mut(&k).is_some())).await?
-    };
-    if !open {
-        return Err(invalid(format!("the {kind} tab is not open: action=open opens it")));
-    }
-    // what the tab answers about is its list as read
-    match kind.as_str() {
-        "light_animations" => {
+}
+
+fn not_open(kind: LibKind) -> CmdError {
+    invalid(format!("the {} tab is not open: library.view action=open opens it", kind.word()))
+}
+
+/// Asks the tab of `kind` for what it answers: `action` and `args` applied, then its fields. The
+/// tab must be open. Also whether it is the active tab and what a selection must wait for.
+async fn run_tab(
+    editor: &Arc<Editor>,
+    kind: LibKind,
+    action: &'static str,
+    args: Args,
+) -> Result<(bool, Map<String, Value>, Option<crate::library::Settle>), CmdError> {
+    on_ui(editor, move |shell, _| {
+        let active = shell.active() == kind.word();
+        let Some(d) = doc_of_kind(shell, kind) else { return Err(not_open(kind)) };
+        let body = d.mcp(action, &args).map_err(invalid)?;
+        let settle = if action == "select" { d.settle() } else { None };
+        Ok((active, body, settle))
+    })
+    .await
+}
+
+/// Whether the tab of `kind` is open.
+async fn tab_open(editor: &Arc<Editor>, kind: LibKind) -> Result<bool, CmdError> {
+    on_ui(editor, move |shell, _| Ok(shell.document_mut(kind.word()).is_some())).await
+}
+
+/// The entry the tab of `kind` has selected, when it is open and has one.
+async fn selected_of(editor: &Arc<Editor>, kind: LibKind) -> Option<String> {
+    on_ui(editor, move |shell, _| {
+        Ok(match kind {
+            LibKind::LightAnimations => doc::<LanimDoc>(shell, kind.word()).map(|d| d.selected.clone()),
+            LibKind::TextureLibrary => doc::<TexLibDoc>(shell, kind.word()).map(|d| d.selected.clone()),
+            LibKind::SoundLibrary => doc::<SoundLibDoc>(shell, kind.word()).map(|d| d.selected.clone()),
+        })
+    })
+    .await
+    .ok()
+    .flatten()
+    .filter(|s| !s.is_empty())
+}
+
+/// What a library is waiting for before a command may answer about it.
+async fn list_ready(editor: &Arc<Editor>, kind: LibKind) -> Result<(), CmdError> {
+    match kind {
+        LibKind::LightAnimations => {
             if let Some(store) =
-                on_ui(&editor, |shell, _| Ok(doc::<LanimDoc>(shell, "light_animations").map(|d| d.store())))
+                on_ui(editor, |shell, _| Ok(doc::<LanimDoc>(shell, "light_animations").map(|d| d.store())))
                     .await?
             {
                 LanimDoc::loaded(&store).await;
             }
         }
-        "texture_library" => {
-            let import = on_ui(&editor, |shell, _| {
+        LibKind::TextureLibrary => {
+            let import = on_ui(editor, |shell, _| {
                 Ok(doc::<TexLibDoc>(shell, "texture_library").and_then(|d| d.import_pending()))
             })
             .await?;
-            TexLibDoc::items_now(&editor, import).await;
+            TexLibDoc::items_now(editor, import).await;
         }
-        _ => {
-            SoundLibDoc::items_now(&editor).await;
+        LibKind::SoundLibrary => {
+            SoundLibDoc::items_now(editor).await;
         }
     }
-    let run = |editor: Arc<Editor>, kind: String, action: String, args: Args| async move {
-        on_ui(&editor, move |shell, _| {
-            let active = shell.active() == kind;
-            let d: Option<&mut dyn LibraryDoc> = match kind.as_str() {
-                "light_animations" => doc::<LanimDoc>(shell, &kind).map(|d| d as &mut dyn LibraryDoc),
-                "texture_library" => doc::<TexLibDoc>(shell, &kind).map(|d| d as &mut dyn LibraryDoc),
-                _ => doc::<SoundLibDoc>(shell, &kind).map(|d| d as &mut dyn LibraryDoc),
-            };
-            let Some(d) = d else {
-                return Err(invalid(format!("the {kind} tab is not open: action=open opens it")));
-            };
-            let body = d.mcp(&action, &args).map_err(invalid)?;
-            let settle = if action == "select" { d.settle() } else { None };
-            Ok((active, body, settle))
-        })
-        .await
+    Ok(())
+}
+
+async fn library(editor: Arc<Editor>, p: LibraryParams, _origin: Origin) -> Reply {
+    let kind = p.kind;
+    let mut action = match p.action {
+        LibraryAction::State => "state",
+        LibraryAction::Open => "open",
+        LibraryAction::Select => "select",
+        LibraryAction::Check => "check",
     };
-    let (mut active, mut body, settle) = run(editor.clone(), kind.clone(), action.clone(), args).await?;
+    // what the tabs read: their own words for the same things
+    let mut args = Args::new();
+    for (key, value) in [
+        ("item", p.item.as_ref().map(|v| json!(v))),
+        ("frame", p.frame.map(|v| json!(v))),
+        ("search", p.query.as_ref().map(|v| json!(v))),
+        ("alpha", p.alpha.map(|v| json!(v))),
+        ("auto_play", p.auto_play.map(|v| json!(v))),
+        ("types", p.types.as_ref().map(|v| json!(v))),
+        ("key", p.key.map(|k| json!(if k == KeyStep::Previous { "previous" } else { "next" }))),
+    ] {
+        if let Some(v) = value {
+            args.insert(key.into(), v);
+        }
+    }
+    // open brings the tab up; state and select never switch tabs
+    if action == "open" || action == "check" {
+        let k = kind.word();
+        let there =
+            on_ui(&editor, move |shell, ctx| Ok(shell.document_mut(k).is_some() && shell.activate(ctx, k)))
+                .await?;
+        if !there {
+            open_tab(&editor, kind.word(), None, None).await?;
+        }
+    }
+    if !tab_open(&editor, kind).await? {
+        return Err(not_open(kind));
+    }
+    if action == "check" {
+        if kind != LibKind::TextureLibrary {
+            return Err(invalid("check looks in the import folder: it is the texture library's"));
+        }
+        run_tab(&editor, kind, "check", Args::new()).await?;
+        action = "state";
+    }
+    if let Some(list) = &p.simulate_drop {
+        let files: Vec<std::path::PathBuf> = list
+            .split('|')
+            .map(|f| f.trim_matches([' ', '\t', '\r', '\n']))
+            .filter(|f| !f.is_empty())
+            .map(std::path::PathBuf::from)
+            .collect();
+        let (x, y) = (p.x.unwrap_or(0.0), p.y.unwrap_or(0.0));
+        on_ui(&editor, move |_, ctx| {
+            let ppp = ctx.pixels_per_point();
+            gz_ui::drop::simulate_files(ctx, files, egui::pos2(x / ppp, y / ppp));
+            Ok(())
+        })
+        .await?;
+        owe_frames(&editor, 3).await;
+        // what the drop started ends before the answer: the import it ran
+        let stores = crate::library::stores::LibraryStores::of(&editor);
+        let begun = tokio::time::Instant::now() + Duration::from_secs(3);
+        while !crate::library::stores::is_set(&stores.tex_saving) && tokio::time::Instant::now() < begun {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let ended = tokio::time::Instant::now() + LOAD_WAIT;
+        while crate::library::stores::is_set(&stores.tex_saving) && tokio::time::Instant::now() < ended {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        owe_frames(&editor, 2).await;
+    }
+    // what the tab answers about is its list as read
+    list_ready(&editor, kind).await?;
+    let (mut active, mut body, settle) = run_tab(&editor, kind, action, args).await?;
     // a selection answers once what it shows is read: the picture, the game sound
     if let Some(s) = settle {
         s.await;
-        (active, body, _) = run(editor.clone(), kind.clone(), "state".to_owned(), Args::new()).await?;
+        (active, body, _) = run_tab(&editor, kind, "state", Args::new()).await?;
     }
     let mut head = Map::new();
-    head.insert("tab".into(), json!(kind));
+    head.insert("tab".into(), json!(kind.word()));
     head.insert("active".into(), json!(active));
     if active {
         owe_frames(&editor, 2).await;
     }
     Ok(merge(head, std::mem::take(&mut body)))
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SetParams {
+    kind: LibKind,
+    /// The entry by its exact name (any case): a texture `wpn\wpn_ak74`, a sound, a light
+    /// animation. Left out: the one the tab has selected.
+    #[serde(default)]
+    item: Option<String>,
+    /// What to change, by key. Texture: type, format, mips, mip_filter, bump_mode, bump_texture,
+    /// bump_normal_map, bump_height, detail_texture, detail_scale, detail_diffuse, detail_bump,
+    /// material, material_weight, dither, dither_each_mip, implicit_lighted, fade_color_on,
+    /// fade_alpha_on, fade_delay, fade_amount, fade_color, border_color_on, border_alpha_on,
+    /// border_color. Sound: quality, min_dist, max_dist, max_ai_dist, base_volume, game_type.
+    /// Light animation: fps, frames, keys ({"<frame>": "#RRGGBB" or null}), move_key ({from, to}).
+    /// A word is the one the editor shows (`DXT5`, `Cube Map`), any case. An unknown key is
+    /// refused with the nearest real one.
+    set: Map<String, Value>,
+    /// Write the files too, as the tab's Save does: the description and the game texture or
+    /// sound built from it, or lanims.xr. False leaves the change as an edit of the tab
+    /// (undoable, unsaved) for `doc.save`.
+    #[serde(default = "yes")]
+    save: bool,
+}
+
+/// What a texture's or a sound's edit is, by the entry's description as the tab shows it.
+async fn set_entry(editor: &Arc<Editor>, p: SetParams, origin: Origin) -> Reply {
+    let item = match p.item.filter(|i| !i.is_empty()) {
+        Some(i) => i,
+        None => selected_of(editor, p.kind)
+            .await
+            .ok_or_else(|| invalid("item names the entry (nothing is selected in a tab)"))?,
+    };
+    let mut head = Map::new();
+    head.insert("kind".into(), json!(p.kind.word()));
+    let stores = crate::library::stores::LibraryStores::of(editor);
+    match p.kind {
+        LibKind::TextureLibrary => {
+            let items = TexLibDoc::items_now(editor, None).await;
+            let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
+            let name = crate::library::keys::exact("texture", &names, &item)
+                .map_err(CmdError::not_found)?
+                .to_owned();
+            let found =
+                items.iter().find(|i| i.name == name).cloned().ok_or_else(|| CmdError::not_found(&name))?;
+            let pending = stores.tex.snapshot().edits.get(&name).cloned();
+            let base = pending.clone().unwrap_or(found.params);
+            let mut params = base.clone();
+            let changed = crate::library::keys::apply_texture(&mut params, &p.set).map_err(invalid)?;
+            if params != base {
+                stores
+                    .tex
+                    .send(
+                        crate::library::textures::TexCmd::Set {
+                            name: name.clone(),
+                            params,
+                            gesture: "set".into(),
+                        },
+                        origin,
+                    )
+                    .await?;
+            }
+            let write = p.save && (pending.is_some() || !changed.is_empty());
+            if write {
+                let id = crate::library::textures::start_texture_save(editor, None, Some(vec![name.clone()]))
+                    .map_err(CmdError::busy)?;
+                crate::library::textures::job_answer(editor, id).await?;
+            }
+            head.insert("item".into(), json!(name));
+            head.insert("changed".into(), json!(changed));
+            head.insert("saved".into(), json!(write));
+            head.insert("dirty".into(), json!(stores.tex.is_dirty()));
+        }
+        LibKind::SoundLibrary => {
+            let items = SoundLibDoc::items_now(editor).await;
+            let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
+            let name =
+                crate::library::keys::exact("sound", &names, &item).map_err(CmdError::not_found)?.to_owned();
+            let found =
+                items.iter().find(|i| i.name == name).cloned().ok_or_else(|| CmdError::not_found(&name))?;
+            let pending = stores.sound.snapshot().edits.get(&name).copied();
+            let base = pending.unwrap_or(found.thm);
+            let mut thm = base;
+            let changed = crate::library::keys::apply_sound(&mut thm, &p.set).map_err(invalid)?;
+            if thm != base {
+                stores
+                    .sound
+                    .send(
+                        crate::library::sounds::SoundCmd::Set {
+                            name: name.clone(),
+                            thm,
+                            gesture: "set".into(),
+                        },
+                        origin,
+                    )
+                    .await?;
+            }
+            let write = p.save && (pending.is_some() || !changed.is_empty());
+            if write {
+                let id = crate::library::sounds::start_sound_save(editor, Some(vec![name.clone()]))
+                    .map_err(CmdError::busy)?;
+                crate::library::textures::job_answer(editor, id).await?;
+            }
+            head.insert("item".into(), json!(name));
+            head.insert("changed".into(), json!(changed));
+            head.insert("saved".into(), json!(write));
+            head.insert("dirty".into(), json!(stores.sound.is_dirty()));
+        }
+        LibKind::LightAnimations => {
+            let done = crate::library::lanim::set_lanim(editor, &item, &p.set).await?;
+            let write = p.save && !done.changed.is_empty();
+            if write {
+                crate::library::lanim::save_lanims(editor).await.map_err(CmdError::io)?;
+            }
+            if let Some(frame) = done.follow {
+                let _ = on_ui(editor, move |shell, _| {
+                    if let Some(d) = doc::<LanimDoc>(shell, "light_animations") {
+                        d.set_pointer(frame);
+                    }
+                    Ok(())
+                })
+                .await;
+            }
+            head.insert("item".into(), json!(item));
+            head.insert("changed".into(), json!(done.changed));
+            head.insert("saved".into(), json!(write));
+            head.insert("dirty".into(), json!(stores.lanim.is_dirty()));
+        }
+    }
+    owe_frames(editor, 1).await;
+    Ok(Value::Object(head))
+}
+
+async fn library_set(editor: Arc<Editor>, p: SetParams, origin: Origin) -> Reply {
+    set_entry(&editor, p, origin).await
+}
+
+/// What `library.play` does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum PlayAction {
+    /// Plays the selected entry.
+    #[default]
+    Play,
+    /// Stops what plays.
+    Stop,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PlayParams {
+    /// sound_library: the game sound; light_animations: the animation in real time.
+    kind: LibKind,
+    #[serde(default)]
+    action: PlayAction,
+    /// play: the entry to pick first; left out: the one selected.
+    #[serde(default)]
+    item: Option<String>,
+}
+
+async fn library_play(editor: Arc<Editor>, p: PlayParams, _origin: Origin) -> Reply {
+    if p.kind == LibKind::TextureLibrary {
+        return Err(invalid("a texture plays nothing: kind is sound_library or light_animations"));
+    }
+    let kind = p.kind;
+    if !tab_open(&editor, kind).await? {
+        return Err(not_open(kind));
+    }
+    list_ready(&editor, kind).await?;
+    let play = p.action == PlayAction::Play;
+    if play && let Some(item) = &p.item {
+        let mut a = Args::new();
+        a.insert("item".into(), json!(item));
+        let (_, _, settle) = run_tab(&editor, kind, "select", a).await?;
+        if let Some(s) = settle {
+            s.await;
+        }
+    }
+    let answered = on_ui(&editor, move |shell, ctx| {
+        let said = match kind {
+            LibKind::SoundLibrary => doc::<SoundLibDoc>(shell, kind.word()).map(|d| d.play(play)),
+            _ => {
+                let now = ctx.input(|i| i.time);
+                doc::<LanimDoc>(shell, kind.word()).map(|d| d.play(play, now))
+            }
+        };
+        match said {
+            Some(r) => r.map_err(invalid),
+            None => Err(not_open(kind)),
+        }
+    })
+    .await;
+    answered?;
+    owe_frames(&editor, 2).await;
+    let (active, body, _) = run_tab(&editor, kind, "state", Args::new()).await?;
+    let mut head = Map::new();
+    head.insert("tab".into(), json!(kind.word()));
+    head.insert("active".into(), json!(active));
+    Ok(merge(head, body))
+}
+
+fn yes_wait() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ImportParams {
+    /// Picture files anywhere on the disk (tga, bmp, dds, png, jpg): copied into the import folder
+    /// and taken into the library. Left out: the pictures the import folder already holds.
+    #[serde(default)]
+    from: Option<Vec<String>>,
+    /// Description keys (`library.set`'s texture keys) applied to every picture imported.
+    #[serde(default)]
+    set: Option<Map<String, Value>>,
+    /// Replace what is there: a staged picture of the same name and a texture of the library
+    /// that an imported picture has the name of. Without it the call refuses and names them.
+    #[serde(default)]
+    overwrite: bool,
+    /// Answer when the job has ended; false answers the job at once.
+    #[serde(default = "yes_wait")]
+    wait: bool,
+}
+
+async fn library_import(editor: Arc<Editor>, p: ImportParams, _origin: Origin) -> Reply {
+    let request = crate::library::textures::ImportRequest {
+        from: p.from.unwrap_or_default().into_iter().map(std::path::PathBuf::from).collect(),
+        set: p.set.unwrap_or_default(),
+        overwrite: p.overwrite,
+        wait: p.wait,
+    };
+    crate::library::textures::import_pictures(&editor, request).await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct RebuildParams {
+    /// texture_library: the game texture; sound_library: the game sound.
+    kind: LibKind,
+    /// The entry by its exact name; left out: the one the tab has selected.
+    #[serde(default)]
+    item: Option<String>,
+    /// texture_library: a cube map's smaller copy, `<name>#small.dds` of 32 x 32 a face.
+    #[serde(default)]
+    small: bool,
+    /// Answer when the job has ended; false answers the job at once.
+    #[serde(default = "yes_wait")]
+    wait: bool,
+}
+
+async fn library_rebuild(editor: Arc<Editor>, p: RebuildParams, _origin: Origin) -> Reply {
+    let item = match p.item.filter(|i| !i.is_empty()) {
+        Some(i) => i,
+        None => selected_of(&editor, p.kind)
+            .await
+            .ok_or_else(|| invalid("item names the entry (nothing is selected in a tab)"))?,
+    };
+    let stores = crate::library::stores::LibraryStores::of(&editor);
+    let id = match p.kind {
+        LibKind::TextureLibrary => {
+            let items = TexLibDoc::items_now(&editor, None).await;
+            let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
+            let name = crate::library::keys::exact("texture", &names, &item)
+                .map_err(CmdError::not_found)?
+                .to_owned();
+            if p.small {
+                let dirs = crate::paths::EditorDirs::of(&editor);
+                crate::libtools::smaller_cube_map(&editor, &dirs, &name).map_err(CmdError::busy)?
+            } else {
+                let pending = stores.tex.snapshot().edits.get(&name).cloned();
+                crate::library::textures::start_texture_rebuild(&editor, &name, pending)
+                    .map_err(CmdError::busy)?
+            }
+        }
+        LibKind::SoundLibrary => {
+            if p.small {
+                return Err(invalid("small is a cube map's: kind=texture_library"));
+            }
+            let items = SoundLibDoc::items_now(&editor).await;
+            let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
+            let name =
+                crate::library::keys::exact("sound", &names, &item).map_err(CmdError::not_found)?.to_owned();
+            let found =
+                items.iter().find(|i| i.name == name).cloned().ok_or_else(|| CmdError::not_found(&name))?;
+            let thm = stores.sound.snapshot().edits.get(&name).copied().unwrap_or(found.thm);
+            crate::library::sounds::start_sound_rebuild(&editor, &name, thm).map_err(CmdError::busy)?
+        }
+        LibKind::LightAnimations => return Err(invalid("a light animation has no game file to build")),
+    };
+    if !p.wait {
+        return Ok(json!({ "job": id.0 }));
+    }
+    crate::library::textures::job_answer(&editor, id).await
 }
 
 // ---- shot.asset --------------------------------------------------------------------------------
@@ -677,7 +1098,7 @@ async fn asset_shot(editor: Arc<Editor>, p: AssetShotParams, _origin: Origin) ->
         Some(p) => p,
         // the visual hook answers through a per-frame queue: a one-shot call renders instead
         None if matches!(category, "Visuals" | "Objects") => {
-            render_model(&editor, &name, ModelSource::Visual)
+            render_model(&editor, &name, ModelSource::Library)
                 .await
                 .map_err(|_| invalid("no preview for this asset (missing thumbnail or wrong name)"))?
         }
@@ -686,7 +1107,7 @@ async fn asset_shot(editor: Arc<Editor>, p: AssetShotParams, _origin: Origin) ->
     Ok(png_reply(&name, &png, false))
 }
 
-/// Registers `preview.model`, `preview.texture`, `library.view` and `shot.asset`.
+/// Registers `preview.model`, `preview.texture`, the library commands and `shot.asset`.
 pub fn register(reg: &mut Registry) {
     reg.area("preview", "The model and texture previews: one asset in a tab of its own");
     reg.cmd(
@@ -703,6 +1124,36 @@ pub fn register(reg: &mut Registry) {
         Spec::view("library.view", "Opens a library tab, picks its entry or answers what it shows.")
             .example("kind=texture_library action=select item=wood_table"),
         library,
+    );
+    reg.cmd(
+        Spec::write(
+            "library.set",
+            "Changes what a library entry is described by: a texture's description, a sound's parameters, a light animation's properties and keys.",
+        )
+        .example("kind=texture_library item=wpn\\wpn_ak74 set={\"format\":\"DXT5\",\"mips\":false}"),
+        library_set,
+    );
+    reg.cmd(
+        Spec::view("library.play", "Plays or stops a sound's game sound or a light animation in its tab.")
+            .example("kind=sound_library action=play item=weapons\\ak74_shoot"),
+        library_play,
+    );
+    reg.cmd(
+        Spec::write(
+            "library.import",
+            "Brings pictures in as textures of the library: copied into the import folder and imported, as a job.",
+        )
+        .destroys_with(&["overwrite"])
+        .example("from=D:\\art\\wood_table.png"),
+        library_import,
+    );
+    reg.cmd(
+        Spec::write(
+            "library.rebuild",
+            "Makes the game texture or the game sound of an entry again from its source.",
+        )
+        .example("kind=sound_library item=weapons\\ak74_shoot"),
+        library_rebuild,
     );
     reg.cmd(
         Spec::read("shot.asset", "A picture of an asset: its thumbnail, or the model rendered.")
@@ -723,7 +1174,7 @@ mod tests {
         let t: TextureParams = serde_json::from_value(json!({ "action": "open", "mip": 2 })).unwrap();
         assert_eq!((t.action, t.mip), (TextureAction::Open, Some(2)));
         assert!(
-            serde_json::from_value::<LibraryParams>(json!({ "kind": "texture_library", "x": 1 })).is_err()
+            serde_json::from_value::<LibraryParams>(json!({ "kind": "texture_library", "z": 1 })).is_err()
         );
     }
 }

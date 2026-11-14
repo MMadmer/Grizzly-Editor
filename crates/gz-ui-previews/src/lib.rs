@@ -54,12 +54,14 @@ pub mod pending;
 pub mod texture;
 pub mod texture_load;
 
-use gz_app::{Action, DocCx, ShellBuilder, args};
+use gz_app::{Action, ActionCx, DocCx, Enabled, Scope, ShellBuilder, args};
 use gz_editor::Registry;
+use gz_editor::{Args, Value, json};
 use gz_ui::Icon;
 use gz_ui::dialog::{self, Answer, ConfirmSpec};
 
-use crate::library::{lanim, sounds, textures};
+use crate::library::stores::LibraryFacts;
+use crate::library::{keys, lanim, sounds, textures};
 use crate::paths::EditorDirs;
 
 fn asker(cx: &DocCx<'_>) -> dialog::Asker {
@@ -185,6 +187,240 @@ pub(crate) fn synchronize_sounds(cx: &mut DocCx<'_>) {
     });
 }
 
+/// The Texture Library's type filter, one checkable action per kind.
+pub(crate) const TYPE_ACTIONS: [&str; 5] = [
+    "library.type_images",
+    "library.type_cube_maps",
+    "library.type_bump_maps",
+    "library.type_normal_maps",
+    "library.type_terrain",
+];
+
+fn facts(cx: &ActionCx<'_>) -> std::sync::Arc<LibraryFacts> {
+    LibraryFacts::of(cx.editor)
+}
+
+/// The type filter as it stands with the kind at `i` turned over: the words the list shows.
+fn types_toggled(cx: &ActionCx<'_>, i: usize) -> Args {
+    let mut on = facts(cx).tex().types;
+    if let Some(t) = on.get_mut(i) {
+        *t = !*t;
+    }
+    let words: Vec<&str> = textures::TYPE_WORDS.iter().zip(on).filter(|(_, v)| *v).map(|(w, _)| *w).collect();
+    let mut a = args(&[("kind", "texture_library")]);
+    a.insert("types".into(), json!(words));
+    a
+}
+
+macro_rules! type_action {
+    ($id:expr, $title:expr, $i:expr) => {
+        Action::new($id, $title, "Libraries", "library.view")
+            .scope(Scope::Tab(&["texture_library"]))
+            .args(|cx| types_toggled(cx, $i))
+            .checked(|cx| facts(cx).tex().types.get($i).copied().unwrap_or(true))
+            .hidden_from_palette()
+    };
+}
+
+const TYPE_ACTION_TABLE: [Action; 5] = [
+    type_action!("library.type_images", "Images", 0),
+    type_action!("library.type_cube_maps", "Cube Maps", 1),
+    type_action!("library.type_bump_maps", "Bump Maps", 2),
+    type_action!("library.type_normal_maps", "Normal Maps", 3),
+    type_action!("library.type_terrain", "Terrain", 4),
+];
+
+const SOUNDS: Scope = Scope::Tab(&["sound_library"]);
+const LANIMS: Scope = Scope::Tab(&["light_animations"]);
+
+fn on_tab(cx: &ActionCx<'_>, kind: &str, why: &'static str) -> Option<Enabled> {
+    (cx.kind != kind).then_some(Enabled::Off(why))
+}
+
+fn args_set(kind: &str, set: Value) -> Args {
+    let mut a = args(&[("kind", kind)]);
+    a.insert("set".into(), set);
+    a.insert("save".into(), json!(false));
+    a
+}
+
+/// The actions of the sound and light animation tabs: what their toolbars press.
+fn tab_actions() -> Vec<Action> {
+    const SOUND: &str = "sound_library";
+    const LANIM: &str = "light_animations";
+    const NO_SOUND_TAB: &str = "Open the Sound Library first.";
+    const NO_LANIM_TAB: &str = "Open Light Animations first.";
+    vec![
+        Action::new("library.play_sound", "Play", "Libraries", "library.play")
+            .icon(Icon::Play)
+            .scope(SOUNDS)
+            .args(|_| args(&[("kind", SOUND), ("action", "play")]))
+            .enabled(|cx| {
+                on_tab(cx, SOUND, NO_SOUND_TAB).unwrap_or_else(|| {
+                    let f = facts(cx).sound();
+                    if f.has_game_sound {
+                        Enabled::On
+                    } else if f.selected {
+                        Enabled::Off("This description has no game sound (.ogg) yet.")
+                    } else {
+                        Enabled::Off("Pick a sound first.")
+                    }
+                })
+            }),
+        Action::new("library.stop_sound", "Stop", "Libraries", "library.play")
+            .icon(Icon::Stop)
+            .scope(SOUNDS)
+            .args(|_| args(&[("kind", SOUND), ("action", "stop")]))
+            .enabled(|cx| {
+                on_tab(cx, SOUND, NO_SOUND_TAB)
+                    .unwrap_or_else(|| Enabled::when(facts(cx).sound().playing, "Nothing is playing."))
+            }),
+        Action::new("library.auto_play", "Auto Play", "Libraries", "library.view")
+            .icon(Icon::SoundSource)
+            .scope(SOUNDS)
+            .args(|cx| {
+                let mut a = args(&[("kind", SOUND)]);
+                a.insert("auto_play".into(), json!(!facts(cx).sound().auto_play));
+                a
+            })
+            .checked(|cx| facts(cx).sound().auto_play)
+            .enabled(|cx| on_tab(cx, SOUND, NO_SOUND_TAB).unwrap_or(Enabled::On)),
+        Action::new("library.rebuild_sound", "Rebuild", "Libraries", "library.rebuild")
+            .icon(Icon::Refresh)
+            .scope(SOUNDS)
+            .args(|_| args(&[("kind", SOUND)]))
+            .enabled(|cx| {
+                on_tab(cx, SOUND, NO_SOUND_TAB).unwrap_or_else(|| {
+                    let f = facts(cx).sound();
+                    if f.read_only {
+                        Enabled::Off("The sound folder cannot be written.")
+                    } else if f.saving {
+                        Enabled::Off("The library is saving.")
+                    } else {
+                        Enabled::when(f.selected, "Pick a sound first.")
+                    }
+                })
+            }),
+        Action::new("library.reload_lanims", "Reload", "Libraries", "library.reload")
+            .icon(Icon::Reload)
+            .scope(LANIMS)
+            .args(|_| args(&[("kind", LANIM)]))
+            .reply(lanim::reload_reply)
+            .enabled(|cx| on_tab(cx, LANIM, NO_LANIM_TAB).unwrap_or(Enabled::On)),
+        Action::new("library.alpha", "Alpha", "Libraries", "library.view")
+            .icon(Icon::Eye)
+            .scope(LANIMS)
+            .args(|cx| {
+                let mut a = args(&[("kind", LANIM)]);
+                a.insert("alpha".into(), json!(!facts(cx).lanim().alpha));
+                a
+            })
+            .checked(|cx| facts(cx).lanim().alpha)
+            .enabled(|cx| on_tab(cx, LANIM, NO_LANIM_TAB).unwrap_or(Enabled::On)),
+        Action::new("library.previous_key", "Previous Key", "Libraries", "library.view")
+            .icon(Icon::ChevronLeft)
+            .scope(LANIMS)
+            .args(|_| args(&[("kind", LANIM), ("key", "previous")]))
+            .enabled(|cx| {
+                on_tab(cx, LANIM, NO_LANIM_TAB)
+                    .unwrap_or_else(|| Enabled::when(facts(cx).lanim().selected, "Pick a light animation first."))
+            }),
+        Action::new("library.next_key", "Next Key", "Libraries", "library.view")
+            .icon(Icon::ChevronRight)
+            .scope(LANIMS)
+            .args(|_| args(&[("kind", LANIM), ("key", "next")]))
+            .enabled(|cx| {
+                on_tab(cx, LANIM, NO_LANIM_TAB)
+                    .unwrap_or_else(|| Enabled::when(facts(cx).lanim().selected, "Pick a light animation first."))
+            }),
+        Action::new("library.add_key", "Add Key", "Libraries", "library.set")
+            .icon(Icon::Plus)
+            .scope(LANIMS)
+            .args(|cx| {
+                let f = facts(cx).lanim();
+                args_set(LANIM, json!({ "keys": { f.pointer.to_string(): keys::color_text(f.color) } }))
+            })
+            .enabled(|cx| {
+                on_tab(cx, LANIM, NO_LANIM_TAB).unwrap_or_else(|| {
+                    let f = facts(cx).lanim();
+                    if !f.selected {
+                        Enabled::Off("Pick a light animation first.")
+                    } else {
+                        Enabled::when(!f.on_key, "There is a key at this frame already.")
+                    }
+                })
+            }),
+        Action::new("library.delete_key", "Delete Key", "Libraries", "library.set")
+            .icon(Icon::Minus)
+            .scope(LANIMS)
+            .args(|cx| args_set(LANIM, json!({ "keys": { facts(cx).lanim().pointer.to_string(): null } })))
+            .enabled(|cx| {
+                on_tab(cx, LANIM, NO_LANIM_TAB).unwrap_or_else(|| {
+                    let f = facts(cx).lanim();
+                    if f.on_key && f.keys > 1 {
+                        Enabled::On
+                    } else if f.on_key {
+                        Enabled::Off("An animation keeps at least one key.")
+                    } else {
+                        Enabled::Off("There is no key at this frame.")
+                    }
+                })
+            }),
+        Action::new("library.key_earlier", "Move Key Earlier", "Libraries", "library.set")
+            .icon(Icon::Back)
+            .scope(LANIMS)
+            .args(|cx| {
+                let f = facts(cx).lanim();
+                args_set(
+                    LANIM,
+                    json!({ "move_key": { "from": f.pointer, "to": f.free_before.unwrap_or(f.pointer), "follow": true } }),
+                )
+            })
+            .enabled(|cx| {
+                on_tab(cx, LANIM, NO_LANIM_TAB).unwrap_or_else(|| {
+                    Enabled::when(
+                        facts(cx).lanim().free_before.is_some(),
+                        "There is no key here with a free frame before it.",
+                    )
+                })
+            }),
+        Action::new("library.key_later", "Move Key Later", "Libraries", "library.set")
+            .icon(Icon::Forward)
+            .scope(LANIMS)
+            .args(|cx| {
+                let f = facts(cx).lanim();
+                args_set(
+                    LANIM,
+                    json!({ "move_key": { "from": f.pointer, "to": f.free_after.unwrap_or(f.pointer), "follow": true } }),
+                )
+            })
+            .enabled(|cx| {
+                on_tab(cx, LANIM, NO_LANIM_TAB).unwrap_or_else(|| {
+                    Enabled::when(
+                        facts(cx).lanim().free_after.is_some(),
+                        "There is no key here with a free frame after it.",
+                    )
+                })
+            }),
+        Action::new("library.play_animation", "Play", "Libraries", "library.play")
+            .icon(Icon::Play)
+            .scope(LANIMS)
+            .args(|_| args(&[("kind", LANIM), ("action", "play")]))
+            .enabled(|cx| {
+                on_tab(cx, LANIM, NO_LANIM_TAB)
+                    .unwrap_or_else(|| Enabled::when(facts(cx).lanim().selected, "Pick a light animation first."))
+            }),
+        Action::new("library.stop_animation", "Stop", "Libraries", "library.play")
+            .icon(Icon::Stop)
+            .scope(LANIMS)
+            .args(|_| args(&[("kind", LANIM), ("action", "stop")]))
+            .enabled(|cx| {
+                on_tab(cx, LANIM, NO_LANIM_TAB)
+                    .unwrap_or_else(|| Enabled::when(facts(cx).lanim().playing, "Nothing is playing."))
+            }),
+    ]
+}
+
 /// Plugs the model and texture previews, the three library tabs and the Libraries menu into the
 /// shell.
 pub fn install(b: &mut ShellBuilder) {
@@ -212,30 +448,33 @@ pub fn install(b: &mut ShellBuilder) {
             _ => a.args(|_| args(&[("action", "open"), ("doc", sounds::KIND), ("kind", sounds::KIND)])),
         });
     }
-    // the library and New Textures share one tab: the library gives way unless it holds
-    // unsaved changes, which the shell asks about first
+    // the library and New Textures share one tab: Check New Textures looks in the import folder
+    // and turns it into New Textures (the library gives way unless it holds unsaved changes, which
+    // the shell asks about first)
     b.action(
-        Action::new("library.check_textures", "Check New Textures", "Libraries", "ui.tab")
+        Action::new("library.check_textures", "Check New Textures", "Libraries", "library.view")
             .icon(Icon::Search)
-            .args(|_| {
-                args(&[
-                    ("action", "open"),
-                    ("kind", textures::KIND),
-                    ("path", "import"),
-                    ("source", "import"),
-                ])
-            }),
+            .args(|_| args(&[("kind", "texture_library"), ("action", "check")]))
+            .enabled(|cx| Enabled::when(!facts(cx).tex().read_only, "The texture folder cannot be written.")),
     );
     b.action(
         Action::new("library.sync_textures", "Synchronize Textures...", "Libraries", "library.sync")
             .icon(Icon::Refresh)
-            .args(|_| args(&[("kind", "textures")])),
+            .args(|_| args(&[("kind", "textures")]))
+            .enabled(|cx| Enabled::when(!facts(cx).tex().read_only, "The texture folder cannot be written.")),
     );
     b.action(
         Action::new("library.sync_sounds", "Synchronize Sounds...", "Libraries", "library.sync")
             .icon(Icon::Refresh)
-            .args(|_| args(&[("kind", "sounds")])),
+            .args(|_| args(&[("kind", "sounds")]))
+            .enabled(|cx| Enabled::when(!facts(cx).sound().read_only, "The sound folder cannot be written.")),
     );
+    for action in TYPE_ACTION_TABLE {
+        b.action(action);
+    }
+    for action in tab_actions() {
+        b.action(action);
+    }
     // the menu opens the libraries; what they do by hand is under each tab's More
     for (order, id) in
         ["library.light_animations", "library.textures", "library.sounds"].into_iter().enumerate()

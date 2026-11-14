@@ -4,9 +4,11 @@
 //! Sound Library the descriptions of `rawdata\sounds`. Lists come from a walk on the IO pool;
 //! edits live in a `Store` per library with undo and are saved explicitly.
 
+pub mod keys;
 pub mod lanim;
 pub mod list;
 pub mod sounds;
+pub mod stores;
 pub mod texsync;
 pub mod textures;
 

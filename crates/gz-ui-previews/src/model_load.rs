@@ -13,27 +13,45 @@ use gz_render::{Aabb, MaterialTable, MeshData, object_rest, visual_pose};
 
 use crate::loader::{Found, Sources};
 
-/// Where `preview.model` looks: the editor's file system (and the project) or the linked game.
+/// Where a model is looked for: the open project's files, the editor's library (the project's
+/// and the editor's own folders), or the linked game's. One typed value both the model tab and
+/// whoever opens it share; the word a command or a tab request carries is [`ModelSource::arg`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModelSource {
-    Visual,
+    /// A model of the open project.
+    Project,
+    /// A model of the project or the editor's library, by its engine name.
+    Library,
+    /// A visual of the linked game, by its engine name.
     Game,
 }
 
 impl ModelSource {
+    /// `library` (or nothing), `project` or `game`; `None` for any other word.
     #[must_use]
-    /// `game` for the linked game's visual; anything else (`project`, `library`) finds the name
-    /// in the project, the library, then the game.
-    pub fn parse(text: &str) -> Self {
-        if text.eq_ignore_ascii_case("game") { ModelSource::Game } else { ModelSource::Visual }
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "" | "library" => Some(ModelSource::Library),
+            "project" => Some(ModelSource::Project),
+            "game" => Some(ModelSource::Game),
+            _ => None,
+        }
     }
 
+    /// The word a command (`source=`) or a tab request carries.
     #[must_use]
     pub fn arg(self) -> &'static str {
         match self {
-            ModelSource::Visual => "library",
+            ModelSource::Project => "project",
+            ModelSource::Library => "library",
             ModelSource::Game => "game",
         }
+    }
+
+    /// Where a model of the linked game is shown from: a visual of the game, not of the editor.
+    #[must_use]
+    pub fn is_game(self) -> bool {
+        self == ModelSource::Game
     }
 }
 
@@ -158,14 +176,14 @@ pub async fn load(editor: Arc<Editor>, name: String, source: ModelSource) -> Mod
         .io(move || {
             let found = match source {
                 ModelSource::Game => sources.find_game_visual(&n),
-                ModelSource::Visual => sources.find_visual(&n),
+                ModelSource::Project | ModelSource::Library => sources.find_visual(&n),
             };
             match found {
                 Some(f) => {
                     let bytes = sources.read(&f);
                     (sources, Some((f, bytes)), false)
                 }
-                None if source == ModelSource::Visual => match sources.find_object(&n) {
+                None if !source.is_game() => match sources.find_object(&n) {
                     Some(f) => {
                         let bytes = sources.read(&f);
                         (sources, Some((f, bytes)), true)
@@ -472,8 +490,13 @@ mod tests {
         assert!(supported(MT::SKELETON_ANIM));
         assert!(!supported(MT::LOD));
         assert_eq!(visual_type_name(MT::TREE_PM), "Tree (PM)");
-        assert_eq!(ModelSource::parse("Game"), ModelSource::Game);
-        assert_eq!(ModelSource::parse(""), ModelSource::Visual);
+        assert_eq!(ModelSource::parse("game"), Some(ModelSource::Game));
+        assert_eq!(ModelSource::parse(""), Some(ModelSource::Library));
+        assert_eq!(ModelSource::parse("visual"), None);
+        assert_eq!(ModelSource::parse("darf"), None);
+        for s in [ModelSource::Project, ModelSource::Library, ModelSource::Game] {
+            assert_eq!(ModelSource::parse(s.arg()), Some(s));
+        }
     }
 
     #[test]

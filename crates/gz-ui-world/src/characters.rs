@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use egui::{Align, CornerRadius, Layout, Rect, ScrollArea, Ui, UiBuilder, Vec2, pos2};
-use gz_app::{DocCx, Document, OpenRequest, ShellBuilder};
+use gz_app::{DocCx, Document, ShellBuilder};
 use gz_base::{RelPath, Rev};
 use gz_characters::resolve::resolve;
 use gz_characters::{Character, Characters, Checker, Roster, text_collapse, text_in, text_raw, text_set};
@@ -26,6 +26,7 @@ use gz_project::Project;
 use gz_ui::dialog::{Answer, ConfirmSpec, confirm, unsaved_prompt};
 use gz_ui::text::{self, Clip};
 use gz_ui::{Font, Icon, Kind, Tone, Toolbar, palette};
+use gz_ui_previews::model_load::ModelSource;
 use parking_lot::Mutex;
 
 use crate::call::{self, args, s};
@@ -762,22 +763,27 @@ impl CharactersDoc {
         });
     }
 
+    /// Where the model viewer finds a visual of the form: the project's own, else the game's.
+    fn model_source(&self, visual: &str) -> ModelSource {
+        if self.lists.visuals.get(&visual.to_lowercase()).is_some_and(|e| e.extra == "project") {
+            ModelSource::Project
+        } else {
+            ModelSource::Game
+        }
+    }
+
     /// Opens the model viewer on the model of the form: the project's own, else the game's.
     fn preview(&self) {
         let visual = self.edit.visual.clone();
         if visual.is_empty() {
             return;
         }
-        let source = if self.lists.visuals.get(&visual.to_lowercase()).is_some_and(|e| e.extra == "project") {
-            "library"
-        } else {
-            "game"
-        };
+        let source = self.model_source(&visual);
         let ed = self.editor.clone();
         call::call_then(
             &self.editor,
             "preview.model",
-            args([("name", s(&visual)), ("source", s(source))]),
+            args([("name", s(&visual)), ("source", s(source.arg()))]),
             move |reply, ctx| {
                 if !call::ok(reply) {
                     gz_ui::state::toast(ctx, Tone::Error, &call::error_text(reply));
@@ -815,6 +821,12 @@ impl CharactersDoc {
             "count": self.roster.as_ref().map_or(0, |r| r.raw.len()),
             "problems": self.own,
             "conflicts": self.conflicts.iter().map(crate::char_form::conflict_line).collect::<Vec<_>>(),
+            // the model viewer beside the form: its source word and what it shows (`error` is empty
+            // when the model is shown); null until a frame has made it
+            "model": self.model.as_ref().map(|(key, d)| {
+                let source = key.split('|').next().unwrap_or_default();
+                json!({ "source": source, "viewer": d.mcp_state() })
+            }),
         })
     }
 
@@ -840,17 +852,12 @@ impl CharactersDoc {
         }
         let c = self.resolved_view();
         let visual = c.visual.clone();
-        let source = if self.lists.visuals.get(&visual.to_lowercase()).is_some_and(|e| e.extra == "project") {
-            "visual"
-        } else {
-            "darf"
-        };
-        let want = format!("{source}|{visual}");
+        let source = self.model_source(&visual);
+        let want = format!("{}|{visual}", source.arg());
         if self.model.as_ref().is_none_or(|(k, _)| *k != want) {
             self.model = (!visual.is_empty())
                 .then(|| {
-                    let mut req = OpenRequest::file("model", &visual);
-                    req.arg = Some(source.to_owned());
+                    let req = gz_ui_previews::model::open_request(&visual, source);
                     let doc = gz_ui_previews::model::factory(&self.editor, &req).ok().map(|mut d| {
                         if let Some(m) =
                             d.as_any_mut().and_then(|a| a.downcast_mut::<gz_ui_previews::model::ModelDoc>())

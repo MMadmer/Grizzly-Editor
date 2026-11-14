@@ -747,8 +747,8 @@ async fn ui_audit(editor: Arc<Editor>, p: AuditParams, _origin: Origin) -> Reply
         let window = p.id.filter(|i| !i.is_empty()).map(|i| shell.window_of(&i));
         let ppp = ctx.pixels_per_point();
         let keep = |surface: &str| window.as_ref().is_none_or(|w| surface == w || surface.ends_with(w.as_str()));
-        let (mut truncated, mut escaped, mut controls, mut loading) =
-            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let (mut truncated, mut escaped, mut controls, mut loading, mut errors) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for e in entries {
             match e {
                 audit::AuditEntry::Truncated { surface, full, shown, rect } if keep(&surface) => {
@@ -763,6 +763,9 @@ async fn ui_audit(editor: Arc<Editor>, p: AuditParams, _origin: Origin) -> Reply
                 audit::AuditEntry::Loading { surface, what, rect } if keep(&surface) => {
                     loading.push(json!({ "window": surface, "label": what, "rect": px_to_pt(rect, ppp) }));
                 }
+                audit::AuditEntry::Error { surface, title, text, rect } if keep(&surface) => {
+                    errors.push(json!({ "window": surface, "label": title, "text": text, "rect": px_to_pt(rect, ppp) }));
+                }
                 _ => {}
             }
         }
@@ -771,6 +774,7 @@ async fn ui_audit(editor: Arc<Editor>, p: AuditParams, _origin: Origin) -> Reply
             "escaped": escaped,
             "controls": controls,
             "loading": loading,
+            "errors": errors,
             "scale": scale(ppp),
         }))
     })
@@ -1096,7 +1100,7 @@ pub fn register(reg: &mut Registry) {
     reg.cmd(
         Spec::read(
             "ui.audit",
-            "What the next frame cut short, let escape or drew off, with the reasons, and what it still loads.",
+            "What the next frame cut short, let escape or drew off, with the reasons, what it still loads and the error states it shows in place of content.",
         ),
         ui_audit,
     );

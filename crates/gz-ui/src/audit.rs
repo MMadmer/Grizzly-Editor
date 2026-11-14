@@ -31,6 +31,8 @@ pub enum AuditEntry {
     },
     /// A surface that shows a busy line instead of its content: what it is waiting for.
     Loading { surface: SmolStr, what: String, rect: [f32; 4] },
+    /// A surface that shows an error state in place of its content: its title and its sentence.
+    Error { surface: SmolStr, title: String, text: String, rect: [f32; 4] },
 }
 
 #[derive(Default)]
@@ -136,6 +138,21 @@ pub fn loading(ctx: &Context, what: &str, rect: Rect) {
     if s.wanted {
         let surface = current(&s);
         s.entries.push(AuditEntry::Loading { surface, what: what.to_owned(), rect: px(ctx, rect) });
+    }
+}
+
+/// An error state was drawn in place of a surface's content.
+pub fn error(ctx: &Context, title: &str, text: &str, rect: Rect) {
+    let h = handle(ctx);
+    let mut s = h.0.lock();
+    if s.wanted {
+        let surface = current(&s);
+        s.entries.push(AuditEntry::Error {
+            surface,
+            title: title.to_owned(),
+            text: text.to_owned(),
+            rect: px(ctx, rect),
+        });
     }
 }
 

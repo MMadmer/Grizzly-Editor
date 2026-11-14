@@ -349,6 +349,17 @@ def run_ui_checks():
     check(v.get("count") == 2 and v.get("file", "").endswith("qa_courier.npcasset"), "U the list has both, the form its file",
           json.dumps(v)[:300])
     check(cmd("ui.list").get("active_tab") == "characters", "U Characters is the active tab")
+    # the model beside the form is the game's own visual: the viewer is told it is the game's (a typed source, not a
+    # word it does not know) and shows the model, not an error state
+    def viewer() -> dict:
+        return ((cmd("characters.view").get("model") or {}).get("viewer")) or {}
+
+    shown = qa.until(lambda: viewer().get("kind") or viewer().get("error"), 40)
+    m = cmd("characters.view").get("model") or {}
+    check(m.get("source") == "game", "U the embedded model is looked for in the linked game", json.dumps(m)[:300])
+    check(viewer().get("error", "x") == "" and viewer().get("kind") and viewer().get("tris", 0) > 0,
+          "U the embedded model is shown for a game model, not an error state", json.dumps(m)[:300])
+    check(not cmd("ui.audit", id="characters").get("errors"), "U the tab shows no error state", qa.short(cmd("ui.audit", id="characters").get("errors")))
     audit = cmd("ui.audit", id="characters")
     check(audit.get("ok") and not audit.get("escaped"), "U nothing escapes the Characters tab",
           json.dumps(audit.get("escaped"))[:400])

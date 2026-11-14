@@ -2,6 +2,8 @@
 //!
 //! - [`empty_state`] - what an empty list or panel says; fits the height it gets (drops the icon
 //!   first, then the margins). Returns whether its action was pressed.
+//! - [`error_state`] - the same in place of content that cannot be shown, in the error tone; an
+//!   audited frame reports it.
 //! - [`badge`], [`status_dot`], [`spinner`], [`busy_line`] - small marks of state.
 //! - [`banner`] - a toned bar with a sentence and up to two actions; [`banner_list`] - one with a
 //!   short list under the sentence, an action per item (the problems of a file, each with its fix).
@@ -44,6 +46,29 @@ fn tone_text(p: &Palette, tone: Tone) -> egui::Color32 {
 /// region it gets. A short region drops the icon first, then the margins, and keeps the words.
 /// Returns whether the action was pressed.
 pub fn empty_state(ui: &mut Ui, icon: Icon, title: &str, text_: &str, action: Option<&str>) -> bool {
+    state_block(ui, icon, None, title, text_, action).0
+}
+
+/// What a surface says in place of its content when it cannot show it: the empty state's
+/// layout with the error icon in the error tone. An audited frame reports it (`ui.audit`
+/// `errors`), so a caller that looks at the surface knows it is not the content. Returns
+/// whether the action was pressed.
+pub fn error_state(ui: &mut Ui, title: &str, text_: &str, action: Option<&str>) -> bool {
+    let tone = palette(ui.ctx()).tone(Tone::Error);
+    let (pressed, rect) = state_block(ui, Icon::Error, Some(tone), title, text_, action);
+    crate::audit::error(ui.ctx(), title, text_, rect);
+    pressed
+}
+
+/// The block both states draw; the rectangle it took.
+fn state_block(
+    ui: &mut Ui,
+    icon: Icon,
+    icon_color: Option<egui::Color32>,
+    title: &str,
+    text_: &str,
+    action: Option<&str>,
+) -> (bool, Rect) {
     let p = palette(ui.ctx());
     let ctx = ui.ctx().clone();
     let avail = ui.available_size();
@@ -77,7 +102,7 @@ pub fn empty_state(ui: &mut Ui, icon: Icon, title: &str, text_: &str, action: Op
             ui.painter(),
             icon,
             Rect::from_min_size(pos2(cx - icon_side * 0.5, y), Vec2::splat(icon_side)),
-            p.text_muted,
+            icon_color.unwrap_or(p.text_muted),
         );
         y += icon_block;
     }
@@ -110,7 +135,7 @@ pub fn empty_state(ui: &mut Ui, icon: Icon, title: &str, text_: &str, action: Op
     }
     let used = Rect::from_min_size(origin, Vec2::new(avail.x, (y - origin.y + margin).max(0.0)));
     ui.allocate_rect(used, Sense::hover());
-    pressed
+    (pressed, used)
 }
 
 /// A small pill: a count, a state word. Muted reads on the raised colour, a tone on its tint.
@@ -147,7 +172,7 @@ pub fn status_dot(ui: &mut Ui, tone: Tone, tip: &str) {
 
 /// How often a spinner asks for its next frame: 30 a second turns it smoothly, and a window
 /// that showed one at every frame it could (160 a second) made a level compile beside it 30 %
-/// slower (docs/rust/STATE.md, "After phase 8c: the window while a job runs").
+/// slower.
 pub const SPINNER_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
 
 /// Paints the spinner centred in `rect`: three quarters of a ring, one turn a second. It is the

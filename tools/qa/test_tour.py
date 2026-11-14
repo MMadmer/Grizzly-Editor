@@ -5,7 +5,9 @@ menu is brought up over MCP at two sizes, and each is audited and pictured once.
 For each of them:
   - the editor says it is there (`ui.tab` / `ui.dialog` / `ui.popup` answer ok and `ui.list` names it); a surface
     the project cannot show (no GitHub repository for Releases, say) must refuse in a sentence, never crash;
-  - `ui.audit` finds nothing cut short and nothing that escaped its window (kit/audit.rs);
+  - `ui.audit` finds nothing cut short and nothing that escaped its window (kit/audit.rs), no busy line or busy
+    status (`loading`: a surface's busy line, a dialog footer's busy status, a card's busy line) and no error state in
+    place of the content (`errors`);
   - `shot.window` is a picture with the editor's size, nothing outside the window, and the dialog on top as `modal`.
 
 The two sizes are the ones the design is held to (docs/UI_DESIGN.md): 1707 x 912 pt at UI scale 1.5 and 1280 x 720 pt
@@ -26,8 +28,8 @@ import qa
 from qa import check, cmd
 
 SIZES = ((1707, 912, 1.5), (1280, 720, 1.0))
-# what a tab of each kind opens on: nothing for a tool tab, a file of the project or the linked game for the rest
-FILES = {"texture": "ui\\ui_icon_equipment", "model": "dynamics\\weapons\\wpn_ak74\\wpn_ak74"}
+# what a tab of each kind opens on: nothing for a tool tab, a file of the linked game for the rest
+FILES = {"model": "dynamics\\weapons\\wpn_ak74\\wpn_ak74"}
 
 
 def settled(label: str) -> None:
@@ -35,6 +37,13 @@ def settled(label: str) -> None:
     ready = qa.until(lambda: not cmd("ui.audit").get("loading"), 20)
     check(ready, "%s: shows its content within 20 s, not a busy line" % label,
           qa.short(cmd("ui.audit").get("loading")))
+
+
+def shows_content(label: str) -> None:
+    """The surface shows what it is for, not an error state in its place (`ui.audit` `errors`: the kit's full-surface
+    error state, "This model cannot be shown ..."). A picture of an error screen proves nothing about the surface."""
+    errors = cmd("ui.audit").get("errors") or []
+    check(not errors, "%s: shows no error state in place of its content" % label, qa.short(errors))
 
 
 def audited(label: str) -> None:
@@ -74,6 +83,12 @@ def open_tab(kind: str, project: str) -> dict:
         return cmd("ui.tab", action="open", kind=kind, path=made.get("path", ""))
     if kind == "pda":
         return cmd("pda.open")
+    if kind == "texture":
+        # a picture the tab can show: a texture of the linked game, found by the editor's own listing
+        listed = cmd("file.list", source="game", kind="dds", query="textures", limit=1)
+        files = listed.get("files", []) if listed.get("ok") else []
+        check(bool(files and files[0].get("path")), "A the linked game has a texture the tour can open", qa.short(listed))
+        return cmd("ui.tab", action="open", kind=kind, path=files[0]["path"] if files else "", source="game")
     if kind in FILES:
         return cmd("ui.tab", action="open", kind=kind, path=FILES[kind])
     return cmd("ui.tab", action="open", kind=kind)
@@ -92,6 +107,7 @@ def phase_a(project: str, tag: str, shots: str | None, contract: dict) -> None:
         check(active.split(":")[0] == kind.split(":")[0] or kind in ("pda", "beh") and active.startswith(kind[:2]),
               label + " comes up as the active tab", active)
         settled(label)
+        shows_content(label)
         audited(label)
         pictured(label, kept(shots, tag), "tab_%s" % kind.replace(":", "_"))
         opened.append(active)
@@ -111,6 +127,7 @@ def phase_b(tag: str, shots: str | None, contract: dict) -> None:
         shown = [d.get("id") for d in cmd("ui.list").get("dialogs", [])]
         check(dialog_id in shown, label + " is listed among the open dialogs", shown)
         settled(label)
+        shows_content(label)
         audited(label)
         pictured(label, kept(shots, tag), "dialog_%s" % dialog_id, modal=dialog_id)
         cmd("ui.dialog", action="close", id=dialog_id)

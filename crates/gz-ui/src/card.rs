@@ -2,6 +2,7 @@
 //!
 //! - [`card`] - a raised box as tall as what it holds, around one part of a surface, with a tone
 //!   strip while it asks for attention.
+//! - [`card_busy`] - a card's line while its part is still being worked out; the audit reports it.
 //! - [`page`] - a surface over the whole work area (the Start page): the base colour, 24 x 20 pt
 //!   margins, a body that scrolls.
 //! - [`page_card`] + [`card_footer`] per [`CardAction`] - a centred card on a page that asks a
@@ -57,6 +58,12 @@ pub fn card<R>(
     }
     ui.add_space(4.0);
     frame.inner
+}
+
+/// What a card says while the part it holds is still being worked out: a spinner and the stage,
+/// on one line. An audited frame reports it (`ui.audit` `loading`), like a surface's busy line.
+pub fn card_busy(ui: &mut Ui, stage: &str) {
+    crate::state::busy_line(ui, stage);
 }
 
 /// A surface over the whole of `ui`'s rectangle (the work area under the caption): the base

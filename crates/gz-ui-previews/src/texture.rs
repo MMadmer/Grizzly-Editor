@@ -616,9 +616,8 @@ impl Document for TextureDoc {
                     ui.new_child(UiBuilder::new().max_rect(canvas).layout(Layout::top_down(Align::Center)));
                 match other {
                     Some(t) => {
-                        state::empty_state(
+                        state::error_state(
                             &mut child,
-                            Icon::Warning,
                             "This texture cannot be shown",
                             &format!("{}: {}", t.name, t.error),
                             None,

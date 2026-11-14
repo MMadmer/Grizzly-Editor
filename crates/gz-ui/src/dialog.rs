@@ -335,7 +335,7 @@ impl Footer<'_> {
     }
 
     /// While a job runs: a spinner and its stage on the left. The job's stop is a labelled
-    /// button of the footer (`Stop <job>`).
+    /// button of the footer (`Stop <job>`). An audited frame reports it, like a busy line.
     pub fn busy(&mut self, stage: &str) {
         self.busy = true;
         let ctx = self.ui.ctx().clone();
@@ -360,6 +360,11 @@ impl Footer<'_> {
             stage,
             Some(room),
             Clip::End,
+        );
+        audit::loading(
+            &ctx,
+            stage,
+            Rect::from_min_max(pos2(x, self.rect.min.y), pos2(buttons_x.max(tx), self.rect.max.y)),
         );
     }
 
