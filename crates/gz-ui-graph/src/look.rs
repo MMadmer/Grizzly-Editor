@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use egui::{Color32, Id, Ui};
 use gz_nq::Catalog;
-use gz_ui::{Combo, Icon, Palette, PickItem, PickList, palette};
+use gz_ui::{Combo, Icon, Palette, PickItem, PickList, Tx, palette};
 
 /// The family a kind belongs to: what colours its header, its icon and its block on the minimap.
 /// A family says what a node is, never its state - state is the status tones'.
@@ -184,28 +184,31 @@ pub fn kind_desc(cat: &Catalog, kind: &str, behaviour: bool) -> String {
 }
 
 /// The kinds of a use mask as the kit's pick list rows, grouped by family: worked out once per
-/// catalog and kept.
+/// catalog, theme (the rows carry its family colours) and language and kept. A kind's title and
+/// description are the catalog's English, shown in the window's language.
 fn kind_items(ui: &Ui, cat: &Catalog, mask: u8, behaviour: bool) -> Arc<Vec<PickItem>> {
-    let id = Id::unique(("gz-ui-graph.kind_items", cat.generation, mask, behaviour));
+    let p = palette(ui.ctx());
+    let lang = gz_ui::i18n::lang(ui.ctx());
+    let id = Id::unique(("gz-ui-graph.kind_items", cat.generation, mask, behaviour, p.key(), lang));
     if let Some(v) = ui.ctx().data(|d| d.get_temp::<Arc<Vec<PickItem>>>(id)) {
         return v;
     }
-    let p = palette(ui.ctx());
     let mut rows: Vec<(usize, PickItem)> = cat
         .kinds_for(mask, behaviour)
         .into_iter()
         .map(|k| {
             let icon = kind_icon(cat, &k.id);
             let family = family_of(icon);
-            let first = first_sentence(&kind_desc(cat, &k.id, behaviour));
-            let item = PickItem::new(k.id.clone(), kind_title(cat, &k.id, behaviour))
+            let first = first_sentence(&Tx::ui_in("kind", kind_desc(cat, &k.id, behaviour)).text(ui.ctx()));
+            let item = PickItem::new(k.id.clone(), Tx::ui_in("kind", kind_title(cat, &k.id, behaviour)))
                 .icon(icon)
                 .tint(family_color(&p, family, 1.0))
-                .detail(if first.is_empty() { k.id.clone() } else { first });
+                .detail(Tx::raw(if first.is_empty() { k.id.clone() } else { first }));
             (family.order(), item)
         })
         .collect();
-    rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.label.cmp(&b.1.label)));
+    let ctx = ui.ctx().clone();
+    rows.sort_by_cached_key(|(order, it)| (*order, it.label.text(&ctx)));
     let v: Arc<Vec<PickItem>> = Arc::new(rows.into_iter().map(|(_, it)| it).collect());
     ui.ctx().data_mut(|d| d.insert_temp(id, v.clone()));
     v
@@ -232,11 +235,11 @@ pub fn kind_combo(
     kind: &mut String,
 ) -> bool {
     let items = kind_items(ui, cat, mask, behaviour);
-    let shown = kind_title(cat, kind, behaviour);
+    let shown = Tx::ui_in("kind", kind_title(cat, kind, behaviour));
     let w = ui.available_width();
     let current = kind.clone();
     let list = PickList::new(("gz-ui-graph.kind", id_salt), &items).current(&current).hint("Search kinds");
-    let picked = Combo::new(("gz-ui-graph.kind_combo", id_salt), &shown)
+    let picked = Combo::new(("gz-ui-graph.kind_combo", id_salt), shown)
         .icon(kind_icon(cat, kind))
         .width(w)
         .show(ui, list);
@@ -279,6 +282,25 @@ pub fn pretty(name: &str) -> String {
         out.push_str(&word);
     }
     if out.is_empty() { name.to_owned() } else { out }
+}
+
+/// A problem as the panels list it - `E007 node[slot]: ` then the validator's sentence - with the
+/// sentence in the window's language (its templates are written in the sentence's form).
+#[must_use]
+pub fn problem_line(ctx: &egui::Context, pr: &gz_nq::validate::NqProblem) -> String {
+    let mut s = pr.code.to_string();
+    if !pr.node.is_empty() {
+        s.push(' ');
+        s.push_str(&pr.node);
+    }
+    if !pr.slot.is_empty() {
+        s.push('[');
+        s.push_str(&pr.slot);
+        s.push(']');
+    }
+    s.push_str(": ");
+    s.push_str(&Tx::ui(pr.sentence()).text(ctx));
+    s
 }
 
 /// `3 nodes`, `1 error`.

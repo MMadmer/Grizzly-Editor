@@ -52,7 +52,7 @@ fn rows_of(ctx: &Context, key: Id, names: Names<'_>) -> Arc<Vec<PickItem>> {
     let mut items = Vec::with_capacity(len + 1);
     items.push(PickItem::new("", "None"));
     if let Some(all) = names.0 {
-        items.extend(all.iter().map(|t| PickItem::new(t.name.as_str(), t.name.as_str())));
+        items.extend(all.iter().map(|t| PickItem::new(t.name.as_str(), gz_ui::Tx::raw(t.name.as_str()))));
     }
     let items = Arc::new(items);
     ctx.data_mut(|d| d.insert_temp(key, Rows { list, len, items: items.clone() }));
@@ -82,8 +82,12 @@ pub fn is_up(ctx: &Context, key: &str) -> bool {
 pub fn texture_pick(ui: &mut Ui, key: &str, value: &str, names: Names<'_>) -> Option<String> {
     let ctx = ui.ctx().clone();
     let pick_id = ("gz-ui-previews.pick", key);
-    let shown = if value.is_empty() { "None" } else { gz_ui::grid::leaf_name(value) };
-    let combo = Combo::new(pick_id, shown).placeholder(value.is_empty()).tip(value);
+    let shown = if value.is_empty() {
+        gz_ui::Tx::from("None")
+    } else {
+        gz_ui::Tx::raw(gz_ui::grid::leaf_name(value))
+    };
+    let combo = Combo::new(pick_id, shown).placeholder(value.is_empty()).tip(gz_ui::Tx::raw(value));
     let popup = combo.popup_id();
     let open = Popup::is_id_open(&ctx, popup);
     let resp = combo.field(ui, open);

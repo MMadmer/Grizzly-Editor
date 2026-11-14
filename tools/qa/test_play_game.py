@@ -4,6 +4,11 @@ COPY of a project, in a game root of the editor's own, on a hidden desktop, with
 
     python tools/qa/test_play_game.py --project D:\\XFinedProjects\\Test [--scene <scene>] [--keep-log <file>]
 
+With --scene l01_escape - a level the linked game has - nothing is compiled: Play builds the project's module into
+the root's modules\\<id> the way a module build does, gives the actor a Player Start where the scene's camera looks
+(in Play's copy of the module), and starts a new game (-start server(all/single/alife/new)) on the game's own level
+with the module mounted; the run wants the module there, no level staged, and the level loaded.
+
 What it does:
   1. copies the project into the system temp folder and puts a scene of the repository into it (--scene, SCENES:
      mp_test by default - one arena, one light -, l03u_agr_underground - multiple-usage models with their LODs,
@@ -98,6 +103,8 @@ SCENES = {
                         "options": {"build.quality": "custom", "build.pixels_per_meter": 10,
                                     "build.jitter_samples": "1"}, "flags": ""},
 }
+# a level the linked game has: Play plays the module over it, nothing is built
+SCENES["l01_escape"] = {"stock": True, "level": "l01_escape"}
 SCENE = "mp_test"
 # the settings the game's own QA forces (Run-NqQa.ps1, Update-QaUserLtx): a window, no sound, no pause
 USER_LTX = {"renderer": "renderer_r4", "vid_mode": "1024x768", "vid_window_mode": "st_opt_windowed",
@@ -105,7 +112,7 @@ USER_LTX = {"renderer": "renderer_r4", "vid_mode": "1024x768", "vid_window_mode"
             "snd_volume_music": "0", "snd_volume_eff": "0"}
 # what the game's log says once the level is in: the new game made of editor.spawn, the level's own files read
 LOADED = {
-    "the new game is created from editor.spawn": "New game is successfully created!",
+    "the new game is created": "New game is successfully created!",
     "the player is made of the spawn's actor": "# New player created.",
     "the client is connected": "client : connection accepted",
     "the level's collision model is built for the level": "cdb_cache\\<level>\\objspace.bin",
@@ -307,10 +314,24 @@ def run_scene(project: str, root: str, scene: str, keep_log: str | None) -> None
     cfg = SCENES[scene]
     level = cfg["level"]
     loaded = {k: v.replace("<level>", level) for k, v in LOADED.items()}
+    os.makedirs(os.path.join(project, "rawdata", "levels"), exist_ok=True)
     shutil.copy2(os.path.join(qa.REPO, "rawdata", "levels", scene + ".level"),
                  os.path.join(project, "rawdata", "levels", scene + ".level"))
     shutil.copytree(os.path.join(qa.REPO, "rawdata", "levels", scene), os.path.join(project, "rawdata", "levels", scene),
                     dirs_exist_ok=True)
+    if cfg.get("stock"):
+        opened = cmd("scene.open", path="rawdata/levels/%s.level" % scene, discard=True, timeout=280)
+        if check(opened.get("ok"), "the scene of a level the game has opens", qa.short(opened)):
+            wait_idle(120)
+            st = cmd("level.status", timeout=120)
+            check(st.get("stock") is True, "level.status: the level is the game's, nothing to compile", qa.short(st))
+            # what an earlier build of the project left in the level's folder would replace the game's own
+            if st.get("replaces"):
+                gone = qa.gate("destroy", "level.clean")
+                check(gone.get("ok"), "the files an earlier build left over the game's level are removed (%d)"
+                      % len(gone.get("removed") or []), qa.short(gone))
+            play_in_place(root, level, loaded, keep_log, stock=True)
+        return
     if not prepare_scene(scene):
         return
     t = time.monotonic()
@@ -344,7 +365,7 @@ def no_way_named(answer: dict) -> list[str]:
     return [k for a in (answer, answer.get("run") or {}) for k in GONE if k in a]
 
 
-def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str | None) -> bool:
+def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str | None, stock: bool = False) -> bool:
     """Play's root made, Play started on it - the installed engine where it is -, the level loaded, the game
     stopped. False when Play did not start the game."""
     # Play makes its root only in an empty folder (play_root.txt marks it its own): made first, then the root's own
@@ -367,16 +388,26 @@ def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str |
           "the root's fsgame.ltx names the installed archives: " + arch.strip())
     user_ltx(root)
     t0, play_wall = time.monotonic(), time.time()
-    play = cmd("level.play", action="start", root=root, params="-i -always_active -silent_error_mode -force_flushlog")
+    play = cmd("level.play", action="start", root=root, params="-i -always_active -silent_error_mode -force_flushlog",
+               timeout=280)
     if not check(play.get("ok") and play.get("started") and play.get("exe", "").lower() == engine.lower(),
                  "Play starts the installed engine in place on its root", qa.short(play)):
         return False
     check(not no_way_named(play), "Play's answer names no way to run the game", str(no_way_named(play)))
     print("play: " + qa.short(play), flush=True)
     staged = os.path.join(root, "gamedata", "levels", level)
-    check(all(os.path.isfile(os.path.join(staged, f)) for f in ("level", "level.ai", "level.geom")) and
-          os.path.isfile(os.path.join(root, "gamedata", "spawns", "editor.spawn")),
-          "the level, its level.ai and editor.spawn are staged in the game root")
+    if stock:
+        module = (play.get("module_dir") or "").replace("/", "\\")
+        check(play.get("way") == "module" and os.path.isfile(os.path.join(module, "mod.ltx"))
+              and "-start server(all/single/alife/new)" in str(play.get("command")),
+              "Play plays the module: it is in the root's modules\\<id> and a new game starts over the game's level",
+              qa.short(play))
+        check(not os.path.isdir(staged) and not os.path.isfile(os.path.join(root, "gamedata", "spawns", "editor.spawn")),
+              "nothing of the level is staged: the game loads its own")
+    else:
+        check(all(os.path.isfile(os.path.join(staged, f)) for f in ("level", "level.ai", "level.geom")) and
+              os.path.isfile(os.path.join(root, "gamedata", "spawns", "editor.spawn")),
+              "the level, its level.ai and editor.spawn are staged in the game root")
     text, loaded_at = "", None
     while time.monotonic() - t0 < GAME_LIMIT:
         text = engine_log(root)

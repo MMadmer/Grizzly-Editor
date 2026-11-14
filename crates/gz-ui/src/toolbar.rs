@@ -20,14 +20,15 @@ use egui::{
 };
 
 use crate::audit;
-use crate::button::{Kind, icon_button_sized, segmented};
+use crate::button::{Kind, icon_button_sized};
 use crate::font::Font;
+use crate::i18n::Tx;
 use crate::icons::{self, Icon};
 use crate::menu::{self, MenuItem, menu_item, menu_popup, take_popup_request};
 use crate::search::SearchField;
 use crate::text::{self, Clip};
 use crate::theme::{Palette, Tone, metrics, palette};
-use crate::units::{button_width, em};
+use crate::units::{button_width_str, em};
 
 /// How a toolbar sits.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -311,7 +312,7 @@ enum Entry<'a> {
     Action { id: Id, icon: Icon, label: String, tip: String, enabled: bool, checked: bool },
     Menu { id: Id, icon: Icon, label: String, tip: String, enabled: bool },
     Split { id: Id, icon: Icon, label: String, tip: String, enabled: bool },
-    Search { text: &'a mut String, hint: String },
+    Search { text: &'a mut String, hint: Tx<'static> },
     Status { text: String, tone: Tone },
     Segmented { id: Id, caption: String, options: Vec<String>, current: usize, enabled: bool },
 }
@@ -419,7 +420,7 @@ fn tool_button(ui: &mut Ui, rect: Rect, id: Id, f: &Face<'_>) -> Response {
             crate::button::toggle_line(painter, rect, p.accent_bright);
         }
         let font_id = font.id();
-        let text_w = if f.label.is_empty() { 0.0 } else { text::width(ui.ctx(), &font_id, f.label) };
+        let text_w = if f.label.is_empty() { 0.0 } else { text::measure(ui.ctx(), &font_id, f.label) };
         let icon_w =
             if f.icon == Icon::None { 0.0 } else { f.glyph + if f.label.is_empty() { 0.0 } else { 6.0 } };
         let caret_w =
@@ -658,10 +659,13 @@ impl<'u, 'a> Toolbar<'u, 'a> {
     }
 
     /// A text on the row in a tone's colour: the problems count, a state.
-    pub fn status(&mut self, text_: &str, tone: Tone) {
+    pub fn status<'t>(&mut self, text_: impl Into<Tx<'t>>, tone: Tone) {
+        let text_tx = text_.into();
+        let text_ = text_tx.get(&self.ctx).into_owned();
+        let text_: &str = &text_;
         let id = self.id.with(("status", self.serial));
         self.serial += 1;
-        let w = text::width(&self.ctx, &Font::Body.id(), text_);
+        let w = text::measure(&self.ctx, &Font::Body.id(), text_);
         let item = PlanItem { kind: ItemKind::Status, w_full: w, w_icon: w, ..PlanItem::default() };
         match self.place(id, item) {
             Some((x, w, _)) => {
@@ -678,7 +682,7 @@ impl<'u, 'a> Toolbar<'u, 'a> {
                     pos2(x, y),
                     Align2::LEFT_CENTER,
                     color,
-                    text_,
+                    text_tx.borrow(),
                     Some(w + 0.5),
                     Clip::End,
                 );
@@ -691,16 +695,20 @@ impl<'u, 'a> Toolbar<'u, 'a> {
     /// A button: an icon, a label (folded to the icon when the row is short), its tip; off, the
     /// tip says why. Returns whether it was pressed, here or from the overflow menu.
     #[allow(clippy::too_many_arguments)]
-    pub fn action(
+    pub fn action<'t>(
         &mut self,
         id_salt: &str,
         icon: Icon,
-        label: &str,
-        tip: &str,
+        label: impl Into<Tx<'t>>,
+        tip: impl Into<Tx<'t>>,
         enabled: bool,
         checked: bool,
         kind: Kind,
     ) -> bool {
+        let label = label.into().text(&self.ctx);
+        let label: &str = &label;
+        let tip = tip.into().text(&self.ctx);
+        let tip: &str = &tip;
         let id = self.id.with(("action", id_salt));
         if kind == Kind::Primary {
             crate::button::note_primary(&self.ctx, self.id, "toolbar", label);
@@ -708,7 +716,7 @@ impl<'u, 'a> Toolbar<'u, 'a> {
         let w_full = if label.is_empty() {
             self.button
         } else {
-            button_width(&self.ctx, label, kind, icon != Icon::None, 0.0)
+            button_width_str(&self.ctx, label, kind, icon != Icon::None, 0.0)
         };
         let w_icon = if icon == Icon::None { w_full } else { self.button };
         let item = PlanItem {
@@ -757,20 +765,24 @@ impl<'u, 'a> Toolbar<'u, 'a> {
     /// opens it by. Off, it keeps its caret and width, its tip says why, and it never opens.
     /// `add` draws the menu's rows while it is open; returns whether it is open.
     #[allow(clippy::too_many_arguments)]
-    pub fn menu(
+    pub fn menu<'t>(
         &mut self,
         id_salt: &str,
         icon: Icon,
-        label: &str,
-        tip: &str,
+        label: impl Into<Tx<'t>>,
+        tip: impl Into<Tx<'t>>,
         request: Option<&str>,
         enabled: bool,
         add: impl FnOnce(&mut Ui),
     ) -> bool {
+        let label = label.into().text(&self.ctx);
+        let label: &str = &label;
+        let tip = tip.into().text(&self.ctx);
+        let tip: &str = &tip;
         let id = self.id.with(("menu", id_salt));
         let popup_id = id.with("popup");
         let caret = metrics::GLYPH_STATUS + 4.0;
-        let w_full = button_width(&self.ctx, label, Kind::Ghost, icon != Icon::None, 0.0) + caret;
+        let w_full = button_width_str(&self.ctx, label, Kind::Ghost, icon != Icon::None, 0.0) + caret;
         let w_icon = if icon == Icon::None { w_full } else { self.button + caret };
         let item = PlanItem {
             kind: ItemKind::Menu,
@@ -838,16 +850,21 @@ impl<'u, 'a> Toolbar<'u, 'a> {
     /// plus `<label> Options`. `add` draws the menu's rows while it is open. Returns whether the
     /// action was pressed.
     #[allow(clippy::too_many_arguments)]
-    pub fn split(
+    pub fn split<'t>(
         &mut self,
         id_salt: &str,
         icon: Icon,
-        label: &str,
-        tip: &str,
+        label: impl Into<Tx<'t>>,
+        tip: impl Into<Tx<'t>>,
         enabled: bool,
         kind: Kind,
         add: impl FnOnce(&mut Ui),
     ) -> bool {
+        let label = label.into().text(&self.ctx);
+        let label: &str = &label;
+        let tip = tip.into().text(&self.ctx);
+        let tip: &str = &tip;
+        let more_tip = crate::i18n::t(&self.ctx, "More options");
         let id = self.id.with(("split", id_salt));
         if kind == Kind::Primary {
             crate::button::note_primary(&self.ctx, self.id, "toolbar", label);
@@ -858,7 +875,7 @@ impl<'u, 'a> Toolbar<'u, 'a> {
         let main_w = if label.is_empty() {
             self.button
         } else {
-            button_width(&self.ctx, label, kind, icon != Icon::None, 0.0)
+            button_width_str(&self.ctx, label, kind, icon != Icon::None, 0.0)
         };
         let w_full = main_w + seam + chevron;
         let w_icon = if icon == Icon::None { w_full } else { self.button + seam + chevron };
@@ -916,7 +933,7 @@ impl<'u, 'a> Toolbar<'u, 'a> {
                     glyph: metrics::GLYPH_STATUS,
                     label: "",
                     title: "",
-                    tip: "More options",
+                    tip: &more_tip,
                     kind,
                     enabled: true,
                     checked: Popup::is_id_open(&self.ctx, popup_id),
@@ -938,7 +955,8 @@ impl<'u, 'a> Toolbar<'u, 'a> {
 
     /// A search field: at least `min_em` wide, up to twice that when the row has room. Returns
     /// whether the text changed.
-    pub fn search(&mut self, text_: &'a mut String, hint: &str, min_em: f32) -> bool {
+    pub fn search<'t>(&mut self, text_: &'a mut String, hint: impl Into<Tx<'t>>, min_em: f32) -> bool {
+        let hint = hint.into();
         let id = self.id.with(("search", self.serial));
         self.serial += 1;
         let w = em(min_em);
@@ -951,7 +969,7 @@ impl<'u, 'a> Toolbar<'u, 'a> {
             }
             None => {
                 if self.overflow_open {
-                    self.entries.push(Entry::Search { text: text_, hint: hint.to_owned() });
+                    self.entries.push(Entry::Search { text: text_, hint: hint.into_owned() });
                 }
                 false
             }
@@ -961,19 +979,24 @@ impl<'u, 'a> Toolbar<'u, 'a> {
     /// One choice out of a few under a caption; in the overflow its choices are radio items
     /// under the caption. Returns whether the choice changed.
     #[allow(clippy::too_many_arguments)]
-    pub fn segmented(
+    pub fn segmented<'t, L: Clone + Into<Tx<'t>>>(
         &mut self,
         id_salt: &str,
-        caption: &str,
+        caption: impl Into<Tx<'t>>,
         current: &mut usize,
-        labels: &[&str],
-        tip: &str,
+        labels: &[L],
+        tip: impl Into<Tx<'t>>,
         enabled: bool,
     ) -> bool {
+        let caption = caption.into().text(&self.ctx);
+        let tip = tip.into().text(&self.ctx);
+        let shown: Vec<String> = crate::button::txs(labels).iter().map(|l| l.text(&self.ctx)).collect();
+        let labels: Vec<&str> = shown.iter().map(String::as_str).collect();
+        let labels: &[&str] = &labels;
         let id = self.id.with(("segmented", id_salt));
         let font = Font::Body.id();
         // the width button::segmented takes at its natural size
-        let w: f32 = labels.iter().map(|l| 20.0 + text::width(&self.ctx, &font, l)).sum();
+        let w: f32 = labels.iter().map(|l| 20.0 + text::measure(&self.ctx, &font, l)).sum();
         let item = PlanItem { kind: ItemKind::Segmented, w_full: w, w_icon: w, ..PlanItem::default() };
         let mut changed = false;
         if let Some((pid, choice)) = self.state.pending_segment
@@ -992,16 +1015,16 @@ impl<'u, 'a> Toolbar<'u, 'a> {
                 if !enabled {
                     child.disable();
                 }
-                changed |= segmented(&mut child, current, labels, None);
+                changed |= crate::button::segmented_str(&mut child, current, labels, None);
                 if !tip.is_empty() {
-                    self.ui.interact(rect, id.with("tip"), Sense::hover()).on_hover_text(tip);
+                    self.ui.interact(rect, id.with("tip"), Sense::hover()).on_hover_text(tip.as_str());
                 }
             }
             None => {
                 if self.overflow_open {
                     self.entries.push(Entry::Segmented {
                         id,
-                        caption: caption.to_owned(),
+                        caption: caption.clone(),
                         options: labels.iter().map(|l| (*l).to_owned()).collect(),
                         current: *current,
                         enabled,
@@ -1062,10 +1085,10 @@ impl<'u, 'a> Toolbar<'u, 'a> {
                             let name = if label.is_empty() { tip.as_str() } else { label.as_str() };
                             if menu::row(
                                 ui,
-                                name,
-                                MenuItem { icon, selected: checked, enabled, ..MenuItem::default() },
+                                &Tx::raw(name),
+                                &MenuItem { icon, selected: checked, enabled, ..MenuItem::default() },
                                 false,
-                                &tip,
+                                &Tx::raw(&tip),
                             ) {
                                 click = Some(id);
                             }
@@ -1074,10 +1097,10 @@ impl<'u, 'a> Toolbar<'u, 'a> {
                             let name = if label.is_empty() { tip.as_str() } else { label.as_str() };
                             if menu::row(
                                 ui,
-                                name,
-                                MenuItem { icon, enabled, ..MenuItem::default() },
+                                &Tx::raw(name),
+                                &MenuItem { icon, enabled, ..MenuItem::default() },
                                 true,
-                                &tip,
+                                &Tx::raw(&tip),
                             ) {
                                 menu_pick = Some(id);
                             }
@@ -1086,31 +1109,31 @@ impl<'u, 'a> Toolbar<'u, 'a> {
                             let name = if label.is_empty() { tip.as_str() } else { label.as_str() };
                             if menu::row(
                                 ui,
-                                name,
-                                MenuItem { icon, enabled, ..MenuItem::default() },
+                                &Tx::raw(name),
+                                &MenuItem { icon, enabled, ..MenuItem::default() },
                                 false,
-                                &tip,
+                                &Tx::raw(&tip),
                             ) {
                                 click = Some(id);
                             }
-                            let options = format!("{name} Options");
-                            if menu::row(ui, &options, MenuItem::default(), true, "") {
+                            let options = crate::tr!("{name} Options", name = name);
+                            if menu::row(ui, &options, &MenuItem::default(), true, &Tx::EMPTY) {
                                 menu_pick = Some(id);
                             }
                         }
                         Entry::Search { text, hint } => {
-                            SearchField::new(text).hint(&hint).width(em(12.0)).id_salt("overflow").show(ui);
+                            SearchField::new(text).hint(hint).width(em(12.0)).id_salt("overflow").show(ui);
                         }
                         Entry::Status { text, tone } => {
-                            text::status(ui, tone, &text);
+                            text::status(ui, tone, Tx::raw(&text));
                         }
                         Entry::Segmented { id, caption, options, current, enabled } => {
                             let muted = palette(ui.ctx()).text_muted;
-                            text::label(ui, &caption, Font::Small, muted, Clip::End);
+                            text::label(ui, Tx::raw(&caption), Font::Small, muted, Clip::End);
                             for (k, option) in options.iter().enumerate() {
                                 if menu_item(
                                     ui,
-                                    option,
+                                    Tx::raw(option),
                                     MenuItem { selected: k == current, enabled, ..MenuItem::default() },
                                 ) {
                                     segment = Some((id, k));

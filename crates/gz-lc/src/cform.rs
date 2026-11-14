@@ -5,12 +5,12 @@ use glam::Vec3;
 use gz_fmt_level::{Aabb, CForm, CollectorPacked, Tri};
 use gz_lc_light::math::{EPS, mknormal};
 use gz_lc_light::{
-    FaceId, LcGlobalData, QUALITY_DRAFT, ShaderXrlc, VertId, connect_by_edge_flags, shader_of,
+    Ctl, FaceId, LcGlobalData, QUALITY_DRAFT, ShaderXrlc, VertId, connect_by_edge_flags, shader_of,
 };
 use rayon::prelude::*;
 
-use crate::Log;
 use crate::qslim::{EdgeQSlim, Model, Placement, Weighting};
+use crate::{Log, Result};
 
 const MAX_DECIMATE_ERROR: f32 = 0.0005;
 const COMPACTNESS_RATIO: f64 = 0.001;
@@ -45,7 +45,7 @@ fn fsimilar(a: f32, b: f32, e: f32) -> bool {
 }
 
 /// The decimation.
-fn simplify(cl: &mut CollectorPacked, bb: &Aabb) {
+fn simplify(cl: &mut CollectorPacked, bb: &Aabb, ctl: &Ctl<'_>) -> Result<()> {
     let verts = cl.verts().to_vec();
     let tris = cl.tris().to_vec();
     let flags = cl.flags().to_vec();
@@ -85,7 +85,7 @@ fn simplify(cl: &mut CollectorPacked, bb: &Aabb) {
         .into_par_iter()
         .flat_map_iter(|f| {
             let mut out = Vec::new();
-            if !model.face_is_valid(f) {
+            if ctl.cancelled() || !model.face_is_valid(f) {
                 return out.into_iter();
             }
             let base = model.face(f);
@@ -128,11 +128,15 @@ fn simplify(cl: &mut CollectorPacked, bb: &Aabb) {
             out.into_iter()
         })
         .collect();
+    ctl.check()?;
     for (a, b, f) in constraints {
         slim.constraint_manual(a, b, f);
     }
     slim.collect_edges();
-    slim.decimate(0, MAX_DECIMATE_ERROR);
+    ctl.check()?;
+    let stop = || ctl.cancelled();
+    slim.decimate_until(0, MAX_DECIMATE_ERROR, &stop);
+    ctl.check()?;
     let mut mdl = std::mem::take(&mut slim.model);
     mdl.compact_vertices();
     for f in 0..mdl.face_count() as u32 {
@@ -144,10 +148,11 @@ fn simplify(cl: &mut CollectorPacked, bb: &Aabb) {
         let p = fc.map(|v| Vec3::from_array(mdl.vertex(v)));
         cl.add_face(p[0], p[1], p[2], fp.material, fp.sector, fp.flags);
     }
+    Ok(())
 }
 
 /// Builds the collision form: answers `level.cform`.
-pub fn build_cform(g: &mut LcGlobalData, log: &mut Log) -> Vec<u8> {
+pub fn build_cform(g: &mut LcGlobalData, log: &mut Log, ctl: &Ctl<'_>) -> Result<Vec<u8>> {
     // X-Ray's compiler sorts the vertex list by address; the collision vertices follow that order
     crate::geom::sort_vertices_by_addr(g);
     let mut marks: rustc_hash::FxHashSet<VertId> = rustc_hash::FxHashSet::default();
@@ -179,6 +184,9 @@ pub fn build_cform(g: &mut LcGlobalData, log: &mut Log) -> Vec<u8> {
         .par_iter()
         .map(|&f| {
             let mut out = Vec::new();
+            if ctl.cancelled() {
+                return out;
+            }
             let Some(face) = mesh.face(f) else { return out };
             for (a, b) in [(face.v[0], face.v[1]), (face.v[1], face.v[2]), (face.v[2], face.v[0])] {
                 let n = mesh.vertex(a).map_or(0, |x| {
@@ -196,6 +204,7 @@ pub fn build_cform(g: &mut LcGlobalData, log: &mut Log) -> Vec<u8> {
             out
         })
         .collect();
+    ctl.check()?;
     let mut critical = 0u32;
     for (&f, edges) in faces.iter().zip(multi) {
         for (pa, pb) in edges {
@@ -237,7 +246,7 @@ pub fn build_cform(g: &mut LcGlobalData, log: &mut Log) -> Vec<u8> {
         }
     }
     if g.params.quality != QUALITY_DRAFT {
-        simplify(&mut cl, &bb);
+        simplify(&mut cl, &bb, ctl)?;
     }
     let verts = cl.verts().to_vec();
     let tris: Vec<Tri> = cl.tris().to_vec();
@@ -250,5 +259,5 @@ pub fn build_cform(g: &mut LcGlobalData, log: &mut Log) -> Vec<u8> {
             face.deflector = None;
         }
     }
-    form.write()
+    Ok(form.write())
 }

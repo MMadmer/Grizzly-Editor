@@ -26,7 +26,7 @@ use gz_nq::index::FindHit;
 use gz_nq::{Catalog, DocHandle, NqService};
 use gz_query::Derived;
 use gz_ui::menu::{MenuItem, menu_item};
-use gz_ui::{Clip, Font, Icon, Kind, Tone, Toolbar, palette};
+use gz_ui::{Clip, Font, Icon, Kind, TipExt, Tone, Toolbar, Tx, palette, tr};
 use parking_lot::Mutex;
 use smol_str::SmolStr;
 
@@ -110,17 +110,18 @@ const KEYS: [(KeyRow, &str); 43] = [
     (KeyRow::Gesture("Right-click / Escape"), "The menu of what is under the cursor / cancel a gesture"),
 ];
 
-/// The keys a row of the card prints: its actions' keys as bound now, then its gesture.
-fn key_text(row: &KeyRow, keys_of: &dyn Fn(&str) -> String) -> String {
+/// The keys a row of the card prints: its actions' keys as bound now, then its gesture, a gesture
+/// in the window's language.
+fn key_text(ctx: &egui::Context, row: &KeyRow, keys_of: &dyn Fn(&str) -> String) -> String {
     match row {
         KeyRow::Head => String::new(),
-        KeyRow::Gesture(g) => (*g).to_owned(),
+        KeyRow::Gesture(g) => gz_ui::i18n::t(ctx, g),
         KeyRow::Keys(ids, extra) => {
             let mut parts: Vec<String> = ids.iter().map(|id| keys_of(id)).filter(|k| !k.is_empty()).collect();
             if !extra.is_empty() {
-                parts.push((*extra).to_owned());
+                parts.push(gz_ui::i18n::t(ctx, extra));
             }
-            if parts.is_empty() { "Not bound".to_owned() } else { parts.join(" / ") }
+            if parts.is_empty() { gz_ui::i18n::t(ctx, "Not bound") } else { parts.join(" / ") }
         }
     }
 }
@@ -621,10 +622,6 @@ impl GraphTab {
         self.synced = self.mirror.clone();
     }
 
-    fn noun(&self) -> &'static str {
-        look::doc_noun(self.behaviour)
-    }
-
     fn set_message(&mut self, text_: &str, tone: Tone) {
         text_.clone_into(&mut self.message);
         self.message_tone = tone;
@@ -781,13 +778,13 @@ impl GraphTab {
             let mut c = ui.new_child(UiBuilder::new().max_rect(full.shrink(16.0)));
             match &self.load_error {
                 Some(e) => {
-                    gz_ui::state::empty_state(
-                        &mut c,
-                        Icon::Error,
-                        &format!("The {} could not be opened", self.noun()),
-                        e,
-                        None,
-                    );
+                    let title = if self.behaviour {
+                        "The graph could not be opened"
+                    } else {
+                        "The quest could not be opened"
+                    };
+                    // the reader's English
+                    gz_ui::state::empty_state(&mut c, Icon::Error, title, Tx::ui(e.as_str()), None);
                 }
                 None => gz_ui::state::busy_line(&mut c, "Reading the file"),
             }
@@ -803,11 +800,13 @@ impl GraphTab {
         self.refresher.tick(&self.editor, &doc, &ctx, snap.edit, force);
         self.data = self.refresher.get();
         for e in std::mem::take(&mut *self.errors.lock()) {
-            self.canvas.set_status(&ctx, &e);
             self.editor.log.info(format!("[nq] {e}"));
+            // a command's English
+            self.canvas.set_status(&ctx, Tx::ui(e));
         }
         for n in std::mem::take(&mut self.inspector.notes) {
-            self.canvas.set_status(&ctx, &n);
+            // the panels' own English
+            self.canvas.set_status(&ctx, Tx::ui(n));
         }
         // the document moved the view (MCP, undo, a command that selects): the mirror follows
         let store_view = ViewMirror::of(&snap.view);
@@ -825,10 +824,15 @@ impl GraphTab {
         let p = palette(&ctx);
         // the wires in force: the graph's own over the preferences
         let set = snap.graph.canvas.wires.over(&self.wires);
+        // a box is as wide as what it shows: the window's language is part of the scene
+        let lang = gz_ui::i18n::catalog(&ctx);
         let rev = Rev(snap.edit)
             .mix(Rev(u64::from(cat.generation)))
             .mix(Rev(self.data.names_rev))
-            .mix(Rev(wire_key(&set)));
+            .mix(Rev(wire_key(&set)))
+            .mix(Rev(u64::from(gz_ui::i18n::lang(&ctx) != gz_ui::Lang::En)))
+            // the scene holds the theme's colours: another theme is another scene
+            .mix(Rev(p.key()));
         let (s2, c2, p2, n2) = (snap.clone(), cat.clone(), p.clone(), self.data.names.clone());
         let ans = self.scenes.get(rev, move || {
             Scene::build(&SceneInput {
@@ -838,6 +842,7 @@ impl GraphTab {
                 palette: &p2,
                 wires: set,
                 names: Some(&*n2),
+                lang: lang.as_deref(),
             })
         });
         self.scene = ans.value().cloned();
@@ -867,23 +872,26 @@ impl GraphTab {
                 .file_name()
                 .map_or(name, |f| f.to_string_lossy().into_owned());
             if let Some(e) = &disk.error {
-                let text_ = format!(
-                    "{file} does not read: {e}. The graph shows the last state that read, until the file is fixed."
+                // what the reader says is its English
+                let text_ = tr!(
+                    "{file} does not read: {error}. The graph shows the last state that read, until the file is fixed.",
+                    file = file.as_str(),
+                    error = Tx::ui(e.to_string())
                 );
-                gz_ui::state::banner(&mut b, Tone::Error, &text_, None, None);
+                gz_ui::state::banner(&mut b, Tone::Error, text_, None, None);
             } else if disk.missing {
-                let text_ = format!("{file} is gone from the disk. Save writes it again.");
-                gz_ui::state::banner(&mut b, Tone::Warning, &text_, None, None);
+                let text_ = tr!("{file} is gone from the disk. Save writes it again.", file = file.as_str());
+                gz_ui::state::banner(&mut b, Tone::Warning, text_, None, None);
             } else {
                 let n = disk.conflicts.len();
-                let text_ = format!(
-                    "Changed on disk too: {n} value{}. The graph keeps its own; Take Theirs takes the file's.",
-                    if n == 1 { "" } else { "s" }
+                let text_ = tr!(
+                    "Changed on disk too: {n} {n:value|values}. The graph keeps its own; Take Theirs takes the file's.",
+                    n = n
                 );
-                let lines: Vec<String> = disk.conflicts.iter().map(conflict_line).collect();
-                let items: Vec<(&str, Option<&str>)> =
-                    lines.iter().map(|l| (l.as_str(), Some("Take Theirs"))).collect();
-                if let Some(i) = gz_ui::state::banner_list(&mut b, Tone::Warning, &text_, &items) {
+                let lines: Vec<String> = disk.conflicts.iter().map(|c| conflict_line(&ctx, c)).collect();
+                let items: Vec<(Tx<'_>, Option<Tx<'_>>)> =
+                    lines.iter().map(|l| (Tx::raw(l.as_str()), Some(Tx::from("Take Theirs")))).collect();
+                if let Some(i) = gz_ui::state::banner_list(&mut b, Tone::Warning, text_, &items) {
                     self.take_theirs(&ctx, i);
                 }
             }
@@ -1369,12 +1377,12 @@ impl GraphTab {
         let mut dui = ui.new_child(UiBuilder::new().id_salt("gz-ui-graph.drawer").max_rect(inner));
         dui.set_clip_rect(inner.intersect(ui.clip_rect()));
         let (results, index) = self.find_results();
-        let problems = format!("Problems ({})", self.data.problems.len());
-        let found = format!("Find Results ({})", results.len());
+        let problems = tr!("Problems ({n})", n = self.data.problems.len());
+        let found = tr!("Find Results ({n})", n = results.len());
         let mut cur = usize::from(drawer == DrawerTab::Find);
         let mut close = false;
         dui.horizontal(|ui| {
-            if gz_ui::segmented(ui, &mut cur, &[&problems, &found], None) {
+            if gz_ui::segmented(ui, &mut cur, &[problems, found], None) {
                 // the switch is applied below
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1435,7 +1443,7 @@ impl GraphTab {
                 } else {
                     format!("{} / {}", if index >= 0 { index + 1 } else { 0 }, results.len())
                 };
-                gz_ui::text::label(ui, &count, Font::Body, p.text_muted, Clip::End);
+                gz_ui::text::label(ui, Tx::raw(count.as_str()), Font::Body, p.text_muted, Clip::End);
             });
             if results.is_empty() {
                 gz_ui::text::status(
@@ -1450,10 +1458,12 @@ impl GraphTab {
             } else {
                 gz_ui::list::list(&mut dui, "gz-ui-graph.find_results", vec2(0.0, -2.0), |l| {
                     for (i, hit) in results.iter().enumerate() {
-                        let text_ = format!("{}  \u{b7}  {}  \u{b7}  {}", hit.node, hit.title, hit.matched);
+                        // the node's title is the catalog's English; the id and what matched are data
+                        let title = Tx::ui_in("kind", hit.title.as_str()).text(&ctx);
+                        let text_ = format!("{}  \u{b7}  {}  \u{b7}  {}", hit.node, title, hit.matched);
                         let selected = i64::try_from(i).ok() == Some(index);
                         if l.row(&format!("f{i}"), selected, |ui| {
-                            gz_ui::text::label(ui, &text_, Font::Body, p.text, Clip::End);
+                            gz_ui::text::label(ui, Tx::raw(text_.as_str()), Font::Body, p.text, Clip::End);
                         })
                         .clicked()
                         {
@@ -1486,11 +1496,9 @@ impl GraphTab {
                     && self.mirror.selection.len() == 1
                     && self.mirror.selection.first().is_some_and(|s| *s == pr.node.as_str());
                 let text_ = pr.text();
-                let sentence = if pr.node.is_empty() {
-                    pr.sentence()
-                } else {
-                    format!("{}: {}", pr.node, pr.sentence())
-                };
+                // the validator's sentence in the window's language; the node's id is data
+                let said = Tx::ui(pr.sentence()).text(&ctx);
+                let sentence = if pr.node.is_empty() { said } else { format!("{}: {said}", pr.node) };
                 let resp = l.row(&format!("p{i}"), selected, |ui| {
                     let (icon, tone) = if pr.is_error() {
                         (Icon::Error, Tone::Error)
@@ -1507,9 +1515,9 @@ impl GraphTab {
                         if tone == Tone::Muted { p.text_muted } else { p.tone(tone) },
                     );
                     ui.add_space(6.0);
-                    gz_ui::text::label(ui, &sentence, Font::Body, p.text, Clip::End);
+                    gz_ui::text::label(ui, Tx::raw(sentence.as_str()), Font::Body, p.text, Clip::End);
                 });
-                let resp = resp.on_hover_text(format!("{}\nClick to frame the node", pr.code));
+                let resp = resp.tip(tr!("{code}\nClick to frame the node", code = pr.code.as_str()));
                 // a message names a node, a slot and a parameter: it is meant to be pasted
                 resp.context_menu(|ui| {
                     if menu_item(ui, "Copy", MenuItem::default()) {
@@ -1657,12 +1665,12 @@ impl GraphTab {
         }
         let spec = gz_ui::ConfirmSpec {
             id: "nq_reload".to_owned(),
-            title: "Reload".to_owned(),
-            headline: "Read the file again and drop the unsaved changes?".to_owned(),
-            items: vec![self.wire.clone()],
+            title: Tx::ctx("dlg.nq_reload", "Reload"),
+            headline: "Read the file again and drop the unsaved changes?".into(),
+            items: vec![Tx::raw(self.wire.clone())],
             total: 1,
-            consequence: "The unsaved changes are lost - this cannot be undone.".to_owned(),
-            action: "Reload".to_owned(),
+            consequence: "The unsaved changes are lost - this cannot be undone.".into(),
+            action: "Reload".into(),
             destructive: true,
         };
         let asker = if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
@@ -1697,14 +1705,15 @@ impl GraphTab {
             .is_some_and(|d| d.store.snapshot().graph.nodes.len() >= gz_nq::doc::MINIMAP_MIN_NODES)
     }
 
-    fn minimap_tip(&self) -> String {
+    fn minimap_tip(&self) -> Tx<'static> {
         let n = self.doc.as_ref().map_or(0, |d| d.store.snapshot().graph.nodes.len());
         if self.minimap_available() {
-            "The whole graph in the canvas's corner: click or drag it to pan".to_owned()
+            "The whole graph in the canvas's corner: click or drag it to pan".into()
         } else {
-            format!(
-                "A graph of {} nodes or more gets a minimap; this one has {n}",
-                gz_nq::doc::MINIMAP_MIN_NODES
+            tr!(
+                "A graph of {min} nodes or more gets a minimap; this one has {n}",
+                min = gz_nq::doc::MINIMAP_MIN_NODES,
+                n = n
             )
         }
     }
@@ -1839,8 +1848,8 @@ impl Document for GraphTab {
         if self.behaviour { "beh" } else { "quest" }
     }
 
-    fn label(&self) -> String {
-        gz_nq::asset::base_name(&self.wire)
+    fn label(&self) -> Tx<'static> {
+        Tx::raw(gz_nq::asset::base_name(&self.wire))
     }
 
     fn icon(&self) -> Icon {
@@ -1851,8 +1860,8 @@ impl Document for GraphTab {
         Some(self.wire.clone())
     }
 
-    fn tooltip(&self) -> Option<String> {
-        Some(self.wire.clone())
+    fn tooltip(&self) -> Option<Tx<'static>> {
+        Some(Tx::raw(self.wire.clone()))
     }
 
     fn dirty(&self) -> bool {
@@ -1907,9 +1916,13 @@ impl Document for GraphTab {
         let mut run: Vec<&'static str> = Vec::new();
         // what each key is bound to now: the author may have rebound any of them
         let key = |id: &str| gz_app::actions::keys_label(cx.editor, id);
-        let tip = |what: &str, id: &str| {
+        let tip = |what: &'static str, id: &str| -> Tx<'static> {
             let k = key(id);
-            if k.is_empty() { what.to_owned() } else { format!("{what} ({k})") }
+            if k.is_empty() {
+                Tx::from(what)
+            } else {
+                tr!("tip" => "{what} ({keys})", what = Tx::from(what), keys = k)
+            }
         };
         let (k_frame_all, k_frame_sel) = (key("graph.frame_all"), key("graph.frame_selection"));
         let snap = self.doc.as_ref().map(|d| d.store.snapshot());
@@ -1925,7 +1938,7 @@ impl Document for GraphTab {
             "save",
             Icon::Save,
             "Save",
-            &tip(if behaviour { "Save the graph" } else { "Save the quest" }, "file.save"),
+            tip(if behaviour { "Save the graph" } else { "Save the quest" }, "file.save"),
             true,
             false,
             Kind::Ghost,
@@ -1933,10 +1946,10 @@ impl Document for GraphTab {
             act.push(A::Save);
         }
         tb.group(8);
-        if tb.action("undo", Icon::Undo, "Undo", &tip("Undo", "edit.undo"), undo_n > 0, false, Kind::Ghost) {
+        if tb.action("undo", Icon::Undo, "Undo", tip("Undo", "edit.undo"), undo_n > 0, false, Kind::Ghost) {
             act.push(A::Undo);
         }
-        if tb.action("redo", Icon::Redo, "Redo", &tip("Redo", "edit.redo"), redo_n > 0, false, Kind::Ghost) {
+        if tb.action("redo", Icon::Redo, "Redo", tip("Redo", "edit.redo"), redo_n > 0, false, Kind::Ghost) {
             act.push(A::Redo);
         }
         tb.group(7);
@@ -1944,14 +1957,14 @@ impl Document for GraphTab {
         let (e, w) = (self.data.errors, self.data.warnings);
         if e > 0 || w > 0 {
             let count = if e > 0 {
-                look::plural(e, "error", "errors")
+                tr!("{n} {n:error|errors}", n = e)
             } else {
-                look::plural(w, "warning", "warnings")
+                tr!("{n} {n:warning|warnings}", n = w)
             };
             if tb.action(
                 "problems",
                 if e > 0 { Icon::Error } else { Icon::Warning },
-                &count,
+                count,
                 "List the problems",
                 true,
                 false,
@@ -1964,7 +1977,7 @@ impl Document for GraphTab {
             "frame",
             Icon::FrameAll,
             "Frame All",
-            &tip("Show the whole graph", "graph.frame_all"),
+            tip("Show the whole graph", "graph.frame_all"),
             true,
             false,
             Kind::Ghost,
@@ -1977,7 +1990,7 @@ impl Document for GraphTab {
             "find",
             Icon::Search,
             "Find",
-            &tip("Find nodes in this graph", "graph.find"),
+            tip("Find nodes in this graph", "graph.find"),
             true,
             find_open,
             Kind::Ghost,
@@ -2020,7 +2033,7 @@ impl Document for GraphTab {
             "minimap",
             Icon::Minimap,
             "Minimap",
-            &self.minimap_tip(),
+            self.minimap_tip(),
             minimap_on,
             minimap_on && minimap_vis,
             Kind::Ghost,
@@ -2039,7 +2052,7 @@ impl Document for GraphTab {
         };
         let z = self.mirror.zoom;
         let has_sel = !self.mirror.selection.is_empty();
-        tb.menu("zoom", Icon::None, &zoom, "Zoom", Some("graph_zoom"), true, |ui| {
+        tb.menu("zoom", Icon::None, Tx::raw(zoom.as_str()), "Zoom", Some("graph_zoom"), true, |ui| {
             if menu_item(
                 ui,
                 "Zoom In",
@@ -2077,36 +2090,41 @@ impl Document for GraphTab {
             ui.separator();
             for i in (0..ZOOM.len() as i32).rev() {
                 let level = format!("{}%", (gz_nq::doc::zoom_of(i) * 100.0 + 0.5) as i32);
-                if menu_item(ui, &level, MenuItem { selected: i == z, ..MenuItem::default() }) {
+                if menu_item(
+                    ui,
+                    Tx::raw(level.as_str()),
+                    MenuItem { selected: i == z, ..MenuItem::default() },
+                ) {
                     act.push(A::Zoom(i));
                 }
             }
         });
         tb.group(3);
         let show_keys = self.show_keys;
-        let row = |ui: &mut Ui, id: &'static str, label: Option<&str>, run: &mut Vec<&'static str>| {
-            let Some(actions) = gz_app::Actions::of(cx.editor) else { return };
-            let Some(a) = actions.table.read().get(id).copied() else { return };
-            let keys = actions.table.read().keys_label(id);
-            let (on, checked) =
-                actions.with_cx(cx.editor, |acx| ((a.enabled)(acx), a.checked.is_some_and(|f| f(acx))));
-            let item = MenuItem {
-                icon: a.icon.unwrap_or(Icon::None),
-                keys: &keys,
-                enabled: on.on(),
-                selected: checked,
-                tip: on.why(),
-                ..MenuItem::default()
+        let row =
+            |ui: &mut Ui, id: &'static str, label: Option<&'static str>, run: &mut Vec<&'static str>| {
+                let Some(actions) = gz_app::Actions::of(cx.editor) else { return };
+                let Some(a) = actions.table.read().get(id).copied() else { return };
+                let keys = actions.table.read().keys_label(id);
+                let (on, checked) =
+                    actions.with_cx(cx.editor, |acx| ((a.enabled)(acx), a.checked.is_some_and(|f| f(acx))));
+                let item = MenuItem {
+                    icon: a.icon.unwrap_or(Icon::None),
+                    keys: &keys,
+                    enabled: on.on(),
+                    selected: checked,
+                    tip: on.why().into(),
+                    ..MenuItem::default()
+                };
+                if menu_item(ui, label.unwrap_or(a.title), item) {
+                    run.push(id);
+                }
             };
-            if menu_item(ui, label.unwrap_or(a.title), item) {
-                run.push(id);
-            }
-        };
         tb.menu(
             "more",
             Icon::More,
             "More",
-            &format!("Everything else of this {}", self.noun()),
+            if behaviour { "Everything else of this graph" } else { "Everything else of this quest" },
             Some("graph_more"),
             true,
             |ui| {
@@ -2139,7 +2157,7 @@ impl Document for GraphTab {
                 ui.separator();
                 if menu_item(
                     ui,
-                    "Back",
+                    Tx::ctx("history", "Back"),
                     MenuItem {
                         icon: Icon::Back,
                         keys: &key("graph.back"),
@@ -2167,7 +2185,7 @@ impl Document for GraphTab {
                             if i < 9 { key(&format!("graph.bookmark_{}", i + 1)) } else { String::new() };
                         if menu_item(
                             ui,
-                            &format!("{name}  \u{b7}  {node}"),
+                            Tx::raw(format!("{name}  \u{b7}  {node}")),
                             MenuItem { keys: &keys, ..MenuItem::default() },
                         ) {
                             act.push(A::Zoom(-1 - i as i32));
@@ -2195,6 +2213,7 @@ impl Document for GraphTab {
             match a {
                 A::Save => {
                     if let Err(e) = self.save_now(&ctx) {
+                        // kept in English: the status line translates it where it is drawn
                         self.set_message(&format!("Save failed: {e}"), Tone::Error);
                     }
                 }
@@ -2237,26 +2256,29 @@ impl Document for GraphTab {
     fn status(&mut self, ui: &mut Ui, _cx: &mut DocCx<'_>) {
         let p = palette(ui.ctx());
         let n = self.doc.as_ref().map_or(0, |d| d.store.snapshot().graph.nodes.len());
+        let ctx = ui.ctx().clone();
         let text_ = format!(
             "{}  \u{b7}  {}  \u{b7}  {}",
-            look::plural(n, "node", "nodes"),
-            look::plural(self.data.errors, "error", "errors"),
-            look::plural(self.data.warnings, "warning", "warnings")
+            tr!("{n} {n:node|nodes}", n = n).text(&ctx),
+            tr!("{n} {n:error|errors}", n = self.data.errors).text(&ctx),
+            tr!("{n} {n:warning|warnings}", n = self.data.warnings).text(&ctx)
         );
-        let tip = self
-            .data
-            .catalog
-            .as_ref()
-            .map(|c| format!("Catalog: {}, version {}", c.source, c.header.version))
-            .unwrap_or_default();
-        let r = gz_ui::text::label(ui, &text_, Font::Small, p.text_secondary, Clip::End);
-        if !tip.is_empty() {
-            r.on_hover_text(tip);
+        let tip = self.data.catalog.as_ref().map(|c| {
+            tr!(
+                "Catalog: {source}, version {version}",
+                source = c.source.as_str(),
+                version = c.header.version
+            )
+        });
+        let r = gz_ui::text::label(ui, Tx::raw(text_.as_str()), Font::Small, p.text_secondary, Clip::End);
+        if let Some(tip) = tip {
+            r.tip(tip);
         }
         if !self.message.is_empty() {
             ui.add_space(12.0);
             let c = if self.message_tone == Tone::Muted { p.text_muted } else { p.tone(self.message_tone) };
-            gz_ui::text::label(ui, &self.message, Font::Small, c, Clip::End);
+            // the tab's own English
+            gz_ui::text::label(ui, Tx::ui(self.message.as_str()), Font::Small, c, Clip::End);
         }
     }
 
@@ -2332,7 +2354,7 @@ impl Document for GraphTab {
                 row(ui, cx, "graph.distribute_vertically");
                 row(ui, cx, "graph.straighten");
             });
-            gz_app::chrome::local_submenu(ui, "Select", Icon::Check, true, |ui| {
+            gz_app::chrome::local_submenu(ui, Tx::ctx("menu.graph", "Select"), Icon::Check, true, |ui| {
                 row(ui, cx, "graph.select_all");
                 row(ui, cx, "graph.select_connected");
                 row(ui, cx, "graph.select_upstream");
@@ -2362,7 +2384,7 @@ impl Document for GraphTab {
                 row(ui, cx, "graph.next_bookmark");
             });
             ui.separator();
-            let item = |ui: &mut Ui, label: &str, selected: bool, enabled: bool| {
+            let item = |ui: &mut Ui, label: &'static str, selected: bool, enabled: bool| {
                 menu_item(ui, label, MenuItem { selected, enabled, ..MenuItem::default() })
             };
             if item(ui, "Graph Panel", graph, true) {
@@ -2566,16 +2588,13 @@ fn keys_card(
                 }
             });
         });
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(
-                    "They work while the cursor is over the graph. Every edit is also an MCP call.",
-                )
-                .font(Font::Small.id())
-                .color(p.text_muted),
-            )
-            .wrap(),
+        gz_ui::text::wrapped(
+            ui,
+            "They work while the cursor is over the graph. Every edit is also an MCP call.",
+            Font::Small,
+            p.text_muted,
         );
+        let ctx = ui.ctx().clone();
         egui::ScrollArea::vertical()
             .id_salt("gz-ui-graph.keys_rows")
             .max_height((r.height() - 80.0).max(60.0))
@@ -2584,23 +2603,17 @@ fn keys_card(
                     match row {
                         KeyRow::Head => {
                             ui.add_space(2.0);
-                            gz_ui::text::label(ui, what, Font::Strong, p.text, Clip::End);
+                            gz_ui::text::label(ui, *what, Font::Strong, p.text, Clip::End);
                         }
                         _ => {
-                            let k = key_text(row, keys_of);
+                            let k = key_text(&ctx, row, keys_of);
                             ui.horizontal(|ui| {
+                                // a gesture in Russian runs longer than its English: it wraps
                                 ui.scope(|ui| {
                                     ui.set_width(gz_ui::units::em(9.0));
-                                    gz_ui::text::label(ui, &k, Font::Body, p.text, Clip::End);
+                                    gz_ui::text::wrapped(ui, Tx::raw(k.as_str()), Font::Body, p.text);
                                 });
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(*what)
-                                            .font(Font::Body.id())
-                                            .color(p.text_secondary),
-                                    )
-                                    .wrap(),
-                                );
+                                gz_ui::text::wrapped(ui, *what, Font::Body, p.text_secondary);
                             });
                         }
                     }
@@ -2610,14 +2623,24 @@ fn keys_card(
     KeysCard { rect: Some(inner.response.rect), close }
 }
 
-/// One conflict as the banner lists it: where, and what each side says.
-fn conflict_line(c: &gz_luadata::Conflict) -> String {
+/// One conflict as the banner lists it: where, and what each side says, in the window's language.
+fn conflict_line(ctx: &egui::Context, c: &gz_luadata::Conflict) -> String {
     let show = |v: &Option<gz_luadata::Value>| match v {
-        None => "removed".to_owned(),
-        Some(v) => gz_luadata::inline(v).unwrap_or_else(|| "a long text".to_owned()),
+        None => gz_ui::i18n::t(ctx, "removed"),
+        Some(v) => gz_luadata::inline(v).unwrap_or_else(|| gz_ui::i18n::t(ctx, "a long text")),
     };
-    let line = c.span.map_or_else(String::new, |s| format!(" (line {})", s.line));
-    format!("{}{line}: here {}, on disk {}", gz_luadata::path::show(&c.path), show(&c.mine), show(&c.theirs))
+    let (at, mine, theirs) = (gz_luadata::path::show(&c.path), show(&c.mine), show(&c.theirs));
+    let line = match c.span {
+        Some(s) => tr!(
+            "{at} (line {line}): here {mine}, on disk {theirs}",
+            at = at,
+            line = s.line,
+            mine = mine,
+            theirs = theirs
+        ),
+        None => tr!("{at}: here {mine}, on disk {theirs}", at = at, mine = mine, theirs = theirs),
+    };
+    line.text(ctx)
 }
 
 #[cfg(test)]

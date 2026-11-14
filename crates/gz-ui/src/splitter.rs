@@ -113,9 +113,9 @@ fn grab(ui: &Ui, id: Id, hit: Rect, vertical: bool, key: &str) -> Grab {
     let start = if dragging { ui.ctx().data(|d| d.get_temp::<f32>(start_id)) } else { None };
     let double = resp.double_clicked();
     if hovered && !held {
-        resp.clone().on_hover_text(TIP);
+        crate::i18n::TipExt::tip(resp.clone(), TIP);
     }
-    audit::control(ui.ctx(), key, true, None, Some(TIP), hit);
+    audit::control(ui.ctx(), key, true, None, Some(&crate::i18n::t(ui.ctx(), TIP)), hit);
     Grab { hovered, held, dragging: dragging && start.is_some(), double, pointer, start }
 }
 

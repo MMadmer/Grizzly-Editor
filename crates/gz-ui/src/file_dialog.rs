@@ -31,8 +31,9 @@ pub enum Mode {
 /// One request: the title, the filters, the folder it opens in and what it picks.
 #[derive(Clone, Debug)]
 pub struct FileRequest {
-    pub title: String,
-    pub filters: Vec<(String, Vec<String>)>,
+    /// The editor's own words: the dialog shows them in the window's language.
+    pub title: crate::Tx<'static>,
+    pub filters: Vec<(crate::Tx<'static>, Vec<String>)>,
     pub folder: Option<PathBuf>,
     pub mode: Mode,
     /// Create the folder first when it does not exist.
@@ -41,9 +42,9 @@ pub struct FileRequest {
 
 impl FileRequest {
     #[must_use]
-    pub fn open(title: &str) -> Self {
+    pub fn open<'a>(title: impl Into<crate::Tx<'a>>) -> Self {
         Self {
-            title: title.to_owned(),
+            title: title.into().into_owned(),
             filters: Vec::new(),
             folder: None,
             mode: Mode::Open,
@@ -52,18 +53,18 @@ impl FileRequest {
     }
 
     #[must_use]
-    pub fn save(title: &str, name: &str) -> Self {
+    pub fn save<'a>(title: impl Into<crate::Tx<'a>>, name: &str) -> Self {
         Self { mode: Mode::Save(name.to_owned()), ..Self::open(title) }
     }
 
     #[must_use]
-    pub fn folder(title: &str) -> Self {
+    pub fn folder<'a>(title: impl Into<crate::Tx<'a>>) -> Self {
         Self { mode: Mode::Folder, ..Self::open(title) }
     }
 
     #[must_use]
-    pub fn filter(mut self, name: &str, extensions: &[&str]) -> Self {
-        self.filters.push((name.to_owned(), extensions.iter().map(|e| (*e).to_owned()).collect()));
+    pub fn filter<'a>(mut self, name: impl Into<crate::Tx<'a>>, extensions: &[&str]) -> Self {
+        self.filters.push((name.into().into_owned(), extensions.iter().map(|e| (*e).to_owned()).collect()));
         self
     }
 
@@ -107,19 +108,26 @@ pub fn pick(
     then: impl FnOnce(PathBuf) + Send + 'static,
 ) -> Result<(), Finding> {
     if !may_open(ctx, asker) {
-        return Err(suppressed_line(&request.title));
+        return Err(suppressed_line(&request.title.en()));
     }
+    // the dialog's words in the window's language, worked out before its thread starts
+    let title = ctx.map_or_else(|| request.title.en().into_owned(), |c| request.title.text(c));
+    let filters: Vec<(String, Vec<String>)> = request
+        .filters
+        .iter()
+        .map(|(n, e)| (ctx.map_or_else(|| n.en().into_owned(), |c| n.text(c)), e.clone()))
+        .collect();
     let _started = exec.thread("gz-ui.file_dialog", move || {
-        if let Some(picked) = run(&request) {
+        if let Some(picked) = run(&request, &title, &filters) {
             then(picked);
         }
     });
     Ok(())
 }
 
-fn run(request: &FileRequest) -> Option<PathBuf> {
-    let mut d = rfd::FileDialog::new().set_title(&request.title);
-    for (name, ext) in &request.filters {
+fn run(request: &FileRequest, title: &str, filters: &[(String, Vec<String>)]) -> Option<PathBuf> {
+    let mut d = rfd::FileDialog::new().set_title(title);
+    for (name, ext) in filters {
         d = d.add_filter(name, ext);
     }
     if let Some(dir) = &request.folder {

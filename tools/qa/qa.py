@@ -484,7 +484,8 @@ class Editor:
 
     `project` is a copy (`copy_project`; anything else is refused); without one the editor starts on the Start
     page. `port` and `home_folder` default to the suite's own; a second editor of one suite names its own. `args`
-    are more switches, `env` more variables (a mock's addresses, a QA token), `headless` without a window,
+    are more switches (`-lang ru` for a suite that looks at the Russian window; English otherwise), `env` more
+    variables (a mock's addresses, a QA token), `headless` without a window,
     `visible` with the window shown (not
     activated) instead of hidden. `ready` says when it is up: `"project"` (the default with a project: `state` says that project is open, the
     first frame is drawn and the scene it reopens loaded), `"ping"` (anything else), or a function.
@@ -534,6 +535,10 @@ class Editor:
             line.append("-headless")
         if self.project:
             line += ["-project", guard_project(self.project)]
+        # the suites read the window's English names: the editor speaks English unless the suite
+        # asks for another language (`args=("-lang", "ru")`), whatever this computer's Windows speaks
+        if "-lang" not in self.extra:
+            line += ["-lang", "en"]
         return line + self.extra
 
     def launch(self, *, check_port: bool = True) -> "Editor":

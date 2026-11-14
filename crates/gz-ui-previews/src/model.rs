@@ -19,7 +19,7 @@ use gz_render::{
 use gz_ui::grid::read_only;
 use gz_ui::splitter::splitter_tail;
 use gz_ui::text::{self, Clip};
-use gz_ui::{Font, Icon, Kind, PropFlags, PropertyGrid, Toolbar, palette, state};
+use gz_ui::{Font, Icon, Kind, PropFlags, PropertyGrid, Toolbar, Tx, palette, state, tr};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
@@ -446,6 +446,7 @@ impl ModelDoc {
         view.mode = self.mode();
         view.flags = ViewFlags::HELPERS;
         view.background = color_of(p.canvas);
+        view.wire_color = color_of(p.scene_wire);
         Some(view)
     }
 
@@ -483,7 +484,7 @@ impl ModelDoc {
         if tb.action(
             "frame",
             Icon::FrameAll,
-            "Frame",
+            Tx::ctx("model", "Frame"),
             "Frame the model, keeping the angle (F)",
             true,
             false,
@@ -641,7 +642,7 @@ impl ModelDoc {
                 ui.new_child(UiBuilder::new().max_rect(rect).layout(Layout::top_down(Align::Center)));
             match failed {
                 Some(e) => {
-                    state::error_state(&mut child, "The viewport cannot be drawn", &e, None);
+                    state::error_state(&mut child, "The viewport cannot be drawn", Tx::ui(e), None);
                 }
                 None if self.renderer.is_none() => {
                     state::error_state(
@@ -706,36 +707,36 @@ impl ModelDoc {
         let ro = PropFlags::READ_ONLY;
         PropertyGrid::new("model").show(ui, |g| {
             g.section("Asset", true, None, |g| {
-                g.row("Name", "The model's file name", ro, 0, |ui| read_only(ui, crate::paths::leaf(&data.name), Clip::End));
-                g.row("Path", "Where it lives, below the game's meshes or the project", ro, 0, |ui| read_only(ui, &data.name, Clip::Start));
-                g.row("Kind", "What kind of visual the engine sees", ro, 0, |ui| read_only(ui, &data.kind, Clip::End));
+                g.row("Name", "The model's file name", ro, 0, |ui| read_only(ui, Tx::raw(crate::paths::leaf(&data.name)), Clip::End));
+                g.row("Path", "Where it lives, below the game's meshes or the project", ro, 0, |ui| read_only(ui, Tx::raw(&data.name), Clip::Start));
+                g.row("Kind", "What kind of visual the engine sees", ro, 0, |ui| read_only(ui, Tx::ui(&data.kind), Clip::End));
             });
             g.section("Geometry", true, None, |g| {
-                g.row("Vertices", "", ro, 0, |ui| read_only(ui, &data.verts.to_string(), Clip::End));
-                g.row("Triangles", "", ro, 0, |ui| read_only(ui, &data.tris.to_string(), Clip::End));
+                g.row("Vertices", "", ro, 0, |ui| read_only(ui, Tx::raw(data.verts.to_string()), Clip::End));
+                g.row("Triangles", "", ro, 0, |ui| read_only(ui, Tx::raw(data.tris.to_string()), Clip::End));
                 if data.bones > 0 {
-                    g.row("Bones", "", ro, 0, |ui| read_only(ui, &data.bones.to_string(), Clip::End));
+                    g.row("Bones", "", ro, 0, |ui| read_only(ui, Tx::raw(data.bones.to_string()), Clip::End));
                 }
                 if let Some(o) = &data.object {
-                    g.row("Meshes", "", ro, 0, |ui| read_only(ui, &o.meshes.to_string(), Clip::End));
+                    g.row("Meshes", "", ro, 0, |ui| read_only(ui, Tx::raw(o.meshes.to_string()), Clip::End));
                     if !o.lod.is_empty() {
-                        g.row("LOD", "The level-of-detail model it switches to", ro, 0, |ui| read_only(ui, &o.lod, Clip::Start));
+                        g.row("LOD", "The level-of-detail model it switches to", ro, 0, |ui| read_only(ui, Tx::raw(&o.lod), Clip::Start));
                     }
                     if o.skeleton {
-                        g.row("Motions", "", ro, 0, |ui| read_only(ui, &o.motions.to_string(), Clip::End));
+                        g.row("Motions", "", ro, 0, |ui| read_only(ui, Tx::raw(o.motions.to_string()), Clip::End));
                     }
                 }
             });
             g.section("Bounds", true, None, |g| {
-                g.row("Size", "Its box, in metres", ro, 0, |ui| read_only(ui, &format!("{:.2} x {:.2} x {:.2}", size.x, size.y, size.z), Clip::End));
-                g.row("Centre", "The box's centre", ro, 0, |ui| read_only(ui, &format!("{:.2}, {:.2}, {:.2}", centre.x, centre.y, centre.z), Clip::End));
-                g.row("Radius", "The radius of the sphere around it", ro, 0, |ui| read_only(ui, &format!("{radius:.2}"), Clip::End));
+                g.row("Size", "Its box, in metres", ro, 0, |ui| read_only(ui, Tx::raw(format!("{:.2} x {:.2} x {:.2}", size.x, size.y, size.z)), Clip::End));
+                g.row("Centre", "The box's centre", ro, 0, |ui| read_only(ui, Tx::raw(format!("{:.2}, {:.2}, {:.2}", centre.x, centre.y, centre.z)), Clip::End));
+                g.row("Radius", "The radius of the sphere around it", ro, 0, |ui| read_only(ui, Tx::raw(format!("{radius:.2}")), Clip::End));
             });
             // what the engine visual draws with, and where each texture comes from: one the loader
             // cannot find draws as its placeholder
             if !data.textures.is_empty() {
-                let badge = data.textures.len().to_string();
-                g.section("Textures", true, Some(&badge), |g| {
+                let badge = Tx::raw(data.textures.len().to_string());
+                g.section("Textures", true, Some(badge), |g| {
                     for t in &data.textures {
                         let (word, why) = match t.from {
                             "project" => ("Project", "The project's own file"),
@@ -743,8 +744,8 @@ impl ModelDoc {
                             "game" => ("Game", "The linked game's archives or its gamedata folder"),
                             _ => ("Not found", "Neither the editor nor the linked game has it: the preview draws the placeholder"),
                         };
-                        let hint = format!("{}\n{why}", t.name);
-                        g.row(crate::paths::leaf(&t.name), &hint, ro, 0, |ui| {
+                        let hint = tr!("previews" => "{name}\n{why}", name = &t.name, why = Tx::from(why));
+                        g.row(Tx::raw(crate::paths::leaf(&t.name)), hint, ro, 0, |ui| {
                             if t.from == "missing" {
                                 let p = palette(ui.ctx());
                                 text::label(ui, word, Font::Body, p.warning, Clip::End);
@@ -757,13 +758,13 @@ impl ModelDoc {
             }
             // the material slots of a library object: texture, shader, game material
             if let Some(o) = data.object.as_ref().filter(|o| !o.materials.is_empty()) {
-                let badge = o.materials.len().to_string();
-                g.section("Materials", true, Some(&badge), |g| {
+                let badge = Tx::raw(o.materials.len().to_string());
+                g.section("Materials", true, Some(badge), |g| {
                     for m in &o.materials {
-                        let dash = |s: &str| if s.is_empty() { "-".to_owned() } else { s.to_owned() };
-                        g.row(if m.name.is_empty() { "(unnamed)" } else { &m.name }, "The texture of this slot", ro, 0, |ui| read_only(ui, &dash(&m.texture), Clip::Start));
-                        g.row("Shader", "The engine shader it draws with", ro, 1, |ui| read_only(ui, &dash(&m.shader), Clip::End));
-                        g.row("Game Material", "What the game makes of hits and steps on it", ro, 1, |ui| read_only(ui, &dash(&m.game_mtl), Clip::End));
+                        let dash = |s: &str| Tx::raw(if s.is_empty() { "-".to_owned() } else { s.to_owned() });
+                        g.row(if m.name.is_empty() { Tx::from("(unnamed)") } else { Tx::raw(&m.name) }, "The texture of this slot", ro, 0, |ui| read_only(ui, dash(&m.texture), Clip::Start));
+                        g.row("Shader", "The engine shader it draws with", ro, 1, |ui| read_only(ui, dash(&m.shader), Clip::End));
+                        g.row("Game Material", "What the game makes of hits and steps on it", ro, 1, |ui| read_only(ui, dash(&m.game_mtl), Clip::End));
                     }
                 });
             }
@@ -821,8 +822,12 @@ impl Document for ModelDoc {
     fn kind(&self) -> &'static str {
         "model"
     }
-    fn label(&self) -> String {
-        if self.name.is_empty() { "Model Preview".to_owned() } else { crate::paths::label_of(&self.name) }
+    fn label(&self) -> Tx<'static> {
+        if self.name.is_empty() {
+            Tx::from("Model Preview")
+        } else {
+            Tx::raw(crate::paths::label_of(&self.name))
+        }
     }
     fn icon(&self) -> Icon {
         Icon::FileModel
@@ -830,8 +835,8 @@ impl Document for ModelDoc {
     fn path(&self) -> Option<String> {
         (!self.name.is_empty()).then(|| self.name.clone())
     }
-    fn tooltip(&self) -> Option<String> {
-        Some(if self.name.is_empty() { "Model Preview".to_owned() } else { self.name.clone() })
+    fn tooltip(&self) -> Option<Tx<'static>> {
+        Some(if self.name.is_empty() { Tx::from("Model Preview") } else { Tx::raw(self.name.clone()) })
     }
     fn padded(&self) -> bool {
         false
@@ -874,7 +879,7 @@ impl Document for ModelDoc {
                 ui.painter().rect_filled(canvas, CornerRadius::ZERO, p.canvas);
                 let mut child =
                     ui.new_child(UiBuilder::new().max_rect(canvas).layout(Layout::top_down(Align::Center)));
-                state::busy_line(&mut child, &format!("Loading {}...", crate::paths::leaf(&self.name)));
+                state::busy_line(&mut child, tr!("Loading {name}...", name = crate::paths::leaf(&self.name)));
             }
             None => {
                 let p = palette(&ctx);
@@ -897,7 +902,7 @@ impl Document for ModelDoc {
                 state::error_state(
                     &mut child,
                     "This model cannot be shown",
-                    &format!("{}: {}", d.name, d.error),
+                    tr!("previews" => "{name}: {error}", name = &d.name, error = Tx::ui(d.error.clone())),
                     None,
                 );
             }
@@ -921,13 +926,17 @@ impl Document for ModelDoc {
 
     fn status(&mut self, ui: &mut Ui, _cx: &mut DocCx<'_>) {
         let Some(d) = self.shown() else { return };
-        let mut text_ = format!("{} verts \u{b7} {} tris", d.verts, d.tris);
-        if d.bones > 0 {
-            text_.push_str(&format!(" \u{b7} {} bones", d.bones));
-        }
-        text_.push_str(if self.lighting == 1 { " \u{b7} Unlit" } else { " \u{b7} Studio" });
+        let line = crate::local::local_facts(
+            ui.ctx(),
+            &[
+                tr!("{n} {n:vert|verts}", n = d.verts),
+                tr!("{n} {n:tri|tris}", n = d.tris),
+                if d.bones > 0 { tr!("{n} {n:bone|bones}", n = d.bones) } else { Tx::EMPTY },
+                Tx::from(if self.lighting == 1 { "Unlit" } else { "Studio" }),
+            ],
+        );
         let p = palette(ui.ctx());
-        text::label(ui, &text_, Font::Small, p.text_secondary, Clip::End);
+        text::label(ui, line, Font::Small, p.text_secondary, Clip::End);
     }
 
     fn shortcut(&mut self, _cx: &mut DocCx<'_>, chord: &Chord) -> bool {

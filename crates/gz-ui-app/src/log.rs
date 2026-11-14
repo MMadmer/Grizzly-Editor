@@ -19,7 +19,7 @@ use gz_editor::{Editor, SmolStr};
 use gz_log::{Level, Log, Record};
 use gz_ui::menu::MenuItem;
 use gz_ui::state::empty_state;
-use gz_ui::{Font, Icon, Kind, Toolbar, ToolbarStyle, menu_item, palette};
+use gz_ui::{Font, Icon, Kind, Toolbar, ToolbarStyle, Tx, menu_item, palette, tr};
 use parking_lot::Mutex;
 use rustc_hash::FxHashSet;
 
@@ -334,10 +334,11 @@ pub fn output_log(ui: &mut Ui, editor: &Editor, host: LogHost) {
     }
 
     // ---- the toolbar: search, the level, what the view does
-    let all = format!("All {}", m.lines.len().saturating_sub(m.marks as usize));
-    let warnings = format!("Warnings {}", m.warnings);
-    let errors = format!("Errors {}", m.errors);
-    let labels = [all.as_str(), warnings.as_str(), errors.as_str()];
+    let labels: [Tx<'static>; 3] = [
+        tr!("All {n}", n = m.lines.len().saturating_sub(m.marks as usize)),
+        tr!("Warnings {n}", n = m.warnings),
+        tr!("Errors {n}", n = m.errors),
+    ];
     let (any_shown, any_lines, auto) = (!m.visible.is_empty(), !m.lines.is_empty(), m.auto_scroll);
     let (toggle_auto, copy, clear);
     {
@@ -420,7 +421,7 @@ pub fn output_log(ui: &mut Ui, editor: &Editor, host: LogHost) {
                 Icon::Search,
                 "No lines match",
                 "Nothing in the log matches the search and the level.",
-                Some("Show All"),
+                Some("Show All".into()),
             );
             return;
         }
@@ -442,6 +443,8 @@ pub fn output_log(ui: &mut Ui, editor: &Editor, host: LogHost) {
             area = area.vertical_scroll_offset(y);
         }
         let font = Font::Mono.id();
+        // the row where the counts start is the view's own; every other line stays as logged
+        let mark_text = Tx::from(COUNT_MARK).text(&ctx);
         let lines = &m.lines;
         let visible = &m.visible;
         let shown = area.show_rows(ui, row_h, total, |ui, range| {
@@ -454,7 +457,12 @@ pub fn output_log(ui: &mut Ui, editor: &Editor, host: LogHost) {
                     (_, LineLevel::Info) => p.text_secondary,
                     (_, LineLevel::Plain) => p.text,
                 };
-                let galley = ui.painter().layout_no_wrap(line.text.to_string(), font.clone(), color);
+                let shown = if line.mark && &*line.text == COUNT_MARK {
+                    mark_text.clone()
+                } else {
+                    line.text.to_string()
+                };
+                let galley = ui.painter().layout_no_wrap(shown, font.clone(), color);
                 let (rect, resp) = ui.allocate_exact_size(Vec2::new(galley.size().x, row_h), Sense::click());
                 if ui.is_rect_visible(rect) {
                     ui.painter().galley(

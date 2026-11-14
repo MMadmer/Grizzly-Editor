@@ -90,7 +90,7 @@ fn the_wheel_over_a_panel_on_the_canvas_does_not_zoom_the_graph() {
     s.has_pos = true;
     g.nodes.push_back(s);
     let cat = Catalog::empty();
-    let p = gz_ui::Palette::new(gz_ui::Accent::default());
+    let p = gz_ui::Palette::default();
     let scene = Scene::build(&SceneInput {
         graph: &g,
         catalog: &cat,
@@ -98,6 +98,7 @@ fn the_wheel_over_a_panel_on_the_canvas_does_not_zoom_the_graph() {
         palette: &p,
         wires: WireSettings::default(),
         names: None,
+        lang: None,
     });
     let data = DocData::default();
     let mut view = ViewMirror::default();

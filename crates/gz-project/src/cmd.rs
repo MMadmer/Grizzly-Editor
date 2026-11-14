@@ -959,7 +959,7 @@ async fn project_associate(ed: Arc<Editor>, p: AssociateParams, _origin: Origin)
         .io(move || -> Result<crate::association::State, String> {
             if now {
                 crate::association::register(crate::association::CLASSES, &program)
-                    .map_err(|e| format!("the association could not be written: {e}"))?;
+                    .map_err(|e| format!("The association could not be written: {e}"))?;
             }
             Ok(crate::association::state(crate::association::CLASSES, &program))
         })

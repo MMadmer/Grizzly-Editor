@@ -14,8 +14,19 @@ use serde::Serialize;
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AuditEntry {
-    /// A text that did not fit and was cut with an ellipsis.
-    Truncated { surface: SmolStr, full: String, shown: String, rect: [f32; 4] },
+    /// A text that did not fit and was cut with an ellipsis; `en` is its English where the window
+    /// shows another language.
+    Truncated {
+        surface: SmolStr,
+        full: String,
+        shown: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        en: Option<String>,
+        rect: [f32; 4],
+    },
+    /// A text of the editor's own that the catalog of the window's language lacks: it was shown
+    /// in English.
+    Untranslated { surface: SmolStr, text: String },
     /// Content that lies outside its surface on an axis that cannot scroll.
     Escaped { surface: SmolStr, what: String, rect: [f32; 4] },
     /// A control: its label, whether it can be pressed, and the reason when it cannot.
@@ -108,6 +119,11 @@ fn current(s: &Shared) -> SmolStr {
 
 /// A text was cut: `full` is what it should read, `shown` what is on screen.
 pub fn truncated(ctx: &Context, full: &str, shown: &str, rect: Rect) {
+    truncated_text(ctx, full, None, shown, rect);
+}
+
+/// A text was cut, with its English when the window shows it in another language.
+pub fn truncated_text(ctx: &Context, full: &str, en: Option<&str>, shown: &str, rect: Rect) {
     let h = handle(ctx);
     let mut s = h.0.lock();
     if s.wanted {
@@ -116,9 +132,36 @@ pub fn truncated(ctx: &Context, full: &str, shown: &str, rect: Rect) {
             surface,
             full: full.to_owned(),
             shown: shown.to_owned(),
+            en: en.filter(|e| *e != full).map(str::to_owned),
             rect: px(ctx, rect),
         });
     }
+}
+
+/// A text of the editor's own was shown in English: the catalog of the window's language lacks
+/// it. Reported once per surface and frame.
+pub fn untranslated(ctx: &Context, text: &str) {
+    let h = handle(ctx);
+    let mut s = h.0.lock();
+    if !s.wanted {
+        return;
+    }
+    let surface = current(&s);
+    let known = s.entries.iter().any(
+        |e| matches!(e, AuditEntry::Untranslated { surface: sf, text: t } if *sf == surface && t == text),
+    );
+    if !known {
+        s.entries.push(AuditEntry::Untranslated { surface, text: text.to_owned() });
+    }
+}
+
+/// Whether `name` is a surface being drawn: its whole window name, or the part after `###`
+/// (`dlg.catalog_submit`, `details`). A translation's context can be a surface.
+#[must_use]
+pub fn in_surface(ctx: &Context, name: &str) -> bool {
+    let h = handle(ctx);
+    let s = h.0.lock();
+    s.surface.iter().rev().any(|sf| sf == name || sf.rsplit_once("###").is_some_and(|(_, id)| id == name))
 }
 
 /// Content left its surface.

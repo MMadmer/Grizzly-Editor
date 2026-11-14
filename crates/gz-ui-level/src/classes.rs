@@ -49,6 +49,19 @@ pub fn listed() -> Vec<ObjClass> {
     out
 }
 
+/// [`listed`] in the order of the names the window shows; empty in English, where the names are
+/// the code's own.
+#[must_use]
+pub fn listed_in(ctx: &egui::Context) -> Vec<ObjClass> {
+    if gz_ui::i18n::lang(ctx) == gz_ui::Lang::En {
+        return Vec::new();
+    }
+    let mut out: Vec<(String, ObjClass)> =
+        listed().into_iter().map(|c| (gz_ui::i18n::t(ctx, plural(c)).to_lowercase(), c)).collect();
+    out.sort();
+    out.into_iter().map(|(_, c)| c).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

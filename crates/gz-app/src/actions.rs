@@ -478,7 +478,12 @@ pub fn keys_label(editor: &Editor, id: &str) -> String {
 
 /// A menu row of an action, drawn by a surface in its own menu: the action's title (or `label`),
 /// its icon, its keys as bound now, off with its reason, checked when it is. Picked, it runs.
-pub fn menu_row(ui: &mut egui::Ui, cx: &mut crate::doc::DocCx<'_>, id: &str, label: Option<&str>) -> bool {
+pub fn menu_row(
+    ui: &mut egui::Ui,
+    cx: &mut crate::doc::DocCx<'_>,
+    id: &str,
+    label: Option<&'static str>,
+) -> bool {
     let Some(actions) = Actions::of(cx.editor) else { return false };
     let Some(a) = actions.table.read().get(id).copied() else { return false };
     let keys = actions.table.read().keys_label(id);
@@ -489,10 +494,15 @@ pub fn menu_row(ui: &mut egui::Ui, cx: &mut crate::doc::DocCx<'_>, id: &str, lab
         keys: &keys,
         enabled: on.on(),
         selected: checked,
-        tip: on.why(),
+        tip: on.why().into(),
         ..gz_ui::MenuItem::default()
     };
-    let picked = gz_ui::menu_item(ui, label.unwrap_or(a.title), item);
+    // an action's title is looked up in the context `action` first ("Group" the verb), then in its
+    // group ("Back" of the Viewport is a view)
+    let ctx = ui.ctx().clone();
+    let picked = gz_ui::i18n::scope(&ctx, a.group, || {
+        gz_ui::menu_item(ui, gz_ui::Tx::ctx("action", label.unwrap_or(a.title)), item)
+    });
     if picked {
         cx.requests.action(id);
     }
@@ -506,20 +516,32 @@ pub fn toolbar_button(
     cx: &mut crate::doc::DocCx<'_>,
     id: &str,
     kind: gz_ui::Kind,
-    label: Option<&str>,
+    label: Option<&'static str>,
 ) -> bool {
     let Some(actions) = Actions::of(cx.editor) else { return false };
     let Some(a) = actions.table.read().get(id).copied() else { return false };
     let keys = actions.table.read().keys_label(id);
     let (on, checked) =
         actions.with_cx(cx.editor, |acx| ((a.enabled)(acx), a.checked.is_some_and(|f| f(acx))));
-    let title = label.unwrap_or(a.title).trim_end_matches("...");
+    // the title in the window's language; a toolbar drops the dots that a menu row keeps
+    let title = gz_ui::i18n::scope(cx.ctx, a.group, || {
+        gz_ui::Tx::ctx("action", label.unwrap_or(a.title)).text(cx.ctx)
+    });
+    let title = title.trim_end_matches("...").trim_end_matches('\u{2026}');
     let tip = match (on, keys.is_empty()) {
-        (Enabled::Off(why), _) => why.to_owned(),
+        (Enabled::Off(why), _) => gz_ui::i18n::t(cx.ctx, why),
         (Enabled::On, true) => title.to_owned(),
         (Enabled::On, false) => format!("{title} ({keys})"),
     };
-    let pressed = tb.action(id, a.icon.unwrap_or(Icon::None), title, &tip, on.on(), checked, kind);
+    let pressed = tb.action(
+        id,
+        a.icon.unwrap_or(Icon::None),
+        gz_ui::Tx::raw(title),
+        gz_ui::Tx::raw(&tip),
+        on.on(),
+        checked,
+        kind,
+    );
     if pressed {
         cx.requests.action(id);
     }
@@ -529,8 +551,12 @@ pub fn toolbar_button(
 /// Runs an action's command from the window: off the UI thread, with the window's origin; its
 /// answer goes to the action's `reply`, or a failure becomes a notice.
 pub fn run(editor: &Arc<Editor>, action: &Action, cx: &ActionCx<'_>) {
-    let a = (action.args)(cx);
-    let (command, reply) = (action.command, action.reply);
+    call(editor, action.command, (action.args)(cx), action.reply);
+}
+
+/// Runs a command from the window as an action does: off the UI thread, with the window's
+/// origin; the answer goes to `reply`, or a failure becomes a notice.
+pub fn call(editor: &Arc<Editor>, command: &'static str, a: Args, reply: Option<fn(&ReplyCx<'_>)>) {
     let ed = editor.clone();
     let origin = editor.ui_origin();
     editor.exec.spawn(async move {

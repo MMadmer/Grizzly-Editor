@@ -145,10 +145,13 @@ impl Thumbs {
             let v = gz_fmt_ogf::Visual::read(bytes).map_err(|e| e.to_string())?;
             MeshData::from_visual(&v, &table).map_err(|e| e.to_string())?
         };
-        let key = content_key(name, bytes);
+        let mesh_key = content_key(name, bytes);
+        // the backdrop is part of the picture, not of the mesh: another theme's is another picture
+        let [r, g, b, _] = background.0;
+        let key = mesh_key ^ (u64::from(r) << 40 | u64::from(g) << 32 | u64::from(b) << 24);
         let (center, radius) = mesh.bounds.sphere();
         let radius = if radius.is_finite() && radius > 1e-4 { radius } else { 1.0 };
-        let handle = renderer.assets().add_mesh(&format!("content_browser\\{key:016x}"), mesh);
+        let handle = renderer.assets().add_mesh(&format!("content_browser\\{mesh_key:016x}"), mesh);
         let fov = 45f32.to_radians();
         let dist = radius / (fov * 0.5).sin() * 1.12;
         let eye = center + Vec3::new(1.0, 0.8, -1.0).normalize() * dist;

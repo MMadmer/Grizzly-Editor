@@ -5,7 +5,7 @@ use glam::{Vec2, Vec3};
 use gz_chunk::Writer;
 use gz_fmt_level::{Aabb, BuildLod};
 use gz_lc_light::math::{EPS, EPS_L, Matrix, i_floor, u8_clr};
-use gz_lc_light::{ColorC, LcGlobalData, MuModel, ShaderXrlc};
+use gz_lc_light::{ColorC, Ctl, LcGlobalData, MuModel, ShaderXrlc};
 use rayon::prelude::*;
 use smallvec::SmallVec;
 use smol_str::SmolStr;
@@ -388,13 +388,22 @@ fn build_ogf(g: &LcGlobalData, faces: &[gz_lc_light::FaceId]) -> Option<Ogf> {
 
 /// One visual per subdivision, built in parallel; the bounds are the
 /// caller's (they draw from the one `rand` stream), then progressive and stripified.
-pub fn flex2ogf(g: &LcGlobalData, splits: Vec<Split>, tree: &mut Tree, noise: bool, log: &mut Log) {
+pub fn flex2ogf(
+    g: &LcGlobalData,
+    splits: Vec<Split>,
+    tree: &mut Tree,
+    noise: bool,
+    log: &mut Log,
+    ctl: &Ctl<'_>,
+) -> Result<()> {
     for (i, s) in splits.iter().enumerate() {
         if s.len() > SS_HIGH_X2 {
             log.warn(format!("! ERROR: subdiv #{i} has more than {SS_HIGH_X2} faces ({})", s.len()));
         }
     }
-    let ogfs: Vec<Option<Ogf>> = splits.par_iter().map(|s| build_ogf(g, s)).collect();
+    let ogfs: Vec<Option<Ogf>> =
+        splits.par_iter().map(|s| if ctl.cancelled() { None } else { build_ogf(g, s) }).collect();
+    ctl.check()?;
     for o in ogfs.into_iter().flatten() {
         let id = tree.nodes.len();
         tree.nodes.push(TreeNode { base: NodeBase::new(0, o.sector), item: Item::Ogf(Box::new(o)) });
@@ -407,6 +416,9 @@ pub fn flex2ogf(g: &LcGlobalData, splits: Vec<Split>, tree: &mut Tree, noise: bo
         .par_iter_mut()
         .map(|n| {
             let mut l = Vec::new();
+            if ctl.cancelled() {
+                return l;
+            }
             if let Item::Ogf(o) = &mut n.item {
                 n.base.set(pending_bounds(o));
                 if !noise {
@@ -417,9 +429,11 @@ pub fn flex2ogf(g: &LcGlobalData, splits: Vec<Split>, tree: &mut Tree, noise: bo
             l
         })
         .collect();
+    ctl.check()?;
     for l in logs.into_iter().flatten() {
         log.msg(l);
     }
+    Ok(())
 }
 
 const SS_HIGH_X2: usize = 2 * 2 * 1024;
@@ -467,7 +481,7 @@ fn mu_face_vertices(
 
 /// `calc_ogf` of every model: a visual per subdivision, with its tangent basis, made
 /// progressive and stripified; the bounds are taken by the caller in model order.
-pub fn mu_calc_ogf(g: &LcGlobalData, tree: &mut Tree, log: &mut Log) {
+pub fn mu_calc_ogf(g: &LcGlobalData, tree: &mut Tree, log: &mut Log, ctl: &Ctl<'_>) -> Result<()> {
     let draft = g.params.quality == gz_lc_light::QUALITY_DRAFT;
     let results: Vec<(Vec<Ogf>, Vec<String>)> = g
         .mu_models
@@ -478,6 +492,9 @@ pub fn mu_calc_ogf(g: &LcGlobalData, tree: &mut Tree, log: &mut Log) {
             let mut l = Vec::new();
             let mut out = Vec::new();
             for s in &m.subdivs {
+                if ctl.cancelled() {
+                    break;
+                }
                 let material = s.material as u16;
                 let mut o = Ogf { material, sector: 0, ..Ogf::default() };
                 o.textures.push(texture_of(g, material));
@@ -498,6 +515,7 @@ pub fn mu_calc_ogf(g: &LcGlobalData, tree: &mut Tree, log: &mut Log) {
             (out, l)
         })
         .collect();
+    ctl.check()?;
     for (mi, (ogfs, l)) in results.into_iter().enumerate() {
         for si in 0..ogfs.len() {
             tree.bounds_jobs.push(BoundsOf::Mu(mi, si));
@@ -507,6 +525,7 @@ pub fn mu_calc_ogf(g: &LcGlobalData, tree: &mut Tree, log: &mut Log) {
             log.msg(line);
         }
     }
+    Ok(())
 }
 
 /// `QC`: a texture coordinate of `[-16, 16]` in 16 bits.

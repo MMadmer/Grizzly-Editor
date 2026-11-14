@@ -17,7 +17,7 @@ use gz_ui::card::{CardAction, card_footer, page, page_card};
 use gz_ui::grid::{PathAction, path_field};
 use gz_ui::pick::{PickItem, PickList};
 use gz_ui::text;
-use gz_ui::{Icon, Kind, Tone};
+use gz_ui::{Icon, Kind, Tone, Tx, tr};
 use parking_lot::Mutex;
 use serde_json::Value;
 
@@ -39,10 +39,10 @@ struct LinkState {
     /// The text the hint was worked out for.
     checked: String,
     check_gen: u64,
-    hint: String,
+    hint: Tx<'static>,
     hint_ok: bool,
     /// The last link that failed.
-    error: String,
+    error: Tx<'static>,
     linking: bool,
     /// The project the card was filled for: another one starts again.
     project: String,
@@ -117,7 +117,7 @@ fn draw(card: &Arc<LinkCard>, ui: &mut Ui, editor: &Arc<Editor>) {
         // a project of its own: the field starts empty, the places are looked at again
         st.project.clone_from(&info.folder);
         st.path.clear();
-        st.error.clear();
+        st.error = Tx::EMPTY;
         st.checked = String::from("\u{0}");
         st.places.clear();
         st.places_asked = false;
@@ -142,7 +142,7 @@ fn draw(card: &Arc<LinkCard>, ui: &mut Ui, editor: &Arc<Editor>) {
     // the hint follows the text, looked at again only when the text changed
     if st.path != st.checked {
         st.checked = st.path.clone();
-        st.hint.clear();
+        st.hint = Tx::EMPTY;
         st.hint_ok = false;
         st.check_gen += 1;
         let (generation, folder) = (st.check_gen, st.path.clone());
@@ -155,8 +155,9 @@ fn draw(card: &Arc<LinkCard>, ui: &mut Ui, editor: &Arc<Editor>) {
                 if st.check_gen == generation {
                     st.hint_ok = found.is_ok();
                     st.hint = match found {
-                        Ok(()) => GAME_OK.to_owned(),
-                        Err(why) => why.to_owned(),
+                        Ok(()) => Tx::from(GAME_OK),
+                        // the game reader's English
+                        Err(why) => Tx::ui(why),
                     };
                 }
             });
@@ -180,12 +181,14 @@ fn draw(card: &Arc<LinkCard>, ui: &mut Ui, editor: &Arc<Editor>) {
                     .places
                     .iter()
                     .map(|p| {
+                        let found = Tx::from(found_words(&p.found));
                         let detail = if p.reason.is_empty() {
-                            format!("A game ({})", found_words(&p.found))
+                            tr!("A game ({found})", found = found)
                         } else {
-                            format!("{} ({})", p.reason, found_words(&p.found))
+                            // the reason is the game reader's English
+                            tr!("link_game.places" => "{reason} ({found})", reason = Tx::ui(p.reason.clone()), found = found)
                         };
-                        PickItem::new(p.root.clone(), p.root.clone()).icon(Icon::GameFolder).detail(detail)
+                        PickItem::new(p.root.clone(), Tx::raw(p.root.clone())).icon(Icon::GameFolder).detail(detail)
                     })
                     .collect();
                 let current = st.path.clone();
@@ -209,18 +212,17 @@ fn draw(card: &Arc<LinkCard>, ui: &mut Ui, editor: &Arc<Editor>) {
                 gz_ui::state::busy_line(ui, "Looking at the folder...");
             } else {
                 let hint = st.hint.clone();
-                text::status(ui, if st.hint_ok { Tone::Success } else { Tone::Error }, &hint);
+                text::status(ui, if st.hint_ok { Tone::Success } else { Tone::Error }, hint);
             }
             if !st.error.is_empty() {
-                let e = format!("Link failed: {}", st.error);
-                text::status(ui, Tone::Error, &e);
+                text::status(ui, Tone::Error, tr!("Link failed: {error}", error = st.error.clone()));
             }
-            let why = if st.path.is_empty() {
-                "Pick the game folder first."
+            let why: Tx<'static> = if st.path.is_empty() {
+                "Pick the game folder first.".into()
             } else if st.linking {
-                "The game is being linked."
+                "The game is being linked.".into()
             } else {
-                st.hint.as_str()
+                st.hint.clone()
             };
             let actions = [
                 // a game that went away mid-session leaves a scene open behind this card: it is
@@ -228,7 +230,8 @@ fn draw(card: &Arc<LinkCard>, ui: &mut Ui, editor: &Arc<Editor>) {
                 CardAction::new("Close Project", Kind::Secondary).enabled(!live_scene, "A scene is open. Link the game to get back to it; File > Project > Switch Project... closes the project."),
                 CardAction::new("Link", Kind::Primary).default_action().enabled(st.hint_ok && !st.linking, why),
             ];
-            clicked = card_footer(ui, &format!("Project: {}", info.name), Tone::Muted, &actions);
+            clicked =
+                card_footer(ui, tr!("Project: {name}", name = info.name.clone()), Tone::Muted, &actions);
         });
     });
 
@@ -243,7 +246,7 @@ fn draw(card: &Arc<LinkCard>, ui: &mut Ui, editor: &Arc<Editor>) {
     match clicked {
         Some(1) => {
             st.linking = true;
-            st.error.clear();
+            st.error = Tx::EMPTY;
             let c = card.clone();
             let a = args([("path", s(&st.path)), ("scope", s("project"))]);
             call_then(editor, "game.link", a, move |reply, _| {

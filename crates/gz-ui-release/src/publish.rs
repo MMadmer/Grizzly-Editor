@@ -27,7 +27,9 @@ use gz_ui::dialog::{self, ResultAction, ResultSpec};
 use gz_ui::grid::{read_only, switch, text_block, text_field};
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
-use gz_ui::{Button, Dialog, DialogSize, Font, Icon, Kind, PropFlags, PropertyGrid, Tone, palette};
+use gz_ui::{
+    Button, Dialog, DialogSize, Font, Icon, Kind, PropFlags, PropertyGrid, TipExt, Tone, Tx, palette, tr,
+};
 use parking_lot::Mutex;
 use zeroize::Zeroizing;
 
@@ -566,16 +568,18 @@ impl PublishDialog {
         // not signed in is said once, in the Account row beside its action; it still stops Publish
         let signed_out = account.is_some() && source == AccountSource::None;
         let can = problems.is_empty() && !signed_out && !reading && !self.queued.load(Ordering::Relaxed);
-        let why = problems
-            .first()
-            .map(String::as_str)
-            .or(signed_out.then_some("Not signed in to GitHub: sign in or save a token in the Account row."))
-            .unwrap_or(if reading {
-                "Reading the releases on GitHub first."
-            } else {
-                "Publishing is starting."
-            })
-            .to_owned();
+        let why = problems.first().map_or_else(
+            || {
+                Tx::from(if signed_out {
+                    "Not signed in to GitHub: sign in or save a token in the Account row."
+                } else if reading {
+                    "Reading the releases on GitHub first."
+                } else {
+                    "Publishing is starting."
+                })
+            },
+            |p| Tx::ui(p.clone()),
+        );
         let mut publish = false;
         let mut cancel = false;
         Dialog::new("Publish Release", "dlg.publish_release", DialogSize::L).show(
@@ -583,7 +587,7 @@ impl PublishDialog {
             &mut open,
             |ui| {
                 for problem in &problems {
-                    text::status(ui, Tone::Warning, problem);
+                    text::status(ui, Tone::Warning, Tx::ui(problem.as_str()));
                 }
                 // where each problem is fixed, by name: Repository and Version are read-only here
                 if fixes != 0 {
@@ -601,7 +605,7 @@ impl PublishDialog {
                     });
                 }
                 if let Some(e) = &list_failed {
-                    text::status(ui, Tone::Muted, &format!("The releases of {} could not be read: {}. Publishing checks the version on GitHub again.", module.repo, reason(e)));
+                    text::status(ui, Tone::Muted, tr!("The releases of {repo} could not be read: {why}. Publishing checks the version on GitHub again.", repo = &module.repo, why = Tx::ui(reason(e).to_owned())));
                 }
                 if !problems.is_empty() || list_failed.is_some() {
                     ui.add_space(4.0);
@@ -613,15 +617,15 @@ impl PublishDialog {
                     text::status(
                         ui,
                         Tone::Warning,
-                        &format!("Publishing replaces {n} {} of an earlier packaging in releases\\{}:", if n == 1 { "file" } else { "files" }, module.version),
+                        tr!("Publishing replaces {n} {n:file|files} of an earlier packaging in releases\\{version}:", n = n, version = &module.version),
                     );
                     let color = palette(ui.ctx()).text_secondary;
                     ui.indent("replaced", |ui| {
                         for name in replaced.iter().take(10) {
-                            text::label(ui, name, Font::Body, color, Clip::Middle);
+                            text::label(ui, Tx::raw(name.as_str()), Font::Body, color, Clip::Middle);
                         }
                         if n > 10 {
-                            text::label(ui, &format!("and {} more", n - 10), Font::Body, color, Clip::End);
+                            text::label(ui, tr!("and {n} more", n = n - 10), Font::Body, color, Clip::End);
                         }
                     });
                 }
@@ -632,7 +636,7 @@ impl PublishDialog {
                 if reading {
                     f.busy("Reading the releases on GitHub...");
                 }
-                if f.button("Publish", Kind::Primary, false, can, &why) {
+                if f.button("Publish", Kind::Primary, false, can, why) {
                     publish = true;
                 }
                 if f.button("Cancel", Kind::Secondary, false, true, "") {
@@ -671,17 +675,33 @@ impl PublishDialog {
         let tag_wrong =
             !tags::valid_tag(&self.tag) || (clash.found && !clash.version) || self.title.len() > MAX_TITLE;
         // a label column in em: the labels are a word or two, the values take the rest
-        let frac = em(9.0) / ui.available_width().max(1.0);
+        // the labels' column follows the longest of them in the window's language
+        let label_w = [
+            "Release",
+            "Notes",
+            "Tag",
+            "Title",
+            "Options",
+            "Requires Game",
+            "Author Key",
+            "Account",
+            "Token",
+        ]
+        .iter()
+        .map(|l| text::width(ui.ctx(), &Font::Body.id(), *l) + em(1.0))
+        .fold(em(9.0), f32::max);
+        let frac = label_w / ui.available_width().max(1.0);
         PropertyGrid::new("publish").label_frac(frac).show(ui, |g| {
             // what goes out in one line, what to say about it, and everything with a good default under More
             let flags = if repo_ok && version_ok { PropFlags::READ_ONLY } else { PropFlags::READ_ONLY | PropFlags::INVALID };
             let name = if module.name.is_empty() { &module.id } else { &module.name };
-            let line = format!(
-                "{name}  ·  {}  ·  {}",
-                if module.version.is_empty() { "no version" } else { &module.version },
-                if module.repo.is_empty() { "no repository" } else { &module.repo }
+            let line = tr!(
+                "publish" => "{name}  ·  {version}  ·  {repo}",
+                name = name.as_str(),
+                version = if module.version.is_empty() { Tx::from("no version") } else { Tx::raw(module.version.clone()) },
+                repo = if module.repo.is_empty() { Tx::from("no repository") } else { Tx::raw(module.repo.clone()) }
             );
-            g.row("Release", "What goes out and where players update from. Mod Settings sets them.", flags, 0, |ui| read_only(ui, &line, Clip::End));
+            g.row("Release", "What goes out and where players update from. Mod Settings sets them.", flags, 0, |ui| read_only(ui, line, Clip::End));
             if repo_ok && g.trailing(Icon::External, "Open the repository on GitHub") {
                 acts.push(Act::RepoPage(module.repo.clone()));
             }
@@ -690,14 +710,15 @@ impl PublishDialog {
                 ui.horizontal(|ui| {
                     ui.add_space(6.0);
                     let _ = text::label(ui, "Notes", Font::Body, p.text_secondary, Clip::End)
-                        .on_hover_text("What changed, shown on the release page. Markdown.");
+                        .tip("What changed, shown on the release page. Markdown.");
                 });
                 let w = ui.available_width().max(1.0);
+                let hint = gz_ui::i18n::t(ui.ctx(), "What changed in this release - players read it on the release page. Markdown.");
                 let resp = ui.add(
                     egui::TextEdit::multiline(&mut self.notes)
                         .font(Font::Body.id())
                         .margin(egui::Margin::symmetric(8, 6))
-                        .hint_text("What changed in this release - players read it on the release page. Markdown.")
+                        .hint_text(hint) // ui-text: translated by i18n::t above
                         .desired_rows(5)
                         .desired_width(w),
                 );
@@ -732,13 +753,13 @@ impl PublishDialog {
                 }
                 g.row("Options", "Players receive only the latest release: the game reads that one alone.", PropFlags::NONE, 0, |ui| {
                     let p = palette(ui.ctx());
-                    switch(ui, &mut self.prerelease).on_hover_text("Players do not receive pre-releases: the game reads the latest release alone.");
+                    switch(ui, &mut self.prerelease).tip("Players do not receive pre-releases: the game reads the latest release alone.");
                     text::label(ui, "Pre-release", Font::Body, p.text, Clip::End);
                     ui.add_space(16.0);
                     let mut latest = self.latest && !self.prerelease;
                     let on = !self.prerelease;
                     ui.add_enabled_ui(on, |ui| {
-                        if switch(ui, &mut latest).on_hover_text("The latest release is the one players update to.").changed() {
+                        if switch(ui, &mut latest).tip("The latest release is the one players update to.").changed() {
                             self.latest = latest;
                         }
                         text::label(ui, "Set as latest", Font::Body, if on { p.text } else { p.text_disabled }, Clip::End);
@@ -749,7 +770,7 @@ impl PublishDialog {
                     "The lowest Dead Air: Refined version this release runs on: the version of the linked game. release.publish requires_game= names another one.",
                     PropFlags::READ_ONLY,
                     0,
-                    |ui| read_only(ui, if requires.is_empty() { "Any version" } else { requires }, Clip::End),
+                    |ui| read_only(ui, if requires.is_empty() { Tx::from("Any version") } else { Tx::raw(requires) }, Clip::End),
                 );
                 if !key_locked {
                     self.key_row(g, editor, false);
@@ -780,10 +801,12 @@ impl PublishDialog {
         let signed_in = source != AccountSource::None;
         let signing = matches!(self.sign.state.as_str(), "starting" | "waiting") && self.signing;
         let text_ = match account {
-            None => String::new(),
-            Some(_) if !signed_in => "Not signed in to GitHub: sign in or save a token".to_owned(),
-            Some((s, detail)) if detail.is_empty() => s.text().to_owned(),
-            Some((s, detail)) => format!("{} ({detail})", s.text()),
+            None => Tx::EMPTY,
+            Some(_) if !signed_in => Tx::from("Not signed in to GitHub: sign in or save a token"),
+            Some((s, detail)) if detail.is_empty() => Tx::from(s.text()),
+            Some((s, detail)) => {
+                tr!("publish" => "{source} ({detail})", source = Tx::from(s.text()), detail = detail.as_str())
+            }
         };
         let help = "Where the GitHub token comes from: an environment variable, the token the editor saved in the Windows Credential Manager, or the GitHub CLI (gh auth login) - in that order.";
         g.row("Account", help, if signed_in { PropFlags::READ_ONLY } else { PropFlags::REQUIRED }, 0, |ui| {
@@ -806,7 +829,7 @@ impl PublishDialog {
             acts.push(Act::ForgetToken);
         }
         if self.sign.state == "failed" && !self.sign.error.is_empty() {
-            g.message(Tone::Error, &self.sign.error);
+            g.message(Tone::Error, Tx::ui(self.sign.error.as_str()));
         }
         if self.signing && self.sign.state == "starting" {
             g.row(
@@ -842,13 +865,21 @@ impl PublishDialog {
         let hint = if signed_in { "Replace with a personal access token" } else { "Personal access token" };
         let typed = !self.token.is_empty();
         if g.row("Token", help, PropFlags::NONE, 0, |ui| {
-            local_secret_row(ui, "token", &mut self.token, hint, "Save", typed, "Paste a token first.")
+            local_secret_row(
+                ui,
+                "token",
+                &mut self.token,
+                hint.into(),
+                "Save".into(),
+                typed,
+                "Paste a token first.".into(),
+            )
         }) == Some(true)
         {
             acts.push(Act::SaveToken);
         }
         if !account_error.is_empty() {
-            g.message(Tone::Error, account_error);
+            g.message(Tone::Error, Tx::ui(account_error));
         }
     }
 
@@ -958,7 +989,7 @@ impl PublishDialog {
                         asker(editor),
                         Tone::Error,
                         "Publish Release",
-                        &format!("Cannot publish the release: {}.", reason(&e)),
+                        tr!("Cannot publish the release: {why}.", why = Tx::ui(reason(&e).to_owned())),
                     ) {
                         editor.log.finding(&line);
                     }
@@ -987,31 +1018,44 @@ impl PublishDialog {
         let job = Publisher::of(editor).view();
         let web = self.facts.lock().web.clone();
         let (tone, headline) = match job.state {
-            PublishState::Done => {
-                let mut h = format!("Release {} {} is published.", job.id, job.version);
-                if job.served {
-                    h.push_str(" The game already offers it: players see the update in the Mods menu.");
-                }
-                (Tone::Success, h)
+            PublishState::Done if job.served => (
+                Tone::Success,
+                tr!(
+                    "Release {id} {version} is published. The game already offers it: players see the update in the Mods menu.",
+                    id = &job.id,
+                    version = &job.version
+                ),
+            ),
+            PublishState::Done => (
+                Tone::Success,
+                tr!("Release {id} {version} is published.", id = &job.id, version = &job.version),
+            ),
+            PublishState::Cancelled if job.github => (
+                Tone::Warning,
+                Tx::from(
+                    "Publishing cancelled. Nothing was published; the draft stays on GitHub and the next attempt reuses it.",
+                ),
+            ),
+            PublishState::Cancelled => (
+                Tone::Warning,
+                Tx::from("Publishing cancelled before anything reached GitHub. Nothing was published."),
+            ),
+            _ if job.refused => {
+                (Tone::Error, tr!("The release was not published: {why}", why = Tx::ui(job.error.clone())))
             }
-            PublishState::Cancelled if job.github => {
-                (Tone::Warning, "Publishing cancelled. Nothing was published; the draft stays on GitHub and the next attempt reuses it.".to_owned())
-            }
-            PublishState::Cancelled => (Tone::Warning, "Publishing cancelled before anything reached GitHub. Nothing was published.".to_owned()),
-            _ if job.refused => (Tone::Error, format!("The release was not published: {}", job.error)),
-            _ => (Tone::Error, format!("Publishing failed: {}", job.error)),
+            _ => (Tone::Error, tr!("Publishing failed: {why}", why = Tx::ui(job.error.clone()))),
         };
-        let mut spec = ResultSpec::new("publish_result", "Publish Release", tone, &headline);
+        let mut spec = ResultSpec::new("publish_result", "Publish Release", tone, headline);
         if job.state == PublishState::Done {
             spec.rows = vec![
-                ("Repository".to_owned(), job.repo.clone()),
-                ("Tag".to_owned(), job.tag.clone()),
-                ("Release page".to_owned(), job.url.clone()),
+                ("Repository".into(), Tx::raw(job.repo.clone())),
+                ("Tag".into(), Tx::raw(job.tag.clone())),
+                ("Release page".into(), Tx::raw(job.url.clone())),
             ];
             if crate::page_ok(&job.url, &web) {
                 let (ctx2, url) = (ctx.clone(), job.url.clone());
                 spec.action = Some(ResultAction {
-                    label: "Open Release Page".to_owned(),
+                    label: "Open Release Page".into(),
                     run: Arc::new(move || ctx2.open_url(egui::OpenUrl::new_tab(&url))),
                 });
             }
@@ -1050,8 +1094,13 @@ impl EditDialog {
         let busy = ReleaseList::of(editor).running() || Publisher::of(editor).running();
         let too_long = self.notes.len() > MAX_NOTES;
         let title_long = self.title.len() > MAX_TITLE;
-        let tag = if self.target.tag.is_empty() { "(no tag)" } else { &self.target.tag };
-        let heading = format!("{} {tag}", if self.target.draft { "Draft release" } else { "Release" });
+        let tag =
+            if self.target.tag.is_empty() { Tx::from("(no tag)") } else { Tx::raw(self.target.tag.clone()) };
+        let heading = if self.target.draft {
+            tr!("Draft release {tag}", tag = tag)
+        } else {
+            tr!("Release {tag}", tag = tag)
+        };
         let why = if too_long {
             "The notes are longer than GitHub takes."
         } else if title_long {

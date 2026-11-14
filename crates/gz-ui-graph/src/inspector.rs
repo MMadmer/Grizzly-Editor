@@ -14,7 +14,7 @@ use gz_nq::catalog::{USE_EXTRA, USE_MAIN, USE_TRIGGER};
 use gz_nq::doc::DocOp;
 use gz_nq::{Catalog, text};
 use gz_ui::grid::{self, PropFlags};
-use gz_ui::{Clip, Font, Icon, NavRowSpec, Tone, nav_row, palette};
+use gz_ui::{Clip, Font, Icon, NavRowSpec, Tone, Tx, nav_row, palette, tr};
 use smol_str::SmolStr;
 
 use crate::canvas::{Op, ViewMirror};
@@ -243,18 +243,19 @@ fn rename_var_in(v: &mut Value, from: &str, to: &str) {
     }
 }
 
-/// A fold header of the panels: the kit's section, with one action on its header.
-fn fold(
+/// A fold header of the panels: the kit's section, with one action on its header. `title` is
+/// the editor's word, or data (a task's id) said with `Tx::raw`.
+fn fold<'a>(
     ui: &mut Ui,
-    key: &str,
-    title: &str,
-    count: Option<&str>,
+    key: &'a str,
+    title: impl Into<Tx<'a>>,
+    count: Option<&'a str>,
     open: bool,
-    action: Option<(Icon, &str)>,
+    action: Option<(Icon, &'static str)>,
 ) -> (bool, bool) {
     let mut sec = Section::new(key, title).default_open(open);
     if let Some(c) = count {
-        sec = sec.count(c);
+        sec = sec.count(Tx::raw(c));
     }
     if let Some((icon, tip)) = action {
         sec = sec.action(icon, tip);
@@ -505,8 +506,9 @@ impl Inspector {
             anchors.push(("variables".to_owned(), ui.cursor().min.y - origin));
             let top = ui.cursor().min.y;
             let count = self.header.vars.len().to_string();
-            let vars = Section::new(&self.key("vars"), "Variables")
-                .count(if self.header.vars.is_empty() { "" } else { &count })
+            let vars_key = self.key("vars");
+            let vars = Section::new(&vars_key, "Variables")
+                .count(Tx::raw(if self.header.vars.is_empty() { "" } else { count.as_str() }))
                 .action(Icon::Plus, "Add a variable")
                 .tip(if cx.graph.is_behaviour() { "The graph's own variables" } else { "The quest's own variables" })
                 .show(ui);
@@ -515,10 +517,11 @@ impl Inspector {
             }
             ui.add_space(4.0);
             let gcount = self.globals.len().to_string();
-            let globals = Section::new(&self.key("globals"), "Global")
-                .count(if self.globals.is_empty() { "" } else { &gcount })
+            let globals_key = self.key("globals");
+            let globals = Section::new(&globals_key, "Global")
+                .count(Tx::raw(if self.globals.is_empty() { "" } else { gcount.as_str() }))
                 .action(Icon::Plus, "Add a global variable")
-                .tip("The module's variables, shared by every graph of it: declared in mod.ltx [vars] and saved there as you edit. global.set and global.add write one, the global condition reads it, {global:name} shows it in a text.")
+                .tip(tr!("The module's variables, shared by every graph of it: declared in mod.ltx [vars] and saved there as you edit. global.set and global.add write one, the global condition reads it, {{global:name}} shows it in a text."))
                 .show(ui);
             if globals.open || globals.action.is_some() {
                 self.draw_globals(ui, cx, globals.action.is_some());
@@ -643,13 +646,14 @@ impl Inspector {
         for i in 0..count {
             let Some(mut t) = self.header.tasks.get(i).cloned() else { continue };
             anchors.push((format!("task:{}", t.id), ui.cursor().min.y - origin));
-            let head = if t.id.is_empty() { "(no id)".to_owned() } else { t.id.clone() };
+            let head = if t.id.is_empty() { Tx::from("(no id)") } else { Tx::raw(t.id.clone()) };
+            let task_key = self.key(&format!("task:{}", t.id));
             let (topen, x) = ui
                 .push_id(i, |ui| {
                     fold(
                         ui,
-                        &self.key(&format!("task:{}", t.id)),
-                        &head,
+                        &task_key,
+                        head,
                         None,
                         true,
                         Some((Icon::Close, "Remove the task. Ctrl+Z brings it back")),
@@ -667,7 +671,7 @@ impl Inspector {
                 let mut refs = false;
                 let mut rename = false;
                 params::grid(ui, ROLE_TASKS, "id", |g| {
-                    g.row("ID", "The task's id in the PDA and in saves. Rename changes every reference with it", PropFlags::READ_ONLY, 1, |ui| grid::read_only(ui, &t.id, Clip::End));
+                    g.row("ID", "The task's id in the PDA and in saves. Rename changes every reference with it", PropFlags::READ_ONLY, 1, |ui| grid::read_only(ui, Tx::raw(t.id.as_str()), Clip::End));
                     refs = g.trailing(Icon::FindInProject, "Find the task's references in the project");
                     rename = g.trailing(Icon::Rename, "Rename the task and every reference to it");
                 });
@@ -685,7 +689,7 @@ impl Inspector {
                 if params::grid(ui, ROLE_TASKS, "type", |g| {
                     g.row("Type", "Storyline tasks are listed first in the PDA", PropFlags::NONE, 1, |ui| {
                         let mut at = usize::from(ty == "storyline");
-                        let c = grid::combo(ui, "type", &mut at, &["additional", "storyline"]);
+                        let c = grid::combo(ui, "type", &mut at, &[Tx::ctx("task_type", "additional"), Tx::ctx("task_type", "storyline")]);
                         if c {
                             ty = items.get(at).cloned().unwrap_or_default();
                         }
@@ -723,7 +727,7 @@ impl Inspector {
                 ui.push_id(("obj", i, j), |ui| {
                     let mut oid = o.id.clone();
                     params::grid(ui, ROLE_TASKS, "oid", |g| {
-                        if g.row(&format!("Objective {}", j + 1), "The objective's id: what objective.* and task.* nodes name", PropFlags::NONE, 2, |ui| grid::text_field(ui, &mut oid).changed()).unwrap_or(false) {
+                        if g.row(tr!("Objective {n}", n = j + 1), "The objective's id: what objective.* and task.* nodes name", PropFlags::NONE, 2, |ui| grid::text_field(ui, &mut oid).changed()).unwrap_or(false) {
                             o_ch = true;
                         }
                         if g.trailing(Icon::Delete, "Remove the objective") {
@@ -807,17 +811,19 @@ impl Inspector {
         let mut removed = None;
         for i in 0..self.header.roles.len() {
             let Some(mut r) = self.header.roles.get(i).cloned() else { continue };
-            let head = format!(
-                "{}{}",
-                if r.name.is_empty() { "(no name)" } else { &r.name },
-                if r.many { " (group)" } else { "" }
-            );
+            let head = match (r.name.is_empty(), r.many) {
+                (true, false) => Tx::from("(no name)"),
+                (true, true) => tr!("{role} (group)", role = Tx::from("(no name)")),
+                (false, false) => Tx::raw(r.name.clone()),
+                (false, true) => tr!("{role} (group)", role = r.name.as_str()),
+            };
+            let role_key = self.key(&format!("role{i}"));
             let (ropen, x) = ui
                 .push_id(i, |ui| {
                     fold(
                         ui,
-                        &self.key(&format!("role{i}")),
-                        &head,
+                        &role_key,
+                        head,
                         None,
                         true,
                         Some((Icon::Close, "Remove the role. Ctrl+Z brings it back")),
@@ -837,7 +843,8 @@ impl Inspector {
                     r.name = name;
                     r_ch = true;
                 }
-                let (more, _) = fold(ui, &self.key(&format!("role{i}/more")), "More", None, false, None);
+                let more_key = self.key(&format!("role{i}/more"));
+                let (more, _) = fold(ui, &more_key, "More", None, false, None);
                 if more {
                     let mut pcx = self.param_cx(ui, cx, ROLE_ROLES, true);
                     r_ch |= params::draw_text(ui, &mut pcx, "title", &Row::new("Title", "For the author: shown where the caller binds the role. Never seen by the player", 2), &mut r.title, false);
@@ -845,7 +852,7 @@ impl Inspector {
                     let mut b_ch = false;
                     params::grid(ui, ROLE_ROLES, "binding", |g| {
                         g.row("Binding", "Group: the role may hold several NPCs - a squad, a list. Optional: bound to nobody is not an error", PropFlags::NONE, 2, |ui| {
-                            b_ch |= gz_ui::Switch::new(&mut many, "Group").tip("The role may hold several NPCs - a squad, a list. Off: exactly one").show(ui).changed();
+                            b_ch |= gz_ui::Switch::new(&mut many, Tx::ctx("role", "Group")).tip("The role may hold several NPCs - a squad, a list. Off: exactly one").show(ui).changed();
                             ui.add_space(16.0);
                             b_ch |= gz_ui::Switch::new(&mut optional, "Optional").tip("Bound to nobody is not an error: steps addressed to it do nothing").show(ui).changed();
                         });
@@ -881,7 +888,7 @@ impl Inspector {
                 Icon::Variable,
                 "No variables",
                 "A variable's default value is also its type.",
-                Some("Add Variable"),
+                Some("Add Variable".into()),
             );
         } else {
             self.var_sel = self.var_sel.min(self.header.vars.len() - 1);
@@ -897,7 +904,13 @@ impl Inspector {
                         params::value_text(&v.value)
                     );
                     if l.row(&format!("var{i}"), i == self.var_sel, |ui| {
-                        gz_ui::text::label(ui, &label, Font::Body, palette(ui.ctx()).text, Clip::End);
+                        gz_ui::text::label(
+                            ui,
+                            Tx::raw(label.as_str()),
+                            Font::Body,
+                            palette(ui.ctx()).text,
+                            Clip::End,
+                        );
                     })
                     .clicked()
                     {
@@ -919,7 +932,13 @@ impl Inspector {
             if let Some(var) = self.header.vars.get(self.var_sel).cloned() {
                 let i = self.var_sel;
                 ui.add_space(4.0);
-                gz_ui::text::label(ui, &var.name, Font::Strong, palette(ui.ctx()).text, Clip::End);
+                gz_ui::text::label(
+                    ui,
+                    Tx::raw(var.name.as_str()),
+                    Font::Strong,
+                    palette(ui.ctx()).text,
+                    Clip::End,
+                );
                 if self.var_name_buf.is_empty() || !ui.ctx().egui_wants_keyboard_input() {
                     self.var_name_buf.clone_from(&var.name);
                 }
@@ -1083,7 +1102,7 @@ impl Inspector {
                 Icon::Variable,
                 "No global variables",
                 "A value every graph of the module sees - the night, a flag, a count.",
-                Some("Add Global"),
+                Some("Add Global".into()),
             );
         } else {
             self.global_sel = self.global_sel.min(self.globals.len() - 1);
@@ -1095,7 +1114,13 @@ impl Inspector {
                     let label =
                         format!("{name}  \u{b7}  {} {}", params::type_name(value), global_text(value));
                     if l.row(&format!("global{i}"), i == self.global_sel, |ui| {
-                        gz_ui::text::label(ui, &label, Font::Body, palette(ui.ctx()).text, Clip::End);
+                        gz_ui::text::label(
+                            ui,
+                            Tx::raw(label.as_str()),
+                            Font::Body,
+                            palette(ui.ctx()).text,
+                            Clip::End,
+                        );
                     })
                     .clicked()
                     {
@@ -1121,7 +1146,13 @@ impl Inspector {
             if let Some((name, value)) = self.globals.get(self.global_sel).cloned() {
                 let i = self.global_sel;
                 ui.add_space(4.0);
-                gz_ui::text::label(ui, &name, Font::Strong, palette(ui.ctx()).text, Clip::End);
+                gz_ui::text::label(
+                    ui,
+                    Tx::raw(name.as_str()),
+                    Font::Strong,
+                    palette(ui.ctx()).text,
+                    Clip::End,
+                );
                 if self.global_name_buf.is_empty() || !ui.ctx().egui_wants_keyboard_input() {
                     self.global_name_buf.clone_from(&name);
                 }
@@ -1281,18 +1312,21 @@ impl Inspector {
             self.node_scroll = [0.0, 0.0];
             self.action_scroll = [0.0, 0.0];
             let n = cx.view.selection.len();
-            let (title, text_) = if n > 1 {
-                (format!("{n} nodes selected"), "Select one node to edit it.".to_owned())
+            let (title, text_): (Tx<'static>, Tx<'static>) = if n > 1 {
+                (tr!("{n} nodes selected", n = n), "Select one node to edit it.".into())
+            } else if cx.graph.is_behaviour() {
+                // a behaviour graph never says "quest"
+                (
+                    "Nothing selected".into(),
+                    "Select a node to edit it. The graph's own settings are in the Graph panel.".into(),
+                )
             } else {
                 (
-                    "Nothing selected".to_owned(),
-                    format!(
-                        "Select a node to edit it. The {}'s own settings are in the Graph panel.",
-                        look::doc_noun(cx.graph.is_behaviour())
-                    ),
+                    "Nothing selected".into(),
+                    "Select a node to edit it. The quest's own settings are in the Graph panel.".into(),
                 )
             };
-            gz_ui::state::empty_state(&mut child, Icon::Info, &title, &text_, None);
+            gz_ui::state::empty_state(&mut child, Icon::Info, title, text_, None);
             ui.allocate_rect(rect, egui::Sense::hover());
             return;
         }
@@ -1398,18 +1432,21 @@ impl Inspector {
         let p = palette(ui.ctx());
         let cat = cx.cat;
         let trig = cat.is_trigger(&self.node.kind);
-        let title = look::kind_title(cat, &self.node.kind, behaviour);
+        // the catalog's English
+        let title = Tx::ui_in("kind", look::kind_title(cat, &self.node.kind, behaviour));
         local::local_pane_header(
             ui,
             look::kind_icon(cat, &self.node.kind),
             look::kind_color(&p, cat, &self.node.kind, 1.0),
-            &title,
+            title,
             &self.node.id,
             0.0,
         );
         // what is wrong with the node, first: each line names a parameter and says what to do
         for pr in cx.data.problems.iter().filter(|pr| pr.node == self.node_id.as_str()) {
-            gz_ui::text::status(ui, if pr.is_error() { Tone::Error } else { Tone::Warning }, &pr.text());
+            // the validator's English
+            let line = look::problem_line(ui.ctx(), pr);
+            gz_ui::text::status(ui, if pr.is_error() { Tone::Error } else { Tone::Warning }, Tx::raw(line));
         }
         let mut ch = false;
         let (open, _) = fold(ui, &self.key("node"), "Node", None, true, None);
@@ -1459,9 +1496,9 @@ impl Inspector {
                 g.row(
                     "Kind",
                     if desc.is_empty() {
-                        "What the node does. Changing it resets the parameters"
+                        Tx::from("What the node does. Changing it resets the parameters")
                     } else {
-                        &desc
+                        Tx::ui_in("kind", desc.clone())
                     },
                     PropFlags::NONE,
                     0,
@@ -1522,7 +1559,7 @@ impl Inspector {
                 None => {
                     params::grid(ui, ROLE_NODE, "unknown", |g| {
                         g.row("Kind", "", PropFlags::INVALID | PropFlags::READ_ONLY, 0, |ui| {
-                            grid::read_only(ui, &kind, Clip::End)
+                            grid::read_only(ui, Tx::raw(kind.as_str()), Clip::End)
                         });
                         g.message(Tone::Error, "Unknown kind - not in the catalog");
                     });
@@ -1565,21 +1602,22 @@ impl Inspector {
                 for (exit, list) in [(false, &self.node.on_enter), (true, &self.node.on_exit)] {
                     for (i, a) in list.iter().enumerate() {
                         let sel = format!("{}:{i}", if exit { "exit" } else { "enter" });
-                        let where_ = format!("{} {}", if exit { "On exit" } else { "On enter" }, i + 1);
-                        let what = look::kind_title(cat, &a.kind, behaviour);
+                        let where_ =
+                            if exit { tr!("On exit {n}", n = i + 1) } else { tr!("On enter {n}", n = i + 1) };
+                        let what = Tx::ui_in("kind", look::kind_title(cat, &a.kind, behaviour));
                         let selected = cx.view.slot == sel;
                         let spec = NavRowSpec {
                             icon: look::kind_icon(cat, &a.kind),
-                            count: Some(&where_),
+                            count: Some(where_),
                             tip: if exit {
-                                "Runs when the node is left. Click to edit it below"
+                                "Runs when the node is left. Click to edit it below".into()
                             } else {
-                                "Runs when the node is entered. Click to edit it below"
+                                "Runs when the node is entered. Click to edit it below".into()
                             },
                             ..NavRowSpec::default()
                         };
                         let top = ui.cursor().min.y;
-                        if nav_row(ui, &format!("act_{sel}"), &what, selected, &spec).clicked {
+                        if nav_row(ui, &format!("act_{sel}"), what, selected, &spec).clicked {
                             cx.view.slot.clone_from(&sel);
                         }
                         if selected && self.reveal_frames > 0 {
@@ -1641,8 +1679,8 @@ impl Inspector {
                         ui,
                         ROLE_NODE,
                         ("out", i),
-                        &Row::new(&pin.name, "", 0),
-                        if tg.is_empty() { "(nothing)" } else { &tg },
+                        &Row::new(Tx::ui_in("pin", pin.name.to_string()), "", 0),
+                        if tg.is_empty() { Tx::from("(nothing)") } else { Tx::raw(tg.as_str()) },
                     );
                 }
             }
@@ -1667,15 +1705,17 @@ impl Inspector {
         else {
             return;
         };
-        let where_ = format!("{} {}", if exit { "On exit" } else { "On enter" }, index + 1);
-        let title = look::kind_title(cat, &a.kind, behaviour);
+        let where_ =
+            if exit { tr!("On exit {n}", n = index + 1) } else { tr!("On enter {n}", n = index + 1) };
+        let where_ = where_.text(ui.ctx());
+        let title = Tx::ui_in("kind", look::kind_title(cat, &a.kind, behaviour));
         let head = ui.cursor().min;
         let tools = 3.0 * 26.0;
         local::local_pane_header(
             ui,
             look::kind_icon(cat, &a.kind),
             look::kind_color(&p, cat, &a.kind, 1.0),
-            &title,
+            title,
             &where_,
             tools,
         );
@@ -1729,9 +1769,9 @@ impl Inspector {
             g.row(
                 "Kind",
                 if desc.is_empty() {
-                    "What the action does. Changing it resets the parameters"
+                    Tx::from("What the action does. Changing it resets the parameters")
                 } else {
-                    &desc
+                    Tx::ui_in("kind", desc.clone())
                 },
                 PropFlags::NONE,
                 0,
@@ -1761,7 +1801,7 @@ impl Inspector {
             None => {
                 params::grid(ui, ROLE_ACTION, "unknown", |g| {
                     g.row("Kind", "", PropFlags::INVALID | PropFlags::READ_ONLY, 0, |ui| {
-                        grid::read_only(ui, &kind, Clip::End)
+                        grid::read_only(ui, Tx::raw(kind.as_str()), Clip::End)
                     });
                     g.message(Tone::Error, "Unknown kind - not in the catalog");
                 });

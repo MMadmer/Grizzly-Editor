@@ -130,22 +130,35 @@ macro_rules! view_mode {
 
 /// A camera view: `viewport.camera action=set view=`.
 macro_rules! camera_view {
-    ($id:literal, $title:literal, $view:literal) => {
+    ($id:literal, $title:literal, $view:literal, $keys:expr) => {
         Action::new($id, $title, GROUP, "viewport.camera")
+            .keys($keys)
             .scope(TAB)
             .args(|_| view_args(&[("action", json!("set")), ("view", json!($view))]))
             .checked(|cx| read(cx, |s| s.nav.current().key() == $view).unwrap_or(false))
     };
 }
 
-/// A camera bookmark: Ctrl+n goes to it, Ctrl+Shift+n keeps the camera in it.
+/// A bookmark's Go: on while the open scene's slot keeps a camera, so a stray digit passes on
+/// instead of saying the slot is empty.
+fn bookmark_kept(cx: &ActionCx<'_>, n: u8) -> Enabled {
+    if !on_level(cx).on() {
+        return on_level(cx);
+    }
+    Enabled::when(
+        crate::service::bookmarks(cx.editor).contains(&n),
+        "This camera bookmark keeps no camera yet: Ctrl and its digit keep one.",
+    )
+}
+
+/// A camera bookmark: n goes to it, Ctrl+n keeps the camera in it.
 macro_rules! bookmark {
     ($n:literal, $key:expr, $go:literal, $set:literal, $gt:literal, $st:literal) => {
         [
-            act!($go, $gt, "viewport.camera", Icon::BookmarkNext, const { &[Chord::ctrl($key)] }, on_level, {
+            act!($go, $gt, "viewport.camera", Icon::BookmarkNext, const { &[Chord::new($key)] }, |cx| bookmark_kept(cx, $n), {
                 "action": "bookmark", "slot": $n
             }),
-            act!($set, $st, "viewport.camera", Icon::Bookmark, const { &[Chord::ctrl_shift($key)] }, on_level, {
+            act!($set, $st, "viewport.camera", Icon::Bookmark, const { &[Chord::ctrl($key)] }, on_level, {
                 "action": "bookmark", "slot": $n, "store": true
             }),
         ]
@@ -166,13 +179,13 @@ fn tool_is(cx: &ActionCx<'_>, g: GizmoType) -> bool {
 pub fn actions() -> Vec<Action> {
     let mut v = vec![
         // the modes
-        act!("viewport.mode_select", "Select Mode", "scene.mode", Icon::Select, const { &[Chord::new(Key::Num1)] }, on_level, { "mode": "select" })
+        act!("viewport.mode_select", "Select Mode", "scene.mode", Icon::Select, const { &[Chord::shift(Key::Num1)] }, on_level, { "mode": "select" })
             .checked(|cx| checked_mode(cx, |m| m == SceneMode::Select)),
-        act!("viewport.mode_place", "Place Mode", "scene.mode", Icon::Place, const { &[Chord::new(Key::Num2)] }, on_level, { "mode": "place" })
+        act!("viewport.mode_place", "Place Mode", "scene.mode", Icon::Place, const { &[Chord::shift(Key::Num2)] }, on_level, { "mode": "place" })
             .checked(|cx| checked_mode(cx, |m| m == SceneMode::Place)),
         Action::new("viewport.mode_paint", "Paint Mode", GROUP, "scene.mode")
             .icon(Icon::DetailObjects)
-            .keys(const { &[Chord::new(Key::Num3)] })
+            .keys(const { &[Chord::shift(Key::Num3)] })
             .scope(TAB)
             .args(|cx| {
                 let layer = read(cx, |s| s.paint_layer).unwrap_or(SceneMode::Details);
@@ -180,7 +193,7 @@ pub fn actions() -> Vec<Action> {
             })
             .enabled(on_level)
             .checked(|cx| checked_mode(cx, |m| m.layer().is_some())),
-        act!("viewport.mode_zones", "Zones Mode", "scene.mode", Icon::Sector, const { &[Chord::new(Key::Num4)] }, on_level, { "mode": "zones" })
+        act!("viewport.mode_zones", "Zones Mode", "scene.mode", Icon::Sector, const { &[Chord::shift(Key::Num4)] }, on_level, { "mode": "zones" })
             .checked(|cx| checked_mode(cx, |m| m == SceneMode::Zones)),
         Action::new("viewport.leave_mode", "Back to Select Mode", GROUP, "scene.mode")
             .icon(Icon::Select)
@@ -202,9 +215,21 @@ pub fn actions() -> Vec<Action> {
             .checked(|cx| tool_is(cx, GizmoType::Rotate)),
         act!("viewport.scale_tool", "Scale", "viewport.view", Icon::Scale, const { &[Chord::new(Key::R)] }, |cx| can(cx, 2), { "tool": "scale" })
             .checked(|cx| tool_is(cx, GizmoType::Scale)),
+        Action::new("viewport.cycle_tool", "Next Transform Tool", GROUP, "viewport.view")
+            .keys(const { &[Chord::new(Key::Space)] })
+            .scope(TAB)
+            .args(|cx| {
+                let next = match read(cx, |s| s.gizmo).unwrap_or(GizmoType::None) {
+                    GizmoType::Move => "rotate",
+                    GizmoType::Rotate => "scale",
+                    _ => "move",
+                };
+                view_args(&[("tool", json!(next))])
+            })
+            .enabled(on_level),
         Action::new("viewport.toggle_space", "World / Local", GROUP, "viewport.view")
             .icon(Icon::Globe)
-            .keys(const { &[Chord::new(Key::Backtick)] })
+            .keys(const { &[Chord::ctrl(Key::Backtick)] })
             .scope(TAB)
             .args(|cx| {
                 let local = read(cx, |s| s.prefs.space == Space::Local).unwrap_or(false);
@@ -215,13 +240,13 @@ pub fn actions() -> Vec<Action> {
         // the camera
         act!("viewport.frame_selection", "Frame Selection", "viewport.camera", Icon::FrameSelection, const { &[Chord::new(Key::F)] }, on_selection, { "action": "frame", "scope": "selection" }),
         act!("viewport.frame_all", "Frame All", "viewport.camera", Icon::FrameAll, const { &[Chord::new(Key::Home)] }, on_level, { "action": "frame", "scope": "all" }),
-        camera_view!("viewport.view_perspective", "Perspective", "perspective"),
-        camera_view!("viewport.view_top", "Top", "top"),
-        camera_view!("viewport.view_bottom", "Bottom", "bottom"),
-        camera_view!("viewport.view_front", "Front", "front"),
-        camera_view!("viewport.view_back", "Back", "back"),
-        camera_view!("viewport.view_left", "Left", "left"),
-        camera_view!("viewport.view_right", "Right", "right"),
+        camera_view!("viewport.view_perspective", "Perspective", "perspective", const { &[Chord::alt(Key::G)] }),
+        camera_view!("viewport.view_top", "Top", "top", const { &[Chord::alt(Key::J)] }),
+        camera_view!("viewport.view_bottom", "Bottom", "bottom", const { &[Chord::alt_shift(Key::J)] }),
+        camera_view!("viewport.view_front", "Front", "front", const { &[Chord::alt(Key::H)] }),
+        camera_view!("viewport.view_back", "Back", "back", const { &[Chord::alt_shift(Key::H)] }),
+        camera_view!("viewport.view_left", "Left", "left", const { &[Chord::alt(Key::K)] }),
+        camera_view!("viewport.view_right", "Right", "right", const { &[Chord::alt_shift(Key::K)] }),
         Action::new("viewport.orthographic", "Orthographic", GROUP, "viewport.camera")
             .icon(Icon::Ortho)
             .scope(TAB)
@@ -358,12 +383,16 @@ pub fn actions() -> Vec<Action> {
 pub const MODES: [&str; 4] =
     ["viewport.mode_select", "viewport.mode_place", "viewport.mode_paint", "viewport.mode_zones"];
 
-/// Adds the viewport's actions and its preferences to the shell.
+/// The viewport's words in Russian.
+pub const RU: &str = include_str!("ru.lua");
+
+/// Adds the viewport's actions, its preferences and its words to the shell.
 pub fn install(b: &mut ShellBuilder) {
     for a in actions() {
         b.action(a);
     }
     crate::prefs::install(b);
+    b.translation(RU);
 }
 
 #[cfg(test)]
@@ -385,6 +414,20 @@ mod tests {
         }
         for m in super::MODES {
             assert!(all.iter().any(|a| a.id == m), "{m}");
+        }
+    }
+
+    /// The viewport's catalog reads with the kit's and the shell's, and holds every title, group
+    /// and reason of its actions.
+    #[test]
+    fn the_catalog_is_sound_and_names_every_action() {
+        let c = gz_ui::i18n::Catalog::parse(&[gz_ui::i18n::KIT_RU, gz_app::lang::SHELL_RU, super::RU])
+            .expect("the catalogs read");
+        let p = gz_ui::i18n::problems(&c);
+        assert!(p.is_empty(), "{}", p.join("\n"));
+        for a in actions() {
+            assert!(c.knows(a.title), "no entry for the action title '{}'", a.title);
+            assert!(c.knows(a.group), "no entry for the group '{}'", a.group);
         }
     }
 }

@@ -11,7 +11,10 @@ use std::time::SystemTime;
 
 use gz_base::{RelPath, SmolStr};
 use gz_mod::exclude_match;
-use gz_project::{Entry, EntryKind, FileTree, is_editor_only_entry, is_source_only_entry, is_tooling_entry};
+use gz_project::{
+    Entry, EntryKind, FileTree, is_editor_only_entry, is_level_build_file, is_source_only_entry,
+    is_tooling_entry,
+};
 use gz_task::Executors;
 use rustc_hash::FxHashMap;
 
@@ -36,6 +39,9 @@ pub enum LeftOutReason {
     Excluded,
     /// An author key: whoever has it publishes updates in the author's name.
     KeyFile,
+    /// A level build's own file (`build.prj`, `build.state`): what the compiler reads, never what
+    /// the game does.
+    LevelBuild,
     PathTooLong,
 }
 
@@ -54,6 +60,7 @@ impl LeftOut {
         let rel = self.rel.to_backslash();
         match self.reason {
             LeftOutReason::KeyFile => format!("{rel} (a key file never ships)"),
+            LeftOutReason::LevelBuild => format!("{rel} (the level build's own file)"),
             LeftOutReason::PathTooLong => format!("{rel} (path too long)"),
             _ => rel,
         }
@@ -131,6 +138,10 @@ impl Walker<'_> {
         };
         if !folder && rel.has_extension("xkey") {
             self.out.left_out.push(LeftOut { rel: rel.clone(), reason: LeftOutReason::KeyFile });
+            return true;
+        }
+        if !folder && is_level_build_file(rel.as_str()) {
+            self.out.left_out.push(LeftOut { rel: rel.clone(), reason: LeftOutReason::LevelBuild });
             return true;
         }
         let reason = match seen {
@@ -285,6 +296,7 @@ mod tests {
             ".git\\objects",
             "gamedata\\textures\\qa",
             "gamedata\\.git",
+            "gamedata\\levels\\l01\\.lc_new",
             "design",
             "temp",
             "rawdata",
@@ -300,6 +312,9 @@ mod tests {
             "gamedata\\textures\\qa\\a.dds",
             "gamedata\\textures\\qa\\Thumbs.db",
             "gamedata\\configs.ltx",
+            "gamedata\\levels\\l01\\level.ai",
+            "gamedata\\levels\\l01\\build.prj",
+            "gamedata\\levels\\l01\\build.state",
             "design\\story.md",
             "art.psd",
             "temp\\x",
@@ -322,9 +337,16 @@ mod tests {
         let files: Vec<&str> = walk.files.iter().map(|f| f.rel.as_str()).collect();
         assert_eq!(
             files,
-            ["gamedata/configs.ltx", "gamedata/textures/qa/a.dds", "LICENSE", "mod.ltx", "patch/fix.ltxp"]
+            [
+                "gamedata/configs.ltx",
+                "gamedata/levels/l01/level.ai",
+                "gamedata/textures/qa/a.dds",
+                "LICENSE",
+                "mod.ltx",
+                "patch/fix.ltxp"
+            ]
         );
-        assert_eq!(walk.bytes, 5);
+        assert_eq!(walk.bytes, 6);
         let left = walk.left_out_texts();
         assert_eq!(
             left,
@@ -336,12 +358,15 @@ mod tests {
                 "design",
                 "docs",
                 "gamedata\\.git",
+                "gamedata\\levels\\l01\\.lc_new",
+                "gamedata\\levels\\l01\\build.prj (the level build's own file)",
+                "gamedata\\levels\\l01\\build.state (the level build's own file)",
                 "gamedata\\textures\\qa\\Thumbs.db"
             ]
         );
 
         let flat = BuildWalk::scan(&tree, &rules, WalkScope::Gamedata, &exec);
-        assert_eq!(flat.files.len(), 2);
+        assert_eq!(flat.files.len(), 3);
         let none = BuildWalk::scan(&tree, &["gamedata".to_owned()], WalkScope::Gamedata, &exec);
         assert!(none.files.is_empty());
         assert_eq!(none.left_out_texts(), ["gamedata"]);

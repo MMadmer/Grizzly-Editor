@@ -1,6 +1,6 @@
 //! What the Level tab's panels draw that no other surface does, and the one copy of what every
 //! panel of the crate does with commands: [`run`] (a command off the UI thread, its answer a
-//! notice), [`confirm`], [`removal`], [`plural`], [`args`].
+//! notice), [`confirm`], [`removal`], [`args`].
 
 use std::sync::Arc;
 
@@ -8,32 +8,40 @@ use egui::{Align2, CornerRadius, Id, Rect, Response, Sense, Stroke, StrokeKind, 
 use gz_editor::{Args, Editor, Value};
 use gz_query::Query;
 use gz_ui::text::{self, Clip};
-use gz_ui::{Button, Font, Icon, Kind, audit, icons, metrics, palette};
+use gz_ui::{Button, Font, Icon, Kind, TipExt, Tx, audit, icons, metrics, palette};
 
 /// `local_eye_toggle`: an eye (or a crossed-out eye) filling `rect`, hover-filled. Returns
 /// whether it was clicked.
-pub fn local_eye_toggle(ui: &mut Ui, id: Id, rect: Rect, visible: bool, tip: &str) -> bool {
+pub fn local_eye_toggle<'a>(ui: &mut Ui, id: Id, rect: Rect, visible: bool, tip: impl Into<Tx<'a>>) -> bool {
     let icon = if visible { Icon::Eye } else { Icon::EyeOff };
-    local_glyph_toggle(ui, id, rect, icon, visible, true, tip)
+    local_glyph_toggle(ui, id, rect, icon, visible, true, tip.into())
 }
 
 /// `local_lock_toggle`: a closed lock while `locked`; an open one only under the pointer, so a
 /// column of unlocked rows stays quiet. Returns whether it was clicked.
-pub fn local_lock_toggle(
+pub fn local_lock_toggle<'a>(
     ui: &mut Ui,
     id: Id,
     rect: Rect,
     locked: bool,
     row_hovered: bool,
-    tip: &str,
+    tip: impl Into<Tx<'a>>,
 ) -> bool {
     let icon = if locked { Icon::Lock } else { Icon::Unlock };
-    local_glyph_toggle(ui, id, rect, icon, locked, locked || row_hovered, tip)
+    local_glyph_toggle(ui, id, rect, icon, locked, locked || row_hovered, tip.into())
 }
 
 /// A square glyph button of a list's column: bright while `on`, drawn only while `shown` or
 /// hovered.
-fn local_glyph_toggle(ui: &mut Ui, id: Id, rect: Rect, icon: Icon, on: bool, shown: bool, tip: &str) -> bool {
+fn local_glyph_toggle(
+    ui: &mut Ui,
+    id: Id,
+    rect: Rect,
+    icon: Icon,
+    on: bool,
+    shown: bool,
+    tip: Tx<'_>,
+) -> bool {
     let p = palette(ui.ctx());
     let resp = ui.interact(rect, id, Sense::click());
     let hovered = resp.hovered();
@@ -54,16 +62,12 @@ fn local_glyph_toggle(ui: &mut Ui, id: Id, rect: Rect, icon: Icon, on: bool, sho
         let g = Rect::from_center_size(rect.center(), Vec2::splat(metrics::GLYPH_ROW));
         icons::draw(ui.painter(), icon, g, tone);
     }
-    audit::control(ui.ctx(), tip, true, None, Some(tip), rect);
+    // the audit reads the English; the window the language it shows
+    let en = tip.en();
+    audit::control(ui.ctx(), &en, true, None, Some(&en), rect);
     let clicked = resp.clicked();
-    resp.on_hover_text(tip);
+    resp.tip(&tip);
     clicked
-}
-
-/// `n word` or `n words`.
-#[must_use]
-pub fn plural(n: usize, word: &str) -> String {
-    format!("{n} {word}{}", if n == 1 { "" } else { "s" })
 }
 
 /// The arguments of a command from name-value pairs.
@@ -143,10 +147,10 @@ pub fn confirm(
 #[must_use]
 pub fn removal(
     id: &str,
-    title: &str,
-    headline: &str,
-    items: Vec<String>,
-    action: &str,
+    title: &'static str,
+    headline: &'static str,
+    items: Vec<gz_ui::Tx<'static>>,
+    action: &'static str,
 ) -> gz_ui::ConfirmSpec {
     gz_ui::ConfirmSpec {
         id: id.into(),
@@ -161,25 +165,25 @@ pub fn removal(
 }
 
 /// A button of a [`local_button_flow`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct LocalButton<'a> {
-    pub label: &'a str,
-    pub tip: &'a str,
+    pub label: Tx<'a>,
+    pub tip: Tx<'a>,
     pub enabled: bool,
     /// Why it is off.
-    pub why: &'a str,
+    pub why: Tx<'a>,
 }
 
 impl<'a> LocalButton<'a> {
     #[must_use]
-    pub const fn new(label: &'a str, tip: &'a str) -> Self {
-        Self { label, tip, enabled: true, why: "" }
+    pub fn new(label: impl Into<Tx<'a>>, tip: impl Into<Tx<'a>>) -> Self {
+        Self { label: label.into(), tip: tip.into(), enabled: true, why: Tx::EMPTY }
     }
 
     #[must_use]
-    pub const fn when(mut self, enabled: bool, why: &'a str) -> Self {
+    pub fn when(mut self, enabled: bool, why: impl Into<Tx<'a>>) -> Self {
         self.enabled = enabled;
-        self.why = why;
+        self.why = why.into();
         self
     }
 }
@@ -191,9 +195,9 @@ pub fn local_button_flow(ui: &mut Ui, buttons: &[LocalButton<'_>]) -> Option<usi
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
         for (i, b) in buttons.iter().enumerate() {
-            let mut button = Button::new(b.label).kind(Kind::Secondary).enabled(b.enabled, b.why);
+            let mut button = Button::new(&b.label).kind(Kind::Secondary).enabled(b.enabled, &b.why);
             if b.enabled {
-                button = button.tip(b.tip);
+                button = button.tip(&b.tip);
             }
             if button.show(ui).clicked() {
                 pressed = Some(i);
@@ -204,7 +208,7 @@ pub fn local_button_flow(ui: &mut Ui, buttons: &[LocalButton<'_>]) -> Option<usi
 }
 
 /// `local_panel_header`: an icon, the name and, muted, what it is.
-pub fn local_panel_header(ui: &mut Ui, icon: Icon, name: &str, kind: &str) {
+pub fn local_panel_header(ui: &mut Ui, icon: Icon, name: Tx<'_>, kind: Tx<'_>) {
     let p = palette(ui.ctx());
     let ctx = ui.ctx().clone();
     let h = metrics::SECTION_HEADER;
@@ -219,7 +223,7 @@ pub fn local_panel_header(ui: &mut Ui, icon: Icon, name: &str, kind: &str) {
     );
     icons::draw(painter, icon, g, p.accent_bright);
     let x = g.max.x + 8.0;
-    let kind_w = if kind.is_empty() { 0.0 } else { text::width(&ctx, &Font::Small.id(), kind) + 8.0 };
+    let kind_w = if kind.is_empty() { 0.0 } else { text::width(&ctx, &Font::Small.id(), &kind) + 8.0 };
     let room = (rect.max.x - x - kind_w).max(0.0);
     let cut = text::paint(
         painter,
@@ -227,12 +231,13 @@ pub fn local_panel_header(ui: &mut Ui, icon: Icon, name: &str, kind: &str) {
         pos2(x, rect.center().y),
         Align2::LEFT_CENTER,
         p.text,
-        name,
+        &name,
         Some(room),
         Clip::End,
     );
     if cut {
-        audit::truncated(&ctx, name, name, rect);
+        let (full, en) = (name.get(&ctx), name.en());
+        audit::truncated_text(&ctx, &full, Some(&en), &full, rect);
     }
     if !kind.is_empty() {
         text::paint(
@@ -241,7 +246,7 @@ pub fn local_panel_header(ui: &mut Ui, icon: Icon, name: &str, kind: &str) {
             pos2(rect.max.x, rect.center().y),
             Align2::RIGHT_CENTER,
             p.text_muted,
-            kind,
+            &kind,
             Some(kind_w),
             Clip::End,
         );
@@ -249,7 +254,8 @@ pub fn local_panel_header(ui: &mut Ui, icon: Icon, name: &str, kind: &str) {
 }
 
 /// `local_thumbnail`: a picture's place without a picture: an inset square with the kind's glyph.
-pub fn local_thumbnail(ui: &mut Ui, side: f32, icon: Icon, tip: &str) {
+pub fn local_thumbnail<'a>(ui: &mut Ui, side: f32, icon: Icon, tip: impl Into<Tx<'a>>) {
+    let tip = tip.into();
     let p = palette(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
     if ui.is_rect_visible(rect) {
@@ -265,17 +271,17 @@ pub fn local_thumbnail(ui: &mut Ui, side: f32, icon: Icon, tip: &str) {
         icons::draw(painter, icon, Rect::from_center_size(rect.center(), Vec2::splat(g)), p.text_muted);
     }
     if !tip.is_empty() {
-        resp.on_hover_text(tip);
+        resp.tip(tip);
     }
 }
 
 /// A Ghost toolbar button with a glyph, a label and a count badge on its corner (the
 /// Outliner's Filters). `checked` lights it.
-pub fn local_badge_button(
+pub fn local_badge_button<'a>(
     ui: &mut Ui,
     icon: Icon,
-    label: &str,
-    tip: &str,
+    label: impl Into<Tx<'a>>,
+    tip: impl Into<Tx<'a>>,
     count: usize,
     checked: bool,
 ) -> Response {
@@ -291,10 +297,10 @@ pub fn local_badge_button(
     if count > 0 && ui.is_rect_visible(resp.rect) {
         let t = count.to_string();
         let font = Font::Small.id();
-        let w = text::width(&ctx, &font, &t);
+        let w = text::width(&ctx, &font, Tx::raw(&t));
         let c = pos2(resp.rect.max.x - 3.0, resp.rect.min.y + 3.0);
         ui.painter().circle_filled(c, (w * 0.5 + 3.0).max(7.0), p.accent);
-        ui.painter().text(c, Align2::CENTER_CENTER, t, font, p.text);
+        ui.painter().text(c, Align2::CENTER_CENTER, t, font, p.on_fill);
     }
     resp
 }
@@ -438,7 +444,7 @@ pub fn local_tree_list(
                             pos2(tx, rect.center().y),
                             Align2::LEFT_CENTER,
                             if row.folder { p.text_secondary } else { p.text },
-                            leaf,
+                            Tx::raw(leaf),
                             Some((rect.max.x - tx - 4.0).max(0.0)),
                             Clip::End,
                         );
@@ -453,7 +459,7 @@ pub fn local_tree_list(
                             }
                         }
                         if !row.folder {
-                            resp.on_hover_text(row.path.as_str());
+                            resp.tip(Tx::raw(row.path.as_str()));
                         }
                     }
                 });
@@ -511,7 +517,7 @@ mod tests {
     fn the_eye_and_the_lock_answer_their_clicks() {
         use egui::{Event, Modifiers, PointerButton, Pos2, RawInput};
         let ctx = egui::Context::default();
-        gz_ui::theme::install(&ctx, gz_ui::theme::Accent::default());
+        gz_ui::theme::install(&ctx, gz_ui::Theme::default_theme());
         let eye = Rect::from_min_size(pos2(10.0, 10.0), Vec2::splat(22.0));
         let lock = Rect::from_min_size(pos2(32.0, 10.0), Vec2::splat(22.0));
         let mut frame = |events: Vec<Event>, t: f64| -> (bool, bool) {

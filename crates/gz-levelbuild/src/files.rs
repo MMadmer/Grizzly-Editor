@@ -138,6 +138,18 @@ pub fn game_files(
     engine: &Engine,
     settings: Option<&(dyn Settings + Sync)>,
 ) -> Result<GameFiles> {
+    game_files_until(scene, lib, engine, settings, crate::NEVER)
+}
+
+/// [`game_files`] that ends with [`BuildError::stopped`] once `stop` says so: asked every few
+/// hundred objects.
+pub fn game_files_until(
+    scene: &SceneState,
+    lib: Lookup<'_>,
+    engine: &Engine,
+    settings: Option<&(dyn Settings + Sync)>,
+    stop: crate::Stop<'_>,
+) -> Result<GameFiles> {
     let mut out = GameFiles::default();
     let (mut spawn, mut spawn_rs) = (Writer::new(), Writer::new());
     let (mut n_spawn, mut n_rs) = (0u32, 0u32);
@@ -164,7 +176,10 @@ pub fn game_files(
             }
             out.meshes = made.meshes;
         }
-        for o in scene.of_class(class) {
+        for (n, o) in scene.of_class(class).enumerate() {
+            if n.is_multiple_of(256) && stop() {
+                return Err(BuildError::stopped());
+            }
             match &o.data {
                 ObjData::Spawn(pt) => {
                     if pt.entity.is_some() {

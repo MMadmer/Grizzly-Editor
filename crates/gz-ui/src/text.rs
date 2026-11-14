@@ -4,6 +4,7 @@
 //! face, width and clip and kept, so a frame that draws the same things again neither searches
 //! nor allocates. [`ellipsize`] is the search itself, for a one-off.
 
+use std::borrow::Cow;
 use std::hash::{BuildHasher, BuildHasherDefault, Hash, Hasher};
 use std::sync::Arc;
 
@@ -12,6 +13,7 @@ use rustc_hash::{FxHashMap, FxHasher};
 
 use crate::audit;
 use crate::font::Font;
+use crate::i18n::Tx;
 use crate::theme::palette;
 
 /// Where a text that does not fit loses its characters.
@@ -31,9 +33,15 @@ fn layout(ctx: &Context, text: &str, font: &FontId, color: Color32) -> Arc<Galle
     ctx.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font.clone(), color))
 }
 
-/// The width of a text in one line.
+/// The width of a text in one line, in the window's language.
 #[must_use]
-pub fn width(ctx: &Context, font: &FontId, text: &str) -> f32 {
+pub fn width<'a>(ctx: &Context, font: &FontId, text: impl Into<Tx<'a>>) -> f32 {
+    measure(ctx, font, &text.into().get(ctx))
+}
+
+/// The width of a text already in the window's language (or data).
+#[must_use]
+pub(crate) fn measure(ctx: &Context, font: &FontId, text: &str) -> f32 {
     if text.is_empty() {
         return 0.0;
     }
@@ -66,13 +74,30 @@ fn cut(chars: &[char], keep: usize, clip: Clip) -> String {
     out
 }
 
-/// The longest form of `text` that fits `max_w`, and whether it was cut.
+/// The longest form of `text` (in the window's language) that fits `max_w`, and whether it was
+/// cut.
 #[must_use]
-pub fn ellipsize(ctx: &Context, font: &FontId, text: &str, max_w: f32, clip: Clip) -> (String, bool) {
+pub fn ellipsize<'a>(
+    ctx: &Context,
+    font: &FontId,
+    text: impl Into<Tx<'a>>,
+    max_w: f32,
+    clip: Clip,
+) -> (String, bool) {
+    ellipsize_str(ctx, font, &text.into().get(ctx), max_w, clip)
+}
+
+pub(crate) fn ellipsize_str(
+    ctx: &Context,
+    font: &FontId,
+    text: &str,
+    max_w: f32,
+    clip: Clip,
+) -> (String, bool) {
     if max_w <= 0.0 || text.is_empty() {
         return (String::new(), !text.is_empty());
     }
-    if width(ctx, font, text) <= max_w {
+    if measure(ctx, font, text) <= max_w {
         return (text.to_owned(), false);
     }
     let chars: Vec<char> = text.chars().collect();
@@ -80,7 +105,7 @@ pub fn ellipsize(ctx: &Context, font: &FontId, text: &str, max_w: f32, clip: Cli
     let (mut lo, mut hi) = (0usize, chars.len().saturating_sub(1));
     while lo < hi {
         let mid = (lo + hi).div_ceil(2);
-        if width(ctx, font, &cut(&chars, mid, clip)) <= max_w {
+        if measure(ctx, font, &cut(&chars, mid, clip)) <= max_w {
             lo = mid;
         } else {
             hi = mid - 1;
@@ -135,10 +160,15 @@ fn fit_key(ctx: &Context, font: &FontId, text: &str, max_w: f32, clip: Clip) -> 
     h.finish()
 }
 
-/// `text` cut to `max_w` the way `clip` says, worked out once and kept: a frame that asks for
-/// the same text at the same width again gets the kept answer.
+/// `text` (in the window's language) cut to `max_w` the way `clip` says, worked out once and kept:
+/// a frame that asks for the same text at the same width again gets the kept answer.
 #[must_use]
-pub fn fit(ctx: &Context, font: &FontId, text: &str, max_w: f32, clip: Clip) -> Fitted {
+pub fn fit<'a>(ctx: &Context, font: &FontId, text: impl Into<Tx<'a>>, max_w: f32, clip: Clip) -> Fitted {
+    fit_str(ctx, font, &text.into().get(ctx), max_w, clip)
+}
+
+#[must_use]
+pub(crate) fn fit_str(ctx: &Context, font: &FontId, text: &str, max_w: f32, clip: Clip) -> Fitted {
     let key = fit_key(ctx, font, text, max_w, clip);
     let frame = ctx.cumulative_frame_nr();
     let cache = fit_cache(ctx);
@@ -151,7 +181,7 @@ pub fn fit(ctx: &Context, font: &FontId, text: &str, max_w: f32, clip: Clip) -> 
             return out;
         }
     }
-    let (shown, cut) = ellipsize(ctx, font, text, max_w, clip);
+    let (shown, cut) = ellipsize_str(ctx, font, text, max_w, clip);
     let out = Fitted { text: Arc::from(shown), cut };
     let mut c = cache.0.lock();
     c.misses += 1;
@@ -173,10 +203,12 @@ pub fn fit_stats(ctx: &Context) -> (u64, u64) {
 
 /// A one-line label that takes the width it is given and cuts itself to it. A cut label shows
 /// the whole text as its tooltip and reports itself to the audit.
-pub fn label(ui: &mut Ui, text: &str, font: Font, color: Color32, clip: Clip) -> Response {
+pub fn label<'a>(ui: &mut Ui, text: impl Into<Tx<'a>>, font: Font, color: Color32, clip: Clip) -> Response {
+    let tx = text.into();
+    let text = tx.get(ui.ctx());
     let font_id = font.id();
     let avail = ui.available_width();
-    let (shown, was_cut) = ellipsize(ui.ctx(), &font_id, text, avail, clip);
+    let (shown, was_cut) = ellipsize_str(ui.ctx(), &font_id, &text, avail, clip);
     let galley = layout(ui.ctx(), &shown, &font_id, color);
     let size = Vec2::new(galley.size().x.min(avail), font.line().max(galley.size().y));
     let (rect, mut resp) = ui.allocate_exact_size(size, Sense::hover());
@@ -185,71 +217,100 @@ pub fn label(ui: &mut Ui, text: &str, font: Font, color: Color32, clip: Clip) ->
         ui.painter().galley(pos, galley, color);
     }
     if was_cut {
-        audit::truncated(ui.ctx(), text, &shown, rect);
-        resp = resp.on_hover_text(text);
+        audit::truncated_text(ui.ctx(), &text, source(&tx).as_deref(), &shown, rect);
+        resp = resp.on_hover_text(text.as_ref());
     }
     resp
 }
 
+/// The English of a text the window shows in another language, for the audit's record of a cut.
+pub(crate) fn source<'t>(tx: &'t Tx<'_>) -> Option<Cow<'t, str>> {
+    (!tx.is_raw()).then(|| tx.en())
+}
+
 /// Body text in the secondary colour, cut at its end.
-pub fn secondary(ui: &mut Ui, text: &str) -> Response {
+pub fn secondary<'a>(ui: &mut Ui, text: impl Into<Tx<'a>>) -> Response {
     let color = palette(ui.ctx()).text_secondary;
     label(ui, text, Font::Body, color, Clip::End)
+}
+
+/// A label of egui's own layout - one line, not cut - in the window's language: what a tooltip,
+/// a popup's caption or a row laid out by egui shows.
+pub fn plain<'a>(ui: &mut Ui, text: impl Into<Tx<'a>>, font: Font, color: Color32) -> Response {
+    let tx = text.into();
+    let shown = tx.get(ui.ctx());
+    ui.add(egui::Label::new(egui::RichText::new(shown.as_ref()).font(font.id()).color(color)).extend())
 }
 
 /// Paints a text at a point, cut to `max_w` when given. Returns whether it was cut. For rows
 /// and canvases that lay out by hand; reports a cut to the audit like the kit's own labels.
 // every argument is one the caller decides at each call; a struct of them would only rename them
 #[allow(clippy::too_many_arguments)]
-pub fn paint(
+pub fn paint<'a>(
     painter: &Painter,
     font: &FontId,
     pos: Pos2,
     anchor: Align2,
     color: Color32,
-    text: &str,
+    text: impl Into<Tx<'a>>,
     max_w: Option<f32>,
     clip: Clip,
 ) -> bool {
     let ctx = painter.ctx();
+    let tx = text.into();
+    let text = tx.get(ctx);
     let Some(w) = max_w else {
-        painter.text(pos, anchor, text, font.clone(), color);
+        painter.text(pos, anchor, text.as_ref(), font.clone(), color);
         return false;
     };
-    let fitted = fit(ctx, font, text, w, clip);
+    let fitted = fit_str(ctx, font, &text, w, clip);
     let rect = painter.text(pos, anchor, &*fitted.text, font.clone(), color);
     if fitted.cut {
-        audit::truncated(ctx, text, &fitted.text, rect);
+        audit::truncated_text(ctx, &text, source(&tx).as_deref(), &fitted.text, rect);
     }
     fitted.cut
 }
 
 /// The rectangle a text painted at `pos` would cover.
 #[must_use]
-pub fn bounds(ctx: &Context, font: &FontId, pos: Pos2, anchor: Align2, text: &str) -> Rect {
-    let size = layout(ctx, text, font, Color32::WHITE).size();
+pub fn bounds<'a>(ctx: &Context, font: &FontId, pos: Pos2, anchor: Align2, text: impl Into<Tx<'a>>) -> Rect {
+    let size = layout(ctx, &text.into().get(ctx), font, Color32::WHITE).size();
     anchor.anchor_size(pos, size)
 }
 
 /// Prose: sentences for the author, wrapped at 36 em.
-pub fn prose(ui: &mut Ui, text: &str) -> Response {
+pub fn prose<'a>(ui: &mut Ui, text: impl Into<Tx<'a>>) -> Response {
+    let text = text.into();
+    let shown = text.get(ui.ctx());
     let max = (Font::Body.size() * 36.0).min(ui.available_width());
     ui.scope(|ui| {
         ui.set_max_width(max);
-        ui.add(egui::Label::new(egui::RichText::new(text).font(Font::Body.id())).wrap())
+        ui.add(egui::Label::new(egui::RichText::new(shown.as_ref()).font(Font::Body.id())).wrap())
     })
     .inner
 }
 
 /// A sentence in a tone's colour, wrapped like prose.
-pub fn status(ui: &mut Ui, tone: crate::theme::Tone, text: &str) -> Response {
+pub fn status<'a>(ui: &mut Ui, tone: crate::theme::Tone, text: impl Into<Tx<'a>>) -> Response {
+    let text = text.into();
+    let shown = text.get(ui.ctx());
     let color = palette(ui.ctx()).tone(tone);
     let max = (Font::Body.size() * 36.0).min(ui.available_width());
     ui.scope(|ui| {
         ui.set_max_width(max);
-        ui.add(egui::Label::new(egui::RichText::new(text).font(Font::Body.id()).color(color)).wrap())
+        ui.add(
+            egui::Label::new(egui::RichText::new(shown.as_ref()).font(Font::Body.id()).color(color)).wrap(),
+        )
     })
     .inner
+}
+
+/// Wrapped text in a face and a colour, as wide as the room it is given: a paragraph that is no
+/// prose (a card's sentence, a hint under a field).
+pub fn wrapped<'a>(ui: &mut Ui, text: impl Into<Tx<'a>>, font: Font, color: Color32) -> Response {
+    let text = text.into();
+    let shown = text.get(ui.ctx());
+    ui.add(egui::Label::new(egui::RichText::new(shown.as_ref()).font(font.id()).color(color)).wrap())
 }
 
 #[cfg(test)]

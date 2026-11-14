@@ -59,18 +59,43 @@ pub fn snap(v: f32) -> f32 {
 }
 
 /// What sizing a node reads besides the node: the catalog, the flow and the document's kind (a
-/// behaviour graph names its kinds its own way).
+/// behaviour graph names its kinds its own way), and how a window that speaks another language
+/// than English shows a title and a line's name (`None`: as the catalog says them, in English).
 #[derive(Clone, Copy)]
 pub struct BoxCx<'a> {
     pub catalog: &'a Catalog,
     pub flow: Flow,
     pub behaviour: bool,
+    pub shown: Option<&'a (dyn Fn(Shown<'_>) -> String + Sync)>,
+}
+
+/// A text of a node a window shows in its own language.
+#[derive(Clone, Copy, Debug)]
+pub enum Shown<'s> {
+    /// A kind's title: the node's, an action's.
+    Title(&'s str),
+    /// The name a line starts with: a parameter's, a condition's title.
+    Key(&'s Line),
 }
 
 impl<'a> BoxCx<'a> {
     #[must_use]
     pub fn of(catalog: &'a Catalog, g: &Graph) -> Self {
-        Self { catalog, flow: g.flow(), behaviour: g.is_behaviour() }
+        Self { catalog, flow: g.flow(), behaviour: g.is_behaviour(), shown: None }
+    }
+
+    fn title(&self, en: String) -> String {
+        match self.shown {
+            Some(f) => f(Shown::Title(&en)),
+            None => en,
+        }
+    }
+
+    fn key(&self, l: &Line) -> String {
+        match self.shown {
+            Some(f) => f(Shown::Key(l)),
+            None => l.key.clone(),
+        }
     }
 }
 
@@ -268,8 +293,9 @@ pub fn lines(catalog: &Catalog, n: &Node, behaviour: bool) -> Vec<Line> {
 }
 
 /// The width a line needs: `key: value` or `Title what`.
-fn line_width(l: &Line) -> f32 {
-    let key = if l.cond.is_empty() && !l.key.is_empty() { format!("{}:", l.key) } else { l.key.clone() };
+fn line_width(cx: &BoxCx<'_>, l: &Line) -> f32 {
+    let name = cx.key(l);
+    let key = if l.cond.is_empty() && !l.key.is_empty() { format!("{name}:") } else { name };
     INSET * 2.0
         + measure::width(Face::Body, BODY_EM, &key)
         + 6.0
@@ -281,7 +307,7 @@ fn line_width(l: &Line) -> f32 {
 pub fn node_box(cx: &BoxCx<'_>, n: &Node) -> NodeBox {
     let cat = cx.catalog;
     let mut b = NodeBox { collapsed: n.collapsed, ..NodeBox::default() };
-    let title = text::kind_title(cat, &n.kind, cx.behaviour);
+    let title = cx.title(text::kind_title(cat, &n.kind, cx.behaviour));
     let mut need = INSET
         + ICON
         + 6.0
@@ -301,7 +327,7 @@ pub fn node_box(cx: &BoxCx<'_>, n: &Node) -> NodeBox {
         let shown = lines(cat, n, cx.behaviour);
         b.lines = shown.len();
         for l in &shown {
-            need = need.max(line_width(l));
+            need = need.max(line_width(cx, l));
         }
         if b.lines > 0 {
             y += PAD;
@@ -319,8 +345,10 @@ pub fn node_box(cx: &BoxCx<'_>, n: &Node) -> NodeBox {
             .chain(n.on_exit.iter().map(|a| (true, a)))
             .take(b.action_rows)
         {
-            let (t, s) =
-                (text::kind_title(cat, &a.kind, cx.behaviour), text::summary(cat, &a.kind, &a.params, None));
+            let (t, s) = (
+                cx.title(text::kind_title(cat, &a.kind, cx.behaviour)),
+                text::summary(cat, &a.kind, &a.params, None),
+            );
             let words = if s.is_empty() { t } else { format!("{t}: {s}") };
             let tag = if exit { measure::width(Face::Body, SMALL_EM, "exit") + 6.0 } else { 0.0 };
             need = need.max(INSET * 2.0 + ROW_ICON + 6.0 + measure::width(Face::Body, BODY_EM, &words) + tag);
@@ -493,7 +521,7 @@ mod tests {
     #[test]
     fn the_box_is_sized_by_what_it_says() {
         let cat = catalog();
-        let cx = BoxCx { catalog: &cat, flow: Flow::Down, behaviour: false };
+        let cx = BoxCx { catalog: &cat, flow: Flow::Down, behaviour: false, shown: None };
         // a bare step: header and the bottom pad, the narrowest width
         let step = Node::new("s", "flow.step");
         assert_eq!(node_box(&cx, &step), NodeBox { h: HEADER + PAD, ..NodeBox::default() });

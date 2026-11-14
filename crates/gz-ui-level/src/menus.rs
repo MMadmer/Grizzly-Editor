@@ -8,7 +8,7 @@ use egui::Ui;
 use gz_app::chrome::{MenuBar, local_submenu};
 use gz_app::{DocCx, menu_row};
 use gz_levelbuild::{LevelBuild, StepState};
-use gz_ui::{Icon, MenuItem, menu_item};
+use gz_ui::{Icon, MenuItem, Tx, menu_item};
 
 use crate::actions::{self as a, step_action};
 
@@ -18,7 +18,7 @@ pub const SCENE_MENU: &[&[&str]] = &[
     &[a::HIDE_SELECTED, a::HIDE_UNSELECTED, a::SHOW_ALL],
     &[a::GROUP, a::UNGROUP, a::SAVE_GROUP],
     &[a::MARK_MOD, a::MARK_BASE],
-    &[a::SUMMARY],
+    &[a::BROWSE_TO_ASSET, a::SUMMARY],
 ];
 
 /// The Build menu above its submenus, in its groups.
@@ -34,19 +34,24 @@ pub const ADVANCED: &[&[&str]] = &[
     &[a::BUILD_DRAFT, a::BUILD_FINAL],
     &a::LAYER_ACTIONS,
     &[a::EXPORT_OBJ, a::EXPORT_SELECTION_OBJ, a::COMPILE_FOLDER],
+    &[a::REMOVE_BUILD_FILES],
     &[a::RELOAD_CONFIGS, a::GAME_FOLDER],
 ];
 
 /// The rows of groups of actions, a separator between the groups.
 pub fn rows(ui: &mut Ui, cx: &mut DocCx<'_>, groups: &[&[&str]]) {
-    for (i, g) in groups.iter().enumerate() {
-        if i > 0 {
-            ui.separator();
+    // an action's title is a verb where the same word is a noun elsewhere ("Group")
+    let ctx = ui.ctx().clone();
+    gz_ui::i18n::scope(&ctx, "action", || {
+        for (i, g) in groups.iter().enumerate() {
+            if i > 0 {
+                ui.separator();
+            }
+            for id in *g {
+                menu_row(ui, cx, id, None);
+            }
         }
-        for id in *g {
-            menu_row(ui, cx, id, None);
-        }
-    }
+    });
 }
 
 /// A step's state as its row says it: "Fresh", "1 object moved.", "Failed: ...".
@@ -61,6 +66,16 @@ pub fn state_word(state: StepState) -> &'static str {
     }
 }
 
+/// A step's title as the window shows it: the steps' words have a context of their own ("Light"
+/// the build step, not the object; "Details" the detail objects, not the panel).
+#[must_use]
+pub fn step_tx(title: &'static str) -> Tx<'static> {
+    Tx::ctx(STEP_CONTEXT, title)
+}
+
+/// The catalog's context of the build steps' titles.
+pub const STEP_CONTEXT: &str = "build_step";
+
 /// The steps of the build, each with its state, building it when picked.
 pub fn step_rows(ui: &mut Ui, cx: &mut DocCx<'_>) {
     let status = LevelBuild::status_now(cx.editor);
@@ -70,10 +85,15 @@ pub fn step_rows(ui: &mut Ui, cx: &mut DocCx<'_>) {
     };
     for s in &status.steps {
         // the row's keys column holds the state; its tip says why it is not fresh
+        let state = gz_ui::i18n::t(ui.ctx(), state_word(s.state));
         let item = MenuItem {
-            keys: state_word(s.state),
+            keys: &state,
             enabled: !crate::actions::running(cx.editor),
-            tip: if s.why.is_empty() { "Built from what the scene holds now." } else { &s.why },
+            tip: if s.why.is_empty() {
+                Tx::from("Built from what the scene holds now.")
+            } else {
+                Tx::ui(&s.why)
+            },
             icon: match s.state {
                 StepState::Failed => Icon::Error,
                 StepState::Stale | StepState::Never => Icon::Warning,
@@ -82,7 +102,7 @@ pub fn step_rows(ui: &mut Ui, cx: &mut DocCx<'_>) {
             },
             ..MenuItem::default()
         };
-        if menu_item(ui, s.step.title(), item) {
+        if menu_item(ui, step_tx(s.step.title()), item) {
             cx.requests.action(step_action(s.step));
         }
     }

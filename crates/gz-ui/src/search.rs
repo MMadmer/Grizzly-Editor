@@ -12,6 +12,7 @@ use egui::{
 use crate::audit;
 use crate::button::icon_button_sized;
 use crate::font::Font;
+use crate::i18n::Tx;
 use crate::icons::{self, Icon};
 use crate::theme::{metrics, palette};
 use crate::units::em;
@@ -68,7 +69,7 @@ pub fn matches(query: &str, text: &str) -> bool {
 #[must_use = "a search field does nothing until it is shown: .show(ui)"]
 pub struct SearchField<'a> {
     text: &'a mut String,
-    hint: &'a str,
+    hint: Tx<'a>,
     min_em: f32,
     width: Option<f32>,
     id_salt: Option<&'a str>,
@@ -76,12 +77,12 @@ pub struct SearchField<'a> {
 
 impl<'a> SearchField<'a> {
     pub fn new(text: &'a mut String) -> Self {
-        Self { text, hint: "Search", min_em: 8.0, width: None, id_salt: None }
+        Self { text, hint: Tx::from("Search"), min_em: 8.0, width: None, id_salt: None }
     }
 
     /// The hint shown while it is empty; also its name for the audit.
-    pub fn hint(mut self, hint: &'a str) -> Self {
-        self.hint = hint;
+    pub fn hint(mut self, hint: impl Into<Tx<'a>>) -> Self {
+        self.hint = hint.into();
         self
     }
 
@@ -107,7 +108,10 @@ impl<'a> SearchField<'a> {
         let p = palette(ui.ctx());
         let width = self.width.unwrap_or_else(|| ui.available_width()).max(em(self.min_em));
         let (rect, _) = ui.allocate_exact_size(Vec2::new(width, metrics::FRAME), Sense::hover());
-        let id = ui.make_persistent_id(("gz-ui.search", self.id_salt.unwrap_or(self.hint)));
+        let hint_en = self.hint.en();
+        // the English names the field's state, so a change of language keeps its focus
+        let id = ui.make_persistent_id(("gz-ui.search", self.id_salt.unwrap_or(&hint_en)));
+        let hint = self.hint.get(ui.ctx());
         let edit_id = id.with("edit");
 
         // Ctrl+F goes to the first search field drawn in a frame
@@ -125,14 +129,13 @@ impl<'a> SearchField<'a> {
         if ui.is_rect_visible(rect) {
             let fill = if hovered || focused { p.input_hover } else { p.input };
             ui.painter().rect_filled(rect, CornerRadius::same(metrics::RADIUS), fill);
-            if focused {
-                ui.painter().rect_stroke(
-                    rect,
-                    CornerRadius::same(metrics::RADIUS),
-                    Stroke::new(1.0, p.accent_bright),
-                    StrokeKind::Inside,
-                );
-            }
+            // a hairline at rest: in a light theme the field's fill alone is nearly the page's
+            ui.painter().rect_stroke(
+                rect,
+                CornerRadius::same(metrics::RADIUS),
+                Stroke::new(1.0, if focused { p.accent_bright } else { p.border_subtle }),
+                StrokeKind::Inside,
+            );
             let glass = Rect::from_min_size(
                 pos2(rect.min.x + 8.0, rect.center().y - 7.0),
                 Vec2::splat(metrics::GLYPH_ROW),
@@ -154,7 +157,7 @@ impl<'a> SearchField<'a> {
                 .frame(Frame::NONE)
                 .margin(Margin::symmetric(0, 4))
                 .font(Font::Body.id())
-                .hint_text(self.hint)
+                .hint_text(hint.as_ref())
                 .desired_width(edit_rect.width()),
         );
 
@@ -178,7 +181,7 @@ impl<'a> SearchField<'a> {
                 resp.mark_changed();
             }
         }
-        audit::control(&ctx, self.hint, true, None, Some("Esc clears, Ctrl+F focuses"), rect);
+        audit::control(&ctx, &hint, true, None, Some("Esc clears, Ctrl+F focuses"), rect);
         resp
     }
 }

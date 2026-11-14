@@ -25,7 +25,7 @@ use gz_mod::ManifestService;
 use gz_project::Project;
 use gz_ui::dialog::{Answer, ConfirmSpec, confirm, unsaved_prompt};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Font, Icon, Kind, Tone, Toolbar, palette};
+use gz_ui::{Font, Icon, Kind, Tone, Toolbar, Tx, palette, tr};
 use gz_ui_previews::model_load::ModelSource;
 use parking_lot::Mutex;
 
@@ -687,8 +687,11 @@ impl CharactersDoc {
             self.run_then(then);
             return;
         }
-        let what =
-            vec![if self.edit.id.is_empty() { "the new character".to_owned() } else { self.edit.id.clone() }];
+        let what: Vec<Tx<'static>> = vec![if self.edit.id.is_empty() {
+            Tx::from("the new character")
+        } else {
+            Tx::raw(self.edit.id.clone())
+        }];
         let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
         let Ok(queue) = gz_app::UiQueue::of(&self.editor) else { return };
         // the kit question needs the context: it is asked at the start of the next frame
@@ -738,13 +741,13 @@ impl CharactersDoc {
         }
         let spec = ConfirmSpec {
             id: "delete_character".to_owned(),
-            title: "Delete Character".to_owned(),
-            headline: format!("Delete the character \"{}\"?", self.edit.id),
-            items: vec![self.edit.file.clone()],
+            title: "Delete Character".into(),
+            headline: tr!("Delete the character \"{id}\"?", id = self.edit.id.as_str()),
+            items: vec![Tx::raw(self.edit.file.clone())],
             total: 0,
             consequence: "Deleted for good - this cannot be undone. The next build takes the character out of the module, and a quest that spawns it has nothing to spawn."
-                .to_owned(),
-            action: "Delete".to_owned(),
+                .into(),
+            action: "Delete".into(),
             destructive: true,
         };
         let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
@@ -791,7 +794,7 @@ impl CharactersDoc {
             args([("name", s(&visual)), ("source", s(source.arg()))]),
             move |reply, ctx| {
                 if !call::ok(reply) {
-                    gz_ui::state::toast(ctx, Tone::Error, &call::error_text(reply));
+                    gz_ui::state::toast(ctx, Tone::Error, Tx::ui(call::error_text(reply)));
                     ed.log.warn(format!("the model preview did not open: {}", call::error_text(reply)));
                 }
             },
@@ -911,8 +914,8 @@ impl CharactersDoc {
             ui.add_space(12.0);
             ui.vertical(|ui| {
                 let name = text_in(&c.name, "rus");
-                let shown = if name.is_empty() { "No name".to_owned() } else { name };
-                let _ = text::label(ui, &shown, Font::Title, p.text, Clip::End);
+                let shown = if name.is_empty() { Tx::from("No name") } else { Tx::raw(name) };
+                let _ = text::label(ui, shown, Font::Title, p.text, Clip::End);
                 let community =
                     if c.community.is_empty() { "stalker".to_owned() } else { c.community.clone() };
                 let caption = self
@@ -922,10 +925,10 @@ impl CharactersDoc {
                     .map(|e| e.name.clone())
                     .filter(|n| !n.is_empty())
                     .unwrap_or(community);
-                let _ = text::label(ui, &caption, Font::Body, p.text_secondary, Clip::End);
+                let _ = text::label(ui, Tx::raw(caption), Font::Body, p.text_secondary, Clip::End);
                 let eng = text_in(&c.name, "eng");
                 if !eng.is_empty() {
-                    let _ = text::label(ui, &eng, Font::Small, p.text_muted, Clip::End);
+                    let _ = text::label(ui, Tx::raw(eng), Font::Small, p.text_muted, Clip::End);
                 }
             });
         });
@@ -1014,7 +1017,7 @@ impl CharactersDoc {
                         Icon::Character,
                         "No character selected",
                         "Pick one in the list, or add one with +.",
-                        Some("New Character"),
+                        Some("New Character".into()),
                     ) {
                         self.actions.push(Action::New);
                     }
@@ -1037,14 +1040,14 @@ impl Document for CharactersDoc {
     fn kind(&self) -> &'static str {
         TAB
     }
-    fn label(&self) -> String {
-        "Characters".to_owned()
+    fn label(&self) -> Tx<'static> {
+        Tx::from("Characters")
     }
     fn icon(&self) -> Icon {
         Icon::Character
     }
-    fn tooltip(&self) -> Option<String> {
-        Some("The module's own NPCs".to_owned())
+    fn tooltip(&self) -> Option<Tx<'static>> {
+        Some(Tx::from("The module's own NPCs"))
     }
     fn dirty(&self) -> bool {
         // a save under way is not saved yet: who waits for it waits for its file

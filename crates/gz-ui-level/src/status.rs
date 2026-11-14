@@ -15,7 +15,7 @@ use gz_editor::Editor;
 use gz_levelbuild::{LevelBuild, StepState};
 use gz_scene::SceneService;
 use gz_ui::text::{self, Clip};
-use gz_ui::{Font, Tone, audit, palette};
+use gz_ui::{Font, TipExt, Tone, Tx, audit, palette, tr};
 
 use crate::actions as a;
 
@@ -57,9 +57,13 @@ pub fn centre(ui: &mut Ui, cx: &DocCx<'_>) {
     let settings = EditorSettings::of(cx.editor);
     let grid = settings.pref("snap_grid_step").unwrap_or(0.1);
     let angle = settings.pref("snap_angle_step").unwrap_or(5.625);
-    let text_ =
-        format!("{selected} selected  \u{b7}  Grid {} m  \u{b7}  Angle {}\u{b0}", fmt_g(grid), fmt_g(angle));
-    text::label(ui, &text_, Font::Small, p.text_secondary, Clip::End);
+    let text_ = tr!(
+        "{n} selected  \u{b7}  Grid {grid} m  \u{b7}  Angle {angle}\u{b0}",
+        n = selected,
+        grid = fmt_g(grid),
+        angle = fmt_g(angle)
+    );
+    text::label(ui, text_, Font::Small, p.text_secondary, Clip::End);
 }
 
 /// A number with as many decimals as it needs.
@@ -84,9 +88,13 @@ fn draw_chip(ui: &mut Ui, cx: &mut DocCx<'_>) {
     }
     let ctx = ui.ctx().clone();
     let p = palette(&ctx);
-    let label = chip_label(&pending(&editor));
+    let titles = pending(&editor);
+    // the English names the chip to the audit; the window reads it in its language
+    let label = chip_label(&titles);
+    let steps: Vec<String> = titles.iter().copied().map(|t| crate::menus::step_tx(t).text(&ctx)).collect();
+    let shown = tr!("Build: {steps}", steps = steps.join(" \u{b7} ")).text(&ctx);
     let font = Font::Small.id();
-    let w = text::width(&ctx, &font, &label) + 12.0;
+    let w = text::width(&ctx, &font, Tx::raw(&shown)) + 12.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(w, 20.0), Sense::hover());
     let id = Id::unique("gz-ui-level.rebuild_chip");
     let resp = ui.interact(rect, id, Sense::click());
@@ -96,13 +104,12 @@ fn draw_chip(ui: &mut Ui, cx: &mut DocCx<'_>) {
     ui.painter().text(
         pos2(rect.min.x + 6.0, rect.center().y),
         Align2::LEFT_CENTER,
-        &label,
+        shown,
         font,
         p.tone(Tone::Warning),
     );
     audit::control(&ctx, &label, true, None, None, rect);
-    let resp = resp
-        .on_hover_text("The scene changed since these steps were built. Build Level builds them in order.");
+    let resp = resp.tip("The scene changed since these steps were built. Build Level builds them in order.");
     let popup = id.with("popup");
     if resp.clicked() {
         egui::Popup::toggle_id(&ctx, popup);

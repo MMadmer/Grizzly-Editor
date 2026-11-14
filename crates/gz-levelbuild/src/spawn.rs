@@ -13,7 +13,7 @@ use gz_fmt_spawn::{
 };
 
 use crate::nav::{INVALID, LevelNav};
-use crate::{BuildError, Result};
+use crate::{BuildError, NEVER, Result, Stop};
 
 /// `y_shift_correction`: a spawn is looked up a little above where it stands.
 const Y_SHIFT: f32 = 0.15;
@@ -63,6 +63,57 @@ pub struct SpawnBuild {
 
 fn class_of(e: &Entity) -> Option<Class> {
     e.class_info().map(|c| c.class)
+}
+
+/// What [`build_spawn`] would refuse of these elements, found at once before a build runs: no
+/// spawn point, no actor or more than one, two objects with one story id. Each refusal names the
+/// object it is about, when there is one.
+#[must_use]
+pub fn refusals(elements: &[Element]) -> Vec<(String, Option<String>)> {
+    let mut out = Vec::new();
+    let mut actors: Vec<&str> = Vec::new();
+    let mut story: BTreeMap<u32, &str> = BTreeMap::new();
+    let mut spawns = 0usize;
+    for el in elements {
+        let e = &el.entity;
+        let Some(class) = class_of(e) else { continue };
+        if class == Class::GraphPoint || !class.is_alife() {
+            continue;
+        }
+        spawns += 1;
+        if class == Class::CreatureActor {
+            actors.push(e.name());
+        }
+        if let Some(id) = e.story_id() {
+            if let Some(other) = story.get(&id) {
+                out.push((
+                    format!(
+                        "{} and {other} have the same story id {id}: a story id names one object.",
+                        e.name()
+                    ),
+                    Some(e.name().to_owned()),
+                ));
+            } else {
+                story.insert(id, e.name());
+            }
+        }
+    }
+    if spawns == 0 {
+        out.push(("The level has no spawn points.".to_owned(), None));
+    } else if actors.is_empty() {
+        out.push((
+            "The level has no actor spawn point: place one (Place > Spawn Points, the actor) where the player starts."
+                .to_owned(),
+            None,
+        ));
+    }
+    for extra in actors.iter().skip(1) {
+        out.push((
+            format!("{extra} is a second actor: the level has one player, remove all but one."),
+            Some((*extra).to_owned()),
+        ));
+    }
+    out
 }
 
 /// The offset of the spawn id in a spawn packet.
@@ -128,6 +179,22 @@ pub fn build_spawn(
     guid: Guid,
     verify_restrictors: bool,
 ) -> Result<SpawnBuild> {
+    build_spawn_until(level, nav, graph, elements, ways, guid, verify_restrictors, NEVER)
+}
+
+/// [`build_spawn`] that ends with [`BuildError::stopped`] once `stop` says so: asked every few
+/// hundred objects.
+#[allow(clippy::too_many_arguments)]
+pub fn build_spawn_until(
+    level: &str,
+    nav: &LevelNav,
+    graph: &GameGraph,
+    elements: Vec<Element>,
+    ways: &[Way],
+    guid: Guid,
+    verify_restrictors: bool,
+    stop: Stop<'_>,
+) -> Result<SpawnBuild> {
     let mut log = vec![
         Finding::info("Start build spawn"),
         Finding::info(format!("level  0 {level}")),
@@ -191,7 +258,10 @@ pub fn build_spawn(
     };
     let first_lv = graph.vertices.get(usize::from(first)).map_or(INVALID, |v| v.level_vertex);
     let mut artefact_points: Vec<LevelPoint> = Vec::new();
-    for e in &mut spawns {
+    for (n, e) in spawns.iter_mut().enumerate() {
+        if n.is_multiple_of(256) && stop() {
+            return Err(BuildError::stopped());
+        }
         let used_ai = e.object().is_some_and(|o| o.alife().flags & alife_flags::USED_AI_LOCATIONS != 0);
         if !used_ai {
             let _ = e.set_vertices(first, first_lv, 0.0);
@@ -230,6 +300,9 @@ pub fn build_spawn(
 
     log.info("Generate artefact spawn positions ...");
     for e in &mut spawns {
+        if stop() {
+            return Err(BuildError::stopped());
+        }
         let Some(zone) = class_of(e)
             .filter(|c| c.is_anomalous_zone())
             .and_then(|_| e.object().and_then(|o| o.zone()).cloned())
@@ -670,6 +743,32 @@ mod tests {
             bad.push(format!("{players} actors"));
         }
         bad
+    }
+
+    #[test]
+    fn what_the_spawn_would_refuse_is_found_before_a_build() {
+        let st = settings();
+        let element = |section: &str, name: &str| {
+            Element::new(
+                Entity::create_spawn_point(section, &st).unwrap(),
+                name,
+                Vec3::ZERO,
+                Vec3::ZERO,
+                None,
+            )
+        };
+        // nothing to spawn at all
+        let none = refusals(&[element("graph_point", "gp")]);
+        assert_eq!(none, [("The level has no spawn points.".to_owned(), None)]);
+        // spawn points but no actor: where the player starts is said
+        let no_actor = refusals(&[element("medkit", "medkit")]);
+        assert_eq!(no_actor.len(), 1);
+        assert!(no_actor[0].0.starts_with("The level has no actor spawn point: place one"), "{no_actor:?}");
+        // two actors: the second is named
+        let two = refusals(&[element("actor", "actor"), element("actor", "actor_2"), element("medkit", "m")]);
+        assert_eq!(two.len(), 1);
+        assert_eq!(two[0].1.as_deref(), Some("actor_2"));
+        assert!(refusals(&[element("actor", "actor"), element("medkit", "m")]).is_empty());
     }
 
     #[test]

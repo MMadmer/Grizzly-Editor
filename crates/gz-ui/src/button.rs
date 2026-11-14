@@ -14,6 +14,7 @@ use egui::{
 
 use crate::audit;
 use crate::font::Font;
+use crate::i18n::Tx;
 use crate::icons::{self, Icon};
 use crate::text;
 use crate::theme::{Palette, metrics, palette};
@@ -145,25 +146,30 @@ fn focus_ring(ui: &Ui, rect: Rect, p: &Palette) {
 /// A labelled button.
 #[must_use = "a button does nothing until it is added: ui.add(..) or .show(ui)"]
 pub struct Button<'a> {
-    label: &'a str,
+    label: Tx<'a>,
     kind: Kind,
     enabled: bool,
-    why: Option<&'a str>,
-    label_set: &'a [&'a str],
+    why: Option<Tx<'a>>,
+    label_set: Vec<Tx<'a>>,
     icon: Option<Icon>,
     min_size: Vec2,
     checked: bool,
-    tip: Option<&'a str>,
+    tip: Option<Tx<'a>>,
+}
+
+/// Several texts as [`Tx`]: string literals, or texts already made into one.
+pub(crate) fn txs<'a, L: Clone + Into<Tx<'a>>>(labels: &[L]) -> Vec<Tx<'a>> {
+    labels.iter().cloned().map(Into::into).collect()
 }
 
 impl<'a> Button<'a> {
-    pub fn new(label: &'a str) -> Self {
+    pub fn new(label: impl Into<Tx<'a>>) -> Self {
         Self {
-            label,
+            label: label.into(),
             kind: Kind::Secondary,
             enabled: true,
             why: None,
-            label_set: &[],
+            label_set: Vec::new(),
             icon: None,
             min_size: Vec2::new(0.0, metrics::FRAME),
             checked: false,
@@ -181,7 +187,8 @@ impl<'a> Button<'a> {
     }
 
     /// Off, with the reason as its tooltip.
-    pub fn enabled(mut self, enabled: bool, why: &'a str) -> Self {
+    pub fn enabled(mut self, enabled: bool, why: impl Into<Tx<'a>>) -> Self {
+        let why = why.into();
         self.enabled = enabled;
         self.why = (!enabled && !why.is_empty()).then_some(why);
         self
@@ -189,8 +196,8 @@ impl<'a> Button<'a> {
 
     /// Every label this button can show: it keeps the width of the widest, so a label that
     /// changes with the state never moves its neighbours.
-    pub fn label_set(mut self, labels: &'a [&'a str]) -> Self {
-        self.label_set = labels;
+    pub fn label_set<L: Clone + Into<Tx<'a>>>(mut self, labels: &[L]) -> Self {
+        self.label_set = txs(labels);
         self
     }
 
@@ -214,8 +221,9 @@ impl<'a> Button<'a> {
         self
     }
 
-    pub fn tip(mut self, tip: &'a str) -> Self {
-        self.tip = Some(tip);
+    pub fn tip(mut self, tip: impl Into<Tx<'a>>) -> Self {
+        let tip = tip.into();
+        self.tip = (!tip.is_empty()).then_some(tip);
         self
     }
 
@@ -233,22 +241,24 @@ impl Widget for Button<'_> {
         let measure_font =
             if matches!(self.kind, Kind::Primary | Kind::Danger) { Font::Strong } else { Font::Body };
         let font_id = measure_font.id();
-        let mut text_w = text::width(ui.ctx(), &font_id, self.label);
-        for other in self.label_set {
-            text_w = text_w.max(text::width(ui.ctx(), &font_id, other));
+        let ctx = ui.ctx().clone();
+        let label = self.label.get(&ctx);
+        let why = self.why.as_ref().map(|w| w.get(&ctx));
+        let tip = self.tip.as_ref().map(|t| t.get(&ctx));
+        let label: &str = &label;
+        let mut text_w = text::measure(&ctx, &font_id, label);
+        for other in &self.label_set {
+            text_w = text_w.max(text::measure(&ctx, &font_id, &other.get(&ctx)));
         }
-        let icon_w = if self.icon.is_some() {
-            metrics::GLYPH + if self.label.is_empty() { 0.0 } else { gap }
-        } else {
-            0.0
-        };
+        let icon_w =
+            if self.icon.is_some() { metrics::GLYPH + if label.is_empty() { 0.0 } else { gap } } else { 0.0 };
         let size = Vec2::new(
             (pad * 2.0 + icon_w + text_w).max(self.min_size.x),
             self.min_size.y.max(metrics::FRAME),
         );
         let sense = if self.enabled { Sense::click() } else { Sense::hover() };
         let (rect, mut resp) = ui.allocate_exact_size(size, sense);
-        resp.widget_info(|| WidgetInfo::labeled(Role::Button, self.enabled, self.label));
+        resp.widget_info(|| WidgetInfo::labeled(Role::Button, self.enabled, label));
 
         if ui.is_rect_visible(rect) {
             let l = look(&p, self.kind, self.enabled, resp.hovered(), resp.is_pointer_button_down_on());
@@ -267,7 +277,7 @@ impl Widget for Button<'_> {
             if self.checked && self.enabled {
                 toggle_line(painter, rect, p.accent_bright);
             }
-            let content_w = icon_w + text::width(ui.ctx(), &l.font.id(), self.label);
+            let content_w = icon_w + text::measure(&ctx, &l.font.id(), label);
             let mut x = rect.center().x - content_w * 0.5;
             if let Some(icon) = self.icon {
                 let r = Rect::from_min_size(
@@ -282,23 +292,17 @@ impl Widget for Button<'_> {
                 );
                 x += icon_w;
             }
-            if !self.label.is_empty() {
-                painter.text(
-                    egui::pos2(x, rect.center().y),
-                    Align2::LEFT_CENTER,
-                    self.label,
-                    l.font.id(),
-                    l.text,
-                );
+            if !label.is_empty() {
+                painter.text(egui::pos2(x, rect.center().y), Align2::LEFT_CENTER, label, l.font.id(), l.text);
             }
             if resp.has_focus() {
                 focus_ring(ui, rect, &p);
             }
         }
-        audit::control(ui.ctx(), self.label, self.enabled, self.why, self.tip, rect);
-        match (self.enabled, self.why, self.tip) {
-            (false, Some(why), _) => resp = resp.on_hover_text(why),
-            (_, _, Some(tip)) => resp = resp.on_hover_text(tip),
+        audit::control(&ctx, label, self.enabled, why.as_deref(), tip.as_deref(), rect);
+        match (self.enabled, why, tip) {
+            (false, Some(why), _) => resp = resp.on_hover_text(why.as_ref()),
+            (_, _, Some(tip)) => resp = resp.on_hover_text(tip.as_ref()),
             _ => {}
         }
         resp
@@ -306,20 +310,29 @@ impl Widget for Button<'_> {
 }
 
 /// A square button that shows an icon. Its name is its tooltip.
-pub fn icon_button(ui: &mut Ui, icon: Icon, tip: &str, checked: bool, enabled: bool) -> Response {
+pub fn icon_button<'a>(
+    ui: &mut Ui,
+    icon: Icon,
+    tip: impl Into<Tx<'a>>,
+    checked: bool,
+    enabled: bool,
+) -> Response {
     icon_button_sized(ui, icon, tip, checked, enabled, metrics::ICON_BUTTON, metrics::GLYPH)
 }
 
 /// An icon button of another size: a row action is as tall as its row with a 14 pt glyph.
-pub fn icon_button_sized(
+pub fn icon_button_sized<'a>(
     ui: &mut Ui,
     icon: Icon,
-    tip: &str,
+    tip: impl Into<Tx<'a>>,
     checked: bool,
     enabled: bool,
     side: f32,
     glyph: f32,
 ) -> Response {
+    let tip = tip.into();
+    let tip = tip.get(ui.ctx());
+    let tip: &str = &tip;
     let p = palette(ui.ctx());
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, mut resp) = ui.allocate_exact_size(Vec2::splat(side), sense);
@@ -362,7 +375,23 @@ pub fn icon_button_sized(
 }
 
 /// One choice out of a few, side by side. Returns whether the choice changed.
-pub fn segmented(ui: &mut Ui, current: &mut usize, labels: &[&str], icons_of: Option<&[Icon]>) -> bool {
+pub fn segmented<'a, L: Clone + Into<Tx<'a>>>(
+    ui: &mut Ui,
+    current: &mut usize,
+    labels: &[L],
+    icons_of: Option<&[Icon]>,
+) -> bool {
+    let shown: Vec<String> = txs(labels).iter().map(|t| t.text(ui.ctx())).collect();
+    segmented_str(ui, current, &shown.iter().map(String::as_str).collect::<Vec<_>>(), icons_of)
+}
+
+/// [`segmented`] over labels already in the window's language.
+pub(crate) fn segmented_str(
+    ui: &mut Ui,
+    current: &mut usize,
+    labels: &[&str],
+    icons_of: Option<&[Icon]>,
+) -> bool {
     let p = palette(ui.ctx());
     let font = Font::Body.id();
     let pad = 10.0;
@@ -375,7 +404,7 @@ pub fn segmented(ui: &mut Ui, current: &mut usize, labels: &[&str], icons_of: Op
             } else {
                 0.0
             };
-            pad * 2.0 + icon_w + text::width(ui.ctx(), &font, l)
+            pad * 2.0 + icon_w + text::measure(ui.ctx(), &font, l)
         })
         .collect();
     let total: f32 = widths.iter().sum();
@@ -387,7 +416,7 @@ pub fn segmented(ui: &mut Ui, current: &mut usize, labels: &[&str], icons_of: Op
             .iter()
             .enumerate()
             .map(|(i, l)| {
-                crate::pick::PickItem::new(i.to_string(), *l)
+                crate::pick::PickItem::new(i.to_string(), Tx::raw(l.to_string()))
                     .icon(icons_of.and_then(|ic| ic.get(i)).copied().unwrap_or(Icon::None))
             })
             .collect();
@@ -395,7 +424,7 @@ pub fn segmented(ui: &mut Ui, current: &mut usize, labels: &[&str], icons_of: Op
         let salt = ("gz-ui.segmented", labels.first().copied().unwrap_or(""), labels.len());
         let shown = labels.get(*current).copied().unwrap_or("");
         let list = crate::pick::PickList::new(salt, &items).current(&current_id).without_search();
-        return match crate::pick::Combo::new(salt, shown).width(w).show(ui, list) {
+        return match crate::pick::Combo::new(salt, Tx::raw(shown)).width(w).show(ui, list) {
             Some(i) if i != *current => {
                 *current = i;
                 true
@@ -462,7 +491,7 @@ pub fn keycaps(ui: &Ui, right_center: egui::Pos2, keys: &str, enabled: bool) -> 
     let gap = 3.0;
     let parts: Vec<&str> = keys.split('+').map(str::trim).filter(|s| !s.is_empty()).collect();
     let widths: Vec<f32> =
-        parts.iter().map(|k| (text::width(ui.ctx(), &font, k) + pad * 2.0).max(h)).collect();
+        parts.iter().map(|k| (text::measure(ui.ctx(), &font, k) + pad * 2.0).max(h)).collect();
     let total: f32 = widths.iter().sum::<f32>() + gap * (parts.len().saturating_sub(1)) as f32;
     let mut x = right_center.x - total;
     let color = if enabled { p.text_secondary } else { p.text_disabled };
@@ -486,7 +515,7 @@ pub fn keycaps_width(ui: &Ui, keys: &str) -> f32 {
     let mut total = 0.0;
     let mut n = 0;
     for k in parts {
-        total += (text::width(ui.ctx(), &font, k) + 8.0).max(16.0);
+        total += (text::measure(ui.ctx(), &font, k) + 8.0).max(16.0);
         n += 1;
     }
     total + 3.0 * (n as f32 - 1.0).max(0.0)

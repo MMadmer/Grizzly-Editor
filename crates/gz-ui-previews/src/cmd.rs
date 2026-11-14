@@ -1019,7 +1019,7 @@ async fn render_model(editor: &Arc<Editor>, name: &str, source: ModelSource) -> 
         return Err(data.error.clone());
     }
     let renderer = thumb_renderer(editor).await?;
-    let p = gz_ui::Palette::new(gz_ui::Accent::Violet);
+    let p = gz_app::EditorSettings::of(editor).theme().palette();
     let bg = gz_render::Color::rgb(p.canvas.r(), p.canvas.g(), p.canvas.b());
     editor
         .exec

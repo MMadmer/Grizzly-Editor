@@ -42,9 +42,13 @@ pub(crate) fn ok(reply: &Value) -> bool {
     reply.get("ok").and_then(Value::as_bool) == Some(true)
 }
 
-/// The reply's `error`, or a sentence when it has none.
-pub(crate) fn error_text(reply: &Value) -> String {
-    reply.get("error").and_then(Value::as_str).unwrap_or("The command failed.").to_owned()
+/// The reply's `error`, or a sentence when it has none: the command's English, shown in the
+/// window's language where the catalog has it.
+pub(crate) fn error_text(reply: &Value) -> gz_ui::Tx<'static> {
+    match reply.get("error").and_then(Value::as_str) {
+        Some(e) => gz_ui::Tx::ui(e.to_owned()),
+        None => gz_ui::Tx::from("The command failed."),
+    }
 }
 
 /// Arguments from `(key, value)` pairs.

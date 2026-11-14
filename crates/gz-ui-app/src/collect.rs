@@ -8,7 +8,7 @@ use std::sync::Arc;
 use gz_app::{Action, DialogDesc, Enabled, ShellBuilder};
 use gz_editor::{Args, Editor, SmolStr};
 use gz_ui::dialog::{Answer, ConfirmSpec, confirm, notice};
-use gz_ui::{Asker, Icon, Tone};
+use gz_ui::{Asker, Icon, Tone, Tx, tr};
 use serde_json::{Value, json};
 
 use crate::reply::{call_then, error_text, ok};
@@ -18,17 +18,10 @@ pub const DIALOG: &str = "collect_library";
 /// The File > Project row.
 pub const ACTION: &str = "project.collect_library";
 
-/// `12.3 MB`.
+/// `12.3 MB`, in the window's language.
 #[must_use]
-pub fn size_text(bytes: u64) -> String {
-    const UNITS: [&str; 4] = ["bytes", "KB", "MB", "GB"];
-    let mut v = bytes as f64;
-    let mut unit = 0;
-    while v >= 1024.0 && unit + 1 < UNITS.len() {
-        v /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 { format!("{bytes} bytes") } else { format!("{v:.1} {}", UNITS[unit]) }
+pub fn size_text(bytes: u64) -> Tx<'static> {
+    crate::cards::size_text(bytes)
 }
 
 pub(crate) fn install(b: &mut ShellBuilder) {
@@ -64,7 +57,7 @@ fn ask(editor: &Arc<Editor>) {
     call_then(editor, "project.collect", dry, move |reply, ctx| {
         if !ok(reply) {
             if let Some(line) =
-                notice(ctx, asker(&ed), Tone::Error, "Collect Library Assets", &error_text(reply))
+                notice(ctx, asker(&ed), Tone::Error, "Collect Library Assets", error_text(reply))
             {
                 ed.log.finding(&line);
             }
@@ -90,16 +83,16 @@ fn ask(editor: &Arc<Editor>) {
         }
         let spec = ConfirmSpec {
             id: DIALOG.to_owned(),
-            title: "Collect Library Assets".to_owned(),
-            headline: format!(
-                "Copy {files} {} ({}) from the editor's library into the project?",
-                if files == 1 { "file" } else { "files" },
-                size_text(bytes)
+            title: "Collect Library Assets".into(),
+            headline: tr!(
+                "Copy {n} {n:file|files} ({size}) from the editor's library into the project?",
+                n = files,
+                size = size_text(bytes)
             ),
             total: refs.len(),
-            items: refs,
-            consequence: String::new(),
-            action: "Collect".to_owned(),
+            items: refs.into_iter().map(gz_ui::Tx::raw).collect(),
+            consequence: Tx::EMPTY,
+            action: "Collect".into(),
             destructive: false,
         };
         let go = ed.clone();
@@ -118,8 +111,8 @@ fn ask(editor: &Arc<Editor>) {
 mod tests {
     #[test]
     fn sizes_read_as_the_author_reads_them() {
-        assert_eq!(super::size_text(900), "900 bytes");
-        assert_eq!(super::size_text(1536), "1.5 KB");
-        assert_eq!(super::size_text(5 * 1024 * 1024), "5.0 MB");
+        assert_eq!(super::size_text(900).en(), "900 bytes");
+        assert_eq!(super::size_text(1536).en(), "1.5 KB");
+        assert_eq!(super::size_text(5 * 1024 * 1024).en(), "5.0 MB");
     }
 }

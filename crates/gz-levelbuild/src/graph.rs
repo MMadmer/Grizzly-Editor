@@ -10,7 +10,7 @@ use gz_fmt_level::{AiMapNode, AiParams, LevelGraph, XRAI_VERSION_COP, export_lev
 use gz_fmt_spawn::{Bytes, CrossTable, GameGraph, GraphEdge, GraphLevel, GraphVertex, Guid, LevelPoint};
 
 use crate::nav::{INVALID, LevelNav};
-use crate::{BuildError, Result};
+use crate::{BuildError, NEVER, Result, Stop};
 
 /// The game graph's vertex record and edge record sizes (`sizeof(CVertex)`, `sizeof(CEdge)`).
 const VERTEX_SIZE: u32 = 42;
@@ -89,6 +89,19 @@ pub fn build_game_graph(
     level_guid: Guid,
     game_guid: Guid,
 ) -> Result<LevelGameGraph> {
+    build_game_graph_until(nav, points, level_name, level_guid, game_guid, NEVER)
+}
+
+/// [`build_game_graph`] that ends with [`BuildError::stopped`] once `stop` says so: asked per
+/// graph point.
+pub fn build_game_graph_until(
+    nav: &LevelNav,
+    points: &[GraphPoint],
+    level_name: &str,
+    level_guid: Guid,
+    game_guid: Guid,
+    stop: Stop<'_>,
+) -> Result<LevelGameGraph> {
     let mut log = vec![
         Finding::info("Building level game graph"),
         Finding::info(format!("{} nodes loaded", nav.count())),
@@ -132,7 +145,7 @@ pub fn build_game_graph(
         return Err(BuildError::new("The level has too many game graph points."));
     }
     log.info("Building cross table");
-    let (results, distances) = cross_distances(nav, &vertices);
+    let (results, distances) = cross_distances(nav, &vertices, stop).ok_or_else(BuildError::stopped)?;
     let cell = nav.header.cell_size;
     let mut cells: Vec<u8> = Vec::with_capacity(nav.count() as usize * 6);
     for (i, &g) in results.iter().enumerate().take(nav.count() as usize) {
@@ -145,6 +158,9 @@ pub fn build_game_graph(
     log.info("Building graph");
     log.info("Generating edges");
     for v in 0..vertices.len() {
+        if stop() {
+            return Err(BuildError::stopped());
+        }
         let neighbours = fill_neighbours(nav, &results, &vertices, v as u32);
         for nb in neighbours {
             let d = path_distance(nav, &vertices, v as u32, nb, &mut log)?;
@@ -187,7 +203,7 @@ pub fn build_game_graph(
 
 /// `fill_marks` + `fill_distances` + `iterate_distances`: per level vertex the game vertex that
 /// owns it, and per game vertex its walking distance in cells to every level vertex it owns.
-fn cross_distances(nav: &LevelNav, vertices: &[Vertex]) -> (Vec<u32>, Vec<Vec<u32>>) {
+fn cross_distances(nav: &LevelNav, vertices: &[Vertex], stop: Stop<'_>) -> Option<(Vec<u32>, Vec<Vec<u32>>)> {
     let n = nav.count() as usize;
     // what no graph point reaches stays marked: the walks never enter it
     let mut marks = vec![false; n];
@@ -210,6 +226,9 @@ fn cross_distances(nav: &LevelNav, vertices: &[Vertex]) -> (Vec<u32>, Vec<Vec<u3
     let mut results = vec![0u32; n];
     let (mut current, mut next_fringe): (Vec<u32>, Vec<u32>) = (Vec::new(), Vec::new());
     for g in 0..vertices.len() {
+        if stop() {
+            return None;
+        }
         let lv = vertices[g].level_vertex;
         let owner = results[lv as usize] as usize;
         distances[owner][lv as usize] = u32::MAX;
@@ -244,7 +263,7 @@ fn cross_distances(nav: &LevelNav, vertices: &[Vertex]) -> (Vec<u32>, Vec<Vec<u3
             curr_dist += 1;
         }
     }
-    (results, distances)
+    Some((results, distances))
 }
 
 /// `fill_neighbours`: the game vertices whose areas border this vertex's, in the order a walk

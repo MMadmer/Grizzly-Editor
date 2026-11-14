@@ -15,7 +15,8 @@ use gz_ui::menu::{MenuItem, menu_item, menu_popup, take_popup_request};
 use gz_ui::state::{badge, banner, busy_line, empty_state};
 use gz_ui::text::{self, Clip};
 use gz_ui::{
-    Font, Icon, Kind, NavRowSpec, Palette, Toolbar, ToolbarStyle, icons, metrics, nav_row, palette, units,
+    Font, Icon, Kind, NavRowSpec, Palette, TipExt, Toolbar, ToolbarStyle, Tx, icons, metrics, nav_row,
+    palette, tr, units,
 };
 use rustc_hash::FxHashSet;
 
@@ -47,9 +48,23 @@ struct Frame<'a> {
 }
 
 impl Frame<'_> {
-    fn toast(&self, text_: &str) {
+    fn toast<'t>(&self, text_: impl Into<Tx<'t>>) {
         gz_ui::state::toast(&self.ctx, gz_ui::Tone::Warning, text_);
     }
+}
+
+/// "Library / Textures / ui" in the window's language: where a favorite points.
+fn location_label(ctx: &egui::Context, loc: &Location) -> String {
+    let mut label = Tx::from(loc.source.label()).text(ctx);
+    if let Some(k) = loc.lib_kind() {
+        label.push_str(" / ");
+        label.push_str(&Tx::from(k.caption).text(ctx));
+    }
+    for part in loc.folder.split('\\').filter(|p| !p.is_empty()) {
+        label.push_str(" / ");
+        label.push_str(part);
+    }
+    label
 }
 
 /// Draws the Content Browser into `ui`: the Level tab's panel and the Content Drawer both call
@@ -118,8 +133,9 @@ pub fn content_browser(ui: &mut Ui, cx: &mut DocCx<'_>, host: Host) {
     shortcuts(&ctx, cx, st, &f, browser_rect);
     drag_preview(&ctx, st, &f);
 
-    // the scroll to a selection made from outside has had both panes' frame
-    st.scroll_to_selection = false;
+    // the scroll to a selection made from outside has had both panes' frame, unless its folder
+    // was still being listed
+    st.scroll_to_selection = std::mem::take(&mut st.reveal_waits);
     let gpu = Some((&cx.gpu.device, &cx.gpu.queue));
     let raised = f.p.raised;
     st.pics.dispatch(
@@ -169,7 +185,8 @@ fn keep_valid(st: &mut Inner, cat: &Catalog, busy: bool) {
 fn go(st: &mut Inner, f: &Frame<'_>, target: Location) {
     let before = st.loc.clone();
     if let Err(e) = st.apply_location(target, true, &f.browser.cats, f.has_project) {
-        f.toast(&e);
+        // the browser's own English
+        f.toast(Tx::ui(e));
     }
     if !st.loc.same(&before) || st.loc.source != before.source {
         st.pics.cancel();
@@ -178,7 +195,8 @@ fn go(st: &mut Inner, f: &Frame<'_>, target: Location) {
 
 fn nav_result(st: &mut Inner, f: &Frame<'_>, r: Result<(), String>, before: &Location) {
     if let Err(e) = r {
-        f.toast(&e);
+        // the browser's own English
+        f.toast(Tx::ui(e));
     }
     if !st.loc.same(before) {
         st.pics.cancel();
@@ -191,15 +209,15 @@ fn nav_result(st: &mut Inner, f: &Frame<'_>, r: Result<(), String>, before: &Loc
 fn toolbar(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
     let row_w = ui.available_width();
     let font = Font::Body.id();
-    let (crumb_root, crumb_folder) = crumb_path(&st.loc);
-    let crumbs_full: f32 = text::width(&f.ctx, &font, crumb_root)
+    let (crumb_root, crumb_folder) = crumb_path(&f.ctx, &st.loc);
+    let crumbs_full: f32 = text::width(&f.ctx, &font, Tx::raw(crumb_root.as_str()))
         + 12.0
         + crumb_folder
             .split('\\')
             .filter(|s| !s.is_empty())
-            .map(|s| 16.0 + text::width(&f.ctx, &font, s) + 12.0)
+            .map(|s| 16.0 + text::width(&f.ctx, &font, Tx::raw(s)) + 12.0)
             .sum::<f32>();
-    let menu_w = |label: &str| 56.0 + text::width(&f.ctx, &font, label);
+    let menu_w = |label: &'static str| 56.0 + text::width(&f.ctx, &font, label);
     let others = menu_w("Add")
         + 13.0
         + 28.0 * 3.0
@@ -228,7 +246,7 @@ fn toolbar(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
         !st.forward.is_empty(),
         !st.loc.folder.is_empty() || (st.loc.source == Source::Library && !st.loc.home()),
     );
-    let root_label = crumb_root;
+    let root_label = crumb_root.clone();
     let folder = crumb_folder.clone();
     {
         let mut tb = Toolbar::begin(ui, "cb_toolbar", ToolbarStyle::Panel);
@@ -250,7 +268,7 @@ fn toolbar(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
         up = tb.action("cb_up", Icon::Up, "", "Parent Folder (Alt+Up)", up_on, false, Kind::Ghost);
         tb.separator();
         tb.group(5);
-        tb.widget("cb_breadcrumb", crumbs_w, |ui| crumb_go = local_breadcrumbs(ui, root_label, &folder));
+        tb.widget("cb_breadcrumb", crumbs_w, |ui| crumb_go = local_breadcrumbs(ui, &root_label, &folder));
         tb.spring();
         tb.group(2);
         tb.search(&mut search, "Search", 10.0);
@@ -314,7 +332,7 @@ fn toolbar(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
             None => {
                 let here = st.loc.clone();
                 if let Err(e) = st.add_favorite(here, &f.browser.cats, f.has_project) {
-                    f.toast(&format!("The folder cannot be a favorite: {e}"));
+                    f.toast(tr!("The folder cannot be a favorite: {error}", error = Tx::ui(e)));
                 }
             }
         }
@@ -324,12 +342,14 @@ fn toolbar(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
     }
 }
 
-/// The breadcrumb of a location: a Library kind's folders hang under "Library" and the kind.
-fn crumb_path(loc: &Location) -> (&'static str, String) {
+/// The breadcrumb of a location as the window shows it: a Library kind's folders hang under
+/// "Library" and the kind (a click on the kind's crumb goes to the kind's root whatever it reads).
+fn crumb_path(ctx: &egui::Context, loc: &Location) -> (String, String) {
+    let word = |en: &'static str| Tx::from(en).text(ctx);
     match loc.lib_kind() {
-        Some(k) if loc.folder.is_empty() => ("Library", k.caption.to_owned()),
-        Some(k) => ("Library", format!("{}\\{}", k.caption, loc.folder)),
-        None => (loc.root_label(), loc.folder.clone()),
+        Some(k) if loc.folder.is_empty() => (word("Library"), word(k.caption)),
+        Some(k) => (word("Library"), format!("{}\\{}", word(k.caption), loc.folder)),
+        None => (word(loc.root_label()), loc.folder.clone()),
     }
 }
 
@@ -345,7 +365,7 @@ fn crumb_target(loc: &Location, path: &str) -> Location {
     }
 }
 
-fn add_menu(ui: &mut Ui, blocked: Option<&str>, pick: &mut Option<usize>) {
+fn add_menu(ui: &mut Ui, blocked: Option<&'static str>, pick: &mut Option<usize>) {
     for (i, (label, _tip, _)) in ADD_ITEMS.iter().enumerate() {
         if i == 1 {
             ui.separator();
@@ -359,8 +379,13 @@ fn add_menu(ui: &mut Ui, blocked: Option<&str>, pick: &mut Option<usize>) {
         };
         if menu_item(
             ui,
-            label,
-            MenuItem { icon, enabled: blocked.is_none(), tip: blocked.unwrap_or(""), ..MenuItem::default() },
+            *label,
+            MenuItem {
+                icon,
+                enabled: blocked.is_none(),
+                tip: blocked.unwrap_or("").into(),
+                ..MenuItem::default()
+            },
         ) {
             *pick = Some(i);
         }
@@ -410,7 +435,7 @@ fn view_menu(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
         Sense::hover(),
     );
     ui.scope_builder(UiBuilder::new().max_rect(row).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
-        let resp = gz_ui::grid::number(ui, &mut size, 8.0, "pt").on_hover_text(
+        let resp = gz_ui::grid::number(ui, &mut size, 8.0, "pt").tip(
             "The side of a tile; the panel and the Content Drawer keep one each. Ctrl+wheel over the tiles changes it too; under 64 pt the folder is a list.",
         );
         if resp.changed() {
@@ -457,15 +482,15 @@ fn favorites_menu(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
     let mut open: Option<usize> = None;
     let mut remove: Option<usize> = None;
     for (i, fav) in st.favorites.iter().enumerate() {
-        let label = fav.label();
+        let label = location_label(&f.ctx, fav);
         let spec = NavRowSpec {
             icon: Icon::StarFilled,
-            tip: &label,
+            tip: Tx::raw(label.as_str()),
             action: Icon::Close,
-            action_tip: "Remove from Favorites",
+            action_tip: "Remove from Favorites".into(),
             ..NavRowSpec::default()
         };
-        let r = nav_row(ui, &format!("cb_fav_menu_{i}"), &label, fav.same(&st.loc), &spec);
+        let r = nav_row(ui, &format!("cb_fav_menu_{i}"), Tx::raw(label.as_str()), fav.same(&st.loc), &spec);
         if r.action {
             remove = Some(i);
         } else if r.clicked {
@@ -478,10 +503,10 @@ fn favorites_menu(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
         && let Some(fav) = st.favorites.get(i).cloned()
     {
         let before = st.loc.clone();
-        let r = st
-            .apply_location(fav, true, &f.browser.cats, f.has_project)
-            .map_err(|e| format!("The favorite cannot be opened: {e}"));
-        nav_result(st, f, r, &before);
+        if let Err(e) = st.apply_location(fav, true, &f.browser.cats, f.has_project) {
+            f.toast(tr!("The favorite cannot be opened: {error}", error = Tx::ui(e)));
+        }
+        nav_result(st, f, Ok(()), &before);
         ui.close();
     }
 }
@@ -545,7 +570,7 @@ fn sources(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
                 let key = format!("content_browser.favorites_{}", f.host.name());
                 let head = Section::new(&key, "Favorites")
                     .default_open(!st.favorites.is_empty())
-                    .count(if st.favorites.is_empty() { "" } else { count.as_str() });
+                    .count(Tx::raw(if st.favorites.is_empty() { "" } else { count.as_str() }));
                 if head.show(ui).open {
                     if st.favorites.is_empty() {
                         gz_ui::text::status(
@@ -577,13 +602,14 @@ fn favorite_rows(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
     let mut remove: Option<usize> = None;
     for (i, fav) in st.favorites.iter().enumerate() {
         let leaf = leaf_of(&fav.folder);
-        let name = if leaf.is_empty() { fav.root_label() } else { leaf };
-        let tip = fav.label();
+        // a root is the source's or the kind's name, a folder its own
+        let name = if leaf.is_empty() { Tx::from(fav.root_label()) } else { Tx::raw(leaf) };
+        let tip = location_label(&f.ctx, fav);
         let spec = NavRowSpec {
             icon: Icon::StarFilled,
-            tip: &tip,
+            tip: Tx::raw(tip.as_str()),
             action: Icon::Close,
-            action_tip: "Remove from Favorites",
+            action_tip: "Remove from Favorites".into(),
             ..NavRowSpec::default()
         };
         let r = nav_row(ui, &format!("cb_fav_{}_{i}", f.host.index()), name, fav.same(&st.loc), &spec);
@@ -597,10 +623,10 @@ fn favorite_rows(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
         st.favorites.remove(i);
     } else if let Some(fav) = open.and_then(|i| st.favorites.get(i).cloned()) {
         let before = st.loc.clone();
-        let r = st
-            .apply_location(fav, true, &f.browser.cats, f.has_project)
-            .map_err(|e| format!("The favorite cannot be opened: {e}"));
-        nav_result(st, f, r, &before);
+        if let Err(e) = st.apply_location(fav, true, &f.browser.cats, f.has_project) {
+            f.toast(tr!("The favorite cannot be opened: {error}", error = Tx::ui(e)));
+        }
+        nav_result(st, f, Ok(()), &before);
     }
 }
 
@@ -625,7 +651,7 @@ fn tree(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>, veils: Option<&FxHashSet<Str
         // the root row names the project: the segment above already says "Project"
         let name =
             f.editor.project_root().and_then(|r| r.file_name().map(|n| n.to_string_lossy().into_owned()));
-        let label = name.unwrap_or_else(|| "Project".to_owned());
+        let label = name.unwrap_or_else(|| gz_ui::i18n::t(&f.ctx, "Project"));
         tree_node(ui, st, f, &cat, cat.root(), 0, veils, &label, &mut act);
     }
     match act {
@@ -659,7 +685,16 @@ fn library_tree(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>, act: &mut Option<Tre
         let shown = st.loc.category == i;
         let open = shown || st.tree_open.contains(&key);
         let id = Id::unique(("cb_tree_kind", f.host.index(), i));
-        let row = local_tree_row(ui, id, 0, k.caption, open, true, shown && st.loc.folder.is_empty(), false);
+        let row = local_tree_row(
+            ui,
+            id,
+            0,
+            Tx::from(k.caption),
+            open,
+            true,
+            shown && st.loc.folder.is_empty(),
+            false,
+        );
         if row.toggled || (row.response.double_clicked() && !shown) {
             if open {
                 st.tree_open.remove(&key);
@@ -707,7 +742,7 @@ fn library_node(
     let has_children = !node.children.is_empty();
     let id = Id::unique(("cb_tree_lib", f.host.index(), kind, tree_key(&node.path)));
     let selected = here && st.loc.folder.eq_ignore_ascii_case(&node.path);
-    let row = local_tree_row(ui, id, depth, &node.name, open, has_children, selected, false);
+    let row = local_tree_row(ui, id, depth, Tx::raw(node.name.as_str()), open, has_children, selected, false);
     if row.toggled || (row.response.double_clicked() && has_children) {
         if open {
             st.tree_open.remove(&key);
@@ -717,8 +752,9 @@ fn library_node(
     } else if row.clicked {
         *act = Some(TreeAct::Open(Location::new(Source::Library, kind, &node.path)));
     }
+    // a reveal centres its folder in the tree, as it does its entry in the grid
     if selected && st.scroll_to_selection {
-        row.response.scroll_to_me(None);
+        row.response.scroll_to_me(Some(egui::Align::Center));
     }
     if open {
         for &c in &node.children {
@@ -756,7 +792,7 @@ fn tree_node(
         ui,
         id,
         depth,
-        label,
+        Tx::raw(label),
         open,
         has_children && !root,
         st.loc.folder.eq_ignore_ascii_case(&node.path),
@@ -783,15 +819,16 @@ fn tree_node(
         *act = Some(TreeAct::Menu(Entry::new(&node.path, true), at));
     }
     if veiled {
-        row.response.clone().on_hover_text("Not shipped: mod.ltx [exclude] leaves it out of the build.");
+        row.response.clone().tip("Not shipped: mod.ltx [exclude] leaves it out of the build.");
     }
     // a project folder of the tree takes the browser's own tiles and files from Explorer
     let accepts = |p: &Payload| takes(st, p);
     if let Some(payload) = Zone::new(label, row.response.rect, &accepts).take(ui) {
         *act = Some(TreeAct::Drop(payload, node.path.to_string()));
     }
+    // a reveal centres its folder in the tree, as it does its entry in the grid
     if st.scroll_to_selection && st.loc.folder.eq_ignore_ascii_case(&node.path) {
-        row.response.scroll_to_me(None);
+        row.response.scroll_to_me(Some(egui::Align::Center));
     }
     if open {
         for &c in &node.children {
@@ -892,13 +929,18 @@ fn grid_body(ui: &mut Ui, cx: &mut DocCx<'_>, st: &mut Inner, f: &Frame<'_>, gri
     // what a Library kind could not read is said over what it could
     if let Some(note) = f.cat.cat.as_ref().and_then(|c| c.note.clone()) {
         let unlinked = st.scope.1.is_empty() && crate::library::reads_game(st.loc.category);
-        if banner(ui, gz_ui::Tone::Info, &note, unlinked.then_some("Link Game..."), None).is_some() {
+        // what the Library's reader says, in its English
+        if banner(ui, gz_ui::Tone::Info, Tx::ui(note.as_str()), unlinked.then(|| "Link Game...".into()), None)
+            .is_some()
+        {
             actions::link_game(f.editor);
         }
         ui.add_space(4.0);
     }
     let answer = f.browser.view(f.editor, &st.loc, &st.search, &f.cat);
     let Some(view) = answer.value().cloned() else {
+        st.reveal_waits =
+            st.scroll_to_selection && (f.cat.busy || matches!(answer, gz_query::Answer::Pending));
         if f.cat.busy || st.loc.source == Source::Library {
             busy_line(
                 ui,
@@ -1168,7 +1210,7 @@ fn tiles(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>, view: &Arc<View>, out: &mut
         if let Some((at, entry)) = rename_at
             && let Some(r) = st.rename.as_mut().filter(|r| r.entry == entry)
         {
-            let want = text::width(ui.ctx(), &Font::Body.id(), &r.text) + 12.0 + 12.0;
+            let want = text::width(ui.ctx(), &Font::Body.id(), Tx::raw(r.text.as_str())) + 12.0 + 12.0;
             let w = want.clamp(at.width(), at.width().max(units::em(24.0))).min(avail);
             let x = if lay.list { at.min.x } else { at.center().x - w * 0.5 };
             let left = ui.max_rect().min.x;
@@ -1211,8 +1253,12 @@ fn tile(
             (cut > 0 && leaf.is_char_boundary(cut) && leaf[cut..].eq_ignore_ascii_case(ext)).then_some(ext)
         })
     };
-    // a spawn section goes by the name the player reads
-    let name = ve.label.as_deref().unwrap_or_else(|| own_ext.map_or(leaf, |e| &leaf[..leaf.len() - e.len()]));
+    // a spawn section goes by the name the player reads; a kind of the Library's top by the
+    // editor's word for it
+    let kind_word = st.loc.home().then(|| Tx::ui(leaf).text(&f.ctx));
+    let name = kind_word.as_deref().unwrap_or_else(|| {
+        ve.label.as_deref().unwrap_or_else(|| own_ext.map_or(leaf, |e| &leaf[..leaf.len() - e.len()]))
+    });
     let selected = st.sel.contains(&ve.entry);
     let renaming = st.rename.as_ref().is_some_and(|r| r.entry == ve.entry);
     let veiled = ve.ship.veiled();
@@ -1302,7 +1348,7 @@ fn tile(
         let width = if lay.list { (cell.max.x - 4.0 - text_x).max(1.0) } else { lay.tile_w - TILE_PAD * 2.0 };
         let font = lay.caption_font.clone();
         let ctx = f.ctx.clone();
-        let measure = |s: &str| text::width(&ctx, &font, s);
+        let measure = |s: &str| text::width(&ctx, &font, Tx::raw(s));
         let cap = caption::caption(
             name,
             !ve.entry.folder && own_ext.is_none() && ve.label.is_none(),
@@ -1373,44 +1419,48 @@ fn tile(
         }
     }
     if resp.hovered() && !renaming && !resp.dragged() {
-        let mut tip = path.to_owned();
+        // one line each, every line in the window's language but the path
+        let mut lines: Vec<Tx<'static>> = vec![Tx::raw(path.to_owned())];
         if let Some(s) = shown
             && let Some((w, h)) = s.source_size
         {
-            tip.push_str(&format!(
-                "\n{w} x {h}{}",
-                match s.alpha {
-                    TileAlpha::Opaque => "",
-                    TileAlpha::Cutout => ", fully transparent",
-                    TileAlpha::Translucent => ", partly transparent",
-                }
-            ));
+            lines.push(match s.alpha {
+                TileAlpha::Opaque => Tx::raw(format!("{w} x {h}")),
+                TileAlpha::Cutout => tr!("{w} x {h}, fully transparent", w = w, h = h),
+                TileAlpha::Translucent => tr!("{w} x {h}, partly transparent", w = w, h = h),
+            });
         }
         if let Some(note) = &ve.note {
-            tip.push('\n');
-            tip.push_str(note);
+            // a note the Library's reader wrote, in its English
+            lines.push(Tx::ui(note.to_string()));
         }
         if !ve.entry.folder && crate::icons::extension(path).is_some_and(|e| e.eq_ignore_ascii_case(".level"))
         {
-            tip.push_str("\nAn X-Ray SDK scene: it is imported into a .scene when it opens.");
+            lines.push("An X-Ray SDK scene: it is imported into a .scene when it opens.".into());
         }
         if ve.wanted {
-            tip.push_str("\nA scene of the project uses it, and the project does not hold it: Bring into Project copies it in.");
+            lines.push(
+                "A scene of the project uses it, and the project does not hold it: Bring into Project copies it in."
+                    .into(),
+            );
         }
         if let Some(kind) = ve.own {
-            tip.push('\n');
-            tip.push_str(crate::icons::own_name(kind));
+            lines.push(Tx::from(crate::icons::own_name(kind)));
         }
         match &ve.ship {
             crate::catalog::Ship::Excluded(rule) => {
-                tip.push_str(&format!("\nNot shipped: excluded by '{rule}' in mod.ltx [exclude]."))
+                lines.push(tr!(
+                    "Not shipped: excluded by '{rule}' in mod.ltx [exclude].",
+                    rule = rule.as_str()
+                ));
             }
             crate::catalog::Ship::Never if st.loc.source == Source::Project => {
-                tip.push_str("\nA source: never shipped.")
+                lines.push("A source: never shipped.".into());
             }
             _ => {}
         }
-        resp.on_hover_text(tip);
+        let tip: Vec<String> = lines.iter().map(|l| l.text(&f.ctx)).collect();
+        resp.tip(Tx::raw(tip.join("\n")));
     }
     rename_rect
 }
@@ -1470,11 +1520,11 @@ fn drag_preview(ctx: &egui::Context, st: &mut Inner, f: &Frame<'_>) {
                     }
                     (None, None) => icons::draw(ui.painter(), glyph, centred(rect, 32.0), f.p.text_secondary),
                 }
-                text::label(ui, &name, Font::Body, f.p.text, Clip::Middle);
+                text::label(ui, Tx::raw(name.as_str()), Font::Body, f.p.text, Clip::Middle);
                 if n > 1 {
                     text::label(
                         ui,
-                        &format!("and {} more", n - 1),
+                        tr!("and {n} more", n = n - 1),
                         Font::Small,
                         f.p.text_secondary,
                         Clip::End,
@@ -1524,7 +1574,7 @@ fn grid_menu(ui: &Ui, st: &mut Inner, f: &Frame<'_>, bg: &egui::Response, grid_r
             MenuItem {
                 keys: "Ctrl+V",
                 enabled: blocked.is_none(),
-                tip: blocked.unwrap_or(""),
+                tip: blocked.unwrap_or("").into(),
                 ..MenuItem::default()
             },
         );
@@ -1589,7 +1639,8 @@ fn entry_menu(st: &mut Inner, f: &Frame<'_>, layer: egui::LayerId) {
     };
     let (rules, _) = ContentBrowser::rules(f.editor);
     let toggle = (writable && f.has_project).then(|| actions::build_toggle(&rules, st.sel.entries()));
-    let head = if count > 1 { format!("{count} selected") } else { leaf_of(&entry.path).to_owned() };
+    let head =
+        if count > 1 { tr!("{n} selected", n = count) } else { Tx::raw(leaf_of(&entry.path).to_owned()) };
     #[derive(PartialEq)]
     enum Pick {
         Open,
@@ -1610,7 +1661,7 @@ fn entry_menu(st: &mut Inner, f: &Frame<'_>, layer: egui::LayerId) {
     menu_popup(&f.ctx, id, Rect::from_min_size(at, Vec2::ZERO), layer, |ui| {
         text::label(ui, &head, Font::Body, p.text_muted, Clip::End);
         ui.separator();
-        let mut row = |ui: &mut Ui, label: &str, item: MenuItem<'_>, what: Pick| {
+        let mut row = |ui: &mut Ui, label: &'static str, item: MenuItem<'_>, what: Pick| {
             if menu_item(ui, label, item) {
                 pick = Some(what);
             }
@@ -1623,7 +1674,7 @@ fn entry_menu(st: &mut Inner, f: &Frame<'_>, layer: egui::LayerId) {
                 MenuItem {
                     icon: Icon::Place,
                     enabled: place_why.is_empty(),
-                    tip: place_why,
+                    tip: place_why.into(),
                     ..MenuItem::default()
                 },
                 Pick::Place,
@@ -1636,7 +1687,7 @@ fn entry_menu(st: &mut Inner, f: &Frame<'_>, layer: egui::LayerId) {
                 MenuItem {
                     icon: Icon::New,
                     enabled: bring_why.is_empty(),
-                    tip: bring_why,
+                    tip: bring_why.into(),
                     ..MenuItem::default()
                 },
                 Pick::Bring,
@@ -1689,7 +1740,7 @@ fn entry_menu(st: &mut Inner, f: &Frame<'_>, layer: egui::LayerId) {
                     MenuItem {
                         icon: Icon::Exclude,
                         enabled: false,
-                        tip: "The editor's own files never ship: nothing here goes into a build.",
+                        tip: "The editor's own files never ship: nothing here goes into a build.".into(),
                         ..MenuItem::default()
                     },
                     Pick::Exclude,
@@ -1707,12 +1758,14 @@ fn entry_menu(st: &mut Inner, f: &Frame<'_>, layer: egui::LayerId) {
                     Pick::Include,
                 ),
                 BuildToggle::ByRule(rule) => {
-                    let tip =
-                        format!("The rule {rule} of mod.ltx [exclude] leaves it out: include that instead.");
+                    let tip = tr!(
+                        "The rule {rule} of mod.ltx [exclude] leaves it out: include that instead.",
+                        rule = rule.as_str()
+                    );
                     row(
                         ui,
                         "Include in Build",
-                        MenuItem { icon: Icon::Exclude, enabled: false, tip: &tip, ..MenuItem::default() },
+                        MenuItem { icon: Icon::Exclude, enabled: false, tip, ..MenuItem::default() },
                         Pick::Include,
                     )
                 }
@@ -1791,24 +1844,26 @@ fn status_strip(ui: &mut Ui, st: &Inner, f: &Frame<'_>) {
         .map_or((0, 0), |v| (v.folders, v.files));
     let shown = folders + files;
     let searching = search_active(&st.search);
-    let mut line = thousands(shown);
-    line.push_str(match (searching, shown == 1) {
-        (true, true) => " result",
-        (true, false) => " results",
-        (false, true) => " item",
-        (false, false) => " items",
-    });
+    // the counts with their words in the window's language, the number written with its commas
+    let mut parts: Vec<Tx<'static>> = vec![if searching {
+        tr!("{count} {n:result|results}", count = thousands(shown), n = shown)
+    } else {
+        tr!("{count} {n:item|items}", count = thousands(shown), n = shown)
+    }];
     let selected = st.selected_tiles();
     if selected > 0 {
-        line.push_str(&format!("  \u{b7}  {} selected", thousands(selected)));
+        parts.push(tr!("{count} selected", count = thousands(selected)));
     }
     if !st.clip.items.is_empty() {
-        line.push_str(&format!(
-            "  \u{b7}  {}{}",
-            thousands(st.clip.items.len()),
-            if st.clip.cut { " cut" } else { " on the clipboard" }
-        ));
+        let count = thousands(st.clip.items.len());
+        parts.push(if st.clip.cut {
+            tr!("{count} cut", count = count)
+        } else {
+            tr!("{count} on the clipboard", count = count)
+        });
     }
+    let line: Vec<String> = parts.iter().map(|t| t.text(&f.ctx)).collect();
+    let line = line.join("  \u{b7}  ");
     let read_only = st.loc.source.read_only();
     let badge_w = if read_only { text::width(&f.ctx, &Font::Small.id(), "Read only") + 12.0 } else { 0.0 };
     text::paint(
@@ -1817,7 +1872,7 @@ fn status_strip(ui: &mut Ui, st: &Inner, f: &Frame<'_>) {
         pos2(rect.min.x + 2.0, rect.center().y),
         Align2::LEFT_CENTER,
         f.p.text_secondary,
-        &line,
+        Tx::raw(line.as_str()),
         Some((w - badge_w - 14.0).max(0.0)),
         Clip::End,
     );
@@ -1826,9 +1881,9 @@ fn status_strip(ui: &mut Ui, st: &Inner, f: &Frame<'_>) {
         let mut child = ui
             .new_child(UiBuilder::new().max_rect(r).layout(egui::Layout::left_to_right(egui::Align::Center)));
         badge(&mut child, "Read only", gz_ui::Tone::Muted);
-        child.interact(r, Id::unique(("cb_read_only", f.host.index())), Sense::hover()).on_hover_text(
-            "Browse, preview and copy out into the project: nothing in this source is changed.",
-        );
+        child
+            .interact(r, Id::unique(("cb_read_only", f.host.index())), Sense::hover())
+            .tip("Browse, preview and copy out into the project: nothing in this source is changed.");
     }
 }
 

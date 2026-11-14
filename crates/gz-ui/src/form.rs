@@ -16,17 +16,26 @@ use std::hash::Hash;
 
 use egui::{Id, Margin, Response, TextEdit, Ui, Vec2};
 
+use crate::i18n::Tx;
 use crate::units::em;
 use crate::{Font, audit, metrics};
 
 /// A box and its label, `width` wide, the whole row a click target; disabled with the `Ui`: the
 /// kit's [`crate::Check`]. Returns whether it flipped.
-pub fn check(ui: &mut Ui, id: Id, label: &str, value: &mut bool, width: f32) -> bool {
+pub fn check<'a>(ui: &mut Ui, id: Id, label: impl Into<Tx<'a>>, value: &'a mut bool, width: f32) -> bool {
     ui.push_id(id, |ui| crate::Check::new(value, label).width(width).show(ui).changed()).inner
 }
 
 /// A one-line text field `width` wide, a frame tall, with `hint` while it is empty.
-pub fn hint_field(ui: &mut Ui, id: Id, value: &mut String, hint: &str, width: f32) -> Response {
+pub fn hint_field<'a>(
+    ui: &mut Ui,
+    id: Id,
+    value: &mut String,
+    hint: impl Into<Tx<'a>>,
+    width: f32,
+) -> Response {
+    let hint = hint.into().text(ui.ctx());
+    let hint: &str = &hint;
     let resp = ui.add(
         TextEdit::singleline(value)
             .id(id)
@@ -45,14 +54,27 @@ pub fn hint_field(ui: &mut Ui, id: Id, value: &mut String, hint: &str, width: f3
 
 /// A [`hint_field`] as wide as the row it is in (3 em at least). Its state lives under
 /// `Id::unique(salt)`, so it keeps the keyboard while the form around it scrolls.
-pub fn row_field(ui: &mut Ui, salt: impl Hash + Debug, value: &mut String, hint: &str) -> Response {
+pub fn row_field<'a>(
+    ui: &mut Ui,
+    salt: impl Hash + Debug,
+    value: &mut String,
+    hint: impl Into<Tx<'a>>,
+) -> Response {
     let width = ui.available_width().max(em(3.0));
     hint_field(ui, Id::unique(salt), value, hint, width)
 }
 
 /// A one-line field `width` wide whose text is never drawn (a password, a token, an API key):
 /// dots, `hint` while it is empty. `hint` names it to the audit.
-pub fn secret_field(ui: &mut Ui, id: Id, value: &mut String, hint: &str, width: f32) -> Response {
+pub fn secret_field<'a>(
+    ui: &mut Ui,
+    id: Id,
+    value: &mut String,
+    hint: impl Into<Tx<'a>>,
+    width: f32,
+) -> Response {
+    let hint = hint.into().text(ui.ctx());
+    let hint: &str = &hint;
     let resp = ui.add(
         TextEdit::singleline(value)
             .id(id)

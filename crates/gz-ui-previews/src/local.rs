@@ -1,12 +1,12 @@
 //! Widgets the kit lacks, local to this crate until a second surface wants them
 //! (docs/UI_DESIGN.md, section 4).
 
-use egui::{Align2, CornerRadius, Painter, Rect, Sense, Ui, Vec2};
+use egui::{Align2, Context, CornerRadius, Painter, Rect, Sense, Ui, Vec2};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Font, palette};
+use gz_ui::{Font, Tx, palette};
 
 /// A preview's title (Title type, ellipsized) and its facts under it (Small, muted).
-pub fn local_heading(ui: &mut Ui, title: &str, title_clip: Clip, facts: &[(&str, Clip)]) {
+pub fn local_heading(ui: &mut Ui, title: Tx<'_>, title_clip: Clip, facts: &[(Tx<'_>, Clip)]) {
     let p = palette(ui.ctx());
     text::label(ui, title, Font::Title, p.text, title_clip);
     for (line, clip) in facts {
@@ -16,9 +16,17 @@ pub fn local_heading(ui: &mut Ui, title: &str, title_clip: Clip, facts: &[(&str,
     }
 }
 
+/// Facts in one line, each in the window's language, joined with a middle dot: a status line.
+/// The pieces are translated here, so the line is shown as it is.
+#[must_use]
+pub fn local_facts(ctx: &Context, parts: &[Tx<'_>]) -> Tx<'static> {
+    let shown: Vec<String> = parts.iter().filter(|t| !t.is_empty()).map(|t| t.text(ctx)).collect();
+    Tx::raw(shown.join(" \u{b7} "))
+}
+
 /// A muted line of Small text at the left and another at the right of one row: a timeline's
 /// first and last frame, a curve's two ends.
-pub fn local_ends(ui: &mut Ui, left: &str, right: &str) {
+pub fn local_ends(ui: &mut Ui, left: Tx<'_>, right: Tx<'_>) {
     let p = palette(ui.ctx());
     let h = Font::Small.line();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::hover());

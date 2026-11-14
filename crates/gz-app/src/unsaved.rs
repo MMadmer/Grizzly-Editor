@@ -96,7 +96,7 @@ impl ShellState {
                 let doc = t.doc.as_ref()?;
                 (doc.dirty() && !doc.dirty_elsewhere()).then(|| DirtyTab {
                     id: t.id.to_string(),
-                    label: t.label(),
+                    label: t.label_en(),
                     kind: doc.kind(),
                 })
             })
@@ -125,7 +125,13 @@ pub(crate) fn save_then(
             Ok(()) => queue.post(then),
             Err(e) if e.code == SAVE_CANCELLED => {}
             Err(e) => queue.post(move |shell, ctx| {
-                gz_ui::dialog::notice(ctx, shell.asker(), gz_ui::Tone::Error, "Save failed", &e.message);
+                gz_ui::dialog::notice(
+                    ctx,
+                    shell.asker(),
+                    gz_ui::Tone::Error,
+                    "Save failed",
+                    gz_ui::Tx::ui(e.message),
+                );
             }),
         }
     });
@@ -147,7 +153,7 @@ pub async fn save_tabs(editor: &Arc<Editor>, ids: Vec<String>, person: bool) -> 
                     let label = shell
                         .find(id)
                         .and_then(|i| shell.tabs.get(i))
-                        .map(crate::shell::Tab::label)
+                        .map(crate::shell::Tab::label_en)
                         .unwrap_or_else(|| id.clone());
                     return Err(CmdError::new("failed", format!("{label}: {e}")));
                 }
@@ -168,7 +174,7 @@ pub async fn save_tabs(editor: &Arc<Editor>, ids: Vec<String>, person: bool) -> 
                 let mut failed = None;
                 for id in &ids {
                     let Some(tab) = shell.find(id).and_then(|i| shell.tabs.get_mut(i)) else { continue };
-                    let label = tab.label();
+                    let label = tab.label_en();
                     if failed.is_none()
                         && let Some(e) = tab.doc.as_mut().and_then(|d| d.save_failed())
                     {

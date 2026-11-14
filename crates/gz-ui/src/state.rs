@@ -20,6 +20,7 @@ use egui::{
 
 use crate::button::{Button, Kind, icon_button_sized};
 use crate::font::Font;
+use crate::i18n::Tx;
 use crate::icons::{self, Icon};
 use crate::text::{self, Clip};
 use crate::theme::{Palette, Tone, metrics, palette};
@@ -45,18 +46,32 @@ fn tone_text(p: &Palette, tone: Tone) -> egui::Color32 {
 /// What an empty list or panel says: an icon, a title, a sentence and an action, centred in the
 /// region it gets. A short region drops the icon first, then the margins, and keeps the words.
 /// Returns whether the action was pressed.
-pub fn empty_state(ui: &mut Ui, icon: Icon, title: &str, text_: &str, action: Option<&str>) -> bool {
-    state_block(ui, icon, None, title, text_, action).0
+pub fn empty_state<'a>(
+    ui: &mut Ui,
+    icon: Icon,
+    title: impl Into<Tx<'a>>,
+    text_: impl Into<Tx<'a>>,
+    action: Option<Tx<'a>>,
+) -> bool {
+    let text_ = text_.into().text(ui.ctx());
+    state_block(ui, icon, None, &title.into(), &text_, action.as_ref()).0
 }
 
 /// What a surface says in place of its content when it cannot show it: the empty state's
 /// layout with the error icon in the error tone. An audited frame reports it (`ui.audit`
 /// `errors`), so a caller that looks at the surface knows it is not the content. Returns
 /// whether the action was pressed.
-pub fn error_state(ui: &mut Ui, title: &str, text_: &str, action: Option<&str>) -> bool {
+pub fn error_state<'a>(
+    ui: &mut Ui,
+    title: impl Into<Tx<'a>>,
+    text_: impl Into<Tx<'a>>,
+    action: Option<Tx<'a>>,
+) -> bool {
     let tone = palette(ui.ctx()).tone(Tone::Error);
-    let (pressed, rect) = state_block(ui, Icon::Error, Some(tone), title, text_, action);
-    crate::audit::error(ui.ctx(), title, text_, rect);
+    let title = title.into();
+    let text_ = text_.into().text(ui.ctx());
+    let (pressed, rect) = state_block(ui, Icon::Error, Some(tone), &title, &text_, action.as_ref());
+    crate::audit::error(ui.ctx(), &title.get(ui.ctx()), &text_, rect);
     pressed
 }
 
@@ -65,9 +80,9 @@ fn state_block(
     ui: &mut Ui,
     icon: Icon,
     icon_color: Option<egui::Color32>,
-    title: &str,
+    title: &Tx<'_>,
     text_: &str,
-    action: Option<&str>,
+    action: Option<&Tx<'_>>,
 ) -> (bool, Rect) {
     let p = palette(ui.ctx());
     let ctx = ui.ctx().clone();
@@ -113,7 +128,7 @@ fn state_block(
             pos2(cx, y + title_h * 0.5),
             Align2::CENTER_CENTER,
             p.text,
-            title,
+            title.borrow(),
             Some(avail.x - 16.0),
             Clip::End,
         );
@@ -128,9 +143,9 @@ fn state_block(
     let mut pressed = false;
     if let Some(action) = action {
         y += 16.0;
-        let w = button_width(&ctx, action, Kind::Primary, false, 0.0);
+        let w = button_width(&ctx, action.borrow(), Kind::Primary, false, 0.0);
         let rect = Rect::from_min_size(pos2(cx - w * 0.5, y), Vec2::new(w, metrics::FRAME));
-        pressed = ui.put(rect, Button::new(action).primary()).clicked();
+        pressed = ui.put(rect, Button::new(action.borrow()).primary()).clicked();
         y += button_h;
     }
     let used = Rect::from_min_size(origin, Vec2::new(avail.x, (y - origin.y + margin).max(0.0)));
@@ -139,11 +154,13 @@ fn state_block(
 }
 
 /// A small pill: a count, a state word. Muted reads on the raised colour, a tone on its tint.
-pub fn badge(ui: &mut Ui, text_: &str, tone: Tone) {
+pub fn badge<'a>(ui: &mut Ui, text_: impl Into<Tx<'a>>, tone: Tone) {
+    let text_ = text_.into().text(ui.ctx());
+    let text_: &str = &text_;
     let p = palette(ui.ctx());
     let font = Font::Small.id();
     let h = 18.0;
-    let w = text::width(ui.ctx(), &font, text_) + 12.0;
+    let w = text::measure(ui.ctx(), &font, text_) + 12.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
     if ui.is_rect_visible(rect) {
         let muted = tone == Tone::Muted;
@@ -159,15 +176,14 @@ pub fn badge(ui: &mut Ui, text_: &str, tone: Tone) {
 }
 
 /// A dot in a tone's colour, with what it means as its tooltip.
-pub fn status_dot(ui: &mut Ui, tone: Tone, tip: &str) {
+pub fn status_dot<'a>(ui: &mut Ui, tone: Tone, tip: impl Into<Tx<'a>>) {
+    use crate::i18n::TipExt;
     let p = palette(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(10.0, Font::Body.line()), Sense::hover());
     if ui.is_rect_visible(rect) {
         ui.painter().circle_filled(rect.center(), 4.0, p.tone(tone));
     }
-    if !tip.is_empty() {
-        resp.on_hover_text(tip);
-    }
+    resp.tip(tip);
 }
 
 /// How often a spinner asks for its next frame: 30 a second turns it smoothly, and a window
@@ -208,30 +224,41 @@ pub fn spinner(ui: &mut Ui) {
 
 /// A spinner and what is being done, on one line. An audited frame reports it: a caller that
 /// looks at the surface knows it has not got its content yet.
-pub fn busy_line(ui: &mut Ui, text_: &str) {
+pub fn busy_line<'a>(ui: &mut Ui, text_: impl Into<Tx<'a>>) {
+    let text_ = text_.into();
     let row = ui
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             spinner(ui);
             let color = palette(ui.ctx()).text;
-            text::label(ui, text_, Font::Body, color, Clip::End);
+            text::label(ui, text_.borrow(), Font::Body, color, Clip::End);
         })
         .response
         .rect;
-    crate::audit::loading(ui.ctx(), text_, row);
+    crate::audit::loading(ui.ctx(), &text_.get(ui.ctx()), row);
 }
 
 /// A toned bar across the row: an icon, a sentence that wraps, up to two actions on the right.
 /// Returns the index of the action pressed.
-pub fn banner(ui: &mut Ui, tone: Tone, text_: &str, a1: Option<&str>, a2: Option<&str>) -> Option<usize> {
+pub fn banner<'a>(
+    ui: &mut Ui,
+    tone: Tone,
+    text_: impl Into<Tx<'a>>,
+    a1: Option<Tx<'a>>,
+    a2: Option<Tx<'a>>,
+) -> Option<usize> {
     let p = palette(ui.ctx());
     let ctx = ui.ctx().clone();
+    let text_ = text_.into().text(&ctx);
+    let a1 = a1.map(|a| a.text(&ctx));
+    let a2 = a2.map(|a| a.text(&ctx));
+    let (a1, a2) = (a1.as_deref(), a2.as_deref());
     let origin = ui.cursor().min;
     let width = ui.available_width().max(em(8.0));
     let pad = 10.0;
     let icon = metrics::GLYPH;
-    let w1 = a1.map_or(0.0, |a| button_width(&ctx, a, Kind::Secondary, false, 0.0));
-    let w2 = a2.map_or(0.0, |a| button_width(&ctx, a, Kind::Secondary, false, 0.0));
+    let w1 = a1.map_or(0.0, |a| button_width(&ctx, Tx::raw(a), Kind::Secondary, false, 0.0));
+    let w2 = a2.map_or(0.0, |a| button_width(&ctx, Tx::raw(a), Kind::Secondary, false, 0.0));
     let buttons = w1 + w2 + if w1 > 0.0 && w2 > 0.0 { 6.0 } else { 0.0 };
     let text_x = origin.x + pad + icon + 8.0;
     let wrap =
@@ -260,13 +287,18 @@ pub fn banner(ui: &mut Ui, tone: Tone, text_: &str, a1: Option<&str>, a2: Option
     let by = rect.center().y - metrics::FRAME * 0.5;
     let mut x = rect.max.x - pad - buttons;
     if let Some(a) = a1 {
-        if ui.put(Rect::from_min_size(pos2(x, by), Vec2::new(w1, metrics::FRAME)), Button::new(a)).clicked() {
+        if ui
+            .put(Rect::from_min_size(pos2(x, by), Vec2::new(w1, metrics::FRAME)), Button::new(Tx::raw(a)))
+            .clicked()
+        {
             clicked = Some(0);
         }
         x += w1 + 6.0;
     }
     if let Some(a) = a2
-        && ui.put(Rect::from_min_size(pos2(x, by), Vec2::new(w2, metrics::FRAME)), Button::new(a)).clicked()
+        && ui
+            .put(Rect::from_min_size(pos2(x, by), Vec2::new(w2, metrics::FRAME)), Button::new(Tx::raw(a)))
+            .clicked()
     {
         clicked = Some(1);
     }
@@ -275,9 +307,15 @@ pub fn banner(ui: &mut Ui, tone: Tone, text_: &str, a1: Option<&str>, a2: Option
 
 /// A toned bar with a sentence and a short list under it: each item a line, with its own action
 /// button at its right when it has one. Returns the index of the item whose action was pressed.
-pub fn banner_list(ui: &mut Ui, tone: Tone, text_: &str, items: &[(&str, Option<&str>)]) -> Option<usize> {
+pub fn banner_list<'a>(
+    ui: &mut Ui,
+    tone: Tone,
+    text_: impl Into<Tx<'a>>,
+    items: &[(Tx<'a>, Option<Tx<'a>>)],
+) -> Option<usize> {
     let p = palette(ui.ctx());
     let ctx = ui.ctx().clone();
+    let text_ = text_.into().text(&ctx);
     let origin = ui.cursor().min;
     let width = ui.available_width().max(em(8.0));
     let pad = 10.0;
@@ -309,7 +347,7 @@ pub fn banner_list(ui: &mut Ui, tone: Tone, text_: &str, items: &[(&str, Option<
     let mut clicked = None;
     let mut y = rect.min.y + pad + galley.size().y + 4.0;
     for (i, (line, action)) in items.iter().enumerate() {
-        let w = action.map_or(0.0, |a| button_width(&ctx, a, Kind::Secondary, false, 0.0));
+        let w = action.as_ref().map_or(0.0, |a| button_width(&ctx, a, Kind::Secondary, false, 0.0));
         let right = rect.max.x - pad;
         let room = (right - if w > 0.0 { w + 8.0 } else { 0.0 } - text_x - 12.0).max(0.0);
         let cy = y + item_h * 0.5;
@@ -320,14 +358,14 @@ pub fn banner_list(ui: &mut Ui, tone: Tone, text_: &str, items: &[(&str, Option<
             pos2(text_x + 12.0, cy),
             Align2::LEFT_CENTER,
             p.text,
-            line,
+            line.borrow(),
             Some(room),
             Clip::End,
         );
         if let Some(a) = action {
             let r =
                 Rect::from_min_size(pos2(right - w, cy - metrics::FRAME * 0.5), Vec2::new(w, metrics::FRAME));
-            if ui.put(r, Button::new(a)).clicked() {
+            if ui.put(r, Button::new(a.borrow())).clicked() {
                 clicked = Some(i);
             }
         }
@@ -340,9 +378,9 @@ pub fn banner_list(ui: &mut Ui, tone: Tone, text_: &str, items: &[(&str, Option<
 #[derive(Clone, Debug)]
 struct ToastItem {
     tone: Tone,
-    text: String,
+    text: Tx<'static>,
     /// Its one button: the label and what it runs (an action's id, which the shell runs).
-    action: Option<(String, String)>,
+    action: Option<(Tx<'static>, String)>,
     /// When it was first drawn, in seconds of the context's clock; `None` until then.
     born: Option<f64>,
     serial: u64,
@@ -372,18 +410,24 @@ const MAX_TOASTS: usize = 4;
 const TOAST_W: f32 = metrics::TOOLTIP_W;
 
 /// Queues a note for [`draw_toasts`]. It stays 6 seconds, an error 10.
-pub fn toast(ctx: &Context, tone: Tone, text_: &str) {
-    push_toast(ctx, tone, text_, None);
+pub fn toast<'a>(ctx: &Context, tone: Tone, text_: impl Into<Tx<'a>>) {
+    push_toast(ctx, tone, text_.into().into_owned(), None);
 }
 
 /// [`toast`] with one button under the text: `label` ("Details", "What's New") and the id of
 /// what it runs - an action's, which the shell runs once the button is pressed
 /// ([`take_toast_actions`]). Pressed, the note goes. It stays 10 seconds.
-pub fn toast_with(ctx: &Context, tone: Tone, text_: &str, label: &str, action: &str) {
-    push_toast(ctx, tone, text_, Some((label.to_owned(), action.to_owned())));
+pub fn toast_with<'a>(
+    ctx: &Context,
+    tone: Tone,
+    text_: impl Into<Tx<'a>>,
+    label: impl Into<Tx<'a>>,
+    action: &str,
+) {
+    push_toast(ctx, tone, text_.into().into_owned(), Some((label.into().into_owned(), action.to_owned())));
 }
 
-fn push_toast(ctx: &Context, tone: Tone, text_: &str, action: Option<(String, String)>) {
+fn push_toast(ctx: &Context, tone: Tone, text_: Tx<'static>, action: Option<(Tx<'static>, String)>) {
     if text_.is_empty() {
         return;
     }
@@ -391,7 +435,7 @@ fn push_toast(ctx: &Context, tone: Tone, text_: &str, action: Option<(String, St
         let t = d.get_temp_mut_or_default::<Toasts>(toasts_id());
         t.serial += 1;
         let serial = t.serial;
-        t.items.push(ToastItem { tone, text: text_.to_owned(), action, born: None, serial });
+        t.items.push(ToastItem { tone, text: text_, action, born: None, serial });
         while t.items.len() > MAX_TOASTS {
             t.items.remove(0);
         }
@@ -399,19 +443,24 @@ fn push_toast(ctx: &Context, tone: Tone, text_: &str, action: Option<(String, St
     ctx.request_repaint();
 }
 
-/// The texts of the notes queued or on screen, oldest first: what MCP answers of them.
+/// The texts of the notes queued or on screen, oldest first, in English: what MCP answers of them.
 #[must_use]
 pub fn toast_texts(ctx: &Context) -> Vec<String> {
     ctx.data(|d| d.get_temp::<Toasts>(toasts_id()))
-        .map(|t| t.items.into_iter().map(|i| i.text).collect())
+        .map(|t| t.items.into_iter().map(|i| i.text.en().into_owned()).collect())
         .unwrap_or_default()
 }
 
-/// The notes up now with their buttons: `(text, Some((label, action)))`.
+/// The notes up now with their buttons, in English: `(text, Some((label, action)))`.
 #[must_use]
 pub fn toast_list(ctx: &Context) -> Vec<(String, Option<(String, String)>)> {
     ctx.data(|d| d.get_temp::<Toasts>(toasts_id()))
-        .map(|t| t.items.into_iter().map(|i| (i.text, i.action)).collect())
+        .map(|t| {
+            t.items
+                .into_iter()
+                .map(|i| (i.text.en().into_owned(), i.action.map(|(l, a)| (l.en().into_owned(), a))))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -467,7 +516,7 @@ pub fn draw_toasts_at(ui: &mut Ui, at: Align2) {
                 let inner_w = TOAST_W - 24.0;
                 let text_w = inner_w - 22.0 - 24.0;
                 let galley =
-                    ui.ctx().fonts_mut(|f| f.layout(item.text.clone(), Font::Body.id(), p.text, text_w));
+                    ui.ctx().fonts_mut(|f| f.layout(item.text.text(&ctx), Font::Body.id(), p.text, text_w));
                 let text_h = galley.size().y.max(metrics::GLYPH);
                 // the button sits under the text, at its right end
                 let button_h = if item.action.is_some() { metrics::FRAME + 8.0 } else { 0.0 };
@@ -507,13 +556,23 @@ pub fn draw_toasts_at(ui: &mut Ui, at: Align2) {
                     dismissed = Some(item.serial);
                 }
                 if let Some((label, action)) = &item.action {
-                    let w = crate::units::button_width(ui.ctx(), label, crate::Kind::Secondary, false, 0.0);
+                    let w = crate::units::button_width(
+                        ui.ctx(),
+                        label.borrow(),
+                        crate::Kind::Secondary,
+                        false,
+                        0.0,
+                    );
                     let slot = Rect::from_min_size(
                         pos2(rect.max.x - 12.0 - w, rect.min.y + 10.0 + text_h + 8.0),
                         Vec2::new(w, metrics::FRAME),
                     );
                     let mut child = ui.new_child(egui::UiBuilder::new().id_salt("action").max_rect(slot));
-                    if crate::Button::new(label).kind(crate::Kind::Secondary).show(&mut child).clicked() {
+                    if crate::Button::new(label.borrow())
+                        .kind(crate::Kind::Secondary)
+                        .show(&mut child)
+                        .clicked()
+                    {
                         picked = Some((item.serial, action.clone()));
                     }
                 }

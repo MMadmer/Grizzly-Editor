@@ -306,7 +306,7 @@ pub struct Canvas {
     hot_frame: Option<(usize, bool)>,
     hot_knot: Option<(usize, usize)>,
     guides: Vec<[Pos2; 2]>,
-    status: String,
+    status: gz_ui::Tx<'static>,
     status_at: f64,
     tip: String,
     menu: Option<Menu>,
@@ -379,12 +379,13 @@ fn round(v: f32) -> f32 {
 /// One line of canvas text cut to `avail`, painted with its left edge at `at.x` and its middle
 /// at `at.y`; the width drawn. The cut is the kit's cached one: worked out once per text, size
 /// and width, not per frame. Canvas text is clipped by its node on purpose, so it is not
-/// reported to the audit.
+/// reported to the audit. `text_` is as the window shows it: a word of the editor's already in
+/// its language.
 fn paint_fit(painter: &Painter, font: &FontId, at: Pos2, color: Color32, text_: &str, avail: f32) -> f32 {
     if text_.is_empty() || avail <= font.size * 0.5 {
         return 0.0;
     }
-    let fitted = gz_ui::text::fit(painter.ctx(), font, text_, avail, gz_ui::Clip::End);
+    let fitted = gz_ui::text::fit(painter.ctx(), font, gz_ui::Tx::raw(text_), avail, gz_ui::Clip::End);
     painter.text(at, Align2::LEFT_CENTER, &*fitted.text, font.clone(), color).width()
 }
 
@@ -451,7 +452,7 @@ impl Canvas {
             hot_frame: None,
             hot_knot: None,
             guides: Vec::new(),
-            status: String::new(),
+            status: gz_ui::Tx::EMPTY,
             status_at: 0.0,
             tip: String::new(),
             menu: None,
@@ -574,8 +575,10 @@ impl Canvas {
         self.want_frame_sel = false;
     }
 
-    pub fn set_status(&mut self, ctx: &egui::Context, text_: &str) {
-        text_.clone_into(&mut self.status);
+    /// A line the canvas says for a few seconds: the editor's own words (`Tx::ui` for a sentence
+    /// the graph area wrote).
+    pub fn set_status(&mut self, ctx: &egui::Context, text_: impl Into<gz_ui::Tx<'static>>) {
+        self.status = text_.into();
         self.status_at = ctx.input(|i| i.time);
     }
 

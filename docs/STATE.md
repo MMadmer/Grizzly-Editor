@@ -28,10 +28,17 @@ What the suites hold, beyond what their names say:
   a file edited outside is one undo step.
 - **One level build** (`test_level_commands`, `test_level_compile`): every step built as one job; the same build
   again builds nothing; the status survives a restart; a moved object makes stale exactly the steps that read it;
-  Stop keeps what ended; the compiler's output matches its records byte for byte
-  (`tools/qa/golden/compile`).
-- **The game runs what the editor builds** (`test_play_game`, `--with-game`): a new game on the built level; the
-  installed game is listed before and after and is equal.
+  Stop ends the build within seconds inside the compiler and keeps what ended (`gz-lc`'s tests stop a compile in
+  every phase, and inside the lightmaps and the static models' light); an error ends the build naming the step and
+  the steps not run; what the spawn would refuse is refused before any step runs; the compiler's output matches its
+  records byte for byte (`tools/qa/golden/compile`).
+- **A level the linked game has** (`test_level_commands` G): every compile step not needed, Build Level builds the
+  spawn layer, a compile step asked for by name runs and its files are the warning `level.clean` removes; Play
+  plays the module - the root's `modules\<id>` with Play's Player Start, the new game's options a file of the root's
+  own, no level staged, a new game on the command line.
+- **The game runs what the editor builds** (`test_play_game`, `--with-game`): a new game on the built level, and
+  (`--scene l01_escape`) a new game on the game's own level with the module mounted from Play's root and the
+  player at Play's Player Start; the installed game is listed before and after and is equal.
 - **The updater** (`gz-update`'s end-to-end test with an HTTP server of its own, `test_update` against the mock): the
   check reads only the archive's end and its manifest; only the delta's ranges are asked for; a cut download resumes
   at its byte, also inside a record, also after a restart; a held file rolls the installation back exactly; the
@@ -57,10 +64,26 @@ What the suites hold, beyond what their names say:
 - **Releases and the Mod Browser** (`test_mod_publish`, `test_mod_catalog`, the mock only): the whole path, the
   doors (`release.delete` only through the destroy door, `release.publish` and `mod.package` only through the
   release door), a check that a closed project's jobs do not start again.
+- **The themes** (`gz-ui`'s theme tests, `test_tour_light`): every theme of the table holds the contrast of
+  `theme::min` (the text levels on the surfaces and the canvas, the tones and Info on their tints and apart
+  from each other, the label on every fill, the accent fill, the selection, borders, the node families, the
+  axes); `test_tour_light` (`test_tour.py --theme grizzly-light`) takes every tab kind, dialog and menu of
+  `ui.contract` in Grizzly Light as `test_tour` does in Grizzly Dark, audited and pictured, with `app.prefs`
+  setting the theme and answering it back.
 - **The game half of the graphs** (the game repository's `tools/nq/run_lua.py test_examples.lua`, its catalog
   parity test): disabled nodes pass through, a file with a `canvas` loads.
 
+- **The window in Russian** (`test_tour` R, `grizzly`'s `the_catalogs_are_one_sound_catalog`): every tab kind,
+  dialog and menu of `ui.contract` at both sizes with `untranslated` empty and no text cut whose English fits;
+  every catalog reads and holds one English per context.
+
 ## 2. Not proven by a run
+
+- The Russian of what the tour does not bring up: a notice, a toast, a confirmation, an error state, a problem
+  sentence a surface shows only in a state the tour does not reach. Their words are in the catalogs as far as
+  the translator's list, `tools/rust/i18n_missing.py`, finds them (a heuristic: it lists data and the cards'
+  English too, which need no entry); a sentence a domain crate puts together that
+  no template matches stays English, and `ui.audit` names it where it is shown.
 
 - A real double click on a `.grizzly` file in Explorer: no test writes the user's file associations (the start
   writes them only for the author's own editor); the association itself is tested under a key of its own.
@@ -207,8 +230,43 @@ What the suites hold, beyond what their names say:
   build it says "Built at Draft quality."; Play builds at the quality and switches the level was last built with.
 - The build regenerates only an AI map it generated itself; one made or edited by hand is kept. Generation starts
   from the spawn points, so no hand-placed node is needed.
-- A failed step does not stop the build: the steps that need it are left for later, the rest run, and the answer
-  names all three.
+- An error stops the build, the way it stops one in Unreal: the step that failed ends the job at once, the steps
+  that finished stay fresh, and the answer names the failed step and the steps not run. A warning never stops it,
+  and a step whose result is usable reports a warning, not an error. What a later step would refuse and can be
+  seen at once - no spawn point, no actor or more than one, two objects with one story id, no graph point, no
+  ground for a generated AI map, a scene that fails its checks (the visibility cells completed first, the same
+  completion the geometry step then uses), the compiler's options, an input file no step of the build makes, the
+  linked game's `all.spawn` - is checked before the first step runs, and the build refuses in seconds with every
+  such problem on the object it is about.
+- Stop ends a build within about a second in any phase: every long loop of the steps (the AI map, the game files,
+  the game graph, the spawn, the geometry, the details) and of the compilers (each phase of `gz-lc`, the light,
+  the details' light) checks the job's cancel flag per item or per chunk; the step in progress is discarded, the
+  compiler's `.lc_new` / `.lc_old` go, and the job ends "Stopped.".
+- The compiler's phases have plain names ("Lighting the lightmaps", "Packing the lightmaps"), and a phase's own
+  stage and count ride under its name ("Lighting the lightmaps: 1200 of 5400"), so a sub-stage never hides the
+  phase. Lines and stage reach the Output Log and the job at most four times a second, and a timer passes what is
+  pending even while the compiler is silent.
+- A stock level - one the linked game's game graph lists (`gz-world` reads `all.spawn`) - is the game's: the module
+  adds to it, so its compile steps are "not needed" for the module whatever the record says, and Build Level
+  builds the spawn layer. Build Step / Rebuild All compile one on purpose and their output ships. Files a build
+  left in a stock level's folder that the game reads are a warning ("The module replaces 9 of l01_escape's own
+  files: ..."), fixed by `level.clean`, which removes what the build wrote: the files its record lists, or, for a
+  record older than the list, the names the steps make.
+- What a level folder holds for the build alone never ships: `build.prj`, `build.state`, `build.lights`,
+  `build.cform`, `build.details`, `build.err`, `level_stat.tga` / `.txt` (`gz-project`'s `rules.rs`,
+  `is_level_build_file`) and the compiler's stage folders (dot names).
+- Play on a stock level runs no step: the module is built the way a module build builds it, into the root's
+  `modules\<id>` (the marker names it, `module = <id>`, before it is written; a later Play removes a module its
+  marker lists that it does not install again), the game's gamedata mirrored without a staged level or
+  `editor.spawn`, and a new game started (`-start server(all/single/alife/new) client(localhost)`). The actor
+  starts at the module's Player Start; without one in the scene, Play writes one into its copy of the module
+  where the camera looks (the ground under the view's centre, else the camera's point) and drops the module's
+  other starts there. A new game takes its modes from `[character_creation] new_game_<mode>_mode` of
+  `configs\axr_options.ltx`, which the new-game screen writes: Play writes its own copy into the root (the
+  player's, its mode keys replaced), so a module that targets `existing` or `new` plays its mode and one that
+  targets `default` or `any` plays the plain game - nothing of the game had to change for it. Files a build left
+  in the level's folder would ship in Play's copy and replace the game's own (an AI map its cross table does not
+  know stopped the game, seen live): Play refuses while there are any, naming them and `level.clean`.
 - Play's gamedata is a mirror of the game's: hard links where the volume allows, copies otherwise.
 
 ### Graphs
@@ -263,6 +321,12 @@ What the suites hold, beyond what their names say:
   editor it had not seen before. The read-back of a pictured frame is polled by one thread made with the window;
   a thread a surface needs on first use (the sound player's, the renderer's start, the image pass's, the file
   dialog's) is made by a pool thread (`gz_task::Executors::thread`).
+- A theme changes at once, so nothing drawn once keeps a theme's colours: the graph's scene keys on the palette,
+  the model pictures of the content browser and the chooser on the colour they stand on (a new theme draws them
+  again), the viewport's background, grid and Wireframe edges are read from the palette every frame. A published
+  palette is mapped onto the roles by one rule and moved, hue kept, where it falls short of a contrast; Grizzly
+  Dark is written out by hand, and some of its values moved to hold the same rule (muted 938f9e, primary
+  hover 726ab6, error f5838c, required d29c69, the scroll bar's handle from the text colour to border.strong).
 - A count that is not known yet is no number: a Place category shows a spinner until its list is read, and the
   busy mark is what `ui.audit`'s `loading` reports - a kit test holds every busy mark to it, `test_ui_shell`
   sees it non-empty while a project opens.

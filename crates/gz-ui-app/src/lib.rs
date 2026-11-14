@@ -44,9 +44,13 @@ use gz_editor::Registry;
 
 pub use log::{LogHost, LogModel, output_log};
 
+/// This package's words in Russian (docs/UI_DESIGN.md, section 9).
+pub const RU: &str = include_str!("ru.lua");
+
 /// Plugs the Start page, the Link Game card, the Output Log (drawer, panel, status line) and
 /// the Preferences tab into the shell.
 pub fn install(b: &mut ShellBuilder) {
+    b.translation(RU);
     start::install(b);
     link::install(b);
     collect::install(b);

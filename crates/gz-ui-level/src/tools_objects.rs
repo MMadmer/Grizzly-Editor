@@ -18,10 +18,10 @@ use gz_scene::objtools::sector::DEFAULT_SECTOR;
 use gz_scene::{ObjClass, ObjData, ObjId, SceneCmd, SceneService, SceneState};
 use gz_ui::text::{self, Clip};
 use gz_ui::{
-    Button, Font, Icon, Kind, PropFlags, PropertyGrid, Section, Switch, Tone, icons, metrics, palette,
+    Button, Font, Icon, Kind, PropFlags, PropertyGrid, Section, Switch, Tone, Tx, icons, metrics, palette,
 };
 
-use crate::local::{args, confirm, local_eye_toggle, plural, removal, run};
+use crate::local::{args, confirm, local_eye_toggle, removal, run};
 
 /// What the first line says: the build makes the cells by itself.
 pub const BUILD_LINE: &str = "The build makes the cells and their portals by itself: one cell for a level without any, the meshes no cell holds into the default cell, and the portals the cells lack. Draw cells here only to cut the level up by hand.";
@@ -86,13 +86,14 @@ pub(crate) fn zones_panel(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
             (o.id, o.name.to_string(), meshes, o.flags.visible)
         })
         .collect();
-    let head = Section::new("zones.cells", "Cells").count(&cells.len().to_string()).show(ui);
+    let head = Section::new("zones.cells", "Cells").count(gz_ui::Tx::raw(cells.len().to_string())).show(ui);
     if head.open {
         if cells.is_empty() {
             text::status(ui, Tone::Muted, "None: the build makes the level one cell.");
         }
         for (id, name, meshes, visible) in &cells {
-            zone_row(ui, editor, &svc, snap, *id, name, &plural(*meshes, "mesh"), *visible, Icon::Sector);
+            let what = gz_ui::tr!("{n} {n:mesh|meshes}", n = *meshes);
+            zone_row(ui, editor, &svc, snap, *id, name, what, *visible, Icon::Sector);
         }
     }
     let portals: Vec<(ObjId, String, String, bool)> = snap
@@ -105,13 +106,24 @@ pub(crate) fn zones_panel(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
             (o.id, o.name.to_string(), between, o.flags.visible)
         })
         .collect();
-    let head = Section::new("zones.portals", "Portals").count(&portals.len().to_string()).show(ui);
+    let head =
+        Section::new("zones.portals", "Portals").count(gz_ui::Tx::raw(portals.len().to_string())).show(ui);
     if head.open {
         if portals.is_empty() {
             text::status(ui, Tone::Muted, "None: the build computes the portals between the cells.");
         }
         for (id, name, between, visible) in &portals {
-            zone_row(ui, editor, &svc, snap, *id, name, between, *visible, Icon::Portal);
+            zone_row(
+                ui,
+                editor,
+                &svc,
+                snap,
+                *id,
+                name,
+                gz_ui::Tx::raw(between.as_str()),
+                *visible,
+                Icon::Portal,
+            );
         }
     }
     let sel_cells = selected_names(snap, ObjClass::Sector);
@@ -134,7 +146,7 @@ pub(crate) fn zones_panel(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
                 "remove_zones",
                 "Remove Cells and Portals",
                 "Remove these cells and portals?",
-                gone,
+                gone.into_iter().map(Tx::raw).collect(),
                 "Remove",
             ),
             move || zones(&ed, "remove", &[("objects", Value::Array(names))]),
@@ -155,7 +167,7 @@ fn zone_row(
     snap: &SceneState,
     id: ObjId,
     name: &str,
-    detail: &str,
+    detail: gz_ui::Tx<'_>,
     visible: bool,
     icon: Icon,
 ) {
@@ -185,14 +197,14 @@ fn zone_row(
         Rect::from_min_size(pos2(x, rect.center().y - 7.0), Vec2::splat(14.0)),
         p.text_secondary,
     );
-    let detail_w = (rect.width() * 0.4).min(text::width(ui.ctx(), &Font::Small.id(), detail) + 4.0);
+    let detail_w = (rect.width() * 0.4).min(text::width(ui.ctx(), &Font::Small.id(), &detail) + 4.0);
     text::paint(
         ui.painter(),
         &Font::Body.id(),
         pos2(x + 20.0, rect.center().y),
         Align2::LEFT_CENTER,
         p.text,
-        name,
+        gz_ui::Tx::raw(name),
         Some((rect.max.x - x - 24.0 - detail_w).max(0.0)),
         Clip::Middle,
     );
@@ -202,7 +214,7 @@ fn zone_row(
         pos2(rect.max.x - 4.0, rect.center().y),
         Align2::RIGHT_CENTER,
         p.text_muted,
-        detail,
+        &detail,
         Some(detail_w),
         Clip::Middle,
     );
@@ -288,7 +300,7 @@ fn more(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState, sel_cells: &[Strin
                     "remove_default_sector",
                     "Remove the Default Cell",
                     "Remove the default cell and its portals?",
-                    vec![DEFAULT_SECTOR.to_owned()],
+                    vec![Tx::raw(DEFAULT_SECTOR)],
                     "Remove",
                 ),
                 move || zones(&ed, "remove", &[("objects", json!([DEFAULT_SECTOR]))]),

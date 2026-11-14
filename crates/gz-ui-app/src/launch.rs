@@ -12,7 +12,9 @@ use serde_json::json;
 pub fn install_hooks(editor: &Arc<Editor>) {
     gz_project::ProjectHooks::of(editor).provide_launch_prompt(|ed, folder| {
         let Ok(queue) = gz_app::UiQueue::of(ed) else { return false };
-        let what: Vec<String> = ed.dirty_docs().into_iter().map(|d| d.name).collect();
+        // an area names its unsaved work in its own English ("Texture Library") or by a file
+        let what: Vec<gz_ui::Tx<'static>> =
+            ed.dirty_docs().into_iter().map(|d| gz_ui::Tx::ui(d.name)).collect();
         let (ed, folder) = (ed.clone(), folder.to_owned());
         queue.post(move |_shell, ctx| {
             let asker = if ed.flags.unattended { Asker::Unattended } else { Asker::Ui };

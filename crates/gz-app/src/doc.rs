@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use egui_wgpu::RenderState;
 use gz_editor::{Editor, SmolStr};
-use gz_ui::{Icon, Tone, Toolbar};
+use gz_ui::{Icon, Tone, Toolbar, Tx};
 
 use crate::keys::Chord;
 
@@ -172,7 +172,7 @@ pub(crate) enum Request {
     Dialog(String),
     Drawer(Option<Drawer>),
     ToggleDrawer(Drawer),
-    Toast(Tone, String),
+    Toast(Tone, Tx<'static>),
     Palette,
     Panel(String, PanelOp),
     Exit,
@@ -210,8 +210,8 @@ impl ShellRequests {
         self.list.push(Request::ToggleDrawer(drawer));
     }
 
-    pub fn toast(&mut self, tone: Tone, text: &str) {
-        self.list.push(Request::Toast(tone, text.to_owned()));
+    pub fn toast<'a>(&mut self, tone: Tone, text: impl Into<Tx<'a>>) {
+        self.list.push(Request::Toast(tone, text.into().into_owned()));
     }
 
     pub fn palette(&mut self) {
@@ -277,13 +277,15 @@ pub trait Document {
     fn id(&self) -> &str;
     /// One of `ui.contract`'s document kinds.
     fn kind(&self) -> &'static str;
-    /// An own asset shows its name without the extension.
-    fn label(&self) -> String;
+    /// What the tab says: the editor's own word for a tool tab (`Tx::from("Preferences")`, shown
+    /// translated), a file's name for a file tab (`Tx::raw`). An own asset shows its name without
+    /// the extension. MCP reads it in English.
+    fn label(&self) -> Tx<'static>;
     fn icon(&self) -> Icon;
     fn path(&self) -> Option<String> {
         None
     }
-    fn tooltip(&self) -> Option<String> {
+    fn tooltip(&self) -> Option<Tx<'static>> {
         None
     }
     fn closable(&self) -> bool {
@@ -350,7 +352,7 @@ pub trait Document {
     }
     /// What the toolbar row says for a tab whose toolbar has nothing of its own: "Saved to
     /// mod.ltx as you edit". The row is never drawn empty.
-    fn toolbar_status(&self) -> Option<String> {
+    fn toolbar_status(&self) -> Option<Tx<'static>> {
         None
     }
     /// Forgets the unsaved changes.

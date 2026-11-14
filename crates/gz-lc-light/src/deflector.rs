@@ -387,19 +387,19 @@ impl Deflector {
     }
 
     /// The triangles mapped onto the layer's texels, then lit.
-    fn l_calculate(&mut self, env: &LightEnv<'_>, lights: &LightSet) {
+    fn l_calculate(&mut self, env: &LightEnv<'_>, lights: &LightSet, ctl: &Ctl<'_>) {
         let (w, h) = (self.layer.width, self.layer.height);
         self.remap_uv(0, 0, w, h, w, h, false);
         let boxes: Vec<Box2> = self.uv_polys.iter().map(|t| Box2::of_tri(&t.uv)).collect();
         let hash = Hash2D::build(HASH_SIDE, HASH_SIDE, self.bounds_summary(), &boxes);
         self.layer.create(w.min(LMAP_SIZE - 2 * BORDER), h.min(LMAP_SIZE - 2 * BORDER));
-        self.l_direct(env, lights, &hash);
+        self.l_direct(env, lights, &hash, ctl);
     }
 
     /// Every texel lit at its jittered samples through the first triangle that holds
     /// each, then the texels the triangles' edges cross but no sample found. The rows are lit
     /// in parallel; the edges in X-Ray's order, since one may take a texel another would.
-    fn l_direct(&mut self, env: &LightEnv<'_>, lights: &LightSet, hash: &Hash2D) {
+    fn l_direct(&mut self, env: &LightEnv<'_>, lights: &LightSet, hash: &Hash2D, ctl: &Ctl<'_>) {
         let (w, h) = (self.layer.width as usize, self.layer.height as usize);
         if w == 0 || h == 0 {
             return;
@@ -420,6 +420,10 @@ impl Deflector {
             .take(h)
             .enumerate()
             .for_each_init(LightCache::default, |cache, (v, (srow, mrow))| {
+                // a stopped compile drops what it lit: the rows left are not worth a ray
+                if ctl.cancelled() {
+                    return;
+                }
                 for (u, (s, m)) in srow.iter_mut().zip(mrow.iter_mut()).enumerate() {
                     let mut c = ColorC::default();
                     let mut count = 0u32;
@@ -527,8 +531,8 @@ impl EdgeLight<'_> {
 
 impl Deflector {
     /// The layer lit, its borders grown, shrunk when the light allows, and
-    /// grown by the final border.
-    pub fn light(&mut self, env: &LightEnv<'_>) {
+    /// grown by the final border. A Stop (`ctl`) leaves it half lit: the caller checks.
+    pub fn light(&mut self, env: &LightEnv<'_>, ctl: &Ctl<'_>) {
         // the bounds of the faces as they are now
         let mut bb = Aabb::INVALID;
         for t in &self.uv_polys {
@@ -539,7 +543,10 @@ impl Deflector {
         (self.sphere_p, self.sphere_r) = sphere_of(&bb);
         let lights = env.lights.select(self.sphere_p, self.sphere_r);
 
-        self.l_calculate(env, &lights);
+        self.l_calculate(env, &lights, ctl);
+        if ctl.cancelled() {
+            return;
+        }
         for r in (1..=254).rev() {
             if !apply_borders(&mut self.layer, r) {
                 break;
@@ -551,7 +558,7 @@ impl Deflector {
         }
         if let Some((w, h)) = compress_rms(&self.layer, rms_shrink(env.params)) {
             self.layer.create(w, h);
-            self.l_calculate(env, &lights);
+            self.l_calculate(env, &lights, ctl);
         }
         expand(&mut self.layer);
     }
@@ -821,13 +828,12 @@ impl Deflectors {
         let listed: std::collections::HashSet<DeflId> = self.list.iter().copied().collect();
         let total = self.list.len();
         let done = AtomicUsize::new(0);
-        ctl.stage("Lighting...");
         self.arena.par_iter_mut().enumerate().for_each(|(i, d)| {
             let Some(d) = d else { return };
             if !listed.contains(&DeflId(i as u32)) || ctl.cancelled() {
                 return;
             }
-            d.light(env);
+            d.light(env, ctl);
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             ctl.progress(n, total);
         });

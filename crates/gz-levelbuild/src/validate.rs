@@ -14,6 +14,11 @@
 //! A scene object in visual mode passes; a particle system is checked for a reference, not for
 //! one the particle library knows; a LOD texture counts as there when the linked game or the
 //! editor's own `gamedata` has it, and its message names the editor's `gamedata\textures` path.
+//!
+//! What leaves a usable level is a warning, never an error that stops the build: two objects of
+//! one model at one place, no light (the lightmaps stay dark), no glow, no spawn point (the spawn
+//! step, which needs one, says so itself), a sound environment with one environment twice, a
+//! sound source without a wave.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -139,9 +144,9 @@ fn scene_objects(
                 continue;
             }
             let same = resolved[ib].as_ref().is_some_and(|lb| normalize(&lb.name) == normalize(&la.name));
-            if same && similar(a.position(), b.position(), EPS_L) {
-                good = false;
-                log.info(format!(
+            // the pair is named once, and it builds: the second copy is only wasted geometry
+            if same && ia < ib && similar(a.position(), b.position(), EPS_L) {
+                log.warn(format!(
                     "Objects '{}' and '{}' of '{}' sit at the same position.",
                     a.name, b.name, la.name
                 ));
@@ -180,26 +185,23 @@ fn wallmarks(snap: &SceneState, engine: &Engine, log: &mut Vec<Finding>) -> bool
     good
 }
 
-/// The sounds' check: the first sound environment with the same inner and outer
-/// environment, or the first sound source without a wave, fails it.
-fn sounds(snap: &SceneState, log: &mut Vec<Finding>) -> bool {
+/// The sounds' check: a sound environment with the same inner and outer environment, a sound
+/// source without a wave - each a warning, the level builds and plays without them.
+fn sounds(snap: &SceneState, log: &mut Vec<Finding>) {
     for o in snap.of_class(ObjClass::SoundEnv) {
         if let ObjData::SoundEnv(e) = &o.data
             && e.inner == e.outer
         {
-            log.info(format!("Sound environment '{}' has the same inner and outer environment.", o.name));
-            return false;
+            log.warn(format!("Sound environment '{}' has the same inner and outer environment.", o.name));
         }
     }
     for o in snap.of_class(ObjClass::SoundSrc) {
         if let ObjData::SoundSrc(s) = &o.data
             && s.wav.is_empty()
         {
-            log.info(format!("Sound source '{}' has no wave.", o.name));
-            return false;
+            log.warn(format!("Sound source '{}' has no wave.", o.name));
         }
     }
-    true
 }
 
 /// The scene's validation: `Ok` with its findings, `Err` with them when it failed.
@@ -221,7 +223,7 @@ pub fn validate(
             ObjClass::SceneObject => scene_objects(snap, &look, tests.full, texture, &mut log),
             ObjClass::Light => {
                 let controls = snap.tools.part(class).light();
-                let mut good = snap.count(class) > 0;
+                let mut good = true;
                 for o in snap.of_class(class) {
                     let ObjData::Light(l) = &o.data else { continue };
                     if controls.and_then(|c| c.name_of(l.lcontrol)).is_none() {
@@ -271,20 +273,17 @@ pub fn validate(
         }
     }
     if snap.count(ObjClass::SpawnPoint) == 0 {
-        log.error("The level has no spawn point.");
-        ok = false;
+        log.warn("The level has no spawn point.");
     }
     if snap.count(ObjClass::Light) == 0 {
-        log.error("The level has no light.");
-        ok = false;
+        log.warn("The level has no light: its lightmaps stay dark.");
     }
     if snap.count(ObjClass::SceneObject) == 0 {
         log.error("The level has no scene object.");
         ok = false;
     }
     if tests.glow && snap.count(ObjClass::Glow) == 0 {
-        log.error("The level has no glow.");
-        ok = false;
+        log.warn("The level has no glow.");
     }
     // the first name another object also has
     let mut seen: BTreeSet<String> = BTreeSet::new();
@@ -345,9 +344,7 @@ pub fn validate(
         }
     }
 
-    if !sounds(snap, &mut log) {
-        ok = false;
-    }
+    sounds(snap, &mut log);
 
     for o in snap.of_class(ObjClass::Particles) {
         let ObjData::Particles(p) = &o.data else { continue };
@@ -392,26 +389,41 @@ mod tests {
     }
 
     #[test]
-    fn a_sound_environment_with_one_environment_twice_fails() {
+    fn a_sound_environment_with_one_environment_twice_is_a_warning() {
         let mut s = SceneState::default();
         let env = SoundEnvData { inner: "cave".into(), outer: "cave".into(), ..SoundEnvData::default() };
         s.insert(Object::new(ObjClass::SoundEnv, "env_1", ObjData::SoundEnv(env)));
         let r = run(&s, Tests::MAKE_GAME);
-        assert!(r.is_err());
         assert!(says(
             &r,
-            Severity::Note,
+            Severity::Warning,
             "Sound environment 'env_1' has the same inner and outer environment."
         ));
+        // the scene fails for having no scene object, not for its sound
+        assert!(!found(&r).iter().any(|f| f.severity == Severity::Error && f.text.contains("ound")));
     }
 
     #[test]
-    fn a_sound_source_without_a_wave_fails() {
+    fn a_sound_source_without_a_wave_is_a_warning() {
         let mut s = SceneState::default();
         s.insert(Object::new(ObjClass::SoundSrc, "snd_1", ObjData::SoundSrc(SoundSrcData::default())));
         let r = run(&s, Tests::MAKE_GAME);
-        assert!(r.is_err());
-        assert!(says(&r, Severity::Note, "Sound source 'snd_1' has no wave."));
+        assert!(says(&r, Severity::Warning, "Sound source 'snd_1' has no wave."));
+    }
+
+    #[test]
+    fn what_leaves_a_usable_level_is_a_warning() {
+        let s = SceneState::default();
+        let r = run(&s, Tests::BUILD);
+        for w in [
+            "The level has no spawn point.",
+            "The level has no light: its lightmaps stay dark.",
+            "The level has no glow.",
+        ] {
+            assert!(says(&r, Severity::Warning, w), "{w}: {:?}", found(&r));
+        }
+        // an empty scene still does not build: it has no object and no static geometry
+        assert!(r.is_err() && says(&r, Severity::Error, "The level has no scene object."));
     }
 
     #[test]

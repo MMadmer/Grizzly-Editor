@@ -27,8 +27,8 @@ use gz_ui::list::{NavRowSpec, nav_row};
 use gz_ui::state::{busy_line, empty_state};
 use gz_ui::text::{self, Clip};
 use gz_ui::{
-    Combo, Font, Icon, Kind, MenuItem, PickAction, PickItem, PickList, PropFlags, PropertyGrid, Tone,
-    Toolbar, icon_button_sized, icons, menu_item, metrics, palette, segmented,
+    Combo, Font, Icon, Kind, MenuItem, PickAction, PickItem, PickList, PropFlags, PropertyGrid, TipExt, Tone,
+    Toolbar, Tx, icon_button_sized, icons, menu_item, metrics, palette, segmented, tr,
 };
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
@@ -197,7 +197,7 @@ pub struct ScreensDoc {
     picking: Arc<AtomicBool>,
 }
 
-fn mask_check(ui: &mut Ui, label: &str, mask: &mut u32, bit: u32, invert: bool) -> bool {
+fn mask_check(ui: &mut Ui, label: &'static str, mask: &mut u32, bit: u32, invert: bool) -> bool {
     let mut on = if invert { *mask & bit == 0 } else { *mask & bit != 0 };
     let flipped = ui
         .push_id(("gz-ui-pda.check", label), |ui| gz_ui::Switch::new(&mut on, label).show(ui).changed())
@@ -256,12 +256,12 @@ fn row_dot(problems: &[String], what: &str, id: &str) -> Option<Tone> {
 }
 
 /// What a screen's music is called.
-fn music_label(d: &Screen) -> String {
+fn music_label(d: &Screen) -> Tx<'static> {
     match d.music.as_str() {
-        "none" => "Silence".to_owned(),
-        "video" => "The Video's Own Sound".to_owned(),
-        "tracks" => d.tracks.join(", "),
-        _ => "Any Track".to_owned(),
+        "none" => Tx::from("Silence"),
+        "video" => Tx::from("The Video's Own Sound"),
+        "tracks" => Tx::raw(d.tracks.join(", ")),
+        _ => Tx::from("Any Track"),
     }
 }
 
@@ -307,7 +307,7 @@ fn edited_number(
     key: &str,
     value: f32,
     speed: f32,
-    unit: &str,
+    unit: &'static str,
     lo: f32,
     hi: f32,
 ) -> Option<f32> {
@@ -584,13 +584,19 @@ impl Frame<'_> {
             let count = d.layers.len().to_string();
             let spec = NavRowSpec {
                 icon: Icon::Picture,
-                count: Some(&count),
+                count: Some(Tx::raw(count.as_str())),
                 dot: row_dot(self.problems, "screen", &d.id),
                 action: Icon::Delete,
-                action_tip: "Remove this screen. Its files stay in the project.",
+                action_tip: "Remove this screen. Its files stay in the project.".into(),
                 ..NavRowSpec::default()
             };
-            let r = nav_row(ui, &format!("screen.{}", d.id), &d.id, self.view.sel_screen == d.id, &spec);
+            let r = nav_row(
+                ui,
+                &format!("screen.{}", d.id),
+                Tx::raw(d.id.as_str()),
+                self.view.sel_screen == d.id,
+                &spec,
+            );
             if r.clicked {
                 self.view.sel_screen.clone_from(&d.id);
                 self.view.sel_track.clear();
@@ -632,10 +638,16 @@ impl Frame<'_> {
                 dim: t.play & mask == 0,
                 dot: row_dot(self.problems, "track", &t.id),
                 action: Icon::Delete,
-                action_tip: "Remove this track. Its file stays in the project.",
+                action_tip: "Remove this track. Its file stays in the project.".into(),
                 ..NavRowSpec::default()
             };
-            let r = nav_row(ui, &format!("track.{}", t.id), &t.id, self.view.sel_track == t.id, &spec);
+            let r = nav_row(
+                ui,
+                &format!("track.{}", t.id),
+                Tx::raw(t.id.as_str()),
+                self.view.sel_track == t.id,
+                &spec,
+            );
             if r.clicked {
                 self.view.sel_track.clone_from(&t.id);
                 self.view.sel_screen.clear();
@@ -673,7 +685,7 @@ impl Frame<'_> {
                     Selection::default()
                 }));
             }
-            resp.response.on_hover_text("What happens when a track ends.");
+            resp.response.tip("What happens when a track ends.");
         }
     }
 
@@ -685,7 +697,7 @@ impl Frame<'_> {
         let w = ui.available_width().min(PREVIEW_W);
         let h = w * 9.0 / 16.0;
         let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
-        resp.on_hover_text("Where the layers go. Pictures and a GIF's first frame are shown as they are; videos, shaders and pages are marked, and move in the game.");
+        resp.tip("Where the layers go. Pictures and a GIF's first frame are shown as they are; videos, shaders and pages are marked, and move in the game.");
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, CornerRadius::ZERO, p.base);
         for (i, l) in d.layers.iter().enumerate() {
@@ -739,7 +751,8 @@ impl Frame<'_> {
     }
 
     fn pick(&mut self, ui: &mut Ui, id_salt: &str, value: &str, on_clear: Change, browse: Pick) {
-        match pick_field(ui, id_salt, value, !value.is_empty()) {
+        // a file of the project: shown as it is
+        match pick_field(ui, id_salt, Tx::raw(value), !value.is_empty()) {
             PickAction::Clear => self.out.changes.push(on_clear),
             PickAction::Browse => self.out.picks.push((
                 "Screens and music",
@@ -761,7 +774,7 @@ impl Frame<'_> {
                 self.pick(ui, "layer_file", &l.file, set_layer(&id, i, |l| l.file.clear()), Pick::LayerFile(id.clone(), i));
             });
             if matches!(kind, FileKind::Picture | FileKind::Gif | FileKind::Video) {
-                g.row("Fit", "Cover fills the place and cuts the picture to it. Contain shows it whole. Stretch fills the place whatever the proportions.", PropFlags::NONE, 0, |ui| {
+                g.row(Tx::ctx("screens", "Fit"), "Cover fills the place and cuts the picture to it. Contain shows it whole. Stretch fills the place whatever the proportions.", PropFlags::NONE, 0, |ui| {
                     let mut cur = match l.fit {
                         Fit::Cover => 0,
                         Fit::Contain => 1,
@@ -889,7 +902,8 @@ impl Frame<'_> {
                 p.text_secondary,
             );
             let right = at.min.x + width - 26.0;
-            let name = if l.file.is_empty() { "Empty: drop a file here" } else { leaf(&l.file) };
+            let name =
+                if l.file.is_empty() { Tx::from("Empty: drop a file here") } else { Tx::raw(leaf(&l.file)) };
             text::paint(
                 painter,
                 &Font::Body.id(),
@@ -947,22 +961,25 @@ impl Frame<'_> {
             && let Some(l) = d.layers.get(drag.index)
         {
             let painter = ctx.layer_painter(LayerId::new(Order::Tooltip, Id::unique("gz-ui-pda.layer_drag")));
-            let name = if l.file.is_empty() { "Empty layer" } else { leaf(&l.file) };
+            let name = if l.file.is_empty() { Tx::from("Empty layer") } else { Tx::raw(leaf(&l.file)) };
             let r = text::bounds(
                 &ctx,
                 &Font::Body.id(),
                 pos2(pt.x + 14.0, pt.y + 4.0),
                 egui::Align2::LEFT_TOP,
-                name,
+                &name,
             )
             .expand2(Vec2::new(8.0, 4.0));
             painter.rect_filled(r, CornerRadius::same(metrics::RADIUS), Palette::alpha(p.overlay, 0.92));
-            painter.text(
+            text::paint(
+                &painter,
+                &Font::Body.id(),
                 pos2(pt.x + 14.0, pt.y + 4.0),
                 egui::Align2::LEFT_TOP,
-                name,
-                Font::Body.id(),
                 p.text,
+                name,
+                None,
+                Clip::End,
             );
         }
         let to = pos2(from.x + ui.available_width(), ui.cursor().min.y + 8.0);
@@ -984,14 +1001,14 @@ impl Frame<'_> {
         for t in &self.s.tracks {
             let on = d.music == "tracks" && d.tracks.contains(&t.id);
             let label = if on { format!("\u{2713} {}", t.id) } else { format!("   {}", t.id) };
-            items.push(PickItem::new(t.id.clone(), label).icon(Icon::FileSound).detail(if on {
+            items.push(PickItem::new(t.id.clone(), Tx::raw(label)).icon(Icon::FileSound).detail(if on {
                 "Plays with this screen: pick to take it off"
             } else {
                 "Pick to play it with this screen"
             }));
         }
         let current = if d.music == "tracks" { String::new() } else { d.music.clone() };
-        let picked = Combo::new(("gz-ui-pda.music", &id), &music_label(d)).show(
+        let picked = Combo::new(("gz-ui-pda.music", &id), music_label(d)).show(
             ui,
             PickList::new(("gz-ui-pda.music_list", &id), &items).current(&current).without_search(),
         );
@@ -1021,7 +1038,7 @@ impl Frame<'_> {
     }
 
     fn levels_row(&mut self, ui: &mut Ui, d: &Screen) {
-        let items: Vec<&str> = d.levels.iter().map(String::as_str).collect();
+        let items: Vec<Tx<'_>> = d.levels.iter().map(|l| Tx::raw(l.as_str())).collect();
         if let Some(i) = chips(ui, "screen_levels", &items, true) {
             let id = d.id.clone();
             self.out.changes.push(set_screen(&id, move |d| {
@@ -1051,7 +1068,7 @@ impl Frame<'_> {
                 gz_ui::menu::menu_popup(ui.ctx(), popup, resp.rect, ui.layer_id(), |ui| {
                     ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                         for k in &free {
-                            if menu_item(ui, k, MenuItem::default()) {
+                            if menu_item(ui, Tx::raw(k.as_str()), MenuItem::default()) {
                                 add = Some(k.clone());
                             }
                         }
@@ -1079,7 +1096,7 @@ impl Frame<'_> {
 
     fn screen_details(&mut self, ui: &mut Ui, d: &Screen) {
         for (error, msg) in problems_of(self.problems, "screen", &d.id) {
-            text::status(ui, if error { Tone::Error } else { Tone::Warning }, msg);
+            text::status(ui, if error { Tone::Error } else { Tone::Warning }, Tx::ui(msg));
         }
         self.preview(ui, d);
         ui.add_space(6.0);
@@ -1131,8 +1148,8 @@ impl Frame<'_> {
                     ui.vertical(|ui| self.levels_row(ui, d));
                 });
                 if !mode.is_empty() && d.show & (LOADING | PAUSE) != 0 {
-                    let help = format!("Shown only in games of this module's mode, {mode}. The main menu belongs to no game.");
-                    g.row("Only In Its Mode", &help, PropFlags::INLINE, 0, |ui| {
+                    let help = tr!("Shown only in games of this module's mode, {mode}. The main menu belongs to no game.", mode = mode.as_str());
+                    g.row("Only In Its Mode", help, PropFlags::INLINE, 0, |ui| {
                         let mut only = !d.modes.is_empty();
                         if switch(ui, &mut only).changed() {
                             let m = mode.clone();
@@ -1171,7 +1188,7 @@ impl Frame<'_> {
 
     fn track_details(&mut self, ui: &mut Ui, t: &Track) {
         for (error, msg) in problems_of(self.problems, "track", &t.id) {
-            text::status(ui, if error { Tone::Error } else { Tone::Warning }, msg);
+            text::status(ui, if error { Tone::Error } else { Tone::Warning }, Tx::ui(msg));
         }
         let id = t.id.clone();
         PropertyGrid::new("track").label_frac(0.28).show(ui, |g: &mut Grid<'_>| {
@@ -1225,18 +1242,16 @@ impl Document for ScreensDoc {
         "screens"
     }
 
-    fn label(&self) -> String {
-        "Screens & Music".to_owned()
+    fn label(&self) -> Tx<'static> {
+        Tx::from("Screens & Music")
     }
 
     fn icon(&self) -> Icon {
         Icon::Picture
     }
 
-    fn tooltip(&self) -> Option<String> {
-        Some(
-            "The module's loading and menu screens and their music - saved to mod.ltx as you edit".to_owned(),
-        )
+    fn tooltip(&self) -> Option<Tx<'static>> {
+        Some(Tx::from("The module's loading and menu screens and their music - saved to mod.ltx as you edit"))
     }
 
     fn alive(&self) -> bool {
@@ -1308,7 +1323,7 @@ impl Document for ScreensDoc {
         if status.is_empty() {
             tb.status("Saved to mod.ltx as you edit", Tone::Muted);
         } else {
-            tb.status(&status, Tone::Error);
+            tb.status(Tx::ui(status), Tone::Error);
         }
     }
 
@@ -1335,7 +1350,7 @@ impl Document for ScreensDoc {
                 Icon::Picture,
                 "No mod.ltx yet",
                 "Screens and music live in the module's mod.ltx. Mod Settings makes it.",
-                Some("Open Mod Settings"),
+                Some("Open Mod Settings".into()),
             ) {
                 cx.requests.open(OpenRequest::kind("mod_settings"));
             }
@@ -1483,18 +1498,21 @@ impl Drop for ReleasePick {
 /// A toolbar caption before its segmented control: muted, with the room of a group gap after it
 /// so the two read as one ("Screens  [Mix In | Only Mine]"). The overflow names the control by
 /// the same caption.
-pub(crate) fn caption(tb: &mut Toolbar<'_, '_>, ctx: &egui::Context, id: &str, text_: &str) {
+pub(crate) fn caption(tb: &mut Toolbar<'_, '_>, ctx: &egui::Context, id: &str, text_: &'static str) {
     let font = Font::Small.id();
     let w = gz_ui::text::width(ctx, &font, text_) + 8.0;
     tb.widget(id, w, |ui| {
         let p = gz_ui::palette(ui.ctx());
         let r = ui.max_rect();
-        ui.painter().text(
+        gz_ui::text::paint(
+            ui.painter(),
+            &font,
             pos2(r.min.x, r.center().y),
             egui::Align2::LEFT_CENTER,
-            text_,
-            font.clone(),
             p.text_muted,
+            text_,
+            None,
+            gz_ui::Clip::End,
         );
     });
 }

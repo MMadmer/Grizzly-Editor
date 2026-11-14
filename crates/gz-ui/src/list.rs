@@ -16,6 +16,7 @@ use egui::{
 use crate::audit;
 use crate::button::icon_button_sized;
 use crate::font::Font;
+use crate::i18n::Tx;
 use crate::icons::{self, Icon};
 use crate::text::{self, Clip};
 use crate::theme::{Tone, metrics, palette};
@@ -168,7 +169,7 @@ impl List<'_> {
 
     /// Hover actions on the last row: squares as tall as the row with 14 pt glyphs, flush right.
     /// Returns the index of the one pressed.
-    pub fn row_actions(&mut self, icons_: &[Icon], tips: &[&str]) -> Option<usize> {
+    pub fn row_actions<'a, L: Clone + Into<Tx<'a>>>(&mut self, icons_: &[Icon], tips: &[L]) -> Option<usize> {
         let (row, hovered) = self.row?;
         if !hovered {
             return None;
@@ -178,14 +179,19 @@ impl List<'_> {
 }
 
 /// Row actions on any row rectangle: shown by the caller while the row is hovered.
-pub fn row_actions_at(ui: &mut Ui, row: Rect, icons_: &[Icon], tips: &[&str]) -> Option<usize> {
+pub fn row_actions_at<'a, L: Clone + Into<Tx<'a>>>(
+    ui: &mut Ui,
+    row: Rect,
+    icons_: &[Icon],
+    tips: &[L],
+) -> Option<usize> {
     let side = row.height();
     let n = icons_.len();
     let mut clicked = None;
     for (i, icon) in icons_.iter().enumerate() {
         let x = row.max.x - (n - i) as f32 * (side + 2.0);
         let r = Rect::from_min_size(pos2(x, row.min.y), Vec2::splat(side));
-        let tip = tips.get(i).copied().unwrap_or("");
+        let tip: Tx<'a> = tips.get(i).cloned().map_or(Tx::EMPTY, Into::into);
         let mut child =
             ui.new_child(UiBuilder::new().id_salt(("gz-ui.row_action", row.min.y.to_bits(), i)).max_rect(r));
         if icon_button_sized(&mut child, *icon, tip, false, true, side, metrics::GLYPH_ROW).clicked() {
@@ -261,32 +267,32 @@ pub fn list<R>(ui: &mut Ui, id_salt: &str, size: Vec2, add: impl FnOnce(&mut Lis
 }
 
 /// The row of a nav, a page list or a sources pane.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct NavRowSpec<'a> {
     pub icon: Icon,
     /// The row's tooltip; empty for none (a cut label then shows itself).
-    pub tip: &'a str,
+    pub tip: Tx<'a>,
     /// A status dot at the right end.
     pub dot: Option<Tone>,
     /// A count at the right end, when there is no dot.
-    pub count: Option<&'a str>,
+    pub count: Option<Tx<'a>>,
     /// Dimmed: a thing that is there but off.
     pub dim: bool,
     /// The one action shown while the row is hovered; `Icon::None` for none.
     pub action: Icon,
-    pub action_tip: &'a str,
+    pub action_tip: Tx<'a>,
 }
 
 impl Default for NavRowSpec<'_> {
     fn default() -> Self {
         Self {
             icon: Icon::None,
-            tip: "",
+            tip: Tx::EMPTY,
             dot: None,
             count: None,
             dim: false,
             action: Icon::None,
-            action_tip: "",
+            action_tip: Tx::EMPTY,
         }
     }
 }
@@ -299,14 +305,19 @@ pub struct NavResponse {
 }
 
 /// A nav row, 22 pt, the whole width it gets.
-pub fn nav_row(
+pub fn nav_row<'a>(
     ui: &mut Ui,
     stable_id: &str,
-    label: &str,
+    label: impl Into<Tx<'a>>,
     selected: bool,
     spec: &NavRowSpec<'_>,
 ) -> NavResponse {
     let p = palette(ui.ctx());
+    let label_tx = label.into();
+    let label = label_tx.get(ui.ctx());
+    let label: &str = &label;
+    let tip = spec.tip.get(ui.ctx());
+    let tip: &str = &tip;
     let h = metrics::ROW;
     let width = ui.available_width().max(h * 2.0);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, h), Sense::hover());
@@ -315,14 +326,7 @@ pub fn nav_row(
     resp.widget_info(|| WidgetInfo::selected(Role::ListItem, true, selected, label));
     let row_hovered = ui.rect_contains_pointer(rect);
     let mut out = NavResponse { clicked: resp.clicked(), action: false };
-    audit::control(
-        ui.ctx(),
-        label,
-        true,
-        None,
-        if spec.tip.is_empty() { None } else { Some(spec.tip) },
-        rect,
-    );
+    audit::control(ui.ctx(), label, true, None, if tip.is_empty() { None } else { Some(tip) }, rect);
     if !ui.is_rect_visible(rect) {
         return out;
     }
@@ -347,13 +351,14 @@ pub fn nav_row(
     } else if let Some(tone) = spec.dot {
         painter.circle_filled(pos2(rect.max.x - 10.0, rect.center().y), 3.5, p.tone(tone));
         text_right = rect.max.x - 18.0;
-    } else if let Some(count) = spec.count {
+    } else if let Some(count) = &spec.count {
         let font = Font::Small.id();
-        let cw = text::width(&ctx, &font, count);
+        let count = count.get(&ctx);
+        let cw = text::measure(&ctx, &font, &count);
         painter.text(
             pos2(rect.max.x - 8.0, rect.center().y),
             Align2::RIGHT_CENTER,
-            count,
+            count.as_ref(),
             font,
             p.text_muted,
         );
@@ -384,12 +389,12 @@ pub fn nav_row(
         pos2(x, rect.center().y),
         Align2::LEFT_CENTER,
         color,
-        label,
+        label_tx.borrow(),
         Some((text_right - x).max(0.0)),
         Clip::End,
     );
-    if !spec.tip.is_empty() {
-        resp.on_hover_text(spec.tip);
+    if !tip.is_empty() {
+        resp.on_hover_text(tip);
     } else if cut {
         resp.on_hover_text(label);
     }
@@ -399,7 +404,7 @@ pub fn nav_row(
         out.action = icon_button_sized(
             &mut child,
             spec.action,
-            spec.action_tip,
+            spec.action_tip.borrow(),
             false,
             true,
             h,
@@ -411,9 +416,9 @@ pub fn nav_row(
 }
 
 /// A column of [`table_headers`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Column<'a> {
-    pub name: &'a str,
+    pub name: Tx<'a>,
     /// Its width in points.
     pub width: f32,
     /// Centred over its cells (a checkbox column).
@@ -426,8 +431,8 @@ pub struct Column<'a> {
 
 impl<'a> Column<'a> {
     #[must_use]
-    pub fn new(name: &'a str, width: f32) -> Self {
-        Self { name, width, centred: false, sorted: None, sortable: false }
+    pub fn new(name: impl Into<Tx<'a>>, width: f32) -> Self {
+        Self { name: name.into(), width, centred: false, sorted: None, sortable: false }
     }
 }
 
@@ -456,19 +461,23 @@ fn header_row(ui: &mut Ui, columns: &[Column<'_>], ruled: bool) -> Option<usize>
         x += c.width;
         let sort_w = if c.sorted.is_some() { metrics::GLYPH_STATUS + 4.0 } else { 0.0 };
         let room = (c.width - 12.0 - sort_w).max(0.0);
-        let name_w = text::width(ui.ctx(), &font, c.name).min(room);
+        let name = c.name.get(ui.ctx());
+        let name_w = text::measure(ui.ctx(), &font, &name).min(room);
         let tx = if c.centred { cell.center().x - (name_w + sort_w) * 0.5 } else { cell.min.x + 6.0 };
         let mut color = p.text_secondary;
         if c.sortable {
-            let resp =
-                ui.interact(cell, ui.make_persistent_id(("gz-ui.table_header", i, c.name)), Sense::click());
+            let resp = ui.interact(
+                cell,
+                ui.make_persistent_id(("gz-ui.table_header", i, c.name.en())),
+                Sense::click(),
+            );
             if resp.hovered() {
                 color = p.text;
             }
             if resp.clicked() {
                 clicked = Some(i);
             }
-            audit::control(ui.ctx(), c.name, true, None, Some("Sort by this column"), cell);
+            audit::control(ui.ctx(), &name, true, None, Some("Sort by this column"), cell);
         }
         if ui.is_rect_visible(cell) {
             text::paint(
@@ -477,7 +486,7 @@ fn header_row(ui: &mut Ui, columns: &[Column<'_>], ruled: bool) -> Option<usize>
                 pos2(tx, cell.center().y),
                 Align2::LEFT_CENTER,
                 color,
-                c.name,
+                c.name.borrow(),
                 Some(room),
                 Clip::End,
             );

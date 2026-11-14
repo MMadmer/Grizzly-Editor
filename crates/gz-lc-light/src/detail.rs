@@ -197,7 +197,6 @@ pub fn light_details(
     only: Option<[f32; 3]>,
     ctl: &Ctl<'_>,
 ) -> Result<DetailStats> {
-    ctl.stage("Lighting nodes...");
     let sx = scene.header.size_x as usize;
     if sx == 0 {
         return Ok(DetailStats::default());

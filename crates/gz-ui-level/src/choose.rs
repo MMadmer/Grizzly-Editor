@@ -16,7 +16,7 @@ use gz_base::{Rev, SmolStr};
 use gz_editor::{Editor, Value, json};
 use gz_query::Query;
 use gz_ui::text::{self, Clip};
-use gz_ui::{Dialog, DialogSize, Font, Icon, Kind, SearchField, Tone, palette, state};
+use gz_ui::{Dialog, DialogSize, Font, Icon, Kind, SearchField, TipExt, Tone, Tx, palette, state, tr};
 
 use crate::choose_pics::{PicKind, Pics};
 use crate::lists::{ListKey, Lists};
@@ -58,7 +58,7 @@ impl std::fmt::Debug for SceneItems {
 #[derive(Clone, Debug)]
 pub struct Chooser {
     pub purpose: Purpose,
-    pub title: String,
+    pub title: Tx<'static>,
     pub list: Option<ListKey>,
     /// Items given by the caller instead of a list (a detail object's colour picks from the
     /// dialog's own objects).
@@ -88,7 +88,7 @@ impl Chooser {
     pub fn new(purpose: Purpose, what: &str, list: Option<ListKey>, current: &str) -> Self {
         Self {
             purpose,
-            title: format!("Select {what}"),
+            title: tr!("Select {what}", what = Tx::ui_in(crate::details::DETAILS, what.to_owned())),
             list,
             items: None,
             scene_list: None,
@@ -166,7 +166,7 @@ impl Chooser {
     #[must_use]
     pub fn state(&self) -> Value {
         json!({
-            "title": self.title,
+            "title": self.title.en(),
             "list": self.list.as_ref().map(ListKey::noun),
             "query": self.search,
             "shown": self.shown,
@@ -274,7 +274,7 @@ pub fn draw(
     let lines: Option<Arc<Vec<u32>>> = order.as_ref().and_then(|a| a.value().cloned());
     let mut double = None;
     let any = !c.picked.is_empty();
-    let status = if c.current.is_empty() { String::new() } else { format!("Now: {}", leaf(&c.current)) };
+    let status = if c.current.is_empty() { Tx::EMPTY } else { tr!("Now: {name}", name = leaf(&c.current)) };
     let multi = c.multi;
     let pictures = c.pictures();
     let previews = pictures.is_some() || c.sounds();
@@ -293,7 +293,9 @@ pub fn draw(
     });
 
     let title = c.title.clone();
-    Dialog::new(&title, "dlg.choose", DialogSize::L).show(
+    // the list's noun, in the window's language: "Search textures"
+    let noun = c.list.as_ref().map_or("items", ListKey::noun);
+    Dialog::new(title, "dlg.choose", DialogSize::L).show(
         ui,
         &mut open,
         |ui| {
@@ -306,7 +308,7 @@ pub fn draw(
                     |ui| {
                         ui.set_width(list_w);
                         let resp = SearchField::new(&mut c.search)
-                            .hint(&format!("Search {}", c.list.as_ref().map_or("items", ListKey::noun)))
+                            .hint(tr!("Search {what}", what = Tx::from(noun)))
                             .width(list_w)
                             .id_salt("choose_search")
                             .show(ui);
@@ -317,18 +319,17 @@ pub fn draw(
                         let list_h =
                             (body_h - gz_ui::metrics::FRAME - 8.0 - if multi { 24.0 } else { 0.0 }).max(80.0);
                         match (&items, &lines) {
-                            (None, _) | (Some(_), None) => state::busy_line(
-                                ui,
-                                &format!("Reading the {}...", c.list.as_ref().map_or("items", ListKey::noun)),
-                            ),
+                            (None, _) | (Some(_), None) => {
+                                state::busy_line(ui, tr!("Reading the {what}...", what = Tx::from(noun)))
+                            }
                             (Some(list), Some(_)) if list.is_empty() => {
                                 state::empty_state(
                                     ui,
                                     Icon::Search,
                                     "Nothing to pick",
-                                    &c.list.as_ref().map_or_else(
-                                        || "No items were found.".to_owned(),
-                                        ListKey::empty_text,
+                                    c.list.as_ref().map_or_else(
+                                        || Tx::from("No items were found."),
+                                        |l| Tx::ui(l.empty_text()),
                                     ),
                                     None,
                                 );
@@ -366,13 +367,17 @@ pub fn draw(
                                 if c.multi {
                                     ui.add_space(4.0);
                                     let picked = if c.picked.is_empty() {
-                                        "Nothing picked yet.".to_owned()
+                                        Tx::from("Nothing picked yet.")
                                     } else {
-                                        format!("{} picked: {}", c.picked.len(), c.picked.join(", "))
+                                        tr!(
+                                            "{n} picked: {names}",
+                                            n = c.picked.len(),
+                                            names = c.picked.join(", ")
+                                        )
                                     };
                                     text::label(
                                         ui,
-                                        &picked,
+                                        picked,
                                         Font::Small,
                                         palette(ui.ctx()).text_secondary,
                                         Clip::End,
@@ -396,7 +401,7 @@ pub fn draw(
             });
         },
         |f| {
-            f.status(&status, Tone::Muted);
+            f.status(status, Tone::Muted);
             select = f.button("Select", Kind::Primary, true, any, "Pick an item first.");
             none = !multi && f.button("None", Kind::Secondary, false, true, "");
             cancel = f.button("Cancel", Kind::Secondary, false, true, "");
@@ -533,7 +538,7 @@ fn rows(
                     pos2(x, rect.center().y - 9.0),
                     egui::Align2::LEFT_CENTER,
                     p.text,
-                    leaf(item),
+                    Tx::raw(leaf(item)),
                     Some(room),
                     Clip::End,
                 );
@@ -543,19 +548,19 @@ fn rows(
                     pos2(x, rect.center().y + 10.0),
                     egui::Align2::LEFT_CENTER,
                     p.text_muted,
-                    folder(item),
+                    Tx::raw(folder(item)),
                     Some(room),
                     Clip::Start,
                 );
             } else {
-                let name_w = text::width(ui.ctx(), &Font::Body.id(), leaf(item)).min(width * 0.6);
+                let name_w = text::width(ui.ctx(), &Font::Body.id(), Tx::raw(leaf(item))).min(width * 0.6);
                 text::paint(
                     ui.painter(),
                     &Font::Body.id(),
                     pos2(x, rect.center().y),
                     egui::Align2::LEFT_CENTER,
                     p.text,
-                    leaf(item),
+                    Tx::raw(leaf(item)),
                     Some(width * 0.6),
                     Clip::End,
                 );
@@ -566,7 +571,7 @@ fn rows(
                     pos2(x, rect.center().y),
                     egui::Align2::LEFT_CENTER,
                     p.text_muted,
-                    folder(item),
+                    Tx::raw(folder(item)),
                     Some((rect.max.x - x - 28.0).max(0.0)),
                     Clip::Start,
                 );
@@ -577,7 +582,7 @@ fn rows(
                 gz_ui::icons::draw(ui.painter(), Icon::Check, tick, p.accent_bright);
             }
             gz_ui::audit::control(ui.ctx(), leaf(item), true, None, None, rect);
-            let resp = resp.on_hover_text(item.as_str());
+            let resp = resp.tip(Tx::raw(item.as_str()));
             if resp.clicked() {
                 clicked = Some(item.clone());
             }
@@ -627,17 +632,17 @@ fn preview(
         }
     }
     ui.add_space(8.0);
-    text::label(ui, leaf(&item), Font::Strong, p.text, Clip::End).on_hover_text(&item);
-    text::label(ui, folder(&item), Font::Small, p.text_muted, Clip::Start);
+    text::label(ui, Tx::raw(leaf(&item)), Font::Strong, p.text, Clip::End).tip(Tx::raw(&item));
+    text::label(ui, Tx::raw(folder(&item)), Font::Small, p.text_muted, Clip::Start);
     if c.sounds() {
         ui.add_space(8.0);
         let player = gz_ui_previews::audio::Player::of(editor);
         let playing = player.is_playing();
         ui.horizontal(|ui| {
-            if gz_ui::Button::new("Play").icon(Icon::Play).show(ui).clicked() {
+            if gz_ui::Button::new(Tx::ctx("playback", "Play")).icon(Icon::Play).show(ui).clicked() {
                 play(editor, &item);
             }
-            if gz_ui::Button::new("Stop")
+            if gz_ui::Button::new(Tx::ctx("playback", "Stop"))
                 .icon(Icon::Stop)
                 .enabled(playing, "Nothing plays.")
                 .show(ui)
@@ -647,7 +652,7 @@ fn preview(
             }
         });
         if let Some(e) = player.error() {
-            text::label(ui, &e, Font::Small, p.tone(Tone::Error), Clip::End);
+            text::label(ui, Tx::ui(e), Font::Small, p.tone(Tone::Error), Clip::End);
         }
     }
 }
@@ -724,7 +729,7 @@ mod tests {
             .with_items(items(&["dynamics\\barrel", "dynamics\\box", "statics\\wall"]));
         c.highlight("dynamics\\box");
         let ctx = egui::Context::default();
-        gz_ui::theme::install(&ctx, gz_ui::theme::Accent::default());
+        gz_ui::theme::install(&ctx, gz_ui::Theme::default_theme());
         let mut outcome = Outcome::Open;
         // the order is made on the CPU pool: a few frames until it is there
         for t in 0..40 {

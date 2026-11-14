@@ -13,6 +13,7 @@ use egui::{Align2, CornerRadius, CursorIcon, Id, Rect, Response, Sense, Stroke, 
 use crate::audit;
 use crate::button::icon_button_sized;
 use crate::font::Font;
+use crate::i18n::Tx;
 use crate::icons::{self, Icon};
 use crate::layout;
 use crate::text::{self, Clip};
@@ -21,7 +22,9 @@ use crate::theme::{metrics, palette};
 /// A column of an [`ItemRows`] or a [`Table`].
 #[derive(Clone, Copy, Debug)]
 pub struct Col<'a> {
-    pub name: &'a str,
+    /// The editor's own word for the column, translated where it is drawn.
+    pub name: &'static str,
+    pub life: std::marker::PhantomData<&'a ()>,
     /// Its width at first, in points; the last column of an `ItemRows` takes what is left.
     pub width: f32,
     /// The narrowest a drag makes it.
@@ -34,8 +37,8 @@ pub struct Col<'a> {
 
 impl<'a> Col<'a> {
     #[must_use]
-    pub const fn new(name: &'a str, width: f32) -> Self {
-        Self { name, width, min: 32.0, sortable: false, centred: false }
+    pub const fn new(name: &'static str, width: f32) -> Self {
+        Self { name, life: std::marker::PhantomData, width, min: 32.0, sortable: false, centred: false }
     }
 
     #[must_use]
@@ -86,9 +89,9 @@ pub struct ItemRows<'a> {
     id: Id,
     columns: &'a [Col<'a>],
     rows: usize,
-    add_label: &'a str,
+    add_label: Tx<'a>,
     reorder: bool,
-    empty: &'a str,
+    empty: Tx<'a>,
 }
 
 impl<'a> ItemRows<'a> {
@@ -97,15 +100,15 @@ impl<'a> ItemRows<'a> {
             id: Id::unique(("gz-ui.item_rows", id_salt)),
             columns,
             rows,
-            add_label: "Add",
+            add_label: Tx::from("Add"),
             reorder: true,
-            empty: "",
+            empty: Tx::EMPTY,
         }
     }
 
     /// The Add row's label: "Add Item".
-    pub fn add_label(mut self, label: &'a str) -> Self {
-        self.add_label = label;
+    pub fn add_label(mut self, label: impl Into<Tx<'a>>) -> Self {
+        self.add_label = label.into();
         self
     }
 
@@ -116,8 +119,8 @@ impl<'a> ItemRows<'a> {
     }
 
     /// What it says while it has no rows: "Nothing in the kit yet."
-    pub fn empty_text(mut self, text_: &'a str) -> Self {
-        self.empty = text_;
+    pub fn empty_text(mut self, text_: impl Into<Tx<'a>>) -> Self {
+        self.empty = text_.into();
         self
     }
 
@@ -169,7 +172,7 @@ impl<'a> ItemRows<'a> {
             ui.painter().text(
                 pos2(r.min.x + lead + 6.0, r.center().y),
                 Align2::LEFT_CENTER,
-                self.empty,
+                self.empty.get(&ctx),
                 Font::Body.id(),
                 p.text_muted,
             );
@@ -264,14 +267,15 @@ impl<'a> ItemRows<'a> {
             Rect::from_min_size(pos2(add_rect.min.x + 6.0, add_rect.center().y - 7.0), Vec2::splat(14.0)),
             if resp.hovered() { p.text } else { p.text_secondary },
         );
+        let add_label = self.add_label.get(&ctx);
         ui.painter().text(
             pos2(add_rect.min.x + 26.0, add_rect.center().y),
             Align2::LEFT_CENTER,
-            self.add_label,
+            add_label.as_ref(),
             Font::Body.id(),
             if resp.hovered() { p.text } else { p.text_secondary },
         );
-        audit::control(&ctx, self.add_label, true, None, None, add_rect);
+        audit::control(&ctx, &add_label, true, None, None, add_rect);
         if resp.clicked() {
             edit.added = true;
         }
@@ -417,7 +421,14 @@ impl<'a> Table<'a> {
                 ev.sort = Some((i, sorted.is_none_or(|asc| !asc)));
             }
             if c.sortable {
-                audit::control(&ctx, c.name, true, None, Some("Sort by this column"), rect);
+                audit::control(
+                    &ctx,
+                    &crate::i18n::t(&ctx, c.name),
+                    true,
+                    None,
+                    Some("Sort by this column"),
+                    rect,
+                );
             }
             // a column is resized from its right edge (not the last one: it takes what is left)
             if i + 1 < self.columns.len() {
@@ -504,7 +515,7 @@ impl<'a> Table<'a> {
 }
 
 /// A cell's text, cut at its end, in the text colour or muted.
-pub fn cell_text(ui: &mut Ui, text_: &str, muted: bool) {
+pub fn cell_text<'a>(ui: &mut Ui, text_: impl Into<Tx<'a>>, muted: bool) {
     let p = palette(ui.ctx());
     let color = if muted { p.text_secondary } else { p.text };
     text::label(ui, text_, Font::Body, color, Clip::End);

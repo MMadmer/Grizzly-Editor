@@ -19,12 +19,12 @@ use gz_scene::apply::SelectMode;
 use gz_scene::{ObjClass, ObjData, ObjId, Object, SceneCmd, SceneService, SceneState};
 use gz_ui::text::{self, Clip};
 use gz_ui::{
-    Check, ConfirmSpec, Dialog, DialogSize, Font, Icon, Kind, MenuItem, SearchField, Tone, audit, icons,
-    menu_item, metrics, palette, state,
+    Check, ConfirmSpec, Dialog, DialogSize, Font, Icon, Kind, MenuItem, SearchField, TipExt, Tone, Tx, audit,
+    icons, menu_item, metrics, palette, state, tr,
 };
 
 use crate::classes;
-use crate::local::{self, args, local_badge_button, local_eye_toggle, local_lock_toggle, plural, run};
+use crate::local::{self, args, local_badge_button, local_eye_toggle, local_lock_toggle, run};
 use crate::outliner_model::{Filter, Folds, Listing, Row, ScrollDecision, Sort, Visibility, compute};
 
 const ROW_H: f32 = metrics::ROW;
@@ -39,7 +39,8 @@ struct Rename {
     id: ObjId,
     original: SmolStr,
     buf: String,
-    error: String,
+    /// Why the name is refused: the editor's own sentence, empty for none.
+    error: &'static str,
     focus: bool,
 }
 
@@ -138,6 +139,11 @@ impl Outliner {
 
     /// The panel's body.
     pub fn draw(&mut self, ui: &mut Ui, editor: &Arc<Editor>) {
+        // the kinds stand in the order of the names the window shows
+        let order = classes::listed_in(ui.ctx());
+        if self.filter.order != order {
+            self.filter.order = order;
+        }
         let svc = editor.project_opt().and_then(|s| s.services.get::<SceneService>());
         let Some(svc) = svc.filter(|s| s.store.snapshot().valid) else {
             state::empty_state(
@@ -190,7 +196,7 @@ impl Outliner {
                     Icon::Search,
                     "Nothing matches",
                     "No object passes the search and the filters.",
-                    Some("Clear Filters"),
+                    Some("Clear Filters".into()),
                 ) {
                     self.clear_filters();
                 }
@@ -275,8 +281,11 @@ impl Outliner {
                 .gap(2.0)
                 .frame(gz_ui::menu::popup_frame(&ctx))
                 .show(|ui| {
-                    ui.set_width(gz_ui::units::em(16.0));
-                    self.filters_menu(ui, &groups);
+                    // Russian runs longer: the segments of the menu take more room
+                    let em = if gz_ui::i18n::lang(&ctx) == gz_ui::Lang::En { 16.0 } else { 19.0 };
+                    ui.set_width(gz_ui::units::em(em));
+                    // the filters' words (All, Visible, Hidden, Scene) are those of a filter
+                    gz_ui::i18n::scope(&ctx, "outliner.filters", || self.filters_menu(ui, &groups));
                 });
             let more =
                 gz_ui::icon_button(ui, Icon::More, "Layout, and showing or hiding objects", false, true);
@@ -361,8 +370,8 @@ impl Outliner {
         });
         for (c, n) in groups {
             let mut shown = !self.filter.class_hidden(*c);
-            let label = format!("{} ({n})", classes::plural(*c));
-            if Check::new(&mut shown, &label).show(ui).changed() {
+            let label = tr!("{kinds} ({n})", kinds = Tx::from(classes::plural(*c)), n = *n);
+            if Check::new(&mut shown, label).show(ui).changed() {
                 if shown {
                     self.filter.hidden.retain(|h| h != c);
                 } else {
@@ -394,7 +403,19 @@ impl Outliner {
         // the header: the eye, the lock, Name, and Type / Owner when the header's menu shows them
         let width = ui.available_width();
         let (head, head_resp) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::click());
-        let type_w = if self.show_type { gz_ui::units::em(7.0) } else { 0.0 };
+        // the Type column: as wide as the longest kind's name where the window speaks another
+        // language than the code
+        let type_w = if !self.show_type {
+            0.0
+        } else if gz_ui::i18n::lang(&ctx) == gz_ui::Lang::En {
+            gz_ui::units::em(7.0)
+        } else {
+            classes::listed()
+                .into_iter()
+                .map(|c| text::width(&ctx, &Font::Body.id(), classes::title(c)) + 8.0)
+                .fold(gz_ui::units::em(7.0), f32::max)
+                .min(width * 0.4)
+        };
         let owner_w = if self.show_owner { (width * 0.25).max(gz_ui::units::em(5.0)) } else { 0.0 };
         if ui.is_rect_visible(head) {
             let painter = ui.painter();
@@ -407,10 +428,12 @@ impl Outliner {
                 icons::draw(painter, icon, Rect::from_center_size(c, Vec2::splat(ICON)), p.text_muted);
             }
             let font = Font::Small.id();
+            let [head_name, head_type, head_owner] =
+                ["Name", "Type", "Owner"].map(|w| gz_ui::i18n::t(&ctx, w));
             painter.text(
                 pos2(head.min.x + ROW_H * 2.0 + 4.0, head.center().y),
                 Align2::LEFT_CENTER,
-                "Name",
+                head_name,
                 font.clone(),
                 p.text_secondary,
             );
@@ -418,7 +441,7 @@ impl Outliner {
                 painter.text(
                     pos2(head.max.x - owner_w - type_w + 4.0, head.center().y),
                     Align2::LEFT_CENTER,
-                    "Type",
+                    head_type,
                     font.clone(),
                     p.text_secondary,
                 );
@@ -427,7 +450,7 @@ impl Outliner {
                 painter.text(
                     pos2(head.max.x - owner_w + 4.0, head.center().y),
                     Align2::LEFT_CENTER,
-                    "Owner",
+                    head_owner,
                     font,
                     p.text_secondary,
                 );
@@ -583,7 +606,7 @@ impl Outliner {
                             pos2(x, rect.center().y),
                             Align2::LEFT_CENTER,
                             if dim { p.text_secondary } else { p.text },
-                            shown_name,
+                            Tx::raw(shown_name),
                             Some((right - x).max(0.0)),
                             Clip::Middle,
                         );
@@ -608,18 +631,18 @@ impl Outliner {
                                 pos2(rect.max.x - owner_w + 4.0, rect.center().y),
                                 Align2::LEFT_CENTER,
                                 p.text_secondary,
-                                leaf(&owner.name),
+                                Tx::raw(leaf(&owner.name)),
                                 Some(owner_w - 8.0),
                                 Clip::Middle,
                             );
                         }
                         let hidden_tip = !vis && self.filter.hierarchy;
                         let resp = if hidden_tip {
-                            resp.on_hover_text("Hidden objects cannot be selected until shown.")
+                            resp.tip("Hidden objects cannot be selected until shown.")
                         } else if !*direct {
-                            resp.on_hover_text("Shown because an object under it matches.")
+                            resp.tip("Shown because an object under it matches.")
                         } else if cut || shown_name.len() != o.name.len() {
-                            resp.on_hover_text(o.name.as_str())
+                            resp.tip(Tx::raw(o.name.as_str()))
                         } else {
                             resp
                         };
@@ -706,10 +729,10 @@ impl Outliner {
             id.with("eye"),
             eye,
             visible,
-            &if visible {
-                format!("Hide every one of the {title}")
+            if visible {
+                tr!("Hide every one of the {title}", title = Tx::from(title))
             } else {
-                format!("Show the {title} again")
+                tr!("Show the {title} again", title = Tx::from(title))
             },
         ) {
             svc.store.post(SceneCmd::ClassView { class, visible: Some(!visible), locked: None }, origin);
@@ -721,10 +744,13 @@ impl Outliner {
             lock,
             locked,
             hovered,
-            &if locked {
-                format!("Unlock the {title}: they can be picked and changed again")
+            if locked {
+                tr!("Unlock the {title}: they can be picked and changed again", title = Tx::from(title))
             } else {
-                format!("Lock the {title}: drawn, but never picked or changed in the viewport")
+                tr!(
+                    "Lock the {title}: drawn, but never picked or changed in the viewport",
+                    title = Tx::from(title)
+                )
             },
         ) {
             svc.store.post(SceneCmd::ClassView { class, visible: None, locked: Some(!locked) }, origin);
@@ -745,9 +771,13 @@ impl Outliner {
             if visible { p.text_secondary } else { p.text_disabled },
         );
         let tx = x + ICON + 6.0;
-        let count = if self.filter.filtering() { format!("{shown} of {total}") } else { total.to_string() };
+        let count = if self.filter.filtering() {
+            tr!("{a} of {b}", a = shown, b = total).text(&ctx)
+        } else {
+            total.to_string()
+        };
         let small = Font::Body.id();
-        let count_w = text::width(&ctx, &small, &count);
+        let count_w = text::width(&ctx, &small, Tx::raw(&count));
         let room = (rect.max.x - tx - count_w - 10.0).max(0.0);
         text::paint(
             ui.painter(),
@@ -864,7 +894,7 @@ impl Outliner {
                         id,
                         original: o.name.clone(),
                         buf: o.name.to_string(),
-                        error: String::new(),
+                        error: "",
                         focus: true,
                     });
                 }
@@ -873,7 +903,7 @@ impl Outliner {
             RowMenu::Command(cmd, pairs) => run(editor, cmd, args(&pairs)),
             RowMenu::Ask(spec, cmd, pairs) => {
                 let ed = editor.clone();
-                local::confirm(ui.ctx(), editor, spec, move || run(&ed, cmd, args(&pairs)));
+                local::confirm(ui.ctx(), editor, *spec, move || run(&ed, cmd, args(&pairs)));
             }
             RowMenu::PivotChooser => svc.view.lock().tool_chooser = Some("group_pivot".into()),
             RowMenu::SaveGroupAs => crate::tools::save_group_as(editor, ui.ctx(), svc, snap),
@@ -883,12 +913,21 @@ impl Outliner {
     fn footer(&self, ui: &mut Ui, listing: &Listing) {
         let p = palette(ui.ctx());
         let line = if listing.shown != listing.total {
-            format!("{} of {} objects \u{b7} {} selected", listing.shown, listing.total, listing.selected)
+            tr!(
+                "{shown} of {total} {total:object|objects} \u{b7} {selected} selected",
+                shown = listing.shown,
+                total = listing.total,
+                selected = listing.selected
+            )
         } else {
-            format!("{} \u{b7} {} selected", plural(listing.total, "object"), listing.selected)
+            tr!(
+                "{n} {n:object|objects} \u{b7} {selected} selected",
+                n = listing.total,
+                selected = listing.selected
+            )
         };
         ui.add_space(2.0);
-        text::label(ui, &line, Font::Small, p.text_muted, Clip::End);
+        text::label(ui, line, Font::Small, p.text_muted, Clip::End);
     }
 
     fn draw_rename(&mut self, ui: &mut Ui, editor: &Arc<Editor>, svc: &Arc<SceneService>) {
@@ -931,7 +970,7 @@ impl Outliner {
                 if r.error.is_empty() {
                     text::label(ui, "A name is unique in the scene.", Font::Small, p.text_muted, Clip::End);
                 } else {
-                    text::status(ui, Tone::Error, &r.error);
+                    text::status(ui, Tone::Error, r.error);
                 }
             },
             |f| {
@@ -952,19 +991,19 @@ impl Outliner {
         let snap = svc.store.snapshot();
         let name = r.buf.trim().to_owned();
         let Some(o) = snap.get(r.id).filter(|o| o.name == r.original) else {
-            r.error = "The object no longer exists.".into();
+            r.error = "The object no longer exists.";
             return;
         };
         if !snap.tools.part(o.class).editable() || !o.editable() {
-            r.error = "The object is locked or part of a group.".into();
+            r.error = "The object is locked or part of a group.";
             return;
         }
         if name.is_empty() {
-            r.error = "Enter a name.".into();
+            r.error = "Enter a name.";
             return;
         }
         if snap.find_any(&name).is_some_and(|x| x.id != o.id) {
-            r.error = "Another object has this name.".into();
+            r.error = "Another object has this name.";
             return;
         }
         let key_before = (o.class, o.name.clone());
@@ -1115,11 +1154,11 @@ fn point_row(
         pos2(x + ICON + 6.0, rect.center().y),
         Align2::LEFT_CENTER,
         p.text_secondary,
-        &label,
+        Tx::raw(&label),
         Some((rect.max.x - x - ICON - 10.0).max(0.0)),
         Clip::Middle,
     );
-    let resp = resp.on_hover_text(format!("A point of {}: {}", w.name, plural(links, "link")));
+    let resp = resp.tip(tr!("A point of {way}: {n} {n:link|links}", way = w.name.as_str(), n = links));
     resp.clicked().then(|| Click::Point { way, index, toggle: ui.input(|i| i.modifiers.command) })
 }
 
@@ -1161,7 +1200,7 @@ enum RowMenu {
     /// A command over the selection, with these arguments.
     Command(&'static str, Vec<(&'static str, Value)>),
     /// The same, after the kit's question.
-    Ask(ConfirmSpec, &'static str, Vec<(&'static str, Value)>),
+    Ask(Box<ConfirmSpec>, &'static str, Vec<(&'static str, Value)>),
     PivotChooser,
     SaveGroupAs,
 }
@@ -1180,23 +1219,23 @@ fn row_menu(ui: &mut Ui, snap: &SceneState, o: &Object) -> Option<RowMenu> {
     let n = objects.len();
     let can_edit = snap.tools.part(o.class).editable() && o.editable() && !o.flags.locked;
     gz_ui::menu::popup_body(ui, |ui| {
-        let mut item = |ui: &mut Ui, label: &str, m: MenuItem, act: RowMenu| {
+        let mut item = |ui: &mut Ui, label: Tx<'static>, m: MenuItem, act: RowMenu| {
             if menu_item(ui, label, m) {
                 out = Some(act);
             }
         };
         item(
             ui,
-            "Focus",
+            "Focus".into(),
             MenuItem { icon: Icon::FrameSelection, ..MenuItem::default() },
             RowMenu::Focus(o.id),
         );
         if o.ref_name().is_some() {
-            item(ui, "Select All Made From the Same", MenuItem::default(), RowMenu::SelectSame(o.id));
+            item(ui, "Select All Made From the Same".into(), MenuItem::default(), RowMenu::SelectSame(o.id));
         }
         item(
             ui,
-            &format!("Select All {}", classes::plural(o.class)),
+            tr!("Select All {kinds}", kinds = Tx::from(classes::plural(o.class))),
             MenuItem::default(),
             RowMenu::SelectKind(o.class),
         );
@@ -1204,22 +1243,24 @@ fn row_menu(ui: &mut Ui, snap: &SceneState, o: &Object) -> Option<RowMenu> {
         let all_locked = objects.iter().all(|x| x.flags.locked);
         item(
             ui,
-            if all_shown { "Hide" } else { "Show" },
+            if all_shown { "Hide" } else { "Show" }.into(),
             MenuItem { icon: if all_shown { Icon::EyeOff } else { Icon::Eye }, ..MenuItem::default() },
             RowMenu::Show(ids.clone(), !all_shown),
         );
         item(
             ui,
-            if all_locked { "Unlock" } else { "Lock" },
+            if all_locked { "Unlock" } else { "Lock" }.into(),
             MenuItem { icon: if all_locked { Icon::Unlock } else { Icon::Lock }, ..MenuItem::default() },
             RowMenu::Lock(ids.clone(), !all_locked),
         );
 
         // what the selection's kinds can do
-        let mut kind_rows: Vec<(String, RowMenu)> = Vec::new();
+        let mut kind_rows: Vec<(Tx<'static>, RowMenu)> = Vec::new();
         if n >= 2 {
-            kind_rows
-                .push(("Group".into(), RowMenu::Command("scene.group", vec![("action", json!("group"))])));
+            kind_rows.push((
+                Tx::ctx("action", "Group"),
+                RowMenu::Command("scene.group", vec![("action", json!("group"))]),
+            ));
         }
         if count(ObjClass::Group) > 0 {
             kind_rows.push(("Ungroup".into(), RowMenu::Command("scene.ungroup", Vec::new())));
@@ -1268,18 +1309,18 @@ fn row_menu(ui: &mut Ui, snap: &SceneState, o: &Object) -> Option<RowMenu> {
             kind_rows.push((
                 "Split Into Parts...".into(),
                 RowMenu::Ask(
-                    ConfirmSpec {
+                    Box::new(ConfirmSpec {
                         id: "split_shapes".into(),
                         title: "Split Shapes".into(),
                         headline: "Split these shapes into their parts?".into(),
                         total: names.len(),
-                        items: names.into_iter().take(10).collect(),
+                        items: names.into_iter().take(10).map(Tx::raw).collect(),
                         consequence:
                             "Each part becomes a shape of its own. Edit > Undo puts them back together."
                                 .into(),
                         action: "Split".into(),
                         destructive: false,
-                    },
+                    }),
                     "scene.shape",
                     vec![("action", json!("split"))],
                 ),
@@ -1316,16 +1357,16 @@ fn row_menu(ui: &mut Ui, snap: &SceneState, o: &Object) -> Option<RowMenu> {
             kind_rows.push((
                 "Detach Their Shapes...".into(),
                 RowMenu::Ask(
-                    ConfirmSpec {
+                    Box::new(ConfirmSpec {
                         id: "detach_spawn_objects".into(),
                         title: "Detach Shapes".into(),
                         headline: "Give the shapes of these spawn points back to the scene?".into(),
                         total: holders.len(),
-                        items: holders.into_iter().take(10).collect(),
+                        items: holders.into_iter().take(10).map(Tx::raw).collect(),
                         consequence: "Edit > Undo attaches them again.".into(),
                         action: "Detach".into(),
                         destructive: false,
-                    },
+                    }),
                     "scene.attach",
                     vec![("detach", json!(true))],
                 ),
@@ -1340,20 +1381,20 @@ fn row_menu(ui: &mut Ui, snap: &SceneState, o: &Object) -> Option<RowMenu> {
         if !kind_rows.is_empty() {
             ui.separator();
             for (label, act) in kind_rows {
-                item(ui, &label, MenuItem::default(), act);
+                item(ui, label, MenuItem::default(), act);
             }
         }
 
         ui.separator();
         item(
             ui,
-            "Rename...",
+            "Rename...".into(),
             MenuItem { icon: Icon::Rename, enabled: can_edit && n == 1, ..MenuItem::default() },
             RowMenu::Rename(o.id),
         );
         item(
             ui,
-            "Delete...",
+            "Delete...".into(),
             MenuItem { icon: Icon::Delete, enabled: can_edit, danger: true, ..MenuItem::default() },
             RowMenu::Delete(ids.clone()),
         );
@@ -1385,7 +1426,7 @@ fn ask_delete(
         }
         .into(),
         total: names.len(),
-        items: names.iter().take(10).map(ToString::to_string).collect(),
+        items: names.iter().take(10).map(|n| Tx::raw(n.to_string())).collect(),
         consequence: "Edit > Undo brings them back.".into(),
         action: "Delete".into(),
         destructive: true,

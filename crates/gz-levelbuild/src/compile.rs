@@ -89,32 +89,36 @@ pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<ser
             Part::Level => "Compiling the level",
             Part::Details => "Lighting the detail objects",
         });
-        let (input, opts2, ctx2, log) = (
-            Input { level: req.dir.clone(), sources: sources.clone() },
-            opts.clone(),
-            ctx.clone(),
-            editor.log.clone(),
-        );
-        let done = editor
-            .exec
-            .cpu(move || {
-                let out = Throttle::new(ctx2.clone(), log);
-                let echo_out = out.clone();
-                let echo = move |line: &str| echo_out.line(line);
-                let report = |r: Progress<'_>| match r {
-                    Progress::Stage(s) => out.stage(s),
-                    Progress::Progress { done, total } => out.progress(done, total),
-                };
-                let ctl = Ctl::new(&ctx2.cancel, &report);
-                let mut lc_log = Log::with_echo(Box::new(echo));
-                let r = match part {
-                    Part::Level => gz_lc::compile(&input, &opts2, &ctl, &mut lc_log),
-                    Part::Details => gz_lc::compile_details(&input, &ctl, &mut lc_log),
-                };
-                out.flush();
-                r
-            })
-            .await;
+        let (input, opts2, ctx2) =
+            (Input { level: req.dir.clone(), sources: sources.clone() }, opts.clone(), ctx.clone());
+        let out = Throttle::new(ctx.clone(), editor.log.clone());
+        let worker = out.clone();
+        let work = editor.exec.cpu(move || {
+            let echo_out = worker.clone();
+            let echo = move |line: &str| echo_out.line(line);
+            let report = |r: Progress<'_>| match r {
+                Progress::Stage(s) => worker.stage(s),
+                Progress::Progress { done, total } => worker.progress(done, total),
+            };
+            let ctl = Ctl::new(&ctx2.cancel, &report);
+            let mut lc_log = Log::with_echo(Box::new(echo));
+            match part {
+                Part::Level => gz_lc::compile(&input, &opts2, &ctl, &mut lc_log),
+                Part::Details => gz_lc::compile_details(&input, &ctl, &mut lc_log),
+            }
+        });
+        // a silent phase still reaches the job and the log: what is pending is passed on at the
+        // throttle's pace by a timer, never faster
+        tokio::pin!(work);
+        let mut tick = tokio::time::interval(THROTTLE);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let done = loop {
+            tokio::select! {
+                r = &mut work => break r,
+                _ = tick.tick() => out.tick(),
+            }
+        };
+        out.flush();
         let report = match done {
             Ok(r) => r,
             Err(e) if e.cancelled() => {
@@ -172,30 +176,60 @@ fn read_mark(line: &str) -> (Option<Severity>, &str) {
 /// report per deflector from every worker and the compiler writes thousands of lines, and every
 /// report wakes the window - which, on the Level tab, draws the scene again on the CPU pool the
 /// compile needs (measured: l12u_control_monolith 93 s with every report passed on, 70 s with no
-/// viewport drawn, 64 s headless).
+/// viewport drawn, 64 s headless). A timer ([`Throttle::tick`]) passes on what waits while the
+/// compiler says nothing, so a long silent phase shows the moment it begins.
+///
+/// The job's stage is the phase's name with what the phase says of itself under it: "Lighting the
+/// static models: the references, 120 of 300" - a phase's own stage never hides the phase.
 #[derive(Clone)]
 struct Throttle(Arc<Mutex<Pending>>, JobCtx, gz_editor::Log);
 
+#[derive(Default)]
 struct Pending {
-    last: Instant,
+    last: Option<Instant>,
     lines: Vec<String>,
-    stage: Option<String>,
+    stage: Stage,
+    /// The stage changed since it was passed on.
+    moved: bool,
+}
+
+/// Where the compile is: its phase, the phase's own stage, the items done of how many.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Stage {
+    phase: Option<String>,
+    sub: Option<String>,
     progress: Option<(usize, usize)>,
+}
+
+impl Stage {
+    /// The job's stage: "Lighting the lightmaps: 1200 of 5400".
+    fn text(&self) -> Option<String> {
+        let phase = self.phase.as_deref()?;
+        let mut out = phase.to_owned();
+        if let Some(sub) = &self.sub {
+            out.push_str(": ");
+            out.push_str(sub);
+        }
+        if let Some((done, total)) = self.progress {
+            out.push_str(if self.sub.is_some() { ", " } else { ": " });
+            out.push_str(&format!("{} of {total}", done.min(total)));
+        }
+        Some(out)
+    }
 }
 
 const THROTTLE: Duration = Duration::from_millis(250);
 
 impl Throttle {
     fn new(ctx: JobCtx, log: gz_editor::Log) -> Self {
-        let p = Pending { last: Instant::now(), lines: Vec::new(), stage: None, progress: None };
-        Self(Arc::new(Mutex::new(p)), ctx, log)
+        Self(Arc::new(Mutex::new(Pending::default())), ctx, log)
     }
 
     fn line(&self, line: &str) {
         let mut p = self.0.lock();
-        if let Some(name) = line.strip_prefix("* New phase started: ") {
-            p.stage = Some(name.trim_end_matches("...").to_owned());
-            p.progress = None;
+        if let Some(name) = line.strip_prefix(gz_lc::PHASE_STARTED) {
+            p.stage = Stage { phase: Some(name.trim().to_owned()), sub: None, progress: None };
+            p.moved = true;
         }
         p.lines.push(line.to_owned());
         self.maybe(p);
@@ -203,20 +237,31 @@ impl Throttle {
 
     fn stage(&self, text: &str) {
         let mut p = self.0.lock();
-        p.stage = Some(text.to_owned());
-        p.progress = None;
+        p.stage.sub = Some(text.trim().to_owned());
+        p.stage.progress = None;
+        p.moved = true;
         self.maybe(p);
     }
 
     fn progress(&self, done: usize, total: usize) {
         let mut p = self.0.lock();
-        p.progress = Some((done, total));
+        p.stage.progress = Some((done, total));
+        p.moved = true;
         self.maybe(p);
     }
 
+    /// Passes on what waits when the last pass is a throttle period old.
     fn maybe(&self, p: parking_lot::MutexGuard<'_, Pending>) {
-        if p.last.elapsed() >= THROTTLE {
+        if p.last.is_none_or(|t| t.elapsed() >= THROTTLE) {
             self.pass(p);
+        }
+    }
+
+    /// The timer's turn: what waits goes once the period is over, nothing when nothing waits.
+    fn tick(&self) {
+        let p = self.0.lock();
+        if p.moved || !p.lines.is_empty() {
+            self.maybe(p);
         }
     }
 
@@ -225,9 +270,9 @@ impl Throttle {
     }
 
     fn pass(&self, mut p: parking_lot::MutexGuard<'_, Pending>) {
-        p.last = Instant::now();
+        p.last = Some(Instant::now());
         let lines = std::mem::take(&mut p.lines);
-        let (stage, progress) = (p.stage.take(), p.progress.take());
+        let stage = std::mem::take(&mut p.moved).then(|| p.stage.clone());
         drop(p);
         for l in &lines {
             match read_mark(l) {
@@ -236,10 +281,12 @@ impl Throttle {
             }
         }
         if let Some(s) = stage {
-            self.1.stage(s);
-        }
-        if let Some((done, total)) = progress {
-            self.1.progress(done, total);
+            if let Some(text) = s.text() {
+                self.1.stage(text);
+            }
+            if let Some((done, total)) = s.progress {
+                self.1.progress(done, total);
+            }
         }
     }
 }
@@ -258,11 +305,34 @@ mod tests {
         assert_eq!(read_mark("! ERROR: split failed"), (Some(Severity::Error), "ERROR: split failed"));
         assert_eq!(read_mark("~ slow"), (Some(Severity::Warning), "slow"));
         assert_eq!(
-            read_mark("* New phase started: Lights"),
-            (Some(Severity::Note), "New phase started: Lights")
+            read_mark("* Phase: Lighting the lightmaps"),
+            (Some(Severity::Note), "Phase: Lighting the lightmaps")
         );
         assert_eq!(read_mark("*** 3 junctions found."), (Some(Severity::Warning), "3 junctions found."));
         assert_eq!(read_mark("    |    | detail"), (None, "    |    | detail"));
         assert_eq!(read_mark("*not a mark"), (None, "*not a mark"));
+    }
+
+    #[test]
+    fn the_stage_keeps_the_phase_and_says_what_it_counts() {
+        let phase = |sub: Option<&str>, progress| Stage {
+            phase: Some("Lighting the static models".into()),
+            sub: sub.map(str::to_owned),
+            progress,
+        };
+        assert_eq!(phase(None, None).text().unwrap(), "Lighting the static models");
+        assert_eq!(
+            phase(Some("the references"), Some((120, 300))).text().unwrap(),
+            "Lighting the static models: the references, 120 of 300"
+        );
+        assert_eq!(phase(None, Some((7, 5))).text().unwrap(), "Lighting the static models: 5 of 5");
+        assert!(Stage::default().text().is_none(), "no phase yet: the job keeps its own stage");
+        // every phase and every sub-stage of the compiler is a whole name: no "...", no shouting
+        for name in gz_lc::PHASES.iter().chain(&gz_lc::DETAIL_PHASES).chain([&gz_lc::READING]) {
+            assert!(
+                !name.ends_with('.') && !name.contains(':') && name.chars().next().unwrap().is_uppercase()
+            );
+            assert!(name.split(' ').all(|w| w.chars().any(char::is_lowercase)), "{name}");
+        }
     }
 }

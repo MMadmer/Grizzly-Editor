@@ -1,7 +1,16 @@
 //! The level build as one job: the steps a request needs, in order, each recorded in
-//! `build.state` as it ends, so a Stop or a failure keeps the finished ones fresh. A step that
-//! fails holds back only the steps that need it: the others still run, and the job ends failed
-//! naming what failed, what was built and what was left for later.
+//! `build.state` as it ends, so a Stop or a failure keeps the finished ones fresh.
+//!
+//! Before the first step runs, what a later step would refuse and can be seen at once is checked
+//! ([`preflight`]): the build refuses in seconds with every such problem on its object, instead
+//! of failing after the long steps. An error ends the build at once, like Unreal's: the finished
+//! steps stay, and the job ends failed naming the step that failed and the steps not run. A
+//! warning never stops it. Stop ends the step in progress within a moment: every long loop of the
+//! steps asks the job's cancel flag ([`crate::Stop`]).
+//!
+//! On a level the linked game has (a stock level), the compile steps are not needed for the
+//! module unless they are asked for by name or forced: Build Level builds the spawn layer, and
+//! what an earlier build left in the level's folder is a warning ([`crate::stock`]).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -27,6 +36,15 @@ use crate::service::{self, LevelBuild, LevelProblem, StepState};
 use crate::spawn::{self, Element, Way};
 use crate::state::{BuildState, Generated, StepRecord};
 use crate::steps::{Options, Step, with_needs};
+
+/// A step's error as the job's: a stopped one is the job's Stop.
+fn job_err(e: crate::BuildError) -> JobError {
+    if e.is_stopped() {
+        JobError { message: crate::STOPPED.to_owned(), cancelled: true }
+    } else {
+        JobError::new(e.0)
+    }
+}
 
 /// Files by name, as a step writes them into the level folder.
 type NamedFiles = Vec<(String, Vec<u8>)>;
@@ -365,6 +383,10 @@ struct StepCx<'a> {
     record: BuildState,
     problems: Vec<LevelProblem>,
     ctx: &'a JobCtx,
+    /// The steps whose scene check the preflight ran: they do not run it again.
+    validated: Vec<Step>,
+    /// The visibility cells completed by the preflight, for the scene of this serial.
+    completed: Option<(u64, gz_scene::objtools::zones::Completion)>,
 }
 
 /// What a step made.
@@ -380,7 +402,8 @@ fn named(files: &NamedFiles) -> Vec<String> {
     files.iter().map(|(n, _)| n.clone()).collect()
 }
 
-/// Runs the build: plans the steps, runs each, records each. Answers what ran.
+/// Runs the build: plans the steps, checks what they need, runs each, records each. Answers
+/// what ran; an error ends it at the step that failed.
 pub(crate) async fn run(
     editor: &Arc<Editor>,
     session: &Arc<ProjectSession>,
@@ -392,11 +415,15 @@ pub(crate) async fn run(
     // the models the scene's objects are made from are part of what the steps read
     let (snap, lib) = (inp.snap.clone(), inp.lib.clone());
     let library = editor.exec.io(move || fingerprint::library_stamp(&snap, &lib)).await;
-    let req = &Request { opts: Options { library, ..req.opts.clone() }, ..req.clone() };
     let level = inp.snap.meta.level.level_path.to_string();
     if level.trim().is_empty() {
         return Err(JobError::new("The scene has no level path: set it in Level Settings."));
     }
+    // a stock level's compile steps run only when they are asked for by name or forced
+    let stock = crate::stock::is_stock(&lb.game_levels(editor).await, &level);
+    let explicit = req.force || req.only.is_some() || req.steps.is_some();
+    let req =
+        &Request { opts: Options { library, stock: stock && !explicit, ..req.opts.clone() }, ..req.clone() };
     let dir = level_dir(session, &level).map_err(JobError::new)?;
     let record = lb
         .record_now(editor, session, &level)
@@ -420,6 +447,7 @@ pub(crate) async fn run(
     let stale = |s: &Step| {
         status.get(*s).is_some_and(|x| !matches!(x.state, StepState::Fresh | StepState::NotNeeded))
     };
+    // what has nothing to make (no detail objects): not what a stock level does not need
     let not_needed: Vec<Step> = asked.iter().copied().filter(|s| !service::needed(&work, *s)).collect();
     let plan: Vec<Step> = asked
         .iter()
@@ -438,6 +466,8 @@ pub(crate) async fn run(
         record,
         problems: Vec::new(),
         ctx,
+        validated: Vec::new(),
+        completed: None,
     };
     // what a step that has nothing to make made before goes, so the game reads none of it
     for s in &not_needed {
@@ -454,15 +484,21 @@ pub(crate) async fn run(
     }
     if plan.is_empty() {
         save_record(editor, &lb, &cx.record, &dir, &objects).await;
-        return Ok(json!({ "level": level, "ran": [], "fresh": true }));
+        let replaced = stock_problem(&mut cx, stock).await;
+        finish_problems(&lb, &[], std::mem::take(&mut cx.problems));
+        return Ok(json!({ "level": level, "ran": [], "fresh": true, "stock": stock, "replaces": replaced }));
+    }
+    // what a later step would refuse, before the first one runs
+    ctx.stage("Checking what the steps need");
+    if let Err(e) = preflight(&mut cx, &plan).await {
+        finish_problems(&lb, &plan, std::mem::take(&mut cx.problems));
+        return Err(e);
     }
     editor.log.info(format!(
         "Building {level}: {}.",
         plan.iter().map(|s| s.title()).collect::<Vec<_>>().join(", ")
     ));
     let mut ran: Vec<Value> = Vec::new();
-    let mut failed: Vec<(Step, String)> = Vec::new();
-    let mut skipped: Vec<Step> = Vec::new();
     let mut objects = objects;
     let total = plan.len();
     for (k, step) in plan.iter().copied().enumerate() {
@@ -470,18 +506,13 @@ pub(crate) async fn run(
             finish_problems(&lb, &plan[..k], cx.problems);
             return Err(stop.into());
         }
-        // a step that needs one that failed waits for it; the others go on
-        let held = |n: &Step| failed.iter().any(|(f, _)| f == n) || skipped.contains(n);
-        if let Some(blocker) = with_needs(&[step]).into_iter().find(|n| *n != step && held(n)) {
-            editor.log.warn(format!("{} is left for later: it needs {}.", step.title(), blocker.title()));
-            skipped.push(step);
-            continue;
-        }
         ctx.stage(format!("{} ({} of {total})", step.stage(), k + 1));
         ctx.fraction(k as f32 / total as f32);
         let begun = Instant::now();
         let out = run_step(&mut cx, step).await;
         let seconds = begun.elapsed().as_secs_f64();
+        let library =
+            if step.classes().contains(&gz_scene::ObjClass::SceneObject) { req.opts.library } else { 0 };
         match out {
             Ok(made) => {
                 if made.changed_scene {
@@ -497,12 +528,9 @@ pub(crate) async fn run(
                         seconds,
                         quality: req.opts.quality,
                         flags: req.opts.flags.clone(),
-                        library: if step.classes().contains(&gz_scene::ObjClass::SceneObject) {
-                            req.opts.library
-                        } else {
-                            0
-                        },
+                        library,
                         failed: None,
+                        files: made.files.clone(),
                     },
                 );
                 save_record(editor, &lb, &cx.record, &dir, &objects).await;
@@ -521,6 +549,7 @@ pub(crate) async fn run(
                 return Err(e);
             }
             Err(e) => {
+                // an error ends the build here: what ran stays, what comes after does not run
                 let fingerprint = cx.fps.get(&step).copied().unwrap_or(0);
                 cx.record.steps.insert(
                     step,
@@ -530,12 +559,9 @@ pub(crate) async fn run(
                         seconds,
                         quality: req.opts.quality,
                         flags: req.opts.flags.clone(),
-                        library: if step.classes().contains(&gz_scene::ObjClass::SceneObject) {
-                            req.opts.library
-                        } else {
-                            0
-                        },
+                        library,
                         failed: Some(e.message.clone()),
+                        files: Vec::new(),
                     },
                 );
                 save_record(editor, &lb, &cx.record, &dir, &objects).await;
@@ -548,28 +574,241 @@ pub(crate) async fn run(
                     position: None,
                 });
                 editor.log.error(format!("{}: {}", step.title(), e.message));
-                failed.push((step, e.message));
+                let not_run: Vec<&str> = plan[k + 1..].iter().map(|s| s.title()).collect();
+                finish_problems(&lb, &plan[..=k], cx.problems);
+                return Err(JobError::new(ended_text(step, &e.message, &ran, &not_run)));
             }
         }
     }
     ctx.fraction(1.0);
+    let replaced = stock_problem(&mut cx, stock).await;
     let problems = cx.problems.len();
     finish_problems(&lb, &plan, cx.problems);
-    if !failed.is_empty() {
-        let mut text: Vec<String> =
-            failed.iter().map(|(s, m)| format!("{} failed: {m}", s.title())).collect();
-        if !ran.is_empty() {
-            let built: Vec<&str> = ran.iter().filter_map(|r| r["title"].as_str()).collect();
-            text.push(format!("Built: {}.", built.join(", ")));
-        }
-        if !skipped.is_empty() {
-            let left: Vec<&str> = skipped.iter().map(|s| s.title()).collect();
-            text.push(format!("Left for later: {}.", left.join(", ")));
-        }
-        return Err(JobError::new(text.join(" ")));
-    }
     editor.log.info(format!("{level} is built."));
-    Ok(json!({ "level": level, "ran": ran, "problems": problems }))
+    Ok(json!({ "level": level, "ran": ran, "problems": problems, "stock": stock, "replaces": replaced }))
+}
+
+/// The sentence a build that met an error ends with: the step and why, what was built, what did
+/// not run.
+fn ended_text(step: Step, why: &str, ran: &[Value], not_run: &[&str]) -> String {
+    let end = if why.ends_with(['.', '!', '?']) { "" } else { "." };
+    let mut text = vec![format!("{} failed: {why}{end}", step.title())];
+    let built: Vec<&str> = ran.iter().filter_map(|r| r["title"].as_str()).collect();
+    if !built.is_empty() {
+        text.push(format!("Built: {}.", built.join(", ")));
+    }
+    if !not_run.is_empty() {
+        text.push(format!("Not run: {}.", not_run.join(", ")));
+    }
+    text.join(" ")
+}
+
+/// On a stock level: the files an earlier build left in the level's folder that would replace the
+/// game's own, as a warning on the level. Answers their names.
+async fn stock_problem(cx: &mut StepCx<'_>, stock: bool) -> Vec<String> {
+    // the warning is said again by every build of the level, never twice
+    LevelBuild::of(cx.session).problems.lock().retain(|p| p.code != "replaces_stock");
+    if !stock {
+        return Vec::new();
+    }
+    let (record, dir) = (cx.record.clone(), cx.dir.clone());
+    let replaced =
+        cx.editor.exec.io(move || crate::stock::replacing(&crate::stock::written(&record, &dir))).await;
+    if let Some(p) = crate::stock::problem(&cx.level, &replaced) {
+        cx.problems.push(p);
+    }
+    replaced
+}
+
+/// The spawn points the spawn step builds, as its elements.
+fn spawn_elements(work: &SceneState, settings: Option<&(dyn Settings + Sync)>) -> Vec<Element> {
+    let mut elements = Vec::new();
+    for o in work.of_class(ObjClass::SpawnPoint) {
+        if let ObjData::Spawn(pt) = &o.data
+            && pt.kind == PointKind::Spawn
+            && let Ok(Some((e, _))) = crate::files::export_entity(o, settings)
+        {
+            elements.push(Element { entity: e });
+        }
+    }
+    elements
+}
+
+/// What a step of `plan` would refuse and can be seen now, each a problem on what it is about:
+/// the compiler's options, the inputs no planned step makes, the spawn's points and the linked
+/// game's `all.spawn`, the graph points, the ground of an AI map to generate, the scene's checks
+/// (the visibility cells completed first, kept for the geometry step). `Err` names the first
+/// error and how many there are; the steps never run then.
+async fn preflight(cx: &mut StepCx<'_>, plan: &[Step]) -> Result<(), JobError> {
+    let has = |s: Step| plan.contains(&s);
+    let mut found: Vec<LevelProblem> = Vec::new();
+    let refuse = |found: &mut Vec<LevelProblem>, step: Step, text: String, object: Option<String>| {
+        found.push(LevelProblem {
+            step,
+            code: "preflight",
+            severity: Severity::Error,
+            text,
+            object,
+            position: None,
+        });
+    };
+    if (has(Step::Light) || has(Step::DetailLight))
+        && let Err(e) = gz_lc::Options::parse(cx.req.opts.flags.split_whitespace())
+    {
+        refuse(&mut found, Step::Light, e.to_string(), None);
+    }
+    // the inputs a step reads from the level folder when no planned step makes them
+    let mut inputs: Vec<(Step, &'static str, &'static str)> = Vec::new();
+    if has(Step::GameGraph) && !has(Step::AiMap) {
+        inputs.push((Step::GameGraph, "level.ai", "build the AI map first"));
+    }
+    if has(Step::Spawn) && !has(Step::AiMap) {
+        inputs.push((Step::Spawn, "level.ai", "build the AI map first"));
+    }
+    if has(Step::Spawn) && !has(Step::GameGraph) {
+        inputs.push((Step::Spawn, "level.graph", "build the game graph first"));
+    }
+    if has(Step::Light) && !has(Step::Geometry) {
+        inputs.push((Step::Light, "build.prj", "build the geometry first"));
+    }
+    if has(Step::DetailLight) && !has(Step::Details) {
+        inputs.push((Step::DetailLight, "build.details", "build the details first"));
+    }
+    if has(Step::DetailLight) && !has(Step::Light) {
+        inputs.push((Step::DetailLight, "build.cform", "build the light first"));
+        inputs.push((Step::DetailLight, "build.lights", "build the light first"));
+    }
+    let dir = cx.dir.clone();
+    let lb = LevelBuild::of(cx.session);
+    let cached_ai = lb.graphs.lock().level.is_some();
+    let missing: Vec<(Step, &'static str, &'static str)> = cx
+        .editor
+        .exec
+        .io(move || inputs.into_iter().filter(|(_, f, _)| !dir.join(f).is_file()).collect())
+        .await;
+    for (step, file, how) in missing {
+        if file == "level.ai" && cached_ai {
+            continue;
+        }
+        refuse(&mut found, step, format!("The level has no {file}: {how}."), None);
+    }
+    if has(Step::GameGraph) && graph_points(&cx.work, sync_settings(&cx.inp.settings)).is_empty() {
+        refuse(
+            &mut found,
+            Step::GameGraph,
+            "The level has no graph point: place at least one on the AI map.".into(),
+            None,
+        );
+    }
+    if has(Step::Spawn) {
+        let linked = match GameLink::of(cx.editor) {
+            Ok(link) => link.files().await.ok().is_some_and(|f| f.exists("spawns\\all.spawn")),
+            Err(_) => false,
+        };
+        if !linked {
+            refuse(
+                &mut found,
+                Step::Spawn,
+                "The linked game has no spawns\\all.spawn: the spawn joins the level to the game's graph, so link a game first.".into(),
+                None,
+            );
+        }
+        let (work, settings) = (Arc::new(cx.work.clone()), cx.inp.settings.clone());
+        let refused = cx
+            .editor
+            .exec
+            .cpu(move || spawn::refusals(&spawn_elements(&work, sync_settings(&settings))))
+            .await;
+        for (text, object) in refused {
+            refuse(&mut found, Step::Spawn, text, object);
+        }
+    }
+    if has(Step::AiMap) && cx.work.bulk.ai_map.as_ref().is_none_or(|a| a.node_count() == 0) {
+        let (work, lib) = (Arc::new(cx.work.clone()), cx.inp.lib.clone());
+        let ground = cx
+            .editor
+            .exec
+            .cpu(move || {
+                let ids = gz_scene::bulk::cmd::ai_ground_ids(&work, &lib);
+                !gz_scene::bulk::ground::names(&work, &ids).is_empty()
+            })
+            .await;
+        if !ground {
+            refuse(
+                &mut found,
+                Step::AiMap,
+                "The scene has no static objects for the AI map to lie on.".into(),
+                None,
+            );
+        }
+    }
+    cx.ctx.check()?;
+    let mut failed_checks = false;
+    if has(Step::Game) {
+        let scene = Arc::new(cx.work.clone());
+        let ok = validate_scene(
+            cx.editor,
+            scene,
+            cx.inp,
+            crate::validate::Tests::MAKE_GAME,
+            Step::Game,
+            &mut cx.problems,
+            cx.ctx,
+        )
+        .await
+        .is_ok();
+        failed_checks |= !ok;
+        cx.validated.push(Step::Game);
+    }
+    if has(Step::Geometry) {
+        cx.ctx.stage("Completing the visibility cells");
+        let (work, lib) = (Arc::new(cx.work.clone()), cx.inp.lib.clone());
+        let c = cx.ctx.clone();
+        let completion = cx
+            .editor
+            .exec
+            .cpu(move || gz_scene::objtools::zones::complete(&work, &lib, &|| c.cancel.is_cancelled()))
+            .await
+            .map_err(|_| JobError { message: crate::STOPPED.to_owned(), cancelled: true })?;
+        let mut scene = completion.state.clone();
+        scene.meta.level = cx.req.opts.quality.apply(&scene.meta.level);
+        let ok = validate_scene(
+            cx.editor,
+            Arc::new(scene),
+            cx.inp,
+            crate::validate::Tests::BUILD,
+            Step::Geometry,
+            &mut cx.problems,
+            cx.ctx,
+        )
+        .await
+        .is_ok();
+        failed_checks |= !ok;
+        cx.validated.push(Step::Geometry);
+        cx.completed = Some((cx.work.serial, completion));
+    }
+    cx.ctx.check()?;
+    let errors = found.len() + cx.problems.iter().filter(|p| p.severity == Severity::Error).count();
+    if found.is_empty() && !failed_checks {
+        return Ok(());
+    }
+    let first = found
+        .first()
+        .or_else(|| cx.problems.iter().find(|p| p.severity == Severity::Error))
+        .map(|p| p.text.trim_end_matches('.').to_owned())
+        .unwrap_or_else(|| "the scene does not pass its checks".to_owned());
+    for p in &found {
+        cx.editor.log.error(format!("{}: {}", p.step.title(), p.text));
+    }
+    cx.problems.extend(found);
+    let more =
+        if errors > 1 { format!(" ({} problems in all: see the problems)", errors) } else { String::new() };
+    let steps: Vec<&str> = plan.iter().map(|s| s.title()).collect();
+    Err(JobError::new(format!(
+        "The build of {} did not start: {first}{more}. Not run: {}.",
+        cx.level,
+        steps.join(", ")
+    )))
 }
 
 /// The problems of the steps that ran replace what those steps found before.
@@ -626,30 +865,34 @@ fn log_lines(editor: &Editor, found: &[Finding]) {
 /// `level.ltx` and the game files: the spawn packets, patrol paths, sounds, particles, fog.
 async fn step_game(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
     let scene = Arc::new(cx.work.clone());
-    validate_scene(
-        cx.editor,
-        scene.clone(),
-        cx.inp,
-        crate::validate::Tests::MAKE_GAME,
-        Step::Game,
-        &mut cx.problems,
-        cx.ctx,
-    )
-    .await?;
+    if !cx.validated.contains(&Step::Game) {
+        validate_scene(
+            cx.editor,
+            scene.clone(),
+            cx.inp,
+            crate::validate::Tests::MAKE_GAME,
+            Step::Game,
+            &mut cx.problems,
+            cx.ctx,
+        )
+        .await?;
+    }
     let (lib, engine, settings) = (cx.inp.lib.clone(), cx.inp.engine.clone(), cx.inp.settings.clone());
+    let c = cx.ctx.clone();
     let (made, log) = cx
         .editor
         .exec
         .cpu(move || -> crate::Result<(NamedFiles, Vec<Finding>)> {
             let look = crate::files::lookup(lib);
             let mut out = vec![("level.ltx".to_owned(), crate::files::level_ltx(&scene, &look))];
-            let g = crate::files::game_files(&scene, &look, &engine, sync_settings(&settings))?;
+            let stop = || c.cancel.is_cancelled();
+            let g = crate::files::game_files_until(&scene, &look, &engine, sync_settings(&settings), &stop)?;
             out.extend(g.files.into_iter().map(|(n, b)| (n.to_owned(), b)));
             out.extend(g.meshes);
             Ok((out, g.log))
         })
         .await
-        .map_err(|e| JobError::new(e.0))?;
+        .map_err(job_err)?;
     log_lines(cx.editor, &log);
     let names = named(&made);
     write_files(cx.editor, cx.dir.clone(), made).await?;
@@ -720,8 +963,15 @@ async fn step_ai_map(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
                 if names.is_empty() {
                     return Err("The scene has no static objects for the AI map to lie on.".to_owned());
                 }
-                let model =
-                    gz_scene::bulk::collide::CollideModel::build(&work, &lib, &names, xrlc.xrlc.as_ref());
+                let stop = || c.cancel.is_cancelled();
+                let model = gz_scene::bulk::collide::CollideModel::build_until(
+                    &work,
+                    &lib,
+                    &names,
+                    xrlc.xrlc.as_ref(),
+                    &stop,
+                )
+                .ok_or_else(|| crate::STOPPED.to_owned())?;
                 let keep_going = |f: f32, total: usize| {
                     c.stage(format!("Generating the AI map: {total} nodes"));
                     c.fraction(f);
@@ -731,7 +981,9 @@ async fn step_ai_map(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
                     .ok_or_else(|| "The scene has no static objects for the AI map to lie on.".to_owned())
             })
             .await
-            .map_err(JobError::new)?;
+            .map_err(|e| {
+                if e == crate::STOPPED { JobError { message: e, cancelled: true } } else { JobError::new(e) }
+            })?;
         cx.ctx.check()?;
         if made.nodes == 0 {
             return Err(JobError::new(
@@ -740,18 +992,34 @@ async fn step_ai_map(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
         }
         // the map goes into the scene as one undo step, so the author sees what the game walks on
         let svc = SceneService::of(cx.editor).map_err(|e| JobError::new(e.message))?;
-        let mut edit =
-            gz_scene::bulk::BulkEdit::new("Generate AI Map", cx.work.serial).with_ai(made.part.clone());
-        edit.kind = gz_scene::bulk::Kind::Step;
-        match svc.store.send(gz_scene::SceneCmd::Bulk(Box::new(edit)), gz_base::Origin::Mcp).await {
+        let send = |serial: u64| {
+            let mut edit =
+                gz_scene::bulk::BulkEdit::new("Generate AI Map", serial).with_ai(made.part.clone());
+            edit.kind = gz_scene::bulk::Kind::Step;
+            svc.store.send(gz_scene::SceneCmd::Bulk(Box::new(edit)), gz_base::Origin::Mcp)
+        };
+        let mut serial = cx.work.serial;
+        match send(serial).await {
             Ok(_) => {}
             Err(e) if e.code == "busy" => {
-                return Err(JobError::new("The scene changed while the AI map was generated: build again."));
+                // the scene moved meanwhile: the map still stands when what it lies on did not move (a
+                // selection, the file's name); anything else is a scene the map was not made for
+                let now = svc.store.snapshot();
+                let (inputs_now, nodes_now) = ai_inputs(&now, &lb.hashes.objects(&now));
+                if inputs_now != inputs || nodes_now != ai_inputs(&cx.work, &objects).1 {
+                    return Err(JobError::new(
+                        "The scene changed while the AI map was generated: build again.",
+                    ));
+                }
+                serial = now.serial;
+                send(serial).await.map_err(|_| {
+                    JobError::new("The scene changed while the AI map was generated: build again.")
+                })?;
             }
             Err(e) => return Err(JobError::new(e.message)),
         }
         cx.work.bulk.ai_map = Some(Arc::new(made.part));
-        cx.work.serial += 1;
+        cx.work.serial = serial + 1;
         changed_scene = true;
         let (_, nodes_now) = ai_inputs(&cx.work, &objects);
         cx.record.ai_map = Some(Generated { inputs, nodes: nodes_now });
@@ -813,10 +1081,12 @@ async fn level_graph(cx: &StepCx<'_>) -> Result<Arc<gz_fmt_level::LevelGraph>, J
 async fn step_game_graph(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
     let lg = level_graph(cx).await?;
     let (work, settings, level) = (Arc::new(cx.work.clone()), cx.inp.settings.clone(), cx.level.clone());
+    let c = cx.ctx.clone();
     let built = cx
         .editor
         .exec
         .cpu(move || {
+            let stop = || c.cancel.is_cancelled();
             let nav = LevelNav::new(&lg);
             let points = graph_points(&work, sync_settings(&settings));
             if points.is_empty() {
@@ -824,10 +1094,10 @@ async fn step_game_graph(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
                     "The level has no graph point: place at least one on the AI map.",
                 ));
             }
-            graph::build_game_graph(&nav, &points, &level, lg.header.guid, guid())
+            graph::build_game_graph_until(&nav, &points, &level, lg.header.guid, guid(), &stop)
         })
         .await
-        .map_err(|e| JobError::new(e.0))?;
+        .map_err(job_err)?;
     log_lines(cx.editor, &built.log);
     let bytes = built.graph.to_bytes();
     write_files(cx.editor, cx.dir.clone(), vec![("level.graph".to_owned(), bytes)]).await?;
@@ -893,21 +1163,14 @@ async fn step_spawn(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
     cx.ctx.stage("Building the spawn");
     let (work, settings, verify) =
         (Arc::new(cx.work.clone()), cx.inp.settings.clone(), cx.req.verify_restrictors);
+    let c = cx.ctx.clone();
     let built = cx
         .editor
         .exec
         .cpu(move || {
+            let stop = || c.cancel.is_cancelled();
             let nav = LevelNav::new(&lg);
-            let st = sync_settings(&settings);
-            let mut elements = Vec::new();
-            for o in work.of_class(ObjClass::SpawnPoint) {
-                if let ObjData::Spawn(pt) = &o.data
-                    && pt.kind == PointKind::Spawn
-                    && let Ok(Some((e, _))) = crate::files::export_entity(o, st)
-                {
-                    elements.push(Element { entity: e });
-                }
-            }
+            let elements = spawn_elements(&work, sync_settings(&settings));
             let ways: Vec<Way> = work
                 .of_class(ObjClass::Way)
                 .filter_map(|o| match &o.data {
@@ -924,10 +1187,10 @@ async fn step_spawn(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
                     _ => None,
                 })
                 .collect();
-            spawn::build_spawn(&level, &nav, &play_graph, elements, &ways, guid(), verify)
+            spawn::build_spawn_until(&level, &nav, &play_graph, elements, &ways, guid(), verify, &stop)
         })
         .await
-        .map_err(|e| JobError::new(e.0))?;
+        .map_err(job_err)?;
     log_lines(cx.editor, &built.log);
     let spawns = cx.session.root.join("gamedata").join("spawns");
     write_files(cx.editor, spawns, vec![("editor.spawn".to_owned(), built.bytes)]).await?;
@@ -937,15 +1200,21 @@ async fn step_spawn(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
 /// `build.prj` and the files beside it: the static geometry with its lights, glows and visibility
 /// cells - the cells completed by the build - the LOD atlas, the HOM and SOM, the wallmarks.
 async fn step_geometry(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
-    cx.ctx.stage("Completing the visibility cells");
-    let (work, lib) = (Arc::new(cx.work.clone()), cx.inp.lib.clone());
-    let c = cx.ctx.clone();
-    let completion = cx
-        .editor
-        .exec
-        .cpu(move || gz_scene::objtools::zones::complete(&work, &lib, &|| c.cancel.is_cancelled()))
-        .await
-        .map_err(|_| JobError { message: "Stopped.".to_owned(), cancelled: true })?;
+    // the preflight's completion, when the scene is still the one it completed
+    let completion = match cx.completed.take() {
+        Some((serial, done)) if serial == cx.work.serial => done,
+        _ => {
+            cx.validated.retain(|s| *s != Step::Geometry);
+            cx.ctx.stage("Completing the visibility cells");
+            let (work, lib) = (Arc::new(cx.work.clone()), cx.inp.lib.clone());
+            let c = cx.ctx.clone();
+            cx.editor
+                .exec
+                .cpu(move || gz_scene::objtools::zones::complete(&work, &lib, &|| c.cancel.is_cancelled()))
+                .await
+                .map_err(|_| JobError { message: crate::STOPPED.to_owned(), cancelled: true })?
+        }
+    };
     for (note, cells) in &completion.notes {
         cx.problems.push(LevelProblem {
             step: Step::Geometry,
@@ -959,29 +1228,33 @@ async fn step_geometry(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
     let mut scene = completion.state;
     scene.meta.level = cx.req.opts.quality.apply(&scene.meta.level);
     let scene = Arc::new(scene);
-    validate_scene(
-        cx.editor,
-        scene.clone(),
-        cx.inp,
-        crate::validate::Tests::BUILD,
-        Step::Geometry,
-        &mut cx.problems,
-        cx.ctx,
-    )
-    .await?;
+    if !cx.validated.contains(&Step::Geometry) {
+        validate_scene(
+            cx.editor,
+            scene.clone(),
+            cx.inp,
+            crate::validate::Tests::BUILD,
+            Step::Geometry,
+            &mut cx.problems,
+            cx.ctx,
+        )
+        .await?;
+    }
     cx.ctx.stage("Reading the LOD textures");
     let lods = Arc::new(lod_pictures(cx.editor, &scene, &cx.inp.lib).await);
     cx.ctx.check()?;
     cx.ctx.stage("Building the geometry");
     let (lib, engine) = (cx.inp.lib.clone(), cx.inp.engine.clone());
     let s2 = scene.clone();
+    let job = cx.ctx.clone();
     let (made, log) = cx
         .editor
         .exec
         .cpu(move || -> crate::Result<(NamedFiles, Vec<Finding>)> {
             let look = crate::files::lookup(lib);
             let lod_src = |n: &str| lods.get(n).cloned();
-            let c = prj::compile(&s2, &look, &engine, &lod_src)?;
+            let stop = || job.cancel.is_cancelled();
+            let c = prj::compile_until(&s2, &look, &engine, &lod_src, &stop)?;
             let mut out: NamedFiles = vec![("build.prj".to_owned(), c.project.write())];
             if let Some((color, normal)) = c.lod_textures {
                 out.push((format!("{}.dds", prj::LEVEL_LODS_TEX_NAME), color));
@@ -1004,7 +1277,7 @@ async fn step_geometry(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
             Ok((out, c.log))
         })
         .await
-        .map_err(|e| JobError::new(e.0))?;
+        .map_err(job_err)?;
     log_lines(cx.editor, &log);
     let names = named(&made);
     let gone: Vec<String> = [
@@ -1131,6 +1404,22 @@ mod tests {
     use gz_base::Findings;
 
     use super::*;
+
+    #[test]
+    fn an_error_ends_the_build_naming_the_step_what_was_built_and_what_did_not_run() {
+        let ran = [json!({ "title": "Game Files" }), json!({ "title": "AI Map" })];
+        assert_eq!(
+            ended_text(Step::Spawn, "The level has no actor spawn point.", &ran, &["Geometry", "Light"]),
+            "Spawn failed: The level has no actor spawn point. Built: Game Files, AI Map. Not run: Geometry, Light."
+        );
+        assert_eq!(
+            ended_text(Step::Light, "the compile broke", &[], &[]),
+            "Light failed: the compile broke."
+        );
+        let stopped = job_err(crate::BuildError::stopped());
+        assert!(stopped.cancelled && stopped.message == "Stopped.");
+        assert!(!job_err(crate::BuildError::new("x")).cancelled);
+    }
 
     #[test]
     fn only_errors_and_warnings_become_problems_and_none_starts_with_a_mark() {

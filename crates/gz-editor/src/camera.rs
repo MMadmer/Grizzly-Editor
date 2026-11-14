@@ -8,6 +8,8 @@ use crate::editor::Editor;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CameraPose {
     pub position: [f32; 3],
+    /// Where it looks, a unit vector; `None` when the viewport did not say.
+    pub direction: Option<[f32; 3]>,
     /// The open scene's level; `None` without a scene.
     pub level: Option<String>,
 }

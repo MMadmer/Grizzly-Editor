@@ -1,6 +1,7 @@
 //! The kit sheet (`-kitsheet`): every widget of the kit in every state it has, on one page, and
 //! the tokens beside them. It is how a surface's author - or a critic - sees what exists before
-//! writing a widget of their own.
+//! writing a widget of their own. Its Theme row shows the sheet in any theme without saving the
+//! choice (`-theme <id>` starts it in one).
 
 use egui::{Color32, CornerRadius, Rect, Sense, Stroke, Ui, Vec2, pos2};
 
@@ -88,7 +89,7 @@ impl Default for Sheet {
     }
 }
 
-fn heading(ui: &mut Ui, title: &str) {
+fn heading(ui: &mut Ui, title: &'static str) {
     ui.add_space(metrics::S16);
     let p = palette(ui.ctx());
     text::label(ui, title, Font::Title, p.text, Clip::End);
@@ -125,8 +126,7 @@ fn swatch(ui: &mut Ui, color: Color32, name: &str) {
     });
 }
 
-fn pick_items() -> Vec<PickItem> {
-    let p = crate::theme::Palette::new(crate::theme::Accent::default());
+fn pick_items(p: &crate::theme::Palette) -> Vec<PickItem> {
     vec![
         PickItem::new("wait", "Wait")
             .icon(Icon::Wait)
@@ -153,6 +153,19 @@ pub fn sheet(ui: &mut Ui) {
     let mut s = ctx.data(|d| d.get_temp::<Sheet>(id)).unwrap_or_default();
     ui.set_max_width(metrics::PAGE_W.max(ui.available_width().min(1100.0)));
     ui.spacing_mut().item_spacing = Vec2::new(metrics::S8, metrics::S6);
+
+    heading(ui, "Theme");
+    ui.horizontal(|ui| {
+        caption(ui, "Shown in");
+        let current = crate::theme::Theme::find(p.theme).unwrap_or_else(crate::theme::Theme::default_theme);
+        ui.scope(|ui| {
+            ui.set_width(em(16.0));
+            if let Some(t) = crate::theme::theme_combo(ui, "kitsheet.theme", current) {
+                crate::theme::install(&ctx, t);
+                ctx.request_repaint();
+            }
+        });
+    });
 
     heading(ui, "Buttons");
     ui.horizontal(|ui| {
@@ -234,7 +247,7 @@ pub fn sheet(ui: &mut Ui) {
         caption(ui, "Flat strip");
         ui.scope(|ui| {
             ui.set_width(em(18.0));
-            let labels = ["Problems (2)", "Pages", "Vars", "Log"].map(str::to_owned);
+            let labels = ["Problems (2)", "Pages", "Vars", "Log"].map(crate::Tx::from);
             let _ = tab_strip(ui, "kitsheet", &labels, &mut s.page);
         });
     });
@@ -301,10 +314,10 @@ pub fn sheet(ui: &mut Ui) {
             ui.set_width(em(10.0));
             grid::combo(ui, "kitsheet.combo", &mut s.combo, &["storyline", "side", "restrictor"]);
         });
-        let items = pick_items();
-        let shown = items.iter().find(|i| i.id == s.pick).map_or("", |i| i.label.as_str()).to_owned();
+        let items = pick_items(&p);
+        let shown = items.iter().find(|i| i.id == s.pick).map_or(crate::Tx::EMPTY, |i| i.label.clone());
         let list = PickList::new("kitsheet.pick", &items).current(&s.pick).remember("kitsheet");
-        if let Some(i) = Combo::new("kitsheet.pick", &shown).icon(Icon::Flow).width(em(10.0)).show(ui, list)
+        if let Some(i) = Combo::new("kitsheet.pick", shown).icon(Icon::Flow).width(em(10.0)).show(ui, list)
             && let Some(it) = items.get(i)
         {
             s.pick.clone_from(&it.id);
@@ -336,13 +349,28 @@ pub fn sheet(ui: &mut Ui) {
     });
     ui.horizontal(|ui| {
         caption(ui, "PickList");
-        let items = pick_items();
+        let items = pick_items(&p);
         // as a popup holds it: as wide as the list
         ui.allocate_ui(Vec2::new(em(18.0) + 16.0, 260.0), |ui| {
             popup_frame(&ctx).show(ui, |ui| {
                 let _ = PickList::new("kitsheet.inline", &items)
                     .current("spawn_npc")
                     .remember("kitsheet")
+                    .width(em(18.0))
+                    .max_height(180.0)
+                    .show(ui);
+            });
+        });
+    });
+    ui.horizontal(|ui| {
+        caption(ui, "PickList, grouped");
+        let themes = crate::theme::pick_items();
+        ui.allocate_ui(Vec2::new(em(18.0) + 16.0, 260.0), |ui| {
+            popup_frame(&ctx).show(ui, |ui| {
+                // no search of its own: the list above keeps the keys
+                let _ = PickList::new("kitsheet.grouped", &themes)
+                    .without_search()
+                    .current(p.theme)
                     .width(em(18.0))
                     .max_height(180.0)
                     .show(ui);
@@ -468,7 +496,14 @@ pub fn sheet(ui: &mut Ui) {
         ui.vertical(|ui| {
             ui.set_width(em(15.0));
             let rows = [
-                ("Quests", NavRowSpec { icon: Icon::Quest, count: Some("12"), ..NavRowSpec::default() }),
+                (
+                    "Quests",
+                    NavRowSpec {
+                        icon: Icon::Quest,
+                        count: Some(crate::Tx::raw("12")),
+                        ..NavRowSpec::default()
+                    },
+                ),
                 (
                     "Characters",
                     NavRowSpec { icon: Icon::Character, dot: Some(Tone::Error), ..NavRowSpec::default() },
@@ -479,13 +514,13 @@ pub fn sheet(ui: &mut Ui) {
                     NavRowSpec {
                         icon: Icon::PdaInterface,
                         action: Icon::Close,
-                        action_tip: "Remove",
+                        action_tip: "Remove".into(),
                         ..NavRowSpec::default()
                     },
                 ),
             ];
             for (i, (label, spec)) in rows.iter().enumerate() {
-                if nav_row(ui, label, label, s.selected_nav == i, spec).clicked {
+                if nav_row(ui, label, *label, s.selected_nav == i, spec).clicked {
                     s.selected_nav = i;
                 }
             }
@@ -508,7 +543,7 @@ pub fn sheet(ui: &mut Ui) {
                 let _ = menu_item(
                     ui,
                     "Off",
-                    MenuItem { enabled: false, tip: "Why it is off.", ..MenuItem::default() },
+                    MenuItem { enabled: false, tip: "Why it is off.".into(), ..MenuItem::default() },
                 );
                 ui.separator();
                 let _ = menu_item(
@@ -546,16 +581,16 @@ pub fn sheet(ui: &mut Ui) {
         ui,
         Tone::Warning,
         "The file changed on the disk while it had unsaved edits.",
-        Some("Reload"),
-        Some("Overwrite..."),
+        Some("Reload".into()),
+        Some("Overwrite...".into()),
     );
     let _ = banner_list(
         ui,
         Tone::Error,
         "The module cannot be built: 2 problems.",
         &[
-            ("quests/night7.nqasset: task 'silence' has no title", Some("Open")),
-            ("mod.ltx: the version is not a version", None),
+            (crate::Tx::raw("quests/night7.nqasset: task 'silence' has no title"), Some("Open".into())),
+            (crate::Tx::raw("mod.ltx: the version is not a version"), None),
         ],
     );
     ui.add_space(metrics::S16);
@@ -636,7 +671,7 @@ pub fn sheet(ui: &mut Ui) {
             ui,
             "This model cannot be shown",
             "The file is not a model the viewer reads.",
-            Some("Open Another"),
+            Some("Open Another".into()),
         );
     });
     ui.scope(|ui| {
@@ -646,11 +681,81 @@ pub fn sheet(ui: &mut Ui) {
             Icon::Search,
             "No matches",
             "No command, panel or tab has these words in its name.",
-            Some("Clear Search"),
+            Some("Clear Search".into()),
         );
     });
 
     heading(ui, "Tokens");
+    for row in [
+        &[
+            (p.chrome, "chrome"),
+            (p.base, "base"),
+            (p.inset, "inset"),
+            (p.canvas, "canvas"),
+            (p.raised, "raised"),
+            (p.overlay, "overlay"),
+            (p.input, "input"),
+            (p.input_hover, "input.hover"),
+        ][..],
+        &[
+            (p.hover, "hover"),
+            (p.pressed, "pressed"),
+            (p.button, "button"),
+            (p.button_hover, "button.hover"),
+            (p.border_subtle, "border.subtle"),
+            (p.border, "border"),
+            (p.border_strong, "border.strong"),
+            (p.dim, "dim"),
+        ][..],
+        &[
+            (p.text, "text"),
+            (p.text_secondary, "text.secondary"),
+            (p.text_muted, "text.muted"),
+            (p.text_disabled, "text.disabled"),
+            (p.accent, "accent"),
+            (p.accent_bright, "accent.bright"),
+            (p.selection, "selection"),
+            (p.selection_focused, "selection.focused"),
+        ][..],
+        &[
+            (p.primary, "primary"),
+            (p.primary_hover, "primary.hover"),
+            (p.primary_pressed, "primary.pressed"),
+            (p.danger, "danger"),
+            (p.danger_hover, "danger.hover"),
+            (p.danger_pressed, "danger.pressed"),
+            (p.on_fill, "on_fill"),
+        ][..],
+        &[
+            (p.error, "error"),
+            (p.warning, "warning"),
+            (p.success, "success"),
+            (p.required, "required"),
+            (p.axis_x, "axis.x"),
+            (p.axis_y, "axis.y"),
+            (p.axis_z, "axis.z"),
+        ][..],
+        &[
+            (p.grid_line, "grid.line"),
+            (p.scene_grid, "scene.grid"),
+            (p.scene_grid_major, "scene.grid.major"),
+            (p.scene_wire, "scene.wire"),
+            (p.scene_label_shadow, "scene.label.shadow"),
+            (p.scroll_handle, "scroll.handle"),
+            (p.scroll_handle_hover, "scroll.handle.hover"),
+        ][..],
+    ] {
+        ui.horizontal_wrapped(|ui| {
+            for (c, n) in row {
+                swatch(ui, *c, n);
+            }
+        });
+    }
+    ui.horizontal_wrapped(|ui| {
+        for tone in [Tone::Muted, Tone::Info, Tone::Success, Tone::Warning, Tone::Error, Tone::Required] {
+            badge(ui, crate::Tx::raw(format!("{tone:?}")), tone);
+        }
+    });
     ui.horizontal_wrapped(|ui| {
         for (i, c) in p.graph_family.iter().enumerate() {
             swatch(ui, *c, &format!("family.{i}"));

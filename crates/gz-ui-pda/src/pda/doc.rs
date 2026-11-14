@@ -19,8 +19,8 @@ use gz_ui::list::list;
 use gz_ui::state::{badge, busy_line, empty_state};
 use gz_ui::text::{self, Clip};
 use gz_ui::{
-    Answer, Asker, Button, ConfirmSpec, Font, Icon, Kind, PropFlags, PropertyGrid, Tone, Toolbar,
-    ToolbarStyle, metrics, palette,
+    Answer, Asker, Button, ConfirmSpec, Font, Icon, Kind, PropFlags, PropertyGrid, TipExt, Tone, Toolbar,
+    ToolbarStyle, Tx, metrics, palette, tr,
 };
 
 use crate::assets::PdaAssets;
@@ -194,12 +194,12 @@ impl PdaDoc {
         }
         let spec = ConfirmSpec {
             id: "pda_revert".to_owned(),
-            title: "Revert PDA Interface".to_owned(),
-            headline: format!("Drop the unsaved edits of {name}?"),
-            items: vec!["The Source pane's edits since the last save".to_owned()],
+            title: "Revert PDA Interface".into(),
+            headline: tr!("Drop the unsaved edits of {name}?", name = name),
+            items: vec![Tx::from("The Source pane's edits since the last save")],
             total: 0,
-            consequence: "The file stays as it is on disk; the edits are lost.".to_owned(),
-            action: "Revert".to_owned(),
+            consequence: "The file stays as it is on disk; the edits are lost.".into(),
+            action: "Revert".into(),
             destructive: true,
         };
         let (ed, tab) = (self.editor.clone(), self.tab.clone());
@@ -223,7 +223,9 @@ impl PdaDoc {
         // what the file on disk did that the Source pane's edits keep out of view
         if !m.disk_note.is_empty() {
             let note = m.disk_note.clone();
-            if gz_ui::state::banner(ui, Tone::Warning, &note, Some("Take Theirs"), None) == Some(0) {
+            if gz_ui::state::banner(ui, Tone::Warning, Tx::ui(note), Some("Take Theirs".into()), None)
+                == Some(0)
+            {
                 self.spawn(|e, tab| Box::pin(async move { super::take_theirs(&e, &tab).await }));
             }
             ui.add_space(6.0);
@@ -249,19 +251,19 @@ impl PdaDoc {
             let room = (ui.available_width() - right - 8.0).max(0.0);
             ui.scope(|ui| {
                 ui.set_max_width(room);
-                text::label(ui, &name, Font::Body, p.text, Clip::Start);
+                text::label(ui, Tx::raw(name.as_str()), Font::Body, p.text, Clip::Start);
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if is_used {
                     ui.scope(|ui| badge(ui, "Used by the module", Tone::Success))
                         .response
-                        .on_hover_text("mod.ltx [pda] layout names this file: the game shows it in the PDA.");
+                        .tip("mod.ltx [pda] layout names this file: the game shows it in the PDA.");
                 } else {
-                    let tip = format!(
-                        "Write [pda] layout = {} into mod.ltx: the game shows this interface in the PDA.",
-                        m.rel
+                    let tip = tr!(
+                        "Write [pda] layout = {path} into mod.ltx: the game shows this interface in the PDA.",
+                        path = &m.rel
                     );
-                    use_it = Button::new("Use in Module").tip(&tip).show(ui).clicked();
+                    use_it = Button::new("Use in Module").tip(tip).show(ui).clicked();
                 }
             });
         });
@@ -283,10 +285,10 @@ impl PdaDoc {
 
         let problems = m.preview.layout.problems.len() + usize::from(!m.read_ok);
         let labels = [
-            if problems > 0 { format!("Problems ({problems})") } else { "Problems".to_owned() },
-            "Pages".to_owned(),
-            "Vars".to_owned(),
-            "Log".to_owned(),
+            if problems > 0 { tr!("Problems ({n})", n = problems) } else { Tx::from("Problems") },
+            Tx::from("Pages"),
+            Tx::from("Vars"),
+            Tx::from("Log"),
         ];
         if let Some(t) = m.want_tab.take() {
             m.tab = t;
@@ -310,11 +312,11 @@ impl PdaDoc {
         let p = palette(ui.ctx());
         if !m.read_ok {
             let text = if m.read_line > 0 {
-                format!("Line {}: {}", m.read_line, m.read_err)
+                tr!("Line {line}: {why}", line = m.read_line, why = Tx::ui(m.read_err.clone()))
             } else {
-                m.read_err.clone()
+                Tx::ui(m.read_err.clone())
             };
-            text::status(ui, Tone::Error, &text);
+            text::status(ui, Tone::Error, text);
             if m.read_line > 0 && Button::new("Go to Line").show(ui).clicked() {
                 m.show_source = true;
                 m.goto_line = m.read_line;
@@ -328,23 +330,27 @@ impl PdaDoc {
             ui.push_id(i, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    badge(ui, &pr.code, if pr.is_error() { Tone::Error } else { Tone::Warning });
+                    badge(
+                        ui,
+                        Tx::raw(pr.code.as_str()),
+                        if pr.is_error() { Tone::Error } else { Tone::Warning },
+                    );
                     text::label(
                         ui,
-                        if pr.path.is_empty() { "layout" } else { &pr.path },
+                        if pr.path.is_empty() { Tx::from("layout") } else { Tx::raw(pr.path.as_str()) },
                         Font::Small,
                         p.text_muted,
                         Clip::End,
                     );
                 });
-                text::prose(ui, &pr.message);
+                text::prose(ui, Tx::ui(pr.message.as_str()));
                 ui.add_space(6.0);
             });
         }
         if !m.reader_source.is_empty() {
             text::label(
                 ui,
-                &format!("Checked by {}", m.reader_source),
+                tr!("Checked by {reader}", reader = &m.reader_source),
                 Font::Small,
                 p.text_muted,
                 Clip::Start,
@@ -392,18 +398,18 @@ impl PdaDoc {
             let mut tb = Toolbar::begin(&mut bar_ui, "pda_source", ToolbarStyle::Panel);
             tb.group(1);
             if !m.read_ok {
-                tb.status(&m.read_err, Tone::Error);
+                tb.status(Tx::ui(m.read_err.as_str()), Tone::Error);
             } else if m.text_dirty {
                 tb.status("Unsaved edits", Tone::Warning);
             } else {
                 tb.status("Saved", Tone::Muted);
             }
             if !m.read_ok && m.read_line > 0 {
-                let label = format!("Line {}", m.read_line);
+                let label = tr!("Line {line}", line = m.read_line);
                 goto = tb.action(
                     "goto_error",
                     Icon::Error,
-                    &label,
+                    label,
                     "Scroll to the line the reader stopped at",
                     true,
                     false,
@@ -450,7 +456,7 @@ fn post_notice(editor: &Arc<Editor>, title: &'static str, text: String) {
                 if unattended { Asker::Unattended } else { Asker::Ui },
                 Tone::Error,
                 title,
-                &text,
+                Tx::ui(text.clone()),
             ) {
                 log.finding(&line);
             }
@@ -473,14 +479,14 @@ fn draw_pages(ui: &mut Ui, m: &mut Model) {
                     let title = if pg.title.is_empty() { &pg.id } else { &pg.title };
                     ui.scope(|ui| {
                         ui.set_max_width(room * 0.6);
-                        text::label(ui, title, Font::Body, p.text, Clip::End);
+                        text::label(ui, Tx::raw(title.as_str()), Font::Body, p.text, Clip::End);
                     });
                     let id = if pg.stock.is_empty() {
-                        pg.id.clone()
+                        Tx::raw(pg.id.clone())
                     } else {
-                        format!("{} \u{b7} stock {}", pg.id, pg.stock)
+                        tr!("{id} · stock {section}", id = &pg.id, section = &pg.stock)
                     };
-                    text::label(ui, &id, Font::Body, p.text_muted, Clip::End);
+                    text::label(ui, id, Font::Body, p.text_muted, Clip::End);
                 });
                 if resp.clicked() {
                     m.preview.closed = false;
@@ -503,11 +509,15 @@ fn draw_pages(ui: &mut Ui, m: &mut Model) {
                     let room = ui.available_width();
                     ui.scope(|ui| {
                         ui.set_max_width(room * 0.45);
-                        text::label(ui, label, Font::Body, p.text, Clip::End);
+                        text::label(ui, *label, Font::Body, p.text, Clip::End);
                     });
                     text::label(
                         ui,
-                        if action.is_empty() { "the stock section" } else { action },
+                        if action.is_empty() {
+                            Tx::from("the stock section")
+                        } else {
+                            Tx::raw(action.as_str())
+                        },
                         Font::Body,
                         p.text_muted,
                         Clip::End,
@@ -541,7 +551,9 @@ fn draw_vars(ui: &mut Ui, m: &mut Model) {
             let label = format!("{{{name}}}");
             let help =
                 if i < declared { "Declared by the layout" } else { "Set by an action in the preview" };
-            g.row(&label, help, PropFlags::READ_ONLY, 0, |ui| read_only(ui, value, Clip::End));
+            g.row(Tx::raw(label), help, PropFlags::READ_ONLY, 0, |ui| {
+                read_only(ui, Tx::raw(value.as_str()), Clip::End)
+            });
         }
     });
 }
@@ -567,7 +579,7 @@ fn draw_log(ui: &mut Ui, m: &mut Model) {
     list(ui, "pda_log", Vec2::new(0.0, metrics::ROW * n as f32 + 10.0), |l| {
         for (k, line) in lines.iter().enumerate() {
             l.row(&(n - 1 - k).to_string(), false, |ui| {
-                text::label(ui, line, Font::Body, p.text, Clip::End);
+                text::label(ui, crate::local::local_log_line(line), Font::Body, p.text, Clip::End);
             });
         }
     });
@@ -582,13 +594,13 @@ impl Document for PdaDoc {
         "pda"
     }
 
-    fn label(&self) -> String {
+    fn label(&self) -> Tx<'static> {
         let m = self.tab.m.lock();
         let name = match &self.target {
             Some(Target::Path(rel)) => base_name(rel),
             _ => base_name(&m.path),
         };
-        if name.is_empty() { "PDA".to_owned() } else { name }
+        if name.is_empty() { Tx::from("PDA") } else { Tx::raw(name) }
     }
 
     fn icon(&self) -> Icon {
@@ -603,9 +615,9 @@ impl Document for PdaDoc {
         (!rel.is_empty()).then_some(rel)
     }
 
-    fn tooltip(&self) -> Option<String> {
+    fn tooltip(&self) -> Option<Tx<'static>> {
         let rel = self.tab.m.lock().rel.clone();
-        Some(if rel.is_empty() { "The module's PDA interface".to_owned() } else { rel })
+        Some(if rel.is_empty() { Tx::from("The module's PDA interface") } else { Tx::raw(rel) })
     }
 
     fn dirty(&self) -> bool {
@@ -667,7 +679,7 @@ impl Document for PdaDoc {
             "aspect",
             "Aspect",
             &mut aspect,
-            &["4:3", "16:9"],
+            &["4:3", "16:9"].map(Tx::raw),
             "The device's shape: 4:3 draws the game's pda.xml, 16:9 its pda_16.xml",
             true,
         ) {
@@ -680,7 +692,7 @@ impl Document for PdaDoc {
             "lang",
             "Language",
             &mut lang_i,
-            &["rus", "eng"],
+            &["rus", "eng"].map(Tx::raw),
             "The language the texts show in: { rus = ..., eng = ... }",
             true,
         ) {
@@ -700,7 +712,7 @@ impl Document for PdaDoc {
             "zoom",
             "Zoom",
             &mut zoom_i,
-            &["Fit", "100%"],
+            &[Tx::from("Fit"), Tx::raw("100%")],
             "Fit the device into the canvas (F), or show the game's 1024 x 768 PDA pixel for pixel. The wheel zooms at the mouse; the right button drags.",
             true,
         ) {
@@ -730,7 +742,7 @@ impl Document for PdaDoc {
         if tb.action(
             "source",
             Icon::FileScript,
-            "Source",
+            Tx::ctx("pda", "Source"),
             "Show the layout's text under the preview",
             true,
             src,
@@ -870,19 +882,23 @@ impl Document for PdaDoc {
         let m = self.tab.m.lock();
         let page = m.preview.layout.find_page(&m.preview.page);
         let where_ = if !m.preview.stock.is_empty() {
-            format!("Stock {}", m.preview.stock)
+            tr!("Stock {section}", section = &m.preview.stock)
         } else {
-            page.filter(|p| !p.title.is_empty()).map_or_else(|| m.preview.page.clone(), |p| p.title.clone())
+            Tx::raw(
+                page.filter(|p| !p.title.is_empty())
+                    .map_or_else(|| m.preview.page.clone(), |p| p.title.clone()),
+            )
         };
         let scale = m.geom.map_or(1.0, |g| g.ky * m.ppp);
-        let text = format!(
-            "Page: {where_} \u{b7} {} \u{b7} {} \u{b7} {:.0}%",
-            m.preview.aspect.label(),
-            m.preview.lang,
-            scale * 100.0
+        let text = tr!(
+            "Page: {page} · {aspect} · {lang} · {zoom}",
+            page = where_,
+            aspect = m.preview.aspect.label(),
+            lang = m.preview.lang.as_str(),
+            zoom = format!("{:.0}%", scale * 100.0)
         );
         drop(m);
-        text::label(ui, &text, Font::Small, p.text_secondary, Clip::End);
+        text::label(ui, text, Font::Small, p.text_secondary, Clip::End);
     }
 
     fn shortcut(&mut self, _cx: &mut DocCx<'_>, chord: &gz_app::Chord) -> bool {

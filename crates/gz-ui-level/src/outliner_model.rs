@@ -85,6 +85,8 @@ pub struct Filter {
     pub hidden: Vec<ObjClass>,
     /// By Hierarchy (objects under the group that owns them) instead of By Type.
     pub hierarchy: bool,
+    /// The kinds in the order of their names in the window's language; empty: in English.
+    pub order: Vec<ObjClass>,
 }
 
 impl Filter {
@@ -283,8 +285,8 @@ impl Listing {
 pub fn compute(state: &SceneState, filter: &Filter, folds: &Folds) -> Listing {
     let terms = parse_terms(&filter.text);
     let filtering = filter.filtering();
-    let classes: Vec<ObjClass> =
-        crate::classes::listed().into_iter().filter(|c| state.count(*c) > 0).collect();
+    let order = if filter.order.is_empty() { crate::classes::listed() } else { filter.order.clone() };
+    let classes: Vec<ObjClass> = order.into_iter().filter(|c| state.count(*c) > 0).collect();
 
     let mut out = Listing::default();
     // per class: every object, and the ones the filter keeps

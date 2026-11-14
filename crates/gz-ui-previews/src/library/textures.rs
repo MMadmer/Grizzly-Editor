@@ -18,7 +18,7 @@ use gz_fmt_tex::{
 use gz_store::{Apply, State, Store, imbl};
 use gz_ui::grid::{Grid, color, combo, number, read_only, switch};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Button, Font, Icon, Kind, PropFlags, PropertyGrid, Tone, Toolbar, palette, state};
+use gz_ui::{Button, Font, Icon, Kind, PropFlags, PropertyGrid, Tone, Toolbar, Tx, palette, state, tr};
 use serde_json::{Map, Value, json};
 
 use super::keys::apply_texture;
@@ -26,7 +26,7 @@ use super::list::{Empty, LibraryList, find, shown};
 use super::stores::{LibraryFacts, LibraryStores, TexFacts};
 use super::texpick::{Names, texture_pick};
 use super::texsync::{import_picture, read_picture, sync_texture};
-use super::{LibraryDoc, LibraryLists, Settle, can_write, folder_text, pane, panes};
+use super::{LibraryDoc, LibraryLists, Settle, can_write, folder_text, folder_tx, pane, panes};
 use crate::local::local_heading;
 use crate::paths::{EditorDirs, list_files, texture_folder_name};
 use crate::pending::Pending;
@@ -383,19 +383,20 @@ impl TexLibDoc {
         let p = palette(&ctx);
         let params = self.params_of(item);
         let alpha = params.flags.contains(TextureFlags::HAS_ALPHA);
-        let fmt = params.fmt.label().unwrap_or("unknown");
-        let facts = format!(
-            "{} x {} \u{b7} {fmt}{}",
-            params.width,
-            params.height,
-            if alpha { " \u{b7} alpha" } else { "" }
+        let facts = crate::local::local_facts(
+            &ctx,
+            &[
+                Tx::raw(format!("{} x {}", params.width, params.height)),
+                params.fmt.label().map_or(Tx::from("unknown"), format_word),
+                if alpha { Tx::from("alpha") } else { Tx::EMPTY },
+            ],
         );
         let src = item.picture.to_string_lossy().into_owned();
         local_heading(
             ui,
-            &crate::paths::label_of(&item.name),
+            Tx::raw(crate::paths::label_of(&item.name)),
             Clip::End,
-            &[(&src, Clip::Start), (&facts, Clip::End)],
+            &[(Tx::raw(src), Clip::Start), (facts, Clip::End)],
         );
         ui.add_space(8.0);
         let Some(pv) = self.preview.as_mut().filter(|v| v.name == item.name) else { return };
@@ -453,11 +454,12 @@ impl TexLibDoc {
         PropertyGrid::new("texture_library").show(ui, |g| {
             token(
                 g,
-                "Type",
+                "Type".into(),
                 "What the game makes of the texture",
                 ro,
                 &mut p.ty.0,
                 &TYPE_TOKENS,
+                Tx::from,
                 &mut gesture,
             );
             if p.ty != before.ty {
@@ -465,10 +467,10 @@ impl TexLibDoc {
             }
             g.section("Source", true, None, |g| {
                 g.row("Width", "", PropFlags::READ_ONLY, 0, |ui| {
-                    read_only(ui, &p.width.to_string(), Clip::End)
+                    read_only(ui, Tx::raw(p.width.to_string()), Clip::End)
                 });
                 g.row("Height", "", PropFlags::READ_ONLY, 0, |ui| {
-                    read_only(ui, &p.height.to_string(), Clip::End)
+                    read_only(ui, Tx::raw(p.height.to_string()), Clip::End)
                 });
                 let alpha = if p.flags.contains(TextureFlags::HAS_ALPHA) { "present" } else { "absent" };
                 g.row("Alpha", "", PropFlags::READ_ONLY, 0, |ui| read_only(ui, alpha, Clip::End));
@@ -477,28 +479,30 @@ impl TexLibDoc {
                 TextureType::IMAGE | TextureType::CUBE_MAP => {
                     token(
                         g,
-                        "Format",
+                        "Format".into(),
                         "How the game texture is stored",
                         ro,
                         &mut p.fmt.0,
                         &format_tokens(),
+                        format_word,
                         &mut gesture,
                     );
                     g.section("Mip Maps", true, None, |g| {
                         flag(g, "Enabled", ro, &mut p.flags, TextureFlags::GENERATE_MIP_MAPS, &mut gesture);
                         token(
                             g,
-                            "Filter",
+                            "Filter".into(),
                             "How the smaller levels are made",
                             ro,
                             &mut p.mip_filter.0,
                             &mip_tokens(),
+                            Tx::raw,
                             &mut gesture,
                         );
                     });
                     g.section("Bump", true, None, |g| {
                         let was = p.bump_mode;
-                        token(g, "Mode", "", ro, &mut p.bump_mode.0, &BUMP_TOKENS, &mut gesture);
+                        token(g, "Mode".into(), "", ro, &mut p.bump_mode.0, &BUMP_TOKENS, Tx::from, &mut gesture);
                         if p.bump_mode != was {
                             p.apply_type_defaults();
                         }
@@ -570,22 +574,24 @@ impl TexLibDoc {
                 TextureType::NORMAL_MAP => {
                     token(
                         g,
-                        "Format",
+                        "Format".into(),
                         "How the game texture is stored",
                         PropFlags::READ_ONLY,
                         &mut p.fmt.0,
                         &format_tokens(),
+                        format_word,
                         &mut gesture,
                     );
                     g.section("Mip Maps", true, None, |g| {
                         flag(g, "Enabled", ro, &mut p.flags, TextureFlags::GENERATE_MIP_MAPS, &mut gesture);
                         token(
                             g,
-                            "Filter",
+                            "Filter".into(),
                             "How the smaller levels are made",
                             ro,
                             &mut p.mip_filter.0,
                             &mip_tokens(),
+                            Tx::raw,
                             &mut gesture,
                         );
                     });
@@ -593,11 +599,12 @@ impl TexLibDoc {
                 _ => {
                     token(
                         g,
-                        "Format",
+                        "Format".into(),
                         "How the game texture is stored",
                         PropFlags::READ_ONLY,
                         &mut p.fmt.0,
                         &format_tokens(),
+                        format_word,
                         &mut gesture,
                     );
                     details(g, ro, &mut p, names, &mut gesture);
@@ -732,37 +739,47 @@ pub(crate) fn material_tokens() -> Vec<(u32, &'static str)> {
     (0..=3).filter_map(|v| TextureMaterial(v).label().map(|l| (v, l))).collect()
 }
 
-/// A row picking one of a token list; a value the list lacks is shown by its number.
+/// A format's name in the window: one with words ("DXT1 Alpha", "8 bit (alpha)") is translated, a
+/// code ("DXT5", "BC7") is shown as it is.
+fn format_word(label: &'static str) -> Tx<'static> {
+    if label.contains(' ') { Tx::from(label) } else { Tx::raw(label) }
+}
+
+/// A row picking one of a token list; a value the list lacks is shown by its number. `shown`
+/// says whether a token's name is a word of the editor's own or a name shown as it is.
+#[allow(clippy::too_many_arguments)]
 fn token(
     g: &mut Grid<'_>,
-    label: &str,
-    help: &str,
+    label: Tx<'static>,
+    help: &'static str,
     flags: PropFlags,
     value: &mut u32,
-    tokens: &[(u32, &str)],
+    tokens: &[(u32, &'static str)],
+    shown: fn(&'static str) -> Tx<'static>,
     gesture: &mut String,
 ) {
+    let key = label.en().into_owned();
     g.row(label, help, flags, 0, |ui| {
         let unknown = format!("{value}");
-        let mut names: Vec<&str> = tokens.iter().map(|(_, n)| *n).collect();
+        let mut names: Vec<Tx<'_>> = tokens.iter().map(|(_, n)| shown(n)).collect();
         let mut cur = tokens.iter().position(|(v, _)| v == value).unwrap_or_else(|| {
-            names.push(&unknown);
+            names.push(Tx::raw(unknown.as_str()));
             names.len() - 1
         });
         if flags.contains(PropFlags::READ_ONLY) {
-            read_only(ui, names.get(cur).copied().unwrap_or(""), Clip::End);
-        } else if combo(ui, label, &mut cur, &names)
+            read_only(ui, names.get(cur).cloned().unwrap_or_default(), Clip::End);
+        } else if combo(ui, &key, &mut cur, &names)
             && let Some((v, _)) = tokens.get(cur)
         {
             *value = *v;
-            *gesture = label.to_owned();
+            gesture.clone_from(&key);
         }
     });
 }
 
 fn flag(
     g: &mut Grid<'_>,
-    label: &str,
+    label: &'static str,
     flags: PropFlags,
     value: &mut TextureFlags,
     bit: TextureFlags,
@@ -782,7 +799,7 @@ fn flag(
 #[allow(clippy::too_many_arguments)]
 fn whole(
     g: &mut Grid<'_>,
-    label: &str,
+    label: &'static str,
     flags: PropFlags,
     value: &mut i32,
     lo: i32,
@@ -792,7 +809,7 @@ fn whole(
 ) {
     g.row(label, "", flags, 0, |ui| {
         if flags.contains(PropFlags::READ_ONLY) {
-            read_only(ui, &value.to_string(), Clip::End);
+            read_only(ui, Tx::raw(value.to_string()), Clip::End);
             return;
         }
         let before = *value;
@@ -807,17 +824,17 @@ fn whole(
 #[allow(clippy::too_many_arguments)]
 fn real(
     g: &mut Grid<'_>,
-    label: &str,
+    label: &'static str,
     flags: PropFlags,
     value: &mut f32,
     speed: f32,
-    unit: &str,
+    unit: &'static str,
     key: &str,
     gesture: &mut String,
 ) {
     g.row(label, "", flags, 0, |ui| {
         if flags.contains(PropFlags::READ_ONLY) {
-            read_only(ui, &format!("{value}"), Clip::End);
+            read_only(ui, Tx::raw(format!("{value}")), Clip::End);
             return;
         }
         let before = *value;
@@ -829,13 +846,20 @@ fn real(
 }
 
 /// `0xAARRGGBB` as a swatch and its hex, the alpha kept.
-fn argb(g: &mut Grid<'_>, label: &str, flags: PropFlags, value: &mut u32, key: &str, gesture: &mut String) {
+fn argb(
+    g: &mut Grid<'_>,
+    label: &'static str,
+    flags: PropFlags,
+    value: &mut u32,
+    key: &str,
+    gesture: &mut String,
+) {
     g.row(label, "", flags, 0, |ui| {
         let v = *value;
         let mut c =
             Color32::from_rgba_unmultiplied((v >> 16) as u8, (v >> 8) as u8, v as u8, (v >> 24) as u8);
         if flags.contains(PropFlags::READ_ONLY) {
-            read_only(ui, &gz_ui::grid::color_hex(c), Clip::End);
+            read_only(ui, Tx::raw(gz_ui::grid::color_hex(c)), Clip::End);
         } else if color(ui, &mut c).changed() {
             let [r, gr, b, a] = c.to_srgba_unmultiplied();
             *value = (u32::from(a) << 24) | (u32::from(r) << 16) | (u32::from(gr) << 8) | u32::from(b);
@@ -847,8 +871,8 @@ fn argb(g: &mut Grid<'_>, label: &str, flags: PropFlags, value: &mut u32, key: &
 /// A texture of the library picked from its list, or none.
 fn pick(
     g: &mut Grid<'_>,
-    (key, label): (&str, &str),
-    help: &str,
+    (key, label): (&str, &'static str),
+    help: &'static str,
     flags: PropFlags,
     value: &mut gz_editor::SmolStr,
     names: Names<'_>,
@@ -856,7 +880,11 @@ fn pick(
 ) {
     g.row(label, help, flags, 0, |ui| {
         if flags.contains(PropFlags::READ_ONLY) {
-            read_only(ui, if value.is_empty() { "None" } else { value }, Clip::Start);
+            read_only(
+                ui,
+                if value.is_empty() { Tx::from("None") } else { Tx::raw(value.as_str()) },
+                Clip::Start,
+            );
             return;
         }
         if let Some(picked) = texture_pick(ui, key, value, names) {
@@ -867,7 +895,7 @@ fn pick(
 }
 
 fn details(g: &mut Grid<'_>, ro: PropFlags, p: &mut TextureParams, names: Names<'_>, gesture: &mut String) {
-    g.section("Details", true, None, |g| {
+    g.section(Tx::ctx("texture_detail", "Details"), true, None, |g| {
         flag(g, "Use As Diffuse", ro, &mut p.flags, TextureFlags::DIFFUSE_DETAIL, gesture);
         flag(g, "Use As Bump", ro, &mut p.flags, TextureFlags::BUMP_DETAIL, gesture);
         pick(
@@ -886,11 +914,12 @@ fn details(g: &mut Grid<'_>, ro: PropFlags, p: &mut TextureParams, names: Names<
     g.section("Material", true, None, |g| {
         token(
             g,
-            "Base",
+            Tx::ctx("texture_material", "Base"),
             "The lighting model the game blends from",
             ro,
             &mut p.material.0,
             &material_tokens(),
+            Tx::raw,
             gesture,
         );
         let mut w = p.material_weight;
@@ -980,13 +1009,12 @@ fn confirm_import(editor: &Arc<Editor>, items: Vec<TexItem>, failed: &super::Sav
             }
             let spec = gz_ui::ConfirmSpec {
                 id: "import_replaces".to_owned(),
-                title: "Import New Textures".to_owned(),
-                headline: "These pictures replace textures the library has:".to_owned(),
-                items: replaced.iter().take(10).cloned().collect(),
+                title: "Import New Textures".into(),
+                headline: "These pictures replace textures the library has:".into(),
+                items: replaced.iter().take(10).cloned().map(Tx::raw).collect(),
                 total: replaced.len(),
-                consequence: "Their source pictures are replaced and their game textures built again."
-                    .to_owned(),
-                action: "Replace".to_owned(),
+                consequence: "Their source pictures are replaced and their game textures built again.".into(),
+                action: "Replace".into(),
                 destructive: true,
             };
             let line = gz_ui::dialog::confirm(ctx, asker, spec, move |reply| {
@@ -1412,8 +1440,8 @@ impl Document for TexLibDoc {
     fn kind(&self) -> &'static str {
         KIND
     }
-    fn label(&self) -> String {
-        if self.import_mode() { "New Textures".to_owned() } else { "Texture Library".to_owned() }
+    fn label(&self) -> Tx<'static> {
+        Tx::from(if self.import_mode() { "New Textures" } else { "Texture Library" })
     }
     fn icon(&self) -> Icon {
         Icon::FileTexture
@@ -1422,12 +1450,12 @@ impl Document for TexLibDoc {
         // New Textures is another target of the same tab: switching to it asks while the library is dirty
         self.import_mode().then(|| "import".to_owned())
     }
-    fn tooltip(&self) -> Option<String> {
-        Some(if self.import_mode() {
-            "Textures found in the import folder".to_owned()
+    fn tooltip(&self) -> Option<Tx<'static>> {
+        Some(Tx::from(if self.import_mode() {
+            "Textures found in the import folder"
         } else {
-            "The texture descriptions of the editor's library".to_owned()
-        })
+            "The texture descriptions of the editor's library"
+        }))
     }
     fn dirty(&self) -> bool {
         self.dirty_now()
@@ -1526,11 +1554,13 @@ impl Document for TexLibDoc {
         if let Some(found) = self.import.as_ref().and_then(Pending::get)
             && found.is_empty()
         {
-            let text_ =
-                format!("Nothing in {} is new to the library.", folder_text(&self.editor, &self.dirs.import));
+            let text_ = tr!(
+                "Nothing in {place} is new to the library.",
+                place = folder_tx(&self.editor, &self.dirs.import)
+            );
             // a line over the tab, never a dialog: a command's caller starts the check too
-            state::toast(ui.ctx(), Tone::Info, &text_);
-            self.editor.log.info(&text_);
+            self.editor.log.info(text_.en());
+            state::toast(ui.ctx(), Tone::Info, text_);
             self.back_to_library();
         }
         let items = self.items();
@@ -1546,11 +1576,14 @@ impl Document for TexLibDoc {
         let none = all.is_empty();
         let import = self.import_mode();
         let where_ = if import {
-            format!("Nothing in {} is new to the library.", folder_text(&self.editor, &self.dirs.import))
+            tr!(
+                "Nothing in {place} is new to the library.",
+                place = folder_tx(&self.editor, &self.dirs.import)
+            )
         } else {
-            format!(
-                "The library lists the .tga images in {}. Drop pictures here to add them.",
-                folder_text(&self.editor, &self.dirs.textures)
+            tr!(
+                "The library lists the .tga images in {place}. Drop pictures here to add them.",
+                place = folder_tx(&self.editor, &self.dirs.textures)
             )
         };
         // a library with nothing in it says so once, over the whole tab, with what fills it
@@ -1560,7 +1593,7 @@ impl Document for TexLibDoc {
                 Icon::FileTexture,
                 "No textures",
                 &where_,
-                (!self.read_only()).then_some("Check New Textures"),
+                (!self.read_only()).then_some(Tx::from("Check New Textures")),
             );
             if act {
                 self.start_import();
@@ -1570,13 +1603,13 @@ impl Document for TexLibDoc {
         }
         let [list_r, preview_r, details_r] = panes(ui, KIND);
         let empty = if items.is_none() {
-            Empty { title: "Reading the library...", text: "", action: None }
+            Empty { title: Tx::from("Reading the library..."), text: Tx::EMPTY, action: None }
         } else if import {
-            Empty { title: "No new textures", text: &where_, action: None }
+            Empty { title: Tx::from("No new textures"), text: where_.borrow(), action: None }
         } else {
             Empty {
-                title: "No textures of these kinds",
-                text: "The Types filter hides every texture in the library.",
+                title: Tx::from("No textures of these kinds"),
+                text: Tx::from("The Types filter hides every texture in the library."),
                 action: None,
             }
         };
@@ -1586,11 +1619,10 @@ impl Document for TexLibDoc {
         let mut import_now = false;
         let out = pane(ui, list_r, "texture_library.list.pane", false, false, |ui| {
             if fresh > 0 && !self.read_only() {
-                let line = format!(
-                    "{fresh} new {} in the import folder.",
-                    if fresh == 1 { "picture" } else { "pictures" }
-                );
-                import_now = state::banner(ui, Tone::Info, &line, Some("Check"), None).is_some();
+                let line = tr!("{n} new {n:picture|pictures} in the import folder.", n = fresh);
+                import_now =
+                    state::banner(ui, Tone::Info, line, Some(Tx::ctx("texture_library", "Check")), None)
+                        .is_some();
                 ui.add_space(4.0);
             }
             self.list.draw(ui, KIND, &keys, &rows, &selected, &empty)
@@ -1632,15 +1664,24 @@ impl Document for TexLibDoc {
         let keys: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
         let rows = shown(&keys, &|i| items.get(i).is_some_and(|t| self.visible(t)), &self.list.search);
         let changed = self.store.snapshot().edits.len();
-        let mut line = format!("{} textures", items.len());
-        if rows.len() != items.len() {
-            line.push_str(&format!(" \u{b7} {} shown", rows.len()));
-        }
-        if changed > 0 && !self.import_mode() {
-            line.push_str(&format!(" \u{b7} {changed} changed"));
-        }
+        let line = crate::local::local_facts(
+            ui.ctx(),
+            &[
+                tr!("{n} {n:texture|textures}", n = items.len()),
+                if rows.len() == items.len() {
+                    Tx::EMPTY
+                } else {
+                    tr!("previews" => "{n} shown", n = rows.len())
+                },
+                if changed > 0 && !self.import_mode() {
+                    tr!("previews" => "{n} changed", n = changed)
+                } else {
+                    Tx::EMPTY
+                },
+            ],
+        );
         let p = palette(ui.ctx());
-        text::label(ui, &line, Font::Small, p.text_secondary, Clip::End);
+        text::label(ui, line, Font::Small, p.text_secondary, Clip::End);
     }
 
     fn edit(&mut self, _cx: &mut DocCx<'_>, action: EditAction, run: bool) -> bool {

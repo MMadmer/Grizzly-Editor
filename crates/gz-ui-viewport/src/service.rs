@@ -427,6 +427,8 @@ pub struct ViewState {
     pub status: Option<(String, Instant)>,
     /// What is behind the scene: the theme's canvas colour, as the pane last drew it.
     pub background: Color,
+    /// The theme's lines over the scene: the grid, its every tenth line, the Wireframe edges.
+    pub scene_lines: [Color; 3],
     /// The pane as last laid out: its size in points and the points' pixels (`viewport.gesture`).
     pub pane_pt: [f32; 2],
     pub ppp: f32,
@@ -473,8 +475,13 @@ impl Default for ViewState {
             brush: Brush::default(),
             paint_layer: gz_scene::SceneMode::Details,
             status: None,
-            // the kit's token `canvas` (151419) until the pane draws with the theme's
+            // the kit's tokens `canvas` (151419) and `scene.*` until the pane draws with the theme's
             background: Color::rgb(0x15, 0x14, 0x19),
+            scene_lines: [
+                Color::rgb(0x90, 0x90, 0x90),
+                Color::rgb(0xb4, 0xb4, 0xb4),
+                Color::rgb(0xd2, 0xd2, 0xd2),
+            ],
             pane_pt: [0.0, 0.0],
             ppp: 1.0,
             scene_key: None,
@@ -534,6 +541,7 @@ impl ViewState {
             prefs: self.prefs,
             size: self.size,
             background: self.background,
+            scene_lines: self.scene_lines,
             ghost: self.ghost.clone(),
             game: GameDrawn {
                 enabled: g.enabled,
@@ -556,6 +564,7 @@ struct Drawn {
     prefs: Prefs,
     size: [u32; 2],
     background: Color,
+    scene_lines: [Color; 3],
     ghost: Option<Ghost>,
     game: GameDrawn,
 }
@@ -1294,6 +1303,7 @@ impl Viewport {
                 }
                 view.grid.cells = st.prefs.grid_count.max(1);
                 view.grid.cell_size = st.prefs.grid_size.max(0.01);
+                [view.grid.color, view.grid.thick_color, view.wire_color] = st.scene_lines;
                 if preview {
                     view = view.as_preview();
                 }
@@ -1756,13 +1766,14 @@ impl Viewport {
             cam.provide(move || {
                 let ed = weak.upgrade()?;
                 let vp = ed.services.get::<Viewport>()?;
-                let position = vp.read(|s| s.nav.position.to_array());
+                let (position, direction) =
+                    vp.read(|s| (s.nav.position.to_array(), s.nav.direction().to_array()));
                 let level = SceneService::of_opt(&ed)
                     .map(|s| s.store.snapshot())
                     .filter(|s| s.valid)
                     .map(|s| s.meta.name())
                     .filter(|n| !n.is_empty());
-                Some(gz_editor::CameraPose { position, level })
+                Some(gz_editor::CameraPose { position, direction: Some(direction), level })
             });
         }
         let settings = gz_app::EditorSettings::of(editor);

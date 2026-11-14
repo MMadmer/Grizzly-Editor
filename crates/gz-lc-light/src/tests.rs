@@ -128,7 +128,7 @@ fn deflect(g: &mut LcGlobalData, start: FaceId) -> DeflId {
 }
 
 fn finish_mesh(g: &mut LcGlobalData) {
-    g.calc_normals(Smoothing::Angle);
+    g.calc_normals(Smoothing::Angle, &Ctl::quiet()).unwrap();
     g.light_prepare();
 }
 
@@ -624,13 +624,21 @@ fn a_stopped_compile_says_so() {
     cancel.cancel();
     let ctl = Ctl::with_cancel(&cancel);
     assert!(matches!(g.light_deflectors(&ctl), Err(LcError::Cancelled)));
-    let stages = std::sync::Mutex::new(Vec::new());
+    // the phase's name is the compiler's: the deflectors say only how far they are
+    let seen = std::sync::Mutex::new((Vec::new(), 0usize, 0usize));
     let report = |r: Report<'_>| {
-        if let Report::Stage(s) = r {
-            stages.lock().unwrap().push(s.to_string());
+        let mut s = seen.lock().unwrap();
+        match r {
+            Report::Stage(t) => s.0.push(t.to_string()),
+            Report::Progress { done, total } => {
+                s.1 = s.1.max(done);
+                s.2 = total;
+            }
         }
     };
     let quiet = gz_task::Cancel::new();
     g.light_deflectors(&Ctl::new(&quiet, &report)).unwrap();
-    assert_eq!(stages.lock().unwrap().as_slice(), ["Lighting..."]);
+    let (stages, done, total) = seen.into_inner().unwrap();
+    assert!(stages.is_empty(), "{stages:?}");
+    assert!(total > 0 && done == total, "{done} of {total}");
 }

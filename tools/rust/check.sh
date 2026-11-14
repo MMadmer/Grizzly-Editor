@@ -10,7 +10,8 @@
 #     that binary instead;
 #   - no command without a card: the registry has no way to add one (`Registry::cmd` takes a card and a
 #     parameter type) and `help` names none without;
-#   - the text encodings, the tests' files, the executables' icon, the third-party notices;
+#   - the text encodings, the tests' files, the window's text through the kit (tools/rust/check_ui_text.py), the
+#     executables' icon, the third-party notices;
 #   - no forbidden word in the code (tools/rust/check_words.py), the last step.
 # Exit code 1 when any of them fails.
 set -u
@@ -125,6 +126,16 @@ if python tools/rust/check_test_files.py crates > Intermediate/check-test-files.
 else
     head -20 Intermediate/check-test-files.txt
     echo "test files: program files in test code (a harmless name, or // program-files: in memory)"
+    bad=1
+fi
+
+echo "== ui text"
+# the window's language: egui's own text calls translate nothing, so a surface draws text through the kit
+if python tools/rust/check_ui_text.py > Intermediate/check-ui-text.txt 2>&1; then
+    echo "ui text: every surface draws its text through the kit's Tx"
+else
+    head -20 Intermediate/check-ui-text.txt
+    echo "ui text: egui text calls past the kit's language boundary (docs/UI_DESIGN.md section 9)"
     bad=1
 fi
 

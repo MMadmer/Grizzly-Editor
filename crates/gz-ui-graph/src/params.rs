@@ -15,7 +15,7 @@ use gz_nq::catalog::{self, Catalog, Kind, Param, USE_COND};
 use gz_nq::{PickerType, text};
 use gz_ui::grid::{self, Grid, PropFlags};
 use gz_ui::menu::menu_popup;
-use gz_ui::{Clip, Font, Icon, PickItem, PickList, PropertyGrid, Tone, palette};
+use gz_ui::{Clip, Font, Icon, PickItem, PickList, PropertyGrid, Tone, Tx, palette, tr};
 use smol_str::SmolStr;
 
 use crate::derived::DocData;
@@ -24,16 +24,18 @@ use crate::look;
 /// What the next row says of itself.
 #[derive(Clone, Debug, Default)]
 pub struct Row {
-    pub label: String,
-    pub help: String,
+    /// The editor's own words (a parameter's name read as a label is `Tx::ui`), shown in the
+    /// window's language.
+    pub label: Tx<'static>,
+    pub help: Tx<'static>,
     pub flags: PropFlags,
     pub depth: u32,
 }
 
 impl Row {
     #[must_use]
-    pub fn new(label: &str, help: &str, depth: u32) -> Self {
-        Self { label: label.to_owned(), help: help.to_owned(), flags: PropFlags::NONE, depth }
+    pub fn new(label: impl Into<Tx<'static>>, help: impl Into<Tx<'static>>, depth: u32) -> Self {
+        Self { label: label.into(), help: help.into(), flags: PropFlags::NONE, depth }
     }
 
     #[must_use]
@@ -43,15 +45,19 @@ impl Row {
     }
 
     #[must_use]
-    pub fn more_help(mut self, text_: &str) -> Self {
-        if !text_.is_empty() {
-            self.help =
-                if self.help.is_empty() { text_.to_owned() } else { format!("{}. {text_}", self.help) };
+    pub fn more_help(mut self, text_: impl Into<Tx<'static>>) -> Self {
+        let more = text_.into();
+        if !more.is_empty() {
+            self.help = if self.help.is_empty() {
+                more
+            } else {
+                tr!("help" => "{help}. {more}", help = std::mem::take(&mut self.help), more = more)
+            };
         }
         self
     }
 
-    fn nested(&self, label: &str, help: &str) -> Row {
+    fn nested(&self, label: impl Into<Tx<'static>>, help: impl Into<Tx<'static>>) -> Row {
         Row::new(label, help, self.depth + 1)
     }
 }
@@ -63,19 +69,20 @@ pub struct TextEdit {
     pub code: bool,
     pub target: String,
     pub apply: bool,
-    pub title: String,
+    /// What is edited: the field's label.
+    pub title: Tx<'static>,
     pub text: String,
     pub check: String,
 }
 
 impl TextEdit {
-    pub fn open_for(&mut self, target: &str, title: &str, text_: &str, code: bool) {
+    pub fn open_for(&mut self, target: &str, title: impl Into<Tx<'static>>, text_: &str, code: bool) {
         *self = TextEdit {
             open: true,
             code,
             target: target.to_owned(),
             apply: false,
-            title: title.to_owned(),
+            title: title.into(),
             text: text_.to_owned(),
             check: String::new(),
         };
@@ -97,7 +104,7 @@ impl TextEdit {
 pub struct PickState {
     pub anchor: Pos2,
     /// The rows of the popup that is up and the note of an empty one.
-    cache: Option<(Id, Vec<PickItem>, String)>,
+    cache: Option<(Id, Vec<PickItem>, Tx<'static>)>,
 }
 
 /// What the editors read and where they keep their transient state.
@@ -133,7 +140,14 @@ pub fn grid<R>(
 }
 
 /// A row that only says something (a count, "Pick the task first").
-pub fn text_row(ui: &mut Ui, role: &'static str, salt: impl Hash + std::fmt::Debug, row: &Row, value: &str) {
+pub fn text_row<'a>(
+    ui: &mut Ui,
+    role: &'static str,
+    salt: impl Hash + std::fmt::Debug,
+    row: &Row,
+    value: impl Into<Tx<'a>>,
+) {
+    let value = value.into();
     grid(ui, role, salt, |g| {
         g.row(&row.label, &row.help, row.flags | PropFlags::READ_ONLY, row.depth, |ui| {
             grid::read_only(ui, value, Clip::End)
@@ -142,7 +156,7 @@ pub fn text_row(ui: &mut Ui, role: &'static str, salt: impl Hash + std::fmt::Deb
 }
 
 /// A button under the rows it adds to (Add Objective, Add Row): Ghost, indented like them.
-pub fn add_button(ui: &mut Ui, label: &str, depth: u32) -> bool {
+pub fn add_button(ui: &mut Ui, label: &'static str, depth: u32) -> bool {
     let mut clicked = false;
     ui.horizontal(|ui| {
         ui.add_space(12.0 * depth as f32 + 6.0);
@@ -171,25 +185,38 @@ fn opt_str(s: &str) -> Value {
     if s.is_empty() { Value::Nil } else { Value::from(s) }
 }
 
-/// A combo over strings with an "unset" first row: returns whether it changed.
-fn combo_field(ui: &mut Ui, salt: &str, cur: &mut String, items: &[String], empty: Option<&str>) -> bool {
-    let mut options: Vec<&str> = Vec::with_capacity(items.len() + 2);
-    if let Some(e) = empty {
-        options.push(e);
-    }
-    options.extend(items.iter().map(String::as_str));
+/// A combo over strings (values, shown as they are) with an "unset" first row (the editor's own
+/// words): returns whether it changed.
+fn combo_field(
+    ui: &mut Ui,
+    salt: &str,
+    cur: &mut String,
+    items: &[String],
+    empty: Option<Tx<'static>>,
+) -> bool {
+    let mut values: Vec<&str> = Vec::with_capacity(items.len() + 1);
+    values.extend(items.iter().map(String::as_str));
     // a value the list does not hold is kept and shown
     let stray = !cur.is_empty() && !items.iter().any(|i| i == cur);
     if stray {
-        options.push(cur.as_str());
+        values.push(cur.as_str());
     }
-    let mut at =
-        if cur.is_empty() { 0 } else { options.iter().position(|o| *o == cur.as_str()).unwrap_or(0) };
-    let owned: Vec<String> = options.iter().map(|s| (*s).to_owned()).collect();
-    let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
-    if grid::combo(ui, salt, &mut at, &refs) {
-        let picked = refs.get(at).copied().unwrap_or("");
-        *cur = if empty.is_some() && at == 0 { String::new() } else { picked.to_owned() };
+    let first = usize::from(empty.is_some());
+    let mut at = if cur.is_empty() {
+        0
+    } else {
+        values.iter().position(|o| *o == cur.as_str()).map_or(0, |i| i + first)
+    };
+    let mut options: Vec<Tx<'_>> = Vec::with_capacity(values.len() + 1);
+    let has_empty = empty.is_some();
+    options.extend(empty);
+    options.extend(values.iter().map(|v| Tx::raw(*v)));
+    if grid::combo(ui, salt, &mut at, &options) {
+        *cur = if has_empty && at == 0 {
+            String::new()
+        } else {
+            values.get(at - first).map_or_else(String::new, |v| (*v).to_owned())
+        };
         return true;
     }
     false
@@ -202,7 +229,7 @@ fn combo_row(
     row: &Row,
     cur: &mut String,
     items: &[String],
-    empty: Option<&str>,
+    empty: Option<Tx<'static>>,
 ) -> bool {
     grid(ui, role, salt, |g| {
         g.row(&row.label, &row.help, row.flags, row.depth, |ui| combo_field(ui, "v", cur, items, empty))
@@ -233,7 +260,7 @@ fn number_row(
     row: &Row,
     v: &mut f32,
     speed: f32,
-    unit: &str,
+    unit: &'static str,
 ) -> bool {
     grid(ui, role, salt, |g| {
         g.row(&row.label, &row.help, row.flags, row.depth, |ui| grid::number(ui, v, speed, unit).changed())
@@ -361,7 +388,7 @@ impl ParamCx<'_> {
 
     /// The rows a picker of a type offers, and the note of an empty one:
     /// every entry, once; the kit's list ranks them as the author types.
-    fn pick_rows(&self, ty: &str) -> (Vec<PickItem>, String) {
+    fn pick_rows(&self, ty: &str) -> (Vec<PickItem>, Tx<'static>) {
         let mut rows: Vec<PickItem> = Vec::new();
         let doc_scoped = matches!(
             ty,
@@ -377,15 +404,26 @@ impl ParamCx<'_> {
                 | "global_name"
         );
         if doc_scoped {
-            let mut push = |id: &str, extra: &str| rows.push(PickItem::new(id, id).detail(extra));
+            // ids and names are data; the second line is data or the editor's word for a kind
+            let mut push = |id: &str, extra: Tx<'static>| {
+                rows.push(PickItem::new(id, Tx::raw(id.to_owned())).detail(extra));
+            };
             match ty {
-                "task_id" => self.graph.tasks.iter().for_each(|t| push(&t.id, "")),
-                "var_name" => self.graph.vars.iter().for_each(|v| push(&v.name, "")),
-                "global_name" => self.data.globals.iter().for_each(|(n, v)| push(n, &format!("= {v}"))),
-                "node_id" => self.graph.nodes.iter().for_each(|n| push(&n.id, "")),
+                "task_id" => self.graph.tasks.iter().for_each(|t| push(&t.id, Tx::EMPTY)),
+                "var_name" => self.graph.vars.iter().for_each(|v| push(&v.name, Tx::EMPTY)),
+                "global_name" => {
+                    self.data.globals.iter().for_each(|(n, v)| push(n, Tx::raw(format!("= {v}"))))
+                }
+                "node_id" => self.graph.nodes.iter().for_each(|n| push(&n.id, Tx::EMPTY)),
                 "ref_name" => {
                     for (r, kind) in gz_nq::validate::declared_refs(self.graph, self.cat) {
-                        push(&r, if matches!(kind, "squad" | "object" | "item") { kind } else { "" });
+                        let extra = match kind {
+                            "squad" => Tx::ctx("ref_kind", "squad"),
+                            "object" => Tx::ctx("ref_kind", "object"),
+                            "item" => Tx::ctx("ref_kind", "item"),
+                            _ => Tx::EMPTY,
+                        };
+                        push(&r, extra);
                     }
                 }
                 "quest_id" | "behaviour_id" => {
@@ -396,26 +434,27 @@ impl ParamCx<'_> {
                         .iter()
                         .filter(|g| g.behaviour == want && g.readable && !g.id.is_empty())
                     {
-                        push(&g.id, &g.path);
+                        push(&g.id, Tx::raw(g.path.clone()));
                     }
                 }
-                "role" => self.graph.roles.iter().for_each(|r| push(&r.name, "")),
+                "role" => self.graph.roles.iter().for_each(|r| push(&r.name, Tx::EMPTY)),
                 "character_id" => {
                     for c in self.data.characters.iter() {
                         let extra = if c.template {
-                            "template - cannot be spawned".to_owned()
+                            Tx::from("template - cannot be spawned")
                         } else if c.name.is_empty() {
-                            c.file.clone()
+                            Tx::raw(c.file.clone())
                         } else {
-                            c.name.clone()
+                            Tx::raw(c.name.clone())
                         };
-                        push(&c.id, &extra);
+                        push(&c.id, extra);
                     }
                 }
-                _ => self.data.way_paths.iter().for_each(|w| push(&w.id, &w.extra)),
+                // a way path's second line is the scene's
+                _ => self.data.way_paths.iter().for_each(|w| push(&w.id, Tx::raw(w.extra.clone()))),
             }
-            let note = if !rows.is_empty() {
-                String::new()
+            let note: Tx<'static> = if !rows.is_empty() {
+                Tx::EMPTY
             } else {
                 match ty {
                     "way_path" => "No way paths in the open scene - draw one with the Way tool",
@@ -426,21 +465,22 @@ impl ParamCx<'_> {
                     _ if self.behaviour => "Nothing declared in this graph",
                     _ => "Nothing declared in this quest",
                 }
-                .to_owned()
+                .into()
             };
             return (rows, note);
         }
         let Some(t) = PickerType::from_name(ty) else {
-            return (rows, "No index for this parameter".to_owned());
+            return (rows, "No index for this parameter".into());
         };
         let Some(p) = self.pickers().filter(|p| p.available()) else {
-            return (rows, "Link a game to get suggestions".to_owned());
+            return (rows, "Link a game to get suggestions".into());
         };
+        // the linked game's ids and names
         for e in p.entries(t) {
             let label = if e.name.is_empty() { e.id.clone() } else { format!("{}  -  {}", e.id, e.name) };
-            rows.push(PickItem::new(e.id.clone(), label).detail(e.extra.clone()));
+            rows.push(PickItem::new(e.id.clone(), Tx::raw(label)).detail(Tx::raw(e.extra.clone())));
         }
-        let note = if rows.is_empty() { "The linked game has none".to_owned() } else { String::new() };
+        let note = if rows.is_empty() { Tx::from("The linked game has none") } else { Tx::EMPTY };
         (rows, note)
     }
 
@@ -501,7 +541,7 @@ pub fn draw_params(ui: &mut Ui, cx: &mut ParamCx<'_>, k: &Kind, params: &mut Val
         for (i, key) in unknown.iter().enumerate() {
             let mut v = params.get(key).cloned().unwrap_or_default();
             let row = Row::new(
-                &format!("{key} (unknown)"),
+                tr!("{key} (unknown)", key = key.as_str()),
                 "Not a parameter of this kind: kept as written, in Lua",
                 depth,
             )
@@ -527,14 +567,15 @@ pub fn draw_param(
     let mut v = params.get(&p.name).cloned().unwrap_or_default();
     // a parameter another form ruled out stays visible but dead
     let ruled_out = catalog::form_ruled_out(kind, &p.name, params);
-    let mut help = format!("{}: {}", p.name, p.ty);
+    // the parameter's name and type as the file writes them, then what the editor says of it
+    let mut help = Tx::raw(format!("{}: {}", p.name, p.ty));
     if let Some(d) = &p.default {
-        help.push_str(&format!(" (default {d})"));
+        help = tr!("help" => "{help} (default {value})", help = help, value = d.as_str());
     }
     if ruled_out {
-        help.push_str(&format!(". Not used: another form of {kind} is set"));
+        help = tr!("help" => "{help}. Not used: another form of {kind} is set", help = help, kind = kind);
     }
-    let mut row = Row::new(&look::pretty(&p.name), &help, depth);
+    let mut row = Row::new(Tx::ui_in("param", look::pretty(&p.name)), help, depth);
     if p.required {
         row = row.flags(PropFlags::REQUIRED);
     }
@@ -650,8 +691,8 @@ pub fn typed(
             let mut cur = v.as_str().unwrap_or("").to_owned();
             let empty = p
                 .and_then(|p| p.default.as_deref())
-                .map_or_else(|| "(unset)".to_owned(), |d| format!("(default: {d})"));
-            if combo_row(ui, role, salt, row, &mut cur, &items, Some(&empty)) {
+                .map_or_else(|| Tx::from("(unset)"), |d| tr!("(default: {value})", value = d));
+            if combo_row(ui, role, salt, row, &mut cur, &items, Some(empty)) {
                 *v = opt_str(&cur);
                 return true;
             }
@@ -746,9 +787,12 @@ pub fn picked(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, ty: &str
         open = g.trailing(Icon::More, "Pick from the list");
         if unknown {
             let list = pt.map_or_else(|| ty.to_owned(), |t| t.name().to_owned());
-            let why =
-                format!("Nothing named '{s}' is in the {list} list: place it first, or pick one that exists");
-            g.message(Tone::Error, &why);
+            let why = tr!(
+                "Nothing named '{name}' is in the {list} list: place it first, or pick one that exists",
+                name = s.as_str(),
+                list = list
+            );
+            g.message(Tone::Error, why);
         }
     });
     if open {
@@ -805,9 +849,9 @@ pub fn draw_text(
                 s = applied;
                 edited = true;
             }
-            let lr = row.nested(key, &row.help);
-            let what = format!("{} ({key})", row.label);
-            edited |= line_field(ui, cx, &format!("{salt}/lang{i}"), &lr, &mut s, multiline, &t, &what);
+            let lr = row.nested(Tx::raw(key.to_string()), row.help.clone());
+            let what = tr!("dlg.nq_text" => "{label} ({language})", label = row.label.clone(), language = key.as_str());
+            edited |= line_field(ui, cx, &format!("{salt}/lang{i}"), &lr, &mut s, multiline, &t, what);
             if edited {
                 v.set(key, s);
                 ch = true;
@@ -828,7 +872,7 @@ pub fn draw_text(
         let changed = g
             .row(&row.label, &row.help, row.flags, row.depth, |ui| {
                 if has_lines {
-                    grid::read_only(ui, &first_line(&s), Clip::End);
+                    grid::read_only(ui, Tx::raw(first_line(&s)), Clip::End);
                     false
                 } else {
                     grid::text_field(ui, &mut s).changed()
@@ -847,7 +891,7 @@ pub fn draw_text(
         }
     });
     if edit {
-        cx.text_edit.open_for(&target, &row.label, &s, false);
+        cx.text_edit.open_for(&target, row.label.clone(), &s, false);
     }
     if per_lang {
         let mut t = Value::table();
@@ -867,7 +911,7 @@ fn line_field(
     s: &mut String,
     multiline: bool,
     target: &str,
-    what: &str,
+    what: Tx<'static>,
 ) -> bool {
     let role = cx.role;
     let has_lines = s.contains('\n');
@@ -876,7 +920,7 @@ fn line_field(
         let c = g
             .row(&row.label, &row.help, row.flags, row.depth, |ui| {
                 if has_lines {
-                    grid::read_only(ui, &first_line(s), Clip::End);
+                    grid::read_only(ui, Tx::raw(first_line(s)), Clip::End);
                     false
                 } else {
                     grid::text_field(ui, s).changed()
@@ -959,7 +1003,7 @@ fn mode_row(
     mode: &mut String,
     list: &[String],
 ) -> bool {
-    combo_row(ui, role, salt, row, mode, list, Some("(unset)"))
+    combo_row(ui, role, salt, row, mode, list, Some("(unset)".into()))
 }
 
 fn fresh_pos(level: &str, radius: Option<f64>) -> Value {
@@ -1031,7 +1075,7 @@ pub fn npc_ref(
                 ui,
                 cx,
                 &format!("{salt}/value"),
-                &Row::new(&look::pretty(m), "", d),
+                &Row::new(Tx::ui_in("param", look::pretty(m)), "", d),
                 pick_type_of(m),
                 &mut s,
             ) {
@@ -1094,7 +1138,7 @@ pub fn object_ref(
             ui,
             cx,
             &format!("{salt}/value"),
-            &row.nested(&look::pretty(&mode), ""),
+            &row.nested(Tx::ui_in("param", look::pretty(&mode)), ""),
             pick_type_of(&mode),
             &mut s,
         ) {
@@ -1122,12 +1166,18 @@ pub fn objective_id(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v:
             false
         }
         Some(t) if ids.is_empty() => {
-            text_row(ui, cx.role, salt, row, &format!("The task '{}' has no objectives yet", t.id));
+            text_row(
+                ui,
+                cx.role,
+                salt,
+                row,
+                tr!("The task '{id}' has no objectives yet", id = t.id.as_str()),
+            );
             false
         }
         Some(_) => {
             let mut cur = v.as_str().unwrap_or("").to_owned();
-            if combo_row(ui, cx.role, salt, row, &mut cur, &ids, Some("(unset)")) {
+            if combo_row(ui, cx.role, salt, row, &mut cur, &ids, Some("(unset)".into())) {
                 *v = opt_str(&cur);
                 return true;
             }
@@ -1190,7 +1240,7 @@ pub fn place(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut V
                 ui,
                 cx,
                 &format!("{salt}/value"),
-                &Row::new(&look::pretty(m), "", d),
+                &Row::new(Tx::ui_in("param", look::pretty(m)), "", d),
                 pick_type_of(m),
                 &mut s,
             ) {
@@ -1318,7 +1368,7 @@ pub fn destination(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: 
                 ui,
                 cx,
                 &format!("{salt}/value"),
-                &Row::new(&look::pretty(m), "", d),
+                &Row::new(Tx::ui_in("param", look::pretty(m)), "", d),
                 pick_type_of(m),
                 &mut s,
             ) {
@@ -1357,8 +1407,12 @@ pub fn who(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Val
                 }
                 for r in roles {
                     let mut on = picked_roles.contains(&r.name);
-                    let cap = if r.many { format!("{} (group)", r.name) } else { r.name.clone() };
-                    if gz_ui::Check::new(&mut on, &cap).show(ui).changed() {
+                    let cap = if r.many {
+                        tr!("{role} (group)", role = r.name.as_str())
+                    } else {
+                        Tx::raw(r.name.clone())
+                    };
+                    if gz_ui::Check::new(&mut on, cap).show(ui).changed() {
                         if on {
                             picked_roles.push(r.name.clone());
                         } else {
@@ -1370,8 +1424,8 @@ pub fn who(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Val
                 // a stray name can still be unticked
                 for st in &stray {
                     let mut on = true;
-                    let cap = format!("{st} (not a role)");
-                    if gz_ui::Check::new(&mut on, &cap).show(ui).changed() && !on {
+                    let cap = tr!("{role} (not a role)", role = st.as_str());
+                    if gz_ui::Check::new(&mut on, cap).show(ui).changed() && !on {
                         picked_roles.retain(|p| p != st);
                         ch = true;
                     }
@@ -1379,7 +1433,7 @@ pub fn who(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Val
             });
         });
         if !stray.is_empty() {
-            g.message(Tone::Error, &format!("Not a role of this graph: {}", stray.join(", ")));
+            g.message(Tone::Error, tr!("Not a role of this graph: {roles}", roles = stray.join(", ")));
         }
     });
     if ch {
@@ -1434,7 +1488,7 @@ pub fn role_target(
             ui,
             cx,
             &format!("{salt}/value"),
-            &row.nested(&look::pretty(&mode), ""),
+            &row.nested(Tx::ui_in("param", look::pretty(&mode)), ""),
             pick_type_of(&mode),
             &mut s,
         ) {
@@ -1450,21 +1504,21 @@ pub fn role_target(
 pub fn role_bindings(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value) -> bool {
     let asset_id = cx.siblings.as_ref().map(|s| s.get_string("asset", "")).unwrap_or_default();
     let mut roles: Vec<gz_nq::Role> = Vec::new();
-    let mut error = String::new();
+    let mut error = Tx::EMPTY;
     if !asset_id.is_empty() && !asset_id.contains('.') {
         match cx.data.graphs.iter().find(|g| g.behaviour && g.readable && g.id == asset_id) {
             Some(g) => roles.clone_from(&g.roles),
-            None => error = format!("No behaviour graph called '{asset_id}' in this project"),
+            None => error = tr!("No behaviour graph called '{id}' in this project", id = asset_id.as_str()),
         }
     }
     let flags = row.flags | if error.is_empty() { PropFlags::NONE } else { PropFlags::INVALID };
     grid(ui, cx.role, salt, |g| {
         let shown = if asset_id.is_empty() {
-            "Pick the asset first - its roles appear here".to_owned()
+            Tx::from("Pick the asset first - its roles appear here")
         } else if error.is_empty() {
-            look::plural(roles.len(), "role", "roles")
+            tr!("{n} {n:role|roles}", n = roles.len())
         } else {
-            String::new()
+            Tx::EMPTY
         };
         g.row(&row.label, &row.help, flags | PropFlags::READ_ONLY, row.depth, |ui| {
             grid::read_only(ui, &shown, Clip::End)
@@ -1476,32 +1530,17 @@ pub fn role_bindings(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v
     let mut ch = false;
     for (i, r) in roles.iter().enumerate() {
         let mut binding = v.get(&r.name).cloned().unwrap_or_default();
-        let mut help = text::preview(&r.title);
-        let add = |h: &mut String, s: &str| {
-            if h.is_empty() {
-                s.clone_into(h);
-            } else {
-                h.push_str(". ");
-                h.push_str(s);
-            }
-        };
+        // the role's title is the author's; what the editor says of it follows
+        let mut bind_row = row.nested(Tx::raw(r.name.clone()), Tx::raw(text::preview(&r.title)));
         if r.many {
-            add(&mut help, "A group");
+            bind_row = bind_row.more_help("A group");
         }
         if !r.default.is_nil() {
-            add(&mut help, "Has a default");
+            bind_row = bind_row.more_help("Has a default");
         } else if r.optional {
-            add(&mut help, "Optional");
+            bind_row = bind_row.more_help("Optional");
         }
-        if npc_ref(
-            ui,
-            cx,
-            &format!("{salt}/bind{i}"),
-            &row.nested(&r.name, &help),
-            &mut binding,
-            false,
-            false,
-        ) {
+        if npc_ref(ui, cx, &format!("{salt}/bind{i}"), &bind_row, &mut binding, false, false) {
             if binding.is_empty() {
                 v.erase(&r.name);
             } else {
@@ -1524,9 +1563,13 @@ pub fn role_bindings(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v
             }
             let mut drop = false;
             grid(ui, cx.role, (salt, "stray", k), |g| {
-                g.row(key, "", PropFlags::INVALID | PropFlags::READ_ONLY, row.depth + 1, |ui| {
-                    grid::read_only(ui, "", Clip::End)
-                });
+                g.row(
+                    Tx::raw(key.as_str()),
+                    "",
+                    PropFlags::INVALID | PropFlags::READ_ONLY,
+                    row.depth + 1,
+                    |ui| grid::read_only(ui, "", Clip::End),
+                );
                 drop = g.trailing(Icon::Delete, "Remove the binding");
                 g.message(Tone::Warning, "The asset declares no such role");
             });
@@ -1553,7 +1596,7 @@ pub fn npc_list(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mu
         cx.role,
         salt,
         &row.clone().more_help("A row is one NPC: a project character or a spawn section"),
-        &format!("{n} NPC{}", if n == 1 { "" } else { "s" }),
+        tr!("{n} {n:NPC|NPCs}", n = n),
     );
     let d = row.depth + 1;
     let (mut remove, mut up, mut down) = (None, None, None);
@@ -1567,7 +1610,7 @@ pub fn npc_list(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mu
         let mut cur = usize::from(by_section);
         let mut changed_mode = false;
         grid(ui, cx.role, (salt, i, "head"), |g| {
-            g.row(&format!("NPC {}", i + 1), "character: an NPC of this project (Create > Character). section: any spawn section the game has", PropFlags::NONE, d, |ui| {
+            g.row(tr!("NPC {n}", n = i + 1), "character: an NPC of this project (Create > Character). section: any spawn section the game has", PropFlags::NONE, d, |ui| {
                 changed_mode = gz_ui::segmented(ui, &mut cur, &["Character", "Section"], None);
             });
             if g.trailing(Icon::Delete, "Remove the NPC") {
@@ -1920,7 +1963,7 @@ fn upgrades(
             for id in &item_caps.upgrades {
                 let mut on = chosen.iter().any(|c| c == id);
                 ui.horizontal(|ui| {
-                    if gz_ui::Check::new(&mut on, id).show(ui).changed() {
+                    if gz_ui::Check::new(&mut on, Tx::raw(id.as_str())).show(ui).changed() {
                         toggled = Some((id.clone(), on));
                     }
                 });
@@ -1962,11 +2005,18 @@ fn row_state(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, depth: u32, k: &Kind
         }
         let mut val = e.get(&rp.name).cloned().unwrap_or_default();
         let help = if stale {
-            format!("{} does not apply to {sect} - {}", rp.name, caps::why(need))
+            tr!(
+                "{key} does not apply to {section} - {why}",
+                key = rp.name.as_str(),
+                section = sect.as_str(),
+                why = Tx::ui(caps::why(need))
+            )
         } else {
-            "Unset means full. condition: wear, 0 ruined. ammo: rounds loaded, or in one box. ref: one item only".to_owned()
+            Tx::from(
+                "Unset means full. condition: wear, 0 ruined. ammo: rounds loaded, or in one box. ref: one item only",
+            )
         };
-        let mut row = Row::new("", &help, depth);
+        let mut row = Row::new("", help, depth);
         if stale {
             row = row.flags(PropFlags::INVALID);
         }
@@ -1974,8 +2024,8 @@ fn row_state(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, depth: u32, k: &Kind
         let one = if rp.name == "ammo_kind" && !item_caps.ammo_class.is_empty() {
             // the rounds this weapon takes, not every item section in the game
             let mut cur = val.to_text("");
-            row.label = "Cartridge".to_owned();
-            let c = combo_row(ui, cx.role, &s, &row, &mut cur, &item_caps.ammo_class, Some("(first)"));
+            row.label = "Cartridge".into();
+            let c = combo_row(ui, cx.role, &s, &row, &mut cur, &item_caps.ammo_class, Some("(first)".into()));
             if c {
                 val = opt_str(&cur);
             }
@@ -1983,7 +2033,7 @@ fn row_state(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, depth: u32, k: &Kind
         } else if rp.name == "upgrades" {
             upgrades(ui, cx, &s, depth, &item_caps, &mut val)
         } else {
-            let mut label = look::pretty(&rp.name);
+            let mut label = Tx::ui_in("param", look::pretty(&rp.name));
             // an unset value means FULL, so that is what the field shows
             let full = item_caps.full_ammo();
             let mut shown = val.clone();
@@ -1991,7 +2041,7 @@ fn row_state(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, depth: u32, k: &Kind
                 shown = Value::Number(f64::from(full));
             }
             if rp.name == "ammo" && item_caps.known && full > 0 {
-                label.push_str(&format!(" / {full}"));
+                label = tr!("row" => "{label} / {full}", label = label, full = full);
             }
             row.label = label;
             let c = typed(ui, cx, &rp.ty, Some(rp), &s, &row, &mut shown);
@@ -2044,13 +2094,7 @@ pub fn item_list(
         ch = true;
     }
     let n = v.arr().len();
-    text_row(
-        ui,
-        cx.role,
-        salt,
-        &Row { help: help.to_owned(), ..row.clone() },
-        &format!("{n} row{}", if n == 1 { "" } else { "s" }),
-    );
+    text_row(ui, cx.role, salt, &Row { help: help.into(), ..row.clone() }, tr!("{n} {n:row|rows}", n = n));
     let d = row.depth + 1;
     let mut kill = None;
     for i in 0..n {
@@ -2058,7 +2102,7 @@ pub fn item_list(
         if !e.is_table() {
             e = Value::table();
         }
-        let head = format!("Row {}", i + 1);
+        let head = tr!("Row {n}", n = i + 1);
         let mut drop = false;
         let mut row_ch = false;
         if e.has("item") {
@@ -2067,7 +2111,7 @@ pub fn item_list(
                 ui,
                 cx,
                 &format!("{salt}/{i}/item"),
-                &Row::new(&head, "One concrete object: a story id or a ref this graph created", d),
+                &Row::new(head.clone(), "One concrete object: a story id or a ref this graph created", d),
                 &mut it,
                 false,
             ) {
@@ -2174,7 +2218,13 @@ pub fn item_list(
                         "The state every item of the row is made with; unset means full",
                         PropFlags::READ_ONLY,
                         d + 1,
-                        |ui| grid::read_only(ui, if sum.is_empty() { "full" } else { &sum }, Clip::End),
+                        |ui| {
+                            grid::read_only(
+                                ui,
+                                if sum.is_empty() { Tx::ctx("state", "full") } else { Tx::raw(sum.as_str()) },
+                                Clip::End,
+                            )
+                        },
                     );
                     flip = g.trailing(
                         if open_state { Icon::ChevronUp } else { Icon::ChevronDown },
@@ -2419,7 +2469,7 @@ pub fn loot_spawn(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
                 ui,
                 cx,
                 &format!("{salt}/place"),
-                &Row::new("Place", "Drops the loot on the ground at the place", d),
+                &Row::new(Tx::ctx("param", "Place"), "Drops the loot on the ground at the place", d),
                 &mut pl,
             ) {
                 v.set("place", pl);
@@ -2474,7 +2524,7 @@ pub fn loot_spawn(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
                 &Row::new("Pick", "Which of the matches gets the loot", d),
                 &mut pick,
                 &modes(&["random", "nearest", "farthest"]),
-                Some("(default)"),
+                Some("(default)".into()),
             ) {
                 if pick.is_empty() {
                     sel.erase("pick");
@@ -2492,7 +2542,7 @@ pub fn loot_spawn(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
                     &Row::new("State", "Full: has anything inside. Empty: holds nothing", d),
                     &mut st,
                     &modes(&["any", "full", "empty"]),
-                    Some("(any)"),
+                    Some("(any)".into()),
                 ) {
                     if st.is_empty() {
                         sel.erase("state");
@@ -2582,7 +2632,11 @@ pub fn loot_spawn(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
                 ui,
                 cx,
                 &format!("{salt}/ncp"),
-                &Row::new("Place", "Where the fresh corpse drops. The loot goes into its inventory", d),
+                &Row::new(
+                    Tx::ctx("param", "Place"),
+                    "Where the fresh corpse drops. The loot goes into its inventory",
+                    d,
+                ),
                 &mut pl,
             ) {
                 nc.set("place", pl);
@@ -2610,13 +2664,7 @@ pub fn cases(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut V
     } else {
         "Each case is a pin; the first case whose conditions hold fires"
     };
-    text_row(
-        ui,
-        cx.role,
-        salt,
-        &row.clone().more_help(more),
-        &format!("{n} case{}", if n == 1 { "" } else { "s" }),
-    );
+    text_row(ui, cx.role, salt, &row.clone().more_help(more), tr!("{n} {n:case|cases}", n = n));
     let d = row.depth + 1;
     let mut drop = None;
     for i in 0..n {
@@ -2628,7 +2676,7 @@ pub fn cases(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut V
         let mut name = c.get_string("name", "");
         grid(ui, cx.role, (salt, i, "name"), |g| {
             if g.row(
-                &format!("Case {}", i + 1),
+                tr!("Case {n}", n = i + 1),
                 "The case's name: the pin it leaves the node by",
                 PropFlags::NONE,
                 d,
@@ -2721,7 +2769,12 @@ pub fn cond_list(
     let mut drop = None;
     for (i, c) in conds.iter_mut().enumerate() {
         let desc = look::kind_desc(cx.cat, &c.kind, cx.behaviour);
-        let help = if desc.is_empty() { "A condition: all of them have to hold".to_owned() } else { desc };
+        // the catalog's English
+        let help = if desc.is_empty() {
+            Tx::from("A condition: all of them have to hold")
+        } else {
+            Tx::ui_in("kind", desc)
+        };
         let mut kind = c.kind.to_string();
         let mut negate = c.negate;
         let mut kind_ch = false;
@@ -2785,14 +2838,14 @@ pub fn lua(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Val
         g.row(&row.label, &row.help, row.flags, row.depth, |ui| {
             grid::read_only(
                 ui,
-                &if code.is_empty() { "(empty)".to_owned() } else { first_line(&code) },
+                if code.is_empty() { Tx::from("(empty)") } else { Tx::raw(first_line(&code)) },
                 Clip::End,
             )
         });
         edit = g.trailing(Icon::Rename, "Edit the Lua");
     });
     if edit {
-        cx.text_edit.open_for(&target, &row.label, &code, true);
+        cx.text_edit.open_for(&target, row.label.clone(), &code, true);
     }
     ch
 }
@@ -2842,7 +2895,7 @@ pub fn var_name_combo(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, 
         return false;
     }
     // a name no longer declared stays selectable (combo_field keeps it)
-    combo_row(ui, cx.role, salt, row, name, &names, Some("(unset)"))
+    combo_row(ui, cx.role, salt, row, name, &names, Some("(unset)".into()))
 }
 
 /// The help footer shows a kind's description on the kind row; `Id` for a popup a caller opens.

@@ -46,6 +46,7 @@ use gz_editor::Registry;
 
 /// Plugs the `pda` and `screens` tabs and their Mod menu commands into the shell.
 pub fn install(b: &mut ShellBuilder) {
+    b.translation(include_str!("ru.lua"));
     pda::doc::install(b);
     screens::doc::install(b);
     // the rows go where the Mod menu keeps their slots: Screens & Music, then PDA Interface
@@ -72,4 +73,19 @@ pub fn register(reg: &mut Registry) {
         screens::cmd::screens_view,
     );
     pda::doc::register(reg);
+}
+
+#[cfg(test)]
+mod i18n_tests {
+    #[test]
+    fn the_catalog_reads_with_the_kits_and_the_shells() {
+        let c = gz_ui::i18n::Catalog::parse(&[
+            gz_ui::i18n::KIT_RU,
+            gz_app::lang::SHELL_RU,
+            include_str!("ru.lua"),
+        ])
+        .expect("the catalogs read");
+        let p = gz_ui::i18n::problems(&c);
+        assert!(p.is_empty(), "{}", p.join("\n"));
+    }
 }

@@ -52,6 +52,9 @@ SUITES: dict[str, dict] = {
     "test_ui_shell": {"args": ["--project", OD], "timeout": 120, "alone": True},
     # every tab kind, dialog and menu at two sizes: audited and pictured once
     "test_tour": {"args": ["--project", OD], "timeout": 120},
+    # the same tour in a light theme: the kit and every surface hold the light half of the themes
+    "test_tour_light": {"script": os.path.join(HERE, "test_tour.py"),
+                        "args": ["--project", OD, "--theme", "grizzly-light"], "timeout": 120},
     "test_asset_icons": {"args": ["--project", OD], "timeout": 120},
     "test_unicode_names": {"args": ["--project", OD], "timeout": 120},
     "test_build_contents": {"args": ["--project", OD], "timeout": 120},

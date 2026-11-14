@@ -18,8 +18,8 @@ use std::sync::Arc;
 use gz_app::{Action, ReplyCx, ShellBuilder, args};
 use gz_editor::{Args, CmdError, Editor, JobId, Origin, Registry, Reply, Spec, json};
 use gz_fmt_tex::{TextureFlags, TextureFormat, TextureParams, TextureType};
-use gz_ui::Icon;
 use gz_ui::dialog::{self, Answer, ConfirmSpec};
+use gz_ui::{Icon, Tx};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
@@ -219,16 +219,16 @@ fn sound_sync_reply(r: &ReplyCx<'_>) {
     let items = reply
         .get("orphans")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+        .map(|a| a.iter().filter_map(Value::as_str).map(|n| Tx::raw(n.to_owned())).collect())
         .unwrap_or_default();
     let spec = ConfirmSpec {
         id: "sync_sounds".to_owned(),
-        title: "Synchronize Sounds".to_owned(),
-        headline: "These sounds have no .wav source any more. Rename them out of the way?".to_owned(),
+        title: "Synchronize Sounds".into(),
+        headline: "These sounds have no .wav source any more. Rename them out of the way?".into(),
         items,
         total: usize::try_from(count).unwrap_or(usize::MAX),
-        consequence: "They are renamed to .~ogg and .~thm. Nothing is deleted.".to_owned(),
-        action: "Rename".to_owned(),
+        consequence: "They are renamed to .~ogg and .~thm. Nothing is deleted.".into(),
+        action: "Rename".into(),
         destructive: false,
     };
     let asker = if r.editor.flags.unattended { dialog::Asker::Unattended } else { dialog::Asker::Ui };
@@ -372,17 +372,16 @@ fn rewrite_reply(r: &ReplyCx<'_>) {
     let items = reply
         .get("names")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+        .map(|a| a.iter().filter_map(Value::as_str).map(|n| Tx::raw(n.to_owned())).collect())
         .unwrap_or_default();
     let spec = ConfirmSpec {
         id: "rewrite_thumbnails".to_owned(),
-        title: "Rewrite Texture Descriptions".to_owned(),
-        headline: "Rewrite every texture description (.thm) of the texture library?".to_owned(),
+        title: "Rewrite Texture Descriptions".into(),
+        headline: "Rewrite every texture description (.thm) of the texture library?".into(),
         items,
         total: usize::try_from(total).unwrap_or(usize::MAX),
-        consequence: "Each file is read and written again in place, in the format this editor writes."
-            .to_owned(),
-        action: "Rewrite".to_owned(),
+        consequence: "Each file is read and written again in place, in the format this editor writes.".into(),
+        action: "Rewrite".into(),
         destructive: false,
     };
     let ed = r.editor.clone();

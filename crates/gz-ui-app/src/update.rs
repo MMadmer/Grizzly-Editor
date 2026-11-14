@@ -15,8 +15,10 @@ use gz_app::{Action, DialogDesc, DocCx, Enabled, PrefGroup, PrefKind, PrefRow, S
 use gz_editor::{Args, Editor, SmolStr};
 use gz_ui::dialog::{Dialog, DialogSize};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Font, Icon, Kind, Tone, palette};
-use gz_update::{State, UpdateService, size_text};
+use gz_ui::{Font, Icon, Kind, Tone, Tx, palette, tr};
+use gz_update::{State, UpdateService};
+
+use crate::local::size_tx;
 use serde_json::json;
 
 /// `ui.dialog open id=update`.
@@ -66,11 +68,17 @@ fn notes(ui: &mut Ui, body: &str) {
             ui.add_space(4.0);
         } else if line.starts_with('#') {
             ui.add_space(2.0);
-            text::label(ui, &clean(line.trim_start_matches('#').trim()), Font::Strong, p.text, Clip::End);
+            text::label(
+                ui,
+                Tx::raw(clean(line.trim_start_matches('#').trim())),
+                Font::Strong,
+                p.text,
+                Clip::End,
+            );
         } else if let Some(item) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
-            text::prose(ui, &format!("\u{2022}  {}", clean(item)));
+            text::prose(ui, Tx::raw(format!("\u{2022}  {}", clean(item))));
         } else {
-            text::prose(ui, &clean(line));
+            text::prose(ui, Tx::raw(clean(line)));
         }
     }
 }
@@ -81,13 +89,18 @@ impl UpdateUi {
         // a note that the dialog says more about carries its button: Details, What's New
         for t in svc.take_toasts() {
             match (t.error, t.whats_new) {
-                (true, _) => gz_ui::state::toast(cx.ctx, Tone::Error, &t.text),
+                // the updater's sentences are its own English, translated by their templates
+                (true, _) => gz_ui::state::toast(cx.ctx, Tone::Error, Tx::ui(t.text)),
                 (false, true) => {
-                    gz_ui::state::toast_with(cx.ctx, Tone::Success, &t.text, "What's New", SHOW_ACTION)
+                    gz_ui::state::toast_with(cx.ctx, Tone::Success, Tx::ui(t.text), "What's New", SHOW_ACTION)
                 }
-                (false, false) => {
-                    gz_ui::state::toast_with(cx.ctx, Tone::Info, &t.text, "Details", SHOW_ACTION)
-                }
+                (false, false) => gz_ui::state::toast_with(
+                    cx.ctx,
+                    Tone::Info,
+                    Tx::ui(t.text),
+                    Tx::ctx("update", "Details"),
+                    SHOW_ACTION,
+                ),
             }
         }
         self.watch_exit(cx, &svc);
@@ -98,18 +111,22 @@ impl UpdateUi {
             .filter(|t| *t > 0)
             .map(|t| (status["download"]["done"].as_u64().unwrap_or(0) * 100 / t).min(100))
             .unwrap_or(0);
-        let (icon, tone, label) = match svc.state() {
-            State::Available | State::Manual => (Icon::Refresh, Some(Tone::Info), format!("Update {latest}")),
-            State::Failed => (Icon::Refresh, Some(Tone::Error), format!("Update {latest}")),
-            State::Downloading => (Icon::Spinner, None, format!("Updating {pct}%")),
-            State::Waiting => (Icon::Refresh, Some(Tone::Warning), "Waiting".to_owned()),
-            State::Ready => (Icon::Refresh, Some(Tone::Info), "Restart to Update".to_owned()),
-            State::Applying => (Icon::Spinner, None, "Updating".to_owned()),
+        let (icon, tone, label): (Icon, Option<Tone>, Tx<'static>) = match svc.state() {
+            State::Available | State::Manual => {
+                (Icon::Refresh, Some(Tone::Info), tr!("Update {version}", version = latest.clone()))
+            }
+            State::Failed => {
+                (Icon::Refresh, Some(Tone::Error), tr!("Update {version}", version = latest.clone()))
+            }
+            State::Downloading => (Icon::Spinner, None, tr!("Updating {pct}%", pct = pct)),
+            State::Waiting => (Icon::Refresh, Some(Tone::Warning), "Waiting".into()),
+            State::Ready => (Icon::Refresh, Some(Tone::Info), "Restart to Update".into()),
+            State::Applying => (Icon::Spinner, None, "Updating".into()),
             // the start after an update offers its notes on its note (What's New)
             _ => return,
         };
-        let tip = svc.text();
-        if local_status_chip(ui, icon, tone, &label, &tip, self.open).clicked() {
+        let tip = Tx::ui(svc.text());
+        if local_status_chip(ui, icon, tone, label, tip, self.open).clicked() {
             self.whats_new = svc.state() == State::Idle && svc.updated().is_some();
             self.open = true;
             if self.whats_new {
@@ -147,27 +164,33 @@ impl UpdateUi {
         let latest = status["latest"].as_str().unwrap_or("").to_owned();
         let updated = svc.updated();
         let whats_new = self.whats_new && state == State::Idle;
-        let headline = match state {
+        let headline: Tx<'static> = match state {
             _ if whats_new => {
-                format!("Updated to {}.", updated.as_ref().map_or(have.clone(), |u| u.1.clone()))
+                tr!("Updated to {version}.", version = updated.as_ref().map_or(have.clone(), |u| u.1.clone()))
             }
-            State::Available | State::Failed | State::Downloading | State::Waiting => {
-                format!("Grizzly Editor {latest} is available. You have {have}.")
-            }
-            State::Ready => format!("Grizzly Editor {latest} is ready to install. You have {have}."),
-            _ => svc.text(),
+            State::Available | State::Failed | State::Downloading | State::Waiting => tr!(
+                "Grizzly Editor {latest} is available. You have {have}.",
+                latest = latest.clone(),
+                have = have.clone()
+            ),
+            State::Ready => tr!(
+                "Grizzly Editor {latest} is ready to install. You have {have}.",
+                latest = latest.clone(),
+                have = have.clone()
+            ),
+            _ => Tx::ui(svc.text()),
         };
         let dl = &status["download"];
         let size_line = dl["bytes"].as_u64().map(|b| {
             let archive = dl["archive"].as_u64().unwrap_or(b);
             match state {
-                State::Downloading | State::Waiting => format!(
-                    "{} of {} downloaded",
-                    size_text(dl["done"].as_u64().unwrap_or(0)),
-                    size_text(dl["total"].as_u64().unwrap_or(b))
+                State::Downloading | State::Waiting => tr!(
+                    "{done} of {total} downloaded",
+                    done = size_tx(dl["done"].as_u64().unwrap_or(0)),
+                    total = size_tx(dl["total"].as_u64().unwrap_or(b))
                 ),
-                State::Ready => String::new(),
-                _ => format!("{} of {} to download", size_text(b), size_text(archive)),
+                State::Ready => Tx::EMPTY,
+                _ => tr!("{part} of {total} to download", part = size_tx(b), total = size_tx(archive)),
             }
         });
         let body_notes = if whats_new {
@@ -177,19 +200,19 @@ impl UpdateUi {
         } else {
             status["notes"].as_str().unwrap_or("").to_owned()
         };
-        let error = status["error"].as_str().filter(|_| state == State::Failed).map(str::to_owned);
+        let error = status["error"].as_str().filter(|_| state == State::Failed).map(|e| Tx::ui(e.to_owned()));
         let stage = editor.jobs.running_in("update").map(|j| j.stage).unwrap_or_default();
         let page = status["release_page"].as_str().unwrap_or("").to_owned();
         let mut open = self.open;
         let mut close = false;
         let ctx = ui.ctx().clone();
-        Dialog::new("Update", "dlg.update", DialogSize::M).show(
+        Dialog::new(Tx::ctx("dlg.update", "Update"), "dlg.update", DialogSize::M).show(
             ui,
             &mut open,
             |ui| {
                 let p = palette(ui.ctx());
                 text::prose(ui, &headline);
-                if let Some(line) = size_line.as_deref().filter(|l| !l.is_empty() && !whats_new) {
+                if let Some(line) = size_line.as_ref().filter(|l| !l.is_empty() && !whats_new) {
                     text::label(ui, line, Font::Body, p.text_secondary, Clip::End);
                 }
                 if let Some(e) = &error {
@@ -208,17 +231,21 @@ impl UpdateUi {
             },
             |f| match state {
                 State::Checking => {
-                    f.busy(if stage.is_empty() { "Looking for a newer version" } else { &stage });
+                    f.busy(if stage.is_empty() {
+                        Tx::from("Looking for a newer version")
+                    } else {
+                        Tx::ui(&stage)
+                    });
                     close = f.button("Hide", Kind::Secondary, false, true, "");
                 }
                 State::Downloading | State::Waiting => {
-                    f.busy(if stage.is_empty() { "Downloading" } else { &stage });
+                    f.busy(if stage.is_empty() { Tx::from("Downloading") } else { Tx::ui(&stage) });
                     if f.button("Stop Updating", Kind::Secondary, false, true, "") {
                         editor.post("update.stop", Args::new());
                     }
                     close = f.button("Hide", Kind::Secondary, false, true, "");
                 }
-                State::Applying => f.busy(&format!("Updating to {latest}...")),
+                State::Applying => f.busy(tr!("Updating to {version}...", version = latest.clone())),
                 State::Available | State::Failed => {
                     if f.button("Download and Install", Kind::Primary, true, true, "") {
                         editor.post("update.download", args(&[("wait", json!(false))]));
@@ -229,9 +256,9 @@ impl UpdateUi {
                     let busy = UpdateService::blocking_job(&editor);
                     let why = busy
                         .as_ref()
-                        .map(|j| format!("The update waits for {j} to end."))
+                        .map(|j| tr!("The update waits for {job} to end.", job = Tx::ui(j.clone())))
                         .unwrap_or_default();
-                    if f.button("Restart and Update", Kind::Primary, true, busy.is_none(), &why) {
+                    if f.button("Restart and Update", Kind::Primary, true, busy.is_none(), why) {
                         // the documents close the usual way; Cancel there cancels the restart
                         svc.set_restart_asked(&editor, true);
                         self.exit_frames = Some(0);
@@ -298,7 +325,7 @@ const UPDATE_ROWS: [PrefRow; 3] = [
         label: "Installed Version",
         help: "The version of this installation.",
         kind: PrefKind::ReadOnly {
-            value: |ed| installed(ed).map(|s| s.installed().to_string()).unwrap_or_default(),
+            value: |ed| installed(ed).map(|s| Tx::raw(s.installed().to_string())).unwrap_or_default(),
         },
     },
     PrefRow {
@@ -308,7 +335,8 @@ const UPDATE_ROWS: [PrefRow; 3] = [
             text: "Check Now",
             run: check_now,
             enabled: |ed| Enabled::when(ed.jobs.running_in("update").is_none(), "An update job is running."),
-            status: |ed| installed(ed).map(|s| s.text()).unwrap_or_default(),
+            // the updater's own English
+            status: |ed| installed(ed).map(|s| Tx::ui(s.text())).unwrap_or_default(),
         },
     },
 ];
@@ -351,6 +379,6 @@ pub(crate) fn install(b: &mut ShellBuilder) {
         icon: Icon::Settings,
         section: "Updates",
         rows: &UPDATE_ROWS,
-        note: Some(|ed| installed(ed).is_none().then(|| ("This Build", DEV_BUILD.to_owned()))),
+        note: Some(|ed| installed(ed).is_none().then(|| ("This Build", Tx::from(DEV_BUILD)))),
     });
 }

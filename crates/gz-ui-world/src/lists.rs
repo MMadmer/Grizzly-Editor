@@ -58,7 +58,21 @@ impl Indexed {
     pub fn label(e: &PickerEntry) -> String {
         if e.name.is_empty() { e.id.clone() } else { format!("{}  ({})", e.name, e.id) }
     }
+
+    /// [`Indexed::label`] for the window: the game's caption shown as it is, the project's own
+    /// model named in the window's language.
+    #[must_use]
+    pub fn label_tx(e: &PickerEntry) -> gz_ui::Tx<'static> {
+        if e.extra == "project" && e.name == PROJECT_OWN {
+            gz_ui::tr!("world" => "{name}  ({id})", name = gz_ui::Tx::from(PROJECT_OWN), id = e.id.as_str())
+        } else {
+            gz_ui::Tx::raw(Self::label(e))
+        }
+    }
 }
+
+/// The caption of a model the project holds itself.
+const PROJECT_OWN: &str = "the project's";
 
 /// A rank of the linked game: its entry and the value it starts at, lowest first.
 #[derive(Clone, Debug, Default)]
@@ -144,7 +158,7 @@ fn visuals(game: Option<&gz_vfs::GameFiles>, project: Option<&Project>) -> Vec<P
             };
             let id = stem.replace('/', "\\").to_lowercase();
             if seen.insert(id.clone()) {
-                out.push(PickerEntry { id, name: "the project's".to_owned(), extra: "project".to_owned() });
+                out.push(PickerEntry { id, name: PROJECT_OWN.to_owned(), extra: "project".to_owned() });
             }
         }
     }

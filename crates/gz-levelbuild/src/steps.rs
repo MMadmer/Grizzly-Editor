@@ -170,6 +170,13 @@ impl Step {
         matches!(self, Self::Details | Self::DetailLight)
     }
 
+    /// Whether the step compiles the level itself - everything but the module's spawn layer. On a
+    /// level the linked game has, none of these is needed for the module.
+    #[must_use]
+    pub fn compiles(self) -> bool {
+        self != Self::SpawnLayer
+    }
+
     /// The steps that need this one, directly or not.
     #[must_use]
     pub fn dependents(self) -> Vec<Step> {
@@ -236,6 +243,9 @@ pub struct Options {
     /// (`fingerprint::library_stamp`): a model edited outside the editor makes the steps that
     /// read the scene's objects stale.
     pub library: u64,
+    /// The level is one of the linked game's and no compile step was asked for by name: those
+    /// steps are not needed for the module (`Step::compiles`).
+    pub stock: bool,
 }
 
 /// The steps a request names, with what they need, in [`Step::ORDER`].

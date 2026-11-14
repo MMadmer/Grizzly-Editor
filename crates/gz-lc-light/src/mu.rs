@@ -245,6 +245,7 @@ impl MuModel {
         model: &RayModel,
         flags: u32,
         stream: Option<XrRandom>,
+        ctl: &Ctl<'_>,
     ) -> Vec<BaseColor> {
         let rot = xform.without_translation().transposed().inverted_43();
         let samples = if env.params.quality == QUALITY_DRAFT { 1u32 } else { 6 };
@@ -257,6 +258,9 @@ impl MuModel {
             .enumerate()
             .with_min_len(16)
             .map_init(LightCache::default, |cache, (i, &v)| {
+                if ctl.cancelled() {
+                    return BaseColor::default();
+                }
                 let Some(vx) = mesh.vertex(v) else { return BaseColor::default() };
                 let (mut amb, mut trans) = (0.0f32, 0.0f32);
                 for f in &vx.adjacents {
@@ -324,11 +328,18 @@ impl MuModel {
 
     /// Lights a model on its own: the model's own hemisphere in its own shadow, into
     /// `color`, the jitter drawn from `stream` as X-Ray's base thread draws it.
-    pub fn calc_lighting(&mut self, env: &MuEnv<'_>, stream: XrRandom) -> Result<()> {
+    pub fn calc_lighting(&mut self, env: &MuEnv<'_>, stream: XrRandom, ctl: &Ctl<'_>) -> Result<()> {
         let model = self.own_ray_model(env.shaders, env.materials)?;
-        self.color =
-            self.calc_lighting_with(env, &Matrix::IDENTITY, &model, LP_DONT_RGB + LP_DONT_SUN, Some(stream));
-        Ok(())
+        ctl.check()?;
+        self.color = self.calc_lighting_with(
+            env,
+            &Matrix::IDENTITY,
+            &model,
+            LP_DONT_RGB + LP_DONT_SUN,
+            Some(stream),
+            ctl,
+        );
+        ctl.check()
     }
 }
 
@@ -391,11 +402,11 @@ impl MuReference {
     }
 
     /// The reference lit in the level, then the fit.
-    pub fn calc_lighting(&mut self, model: &MuModel, env: &MuEnv<'_>, level: &RayModel) {
+    pub fn calc_lighting(&mut self, model: &MuModel, env: &MuEnv<'_>, level: &RayModel, ctl: &Ctl<'_>) {
         let flags = if env.nosun { LP_DONT_SUN } else { 0 } | LP_DEFAULT;
         // X-Ray's compiler lights the references on four threads from the one `::Random`: no order to
         // reproduce (its own runs differ), so each vertex seeds its own
-        self.color = model.calc_lighting_with(env, &self.xform, level, flags, None);
+        self.color = model.calc_lighting_with(env, &self.xform, level, flags, None, ctl);
         let n = self.color.len().min(model.color.len());
         let a: Vec<f64> = model.color.iter().take(n).map(|c| f64::from(c.get().hemi)).collect();
         for i in 0..5 {
@@ -558,7 +569,7 @@ pub fn light_mu(
     level: &RayModel,
     ctl: &Ctl<'_>,
 ) -> Result<()> {
-    ctl.stage("MU : Models...");
+    ctl.stage("the models");
     let done = AtomicUsize::new(0);
     let total = models.len() + refs.len();
     // the models one after another on one thread, the jitter from `::Random` as the
@@ -576,20 +587,20 @@ pub fn light_mu(
         .map(|(m, start)| {
             ctl.check()?;
             m.calc_materials(env.shaders, env.materials);
-            m.calc_lighting(env, start)?;
+            m.calc_lighting(env, start, ctl)?;
             ctl.progress(done.fetch_add(1, Ordering::Relaxed) + 1, total);
             Ok(())
         })
         .collect();
     results.into_iter().collect::<Result<()>>()?;
-    ctl.stage("MU : References...");
+    ctl.stage("the references");
     let models = &*models;
     refs.par_iter_mut().for_each(|r| {
         if ctl.cancelled() {
             return;
         }
         if let Some(m) = models.get(r.model as usize) {
-            r.calc_lighting(m, env, level);
+            r.calc_lighting(m, env, level, ctl);
         }
         ctl.progress(done.fetch_add(1, Ordering::Relaxed) + 1, total);
     });

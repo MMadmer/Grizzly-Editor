@@ -20,7 +20,7 @@ use gz_scene::{ObjClass, SceneCmd, SceneService, SceneState};
 use gz_ui::{Asker, Icon, state};
 
 use crate::choose::{Chooser, Purpose};
-use crate::local::{self, args, run};
+use crate::local::{args, run};
 use crate::place::PlacePanel;
 use crate::tools_bulk::BulkPanels;
 
@@ -199,7 +199,7 @@ pub(crate) fn ask_reset_all(editor: &Arc<Editor>, ctx: &egui::Context, who: Aske
         id: "reset_surfaces".into(),
         title: "Reset Surfaces".into(),
         headline: "Reset the surfaces of every object in the level?".into(),
-        items: vec![local::plural(count, "visible object")],
+        items: vec![gz_ui::tr!("{n} {n:visible object|visible objects}", n = count)],
         total: 1,
         consequence: "Surface changes made on these objects in this level are lost.".into(),
         action: "Reset All".into(),

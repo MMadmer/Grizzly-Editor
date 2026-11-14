@@ -15,7 +15,6 @@ use std::sync::Arc;
 use egui::Ui;
 use gz_app::{DialogDesc, DocCx, ShellBuilder};
 use gz_editor::{Editor, JobId};
-use gz_mod::text::count_text;
 use gz_mod::{Manifest, ManifestService};
 use gz_project::Project;
 use gz_release::format::{check_requires_game, release_gate, resolve_release_dir};
@@ -24,7 +23,7 @@ use gz_ui::dialog::{ConfirmSpec, ResultAction, ResultSpec, confirm, notice};
 use gz_ui::grid::{path_field, read_only};
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
-use gz_ui::{Button, Dialog, DialogSize, Kind, PathAction, PropFlags, PropertyGrid, Tone};
+use gz_ui::{Button, Dialog, DialogSize, Kind, PathAction, PropFlags, PropertyGrid, TipExt, Tone, Tx, tr};
 use parking_lot::Mutex;
 
 use crate::build::{add_bake_note, asker, build_running, split_lines};
@@ -120,7 +119,7 @@ impl KeyLine {
             let _ = text::status(
                 ui,
                 Tone::Error,
-                &format!("Not signed: the key file does not read: {}.", state.error),
+                tr!("Not signed: the key file does not read: {why}.", why = Tx::ui(state.error.clone())),
             );
         } else if state.locked {
             let mut unlock = false;
@@ -130,21 +129,25 @@ impl KeyLine {
                     let width = (ui.available_width() - button - 8.0).max(em(6.0));
                     let field_id = ui.make_persistent_id(("gz-ui-mod.password", id_salt));
                     let field = gz_ui::form::secret_field(ui, field_id, &mut self.password, "Author key password", width)
-                        .on_hover_text("The author key file is protected. Its password is asked once per session and never stored.");
+                        .tip("The author key file is protected. Its password is asked once per session and never stored.");
                     let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     let has = !self.password.is_empty();
                     let clicked = Button::new("Unlock").enabled(has && !self.unlocking, "Type the key file's password first.").show(ui).clicked();
                     unlock = has && !self.unlocking && (clicked || enter);
                 });
                 if !self.problem.is_empty() {
-                    let _ = text::status(ui, Tone::Error, &self.problem);
+                    let _ = text::status(ui, Tone::Error, Tx::ui(self.problem.as_str()));
                 }
             });
             if unlock {
                 self.unlock(editor);
             }
         } else {
-            let _ = text::status(ui, Tone::Success, &format!("Signed with the author key {}.", state.key_id));
+            let _ = text::status(
+                ui,
+                Tone::Success,
+                tr!("Signed with the author key {key}.", key = &state.key_id),
+            );
         }
     }
 }
@@ -174,10 +177,11 @@ struct PackageDialog {
 
 /// The release gate's refusal as the result the window shows, Mod Settings its action.
 fn cannot_package(editor: &Arc<Editor>, ctx: &egui::Context, err: &str) {
-    let mut spec = ResultSpec::new("package_result", "Cannot Package", Tone::Error, &format!("{err}."));
+    let headline = tr!("build" => "{why}.", why = Tx::ui(err.to_owned()));
+    let mut spec = ResultSpec::new("package_result", "Cannot Package", Tone::Error, headline);
     let ed = editor.clone();
     spec.action = Some(ResultAction {
-        label: "Mod Settings".to_owned(),
+        label: "Mod Settings".into(),
         run: Arc::new(move || call::open_tab(&ed, crate::settings::TAB)),
     });
     crate::build::show_result(editor, ctx, spec);
@@ -214,7 +218,7 @@ pub fn request(cx: &mut DocCx<'_>) {
                 args([("action", s("open")), ("id", s(PACKAGE_RELEASE))]),
                 |reply, ctx| {
                     if !call::ok(reply) {
-                        gz_ui::state::toast(ctx, Tone::Error, &call::error_text(reply));
+                        gz_ui::state::toast(ctx, Tone::Error, Tx::ui(call::error_text(reply)));
                     }
                 },
             ),
@@ -229,23 +233,25 @@ pub fn package_report(m: &Manifest, r: &PackageResult) -> ResultSpec {
     let mut warnings = Vec::new();
     if !r.ok {
         add_bake_note(&r.baked, &mut rows, &mut warnings);
-        let mut spec = ResultSpec::new("package_result", "Packaging Failed", Tone::Error, &r.err);
+        let mut spec =
+            ResultSpec::new("package_result", "Packaging Failed", Tone::Error, Tx::ui(r.err.clone()));
         spec.rows = rows;
         spec.warnings = warnings;
         return spec;
     }
-    rows.push(("Folder".to_owned(), r.out_dir.clone()));
-    rows.push(("Descriptor".to_owned(), format!("{}.update.ltx", m.id)));
-    rows.push(("File index".to_owned(), r.index.name.clone()));
+    rows.push(("Folder".into(), Tx::raw(r.out_dir.clone())));
+    rows.push(("Descriptor".into(), Tx::raw(format!("{}.update.ltx", m.id))));
+    rows.push(("File index".into(), Tx::raw(r.index.name.clone())));
     for p in &r.packages {
-        rows.push(("Package".to_owned(), format!("{}  ({:.1} MB)", p.name, p.size as f64 / 1_048_576.0)));
+        let size = format!("{:.1}", p.size as f64 / 1_048_576.0);
+        rows.push(("Package".into(), tr!("{name}  ({size} MB)", name = &p.name, size = size)));
     }
     rows.push((
-        "Signed".to_owned(),
+        "Signed".into(),
         if r.signed {
-            format!("With the author key {}", r.key_id)
+            tr!("With the author key {key}", key = &r.key_id)
         } else {
-            "No - the Mod Browser lists signed releases only".to_owned()
+            Tx::from("No - the Mod Browser lists signed releases only")
         },
     ));
     add_bake_note(&r.baked, &mut rows, &mut warnings);
@@ -257,23 +263,30 @@ pub fn package_report(m: &Manifest, r: &PackageResult) -> ResultSpec {
     }
     split_lines(&r.warnings, &mut warnings);
     // the index addresses the zip by byte offset: a repacked copy is another file
-    let of_repo = if m.update_github.is_empty() { String::new() } else { format!(" of {}", m.update_github) };
-    let headline = format!(
-        "Release {} {}: {} packaged. Upload the files exactly as written to a GitHub release{of_repo} and mark it as the latest - Publish Release does both in one step.",
-        m.id,
-        m.version,
-        count_text(r.files, "file", "files")
-    );
+    let headline = if m.update_github.is_empty() {
+        tr!(
+            "Release {id} {version}: {n} {n:file|files} packaged. Upload the files exactly as written to a GitHub release and mark it as the latest - Publish Release does both in one step.",
+            id = &m.id,
+            version = &m.version,
+            n = r.files
+        )
+    } else {
+        tr!(
+            "Release {id} {version}: {n} {n:file|files} packaged. Upload the files exactly as written to a GitHub release of {repo} and mark it as the latest - Publish Release does both in one step.",
+            id = &m.id,
+            version = &m.version,
+            n = r.files,
+            repo = &m.update_github
+        )
+    };
     let tone = if warnings.is_empty() { Tone::Success } else { Tone::Warning };
-    let mut spec = ResultSpec::new("package_result", "Release Packaged", tone, &headline);
+    let mut spec = ResultSpec::new("package_result", "Release Packaged", tone, headline);
     spec.rows = rows;
     spec.left_out.clone_from(&r.left_out);
     spec.warnings = warnings;
     let dir = r.out_dir.clone();
-    spec.action = Some(ResultAction {
-        label: "Open Folder".to_owned(),
-        run: Arc::new(move || call::open_folder(&dir)),
-    });
+    spec.action =
+        Some(ResultAction { label: "Open Folder".into(), run: Arc::new(move || call::open_folder(&dir)) });
     spec
 }
 
@@ -286,7 +299,13 @@ fn queue_package(editor: &Arc<Editor>, ctx: &egui::Context, m: Manifest, out_dir
         }
         Err(e) => call::log_lines(
             editor,
-            notice(ctx, asker(editor), Tone::Warning, "Packaging Release", &format!("{}.", e.message)),
+            notice(
+                ctx,
+                asker(editor),
+                Tone::Warning,
+                "Packaging Release",
+                tr!("build" => "{why}.", why = Tx::ui(e.message)),
+            ),
         ),
     }
 }
@@ -436,12 +455,12 @@ impl PackageDialog {
                     } else {
                         let spec = ConfirmSpec {
                             id: "replace_release".to_owned(),
-                            title: "Replace Release Files".to_owned(),
-                            headline: format!("An earlier packaging of {} is in {dir}.", manifest.version),
-                            items: files,
+                            title: "Replace Release Files".into(),
+                            headline: tr!("An earlier packaging of {version} is in {dir}.", version = &manifest.version, dir = dir),
+                            items: files.into_iter().map(Tx::raw).collect(),
                             total: 0,
-                            consequence: "Deleted for good - this cannot be undone. The new packaging takes their place.".to_owned(),
-                            action: "Replace".to_owned(),
+                            consequence: "Deleted for good - this cannot be undone. The new packaging takes their place.".into(),
+                            action: "Replace".into(),
                             destructive: true,
                         };
                         let (ed, inbox) = (editor.clone(), inbox.clone());
@@ -454,8 +473,13 @@ impl PackageDialog {
                         call::log_lines(&editor, line);
                     }
                 }
-                PropertyGrid::new("package_dialog").label_frac(em(9.0) / ui.available_width().max(1.0)).show(ui, |g| {
-                    g.row("Release", "The module id and the version from Mod Settings.", PropFlags::READ_ONLY, 0, |ui| read_only(ui, &release, Clip::End));
+                // the label column is as wide as the longest label in the window's language
+                let label_w = ["Release", "Output Folder", "Requires Game", "Author Key"]
+                    .iter()
+                    .map(|l| text::width(ui.ctx(), &gz_ui::Font::Body.id(), *l) + em(1.0))
+                    .fold(em(9.0), f32::max);
+                PropertyGrid::new("package_dialog").label_frac(label_w / ui.available_width().max(1.0)).show(ui, |g| {
+                    g.row("Release", "The module id and the version from Mod Settings.", PropFlags::READ_ONLY, 0, |ui| read_only(ui, Tx::raw(&release), Clip::End));
                     g.section("More", out_dir.trim().is_empty() || !requires_ok, None, |g| {
                         let action = g.row(
                             "Output Folder",
@@ -554,18 +578,18 @@ mod tests {
             ..PackageResult::default()
         };
         let spec = package_report(&m, &r);
-        assert_eq!(spec.title, "Release Packaged");
+        assert_eq!(spec.title.en(), "Release Packaged");
         // no repository: a warning, so the tone is not Success
         assert_eq!(spec.tone, Tone::Warning);
-        assert!(spec.rows.iter().any(|(k, v)| k == "Package" && v == "od-1.2.0.zip  (1.0 MB)"));
-        assert!(spec.headline.starts_with("Release od 1.2.0: 2 files packaged."));
-        assert!(spec.rows.iter().any(|(k, v)| k == "Signed" && v.starts_with("No")));
+        assert!(spec.rows.iter().any(|(k, v)| k.en() == "Package" && v.en() == "od-1.2.0.zip  (1.0 MB)"));
+        assert!(spec.headline.en().starts_with("Release od 1.2.0: 2 files packaged."));
+        assert!(spec.rows.iter().any(|(k, v)| k.en() == "Signed" && v.en().starts_with("No")));
     }
 
     #[test]
     fn a_failed_packaging_says_why() {
         let r = PackageResult { ok: false, err: "nothing to pack".into(), ..PackageResult::default() };
         let spec = package_report(&Manifest::default(), &r);
-        assert_eq!((spec.title.as_str(), spec.tone), ("Packaging Failed", Tone::Error));
+        assert_eq!((spec.title.en().as_ref(), spec.tone), ("Packaging Failed", Tone::Error));
     }
 }

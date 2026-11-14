@@ -15,7 +15,7 @@ use gz_editor::{Args, Editor, SmolStr, Value};
 use gz_scene::SceneService;
 use gz_scene::recovery::{Recovery, Status, read_manifest};
 use gz_ui::text::Clip;
-use gz_ui::{Answer, CardAction, ConfirmSpec, Font, Kind, Tone, card, palette};
+use gz_ui::{Answer, CardAction, ConfirmSpec, Font, Kind, Tone, Tx, card, palette, tr};
 use parking_lot::Mutex;
 
 use crate::tools::asker;
@@ -122,7 +122,7 @@ fn draw(ui: &mut Ui, cx: &mut DocCx<'_>) {
     let Some(st) = s.status.clone() else { return };
     let p = palette(ui.ctx());
     let saved_at = format_saved_at(st.saved_at);
-    let scene = if st.source.is_empty() { "Untitled scene".to_owned() } else { st.source.clone() };
+    let scene = if st.source.is_empty() { Tx::from("Untitled scene") } else { Tx::raw(st.source.clone()) };
     let mut clicked = None;
     card::page(ui, gz_app::contract::WINDOW_START_PAGE, |ui| {
         card::page_card(ui, "recovery", "Recover Unsaved Scene", 560.0, |ui| {
@@ -138,11 +138,18 @@ fn draw(ui: &mut Ui, cx: &mut DocCx<'_>) {
                 "A snapshot of its unsaved scene was kept. Restore opens it as an unsaved scene; the scene file stays as it is.",
             );
             ui.add_space(8.0);
+            // the labels' column is as wide as the wider label in the window's language
+            let keys = ["Saved", "Scene"];
+            let key_w = keys
+                .iter()
+                .map(|k| gz_ui::text::width(ui.ctx(), &Font::Body.id(), *k))
+                .fold(gz_ui::units::em(5.0), f32::max)
+                + 8.0;
             for (k, v, clip) in
-                [("Saved", saved_at.as_str(), Clip::End), ("Scene", scene.as_str(), Clip::Start)]
+                [(keys[0], Tx::raw(saved_at.as_str()), Clip::End), (keys[1], scene.clone(), Clip::Start)]
             {
                 ui.horizontal(|ui| {
-                    ui.allocate_ui(egui::Vec2::new(gz_ui::units::em(5.0), gz_ui::metrics::ROW), |ui| {
+                    ui.allocate_ui(egui::Vec2::new(key_w, gz_ui::metrics::ROW), |ui| {
                         gz_ui::text::label(ui, k, Font::Body, p.text_secondary, Clip::End)
                     });
                     gz_ui::text::label(ui, v, Font::Body, p.text, clip);
@@ -159,7 +166,7 @@ fn draw(ui: &mut Ui, cx: &mut DocCx<'_>) {
             let error = if s.error.is_empty() { st.last_error.clone() } else { s.error.clone() };
             if !error.is_empty() {
                 ui.add_space(4.0);
-                gz_ui::text::status(ui, Tone::Error, &error);
+                gz_ui::text::status(ui, Tone::Error, Tx::ui(error));
             }
             let restore_why = if st.dirty {
                 "Save or discard the open scene first."
@@ -179,18 +186,21 @@ fn draw(ui: &mut Ui, cx: &mut DocCx<'_>) {
     match clicked {
         Some(1) => post(&editor, "restore"),
         Some(0) => {
-            let mut items = vec![format!("The unsaved changes to {scene}")];
+            let mut items = vec![tr!("The unsaved changes to {scene}", scene = scene)];
             if s.snapshots > 1 {
                 let n = s.snapshots - 1;
-                items.push(format!("{n} older {}", if n == 1 { "snapshot" } else { "snapshots" }));
+                items.push(tr!("{n} older {n:snapshot|snapshots}", n = n));
             }
             let spec = ConfirmSpec {
                 id: SmolStr::new("discard_recovery").to_string(),
                 title: "Discard Recovery".into(),
-                headline: format!("Discard the recovery snapshot saved at {saved_at}?"),
+                headline: tr!(
+                    "Discard the recovery snapshot saved at {saved_at}?",
+                    saved_at = saved_at.as_str()
+                ),
                 total: items.len(),
                 items,
-                consequence: String::new(),
+                consequence: Tx::EMPTY,
                 action: "Discard".into(),
                 destructive: true,
             };

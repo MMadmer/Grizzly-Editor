@@ -10,8 +10,11 @@
 //!   quality, the objects as the last build saw them, the AI map the build generated.
 //! - [`service`] - [`LevelBuild`]: the record, the status ([`Status`], a query keyed on the
 //!   scene's revision - the status bar reads it, nothing polls), the problems of the last build.
-//! - `pipeline` - the build as one job of the group `level_build`: the stale steps in order,
-//!   each recorded as it ends; Stop between steps and inside the long ones.
+//! - `pipeline` - the build as one job of the group `level_build`: what a later step would refuse
+//!   checked first, then the stale steps in order, each recorded as it ends; the first error ends
+//!   it, Stop ends it within a moment in any step (every long loop asks a [`Stop`]).
+//! - [`stock`] - a level the linked game has: its compile steps not needed for the module, what an
+//!   earlier build left in its folder (`level.clean` removes it).
 //!
 //! # The domain (pure, over a scene snapshot)
 //!
@@ -43,12 +46,13 @@
 //!   `gz_lc::compile_details`) on a level folder, every core, the compiler's phases as the
 //!   job's stage.
 //! - [`play_root`] - what may be Play's game root; [`play`] - the root made and refreshed (the
-//!   game's loose gamedata mirrored as hard links), the level staged; the installed engine runs in
-//!   place on the root's fs config, and an engine that does not say it can is refused before
-//!   anything is built.
+//!   game's loose gamedata mirrored as hard links), the level staged - or, on a level the game has,
+//!   the module installed into its `modules\` ([`module_play`]: Play's Player Start, the new game's
+//!   mode); the installed engine runs in place on the root's fs config, and an engine that does not
+//!   say it can is refused before anything is built.
 //! - [`process`] - the game as a `tokio::process` child: its output followed into the job's
 //!   stage, Stop ends the whole process tree.
-//! - [`register`] - the `level` area: `level.build`, `level.status`, `level.problems`,
+//! - [`register`] - the `level` area: `level.build`, `level.status`, `level.problems`, `level.clean`,
 //!   `level.validate`, `level.play`, `level.export`, `level.compile`.
 //!
 //! The build writes into the open project's `gamedata\levels\<level>` and `gamedata\spawns`,
@@ -67,6 +71,7 @@ pub mod graph;
 mod hemi;
 pub mod libs;
 pub mod merge;
+pub mod module_play;
 pub mod nav;
 mod pipeline;
 pub mod play;
@@ -77,10 +82,11 @@ pub mod service;
 pub mod spawn;
 pub mod state;
 pub mod steps;
+pub mod stock;
 pub mod validate;
 pub mod wallmarks;
 
-pub use cmd::{JOB_BUILD, JOB_RUN, register};
+pub use cmd::{JOB_BUILD, JOB_PLAY_MODULE, JOB_RUN, register};
 pub use service::{LevelBuild, LevelProblem, Running, Status, StepState, StepStatus};
 pub use steps::{Quality, Step};
 
@@ -93,6 +99,26 @@ impl BuildError {
     pub(crate) fn new(text: impl Into<String>) -> Self {
         Self(text.into())
     }
+
+    /// The answer of work that was stopped (the job's Stop).
+    #[must_use]
+    pub fn stopped() -> Self {
+        Self(STOPPED.to_owned())
+    }
+
+    #[must_use]
+    pub fn is_stopped(&self) -> bool {
+        self.0 == STOPPED
+    }
 }
+
+/// What a stopped step answers: the job's own word for it.
+pub const STOPPED: &str = "Stopped.";
+
+/// Asked by every long loop of a step, per item or per chunk: `true` once the job is stopped.
+pub type Stop<'a> = &'a (dyn Fn() -> bool + Sync);
+
+/// Never stops: what a caller without a job passes.
+pub const NEVER: Stop<'static> = &|| false;
 
 pub type Result<T, E = BuildError> = std::result::Result<T, E>;

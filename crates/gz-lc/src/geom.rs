@@ -10,8 +10,11 @@ use gz_lc_light::{
 };
 use rayon::prelude::*;
 
-use crate::mender::{MVertex, mend};
+use crate::mender::{MVertex, mend_until};
 use crate::{Error, Log, Result};
+
+/// How many items a sequential loop takes between two looks at the Stop.
+pub(crate) const STOP_EVERY: usize = 4096;
 
 /// The average of two 2D vectors.
 fn average(a: Vec2, b: Vec2) -> Vec2 {
@@ -46,6 +49,7 @@ pub fn pre_optimize(
     scene_bb: &gz_fmt_level::Aabb,
     log: &mut Log,
     no_invalid_check: bool,
+    ctl: &Ctl<'_>,
 ) -> Result<()> {
     let bb = scene_bb;
     let vscale = bb.max - bb.min;
@@ -66,7 +70,10 @@ pub fn pre_optimize(
     let vcount = g.mesh.vertices().len();
     let fcount = g.mesh.faces().len();
     let list = g.mesh.vertices().to_vec();
-    for &test in &list {
+    for (n, &test) in list.iter().enumerate() {
+        if n.is_multiple_of(STOP_EVERY) {
+            ctl.check()?;
+        }
         let Some(v) = g.mesh.vertex(test).map(|x| x.p) else { continue };
         let ix = i_floor((v.x - vmin.x) * scale.x) as u32;
         let iy = i_floor((v.y - vmin.y) * scale.y) as u32;
@@ -127,7 +134,10 @@ pub fn pre_optimize(
     }
 
     let faces = g.mesh.faces().to_vec();
-    for f in faces {
+    for (n, f) in faces.into_iter().enumerate() {
+        if n.is_multiple_of(STOP_EVERY) {
+            ctl.check()?;
+        }
         if g.mesh.face(f).is_some_and(|x| x.is_degenerated()) {
             g.mesh.destroy_face(f, false);
         } else {
@@ -180,7 +190,7 @@ fn sqr_distance_to_segment(p: Vec3, a: Vec3, b: Vec3) -> f32 {
 /// A face's T-junction candidates (edge ends, the vertex on it) and its long edges.
 type JunctionsAndEdges = (Vec<(VertId, VertId, VertId)>, Vec<(VertId, VertId)>);
 
-pub fn correct_tjunctions(g: &LcGlobalData, log: &mut Log) {
+pub fn correct_tjunctions(g: &LcGlobalData, log: &mut Log, ctl: &Ctl<'_>) -> Result<()> {
     let mesh = &g.mesh;
     let pos = |v: VertId| mesh.vertex(v).map_or(Vec3::ZERO, |x| x.p);
     // per face: (junction candidates, long edges), merged in face order as X-Ray's compiler meets them
@@ -190,6 +200,9 @@ pub fn correct_tjunctions(g: &LcGlobalData, log: &mut Log) {
         .map(|&f| {
             let mut js = Vec::new();
             let mut es = Vec::new();
+            if ctl.cancelled() {
+                return (js, es);
+            }
             let Some(face) = mesh.face(f) else { return (js, es) };
             for e in 0..3 {
                 let (va, vb) = face.edge_verts(e);
@@ -215,6 +228,7 @@ pub fn correct_tjunctions(g: &LcGlobalData, log: &mut Log) {
             (js, es)
         })
         .collect();
+    ctl.check()?;
     let mut junctions: Vec<VertId> = Vec::new();
     let mut seen_t = std::collections::HashSet::new();
     let mut edges = std::collections::HashSet::new();
@@ -229,7 +243,12 @@ pub fn correct_tjunctions(g: &LcGlobalData, log: &mut Log) {
         }
     }
     let line = format!("*** {} junctions and {} long edges found.", junctions.len(), edges.len());
-    if junctions.is_empty() && edges.is_empty() { log.msg(line) } else { log.warn(line) }
+    if junctions.is_empty() && edges.is_empty() {
+        log.msg(line)
+    } else {
+        log.warn(line)
+    }
+    Ok(())
 }
 
 /// `aht_max_edge`: `c_SS_maxsize / 2.5`.
@@ -252,10 +271,13 @@ fn set_soft(flags: &mut u32, e: u16, soft: bool) {
 
 /// Tesselates: every edge longer than
 /// [`AHT_MAX_EDGE`] split in the middle, each face sharing it replaced by two.
-fn tesselate(g: &mut LcGlobalData, log: &mut Log) {
+fn tesselate(g: &mut LcGlobalData, log: &mut Log, ctl: &Ctl<'_>) -> Result<()> {
     let mut counter = 0u32;
     let mut i = 0usize;
     while i < g.mesh.faces().len() {
+        if i.is_multiple_of(STOP_EVERY) {
+            ctl.check()?;
+        }
         let f = g.mesh.faces()[i];
         i += 1;
         let Some(face) = g.mesh.face(f) else { continue };
@@ -305,7 +327,7 @@ fn tesselate(g: &mut LcGlobalData, log: &mut Log) {
                     g.mesh.destroy_vertex(v, false);
                 }
             }
-            log.status(format!("Working: {counter} verts created, {}(now) ...", g.mesh.vertices().len()));
+            log.status(format!("{counter} vertices made, {} in the mesh", g.mesh.vertices().len()));
         }
         // tessalate_faces
         let (p1, p2) =
@@ -371,16 +393,20 @@ fn tesselate(g: &mut LcGlobalData, log: &mut Log) {
         }
     }
     compact_lists(g);
+    Ok(())
 }
 
 /// Smooths the vertex colours: each vertex takes the mean of the vertices of its faces.
-fn smooth_vert_colors(g: &mut LcGlobalData, count: u32) {
+fn smooth_vert_colors(g: &mut LcGlobalData, count: u32, ctl: &Ctl<'_>) -> Result<()> {
     for _ in 0..count {
         let mesh = &g.mesh;
         let colors: Vec<BaseColor> = mesh
             .vertices()
             .par_iter()
             .map(|&v| {
+                if ctl.cancelled() {
+                    return BaseColor::default();
+                }
                 let mut circle: Vec<VertId> = Vec::new();
                 if let Some(vx) = mesh.vertex(v) {
                     for &f in &vx.adjacents {
@@ -402,6 +428,7 @@ fn smooth_vert_colors(g: &mut LcGlobalData, count: u32) {
                 BaseColor::from_c(&avg)
             })
             .collect();
+        ctl.check()?;
         let verts = g.mesh.vertices().to_vec();
         for (v, c) in verts.into_iter().zip(colors) {
             if let Some(x) = g.mesh.vertex_mut(v) {
@@ -409,6 +436,7 @@ fn smooth_vert_colors(g: &mut LcGlobalData, count: u32) {
             }
         }
     }
+    Ok(())
 }
 
 /// The long edges tesselated, every vertex's hemisphere taken in
@@ -419,7 +447,7 @@ pub fn adaptive_ht(
     log: &mut Log,
     ctl: &Ctl<'_>,
 ) -> Result<()> {
-    log.status("Tesselating...".into());
+    log.status("Tessellating the long edges".into());
     let faces = g.mesh.faces().to_vec();
     for f in faces {
         if let Some(x) = g.mesh.face_mut(f) {
@@ -428,14 +456,14 @@ pub fn adaptive_ht(
         }
         g.mesh.calc_normal(f);
     }
-    tesselate(g, log);
+    tesselate(g, log, ctl)?;
     ctl.check()?;
 
-    log.status("Precalculating...".into());
+    log.status("Building the ray model".into());
     // X-Ray's compiler builds the model and then caches the opacity it reads while tracing
     g.light_prepare();
-    g.build_rapid(scene_bb)?;
-    log.status("Precalculating : base hemisphere ...".into());
+    g.build_rapid_with(scene_bb, ctl)?;
+    log.status("Lighting the vertices by the sky".into());
     let verts = g.mesh.vertices().to_vec();
     for &v in &verts {
         g.mesh.normal_from_adj(v);
@@ -453,6 +481,9 @@ pub fn adaptive_ht(
             .par_iter()
             .map_init(LightCache::default, |cache, &v| {
                 let mut c = ColorC::default();
+                if ctl.cancelled() {
+                    return BaseColor::default();
+                }
                 if let Some(x) = mesh.vertex(v) {
                     light_point(&tracer, cache, &mut c, x.p, x.n, lights, LP_DONT_RGB + LP_DONT_SUN, None);
                 }
@@ -467,14 +498,13 @@ pub fn adaptive_ht(
         }
     }
     ctl.check()?;
-    log.status("Gathering lighting information...".into());
-    smooth_vert_colors(g, 5);
-    Ok(())
+    log.status("Smoothing the vertex light".into());
+    smooth_vert_colors(g, 5, ctl)
 }
 
 /// One vertex per corner and texture coordinate through
 /// MeshMender; every face gets its corners' tangent and binormal and the coordinates back.
-pub fn tangent_basis(g: &mut LcGlobalData, log: &mut Log) {
+pub fn tangent_basis(g: &mut LcGlobalData, log: &mut Log, ctl: &Ctl<'_>) -> Result<()> {
     // X-Ray's compiler sorts the vertex list by address here and keeps that order
     sort_vertices_by_addr(g);
     let mesh = &g.mesh;
@@ -487,7 +517,10 @@ pub fn tangent_basis(g: &mut LcGlobalData, log: &mut Log) {
     let mut remap: Vec<Vec<u32>> = vec![Vec::new(); mesh.vertices().len()];
     let mut verts: Vec<MVertex> = Vec::with_capacity(mesh.vertices().len() * 4 / 3);
     let mut indices: Vec<u32> = Vec::with_capacity(mesh.faces().len() * 3);
-    for &f in mesh.faces() {
+    for (n, &f) in mesh.faces().iter().enumerate() {
+        if n.is_multiple_of(STOP_EVERY) {
+            ctl.check()?;
+        }
         let Some(face) = mesh.face(f) else { continue };
         let tc = face.tc0();
         for (&v, &ftc) in face.v.iter().zip(tc.iter()) {
@@ -523,7 +556,10 @@ pub fn tangent_basis(g: &mut LcGlobalData, log: &mut Log) {
         "duplication: was[{was}] / become[{become_}] - {:2.1}%",
         100.0 * (become_ as f32 - was as f32) / was as f32
     ));
-    mend(&mut verts, &mut indices, 0.5, 0.5);
+    let stop = || ctl.cancelled();
+    if mend_until(&mut verts, &mut indices, 0.5, 0.5, &stop).is_none() {
+        ctl.check()?;
+    }
     let faces = g.mesh.faces().to_vec();
     for (f, t) in faces.into_iter().zip(indices.as_chunks::<3>().0) {
         let Some(face) = g.mesh.face_mut(f) else { continue };
@@ -536,6 +572,7 @@ pub fn tangent_basis(g: &mut LcGlobalData, log: &mut Log) {
             face.basis_binormal[k] = Basis::of(Vec3::from_array(mv.binormal));
         }
     }
+    Ok(())
 }
 
 /// `fsimilar(a, b)`: xrCore's default bound, `EPS`.

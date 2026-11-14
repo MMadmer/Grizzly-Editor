@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 gz-base.workspace = true
 gz-task.workspace = true
+gz-luadata.workspace = true
 egui.workspace = true
 parking_lot.workspace = true
 rfd = { version = "0.15", default-features = false }

@@ -18,9 +18,9 @@ use gz_app::{Action, ActionCx, Chord, Enabled, ReplyCx, Scope};
 use gz_editor::{Args, Editor, Value, json};
 use gz_levelbuild::Step;
 use gz_scene::{SceneService, SceneState};
-use gz_ui::Icon;
 use gz_ui::dialog::{Answer, ResultSpec};
 use gz_ui::theme::Tone;
+use gz_ui::{Icon, Tx};
 
 /// The kinds of tab the level's keys are live on.
 pub const LEVEL_TABS: &[&str] = &["level"];
@@ -51,6 +51,7 @@ pub const SAVE_GROUP: &str = "level.save_group";
 pub const MARK_MOD: &str = "level.mark_mod_content";
 pub const MARK_BASE: &str = "level.mark_base_level";
 pub const SUMMARY: &str = "level.summary";
+pub const BROWSE_TO_ASSET: &str = "level.browse_to_asset";
 pub const SNAPSHOT: &str = "level.recovery_snapshot";
 pub const MAXIMIZE: &str = "level.maximize_viewport";
 pub const BUILD_LEVEL: &str = "level.build";
@@ -68,6 +69,7 @@ pub const PLAY_CLEAN: &str = "level.play_clean";
 pub const PLAY_WITHOUT_BUILDING: &str = "level.play_without_building";
 pub const STOP: &str = "level.stop";
 pub const RELOAD_CONFIGS: &str = "level.reload_configs";
+pub const REMOVE_BUILD_FILES: &str = "level.remove_build_files";
 pub const GAME_FOLDER: &str = "level.game_folder";
 
 /// The mod's level layers (`gz-ui-mod`'s actions), listed under Build > Advanced too.
@@ -100,6 +102,30 @@ pub fn scene(editor: &Editor) -> Option<Arc<SceneService>> {
 
 fn snapshot(cx: &ActionCx<'_>) -> Option<Arc<gz_store::Snap<SceneState>>> {
     scene(cx.editor).map(|s| s.store.snapshot())
+}
+
+/// The Library's kind, the field and the value a scene object's asset is found by in the Content
+/// Browser (`content.view action=reveal`): an object, a group, a sound, a particle effect, a spawn
+/// section. A model the game draws as it is (visual mode) has no asset of the library.
+fn asset_of(o: &gz_scene::Object) -> Option<(&'static str, &'static str, String)> {
+    use gz_scene::ObjData;
+    let named = |s: &str| (!s.trim().is_empty()).then(|| s.to_owned());
+    match &o.data {
+        ObjData::SceneObject(d) if !d.visual_mode() => named(&d.reference).map(|r| ("objects", "ref", r)),
+        ObjData::Group(g) => named(&g.reference).map(|r| ("groups", "ref", r)),
+        ObjData::SoundSrc(d) => named(&d.wav).map(|r| ("sounds", "ref", r)),
+        ObjData::Particles(d) => named(&d.reference).map(|r| ("particles", "ref", r)),
+        ObjData::Spawn(d) => {
+            d.entity.as_ref().and_then(|e| named(e.section())).map(|r| ("spawn_sections", "section", r))
+        }
+        _ => None,
+    }
+}
+
+/// The asset of the first selected object that has one.
+fn selected_asset(cx: &ActionCx<'_>) -> Option<(&'static str, &'static str, String)> {
+    let s = snapshot(cx)?;
+    s.selected_in_order().into_iter().filter_map(|id| s.get(id)).find_map(|o| asset_of(o))
 }
 
 fn with_project(cx: &ActionCx<'_>) -> Enabled {
@@ -214,7 +240,7 @@ fn settled(r: &ReplyCx<'_>, command: &'static str, args: Args) {
         return;
     }
     let name = scene(r.editor).map(|s| s.store.snapshot().meta.name()).unwrap_or_default();
-    let what = vec![if name.is_empty() { "Untitled scene".to_owned() } else { name }];
+    let what = vec![if name.is_empty() { Tx::from("Untitled scene") } else { Tx::raw(name) }];
     let ed = r.editor.clone();
     let line =
         gz_ui::dialog::unsaved_prompt(r.ctx, crate::tools::asker(r.editor), "scene", &what, move |answer| {
@@ -256,23 +282,91 @@ pub fn show_validation(r: &ReplyCx<'_>) {
         .map(|l| l.iter().filter_map(|p| p.get("text").and_then(Value::as_str)).map(str::to_owned).collect())
         .unwrap_or_default();
     let (tone, headline) = if !ok {
-        (
-            Tone::Error,
-            r.reply.get("error").and_then(Value::as_str).unwrap_or("The scene was not checked.").to_owned(),
-        )
+        let why = r.reply.get("error").and_then(Value::as_str).map(|e| Tx::ui(e.to_owned()));
+        (Tone::Error, why.unwrap_or_else(|| Tx::from("The scene was not checked.")))
     } else if valid {
         (
             if lines.is_empty() { Tone::Success } else { Tone::Warning },
-            "The scene passes its checks.".to_owned(),
+            Tx::from("The scene passes its checks."),
         )
     } else {
-        (Tone::Error, "The scene does not pass its checks.".to_owned())
+        (Tone::Error, Tx::from("The scene does not pass its checks."))
     };
-    let mut spec = ResultSpec::new("validate_result", "Validate Scene", tone, &headline);
+    let mut spec = ResultSpec::new("validate_result", "Validate Scene", tone, headline);
     spec.warnings = lines;
     for l in gz_ui::dialog::result(r.ctx, crate::tools::asker(r.editor), spec) {
         r.editor.log.finding(&l);
     }
+}
+
+/// Remove Build Files: on a level the linked game has, a build compiled the level there.
+fn can_remove_build_files(cx: &ActionCx<'_>) -> Enabled {
+    if running(cx.editor) {
+        return Enabled::Off(BUSY);
+    }
+    let st = gz_levelbuild::LevelBuild::status_last(cx.editor);
+    Enabled::when(
+        st.is_some_and(|s| s.stock && !s.built_over.is_empty()),
+        "No build compiled this level of the linked game here.",
+    )
+}
+
+/// The files `level.clean dry_run=true` named, asked about by name through the kit's confirm,
+/// and removed on Yes.
+fn confirm_build_files(r: &ReplyCx<'_>) {
+    if r.reply.get("ok").and_then(Value::as_bool) != Some(true) {
+        let text = r.reply.get("error").and_then(Value::as_str).unwrap_or("The build files were not found.");
+        r.editor.notices.error(text.to_owned());
+        return;
+    }
+    let files: Vec<String> = r
+        .reply
+        .get("files")
+        .and_then(Value::as_array)
+        .map(|l| l.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+        .unwrap_or_default();
+    let level = r.reply.get("level").and_then(Value::as_str).unwrap_or_default().to_owned();
+    if files.is_empty() {
+        r.editor.notices.note(format!("{level}'s folder holds no file a build wrote."));
+        return;
+    }
+    let spec = gz_ui::ConfirmSpec {
+        id: "clean_level".into(),
+        title: "Remove Build Files".into(),
+        headline: gz_ui::tr!(
+            "Remove {n} {n:file|files} a level build wrote into {level}'s folder? The module would ship them over the game's own level.",
+            n = files.len(),
+            level = level
+        ),
+        total: files.len(),
+        items: files.into_iter().map(gz_ui::Tx::raw).collect(),
+        consequence: "Deleted for good - this cannot be undone.".into(),
+        action: "Remove".into(),
+        destructive: true,
+    };
+    let ed = r.editor.clone();
+    crate::local::confirm(r.ctx, r.editor, spec, move || {
+        let ed2 = ed.clone();
+        ed.exec.spawn(async move {
+            let reply = ed2.call("level.clean", Args::new(), ed2.ui_origin()).await;
+            crate::problems::changed(&ed2);
+            if reply.get("ok").and_then(Value::as_bool) != Some(true) {
+                let text =
+                    reply.get("error").and_then(Value::as_str).unwrap_or("The build files were not removed.");
+                ed2.notices.error(text.to_owned());
+                return;
+            }
+            // a file in use stays, and stays the build's: the author learns which
+            let kept: Vec<&str> = reply
+                .get("kept")
+                .and_then(Value::as_array)
+                .map(|l| l.iter().filter_map(|k| k.get("file").and_then(Value::as_str)).collect())
+                .unwrap_or_default();
+            if !kept.is_empty() {
+                ed2.notices.error(format!("These build files could not be removed: {}.", kept.join(", ")));
+            }
+        });
+    });
 }
 
 /// A Clear Problems answered: the Problems panel reads the list again.
@@ -353,7 +447,7 @@ pub fn actions() -> Vec<Action> {
             })
             .reply(|r| settled(r, "scene.open", last_scene_args(r.editor))),
         Action::new(SAVE_AS, "Save As...", SCENE, "level.show")
-            .keys(const { &[Chord::ctrl_shift(Key::S)] })
+            .keys(const { &[Chord::ctrl_alt(Key::S)] })
             .scope(TAB)
             .args(|_| view("dialog", "save_as"))
             .enabled(with_scene),
@@ -389,7 +483,7 @@ pub fn actions() -> Vec<Action> {
             }),
         // groups
         Action::new(UNGROUP, "Ungroup", SCENE, "scene.ungroup")
-            .keys(const { &[Chord::ctrl_shift(Key::G)] })
+            .keys(const { &[Chord::shift(Key::G)] })
             .scope(TAB)
             .enabled(|cx| match snapshot(cx) {
                 None => with_scene(cx),
@@ -418,6 +512,18 @@ pub fn actions() -> Vec<Action> {
             .scope(TAB)
             .args(|_| pairs(&[("set", json!({ "authored": false }))]))
             .enabled(with_selection),
+        // the selection's asset; with none, the key goes on to the tab's own file
+        Action::new(BROWSE_TO_ASSET, "Browse to Asset", SCENE, "content.view")
+            .icon(Icon::Folder)
+            .keys(const { &[Chord::ctrl(Key::B)] })
+            .scope(TAB)
+            .args(|cx| {
+                let (kind, field, value) = selected_asset(cx).unwrap_or_default();
+                pairs(&[("action", json!("reveal")), ("kind", json!(kind)), (field, json!(value))])
+            })
+            .enabled(|cx| {
+                Enabled::when(selected_asset(cx).is_some(), "Select an object made from an asset first.")
+            }),
         Action::new(SUMMARY, "Summary Info", SCENE, "level.show")
             .icon(Icon::Info)
             .scope(TAB)
@@ -442,7 +548,6 @@ pub fn actions() -> Vec<Action> {
         // building
         Action::new(BUILD_LEVEL, "Build Level", BUILD, "level.build")
             .icon(Icon::BuildAll)
-            .keys(const { &[Chord::new(Key::F5)] })
             .scope(TAB)
             .enabled(can_build),
         Action::new(REBUILD_ALL, "Rebuild All", BUILD, "level.build")
@@ -488,7 +593,7 @@ pub fn actions() -> Vec<Action> {
         // playing
         Action::new(PLAY, "Play", BUILD, "level.play")
             .icon(Icon::Play)
-            .keys(const { &[Chord::new(Key::F9)] })
+            .keys(const { &[Chord::alt(Key::P)] })
             .scope(TAB)
             .args(|_| view("action", "start"))
             .enabled(can_play),
@@ -518,6 +623,11 @@ pub fn actions() -> Vec<Action> {
                     Enabled::when(game_root(cx.editor).is_some(), "No game is linked.")
                 }
             }),
+        Action::new(REMOVE_BUILD_FILES, "Remove Build Files...", BUILD, "level.clean")
+            .scope(TAB)
+            .args(|_| pairs(&[("dry_run", json!(true))]))
+            .enabled(can_remove_build_files)
+            .reply(confirm_build_files),
         Action::new(GAME_FOLDER, "Open Game Folder", BUILD, "ui.reveal")
             .icon(Icon::GameFolder)
             .scope(TAB)

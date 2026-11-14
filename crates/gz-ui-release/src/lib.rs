@@ -105,6 +105,7 @@ pub fn register(reg: &mut gz_editor::Registry) {
 
 /// Plugs the windows into the shell.
 pub fn install(b: &mut ShellBuilder) {
+    b.translation(include_str!("ru.lua"));
     let hub: Hub = Rc::new(RefCell::new(publish::ReleaseUi::default()));
 
     // the Publish Release dialog; it also draws the edit dialog and the publish result, which
@@ -167,10 +168,16 @@ pub fn install(b: &mut ShellBuilder) {
         let state = publisher.button_text();
         let running = publisher.running();
         // the label keeps its width: what a running release does is in the tip, and the button is lit meanwhile
-        let mut tip = if running { format!("{state}.\nClick to see the job.\n") } else { String::new() };
-        tip.push_str("Package the module and publish it as a GitHub release.\nPlayers receive it through the game's Mods menu.");
+        let tip = if running {
+            gz_ui::tr!(
+                "{state}.\nClick to see the job.\nPackage the module and publish it as a GitHub release.\nPlayers receive it through the game's Mods menu.",
+                state = gz_ui::Tx::ui(state)
+            )
+        } else {
+            gz_ui::Tx::from("Package the module and publish it as a GitHub release.\nPlayers receive it through the game's Mods menu.")
+        };
         let queued = tb_hub.borrow().publish_queued();
-        if tb.action("publish_release", Icon::Publish, "Publish Release", &tip, !queued, running, Kind::Ghost) {
+        if tb.action("publish_release", Icon::Publish, "Publish Release", tip, !queued, running, Kind::Ghost) {
             if running {
                 cx.requests.task_card(true);
             } else {
@@ -186,6 +193,21 @@ pub fn install(b: &mut ShellBuilder) {
             cx.requests.action(ACT_RELEASES);
         }
     });
+}
+
+#[cfg(test)]
+mod i18n_tests {
+    #[test]
+    fn the_catalog_reads_with_the_kits_and_the_shells() {
+        let c = gz_ui::i18n::Catalog::parse(&[
+            gz_ui::i18n::KIT_RU,
+            gz_app::lang::SHELL_RU,
+            include_str!("ru.lua"),
+        ])
+        .expect("the catalogs read");
+        let p = gz_ui::i18n::problems(&c);
+        assert!(p.is_empty(), "{}", p.join("\n"));
+    }
 }
 
 #[cfg(test)]

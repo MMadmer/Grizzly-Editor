@@ -6,6 +6,7 @@
 //! `level.status` read it, nothing polls it, and it is computed on the CPU pool once per change.
 
 use std::path::PathBuf;
+
 use std::sync::{Arc, OnceLock};
 
 use gz_base::{Rev, RevCounter, Severity};
@@ -51,7 +52,8 @@ pub enum StepState {
     Never,
     /// Its last run failed.
     Failed,
-    /// The scene has nothing this step makes (no detail objects).
+    /// The scene has nothing this step makes (no detail objects), or the level is one of the
+    /// linked game's and the step compiles it (the module adds to the game's level).
     NotNeeded,
 }
 
@@ -78,6 +80,11 @@ pub struct Status {
     /// The level the scene builds (Level Settings' level path).
     pub level: String,
     pub steps: Vec<StepStatus>,
+    /// The level is one of the linked game's: the module adds to it, nothing is compiled.
+    pub stock: bool,
+    /// On a stock level: the compile steps an earlier build ran there, whose files replace the
+    /// game's own in every game that mounts the module (`level.clean` removes them).
+    pub built_over: Vec<Step>,
 }
 
 impl Status {
@@ -118,6 +125,14 @@ pub struct LevelProblem {
     pub position: Option<[f32; 3]>,
 }
 
+/// The levels of the linked game, read for the game's revision.
+#[derive(Default)]
+struct GameLevels {
+    rev: Option<Rev>,
+    levels: Arc<Vec<String>>,
+    reading: bool,
+}
+
 /// The record of the level the scene builds, as read from its folder.
 #[derive(Default)]
 struct RecordSlot {
@@ -146,6 +161,9 @@ pub struct LevelBuild {
     status: OnceLock<Query<(), Status>>,
     pub(crate) problems: Mutex<Vec<LevelProblem>>,
     pub(crate) graphs: Mutex<Graphs>,
+    game_levels: Mutex<GameLevels>,
+    /// A read of the game's levels ended: the status follows it.
+    levels_rev: RevCounter,
 }
 
 /// The project's `gamedata\levels`: a level build lands in the project, never in the editor or
@@ -159,7 +177,7 @@ pub fn levels_root(session: &ProjectSession) -> PathBuf {
 #[must_use]
 pub fn default_options(editor: &Editor) -> Options {
     let game = gz_project::Project::of(editor).map(|(_, p)| p.game_root()).unwrap_or_default();
-    Options { quality: Quality::Standard, flags: String::new(), game, library: 0 }
+    Options { quality: Quality::Standard, flags: String::new(), game, library: 0, stock: false }
 }
 
 impl LevelBuild {
@@ -172,6 +190,49 @@ impl LevelBuild {
     #[must_use]
     pub fn running(&self) -> Option<Running> {
         self.running.lock().map(|(p, _)| p)
+    }
+
+    /// The levels of the linked game (its game graph, `gz-world`'s read of `all.spawn`) without
+    /// waiting: `None` until the first read for the game's revision ended, which this starts.
+    pub fn game_levels_now(&self, editor: &Arc<Editor>) -> Option<Arc<Vec<String>>> {
+        let rev = gz_project::Project::of(editor).ok().map(|(_, p)| p.game_rev());
+        let mut slot = self.game_levels.lock();
+        if slot.rev.is_some() && slot.rev == rev {
+            return Some(slot.levels.clone());
+        }
+        if !slot.reading {
+            slot.reading = true;
+            let (ed, session) = (editor.clone(), editor.project_opt());
+            editor.exec.spawn(async move {
+                let Some(session) = session else { return };
+                let lb = Self::of(&session);
+                let levels = read_game_levels(&ed).await;
+                let mut slot = lb.game_levels.lock();
+                *slot = GameLevels { rev, levels: Arc::new(levels), reading: false };
+                drop(slot);
+                lb.levels_rev.bump();
+                ed.exec.wake().ping();
+            });
+        }
+        // the levels of the game read before, while the new ones are read
+        slot.rev.is_some().then(|| slot.levels.clone())
+    }
+
+    /// The levels of the linked game, read now when they have not been for its revision.
+    pub async fn game_levels(&self, editor: &Arc<Editor>) -> Arc<Vec<String>> {
+        let rev = gz_project::Project::of(editor).ok().map(|(_, p)| p.game_rev());
+        {
+            let slot = self.game_levels.lock();
+            if slot.rev.is_some() && slot.rev == rev {
+                return slot.levels.clone();
+            }
+        }
+        let levels = Arc::new(read_game_levels(editor).await);
+        let mut slot = self.game_levels.lock();
+        *slot = GameLevels { rev, levels: levels.clone(), reading: false };
+        drop(slot);
+        self.levels_rev.bump();
+        levels
     }
 
     /// The record of `level` when it has been read; starts the read the first time a level is
@@ -250,6 +311,13 @@ impl LevelBuild {
         self.record_rev.bump();
     }
 
+    /// The last status worked out, asking for nothing: what an action's state reads.
+    #[must_use]
+    pub fn status_last(editor: &Editor) -> Option<Arc<Status>> {
+        let session = editor.project_opt()?;
+        Self::of(&session).status.get()?.peek(&())
+    }
+
     /// The status of the open scene without waiting: fresh, the last one while a new one is
     /// worked out, or nothing yet. What the status bar draws.
     #[must_use]
@@ -263,12 +331,15 @@ impl LevelBuild {
         let lb = Self::of(&session);
         let level = snap.meta.level.level_path.to_string();
         let record = lb.record(editor, &session, &level)?;
-        let opts = default_options(editor);
+        let levels = lb.game_levels_now(editor)?;
+        let mut opts = default_options(editor);
+        opts.stock = crate::stock::is_stock(&levels, &level);
         let lib = svc.library.clone();
         let rev = svc
             .store
             .rev()
             .mix(lb.record_rev.get())
+            .mix(lb.levels_rev.get())
             .mix(Rev(fingerprint::text_hash(&opts.game)))
             .mix(lib.rev());
         let query = lb.status.get_or_init(|| Query::new(editor.exec.clone()));
@@ -293,10 +364,13 @@ impl LevelBuild {
         let lb = Self::of(session);
         let level = scene.meta.level.level_path.to_string();
         let record = lb.record_now(editor, session, &level).await;
-        let opts = default_options(editor);
+        let levels = lb.game_levels(editor).await;
+        let mut opts = default_options(editor);
+        opts.stock = crate::stock::is_stock(&levels, &level);
         let lib = session.services.get::<SceneService>().map(|svc| svc.library.clone());
         let rev = rev
             .mix(lb.record_rev.get())
+            .mix(lb.levels_rev.get())
             .mix(Rev(fingerprint::text_hash(&opts.game)))
             .mix(lib.as_ref().map_or(Rev::ZERO, |l| l.rev()));
         let query = lb.status.get_or_init(|| Query::new(editor.exec.clone()));
@@ -307,6 +381,15 @@ impl LevelBuild {
                 status_of(&scene, &lb2.hashes, record.as_deref(), &Options { library, ..opts })
             })
             .await
+    }
+}
+
+/// The levels of the linked game's game graph, as `gz-world` reads its `all.spawn` (cached per
+/// game revision there); none when no game is linked or it cannot be read.
+async fn read_game_levels(editor: &Arc<Editor>) -> Vec<String> {
+    match gz_world::WorldService::of(editor).await {
+        Ok(w) => w.game().await.levels.clone(),
+        Err(_) => Vec::new(),
     }
 }
 
@@ -358,6 +441,15 @@ pub(crate) fn status_with(
             steps.push(st);
             continue;
         }
+        if opts.stock && step.compiles() {
+            st.state = StepState::NotNeeded;
+            st.why = format!(
+                "{} is a level of the linked game: the module adds to it, and the level is not compiled.",
+                scene.meta.level.level_path
+            );
+            steps.push(st);
+            continue;
+        }
         match rec {
             None => {
                 st.state = StepState::Never;
@@ -375,7 +467,12 @@ pub(crate) fn status_with(
         }
         steps.push(st);
     }
-    Status { level: scene.meta.level.level_path.to_string(), steps }
+    let built_over: Vec<Step> = if opts.stock {
+        record.map(|r| r.steps.keys().copied().filter(|s| s.compiles()).collect()).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    Status { level: scene.meta.level.level_path.to_string(), steps, stock: opts.stock, built_over }
 }
 
 /// Why a stale step is stale, in a sentence.
@@ -465,6 +562,7 @@ mod tests {
                     flags: opts.flags.clone(),
                     library: if step.classes().contains(&ObjClass::SceneObject) { opts.library } else { 0 },
                     failed: None,
+                    files: Vec::new(),
                 },
             );
         }
@@ -538,6 +636,29 @@ mod tests {
         let st = status_of(&s, &cache, Some(&record), &draft);
         assert_eq!(st.get(Step::Game).unwrap().state, StepState::Failed);
         assert_eq!(st.get(Step::Game).unwrap().why, "The scene has no spawn point.");
+    }
+
+    #[test]
+    fn a_stock_level_needs_no_compile_and_names_what_a_build_left() {
+        let (s, _) = scene();
+        let cache = HashCache::default();
+        let stock = Options { stock: true, ..Options::default() };
+        // never built: the module needs its spawn layer and nothing else
+        let st = status_of(&s, &cache, None, &stock);
+        assert_eq!(st.to_build(), [Step::SpawnLayer]);
+        assert!(st.stock && st.built_over.is_empty());
+        let light = st.get(Step::Light).unwrap();
+        assert_eq!(light.state, StepState::NotNeeded);
+        assert!(light.why.contains("is a level of the linked game"), "{}", light.why);
+        assert_eq!(st.text(), "Spawn Layer");
+        // an earlier build compiled it here: still not needed, and the steps it ran are named
+        let mut record = built(&s, &cache, &Options::default());
+        record.steps.remove(&Step::SpawnLayer);
+        let st = status_of(&s, &cache, Some(&record), &stock);
+        assert_eq!(st.to_build(), [Step::SpawnLayer]);
+        assert!(st.built_over.contains(&Step::Geometry) && !st.built_over.contains(&Step::SpawnLayer));
+        // the same level built as a level of the module's own: every step by its record
+        assert!(status_of(&s, &cache, Some(&record), &Options::default()).built_over.is_empty());
     }
 
     #[test]

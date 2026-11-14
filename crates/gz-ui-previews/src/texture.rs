@@ -12,7 +12,9 @@ use gz_editor::Editor;
 use gz_ui::grid::read_only;
 use gz_ui::splitter::splitter_tail;
 use gz_ui::text::{self, Clip};
-use gz_ui::{Font, Icon, Kind, MenuItem, PropFlags, PropertyGrid, Toolbar, menu_item, palette, state};
+use gz_ui::{
+    Font, Icon, Kind, MenuItem, PropFlags, PropertyGrid, Toolbar, Tx, menu_item, palette, state, tr,
+};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
@@ -241,7 +243,7 @@ impl TextureDoc {
                     let label = format!("{}%", step * 100.0);
                     if menu_item(
                         ui,
-                        &label,
+                        Tx::raw(label),
                         MenuItem { selected: *zoom == step, enabled: on, ..MenuItem::default() },
                     ) {
                         *zoom = step;
@@ -256,7 +258,7 @@ impl TextureDoc {
             "channels",
             "Channels",
             &mut self.channel,
-            &CHANNELS,
+            &CHANNELS.map(Tx::raw),
             "RGBA shows the image over a checkerboard; R, G and B one colour channel; A the alpha as grey",
             on,
         );
@@ -275,7 +277,7 @@ impl TextureDoc {
                         let (w, h) = t.mip_size(m);
                         if menu_item(
                             ui,
-                            &format!("Mip {m} \u{b7} {w} x {h}"),
+                            tr!("Mip {m} \u{b7} {w} x {h}", m = m, w = w, h = h),
                             MenuItem { selected: m == *mip, ..MenuItem::default() },
                         ) {
                             *mip = m;
@@ -417,17 +419,17 @@ impl TextureDoc {
         PropertyGrid::new("texture").show(ui, |g| {
             g.section("Texture", true, None, |g| {
                 g.row("Name", "The texture's file name", ro, 0, |ui| {
-                    read_only(ui, crate::paths::leaf(&t.name), Clip::End)
+                    read_only(ui, Tx::raw(crate::paths::leaf(&t.name)), Clip::End)
                 });
                 g.row("Size", "Its size as imported, in pixels", ro, 0, |ui| {
-                    read_only(ui, &format!("{} x {}", t.width, t.height), Clip::End)
+                    read_only(ui, Tx::raw(format!("{} x {}", t.width, t.height)), Clip::End)
                 });
                 let help = if t.decoded {
                     "The GPU cannot take this file as it is: the preview shows its top level decoded"
                 } else {
                     "The file's pixel format, as the GPU holds it"
                 };
-                g.row("Format", help, ro, 0, |ui| read_only(ui, &t.format_text(), Clip::End));
+                g.row("Format", help, ro, 0, |ui| read_only(ui, format_shown(&t), Clip::End));
                 // what a decoded copy has is not what the file has: those rows would describe the preview
                 if !t.decoded {
                     let yes = |b: bool| if b { "Yes" } else { "No" };
@@ -438,17 +440,21 @@ impl TextureDoc {
                         read_only(ui, fi.map_or("Unknown", |f| yes(f.srgb)), Clip::End)
                     });
                     g.row("Mips", "The mip levels the file holds", ro, 0, |ui| {
-                        read_only(ui, &t.mips.to_string(), Clip::End)
+                        read_only(ui, Tx::raw(t.mips.to_string()), Clip::End)
                     });
                     if let Some(f) = fi {
                         g.row("GPU Memory", "What the whole mip chain takes on the GPU", ro, 0, |ui| {
-                            read_only(ui, &human_bytes(gpu_bytes(&f, t.width, t.height, t.mips)), Clip::End)
+                            read_only(
+                                ui,
+                                Tx::raw(human_bytes(gpu_bytes(&f, t.width, t.height, t.mips))),
+                                Clip::End,
+                            )
                         });
                     }
                 }
                 if t.file_size > 0 {
                     g.row("On Disk", "The size of the file", ro, 0, |ui| {
-                        read_only(ui, &human_bytes(t.file_size), Clip::End)
+                        read_only(ui, Tx::raw(human_bytes(t.file_size)), Clip::End)
                     });
                 }
                 // where it lives and its path are two rows: an ellipsis at the start of one line ate the origin's label
@@ -472,7 +478,7 @@ impl TextureDoc {
                     } else {
                         "The file the texture was read from"
                     };
-                    g.row("Path", help, ro, 0, |ui| read_only(ui, &path, Clip::Start));
+                    g.row("Path", help, ro, 0, |ui| read_only(ui, Tx::raw(&path), Clip::Start));
                     if let Some(f) = &t.file
                         && g.trailing(Icon::Reveal, "Show in Explorer")
                     {
@@ -484,16 +490,17 @@ impl TextureDoc {
             });
             g.section("View", true, None, |g| {
                 g.row("Shown", "The mip level the canvas shows and its size", ro, 0, |ui| {
-                    read_only(ui, &format!("Mip {mip} \u{b7} {mw} x {mh}"), Clip::End)
+                    read_only(ui, tr!("Mip {m} \u{b7} {w} x {h}", m = mip, w = mw, h = mh), Clip::End)
                 });
+                let percent = format!("{:.0}%", self.scale * 100.0);
                 let zoom = if self.zoom > 0.0 {
-                    format!("{:.0}%", self.scale * 100.0)
+                    Tx::raw(percent)
                 } else {
-                    format!("Fit ({:.0}%)", self.scale * 100.0)
+                    tr!("Fit ({percent})", percent = percent)
                 };
-                g.row("Zoom", "Screen pixels per texel", ro, 0, |ui| read_only(ui, &zoom, Clip::End));
+                g.row("Zoom", "Screen pixels per texel", ro, 0, |ui| read_only(ui, zoom, Clip::End));
                 g.row("Channels", "What the canvas shows of the colour", ro, 0, |ui| {
-                    read_only(ui, CHANNELS.get(self.channel).copied().unwrap_or("RGBA"), Clip::End)
+                    read_only(ui, Tx::raw(CHANNELS.get(self.channel).copied().unwrap_or("RGBA")), Clip::End)
                 });
             });
         });
@@ -555,8 +562,8 @@ impl Document for TextureDoc {
     fn kind(&self) -> &'static str {
         "texture"
     }
-    fn label(&self) -> String {
-        if self.name.is_empty() { "Texture".to_owned() } else { crate::paths::label_of(&self.name) }
+    fn label(&self) -> Tx<'static> {
+        if self.name.is_empty() { Tx::from("Texture") } else { Tx::raw(crate::paths::label_of(&self.name)) }
     }
     fn icon(&self) -> Icon {
         Icon::FileTexture
@@ -564,8 +571,8 @@ impl Document for TextureDoc {
     fn path(&self) -> Option<String> {
         (!self.name.is_empty()).then(|| self.name.clone())
     }
-    fn tooltip(&self) -> Option<String> {
-        Some(if self.name.is_empty() { "Texture".to_owned() } else { self.name.clone() })
+    fn tooltip(&self) -> Option<Tx<'static>> {
+        Some(if self.name.is_empty() { Tx::from("Texture") } else { Tx::raw(self.name.clone()) })
     }
     fn padded(&self) -> bool {
         false
@@ -618,13 +625,13 @@ impl Document for TextureDoc {
                         state::error_state(
                             &mut child,
                             "This texture cannot be shown",
-                            &format!("{}: {}", t.name, t.error),
+                            tr!("previews" => "{name}: {error}", name = &t.name, error = Tx::ui(t.error.clone())),
                             None,
                         );
                     }
                     None => state::busy_line(
                         &mut child,
-                        &format!("Reading {}...", crate::paths::leaf(&self.name)),
+                        tr!("Reading {name}...", name = crate::paths::leaf(&self.name)),
                     ),
                 }
             }
@@ -648,14 +655,17 @@ impl Document for TextureDoc {
         let Some(t) = self.image() else { return };
         let mip = self.mip.min(t.mips.saturating_sub(1));
         let (w, h) = t.mip_size(mip);
-        let line = format!(
-            "{w} x {h} \u{b7} {} \u{b7} mip {mip} of {} \u{b7} {:.0}%",
-            t.format_text(),
-            t.mips,
-            self.scale * 100.0
+        let line = crate::local::local_facts(
+            ui.ctx(),
+            &[
+                Tx::raw(format!("{w} x {h}")),
+                format_shown(&t),
+                tr!("mip {mip} of {mips}", mip = mip, mips = t.mips),
+                Tx::raw(format!("{:.0}%", self.scale * 100.0)),
+            ],
         );
         let p = palette(ui.ctx());
-        text::label(ui, &line, Font::Small, p.text_secondary, Clip::End);
+        text::label(ui, line, Font::Small, p.text_secondary, Clip::End);
     }
 
     fn shortcut(&mut self, _cx: &mut DocCx<'_>, chord: &Chord) -> bool {
@@ -717,6 +727,12 @@ pub fn factory(editor: &Arc<Editor>, req: &OpenRequest) -> Result<Box<dyn Docume
         Pending::spawn(&editor.exec, load(ed, n, source))
     });
     Ok(Box::new(TextureDoc::new(editor, name, source, pending)))
+}
+
+/// A texture's format as the window shows it: a pixel format's name is data ("BC1 (DXT1)"); a
+/// copy decoded for the preview is said in a sentence of the editor's own.
+fn format_shown(t: &crate::texture_load::TexFile) -> Tx<'static> {
+    if t.decoded { Tx::ui(t.format_text()) } else { Tx::raw(t.format_text()) }
 }
 
 #[cfg(test)]

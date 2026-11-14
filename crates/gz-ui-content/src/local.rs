@@ -6,7 +6,7 @@ use egui::{
     Vec2, pos2,
 };
 use gz_ui::text::{self, Clip};
-use gz_ui::{Font, Icon, icons, metrics, palette};
+use gz_ui::{Font, Icon, TipExt, Tx, icons, metrics, palette};
 
 /// A row of the folder tree: the chevron when it has sub-folders, a folder glyph, the name cut
 /// to the pane. A click on the chevron toggles it; anywhere else picks it.
@@ -17,17 +17,18 @@ pub struct TreeRow {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn local_tree_row(
+pub fn local_tree_row<'a>(
     ui: &mut Ui,
     id: Id,
     depth: usize,
-    label: &str,
+    label: impl Into<Tx<'a>>,
     open: bool,
     has_children: bool,
     selected: bool,
     veiled: bool,
 ) -> TreeRow {
     let p = palette(ui.ctx());
+    let label = label.into();
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, metrics::ROW), Sense::hover());
     let response = ui.interact(rect, id, Sense::click_and_drag());
@@ -74,18 +75,20 @@ pub fn local_tree_row(
             pos2(x, rect.center().y),
             Align2::LEFT_CENTER,
             if veiled { p.text_muted } else { p.text },
-            label,
+            &label,
             Some((rect.max.x - 4.0 - x).max(0.0)),
             Clip::End,
         );
     }
-    gz_ui::audit::control(ui.ctx(), label, true, None, None, rect);
+    // an agent reads the control in English
+    gz_ui::audit::control(ui.ctx(), &label.en(), true, None, None, rect);
     TreeRow { clicked, toggled, response }
 }
 
 /// The folder path as crumbs: the root, then each folder, chevrons between; the leading crumbs
 /// fold into "…" until the rest fits, the folder shown always stays and gives up its middle
-/// last. Returns the path picked (`""` for the root), when one was.
+/// last. Returns the path picked (`""` for the root), when one was. `root_label` and `folder`
+/// are as the window shows them (a word of the editor's already in its language).
 pub fn local_breadcrumbs(ui: &mut Ui, root_label: &str, folder: &str) -> Option<String> {
     let ctx = ui.ctx().clone();
     let p = palette(&ctx);
@@ -94,14 +97,14 @@ pub fn local_breadcrumbs(ui: &mut Ui, root_label: &str, folder: &str) -> Option<
     let width = ui.available_width();
     let h = metrics::FRAME;
     let mut crumbs: Vec<(String, String, f32)> =
-        vec![(root_label.to_owned(), String::new(), text::width(&ctx, &font, root_label) + pad)];
+        vec![(root_label.to_owned(), String::new(), text::width(&ctx, &font, Tx::raw(root_label)) + pad)];
     let mut path = String::new();
     for part in folder.split('\\').filter(|s| !s.is_empty()) {
         if !path.is_empty() {
             path.push('\\');
         }
         path.push_str(part);
-        crumbs.push((part.to_owned(), path.clone(), text::width(&ctx, &font, part) + pad));
+        crumbs.push((part.to_owned(), path.clone(), text::width(&ctx, &font, Tx::raw(part)) + pad));
     }
     let n = crumbs.len();
     let mut total: f32 = crumbs.iter().enumerate().map(|(i, c)| c.2 + if i > 0 { sep } else { 0.0 }).sum();
@@ -130,7 +133,7 @@ pub fn local_breadcrumbs(ui: &mut Ui, root_label: &str, folder: &str) -> Option<
     let fold_id = ui.make_persistent_id("gz-ui-content.crumbs.fold");
     if first > 0 {
         let r = Rect::from_min_size(pos2(x, rect.min.y), Vec2::new(fold_w, h));
-        let resp = ui.interact(r, fold_id.with("button"), Sense::click()).on_hover_text("The folders above");
+        let resp = ui.interact(r, fold_id.with("button"), Sense::click()).tip("The folders above");
         if resp.hovered() {
             painter.rect_filled(
                 r,
@@ -150,7 +153,7 @@ pub fn local_breadcrumbs(ui: &mut Ui, root_label: &str, folder: &str) -> Option<
         }
         gz_ui::menu::menu_popup(&ctx, fold_id, r, ui.layer_id(), |ui| {
             for (label, path, _) in crumbs.iter().take(first) {
-                if gz_ui::menu_item(ui, label, gz_ui::MenuItem::default()) {
+                if gz_ui::menu_item(ui, Tx::raw(label.as_str()), gz_ui::MenuItem::default()) {
                     go = Some(path.clone());
                 }
             }
@@ -174,12 +177,12 @@ pub fn local_breadcrumbs(ui: &mut Ui, root_label: &str, folder: &str) -> Option<
                 if resp.is_pointer_button_down_on() { p.pressed } else { p.hover },
             );
         }
-        let (shown, cut) = text::ellipsize(&ctx, &font, label, w - pad, Clip::End);
+        let (shown, cut) = text::ellipsize(&ctx, &font, Tx::raw(label.as_str()), w - pad, Clip::End);
         let color = if last || resp.hovered() { p.text } else { p.text_secondary };
         painter.text(r.center(), Align2::CENTER_CENTER, &shown, font.clone(), color);
         if cut {
             gz_ui::audit::truncated(&ctx, label, &shown, r);
-            resp.clone().on_hover_text(label.as_str());
+            resp.clone().tip(Tx::raw(label.as_str()));
         }
         if resp.clicked() && !last {
             go = Some(path.clone());
@@ -236,17 +239,21 @@ pub fn local_rename_box(
 }
 
 /// A heading inside a menu: Small muted text.
-pub fn local_menu_heading(ui: &mut Ui, title: &str) {
+pub fn local_menu_heading<'a>(ui: &mut Ui, title: impl Into<Tx<'a>>) {
     let p = palette(ui.ctx());
+    let title = title.into();
     // as wide as its words: a popup sizes itself by what its rows ask for
-    let w = text::width(ui.ctx(), &Font::Small.id(), title) + 16.0;
+    let w = text::width(ui.ctx(), &Font::Small.id(), &title) + 16.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(w, 22.0), Sense::hover());
-    ui.painter().text(
+    text::paint(
+        ui.painter(),
+        &Font::Small.id(),
         pos2(rect.min.x + 8.0, rect.center().y + 2.0),
         Align2::LEFT_CENTER,
-        title,
-        Font::Small.id(),
         p.text_muted,
+        &title,
+        None,
+        Clip::End,
     );
 }
 

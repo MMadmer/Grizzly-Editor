@@ -30,7 +30,7 @@ use gz_query::Query;
 use gz_scene::SceneService;
 use gz_scene::model::SceneMode;
 use gz_ui::text::{self, Clip};
-use gz_ui::{Font, Icon, SearchField, Section, icons, metrics, palette, state};
+use gz_ui::{Font, Icon, SearchField, Section, Tx, icons, metrics, palette, state, tr};
 use gz_ui_viewport::place::{Kind, Placeable};
 use parking_lot::Mutex;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -186,11 +186,24 @@ pub struct Item {
     pub detail: String,
     pub icon: Icon,
     pub what: What,
+    /// The label is the editor's own word (a light, a shape), not a name from the lists.
+    pub own: bool,
 }
 
 impl Item {
     fn new(category: Category, label: &str, detail: &str, icon: Icon, what: What) -> Self {
-        Self { category, label: label.to_owned(), detail: detail.to_owned(), icon, what }
+        Self { category, label: label.to_owned(), detail: detail.to_owned(), icon, what, own: false }
+    }
+
+    /// One of the panel's own rows: its label is translated where it is drawn.
+    fn own(category: Category, label: &str, detail: &str, icon: Icon, what: What) -> Self {
+        Self { own: true, ..Self::new(category, label, detail, icon, what) }
+    }
+
+    /// The label as the window shows it.
+    #[must_use]
+    pub fn label_tx(&self) -> Tx<'static> {
+        if self.own { Tx::ui(self.label.clone()) } else { Tx::raw(self.label.clone()) }
     }
 }
 
@@ -376,42 +389,54 @@ pub struct Key {
     /// The folders open, per category; `epoch` moves with every toggle.
     pub epoch: u64,
     pub recent: Vec<String>,
+    /// The panel's own rows' labels in the window's language, lower case (none in English): a
+    /// search finds them by either name.
+    pub shown: Vec<(String, String)>,
 }
 
 /// The fixed rows of the short categories.
 fn builtin() -> Vec<Item> {
     use Category as C;
     vec![
-        Item::new(C::Lights, "Light", "", Icon::Light, What::of(Kind::Light, None)),
-        Item::new(C::Lights, "Glow", "", Icon::Glow, What::of(Kind::Glow, None)),
-        Item::new(
+        Item::own(C::Lights, "Light", "", Icon::Light, What::of(Kind::Light, None)),
+        Item::own(C::Lights, "Glow", "", Icon::Glow, What::of(Kind::Glow, None)),
+        Item::own(
             C::SpawnPoints,
             "Player Start",
             "player_start",
             Icon::PlayerStart,
             What::of(Kind::Spawn, Some("player_start")),
         ),
-        Item::new(
+        Item::own(
             C::SpawnPoints,
             "Environment Modifier",
             "env_mod",
             Icon::Spawn,
             What::of(Kind::Spawn, Some("env_mod")),
         ),
-        Item::new(
+        Item::own(
             C::SpawnPoints,
             "Respawn Point",
             "rpoint",
             Icon::Spawn,
             What::of(Kind::Spawn, Some("rpoint")),
         ),
-        Item::new(C::Shapes, "Sphere Shape", "", Icon::Shape, What::of(Kind::Shape, None)),
-        Item::new(C::Shapes, "Box Shape", "", Icon::Shape, What::of(Kind::Shape, Some("box"))),
-        Item::new(C::Shapes, "AI Map Bounds", "", Icon::AIMap, What::of(Kind::Shape, Some("ai_map_bounds"))),
-        Item::new(C::Shapes, "Fog Volume", "", Icon::FogVolume, What::of(Kind::Fog, None)),
-        Item::new(C::Shapes, "Sound Environment", "", Icon::SoundEnv, What::of(Kind::SoundEnv, None)),
-        Item::new(C::Ways, "Way Path", "", Icon::Way, What::of(Kind::Way, None)),
+        Item::own(C::Shapes, "Sphere Shape", "", Icon::Shape, What::of(Kind::Shape, None)),
+        Item::own(C::Shapes, "Box Shape", "", Icon::Shape, What::of(Kind::Shape, Some("box"))),
+        Item::own(C::Shapes, "AI Map Bounds", "", Icon::AIMap, What::of(Kind::Shape, Some("ai_map_bounds"))),
+        Item::own(C::Shapes, "Fog Volume", "", Icon::FogVolume, What::of(Kind::Fog, None)),
+        Item::own(C::Shapes, "Sound Environment", "", Icon::SoundEnv, What::of(Kind::SoundEnv, None)),
+        Item::own(C::Ways, "Way Path", "", Icon::Way, What::of(Kind::Way, None)),
     ]
+}
+
+/// The panel's own rows' labels in the window's language, for the search (none in English).
+#[must_use]
+pub fn shown_labels(ctx: &egui::Context) -> Vec<(String, String)> {
+    if gz_ui::i18n::lang(ctx) == gz_ui::Lang::En {
+        return Vec::new();
+    }
+    builtin().into_iter().map(|b| (b.label.clone(), b.label_tx().text(ctx).to_lowercase())).collect()
 }
 
 /// The leaf of a `\`-separated name.
@@ -431,7 +456,7 @@ fn recent_item(key: &str, names: Option<&FxHashMap<String, String>>) -> Option<I
         Kind::Spawn => (names.and_then(|n| n.get(&r)).cloned().unwrap_or_else(|| r.clone()), Icon::Spawn),
         k => (leaf(&r).to_owned(), crate::classes::icon(k.class())),
     };
-    Some(Item { category: Category::Recent, label, detail: r, icon, what })
+    Some(Item { category: Category::Recent, label, detail: r, icon, what, own: false })
 }
 
 /// The items of a long list: `(folder path, item)` in the list's order.
@@ -469,9 +494,15 @@ fn list_items(cat: Category, inputs: &Inputs) -> Option<Vec<(String, Item)>> {
     })
 }
 
-/// Whether an item passes the search: every word, in its label or what it is.
-fn passes(search: &str, item: &Item) -> bool {
-    search.trim().is_empty() || gz_ui::search::matches(search, &format!("{} {}", item.label, item.detail))
+/// Whether an item passes the search: every word, in its label (in English or the window's
+/// language) or what it is.
+fn passes(search: &str, item: &Item, shown: &[(String, String)]) -> bool {
+    if search.trim().is_empty() {
+        return true;
+    }
+    let local =
+        if item.own { shown.iter().find(|(en, _)| *en == item.label).map(|(_, t)| t.as_str()) } else { None };
+    gz_ui::search::matches(search, &format!("{} {} {}", item.label, item.detail, local.unwrap_or("")))
 }
 
 /// The rows of the panel: a pure function of the lists, the search, what is open and Recent.
@@ -507,7 +538,8 @@ pub fn rows(inputs: &Inputs, key: &Key, folders: &FxHashMap<Category, FxHashSet<
             }
             None => true,
         };
-        let shown: Vec<(String, Item)> = items.into_iter().filter(|(_, i)| passes(&key.search, i)).collect();
+        let shown: Vec<(String, Item)> =
+            items.into_iter().filter(|(_, i)| passes(&key.search, i, &key.shown)).collect();
         out.matches += shown.len();
         if (searching || cat == Category::Recent) && shown.is_empty() && !(reading && searching) {
             continue;
@@ -694,6 +726,7 @@ impl PlacePanel {
                 .collect(),
             epoch: self.epoch,
             recent: gz_ui::layout::list(ctx, RECENT_KEY),
+            shown: shown_labels(ctx),
         }
     }
 
@@ -759,7 +792,7 @@ impl PlacePanel {
                     Icon::Search,
                     "Nothing matches",
                     "No placeable thing has this name.",
-                    Some("Clear Search"),
+                    Some("Clear Search".into()),
                 ) {
                     self.search.clear();
                 }
@@ -818,7 +851,7 @@ impl PlacePanel {
                         let mut section =
                             Section::new(&key, category.title()).default_open(category.open_by_default());
                         section = match &count {
-                            Some(n) => section.count(n),
+                            Some(n) => section.count(Tx::raw(n)),
                             None => section.busy("Reading the list..."),
                         };
                         let head = section.show(&mut child);
@@ -851,7 +884,7 @@ impl PlacePanel {
                             pos2(x + 34.0, rect.center().y),
                             Align2::LEFT_CENTER,
                             p.text_secondary,
-                            leaf(path),
+                            Tx::raw(leaf(path)),
                             Some((rect.max.x - x - 38.0).max(0.0)),
                             Clip::End,
                         );
@@ -877,7 +910,7 @@ impl PlacePanel {
                             pos2(rect.min.x + 24.0, rect.center().y),
                             Align2::LEFT_CENTER,
                             p.text_muted,
-                            text,
+                            *text,
                             Some((rect.width() - 28.0).max(0.0)),
                             Clip::End,
                         );
@@ -966,15 +999,16 @@ impl PlacePanel {
         {
             0.0
         } else {
-            (rect.width() * 0.35).min(text::width(&ctx, &Font::Small.id(), &item.detail) + 4.0)
+            (rect.width() * 0.35).min(text::width(&ctx, &Font::Small.id(), Tx::raw(&item.detail)) + 4.0)
         };
+        let label = item.label_tx();
         let cut = text::paint(
             ui.painter(),
             &Font::Body.id(),
             pos2(tx, rect.center().y),
             Align2::LEFT_CENTER,
             p.text,
-            &item.label,
+            &label,
             Some((rect.max.x - tx - detail_w - 6.0).max(0.0)),
             Clip::Middle,
         );
@@ -985,13 +1019,13 @@ impl PlacePanel {
                 pos2(rect.max.x - 4.0, rect.center().y),
                 Align2::RIGHT_CENTER,
                 p.text_muted,
-                &item.detail,
+                Tx::raw(&item.detail),
                 Some(detail_w),
                 Clip::Middle,
             );
         }
         if resp.dragged() {
-            drag_label(&ctx, &item.label);
+            drag_label(&ctx, &label);
         }
         let dropped_at = resp.drag_stopped().then(|| ctx.input(|i| i.pointer.latest_pos())).flatten();
         let clicked = resp.clicked();
@@ -1000,23 +1034,21 @@ impl PlacePanel {
         } else {
             format!("{}\n", item.detail)
         };
-        let tip = format!(
-            "{}\n{what}{}",
-            item.label,
-            if armed {
-                "Placing it: each click in the viewport places one. Click again or press Esc to stop."
-            } else if draggable.is_none() {
-                "Click to place it on the ground in front of the camera."
-            } else {
-                "Click to place it with clicks in the viewport, or drag it into the viewport."
-            }
-        );
+        // the tip is put together from texts already in the window's language
+        let how = if armed {
+            "Placing it: each click in the viewport places one. Click again or press Esc to stop."
+        } else if draggable.is_none() {
+            "Click to place it on the ground in front of the camera."
+        } else {
+            "Click to place it with clicks in the viewport, or drag it into the viewport."
+        };
+        let tip = format!("{}\n{what}{}", label.text(&ctx), gz_ui::i18n::t(&ctx, how));
         let _ = cut;
         resp.on_hover_ui(|ui| {
             if let Some(t) = tex {
                 ui.image(egui::load::SizedTexture::new(t, Vec2::splat(128.0)));
             }
-            ui.label(tip);
+            text::plain(ui, Tx::raw(tip), Font::Body, palette(ui.ctx()).text);
         });
         ItemResponse { clicked, dropped_at }
     }
@@ -1044,10 +1076,10 @@ impl PlacePanel {
             .rows
             .iter()
             .find_map(|r| match r {
-                Row::Item { item, .. } if item.what.placeable() == Some(a) => Some(item.label.clone()),
+                Row::Item { item, .. } if item.what.placeable() == Some(a) => Some(item.label_tx()),
                 _ => None,
             })
-            .unwrap_or_else(|| a.title());
+            .unwrap_or_else(|| a.title_tx());
         ui.horizontal(|ui| {
             icons::draw(
                 ui.painter(),
@@ -1060,7 +1092,7 @@ impl PlacePanel {
             ui.allocate_ui(Vec2::new(room, ROW_H), |ui| {
                 text::label(
                     ui,
-                    &format!("Placing {label} \u{b7} Esc stops"),
+                    tr!("Placing {label} \u{b7} Esc stops", label = label),
                     Font::Body,
                     p.text,
                     Clip::Middle,
@@ -1153,7 +1185,7 @@ impl ItemResponse {
 }
 
 /// The name of what is dragged, under the pointer.
-fn drag_label(ctx: &egui::Context, label: &str) {
+fn drag_label(ctx: &egui::Context, label: &Tx<'_>) {
     let Some(at) = ctx.pointer_latest_pos() else { return };
     let p = palette(ctx);
     egui::Area::new(Id::unique("gz-ui-level.place_drag"))
@@ -1311,7 +1343,7 @@ mod tests {
         );
         let mut panel = PlacePanel::new(&ed);
         let ctx = egui::Context::default();
-        gz_ui::theme::install(&ctx, gz_ui::theme::Accent::default());
+        gz_ui::theme::install(&ctx, gz_ui::Theme::default_theme());
         let item = Item::new(Category::Lights, "Light", "", Icon::Light, What::of(Kind::Light, None));
         let row = Rect::from_min_size(pos2(10.0, 10.0), Vec2::new(240.0, ROW_H));
         let mut run = |events: Vec<Event>, t: f64| -> ItemResponse {

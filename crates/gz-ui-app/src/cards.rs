@@ -401,26 +401,20 @@ pub fn info_from_reply(reply: &serde_json::Value) -> gz_project::DeleteInfo {
     }
 }
 
-/// `n file` / `n files`.
+/// A size as the confirmation names it - bytes, KB, MB, GB - in the window's language.
 #[must_use]
-pub fn count_text(n: u32, one: &str, many: &str) -> String {
-    format!("{n} {}", if n == 1 { one } else { many })
-}
-
-/// A size as the confirmation names it: bytes, KB, MB, GB.
-#[must_use]
-pub fn size_text(bytes: u64) -> String {
+pub fn size_text(bytes: u64) -> gz_ui::Tx<'static> {
     const KB: u64 = 1024;
     const MB: u64 = 1 << 20;
     const GB: u64 = 1 << 30;
     if bytes < KB {
-        format!("{bytes} bytes")
+        gz_ui::tr!("{n} {n:byte|bytes}", n = bytes)
     } else if bytes < MB {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
+        gz_ui::tr!("{n} KB", n = format!("{:.1}", bytes as f64 / 1024.0))
     } else if bytes < GB {
-        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+        gz_ui::tr!("{n} MB", n = format!("{:.1}", bytes as f64 / 1_048_576.0))
     } else {
-        format!("{:.2} GB", bytes as f64 / 1_073_741_824.0)
+        gz_ui::tr!("{n} GB", n = format!("{:.2}", bytes as f64 / 1_073_741_824.0))
     }
 }
 
@@ -496,11 +490,10 @@ mod tests {
 
     #[test]
     fn texts() {
-        assert_eq!(count_text(1, "file", "files"), "1 file");
-        assert_eq!(count_text(3, "file", "files"), "3 files");
-        assert_eq!(size_text(512), "512 bytes");
-        assert_eq!(size_text(1536), "1.5 KB");
-        assert_eq!(size_text(3 * 1_048_576), "3.0 MB");
+        assert_eq!(size_text(512).en(), "512 bytes");
+        assert_eq!(size_text(1).en(), "1 byte");
+        assert_eq!(size_text(1536).en(), "1.5 KB");
+        assert_eq!(size_text(3 * 1_048_576).en(), "3.0 MB");
     }
 
     #[test]

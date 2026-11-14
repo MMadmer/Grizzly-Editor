@@ -9,6 +9,7 @@
 
 use egui::{Align2, CornerRadius, Id, Rect, Role, Sense, Stroke, Ui, Vec2, WidgetInfo, pos2};
 
+use crate::i18n::Tx;
 use crate::icons::{self, Icon};
 use crate::text::{self, Clip};
 use crate::theme::{metrics, palette};
@@ -41,7 +42,7 @@ const FLAT_PAD: f32 = 24.0;
 
 /// The width a tab takes for its label: `closable` leaves room for the cross.
 #[must_use]
-pub fn tab_width(ctx: &egui::Context, label: &str, closable: bool) -> f32 {
+pub fn tab_width<'a>(ctx: &egui::Context, label: impl Into<Tx<'a>>, closable: bool) -> f32 {
     text::width(ctx, &Font::Body.id(), label) + if closable { DOCKED_PAD } else { FLAT_PAD }
 }
 
@@ -50,15 +51,15 @@ pub fn tab_width(ctx: &egui::Context, label: &str, closable: bool) -> f32 {
 pub struct PanelTab<'a> {
     id: Id,
     rect: Rect,
-    label: &'a str,
+    label: Tx<'a>,
     front: bool,
     closable: bool,
     style: TabStyle,
 }
 
 impl<'a> PanelTab<'a> {
-    pub fn new(id: Id, rect: Rect, label: &'a str) -> Self {
-        Self { id, rect, label, front: false, closable: false, style: TabStyle::Docked }
+    pub fn new(id: Id, rect: Rect, label: impl Into<Tx<'a>>) -> Self {
+        Self { id, rect, label: label.into(), front: false, closable: false, style: TabStyle::Docked }
     }
 
     /// The tab in front of its strip: the base fill, the text colour, the accent overline.
@@ -79,8 +80,10 @@ impl<'a> PanelTab<'a> {
     }
 
     pub fn show(self, ui: &mut Ui) -> TabResponse {
-        let Self { id, rect, label, front, closable, style } = self;
+        let Self { id, rect, label: label_tx, front, closable, style } = self;
         let ctx = ui.ctx().clone();
+        let label = label_tx.get(&ctx);
+        let label: &str = &label;
         let p = palette(&ctx);
         let flat = style == TabStyle::Flat;
         let resp = ui.interact(rect, id, Sense::click());
@@ -119,7 +122,7 @@ impl<'a> PanelTab<'a> {
                     rect.center(),
                     Align2::CENTER_CENTER,
                     color,
-                    label,
+                    label_tx.borrow(),
                     Some((rect.width() - 12.0).max(0.0)),
                     Clip::End,
                 )
@@ -131,13 +134,13 @@ impl<'a> PanelTab<'a> {
                     pos2(rect.min.x + 10.0, rect.center().y),
                     Align2::LEFT_CENTER,
                     color,
-                    label,
+                    label_tx.borrow(),
                     Some(room.max(0.0)),
                     Clip::End,
                 )
             };
             if cut {
-                audit::truncated(&ctx, label, label, rect);
+                audit::truncated_text(&ctx, label, text::source(&label_tx).as_deref(), label, rect);
             }
             if show_cross && let Some(c) = &cross_resp {
                 if c.hovered() {
@@ -154,7 +157,7 @@ impl<'a> PanelTab<'a> {
         audit::control(&ctx, label, true, None, None, rect);
         let close = cross_resp.as_ref().is_some_and(egui::Response::clicked);
         if let Some(c) = cross_resp {
-            c.on_hover_text("Close");
+            c.on_hover_text(crate::i18n::t(&ctx, "Close"));
         }
         TabResponse { clicked: resp.clicked() && !close, close, menu: resp.secondary_clicked() }
     }
@@ -171,7 +174,7 @@ pub fn flat_widths(wants: &[f32], width: f32) -> Vec<f32> {
 
 /// A strip of flat tabs across `ui`, 26 pt, a hairline under it: a panel's own pages. Returns
 /// whether the choice changed.
-pub fn tab_strip(ui: &mut Ui, id_salt: &str, labels: &[String], current: &mut usize) -> bool {
+pub fn tab_strip(ui: &mut Ui, id_salt: &str, labels: &[Tx<'_>], current: &mut usize) -> bool {
     let ctx = ui.ctx().clone();
     let p = palette(&ctx);
     let w = ui.available_width();
@@ -187,7 +190,7 @@ pub fn tab_strip(ui: &mut Ui, id_salt: &str, labels: &[String], current: &mut us
     for (i, (label, tw)) in labels.iter().zip(widths).enumerate() {
         let r = Rect::from_min_max(pos2(x, strip.min.y), pos2(x + tw, strip.max.y));
         x += tw;
-        let resp = PanelTab::new(ui.make_persistent_id(("gz-ui.tab", id_salt, i)), r, label)
+        let resp = PanelTab::new(ui.make_persistent_id(("gz-ui.tab", id_salt, i)), r, label.borrow())
             .front(*current == i)
             .style(TabStyle::Flat)
             .show(ui);

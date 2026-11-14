@@ -7,7 +7,7 @@ use std::cell::Cell;
 use std::sync::Arc;
 
 use gz_editor::{Args, Editor, Value as Json};
-use gz_ui::{Clip, Dialog, DialogSize, Font, Kind, Tone, palette};
+use gz_ui::{Clip, Dialog, DialogSize, Font, Kind, Tone, Tx, palette, tr};
 use parking_lot::Mutex;
 
 use crate::params::TextEdit;
@@ -16,8 +16,13 @@ fn ok(reply: &Json) -> bool {
     reply.get("ok").and_then(Json::as_bool) == Some(true)
 }
 
-fn error_text(reply: &Json) -> String {
-    reply.get("error").and_then(Json::as_str).unwrap_or("The command failed.").to_owned()
+/// The reply's `error`: the command's English, shown in the window's language where the catalog
+/// has it.
+fn error_text(reply: &Json) -> Tx<'static> {
+    match reply.get("error").and_then(Json::as_str) {
+        Some(e) => Tx::ui(e.to_owned()),
+        None => Tx::from("The command failed."),
+    }
 }
 
 /// Runs a command as the window would and keeps its reply for a later frame.
@@ -80,10 +85,10 @@ pub struct ProjectFind {
     pub focus: bool,
     pub query: String,
     pub results: Vec<FoundRow>,
-    pub diagnostics: Vec<String>,
-    pub error: String,
+    pub diagnostics: Vec<Tx<'static>>,
+    pub error: Tx<'static>,
     pub complete: bool,
-    pub status: String,
+    pub status: Tx<'static>,
     busy: bool,
     reply: Arc<Mutex<Option<Json>>>,
 }
@@ -114,7 +119,7 @@ impl ProjectFind {
         self.busy = false;
         self.results.clear();
         self.diagnostics.clear();
-        self.error.clear();
+        self.error = Tx::EMPTY;
         if !ok(&r) {
             self.error = error_text(&r);
             self.complete = true;
@@ -132,17 +137,24 @@ impl ProjectFind {
         }
         for d in r.get("diagnostics").and_then(Json::as_array).into_iter().flatten() {
             let s = |k: &str| d.get(k).and_then(Json::as_str).unwrap_or("").to_owned();
-            self.diagnostics.push(format!("{}: {}", s("path"), s("message")));
+            // the message is the graph area's English
+            self.diagnostics.push(tr!(
+                "dlg.nq_project_find" => "{path}: {message}",
+                path = s("path"),
+                message = Tx::ui(s("message"))
+            ));
         }
         let generation = r.get("generation").and_then(Json::as_u64).unwrap_or(0);
         let fingerprint = r.get("fingerprint").and_then(Json::as_str).unwrap_or("");
         self.status = if generation > 0 {
-            format!(
-                "{} \u{b7} index generation {generation} \u{b7} fingerprint {fingerprint}",
-                crate::look::plural(self.results.len(), "result", "results")
+            tr!(
+                "{n} {n:result|results} \u{b7} index generation {generation} \u{b7} fingerprint {fingerprint}",
+                n = self.results.len(),
+                generation = generation,
+                fingerprint = fingerprint
             )
         } else {
-            String::new()
+            Tx::EMPTY
         };
     }
 
@@ -213,12 +225,20 @@ impl ProjectFind {
                         egui::vec2(0.0, 14.0 * 22.0 + 10.0),
                         |l| {
                             for (i, r) in self.results.iter().enumerate() {
+                                // the node's title is the catalog's English, the rest data
+                                let title = Tx::ui_in("kind", r.title.as_str()).text(&ctx);
                                 let text_ = format!(
                                     "{}  \u{b7}  {}  \u{b7}  {}  \u{b7}  {}",
-                                    r.path, r.node, r.title, r.source
+                                    r.path, r.node, title, r.source
                                 );
                                 if l.row(&format!("r{i}"), false, |ui| {
-                                    gz_ui::text::label(ui, &text_, Font::Body, p.text, Clip::Middle);
+                                    gz_ui::text::label(
+                                        ui,
+                                        Tx::raw(text_.as_str()),
+                                        Font::Body,
+                                        p.text,
+                                        Clip::Middle,
+                                    );
                                 })
                                 .clicked()
                                 {
@@ -233,7 +253,7 @@ impl ProjectFind {
                 }
             },
             |f| {
-                f.status(&status, Tone::Muted);
+                f.status(status, Tone::Muted);
                 if f.button("Close", Kind::Secondary, true, true, "") {
                     close.set(true);
                 }
@@ -257,7 +277,7 @@ pub struct TaskRename {
     pub open: bool,
     pub from: String,
     pub to: String,
-    pub error: String,
+    pub error: Tx<'static>,
     busy: bool,
     reply: Arc<Mutex<Option<Json>>>,
 }
@@ -266,7 +286,7 @@ impl TaskRename {
     pub fn begin(&mut self, id: &str) {
         id.clone_into(&mut self.from);
         id.clone_into(&mut self.to);
-        self.error.clear();
+        self.error = Tx::EMPTY;
         self.open = true;
     }
 
@@ -293,7 +313,7 @@ impl TaskRename {
             ui,
             &mut open,
             |ui| {
-                gz_ui::text::prose(ui, &format!("Rename the task '{}'.", self.from));
+                gz_ui::text::prose(ui, tr!("Rename the task '{id}'.", id = self.from.as_str()));
                 ui.add_space(4.0);
                 gz_ui::text::label(ui, "New ID", Font::Body, palette(ui.ctx()).text_secondary, Clip::End);
                 gz_ui::grid::text_field(ui, &mut self.to);
@@ -302,9 +322,9 @@ impl TaskRename {
                 gz_ui::text::status(
                     ui,
                     Tone::Muted,
-                    &format!(
-                        "Saves and running quest state recorded under '{}' are not migrated.",
-                        self.from
+                    tr!(
+                        "Saves and running quest state recorded under '{id}' are not migrated.",
+                        id = self.from.as_str()
                     ),
                 );
                 if !self.error.is_empty() {
@@ -352,7 +372,7 @@ pub struct TaskRefs {
     pub id: String,
     pub refs: Vec<RefRow>,
     pub diagnostics: Vec<String>,
-    pub error: String,
+    pub error: Tx<'static>,
     pub complete: bool,
     pub generation: u64,
     busy: bool,
@@ -364,7 +384,7 @@ impl TaskRefs {
         id.clone_into(&mut self.id);
         self.refs.clear();
         self.diagnostics.clear();
-        self.error.clear();
+        self.error = Tx::EMPTY;
         self.complete = false;
         self.generation = 0;
         self.open = true;
@@ -405,7 +425,7 @@ impl TaskRefs {
         let mut go = None;
         let close = Cell::new(false);
         let status =
-            if self.generation > 0 { format!("Index generation {}", self.generation) } else { String::new() };
+            if self.generation > 0 { tr!("Index generation {n}", n = self.generation) } else { Tx::EMPTY };
         let mut open = self.open;
         Dialog::new("Task References", "nq_task_references", DialogSize::M).show(
             ui,
@@ -413,7 +433,11 @@ impl TaskRefs {
             |ui| {
                 gz_ui::text::prose(
                     ui,
-                    &format!("{} reference(s) to the task '{}'", self.refs.len(), self.id),
+                    tr!(
+                        "{n} {n:reference|references} to the task '{id}'",
+                        n = self.refs.len(),
+                        id = self.id.as_str()
+                    ),
                 );
                 if self.busy {
                     gz_ui::state::busy_line(ui, "Looking through the project");
@@ -443,7 +467,13 @@ impl TaskRefs {
                                 let text_ =
                                     format!("{}  \u{b7}  {}  \u{b7}  {}.{}", r.node, r.slot, r.kind, r.param);
                                 if l.row(&format!("ref{i}"), false, |ui| {
-                                    gz_ui::text::label(ui, &text_, Font::Body, p.text, Clip::End);
+                                    gz_ui::text::label(
+                                        ui,
+                                        Tx::raw(text_.as_str()),
+                                        Font::Body,
+                                        p.text,
+                                        Clip::End,
+                                    );
                                 })
                                 .clicked()
                                 {
@@ -454,11 +484,12 @@ impl TaskRefs {
                     );
                 }
                 for d in &self.diagnostics {
-                    gz_ui::text::status(ui, Tone::Warning, d);
+                    // the graph area's English
+                    gz_ui::text::status(ui, Tone::Warning, Tx::ui(d.as_str()));
                 }
             },
             |f| {
-                f.status(&status, Tone::Muted);
+                f.status(status, Tone::Muted);
                 if f.button("Close", Kind::Secondary, true, true, "") {
                     close.set(true);
                 }
@@ -496,6 +527,7 @@ pub fn draw_text_edit(ui: &mut egui::Ui, te: &mut TextEdit) {
         ui,
         &mut open,
         |ui| {
+            // the field's label: the editor's own English
             gz_ui::text::label(ui, &te.title, Font::Small, palette(ui.ctx()).text_secondary, Clip::End);
             let font = if te.code { Font::Mono.id() } else { Font::Body.id() };
             let h = if te.code { 340.0 } else { 220.0 };
@@ -510,7 +542,8 @@ pub fn draw_text_edit(ui: &mut egui::Ui, te: &mut TextEdit) {
             } else if ok_check {
                 f.status("Syntax is fine", Tone::Success);
             } else {
-                f.status(&status, Tone::Error);
+                // the Lua reader's English
+                f.status(Tx::ui(status.as_str()), Tone::Error);
             }
             if f.button("Apply", Kind::Primary, true, true, "") {
                 apply.set(true);

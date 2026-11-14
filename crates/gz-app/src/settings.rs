@@ -1,4 +1,4 @@
-//! The editor's own settings file: the preferences, the accent and the interface scale, the
+//! The editor's own settings file: the preferences, the theme and the interface scale, the
 //! window's place, the layout store (sizes and the kit's short lists) and the keys the author
 //! bound.
 //!
@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use gz_editor::{Editor, SmolStr};
 use gz_ltx::LtxDoc;
-use gz_ui::Accent;
+use gz_ui::{Lang, Theme};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
@@ -45,8 +45,9 @@ const fn def(key: &'static str, ty: PrefType, default: f64, lo: f64, hi: f64) ->
 
 /// Every preference of the window itself and of the level editor, by its settings key. An area
 /// adds its own with [`EditorSettings::add_defs`] (a group of Preferences, `ShellBuilder::pref_group`).
-pub const PREFS: [PrefDef; 33] = [
+pub const PREFS: [PrefDef; 34] = [
     def("active_idle_fps", PrefType::U32, 120.0, 30.0, 240.0),
+    def("vsync", PrefType::Bool, 1.0, 0.0, 1.0),
     def("floating_panels", PrefType::Bool, 0.0, 0.0, 1.0),
     def("view_np", PrefType::Float, 0.1, 0.01, 10.0),
     def("view_fp", PrefType::Float, 1500.0, 10.0, 10000.0),
@@ -165,6 +166,8 @@ struct Inner {
     /// What an area added (`add_defs`), with their values.
     extra: Vec<(PrefDef, f64)>,
     dirty: bool,
+    /// How many times the language was set in this run: a choice made now wins over `-lang`.
+    lang_rev: u64,
 }
 
 /// The editor's settings, an `Editor` service. The file is read by [`EditorSettings::load`] at
@@ -176,6 +179,8 @@ pub struct EditorSettings {
     order: Arc<gz_editor::fsx::InOrder>,
     /// The Preferences page last shown.
     pub page: Mutex<SmolStr>,
+    /// `-theme <id>`: the theme of this run, never saved; a theme picked meanwhile replaces it.
+    run_theme: Mutex<Option<&'static Theme>>,
 }
 
 impl EditorSettings {
@@ -191,9 +196,10 @@ impl EditorSettings {
             .collect();
         Self {
             path: path.to_path_buf(),
-            inner: Mutex::new(Inner { doc, prefs, extra: Vec::new(), dirty: false }),
+            inner: Mutex::new(Inner { doc, prefs, extra: Vec::new(), dirty: false, lang_rev: 0 }),
             order: Arc::default(),
             page: Mutex::new(SmolStr::new("General")),
+            run_theme: Mutex::new(None),
         }
     }
 
@@ -277,18 +283,27 @@ impl EditorSettings {
         s.dirty = true;
     }
 
+    /// Preferences > Interface > Theme (`[ui] theme`), or this run's `-theme`; a name no theme has is
+    /// the default.
     #[must_use]
-    pub fn accent(&self) -> Accent {
-        match self.inner.lock().doc.get("ui", "theme") {
-            Some("graphite") => Accent::Graphite,
-            _ => Accent::Violet,
+    pub fn theme(&self) -> &'static Theme {
+        if let Some(t) = *self.run_theme.lock() {
+            return t;
         }
+        self.inner.lock().doc.get("ui", "theme").map_or_else(Theme::default_theme, Theme::from_settings)
     }
 
-    pub fn set_accent(&self, accent: Accent) {
+    /// Picks the theme and keeps it; a `-theme` of this run gives way to it.
+    pub fn set_theme(&self, theme: &'static Theme) {
+        *self.run_theme.lock() = None;
         let mut s = self.inner.lock();
-        s.doc.set("ui", "theme", theme_key(accent));
+        s.doc.set("ui", "theme", theme.id);
         s.dirty = true;
+    }
+
+    /// `-theme <id>`: the theme of this run alone; the file keeps its own.
+    pub fn set_run_theme(&self, theme: &'static Theme) {
+        *self.run_theme.lock() = Some(theme);
     }
 
     #[must_use]
@@ -428,6 +443,26 @@ impl EditorSettings {
         s.dirty = true;
     }
 
+    /// Preferences > General > Language (`[ui] language`): the system's unless the author picked
+    /// one. A value the editor does not know reads as the system's.
+    #[must_use]
+    pub fn language(&self) -> LangChoice {
+        self.inner.lock().doc.get("ui", "language").and_then(LangChoice::parse).unwrap_or_default()
+    }
+
+    pub fn set_language(&self, choice: LangChoice) {
+        let mut s = self.inner.lock();
+        s.doc.set("ui", "language", choice.key());
+        s.dirty = true;
+        s.lang_rev += 1;
+    }
+
+    /// How many times the language was set in this run.
+    #[must_use]
+    pub fn language_rev(&self) -> u64 {
+        self.inner.lock().lang_rev
+    }
+
     /// Something changed since the file was last written.
     #[must_use]
     pub fn is_dirty(&self) -> bool {
@@ -468,36 +503,79 @@ impl EditorSettings {
     }
 }
 
-/// The wire key of an accent family.
-#[must_use]
-pub fn theme_key(accent: Accent) -> &'static str {
-    match accent {
-        Accent::Violet => "grizzly-purple",
-        Accent::Graphite => "graphite",
+/// The window's language as the settings keep it: the system's, or one the author picked.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LangChoice {
+    /// Russian when Windows speaks Russian to the user, English otherwise.
+    #[default]
+    System,
+    Lang(Lang),
+}
+
+impl LangChoice {
+    /// The key of the settings file and of `app.prefs`: `system`, `en`, `ru`.
+    #[must_use]
+    pub fn key(self) -> &'static str {
+        match self {
+            LangChoice::System => "system",
+            LangChoice::Lang(l) => l.key(),
+        }
+    }
+
+    /// `system`, a language's key or its name.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<LangChoice> {
+        if text.trim().eq_ignore_ascii_case("system") {
+            return Some(LangChoice::System);
+        }
+        Lang::parse(text).map(LangChoice::Lang)
+    }
+
+    /// The language shown for this choice on a system whose interface speaks `system` (an ISO
+    /// 639-1 code, `gz_win::user_ui_language`).
+    #[must_use]
+    pub fn resolve(self, system: &str) -> Lang {
+        match self {
+            LangChoice::System => system_lang(system),
+            LangChoice::Lang(l) => l,
+        }
     }
 }
 
-/// The name the author reads.
+/// The language the window speaks when it follows the system: Russian for a Russian Windows,
+/// English for any other.
 #[must_use]
-pub fn theme_name(accent: Accent) -> &'static str {
-    match accent {
-        Accent::Violet => "Grizzly Purple",
-        Accent::Graphite => "Graphite",
-    }
+pub fn system_lang(code: &str) -> Lang {
+    if code.eq_ignore_ascii_case("ru") { Lang::Ru } else { Lang::En }
 }
 
-/// A preset by its key or its name, any case.
-#[must_use]
-pub fn parse_theme(text: &str) -> Option<Accent> {
-    [Accent::Violet, Accent::Graphite]
-        .into_iter()
-        .find(|a| text.eq_ignore_ascii_case(theme_key(*a)) || text.eq_ignore_ascii_case(theme_name(*a)))
-}
+/// Every choice of the language, in the order Preferences lists them.
+pub const LANG_CHOICES: [LangChoice; 3] =
+    [LangChoice::System, LangChoice::Lang(Lang::En), LangChoice::Lang(Lang::Ru)];
 
 #[cfg(test)]
 mod tests {
-    use super::{PREFS, parse_interface_scale, parse_pref, parse_theme, pref_def, pref_json};
-    use gz_ui::Accent;
+    use super::{
+        EditorSettings, LangChoice, PREFS, parse_interface_scale, parse_pref, pref_def, pref_json,
+        system_lang,
+    };
+    use gz_ui::Lang;
+
+    #[test]
+    fn the_language_follows_the_system_unless_one_is_picked() {
+        assert_eq!(system_lang("ru"), Lang::Ru);
+        assert_eq!(system_lang("en"), Lang::En);
+        assert_eq!(system_lang("de"), Lang::En, "a language the editor lacks reads as English");
+        assert_eq!(system_lang(""), Lang::En);
+        assert_eq!(LangChoice::System.resolve("ru"), Lang::Ru);
+        assert_eq!(LangChoice::Lang(Lang::En).resolve("ru"), Lang::En);
+        assert_eq!(LangChoice::Lang(Lang::Ru).resolve("en"), Lang::Ru);
+        assert_eq!(LangChoice::parse("System"), Some(LangChoice::System));
+        assert_eq!(LangChoice::parse("ru"), Some(LangChoice::Lang(Lang::Ru)));
+        assert_eq!(LangChoice::parse("English"), Some(LangChoice::Lang(Lang::En)));
+        assert_eq!(LangChoice::parse("klingon"), None);
+        assert_eq!(LangChoice::default().key(), "system");
+    }
 
     #[test]
     fn values_parse_as_their_types_say() {
@@ -519,7 +597,7 @@ mod tests {
         assert_eq!(pref_json(fov, 60.0), serde_json::json!(60));
         let Some(c) = pref_def("fog_color") else { return };
         assert_eq!(pref_json(c, f64::from(0x0055_5555u32)), serde_json::json!("0x00555555"));
-        assert_eq!(PREFS.len(), 33);
+        assert_eq!(PREFS.len(), 34);
         assert_eq!(parse_interface_scale("auto"), Some(None));
         assert_eq!(parse_interface_scale("125%"), Some(Some(1.25)));
         assert_eq!(parse_interface_scale("1.5"), Some(Some(1.5)));
@@ -528,8 +606,29 @@ mod tests {
 
     #[test]
     fn themes() {
-        assert_eq!(parse_theme("Graphite"), Some(Accent::Graphite));
-        assert_eq!(parse_theme("grizzly-purple"), Some(Accent::Violet));
-        assert_eq!(parse_theme("pink"), None);
+        let dir = std::env::temp_dir().join(format!("gz_settings_theme_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("settings.ltx");
+        // a theme by id or title; a name no theme has is the default
+        for (was, is) in [
+            ("grizzly-graphite", "grizzly-graphite"),
+            ("Solarized Light", "solarized-light"),
+            ("violet", "grizzly-dark"),
+        ] {
+            let _ = std::fs::write(&file, format!("[ui]\ntheme = {was}\n"));
+            assert_eq!(EditorSettings::load(&file).theme().id, is, "{was}");
+        }
+        let s = EditorSettings::load(&dir.join("missing.ltx"));
+        assert_eq!(s.theme().id, "grizzly-dark");
+        let light = gz_ui::Theme::find("solarized-light").inspect(|t| s.set_run_theme(t));
+        assert_eq!(Some(s.theme()), light);
+        // a run's theme is never written; a pick is, and replaces it
+        assert!(!s.inner.lock().doc.to_string().contains("solarized"));
+        if let Some(t) = gz_ui::Theme::find("nord") {
+            s.set_theme(t);
+        }
+        assert_eq!(s.theme().id, "nord");
+        assert!(s.inner.lock().doc.to_string().contains("theme = nord"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

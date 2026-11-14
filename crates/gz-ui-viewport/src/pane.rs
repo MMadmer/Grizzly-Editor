@@ -23,7 +23,7 @@ use gz_scene::apply::{SelectMode, TransformEdit};
 use gz_scene::objtools::ToolEdit;
 use gz_scene::{ObjClass, ObjData, ObjId, Object, SceneCmd, SceneMode, SceneService};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Font, Icon, Kind, Palette, Toolbar, ToolbarStyle, palette};
+use gz_ui::{Font, Icon, Kind, Palette, TipExt, Toolbar, ToolbarStyle, Tx, palette, tr};
 use parking_lot::Mutex;
 
 use crate::camera::{Buttons, FlyKey, Target};
@@ -265,10 +265,12 @@ impl ViewportPane {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
         let canvas_c = Color::rgb(p.canvas.r(), p.canvas.g(), p.canvas.b());
-        if self.vp.read(|s| s.size != size || s.background != canvas_c) {
+        let lines = [p.scene_grid, p.scene_grid_major, p.scene_wire].map(|c| Color::rgb(c.r(), c.g(), c.b()));
+        if self.vp.read(|s| s.size != size || s.background != canvas_c || s.scene_lines != lines) {
             self.vp.with(|s| {
                 s.size = size;
                 s.background = canvas_c;
+                s.scene_lines = lines;
             });
         }
         self.vp.sync(cx.editor);
@@ -296,7 +298,7 @@ impl ViewportPane {
             finished = Some(info);
         }
         if let Some(info) = &finished {
-            draw_labels(&painter, rect, info, label_px);
+            draw_labels(&painter, rect, info, label_px, p.scene_label_shadow);
         }
         let show = self.vp.read(|s| s.prefs.show);
         if show.safe_rect {
@@ -313,14 +315,23 @@ impl ViewportPane {
         if let Some((text_, at)) = self.vp.read(|s| s.status.clone())
             && at.elapsed().as_secs_f32() < 2.0
         {
+            // on a pill like the stats: the scene behind it may be any colour, the theme light or dark
+            let font = Font::Small.id();
+            let shown = Tx::ui(&text_).text(&ctx);
+            let w = text::width(&ctx, &font, Tx::raw(&shown)).min(rect.width() - 32.0);
+            let bg = Rect::from_min_max(
+                pos2(rect.min.x + 8.0, rect.max.y - 8.0 - Font::Small.line() - 6.0),
+                pos2(rect.min.x + 8.0 + w + 16.0, rect.max.y - 8.0),
+            );
+            painter.rect_filled(bg, CornerRadius::same(6), p.overlay.gamma_multiply(0.92));
             text::paint(
                 &painter,
-                &Font::Small.id(),
-                pos2(rect.min.x + 8.0, rect.max.y - 8.0),
-                Align2::LEFT_BOTTOM,
+                &font,
+                pos2(bg.min.x + 8.0, bg.center().y),
+                Align2::LEFT_CENTER,
                 p.text_secondary,
-                &text_,
-                None,
+                Tx::raw(&shown),
+                Some(w),
                 Clip::End,
             );
             ctx.request_repaint_after(Duration::from_millis(250));
@@ -882,7 +893,7 @@ impl ViewportPane {
                 if let Some(ray) = ray_at(at) {
                     self.carry(&payload, at, ray, ppp);
                     let title =
-                        Placeable::of_payload(&payload).first().map(Placeable::title).unwrap_or_default();
+                        Placeable::of_payload(&payload).first().map(Placeable::title_tx).unwrap_or_default();
                     let p = palette(&ctx);
                     text::paint(
                         &ui.painter_at(rect),
@@ -890,7 +901,7 @@ impl ViewportPane {
                         at + vec2(14.0, 14.0),
                         Align2::LEFT_TOP,
                         p.text,
-                        &format!("Place {title}"),
+                        tr!("Place {title}", title = title),
                         None,
                         Clip::End,
                     );
@@ -1169,13 +1180,17 @@ impl ViewportPane {
         painter.circle_filled(centre, 2.5, p.text_secondary);
         // a click on an end looks from it; anywhere else on the gizmo goes back to the free view
         let target = hot.and_then(|i| ends.get(i)).map_or(Target::Perspective, |e| e.target);
-        let tip = if target == Target::Perspective {
-            "Perspective: back to the free view".to_owned()
-        } else {
-            format!("{} view", target.name())
+        let tip = match target {
+            Target::Perspective => "Perspective: back to the free view",
+            Target::Front => "Front view",
+            Target::Back => "Back view",
+            Target::Left => "Left view",
+            Target::Right => "Right view",
+            Target::Top => "Top view",
+            Target::Bottom => "Bottom view",
         };
-        gz_ui::audit::control(ui.ctx(), "Axis gizmo", true, None, Some(&tip), r);
-        if resp.on_hover_text(tip).clicked() {
+        gz_ui::audit::control(ui.ctx(), "Axis gizmo", true, None, Some(tip), r);
+        if resp.tip(tip).clicked() {
             self.vp.with(|s| s.nav.set_target(target));
         }
     }
@@ -1245,7 +1260,8 @@ impl ViewportPane {
             tb.menu(
                 "perspective",
                 icon,
-                view_target.name(),
+                // a view's name: "Back" is where the camera looks from
+                gz_ui::Tx::ctx("Viewport", view_target.name()),
                 "The camera's view, framing, bookmarks",
                 Some("viewport:perspective"),
                 true,
@@ -1313,13 +1329,13 @@ impl ViewportPane {
                     _ => Icon::SnapScale,
                 };
                 pill_action(&mut tb, cx, id, icon, "");
-                let value = menus::step_label(kind, step);
+                let value = menus::step_text(kind, step);
                 let tip = match kind {
                     GizmoType::Move => "The grid step a move goes by",
                     GizmoType::Rotate => "The angle a turn goes by",
                     _ => "The step scaling goes by",
                 };
-                tb.menu(menu, Icon::None, &value, tip, Some(request), true, |ui| {
+                tb.menu(menu, Icon::None, value, tip, Some(request), true, |ui| {
                     menus::step_body(ui, cx, kind)
                 });
             }
@@ -1329,18 +1345,20 @@ impl ViewportPane {
 
 /// A pill of an action: its icon (and `label` when it has one), its title and keys as the tip,
 /// off with the reason, checked as a toggle. Pressed, it runs.
-fn pill_action(tb: &mut Toolbar<'_, '_>, cx: &mut DocCx<'_>, id: &str, icon: Icon, label: &str) {
+fn pill_action(tb: &mut Toolbar<'_, '_>, cx: &mut DocCx<'_>, id: &str, icon: Icon, label: &'static str) {
     let Some(actions) = gz_app::Actions::of(cx.editor) else { return };
     let Some(a) = actions.table.read().get(id).copied() else { return };
     let keys = actions.table.read().keys_label(id);
     let (on, checked) =
         actions.with_cx(cx.editor, |acx| ((a.enabled)(acx), a.checked.is_some_and(|f| f(acx))));
+    // the tip is put together from words already in the window's language
+    let title = gz_ui::i18n::t(cx.ctx, a.title);
     let tip = match (on.on(), keys.is_empty()) {
-        (false, _) => format!("{}: {}", a.title, on.why()),
-        (true, true) => a.title.to_owned(),
-        (true, false) => format!("{} ({keys})", a.title),
+        (false, _) => format!("{title}: {}", gz_ui::i18n::t(cx.ctx, on.why())),
+        (true, true) => title,
+        (true, false) => format!("{title} ({keys})"),
     };
-    if tb.action(id, icon, label, &tip, on.on(), checked, Kind::Ghost) {
+    if tb.action(id, icon, label, Tx::raw(&tip), on.on(), checked, Kind::Ghost) {
         cx.requests.action(id);
     }
 }
@@ -1423,9 +1441,9 @@ fn fly_key(key: Key) -> Option<FlyKey> {
     }
 }
 
-/// The labels the frame found visible, white on a black shadow. A label is laid out once, without
-/// a colour of its own, and painted twice.
-fn draw_labels(painter: &egui::Painter, rect: Rect, info: &gz_render::FrameInfo, ppp: f32) {
+/// The labels the frame found visible, in their colours over the theme's label shadow. A label is
+/// laid out once, without a colour of its own, and painted twice.
+fn draw_labels(painter: &egui::Painter, rect: Rect, info: &gz_render::FrameInfo, ppp: f32, shadow: Color32) {
     let font = Font::Small.id();
     for l in info.labels.iter().filter(|l| l.visible) {
         let at = pos2(rect.min.x + l.position[0] / ppp, rect.min.y + l.position[1] / ppp);
@@ -1433,10 +1451,16 @@ fn draw_labels(painter: &egui::Painter, rect: Rect, info: &gz_render::FrameInfo,
             continue;
         }
         let c = Color32::from_rgba_unmultiplied(l.color.0[0], l.color.0[1], l.color.0[2], 255);
-        let text = painter.layout_no_wrap(l.text.to_string(), font.clone(), Color32::PLACEHOLDER);
+        // a label is a name (data), except the one kind the editor names in its own words
+        let shown = if l.text == crate::draw::PLAYER_START_LABEL {
+            gz_ui::i18n::t(painter.ctx(), crate::draw::PLAYER_START_LABEL)
+        } else {
+            l.text.to_string()
+        };
+        let text = painter.layout_no_wrap(shown, font.clone(), Color32::PLACEHOLDER);
         // the anchor is the label's left edge at mid-height
         let corner = pos2(at.x, at.y - text.size().y * 0.5);
-        painter.galley(corner + vec2(1.0, 1.0), text.clone(), Color32::BLACK);
+        painter.galley(corner + vec2(1.0, 1.0), text.clone(), shadow);
         painter.galley(corner, text, c);
     }
 }
@@ -1475,20 +1499,25 @@ fn local_stats_pill(
     let stats = info.map(|i| i.stats).unwrap_or_default();
     let game = vp.read(|s| s.game.active().then_some((s.game.drawn.len(), s.game.in_view)));
     let (lights, of) = game.unwrap_or((stats.lights, stats.lights_in_view));
-    let lines = [
-        format!("FPS         {:.0}", rates.ui_fps),
-        format!("Render FPS  {:.0}", rates.render_fps),
-        format!("Triangles   {}", stats.triangles),
-        format!("Objects     {} of {}", stats.visible, stats.instances),
-        format!("Draw calls  {}", stats.draws),
-        format!("Lights      {lights} of {of}"),
+    let ctx = painter.ctx();
+    let of_ = |a: usize, b: usize| tr!("{a} of {b}", a = a, b = b).text(ctx);
+    let rows = [
+        (gz_ui::i18n::t(ctx, "FPS"), format!("{:.0}", rates.ui_fps)),
+        (gz_ui::i18n::t(ctx, "Render FPS"), format!("{:.0}", rates.render_fps)),
+        (gz_ui::i18n::t(ctx, "Triangles"), stats.triangles.to_string()),
+        (gz_ui::i18n::t(ctx, "Objects"), of_(stats.visible, stats.instances)),
+        (gz_ui::i18n::t(ctx, "Draw calls"), stats.draws.to_string()),
+        (gz_ui::i18n::t(ctx, "Lights"), of_(lights, of)),
     ];
+    // the values line up in one column whatever the language's words are
+    let pad_to = rows.iter().map(|(l, _)| l.chars().count()).max().unwrap_or(0) + 2;
+    let lines = rows.map(|(l, v)| format!("{l:<pad_to$}{v}"));
     let font = Font::Mono.id();
     let line = 15.0;
     let pad = 8.0;
     let at = pos2(rect.min.x + 8.0, rect.min.y + 44.0);
     let n = (((rect.max.y - 8.0 - at.y - pad * 2.0) / line).floor().max(0.0) as usize).min(lines.len());
-    let w = lines.iter().take(n).map(|l| text::width(painter.ctx(), &font, l)).fold(0.0f32, f32::max);
+    let w = lines.iter().take(n).map(|l| text::width(ctx, &font, Tx::raw(l))).fold(0.0f32, f32::max);
     if n == 0 || w + pad * 2.0 > rect.width() - 16.0 {
         return;
     }

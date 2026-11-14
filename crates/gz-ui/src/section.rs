@@ -9,6 +9,7 @@ use egui::{Align2, Context, Rect, Response, Sense, Ui, Vec2, pos2};
 use crate::audit;
 use crate::button::icon_button_sized;
 use crate::font::Font;
+use crate::i18n::Tx;
 use crate::icons::{self, Icon};
 use crate::layout;
 use crate::text::{self, Clip};
@@ -30,13 +31,13 @@ pub struct SectionResponse {
 #[must_use = "a section does nothing until it is shown: .show(ui) or .body(ui, ..)"]
 pub struct Section<'a> {
     key: &'a str,
-    title: &'a str,
-    count: Option<&'a str>,
+    title: Tx<'a>,
+    count: Option<Tx<'a>>,
     open: bool,
-    actions: Vec<(Icon, &'a str)>,
-    tip: Option<&'a str>,
+    actions: Vec<(Icon, Tx<'a>)>,
+    tip: Option<Tx<'a>>,
     /// What the section is waiting for: a spinner stands where the count would.
-    busy: Option<&'a str>,
+    busy: Option<Tx<'a>>,
 }
 
 fn store_key(key: &str) -> String {
@@ -55,8 +56,8 @@ pub fn set_open(ctx: &Context, key: &str, open: bool) {
 }
 
 impl<'a> Section<'a> {
-    pub fn new(key: &'a str, title: &'a str) -> Self {
-        Self { key, title, count: None, open: true, actions: Vec::new(), tip: None, busy: None }
+    pub fn new(key: &'a str, title: impl Into<Tx<'a>>) -> Self {
+        Self { key, title: title.into(), count: None, open: true, actions: Vec::new(), tip: None, busy: None }
     }
 
     /// Its state until the author folds or opens it. Open unless told.
@@ -66,7 +67,8 @@ impl<'a> Section<'a> {
     }
 
     /// A count after the title, muted: "Variables 11".
-    pub fn count(mut self, count: &'a str) -> Self {
+    pub fn count(mut self, count: impl Into<Tx<'a>>) -> Self {
+        let count = count.into();
         self.count = (!count.is_empty()).then_some(count);
         self
     }
@@ -74,22 +76,22 @@ impl<'a> Section<'a> {
     /// The section's content is still being read: the kit's spinner stands after the title where
     /// the count would, and an audited frame reports `what` as loading (`ui.audit`), the section
     /// open or folded. A count is never shown with it - a number not known yet is no number.
-    pub fn busy(mut self, what: &'a str) -> Self {
-        self.busy = Some(what);
+    pub fn busy(mut self, what: impl Into<Tx<'a>>) -> Self {
+        self.busy = Some(what.into());
         self.count = None;
         self
     }
 
     /// A small icon button in the trailing slot (+ adds, the menu glyph opens a menu); the
     /// first added stands at the right end.
-    pub fn action(mut self, icon: Icon, tip: &'a str) -> Self {
-        self.actions.push((icon, tip));
+    pub fn action(mut self, icon: Icon, tip: impl Into<Tx<'a>>) -> Self {
+        self.actions.push((icon, tip.into()));
         self
     }
 
     /// The header's hover hint.
-    pub fn tip(mut self, tip: &'a str) -> Self {
-        self.tip = Some(tip);
+    pub fn tip(mut self, tip: impl Into<Tx<'a>>) -> Self {
+        self.tip = Some(tip.into());
         self
     }
 
@@ -97,6 +99,10 @@ impl<'a> Section<'a> {
     pub fn show(self, ui: &mut Ui) -> SectionResponse {
         let ctx = ui.ctx().clone();
         let p = palette(&ctx);
+        let title = self.title.get(&ctx);
+        let title: &str = &title;
+        let count = self.count.as_ref().map(|c| c.get(&ctx));
+        let tip = self.tip.as_ref().map(|t| t.get(&ctx));
         let mut open = is_open(&ctx, self.key, self.open);
         let (rect, _) =
             ui.allocate_exact_size(Vec2::new(ui.available_width(), metrics::SECTION_HEADER), Sense::hover());
@@ -135,7 +141,7 @@ impl<'a> Section<'a> {
             let count_w = if self.busy.is_some() {
                 mark + metrics::S8
             } else {
-                self.count.map_or(0.0, |c| text::width(&ctx, &Font::Small.id(), c) + metrics::S8)
+                count.as_deref().map_or(0.0, |c| text::measure(&ctx, &Font::Small.id(), c) + metrics::S8)
             };
             let room = (head.max.x - x - count_w - 4.0).max(0.0);
             text::paint(
@@ -144,17 +150,17 @@ impl<'a> Section<'a> {
                 pos2(x, rect.center().y),
                 Align2::LEFT_CENTER,
                 p.text,
-                self.title,
+                self.title.borrow(),
                 Some(room),
                 Clip::End,
             );
             if self.busy.is_some() {
-                let w = text::width(&ctx, &font, self.title).min(room);
+                let w = text::measure(&ctx, &font, title).min(room);
                 let at = pos2(x + w + metrics::S8 + mark * 0.5, rect.center().y);
                 crate::state::spinner_at(&ctx, painter, Rect::from_center_size(at, Vec2::splat(mark)));
             }
-            if let Some(count) = self.count {
-                let w = text::width(&ctx, &font, self.title).min(room);
+            if let Some(count) = count.as_deref() {
+                let w = text::measure(&ctx, &font, title).min(room);
                 painter.text(
                     pos2(x + w + metrics::S8, rect.center().y),
                     Align2::LEFT_CENTER,
@@ -170,17 +176,19 @@ impl<'a> Section<'a> {
             x -= slot;
             let cell = Rect::from_min_size(pos2(x, rect.center().y - slot * 0.5), Vec2::splat(slot));
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(cell).id_salt(("action", i)));
-            if icon_button_sized(&mut child, *icon, tip, false, true, slot, metrics::GLYPH_ROW).clicked() {
+            if icon_button_sized(&mut child, *icon, tip.borrow(), false, true, slot, metrics::GLYPH_ROW)
+                .clicked()
+            {
                 action = Some(i);
             }
             x -= 2.0;
         }
-        audit::control(&ctx, self.title, true, None, self.tip, rect);
-        if let Some(what) = self.busy {
-            audit::loading(&ctx, what, rect);
+        audit::control(&ctx, title, true, None, tip.as_deref(), rect);
+        if let Some(what) = &self.busy {
+            audit::loading(&ctx, &what.get(&ctx), rect);
         }
-        if let Some(tip) = self.tip {
-            resp = resp.on_hover_text(tip);
+        if let Some(tip) = tip {
+            resp = resp.on_hover_text(tip.as_ref());
         }
         let _ = resp;
         SectionResponse { open, toggled, action, rect }

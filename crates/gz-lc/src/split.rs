@@ -97,6 +97,7 @@ pub fn uv_map(g: &mut LcGlobalData, splits: &mut Vec<Split>, log: &mut Log, ctl:
         // the faces' areas, taken once: nothing moves a corner while the subdivision is cut
         let mut areas: Vec<f32> = splits[sp].par_iter().map(|&f| g.mesh.calc_area(f)).collect();
         loop {
+            ctl.check()?;
             let mut ms: Option<FaceId> = None;
             let mut ma = 0.0f32;
             for (&f, &a) in splits[sp].iter().zip(&areas) {
@@ -139,7 +140,7 @@ pub fn uv_map(g: &mut LcGlobalData, splits: &mut Vec<Split>, log: &mut Log, ctl:
         }
         sp = sp.wrapping_add(1);
     }
-    log.msg(format!("{} subdivisions...", splits.len()));
+    log.msg(format!("{} subdivisions.", splits.len()));
     Ok(())
 }
 
@@ -395,6 +396,7 @@ pub fn merge_geometry(g: &LcGlobalData, splits: &mut Vec<Split>, log: &mut Log, 
         let Some(k) = keys[split] else { continue };
         let mut orig: Option<Aabb> = None;
         loop {
+            ctl.check()?;
             let (need, base) = needs[split];
             if !need {
                 break;

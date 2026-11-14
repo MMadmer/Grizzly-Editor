@@ -29,11 +29,12 @@ use parking_lot::Mutex;
 use crate::audit;
 use crate::button::{Button, Kind};
 use crate::font::Font;
+use crate::i18n::{TipExt, Tx};
 use crate::icons::{self, Icon};
 use crate::state::{spinner_at, tone_icon};
 use crate::text::{self, Clip};
 use crate::theme::{Tone, metrics, palette};
-use crate::units::{button_width, em};
+use crate::units::{button_width_str, em};
 
 /// A dialog's width class.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -86,27 +87,29 @@ pub enum Asker {
 pub struct DialogInfo {
     /// `dlg.<name>`.
     pub id: String,
+    /// Its title in English, whatever language the window shows.
     pub title: String,
     /// Its rectangle in pixels: min x, min y, max x, max y.
     pub rect_px: [f32; 4],
 }
 
-/// A confirmation (`confirm`).
+/// A confirmation (`confirm`). Its texts are shown in the window's language and logged in English;
+/// an item is a name (`Tx::raw`) or a word of the editor's own ("Unsaved edits").
 #[derive(Clone, Debug, Default)]
 pub struct ConfirmSpec {
     /// The name after `dlg.`.
     pub id: String,
-    pub title: String,
+    pub title: Tx<'static>,
     /// The question, a sentence naming what happens.
-    pub headline: String,
+    pub headline: Tx<'static>,
     /// What it touches: up to 10 are listed, then "and N more".
-    pub items: Vec<String>,
+    pub items: Vec<Tx<'static>>,
     /// How many there are in all, when `items` lists only some.
     pub total: usize,
     /// What it costs, in the warning colour; a destructive one says "Deleted for good" without it.
-    pub consequence: String,
+    pub consequence: Tx<'static>,
     /// The action button's label; "Delete" for a destructive one, "OK" otherwise.
-    pub action: String,
+    pub action: Tx<'static>,
     /// Loses data: the action is Danger, Cancel the default, Enter and Esc cancel.
     pub destructive: bool,
 }
@@ -114,7 +117,7 @@ pub struct ConfirmSpec {
 /// A button of a [`ResultSpec`] that does something without closing it (Open Folder).
 #[derive(Clone)]
 pub struct ResultAction {
-    pub label: String,
+    pub label: Tx<'static>,
     pub run: Arc<dyn Fn() + Send + Sync>,
 }
 
@@ -129,14 +132,15 @@ impl std::fmt::Debug for ResultAction {
 pub struct ResultSpec {
     /// The name after `dlg.`: `build_result`, `export_result`, ...
     pub id: String,
-    pub title: String,
+    pub title: Tx<'static>,
     pub tone: Tone,
-    pub headline: String,
-    /// Key and value pairs.
-    pub rows: Vec<(String, String)>,
-    /// What the build passed by: "Not shipped".
+    pub headline: Tx<'static>,
+    /// Key and value pairs: the key the editor's own word, the value data or a word of its own.
+    pub rows: Vec<(Tx<'static>, Tx<'static>)>,
+    /// What the build passed by: "Not shipped". Paths, shown as they are.
     pub left_out: Vec<String>,
-    /// Up to 8 are shown.
+    /// Up to 8 are shown: sentences a domain crate wrote, shown translated where the catalog
+    /// knows them.
     pub warnings: Vec<String>,
     pub action: Option<ResultAction>,
 }
@@ -144,12 +148,12 @@ pub struct ResultSpec {
 impl ResultSpec {
     /// A result with no rows, nothing left out, no warnings and no action.
     #[must_use]
-    pub fn new(id: &str, title: &str, tone: Tone, headline: &str) -> Self {
+    pub fn new<'a>(id: &str, title: impl Into<Tx<'a>>, tone: Tone, headline: impl Into<Tx<'a>>) -> Self {
         Self {
             id: id.to_owned(),
-            title: title.to_owned(),
+            title: title.into().into_owned(),
             tone,
-            headline: headline.to_owned(),
+            headline: headline.into().into_owned(),
             rows: Vec::new(),
             left_out: Vec::new(),
             warnings: Vec::new(),
@@ -162,14 +166,14 @@ type Then = Box<dyn FnOnce(Answer) + Send>;
 
 enum QKind {
     Confirm(ConfirmSpec),
-    Unsaved { headline: String, items: Vec<String> },
-    Notice { tone: Tone, text: String },
+    Unsaved { headline: Tx<'static>, items: Vec<Tx<'static>> },
+    Notice { tone: Tone, text: Tx<'static> },
     Result(ResultSpec),
 }
 
 struct Queued {
     kind: QKind,
-    title: String,
+    title: Tx<'static>,
     name: String,
     /// The dialog this one is a sheet of, while that dialog is drawn.
     parent: Option<String>,
@@ -300,11 +304,14 @@ pub struct Footer<'u> {
 
 impl Footer<'_> {
     /// A status line on the left with its tone's icon, cut to what the buttons leave.
-    pub fn status(&mut self, text_: &str, tone: Tone) {
-        if text_.is_empty() {
+    pub fn status<'a>(&mut self, text_: impl Into<Tx<'a>>, tone: Tone) {
+        let ctx = self.ui.ctx().clone();
+        let text_tx = text_.into();
+        if text_tx.is_empty() {
             return;
         }
-        let ctx = self.ui.ctx().clone();
+        let text_ = text_tx.get(&ctx);
+        let text_: &str = &text_;
         let p = palette(&ctx);
         let x = self.rect.min.x + 16.0;
         let cy = self.rect.center().y;
@@ -324,7 +331,7 @@ impl Footer<'_> {
             pos2(tx, cy),
             Align2::LEFT_CENTER,
             color,
-            text_,
+            text_tx.borrow(),
             Some(room),
             Clip::End,
         );
@@ -336,9 +343,11 @@ impl Footer<'_> {
 
     /// While a job runs: a spinner and its stage on the left. The job's stop is a labelled
     /// button of the footer (`Stop <job>`). An audited frame reports it, like a busy line.
-    pub fn busy(&mut self, stage: &str) {
+    pub fn busy<'a>(&mut self, stage: impl Into<Tx<'a>>) {
         self.busy = true;
         let ctx = self.ui.ctx().clone();
+        let stage = stage.into();
+        let stage = if stage.is_empty() { Tx::from("Working...") } else { stage };
         let p = palette(&ctx);
         let x = self.rect.min.x + 16.0;
         let cy = self.rect.center().y;
@@ -350,46 +359,56 @@ impl Footer<'_> {
         let tx = x + metrics::GLYPH + 8.0;
         let buttons_x = self.rect.max.x - 16.0 - self.last_w;
         let room = (buttons_x - 16.0 - tx).max(em(3.0));
-        let stage = if stage.is_empty() { "Working..." } else { stage };
         text::paint(
             self.ui.painter(),
             &Font::Body.id(),
             pos2(tx, cy),
             Align2::LEFT_CENTER,
             p.text,
-            stage,
+            stage.borrow(),
             Some(room),
             Clip::End,
         );
         audit::loading(
             &ctx,
-            stage,
+            &stage.get(&ctx),
             Rect::from_min_max(pos2(x, self.rect.min.y), pos2(buttons_x.max(tx), self.rect.max.y)),
         );
     }
 
     /// A button, placed after the ones before it. `is_default` takes the keyboard focus when the
     /// dialog opens and is pressed by Enter (never a Danger one, never in a destructive dialog).
-    pub fn button(&mut self, label: &str, kind: Kind, is_default: bool, enabled: bool, why: &str) -> bool {
-        self.button_set(label, &[], kind, is_default, enabled, why)
+    pub fn button<'a>(
+        &mut self,
+        label: impl Into<Tx<'a>>,
+        kind: Kind,
+        is_default: bool,
+        enabled: bool,
+        why: impl Into<Tx<'a>>,
+    ) -> bool {
+        self.button_set(label, &[] as &[&'static str], kind, is_default, enabled, why)
     }
 
     /// A button whose label changes with the state: it keeps the width of the widest of
     /// `label_set`.
-    pub fn button_set(
+    pub fn button_set<'a, L: Clone + Into<Tx<'a>>>(
         &mut self,
-        label: &str,
-        label_set: &[&str],
+        label: impl Into<Tx<'a>>,
+        label_set: &[L],
         kind: Kind,
         is_default: bool,
         enabled: bool,
-        why: &str,
+        why: impl Into<Tx<'a>>,
     ) -> bool {
         let ctx = self.ui.ctx().clone();
+        let label_tx = label.into();
+        let label = label_tx.get(&ctx).into_owned();
+        let label_set: Vec<String> = crate::button::txs(label_set).iter().map(|l| l.text(&ctx)).collect();
+        let why = why.into().text(&ctx);
         let w = label_set
             .iter()
             .chain(std::iter::once(&label))
-            .map(|l| button_width(&ctx, l, kind, false, metrics::DIALOG_BUTTON_W))
+            .map(|l| button_width_str(&ctx, l, kind, false, metrics::DIALOG_BUTTON_W))
             .fold(0.0, f32::max);
         if self.w_cur > 0.0 {
             self.x += 8.0;
@@ -402,11 +421,13 @@ impl Footer<'_> {
             self.danger = true;
         }
         if kind == Kind::Primary {
-            crate::button::note_primary(&ctx, self.ui.scope_id(), "dialog footer", label);
+            crate::button::note_primary(&ctx, self.ui.scope_id(), "dialog footer", &label);
         }
-        let resp = self
-            .ui
-            .put(rect, Button::new(label).kind(kind).enabled(enabled, why).label_set(label_set).dialog());
+        let set: Vec<Tx<'_>> = label_set.iter().map(|l| Tx::raw(l.as_str())).collect();
+        let resp = self.ui.put(
+            rect,
+            Button::new(Tx::raw(&label)).kind(kind).enabled(enabled, Tx::raw(&why)).label_set(&set).dialog(),
+        );
         self.buttons.push(resp.id);
         let mut pressed = resp.clicked() && enabled;
         if is_default && enabled && kind != Kind::Danger {
@@ -426,16 +447,17 @@ impl Footer<'_> {
 /// A modal dialog.
 #[must_use = "a dialog does nothing until it is shown: .show(ui, &mut open, ..)"]
 pub struct Dialog<'a> {
-    title: &'a str,
+    title: Tx<'a>,
     name: &'a str,
     size: DialogSize,
     sheet: bool,
 }
 
 impl<'a> Dialog<'a> {
-    /// `name` is `dlg.<name>` (the prefix is added when missing): what MCP calls it.
-    pub fn new(title: &'a str, name: &'a str, size: DialogSize) -> Self {
-        Self { title, name, size, sheet: false }
+    /// `name` is `dlg.<name>` (the prefix is added when missing): what MCP calls it. The title is
+    /// shown in the window's language; MCP and the audit know the dialog by its English title.
+    pub fn new(title: impl Into<Tx<'a>>, name: &'a str, size: DialogSize) -> Self {
+        Self { title: title.into(), name, size, sheet: false }
     }
 
     /// Raised from the dialog being drawn: under its title, no wider than it. Outside a dialog it
@@ -456,14 +478,14 @@ impl<'a> Dialog<'a> {
     ) -> Option<R> {
         let ctx = ui.ctx().clone();
         let parent = if self.sheet { handle(&ctx).0.lock().stack.last().cloned() } else { None };
-        show_impl(&ctx, self.title, &full_name(self.name), self.size, parent, open, body, footer)
+        show_impl(&ctx, &self.title, &full_name(self.name), self.size, parent, open, body, footer)
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn show_impl<R>(
     ctx: &Context,
-    title: &str,
+    title: &Tx<'_>,
     name: &str,
     size: DialogSize,
     parent: Option<Drawn>,
@@ -576,7 +598,7 @@ fn show_impl<R>(
             pos2(title_rect.min.x + 16.0, title_rect.center().y),
             Align2::LEFT_CENTER,
             p.text,
-            title,
+            title.borrow(),
             Some(room),
             Clip::End,
         );
@@ -603,7 +625,7 @@ fn show_impl<R>(
             Rect::from_center_size(cross.center(), Vec2::splat(metrics::GLYPH)),
             if c.hovered() { p.text } else { p.text_secondary },
         );
-        if c.on_hover_text("Close").clicked() {
+        if c.tip("Close").clicked() {
             close_now = true;
         }
 
@@ -612,11 +634,12 @@ fn show_impl<R>(
             cur_at = g.cur.len();
             g.stack.push(Drawn { name: name.to_owned(), rect });
         }
-        // the audit names the dialog as its window is named, `Title###dlg.<name>`: what
-        // `ui.audit id=dlg.<name>` and the contract's window names look for
-        let window = format!("{title}###{name}");
+        // the audit names the dialog as its window is named, `Title###dlg.<name>` in English: what
+        // `ui.audit id=dlg.<name>` and the contract's window names look for, in any language
+        let window = format!("{}###{name}", title.en());
         audit::surface(ctx, &window, || {
-            audit::control(ctx, "Close", true, None, Some("Close"), cross);
+            let close = crate::i18n::t(ctx, "Close");
+            audit::control(ctx, &close, true, None, Some(&close), cross);
             // the body scrolls; the window itself never does
             let body_rect = Rect::from_min_max(
                 pos2(rect.min.x, title_rect.max.y),
@@ -721,7 +744,7 @@ fn show_impl<R>(
             at,
             DialogInfo {
                 id: name.to_owned(),
-                title: title.to_owned(),
+                title: title.en().into_owned(),
                 rect_px: [r.min.x * ppp, r.min.y * ppp, r.max.x * ppp, r.max.y * ppp],
             },
         );
@@ -736,29 +759,29 @@ fn show_impl<R>(
     out
 }
 
-fn headline(ui: &mut Ui, text_: &str) {
+fn headline(ui: &mut Ui, text_: &Tx<'_>) {
     if text_.is_empty() {
         return;
     }
     let p = palette(ui.ctx());
-    ui.label(RichText::new(text_).font(Font::Strong.id()).color(p.text));
+    ui.label(RichText::new(text_.get(ui.ctx()).as_ref()).font(Font::Strong.id()).color(p.text));
     ui.add_space(4.0);
 }
 
-fn list(ui: &mut Ui, items: &[String], total: usize, limit: usize) {
+fn list(ui: &mut Ui, items: &[Tx<'_>], total: usize, limit: usize) {
     let p = palette(ui.ctx());
     let shown = items.len().min(limit);
     for item in items.iter().take(shown) {
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            text::label(ui, item, Font::Body, p.text, Clip::Middle);
+            text::label(ui, item.borrow(), Font::Body, p.text, Clip::Middle);
         });
     }
     let all = total.max(items.len());
     if all > shown {
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            text::label(ui, &format!("and {} more", all - shown), Font::Body, p.text_muted, Clip::End);
+            text::label(ui, crate::tr!("and {n} more", n = all - shown), Font::Body, p.text_muted, Clip::End);
         });
     }
 }
@@ -788,9 +811,9 @@ fn draw_queued(ctx: &Context, q: &mut Queued, parent: Option<Drawn>) {
                     if !c.consequence.is_empty() || c.destructive {
                         ui.add_space(4.0);
                         let text_ = if c.consequence.is_empty() {
-                            "Deleted for good - this cannot be undone."
+                            Tx::from("Deleted for good - this cannot be undone.")
                         } else {
-                            c.consequence.as_str()
+                            c.consequence.borrow()
                         };
                         text::status(ui, Tone::Warning, text_);
                     }
@@ -804,10 +827,10 @@ fn draw_queued(ctx: &Context, q: &mut Queued, parent: Option<Drawn>) {
                     text::status(ui, Tone::Muted, "Changes are lost if they are not saved.");
                 }
                 QKind::Notice { tone, text: t } => {
-                    text::status(ui, *tone, t);
+                    text::status(ui, *tone, t.borrow());
                 }
                 QKind::Result(r) => {
-                    text::status(ui, r.tone, &r.headline);
+                    text::status(ui, r.tone, r.headline.borrow());
                     if !r.rows.is_empty() {
                         ui.add_space(4.0);
                         let key_w = em(9.0);
@@ -823,7 +846,7 @@ fn draw_queued(ctx: &Context, q: &mut Queued, parent: Option<Drawn>) {
                                 pos2(row.min.x, row.center().y),
                                 Align2::LEFT_CENTER,
                                 p.text_secondary,
-                                key,
+                                key.borrow(),
                                 Some(key_w - 8.0),
                                 Clip::End,
                             );
@@ -834,7 +857,7 @@ fn draw_queued(ctx: &Context, q: &mut Queued, parent: Option<Drawn>) {
                                 pos2(vx, row.center().y),
                                 Align2::LEFT_CENTER,
                                 p.text,
-                                value,
+                                value.borrow(),
                                 Some((row.max.x - vx).max(0.0)),
                                 Clip::Middle,
                             );
@@ -842,19 +865,20 @@ fn draw_queued(ctx: &Context, q: &mut Queued, parent: Option<Drawn>) {
                     }
                     if !r.left_out.is_empty() {
                         ui.add_space(4.0);
-                        headline(ui, "Not shipped");
-                        list(ui, &r.left_out, 0, 10);
+                        headline(ui, &Tx::from("Not shipped"));
+                        let names: Vec<Tx<'_>> = r.left_out.iter().map(|i| Tx::raw(i.as_str())).collect();
+                        list(ui, &names, 0, 10);
                     }
                     if !r.warnings.is_empty() {
                         ui.add_space(4.0);
                         let shown = r.warnings.len().min(8);
                         for w in r.warnings.iter().take(shown) {
-                            text::status(ui, Tone::Warning, w);
+                            text::status(ui, Tone::Warning, Tx::ui(w.as_str()));
                         }
                         if r.warnings.len() > shown {
                             text::label(
                                 ui,
-                                &format!("and {} more warnings", r.warnings.len() - shown),
+                                crate::tr!("and {n} more {n:warning|warnings}", n = r.warnings.len() - shown),
                                 Font::Body,
                                 p.text_muted,
                                 Clip::End,
@@ -867,11 +891,11 @@ fn draw_queued(ctx: &Context, q: &mut Queued, parent: Option<Drawn>) {
         |f| match kind {
             QKind::Confirm(c) => {
                 let label = if !c.action.is_empty() {
-                    c.action.as_str()
+                    c.action.borrow()
                 } else if c.destructive {
-                    "Delete"
+                    Tx::from("Delete")
                 } else {
-                    "OK"
+                    Tx::from("OK")
                 };
                 if f.button(
                     label,
@@ -905,7 +929,7 @@ fn draw_queued(ctx: &Context, q: &mut Queued, parent: Option<Drawn>) {
             }
             QKind::Result(r) => {
                 if let Some(a) = &r.action
-                    && f.button(&a.label, Kind::Secondary, false, true, "")
+                    && f.button(a.label.borrow(), Kind::Secondary, false, true, "")
                 {
                     action = Some(a.run.clone());
                 }
@@ -1003,7 +1027,7 @@ pub fn draw_overlays(ui: &mut Ui) {
     s.stack.clear();
 }
 
-fn queue(ctx: &Context, kind: QKind, title: String, name: String, then: Option<Then>) {
+fn queue(ctx: &Context, kind: QKind, title: Tx<'static>, name: String, then: Option<Then>) {
     let h = handle(ctx);
     let mut s = h.0.lock();
     // a question raised inside a dialog is a sheet of it
@@ -1063,7 +1087,8 @@ pub fn confirm(
     spec: ConfirmSpec,
     then: impl FnOnce(Answer) + Send + 'static,
 ) -> Option<Finding> {
-    let what = or(&spec.headline, or(&spec.title, "Confirm")).to_owned();
+    let (headline, title) = (spec.headline.en(), spec.title.en());
+    let what = or(&headline, or(&title, "Confirm")).to_owned();
     match who(ctx, asker) {
         Asker::Mcp => {
             then(Answer::Yes);
@@ -1074,7 +1099,7 @@ pub fn confirm(
             Some(Finding::warning(format!("[dlg suppressed] {what}  -> auto-answer: No")))
         }
         Asker::Ui => {
-            let title = or(&spec.title, "Confirm").to_owned();
+            let title = if spec.title.is_empty() { Tx::from("Confirm") } else { spec.title.clone() };
             let name = full_name(or(&spec.id, "confirm"));
             queue(ctx, QKind::Confirm(spec), title, name, Some(Box::new(then)));
             None
@@ -1089,10 +1114,10 @@ pub fn unsaved_prompt(
     ctx: &Context,
     asker: Asker,
     id: &str,
-    what: &[String],
+    what: &[Tx<'static>],
     then: impl FnOnce(Answer) + Send + 'static,
 ) -> Option<Finding> {
-    let joined = what.join(", ");
+    let joined = what.iter().map(|w| w.en().into_owned()).collect::<Vec<_>>().join(", ");
     match who(ctx, asker) {
         Asker::Mcp => {
             then(Answer::Cancel);
@@ -1104,17 +1129,11 @@ pub fn unsaved_prompt(
         }
         Asker::Ui => {
             let headline = match what {
-                [one] => format!("Save changes to {one}?"),
-                _ => "Save changes to these items?".to_owned(),
+                [one] => crate::tr!("Save changes to {one}?", one = one.clone()),
+                _ => Tx::from("Save changes to these items?"),
             };
             let kind = QKind::Unsaved { headline, items: what.to_vec() };
-            queue(
-                ctx,
-                kind,
-                "Unsaved Changes".to_owned(),
-                full_name(or(id, "unsaved")),
-                Some(Box::new(then)),
-            );
+            queue(ctx, kind, Tx::from("Unsaved Changes"), full_name(or(id, "unsaved")), Some(Box::new(then)));
             None
         }
     }
@@ -1122,8 +1141,15 @@ pub fn unsaved_prompt(
 
 /// A note for the author: an error, a warning, information. Returns the finding to log; only `Ui`
 /// opens it.
-pub fn notice(ctx: &Context, asker: Asker, tone: Tone, title: &str, text_: &str) -> Option<Finding> {
-    let line = logged(tone, title, text_);
+pub fn notice<'a>(
+    ctx: &Context,
+    asker: Asker,
+    tone: Tone,
+    title: impl Into<Tx<'a>>,
+    text_: impl Into<Tx<'a>>,
+) -> Option<Finding> {
+    let (title, text_) = (title.into().into_owned(), text_.into().into_owned());
+    let line = logged(tone, &title.en(), &text_.en());
     if who(ctx, asker) == Asker::Ui {
         let fallback = match tone {
             Tone::Error => "Error",
@@ -1132,8 +1158,8 @@ pub fn notice(ctx: &Context, asker: Asker, tone: Tone, title: &str, text_: &str)
         };
         queue(
             ctx,
-            QKind::Notice { tone, text: text_.to_owned() },
-            or(title, fallback).to_owned(),
+            QKind::Notice { tone, text: text_ },
+            if title.is_empty() { Tx::from(fallback) } else { title },
             "dlg.notice".to_owned(),
             None,
         );
@@ -1145,10 +1171,10 @@ pub fn notice(ctx: &Context, asker: Asker, tone: Tone, title: &str, text_: &str)
 /// warnings, the action and OK. Returns the findings to log (the headline at the tone of the
 /// result, then each warning); only `Ui` opens it.
 pub fn result(ctx: &Context, asker: Asker, spec: ResultSpec) -> Vec<Finding> {
-    let mut lines = vec![logged(spec.tone, &spec.title, &spec.headline)];
+    let mut lines = vec![logged(spec.tone, &spec.title.en(), &spec.headline.en())];
     lines.extend(spec.warnings.iter().map(Finding::warning));
     if who(ctx, asker) == Asker::Ui {
-        let title = or(&spec.title, "Result").to_owned();
+        let title = if spec.title.is_empty() { Tx::from("Result") } else { spec.title.clone() };
         let name = full_name(or(&spec.id, "result"));
         queue(ctx, QKind::Result(spec), title, name, None);
     }
@@ -1216,7 +1242,7 @@ mod tests {
             },
         );
         let confirmed = rx.try_recv().ok();
-        super::unsaved_prompt(ctx, asker, "unsaved", &["quest.nqasset".to_owned()], move |a| {
+        super::unsaved_prompt(ctx, asker, "unsaved", &[crate::Tx::raw("quest.nqasset")], move |a| {
             let _ = tx2.send(a);
         });
         let unsaved = rx.try_recv().ok();

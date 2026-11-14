@@ -16,21 +16,23 @@ use egui::{
 use crate::audit;
 use crate::button::{Button, Kind};
 use crate::font::Font;
+use crate::i18n::Tx;
 use crate::text::{self, Clip};
 use crate::theme::{Tone, metrics, palette};
 use crate::units::{button_width, em};
 
 /// A raised box around one part of a surface, as tall as what it holds, the whole width it gets.
 /// `attention` puts a strip in the tone's colour down its left edge.
-pub fn card<R>(
+pub fn card<'a, R>(
     ui: &mut Ui,
     id_salt: &str,
-    title: &str,
+    title: impl Into<Tx<'a>>,
     tone: Tone,
     attention: bool,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> R {
     let p = palette(ui.ctx());
+    let title = title.into();
     let out = ui.push_id(("gz-ui.card", id_salt), |ui| {
         Frame::new()
             .fill(p.raised)
@@ -41,7 +43,7 @@ pub fn card<R>(
                 ui.set_width(ui.available_width());
                 if !title.is_empty() {
                     let color = p.text;
-                    text::label(ui, title, Font::Strong, color, Clip::End);
+                    text::label(ui, title.borrow(), Font::Strong, color, Clip::End);
                 }
                 add(ui)
             })
@@ -62,7 +64,7 @@ pub fn card<R>(
 
 /// What a card says while the part it holds is still being worked out: a spinner and the stage,
 /// on one line. An audited frame reports it (`ui.audit` `loading`), like a surface's busy line.
-pub fn card_busy(ui: &mut Ui, stage: &str) {
+pub fn card_busy<'a>(ui: &mut Ui, stage: impl Into<Tx<'a>>) {
     crate::state::busy_line(ui, stage);
 }
 
@@ -105,15 +107,16 @@ const CARD_PAD: Vec2 = Vec2::new(20.0, 16.0);
 
 /// A card centred on a page, a little above the middle, at most `width` wide, with its title.
 /// A card taller than the page makes the page scroll.
-pub fn page_card<R>(
+pub fn page_card<'a, R>(
     ui: &mut Ui,
     id_salt: &str,
-    title: &str,
+    title: impl Into<Tx<'a>>,
     width: f32,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> R {
     let p = palette(ui.ctx());
     let ctx = ui.ctx().clone();
+    let title = title.into();
     let id = Id::unique(("gz-ui.page_card", id_salt));
     let frame_nr = ctx.cumulative_frame_nr();
     let mut mem = ctx.data(|d| d.get_temp::<PageCardMem>(id)).unwrap_or_default();
@@ -142,7 +145,7 @@ pub fn page_card<R>(
         .show(&mut child, |ui| {
             ui.set_width(w - CARD_PAD.x * 2.0);
             let color = p.text;
-            text::label(ui, title, Font::Title, color, Clip::End);
+            text::label(ui, title.borrow(), Font::Title, color, Clip::End);
             ui.add_space(8.0);
             add(ui)
         });
@@ -162,21 +165,21 @@ pub fn page_card<R>(
 }
 
 /// A button of a [`card_footer`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct CardAction<'a> {
-    pub label: &'a str,
+    pub label: Tx<'a>,
     pub kind: Kind,
     /// Enter presses it (never a Danger one).
     pub is_default: bool,
     pub enabled: bool,
     /// Why it is off: its tooltip.
-    pub why: &'a str,
+    pub why: Tx<'a>,
 }
 
 impl<'a> CardAction<'a> {
     #[must_use]
-    pub fn new(label: &'a str, kind: Kind) -> Self {
-        Self { label, kind, is_default: false, enabled: true, why: "" }
+    pub fn new(label: impl Into<Tx<'a>>, kind: Kind) -> Self {
+        Self { label: label.into(), kind, is_default: false, enabled: true, why: Tx::EMPTY }
     }
 
     #[must_use]
@@ -186,9 +189,9 @@ impl<'a> CardAction<'a> {
     }
 
     #[must_use]
-    pub fn enabled(mut self, enabled: bool, why: &'a str) -> Self {
+    pub fn enabled(mut self, enabled: bool, why: impl Into<Tx<'a>>) -> Self {
         self.enabled = enabled;
-        self.why = why;
+        self.why = why.into();
         self
     }
 }
@@ -196,9 +199,17 @@ impl<'a> CardAction<'a> {
 /// The footer of a [`page_card`]: a line across the card, the status on the left in what the
 /// buttons leave, the buttons on the right (at least 88 x 28). Returns the index pressed; Enter
 /// presses the default while nothing else has the keys.
-pub fn card_footer(ui: &mut Ui, status: &str, tone: Tone, actions: &[CardAction<'_>]) -> Option<usize> {
+pub fn card_footer<'a>(
+    ui: &mut Ui,
+    status: impl Into<Tx<'a>>,
+    tone: Tone,
+    actions: &[CardAction<'_>],
+) -> Option<usize> {
     let p = palette(ui.ctx());
     let ctx = ui.ctx().clone();
+    let status_tx = status.into();
+    let status = status_tx.get(&ctx);
+    let status: &str = &status;
     let gap = 8.0;
     let h = metrics::DIALOG_BUTTON_H;
     ui.add_space(8.0);
@@ -212,7 +223,7 @@ pub fn card_footer(ui: &mut Ui, status: &str, tone: Tone, actions: &[CardAction<
 
     let widths: Vec<f32> = actions
         .iter()
-        .map(|a| button_width(&ctx, a.label, a.kind, false, metrics::DIALOG_BUTTON_W))
+        .map(|a| button_width(&ctx, a.label.borrow(), a.kind, false, metrics::DIALOG_BUTTON_W))
         .collect();
     let total: f32 = widths.iter().sum::<f32>() + gap * actions.len().saturating_sub(1) as f32;
     let room = ui.available_width();
@@ -226,7 +237,7 @@ pub fn card_footer(ui: &mut Ui, status: &str, tone: Tone, actions: &[CardAction<
             pos2(row.min.x, row.center().y),
             Align2::LEFT_CENTER,
             color,
-            status,
+            status_tx.borrow(),
             Some(status_w),
             Clip::End,
         );
@@ -243,7 +254,7 @@ pub fn card_footer(ui: &mut Ui, status: &str, tone: Tone, actions: &[CardAction<
     let mut x = row.min.x + (room - total).max(0.0);
     for (i, (a, w)) in actions.iter().zip(&widths).enumerate() {
         let r = Rect::from_min_size(pos2(x, row.min.y), Vec2::new(*w, h));
-        let button = Button::new(a.label).kind(a.kind).enabled(a.enabled, a.why).dialog();
+        let button = Button::new(a.label.borrow()).kind(a.kind).enabled(a.enabled, a.why.borrow()).dialog();
         if ui.put(r, button).clicked() {
             clicked = Some(i);
         }

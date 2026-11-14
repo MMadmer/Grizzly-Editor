@@ -54,8 +54,6 @@ pub struct DrawerDesc {
 pub type OpenFn = Box<dyn FnMut(&mut DocCx<'_>) -> Result<(), String>>;
 /// What the status bar reads of the log.
 pub type LogStateFn = std::sync::Arc<dyn Fn(&Editor) -> LogState + Send + Sync>;
-/// Shows a project path in the Content Browser.
-pub type RevealFn = Box<dyn FnMut(&str, &mut DocCx<'_>)>;
 /// Rebuilds the layout (`true`: every split too).
 pub type ResetLayoutFn = Box<dyn FnMut(bool, &mut DocCx<'_>)>;
 
@@ -116,8 +114,8 @@ pub struct PrefGroup {
 }
 
 /// What a group says instead of its rows, as one read-only row - its label and its sentence
-/// (`None`: the rows).
-pub type NoteFn = fn(&Arc<Editor>) -> Option<(&'static str, String)>;
+/// (`None`: the rows). The sentence says whether it is the area's own words or data.
+pub type NoteFn = fn(&Arc<Editor>) -> Option<(&'static str, gz_ui::Tx<'static>)>;
 
 /// A row of a [`PrefGroup`]: its official label, its help, and what it is.
 #[derive(Clone, Copy, Debug)]
@@ -135,15 +133,26 @@ pub enum PrefKind {
     Setting { def: crate::settings::PrefDef, unit: &'static str, choices: &'static [&'static str] },
     /// On or off, kept by the area itself: `get` reads it, `set` changes it (through a command).
     Switch { get: fn(&Arc<Editor>) -> bool, set: fn(&Arc<Editor>, bool), default: bool },
-    /// A value to read, never edited.
-    ReadOnly { value: fn(&Arc<Editor>) -> String },
+    /// A value to read, never edited: data (`Tx::raw`, a folder, a version) or the area's own
+    /// words.
+    ReadOnly { value: fn(&Arc<Editor>) -> gz_ui::Tx<'static> },
     /// A button and, beside it, the sentence `status` answers (what the last run found). `run`
     /// starts the work (a command); `enabled` says why the button is off.
     Button {
         text: &'static str,
         run: fn(&Arc<Editor>),
         enabled: fn(&Arc<Editor>) -> crate::actions::Enabled,
-        status: fn(&Arc<Editor>) -> String,
+        status: fn(&Arc<Editor>) -> gz_ui::Tx<'static>,
+    },
+    /// A state that is in order or is not: in order (`done`), a check mark and the sentence
+    /// `status` answers, and no button to press; otherwise the button that puts it in order
+    /// (`run`, off with `enabled`'s reason) beside the sentence.
+    Fix {
+        text: &'static str,
+        run: fn(&Arc<Editor>),
+        enabled: fn(&Arc<Editor>) -> crate::actions::Enabled,
+        status: fn(&Arc<Editor>) -> gz_ui::Tx<'static>,
+        done: fn(&Arc<Editor>) -> bool,
     },
 }
 
@@ -179,8 +188,9 @@ pub struct ShellBuilder {
     pub(crate) dialogs: Vec<DialogDesc>,
     pub(crate) panels: Vec<PanelDesc>,
     pub(crate) log_state: Option<LogStateFn>,
-    pub(crate) reveal: Option<RevealFn>,
     pub(crate) reset_layout: Option<ResetLayoutFn>,
+    /// The areas' catalogs of the window's languages (`ru.lua`, Lua data).
+    pub(crate) translations: Vec<&'static str>,
 }
 
 impl ShellBuilder {
@@ -335,11 +345,17 @@ impl ShellBuilder {
         self.log_state = Some(std::sync::Arc::new(f));
     }
 
-    /// A tab's file shown in the Content Browser (the tab menu's Show in Content Browser).
-    pub fn reveal_in_browser(&mut self, f: impl FnMut(&str, &mut DocCx<'_>) + 'static) {
-        self.reveal = Some(Box::new(f));
+    /// An area's catalog of a language: the Lua data file it embeds (`include_str!("ru.lua")`).
+    /// The shell reads every one the first time the window is to speak its language.
+    pub fn translation(&mut self, source: &'static str) {
+        self.translations.push(source);
     }
 
+    /// The catalogs added, for a test of an application's own builder.
+    #[must_use]
+    pub fn translations(&self) -> &[&'static str] {
+        &self.translations
+    }
     /// Reset Layout: `true` also forgets every split and grid width.
     pub fn reset_layout(&mut self, f: impl FnMut(bool, &mut DocCx<'_>) + 'static) {
         self.reset_layout = Some(Box::new(f));

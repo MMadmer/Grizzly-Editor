@@ -139,6 +139,12 @@ impl Options {
     }
 }
 
+/// How a phase's first line starts: `* Phase: Lighting the lightmaps`. Whoever follows the log
+/// tells the phases from the other lines by it.
+pub const PHASE_STARTED: &str = "* Phase: ";
+/// How a phase's last line starts: `* Phase done: Lighting the lightmaps (12.500 s)`.
+pub const PHASE_DONE: &str = "* Phase done: ";
+
 /// The compile's log: the phases with their seconds and the lines it prints.
 #[derive(Default)]
 pub struct Log {
@@ -188,17 +194,17 @@ impl Log {
         self.push(format!("    | {s}"));
     }
 
-    /// A new phase: the one before ends with its seconds.
+    /// A new phase, by the plain name of what it does: the one before ends with its seconds.
     pub fn phase(&mut self, name: &str) {
         self.end_phase();
-        self.push(format!("* New phase started: {name}"));
+        self.push(format!("{PHASE_STARTED}{name}"));
         self.started = Some((name.to_owned(), Instant::now()));
     }
 
     fn end_phase(&mut self) {
         if let Some((name, t)) = self.started.take() {
             let s = t.elapsed().as_secs_f64();
-            self.push(format!("* Phase done: {name} ({s:.3} s)"));
+            self.push(format!("{PHASE_DONE}{name} ({s:.3} s)"));
             self.phases.push((name, s));
         }
     }
@@ -242,8 +248,39 @@ fn adapt(e: LcError) -> Error {
     Error::Light(e)
 }
 
+/// The phases of the level compile in their order, by the plain names the log and the job's stage
+/// show ([`Log::phase`]); the compile of a level folder reads its project first ([`READING`]).
+pub const PHASES: [&str; 20] = [
+    "Loading the build project into the compiler",
+    "Optimizing the geometry",
+    "Tessellating the geometry for its vertex light",
+    "Building the normals",
+    "Building the collision",
+    "Building the tangent basis",
+    "Building the ray model of the light",
+    "Lighting the static models",
+    "Resolving the materials",
+    "Mapping the lightmaps",
+    "Subdividing the geometry",
+    "Lighting the implicit textures",
+    "Lighting the lightmaps",
+    "Lighting the vertices",
+    "Packing the lightmaps",
+    "Merging the geometry",
+    "Converting the geometry to visuals",
+    "Converting the static models to visuals",
+    "Building the sectors",
+    "Writing the level",
+];
+/// The first phase of a level folder's compile.
+pub const READING: &str = "Reading the build project";
+/// The phases of the detail light.
+pub const DETAIL_PHASES: [&str; 2] =
+    ["Reading the level for the detail light", "Lighting the detail objects"];
+
 /// The whole compile in memory: a read `build.prj` with the given shaders and prepared textures
-/// loaded into the compiler's model, then every phase. `log` follows it phase by phase.
+/// loaded into the compiler's model, then every phase. `log` follows it phase by phase; `ctl`
+/// stops it within a moment in any phase (every long loop checks it per item or per chunk).
 pub fn compile_project(
     prj: &BuildProject,
     shaders: Shaders,
@@ -252,7 +289,7 @@ pub fn compile_project(
     ctl: &Ctl<'_>,
     log: &mut Log,
 ) -> Result<Output> {
-    log.phase("Converting data structures...");
+    log.phase(PHASES[0]);
     let (mut g, mut extra) = load::load(prj, shaders, textures, !opts.nosmg)?;
     g.nosun = opts.nosun;
     g.linear = opts.linear;
@@ -267,97 +304,104 @@ pub fn compile_project(
         w.w_u16(g.params.quality);
     });
     out.put("build.lights", g.lights.write_build_lights());
-
-    log.phase("Optimizing...");
-    if !opts.no_optimize {
-        geom::pre_optimize(&mut g, &extra.scene_bb, log, opts.no_invalid_faces)?;
-    }
-    geom::correct_tjunctions(&g, log);
     ctl.check().map_err(adapt)?;
 
-    log.phase("Adaptive HT...");
+    log.phase(PHASES[1]);
+    if !opts.no_optimize {
+        geom::pre_optimize(&mut g, &extra.scene_bb, log, opts.no_invalid_faces, ctl)?;
+    }
+    geom::correct_tjunctions(&g, log, ctl)?;
+    ctl.check().map_err(adapt)?;
+
+    log.phase(PHASES[2]);
     geom::adaptive_ht(&mut g, &extra.scene_bb, log, ctl)?;
 
-    log.phase("Building normals...");
-    g.calc_normals(smoothing);
-    log.status("Models...".into());
-    g.mu_calc_normals(smoothing);
+    log.phase(PHASES[3]);
+    g.calc_normals(smoothing, ctl)?;
+    log.status("The normals of the static models".into());
+    g.mu_calc_normals(smoothing, ctl)?;
     ctl.check().map_err(adapt)?;
 
-    log.phase("Building collision database...");
-    out.put("level.cform", cform::build_cform(&mut g, log));
+    log.phase(PHASES[4]);
+    out.put("level.cform", cform::build_cform(&mut g, log, ctl)?);
     tree::save_portals(&extra, &mut level);
     ctl.check().map_err(adapt)?;
 
-    log.phase("Building tangent-basis...");
-    geom::tangent_basis(&mut g, log);
+    log.phase(PHASES[5]);
+    geom::tangent_basis(&mut g, log, ctl)?;
 
-    log.phase("Building rcast-CFORM model...");
+    log.phase(PHASES[6]);
     g.light_prepare();
-    let form = g.build_rapid(&extra.scene_bb)?;
+    let form = g.build_rapid_with(&extra.scene_bb, ctl)?;
     out.put("build.cform", form.write());
     ctl.check().map_err(adapt)?;
 
-    log.phase("LIGHT: Starting MU...");
+    log.phase(PHASES[7]);
     g.light_prepare();
     g.light_mu(ctl)?;
 
-    log.phase("Resolving materials...");
+    log.phase(PHASES[8]);
     let mut splits = split::resolve_materials(&mut g, log);
     g.mesh.isolate_vertices();
+    ctl.check().map_err(adapt)?;
 
-    log.phase("Build UV mapping...");
+    log.phase(PHASES[9]);
     split::uv_map(&mut g, &mut splits, log, ctl)?;
     g.mesh.isolate_vertices();
 
-    log.phase("Subdividing geometry...");
+    log.phase(PHASES[10]);
     split::subdivide(&mut g, &mut splits, log, ctl)?;
     g.mesh.isolate_vertices();
     g.mesh.reload_vertex_pool();
+    ctl.check().map_err(adapt)?;
 
-    log.phase("LIGHT: Implicit...");
+    log.phase(PHASES[11]);
     let implicit = g.implicit_lighting(ctl)?;
     for m in &implicit {
         let (base, lm) = m.dds()?;
         out.put(format!("{}.dds", m.name), base);
         out.put(format!("{}_lm.dds", m.name), lm);
     }
-    log.phase("LIGHT: LMaps...");
+    ctl.check().map_err(adapt)?;
+    log.phase(PHASES[12]);
     // LMapsLocal shuffles the deflectors with the main thread's rand(), never seeded before (srand(367)
     // comes with the first MinSphere, later); the pages' layout follows that order
     sphere::MsvcRand::new(1).shuffle(g.deflectors.list_mut());
     g.light_deflectors(ctl)?;
-    log.phase("LIGHT: Vertex...");
+    log.phase(PHASES[13]);
     g.light_vertices(ctl)?;
-    log.phase("LIGHT: Merging lightmaps...");
+    log.phase(PHASES[14]);
     let pages = g.merge_lightmaps(ctl)?;
     for p in &pages {
         let (a, b) = p.dds()?;
         out.put(format!("{}_1.dds", p.name), a);
         out.put(format!("{}_2.dds", p.name), b);
     }
-
-    log.phase("Merging geometry...");
-    split::merge_geometry(&g, &mut splits, log, ctl)?;
-
-    log.phase("Converting to OGFs...");
-    tree::flex2ogf(&g, splits, &mut tree, opts.noise, log);
     ctl.check().map_err(adapt)?;
 
-    log.phase("Converting MU-models to OGFs...");
-    log.status("MU : Models...".into());
-    tree::mu_calc_ogf(&g, &mut tree, log);
-    tree::mu_export_geometry(&g, &mut tree);
-    log.status("MU : References...".into());
-    tree::mu_export_refs(&g, &extra, &mut tree)?;
+    log.phase(PHASES[15]);
+    split::merge_geometry(&g, &mut splits, log, ctl)?;
 
-    log.phase("Building sectors...");
+    log.phase(PHASES[16]);
+    tree::flex2ogf(&g, splits, &mut tree, opts.noise, log, ctl)?;
+    ctl.check().map_err(adapt)?;
+
+    log.phase(PHASES[17]);
+    log.status("The models".into());
+    tree::mu_calc_ogf(&g, &mut tree, log, ctl)?;
+    tree::mu_export_geometry(&g, &mut tree);
+    log.status("The references".into());
+    tree::mu_export_refs(&g, &extra, &mut tree)?;
+    ctl.check().map_err(adapt)?;
+
+    log.phase(PHASES[18]);
     let sectors = tree::build_sectors(&mut extra, &mut tree, log)?;
     let mut rng = sphere::MsvcRand::min_sphere();
     tree::take_bounds(&mut tree, &mut rng);
     ctl.check().map_err(adapt)?;
 
-    log.phase("Saving...");
+    log.phase(PHASES[19]);
+    ctl.check().map_err(adapt)?;
     tree::save_lights(&extra, &mut level);
     tree::save_glows(&g, &extra, &mut tree, &mut level);
     let (geom_main, geom_fast) = tree::save_tree(&g, &extra, &mut tree, &mut level, log);
@@ -410,6 +454,16 @@ fn whole_chunks(name: &str, bytes: &[u8]) -> Result<()> {
 /// wait until the new ones are in.
 const STAGE_NEW: &str = ".lc_new";
 const STAGE_OLD: &str = ".lc_old";
+
+/// What a compile that was stopped, failed or crashed left of its stage beside the level.
+fn clean_stage(dir: &Path) {
+    for d in [STAGE_NEW, STAGE_OLD] {
+        let p = dir.join(d);
+        if p.is_dir() {
+            let _ = std::fs::remove_dir_all(&p);
+        }
+    }
+}
 
 fn io_err(what: &str, path: &Path, e: &std::io::Error) -> Error {
     Error::Io(format!("{} could not be {what}: {e}", path.display()))
@@ -524,14 +578,21 @@ pub fn compile(input: &Input, opts: &Options, ctl: &Ctl<'_>, log: &mut Log) -> R
         return pool.install(|| compile(input, &opts, ctl, log));
     }
     let t = Instant::now();
-    log.phase(&format!("Reading project [{}]...", input.level.display()));
+    log.phase(READING);
+    log.msg(input.level.join("build.prj").display().to_string());
     let prj = BuildProject::read(&read(&input.level.join("build.prj"))?)?;
     log.msg(format!("version: {}", prj.version));
     let shaders = input.sources.shaders()?;
-    log.status("Processing textures...".into());
+    ctl.check().map_err(adapt)?;
+    log.status("Processing the textures".into());
     let textures = input.sources.textures(&prj.textures, TextureUse::Level { radiosity: false })?;
+    ctl.check().map_err(adapt)?;
     let out = match compile_project(&prj, shaders, textures, opts, ctl, log) {
         Ok(out) => out,
+        Err(e) if e.cancelled() => {
+            clean_stage(&input.level);
+            return Err(e);
+        }
         Err(Error::InvalidFaces(n, err)) => {
             // written before the refusal: the author finds the faces in the viewport from it
             let path = input.level.join("build.err");
@@ -542,6 +603,8 @@ pub fn compile(input: &Input, opts: &Options, ctl: &Ctl<'_>, log: &mut Log) -> R
         Err(e) => return Err(e),
     };
     let mut report = Report { invalid_faces: out.invalid_faces, ..Report::default() };
+    // the last moment a Stop costs nothing: the level folder is not touched yet
+    ctl.check().map_err(adapt)?;
     write_all(&input.level, &out, true, &mut report)?;
     report.seconds = t.elapsed().as_secs_f64();
     report.lines = std::mem::take(&mut log.lines);
@@ -554,7 +617,7 @@ pub fn compile(input: &Input, opts: &Options, ctl: &Ctl<'_>, log: &mut Log) -> R
 /// `build.lights` and `build.prj` of the level folder.
 pub fn compile_details(input: &Input, ctl: &Ctl<'_>, log: &mut Log) -> Result<Report> {
     let t = Instant::now();
-    log.phase("Loading level...");
+    log.phase(DETAIL_PHASES[0]);
     let dir = &input.level;
     let prj = BuildProject::read(&read(&dir.join("build.prj"))?)?;
     let shaders = input.sources.shaders()?;
@@ -562,8 +625,11 @@ pub fn compile_details(input: &Input, ctl: &Ctl<'_>, log: &mut Log) -> Result<Re
     let details = read(&dir.join("build.details"))?;
     let cform = read(&dir.join("build.cform"))?;
     let lights = read(&dir.join("build.lights"))?;
-    log.phase("Lighting nodes...");
-    let bytes = compile_details_in_memory(&prj, shaders, textures, &details, &cform, &lights, ctl, log)?;
+    ctl.check().map_err(adapt)?;
+    log.phase(DETAIL_PHASES[1]);
+    let bytes = compile_details_in_memory(&prj, shaders, textures, &details, &cform, &lights, ctl, log)
+        .inspect_err(|_| clean_stage(dir))?;
+    ctl.check().map_err(adapt)?;
     let mut out = Output::default();
     out.put("level.details", bytes);
     let mut report = Report::default();

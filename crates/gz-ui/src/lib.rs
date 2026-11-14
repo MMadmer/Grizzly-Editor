@@ -4,7 +4,10 @@
 //! from [`theme::metrics`], text from the six [`Font`] styles, pictures from the [`Icon`] set.
 //! Sizes are points - egui's unit - so DPI enters in one place.
 //!
-//! - [`theme`] - tokens: [`Palette`], [`Tone`], [`Accent`], `metrics`, [`theme::install`]
+//! - [`i18n`] - the window's language: every widget takes a [`Tx`] (a literal is the editor's own
+//!   words and is translated, [`tr!`] a sentence with values, [`Tx::raw`] data shown as it is),
+//!   [`i18n::scope`] for a context, [`TipExt::tip`] for a tooltip
+//! - [`theme`] - tokens: [`Palette`], [`Tone`], the [`Theme`]s, `metrics`, [`theme::install`]
 //! - [`font`] - [`Font`], [`font::FontFiles`], [`font::install`]
 //! - [`icons`] - [`Icon`], `icons::draw`
 //! - [`text`] - measured and ellipsized text: [`Clip`], `text::label`, `text::paint`, `text::prose`
@@ -61,6 +64,7 @@ pub mod audit;
 pub mod backdrop;
 pub mod button;
 pub mod font;
+pub mod i18n;
 pub mod icons;
 pub mod layout;
 pub mod text;
@@ -102,6 +106,7 @@ pub use check::{Check, Switch};
 pub use dialog::{Answer, Asker, ConfirmSpec, Dialog, DialogInfo, DialogSize, ResultSpec};
 pub use font::Font;
 pub use grid::{PathAction, PickAction, PropFlags, PropertyGrid};
+pub use i18n::{Lang, TipExt, Tx};
 pub use icons::Icon;
 pub use list::{NavRowSpec, nav_row};
 pub use menu::{MenuItem, menu_item};
@@ -111,5 +116,5 @@ pub use search::SearchField;
 pub use section::{Section, SectionResponse};
 pub use tabs::{PanelTab, TabResponse, TabStyle, tab_strip};
 pub use text::Clip;
-pub use theme::{Accent, Palette, Tone, metrics, palette};
+pub use theme::{Palette, THEMES, Theme, Tone, metrics, palette};
 pub use toolbar::{Toolbar, ToolbarStyle};

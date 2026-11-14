@@ -8,8 +8,8 @@ use std::sync::Arc;
 use gz_app::{Action, ActionCx, ReplyCx, ShellBuilder};
 use gz_editor::{Args, Value};
 use gz_ui::Icon;
-use gz_ui::Tone;
 use gz_ui::dialog::{ResultAction, ResultSpec};
+use gz_ui::{Tone, Tx, tr};
 
 use crate::call;
 
@@ -42,9 +42,14 @@ fn text(reply: &Value, key: &str) -> String {
     reply.get(key).and_then(Value::as_str).unwrap_or("").replace('/', "\\")
 }
 
-/// `n` and what it counts, or nothing for zero.
-fn count_line(n: i64, rest: &str) -> Option<String> {
-    (n != 0).then(|| format!("{n} {rest}"))
+/// A count's warning, or nothing for zero: the English sentence the result shows translated.
+fn count_line(n: i64, line: impl FnOnce(i64) -> Tx<'static>) -> Option<String> {
+    (n != 0).then(|| line(n).en().into_owned())
+}
+
+/// A count of a reply as a result row's value.
+fn num_tx(reply: &Value, key: &str) -> Tx<'static> {
+    Tx::raw(num(reply, key).to_string())
 }
 
 /// What a bake's answer says, as the result shows it.
@@ -54,77 +59,83 @@ fn report(kind: &str, failed: &str, reply: &Value) -> (ResultSpec, String) {
             "bake_result",
             "Bake Failed",
             Tone::Error,
-            &format!("{failed}: {}", call::error_text(reply)),
+            tr!("bake" => "{failed}: {why}", failed = Tx::ui(failed.to_owned()), why = Tx::ui(call::error_text(reply))),
         );
         return (spec, String::new());
     }
-    let mut rows: Vec<(String, String)> = Vec::new();
+    let mut rows: Vec<(Tx<'static>, Tx<'static>)> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
     let (headline, folder) = match kind {
         "spawn" => {
             let path = text(reply, "path");
-            rows.push(("File".into(), path.clone()));
-            rows.push(("Skipped".into(), num(reply, "skipped").to_string()));
-            rows.push(("Player Starts".into(), num(reply, "starts").to_string()));
-            rows.push(("Way paths".into(), num(reply, "paths").to_string()));
-            rows.push(("NPC orders".into(), num(reply, "orders").to_string()));
-            rows.push(("Base objects removed".into(), num(reply, "removed").to_string()));
-            warnings.extend(count_line(
-                num(reply, "scaled"),
-                "object(s) have a scale other than 1: the spawn layer carries no scale.",
-            ));
-            warnings.extend(count_line(
-                num(reply, "missing"),
-                "object(s) are not baked: their model exists neither in the game nor in the project.",
-            ));
+            rows.push(("File".into(), Tx::raw(path.clone())));
+            rows.push(("Skipped".into(), num_tx(reply, "skipped")));
+            rows.push(("Player Starts".into(), num_tx(reply, "starts")));
+            rows.push(("Way paths".into(), num_tx(reply, "paths")));
+            rows.push(("NPC orders".into(), num_tx(reply, "orders")));
+            rows.push(("Base objects removed".into(), num_tx(reply, "removed")));
+            warnings.extend(count_line(num(reply, "scaled"), |n| {
+                tr!(
+                    "{n} {n:object has|objects have} a scale other than 1: the spawn layer carries no scale.",
+                    n = n
+                )
+            }));
+            warnings.extend(count_line(num(reply, "missing"), |n| {
+                tr!(
+                    "{n} {n:object is|objects are} not baked: the model exists neither in the game nor in the project.",
+                    n = n
+                )
+            }));
             // a stash keeps its ghost model unless the author picks another one
-            warnings.extend(count_line(
-                num(reply, "invisible"),
-                "object(s) use a model the engine draws nothing for: they work but stay invisible in game. Give them a real mesh in Model > Visual (the log names them).",
-            ));
+            warnings.extend(count_line(num(reply, "invisible"), |n| {
+                tr!(
+                    "{n} {n:object uses|objects use} a model the engine draws nothing for: they work but stay invisible in game. Give them a real mesh in Model > Visual (the log names them).",
+                    n = n
+                )
+            }));
             if let Some(list) = reply.get("warnings").and_then(Value::as_array) {
                 warnings.extend(list.iter().filter_map(Value::as_str).map(str::to_owned));
             }
             (
-                format!("The spawn layer holds {} op(s) of the selection.", num(reply, "exported")),
+                tr!("The spawn layer holds {n} {n:op|ops} of the selection.", n = num(reply, "exported")),
                 parent(&path),
             )
         }
         "collision" => {
             let path = text(reply, "path");
-            rows.push(("File".into(), path.clone()));
-            rows.push(("Vertices".into(), num(reply, "vertices").to_string()));
-            rows.push(("Triangles".into(), num(reply, "tris").to_string()));
-            rows.push(("Materials".into(), num(reply, "materials").to_string()));
-            ("The collision overlay of the selection is written.".to_owned(), parent(&path))
+            rows.push(("File".into(), Tx::raw(path.clone())));
+            rows.push(("Vertices".into(), num_tx(reply, "vertices")));
+            rows.push(("Triangles".into(), num_tx(reply, "tris")));
+            rows.push(("Materials".into(), num_tx(reply, "materials")));
+            (Tx::from("The collision overlay of the selection is written."), parent(&path))
         }
         "visuals" => {
             let dir = text(reply, "dir");
-            rows.push(("Folder".into(), dir.clone()));
-            rows.push(("Models".into(), num(reply, "exported").to_string()));
-            rows.push(("Registry".into(), "overlay_visuals.ltx".into()));
-            warnings.extend(count_line(
-                num(reply, "skipped_dynamic"),
-                "dynamic object(s) skipped: an overlay holds static visuals only.",
-            ));
-            warnings.extend(count_line(
-                num(reply, "skipped_failed"),
-                "object(s) failed to export (the log names them).",
-            ));
-            ("The visual overlay of the selection is written.".to_owned(), dir)
+            rows.push(("Folder".into(), Tx::raw(dir.clone())));
+            rows.push(("Models".into(), num_tx(reply, "exported")));
+            rows.push(("Registry".into(), Tx::raw("overlay_visuals.ltx")));
+            warnings.extend(count_line(num(reply, "skipped_dynamic"), |n| {
+                tr!("{n} dynamic {n:object|objects} skipped: an overlay holds static visuals only.", n = n)
+            }));
+            warnings.extend(count_line(num(reply, "skipped_failed"), |n| {
+                tr!("{n} {n:object|objects} failed to export (the log names them).", n = n)
+            }));
+            (Tx::from("The visual overlay of the selection is written."), dir)
         }
         _ => {
             let path = text(reply, "path");
-            rows.push(("File".into(), path.clone()));
-            rows.push(("Volumes".into(), num(reply, "cuts").to_string()));
+            rows.push(("File".into(), Tx::raw(path.clone())));
+            rows.push(("Volumes".into(), num_tx(reply, "cuts")));
             (
-                "Base collision inside the boxes is removed and base visuals fully inside them are detached. Put your own geometry in with the other layers.".to_owned(),
+                Tx::from(
+                    "Base collision inside the boxes is removed and base visuals fully inside them are detached. Put your own geometry in with the other layers.",
+                ),
                 parent(&path),
             )
         }
     };
     let tone = if warnings.is_empty() { Tone::Success } else { Tone::Warning };
-    let mut spec = ResultSpec::new("bake_result", "Scene Layer Baked", tone, &headline);
+    let mut spec = ResultSpec::new("bake_result", "Scene Layer Baked", tone, headline);
     spec.rows = rows;
     spec.warnings = warnings;
     (spec, folder)
@@ -142,7 +153,7 @@ fn show_bake(r: &ReplyCx<'_>, n: usize) {
     let (mut spec, folder) = report(kind, failed, r.reply);
     if !folder.is_empty() {
         spec.action = Some(ResultAction {
-            label: "Open Folder".to_owned(),
+            label: "Open Folder".into(),
             run: Arc::new(move || call::open_folder(&folder)),
         });
     }
@@ -187,7 +198,7 @@ mod tests {
     fn a_spawn_bake_reads_like_bake_done() {
         let reply = json!({ "ok": true, "exported": 3, "skipped": 1, "scaled": 2, "invisible": 0, "starts": 1, "paths": 0, "orders": 0, "path": "C:/m/spawn/l01.xspawn", "warnings": ["w"] });
         let (spec, folder) = report("spawn", "x", &reply);
-        assert_eq!(spec.headline, "The spawn layer holds 3 op(s) of the selection.");
+        assert_eq!(spec.headline.en(), "The spawn layer holds 3 ops of the selection.");
         assert_eq!(spec.tone, Tone::Warning);
         assert_eq!(spec.warnings.len(), 2);
         assert_eq!(folder, "C:\\m\\spawn");
@@ -197,8 +208,8 @@ mod tests {
     fn a_refusal_is_bake_failed() {
         let reply = json!({ "ok": false, "error": "no scene" });
         let (spec, folder) = report("cut", "The level cut was not written", &reply);
-        assert_eq!(spec.title, "Bake Failed");
-        assert_eq!(spec.headline, "The level cut was not written: no scene");
+        assert_eq!(spec.title.en(), "Bake Failed");
+        assert_eq!(spec.headline.en(), "The level cut was not written: no scene");
         assert!(folder.is_empty());
     }
 }

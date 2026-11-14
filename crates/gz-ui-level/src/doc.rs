@@ -457,7 +457,9 @@ impl LevelDoc {
         for panel in &panels {
             let label =
                 if *panel == PanelId::Place { crate::tools::tab_label(&self.editor) } else { panel.label() };
-            let w = gz_ui::tabs::tab_width(&ctx, label, true).min(each_max);
+            // a dock's tab may say it shorter than the Window menu does (context `dock`)
+            let label = gz_ui::Tx::ctx("dock", label);
+            let w = gz_ui::tabs::tab_width(&ctx, label.borrow(), true).min(each_max);
             let tab = Rect::from_min_size(pos2(x, strip.min.y + 2.0), Vec2::new(w, STRIP - 2.0));
             let resp = gz_ui::PanelTab::new(Id::unique(("gz-ui-level.tab", panel.id())), tab, label)
                 .front(front == Some(*panel))
@@ -758,21 +760,26 @@ impl Document for LevelDoc {
         "level"
     }
 
-    fn label(&self) -> String {
+    fn label(&self) -> gz_ui::Tx<'static> {
         let name = self.scene().map(|s| s.store.snapshot().meta.name()).unwrap_or_default();
-        if name.is_empty() { "Untitled".to_owned() } else { name }
+        if name.is_empty() { gz_ui::Tx::from("Untitled") } else { gz_ui::Tx::raw(name) }
     }
 
     fn icon(&self) -> Icon {
         Icon::Level
     }
 
+    /// The file the scene is on the disk as: its `.scene`, or the X-Ray SDK scene it was converted
+    /// from while the `.scene` is not written yet - what Show in Content Browser and Explorer find.
     fn path(&self) -> Option<String> {
-        self.scene().and_then(|s| s.store.snapshot().meta.file.as_ref().map(|f| f.display().to_string()))
+        self.scene().and_then(|s| {
+            let snap = s.store.snapshot();
+            snap.meta.imported.as_ref().or(snap.meta.file.as_ref()).map(|f| f.display().to_string())
+        })
     }
 
-    fn tooltip(&self) -> Option<String> {
-        Some(self.path().unwrap_or_else(|| "The scene has not been saved yet".to_owned()))
+    fn tooltip(&self) -> Option<gz_ui::Tx<'static>> {
+        Some(self.path().map_or_else(|| gz_ui::Tx::from("The scene has not been saved yet"), gz_ui::Tx::raw))
     }
 
     fn closable(&self) -> bool {

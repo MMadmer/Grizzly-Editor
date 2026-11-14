@@ -11,7 +11,7 @@
 //! the packaging through `mod.view dialog=`.
 
 use gz_app::{Action, ActionCx, DocCx, Enabled, Scope, ShellBuilder, args};
-use gz_ui::{Icon, Kind, MenuItem, menu_item};
+use gz_ui::{Icon, Kind, MenuItem, Tx, menu_item, tr};
 
 use crate::build::{build_running, build_target_text, can_build_into_game, job_status_text};
 
@@ -86,8 +86,6 @@ pub(crate) fn install(b: &mut ShellBuilder) {
     b.action(
         Action::new(BUILD_INTO_GAME, "Build Into Game", "Mod", "mod.build")
             .icon(Icon::BuildMod)
-            .keys(const { &[gz_app::Chord::ctrl(egui::Key::B)] })
-            // a graph keeps Ctrl+B for its bookmarks
             .scope(Scope::Tab(&["level"]))
             .args(|_| build_to("game"))
             .enabled(|cx| {
@@ -127,16 +125,16 @@ fn build_mod(tb: &mut gz_ui::Toolbar<'_, '_>, cx: &mut DocCx<'_>) {
     let busy = build_running(&editor);
     let target = build_target_text(&editor);
     let tip = if busy {
-        format!("{}.\nClick to see the job.", job_status_text(&editor))
+        tr!("{status}.\nClick to see the job.", status = job_status_text(&editor))
     } else if target.is_empty() {
-        "Link a game and set a valid module id first.".to_owned()
+        Tx::from("Link a game and set a valid module id first.")
     } else {
-        format!("A clean build into the linked game:\n{target}")
+        tr!("A clean build into the linked game:\n{target}", target = target)
     };
     let mut picked = None;
     tb.group(100);
     let can = can_build_into_game(&editor);
-    if tb.split("build_mod", Icon::BuildMod, "Build Mod", &tip, can, Kind::Primary, |ui| {
+    if tb.split("build_mod", Icon::BuildMod, "Build Mod", tip, can, Kind::Primary, |ui| {
         for (id, icon, label, on) in [
             (BUILD_INTO_GAME, Icon::BuildMod, "Build Into Game", !busy && can),
             (BUILD_TO_FOLDER, Icon::GameFolder, "Build to Folder...", !busy),

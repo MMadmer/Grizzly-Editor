@@ -38,6 +38,16 @@ impl Chord {
         Self { key, ctrl: false, shift: false, alt: true }
     }
 
+    #[must_use]
+    pub const fn ctrl_alt(key: Key) -> Self {
+        Self { key, ctrl: true, shift: false, alt: true }
+    }
+
+    #[must_use]
+    pub const fn alt_shift(key: Key) -> Self {
+        Self { key, ctrl: false, shift: true, alt: true }
+    }
+
     /// The chord a key event is, with the modifiers it came with.
     #[must_use]
     pub fn of(key: Key, modifiers: Modifiers) -> Self {
@@ -161,23 +171,46 @@ fn key_from_label(part: &str) -> Option<Key> {
     }
 }
 
+/// The key a press is: the one its layout gives, except a digit key, which is its digit whatever
+/// Shift or the layout makes of it - Shift+1 types "!" (";" on a Russian layout), a French
+/// layout's 1 types "&" - so Shift+1 and Ctrl+1 bind as the keys printed on them.
+fn key_of(key: Key, physical: Option<Key>) -> Key {
+    match physical {
+        Some(
+            p @ (Key::Num0
+            | Key::Num1
+            | Key::Num2
+            | Key::Num3
+            | Key::Num4
+            | Key::Num5
+            | Key::Num6
+            | Key::Num7
+            | Key::Num8
+            | Key::Num9),
+        ) => p,
+        _ => key,
+    }
+}
+
+/// The chord a key press is; `None` for anything else.
+fn chord_of(e: &Event) -> Option<Chord> {
+    match e {
+        Event::Key { key, physical_key, pressed: true, repeat: false, modifiers, .. } => {
+            Some(Chord::of(key_of(*key, *physical_key), *modifiers))
+        }
+        _ => None,
+    }
+}
+
 /// The key presses of this frame that nobody took yet, as chords, in order.
 #[must_use]
 pub fn pressed(events: &[Event]) -> Vec<Chord> {
-    events
-        .iter()
-        .filter_map(|e| match e {
-            Event::Key { key, pressed: true, repeat: false, modifiers, .. } => {
-                Some(Chord::of(*key, *modifiers))
-            }
-            _ => None,
-        })
-        .collect()
+    events.iter().filter_map(chord_of).collect()
 }
 
 /// Takes the press of `chord` out of this frame's input: the next taker does not see it.
 pub fn consume(input: &mut egui::InputState, chord: &Chord) -> bool {
-    let at = input.events.iter().position(|e| matches!(e, Event::Key { key, pressed: true, repeat: false, modifiers, .. } if Chord::of(*key, *modifiers) == *chord));
+    let at = input.events.iter().position(|e| chord_of(e).as_ref() == Some(chord));
     match at {
         Some(i) => {
             input.events.remove(i);
@@ -189,9 +222,30 @@ pub fn consume(input: &mut egui::InputState, chord: &Chord) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use egui::Key;
+    use egui::{Event, Key, Modifiers};
 
-    use super::Chord;
+    use super::{Chord, pressed};
+
+    #[test]
+    fn a_digit_key_is_its_digit_whatever_shift_or_the_layout_types() {
+        let press = |key, physical, modifiers| Event::Key {
+            key,
+            physical_key: Some(physical),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        let events = [
+            press(Key::Exclamationmark, Key::Num1, Modifiers::SHIFT),
+            press(Key::Semicolon, Key::Num4, Modifiers::SHIFT),
+            press(Key::Num3, Key::Num3, Modifiers::CTRL),
+            press(Key::B, Key::B, Modifiers::CTRL),
+        ];
+        assert_eq!(
+            pressed(&events),
+            [Chord::shift(Key::Num1), Chord::shift(Key::Num4), Chord::ctrl(Key::Num3), Chord::ctrl(Key::B)]
+        );
+    }
 
     #[test]
     fn labels_read_back() {

@@ -59,11 +59,16 @@ fn file_dialog(
     )
 }
 
-fn open_request(title: &str, filter: (&str, &[&str]), dir: PathBuf) -> FileRequest {
+fn open_request(title: &'static str, filter: (&'static str, &[&str]), dir: PathBuf) -> FileRequest {
     FileRequest::open(title).filter(filter.0, filter.1).in_folder(dir)
 }
 
-fn save_request(title: &str, filter: (&str, &[&str]), dir: PathBuf, name: &str) -> FileRequest {
+fn save_request(
+    title: &'static str,
+    filter: (&'static str, &[&str]),
+    dir: PathBuf,
+    name: &str,
+) -> FileRequest {
     FileRequest::save(title, name).filter(filter.0, filter.1).in_folder(dir).creating_folder()
 }
 
@@ -85,7 +90,7 @@ fn settle_then(editor: &Arc<Editor>, ctx: &Context, go: impl FnOnce(&Arc<Editor>
         return;
     }
     let name = svc.store.snapshot().meta.name();
-    let what = vec![if name.is_empty() { "Untitled scene".to_owned() } else { name }];
+    let what = vec![if name.is_empty() { gz_ui::Tx::from("Untitled scene") } else { gz_ui::Tx::raw(name) }];
     let ed = editor.clone();
     let line =
         gz_ui::dialog::unsaved_prompt(ctx, asker(editor), "scene", &what, move |answer| match answer {
@@ -339,6 +344,19 @@ pub fn summary_open(editor: &Editor) -> bool {
     sheet(editor).lock().open
 }
 
+/// A key of the summary as the window shows it: a path of the editor's words and of names (a
+/// texture, an object); each part the catalog knows is translated, the names are kept.
+fn summary_key(ctx: &Context, key: &str) -> gz_ui::Tx<'static> {
+    let Some(catalog) = gz_ui::i18n::catalog(ctx) else { return gz_ui::Tx::raw(key.to_owned()) };
+    let parts: Vec<String> = key
+        .split('\\')
+        .map(|s| {
+            if catalog.knows(s) { gz_ui::Tx::ui_in("summary", s.to_owned()).text(ctx) } else { s.to_owned() }
+        })
+        .collect();
+    gz_ui::Tx::raw(parts.join("\\"))
+}
+
 fn draw_summary(ui: &mut egui::Ui, editor: &Arc<Editor>) {
     let s = sheet(editor);
     let (mut open, rows, busy) = {
@@ -364,13 +382,15 @@ fn draw_summary(ui: &mut egui::Ui, editor: &Arc<Editor>) {
                 );
                 return;
             }
+            let ctx = ui.ctx().clone();
             egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
                 gz_ui::PropertyGrid::new("summary").show(ui, |g| {
                     for (k, v) in &rows {
-                        g.row(k, "", gz_ui::PropFlags::NONE, 0, |ui| {
+                        // the key is the editor's word, the value what the scene holds
+                        g.row(summary_key(&ctx, k), "", gz_ui::PropFlags::NONE, 0, |ui| {
                             gz_ui::text::label(
                                 ui,
-                                v,
+                                gz_ui::Tx::raw(v.as_str()),
                                 gz_ui::Font::Body,
                                 gz_ui::palette(ui.ctx()).text,
                                 gz_ui::Clip::End,
@@ -478,7 +498,7 @@ fn recent_rows(ui: &mut egui::Ui, cx: &mut DocCx<'_>) {
         editor.project_opt().is_some() && !list.is_empty(),
         |ui| {
             for f in &list {
-                if menu_item(ui, f, MenuItem::default()) {
+                if menu_item(ui, gz_ui::Tx::raw(f.as_str()), MenuItem::default()) {
                     open_scene_file(&editor, cx.ctx, f.clone());
                 }
             }

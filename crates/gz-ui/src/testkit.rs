@@ -5,7 +5,7 @@ use egui::{Context, Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, 
 /// A context with the kit's theme and fonts as egui ships them.
 pub fn context() -> Context {
     let ctx = Context::default();
-    crate::theme::install(&ctx, crate::theme::Accent::default());
+    crate::theme::install(&ctx, crate::theme::Theme::default_theme());
     ctx
 }
 

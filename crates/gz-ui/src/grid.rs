@@ -27,6 +27,7 @@ use egui::{
 use crate::audit;
 use crate::button::icon_button_sized;
 use crate::font::Font;
+use crate::i18n::{Tx, t};
 use crate::icons::{self, Icon};
 use crate::layout;
 use crate::text::{self, Clip};
@@ -208,18 +209,24 @@ impl Grid<'_> {
 
     /// A full-row header that folds what it holds; `open` is its state until it is clicked.
     /// `body` draws the section's rows while it is open. Returns whether it is open.
-    pub fn section(
+    pub fn section<'t>(
         &mut self,
-        title: &str,
+        title: impl Into<Tx<'t>>,
         open: bool,
-        badge: Option<&str>,
+        badge: Option<Tx<'_>>,
         body: impl FnOnce(&mut Self),
     ) -> bool {
         self.close_row();
         let p = palette(self.ui.ctx());
         let ctx = self.ui.ctx().clone();
+        let title_tx = title.into();
+        let title = title_tx.get(&ctx);
+        let title: &str = &title;
+        let badge = badge.map(|b| b.text(&ctx));
+        let badge = badge.as_deref();
         let rect = Rect::from_min_max(pos2(self.x0, self.y), pos2(self.x1, self.y + HEADER_H));
-        let id = self.scope.with(("section", title));
+        // the English names the section's state, so a change of language keeps it open
+        let id = self.scope.with(("section", title_tx.en()));
         let mut is_open = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(open);
         let resp = self.ui.interact(rect, id, Sense::click());
         if resp.clicked() {
@@ -241,7 +248,7 @@ impl Grid<'_> {
             let mut right = rect.max.x - 8.0;
             if let Some(badge) = badge.filter(|b| !b.is_empty()) {
                 let font = Font::Small.id();
-                let w = text::width(&ctx, &font, badge) + 12.0;
+                let w = text::measure(&ctx, &font, badge) + 12.0;
                 let pill = Rect::from_min_max(pos2(right - w, cy - 9.0), pos2(right, cy + 9.0));
                 painter.rect_filled(pill, CornerRadius::same(9), p.base);
                 painter.text(pos2(pill.min.x + 6.0, cy), Align2::LEFT_CENTER, badge, font, p.text_secondary);
@@ -254,7 +261,7 @@ impl Grid<'_> {
                 pos2(x, cy),
                 Align2::LEFT_CENTER,
                 p.text,
-                title,
+                title_tx.borrow(),
                 Some((right - x).max(0.0)),
                 Clip::End,
             );
@@ -274,10 +281,10 @@ impl Grid<'_> {
     /// A property row. `value` draws in the value column, a field-high line that starts at the
     /// left of the column; what it draws below that line makes the row taller. Returns `None`
     /// for a row scrolled out of view (it keeps the height it took when last drawn).
-    pub fn row<R>(
+    pub fn row<'t, R>(
         &mut self,
-        label: &str,
-        help: &str,
+        label: impl Into<Tx<'t>>,
+        help: impl Into<Tx<'t>>,
         flags: PropFlags,
         depth: u32,
         value: impl FnOnce(&mut Ui) -> R,
@@ -289,7 +296,14 @@ impl Grid<'_> {
         let label_h = if self.stacked && !inline_value { Font::Body.line() + 2.0 } else { 0.0 };
         let y = self.y;
         let rect = Rect::from_min_max(pos2(self.x0, y), pos2(self.x1, y + label_h + ROW_H));
-        let id = self.scope.with(("row", label, depth));
+        let label_tx = label.into();
+        let help_tx = help.into();
+        // the English names the row's state, so a change of language keeps it
+        let id = self.scope.with(("row", label_tx.en(), depth));
+        let label = label_tx.get(&ctx);
+        let label: &str = &label;
+        let help = help_tx.get(&ctx);
+        let help: &str = &help;
         let mem = ctx.data(|d| d.get_temp::<RowMem>(id)).unwrap_or_default();
         let slots = mem.slots.max(u8::from(flags.contains(PropFlags::MODIFIED)));
 
@@ -338,12 +352,12 @@ impl Grid<'_> {
             pos2(label_x, label_cy),
             Align2::LEFT_CENTER,
             color,
-            label,
+            label_tx.borrow(),
             Some(room),
             Clip::End,
         );
         if flags.contains(PropFlags::REQUIRED) {
-            let dot_x = label_x + text::width(&ctx, &font, label).min(room) + 5.0;
+            let dot_x = label_x + text::measure(&ctx, &font, label).min(room) + 5.0;
             painter.circle_filled(pos2(dot_x, label_cy), 2.5, p.required);
         }
         let label_rect = Rect::from_min_max(
@@ -400,7 +414,7 @@ impl Grid<'_> {
 
     /// An icon button at the end of the last row (24 pt, a 14 pt glyph). Returns whether it was
     /// pressed. The row reserves the slots it used the frame before.
-    pub fn trailing(&mut self, icon: Icon, tip: &str) -> bool {
+    pub fn trailing<'t>(&mut self, icon: Icon, tip: impl Into<Tx<'t>>) -> bool {
         let stacked = self.stacked;
         let x1 = self.x1;
         let Some(row) = self.row.as_mut() else {
@@ -424,19 +438,19 @@ impl Grid<'_> {
 
     /// A sentence under the last row's value (or across the grid with no row open), in Small
     /// type and the tone's colour: why a value is invalid, what it will do.
-    pub fn message(&mut self, tone: Tone, text_: &str) {
+    pub fn message<'t>(&mut self, tone: Tone, text_: impl Into<Tx<'t>>) {
+        let ctx = self.ui.ctx().clone();
+        let text_ = text_.into().text(&ctx);
         if text_.is_empty() {
             return;
         }
-        let ctx = self.ui.ctx().clone();
         let p = palette(&ctx);
         let color = if tone == Tone::Muted { p.text_muted } else { p.tone(tone) };
         let (x, y) = match &self.row {
             Some(row) => (row.value_x, row.bottom.max(row.rect.max.y - 2.0)),
             None => (self.x0 + 6.0, self.y),
         };
-        let galley = ctx
-            .fonts_mut(|f| f.layout(text_.to_owned(), Font::Small.id(), color, (self.x1 - x).max(em(3.0))));
+        let galley = ctx.fonts_mut(|f| f.layout(text_, Font::Small.id(), color, (self.x1 - x).max(em(3.0))));
         let h = galley.size().y;
         self.ui.painter().galley(pos2(x, y), galley, color);
         match self.row.as_mut() {
@@ -519,13 +533,14 @@ pub fn help_footer(ui: &mut Ui) {
     let w = Some(rect.width() - 8.0);
     match state.filter(|s| s.frame + 1 >= now && !(s.label.is_empty() && s.help.is_empty())) {
         Some(s) => {
+            // already in the window's language: the row put it there
             text::paint(
                 painter,
                 &font,
                 pos2(x, rect.min.y + 8.0),
                 Align2::LEFT_TOP,
                 p.text_secondary,
-                &s.label,
+                Tx::raw(&s.label),
                 w,
                 Clip::End,
             );
@@ -536,7 +551,7 @@ pub fn help_footer(ui: &mut Ui) {
                     pos2(x, rect.min.y + 8.0 + line),
                     Align2::LEFT_TOP,
                     p.text_muted,
-                    &s.help,
+                    Tx::raw(&s.help),
                     w,
                     Clip::End,
                 );
@@ -577,7 +592,7 @@ fn field_frame(ui: &Ui, rect: Rect, hovered: bool, focused: bool) {
 
 /// A one-line text field, the width it gets.
 pub fn text_field(ui: &mut Ui, value: &mut String) -> Response {
-    let hint = if is_mixed(ui) { MULTIPLE } else { "" };
+    let hint = if is_mixed(ui) { t(ui.ctx(), MULTIPLE) } else { String::new() };
     let w = ui.available_width();
     ui.add(
         TextEdit::singleline(value)
@@ -620,7 +635,13 @@ pub fn parse_number(typed: &str) -> Option<f64> {
 
 /// The shared number field: drags by `speed` per point, a click types. Returns the response and
 /// the new value when it changed.
-fn number_field(ui: &mut Ui, value: f64, speed: f64, unit: &str, decimals: usize) -> (Response, Option<f64>) {
+fn number_field(
+    ui: &mut Ui,
+    value: f64,
+    speed: f64,
+    unit: &Tx<'_>,
+    decimals: usize,
+) -> (Response, Option<f64>) {
     let ctx = ui.ctx().clone();
     let p = palette(&ctx);
     let w = ui.available_width().max(em(3.0));
@@ -689,7 +710,13 @@ fn number_field(ui: &mut Ui, value: f64, speed: f64, unit: &str, decimals: usize
         let painter = ui.painter();
         let x = rect.min.x + 8.0;
         if is_mixed(ui) && out.is_none() {
-            painter.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, MULTIPLE, font, p.text_muted);
+            painter.text(
+                pos2(x, rect.center().y),
+                Align2::LEFT_CENTER,
+                t(&ctx, MULTIPLE),
+                font,
+                p.text_muted,
+            );
         } else {
             let shown = format_number(out.unwrap_or(value), decimals);
             // a number is never cut
@@ -698,7 +725,7 @@ fn number_field(ui: &mut Ui, value: f64, speed: f64, unit: &str, decimals: usize
                 painter.text(
                     pos2(r.max.x + 4.0, rect.center().y),
                     Align2::LEFT_CENTER,
-                    unit,
+                    unit.get(&ctx),
                     font,
                     p.text_muted,
                 );
@@ -709,8 +736,8 @@ fn number_field(ui: &mut Ui, value: f64, speed: f64, unit: &str, decimals: usize
 }
 
 /// A number dragged without steppers, its unit after it (m, °, fps); a click types it.
-pub fn number(ui: &mut Ui, value: &mut f32, speed: f32, unit: &str) -> Response {
-    let (resp, out) = number_field(ui, f64::from(*value), f64::from(speed), unit, 3);
+pub fn number<'t>(ui: &mut Ui, value: &mut f32, speed: f32, unit: impl Into<Tx<'t>>) -> Response {
+    let (resp, out) = number_field(ui, f64::from(*value), f64::from(speed), &unit.into(), 3);
     if let Some(v) = out {
         *value = v as f32;
     }
@@ -718,8 +745,8 @@ pub fn number(ui: &mut Ui, value: &mut f32, speed: f32, unit: &str) -> Response 
 }
 
 /// A whole number dragged without steppers, its unit after it.
-pub fn integer(ui: &mut Ui, value: &mut i32, speed: f32, unit: &str) -> Response {
-    let (resp, out) = number_field(ui, f64::from(*value), f64::from(speed), unit, 0);
+pub fn integer<'t>(ui: &mut Ui, value: &mut i32, speed: f32, unit: impl Into<Tx<'t>>) -> Response {
+    let (resp, out) = number_field(ui, f64::from(*value), f64::from(speed), &unit.into(), 0);
     if let Some(v) = out {
         *value = v.round().clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
     }
@@ -769,7 +796,12 @@ pub fn switch(ui: &mut Ui, value: &mut bool) -> Response {
 }
 
 /// One of a few named choices: the kit's [`crate::Combo`]. Returns whether the choice changed.
-pub fn combo(ui: &mut Ui, id_salt: &str, current: &mut usize, options: &[&str]) -> bool {
+pub fn combo<'t, L: Clone + Into<Tx<'t>>>(
+    ui: &mut Ui,
+    id_salt: &str,
+    current: &mut usize,
+    options: &[L],
+) -> bool {
     crate::pick::combo(ui, ("gz-ui.grid.combo", id_salt), current, options)
 }
 
@@ -820,7 +852,7 @@ pub fn color(ui: &mut Ui, value: &mut Color32) -> Response {
             .id(id)
             .font(Font::Body.id())
             .margin(Margin::symmetric(8, 4))
-            .hint_text(if mixed { MULTIPLE } else { "" })
+            .hint_text(if mixed { t(ui.ctx(), MULTIPLE) } else { String::new() })
             .desired_width(w)
             .min_size(Vec2::new(w, metrics::FRAME)),
     );
@@ -919,8 +951,10 @@ fn fit_start(text_: &str, max_w: f32, measure: &dyn Fn(&str) -> f32) -> (String,
 
 /// A value picked from a list or a browser: the leaf name with a start ellipsis (the whole value
 /// in the tooltip), a chevron, and a clear cross when `clearable` and set.
-pub fn pick_field(ui: &mut Ui, id_salt: &str, value: &str, clearable: bool) -> PickAction {
+pub fn pick_field<'t>(ui: &mut Ui, id_salt: &str, value: impl Into<Tx<'t>>, clearable: bool) -> PickAction {
     let ctx = ui.ctx().clone();
+    let value = value.into().text(&ctx);
+    let value: &str = &value;
     let p = palette(&ctx);
     let w = ui.available_width().max(em(6.0));
     let (rect, _) = ui.allocate_exact_size(Vec2::new(w, metrics::FRAME), Sense::hover());
@@ -935,16 +969,16 @@ pub fn pick_field(ui: &mut Ui, id_salt: &str, value: &str, clearable: bool) -> P
     let room = (rect.width() - 16.0 - chevron - clear).max(0.0);
     let pos = pos2(rect.min.x + 8.0, rect.center().y);
     if is_mixed(ui) {
-        ui.painter().text(pos, Align2::LEFT_CENTER, MULTIPLE, font, p.text_muted);
+        ui.painter().text(pos, Align2::LEFT_CENTER, t(&ctx, MULTIPLE), font, p.text_muted);
     } else if has_value {
         let leaf = leaf_name(value);
-        let (shown, cut) = fit_start(leaf, room, &|s| text::width(&ctx, &font, s));
+        let (shown, cut) = fit_start(leaf, room, &|s| text::measure(&ctx, &font, s));
         ui.painter().text(pos, Align2::LEFT_CENTER, &shown, font, p.text);
         if cut {
             audit::truncated(&ctx, value, &shown, rect);
         }
     } else {
-        ui.painter().text(pos, Align2::LEFT_CENTER, "None", font, p.text_muted);
+        ui.painter().text(pos, Align2::LEFT_CENTER, t(&ctx, "None"), font, p.text_muted);
     }
     let ch = Rect::from_min_size(
         pos2(rect.max.x - chevron + 4.0, rect.center().y - 6.0),
@@ -1030,12 +1064,12 @@ pub fn path_field(ui: &mut Ui, id_salt: &str, value: &mut String, folder: bool) 
             ui.painter().text(
                 pos,
                 Align2::LEFT_CENTER,
-                if folder { "No folder selected" } else { "No file selected" },
+                t(&ctx, if folder { "No folder selected" } else { "No file selected" }),
                 font,
                 p.text_muted,
             );
         } else {
-            let (shown, cut) = fit_start(value, rect.width() - 16.0, &|s| text::width(&ctx, &font, s));
+            let (shown, cut) = fit_start(value, rect.width() - 16.0, &|s| text::measure(&ctx, &font, s));
             ui.painter().text(pos, Align2::LEFT_CENTER, &shown, font, p.text);
             if cut {
                 audit::truncated(&ctx, value, &shown, rect);
@@ -1056,8 +1090,14 @@ pub fn path_field(ui: &mut Ui, id_salt: &str, value: &mut String, folder: bool) 
 
 /// Pills of names, wrapping before one that would pass the row's end; `removable` gives each a
 /// cross. Returns the index whose cross was pressed.
-pub fn chips(ui: &mut Ui, id_salt: &str, items: &[&str], removable: bool) -> Option<usize> {
+pub fn chips<'t, L: Clone + Into<Tx<'t>>>(
+    ui: &mut Ui,
+    id_salt: &str,
+    items: &[L],
+    removable: bool,
+) -> Option<usize> {
     let ctx = ui.ctx().clone();
+    let items: Vec<String> = crate::button::txs(items).iter().map(|i| i.text(&ctx)).collect();
     let p = palette(&ctx);
     let h = metrics::ROW;
     let gap = 4.0;
@@ -1069,7 +1109,7 @@ pub fn chips(ui: &mut Ui, id_salt: &str, items: &[&str], removable: bool) -> Opt
     let mut removed = None;
     for (i, item) in items.iter().enumerate() {
         let close = if removable { 16.0 } else { 0.0 };
-        let w = 8.0 + text::width(&ctx, &font, item) + if removable { 4.0 + close } else { 0.0 } + 8.0;
+        let w = 8.0 + text::measure(&ctx, &font, item) + if removable { 4.0 + close } else { 0.0 } + 8.0;
         if x > origin.x && x + w > right {
             x = origin.x;
             y += h + gap;
@@ -1089,7 +1129,7 @@ pub fn chips(ui: &mut Ui, id_salt: &str, items: &[&str], removable: bool) -> Opt
         ui.painter().text(
             pos2(rect.min.x + 8.0, rect.center().y),
             Align2::LEFT_CENTER,
-            *item,
+            item,
             font.clone(),
             p.text,
         );
@@ -1110,11 +1150,22 @@ pub fn chips(ui: &mut Ui, id_salt: &str, items: &[&str], removable: bool) -> Opt
 }
 
 /// A label above a multi-line text as wide as the column, `lines` lines tall.
-pub fn text_block(ui: &mut Ui, label: &str, help: &str, value: &mut String, lines: usize) -> Response {
+pub fn text_block<'t>(
+    ui: &mut Ui,
+    label: impl Into<Tx<'t>>,
+    help: impl Into<Tx<'t>>,
+    value: &mut String,
+    lines: usize,
+) -> Response {
     let p = palette(ui.ctx());
+    let label_tx = label.into();
+    let label = label_tx.text(ui.ctx());
+    let label: &str = &label;
+    let help = help.into().text(ui.ctx());
+    let help: &str = &help;
     ui.horizontal(|ui| {
         ui.add_space(6.0);
-        let resp = text::label(ui, label, Font::Body, p.text_secondary, Clip::End);
+        let resp = text::label(ui, label_tx.borrow(), Font::Body, p.text_secondary, Clip::End);
         if !help.is_empty() {
             resp.on_hover_text(help);
         }
@@ -1134,13 +1185,15 @@ pub fn text_block(ui: &mut Ui, label: &str, help: &str, value: &mut String, line
 
 /// A value that is shown, not edited: selectable secondary text, its first line only (the whole
 /// of it in the tooltip). A path passes `Clip::Start` and keeps its end.
-pub fn read_only(ui: &mut Ui, value: &str, clip: Clip) {
+pub fn read_only<'t>(ui: &mut Ui, value: impl Into<Tx<'t>>, clip: Clip) {
     let ctx = ui.ctx().clone();
+    let value = value.into().text(&ctx);
+    let value: &str = &value;
     let p = palette(&ctx);
     let first = value.lines().next().unwrap_or("");
     let font = Font::Body.id();
     let room = (ui.available_width() - 16.0).max(0.0);
-    let fits = text::width(&ctx, &font, first) <= room && first.len() == value.len();
+    let fits = text::measure(&ctx, &font, first) <= room && first.len() == value.len();
     if fits || clip == Clip::End {
         let resp = ui.add(
             egui::Label::new(RichText::new(first).font(font.clone()).color(p.text_secondary))
@@ -1152,7 +1205,7 @@ pub fn read_only(ui: &mut Ui, value: &str, clip: Clip) {
             resp.on_hover_text(value);
         }
     } else {
-        let resp = text::label(ui, first, Font::Body, p.text_secondary, clip);
+        let resp = text::label(ui, Tx::raw(first), Font::Body, p.text_secondary, clip);
         resp.on_hover_text(value);
     }
 }

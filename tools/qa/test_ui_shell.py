@@ -22,7 +22,10 @@ What it proves (every length in pt, as the commands answer them; a picture is px
      opened, it is the modal on top
   I  actions: a palette row runs by its id (window.log_drawer opens the Log drawer) and comes back first as recent;
      app.keys lists every action with its group (the graph's under Graph); a binding made in app.keys is what the key
-     pass finds (app.keys resolve), the old key no longer runs it, the palette shows the new key; reset puts it back
+     pass finds (app.keys resolve), the old key no longer runs it, the palette shows the new key; reset puts it back;
+     the default keys are Unreal's (Ctrl+B shows the tab's file in the Content Browser, Ctrl+Shift+S saves all,
+     Alt+P plays, Shift+1 is Select mode, Ctrl+` World / Local, ` the Output Log) and no long work has a default key;
+     Ctrl+B's reveal selects the tab's file in the browser
   J  stable chrome and stalls: every tab kind is opened; switching between them moves no part of the frame (the
      caption, the tab row and every tab, the toolbar row, the project's group, the status bar), a tool tab's empty
      toolbar row holds its status; after the whole tour perf.stalls names no UI pass over 100 ms; the Task Center
@@ -536,6 +539,27 @@ def phase_i(project, shots, ed, before_scale, contract) -> None:
     cmd("app.keys", action="reset", id="window.log_drawer")
     again = cmd("app.keys", action="resolve", keys=old)
     check(again.get("runs") == "window.log_drawer", "I reset gives the action its default key back", short(again))
+    # Unreal's keys, on the Level tab with nothing selected and no panel holding the keys
+    cmd("scene.select", none=True)
+    want = {"Ctrl+B": "edit.show_in_browser", "Ctrl+Shift+S": "file.save_all", "Alt+P": "level.play",
+            "Shift+1": "viewport.mode_select", "Ctrl+`": "viewport.toggle_space", "`": "window.log_drawer"}
+    got = {k: cmd("app.keys", action="resolve", keys=k).get("runs") for k in want}
+    check(got == want, "I the default keys are Unreal's", json.dumps(got))
+    long_work = [i for i in ("level.build", "mod.build_into_game", "mod.build") if (rows.get(i) or {}).get("default")]
+    check(not long_work, "I no long work has a default key: one stray chord never starts a build", json.dumps(long_work))
+    tab_path = next((t.get("path") for t in cmd("state").get("tabs", []) if t.get("id") == "level"), "") or ""
+    ran = cmd("ui.palette", action="run", id="edit.show_in_browser")
+    if not tab_path:
+        check(not ran.get("ok") and ran.get("code") == "refused",
+              "I with no file on the Level tab, Ctrl+B's action says why it is off", short(ran))
+        return
+    qa.until(lambda: cmd("content.view").get("selection"), 10)
+    view = cmd("content.view")
+    leaf = os.path.basename(tab_path).lower()
+    picked = [e for e in view.get("selection") or [] if e.lower().endswith(leaf)]
+    check(ran.get("ok") and leaf and picked and view.get("visible"),
+          "I Ctrl+B's action shows the Level tab's file selected in the Content Browser",
+          short(ran) + " / " + json.dumps({"tab": tab_path, "selection": view.get("selection"), "visible": view.get("visible")}))
 
 
 # the tab kinds a tour opens without a file of their own, and how

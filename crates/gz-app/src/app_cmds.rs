@@ -367,9 +367,13 @@ async fn app_about(editor: Arc<Editor>, _p: NoParams, origin: Origin) -> Reply {
     {
         let t = text.clone();
         q.run(move |shell, ctx| {
-            if let Some(line) =
-                gz_ui::dialog::notice(ctx, shell.asker(), Tone::Info, "About Grizzly Editor", &t)
-            {
+            if let Some(line) = gz_ui::dialog::notice(
+                ctx,
+                shell.asker(),
+                Tone::Info,
+                "About Grizzly Editor",
+                gz_ui::Tx::ui(t.clone()),
+            ) {
                 shell.editor.log.finding(&line);
             }
             Ok(())
@@ -399,11 +403,18 @@ struct PrefsParams {
     /// What to do.
     #[serde(default)]
     action: PrefsAction,
-    /// A preference's key (`app.prefs` lists them): `accent`, `scale`, `view_fov`, ...
+    /// A preference's key (`app.prefs` lists them): `theme`, `scale`, `language`, `view_fov`, ...
     #[serde(default)]
     key: Option<String>,
     /// Its new value: a number, true or false, a colour as 0xAARRGGBB or #RRGGBB, a name of a
-    /// choice (accent: grizzly-purple or graphite; scale: auto, 100 ... 200).
+    /// choice (scale: auto, 100 ... 200; language: system, en or ru; theme: an id or a title -
+    /// grizzly-dark, grizzly-graphite, one-dark-pro, dracula, github-dark, monokai, night-owl,
+    /// tokyo-night, tokyo-night-storm, ayu-dark, ayu-mirage, catppuccin-mocha, catppuccin-macchiato,
+    /// catppuccin-frappe, nord, gruvbox-dark, solarized-dark, rose-pine, rose-pine-moon,
+    /// everforest-dark, kanagawa-wave, kanagawa-dragon; light: grizzly-light, github-light,
+    /// one-light, catppuccin-latte, solarized-light, gruvbox-light, ayu-light, night-owl-light,
+    /// tokyo-night-light, rose-pine-dawn, everforest-light, kanagawa-lotus, alucard; `app.prefs
+    /// key=theme` lists them with their titles).
     #[serde(default)]
     value: Option<String>,
     /// The page to show: General, Interface, Viewport, Tools, Objects, Recovery, Keyboard, or one
@@ -415,16 +426,26 @@ struct PrefsParams {
     search: Option<String>,
 }
 
-/// The preferences of the window itself that are no number of the table: the accent and the
+/// The themes as `app.prefs key=theme` lists them.
+fn themes_json() -> Value {
+    gz_ui::THEMES
+        .iter()
+        .map(|t| json!({ "id": t.id, "title": t.title, "light": t.light }))
+        .collect::<Vec<_>>()
+        .into()
+}
+
+/// The preferences of the window itself that are no number of the table: the theme and the
 /// interface scale.
 fn named_pref(settings: &EditorSettings, key: &str) -> Option<Value> {
     match key {
-        "accent" => Some(json!(settings::theme_key(settings.accent()))),
+        "theme" => Some(json!(settings.theme().id)),
         "scale" => Some(json!(
             settings
                 .interface_scale()
                 .map_or_else(|| "auto".to_owned(), |s| format!("{}", (s * 100.0).round() as i32))
         )),
+        "language" => Some(json!(settings.language().key())),
         _ => None,
     }
 }
@@ -455,13 +476,14 @@ async fn app_prefs(editor: Arc<Editor>, p: PrefsParams, origin: Origin) -> Reply
     if p.action == PrefsAction::Set {
         let value = p.value.ok_or_else(|| invalid("set takes key= and value="))?;
         match key.as_str() {
-            "accent" => {
-                let accent = settings::parse_theme(&value)
-                    .ok_or_else(|| invalid("accent must be grizzly-purple or graphite"))?;
-                settings.set_accent(accent);
+            "theme" => {
+                let theme = gz_ui::Theme::find(&value).ok_or_else(|| {
+                    invalid("theme takes a theme's id or title: app.prefs key=theme lists them")
+                })?;
+                settings.set_theme(theme);
                 if let Ok(q) = UiQueue::of(&editor) {
                     q.run(move |_, ctx| {
-                        gz_ui::theme::install(ctx, accent);
+                        gz_ui::theme::install(ctx, theme);
                         ctx.request_repaint();
                         Ok(())
                     })
@@ -472,6 +494,13 @@ async fn app_prefs(editor: Arc<Editor>, p: PrefsParams, origin: Origin) -> Reply
                 let s = settings::parse_interface_scale(&value)
                     .ok_or_else(|| invalid("scale must be auto, 100, 125, 150, 175 or 200"))?;
                 settings.set_interface_scale(s);
+                editor.exec.wake().ping();
+            }
+            "language" => {
+                let choice = settings::LangChoice::parse(&value)
+                    .ok_or_else(|| invalid("language must be system, en or ru"))?;
+                // it wins over -lang and shows from the next frame on
+                settings.set_language(choice);
                 editor.exec.wake().ping();
             }
             _ => {
@@ -486,6 +515,12 @@ async fn app_prefs(editor: Arc<Editor>, p: PrefsParams, origin: Origin) -> Reply
         editor.exec.wake().ping();
     }
     if !key.is_empty() {
+        if key == "theme" {
+            let t = settings.theme();
+            return Ok(json!({
+                "key": key, "value": t.id, "title": t.title, "light": t.light, "themes": themes_json(),
+            }));
+        }
         if let Some(v) = named_pref(&settings, &key) {
             return Ok(json!({ "key": key, "value": v }));
         }
@@ -504,7 +539,7 @@ async fn app_prefs(editor: Arc<Editor>, p: PrefsParams, origin: Origin) -> Reply
         return Ok(Value::Object(out));
     }
     let mut all = Map::new();
-    for k in ["accent", "scale"] {
+    for k in ["theme", "scale", "language"] {
         if let Some(v) = named_pref(&settings, k) {
             all.insert(k.to_owned(), v);
         }
@@ -670,6 +705,25 @@ async fn doc_save(editor: Arc<Editor>, p: DocParams, origin: Origin) -> Reply {
     Ok(json!({ "doc": tab }))
 }
 
+async fn doc_save_all(editor: Arc<Editor>, _p: NoParams, origin: Origin) -> Reply {
+    let tabs: Vec<String> = match UiQueue::of(&editor) {
+        Ok(q) => q.run(|shell, _| Ok(shell.dirty_tabs().into_iter().map(|(id, _)| id).collect())).await?,
+        Err(_) => Vec::new(),
+    };
+    match crate::unsaved::save_tabs(&editor, tabs.clone(), origin.may_ask()).await {
+        Ok(()) => {}
+        // the person gave a save up in the Save dialog: no failure to tell them of
+        Err(e) if e.code == crate::unsaved::SAVE_CANCELLED => return Ok(json!({ "cancelled": true })),
+        Err(e) => return Err(e),
+    }
+    // the editor's own unsaved work no tab shows (a library a command edited)
+    editor.save_all().await.map_err(|e| CmdError::new("failed", e.message))?;
+    Ok(json!({
+        "saved": tabs,
+        "unsaved": serde_json::to_value(editor.dirty_docs()).unwrap_or(Value::Null),
+    }))
+}
+
 fn edit_doc(
     editor: &Arc<Editor>,
     doc: Option<String>,
@@ -804,6 +858,13 @@ pub(crate) fn register(reg: &mut Registry) {
         doc_list,
     );
     reg.cmd(Spec::write("doc.save", "Saves an open document (the active tab without doc)."), doc_save);
+    reg.cmd(
+        Spec::write(
+            "doc.save_all",
+            "Saves every open document with unsaved work, and the editor's own unsaved work.",
+        ),
+        doc_save_all,
+    );
     reg.cmd(Spec::write("doc.undo", "Takes back the last change of an open document."), doc_undo);
     reg.cmd(Spec::write("doc.redo", "Does again what Undo took back in an open document."), doc_redo);
     reg.cmd(
@@ -823,4 +884,15 @@ pub(crate) fn register(reg: &mut Registry) {
         Spec::view("perf.stalls", "The UI passes and events that held the UI thread longer than 100 ms."),
         perf_stalls,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_card_names_every_theme() {
+        let schema = serde_json::to_string(&schemars::schema_for!(super::PrefsParams)).unwrap_or_default();
+        for t in gz_ui::THEMES {
+            assert!(schema.contains(t.id), "app.prefs's value does not name {}", t.id);
+        }
+    }
 }

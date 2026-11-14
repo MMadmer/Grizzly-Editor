@@ -4,7 +4,7 @@
 //! one, Rebuild All and Advanced; Play's menu plays clean or without building.
 
 use gz_app::{DocCx, toolbar_button};
-use gz_ui::{Icon, Kind, Toolbar};
+use gz_ui::{Icon, Kind, Toolbar, Tx};
 
 use crate::actions as a;
 use crate::menus;
@@ -17,10 +17,12 @@ fn tip_of(cx: &DocCx<'_>, id: &str) -> (bool, String, &'static str, Icon) {
     let keys = table.keys_label(id);
     drop(table);
     let on = actions.with_cx(cx.editor, |acx| (action.enabled)(acx));
+    // the tip is put together from words already in the window's language
+    let title = gz_ui::i18n::t(cx.ctx, action.title);
     let tip = match (on, keys.is_empty()) {
-        (gz_app::Enabled::Off(why), _) => why.to_owned(),
-        (gz_app::Enabled::On, true) => action.title.to_owned(),
-        (gz_app::Enabled::On, false) => format!("{} ({keys})", action.title),
+        (gz_app::Enabled::Off(why), _) => gz_ui::i18n::t(cx.ctx, why),
+        (gz_app::Enabled::On, true) => title,
+        (gz_app::Enabled::On, false) => format!("{title} ({keys})"),
     };
     (on.on(), tip, action.title, action.icon.unwrap_or(Icon::None))
 }
@@ -36,7 +38,7 @@ fn split(
     if title.is_empty() {
         return;
     }
-    let pressed = tb.split(id, icon, title, &tip, on, Kind::Ghost, |ui| menu(ui, cx));
+    let pressed = tb.split(id, icon, title, Tx::raw(&tip), on, Kind::Ghost, |ui| menu(ui, cx));
     if pressed {
         cx.requests.action(id);
     }

@@ -241,6 +241,20 @@ impl Default for WindowOptions {
     }
 }
 
+/// How the window's surfaces present: waiting for the monitor's refresh (Preferences > General >
+/// VSync, on by default) or not, with the low-latency frame queue either way.
+fn surface_config(editor: &Editor) -> SurfaceConfig {
+    let vsync = crate::settings::EditorSettings::of(editor).pref("vsync").is_none_or(|v| v != 0.0);
+    SurfaceConfig {
+        present_mode: if vsync {
+            egui_wgpu::wgpu::PresentMode::AutoVsync
+        } else {
+            egui_wgpu::wgpu::PresentMode::AutoNoVsync
+        },
+        ..SurfaceConfig::LOW_LATENCY
+    }
+}
+
 /// The gate a renderer of this editor is made with: the window's, or one of its own for an editor
 /// without a window (nothing configures a surface there).
 #[must_use]
@@ -416,6 +430,9 @@ struct App {
     polls: Polls,
     /// A frame is due.
     dirty: bool,
+    /// Frames left whose paints may configure a surface again after Preferences > General >
+    /// VSync changed: every surface does it at its own next paint, a panel's window included.
+    reconfiguring: u8,
     /// What made the next frame due, for `perf.frames`' `ui_frame_causes`: a ping of the
     /// editor's wake from another thread, an event of the window, egui's own request.
     woken: bool,
@@ -595,7 +612,7 @@ impl App {
         // waits on the GPU, and the one block_on of the UI thread is this, before the first frame
         profile_stage(&self.profile, "Making the surface");
         let config = WgpuConfiguration {
-            surface: SurfaceConfig::LOW_LATENCY,
+            surface: surface_config(&self.editor),
             wgpu_setup: egui_wgpu::WgpuSetup::Existing(device),
             ..Default::default()
         };
@@ -704,6 +721,20 @@ impl App {
         self.dirty = false;
         *self.repaint_at.lock() = None;
 
+        // Preferences > General > VSync: every surface is configured again at its next paint, which
+        // no other thread's submission may cross - this frame's paints and the next two frames'
+        // hold the gate (a panel's window paints during the pass), and let it go before the
+        // panels' windows are synced, which close it themselves
+        let surface = surface_config(&self.editor);
+        {
+            let mut sh = live.shared.borrow_mut();
+            if sh.painter.surface_config() != surface {
+                sh.painter.set_surface_config(surface);
+                self.reconfiguring = 3;
+            }
+        }
+        let alone = (self.reconfiguring > 0).then(|| self.link.gate.close());
+        self.reconfiguring = self.reconfiguring.saturating_sub(1);
         let woken = std::mem::take(&mut self.woken);
         let input = std::mem::take(&mut self.input);
         let asked = std::mem::take(&mut self.asked);
@@ -783,6 +814,7 @@ impl App {
             waited
         };
 
+        drop(alone);
         // the viewports of the panels outside: windows made for the new, commands for the
         // others, gone for those no pass asked for
         if self.opts.floating {
@@ -1259,6 +1291,7 @@ pub fn run(
         profile: Arc::new(Mutex::new(profile)),
         polls: Polls::new(),
         dirty: true,
+        reconfiguring: 0,
         woken: false,
         wake_pending,
         later_pending: Arc::new(AtomicBool::new(false)),

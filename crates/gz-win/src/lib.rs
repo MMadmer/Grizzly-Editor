@@ -22,12 +22,15 @@
 //! - [`process_alive`], [`allow_foreground`] - one editor per home: the running one, and its
 //!   window brought forward by a second start;
 //! - [`rename_in_place`], [`NamedEvent`] - the editor's own update: a rename that never copies,
-//!   and the signal of the restarted editor.
+//!   and the signal of the restarted editor;
+//! - [`user_ui_language`] - the language the user reads Windows in: the window's language when
+//!   the author leaves it to the system.
 
 #![cfg(windows)]
 
 mod caption;
 mod console;
+mod files;
 mod folders;
 mod instance;
 mod job;
@@ -37,6 +40,7 @@ mod update;
 
 pub use caption::{CaptionHitTest, CaptionShape, PxRect, hit_test, install_caption_hit_test};
 pub use console::{ConsoleStreams, attach_parent_console, on_console_end};
+pub use files::remove_file_keeping_marks;
 pub use folders::{KnownFolder, free_space, is_volume_root, known_folder, volume_path_name};
 pub use instance::{allow_foreground, process_alive};
 pub use job::end_with_this_process;
@@ -143,6 +147,30 @@ pub fn process_counters() -> io::Result<ProcessCounters> {
 /// A `FILETIME` duration in its 100 ns ticks.
 fn filetime_ticks(t: FILETIME) -> u64 {
     (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime)
+}
+
+/// The language of the user's Windows interface, as its ISO 639-1 code (`ru`, `en`, `de`, ...);
+/// empty for a language the editor has no code for.
+#[must_use]
+pub fn user_ui_language() -> &'static str {
+    // SAFETY: GetUserDefaultUILanguage takes nothing and only answers a LANGID.
+    let id = unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() };
+    primary_language_code(id)
+}
+
+/// The ISO 639-1 code of a LANGID's primary language (its low ten bits).
+fn primary_language_code(langid: u16) -> &'static str {
+    match langid & 0x3ff {
+        0x09 => "en",
+        0x19 => "ru",
+        0x22 => "uk",
+        0x23 => "be",
+        0x07 => "de",
+        0x0c => "fr",
+        0x0a => "es",
+        0x15 => "pl",
+        _ => "",
+    }
 }
 
 /// Whether whoever started the process asked for a minimised window (a shortcut's

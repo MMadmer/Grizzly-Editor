@@ -5,7 +5,7 @@ use egui::{
     pos2,
 };
 use gz_ui::text::{self, Clip};
-use gz_ui::{Font, Icon, Tone, icons, metrics, palette};
+use gz_ui::{Font, Icon, TipExt, Tone, Tx, icons, metrics, palette, tr};
 
 /// A whole number that may be empty: digits only, the hint shown while it is (the base's
 /// amount, the new-game screen's). Returns the new value when it was typed: `Some(None)` for an
@@ -14,7 +14,7 @@ pub fn local_number_text(
     ui: &mut Ui,
     salt: &str,
     value: Option<i64>,
-    hint: &str,
+    hint: Tx<'_>,
     width: f32,
 ) -> Option<Option<i64>> {
     let ctx = ui.ctx().clone();
@@ -32,7 +32,7 @@ pub fn local_number_text(
             .id(id)
             .font(Font::Body.id())
             .margin(Margin::symmetric(8, 4))
-            .hint_text(hint)
+            .hint_text(hint.text(&ctx)) // ui-text: translated by Tx::text
             .desired_width(width)
             .min_size(Vec2::new(width, metrics::FRAME)),
     );
@@ -63,7 +63,13 @@ pub fn drawer_height(open: bool, avail: f32) -> f32 {
 /// The problems drawer at the bottom of a tab: a header that says how
 /// many, the list under it while open. `lines` are the sentences with their tones; `ok` is said
 /// when there are none.
-pub fn local_problems_drawer(ui: &mut Ui, open: &mut bool, height: f32, lines: &[(Tone, String)], ok: &str) {
+pub fn local_problems_drawer(
+    ui: &mut Ui,
+    open: &mut bool,
+    height: f32,
+    lines: &[(Tone, String)],
+    ok: &'static str,
+) {
     let ctx = ui.ctx().clone();
     let p = palette(&ctx);
     let errors = lines.iter().filter(|(t, _)| *t == Tone::Error).count();
@@ -75,14 +81,14 @@ pub fn local_problems_drawer(ui: &mut Ui, open: &mut bool, height: f32, lines: &
     if resp.clicked() {
         *open = !*open;
     }
-    let resp = resp.on_hover_text(if *open { "Hide the problems" } else { "Show the problems" });
+    let resp = resp.tip(if *open { "Hide the problems" } else { "Show the problems" });
     let summary = if errors + warnings == 0 {
-        "Problems: none".to_owned()
+        Tx::from("Problems: none")
     } else {
-        format!(
-            "Problems: {errors} error{}, {warnings} warning{}",
-            if errors == 1 { "" } else { "s" },
-            if warnings == 1 { "" } else { "s" }
+        tr!(
+            "Problems: {errors} {errors:error|errors}, {warnings} {warnings:warning|warnings}",
+            errors = errors,
+            warnings = warnings
         )
     };
     if ui.is_rect_visible(rect) {
@@ -123,7 +129,7 @@ pub fn local_problems_drawer(ui: &mut Ui, open: &mut bool, height: f32, lines: &
             Clip::End,
         );
     }
-    gz_ui::audit::control(&ctx, &summary, true, None, None, rect);
+    gz_ui::audit::control(&ctx, &summary.text(&ctx), true, None, None, rect);
     if !*open {
         return;
     }
@@ -132,8 +138,9 @@ pub fn local_problems_drawer(ui: &mut Ui, open: &mut bool, height: f32, lines: &
         ui,
         |ui| {
             egui::Frame::new().inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
+                // the problems are the domain's sentences, shown translated where the catalog knows them
                 for (tone, line) in lines {
-                    let _ = text::status(ui, *tone, line);
+                    let _ = text::status(ui, *tone, Tx::ui(line.as_str()));
                 }
                 if lines.is_empty() {
                     let _ = text::status(ui, Tone::Success, ok);

@@ -332,6 +332,18 @@ pub fn mend(
     tangent_crease: f32,
     binormal_crease: f32,
 ) -> Vec<u32> {
+    mend_until(verts, indices, tangent_crease, binormal_crease, &|| false).unwrap_or_default()
+}
+
+/// [`mend`] that gives up - `None`, the vertices half mended - once `stop` says so; asked every
+/// few thousand points.
+pub fn mend_until(
+    verts: &mut Vec<MVertex>,
+    indices: &mut [u32],
+    tangent_crease: f32,
+    binormal_crease: f32,
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Option<Vec<u32>> {
     let mut mapping: Vec<u32> = (0..verts.len() as u32).collect();
     let mut m = Mender { tris: Vec::with_capacity(indices.len() / 3), original: verts.len() };
     let mut children: BTreeMap<Key, Vec<usize>> = BTreeMap::new();
@@ -347,7 +359,10 @@ pub fn mend(
             children.entry(Key(p)).or_default().push(i);
         }
     }
-    for (key, possible) in &children {
+    for (n, (key, possible)) in children.iter().enumerate() {
+        if n.is_multiple_of(4096) && stop() {
+            return None;
+        }
         m.process(possible, verts, &mut mapping, key.0, Which::Tangent, tangent_crease);
         m.process(possible, verts, &mut mapping, key.0, Which::Binormal, binormal_crease);
     }
@@ -357,7 +372,7 @@ pub fn mend(
         }
     }
     orthogonalize(verts);
-    mapping
+    Some(mapping)
 }
 
 #[cfg(test)]

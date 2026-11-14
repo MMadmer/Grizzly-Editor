@@ -59,12 +59,26 @@ impl CollideModel {
     /// The faces of the scene objects named, as the generation collects them.
     #[must_use]
     pub fn build(state: &SceneState, lib: &Library, snap: &[SmolStr], shaders: Option<&ShadersXrlc>) -> Self {
+        Self::build_until(state, lib, snap, shaders, &|| false).unwrap_or_default()
+    }
+
+    /// [`Self::build`] that gives up - `None` - once `stop` says so, asked per object.
+    pub fn build_until(
+        state: &SceneState,
+        lib: &Library,
+        snap: &[SmolStr],
+        shaders: Option<&ShadersXrlc>,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Option<Self> {
         let mut tris: Vec<[Vec3; 3]> = Vec::new();
         let mut material: Vec<u16> = Vec::new();
         let mut materials: Vec<SmolStr> = Vec::new();
         let mut mtl_index: FxHashMap<String, u16> = FxHashMap::default();
         let mut unknown = 0;
         for name in snap {
+            if stop() {
+                return None;
+            }
             let Some(o) = state.find(ObjClass::SceneObject, &name.to_lowercase()) else { continue };
             let ObjData::SceneObject(d) = &o.data else { continue };
             let Some(lo) = lib.cached(&d.reference) else { continue };
@@ -103,7 +117,7 @@ impl CollideModel {
         }
         let mut out = Self { tris, material, materials, unknown_shaders: unknown, ..Self::default() };
         out.index();
-        out
+        Some(out)
     }
 
     /// A model of given triangles (tests, the hand-made scenes), all of one material.

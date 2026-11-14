@@ -19,7 +19,7 @@ use gz_ui::list::{Column, table_headers};
 use gz_ui::state::busy_line;
 use gz_ui::text::{self, Clip};
 use gz_ui::units::{button_width, em};
-use gz_ui::{Button, Font, Icon, Kind, Tone, icons, keycaps, keycaps_width, palette};
+use gz_ui::{Button, Font, Icon, Kind, TipExt, Tone, Tx, icons, keycaps, keycaps_width, palette, tr};
 use parking_lot::Mutex;
 
 use crate::reply::{args, call_then, error_text, ok, s};
@@ -29,7 +29,10 @@ use crate::reply::{args, call_then, error_text, ok, s};
 pub struct KeyRow {
     /// The action's id (`edit.undo`, `level.build`).
     pub id: String,
+    /// The action's title without the "..." of a row that opens a dialog.
     pub title: String,
+    /// The action's title as the action says it: what the window's language looks up.
+    pub label: String,
     pub group: String,
     /// What it is bound to now, and by default.
     pub keys: Vec<String>,
@@ -65,6 +68,7 @@ pub fn parse_rows(reply: &Value) -> Vec<KeyRow> {
                     KeyRow {
                         id: text_("id"),
                         title: text_("title").trim_end_matches("...").to_owned(),
+                        label: text_("title"),
                         group: text_("group"),
                         keys: strings(r.get("keys")),
                         default: strings(r.get("default")),
@@ -87,10 +91,32 @@ pub fn parse_rows(reply: &Value) -> Vec<KeyRow> {
     out
 }
 
-/// A search finds a row by its title, its group, its keys and its id.
+/// A search finds a row by its title, its group, its keys and its id, in English.
 #[must_use]
 pub fn row_matches(search: &str, row: &KeyRow) -> bool {
     gz_ui::search::matches(search, &format!("{} {} {} {}", row.group, row.title, row.keys.join(" "), row.id))
+}
+
+/// The action's title in the window's language, without the "..." of a row that opens a dialog.
+fn title_shown(ctx: &egui::Context, row: &KeyRow) -> String {
+    // looked up in the action's group too: "Back" of the Viewport is a view
+    gz_ui::i18n::scope(ctx, &row.group, || shown(ctx, &row.label))
+}
+
+/// An action's title as it says it, in the window's language and without its "...".
+fn shown(ctx: &egui::Context, label: &str) -> String {
+    let t = Tx::ui_in("action", label.to_owned()).text(ctx);
+    t.trim_end_matches("...").trim_end_matches('\u{2026}').to_owned()
+}
+
+/// A search finds a row by its title and its group in the window's language or in English, its
+/// keys and its id.
+fn row_matches_in(ctx: &egui::Context, search: &str, row: &KeyRow) -> bool {
+    row_matches(search, row) || {
+        let group = Tx::ui_in("group", row.group.clone()).text(ctx);
+        let shown = format!("{group} {} {} {}", title_shown(ctx, row), row.keys.join(" "), row.id);
+        gz_ui::search::matches(search, &shown)
+    }
 }
 
 /// A chord the page takes for a shortcut: Esc gives up, Enter alone is no shortcut.
@@ -113,7 +139,7 @@ enum Line {
 pub struct KeyboardPage {
     rows: Arc<Mutex<Option<Vec<KeyRow>>>>,
     recording: Option<String>,
-    note: Arc<Mutex<Option<(Tone, String)>>>,
+    note: Arc<Mutex<Option<(Tone, Tx<'static>)>>>,
 }
 
 const ROW_H: f32 = 30.0;
@@ -129,17 +155,21 @@ impl KeyboardPage {
         });
     }
 
-    /// How many rows a search finds.
+    /// How many rows a search finds, in the window's language or in English.
     #[must_use]
-    pub fn matches(&self, search: &str) -> usize {
-        self.rows.lock().as_ref().map_or(0, |rows| rows.iter().filter(|r| row_matches(search, r)).count())
+    pub fn matches(&self, ctx: &egui::Context, search: &str) -> usize {
+        self.rows
+            .lock()
+            .as_ref()
+            .map_or(0, |rows| rows.iter().filter(|r| row_matches_in(ctx, search, r)).count())
     }
 
-    /// Runs `app.keys` and lists again; a key taken from another action is said.
+    /// Runs `app.keys` and lists again; a key taken from another action is said. `title` is the
+    /// action's as it says it.
     fn change(&self, editor: &Arc<Editor>, a: gz_editor::Args, title: String) {
         let (rows, note) = (self.rows.clone(), self.note.clone());
         let ed = editor.clone();
-        call_then(editor, "app.keys", a, move |reply, _| {
+        call_then(editor, "app.keys", a, move |reply, ctx| {
             if !ok(reply) {
                 *note.lock() = Some((Tone::Error, error_text(reply)));
                 return;
@@ -152,10 +182,15 @@ impl KeyboardPage {
             let names: Vec<String> = rows
                 .lock()
                 .as_ref()
-                .map(|r| r.iter().filter(|x| moved.contains(&x.id)).map(|x| x.title.clone()).collect())
+                .map(|r| r.iter().filter(|x| moved.contains(&x.id)).map(|x| title_shown(ctx, x)).collect())
                 .unwrap_or_default();
-            *note.lock() = (!names.is_empty())
-                .then(|| (Tone::Warning, format!("{title} took its keys from {}.", names.join(", "))));
+            *note.lock() = (!names.is_empty()).then(|| {
+                let action = shown(ctx, &title);
+                (
+                    Tone::Warning,
+                    tr!("{action} took its keys from {others}.", action = action, others = names.join(", ")),
+                )
+            });
             call_then(&ed, "app.keys", args([("action", s("list"))]), move |reply, _| {
                 if ok(reply) {
                     *rows.lock() = Some(parse_rows(reply));
@@ -172,8 +207,9 @@ impl KeyboardPage {
             busy_line(ui, "Reading the keys...");
             return;
         };
-        let shown: Vec<usize> =
-            (0..rows.len()).filter(|&i| search.is_empty() || row_matches(search, &rows[i])).collect();
+        let shown: Vec<usize> = (0..rows.len())
+            .filter(|&i| search.is_empty() || row_matches_in(&ctx, search, &rows[i]))
+            .collect();
         let mut lines: Vec<Line> = Vec::with_capacity(shown.len() + 16);
         let mut last_group: Option<&str> = None;
         for &i in &shown {
@@ -191,7 +227,7 @@ impl KeyboardPage {
             match note {
                 Some((tone, text_)) => {
                     let color = p.tone(tone);
-                    text::label(ui, &text_, Font::Body, color, Clip::End);
+                    text::label(ui, text_, Font::Body, color, Clip::End);
                 }
                 None => {
                     let muted = p.text_secondary;
@@ -240,11 +276,11 @@ impl KeyboardPage {
                     self.recording = None;
                 } else if chord.key == Key::Backspace && !chord.ctrl && !chord.shift && !chord.alt {
                     self.recording = None;
-                    let title = rows.iter().find(|r| r.id == id).map(|r| r.title.clone()).unwrap_or_default();
+                    let title = rows.iter().find(|r| r.id == id).map(|r| r.label.clone()).unwrap_or_default();
                     self.change(editor, args([("action", s("clear")), ("id", s(&id))]), title);
                 } else if takes(&chord) {
                     self.recording = None;
-                    let title = rows.iter().find(|r| r.id == id).map(|r| r.title.clone()).unwrap_or_default();
+                    let title = rows.iter().find(|r| r.id == id).map(|r| r.label.clone()).unwrap_or_default();
                     self.change(
                         editor,
                         args([("action", s("bind")), ("id", s(&id)), ("keys", s(&chord.label()))]),
@@ -268,12 +304,16 @@ impl KeyboardPage {
                     let (r, _) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
                     match line {
                         Line::Group(i) => {
-                            ui.painter().text(
+                            // the group an action registered, in its English
+                            text::paint(
+                                ui.painter(),
+                                &Font::Strong.id(),
                                 pos2(r.min.x + 6.0, r.center().y + 3.0),
                                 Align2::LEFT_CENTER,
-                                &rows[i].group,
-                                Font::Strong.id(),
                                 p.text,
+                                Tx::ui_in("group", rows[i].group.as_str()),
+                                Some(width - 12.0),
+                                Clip::End,
                             );
                         }
                         Line::Row(i) => {
@@ -284,13 +324,14 @@ impl KeyboardPage {
                             }
                             // the title, and what it shares its keys with
                             let title_room = title_w - 18.0;
+                            let title = title_shown(&ctx, row);
                             text::paint(
                                 ui.painter(),
                                 &Font::Body.id(),
                                 pos2(r.min.x + 18.0, r.center().y),
                                 Align2::LEFT_CENTER,
                                 p.text,
-                                &row.title,
+                                Tx::raw(title.as_str()),
                                 Some(title_room),
                                 Clip::End,
                             );
@@ -318,34 +359,44 @@ impl KeyboardPage {
                                 Stroke::new(if recording { 2.0 } else { 1.0 }, outline),
                                 StrokeKind::Inside,
                             );
+                            let cell_room = Some(cell.width() - 16.0);
                             if recording {
-                                ui.painter().text(
+                                text::paint(
+                                    ui.painter(),
+                                    &Font::Body.id(),
                                     pos2(cell.min.x + 8.0, cell.center().y),
                                     Align2::LEFT_CENTER,
-                                    "Press keys...",
-                                    Font::Body.id(),
                                     p.accent_bright,
+                                    "Press keys...",
+                                    cell_room,
+                                    Clip::End,
                                 );
                                 ui.ctx().request_repaint();
                             } else if row.keys.is_empty() {
-                                ui.painter().text(
+                                text::paint(
+                                    ui.painter(),
+                                    &Font::Body.id(),
                                     pos2(cell.min.x + 8.0, cell.center().y),
                                     Align2::LEFT_CENTER,
-                                    "None",
-                                    Font::Body.id(),
                                     p.text_muted,
+                                    "None",
+                                    cell_room,
+                                    Clip::End,
                                 );
                             } else {
                                 let first = row.keys.first().cloned().unwrap_or_default();
                                 let w = keycaps_width(ui, &first);
                                 keycaps(ui, pos2(cell.min.x + 8.0 + w, cell.center().y), &first, true);
                                 if row.keys.len() > 1 {
-                                    ui.painter().text(
+                                    text::paint(
+                                        ui.painter(),
+                                        &Font::Small.id(),
                                         pos2(cell.min.x + 14.0 + w, cell.center().y),
                                         Align2::LEFT_CENTER,
-                                        format!("+{}", row.keys.len() - 1),
-                                        Font::Small.id(),
                                         p.text_muted,
+                                        Tx::raw(format!("+{}", row.keys.len() - 1)),
+                                        None,
+                                        Clip::End,
                                     );
                                 }
                             }
@@ -366,26 +417,27 @@ impl KeyboardPage {
                                     x.shrink(3.0),
                                     if xr.hovered() { p.text } else { p.text_secondary },
                                 );
-                                if xr.on_hover_text("Take the keys away").clicked() {
+                                if xr.tip("Take the keys away").clicked() {
                                     clear = Some(i);
                                 }
                             }
                             let tip = if row.conflicts.is_empty() {
-                                format!("{}\nClick, then press the keys.", row.id)
+                                tr!("{id}\nClick, then press the keys.", id = row.id.clone())
                             } else {
-                                let names: Vec<&str> = rows
+                                let names: Vec<String> = rows
                                     .iter()
                                     .filter(|x| row.conflicts.contains(&x.id))
-                                    .map(|x| x.title.as_str())
+                                    .map(|x| title_shown(&ctx, x))
                                     .collect();
-                                format!(
-                                    "The same keys as {} where both are live.\n{}",
-                                    names.join(", "),
-                                    row.id
+                                tr!(
+                                    "The same keys as {others} where both are live.\n{id}",
+                                    others = names.join(", "),
+                                    id = row.id.clone()
                                 )
                             };
-                            gz_ui::audit::control(ui.ctx(), &row.title, true, None, Some(&tip), cell);
-                            if resp.on_hover_text(tip).clicked() && clear.is_none() {
+                            // an agent reads the control in English
+                            gz_ui::audit::control(ui.ctx(), &row.title, true, None, Some(&tip.en()), cell);
+                            if resp.tip(tip).clicked() && clear.is_none() {
                                 record = Some(row.id.clone());
                             }
                             if !row.conflicts.is_empty() {
@@ -425,11 +477,11 @@ impl KeyboardPage {
         }
         if let Some(i) = clear {
             let row = &rows[i];
-            self.change(editor, args([("action", s("clear")), ("id", s(&row.id))]), row.title.clone());
+            self.change(editor, args([("action", s("clear")), ("id", s(&row.id))]), row.label.clone());
         }
         if let Some(i) = reset {
             let row = &rows[i];
-            self.change(editor, args([("action", s("reset")), ("id", s(&row.id))]), row.title.clone());
+            self.change(editor, args([("action", s("reset")), ("id", s(&row.id))]), row.label.clone());
         }
     }
 
@@ -442,12 +494,12 @@ impl KeyboardPage {
     fn ask_reset_all(&self, ctx: &egui::Context, editor: &Arc<Editor>, changed: usize) {
         let spec = ConfirmSpec {
             id: "reset_keys".to_owned(),
-            title: "Reset All Keys".to_owned(),
-            headline: format!("Put {changed} changed shortcut(s) back to their defaults?"),
+            title: "Reset All Keys".into(),
+            headline: tr!("Put {n} changed {n:shortcut|shortcuts} back to their defaults?", n = changed),
             items: Vec::new(),
             total: 0,
-            consequence: "The keys you bound are forgotten; every action has its own keys again.".to_owned(),
-            action: "Reset All".to_owned(),
+            consequence: "The keys you bound are forgotten; every action has its own keys again.".into(),
+            action: "Reset All".into(),
             destructive: false,
         };
         let asker = if editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
@@ -498,6 +550,7 @@ mod tests {
         let r = KeyRow {
             id: "graph.frame_all".into(),
             title: "Frame All".into(),
+            label: "Frame All".into(),
             group: "Graph".into(),
             keys: vec!["Home".into()],
             default: vec![],

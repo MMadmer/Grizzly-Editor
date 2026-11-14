@@ -24,3 +24,6 @@ rustc-hash.workspace = true
 smallvec.workspace = true
 smol_str.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+gz-task.workspace = true

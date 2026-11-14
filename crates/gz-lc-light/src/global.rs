@@ -124,17 +124,21 @@ impl LcGlobalData {
     }
 
     /// Calculates the normals of the vertices and faces.
-    pub fn calc_normals(&mut self, smoothing: Smoothing) -> isize {
-        self.mesh.calc_normals(self.params.sm_angle, smoothing)
+    pub fn calc_normals(&mut self, smoothing: Smoothing, ctl: &Ctl<'_>) -> Result<isize> {
+        let stop = || ctl.cancelled();
+        let added = self.mesh.calc_normals_until(self.params.sm_angle, smoothing, &stop);
+        ctl.check()?;
+        Ok(added.unwrap_or(0))
     }
 
     /// Calculates the normals of the MU models.
-    pub fn mu_calc_normals(&mut self, smoothing: Smoothing) {
+    pub fn mu_calc_normals(&mut self, smoothing: Smoothing, ctl: &Ctl<'_>) -> Result<()> {
         let angle = self.params.sm_angle;
         // one after another through the pools they share
         let mut vpool = self.mu_models.last().map(|m| m.mesh.vpool.clone()).unwrap_or_default();
         let mut fpool = self.mu_models.last().map(|m| m.mesh.fpool.clone()).unwrap_or_default();
         for m in &mut self.mu_models {
+            ctl.check()?;
             m.mesh.vpool = std::mem::take(&mut vpool);
             m.mesh.fpool = std::mem::take(&mut fpool);
             m.calc_normals(angle, smoothing);
@@ -145,12 +149,18 @@ impl LcGlobalData {
             m.mesh.vpool = vpool;
             m.mesh.fpool = fpool;
         }
+        Ok(())
     }
 
     /// The shadow-casting faces of the level (one of each set of equal
     /// faces) and of every reference into the ray model, which replaces the one before; answers
     /// the soup as `build.cform` holds it. `bounds` is the box of the build's vertices.
     pub fn build_rapid(&mut self, bounds: &Aabb) -> Result<RcastForm> {
+        self.build_rapid_with(bounds, &Ctl::quiet())
+    }
+
+    /// [`Self::build_rapid`] stopped by `ctl` between faces.
+    pub fn build_rapid_with(&mut self, bounds: &Aabb, ctl: &Ctl<'_>) -> Result<RcastForm> {
         self.ray = None;
         let faces = self.mesh.faces().to_vec();
         for &f in &faces {
@@ -160,7 +170,10 @@ impl LcGlobalData {
         }
         let mut cl = RapidCollector::new(bounds, self.mesh.vertices().len(), faces.len());
         let mut adjacent: Vec<FaceId> = Vec::with_capacity(36);
-        for &f in &faces {
+        for (n, &f) in faces.iter().enumerate() {
+            if n.is_multiple_of(4096) {
+                ctl.check()?;
+            }
             let Some(face) = self.mesh.face(f) else { continue };
             if !casts(shader_of(face.material, &self.shaders, &self.materials)) {
                 continue;
@@ -202,6 +215,7 @@ impl LcGlobalData {
                 m.export_cform_rcast(&mut cl, &r.xform, &self.shaders, &self.materials);
             }
         }
+        ctl.check()?;
         let (model, form) = cl.finish(*bounds)?;
         self.ray = Some(model);
         Ok(form)

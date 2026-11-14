@@ -9,7 +9,7 @@ use gz_ui::list::list;
 use gz_ui::search::matches;
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
-use gz_ui::{Font, Icon, SearchField, metrics, palette, state};
+use gz_ui::{Font, Icon, SearchField, Tx, metrics, palette, state};
 
 use crate::paths::leaf;
 
@@ -57,9 +57,9 @@ pub fn find(keys: &[&str], name: &str) -> Option<usize> {
 
 /// What an empty list says.
 pub struct Empty<'a> {
-    pub title: &'a str,
-    pub text: &'a str,
-    pub action: Option<&'a str>,
+    pub title: Tx<'a>,
+    pub text: Tx<'a>,
+    pub action: Option<Tx<'a>>,
 }
 
 /// What a frame of the list did.
@@ -132,9 +132,19 @@ impl LibraryList {
             if rows.is_empty() {
                 let ui = l.ui();
                 let (icon, title, text_, action) = if search_on {
-                    (Icon::Search, "No matches", "Nothing in the library matches the search.", None)
+                    (
+                        Icon::Search,
+                        Tx::from("No matches"),
+                        Tx::from("Nothing in the library matches the search."),
+                        None,
+                    )
                 } else {
-                    (Icon::Folder, empty.title, empty.text, empty.action)
+                    (
+                        Icon::Folder,
+                        empty.title.borrow(),
+                        empty.text.borrow(),
+                        empty.action.as_ref().map(Tx::borrow),
+                    )
                 };
                 out.acted = state::empty_state(ui, icon, title, text_, action);
                 return;
@@ -163,14 +173,14 @@ impl LibraryList {
                     let font = Font::Body.id();
                     let rect = ui.max_rect();
                     let y = rect.center().y;
-                    let shown_w = text::width(ui.ctx(), &font, name).min(room);
+                    let shown_w = text::width(ui.ctx(), &font, Tx::raw(name)).min(room);
                     text::paint(
                         ui.painter(),
                         &font,
                         pos2(rect.min.x, y),
                         Align2::LEFT_CENTER,
                         p.text,
-                        name,
+                        Tx::raw(name),
                         Some(room.max(0.0)),
                         Clip::End,
                     );
@@ -183,7 +193,7 @@ impl LibraryList {
                             pos2(rect.min.x + shown_w + 8.0, y),
                             Align2::LEFT_CENTER,
                             p.text_muted,
-                            folder,
+                            Tx::raw(folder),
                             Some(rest),
                             Clip::Start,
                         );

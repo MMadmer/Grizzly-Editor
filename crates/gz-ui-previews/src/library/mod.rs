@@ -150,6 +150,12 @@ pub fn folder_text(editor: &Editor, dir: &std::path::Path) -> String {
     crate::paths::folder_text(editor.project_root().as_deref(), &gz_project::library_root(editor), dir)
 }
 
+/// [`folder_text`] for the window.
+#[must_use]
+pub fn folder_tx(editor: &Editor, dir: &std::path::Path) -> gz_ui::Tx<'static> {
+    crate::paths::folder_tx(editor.project_root().as_deref(), &gz_project::library_root(editor), dir)
+}
+
 /// The keys of a listing as `&str`, for the list.
 #[must_use]
 pub fn keys_of<T>(items: &[T], key: impl Fn(&T) -> &str) -> Vec<&str> {

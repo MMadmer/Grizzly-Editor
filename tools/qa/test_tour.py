@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """A short tour of the window on a COPY of a project: every kind of tab, every dialog the contract names and every
-menu is brought up over MCP at two sizes, and each is audited and pictured once.
+menu is brought up over MCP at two sizes, and each is audited and pictured once - in English, then in Russian.
 
 For each of them:
   - the editor says it is there (`ui.tab` / `ui.dialog` / `ui.popup` answer ok and `ui.list` names it); a surface
@@ -9,16 +9,25 @@ For each of them:
     status (`loading`: a surface's busy line, a dialog footer's busy status, a card's busy line) and no error state in
     place of the content (`errors`);
   - `shot.window` is a picture with the editor's size, nothing outside the window, and the dialog on top as `modal`.
+In Russian (docs/UI_DESIGN.md, section 9) each is audited again: `untranslated` is empty - every text of the
+editor's own reads in Russian - and no text is cut whose English the English pass showed whole (Russian runs about
+a quarter longer: a width follows its text).
 
 The two sizes are the ones the design is held to (docs/UI_DESIGN.md): 1707 x 912 pt at UI scale 1.5 and 1280 x 720 pt
-at 1.0. --shots keeps the pictures: the first size in the folder, the second in `small` inside it.
+at 1.0. --shots keeps the pictures: the first size in the folder, the second in `small` inside it, the Russian ones
+in `ru` and `ru/small`.
 
-    python tools/qa/test_tour.py --project <project> [--shots <folder>] [--only A,B]
+    python tools/qa/test_tour.py --project <project> [--shots <folder>] [--only A,B,R] [--theme <id>]
+
+--theme takes the tour in a theme (`app.prefs key=theme` lists them; a light one, solarized-light say, holds the
+light half of the kit): the editor is set to it over MCP before the first surface and must answer it back.
 
   A  every tab kind of ui.contract's document_kinds opens, comes up active and is audited; a library tab (light
      animations, textures, sounds) has its first entry picked first, so what an entry shows is pictured too
   B  every dialog of ui.contract opens, is the window's modal and is audited
   C  every menu of ui.contract opens to be looked at and is audited
+  R  A, B and C again with the window in Russian (`app.prefs key=language value=ru`); the English pass of the same
+     phases runs first (quietly when it was not asked for): it is what a Russian cut is weighed against
 """
 from __future__ import annotations
 
@@ -31,6 +40,9 @@ from qa import check, cmd
 SIZES = ((1707, 912, 1.5), (1280, 720, 1.0))
 # what a tab of each kind opens on: nothing for a tool tab, a file of the linked game for the rest
 FILES = {"model": "dynamics\\weapons\\wpn_ak74\\wpn_ak74"}
+
+# the language the window shows now, and the English texts the English pass saw cut, per size
+PASS = {"lang": "en", "tag": "max", "cut": {}}
 
 
 def settled(label: str) -> None:
@@ -49,22 +61,37 @@ def shows_content(label: str) -> None:
 
 def audited(label: str) -> None:
     """Nothing escapes its window and no text is cut to nothing. A text cut with an ellipsis that still shows its
-    end - a path, a status line, which the tooltip holds whole - is the design, and is only noted."""
+    end - a path, a status line, which the tooltip holds whole - is the design, and is only noted. In Russian every
+    text of the editor's own has its translation, and none is cut whose English the English pass showed whole."""
     a = cmd("ui.audit")
     cut, escaped = a.get("truncated") or [], a.get("escaped") or []
     vanished = [t for t in cut if not t.get("shown") and (t.get("rect") or [0, 0, 0])[2] > 0]
     check(a.get("ok") and not vanished and not escaped, "%s: no text is cut to nothing and nothing escapes its window" % label,
           qa.short({"vanished": vanished[:3], "escaped": escaped[:3]}))
+    seen = PASS["cut"].setdefault(PASS["tag"], set())
+    if PASS["lang"] == "en":
+        seen.update(str(t.get("label")) for t in cut)
+    else:
+        check(a.get("language") == PASS["lang"], "%s: the window speaks %s" % (label, PASS["lang"]), a.get("language"))
+        missing = a.get("untranslated") or []
+        check(not missing, "%s: every text of the editor's own reads in Russian (%d without an entry)" % (label, len(missing)),
+              qa.short([m.get("label") for m in missing[:12]]))
+        # a translated text carries its English (`en`); data and the log's lines read the same in both
+        longer = [t for t in cut if t.get("en") and str(t["en"]) not in seen]
+        check(not longer, "%s: no Russian text is cut where its English fits" % label,
+              qa.short([(t.get("label"), t.get("shown")) for t in longer[:6]]))
     for t in cut:
         if t not in vanished:
             print("NOTE %s: '%s' is shown cut short" % (label, str(t.get("label"))[:60]), flush=True)
 
 
 def kept(shots: str | None, tag: str) -> str | None:
-    """Where the pictures of a size go: the folder itself for the first size, `small` inside it for the other."""
+    """Where the pictures of a size go: the folder itself for the first size, `small` inside it for the other; the
+    Russian ones in `ru` beside them."""
     if not shots:
         return None
-    return shots if tag == "max" else os.path.join(shots, "small")
+    base = shots if PASS["lang"] == "en" else os.path.join(shots, PASS["lang"])
+    return base if tag == "max" else os.path.join(base, "small")
 
 
 def pictured(label: str, shots: str | None, name: str, modal: str | None = None) -> None:
@@ -113,7 +140,7 @@ def pick_first(kind: str, label: str) -> None:
 def phase_a(project: str, tag: str, shots: str | None, contract: dict) -> None:
     opened = []
     for kind in contract.get("document_kinds", []):
-        label = "A %s %s" % (tag, kind)
+        label = "A %s %s %s" % (PASS["lang"], tag, kind)
         o = open_tab(kind, project)
         if not o.get("ok"):
             # the project cannot show it: it says why, in a sentence
@@ -137,7 +164,7 @@ def phase_a(project: str, tag: str, shots: str | None, contract: dict) -> None:
 
 def phase_b(tag: str, shots: str | None, contract: dict) -> None:
     for dialog_id, window in (contract.get("dialogs") or {}).items():
-        label = "B %s %s" % (tag, dialog_id)
+        label = "B %s %s %s" % (PASS["lang"], tag, dialog_id)
         o = cmd("ui.dialog", action="open", id=dialog_id)
         if not o.get("ok"):
             check(isinstance(o.get("error"), str) and len(o["error"]) > 12, label + " is refused in a sentence", qa.short(o))
@@ -154,7 +181,7 @@ def phase_b(tag: str, shots: str | None, contract: dict) -> None:
 
 def phase_c(tag: str, shots: str | None, contract: dict) -> None:
     for menu in contract.get("menus") or []:
-        label = "C %s menu %s" % (tag, menu)
+        label = "C %s %s menu %s" % (PASS["lang"], tag, menu)
         o = cmd("ui.popup", show="menu:" + menu)
         if not o.get("ok"):
             check(isinstance(o.get("error"), str) and len(o["error"]) > 12, label + " is refused in a sentence", qa.short(o))
@@ -164,25 +191,55 @@ def phase_c(tag: str, shots: str | None, contract: dict) -> None:
         cmd("ui.popup", show="none")
 
 
+def themed(theme: str, contract: dict) -> None:
+    """The editor takes the theme over MCP, answers it back, and the contract names it."""
+    check(theme in (contract.get("themes") or []), "ui.contract names the theme %s" % theme, contract.get("themes"))
+    check(cmd("app.prefs", action="set", key="theme", value=theme).get("ok"), "app.prefs sets the theme %s" % theme)
+    got = cmd("app.prefs", key="theme")
+    listed = [t.get("id") for t in got.get("themes") or []]
+    check(got.get("value") == theme and theme in listed, "app.prefs answers the theme it set, among the themes",
+          qa.short(got))
+
+
 def run(ctx: qa.Run) -> None:
+    asked = {c for c in (ctx.only or "").upper() if c.isalpha()} or set("ABCR")
+    # the phases each pass tours; the Russian pass weighs its cuts against the English one of the same phases
+    base = sorted(asked & set("ABC")) or ["A", "B", "C"]
     ed = qa.Editor(ctx.project).start()
     try:
         contract = cmd("ui.contract")
-        for width, height, scale in SIZES:
-            tag = "max" if width == SIZES[0][0] else "small"
-            cmd("ui.scale", value=scale)
-            check(cmd("app.window", action="resize", width=width, height=height).get("ok"),
-                  "%s: the window takes %d x %d pt at scale %g" % (tag, width, height, scale))
-            qa.run_phases({"A": lambda: phase_a(ctx.project, tag, ctx.shots, contract),
-                           "B": lambda: phase_b(tag, ctx.shots, contract),
-                           "C": lambda: phase_c(tag, ctx.shots, contract)}, ctx.only)
+        if ctx.args.theme:
+            themed(ctx.args.theme, contract)
+        for lang in ["en"] + (["ru"] if "R" in asked else []):
+            PASS["lang"] = lang
+            if lang != "en":
+                check(cmd("app.prefs", action="set", key="language", value=lang).get("ok"),
+                      "R the window takes the language %s at once, without a restart" % lang)
+            for width, height, scale in SIZES:
+                tag = "max" if width == SIZES[0][0] else "small"
+                PASS["tag"] = tag
+                cmd("ui.scale", value=scale)
+                check(cmd("app.window", action="resize", width=width, height=height).get("ok"),
+                      "%s: the window takes %d x %d pt at scale %g" % (tag, width, height, scale))
+                steps = {"A": lambda: phase_a(ctx.project, tag, ctx.shots, contract),
+                         "B": lambda: phase_b(tag, ctx.shots, contract),
+                         "C": lambda: phase_c(tag, ctx.shots, contract)}
+                steps = {k: v for k, v in steps.items() if k in base}
+                if lang == "en" and not asked & set("ABC"):
+                    # asked for the Russian pass alone: the English one runs quietly, for its cuts
+                    qa.run_phases(steps, "R", {"R": "".join(base)})
+                else:
+                    qa.run_phases(steps, ",".join(base))
+        if "R" in asked:
+            cmd("app.prefs", action="set", key="language", value="en")
         cmd("ui.scale", value=1.5)
     finally:
         ed.close()
 
 
 def main() -> int:
-    return qa.suite("TOUR", run, doc=__doc__, phases="ABC")
+    return qa.suite("TOUR", run, doc=__doc__, phases="ABCR",
+                    add_args=lambda ap: ap.add_argument("--theme", default="", help="a theme's id to take the tour in"))
 
 
 if __name__ == "__main__":

@@ -7,6 +7,48 @@ use egui::text::TextWrapping;
 
 use super::*;
 
+/// A text of the editor's own English that the scene keeps (a kind's title, its description, a
+/// line's name), in the window's language.
+fn shown(ctx: &egui::Context, en: &str) -> String {
+    gz_ui::Tx::ui(en).text(ctx)
+}
+
+/// The name a line of a node starts with, in the window's language: a parameter's name, a
+/// condition's title, or "Not <title>" for a negated one (`gz_nq::layout::cond_key`'s English).
+fn cond_or_param(ctx: &egui::Context, line: &gz_nq::layout::Line) -> String {
+    if line.cond.is_empty() {
+        return gz_ui::Tx::ui_in("param", line.key.as_str()).text(ctx);
+    }
+    let Some(rest) = line.key.strip_prefix("Not ").filter(|_| line.negate) else {
+        return kind_shown(ctx, &line.key);
+    };
+    // the title as the catalog has it: cond_key lowered its first letter
+    let mut title = rest.to_owned();
+    if let Some(first) = title.get(..1).map(str::to_ascii_uppercase) {
+        title.replace_range(..1, &first);
+    }
+    let mut said = kind_shown(ctx, &title);
+    let mut chars = said.chars();
+    if let (Some(a), Some(b)) = (chars.next(), chars.next())
+        && a.is_uppercase()
+        && !b.is_uppercase()
+    {
+        said = a.to_lowercase().chain(said.chars().skip(1)).collect();
+    }
+    gz_ui::tr!("Not {condition}", condition = said).text(ctx)
+}
+
+/// What the NQ catalog says of a kind (its title, its description, what a pin means), in the
+/// window's language: the catalog's entries are of the context `kind`.
+fn kind_shown(ctx: &egui::Context, en: &str) -> String {
+    gz_ui::Tx::ui_in("kind", en).text(ctx)
+}
+
+/// A pin's name as the canvas shows it: the catalog's name, in the window's language.
+fn pin_shown(ctx: &egui::Context, name: &str) -> String {
+    gz_ui::Tx::ui_in("pin", name).text(ctx)
+}
+
 impl Detail {
     /// Less detail is a lower rank.
     fn rank(self) -> u8 {
@@ -63,7 +105,8 @@ impl Canvas {
         self.drawn_frame = ctx.cumulative_frame_nr();
         cx.view.center = [layout::sane(cx.view.center[0]), layout::sane(cx.view.center[1])];
         if let Some(st) = cx.doc_status.take() {
-            self.set_status(&ctx, &st);
+            // the document's own English
+            self.set_status(&ctx, gz_ui::Tx::ui(st));
         }
         // a commit in flight is drawn until the scene that holds it arrives
         if self.settle.as_ref().is_some_and(|s| cx.scene.is_some_and(|sc| sc.edit != s.from_edit)) {
@@ -154,12 +197,15 @@ impl Canvas {
         self.draw_beyond(&painter, &p, sc, cx.view, mouse);
         self.draw_status(&painter, &p, &ctx);
         if sc.nodes.is_empty() {
-            painter.text(
+            gz_ui::text::paint(
+                &painter,
+                &Font::Body.id(),
                 rect.center(),
                 Align2::CENTER_CENTER,
-                "Right-click or press Tab to add a node",
-                Font::Body.id(),
                 p.text_muted,
+                "Right-click or press Tab to add a node",
+                None,
+                gz_ui::Clip::End,
             );
         }
 
@@ -341,6 +387,7 @@ impl Canvas {
             let line_px = (TITLE_LINE * 1.1 * s * ppp).clamp(12.0, 40.0);
             let font = Self::font_px(Font::Strong, line_px, ppp);
             if self.frame_title.as_ref().is_none_or(|(i, _, _)| *i != f.index) {
+                // a frame's title is the author's
                 paint_fit(
                     painter,
                     &font,
@@ -361,12 +408,17 @@ impl Canvas {
                 );
             }
             if self.hovered && self.hot_frame.is_some_and(|(i, _)| i == f.index) && self.tip.is_empty() {
+                let ctx = painter.ctx();
                 self.tip = if self.hot_frame.is_some_and(|(_, resize)| resize) {
-                    "Drag to resize the frame".to_owned()
+                    gz_ui::i18n::t(ctx, "Drag to resize the frame")
                 } else {
                     format!(
-                        "{}\nDrag to move the frame and what it holds, double-click to rename it",
-                        f.title
+                        "{}\n{}",
+                        f.title,
+                        gz_ui::i18n::t(
+                            ctx,
+                            "Drag to move the frame and what it holds, double-click to rename it"
+                        )
                     )
                 };
             }
@@ -604,7 +656,7 @@ impl Canvas {
                 );
             }
             if hovered_node && self.tip.is_empty() {
-                self.tip = node_tip(n, marks);
+                self.tip = node_tip(painter.ctx(), n, marks);
             }
             return;
         }
@@ -662,7 +714,7 @@ impl Canvas {
         painter.rect_stroke(r, radius(rnd), border, StrokeKind::Inside);
         self.draw_pins(painter, p, sc, cx, i, detail, alpha, mouse, ppp);
         if detail == Detail::Header && hovered_node && self.tip.is_empty() && self.hot_node.is_none() {
-            self.tip = node_tip(n, marks);
+            self.tip = node_tip(painter.ctx(), n, marks);
         }
     }
 
@@ -692,7 +744,7 @@ impl Canvas {
         let inner = (r.width() - 8.0).max(line);
         let rows = ((r.height() - 4.0) / line).floor().max(1.0) as usize;
         let mut job = LayoutJob::single_section(
-            n.title.clone(),
+            kind_shown(painter.ctx(), &n.title),
             TextFormat {
                 font_id: font,
                 color: Palette::alpha(p.text, alpha.max(0.5)),
@@ -759,7 +811,7 @@ impl Canvas {
         if let Some(m) = cx.data.marks(&n.id) {
             let c = if m.severity >= 2 { p.error } else { p.warning };
             let count = m.count.to_string();
-            let tw = gz_ui::text::width(painter.ctx(), &small, &count);
+            let tw = gz_ui::text::width(painter.ctx(), &small, gz_ui::Tx::raw(count.as_str()));
             let pill = Rect::from_min_max(
                 pos2(right - badge - tw - 8.0 * s, cy - badge * 0.55),
                 pos2(right, cy + badge * 0.55),
@@ -773,17 +825,15 @@ impl Canvas {
             );
             painter.text(pos2(pill.max.x - 4.0 * s, cy), Align2::RIGHT_CENTER, count, small.clone(), c);
             if self.hovered && pill.contains(mouse) {
-                self.tip = format!(
-                    "{}\n{}",
-                    m.first,
-                    if m.count > 1 {
-                        format!("and {} more in the Problems drawer", m.count - 1)
-                    } else {
-                        String::new()
-                    }
-                )
-                .trim_end()
-                .to_owned();
+                // the first problem is the validator's English
+                let ctx = painter.ctx();
+                let first = shown(ctx, &m.first);
+                self.tip = if m.count > 1 {
+                    let more = gz_ui::tr!("and {n} more in the Problems drawer", n = m.count - 1);
+                    format!("{first}\n{}", more.text(ctx))
+                } else {
+                    first
+                };
             }
             right = pill.min.x - 4.0 * s;
         }
@@ -799,7 +849,7 @@ impl Canvas {
                     .filter(|x| x.node == n.id)
                     .map(|x| x.name.as_str())
                     .collect();
-                self.tip = format!("Bookmark: {}", names.join(", "));
+                self.tip = gz_ui::tr!("Bookmark: {names}", names = names.join(", ")).text(painter.ctx());
             }
             right -= badge + 4.0 * s;
         }
@@ -807,21 +857,27 @@ impl Canvas {
             if !on {
                 continue;
             }
-            let tw = gz_ui::text::width(painter.ctx(), &small, word);
-            painter.text(
+            // a badge of the node's header
+            let word = gz_ui::Tx::ctx("badge", word);
+            let tw = gz_ui::text::width(painter.ctx(), &small, &word);
+            gz_ui::text::paint(
+                painter,
+                &small,
                 pos2(right - tw, cy),
                 Align2::LEFT_CENTER,
-                word,
-                small.clone(),
                 Palette::alpha(p.text_muted, text_a),
+                &word,
+                None,
+                gz_ui::Clip::End,
             );
             right -= tw + 6.0 * s;
         }
         // the id gets what the title leaves, and never more than 40% of the row
         let room = (right - x).max(0.0);
-        let title_w = gz_ui::text::width(painter.ctx(), &strong, &n.title);
-        let id_w =
-            gz_ui::text::width(painter.ctx(), &small, &n.id).min((room - title_w - 8.0 * s).max(room * 0.4));
+        let title = kind_shown(painter.ctx(), &n.title);
+        let title_w = gz_ui::text::width(painter.ctx(), &strong, gz_ui::Tx::raw(title.as_str()));
+        let id_w = gz_ui::text::width(painter.ctx(), &small, gz_ui::Tx::raw(n.id.as_str()))
+            .min((room - title_w - 8.0 * s).max(room * 0.4));
         let line_px = small.size / 0.75;
         let show_id = id_w > line_px * 1.5;
         if show_id {
@@ -839,7 +895,7 @@ impl Canvas {
             &strong,
             pos2(x, cy),
             Palette::alpha(p.text, text_a),
-            &n.title,
+            &title,
             if show_id { room - id_w - 8.0 * s } else { room },
         );
         let head = Rect::from_min_max(a, pos2(b.x, a.y + header));
@@ -849,7 +905,7 @@ impl Canvas {
             && self.hot_node.is_none()
             && !n.desc.is_empty()
         {
-            self.tip = format!("{}\n{}", n.title, n.desc);
+            self.tip = format!("{title}\n{}", kind_shown(painter.ctx(), &n.desc));
         }
     }
 
@@ -875,7 +931,14 @@ impl Canvas {
             && !n.comment.is_empty()
         {
             let y = a.y + (cy + COMMENT * 0.5) * s;
-            let fitted = gz_ui::text::fit(painter.ctx(), &body, &n.comment, inner, gz_ui::Clip::End);
+            // the author's comment
+            let fitted = gz_ui::text::fit(
+                painter.ctx(),
+                &body,
+                gz_ui::Tx::raw(n.comment.as_str()),
+                inner,
+                gz_ui::Clip::End,
+            );
             let job = LayoutJob::single_section(
                 fitted.text.to_string(),
                 TextFormat {
@@ -892,18 +955,20 @@ impl Canvas {
         for (k, line) in n.lines.iter().take(n.b.lines).enumerate() {
             let ly = a.y + (n.b.lines_y + LINE * k as f32 + LINE * 0.5) * s;
             if line.key.is_empty() {
+                // the line without a name is the layout's "+N more"
                 paint_fit(
                     painter,
                     &body,
                     pos2(a.x + inset, ly),
                     Palette::alpha(p.text_secondary, text_a),
-                    &line.value,
+                    &shown(painter.ctx(), &line.value),
                     inner,
                 );
                 continue;
             }
-            // a parameter reads "name: value", a condition "Title what"
-            let key = if line.cond.is_empty() { format!("{}:", line.key) } else { line.key.clone() };
+            // a parameter reads "name: value", a condition "Title what"; the name is the editor's
+            let name = cond_or_param(painter.ctx(), line);
+            let key = if line.cond.is_empty() { format!("{name}:") } else { name };
             let share = if line.value.is_empty() {
                 1.0
             } else if line.cond.is_empty() {
@@ -994,17 +1059,23 @@ impl Canvas {
             x += icon + 6.0 * s;
             let mut right = a.x + w - inset;
             if act.exit {
-                let tw = gz_ui::text::width(painter.ctx(), &body, "exit");
-                painter.text(
+                // the slot an action runs in
+                let word = gz_ui::Tx::ctx("badge", "exit");
+                let tw = gz_ui::text::width(painter.ctx(), &body, &word);
+                gz_ui::text::paint(
+                    painter,
+                    &body,
                     pos2(right - tw, cy),
                     Align2::LEFT_CENTER,
-                    "exit",
-                    body.clone(),
                     Palette::alpha(p.text_muted, text_a),
+                    &word,
+                    None,
+                    gz_ui::Clip::End,
                 );
                 right -= tw + 6.0 * s;
             }
-            let label = if act.summary.is_empty() { act.title.clone() } else { format!("{}:", act.title) };
+            let title = kind_shown(painter.ctx(), &act.title);
+            let label = if act.summary.is_empty() { title } else { format!("{title}:") };
             let tw =
                 paint_fit(painter, &body, pos2(x, cy), Palette::alpha(p.text, text_a), &label, right - x);
             let sx = x + tw + 5.0 * s;
@@ -1029,13 +1100,16 @@ impl Canvas {
                     Palette::alpha(p.hover, text_a),
                 );
             }
-            let more = format!("+{} more", n.b.actions - n.b.action_rows);
-            painter.text(
+            let more = gz_ui::tr!("+{n} more", n = n.b.actions - n.b.action_rows);
+            gz_ui::text::paint(
+                painter,
+                &body,
                 pos2(a.x + inset, top + row_h * 0.5),
                 Align2::LEFT_CENTER,
-                more,
-                body.clone(),
                 Palette::alpha(p.text_secondary, text_a),
+                more,
+                None,
+                gz_ui::Clip::End,
             );
         }
     }
@@ -1073,7 +1147,9 @@ impl Canvas {
                     Flow::Right => pos2(c.x + 8.0 * s, c.y - 8.0 * s),
                     Flow::Down => pos2(c.x + 6.0 * s, c.y + 10.0 * s),
                 };
-                let tw = gz_ui::text::width(painter.ctx(), &label_font, &pin.name).min(160.0 * s);
+                let name = pin_shown(painter.ctx(), &pin.name);
+                let tw = gz_ui::text::width(painter.ctx(), &label_font, gz_ui::Tx::raw(name.as_str()))
+                    .min(160.0 * s);
                 let plate = Rect::from_min_size(
                     pos2(at.x - 2.0, at.y - label_font.size * 0.7),
                     vec2(tw + 4.0, label_font.size * 1.4),
@@ -1088,16 +1164,25 @@ impl Canvas {
                     } else {
                         Palette::alpha(role_color(p, pin.role, by_pin), pa)
                     },
-                    &pin.name,
+                    &name,
                     160.0 * s,
                 );
             }
             if over {
                 painter.circle_filled(c, halo, Palette::alpha(p.pin_hot, 0.15));
-                let mut t = format!("{}: ", look::pretty(&pin.name));
-                t.push_str(if pin.desc.is_empty() { "a way out of this node" } else { &pin.desc });
-                t.push_str(if pin.connected { "\nDrag to wire it elsewhere" } else { "\nDrag to wire it" });
-                self.tip = t;
+                let ctx = painter.ctx();
+                // the pin's name and what it means, as the catalog says them
+                let name = pin_shown(ctx, &pin.name);
+                let what = if pin.desc.is_empty() {
+                    gz_ui::i18n::t(ctx, "a way out of this node")
+                } else {
+                    kind_shown(ctx, &pin.desc)
+                };
+                let how = gz_ui::i18n::t(
+                    ctx,
+                    if pin.connected { "Drag to wire it elsewhere" } else { "Drag to wire it" },
+                );
+                self.tip = format!("{name}: {what}\n{how}");
             }
             let rr = if over { pr * 1.4 } else { pr };
             let fill =
@@ -1122,7 +1207,8 @@ impl Canvas {
                     Palette::alpha(if target { p.pin_target } else { p.pin_hot }, 0.18),
                 );
                 if !target && self.tip.is_empty() {
-                    self.tip = "The way into this node\nDrag to wire it from a node".to_owned();
+                    self.tip =
+                        gz_ui::i18n::t(painter.ctx(), "The way into this node\nDrag to wire it from a node");
                 }
             }
             let rr = if over { pr * 1.4 } else { pr };
@@ -1199,8 +1285,11 @@ impl Canvas {
             );
         }
         // red over anything that is not a place for it: releasing there cancels the move
-        let title = look::kind_title(cx.catalog, &act.kind, cx.graph.is_behaviour());
-        let w = gz_ui::text::width(painter.ctx(), &Font::Body.id(), &title).min(200.0) + 34.0;
+        let title =
+            kind_shown(painter.ctx(), &look::kind_title(cx.catalog, &act.kind, cx.graph.is_behaviour()));
+        let w = gz_ui::text::width(painter.ctx(), &Font::Body.id(), gz_ui::Tx::raw(title.as_str()))
+            .min(200.0)
+            + 34.0;
         let pill = Rect::from_min_size(pos2(mouse.x + 12.0, mouse.y + 4.0), vec2(w, 24.0));
         painter.rect_filled(pill, CornerRadius::same(4), Palette::alpha(p.overlay, 0.95));
         painter.rect_stroke(
@@ -1253,15 +1342,17 @@ impl Canvas {
         let boxr = Rect::from_min_size(bmin, vec2(MINIMAP_W * k, MINIMAP_H * k));
         painter.rect_filled(boxr, CornerRadius::same(6), Palette::alpha(p.overlay, 0.92));
         painter.rect_stroke(boxr, CornerRadius::same(6), Stroke::new(1.0, p.border), StrokeKind::Inside);
+        // the mesh holds the theme's colours: another theme is another mesh
+        let made_for = sc.edit ^ p.key();
         let mesh = match &self.minimap_cache {
-            Some((edit, at, m)) if *edit == sc.edit && *at == bmin && self.minimap_k == k => m.clone(),
+            Some((edit, at, m)) if *edit == made_for && *at == bmin && self.minimap_k == k => m.clone(),
             _ => {
                 let mut m = mm.mesh.clone();
                 for v in &mut m.vertices {
                     v.pos = bmin + v.pos.to_vec2() * k;
                 }
                 let m = Arc::new(m);
-                self.minimap_cache = Some((sc.edit, bmin, m.clone()));
+                self.minimap_cache = Some((made_for, bmin, m.clone()));
                 self.minimap_k = k;
                 m
             }
@@ -1307,7 +1398,7 @@ impl Canvas {
         }
         self.minimap_hovered = self.hovered && boxr.contains(mouse);
         if self.minimap_hovered {
-            self.tip = "Minimap: click or drag to move the view".to_owned();
+            self.tip = gz_ui::i18n::t(painter.ctx(), "Minimap: click or drag to move the view");
         }
     }
 
@@ -1328,7 +1419,6 @@ impl Canvas {
             return;
         }
         const ICONS: [Icon; 4] = [Icon::ChevronUp, Icon::ChevronDown, Icon::ChevronLeft, Icon::ChevronRight];
-        const WHERE: [&str; 4] = ["above", "below", "left of", "right of"];
         let font = Font::Small.id();
         let icon = 12.0;
         let (padx, pady) = (8.0, 4.0);
@@ -1338,9 +1428,14 @@ impl Canvas {
             if count == 0 {
                 continue;
             }
-            let label = format!("{count} more");
+            let label = gz_ui::tr!("{n} more", n = count).text(painter.ctx());
             let h = round(Font::Small.line().max(icon) + pady * 2.0);
-            let w = round(padx + icon + 4.0 + gz_ui::text::width(painter.ctx(), &font, &label) + padx);
+            let w = round(
+                padx + icon
+                    + 4.0
+                    + gz_ui::text::width(painter.ctx(), &font, gz_ui::Tx::raw(label.as_str()))
+                    + padx,
+            );
             let a = match side {
                 0 => pos2(self.origin.x + (self.size.x - w) * 0.5, self.origin.y + inset),
                 1 => pos2(self.origin.x + (self.size.x - w) * 0.5, self.origin.y + self.size.y - inset - h),
@@ -1378,11 +1473,25 @@ impl Canvas {
                 p.text_secondary,
             );
             if hot {
-                self.tip = format!(
-                    "{count} {} {} the view. Click to bring the nearest one in",
-                    if count == 1 { "node" } else { "nodes" },
-                    WHERE.get(side).copied().unwrap_or("")
-                );
+                let tip = match side {
+                    0 => gz_ui::tr!(
+                        "{n} {n:node|nodes} above the view. Click to bring the nearest one in",
+                        n = count
+                    ),
+                    1 => gz_ui::tr!(
+                        "{n} {n:node|nodes} below the view. Click to bring the nearest one in",
+                        n = count
+                    ),
+                    2 => gz_ui::tr!(
+                        "{n} {n:node|nodes} left of the view. Click to bring the nearest one in",
+                        n = count
+                    ),
+                    _ => gz_ui::tr!(
+                        "{n} {n:node|nodes} right of the view. Click to bring the nearest one in",
+                        n = count
+                    ),
+                };
+                self.tip = tip.text(painter.ctx());
             }
         }
     }
@@ -1393,14 +1502,14 @@ impl Canvas {
         }
         let now = ctx.input(|i| i.time);
         if now - self.status_at > STATUS_SECONDS {
-            self.status.clear();
+            self.status = gz_ui::Tx::EMPTY;
             return;
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
         let font = Font::Body.id();
         let (shown, _) =
             gz_ui::text::ellipsize(ctx, &font, &self.status, self.size.x - 40.0, gz_ui::Clip::End);
-        let w = gz_ui::text::width(ctx, &font, &shown);
+        let w = gz_ui::text::width(ctx, &font, gz_ui::Tx::raw(shown.as_str()));
         let r = Rect::from_min_size(self.origin + vec2(8.0, 8.0), vec2(w + 20.0, Font::Body.line() + 8.0));
         painter.rect_filled(r, CornerRadius::same(6), Palette::alpha(p.overlay, 0.92));
         painter.rect_stroke(r, CornerRadius::same(6), Stroke::new(1.0, p.border_subtle), StrokeKind::Inside);
@@ -1420,19 +1529,21 @@ fn hatch(painter: &Painter, r: Rect, color: Color32, s: f32) {
     }
 }
 
-/// What a node too small to read says on hover.
-fn node_tip(n: &SceneNode, marks: Option<&crate::derived::NodeMarks>) -> String {
-    let mut t = format!("{}\n{}", n.title, n.id);
+/// What a node too small to read says on hover, in the window's language.
+fn node_tip(ctx: &egui::Context, n: &SceneNode, marks: Option<&crate::derived::NodeMarks>) -> String {
+    let mut t = format!("{}\n{}", kind_shown(ctx, &n.title), n.id);
     if !n.summary.is_empty() {
         t.push('\n');
         t.push_str(&n.summary);
     }
     if n.disabled {
-        t.push_str("\nDisabled: the game passes through it");
+        t.push('\n');
+        t.push_str(&gz_ui::i18n::t(ctx, "Disabled: the game passes through it"));
     }
     if let Some(m) = marks {
+        // the validator's English
         t.push('\n');
-        t.push_str(&m.first);
+        t.push_str(&shown(ctx, &m.first));
     }
     t
 }

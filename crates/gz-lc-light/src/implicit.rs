@@ -84,7 +84,7 @@ pub fn implicit_lighting(
     if input.params.quality == QUALITY_DRAFT {
         return Ok(Vec::new());
     }
-    ctl.stage("Sorting faces...");
+    ctl.stage("sorting the faces");
     let mut by_texture: std::collections::BTreeMap<u32, Vec<FaceId>> = std::collections::BTreeMap::new();
     for &f in mesh.faces() {
         let Some(face) = mesh.face(f) else { continue };
@@ -100,7 +100,7 @@ pub fn implicit_lighting(
     for (tid, faces) in by_texture {
         ctl.check()?;
         let Some(tex) = textures.get(tid as usize) else { continue };
-        ctl.stage(&format!("Lighting implicit map '{}'...", tex.name));
+        ctl.stage(&format!("the texture {}", tex.name));
         for &f in &faces {
             if let Some(face) = mesh.face_mut(f) {
                 let tc = face.tc0();
@@ -117,17 +117,16 @@ pub fn implicit_lighting(
                 nosun: input.nosun,
                 linear: input.linear,
             };
-            light_texture(&env, tex.width, tex.height, &faces)
+            light_texture(&env, tex.width, tex.height, &faces, ctl)
         };
+        ctl.check()?;
         let mut lmap = lmap;
-        ctl.stage("Processing lightmap...");
         for r in (1..=254).rev() {
             if !apply_borders(&mut lmap, r) {
                 break;
             }
         }
 
-        ctl.stage("Mixing lighting with texture...");
         let Some(tex) = textures.get_mut(tid as usize) else { continue };
         let (w, h) = (tex.width, tex.height);
         let Some(surface) = tex.surface.as_mut() else {
@@ -148,7 +147,7 @@ pub fn implicit_lighting(
 
 /// Executes the implicit light over every row: a texel takes the light of each of its jittered
 /// samples on every face that holds it.
-fn light_texture(env: &LightEnv<'_>, w: u32, h: u32, faces: &[FaceId]) -> LmLayer {
+fn light_texture(env: &LightEnv<'_>, w: u32, h: u32, faces: &[FaceId], ctl: &Ctl<'_>) -> LmLayer {
     let mut lmap = LmLayer::new(w, h);
     let (wu, hu) = (w as usize, h as usize);
     if wu == 0 || hu == 0 {
@@ -173,6 +172,9 @@ fn light_texture(env: &LightEnv<'_>, w: u32, h: u32, faces: &[FaceId]) -> LmLaye
     lmap.surface.par_chunks_mut(wu).zip(lmap.marker.par_chunks_mut(wu)).take(hu).enumerate().for_each_init(
         LightCache::default,
         |cache, (v, (srow, mrow))| {
+            if ctl.cancelled() {
+                return;
+            }
             for (u, (s, m)) in srow.iter_mut().zip(mrow.iter_mut()).enumerate() {
                 let mut c = ColorC::default();
                 let mut count = 0u32;

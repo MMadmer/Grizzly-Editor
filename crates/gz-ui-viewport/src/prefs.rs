@@ -52,13 +52,16 @@ fn next_adapter(ed: &Arc<Editor>) {
     settings.save_soon(ed);
 }
 
-fn adapter_status(ed: &Arc<Editor>) -> String {
+fn adapter_status(ed: &Arc<Editor>) -> gz_ui::Tx<'static> {
     let settings = gz_app::EditorSettings::of(ed);
     let active = gz_app::gpu::Gpu::of(ed).adapters().map(|a| a.active).unwrap_or_default();
     let wanted = settings.gpu_adapter();
-    let wanted = if wanted.is_empty() { "the system's choice".to_owned() } else { wanted };
-    let active = if active.is_empty() { "unknown".to_owned() } else { active };
-    format!("Uses {active}; the next start uses {wanted}.")
+    // the adapters' names are data; what stands for a missing one is the editor's words
+    let active =
+        if active.is_empty() { gz_ui::Tx::ctx("adapter", "unknown") } else { gz_ui::Tx::raw(active) };
+    let wanted =
+        if wanted.is_empty() { gz_ui::Tx::from("the system's choice") } else { gz_ui::Tx::raw(wanted) };
+    gz_ui::tr!("Uses {active}; the next start uses {wanted}.", active = active, wanted = wanted)
 }
 
 const RENDERING: [PrefRow; 2] = [

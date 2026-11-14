@@ -956,8 +956,19 @@ impl EdgeQSlim {
     /// `decimate(target, max_error)`: contractions until no more than `target` faces are
     /// left or the cheapest one costs more than `max_error`.
     pub fn decimate(&mut self, target: u32, max_error: f32) -> bool {
+        self.decimate_until(target, max_error, &|| false)
+    }
+
+    /// [`Self::decimate`] that gives up, answering `false`, once `stop` says so - asked every few
+    /// thousand contractions.
+    pub fn decimate_until(&mut self, target: u32, max_error: f32, stop: &(dyn Fn() -> bool + Sync)) -> bool {
         let max_error = max_error + EDGE_BASE_ERROR;
+        let mut n = 0usize;
         while self.valid_faces > target {
+            n += 1;
+            if n.is_multiple_of(4096) && stop() {
+                return false;
+            }
             let Some(&top) = self.heap.first() else { return false };
             if -self.key(top) > max_error {
                 return true;

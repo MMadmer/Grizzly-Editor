@@ -9,7 +9,7 @@ use gz_ui::{Font, Icon, Tone, icon_button, metrics, palette};
 
 /// A list's header: its title in the strong face and a + at its right end. Returns whether the
 /// + was pressed.
-pub fn local_list_header(ui: &mut Ui, title: &str, tip: &str) -> bool {
+pub fn local_list_header(ui: &mut Ui, title: &'static str, tip: &'static str) -> bool {
     let p = palette(ui.ctx());
     let w = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(w, metrics::ICON_BUTTON), Sense::hover());
@@ -30,6 +30,18 @@ pub fn local_list_header(ui: &mut Ui, title: &str, tip: &str) -> bool {
     let mut child =
         ui.new_child(egui::UiBuilder::new().id_salt(("gz-ui-pda.list_header", title)).max_rect(b));
     icon_button(&mut child, Icon::Plus, tip, false, true).clicked()
+}
+
+/// A line of the preview's action log or its toast: the preview's own notes ("The PDA closes",
+/// "The game calls f()") are the editor's words, an action as the layout writes it is data.
+#[must_use]
+pub fn local_log_line(line: &str) -> gz_ui::Tx<'static> {
+    const OWN: [&str; 4] = ["The PDA closes", "Quests receive signal ", "The game calls ", "mod.ltx: "];
+    if OWN.iter().any(|p| line.starts_with(p)) {
+        gz_ui::Tx::ui(line.to_owned())
+    } else {
+        gz_ui::Tx::raw(line.to_owned())
+    }
 }
 
 /// What a [`local_code_view`] was asked to do this frame.
@@ -249,17 +261,18 @@ fn warm_up(ui: &mut Ui, id: egui::Id, value: &str, font: &egui::FontId) -> bool 
     }
     ctx.request_repaint();
     let share = (end as f32 / value.len() as f32 * 100.0).round();
-    gz_ui::state::busy_line(ui, &format!("Laying out the text: {share:.0}%"));
+    gz_ui::state::busy_line(ui, gz_ui::tr!("Laying out the text: {share}%", share = format!("{share:.0}")));
     false
 }
 
 /// The text as Lua data in four colours of the palette: keys, strings, numbers, comments; the
-/// rest in the text colour. The job is kept per text, so a frame that changes nothing lexes
-/// nothing.
+/// rest in the text colour. The job is kept per text and theme, so a frame that changes nothing
+/// lexes nothing.
 fn lua_job(ctx: &egui::Context, text_: &str, font: &egui::FontId) -> egui::text::LayoutJob {
     use std::hash::{Hash, Hasher};
     let mut h = rustc_hash::FxHasher::default();
     text_.hash(&mut h);
+    palette(ctx).key().hash(&mut h);
     let want = h.finish();
     let key = egui::Id::unique("gz-ui-pda.lua_job");
     if let Some((k, job)) = ctx.data(|d| d.get_temp::<(u64, std::sync::Arc<egui::text::LayoutJob>)>(key))

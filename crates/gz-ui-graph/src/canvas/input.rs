@@ -157,7 +157,7 @@ impl Canvas {
         if wheel_busy {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
-        self.hover_tip(sc, cx, mouse, hovered);
+        self.hover_tip(ctx, sc, cx, mouse, hovered);
     }
 
     /// The left button went down on the canvas.
@@ -650,8 +650,13 @@ impl Canvas {
             pin: l.pin.to_string(),
             to: t.id.to_string(),
         }));
-        let msg = format!("Removed the wire {}.{} -> {}", f.id, l.pin, t.id);
-        self.set_status(ctx, &msg);
+        let msg = gz_ui::tr!(
+            "Removed the wire {from}.{pin} -> {to}",
+            from = f.id.as_str(),
+            pin = l.pin.as_str(),
+            to = t.id.as_str()
+        );
+        self.set_status(ctx, msg);
         self.hot_link = None;
     }
 
@@ -694,7 +699,7 @@ impl Canvas {
 
     fn end_link(&mut self, ctx: &egui::Context, sc: &Scene, cx: &mut CanvasCx<'_>, mouse: Pos2, grab: f32) {
         let Some(l) = self.linking.take() else { return };
-        self.status.clear();
+        self.status = gz_ui::Tx::EMPTY;
         match l {
             Linking::From { node: from, pin } => {
                 let mut node = self.hit_node(sc, cx.view, mouse);
@@ -705,7 +710,8 @@ impl Canvas {
                             && let Err(why) = doc::can_link(cx.catalog, cx.graph, &from, &t.id)
                         {
                             if t.id != from {
-                                self.set_status(ctx, &why);
+                                // the graph's own English
+                                self.set_status(ctx, gz_ui::Tx::ui(why));
                             }
                             return;
                         }
@@ -746,7 +752,7 @@ impl Canvas {
                             pin: pin.name.clone(),
                             to: to.to_string(),
                         })),
-                        Err(why) => self.set_status(ctx, &why),
+                        Err(why) => self.set_status(ctx, gz_ui::Tx::ui(why)),
                     }
                     return;
                 }
@@ -763,9 +769,15 @@ impl Canvas {
                                 pin: pin.name.clone(),
                                 to: to.to_string(),
                             })),
-                            Err(why) => self.set_status(ctx, &why),
+                            Err(why) => self.set_status(ctx, gz_ui::Tx::ui(why)),
                         },
-                        None => self.set_status(ctx, &format!("{} has no way out to wire from", f.title)),
+                        None => self.set_status(
+                            ctx,
+                            gz_ui::tr!(
+                                "{node} has no way out to wire from",
+                                node = gz_ui::Tx::ui_in("kind", f.title.clone())
+                            ),
+                        ),
                     }
                     return;
                 }
@@ -797,7 +809,7 @@ impl Canvas {
             return;
         }
         if let Err(why) = doc::can_link(cx.catalog, cx.graph, &new_from, &new_to) {
-            self.set_status(ctx, &why);
+            self.set_status(ctx, gz_ui::Tx::ui(why));
             return;
         }
         let ops = vec![
@@ -817,8 +829,9 @@ impl Canvas {
         cx.ops.push(Op::Doc(DocOp::ApplyOps(Value::from(ops))));
     }
 
-    /// What the pointer is on, said on hover.
-    fn hover_tip(&mut self, sc: &Scene, cx: &CanvasCx<'_>, mouse: Pos2, hovered: bool) {
+    /// What the pointer is on, said on hover, in the window's language.
+    fn hover_tip(&mut self, ctx: &egui::Context, sc: &Scene, cx: &CanvasCx<'_>, mouse: Pos2, hovered: bool) {
+        let t = |en: &'static str| gz_ui::i18n::t(ctx, en);
         let busy = self.drag.is_some()
             || self.linking.is_some()
             || self.rewire.is_some()
@@ -830,38 +843,44 @@ impl Canvas {
         }
         if let Some(h) = self.hot_action {
             if h.more {
-                self.tip = "Show the rest of the actions in the Details panel".to_owned();
+                self.tip = t("Show the rest of the actions in the Details panel");
             } else if let Some(sn) = sc.nodes.get(h.node)
                 && let Some(row) = sn.action_at(h.row)
             {
-                let mut t = format!(
-                    "{} {}: {}",
-                    if row.exit { "On exit" } else { "On enter" },
-                    row.index + 1,
-                    row.title
-                );
+                let slot = if row.exit {
+                    gz_ui::tr!("On exit {n}", n = row.index + 1)
+                } else {
+                    gz_ui::tr!("On enter {n}", n = row.index + 1)
+                };
+                let mut tip =
+                    format!("{}: {}", slot.text(ctx), gz_ui::Tx::ui_in("kind", row.title.as_str()).text(ctx));
                 if !row.summary.is_empty() {
-                    t.push('\n');
-                    t.push_str(&row.summary);
+                    tip.push('\n');
+                    // what it acts on: names and values, as they are
+                    tip.push_str(&row.summary);
                 }
-                t.push_str("\nDouble-click to edit it, drag to move it");
-                self.tip = t;
+                tip.push('\n');
+                tip.push_str(&t("Double-click to edit it, drag to move it"));
+                self.tip = tip;
             }
             return;
         }
         if self.hot_knot.is_some() {
-            self.tip = "A reroute: drag to move it, double-click to remove it".to_owned();
+            self.tip = t("A reroute: drag to move it, double-click to remove it");
             return;
         }
         if let Some(li) = self.hot_link
             && let Some(l) = sc.links.get(li)
-            && let (Some(f), Some(t)) = (sc.nodes.get(l.from as usize), sc.nodes.get(l.to as usize))
+            && let (Some(f), Some(to)) = (sc.nodes.get(l.from as usize), sc.nodes.get(l.to as usize))
         {
+            let wire = if l.pin.as_str() == "next" {
+                format!("{} -> {}", f.id, to.id)
+            } else {
+                format!("{} -> {} ({})", f.id, to.id, l.pin)
+            };
             self.tip = format!(
-                "{} -> {}{}\nDouble-click to add a reroute, Alt+click to remove, Alt+drag an end to rewire",
-                f.id,
-                t.id,
-                if l.pin.as_str() == "next" { String::new() } else { format!(" ({})", l.pin) }
+                "{wire}\n{}",
+                t("Double-click to add a reroute, Alt+click to remove, Alt+drag an end to rewire")
             );
         }
         let _ = (cx, mouse);

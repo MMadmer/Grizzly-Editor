@@ -26,8 +26,8 @@ use gz_ui::pick::{PickItem, PickList, pick_popup};
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
 use gz_ui::{
-    Button, Check, Font, Icon, Kind, PropFlags, PropertyGrid, SearchField, Section, Tone, Toolbar,
-    icon_button, metrics, palette, segmented,
+    Button, Check, Font, Icon, Kind, PropFlags, PropertyGrid, SearchField, Section, TipExt, Tone, Toolbar,
+    Tx, icon_button, metrics, palette, segmented, tr,
 };
 use gz_ui::{Col, ItemRows};
 use gz_world::{
@@ -514,7 +514,7 @@ impl WorldDoc {
                         args([("action", s("focus")), ("object", s(&name)), ("select", Value::Bool(true))]),
                         |reply, ctx| {
                             if !call::ok(reply) {
-                                gz_ui::state::toast(ctx, Tone::Warning, &call::error_text(reply));
+                                gz_ui::state::toast(ctx, Tone::Warning, Tx::ui(call::error_text(reply)));
                             }
                         },
                     );
@@ -528,11 +528,12 @@ impl WorldDoc {
     /// Takes everything of the original game out: reversible, but it is five decisions at once,
     /// so it asks.
     fn ask_empty_world(&mut self, ctx: &egui::Context) {
-        let kept: Vec<String> = RULE_TEXT
+        // the rules' captions: the editor's own words, shown in the window's language
+        let kept: Vec<gz_ui::Tx<'static>> = RULE_TEXT
             .iter()
             .zip(self.world.keep)
             .filter(|(_, keep)| *keep)
-            .map(|((caption, _), _)| (*caption).to_owned())
+            .map(|((caption, _), _)| gz_ui::Tx::from(*caption))
             .collect();
         if kept.is_empty() {
             gz_ui::state::toast(
@@ -544,12 +545,12 @@ impl WorldDoc {
         }
         let spec = ConfirmSpec {
             id: "empty_world".to_owned(),
-            title: "Empty World".to_owned(),
-            headline: "Take everything of the original game out of this mode?".to_owned(),
+            title: "Empty World".into(),
+            headline: "Take everything of the original game out of this mode?".into(),
             items: kept,
             total: 0,
-            consequence: "Your own characters and quests stay. It is saved to mod.ltx at once; Keep Everything brings it back.".to_owned(),
-            action: "Empty World".to_owned(),
+            consequence: "Your own characters and quests stay. It is saved to mod.ltx at once; Keep Everything brings it back.".into(),
+            action: "Empty World".into(),
             destructive: false,
         };
         let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
@@ -621,7 +622,11 @@ impl WorldDoc {
     fn draw_rules(&mut self, ui: &mut Ui) {
         let choices = self.world.choice_count();
         let p = palette(ui.ctx());
-        let label_w = em(12.0);
+        // the captions' column is as wide as the widest of them in the window's language
+        let label_w = RULE_TEXT
+            .iter()
+            .map(|(caption, _)| text::width(ui.ctx(), &Font::Body.id(), *caption) + em(1.0))
+            .fold(em(12.0), f32::max);
         for (i, (caption, hint)) in RULE_TEXT.iter().enumerate() {
             let key = RULES.get(i).copied().unwrap_or("");
             let keep = self.world.keep.get(i).copied().unwrap_or(true);
@@ -631,8 +636,8 @@ impl WorldDoc {
                 ui.horizontal(|ui| {
                     ui.set_height(TABLE_ROW);
                     local_cell(ui, Vec2::new(label_w, metrics::FRAME), Layout::left_to_right(Align::Center), |ui| {
-                        let _ = text::label(ui, caption, Font::Body, p.text, Clip::End)
-                            .on_hover_text(format!("{hint}\nmod.ltx: {key}"));
+                        let _ = text::label(ui, *caption, Font::Body, p.text, Clip::End)
+                            .tip(tr!("{hint}\nmod.ltx: {key}", hint = Tx::from(*hint), key = key));
                     });
                     let before = state;
                     if segmented(ui, &mut state, &RULE_STATES, None) && state != before {
@@ -655,7 +660,7 @@ impl WorldDoc {
                     }
                 })
                 .response
-                .on_hover_text("Remove: not in the mode's world. Keep: as in the original game. Player Decides: a choice on the new-game screen, kept unless the player turns it off.");
+                .tip("Remove: not in the mode's world. Keep: as in the original game. Player Decides: a choice on the new-game screen, kept unless the player turns it off.");
             });
         }
         ui.add_space(4.0);
@@ -695,15 +700,14 @@ impl WorldDoc {
                     {
                         self.actions.push(Action::Focus(st.name.clone()));
                     }
-                    let line = format!(
-                        "{}  at {:.1}, {:.1}, {:.1}",
-                        level_label(&self.captions, &st.level),
-                        st.position[0],
-                        st.position[1],
-                        st.position[2]
+                    let line = tr!(
+                        "{level}  at {position}",
+                        level = level_label(&self.captions, &st.level),
+                        position =
+                            format!("{:.1}, {:.1}, {:.1}", st.position[0], st.position[1], st.position[2])
                     );
-                    let _ = text::label(ui, &line, Font::Body, p.text, Clip::End)
-                        .on_hover_text(format!("{}: {}", st.source, st.name));
+                    let _ = text::label(ui, line, Font::Body, p.text, Clip::End)
+                        .tip(Tx::raw(format!("{}: {}", st.source, st.name)));
                 });
             });
         }
@@ -711,7 +715,7 @@ impl WorldDoc {
             let _ = text::status(
                 ui,
                 Tone::Error,
-                &format!("A module has one Player Start: the build refuses {}.", self.starts.len()),
+                tr!("A module has one Player Start: the build refuses {n}.", n = self.starts.len()),
             );
         }
         ui.add_space(2.0);
@@ -746,12 +750,12 @@ impl WorldDoc {
         );
         ui.add_space(2.0);
         ui.horizontal(|ui| {
-            let _ = text::label(ui, "Money", Font::Body, p.text_secondary, Clip::End).on_hover_text(
+            let _ = text::label(ui, "Money", Font::Body, p.text_secondary, Clip::End).tip(
                 "The money a new game begins with. Empty: what the new-game screen gives.\nmod.ltx: money",
             );
             ui.add_space(8.0);
             let money = (self.kit.money >= 0).then_some(i64::from(self.kit.money));
-            if let Some(v) = local_number_text(ui, "world.money", money, "the screen's", em(8.0)) {
+            if let Some(v) = local_number_text(ui, "world.money", money, Tx::from("the screen's"), em(8.0)) {
                 self.kit.money = v.map_or(-1, |n| i32::try_from(n).unwrap_or(i32::MAX));
                 self.kit_dirty = true;
             }
@@ -783,7 +787,7 @@ impl WorldDoc {
                         let Some(it) = items.get(row) else { return };
                         if col == 0 {
                             let mut section = it.section.clone();
-                            let none = it.section.is_empty().then_some("Pick an item...");
+                            let none = it.section.is_empty().then_some(Tx::from("Pick an item..."));
                             if item_picker(ui, &format!("world.kit.{row}"), &mut section, lists, none)
                                 && !section.is_empty()
                             {
@@ -858,7 +862,7 @@ impl WorldDoc {
 
     /// Two ways, one list: the first segment empties it (everywhere), the second lets levels be
     /// picked (`Scope`). Returns the list when it changed.
-    fn scope(&mut self, ui: &mut Ui, key: &str, labels: [&str; 2], area: bool) {
+    fn scope(&mut self, ui: &mut Ui, key: &str, labels: [&'static str; 2], area: bool) {
         let ctx = ui.ctx().clone();
         let mut limited = if area { self.area_limited } else { self.levels_limited };
         let mut pick = usize::from(limited);
@@ -887,7 +891,7 @@ impl WorldDoc {
         };
         let mut changed = false;
         if !shown.is_empty() {
-            let refs: Vec<&str> = shown.iter().map(String::as_str).collect();
+            let refs: Vec<Tx<'_>> = shown.iter().map(|s| Tx::raw(s.as_str())).collect();
             if let Some(r) = chips(ui, key, &refs, true) {
                 let list = if area { &mut self.world.area } else { &mut self.world.levels };
                 if r < list.len() {
@@ -904,7 +908,7 @@ impl WorldDoc {
                 let _ = text::status(
                     ui,
                     Tone::Warning,
-                    &format!("Not in the linked game: {}.", unknown.join(", ")),
+                    tr!("Not in the linked game: {names}.", names = unknown.join(", ")),
                 );
             }
         }
@@ -926,7 +930,7 @@ impl WorldDoc {
                 .map(|(name, caption)| {
                     let label =
                         if caption.is_empty() { name.clone() } else { format!("{name}  -  {caption}") };
-                    PickItem::new(name.as_str(), label)
+                    PickItem::new(name.as_str(), Tx::raw(label))
                 })
                 .collect();
             let empty =
@@ -958,9 +962,9 @@ impl WorldDoc {
         };
         if !game.ok {
             let text_ = if game.error.is_empty() {
-                "Link a game to list its transitions."
+                Tx::from("Link a game to list its transitions.")
             } else {
-                game.error.as_str()
+                Tx::ui(game.error.as_str())
             };
             let _ = text::status(ui, Tone::Muted, text_);
             return;
@@ -978,7 +982,8 @@ impl WorldDoc {
         let mut lock_level: Option<bool> = None;
         let mut picked_level: Option<String> = None;
         let preview = self.level_label(&self.trans_level);
-        let rows: Vec<String> = self.level_rows.iter().map(|(_, label)| label.clone()).collect();
+        let rows: Vec<Tx<'static>> =
+            self.level_rows.iter().map(|(_, label)| Tx::raw(label.clone())).collect();
         let current = self.level_rows.iter().position(|(name, _)| *name == self.trans_level);
         let level_locked = self.world.locked_levels.contains(&self.trans_level);
         PropertyGrid::new("world").label_frac(0.25).show(ui, |g| {
@@ -990,7 +995,7 @@ impl WorldDoc {
                 |ui| {
                     let w = ui.available_width().min(em(24.0));
                     local_cell(ui, Vec2::new(w, metrics::FRAME), Layout::left_to_right(Align::Center), |ui| {
-                        row_combo(ui, "world.trans_level", &preview, false, &rows, current)
+                        row_combo(ui, "world.trans_level", Tx::raw(preview.as_str()), false, &rows, current)
                     })
                     .inner
                 },
@@ -1079,12 +1084,16 @@ impl WorldDoc {
                         Layout::left_to_right(Align::Center),
                         |ui| {
                             ui.add_space(6.0);
-                            let tip = format!(
-                                "{}\nat {:.1}, {:.1}, {:.1}",
-                                t.name, t.position[0], t.position[1], t.position[2]
+                            let tip = tr!(
+                                "{name}\nat {position}",
+                                name = t.name.as_str(),
+                                position = format!(
+                                    "{:.1}, {:.1}, {:.1}",
+                                    t.position[0], t.position[1], t.position[2]
+                                )
                             );
-                            let _ =
-                                text::label(ui, &t.name, Font::Body, p.text, Clip::End).on_hover_text(tip);
+                            let _ = text::label(ui, Tx::raw(t.name.as_str()), Font::Body, p.text, Clip::End)
+                                .tip(tip);
                         },
                     );
                     local_cell(
@@ -1093,8 +1102,8 @@ impl WorldDoc {
                         Layout::left_to_right(Align::Center),
                         |ui| {
                             ui.add_space(6.0);
-                            let _ = text::label(ui, &to, Font::Body, p.text, Clip::End)
-                                .on_hover_text(t.to_level.as_str());
+                            let _ = text::label(ui, Tx::raw(to.as_str()), Font::Body, p.text, Clip::End)
+                                .tip(Tx::raw(t.to_level.as_str()));
                         },
                     );
                     let by = self.world.closed_by(&t.name, &t.level, &t.to_level);
@@ -1115,7 +1124,7 @@ impl WorldDoc {
                     let resp =
                         Check::new(&mut closed, "").width(metrics::FRAME).enabled(own, tip).show(&mut child);
                     let flipped = resp.changed();
-                    let _ = resp.on_hover_text(tip);
+                    let _ = resp.tip(tip);
                     if flipped {
                         toggled = Some((t.name.clone(), closed));
                     }
@@ -1148,7 +1157,7 @@ impl WorldDoc {
                     let _ = text::status(
                         ui,
                         Tone::Warning,
-                        &format!("Closed, but not in the linked game: {name}"),
+                        tr!("Closed, but not in the linked game: {name}", name = name.as_str()),
                     );
                 });
             });
@@ -1161,9 +1170,9 @@ impl WorldDoc {
 
     fn draw_page(&mut self, ui: &mut Ui) {
         let text_ = self.manifest.as_ref().map_or_else(String::new, |m| mode_text(m, self.modes.as_deref()));
-        let _ = text::prose(ui, &text_).on_hover_text("A new game reads these rules once and keeps them in its saves. Quests change them while the game runs.");
+        let _ = text::prose(ui, Tx::ui(text_)).tip("A new game reads these rules once and keeps them in its saves. Quests change them while the game runs.");
         ui.add_space(6.0);
-        let offered = format!("{} of {MAX_PLAYER_CHOICES} offered", self.world.choice_count());
+        let offered = tr!("{n} of {max} offered", n = self.world.choice_count(), max = MAX_PLAYER_CHOICES);
         if Section::new("world.original", "Original Game").count(&offered).show(ui).open {
             ui.add_space(4.0);
             self.draw_rules(ui);
@@ -1175,9 +1184,9 @@ impl WorldDoc {
             ui.add_space(8.0);
         }
         let kit_right = if !self.kit.declared {
-            "The new-game screen's".to_owned()
+            Tx::from("The new-game screen's")
         } else {
-            format!("{} item{}", self.kit.items.len(), if self.kit.items.len() == 1 { "" } else { "s" })
+            tr!("{n} {n:item|items}", n = self.kit.items.len())
         };
         if Section::new("world.kit", "Starting Kit").count(&kit_right).show(ui).open {
             ui.add_space(4.0);
@@ -1188,9 +1197,9 @@ impl WorldDoc {
             ui.add_space(4.0);
             ui.indent("gz-ui-world.more", |ui| {
                 let levels = if self.world.levels.is_empty() {
-                    "Every level".to_owned()
+                    Tx::from("Every level")
                 } else {
-                    format!("{} levels", self.world.levels.len())
+                    tr!("{n} {n:level|levels}", n = self.world.levels.len())
                 };
                 if Section::new("world.applies", "Applies On").count(&levels).show(ui).open {
                     ui.add_space(4.0);
@@ -1203,9 +1212,9 @@ impl WorldDoc {
                     ui.add_space(8.0);
                 }
                 let area = if self.world.area.is_empty() {
-                    "Anywhere".to_owned()
+                    Tx::from("Anywhere")
                 } else {
-                    format!("{} levels", self.world.area.len())
+                    tr!("{n} {n:level|levels}", n = self.world.area.len())
                 };
                 if Section::new("world.area", "Playable Area").count(&area).show(ui).open {
                     ui.add_space(4.0);
@@ -1357,14 +1366,14 @@ impl Document for WorldDoc {
     fn kind(&self) -> &'static str {
         TAB
     }
-    fn label(&self) -> String {
-        "World Rules".to_owned()
+    fn label(&self) -> Tx<'static> {
+        Tx::from("World Rules")
     }
     fn icon(&self) -> Icon {
         Icon::World
     }
-    fn tooltip(&self) -> Option<String> {
-        Some("What the mode keeps of the original game - saved to mod.ltx as you edit".to_owned())
+    fn tooltip(&self) -> Option<Tx<'static>> {
+        Some(Tx::from("What the mode keeps of the original game - saved to mod.ltx as you edit"))
     }
 
     fn toolbar<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>, cx: &mut DocCx<'_>) {
@@ -1404,7 +1413,7 @@ impl Document for WorldDoc {
         if self.status.is_empty() {
             tb.status(SAVED, Tone::Muted);
         } else {
-            tb.status(&self.status, Tone::Error);
+            tb.status(Tx::ui(self.status.as_str()), Tone::Error);
         }
     }
 
@@ -1438,7 +1447,7 @@ impl Document for WorldDoc {
                 Icon::World,
                 "No mod.ltx yet",
                 "World rules live in the module's mod.ltx. Mod Settings makes it.",
-                Some("Open Mod Settings"),
+                Some("Open Mod Settings".into()),
             ) {
                 self.actions.push(Action::OpenSettings);
             }

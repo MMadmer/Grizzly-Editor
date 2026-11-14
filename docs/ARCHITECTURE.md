@@ -170,7 +170,8 @@ last one. The game knows modules and nothing of this editor.
 | `.pdaasset` | `docs/pda/PDA_FORMAT.md` | the game's `xms_pda_layout.script` executed unchanged; `test_pda.py`; the game's `test_pda_layout.lua` |
 | Screens and music files | game `MODDING.md`, "Screens and music" | `test_screens.py`; the game's `Run-ScreensQa.ps1` |
 | The level layers of a module: `.xspawn`, `spawn\custom_data\*.ltx`, `overlay_visuals.ltx`, `overlay.xcform`, the cut, exported `.ogf`, the AI map | game `MODDING.md` "World rules", `XMS_ARCHITECTURE.md` | golden files in `gz-export-level/tests`; `test_level_commands.py`; `test_world.py` |
-| What Play builds: the collision, the game graph, the cross table, the spawn | engine formats | the game loads the level (`test_play_game.py`: a new game, the player, the level's geometry and collision); unit tests hold what the game's loader relies on |
+| What Play builds on a new level: the collision, the game graph, the cross table, the spawn | engine formats | the game loads the level (`test_play_game.py`: a new game, the player, the level's geometry and collision); unit tests hold what the game's loader relies on |
+| Play on a level the linked game has: the module in the root's `modules\<id>` (the module build's own pass), its Player Start (`op = start`, Play's copy only), the new game's modes (`[character_creation] new_game_<mode>_mode` of the root's `configs\axr_options.ltx`), `-start server(all/single/alife/new)` | game `MODDING.md` "World rules", `XMS_ARCHITECTURE.md` 7.2-7.4, `xms_game.cpp` `SyncModesFromNewGameOptions`, `xms_core.cpp` (`$fs_root$\modules`) | `test_level_commands.py` (the root's module, its start and the command line, `dry_run`); `test_play_game.py` (`--with-game`: the new game on the stock level, the installed game unchanged) |
 | A compiled level (`level`, `level.geom`, `level.cform`, the lightmaps, `level.details`) | engine formats | `test_level_compile.py` against its own records (`tools/qa/golden/compile`); the game loads it (`test_play_game.py`) |
 | The installed module (`modules\<id>`, `.new\<id>`, hard links, tooling left out) | this repository's rules, game `xms_core.cpp` | `test_build_job.py`, `test_build_contents.py` |
 | Flat export `gamedata_<id>` | - | `test_build_contents.py` |
@@ -186,7 +187,9 @@ is on disk, read back from the finished archive.
 
 **A level build writes into the open project** (`gamedata\levels\<level>`, `gamedata\spawns`, the build's state
 beside them) and never into the game; a level folder is wiped only when its real path lies below the project's
-levels folder and is no link.
+levels folder and is no link. It is one job of steps that checks first what a later step would refuse, ends at
+the first error (a warning never ends it) and stops within about a second in any phase; on a level the linked
+game has, the compile steps are not needed for the module, and Play builds the module instead of the level.
 
 ## 10. Proof
 

@@ -777,6 +777,17 @@ pub fn compile(
     engine: &Engine,
     lods: LodSource<'_>,
 ) -> Result<Compiled> {
+    compile_until(scene, lib, engine, lods, crate::NEVER)
+}
+
+/// [`compile`] that ends with [`BuildError::stopped`] once `stop` says so: asked per object.
+pub fn compile_until(
+    scene: &SceneState,
+    lib: Lookup<'_>,
+    engine: &Engine,
+    lods: LodSource<'_>,
+    stop: crate::Stop<'_>,
+) -> Result<Compiled> {
     let level_box = level_box(scene, lib)
         .ok_or_else(|| BuildError::new("The level's bounding volume cannot be computed."))?;
     if scene.objects.is_empty() {
@@ -798,6 +809,9 @@ pub fn compile(
     // the tools in class order: glows, scene objects, lights, portals
     for class in ObjClass::ALL {
         for o in scene.of_class(class) {
+            if stop() {
+                return Err(BuildError::stopped());
+            }
             match class {
                 ObjClass::Glow => b.glow(&cx, o, &sectors)?,
                 ObjClass::Light => b.light(o, &sectors, scene)?,
@@ -926,6 +940,9 @@ pub fn compile(
         }
     }
 
+    if stop() {
+        return Err(BuildError::stopped());
+    }
     // the LOD pictures merged into one texture, their quads' coordinates moved into it
     let mut lod_textures = None;
     if !b.lods.is_empty() {

@@ -8,8 +8,8 @@ use gz_ui::list::{Column, list, table_headers};
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
 use gz_ui::{
-    Button, Col, Font, Icon, ItemRows, PropFlags, PropertyGrid, SearchField, Tone, icon_button, icons,
-    metrics, palette,
+    Button, Col, Font, Icon, ItemRows, PropFlags, PropertyGrid, SearchField, TipExt, Tone, Tx, icon_button,
+    icons, metrics, palette, tr,
 };
 
 use crate::characters::{Action, CharactersDoc, field_of, problem_text, problem_tone};
@@ -46,14 +46,14 @@ fn flags(own: &[String], field: &str, base: PropFlags) -> PropFlags {
 /// The sentences of a row's problems under it.
 fn messages(g: &mut Grid<'_>, own: &[String], field: &str) {
     for p in own.iter().filter(|p| field_of(p) == field) {
-        g.message(problem_tone(p), &problem_text(p));
+        g.message(problem_tone(p), Tx::ui(problem_text(p)));
     }
 }
 
 /// The same, as lines of their own outside the grid.
 fn status_lines(ui: &mut Ui, own: &[String], field: &str) {
     for p in own.iter().filter(|p| field_of(p) == field) {
-        let _ = text::status(ui, problem_tone(p), &problem_text(p));
+        let _ = text::status(ui, problem_tone(p), Tx::ui(problem_text(p)));
     }
 }
 
@@ -75,14 +75,15 @@ fn item_label(items: &Indexed, section: &str) -> String {
     items.get(section).map_or_else(|| section.to_owned(), Indexed::label)
 }
 
-/// "sells ..., a stock of N item(s), asks .. and pays .. of the cost".
-fn trade_summary(t: &Trade) -> String {
-    let sells = if t.sells.is_empty() { "its stock only".to_owned() } else { t.sells.join(", ") };
-    format!(
-        "sells {sells}, a stock of {} item(s), asks {} and pays {} of the cost",
-        t.stock.len(),
-        gz_luadata::format_g(f64::from(t.markup), 6),
-        gz_luadata::format_g(f64::from(t.pays), 6)
+/// "sells ..., a stock of N items, asks .. and pays .. of the cost".
+fn trade_summary(t: &Trade) -> Tx<'static> {
+    let sells = if t.sells.is_empty() { Tx::from("its stock only") } else { Tx::raw(t.sells.join(", ")) };
+    tr!(
+        "sells {sells}, a stock of {n} {n:item|items}, asks {markup} and pays {pays} of the cost",
+        sells = sells,
+        n = t.stock.len(),
+        markup = gz_luadata::format_g(f64::from(t.markup), 6),
+        pays = gz_luadata::format_g(f64::from(t.pays), 6)
     )
 }
 
@@ -140,7 +141,8 @@ impl CharactersDoc {
         list(ui, "gz-ui-world.characters.list", Vec2::new(0.0, -foot), |l| {
             // a new character nobody saved yet heads the list
             if fresh {
-                let label = if edit_id.is_empty() { "New character".to_owned() } else { edit_id.clone() };
+                let label =
+                    if edit_id.is_empty() { Tx::from("New character") } else { Tx::raw(edit_id.clone()) };
                 let resp = l.row("##new", true, |ui| {
                     let r = ui.max_rect();
                     let x = r.min.x;
@@ -163,7 +165,7 @@ impl CharactersDoc {
                     );
                     local_dirty_dot(ui.painter(), pos2(r.max.x - 10.0, r.center().y), ui.ctx());
                 });
-                let _ = resp.on_hover_text("Not saved yet");
+                let _ = resp.tip("Not saved yet");
             }
             for &i in shown {
                 let Some(c) = roster.raw.get(i) else { continue };
@@ -203,14 +205,14 @@ impl CharactersDoc {
                     let x = r.min.x + THUMB_W + 6.0;
                     let room = (r.max.x - x - right).max(0.0);
                     let font = Font::Body.id();
-                    let id_w = text::width(ui.ctx(), &font, &c.id).min(room);
+                    let id_w = text::width(ui.ctx(), &font, Tx::raw(c.id.as_str())).min(room);
                     text::paint(
                         ui.painter(),
                         &font,
                         pos2(x, cy),
                         Align2::LEFT_CENTER,
                         p.text,
-                        &c.id,
+                        Tx::raw(c.id.as_str()),
                         Some(room),
                         Clip::End,
                     );
@@ -222,7 +224,7 @@ impl CharactersDoc {
                             pos2(nx, cy),
                             Align2::LEFT_CENTER,
                             p.text_muted,
-                            &name,
+                            Tx::raw(name.as_str()),
                             Some((room - id_w - 8.0).max(0.0)),
                             Clip::End,
                         );
@@ -245,7 +247,7 @@ impl CharactersDoc {
                     }
                 });
                 let tip = if name.is_empty() { c.file.clone() } else { format!("{}\n{name}", c.file) };
-                if resp.on_hover_text(tip).clicked() && !selected {
+                if resp.tip(Tx::raw(tip)).clicked() && !selected {
                     picked = Some(c.file.clone());
                 }
             }
@@ -255,7 +257,7 @@ impl CharactersDoc {
                     Icon::Character,
                     "No characters",
                     "The module's own NPCs live here.",
-                    Some("New Character"),
+                    Some("New Character".into()),
                 ) {
                     new_clicked = true;
                 }
@@ -264,13 +266,9 @@ impl CharactersDoc {
             }
         });
         if !unread.is_empty() {
-            let count = if unread.len() == 1 {
-                "1 file does not read".to_owned()
-            } else {
-                format!("{} files do not read", unread.len())
-            };
+            let count = tr!("{n} {n:file does|files do} not read", n = unread.len());
             let all: Vec<&str> = unread.iter().map(|x| x.as_str()).collect();
-            let _ = text::status(ui, Tone::Error, &count).on_hover_text(all.join("\n"));
+            let _ = text::status(ui, Tone::Error, count).tip(Tx::ui(all.join("\n")));
         }
         if new_clicked {
             self.actions.push(Action::New);
@@ -289,17 +287,24 @@ impl CharactersDoc {
         let p = palette(&ctx);
         let portrait = 64.0;
         let text_w = (width - portrait * 1.42 - 12.0 - 8.0).max(em(4.0));
-        let mut title = if self.name_eng.is_empty() { self.name_rus.clone() } else { self.name_eng.clone() };
-        if title.is_empty() {
-            title = if self.edit.id.is_empty() { "New character".to_owned() } else { self.edit.id.clone() };
-        }
-        let in_game = if self.module_id.is_empty() {
-            "The module has no id yet: Mod Settings".to_owned()
+        let name = if self.name_eng.is_empty() { self.name_rus.clone() } else { self.name_eng.clone() };
+        let title = if !name.is_empty() {
+            Tx::raw(name)
+        } else if self.edit.id.is_empty() {
+            Tx::from("New character")
         } else {
-            format!("In game: {}", game_id(&self.module_id, &self.edit.id))
+            Tx::raw(self.edit.id.clone())
         };
-        let file =
-            if self.edit.file.is_empty() { "Not saved yet".to_owned() } else { self.edit.file.clone() };
+        let in_game = if self.module_id.is_empty() {
+            Tx::from("The module has no id yet: Mod Settings")
+        } else {
+            tr!("In game: {id}", id = game_id(&self.module_id, &self.edit.id))
+        };
+        let file = if self.edit.file.is_empty() {
+            Tx::from("Not saved yet")
+        } else {
+            Tx::raw(self.edit.file.clone())
+        };
         ui.horizontal_top(|ui| {
             let _ = draw_portrait(ui, &self.editor, self.sheets.as_ref(), &self.lists, &self.edit.icon, portrait);
             ui.add_space(12.0);
@@ -307,7 +312,7 @@ impl CharactersDoc {
                 ui.set_width(text_w);
                 let _ = text::label(ui, &title, Font::Title, p.text, Clip::End);
                 let _ = text::label(ui, &in_game, Font::Body, p.text_secondary, Clip::End)
-                    .on_hover_text("The spawn section, the squad section (with _squad) and the profile a placed stalker carries.");
+                    .tip("The spawn section, the squad section (with _squad) and the profile a placed stalker carries.");
                 let _ = text::label(ui, &file, Font::Body, p.text_secondary, Clip::Start);
                 if self.edit.is_abstract {
                     gz_ui::state::badge(ui, "Template", Tone::Muted);
@@ -315,22 +320,22 @@ impl CharactersDoc {
             });
         });
         for problem in self.own.iter().filter(|x| field_of(x).is_empty()) {
-            let _ = text::status(ui, problem_tone(problem), &problem_text(problem));
+            let _ = text::status(ui, problem_tone(problem), Tx::ui(problem_text(problem)));
         }
         if !self.status.is_empty() {
-            let _ = text::status(ui, Tone::Error, &self.status);
+            let _ = text::status(ui, Tone::Error, Tx::ui(self.status.as_str()));
         }
         // the file changed on disk too: the values both sides changed keep the form's
         if !self.conflicts.is_empty() {
             let n = self.conflicts.len();
-            let head = format!(
-                "Changed on disk too: {n} value{}. The form keeps its own; Take Theirs takes the file's.",
-                if n == 1 { "" } else { "s" }
+            let head = tr!(
+                "Changed on disk too: {n} {n:value|values}. The form keeps its own; Take Theirs takes the file's.",
+                n = n
             );
             let lines: Vec<String> = self.conflicts.iter().map(conflict_line).collect();
-            let items: Vec<(&str, Option<&str>)> =
-                lines.iter().map(|l| (l.as_str(), Some("Take Theirs"))).collect();
-            if let Some(i) = gz_ui::state::banner_list(ui, Tone::Warning, &head, &items) {
+            let items: Vec<(Tx<'_>, Option<Tx<'_>>)> =
+                lines.iter().map(|l| (Tx::ui(l.as_str()), Some(Tx::from("Take Theirs")))).collect();
+            if let Some(i) = gz_ui::state::banner_list(ui, Tone::Warning, head, &items) {
                 self.take_theirs(i);
             }
         }
@@ -353,8 +358,8 @@ impl CharactersDoc {
         let base = edit.base.clone();
         PropertyGrid::new(ROLE).label_frac(LABEL_FRAC).show(ui, |g| {
             g.section("Identity", true, None, |g| {
-                let help = format!("a-z, 0-9 and _. The game knows the character as {module}_<id>.");
-                if g.row("ID", &help, flags(own, "id", PropFlags::REQUIRED), 0, |ui| gz_ui::form::row_field(ui, ("gz-ui-world.text", "character.id"), &mut edit.id, "").changed()) == Some(true) {
+                let help = tr!("a-z, 0-9 and _. The game knows the character as {module}_<id>.", module = module.as_str());
+                if g.row("ID", help, flags(own, "id", PropFlags::REQUIRED), 0, |ui| gz_ui::form::row_field(ui, ("gz-ui-world.text", "character.id"), &mut edit.id, "").changed()) == Some(true) {
                     changed = true;
                 }
                 messages(g, own, "id");
@@ -363,16 +368,16 @@ impl CharactersDoc {
                     r.raw.iter().enumerate().filter(|(i, _)| Some(*i) != *sel).map(|(_, c)| (c.id.clone(), c.is_abstract)).collect()
                 });
                 let known = edit.base.is_empty() || others.iter().any(|(id, _)| *id == edit.base);
-                let mut rows = vec!["None".to_owned()];
-                rows.extend(others.iter().map(|(id, template)| if *template { format!("{id}  (template)") } else { id.clone() }));
+                let mut rows = vec![Tx::from("None")];
+                rows.extend(others.iter().map(|(id, template)| if *template { tr!("{id}  (template)", id = id.as_str()) } else { Tx::raw(id.clone()) }));
                 let current = if edit.base.is_empty() { Some(0) } else { others.iter().position(|(id, _)| *id == edit.base).map(|i| i + 1) };
-                let preview_text = if edit.base.is_empty() { "None".to_owned() } else { edit.base.clone() };
+                let preview_text = if edit.base.is_empty() { Tx::from("None") } else { Tx::raw(edit.base.clone()) };
                 let picked = g.row(
                     "Base",
                     "Another character to start from: what this one does not set comes from there, and the starting kits are merged. None: the character stands on its own.",
                     flags(own, "base", PropFlags::NONE),
                     0,
-                    |ui| row_combo(ui, "character.base", &preview_text, !known, &rows, current),
+                    |ui| row_combo(ui, "character.base", preview_text.clone(), !known, &rows, current),
                 );
                 if let Some(Some(i)) = picked {
                     let next = if i == 0 { String::new() } else { others.get(i - 1).map(|(id, _)| id.clone()).unwrap_or_default() };
@@ -399,14 +404,14 @@ impl CharactersDoc {
                 let hint = |lang: &str| inherited.map(|b| text_raw(&b.name, lang)).unwrap_or_default();
                 let (hint_rus, hint_eng) = (hint("rus"), hint("eng"));
                 if g.row("Name (rus)", "What the player reads above the NPC and in dialog.", flags(own, "name", PropFlags::NONE), 0, |ui| {
-                    gz_ui::form::row_field(ui, ("gz-ui-world.text", "character.name_rus"), name_rus, &hint_rus).changed()
+                    gz_ui::form::row_field(ui, ("gz-ui-world.text", "character.name_rus"), name_rus, Tx::raw(hint_rus.as_str())).changed()
                 }) == Some(true)
                 {
                     changed = true;
                 }
                 messages(g, own, "name");
                 if g.row("Name (eng)", "Left empty, an English install reads the Russian name.", PropFlags::NONE, 0, |ui| {
-                    gz_ui::form::row_field(ui, ("gz-ui-world.text", "character.name_eng"), name_eng, &hint_eng).changed()
+                    gz_ui::form::row_field(ui, ("gz-ui-world.text", "character.name_eng"), name_eng, Tx::raw(hint_eng.as_str())).changed()
                 }) == Some(true)
                 {
                     changed = true;
@@ -423,13 +428,13 @@ impl CharactersDoc {
             });
             g.section("Appearance", true, None, |g| {
                 let none = match inherited.filter(|b| !b.visual.is_empty()) {
-                    Some(b) => format!("From {base}: {}", b.visual),
-                    None if !base.is_empty() => "From the base".to_owned(),
-                    None => "Not set".to_owned(),
+                    Some(b) => tr!("From {base}: {value}", base = base.as_str(), value = b.visual.as_str()),
+                    None if !base.is_empty() => Tx::from("From the base"),
+                    None => Tx::from("Not set"),
                 };
                 let help = "The model the NPC spawns with and keeps: meshes\\actors of the linked game and the project. An outfit changes its protection, never its model.";
                 if g.row("Model", help, flags(own, "visual", PropFlags::NONE), 0, |ui| {
-                    list_picker(ui, "character.visual", &mut edit.visual, &lists.visuals, &lists.visuals, Some(&none), !lists.loaded)
+                    list_picker(ui, "character.visual", &mut edit.visual, &lists.visuals, &lists.visuals, Some(none.clone()), !lists.loaded)
                 }) == Some(true)
                 {
                     changed = true;
@@ -448,19 +453,19 @@ impl CharactersDoc {
             });
             g.section("Profile", true, None, |g| {
                 let unset = if base.is_empty() {
-                    "Not set: stalker".to_owned()
+                    Tx::from("Not set: stalker")
                 } else {
                     match inherited.map(|b| b.community.as_str()).filter(|c| !c.is_empty()) {
-                        Some(c) => format!("From {base}: {c}"),
-                        None => format!("From {base}"),
+                        Some(c) => tr!("From {base}: {value}", base = base.as_str(), value = c),
+                        None => tr!("From {base}", base = base.as_str()),
                     }
                 };
                 if g.row("Community", "The communities of the linked game. Not set: the base's, or stalker without one.", flags(own, "community", PropFlags::NONE), 0, |ui| {
                     if lists.loaded && lists.communities.is_empty() {
                         // no linked game to read the list from, so the field stays a field
-                        gz_ui::form::row_field(ui, ("gz-ui-world.text", "character.community"), &mut edit.community, "stalker").on_hover_text("No linked game to list the communities of: type the id.").changed()
+                        gz_ui::form::row_field(ui, ("gz-ui-world.text", "character.community"), &mut edit.community, "stalker").tip("No linked game to list the communities of: type the id.").changed()
                     } else {
-                        list_picker(ui, "character.community", &mut edit.community, &lists.communities, &lists.stalker_communities, Some(&unset), !lists.loaded)
+                        list_picker(ui, "character.community", &mut edit.community, &lists.communities, &lists.stalker_communities, Some(unset.clone()), !lists.loaded)
                     }
                 }) == Some(true)
                 {
@@ -502,7 +507,7 @@ impl CharactersDoc {
             });
             g.section("Dialogs", true, None, |g| {
                 if g.row("Opening Dialog", "The dialog it opens with (start_dialog), captioned with its first line.", flags(own, "dialog", PropFlags::NONE), 0, |ui| {
-                    list_picker(ui, "character.dialog", &mut edit.start_dialog, &lists.dialogs, &lists.dialogs, Some("None"), !lists.loaded)
+                    list_picker(ui, "character.dialog", &mut edit.start_dialog, &lists.dialogs, &lists.dialogs, Some(Tx::from("None")), !lists.loaded)
                 }) == Some(true)
                 {
                     changed = true;
@@ -517,7 +522,7 @@ impl CharactersDoc {
                 });
             });
             let trader = edit.trade.is_trader();
-            g.section("Trade", true, trader.then_some("Trader"), |g| {
+            g.section("Trade", true, trader.then_some(Tx::from("Trader")), |g| {
                 let inherited_trade = inherited.map(|b| b.trade.clone()).unwrap_or_default();
                 if trader {
                     if trade_rows(g, &mut edit.trade, lists, own) {
@@ -559,21 +564,29 @@ fn rank_row(ui: &mut Ui, edit: &mut Character, lists: &ListsView) -> bool {
         let cur = ranks.iter().rposition(|r| edit.rank >= r.from);
         let name = |e: &gz_nq::PickerEntry| Indexed::label(e);
         let preview = if !edit.has_rank {
-            "Not set".to_owned()
+            Tx::from("Not set")
         } else {
             cur.and_then(|i| ranks.get(i))
-                .map_or_else(|| "Below the lowest rank".to_owned(), |r| name(&r.entry))
+                .map_or_else(|| Tx::from("Below the lowest rank"), |r| Tx::raw(name(&r.entry)))
         };
-        let rows: Vec<String> = ranks
+        // the game's names of the ranks, with their numbers: shown as they are
+        let rows: Vec<Tx<'static>> = ranks
             .iter()
             .enumerate()
             .map(|(i, r)| match ranks.get(i + 1) {
-                Some(next) => format!("{}   {}-{}", name(&r.entry), r.from, next.from - 1),
-                None => format!("{}   {}+", name(&r.entry), r.from),
+                Some(next) => Tx::raw(format!("{}   {}-{}", name(&r.entry), r.from, next.from - 1)),
+                None => Tx::raw(format!("{}   {}+", name(&r.entry), r.from)),
             })
             .collect();
         let picked = cell(ui, combo_w, |ui| {
-            row_combo(ui, "character.rank", &preview, false, &rows, if edit.has_rank { cur } else { None })
+            row_combo(
+                ui,
+                "character.rank",
+                preview.clone(),
+                false,
+                &rows,
+                if edit.has_rank { cur } else { None },
+            )
         });
         if let Some(i) = picked
             && let Some(r) = ranks.get(i)
@@ -623,13 +636,17 @@ fn money_row(ui: &mut Ui, edit: &mut Character, inherited: Option<&Character>) -
         } else {
             (None, None)
         };
-        if let Some(v) = local_number_text(ui, "character.money_min", min, &base_min.to_string(), number) {
+        if let Some(v) =
+            local_number_text(ui, "character.money_min", min, Tx::raw(base_min.to_string()), number)
+        {
             adopt(edit);
             edit.money_min = i32::try_from(v.unwrap_or(0).max(0)).unwrap_or(i32::MAX);
             *changed = true;
         }
         let _ = text::label(ui, "to", Font::Body, secondary, Clip::End);
-        if let Some(v) = local_number_text(ui, "character.money_max", max, &base_max.to_string(), number) {
+        if let Some(v) =
+            local_number_text(ui, "character.money_max", max, Tx::raw(base_max.to_string()), number)
+        {
             adopt(edit);
             edit.money_max = i32::try_from(v.unwrap_or(0).max(0)).unwrap_or(i32::MAX);
             *changed = true;
@@ -689,7 +706,7 @@ fn draw_kit(
     let n_given = inherited_rows.len();
     let inherits = !given.is_empty();
     let columns = [Col::new("Item", em(18.0)), Col::new("Count", em(6.0))];
-    let from = format!("from {base}");
+    let from = tr!("from {base}", base = base);
     let mut picked: Option<(usize, String)> = None;
     let mut counted: Option<(usize, i32)> = None;
     let supplies = &edit.supplies;
@@ -704,21 +721,30 @@ fn draw_kit(
                 .show(ui, |ui, row, col| {
                     if let Some(g) = inherited_rows.get(row) {
                         if col == 0 {
-                            let label = format!("{}  ·  {from}", item_label(&lists.items, &g.section));
-                            let _ =
-                        text::label(ui, &label, Font::Body, p.text_muted, Clip::End).on_hover_text(format!(
-                            "From {base}. Its cross takes it out of this character's kit (a count of 0)."
-                        ));
+                            let label = tr!(
+                                "{item}  ·  {from}",
+                                item = item_label(&lists.items, &g.section),
+                                from = from.clone()
+                            );
+                            let _ = text::label(ui, label, Font::Body, p.text_muted, Clip::End).tip(tr!(
+                                "From {base}. Its cross takes it out of this character's kit (a count of 0).",
+                                base = base
+                            ));
                         } else {
-                            let _ =
-                                text::label(ui, &g.count.to_string(), Font::Body, p.text_muted, Clip::End);
+                            let _ = text::label(
+                                ui,
+                                Tx::raw(g.count.to_string()),
+                                Font::Body,
+                                p.text_muted,
+                                Clip::End,
+                            );
                         }
                         return;
                     }
                     let Some(own_row) = supplies.get(row - n_given) else { return };
                     if col == 0 {
                         let mut section = own_row.section.clone();
-                        let none = own_row.section.is_empty().then_some("Pick an item...");
+                        let none = own_row.section.is_empty().then_some(Tx::from("Pick an item..."));
                         if item_picker(ui, &format!("character.kit.{row}"), &mut section, lists, none) {
                             picked = Some((row - n_given, section));
                         }
@@ -819,9 +845,8 @@ fn trade_rows(g: &mut Grid<'_>, t: &mut Trade, lists: &ListsView, own: &[String]
 fn draw_stock(ui: &mut Ui, t: &mut Trade, inherited: &Trade, lists: &ListsView, own: &[String]) -> bool {
     let p = palette(ui.ctx());
     let mut changed = false;
-    let _ = text::label(ui, "Stock", Font::Body, p.text_secondary, Clip::End).on_hover_text(
-        "What is on the shelf after every restock: an item, how many, and the chance that it is there.",
-    );
+    let _ = text::label(ui, "Stock", Font::Body, p.text_secondary, Clip::End)
+        .tip("What is on the shelf after every restock: an item, how many, and the chance that it is there.");
     if t.stock.is_empty() {
         let _ = text::status(
             ui,
@@ -900,13 +925,13 @@ fn draw_trade_off(ui: &mut Ui, t: &mut Trade, inherited: &Trade, base: &str) -> 
     let mut changed = false;
     let from_base = !t.declared && inherited.is_trader();
     let line = if from_base {
-        format!("Trades as {base} does: {}.", trade_summary(inherited))
+        tr!("Trades as {base} does: {summary}.", base = base, summary = trade_summary(inherited))
     } else if t.declared && t.off && inherited.is_trader() {
-        format!("Not a trader, although {base} is one.")
+        tr!("Not a trader, although {base} is one.", base = base)
     } else {
-        "Not a trader: it trades like any stalker of its community, with what it carries.".to_owned()
+        Tx::from("Not a trader: it trades like any stalker of its community, with what it carries.")
     };
-    let _ = text::prose(ui, &line);
+    let _ = text::prose(ui, line);
     ui.add_space(2.0);
     ui.horizontal(|ui| {
         let label = if from_base { "Change Trade" } else { "Make a Trader" };
@@ -943,12 +968,12 @@ mod tests {
             ..Trade::default()
         };
         assert_eq!(
-            trade_summary(&t),
-            "sells weapon, food, a stock of 0 item(s), asks 1.5 and pays 0.3 of the cost"
+            trade_summary(&t).en(),
+            "sells weapon, food, a stock of 0 items, asks 1.5 and pays 0.3 of the cost"
         );
         assert_eq!(
-            trade_summary(&Trade::default()),
-            "sells its stock only, a stock of 0 item(s), asks 1 and pays 0.3 of the cost"
+            trade_summary(&Trade::default()).en(),
+            "sells its stock only, a stock of 0 items, asks 1 and pays 0.3 of the cost"
         );
     }
 

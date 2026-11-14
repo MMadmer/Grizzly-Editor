@@ -27,8 +27,8 @@ use gz_ui::pick::{PickItem, PickList as KitPickList, pick_popup};
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
 use gz_ui::{
-    Button, Col, Font, Icon, ItemRows, Kind, NavRowSpec, PropFlags, PropertyGrid, Tone, icon_button, metrics,
-    nav_row, palette, segmented,
+    Button, Col, Font, Icon, ItemRows, Kind, NavRowSpec, PropFlags, PropertyGrid, TipExt, Tone, Tx,
+    icon_button, metrics, nav_row, palette, segmented, tr,
 };
 use parking_lot::Mutex;
 
@@ -712,17 +712,21 @@ impl ModSettingsDoc {
     fn ask_game_updates(&self, ctx: &egui::Context, asker: Asker) {
         let spec = ConfirmSpec {
             id: "disable_game_updates".to_owned(),
-            title: "Disable Game Updates".to_owned(),
-            headline: "Everyone who installs this module stops getting updates of the game. Disable them only as a last resort.".to_owned(),
-            items: vec![
-                "The game no longer checks for updates, so its fixes never reach these players.".to_owned(),
-                "Send Bug Report disappears from the main menu.".to_owned(),
-                "The menu says in red that updates were disabled, and names this module.".to_owned(),
-                "It lasts for as long as the module is installed, and other modules cannot turn it back on.".to_owned(),
-            ],
+            title: "Disable Game Updates".into(),
+            headline: "Everyone who installs this module stops getting updates of the game. Disable them only as a last resort.".into(),
+            // the editor's own words: shown in the window's language, logged in English
+            items: [
+                "The game no longer checks for updates, so its fixes never reach these players.",
+                "Send Bug Report disappears from the main menu.",
+                "The menu says in red that updates were disabled, and names this module.",
+                "It lasts for as long as the module is installed, and other modules cannot turn it back on.",
+            ]
+            .into_iter()
+            .map(Tx::from)
+            .collect(),
             total: 0,
-            consequence: "Right only for a module an update would break. If a game update merely might conflict with yours, keep updates on and release a fix instead.".to_owned(),
-            action: "Disable Updates".to_owned(),
+            consequence: "Right only for a module an update would break. If a game update merely might conflict with yours, keep updates on and release a fix instead.".into(),
+            action: "Disable Updates".into(),
             destructive: true,
         };
         let (inbox, ed) = (self.inbox.clone(), self.editor.clone());
@@ -785,13 +789,13 @@ impl ModSettingsDoc {
                 |ui| gz_ui::form::row_field(ui, ("gz-ui-mod.text", "name"), &mut form.name, ""),
             );
             g.row("Version", "1 to 4 numbers separated by dots. The game compares versions to offer an update.", flags(problems, "version", PropFlags::REQUIRED), 0, |ui| {
-                gz_ui::form::row_field(ui, ("gz-ui-mod.text", "version"), &mut form.version, "1.0.0")
+                gz_ui::form::row_field(ui, ("gz-ui-mod.text", "version"), &mut form.version, gz_ui::Tx::raw("1.0.0"))
             });
             messages(g, problems, "version");
             g.row("Author", "Shown in the game's Mods menu.", PropFlags::NONE, 0, |ui| gz_ui::form::row_field(ui, ("gz-ui-mod.text", "author"), &mut form.author, ""));
             let _ = g.block(|ui| text_block(ui, "Description", "Shown in the game's Mods menu. Plain text or a string table id.", &mut form.description, 4));
             g.row("Website", "The mod's page on AP-PRO or ModDB. The game opens it from the Mods menu.", flags(problems, "website", PropFlags::NONE), 0, |ui| {
-                gz_ui::form::row_field(ui, ("gz-ui-mod.text", "website"), &mut form.website, "https://ap-pro.ru/stuff/...")
+                gz_ui::form::row_field(ui, ("gz-ui-mod.text", "website"), &mut form.website, gz_ui::Tx::raw("https://ap-pro.ru/stuff/..."))
             });
             messages(g, problems, "website");
             let repo = g.row(
@@ -799,7 +803,7 @@ impl ModSettingsDoc {
                 "owner/repo. The game checks the latest release of this repository for updates. A pasted address is fine: it is kept as owner/repo.",
                 flags(problems, "github", PropFlags::NONE),
                 0,
-                |ui| gz_ui::form::row_field(ui, ("gz-ui-mod.text", "github"), &mut form.github, "owner/repo"),
+                |ui| gz_ui::form::row_field(ui, ("gz-ui-mod.text", "github"), &mut form.github, gz_ui::Tx::raw("owner/repo")),
             );
             if repo.is_some_and(|r| r.lost_focus()) {
                 form.github = normalize_github_repo(&form.github);
@@ -877,7 +881,7 @@ impl ModSettingsDoc {
                                 } else if thumbnail.is_empty() {
                                     let _ = text::prose(ui, "No picture: the Mods window shows the first letter of the name.");
                                 } else {
-                                    let _ = text::label(ui, thumbnail.as_str(), Font::Body, p.text_secondary, Clip::Start);
+                                    let _ = text::label(ui, Tx::raw(thumbnail.as_str()), Font::Body, p.text_secondary, Clip::Start);
                                     if picture.unreadable {
                                         let _ = text::status(ui, Tone::Error, "The file does not read as a picture.");
                                     }
@@ -960,19 +964,19 @@ impl ModSettingsDoc {
             // files, configs and scripts mount at engine start, before any mode is picked: a
             // weapon rebalance would leak into every campaign
             if kind.is_some_and(|k| k != TargetKind::Plain) && (gated.0 > 0 || gated.1 > 0) {
-                let text = format!(
-                    "{} under gamedata and {} are not gated: they mount at engine start, in every game.",
-                    gz_mod::text::count_text(gated.0, "file", "files"),
-                    gz_mod::text::count_text(gated.1, "config patch", "config patches")
+                let text = tr!(
+                    "{files} {files:file|files} under gamedata and {patches} config {patches:patch|patches} are not gated: they mount at engine start, in every game.",
+                    files = gated.0,
+                    patches = gated.1
                 );
                 g.message(Tone::Warning, &text);
             }
             match kind {
                 Some(TargetKind::Existing) => {
-                    let mut options: Vec<&str> = list.iter().map(|m| m.caption.as_str()).collect();
+                    let mut options: Vec<Tx<'_>> = list.iter().map(|m| Tx::raw(m.caption.as_str())).collect();
                     let mut current = list.iter().position(|m| m.id.eq_ignore_ascii_case(&form.mode));
                     if current.is_none() && !form.mode.is_empty() {
-                        options.push(form.mode.as_str());
+                        options.push(Tx::raw(form.mode.as_str()));
                         current = Some(options.len() - 1);
                     }
                     let picked = g
@@ -992,12 +996,16 @@ impl ModSettingsDoc {
                         m.id.clone_into(&mut form.mode);
                     }
                     if let Some(m) = list.iter().find(|m| m.id.eq_ignore_ascii_case(&form.mode)) {
-                        let whose = if m.source == "game" { " - the linked game's".to_owned() } else { format!(" - module {}", m.source) };
-                        g.message(Tone::Muted, &format!("{}{whose}", m.id));
+                        let whose = if m.source == "game" {
+                            tr!("{id} - the linked game's", id = &m.id)
+                        } else {
+                            tr!("{id} - module {module}", id = &m.id, module = &m.source)
+                        };
+                        g.message(Tone::Muted, whose);
                     }
                     if list.is_empty() && scan.is_some() {
-                        let why = scan.as_ref().and_then(|s| s.error.clone()).unwrap_or_else(|| "The linked game declares no modes, only options.".to_owned());
-                        g.message(Tone::Warning, &why);
+                        let why = scan.as_ref().and_then(|s| s.error.clone()).map_or(Tx::from("The linked game declares no modes, only options."), Tx::ui);
+                        g.message(Tone::Warning, why);
                     }
                     messages(g, problems, "mode");
                 }
@@ -1053,9 +1061,9 @@ impl ModSettingsDoc {
                     })
                     .collect();
                 let request = format!("mod_settings.{}", RELATION_SHOWS[i]);
-                let out = g.row(label, help, flags(problems, field, PropFlags::NONE), 0, |ui| {
+                let out = g.row(*label, *help, flags(problems, field, PropFlags::NONE), 0, |ui| {
                     local_value_column(ui, field, |ui| {
-                        let refs: Vec<&str> = shown.iter().map(String::as_str).collect();
+                        let refs: Vec<Tx<'_>> = shown.iter().map(|s| Tx::raw(s.as_str())).collect();
                         let removed = if refs.is_empty() { None } else { chips(ui, field, &refs, true) };
                         let resp = Button::new("Add Module...").show(ui);
                         // a click, or `mod.view show=` asking for the same list
@@ -1084,7 +1092,7 @@ impl ModSettingsDoc {
                     if !missing.is_empty() {
                         g.message(
                             Tone::Muted,
-                            &format!("Not installed in the linked game: {}.", missing.join(", ")),
+                            tr!("Not installed in the linked game: {ids}.", ids = missing.join(", ")),
                         );
                     }
                 }
@@ -1115,7 +1123,7 @@ impl ModSettingsDoc {
             let mut items: Vec<PickItem> = installed
                 .iter()
                 .filter(|m| !is_taken(&m.id))
-                .map(|m| PickItem::new(m.id.as_str(), module_label(installed, &m.id)))
+                .map(|m| PickItem::new(m.id.as_str(), Tx::raw(module_label(installed, &m.id))))
                 .collect();
             // an id the game does not list is taken as typed
             let typed = form::relation_id(&KitPickList::query(&ctx, popup));
@@ -1125,7 +1133,7 @@ impl ModSettingsDoc {
                 && validate_id(&typed)
             {
                 items.push(
-                    PickItem::new(typed.as_str(), format!("Add {typed}"))
+                    PickItem::new(typed.as_str(), tr!("Add {id}", id = typed.as_str()))
                         .detail("Not installed in the linked game: the id is taken as typed."),
                 );
             }
@@ -1167,11 +1175,11 @@ impl ModSettingsDoc {
         let Self { form, problems, aux, actions, .. } = self;
         let files = &aux.pda_files;
         PropertyGrid::new(ROLE).label_frac(LABEL_FRAC).show(ui, |g| {
-            let mut options: Vec<&str> = vec!["None"];
-            options.extend(files.iter().map(String::as_str));
+            let mut options: Vec<Tx<'_>> = vec![Tx::from("None")];
+            options.extend(files.iter().map(|f| Tx::raw(f.as_str())));
             let mut current = if form.pda.is_empty() { 0 } else { files.iter().position(|f| form::same_path(f, &form.pda)).map_or(usize::MAX, |i| i + 1) };
             if current == usize::MAX {
-                options.push(form.pda.as_str());
+                options.push(Tx::raw(form.pda.as_str()));
                 current = options.len() - 1;
             }
             let picked = g
@@ -1286,9 +1294,7 @@ impl ModSettingsDoc {
                                 gz_ui::Check::new(&mut c.cheat, "").width(metrics::FRAME).show(ui)
                             })
                             .inner;
-                        Some(r.on_hover_text(
-                            "Runs only in Dead Air's debug mode (the game started with -dbg).",
-                        ))
+                        Some(r.tip("Runs only in Dead Air's debug mode (the game started with -dbg)."))
                     }
                 };
                 if let Some(r) = resp {
@@ -1331,9 +1337,9 @@ impl ModSettingsDoc {
             ui.add_space(8.0);
             let Self { form, problems, .. } = self;
             if let Some(c) = form.commands.get_mut(i) {
-                let title = if c.name.is_empty() { "New Command".to_owned() } else { c.name.clone() };
+                let title = if c.name.is_empty() { Tx::from("New Command") } else { Tx::raw(c.name.clone()) };
                 PropertyGrid::new(ROLE).label_frac(LABEL_FRAC).show(ui, |g| {
-                    g.section(&title, true, c.cheat.then_some("cheat"), |g| {
+                    g.section(title, true, c.cheat.then_some(Tx::from("cheat")), |g| {
                         let f = |part: &str| format!("commands.{i}.{part}");
                         g.row(
                             "Help",
@@ -1372,7 +1378,7 @@ impl ModSettingsDoc {
                 "No function matches."
             };
             let items: Vec<PickItem> =
-                functions.iter().map(|f| PickItem::new(f.as_str(), f.as_str())).collect();
+                functions.iter().map(|f| PickItem::new(f.as_str(), Tx::raw(f.as_str()))).collect();
             let list = KitPickList::new(popup, &items)
                 .hint("Search the project's functions")
                 .empty(empty)
@@ -1422,17 +1428,22 @@ impl ModSettingsDoc {
 
     /// What the footer says of the file: the first problem that stops a save, the last failure,
     /// or how the tab saves. The tab's empty toolbar row says it too.
-    fn save_status(&self) -> (String, Tone) {
+    fn save_status(&self) -> (Tx<'static>, Tone) {
         match form::blocking(&self.problems).0 {
-            Some(first) => {
-                (format!("{}: {}", PAGES.get(first.page).map_or("", |p| p.label), first.text), Tone::Error)
-            }
-            None if !self.status.is_empty() => (self.status.clone(), Tone::Error),
-            None if !self.exists => ("No mod.ltx yet: the first edit makes it.".to_owned(), Tone::Muted),
+            Some(first) => (
+                tr!(
+                    "mod_settings" => "{page}: {problem}",
+                    page = Tx::from(PAGES.get(first.page).map_or("", |p| p.label)),
+                    problem = Tx::ui(first.text.clone())
+                ),
+                Tone::Error,
+            ),
+            None if !self.status.is_empty() => (Tx::ui(self.status.clone()), Tone::Error),
+            None if !self.exists => (Tx::from("No mod.ltx yet: the first edit makes it."), Tone::Muted),
             None if self.picture_waits() => {
-                ("The picture waits for Save; the rest is saved as you edit".to_owned(), Tone::Warning)
+                (Tx::from("The picture waits for Save; the rest is saved as you edit"), Tone::Warning)
             }
-            None => ("Saved to mod.ltx as you edit".to_owned(), Tone::Muted),
+            None => (Tx::from("Saved to mod.ltx as you edit"), Tone::Muted),
         }
     }
 }
@@ -1444,20 +1455,20 @@ impl Document for ModSettingsDoc {
     fn kind(&self) -> &'static str {
         TAB
     }
-    fn label(&self) -> String {
-        "Mod Settings".to_owned()
+    fn label(&self) -> Tx<'static> {
+        Tx::from("Mod Settings")
     }
     fn icon(&self) -> Icon {
         // a module, not the editor's settings: Preferences is the gear
         Icon::Package
     }
-    fn tooltip(&self) -> Option<String> {
-        Some("mod.ltx: the module's name, version, game mode and what the build ships".to_owned())
+    fn tooltip(&self) -> Option<Tx<'static>> {
+        Some(Tx::from("mod.ltx: the module's name, version, game mode and what the build ships"))
     }
     fn dirty(&self) -> bool {
         ModSettingsDoc::dirty(self)
     }
-    fn toolbar_status(&self) -> Option<String> {
+    fn toolbar_status(&self) -> Option<Tx<'static>> {
         Some(self.save_status().0)
     }
 
@@ -1480,7 +1491,7 @@ impl Document for ModSettingsDoc {
         }
         let (status, tone) = self.save_status();
         tb.group(1);
-        tb.status(&status, tone);
+        tb.status(status, tone);
     }
 
     fn body(&mut self, ui: &mut Ui, cx: &mut DocCx<'_>) {
@@ -1675,7 +1686,7 @@ fn flags(problems: &[Problem], field: &str, base: PropFlags) -> PropFlags {
 /// The sentences of a row's problems under it.
 fn messages(g: &mut Grid<'_>, problems: &[Problem], field: &str) {
     for p in problems.iter().filter(|p| p.field == field) {
-        g.message(p.tone, &p.text);
+        g.message(p.tone, Tx::ui(p.text.as_str()));
     }
 }
 

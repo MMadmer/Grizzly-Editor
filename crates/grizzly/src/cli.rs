@@ -82,6 +82,15 @@ pub struct Cli {
     pub ui_scale: Option<f32>,
     /// `-uiscale` was given a value outside 0.5..4 or none.
     pub bad_ui_scale: bool,
+    /// `-lang en|ru`: the window in this language for the run, until Preferences picks one.
+    pub lang: Option<gz_ui::Lang>,
+    /// `-lang` was given a language the editor does not have, or none.
+    pub bad_lang: bool,
+    /// `-theme <id>`: the editor in this theme for the run, never saved (`-kitsheet -theme
+    /// solarized-light` audits a light theme).
+    pub theme: Option<&'static gz_ui::Theme>,
+    /// `-theme` named no theme: what it named.
+    pub bad_theme: Option<String>,
     /// Options nobody knows: named in the log, never fatal.
     pub unknown: Vec<String>,
     /// The commandlet this run is, when it is one.
@@ -127,9 +136,20 @@ impl Cli {
                 "quiet" => cli.quiet = true,
                 "keep_going" | "keep-going" => cli.keep_going = true,
                 "updated" => cli.updated = it.next(),
+                "theme" => {
+                    let named = it.next().unwrap_or_default();
+                    match gz_ui::Theme::find(&named) {
+                        Some(t) => cli.theme = Some(t),
+                        None => cli.bad_theme = Some(named),
+                    }
+                }
                 "uiscale" => match it.next().and_then(|v| v.trim().parse::<f32>().ok()) {
                     Some(v) if (0.5..=4.0).contains(&v) => cli.ui_scale = Some(v),
                     _ => cli.bad_ui_scale = true,
+                },
+                "lang" => match it.next().as_deref().and_then(gz_ui::Lang::parse) {
+                    Some(l) => cli.lang = Some(l),
+                    None => cli.bad_lang = true,
                 },
                 _ => cli.unknown.push(arg),
             }
@@ -255,6 +275,17 @@ mod tests {
         assert_eq!(cli(&[]).home(Some("C:/b".into()), root), PathBuf::from("C:/b"));
         assert_eq!(cli(&[]).home(Some("  ".into()), root), root);
         assert_eq!(cli(&[]).home(None, root), root);
+    }
+
+    #[test]
+    fn a_theme_for_the_run() {
+        assert_eq!(
+            cli(&["-kitsheet", "-theme", "solarized-light"]).theme.map(|t| t.id),
+            Some("solarized-light")
+        );
+        assert_eq!(cli(&["-theme", "Catppuccin Latte"]).theme.map(|t| t.id), Some("catppuccin-latte"));
+        let bad = cli(&["-theme", "pink"]);
+        assert_eq!((bad.theme, bad.bad_theme.as_deref()), (None, Some("pink")));
     }
 
     #[test]

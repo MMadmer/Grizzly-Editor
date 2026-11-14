@@ -1,0 +1,87 @@
+Colour themes
+-------------
+
+The editor's colour themes, other than Grizzly Dark, Grizzly Graphite and
+Grizzly Light, take their colours from these published palettes
+(crates/gz-ui/src/theme/themes.rs maps each onto the editor's colour roles).
+Each is listed with its authors, its licence and where it is published.
+
+The editor takes only their colours; no file of these themes is part of it. Their
+names belong to their owners and are used only to say whose colours a theme
+shows: Dracula is a registered trademark of Zeno Rocha, GitHub a trademark of
+GitHub, Inc., and every other name its owner's. Grizzly Editor and its authors
+are not affiliated with any of them, and none of them has endorsed it.
+
+One Dark Pro - Binaryify - MIT - https://github.com/Binaryify/OneDark-Pro
+Atom One Light - Mahmoud Ali, after GitHub's Atom One Light - MIT -
+  https://github.com/akamud/vscode-theme-onelight
+Dracula - Dracula Theme - MIT - https://github.com/dracula/visual-studio-code
+Alucard - Dracula Theme - MIT - https://github.com/dracula/cursor
+GitHub Dark, GitHub Light - Primer (GitHub), on @primer/primitives - MIT -
+  https://github.com/primer/github-vscode-theme
+Monokai - Microsoft Corporation, after Colorsublime - MIT -
+  https://github.com/microsoft/vscode/tree/main/extensions/theme-monokai
+Night Owl, Night Owl Light - Sarah Drasner - MIT -
+  https://github.com/sdras/night-owl-vscode-theme
+Tokyo Night, Tokyo Night Storm, Tokyo Night Light - Enkia - MIT -
+  https://github.com/enkia/tokyo-night-vscode-theme
+Ayu Dark, Ayu Mirage, Ayu Light - Ike Kurghinyan, Konstantin Pschera - MIT -
+  https://github.com/ayu-theme/ayu-colors
+Catppuccin Mocha, Catppuccin Macchiato, Catppuccin Frappé, Catppuccin Latte -
+  Catppuccin - MIT - https://github.com/catppuccin/palette
+Nord - Sven Greb - MIT - https://github.com/nordtheme/nord
+Gruvbox Dark, Gruvbox Light - Pavel Pertsev - MIT -
+  https://github.com/morhetz/gruvbox
+Solarized Dark, Solarized Light - Ethan Schoonover - MIT -
+  https://github.com/altercation/solarized
+Rosé Pine, Rosé Pine Moon, Rosé Pine Dawn - Rosé Pine - MIT -
+  https://github.com/rose-pine/neovim
+Everforest Dark, Everforest Light - sainnhe - MIT -
+  https://github.com/sainnhe/everforest
+Kanagawa Wave, Kanagawa Dragon, Kanagawa Lotus - Tommaso Laurenzi - MIT -
+  https://github.com/rebelot/kanagawa.nvim
+
+Every one of them is under the MIT License. Their copyright notices:
+
+Copyright (c) 2013-2022 Binaryify
+Copyright (c) 2015 Mahmoud Ali
+Copyright (c) 2016 GitHub Inc.
+Copyright (c) 2016 Dracula Theme
+Copyright (c) 2023 Dracula Theme
+Copyright (c) 2020 Primer
+Copyright (c) 2018 GitHub Inc.
+Copyright (c) 2015 - present Microsoft Corporation
+Copyright (c) 2015 Colorsublime.com
+Copyright (c) 2018 Sarah Drasner
+Copyright (c) 2018-present Enkia
+Copyright (c) 2016 Ike Kurghinyan
+Copyright (c) Konstantin Pschera <me@kons.ch> (kons.ch)
+Copyright (c) 2021 Catppuccin
+Copyright (c) 2016-present Sven Greb <development@svengreb.de> (https://www.svengreb.de)
+Copyright (c) 2018 Pavel Pertsev
+Copyright (c) 2011 Ethan Schoonover
+Copyright (c) 2023 Rosé Pine
+Copyright (c) 2019 sainnhe
+Copyright (c) 2021 Tommaso Laurenzi
+
+The license each of them is granted under:
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

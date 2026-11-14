@@ -78,6 +78,12 @@ pub use doc::LevelDoc;
 /// The tab id of the Level document.
 pub const LEVEL: &str = "level";
 
+/// The Level tab's own words in Russian.
+pub const RU: &str = include_str!("ru.lua");
+/// What the level's domain crates say that the tab shows, in Russian: the rows of Details and
+/// Level Settings, the level build's steps, stages and problems.
+pub const DOMAIN_RU: &str = include_str!("domain.ru.lua");
+
 /// Plugs the Level document, its panels, its actions and their menu rows, the Build chip, the
 /// Recovery card and the Import Base Scene dialog into the shell.
 pub fn install(b: &mut ShellBuilder) {
@@ -103,6 +109,8 @@ pub fn install(b: &mut ShellBuilder) {
     status::install(b);
     recovery::install(b);
     import::install(b);
+    b.translation(RU);
+    b.translation(DOMAIN_RU);
     b.reset_layout(|all, cx| doc::post_to_level(cx.editor, doc::Act::ResetLayout(all)));
 }
 
@@ -111,4 +119,82 @@ pub fn install(b: &mut ShellBuilder) {
 pub fn register(reg: &mut Registry) {
     cmd::register(reg);
     view_cmd::register(reg);
+}
+
+#[cfg(test)]
+mod tests {
+    use gz_scene::ObjClass;
+    use gz_scene::format::fields;
+    use gz_ui::i18n::{Catalog, KIT_RU, problems};
+
+    /// The catalogs the editor ships that the Level tab's words come from: the kit's, the shell's,
+    /// the other areas' (a word another catalog holds is not repeated here) and the tab's own.
+    fn catalog() -> Catalog {
+        Catalog::parse(&[
+            KIT_RU,
+            gz_app::lang::SHELL_RU,
+            gz_ui_app::RU,
+            gz_ui_content::RU,
+            include_str!("../../gz-ui-previews/src/ru.lua"),
+            include_str!("../../gz-ui-mod/src/ru.lua"),
+            include_str!("../../gz-ui-release/src/ru.lua"),
+            gz_ui_viewport::actions::RU,
+            super::RU,
+            super::DOMAIN_RU,
+        ])
+        .expect("the catalogs read")
+    }
+
+    #[test]
+    fn the_catalogs_are_sound() {
+        let p = problems(&catalog());
+        assert!(p.is_empty(), "{}", p.join("\n"));
+    }
+
+    /// Every action of the tab, its group, and every step of the build have their words.
+    #[test]
+    fn the_actions_and_the_steps_have_their_words() {
+        let c = catalog();
+        for a in crate::actions::actions() {
+            assert!(c.knows(a.title), "no entry for the action '{}'", a.title);
+            assert!(c.knows(a.group), "no entry for the group '{}'", a.group);
+        }
+        for s in gz_levelbuild::Step::ORDER {
+            assert!(c.knows(s.title()), "no entry for the step '{}'", s.title());
+            assert!(c.knows(s.stage()), "no entry for the stage '{}'", s.stage());
+        }
+        for class in ObjClass::ALL {
+            for w in [class.desc(), class.label_plural(), class.label()] {
+                assert!(c.knows(w), "no entry for the kind '{w}'");
+            }
+        }
+    }
+
+    /// Every key of the scene's files that Details or Level Settings shows has its label, its
+    /// section and its help.
+    #[test]
+    fn the_rows_of_the_files_have_their_words() {
+        let c = catalog();
+        let mut missing = Vec::new();
+        let mut check = |t: &str| {
+            if !t.is_empty() && !c.knows(t) {
+                missing.push(t.to_owned());
+            }
+        };
+        for class in ObjClass::ALL {
+            for f in fields::object_fields(class) {
+                check(f.label);
+                check(f.help);
+                f.group.split('\\').for_each(&mut check);
+            }
+        }
+        for f in gz_scene::format::SCENE_FIELDS {
+            check(f.label);
+            check(f.help);
+            f.group.split('\\').for_each(&mut check);
+        }
+        missing.sort();
+        missing.dedup();
+        assert!(missing.is_empty(), "no entries for:\n{}", missing.join("\n"));
+    }
 }

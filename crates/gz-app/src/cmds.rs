@@ -462,7 +462,7 @@ async fn ui_panel(editor: Arc<Editor>, p: PanelParams, _origin: Origin) -> Reply
 enum DrawerAction {
     Open,
     Close,
-    /// Open when closed, closed when open (Ctrl+Space, Ctrl+`).
+    /// Open when closed, closed when open (Ctrl+Space, `).
     Toggle,
 }
 
@@ -655,10 +655,14 @@ async fn ui_toast(editor: Arc<Editor>, p: ToastParams, _origin: Origin) -> Reply
                     .action(id)
                     .map(|a| a.title)
                     .ok_or_else(|| CmdError::not_found(format!("no action '{id}' (app.keys lists them)")))?;
-                let label = p.label.as_deref().unwrap_or(title).trim_end_matches("...");
-                gz_ui::state::toast_with(ctx, tone, &p.text, label, id);
+                // the caller's words are its own; an action's title is the editor's
+                let label = match p.label.as_deref() {
+                    Some(l) => gz_ui::Tx::raw(l.trim_end_matches("...").to_owned()),
+                    None => gz_ui::Tx::from(title),
+                };
+                gz_ui::state::toast_with(ctx, tone, gz_ui::Tx::raw(p.text.clone()), label, id);
             }
-            None => gz_ui::state::toast(ctx, tone, &p.text),
+            None => gz_ui::state::toast(ctx, tone, gz_ui::Tx::raw(p.text.clone())),
         }
         Ok(json!({ "toasts": gz_ui::state::toast_texts(ctx), "toast_notes": toasts_json(ctx) }))
     })
@@ -761,10 +765,21 @@ async fn ui_audit(editor: Arc<Editor>, p: AuditParams, _origin: Origin) -> Reply
         let keep = |surface: &str| window.as_ref().is_none_or(|w| surface == w || surface.ends_with(w.as_str()));
         let (mut truncated, mut escaped, mut controls, mut loading, mut errors) =
             (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut untranslated: Vec<Value> = Vec::new();
         for e in entries {
             match e {
-                audit::AuditEntry::Truncated { surface, full, shown, rect } if keep(&surface) => {
-                    truncated.push(json!({ "window": surface, "label": full, "shown": shown, "rect": px_to_pt(rect, ppp) }));
+                audit::AuditEntry::Truncated { surface, full, shown, en, rect } if keep(&surface) => {
+                    let mut t = json!({ "window": surface, "label": full, "shown": shown, "rect": px_to_pt(rect, ppp) });
+                    if let (Some(en), Some(o)) = (en, t.as_object_mut()) {
+                        o.insert("en".into(), json!(en));
+                    }
+                    truncated.push(t);
+                }
+                audit::AuditEntry::Untranslated { surface, text } if keep(&surface) => {
+                    let row = json!({ "window": surface, "label": text });
+                    if !untranslated.contains(&row) {
+                        untranslated.push(row);
+                    }
                 }
                 audit::AuditEntry::Escaped { surface, what, rect } if keep(&surface) => {
                     escaped.push(json!({ "window": surface, "label": what, "rect": px_to_pt(rect, ppp) }));
@@ -787,6 +802,8 @@ async fn ui_audit(editor: Arc<Editor>, p: AuditParams, _origin: Origin) -> Reply
             "controls": controls,
             "loading": loading,
             "errors": errors,
+            "language": gz_ui::i18n::lang(ctx).key(),
+            "untranslated": untranslated,
             "scale": scale(ppp),
         }))
     })
@@ -837,7 +854,7 @@ pub(crate) fn ui_contract_json() -> Value {
         "view_default": "tiles",
         "view_default_panel": "list",
         "tile_error": contract::TILE_RANGE_ERROR,
-        "accents": contract::THEME_PRESETS.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+        "themes": gz_ui::THEMES.iter().map(|t| t.id).collect::<Vec<_>>(),
         "categories": contract::CATEGORIES,
         "card_menu": [contract::CARD_SHOW_IN_EXPLORER, contract::CARD_DELETE, contract::CARD_REMOVE_FROM_LIST],
         "delete_project_dialog": contract::DELETE_PROJECT_DIALOG,
@@ -918,7 +935,8 @@ async fn ui_reset_layout(editor: Arc<Editor>, p: ResetLayoutParams, _origin: Ori
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct RevealParams {
-    /// A file or folder of the project, project-relative. Left out: the project's folder.
+    /// A file or folder of the project, project-relative (or an absolute path, which a tab whose
+    /// file lies outside the project names). Left out: the project's folder.
     #[serde(default)]
     path: Option<String>,
     /// Answer what would be shown and open nothing.
@@ -928,8 +946,12 @@ struct RevealParams {
 
 async fn ui_reveal(editor: Arc<Editor>, p: RevealParams, _origin: Origin) -> Reply {
     let root = editor.project()?.root.clone();
-    let rel = p.path.unwrap_or_default();
-    let full = if rel.is_empty() { root.clone() } else { root.join(rel.replace('/', "\\")) };
+    let rel = p.path.unwrap_or_default().replace('/', "\\");
+    let full = if rel.is_empty() { root.clone() } else { root.join(&rel) };
+    let there = full.clone();
+    if !editor.exec.io(move || there.exists()).await {
+        return Err(CmdError::not_found(format!("{} is not there.", full.display())));
+    }
     if !p.dry_run {
         let shown = full.clone();
         let is_dir = rel.is_empty();
@@ -1113,7 +1135,7 @@ pub fn register(reg: &mut Registry) {
     reg.cmd(
         Spec::read(
             "ui.audit",
-            "What the next frame cut short, let escape or drew off, with the reasons, what it still loads and the error states it shows in place of content.",
+            "What the next frame cut short, let escape or drew off, with the reasons, what it still loads, the error states it shows in place of content and, in another language than English, the editor's own words its catalog lacks.",
         ),
         ui_audit,
     );

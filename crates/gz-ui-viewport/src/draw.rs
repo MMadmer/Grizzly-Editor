@@ -174,6 +174,9 @@ fn world_box(state: &SceneState, lib: &Library, o: &Object) -> Option<Aabb> {
     objects::world_box(state, o, &local).and_then(|b| ga(&b))
 }
 
+/// The label of the Player Start: the editor's word, translated where the label is drawn.
+pub const PLAYER_START_LABEL: &str = "Player Start";
+
 /// The name a spawn point's label shows (Show > Spawn Names).
 fn spawn_label(o: &Object, d: &objects::SpawnData) -> String {
     if let Some(s) = d.section() {
@@ -182,7 +185,7 @@ fn spawn_label(o: &Object, d: &objects::SpawnData) -> String {
     match d.kind {
         PointKind::RPoint => format!("RPoint T:{}", d.rpoint.team),
         PointKind::EnvMod => format!("EnvMod V:{:3.2}, F:{:3.2}", d.env.view_dist, d.env.fog_density),
-        PointKind::PlayerStart => "Player Start".to_owned(),
+        PointKind::PlayerStart => PLAYER_START_LABEL.to_owned(),
         PointKind::Spawn => o.name.to_string(),
     }
 }

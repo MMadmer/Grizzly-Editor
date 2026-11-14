@@ -32,6 +32,16 @@ fn running_job(cx: &ActionCx<'_>) -> Option<u64> {
     cx.editor.jobs.snapshot().into_iter().rev().find(gz_editor::JobInfo::running).map(|j| j.id.0)
 }
 
+/// The active tab's file shown in the Content Browser, and in Explorer.
+pub const BROWSE_TAB: &str = "edit.show_in_browser";
+pub const EXPLORE_TAB: &str = "edit.show_in_explorer";
+
+/// `content.view` revealing a project file (project-relative).
+#[must_use]
+pub fn reveal_in_browser(path: &str) -> Args {
+    args(&[("action", "reveal"), ("source", "project"), ("path", path)])
+}
+
 /// Every action of the window itself.
 #[must_use]
 pub fn shell_actions() -> Vec<Action> {
@@ -42,6 +52,11 @@ pub fn shell_actions() -> Vec<Action> {
             .keys(const { &[Chord::ctrl(Key::S)] })
             .args(active_doc)
             .enabled(|cx| Enabled::when(cx.project && cx.dirty, "Nothing on this tab to save."))
+            .frame_key(),
+        Action::new("file.save_all", "Save All", "File", "doc.save_all")
+            .icon(Icon::Save)
+            .keys(const { &[Chord::ctrl_shift(Key::S)] })
+            .enabled(on_a_document)
             .frame_key(),
         Action::new("project.open_folder", "Open Project Folder", "File", "ui.reveal")
             .icon(Icon::Reveal)
@@ -96,6 +111,26 @@ pub fn shell_actions() -> Vec<Action> {
             .args(|_| args(&[("action", "open")]))
             .hidden_from_palette()
             .frame_key(),
+        Action::new(BROWSE_TAB, "Show in Content Browser", "Edit", "content.view")
+            .icon(Icon::Folder)
+            .keys(const { &[Chord::ctrl(Key::B)] })
+            .args(|cx| reveal_in_browser(cx.path))
+            .enabled(|cx| {
+                if !cx.project || cx.path.is_empty() {
+                    return Enabled::Off("This tab shows no file of the project.");
+                }
+                // what the browser shows is the project: a file outside it is Explorer's alone
+                Enabled::when(
+                    !std::path::Path::new(cx.path).is_absolute(),
+                    "The file is outside the project.",
+                )
+            }),
+        Action::new(EXPLORE_TAB, "Show in Explorer", "Edit", "ui.reveal")
+            .icon(Icon::Reveal)
+            .args(|cx| args(&[("path", cx.path)]))
+            .enabled(|cx| {
+                Enabled::when(cx.project && !cx.path.is_empty(), "This tab shows no file of the project.")
+            }),
         Action::new("app.preferences", "Preferences", "Edit", "app.prefs")
             .icon(Icon::Settings)
             .args(|_| args(&[("action", "show")])),
@@ -119,7 +154,7 @@ pub fn shell_actions() -> Vec<Action> {
             .frame_key(),
         Action::new("window.log_drawer", "Log Drawer", "Window", "ui.drawer")
             .icon(Icon::Log)
-            .keys(const { &[Chord::ctrl(Key::Backtick)] })
+            .keys(const { &[Chord::new(Key::Backtick)] })
             .args(|_| args(&[("action", "toggle"), ("id", "log")]))
             .enabled(on_a_document)
             .checked(|cx| cx.drawer == Some(Drawer::Log))
@@ -160,6 +195,7 @@ pub fn shell_actions() -> Vec<Action> {
 /// Where the window's own actions stand in its menus: menu, group, order, action, label.
 pub const SHELL_MENU: &[(&str, i32, i32, &str, Option<&str>)] = &[
     ("File", 20, 0, "file.save", None),
+    ("File", 20, 1, "file.save_all", None),
     ("File", 90, 0, "app.quit", None),
     ("Edit", 0, 0, "edit.undo", None),
     ("Edit", 0, 1, "edit.redo", None),
@@ -169,6 +205,8 @@ pub const SHELL_MENU: &[(&str, i32, i32, &str, Option<&str>)] = &[
     ("Edit", 10, 3, "edit.duplicate", None),
     ("Edit", 10, 4, "edit.delete", None),
     ("Edit", 20, 0, "edit.find", None),
+    ("Edit", 30, 0, BROWSE_TAB, None),
+    ("Edit", 30, 1, EXPLORE_TAB, None),
     ("Edit", 90, 0, "edit.palette", None),
     ("Edit", 90, 1, "app.preferences", None),
     ("Window", 50, 0, "window.content_drawer", None),

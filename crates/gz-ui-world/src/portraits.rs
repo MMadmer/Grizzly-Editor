@@ -15,7 +15,7 @@ use gz_nq::PickerEntry;
 use gz_ui::menu::menu_popup;
 use gz_ui::text;
 use gz_ui::units::em;
-use gz_ui::{Icon, MenuItem, SearchField, Tone, icons, menu_item, palette};
+use gz_ui::{Icon, MenuItem, SearchField, TipExt, Tone, Tx, icons, menu_item, palette, tr};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
@@ -179,7 +179,7 @@ pub fn draw_portrait(
             }
         }
     }
-    resp.on_hover_text(if icon.is_empty() { "No portrait" } else { icon })
+    resp.tip(if icon.is_empty() { Tx::from("No portrait") } else { Tx::raw(icon.to_owned()) })
 }
 
 /// The portraits a search shows, worked out once per query and per read of the list.
@@ -206,18 +206,18 @@ pub fn local_portrait_gallery(
     let list: &Indexed = &lists.icons;
     let id = Id::unique(("gz-ui-world.gallery", salt));
     let unknown = !value.is_empty() && list.get(value).is_none() && !list.is_empty();
-    let shown_text = if value.is_empty() { "None" } else { value.as_str() };
+    let shown_text = if value.is_empty() { Tx::from("None") } else { Tx::raw(value.as_str()) };
     let tip = if unknown {
-        format!("'{value}' is not in the linked game or the project: kept as written")
+        tr!("'{value}' is not in the linked game or the project: kept as written", value = value.as_str())
     } else {
-        String::new()
+        Tx::EMPTY
     };
     // the kit's combo field; the gallery under it is this surface's own
     let resp = gz_ui::Combo::new(("gz-ui-world.gallery_field", salt), shown_text)
         .warn(unknown)
         .placeholder(value.is_empty())
         .busy(!lists.loaded, READING)
-        .tip(&tip)
+        .tip(tip)
         .field(ui, Popup::is_id_open(&ctx, id));
     // a click toggles it; `characters.view show=icon` puts it up to be looked at
     let asked = lists.loaded && gz_ui::menu::take_popup_request(&ctx, salt);
@@ -332,11 +332,11 @@ pub fn local_portrait_gallery(
                                 }
                             }
                             let tip = if e.extra.starts_with("project:") {
-                                format!("{}\nThe project's", e.id)
+                                tr!("{id}\nThe project's", id = e.id.as_str())
                             } else {
-                                e.id.clone()
+                                Tx::raw(e.id.clone())
                             };
-                            if cell_resp.on_hover_text(tip).clicked() {
+                            if cell_resp.tip(tip).clicked() {
                                 picked = Some(e.id.clone());
                             }
                         }

@@ -4,7 +4,9 @@
 //!   ([`crate::rank`]: word prefixes first, then letters in order), virtualized rows (only the rows
 //!   on screen are laid out), an icon and a tint per row, a second muted line on the highlighted
 //!   row, and - with a memory key - the sections Recent and Favourites above the rest, a star per
-//!   row to add or take a favourite. Full keyboard use: type to search, Up / Down / Page Up /
+//!   row to add or take a favourite; rows with a group stand under their group's heading (Dark,
+//!   Light) while nothing is searched, and a row may show a strip of colours (a theme's swatch)
+//!   where an icon goes. Full keyboard use: type to search, Up / Down / Page Up /
 //!   Page Down / Home / End move, Enter picks, Esc closes. The order is worked out when the query
 //!   changes, never per frame.
 //! - **`Combo`** is a value with the kit's chevron that opens a `PickList` under it. It is the
@@ -21,6 +23,7 @@ use rustc_hash::FxHasher;
 
 use crate::audit;
 use crate::font::Font;
+use crate::i18n::Tx;
 use crate::icons::{self, Icon};
 use crate::layout;
 use crate::menu::popup_frame;
@@ -34,34 +37,41 @@ use crate::units::em;
 pub struct PickItem {
     /// What the list remembers it by (recent, favourites) and the caller picks it by.
     pub id: String,
-    /// What the row shows.
-    pub label: String,
+    /// What the row shows: the editor's own word, or data ([`Tx::raw`]).
+    pub label: Tx<'static>,
     /// The second line of the highlighted row, muted; searched like a path is.
-    pub detail: String,
+    pub detail: Tx<'static>,
     pub icon: Icon,
     /// The icon's colour (a family, a tone); the text colour without one.
     pub tint: Option<Color32>,
     /// Off rows are shown and never picked.
     pub enabled: bool,
+    /// The heading the row stands under while nothing is searched; rows of one group stand
+    /// together, the groups in the order their first row has.
+    pub group: String,
+    /// Colours drawn as a strip where the icon goes ([`swatch`]).
+    pub swatch: Vec<Color32>,
 }
 
 impl Default for PickItem {
     fn default() -> Self {
         Self {
             id: String::new(),
-            label: String::new(),
-            detail: String::new(),
+            label: Tx::EMPTY,
+            detail: Tx::EMPTY,
             icon: Icon::None,
             tint: None,
             enabled: true,
+            group: String::new(),
+            swatch: Vec::new(),
         }
     }
 }
 
 impl PickItem {
     #[must_use]
-    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
-        Self { id: id.into(), label: label.into(), ..Self::default() }
+    pub fn new<'a>(id: impl Into<String>, label: impl Into<Tx<'a>>) -> Self {
+        Self { id: id.into(), label: label.into().into_owned(), ..Self::default() }
     }
 
     #[must_use]
@@ -77,8 +87,8 @@ impl PickItem {
     }
 
     #[must_use]
-    pub fn detail(mut self, detail: impl Into<String>) -> Self {
-        self.detail = detail.into();
+    pub fn detail<'a>(mut self, detail: impl Into<Tx<'a>>) -> Self {
+        self.detail = detail.into().into_owned();
         self
     }
 
@@ -87,6 +97,44 @@ impl PickItem {
         self.enabled = enabled;
         self
     }
+
+    #[must_use]
+    pub fn group(mut self, group: impl Into<String>) -> Self {
+        self.group = group.into();
+        self
+    }
+
+    #[must_use]
+    pub fn swatch(mut self, colors: &[Color32]) -> Self {
+        self.swatch = colors.to_vec();
+        self
+    }
+}
+
+/// How wide a swatch strip is.
+pub const SWATCH_W: f32 = 28.0;
+
+/// A strip of colours side by side in `rect`, outlined: what a theme looks like.
+pub fn swatch(painter: &egui::Painter, rect: Rect, colors: &[Color32], outline: Color32) {
+    if colors.is_empty() {
+        return;
+    }
+    let w = rect.width() / colors.len() as f32;
+    let last = colors.len() - 1;
+    for (i, c) in colors.iter().enumerate() {
+        let r = Rect::from_min_max(
+            pos2(rect.min.x + w * i as f32, rect.min.y),
+            pos2(if i == last { rect.max.x } else { rect.min.x + w * (i + 1) as f32 }, rect.max.y),
+        );
+        let corner = CornerRadius {
+            nw: if i == 0 { 3 } else { 0 },
+            sw: if i == 0 { 3 } else { 0 },
+            ne: if i == last { 3 } else { 0 },
+            se: if i == last { 3 } else { 0 },
+        };
+        painter.rect_filled(r, corner, *c);
+    }
+    painter.rect_stroke(rect, CornerRadius::same(3), Stroke::new(1.0, outline), StrokeKind::Inside);
 }
 
 /// The height of a row, and the highlighted row's second line.
@@ -108,14 +156,19 @@ enum Heading {
     Recent,
     Favourites,
     All,
+    /// The group of the item at this index.
+    Group(usize),
 }
 
 impl Heading {
-    fn title(self) -> &'static str {
+    /// The heading's English: the sections' are the editor's own words, a group's the caller's;
+    /// both are translated where they are drawn.
+    fn title(self, items: &[PickItem]) -> &str {
         match self {
             Heading::Recent => "Recent",
             Heading::Favourites => "Favourites",
             Heading::All => "All",
+            Heading::Group(i) => items.get(i).map_or("", |it| it.group.as_str()),
         }
     }
 }
@@ -175,21 +228,21 @@ pub struct PickList<'a> {
     items: &'a [PickItem],
     current: Option<&'a str>,
     memory: Option<&'a str>,
-    hint: &'a str,
+    hint: Tx<'a>,
     width: f32,
     max_h: f32,
     search: bool,
-    empty: Option<&'a str>,
+    empty: Option<Tx<'a>>,
 }
 
-fn fingerprint(items: &[PickItem], query: &str, recent: &[String], favs: &[String]) -> u64 {
+fn fingerprint(ctx: &Context, items: &[PickItem], query: &str, recent: &[String], favs: &[String]) -> u64 {
     let mut h: FxHasher = BuildHasherDefault::<FxHasher>::default().build_hasher();
+    crate::i18n::lang(ctx).hash(&mut h);
     items.len().hash(&mut h);
     if let (Some(a), Some(b)) = (items.first(), items.last()) {
-        a.id.hash(&mut h);
-        b.id.hash(&mut h);
+        (&a.id, &a.group, &b.id, &b.group).hash(&mut h);
         if let Some(m) = items.get(items.len() / 2) {
-            m.id.hash(&mut h);
+            (&m.id, &m.group).hash(&mut h);
         }
     }
     query.hash(&mut h);
@@ -198,15 +251,57 @@ fn fingerprint(items: &[PickItem], query: &str, recent: &[String], favs: &[Strin
     h.finish()
 }
 
+/// The items in `order` under their groups' headings, the groups in the order of their first
+/// item; without groups, the items alone.
+fn grouped(items: &[PickItem], order: &[usize], out: &mut Vec<Line>) {
+    let mut firsts: Vec<usize> = Vec::new();
+    for &i in order {
+        if !firsts.iter().any(|&f| items[f].group == items[i].group) {
+            firsts.push(i);
+        }
+    }
+    if firsts.len() == 1 && items[firsts[0]].group.is_empty() {
+        out.extend(order.iter().map(|&i| Line::Item(i)));
+        return;
+    }
+    for f in firsts {
+        // the rows without a group stand without a heading
+        if !items[f].group.is_empty() {
+            out.push(Line::Head(Heading::Group(f)));
+        }
+        out.extend(order.iter().filter(|&&i| items[i].group == items[f].group).map(|&i| Line::Item(i)));
+    }
+}
+
 /// The lines for a query: the ranked matches; without a query the Favourites and Recent
-/// sections first (with a memory key), then every item.
-fn lines_for(items: &[PickItem], query: &str, recent: &[String], favs: &[String]) -> Vec<Line> {
+/// sections first (with a memory key), then every item, under its group's heading.
+fn lines_for(
+    ctx: &Context,
+    items: &[PickItem],
+    query: &str,
+    recent: &[String],
+    favs: &[String],
+) -> Vec<Line> {
+    // the words shown, and their English for a search typed in it
+    let texts: Vec<(String, String, String)> = items
+        .iter()
+        .map(|it| {
+            let en = if it.label.is_raw() { String::new() } else { it.label.en().into_owned() };
+            (it.label.text(ctx), it.detail.text(ctx), en)
+        })
+        .collect();
     let matched = rank::rank(items.len(), query, |i| {
-        let it = &items[i];
-        (it.label.as_str(), it.detail.as_str(), "")
+        let (label, detail, en) = &texts[i];
+        (label.as_str(), detail.as_str(), en.as_str())
     });
-    if !query.trim().is_empty() || (recent.is_empty() && favs.is_empty()) {
+    if !query.trim().is_empty() {
         return matched.into_iter().map(Line::Item).collect();
+    }
+    let has_groups = items.iter().any(|it| !it.group.is_empty());
+    if recent.is_empty() && favs.is_empty() {
+        let mut out = Vec::with_capacity(items.len() + 2);
+        grouped(items, &matched, &mut out);
+        return out;
     }
     let index_of = |id: &String| items.iter().position(|it| &it.id == id);
     let mut out = Vec::with_capacity(items.len() + 3);
@@ -220,8 +315,12 @@ fn lines_for(items: &[PickItem], query: &str, recent: &[String], favs: &[String]
         out.push(Line::Head(Heading::Recent));
         out.extend(r.into_iter().map(Line::Item));
     }
-    out.push(Line::Head(Heading::All));
-    out.extend(matched.into_iter().map(Line::Item));
+    if has_groups {
+        grouped(items, &matched, &mut out);
+    } else {
+        out.push(Line::Head(Heading::All));
+        out.extend(matched.into_iter().map(Line::Item));
+    }
     out
 }
 
@@ -232,7 +331,7 @@ impl<'a> PickList<'a> {
             items,
             current: None,
             memory: None,
-            hint: "Search",
+            hint: Tx::from("Search"),
             width: em(18.0),
             max_h: 360.0,
             search: true,
@@ -252,8 +351,8 @@ impl<'a> PickList<'a> {
         self
     }
 
-    pub fn hint(mut self, hint: &'a str) -> Self {
-        self.hint = hint;
+    pub fn hint(mut self, hint: impl Into<Tx<'a>>) -> Self {
+        self.hint = hint.into();
         self
     }
 
@@ -275,8 +374,8 @@ impl<'a> PickList<'a> {
     }
 
     /// What the list says when no row is left: a sentence, wrapped to the list's width.
-    pub fn empty(mut self, text: &'a str) -> Self {
-        self.empty = Some(text);
+    pub fn empty(mut self, text: impl Into<Tx<'a>>) -> Self {
+        self.empty = Some(text.into());
         self
     }
 
@@ -353,16 +452,16 @@ impl<'a> PickList<'a> {
                     .id(edit_id)
                     .frame(egui::Frame::NONE)
                     .margin(Margin::symmetric(4, 4))
-                    .hint_text(self.hint)
+                    .hint_text(self.hint.get(&ctx).as_ref())
                     .font(Font::Body.id())
                     .desired_width(field.width()),
             );
             ui.add_space(4.0);
         }
 
-        let made_for = fingerprint(self.items, &st.query, &recent, &favs);
+        let made_for = fingerprint(&ctx, self.items, &st.query, &recent, &favs);
         if made_for != st.made_for {
-            st.lines = lines_for(self.items, &st.query, &recent, &favs);
+            st.lines = lines_for(&ctx, self.items, &st.query, &recent, &favs);
             st.made_for = made_for;
             // a list that opens highlights what is chosen; a new query, its best match
             let want = if fresh { self.current } else { None }.and_then(|c| {
@@ -429,10 +528,11 @@ impl<'a> PickList<'a> {
         };
         let total: f32 = st.lines.iter().enumerate().map(|(n, l)| height_of(n, l)).sum();
         if st.lines.is_empty() {
-            let said =
-                self.empty.unwrap_or(if self.items.is_empty() { "Nothing to pick" } else { "No matches" });
+            let said = self.empty.clone().unwrap_or_else(|| {
+                Tx::from(if self.items.is_empty() { "Nothing to pick" } else { "No matches" })
+            });
             let galley =
-                ui.painter().layout(said.to_owned(), Font::Body.id(), p.text_muted, self.width - 16.0);
+                ui.painter().layout(said.text(&ctx), Font::Body.id(), p.text_muted, self.width - 16.0);
             let (r, _) = ui.allocate_exact_size(
                 Vec2::new(self.width, (galley.size().y + 16.0).max(ROW_H * 2.0)),
                 Sense::hover(),
@@ -489,7 +589,7 @@ impl<'a> PickList<'a> {
                                     ui.painter().text(
                                         pos2(rect.min.x + 8.0, rect.center().y + 2.0),
                                         Align2::LEFT_CENTER,
-                                        head.title(),
+                                        Tx::ui_in("pick.group", head.title(self.items).to_owned()).text(&ctx),
                                         Font::Small.id(),
                                         p.text_muted,
                                     );
@@ -581,6 +681,15 @@ fn draw_row(
     }
     let cy = rect.min.y + ROW_H * 0.5;
     let mut x = rect.min.x + 8.0;
+    if !it.swatch.is_empty() {
+        swatch(
+            painter,
+            Rect::from_min_size(pos2(x, cy - 7.0), Vec2::new(SWATCH_W, 14.0)),
+            &it.swatch,
+            p.border,
+        );
+        x += SWATCH_W + 8.0;
+    }
     if it.icon != Icon::None {
         let color = if !it.enabled { p.text_disabled } else { it.tint.unwrap_or(p.text_secondary) };
         icons::draw(painter, it.icon, Rect::from_min_size(pos2(x, cy - 8.0), Vec2::splat(16.0)), color);
@@ -593,7 +702,7 @@ fn draw_row(
         pos2(x, cy),
         Align2::LEFT_CENTER,
         if it.enabled { p.text } else { p.text_disabled },
-        &it.label,
+        it.label.borrow(),
         Some((right - x).max(0.0)),
         Clip::End,
     );
@@ -612,7 +721,7 @@ fn draw_row(
             pos2(x, rect.min.y + ROW_H + DETAIL_H * 0.5 - 4.0),
             Align2::LEFT_CENTER,
             p.text_muted,
-            &it.detail,
+            it.detail.borrow(),
             Some((rect.max.x - 8.0 - x).max(0.0)),
             Clip::Start,
         );
@@ -635,11 +744,14 @@ fn draw_row(
             );
         }
         star = sr.clicked();
-        let _ =
-            sr.on_hover_text(if on { "Take it out of the favourites" } else { "Add it to the favourites" });
+        let _ = crate::i18n::TipExt::tip(
+            sr,
+            if on { "Take it out of the favourites" } else { "Add it to the favourites" },
+        );
     }
-    resp.widget_info(|| WidgetInfo::selected(Role::ListItem, it.enabled, current, &it.label));
-    audit::control(ui.ctx(), &it.label, it.enabled, None, None, rect);
+    let label = it.label.get(ui.ctx());
+    resp.widget_info(|| WidgetInfo::selected(Role::ListItem, it.enabled, current, label.as_ref()));
+    audit::control(ui.ctx(), &label, it.enabled, None, None, rect);
     RowOut { clicked: resp.clicked(), hovered: resp.hovered(), star }
 }
 
@@ -676,40 +788,48 @@ pub fn pick_popup(
 #[must_use = "a combo does nothing until it is shown"]
 pub struct Combo<'a> {
     id_salt: Id,
-    shown: &'a str,
+    shown: Tx<'a>,
     icon: Icon,
+    swatch: &'a [Color32],
     width: Option<f32>,
     enabled: bool,
-    why: &'a str,
+    why: Tx<'a>,
     mixed: bool,
     error: bool,
     warn: bool,
     placeholder: bool,
     busy: bool,
-    tip: &'a str,
+    tip: Tx<'a>,
 }
 
 impl<'a> Combo<'a> {
     /// A combo showing `shown` (the chosen value's name).
-    pub fn new(id_salt: impl Hash + std::fmt::Debug, shown: &'a str) -> Self {
+    pub fn new(id_salt: impl Hash + std::fmt::Debug, shown: impl Into<Tx<'a>>) -> Self {
         Self {
             id_salt: Id::unique(("gz-ui.combo", id_salt)),
-            shown,
+            shown: shown.into(),
             icon: Icon::None,
+            swatch: &[],
             width: None,
             enabled: true,
-            why: "",
+            why: Tx::EMPTY,
             mixed: false,
             error: false,
             warn: false,
             placeholder: false,
             busy: false,
-            tip: "",
+            tip: Tx::EMPTY,
         }
     }
 
     pub fn icon(mut self, icon: Icon) -> Self {
         self.icon = icon;
+        self
+    }
+
+    /// A strip of colours before the value (the chosen theme's swatch).
+    pub fn swatch(mut self, colors: &'a [Color32]) -> Self {
+        self.swatch = colors;
         self
     }
 
@@ -719,9 +839,9 @@ impl<'a> Combo<'a> {
         self
     }
 
-    pub fn enabled(mut self, enabled: bool, why: &'a str) -> Self {
+    pub fn enabled(mut self, enabled: bool, why: impl Into<Tx<'a>>) -> Self {
         self.enabled = enabled;
-        self.why = why;
+        self.why = why.into();
         self
     }
 
@@ -751,18 +871,18 @@ impl<'a> Combo<'a> {
 
     /// The list is still being read: a spinner where the chevron is, and no press; `why` says
     /// what is read.
-    pub fn busy(mut self, busy: bool, why: &'a str) -> Self {
+    pub fn busy(mut self, busy: bool, why: impl Into<Tx<'a>>) -> Self {
         self.busy = busy;
         if busy {
             self.enabled = false;
-            self.why = why;
+            self.why = why.into();
         }
         self
     }
 
     /// What hovering the value says (a value cut short says itself).
-    pub fn tip(mut self, tip: &'a str) -> Self {
-        self.tip = tip;
+    pub fn tip(mut self, tip: impl Into<Tx<'a>>) -> Self {
+        self.tip = tip.into();
         self
     }
 
@@ -802,7 +922,11 @@ impl<'a> Combo<'a> {
             Vec2::new(w, metrics::FRAME),
             if self.enabled { Sense::click() } else { Sense::hover() },
         );
-        resp.widget_info(|| WidgetInfo::labeled(Role::ComboBox, self.enabled, self.shown));
+        let shown_text = self.shown.get(&ctx);
+        let shown_text: &str = &shown_text;
+        let why_text = self.why.get(&ctx);
+        let tip_text = self.tip.get(&ctx);
+        resp.widget_info(|| WidgetInfo::labeled(Role::ComboBox, self.enabled, shown_text));
         let mut cut_value = false;
         if ui.is_rect_visible(rect) {
             let painter = ui.painter();
@@ -839,12 +963,21 @@ impl<'a> Combo<'a> {
                 );
                 x += 22.0;
             }
+            if !self.swatch.is_empty() {
+                swatch(
+                    painter,
+                    Rect::from_min_size(pos2(x, rect.center().y - 7.0), Vec2::new(SWATCH_W, 14.0)),
+                    self.swatch,
+                    p.border,
+                );
+                x += SWATCH_W + 8.0;
+            }
             let chevron = Rect::from_min_size(
                 pos2(rect.max.x - 8.0 - metrics::GLYPH_STATUS, rect.center().y - metrics::GLYPH_STATUS * 0.5),
                 Vec2::splat(metrics::GLYPH_STATUS),
             );
             let (shown, color) = if self.mixed {
-                ("Multiple values", p.text_muted)
+                (Tx::from("Multiple values"), p.text_muted)
             } else {
                 let color = if !self.enabled && !self.busy {
                     p.text_disabled
@@ -855,7 +988,7 @@ impl<'a> Combo<'a> {
                 } else {
                     p.text
                 };
-                (self.shown, color)
+                (self.shown.borrow(), color)
             };
             let cut = text::paint(
                 painter,
@@ -863,7 +996,7 @@ impl<'a> Combo<'a> {
                 pos2(x, rect.center().y),
                 Align2::LEFT_CENTER,
                 color,
-                shown,
+                shown.borrow(),
                 Some((chevron.min.x - 6.0 - x).max(0.0)),
                 Clip::End,
             );
@@ -878,32 +1011,34 @@ impl<'a> Combo<'a> {
                 );
             }
             if cut {
-                audit::truncated(&ctx, shown, shown, rect);
+                let full = shown.get(&ctx);
+                audit::truncated_text(&ctx, &full, text::source(&shown).as_deref(), &full, rect);
                 cut_value = true;
             }
         }
-        let why = (!self.enabled && !self.why.is_empty()).then_some(self.why);
-        audit::control(&ctx, self.shown, self.enabled, why, why, rect);
+        let why = (!self.enabled && !why_text.is_empty()).then_some(why_text.as_ref());
+        audit::control(&ctx, shown_text, self.enabled, why, why, rect);
         match why {
             Some(w) => resp.on_hover_text(w),
-            None if !self.tip.is_empty() => resp.on_hover_text(self.tip),
-            None if cut_value => resp.on_hover_text(self.shown),
+            None if !tip_text.is_empty() => resp.on_hover_text(tip_text.as_ref()),
+            None if cut_value => resp.on_hover_text(shown_text),
             None => resp,
         }
     }
 }
 
 /// One of a few named choices as a combo: the plain case. Returns whether the choice changed.
-pub fn combo(
+pub fn combo<'a, L: Clone + Into<Tx<'a>>>(
     ui: &mut Ui,
     id_salt: impl Hash + std::fmt::Debug + Copy,
     current: &mut usize,
-    options: &[&str],
+    options: &[L],
 ) -> bool {
+    let options = crate::button::txs(options);
     let items: Vec<PickItem> =
-        options.iter().enumerate().map(|(i, o)| PickItem::new(i.to_string(), *o)).collect();
+        options.iter().enumerate().map(|(i, o)| PickItem::new(i.to_string(), o.borrow())).collect();
     let current_id = current.to_string();
-    let shown = options.get(*current).copied().unwrap_or("");
+    let shown = options.get(*current).map_or(Tx::EMPTY, Tx::borrow);
     let mixed = crate::grid::is_mixed(ui);
     let mut list = PickList::new(id_salt, &items).current(&current_id);
     if options.len() <= 8 {
@@ -920,7 +1055,8 @@ pub fn combo(
 
 #[cfg(test)]
 mod tests {
-    use super::{Heading, Line, PickItem, first_item, lines_for};
+    use super::{Heading, Line, PickItem, first_item};
+    use crate::Tx;
 
     fn items() -> Vec<PickItem> {
         ["Wait", "Spawn NPC", "Give Item", "App Message", "Spawn Squad"]
@@ -928,6 +1064,10 @@ mod tests {
             .enumerate()
             .map(|(i, l)| PickItem::new(format!("k{i}"), *l))
             .collect()
+    }
+
+    fn lines_for(it: &[PickItem], query: &str, recent: &[String], favs: &[String]) -> Vec<Line> {
+        super::lines_for(&egui::Context::default(), it, query, recent, favs)
     }
 
     #[test]
@@ -948,6 +1088,28 @@ mod tests {
         assert_eq!(spawn, vec![Line::Item(1), Line::Item(4)]);
         let letters = lines_for(&it, "sn", &recent, &favs);
         assert_eq!(letters, vec![Line::Item(1)]);
+    }
+
+    #[test]
+    fn groups_head_their_rows_while_nothing_is_searched() {
+        let it: Vec<PickItem> = [("a", "Dark"), ("b", "Light"), ("c", "Dark")]
+            .iter()
+            .map(|(id, g)| PickItem::new(*id, Tx::raw(id.to_uppercase())).group(*g))
+            .collect();
+        let all = lines_for(&it, "", &[], &[]);
+        assert_eq!(
+            all,
+            vec![
+                Line::Head(Heading::Group(0)),
+                Line::Item(0),
+                Line::Item(2),
+                Line::Head(Heading::Group(1)),
+                Line::Item(1)
+            ]
+        );
+        assert_eq!(Heading::Group(1).title(&it), "Light");
+        // a search ranks the rows without the headings
+        assert_eq!(lines_for(&it, "b", &[], &[]), vec![Line::Item(1)]);
     }
 
     #[test]

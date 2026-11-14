@@ -16,12 +16,14 @@ use gz_fmt_sound::{
 use gz_store::{Apply, State, Store, imbl};
 use gz_ui::grid::{Grid, combo, number, read_only};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Button, Font, Icon, Kind, PropFlags, PropertyGrid, Tone, Toolbar, palette, state};
+use gz_ui::{
+    Button, Font, Icon, Kind, PropFlags, PropertyGrid, TipExt, Tone, Toolbar, Tx, palette, state, tr,
+};
 use serde_json::{Map, Value, json};
 
 use super::list::{Empty, LibraryList, find, shown};
 use super::stores::{LibraryFacts, LibraryStores, SoundFacts};
-use super::{LibraryDoc, LibraryLists, Settle, can_write, folder_text, pane, panes};
+use super::{LibraryDoc, LibraryLists, Settle, can_write, folder_tx, pane, panes};
 use crate::audio::Player;
 use crate::local::{local_ends, local_heading};
 use crate::paths::{EditorDirs, file_age, list_files};
@@ -325,16 +327,20 @@ impl SoundLibDoc {
         let src = self.dirs.sounds.join(format!("{}.wav", item.name)).to_string_lossy().into_owned();
         let game = self.game_sound();
         let facts = match game.as_deref() {
-            Some(Some(g)) => {
-                format!("{:.1} KB \u{b7} {:.2} s", g.bytes as f32 / 1024.0, g.ms as f32 / 1000.0)
-            }
-            _ => String::new(),
+            Some(Some(g)) => crate::local::local_facts(
+                &ctx,
+                &[
+                    tr!("previews" => "{n} KB", n = format!("{:.1}", g.bytes as f32 / 1024.0)),
+                    tr!("previews" => "{s} s", s = format!("{:.2}", g.ms as f32 / 1000.0)),
+                ],
+            ),
+            _ => Tx::EMPTY,
         };
         local_heading(
             ui,
-            &crate::paths::label_of(&item.name),
+            Tx::raw(crate::paths::label_of(&item.name)),
             Clip::End,
-            &[(&src, Clip::Start), (&facts, Clip::End)],
+            &[(Tx::raw(src), Clip::Start), (facts, Clip::End)],
         );
         match game.as_deref() {
             Some(None) => {
@@ -445,13 +451,13 @@ impl SoundLibDoc {
             t.base_volume = t.base_volume.clamp(0.0, 2.0);
             g.row("Game Type", "What NPCs make of the sound", ro, 0, |ui| {
                 let unknown = format!("{:#010x}", t.game_type);
-                let mut names: Vec<&str> = GAME_TYPES.iter().map(|(_, n)| *n).collect();
+                let mut names: Vec<Tx<'_>> = GAME_TYPES.iter().map(|(_, n)| Tx::from(*n)).collect();
                 let mut cur = GAME_TYPES.iter().position(|(v, _)| *v == t.game_type).unwrap_or_else(|| {
-                    names.push(&unknown);
+                    names.push(Tx::raw(unknown.as_str()));
                     names.len() - 1
                 });
                 if ro.contains(PropFlags::READ_ONLY) {
-                    read_only(ui, names.get(cur).copied().unwrap_or(""), Clip::End);
+                    read_only(ui, names.get(cur).cloned().unwrap_or_default(), Clip::End);
                 } else if combo(ui, "game_type", &mut cur, &names)
                     && let Some((v, _)) = GAME_TYPES.get(cur)
                 {
@@ -500,10 +506,18 @@ impl SoundLibDoc {
             if let Some(Some(gs)) = game.as_deref() {
                 g.section("Game Sound", true, None, |g| {
                     g.row("File Size", "", PropFlags::READ_ONLY, 0, |ui| {
-                        read_only(ui, &format!("{:.2} KB", gs.bytes as f32 / 1024.0), Clip::End)
+                        read_only(
+                            ui,
+                            tr!("previews" => "{n} KB", n = format!("{:.2}", gs.bytes as f32 / 1024.0)),
+                            Clip::End,
+                        )
                     });
                     g.row("Length", "", PropFlags::READ_ONLY, 0, |ui| {
-                        read_only(ui, &format!("{:.2} s", gs.ms as f32 / 1000.0), Clip::End)
+                        read_only(
+                            ui,
+                            tr!("previews" => "{s} s", s = format!("{:.2}", gs.ms as f32 / 1000.0)),
+                            Clip::End,
+                        )
                     });
                 });
             }
@@ -852,24 +866,28 @@ fn draw_attenuation(ui: &mut Ui, thm: &SoundThm, height: f32) {
         Stroke::new(1.0, p.border_subtle),
         egui::StrokeKind::Inside,
     );
-    resp.on_hover_text("Volume over distance: full up to the minimum distance, silent past the maximum.");
-    local_ends(ui, &format!("Min {:.1} m", thm.min_dist), &format!("Max {:.1} m", thm.max_dist));
+    resp.tip("Volume over distance: full up to the minimum distance, silent past the maximum.");
+    local_ends(
+        ui,
+        tr!("Min {d} m", d = format!("{:.1}", thm.min_dist)),
+        tr!("Max {d} m", d = format!("{:.1}", thm.max_dist)),
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
 fn real(
     g: &mut Grid<'_>,
-    label: &str,
-    help: &str,
+    label: &'static str,
+    help: &'static str,
     flags: PropFlags,
     value: &mut f32,
     speed: f32,
-    unit: &str,
+    unit: &'static str,
     gesture: &mut String,
 ) {
     g.row(label, help, flags, 0, |ui| {
         if flags.contains(PropFlags::READ_ONLY) {
-            read_only(ui, &format!("{value:.2}"), Clip::End);
+            read_only(ui, Tx::raw(format!("{value:.2}")), Clip::End);
             return;
         }
         let before = *value;
@@ -902,14 +920,14 @@ impl Document for SoundLibDoc {
     fn kind(&self) -> &'static str {
         KIND
     }
-    fn label(&self) -> String {
-        "Sound Library".to_owned()
+    fn label(&self) -> Tx<'static> {
+        Tx::from("Sound Library")
     }
     fn icon(&self) -> Icon {
         Icon::FileSound
     }
-    fn tooltip(&self) -> Option<String> {
-        Some("The sound descriptions of the editor's library".to_owned())
+    fn tooltip(&self) -> Option<Tx<'static>> {
+        Some(Tx::from("The sound descriptions of the editor's library"))
     }
     fn dirty(&self) -> bool {
         self.store.is_dirty()
@@ -959,8 +977,12 @@ impl Document for SoundLibDoc {
             cx.requests.action("file.save");
         }
         tb.group(3);
-        gz_app::toolbar_button(tb, cx, "library.play_sound", Kind::Ghost, None);
-        gz_app::toolbar_button(tb, cx, "library.stop_sound", Kind::Ghost, None);
+        // the toolbar's words for them are short; "Play" is the sound's, not the game's
+        let ctx = cx.ctx.clone();
+        gz_ui::i18n::scope(&ctx, "playback", || {
+            gz_app::toolbar_button(tb, cx, "library.play_sound", Kind::Ghost, Some("Play"));
+            gz_app::toolbar_button(tb, cx, "library.stop_sound", Kind::Ghost, Some("Stop"));
+        });
         gz_app::toolbar_button(tb, cx, "library.auto_play", Kind::Ghost, None);
         tb.group(1);
         gz_app::toolbar_button(tb, cx, "library.rebuild_sound", Kind::Ghost, None);
@@ -988,11 +1010,11 @@ impl Document for SoundLibDoc {
         let all = items.clone().unwrap_or_default();
         // a library with nothing in it says so once, over the whole tab
         if items.is_some() && all.is_empty() {
-            let text_ = format!(
-                "The library lists the .wav files in {}. A sound copied there shows up the next time the library opens.",
-                folder_text(&self.editor, &self.dirs.sounds)
+            let text_ = tr!(
+                "The library lists the .wav files in {place}. A sound copied there shows up the next time the library opens.",
+                place = folder_tx(&self.editor, &self.dirs.sounds)
             );
-            state::empty_state(ui, Icon::FileSound, "No sounds", &text_, None);
+            state::empty_state(ui, Icon::FileSound, "No sounds", text_, None);
             return;
         }
         let [list_r, preview_r, details_r] = panes(ui, KIND);
@@ -1000,16 +1022,16 @@ impl Document for SoundLibDoc {
         let rows = shown(&keys, &|_| true, &self.list.search);
         // only an empty list says where the library is read from
         let empty_text = if items.is_some() && all.is_empty() {
-            format!(
-                "The library lists the .wav files in {}. A sound copied there shows up the next time the library opens.",
-                folder_text(&self.editor, &self.dirs.sounds)
+            tr!(
+                "The library lists the .wav files in {place}. A sound copied there shows up the next time the library opens.",
+                place = folder_tx(&self.editor, &self.dirs.sounds)
             )
         } else {
-            String::new()
+            Tx::EMPTY
         };
         let empty = Empty {
-            title: if items.is_some() { "No sounds" } else { "Reading the library..." },
-            text: &empty_text,
+            title: Tx::from(if items.is_some() { "No sounds" } else { "Reading the library..." }),
+            text: empty_text,
             action: None,
         };
         let selected = self.selected.clone();
@@ -1049,15 +1071,20 @@ impl Document for SoundLibDoc {
         let keys: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
         let rows = shown(&keys, &|_| true, &self.list.search);
         let changed = self.store.snapshot().edits.len();
-        let mut line = format!("{} sounds", items.len());
-        if rows.len() != items.len() {
-            line.push_str(&format!(" \u{b7} {} shown", rows.len()));
-        }
-        if changed > 0 {
-            line.push_str(&format!(" \u{b7} {changed} changed"));
-        }
+        let line = crate::local::local_facts(
+            ui.ctx(),
+            &[
+                tr!("{n} {n:sound|sounds}", n = items.len()),
+                if rows.len() == items.len() {
+                    Tx::EMPTY
+                } else {
+                    tr!("previews" => "{n} shown", n = rows.len())
+                },
+                if changed > 0 { tr!("previews" => "{n} changed", n = changed) } else { Tx::EMPTY },
+            ],
+        );
         let p = palette(ui.ctx());
-        text::label(ui, &line, Font::Small, p.text_secondary, Clip::End);
+        text::label(ui, line, Font::Small, p.text_secondary, Clip::End);
     }
 
     fn edit(&mut self, _cx: &mut DocCx<'_>, action: EditAction, run: bool) -> bool {

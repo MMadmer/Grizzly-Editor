@@ -367,3 +367,107 @@ fn the_number_of_threads_is_an_option_of_the_test() {
     assert!(Options::parse(["-threads=0"]).is_err());
     assert!(Options::parse(["-threads=x"]).is_err());
 }
+
+/// The compile of `prj` with a Stop that `stop_when` pulls, given every log line and every report
+/// (before the Stop and after it): the answer, the lines, and how long the compile took after the
+/// Stop was pulled.
+fn stopped_compile(
+    prj: &gz_fmt_level::BuildProject,
+    shaders: Shaders,
+    textures: Vec<gz_lc_light::BuildTexture>,
+    stop_when: impl Fn(Option<&str>, Option<gz_lc_light::Report<'_>>) -> bool + Send + Sync + 'static,
+) -> (crate::Result<crate::Output>, Vec<String>, Option<std::time::Duration>) {
+    use std::sync::{Arc, Mutex};
+    let cancel = gz_task::Cancel::new();
+    let pulled: Arc<Mutex<Option<std::time::Instant>>> = Arc::default();
+    let when = Arc::new(stop_when);
+    let (c1, p1, w1) = (cancel.clone(), pulled.clone(), when.clone());
+    let echo = move |line: &str| {
+        if w1(Some(line), None) && !c1.is_cancelled() {
+            *p1.lock().unwrap() = Some(std::time::Instant::now());
+            c1.cancel();
+        }
+    };
+    let (c2, p2) = (cancel.clone(), pulled.clone());
+    let report = move |r: gz_lc_light::Report<'_>| {
+        if when(None, Some(r)) && !c2.is_cancelled() {
+            *p2.lock().unwrap() = Some(std::time::Instant::now());
+            c2.cancel();
+        }
+    };
+    let ctl = Ctl::new(&cancel, &report);
+    let mut log = Log::with_echo(Box::new(echo));
+    let out = compile_project(prj, shaders, textures, &Options::default(), &ctl, &mut log);
+    let after = pulled.lock().unwrap().map(|t| t.elapsed());
+    (out, log.lines, after)
+}
+
+#[test]
+fn a_stop_in_any_phase_ends_the_compile_in_that_phase() {
+    for phase in crate::PHASES {
+        let (prj, shaders, textures) = project();
+        let at = format!("{}{phase}", crate::PHASE_STARTED);
+        let (out, lines, _) =
+            stopped_compile(&prj, shaders, textures, move |line, _| line == Some(at.as_str()));
+        assert!(out.as_ref().err().is_some_and(crate::Error::cancelled), "{phase}: {:?}", out.err());
+        let started: Vec<&str> = lines.iter().filter_map(|l| l.strip_prefix(crate::PHASE_STARTED)).collect();
+        assert_eq!(started.last().copied(), Some(phase), "the compile went past {phase}");
+    }
+}
+
+#[test]
+fn a_stop_while_the_lightmaps_are_lit_ends_within_a_moment() {
+    // the floor lit densely: the phase takes seconds, the Stop comes as its first deflector is done
+    let (mut prj, shaders, textures) = project();
+    prj.params.lm_pixels_per_meter = 24.0;
+    prj.params.lm_jitter_samples = 9;
+    let phase = format!("{}{}", crate::PHASE_STARTED, crate::PHASES[12]);
+    let inside = std::sync::atomic::AtomicBool::new(false);
+    let started = std::time::Instant::now();
+    let (out, lines, after) = stopped_compile(&prj, shaders, textures, move |line, r| {
+        if line == Some(phase.as_str()) {
+            inside.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        inside.load(std::sync::atomic::Ordering::Relaxed)
+            && matches!(r, Some(gz_lc_light::Report::Progress { .. }))
+    });
+    assert!(out.as_ref().err().is_some_and(crate::Error::cancelled), "{:?}", out.err());
+    let after = after.expect("the Stop was pulled while the lightmaps were lit");
+    assert!(after < std::time::Duration::from_secs(1), "the compile took {after:?} to stop");
+    assert!(!lines.iter().any(|l| l.starts_with(crate::PHASE_DONE) && l.contains(crate::PHASES[12])));
+    eprintln!("stopped {after:?} after the Stop, {:?} in all", started.elapsed());
+}
+
+#[test]
+fn a_stop_while_the_references_are_lit_leaves_the_rest_unlit() {
+    // many references of the model: the Stop at the first one lit, most never are
+    let (mut prj, shaders, textures) = project();
+    let first = prj.mu_refs[0];
+    prj.mu_refs = (0..4000)
+        .map(|i| {
+            let mut r = first;
+            r.transform[3][0] = -20.0 + (i % 64) as f32 * 0.6;
+            r.transform[3][2] = -20.0 + (i / 64) as f32 * 0.6;
+            r
+        })
+        .collect();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new((false, 0usize, 0usize)));
+    let s2 = seen.clone();
+    let (out, _, after) = stopped_compile(&prj, shaders, textures, move |_, r| {
+        let mut s = s2.lock().unwrap();
+        match r {
+            Some(gz_lc_light::Report::Stage("the references")) => s.0 = true,
+            Some(gz_lc_light::Report::Progress { done, total }) if s.0 => {
+                s.1 = s.1.max(done);
+                s.2 = total;
+                return true;
+            }
+            _ => {}
+        }
+        false
+    });
+    assert!(out.as_ref().err().is_some_and(crate::Error::cancelled), "{:?}", out.err());
+    assert!(after.is_some_and(|a| a < std::time::Duration::from_secs(1)), "{after:?}");
+    let (_, done, total) = *seen.lock().unwrap();
+    assert!(total > 4000 && done < total / 2, "{done} of {total} lit before the Stop took");
+}

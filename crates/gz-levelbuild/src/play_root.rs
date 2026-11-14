@@ -11,7 +11,9 @@
 //!
 //! A root is Play's when it carries [`MARKER`]: Play writes it when it makes a root in a missing
 //! or empty folder, and a folder that holds anything else and no marker is refused. Play clears
-//! only what it writes there (`play.rs`), never the folder.
+//! only what it writes there (`play.rs`), never the folder: the entries of the root's top its
+//! marker lists (`entry = `) and the modules it installed in the root's `modules\` (`module = `,
+//! written before the module is).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,6 +29,8 @@ const MARKER_HEAD: &str = "; A game root made by Play of the level editor. Play 
 /// those copies, and never written.
 const PROGRAM_KEY: &str = "program = ";
 const ENTRY_KEY: &str = "entry = ";
+/// A module Play installed into the root's `modules\`: the only folders Play removes there.
+const MODULE_KEY: &str = "module = ";
 
 /// What a root that passed the checks holds now.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,9 +39,9 @@ pub enum RootState {
     Missing,
     /// An empty folder: Play makes its root in it.
     Empty,
-    /// Play's own root, with the entries its marker lists and the programs a copying Play
-    /// put there.
-    Marked { programs: Vec<String>, entries: Vec<String> },
+    /// Play's own root, with the entries its marker lists, the programs a copying Play put
+    /// there and the modules Play installed in its `modules\`.
+    Marked { programs: Vec<String>, entries: Vec<String>, modules: Vec<String> },
 }
 
 impl RootState {
@@ -116,6 +120,11 @@ pub(crate) fn marker_line(name: &str) -> String {
     format!("{ENTRY_KEY}{name}\r\n")
 }
 
+/// A marker's line for a module Play installs (`module = `).
+pub(crate) fn module_line(id: &str) -> String {
+    format!("{MODULE_KEY}{id}\r\n")
+}
+
 /// A file name of the root's top: no separator, no `..`, no stream.
 pub(crate) fn plain_name(n: &str) -> bool {
     !n.is_empty() && n != "." && n != ".." && !n.contains(['\\', '/', ':'])
@@ -126,23 +135,31 @@ pub(crate) fn marker_head() -> &'static str {
     MARKER_HEAD
 }
 
-/// The marker's text for `entries`.
-pub(crate) fn marker_text(entries: &[String]) -> String {
+/// The marker's text for `entries` and the `modules` Play installed.
+pub(crate) fn marker_text(entries: &[String], modules: &[String]) -> String {
     let mut out = MARKER_HEAD.to_owned();
     for e in entries {
         out.push_str(&marker_line(e));
+    }
+    for m in modules {
+        out.push_str(&module_line(m));
     }
     out
 }
 
 /// What a marker lists - programs, other entries -, read again (`stage_level`, `prepare`).
 pub(crate) fn read_marker(root: &Path) -> Option<(Vec<String>, Vec<String>)> {
+    read_marker_all(root).map(|(p, e, _)| (p, e))
+}
+
+/// What a marker lists: programs, entries, modules.
+pub(crate) fn read_marker_all(root: &Path) -> Option<(Vec<String>, Vec<String>, Vec<String>)> {
     let marker = root.join(MARKER);
     if !fs::symlink_metadata(&marker).is_ok_and(|m| m.is_file()) {
         return None;
     }
     let text = String::from_utf8_lossy(&fs::read(&marker).ok()?).into_owned();
-    Some((marker_names(&text, PROGRAM_KEY), marker_names(&text, ENTRY_KEY)))
+    Some((marker_names(&text, PROGRAM_KEY), marker_names(&text, ENTRY_KEY), marker_names(&text, MODULE_KEY)))
 }
 
 /// The projects inside what Play is about to clear of a marked root (its `gamedata`): any
@@ -231,9 +248,9 @@ pub fn check_root(cx: &DeleteContext, root: &Path) -> Result<RootState, String> 
     if names.is_empty() {
         return Ok(RootState::Empty);
     }
-    if let Some((programs, entries)) = read_marker(Path::new(&full)) {
+    if let Some((programs, entries, modules)) = read_marker_all(Path::new(&full)) {
         nothing_to_lose(Path::new(&full), &entries)?;
-        return Ok(RootState::Marked { programs, entries });
+        return Ok(RootState::Marked { programs, entries, modules });
     }
     names.sort_by_key(|n| n.to_ascii_lowercase());
     let count = names.len();
@@ -315,7 +332,8 @@ mod tests {
             check_root(&cx, &missing).unwrap(),
             RootState::Marked {
                 programs: vec!["engine.bin".to_owned()],
-                entries: vec!["gamedata".to_owned()]
+                entries: vec!["gamedata".to_owned()],
+                modules: Vec::new(),
             }
         );
     }
@@ -326,7 +344,7 @@ mod tests {
         let cx = DeleteContext::default();
         let root = base.path().join("play");
         fs::create_dir_all(root.join("gamedata").join("mods").join("my_mod")).unwrap();
-        fs::write(root.join(MARKER), marker_text(&["gamedata".to_owned()])).unwrap();
+        fs::write(root.join(MARKER), marker_text(&["gamedata".to_owned()], &[])).unwrap();
         fs::write(root.join("gamedata").join("mods").join("my_mod").join("mod.ltx"), b"[module]").unwrap();
         let before = listing(base.path());
         let why = check_root(&cx, &root).unwrap_err();

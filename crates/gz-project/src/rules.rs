@@ -42,6 +42,34 @@ pub fn is_source_only_entry(name_in_root: &str) -> bool {
         || GUIDES.iter().any(|n| n.eq_ignore_ascii_case(name_in_root))
 }
 
+/// The level build's own files in a level folder: what the compiler reads and the build keeps for
+/// itself, never what the game does.
+const LEVEL_BUILD_FILES: [&str; 8] = [
+    "build.prj",
+    "build.state",
+    "build.lights",
+    "build.cform",
+    "build.details",
+    "build.err",
+    "level_stat.tga",
+    "level_stat.txt",
+];
+
+/// A file of a level folder the level build keeps for itself, by its name there.
+#[must_use]
+pub fn is_level_build_name(name: &str) -> bool {
+    LEVEL_BUILD_FILES.iter().any(|n| n.eq_ignore_ascii_case(name))
+}
+
+/// A project-relative path (either separator) that is a level build's own file:
+/// `gamedata\levels\<level>\build.prj` and the like. Never shipped.
+#[must_use]
+pub fn is_level_build_file(rel: &str) -> bool {
+    let parts: Vec<&str> = rel.split(['\\', '/']).filter(|p| !p.is_empty()).collect();
+    matches!(parts.as_slice(), [g, l, _, name]
+        if g.eq_ignore_ascii_case("gamedata") && l.eq_ignore_ascii_case("levels") && is_level_build_name(name))
+}
+
 /// Tooling: version control, IDE and OS litter. Never shown, never shipped and never walked,
 /// at ANY depth.
 #[must_use]
@@ -106,6 +134,28 @@ pub fn ensure_gitignore(root: &Path) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_level_folders_build_files_are_the_builds_own() {
+        for p in [
+            "gamedata\\levels\\l01_escape\\build.prj",
+            "gamedata/levels/l01_escape/build.state",
+            "GameData\\Levels\\x\\BUILD.LIGHTS",
+            "gamedata\\levels\\x\\level_stat.tga",
+        ] {
+            assert!(is_level_build_file(p), "{p}");
+        }
+        for p in [
+            "gamedata\\levels\\l01_escape\\level",
+            "gamedata\\levels\\l01_escape\\build_details.dds",
+            "gamedata\\levels\\l01_escape\\level.ai",
+            "gamedata\\build.prj",
+            "levels\\x\\build.prj",
+            "gamedata\\levels\\x\\meshes\\build.prj",
+        ] {
+            assert!(!is_level_build_file(p), "{p}");
+        }
+    }
 
     #[test]
     fn tooling_at_any_depth() {

@@ -1,6 +1,6 @@
 # Building and shipping a mod
 
-Short version: press **Build Mod** (or `Ctrl+B`), or run `Grizzly-Cmd.exe build` in the project folder.
+Short version: press **Build Mod**, or run `Grizzly-Cmd.exe build` in the project folder.
 Everything below is why that works and what to do when it refuses.
 
 **Files first.** Every part of a module is a text file of the project - `mod.ltx`, the quests and
@@ -45,7 +45,7 @@ A mod that changes the class of an existing item needs a new game while it is on
 
 ## 2. Building
 
-**Mod → Build Into Game** · toolbar **Build Mod** · `Ctrl+B`
+**Mod → Build Into Game** · toolbar **Build Mod**
 
 Writes straight into `<linked game>\modules\<id>`. No packing step, no copying
 by hand — the game reads modules from that folder as-is.
@@ -540,7 +540,7 @@ Validation runs as you edit; the toolbar's **Validate** opens the **Problems**
 drawer under the canvas — click a problem to jump to the node. Errors (`E…`) block, warnings (`W…`) do
 not. `asset.check` (`Grizzly-Cmd.exe check`) runs exactly the gate the build runs.
 
-Then press **Build** (`Ctrl+B`). If any quest in the project has an error the
+Then press **Build Mod**. If any quest in the project has an error the
 build **refuses** with `quest graph errors: N (see log)` and the log lists them
 one per line — same codes the game prints. A clean build copies the `.nqasset`
 files straight into `<game>\modules\<id>\`, keeping the folder they sit in

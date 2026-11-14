@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use egui::{Align, Color32, Layout, Rect, ScrollArea, Ui, UiBuilder, Vec2, pos2};
-use gz_app::settings::{INTERFACE_SCALES, PrefType, pref_def};
+use gz_app::settings::{INTERFACE_SCALES, LANG_CHOICES, LangChoice, PrefType, pref_def};
 use gz_app::{
     DocCx, Document, EditorSettings, PrefGroup, PrefGroups, PrefKind as RowKind, PrefRow, ShellBuilder,
 };
@@ -23,7 +23,7 @@ use gz_ui::grid::{Grid, color, combo, format_number, help_footer, integer, numbe
 use gz_ui::list::{NavRowSpec, list, nav_row};
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
-use gz_ui::{Accent, Font, Icon, PropFlags, PropertyGrid, SearchField, palette};
+use gz_ui::{Font, Icon, PropFlags, PropertyGrid, SearchField, THEMES, Tx, palette, tr};
 use parking_lot::Mutex;
 
 use crate::keyboard::KeyboardPage;
@@ -31,7 +31,9 @@ use crate::keyboard::KeyboardPage;
 /// How a preference is edited.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrefKind {
-    /// The editor's colours: the accent family.
+    /// The window's language: the system's, English or Russian.
+    Language,
+    /// The editor's colours: a theme, picked from the dark and the light ones.
     Theme,
     /// The UI's scale: Auto (the monitor's) or a percentage.
     Scale,
@@ -111,10 +113,17 @@ pub const PREFS: &[Pref] = &[
         "",
     ),
     pref(
-        "Interface\\Accent",
-        "accent",
+        "Interface\\Theme",
+        "theme",
         PrefKind::Theme,
-        "The colour of what is active, selected or the one action of a surface.",
+        "Every colour of the editor, dark or light. It changes at once. A theme named after a published one takes its colours; the name is its owner's, who has not endorsed the editor.",
+        "",
+    ),
+    pref(
+        "General\\Language",
+        "language",
+        PrefKind::Language,
+        "The language of the editor's window. System follows Windows: Russian when Windows speaks Russian to you, English otherwise.",
         "",
     ),
     pref(
@@ -130,6 +139,13 @@ pub const PREFS: &[Pref] = &[
         PrefKind::Whole,
         "The most frames a second the editor draws while its window is in front.",
         "fps",
+    ),
+    pref(
+        "General\\VSync",
+        "vsync",
+        PrefKind::Switch,
+        "Each frame waits for the monitor's refresh, so nothing tears. Off, a frame is shown as soon as it is drawn, up to the frame rate limit.",
+        "",
     ),
     pref(
         "General\\Recent Files",
@@ -379,8 +395,26 @@ pub const PAGES: [(&str, Icon); 7] = [
     (KEYBOARD, Icon::Keyboard),
 ];
 
-const THEMES: [&str; 2] = ["Grizzly Purple", "Graphite"];
 const SCALES: [&str; 6] = ["Auto", "100%", "125%", "150%", "175%", "200%"];
+
+/// The scales as the combo names them: Auto in the window's language, the percentages as they are.
+fn scale_names() -> [Tx<'static>; 6] {
+    SCALES.map(|s| if s == "Auto" { Tx::from(s) } else { Tx::raw(s) })
+}
+
+/// The languages as the combo names them, in the order of `LANG_CHOICES`: the system's choice in
+/// the window's language, every language in itself.
+fn language_names() -> [Tx<'static>; 3] {
+    LANG_CHOICES.map(|c| match c {
+        LangChoice::System => gz_app::lang::system_choice_name(),
+        LangChoice::Lang(l) => Tx::raw(l.native_name()),
+    })
+}
+
+/// The index of a language choice in `LANG_CHOICES`.
+fn language_index(choice: LangChoice) -> usize {
+    LANG_CHOICES.iter().position(|c| *c == choice).unwrap_or(0)
+}
 
 impl Pref {
     /// The page, the section (empty for a row of the page itself) and the label.
@@ -402,10 +436,11 @@ impl Pref {
         self.key
     }
 
-    /// The settings file keeps this preference (the theme always).
+    /// The settings file keeps this preference (the theme, the scale and the language always).
     #[must_use]
     pub fn live(&self) -> bool {
-        matches!(self.kind, PrefKind::Theme | PrefKind::Scale) || pref_def(self.key).is_some()
+        matches!(self.kind, PrefKind::Theme | PrefKind::Scale | PrefKind::Language)
+            || pref_def(self.key).is_some()
     }
 
     /// Its default and range: the shell's where it defines the key, else this table's.
@@ -420,10 +455,30 @@ impl Pref {
         }
     }
 
-    /// What a search looks at: the label and where it sits.
+    /// What a search looks at: the label and where it sits, in English.
     #[must_use]
     pub fn matches(&self, search: &str) -> bool {
         gz_ui::search::matches(search, &self.path.replace('\\', " "))
+    }
+
+    /// [`Pref::matches`] in the window's language or in English.
+    #[must_use]
+    pub fn matches_in(&self, ctx: &egui::Context, search: &str) -> bool {
+        self.matches(search) || {
+            let (page, section, label) = self.parts();
+            found_in(ctx, search, &[page, section, label])
+        }
+    }
+}
+
+/// Whether the search finds every word in these words of the editor's, in the window's language
+/// or in English.
+fn found_in(ctx: &egui::Context, search: &str, words: &[&'static str]) -> bool {
+    let en = words.join(" ");
+    gz_ui::search::matches(search, &en) || {
+        let shown: Vec<String> =
+            words.iter().filter(|w| !w.is_empty()).map(|w| Tx::from(*w).text(ctx)).collect();
+        gz_ui::search::matches(search, &shown.join(" "))
     }
 }
 
@@ -431,7 +486,10 @@ impl Pref {
 /// keep it.
 fn value_of(settings: &EditorSettings, p: &Pref) -> f64 {
     match p.kind {
-        PrefKind::Theme => f64::from(u8::from(settings.accent() == Accent::Graphite)),
+        // the index into LANG_CHOICES: 0 System
+        PrefKind::Language => language_index(settings.language()) as f64,
+        // the index into the themes: 0 Grizzly Dark
+        PrefKind::Theme => THEMES.iter().position(|t| t.id == settings.theme().id).unwrap_or(0) as f64,
         // the index into SCALES: 0 Auto
         PrefKind::Scale => settings.interface_scale().map_or(0.0, |s| {
             INTERFACE_SCALES
@@ -450,10 +508,16 @@ fn value_of(settings: &EditorSettings, p: &Pref) -> f64 {
 /// Applies a new value at once; the file is written later.
 fn set_value(settings: &EditorSettings, ctx: &egui::Context, p: &Pref, v: f64) {
     match p.kind {
+        // the shell shows the window in it from the next frame
+        PrefKind::Language => {
+            settings.set_language(LANG_CHOICES.get(v.round().max(0.0) as usize).copied().unwrap_or_default());
+            ctx.request_repaint();
+        }
         PrefKind::Theme => {
-            let accent = if v >= 1.0 { Accent::Graphite } else { Accent::Violet };
-            settings.set_accent(accent);
-            gz_ui::theme::install(ctx, accent);
+            let theme = THEMES.get(v.round() as usize).unwrap_or_else(|| gz_ui::Theme::default_theme());
+            settings.set_theme(theme);
+            gz_ui::theme::install(ctx, theme);
+            ctx.request_repaint();
         }
         PrefKind::Scale => {
             let i = v.round() as usize;
@@ -477,15 +541,16 @@ fn set_value(settings: &EditorSettings, ctx: &egui::Context, p: &Pref, v: f64) {
 }
 
 /// A value as a read-only row shows it.
-fn value_text(p: &Pref, v: f64) -> String {
+fn value_text(p: &Pref, v: f64) -> Tx<'static> {
     match p.kind {
-        PrefKind::Switch | PrefKind::Flag(_) => (if v != 0.0 { "On" } else { "Off" }).to_owned(),
-        PrefKind::Theme => THEMES.get(v as usize).copied().unwrap_or("").to_owned(),
-        PrefKind::Scale => SCALES.get(v as usize).copied().unwrap_or("").to_owned(),
-        PrefKind::Color => format!("#{:06x}", (v as u32) & 0x00ff_ffff),
-        PrefKind::Angle => format!("{}\u{b0}", format_number(v, 3)),
-        _ if p.unit.is_empty() => format_number(v, 3),
-        _ => format!("{} {}", format_number(v, 3), p.unit),
+        PrefKind::Switch | PrefKind::Flag(_) => Tx::from(if v != 0.0 { "On" } else { "Off" }),
+        PrefKind::Language => language_names().into_iter().nth(v as usize).unwrap_or_default(),
+        PrefKind::Theme => THEMES.get(v as usize).map_or(Tx::EMPTY, |t| Tx::raw(t.title)),
+        PrefKind::Scale => scale_names().into_iter().nth(v as usize).unwrap_or_default(),
+        PrefKind::Color => Tx::raw(format!("#{:06x}", (v as u32) & 0x00ff_ffff)),
+        PrefKind::Angle => Tx::raw(format!("{}\u{b0}", format_number(v, 3))),
+        _ if p.unit.is_empty() => Tx::raw(format_number(v, 3)),
+        _ => tr!("prefs.value" => "{n} {unit}", n = format_number(v, 3), unit = Tx::from(p.unit)),
     }
 }
 
@@ -569,13 +634,14 @@ impl PreferencesDoc {
         ui.add_space(4.0);
         let searching = !self.search.is_empty();
         let pages = self.pages();
+        let ctx = ui.ctx().clone();
         let counts: Vec<usize> = pages
             .iter()
             .map(|(name, _)| {
                 if *name == KEYBOARD {
-                    self.keyboard.matches(&self.search)
+                    self.keyboard.matches(&ctx, &self.search)
                 } else {
-                    PREFS.iter().filter(|p| p.parts().0 == *name && p.matches(&self.search)).count()
+                    PREFS.iter().filter(|p| p.parts().0 == *name && p.matches_in(&ctx, &self.search)).count()
                 }
             })
             .collect();
@@ -585,12 +651,12 @@ impl PreferencesDoc {
                 let count_text = count.to_string();
                 let spec = NavRowSpec {
                     icon: *icon,
-                    tip: if searching { "Clears the search and opens the page" } else { "" },
-                    count: (searching && *count > 0).then_some(count_text.as_str()),
+                    tip: if searching { "Clears the search and opens the page".into() } else { Tx::EMPTY },
+                    count: (searching && *count > 0).then(|| Tx::raw(count_text.as_str())),
                     dim: searching && *count == 0,
                     ..NavRowSpec::default()
                 };
-                if nav_row(l.ui(), name, name, !searching && self.page == *name, &spec).clicked {
+                if nav_row(l.ui(), name, *name, !searching && self.page == *name, &spec).clicked {
                     picked = Some(*name);
                 }
             }
@@ -620,17 +686,23 @@ impl PreferencesDoc {
         let changed = g.row(label, p.help, flags, depth, |ui| {
             ui.set_max_width(em(16.0).min(ui.available_width()));
             if !live {
-                read_only(ui, &value_text(p, v), Clip::End);
+                read_only(ui, value_text(p, v), Clip::End);
                 return None;
             }
             match p.kind {
-                PrefKind::Theme => {
+                PrefKind::Language => {
                     let mut i = v as usize;
-                    combo(ui, "prefs.theme", &mut i, &THEMES).then_some(i as f64)
+                    combo(ui, "prefs.language", &mut i, &language_names()).then_some(i as f64)
+                }
+                PrefKind::Theme => {
+                    let current = THEMES.get(v as usize).unwrap_or_else(|| gz_ui::Theme::default_theme());
+                    gz_ui::theme::theme_combo(ui, "prefs.theme", current)
+                        .and_then(|t| THEMES.iter().position(|x| x.id == t.id))
+                        .map(|i| i as f64)
                 }
                 PrefKind::Scale => {
                     let mut i = v as usize;
-                    combo(ui, "prefs.scale", &mut i, &SCALES).then_some(i as f64)
+                    combo(ui, "prefs.scale", &mut i, &scale_names()).then_some(i as f64)
                 }
                 PrefKind::Switch | PrefKind::Flag(_) => {
                     let mut b = v != 0.0;
@@ -693,7 +765,7 @@ impl PreferencesDoc {
     fn draw_page_cards(&mut self, ui: &mut Ui, page: &str, ctx: &egui::Context) {
         let rows: Vec<&'static Pref> = PREFS
             .iter()
-            .filter(|p| p.parts().0 == page && (self.search.is_empty() || p.matches(&self.search)))
+            .filter(|p| p.parts().0 == page && (self.search.is_empty() || p.matches_in(ctx, &self.search)))
             .collect();
         let own: Vec<&'static Pref> = rows.iter().filter(|p| p.parts().1.is_empty()).copied().collect();
         if !own.is_empty() {
@@ -736,10 +808,7 @@ impl PreferencesDoc {
                 .iter()
                 .filter(|r| {
                     self.search.is_empty()
-                        || gz_ui::search::matches(
-                            &self.search,
-                            &format!("{} {} {}", group.page, group.section, r.label),
-                        )
+                        || found_in(ctx, &self.search, &[group.page, group.section, r.label])
                 })
                 .collect();
             if shown.is_empty() {
@@ -756,7 +825,7 @@ impl PreferencesDoc {
                     PropertyGrid::new("preferences").show(ui, |g| match &note {
                         // the rows mean nothing here: one sentence says why
                         Some((label, text)) => {
-                            g.row(label, text, PropFlags::READ_ONLY, 0, |ui| {
+                            g.row(*label, text, PropFlags::READ_ONLY, 0, |ui| {
                                 gz_ui::grid::read_only(ui, text, Clip::End);
                             });
                         }
@@ -797,6 +866,34 @@ impl PreferencesDoc {
                 let v = value(&editor);
                 g.row(r.label, r.help, PropFlags::READ_ONLY, 0, |ui| {
                     gz_ui::grid::read_only(ui, &v, Clip::End)
+                });
+                return;
+            }
+            RowKind::Fix { text: label, run, enabled, status, done } => {
+                let sentence = status(&editor);
+                if done(&editor) {
+                    g.row(r.label, r.help, PropFlags::READ_ONLY, 0, |ui| {
+                        ui.horizontal(|ui| {
+                            let p = gz_ui::palette(ui.ctx());
+                            let side = gz_ui::metrics::GLYPH;
+                            let (rect, _) =
+                                ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
+                            gz_ui::icons::draw(ui.painter(), Icon::Check, rect, p.tone(gz_ui::Tone::Success));
+                            ui.add_space(6.0);
+                            text::secondary(ui, &sentence);
+                        });
+                    });
+                    return;
+                }
+                let on = enabled(&editor);
+                g.row(r.label, r.help, PropFlags::NONE, 0, |ui| {
+                    ui.horizontal(|ui| {
+                        if gz_ui::Button::new(label).enabled(on.on(), on.why()).show(ui).clicked() {
+                            run(&editor);
+                        }
+                        ui.add_space(8.0);
+                        text::secondary(ui, &sentence);
+                    });
                 });
                 return;
             }
@@ -878,7 +975,8 @@ impl PreferencesDoc {
         let keyboard = !searching && self.page == KEYBOARD;
         // a page is a column of cards, 760 pt at most
         let width = ui.available_width().clamp(1.0, gz_ui::metrics::PAGE_W);
-        let title = if searching { "Search Results" } else { self.page.as_str() };
+        // a page's name is the window's or an area's English
+        let title = if searching { Tx::from("Search Results") } else { Tx::ui(self.page.clone()) };
         let r = Rect::from_min_size(ui.cursor().min, Vec2::new(width, Font::Title.line()));
         let mut t = ui.new_child(UiBuilder::new().max_rect(r));
         text::label(&mut t, title, Font::Title, p.text, Clip::End);
@@ -906,10 +1004,10 @@ impl PreferencesDoc {
                         .map(|(n, _)| *n)
                         .filter(|n| {
                             *n != KEYBOARD
-                                && PREFS.iter().any(|p| p.parts().0 == *n && p.matches(&self.search))
+                                && PREFS.iter().any(|p| p.parts().0 == *n && p.matches_in(&ctx, &self.search))
                         })
                         .collect();
-                    let keys = self.keyboard.matches(&self.search);
+                    let keys = self.keyboard.matches(&ctx, &self.search);
                     if pages.is_empty() && keys == 0 {
                         gz_ui::state::empty_state(
                             ui,
@@ -955,18 +1053,18 @@ impl Document for PreferencesDoc {
     fn kind(&self) -> &'static str {
         "preferences"
     }
-    fn label(&self) -> String {
-        "Preferences".to_owned()
+    fn label(&self) -> Tx<'static> {
+        Tx::from("Preferences")
     }
     fn icon(&self) -> Icon {
         Icon::Settings
     }
-    fn tooltip(&self) -> Option<String> {
-        Some("The editor's settings. A change takes effect at once and is saved.".to_owned())
+    fn tooltip(&self) -> Option<Tx<'static>> {
+        Some(Tx::from("The editor's settings. A change takes effect at once and is saved."))
     }
 
-    fn toolbar_status(&self) -> Option<String> {
-        Some("A change takes effect at once and is saved".to_owned())
+    fn toolbar_status(&self) -> Option<Tx<'static>> {
+        Some(Tx::from("A change takes effect at once and is saved"))
     }
 
     fn body(&mut self, ui: &mut Ui, cx: &mut DocCx<'_>) {
@@ -1072,11 +1170,37 @@ mod tests {
     #[test]
     fn values_read_as_the_rows_show_them() {
         let p = pref("General\\Undo Steps", "scene_undo_level", PrefKind::Whole, "x", "");
-        assert_eq!(value_text(&p, 125.0), "125");
+        assert_eq!(value_text(&p, 125.0).en(), "125");
         let p = pref("Viewport\\Fog\\Color", "fog_color", PrefKind::Color, "x", "");
-        assert_eq!(value_text(&p, f64::from(0x0055_5555u32)), "#555555");
+        assert_eq!(value_text(&p, f64::from(0x0055_5555u32)).en(), "#555555");
         let p = flag("Objects\\Display\\Show Pivot", 1, "x");
-        assert_eq!(value_text(&p, 0.0), "Off");
+        assert_eq!(value_text(&p, 0.0).en(), "Off");
+        let p = pref("Viewport\\Grid\\Cell Size", "grid_cell_size", PrefKind::Float, "x", "m");
+        assert_eq!(value_text(&p, 2.0).en(), "2 m");
+        // every language is named in itself
+        let lang = PREFS.iter().find(|p| p.key == "language").expect("the Language row");
+        assert_eq!(value_text(lang, 1.0).en(), "English");
+        assert_eq!(value_text(lang, 2.0).en(), gz_ui::Lang::Ru.native_name());
+        assert!(value_text(lang, 0.0).en().starts_with("System ("));
+    }
+
+    #[test]
+    fn language_is_the_first_row_of_general() {
+        let first = PREFS.iter().find(|p| p.parts().0 == "General").expect("General rows");
+        assert_eq!(first.parts(), ("General", "", "Language"));
+        assert!(first.live());
+        // System by default; Reset gives it back
+        assert_eq!(first.bounds().0, 0.0);
+        assert_eq!(LANG_CHOICES[0], LangChoice::System);
+        assert_eq!(language_index(LangChoice::Lang(gz_ui::Lang::Ru)), 2);
+    }
+
+    #[test]
+    fn the_catalog_reads_with_the_kits_and_the_shells() {
+        let c = gz_ui::i18n::Catalog::parse(&[gz_ui::i18n::KIT_RU, gz_app::lang::SHELL_RU, crate::RU])
+            .expect("the catalogs read");
+        let p = gz_ui::i18n::problems(&c);
+        assert!(p.is_empty(), "{}", p.join("\n"));
     }
 
     #[test]

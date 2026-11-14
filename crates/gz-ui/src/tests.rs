@@ -273,7 +273,7 @@ fn a_docked_tab_answers_a_click_a_cross_and_a_menu() {
 #[test]
 fn a_tab_strip_changes_its_choice_by_a_click() {
     let ctx = context();
-    let labels: Vec<String> = ["Problems", "Pages", "Vars", "Log"].iter().map(|s| (*s).to_owned()).collect();
+    let labels: Vec<crate::Tx<'static>> = ["Problems", "Pages", "Vars", "Log"].map(crate::Tx::from).to_vec();
     let mut current = 0usize;
     let mut origin = Pos2::ZERO;
     let mut width = 0.0;

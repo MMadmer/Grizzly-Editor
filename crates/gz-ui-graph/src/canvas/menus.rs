@@ -79,7 +79,7 @@ impl PickFor {
 
 /// An action's menu row: its title (or `label`), icon and keys as bound now, off with its reason.
 /// Picked, the tab runs it.
-fn action_row(ui: &mut Ui, cx: &mut CanvasCx<'_>, id: &'static str, label: Option<&str>) -> bool {
+fn action_row(ui: &mut Ui, cx: &mut CanvasCx<'_>, id: &'static str, label: Option<&'static str>) -> bool {
     let Some(editor) = cx.editor else { return false };
     let Some(actions) = gz_app::Actions::of(editor) else { return false };
     let (a, keys) = {
@@ -93,7 +93,7 @@ fn action_row(ui: &mut Ui, cx: &mut CanvasCx<'_>, id: &'static str, label: Optio
         keys: &keys,
         enabled: on.on(),
         selected: checked,
-        tip: on.why(),
+        tip: on.why().into(),
         ..MenuItem::default()
     };
     let picked = menu_item(ui, label.unwrap_or(a.title), item);
@@ -684,7 +684,7 @@ impl Canvas {
             Menu::Wire { from, pin, to, at } => {
                 gz_ui::text::label(
                     ui,
-                    &format!("{from}.{pin} -> {to}"),
+                    gz_ui::Tx::raw(format!("{from}.{pin} -> {to}")),
                     Font::Small,
                     palette(&ctx).text_muted,
                     gz_ui::Clip::Middle,
@@ -867,15 +867,21 @@ fn picker_items(ctx: &egui::Context, cat: &Catalog, g: &Graph, want: PickWant) -
         .map(|k| {
             let icon = look::kind_icon(cat, &k.id);
             let family = look::family_of(icon);
-            let first = look::first_sentence(&look::kind_desc(cat, &k.id, behaviour));
-            let item = PickItem::new(k.id.clone(), look::kind_title(cat, &k.id, behaviour))
-                .icon(icon)
-                .tint(look::family_color(&p, family, 1.0))
-                .detail(if first.is_empty() { k.id.clone() } else { first });
+            // the catalog's English, in the window's language
+            let first = look::first_sentence(
+                &gz_ui::Tx::ui_in("kind", look::kind_desc(cat, &k.id, behaviour)).text(ctx),
+            );
+            let item = PickItem::new(
+                k.id.clone(),
+                gz_ui::Tx::ui_in("kind", look::kind_title(cat, &k.id, behaviour)),
+            )
+            .icon(icon)
+            .tint(look::family_color(&p, family, 1.0))
+            .detail(gz_ui::Tx::raw(if first.is_empty() { k.id.clone() } else { first }));
             (family.order(), item)
         })
         .collect();
-    rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.label.cmp(&b.1.label)));
+    rows.sort_by_cached_key(|(order, it)| (*order, it.label.text(ctx)));
     rows.into_iter().map(|(_, it)| it).collect()
 }
 

@@ -20,12 +20,15 @@ use gz_scene::bulk::LinkMode;
 use gz_scene::bulk::wallmark::flags as wm_flags;
 use gz_scene::{ObjClass, ObjData, SceneState};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Button, Font, Icon, Kind, PickAction, PropFlags, PropertyGrid, Section, Switch, Tone, palette};
+use gz_ui::{
+    Button, Font, Icon, Kind, PickAction, PropFlags, PropertyGrid, Section, Switch, TipExt, Tone, Tx,
+    palette, tr,
+};
 use rustc_hash::FxHashMap;
 
 use crate::choose::{Chooser, Purpose};
 use crate::lists::ListKey;
-use crate::local::{LocalButton, args, confirm, local_button_flow, plural, removal, run};
+use crate::local::{LocalButton, args, confirm, local_button_flow, removal, run};
 
 /// What the panels keep between frames: numbers being dragged or typed, the mesh the foliage
 /// brush paints, and the counts worked out off the UI thread.
@@ -44,17 +47,19 @@ impl BulkPanels {
         &mut self,
         g: &mut gz_ui::grid::Grid<'_>,
         key: &'static str,
-        label: &str,
-        help: &str,
+        label: &'static str,
+        help: &'static str,
         value: f32,
         speed: f32,
-        unit: &str,
+        unit: &'static str,
         send: &mut Option<(&'static str, f32)>,
     ) {
         let pending = &mut self.pending;
+        // a unit is a word of the window's language
+        let unit = if unit.is_empty() { Tx::EMPTY } else { Tx::ctx("unit", unit) };
         g.row(label, help, PropFlags::NONE, 0, |ui| {
             let mut v = pending.get(key).copied().unwrap_or(value);
-            let r = gz_ui::grid::number(ui, &mut v, speed, unit);
+            let r = gz_ui::grid::number(ui, &mut v, speed, &unit);
             if r.changed() {
                 pending.insert(key, v);
             }
@@ -119,13 +124,17 @@ pub(crate) fn aimap_panel(
     if part.is_none() || nodes == 0 {
         text::status(ui, Tone::Muted, "No AI map yet. The build makes one by itself; Generate makes it now.");
     } else {
-        text::status(ui, Tone::Muted, &format!("{} \u{b7} {} selected", plural(nodes, "node"), selected));
+        text::status(
+            ui,
+            Tone::Muted,
+            tr!("{n} {n:node|nodes} \u{b7} {selected} selected", n = nodes, selected = selected),
+        );
     }
     let bounds = bounds_volume(snap).map(str::to_owned);
     ui.horizontal_wrapped(|ui| match &bounds {
         Some(name) => {
-            text::label(ui, &format!("Inside {name}"), Font::Body, palette(ui.ctx()).text_secondary, Clip::Middle)
-                .on_hover_text("The AI Map Bounds volume the map is generated inside");
+            text::label(ui, tr!("Inside {name}", name = name.as_str()), Font::Body, palette(ui.ctx()).text_secondary, Clip::Middle)
+                .tip("The AI Map Bounds volume the map is generated inside");
         }
         None => {
             text::label(ui, "Over the whole level", Font::Body, palette(ui.ctx()).text_secondary, Clip::End);
@@ -201,7 +210,7 @@ pub(crate) fn aimap_panel(
                     "clear_ai_map",
                     "Clear AI Map",
                     "Remove every node of the AI map?",
-                    vec![plural(nodes, "node")],
+                    vec![tr!("{n} {n:node|nodes}", n = nodes)],
                     "Clear",
                 ),
                 move || act(&ed, "scene.ai_map", "clear", &[]),
@@ -355,7 +364,7 @@ fn aimap_more(
                 "delete_ai_nodes",
                 "Delete Nodes",
                 "Remove the selected nodes of the AI map?",
-                vec![plural(selected, "node")],
+                vec![tr!("{n} {n:node|nodes}", n = selected)],
                 "Delete",
             ),
             move || act(&ed, "scene.ai_map", "remove", &[]),
@@ -363,7 +372,7 @@ fn aimap_more(
     }
     ui.add_space(6.0);
     let head = Section::new("paint.ai_map.materials", "Ignored Materials")
-        .count(&t.ignored.len().to_string())
+        .count(Tx::raw(t.ignored.len().to_string()))
         .default_open(false)
         .action(Icon::Plus, "Add a game material the AI map is not generated on")
         .show(ui);
@@ -384,7 +393,7 @@ fn aimap_more(
                 if gz_ui::icon_button(ui, Icon::Close, "Take it out of the list", false, true).clicked() {
                     act(editor, "scene.ai_map", "set", &[("unignore_materials", json!([name.as_str()]))]);
                 }
-                text::label(ui, name, Font::Body, p.text, Clip::Start);
+                text::label(ui, Tx::raw(name.as_str()), Font::Body, p.text, Clip::Start);
             });
         }
     }
@@ -454,13 +463,17 @@ pub(crate) fn foliage_panel(
         text::status(
             ui,
             Tone::Muted,
-            &format!("{} \u{b7} {} covered", plural(meshes.len(), "mesh"), plural(slots, "slot")),
+            tr!(
+                "{n} {n:mesh|meshes} \u{b7} {slots} {slots:slot|slots} covered",
+                n = meshes.len(),
+                slots = slots
+            ),
         );
     }
     let mut b = brush(editor);
     // the meshes: a drop zone, a row each, the brush paints the one picked
     let head = Section::new("paint.foliage.meshes", "Meshes")
-        .count(&meshes.len().to_string())
+        .count(Tx::raw(meshes.len().to_string()))
         .action(Icon::Plus, "Add library objects as foliage meshes")
         .show(ui);
     if head.action == Some(0) {
@@ -477,10 +490,11 @@ pub(crate) fn foliage_panel(
                 egui::Stroke::new(1.0, p.border),
                 egui::StrokeKind::Inside,
             );
+            let drop_here = gz_ui::i18n::t(ui.ctx(), "Drop objects here");
             ui.painter().text(
                 r.center(),
                 egui::Align2::CENTER_CENTER,
-                "Drop objects here",
+                drop_here,
                 Font::Body.id(),
                 p.text_muted,
             );
@@ -509,11 +523,11 @@ pub(crate) fn foliage_panel(
                     r.min + Vec2::new(24.0, r.height() * 0.5),
                     egui::Align2::LEFT_CENTER,
                     p.text,
-                    crate::outliner::leaf(&m.reference),
+                    Tx::raw(crate::outliner::leaf(&m.reference)),
                     Some(w - 28.0),
                     Clip::Middle,
                 );
-                let resp = resp.on_hover_text(format!("{}\nClick to paint with it", m.reference));
+                let resp = resp.tip(tr!("{name}\nClick to paint with it", name = m.reference.as_str()));
                 if resp.clicked() {
                     b.mesh = Some(m.reference.clone());
                     gz_ui_viewport::set_brush(editor, b.clone());
@@ -535,7 +549,7 @@ pub(crate) fn foliage_panel(
                     "remove_foliage_mesh",
                     "Remove Foliage Mesh",
                     "Take this mesh out of the foliage, with everywhere it grows?",
-                    vec![r],
+                    vec![Tx::raw(r)],
                     "Remove",
                 ),
                 move || act(&ed, "scene.details", "remove", &[("objects", json!([name]))]),
@@ -554,7 +568,7 @@ pub(crate) fn foliage_panel(
     if let Some(m) = b.mesh.as_ref().and_then(|n| meshes.iter().find(|m| m.reference.eq_ignore_ascii_case(n)))
     {
         ui.add_space(4.0);
-        text::label(ui, crate::outliner::leaf(&m.reference), Font::Strong, p.text, Clip::Middle);
+        text::label(ui, Tx::raw(crate::outliner::leaf(&m.reference)), Font::Strong, p.text, Clip::Middle);
         let mut send = None;
         PropertyGrid::new("tools").show(ui, |g| {
             panels.local_number_row(
@@ -675,7 +689,7 @@ pub(crate) fn foliage_panel(
                     "clear_details",
                     "Clear Foliage",
                     "Remove the foliage from the whole level?",
-                    vec![plural(slots, "covered slot")],
+                    vec![tr!("{n} {n:covered slot|covered slots}", n = slots)],
                     "Clear",
                 ),
                 move || act(&ed, "scene.details", "clear", &[]),
@@ -692,7 +706,9 @@ pub(crate) fn foliage_panel(
                 PropFlags::NONE,
                 0,
                 |ui| {
-                    if let PickAction::Browse = gz_ui::grid::pick_field(ui, "do_base", &base, false) {
+                    if let PickAction::Browse =
+                        gz_ui::grid::pick_field(ui, "do_base", Tx::raw(base.as_str()), false)
+                    {
                         *chooser = Some(Chooser::new(
                             Purpose::ToolCommand {
                                 cmd: "scene.details",
@@ -787,19 +803,21 @@ pub(crate) fn decals_panel(
     text::status(
         ui,
         Tone::Muted,
-        &if ready {
-            format!(
-                "A click on the level lays a decal. {} \u{b7} {} selected",
-                plural(count, "decal"),
-                selected
+        if ready {
+            tr!(
+                "A click on the level lays a decal. {n} {n:decal|decals} \u{b7} {selected} selected",
+                n = count,
+                selected = selected
             )
         } else {
-            "Pick a texture, then click on the level to lay a decal.".to_owned()
+            Tx::from("Pick a texture, then click on the level to lay a decal.")
         },
     );
     PropertyGrid::new("tools").show(ui, |g| {
         g.row("Texture", "What a new decal shows", PropFlags::NONE, 0, |ui| {
-            if let PickAction::Browse = gz_ui::grid::pick_field(ui, "wm_texture", &w.texture, false) {
+            if let PickAction::Browse =
+                gz_ui::grid::pick_field(ui, "wm_texture", Tx::raw(w.texture.as_str()), false)
+            {
                 *chooser = Some(Chooser::new(
                     Purpose::ToolCommand { cmd: "scene.wallmarks", action: "set", arg: "texture" },
                     "Texture",
@@ -860,7 +878,7 @@ pub(crate) fn decals_panel(
                 "delete_wallmarks",
                 "Delete Decals",
                 "Remove the selected decals?",
-                vec![plural(selected, "decal")],
+                vec![tr!("{n} {n:decal|decals}", n = selected)],
                 "Delete",
             ),
             move || act(&ed, "scene.wallmarks", "remove", &[]),
@@ -870,7 +888,9 @@ pub(crate) fn decals_panel(
     Section::new("paint.decals.more", "More").default_open(false).body(ui, |ui| {
         PropertyGrid::new("tools").show(ui, |g| {
             g.row("Shader", "The engine shader a new decal is drawn with", PropFlags::NONE, 0, |ui| {
-                if let PickAction::Browse = gz_ui::grid::pick_field(ui, "wm_shader", &w.shader, false) {
+                if let PickAction::Browse =
+                    gz_ui::grid::pick_field(ui, "wm_shader", Tx::raw(w.shader.as_str()), false)
+                {
                     *chooser = Some(Chooser::new(
                         Purpose::ToolCommand { cmd: "scene.wallmarks", action: "set", arg: "shader" },
                         "Shader",

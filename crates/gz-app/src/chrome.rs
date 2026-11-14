@@ -17,8 +17,8 @@ use gz_editor::SmolStr;
 use gz_ui::menu::menu_popup;
 use gz_ui::text::{self, Clip};
 use gz_ui::{
-    Button, Font, Icon, Kind, MenuItem, SearchField, Tone, Toolbar, ToolbarStyle, audit, icon_button_sized,
-    icons, menu_item, palette, state,
+    Button, Font, Icon, Kind, MenuItem, SearchField, TipExt, Tone, Toolbar, ToolbarStyle, Tx, audit,
+    icon_button_sized, icons, menu_item, palette, state,
 };
 
 use crate::builder::MenuContent;
@@ -109,10 +109,17 @@ pub(crate) fn load_logo(ctx: &Context) -> Option<TextureHandle> {
 
 /// A caption menu's button: 32 pt tall, the label in Body with 8 pt each side, the hover fill
 /// while hovered or open.
-pub fn local_caption_button(ui: &mut Ui, label: &str, open: bool, enabled: bool) -> Response {
+pub fn local_caption_button<'a>(
+    ui: &mut Ui,
+    label: impl Into<Tx<'a>>,
+    open: bool,
+    enabled: bool,
+) -> Response {
     let p = palette(ui.ctx());
     let font = Font::Body.id();
-    let w = text::width(ui.ctx(), &font, label) + 16.0;
+    let label = label.into().text(ui.ctx());
+    let label: &str = &label;
+    let w = text::width(ui.ctx(), &font, Tx::raw(label)) + 16.0;
     let h = ui.max_rect().height().min(CAPTION_H);
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, h), sense);
@@ -133,9 +140,11 @@ pub fn local_caption_button(ui: &mut Ui, label: &str, open: bool, enabled: bool)
 
 /// A window button of the caption: 46 x 32, a whisper of a fill on hover, the danger fill
 /// under the close cross only.
-pub fn local_window_button(ui: &mut Ui, rect: Rect, icon: Icon, tip: &str, danger: bool) -> bool {
+pub fn local_window_button(ui: &mut Ui, rect: Rect, icon: Icon, tip: &'static str, danger: bool) -> bool {
     let p = palette(ui.ctx());
     let resp = ui.interact(rect, ui.scope_id().with(("gz-app.window_button", tip)), Sense::click());
+    let tip = gz_ui::i18n::t(ui.ctx(), tip);
+    let tip: &str = &tip;
     if resp.hovered() {
         let fill = match (danger, resp.is_pointer_button_down_on()) {
             (true, true) => p.danger_pressed,
@@ -145,16 +154,23 @@ pub fn local_window_button(ui: &mut Ui, rect: Rect, icon: Icon, tip: &str, dange
         };
         ui.painter().rect_filled(rect, CornerRadius::ZERO, fill);
     }
-    let color = if resp.hovered() { p.text } else { p.text_secondary };
+    // the cross on the danger fill is the fill's label colour
+    let color = match (resp.hovered(), danger) {
+        (true, true) => p.on_fill,
+        (true, false) => p.text,
+        (false, _) => p.text_secondary,
+    };
     icons::draw(ui.painter(), icon, Rect::from_center_size(rect.center(), Vec2::splat(12.0)), color);
     audit::control(ui.ctx(), tip, true, None, Some(tip), rect);
-    resp.on_hover_text(tip).clicked()
+    resp.tip(Tx::raw(tip)).clicked()
 }
 
 /// The maximise button: Windows owns its clicks (`HTMAXBUTTON`), so its hover comes from the
 /// window's hit test, not from egui.
-fn local_max_button(ui: &mut Ui, rect: Rect, icon: Icon, tip: &str, hot: bool) {
+fn local_max_button(ui: &mut Ui, rect: Rect, icon: Icon, tip: &'static str, hot: bool) {
     let p = palette(ui.ctx());
+    let tip = gz_ui::i18n::t(ui.ctx(), tip);
+    let tip: &str = &tip;
     if hot {
         ui.painter().rect_filled(rect, CornerRadius::ZERO, p.hover);
     }
@@ -168,9 +184,9 @@ fn local_max_button(ui: &mut Ui, rect: Rect, icon: Icon, tip: &str, hot: bool) {
 }
 
 /// A menu row that opens a submenu to its right while hovered: the kit's row.
-pub fn local_submenu<R>(
+pub fn local_submenu<'a, R>(
     ui: &mut Ui,
-    label: &str,
+    label: impl Into<Tx<'a>>,
     icon: Icon,
     enabled: bool,
     add: impl FnOnce(&mut Ui) -> R,
@@ -179,17 +195,21 @@ pub fn local_submenu<R>(
 }
 
 /// A chip of the status bar: an icon in its tone and a short text in Small.
-pub fn local_status_chip(
+pub fn local_status_chip<'a>(
     ui: &mut Ui,
     icon: Icon,
     tone: Option<Tone>,
-    label: &str,
-    tip: &str,
+    label: impl Into<Tx<'a>>,
+    tip: impl Into<Tx<'a>>,
     checked: bool,
 ) -> Response {
     let p = palette(ui.ctx());
     let font = Font::Small.id();
-    let text_w = if label.is_empty() { 0.0 } else { text::width(ui.ctx(), &font, label) + 4.0 };
+    let label = label.into().text(ui.ctx());
+    let label: &str = &label;
+    let tip = tip.into().text(ui.ctx());
+    let tip: &str = &tip;
+    let text_w = if label.is_empty() { 0.0 } else { text::width(ui.ctx(), &font, Tx::raw(label)) + 4.0 };
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(6.0 + 14.0 + text_w + 6.0, 20.0), Sense::click());
     if ui.is_rect_visible(rect) {
         if checked || resp.hovered() {
@@ -217,7 +237,7 @@ pub fn local_status_chip(
         }
     }
     audit::control(ui.ctx(), if label.is_empty() { tip } else { label }, true, None, Some(tip), rect);
-    resp.on_hover_text(tip)
+    resp.tip(Tx::raw(tip))
 }
 
 // ---- the menu bar -----------------------------------------------------------------------------
@@ -255,7 +275,7 @@ impl MenuBar<'_, '_> {
 
     pub fn menu_enabled(&mut self, name: &str, enabled: bool, add: impl FnOnce(&mut Ui)) {
         if self.state.folded {
-            if local_submenu(self.ui, name, Icon::None, enabled, add).is_some() {
+            if local_submenu(self.ui, Tx::ui_in("menu", name), Icon::None, enabled, add).is_some() {
                 self.state.open_now = Some(SmolStr::new(name));
             }
             return;
@@ -263,7 +283,7 @@ impl MenuBar<'_, '_> {
         let ctx = self.ui.ctx().clone();
         let id = menu_id(name);
         let open = Popup::is_id_open(&ctx, id);
-        let resp = local_caption_button(self.ui, name, open, enabled);
+        let resp = local_caption_button(self.ui, Tx::ui_in("menu", name), open, enabled);
         if enabled {
             if resp.clicked() {
                 Popup::toggle_id(&ctx, id);
@@ -487,7 +507,7 @@ impl ShellState {
         if info.active {
             let font = Font::Body.id();
             let name = info.name;
-            let w = text::width(&ctx, &font, &name);
+            let w = text::width(&ctx, &font, Tx::raw(&name));
             let right = self.caption.buttons_x - 12.0;
             if right - w >= end + 48.0 {
                 ui.painter().text(
@@ -618,7 +638,7 @@ impl ShellState {
                 Row::Builtin(b) => self.builtin_row(ui, ctx, b, picks),
                 Row::Entry(i) => self.entry_row(ui, ctx, i, picks),
                 Row::Submenu(name) => {
-                    local_submenu(ui, &name, Icon::None, true, |ui| {
+                    local_submenu(ui, Tx::ui_in("menu", name.as_str()), Icon::None, true, |ui| {
                         self.menu_rows(ui, ctx, menu, Some(&name), picks)
                     });
                 }
@@ -635,16 +655,17 @@ impl ShellState {
                 let on = (a.enabled)(&cx);
                 let checked = a.checked.is_some_and(|f| f(&cx));
                 let keys = self.action_keys(&id);
-                let text = label.map_or_else(|| a.title.to_owned(), |l| l.to_string());
+                let text =
+                    label.map_or_else(|| Tx::ctx("action", a.title), |l| Tx::ui_in("action", l.to_string()));
                 let item = MenuItem {
                     icon: a.icon.unwrap_or(Icon::None),
                     keys: &keys,
                     enabled: on.on(),
                     selected: checked,
-                    tip: on.why(),
+                    tip: on.why().into(),
                     ..MenuItem::default()
                 };
-                if menu_item(ui, &text, item) {
+                if gz_ui::i18n::scope(ctx, a.group, || menu_item(ui, text, item)) {
                     picks.push(Pick::Action(id));
                 }
             }
@@ -680,8 +701,8 @@ impl ShellState {
                     };
                     if menu_item(
                         ui,
-                        &panel.label,
-                        MenuItem { icon: panel.icon, selected: open, tip, ..MenuItem::default() },
+                        Tx::ui(panel.label.as_str()),
+                        MenuItem { icon: panel.icon, selected: open, tip: tip.into(), ..MenuItem::default() },
                     ) {
                         self.requests.panel(&panel.id, if open { PanelOp::Close } else { PanelOp::Focus });
                     }
@@ -689,15 +710,18 @@ impl ShellState {
             }
             Builtin::Documents => {
                 // the open documents, the way Ctrl+Tab walks them
-                let list: Vec<(SmolStr, String, Icon, bool)> =
-                    self.tabs.iter().map(|t| (t.id.clone(), t.label(), t.icon, t.dirty())).collect();
+                let list: Vec<(SmolStr, String, Icon, bool)> = self
+                    .tabs
+                    .iter()
+                    .map(|t| (t.id.clone(), t.label().text(_ctx), t.icon, t.dirty()))
+                    .collect();
                 for (id, label, icon, dirty) in list {
                     let text = if dirty { format!("{label} *") } else { label };
                     let picked = ui
                         .push_id(id.as_str(), |ui| {
                             menu_item(
                                 ui,
-                                &text,
+                                Tx::raw(text),
                                 MenuItem { icon, selected: id == self.active, ..MenuItem::default() },
                             )
                         })
@@ -713,7 +737,7 @@ impl ShellState {
     fn run_pick(&mut self, ctx: &Context, pick: Pick) {
         let Pick::Action(id) = pick;
         if let Err(e) = self.run_action(&id) {
-            state::toast(ctx, Tone::Warning, &e);
+            state::toast(ctx, Tone::Warning, Tx::ui(e));
         }
     }
 
@@ -734,7 +758,7 @@ impl ShellState {
             close(&editor, None);
             return;
         }
-        let what: Vec<String> = dirty.iter().map(|(_, l)| l.clone()).chain(other).collect();
+        let what: Vec<Tx<'static>> = dirty.iter().map(|(_, l)| l.clone()).chain(other).collect();
         let ids: Vec<String> = dirty.into_iter().map(|(id, _)| id).collect();
         let queue = self.queue.clone();
         let line = gz_ui::dialog::unsaved_prompt(ctx, self.asker(), "switch_project", &what, move |answer| {
@@ -803,9 +827,10 @@ impl ShellState {
         let y0 = bar.max.y - tab_h;
         let x_start = row.cursor().min.x + 8.0;
         let avail = (max_x - x_start - tabs::CHEVRON - 4.0).max(0.0);
-        let labels: Vec<String> = self.tabs.iter().map(Tab::label).collect();
+        let txs: Vec<Tx<'static>> = self.tabs.iter().map(Tab::label).collect();
+        let labels: Vec<String> = txs.iter().map(|t| t.text(&ctx)).collect();
         let mut want: Vec<f32> =
-            labels.iter().map(|l| tabs::want_width(text::width(&ctx, &font, l))).collect();
+            labels.iter().map(|l| tabs::want_width(text::width(&ctx, &font, Tx::raw(l)))).collect();
         let active_i = self.find(&self.active);
         // tool tabs give way first: their icon alone before any name is cut
         let tools: Vec<bool> = self.tabs.iter().map(|t| tabs::is_tool(&t.kind)).collect();
@@ -814,7 +839,8 @@ impl ShellState {
             t.icon_only = *only;
         }
         let more_font = Font::Small.id();
-        let count_extra = (text::width(&ctx, &more_font, "+99") + 16.0 + 16.0 - tabs::CHEVRON).max(0.0);
+        let count_extra =
+            (text::width(&ctx, &more_font, Tx::raw("+99")) + 16.0 + 16.0 - tabs::CHEVRON).max(0.0);
         let plan = tabs::plan_strip(&want, active_i, avail, count_extra);
 
         // names that would still cut to the same text are cut in the middle
@@ -828,7 +854,7 @@ impl ShellState {
                     text::ellipsize(
                         &ctx,
                         &font,
-                        labels.get(i).map_or("", String::as_str),
+                        Tx::raw(labels.get(i).map_or("", String::as_str)),
                         tabs::text_room(w, cross, tab.dirty()),
                         Clip::End,
                     )
@@ -937,7 +963,7 @@ impl ShellState {
                     pos2(tx, rect.center().y),
                     Align2::LEFT_CENTER,
                     if active { p.text } else { p.text_secondary },
-                    label,
+                    txs.get(i).map_or(Tx::EMPTY, Tx::borrow),
                     Some(room),
                     if middle { Clip::Middle } else { Clip::End },
                 );
@@ -957,11 +983,13 @@ impl ShellState {
                 painter.circle_filled(slot.center(), 3.5, if tab.id == LEVEL { p.warning } else { p.text });
             }
             if cut {
-                audit::truncated(&ctx, label, &text::ellipsize(&ctx, &font, label, room, Clip::End).0, rect);
+                let en = txs.get(i).filter(|t| !t.is_raw()).map(|t| t.en().into_owned());
+                let shown = text::ellipsize(&ctx, &font, Tx::raw(label), room, Clip::End).0;
+                audit::truncated_text(&ctx, label, en.as_deref(), &shown, rect);
             }
             audit::control(&ctx, label, true, None, Some("a major tab"), rect);
-            let tip = tab.tooltip();
-            let _ = resp.on_hover_text(tip);
+            let tip = tab.tooltip(&ctx);
+            let _ = resp.tip(Tx::raw(tip));
         }
 
         // the drag: over the middle of a neighbour, the two swap; Level keeps the first place
@@ -992,18 +1020,21 @@ impl ShellState {
         let chevron_rect;
         {
             let label = format!("+{hidden}");
-            let w =
-                if hidden > 0 { text::width(&ctx, &more_font, &label) + 16.0 + 16.0 } else { tabs::CHEVRON };
+            let w = if hidden > 0 {
+                text::width(&ctx, &more_font, Tx::raw(&label)) + 16.0 + 16.0
+            } else {
+                tabs::CHEVRON
+            };
             let r = Rect::from_min_size(
                 pos2((x + 2.0).round(), (y0 + (tab_h - tabs::CHEVRON) * 0.5).round()),
                 Vec2::new(w, tabs::CHEVRON),
             );
             chevron_rect = r;
             let tip = match hidden {
-                0 => "Open tabs".to_owned(),
-                1 => "1 more tab".to_owned(),
-                n => format!("{n} more tabs"),
-            };
+                0 => Tx::from("Open tabs"),
+                n => gz_ui::tr!("{n} more {n:tab|tabs}", n = n),
+            }
+            .text(&ctx);
             let resp = row.interact(r, Id::unique("gz-app.tab_overflow_button"), Sense::click());
             let painter = row.painter();
             if open || resp.hovered() {
@@ -1036,13 +1067,13 @@ impl ShellState {
                 );
             }
             audit::control(&ctx, &tip, true, None, Some(&tip), r);
-            if resp.on_hover_text(&tip).clicked() {
+            if resp.tip(Tx::raw(&tip)).clicked() {
                 Popup::toggle_id(&ctx, overflow);
             }
         }
         let layer = row.layer_id();
         let entries: Vec<(SmolStr, String, Icon, bool)> =
-            self.tabs.iter().map(|t| (t.id.clone(), t.label(), t.icon, t.dirty())).collect();
+            self.tabs.iter().map(|t| (t.id.clone(), t.label().text(&ctx), t.icon, t.dirty())).collect();
         let current = self.active.clone();
         let mut picked = None;
         if menu_popup(&ctx, overflow, chevron_rect, layer, |ui| {
@@ -1052,7 +1083,7 @@ impl ShellState {
                     .push_id(id.as_str(), |ui| {
                         menu_item(
                             ui,
-                            &text,
+                            Tx::raw(&text),
                             MenuItem { icon: *icon, selected: *id == current, ..MenuItem::default() },
                         )
                     })
@@ -1088,7 +1119,9 @@ impl ShellState {
                 Some((rect, closable, path)) => {
                     let anchor = rect.unwrap_or(chevron_rect);
                     let mut action = None;
-                    let has_reveal = self.parts.reveal.is_some();
+                    // what the browser shows is the project: a file outside it is Explorer's alone
+                    let rel = crate::shell::project_relative(self.editor.project_root().as_deref(), &path);
+                    let in_project = !rel.is_empty() && !std::path::Path::new(&rel).is_absolute();
                     let shown = menu_popup(&ctx, menu_popup_id, anchor, layer, |ui| {
                         if menu_item(
                             ui,
@@ -1119,7 +1152,12 @@ impl ShellState {
                             "Show in Content Browser",
                             MenuItem {
                                 icon: Icon::Folder,
-                                enabled: !path.is_empty() && has_reveal,
+                                enabled: in_project,
+                                tip: if path.is_empty() || in_project {
+                                    Tx::EMPTY
+                                } else {
+                                    Tx::from("The file is outside the project.")
+                                },
                                 ..MenuItem::default()
                             },
                         ) {
@@ -1141,7 +1179,7 @@ impl ShellState {
                     }
                     if let Some(a) = action {
                         self.tab_menu = None;
-                        self.tab_menu_action(&ctx, &target, &path, a);
+                        self.tab_menu_action(&ctx, &target, &path, &rel, a);
                     }
                 }
             }
@@ -1155,7 +1193,7 @@ impl ShellState {
         }
     }
 
-    fn tab_menu_action(&mut self, ctx: &Context, target: &str, path: &str, action: u8) {
+    fn tab_menu_action(&mut self, ctx: &Context, target: &str, path: &str, rel: &str, action: u8) {
         let ids: Vec<(SmolStr, bool, bool)> =
             self.tabs.iter().map(|t| (t.id.clone(), t.closable(), t.dirty())).collect();
         match action {
@@ -1167,26 +1205,14 @@ impl ShellState {
             3 => ids.iter().filter(|(_, c, _)| *c).for_each(|(id, _, _)| self.request_close(ctx, id)),
             4 => ids.iter().filter(|(_, c, d)| *c && !*d).for_each(|(id, _, _)| self.request_close(ctx, id)),
             5 => ctx.copy_text(path.to_owned()),
-            6 => {
-                if let Some(f) = self.parts.reveal.as_mut() {
-                    f(
-                        path,
-                        &mut DocCx {
-                            editor: &self.editor,
-                            gpu: &self.gpu,
-                            ctx,
-                            active_tab: &self.active,
-                            requests: &mut self.requests,
-                        },
-                    );
-                }
-            }
+            6 => crate::actions::call(
+                &self.editor,
+                "content.view",
+                crate::shell_actions::reveal_in_browser(rel),
+                None,
+            ),
             7 => {
-                let full = match self.editor.project_root() {
-                    Some(root) if !std::path::Path::new(path).is_absolute() => root.join(path),
-                    _ => std::path::PathBuf::from(path),
-                };
-                reveal_file(&full);
+                crate::actions::call(&self.editor, "ui.reveal", crate::actions::args(&[("path", rel)]), None)
             }
             _ => {}
         }
@@ -1229,8 +1255,8 @@ impl ShellState {
                 doc.toolbar(&mut tb, &mut DocCx { editor, gpu, ctx: &ctx, active_tab: active, requests });
                 // a row with nothing of its own is never drawn empty: it holds the tab's status
                 if tb.items() == 0 {
-                    tb.status(&fallback, Tone::Muted);
-                    status_shown = Some(fallback);
+                    status_shown = Some(fallback.en().into_owned());
+                    tb.status(fallback, Tone::Muted);
                 }
             }
             tb.spring();
@@ -1287,27 +1313,32 @@ impl ShellState {
             false,
         );
         let log_open = self.drawer == Some(Drawer::Log);
-        let warnings_tip =
-            format!("{} warnings since the project opened. Opens the Output Log.", log.warnings);
+        let warnings_tip = gz_ui::tr!(
+            "{n} {n:warning|warnings} since the project opened. Opens the Output Log.",
+            n = log.warnings
+        );
         if local_status_chip(
             &mut right,
             Icon::Warning,
             Some(if log.warnings > 0 { Tone::Warning } else { Tone::Muted }),
-            &log.warnings.to_string(),
-            &warnings_tip,
+            Tx::raw(log.warnings.to_string()),
+            warnings_tip,
             false,
         )
         .clicked()
         {
             self.toggle_drawer(&ctx, Drawer::Log);
         }
-        let errors_tip = format!("{} errors since the project opened. Opens the Output Log.", log.errors);
+        let errors_tip = gz_ui::tr!(
+            "{n} {n:error|errors} since the project opened. Opens the Output Log.",
+            n = log.errors
+        );
         if local_status_chip(
             &mut right,
             Icon::Error,
             Some(if log.errors > 0 { Tone::Error } else { Tone::Muted }),
-            &log.errors.to_string(),
-            &errors_tip,
+            Tx::raw(log.errors.to_string()),
+            errors_tip,
             false,
         )
         .clicked()
@@ -1318,13 +1349,34 @@ impl ShellState {
         let running: Vec<gz_editor::JobInfo> =
             self.editor.jobs.snapshot().into_iter().filter(gz_editor::JobInfo::running).collect();
         if !running.is_empty() {
+            // one job says what it does now: its stage and how far it is
             let label = match running.as_slice() {
-                [one] => one.title.clone(),
-                many => format!("{} tasks", many.len()),
+                [one] => {
+                    let mut l = Tx::ui(one.title.clone()).text(&ctx);
+                    if !one.stage.is_empty() && one.stage != one.title {
+                        l.push_str(" · ");
+                        l.push_str(&Tx::ui(one.stage.clone()).text(&ctx));
+                    }
+                    if let Some(f) = one.fraction {
+                        use std::fmt::Write as _;
+                        let _ = write!(l, " {:.0}%", (f * 100.0).clamp(0.0, 100.0));
+                    }
+                    l
+                }
+                many => gz_ui::tr!("{n} {n:task|tasks}", n = many.len()).text(&ctx),
             };
-            let shown = text::fit(&ctx, &small, &label, gz_ui::units::em(18.0), Clip::End);
-            if local_status_chip(&mut right, Icon::Spinner, None, &shown.text, &label, self.card_open)
-                .clicked()
+            // the bar has the room: the chip takes up to a third of it before it cuts the text
+            let room = (rect.width() / 3.0).clamp(gz_ui::units::em(18.0), gz_ui::units::em(52.0));
+            let shown = text::fit(&ctx, &small, Tx::raw(&label), room, Clip::End);
+            if local_status_chip(
+                &mut right,
+                Icon::Spinner,
+                None,
+                Tx::raw(&*shown.text),
+                Tx::raw(&label),
+                self.card_open,
+            )
+            .clicked()
             {
                 self.show_card(!self.card_open);
             }
@@ -1395,7 +1447,21 @@ impl ShellState {
             && let Some(i) = self.find(&id)
             && room_x1 - left_end > 24.0
         {
-            let want = ctx.data(|d| d.get_temp::<f32>(Id::unique("gz-app.status_centre_w"))).unwrap_or(0.0);
+            // the centre's own width, laid out first where nothing cuts it (a longer language, a
+            // longer state), so it is placed this very frame
+            let probe_rect =
+                Rect::from_min_max(pos2(left_end, rect.min.y), pos2(left_end + rect.width(), rect.max.y));
+            let mut probe = ui.new_child(
+                UiBuilder::new()
+                    .id_salt("gz-app.status_centre_probe")
+                    .max_rect(probe_rect)
+                    .layout(Layout::left_to_right(Align::Center))
+                    .sizing_pass()
+                    .invisible(),
+            );
+            probe.style_mut().override_font_id = Some(small.clone());
+            self.doc_status(i, &mut probe, &ctx);
+            let want = (probe.min_rect().max.x - left_end).max(0.0);
             // centred where the room allows; ImClamp's order: the low bound wins a tie
             let centred = (rect.min.x + (rect.width() - want) * 0.5).round();
             let (lo, hi) = (left_end + 160.0, (room_x1 - want).max(left_end));
@@ -1409,25 +1475,8 @@ impl ShellState {
             );
             centre.set_clip_rect(area);
             centre.style_mut().override_font_id = Some(small.clone());
-            if let Some(tab) = self.tabs.get_mut(i)
-                && !tab.failed
-                && tab.panicked.is_none()
-                && let Some(doc) = tab.doc.as_mut()
-                && !doc.missing()
-            {
-                doc.status(
-                    &mut centre,
-                    &mut DocCx {
-                        editor: &self.editor,
-                        gpu: &self.gpu,
-                        ctx: &ctx,
-                        active_tab: &self.active,
-                        requests: &mut self.requests,
-                    },
-                );
-            }
+            self.doc_status(i, &mut centre, &ctx);
             let used = (centre.min_rect().max.x - status_x).max(0.0);
-            ctx.data_mut(|d| d.insert_temp(Id::unique("gz-app.status_centre_w"), used));
             if used <= 0.0 {
                 status_x = room_x1;
             } else {
@@ -1438,8 +1487,8 @@ impl ShellState {
         let line_x1 = status_x - 16.0;
         if !log.last.is_empty() && line_x1 - left_end > 40.0 {
             // the last report; a click opens the Output Log on it
-            let fitted = text::fit(&ctx, &small, &log.last, line_x1 - left_end, Clip::End);
-            let w = text::width(&ctx, &small, &fitted.text);
+            let fitted = text::fit(&ctx, &small, Tx::raw(&log.last), line_x1 - left_end, Clip::End);
+            let w = text::width(&ctx, &small, Tx::raw(&*fitted.text));
             let r = Rect::from_min_max(
                 pos2(left_end.round() - 2.0, rect.min.y + 2.0),
                 pos2(left_end + w + 2.0, rect.max.y - 2.0),
@@ -1460,15 +1509,35 @@ impl ShellState {
             }
             audit::control(&ctx, &log.last, true, None, Some("Opens the Output Log"), r);
             self.status_line_rect = Some(r);
-            if resp.on_hover_text(format!("{}\nClick to open the Output Log.", log.last)).clicked()
-                && !self.start_page
-            {
+            let hint = gz_ui::i18n::t(&ctx, "Click to open the Output Log.");
+            if resp.tip(Tx::raw(format!("{}\n{hint}", log.last))).clicked() && !self.start_page {
                 self.toggle_drawer(&ctx, Drawer::Log);
             }
         }
     }
 
     // ---- the work area -------------------------------------------------------------------
+
+    /// What tab `i` says in the status bar's centre, when it can say anything.
+    fn doc_status(&mut self, i: usize, ui: &mut Ui, ctx: &Context) {
+        if let Some(tab) = self.tabs.get_mut(i)
+            && !tab.failed
+            && tab.panicked.is_none()
+            && let Some(doc) = tab.doc.as_mut()
+            && !doc.missing()
+        {
+            doc.status(
+                ui,
+                &mut DocCx {
+                    editor: &self.editor,
+                    gpu: &self.gpu,
+                    ctx,
+                    active_tab: &self.active,
+                    requests: &mut self.requests,
+                },
+            );
+        }
+    }
 
     fn draw_work(&mut self, ui: &mut Ui, work: Rect) {
         let ctx = ui.ctx().clone();
@@ -1568,8 +1637,8 @@ impl ShellState {
                     &mut body,
                     Icon::Error,
                     "This tab stopped on an internal error",
-                    &text_,
-                    Some("Close Tab"),
+                    Tx::raw(&text_),
+                    Some("Close Tab".into()),
                 ) {
                     self.requests.close(&id);
                     if let Some(tab) = self.tabs.get_mut(i) {
@@ -1582,7 +1651,7 @@ impl ShellState {
                     &mut body,
                     Icon::File,
                     "File not found",
-                    if path.is_empty() { &label } else { &path },
+                    if path.is_empty() { label } else { Tx::raw(path) },
                     None,
                 );
             } else if loaded {
@@ -1796,12 +1865,14 @@ impl ShellState {
     /// Every row the palette offers: the actions, the open tabs, the Level panels, the level
     /// editor's own commands.
     pub(crate) fn palette_rows(&self) -> Vec<PaletteRow> {
+        let ctx = self.ctx_of();
         let mut rows = Vec::new();
         let recent = gz_ui::layout::list(&self.ctx_of(), pal::RECENT_KEY);
         let cx = self.action_cx();
         let table = self.parts.actions.table.read();
         for a in table.all().iter().filter(|a| a.in_palette) {
             let on = (a.enabled)(&cx);
+            let title = gz_ui::i18n::scope(&ctx, a.group, || Tx::ctx("action", a.title).text(&ctx));
             rows.push(PaletteRow {
                 id: a.id.to_owned(),
                 kind: "action",
@@ -1813,6 +1884,9 @@ impl ShellState {
                 enabled: on.on(),
                 why: on.why().to_owned(),
                 recent: recent.iter().position(|r| r == a.id),
+                shown: title.trim_end_matches("...").trim_end_matches('…').to_owned(),
+                shown_category: Tx::ctx("group", a.group).text(&ctx),
+                shown_why: gz_ui::i18n::t(&ctx, on.why()),
             });
         }
         let root = self.editor.project_root();
@@ -1821,7 +1895,10 @@ impl ShellState {
             rows.push(PaletteRow {
                 id: format!("tab:{}", t.id),
                 kind: "tab",
-                label: t.label(),
+                label: t.label_en(),
+                shown: t.label().text(&ctx),
+                shown_category: gz_ui::i18n::t(&ctx, "Tab"),
+                shown_why: String::new(),
                 category: "Tab".to_owned(),
                 detail: path,
                 shortcut: String::new(),
@@ -1836,6 +1913,13 @@ impl ShellState {
                 id: format!("panel:{}", panel.id),
                 kind: "panel",
                 label: panel.label.to_string(),
+                shown: Tx::ui(panel.label.as_str()).text(&ctx),
+                shown_category: gz_ui::i18n::t(&ctx, "Panel"),
+                shown_why: if self.start_page {
+                    gz_ui::i18n::t(&ctx, "Open a project first.")
+                } else {
+                    String::new()
+                },
                 category: "Panel".to_owned(),
                 detail: String::new(),
                 shortcut: String::new(),
@@ -1856,7 +1940,12 @@ impl ShellState {
     /// The palette's rows for a query, ranked: worked out again only when the query (or what is
     /// open) changed.
     pub(crate) fn palette_ranked(&mut self, _ctx: &Context, query: &str) -> Vec<PaletteRow> {
-        let key = format!("{query}\u{1}{}\u{1}{}", self.tabs.len(), self.active);
+        let key = format!(
+            "{query}\u{1}{}\u{1}{}\u{1}{}",
+            self.tabs.len(),
+            self.active,
+            gz_ui::i18n::lang(&self.egui_ctx).key()
+        );
         if self.palette.ranked_for.as_deref() != Some(key.as_str()) {
             self.palette.ranked = pal::rank(self.palette_rows(), query);
             self.palette.ranked_for = Some(key);
@@ -2024,7 +2113,7 @@ impl ShellState {
                         Stroke::new(1.0, p.border_subtle),
                     );
                     let small = Font::Small.id();
-                    let found = if count == 1 { "1 result".to_owned() } else { format!("{count} results") };
+                    let found = gz_ui::tr!("{n} {n:result|results}", n = count).text(&ctx);
                     ui.painter().text(
                         pos2(footer.min.x + 12.0, footer.center().y),
                         Align2::LEFT_CENTER,
@@ -2034,7 +2123,8 @@ impl ShellState {
                     );
                     let mut x = footer.max.x - 12.0;
                     for (keys, what) in [("Esc", "Close"), ("Enter", "Run")] {
-                        x -= text::width(&ctx, &small, what);
+                        let what = Tx::ctx("palette", what).text(&ctx);
+                        x -= text::width(&ctx, &small, Tx::raw(&what));
                         ui.painter().text(
                             pos2(x, footer.center().y),
                             Align2::LEFT_CENTER,
@@ -2065,7 +2155,8 @@ impl ShellState {
             if let Some(row) = rows.get(i) {
                 let id = row.id.clone();
                 if let Err(e) = self.palette_run(&ctx, &id) {
-                    state::toast(&ctx, Tone::Warning, &format!("{}: {e}", row.label));
+                    let what = Tx::ui(e).text(&ctx);
+                    state::toast(&ctx, Tone::Warning, Tx::raw(format!("{}: {what}", row.shown)));
                 }
             }
         }
@@ -2194,7 +2285,7 @@ fn card_row(
         pos2(head.min.x + 24.0, head.center().y),
         Align2::LEFT_CENTER,
         p.text,
-        &job.title,
+        Tx::ui(job.title.as_str()),
         Some((width - 24.0 - hide_w).max(0.0)),
         Clip::End,
     );
@@ -2218,7 +2309,7 @@ fn card_row(
         }
     }
     if !card.subtitle.is_empty() {
-        small_line(ui, &card.subtitle, p.text_secondary, width, Clip::Middle);
+        small_line(ui, Tx::ui(card.subtitle.as_str()), p.text_secondary, width, Clip::Middle);
     }
     ui.add_space(6.0);
     card_steps(ui, card, width);
@@ -2228,9 +2319,10 @@ fn card_row(
     // what it is doing, and for how long: "Copying files        00:42 · about 01:08 left"
     let mut time = crate::tasks::format_elapsed(now.saturating_sub(job.started_ms));
     if card.eta_ms > 0 {
-        time.push_str(&format!(" · about {} left", crate::tasks::format_elapsed(card.eta_ms)));
+        let eta = crate::tasks::format_elapsed(card.eta_ms);
+        time.push_str(&gz_ui::tr!(" · about {eta} left", eta = eta).text(&ctx));
     }
-    let time_w = text::width(&ctx, &small, &time);
+    let time_w = text::width(&ctx, &small, Tx::raw(&time));
     let (line, _) = ui.allocate_exact_size(Vec2::new(width, 16.0), Sense::hover());
     text::paint(
         ui.painter(),
@@ -2238,7 +2330,7 @@ fn card_row(
         pos2(line.min.x, line.center().y),
         Align2::LEFT_CENTER,
         p.text,
-        &job.stage,
+        Tx::ui(job.stage.as_str()),
         Some((width - time_w - 12.0).max(0.0)),
         Clip::End,
     );
@@ -2254,34 +2346,38 @@ fn card_row(
         let mut numbers = format!("{:.0}%", f * 100.0);
         if !card.numbers.is_empty() {
             numbers.push_str("  ·  ");
-            numbers.push_str(&card.numbers);
+            numbers.push_str(&Tx::ui(card.numbers.as_str()).text(&ctx));
         }
-        small_line(ui, &numbers, p.text_secondary, width, Clip::End);
+        small_line(ui, Tx::raw(&numbers), p.text_secondary, width, Clip::End);
     }
     if !card.file.is_empty() {
-        small_line(ui, &card.file, p.text_muted, width, Clip::Middle);
+        small_line(ui, Tx::raw(&card.file), p.text_muted, width, Clip::Middle);
     }
     ui.add_space(4.0);
     let label = if cancel_requested {
-        "Stopping...".to_owned()
+        Tx::from("Stopping...")
     } else if card.stop_label.is_empty() {
-        "Stop".to_owned()
+        Tx::from("Stop")
     } else {
-        card.stop_label.clone()
+        Tx::ui(card.stop_label.as_str())
     };
-    let w = gz_ui::units::button_width(&ctx, &label, Kind::Secondary, false, 0.0);
+    let w = gz_ui::units::button_width(&ctx, label.borrow(), Kind::Secondary, false, 0.0);
     let (row, _) = ui.allocate_exact_size(Vec2::new(width, 24.0), Sense::hover());
-    let tip = if card.stop_tip.is_empty() { "It stops at the next step." } else { card.stop_tip.as_str() };
+    let tip = if card.stop_tip.is_empty() {
+        Tx::from("It stops at the next step.")
+    } else {
+        Tx::ui(card.stop_tip.as_str())
+    };
     let stopped = ui
         .put(
             Rect::from_min_size(pos2(row.max.x - w, row.min.y), Vec2::new(w, 24.0)),
-            Button::new(&label).enabled(!cancel_requested, "It stops at the next step.").tip(tip),
+            Button::new(label).enabled(!cancel_requested, "It stops at the next step.").tip(tip),
         )
         .clicked();
     stopped && !cancel_requested
 }
 
-fn small_line(ui: &mut Ui, text_: &str, color: Color32, width: f32, clip: Clip) {
+fn small_line(ui: &mut Ui, text_: Tx<'_>, color: Color32, width: f32, clip: Clip) {
     let (r, _) = ui.allocate_exact_size(Vec2::new(width, 16.0), Sense::hover());
     let shown_cut = text::paint(
         ui.painter(),
@@ -2289,12 +2385,13 @@ fn small_line(ui: &mut Ui, text_: &str, color: Color32, width: f32, clip: Clip) 
         pos2(r.min.x, r.center().y),
         Align2::LEFT_CENTER,
         color,
-        text_,
+        text_.borrow(),
         Some(width),
         clip,
     );
     if shown_cut {
-        ui.interact(r, ui.scope_id().with(("gz-app.small_line", text_)), Sense::hover()).on_hover_text(text_);
+        let full = text_.text(ui.ctx());
+        ui.interact(r, ui.scope_id().with(("gz-app.small_line", &full)), Sense::hover()).tip(Tx::raw(full));
     }
 }
 
@@ -2307,13 +2404,16 @@ fn card_steps(ui: &mut Ui, card: &crate::TaskCard, width: f32) {
     let ctx = ui.ctx().clone();
     let small = Font::Small.id();
     let (dot, gap) = (3.0, 5.0);
-    let labels: f32 = card.steps.iter().map(|s| text::width(&ctx, &small, s) + dot * 2.0 + gap).sum();
+    // a step is a noun ("Copy" the step, not the verb): the context `task_card` says so
+    let steps: Vec<String> =
+        card.steps.iter().map(|s| Tx::ui_in("task_card", s.as_str()).text(&ctx)).collect();
+    let labels: f32 = steps.iter().map(|s| text::width(&ctx, &small, Tx::raw(s)) + dot * 2.0 + gap).sum();
     let count = card.steps.len();
     let link = if count > 1 { ((width - labels) / (count - 1) as f32).max(6.0) } else { 0.0 };
     let (r, _) = ui.allocate_exact_size(Vec2::new(width, 18.0), Sense::hover());
     let cy = r.center().y;
     let mut x = r.min.x;
-    for (i, name) in card.steps.iter().enumerate() {
+    for (i, name) in steps.iter().enumerate() {
         let i = i as i32;
         let (done, now) = (i < card.step, i == card.step);
         let tone = if done || now { p.accent } else { p.text_muted };
@@ -2335,7 +2435,7 @@ fn card_steps(ui: &mut Ui, card: &crate::TaskCard, width: f32) {
             p.text_muted
         };
         ui.painter().text(pos2(x, cy), Align2::LEFT_CENTER, name, small.clone(), color);
-        x += text::width(&ctx, &small, name);
+        x += text::width(&ctx, &small, Tx::raw(name));
         if (i as usize) + 1 < count {
             let (a, b) = (x + gap, x + link - gap);
             if b > a {
@@ -2407,7 +2507,7 @@ fn palette_row(ui: &mut Ui, row: &PaletteRow, selected: bool, row_h: f32) -> Res
                 },
             );
         }
-        let keys_w = text::width(&ctx, &Font::Small.id(), &row.shortcut);
+        let keys_w = text::width(&ctx, &Font::Small.id(), Tx::raw(&row.shortcut));
         let name_x = rect.min.x + 36.0;
         let body = Font::Body.id();
         // the columns stand where they stand on every row, keys or none: the keys' column is
@@ -2424,11 +2524,11 @@ fn palette_row(ui: &mut Ui, row: &PaletteRow, selected: bool, row_h: f32) -> Res
             pos2(name_x, rect.center().y),
             Align2::LEFT_CENTER,
             text_c,
-            &row.label,
+            Tx::raw(&row.shown),
             Some((col_x - 12.0 - name_x).max(0.0)),
             Clip::End,
         );
-        let second = if row.detail.is_empty() { &row.category } else { &row.detail };
+        let second = if row.detail.is_empty() { &row.shown_category } else { &row.detail };
         if right - col_x > 24.0 {
             text::paint(
                 ui.painter(),
@@ -2436,7 +2536,7 @@ fn palette_row(ui: &mut Ui, row: &PaletteRow, selected: bool, row_h: f32) -> Res
                 pos2(col_x, rect.center().y),
                 Align2::LEFT_CENTER,
                 p.text_muted,
-                second,
+                Tx::raw(second),
                 Some(right - col_x),
                 if row.detail.is_empty() { Clip::End } else { Clip::Start },
             );
@@ -2453,14 +2553,18 @@ fn palette_row(ui: &mut Ui, row: &PaletteRow, selected: bool, row_h: f32) -> Res
     }
     audit::control(
         &ctx,
-        &row.label,
+        &row.shown,
         row.enabled,
-        (!row.why.is_empty()).then_some(row.why.as_str()),
-        Some(&row.category),
+        (!row.shown_why.is_empty()).then_some(row.shown_why.as_str()),
+        Some(&row.shown_category),
         rect,
     );
-    let tip = if row.why.is_empty() { format!("{}\n{}", row.category, row.id) } else { row.why.clone() };
-    resp.on_hover_text(tip)
+    let tip = if row.why.is_empty() {
+        format!("{}\n{}", row.shown_category, row.id)
+    } else {
+        row.shown_why.clone()
+    };
+    resp.tip(Tx::raw(tip))
 }
 
 /// The card's head when nothing runs: what ended, and the chevron that hides it.
@@ -2470,7 +2574,7 @@ fn finished_head(ui: &mut Ui, width: f32, hide: &mut bool) {
     ui.painter().text(
         pos2(head.min.x, head.center().y),
         Align2::LEFT_CENTER,
-        "Recent Tasks",
+        gz_ui::i18n::t(ui.ctx(), "Recent Tasks"),
         Font::Strong.id(),
         p.text,
     );
@@ -2498,16 +2602,17 @@ fn finished_row(ui: &mut Ui, job: &gz_editor::JobInfo, width: f32, now: u64) {
         Rect::from_min_size(pos2(r.min.x, r.center().y - 7.0), Vec2::splat(14.0)),
         tone.gamma_multiply(0.8),
     );
-    let result = crate::tasks::result_text(job);
+    let result = Tx::ui(crate::tasks::result_text(job)).text(ui.ctx());
+    let title = Tx::ui(job.title.as_str()).text(ui.ctx());
     let ago = crate::tasks::format_elapsed(now.saturating_sub(job.ended_ms.unwrap_or(now)));
-    let rw = text::width(ui.ctx(), &Font::Small.id(), &result).min(width * 0.5);
+    let rw = text::width(ui.ctx(), &Font::Small.id(), Tx::raw(&result)).min(width * 0.5);
     text::paint(
         ui.painter(),
         &Font::Body.id(),
         pos2(r.min.x + 22.0, r.center().y),
         Align2::LEFT_CENTER,
         p.text_secondary,
-        &job.title,
+        Tx::raw(&title),
         Some((width - 22.0 - rw - 12.0).max(0.0)),
         Clip::End,
     );
@@ -2517,21 +2622,24 @@ fn finished_row(ui: &mut Ui, job: &gz_editor::JobInfo, width: f32, now: u64) {
         pos2(r.max.x, r.center().y),
         Align2::RIGHT_CENTER,
         p.text_muted,
-        &result,
+        Tx::raw(&result),
         Some(rw + 0.5),
         Clip::End,
     );
-    let _ = resp.on_hover_text(format!("{} - {result}, {ago} ago", job.title));
+    let _ = resp.tip(gz_ui::tr!("{title} - {result}, {ago} ago", title = title, result = result, ago = ago));
 }
 
 /// Opens a folder in Explorer.
 pub(crate) fn reveal_folder(path: &std::path::Path) {
-    let _ = std::process::Command::new("explorer.exe").arg(path).spawn();
+    let shown = path.display().to_string().replace('/', "\\");
+    let _ = std::process::Command::new("explorer.exe").arg(shown).spawn();
 }
 
-/// Shows a file selected in Explorer.
+/// Shows a file selected in Explorer. Explorer reads `/select,"<path>"` itself, not the way a
+/// program's arguments are quoted, and only with backslashes: a path with a space or a `/` in it
+/// otherwise opens the Documents folder instead.
 pub(crate) fn reveal_file(path: &std::path::Path) {
-    let mut arg = std::ffi::OsString::from("/select,");
-    arg.push(path.as_os_str());
-    let _ = std::process::Command::new("explorer.exe").arg(arg).spawn();
+    use std::os::windows::process::CommandExt;
+    let shown = path.display().to_string().replace('/', "\\");
+    let _ = std::process::Command::new("explorer.exe").raw_arg(format!("/select,\"{shown}\"")).spawn();
 }

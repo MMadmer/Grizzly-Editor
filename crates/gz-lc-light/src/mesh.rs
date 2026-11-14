@@ -866,6 +866,17 @@ impl Mesh {
     /// copy per group of its faces that share a normal, the originals dropped. Answers how many
     /// vertices were added.
     pub fn calc_normals(&mut self, sm_angle: f32, smoothing: Smoothing) -> isize {
+        self.calc_normals_until(sm_angle, smoothing, &|| false).unwrap_or(0)
+    }
+
+    /// [`Self::calc_normals`] that gives up - `None`, the mesh half split - once `stop` says so,
+    /// asked every few thousand vertices.
+    pub fn calc_normals_until(
+        &mut self,
+        sm_angle: f32,
+        smoothing: Smoothing,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Option<isize> {
         let vcount = self.vert_list.len();
         let sm_cos = deg2rad(sm_angle).cos();
         let faces = self.face_list.clone();
@@ -876,6 +887,9 @@ impl Mesh {
             self.calc_normal(f);
         }
         for i in 0..vcount {
+            if i.is_multiple_of(4096) && stop() {
+                return None;
+            }
             let Some(&v) = self.vert_list.get(i) else { break };
             // X-Ray's compiler sorts a vertex's faces by their addresses
             let (faddr, fpool) = (&self.faddr, &self.fpool);
@@ -915,7 +929,7 @@ impl Mesh {
                 face.flags.splitted = false;
             }
         }
-        self.vert_list.len() as isize - vcount as isize
+        Some(self.vert_list.len() as isize - vcount as isize)
     }
 }
 

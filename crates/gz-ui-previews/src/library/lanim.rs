@@ -15,13 +15,15 @@ use gz_store::{Apply, State, Store};
 use gz_ui::dialog::{self, Answer, ConfirmSpec};
 use gz_ui::grid::{color, integer, number, read_only};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Font, Icon, Kind, PropFlags, PropertyGrid, Toolbar, ToolbarStyle, palette, state};
+use gz_ui::{
+    Font, Icon, Kind, PropFlags, PropertyGrid, TipExt, Toolbar, ToolbarStyle, Tx, palette, state, tr,
+};
 use serde_json::{Map, Value, json};
 
 use super::keys;
 use super::list::{Empty, LibraryList, find, shown};
 use super::stores::{LanimFacts, LibraryFacts, LibraryStores};
-use super::{LibraryDoc, folder_text, pane, panes};
+use super::{LibraryDoc, folder_tx, pane, panes};
 use crate::local::{local_ends, local_heading};
 use crate::paths::EditorDirs;
 use crate::writer::LibraryWriter;
@@ -317,14 +319,16 @@ impl LanimDoc {
             self.pointer = ((t * f64::from(fps)).floor() as i32).clamp(0, (item.frame_count - 1).max(0));
             ctx.request_repaint();
         }
-        let facts = format!(
-            "{} frames \u{b7} {} fps \u{b7} {:.2} s \u{b7} {} keys",
-            item.frame_count,
-            item.fps,
-            item.frame_count as f32 / item.fps.max(1e-3),
-            item.keys.len()
+        let facts = crate::local::local_facts(
+            &ctx,
+            &[
+                tr!("{n} {n:frame|frames}", n = item.frame_count),
+                tr!("{fps} fps", fps = item.fps.to_string()),
+                tr!("previews" => "{s} s", s = format!("{:.2}", item.frame_count as f32 / item.fps.max(1e-3))),
+                tr!("{n} {n:key|keys}", n = item.keys.len()),
+            ],
         );
-        local_heading(ui, &item.name, Clip::Start, &[(&facts, Clip::End)]);
+        local_heading(ui, Tx::raw(item.name.as_str()), Clip::Start, &[(facts, Clip::End)]);
         ui.add_space(8.0);
 
         // the colour at the frame the pointer is on: the light as it looks then
@@ -342,14 +346,23 @@ impl LanimDoc {
             Stroke::new(1.0, p.border),
             egui::StrokeKind::Inside,
         );
-        let tip = format!(
-            "Frame {}: #{:06X}, alpha {}{}",
-            self.pointer,
-            argb & 0xFF_FFFF,
-            argb >> 24,
-            if item.keys.contains_key(&self.pointer) { " (a key)" } else { "" }
-        );
-        resp.on_hover_text(tip);
+        let color = format!("#{:06X}", argb & 0xFF_FFFF);
+        let tip = if item.keys.contains_key(&self.pointer) {
+            tr!(
+                "Frame {frame}: {color}, alpha {alpha} (a key)",
+                frame = self.pointer,
+                color = color,
+                alpha = argb >> 24
+            )
+        } else {
+            tr!(
+                "Frame {frame}: {color}, alpha {alpha}",
+                frame = self.pointer,
+                color = color,
+                alpha = argb >> 24
+            )
+        };
+        resp.tip(tip);
         ui.add_space(12.0);
         self.draw_timeline(ui, item, 40.0);
         self.draw_key_bar(ui, item, cx);
@@ -374,7 +387,7 @@ impl LanimDoc {
                 self.pointer = under(pos.x);
             }
         }
-        let resp = resp.on_hover_text("Click or drag to pick a frame; double-click adds a key there.");
+        let resp = resp.tip("Click or drag to pick a frame; double-click adds a key there.");
         let painter = ui.painter_at(rect);
         let strip = Rect::from_min_max(rect.min, pos2(rect.max.x, strip_b));
         // one strip per frame, or one per point column when the frames outnumber the points
@@ -416,7 +429,7 @@ impl LanimDoc {
         );
         painter.rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
         let _ = resp;
-        local_ends(ui, "0", &(count - 1).to_string());
+        local_ends(ui, Tx::raw("0"), Tx::raw((count - 1).to_string()));
     }
 
     fn add_key(&mut self, item: &LightAnim) {
@@ -443,6 +456,7 @@ impl LanimDoc {
             free_before: free_before.filter(|_| on_key),
             free_after: free_after.filter(|_| on_key),
         });
+        let prefix = gz_ui::i18n::t(ui.ctx(), "Frame ");
         let mut tb = Toolbar::begin(ui, "light_animation_keys", ToolbarStyle::Panel);
         tb.group(3);
         gz_app::toolbar_button(&mut tb, cx, "library.previous_key", Kind::Ghost, Some(""));
@@ -450,11 +464,11 @@ impl LanimDoc {
         let pointer = &mut self.pointer;
         let playing = &mut self.playing;
         tb.widget("frame", 88.0, |ui| {
-            let r = ui.add(egui::DragValue::new(pointer).range(0..=last).speed(0.25).prefix("Frame "));
+            let r = ui.add(egui::DragValue::new(pointer).range(0..=last).speed(0.25).prefix(prefix));
             if r.changed() {
                 *playing = None;
             }
-            r.on_hover_text("The frame the timeline points at; drag or type a number");
+            r.tip("The frame the timeline points at; drag or type a number");
         });
         gz_app::toolbar_button(&mut tb, cx, "library.next_key", Kind::Ghost, Some(""));
         tb.group(2);
@@ -466,13 +480,16 @@ impl LanimDoc {
         tb.spring();
         tb.group(4);
         let play = self.playing.is_some();
-        gz_app::toolbar_button(
-            &mut tb,
-            cx,
-            if play { "library.stop_animation" } else { "library.play_animation" },
-            Kind::Ghost,
-            None,
-        );
+        let ctx = cx.ctx.clone();
+        gz_ui::i18n::scope(&ctx, "playback", || {
+            gz_app::toolbar_button(
+                &mut tb,
+                cx,
+                if play { "library.stop_animation" } else { "library.play_animation" },
+                Kind::Ghost,
+                Some(if play { "Stop" } else { "Play" }),
+            );
+        });
         tb.end();
     }
 
@@ -509,9 +526,13 @@ impl LanimDoc {
                 }
             });
             g.section("Current", true, None, |g| {
-                g.row("Frame", "The frame the timeline points at", PropFlags::READ_ONLY, 0, |ui| {
-                    read_only(ui, &pointer.to_string(), Clip::End)
-                });
+                g.row(
+                    Tx::ctx("light_animations", "Frame"),
+                    "The frame the timeline points at",
+                    PropFlags::READ_ONLY,
+                    0,
+                    |ui| read_only(ui, Tx::raw(pointer.to_string()), Clip::End),
+                );
                 match key {
                     Some(argb) => {
                         g.row("Color", "The key's colour", PropFlags::NONE, 0, |ui| {
@@ -646,14 +667,14 @@ impl Document for LanimDoc {
     fn kind(&self) -> &'static str {
         KIND
     }
-    fn label(&self) -> String {
-        "Light Animations".to_owned()
+    fn label(&self) -> Tx<'static> {
+        Tx::from("Light Animations")
     }
     fn icon(&self) -> Icon {
         Icon::Light
     }
-    fn tooltip(&self) -> Option<String> {
-        Some("The light animation library (lanims.xr)".to_owned())
+    fn tooltip(&self) -> Option<Tx<'static>> {
+        Some(Tx::from("The light animation library (lanims.xr)"))
     }
     fn dirty(&self) -> bool {
         self.store.is_dirty()
@@ -691,13 +712,13 @@ impl Document for LanimDoc {
         // a library with nothing in it (or that cannot be read) says so once, over the whole tab
         if snap.loaded && keys.is_empty() {
             match &snap.error {
-                Some(e) => state::error_state(ui, "The library cannot be read", e, None),
+                Some(e) => state::error_state(ui, "The library cannot be read", Tx::ui(e), None),
                 None => {
-                    let text_ = format!(
-                        "lanims.xr in {} holds no light animation.",
-                        folder_text(&self.editor, &EditorDirs::of(&self.editor).gamedata)
+                    let text_ = tr!(
+                        "lanims.xr in {place} holds no light animation.",
+                        place = folder_tx(&self.editor, &EditorDirs::of(&self.editor).gamedata)
                     );
-                    state::empty_state(ui, Icon::Light, "No light animations", &text_, None)
+                    state::empty_state(ui, Icon::Light, "No light animations", text_, None)
                 }
             };
             return;
@@ -706,16 +727,16 @@ impl Document for LanimDoc {
         let rows = shown(&keys, &|_| true, &self.list.search);
         // only an empty list says where the library is read from
         let empty_text = if snap.loaded && keys.is_empty() {
-            format!(
-                "lanims.xr in {} holds no light animation.",
-                folder_text(&self.editor, &EditorDirs::of(&self.editor).gamedata)
+            tr!(
+                "lanims.xr in {place} holds no light animation.",
+                place = folder_tx(&self.editor, &EditorDirs::of(&self.editor).gamedata)
             )
         } else {
-            String::new()
+            Tx::EMPTY
         };
         let empty = Empty {
-            title: if snap.loaded { "No light animations" } else { "Reading the library..." },
-            text: &empty_text,
+            title: Tx::from(if snap.loaded { "No light animations" } else { "Reading the library..." }),
+            text: empty_text,
             action: None,
         };
         let selected = self.selected.clone();
@@ -735,7 +756,7 @@ impl Document for LanimDoc {
         }
         if let Some(e) = &snap.error {
             pane(ui, preview_r, "light_animations.preview", true, false, |ui| {
-                state::error_state(ui, "The library cannot be read", e, None);
+                state::error_state(ui, "The library cannot be read", Tx::ui(e), None);
             });
         } else {
             pane(ui, preview_r, "light_animations.preview", true, false, |ui| match &item {
@@ -762,12 +783,15 @@ impl Document for LanimDoc {
 
     fn status(&mut self, ui: &mut Ui, _cx: &mut DocCx<'_>) {
         let snap = self.store.snapshot();
-        let mut line = format!("{} light animations", snap.lib.items.len());
-        if self.store.is_dirty() {
-            line.push_str(" \u{b7} unsaved changes");
-        }
+        let line = crate::local::local_facts(
+            ui.ctx(),
+            &[
+                tr!("{n} light {n:animation|animations}", n = snap.lib.items.len()),
+                if self.store.is_dirty() { Tx::from("unsaved changes") } else { Tx::EMPTY },
+            ],
+        );
         let p = palette(ui.ctx());
-        text::label(ui, &line, Font::Small, p.text_secondary, Clip::End);
+        text::label(ui, line, Font::Small, p.text_secondary, Clip::End);
     }
 
     fn edit(&mut self, _cx: &mut DocCx<'_>, action: EditAction, run: bool) -> bool {
@@ -828,12 +852,12 @@ pub fn reload_reply(r: &gz_app::ReplyCx<'_>) {
     }
     let spec = ConfirmSpec {
         id: "reload_light_animations".to_owned(),
-        title: "Reload Light Animations".to_owned(),
-        headline: "Read the light animation library from disk again?".to_owned(),
-        items: vec!["Unsaved changes to the light animations".to_owned()],
+        title: "Reload Light Animations".into(),
+        headline: "Read the light animation library from disk again?".into(),
+        items: vec![Tx::from("Unsaved changes to the light animations")],
         total: 0,
-        consequence: "The changes made since the last save are lost.".to_owned(),
-        action: "Reload".to_owned(),
+        consequence: "The changes made since the last save are lost.".into(),
+        action: "Reload".into(),
         destructive: true,
     };
     let editor = r.editor.clone();

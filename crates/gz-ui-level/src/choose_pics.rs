@@ -45,6 +45,8 @@ const MAX_BYTES: u64 = 32 << 20;
 struct Made {
     key: Key,
     rgba: Option<(u32, u32, Vec<u8>)>,
+    /// What a model's picture was drawn on; a picture of another theme's is drawn again.
+    backdrop: Option<[u8; 3]>,
 }
 
 /// The chooser's renderer and its pictures, an `Editor` service.
@@ -59,6 +61,8 @@ pub struct Pics {
     textures: AtomicUsize,
     /// UI thread only.
     shown: Mutex<Shown>,
+    /// What a model's picture stands on: the theme's overlay colour, as the last frame had it.
+    backdrop: Mutex<[u8; 3]>,
 }
 
 #[derive(Default)]
@@ -84,10 +88,24 @@ impl Pics {
 
     /// The jobs' results become textures, a few a frame; the coldest go past the budget.
     pub fn begin_frame(&self, ctx: &Context, frame: u64) {
+        // another theme: the model pictures are drawn again on its overlay colour
+        let o = gz_ui::palette(ctx).overlay;
+        let now = [o.r(), o.g(), o.b()];
+        if std::mem::replace(&mut *self.backdrop.lock(), now) != now {
+            self.shown.lock().textures.retain(|k, _| k.0 == PicKind::Texture);
+        }
         let mut done = self.done.lock();
         let take = done.len().min(UPLOADS_PER_FRAME);
-        let made: Vec<Made> = done.drain(..take).collect();
+        let mut made: Vec<Made> = done.drain(..take).collect();
         drop(done);
+        // a picture drawn on the theme before: asked again by the frame that shows it
+        made.retain(|m| {
+            let stale = m.backdrop.is_some_and(|b| b != now);
+            if stale {
+                self.shown.lock().pending.remove(&m.key);
+            }
+            !stale
+        });
         if !made.is_empty() {
             ctx.request_repaint();
         }
@@ -159,7 +177,7 @@ impl Pics {
                 None => None,
             };
             me.textures.fetch_sub(1, Ordering::AcqRel);
-            me.done.lock().push(Made { key, rgba });
+            me.done.lock().push(Made { key, rgba, backdrop: None });
             ed.exec.wake().ping();
         });
         true
@@ -177,6 +195,7 @@ impl Pics {
         }
         self.models.fetch_add(1, Ordering::AcqRel);
         let (me, ed) = (self.clone(), editor.clone());
+        let backdrop = *self.backdrop.lock();
         editor.exec.spawn(async move {
             let (kind, name, side) = (key.0, key.1.clone(), key.2);
             let bytes = match kind {
@@ -187,13 +206,13 @@ impl Pics {
             let rgba = match bytes {
                 Some(b) => ed
                     .exec
-                    .io(move || me2.render(&renderer, kind, &name, &b, side).ok())
+                    .io(move || me2.render(&renderer, kind, &name, &b, side, backdrop).ok())
                     .await
                     .map(|img| (img.width, img.height, img.rgba.clone())),
                 None => None,
             };
             me.models.fetch_sub(1, Ordering::AcqRel);
-            me.done.lock().push(Made { key, rgba });
+            me.done.lock().push(Made { key, rgba, backdrop: Some(backdrop) });
             ed.exec.wake().ping();
         });
         true
@@ -259,6 +278,7 @@ impl Pics {
         name: &str,
         bytes: &[u8],
         side: u32,
+        backdrop: [u8; 3],
     ) -> Result<Arc<gz_render::Image>, String> {
         let table = renderer.assets().table();
         let mesh = if kind == PicKind::Object {
@@ -268,10 +288,13 @@ impl Pics {
             let v = gz_fmt_ogf::Visual::read(bytes).map_err(|e| e.to_string())?;
             MeshData::from_visual(&v, &table).map_err(|e| e.to_string())?
         };
-        let key = key_of(kind, name, bytes.len());
+        let mesh_key = key_of(kind, name, bytes.len());
+        // the backdrop is part of the picture, not of the mesh
+        let [r, g, b] = backdrop;
+        let key = mesh_key ^ (u64::from(r) << 40 | u64::from(g) << 32 | u64::from(b) << 24);
         let (center, radius) = mesh.bounds.sphere();
         let radius = if radius.is_finite() && radius > 1e-4 { radius } else { 1.0 };
-        let handle = renderer.assets().add_mesh(&format!("chooser\\{key:016x}"), mesh);
+        let handle = renderer.assets().add_mesh(&format!("chooser\\{mesh_key:016x}"), mesh);
         let fov = 45f32.to_radians();
         let dist = radius / (fov * 0.5).sin() * 1.12;
         let eye = center + Vec3::new(1.0, 0.8, -1.0).normalize() * dist;
@@ -287,7 +310,7 @@ impl Pics {
                 list.push(Instance::new(handle, Mat4::IDENTITY));
                 let mut view = View::new(camera, [side, side]);
                 // the overlay token's colour, the dialog the picture stands on
-                view.background = Color::rgb(0x28, 0x27, 0x2e);
+                view.background = Color::rgb(r, g, b);
                 (list, view)
             })
             .map_err(|e| e.to_string())

@@ -7,15 +7,16 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gz_app::{DocCx, Drawer, OpenRequest, PanelOp};
+use gz_app::{DocCx, OpenRequest};
 use gz_editor::{Args, Editor, Value, json};
 use gz_ui::dialog::{self, Answer, Asker, ConfirmSpec};
+use gz_ui::{Tx, tr};
 
 use crate::catalog::{Catalog, Origin};
+use crate::icons;
 use crate::model::{self, Location, Source, leaf_of, parent_of};
 use crate::select::Entry;
 use crate::service::{CatKey, Clip, Clipboard, ContentBrowser, Inner, Rename};
-use crate::{PANEL_ID, icons};
 
 /// Who answers the browser's questions from the window.
 #[must_use]
@@ -322,10 +323,6 @@ pub(crate) fn commit_rename(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>,
 
 // ---- delete ------------------------------------------------------------------------------------
 
-fn counted(n: usize, one: &str, many: &str) -> String {
-    format!("{n} {}", if n == 1 { one } else { many })
-}
-
 /// The confirmation of a deletion: it names what goes.
 #[must_use]
 pub(crate) fn delete_spec(entries: &[Entry], cat: Option<&Catalog>) -> ConfirmSpec {
@@ -343,31 +340,32 @@ pub(crate) fn delete_spec(entries: &[Entry], cat: Option<&Catalog>) -> ConfirmSp
         }
     }
     let headline = match entries {
-        [one] if one.folder => format!("Delete the folder {} and everything in it?", leaf_of(&one.path)),
-        [one] => format!("Delete {}?", leaf_of(&one.path)),
-        _ if folders > 0 && files > 0 => format!(
-            "Delete {} and {}?",
-            counted(folders, "folder", "folders"),
-            counted(files, "file", "files")
+        [one] if one.folder => {
+            tr!("Delete the folder {name} and everything in it?", name = leaf_of(&one.path))
+        }
+        [one] => tr!("Delete {name}?", name = leaf_of(&one.path)),
+        _ if folders > 0 && files > 0 => tr!(
+            "Delete {folders} {folders:folder|folders} and {files} {files:file|files}?",
+            folders = folders,
+            files = files
         ),
-        _ if folders > 0 => format!("Delete {}?", counted(folders, "folder", "folders")),
-        _ => format!("Delete {}?", counted(files, "file", "files")),
+        _ if folders > 0 => tr!("Delete {n} {n:folder|folders}?", n = folders),
+        _ => tr!("Delete {n} {n:file|files}?", n = files),
     };
-    let consequence = if inside > 0 {
-        format!(
-            "{}{}. Deleted for good - this cannot be undone.",
-            if folders == 1 { "It holds " } else { "The folders hold " },
-            counted(inside, "file", "files")
-        )
-    } else {
-        String::new()
+    let consequence = match (inside, folders) {
+        (0, _) => Tx::EMPTY,
+        (_, 1) => tr!("It holds {n} {n:file|files}. Deleted for good - this cannot be undone.", n = inside),
+        _ => {
+            tr!("The folders hold {n} {n:file|files}. Deleted for good - this cannot be undone.", n = inside)
+        }
     };
     ConfirmSpec {
         id: "cb_delete".into(),
-        title: "Delete".into(),
+        // a title names the deletion; the button that does it is the verb
+        title: Tx::ctx("dlg.cb_delete", "Delete"),
         headline,
         total: items.len(),
-        items,
+        items: items.into_iter().map(Tx::raw).collect(),
         consequence,
         action: "Delete".into(),
         destructive: true,
@@ -623,14 +621,21 @@ pub(crate) fn paste(
         run();
         return;
     }
-    let where_ =
-        if st.loc.folder.is_empty() { "the project's root".to_owned() } else { st.loc.folder.clone() };
+    let where_ = if st.loc.folder.is_empty() {
+        Tx::ctx("in_folder", "the project's root")
+    } else {
+        Tx::raw(st.loc.folder.clone())
+    };
     let spec = ConfirmSpec {
         id: "cb_replace".into(),
-        title: "Replace".into(),
-        headline: format!("{} item(s) already exist in {where_} and will be replaced:", clashes.len()),
+        title: Tx::ctx("dlg.cb_replace", "Replace"),
+        headline: tr!(
+            "{n} {n:item already exists|items already exist} in {folder} and will be replaced:",
+            n = clashes.len(),
+            folder = where_
+        ),
         total: clashes.len(),
-        items: clashes,
+        items: clashes.into_iter().map(Tx::raw).collect(),
         consequence: "What they replace is gone for good - this cannot be undone.".into(),
         action: "Replace".into(),
         destructive: true,
@@ -1077,38 +1082,6 @@ async fn viewport_centre(editor: &Arc<Editor>) -> Option<[f64; 2]> {
     (w > 1.0 && h > 1.0).then_some([(w * 0.5).round(), (h * 0.5).round()])
 }
 
-// ---- reaching the browser -------------------------------------------------------------------------
-
-/// Brings the browser up from the window: the panel while Level draws it, the Content Drawer over
-/// anything else.
-pub(crate) fn make_visible(cx: &mut DocCx<'_>, st: &Inner) {
-    let now = cx.ctx.cumulative_frame_nr();
-    if cx.active_tab == gz_app::tabs::LEVEL && st.host(crate::Host::Panel).recent(now) {
-        cx.requests.panel(PANEL_ID, PanelOp::Focus);
-    } else {
-        cx.requests.drawer(Some(Drawer::Content));
-    }
-}
-
-/// The tab menu's Show in Content Browser: the project file of a tab selected in the browser.
-pub(crate) fn reveal_from_tab(cx: &mut DocCx<'_>, path: &str) {
-    let browser = ContentBrowser::of(cx.editor);
-    let mut st = browser.inner.lock();
-    let has_project = cx.editor.project_opt().is_some();
-    let rel = crate::model::normalize_name(path);
-    let folder = parent_of(&rel).to_owned();
-    let origin = st.loc.clone();
-    let target = Location::new(Source::Project, st.loc.category, &folder);
-    if st.apply_location(target, false, &browser.cats, has_project).is_ok() {
-        st.remember(&origin);
-        st.search.clear();
-        st.sel.only(Entry::new(&rel, false));
-        st.scroll_to_selection = true;
-        st.pics.cancel();
-    }
-    make_visible(cx, &st);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1202,10 +1175,10 @@ mod tests {
             Some("box\\b".into())
         );
         let spec = delete_spec(&[Entry::new("a\\b.txt", false)], None);
-        assert_eq!(spec.headline, "Delete b.txt?");
+        assert_eq!(spec.headline.en(), "Delete b.txt?");
         let spec = delete_spec(&[Entry::new("a", true), Entry::new("b.txt", false)], None);
-        assert_eq!(spec.headline, "Delete 1 folder and 1 file?");
-        assert!(spec.destructive && spec.items == ["a\\", "b.txt"]);
+        assert_eq!(spec.headline.en(), "Delete 1 folder and 1 file?");
+        assert!(spec.destructive && spec.items == [Tx::raw("a\\"), Tx::raw("b.txt")]);
         assert_eq!(free_folder_name(None, ""), Some("New Folder".into()));
     }
 

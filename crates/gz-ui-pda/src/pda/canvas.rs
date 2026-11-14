@@ -26,6 +26,9 @@ use crate::pda::{Geom, Model};
 
 /// What the game itself draws, as the layout's own colours are given (ARGB): a texture it cannot
 /// find, the player on the map.
+/// The hint of the game's screen edge: the one hover hint of the canvas that is the editor's own.
+const EDGE_HINT: &str =
+    "The game's screen ends here. The PDA runs on past it, so the game shows it cut like this.";
 const GAME_MISSING_TEXTURE: u32 = 0x5AFF_00FF;
 const GAME_PLAYER_RING: u32 = 0xFFFF_FFFF;
 const GAME_PLAYER_DOT: u32 = 0xFF28_A0FF;
@@ -278,10 +281,10 @@ impl Draw<'_> {
     }
 
     /// An editor's note inside the device - not game text: the editor's font, centred, wrapped.
-    fn note(&self, painter: &Painter, r: Rect, text: &str) {
+    fn note(&self, painter: &Painter, r: Rect, text: gz_ui::Tx<'_>) {
         let font = Font::Body.id();
         let wrap = (r.width() - 24.0).max(Font::Body.line());
-        let galley = painter.layout(text.to_owned(), font, self.p.text_secondary, wrap);
+        let galley = painter.layout(text.text(painter.ctx()), font, self.p.text_secondary, wrap);
         let size = galley.size();
         let at = pos2(
             floor_px((r.min.x + r.max.x - size.x) * 0.5, self.ppp),
@@ -460,7 +463,7 @@ impl Draw<'_> {
         } else {
             "The live map. The linked game has no map of this level."
         };
-        self.note(&painter, slot, text);
+        self.note(&painter, slot, text.into());
     }
 
     fn back_color(m: &Model, i: usize) -> u32 {
@@ -599,11 +602,16 @@ impl Draw<'_> {
             ("eptStatistics", "Statistics"),
             ("eptFractionWar", "Faction war"),
         ];
-        let title = NAMES.iter().find(|(k, _)| *k == stock).map_or(stock, |(_, t)| t);
-        let note = format!(
-            "Stock PDA section: {title} ({stock})\nThe game shows its own screen here; the overlay stays on top."
+        let title = NAMES
+            .iter()
+            .find(|(k, _)| *k == stock)
+            .map_or_else(|| gz_ui::Tx::raw(stock.to_owned()), |(_, t)| gz_ui::Tx::from(*t));
+        let note = gz_ui::tr!(
+            "Stock PDA section: {title} ({stock})\nThe game shows its own screen here; the overlay stays on top.",
+            title = title,
+            stock = stock
         );
-        self.note(painter, r, &note);
+        self.note(painter, r, note);
     }
 
     /// The device's art runs on past the game's screen; each side of the device that lies on the
@@ -766,7 +774,7 @@ pub fn draw_canvas(
         d.tex(&base, &side.close_tex, close, 0xFFFF_FFFF, 0.0);
     }
     if m.preview.closed {
-        d.note(&base, screen, "The PDA is closed. Click to open it again.");
+        d.note(&base, screen, "The PDA is closed. Click to open it again.".into());
     }
 
     // the left button plays the layout
@@ -792,8 +800,7 @@ pub fn draw_canvas(
             d.hover_hint = m.preview.format(&it.hint, &now);
         }
         if d.hover_hint.is_empty() && item.is_none() && on_edge {
-            "The game's screen ends here. The PDA runs on past it, so the game shows it cut like this."
-                .clone_into(&mut d.hover_hint);
+            EDGE_HINT.clone_into(&mut d.hover_hint);
         }
         if pressed_now {
             m.pressed = item;
@@ -840,7 +847,13 @@ pub fn draw_canvas(
         ctx.set_cursor_icon(CursorIcon::Move);
     }
     if !d.hover_hint.is_empty() {
-        resp.on_hover_text(d.hover_hint.clone());
+        // the layout's own hint is what the author wrote; the screen's edge is the editor's words
+        let hint = if d.hover_hint == EDGE_HINT {
+            gz_ui::Tx::from(EDGE_HINT)
+        } else {
+            gz_ui::Tx::raw(d.hover_hint.as_str())
+        };
+        gz_ui::TipExt::tip(resp, hint);
     }
 
     // a script action or a signal leaves a note on the screen for a moment
@@ -855,7 +868,8 @@ pub fn draw_canvas(
         } else {
             let font = Font::Body.id();
             let wrap = (screen.width() - 48.0).max(Font::Body.line());
-            let galley = base.layout(m.preview.toast.clone(), font, d.p.text, wrap);
+            let toast = crate::local::local_log_line(&m.preview.toast).text(&ctx);
+            let galley = base.layout(toast, font, d.p.text, wrap);
             let ts = galley.size();
             let c = pos2(screen.center().x, screen.max.y - 40.0 * g.ky);
             let pad = Vec2::new(12.0, 7.0);

@@ -126,8 +126,14 @@ pub fn strip_ext(name: &str) -> &str {
 /// in it ("the editor's rawdata\textures folder"), anything else by its whole path.
 #[must_use]
 pub fn folder_text(project: Option<&Path>, editor_root: &Path, folder: &Path) -> String {
+    folder_tx(project, editor_root, folder).en().into_owned()
+}
+
+/// [`folder_text`] for the window: the owner's words in its language, the path as it is.
+#[must_use]
+pub fn folder_tx(project: Option<&Path>, editor_root: &Path, folder: &Path) -> gz_ui::Tx<'static> {
     let text = folder.to_string_lossy();
-    let inside = |root: &Path, owner: &str| -> Option<String> {
+    let inside = |root: &Path, project: bool| -> Option<gz_ui::Tx<'static>> {
         let r = root.to_string_lossy();
         let r = r.trim_end_matches(['\\', '/']);
         if r.is_empty()
@@ -142,14 +148,19 @@ pub fn folder_text(project: Option<&Path>, editor_root: &Path, folder: &Path) ->
         if !rest.starts_with(['\\', '/']) {
             return None;
         }
-        Some(format!("the {owner} {} folder", rest.trim_start_matches(['\\', '/'])))
+        let path = rest.trim_start_matches(['\\', '/']);
+        Some(if project {
+            gz_ui::tr!("the project's {path} folder", path = path)
+        } else {
+            gz_ui::tr!("the editor's {path} folder", path = path)
+        })
     };
     if let Some(p) = project
-        && let Some(t) = inside(p, "project's")
+        && let Some(t) = inside(p, true)
     {
         return t;
     }
-    inside(editor_root, "editor's").unwrap_or_else(|| text.into_owned())
+    inside(editor_root, false).unwrap_or_else(|| gz_ui::Tx::raw(text.into_owned()))
 }
 
 /// A texture's prefix up to its first `_` becomes its

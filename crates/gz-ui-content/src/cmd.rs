@@ -92,6 +92,14 @@ struct ViewParams {
     /// folder ends in `\`.
     #[serde(default)]
     path: Option<String>,
+    /// reveal, in place of path: what a scene object names - an object's, a group's, a sound's
+    /// or a particle effect's reference - with the Library's `kind`; the project's copy first,
+    /// else the Library's entry.
+    #[serde(default, rename = "ref")]
+    reference: Option<String>,
+    /// reveal, in place of path: a spawn section, as `ref` (kind=spawn_sections).
+    #[serde(default)]
+    section: Option<String>,
     /// reveal: open the entry as a double click does.
     #[serde(default)]
     open: bool,
@@ -173,6 +181,59 @@ fn named(p: &ViewParams, cur: &Location) -> Result<(Source, usize), CmdError> {
         })?,
     };
     Ok((source, if source == Source::Library { kind } else { 0 }))
+}
+
+/// The entry a reference names: the project's own copy first, then the Library's.
+async fn by_reference(
+    ed: &Arc<Editor>,
+    browser: &Arc<ContentBrowser>,
+    p: &ViewParams,
+    has_project: bool,
+) -> Result<(Source, usize, Entry), CmdError> {
+    let want = p.reference.as_deref().or(p.section.as_deref()).unwrap_or_default().trim().replace('/', "\\");
+    let category = p.kind.as_deref().and_then(find_kind).ok_or_else(|| {
+        refuse(
+            "a reveal by ref names the Library's kind: objects, groups, sounds, particles or spawn_sections",
+        )
+    })?;
+    let placed = model::kind(category).filter(|k| k.placed).map(|k| k.payload).ok_or_else(|| {
+        refuse("a reveal by ref takes kind objects, groups, sounds, particles or spawn_sections")
+    })?;
+    // a reference as a scene names it: no folder of the kind, no extension (a project's group is
+    // its file `rawdata\groups\x.group`, a scene's group `x`; a sound `x.ogg` is `x`)
+    let short = |v: &str| {
+        let v = v.trim().replace('/', "\\");
+        let below = match v.get(..15) {
+            Some(head) if head.eq_ignore_ascii_case("rawdata\\groups\\") => v[15..].to_owned(),
+            _ => v,
+        };
+        crate::catalog::stem(&below).to_ascii_lowercase()
+    };
+    let wanted = short(&want);
+    let find = |cat: &Catalog| {
+        cat.files()
+            .find(|f| {
+                crate::actions::placeable(cat, &f.path)
+                    .is_some_and(|(kind, _, value)| kind == placed && short(&value) == wanted)
+            })
+            .map(|f| Entry::new(&f.path, false))
+    };
+    let mut places = Vec::with_capacity(2);
+    if has_project && matches!(category, model::OBJECTS | model::GROUPS) {
+        places.push((Source::Project, 0));
+    }
+    places.push((Source::Library, category));
+    for (source, cat_kind) in places {
+        let at = Location::new(source, cat_kind, "");
+        let cat = browser.cats.fresh(ed, cat_key(&at)).await.map_err(refuse)?;
+        if let Some(e) = find(&cat) {
+            return Ok((source, cat_kind, e));
+        }
+    }
+    Err(CmdError::not_found(format!(
+        "{want} is neither in the project nor in the Library's {}.",
+        model::kind(category).map_or("entries", |k| k.caption)
+    )))
 }
 
 /// An entry of the source: what `path` names, as the catalog spells it.
@@ -344,15 +405,26 @@ async fn content_view(ed: Arc<Editor>, p: ViewParams, _origin: Origin) -> Reply 
             }
             target = Some(t);
         }
+        ViewAction::Reveal if p.reference.is_some() || p.section.is_some() => {
+            let (src, cat_kind, e) = by_reference(&ed, &browser, &p, has_project).await?;
+            let folder = model::parent_of(&e.path).to_owned();
+            target = Some(Location::new(src, cat_kind, &folder));
+            entry = Some(e);
+        }
         ViewAction::Reveal => {
-            let raw = p.path.as_deref().ok_or_else(|| CmdError::invalid("reveal takes path"))?;
+            let raw =
+                p.path.as_deref().ok_or_else(|| CmdError::invalid("reveal takes path, ref or section"))?;
             let at = Location::new(source, kind, "");
             if at.home() {
                 return Err(refuse("name the Library's kind to reveal an entry of it (kind=)"));
             }
             let cat = browser.cats.fresh(&ed, cat_key(&at)).await.map_err(refuse)?;
-            let e = find_entry(&cat, raw)
-                .ok_or_else(|| CmdError::not_found(format!("{raw} is not in this source")))?;
+            let e = find_entry(&cat, raw).ok_or_else(|| {
+                CmdError::not_found(match source {
+                    Source::Project => format!("{raw} is not among the project's files."),
+                    Source::Library => format!("{raw} is not in the Library."),
+                })
+            })?;
             let folder = if e.folder { e.path.to_string() } else { model::parent_of(&e.path).to_owned() };
             target = Some(Location::new(source, kind, &folder));
             entry = Some(e);

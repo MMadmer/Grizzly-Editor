@@ -28,7 +28,9 @@ use gz_scene::props::{self, Effect, Kind as RowKind, MergedRow, PropCx, Row, Val
 use gz_scene::{ObjClass, SceneCmd, SceneService, SceneState};
 use gz_ui::grid::{self, PickAction, PropFlags, PropertyGrid};
 use gz_ui::text::Clip;
-use gz_ui::{Dialog, DialogSize, Font, Icon, Kind, SearchField, Section, Tone, icon_button, state};
+use gz_ui::{
+    Dialog, DialogSize, Font, Icon, Kind, Lang, SearchField, Section, Tone, Tx, icon_button, state, tr,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::choose::{Chooser, Purpose};
@@ -62,8 +64,10 @@ pub struct Prepared {
     pub total: usize,
     pub visible: usize,
     pub icon: Icon,
-    pub name: String,
-    pub kind: String,
+    /// The header's name: an object's (data), or how many are selected.
+    pub name: Tx<'static>,
+    /// What it is, muted: the editor's words.
+    pub kind: Tx<'static>,
 }
 
 /// The rows of the selection - only those every selected object has, "mixed" where their
@@ -229,7 +233,8 @@ pub fn reset_text(row: &Row, default: &str) -> Option<String> {
     }
 }
 
-/// The rows as a tree of categories, filtered by `filter`, with the header.
+/// The rows as a tree of categories, filtered by `filter`, with the header. With `window` the
+/// search also matches a label in the language the window shows.
 #[must_use]
 pub fn prepare(
     state: &SceneState,
@@ -237,13 +242,18 @@ pub fn prepare(
     target: usize,
     filter: &str,
     ctx: &PropContext,
+    window: Option<&egui::Context>,
 ) -> Prepared {
     let all = rows(state, lib, target, ctx);
     let f = filter.to_lowercase();
     let mut nodes = Vec::new();
     let mut visible = 0;
     for r in &all {
-        if !f.is_empty() && !r.row.key.to_lowercase().contains(&f) && !r.row.label.to_lowercase().contains(&f)
+        let shown = |c: &egui::Context| label_tx(&r.row).text(c).to_lowercase().contains(&f);
+        if !f.is_empty()
+            && !r.row.key.to_lowercase().contains(&f)
+            && !r.row.label.to_lowercase().contains(&f)
+            && !window.is_some_and(shown)
         {
             continue;
         }
@@ -268,8 +278,8 @@ pub fn prepare(
             .file
             .as_ref()
             .and_then(|f| f.file_name())
-            .map_or_else(|| "Untitled".to_owned(), |n| n.to_string_lossy().into_owned());
-        (Icon::Level, name, "Level".to_owned())
+            .map_or_else(|| Tx::from("Untitled"), |n| Tx::raw(n.to_string_lossy().into_owned()));
+        (Icon::Level, name, Tx::from("Level"))
     } else {
         header(state)
     };
@@ -277,23 +287,23 @@ pub fn prepare(
 }
 
 /// One object names itself, several say how many and of what kind.
-fn header(state: &SceneState) -> (Icon, String, String) {
+fn header(state: &SceneState) -> (Icon, Tx<'static>, Tx<'static>) {
     let class = state.tools.placing;
     let selected: Vec<_> = state.selected_in_order().iter().filter_map(|id| state.get(*id)).collect();
     match selected.as_slice() {
-        [] => (crate::classes::icon(class), "Nothing Selected".to_owned(), String::new()),
-        [one] => (crate::classes::icon(one.class), one.name.to_string(), one.class.desc().to_owned()),
+        [] => (crate::classes::icon(class), Tx::from("Nothing Selected"), Tx::EMPTY),
+        [one] => (crate::classes::icon(one.class), Tx::raw(one.name.to_string()), Tx::from(one.class.desc())),
         many => {
             let first = many.first().map_or(class, |o| o.class);
             let uniform = many.iter().all(|o| o.class == first);
             let icon = if uniform { crate::classes::icon(first) } else { Icon::Group };
             (
                 icon,
-                format!("{} objects", many.len()),
+                tr!("{n} {n:object|objects}", n = many.len()),
                 if uniform {
-                    first.desc().to_owned()
+                    Tx::from(first.desc())
                 } else {
-                    "Several kinds - the rows they share".to_owned()
+                    Tx::from("Several kinds - the rows they share")
                 },
             )
         }
@@ -302,8 +312,75 @@ fn header(state: &SceneState) -> (Icon, String, String) {
 
 /// "Search 1 property", "Search 30 properties".
 #[must_use]
-pub fn search_hint(total: usize) -> String {
-    if total == 1 { "Search 1 property".to_owned() } else { format!("Search {total} properties") }
+pub fn search_hint(total: usize) -> Tx<'static> {
+    tr!("Search {n} {n:property|properties}", n = total)
+}
+
+/// A row's label as the window shows it: the editor's words, but for the names a scene gives
+/// (a group's members name themselves and their kind).
+#[must_use]
+pub fn label_tx(row: &Row) -> Tx<'static> {
+    if row.key.starts_with("members.")
+        && let Some((name, kind)) = row.label.strip_suffix(')').and_then(|l| l.rsplit_once(" ("))
+    {
+        return tr!("{name} ({kind})", name = name, kind = Tx::ui_in(DETAILS, kind.to_owned()));
+    }
+    // a loophole of a smart cover is named by the cover's description
+    if row.key.starts_with("props.cover.loopholes.") {
+        return Tx::raw(row.label.clone());
+    }
+    Tx::ui_in(DETAILS, row.label.clone())
+}
+
+/// The catalog's context of the panels' words: a row's label, its section, a word of its list
+/// ("Keys" of a motion, not of the keyboard).
+pub const DETAILS: &str = "details";
+
+/// What a row means and the range a number takes, in the window's language (`props::help_of`
+/// in English).
+fn help_tx(ctx: &egui::Context, row: &Row) -> String {
+    let unit = props::unit_of(row);
+    let unit_word = unit_tx(&unit).text(ctx);
+    let suffix =
+        if unit.is_empty() || unit == "\u{b0}" || unit == "%" { unit_word } else { format!(" {unit_word}") };
+    let g = gz_scene::math::fmt_g;
+    let range = match row.kind {
+        RowKind::Float { min, max, .. } if min < max => {
+            tr!("Range: {min} to {max}{unit}.", min = g(min), max = g(max), unit = suffix).text(ctx)
+        }
+        RowKind::Angle { min, max, .. } if min < max => tr!(
+            "Range: {min} to {max}{unit}.",
+            min = g(min.to_degrees()),
+            max = g(max.to_degrees()),
+            unit = suffix
+        )
+        .text(ctx),
+        RowKind::Int { min, max } if min < max => {
+            tr!("Range: {min} to {max}{unit}.", min = min.to_string(), max = max.to_string(), unit = suffix)
+                .text(ctx)
+        }
+        _ => String::new(),
+    };
+    let help = if row.help.is_empty() { String::new() } else { Tx::ui(row.help.as_str()).text(ctx) };
+    match (help.is_empty(), range.is_empty()) {
+        (_, true) => help,
+        (true, false) => range,
+        (false, false) => format!("{help} {range}"),
+    }
+}
+
+/// A unit as the window writes it: `m` and `s` are words of the language, `°` and `%` signs.
+fn unit_tx(unit: &str) -> Tx<'static> {
+    match unit {
+        "" | "\u{b0}" | "%" => Tx::raw(unit.to_owned()),
+        u => Tx::ui_in("unit", u.to_owned()),
+    }
+}
+
+/// The sections whose sub-sections are named by the scene (a surface, a way point): those names
+/// are data.
+fn names_data(parent: &str) -> bool {
+    matches!(parent, "Surfaces" | "Points")
 }
 
 /// Rows most authors never touch: under their section's More.
@@ -363,6 +440,9 @@ struct Commit {
     live: bool,
 }
 
+/// Why a row's value was not set: the row's label, when the row refused it, and the reason.
+pub type Refusal = (Option<String>, String);
+
 /// Applies a row's value given as text as a `SceneCmd`; a transform row's live steps merge under
 /// `merge`.
 pub async fn set_value(
@@ -371,20 +451,20 @@ pub async fn set_value(
     key: &str,
     text: &str,
     merge: Option<SmolStr>,
-) -> Result<(), String> {
-    let svc = SceneService::of(editor).map_err(|e| e.message)?;
+) -> Result<(), Refusal> {
+    let svc = SceneService::of(editor).map_err(|e| (None, e.message))?;
     let snap = svc.store.snapshot();
     let ctx = svc.prop_cx();
     let (s2, lib) = (snap.clone(), svc.library.clone());
     let c2 = ctx.clone();
     let all = editor.exec.cpu(move || rows(&s2, &lib, target, &c2)).await;
-    let row = props::find(&all, key).ok_or_else(|| format!("no row '{key}'"))?.clone();
+    let row = props::find(&all, key).ok_or_else(|| (None, format!("no row '{key}'")))?.clone();
     let k = row.row.key.clone();
-    let parsed = props::parse(&row.row, text).map_err(|e| format!("{} {e}", row.row.label))?;
+    let refused = |e: String| (Some(row.row.label.clone()), e);
+    let parsed = props::parse(&row.row, text).map_err(refused)?;
     let origin = editor.ui_origin();
     if target == WORLD {
-        let (level, tools) =
-            props::set_world(&snap, &k, &parsed).map_err(|e| format!("{} {e}", row.row.label))?;
+        let (level, tools) = props::set_world(&snap, &k, &parsed).map_err(refused)?;
         svc.store
             .send(
                 SceneCmd::SetWorld {
@@ -396,14 +476,14 @@ pub async fn set_value(
                 origin,
             )
             .await
-            .map_err(|e| e.message)?;
+            .map_err(|e| (None, e.message))?;
         return Ok(());
     }
     let cx = PropCx { lib: Some(&svc.library), entity: &ctx };
     let mut objects = Vec::new();
     let mut transforms = Vec::new();
     for obj in snap.selected_in_order().iter().filter_map(|id| snap.get(*id)) {
-        match props::set_object(&snap, obj, &k, &parsed, &cx).map_err(|e| format!("{} {e}", row.row.label))? {
+        match props::set_object(&snap, obj, &k, &parsed, &cx).map_err(refused)? {
             Effect::Object(n) => objects.push(n),
             Effect::Objects(list) => objects.extend(list),
             Effect::Transform(e) => transforms.push((obj.id, e)),
@@ -417,13 +497,13 @@ pub async fn set_value(
                 origin,
             )
             .await
-            .map_err(|e| e.message)?;
+            .map_err(|e| (None, e.message))?;
     }
     if !objects.is_empty() {
         svc.store
             .send(SceneCmd::ReplaceObjects { objects, serial: snap.serial, label: "Property".into() }, origin)
             .await
-            .map_err(|e| e.message)?;
+            .map_err(|e| (None, e.message))?;
     }
     Ok(())
 }
@@ -437,10 +517,15 @@ fn send(editor: &Arc<Editor>, target: usize, c: Commit) {
     let ed = editor.clone();
     let merge = c.live.then(|| SmolStr::new(format!("details:{}", c.key)));
     editor.exec.spawn(async move {
-        if let Err(e) = set_value(&ed, target, &c.key, &c.text, merge).await
+        if let Err((label, why)) = set_value(&ed, target, &c.key, &c.text, merge).await
             && let Ok(q) = gz_app::UiQueue::of(&ed)
         {
-            q.post(move |_, ctx| gz_ui::state::toast(ctx, Tone::Error, &e));
+            // the row's label and its reason, each in the window's language
+            let text = match label {
+                Some(l) => tr!("{label} {why}", label = Tx::ui_in(DETAILS, l), why = Tx::ui(why)),
+                None => Tx::ui(why),
+            };
+            q.post(move |_, ctx| gz_ui::state::toast(ctx, Tone::Error, text));
         }
     });
 }
@@ -463,7 +548,7 @@ fn section_key(target: usize, title: &str) -> String {
 /// One of the two panels.
 pub struct PropsPanel {
     pub target: usize,
-    query: Query<(usize, String), Prepared>,
+    query: Query<(usize, String, Lang), Prepared>,
     search: String,
     /// The filter as last read from the scene's view.
     synced: String,
@@ -528,11 +613,17 @@ impl PropsPanel {
         }
         let snap = svc.store.snapshot();
         let rev = snap.rev.mix(svc.library.rev());
-        let key = (t, self.search.clone());
+        // the search matches the labels in the window's language too: a language of its own key
+        let lang = gz_ui::i18n::lang(ui.ctx());
+        let key = (t, self.search.clone(), lang);
         let (s, lib, filter) = (snap.clone(), svc.library.clone(), self.search.clone());
         let ctx = svc.prop_cx();
         let rev = rev.mix(gz_base::Rev(Arc::as_ptr(&ctx) as usize as u64));
-        let answer = self.query.get(&key, rev, move || prepare(&s, &lib, t, &filter, &ctx));
+        let window = ui.ctx().clone();
+        let answer = self.query.get(&key, rev, move || {
+            let window = (lang != Lang::En).then_some(&window);
+            prepare(&s, &lib, t, &filter, &ctx, window)
+        });
         let Some(prep) = answer.value().cloned() else {
             state::busy_line(ui, "Reading the properties...");
             return;
@@ -550,7 +641,7 @@ impl PropsPanel {
             gz_app::report_scroll(ui.ctx(), self.window(), 0.0, 0.0);
             return;
         }
-        local_panel_header(ui, prep.icon, &prep.name, &prep.kind);
+        local_panel_header(ui, prep.icon, prep.name.borrow(), prep.kind.borrow());
         ui.add_space(4.0);
         self.search_row(ui, &svc, prep.total);
         ui.add_space(4.0);
@@ -584,13 +675,14 @@ impl PropsPanel {
                     pick: &mut pick,
                     open_text: &mut open_text,
                     expanded,
+                    ctx: ui.ctx().clone(),
                 };
                 let top: Vec<&Node> = prep.nodes.iter().filter(|n| matches!(n, Node::Row(_))).collect();
                 if !top.is_empty() {
                     ui.push_id("top", |ui| {
                         PropertyGrid::new(role).label_frac(frac).show(ui, |g| {
                             for n in &top {
-                                draw_node(g, n, 0, &mut cx);
+                                draw_node(g, n, 0, "", &mut cx);
                             }
                         });
                     });
@@ -600,7 +692,10 @@ impl PropsPanel {
                     sections.push(title.clone());
                     let count = count_rows(children).to_string();
                     let key = section_key(t, title);
-                    let open = Section::new(&key, title).count(&count).show(ui).open;
+                    let open = Section::new(&key, Tx::ui_in(DETAILS, title.as_str()))
+                        .count(Tx::raw(&count))
+                        .show(ui)
+                        .open;
                     if !open {
                         continue;
                     }
@@ -609,13 +704,13 @@ impl PropsPanel {
                     ui.push_id(title.as_str(), |ui| {
                         PropertyGrid::new(role).label_frac(frac).show(ui, |g| {
                             for c in &plain {
-                                draw_node(g, c, 0, &mut cx);
+                                draw_node(g, c, 0, title, &mut cx);
                             }
                             if !more.is_empty() {
                                 let badge = more.len().to_string();
-                                g.section("More", false, Some(&badge), |g| {
+                                g.section("More", false, Some(Tx::raw(&badge)), |g| {
                                     for c in &more {
-                                        draw_node(g, c, 1, &mut cx);
+                                        draw_node(g, c, 1, title, &mut cx);
                                     }
                                 });
                             }
@@ -676,7 +771,7 @@ impl PropsPanel {
             let w = (ui.available_width() - 30.0).max(80.0);
             let hint = search_hint(total);
             let resp = SearchField::new(&mut self.search)
-                .hint(&hint)
+                .hint(hint)
                 .width(w)
                 .id_salt(if t == WORLD { "props_world" } else { "props_selection" })
                 .show(ui);
@@ -720,8 +815,8 @@ impl PropsPanel {
         let mut open = true;
         let mut ok = false;
         let mut cancelled = false;
-        let title = format!("Edit {}", et.label);
-        Dialog::new(&title, "dlg.edit_text", DialogSize::M).show(
+        let title = tr!("Edit {label}", label = Tx::ui_in(DETAILS, et.label.clone()));
+        Dialog::new(title, "dlg.edit_text", DialogSize::M).show(
             ui,
             &mut open,
             |ui| {
@@ -803,16 +898,20 @@ struct RowCx<'a> {
     pick: &'a mut Option<(String, String, props::Choice, String)>,
     open_text: &'a mut Option<(String, String, String)>,
     expanded: bool,
+    /// The window's context: the language the rows' words are shown in.
+    ctx: egui::Context,
 }
 
-fn draw_node(g: &mut grid::Grid<'_>, n: &Node, depth: u32, cx: &mut RowCx<'_>) {
+fn draw_node(g: &mut grid::Grid<'_>, n: &Node, depth: u32, parent: &str, cx: &mut RowCx<'_>) {
     match n {
         Node::Row(r) => draw_row(g, r, depth, cx),
         Node::Section(title, children) => {
             let open = cx.expanded;
-            g.section(title, open, None, |g| {
+            let shown =
+                if names_data(parent) { Tx::raw(title.as_str()) } else { Tx::ui_in(DETAILS, title.as_str()) };
+            g.section(shown, open, None, |g| {
                 for c in children {
-                    draw_node(g, c, depth + 1, cx);
+                    draw_node(g, c, depth + 1, title, cx);
                 }
             });
         }
@@ -856,8 +955,9 @@ fn draw_row(g: &mut grid::Grid<'_>, item: &Item, depth: u32, cx: &mut RowCx<'_>)
     let target = cx.panel.target;
     let key = r.row.key.clone();
     let label = r.row.label.clone();
-    let help = props::help_of(&r.row);
-    let unit = props::unit_of(&r.row);
+    let shown_label = label_tx(&r.row);
+    let help = help_tx(&cx.ctx, &r.row);
+    let unit = unit_tx(&props::unit_of(&r.row));
     let mut flags = PropFlags::NONE;
     if !r.row.enabled || matches!(r.row.kind, RowKind::Caption) {
         flags = flags | PropFlags::READ_ONLY;
@@ -878,7 +978,7 @@ fn draw_row(g: &mut grid::Grid<'_>, item: &Item, depth: u32, cx: &mut RowCx<'_>)
     let vector_row = matches!(r.row.kind, RowKind::Vector { .. } | RowKind::Angle3 { .. })
         && matches!(value, Val::Vec3(_))
         && !g.stacked();
-    g.row(&label, &help, flags, depth, |ui| {
+    g.row(shown_label, Tx::raw(help), flags, depth, |ui| {
         if !enabled {
             ui.disable();
         }
@@ -897,7 +997,13 @@ fn draw_row(g: &mut grid::Grid<'_>, item: &Item, depth: u32, cx: &mut RowCx<'_>)
                         Clip::End,
                     );
                 } else {
-                    grid::read_only(ui, &text, if key == "file" { Clip::Start } else { Clip::End });
+                    // a caption's value is data, but for the few that are the editor's sentences
+                    let shown = if matches!(key.as_str(), "motion.version" | "props" | "light_controls") {
+                        Tx::ui_in(DETAILS, text)
+                    } else {
+                        Tx::raw(text)
+                    };
+                    grid::read_only(ui, shown, if key == "file" { Clip::Start } else { Clip::End });
                 }
             }
             (RowKind::Bool | RowKind::Flag, Val::Bool(b)) => {
@@ -955,8 +1061,13 @@ fn draw_row(g: &mut grid::Grid<'_>, item: &Item, depth: u32, cx: &mut RowCx<'_>)
             }
             (RowKind::Token(items), Val::Num(n)) => {
                 let names: Vec<&str> = items.iter().map(|(s, _)| s.as_str()).collect();
+                // the words of a list are the editor's, but for the lists the scene or the game
+                // names (light controls, story ids, graph locations)
+                let data = key == "control" || is_named_list(&key);
+                let shown: Vec<Tx<'_>> =
+                    names.iter().map(|s| if data { Tx::raw(*s) } else { Tx::ui_in(DETAILS, *s) }).collect();
                 let mut cur = items.iter().position(|(_, id)| *id == *n as i64).unwrap_or(0);
-                if grid::combo(ui, &key, &mut cur, &names)
+                if grid::combo(ui, &key, &mut cur, &shown)
                     && let Some(name) = names.get(cur)
                 {
                     out.now = Some((*name).to_owned());
@@ -966,7 +1077,7 @@ fn draw_row(g: &mut grid::Grid<'_>, item: &Item, depth: u32, cx: &mut RowCx<'_>)
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     for c in captions {
-                        if gz_ui::Button::new(c).show(ui).clicked() {
+                        if gz_ui::Button::new(Tx::ui_in("playback", c.as_str())).show(ui).clicked() {
                             out.now = Some(c.to_string());
                         }
                     }
@@ -974,7 +1085,7 @@ fn draw_row(g: &mut grid::Grid<'_>, item: &Item, depth: u32, cx: &mut RowCx<'_>)
             }
             (RowKind::Choose(choice), _) => {
                 let text = r.row.text();
-                match grid::pick_field(ui, &key, if text == "<none>" { "" } else { &text }, true) {
+                match grid::pick_field(ui, &key, Tx::raw(if text == "<none>" { "" } else { &text }), true) {
                     PickAction::Browse => {
                         *cx.pick = Some((key.clone(), label.clone(), choice.clone(), text.clone()));
                     }
@@ -989,7 +1100,7 @@ fn draw_row(g: &mut grid::Grid<'_>, item: &Item, depth: u32, cx: &mut RowCx<'_>)
                     ui.horizontal(|ui| {
                         let w = (ui.available_width() - 56.0).max(20.0);
                         ui.allocate_ui(Vec2::new(w, gz_ui::metrics::FRAME), |ui| {
-                            grid::read_only(ui, &first, Clip::End)
+                            grid::read_only(ui, Tx::raw(&first), Clip::End)
                         });
                         if gz_ui::Button::new("Edit").show(ui).clicked() {
                             *cx.open_text = Some((key.clone(), label.clone(), text.clone()));
@@ -1007,7 +1118,11 @@ fn draw_row(g: &mut grid::Grid<'_>, item: &Item, depth: u32, cx: &mut RowCx<'_>)
                     }
                 }
             }
-            _ => grid::read_only(ui, &r.row.text(), Clip::End),
+            // a flag's words (Point, Spot) are the editor's; any other value is data
+            _ if matches!(r.row.kind, RowKind::Flag) => {
+                grid::read_only(ui, Tx::ui_in(DETAILS, r.row.text()), Clip::End)
+            }
+            _ => grid::read_only(ui, Tx::raw(r.row.text()), Clip::End),
         }
     });
     if g.was_reset()
@@ -1077,6 +1192,11 @@ pub(crate) fn takes_several(key: &str, choice: &props::Choice, list: Option<&Lis
 
 const RESPAWN_PROFILE: &str = "Respawn Point\\Profile";
 
+/// The token rows whose words a scene or the linked game names: shown as they are.
+fn is_named_list(key: &str) -> bool {
+    matches!(key, "props.story_id" | "props.spawn_story_id") || key.starts_with("props.graph_point.location_")
+}
+
 /// The chooser of a row that takes several items: the bones it has are picked already.
 fn several(c: Chooser, key: &str, choice: &props::Choice) -> Chooser {
     if !takes_several(key, choice, c.list.as_ref()) {
@@ -1139,8 +1259,8 @@ mod tests {
         assert_eq!(val_text(&Val::Color(0xff11_2233)), "0xFF112233");
         assert!(multi_line("props.custom_data", "x"));
         assert!(!multi_line("Name", "x"));
-        assert_eq!(search_hint(1), "Search 1 property");
-        assert_eq!(search_hint(30), "Search 30 properties");
+        assert_eq!(search_hint(1).en(), "Search 1 property");
+        assert_eq!(search_hint(30).en(), "Search 30 properties");
     }
 
     #[test]
@@ -1171,7 +1291,7 @@ mod tests {
     #[test]
     fn a_vector_takes_one_line_under_its_label() {
         let ctx = egui::Context::default();
-        gz_ui::theme::install(&ctx, gz_ui::theme::Accent::default());
+        gz_ui::theme::install(&ctx, gz_ui::Theme::default_theme());
         let pos = Item {
             row: MergedRow {
                 row: row(
@@ -1207,6 +1327,7 @@ mod tests {
                     pick: &mut pick,
                     open_text: &mut text,
                     expanded: true,
+                    ctx: ui.ctx().clone(),
                 };
                 let top = ui.cursor().min.y;
                 PropertyGrid::new("selection").show(ui, |g| draw_row(g, &pos, 0, &mut cx));

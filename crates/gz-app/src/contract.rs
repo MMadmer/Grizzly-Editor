@@ -69,7 +69,7 @@ pub const DOCUMENT_KINDS: [&str; 15] = [
 
 /// Kit dialogs a row, a document or a question raises; none opens over `ui.dialog`, each closes
 /// with it, as Esc.
-pub const KIT_DIALOGS: [&str; 28] = [
+pub const KIT_DIALOGS: [&str; 29] = [
     "dlg.disable_game_updates",
     "dlg.choose",
     "dlg.edit_text",
@@ -98,6 +98,7 @@ pub const KIT_DIALOGS: [&str; 28] = [
     "dlg.edit_release",
     "dlg.catalog_withdraw",
     "dlg.delete_project",
+    "dlg.clean_level",
 ];
 
 /// The Task Center's card.
@@ -166,9 +167,6 @@ pub const UI_SCALE_MAX: f32 = 2.5;
 
 /// Preferences > Interface > Interface Scale: Auto, then these percentages.
 pub const INTERFACE_SCALES: [&str; 6] = ["auto", "100", "125", "150", "175", "200"];
-
-/// The theme presets: the wire key and the name the author reads.
-pub const THEME_PRESETS: [(&str, &str); 2] = [("grizzly-purple", "Grizzly Purple"), ("graphite", "Graphite")];
 
 /// The kinds of the Content Browser's Library, as it names them.
 pub const CATEGORIES: [&str; 7] =

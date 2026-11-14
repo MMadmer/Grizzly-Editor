@@ -9,7 +9,9 @@ use egui::{Align2, Rect, Ui, Vec2, pos2};
 use gz_app::{DialogDesc, DocCx, ShellBuilder};
 use gz_editor::{Editor, SmolStr};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Dialog, DialogSize, Font, Icon, Kind, SearchField, Tone, icons, list, palette, state};
+use gz_ui::{
+    Dialog, DialogSize, Font, Icon, Kind, SearchField, TipExt, Tone, Tx, icons, list, palette, state, tr,
+};
 use parking_lot::Mutex;
 
 /// What the dialog read as it opened.
@@ -82,16 +84,18 @@ fn import(editor: &Arc<Editor>, name: String, there: bool) {
         queue.post(move |shell, ctx| match result {
             Ok(_) => {
                 let text_ = if there {
-                    format!("Scene '{name}' is in the project already.")
+                    tr!("Scene '{name}' is in the project already.", name = name.as_str())
                 } else {
-                    format!("Scene '{name}' imported into the project.")
+                    tr!("Scene '{name}' imported into the project.", name = name.as_str())
                 };
-                state::toast(ctx, Tone::Success, &text_);
+                state::toast(ctx, Tone::Success, text_);
                 state_of(&ed).0.lock().open = false;
             }
             Err(e) => {
                 let asker = if ed.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
-                if let Some(line) = gz_ui::dialog::notice(ctx, asker, Tone::Error, "Import Base Scene", &e) {
+                if let Some(line) =
+                    gz_ui::dialog::notice(ctx, asker, Tone::Error, "Import Base Scene", Tx::ui(e))
+                {
                     ed.log.finding(&line);
                 }
                 let _ = shell;
@@ -114,7 +118,7 @@ fn draw(ui: &mut Ui, cx: &mut DocCx<'_>) {
     let mut cancel = false;
     let listed = s.listed.clone();
     let count = listed.as_ref().map_or(0, |l| l.scenes.len());
-    let status = format!("{count} {}", if count == 1 { "scene" } else { "scenes" });
+    let status = tr!("{n} {n:scene|scenes}", n = count);
     let can_import = !s.pick.is_empty();
     let ImportState { search, pick, reading, .. } = &mut *s;
     Dialog::new("Import Base Scene", "dlg.import_base_scene", DialogSize::M).show(
@@ -143,7 +147,7 @@ fn draw(ui: &mut Ui, cx: &mut DocCx<'_>) {
                         icons::draw(ui.painter(), Icon::Level, Rect::from_min_size(pos2(r.min.x, r.center().y - 7.0), Vec2::splat(14.0)), p.text_secondary);
                         let x = r.min.x + 20.0;
                         let room = (r.max.x - x - 6.0 - if there { badge_w + 8.0 } else { 0.0 }).max(0.0);
-                        text::paint(ui.painter(), &Font::Body.id(), pos2(x, r.center().y), Align2::LEFT_CENTER, p.text, scene, Some(room), Clip::End);
+                        text::paint(ui.painter(), &Font::Body.id(), pos2(x, r.center().y), Align2::LEFT_CENTER, p.text, Tx::raw(scene), Some(room), Clip::End);
                         if there {
                             let br = Rect::from_min_size(pos2(r.max.x - 6.0 - badge_w, r.center().y - 9.0), Vec2::new(badge_w, 18.0));
                             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(br));
@@ -163,11 +167,11 @@ fn draw(ui: &mut Ui, cx: &mut DocCx<'_>) {
                 }
             });
             ui.add_space(4.0);
-            text::label(ui, &l.library, Font::Body, p.text_muted, Clip::Start)
-                .on_hover_text("The editor's library of the game's source scenes. Importing copies one into the project; the library stays as it is.");
+            text::label(ui, Tx::raw(&l.library), Font::Body, p.text_muted, Clip::Start)
+                .tip("The editor's library of the game's source scenes. Importing copies one into the project; the library stays as it is.");
         },
         |f| {
-            f.status(&status, Tone::Muted);
+            f.status(status, Tone::Muted);
             import_pressed = f.button("Import", Kind::Primary, true, can_import, "Pick a scene first.");
             if f.button("Cancel", Kind::Secondary, false, true, "") {
                 cancel = true;

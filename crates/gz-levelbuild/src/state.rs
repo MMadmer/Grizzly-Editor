@@ -9,6 +9,7 @@
 //! steps = {
 //!   geometry = { fingerprint = "9f3a51c2e07b6d14", time = "2026-11-14 12:30:05", seconds = 1.25, quality = "standard" },
 //!   light = { fingerprint = "...", time = "...", seconds = 63.5, quality = "draft", failed = "..." },
+//!   ai_map = { fingerprint = "...", time = "...", seconds = 2.5, files = { "level.ai" } },
 //! }
 //! ai_map = { inputs = "...", nodes = "..." }
 //! objects = { scene_object = [[<xform> <data> [g] <name>
@@ -50,6 +51,10 @@ pub struct StepRecord {
     pub library: u64,
     /// The sentence the step failed with; a failed step is never fresh.
     pub failed: Option<String>,
+    /// What the step wrote: names in the level folder (`level.ai`, `meshes\brkbl#0.ogf`), or
+    /// project-relative ones from `gamedata` on (`gamedata/spawns/editor.spawn`). Empty in a record
+    /// older than the list: what the steps make by name stands in for it (`stock::known_files`).
+    pub files: Vec<String>,
 }
 
 /// The AI map the build generated: the fingerprint of what it was generated over and of the nodes
@@ -120,6 +125,10 @@ impl BuildState {
             if let Some(f) = &r.failed {
                 t.set("failed", f.as_str());
             }
+            if !r.files.is_empty() {
+                let list: Vec<Value> = r.files.iter().map(|f| Value::from(f.as_str())).collect();
+                t.set("files", list);
+            }
             steps.set(step.name(), t);
         }
         top.set("steps", steps);
@@ -180,6 +189,10 @@ impl BuildState {
                         flags: t.get_string("flags", ""),
                         library: t.get("library").and_then(Value::as_str).and_then(unhex).unwrap_or(0),
                         failed: t.get("failed").and_then(Value::as_str).map(str::to_owned),
+                        files: t
+                            .get("files")
+                            .map(|l| l.arr().iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                            .unwrap_or_default(),
                     },
                 );
             }
@@ -247,6 +260,7 @@ mod tests {
                 flags: String::new(),
                 library: 0x00c0_ffee,
                 failed: None,
+                files: vec!["build.prj".into(), "meshes\\brkbl#0.ogf".into()],
             },
         );
         s.steps.insert(
@@ -259,6 +273,7 @@ mod tests {
                 flags: "-noise -nosun".into(),
                 library: 0,
                 failed: Some("The compile failed: \"x\"".into()),
+                files: Vec::new(),
             },
         );
         s.ai_map = Some(Generated { inputs: 7, nodes: 9 });

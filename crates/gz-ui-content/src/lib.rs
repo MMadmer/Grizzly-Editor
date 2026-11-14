@@ -129,9 +129,13 @@ pub fn payload_of(cat: &catalog::Catalog, path: &str, folder: bool) -> Asset {
     Asset { path: reference, kind: kind.to_owned(), file }
 }
 
+/// The browser's words in Russian (docs/UI_DESIGN.md, section 9).
+pub const RU: &str = include_str!("ru.lua");
+
 /// Plugs the browser into the shell: the Level panel's description, the Content Drawer's body
 /// and the tab menu's Show in Content Browser.
 pub fn install(b: &mut ShellBuilder) {
+    b.translation(RU);
     b.panel(PanelDesc {
         id: SmolStr::new(PANEL_ID),
         label: SmolStr::new("Content Browser"),
@@ -149,7 +153,6 @@ pub fn install(b: &mut ShellBuilder) {
             }),
         },
     );
-    b.reveal_in_browser(|path, cx| actions::reveal_from_tab(cx, path));
 }
 
 /// What the browser tells the rest of the editor: the folder `file.create` makes an asset in when
@@ -167,4 +170,15 @@ pub fn install_hooks(editor: &gz_editor::Editor) {
 /// The commands of this package: `content.view`.
 pub fn register(reg: &mut Registry) {
     cmd::register(reg);
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_catalog_reads_with_the_kits_and_the_shells() {
+        let c = gz_ui::i18n::Catalog::parse(&[gz_ui::i18n::KIT_RU, gz_app::lang::SHELL_RU, super::RU])
+            .expect("the catalogs read");
+        let p = gz_ui::i18n::problems(&c);
+        assert!(p.is_empty(), "{}", p.join("\n"));
+    }
 }

@@ -1,7 +1,8 @@
 //! The project area's groups of Preferences: **Game** (the editor's default game - its folder,
 //! version, how it was found, Change..., Find Again - and the open project's own, with Use
 //! Default Game), **Library** (the folder scenes take what the project lacks from) and, on
-//! General, **Project Files** (Open .grizzly Files with This Editor, File Association with its Register Now).
+//! General, **Project Files** (Open .grizzly Files with This Editor, File Association: a check mark while
+//! project files open with this editor, Register Now while they do not).
 //!
 //! Every change is a command (`game.link`, `project.set_library`, `project.associate`). Nothing
 //! here reads a file in a frame: what the rows show is the last `game.info` / `project.info` /
@@ -13,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use gz_app::{Enabled, PrefGroup, PrefKind, PrefRow, ShellBuilder};
 use gz_editor::Editor;
-use gz_ui::Icon;
+use gz_ui::{Icon, Tx, tr};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
@@ -29,8 +30,9 @@ struct Shown {
     /// When they were asked for, and whether an ask is out.
     asked: Option<Instant>,
     asking: bool,
-    /// What the last change said when it failed.
-    error: String,
+    /// What the last change said when it failed (the command's English), and the command it was.
+    error: Tx<'static>,
+    failed: &'static str,
 }
 
 /// The rows' service.
@@ -74,7 +76,11 @@ impl GamePrefs {
     fn change(self: &Arc<Self>, editor: &Arc<Editor>, command: &'static str, a: gz_editor::Args) {
         let (ed, me) = (editor.clone(), self.clone());
         call_then(editor, command, a, move |reply, _| {
-            me.shown.lock().error = if ok(reply) { String::new() } else { error_text(reply) };
+            {
+                let mut s = me.shown.lock();
+                s.error = if ok(reply) { Tx::EMPTY } else { error_text(reply) };
+                s.failed = command;
+            }
             me.refresh(&ed, true);
         });
     }
@@ -102,30 +108,30 @@ fn own_game(v: &Value) -> Option<String> {
 
 // ---- Game > Default Game ------------------------------------------------------------------------
 
-fn default_folder(ed: &Arc<Editor>) -> String {
+fn default_folder(ed: &Arc<Editor>) -> Tx<'static> {
     GamePrefs::read(ed, |s| {
         let d = text_of(&s.game, "default");
-        if d.is_empty() { "No game found".to_owned() } else { d.replace('/', "\\") }
+        if d.is_empty() { Tx::from("No game found") } else { Tx::raw(d.replace('/', "\\")) }
     })
 }
 
-fn default_found(ed: &Arc<Editor>) -> String {
+fn default_found(ed: &Arc<Editor>) -> Tx<'static> {
     GamePrefs::read(ed, |s| {
         match text_of(&s.game, "default_found") {
-            "preference" => "Picked by you",
-            "linked" => "A game this editor was linked to before",
-            "installed" => "The installed Dead Air Refined",
-            "beside_editor" => "Beside the editor",
-            _ => "Not found",
+            "preference" => Tx::from("Picked by you"),
+            "linked" => Tx::from("A game this editor was linked to before"),
+            "installed" => Tx::from("The installed Dead Air Refined"),
+            "beside_editor" => Tx::from("Beside the editor"),
+            // a game, in Russian a word of its own gender
+            _ => Tx::ctx("prefs.game", "Not found"),
         }
-        .to_owned()
     })
 }
 
-fn game_version(ed: &Arc<Editor>) -> String {
+fn game_version(ed: &Arc<Editor>) -> Tx<'static> {
     GamePrefs::read(ed, |s| {
         let v = text_of(&s.game, "version");
-        if v.is_empty() { "-".to_owned() } else { v.to_owned() }
+        Tx::raw(if v.is_empty() { "-".to_owned() } else { v.to_owned() })
     })
 }
 
@@ -141,7 +147,7 @@ fn find_again(ed: &Arc<Editor>) {
     GamePrefs::of(ed).change(ed, "game.link", args([("find", json!(true))]));
 }
 
-fn last_error(ed: &Arc<Editor>) -> String {
+fn last_error(ed: &Arc<Editor>) -> Tx<'static> {
     GamePrefs::read(ed, |s| s.error.clone())
 }
 
@@ -149,8 +155,8 @@ fn always(_: &Arc<Editor>) -> Enabled {
     Enabled::when(true, "")
 }
 
-fn nothing(_: &Arc<Editor>) -> String {
-    String::new()
+fn nothing(_: &Arc<Editor>) -> Tx<'static> {
+    Tx::EMPTY
 }
 
 const DEFAULT_GAME: [PrefRow; 5] = [
@@ -183,12 +189,12 @@ const DEFAULT_GAME: [PrefRow; 5] = [
 
 // ---- Game > This Project --------------------------------------------------------------------------
 
-fn project_game(ed: &Arc<Editor>) -> String {
+fn project_game(ed: &Arc<Editor>) -> Tx<'static> {
     GamePrefs::read(ed, |s| {
         if !project_open(&s.project) {
-            return "No project is open".to_owned();
+            return Tx::from("No project is open");
         }
-        own_game(&s.project).unwrap_or_else(|| "Uses the default game".to_owned())
+        own_game(&s.project).map_or_else(|| Tx::from("Uses the default game"), Tx::raw)
     })
 }
 
@@ -243,28 +249,34 @@ const THIS_PROJECT: [PrefRow; 3] = [
 
 // ---- Library ----------------------------------------------------------------------------------------
 
-fn library_folder(ed: &Arc<Editor>) -> String {
+fn library_path(ed: &Arc<Editor>) -> String {
     GamePrefs::read(ed, |s| {
         let f = text_of(&s.project, "library_root");
         if f.is_empty() { gz_project::library_root(ed).display().to_string() } else { f.replace('/', "\\") }
     })
 }
 
-fn library_list(ed: &Arc<Editor>) -> String {
+fn library_folder(ed: &Arc<Editor>) -> Tx<'static> {
+    Tx::raw(library_path(ed))
+}
+
+fn library_list(ed: &Arc<Editor>) -> Tx<'static> {
     GamePrefs::read(ed, |s| {
         if !project_open(&s.project) {
-            return "No project is open".to_owned();
+            return Tx::from("No project is open");
         }
         match s.project.get("library").and_then(Value::as_array).map_or(0, Vec::len) {
-            0 => "Nothing: the project is complete by itself".to_owned(),
-            1 => "1 object (File > Project > Collect Library Assets... copies it in)".to_owned(),
-            n => format!("{n} objects (File > Project > Collect Library Assets... copies them in)"),
+            0 => Tx::from("Nothing: the project is complete by itself"),
+            n => tr!(
+                "{n} {n:object|objects} (File > Project > Collect Library Assets... copies {n:it|them} in)",
+                n = n
+            ),
         }
     })
 }
 
 fn change_library(ed: &Arc<Editor>) {
-    let start = library_folder(ed);
+    let start = library_path(ed);
     let e = ed.clone();
     pick_folder(ed, "Library Folder", &start, move |folder, _| {
         GamePrefs::of(&e).change(&e, "project.set_library", args([("path", s(&folder))]));
@@ -315,20 +327,30 @@ fn associate_on(ed: &Arc<Editor>) -> bool {
 }
 
 fn set_associate(ed: &Arc<Editor>, on: bool) {
-    GamePrefs::of(ed).change(ed, "project.associate", args([("on", json!(on))]));
+    // turned on, it takes effect now rather than at the next start
+    GamePrefs::of(ed).change(ed, "project.associate", args([("on", json!(on)), ("now", json!(on))]));
 }
 
 fn register_now(ed: &Arc<Editor>) {
     GamePrefs::of(ed).change(ed, "project.associate", args([("now", json!(true))]));
 }
 
-fn association_status(ed: &Arc<Editor>) -> String {
+fn associated(ed: &Arc<Editor>) -> bool {
+    GamePrefs::read(ed, |s| s.association.get("ours").and_then(Value::as_bool) == Some(true))
+}
+
+fn association_status(ed: &Arc<Editor>) -> Tx<'static> {
     GamePrefs::read(ed, |s| {
+        // the association's own failure is said in its row; another change's is not
+        if !s.error.is_empty() && s.failed == "project.associate" {
+            return s.error.clone();
+        }
         let ours = s.association.get("ours").and_then(Value::as_bool) == Some(true);
         match s.association.get("program").and_then(Value::as_str) {
-            Some(_) if ours => "Project files open with this editor.".to_owned(),
-            Some(p) => format!("Project files open with {}.", p.replace('/', "\\")),
-            None => "No program opens project files yet.".to_owned(),
+            Some(_) if ours => Tx::from("Project files open with this editor."),
+            Some(p) => tr!("Project files open with {program}.", program = p.replace('/', "\\")),
+            None if s.asked.is_none() => Tx::from("Reading the association..."),
+            None => Tx::from("No program opens project files yet."),
         }
     })
 }
@@ -342,11 +364,12 @@ const PROJECT_FILES: [PrefRow; 2] = [
     PrefRow {
         label: "File Association",
         help: "Makes project files open with this editor now.",
-        kind: PrefKind::Button {
+        kind: PrefKind::Fix {
             text: "Register Now",
             run: register_now,
             enabled: always,
             status: association_status,
+            done: associated,
         },
     },
 ];

@@ -1148,10 +1148,10 @@ A painter canvas of the kit: the scene of a revision is built off the UI thread
   Insert Node...) only kinds that do both. Picking makes the node and wires it.
 - **Actions**: every gesture's command and every menu row is an action of the group Graph with
   keys the author can bind again (Keyboard page): Align Left/Centre/Right/Top/Middle/Bottom,
-  Distribute, Straighten Connections (Shift+Q), Select Connected (Ctrl+L) / Upstream / Downstream,
+  Distribute, Straighten Connections (Q), Select Connected (Ctrl+L) / Upstream / Downstream,
   Add Comment Frame (C), Replace Node, Duplicate with Wires (Ctrl+Shift+D), Disable/Enable
-  (Ctrl+Shift+E), Collapse/Expand (Ctrl+Shift+H), Connect to the Nearest (Q), Bypass (Alt+D),
-  Remove the Wire Under the Pointer (D), Bookmarks (Ctrl+1..9 jump, Ctrl+Shift+1..9 set, by name),
+  (Ctrl+Shift+E), Collapse/Expand (Ctrl+Shift+H), Connect to the Nearest (Shift+Q), Bypass (Alt+D),
+  Remove the Wire Under the Pointer (D), Bookmarks (Shift+1..9 jump, Ctrl+1..9 set, by name),
   Auto Layout (all, selection, branch), Frame All / Selection, Find (Ctrl+F, F3, Shift+F3), Find in
   Project (Ctrl+Shift+F), Back/Forward (Alt+Left/Right). Copy and paste work between graphs (a
   fragment of nodes as Lua; kinds the target may not use are left out and named).

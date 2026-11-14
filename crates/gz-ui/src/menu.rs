@@ -16,13 +16,14 @@ use egui::{
 
 use crate::audit;
 use crate::font::Font;
+use crate::i18n::Tx;
 use crate::icons::{self, Icon};
 use crate::text::{self, Clip};
 use crate::theme::{metrics, palette};
 use crate::units::em;
 
 /// How a menu row looks. `MenuItem::default()` is a plain, enabled row.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct MenuItem<'a> {
     pub icon: Icon,
     /// What is bound NOW, as text ("Ctrl+Shift+P"); empty for none.
@@ -33,12 +34,12 @@ pub struct MenuItem<'a> {
     /// Leads to a deletion: the label in the error colour.
     pub danger: bool,
     /// The row's hover hint; on a disabled row, why it is off.
-    pub tip: &'a str,
+    pub tip: Tx<'a>,
 }
 
 impl Default for MenuItem<'_> {
     fn default() -> Self {
-        Self { icon: Icon::None, keys: "", selected: false, enabled: true, danger: false, tip: "" }
+        Self { icon: Icon::None, keys: "", selected: false, enabled: true, danger: false, tip: Tx::EMPTY }
     }
 }
 
@@ -48,9 +49,9 @@ const ROW_H: f32 = 24.0;
 const KEYS_GAP: f32 = 24.0;
 
 /// A menu row. Returns whether it was picked; a picked row closes its menu.
-pub fn menu_item(ui: &mut Ui, label: &str, item: MenuItem<'_>) -> bool {
-    let tip = item.tip;
-    row(ui, label, item, false, tip)
+pub fn menu_item<'a>(ui: &mut Ui, label: impl Into<Tx<'a>>, item: MenuItem<'_>) -> bool {
+    let tip = item.tip.clone();
+    row(ui, &label.into(), &item, false, &tip)
 }
 
 /// What the popup being drawn knows of its rows: whether one of them had an icon or a check last
@@ -81,12 +82,12 @@ fn reserves_column(ctx: &Context, own: bool) -> bool {
 
 /// The width of a shortcut drawn in a menu row.
 fn keys_width(ctx: &Context, keys: &str) -> f32 {
-    if keys.is_empty() { 0.0 } else { text::width(ctx, &Font::Small.id(), keys) }
+    if keys.is_empty() { 0.0 } else { text::measure(ctx, &Font::Small.id(), keys) }
 }
 
 /// A menu row, optionally with a submenu chevron and a tooltip: the overflow menu's rows.
-pub(crate) fn row(ui: &mut Ui, label: &str, item: MenuItem<'_>, submenu: bool, tip: &str) -> bool {
-    let picked = row_response(ui, label, &item, submenu, tip).clicked() && item.enabled;
+pub(crate) fn row(ui: &mut Ui, label: &Tx<'_>, item: &MenuItem<'_>, submenu: bool, tip: &Tx<'_>) -> bool {
+    let picked = row_response(ui, label, item, submenu, tip).clicked() && item.enabled;
     if picked && (ui.stack().contained_in(UiKind::Menu) || ui.stack().contained_in(UiKind::Popup)) {
         ui.close();
     }
@@ -95,15 +96,15 @@ pub(crate) fn row(ui: &mut Ui, label: &str, item: MenuItem<'_>, submenu: bool, t
 
 /// A row that opens a submenu to its right while hovered: a row like its neighbours - the same
 /// icon column, the same label start - with a chevron at its end. `add` draws the submenu's rows.
-pub fn submenu<R>(
+pub fn submenu<'a, R>(
     ui: &mut Ui,
-    label: &str,
+    label: impl Into<Tx<'a>>,
     icon: Icon,
     enabled: bool,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> Option<R> {
     let item = MenuItem { icon, enabled, ..MenuItem::default() };
-    let resp = row_response(ui, label, &item, true, "");
+    let resp = row_response(ui, &label.into(), &item, true, &Tx::EMPTY);
     if !enabled {
         return None;
     }
@@ -111,11 +112,21 @@ pub fn submenu<R>(
 }
 
 /// Lays out and paints one row and answers its response; what a click means is the caller's.
-fn row_response(ui: &mut Ui, label: &str, item: &MenuItem<'_>, submenu: bool, tip: &str) -> egui::Response {
+fn row_response(
+    ui: &mut Ui,
+    label_tx: &Tx<'_>,
+    item: &MenuItem<'_>,
+    submenu: bool,
+    tip: &Tx<'_>,
+) -> egui::Response {
     let p = palette(ui.ctx());
     let font = Font::Body.id();
+    let label = label_tx.get(ui.ctx());
+    let label: &str = &label;
+    let tip = tip.get(ui.ctx());
+    let tip: &str = &tip;
     let has_slot = reserves_column(ui.ctx(), item.icon != Icon::None || item.selected);
-    let label_w = text::width(ui.ctx(), &font, label);
+    let label_w = text::measure(ui.ctx(), &font, label);
     let keys_w = keys_width(ui.ctx(), item.keys);
     let desired = 8.0
         + if has_slot { metrics::GLYPH + 8.0 } else { 0.0 }
@@ -181,7 +192,7 @@ fn row_response(ui: &mut Ui, label: &str, item: &MenuItem<'_>, submenu: bool, ti
             pos2(x, rect.center().y),
             Align2::LEFT_CENTER,
             text_color,
-            label,
+            label_tx.borrow(),
             Some((right - x).max(0.0)),
             Clip::End,
         );

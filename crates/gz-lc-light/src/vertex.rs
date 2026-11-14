@@ -145,7 +145,6 @@ pub fn light_vertices(
     materials: &[crate::data::BuildMaterial],
     ctl: &Ctl<'_>,
 ) -> Result<Vec<Option<BaseColor>>> {
-    ctl.stage("Calculating...");
     let verts = env.mesh.vertices();
     let total = verts.len();
     let done = AtomicUsize::new(0);
@@ -179,7 +178,7 @@ pub fn light_vertices(
         .collect();
     ctl.check()?;
 
-    ctl.stage("Transluenting...");
+    ctl.stage("the translucent vertices");
     let mut groups = TransGroups::default();
     for (i, (v, c)) in verts.iter().zip(&lit).enumerate() {
         if c.is_some()

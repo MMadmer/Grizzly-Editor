@@ -4,7 +4,9 @@
     python tools/rust/notices.py --check    exits 1 when the file on disk is not what this would write
 
 The file is `licenses/NOTICES_HEAD.txt` (written by hand: the C code the crates vendor and the origin of the LZHUF
-coder, which no manifest describes) followed by every third-party crate in the dependency closure of `grizzly` and `gz-mcp-bridge`
+coder, which no manifest describes), then `licenses/THEMES.txt` (written by hand too: the published palettes the
+colour themes take their colours from, which `gz-ui`'s theme tests hold to the theme table), followed by every
+third-party crate in the dependency closure of `grizzly` and `gz-mcp-bridge`
 for Windows - normal dependencies only: a build script's and a proc macro's own dependencies run at build time and
 are not in the programs. Each crate is listed with its version, the license its manifest states and its
 repository; the license files the crates ship follow, each text once with the crates that carry it.
@@ -26,6 +28,7 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUT = os.path.join(REPO, "licenses", "THIRD_PARTY_NOTICES.txt")
 HEAD = os.path.join(REPO, "licenses", "NOTICES_HEAD.txt")
+THEMES = os.path.join(REPO, "licenses", "THEMES.txt")
 ROOTS = ("grizzly", "gz-mcp-bridge")
 TARGET = "x86_64-pc-windows-msvc"
 LICENSE_FILE = re.compile(r"^(licen[sc]e|copying|notice|unlicense|copyright)", re.IGNORECASE)
@@ -159,13 +162,15 @@ def wrap_names(names: list[str]) -> str:
 def build() -> str:
     with open(HEAD, "rb") as f:
         head = f.read().decode("utf-8").replace("\r\n", "\n").rstrip() + "\n"
+    with open(THEMES, "rb") as f:
+        themes = f.read().decode("utf-8").replace("\r\n", "\n").rstrip() + "\n"
     crates = linked(metadata())
     refused = [f"{c['name']} {c['version']} ({c.get('license') or 'no license stated'})" for c in crates
                if not acceptable(c.get("license"))]
     if refused:
         sys.exit("a linked crate has no license the editor may link under (tools/rust/notices.py ALLOWED):\n  "
                  + "\n  ".join(refused))
-    out = [head, "", "Rust crates", "===========", "",
+    out = [head, "", themes, "", "Rust crates", "===========", "",
            f"The two programs link {len(crates)} third-party crates (their normal dependencies for Windows). Each is",
            "listed with the license its manifest states; the license files the crates ship follow, each text",
            "once with the crates that carry it.", ""]

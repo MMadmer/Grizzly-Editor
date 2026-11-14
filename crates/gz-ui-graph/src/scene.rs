@@ -234,6 +234,31 @@ pub struct SceneInput<'a> {
     pub wires: WireSettings,
     /// In-game names of items, names of characters.
     pub names: Option<&'a dyn Names>,
+    /// The window's catalog when it speaks another language than English: a box is as wide as
+    /// what it shows.
+    pub lang: Option<&'a gz_ui::i18n::Catalog>,
+}
+
+/// A node's title or a line's name as the canvas shows it in a language (`canvas::draw`'s
+/// `kind_shown` and `cond_or_param`), for the box's width.
+fn shown_in(lang: &gz_ui::i18n::Catalog, s: layout::Shown<'_>) -> String {
+    let say =
+        |en: &str, ctx: &str| lang.lookup(en, Some(ctx)).map_or_else(|| en.to_owned(), |t| t.to_string());
+    match s {
+        layout::Shown::Title(t) => say(t, "kind"),
+        layout::Shown::Key(l) if l.cond.is_empty() => say(&l.key, "param"),
+        layout::Shown::Key(l) => match l.key.strip_prefix("Not ").filter(|_| l.negate) {
+            // the title as the catalog has it, after the English "Not ", which is as wide
+            Some(rest) => {
+                let mut title = rest.to_owned();
+                if let Some(first) = title.get(..1).map(str::to_ascii_uppercase) {
+                    title.replace_range(..1, &first);
+                }
+                format!("Not {}", say(&title, "kind"))
+            }
+            None => say(&l.key, "kind"),
+        },
+    }
 }
 
 fn action_rows(
@@ -310,7 +335,11 @@ impl Scene {
         let g = inp.graph;
         let cat = inp.catalog;
         let behaviour = g.is_behaviour();
-        let cx = BoxCx::of(cat, g);
+        let shown = inp.lang.map(|lang| move |s: layout::Shown<'_>| shown_in(lang, s));
+        let cx = BoxCx {
+            shown: shown.as_ref().map(|f| f as &(dyn Fn(layout::Shown<'_>) -> String + Sync)),
+            ..BoxCx::of(cat, g)
+        };
         let reach = g.reachable(cat, None);
         let mut nodes: Vec<SceneNode> = Vec::with_capacity(g.nodes.len());
         let mut index: FxHashMap<SmolStr, u32> = FxHashMap::default();
@@ -687,7 +716,7 @@ mod tests {
     }
 
     fn scene(g: &Graph, cat: &Catalog) -> Scene {
-        let p = Palette::new(gz_ui::Accent::default());
+        let p = Palette::default();
         Scene::build(&SceneInput {
             graph: g,
             catalog: cat,
@@ -695,6 +724,7 @@ mod tests {
             palette: &p,
             wires: WireSettings::default(),
             names: None,
+            lang: None,
         })
     }
 

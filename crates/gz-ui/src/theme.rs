@@ -2,7 +2,16 @@
 //!
 //! A surface never writes a colour or a chrome size of its own: it takes the [`Palette`] of its
 //! context and the constants of [`metrics`]. Sizes are points - egui's own unit - so DPI enters
-//! in one place, the context's pixels per point.
+//! in one place, the context's pixels per point. The palette is a [`Theme`]'s, one of the dark and
+//! light themes of [`THEMES`], each held to the contrast of [`min`]; [`install`] applies one at
+//! once.
+
+pub mod color;
+#[cfg(test)]
+mod tests;
+mod themes;
+
+pub use themes::{THEMES, Theme, min};
 
 use std::sync::Arc;
 
@@ -73,15 +82,6 @@ pub mod metrics {
     pub const TOOLTIP_DELAY: f32 = 0.45;
 }
 
-/// The accent family. Everything else of the theme is the same in both.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Accent {
-    #[default]
-    Violet,
-    Graphite,
-}
-
 /// What a colour says about state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Tone {
@@ -94,14 +94,13 @@ pub enum Tone {
     Required,
 }
 
-const fn rgb(hex: u32) -> Color32 {
-    Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
-}
-
 /// The colours of the theme, by role.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Palette {
-    pub accent_family: Accent,
+    /// The theme's id ([`Theme::id`]).
+    pub theme: &'static str,
+    /// A light theme: dark text on light surfaces.
+    pub light: bool,
     /// Caption, status bar, inactive tabs.
     pub chrome: Color32,
     /// Panels, documents, toolbars, the active tab.
@@ -168,6 +167,16 @@ pub struct Palette {
     pub frame_title: Color32,
     /// The graph's grid lines.
     pub grid_line: Color32,
+    /// The 3D viewport's grid: its lines and every tenth one.
+    pub scene_grid: Color32,
+    pub scene_grid_major: Color32,
+    /// Edges in the 3D viewport's Wireframe mode.
+    pub scene_wire: Color32,
+    /// What a viewport label casts over the scene, behind the label's own colour.
+    pub scene_label_shadow: Color32,
+    /// A scroll bar's handle, at rest and under the pointer or dragged.
+    pub scroll_handle: Color32,
+    pub scroll_handle_hover: Color32,
     /// Elevation: what a menu, a pick list or a tooltip casts.
     pub shadow_popup: Shadow,
     /// What a dialog casts.
@@ -176,108 +185,19 @@ pub struct Palette {
     pub shadow_card: Shadow,
 }
 
+impl Default for Palette {
+    /// Grizzly Dark's.
+    fn default() -> Self {
+        Theme::default_theme().palette()
+    }
+}
+
 impl Palette {
+    /// What a cache of drawn colours keys on: the theme the palette is.
     #[must_use]
-    pub fn new(accent: Accent) -> Self {
-        let (accent_c, bright, selection, selection_focused, primary, primary_hover, primary_pressed) =
-            match accent {
-                Accent::Violet => (
-                    rgb(0x7971bd),
-                    rgb(0xa79fed),
-                    rgb(0x464150),
-                    rgb(0x554f72),
-                    rgb(0x6a62ae),
-                    rgb(0x7971bd),
-                    rgb(0x5c5599),
-                ),
-                Accent::Graphite => (
-                    rgb(0x727782),
-                    rgb(0x9399a5),
-                    rgb(0x454951),
-                    rgb(0x50545d),
-                    rgb(0x60656f),
-                    rgb(0x727782),
-                    rgb(0x545862),
-                ),
-            };
-        Self {
-            accent_family: accent,
-            chrome: rgb(0x17161b),
-            base: rgb(0x202025),
-            inset: rgb(0x1c1b20),
-            canvas: rgb(0x151419),
-            raised: rgb(0x26252c),
-            overlay: rgb(0x28272e),
-            input: rgb(0x2a2931),
-            input_hover: rgb(0x302e38),
-            hover: rgb(0x2e2c35),
-            pressed: rgb(0x36343f),
-            button: rgb(0x34323d),
-            button_hover: rgb(0x3d3a47),
-            border_subtle: rgb(0x2c2a33),
-            border: rgb(0x3d3947),
-            border_strong: rgb(0x524d5f),
-            text: rgb(0xf2effb),
-            text_secondary: rgb(0xbdb8c9),
-            text_muted: rgb(0x8e8a99),
-            text_disabled: rgb(0x5f5b69),
-            accent: accent_c,
-            accent_bright: bright,
-            selection,
-            selection_focused,
-            primary,
-            primary_hover,
-            primary_pressed,
-            danger: rgb(0x8a3b43),
-            danger_hover: rgb(0xa3464f),
-            danger_pressed: rgb(0x74323a),
-            error: rgb(0xe06c75),
-            warning: rgb(0xe5c07b),
-            success: rgb(0x98c379),
-            required: rgb(0xd19a66),
-            axis_x: rgb(0xe06c75),
-            axis_y: rgb(0x98c379),
-            axis_z: rgb(0x61afef),
-            dim: Color32::from_rgba_unmultiplied(0x0c, 0x0b, 0x0e, 153),
-            on_fill: Color32::WHITE,
-            // OKLCH lightness 0.72, chroma 0.09, hues 36 degrees apart: equal weight on the canvas
-            graph_family: [
-                rgb(0xd08a8c),
-                rgb(0xcf9776),
-                rgb(0xbfa56a),
-                rgb(0xa3b06e),
-                rgb(0x80b685),
-                rgb(0x68b5a4),
-                rgb(0x68aec0),
-                rgb(0x7ea3d3),
-                rgb(0x9a98d6),
-                rgb(0xb98fc5),
-            ],
-            wire_base: rgb(0x8e8a99),
-            wire_hot: rgb(0xf2effb),
-            wire_selected: bright,
-            wire_dim: rgb(0x3d3947),
-            pin_exec: rgb(0xbdb8c9),
-            pin_input: rgb(0x8e8a99),
-            pin_hot: rgb(0xf2effb),
-            pin_target: bright,
-            frame_fill: Color32::from_rgba_unmultiplied(0x9a, 0x98, 0xd6, 18),
-            frame_title: Color32::from_rgba_unmultiplied(0x9a, 0x98, 0xd6, 46),
-            grid_line: rgb(0x1f1e25),
-            shadow_popup: Shadow {
-                offset: [0, 4],
-                blur: 14,
-                spread: 0,
-                color: Color32::from_black_alpha(110),
-            },
-            shadow_dialog: Shadow {
-                offset: [0, 10],
-                blur: 32,
-                spread: 2,
-                color: Color32::from_black_alpha(140),
-            },
-            shadow_card: Shadow { offset: [0, 2], blur: 10, spread: 0, color: Color32::from_black_alpha(90) },
-        }
+    pub fn key(&self) -> u64 {
+        use std::hash::{BuildHasher, BuildHasherDefault};
+        BuildHasherDefault::<rustc_hash::FxHasher>::default().hash_one(self.theme)
     }
 
     /// The colour of a node family, by its number (wraps after ten).
@@ -320,10 +240,37 @@ fn palette_id() -> Id {
 #[must_use]
 pub fn palette(ctx: &Context) -> Arc<Palette> {
     ctx.data(|d| d.get_temp::<Arc<Palette>>(palette_id())).unwrap_or_else(|| {
-        let made = Arc::new(Palette::new(Accent::default()));
+        let made = Arc::new(Palette::default());
         ctx.data_mut(|d| d.insert_temp(palette_id(), made.clone()));
         made
     })
+}
+
+/// The themes as pick list rows: the dark ones, then the light ones, under those headings, each
+/// with its swatch.
+#[must_use]
+pub fn pick_items() -> Vec<crate::pick::PickItem> {
+    THEMES
+        .iter()
+        .map(|t| {
+            crate::pick::PickItem::new(t.id, t.title)
+                .group(if t.light { "Light" } else { "Dark" })
+                .swatch(&t.swatch())
+        })
+        .collect()
+}
+
+/// The theme picker: the chosen theme with its swatch, opening [`pick_items`]. Returns another
+/// theme when one is picked.
+pub fn theme_combo(ui: &mut egui::Ui, id_salt: &str, current: &Theme) -> Option<&'static Theme> {
+    let items = pick_items();
+    let shown = current.swatch();
+    let list = crate::pick::PickList::new(id_salt, &items).current(current.id).hint("Search themes");
+    crate::pick::Combo::new(id_salt, current.title)
+        .swatch(&shown)
+        .show(ui, list)
+        .and_then(|i| THEMES.get(i))
+        .filter(|t| t.id != current.id)
 }
 
 /// The name of the font family that holds the semibold face.
@@ -339,8 +286,9 @@ fn visuals(p: &Palette) -> Visuals {
         fg_stroke: Stroke::new(1.0, text),
         expansion: 0.0,
     };
-    let mut v = Visuals::dark();
-    v.dark_mode = true;
+    // egui's own light or dark visuals underneath: its text rendering differs between the two
+    let mut v = if p.light { Visuals::light() } else { Visuals::dark() };
+    v.dark_mode = !p.light;
     // an input reads as an input: a 1 pt outline at rest that is not its own fill's colour, a
     // stronger one under the pointer
     v.widgets = Widgets {
@@ -350,6 +298,11 @@ fn visuals(p: &Palette) -> Visuals {
         active: widget(p.pressed, p.border_strong, p.text),
         open: widget(p.hover, p.border, p.text),
     };
+    // egui paints a scroll bar's handle in the strong fill (and its own colour picker's and slider's
+    // parts, which the kit uses once, in the property grid's colour field): the theme's handle colours
+    v.widgets.inactive.bg_fill = p.scroll_handle;
+    v.widgets.hovered.bg_fill = p.scroll_handle_hover;
+    v.widgets.active.bg_fill = p.scroll_handle_hover;
     v.selection = Selection { bg_fill: p.selection_focused, stroke: Stroke::new(1.0, p.text) };
     v.override_text_color = None;
     v.weak_text_color = Some(p.text_muted);
@@ -369,6 +322,8 @@ fn visuals(p: &Palette) -> Visuals {
     v.menu_corner_radius = CornerRadius::same(metrics::RADIUS_POPUP);
     v.panel_fill = p.base;
     v.text_cursor.stroke = Stroke::new(1.5, p.accent_bright);
+    v.ime_composition.active_underline_stroke = Stroke::new(1.5, p.text);
+    v.ime_composition.inactive_underline_stroke = Stroke::new(1.0, p.text_muted);
     v.button_frame = true;
     v.collapsing_header_frame = false;
     v.indent_has_left_vline = false;
@@ -379,9 +334,10 @@ fn visuals(p: &Palette) -> Visuals {
     v
 }
 
-/// Installs the theme: the palette for the kit and egui's own style for what egui draws itself.
-pub fn install(ctx: &Context, accent: Accent) {
-    let p = Arc::new(Palette::new(accent));
+/// Installs a theme: the palette for the kit and egui's own style for what egui draws itself. It
+/// applies on the next frame; nothing restarts.
+pub fn install(ctx: &Context, theme: &Theme) {
+    let p = Arc::new(theme.palette());
     ctx.data_mut(|d| d.insert_temp(palette_id(), p.clone()));
 
     let mut style = Style { visuals: visuals(&p), ..(*ctx.global_style()).clone() };
@@ -397,6 +353,8 @@ pub fn install(ctx: &Context, accent: Accent) {
     style.spacing.tooltip_width = metrics::TOOLTIP_W;
     style.spacing.scroll.bar_width = metrics::SCROLLBAR;
     style.spacing.scroll.floating = false;
+    // the handle in the theme's scroll colours, not in the text colour egui's floating bars take
+    style.spacing.scroll.foreground_color = false;
     style.interaction.tooltip_delay = metrics::TOOLTIP_DELAY;
     style.interaction.selectable_labels = false;
     // Activation is synchronous: a menu, a dialog or a tooltip is whole on the frame it appears,

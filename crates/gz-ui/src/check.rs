@@ -14,6 +14,7 @@ use egui::{
 
 use crate::audit;
 use crate::font::Font;
+use crate::i18n::Tx;
 use crate::icons::{self, Icon};
 use crate::text::{self, Clip};
 use crate::theme::{Palette, metrics, palette};
@@ -79,7 +80,7 @@ pub fn paint_switch(ui: &Ui, t: Rect, on: bool, hovered: bool, enabled: bool) {
 /// switch. Returns its rect and response.
 fn row(ui: &mut Ui, control_w: f32, label: &str, width: Option<f32>, enabled: bool) -> (Rect, Response) {
     let ctx = ui.ctx().clone();
-    let label_w = if label.is_empty() { 0.0 } else { text::width(&ctx, &Font::Body.id(), label) + 8.0 };
+    let label_w = if label.is_empty() { 0.0 } else { text::measure(&ctx, &Font::Body.id(), label) + 8.0 };
     let w = width.unwrap_or(control_w + label_w).max(control_w);
     ui.allocate_exact_size(
         Vec2::new(w, metrics::FRAME),
@@ -87,7 +88,7 @@ fn row(ui: &mut Ui, control_w: f32, label: &str, width: Option<f32>, enabled: bo
     )
 }
 
-fn paint_label(ui: &Ui, rect: Rect, x: f32, label: &str, enabled: bool) {
+fn paint_label(ui: &Ui, rect: Rect, x: f32, label: &Tx<'_>, enabled: bool) {
     if label.is_empty() {
         return;
     }
@@ -98,7 +99,7 @@ fn paint_label(ui: &Ui, rect: Rect, x: f32, label: &str, enabled: bool) {
         pos2(x, rect.center().y),
         Align2::LEFT_CENTER,
         if enabled { p.text } else { p.text_disabled },
-        label,
+        label.borrow(),
         Some((rect.max.x - x).max(0.0)),
         Clip::End,
     );
@@ -108,17 +109,25 @@ fn paint_label(ui: &Ui, rect: Rect, x: f32, label: &str, enabled: bool) {
 #[must_use = "a check does nothing until it is shown: .show(ui)"]
 pub struct Check<'a> {
     value: &'a mut bool,
-    label: &'a str,
+    label: Tx<'a>,
     mixed: bool,
     enabled: bool,
-    why: &'a str,
+    why: Tx<'a>,
     width: Option<f32>,
-    tip: &'a str,
+    tip: Tx<'a>,
 }
 
 impl<'a> Check<'a> {
-    pub fn new(value: &'a mut bool, label: &'a str) -> Self {
-        Self { value, label, mixed: false, enabled: true, why: "", width: None, tip: "" }
+    pub fn new(value: &'a mut bool, label: impl Into<Tx<'a>>) -> Self {
+        Self {
+            value,
+            label: label.into(),
+            mixed: false,
+            enabled: true,
+            why: Tx::EMPTY,
+            width: None,
+            tip: Tx::EMPTY,
+        }
     }
 
     /// Some of what it stands for have it and some do not: a dash in the box. A click sets it.
@@ -128,9 +137,9 @@ impl<'a> Check<'a> {
     }
 
     /// Off, with the reason as its tooltip.
-    pub fn enabled(mut self, enabled: bool, why: &'a str) -> Self {
+    pub fn enabled(mut self, enabled: bool, why: impl Into<Tx<'a>>) -> Self {
         self.enabled = enabled;
-        self.why = why;
+        self.why = why.into();
         self
     }
 
@@ -140,16 +149,18 @@ impl<'a> Check<'a> {
         self
     }
 
-    pub fn tip(mut self, tip: &'a str) -> Self {
-        self.tip = tip;
+    pub fn tip(mut self, tip: impl Into<Tx<'a>>) -> Self {
+        self.tip = tip.into();
         self
     }
 
     /// Draws it; the response is `changed()` when it flipped.
     pub fn show(self, ui: &mut Ui) -> Response {
         let enabled = self.enabled && ui.is_enabled();
-        let (rect, mut resp) = row(ui, metrics::FRAME, self.label, self.width, enabled);
-        resp.widget_info(|| WidgetInfo::selected(Role::CheckBox, enabled, *self.value, self.label));
+        let ctx = ui.ctx().clone();
+        let (label, why_text, tip_text) = (self.label.get(&ctx), self.why.get(&ctx), self.tip.get(&ctx));
+        let (rect, mut resp) = row(ui, metrics::FRAME, &label, self.width, enabled);
+        resp.widget_info(|| WidgetInfo::selected(Role::CheckBox, enabled, *self.value, label.as_ref()));
         if enabled && resp.clicked() {
             *self.value = if self.mixed { true } else { !*self.value };
             resp.mark_changed();
@@ -163,11 +174,11 @@ impl<'a> Check<'a> {
             if resp.has_focus() {
                 focus(ui, b, 3, &palette(ui.ctx()));
             }
-            paint_label(ui, rect, rect.min.x + metrics::FRAME + 4.0, self.label, enabled);
+            paint_label(ui, rect, rect.min.x + metrics::FRAME + 4.0, &self.label, enabled);
         }
-        let why = (!enabled && !self.why.is_empty()).then_some(self.why);
-        let tip = if !enabled && !self.why.is_empty() { self.why } else { self.tip };
-        audit::control(ui.ctx(), self.label, enabled, why, (!tip.is_empty()).then_some(tip), rect);
+        let why = (!enabled && !why_text.is_empty()).then_some(why_text.as_ref());
+        let tip: &str = if !enabled && !why_text.is_empty() { &why_text } else { &tip_text };
+        audit::control(&ctx, &label, enabled, why, (!tip.is_empty()).then_some(tip), rect);
         if tip.is_empty() { resp } else { resp.on_hover_text(tip) }
     }
 }
@@ -176,21 +187,21 @@ impl<'a> Check<'a> {
 #[must_use = "a switch does nothing until it is shown: .show(ui)"]
 pub struct Switch<'a> {
     value: &'a mut bool,
-    label: &'a str,
+    label: Tx<'a>,
     enabled: bool,
-    why: &'a str,
+    why: Tx<'a>,
     width: Option<f32>,
-    tip: &'a str,
+    tip: Tx<'a>,
 }
 
 impl<'a> Switch<'a> {
-    pub fn new(value: &'a mut bool, label: &'a str) -> Self {
-        Self { value, label, enabled: true, why: "", width: None, tip: "" }
+    pub fn new(value: &'a mut bool, label: impl Into<Tx<'a>>) -> Self {
+        Self { value, label: label.into(), enabled: true, why: Tx::EMPTY, width: None, tip: Tx::EMPTY }
     }
 
-    pub fn enabled(mut self, enabled: bool, why: &'a str) -> Self {
+    pub fn enabled(mut self, enabled: bool, why: impl Into<Tx<'a>>) -> Self {
         self.enabled = enabled;
-        self.why = why;
+        self.why = why.into();
         self
     }
 
@@ -199,8 +210,8 @@ impl<'a> Switch<'a> {
         self
     }
 
-    pub fn tip(mut self, tip: &'a str) -> Self {
-        self.tip = tip;
+    pub fn tip(mut self, tip: impl Into<Tx<'a>>) -> Self {
+        self.tip = tip.into();
         self
     }
 
@@ -208,8 +219,10 @@ impl<'a> Switch<'a> {
     pub fn show(self, ui: &mut Ui) -> Response {
         let enabled = self.enabled && ui.is_enabled();
         let control = TRACK.x + 4.0;
-        let (rect, mut resp) = row(ui, control, self.label, self.width, enabled);
-        resp.widget_info(|| WidgetInfo::selected(Role::CheckBox, enabled, *self.value, self.label));
+        let ctx = ui.ctx().clone();
+        let (label, why_text, tip_text) = (self.label.get(&ctx), self.why.get(&ctx), self.tip.get(&ctx));
+        let (rect, mut resp) = row(ui, control, &label, self.width, enabled);
+        resp.widget_info(|| WidgetInfo::selected(Role::CheckBox, enabled, *self.value, label.as_ref()));
         if enabled && resp.clicked() {
             *self.value = !*self.value;
             resp.mark_changed();
@@ -220,11 +233,11 @@ impl<'a> Switch<'a> {
             if resp.has_focus() {
                 focus(ui, t, 8, &palette(ui.ctx()));
             }
-            paint_label(ui, rect, rect.min.x + control + 6.0, self.label, enabled);
+            paint_label(ui, rect, rect.min.x + control + 6.0, &self.label, enabled);
         }
-        let why = (!enabled && !self.why.is_empty()).then_some(self.why);
-        let tip = if !enabled && !self.why.is_empty() { self.why } else { self.tip };
-        audit::control(ui.ctx(), self.label, enabled, why, (!tip.is_empty()).then_some(tip), rect);
+        let why = (!enabled && !why_text.is_empty()).then_some(why_text.as_ref());
+        let tip: &str = if !enabled && !why_text.is_empty() { &why_text } else { &tip_text };
+        audit::control(&ctx, &label, enabled, why, (!tip.is_empty()).then_some(tip), rect);
         if tip.is_empty() { resp } else { resp.on_hover_text(tip) }
     }
 }

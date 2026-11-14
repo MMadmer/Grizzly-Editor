@@ -384,6 +384,8 @@ pub(crate) struct Inner {
     pub view_dirty: bool,
     /// A selection made from outside lands on screen with the next frame.
     pub scroll_to_selection: bool,
+    /// The folder a reveal goes to was not listed yet this frame: the scroll waits for it.
+    pub reveal_waits: bool,
     pub shown_folder: Option<(Source, usize, String)>,
     /// Folders open in the tree, lower case; the root is always open.
     pub tree_open: FxHashSet<String>,
@@ -429,6 +431,7 @@ impl Default for Inner {
             view_loaded: false,
             view_dirty: false,
             scroll_to_selection: false,
+            reveal_waits: false,
             shown_folder: None,
             tree_open: FxHashSet::default(),
             marquee: None,

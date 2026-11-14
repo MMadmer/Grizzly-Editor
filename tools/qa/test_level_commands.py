@@ -18,8 +18,9 @@
   R  the status after a restart: the scene saved, the editor closed and started again on the copy - level.status
      says what it said before; a scene object moved - the steps that read it are stale ("1 object moved."), the
      others not
-  S  Stop between steps keeps the finished ones fresh: after the move, level.build wait=false and job.stop while the
-     compiler runs - the job ends cancelled, the geometry is fresh, the light is not
+  S  Stop ends the build now: after the move, level.build wait=false and job.stop while the compiler runs - the job's
+     stage named the compiler's phase by its plain name (no "..."), the job ends cancelled within seconds of the Stop,
+     no compiler stage folder is left, the geometry is fresh, the light is not
   C  level.compile on a folder: refused for a folder that holds no build.prj, naming it; the level folder compiled
      again, waited for with job.wait, its report naming the compiler's phases and files
   E  level.export: the static geometry as OBJ, the spawn layer of one object named, the visuals - models that name
@@ -34,9 +35,19 @@
      and removes one, the status following; scene.wallmarks lays a mark under a point; scene.zones lists and
      validates; level.build only=detail_light builds the details and their light
 
-    python tools/qa/test_level_commands.py --project <project> [--only A,B,...]
   D  the doors: saving as a scene that is there, and discarding the recovery snapshots, pass the destroy door alone;
      scene.info writes no file, scene.summary writes the summary and refuses a file that is there
+  F  an error ends the build: the light on a build.prj cut short fails, the answer names it and the detail light
+     after it as not run; with the actor gone the spawn is refused before any step runs - in seconds, the problem on
+     the step, nothing built
+  G  a level the linked game has (the scene saved as l01_escape, its level path l01_escape): level.status says it is
+     the game's - every compile step not needed, the Build chip asks for none -, Build Level builds the spawn layer
+     alone; a compile step asked for by name still runs, and what it wrote is the warning that it replaces the
+     game's files, which level.clean (the destroy door; dry_run names them) removes; Play plays the module
+     (dry_run): the root's modules\<id> holds the module with Play's Player Start, the new game's options are a file
+     of the root's own, no level and no editor.spawn are staged, and the command line starts a new game
+
+    python tools/qa/test_level_commands.py --project <project> [--only A,B,...]
 """
 from __future__ import annotations
 
@@ -52,7 +63,7 @@ from qa import check, cmd, short
 
 
 SCENE = "mp_test"
-PHASES = "ABURSCEYKLD"
+PHASES = "ABURSCEYKLDFG"
 SHOTS: str | None = None
 def listing(folder: str) -> list[tuple[str, int]]:
     out = []
@@ -316,6 +327,16 @@ def phase_r() -> None:
 
 # ---- S ------------------------------------------------------------------------------------------------------------
 
+# the compiler's phases by their plain names (gz-lc's PHASES): what the job's stage shows while one runs
+COMPILER_PHASES = ("Reading the build project", "Loading the build project into the compiler", "Optimizing the geometry",
+                   "Tessellating the geometry for its vertex light", "Building the normals", "Building the collision",
+                   "Building the tangent basis", "Building the ray model of the light", "Lighting the static models",
+                   "Resolving the materials", "Mapping the lightmaps", "Subdividing the geometry",
+                   "Lighting the implicit textures", "Lighting the lightmaps", "Lighting the vertices",
+                   "Packing the lightmaps", "Merging the geometry", "Converting the geometry to visuals",
+                   "Converting the static models to visuals", "Building the sectors", "Writing the level")
+
+
 def phase_s() -> None:
     # the level's own settings: the compiler takes long enough to be stopped inside it
     started = cmd("level.build", wait=False)
@@ -323,17 +344,27 @@ def phase_s() -> None:
     if not check(started.get("ok") and job, "S level.build wait=false answers its job", short(started)):
         return
     deadline = time.monotonic() + 300
-    stage = ""
+    stage, stages = "", []
     while time.monotonic() < deadline:
         j = cmd("job.get", job=job)
         stage = j.get("stage") or ""
-        if j.get("state") != "running" or "geometry and light" in stage or "Compiling" in stage:
+        if stage and (not stages or stages[-1] != stage):
+            stages.append(stage)
+        # inside the compiler, past its reading: a phase of the geometry or the light that is under way
+        if j.get("state") != "running" or stage.startswith(COMPILER_PHASES[2:]):
             break
-        time.sleep(0.05)
+        time.sleep(0.02)
+    t = time.monotonic()
     stopped = cmd("job.stop", job=job)
     end = cmd("job.wait", job=job, timeout=300)
+    after = time.monotonic() - t
     check(stopped.get("ok") and end.get("state") == "cancelled",
           "S job.stop while the compiler runs ends the build cancelled (stopped in: %s)" % stage, short(end))
+    check(stage.startswith(COMPILER_PHASES) and not any(x.rstrip().endswith("...") for x in stages),
+          "S the job's stage follows the compiler's phases by their plain names (%s)" % stage, short(stages[-6:]))
+    check(after < 5.0, "S the build stopped %.1f s after the Stop, in the compiler's phase" % after, timing=True)
+    left = [d for d in (".lc_new", ".lc_old") if os.path.isdir(os.path.join(level_dir(), d))]
+    check(not left, "S the compiler's stage folders are gone", ", ".join(left))
     states = status_states()
     check(states.get("geometry", {}).get("state") == "fresh" and states.get("game", {}).get("state") == "fresh"
           and states.get("light", {}).get("state") != "fresh",
@@ -356,7 +387,8 @@ def phase_c() -> None:
     parts = report.get("parts") or [{}]
     phases = [p.get("name") for p in parts[0].get("phases", [])]
     files = {f.get("name") for f in parts[0].get("files", [])}
-    check(started.get("ok") and done.get("state") == "done" and "LIGHT: LMaps..." in phases
+    check(started.get("ok") and done.get("state") == "done" and "Lighting the lightmaps" in phases
+          and not any(p.endswith("...") or p.startswith("LIGHT") for p in phases)
           and {"level", "level.geom"} <= files,
           "C the level folder compiled again, followed with job.wait (%d phases, %d files)" % (len(phases), len(files)),
           short(done)[:300])
@@ -539,8 +571,165 @@ def phase_l() -> None:
           "L level.build only=detail_light builds the details and their light (%s)" % ", ".join(ran), short(built))
 
 
+# ---- F ------------------------------------------------------------------------------------------------------------
+
+def phase_f() -> None:
+    """An error ends the build; what a later step would refuse is refused before the first step runs."""
+    if not check(open_small_scene(), "F the scene opens"):
+        return
+    prj = os.path.join(level_dir(), "build.prj")
+    if not check(os.path.isfile(prj), "F the level folder holds build.prj"):
+        return
+    keep = prj + ".qa"
+    shutil.copy2(prj, keep)
+    try:
+        # the light reads a build.prj cut short: it fails, and the detail light it holds up never runs
+        with open(prj, "r+b") as f:
+            f.truncate(max(16, os.path.getsize(prj) // 3))
+        t = time.monotonic()
+        r = cmd("level.build", only="detail_light", force=True, nosun=True, quality="draft", timeout=600)
+        secs = time.monotonic() - t
+        err = str(r.get("error"))
+        check(not r.get("ok") and "Light failed:" in err and "Not run: Detail Light" in err,
+              "F a step that fails ends the build, naming it and the steps not run (%.1f s)" % secs, short(r))
+        states = status_states()
+        check(states.get("light", {}).get("state") == "failed", "F the light is failed, the build went no further",
+              short(states.get("light")))
+    finally:
+        shutil.copy2(keep, prj)
+        os.remove(keep)
+    # the actor gone: the spawn is refused before a single step runs, the problem on the step
+    actors = [o["name"] for o in cmd("scene.objects", classes=["spawn"], limit=100000).get("objects") or []
+              if o.get("ref") == "actor"]
+    if not check(actors, "F the scene has the player's spawn point"):
+        return
+    gone = cmd("scene.delete", objects=actors)
+    check(gone.get("ok"), "F the player's spawn point is deleted", short(gone))
+    t = time.monotonic()
+    r = cmd("level.build", only="spawn", force=True, timeout=600)
+    secs = time.monotonic() - t
+    err = str(r.get("error"))
+    check(not r.get("ok") and "did not start" in err and "no actor spawn point" in err and "Not run:" in err,
+          "F with no actor the build refuses before any step (%.1f s)" % secs, short(r))
+    check(secs < 30, "F ... in seconds, not after the long steps (%.1f s)" % secs, timing=True)
+    probs = cmd("level.problems", step="spawn").get("problems") or []
+    check(any(p.get("code") == "preflight" and "actor" in p.get("text", "") and p.get("severity") == "error"
+              for p in probs), "F the refusal is a problem of the spawn step", short(probs))
+    undo = cmd("doc.undo", doc="level")
+    back = []
+    deadline = time.monotonic() + 10
+    while not back and time.monotonic() < deadline:
+        back = [o["name"] for o in cmd("scene.objects", classes=["spawn"], limit=100000).get("objects") or []
+                if o.get("ref") == "actor"]
+        if not back:
+            time.sleep(0.2)
+    check(back, "F the actor comes back with Undo", short(undo) + " " + short(back))
+
+
+# ---- G ------------------------------------------------------------------------------------------------------------
+
+STOCK = "l01_escape"
+
+
+def phase_g() -> None:
+    """A level the linked game has: the module adds to it, nothing is compiled, Play plays the module."""
+    levels = {l.get("name") for l in cmd("world.lookup", type="levels", timeout=120).get("levels") or []}
+    if not check(STOCK in levels, "G the linked game has %s" % STOCK, "levels: %d" % len(levels)):
+        return
+    if not check(open_small_scene(), "G the scene opens"):
+        return
+    rel = "rawdata/levels/%s.scene" % STOCK
+    saved = cmd("scene.save", path=rel, timeout=120)
+    path = cmd("scene.set", world=True, set={"level.path": STOCK})
+    check(saved.get("ok") and path.get("ok"), "G the scene is saved as %s with its level path" % STOCK,
+          short(saved) + short(path))
+    st = cmd("level.status", timeout=120)
+    states = {s["step"]: s for s in st.get("steps", [])}
+    compile_steps = [k for k in states if k != "spawn_layer"]
+    check(st.get("ok") and st.get("stock") is True and compile_steps
+          and all(states[k]["state"] == "not_needed" for k in compile_steps)
+          and set(st.get("stale") or []) <= {"spawn_layer"},
+          "G level.status: a level of the linked game, every compile step not needed",
+          short({k: v["state"] for k, v in states.items()}))
+    why = states.get("light", {}).get("why", "")
+    check("is a level of the linked game" in why, "G ... saying why", why)
+    chip = str(cmd("level.show").get("build") or "")
+    check(not any(t in chip for t in ("Game Files", "AI Map", "Geometry", "Light", "Spawn ·")),
+          "G the Build chip asks for no compile step (%s)" % (chip or "nothing"), chip)
+    built = cmd("level.build", timeout=600)
+    ran = [r.get("step") for r in built.get("ran") or []]
+    check(built.get("ok") and set(ran) <= {"spawn_layer"} and built.get("stock") is True,
+          "G Build Level builds what the module needs and no compile (%s)" % (", ".join(ran) or "nothing"), short(built))
+    # a compile step asked for by name runs: its files would replace the game's own
+    game = cmd("level.build", only="game", force=True, timeout=600)
+    check(game.get("ok") and [r.get("step") for r in game.get("ran") or []] == ["game"],
+          "G a compile step asked for by name still runs", short(game))
+    st = cmd("level.status", timeout=120)
+    replaces = st.get("replaces") or []
+    check("level.ltx" in replaces and all(not r.startswith("build.") for r in replaces),
+          "G level.status names the game's files the module would replace (%d)" % len(replaces), short(replaces))
+    probs = cmd("level.problems").get("problems") or []
+    check(any(p.get("code") == "replaces_stock" and p.get("severity") == "warning" for p in probs),
+          "G ... and the problems hold the warning", short([p for p in probs if p.get("code") == "replaces_stock"]))
+    refused = cmd("level.play", action="start", dry_run=True, timeout=120)
+    if "fsltx-in-place" not in str(refused.get("error")):
+        check(not refused.get("ok") and refused.get("code") == "refused" and "level.clean" in str(refused.get("error")),
+              "G Play refuses while the module would replace the game's files, naming the fix", short(refused))
+    run_door = qa.gate("run", "level.clean")
+    check(not run_door.get("ok") and run_door.get("code") == "gate", "G level.clean does not pass the run door",
+          short(run_door))
+    dry = qa.gate("destroy", "level.clean", dry_run=True)
+    d = os.path.join(CTX.project, "gamedata", "levels", STOCK)
+    check(dry.get("ok") and "level.ltx" in (dry.get("files") or []) and os.path.isfile(os.path.join(d, "level.ltx")),
+          "G level.clean dry_run=true names the files and removes none", short(dry))
+    gone = qa.gate("destroy", "level.clean")
+    left = [f for f in (gone.get("files") or []) if os.path.exists(os.path.join(d, f))]
+    check(gone.get("ok") and gone.get("removed") and not left, "G level.clean through the destroy door removes them",
+          short(gone))
+    st = cmd("level.status", timeout=120)
+    check(not st.get("replaces"), "G nothing of the game's level is replaced any more", short(st.get("replaces")))
+    # Play plays the module: nothing compiled, nothing of the level staged, a new game
+    t = time.monotonic()
+    play = cmd("level.play", action="start", dry_run=True, timeout=600)
+    secs = time.monotonic() - t
+    if "fsltx-in-place" in str(play.get("error")) or "no game" in str(play.get("error")).lower():
+        print("SKIP G Play: the linked game does not run in place here: " + short(play), flush=True)
+        return
+    check(play.get("ok") and play.get("way") == "module" and "no compile needed" in str(play.get("note")),
+          "G Play on %s plays the module (%.1f s)" % (STOCK, secs), short(play))
+    root = (play.get("root") or "").replace("/", "\\")
+    module = (play.get("module_dir") or "").replace("/", "\\")
+    check(os.path.isfile(os.path.join(module, "mod.ltx")), "G the module is in the root's modules\\<id>", module)
+    shipped = [os.path.relpath(os.path.join(dp, n), module) for dp, _dn, fs in os.walk(module) for n in fs]
+    check(not [f for f in shipped if os.path.basename(f).startswith("build.")],
+          "G the module ships none of the level build's own files", short(shipped[:20]))
+    layer = os.path.join(module, "spawn", STOCK + ".xspawn")
+    text = open(layer, encoding="utf-8", errors="replace").read() if os.path.isfile(layer) else ""
+    start = play.get("start") or {}
+    check("op        = start" in text and "level     = %s" % STOCK in text and start.get("placed") is True,
+          "G Play's Player Start where the camera looks is in its copy of the module (%s)" % start.get("source"),
+          text[:300])
+    check(not os.path.exists(os.path.join(CTX.project, "spawn", STOCK + ".xspawn"))
+          or "grizzly_play_start" not in open(os.path.join(CTX.project, "spawn", STOCK + ".xspawn"),
+                                              encoding="utf-8", errors="replace").read(),
+          "G ... and never in the project's own layer")
+    marker = open(os.path.join(root, "play_root.txt"), encoding="utf-8", errors="replace").read() if root else ""
+    check("module = " in marker, "G the root's marker names the module it holds", marker[-200:])
+    options = os.path.join(root, "gamedata", "configs", "axr_options.ltx")
+    check(os.path.isfile(options) and os.stat(options).st_nlink == 1,
+          "G the new game's options are a file of the root's own (the game's is never written)")
+    check(not os.path.isdir(os.path.join(root, "gamedata", "levels", STOCK))
+          and not os.path.isfile(os.path.join(root, "gamedata", "spawns", "editor.spawn")),
+          "G no level and no editor.spawn are staged")
+    line = str(play.get("command"))
+    check("-start server(all/single/alife/new) client(localhost)" in line and "-fsltx" in line
+          and play.get("started") is None, "G the command line starts a new game on the root's modules", line)
+    st = cmd("level.play", action="status")
+    check(st.get("ok") and not st.get("running"), "G nothing was started (dry_run)", short(st))
+
+
 STEPS = {"A": phase_a, "B": phase_b, "U": phase_u, "R": phase_r, "S": phase_s, "C": phase_c, "E": phase_e, "Y": phase_y,
-         "K": phase_k, "L": phase_l, "D": phase_d}
+         "K": phase_k, "L": phase_l, "D": phase_d, "F": phase_f, "G": phase_g}
 
 
 def run(ctx: qa.Run) -> None:

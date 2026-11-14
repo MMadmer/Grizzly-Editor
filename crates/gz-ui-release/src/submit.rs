@@ -25,7 +25,9 @@ use gz_ui::file_dialog::FileRequest;
 use gz_ui::grid::read_only;
 use gz_ui::state::busy_line;
 use gz_ui::text::{self, Clip};
-use gz_ui::{Button, Dialog, DialogSize, Font, Icon, Kind, PropFlags, PropertyGrid, Section, Tone, palette};
+use gz_ui::{
+    Button, Dialog, DialogSize, Font, Icon, Kind, PropFlags, PropertyGrid, Section, Tone, Tx, palette, tr,
+};
 use parking_lot::Mutex;
 use zeroize::Zeroizing;
 
@@ -87,30 +89,32 @@ pub(crate) fn issue_tone(issue: &CatalogIssue) -> Tone {
 pub(crate) fn issue_lines(
     issue: &CatalogIssue,
     done: bool,
-    accepted_done: &str,
-    accepted_soon: &str,
-) -> Vec<(Tone, String)> {
-    let n = issue.number;
+    accepted_done: &'static str,
+    accepted_soon: &'static str,
+) -> Vec<(Tone, Tx<'static>)> {
+    let n = issue.number.to_string();
     let mut out = Vec::new();
     if issue.state == "open" {
-        out.push((Tone::Muted, format!("#{n} is open: the catalog checks it.")));
+        out.push((Tone::Muted, tr!("#{n} is open: the catalog checks it.", n = n.as_str())));
         let tone = match issue.verdict.as_str() {
             "accepted" => Tone::Success,
             "refused" => Tone::Error,
             _ => Tone::Warning,
         };
+        // the catalog's own sentence: shown as it wrote it
         if !issue.verdict_text.is_empty() {
-            out.push((tone, issue.verdict_text.clone()));
+            out.push((tone, Tx::raw(issue.verdict_text.clone())));
         }
     } else if issue.verdict == "accepted" {
-        out.push((Tone::Success, format!("#{n} {}", if done { accepted_done } else { accepted_soon })));
+        let what = Tx::from(if done { accepted_done } else { accepted_soon });
+        out.push((Tone::Success, tr!("submit" => "#{n} {what}", n = n.as_str(), what = what)));
     } else if issue.verdict == "refused" {
-        out.push((Tone::Error, format!("#{n} was refused.")));
+        out.push((Tone::Error, tr!("#{n} was refused.", n = n.as_str())));
         if !issue.verdict_text.is_empty() {
-            out.push((Tone::Error, issue.verdict_text.clone()));
+            out.push((Tone::Error, Tx::raw(issue.verdict_text.clone())));
         }
     } else {
-        out.push((Tone::Muted, format!("#{n} was closed.")));
+        out.push((Tone::Muted, tr!("#{n} was closed.", n = n.as_str())));
     }
     out
 }
@@ -196,9 +200,9 @@ enum Act {
 
 /// A sentence in a tone's colour, wrapped at the card's width (prose wraps at 36 em: a card of
 /// an L dialog is wider, and the rest of its line would stay empty).
-fn wide_status(ui: &mut Ui, tone: Tone, text_: &str) -> egui::Response {
+fn wide_status<'a>(ui: &mut Ui, tone: Tone, text_: impl Into<Tx<'a>>) -> egui::Response {
     let color = palette(ui.ctx()).tone(tone);
-    ui.add(egui::Label::new(egui::RichText::new(text_).font(Font::Body.id()).color(color)).wrap())
+    text::wrapped(ui, text_, Font::Body, color)
 }
 
 pub(crate) struct SubmitUi {
@@ -449,27 +453,24 @@ impl SubmitUi {
 
         let blocks: Vec<&str> =
             view.check.findings.iter().filter(|f| f.level == Level::Block).map(|f| f.text.as_str()).collect();
+        // the check's findings are the domain's sentences, shown translated where the catalog knows them
         let ready = view.check.done && !view.check.blocking && signed_in && !running;
         let why = if running {
-            BUSY_WHY
+            Tx::from(BUSY_WHY)
         } else if !signed_in {
-            SIGN_IN_WHY
+            Tx::from(SIGN_IN_WHY)
         } else if !view.check.done {
-            "Check the requirements first."
+            Tx::from("Check the requirements first.")
         } else {
-            blocks.first().copied().unwrap_or("Every requirement above has to be met.")
+            blocks.first().map_or(Tx::from("Every requirement above has to be met."), |b| Tx::ui(*b))
         };
         let status = if !running && view.check.done && !blocks.is_empty() {
-            format!(
-                "{} {} to fix",
-                blocks.len(),
-                if blocks.len() == 1 { "requirement" } else { "requirements" }
-            )
+            tr!("{n} {n:requirement|requirements} to fix", n = blocks.len())
         } else {
-            String::new()
+            Tx::EMPTY
         };
         let (stop_name, submit_name, stopping) = (stop_label(view.job), submit_label(&view), self.stopping);
-        let stage = if view.stage.is_empty() { "Working...".to_owned() } else { view.stage.clone() };
+        let stage = if view.stage.is_empty() { Tx::from("Working...") } else { Tx::ui(view.stage.clone()) };
         let (mut stop, mut submit, mut close) = (false, false, false);
 
         Dialog::new("Submit to Mod Browser", "dlg.catalog_submit", DialogSize::L).show(
@@ -480,13 +481,13 @@ impl SubmitUi {
                 let p = palette(ui.ctx());
                 // the module, and what the window does for it
                 ui.horizontal(|ui| {
-                    let id_w = text::width(ui.ctx(), &Font::Body.id(), &id);
+                    let id_w = text::width(ui.ctx(), &Font::Body.id(), Tx::raw(id.as_str()));
                     ui.scope(|ui| {
                         ui.set_max_width((ui.available_width() - id_w - gz_ui::units::em(2.0)).max(gz_ui::units::em(6.0)));
-                        text::label(ui, if name.is_empty() { &id } else { &name }, Font::Title, p.text, Clip::End);
+                        text::label(ui, Tx::raw(if name.is_empty() { id.as_str() } else { name.as_str() }), Font::Title, p.text, Clip::End);
                     });
                     if !name.is_empty() && name != id {
-                        text::label(ui, &id, Font::Body, p.text_muted, Clip::End);
+                        text::label(ui, Tx::raw(id.as_str()), Font::Body, p.text_muted, Clip::End);
                     }
                 });
                 wide_status(
@@ -515,7 +516,7 @@ impl SubmitUi {
                     f.busy(&stage);
                     stop = f.button_set(stop_name, &STOP_LABELS, Kind::Secondary, false, !stopping, "Stopping at the next step.");
                 } else {
-                    submit = f.button_set(submit_name, &SUBMIT_LABELS, Kind::Primary, false, ready, why);
+                    submit = f.button_set(submit_name, &SUBMIT_LABELS, Kind::Primary, false, ready, &why);
                     close = f.button("Close", Kind::Secondary, false, true, "");
                 }
             },
@@ -583,8 +584,8 @@ impl SubmitUi {
             Tone::Success
         };
         card(ui, "card_key", "", tone, !readable || key.locked, |ui| {
-            let badge = readable.then_some((if key.locked { "Locked" } else { "Ready" }, tone));
-            local_card_title(ui, "Author Key", tone, false, badge, None);
+            let badge = readable.then_some((Tx::from(if key.locked { "Locked" } else { "Ready" }), tone));
+            local_card_title(ui, "Author Key".into(), tone, false, badge, None);
             if !key.exists {
                 wide_status(
                     ui,
@@ -595,7 +596,7 @@ impl SubmitUi {
                 let target = self.key_target.clone();
                 PropertyGrid::new("catalog_key").label_frac(gz_ui::units::em(8.0) / ui.available_width().max(1.0)).show(ui, |g| {
                     g.row("Key File", "Where Create Key writes the new key file. It never replaces a file that is there.", PropFlags::NONE, 0, |ui| {
-                        read_only(ui, &target, Clip::Start);
+                        read_only(ui, Tx::raw(target.as_str()), Clip::Start);
                     });
                     if !picking && g.trailing(Icon::Open, "Choose where the new key goes") {
                         acts.push(Act::PickTarget);
@@ -634,7 +635,11 @@ impl SubmitUi {
                     }
                 });
             } else if !key.error.is_empty() {
-                wide_status(ui, Tone::Error, &format!("The key file does not read: {}.", key.error));
+                wide_status(
+                    ui,
+                    Tone::Error,
+                    tr!("The key file does not read: {why}.", why = Tx::ui(key.error.clone())),
+                );
                 PropertyGrid::new("catalog_key")
                     .label_frac(gz_ui::units::em(8.0) / ui.available_width().max(1.0))
                     .show(ui, |g| {
@@ -643,7 +648,7 @@ impl SubmitUi {
                             "The key file the editor remembers.",
                             PropFlags::READ_ONLY,
                             0,
-                            |ui| read_only(ui, &key.path, Clip::Start),
+                            |ui| read_only(ui, Tx::raw(key.path.as_str()), Clip::Start),
                         );
                     });
                 if Button::new("Use Another Key File...")
@@ -661,7 +666,7 @@ impl SubmitUi {
                 ui.add_space(4.0);
             }
             if !key_error.is_empty() {
-                wide_status(ui, Tone::Error, key_error);
+                wide_status(ui, Tone::Error, Tx::ui(key_error));
             }
         });
     }
@@ -678,10 +683,10 @@ impl SubmitUi {
             .label_frac(gz_ui::units::em(8.0) / ui.available_width().max(1.0))
             .show(ui, |g| {
                 g.row("Key", "The key's id: what a signed release names.", PropFlags::READ_ONLY, 0, |ui| {
-                    read_only(ui, &key.key_id, Clip::End)
+                    read_only(ui, Tx::raw(key.key_id.as_str()), Clip::End)
                 });
                 g.row("Key File", "The key file this computer signs with.", PropFlags::READ_ONLY, 0, |ui| {
-                    read_only(ui, &key.path, Clip::Start)
+                    read_only(ui, Tx::raw(key.path.as_str()), Clip::Start)
                 });
                 if key.locked {
                     // the author key row Package Release and Publish Release draw: the password, once per session
@@ -739,7 +744,7 @@ impl SubmitUi {
             Tone::Required
         };
         card(ui, "card_vt", "", tone, !settled, |ui| {
-            local_card_title(ui, "VirusTotal (required)", tone, !settled, None, None);
+            local_card_title(ui, "VirusTotal (required)".into(), tone, !settled, None, None);
             match vt_known {
                 None => {
                     wide_status(
@@ -759,10 +764,10 @@ impl SubmitUi {
                         ui,
                         "vt_key",
                         &mut self.vt_input,
-                        "VirusTotal API key",
-                        "Save Key",
+                        "VirusTotal API key".into(),
+                        "Save Key".into(),
                         typed,
-                        "Paste the key first.",
+                        "Paste the key first.".into(),
                     ) {
                         acts.push(Act::SaveVtKey);
                     }
@@ -798,7 +803,7 @@ impl SubmitUi {
                         wide_status(
                             ui,
                             level_tone(vt_level(&r.state, view.vt_scanned)),
-                            &format!("{}.", describe(r)),
+                            tr!("submit" => "{line}.", line = Tx::ui(describe(r))),
                         );
                     }
                     let reports = packages.iter().filter(|r| has_report(r)).count();
@@ -822,7 +827,7 @@ impl SubmitUi {
                 }
             }
             if !vt_error.is_empty() {
-                wide_status(ui, Tone::Error, vt_error);
+                wide_status(ui, Tone::Error, Tx::ui(vt_error));
             }
         });
     }
@@ -844,19 +849,30 @@ impl SubmitUi {
         let can = !running && signed_in;
         let mut go = false;
         let mut cancel = false;
-        let headline =
-            format!("Withdraw {} ({id}) from the Mod Browser?", if name.is_empty() { id } else { name });
-        let from = if view.login.is_empty() { String::new() } else { format!(", from {}", view.login) };
-        let where_ = format!(
-            "The request is a public issue at github.com/{catalog_repo}{from}, judged by the catalog's own checks."
+        let headline = tr!(
+            "Withdraw {name} ({id}) from the Mod Browser?",
+            name = if name.is_empty() { id } else { name },
+            id = id
         );
+        let where_ = if view.login.is_empty() {
+            tr!(
+                "The request is a public issue at github.com/{repo}, judged by the catalog's own checks.",
+                repo = catalog_repo
+            )
+        } else {
+            tr!(
+                "The request is a public issue at github.com/{repo}, from {login}, judged by the catalog's own checks.",
+                repo = catalog_repo,
+                login = &view.login
+            )
+        };
         Dialog::new("Withdraw from Mod Browser", "dlg.catalog_withdraw", DialogSize::M).sheet().show(
             ui,
             &mut self.want_withdraw,
             |ui| {
                 let p = palette(ui.ctx());
                 ui.scope(|ui| {
-                    ui.add(egui::Label::new(egui::RichText::new(&headline).font(Font::Strong.id()).color(p.text)).wrap());
+                    text::wrapped(ui, &headline, Font::Strong, p.text);
                 });
                 ui.add_space(4.0);
                 wide_status(ui, Tone::Warning, "The Mod Browser stops offering it, and players who installed it there get no more updates.");
@@ -983,14 +999,19 @@ fn requirements_card(ui: &mut Ui, view: &View, start_error: &str, acts: &mut Vec
         Tone::Muted
     };
     card(ui, "card_requirements", "", tone, blocks > 0, |ui| {
-        let fix = format!("{blocks} to fix");
         let badge = (view.check.done && !checking).then_some(if blocks > 0 {
-            (fix.as_str(), Tone::Error)
+            (tr!("{n} to fix", n = blocks), Tone::Error)
         } else {
-            ("Met", Tone::Success)
+            (Tx::from("Met"), Tone::Success)
         });
-        if local_card_title(ui, "Requirements", tone, false, badge, Some(("Check Again", !running, BUSY_WHY)))
-        {
+        if local_card_title(
+            ui,
+            "Requirements".into(),
+            tone,
+            false,
+            badge,
+            Some(("Check Again".into(), !running, BUSY_WHY.into())),
+        ) {
             acts.push(Act::Check);
         }
         if checking {
@@ -999,22 +1020,22 @@ fn requirements_card(ui: &mut Ui, view: &View, start_error: &str, acts: &mut Vec
             wide_status(ui, Tone::Muted, "Not checked yet.");
         }
         for f in &open {
-            wide_status(ui, level_tone(f.level), &f.text);
+            wide_status(ui, level_tone(f.level), Tx::ui(f.text.as_str()));
         }
         if view.check.done && open.is_empty() && !checking {
             wide_status(ui, Tone::Success, "Every requirement is met.");
         }
         if !met.is_empty()
-            && Section::new("catalog_met", &format!("Met ({})", met.len())).default_open(false).show(ui).open
+            && Section::new("catalog_met", tr!("Met ({n})", n = met.len())).default_open(false).show(ui).open
         {
             ui.add_space(2.0);
             for f in &met {
-                wide_status(ui, Tone::Success, &f.text);
+                wide_status(ui, Tone::Success, Tx::ui(f.text.as_str()));
             }
             ui.add_space(4.0);
         }
         if !start_error.is_empty() {
-            wide_status(ui, Tone::Error, start_error);
+            wide_status(ui, Tone::Error, Tx::ui(start_error));
         }
     });
 }
@@ -1031,7 +1052,10 @@ fn submission_card(ui: &mut Ui, view: &View, signed_in: bool, catalog_repo: &str
                 wide_status(
                     ui,
                     Tone::Warning,
-                    &format!("The submission could not be looked up: {}.", reason(&view.submission_error)),
+                    tr!(
+                        "The submission could not be looked up: {why}.",
+                        why = Tx::ui(reason(&view.submission_error).to_owned())
+                    ),
                 );
             } else if signed_in {
                 wide_status(ui, Tone::Muted, "Not looked up yet: Check Again reads where it stands.");
@@ -1048,25 +1072,26 @@ fn submission_card(ui: &mut Ui, view: &View, signed_in: bool, catalog_repo: &str
                 wide_status(ui, tone, &line);
             }
             if !submission.note.is_empty() {
-                wide_status(ui, Tone::Muted, &submission.note);
+                wide_status(ui, Tone::Muted, Tx::ui(submission.note.as_str()));
             }
             if Button::new("Open Submission").show(ui).clicked() {
                 acts.push(Act::Page(submission.url.clone()));
             }
         }
-        let from = if view.login.is_empty() { String::new() } else { format!(" from {}", view.login) };
-        let where_ = format!("Submitting opens a public issue at github.com/{catalog_repo}{from}.");
-        wide_status(
-            ui,
-            Tone::Muted,
-            if signed_in {
-                &where_
-            } else {
-                "Submitting needs a GitHub account: sign in from Publish Release."
-            },
-        );
+        let where_ = if !signed_in {
+            Tx::from("Submitting needs a GitHub account: sign in from Publish Release.")
+        } else if view.login.is_empty() {
+            tr!("Submitting opens a public issue at github.com/{repo}.", repo = catalog_repo)
+        } else {
+            tr!(
+                "Submitting opens a public issue at github.com/{repo} from {login}.",
+                repo = catalog_repo,
+                login = &view.login
+            )
+        };
+        wide_status(ui, Tone::Muted, where_);
         if view.state == JobState::Failed && !view.error.is_empty() && view.job != Job::Withdraw {
-            wide_status(ui, Tone::Error, &view.error);
+            wide_status(ui, Tone::Error, Tx::ui(view.error.as_str()));
         }
     });
 }
@@ -1098,7 +1123,7 @@ fn withdrawal_card(ui: &mut Ui, view: &View, signed_in: bool, acts: &mut Vec<Act
             }
         }
         if !w.note.is_empty() {
-            wide_status(ui, Tone::Muted, &w.note);
+            wide_status(ui, Tone::Muted, Tx::ui(w.note.as_str()));
         }
         if withdrawn && w.number != 0 && w.verdict == "accepted" {
             wide_status(ui, Tone::Muted, "Submitting the module again lists it again.");
@@ -1123,7 +1148,11 @@ fn withdrawal_card(ui: &mut Ui, view: &View, signed_in: bool, acts: &mut Vec<Act
             wide_status(
                 ui,
                 Tone::Warning,
-                &format!("Only {owner}, the owner of {}, can withdraw it.", view.listing.github),
+                tr!(
+                    "Only {owner}, the owner of {repo}, can withdraw it.",
+                    owner = owner,
+                    repo = &view.listing.github
+                ),
             );
         }
         ui.horizontal(|ui| {
@@ -1147,7 +1176,7 @@ fn withdrawal_card(ui: &mut Ui, view: &View, signed_in: bool, acts: &mut Vec<Act
             }
         });
         if failed {
-            wide_status(ui, Tone::Error, &view.error);
+            wide_status(ui, Tone::Error, Tx::ui(view.error.as_str()));
         }
     });
 }
@@ -1187,19 +1216,22 @@ mod tests {
             "a",
             "b",
         );
+        let en = |l: Vec<(Tone, Tx<'static>)>| -> Vec<(Tone, String)> {
+            l.into_iter().map(|(t, x)| (t, x.en().into_owned())).collect()
+        };
         assert_eq!(
-            lines,
+            en(lines),
             vec![
                 (Tone::Muted, "#4 is open: the catalog checks it.".to_owned()),
                 (Tone::Warning, "VirusTotal is still analysing od-1.0.0.zip.".to_owned())
             ]
         );
         assert_eq!(
-            issue_lines(&issue(4, "closed", "accepted", ""), true, "was in.", "comes in."),
+            en(issue_lines(&issue(4, "closed", "accepted", ""), true, "was in.", "comes in.")),
             vec![(Tone::Success, "#4 was in.".to_owned())]
         );
         assert_eq!(
-            issue_lines(&issue(4, "closed", "", ""), true, "a", "b"),
+            en(issue_lines(&issue(4, "closed", "", ""), true, "a", "b")),
             vec![(Tone::Muted, "#4 was closed.".to_owned())]
         );
     }

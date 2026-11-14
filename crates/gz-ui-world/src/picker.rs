@@ -19,7 +19,7 @@ use egui::{Context, Id, Popup, Response, ScrollArea, Ui};
 use gz_ui::menu::menu_popup;
 use gz_ui::pick::{PickItem, pick_popup};
 use gz_ui::units::em;
-use gz_ui::{Combo, PickList, Tone, text};
+use gz_ui::{Combo, PickList, Tone, Tx, text, tr};
 
 use crate::lists::{Indexed, ListsView};
 
@@ -44,11 +44,12 @@ struct Rows {
 
 /// The pick items of `rows`, with the row that clears the value first; made once per read of
 /// the list and kept for the field while its popup is used.
-fn rows_of(ctx: &Context, key: Id, rows: &Indexed, none: Option<&str>) -> Arc<Vec<PickItem>> {
+fn rows_of(ctx: &Context, key: Id, rows: &Indexed, none: Option<&Tx<'static>>) -> Arc<Vec<PickItem>> {
+    let none_key = none.map(|n| n.en().into_owned());
     if let Some(r) = ctx.data(|d| d.get_temp::<Rows>(key))
         && r.serial == rows.serial
         && r.len == rows.entries.len()
-        && r.none.as_deref() == none
+        && r.none == none_key
     {
         return r.items;
     }
@@ -56,17 +57,13 @@ fn rows_of(ctx: &Context, key: Id, rows: &Indexed, none: Option<&str>) -> Arc<Ve
     if let Some(none) = none {
         items.push(PickItem::new("", none));
     }
-    items.extend(rows.entries.iter().map(|e| PickItem::new(e.id.as_str(), Indexed::label(e))));
+    // the game's names: shown as they are
+    items.extend(rows.entries.iter().map(|e| PickItem::new(e.id.as_str(), Indexed::label_tx(e))));
     let items = Arc::new(items);
     ctx.data_mut(|d| {
         d.insert_temp(
             key,
-            Rows {
-                serial: rows.serial,
-                len: rows.entries.len(),
-                none: none.map(str::to_owned),
-                items: items.clone(),
-            },
+            Rows { serial: rows.serial, len: rows.entries.len(), none: none_key, items: items.clone() },
         );
     });
     items
@@ -97,34 +94,34 @@ pub fn list_picker(
     value: &mut String,
     lookup: &Indexed,
     rows: &Indexed,
-    none: Option<&str>,
+    none: Option<Tx<'static>>,
     busy: bool,
 ) -> bool {
     let ctx = ui.ctx().clone();
     let cur = lookup.get(value);
     let preview = match cur {
-        _ if value.is_empty() => none.unwrap_or("").to_owned(),
-        Some(e) if !e.name.is_empty() => format!("{}  ({})", e.name, value),
-        _ => value.clone(),
+        _ if value.is_empty() => none.clone().unwrap_or_default(),
+        Some(e) if !e.name.is_empty() => Indexed::label_tx(e),
+        _ => Tx::raw(value.clone()),
     };
     let unknown = !value.is_empty() && cur.is_none() && !lookup.is_empty();
     let tip = if unknown {
-        format!("'{value}' is not in the linked game or the project: kept as written")
+        tr!("'{value}' is not in the linked game or the project: kept as written", value = value.as_str())
     } else {
-        String::new()
+        Tx::EMPTY
     };
-    let combo = Combo::new(pick_id(salt), &preview)
+    let combo = Combo::new(pick_id(salt), preview)
         .warn(unknown)
         .placeholder(value.is_empty())
         .busy(busy, READING)
-        .tip(&tip);
+        .tip(tip);
     let popup = combo.popup_id();
     let resp = combo.field(ui, Popup::is_id_open(&ctx, popup));
     if !opened(&ctx, salt, popup, &resp, busy) {
         return false;
     }
     // the rows are made for a list that is open: a closed field costs its text
-    let items = rows_of(&ctx, popup.with("rows"), rows, none);
+    let items = rows_of(&ctx, popup.with("rows"), rows, none.as_ref());
     let list = PickList::new(pick_id(salt), &items)
         .current(value)
         .hint("Type to filter")
@@ -148,7 +145,7 @@ pub fn item_picker(
     salt: &str,
     value: &mut String,
     lists: &ListsView,
-    none: Option<&str>,
+    none: Option<Tx<'static>>,
 ) -> bool {
     list_picker(ui, salt, value, &lists.items, &lists.items, none, !lists.loaded)
 }
@@ -158,9 +155,9 @@ pub fn item_picker(
 pub fn row_combo(
     ui: &mut Ui,
     salt: &str,
-    preview: &str,
+    preview: Tx<'_>,
     warn: bool,
-    rows: &[String],
+    rows: &[Tx<'static>],
     selected: Option<usize>,
 ) -> Option<usize> {
     let ctx = ui.ctx().clone();
@@ -171,7 +168,7 @@ pub fn row_combo(
         return None;
     }
     let items: Vec<PickItem> =
-        rows.iter().enumerate().map(|(i, row)| PickItem::new(i.to_string(), row.as_str())).collect();
+        rows.iter().enumerate().map(|(i, row)| PickItem::new(i.to_string(), row)).collect();
     let current = selected.map(|i| i.to_string()).unwrap_or_default();
     let mut list = PickList::new(pick_id(salt), &items)
         .without_search()
@@ -191,12 +188,12 @@ pub fn local_multi_combo(
     salt: &str,
     picked: &mut Vec<String>,
     names: &[String],
-    none: &str,
+    none: &'static str,
     busy: bool,
 ) -> bool {
     let ctx = ui.ctx().clone();
-    let preview = if picked.is_empty() { none.to_owned() } else { picked.join(", ") };
-    let combo = Combo::new(pick_id(salt), &preview).placeholder(picked.is_empty()).busy(busy, READING);
+    let preview = if picked.is_empty() { Tx::from(none) } else { Tx::raw(picked.join(", ")) };
+    let combo = Combo::new(pick_id(salt), preview).placeholder(picked.is_empty()).busy(busy, READING);
     let popup = combo.popup_id();
     let resp = combo.field(ui, Popup::is_id_open(&ctx, popup));
     if resp.clicked() {
@@ -213,7 +210,7 @@ pub fn local_multi_combo(
     let _ = menu_popup(&ctx, popup, resp.rect, ui.layer_id(), |ui| {
         ui.set_min_width(width);
         let unlisted: Vec<String> = picked.iter().filter(|x| !names.contains(x)).cloned().collect();
-        let mut toggle = |ui: &mut Ui, name: &str, caption: &str| {
+        let mut toggle = |ui: &mut Ui, name: &str, caption: Tx<'_>| {
             let mut on = picked.iter().any(|x| x == name);
             if gz_ui::form::check(
                 ui,
@@ -236,10 +233,10 @@ pub fn local_multi_combo(
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 for name in names {
-                    toggle(ui, name, name);
+                    toggle(ui, name, Tx::raw(name.as_str()));
                 }
                 for name in &unlisted {
-                    toggle(ui, name, &format!("{name}  (not in the linked game)"));
+                    toggle(ui, name, tr!("{name}  (not in the linked game)", name = name.as_str()));
                 }
                 if names.is_empty() {
                     let _ = text::status(ui, Tone::Muted, "The linked game lists no trade categories.");

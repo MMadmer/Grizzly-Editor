@@ -258,7 +258,7 @@ pub fn merge_lightmaps(
     let mut pages = Vec::new();
     while !layer.is_empty() {
         ctl.check()?;
-        ctl.stage(&format!("Building lightmap {}...", lightmaps.len()));
+        ctl.stage(&format!("page {}", lightmaps.len() + 1));
 
         // the largest deflector of every material
         let mut max_area = vec![0u32; materials.len()];
@@ -297,6 +297,7 @@ pub fn merge_lightmaps(
         let mut lmap = Lightmap::default();
         let mut placed = 0usize;
         for (i, &d) in layer.iter().take(count).enumerate() {
+            ctl.check()?;
             let Some(defl) = defls.get(d) else { continue };
             if let Some((r, rotated)) = mask.place(&defl.layer) {
                 lmap.capture(page, defl, mesh, r.ax, r.ay, r.size_x(), r.size_y(), rotated);

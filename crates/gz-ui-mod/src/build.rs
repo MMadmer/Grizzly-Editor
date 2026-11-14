@@ -17,13 +17,12 @@ use egui::Ui;
 use gz_app::{DialogDesc, DocCx, ShellBuilder};
 use gz_build::{BuildKind, BuildRequest, BuildResult, Builds, CleanQuestion};
 use gz_editor::{Editor, JobId};
-use gz_mod::text::count_text;
 use gz_mod::{ManifestService, validate_id};
 use gz_project::Project;
 use gz_ui::dialog::{Asker, ConfirmSpec, ResultAction, ResultSpec, confirm, notice, result};
 use gz_ui::grid::{PathAction, path_field, read_only};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Dialog, DialogSize, Icon, Kind, PropFlags, PropertyGrid, Tone};
+use gz_ui::{Dialog, DialogSize, Icon, Kind, PropFlags, PropertyGrid, Tone, Tx, tr};
 use parking_lot::Mutex;
 
 use crate::call::{self, Pick, post_ui};
@@ -120,10 +119,14 @@ pub fn build_target_text(editor: &Editor) -> String {
 
 /// What the running build or packaging is doing, for a tip: "Building Module: Copying the files".
 #[must_use]
-pub fn job_status_text(editor: &Editor) -> String {
+pub fn job_status_text(editor: &Editor) -> Tx<'static> {
     let job = editor.jobs.running_in("build");
-    let Some(job) = job else { return String::new() };
-    if job.stage.is_empty() { job.title } else { format!("{}: {}", job.title, job.stage) }
+    let Some(job) = job else { return Tx::EMPTY };
+    if job.stage.is_empty() {
+        Tx::ui(job.title)
+    } else {
+        tr!("build" => "{title}: {stage}", title = Tx::ui(job.title), stage = Tx::ui(job.stage))
+    }
 }
 
 /// Reads the manifest's store (made on first use), then hands its module id to `then` on the UI
@@ -147,11 +150,11 @@ fn with_manifest_id(
 }
 
 /// The result naming a missing module id, with Mod Settings as its action.
-pub(crate) fn report_missing_id(editor: &Arc<Editor>, ctx: &egui::Context, title: &str) {
+pub(crate) fn report_missing_id(editor: &Arc<Editor>, ctx: &egui::Context, title: &'static str) {
     let mut spec = ResultSpec::new("build_result", title, Tone::Error, MISSING_ID);
     let ed = editor.clone();
     spec.action = Some(ResultAction {
-        label: "Mod Settings".to_owned(),
+        label: "Mod Settings".into(),
         run: Arc::new(move || call::open_tab(&ed, crate::settings::TAB)),
     });
     show_result(editor, ctx, spec);
@@ -161,12 +164,12 @@ pub(crate) fn report_missing_id(editor: &Arc<Editor>, ctx: &egui::Context, title
 /// failed at to its warnings.
 pub(crate) fn add_bake_note(
     note: &[gz_base::Finding],
-    rows: &mut Vec<(String, String)>,
+    rows: &mut Vec<(Tx<'static>, Tx<'static>)>,
     warnings: &mut Vec<String>,
 ) {
     for f in note {
         match f.severity {
-            gz_base::Severity::Note => rows.push(("Scene".to_owned(), f.text.clone())),
+            gz_base::Severity::Note => rows.push(("Scene".into(), Tx::ui(f.text.clone()))),
             _ => warnings.push(f.text.clone()),
         }
     }
@@ -184,7 +187,7 @@ pub fn build_report(kind: BuildKind, r: &BuildResult, id: &str) -> ResultSpec {
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
     if r.ok {
-        rows.push(("Folder".to_owned(), r.path.clone()));
+        rows.push(("Folder".into(), Tx::raw(r.path.clone())));
     }
     add_bake_note(&r.bake_note, &mut rows, &mut warnings);
     split_lines(&r.warnings, &mut warnings);
@@ -194,34 +197,33 @@ pub fn build_report(kind: BuildKind, r: &BuildResult, id: &str) -> ResultSpec {
             result_id,
             if flat { "Export Failed" } else { "Build Failed" },
             Tone::Error,
-            &r.err,
+            Tx::ui(r.err.clone()),
         );
         spec.rows = rows;
         spec.warnings = warnings;
         return spec;
     }
-    let files = count_text(r.files, "file", "files");
+    let n = r.files;
     let headline = match kind {
         BuildKind::IntoGame => {
-            rows.push(("Console".to_owned(), format!("xms_enable {id}  /  xms_disable {id}")));
-            format!(
-                "The module is in the game: {files}. Added objects reach new games and loaded saves; changes to existing objects need a new game."
+            rows.push(("Console".into(), Tx::raw(format!("xms_enable {id}  /  xms_disable {id}"))));
+            tr!(
+                "The module is in the game: {n} {n:file|files}. Added objects reach new games and loaded saves; changes to existing objects need a new game.",
+                n = n
             )
         }
-        BuildKind::Flat => format!("{files} exported as a gamedata folder."),
-        BuildKind::ToFolder => format!("The module is built: {files}."),
+        BuildKind::Flat => tr!("{n} {n:file|files} exported as a gamedata folder.", n = n),
+        BuildKind::ToFolder => tr!("The module is built: {n} {n:file|files}.", n = n),
     };
     let tone = if warnings.is_empty() { Tone::Success } else { Tone::Warning };
     let mut spec =
-        ResultSpec::new(result_id, if flat { "Export Complete" } else { "Build Complete" }, tone, &headline);
+        ResultSpec::new(result_id, if flat { "Export Complete" } else { "Build Complete" }, tone, headline);
     spec.rows = rows;
     spec.left_out.clone_from(&r.left_out);
     spec.warnings = warnings;
     let path = r.path.clone();
-    spec.action = Some(ResultAction {
-        label: "Open Folder".to_owned(),
-        run: Arc::new(move || call::open_folder(&path)),
-    });
+    spec.action =
+        Some(ResultAction { label: "Open Folder".into(), run: Arc::new(move || call::open_folder(&path)) });
     spec
 }
 
@@ -230,12 +232,12 @@ pub fn build_report(kind: BuildKind, r: &BuildResult, id: &str) -> ResultSpec {
 pub fn clean_confirm(q: &CleanQuestion) -> ConfirmSpec {
     ConfirmSpec {
         id: q.id.to_owned(),
-        title: q.title.to_owned(),
-        headline: q.headline.clone(),
-        items: q.items.clone(),
+        title: Tx::ui(q.title),
+        headline: Tx::ui(q.headline.clone()),
+        items: q.items.iter().map(|i| Tx::raw(i.clone())).collect(),
         total: q.total,
-        consequence: q.consequence.to_owned(),
-        action: q.action.to_owned(),
+        consequence: Tx::ui(q.consequence),
+        action: Tx::ui(q.action),
         destructive: true,
     }
 }
@@ -255,9 +257,16 @@ pub fn start_build(editor: &Arc<Editor>, kind: BuildKind, target: String, clean:
                 crate::cards::started_from_ui(ed, job);
                 follow_build(ed, job, kind, target, id);
             }
-            Err(e) => {
-                call::log_lines(ed, notice(ctx, asker(ed), Tone::Warning, title, &format!("{}.", e.message)))
-            }
+            Err(e) => call::log_lines(
+                ed,
+                notice(
+                    ctx,
+                    asker(ed),
+                    Tone::Warning,
+                    title,
+                    tr!("build" => "{why}.", why = Tx::ui(e.message)),
+                ),
+            ),
         }
     });
 }
@@ -361,7 +370,7 @@ pub fn request_export(cx: &mut DocCx<'_>, flat: bool) {
             call::args([("action", call::s("open")), ("id", call::s(dialog))]),
             |reply, ctx| {
                 if !call::ok(reply) {
-                    gz_ui::state::toast(ctx, Tone::Error, &call::error_text(reply));
+                    gz_ui::state::toast(ctx, Tone::Error, Tx::ui(call::error_text(reply)));
                 }
             },
         );
@@ -463,13 +472,13 @@ impl ExportDialog {
                     if action == Some(PathAction::Browse) {
                         browse = true;
                     }
-                    if !root.is_empty() && g.trailing(Icon::GameFolder, &format!("Use the linked game: {root}")) {
+                    if !root.is_empty() && g.trailing(Icon::GameFolder, tr!("Use the linked game: {root}", root = root.as_str())) {
                         target.clone_from(&root);
                     }
                     match id.as_deref() {
                         Some(id) if valid_id && !target.trim().is_empty() => {
                             let dest = writes_to(target.trim(), id, flat);
-                            g.row("Writes To", "The folder this build fills.", PropFlags::READ_ONLY, 0, |ui| read_only(ui, &dest, Clip::Start));
+                            g.row("Writes To", "The folder this build fills.", PropFlags::READ_ONLY, 0, |ui| read_only(ui, Tx::raw(&dest), Clip::Start));
                         }
                         Some(_) if !valid_id => {
                             g.message(Tone::Error, MISSING_ID);
@@ -566,10 +575,10 @@ mod tests {
         };
         let spec = build_report(BuildKind::IntoGame, &r, "od");
         assert_eq!(spec.id, "build_result");
-        assert_eq!(spec.title, "Build Complete");
+        assert_eq!(spec.title.en(), "Build Complete");
         assert_eq!(spec.tone, Tone::Warning);
-        assert!(spec.headline.starts_with("The module is in the game: 3 files."));
-        let keys: Vec<&str> = spec.rows.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(spec.headline.en().starts_with("The module is in the game: 3 files."));
+        let keys: Vec<String> = spec.rows.iter().map(|(k, _)| k.en().into_owned()).collect();
         assert_eq!(keys, ["Folder", "Scene", "Console"]);
         assert_eq!(spec.warnings, ["lost", "one"]);
         assert!(spec.action.is_some());
@@ -580,10 +589,10 @@ mod tests {
         let r = BuildResult { ok: false, err: "the target is a link".into(), ..BuildResult::default() };
         let spec = build_report(BuildKind::Flat, &r, "od");
         assert_eq!(
-            (spec.id.as_str(), spec.title.as_str(), spec.tone),
+            (spec.id.as_str(), spec.title.en().as_ref(), spec.tone),
             ("export_result", "Export Failed", Tone::Error)
         );
-        assert_eq!(spec.headline, "the target is a link");
+        assert_eq!(spec.headline.en(), "the target is a link");
         assert!(spec.action.is_none());
     }
 

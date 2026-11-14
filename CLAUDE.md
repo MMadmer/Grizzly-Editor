@@ -270,8 +270,10 @@ A change of plan is a change of its document first.
   for a question, OK for a note - to the window's own actions; a command's caller is answered the same on any
   editor and is refused with `unsaved` there too; a crash = symbolised stack + dump + exit code 3). `-headless` runs it without a
   window, `-home <folder>` keeps its project list, settings and logs there (or `GRIZZLY_HOME`), `-mcp_port <n>`
-  listens elsewhere, `-minimized` starts the window minimised, `-uiscale <f>` fixes the UI scale, `-kitsheet` and
-  `-iconsheet` show the kit's widgets and icons and nothing else.
+  listens elsewhere, `-minimized` starts the window minimised, `-uiscale <f>` fixes the UI scale, `-lang en|ru`
+  holds the window's language for the run (the QA client starts every editor with `-lang en`), `-theme <id>`
+  shows the run in a theme and saves nothing, `-kitsheet` and `-iconsheet` show the kit's widgets and icons and
+  nothing else.
 - **A picture is ONE call and always current**: `gz-app`'s `shots.rs` HOLDS a `shot.window` / `shot.viewport`
   request until the frames it asked for were presented, then answers. It has to: the editor redraws on demand, so an
   answer given at once showed the frame from BEFORE the caller's last commands - and because no UI pass ran, a
@@ -342,7 +344,10 @@ A change of plan is a change of its document first.
 - **The kit (`gz-ui`) is the only way to draw UI**, on egui, and it has ONE widget per job (`Section`, `Check`,
   `Switch`, `Combo`, `PickList`, `ItemRows`, `Table`, the property grid, the toolbar, the dialogs, the states;
   `-kitsheet` shows every one in every state). Colours are theme tokens (`theme.rs`: the `Palette` of the
-  context, the state tones; a surface never writes a colour of its own), sizes are points (`metrics`, `units.rs`
+  context, the state tones; a surface never writes a colour of its own). The theme is one of the dark and light
+  themes of `theme/themes.rs` (Preferences > Interface > Theme, `[ui] theme`, `app.prefs key=theme`), each held to
+  the contrast minimums of `theme::min` by the kit's tests, and it changes at once: nothing may assume a dark or a
+  light background, and nothing drawn once may keep a theme's colours past a change. Sizes are points (`metrics`, `units.rs`
   `em(n)`); DPI enters in one place, the context's pixels per point, so nothing is sized in pixels. A widget the
   kit lacks starts in its surface crate's `local.rs` and moves into `gz-ui` when a second surface wants it
   (UI_DESIGN.md section 8 lists what is still local). One Primary button per toolbar and per dialog footer.
@@ -352,7 +357,7 @@ A change of plan is a change of its document first.
   major tab (`doc.rs`, `shell.rs`): Level is tab 1 and never closes; a quest / behaviour graph is `quest:<rel>` /
   `beh:<rel>`; `pda`, `model`, `texture` switch to a new target; the rest are singletons. Only the active tab is
   drawn - Level behind another renders no scene (`shot.viewport` gets a pass of its own). The Content Browser and
-  the Output Log also open as drawers over any tab (Ctrl+Space, Ctrl+\`), one at a time.
+  the Output Log also open as drawers over any tab (Ctrl+Space, \`), one at a time.
 - **Nothing in the frame moves when the tab changes**: the tabs have a row of their own under the caption, every
   tab's toolbar row ends in the same project group (Build Mod, Publish Release, Releases), tool tabs fold to icons
   whichever tab is up. What every tab shares never sits in a row with what changes from tab to tab.
@@ -391,8 +396,9 @@ A change of plan is a change of its document first.
   dialog. An empty library says what it
   reads (rawdata\sounds, gamedata\lanims.xr).
 - QA (each on a COPY, in a home of its own, ending on `perf.stalls`): `python tools/qa/run_all.py` lists the suites;
-  `tools/qa/test_ui_shell.py` holds the frame, `test_tour.py` every tab kind, dialog and menu
-  of `ui.contract`, audited and pictured at 1707x912 / 1.5 and 1280x720 / 1.0.
+  `tools/qa/test_ui_shell.py` holds the frame, `test_tour.py` every tab kind, dialog and menu of `ui.contract`,
+  audited and pictured at 1707x912 / 1.5 and 1280x720 / 1.0 (`--theme <id>` in another theme; `test_tour_light`
+  runs it in Grizzly Light).
 
 ## The Level tab
 
@@ -411,21 +417,44 @@ A change of plan is a change of its document first.
 - **Building a level is one command and one job**, `level.build` (`gz-levelbuild`): the steps `game`,
   `spawn_layer`, `ai_map`, `game_graph`, `spawn`, `geometry`, `details`, `light`, `detail_light`, each fresh,
   stale (with why: "12 objects moved"), never built, failed or not needed - judged by fingerprints of what the step
-  reads, kept in `gamedata\levels\<level>\build.state`. A build runs what is stale, in order; Stop or a failure
-  keeps the finished steps, and a failed step holds back only the steps that need it. Nothing is made by hand
+  reads, kept in `gamedata\levels\<level>\build.state`. A build first checks in seconds what a later step would
+  refuse (no actor or graph point for the spawn, a scene that fails its checks, an input no step makes) and refuses
+  with the problem on the thing it is about; then it runs what is stale, in order. **An error ends the build at
+  once**, like Unreal's: the finished steps stay, the answer names the failed step and the steps not run; a warning
+  never stops it, and what leaves a usable result is a warning. **Stop ends the step in progress within about a
+  second** in any phase (every long loop of the steps and the compilers checks it per item); finished steps stay,
+  the compiler's stage folders go. The job's stage follows the compiler's phases by their plain names, passed on
+  within the throttle period even while the compiler is silent. Nothing is made by hand
   first: the build generates an AI map the scene lacks (over the ground, from the spawn points, as one undo step;
   a map the author made is kept), completes the visibility cells and portals in its own copy, and removes what an
   earlier build left. The ground of the painted layers is every static object, narrowed by a list or a volume.
+- **A level the linked game has (a stock level: its game graph lists it) is the game's**: the module adds to it
+  (the spawn layer from what the scene marks `authored` / `removed`, the overlays the author exports), so its
+  compile steps (`game`, `ai_map`, `game_graph`, `spawn`, `geometry`, `details`, `light`, `detail_light`) are not
+  needed - the status and the Build chip never ask for them, and Build Level builds the spawn layer. Build Step and
+  Rebuild All still compile one on purpose; that output is the author's and ships. Files a build left in a stock
+  level's folder replace the game's own in every game that mounts the module: a warning on the level, whose fix
+  (`level.clean`, the destroy door; a confirmation naming them in the window) removes exactly what the build
+  wrote. The build's own files (`build.prj`, `build.state`, the other `build.*`, `level_stat.*`, the compiler's
+  stage folders) never ship.
 - **Problems are on the thing they are about**: `level.problems` rows carry the object or the place, the Problems
   panel selects and frames it, the viewport draws refused faces. `level.status` and the status bar's Build chip
   read the same status without waiting (`LevelBuild::status_now`).
-- **Play** (`level.play`) builds what is stale at the quality the level was last built with and starts the
-  installed game on it (Dangerous operations, below).
+- **Play** (`level.play`) on a stock level plays the module and compiles nothing: the module built the real way
+  (`gz-build`'s module build with its bake) into the root's `modules\<id>`, a Player Start where the camera looks
+  added to Play's copy when the scene has none (never to the project), and a new game started
+  (`-start server(all/single/alife/new)`) with the module's mode on - Play's own `axr_options.ltx` in the root
+  says it, as the new-game screen would. It refuses, in seconds and naming them, while the module holds files that
+  replace the level's own (the game loads them over its level and stops: `level.clean` first). On a new level it
+  builds what is stale at the quality the level was
+  last built with and starts the installed game on it. Its answer and its job say which way it went
+  (Dangerous operations, below).
 - Level has two size classes, **Wide** (1400 x 640 pt and up: browser, log and Problems docked) and **Compact**
   (drawers only); crossing one rebuilds the layout unless the author customised it (`gz-ui-level`'s `layout.rs`).
 - Viewport stats are off by default and a Mono pill over the viewport - nothing is printed into the render target.
 - QA: `test_scene_tools.py`, `test_level_commands.py`, `test_level_compile.py` (the compiler against its records
-  under `tools/qa/golden/compile`), `test_properties.py`, `test_play_game.py` (`--with-game`).
+  under `tools/qa/golden/compile`), `test_properties.py`, `test_play_game.py` (`--with-game`; `--scene l01_escape`
+  plays a module over a level of the game).
 
 ## The Start page (project browser)
 
@@ -574,6 +603,8 @@ A change of plan is a change of its document first.
     rewrites it on every status;
   - the editor's own files and the sources at the root (`is_editor_only`, `is_source_only`: the project file,
     `releases\`, preview.png, the scratch folders; `AGENTS.md`);
+  - the level build's own files in `gamedata\levels\<level>\` (`is_level_build_file`: `build.prj`, `build.state`,
+    the other `build.*`, `level_stat.*`) - what the compiler reads, never what the game does;
   - **mod.ltx `[exclude]`** - the author's call (`gz-mod`'s `exclude.rs`, `exclude_match`): a
     project path (a folder takes everything below it) or a pattern (no slash = a
     name at any depth, `*.psd`; with one = a path, `docs/*.md`). Set from the
@@ -1298,7 +1329,8 @@ A change of plan is a change of its document first.
   "restorable".
 - **Play starts the installed game where it is** (`gz-levelbuild`'s `play.rs`): `<game>\xrEngine.exe -fsltx
   <root>\fsgame.ltx`, the root holding the marker, the fs config, the staged gamedata (a mirror of the
-  game's: hard links where the volume allows, copies otherwise) and an app data - no program.
+  game's: hard links where the volume allows, copies otherwise), an app data and `modules\` (the module a stock
+  level's Play installed, named in the marker by a `module = ` line) - no program.
   A linked game that does not state the ability (`fsltx-in-place`, in the version resources of the
   engine and of its libraries) is refused before anything is built, naming the program: Play never copies a
   program to run it. `test_play_game` lists the installed game before and after and wants it equal.
@@ -1323,10 +1355,22 @@ A change of plan is a change of its document first.
 
 - Style: the local style of the file; comments only where the "why" is not
   obvious, short and in English. Rust is formatted by `cargo fmt` (`rustfmt.toml`) and held by clippy without a warning.
-- All product text is English in the official tone: UI labels, hints, the
-  kind catalog, logs, the commands' cards, generated files, docs. Russian
-  remains only where it is game content the player sees (quest titles,
-  dialog phrases, string tables) or fixture data in encoding tests.
+- **English is the language of the code; the window speaks English or Russian** (docs/UI_DESIGN.md section 9).
+  Every text the editor says is written in English, in the official tone, where it is said: UI labels, hints,
+  the kind catalog, logs, the commands' cards, generated files, docs. The window shows it in the language of
+  Preferences > General > Language (`[ui] language = system|en|ru`, `app.prefs key=language`, `-lang`; System is
+  Russian on a Russian Windows), translated by the UI crates' catalogs (`src/ru.lua`, Lua data, embedded and
+  handed to the shell by each crate's `install`; the kit's carries the glossary). Russian appears in the sources
+  only there, in game content the player sees (quest titles, dialog phrases, string tables) and in
+  encoding-test fixtures - never in a `.rs` file. The log, MCP answers, commandlets, cards and docs stay English.
+- **The kit's widgets take a `Tx`**: a literal is the editor's own words (looked up), `tr!("... {n}
+  {n:file|files}", n = k)` a sentence with values, `Tx::raw` data (names, paths, game strings, what the author
+  typed), `Tx::ui` the editor's English that is no literal (a registered label, a domain crate's sentence, shown
+  through a template of the catalog). A `String` does not become a `Tx`: never make the editor's own words
+  `Tx::raw` to get past the compiler. egui's own text calls stay inside the kit (`tools/rust/check_ui_text.py`).
+  A new text of the window is a new catalog entry in the crate that draws it (`tools/rust/i18n_missing.py` lists
+  the missing ones; `grizzly`'s test `the_catalogs_are_one_sound_catalog` holds every catalog to one English per
+  context), and a Russian label is never cut where the English fits (`test_tour.py`'s Russian pass).
 - UI text is short. A label names the thing (Title Case in grids and on buttons);
   details go into the hover hint; a message is a sentence for the author, never a
   bare problem code or a raw HTTP or OS error number (what the system refused a file operation with is said in

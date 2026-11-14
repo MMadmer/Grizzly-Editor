@@ -36,6 +36,7 @@ pub mod contract;
 pub mod doc;
 pub mod gpu;
 pub mod keys;
+pub mod lang;
 pub mod palette;
 pub mod project;
 mod queue;

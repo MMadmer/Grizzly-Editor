@@ -81,6 +81,12 @@ fn main() -> ExitCode {
     if cli.bad_ui_scale {
         log.warn("-uiscale wants a scale from 0.5 to 4, e.g. -uiscale 1.5");
     }
+    if cli.bad_lang {
+        log.warn("-lang wants a language the editor has: en or ru");
+    }
+    if let Some(named) = &cli.bad_theme {
+        log.warn(format!("-theme names no theme: '{named}' (app.prefs key=theme lists them)"));
+    }
     // one editor per home: a second start hands its project to the editor that holds the home
     // (an update's restart takes over from the one that is ending, and never hands back)
     if !cli.commandlet()
@@ -115,6 +121,9 @@ fn main() -> ExitCode {
         // does for any other.
         let asked = editor.clone();
         gz_win::on_console_end(move || asked.request_quit());
+    }
+    if let Some(theme) = cli.theme {
+        gz_app::EditorSettings::of(&editor).set_run_theme(theme);
     }
     gz_app::project::set_project_probe(&editor, project_probe);
     gz_game::install(&editor);
@@ -213,6 +222,7 @@ fn main() -> ExitCode {
                 iconsheet: cli.iconsheet,
                 kitsheet: cli.kitsheet,
                 ui_scale: cli.ui_scale,
+                lang: cli.lang,
             },
         );
         // the profile runs on to the first frame on the screen
@@ -383,5 +393,80 @@ mod tests {
         assert!(shell.has_start_page());
         // the scene's file rows are the Level tab's actions, with its Open Scene and Save As dialogs
         assert!(shell.has_action("level.open_scene") && shell.has_action("level.save_as"));
+    }
+
+    /// Every catalog file of the workspace (`crates/*/src/**/*ru.lua`), as its path.
+    fn catalog_files() -> Vec<(String, String)> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(rd) = std::fs::read_dir(dir) else { return };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with("ru.lua")) {
+                    out.push(p);
+                }
+            }
+        }
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut files = Vec::new();
+        for c in std::fs::read_dir(&crates).into_iter().flatten().flatten() {
+            walk(&c.path().join("src"), &mut files);
+        }
+        files.sort();
+        files
+            .into_iter()
+            .filter_map(|p| {
+                let text = std::fs::read_to_string(&p).ok()?;
+                let name = p.strip_prefix(&crates).unwrap_or(&p).display().to_string().replace('\\', "/");
+                Some((name, text.replace("\r\n", "\n")))
+            })
+            .collect()
+    }
+
+    /// The window's Russian is the catalogs the UI crates hand the shell: every catalog file is
+    /// handed over, they read as one, and no English is translated twice in one context - in
+    /// one file or in two, each named.
+    #[test]
+    fn the_catalogs_are_one_sound_catalog() {
+        let mut shell = ShellBuilder::new();
+        super::install_ui(&mut shell);
+        let mut sources: Vec<&'static str> = vec![gz_ui::i18n::KIT_RU, gz_app::lang::SHELL_RU];
+        sources.extend(shell.translations());
+        let files = catalog_files();
+        let mut wrong = Vec::new();
+        let name_of = |src: &str| {
+            let src = src.replace("\r\n", "\n");
+            files
+                .iter()
+                .find(|(_, text)| *text == src)
+                .map_or_else(|| "(no file)".to_owned(), |(n, _)| n.clone())
+        };
+        for (name, text) in &files {
+            if !sources.iter().any(|s| s.replace("\r\n", "\n") == *text) {
+                wrong.push(format!("{name}: no crate hands it to the shell (ShellBuilder::translation)"));
+            }
+        }
+        match gz_ui::i18n::Catalog::parse(&sources) {
+            Err(e) => wrong.push(format!("{}: {e}", name_of(sources.get(e.source).copied().unwrap_or("")))),
+            Ok(catalog) => {
+                let mut seen: std::collections::HashMap<(String, Option<String>), String> =
+                    std::collections::HashMap::new();
+                for e in catalog.entries() {
+                    let here =
+                        format!("{} entry {}", name_of(sources.get(e.source).copied().unwrap_or("")), e.at);
+                    if let Some(first) = seen.insert((e.en.clone(), e.ctx.clone()), here.clone()) {
+                        let ctx = e.ctx.as_deref().map(|c| format!(" (ctx {c})")).unwrap_or_default();
+                        wrong.push(format!("'{}'{ctx}: {first} and {here}", e.en));
+                    }
+                }
+                for p in gz_ui::i18n::problems(&catalog) {
+                    if !p.contains("the same English") {
+                        wrong.push(p);
+                    }
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{} problems:\n{}", wrong.len(), wrong.join("\n"));
     }
 }

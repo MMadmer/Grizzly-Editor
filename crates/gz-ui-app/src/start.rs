@@ -35,8 +35,8 @@ use gz_ui::state::{badge, banner, busy_line, toast};
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
 use gz_ui::{
-    Button, Dialog, DialogSize, Font, Icon, Kind, MenuItem, SearchField, Tone, icon_button_sized, icons,
-    menu_item, palette, segmented,
+    Button, Dialog, DialogSize, Font, Icon, Kind, MenuItem, SearchField, TipExt, Tone, Tx, icon_button_sized,
+    icons, menu_item, palette, segmented, tr,
 };
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
@@ -114,9 +114,10 @@ pub(crate) struct PageState {
     checked_key: String,
     check_gen: u64,
     pub new_state: NewState,
-    pub create_error: String,
+    /// What the last Create was refused with: the command's English.
+    pub create_error: Tx<'static>,
     creating: bool,
-    pub page_error: String,
+    pub page_error: Tx<'static>,
     pub menu: Option<Menu>,
     /// MCP: take any card menu down on the next frame.
     pub menu_close: bool,
@@ -317,8 +318,8 @@ fn draw(page: &Arc<StartPage>, ui: &mut Ui, cx: &mut DocCx<'_>) {
         ui.add_space(8.0);
         if !st.page_error.is_empty() {
             let error = st.page_error.clone();
-            if banner(ui, Tone::Error, &error, Some("Dismiss"), None).is_some() {
-                st.page_error.clear();
+            if banner(ui, Tone::Error, error, Some("Dismiss".into()), None).is_some() {
+                st.page_error = Tx::EMPTY;
             }
             ui.add_space(8.0);
         }
@@ -352,7 +353,7 @@ fn draw_version(ui: &Ui, page: Rect) {
         at,
         Align2::RIGHT_BOTTOM,
         p.text_muted,
-        &line,
+        Tx::raw(line),
         None,
         Clip::End,
     );
@@ -367,7 +368,7 @@ fn check_new_folder(st: &mut PageState, editor: &Arc<Editor>, page: &Arc<StartPa
     }
     st.checked_key = key;
     // the fields changed: the last failure spoke of something else
-    st.create_error.clear();
+    st.create_error = Tx::EMPTY;
     st.new_state = NewState::New;
     st.check_gen += 1;
     let parent = paths::trim_trailing(paths::to_backslash(&st.parent));
@@ -428,29 +429,31 @@ fn draw_form(ui: &mut Ui, st: &mut PageState, rect: Rect, actions: &mut Vec<Acti
 
     // the worst first, one line
     let name_ok = valid_name(&st.name);
-    let message = if !st.create_error.is_empty() {
+    let message: Option<(Tone, Tx<'static>)> = if !st.create_error.is_empty() {
         Some((Tone::Error, st.create_error.clone()))
     } else if !st.name.is_empty() && !name_ok {
-        Some((Tone::Error, "Use Latin letters, digits, _ and - only.".to_owned()))
+        Some((Tone::Error, "Use Latin letters, digits, _ and - only.".into()))
     } else if st.new_state == NewState::NotFullPath {
-        Some((Tone::Error, "The location must be a full path.".to_owned()))
+        Some((Tone::Error, "The location must be a full path.".into()))
     } else if st.new_state == NewState::ProjectThere {
-        Some((Tone::Info, "A project with this name is there: Create opens it.".to_owned()))
+        Some((Tone::Info, "A project with this name is there: Create opens it.".into()))
     } else if st.new_state == NewState::FolderThere {
-        Some((Tone::Warning, "The folder exists: the project is made inside it.".to_owned()))
+        Some((Tone::Warning, "The folder exists: the project is made inside it.".into()))
     } else {
         None
     };
     // one line: what is wrong, else where the folder is made (its start cut, its end kept)
     match message {
         Some((tone, m)) => {
-            text::label(ui, &m, Font::Small, p.tone(tone), Clip::End).on_hover_text(m.as_str());
+            text::label(ui, &m, Font::Small, p.tone(tone), Clip::End).tip(&m);
+        }
+        None if st.parent.is_empty() => {
+            text::label(ui, "Pick a location under More.", Font::Small, p.text_muted, Clip::Start);
         }
         None => {
-            let parent =
-                if st.parent.is_empty() { "Pick a location under More." } else { st.parent.as_str() };
-            text::label(ui, parent, Font::Small, p.text_muted, Clip::Start)
-                .on_hover_text(format!("The project's folder is made in {parent}"));
+            let parent = st.parent.as_str();
+            text::label(ui, Tx::raw(parent), Font::Small, p.text_muted, Clip::Start)
+                .tip(tr!("The project's folder is made in {folder}", folder = parent));
         }
     }
     let more = Section::new("start.new_project.more", "More")
@@ -506,7 +509,7 @@ fn draw_form(ui: &mut Ui, st: &mut PageState, rect: Rect, actions: &mut Vec<Acti
         .clicked()
     {
         st.form_open = false;
-        st.create_error.clear();
+        st.create_error = Tx::EMPTY;
     }
 }
 
@@ -546,7 +549,7 @@ fn draw_new_card(ui: &mut Ui, st: &mut PageState, rect: Rect) {
         Some("Makes a new project folder with its project file"),
         rect,
     );
-    if resp.on_hover_text("Makes a new project folder with its project file").clicked() {
+    if resp.tip("Makes a new project folder with its project file").clicked() {
         st.form_open = true;
         st.form_focus = true;
     }
@@ -556,7 +559,7 @@ fn draw_new_card(ui: &mut Ui, st: &mut PageState, rect: Rect) {
 fn draw_projects(ui: &mut Ui, st: &mut PageState, page: &Arc<StartPage>, actions: &mut Vec<Action>) {
     let ctx = ui.ctx().clone();
     let body = Font::Body.id();
-    let sort_w: f32 = SORT_LABELS.iter().map(|l| 20.0 + text::width(&ctx, &body, l)).sum();
+    let sort_w: f32 = SORT_LABELS.iter().map(|l| 20.0 + text::width(&ctx, &body, *l)).sum();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         if Button::new("Open Folder...").tip("Opens a folder that holds a project file (.grizzly) or mod.ltx, such as a fresh clone of a mod's repository.").show(ui).clicked() {
@@ -759,7 +762,7 @@ fn draw_card(
             pos2(prect.min.x, row_y + row_h * 0.5),
             Align2::LEFT_CENTER,
             p.text.gamma_multiply(veil),
-            &card.name,
+            Tx::raw(card.name.as_str()),
             Some(name_room),
             Clip::End,
         );
@@ -808,9 +811,9 @@ fn draw_card(
         actions.push(Action::Open(card.path.clone()));
     }
     if !here {
-        resp.on_hover_text(state_help(card.state));
+        resp.tip(state_help(card.state));
     } else if path_cut {
-        resp.on_hover_text(card.path.as_str());
+        resp.tip(Tx::raw(card.path.as_str()));
     }
 }
 
@@ -839,7 +842,7 @@ fn draw_card_path(
             pos2(at.x, y),
             Align2::LEFT_CENTER,
             secondary,
-            path,
+            Tx::raw(path),
             Some(room),
             Clip::Start,
         );
@@ -853,7 +856,7 @@ fn draw_card_path(
             pos2(at.x, y),
             Align2::LEFT_CENTER,
             secondary,
-            path,
+            Tx::raw(path),
             Some(room),
             Clip::Start,
         );
@@ -866,7 +869,7 @@ fn draw_card_path(
     } else {
         tail.to_owned()
     };
-    let width = |t: &str| text::width(ctx, &font, t);
+    let width = |t: &str| text::width(ctx, &font, Tx::raw(t));
     let folder_w = width(folder);
     let tries = [(head, tail.to_owned()), (lead, tail.to_owned()), (lead, past)];
     let pick = tries.iter().position(|(pre, post)| width(pre) + folder_w + width(post) <= room);
@@ -888,7 +891,7 @@ fn draw_card_path(
                 pos2(at.x, y),
                 Align2::LEFT_CENTER,
                 strong,
-                &card.parent,
+                Tx::raw(card.parent.as_str()),
                 Some(room),
                 Clip::End,
             );
@@ -944,7 +947,7 @@ fn draw_menu(ui: &mut Ui, st: &mut PageState, actions: &mut Vec<Action>) -> Opti
 }
 
 /// One line of the list of what goes.
-fn what_goes(ui: &mut Ui, line: &str) {
+fn what_goes<'a>(ui: &mut Ui, line: impl Into<Tx<'a>>) {
     ui.horizontal(|ui| {
         ui.add_space(8.0);
         let color = palette(ui.ctx()).text;
@@ -1004,37 +1007,37 @@ fn confirm_body(ui: &mut Ui, c: &Confirm) {
     let Some(d) = c.info.as_ref() else {
         text::label(
             ui,
-            &format!("Delete the project \"{}\" from disk?", c.name),
+            tr!("Delete the project \"{name}\" from disk?", name = c.name.as_str()),
             Font::Strong,
             p.text,
             Clip::Middle,
         );
-        text::label(ui, &c.path, Font::Body, p.text_secondary, Clip::Start);
+        text::label(ui, Tx::raw(c.path.as_str()), Font::Body, p.text_secondary, Clip::Start);
         ui.add_space(8.0);
         busy_line(ui, "Counting what the folder holds...");
         return;
     };
     let name = if d.name.is_empty() { c.name.as_str() } else { d.name.as_str() };
     let path = if d.path.is_empty() { c.path.as_str() } else { d.path.as_str() };
-    let held = format!(
-        "{} in {}, {}",
-        cards::count_text(d.files, "file", "files"),
-        cards::count_text(d.folders, "folder", "folders"),
-        cards::size_text(d.bytes)
+    let held = tr!(
+        "dlg.delete_project" => "{files} {files:file|files} in {folders} {folders:folder|folders}, {size}",
+        files = d.files,
+        folders = d.folders,
+        size = cards::size_text(d.bytes)
     );
     let question = !c.done && d.refused.is_none() && !d.missing;
     let partial = c.done && d.refused.is_none();
     let headline = if question {
-        format!("Delete the project \"{name}\" from disk?")
+        tr!("Delete the project \"{name}\" from disk?", name = name)
     } else if partial {
-        format!("The project \"{name}\" was not deleted completely.")
+        tr!("The project \"{name}\" was not deleted completely.", name = name)
     } else if d.missing {
-        format!("The folder of the project \"{name}\" does not exist any more.")
+        tr!("The folder of the project \"{name}\" does not exist any more.", name = name)
     } else {
-        format!("The project \"{name}\" cannot be deleted from here.")
+        tr!("The project \"{name}\" cannot be deleted from here.", name = name)
     };
-    text::label(ui, &headline, Font::Strong, p.text, Clip::Middle);
-    text::label(ui, path, Font::Body, p.text_secondary, Clip::Start);
+    text::label(ui, headline, Font::Strong, p.text, Clip::Middle);
+    text::label(ui, Tx::raw(path), Font::Body, p.text_secondary, Clip::Start);
     ui.add_space(8.0);
     if question {
         text::secondary(ui, "What goes:");
@@ -1045,32 +1048,33 @@ fn confirm_body(ui: &mut Ui, c: &Confirm) {
         if d.releases {
             what_goes(
                 ui,
-                &format!(
-                    "releases\\ - the files of published releases: {}, {}",
-                    cards::count_text(d.release_files, "file", "files"),
-                    cards::size_text(d.release_bytes)
+                tr!(
+                    "releases\\ - the files of published releases: {n} {n:file|files}, {size}",
+                    n = d.release_files,
+                    size = cards::size_text(d.release_bytes)
                 ),
             );
         }
         if d.links > 0 {
             what_goes(
                 ui,
-                &format!(
-                    "{} - removed as links; what they point at stays",
-                    cards::count_text(d.links, "link", "links")
-                ),
+                tr!("{n} {n:link|links} - removed as links; what they point at stays", n = d.links),
             );
         }
         ui.add_space(8.0);
         text::status(ui, Tone::Warning, "Deleted for good - this cannot be undone.");
     } else if partial {
-        text::secondary(ui, &format!("Deleted: {held}. What stayed:"));
+        text::secondary(ui, tr!("Deleted: {held}. What stayed:", held = held));
         for f in d.failed.iter().take(10) {
-            what_goes(ui, &format!("{} - {}", f.path, f.reason));
+            // the reason is the system's or the deletion's English
+            what_goes(
+                ui,
+                tr!("dlg.delete_project" => "{path} - {reason}", path = f.path.as_str(), reason = Tx::ui(f.reason.clone())),
+            );
         }
         let listed = d.failed.len().min(10) as u32;
         if d.failed_total > listed {
-            what_goes(ui, &format!("and {} more", d.failed_total - listed));
+            what_goes(ui, tr!("and {n} more", n = d.failed_total - listed));
         }
         ui.add_space(8.0);
         text::status(
@@ -1085,9 +1089,10 @@ fn confirm_body(ui: &mut Ui, c: &Confirm) {
             "Nothing was deleted. Remove from List in its menu takes it off the list.",
         );
     } else {
-        text::status(ui, Tone::Error, d.refused.as_deref().unwrap_or(""));
+        // the check's own English
+        text::status(ui, Tone::Error, Tx::ui(d.refused.clone().unwrap_or_default()));
         for n in d.nested.iter().skip(1) {
-            what_goes(ui, n);
+            what_goes(ui, Tx::raw(n.as_str()));
         }
         ui.add_space(8.0);
         text::status(ui, Tone::Muted, "Nothing was deleted.");
@@ -1120,7 +1125,7 @@ pub(crate) fn open_confirm(
     });
 }
 
-fn set_page_error(page: &StartPage, text_: String) {
+fn set_page_error(page: &StartPage, text_: Tx<'static>) {
     page.state.lock().page_error = text_;
 }
 
@@ -1131,7 +1136,7 @@ fn run(action: Action, st: &mut PageState, editor: &Arc<Editor>, page: &Arc<Star
             call_then(editor, "project.open", args([("path", s(&path))]), move |reply, _| {
                 if !ok(reply) {
                     let mut st = pg.state.lock();
-                    st.page_error = format!("The project cannot be opened: {}", error_text(reply));
+                    st.page_error = tr!("The project cannot be opened: {error}", error = error_text(reply));
                     refresh(&mut st, &ed, &pg);
                 }
             })
@@ -1177,7 +1182,7 @@ fn run(action: Action, st: &mut PageState, editor: &Arc<Editor>, page: &Arc<Star
         Action::Reveal(path) => {
             call_then(editor, "project.reveal", args([("path", s(&path))]), move |reply, _| {
                 if !ok(reply) {
-                    set_page_error(&pg, format!("Show in Explorer: {}", error_text(reply)));
+                    set_page_error(&pg, tr!("Show in Explorer: {error}", error = error_text(reply)));
                 }
             })
         }
@@ -1186,7 +1191,7 @@ fn run(action: Action, st: &mut PageState, editor: &Arc<Editor>, page: &Arc<Star
             call_then(editor, "project.forget", args([("path", s(&path))]), move |reply, ctx| {
                 let mut st = pg.state.lock();
                 if ok(reply) {
-                    toast(ctx, Tone::Info, &format!("{name} was taken off the list."));
+                    toast(ctx, Tone::Info, tr!("{name} was taken off the list.", name = name.as_str()));
                 } else {
                     st.page_error = error_text(reply);
                 }
@@ -1200,15 +1205,19 @@ fn run(action: Action, st: &mut PageState, editor: &Arc<Editor>, page: &Arc<Star
                     st.confirm = None;
                     let info = cards::info_from_reply(reply);
                     let line = if info.missing {
-                        format!("Project \"{name}\" removed from the list: its folder was gone already.")
+                        tr!(
+                            "Project \"{name}\" removed from the list: its folder was gone already.",
+                            name = name.as_str()
+                        )
                     } else {
-                        format!(
-                            "Project \"{name}\" deleted: {}, {}.",
-                            cards::count_text(info.files, "file", "files"),
-                            cards::count_text(info.folders, "folder", "folders")
+                        tr!(
+                            "Project \"{name}\" deleted: {files} {files:file|files}, {folders} {folders:folder|folders}.",
+                            name = name.as_str(),
+                            files = info.files,
+                            folders = info.folders
                         )
                     };
-                    toast(ctx, Tone::Success, &line);
+                    toast(ctx, Tone::Success, line);
                 } else if let Some(c) = st.confirm.as_mut().filter(|c| c.path == path) {
                     c.deleting = false;
                     c.done = true;
@@ -1246,13 +1255,14 @@ fn open_folder(editor: &Arc<Editor>, page: &Arc<StartPage>, folder: String) {
             })
             .await;
         if !is_project {
-            let text_ = format!("Not a project - no project file and no mod.ltx: {folder}");
+            let text_ =
+                tr!("Not a project - no project file and no mod.ltx: {folder}", folder = folder.as_str());
             post_ui(&ed, move |_| set_page_error(&pg, text_));
             return;
         }
         let reply = ed.call("project.open", args([("path", s(&folder))]), ed.ui_origin()).await;
         if !ok(&reply) {
-            let text_ = format!("The project cannot be opened: {}", error_text(&reply));
+            let text_ = tr!("The project cannot be opened: {error}", error = error_text(&reply));
             post_ui(&ed, move |_| set_page_error(&pg, text_));
         }
     });

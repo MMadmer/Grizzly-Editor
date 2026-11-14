@@ -14,8 +14,14 @@
 //!
 //! The root holds the marker, `fsgame.ltx`, the copy of the loose `gamedata` with the level and
 //! `editor.spawn` staged into it, an `appdata` of its own (the player's settings copied the first
-//! time, no save, no module) and an empty `modules` - no program and no link. The game's own QA
-//! roots are built the same way.
+//! time, no save, no module of the player's) and `modules` - empty, or holding the one module a
+//! Play on a level of the game installed (the module build's own pass writes it, the marker names
+//! it first) - no program and no link. The game's own QA roots are built the same way.
+//!
+//! Playing a module on a level the game has, Play also writes its own `configs\axr_options.ltx`
+//! into the root's gamedata ([`write_game_options`]: the player's, the new game's mode keys
+//! replaced by the module's mode) and, when the scene has no Player Start, one into its copy of
+//! the module ([`place_start`]) - never into the project or the game.
 //!
 //! What may be a root is [`crate::play_root::check_root`]'s: it is asked before anything else
 //! here, and a root is made only in a missing or empty folder, which then carries the marker
@@ -32,7 +38,8 @@
 //!   the marker listed the folder and no project file lies inside it, walked again right before -;
 //!   the staged level in it, linked from the project's level folder the same way;
 //! - `appdata\` (logs, saves, screenshots, the player's `user.ltx`, the caches and the game's
-//!   content records, seeded once and never cleared), `modules\` (empty).
+//!   content records, seeded once and never cleared), `modules\` (the module a Play installs,
+//!   by its marker's `module = ` line; one the marker lists and this Play does not install goes).
 //!
 //! A root in which a copied engine ran stays Play's: the programs its marker lists
 //! (`program = `), its `database` junction (unlinked, never followed) and its `.dead-air-x64`
@@ -348,6 +355,8 @@ pub struct PlayInput<'a> {
     pub archived: &'a str,
     /// The level's name and the folder it was built into.
     pub level: Option<(&'a str, &'a Path)>,
+    /// The module this Play installs into the root's `modules\` (a level the game has).
+    pub module: Option<&'a str>,
 }
 
 fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
@@ -421,7 +430,7 @@ impl<'a> Claims<'a> {
     fn open(root: &'a Path, state: &RootState) -> Result<Self, String> {
         let at = root.join(MARKER);
         let (ours, marker) = match state {
-            RootState::Marked { programs, entries } => {
+            RootState::Marked { programs, entries, .. } => {
                 let marker = fs::OpenOptions::new()
                     .append(true)
                     .open(&at)
@@ -470,6 +479,16 @@ impl<'a> Claims<'a> {
         self.ours.push(name.to_ascii_lowercase());
         Ok(())
     }
+
+    /// The marker names the module before the build writes it into `modules\`.
+    fn module(&mut self, id: &str) -> Result<(), String> {
+        if let Some(m) = self.marker.as_mut() {
+            m.write_all(play_root::module_line(id).as_bytes())
+                .and_then(|()| m.flush())
+                .map_err(|e| format!("{MARKER} could not be written in {}: {e}", self.root.display()))?;
+        }
+        Ok(())
+    }
 }
 
 fn appeared(root: &Path, name: &str) -> String {
@@ -505,10 +524,17 @@ fn prepare_checked(
     }
     let limit = path_limit(&engine.ability, windows_long_paths);
     check_path_lengths(root, &planned_longest(input, state), limit)?;
-    let (old_programs, old_entries) = match state {
-        RootState::Marked { programs, entries } => (programs.clone(), entries.clone()),
-        RootState::Missing | RootState::Empty => (Vec::new(), Vec::new()),
+    let (old_programs, old_entries, old_modules) = match state {
+        RootState::Marked { programs, entries, modules } => {
+            (programs.clone(), entries.clone(), modules.clone())
+        }
+        RootState::Missing | RootState::Empty => (Vec::new(), Vec::new(), Vec::new()),
     };
+    if let Some(id) = input.module
+        && !play_root::plain_name(id)
+    {
+        return Err(format!("{id} is not a module id"));
+    }
     let listed = |name: &str| old_entries.iter().any(|e| e.eq_ignore_ascii_case(name));
 
     // from here on the disk changes: the marker first, then each entry claimed before it is written
@@ -572,9 +598,25 @@ fn prepare_checked(
             let _ = fs::copy(&src, &dst);
         }
     }
-    // no module of the player's: the game root has a modules folder of its own, empty
+    // no module of the player's: the game root has a modules folder of its own, which holds the
+    // module this Play installs and nothing else
     claims.claim("modules")?;
-    let _ = fs::create_dir_all(root.join("modules"));
+    let modules = root.join("modules");
+    let _ = fs::create_dir_all(&modules);
+    if listed("modules") {
+        for m in &old_modules {
+            if input.module.is_some_and(|id| id.eq_ignore_ascii_case(m)) {
+                continue;
+            }
+            let stage = modules.join(".new");
+            for p in [modules.join(m), stage.join(m), stage.join(format!("{m}.old"))] {
+                remove_tree(&p);
+            }
+        }
+    }
+    if let Some(id) = input.module {
+        claims.module(id)?;
+    }
     // the engine keeps its content records in the root's app data itself
     if listed(OLD_CONTENT_DIR) {
         remove_tree(&root.join(OLD_CONTENT_DIR));
@@ -582,7 +624,8 @@ fn prepare_checked(
     // the marker as the root is now: the entries written
     drop(claims.marker.take());
     let entries: Vec<String> = ENTRIES.iter().map(|e| (*e).to_owned()).collect();
-    fs::write(root.join(MARKER), play_root::marker_text(&entries))
+    let installed: Vec<String> = input.module.map(|id| vec![id.to_owned()]).unwrap_or_default();
+    fs::write(root.join(MARKER), play_root::marker_text(&entries, &installed))
         .map_err(|e| format!("{MARKER} could not be written in {}: {e}", root.display()))?;
     Ok(PlayRoot {
         root: root.to_path_buf(),
@@ -697,6 +740,191 @@ fn check_path_lengths(root: &Path, longest: &str, limit: usize) -> Result<(), St
     Ok(())
 }
 
+/// The new game's options in a Play root: the game's `configs\axr_options.ltx` (the player's
+/// settings) with `[character_creation]`'s mode keys replaced by `new_game_<mode>_mode = true` for
+/// `mode` (none: the plain game), as the new-game screen writes them - the game takes a new
+/// game's modes from there (the game's `SyncModesFromNewGameOptions`). Written as a file of
+/// the root's own: the link to the game's file goes first, the game's file is never written.
+/// Only into a root Play made. Blocking.
+pub fn write_game_options(root: &Path, game: &Path, mode: Option<&str>) -> Result<(), String> {
+    if !play_root::read_marker(root).is_some_and(|(_, entries)| entries.iter().any(|e| e == "gamedata")) {
+        return Err(format!("{} is not a Play root: its {MARKER} does not list gamedata.", root.display()));
+    }
+    let rel = Path::new("gamedata").join("configs").join("axr_options.ltx");
+    // the game's text is cp1251: a player's Cyrillic values come back as they were
+    let theirs = fs::read(game.join(&rel)).unwrap_or_default();
+    let text = new_game_options(&gz_base::text::cp1251_to_utf8(&theirs), mode);
+    let (bytes, _) = gz_base::text::utf8_to_cp1251(&text);
+    let at = root.join(&rel);
+    if let Some(dir) = at.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("{} could not be made: {e}", dir.display()))?;
+    }
+    // the root's file is a hard link to the game's: it goes without its read-only mark cleared,
+    // which the game's own file shares
+    if fs::symlink_metadata(&at).is_ok() {
+        gz_win::remove_file_keeping_marks(&at)
+            .map_err(|e| format!("{} could not be replaced: {e}", at.display()))?;
+    }
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&at)
+        .map_err(|e| format!("{} could not be written: {e}", at.display()))?;
+    f.write_all(&bytes).map_err(|e| format!("{} could not be written: {e}", at.display()))
+}
+
+/// `text` (an `axr_options.ltx`) with the new game's modes `mode` alone: every
+/// `new_game_<id>_mode` key of `[character_creation]` dropped, the mode's set to `true`; the
+/// section made when the file has none. Every other line stays.
+#[must_use]
+pub fn new_game_options(text: &str, mode: Option<&str>) -> String {
+    let mode = mode.map(str::trim).filter(|m| !m.is_empty() && *m != "*");
+    let key = mode.map(|m| format!("new_game_{}_mode = true", m.to_ascii_lowercase()));
+    let mode_key = |line: &str| {
+        let k = line.split(['=', ';']).next().unwrap_or("").trim().to_ascii_lowercase();
+        k.starts_with("new_game_") && k.ends_with("_mode") && k.len() > "new_game__mode".len()
+    };
+    let mut out = String::with_capacity(text.len() + 64);
+    let (mut inside, mut seen) = (false, false);
+    for line in text.split_inclusive('\n') {
+        let t = line.trim();
+        if t.starts_with('[') {
+            if inside && let Some(k) = &key {
+                out.push_str(k);
+                out.push_str("\r\n");
+            }
+            inside = t
+                .trim_start_matches('[')
+                .split(']')
+                .next()
+                .is_some_and(|n| n.trim().eq_ignore_ascii_case("character_creation"));
+            seen |= inside;
+        } else if inside && mode_key(t) {
+            continue;
+        }
+        out.push_str(line);
+    }
+    if inside && let Some(k) = &key {
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push_str("\r\n");
+        }
+        out.push_str(k);
+        out.push_str("\r\n");
+    }
+    if !seen && let Some(k) = &key {
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push_str("\r\n");
+        }
+        out.push_str("[character_creation]\r\n");
+        out.push_str(k);
+        out.push_str("\r\n");
+    }
+    out
+}
+
+/// Where the Player Start Play gave the actor stands.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlayStart {
+    pub level: String,
+    pub position: [f32; 3],
+    pub direction: [f32; 3],
+}
+
+/// The op Play's Player Start is written as.
+pub const PLAY_START_OP: &str = "obj:grizzly_play_start";
+
+/// The sections of an `.xspawn` text that are not a Player Start (`op = start`): what stays of
+/// a layer when Play puts its own start in. Answers the text and how many starts went.
+#[must_use]
+pub fn without_starts(text: &str) -> (String, usize) {
+    let mut out = String::with_capacity(text.len());
+    let mut section = String::new();
+    let mut dropped = 0usize;
+    let is_start = |s: &str| {
+        s.lines().any(|l| {
+            let mut kv = l.splitn(2, '=');
+            let (k, v) = (kv.next().unwrap_or("").trim(), kv.next().unwrap_or("").trim());
+            k.eq_ignore_ascii_case("op")
+                && v.split(';').next().unwrap_or("").trim().eq_ignore_ascii_case("start")
+        })
+    };
+    let mut flush = |section: &mut String, out: &mut String| {
+        if section.trim_start().starts_with('[') && is_start(section) {
+            dropped += 1;
+        } else {
+            out.push_str(section);
+        }
+        section.clear();
+    };
+    for line in text.split_inclusive('\n') {
+        if line.trim_start().starts_with('[') {
+            flush(&mut section, &mut out);
+        }
+        section.push_str(line);
+    }
+    flush(&mut section, &mut out);
+    (out, dropped)
+}
+
+/// Play's Player Start in its copy of the module (`<root>\modules\<id>`): every start the
+/// module's layers hold there goes, and `start` is added to the level's layer
+/// (`spawn\<level>.xspawn`, made when the module has none). Each file is written anew - a file
+/// the module build linked to an earlier build is never written through. Only into a root Play
+/// made, and only into a module its marker names. Answers how many starts of the module went.
+/// Blocking.
+pub fn place_start(root: &Path, id: &str, start: &PlayStart) -> Result<usize, String> {
+    let named = play_root::read_marker_all(root)
+        .is_some_and(|(_, _, modules)| modules.iter().any(|m| m.eq_ignore_ascii_case(id)));
+    if !named || !play_root::plain_name(id) || !play_root::plain_name(&start.level) {
+        return Err(format!("{} holds no module {id} that Play installed.", root.display()));
+    }
+    let spawn = root.join("modules").join(id).join("spawn");
+    fs::create_dir_all(&spawn).map_err(|e| format!("{} could not be made: {e}", spawn.display()))?;
+    let rewrite = |path: &Path, text: &str| -> Result<(), String> {
+        clear_readonly(path);
+        if fs::symlink_metadata(path).is_ok() {
+            fs::remove_file(path).map_err(|e| format!("{} could not be replaced: {e}", path.display()))?;
+        }
+        fs::write(path, text.as_bytes()).map_err(|e| format!("{} could not be written: {e}", path.display()))
+    };
+    let mut dropped = 0usize;
+    let target = spawn.join(format!("{}.xspawn", start.level));
+    let mut target_text = String::new();
+    let listing = fs::read_dir(&spawn).map_err(|e| format!("{} could not be read: {e}", spawn.display()))?;
+    for e in listing.flatten() {
+        let path = e.path();
+        let is_layer = e.file_type().is_ok_and(|t| t.is_file())
+            && path.extension().is_some_and(|x| x.eq_ignore_ascii_case("xspawn"));
+        if !is_layer {
+            continue;
+        }
+        let text = String::from_utf8_lossy(
+            &fs::read(&path).map_err(|err| format!("{} could not be read: {err}", path.display()))?,
+        )
+        .into_owned();
+        let (kept, n) = without_starts(&text);
+        dropped += n;
+        if path.file_name().is_some_and(|f| f.eq_ignore_ascii_case(target.file_name().unwrap_or_default())) {
+            target_text = kept;
+        } else if n > 0 {
+            rewrite(&path, &kept)?;
+        }
+    }
+    let [x, y, z] = start.position;
+    let [a, b, c] = start.direction;
+    if !target_text.is_empty() && !target_text.ends_with('\n') {
+        target_text.push_str("\r\n");
+    }
+    target_text.push_str(&format!(
+        "[{PLAY_START_OP}]\r\nop        = start\r\nlevel     = {}\r\nposition  = {}\r\ndirection = {}\r\n\r\n",
+        start.level,
+        gz_export_level::cfmt::f3(glam::Vec3::new(x, y, z)),
+        gz_export_level::cfmt::f3(glam::Vec3::new(a, b, c)),
+    ));
+    rewrite(&target, &target_text)?;
+    Ok(dropped)
+}
+
 /// The built level (`level_dir`, every file of it, `level.ai` among them) mirrored into the root's
 /// `gamedata\levels\<level>`, and the spawn file `spawn` as `gamedata\spawns\editor.spawn` -
 /// hard links where the volume allows. Only into a root Play made (its marker). Blocking.
@@ -764,7 +992,7 @@ mod tests {
     }
 
     fn input<'a>(game: &'a Path, root: &'a Path, cx: &'a DeleteContext) -> PlayInput<'a> {
-        PlayInput { game, root, context: cx, archived: "", level: None }
+        PlayInput { game, root, context: cx, archived: "", level: None, module: None }
     }
 
     fn listed(dir: &Path) -> Vec<String> {
@@ -1030,8 +1258,8 @@ mod tests {
         let why = prepare_with(&input(&game, &root, &cx), &PROGRAMS).unwrap_err();
         assert!(why.contains("it holds a project") && why.contains("my_mod"), "{why}");
         // the project put there after the check: prepare walks again before it clears
-        let (programs, entries) = play_root::read_marker(&root).unwrap();
-        let stale = RootState::Marked { programs, entries };
+        let (programs, entries, modules) = play_root::read_marker_all(&root).unwrap();
+        let stale = RootState::Marked { programs, entries, modules };
         let why = prepare_checked(&input(&game, &root, &cx), &PROGRAMS, &stale).unwrap_err();
         assert!(why.contains("it holds a project"), "{why}");
         assert!(nested.join("mod.ltx").is_file());
@@ -1096,6 +1324,82 @@ mod tests {
         let why = check_path_lengths(&PathBuf::from(format!("{}r\\", deepest.display())), "fsgame.ltx", 519)
             .unwrap_err();
         assert!(why.contains("259 characters long") && why.contains("a folder of 258 at most"), "{why}");
+    }
+
+    #[test]
+    fn a_new_games_mode_is_the_modules_and_nothing_else_of_the_options_changes() {
+        let theirs = "[options]\r\nvolume = 1\r\n[character_creation]\r\nnew_game_faction = stalker\r\nnew_game_metro_mode = true\r\nnew_game_good_loot = true\r\n[other]\r\nx = 1\r\n";
+        let out = new_game_options(theirs, Some("my_story"));
+        assert_eq!(
+            out,
+            "[options]\r\nvolume = 1\r\n[character_creation]\r\nnew_game_faction = stalker\r\nnew_game_good_loot = true\r\nnew_game_my_story_mode = true\r\n[other]\r\nx = 1\r\n"
+        );
+        // the plain game: no mode key at all, the rest as it was
+        let plain = new_game_options(theirs, None);
+        assert!(!plain.contains("_mode") && plain.contains("new_game_faction = stalker"), "{plain}");
+        assert_eq!(new_game_options(theirs, Some("*")), plain);
+        // no file, or no section: the section is made
+        assert_eq!(new_game_options("", Some("m")), "[character_creation]\r\nnew_game_m_mode = true\r\n");
+        assert_eq!(
+            new_game_options("[a]\r\nb = 1", Some("m")),
+            "[a]\r\nb = 1\r\n[character_creation]\r\nnew_game_m_mode = true\r\n"
+        );
+        assert_eq!(new_game_options("[a]\r\n", None), "[a]\r\n");
+    }
+
+    #[test]
+    fn a_play_root_installs_one_module_and_takes_back_the_one_it_installed_before() {
+        let base = tempfile::tempdir().unwrap();
+        let game = game(base.path());
+        let options = game.join("gamedata").join("configs").join("axr_options.ltx");
+        fs::write(&options, b"[character_creation]\r\nnew_game_metro_mode = true\r\n").unwrap();
+        let before = listed(&game);
+        let cx = DeleteContext::default();
+        let root = base.path().join("play");
+        let with = |module| PlayInput { module, ..input(&game, &root, &cx) };
+        prepare_with(&with(Some("story")), &PROGRAMS).unwrap();
+        let marker = fs::read_to_string(root.join(MARKER)).unwrap();
+        assert!(marker.contains("module = story") && marker.contains("entry = modules"), "{marker}");
+        // the module build writes it; Play's start goes into Play's copy, the module's own start out
+        let spawn = root.join("modules").join("story").join("spawn");
+        fs::create_dir_all(&spawn).unwrap();
+        fs::write(root.join("modules").join("story").join("mod.ltx"), b"[module]\r\nid = story\r\n").unwrap();
+        fs::write(
+            spawn.join("l02_garbage.xspawn"),
+            "[obj:box]\r\nop        = add\r\nsection   = physic_object\r\nlevel     = l02_garbage\r\n\r\n[obj:start_1]\r\nop        = start\r\nlevel     = l02_garbage\r\nposition  = 1,2,3\r\n\r\n",
+        )
+        .unwrap();
+        let start =
+            PlayStart { level: "l01_escape".into(), position: [1.5, 0.0, -2.0], direction: [0.0, 1.0, 0.0] };
+        assert_eq!(place_start(&root, "story", &start).unwrap(), 1, "the module's own start goes");
+        let garbage = fs::read_to_string(spawn.join("l02_garbage.xspawn")).unwrap();
+        assert!(garbage.contains("[obj:box]") && !garbage.contains("op        = start"), "{garbage}");
+        let escape = fs::read_to_string(spawn.join("l01_escape.xspawn")).unwrap();
+        assert!(
+            escape.starts_with(
+                "[obj:grizzly_play_start]\r\nop        = start\r\nlevel     = l01_escape\r\nposition  = 1.500000,0.000000,-2.000000"
+            ),
+            "{escape}"
+        );
+        assert!(place_start(&root, "someone_else", &start).is_err(), "only into the module Play installed");
+        // the new game's options: a file of the root's own, the game's untouched
+        write_game_options(&root, &game, Some("story")).unwrap();
+        let ours = fs::read_to_string(root.join("gamedata").join("configs").join("axr_options.ltx")).unwrap();
+        assert_eq!(ours, "[character_creation]\r\nnew_game_story_mode = true\r\n");
+        assert_eq!(fs::read(&options).unwrap(), b"[character_creation]\r\nnew_game_metro_mode = true\r\n");
+        // a Play on a new level installs no module: the one Play installed goes, nothing else
+        fs::create_dir_all(root.join("modules").join("someone")).unwrap();
+        prepare_with(&with(None), &PROGRAMS).unwrap();
+        assert!(!root.join("modules").join("story").exists());
+        assert!(root.join("modules").join("someone").is_dir(), "a folder Play did not install stays");
+        assert!(!fs::read_to_string(root.join(MARKER)).unwrap().contains("module = "));
+        // the mirror took the game's options back; the game is as it was
+        assert_eq!(
+            fs::read(root.join("gamedata").join("configs").join("axr_options.ltx")).unwrap(),
+            b"[character_creation]\r\nnew_game_metro_mode = true\r\n"
+        );
+        assert_eq!(listed(&game), before);
+        assert_eq!(fs::read(&options).unwrap(), b"[character_creation]\r\nnew_game_metro_mode = true\r\n");
     }
 
     #[test]

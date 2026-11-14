@@ -176,6 +176,15 @@ impl Placeable {
         }
     }
 
+    /// [`Placeable::title`] as the window shows it: a reference is data, a kind the editor's word.
+    #[must_use]
+    pub fn title_tx(&self) -> gz_ui::Tx<'static> {
+        match &self.reference {
+            Some(_) => gz_ui::Tx::raw(self.title()),
+            None => gz_ui::Tx::from(self.kind.class().label()),
+        }
+    }
+
     /// The arguments of `scene.place` for it at `position`, turned by `rotation` degrees and
     /// scaled by `scale`.
     #[must_use]

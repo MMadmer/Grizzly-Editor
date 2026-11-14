@@ -15,10 +15,10 @@ use gz_editor::Editor;
 use gz_fmt_level::{ColorIndex, DetailColorIndices, SceneDetails};
 use gz_scene::{SceneCmd, SceneService};
 use gz_ui::text::Clip;
-use gz_ui::{Button, ConfirmSpec, Dialog, DialogSize, Font, Kind, Tone, grid, list, palette};
+use gz_ui::{Button, ConfirmSpec, Dialog, DialogSize, Font, Kind, Tone, Tx, grid, list, palette, tr};
 
 use crate::choose::{Chooser, Purpose};
-use crate::local::{LocalButton, confirm, local_button_flow, plural};
+use crate::local::{LocalButton, confirm, local_button_flow};
 
 /// The dialog's name.
 pub const DIALOG: &str = "dlg.colour_indices";
@@ -78,14 +78,10 @@ impl DetailObjects {
         let model = current(&svc);
         let mut open = true;
         let mut close = false;
-        let status = format!(
-            "{} \u{b7} {}",
-            plural(model.indices.objects.len(), "mesh"),
-            if model.indices.colors.len() == 1 {
-                "1 colour".to_owned()
-            } else {
-                format!("{} colours", model.indices.colors.len())
-            }
+        let status = tr!(
+            "{n} {n:mesh|meshes} \u{b7} {c} {c:colour|colours}",
+            n = model.indices.objects.len(),
+            c = model.indices.colors.len()
         );
         let mut next = model.clone();
         let mut changed = false;
@@ -94,7 +90,7 @@ impl DetailObjects {
             &mut open,
             |ui| changed |= self.colors(ui, editor, &svc, &mut next, chooser),
             |f| {
-                f.status(&status, Tone::Muted);
+                f.status(status, Tone::Muted);
                 if f.button("Close", Kind::Primary, true, true, "") {
                     close = true;
                 }
@@ -153,7 +149,7 @@ impl DetailObjects {
                 id: "clear_colour_indices".into(),
                 title: "Clear Colours".into(),
                 headline: "Take every colour out?".into(),
-                items: vec![if n == 1 { "1 colour".to_owned() } else { format!("{n} colours") }],
+                items: vec![tr!("{n} {n:colour|colours}", n = n)],
                 total: 1,
                 consequence: "The meshes stay. Edit > Undo brings the colours back.".into(),
                 action: "Clear All".into(),
@@ -183,7 +179,7 @@ impl DetailObjects {
                 gz_ui::card::card(
                     ui,
                     &format!("color_{i}"),
-                    &format!("Colour {}", i + 1),
+                    tr!("Colour {n}", n = i + 1),
                     Tone::Muted,
                     false,
                     |ui| {
@@ -227,7 +223,7 @@ impl DetailObjects {
                         list::list(ui, &format!("color_list_{i}"), Vec2::new(0.0, h), |l| {
                             for (r, name) in names.iter().enumerate() {
                                 if l.row(&format!("c{i}_{name}"), picked == Some(r), |ui| {
-                                    gz_ui::text::label(ui, name, Font::Body, p.text, Clip::Start);
+                                    gz_ui::text::label(ui, Tx::raw(name), Font::Body, p.text, Clip::Start);
                                 })
                                 .clicked()
                                     && let Some(slot) = self.color_rows.get_mut(i)

@@ -171,8 +171,8 @@ grep '^cached|' Intermediate/test-logs/plan.txt | awk -F'|' '{ printf "cached %-
 # (TEMP / TMP), watched through its change notifications while they run, and so is the
 # repository's own tree (not Intermediate\cargo, where cargo writes its programs - it does not
 # build while they run; only what is made meanwhile counts there, the tree has scripts and builds
-# of its own); a file created in either with a program's name or an MZ header fails the run, even
-# one deleted at once
+# of its own; nor .claude, whose worktrees are other checkouts building beside this one); a file
+# created in either with a program's name or an MZ header fails the run, even one deleted at once
 watch_dir=$(mktemp -d /tmp/gztest_XXXXXX)
 watch_win=$(cygpath -w "$watch_dir")
 watch_failed=0
@@ -183,7 +183,7 @@ if [ "$ran" -gt 0 ]; then
     disown
     python -I tools/rust/watch_programs.py "$(cygpath -w "$root")" Intermediate/test-logs/watch_repo.txt \
         --ready Intermediate/test-logs/watch_repo.ready --marks Intermediate/test-logs \
-        --exclude Intermediate/cargo --since-start &
+        --exclude Intermediate/cargo --exclude .claude --since-start &
     disown
     t_arm=$(now)
     for ready in watch.ready watch_repo.ready; do

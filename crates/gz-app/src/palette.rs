@@ -27,6 +27,11 @@ pub struct PaletteRow {
     pub why: String,
     /// Run from the palette lately: its place among the recent ones, 0 the newest.
     pub recent: Option<usize>,
+    /// The name, the category and the reason as the window shows them, in its language; the
+    /// fields above are English, what MCP answers.
+    pub shown: String,
+    pub shown_category: String,
+    pub shown_why: String,
 }
 
 impl PaletteRow {
@@ -71,10 +76,15 @@ pub fn rank(rows: Vec<PaletteRow>, query: &str) -> Vec<PaletteRow> {
         });
         return rows;
     }
+    // the keys, and the English name in another language: either is typed to find a row
+    let keys: Vec<String> = rows
+        .iter()
+        .map(|r| if r.shown == r.label { r.shortcut.clone() } else { format!("{} {}", r.label, r.shortcut) })
+        .collect();
     let order = gz_ui::rank::rank(rows.len(), query, |i| {
         let r = &rows[i];
-        let second = if r.detail.is_empty() { r.category.as_str() } else { r.detail.as_str() };
-        (r.label.as_str(), second, r.shortcut.as_str())
+        let second = if r.detail.is_empty() { r.shown_category.as_str() } else { r.detail.as_str() };
+        (r.shown.as_str(), second, keys[i].as_str())
     });
     let mut slots: Vec<Option<PaletteRow>> = rows.into_iter().map(Some).collect();
     order.into_iter().filter_map(|i| slots.get_mut(i).and_then(Option::take)).collect()
@@ -97,6 +107,9 @@ mod tests {
             enabled: true,
             why: String::new(),
             recent: None,
+            shown: label.into(),
+            shown_category: category.into(),
+            shown_why: String::new(),
         }
     }
 

@@ -14,7 +14,7 @@ use egui_wgpu::RenderState;
 use gz_editor::{Editor, JobId, SmolStr};
 use gz_ui::dialog::{self, Answer, Asker};
 use gz_ui::font::FontFiles;
-use gz_ui::{Icon, Tone, audit, layout, state};
+use gz_ui::{Icon, Tone, Tx, audit, layout, state};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::actions::{Action, ActionCx, ActionTable};
@@ -57,6 +57,8 @@ pub struct ShellOptions {
     /// `-uiscale <f>` (0.5..4): the UI at this scale, whatever the monitor says
     /// . Taken again when the window meets another monitor's scale.
     pub ui_scale: Option<f32>,
+    /// `-lang en|ru`: the window in this language until Preferences or `app.prefs` picks one.
+    pub lang: Option<gz_ui::Lang>,
 }
 
 /// How a tab is closed when asked over MCP.
@@ -92,7 +94,9 @@ impl Tab {
         self.doc.is_some()
     }
 
-    pub fn label(&self) -> String {
+    /// What the tab says: the document's label; a placeholder's, as the session kept it in
+    /// English (the editor's own word for a tool tab, a file's name for a file tab).
+    pub fn label(&self) -> Tx<'static> {
         if let Some(d) = &self.doc {
             let l = d.label();
             if !l.is_empty() {
@@ -100,10 +104,19 @@ impl Tab {
             }
         }
         if !self.label.is_empty() {
-            return self.label.clone();
+            return if self.path().is_empty() {
+                Tx::ui(self.label.clone())
+            } else {
+                Tx::raw(self.label.clone())
+            };
         }
         let p = self.path();
-        if p.is_empty() { self.id.to_string() } else { tabs::label_of_path(&p) }
+        Tx::raw(if p.is_empty() { self.id.to_string() } else { tabs::label_of_path(&p) })
+    }
+
+    /// The label in English: what MCP and the session read.
+    pub fn label_en(&self) -> String {
+        self.label().en().into_owned()
     }
 
     pub fn path(&self) -> String {
@@ -122,20 +135,24 @@ impl Tab {
         self.id != LEVEL && self.doc.as_ref().is_none_or(|d| d.closable())
     }
 
-    pub fn tooltip(&self) -> String {
-        let mut text = self.doc.as_ref().and_then(|d| d.tooltip()).unwrap_or_else(|| self.path());
+    /// The tab's tooltip in the window's language: the document's, its path, or its label, then
+    /// what is wrong with it.
+    pub fn tooltip(&self, ctx: &Context) -> String {
+        let mut text = match self.doc.as_ref().and_then(|d| d.tooltip()) {
+            Some(t) => t.text(ctx),
+            None => self.path(),
+        };
         if text.is_empty() {
-            text = self.label();
+            text = self.label().text(ctx);
         }
         if self.dirty() {
-            text.push_str(if self.id == LEVEL {
-                "\nThe scene has unsaved changes."
-            } else {
-                "\nUnsaved changes."
-            });
+            text.push('\n');
+            let what = if self.id == LEVEL { "The scene has unsaved changes." } else { "Unsaved changes." };
+            text.push_str(&gz_ui::i18n::t(ctx, what));
         }
         if self.missing() {
-            text.push_str("\nFile not found.");
+            text.push('\n');
+            text.push_str(&gz_ui::i18n::t(ctx, "File not found."));
         }
         text
     }
@@ -144,7 +161,7 @@ impl Tab {
         serde_json::json!({
             "id": self.id,
             "kind": self.kind,
-            "label": self.label(),
+            "label": self.label_en(),
             "path": self.path(),
             "dirty": self.dirty(),
             "active": active,
@@ -169,7 +186,6 @@ pub(crate) struct Parts {
     pub dialogs: Vec<DialogDesc>,
     pub panels: Vec<PanelDesc>,
     pub log_state: Option<crate::builder::LogStateFn>,
-    pub reveal: Option<crate::builder::RevealFn>,
     pub reset_layout: Option<crate::builder::ResetLayoutFn>,
 }
 
@@ -306,10 +322,14 @@ pub struct ShellState {
     pub(crate) test_scale: Option<f32>,
     /// The scale applied last: the preference, `-uiscale` or a test's.
     scale_applied: Option<(Option<f32>, f32)>,
+    /// The window's language, its catalogs and `-lang`.
+    pub(crate) language: crate::lang::Language,
     /// What the active tab takes of the Edit menu, and whether it is dirty: worked out once a
     /// frame, for the actions' checks.
     pub(crate) edits_now: Vec<EditAction>,
     pub(crate) dirty_now: bool,
+    /// The active tab's file, project-relative, as of this frame.
+    pub(crate) path_now: String,
     /// What the frame drew where (pt), for `ui.frame`.
     pub(crate) toolbar_rect: Option<Rect>,
     pub(crate) project_toolbar_rect: Option<Rect>,
@@ -340,8 +360,8 @@ impl Document for LevelPlaceholder {
     fn kind(&self) -> &'static str {
         "level"
     }
-    fn label(&self) -> String {
-        "Level".to_owned()
+    fn label(&self) -> Tx<'static> {
+        Tx::from("Level")
     }
     fn icon(&self) -> Icon {
         Icon::Level
@@ -379,8 +399,8 @@ impl ShellState {
             dialogs,
             panels,
             log_state,
-            reveal,
             reset_layout,
+            translations,
         } = builder;
         JobMarks::of(&editor).log_state.lock().clone_from(&log_state);
         // the window's own actions first, then the areas': a later id replaces an earlier one
@@ -429,7 +449,6 @@ impl ShellState {
             dialogs,
             panels,
             log_state,
-            reveal,
             reset_layout,
         };
         parts.project_toolbar.sort_by_key(|(o, _)| *o);
@@ -480,8 +499,10 @@ impl ShellState {
             panic_guard,
             test_scale: None,
             scale_applied: None,
+            language: crate::lang::Language::new(translations, None),
             edits_now: Vec::new(),
             dirty_now: false,
+            path_now: String::new(),
             toolbar_rect: None,
             project_toolbar_rect: None,
             toolbar_status_shown: None,
@@ -688,7 +709,7 @@ impl ShellState {
                         });
                         return Ok(());
                     }
-                    return Err(OpenError::Unsaved { id: id.to_string(), label: tab.label() });
+                    return Err(OpenError::Unsaved { id: id.to_string(), label: tab.label_en() });
                 }
                 if let Some(tab) = self.tabs.get_mut(i) {
                     if let Some(old) = tab.doc.as_mut() {
@@ -885,13 +906,13 @@ impl ShellState {
 
     /// The tabs with unsaved changes: id and label.
     pub(crate) fn dirty_tabs(&self) -> Vec<(String, String)> {
-        self.tabs.iter().filter(|t| t.dirty()).map(|t| (t.id.to_string(), t.label())).collect()
+        self.tabs.iter().filter(|t| t.dirty()).map(|t| (t.id.to_string(), t.label_en())).collect()
     }
 
     /// The unsaved work the window's questions name: the dirty tabs, and what no tab shows - a
     /// library a command edited with its tab closed.
-    pub(crate) fn unsaved_work(&self) -> (Vec<(String, String)>, Vec<String>) {
-        let tabs = self.dirty_tabs();
+    pub(crate) fn unsaved_work(&self) -> (Vec<(String, Tx<'static>)>, Vec<Tx<'static>>) {
+        let tabs = self.tabs.iter().filter(|t| t.dirty()).map(|t| (t.id.to_string(), t.label())).collect();
         // the scene is the Level tab's; every other document goes by its tab's kind
         let shown = |kind: &str| kind == "scene" || self.tabs.iter().any(|t| t.kind == kind && t.dirty());
         let other = self
@@ -899,7 +920,8 @@ impl ShellState {
             .dirty_docs()
             .into_iter()
             .filter(|d| !shown(d.kind.as_str()))
-            .map(|d| d.name)
+            // an area names its unsaved work in its own English ("Texture Library") or by a file
+            .map(|d| Tx::ui(d.name))
             .collect();
         (tabs, other)
     }
@@ -912,7 +934,7 @@ impl ShellState {
             self.editor.request_quit();
             return;
         }
-        let what: Vec<String> = dirty.iter().map(|(_, l)| l.clone()).chain(other).collect();
+        let what: Vec<Tx<'static>> = dirty.iter().map(|(_, l)| l.clone()).chain(other).collect();
         let ids: Vec<String> = dirty.into_iter().map(|(id, _)| id).collect();
         let queue = self.queue.clone();
         let editor = self.editor.clone();
@@ -1046,15 +1068,12 @@ impl ShellState {
 
     /// What is in front of the author, for an action's checks.
     pub(crate) fn action_cx(&self) -> ActionCx<'_> {
-        let (kind, path) = match self.find(&self.active).and_then(|i| self.tabs.get(i)) {
-            Some(t) => (t.kind.as_str(), t.doc.as_ref().and_then(|d| d.path()).map(|_| "").unwrap_or("")),
-            None => ("", ""),
-        };
+        let kind = self.find(&self.active).and_then(|i| self.tabs.get(i)).map_or("", |t| t.kind.as_str());
         ActionCx {
             editor: &self.editor,
             tab: &self.active,
             kind,
-            path,
+            path: &self.path_now,
             project: !self.start_page,
             dirty: self.dirty_now,
             edits: &self.edits_now,
@@ -1122,6 +1141,7 @@ impl ShellState {
         }
         self.edits_now = edits;
         self.dirty_now = dirty;
+        self.path_now = self.active_path();
         let kind = self
             .find(&self.active)
             .and_then(|i| self.tabs.get(i))
@@ -1130,7 +1150,7 @@ impl ShellState {
         self.parts.actions.set_facts(crate::actions::Facts {
             tab: self.active.to_string(),
             kind,
-            path: self.active_path(),
+            path: self.path_now.clone(),
             project: !self.start_page,
             dirty: self.dirty_now,
             edits: self.edits_now.clone(),
@@ -1219,10 +1239,12 @@ impl ShellState {
         match r {
             Request::Open(req) => match self.open(ctx, req, false, self.asker()) {
                 Ok(()) => {}
-                Err(OpenError::Unsaved { label, .. }) => {
-                    state::toast(ctx, Tone::Warning, &format!("{label} has unsaved changes."))
-                }
-                Err(OpenError::Other(e)) => state::toast(ctx, Tone::Error, &e),
+                Err(OpenError::Unsaved { label, .. }) => state::toast(
+                    ctx,
+                    Tone::Warning,
+                    gz_ui::tr!("{label} has unsaved changes.", label = label),
+                ),
+                Err(OpenError::Other(e)) => state::toast(ctx, Tone::Error, Tx::ui(e)),
             },
             Request::Activate(id) => {
                 self.activate(ctx, &id);
@@ -1230,7 +1252,7 @@ impl ShellState {
             Request::Close(id) => self.request_close(ctx, &id),
             Request::Dialog(id) => {
                 if let Err(e) = self.open_dialog(ctx, &id) {
-                    state::toast(ctx, Tone::Error, &e);
+                    state::toast(ctx, Tone::Error, Tx::ui(e));
                 }
             }
             Request::Drawer(Some(d)) => {
@@ -1238,7 +1260,7 @@ impl ShellState {
             }
             Request::Drawer(None) => self.drawer = None,
             Request::ToggleDrawer(d) => self.toggle_drawer(ctx, d),
-            Request::Toast(tone, text) => state::toast(ctx, tone, &text),
+            Request::Toast(tone, text) => state::toast(ctx, tone, text),
             Request::Palette => self.open_palette(""),
             Request::Panel(id, op) => {
                 self.panel(ctx, &id, op);
@@ -1251,7 +1273,7 @@ impl ShellState {
             Request::OwnKeys(who) => self.key_owner_now = Some(SmolStr::new(who)),
             Request::Action(id) => {
                 if let Err(e) = self.run_action(&id) {
-                    state::toast(ctx, Tone::Warning, &e);
+                    state::toast(ctx, Tone::Warning, Tx::ui(e));
                 }
             }
             Request::CaptureKeys => self.capture_now = true,
@@ -1451,7 +1473,7 @@ impl ShellState {
                     id: t.id.to_string(),
                     kind: t.kind.to_string(),
                     icon: t.icon,
-                    label: t.label(),
+                    label: t.label_en(),
                     arg,
                 }
             })
@@ -1894,7 +1916,7 @@ pub fn window_options(editor: &Editor) -> WindowOptions {
     opts.gpu_adapter = settings.gpu_adapter();
     opts.floating = settings.pref("floating_panels").is_some_and(|v| v != 0.0);
     // what the window shows before its device exists: the theme's background
-    let base = gz_ui::theme::Palette::new(settings.accent()).base;
+    let base = settings.theme().palette().base;
     opts.background = [base.r(), base.g(), base.b()];
     opts
 }
@@ -1914,6 +1936,8 @@ pub struct GrizzlyShell {
     opts: ShellOptions,
     state: Option<ShellState>,
     ctx: Option<Context>,
+    /// The window's language, its catalogs already being read while the window comes up.
+    language: Option<crate::lang::Language>,
 }
 
 impl GrizzlyShell {
@@ -1921,7 +1945,12 @@ impl GrizzlyShell {
     pub fn new(editor: Arc<Editor>, builder: ShellBuilder, opts: ShellOptions) -> Self {
         let wake = editor.exec.wake().clone();
         let queue = editor.services.get_or_init(|| UiQueue::new(wake));
-        Self { editor, queue, builder: Some(builder), opts, state: None, ctx: None }
+        // a start in another language than English reads its catalogs on the CPU pool now, while
+        // the window and its device come up: the first frame finds them read
+        let mut language = crate::lang::Language::new(builder.translations.clone(), opts.lang);
+        let wanted = language.wanted(&EditorSettings::of(&editor));
+        language.prefetch(wanted, &editor);
+        Self { editor, queue, builder: Some(builder), opts, state: None, ctx: None, language: Some(language) }
     }
 }
 
@@ -1929,7 +1958,7 @@ impl Shell for GrizzlyShell {
     fn init(&mut self, ctx: &Context, gpu: &RenderState) {
         let settings = EditorSettings::of(&self.editor);
         gz_ui::font::install(ctx, std::mem::take(&mut self.opts.fonts));
-        gz_ui::theme::install(ctx, settings.accent());
+        gz_ui::theme::install(ctx, settings.theme());
         layout::load(ctx, settings.layout());
         layout::load_lists(ctx, settings.lists());
         ctx.options_mut(|o| o.zoom_with_keyboard = false);
@@ -1948,6 +1977,10 @@ impl Shell for GrizzlyShell {
             ctx.clone(),
         );
         state.logo = crate::chrome::load_logo(ctx);
+        if let Some(language) = self.language.take() {
+            state.language = language;
+        }
+        state.language.apply(ctx, &state.settings, &state.editor);
         self.state = Some(state);
         self.ctx = Some(ctx.clone());
     }
@@ -1956,6 +1989,7 @@ impl Shell for GrizzlyShell {
         match self.state.as_mut() {
             Some(s) => {
                 s.apply_scale(ui.ctx(), self.opts.ui_scale);
+                s.language.apply(ui.ctx(), &s.settings, &s.editor);
                 s.frame(ui)
             }
             None => FrameReport::default(),

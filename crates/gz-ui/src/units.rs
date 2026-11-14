@@ -6,6 +6,7 @@ use egui::Context;
 
 use crate::button::Kind;
 use crate::font::Font;
+use crate::i18n::Tx;
 use crate::text;
 use crate::theme::metrics;
 
@@ -21,8 +22,14 @@ pub const fn em(n: f32) -> f32 {
 /// The width [`crate::Button`] takes for this label and kind (8 pt padding each side, the label
 /// measured in the face its kind draws with), at least `min_w`.
 #[must_use]
-pub fn button_width(ctx: &Context, label: &str, kind: Kind, icon: bool, min_w: f32) -> f32 {
+pub fn button_width<'a>(ctx: &Context, label: impl Into<Tx<'a>>, kind: Kind, icon: bool, min_w: f32) -> f32 {
+    button_width_str(ctx, &label.into().get(ctx), kind, icon, min_w)
+}
+
+/// [`button_width`] of a label already in the window's language.
+#[must_use]
+pub(crate) fn button_width_str(ctx: &Context, label: &str, kind: Kind, icon: bool, min_w: f32) -> f32 {
     let font = if matches!(kind, Kind::Primary | Kind::Danger) { Font::Strong } else { Font::Body };
     let icon_w = if icon { metrics::GLYPH + if label.is_empty() { 0.0 } else { 6.0 } } else { 0.0 };
-    (16.0 + icon_w + text::width(ctx, &font.id(), label)).max(min_w)
+    (16.0 + icon_w + text::measure(ctx, &font.id(), label)).max(min_w)
 }

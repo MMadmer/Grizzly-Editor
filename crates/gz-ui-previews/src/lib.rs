@@ -127,7 +127,7 @@ fn tab_actions() -> Vec<Action> {
     const NO_SOUND_TAB: &str = "Open the Sound Library first.";
     const NO_LANIM_TAB: &str = "Open Light Animations first.";
     vec![
-        Action::new("library.play_sound", "Play", "Libraries", "library.play")
+        Action::new("library.play_sound", "Play Sound", "Libraries", "library.play")
             .icon(Icon::Play)
             .scope(SOUNDS)
             .args(|_| args(&[("kind", SOUND), ("action", "play")]))
@@ -143,7 +143,7 @@ fn tab_actions() -> Vec<Action> {
                     }
                 })
             }),
-        Action::new("library.stop_sound", "Stop", "Libraries", "library.play")
+        Action::new("library.stop_sound", "Stop Sound", "Libraries", "library.play")
             .icon(Icon::Stop)
             .scope(SOUNDS)
             .args(|_| args(&[("kind", SOUND), ("action", "stop")]))
@@ -278,7 +278,7 @@ fn tab_actions() -> Vec<Action> {
                     )
                 })
             }),
-        Action::new("library.play_animation", "Play", "Libraries", "library.play")
+        Action::new("library.play_animation", "Play Animation", "Libraries", "library.play")
             .icon(Icon::Play)
             .scope(LANIMS)
             .args(|_| args(&[("kind", LANIM), ("action", "play")]))
@@ -286,7 +286,7 @@ fn tab_actions() -> Vec<Action> {
                 on_tab(cx, LANIM, NO_LANIM_TAB)
                     .unwrap_or_else(|| Enabled::when(facts(cx).lanim().selected, "Pick a light animation first."))
             }),
-        Action::new("library.stop_animation", "Stop", "Libraries", "library.play")
+        Action::new("library.stop_animation", "Stop Animation", "Libraries", "library.play")
             .icon(Icon::Stop)
             .scope(LANIMS)
             .args(|_| args(&[("kind", LANIM), ("action", "stop")]))
@@ -300,6 +300,7 @@ fn tab_actions() -> Vec<Action> {
 /// Plugs the model and texture previews, the three library tabs and the Libraries menu into the
 /// shell.
 pub fn install(b: &mut ShellBuilder) {
+    b.translation(include_str!("ru.lua"));
     b.document("model", model::factory);
     b.document("texture", texture::factory);
     b.document(lanim::KIND, lanim::factory);
@@ -352,4 +353,19 @@ pub fn install(b: &mut ShellBuilder) {
 pub fn register(reg: &mut Registry) {
     cmd::register(reg);
     libtools::register(reg);
+}
+
+#[cfg(test)]
+mod i18n_tests {
+    #[test]
+    fn the_catalog_reads_with_the_kits_and_the_shells() {
+        let c = gz_ui::i18n::Catalog::parse(&[
+            gz_ui::i18n::KIT_RU,
+            gz_app::lang::SHELL_RU,
+            include_str!("ru.lua"),
+        ])
+        .expect("the catalogs read");
+        let p = gz_ui::i18n::problems(&c);
+        assert!(p.is_empty(), "{}", p.join("\n"));
+    }
 }

@@ -117,6 +117,8 @@ pub struct Pictures {
     asked: Vec<Request>,
     dead: Vec<(u64, TextureHandle)>,
     shared: Arc<Shared>,
+    /// What the model pictures stand on (the theme's raised colour) as they were drawn.
+    backdrop: Option<gz_render::Color>,
 }
 
 /// What a finished job pings.
@@ -327,6 +329,18 @@ impl Pictures {
         gpu: Option<(&wgpu::Device, &wgpu::Queue)>,
         background: gz_render::Color,
     ) {
+        // another theme: the model pictures are drawn again on its colour, and what is being
+        // drawn on the one before is thrown away when it ends
+        if self.backdrop.is_some_and(|b| b != background) {
+            self.cancel();
+            let frame = self.cache.values().map(|p| p.used).max().unwrap_or(0);
+            let models: Vec<PicKey> =
+                self.cache.iter().filter(|(_, p)| p.model).map(|(k, _)| k.clone()).collect();
+            for k in models {
+                self.forget(&k, frame);
+            }
+        }
+        self.backdrop = Some(background);
         let asked = std::mem::take(&mut self.asked);
         let generation = self.shared.generation.load(Ordering::Acquire);
         for r in asked {

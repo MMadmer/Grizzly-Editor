@@ -12,7 +12,7 @@ use egui::Ui;
 use gz_editor::{Args, Editor, Value, json};
 use gz_ui::rows::{Col, Table};
 use gz_ui::text::Clip;
-use gz_ui::{Font, Icon, Tone, palette, state};
+use gz_ui::{Font, Icon, TipExt, Tone, Tx, palette, state};
 use parking_lot::Mutex;
 
 /// The panel's MCP id.
@@ -219,16 +219,20 @@ pub fn draw(ui: &mut Ui, editor: &Arc<Editor>) {
                         let icon = if it.error { Icon::Error } else { Icon::Warning };
                         let (r, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
                         gz_ui::icons::draw(ui.painter(), icon, r, p.tone(tone));
-                        gz_ui::text::label(ui, &it.text, Font::Body, p.text, Clip::End)
-                            .on_hover_text(&it.text);
+                        gz_ui::text::label(ui, Tx::ui(&it.text), Font::Body, p.text, Clip::End)
+                            .tip(Tx::ui(&it.text));
                     });
                 }
                 1 => {
                     let name = it.object.as_deref().unwrap_or("");
-                    gz_ui::text::label(ui, name, Font::Body, p.text_secondary, Clip::Start);
+                    gz_ui::text::label(ui, Tx::raw(name), Font::Body, p.text_secondary, Clip::Start);
                 }
                 _ => {
-                    gz_ui::text::label(ui, &it.step, Font::Small, p.text_muted, Clip::End);
+                    let step = gz_levelbuild::Step::ORDER
+                        .into_iter()
+                        .find(|s| s.title() == it.step)
+                        .map_or_else(|| Tx::raw(it.step.as_str()), |s| crate::menus::step_tx(s.title()));
+                    gz_ui::text::label(ui, step, Font::Small, p.text_muted, Clip::End);
                 }
             }
         });
