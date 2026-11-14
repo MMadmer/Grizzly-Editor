@@ -109,7 +109,7 @@ def pick_list_checks(shots) -> None:
     check(not bad.get("ok") and "add_level" in bad.get("error", "") and "add_area_level" in bad.get("error", ""),
           "U an unknown list is refused, naming the lists", json.dumps(bad)[:300])
     # the contract says which popups a view command brings up
-    popups = cmd("ui.contract").get("popups", [])
+    popups = cmd("ui.contract").get("view_popups", [])
     check("world.view show=add_level" in popups and "mod.view show=function" in popups,
           "U ui.contract names the popups world.view and mod.view put up", json.dumps(popups)[:400])
 

@@ -410,6 +410,28 @@ enum LibraryAction {
     Check,
 }
 
+/// A texture pick of a description, put up to be looked at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum TexturePick {
+    /// The detail texture.
+    Detail,
+    /// The bump map.
+    Bump,
+    /// A bump map's own normal map.
+    Normal,
+}
+
+impl TexturePick {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Detail => "detail",
+            Self::Bump => "bump",
+            Self::Normal => "normal",
+        }
+    }
+}
+
 /// The key of a light animation the timeline moves to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -446,6 +468,10 @@ struct LibraryParams {
     /// Light animations: the timeline goes to the previous or the next key of the selected one.
     #[serde(default)]
     key: Option<KeyStep>,
+    /// Texture library: puts a texture pick of the selected description up to be looked at
+    /// (its list of the library's textures); refused when the description has no such row.
+    #[serde(default)]
+    show: Option<TexturePick>,
     /// Files (separated by |) dropped on the tab at the window point `x`, `y`, the way a drop from
     /// Explorer lands. Pictures dropped on the Texture Library are imported.
     #[serde(default)]
@@ -617,6 +643,26 @@ async fn library(editor: Arc<Editor>, p: LibraryParams, _origin: Origin) -> Repl
     head.insert("active".into(), json!(active));
     if active {
         owe_frames(&editor, 2).await;
+    }
+    if let Some(pick) = p.show {
+        if kind != LibKind::TextureLibrary || !active {
+            return Err(invalid("show puts up a texture pick of the Texture Library's open tab"));
+        }
+        let key = pick.key();
+        on_ui(&editor, move |_, ctx| {
+            crate::library::texpick::ask(ctx, key);
+            ctx.request_repaint();
+            Ok(())
+        })
+        .await?;
+        owe_frames(&editor, 3).await;
+        let up = on_ui(&editor, move |_, ctx| Ok(crate::library::texpick::is_up(ctx, key))).await?;
+        if !up {
+            return Err(invalid(format!(
+                "the selected description has no {key} texture row: pick a texture whose description has one"
+            )));
+        }
+        head.insert("pick".into(), json!(key));
     }
     Ok(merge(head, std::mem::take(&mut body)))
 }

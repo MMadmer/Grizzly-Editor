@@ -59,17 +59,37 @@ fn rows_of(ctx: &Context, key: Id, names: Names<'_>) -> Arc<Vec<PickItem>> {
     items
 }
 
-/// A texture of the library picked from its list, or none. Returns the name picked (empty for
-/// none) when the author picked.
-pub fn texture_pick(ui: &mut Ui, salt: &str, value: &str, names: Names<'_>) -> Option<String> {
+/// The name a pick's popup is asked for by (`library.view show=`).
+fn request(key: &str) -> String {
+    format!("library.{key}")
+}
+
+/// Asks for the pick `key` (`detail`, `bump`, `normal`) to be put up on the next frame that draws it.
+pub fn ask(ctx: &Context, key: &str) {
+    gz_ui::menu::show_popup(ctx, &request(key));
+}
+
+/// Whether the pick `key` is up; a request nobody took (the description has no such row) is
+/// taken back.
+pub fn is_up(ctx: &Context, key: &str) -> bool {
+    let _ = gz_ui::menu::take_popup_request(ctx, &request(key));
+    Popup::is_id_open(ctx, Combo::new(("gz-ui-previews.pick", key), "").popup_id())
+}
+
+/// A texture of the library picked from its list, or none. `key` tells the description's picks
+/// apart (`detail`, `bump`, `normal`: two of them are labelled Texture). Returns the name picked
+/// (empty for none) when the author picked.
+pub fn texture_pick(ui: &mut Ui, key: &str, value: &str, names: Names<'_>) -> Option<String> {
     let ctx = ui.ctx().clone();
-    let pick_id = ("gz-ui-previews.pick", salt);
+    let pick_id = ("gz-ui-previews.pick", key);
     let shown = if value.is_empty() { "None" } else { gz_ui::grid::leaf_name(value) };
     let combo = Combo::new(pick_id, shown).placeholder(value.is_empty()).tip(value);
     let popup = combo.popup_id();
     let open = Popup::is_id_open(&ctx, popup);
     let resp = combo.field(ui, open);
-    if resp.clicked() {
+    // put up from outside to be looked at
+    let asked = gz_ui::menu::take_popup_request(&ctx, &request(key));
+    if resp.clicked() || (asked && !open) {
         if open {
             Popup::close_id(&ctx, popup);
         } else {

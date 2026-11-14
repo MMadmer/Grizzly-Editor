@@ -116,7 +116,7 @@ Every major tab kind has an icon of its own, and so does every Level panel: a ta
 
 ## 4. UI kit
 
-The kit is the crate `gz-ui`, on egui; its API is the crate's own (`cargo doc -p gz-ui`). `-kitsheet` opens a sheet of every widget below in every state, and the tokens (`kitsheet.rs`): it is how a surface stream sees what exists.
+The kit is the crate `gz-ui`, on egui; its API is the crate's own (`cargo doc -p gz-ui`). `-kitsheet` opens a sheet of the widgets below in their states, and the tokens (`kitsheet.rs`): it is how one sees what exists. What is no widget on a sheet - a page that fills the work area, a page card with its footer, a splitter, a drop zone, the system's file dialog - is seen on the surface that uses it; the kit's questions open from the sheet's buttons.
 
 **What drawing code may use.** The kit, the theme's tokens and nothing else: colours through the context's `Palette` and its tones, sizes in pt through `metrics` and `units`. A widget the kit lacks starts as a `local_<name>` function in its surface crate's `local.rs` and moves into the kit once a second surface needs it (section 8).
 
@@ -129,7 +129,7 @@ The kit is the crate `gz-ui`, on egui; its API is the crate's own (`cargo doc -p
 | `Switch` | a setting that applies at once | off, on, disabled |
 | `Combo` | a value picked from a list, with the kit's chevron; opens a `PickList` (or, through its `field`, a popup of the caller's own) | rest, open, mixed ("Multiple values"), invalid, a value the list lacks kept and shown in the warning tone with its tip, nothing chosen (the words for it in the secondary tone), busy (a spinner for the chevron while the list is read), disabled |
 | `PickList` | the popup list: ranked search (`rank.rs`: whole-word prefixes, then letters in order), virtualized rows with an icon and a family tint, a second muted line on the highlighted row, sections Recent and Favourites with a star per row, full keyboard use (arrows, Page Up/Down, Ctrl+Home/End, Enter, Esc), measured once when it opens | rows on, off, current (a check), highlighted; "No matches", "Nothing to pick" |
-| `Section` | the fold header of a part of a panel: chevron, Strong title, a count, a trailing + and menu; no fill; 28 pt; its open state kept in the layout store by id | open, closed |
+| `Section` | the fold header of a part of a panel: chevron, Strong title, a count, a trailing + and menu; no fill; 28 pt; its open state kept in the layout store by id | open, closed, busy (a spinner where the count stands while what it counts is read, reported to an audited frame as loading whether it is open or not) |
 | `ItemRows` | a small editable table: named columns, a cross per row, an Add row, drag to reorder | rows, empty with its Add row |
 | `Table` | records: sortable, resizable columns, virtualized rows, selection, a context menu | sorted up/down, selected, hovered |
 | `PropertyGrid` | label-value rows per role, sections, a help footer; values `text_field`, `number` / `integer`, `switch`, `combo`, `color`, `vec3_field`, `pick_field`, `path_field`, `chips`, `text_block`, `read_only` | required, invalid, modified (Reset), read-only, mixed |
@@ -150,7 +150,7 @@ The kit is the crate `gz-ui`, on egui; its API is the crate's own (`cargo doc -p
 | `text::fit` | a cut text kept per (text, face, width), for what is drawn every frame | |
 | `upload::Tiled` | a big picture that reaches the GPU a few tiles a frame, so no frame uploads megabytes | loading, whole |
 | `audit` | what a frame cut short, let escape, shows as an error or still loads, for `ui.audit` | |
-| `file_dialog` | the system's file dialog, for a person only | |
+| `file_dialog` | the system's file dialog, for a person only, on a thread a pool makes (`Executors::thread`) | |
 
 **Buttons**
 - One Primary per surface: the kit asserts it in debug builds for a dialog footer and a toolbar.
@@ -473,7 +473,7 @@ None of them acts while a modal is up. `app.keys action=resolve keys=<chord>` an
 - Money: from / to fields, empty while the character sets none (the base's amount as the hint), Never runs out beside them, a Clear icon to unset.
 - Template and Squad are the grid's switches. Problems show as sentences under their fields; the codes stay in MCP and the build.
 - Unsaved edits ask before any switch. Validation runs on change. An item, a portrait or a dialog the module brings itself is no unknown one (the module's own sections, `gz-mod`'s `sections.rs`).
-- MCP: `characters.view` (select, path, show=<picker>, save / discard).
+- MCP: `characters.view` (select, path, show=<picker>: base, visual, icon, community, rank, dialog, sells, buys; save / discard).
 
 **Screens & Music** (`screens`, Mod > Screens & Music; `screens.info`, `screens.set`, `screens.import`, `screens.view`). Saves to mod.ltx as it is edited, like World Rules; the toolbar row says so.
 - Toolbar: `Loading | Menu` (which surface the tab edits), then `Screens [Mix In | Only Mine]` and `Music [Mix In | Only Mine]` for that surface - each a muted caption with a group gap before its choice - then the status.
@@ -487,7 +487,7 @@ None of them acts while a modal is up. `app.keys action=resolve keys=<chord>` an
 - Toolbar: Reload Game Data, Empty World... (confirms through `dlg.empty_world`). The status reads "Saved to mod.ltx as you edit".
 - One scroll up to 900, kit `Section`s: Original Game (its count "n of 3 offered"), a row per rule - its label, then one segmented control [Remove | Keep | Player Decides]; Player Decides keeps the rule unless the player turns it off, and a fourth one is refused with a sentence; Keep Everything under them. Player Start (Place in Scene). Starting Kit: Money, Keep the perks, and the kit's `ItemRows` (Item | Count | cross, Add Item, drag to reorder; a row is sent once it has its item), Game's Base Kit and Remove Kit - an ordinary button: Edit > Undo on the tab puts the kit back. More (folded): Applies On (chips), Playable Area, Transitions (a filterable Transition | Leads To | Closed table).
 - Problems go in a drawer. An item the module brings itself is no unknown item (W208).
-- MCP: `world.info`, `world.set`, `world.lookup type=levels|transitions|patrols`, `world.view`.
+- MCP: `world.info`, `world.set`, `world.lookup type=levels|transitions|patrols`, `world.view` (`show=add_level|add_area_level` puts the level list up).
 
 **Mod Settings**
 - Nav, 200, one `NavRow` per page with its icon and a problem dot: General, Mod Browser, Game Mode, Relations, Build Contents, PDA, Commands. A dot says only what was looked at: the project's scripts are read when the tab opens, on the pools, and a function is not called missing before they are.
@@ -497,7 +497,7 @@ None of them acts while a modal is up. `app.keys action=resolve keys=<chord>` an
 - Build Contents: Not Shipped, a block of paths and patterns.
 - Commands: the kit's `ItemRows` - Name | Function (its chevron picks a `<script>.<function>` of the project's scripts) | Arguments | Cheat | cross, Add Command, drag to reorder; a field with an error has the error outline. Under the table the selected command's Help and every sentence about it. Read the Scripts Again reads the scripts once more.
 - The tab saves as it is edited: the toolbar row says so ("Saved to mod.ltx as you edit", or what stops the save). While a new picture waits, the row holds Save (Primary) and that status. There is no footer.
-- MCP: `mod.view` (page, ask_game_updates, dialog); the data is `mod.info` / `mod.set` / `mod.thumbnail`.
+- MCP: `mod.view` (page, ask_game_updates, dialog, `show=add_requires|add_load_after|add_load_before|add_conflicts|function` for its pick lists); the data is `mod.info` / `mod.set` / `mod.thumbnail`.
 
 **Build dialogs**
 - **Build to Folder and Export Flat (M):** a PathField, and Writes To: the folder the build fills, read from its end (`<folder>\modules\<id>`, `<folder>\gamedata_<id>`). The label column is 8 em. A clean build that would delete files it did not write refuses; `dlg.clean_target` names up to ten of them, Cancel the default, and Yes builds again with `clean`.
@@ -569,7 +569,7 @@ None of them acts while a modal is up. `app.keys action=resolve keys=<chord>` an
 
 **Libraries** (`gz-ui-previews`'s `library`; `library.view`)
 - Light Animations, Texture Library and Sound Library are documents: list | preview or timeline | grid. An unsaved prompt guards their edits. The Libraries menu opens the three and Reload Objects; what a library does by hand is under its tab's More.
-- **Their edits are the editor's, not the tab's**: a tab, a command and Save work on one set of pending changes (`LibraryStores`), so every button of a library's toolbar is an action over a command and nothing needs the tab. `library.set kind= item= set={...}` changes a texture's description, a sound's parameters or a light animation's properties and keys by the names the Details rows show (it saves, or `save=false` leaves the edit unsaved); `library.play` plays or stops a sound or a light animation; `library.import from=` brings pictures in from anywhere as one job (`overwrite` is the losing parameter); `library.rebuild` makes an entry's game texture or game sound again; `library.view action=check` is Check New Textures; `library.reload kind=light_animations` reads the file again (`discard` loses unsaved keys); `library.sync kind=texture_library|sound_library [retire_orphans]` and `library.rewrite_descriptions [dry_run]` are jobs the command starts and waits for, answering what was made by count and by name. Every write of a library passes one writer (`gz-ui-previews`'s `writer.rs`) that asks `gz_project::library_guard` first: a library is never a game.
+- **Their edits are the editor's, not the tab's**: a tab, a command and Save work on one set of pending changes (`LibraryStores`), so every button of a library's toolbar is an action over a command and nothing needs the tab. `library.set kind= item= set={...}` changes a texture's description, a sound's parameters or a light animation's properties and keys by the names the Details rows show (it saves, or `save=false` leaves the edit unsaved); `library.play` plays or stops a sound or a light animation; `library.import from=` brings pictures in from anywhere as one job (`overwrite` is the losing parameter); `library.rebuild` makes an entry's game texture or game sound again; `library.view action=check` is Check New Textures and `show=detail|bump|normal` puts a description's texture pick up; `library.reload kind=light_animations` reads the file again (`discard` loses unsaved keys); `library.sync kind=texture_library|sound_library [retire_orphans]` and `library.rewrite_descriptions [dry_run]` are jobs the command starts and waits for, answering what was made by count and by name. Every write of a library passes one writer (`gz-ui-previews`'s `writer.rs`) that asks `gz_project::library_guard` first: a library is never a game.
 - **One empty state for one fact.** A library with nothing in it says so once, over the whole tab, naming the folder or file it reads, with what fills it as the single Primary (the Texture Library: Check New Textures, and the words that pictures can be dropped on the tab). With entries and none picked, the preview says "Pick ..." and the details stay blank.
 - The Texture Library reads the `.tga` sources of `rawdata\textures`. **Pictures dropped on the tab - files from Explorer, picture tiles of the Content Browser - are imported** (the kit's drop zone over the whole tab, `library.import`); nobody has to find the import folder. As it opens it looks at the import folder by itself and offers what is new there over the list ("3 new pictures in the import folder." [Check]); the check turns the tab into New Textures, and the finished import - which builds the game textures - brings the library back; an import that would replace a staged picture or a texture of the library asks first, naming them. More: Check New Textures, Synchronize Textures, Rewrite Texture Descriptions..., Reload Textures, the type filter. The Sound Library's toolbar: Play, Stop, Auto Play, Rebuild, then More (Synchronize Sounds). A synchronisation makes what is missing or older and loses nothing, so it asks nothing; the sounds' asks afterwards whether the game sounds that lost their source are to be retired (renamed, never deleted), and the rewrite asks first, naming how many descriptions it writes. The Light Animations tab's: Reload, Alpha, the key actions (Previous, Next, Add, Delete, Move Earlier, Move Later), Play, Stop. Whether a library's folder can be written is looked at on the IO pool as the tab opens (until it answers, the tab is not read-only).
 - Detail Object List becomes an L dialog (`dlg.detail_objects`, above).
@@ -605,7 +605,7 @@ The window's commands are typed cards of the registry (`docs/COMMANDS.md`): `hel
 | `ui.split [key= value=]` | the layout store's sizes; with no key, every key |
 | `ui.audit [id=]` | what the next frame cut short (`truncated`), let escape (`escaped`), its `controls` (enabled, why, help), `loading`: the busy marks it shows (a busy line, a card's, a dialog footer's) - a surface that has not got its content yet, so a caller waits for an empty list before it judges or pictures one - and `errors`: the error states it shows in place of content, each with its sentence |
 | `ui.scale [value=]` | the scale for tests until the editor ends; never saved |
-| `ui.contract` | the constants QA pins (`gz-app`'s `contract.rs`): panels, drawers, dialogs, kit dialogs, document kinds, popups, menus, viewport menus, the palette's id, the Task card, tile range and defaults, accents, categories, card menu labels, the scale range, the interface scales, the stall limit |
+| `ui.contract` | the constants QA pins (`gz-app`'s `contract.rs`): panels, drawers, dialogs, kit dialogs, document kinds, popups (`ui.popup`'s names), `view_popups` (the pick lists of a surface, each as the call that puts it up: `world.view show=add_level`, `mod.view show=function`, `characters.view show=visual`, `library.view kind=texture_library show=detail`; a kit pick list is no menu, so `ui.audit` lists its rows and a picture shows it), menus, viewport menus, the palette's id, the Task card, tile range and defaults, accents, categories, card menu labels, the scale range, the interface scales, the stall limit |
 | `ui.reset_layout [scope=level\|all]` | Window > Reset Layout; `all` also forgets every split |
 | `ui.reveal [path= dry_run=]` | a file or folder of the project in Explorer |
 | `ui.palette action=state\|query\|open\|close\|run [query= id= limit=]` | the Command Palette: ranked rows {id, kind, label, category, detail, shortcut, enabled, why, recent}; `run` runs a row by its id - an action's, `tab:<id>`, `panel:<id>` |
@@ -633,7 +633,8 @@ The surfaces' own commands are in their crates (`graph.view`, `viewport.view`, `
 - `gz-ui-app`: the Start page's rule to the row's edge.
 - `gz-ui-content`: the tree row, the breadcrumbs, the rename box, the menu heading, the marquee.
 - `gz-ui-graph`: the graph panes' header.
-- `gz-ui-level`: the eye and lock toggles, the button flow, the panel header, the thumbnail, the badge button, the tree list (and the panels' command helpers, which draw nothing).
+- `gz-ui-level`: the eye and lock toggles, the button flow, the panel header, the thumbnail, the badge button, the tree list, the number row that holds a value while it is dragged and sends it once (and the panels' command helpers, which draw nothing).
+- `gz-ui-viewport`: the axis gizmo, which reads and sets the viewport's camera, and the stats pill.
 - `gz-ui-mod`: a block of values inside one property row, the thumbnail's frame.
 - `gz-ui-pda`: a list's title with its +, the code pane (with the Lua colouring and the layout over frames), the mark where a dragged row lands.
 - `gz-ui-previews`: a preview's heading, the timeline's ends, the picture frame, the mouse wheel's turn over a preview.

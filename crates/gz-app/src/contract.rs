@@ -108,11 +108,8 @@ pub const PALETTE_ID: &str = "grizzly_command_palette";
 /// Its window.
 pub const PALETTE_WINDOW: &str = "Command Palette###grizzly_command_palette";
 
-/// Popups put up to be looked at. The first ones are `ui.popup`'s names; the rest (written
-/// `<command> show=<value>`) belong to a surface and are put up by its own view command, which
-/// opens the tab, the page and the fold that hold the list - a kit pick list is no menu, so
-/// `ui.list` does not name it, but `ui.audit` lists its rows and `shot.window` shows it.
-pub const POPUPS: [&str; 30] = [
+/// The popups `ui.popup show=` puts up to be looked at.
+pub const POPUPS: [&str; 15] = [
     "menu:<name>",
     "tab_menu:<tab>",
     "tab_overflow",
@@ -128,6 +125,13 @@ pub const POPUPS: [&str; 30] = [
     "viewport:<menu>",
     "tasks",
     "rebuild",
+];
+
+/// The pick lists of a surface, each put up by its own view command (written as the call:
+/// `<command> show=<value>`), which opens the tab, the page and the fold that hold the list. A
+/// kit pick list is no menu, so `ui.list` does not name it: `ui.audit` lists its rows and
+/// `shot.window` shows it.
+pub const VIEW_POPUPS: [&str; 18] = [
     "world.view show=add_level",
     "world.view show=add_area_level",
     "mod.view show=add_requires",
@@ -143,6 +147,9 @@ pub const POPUPS: [&str; 30] = [
     "characters.view show=dialog",
     "characters.view show=sells",
     "characters.view show=buys",
+    "library.view kind=texture_library show=detail",
+    "library.view kind=texture_library show=bump",
+    "library.view kind=texture_library show=normal",
 ];
 
 /// The caption's menus, in their order; Graph is a graph tab's own, Menu the folded button.

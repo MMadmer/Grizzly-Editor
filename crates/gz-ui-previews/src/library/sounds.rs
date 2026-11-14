@@ -384,7 +384,7 @@ impl SoundLibDoc {
             );
             real(
                 g,
-                "Min Dist",
+                "Min Distance",
                 "Up to this distance the sound plays at full volume",
                 ro,
                 &mut t.min_dist,
@@ -395,7 +395,7 @@ impl SoundLibDoc {
             t.min_dist = t.min_dist.clamp(0.01, 1000.0);
             real(
                 g,
-                "Max Dist",
+                "Max Distance",
                 "Past this distance the sound is silent",
                 ro,
                 &mut t.max_dist,
@@ -412,7 +412,7 @@ impl SoundLibDoc {
             let mut ai = t.max_ai_dist;
             real(
                 g,
-                "Max AI Dist",
+                "Max AI Distance",
                 "How far NPCs hear the sound; at most the maximum distance",
                 ro,
                 &mut ai,
@@ -454,7 +454,7 @@ impl SoundLibDoc {
                 // one button a row: two side by side do not fit the pane's 220 pt
                 let on = !ro.contains(PropFlags::READ_ONLY);
                 g.row(
-                    "Max Dist",
+                    "Max Distance",
                     "The distance where the sound falls to 1%, from the minimum, with the game's rolloff",
                     ro,
                     1,
@@ -471,7 +471,7 @@ impl SoundLibDoc {
                     },
                 );
                 g.row(
-                    "Min Dist",
+                    "Min Distance",
                     "The minimum distance worked out from the maximum, with the game's rolloff",
                     ro,
                     1,

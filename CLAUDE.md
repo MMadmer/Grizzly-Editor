@@ -263,7 +263,8 @@ A change of plan is a change of its document first.
   frames too and are held the same way, and a view command (`graph.view`, `pda.preview`, `preview.model`, ...)
   answers from the frames that show what it changed. Only the ACTIVE tab is drawn, so a picture shows that tab:
   anything that must be looked at from outside needs a command into view (`ui.tab` / `ui.panel` / `ui.drawer` /
-  `ui.dialog` / `ui.popup` / `ui.scroll`, an area's `*.view`).
+  `ui.dialog` / `ui.popup` / `ui.scroll`, an area's `*.view` - whose `show=` puts a pick list of its surface up; `ui.contract`'s
+  `view_popups` names every one).
 - **A modal lives in the editor's own window.** A kit dialog (`gz-ui`'s `dialog.rs`) is drawn in the main window,
   centred, kept inside its work area and never taller than it (a taller one scrolls). Panels get windows of their own
   only with Preferences > General > Allow Panels Outside the Window (`[ui] floating_panels`, read at start);
@@ -380,7 +381,7 @@ A change of plan is a change of its document first.
   Paint (a layer: AI Map, Foliage, Decals) and Zones. A mode never filters what the Outliner or a command selects.
 - **Place is one panel with one search over everything placeable** - objects, lights, spawn points, shapes and
   volumes, sounds, particles, way paths, groups, with Recent - dragged into the viewport or armed and clicked
-  (`level.view`, `scene.place`). Way points are sub-objects of their way; a volume's job is its `usage` (a shape
+  (`level.view`, `scene.place`). A category whose list is still being read shows a spinner, never a count of 0. Way points are sub-objects of their way; a volume's job is its `usage` (a shape
   with `usage = "ai_map_bounds"` bounds the AI map).
 - **Details shows what the selection is**: Transform first, rare rows under More, a Reset arrow on a value off its
   default, several objects showing the rows they share. Every row has a stable key, a Title Case label, a unit and

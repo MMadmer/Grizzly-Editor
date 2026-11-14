@@ -380,8 +380,8 @@ impl TextureParams {
             MipFilterId::KAISER => MipFilter::CatmullRom,
             _ => MipFilter::Default,
         };
-        // DXTCompressImage generates the whole chain whatever flGenerateMipMaps says,
-        // and applies neither the fade nor the border options
+        // the game textures of the library were made with the whole mip chain whatever the
+        // description's mip switch says, and with neither the fade nor the border options
         Ok(DdsRequest { encoding, mips: true, filter })
     }
 }

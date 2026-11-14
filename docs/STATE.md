@@ -182,8 +182,13 @@ What the suites hold, beyond what their names say:
   window's frame waiting.
 - No frame makes a thread: making one is a system call, and a virus scanner held it for three seconds on an
   editor it had not seen before. The read-back of a pictured frame is polled by one thread made with the window;
-  a thread a surface needs on first use (the sound player's, the renderer's start, the image pass's) is made by
-  a pool thread (`gz_task::Executors::thread`).
+  a thread a surface needs on first use (the sound player's, the renderer's start, the image pass's, the file
+  dialog's) is made by a pool thread (`gz_task::Executors::thread`).
+- A count that is not known yet is no number: a Place category shows a spinner until its list is read, and the
+  busy mark is what `ui.audit`'s `loading` reports - a kit test holds every busy mark to it, `test_ui_shell`
+  sees it non-empty while a project opens.
+- A pick list of a surface is put up by that surface's view command (`show=`), not by `ui.popup`: the command
+  opens the tab, the page and the fold that hold it. `ui.contract`'s `view_popups` names every one.
 - The viewport labels the nearest 256 of what is in view, each laid out once: a marquee over a whole level selected
   its way paths, and the frame that named every point of them spent 80 ms on text.
 - A stall's stack is read at half the limit: the middle of a pass that works, the same place in one that waits.

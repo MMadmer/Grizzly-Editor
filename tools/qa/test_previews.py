@@ -452,11 +452,32 @@ def run_library_commands(project: str, shots: str | None) -> None:
             library_lanim(lib)
             library_maintenance(lib)
             library_is_no_game(art)
+            library_pick_popups(shots)
         finally:
             ed.close()
     finally:
         qa.remove_tree(lib)
         qa.remove_tree(art)
+
+
+def library_pick_popups(shots: str | None) -> None:
+    """A description's texture picks are the kit's list, and a command puts each up to be looked at."""
+    item = "qa" + chr(92) + "qa_swatch"
+    v = cmd("library.view", kind="texture_library", action="select", item=item, show="detail")
+    rows = [c.get("label") for c in cmd("ui.audit").get("controls") or []]
+    check(v.get("ok") and v.get("pick") == "detail" and "None" in rows,
+          "K library.view show=detail puts the detail texture's list up, None first", json.dumps(v)[:200])
+    qa.shot(shots, "library_pick_detail")
+    cmd("ui.popup", show="none")
+    no = cmd("library.view", kind="texture_library", action="select", item=item, show="normal")
+    check(not no.get("ok") and "no normal texture row" in str(no.get("error")),
+          "K a pick the description has no row for is refused in a sentence", json.dumps(no)[:200])
+    wrong = cmd("ui.popup", show="detail")
+    check(not wrong.get("ok") and "library.view" in str(wrong.get("error")),
+          "K ui.popup names the command that puts a surface's pick list up", json.dumps(wrong)[:200])
+    views = cmd("ui.contract").get("view_popups") or []
+    check("library.view kind=texture_library show=detail" in views, "K ui.contract names the pick lists a view command puts up",
+          json.dumps(views)[:300])
 
 
 def library_is_no_game(art: str) -> None:

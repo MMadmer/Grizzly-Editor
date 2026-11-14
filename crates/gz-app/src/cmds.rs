@@ -834,6 +834,7 @@ pub(crate) fn ui_contract_json() -> Value {
         "dialogs": pairs(&contract::DIALOGS),
         "document_kinds": contract::DOCUMENT_KINDS,
         "popups": contract::POPUPS,
+        "view_popups": contract::VIEW_POPUPS,
         "menus": contract::MENUS,
         "viewport_menus": contract::VIEWPORT_MENUS,
         "kit_dialogs": contract::KIT_DIALOGS,

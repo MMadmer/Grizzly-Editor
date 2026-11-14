@@ -2156,7 +2156,16 @@ impl ShellState {
                 gz_ui::menu::show_popup(ctx, &name);
                 Ok(())
             }
-            _ => Err(format!("unknown popup '{show}' (ui.contract lists them)")),
+            _ => {
+                // a surface's pick list is put up by its own view command
+                let by_view = contract::VIEW_POPUPS
+                    .iter()
+                    .find(|call| call.rsplit_once("show=").is_some_and(|(_, value)| value == show));
+                Err(match by_view {
+                    Some(call) => format!("'{show}' is a pick list of its surface: {call} puts it up"),
+                    None => format!("unknown popup '{show}' (ui.contract lists them)"),
+                })
+            }
         }
     }
 }

@@ -467,7 +467,7 @@ impl TexLibDoc {
                         &format_tokens(),
                         &mut gesture,
                     );
-                    g.section("MipMaps", true, None, |g| {
+                    g.section("Mip Maps", true, None, |g| {
                         flag(g, "Enabled", ro, &mut p.flags, TextureFlags::GENERATE_MIP_MAPS, &mut gesture);
                         token(
                             g,
@@ -488,7 +488,7 @@ impl TexLibDoc {
                         if p.bump_mode == BumpMode::USE || p.bump_mode == BumpMode::USE_PARALLAX {
                             pick(
                                 g,
-                                "Texture",
+                                ("bump", "Texture"),
                                 "The bump map it is lit with",
                                 ro,
                                 &mut p.bump_name,
@@ -502,7 +502,7 @@ impl TexLibDoc {
                         flag(g, "Dither", ro, &mut p.flags, TextureFlags::DITHER_COLOR, &mut gesture);
                         flag(
                             g,
-                            "Dither Each MIP",
+                            "Dither Each Mip",
                             ro,
                             &mut p.flags,
                             TextureFlags::DITHER_EACH_MIP_LEVEL,
@@ -510,7 +510,7 @@ impl TexLibDoc {
                         );
                         flag(
                             g,
-                            "Implicit Lighted",
+                            "Implicitly Lit",
                             ro,
                             &mut p.flags,
                             TextureFlags::IMPLICIT_LIGHTED,
@@ -518,19 +518,19 @@ impl TexLibDoc {
                         );
                     });
                     g.section("Fade", true, None, |g| {
-                        flag(g, "Enable Color", ro, &mut p.flags, TextureFlags::FADE_TO_COLOR, &mut gesture);
-                        flag(g, "Enabled Alpha", ro, &mut p.flags, TextureFlags::FADE_TO_ALPHA, &mut gesture);
+                        flag(g, "Fade Color", ro, &mut p.flags, TextureFlags::FADE_TO_COLOR, &mut gesture);
+                        flag(g, "Fade Alpha", ro, &mut p.flags, TextureFlags::FADE_TO_ALPHA, &mut gesture);
                         let mut d = i32::from(p.fade_delay);
-                        whole(g, "Delay 'n' MIP", ro, &mut d, 0, 255, "fade_delay", &mut gesture);
+                        whole(g, "First Faded Mip", ro, &mut d, 0, 255, "fade_delay", &mut gesture);
                         p.fade_delay = u8::try_from(d).unwrap_or(0);
                         let mut a = i32::try_from(p.fade_amount).unwrap_or(0);
-                        whole(g, "% of color to fade in", ro, &mut a, 0, 100, "fade_amount", &mut gesture);
+                        whole(g, "Amount, %", ro, &mut a, 0, 100, "fade_amount", &mut gesture);
                         p.fade_amount = u32::try_from(a).unwrap_or(0);
                         argb(g, "Color", ro, &mut p.fade_color, "fade_color", &mut gesture);
                     });
                     g.section("Border", true, None, |g| {
-                        flag(g, "Enabled Color", ro, &mut p.flags, TextureFlags::COLOR_BORDER, &mut gesture);
-                        flag(g, "Enabled Alpha", ro, &mut p.flags, TextureFlags::ALPHA_BORDER, &mut gesture);
+                        flag(g, "Border Color", ro, &mut p.flags, TextureFlags::COLOR_BORDER, &mut gesture);
+                        flag(g, "Border Alpha", ro, &mut p.flags, TextureFlags::ALPHA_BORDER, &mut gesture);
                         argb(g, "Color", ro, &mut p.border_color, "border_color", &mut gesture);
                     });
                 }
@@ -538,7 +538,7 @@ impl TexLibDoc {
                     g.section("Bump", true, None, |g| {
                         pick(
                             g,
-                            "Special NormalMap",
+                            ("normal", "Normal Map"),
                             "A normal map of its own, 32 bit, of the same size",
                             ro,
                             &mut p.ext_normal_map_name,
@@ -560,7 +560,7 @@ impl TexLibDoc {
                         &format_tokens(),
                         &mut gesture,
                     );
-                    g.section("MipMaps", true, None, |g| {
+                    g.section("Mip Maps", true, None, |g| {
                         flag(g, "Enabled", ro, &mut p.flags, TextureFlags::GENERATE_MIP_MAPS, &mut gesture);
                         token(
                             g,
@@ -587,7 +587,7 @@ impl TexLibDoc {
                     g.section("Flags", true, None, |g| {
                         flag(
                             g,
-                            "Implicit Lighted",
+                            "Implicitly Lit",
                             PropFlags::READ_ONLY,
                             &mut p.flags,
                             TextureFlags::IMPLICIT_LIGHTED,
@@ -830,7 +830,7 @@ fn argb(g: &mut Grid<'_>, label: &str, flags: PropFlags, value: &mut u32, key: &
 /// A texture of the library picked from its list, or none.
 fn pick(
     g: &mut Grid<'_>,
-    label: &str,
+    (key, label): (&str, &str),
     help: &str,
     flags: PropFlags,
     value: &mut gz_editor::SmolStr,
@@ -842,9 +842,9 @@ fn pick(
             read_only(ui, if value.is_empty() { "None" } else { value }, Clip::Start);
             return;
         }
-        if let Some(picked) = texture_pick(ui, label, value, names) {
+        if let Some(picked) = texture_pick(ui, key, value, names) {
             *value = picked.into();
-            *gesture = label.to_owned();
+            *gesture = key.to_owned();
         }
     });
 }
@@ -852,8 +852,16 @@ fn pick(
 fn details(g: &mut Grid<'_>, ro: PropFlags, p: &mut TextureParams, names: Names<'_>, gesture: &mut String) {
     g.section("Details", true, None, |g| {
         flag(g, "Use As Diffuse", ro, &mut p.flags, TextureFlags::DIFFUSE_DETAIL, gesture);
-        flag(g, "Use As Bump (R2)", ro, &mut p.flags, TextureFlags::BUMP_DETAIL, gesture);
-        pick(g, "Texture", "The detail texture laid over it", ro, &mut p.detail_name, names, gesture);
+        flag(g, "Use As Bump", ro, &mut p.flags, TextureFlags::BUMP_DETAIL, gesture);
+        pick(
+            g,
+            ("detail", "Texture"),
+            "The detail texture laid over it",
+            ro,
+            &mut p.detail_name,
+            names,
+            gesture,
+        );
         let mut s = p.detail_scale;
         real(g, "Scale", ro, &mut s, 0.1, "", "detail_scale", gesture);
         p.detail_scale = s.clamp(0.1, 10000.0);
