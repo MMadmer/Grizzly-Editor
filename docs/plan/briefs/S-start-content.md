@@ -60,6 +60,16 @@ payloads: the payload types are the kit's (`gz_ui::drop`), so agree through it.
   `shot.asset` - replacing `preview_model`, `texture_preview`, `library`, `asset_preview` and the bridge's
   `asset_preview_model`.
 
+## 3a. Two leftovers of the PDA tab (`crates/gz-ui-pda`, yours for this)
+
+Stream M left two items open in its report (`docs/plan/reports/M.md`, "Not done"):
+- the PDA tab stalls 140-300 ms on its first frame when the Source pane is open on a large layout file (the
+  author's is the case; moving the colouring off the UI thread did not remove it): find what the first frame
+  really does (measure - `perf.stalls` names the phase), and make it a frame like any other;
+- the PDA's texture sheets upload in one piece: use the kit's `upload::Tiled` (audit `ux_rest.md` D row 12), as
+  your thumbnails do.
+`tools/qa/test_pda.py` ends with `perf.stalls` empty on the author's layout.
+
 ## 4. The Output Log
 
 The first visible line is never cut in half; a line's level is its colour and a word a filter can pick; the

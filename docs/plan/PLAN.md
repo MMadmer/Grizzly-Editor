@@ -99,9 +99,20 @@ records removed; the command core (`gz-editor`); version 0.7.0; the contracts (`
 
 | Stream | Brief | Owns | Model |
 |---|---|---|---|
-| L2 Level UI | `briefs/L2-level-ui.md` | `gz-ui-level`, `gz-ui-viewport`; `viewport.*`, the level's actions; UI_DESIGN's level sections | Opus 5.5, xhigh |
-| S Start, content, previews | `briefs/S-start-content.md` | `gz-ui-app` (start page), `gz-ui-content`, `gz-ui-previews`; `file.*` UI, the libraries | Opus 5.5, high |
-| Q Tests and documents | `briefs/Q-tests-docs.md` | `tools/qa`, `tools/rust`, `tools/mcp`, `docs/` (ARCHITECTURE, STATE, AI_SETUP, MOD_QUICKSTART), test pruning across crates, the comment sweep | Sonnet 5.5, high |
+| L2a Viewport | `briefs/L2a-viewport.md` | `gz-ui-viewport`, `gz-render`: the mode control, pills, gizmo, the drop target, brushes; `viewport.*` | Opus 5.5, high |
+| L2b1 Place and Outliner | `briefs/L2b1-place-outliner.md` | `gz-ui-level`: the layout, the Place panel, the Outliner, the modes' panels | Opus 5.5, high |
+| L2b2 Details and Build | `briefs/L2b2-details-build.md` | `gz-ui-level`: Details, the chooser, Build and Play, menus, the level's actions; the old command table deleted | Opus 5.5, high |
+| S Start, content, previews | `briefs/S-start-content.md` | `gz-ui-app` (start page), `gz-ui-content`, `gz-ui-previews`; the PDA tab's two leftovers | Opus 5.5, high |
+
+**Wave 3b - after the surfaces**
+
+| Stream | Brief | Owns | Model |
+|---|---|---|---|
+| Q1 Suites and checks | `briefs/Q1-suites-checks.md` | `tools/qa`, the check scripts; the untyped registry API removed | Sonnet 5.5, high |
+| Q2 Sweep and documents | `briefs/Q2-sweep-docs.md` | comments, names and messages in every crate; the documents; dead tracked data | Sonnet 5.5, high |
+
+An engineer gets one or two large pieces of work, not five: a stream that grew past that was cut (L1 into two,
+L2 into three, Q into two).
 
 **Wave 4 - closing:** the critic (Fable 5.2) reads the whole diff against this plan and the contracts and is
 resumed after each round of fixes until it says nothing is open; the three entry points on the release build; the
@@ -134,7 +145,8 @@ local build in `Bin\x64\Release`; `main` moved to the result; CLAUDE.md and the 
 - **M**: every mod-side surface passes section 1a and the defects of `ux_rest.md` B.5-B.10; their commands are
   typed (`mod.*`, `release.*`, `screens.*`, `world.*`, `characters.*`, `pda.*`); no bridge-side polling is needed;
   a project's jobs stop when it closes.
-- **L2**: the level tab on the new model, every finding of `ux_level.md` B and C fixed or answered.
+- **L2** (L2a the viewport, L2b the panels): the level tab on the new model, every finding of `ux_level.md` B, C
+  and D fixed or answered; the old command table gone.
 - **S**: the Start page, the Content Browser (drag into the viewport places), the previews and libraries polished
   to the same standard; their commands typed.
 - **Q**: three entry points; suites by area, each under two minutes, each ending on `perf.stalls`; no `add` /
