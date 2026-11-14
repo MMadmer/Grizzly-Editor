@@ -191,6 +191,10 @@ What the suites hold, beyond what their names say:
   `errors`, the error states it shows in place of content: a caller that judges or pictures a surface waits for
   an empty `loading` first, and the tour does and fails on an error state - it found the stall above by staying
   on a tab until it was ready.
+- A library is never a game: its writers pass a guard built from every game this editor knows, and a game's
+  folder is refused as the library's. A synchronisation asks nothing (it loses nothing); retiring the game
+  sounds that lost their source and rewriting the descriptions are asked by the window's action, never by
+  the command.
 - The libraries' pending edits are a service of the editor, so a command edits what a person edits and needs
   no tab. `library.set` saves by default: a caller that sets and leaves must not lose the change; a person's
   edit stays unsaved until Save. `library.rebuild` is not `library.import`: nothing comes from outside.

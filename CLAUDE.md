@@ -513,7 +513,10 @@ A change of plan is a change of its document first.
   build and the flat export, the level exports, the level build, the release stage and Play's
   game root: nothing under the linked game's root, judged as written and where the path really is, but the module's
   `modules\<id>` (with its stage in `modules\.new`) and the flat `gamedata_<id>`. A level build writes into the open
-  project (`gamedata\levels\<level>`, `gamedata\spawns`), never into the game.
+  project (`gamedata\levels\<level>`, `gamedata\spawns`), never into the game. The editor's library has a guard of
+  its own, with no exception: its writers (descriptions, game textures and sounds, `lanims.xr`, imports) pass
+  `gz_project::library_guard`, nothing under any game this editor knows is written, and a game's folder is
+  refused as the library's.
 
 ## Classic mods
 

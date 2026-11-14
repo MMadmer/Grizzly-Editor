@@ -97,7 +97,8 @@ timeout answers `code: running` with its job, never a guess.
   Text is UTF-8 inside; cp1251 is converted explicitly where the game's files are read or written.
 - **Every writer passes one guard** (`gz_editor::fsx::WriteGuard`): nothing under the linked game's root, judged
   as written and where the path really is, except the module's `modules\<id>` (with its stage in
-  `modules\.new`) and the flat `gamedata_<id>`.
+  `modules\.new`) and the flat `gamedata_<id>`. The editor's library is written through a guard of its own
+  (`gz_project::library_guard`): nothing under any game this editor knows, with no exception.
 - **The editor's own updates** (`gz-update`, `docs/UPDATES.md`): one archive per release, a ranged delta, a
   journalled swap with rollback.
 
