@@ -360,8 +360,11 @@ A change of plan is a change of its document first.
 - A project's tabs live in this machine's state of it and come back lazily (a placeholder until
   activated; "File not found" / `missing` when the file is gone). The layout lives in the kit's layout store in
   the editor's settings file `grizzly_editor.ltx` (`gz-app`'s `settings.rs`).
-- The libraries are tabs too (Libraries menu, `library.view`; `gz-ui-previews`). The Texture Library
-  reads the `.tga` sources of `$textures$` (rawdata\textures); Check New Textures
+- The libraries are tabs too (Libraries menu, `library.view`; `gz-ui-previews`). Their files are binary (`.thm`,
+  `lanims.xr`), so what they edit has commands: `library.set` (a texture's description, a sound's parameters, a
+  light animation's keys), `library.play`, `library.import`, `library.rebuild`, and every toolbar button is an
+  action over one. The pending edits are a service (`LibraryStores`), not the tab's. The Texture Library
+  reads the `.tga` sources of `$textures$` (rawdata\textures) and takes pictures dropped on it; Check New Textures
   turns a library tab without unsaved changes into New Textures (from `$import$`)
   and the finished import brings the library back. An empty library says what it
   reads (rawdata\sounds, gamedata\lanims.xr).

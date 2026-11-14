@@ -138,15 +138,15 @@ The kit is the crate `gz-ui`, on egui; its API is the crate's own (`cargo doc -p
 | `menu_item` / `MenuItem` | a menu row | on, off with its reason, checked, danger |
 | `banner`, `banner_list` | a toned bar over a surface, with up to a short list and an action per item | info, warning, error |
 | `toast`, `toast_with` | a note in the window, optionally with one button that runs an action | info, success, warning, error |
-| `empty_state`, `badge`, `status_dot`, `spinner`, `busy_line` | states of a surface | |
-| `card`, `page`, `page_card` + `card_footer` | a raised part of a page; a page filling the work area; a centred card with a dialog-like footer | a tone strip while it asks for attention |
+| `empty_state`, `error_state`, `badge`, `status_dot`, `spinner`, `busy_line` | states of a surface | an error state and a busy line report themselves to an audited frame |
+| `card`, `card_busy`, `page`, `page_card` + `card_footer` | a raised part of a page and its busy line; a page filling the work area; a centred card with a dialog-like footer | a tone strip while it asks for attention; busy |
 | `Dialog`, `Footer`; `confirm`, `unsaved_prompt`, `notice`, `result` | modal work and the kit's questions | S, M, L, XL; a sheet of its parent; busy |
 | `list`, `nav_row`, `table_headers` | rows with stable ids, a nav list | selected, hovered, a dot or a count |
 | `splitter`, `splitter_tail`, `splitter_at` | a resizable edge; its value in the layout store | |
 | `drop` (`Payload`, `Zone`) | typed drag payloads - an asset with its kind, files from Explorer - and drop zones any surface declares | a zone lights up under what it takes |
 | `text::fit` | a cut text kept per (text, face, width), for what is drawn every frame | |
 | `upload::Tiled` | a big picture that reaches the GPU a few tiles a frame, so no frame uploads megabytes | loading, whole |
-| `audit` | what a frame cut short or let escape, for `ui.audit` | |
+| `audit` | what a frame cut short, let escape, shows as an error or still loads, for `ui.audit` | |
 | `file_dialog` | the system's file dialog, for a person only | |
 
 **Buttons**
@@ -223,7 +223,7 @@ Chrome totals 122 pt:
 - **Level only:** Scene, Build, View (section 6, "Level toolbar and menus").
 - **Graph only:** Graph (the graph tab's).
 - **Mod:** Mod Settings, Characters, World Rules, Screens & Music, PDA Interface, Link Game... | Build Into Game, Build to Folder..., Export Flat Gamedata..., Bake Scene Layer ▸ | Package Release..., Publish Release..., Releases | Submit to Mod Browser....
-- **Libraries:** Light Animations, Texture Library, Sound Library | Check New Textures, Synchronize Textures..., Synchronize Sounds... | Reload Objects, Reload Textures, Rewrite Texture Descriptions....
+- **Libraries:** Light Animations, Texture Library, Sound Library | Reload Objects. What a library does by hand is under its tab's More.
 - **Window:** the Level panels, each with its own icon and a check while open; Content Drawer, Log Drawer; the open documents; Reset Layout.
 - **Help:** Keyboard Shortcuts (Preferences on its Keyboard page), About Grizzly Editor | Check for Updates... (a check, then the Update dialog with what it found).
 
@@ -566,8 +566,9 @@ None of them acts while a modal is up. `app.keys action=resolve keys=<chord>` an
 
 **Libraries** (`gz-ui-previews`'s `library`; `library.view`)
 - Light Animations, Texture Library and Sound Library are documents: list | preview or timeline | grid. An unsaved prompt guards their edits. The Libraries menu opens the three and Reload Objects; what a library does by hand is under its tab's More.
+- **Their edits are the editor's, not the tab's**: a tab, a command and Save work on one set of pending changes (`LibraryStores`), so every button of a library's toolbar is an action over a command and nothing needs the tab. `library.set kind= item= set={...}` changes a texture's description, a sound's parameters or a light animation's properties and keys by the names the Details rows show (it saves, or `save=false` leaves the edit unsaved); `library.play` plays or stops a sound or a light animation; `library.import from=` brings pictures in from anywhere as one job (`overwrite` is the losing parameter); `library.rebuild` makes an entry's game texture or game sound again; `library.view action=check` is Check New Textures; `library.reload kind=light_animations` reads the file again (`discard` loses unsaved keys).
 - **One empty state for one fact.** A library with nothing in it says so once, over the whole tab, naming the folder or file it reads, with what fills it as the single Primary (the Texture Library: Import New Textures). With entries and none picked, the preview says "Pick ..." and the details stay blank.
-- The Texture Library reads the `.tga` sources of `rawdata\textures`. As it opens it looks at the import folder by itself and offers what is new there over the list ("3 new pictures in the import folder." [Import]); Import turns the tab into New Textures, and the finished import - which builds the game textures - brings the library back. More: Check New Textures, Synchronize Textures..., Rewrite Texture Descriptions..., Reload Textures. The Sound Library's More: Synchronize Sounds.... Whether a library's folder can be written is looked at on the IO pool as the tab opens (until it answers, the tab is not read-only).
+- The Texture Library reads the `.tga` sources of `rawdata\textures`. **Pictures dropped on the tab - files from Explorer, picture tiles of the Content Browser - are imported** (the kit's drop zone over the whole tab, `library.import`); nobody has to find the import folder. As it opens it looks at the import folder by itself and offers what is new there over the list ("3 new pictures in the import folder." [Check]); the check turns the tab into New Textures, and the finished import - which builds the game textures - brings the library back; an import that would replace a staged picture or a texture of the library asks first, naming them. More: Check New Textures, Synchronize Textures..., Rewrite Texture Descriptions..., Reload Textures, the type filter. The Sound Library's toolbar: Play, Stop, Auto Play, Rebuild, then More (Synchronize Sounds...). The Light Animations tab's: Reload, Alpha, the key actions (Previous, Next, Add, Delete, Move Earlier, Move Later), Play, Stop. Whether a library's folder can be written is looked at on the IO pool as the tab opens (until it answers, the tab is not read-only).
 - Detail Object List becomes an L dialog (`dlg.detail_objects`, above).
 - Choose (`###dlg.choose`, the Chooser above). Every list is picked, never typed (`gz-ui-level`'s `lists.rs`, read off the UI thread and kept for the session):
  a spawn's Model\Animation lists its model's motions (its own and those of the `.omf` files it names), Fixed bones and a light's bones its model's bones (Fixed bones takes several, the ones it has picked already), Motion the game's `anims\*.anm` / `*.anms`. An empty list says what is missing ("The model ... has no motions.", "The object has no model."). `scene.choices` answers the same list (`list`, `total`, `choices` with `query` / `limit`, `several`, `empty`); `scene.get` names a pick property's `list`.
@@ -599,7 +600,7 @@ The window's commands are typed cards of the registry (`docs/COMMANDS.md`): `hel
 | `ui.toast text= [tone= action= label=]` | a note, optionally with a button that runs an action |
 | `ui.scroll id= to=top\|bottom\|<pt>\|item:<name>` | a panel, a drawer, a dialog or the work area; answers `scroll_y`, `scroll_max_y` |
 | `ui.split [key= value=]` | the layout store's sizes; with no key, every key |
-| `ui.audit [id=]` | what the next frame cut short (`truncated`), let escape (`escaped`), its `controls` (enabled, why, help), and `loading`: the busy lines it shows - a surface that has not got its content yet, so a caller waits for an empty list before it judges or pictures one |
+| `ui.audit [id=]` | what the next frame cut short (`truncated`), let escape (`escaped`), its `controls` (enabled, why, help), `loading`: the busy marks it shows (a busy line, a card's, a dialog footer's) - a surface that has not got its content yet, so a caller waits for an empty list before it judges or pictures one - and `errors`: the error states it shows in place of content, each with its sentence |
 | `ui.scale [value=]` | the scale for tests until the editor ends; never saved |
 | `ui.contract` | the constants QA pins (`gz-app`'s `contract.rs`): panels, drawers, dialogs, kit dialogs, document kinds, popups, menus, viewport menus, the palette's id, the Task card, tile range and defaults, accents, categories, card menu labels, the scale range, the interface scales, the stall limit |
 | `ui.reset_layout [scope=level\|all]` | Window > Reset Layout; `all` also forgets every split |

@@ -36,7 +36,9 @@ ways in), `docs/ASSETS.md` (text assets and projects), `docs/UPDATES.md` (the ed
 
 The pools run at normal priority on every logical core: the editor's work takes what the hardware has, and no
 pool is made smaller or slower for smoothness. The thread that draws runs above normal instead, so the window
-gets its slice first; the process opts out of Windows' power throttling.
+gets its slice first; the process opts out of Windows' power throttling. No thread is made by the UI thread:
+a thread of its own (a device's loop, a renderer's start) is started with `Executors::thread`, where a pool
+thread makes it.
 
 ## 3. State
 
@@ -46,7 +48,8 @@ that fails or panics leaves the published state exactly as it was. Large collect
 so a snapshot per command shares the rest; bulk data (meshes, textures, AI map tiles, detail slots) is immutable
 blobs behind handles. **Undo is the previous snapshot**: every document has its own history, and undo cannot
 disagree with the model. Stores never await one another: work that spans stores is a job that sends commands to
-each.
+each. What a tab edits lives in a store of the editor or the project, never in the tab: a command changes it
+without a window, and the tab, when one is open, follows (the libraries' pending edits: `LibraryStores`).
 
 **Derived data is a query** (`gz-query`): a pure function of snapshots and file revisions, memoised by those
 revisions, computed on the CPU pool. It answers at once with `Fresh`, `Stale` or `Pending`; the UI draws what it

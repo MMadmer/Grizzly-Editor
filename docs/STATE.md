@@ -183,8 +183,13 @@ What the suites hold, beyond what their names say:
 - The viewport labels the nearest 256 of what is in view, each laid out once: a marquee over a whole level selected
   its way paths, and the frame that named every point of them spent 80 ms on text.
 - A stall's stack is read at half the limit: the middle of a pass that works, the same place in one that waits.
-- `ui.audit` answers `loading`, the busy lines a frame shows: a caller that judges or pictures a surface waits
-  for an empty list first, and the tour does - it found the stall above by staying on a tab until it was ready.
+- `ui.audit` answers `loading`, the busy marks a frame shows (a busy line, a card's, a dialog footer's), and
+  `errors`, the error states it shows in place of content: a caller that judges or pictures a surface waits for
+  an empty `loading` first, and the tour does and fails on an error state - it found the stall above by staying
+  on a tab until it was ready.
+- The libraries' pending edits are a service of the editor, so a command edits what a person edits and needs
+  no tab. `library.set` saves by default: a caller that sets and leaves must not lose the change; a person's
+  edit stays unsaved until Save. `library.rebuild` is not `library.import`: nothing comes from outside.
 - A resize configures the surface on the UI thread, which waits there for the frames in flight; the graphics
   driver's own waits inside a present are the driver's. On a machine with no processor to spare either can pass
   100 ms, so a suite that fails on a stall alone beside other suites is run again alone before it counts.
