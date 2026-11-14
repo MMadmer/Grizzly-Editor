@@ -1698,14 +1698,18 @@ dependencies = [
 name = "gz-lc-gpu"
 version = "0.7.0"
 dependencies = [
+ "bytemuck",
+ "futures",
  "glam",
  "gz-fmt-level",
  "gz-lc",
  "gz-lc-light",
  "gz-task",
  "hex",
+ "parking_lot 0.13.0",
  "rayon",
  "sha2",
+ "wgpu",
 ]
 
 [[package]]
@@ -1744,6 +1748,7 @@ dependencies = [
  "gz-fmt-xr",
  "gz-game",
  "gz-lc",
+ "gz-lc-gpu",
  "gz-lc-light",
  "gz-luadata",
  "gz-mod",
