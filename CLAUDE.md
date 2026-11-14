@@ -141,7 +141,9 @@ A change of plan is a change of its document first.
   `exists`), a write that fails off the UI thread is the command's answer (`Document::save_failed`), never a
   dialog, and a tab that writes on the pools stays dirty until its file is written. Every command that saves
   tabs waits for the saves (`save_tabs`) before it goes on: no tab, project or editor closes over a write
-  under way.
+  under way. `app.switch_project` is the project's close with the caller's own answer: `project.close`
+  saves the scene and every tab, refuses with `unsaved` naming them, or drops them (`discard`, the destroy
+  door).
 - **The effect decides the door.** Over MCP the bridge `grizzly-mcp.exe` has six tools: `grizzly_help`,
   `grizzly_state`, `grizzly_run` (read, view, write; `batch` runs several), `grizzly_destroy` (loses data for good:
   `destructiveHint`, so a client asks its user on exactly those calls), `grizzly_release` (reaches players),
@@ -263,7 +265,8 @@ A change of plan is a change of its document first.
 - `licenses\THIRD_PARTY_NOTICES.txt` is made by `python tools/rust/notices.py` from what the three programs link; a
   dependency added or removed means running it again (`check.sh` says so).
 - Test run: `Grizzly.exe -project "<folder or project file>" -nodlg` (`-nodlg` = no modals: the logged answers - No
-  for a question, OK for a note; a crash = symbolised stack + dump + exit code 3). `-headless` runs it without a
+  for a question, OK for a note - to the window's own actions; a command's caller is answered the same on any
+  editor and is refused with `unsaved` there too; a crash = symbolised stack + dump + exit code 3). `-headless` runs it without a
   window, `-home <folder>` keeps its project list, settings and logs there (or `GRIZZLY_HOME`), `-mcp_port <n>`
   listens elsewhere, `-minimized` starts the window minimised, `-uiscale <f>` fixes the UI scale, `-kitsheet` and
   `-iconsheet` show the kit's widgets and icons and nothing else.
@@ -1284,9 +1287,11 @@ A change of plan is a change of its document first.
   what its marker listed or this run wrote, and never when a project lies anywhere inside what it would clear. Every
   refusal comes before a byte is written or removed. An editor started with a home of its own (`-home`) keeps its
   default root under that home; only the author's own uses `%LOCALAPPDATA%\GrizzlyPlay`.
-- **Exit with Save ends the editor only when every save has finished**: a write under way and the Save dialog
-  of a scene without a file are waited for (`save_tabs`), and a save that fails keeps the editor open and says
-  why.
+- **A Save answered in the window is waited for** (`gz-app`'s `save_then`): Exit, Close Tab, a tab that
+  switches its file and Switch Project go on only when every save has finished - a write under way, the Save
+  dialog of a scene without a file. A save that fails keeps the tab, the project and the editor open and says
+  why; the Save dialog cancelled ends the wait quietly (`SAVE_CANCELLED`). Switch Project's question names the
+  scene with the other unsaved tabs.
 - A command shows NO confirmation (its caller already decided, and a call that loses data came through the
   destroy door) and never hangs on a modal — the window's path and the command
   share the implementation, but not the dialog.

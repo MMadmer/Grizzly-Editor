@@ -627,6 +627,30 @@ def run(ctx: qa.Run) -> None:
         got = last_scene(p["open"])
         check(o.get("ok") and c.get("ok") and got is not None and got.replace("/", "\\").lower() == rel,
               "L a project closed before its scene loaded keeps it", repr(got))
+
+        # ------------------------------------------------------------------ W: an asset never lands in the game
+        # a game made for this check alone, linked in the suite's own home; a folder of the project that is a
+        # link into it takes no asset - the file passes the write guard where it really lands
+        fake = os.path.join(w.root, "qa_fake_game")
+        for sub in ("gamedata", "database"):
+            os.makedirs(os.path.join(fake, sub))
+        with open(os.path.join(fake, "fsgame.ltx"), "w") as f:
+            f.write("; the file system's table")
+        qa.guard_project(p["created"])
+        o = cmd("project.open", path=p["created"])
+        linked = cmd("game.link", path=fake)
+        os.makedirs(os.path.join(p["created"], "quests"), exist_ok=True)
+        link = os.path.join(p["created"], "quests", "into_game")
+        _winapi.CreateJunction(os.path.join(fake, "gamedata"), link)
+        through = cmd("file.create", kind="quest", path="quests/into_game")
+        inside = os.listdir(os.path.join(fake, "gamedata"))
+        os.rmdir(link)
+        beside = cmd("file.create", kind="quest", path="quests")
+        check(o.get("ok") and linked.get("ok") and not through.get("ok") and "linked game" in str(through.get("error"))
+              and inside == [], "W file.create through a link into the linked game is refused, the game untouched",
+              short(through) + " / " + short(linked) + " / " + str(inside))
+        check(beside.get("ok"), "W beside the link the asset is made", short(beside))
+        c = cmd("project.close")
     finally:
         ed.close()
         try:

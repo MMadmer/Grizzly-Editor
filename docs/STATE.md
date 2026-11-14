@@ -68,8 +68,10 @@ What the suites hold, beyond what their names say:
 - The sound preview's playback in the chooser.
 - What the manifest's reference says a key of `[world]`, `[start_kit]` or `[screens]` does in the game: it is
   read from the readers' code and the game's document, not from a run of the game.
-- The window's Exit with Save over a scene that has no file: the Save dialog is the system's, and no suite
-  answers it.
+- The window's questions over unsaved work - Exit, Close Tab, a tab that switches its file, Switch Project -
+  and the Save dialog of a scene that has no file, picked or cancelled: a person's clicks and the system's
+  dialog, which no suite answers. The commands behind them are driven (`test_scene_tools` Z, `test_pda` H);
+  the window's own paths are held by the code they share with them (`save_tabs`).
 
 ## 3. Decisions
 
@@ -96,7 +98,17 @@ What the suites hold, beyond what their names say:
 - The window's Exit with Save waits for every save and then ends the editor; before, it ended under a write
   that had only begun, and under the Save dialog of a scene without a file. The commands do the same
   (`app.quit save=true`, `app.switch_project save=true`, `ui.tab action=close|open save=true`): each waits in
-  `save_tabs` until the tabs are clean or one of them answers why not.
+  `save_tabs` until the tabs are clean or one of them answers why not. So do the window's other three
+  questions (`save_then`): Close Tab, a tab that switches its file, Switch Project. A person's save has no
+  deadline - the Save dialog of a scene without a file is theirs to answer - and the dialog cancelled is the
+  save's answer (`SAVE_CANCELLED`, left by a guard the kit drops with the unrun continuation), which ends
+  the wait with nothing said.
+- `app.switch_project` is `project.close` with the caller's own answer. It had its own list of unsaved tabs,
+  which left the Level tab out, and closed the project with `discard`: the unsaved scene was dropped by
+  `save=true`, by no answer at all, and by the window's question, which did not name it.
+- `-nodlg`'s logged answers are for the window's own actions (`Origin::Unattended`). `project.close`,
+  `project.open` and `app.quit` took the flag for a command's caller too and dropped unsaved work without
+  `discard` on such an editor - every QA editor is one; a caller is refused with `unsaved` now.
 - A tab that learns of its save only as it draws (Mod Settings, Characters) takes the save's answer when the
   shell asks `save_failed` too: a tab that is not the active one is not drawn, and its save would never end.
   A save under way counts as unsaved (Characters).
@@ -105,7 +117,10 @@ What the suites hold, beyond what their names say:
   with a window, on the author's home (seen once, on the day `grizzly` got its first integration test). An
   example is no test either.
 - `file.create` makes the folder it is asked to put the asset into, the way `file.mkdir` makes one: its own
-  example works on a new project.
+  example works on a new project. It refuses a folder the project never lists, a device's name and a file in
+  the way; it takes a name no file of the kind has anywhere in the project (the asset's id comes from the
+  name: two quests made in two folders were one id); and the file passes the write guard where it really
+  lands - through a link in the project it reached the linked game.
 - The manifest's reference is one page of `gz-mod` (`reference.rs`), asked by name before the kind table:
   `[world]`, `[start_kit]` and `[screens]` are described there and held to their readers by a test of
   `grizzly`, which sees every crate - not by a hook each of those crates would have to offer. The first

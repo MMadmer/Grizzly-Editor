@@ -242,7 +242,8 @@ async fn app_quit(editor: Arc<Editor>, p: QuitParams, origin: Origin) -> Reply {
         .await?;
         return Ok(json!({ "asking": true }));
     }
-    let unattended = origin == Origin::Unattended || editor.flags.unattended;
+    // the window's own action under -nodlg has the logged answer; a command's caller says discard
+    let unattended = origin == Origin::Unattended;
     let mut out = Map::new();
     if p.save {
         let dirty = match UiQueue::of(&editor) {
@@ -295,7 +296,7 @@ async fn app_quit(editor: Arc<Editor>, p: QuitParams, origin: Origin) -> Reply {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SwitchParams {
-    /// Save the unsaved tabs first.
+    /// Save the scene and every unsaved tab first; the project closes once they are written.
     #[serde(default)]
     save: bool,
     /// Drop their unsaved changes.
@@ -308,46 +309,50 @@ async fn app_switch_project(editor: Arc<Editor>, p: SwitchParams, origin: Origin
         return Err(invalid("save and discard exclude each other"));
     }
     editor.project()?;
-    let ask = origin == Origin::Ui && !p.save && !p.discard;
-    let asker = asker_of(origin);
-    let (save, discard) = (p.save, p.discard);
-    // `None`: a person is asked in the window; otherwise the tabs to save first
-    let to_save = on_ui(&editor, move |shell, ctx| {
-        let dirty: Vec<(String, String)> =
-            shell.dirty_tabs().into_iter().filter(|(id, _)| id != crate::tabs::LEVEL).collect();
-        if dirty.is_empty() {
-            return Ok(Some(Vec::new()));
-        }
-        if ask {
+    // a person who has not answered yet: the window's question, which names the scene and every
+    // other unsaved tab (with nothing unsaved the project closes at once)
+    if origin == Origin::Ui && !p.save && !p.discard {
+        let asking = on_ui(&editor, |shell, ctx| {
+            let asking = !shell.dirty_tabs().is_empty();
             shell.switch_project(ctx);
-            return Ok(None);
-        }
-        if !save && !discard && asker != gz_ui::Asker::Unattended {
-            return Err(unsaved(&dirty));
-        }
-        if save {
-            return Ok(Some(dirty.into_iter().map(|(id, _)| id).collect()));
-        }
-        for (id, _) in &dirty {
-            shell.discard_tab(ctx, id);
-        }
-        Ok(Some(Vec::new()))
-    })
-    .await?;
-    let Some(to_save) = to_save else {
-        return Ok(json!({ "asking": true }));
-    };
-    // every save is waited for: the project does not close over a write under way
-    crate::unsaved::save_tabs(&editor, to_save, origin.may_ask()).await?;
+            Ok(asking)
+        })
+        .await?;
+        return Ok(if asking { json!({ "asking": true }) } else { json!({ "closing": true }) });
+    }
+    // the caller's own answer goes to the project's close, which saves every document - the scene,
+    // the tabs - and waits for the saves, refuses with `unsaved` naming them, or drops them
     let mut a = gz_editor::Args::new();
-    a.insert("discard".into(), json!(true));
+    if p.save {
+        a.insert("save".into(), json!(true));
+    }
+    if p.discard {
+        a.insert("discard".into(), json!(true));
+    }
     let reply = editor.call("project.close", a, origin).await;
     if reply.get("ok").and_then(Value::as_bool) != Some(true) {
-        let why =
-            reply.get("error").and_then(Value::as_str).unwrap_or("the project did not close").to_owned();
-        return Err(CmdError::new("failed", why));
+        return Err(failure_of(reply, "the project did not close"));
     }
-    Ok(json!({ "closed": true }))
+    let mut out = Map::new();
+    out.insert("closed".into(), json!(true));
+    for key in ["saved", "discarded"] {
+        if let Some(docs) = reply.get(key) {
+            out.insert(key.into(), docs.clone());
+        }
+    }
+    Ok(Value::Object(out))
+}
+
+/// A command's answer turned back into the error it was: its code, its sentence and what else it
+/// carried (the unsaved documents).
+fn failure_of(reply: Value, fallback: &str) -> CmdError {
+    let Value::Object(mut map) = reply else { return CmdError::new("failed", fallback) };
+    let text = |v: Option<Value>| v.and_then(|v| v.as_str().map(str::to_owned));
+    let code = text(map.remove("code")).unwrap_or_else(|| "failed".to_owned());
+    let message = text(map.remove("error")).unwrap_or_else(|| fallback.to_owned());
+    map.remove("ok");
+    let error = CmdError::new(&code, message);
+    if map.is_empty() { error } else { error.with_data(Value::Object(map)) }
 }
 
 async fn app_about(editor: Arc<Editor>, _p: NoParams, origin: Origin) -> Reply {
@@ -653,7 +658,12 @@ async fn doc_list(editor: Arc<Editor>, _p: NoParams, _origin: Origin) -> Reply {
 
 async fn doc_save(editor: Arc<Editor>, p: DocParams, origin: Origin) -> Reply {
     let id = on_ui(&editor, move |shell, _| target(shell, p.doc)).await?;
-    crate::unsaved::save_tabs(&editor, vec![id.clone()], origin.may_ask()).await?;
+    match crate::unsaved::save_tabs(&editor, vec![id.clone()], origin.may_ask()).await {
+        Ok(()) => {}
+        // the person gave the save up in the Save dialog: no failure to tell them of
+        Err(e) if e.code == crate::unsaved::SAVE_CANCELLED => return Ok(json!({ "cancelled": true })),
+        Err(e) => return Err(e),
+    }
     let tab = on_ui(&editor, move |shell, _| Ok(shell.tab_json(&id))).await?;
     Ok(json!({ "doc": tab }))
 }
@@ -761,7 +771,7 @@ pub(crate) fn register(reg: &mut Registry) {
     reg.cmd(
         Spec::write(
             "app.switch_project",
-            "Closes the project and goes back to the Start page; unsaved tabs need save or discard.",
+            "Closes the project and goes back to the Start page; unsaved work - the scene, the tabs - needs save or discard.",
         )
         .destroys_with(&["discard"]),
         app_switch_project,

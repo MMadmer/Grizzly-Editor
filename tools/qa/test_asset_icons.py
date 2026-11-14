@@ -208,6 +208,18 @@ def run(ctx: qa.Run) -> None:
               "D file.create makes the folder it is asked to put the asset into", json.dumps(deep)[:300])
         up = cmd("file.create", kind="quest", path="../outside")
         check(not up.get("ok"), "D and a folder outside the project is refused", json.dumps(up)[:300])
+        # the new asset's name is taken once in the project: its id comes from the name
+        other = cmd("file.create", kind="quest", path="qa_made/elsewhere")
+        names = {os.path.basename(where).lower(), os.path.basename(other.get("path", "")).lower()}
+        check(other.get("ok") and len(names) == 2, "D two quests made in two folders get two names (two ids)",
+              json.dumps(other)[:300])
+        # a folder the project never lists, a name Windows keeps, a file in the way: refused in a sentence
+        for bad, word in ((".git/hooks", "tooling"), ("releases/x", "editor's own"), ("temp/x", "editor's own"),
+                          ("qa_made/con", "device"), ("mod.ltx/x", "is a file")):
+            r = cmd("file.create", kind="quest", path=bad)
+            check(not r.get("ok") and word in str(r.get("error")) and "win32" not in str(r.get("error"))
+                  and not os.path.isdir(os.path.join(project, *bad.split("/"))),
+                  "D file.create path=" + bad + " is refused in a sentence, nothing made", json.dumps(r)[:300])
     finally:
         ed.close()
 

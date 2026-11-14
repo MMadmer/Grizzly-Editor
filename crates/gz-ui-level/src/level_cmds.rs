@@ -216,6 +216,19 @@ pub fn open(editor: &Arc<Editor>, ctx: &Context, which: LevelDialog) -> Result<(
 
 /// File > Save As...: the system's dialog in the project.
 pub fn save_as(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
+    save_as_with(editor, ctx, |ed, f| {
+        // the system's dialog asked before it gave a file that is there
+        run(ed, "scene.save", args(&[("path", path_text(&f)), ("overwrite", Value::Bool(true))]));
+    })
+}
+
+/// The Save Scene As dialog; `then` gets the file picked and is dropped unrun when the dialog is
+/// cancelled.
+pub fn save_as_with(
+    editor: &Arc<Editor>,
+    ctx: &Context,
+    then: impl FnOnce(&Arc<Editor>, std::path::PathBuf) + Send + 'static,
+) -> Result<(), String> {
     let Some(svc) = scene(editor) else { return Err("Open or create a scene first.".to_owned()) };
     let snap = svc.store.snapshot();
     let name = snap
@@ -228,10 +241,7 @@ pub fn save_as(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
         editor,
         ctx,
         save_request("Save Scene As", ("Scene", &["scene"]), svc.root.clone(), &name),
-        |ed, f| {
-            // the system's dialog asked before it gave a file that is there
-            run(ed, "scene.save", args(&[("path", path_text(&f)), ("overwrite", Value::Bool(true))]));
-        },
+        then,
     )
 }
 

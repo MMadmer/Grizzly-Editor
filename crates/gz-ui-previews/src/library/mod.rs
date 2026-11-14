@@ -100,6 +100,13 @@ pub(crate) fn answer_job(editor: &Arc<Editor>, id: gz_editor::JobId, failed: &Sa
     });
 }
 
+/// A caller's save found the libraries' save already running: that job's end answers the caller.
+pub(crate) fn answer_running(editor: &Arc<Editor>, failed: &SaveError) {
+    if let Some(job) = editor.jobs.running_in("libraries") {
+        answer_job(editor, job.id, failed);
+    }
+}
+
 /// Something a library tab is still reading for its selection.
 pub type Settle = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 

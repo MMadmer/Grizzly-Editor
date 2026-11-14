@@ -19,6 +19,10 @@ use crate::shell::ShellState;
 /// How long a save on request may take before the command gives up on it.
 const SAVE_WAIT: Duration = Duration::from_secs(120);
 
+/// The code of a save its person gave up - the system's Save dialog, cancelled: who waited for
+/// the save ends there, quietly.
+pub const SAVE_CANCELLED: &str = "cancelled";
+
 /// A tab with unsaved work only it holds: `(id, label, kind)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DirtyTab {
@@ -106,6 +110,27 @@ impl ShellState {
     }
 }
 
+/// The window's Save answer: saves the tabs for a person, waits for the saves, then runs `then`
+/// on the UI thread. A save that fails is a notice and `then` does not run - nothing closes over
+/// work that is not on the disk; a save the person gave up ([`SAVE_CANCELLED`]) ends quietly.
+pub(crate) fn save_then(
+    editor: &Arc<Editor>,
+    queue: &Arc<UiQueue>,
+    ids: Vec<String>,
+    then: impl FnOnce(&mut ShellState, &egui::Context) + Send + 'static,
+) {
+    let (ed, queue) = (editor.clone(), queue.clone());
+    let _task = editor.exec.spawn(async move {
+        match save_tabs(&ed, ids, true).await {
+            Ok(()) => queue.post(then),
+            Err(e) if e.code == SAVE_CANCELLED => {}
+            Err(e) => queue.post(move |shell, ctx| {
+                gz_ui::dialog::notice(ctx, shell.asker(), gz_ui::Tone::Error, "Save failed", &e.message);
+            }),
+        }
+    });
+}
+
 /// Saves the tabs `ids` and waits until each is clean: `Err` names the first that refused, or
 /// the one whose save did not end in time. `person`: a person asked in the window, so a tab
 /// may raise a question; a command's caller is refused in a sentence instead.
@@ -130,7 +155,10 @@ pub async fn save_tabs(editor: &Arc<Editor>, ids: Vec<String>, person: bool) -> 
             Ok(())
         })
         .await?;
-    let deadline = tokio::time::Instant::now() + SAVE_WAIT;
+    // a command is answered in time; a person's save may wait for that person (the Save dialog
+    // of a scene without a file), and ends when the file is written, the save fails or the
+    // dialog is cancelled
+    let deadline = (!person).then(|| tokio::time::Instant::now() + SAVE_WAIT);
     loop {
         let ids = ids.clone();
         // the tabs still dirty, and the first whose save - a write on the pools - failed
@@ -157,7 +185,7 @@ pub async fn save_tabs(editor: &Arc<Editor>, ids: Vec<String>, person: bool) -> 
             return Err(failed);
         }
         let Some(first) = left.first() else { return Ok(()) };
-        if tokio::time::Instant::now() >= deadline {
+        if deadline.is_some_and(|d| tokio::time::Instant::now() >= d) {
             return Err(CmdError::new("failed", format!("{first}: the save did not finish")));
         }
         tokio::time::sleep(Duration::from_millis(50)).await;

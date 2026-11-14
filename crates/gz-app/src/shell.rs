@@ -671,25 +671,20 @@ impl ShellState {
                         let queue = self.queue.clone();
                         let retarget = req.clone();
                         let target = id.to_string();
+                        let editor = self.editor.clone();
                         dialog::unsaved_prompt(ctx, Asker::Ui, "retarget_tab", &[label], move |answer| {
-                            if answer == Answer::Cancel {
-                                return;
-                            }
-                            queue.post(move |shell, ctx| {
-                                if answer == Answer::Yes
-                                    && let Err(e) = shell.save_tab(ctx, &target, true)
-                                {
-                                    let _ = gz_ui::dialog::notice(
-                                        ctx,
-                                        shell.asker(),
-                                        Tone::Error,
-                                        "Save failed",
-                                        &e,
-                                    );
-                                    return;
+                            match answer {
+                                Answer::Cancel => {}
+                                // the other file opens once this one is written
+                                Answer::Yes => {
+                                    crate::unsaved::save_then(&editor, &queue, vec![target], |shell, ctx| {
+                                        let _ = shell.open(ctx, retarget, false, Asker::Ui);
+                                    })
                                 }
-                                let _ = shell.open(ctx, retarget, true, Asker::Ui);
-                            });
+                                _ => queue.post(move |shell, ctx| {
+                                    let _ = shell.open(ctx, retarget, true, Asker::Ui);
+                                }),
+                            }
                         });
                         return Ok(());
                     }
@@ -758,16 +753,19 @@ impl ShellState {
         let target = id.to_owned();
         let queue = self.queue.clone();
         let asker = self.asker();
-        let line = dialog::unsaved_prompt(ctx, asker, "close_tab", &what, move |answer| {
-            if answer == Answer::Cancel {
-                return;
+        let editor = self.editor.clone();
+        let line = dialog::unsaved_prompt(ctx, asker, "close_tab", &what, move |answer| match answer {
+            Answer::Cancel => {}
+            // the tab closes once its file is written; a save that fails keeps it open
+            Answer::Yes => {
+                let id = target.clone();
+                crate::unsaved::save_then(&editor, &queue, vec![target], move |shell, ctx| {
+                    let _ = shell.close_tab(ctx, &id, CloseMode::IfClean, true);
+                });
             }
-            let mode = if answer == Answer::Yes { CloseMode::SaveFirst } else { CloseMode::Discard };
-            queue.post(move |shell, ctx| {
-                if let Err(e) = shell.close_tab(ctx, &target, mode, true) {
-                    gz_ui::dialog::notice(ctx, shell.asker(), Tone::Error, "Save failed", &e);
-                }
-            });
+            _ => queue.post(move |shell, ctx| {
+                let _ = shell.close_tab(ctx, &target, CloseMode::Discard, true);
+            }),
         });
         if let Some(line) = line {
             self.editor.log.finding(&line);
@@ -903,18 +901,10 @@ impl ShellState {
         let editor = self.editor.clone();
         let line = dialog::unsaved_prompt(ctx, self.asker(), "exit", &what, move |answer| match answer {
             Answer::Cancel => {}
+            // every save is waited for: the editor does not end over a write under way, or under
+            // the Save dialog of a scene that has no file yet
             Answer::Yes => {
-                // every save is waited for: the editor does not end over a write under way, or
-                // under the Save dialog of a scene that has no file yet
-                let ed = editor.clone();
-                let _task = editor.exec.spawn(async move {
-                    match crate::unsaved::save_tabs(&ed, ids, true).await {
-                        Ok(()) => ed.request_quit(),
-                        Err(e) => queue.post(move |shell, ctx| {
-                            gz_ui::dialog::notice(ctx, shell.asker(), Tone::Error, "Save failed", &e.message);
-                        }),
-                    }
-                });
+                crate::unsaved::save_then(&editor, &queue, ids, |shell, _| shell.editor.request_quit());
             }
             _ => queue.post(move |shell, ctx| {
                 for id in &ids {

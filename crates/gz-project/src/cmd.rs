@@ -156,10 +156,11 @@ async fn project_list(ed: Arc<Editor>, _p: NoArgs, _origin: Origin) -> Reply {
 
 // ---- open, close, create ----------------------------------------------------------------------
 
-/// Whether the caller let unsaved work go: `discard`, or `-nodlg`, where the logged answer has
-/// always been No.
-fn lets_go(ed: &Editor, discard: bool, origin: Origin) -> bool {
-    discard || origin == Origin::Unattended || ed.flags.unattended
+/// Whether unsaved work was let go: `discard`, or the window's own action under `-nodlg`, whose
+/// question has the logged answer No. A command's caller is never that: on any editor it says
+/// `discard`, through the destroy door, or is refused with `unsaved`.
+fn lets_go(discard: bool, origin: Origin) -> bool {
+    discard || origin == Origin::Unattended
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -214,11 +215,7 @@ async fn project_open(ed: Arc<Editor>, p: OpenParams, origin: Origin) -> Reply {
     {
         return Ok(json!({ "note": "already open", "path": paths::wire(open.root()) }));
     }
-    if ed.project_opt().is_some()
-        && !p.save
-        && !lets_go(&ed, p.discard, origin)
-        && !ed.dirty_docs().is_empty()
-    {
+    if ed.project_opt().is_some() && !p.save && !lets_go(p.discard, origin) && !ed.dirty_docs().is_empty() {
         if p.from_launch && !ed.flags.headless && ProjectHooks::of(&ed).ask_before_launch(&ed, &folder) {
             return Ok(json!({ "asking": true, "path": paths::wire(&folder) }));
         }
@@ -227,7 +224,7 @@ async fn project_open(ed: Arc<Editor>, p: OpenParams, origin: Origin) -> Reply {
     if p.save && ed.project_opt().is_some() {
         ed.save_all().await?;
     }
-    let discard = lets_go(&ed, p.discard, origin) || p.save;
+    let discard = lets_go(p.discard, origin) || p.save;
     let opened = open(&ed, &folder, discard, false, p.scene.unwrap_or(true)).await?;
     Ok(json!({ "path": paths::wire(&opened.root), "id": opened.id, "file": paths::wire(&opened.file) }))
 }
@@ -558,7 +555,7 @@ async fn project_close(ed: Arc<Editor>, p: CloseParams, origin: Origin) -> Reply
                 ));
             }
         } else {
-            if !lets_go(&ed, p.discard, origin) {
+            if !lets_go(p.discard, origin) {
                 return Err(CmdError::unsaved(dirty_json.clone())
                     .with_data(json!({ "dirty": dirty_json, "note": "pass save=true or discard=true" })));
             }
@@ -1191,33 +1188,56 @@ async fn file_create(ed: Arc<Editor>, p: FileCreateParams, _origin: Origin) -> R
             kind.key()
         )));
     };
+    if let Some(why) = folder_problem(&folder) {
+        return Err(refuse(format!("Cannot create the {}: {why}", kind.noun())));
+    }
+    // the names the kind's files have anywhere in the project, as the tree holds them now: the new
+    // asset's id comes from its name, and two files of one name in two folders would share it
+    project.tree.refresh().await;
+    let extension = kind.leaf(1).rsplit('.').next().unwrap_or_default().to_owned();
+    let taken: rustc_hash::FxHashSet<String> = project
+        .tree
+        .snapshot()
+        .files_with_extension(&extension)
+        .iter()
+        .map(|f| f.file_name().to_lowercase())
+        .collect();
     let root = PathBuf::from(project.root());
     let rel_folder = folder.clone();
     let pr = project.clone();
     let made = ed
         .exec
         .io(move || -> Result<RelPath, String> {
+            let refused = |why: String| format!("Cannot create the {}: {why}", kind.noun());
             let dir = rel_folder.to_fs(&root);
             if !fsys::dir_exists(&dir) {
+                // a file in the way is named, not what the system calls the failure
+                let mut at = root.clone();
+                for seg in rel_folder.segments() {
+                    at.push(seg);
+                    if fsys::file_exists(&at) {
+                        return Err(refused(format!(
+                            "{seg} is a file, not a folder ({} cannot be made)",
+                            rel_folder.to_backslash()
+                        )));
+                    }
+                }
                 // the folder it was asked to put the asset into is made, the way file.mkdir makes one
                 let mut ops = FileOps::new(pr.root(), &no_game, pr.write_guard(None));
-                ops.mkdir(&dir.to_string_lossy()).map_err(|e| {
-                    format!(
-                        "Cannot create the {}: the folder {}: {e}",
-                        kind.noun(),
-                        rel_folder.to_backslash()
-                    )
-                })?;
+                ops.mkdir(&dir.to_string_lossy())
+                    .map_err(|e| refused(format!("the folder {}: {e}", rel_folder.to_backslash())))?;
             }
-            let found = (1..=999u32)
-                .map(|n| (n, kind.leaf(n)))
-                .find(|(_, leaf)| std::fs::symlink_metadata(dir.join(leaf)).is_err());
+            let found = (1..=999u32).map(|n| (n, kind.leaf(n))).find(|(_, leaf)| {
+                !taken.contains(&leaf.to_lowercase()) && std::fs::symlink_metadata(dir.join(leaf)).is_err()
+            });
             let Some((n, leaf)) = found else { return Err(kind.too_many().to_owned()) };
             let stem = leaf.rfind('.').and_then(|d| leaf.get(..d)).unwrap_or(&leaf).to_owned();
-            let bytes = template(&TemplateCx { stem: &stem, n })
-                .map_err(|e| format!("Cannot create the {}: {e}", kind.noun()))?;
-            gz_editor::fsx::write_atomic(&dir.join(&leaf), &bytes)
-                .map_err(|e| format!("Cannot create the {}: {e}", kind.noun()))?;
+            let bytes = template(&TemplateCx { stem: &stem, n }).map_err(|e| refused(e.to_string()))?;
+            // the file passes the guard where it really lands: a folder that is a link may lead
+            // into the linked game
+            let file = dir.join(&leaf);
+            pr.write_guard(None).check(&file).map_err(|e| refused(e.to_string()))?;
+            gz_editor::fsx::write_atomic(&file, &bytes).map_err(|e| refused(e.to_string()))?;
             rel_folder.join(&leaf).map_err(|e| e.to_string())
         })
         .await
@@ -1226,6 +1246,25 @@ async fn file_create(ed: Arc<Editor>, p: FileCreateParams, _origin: Origin) -> R
     project.tree.mark_fs(Path::new(project.root()));
     project.tree.mark(folder);
     Ok(json!({ "kind": kind.key(), "path": made.to_string() }))
+}
+
+/// Why an asset is not made in `folder`, or `None`: a folder the project never lists (tooling at
+/// any depth, the editor's own folders at the root), or a name Windows does not take as it is.
+fn folder_problem(folder: &RelPath) -> Option<String> {
+    for (depth, seg) in folder.segments().enumerate() {
+        if rules::is_tooling_entry(seg) {
+            return Some(format!(
+                "{seg} is a tooling folder: the project lists nothing in it and no build ships it"
+            ));
+        }
+        if depth == 0 && rules::is_editor_only_entry(seg) {
+            return Some(format!("{seg} is the editor's own folder: nothing in it is the project's content"));
+        }
+        if let Some(why) = gz_base::file_name_problem(seg) {
+            return Some(format!("the folder name '{seg}' {why}"));
+        }
+    }
+    None
 }
 
 /// Where `file.list` and `file.import` look.

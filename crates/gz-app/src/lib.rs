@@ -67,7 +67,7 @@ pub use shell::{
 };
 pub use shots::{PictureGate, encode_png};
 pub use tasks::{TaskCard, TaskCardTable};
-pub use unsaved::save_tabs;
+pub use unsaved::{SAVE_CANCELLED, save_tabs};
 pub use window::{
     FrameReport, GpuOwners, Shell, StartProfile, UserEvent, WindowLink, WindowOptions, gpu_gate, run,
 };

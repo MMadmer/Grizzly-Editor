@@ -1092,6 +1092,34 @@ def phase_z() -> None:
     check(named.get("ok") and moved.get("ok") and again.get("ok") and not level_dirty(),
           "Z scene.save path= names the file, and doc.save writes into it afterwards", short(named) + " / " + short(again))
 
+    # Switch Project settles the scene like every other unsaved document: without an answer it is refused, naming
+    # the scene; save=true writes it before the project closes; a scene without a file is refused in a sentence
+    cmd("scene.set", objects=[name], position=[3.0, 0.0, 0.0])
+    plain = cmd("app.switch_project")
+    still = cmd("project.info")
+    check(not plain.get("ok") and plain.get("code") == "unsaved" and "qa_nofile" in short(plain) and still.get("ok")
+          and level_dirty(), "Z app.switch_project over an unsaved scene is refused with unsaved, naming it",
+          short(plain))
+    saved = cmd("app.switch_project", save=True, timeout=120)
+    back = cmd("project.open", path=CTX.project, timeout=120)
+    again = cmd("scene.open", path=path, timeout=120)
+    cmd("ui.tab", action="open", doc="level")
+    x = position(name)[0]
+    check(saved.get("ok") and saved.get("closed") and back.get("ok") and again.get("ok") and abs(x - 3.0) < 1e-3,
+          "Z app.switch_project save=true writes the scene before the project closes (x = %.1f)" % x,
+          short(saved) + " / " + short(again))
+    cmd("scene.new", discard=True)
+    place(BOX, 0.0, 0.0, 0.0)
+    nofile = cmd("app.switch_project", save=True)
+    check(not nofile.get("ok") and "no file yet" in str(nofile.get("error")) and "scene.save path=" in str(nofile.get("error"))
+          and cmd("project.info").get("ok") and level_dirty(),
+          "Z save=true over a scene without a file is refused in a sentence, and the project stays open", short(nofile))
+    dropped = cmd("app.switch_project", discard=True)
+    back = cmd("project.open", path=CTX.project, timeout=120)
+    cmd("ui.tab", action="open", doc="level")
+    check(dropped.get("ok") and dropped.get("closed") and back.get("ok"),
+          "Z discard=true drops it through the destroy door", short(dropped))
+
 
 def job_of(job_id: int) -> dict:
     return next((j for j in cmd("job.list").get("jobs", []) if j.get("id") == job_id), {})

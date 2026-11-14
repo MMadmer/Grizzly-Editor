@@ -103,7 +103,7 @@ pub struct LevelDoc {
     preview_at: Option<(Instant, Rev, String)>,
     project_rev: Rev,
     /// What stopped the save a command's caller asked for: that caller's answer.
-    save_error: Arc<Mutex<Option<gz_editor::CmdError>>>,
+    save_error: SaveAnswer,
 }
 
 /// Marks the close hook that takes `preview.png` as registered.
@@ -617,34 +617,21 @@ impl LevelDoc {
         }
     }
 
-    /// Saves the scene into its file. A scene that has none yet asks a person where (Save
-    /// As); `by_caller`, a command's caller is told which command names the file, and a save
-    /// that fails is that caller's answer ([`Document::save_failed`]), not a notice.
+    /// Saves the scene into its file, off the UI thread; what stops the save is the answer of
+    /// whoever waits for it ([`Document::save_failed`]), never a notice of the tab's own. A scene
+    /// that has no file yet asks a person where (Save As) - cancelled there, the save ends as
+    /// [`gz_app::SAVE_CANCELLED`]; `by_caller`, a command is told which command names the file.
     fn save_scene(&mut self, ctx: &egui::Context, by_caller: bool) -> Result<(), String> {
         let Some(svc) = self.scene() else { return Ok(()) };
         let snap = svc.store.snapshot();
         if !snap.valid {
             return Ok(());
         }
+        *self.save_error.lock() = None;
+        let origin = if by_caller { gz_base::Origin::Mcp } else { self.editor.ui_origin() };
         match snap.meta.file.clone() {
             Some(file) => {
-                let mut args = Args::new();
-                args.insert("path".into(), Value::String(file.display().to_string()));
-                if by_caller {
-                    *self.save_error.lock() = None;
-                    let (ed, failed) = (self.editor.clone(), self.save_error.clone());
-                    let _task = self.editor.exec.spawn(async move {
-                        let reply = ed.call("scene.save", args, gz_base::Origin::Mcp).await;
-                        if reply.get("ok").and_then(Value::as_bool) != Some(true) {
-                            let why = reply.get("error").and_then(Value::as_str).unwrap_or("the save failed");
-                            let code = reply.get("code").and_then(Value::as_str).unwrap_or("failed");
-                            *failed.lock() = Some(gz_editor::CmdError::new(code, why));
-                            ed.exec.wake().ping();
-                        }
-                    });
-                } else {
-                    self.editor.post("scene.save", args);
-                }
+                write_scene(&self.editor, &self.save_error, &file, false, origin);
                 Ok(())
             }
             None if by_caller => {
@@ -652,9 +639,69 @@ impl LevelDoc {
                     .to_owned())
             }
             None => {
-                let _ = crate::level_cmds::save_as(&self.editor, ctx);
-                Ok(())
+                let gave_up =
+                    GaveUp { editor: self.editor.clone(), answer: self.save_error.clone(), armed: true };
+                let failed = self.save_error.clone();
+                crate::level_cmds::save_as_with(&self.editor, ctx, move |ed, file| {
+                    gave_up.picked();
+                    // the system's dialog asked before it gave a file that is there
+                    write_scene(ed, &failed, &file, true, origin);
+                })
             }
+        }
+    }
+}
+
+/// What stopped the scene's save, kept for whoever waits for it.
+type SaveAnswer = Arc<Mutex<Option<gz_editor::CmdError>>>;
+
+/// Writes the scene into `file` through `scene.save`; a failure is left in `failed`.
+fn write_scene(
+    editor: &Arc<Editor>,
+    failed: &SaveAnswer,
+    file: &std::path::Path,
+    overwrite: bool,
+    origin: gz_base::Origin,
+) {
+    let mut args = Args::new();
+    args.insert("path".into(), Value::String(file.display().to_string()));
+    if overwrite {
+        args.insert("overwrite".into(), Value::Bool(true));
+    }
+    let (ed, failed) = (editor.clone(), failed.clone());
+    let _task = editor.exec.spawn(async move {
+        let reply = ed.call("scene.save", args, origin).await;
+        if reply.get("ok").and_then(Value::as_bool) != Some(true) {
+            let why = reply.get("error").and_then(Value::as_str).unwrap_or("the save failed");
+            let code = reply.get("code").and_then(Value::as_str).unwrap_or("failed");
+            *failed.lock() = Some(gz_editor::CmdError::new(code, why));
+            ed.exec.wake().ping();
+        }
+    });
+}
+
+/// Rides in what runs when the Save dialog gives a file. The kit drops that unrun when the dialog
+/// is cancelled: dropped while armed, this leaves the save's answer - cancelled - so that who
+/// waits for the save ends there instead of waiting for a file nobody picks.
+struct GaveUp {
+    editor: Arc<Editor>,
+    answer: SaveAnswer,
+    armed: bool,
+}
+
+impl GaveUp {
+    /// The dialog gave a file.
+    fn picked(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for GaveUp {
+    fn drop(&mut self) {
+        if self.armed {
+            *self.answer.lock() =
+                Some(gz_editor::CmdError::new(gz_app::SAVE_CANCELLED, "the save was cancelled"));
+            self.editor.exec.wake().ping();
         }
     }
 }

@@ -50,7 +50,13 @@ reg.cmd(
   asks for (`doc.save`, `ui.tab action=close save=true`, `app.quit save=true`) is held to it: what the window's
   Save would ask is refused, naming the command that takes the answer as a parameter - `scene.save path=` for a
   scene without a file; `library.import overwrite=true`, code `exists`, for New Textures that would replace a
-  texture - and a save that fails on the pools is the command's answer, with its code.
+  texture - and a save that fails on the pools is the command's answer, with its code. `-nodlg` changes none
+  of it: its logged answers are for the window's own actions, and a command's caller is refused with
+  `unsaved` on any editor. `app.switch_project` is `project.close` with the caller's `save` or `discard`.
+- `file.create` makes the folder it is asked to put the asset into, and refuses one the project never lists
+  (a tooling name at any depth, the editor's own folders at the root), a name Windows keeps for a device and
+  a file in the way, each in a sentence; the new file's name is free in the whole project, because the
+  asset's id comes from it; the file passes the write guard where it really lands.
 
 ## 2. Parameter names
 

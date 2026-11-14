@@ -717,39 +717,34 @@ impl ShellState {
         }
     }
 
-    /// Back to the Start page, after the question about the unsaved tabs.
+    /// Back to the Start page, after the question that names every unsaved tab - the scene among
+    /// them. Save waits for the saves; the project's close then settles what is left and refuses
+    /// over a document that is still unsaved.
     pub(crate) fn switch_project(&mut self, ctx: &Context) {
-        let dirty: Vec<(String, String)> =
-            self.dirty_tabs().into_iter().filter(|(id, _)| id != LEVEL).collect();
+        let dirty = self.dirty_tabs();
         let editor = self.editor.clone();
-        let close = move |editor: Arc<gz_editor::Editor>| {
-            editor.post(
-                "project.close",
-                gz_editor::Args::from_iter([("discard".to_owned(), serde_json::Value::Bool(true))]),
-            )
+        let close = |editor: &Arc<gz_editor::Editor>, how: Option<&str>| {
+            let mut args = gz_editor::Args::new();
+            if let Some(how) = how {
+                args.insert(how.to_owned(), serde_json::Value::Bool(true));
+            }
+            editor.post("project.close", args);
         };
         if dirty.is_empty() {
-            close(editor);
+            close(&editor, None);
             return;
         }
         let what: Vec<String> = dirty.iter().map(|(_, l)| l.clone()).collect();
         let ids: Vec<String> = dirty.into_iter().map(|(id, _)| id).collect();
         let queue = self.queue.clone();
         let line = gz_ui::dialog::unsaved_prompt(ctx, self.asker(), "switch_project", &what, move |answer| {
-            if answer == gz_ui::Answer::Cancel {
-                return;
+            match answer {
+                gz_ui::Answer::Cancel => {}
+                gz_ui::Answer::Yes => crate::unsaved::save_then(&editor, &queue, ids, move |shell, _| {
+                    close(&shell.editor, Some("save"));
+                }),
+                _ => close(&editor, Some("discard")),
             }
-            queue.post(move |shell, ctx| {
-                for id in &ids {
-                    if answer == gz_ui::Answer::No {
-                        shell.discard_tab(ctx, id);
-                    } else if let Err(e) = shell.save_tab(ctx, id, true) {
-                        let _ = gz_ui::dialog::notice(ctx, shell.asker(), Tone::Error, "Save failed", &e);
-                        return;
-                    }
-                }
-                close(shell.editor.clone());
-            });
         });
         if let Some(line) = line {
             self.editor.log.finding(&line);

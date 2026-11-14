@@ -246,7 +246,7 @@ Chrome totals 122 pt:
 A major tab is a `Document` (`gz-app`'s `doc.rs`): `id`, `kind`, `label`, `icon`, `path`, `tooltip`, `closable`, `dirty`, `missing`, `body`, `status`, `toolbar`, `toolbar_status`, `menus`, `key_part`, `shortcut`, `edit`, `save`, `reload`, `discard`, `on_activate`, `on_deactivate`, `on_close`, `inactive`, and for MCP `mcp_state`, `panel_state`, `panel`, `as_any_mut`.
 - Activation lands in the same frame. The active document draws in `###doc.host` at the work area; inactive documents are not drawn, their `inactive()` hook runs instead.
 - Tabs persist per project in this machine's state of it (`<home>\projects\<project id>.tabs.ltx`, `docs/assets/PROJECT.md`) and load lazily: a restored tab is a placeholder (`loaded:false`) until it is activated. A tab whose file is gone shows "File not found"; MCP reports it as `missing`.
-- Switch Project and `project.close` settle the dirty tabs first, write the session and close the project's tabs; they come back when it opens again.
+- Switch Project and `project.close` settle the unsaved work first - the scene and every dirty tab: Switch Project's question names them all, Save waits for the saves before the project closes, and a save that fails keeps it open -, write the session and close the project's tabs; they come back when it opens again. Close Tab and a tab that switches its file wait for their Save the same way; the Save dialog of a scene without a file, cancelled, ends the wait with nothing said.
 
 **Level workspace**
 - The Level toolbar sits over the Level dock; the viewport is its central node, without a tab bar.

@@ -247,9 +247,8 @@ impl LanimDoc {
         self.editor.exec.spawn(async move { LibraryStores::reload_lanims(&editor).await });
     }
 
-    /// Writes the light animation library on the IO pool, then marks it saved.
-    /// Writes the library off the UI thread. A failure is a notice for a person and, `by_caller`,
-    /// the answer of the command that asked.
+    /// Writes the light animation library on the IO pool, then marks it saved. A failure is a
+    /// notice for a person and, `by_caller`, the answer of the command that asked.
     fn save_now(&self, by_caller: bool) {
         *self.save_error.lock() = None;
         let (editor, failed) = (self.editor.clone(), self.save_error.clone());

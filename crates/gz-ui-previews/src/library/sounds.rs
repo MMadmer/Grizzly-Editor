@@ -285,6 +285,10 @@ impl SoundLibDoc {
             return Err("The sound folder cannot be written.".to_owned());
         }
         if self.saving() {
+            // a save is under way: a caller is answered by how that one ends
+            if by_caller {
+                super::answer_running(&self.editor, &self.save_error);
+            }
             return Ok(());
         }
         Player::of(&self.editor).stop();
