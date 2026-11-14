@@ -1,151 +1,89 @@
-//! The pickers: what comes from a list is PICKED, not typed (CLAUDE.md, "Characters").
+//! The pickers: what comes from a list is PICKED, not typed (CLAUDE.md, "Characters"). Each is
+//! the kit's [`Combo`] field with the kit's [`PickList`] under it; what this file adds is what
+//! the lists of the linked game need.
 //!
-//! - [`local_list_picker`] - a long list (items, dialogs, models, communities) in a popup with a
-//!   search on top and only the rows in view laid out; the field shows "caption
-//!   (id)". A value the list does not hold is kept, shown in the warning colour and said so in
-//!   the tip - never replaced: the text path may name what only the module brings.
+//! - [`list_picker`] - a long list (items, dialogs, models, communities): the field shows
+//!   "caption (id)". A value the list does not hold is kept, shown in the warning tone and said
+//!   so in the tip - never replaced: the text path may name what only the module brings.
 //! - [`item_picker`] - the one item picker of both tabs: a kit row, a stock row, the mode's start
 //!   kit.
-//! - [`local_combo`] - a short list with a preview of its own (Base, Rank, the transitions'
+//! - [`row_combo`] - a short list with a preview of its own (Base, Rank, the transitions'
 //!   level).
 //! - [`local_multi_combo`] - ticks over names, the picked joined in the preview; a picked name
-//!   the list lacks stays ticked and says so.
+//!   the list lacks stays ticked and says so. The kit has no list of ticks: this one is the world
+//!   tabs' own, on the kit's combo field.
 
 use std::sync::Arc;
 
-use egui::{
-    Align2, Color32, CornerRadius, Id, Popup, Rect, Response, ScrollArea, Sense, Stroke, StrokeKind, Ui,
-    Vec2, pos2,
-};
+use egui::{Context, Id, Popup, Response, ScrollArea, Ui};
 use gz_ui::menu::menu_popup;
-use gz_ui::text::{self, Clip};
+use gz_ui::pick::{PickItem, pick_popup};
 use gz_ui::units::em;
-use gz_ui::{Font, Icon, MenuItem, SearchField, Tone, icons, menu_item, metrics, palette};
+use gz_ui::{Combo, PickList, Tone, text};
 
 use crate::lists::{Indexed, ListsView};
 
 /// The height of a picker's popup list.
 const POPUP_H: f32 = 320.0;
-/// A row of a menu (the kit's `menu_item`).
-const MENU_ROW: f32 = 24.0;
+/// What a field says while the linked game's lists are being read.
+pub(crate) const READING: &str = "The linked game's lists are being read";
 
-/// What a popup's search left: the query and the rows it matched, for one generation of the list.
-#[derive(Clone, Default)]
-struct Filtered {
-    query: String,
+/// What a field's list and its popup live under.
+fn pick_id(salt: &str) -> (&'static str, &str) {
+    ("gz-ui-world.pick", salt)
+}
+
+/// The rows of a long list as the kit's pick items, for one read of the list.
+#[derive(Clone)]
+struct Rows {
     serial: u64,
     len: usize,
-    rows: Arc<Vec<u32>>,
+    none: Option<String>,
+    items: Arc<Vec<PickItem>>,
 }
 
-fn popup_id(salt: &str) -> Id {
-    Id::unique(("gz-ui-world.pick", salt))
-}
-
-/// The field a picker opens from: the input fill, the value cut to fit, a chevron or a spinner.
-/// Returns the response and whether the text was cut.
-pub(crate) fn paint_field(ui: &mut Ui, text_: &str, color: Color32, busy: bool) -> (Response, bool) {
-    let ctx = ui.ctx().clone();
-    let p = palette(&ctx);
-    let w = ui.available_width().max(em(3.0));
-    let (rect, resp) = ui.allocate_exact_size(
-        Vec2::new(w, metrics::FRAME),
-        if busy { Sense::hover() } else { Sense::click() },
-    );
-    let mut cut = false;
-    if ui.is_rect_visible(rect) {
-        let radius = CornerRadius::same(metrics::RADIUS);
-        ui.painter().rect_filled(rect, radius, if resp.hovered() && !busy { p.input_hover } else { p.input });
-        if resp.has_focus() {
-            ui.painter().rect_stroke(rect, radius, Stroke::new(1.0, p.accent_bright), StrokeKind::Inside);
-        }
-        let glyph = Rect::from_min_size(
-            pos2(rect.max.x - 8.0 - metrics::GLYPH_STATUS, rect.center().y - metrics::GLYPH_STATUS * 0.5),
-            Vec2::splat(metrics::GLYPH_STATUS),
-        );
-        if busy {
-            gz_ui::state::spinner_at(&ctx, ui.painter(), glyph);
-        } else {
-            icons::draw(ui.painter(), Icon::ChevronDown, glyph, p.text_secondary);
-        }
-        let x = rect.min.x + 8.0;
-        let room = (glyph.min.x - 6.0 - x).max(0.0);
-        cut = text::paint(
-            ui.painter(),
-            &Font::Body.id(),
-            pos2(x, rect.center().y),
-            Align2::LEFT_CENTER,
-            color,
-            text_,
-            Some(room),
-            Clip::End,
-        );
-        if cut {
-            let (shown, _) = text::ellipsize(&ctx, &Font::Body.id(), text_, room, Clip::End);
-            gz_ui::audit::truncated(&ctx, text_, &shown, rect);
-        }
-    }
-    (resp, cut)
-}
-
-/// The search on top of a popup, focused when it opens; returns the query.
-fn popup_search(ui: &mut Ui, id: Id, width: f32) -> String {
-    let ctx = ui.ctx().clone();
-    let mut query = ctx.data(|d| d.get_temp::<String>(id.with("search"))).unwrap_or_default();
-    let field = SearchField::new(&mut query)
-        .hint("Type to filter")
-        .width(width)
-        .id_salt("gz-ui-world.pick_search")
-        .show(ui);
-    if ctx.data_mut(|d| d.remove_temp::<bool>(id.with("focus"))).is_some() {
-        field.request_focus();
-    }
-    ctx.data_mut(|d| d.insert_temp(id.with("search"), query.clone()));
-    ui.add_space(4.0);
-    query
-}
-
-/// Opens a picker's popup: an empty search that takes the keyboard.
-fn open_popup(ctx: &egui::Context, id: Id) {
-    ctx.data_mut(|d| {
-        d.insert_temp(id.with("search"), String::new());
-        d.insert_temp(id.with("focus"), true);
-    });
-    Popup::open_id(ctx, id);
-}
-
-/// The rows of `list` the query matches, worked out once per query and per read of the list.
-fn filtered(ctx: &egui::Context, id: Id, list: &Indexed, query: &str) -> Arc<Vec<u32>> {
-    let key = id.with("filtered");
-    if let Some(f) = ctx.data(|d| d.get_temp::<Filtered>(key))
-        && f.query == query
-        && f.serial == list.serial
-        && f.len == list.entries.len()
+/// The pick items of `rows`, with the row that clears the value first; made once per read of
+/// the list and kept for the field while its popup is used.
+fn rows_of(ctx: &Context, key: Id, rows: &Indexed, none: Option<&str>) -> Arc<Vec<PickItem>> {
+    if let Some(r) = ctx.data(|d| d.get_temp::<Rows>(key))
+        && r.serial == rows.serial
+        && r.len == rows.entries.len()
+        && r.none.as_deref() == none
     {
-        return f.rows;
+        return r.items;
     }
-    let rows: Vec<u32> = list
-        .entries
-        .iter()
-        .enumerate()
-        .filter(|(_, e)| {
-            query.trim().is_empty() || gz_ui::search::matches(query, &format!("{} {}", e.id, e.name))
-        })
-        .filter_map(|(i, _)| u32::try_from(i).ok())
-        .collect();
-    let rows = Arc::new(rows);
+    let mut items = Vec::with_capacity(rows.entries.len() + 1);
+    if let Some(none) = none {
+        items.push(PickItem::new("", none));
+    }
+    items.extend(rows.entries.iter().map(|e| PickItem::new(e.id.as_str(), Indexed::label(e))));
+    let items = Arc::new(items);
     ctx.data_mut(|d| {
         d.insert_temp(
             key,
-            Filtered {
-                query: query.to_owned(),
-                serial: list.serial,
-                len: list.entries.len(),
-                rows: rows.clone(),
+            Rows {
+                serial: rows.serial,
+                len: rows.entries.len(),
+                none: none.map(str::to_owned),
+                items: items.clone(),
             },
-        )
+        );
     });
-    rows
+    items
+}
+
+/// The field's press and a request from outside (`characters.view show=`, `world.view`): the
+/// popup opens on an empty search, or closes. Returns whether it is open now.
+fn opened(ctx: &Context, salt: &str, popup: Id, resp: &Response, busy: bool) -> bool {
+    let open = Popup::is_id_open(ctx, popup);
+    let asked = !busy && gz_ui::menu::take_popup_request(ctx, salt);
+    if (resp.clicked() && !open) || (asked && !open) {
+        PickList::reset(ctx, pick_id(salt));
+        Popup::open_id(ctx, popup);
+    } else if resp.clicked() {
+        Popup::close_id(ctx, popup);
+    }
+    Popup::is_id_open(ctx, popup)
 }
 
 /// A long list picked from a popup. `lookup` names the values (their captions, whether a value
@@ -153,8 +91,7 @@ fn filtered(ctx: &egui::Context, id: Id, list: &Indexed, query: &str) -> Arc<Vec
 /// is the row that clears the value - and what the field shows while it is empty. `busy`: the
 /// list is still being read. `salt` tells this field from every other one of the surface.
 /// Returns whether the value changed.
-#[allow(clippy::too_many_arguments)]
-pub fn local_list_picker(
+pub fn list_picker(
     ui: &mut Ui,
     salt: &str,
     value: &mut String,
@@ -164,8 +101,6 @@ pub fn local_list_picker(
     busy: bool,
 ) -> bool {
     let ctx = ui.ctx().clone();
-    let p = palette(&ctx);
-    let id = popup_id(salt);
     let cur = lookup.get(value);
     let preview = match cur {
         _ if value.is_empty() => none.unwrap_or("").to_owned(),
@@ -173,82 +108,35 @@ pub fn local_list_picker(
         _ => value.clone(),
     };
     let unknown = !value.is_empty() && cur.is_none() && !lookup.is_empty();
-    let color = if unknown {
-        p.warning
-    } else if value.is_empty() {
-        p.text_secondary
+    let tip = if unknown {
+        format!("'{value}' is not in the linked game or the project: kept as written")
     } else {
-        p.text
+        String::new()
     };
-    let (resp, cut) = paint_field(ui, &preview, color, busy);
-    let why = busy.then_some("The linked game's lists are being read");
-    gz_ui::audit::control(&ctx, &preview, !busy, why, None, resp.rect);
-    let resp = if busy {
-        resp.on_hover_text("Reading the linked game's lists...")
-    } else if unknown {
-        resp.on_hover_text(format!("'{value}' is not in the linked game or the project: kept as written"))
-    } else if cut {
-        resp.on_hover_text(preview.as_str())
-    } else {
-        resp
-    };
-    if resp.clicked() {
-        if Popup::is_id_open(&ctx, id) {
-            Popup::close_id(&ctx, id);
-        } else {
-            open_popup(&ctx, id);
-        }
-    }
-    // put up from outside to be looked at (`characters.view show=`)
-    if !busy && gz_ui::menu::take_popup_request(&ctx, salt) {
-        open_popup(&ctx, id);
-    }
-    if !Popup::is_id_open(&ctx, id) {
+    let combo = Combo::new(pick_id(salt), &preview)
+        .warn(unknown)
+        .placeholder(value.is_empty())
+        .busy(busy, READING)
+        .tip(&tip);
+    let popup = combo.popup_id();
+    let resp = combo.field(ui, Popup::is_id_open(&ctx, popup));
+    if !opened(&ctx, salt, popup, &resp, busy) {
         return false;
     }
-    let width = resp.rect.width().max(em(18.0));
-    let mut picked: Option<String> = None;
-    let _ = menu_popup(&ctx, id, resp.rect, ui.layer_id(), |ui| {
-        ui.set_width(width);
-        let query = popup_search(ui, id, width);
-        if let Some(none) = none
-            && menu_item(ui, none, MenuItem { selected: value.is_empty(), ..MenuItem::default() })
-        {
-            picked = Some(String::new());
-        }
-        let shown = filtered(&ctx, id, rows, &query);
-        if shown.is_empty() {
-            let _ = text::status(ui, Tone::Muted, "Nothing matches.");
-            return;
-        }
-        ScrollArea::vertical()
-            .id_salt(id.with("rows"))
-            .max_height(POPUP_H)
-            .auto_shrink([false, true])
-            .show_rows(ui, MENU_ROW, shown.len(), |ui, range| {
-                for i in range {
-                    let Some(e) = shown.get(i).and_then(|r| rows.entries.get(*r as usize)) else { continue };
-                    let label = Indexed::label(e);
-                    let out = ui.push_id(i, |ui| {
-                        menu_item(ui, &label, MenuItem { selected: e.id == *value, ..MenuItem::default() })
-                    });
-                    if out.inner {
-                        picked = Some(e.id.clone());
-                    }
-                }
-            });
-    });
-    match picked {
-        Some(v) if v != *value => {
-            *value = v;
-            Popup::close_id(&ctx, id);
+    // the rows are made for a list that is open: a closed field costs its text
+    let items = rows_of(&ctx, popup.with("rows"), rows, none);
+    let list = PickList::new(pick_id(salt), &items)
+        .current(value)
+        .hint("Type to filter")
+        .empty("Nothing matches.")
+        .width(resp.rect.width().max(em(18.0)))
+        .max_height(POPUP_H);
+    match pick_popup(&ctx, popup, resp.rect, ui.layer_id(), list).and_then(|n| items.get(n)) {
+        Some(item) if item.id != *value => {
+            value.clone_from(&item.id);
             true
         }
-        Some(_) => {
-            Popup::close_id(&ctx, id);
-            false
-        }
-        None => false,
+        _ => false,
     }
 }
 
@@ -262,12 +150,12 @@ pub fn item_picker(
     lists: &ListsView,
     none: Option<&str>,
 ) -> bool {
-    local_list_picker(ui, salt, value, &lists.items, &lists.items, none, !lists.loaded)
+    list_picker(ui, salt, value, &lists.items, &lists.items, none, !lists.loaded)
 }
 
-/// A short list with a preview of its own: returns the row picked. `warn` paints the preview in
-/// the warning colour (a value the list does not hold).
-pub fn local_combo(
+/// A short list with a preview of its own: returns the row picked. `warn` shows the preview in
+/// the warning tone (a value the list does not hold).
+pub fn row_combo(
     ui: &mut Ui,
     salt: &str,
     preview: &str,
@@ -276,48 +164,23 @@ pub fn local_combo(
     selected: Option<usize>,
 ) -> Option<usize> {
     let ctx = ui.ctx().clone();
-    let p = palette(&ctx);
-    let id = popup_id(salt);
-    let (resp, cut) = paint_field(ui, preview, if warn { p.warning } else { p.text }, false);
-    gz_ui::audit::control(&ctx, preview, true, None, None, resp.rect);
-    let resp = if cut { resp.on_hover_text(preview) } else { resp };
-    if resp.clicked() {
-        Popup::toggle_id(&ctx, id);
-    }
-    if gz_ui::menu::take_popup_request(&ctx, salt) {
-        Popup::open_id(&ctx, id);
-    }
-    if !Popup::is_id_open(&ctx, id) {
+    let combo = Combo::new(pick_id(salt), preview).warn(warn);
+    let popup = combo.popup_id();
+    let resp = combo.field(ui, Popup::is_id_open(&ctx, popup));
+    if !opened(&ctx, salt, popup, &resp, false) {
         return None;
     }
-    let width = resp.rect.width().max(em(12.0));
-    let mut picked = None;
-    let _ = menu_popup(&ctx, id, resp.rect, ui.layer_id(), |ui| {
-        ui.set_min_width(width);
-        ScrollArea::vertical().id_salt(id.with("rows")).max_height(POPUP_H).auto_shrink([false, true]).show(
-            ui,
-            |ui| {
-                for (i, row) in rows.iter().enumerate() {
-                    if ui
-                        .push_id(i, |ui| {
-                            menu_item(
-                                ui,
-                                row,
-                                MenuItem { selected: selected == Some(i), ..MenuItem::default() },
-                            )
-                        })
-                        .inner
-                    {
-                        picked = Some(i);
-                    }
-                }
-            },
-        );
-    });
-    if picked.is_some() {
-        Popup::close_id(&ctx, id);
+    let items: Vec<PickItem> =
+        rows.iter().enumerate().map(|(i, row)| PickItem::new(i.to_string(), row.as_str())).collect();
+    let current = selected.map(|i| i.to_string()).unwrap_or_default();
+    let mut list = PickList::new(pick_id(salt), &items)
+        .without_search()
+        .width(resp.rect.width().max(em(12.0)))
+        .max_height(POPUP_H);
+    if selected.is_some() {
+        list = list.current(&current);
     }
-    picked
+    pick_popup(&ctx, popup, resp.rect, ui.layer_id(), list)
 }
 
 /// Ticks over the names a list offers: the preview joins what is picked (`none` while nothing
@@ -332,32 +195,22 @@ pub fn local_multi_combo(
     busy: bool,
 ) -> bool {
     let ctx = ui.ctx().clone();
-    let p = palette(&ctx);
-    let id = popup_id(salt);
     let preview = if picked.is_empty() { none.to_owned() } else { picked.join(", ") };
-    let (resp, cut) =
-        paint_field(ui, &preview, if picked.is_empty() { p.text_secondary } else { p.text }, busy);
-    gz_ui::audit::control(
-        &ctx,
-        &preview,
-        !busy,
-        busy.then_some("The linked game's lists are being read"),
-        None,
-        resp.rect,
-    );
-    let resp = if cut { resp.on_hover_text(preview.as_str()) } else { resp };
+    let combo = Combo::new(pick_id(salt), &preview).placeholder(picked.is_empty()).busy(busy, READING);
+    let popup = combo.popup_id();
+    let resp = combo.field(ui, Popup::is_id_open(&ctx, popup));
     if resp.clicked() {
-        Popup::toggle_id(&ctx, id);
+        Popup::toggle_id(&ctx, popup);
     }
     if !busy && gz_ui::menu::take_popup_request(&ctx, salt) {
-        Popup::open_id(&ctx, id);
+        Popup::open_id(&ctx, popup);
     }
-    if !Popup::is_id_open(&ctx, id) {
+    if !Popup::is_id_open(&ctx, popup) {
         return false;
     }
     let width = resp.rect.width().max(em(14.0));
     let mut changed = false;
-    let _ = menu_popup(&ctx, id, resp.rect, ui.layer_id(), |ui| {
+    let _ = menu_popup(&ctx, popup, resp.rect, ui.layer_id(), |ui| {
         ui.set_min_width(width);
         let unlisted: Vec<String> = picked.iter().filter(|x| !names.contains(x)).cloned().collect();
         let mut toggle = |ui: &mut Ui, name: &str, caption: &str| {
@@ -377,9 +230,11 @@ pub fn local_multi_combo(
                 changed = true;
             }
         };
-        ScrollArea::vertical().id_salt(id.with("rows")).max_height(POPUP_H).auto_shrink([false, true]).show(
-            ui,
-            |ui| {
+        ScrollArea::vertical()
+            .id_salt(popup.with("rows"))
+            .max_height(POPUP_H)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
                 for name in names {
                     toggle(ui, name, name);
                 }
@@ -389,8 +244,7 @@ pub fn local_multi_combo(
                 if names.is_empty() {
                     let _ = text::status(ui, Tone::Muted, "The linked game lists no trade categories.");
                 }
-            },
-        );
+            });
     });
     changed
 }

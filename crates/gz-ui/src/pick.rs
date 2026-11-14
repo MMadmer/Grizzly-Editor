@@ -683,6 +683,10 @@ pub struct Combo<'a> {
     why: &'a str,
     mixed: bool,
     error: bool,
+    warn: bool,
+    placeholder: bool,
+    busy: bool,
+    tip: &'a str,
 }
 
 impl<'a> Combo<'a> {
@@ -697,6 +701,10 @@ impl<'a> Combo<'a> {
             why: "",
             mixed: false,
             error: false,
+            warn: false,
+            placeholder: false,
+            busy: false,
+            tip: "",
         }
     }
 
@@ -729,6 +737,35 @@ impl<'a> Combo<'a> {
         self
     }
 
+    /// The value is one the list does not hold, kept as it was written: the warning tone.
+    pub fn warn(mut self, warn: bool) -> Self {
+        self.warn = warn;
+        self
+    }
+
+    /// Nothing is chosen: what is shown is the words for that, in the secondary tone.
+    pub fn placeholder(mut self, placeholder: bool) -> Self {
+        self.placeholder = placeholder;
+        self
+    }
+
+    /// The list is still being read: a spinner where the chevron is, and no press; `why` says
+    /// what is read.
+    pub fn busy(mut self, busy: bool, why: &'a str) -> Self {
+        self.busy = busy;
+        if busy {
+            self.enabled = false;
+            self.why = why;
+        }
+        self
+    }
+
+    /// What hovering the value says (a value cut short says itself).
+    pub fn tip(mut self, tip: &'a str) -> Self {
+        self.tip = tip;
+        self
+    }
+
     /// The id the combo's popup lives under (`Popup::open_id` opens it from outside).
     #[must_use]
     pub fn popup_id(&self) -> Id {
@@ -745,6 +782,8 @@ impl<'a> Combo<'a> {
             if open {
                 Popup::close_id(&ctx, popup_id);
             } else {
+                // a list that opens starts from an empty search, on what is chosen
+                ctx.data_mut(|d| d.remove::<State>(list.id));
                 Popup::open_id(&ctx, popup_id);
             }
         }
@@ -752,8 +791,10 @@ impl<'a> Combo<'a> {
         pick_popup(&ctx, popup_id, resp.rect, ui.layer_id(), list.width(width))
     }
 
-    /// The field alone: an input fill, the 1 pt outline, the value, the chevron.
-    fn field(&self, ui: &mut Ui, open: bool) -> Response {
+    /// The field alone: an input fill, the 1 pt outline, the value, the chevron. For a caller
+    /// whose popup is not a pick list (ticks over names): it opens its own under
+    /// [`Combo::popup_id`].
+    pub fn field(&self, ui: &mut Ui, open: bool) -> Response {
         let ctx = ui.ctx().clone();
         let p = palette(&ctx);
         let w = self.width.unwrap_or_else(|| ui.available_width()).max(em(4.0));
@@ -762,6 +803,7 @@ impl<'a> Combo<'a> {
             if self.enabled { Sense::click() } else { Sense::hover() },
         );
         resp.widget_info(|| WidgetInfo::labeled(Role::ComboBox, self.enabled, self.shown));
+        let mut cut_value = false;
         if ui.is_rect_visible(rect) {
             let painter = ui.painter();
             let hot = self.enabled && (resp.hovered() || open);
@@ -804,7 +846,16 @@ impl<'a> Combo<'a> {
             let (shown, color) = if self.mixed {
                 ("Multiple values", p.text_muted)
             } else {
-                (self.shown, if self.enabled { p.text } else { p.text_disabled })
+                let color = if !self.enabled && !self.busy {
+                    p.text_disabled
+                } else if self.warn {
+                    p.warning
+                } else if self.placeholder {
+                    p.text_secondary
+                } else {
+                    p.text
+                };
+                (self.shown, color)
             };
             let cut = text::paint(
                 painter,
@@ -816,20 +867,27 @@ impl<'a> Combo<'a> {
                 Some((chevron.min.x - 6.0 - x).max(0.0)),
                 Clip::End,
             );
-            icons::draw(
-                painter,
-                Icon::ChevronDown,
-                chevron,
-                if self.enabled { p.text_secondary } else { p.text_disabled },
-            );
+            if self.busy {
+                crate::state::spinner_at(&ctx, painter, chevron);
+            } else {
+                icons::draw(
+                    painter,
+                    Icon::ChevronDown,
+                    chevron,
+                    if self.enabled { p.text_secondary } else { p.text_disabled },
+                );
+            }
             if cut {
                 audit::truncated(&ctx, shown, shown, rect);
+                cut_value = true;
             }
         }
         let why = (!self.enabled && !self.why.is_empty()).then_some(self.why);
         audit::control(&ctx, self.shown, self.enabled, why, why, rect);
         match why {
             Some(w) => resp.on_hover_text(w),
+            None if !self.tip.is_empty() => resp.on_hover_text(self.tip),
+            None if cut_value => resp.on_hover_text(self.shown),
             None => resp,
         }
     }

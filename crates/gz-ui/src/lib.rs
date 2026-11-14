@@ -50,12 +50,15 @@
 //!   ([`rank`]), virtualized rows, Recent and Favourites, the keyboard
 //! - [`ItemRows`] - a small editable table (cells, a cross per row, Add, drag to reorder);
 //!   [`Table`] - a record list (sortable resizable columns, virtualized rows, selection, a menu)
+//! - [`PanelTab`], [`tab_strip`] - the one panel tab: a dock's tab and a panel's own flat strip
+//! - [`checker`] - the checkerboard under a picture with transparency
 //! - [`state::banner`], [`state::banner_list`] - a toned bar, with a list and an action per item
 //! - [`drop`] - typed drag payloads ([`drop::Payload`]) and drop zones ([`drop::Zone`])
 //! - [`text::fit`] - a cut text kept per text, face and width, for what is drawn every frame
 //! - [`upload::Tiled`] - a big picture that reaches the GPU a few tiles a frame
 
 pub mod audit;
+pub mod backdrop;
 pub mod button;
 pub mod font;
 pub mod icons;
@@ -90,6 +93,7 @@ mod testkit;
 #[cfg(test)]
 mod tests;
 
+pub use backdrop::checker;
 pub use button::{
     Button, Kind, icon_button, icon_button_sized, keycaps, keycaps_width, note_primary, segmented,
 };

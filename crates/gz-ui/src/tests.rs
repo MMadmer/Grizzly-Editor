@@ -296,3 +296,34 @@ fn a_tab_strip_changes_its_choice_by_a_click() {
     assert!(changed);
     assert_eq!(current, 1);
 }
+
+/// A combo whose list is still being read takes no press and says why; one that is ready opens
+/// its list on a press, from an empty search.
+#[test]
+fn a_busy_combo_takes_no_press_and_a_ready_one_opens_its_list() {
+    use crate::pick::PickItem;
+    use crate::{Combo, PickList};
+    let ctx = context();
+    let items = vec![PickItem::new("a", "Alpha"), PickItem::new("b", "Beta")];
+    // one frame: where the field stood and the id of its popup
+    let run = |t: f64, events: Vec<egui::Event>, busy: bool| {
+        let mut out = (Rect::NOTHING, Id::NULL);
+        frame(&ctx, t, events, |ui| {
+            let combo = Combo::new("test.combo", "Alpha").width(120.0).busy(busy, "The list is being read.");
+            let popup = combo.popup_id();
+            let before = ui.cursor().min;
+            let _ = combo.show(ui, PickList::new("test.combo", &items).current("a"));
+            out = (Rect::from_min_size(before, Vec2::new(120.0, crate::metrics::FRAME)), popup);
+        });
+        out
+    };
+    let (field, popup) = run(0.0, Vec::new(), true);
+    for (i, e) in click_at(field.center()).into_iter().enumerate() {
+        let _ = run(0.05 + i as f64 * 0.05, e, true);
+    }
+    assert!(!egui::Popup::is_id_open(&ctx, popup), "a busy combo opened");
+    for (i, e) in click_at(field.center()).into_iter().enumerate() {
+        let _ = run(1.0 + i as f64 * 0.05, e, false);
+    }
+    assert!(egui::Popup::is_id_open(&ctx, popup), "a ready combo did not open");
+}

@@ -18,7 +18,6 @@ use serde_json::{Value, json};
 
 use crate::gpu::mip_view;
 use crate::image_pass::{ImageDraw, ImageMode, paint_image};
-use crate::local::local_checker;
 use crate::pending::Pending;
 use crate::texture_load::{TexFile, TexSource, gpu_bytes, human_bytes, load};
 
@@ -384,7 +383,7 @@ impl TextureDoc {
         }
         // the channel views: RGBA over the checkerboard, one colour over black, the alpha as grey
         if self.channel == 0 {
-            local_checker(&painter, &p, image_rect.min, clip);
+            gz_ui::checker(&painter, image_rect.min, clip, 8.0);
         }
         // past 2:1 every texel is a block of pixels: sampled nearest, so it reads as one
         if let Some((linear, nearest)) = self.draws(t) {

@@ -1,35 +1,9 @@
 //! Widgets the kit lacks, local to this crate until a second surface wants them
 //! (docs/UI_DESIGN.md, section 4).
 
-use egui::{Align2, CornerRadius, Painter, Pos2, Rect, Sense, Ui, Vec2, pos2};
+use egui::{Align2, CornerRadius, Painter, Rect, Sense, Ui, Vec2};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Font, Palette, palette};
-
-/// The checkerboard a picture with alpha is judged against: only the cells inside `clip` are
-/// painted, lined up with `origin` so they move with the picture (a zoomed-in 4096 texture is
-/// millions of cells, a canvas a few hundred).
-pub fn local_checker(painter: &Painter, p: &Palette, origin: Pos2, clip: Rect) {
-    let cell = 8.0;
-    if clip.width() <= 0.0 || clip.height() <= 0.0 {
-        return;
-    }
-    painter.rect_filled(clip, CornerRadius::ZERO, p.input);
-    let col0 = ((clip.min.x - origin.x) / cell).floor() as i64;
-    let row0 = ((clip.min.y - origin.y) / cell).floor() as i64;
-    let mut row = row0;
-    while origin.y + row as f32 * cell < clip.max.y {
-        let mut col = col0 + ((col0 + row) & 1);
-        while origin.x + col as f32 * cell < clip.max.x {
-            let a = pos2(origin.x + col as f32 * cell, origin.y + row as f32 * cell);
-            let r = Rect::from_min_max(a.max(clip.min), (a + Vec2::splat(cell)).min(clip.max));
-            if r.width() > 0.0 && r.height() > 0.0 {
-                painter.rect_filled(r, CornerRadius::ZERO, p.hover);
-            }
-            col += 2;
-        }
-        row += 1;
-    }
-}
+use gz_ui::{Font, palette};
 
 /// A preview's title (Title type, ellipsized) and its facts under it (Small, muted).
 pub fn local_heading(ui: &mut Ui, title: &str, title_clip: Clip, facts: &[(&str, Clip)]) {

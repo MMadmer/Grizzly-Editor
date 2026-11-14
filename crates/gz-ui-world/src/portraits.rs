@@ -21,7 +21,7 @@ use rustc_hash::FxHashMap;
 
 use crate::call::post_ui;
 use crate::lists::{Indexed, ListsView};
-use crate::picker::paint_field;
+use crate::picker::READING;
 
 /// The largest sheet read.
 const SHEET_READ_LIMIT: u64 = 128 << 20;
@@ -207,27 +207,18 @@ pub fn local_portrait_gallery(
     let id = Id::unique(("gz-ui-world.gallery", salt));
     let unknown = !value.is_empty() && list.get(value).is_none() && !list.is_empty();
     let shown_text = if value.is_empty() { "None" } else { value.as_str() };
-    let color = if unknown {
-        p.warning
-    } else if value.is_empty() {
-        p.text_secondary
+    let tip = if unknown {
+        format!("'{value}' is not in the linked game or the project: kept as written")
     } else {
-        p.text
+        String::new()
     };
-    let (resp, _) = paint_field(ui, shown_text, color, !lists.loaded);
-    gz_ui::audit::control(
-        &ctx,
-        shown_text,
-        lists.loaded,
-        (!lists.loaded).then_some("The linked game's lists are being read"),
-        None,
-        resp.rect,
-    );
-    let resp = if unknown {
-        resp.on_hover_text(format!("'{value}' is not in the linked game or the project: kept as written"))
-    } else {
-        resp
-    };
+    // the kit's combo field; the gallery under it is this surface's own
+    let resp = gz_ui::Combo::new(("gz-ui-world.gallery_field", salt), shown_text)
+        .warn(unknown)
+        .placeholder(value.is_empty())
+        .busy(!lists.loaded, READING)
+        .tip(&tip)
+        .field(ui, Popup::is_id_open(&ctx, id));
     // a click toggles it; `characters.view show=icon` puts it up to be looked at
     let asked = lists.loaded && gz_ui::menu::take_popup_request(&ctx, salt);
     if (resp.clicked() && !Popup::is_id_open(&ctx, id)) || asked {

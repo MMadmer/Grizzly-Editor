@@ -235,33 +235,6 @@ pub fn local_rename_box(
     RenameOut { done: !focus && resp.lost_focus(), cancelled: false }
 }
 
-/// The checkerboard every image editor puts under transparency: cells of 8 pt, down to 4 in a
-/// small picture.
-pub fn local_checker(painter: &egui::Painter, rect: Rect) {
-    let p = palette(painter.ctx());
-    let (w, h) = (rect.width(), rect.height());
-    if w < 1.0 || h < 1.0 {
-        return;
-    }
-    let cell = (w.max(h) / 8.0).clamp(4.0, 8.0).round().max(2.0);
-    painter.rect_filled(rect, CornerRadius::ZERO, p.border);
-    let mut y = rect.min.y;
-    let mut row = 0;
-    while y < rect.max.y {
-        let mut x = rect.min.x + if row % 2 == 1 { cell } else { 0.0 };
-        while x < rect.max.x {
-            painter.rect_filled(
-                Rect::from_min_max(pos2(x, y), pos2((x + cell).min(rect.max.x), (y + cell).min(rect.max.y))),
-                CornerRadius::ZERO,
-                p.border_strong,
-            );
-            x += cell * 2.0;
-        }
-        y += cell;
-        row += 1;
-    }
-}
-
 /// A heading inside a menu: Small muted text.
 pub fn local_menu_heading(ui: &mut Ui, title: &str) {
     let p = palette(ui.ctx());

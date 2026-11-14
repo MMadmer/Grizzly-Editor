@@ -22,7 +22,7 @@ use super::keys;
 use super::list::{Empty, LibraryList, find, shown};
 use super::stores::{LanimFacts, LibraryFacts, LibraryStores};
 use super::{LibraryDoc, folder_text, pane, panes};
-use crate::local::{local_checker, local_ends, local_heading};
+use crate::local::{local_ends, local_heading};
 use crate::paths::EditorDirs;
 
 pub const KIND: &str = "light_animations";
@@ -326,7 +326,7 @@ impl LanimDoc {
         let (rect, resp) = ui.allocate_exact_size(Vec2::new(avail.x, swatch_h), Sense::hover());
         let argb = item.color_at(self.pointer.clamp(0, item.frame_count)).unwrap_or(0);
         if self.render_alpha {
-            local_checker(ui.painter(), &p, rect.min, rect);
+            gz_ui::checker(ui.painter(), rect.min, rect, 8.0);
         }
         ui.painter().rect_filled(rect, CornerRadius::same(6), paint_color(argb, self.render_alpha));
         ui.painter().rect_stroke(
@@ -372,7 +372,7 @@ impl LanimDoc {
         let strip = Rect::from_min_max(rect.min, pos2(rect.max.x, strip_b));
         // one strip per frame, or one per point column when the frames outnumber the points
         if self.render_alpha {
-            local_checker(&painter, &p, strip.min, strip);
+            gz_ui::checker(&painter, strip.min, strip, 8.0);
         }
         let cols = count.min((w as i32).max(1));
         for c in 0..cols {

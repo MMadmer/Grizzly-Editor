@@ -15,7 +15,7 @@ use gz_ui::{
 use crate::characters::{Action, CharactersDoc, field_of, problem_text, problem_tone};
 use crate::lists::{Indexed, ListsView};
 use crate::local::{local_cell, local_dirty_dot, local_number_text};
-use crate::picker::{item_picker, local_combo, local_list_picker, local_multi_combo};
+use crate::picker::{item_picker, list_picker, local_multi_combo, row_combo};
 use crate::portraits::{draw_portrait, local_portrait_gallery};
 
 const ROLE: &str = "character";
@@ -372,7 +372,7 @@ impl CharactersDoc {
                     "Another character to start from: what this one does not set comes from there, and the starting kits are merged. None: the character stands on its own.",
                     flags(own, "base", PropFlags::NONE),
                     0,
-                    |ui| local_combo(ui, "character.base", &preview_text, !known, &rows, current),
+                    |ui| row_combo(ui, "character.base", &preview_text, !known, &rows, current),
                 );
                 if let Some(Some(i)) = picked {
                     let next = if i == 0 { String::new() } else { others.get(i - 1).map(|(id, _)| id.clone()).unwrap_or_default() };
@@ -429,7 +429,7 @@ impl CharactersDoc {
                 };
                 let help = "The model the NPC spawns with and keeps: meshes\\actors of the linked game and the project. An outfit changes its protection, never its model.";
                 if g.row("Model", help, flags(own, "visual", PropFlags::NONE), 0, |ui| {
-                    local_list_picker(ui, "character.visual", &mut edit.visual, &lists.visuals, &lists.visuals, Some(&none), !lists.loaded)
+                    list_picker(ui, "character.visual", &mut edit.visual, &lists.visuals, &lists.visuals, Some(&none), !lists.loaded)
                 }) == Some(true)
                 {
                     changed = true;
@@ -460,7 +460,7 @@ impl CharactersDoc {
                         // no linked game to read the list from, so the field stays a field
                         gz_ui::form::row_field(ui, ("gz-ui-world.text", "character.community"), &mut edit.community, "stalker").on_hover_text("No linked game to list the communities of: type the id.").changed()
                     } else {
-                        local_list_picker(ui, "character.community", &mut edit.community, &lists.communities, &lists.stalker_communities, Some(&unset), !lists.loaded)
+                        list_picker(ui, "character.community", &mut edit.community, &lists.communities, &lists.stalker_communities, Some(&unset), !lists.loaded)
                     }
                 }) == Some(true)
                 {
@@ -502,7 +502,7 @@ impl CharactersDoc {
             });
             g.section("Dialogs", true, None, |g| {
                 if g.row("Opening Dialog", "The dialog it opens with (start_dialog), captioned with its first line.", flags(own, "dialog", PropFlags::NONE), 0, |ui| {
-                    local_list_picker(ui, "character.dialog", &mut edit.start_dialog, &lists.dialogs, &lists.dialogs, Some("None"), !lists.loaded)
+                    list_picker(ui, "character.dialog", &mut edit.start_dialog, &lists.dialogs, &lists.dialogs, Some("None"), !lists.loaded)
                 }) == Some(true)
                 {
                     changed = true;
@@ -573,7 +573,7 @@ fn rank_row(ui: &mut Ui, edit: &mut Character, lists: &ListsView) -> bool {
             })
             .collect();
         let picked = cell(ui, combo_w, |ui| {
-            local_combo(ui, "character.rank", &preview, false, &rows, if edit.has_rank { cur } else { None })
+            row_combo(ui, "character.rank", &preview, false, &rows, if edit.has_rank { cur } else { None })
         });
         if let Some(i) = picked
             && let Some(r) = ranks.get(i)

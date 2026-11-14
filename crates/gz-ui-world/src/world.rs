@@ -39,7 +39,7 @@ use rustc_hash::FxHashMap;
 use crate::call::{self, args, s};
 use crate::lists::{Lists, ListsView};
 use crate::local::{drawer_height, local_cell, local_number_text, local_problems_drawer};
-use crate::picker::{item_picker, local_combo};
+use crate::picker::{item_picker, row_combo};
 
 /// The tab's id and kind.
 pub const TAB: &str = "world_rules";
@@ -968,7 +968,7 @@ impl WorldDoc {
                 |ui| {
                     let w = ui.available_width().min(em(24.0));
                     local_cell(ui, Vec2::new(w, metrics::FRAME), Layout::left_to_right(Align::Center), |ui| {
-                        local_combo(ui, "world.trans_level", &preview, false, &rows, current)
+                        row_combo(ui, "world.trans_level", &preview, false, &rows, current)
                     })
                     .inner
                 },

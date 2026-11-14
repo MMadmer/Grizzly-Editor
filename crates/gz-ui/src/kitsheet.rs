@@ -260,6 +260,20 @@ pub fn sheet(ui: &mut Ui) {
             .width(em(6.0))
             .enabled(false, "Why it is off.")
             .show(ui, PickList::new("o", &[]));
+        // a value the list does not hold, nothing chosen, a list still being read
+        let _ = Combo::new("kitsheet.warn", "not_in_the_list")
+            .width(em(9.0))
+            .warn(true)
+            .tip("Kept as written.")
+            .show(ui, PickList::new("w", &[]));
+        let _ = Combo::new("kitsheet.none", "None")
+            .width(em(6.0))
+            .placeholder(true)
+            .show(ui, PickList::new("n", &[]));
+        let _ = Combo::new("kitsheet.busy", "Reading")
+            .width(em(7.0))
+            .busy(true, "The list is being read.")
+            .show(ui, PickList::new("b", &[]));
     });
     ui.horizontal(|ui| {
         caption(ui, "PickList");
@@ -275,6 +289,14 @@ pub fn sheet(ui: &mut Ui) {
                     .show(ui);
             });
         });
+    });
+    ui.horizontal(|ui| {
+        caption(ui, "Checker");
+        // under a picture with transparency: 8 pt cells, 4 in a small one
+        for (side, cell) in [(64.0, 8.0), (24.0, 4.0)] {
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), egui::Sense::hover());
+            crate::checker(ui.painter(), rect.min, rect, cell);
+        }
     });
 
     heading(ui, "Section");

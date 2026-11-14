@@ -23,10 +23,10 @@
 //! - [`register`] - `characters.view`, `world.view`; [`install`] - the two tabs and their Mod menu
 //!   rows (at `gz_ui_mod::mod_menu_slot`).
 //!
-//! Widgets the kit lacks, local to this crate: [`picker::local_list_picker`] (a long list in a
-//! popup with a search, only the rows in view laid out), [`picker::local_combo`] (a short list
-//! with a free preview), [`picker::local_multi_combo`] (ticks over names, a name the list lacks
-//! kept), [`portraits::local_portrait_gallery`] (the faces of every portrait sheet),
+//! What comes from a list is picked with the kit's `Combo` and `PickList` ([`picker::list_picker`],
+//! [`picker::row_combo`]). Widgets the kit lacks, local to this crate:
+//! [`picker::local_multi_combo`] (ticks over names, a name the list lacks kept),
+//! [`portraits::local_portrait_gallery`] (the faces of every portrait sheet),
 //! [`local::local_number_text`] (a number that may be empty, with a hint),
 //! [`local::local_dirty_dot`], [`local::local_problems_drawer`], [`local::local_cell`] and
 //! [`local::drawer_height`]. The levels World Rules picks are the kit's `PickList`.

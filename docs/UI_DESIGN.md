@@ -127,7 +127,7 @@ The kit is the crate `gz-ui`, on egui; its API is the crate's own (`cargo doc -p
 | `Button` (`Kind` Primary, Secondary, Ghost, GhostDanger, Danger), `icon_button`, `segmented`, `keycaps` | a click that does something | rest, hover, pressed, off with its reason as the tip, a toggle that is on (a Ghost with a 2 pt accent.bright underline) |
 | `Check` | one of several: list rows, multi-choice | off, on, mixed, disabled |
 | `Switch` | a setting that applies at once | off, on, disabled |
-| `Combo` | a value picked from a list, with the kit's chevron; opens a `PickList` | rest, open, mixed ("Multiple values"), invalid (a value the list lacks, kept and shown), disabled |
+| `Combo` | a value picked from a list, with the kit's chevron; opens a `PickList` (or, through its `field`, a popup of the caller's own) | rest, open, mixed ("Multiple values"), invalid, a value the list lacks kept and shown in the warning tone with its tip, nothing chosen (the words for it in the secondary tone), busy (a spinner for the chevron while the list is read), disabled |
 | `PickList` | the popup list: ranked search (`rank.rs`: whole-word prefixes, then letters in order), virtualized rows with an icon and a family tint, a second muted line on the highlighted row, sections Recent and Favourites with a star per row, full keyboard use (arrows, Page Up/Down, Ctrl+Home/End, Enter, Esc), measured once when it opens | rows on, off, current (a check), highlighted; "No matches", "Nothing to pick" |
 | `Section` | the fold header of a part of a panel: chevron, Strong title, a count, a trailing + and menu; no fill; 28 pt; its open state kept in the layout store by id | open, closed |
 | `ItemRows` | a small editable table: named columns, a cross per row, an Add row, drag to reorder | rows, empty with its Add row |
@@ -141,7 +141,10 @@ The kit is the crate `gz-ui`, on egui; its API is the crate's own (`cargo doc -p
 | `empty_state`, `error_state`, `badge`, `status_dot`, `spinner`, `busy_line` | states of a surface | an error state and a busy line report themselves to an audited frame |
 | `card`, `card_busy`, `page`, `page_card` + `card_footer` | a raised part of a page and its busy line; a page filling the work area; a centred card with a dialog-like footer | a tone strip while it asks for attention; busy |
 | `Dialog`, `Footer`; `confirm`, `unsaved_prompt`, `notice`, `result` | modal work and the kit's questions | S, M, L, XL; a sheet of its parent; busy |
-| `list`, `nav_row`, `table_headers` | rows with stable ids, a nav list | selected, hovered, a dot or a count |
+| `list`, `nav_row`, `table_headers`, `table_headers_ruled` | rows with stable ids, a nav list, the head of a static table (ruled: with its column lines) | selected, hovered, a dot or a count |
+| `tabs` (`PanelTab`, `tab_strip`) | the one panel tab, 26 pt with an accent overline: a dock's tab (rounded, a close cross, draggable) and a panel's own flat strip | front, behind, hovered, shrunk together when the strip is short |
+| `form` (`check`, `hint_field`, `row_field`, `secret_field`) | a form's widgets outside a grid: a tick with its caption, a text field with a hint, one as wide as its row, one whose text is hidden | empty with its hint, typed, hidden |
+| `checker` | the checkerboard a picture with transparency stands on: only the cells in view, lined up with the picture | 8 pt cells, 4 in a small picture |
 | `splitter`, `splitter_tail`, `splitter_at` | a resizable edge; its value in the layout store | |
 | `drop` (`Payload`, `Zone`) | typed drag payloads - an asset with its kind, files from Explorer - and drop zones any surface declares | a zone lights up under what it takes |
 | `text::fit` | a cut text kept per (text, face, width), for what is drawn every frame | |
@@ -626,11 +629,15 @@ The surfaces' own commands are in their crates (`graph.view`, `viewport.view`, `
 - The shell: `gz-app` - `shell.rs` (the state of the window, keys, tabs), `chrome.rs` (the frame, menus, status bar, the palette, the Task card), `actions.rs` and `shell_actions.rs` (actions), `palette.rs`, `tabs.rs`, `tasks.rs`, `stalls.rs`, `shots.rs` (pictures held for frames), `cmds.rs` and `app_cmds.rs` (the commands of section 7), `contract.rs` (the ONE place for a constant `ui.contract` answers), `settings.rs` (`grizzly_editor.ltx`).
 - One crate per surface, each with one `install(builder)` for its documents, actions, menu rows, toolbar items, preference groups and dialogs, and one `register(reg)` for its commands: `gz-ui-app` (Start page, Output Log, Preferences, the Keyboard page, updates), `gz-ui-content` (Content Browser), `gz-ui-level` (the Level tab's dock and panels), `gz-ui-viewport`, `gz-ui-graph` (quests, behaviour graphs), `gz-ui-previews` (model, texture, the libraries), `gz-ui-pda` (PDA preview, Screens & Music), `gz-ui-mod` (Mod Settings, the build dialogs), `gz-ui-world` (Characters, World Rules), `gz-ui-release` (Package Release, Publish Release, Releases, Submit).
 
-**What the surfaces still carry of their own** (`local.rs`), to be replaced by the kit's one widget of its job in their own streams: fold headers (`form::section`, `form::raised_section`, the graph's fold header, the release fold) by `Section`; checks (`form::check`, the graph's, the PDA's, the world's cell check) by `Check` / `Switch`; pick lists (the graph's kind picker, Mod Settings', the world's item picker) by `PickList` and `Combo`; item rows (Characters', World Rules') by `ItemRows`; table heads (the release table head, `list::table_headers`) by `Table`; per-surface drop code by `drop` (Screens & Music's); ellipsizing in hot paths (the graph canvas) by `text::fit`. Other local widgets, each used by one crate:
-- `gz-ui-app`: rule, the hint field's audit wrapper. `gz-ui-content`: tree row, breadcrumbs, rename box, checker, menu heading, marquee.
-- `gz-ui-graph`: pane header. `gz-ui-level`: eye toggle, lock toggle, button flow, panel header, thumbnail, badge button, tab, tree list.
-- `gz-ui-mod`: password field, value column, picture. `gz-ui-pda`: list header, tab strip, code view (with the Lua colouring and the layout over frames), drop mark.
-- `gz-ui-previews`: checker, heading, frame, texture pick, wheel. `gz-ui-release`: secret field and row, code, card title.
-- `gz-ui-world`: number text, dirty dot, problems drawer, level picker.
+**What a surface keeps of its own** (`local.rs`). The kit has one widget per job, and what two surfaces draw is the kit's. What is listed here is drawn by one surface alone and is nobody else's job; a second surface that wants one moves it into `gz-ui` first.
+- `gz-ui-app`: the Start page's rule to the row's edge.
+- `gz-ui-content`: the tree row, the breadcrumbs, the rename box, the menu heading, the marquee.
+- `gz-ui-graph`: the graph panes' header.
+- `gz-ui-level`: the eye and lock toggles, the button flow, the panel header, the thumbnail, the badge button, the tree list (and the panels' command helpers, which draw nothing).
+- `gz-ui-mod`: a block of values inside one property row, the thumbnail's frame.
+- `gz-ui-pda`: a list's title with its +, the code pane (with the Lua colouring and the layout over frames), the mark where a dragged row lands.
+- `gz-ui-previews`: a preview's heading, the timeline's ends, the picture frame, the texture pick, the colour wheel.
+- `gz-ui-release`: the secret row (the kit's `secret_field` with its button), the device code, a card's title line, a hand-painted table cell.
+- `gz-ui-world`: a number that may be empty, the unsaved dot, the problems drawer, an exact-size table cell, the ticks over names (`local_multi_combo`, on the kit's `Combo` field) and the portrait gallery.
 
 **QA of the UI** (each on a copy of a project, in a home of its own): `tools/qa/test_ui_shell.py` (the frame, tabs, drawers, panels, dialogs, size classes, menus and their one label column, the palette and its actions, rebinding, stable chrome across every tab kind, the stall monitor, the Task Center), `test_tour.py` (every tab kind, dialog and menu of `ui.contract`, audited and pictured at both sizes), `test_graph_ui.py`, `test_previews.py`, `test_properties.py`, beside every surface's suite. The kit's own tests (`cargo test -p gz-ui`) hold the pick list's ranking and keys, `Section`'s fold, `ItemRows`' add, remove and reorder, the one-Primary assert, the menu's label column and `text::fit`'s cache.

@@ -25,9 +25,7 @@ use gz_ui::section::Section;
 use crate::actions::{self, ADD_ITEMS, BuildToggle};
 use crate::caption;
 use crate::catalog::{Catalog, Node, Origin, Picture, View, ViewEntry};
-use crate::local::{
-    local_breadcrumbs, local_checker, local_marquee, local_menu_heading, local_rename_box, local_tree_row,
-};
+use crate::local::{local_breadcrumbs, local_marquee, local_menu_heading, local_rename_box, local_tree_row};
 use crate::model::{
     GRID_PAD_Y, HOME, Host, KINDS, LIST_BELOW, LIST_COLUMN_EM, LIST_PICTURE, LIST_ROW, Location, Source,
     TILE_GAP, TILE_PAD, leaf_of, search_active, thousands,
@@ -1436,7 +1434,9 @@ fn draw_picture(painter: &egui::Painter, s: Shown, square: Rect) {
     let (fw, fh) = if by_height { (h * s.aspect, h) } else { (w, w / s.aspect) };
     let rect = Rect::from_center_size(square.center(), Vec2::new(fw.round().max(1.0), fh.round().max(1.0)));
     if s.alpha != TileAlpha::Opaque {
-        local_checker(painter, rect);
+        // cells of 8 pt, down to 4 in a small picture
+        let cell = (rect.width().max(rect.height()) / 8.0).clamp(4.0, 8.0).round();
+        gz_ui::checker(painter, rect.min, rect, cell);
     }
     painter.image(s.tex, rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
 }

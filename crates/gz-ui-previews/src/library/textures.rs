@@ -26,7 +26,7 @@ use super::list::{Empty, LibraryList, find, shown};
 use super::stores::{LibraryFacts, LibraryStores, TexFacts};
 use super::texsync::{import_picture, read_picture, sync_texture};
 use super::{LibraryDoc, LibraryLists, Settle, can_write, folder_text, pane, panes};
-use crate::local::{local_checker, local_heading};
+use crate::local::local_heading;
 use crate::paths::{EditorDirs, list_files, texture_folder_name};
 use crate::pending::Pending;
 
@@ -409,7 +409,7 @@ impl TexLibDoc {
         let (row, _) = ui.allocate_exact_size(Vec2::new(avail.x, size.y), Sense::hover());
         let rect = Rect::from_min_size(pos2(row.min.x + (avail.x - size.x) * 0.5, row.min.y), size);
         if alpha {
-            local_checker(ui.painter(), &p, rect.min, rect);
+            gz_ui::checker(ui.painter(), rect.min, rect, 8.0);
         }
         ui.painter().image(
             tex.id(),
