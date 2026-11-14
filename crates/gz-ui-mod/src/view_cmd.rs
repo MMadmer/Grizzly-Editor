@@ -1,7 +1,7 @@
 //! `mod.view`: the Mod Settings tab, and the dialogs of the builds and of the packaging, for
 //! whoever looks at them. A `page` opens the tab on that page, `ask_game_updates` puts the Disable
 //! Game Updates question up, `dialog` puts a build's or the packaging's dialog up the way the Mod
-//! menu does; without any of them this only reports. The data is `mod.info` / `mod.set`.
+//! menu does, `show` puts one of the tab's pick lists up; without any of them this only reports. The data is `mod.info` / `mod.set`.
 
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ use serde::Deserialize;
 
 use crate::call::{args, ok, s};
 use crate::form::{self, PAGES};
-use crate::settings::{ModSettingsDoc, TAB, view_json};
+use crate::settings::{ModSettingsDoc, RELATION_SHOWS, SHOW_FUNCTION, TAB, show_error, view_json};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -39,6 +39,11 @@ struct ViewParams {
     /// Puts a build's or the packaging's dialog up, as the Mod menu does.
     #[serde(default)]
     dialog: Option<Dialog>,
+    /// Puts a list of Mod Settings up to be looked at: add_requires, add_load_after, add_load_before,
+    /// add_conflicts (the Add Module lists of the Relations page) or function (the Function list
+    /// of the first command; the module needs a command). `ui.audit` lists the rows it offers.
+    #[serde(default)]
+    show: Option<String>,
 }
 
 pub(crate) fn register(reg: &mut Registry) {
@@ -76,7 +81,14 @@ async fn mod_view(ed: Arc<Editor>, p: ViewParams, origin: Origin) -> Reply {
         None => None,
     };
     let ask = p.ask_game_updates;
-    if page.is_some() || ask {
+    let show = p.show.filter(|v| !v.is_empty());
+    if let Some(name) = &show
+        && name != SHOW_FUNCTION
+        && !RELATION_SHOWS.contains(&name.as_str())
+    {
+        return Err(CmdError::invalid(show_error()));
+    }
+    if page.is_some() || ask || show.is_some() {
         let reply = ed.call("ui.tab", args([("action", s("open")), ("kind", s(TAB))]), origin).await;
         let windowless = reply.get("code").and_then(serde_json::Value::as_str) == Some("no_window")
             || reply.get("error").and_then(serde_json::Value::as_str)
@@ -85,7 +97,7 @@ async fn mod_view(ed: Arc<Editor>, p: ViewParams, origin: Origin) -> Reply {
             return Err(CmdError::new("refused", crate::call::error_text(&reply)));
         }
     }
-    let answer = on_ui(&ed, move |shell, _ctx| {
+    let answer = on_ui(&ed, move |shell, ctx| {
         let active = shell.active() == TAB;
         let doc = shell
             .document_mut(TAB)
@@ -98,7 +110,11 @@ async fn mod_view(ed: Arc<Editor>, p: ViewParams, origin: Origin) -> Reply {
         if ask {
             doc.ask_game_updates_later();
         }
+        if let Some(name) = &show {
+            doc.show_list(ctx, name).map_err(|e| CmdError::new("refused", e))?;
+        }
         doc.refresh();
+        ctx.request_repaint();
         Ok(doc.view_json(active))
     })
     .await;

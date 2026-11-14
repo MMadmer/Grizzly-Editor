@@ -321,10 +321,11 @@ async fn read_names(ed: &Arc<Editor>) -> FxHashMap<String, String> {
 /// One row of the panel.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Row {
-    /// A category's fold header with how many it holds (or matches).
+    /// A category's fold header with how many it holds (or matches); `None` while its list is
+    /// still being read, because a count not known yet is no count.
     Header {
         category: Category,
-        count: usize,
+        count: Option<usize>,
         open: bool,
     },
     /// A folder of a long list.
@@ -511,7 +512,7 @@ pub fn rows(inputs: &Inputs, key: &Key, folders: &FxHashMap<Category, FxHashSet<
         if (searching || cat == Category::Recent) && shown.is_empty() && !(reading && searching) {
             continue;
         }
-        push(&mut out, Row::Header { category: cat, count: shown.len(), open });
+        push(&mut out, Row::Header { category: cat, count: (!reading).then_some(shown.len()), open });
         if !open {
             continue;
         }
@@ -812,11 +813,15 @@ impl PlacePanel {
                 match row {
                     Row::Header { category, count, .. } => {
                         let mut child = crate::local::child_at(ui, ("place_head", category.id()), rect);
-                        let count = count.to_string();
-                        let head = Section::new(&category.store_key(), category.title())
-                            .default_open(category.open_by_default())
-                            .count(&count)
-                            .show(&mut child);
+                        let count = count.map(|n| n.to_string());
+                        let key = category.store_key();
+                        let mut section =
+                            Section::new(&key, category.title()).default_open(category.open_by_default());
+                        section = match &count {
+                            Some(n) => section.count(n),
+                            None => section.busy("Reading the list..."),
+                        };
+                        let head = section.show(&mut child);
                         if head.toggled {
                             toggle_cat = Some(*category);
                         }
@@ -1080,9 +1085,10 @@ impl PlacePanel {
             .rows
             .iter()
             .filter_map(|r| match r {
-                Row::Header { category, count, open } => Some(
-                    json!({ "id": category.id(), "name": category.title(), "count": count, "open": open }),
-                ),
+                Row::Header { category, count, open } => Some(json!({
+                    "id": category.id(), "name": category.title(), "count": count,
+                    "loading": count.is_none(), "open": open,
+                })),
                 _ => None,
             })
             .collect();
@@ -1092,7 +1098,7 @@ impl PlacePanel {
             .take(limit)
             .map(|r| match r {
                 Row::Header { category, count, open } => {
-                    json!({ "category": category.id(), "count": count, "open": open })
+                    json!({ "category": category.id(), "count": count, "loading": count.is_none(), "open": open })
                 }
                 Row::Folder { category, path, depth, open } => {
                     json!({ "folder": &**path, "category": category.id(), "depth": depth, "open": open })
@@ -1212,7 +1218,10 @@ mod tests {
                 .iter()
                 .any(|x| matches!(x, Row::Folder { path, open: true, .. } if &**path == "weapons\\pistols"))
         );
-        assert!(matches!(r.rows[0], Row::Header { category: Category::SpawnPoints, count: 1, open: true }));
+        assert!(matches!(
+            r.rows[0],
+            Row::Header { category: Category::SpawnPoints, count: Some(1), open: true }
+        ));
         assert_eq!(r.matches, 1);
         // the section itself matches too
         let key = Key { search: "dog_weak".into(), ..Key::default() };
@@ -1238,11 +1247,26 @@ mod tests {
     }
 
     #[test]
+    fn a_list_being_read_has_no_count() {
+        // the groups are not read yet, the folded header carries no number; the particles are
+        // read and empty: that is a real 0
+        let r = rows(&inputs(), &Key::default(), &FxHashMap::default());
+        let count = |c: Category| {
+            r.rows.iter().find_map(|x| match x {
+                Row::Header { category, count, .. } if *category == c => Some(*count),
+                _ => None,
+            })
+        };
+        assert_eq!(count(Category::Groups), Some(None));
+        assert_eq!(count(Category::Particles), Some(Some(0)));
+    }
+
+    #[test]
     fn recent_lists_what_was_placed_last() {
         let recent = vec![What::of(Kind::Spawn, Some("wpn_pm")).key(), What::of(Kind::Light, None).key()];
         let key = Key { open: vec![Category::Recent], recent, ..Key::default() };
         let r = rows(&inputs(), &key, &FxHashMap::default());
-        assert!(matches!(r.rows[0], Row::Header { category: Category::Recent, count: 2, .. }));
+        assert!(matches!(r.rows[0], Row::Header { category: Category::Recent, count: Some(2), .. }));
         assert_eq!(item_labels(&r)[..2], ["PM Pistol", "Light"]);
         // without anything placed there is no Recent at all
         let r = rows(&inputs(), &Key::default(), &FxHashMap::default());

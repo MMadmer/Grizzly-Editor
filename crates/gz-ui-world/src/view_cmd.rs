@@ -101,6 +101,10 @@ pub(crate) struct WorldView {
     /// Unfolds More.
     #[serde(default)]
     more: bool,
+    /// Puts a pick list up to be looked at: add_level (Applies On) or add_area_level (Playable
+    /// Area). Needs a linked game, whose levels it lists; `ui.audit` lists the rows it offers.
+    #[serde(default)]
+    show: Option<String>,
     /// Opens the tab.
     #[serde(default)]
     open: bool,
@@ -118,7 +122,7 @@ pub(crate) fn register(reg: &mut Registry) {
         characters_view,
     );
     reg.cmd(
-        Spec::view("world.view", "Puts the World Rules tab up - its drawer, a level of its transitions - and answers what it shows.")
+        Spec::view("world.view", "Puts the World Rules tab up - its drawer, a level of its transitions, a list of levels - and answers what it shows.")
             .example("more=true"),
         world_view,
     );
@@ -241,7 +245,11 @@ pub(crate) async fn characters_view(ed: Arc<Editor>, a: CharactersView, origin: 
 
 pub(crate) async fn world_view(ed: Arc<Editor>, a: WorldView, origin: Origin) -> Reply {
     // what it asks for is under More
-    let more = a.more || a.level.is_some() || a.filter.is_some();
+    let show = a.show.filter(|v| !v.is_empty());
+    if show.as_deref().is_some_and(|v| v != world::SHOW_ADD_LEVEL && v != world::SHOW_ADD_AREA_LEVEL) {
+        return Err(CmdError::invalid(world::show_error()));
+    }
+    let more = a.more || a.level.is_some() || a.filter.is_some() || show.is_some();
     if ed.project_opt().is_none() {
         return Err(CmdError::no_project());
     }
@@ -261,8 +269,12 @@ pub(crate) async fn world_view(ed: Arc<Editor>, a: WorldView, origin: Origin) ->
             ));
         }
     }
+    // the lists of levels come from the linked game
+    if show.is_some() && !svc.game().await.ok {
+        return Err(CmdError::new("refused", "no game is linked: the levels to pick come from it"));
+    }
     // anything to set opens the tab on it; without one this only looks
-    if drawer.is_some() || level.is_some() || filter.is_some() || a.open {
+    if drawer.is_some() || level.is_some() || filter.is_some() || show.is_some() || a.open {
         open_tab(&ed, world::TAB, origin).await?;
     }
     let _ = svc.manifest().sync().await;
@@ -286,6 +298,9 @@ pub(crate) async fn world_view(ed: Arc<Editor>, a: WorldView, origin: Origin) ->
         }
         if let Some(f) = filter {
             doc.set_filter(&f);
+        }
+        if let Some(name) = &show {
+            doc.show_list(ctx, name).map_err(|e| CmdError::new("refused", e))?;
         }
         ctx.request_repaint();
         Ok(doc.view_json(active, &problems))

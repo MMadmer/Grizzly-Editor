@@ -4,17 +4,23 @@
 
 use egui::{Color32, CornerRadius, Rect, Sense, Stroke, Ui, Vec2, pos2};
 
-use crate::button::{Button, Kind, icon_button, segmented};
+use crate::button::{Button, Kind, icon_button, keycaps, keycaps_width, segmented};
+use crate::card::{card, card_busy};
 use crate::check::{Check, Switch};
+use crate::dialog::{Dialog, DialogSize};
 use crate::font::Font;
-use crate::grid::{self, number, text_field};
+use crate::form;
+use crate::grid::{self, PropFlags, PropertyGrid, number, text_field};
 use crate::icons::Icon;
+use crate::list::{Column, NavRowSpec, nav_row, table_headers, table_headers_ruled};
 use crate::menu::{MenuItem, menu_item, popup_body, popup_frame};
 use crate::pick::{Combo, PickItem, PickList};
 use crate::rows::{Col, ItemRows, Table, cell_text};
 use crate::search::SearchField;
 use crate::section::Section;
-use crate::state::{badge, banner, banner_list, empty_state, spinner, spinner_at, status_dot};
+use crate::state::{
+    badge, banner, banner_list, busy_line, empty_state, error_state, spinner, spinner_at, status_dot, toast,
+};
 use crate::tabs::{PanelTab, tab_strip, tab_width};
 use crate::text::{self, Clip};
 use crate::theme::{Tone, metrics, palette};
@@ -37,6 +43,19 @@ struct Sheet {
     panel: bool,
     tab: usize,
     page: usize,
+    /// The form fields: a hidden one, one with its hint showing, one typed in, one as wide as its row.
+    secret: String,
+    hinted: String,
+    hint_typed: String,
+    row_empty: String,
+    row_typed: String,
+    /// The property grid's values.
+    grid_text: String,
+    grid_number: f32,
+    /// A dialog the sheet shows: the plain one, the one with a job running.
+    dialog: bool,
+    dialog_busy: bool,
+    selected_nav: usize,
 }
 
 impl Default for Sheet {
@@ -55,6 +74,16 @@ impl Default for Sheet {
             panel: true,
             tab: 1,
             page: 0,
+            secret: String::new(),
+            hinted: String::new(),
+            hint_typed: "Night 7".to_owned(),
+            row_empty: String::new(),
+            row_typed: "my_mod.status".to_owned(),
+            grid_text: "Night 7".to_owned(),
+            grid_number: 12.0,
+            dialog: false,
+            dialog_busy: false,
+            selected_nav: 1,
         }
     }
 }
@@ -147,6 +176,16 @@ pub fn sheet(ui: &mut Ui) {
         caption(ui, "Segmented");
         segmented(ui, &mut s.seg, &["Auto", "Manual", "Never"], None);
     });
+    ui.horizontal(|ui| {
+        caption(ui, "Keycaps");
+        // what is bound now, as menu rows and tooltips show it
+        for (keys, enabled) in [("Ctrl+S", true), ("Ctrl+Shift+P", true), ("F5", false)] {
+            let (r, _) =
+                ui.allocate_exact_size(Vec2::new(keycaps_width(ui, keys), metrics::S16), Sense::hover());
+            keycaps(ui, pos2(r.max.x, r.center().y), keys, enabled);
+            ui.add_space(metrics::S8);
+        }
+    });
 
     heading(ui, "Toolbar");
     ui.horizontal(|ui| {
@@ -237,6 +276,26 @@ pub fn sheet(ui: &mut Ui) {
         });
     });
     ui.horizontal(|ui| {
+        caption(ui, "Form fields");
+        // with the hint showing, typed in, and hidden (empty, then typed)
+        form::hint_field(ui, egui::Id::unique("kitsheet.hint"), &mut s.hinted, "my_mod", em(8.0));
+        form::hint_field(ui, egui::Id::unique("kitsheet.hint_typed"), &mut s.hint_typed, "my_mod", em(8.0));
+    });
+    ui.horizontal(|ui| {
+        caption(ui, "Hidden");
+        form::secret_field(ui, egui::Id::unique("kitsheet.secret"), &mut s.secret, "Password", em(9.0));
+        let mut typed = "hunter2".to_owned();
+        form::secret_field(ui, egui::Id::unique("kitsheet.secret_typed"), &mut typed, "Password", em(9.0));
+    });
+    ui.horizontal(|ui| {
+        caption(ui, "As wide as its row");
+        ui.vertical(|ui| {
+            ui.set_width(em(24.0));
+            form::row_field(ui, "kitsheet.row_empty", &mut s.row_empty, "my_mod.status");
+            form::row_field(ui, "kitsheet.row_typed", &mut s.row_typed, "my_mod.status");
+        });
+    });
+    ui.horizontal(|ui| {
         caption(ui, "Combo");
         ui.scope(|ui| {
             ui.set_width(em(10.0));
@@ -291,6 +350,14 @@ pub fn sheet(ui: &mut Ui) {
         });
     });
     ui.horizontal(|ui| {
+        caption(ui, "PickList, empty");
+        ui.allocate_ui(Vec2::new(em(18.0) + 16.0, 90.0), |ui| {
+            popup_frame(&ctx).show(ui, |ui| {
+                let _ = PickList::new("kitsheet.none_to_pick", &[]).width(em(18.0)).max_height(80.0).show(ui);
+            });
+        });
+    });
+    ui.horizontal(|ui| {
         caption(ui, "Checker");
         // under a picture with transparency: 8 pt cells, 4 in a small one
         for (side, cell) in [(64.0, 8.0), (24.0, 4.0)] {
@@ -304,6 +371,9 @@ pub fn sheet(ui: &mut Ui) {
         Section::new("kitsheet.open", "Variables").count("11").action(Icon::Plus, "Add a variable").show(ui);
     ui.indent("kitsheet.section_body", |ui| caption(ui, "the section's body"));
     let _ = Section::new("kitsheet.closed", "More").default_open(false).show(ui);
+    // a list still being read has no count: a spinner stands where the count would
+    let _ =
+        Section::new("kitsheet.reading", "Objects").default_open(false).busy("Reading the list...").show(ui);
 
     heading(ui, "ItemRows");
     let cols = [Col::new("Item", em(14.0)), Col::new("Count", em(5.0))];
@@ -326,6 +396,34 @@ pub fn sheet(ui: &mut Ui) {
     if let Some((from, to)) = edit.moved {
         crate::rows::apply_move(&mut s.rows, from, to);
     }
+
+    ui.add_space(metrics::S8);
+    let _ = ItemRows::new("kitsheet.rows_empty", &cols, 0)
+        .add_label("Add Item")
+        .empty_text("Nothing in the kit yet.")
+        .show(ui, |_, _, _| {});
+
+    heading(ui, "Property grid");
+    PropertyGrid::new("kitsheet").show(ui, |g| {
+        g.row("Title", "What the player reads.", PropFlags::REQUIRED, 0, |ui| {
+            text_field(ui, &mut s.grid_text)
+        });
+        g.row("Duration", "How long it lasts.", PropFlags::MODIFIED, 0, |ui| {
+            number(ui, &mut s.grid_number, 0.1, "s")
+        });
+        g.row("Version", "Not a version.", PropFlags::INVALID, 0, |ui| {
+            let mut v = "1.x".to_owned();
+            text_field(ui, &mut v)
+        });
+        g.message(Tone::Error, "The version is not a version.");
+        g.row("Source", "Where it was made.", PropFlags::READ_ONLY, 0, |ui| {
+            crate::grid::read_only(ui, r"gamedata\configs\night7.ltx", Clip::Start)
+        });
+        g.row("Radius", "Two objects differ.", PropFlags::MIXED, 0, |ui| {
+            let mut v = 0.0;
+            number(ui, &mut v, 0.1, "m")
+        });
+    });
 
     heading(ui, "Table");
     let tcols = [
@@ -351,6 +449,47 @@ pub fn sheet(ui: &mut Ui) {
         if let Some(r) = ev.clicked {
             s.selected = Some(r);
         }
+    });
+
+    heading(ui, "Lists");
+    let cols = [Column::new("Name", em(8.0)), Column::new("Count", em(4.0)), Column::new("On", em(3.0))];
+    ui.horizontal(|ui| {
+        caption(ui, "Headers");
+        ui.vertical(|ui| {
+            ui.set_width(em(15.0));
+            table_headers(ui, &cols);
+            ui.add_space(metrics::S4);
+            // the look of the header of a Table, for rows drawn by the caller
+            table_headers_ruled(ui, &cols);
+        });
+    });
+    ui.horizontal(|ui| {
+        caption(ui, "Nav rows");
+        ui.vertical(|ui| {
+            ui.set_width(em(15.0));
+            let rows = [
+                ("Quests", NavRowSpec { icon: Icon::Quest, count: Some("12"), ..NavRowSpec::default() }),
+                (
+                    "Characters",
+                    NavRowSpec { icon: Icon::Character, dot: Some(Tone::Error), ..NavRowSpec::default() },
+                ),
+                ("Behaviours", NavRowSpec { icon: Icon::Behaviour, dim: true, ..NavRowSpec::default() }),
+                (
+                    "PDA",
+                    NavRowSpec {
+                        icon: Icon::PdaInterface,
+                        action: Icon::Close,
+                        action_tip: "Remove",
+                        ..NavRowSpec::default()
+                    },
+                ),
+            ];
+            for (i, (label, spec)) in rows.iter().enumerate() {
+                if nav_row(ui, label, label, s.selected_nav == i, spec).clicked {
+                    s.selected_nav = i;
+                }
+            }
+        });
     });
 
     heading(ui, "Menus");
@@ -402,6 +541,7 @@ pub fn sheet(ui: &mut Ui) {
             ),
         );
     });
+    let _ = banner(ui, Tone::Info, "A newer version of the game is linked.", None, None);
     let _ = banner(
         ui,
         Tone::Warning,
@@ -419,8 +559,88 @@ pub fn sheet(ui: &mut Ui) {
         ],
     );
     ui.add_space(metrics::S16);
+    ui.add_space(metrics::S8);
+    ui.horizontal(|ui| {
+        caption(ui, "Busy line");
+        ui.vertical(|ui| busy_line(ui, "Reading the library..."));
+    });
+    ui.horizontal(|ui| {
+        caption(ui, "Card");
+        ui.vertical(|ui| {
+            ui.set_width(em(24.0));
+            card(ui, "kitsheet.card", "Author Key", Tone::Required, true, |ui| {
+                ui.label(
+                    egui::RichText::new("A key is needed to sign a release.")
+                        .font(Font::Body.id())
+                        .color(p.text_secondary),
+                );
+            });
+            // while the part it holds is worked out
+            card(ui, "kitsheet.card_busy", "Requirements", Tone::Info, false, |ui| {
+                card_busy(ui, "Checking the release...");
+            });
+        });
+    });
+    ui.horizontal(|ui| {
+        caption(ui, "Toasts");
+        for (label, tone, text_) in [
+            ("Info", Tone::Info, "Scene saved."),
+            ("Success", Tone::Success, "The module was built."),
+            ("Warning", Tone::Warning, "2 files were left out."),
+            ("Error", Tone::Error, "The build stopped."),
+        ] {
+            if Button::new(label).show(ui).clicked() {
+                toast(&ctx, tone, text_);
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        caption(ui, "Dialogs");
+        if Button::new("Dialog").show(ui).clicked() {
+            s.dialog = true;
+        }
+        if Button::new("Dialog With a Job").show(ui).clicked() {
+            s.dialog_busy = true;
+        }
+    });
+    let (mut open, mut closed) = (s.dialog, false);
+    let _ = Dialog::new("Rename Quest", "kitsheet", DialogSize::S).show(
+        ui,
+        &mut open,
+        |ui| {
+            ui.label("The quest keeps its tasks and its variables.");
+        },
+        |f| {
+            f.status("The name is used by one other quest.", Tone::Warning);
+            closed |= f.button("Cancel", Kind::Secondary, false, true, "");
+            closed |= f.button("Rename", Kind::Primary, true, true, "");
+        },
+    );
+    s.dialog = open && !closed;
+    let (mut open, mut closed) = (s.dialog_busy, false);
+    let _ = Dialog::new("Build to Folder", "kitsheet_busy", DialogSize::S).show(
+        ui,
+        &mut open,
+        |ui| {
+            ui.label("The module is built beside the editor.");
+        },
+        |f| {
+            f.busy("Copying the files...");
+            closed |= f.button("Stop Building", Kind::Secondary, false, true, "");
+        },
+    );
+    s.dialog_busy = open && !closed;
     ui.scope(|ui| {
-        ui.set_height(150.0);
+        ui.set_height(210.0);
+        let _ = error_state(
+            ui,
+            "This model cannot be shown",
+            "The file is not a model the viewer reads.",
+            Some("Open Another"),
+        );
+    });
+    ui.scope(|ui| {
+        ui.set_height(210.0);
         let _ = empty_state(
             ui,
             Icon::Search,

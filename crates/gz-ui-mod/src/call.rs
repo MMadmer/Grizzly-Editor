@@ -125,7 +125,7 @@ pub(crate) fn pick_path(
         request = request.in_folder(start);
     }
     let asker = if editor.flags.unattended { Asker::Unattended } else { Asker::Ui };
-    let picked = gz_ui::file_dialog::pick(None, asker, request, move |path| {
+    let picked = gz_ui::file_dialog::pick(&editor.exec, None, asker, request, move |path| {
         drop(release);
         let text = path.display().to_string();
         queue.post(move |_, ctx| {

@@ -27,6 +27,10 @@ What it proves (every length in pt, as the commands answer them; a picture is px
      caption, the tab row and every tab, the toolbar row, the project's group, the status bar), a tool tab's empty
      toolbar row holds its status; after the whole tour perf.stalls names no UI pass over 100 ms; the Task Center
      lists what ended
+  K  `loading` is no empty promise: while the project's scene is read (a project closed and opened again) `ui.audit`
+     answers a non-empty `loading` - the busy lines and the busy headers of the surfaces that wait, which is what
+     test_tour's wait looks for - and an empty one once it is read; the Place panel's list that is read shows no
+     count (`level.view`'s categories answer `count: null, loading: true`), never 0
 
     python tools/qa/test_ui_shell.py --project <project> [--only A,F,...] [--shots <folder>]
 
@@ -50,7 +54,7 @@ from qa import check, cmd, shot
 WIDE = (1500, 800)       # pt: the Wide size class (W >= 1400, H >= 640)
 COMPACT = (1280, 720)    # pt: Compact
 NARROW = (1000, 700)     # pt: under 1100 the caption's menus fold
-PHASES = "ABCDEFGHIJ"
+PHASES = "ABCDEFGHIJK"
 
 
 def short(answer: dict) -> str:
@@ -622,8 +626,44 @@ def phase_j(project, shots, ed, before_scale, contract) -> None:
             cmd("ui.tab", action="close", doc=doc, discard=True)
 
 
+def phase_k(project, shots, ed, before_scale, contract) -> None:
+    """The control of `ui.audit`'s `loading`: while an editor reads the project it opens, `ui.audit` names what its
+    surfaces wait for; once it is all read it names nothing. The last phase: it ends this suite's editor and starts a
+    fresh one on the same copy, and looks at every frame from the first answer on."""
+    ed.close()
+    fresh = qa.Editor(project, ready="ping", stalls=False)
+    fresh.start()
+    try:
+        seen: list = []
+        unknown: list = []
+        zero = []
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            loading = fresh.cmd("ui.audit").get("loading") or []
+            if loading:
+                seen = seen or loading
+                # the Place panel's categories are read on the same frames: a list not read has no count
+                cats = ((fresh.cmd("level.view").get("place") or {}).get("categories") or []) if len(seen) else []
+                unknown = unknown or [c for c in cats if c.get("loading")]
+                zero = zero or [c for c in cats if c.get("loading") and c.get("count") == 0]
+            elif seen:
+                break
+            elif fresh.cmd("state").get("project"):
+                # the project is open and nothing waited on the frames looked at: no more to see
+                break
+        print("NOTE K saw %d busy mark(s), first: %s; %d Place categor(ies) without a count" % (
+            len(seen), qa.short(seen[:1], 160), len(unknown)), flush=True)
+        check(bool(seen), "K ui.audit answers a non-empty loading while the editor reads the project it opens", qa.short(seen))
+        check(not zero, "K a category whose list is being read answers no count, never 0", qa.short(zero))
+        fresh.cmd("job.wait", timeout=120)
+        settled = qa.until(lambda: not fresh.cmd("ui.audit").get("loading"), 30)
+        check(settled, "K ui.audit answers an empty loading once everything is read", qa.short(fresh.cmd("ui.audit").get("loading")))
+    finally:
+        fresh.close()
+
+
 PHASE = {"A": phase_a, "B": phase_b, "C": phase_c, "D": phase_d, "E": phase_e, "F": phase_f, "G": phase_g, "H": phase_h,
-         "I": phase_i, "J": phase_j}
+         "I": phase_i, "J": phase_j, "K": phase_k}
 
 
 def main() -> int:

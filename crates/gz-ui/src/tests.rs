@@ -327,3 +327,63 @@ fn a_busy_combo_takes_no_press_and_a_ready_one_opens_its_list() {
     }
     assert!(egui::Popup::is_id_open(&ctx, popup), "a ready combo did not open");
 }
+
+/// What an audited frame reports as `loading`: the control `test_ui_shell` and the tour's wait
+/// stand on. One entry per busy mark drawn, none for a frame without one, and none at all when
+/// nobody asked for the audit.
+#[test]
+fn an_audited_frame_reports_every_busy_mark_and_only_those() {
+    use crate::audit::{self, AuditEntry};
+    use crate::dialog::{Dialog, DialogSize};
+    let ctx = context();
+    let loading = |entries: &[AuditEntry]| -> Vec<String> {
+        entries
+            .iter()
+            .filter_map(|e| match e {
+                AuditEntry::Loading { what, .. } => Some(what.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut t = 0.0;
+    // one frame with the given marks drawn; `audited` says whether anybody asked
+    let mut run = |audited: bool, line: bool, dialog: bool, card: bool, section: bool| {
+        t += 0.1;
+        if audited {
+            audit::begin(&ctx);
+        }
+        let mut open = dialog;
+        frame(&ctx, t, Vec::new(), |ui| {
+            if line {
+                crate::state::busy_line(ui, "Reading the list...");
+            }
+            if card {
+                crate::card::card_busy(ui, "Working out the preview...");
+            }
+            if section {
+                Section::new("test.busy", "Objects").busy("Objects are being read").show(ui);
+            }
+            let _ = Dialog::new("Build", "busy_test", DialogSize::S).show(
+                ui,
+                &mut open,
+                |ui| {
+                    ui.label("body");
+                },
+                |f| f.busy("Compiling the level"),
+            );
+        });
+        loading(&audit::take(&ctx))
+    };
+    // nothing busy: nothing reported
+    assert_eq!(run(true, false, false, false, false), Vec::<String>::new());
+    // each mark alone gives exactly one entry, with the words it shows
+    assert_eq!(run(true, true, false, false, false), ["Reading the list..."]);
+    assert_eq!(run(true, false, false, true, false), ["Working out the preview..."]);
+    assert_eq!(run(true, false, false, false, true), ["Objects are being read"]);
+    // a dialog's footer: the first frame of a dialog draws it too
+    assert_eq!(run(true, false, true, false, false), ["Compiling the level"]);
+    // all together: one each
+    assert_eq!(run(true, true, true, true, true).len(), 4);
+    // an ordinary frame, nobody asked: nothing collected
+    assert_eq!(run(false, true, true, true, true), Vec::<String>::new());
+}

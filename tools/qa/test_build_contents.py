@@ -14,6 +14,8 @@ over MCP on a THROW-AWAY COPY of a project filled with all of that and checks:
   * the clean build does not follow a link inside the target, refuses a target that
     is a link, and refuses a target that overlaps the project;
   * a git working copy gets a .gitignore for the editor's own files, once;
+  * the Mod Settings tab's pick lists - the four Add Module lists and the Function list - are put up by
+    `mod.view show=`, listed by `ui.audit`, pictured and taken down (`ui.popup show=none`);
   * the Mod Settings tab opens on each of its pages (mod.view), follows a
     save made elsewhere without turning dirty, and its Relations and Mod Browser pages
     are the same label-left grid as the rest; the build dialogs (Build to Folder,
@@ -27,6 +29,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -107,7 +110,64 @@ def labels_of(audit: dict) -> dict:
     return {c.get("label"): c for c in audit.get("controls", [])}
 
 
-def run_ui_checks() -> None:
+# what `mod.view show=` puts up: the four Add Module lists of Relations and the Function list of a command
+RELATION_LISTS = {"add_requires": "Requires", "add_load_after": "Load After", "add_load_before": "Load Before",
+                  "add_conflicts": "Conflicts"}
+
+
+def popup_controls() -> set:
+    """The labels a frame draws now, the rows of an open pick list among them."""
+    return {c.get("label") for c in cmd("ui.audit").get("controls", []) if c.get("label")}
+
+
+def pick_list_checks(shots) -> None:
+    """The pick lists no click is needed for: `mod.view show=` puts each up on its page (a request the page
+    answers on its next frame), its search field and rows are in `ui.audit`, a picture shows it, and
+    `ui.popup show=none` takes it down. A list the module cannot have (a Function list without a command) is
+    refused by the reason."""
+    cmd("mod.view", page="relations")
+    quiet = popup_controls()
+    check(not [l for l in quiet if re.search(r"  \(\w+\)$", l)], "U no module list is up before one is asked for", str(sorted(quiet))[:300])
+    for show in RELATION_LISTS:
+        v = cmd("mod.view", show=show)
+        check(v.get("ok") and v.get("page") == "relations", "U mod.view show=%s opens Relations" % show, json.dumps(v)[:300])
+        up = popup_controls()
+        # a module is a row as "<name>  (<id>)"
+        rows = sorted(l for l in up - quiet if re.search(r"  \(\w+\)$", l))
+        check(bool(rows), "U show=%s puts the module list up, with rows" % show, str(sorted(up - quiet))[:300])
+        qa.shot(shots, "mod_settings_" + show)
+        gone = cmd("ui.popup", show="none")
+        check(gone.get("ok") and not [l for l in popup_controls() - quiet if re.search(r"  \(\w+\)$", l)],
+              "U ui.popup show=none takes the %s list down" % show, json.dumps(gone)[:200])
+    # the Function list belongs to a command row
+    bad = cmd("mod.view", show="nowhere")
+    check(not bad.get("ok") and "add_requires" in bad.get("error", "") and "function" in bad.get("error", ""),
+          "U an unknown list is refused, naming the lists", json.dumps(bad)[:300])
+
+
+def function_list_checks(project: str, shots) -> None:
+    """The Function list of a command: the project's own scripts are what it offers. A module without a command has
+    no list to show (refused, saying why); the first command makes one."""
+    cmd("mod.view", page="commands")
+    quiet = popup_controls()
+    v = cmd("mod.view", show="function")
+    made = None
+    if not v.get("ok"):
+        check("no command" in v.get("error", ""), "U show=function without a command is refused, saying why", json.dumps(v)[:300])
+        made = cmd("mod.set", set={"commands": {"qa_status": {"function": "qa_pick.status"}}})
+        check(made.get("ok"), "U a command to pick a function for", json.dumps(made)[:300])
+        v = cmd("mod.view", show="function")
+    check(v.get("ok") and v.get("page") == "commands", "U mod.view show=function opens Commands", json.dumps(v)[:300])
+    # the scripts are read off the UI thread: the list fills in a frame or two; a function is `<script>.<name>`
+    rows = qa.until(lambda: sorted(l for l in popup_controls() - quiet if re.match(r"^\w+\.\w+$", l)), 10)
+    check(bool(rows), "U the Function list offers the project's functions as rows", str(sorted(popup_controls() - quiet))[:400])
+    qa.shot(shots, "mod_settings_function")
+    cmd("ui.popup", show="none")
+    if made:
+        cmd("mod.set", set={"commands": {"qa_status": None}})
+
+
+def run_ui_checks(project: str, shots) -> None:
     """Mod Settings is a tab that follows mod.ltx; the build dialogs open, show and close over MCP."""
     v = cmd("mod.view")
     check(v.get("ok") and v.get("tab") == "mod_settings", "U mod.view answers", json.dumps(v)[:300])
@@ -143,6 +203,8 @@ def run_ui_checks() -> None:
     check(grid, "U Relations is a grid: each row's Add Module... sits in the value column",
           json.dumps({"rows": rows, "adds": adds})[:400])
     # Mod Browser too: Picture and Tags are rows, the picture's buttons in the value column
+    pick_list_checks(shots)
+    function_list_checks(project, shots)
     cmd("mod.view", page="mod_browser")
     audit = cmd("ui.audit", id="mod_settings")
     controls = labels_of(audit)
@@ -301,7 +363,7 @@ def run(ctx: qa.Run) -> None:
         check("LICENSE" not in left and "README.md" not in left, "D and does not name what shipped")
 
         # ------------------------------------------------------------------ U: Mod Settings and the build dialogs
-        run_ui_checks()
+        run_ui_checks(project, ctx.shots)
 
         # ------------------------------------------------------------------ F: the clean build and links
         keep = os.path.join(linked, "keep.txt")

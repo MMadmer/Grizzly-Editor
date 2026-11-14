@@ -301,7 +301,7 @@ fn pick_file(editor: &Arc<Editor>, facts: &Arc<Mutex<Facts>>, save: bool, start:
     }
     let done = PickDone { slot: facts.clone(), editor: editor.clone() };
     let asker = if editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
-    let picked = gz_ui::file_dialog::pick(None, asker, request, move |p: PathBuf| {
+    let picked = gz_ui::file_dialog::pick(&editor.exec, None, asker, request, move |p: PathBuf| {
         let p = p.display().to_string();
         done.slot.lock().picked = Some(if save { Picked::Target(p) } else { Picked::Use(p) });
     });

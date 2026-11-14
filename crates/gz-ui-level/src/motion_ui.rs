@@ -99,12 +99,18 @@ pub fn press(editor: &Arc<Editor>, key: &str, caption: &str) -> bool {
             .filter("Object motion", &["anm"])
             .in_folder(dir)
             .creating_folder();
-            let picked = gz_ui::file_dialog::pick(None, crate::tools::asker(editor), request, move |f| {
-                let mut a = Args::new();
-                a.insert("action".into(), json!(if import { "import" } else { "export" }));
-                a.insert("path".into(), json!(f.display().to_string()));
-                motion_call(&ed, &object, a);
-            });
+            let picked = gz_ui::file_dialog::pick(
+                &editor.exec,
+                None,
+                crate::tools::asker(editor),
+                request,
+                move |f| {
+                    let mut a = Args::new();
+                    a.insert("action".into(), json!(if import { "import" } else { "export" }));
+                    a.insert("path".into(), json!(f.display().to_string()));
+                    motion_call(&ed, &object, a);
+                },
+            );
             if let Err(line) = picked {
                 editor.log.finding(&line);
             }

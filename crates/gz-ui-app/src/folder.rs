@@ -42,7 +42,7 @@ pub(crate) fn pick_folder(
         request = request.in_folder(start);
     }
     let asker = if editor.flags.unattended { Asker::Unattended } else { Asker::Ui };
-    let picked = gz_ui::file_dialog::pick(None, asker, request, move |folder| {
+    let picked = gz_ui::file_dialog::pick(&editor.exec, None, asker, request, move |folder| {
         drop(release);
         let text = folder.display().to_string();
         queue.post(move |_, ctx| {
@@ -69,7 +69,7 @@ pub(crate) fn pick_file(
     }
     let release = Release(busy);
     let asker = if editor.flags.unattended { Asker::Unattended } else { Asker::Ui };
-    let picked = gz_ui::file_dialog::pick(None, asker, request, move |file| {
+    let picked = gz_ui::file_dialog::pick(&editor.exec, None, asker, request, move |file| {
         drop(release);
         let text = file.display().to_string();
         queue.post(move |_, ctx| {

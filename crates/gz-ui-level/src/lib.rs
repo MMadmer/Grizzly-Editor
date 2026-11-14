@@ -35,8 +35,8 @@
 //!
 //! Widgets the kit lacks, local to this crate ([`local`]): `local_eye_toggle`,
 //! `local_lock_toggle`, `local_button_flow`, `local_panel_header`, `local_thumbnail`,
-//! `local_badge_button`, `local_tab` (a panel tab with its cross on hover), `local_tree_list`
-//! (the filtered tree list of a chooser); `tools_bulk`'s `local_number_row`.
+//! `local_badge_button`, `local_tree_list` (the filtered tree list of a chooser);
+//! `tools_bulk`'s `local_number_row`. The panel tabs are the kit's `gz_ui::tabs`.
 
 #![forbid(unsafe_code)]
 

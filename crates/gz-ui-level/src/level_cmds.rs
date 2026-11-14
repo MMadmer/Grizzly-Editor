@@ -51,10 +51,12 @@ fn file_dialog(
     then: impl FnOnce(&Arc<Editor>, PathBuf) + Send + 'static,
 ) -> Result<(), String> {
     let ed = editor.clone();
-    gz_ui::file_dialog::pick(Some(ctx), asker(editor), request, move |f| then(&ed, f)).map_err(|line| {
-        editor.log.finding(&line);
-        gz_ui::file_dialog::NAME_THE_FILE.to_owned()
-    })
+    gz_ui::file_dialog::pick(&editor.exec, Some(ctx), asker(editor), request, move |f| then(&ed, f)).map_err(
+        |line| {
+            editor.log.finding(&line);
+            gz_ui::file_dialog::NAME_THE_FILE.to_owned()
+        },
+    )
 }
 
 fn open_request(title: &str, filter: (&str, &[&str]), dir: PathBuf) -> FileRequest {

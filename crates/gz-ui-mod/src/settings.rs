@@ -577,6 +577,23 @@ impl ModSettingsDoc {
         }
     }
 
+    /// `mod.view show=`: opens the page the list is on and asks for the list; the page opens it
+    /// on its next frame. `Err` says why it cannot be put up.
+    pub fn show_list(&mut self, ctx: &egui::Context, name: &str) -> Result<(), String> {
+        if name == SHOW_FUNCTION {
+            if self.form.commands.is_empty() {
+                return Err("the module has no command yet: add one (mod.set set={\"commands\": ...}), then its Function list can be shown".to_owned());
+            }
+            self.set_page(form::COMMANDS);
+        } else if RELATION_SHOWS.contains(&name) {
+            self.set_page(form::RELATIONS);
+        } else {
+            return Err(show_error());
+        }
+        gz_ui::menu::show_popup(ctx, &format!("mod_settings.{name}"));
+        Ok(())
+    }
+
     /// `mod.view ask_game_updates=true`: the question goes up on the tab's next frame.
     pub fn ask_game_updates_later(&mut self) {
         self.page = form::GENERAL;
@@ -1009,12 +1026,15 @@ impl ModSettingsDoc {
                         if value.is_empty() { label } else { format!("{label}  {value}") }
                     })
                     .collect();
+                let request = format!("mod_settings.{}", RELATION_SHOWS[i]);
                 let out = g.row(label, help, flags(problems, field, PropFlags::NONE), 0, |ui| {
                     local_value_column(ui, field, |ui| {
                         let refs: Vec<&str> = shown.iter().map(String::as_str).collect();
                         let removed = if refs.is_empty() { None } else { chips(ui, field, &refs, true) };
                         let resp = Button::new("Add Module...").show(ui);
-                        (removed, resp.clicked(), resp.rect)
+                        // a click, or `mod.view show=` asking for the same list
+                        let asked = gz_ui::menu::take_popup_request(&ctx, &request);
+                        (removed, resp.clicked() || asked, resp.rect)
                     })
                 });
                 if let Some((removed, add, rect)) = out {
@@ -1167,7 +1187,9 @@ impl ModSettingsDoc {
         let ctx = ui.ctx().clone();
         let layer = ui.layer_id();
         let mut pick_at: Option<(usize, Rect)> = None;
-        let mut opened = None;
+        // a click on a row's chevron, or `mod.view show=function` asking for the first row's list
+        let mut opened =
+            gz_ui::menu::take_popup_request(&ctx, &format!("mod_settings.{SHOW_FUNCTION}")).then_some(0);
         let mut selected = self.command_sel.min(self.form.commands.len().saturating_sub(1));
         let columns = [
             Col::new("Name", em(10.0)),
@@ -1220,7 +1242,10 @@ impl ModSettingsDoc {
                         if r.changed() {
                             c.declared = true;
                         }
-                        pick_at = pick_at.or(Some((row, r.rect)));
+                        // the list belongs to the row that asked for it, or has it open
+                        if opened == Some(row) || Popup::is_id_open(&ctx, function_picker_id(row)) {
+                            pick_at = Some((row, r.rect));
+                        }
                         Some(r)
                     }
                     2 => Some(gz_ui::form::row_field(
@@ -1560,8 +1585,20 @@ pub fn view_json(open: bool, active: bool, page: usize, dirty: bool, problems: &
     })
 }
 
+/// What `mod.view show=` puts up: the four Add Module lists of the Relations page and the
+/// Function list of the first command.
+pub(crate) const SHOW_FUNCTION: &str = "function";
+pub(crate) const RELATION_SHOWS: [&str; 4] =
+    ["add_requires", "add_load_after", "add_load_before", "add_conflicts"];
+
 fn picker_id(relation: usize) -> Id {
     Id::unique(("gz-ui-mod.pick_module", relation))
+}
+
+/// The refusal of a `show=` that names no list.
+pub(crate) fn show_error() -> String {
+    let all: Vec<&str> = RELATION_SHOWS.iter().copied().chain([SHOW_FUNCTION]).collect();
+    format!("show must be one of: {}", all.join(", "))
 }
 
 fn function_picker_id(command: usize) -> Id {

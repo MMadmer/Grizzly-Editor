@@ -170,7 +170,7 @@ pub(crate) fn save_group_as(
         .filter("Group", &["group"])
         .in_folder(dir)
         .creating_folder();
-    let picked = gz_ui::file_dialog::pick(Some(ctx), asker(editor), request, move |f| {
+    let picked = gz_ui::file_dialog::pick(&editor.exec, Some(ctx), asker(editor), request, move |f| {
         run(
             &ed,
             "scene.group",

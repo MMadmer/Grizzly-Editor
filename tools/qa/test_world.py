@@ -8,7 +8,8 @@ What it proves:
   B  the linked game's levels and transitions come out of its all.spawn, and the
      area / locks close them the way the engine will (changer > level > area)
   U  the World Rules tab opens, points its transitions at a level and its problems
-     drawer over MCP (world.view), draws every section and lets nothing escape it
+     drawer over MCP (world.view), draws every section and lets nothing escape it, and puts up its two lists of
+     levels (world.view show=: the rows `ui.audit` lists, a picture, ui.popup show=none)
   C  the scene: a Player Start, a way path and a stalker with an order bake into the
      spawn layer as op = start, [path:<name>] and [xms_order]; a path named like one
      of the game's is left out with a warning
@@ -80,7 +81,40 @@ QUEST_E024 = """return {
 """
 
 
-def run_ui_checks() -> None:
+def drawn() -> set:
+    """The labels a frame draws now, the search field and the rows of a pick list that is up among them."""
+    return {c.get("label") for c in cmd("ui.audit").get("controls", []) if c.get("label")}
+
+
+def pick_list_checks(shots) -> None:
+    """The two lists of levels no click is needed for: `world.view show=` unfolds More and the section, switches
+    the list on and puts it up; `ui.audit` lists its search field and rows (a kit pick list is no menu: `ui.list`
+    does not name it), a picture shows it, `ui.popup show=none` takes it down."""
+    quiet = drawn()
+    check(not [l for l in quiet if "  -  " in l], "U no level list is up before one is asked for", str(sorted(quiet))[:200])
+    for show in ("add_level", "add_area_level"):
+        v = cmd("world.view", show=show)
+        check(v.get("ok") and v.get("active"), "U world.view show=%s answers" % show, json.dumps(v)[:300])
+        # a level is a row as "<id>  -  <caption>"; the pick list is virtualized, the first rows are drawn
+        rows = qa.until(lambda: [l for l in drawn() - quiet if "  -  " in l], 10)
+        check(bool(rows), "U show=%s puts the list of the linked game's levels up, with rows" % show, str(rows)[:300])
+        # the button the list hangs from is under the fold: bring it into view for the picture
+        cmd("ui.scroll", id="world_rules", to="bottom")
+        cmd("ui.frame")
+        qa.shot(shots, "world_rules_" + show)
+        gone = cmd("ui.popup", show="none")
+        check(gone.get("ok") and not [l for l in drawn() - quiet if "  -  " in l], "U ui.popup show=none takes the %s list down" % show,
+              json.dumps(gone)[:200])
+    bad = cmd("world.view", show="nowhere")
+    check(not bad.get("ok") and "add_level" in bad.get("error", "") and "add_area_level" in bad.get("error", ""),
+          "U an unknown list is refused, naming the lists", json.dumps(bad)[:300])
+    # the contract says which popups a view command brings up
+    popups = cmd("ui.contract").get("popups", [])
+    check("world.view show=add_level" in popups and "mod.view show=function" in popups,
+          "U ui.contract names the popups world.view and mod.view put up", json.dumps(popups)[:400])
+
+
+def run_ui_checks(shots) -> None:
     """The World Rules tab: opened, pointed and looked at over MCP, and nothing of it leaves its window."""
     v = cmd("world.view")
     check(v.get("ok") and v.get("tab") == "world_rules", "U world.view answers", json.dumps(v)[:300])
@@ -104,6 +138,7 @@ def run_ui_checks() -> None:
     labels = {c.get("label") for c in audit.get("controls", [])}
     for section in ("Original Game", "Player Start", "Place in Scene"):
         check(section in labels, "U the tab shows " + section, json.dumps(sorted(x for x in labels if x))[:400])
+    pick_list_checks(shots)
     # the rest is drawn once the page scrolls to it
     scrolled = cmd("ui.scroll", id="world_rules", to="bottom")
     check(scrolled.get("ok"), "U the page scrolls", json.dumps(scrolled)[:300])
@@ -214,7 +249,7 @@ def run(ctx: qa.Run) -> None:
               "B the game's own patrol paths are listed", json.dumps(patrols)[:300])
 
         # ------------------------------------------------------------ U: the World Rules tab
-        run_ui_checks()
+        run_ui_checks(ctx.shots)
 
         # ------------------------------------------------------------ C: the scene
         # the editor does not reopen the last scene by itself on every start: ask for it

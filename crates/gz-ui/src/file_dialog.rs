@@ -2,13 +2,15 @@
 //!
 //! A window of the operating system cannot be answered by an MCP caller or under `-nodlg`, so
 //! for those askers nothing opens: [`pick`] returns the line to log and the caller refuses with
-//! [`NAME_THE_FILE`]. For a person the dialog runs on a thread of its own and `then` gets the
-//! path picked (it is dropped unrun when the dialog is cancelled).
+//! [`NAME_THE_FILE`]. For a person the dialog runs on a thread of its own - made by an IO pool
+//! thread (`Executors::thread`), never by the frame of the click - and `then` gets the path
+//! picked (it is dropped unrun when the dialog is cancelled).
 
 use std::path::PathBuf;
 
 use egui::Context;
 use gz_base::Finding;
+use gz_task::Executors;
 
 use crate::dialog::Asker;
 
@@ -92,11 +94,13 @@ pub fn may_open(ctx: Option<&Context>, asker: Asker) -> bool {
     who == Asker::Ui
 }
 
-/// Opens the system's dialog for a person, on a thread of its own; `then` runs there with the
-/// path picked. For any other asker (or the caller's scope on `ctx`) nothing opens: the error is
-/// the finding to log, and the caller refuses with [`NAME_THE_FILE`]. A thread that could not
-/// start is an error too.
+/// Opens the system's dialog for a person, on a thread of its own that `exec` makes (a call from
+/// a frame costs a message to a pool, not a system call that a virus scanner may hold for
+/// seconds); `then` runs there with the path picked. For any other asker (or the caller's scope
+/// on `ctx`) nothing opens: the error is the finding to log, and the caller refuses with
+/// [`NAME_THE_FILE`].
 pub fn pick(
+    exec: &Executors,
     ctx: Option<&Context>,
     asker: Asker,
     request: FileRequest,
@@ -105,12 +109,12 @@ pub fn pick(
     if !may_open(ctx, asker) {
         return Err(suppressed_line(&request.title));
     }
-    let spawned = std::thread::Builder::new().name("gz-ui.file_dialog".into()).spawn(move || {
+    let _started = exec.thread("gz-ui.file_dialog", move || {
         if let Some(picked) = run(&request) {
             then(picked);
         }
     });
-    spawned.map(drop).map_err(|e| Finding::warning(format!("The file dialog did not open: {e}.")))
+    Ok(())
 }
 
 fn run(request: &FileRequest) -> Option<PathBuf> {
@@ -137,13 +141,18 @@ fn run(request: &FileRequest) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use crate::dialog::answer_as;
+    use gz_task::{ExecOptions, Runtime};
 
     #[test]
     fn nothing_opens_for_a_caller_who_cannot_answer() {
-        let line = pick(None, Asker::Unattended, FileRequest::open("Open Scene"), |_| panic!("no path"));
-        assert_eq!(line, Err(Finding::warning("[dlg suppressed] Open Scene")));
+        let rt = Runtime::start(ExecOptions::default()).expect("a runtime");
+        let exec = rt.exec();
         let line =
-            pick(None, Asker::Mcp, FileRequest::save("Save Scene As", "a.level"), |_| panic!("no path"));
+            pick(&exec, None, Asker::Unattended, FileRequest::open("Open Scene"), |_| panic!("no path"));
+        assert_eq!(line, Err(Finding::warning("[dlg suppressed] Open Scene")));
+        let line = pick(&exec, None, Asker::Mcp, FileRequest::save("Save Scene As", "a.level"), |_| {
+            panic!("no path")
+        });
         assert_eq!(line, Err(Finding::warning("[dlg suppressed] Save Scene As")));
     }
 
@@ -151,9 +160,12 @@ mod tests {
     fn a_held_scope_wins_over_the_asker_named() {
         let ctx = Context::default();
         assert!(may_open(Some(&ctx), Asker::Ui));
+        let rt = Runtime::start(ExecOptions::default()).expect("a runtime");
+        let exec = rt.exec();
         let scope = answer_as(&ctx, Asker::Mcp);
         assert!(!may_open(Some(&ctx), Asker::Ui));
-        let line = pick(Some(&ctx), Asker::Ui, FileRequest::folder("Link Game"), |_| panic!("no path"));
+        let line =
+            pick(&exec, Some(&ctx), Asker::Ui, FileRequest::folder("Link Game"), |_| panic!("no path"));
         assert_eq!(line, Err(Finding::warning("[dlg suppressed] Link Game")));
         drop(scope);
         assert!(may_open(Some(&ctx), Asker::Ui));

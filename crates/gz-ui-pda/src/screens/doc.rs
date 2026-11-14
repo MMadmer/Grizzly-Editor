@@ -483,7 +483,7 @@ impl ScreensDoc {
         let request =
             FileRequest::open("Choose a File").filter(filter, exts).in_folder(self.tab.root.clone());
         let asker = if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
-        let picked = gz_ui::file_dialog::pick(None, asker, request, move |file| {
+        let picked = gz_ui::file_dialog::pick(&self.editor.exec, None, asker, request, move |file| {
             drop(release);
             let file = file.display().to_string();
             let _task = ed.exec.clone().spawn(async move {

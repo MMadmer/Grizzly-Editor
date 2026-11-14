@@ -35,6 +35,8 @@ pub struct Section<'a> {
     open: bool,
     actions: Vec<(Icon, &'a str)>,
     tip: Option<&'a str>,
+    /// What the section is waiting for: a spinner stands where the count would.
+    busy: Option<&'a str>,
 }
 
 fn store_key(key: &str) -> String {
@@ -54,7 +56,7 @@ pub fn set_open(ctx: &Context, key: &str, open: bool) {
 
 impl<'a> Section<'a> {
     pub fn new(key: &'a str, title: &'a str) -> Self {
-        Self { key, title, count: None, open: true, actions: Vec::new(), tip: None }
+        Self { key, title, count: None, open: true, actions: Vec::new(), tip: None, busy: None }
     }
 
     /// Its state until the author folds or opens it. Open unless told.
@@ -66,6 +68,15 @@ impl<'a> Section<'a> {
     /// A count after the title, muted: "Variables 11".
     pub fn count(mut self, count: &'a str) -> Self {
         self.count = (!count.is_empty()).then_some(count);
+        self
+    }
+
+    /// The section's content is still being read: the kit's spinner stands after the title where
+    /// the count would, and an audited frame reports `what` as loading (`ui.audit`), the section
+    /// open or folded. A count is never shown with it - a number not known yet is no number.
+    pub fn busy(mut self, what: &'a str) -> Self {
+        self.busy = Some(what);
+        self.count = None;
         self
     }
 
@@ -120,7 +131,12 @@ impl<'a> Section<'a> {
             );
             let x = chevron.max.x + 6.0;
             let font = Font::Strong.id();
-            let count_w = self.count.map_or(0.0, |c| text::width(&ctx, &Font::Small.id(), c) + metrics::S8);
+            let mark = metrics::GLYPH;
+            let count_w = if self.busy.is_some() {
+                mark + metrics::S8
+            } else {
+                self.count.map_or(0.0, |c| text::width(&ctx, &Font::Small.id(), c) + metrics::S8)
+            };
             let room = (head.max.x - x - count_w - 4.0).max(0.0);
             text::paint(
                 painter,
@@ -132,6 +148,11 @@ impl<'a> Section<'a> {
                 Some(room),
                 Clip::End,
             );
+            if self.busy.is_some() {
+                let w = text::width(&ctx, &font, self.title).min(room);
+                let at = pos2(x + w + metrics::S8 + mark * 0.5, rect.center().y);
+                crate::state::spinner_at(&ctx, painter, Rect::from_center_size(at, Vec2::splat(mark)));
+            }
             if let Some(count) = self.count {
                 let w = text::width(&ctx, &font, self.title).min(room);
                 painter.text(
@@ -155,6 +176,9 @@ impl<'a> Section<'a> {
             x -= 2.0;
         }
         audit::control(&ctx, self.title, true, None, self.tip, rect);
+        if let Some(what) = self.busy {
+            audit::loading(&ctx, what, rect);
+        }
         if let Some(tip) = self.tip {
             resp = resp.on_hover_text(tip);
         }

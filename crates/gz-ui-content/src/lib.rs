@@ -32,8 +32,9 @@
 //!
 //! Widgets the kit lacks, local to this crate ([`local`]): `local_tree_row` (a row of the folder
 //! tree), `local_breadcrumbs` (the folder path whose leading parts fold into "…"),
-//! `local_rename_box` (the inline rename field with its own selection), `local_checker` (the
-//! checkerboard under a picture with transparency), `local_marquee`, `local_menu_heading`.
+//! `local_rename_box` (the inline rename field with its own selection), `local_marquee`,
+//! `local_menu_heading`. The checkerboard under a picture with transparency is the kit's
+//! `gz_ui::checker`.
 
 #![forbid(unsafe_code)]
 

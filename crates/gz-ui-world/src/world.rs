@@ -572,6 +572,25 @@ impl WorldDoc {
         level.clone_into(&mut self.trans_level);
     }
 
+    /// `world.view show=`: unfolds what holds the list, switches the list on and asks for it; the
+    /// tab opens it on its next frame. `Err` says why it cannot be put up.
+    pub(crate) fn show_list(&mut self, ctx: &egui::Context, name: &str) -> Result<(), String> {
+        let (section, key, area) = match name {
+            SHOW_ADD_LEVEL => ("world.applies", "world.levels", false),
+            SHOW_ADD_AREA_LEVEL => ("world.area", "world.area_levels", true),
+            _ => return Err(show_error()),
+        };
+        if area {
+            self.area_limited = true;
+        } else {
+            self.levels_limited = true;
+        }
+        crate::world::open_more(ctx);
+        gz_ui::section::set_open(ctx, section, true);
+        gz_ui::menu::show_popup(ctx, key);
+        Ok(())
+    }
+
     pub(crate) fn set_filter(&mut self, filter: &str) {
         filter.clone_into(&mut self.trans_filter);
     }
@@ -891,7 +910,10 @@ impl WorldDoc {
         }
         let popup = Id::unique(("gz-ui-world.pick_level", key));
         let resp = Button::new("Add Level...").enabled(game_ok, "Link a game to pick its levels").show(ui);
-        if resp.clicked() {
+        // a click, or `world.view show=` asking for the same list
+        // (kept until the game's levels are read: a request is not spent on a button that is off)
+        let asked = game_ok && gz_ui::menu::take_popup_request(&ctx, key);
+        if resp.clicked() || asked {
             PickList::reset(&ctx, popup);
             Popup::open_id(&ctx, popup);
         }
@@ -1440,6 +1462,15 @@ impl Document for WorldDoc {
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(self)
     }
+}
+
+/// What `world.view show=` puts up: the Add Level list of Applies On and of Playable Area.
+pub(crate) const SHOW_ADD_LEVEL: &str = "add_level";
+pub(crate) const SHOW_ADD_AREA_LEVEL: &str = "add_area_level";
+
+/// The refusal of a `show=` that names no list.
+pub(crate) fn show_error() -> String {
+    format!("show must be one of: {SHOW_ADD_LEVEL}, {SHOW_ADD_AREA_LEVEL}")
 }
 
 /// Opens More from outside: what MCP asks for (a level, a filter) is under it.
