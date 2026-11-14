@@ -288,7 +288,7 @@ def run_one(name: str, extra: list[str], port_lock: threading.Lock) -> dict:
 TROUBLE = ("the graphics device reported an error", "panicked at")
 
 # what a check that times something is called: the UI thread's stalls, and answers given while a job runs
-TIMINGS = ("holds the UI thread under", "no UI pass waited", "is answered at once", "no stall")
+TIMINGS = ("holds the UI thread under", "no UI pass waited", "no UI pass stalled", "is answered at once", "no stall")
 
 
 def only_timings(result: dict) -> bool:
