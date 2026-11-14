@@ -451,11 +451,26 @@ def run_library_commands(project: str, shots: str | None) -> None:
             library_sound(lib)
             library_lanim(lib)
             library_maintenance(lib)
+            library_is_no_game(art)
         finally:
             ed.close()
     finally:
         qa.remove_tree(lib)
         qa.remove_tree(art)
+
+
+def library_is_no_game(art: str) -> None:
+    """A folder that is a game is refused as the library's: the library is written, a game never is."""
+    fake = os.path.join(art, "a_game")
+    os.makedirs(os.path.join(fake, "gamedata"))
+    os.makedirs(os.path.join(fake, "rawdata"))
+    with open(os.path.join(fake, "fsgame.ltx"), "w") as f:
+        f.write("; a folder that looks like a game")
+    before = sorted(os.listdir(fake))
+    r = cmd("project.set_library", path=fake)
+    check(not r.get("ok") and "a game's folder" in str(r.get("error")),
+          "K a game's folder is refused as the library's folder", json.dumps(r)[:300])
+    check(sorted(os.listdir(fake)) == before, "K ... and nothing is written into it", str(sorted(os.listdir(fake))))
 
 
 def exists(lib: str, rel: str) -> bool:
