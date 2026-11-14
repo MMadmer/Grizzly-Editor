@@ -3,6 +3,10 @@
 //! ```text
 //! lighter(LightChoice) -> Chosen     what `light=auto|gpu|cpu|off` lights a build with
 //! GpuLighter                         sample points lit by a compute shader (`gz_lc_light::Lighter`)
+//! bvh.rs                             the lighter's own tree: binned SAH, collapsed 4-wide, 8-bit planes
+//! pack.rs                            the scene and a job's lights as the kernel reads them
+//! light.wgsl                         `light_point` and `RayModel::trace`: a ray a thread, then a
+//!                                    sample a thread adds its lights up
 //! ```
 //!
 //! The graphics card's lighter is a plain compute shader over a tree it builds itself: any DX12 or
@@ -10,7 +14,11 @@
 //! has an instance and a device of its own, never the window's. `auto` wraps it in
 //! `gz_lc_light::AutoLighter`: whatever the card fails at is lit on the CPU and the build goes on.
 
+mod bvh;
 mod gpu;
+mod pack;
+#[cfg(test)]
+mod tests;
 
 pub use gpu::GpuLighter;
 
@@ -26,11 +34,15 @@ pub struct Chosen {
 /// The lighter `choice` names. `gpu` without a usable graphics card is refused with the reason;
 /// `auto` lights on the CPU then and says why in [`Chosen::note`].
 pub fn lighter(choice: LightChoice) -> Result<Chosen, String> {
+    choose(choice, GpuLighter::new)
+}
+
+fn choose(choice: LightChoice, card: impl FnOnce() -> Result<GpuLighter, String>) -> Result<Chosen, String> {
     Ok(match choice {
         LightChoice::Cpu => Chosen { lighter: Box::new(CpuLighter::default()), note: None },
         LightChoice::Off => Chosen { lighter: Box::new(NullLighter::default()), note: None },
-        LightChoice::Gpu => Chosen { lighter: Box::new(GpuLighter::new()?), note: None },
-        LightChoice::Auto => match GpuLighter::new() {
+        LightChoice::Gpu => Chosen { lighter: Box::new(card()?), note: None },
+        LightChoice::Auto => match card() {
             Ok(gpu) => Chosen { lighter: Box::new(AutoLighter::new(Box::new(gpu))), note: None },
             Err(why) => Chosen {
                 lighter: Box::new(CpuLighter::default()),
@@ -38,18 +50,4 @@ pub fn lighter(choice: LightChoice) -> Result<Chosen, String> {
             },
         },
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_cpu_and_no_light_need_no_graphics_card() {
-        assert_eq!(lighter(LightChoice::Cpu).map(|c| c.lighter.name()), Ok("the CPU".to_owned()));
-        assert_eq!(lighter(LightChoice::Off).map(|c| c.lighter.name()), Ok("no light".to_owned()));
-        // auto always lights: on a card, or on the CPU with the reason
-        let auto = lighter(LightChoice::Auto);
-        assert!(auto.is_ok());
-    }
 }

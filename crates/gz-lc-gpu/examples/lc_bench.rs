@@ -3,7 +3,8 @@
 //!
 //! ```text
 //! lc_bench <level folder> root=<data root> [light=cpu|gpu|auto|off] [mode=compile|rays|details]
-//!          [stop_after=<phase>] [threads=N] [samples=N] [compare=1] [out=<folder>] [<compiler flags>]
+//!          [stop_after=<phase>] [threads=N] [samples=N] [compare=1] [again=1] [out=<folder>]
+//!          [<compiler flags>]
 //! ```
 //!
 //! - `<level folder>` holds `build.prj` (and `build.details` for `mode=details`);
@@ -13,8 +14,9 @@
 //!   seconds and the SHA-256 and size of every file it made; `stop_after=` ends it when the phase
 //!   whose name starts so has ended; `out=` also writes the files into that folder;
 //! - `mode=rays` builds the scene the light is traced in, lights `samples=` of its vertices
-//!   (200000) with the whole light set and prints the samples a second; `compare=1` lights them
-//!   on the CPU too and says how far the two are apart;
+//!   (200000) with the whole light set and prints the samples a second; `again=1` lights them once
+//!   more and prints that call's rate apart (a graphics card starts the first call from its idle
+//!   clocks); `compare=1` lights them on the CPU too and says how far the two are apart;
 //! - `mode=details` lights the detail slots from `build.details`, `build.cform` and
 //!   `build.lights` (the last two from `out=` when it holds them, else from the level folder);
 //! - a word without `=` is a compiler flag (`nosun`, `no_invalidefaces`, ...).
@@ -44,6 +46,7 @@ struct Args {
     stop_after: Option<String>,
     samples: usize,
     compare: bool,
+    again: bool,
     out: Option<PathBuf>,
     threads: Option<usize>,
     flags: Vec<String>,
@@ -57,6 +60,7 @@ fn args() -> Result<Args, String> {
         stop_after: None,
         samples: 200_000,
         compare: false,
+        again: false,
         out: None,
         threads: None,
         flags: Vec::new(),
@@ -68,6 +72,7 @@ fn args() -> Result<Args, String> {
             Some(("stop_after", v)) => a.stop_after = Some(v.to_ascii_lowercase()),
             Some(("samples", v)) => a.samples = v.parse().map_err(|_| format!("{word}: a whole number"))?,
             Some(("compare", v)) => a.compare = v != "0",
+            Some(("again", v)) => a.again = v != "0",
             Some(("out", v)) => a.out = Some(PathBuf::from(v)),
             Some(("threads", v)) => {
                 a.threads = Some(v.parse().map_err(|_| format!("{word}: a whole number"))?);
@@ -83,7 +88,7 @@ fn args() -> Result<Args, String> {
     if a.folder.as_os_str().is_empty() || a.root.as_os_str().is_empty() {
         return Err("usage: lc_bench <level folder> root=<data root> [light=cpu|gpu|auto|off] \
                     [mode=compile|rays|details] [stop_after=<phase>] [threads=N] [samples=N] [compare=1] \
-                    [out=<folder>] [<compiler flags>]"
+                    [again=1] [out=<folder>] [<compiler flags>]"
             .to_owned());
     }
     Ok(a)
@@ -226,6 +231,14 @@ fn rays(a: &Args, prj: &BuildProject, opts: &Options, lighter: &dyn Lighter) -> 
     let t = Instant::now();
     scene.light(&job, &samples, &mut out, &Ctl::quiet()).map_err(|e| e.to_string())?;
     let seconds = t.elapsed().as_secs_f64().max(1e-9);
+    if a.again {
+        // the same samples once more: a lighter that has been working, its caches and the graphics
+        // card's clocks up
+        let t = Instant::now();
+        scene.light(&job, &samples, &mut out, &Ctl::quiet()).map_err(|e| e.to_string())?;
+        let again = t.elapsed().as_secs_f64().max(1e-9);
+        say!("again {again:9.3} s  {:.0} samples a second", samples.len() as f64 / again);
+    }
     drop(scene);
     said_by(lighter);
     let sum = out.iter().fold([0.0f64; 3], |s, c| {

@@ -12,13 +12,17 @@ workspace = true
 
 [dependencies]
 gz-lc-light.workspace = true
+wgpu.workspace = true
+bytemuck.workspace = true
+rayon.workspace = true
+glam.workspace = true
+parking_lot.workspace = true
+futures.workspace = true
 
 [dev-dependencies]
 # the bench (`examples/lc_bench.rs`) runs the compiler on a level folder
 gz-lc.workspace = true
 gz-fmt-level.workspace = true
 gz-task.workspace = true
-glam.workspace = true
-rayon.workspace = true
 sha2.workspace = true
 hex.workspace = true
