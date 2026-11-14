@@ -8,18 +8,18 @@
 //! on one thread.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use glam::Vec3;
 use rayon::prelude::*;
 
+use crate::bake::{LitScene, Sample};
+use crate::batch::{BATCH, light_samples};
 use crate::color::{BaseColor, ColorC};
 use crate::data::{ShaderXrlc, Shaders, shader_of};
 use crate::deflector::LightEnv;
 use crate::math::EPS_L;
 use crate::mesh::VertId;
-use crate::point::{LP_DONT_HEMI, light_point};
-use crate::ray::LightCache;
+use crate::point::LP_DONT_HEMI;
 use crate::{Ctl, Result};
 
 /// A key of the map of points by x: equal keys stay in the order they came.
@@ -143,39 +143,42 @@ pub fn light_vertices(
     env: &LightEnv<'_>,
     shaders: &Shaders,
     materials: &[crate::data::BuildMaterial],
+    scene: &dyn LitScene,
     ctl: &Ctl<'_>,
 ) -> Result<Vec<Option<BaseColor>>> {
     let verts = env.mesh.vertices();
     let total = verts.len();
-    let done = AtomicUsize::new(0);
-    let tracer = env.tracer();
     let flags = env.sun_flag() | LP_DONT_HEMI;
-    let lit: Vec<Option<BaseColor>> = verts
-        .par_iter()
-        .with_min_len(64)
-        .map_init(LightCache::default, |cache, &v| {
-            if ctl.cancelled() {
-                return None;
-            }
-            let (vertex_light, trans) = translucency(env, shaders, materials, v);
-            let vx = env.mesh.vertex(v)?;
-            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-            if n.is_multiple_of(4096) {
-                ctl.progress(n, total);
-            }
-            if !vertex_light {
-                return None;
-            }
-            let old = vx.c.get();
-            let mut c = ColorC::default();
-            light_point(&tracer, cache, &mut c, vx.p, vx.n, env.lights, flags, None);
-            c.tmp = trans;
-            c.mul(0.5);
-            // the hemisphere found before is kept
-            c.hemi = old.hemi;
-            Some(BaseColor::from_c(&c))
-        })
-        .collect();
+    let job = env.job();
+    let mut lit: Vec<Option<BaseColor>> = Vec::with_capacity(total);
+    // a batch of vertices: one sample each for those of a vertex-lit face
+    for chunk in verts.chunks(BATCH) {
+        ctl.check()?;
+        let wants: Vec<Option<(Sample, f32, f32)>> = chunk
+            .par_iter()
+            .with_min_len(64)
+            .map(|&v| {
+                let (vertex_light, trans) = translucency(env, shaders, materials, v);
+                let vx = env.mesh.vertex(v)?;
+                vertex_light.then(|| (Sample::new(vx.p, vx.n, flags, None), trans, vx.c.get().hemi))
+            })
+            .collect();
+        let samples: Vec<Sample> = wants.iter().flatten().map(|w| w.0).collect();
+        let light = light_samples(scene, &job, &samples, ctl)?;
+        let mut at = light.iter();
+        for w in &wants {
+            lit.push(w.and_then(|(_, trans, hemi)| {
+                let mut c = ColorC::default();
+                c.add(at.next()?);
+                c.tmp = trans;
+                c.mul(0.5);
+                // the hemisphere found before is kept
+                c.hemi = hemi;
+                Some(BaseColor::from_c(&c))
+            }));
+        }
+        ctl.progress(lit.len(), total);
+    }
     ctl.check()?;
 
     ctl.stage("the translucent vertices");

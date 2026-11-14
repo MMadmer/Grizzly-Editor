@@ -35,6 +35,7 @@ gz-world.workspace = true
 gz-mod.workspace = true
 gz-lc.workspace = true
 gz-lc-light.workspace = true
+gz-lc-gpu.workspace = true
 glam.workspace = true
 serde.workspace = true
 serde_json.workspace = true

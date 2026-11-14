@@ -17,7 +17,7 @@ use parking_lot::Mutex;
 use gz_base::{Finding, Severity};
 use gz_editor::{Editor, JobCtx, JobError, json};
 use gz_lc::{Input, Log, Options, Sources};
-use gz_lc_light::{Ctl, Report as Progress};
+use gz_lc_light::{Ctl, Lighter, Report as Progress};
 
 /// What a compile runs, in this order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,10 +73,22 @@ pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<ser
     for u in &unknown {
         editor.log.warn(format!("The compiler does not know the option '{u}'; it is left out."));
     }
+    // the lighter of the job, made once: a graphics card's device is made here and nowhere else
+    let choice = opts.light;
+    let chosen = editor
+        .exec
+        .cpu(move || gz_lc_gpu::lighter(choice))
+        .await
+        .map_err(|why| JobError::new(format!("light={}: {why}", choice.name())))?;
+    if let Some(note) = &chosen.note {
+        editor.log.info(note);
+    }
+    let lighter: Arc<dyn Lighter> = Arc::from(chosen.lighter);
+    let on = lighter.name();
     let threads = editor.exec.cpu_pool().current_num_threads();
     let sources = Sources::of_root(&editor.paths.root);
     editor.log.info(format!(
-        "Compiling {} on {threads} threads; data from {}.",
+        "Compiling {} on {threads} threads, the light baked on {on}; data from {}.",
         req.level,
         sources.game_data.display()
     ));
@@ -86,12 +98,13 @@ pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<ser
         let part = *part;
         ctx.check()?;
         ctx.stage(match part {
-            Part::Level => "Compiling the level",
-            Part::Details => "Lighting the detail objects",
+            Part::Level => format!("Compiling the level, the light on {on}"),
+            Part::Details => format!("Lighting the detail objects on {on}"),
         });
         let (input, opts2, ctx2) =
             (Input { level: req.dir.clone(), sources: sources.clone() }, opts.clone(), ctx.clone());
-        let out = Throttle::new(ctx.clone(), editor.log.clone());
+        let out = Throttle::new(ctx.clone(), editor.log.clone(), on.clone());
+        let lighter = lighter.clone();
         let worker = out.clone();
         let work = editor.exec.cpu(move || {
             let echo_out = worker.clone();
@@ -101,11 +114,10 @@ pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<ser
                 Progress::Progress { done, total } => worker.progress(done, total),
             };
             let ctl = Ctl::new(&ctx2.cancel, &report);
-            let lighter = gz_lc_light::CpuLighter::default();
             let mut lc_log = Log::with_echo(Box::new(echo));
             match part {
-                Part::Level => gz_lc::compile(&input, &opts2, &lighter, &ctl, &mut lc_log),
-                Part::Details => gz_lc::compile_details(&input, &lighter, &ctl, &mut lc_log),
+                Part::Level => gz_lc::compile(&input, &opts2, lighter.as_ref(), &ctl, &mut lc_log),
+                Part::Details => gz_lc::compile_details(&input, lighter.as_ref(), &ctl, &mut lc_log),
             }
         });
         // a silent phase still reaches the job and the log: what is pending is passed on at the
@@ -146,6 +158,8 @@ pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<ser
             "files": report.files.iter().map(|(n, s)| json!({ "name": n, "size": s })).collect::<Vec<_>>(),
             "warnings": warnings,
             "invalid_faces": report.invalid_faces,
+            "lighter": report.lighter,
+            "samples": report.samples,
         }));
     }
     Ok(json!({
@@ -153,6 +167,8 @@ pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<ser
         "dir": req.dir.display().to_string().replace('\\', "/"),
         "threads": threads,
         "seconds": total,
+        "lighter": lighter.name(),
+        "samples": lighter.samples(),
         "parts": parts,
     }))
 }
@@ -200,6 +216,8 @@ struct Stage {
     phase: Option<String>,
     sub: Option<String>,
     progress: Option<(usize, usize)>,
+    /// Where the light is baked: a phase that lights says so.
+    on: Option<String>,
 }
 
 impl Stage {
@@ -207,6 +225,10 @@ impl Stage {
     fn text(&self) -> Option<String> {
         let phase = self.phase.as_deref()?;
         let mut out = phase.to_owned();
+        if let Some(on) = self.on.as_deref().filter(|_| phase.starts_with("Lighting")) {
+            out.push_str(" on ");
+            out.push_str(on);
+        }
         if let Some(sub) = &self.sub {
             out.push_str(": ");
             out.push_str(sub);
@@ -222,14 +244,16 @@ impl Stage {
 const THROTTLE: Duration = Duration::from_millis(250);
 
 impl Throttle {
-    fn new(ctx: JobCtx, log: gz_editor::Log) -> Self {
-        Self(Arc::new(Mutex::new(Pending::default())), ctx, log)
+    fn new(ctx: JobCtx, log: gz_editor::Log, on: String) -> Self {
+        let p = Pending { stage: Stage { on: Some(on), ..Stage::default() }, ..Pending::default() };
+        Self(Arc::new(Mutex::new(p)), ctx, log)
     }
 
     fn line(&self, line: &str) {
         let mut p = self.0.lock();
         if let Some(name) = line.strip_prefix(gz_lc::PHASE_STARTED) {
-            p.stage = Stage { phase: Some(name.trim().to_owned()), sub: None, progress: None };
+            let on = p.stage.on.take();
+            p.stage = Stage { phase: Some(name.trim().to_owned()), sub: None, progress: None, on };
             p.moved = true;
         }
         p.lines.push(line.to_owned());
@@ -320,6 +344,7 @@ mod tests {
             phase: Some("Lighting the static models".into()),
             sub: sub.map(str::to_owned),
             progress,
+            on: None,
         };
         assert_eq!(phase(None, None).text().unwrap(), "Lighting the static models");
         assert_eq!(
@@ -328,6 +353,11 @@ mod tests {
         );
         assert_eq!(phase(None, Some((7, 5))).text().unwrap(), "Lighting the static models: 5 of 5");
         assert!(Stage::default().text().is_none(), "no phase yet: the job keeps its own stage");
+        // a phase that lights says where
+        let lit =
+            |name: &str| Stage { phase: Some(name.into()), on: Some("the CPU".into()), ..Stage::default() };
+        assert_eq!(lit("Lighting the lightmaps").text().unwrap(), "Lighting the lightmaps on the CPU");
+        assert_eq!(lit("Packing the lightmaps").text().unwrap(), "Packing the lightmaps");
         // every phase and every sub-stage of the compiler is a whole name: no "...", no shouting
         for name in gz_lc::PHASES.iter().chain(&gz_lc::DETAIL_PHASES).chain([&gz_lc::READING]) {
             assert!(

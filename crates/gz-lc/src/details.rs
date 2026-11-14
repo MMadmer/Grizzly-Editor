@@ -10,6 +10,14 @@ use gz_lc_light::{
 
 use crate::{Error, Log, Result};
 
+/// The lighter's scene of the detail model.
+fn scene_of<'a>(
+    lighter: &'a dyn Lighter,
+    scene: &'a DetailScene,
+) -> Result<Box<dyn gz_lc_light::LitScene + 'a>> {
+    Ok(lighter.scene(&scene.model, &scene.textures)?)
+}
+
 /// The detail light in memory: answers `level.details`.
 #[allow(clippy::too_many_arguments)]
 pub fn compile_details_in_memory(
@@ -23,8 +31,6 @@ pub fn compile_details_in_memory(
     ctl: &Ctl<'_>,
     log: &mut Log,
 ) -> Result<Vec<u8>> {
-    // the slots still light through their own rays: the baker takes them over
-    let _ = lighter;
     let damaged = |name: &'static str| move |e: String| Error::Invalid(format!("{name} is damaged: {e}"));
     crate::whole_chunks("build.cform", build_cform)?;
     crate::whole_chunks("build.lights", build_lights)?;
@@ -46,7 +52,12 @@ pub fn compile_details_in_memory(
     let scene = DetailScene::new(&form, shaders, materials, textures, lights, details.header)?;
     log.msg(format!("* Level CFORM: {} faces", form.tris.len()));
     let mut slots = details.slots.to_vec();
-    let stats = light_details(&scene, &mut slots, None, ctl)?;
+    let lit = scene_of(lighter, &scene)?;
+    let stats = light_details(&scene, &mut slots, None, lit.as_ref(), ctl)?;
+    drop(lit);
+    for n in lighter.notes() {
+        log.warn(n);
+    }
     log.msg(format!("{} slots lit, {} empty, {} without ground", stats.lit, stats.empty, stats.no_ground));
     details.slots = slots.into();
     Ok(details.write())

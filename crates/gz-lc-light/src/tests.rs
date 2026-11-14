@@ -127,6 +127,18 @@ fn deflect(g: &mut LcGlobalData, start: FaceId) -> DeflId {
     id
 }
 
+/// What a test lights a point through: the level's model, its falloff.
+fn tracer<'a>(env: &LightEnv<'a>) -> Tracer<'a> {
+    Tracer { model: env.model, textures: env.textures, falloff: Falloff::Level { linear: env.linear } }
+}
+
+/// The detail light on the CPU.
+fn details(scene: &DetailScene, slots: &mut [DetailSlot], only: Option<[f32; 3]>) -> Result<DetailStats> {
+    let cpu = CpuLighter::default();
+    let lit = cpu.scene(&scene.model, &scene.textures)?;
+    light_details(scene, slots, only, lit.as_ref(), &Ctl::quiet())
+}
+
 fn finish_mesh(g: &mut LcGlobalData) {
     g.calc_normals(Smoothing::Angle, &Ctl::quiet()).unwrap();
     g.light_prepare();
@@ -146,7 +158,7 @@ fn a_point_with_a_free_sky_and_under_an_occluder() {
     finish_mesh(&mut g);
     g.build_rapid(&g.scene_bounds()).unwrap();
     let env = g.light_env().unwrap();
-    let tracer = env.tracer();
+    let t = tracer(&env);
     let mut cache = LightCache::default();
 
     // through the alpha-tested occluder (alpha 128):
@@ -159,7 +171,7 @@ fn a_point_with_a_free_sky_and_under_an_occluder() {
     let mut c = ColorC::default();
     // off the quads' diagonal, which a ray along it would meet twice
     let p = Vec3::new(0.3, 0.0, 0.6);
-    light_point(&tracer, &mut cache, &mut c, p, Vec3::Y, env.lights, LP_DEFAULT, None);
+    light_point(&t, &mut cache, &mut c, p, Vec3::Y, env.lights, LP_DEFAULT, None);
     let want_rgb = through * (1.0 / 1.0 - 2.0 * (1.0 / 11.0));
     assert!((c.rgb.x - want_rgb).abs() < 1e-6, "{} {}", c.rgb.x, want_rgb);
     assert!((c.sun - through).abs() < 1e-6);
@@ -174,7 +186,7 @@ fn a_point_with_a_free_sky_and_under_an_occluder() {
     let env2 = g2.light_env().unwrap();
     let mut c = ColorC::default();
     light_point(
-        &env2.tracer(),
+        &tracer(&env2),
         &mut LightCache::default(),
         &mut c,
         p,
@@ -189,7 +201,7 @@ fn a_point_with_a_free_sky_and_under_an_occluder() {
     let mut c = ColorC::default();
     let beside = Vec3::new(3.0, 0.0, 0.5);
     light_point(
-        &env2.tracer(),
+        &tracer(&env2),
         &mut LightCache::default(),
         &mut c,
         beside,
@@ -226,7 +238,7 @@ fn the_hemisphere_counts_the_lights_above_the_surface() {
     let env = g.light_env().unwrap();
     let mut c = ColorC::default();
     light_point(
-        &env.tracer(),
+        &tracer(&env),
         &mut LightCache::default(),
         &mut c,
         Vec3::new(0.5, 0.0, 0.5),
@@ -261,7 +273,7 @@ fn a_lit_and_a_shadowed_texel() {
     // OA_Export: projected along +y the floor is 2 x 2 in texture space: iCeil(2 * 4 + .5) = 9
     let layer = &g.deflectors.get(d).unwrap().layer;
     assert_eq!((layer.width, layer.height), (9, 9));
-    g.light_deflectors(&Ctl::quiet()).unwrap();
+    g.light_deflectors(&CpuLighter::default(), &Ctl::quiet()).unwrap();
     let defl = g.deflectors.get(d).unwrap();
     let lm = &defl.layer;
     // the light changes along the floor's x, the projection's v (OA_Export: up = +x); the
@@ -301,7 +313,7 @@ fn a_free_floor_compresses_to_one_colour_and_packs_into_a_page() {
     finish_mesh(&mut g);
     let d = deflect(&mut g, f[0]);
     g.build_rapid(&g.scene_bounds()).unwrap();
-    g.light_deflectors(&Ctl::quiet()).unwrap();
+    g.light_deflectors(&CpuLighter::default(), &Ctl::quiet()).unwrap();
     let lm = &g.deflectors.get(d).unwrap().layer;
     // compress_Zero: 2 x 2 texels of the mean, the size 0
     assert_eq!((lm.width, lm.height, lm.surface.len()), (0, 0, 4));
@@ -347,7 +359,7 @@ fn vertex_light_on_a_two_triangle_floor() {
         g.mesh.vertex_mut(v).unwrap().c = BaseColor::from_c(&ColorC { hemi: 0.3, ..ColorC::default() });
     }
     g.build_rapid(&g.scene_bounds()).unwrap();
-    g.light_vertices(&Ctl::quiet()).unwrap();
+    g.light_vertices(&CpuLighter::default(), &Ctl::quiet()).unwrap();
     for &v in g.mesh.vertices() {
         let vx = g.mesh.vertex(v).unwrap();
         // a corner: R = sqrt(1 + 4 + 1), D = 2 / R; A = D (1 - R / 11); the light halved
@@ -372,7 +384,7 @@ fn implicit_light_puts_the_sky_into_the_texture() {
     let f = floor(&mut g.mesh, 0.0, (0.0, 0.0), (2.0, 2.0), 3);
     finish_mesh(&mut g);
     g.build_rapid(&g.scene_bounds()).unwrap();
-    let maps = g.implicit_lighting(&Ctl::quiet()).unwrap();
+    let maps = g.implicit_lighting(&CpuLighter::default(), &Ctl::quiet()).unwrap();
     assert_eq!(maps.len(), 1);
     let m = &maps[0];
     assert_eq!((m.texture, m.name.as_str(), m.base.width), (2, "terrain", 4));
@@ -389,7 +401,7 @@ fn implicit_light_puts_the_sky_into_the_texture() {
     }
     // at the draft quality nothing is done
     g.params.quality = QUALITY_DRAFT;
-    assert!(g.implicit_lighting(&Ctl::quiet()).unwrap().is_empty());
+    assert!(g.implicit_lighting(&CpuLighter::default(), &Ctl::quiet()).unwrap().is_empty());
 }
 
 fn mu_scene() -> LcGlobalData {
@@ -443,7 +455,7 @@ fn an_mu_model_and_its_reference() {
     g.build_rapid(&g.scene_bounds()).unwrap();
     // the reference's two faces joined the ray model after the floor's
     assert_eq!(g.ray.as_ref().unwrap().len(), 4);
-    g.light_mu(&Ctl::quiet()).unwrap();
+    g.light_mu(&CpuLighter::default(), &Ctl::quiet()).unwrap();
     let m = &g.mu_models[0];
     assert_eq!(m.subdivs.len(), 1);
     // own light: the sky alone (0.5 at each of six samples), the translucency mix halves it
@@ -509,7 +521,7 @@ fn a_detail_slot_is_lit_at_its_points_and_its_corners_decide_its_objects() {
     assert_eq!(s.id(1), 5);
     assert_eq!(s.id(0), 0);
 
-    let stats = light_details(&scene, &mut slots, None, &Ctl::quiet()).unwrap();
+    let stats = details(&scene, &mut slots, None).unwrap();
     assert_eq!(stats, DetailStats { lit: 4, empty: 0, no_ground: 0 });
     // the free slots: sun 1 and sky 1 at each of the 225 points, the mean halved: 0.5 is
     // floor(7.5) = 7 of 15; the roofed one: 0. The two beside the roof have their row of 15
@@ -521,7 +533,7 @@ fn a_detail_slot_is_lit_at_its_points_and_its_corners_decide_its_objects() {
     assert_eq!(slots[3].colors(), [0, 0, 0, 0, 0]);
     // a square that holds only the first slot lights only that one
     let (scene, mut slots) = detail_scene();
-    let stats = light_details(&scene, &mut slots, Some([1.0, 1.0, 0.5]), &Ctl::quiet()).unwrap();
+    let stats = details(&scene, &mut slots, Some([1.0, 1.0, 0.5])).unwrap();
     assert_eq!(stats.lit, 1);
 }
 
@@ -569,8 +581,8 @@ fn compile(threads: usize) -> Vec<u8> {
     pool.install(|| {
         let mut g = full_scene();
         let form = g.build_rapid(&g.scene_bounds()).unwrap();
-        g.light_mu(&Ctl::quiet()).unwrap();
-        let out = g.light(&Ctl::quiet()).unwrap();
+        g.light_mu(&CpuLighter::default(), &Ctl::quiet()).unwrap();
+        let out = g.light(&CpuLighter::default(), &Ctl::quiet()).unwrap();
         let mut bytes = form.write();
         for p in &out.pages {
             bytes.extend_from_slice(&p.base.rgba);
@@ -602,7 +614,7 @@ fn compile(threads: usize) -> Vec<u8> {
             }
         }
         let (scene, mut slots) = detail_scene();
-        light_details(&scene, &mut slots, None, &Ctl::quiet()).unwrap();
+        details(&scene, &mut slots, None).unwrap();
         slots.iter().for_each(|s| bytes.extend_from_slice(&s.word1.to_le_bytes()));
         bytes
     })
@@ -623,7 +635,7 @@ fn a_stopped_compile_says_so() {
     let cancel = gz_task::Cancel::new();
     cancel.cancel();
     let ctl = Ctl::with_cancel(&cancel);
-    assert!(matches!(g.light_deflectors(&ctl), Err(LcError::Cancelled)));
+    assert!(matches!(g.light_deflectors(&CpuLighter::default(), &ctl), Err(LcError::Cancelled)));
     // the phase's name is the compiler's: the deflectors say only how far they are
     let seen = std::sync::Mutex::new((Vec::new(), 0usize, 0usize));
     let report = |r: Report<'_>| {
@@ -637,8 +649,398 @@ fn a_stopped_compile_says_so() {
         }
     };
     let quiet = gz_task::Cancel::new();
-    g.light_deflectors(&Ctl::new(&quiet, &report)).unwrap();
+    g.light_deflectors(&CpuLighter::default(), &Ctl::new(&quiet, &report)).unwrap();
     let (stages, done, total) = seen.into_inner().unwrap();
     assert!(stages.is_empty(), "{stages:?}");
     assert!(total > 0 && done == total, "{done} of {total}");
+}
+
+// ---- the baker against light_point -----------------------------------------------------------------
+//
+// What each consumer lit before it went through the baker, kept here as the reference: the loops
+// as they were, `light_point` called into one colour sample after sample, the lights of a sphere
+// selected. The baker lights every sample from nothing and the consumer sums them in their order,
+// so a value of several samples may differ by the rounding of the sums - one step of the 16-bit
+// fixed point at most -, and a value of one sample (a vertex, an edge texel, a texel at one
+// jitter sample) is the same bits.
+
+/// The largest difference of two packed colours, in steps of the fixed point.
+fn apart(a: &BaseColor, b: &BaseColor) -> i32 {
+    [(a.r, b.r), (a.g, b.g), (a.b, b.b), (a.h, b.h), (a.s, b.s), (a.t, b.t)]
+        .iter()
+        .map(|&(x, y)| (i32::from(x) - i32::from(y)).abs())
+        .max()
+        .unwrap_or(0)
+}
+
+/// The old `l_calculate` + `l_direct` of one deflector, rows and edges, before the borders.
+fn old_chart(env: &LightEnv<'_>, d: &Deflector) -> LmLayer {
+    let mut d = d.clone();
+    d.take_sphere(env.mesh);
+    let lights = env.lights.select(d.sphere_p, d.sphere_r);
+    let (w, h) = (d.layer.width, d.layer.height);
+    d.remap_uv(0, 0, w, h, w, h, false);
+    let boxes: Vec<math::Box2> = d.uv_polys.iter().map(|t| math::Box2::of_tri(&t.uv)).collect();
+    let hash = Hash2D::build(128, 128, d.bounds_summary(), &boxes);
+    let mut layer = LmLayer::new(w, h);
+    let (w, h) = (w as usize, h as usize);
+    let t = tracer(env);
+    let mut cache = LightCache::default();
+    let flags = env.sun_flag() | LP_USE_FACE_DISABLE;
+    let dim = Vec2::new(w as f32, h as f32);
+    let half = Vec2::new(0.5 / dim.x, 0.5 / dim.y);
+    let js = Vec2::new(0.4999 / dim.x, 0.4999 / dim.y);
+    let world = |f: FaceId| {
+        let face = env.mesh.face(f)?;
+        Some((env.mesh.positions(f)?, env.mesh.normals(f)?, face.n))
+    };
+    for v in 0..h {
+        for u in 0..w {
+            let mut c = ColorC::default();
+            let mut count = 0u32;
+            for j in jitter(env.params.lm_jitter_samples) {
+                let p =
+                    Vec2::new(u as f32 / dim.x + half.x + j.x * js.x, v as f32 / dim.y + half.y + j.y * js.y);
+                for &i in hash.query(p.x, p.y) {
+                    let tri = &d.uv_polys[i as usize];
+                    let Some(b) = (Tcf { uv: tri.uv }).inside(p) else { continue };
+                    let Some((wp, wn, fnrm)) = world(tri.owner) else { break };
+                    let wp = math::from_bary(wp[0], wp[1], wp[2], b);
+                    let (wn, _) = math::exact_normalize(math::from_bary(wn[0], wn[1], wn[2], b));
+                    let (wn, _) = math::exact_normalize(wn + fnrm);
+                    light_point(&t, &mut cache, &mut c, wp, wn, &lights, flags, Some(tri.owner));
+                    count += 1;
+                    break;
+                }
+            }
+            if count > 0 {
+                c.scale(count);
+                c.mul(0.5);
+                layer.marker[v * w + u] = 255;
+            }
+            layer.surface[v * w + u] = BaseColor::from_c(&c);
+        }
+    }
+    let texel = (1.0 / w.max(h) as f32) / 8.0;
+    for tri in &d.uv_polys {
+        let Some((p, _, fnrm)) = world(tri.owner) else { continue };
+        for e in 0..3 {
+            let (a, b) = (e, (e + 1) % 3);
+            let (p1, p2) = (tri.uv[a], tri.uv[b]);
+            let (v1, v2) = (p[a], p[b]);
+            let size = p2 - p1;
+            let steps = math::i_ceil(size.x.abs() / texel).max(math::i_ceil(size.y.abs() / texel));
+            if steps <= 0 {
+                continue;
+            }
+            for i in 0..=steps {
+                let time = i as f32 / steps as f32;
+                let uv = Vec2::new(size.x * time + p1.x, size.y * time + p1.y);
+                let (x, y) = (math::i_floor(uv.x * w as f32), math::i_floor(uv.y * h as f32));
+                if x < 0 || x >= w as i32 || y < 0 || y >= h as i32 {
+                    continue;
+                }
+                let id = y as usize * w + x as usize;
+                if layer.marker[id] != 0 {
+                    continue;
+                }
+                let mut c = ColorC::default();
+                light_point(
+                    &t,
+                    &mut cache,
+                    &mut c,
+                    math::mad(v1, v2 - v1, time),
+                    fnrm,
+                    &lights,
+                    env.sun_flag(),
+                    Some(tri.owner),
+                );
+                c.mul(0.5);
+                layer.surface[id] = BaseColor::from_c(&c);
+                layer.marker[id] = 255;
+            }
+        }
+    }
+    layer
+}
+
+/// The charts of the full scene, lit the old way and through the baker: the texels and their
+/// markers. Answers (texels, texels that differ, the largest difference).
+fn charts_apart(jitter_samples: u32) -> (usize, usize, i32) {
+    let mut g = full_scene();
+    g.params.lm_jitter_samples = jitter_samples;
+    g.build_rapid(&g.scene_bounds()).unwrap();
+    let env = g.light_env().unwrap();
+    let cpu = CpuLighter::default();
+    let scene = cpu.scene(env.model, env.textures).unwrap();
+    let (mut texels, mut differ, mut worst) = (0, 0, 0);
+    for &id in g.deflectors.list() {
+        let d = g.deflectors.get(id).unwrap();
+        let old = old_chart(&env, d);
+        let mut new = d.clone();
+        new.take_sphere(env.mesh);
+        let got = new.gather(env.mesh, env.params, env.sun_flag());
+        let lit = light_samples(scene.as_ref(), &env.job(), &got.samples, &Ctl::quiet()).unwrap();
+        new.scatter(&lit, &got.runs);
+        assert_eq!((new.layer.width, new.layer.height), (old.width, old.height));
+        assert_eq!(new.layer.marker, old.marker, "the markers are geometry's");
+        for (a, b) in new.layer.surface.iter().zip(&old.surface) {
+            texels += 1;
+            let e = apart(a, b);
+            differ += usize::from(e != 0);
+            worst = worst.max(e);
+        }
+    }
+    (texels, differ, worst)
+}
+
+#[test]
+fn the_charts_through_the_baker_are_the_charts_light_point_gave() {
+    let (texels, differ, worst) = charts_apart(1);
+    assert!(texels > 200, "{texels}");
+    assert_eq!((differ, worst), (0, 0), "one sample a texel: the same bits");
+    let (texels, differ, worst) = charts_apart(4);
+    assert!(worst <= 1 && differ * 100 <= texels, "{differ} of {texels} apart, by {worst}");
+}
+
+#[test]
+fn the_vertices_the_models_the_textures_and_the_slots_through_the_baker() {
+    let cpu = CpuLighter::default();
+    // the vertices: one sample each, the same bits
+    let mut g = full_scene();
+    g.build_rapid(&g.scene_bounds()).unwrap();
+    let mut old = Vec::new();
+    {
+        let env = g.light_env().unwrap();
+        let t = tracer(&env);
+        for &v in env.mesh.vertices() {
+            let vx = env.mesh.vertex(v).unwrap();
+            let lit = vx
+                .adjacents
+                .iter()
+                .any(|&f| g.shader(env.mesh.face(f).unwrap().material).flags & ShaderXrlc::LIGHT_VERTEX != 0);
+            old.push(lit.then(|| {
+                let mut c = ColorC::default();
+                light_point(
+                    &t,
+                    &mut LightCache::default(),
+                    &mut c,
+                    vx.p,
+                    vx.n,
+                    env.lights,
+                    LP_DONT_HEMI,
+                    None,
+                );
+                c.mul(0.5);
+                c.hemi = vx.c.get().hemi;
+                BaseColor::from_c(&c)
+            }));
+        }
+    }
+    g.light_vertices(&cpu, &Ctl::quiet()).unwrap();
+    let mut seen = 0;
+    for (&v, want) in g.mesh.vertices().iter().zip(&old) {
+        if let Some(want) = want {
+            assert_eq!(g.mesh.vertex(v).unwrap().c, *want);
+            seen += 1;
+        }
+    }
+    assert!(seen >= 4, "{seen}");
+
+    // the models' own light and the references': six samples a vertex
+    let mut g = full_scene();
+    g.build_rapid(&g.scene_bounds()).unwrap();
+    let mut models = g.mu_models.clone();
+    let env = g.mu_env();
+    let mut stream = math::XrRandom::new(1);
+    let mut old_models = Vec::new();
+    for m in &mut models {
+        let start = stream;
+        stream = stream.advanced(m.light_draws(env.params));
+        m.calc_materials(env.shaders, env.materials);
+        let own = m.own_ray_model(env.shaders, env.materials).unwrap();
+        old_models.push(old_mu(
+            m,
+            &env,
+            &math::Matrix::IDENTITY,
+            &own,
+            LP_DONT_RGB + LP_DONT_SUN,
+            Some(start),
+        ));
+    }
+    let level = g.ray.clone().unwrap();
+    let old_refs: Vec<Vec<BaseColor>> = g
+        .mu_refs
+        .iter()
+        .map(|r| old_mu(&models[r.model as usize], &env, &r.xform, &level, LP_DEFAULT, None))
+        .collect();
+    g.light_mu(&cpu, &Ctl::quiet()).unwrap();
+    let close = |a: &[BaseColor], b: &[BaseColor]| {
+        assert_eq!(a.len(), b.len());
+        assert!(a.iter().zip(b).all(|(x, y)| apart(x, y) <= 1), "{a:?} {b:?}");
+    };
+    for (m, want) in g.mu_models.iter().zip(&old_models) {
+        close(&m.color, want);
+    }
+    for (r, want) in g.mu_refs.iter().zip(&old_refs) {
+        close(&r.color, want);
+    }
+
+    // the implicit texture
+    let mut g = full_scene();
+    g.build_rapid(&g.scene_bounds()).unwrap();
+    let faces: Vec<FaceId> =
+        g.mesh.faces().iter().copied().filter(|&f| g.mesh.face(f).unwrap().material == 3).collect();
+    let env = g.light_env().unwrap();
+    let old = old_implicit(&env, 4, 4, &faces);
+    let scene = cpu.scene(env.model, env.textures).unwrap();
+    let new = crate::implicit::light_texture(&env, 4, 4, &faces, scene.as_ref(), &Ctl::quiet()).unwrap();
+    assert_eq!(new.marker, old.marker);
+    assert!(new.surface.iter().zip(&old.surface).all(|(a, b)| apart(a, b) <= 1));
+    assert!(old.marker.iter().filter(|&&m| m == 255).count() >= 8);
+
+    // the slots: 225 points each
+    let (scene, slots) = detail_scene();
+    let mut new = slots.clone();
+    details(&scene, &mut new, None).unwrap();
+    for (z, row) in slots.chunks(2).enumerate() {
+        for (x, s) in row.iter().enumerate() {
+            let want = old_slot(&scene, x as i32, z as i32, s).unwrap();
+            let got = new[z * 2 + x].colors();
+            assert!(want.iter().zip(&got).all(|(a, b)| a.abs_diff(*b) <= 1), "{want:?} {got:?}");
+        }
+    }
+}
+
+/// The old `calc_lighting_with`: six samples a vertex into one colour, then the groups.
+fn old_mu(
+    m: &MuModel,
+    env: &MuEnv<'_>,
+    xform: &math::Matrix,
+    model: &RayModel,
+    flags: u32,
+    stream: Option<math::XrRandom>,
+) -> Vec<BaseColor> {
+    let rot = xform.without_translation().transposed().inverted_43();
+    let samples = if env.params.quality == QUALITY_DRAFT { 1u32 } else { 6 };
+    let t = Tracer { model, textures: env.textures, falloff: Falloff::Level { linear: env.linear } };
+    let verts = m.mesh.vertices();
+    let mut colors: Vec<BaseColor> = verts
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| {
+            let vx = m.mesh.vertex(v).unwrap();
+            let (mut amb, mut trans) = (0.0f32, 0.0f32);
+            for f in &vx.adjacents {
+                let s = shader_of(m.mesh.face(*f).unwrap().material, env.shaders, env.materials);
+                amb += s.vert_ambient;
+                trans += s.vert_translucency;
+            }
+            let n_adj = vx.adjacents.len() as f32;
+            amb /= n_adj;
+            trans /= n_adj;
+            let vp = xform.transform_tiny(vx.p);
+            let (vn, _) = math::exact_normalize(rot.transform_dir(vx.n));
+            let mut rnd = match stream {
+                Some(s) => s.advanced(i as u64 * u64::from(samples) * 3),
+                None => math::XrRandom::from_words(&math::point_words(vp)),
+            };
+            let mut c = ColorC::default();
+            for sample in 0..samples {
+                let a = 0.2 * sample as f32 / samples as f32;
+                let n = rnd.dir_cone(vn, math::deg2rad(30.0));
+                let p = math::mad(vp, n, a);
+                light_point(&t, &mut LightCache::default(), &mut c, p, n, env.lights, flags, None);
+            }
+            c.scale(samples);
+            c.tmp = trans;
+            if flags & LP_DONT_HEMI == 0 {
+                c.hemi += amb;
+            }
+            BaseColor::from_c(&c)
+        })
+        .collect();
+    let mut groups = TransGroups::default();
+    for (i, &v) in verts.iter().enumerate() {
+        groups.register(m.mesh.vertex(v).unwrap().p, i as u32, false);
+    }
+    for list in groups.in_order() {
+        let mut list = list.to_vec();
+        list.sort_unstable();
+        list.dedup();
+        let cs: Vec<ColorC> = list.iter().map(|&i| colors[i as usize].get()).collect();
+        for (&i, c) in list.iter().zip(mix_group(&cs, 0.5)) {
+            colors[i as usize] = BaseColor::from_c(&c);
+        }
+    }
+    colors
+}
+
+/// The old `light_texture`.
+fn old_implicit(env: &LightEnv<'_>, w: u32, h: u32, faces: &[FaceId]) -> LmLayer {
+    let mut lmap = LmLayer::new(w, h);
+    let tcs: Vec<[Vec2; 3]> = faces.iter().map(|&f| env.mesh.face(f).unwrap().tc0()).collect();
+    let mut bounds = math::Box2::INVALID;
+    let boxes: Vec<math::Box2> = tcs.iter().map(math::Box2::of_tri).collect();
+    boxes.iter().for_each(|b| bounds.merge(b));
+    let hash = Hash2D::build(384, 384, bounds, &boxes);
+    let t = tracer(env);
+    let dim = Vec2::new(w as f32, h as f32);
+    let half = Vec2::new(0.5 / dim.x, 0.5 / dim.y);
+    let js = Vec2::new(0.499 / dim.x, 0.499 / dim.y);
+    for v in 0..h as usize {
+        for u in 0..w as usize {
+            let mut c = ColorC::default();
+            let mut count = 0u32;
+            for j in jitter(env.params.lm_jitter_samples) {
+                let p =
+                    Vec2::new(u as f32 / dim.x + half.x + j.x * js.x, v as f32 / dim.y + half.y + j.y * js.y);
+                for &i in hash.query(p.x, p.y) {
+                    let i = i as usize;
+                    let Some(b) = (Tcf { uv: tcs[i] }).inside(p) else { continue };
+                    let pos = env.mesh.positions(faces[i]).unwrap();
+                    let nrm = env.mesh.normals(faces[i]).unwrap();
+                    let wp = math::from_bary(pos[0], pos[1], pos[2], b);
+                    let wn = math::normalize(math::from_bary(nrm[0], nrm[1], nrm[2], b));
+                    let skip = Some(faces[i]);
+                    light_point(
+                        &t,
+                        &mut LightCache::default(),
+                        &mut c,
+                        wp,
+                        wn,
+                        env.lights,
+                        env.sun_flag(),
+                        skip,
+                    );
+                    count += 1;
+                }
+            }
+            if count > 0 {
+                c.scale(count);
+                c.mul(0.5);
+                lmap.surface[v * w as usize + u] = BaseColor::from_c(&c);
+                lmap.marker[v * w as usize + u] = 255;
+            }
+        }
+    }
+    lmap
+}
+
+/// The old `slot_light`: the points into one colour, the lights of the slot's sphere.
+fn old_slot(scene: &DetailScene, x: i32, z: i32, slot: &DetailSlot) -> Option<[u8; 5]> {
+    let mut slot = *slot;
+    process_palette(&mut slot);
+    let bb = scene.slot_box(x, z, &slot);
+    let (sp, sr) = math::sphere_of(&bb);
+    let selected = scene.lights.select(sp, sr);
+    let mut points = Vec::new();
+    slot_points(scene, x, z, &slot, &mut Vec::new(), &mut points)?;
+    let t = Tracer { model: &scene.model, textures: &scene.textures, falloff: Falloff::Details };
+    let mut amount = ColorC::default();
+    for s in &points {
+        let (p, n) = (Vec3::from(s.p), Vec3::from(s.n));
+        light_point(&t, &mut LightCache::default(), &mut amount, p, n, &selected, 0, None);
+    }
+    Some(slot_colors(amount, points.len() as u32))
 }

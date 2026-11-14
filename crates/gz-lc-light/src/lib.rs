@@ -17,7 +17,7 @@
 //! - [`ColorC`] / [`BaseColor`] - `base_color_c`, `base_color`.
 //! - [`LmLayer`], [`apply_borders`], [`blit`], [`blit_r`] - `lm_layer` and its blits.
 //! - [`Deflector`] / [`Deflectors`] - the deflectors: their projection, the UV remap and the light.
-//! - [`Lightmap`] / [`LightmapPage`] / [`PageMask`] - the lightmap and the page surface.
+//! - [`Lightmap`] / [`LightmapPage`] - the lightmap and the page surface.
 //! - [`MuModel`] / [`MuReference`] - the multiple-usage models and their references.
 //! - [`LcGlobalData`] - the global data and the calls the level compiler makes into it.
 //!
@@ -31,13 +31,15 @@
 //!   [`AutoLighter`].
 //! - [`light_point`] - the light a point gets.
 //! - [`Deflector::light`], [`Deflectors::light_all`] - the lightmaps of the deflectors.
-//! - [`merge_lightmaps`] - the deflectors into pages.
+//! - [`pack_lightmaps`] - the lit charts into pages, by visual; [`merge_lightmaps`] - each chart
+//!   a visual of its own.
 //! - [`light_vertices`] - the light of the vertices.
 //! - [`implicit_lighting`] - the implicit light.
 //! - [`light_mu`] - the MU models and references.
-//! - [`light_details`] / [`slot_light`] - the detail objects' light.
+//! - [`light_details`] / [`slot_points`] - the detail objects' light.
 
 mod bake;
+mod batch;
 mod color;
 pub mod crt;
 mod data;
@@ -64,6 +66,7 @@ pub use bake::{
     AutoLighter, CHUNK, CpuLighter, LightChoice, LightJob, Lighter, LitScene, NO_SKIP, NULL_LIGHT,
     NullLighter, Sample,
 };
+pub use batch::{BATCH, Gathered, Run, light_samples};
 pub use color::{BaseColor, ColorC, fixed16_r, fixed16_w};
 pub use data::{
     BuildMaterial, BuildParams, BuildTexture, NO_SHADER, QUALITY_DRAFT, ShaderXrlc, Shaders, TextureUse,
@@ -74,25 +77,29 @@ pub use deflector::{
     Deflector, Deflectors, LMAP_SIZE, LightEnv, MAX_LAYER, UvTri, compress_rms, compress_zero, jitter,
     rms_average, rms_shrink, rms_test_flat, rms_test_size, rms_zero,
 };
-pub use detail::{DetailScene, DetailStats, LIGHT_COUNT, light_details, process_palette, slot_light};
+pub use detail::{
+    DetailScene, DetailStats, LIGHT_COUNT, light_details, process_palette, slot_colors, slot_points,
+};
 pub use filter::{BLUR_GAUSS, build_kernel, process_kernel};
 pub use global::{LcGlobalData, LightOutput};
 pub use hash2d::Hash2D;
-pub use implicit::{ImplicitInput, ImplicitMap, has_implicit_lighting, implicit_lighting};
+pub use implicit::{
+    ImplicitInput, ImplicitMap, apply_implicit, has_implicit_lighting, implicit_lighting, implicit_shadows,
+};
 pub use layer::{BORDER, LmLayer, apply_borders, blit, blit_r, image_of, lblit, pixels_of};
 pub use light::{
     LCONTROL_HEMI, LCONTROL_STATIC, LCONTROL_SUN, LT_DIRECT, LT_POINT, LT_SECONDARY, LightSet, R_LIGHT_SIZE,
     RLight,
 };
-pub use lightmap::{Lightmap, LightmapPage, PageMask, Rect, merge_lightmaps};
+pub use lightmap::{Lightmap, LightmapPage, PackReport, Rect, merge_lightmaps, pack_lightmaps};
 pub use mesh::{
     BACKFACE_FLAG, Basis, DeflId, EDGE2IDX, EDGE2IDX3, Face, FaceFlags, FaceId, IDX2EDGE, Mesh, MeshErrors,
     NO_SM_GROUP, NO_VERT, PoolSim, Smoothing, Tcf, VertId, Vertex, area_of, barycentric,
     connect_by_edge_flags, is_inside, is_soft_edge,
 };
 pub use mu::{
-    MuEnv, MuModel, MuReference, Subdiv, cache_opacity, light_mu, linear_regression, optimize_parameters,
-    simple_optimize,
+    MuEnv, MuModel, MuReference, MuSamples, Subdiv, cache_opacity, light_mu, linear_regression,
+    optimize_parameters, simple_optimize,
 };
 pub use point::{
     Falloff, LP_DEFAULT, LP_DONT_HEMI, LP_DONT_RGB, LP_DONT_SUN, LP_USE_FACE_DISABLE, Tracer, light_point,

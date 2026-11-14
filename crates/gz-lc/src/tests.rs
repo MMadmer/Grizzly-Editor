@@ -432,7 +432,7 @@ fn a_stop_while_the_lightmaps_are_lit_ends_within_a_moment() {
     let (mut prj, shaders, textures) = project();
     prj.params.lm_pixels_per_meter = 24.0;
     prj.params.lm_jitter_samples = 9;
-    let phase = format!("{}{}", crate::PHASE_STARTED, crate::PHASES[12]);
+    let phase = format!("{}{}", crate::PHASE_STARTED, crate::PHASES[13]);
     let inside = std::sync::atomic::AtomicBool::new(false);
     let started = std::time::Instant::now();
     let (out, lines, after) = stopped_compile(&prj, shaders, textures, move |line, r| {
@@ -445,7 +445,7 @@ fn a_stop_while_the_lightmaps_are_lit_ends_within_a_moment() {
     assert!(out.as_ref().err().is_some_and(crate::Error::cancelled), "{:?}", out.err());
     let after = after.expect("the Stop was pulled while the lightmaps were lit");
     assert!(after < std::time::Duration::from_secs(1), "the compile took {after:?} to stop");
-    assert!(!lines.iter().any(|l| l.starts_with(crate::PHASE_DONE) && l.contains(crate::PHASES[12])));
+    assert!(!lines.iter().any(|l| l.starts_with(crate::PHASE_DONE) && l.contains(crate::PHASES[13])));
     eprintln!("stopped {after:?} after the Stop, {:?} in all", started.elapsed());
 }
 
@@ -481,4 +481,92 @@ fn a_stop_while_the_references_are_lit_leaves_the_rest_unlit() {
     assert!(after.is_some_and(|a| a < std::time::Duration::from_secs(1)), "{after:?}");
     let (_, done, total) = *seen.lock().unwrap();
     assert!(total > 4000 && done < total / 2, "{done} of {total} lit before the Stop took");
+}
+
+/// The CPU's light with every sample scaled by a factor between 0.9 and 1.1 drawn from the
+/// sample's own position: another light, the same geometry.
+#[derive(Default)]
+struct Scaled(CpuLighter);
+
+struct ScaledScene<'a>(Box<dyn gz_lc_light::LitScene + 'a>);
+
+impl gz_lc_light::Lighter for Scaled {
+    fn name(&self) -> String {
+        "a scaled light".into()
+    }
+
+    fn scene<'a>(
+        &'a self,
+        model: &'a gz_lc_light::RayModel,
+        textures: &'a [gz_lc_light::BuildTexture],
+    ) -> gz_lc_light::Result<Box<dyn gz_lc_light::LitScene + 'a>> {
+        Ok(Box::new(ScaledScene(self.0.scene(model, textures)?)))
+    }
+}
+
+impl gz_lc_light::LitScene for ScaledScene<'_> {
+    fn light(
+        &self,
+        job: &gz_lc_light::LightJob<'_>,
+        samples: &[gz_lc_light::Sample],
+        out: &mut [gz_lc_light::ColorC],
+        ctl: &Ctl<'_>,
+    ) -> gz_lc_light::Result<()> {
+        self.0.light(job, samples, out, ctl)?;
+        for (s, o) in samples.iter().zip(out.iter_mut()) {
+            let mut h = 0x9e37_79b9u32;
+            for v in s.p {
+                h = (h ^ v.to_bits()).wrapping_mul(0x0100_0193);
+                h ^= h >> 15;
+            }
+            o.mul(0.9 + 0.2 * (h % 1000) as f32 / 999.0);
+        }
+        Ok(())
+    }
+}
+
+fn compile_with(lighter: &dyn gz_lc_light::Lighter, threads: usize, opts: &Options) -> (crate::Output, Log) {
+    let (mut prj, shaders, textures) = project();
+    // charts big enough that the light decides their sizes
+    prj.params.lm_pixels_per_meter = 6.0;
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+    pool.install(|| {
+        let mut log = Log::default();
+        let out = compile_project(&prj, shaders, textures, opts, lighter, &Ctl::quiet(), &mut log).unwrap();
+        (out, log)
+    })
+}
+
+/// Section 2 of the level build's contract: one scene, one set of settings - the same structure
+/// whatever the light. A light scaled sample by sample shrinks, collapses and packs the charts
+/// differently and lands them elsewhere on the pages, and the visuals, their faces, vertices and
+/// bounds, the sectors and the collision stay the same; so does the structure on one thread and
+/// on eight, with no light at all, and with every chart at its geometry's size.
+#[test]
+fn the_structure_does_not_follow_the_light() {
+    let opts = Options::default();
+    let (cpu, log) = compile_with(&CpuLighter::default(), 4, &opts);
+    let (scaled, _) = compile_with(&Scaled::default(), 4, &opts);
+    let (one, _) = compile_with(&CpuLighter::default(), 1, &opts);
+    let (none, _) = compile_with(&gz_lc_light::NullLighter::default(), 8, &opts);
+    let (kept, _) =
+        compile_with(&CpuLighter::default(), 4, &Options { no_lm_shrink: true, ..Options::default() });
+    let file = |o: &crate::Output, n: &str| o.files.iter().find(|(f, _)| f == n).map(|(_, b)| b.clone());
+    assert_ne!(cpu.structure, 0);
+    assert_eq!(cpu.structure, scaled.structure, "a scaled light changed the structure");
+    assert_eq!(cpu.structure, one.structure, "the number of threads changed the structure");
+    assert_eq!(cpu.structure, none.structure, "no light changed the structure");
+    assert_eq!(cpu.structure, kept.structure, "the charts' sizes changed the structure");
+    for n in ["level.cform", "build.cform"] {
+        assert_eq!(file(&cpu, n), file(&scaled, n), "{n}");
+    }
+    // the light did differ: the pages are not the same
+    let pages = |o: &crate::Output| -> Vec<Vec<u8>> {
+        o.files.iter().filter(|(n, _)| n.starts_with("lmap#")).map(|(_, b)| b.clone()).collect()
+    };
+    assert!(!pages(&cpu).is_empty());
+    assert_ne!(pages(&cpu), pages(&scaled), "the scaled light lit the same pages: the test proves nothing");
+    // the log says what was packed and where the light was baked
+    assert!(log.lines.iter().any(|l| l.contains("lightmap pages,")), "{:?}", log.lines);
+    assert!(log.lines.iter().any(|l| l.contains("The light was baked on the CPU:")), "{:?}", log.lines);
 }

@@ -2,18 +2,18 @@
 //! `level.details` that holds an object is lit at 15 x 15 points on the ground under it, the
 //! mean quantised into its five colours.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use glam::Vec3;
 use gz_fmt_level::{DETAIL_SLOT_SIZE, DetailHeader, DetailSlot};
 use rayon::prelude::*;
 
+use crate::bake::{LightJob, LitScene, Sample};
+use crate::batch::{self, BATCH, Gathered, light_samples};
 use crate::color::ColorC;
 use crate::data::{BuildMaterial, BuildTexture, Shaders};
 use crate::light::LightSet;
-use crate::math::{Aabb, EPS, EPS_L, cross, dot, mknormal, sphere_of};
-use crate::point::{Falloff, Tracer, light_point};
-use crate::ray::{LightCache, RayModel, RcastForm};
+use crate::math::{Aabb, EPS, EPS_L, cross, dot, mknormal};
+use crate::point::Falloff;
+use crate::ray::{RayModel, RcastForm};
 use crate::{Ctl, Result};
 
 /// The points of a slot run from -7 to 7 on each axis.
@@ -117,19 +117,18 @@ fn test_ray_tri_cull(c: Vec3, d: Vec3, p: &[Vec3; 3]) -> Option<f32> {
     Some(dot(e2, qvec) * (1.0 / det))
 }
 
-/// `detail_slot_calculate`: the slot's light, `None` when no face of the level is in its box.
-/// Each point is dropped onto the highest front face under it in the box; a point that finds
-/// none below the slot's base is left out.
-pub fn slot_light(
+/// `detail_slot_calculate`'s points: where the slot is lit, `None` when no face of the level is in
+/// its box. Each point is dropped onto the highest front face under it in the box; a point that
+/// finds none below the slot's base is left out.
+pub fn slot_points(
     scene: &DetailScene,
     x: i32,
     z: i32,
     slot: &DetailSlot,
-    cache: &mut LightCache,
     found: &mut Vec<u32>,
-) -> Option<[u8; 5]> {
+    out: &mut Vec<Sample>,
+) -> Option<()> {
     let bb = scene.slot_box(x, z, slot);
-    let (sp, sr) = sphere_of(&bb);
     let (c, d) = center_half(&bb);
     let query = Aabb { min: c - (d + Vec3::splat(0.01)), max: c + (d + Vec3::splat(0.01)) };
     found.clear();
@@ -140,10 +139,6 @@ pub fn slot_light(
     // X-Ray's compiler walks them in its tree's order; a fixed order here decides between equal heights
     found.sort_unstable();
 
-    let selected = scene.lights.select(sp, sr);
-    let tracer = Tracer { model: &scene.model, textures: &scene.textures, falloff: Falloff::Details };
-    let mut amount = ColorC::default();
-    let mut count = 0u32;
     let coeff = (DETAIL_SLOT_SIZE * 0.5) / LIGHT_COUNT as f32;
     for px in -LIGHT_COUNT..=LIGHT_COUNT {
         let x_at = c.x + coeff * px as f32;
@@ -167,14 +162,19 @@ pub fn slot_light(
             if p.y < bb.min.y {
                 continue;
             }
-            light_point(&tracer, cache, &mut amount, p, n, &selected, 0, None);
-            count += 1;
+            out.push(Sample::new(p, n, 0, None));
         }
     }
+    Some(())
+}
+
+/// A slot's five colours from the sum of its points' light: the mean halved, quantised.
+#[must_use]
+pub fn slot_colors(mut amount: ColorC, count: u32) -> [u8; 5] {
     amount.scale(count);
     amount.mul(0.5);
     let q = |v: f32| DetailSlot::quantize(v, 15) as u8;
-    Some([q(amount.sun), q(amount.hemi), q(amount.rgb.x), q(amount.rgb.y), q(amount.rgb.z)])
+    [q(amount.sun), q(amount.hemi), q(amount.rgb.x), q(amount.rgb.y), q(amount.rgb.z)]
 }
 
 /// What [`light_details`] did.
@@ -188,13 +188,22 @@ pub struct DetailStats {
     pub no_ground: usize,
 }
 
+/// What a row of slots wants lit: its points and, per slot, where they are.
+#[derive(Default)]
+struct RowPoints {
+    stats: DetailStats,
+    points: Gathered,
+}
+
 /// The detail light: every slot's palette processed and, unless it is empty (or outside
-/// `only`, the square `do_light.ltx` asks for: centre x, centre z, radius), lit - the slots of
-/// a row in parallel, every row in parallel.
+/// `only`, the square `do_light.ltx` asks for: centre x, centre z, radius), lit through `lit`,
+/// the scene of the detail model - the points of the rows of a batch gathered in parallel, lit
+/// in one call, the colours scattered back.
 pub fn light_details(
     scene: &DetailScene,
     slots: &mut [DetailSlot],
     only: Option<[f32; 3]>,
+    lit: &dyn LitScene,
     ctl: &Ctl<'_>,
 ) -> Result<DetailStats> {
     let sx = scene.header.size_x as usize;
@@ -202,21 +211,25 @@ pub fn light_details(
         return Ok(DetailStats::default());
     }
     let rows = slots.len() / sx;
-    let done = AtomicUsize::new(0);
-    let stats: Vec<DetailStats> = slots
-        .par_chunks_mut(sx)
-        .enumerate()
-        .map_init(
-            || (LightCache::default(), Vec::new()),
-            |(cache, found), (z, row)| {
-                let mut st = DetailStats::default();
-                if ctl.cancelled() {
-                    return st;
-                }
+    let per_slot = ((2 * LIGHT_COUNT + 1) * (2 * LIGHT_COUNT + 1)) as usize;
+    let rows_per = (BATCH / (sx * per_slot)).max(1);
+    let job = LightJob { lights: &scene.lights, falloff: Falloff::Details };
+    let mut stats = DetailStats::default();
+    let mut z0 = 0usize;
+    while z0 < rows {
+        ctl.check()?;
+        let z1 = (z0 + rows_per).min(rows);
+        let block = &mut slots[z0 * sx..z1 * sx];
+        let gathered: Vec<RowPoints> = block
+            .par_chunks_mut(sx)
+            .enumerate()
+            .map_init(Vec::new, |found, (dz, row)| {
+                let z = z0 + dz;
+                let mut out = RowPoints::default();
                 for (x, slot) in row.iter_mut().enumerate() {
                     process_palette(slot);
                     if slot.is_empty() {
-                        st.empty += 1;
+                        out.stats.empty += 1;
                         continue;
                     }
                     if let Some([cx, cz, r]) = only {
@@ -226,23 +239,41 @@ pub fn light_details(
                             continue;
                         }
                     }
-                    match slot_light(scene, x as i32, z as i32, slot, cache, found) {
-                        Some(colors) => {
-                            slot.set_colors(colors);
-                            st.lit += 1;
+                    let first = out.points.begin();
+                    match slot_points(scene, x as i32, z as i32, slot, found, &mut out.points.samples) {
+                        Some(()) => {
+                            out.points.end(x as u32, first);
+                            out.stats.lit += 1;
                         }
-                        None => st.no_ground += 1,
+                        None => out.stats.no_ground += 1,
                     }
                 }
-                ctl.progress(done.fetch_add(1, Ordering::Relaxed) + 1, rows);
-                st
-            },
-        )
-        .collect();
+                out
+            })
+            .collect();
+        let mut bases = Vec::with_capacity(gathered.len());
+        let mut samples = Vec::new();
+        for g in &gathered {
+            bases.push(samples.len());
+            samples.extend_from_slice(&g.points.samples);
+        }
+        let light = light_samples(lit, &job, &samples, ctl)?;
+        block.par_chunks_mut(sx).zip(gathered.par_iter().zip(&bases)).for_each(|(row, (g, &base))| {
+            let mine = light.get(base..base + g.points.samples.len()).unwrap_or_default();
+            for r in &g.points.runs {
+                if let Some(slot) = row.get_mut(r.item as usize) {
+                    slot.set_colors(slot_colors(batch::sum(mine, r), r.count));
+                }
+            }
+        });
+        for g in &gathered {
+            stats.lit += g.stats.lit;
+            stats.empty += g.stats.empty;
+            stats.no_ground += g.stats.no_ground;
+        }
+        z0 = z1;
+        ctl.progress(z0, rows);
+    }
     ctl.check()?;
-    Ok(stats.into_iter().fold(DetailStats::default(), |a, b| DetailStats {
-        lit: a.lit + b.lit,
-        empty: a.empty + b.empty,
-        no_ground: a.no_ground + b.no_ground,
-    }))
+    Ok(stats)
 }
