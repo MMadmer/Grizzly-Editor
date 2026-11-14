@@ -152,6 +152,8 @@ pub struct ModSettingsDoc {
     status: String,
     saving: Option<Form>,
     failed: Option<Form>,
+    /// What stopped the last save: the answer of a command that asked for it.
+    save_error: Option<String>,
     inbox: Arc<Mutex<Inbox>>,
     modes: Option<Arc<ModeScan>>,
     installed: Option<Vec<Installed>>,
@@ -185,6 +187,7 @@ impl ModSettingsDoc {
             status: String::new(),
             saving: None,
             failed: None,
+            save_error: None,
             inbox: Arc::new(Mutex::new(Inbox::default())),
             modes: None,
             installed: None,
@@ -621,6 +624,7 @@ impl ModSettingsDoc {
             return Ok(());
         }
         self.saving = Some(self.form.clone());
+        self.save_error = None;
         let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
         let origin = self.editor.ui_origin();
         let _task = self.editor.exec.spawn(async move {
@@ -653,6 +657,7 @@ impl ModSettingsDoc {
                 }
             }
             Err(e) => {
+                self.save_error = Some(e.clone());
                 self.status = e;
                 self.failed = Some(sent);
             }
@@ -1526,6 +1531,12 @@ impl Document for ModSettingsDoc {
 
     fn save(&mut self, _cx: &mut DocCx<'_>) -> Result<(), String> {
         self.save_now()
+    }
+
+    fn save_failed(&mut self) -> Option<gz_editor::CmdError> {
+        // the save's answer is taken here too: the tab may not be the one drawn
+        self.take_inbox(None);
+        self.save_error.take().map(|e| gz_editor::CmdError::new("failed", e))
     }
 
     fn discard(&mut self, _cx: &mut DocCx<'_>) {

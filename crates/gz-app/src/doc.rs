@@ -150,6 +150,18 @@ impl OpenRequest {
 #[derive(Default)]
 pub struct ShellRequests {
     pub(crate) list: Vec<Request>,
+    /// A command's caller, not a person in the window, asked for the call under way.
+    pub(crate) by_caller: bool,
+}
+
+impl ShellRequests {
+    /// Whether a command's caller, not a person in the window, asked for the call under way (a
+    /// tab's save). A caller is never asked a question and never shown a dialog: what would
+    /// raise one refuses in a sentence that names the command to use instead.
+    #[must_use]
+    pub fn by_caller(&self) -> bool {
+        self.by_caller
+    }
 }
 
 pub(crate) enum Request {
@@ -311,8 +323,18 @@ pub trait Document {
     fn edit(&mut self, cx: &mut DocCx<'_>, action: EditAction, run: bool) -> bool {
         false
     }
+    /// Saves the tab, or begins to: a tab that writes on the pools stays dirty until its file
+    /// is written. With [`ShellRequests::by_caller`] nothing may be asked: what needs a person's
+    /// answer is refused in a sentence that names the command to use.
     fn save(&mut self, cx: &mut DocCx<'_>) -> Result<(), String> {
         Ok(())
+    }
+    /// What stopped a save that went on after [`Document::save`] returned (a write on the
+    /// pools, a job), taken once: the answer of the command that asked for the save. The shell
+    /// asks it while it waits for a save, whether the tab is drawn or not - a tab that learns
+    /// of its saves only as it draws takes what arrived here.
+    fn save_failed(&mut self) -> Option<gz_editor::CmdError> {
+        None
     }
     /// Reads its file again (`doc.reload`); `discard` lets it drop unsaved edits first.
     fn reload(&mut self, cx: &mut DocCx<'_>, discard: bool) -> Result<(), String> {

@@ -250,15 +250,12 @@ async fn app_quit(editor: Arc<Editor>, p: QuitParams, origin: Origin) -> Reply {
             Err(_) => Vec::new(),
         };
         editor.save_all().await.map_err(|e| CmdError::new("failed", e.message))?;
-        if let Ok(q) = UiQueue::of(&editor) {
-            q.run(|shell, ctx| {
-                for (id, label) in shell.dirty_tabs() {
-                    shell.save_tab(ctx, &id).map_err(|e| CmdError::new("failed", format!("{label}: {e}")))?;
-                }
-                Ok(())
-            })
-            .await?;
-        }
+        // what a tab still holds is saved and waited for: the editor does not end over a write under way
+        let left: Vec<String> = match UiQueue::of(&editor) {
+            Ok(q) => q.run(|shell, _| Ok(shell.dirty_tabs().into_iter().map(|(id, _)| id).collect())).await?,
+            Err(_) => Vec::new(),
+        };
+        crate::unsaved::save_tabs(&editor, left, origin.may_ask()).await?;
         if !dirty.is_empty() {
             out.insert("saved".into(), dirty_json(&dirty));
         }
@@ -314,32 +311,34 @@ async fn app_switch_project(editor: Arc<Editor>, p: SwitchParams, origin: Origin
     let ask = origin == Origin::Ui && !p.save && !p.discard;
     let asker = asker_of(origin);
     let (save, discard) = (p.save, p.discard);
-    let settled = on_ui(&editor, move |shell, ctx| {
+    // `None`: a person is asked in the window; otherwise the tabs to save first
+    let to_save = on_ui(&editor, move |shell, ctx| {
         let dirty: Vec<(String, String)> =
             shell.dirty_tabs().into_iter().filter(|(id, _)| id != crate::tabs::LEVEL).collect();
         if dirty.is_empty() {
-            return Ok(true);
+            return Ok(Some(Vec::new()));
         }
         if ask {
             shell.switch_project(ctx);
-            return Ok(false);
+            return Ok(None);
         }
         if !save && !discard && asker != gz_ui::Asker::Unattended {
             return Err(unsaved(&dirty));
         }
-        for (id, label) in &dirty {
-            if save {
-                shell.save_tab(ctx, id).map_err(|e| CmdError::new("failed", format!("{label}: {e}")))?;
-            } else {
-                shell.discard_tab(ctx, id);
-            }
+        if save {
+            return Ok(Some(dirty.into_iter().map(|(id, _)| id).collect()));
         }
-        Ok(true)
+        for (id, _) in &dirty {
+            shell.discard_tab(ctx, id);
+        }
+        Ok(Some(Vec::new()))
     })
     .await?;
-    if !settled {
+    let Some(to_save) = to_save else {
         return Ok(json!({ "asking": true }));
-    }
+    };
+    // every save is waited for: the project does not close over a write under way
+    crate::unsaved::save_tabs(&editor, to_save, origin.may_ask()).await?;
     let mut a = gz_editor::Args::new();
     a.insert("discard".into(), json!(true));
     let reply = editor.call("project.close", a, origin).await;
@@ -652,9 +651,9 @@ async fn doc_list(editor: Arc<Editor>, _p: NoParams, _origin: Origin) -> Reply {
     Ok(json!({ "docs": docs, "unsaved": serde_json::to_value(editor.dirty_docs()).unwrap_or(Value::Null) }))
 }
 
-async fn doc_save(editor: Arc<Editor>, p: DocParams, _origin: Origin) -> Reply {
+async fn doc_save(editor: Arc<Editor>, p: DocParams, origin: Origin) -> Reply {
     let id = on_ui(&editor, move |shell, _| target(shell, p.doc)).await?;
-    crate::unsaved::save_tabs(&editor, vec![id.clone()]).await.map_err(|e| CmdError::new("failed", e))?;
+    crate::unsaved::save_tabs(&editor, vec![id.clone()], origin.may_ask()).await?;
     let tab = on_ui(&editor, move |shell, _| Ok(shell.tab_json(&id))).await?;
     Ok(json!({ "doc": tab }))
 }

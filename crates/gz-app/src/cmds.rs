@@ -239,6 +239,27 @@ struct TabParams {
     discard: bool,
 }
 
+/// What `ui.tab action=open` opens: "quest:<rel>" and the singletons' ids name a kind and a
+/// path, which `kind=` and `path=` name outright.
+fn open_target(id: &str, kind: Option<&str>, path: Option<&str>) -> (String, String) {
+    let (mut kind, mut path) = (kind.unwrap_or_default().to_owned(), path.unwrap_or_default().to_owned());
+    if !id.is_empty() {
+        match id.split_once(':') {
+            Some((k, rest)) => {
+                if kind.is_empty() {
+                    k.clone_into(&mut kind);
+                }
+                if path.is_empty() {
+                    rest.clone_into(&mut path);
+                }
+            }
+            None if kind.is_empty() => id.clone_into(&mut kind),
+            None => {}
+        }
+    }
+    (kind, path)
+}
+
 async fn ui_tab(editor: Arc<Editor>, p: TabParams, origin: Origin) -> Reply {
     let id = p.doc.clone().unwrap_or_default();
     let has_project = editor.project_opt().is_some();
@@ -253,9 +274,22 @@ async fn ui_tab(editor: Arc<Editor>, p: TabParams, origin: Origin) -> Reply {
             Ok(if wanted.is_empty() { shell.active().to_owned() } else { wanted })
         })
         .await?;
-        crate::unsaved::save_tabs(&editor, vec![target]).await.map_err(invalid)?;
+        crate::unsaved::save_tabs(&editor, vec![target], origin.may_ask()).await?;
+    }
+    if p.action == TabAction::Open && p.save {
+        // a dirty singleton that switches target is saved first, and its save waited for: a tab
+        // that writes on the pools is dirty until its file is written
+        let (kind, path) = open_target(&id, p.kind.as_deref(), p.path.as_deref());
+        if !kind.is_empty() {
+            let target = crate::doc::tab_id(&kind, (!path.is_empty()).then_some(path.as_str())).to_string();
+            let there = target.clone();
+            if on_ui(&editor, move |shell, _| Ok(shell.tab_json(&there).is_some())).await? {
+                crate::unsaved::save_tabs(&editor, vec![target], origin.may_ask()).await?;
+            }
+        }
     }
     let asker = asker_of(origin);
+    let person = origin.may_ask();
     on_ui(&editor, move |shell, ctx| match p.action {
         TabAction::List => Ok(Value::Object(tabs_fields(shell))),
         TabAction::Next | TabAction::Prev => {
@@ -278,22 +312,7 @@ async fn ui_tab(editor: Arc<Editor>, p: TabParams, origin: Origin) -> Reply {
                 }
                 return Ok(answer_active(shell));
             }
-            // "quest:<rel>" and the singletons' ids name what to open
-            let (mut kind, mut path) = (p.kind.unwrap_or_default(), p.path.unwrap_or_default());
-            if !id.is_empty() {
-                match id.split_once(':') {
-                    Some((k, rest)) => {
-                        if kind.is_empty() {
-                            kind = k.to_owned();
-                        }
-                        if path.is_empty() {
-                            path = rest.to_owned();
-                        }
-                    }
-                    None if kind.is_empty() => kind.clone_from(&id),
-                    None => {}
-                }
-            }
+            let (kind, path) = open_target(&id, p.kind.as_deref(), p.path.as_deref());
             let source = p.source.unwrap_or_default();
             if kind.is_empty() {
                 return Err(invalid("pass doc=, or kind= (and path= for a file)"));
@@ -318,13 +337,6 @@ async fn ui_tab(editor: Arc<Editor>, p: TabParams, origin: Origin) -> Reply {
                 arg: (!source.is_empty()).then_some(source),
                 activate: true,
             };
-            if p.save && !shell.active().is_empty() {
-                // a dirty singleton that switches target: saved first when asked
-                let target = crate::doc::tab_id(&req.kind, req.path.as_deref()).to_string();
-                if shell.tab_json(&target).is_some() {
-                    shell.save_tab(ctx, &target).map_err(invalid)?;
-                }
-            }
             match shell.open(ctx, req, p.discard, asker) {
                 Ok(()) => Ok(answer_active(shell)),
                 Err(OpenError::Unsaved { id, label }) => Err(unsaved(&[(id, label)])),
@@ -348,7 +360,7 @@ async fn ui_tab(editor: Arc<Editor>, p: TabParams, origin: Origin) -> Reply {
             } else {
                 CloseMode::IfClean
             };
-            match shell.close_tab(ctx, &id, mode) {
+            match shell.close_tab(ctx, &id, mode, person) {
                 Ok(()) => {
                     let mut out = Map::new();
                     out.insert("closed".into(), json!(id));

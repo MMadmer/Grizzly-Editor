@@ -677,7 +677,7 @@ impl ShellState {
                             }
                             queue.post(move |shell, ctx| {
                                 if answer == Answer::Yes
-                                    && let Err(e) = shell.save_tab(ctx, &target)
+                                    && let Err(e) = shell.save_tab(ctx, &target, true)
                                 {
                                     let _ = gz_ui::dialog::notice(
                                         ctx,
@@ -764,7 +764,7 @@ impl ShellState {
             }
             let mode = if answer == Answer::Yes { CloseMode::SaveFirst } else { CloseMode::Discard };
             queue.post(move |shell, ctx| {
-                if let Err(e) = shell.close_tab(ctx, &target, mode) {
+                if let Err(e) = shell.close_tab(ctx, &target, mode, true) {
                     gz_ui::dialog::notice(ctx, shell.asker(), Tone::Error, "Save failed", &e);
                 }
             });
@@ -776,7 +776,13 @@ impl ShellState {
 
     /// MCP's close: `IfClean` refuses a dirty tab ("unsaved"), `SaveFirst` saves it, `Discard`
     /// drops the changes.
-    pub(crate) fn close_tab(&mut self, ctx: &Context, id: &str, mode: CloseMode) -> Result<(), String> {
+    pub(crate) fn close_tab(
+        &mut self,
+        ctx: &Context,
+        id: &str,
+        mode: CloseMode,
+        person: bool,
+    ) -> Result<(), String> {
         let Some(i) = self.find(id) else { return Err("not open".to_owned()) };
         let Some(tab) = self.tabs.get(i) else { return Err("not open".to_owned()) };
         if !tab.closable() {
@@ -785,7 +791,7 @@ impl ShellState {
         if tab.dirty() {
             match mode {
                 CloseMode::IfClean => return Err("unsaved".to_owned()),
-                CloseMode::SaveFirst => self.save_tab(ctx, id)?,
+                CloseMode::SaveFirst => self.save_tab(ctx, id, person)?,
                 CloseMode::Discard => {
                     if let Some(tab) = self.tabs.get_mut(i)
                         && let Some(doc) = tab.doc.as_mut()
@@ -799,16 +805,24 @@ impl ShellState {
         Ok(())
     }
 
-    /// A tab's save without closing it; `Ok` when it is clean.
-    pub(crate) fn save_tab(&mut self, ctx: &Context, id: &str) -> Result<(), String> {
+    /// A tab's save without closing it; `Ok` when it is clean or its save has begun. `person`:
+    /// a person asked in the window, so the tab may raise a question (the system's Save dialog
+    /// for a scene without a file); a command's caller is refused in a sentence instead.
+    pub(crate) fn save_tab(&mut self, ctx: &Context, id: &str, person: bool) -> Result<(), String> {
         let Some(i) = self.find(id) else { return Err("not open".to_owned()) };
         let Some(tab) = self.tabs.get_mut(i) else { return Err("not open".to_owned()) };
+        // a failure an earlier save left is not this save's
+        let _earlier = tab.doc.as_mut().and_then(|d| d.save_failed());
         if !tab.dirty() {
             return Ok(());
         }
         let Some(doc) = tab.doc.as_mut() else { return Ok(()) };
-        doc.save(&mut cx!(self, ctx))
-            .map_err(|e| if e.is_empty() { "it cannot be saved".to_owned() } else { e })
+        // whatever the tab raises all the same gets the logged answers: nothing opens for a caller
+        let _answers = (!person).then(|| dialog::answer_as(ctx, Asker::Unattended));
+        self.requests.by_caller = !person;
+        let saved = doc.save(&mut cx!(self, ctx));
+        self.requests.by_caller = false;
+        saved.map_err(|e| if e.is_empty() { "it cannot be saved".to_owned() } else { e })
     }
 
     /// A tab's discard without closing it; `true` when it is clean afterwards.
@@ -886,34 +900,28 @@ impl ShellState {
         let what: Vec<String> = dirty.iter().map(|(_, l)| l.clone()).collect();
         let ids: Vec<String> = dirty.into_iter().map(|(id, _)| id).collect();
         let queue = self.queue.clone();
-        let line = dialog::unsaved_prompt(ctx, self.asker(), "exit", &what, move |answer| {
-            if answer == Answer::Cancel {
-                return;
-            }
-            queue.post(move |shell, ctx| {
-                for id in &ids {
-                    if answer == Answer::Yes {
-                        if let Err(e) = shell.save_tab(ctx, id) {
-                            let label = shell
-                                .find(id)
-                                .and_then(|i| shell.tabs.get(i))
-                                .map(Tab::label)
-                                .unwrap_or_default();
-                            gz_ui::dialog::notice(
-                                ctx,
-                                shell.asker(),
-                                Tone::Error,
-                                "Save failed",
-                                &format!("{label}: {e}"),
-                            );
-                            return;
-                        }
-                    } else {
-                        shell.discard_tab(ctx, id);
+        let editor = self.editor.clone();
+        let line = dialog::unsaved_prompt(ctx, self.asker(), "exit", &what, move |answer| match answer {
+            Answer::Cancel => {}
+            Answer::Yes => {
+                // every save is waited for: the editor does not end over a write under way, or
+                // under the Save dialog of a scene that has no file yet
+                let ed = editor.clone();
+                let _task = editor.exec.spawn(async move {
+                    match crate::unsaved::save_tabs(&ed, ids, true).await {
+                        Ok(()) => ed.request_quit(),
+                        Err(e) => queue.post(move |shell, ctx| {
+                            gz_ui::dialog::notice(ctx, shell.asker(), Tone::Error, "Save failed", &e.message);
+                        }),
                     }
+                });
+            }
+            _ => queue.post(move |shell, ctx| {
+                for id in &ids {
+                    shell.discard_tab(ctx, id);
                 }
                 shell.editor.request_quit();
-            });
+            }),
         });
         if let Some(line) = line {
             self.editor.log.finding(&line);

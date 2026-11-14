@@ -169,6 +169,8 @@ pub struct TexLibDoc {
     new_pictures: Pending<usize>,
     /// A save is running.
     saving: Arc<std::sync::atomic::AtomicBool>,
+    /// What stopped the save a command's caller asked for.
+    save_error: super::SaveError,
     preview: Option<Preview>,
 }
 
@@ -202,6 +204,7 @@ impl TexLibDoc {
             writable,
             new_pictures,
             saving: stores.tex_saving.clone(),
+            save_error: Arc::default(),
             preview: None,
         };
         if import {
@@ -317,17 +320,28 @@ impl TexLibDoc {
 
     /// Writes what changed as a job: descriptions, then game textures; New Textures copies its
     /// pictures into the library first, after asking when that replaces a texture the library has.
-    fn queue_save(&mut self) -> Result<(), String> {
+    /// `by_caller`, a command's caller asked: nothing is asked, an import that replaces is
+    /// refused, and what stops the save is that caller's answer.
+    fn queue_save(&mut self, by_caller: bool) -> Result<(), String> {
         if self.read_only() {
             return Err("The texture folder cannot be written.".to_owned());
         }
         if self.saving() {
             return Ok(());
         }
+        *self.save_error.lock() = None;
         let Some(items) = self.import.as_ref().and_then(Pending::get).map(|i| i.as_ref().clone()) else {
-            return start_texture_save(&self.editor, None, None).map(|_| ());
+            let id = start_texture_save(&self.editor, None, None)?;
+            if by_caller {
+                super::answer_job(&self.editor, id, &self.save_error);
+            }
+            return Ok(());
         };
-        confirm_import(&self.editor, items);
+        if by_caller {
+            import_for_caller(&self.editor, items, &self.save_error);
+        } else {
+            confirm_import(&self.editor, items);
+        }
         Ok(())
     }
 
@@ -903,6 +917,35 @@ pub fn replaced_by_import(dirs: &EditorDirs, items: &[TexItem]) -> Vec<String> {
         .collect()
 }
 
+/// New Textures' Import for a command's caller: nothing is asked. An import that replaces
+/// textures of the library is refused, naming them and the command that replaces them.
+fn import_for_caller(editor: &Arc<Editor>, items: Vec<TexItem>, failed: &super::SaveError) {
+    let (dirs, ed, failed) = (EditorDirs::of(editor), editor.clone(), failed.clone());
+    let _task = editor.exec.clone().spawn(async move {
+        let (d, i) = (dirs, items.clone());
+        let replaced = ed.exec.io(move || replaced_by_import(&d, &i)).await;
+        let refused = if replaced.is_empty() {
+            match start_texture_save(&ed, Some(items), None) {
+                Ok(id) => {
+                    super::answer_job(&ed, id, &failed);
+                    return;
+                }
+                Err(e) => CmdError::new("failed", e),
+            }
+        } else {
+            CmdError::new(
+                "exists",
+                format!(
+                    "The import would replace: {}. library.import overwrite=true replaces them.",
+                    replaced.join(", ")
+                ),
+            )
+        };
+        *failed.lock() = Some(refused);
+        ed.exec.wake().ping();
+    });
+}
+
 /// New Textures' Import: asks first when it replaces textures of the library, then starts.
 fn confirm_import(editor: &Arc<Editor>, items: Vec<TexItem>) {
     let (dirs, ed) = (EditorDirs::of(editor), editor.clone());
@@ -1453,13 +1496,9 @@ impl Document for TexLibDoc {
         {
             let text_ =
                 format!("Nothing in {} is new to the library.", folder_text(&self.editor, &self.dirs.import));
-            let asker =
-                if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
-            if let Some(line) =
-                gz_ui::dialog::notice(ui.ctx(), asker, Tone::Info, "Check New Textures", &text_)
-            {
-                self.editor.log.finding(&line);
-            }
+            // a line over the tab, never a dialog: a command's caller starts the check too
+            state::toast(ui.ctx(), Tone::Info, &text_);
+            self.editor.log.info(&text_);
             self.back_to_library();
         }
         let items = self.items();
@@ -1591,8 +1630,12 @@ impl Document for TexLibDoc {
         there
     }
 
-    fn save(&mut self, _cx: &mut DocCx<'_>) -> Result<(), String> {
-        self.queue_save()
+    fn save(&mut self, cx: &mut DocCx<'_>) -> Result<(), String> {
+        self.queue_save(cx.requests.by_caller())
+    }
+
+    fn save_failed(&mut self) -> Option<CmdError> {
+        self.save_error.lock().take()
     }
 
     fn discard(&mut self, _cx: &mut DocCx<'_>) {

@@ -199,6 +199,24 @@ def run_tab(project: str, fixture: str, shots: str | None) -> None:
     p = cmd("pda.preview", action="open", path="pda/courier.pdaasset", pane="both", tab="problems")
     check(p.get("ok") and p.get("text_dirty") is False, "H and the first layout comes back clean", json.dumps(p)[:200])
 
+    # the shell's save of the tab: the command answers once the file holds the text (the tab is dirty until then),
+    # and a layout saved on the way to another one is written before the other one opens
+    cmd("pda.preview", action="apply", text=edited)
+    saved = cmd("doc.save", doc="pda")
+    state = cmd("pda.preview", action="state")
+    check(saved.get("ok") and 'title = "Queue"' in read(courier) and state.get("text_dirty") is False,
+          "H doc.save answers once the file holds the text", json.dumps(saved)[:200])
+    cmd("pda.preview", action="apply", text=fixture)
+    moved = cmd("ui.tab", action="open", kind="pda", path="pda/qa_app.pdaasset", save=True)
+    state = cmd("pda.preview", action="state")
+    check(moved.get("ok") and 'title = "Orders"' in read(courier)
+          and state.get("state", {}).get("path", "").endswith("qa_app.pdaasset"),
+          "H ui.tab open save=true writes the layout it leaves, then opens the other one", json.dumps(moved)[:200])
+    p = cmd("pda.preview", action="open", path="pda/courier.pdaasset", pane="both", tab="problems")
+    check(p.get("ok") and p.get("text_dirty") is False, "H the first layout is back, saved", json.dumps(p)[:200])
+    put("pda/courier.pdaasset", fixture)
+    follows()
+
     # a text that does not parse: its line, and nothing written
     broken = fixture.replace('title = "Orders"', 'title = = "Orders"', 1)
     p = cmd("pda.preview", action="apply", text=broken)

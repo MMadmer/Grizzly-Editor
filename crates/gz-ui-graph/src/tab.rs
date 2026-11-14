@@ -351,6 +351,8 @@ pub struct GraphTab {
     open_after: Option<(String, String)>,
     clipboard: Option<arboard::Clipboard>,
     force_refresh: bool,
+    /// What stopped the last save: the answer of a command that asked for it.
+    save_error: Option<gz_editor::CmdError>,
 }
 
 impl GraphTab {
@@ -445,6 +447,7 @@ impl GraphTab {
             open_after: None,
             clipboard: None,
             force_refresh: false,
+            save_error: None,
         })
     }
 
@@ -1567,6 +1570,7 @@ impl GraphTab {
         let (ed, d, ctx2) = (self.editor.clone(), doc.clone(), ctx.clone());
         let result: Arc<Mutex<Option<Result<(), String>>>> = Arc::new(Mutex::new(None));
         let r2 = result.clone();
+        self.save_error = None;
         self.set_message("Saving", Tone::Muted);
         let _task = self.editor.exec.spawn(async move {
             let r = match NqService::of(&ed) {
@@ -1580,6 +1584,7 @@ impl GraphTab {
             if r.is_err() {
                 ed.log.warn(format!("[nq] {text_}"));
             }
+            let failure = r.as_ref().err().cloned();
             *r2.lock() = Some(r);
             if let Ok(q) = gz_app::UiQueue::of(&ed) {
                 let id = doc_id(&d.path().wire, gz_nq::asset::is_behaviour_path(&d.path().wire));
@@ -1597,6 +1602,7 @@ impl GraphTab {
                             Tone::Error
                         };
                         t.set_message(&text_, tone);
+                        t.save_error = failure.map(|e| gz_editor::CmdError::new("failed", e));
                         t.refresher_force();
                     }
                 });
@@ -2456,6 +2462,10 @@ impl Document for GraphTab {
     fn save(&mut self, cx: &mut DocCx<'_>) -> Result<(), String> {
         let ctx = cx.ctx.clone();
         self.save_now(&ctx)
+    }
+
+    fn save_failed(&mut self) -> Option<gz_editor::CmdError> {
+        self.save_error.take()
     }
 
     fn discard(&mut self, _cx: &mut DocCx<'_>) {

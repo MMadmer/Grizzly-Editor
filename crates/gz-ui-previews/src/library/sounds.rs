@@ -173,6 +173,8 @@ pub struct SoundLibDoc {
     /// Whether the sound folder can be written: looked at on the IO pool as the tab opens.
     writable: Pending<bool>,
     saving: Arc<std::sync::atomic::AtomicBool>,
+    /// What stopped the save a command's caller asked for.
+    save_error: super::SaveError,
     game: Option<(String, Pending<Option<GameSound>>)>,
     /// A rebuild ended: the preview reads the new file.
     rebuilt: Arc<std::sync::atomic::AtomicBool>,
@@ -201,6 +203,7 @@ impl SoundLibDoc {
             auto_play: false,
             writable,
             saving: stores.sound_saving.clone(),
+            save_error: Arc::default(),
             game: None,
             rebuilt: stores.sound_rebuilt.clone(),
         }
@@ -277,7 +280,7 @@ impl SoundLibDoc {
     }
 
     /// Writes the changed descriptions as a job.
-    fn queue_save(&mut self) -> Result<(), String> {
+    fn queue_save(&mut self, by_caller: bool) -> Result<(), String> {
         if self.read_only() {
             return Err("The sound folder cannot be written.".to_owned());
         }
@@ -285,7 +288,13 @@ impl SoundLibDoc {
             return Ok(());
         }
         Player::of(&self.editor).stop();
-        start_sound_save(&self.editor, None).map(|_| ())
+        *self.save_error.lock() = None;
+        let id = start_sound_save(&self.editor, None)?;
+        // a job that fails is a caller's answer; a person reads it on the job's card
+        if by_caller {
+            super::answer_job(&self.editor, id, &self.save_error);
+        }
+        Ok(())
     }
 
     /// Plays the selected sound's game sound, or stops what plays.
@@ -405,7 +414,7 @@ impl SoundLibDoc {
             );
             t.max_dist = t.max_dist.clamp(0.1, 1000.0);
             if t.max_ai_dist > t.max_dist {
-                // 'Max AI Dist' <= 'Max Dist': it is clamped
+                // the AI distance never exceeds the maximum distance
                 t.max_ai_dist = t.max_dist;
                 clamped = true;
             }
@@ -503,7 +512,7 @@ impl SoundLibDoc {
             gz_ui::state::toast(
                 ui.ctx(),
                 Tone::Info,
-                "'Max AI Dist' <= 'Max Dist'. 'Max AI Dist' will be clamped.",
+                "Max AI Distance cannot be more than Max Distance: it was lowered to match.",
             );
         }
         if t != before && ro == PropFlags::NONE {
@@ -1056,8 +1065,12 @@ impl Document for SoundLibDoc {
         there
     }
 
-    fn save(&mut self, _cx: &mut DocCx<'_>) -> Result<(), String> {
-        self.queue_save()
+    fn save(&mut self, cx: &mut DocCx<'_>) -> Result<(), String> {
+        self.queue_save(cx.requests.by_caller())
+    }
+
+    fn save_failed(&mut self) -> Option<gz_editor::CmdError> {
+        self.save_error.lock().take()
     }
 
     fn discard(&mut self, _cx: &mut DocCx<'_>) {

@@ -481,17 +481,29 @@ def library_pick_popups(shots: str | None) -> None:
 
 
 def library_is_no_game(art: str) -> None:
-    """A folder that is a game is refused as the library's: the library is written, a game never is."""
-    fake = os.path.join(art, "a_game")
-    os.makedirs(os.path.join(fake, "gamedata"))
-    os.makedirs(os.path.join(fake, "rawdata"))
-    with open(os.path.join(fake, "fsgame.ltx"), "w") as f:
-        f.write("; a folder that looks like a game")
+    """A folder that is a game is refused as the library's: the library is written, a game never is. A game is told
+    by what only a game has (its archives, its engine), not by what the editor's own folder has too."""
+    def laid_out(name: str, *more: str) -> str:
+        folder = os.path.join(art, name)
+        for sub in ("gamedata", "rawdata") + more:
+            os.makedirs(os.path.join(folder, sub))
+        with open(os.path.join(folder, "fsgame.ltx"), "w") as f:
+            f.write("; the file system's table")
+        return folder
+
+    fake = laid_out("a_game", "database")
     before = sorted(os.listdir(fake))
     r = cmd("project.set_library", path=fake)
     check(not r.get("ok") and "a game's folder" in str(r.get("error")),
           "K a game's folder is refused as the library's folder", json.dumps(r)[:300])
     check(sorted(os.listdir(fake)) == before, "K ... and nothing is written into it", str(sorted(os.listdir(fake))))
+    # another editor's folder holds fsgame.ltx, gamedata and rawdata as well, and is a library
+    other = laid_out("an_editor")
+    taken = cmd("project.set_library", path=other)
+    check(taken.get("ok") and taken.get("own") is False, "K a folder laid out like the editor's own is taken as the library",
+          json.dumps(taken)[:300])
+    own = cmd("project.set_library")
+    check(own.get("ok") and own.get("own") is True, "K and the editor's own library comes back", json.dumps(own)[:300])
 
 
 def exists(lib: str, rel: str) -> bool:
@@ -571,15 +583,38 @@ def library_texture(lib: str, art: str, png: str, shots: str | None = None) -> N
     check(mine.get("ok") and mine.get("imported") == ["qa_mine.png"] and exists(lib, "rawdata/textures/qa/qa_mine.tga")
           and not exists(lib, "import/qa_mine.png") and exists(lib, "import/qa_mine.~png"),
           "K a picture of the import folder's own is renamed to .~png, not deleted", json.dumps(mine)[:300])
-    # Check New Textures looks in the import folder
+    # Check New Textures looks in the import folder; with nothing new it says so in a line, never a dialog
+    nothing = cmd("library.view", kind="texture_library", action="check")
+    said = qa.until(lambda: any("is new to the library" in t for t in cmd("ui.list").get("toasts") or []), 10)
+    win = cmd("shot.window")
+    back = cmd("library.view", kind="texture_library", action="state")
+    check(nothing.get("ok") and said and win.get("modal") is None and back.get("import") is False,
+          "K a check that finds nothing says so in a note over the tab and leaves no dialog",
+          json.dumps({"modal": win.get("modal"), "import": back.get("import"), "toasts": cmd("ui.list").get("toasts")})[:300])
+    # one new picture, and one whose name the library has
     write_png(os.path.join(lib, "import", "qa_fresh.png"))
+    write_png(os.path.join(lib, "import", "qa_import.png"))
     c = cmd("library.view", kind="texture_library", action="check")
-    check(c.get("ok") and c.get("import") is True and c.get("items") == 1, "K library.view check turns the tab into New Textures",
+    check(c.get("ok") and c.get("import") is True and c.get("items") == 2, "K library.view check turns the tab into New Textures",
           json.dumps(c)[:300])
     audit = cmd("ui.audit")
     labels = {x.get("label") for x in audit.get("controls", [])}
     check({"Import", "More"} <= labels, "K New Textures offers Import and More", json.dumps(sorted(l for l in labels if l))[:300])
+    # the tab's save asked by a command: the window's Import asks before it replaces a texture of the library; a
+    # command is refused at once, with the textures and the command that replaces them
+    began = time.monotonic()
+    refused = cmd("doc.save", doc="texture_library")
+    took = time.monotonic() - began
+    check(not refused.get("ok") and refused.get("code") == "exists" and "qa_import" in str(refused.get("error"))
+          and "library.import overwrite=true" in str(refused.get("error")),
+          "K doc.save on New Textures that would replace a texture answers exists, naming it and the command",
+          json.dumps(refused)[:300])
+    check(took < 1.0, "K and it answers inside a second (%.2f s)" % took, timing=True)
+    win = cmd("shot.window")
+    check(win.get("modal") is None and exists(lib, "import/qa_import.png") and exists(lib, "import/qa_fresh.png"),
+          "K no question is up and nothing was imported", json.dumps(win.get("modal"))[:200])
     cmd("ui.tab", action="close", doc="texture_library", discard=True)
+    os.remove(os.path.join(lib, "import", "qa_import.png"))
     t = cmd("library.view", kind="texture_library", action="open", types=["images"])
     check(t.get("types") == ["images"], "K the type filter is a parameter", json.dumps(t)[:300])
     cmd("library.view", kind="texture_library", action="state", types=["images", "cube_maps", "bump_maps", "normal_maps", "terrain"])

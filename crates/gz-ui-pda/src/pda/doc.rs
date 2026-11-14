@@ -896,42 +896,51 @@ impl Document for PdaDoc {
         true
     }
 
-    fn save(&mut self, _cx: &mut DocCx<'_>) -> Result<(), String> {
-        // written off the UI thread; the pane reads clean at once and a failure says so
-        {
+    fn save(&mut self, cx: &mut DocCx<'_>) -> Result<(), String> {
+        // written off the UI thread, the text as it is now (the tab may show another file by
+        // then); the tab stays dirty until its file holds it
+        let point = {
             let mut m = self.tab.m.lock();
             if !m.text_dirty {
                 return Ok(());
             }
-            m.disk = m.text.clone();
-            m.text_dirty = false;
-        }
-        let ed = self.editor.clone();
-        self.spawn(move |e, tab| {
+            m.save_error = None;
+            (m.path.clone(), m.text.clone())
+        };
+        // a caller is answered with a failure; a person reads it in the window
+        let by_caller = cx.requests.by_caller();
+        self.spawn(move |ed, tab| {
             Box::pin(async move {
-                if let Err(err) = super::save_and_read(&e, &tab).await {
-                    tab.m.lock().text_dirty = true;
-                    post_notice(&ed, "Save failed", err);
+                if let Err(err) = super::save_point_and_read(&ed, &tab, point).await {
+                    if by_caller {
+                        tab.m.lock().save_error = Some(gz_editor::CmdError::new("failed", err));
+                        ed.exec.wake().ping();
+                    } else {
+                        post_notice(&ed, "Save failed", err);
+                    }
                 }
             })
         });
         Ok(())
     }
 
+    fn save_failed(&mut self) -> Option<gz_editor::CmdError> {
+        self.tab.m.lock().save_error.take()
+    }
+
     fn discard(&mut self, _cx: &mut DocCx<'_>) {
-        let path = {
+        // the edits go and the text is the file's again, as last read or written. No read of the
+        // disk: the shell discards the view it retargets, and a load of the file it leaves would
+        // race the load of the one it opens
+        {
             let mut m = self.tab.m.lock();
+            if !m.text_dirty {
+                return;
+            }
             m.text = m.disk.clone();
             m.text_dirty = false;
-            m.path.clone()
-        };
-        if !path.is_empty() {
-            self.spawn(move |ed, tab| {
-                Box::pin(async move {
-                    super::load_file(&ed, &tab, &path).await;
-                })
-            });
         }
+        self.read_async();
     }
 
     fn on_activate(&mut self, _cx: &mut DocCx<'_>) {

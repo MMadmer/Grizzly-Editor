@@ -16,6 +16,7 @@ use gz_base::Rev;
 use gz_editor::{Args, Editor, Value};
 use gz_scene::SceneService;
 use gz_ui::{Icon, MenuItem, Toolbar, audit, menu_item, palette};
+use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
 use crate::choose::{self, Chooser, Outcome, Purpose};
@@ -101,6 +102,8 @@ pub struct LevelDoc {
     /// When the last preview was taken (or the scene came up), of which revision and scene.
     preview_at: Option<(Instant, Rev, String)>,
     project_rev: Rev,
+    /// What stopped the save a command's caller asked for: that caller's answer.
+    save_error: Arc<Mutex<Option<gz_editor::CmdError>>>,
 }
 
 /// Marks the close hook that takes `preview.png` as registered.
@@ -134,6 +137,7 @@ impl LevelDoc {
             was_dirty: false,
             preview_at: None,
             project_rev: editor.project_rev(),
+            save_error: Arc::default(),
         }
     }
 
@@ -613,20 +617,43 @@ impl LevelDoc {
         }
     }
 
-    fn save_scene(&mut self, ctx: &egui::Context) {
-        let Some(svc) = self.scene() else { return };
+    /// Saves the scene into its file. A scene that has none yet asks a person where (Save
+    /// As); `by_caller`, a command's caller is told which command names the file, and a save
+    /// that fails is that caller's answer ([`Document::save_failed`]), not a notice.
+    fn save_scene(&mut self, ctx: &egui::Context, by_caller: bool) -> Result<(), String> {
+        let Some(svc) = self.scene() else { return Ok(()) };
         let snap = svc.store.snapshot();
         if !snap.valid {
-            return;
+            return Ok(());
         }
         match snap.meta.file.clone() {
             Some(file) => {
                 let mut args = Args::new();
                 args.insert("path".into(), Value::String(file.display().to_string()));
-                self.editor.post("scene.save", args);
+                if by_caller {
+                    *self.save_error.lock() = None;
+                    let (ed, failed) = (self.editor.clone(), self.save_error.clone());
+                    let _task = self.editor.exec.spawn(async move {
+                        let reply = ed.call("scene.save", args, gz_base::Origin::Mcp).await;
+                        if reply.get("ok").and_then(Value::as_bool) != Some(true) {
+                            let why = reply.get("error").and_then(Value::as_str).unwrap_or("the save failed");
+                            let code = reply.get("code").and_then(Value::as_str).unwrap_or("failed");
+                            *failed.lock() = Some(gz_editor::CmdError::new(code, why));
+                            ed.exec.wake().ping();
+                        }
+                    });
+                } else {
+                    self.editor.post("scene.save", args);
+                }
+                Ok(())
+            }
+            None if by_caller => {
+                Err("the scene has no file yet: scene.save path=<file> names it and saves the scene"
+                    .to_owned())
             }
             None => {
                 let _ = crate::level_cmds::save_as(&self.editor, ctx);
+                Ok(())
             }
         }
     }
@@ -789,8 +816,11 @@ impl Document for LevelDoc {
     }
 
     fn save(&mut self, cx: &mut DocCx<'_>) -> Result<(), String> {
-        self.save_scene(cx.ctx);
-        Ok(())
+        self.save_scene(cx.ctx, cx.requests.by_caller())
+    }
+
+    fn save_failed(&mut self) -> Option<gz_editor::CmdError> {
+        self.save_error.lock().take()
     }
 
     fn discard(&mut self, _cx: &mut DocCx<'_>) {

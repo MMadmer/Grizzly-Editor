@@ -213,6 +213,8 @@ pub struct LanimDoc {
     /// A frame count being dragged or typed: applied when the edit is let go of, so a drag
     /// through a smaller count drops no keys.
     pending_count: Option<i32>,
+    /// What stopped the save a command's caller asked for.
+    save_error: super::SaveError,
 }
 
 impl LanimDoc {
@@ -230,6 +232,7 @@ impl LanimDoc {
             playing: None,
             render_alpha: false,
             pending_count: None,
+            save_error: Arc::default(),
         };
         // changes made before the tab opened (a command's) stay; a clean library is read again
         if !doc.store.is_dirty() {
@@ -238,18 +241,26 @@ impl LanimDoc {
         doc
     }
 
-    /// Reads the file again (`LALib.Reload`) on the IO pool.
+    /// Reads the light animation library's file again on the IO pool.
     fn reload_now(&self) {
         let editor = self.editor.clone();
         self.editor.exec.spawn(async move { LibraryStores::reload_lanims(&editor).await });
     }
 
-    /// Writes the library (`LALib.Save`) on the IO pool, then marks it saved.
-    fn save_now(&self) {
-        let editor = self.editor.clone();
+    /// Writes the light animation library on the IO pool, then marks it saved.
+    /// Writes the library off the UI thread. A failure is a notice for a person and, `by_caller`,
+    /// the answer of the command that asked.
+    fn save_now(&self, by_caller: bool) {
+        *self.save_error.lock() = None;
+        let (editor, failed) = (self.editor.clone(), self.save_error.clone());
         self.editor.exec.spawn(async move {
             if let Err(e) = save_lanims(&editor).await {
-                editor.notices.error(e);
+                if by_caller {
+                    *failed.lock() = Some(CmdError::new("failed", e));
+                    editor.exec.wake().ping();
+                } else {
+                    editor.notices.error(e);
+                }
             }
         });
     }
@@ -779,9 +790,13 @@ impl Document for LanimDoc {
         there
     }
 
-    fn save(&mut self, _cx: &mut DocCx<'_>) -> Result<(), String> {
-        self.save_now();
+    fn save(&mut self, cx: &mut DocCx<'_>) -> Result<(), String> {
+        self.save_now(cx.requests.by_caller());
         Ok(())
+    }
+
+    fn save_failed(&mut self) -> Option<CmdError> {
+        self.save_error.lock().take()
     }
 
     fn discard(&mut self, _cx: &mut DocCx<'_>) {

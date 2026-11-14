@@ -265,6 +265,8 @@ pub struct CharactersDoc {
     /// A file asked for (the content browser, MCP): selected once the roster holds it.
     pending_open: Option<String>,
     saving: bool,
+    /// What stopped the last save: the answer of a command that asked for it.
+    save_error: Option<String>,
     pub(crate) lists: ListsView,
     pub(crate) sheets: Option<Arc<Sheets>>,
     pub(crate) actions: Vec<Action>,
@@ -306,6 +308,7 @@ impl CharactersDoc {
             inbox: Arc::new(Mutex::new(Inbox::default())),
             pending_open: open,
             saving: false,
+            save_error: None,
             lists: ListsView::default(),
             sheets: None,
             actions: Vec::new(),
@@ -627,6 +630,7 @@ impl CharactersDoc {
         }
         let plan = self.save_plan()?;
         self.saving = true;
+        self.save_error = None;
         // the shell may close the tab right after it asked to save
         self.dirty = false;
         let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
@@ -654,6 +658,7 @@ impl CharactersDoc {
             Err(e) => {
                 self.dirty = true;
                 self.status = format!("Not saved: {e}");
+                self.save_error = Some(e);
             }
         }
     }
@@ -1042,7 +1047,8 @@ impl Document for CharactersDoc {
         Some("The module's own NPCs".to_owned())
     }
     fn dirty(&self) -> bool {
-        self.dirty
+        // a save under way is not saved yet: who waits for it waits for its file
+        self.dirty || self.saving
     }
 
     fn toolbar<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>, cx: &mut DocCx<'_>) {
@@ -1129,6 +1135,12 @@ impl Document for CharactersDoc {
 
     fn save(&mut self, _cx: &mut DocCx<'_>) -> Result<(), String> {
         self.start_save(Then::Nothing)
+    }
+
+    fn save_failed(&mut self) -> Option<gz_editor::CmdError> {
+        // the save's answer is taken here too: the tab may not be the one drawn
+        self.take_inbox(None);
+        self.save_error.take().map(|e| gz_editor::CmdError::new("failed", e))
     }
 
     fn discard(&mut self, _cx: &mut DocCx<'_>) {

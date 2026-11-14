@@ -743,7 +743,7 @@ impl ShellState {
                 for id in &ids {
                     if answer == gz_ui::Answer::No {
                         shell.discard_tab(ctx, id);
-                    } else if let Err(e) = shell.save_tab(ctx, id) {
+                    } else if let Err(e) = shell.save_tab(ctx, id, true) {
                         let _ = gz_ui::dialog::notice(ctx, shell.asker(), Tone::Error, "Save failed", &e);
                         return;
                     }

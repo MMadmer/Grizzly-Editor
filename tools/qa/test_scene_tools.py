@@ -68,7 +68,7 @@ import qa
 from qa import check, cmd, short
 
 
-PHASES = "FOKXRALMGQHBPVDWTUNS"
+PHASES = "FOKXRALMGQHBPVDWTUNSZ"
 # what opening the Escape scene may take: its load is measured here, not in a benchmark of its own
 OPEN_BUDGET_S = 30
 SCENE = "rawdata/levels/l01_escape.scene"
@@ -1059,12 +1059,46 @@ def phase_s() -> None:
           short({k: v for k, v in pic.items() if k != "png_base64"}))
 
 
+# ---- Z: a tab's save asked by a command asks nobody ---------------------------------------------------------------
+
+def level_dirty() -> bool:
+    return any(t.get("id") == "level" and t.get("dirty") for t in cmd("ui.tab", action="list").get("tabs", []))
+
+
+def phase_z() -> None:
+    # a scene with no file yet: the window's Save asks where it goes (Save As); a command is told at once which
+    # command names the file - no system dialog, no wait for an answer nobody gives
+    fresh = cmd("scene.new", discard=True)
+    cmd("ui.tab", action="open", doc="level")
+    name = place(BOX, 0.0, 0.0, 0.0)
+    if not check(fresh.get("ok") and name and level_dirty(), "Z an empty scene with no file holds an unsaved object",
+                 short(fresh) + " / " + name):
+        return
+    began = time.monotonic()
+    saved = cmd("doc.save", doc="level")
+    took = time.monotonic() - began
+    check(not saved.get("ok") and "no file yet" in str(saved.get("error")) and "scene.save path=" in str(saved.get("error")),
+          "Z doc.save of a scene without a file is refused, naming scene.save", short(saved))
+    check(took < 1.0, "Z and it answers inside a second (%.2f s)" % took, timing=True)
+    win = cmd("shot.window")
+    check(win.get("ok") and win.get("modal") is None and not win.get("outside") and level_dirty(),
+          "Z no dialog is up, no window is outside, and the scene is still unsaved",
+          short({k: v for k, v in win.items() if k != "png_base64"}))
+    # the command it names saves the scene, and the tab's save has a file from then on
+    path = os.path.join(CTX.project, "rawdata", "levels", "qa_nofile.scene").replace("\\", "/")
+    named = cmd("scene.save", path=path, timeout=120)
+    moved = cmd("scene.set", objects=[name], position=[1.5, 0.0, 0.0])
+    again = cmd("doc.save", doc="level", timeout=120)
+    check(named.get("ok") and moved.get("ok") and again.get("ok") and not level_dirty(),
+          "Z scene.save path= names the file, and doc.save writes into it afterwards", short(named) + " / " + short(again))
+
+
 def job_of(job_id: int) -> dict:
     return next((j for j in cmd("job.list").get("jobs", []) if j.get("id") == job_id), {})
 
 
 STEPS = {"F": phase_f, "O": phase_o, "K": phase_k, "X": phase_x, "R": phase_r, "A": phase_a, "L": phase_l, "M": phase_m, "G": phase_g, "Q": phase_q, "H": phase_h, "B": phase_b, "P": phase_p, "V": phase_v, "D": phase_d,
-         "W": phase_w, "T": phase_t, "U": phase_u, "N": phase_n, "S": phase_s}
+         "W": phase_w, "T": phase_t, "U": phase_u, "N": phase_n, "S": phase_s, "Z": phase_z}
 
 
 def run(ctx: qa.Run) -> None:

@@ -83,6 +83,23 @@ pub trait LibraryDoc {
     }
 }
 
+/// What stopped the save a command's caller asked for, kept for that caller's answer
+/// (`Document::save_failed`).
+pub(crate) type SaveError = Arc<parking_lot::Mutex<Option<gz_editor::CmdError>>>;
+
+/// A caller's save runs as the job `id`: a job that fails or is stopped is that caller's answer.
+pub(crate) fn answer_job(editor: &Arc<Editor>, id: gz_editor::JobId, failed: &SaveError) {
+    let (ed, failed) = (editor.clone(), failed.clone());
+    let _task = editor.exec.spawn(async move {
+        let Some(info) = ed.jobs.wait(id).await else { return };
+        if info.state != gz_editor::JobState::Done {
+            let why = info.error.unwrap_or_else(|| "the save was stopped".to_owned());
+            *failed.lock() = Some(gz_editor::CmdError::new("failed", why));
+            ed.exec.wake().ping();
+        }
+    });
+}
+
 /// Something a library tab is still reading for its selection.
 pub type Settle = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 

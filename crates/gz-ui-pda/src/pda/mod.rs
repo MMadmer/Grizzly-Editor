@@ -96,6 +96,8 @@ pub struct Model {
     pub text: String,
     /// What the file holds, as last read or written.
     pub disk: String,
+    /// What stopped the save a command's caller asked for: that caller's answer.
+    pub save_error: Option<gz_editor::CmdError>,
     pub text_dirty: bool,
     /// What the file on disk did that the Source pane's edits keep out of view: empty, or the
     /// sentence the tab shows with Take Theirs.
@@ -148,6 +150,7 @@ impl Model {
             rel: String::new(),
             text: String::new(),
             disk: String::new(),
+            save_error: None,
             text_dirty: false,
             disk_note: String::new(),
             read_ok: false,
@@ -389,10 +392,24 @@ fn follow_file(editor: &Arc<Editor>, tab: &Arc<PdaTab>, rel: &str) {
 
 /// Writes the Source pane's text to the file.
 pub async fn save_text(editor: &Arc<Editor>, tab: &Arc<PdaTab>) -> Result<(), String> {
-    let (path, text) = {
-        let m = tab.m.lock();
-        (m.path.clone(), m.text.clone())
-    };
+    let point = save_point(tab);
+    write_point(editor, tab, point).await
+}
+
+/// What a save writes - the file and the text - as they are now. Taken when the save is asked
+/// for: by the time the write runs the tab may show another file.
+#[must_use]
+pub fn save_point(tab: &PdaTab) -> (String, String) {
+    let m = tab.m.lock();
+    (m.path.clone(), m.text.clone())
+}
+
+/// Writes a [`save_point`]; the tab is clean once its file holds the text it shows.
+pub async fn write_point(
+    editor: &Arc<Editor>,
+    tab: &Arc<PdaTab>,
+    (path, text): (String, String),
+) -> Result<(), String> {
     if path.is_empty() {
         return Err("no PDA layout is open".to_owned());
     }
@@ -421,7 +438,17 @@ pub async fn save_text(editor: &Arc<Editor>, tab: &Arc<PdaTab>) -> Result<(), St
 
 /// Saves the text and reads it again: the toolbar's Save, Ctrl+S, the shell's save.
 pub async fn save_and_read(editor: &Arc<Editor>, tab: &Arc<PdaTab>) -> Result<(), String> {
-    save_text(editor, tab).await?;
+    let point = save_point(tab);
+    save_point_and_read(editor, tab, point).await
+}
+
+/// [`save_and_read`] of a [`save_point`] taken earlier.
+pub async fn save_point_and_read(
+    editor: &Arc<Editor>,
+    tab: &Arc<PdaTab>,
+    point: (String, String),
+) -> Result<(), String> {
+    write_point(editor, tab, point).await?;
     read(editor, tab, true).await;
     Ok(())
 }
