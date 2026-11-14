@@ -45,6 +45,7 @@ use std::time::Instant;
 
 use gz_fmt_level::BuildProject;
 use gz_lc_light::{Ctl, LcError, LcGlobalData, LightChoice, Lighter, Shaders, Smoothing, TextureUse};
+use rayon::prelude::*;
 
 pub use details::compile_details_in_memory;
 pub use load::{Extra, Sources};
@@ -99,6 +100,10 @@ pub struct Options {
     /// `-light=auto|gpu|cpu|off`: where the light is baked. The compiler lights with the lighter it
     /// is given; this is the word its caller makes that lighter from.
     pub light: LightChoice,
+    /// `-no_lm_shrink`: every lightmap keeps the size its geometry gives it, flat or smooth as its
+    /// light may be - the charts, the merge and the packing measured at their real sizes under a
+    /// constant light.
+    pub no_lm_shrink: bool,
 }
 
 impl Options {
@@ -116,6 +121,7 @@ impl Options {
                 "no_optimize" => o.no_optimize = true,
                 "no_invalidefaces" => o.no_invalid_faces = true,
                 "att" => o.linear = true,
+                "no_lm_shrink" => o.no_lm_shrink = true,
                 "silent" | "o" | "keep_temp_files" => {}
                 t if t.starts_with("light=") => match LightChoice::parse(&t["light=".len()..]) {
                     Some(c) => o.light = c,
@@ -228,6 +234,10 @@ pub struct Output {
     /// The faces the compiler refused as degenerate (kept under `-no_invalidefaces`; their corners are in
     /// `build.err`).
     pub invalid_faces: u32,
+    /// A hash of the structure the compile made - the visuals' faces, vertices, bounds and sectors,
+    /// the static models' references, the collision - and nothing of its light: two compiles of one
+    /// project with any lighter on any number of threads answer the same.
+    pub structure: u64,
 }
 
 impl Output {
@@ -245,6 +255,10 @@ pub struct Report {
     pub seconds: f64,
     pub warnings: Vec<String>,
     pub invalid_faces: u32,
+    /// Where the light was baked: the lighter's name.
+    pub lighter: String,
+    /// The samples it lit.
+    pub samples: u64,
 }
 
 /// Where a compile reads and writes.
@@ -269,15 +283,15 @@ pub const PHASES: [&str; 20] = [
     "Building the collision",
     "Building the tangent basis",
     "Building the ray model of the light",
-    "Lighting the static models",
     "Resolving the materials",
     "Mapping the lightmaps",
     "Subdividing the geometry",
+    "Merging the geometry into visuals",
+    "Lighting the static models",
     "Lighting the implicit textures",
     "Lighting the lightmaps",
     "Lighting the vertices",
     "Packing the lightmaps",
-    "Merging the geometry",
     "Converting the geometry to visuals",
     "Converting the static models to visuals",
     "Building the sectors",
@@ -331,8 +345,6 @@ pub fn compile_project(
     ctl: &Ctl<'_>,
     log: &mut Log,
 ) -> Result<Output> {
-    // the phases still light through `light_point` themselves: the baker takes them over one by one
-    let _ = lighter;
     log.phase(PHASES[0]);
     let (mut g, mut extra) = load::load(prj, shaders, textures, !opts.nosmg)?;
     g.nosun = opts.nosun;
@@ -380,52 +392,74 @@ pub fn compile_project(
     out.put("build.cform", form.write());
     ctl.check().map_err(adapt)?;
 
+    // STRUCTURE: the visuals are made from the geometry alone, before any light
     log.phase(PHASES[7]);
-    g.light_prepare();
-    g.light_mu(ctl)?;
-
-    log.phase(PHASES[8]);
     let mut splits = split::resolve_materials(&mut g, log);
     g.mesh.isolate_vertices();
     ctl.check().map_err(adapt)?;
 
-    log.phase(PHASES[9]);
+    log.phase(PHASES[8]);
     split::uv_map(&mut g, &mut splits, log, ctl)?;
     g.mesh.isolate_vertices();
 
-    log.phase(PHASES[10]);
+    log.phase(PHASES[9]);
     split::subdivide(&mut g, &mut splits, log, ctl)?;
     g.mesh.isolate_vertices();
     g.mesh.reload_vertex_pool();
     ctl.check().map_err(adapt)?;
 
-    log.phase(PHASES[11]);
-    let implicit = g.implicit_lighting(ctl)?;
-    for m in &implicit {
-        let (base, lm) = m.dds()?;
-        out.put(format!("{}.dds", m.name), base);
-        out.put(format!("{}_lm.dds", m.name), lm);
-    }
-    ctl.check().map_err(adapt)?;
-    log.phase(PHASES[12]);
-    // LMapsLocal shuffles the deflectors with the main thread's rand(), never seeded before (srand(367)
-    // comes with the first MinSphere, later); the pages' layout follows that order
-    sphere::MsvcRand::new(1).shuffle(g.deflectors.list_mut());
-    g.light_deflectors(ctl)?;
-    log.phase(PHASES[13]);
-    g.light_vertices(ctl)?;
-    log.phase(PHASES[14]);
-    let pages = g.merge_lightmaps(ctl)?;
-    for p in &pages {
-        let (a, b) = p.dds()?;
-        out.put(format!("{}_1.dds", p.name), a);
-        out.put(format!("{}_2.dds", p.name), b);
-    }
-    ctl.check().map_err(adapt)?;
-
-    log.phase(PHASES[15]);
+    log.phase(PHASES[10]);
     split::merge_geometry(&g, &mut splits, log, ctl)?;
+    let charts = split::visual_charts(&g, &splits);
+    ctl.check().map_err(adapt)?;
 
+    // LIGHT: every light value through the lighter
+    g.shrink = !opts.no_lm_shrink;
+    let implicit = {
+        let mut phase = |i: usize| {
+            for n in lighter.notes() {
+                log.warn(n);
+            }
+            log.phase(PHASES[11 + i]);
+        };
+        g.bake(lighter, ctl, &mut phase)?
+    };
+    for n in lighter.notes() {
+        log.warn(n);
+    }
+    log.msg(format!("The light was baked on {}: {} samples lit.", lighter.name(), lighter.samples()));
+    let implicit_dds: Vec<_> = implicit.par_iter().map(|m| m.dds().map(|d| (m.name.clone(), d))).collect();
+    for r in implicit_dds {
+        let (name, (base, lm)) = r?;
+        out.put(format!("{name}.dds"), base);
+        out.put(format!("{name}_lm.dds"), lm);
+    }
+    ctl.check().map_err(adapt)?;
+
+    // ATLAS: what was lit packed, the charts of one visual on one page
+    log.phase(PHASES[15]);
+    let (pages, packed) = g.pack_lightmaps(&charts, ctl)?;
+    log.msg(format!(
+        "{} lightmap pages, {:.1} % of their texels taken by the charts.",
+        packed.pages,
+        packed.fill * 100.0
+    ));
+    if split::split_by_page(&g, &mut splits, log) > 0 {
+        log.warn(format!(
+            "{} visuals were cut by lightmap page: their charts did not fit one page.",
+            packed.split.len()
+        ));
+    }
+    let encoded: Vec<_> = pages.par_iter().map(|p| p.dds().map(|d| (p.name.clone(), d))).collect();
+    drop(pages);
+    for r in encoded {
+        let (name, (a, b)) = r?;
+        out.put(format!("{name}_1.dds"), a);
+        out.put(format!("{name}_2.dds"), b);
+    }
+    ctl.check().map_err(adapt)?;
+
+    // OUTPUT
     log.phase(PHASES[16]);
     tree::flex2ogf(&g, splits, &mut tree, opts.noise, log, ctl)?;
     ctl.check().map_err(adapt)?;
@@ -442,6 +476,7 @@ pub fn compile_project(
     let sectors = tree::build_sectors(&mut extra, &mut tree, log)?;
     let mut rng = sphere::MsvcRand::min_sphere();
     tree::take_bounds(&mut tree, &mut rng);
+    out.structure = structure_digest(&tree, &sectors, &out);
     ctl.check().map_err(adapt)?;
 
     log.phase(PHASES[19]);
@@ -652,7 +687,12 @@ pub fn compile(
         }
         Err(e) => return Err(e),
     };
-    let mut report = Report { invalid_faces: out.invalid_faces, ..Report::default() };
+    let mut report = Report {
+        invalid_faces: out.invalid_faces,
+        lighter: lighter.name(),
+        samples: lighter.samples(),
+        ..Report::default()
+    };
     // the last moment a Stop costs nothing: the level folder is not touched yet
     ctl.check().map_err(adapt)?;
     write_all(&input.level, &out, true, &mut report)?;
@@ -683,7 +723,7 @@ pub fn compile_details(input: &Input, lighter: &dyn Lighter, ctl: &Ctl<'_>, log:
     ctl.check().map_err(adapt)?;
     let mut out = Output::default();
     out.put("level.details", bytes);
-    let mut report = Report::default();
+    let mut report = Report { lighter: lighter.name(), samples: lighter.samples(), ..Report::default() };
     // the detail compiler writes level.details alone: the level's pages are not its own
     write_all(dir, &out, false, &mut report)?;
     log.end_phase();
@@ -692,4 +732,110 @@ pub fn compile_details(input: &Input, lighter: &dyn Lighter, ctl: &Ctl<'_>, log:
     report.phases = log.phases.clone();
     report.warnings = log.warnings.clone();
     Ok(report)
+}
+
+/// FNV-1a over the words the structure is made of.
+struct Fnv(u64);
+
+impl Fnv {
+    fn bytes(&mut self, b: &[u8]) {
+        for &x in b {
+            self.0 = (self.0 ^ u64::from(x)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    fn u(&mut self, v: u64) {
+        self.bytes(&v.to_le_bytes());
+    }
+
+    fn f(&mut self, v: f32) {
+        self.u(u64::from(v.to_bits()));
+    }
+
+    fn v3(&mut self, v: glam::Vec3) {
+        [v.x, v.y, v.z].into_iter().for_each(|x| self.f(x));
+    }
+
+    fn aabb(&mut self, b: &gz_fmt_level::Aabb) {
+        self.v3(b.min);
+        self.v3(b.max);
+    }
+}
+
+/// [`Output::structure`]: everything section 2 of the level build's contract holds still across
+/// lighters - which faces make which visual, their order, bounds, vertices' positions, normals,
+/// tangent basis, base texture coordinates, indices and windows, the static models' visuals and
+/// references, the sectors and the collision - and nothing of the light: no lightmap coordinate,
+/// page, colour or fit.
+fn structure_digest(tree: &tree::Tree, sectors: &[tree::Sector], out: &Output) -> u64 {
+    let mut h = Fnv(0xcbf2_9ce4_8422_2325);
+    let ogf = |h: &mut Fnv, o: &ogf::Ogf| {
+        h.u(u64::from(o.material));
+        h.u(u64::from(o.sector));
+        h.u(o.data.vertices.len() as u64);
+        for v in &o.data.vertices {
+            h.v3(v.p);
+            h.v3(v.n);
+            h.bytes(&[v.t.x, v.t.y, v.t.z, v.b.x, v.b.y, v.b.z]);
+            if let Some(uv) = v.uv.first() {
+                h.f(uv.x);
+                h.f(uv.y);
+            }
+        }
+        for f in o.data.faces.iter().chain(&o.fast.faces) {
+            f.iter().for_each(|&i| h.u(u64::from(i)));
+        }
+        for s in o.data.swi.iter().chain(&o.fast.swi) {
+            h.u(u64::from(s.offset));
+            h.u(u64::from(s.num_tris));
+            h.u(u64::from(s.num_verts));
+        }
+        o.fast.vertices.iter().for_each(|&p| h.v3(p));
+    };
+    h.u(tree.nodes.len() as u64);
+    for n in &tree.nodes {
+        h.u(n.base.level as u64);
+        h.u(u64::from(n.base.sector));
+        h.aabb(&n.base.bbox);
+        h.v3(n.base.c);
+        h.f(n.base.r);
+        match &n.item {
+            tree::Item::Ogf(o) => {
+                h.u(1);
+                ogf(&mut h, o);
+            }
+            tree::Item::Ref(r) => {
+                h.u(2);
+                h.u(u64::from(r.material));
+                h.u(r.model.0 as u64);
+                h.u(r.model.1 as u64);
+                r.xform.m.iter().flatten().for_each(|&x| h.f(x));
+            }
+            tree::Item::Node(children) => {
+                h.u(3);
+                children.iter().for_each(|&c| h.u(u64::from(c)));
+            }
+            tree::Item::Lod { children, material, faces } => {
+                h.u(4);
+                children.iter().for_each(|&c| h.u(u64::from(c)));
+                h.u(u64::from(*material));
+                for v in faces.iter().flatten() {
+                    h.v3(v.v);
+                    h.f(v.t.x);
+                    h.f(v.t.y);
+                }
+            }
+        }
+    }
+    for m in tree.mu.iter().flatten() {
+        ogf(&mut h, m);
+    }
+    for s in sectors {
+        h.u(s.root as u64);
+        s.portals.iter().for_each(|&p| h.u(u64::from(p)));
+    }
+    if let Some((_, cform)) = out.files.iter().find(|(n, _)| n == "level.cform") {
+        h.bytes(cform);
+    }
+    h.0
 }

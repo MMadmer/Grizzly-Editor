@@ -171,9 +171,54 @@ struct BuildParams {
     /// The compiler: point lights fall off linearly.
     #[serde(default)]
     linear: bool,
+    /// Where the light is baked: auto (left out) the graphics card when it answers as the CPU does
+    /// and the CPU otherwise, gpu the graphics card (refused before anything is built when this
+    /// machine has none), cpu the CPU (the reference: the same bytes on every machine).
+    #[serde(default)]
+    light: Option<LightWord>,
     /// Wait for the build to end (the default); false answers the job at once.
     #[serde(default)]
     wait: Option<bool>,
+}
+
+/// Where a build's light is baked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum LightWord {
+    /// The graphics card when it answers as the CPU does, the CPU otherwise.
+    Auto,
+    /// The graphics card; a machine without one is refused.
+    Gpu,
+    /// The CPU: the reference.
+    Cpu,
+}
+
+/// The compiler's flags with the light asked for: any `-light=` they hold replaced by the word,
+/// `auto` (the compiler's default) by none; left out, the flags stay as they are.
+fn with_light(flags: &str, light: Option<LightWord>) -> String {
+    let Some(light) = light else { return flags.to_owned() };
+    let mut words: Vec<&str> =
+        flags.split_whitespace().filter(|w| !w.to_ascii_lowercase().starts_with("-light=")).collect();
+    match light {
+        LightWord::Auto => {}
+        LightWord::Gpu => words.push("-light=gpu"),
+        LightWord::Cpu => words.push("-light=cpu"),
+    }
+    words.join(" ")
+}
+
+/// A build whose flags ask for the graphics card is refused before anything is built when this
+/// machine has none to light with.
+async fn need_lighter(ed: &Arc<Editor>, flags: &str) -> Result<(), CmdError> {
+    let (opts, _) =
+        gz_lc::Options::parse(flags.split_whitespace()).map_err(|e| CmdError::invalid(e.to_string()))?;
+    if opts.light != gz_lc_light::LightChoice::Gpu {
+        return Ok(());
+    }
+    ed.exec
+        .cpu(|| gz_lc_gpu::lighter(gz_lc_light::LightChoice::Gpu).map(|_| ()))
+        .await
+        .map_err(|why| CmdError::new("refused", format!("light=gpu: {why}")))
 }
 
 /// The compiler's command line of the switches a request turned on.
@@ -196,6 +241,8 @@ async fn build(ed: Arc<Editor>, p: BuildParams, _o: Origin) -> Reply {
         (p.no_invalid_faces, "-no_invalidefaces"),
         (p.linear, "-att"),
     ]);
+    opts.flags = with_light(&opts.flags, p.light);
+    need_lighter(&ed, &opts.flags).await?;
     let req = Request { steps: p.steps, only: p.only, force: p.force, opts, verify_restrictors: false };
     let id = start_build(&ed, &session, req, "Building the level")?;
     answer_job(&ed, id, p.wait).await
@@ -441,6 +488,11 @@ struct PlayParams {
     /// start: the quality a stale level is built at; left out: the quality it was built at last.
     #[serde(default)]
     quality: Option<Quality>,
+    /// start: where the light of a stale level is baked: auto the graphics card when it answers as
+    /// the CPU does and the CPU otherwise, gpu the graphics card (refused before anything is built
+    /// when this machine has none), cpu the CPU; left out: where it was baked last.
+    #[serde(default)]
+    light: Option<LightWord>,
     /// start: everything but the game itself - the root made, the module or the level put in it -
     /// and the command line it would run answered.
     #[serde(default)]
@@ -518,7 +570,8 @@ async fn play(ed: Arc<Editor>, p: PlayParams, _o: Origin) -> Reply {
                 // a level built at draft quality, or with compiler flags, plays as it was built
                 let light = last.as_ref().and_then(|r| r.steps.get(&Step::Light));
                 opts.quality = p.quality.unwrap_or_else(|| light.map_or(Quality::Standard, |r| r.quality));
-                opts.flags = light.map(|r| r.flags.clone()).unwrap_or_default();
+                opts.flags = with_light(&light.map(|r| r.flags.clone()).unwrap_or_default(), p.light);
+                need_lighter(&ed, &opts.flags).await?;
                 let steps: Vec<Step> = Step::ORDER.into_iter().filter(|s| *s != Step::SpawnLayer).collect();
                 let req = Request {
                     steps: Some(steps),
@@ -1201,6 +1254,11 @@ struct CompileParams {
     /// The compile on a pool of its own of this many threads (the same result on any number).
     #[serde(default)]
     threads: Option<usize>,
+    /// Where the light is baked: auto (left out) the graphics card when it answers as the CPU does
+    /// and the CPU otherwise, gpu the graphics card (refused before anything is built when this
+    /// machine has none), cpu the CPU (the reference: the same bytes on every machine).
+    #[serde(default)]
+    light: Option<LightWord>,
     /// Wait for the compile to end (the default); false answers the job at once.
     #[serde(default)]
     wait: Option<bool>,
@@ -1219,7 +1277,7 @@ impl CompileParams {
         if let Some(n) = self.threads {
             f.push_str(&format!("{}-threads={n}", if f.is_empty() { "" } else { " " }));
         }
-        f
+        with_light(&f, self.light)
     }
 }
 
@@ -1257,6 +1315,7 @@ async fn compile_folder(ed: Arc<Editor>, p: CompileParams) -> Reply {
         .map_err(|e| CmdError::new("refused", e))?;
     let level = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let flags = p.flags();
+    need_lighter(&ed, &flags).await?;
     let names: Vec<&str> = parts.iter().map(|x| x.name()).collect();
     ed.log.info(format!(
         "Compile {} ({}){}.",

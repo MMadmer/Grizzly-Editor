@@ -5,25 +5,25 @@
 //! nothing or to a smaller size when the light is flat enough (the RMS thresholds),
 //! and the final border.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use glam::{Vec2, Vec3};
 use gz_fmt_tex::{ImfFilter, imf_resample};
 use rayon::prelude::*;
 
+use crate::bake::{LightJob, LitScene, Sample};
+use crate::batch::{self, BATCH, Gathered, Run, light_samples};
 use crate::color::{BaseColor, ColorC};
 use crate::data::{BuildMaterial, BuildParams, BuildTexture, Shaders, shader_of};
 use crate::hash2d::Hash2D;
 use crate::layer::{BORDER, LmLayer, apply_borders, image_of, lblit, pixels_of};
 use crate::light::LightSet;
 use crate::math::{
-    Aabb, Box2, EPS, EPS_S, Matrix, color_get_a, color_get_b, color_get_g, color_get_r, cos_deg,
+    Aabb, Box2, EPS, EPS_S, Matrix, color_get_a, color_get_b, color_get_g, color_get_r, color_rgba, cos_deg,
     exact_normalize, from_bary, i_ceil, i_floor, mad, magnitude, normalize, normalize_safe, sphere_of,
     u8_clr,
 };
 use crate::mesh::{DeflId, FaceId, Mesh, Tcf};
-use crate::point::{Falloff, LP_DEFAULT, LP_DONT_SUN, LP_USE_FACE_DISABLE, Tracer, light_point};
-use crate::ray::{LightCache, RayModel};
+use crate::point::{Falloff, LP_DEFAULT, LP_DONT_SUN, LP_USE_FACE_DISABLE};
+use crate::ray::RayModel;
 use crate::{Ctl, Result};
 
 /// `c_LMAP_size`: the side of a lightmap page.
@@ -89,12 +89,17 @@ pub struct LightEnv<'a> {
     pub nosun: bool,
     /// `-att`: point lights fall off linearly.
     pub linear: bool,
+    /// A lightmap whose light allows it shrinks or collapses; off, every chart keeps the size its
+    /// geometry gives it (a measure of the structure without the light).
+    pub shrink: bool,
 }
 
 impl<'a> LightEnv<'a> {
+    /// What the level's samples are lit with: the whole light set (a point light out of a
+    /// sample's reach gives it nothing), the level's falloff.
     #[must_use]
-    pub fn tracer(&self) -> Tracer<'a> {
-        Tracer { model: self.model, textures: self.textures, falloff: Falloff::Level { linear: self.linear } }
+    pub fn job(&self) -> LightJob<'a> {
+        LightJob { lights: self.lights, falloff: Falloff::Level { linear: self.linear } }
     }
 
     #[must_use]
@@ -386,182 +391,203 @@ impl Deflector {
             .collect()
     }
 
-    /// The triangles mapped onto the layer's texels, then lit.
-    fn l_calculate(&mut self, env: &LightEnv<'_>, lights: &LightSet, ctl: &Ctl<'_>) {
+    /// The bounds of the faces as they are now.
+    pub(crate) fn take_sphere(&mut self, mesh: &Mesh) {
+        let mut bb = Aabb::INVALID;
+        for t in &self.uv_polys {
+            if let Some(p) = mesh.positions(t.owner) {
+                p.iter().for_each(|p| bb.modify(*p));
+            }
+        }
+        (self.sphere_p, self.sphere_r) = sphere_of(&bb);
+    }
+
+    /// The triangles mapped onto the layer's texels at its size and every texel's samples
+    /// gathered: its jittered points through the first triangle that holds each, then - in X-Ray's
+    /// order, since one edge may take a texel another would - the texels the triangles' edges
+    /// cross but no point found, one sample each at the edge. The markers are set here: where a
+    /// texel's light comes from is geometry's alone. A run's item is the texel's index.
+    pub(crate) fn gather(&mut self, mesh: &Mesh, params: &BuildParams, sun_flag: u32) -> Gathered {
         let (w, h) = (self.layer.width, self.layer.height);
         self.remap_uv(0, 0, w, h, w, h, false);
         let boxes: Vec<Box2> = self.uv_polys.iter().map(|t| Box2::of_tri(&t.uv)).collect();
         let hash = Hash2D::build(HASH_SIDE, HASH_SIDE, self.bounds_summary(), &boxes);
         self.layer.create(w.min(LMAP_SIZE - 2 * BORDER), h.min(LMAP_SIZE - 2 * BORDER));
-        self.l_direct(env, lights, &hash, ctl);
-    }
-
-    /// Every texel lit at its jittered samples through the first triangle that holds
-    /// each, then the texels the triangles' edges cross but no sample found. The rows are lit
-    /// in parallel; the edges in X-Ray's order, since one may take a texel another would.
-    fn l_direct(&mut self, env: &LightEnv<'_>, lights: &LightSet, hash: &Hash2D, ctl: &Ctl<'_>) {
+        let mut g = Gathered::default();
         let (w, h) = (self.layer.width as usize, self.layer.height as usize);
         if w == 0 || h == 0 {
-            return;
+            return g;
         }
-        let tris = self.world(env.mesh);
-        let tracer = env.tracer();
-        let flags = env.sun_flag() | LP_USE_FACE_DISABLE;
+        let tris = self.world(mesh);
+        let flags = sun_flag | LP_USE_FACE_DISABLE;
         let dim = Vec2::new(w as f32, h as f32);
         let half = Vec2::new(0.5 / dim.x, 0.5 / dim.y);
         let js = Vec2::new(0.4999 / dim.x, 0.4999 / dim.y);
-        let jit = jitter(env.params.lm_jitter_samples);
-        let uv_polys = &self.uv_polys;
-        let layer = &mut self.layer;
-        layer
-            .surface
-            .par_chunks_mut(w)
-            .zip(layer.marker.par_chunks_mut(w))
-            .take(h)
-            .enumerate()
-            .for_each_init(LightCache::default, |cache, (v, (srow, mrow))| {
-                // a stopped compile drops what it lit: the rows left are not worth a ray
-                if ctl.cancelled() {
-                    return;
-                }
-                for (u, (s, m)) in srow.iter_mut().zip(mrow.iter_mut()).enumerate() {
-                    let mut c = ColorC::default();
-                    let mut count = 0u32;
-                    for j in jit {
-                        let p = Vec2::new(
-                            u as f32 / dim.x + half.x + j.x * js.x,
-                            v as f32 / dim.y + half.y + j.y * js.y,
-                        );
-                        for &i in hash.query(p.x, p.y) {
-                            let Some(t) = uv_polys.get(i as usize) else { continue };
-                            let Some(b) = (Tcf { uv: t.uv }).inside(p) else { continue };
-                            let Some(Some(world)) = tris.get(i as usize) else { break };
-                            let wp = from_bary(world.p[0], world.p[1], world.p[2], b);
-                            let (wn, _) = exact_normalize(from_bary(world.n[0], world.n[1], world.n[2], b));
-                            let (wn, _) = exact_normalize(wn + world.face_n);
-                            light_point(&tracer, cache, &mut c, wp, wn, lights, flags, Some(world.face));
-                            count += 1;
-                            break;
-                        }
+        let jit = jitter(params.lm_jitter_samples);
+        g.samples.reserve(w * h * jit.len());
+        for v in 0..h {
+            for u in 0..w {
+                let first = g.begin();
+                for j in jit {
+                    let p = Vec2::new(
+                        u as f32 / dim.x + half.x + j.x * js.x,
+                        v as f32 / dim.y + half.y + j.y * js.y,
+                    );
+                    for &i in hash.query(p.x, p.y) {
+                        let Some(t) = self.uv_polys.get(i as usize) else { continue };
+                        let Some(b) = (Tcf { uv: t.uv }).inside(p) else { continue };
+                        let Some(Some(world)) = tris.get(i as usize) else { break };
+                        let wp = from_bary(world.p[0], world.p[1], world.p[2], b);
+                        let (wn, _) = exact_normalize(from_bary(world.n[0], world.n[1], world.n[2], b));
+                        let (wn, _) = exact_normalize(wn + world.face_n);
+                        g.samples.push(Sample::new(wp, wn, flags, Some(world.face)));
+                        break;
                     }
-                    if count > 0 {
-                        c.scale(count);
-                        c.mul(0.5);
-                        *m = 255;
-                    } else {
-                        *m = 0;
-                    }
-                    *s = BaseColor::from_c(&c);
                 }
-            });
+                let id = v * w + u;
+                let lit = g.samples.len() as u32 > first;
+                if lit {
+                    g.end(id as u32, first);
+                }
+                if let Some(m) = self.layer.marker.get_mut(id) {
+                    *m = if lit { 255 } else { 0 };
+                }
+            }
+        }
 
         // the edges
         let texel = (1.0 / w.max(h) as f32) / 8.0;
-        let mut cache = LightCache::default();
-        let edge = EdgeLight { tracer: &tracer, lights, flags: env.sun_flag() | LP_DEFAULT, texel };
+        let edge_flags = sun_flag | LP_DEFAULT;
         for (t, world) in self.uv_polys.iter().zip(&tris) {
             let Some(world) = world else { continue };
             for e in 0..3 {
                 let (a, b) = (e, (e + 1) % 3);
-                edge.run(&mut self.layer, &mut cache, (t.uv[a], t.uv[b]), (world.p[a], world.p[b]), world);
+                edge_samples(
+                    &mut self.layer,
+                    &mut g,
+                    (t.uv[a], t.uv[b]),
+                    (world.p[a], world.p[b]),
+                    world,
+                    texel,
+                    edge_flags,
+                );
             }
         }
+        g
     }
-}
 
-/// What the edge texels are lit with.
-struct EdgeLight<'a> {
-    tracer: &'a Tracer<'a>,
-    lights: &'a LightSet,
-    flags: u32,
-    texel: f32,
-}
-
-impl EdgeLight<'_> {
-    /// The texels an edge crosses that are still unlit, lit at the edge.
-    fn run(
-        &self,
-        lm: &mut LmLayer,
-        cache: &mut LightCache,
-        (p1, p2): (Vec2, Vec2),
-        (v1, v2): (Vec3, Vec3),
-        world: &TriWorld,
-    ) {
-        let texel = self.texel;
-        let vdir = v2 - v1;
-        let size = Vec2::new(p2.x - p1.x, p2.y - p1.y);
-        let du = i_ceil(size.x.abs() / texel);
-        let dv = i_ceil(size.y.abs() / texel);
-        let steps = du.max(dv);
-        if steps <= 0 {
-            return;
-        }
-        for i in 0..=steps {
-            let time = i as f32 / steps as f32;
-            let uv = Vec2::new(size.x * time + p1.x, size.y * time + p1.y);
-            let x = i_floor(uv.x * lm.width as f32);
-            let y = i_floor(uv.y * lm.height as f32);
-            if x < 0 || x >= lm.width as i32 || y < 0 || y >= lm.height as i32 {
-                continue;
-            }
-            let id = y as usize * lm.width as usize + x as usize;
-            if lm.marker.get(id).is_none_or(|&m| m != 0) {
-                continue;
-            }
-            let mut c = ColorC::default();
-            let p = mad(v1, vdir, time);
-            light_point(
-                self.tracer,
-                cache,
-                &mut c,
-                p,
-                world.face_n,
-                self.lights,
-                self.flags,
-                Some(world.face),
-            );
+    /// The lights of [`Self::gather`]'s samples into the texels: a texel's samples averaged and
+    /// halved.
+    pub(crate) fn scatter(&mut self, lit: &[ColorC], runs: &[Run]) {
+        for r in runs {
+            let mut c = batch::sum(lit, r);
+            c.scale(r.count);
             c.mul(0.5);
-            if let (Some(s), Some(m)) = (lm.surface.get_mut(id), lm.marker.get_mut(id)) {
+            if let Some(s) = self.layer.surface.get_mut(r.item as usize) {
                 *s = BaseColor::from_c(&c);
-                *m = 255;
             }
         }
     }
-}
 
-impl Deflector {
-    /// The layer lit, its borders grown, shrunk when the light allows, and
-    /// grown by the final border. A Stop (`ctl`) leaves it half lit: the caller checks.
-    pub fn light(&mut self, env: &LightEnv<'_>, ctl: &Ctl<'_>) {
-        // the bounds of the faces as they are now
-        let mut bb = Aabb::INVALID;
-        for t in &self.uv_polys {
-            if let Some(p) = env.mesh.positions(t.owner) {
-                p.iter().for_each(|p| bb.modify(*p));
-            }
-        }
-        (self.sphere_p, self.sphere_r) = sphere_of(&bb);
-        let lights = env.lights.select(self.sphere_p, self.sphere_r);
-
-        self.l_calculate(env, &lights, ctl);
-        if ctl.cancelled() {
-            return;
-        }
+    /// The lit layer's borders grown, the layer shrunk when the light allows - to nothing, or to a
+    /// smaller size resampled from what was lit (never lit again) - and grown by the final border.
+    fn finish(&mut self, mesh: &Mesh, params: &BuildParams, sun_flag: u32, shrink: bool) {
         for r in (1..=254).rev() {
             if !apply_borders(&mut self.layer, r) {
                 break;
             }
         }
-
-        if compress_zero(&mut self.layer, rms_zero(env.params)) {
-            return;
-        }
-        if let Some((w, h)) = compress_rms(&self.layer, rms_shrink(env.params)) {
-            self.layer.create(w, h);
-            self.l_calculate(env, &lights, ctl);
+        if shrink {
+            if compress_zero(&mut self.layer, rms_zero(params)) {
+                return;
+            }
+            if let Some((w, h)) = compress_rms(&self.layer, rms_shrink(params))
+                && let Some(small) = resample(&self.layer, w, h)
+            {
+                // the markers of the smaller layer are the geometry's, its texels the resampled ones
+                self.layer.create(w, h);
+                let _ = self.gather(mesh, params, sun_flag);
+                if small.len() == self.layer.surface.len() {
+                    self.layer.surface = small;
+                }
+            }
         }
         expand(&mut self.layer);
     }
+}
+
+/// The texels an edge crosses that are still unlit, each given one sample at the edge and its
+/// marker: an edge after it finds the texel taken.
+#[allow(clippy::too_many_arguments)]
+fn edge_samples(
+    lm: &mut LmLayer,
+    g: &mut Gathered,
+    (p1, p2): (Vec2, Vec2),
+    (v1, v2): (Vec3, Vec3),
+    world: &TriWorld,
+    texel: f32,
+    flags: u32,
+) {
+    let vdir = v2 - v1;
+    let size = Vec2::new(p2.x - p1.x, p2.y - p1.y);
+    let du = i_ceil(size.x.abs() / texel);
+    let dv = i_ceil(size.y.abs() / texel);
+    let steps = du.max(dv);
+    if steps <= 0 {
+        return;
+    }
+    for i in 0..=steps {
+        let time = i as f32 / steps as f32;
+        let uv = Vec2::new(size.x * time + p1.x, size.y * time + p1.y);
+        let x = i_floor(uv.x * lm.width as f32);
+        let y = i_floor(uv.y * lm.height as f32);
+        if x < 0 || x >= lm.width as i32 || y < 0 || y >= lm.height as i32 {
+            continue;
+        }
+        let id = y as usize * lm.width as usize + x as usize;
+        let Some(m) = lm.marker.get_mut(id) else { continue };
+        if *m != 0 {
+            continue;
+        }
+        *m = 255;
+        let first = g.begin();
+        g.samples.push(Sample::new(mad(v1, vdir, time), world.face_n, flags, Some(world.face)));
+        g.end(id as u32, first);
+    }
+}
+
+/// The layer resampled to `w` x `h` with the filter [`rms_test_size`] judged it by: the static
+/// light and the sun, the sun and the hemisphere, as two pictures. `None` when a side is too small
+/// for the filter.
+fn resample(lm: &LmLayer, w: u32, h: u32) -> Option<Vec<BaseColor>> {
+    let n = lm.width as usize * lm.height as usize;
+    let mut a = Vec::with_capacity(n);
+    let mut b = Vec::with_capacity(n);
+    for s in lm.surface.iter().take(n) {
+        let c = s.get();
+        a.push(color_rgba(u8_clr(c.rgb.x), u8_clr(c.rgb.y), u8_clr(c.rgb.z), u8_clr(c.sun)));
+        b.push(color_rgba(u8_clr(c.sun), u8_clr(c.hemi), 0, 255));
+    }
+    let down = |p: &[u32]| imf_resample(&image_of(lm.width, lm.height, p), w, h, ImfFilter::Lanczos3).ok();
+    let (a, b) = (down(&a)?, down(&b)?);
+    // a byte back into the fixed point with half a step more: the page packs it to the same byte
+    let f = |v: u8| (f32::from(v) + 0.5) / 255.0;
+    Some(
+        a.rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b.rgba.as_chunks::<4>().0)
+            .map(|(a, b)| {
+                BaseColor::from_c(&ColorC {
+                    rgb: Vec3::new(f(a[0]), f(a[1]), f(a[2])),
+                    hemi: f(b[1]),
+                    sun: f(b[0]),
+                    tmp: 0.0,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// The final border: a layer one texel wide or high becomes a line of two texels and its
@@ -820,23 +846,66 @@ impl Deflectors {
         self.list.is_empty()
     }
 
-    /// Every deflector on the list lit, as many at once as the pool has
-    /// workers (and each one's rows in parallel). X-Ray's compiler shuffles the list first to spread the
-    /// load over its six threads; a deflector's light depends on nothing but itself, so the
+    /// Every deflector on the list lit through `scene`: the samples of as many deflectors as
+    /// make a batch gathered at once (each deflector's on a worker), lit in one call, scattered
+    /// back, then each layer finished. A deflector's light depends on nothing but itself, so the
     /// order is the list's.
-    pub fn light_all(&mut self, env: &LightEnv<'_>, ctl: &Ctl<'_>) -> Result<()> {
-        let listed: std::collections::HashSet<DeflId> = self.list.iter().copied().collect();
-        let total = self.list.len();
-        let done = AtomicUsize::new(0);
-        self.arena.par_iter_mut().enumerate().for_each(|(i, d)| {
-            let Some(d) = d else { return };
-            if !listed.contains(&DeflId(i as u32)) || ctl.cancelled() {
-                return;
+    pub fn light_all(&mut self, env: &LightEnv<'_>, scene: &dyn LitScene, ctl: &Ctl<'_>) -> Result<()> {
+        let ids: Vec<DeflId> = self.list.iter().copied().filter(|&d| self.get(d).is_some()).collect();
+        let total = ids.len();
+        let jit = jitter(env.params.lm_jitter_samples).len();
+        let job = env.job();
+        let sun = env.sun_flag();
+        let mut at = 0usize;
+        while at < ids.len() {
+            ctl.check()?;
+            // a batch: whole deflectors, by their texels' samples
+            let (mut end, mut n) = (at, 0usize);
+            while let Some(&d) = ids.get(end) {
+                let est = self.get(d).map_or(0, |x| x.layer.width as usize * x.layer.height as usize * jit);
+                if end > at && n + est > BATCH {
+                    break;
+                }
+                n += est;
+                end += 1;
             }
-            d.light(env, ctl);
-            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-            ctl.progress(n, total);
-        });
+            let mut chunk: Vec<(DeflId, Deflector)> = ids[at..end]
+                .iter()
+                .filter_map(|&d| self.arena.get_mut(d.0 as usize).and_then(Option::take).map(|x| (d, x)))
+                .collect();
+            let gathered: Vec<Gathered> = chunk
+                .par_iter_mut()
+                .map(|(_, d)| {
+                    if ctl.cancelled() {
+                        return Gathered::default();
+                    }
+                    d.take_sphere(env.mesh);
+                    d.gather(env.mesh, env.params, sun)
+                })
+                .collect();
+            let mut bases = Vec::with_capacity(gathered.len());
+            let mut samples = Vec::with_capacity(gathered.iter().map(|g| g.samples.len()).sum());
+            for g in &gathered {
+                bases.push(samples.len());
+                samples.extend_from_slice(&g.samples);
+            }
+            let lit = light_samples(scene, &job, &samples, ctl);
+            if let Ok(lit) = &lit {
+                chunk.par_iter_mut().zip(gathered.par_iter().zip(&bases)).for_each(|((_, d), (g, &base))| {
+                    let mine = lit.get(base..base + g.samples.len()).unwrap_or_default();
+                    d.scatter(mine, &g.runs);
+                    d.finish(env.mesh, env.params, sun, env.shrink);
+                });
+            }
+            for (id, d) in chunk {
+                if let Some(slot) = self.arena.get_mut(id.0 as usize) {
+                    *slot = Some(d);
+                }
+            }
+            lit?;
+            at = end;
+            ctl.progress(at, total);
+        }
         ctl.check()
     }
 }

@@ -5,12 +5,15 @@
 use glam::Vec3;
 use gz_fmt_level::{Aabb, BuildProject};
 
+use crate::bake::{Lighter, LitScene};
 use crate::data::{BuildMaterial, BuildParams, BuildTexture, ShaderXrlc, Shaders, shader_of};
 use crate::deflector::{Deflectors, LightEnv};
-use crate::implicit::{ImplicitInput, ImplicitMap, has_implicit_lighting, implicit_lighting};
+use crate::implicit::{
+    ImplicitInput, ImplicitMap, apply_implicit, has_implicit_lighting, implicit_lighting, implicit_shadows,
+};
 use crate::light::LightSet;
-use crate::lightmap::{Lightmap, LightmapPage, merge_lightmaps};
-use crate::mesh::{FaceId, Mesh, Smoothing};
+use crate::lightmap::{Lightmap, LightmapPage, PackReport, merge_lightmaps, pack_lightmaps};
+use crate::mesh::{DeflId, FaceId, Mesh, Smoothing};
 use crate::mu::{MuEnv, MuModel, MuReference, cache_opacity, light_mu};
 use crate::ray::{RayModel, RcastForm};
 use crate::vertex::{apply_vertex_light, light_vertices};
@@ -39,6 +42,8 @@ pub struct LcGlobalData {
     pub nosun: bool,
     /// `-att` (`gl_linear`).
     pub linear: bool,
+    /// A lightmap whose light allows it shrinks or collapses (off: `-no_lm_shrink`).
+    pub shrink: bool,
 }
 
 /// What the light step makes besides what it changes in the data.
@@ -73,6 +78,7 @@ impl LcGlobalData {
             deflectors: Deflectors::default(),
             nosun: false,
             linear: false,
+            shrink: true,
         }
     }
 
@@ -187,6 +193,7 @@ impl LcGlobalData {
             params: &self.params,
             nosun: self.nosun,
             linear: self.linear,
+            shrink: self.shrink,
         })
     }
 
@@ -203,65 +210,149 @@ impl LcGlobalData {
         }
     }
 
-    /// `run_mu_light` with its waits: the models' and the references' light.
-    pub fn light_mu(&mut self, ctl: &Ctl<'_>) -> Result<()> {
-        let model =
-            self.ray.take().ok_or_else(|| LcError::Invalid("The ray model is not built yet.".into()))?;
-        let mut models = std::mem::take(&mut self.mu_models);
-        let mut refs = std::mem::take(&mut self.mu_refs);
-        let out = light_mu(&mut models, &mut refs, &self.mu_env(), &model, ctl);
-        self.mu_models = models;
-        self.mu_refs = refs;
-        self.ray = Some(model);
-        out
+    /// The models' and the references' light, in a scene of `lighter` of their own.
+    pub fn light_mu(&mut self, lighter: &dyn Lighter, ctl: &Ctl<'_>) -> Result<()> {
+        self.bake_parts(lighter, ctl, &mut |_| {}, &[Part::Mu]).map(|_| ())
     }
 
     /// Every deflector lit.
-    pub fn light_deflectors(&mut self, ctl: &Ctl<'_>) -> Result<()> {
-        let mut defls = std::mem::take(&mut self.deflectors);
-        let out = self.light_env().and_then(|env| defls.light_all(&env, ctl));
-        self.deflectors = defls;
-        out
+    pub fn light_deflectors(&mut self, lighter: &dyn Lighter, ctl: &Ctl<'_>) -> Result<()> {
+        self.bake_parts(lighter, ctl, &mut |_| {}, &[Part::Charts]).map(|_| ())
     }
 
-    /// The light of a vertex.
-    pub fn light_vertices(&mut self, ctl: &Ctl<'_>) -> Result<()> {
-        let light = {
-            let env = self.light_env()?;
-            light_vertices(&env, &self.shaders, &self.materials, ctl)?
-        };
-        apply_vertex_light(&mut self.mesh, &light);
-        Ok(())
+    /// The light of the vertices.
+    pub fn light_vertices(&mut self, lighter: &dyn Lighter, ctl: &Ctl<'_>) -> Result<()> {
+        self.bake_parts(lighter, ctl, &mut |_| {}, &[Part::Vertices]).map(|_| ())
     }
 
-    /// The implicit lighting.
-    pub fn implicit_lighting(&mut self, ctl: &Ctl<'_>) -> Result<Vec<ImplicitMap>> {
-        let model =
-            self.ray.as_ref().ok_or_else(|| LcError::Invalid("The ray model is not built yet.".into()))?;
-        let input = ImplicitInput {
-            model,
-            shaders: &self.shaders,
-            materials: &self.materials,
-            lights: &self.lights,
-            params: &self.params,
-            nosun: self.nosun,
-            linear: self.linear,
-        };
-        implicit_lighting(&mut self.mesh, &mut self.textures, &input, ctl)
+    /// The implicit lighting: the maps, and every lit texture's surface with the hemisphere in
+    /// its alpha.
+    pub fn implicit_lighting(&mut self, lighter: &dyn Lighter, ctl: &Ctl<'_>) -> Result<Vec<ImplicitMap>> {
+        self.bake_parts(lighter, ctl, &mut |_| {}, &[Part::Implicit])
     }
 
-    /// Merges the lightmaps into pages.
+    /// Every deflector packed into pages as a visual of its own.
     pub fn merge_lightmaps(&mut self, ctl: &Ctl<'_>) -> Result<Vec<LightmapPage>> {
-        merge_lightmaps(&mut self.deflectors, &mut self.mesh, &self.materials, &mut self.lightmaps, ctl)
+        merge_lightmaps(&mut self.deflectors, &mut self.mesh, &mut self.lightmaps, ctl)
     }
 
-    /// The implicit light, the deflectors, the vertices, then the merge into
-    /// pages. The MU light is [`Self::light_mu`], which X-Ray's compiler runs beside these from the
-    /// moment the ray model exists.
-    pub fn light(&mut self, ctl: &Ctl<'_>) -> Result<LightOutput> {
-        let implicit = self.implicit_lighting(ctl)?;
-        self.light_deflectors(ctl)?;
-        self.light_vertices(ctl)?;
+    /// The lit charts packed into pages by visual: `visuals` names each visual's deflectors.
+    pub fn pack_lightmaps(
+        &mut self,
+        visuals: &[Vec<DeflId>],
+        ctl: &Ctl<'_>,
+    ) -> Result<(Vec<LightmapPage>, PackReport)> {
+        pack_lightmaps(&mut self.deflectors, visuals, &mut self.mesh, &mut self.lightmaps, ctl)
+    }
+
+    /// The light of a build, every part of it through `lighter`, in one scene of the level where
+    /// it can: the static models and their references, the implicit textures, the lightmaps'
+    /// charts, the vertices. `phase` hears each part as it begins (0 to 3). Answers the maps of
+    /// the implicit light; the textures' surfaces take the hemisphere when the light is done (or
+    /// before the charts when a transparent shadow caster wears one of them).
+    pub fn bake(
+        &mut self,
+        lighter: &dyn Lighter,
+        ctl: &Ctl<'_>,
+        phase: &mut dyn FnMut(usize),
+    ) -> Result<Vec<ImplicitMap>> {
+        self.bake_parts(lighter, ctl, phase, &[Part::Mu, Part::Implicit, Part::Charts, Part::Vertices])
+    }
+
+    fn bake_parts(
+        &mut self,
+        lighter: &dyn Lighter,
+        ctl: &Ctl<'_>,
+        phase: &mut dyn FnMut(usize),
+        parts: &[Part],
+    ) -> Result<Vec<ImplicitMap>> {
+        let LcGlobalData {
+            params,
+            shaders,
+            materials,
+            textures,
+            lights,
+            ray,
+            mu_models,
+            mu_refs,
+            mesh,
+            deflectors,
+            nosun,
+            linear,
+            shrink,
+            ..
+        } = self;
+        let model = ray.as_ref().ok_or_else(|| LcError::Invalid("The ray model is not built yet.".into()))?;
+        let (nosun, linear, shrink) = (*nosun, *linear, *shrink);
+        let mut maps = Vec::new();
+        let mut applied = false;
+        {
+            let scene = lighter.scene(model, textures)?;
+            if parts.contains(&Part::Mu) {
+                phase(0);
+                let env = MuEnv { shaders, materials, textures, params, lights, nosun, linear };
+                light_mu(mu_models, mu_refs, &env, lighter, scene.as_ref(), ctl)?;
+                ctl.check()?;
+            }
+            if parts.contains(&Part::Implicit) {
+                phase(1);
+                let input = ImplicitInput { model, shaders, materials, lights, params, nosun, linear };
+                maps = implicit_lighting(mesh, textures, &input, scene.as_ref(), ctl)?;
+                ctl.check()?;
+            }
+            let later = parts.contains(&Part::Charts) || parts.contains(&Part::Vertices);
+            if !(later && implicit_shadows(model, &maps)) {
+                let light = {
+                    let env = LightEnv { mesh, model, textures, lights, params, nosun, linear, shrink };
+                    Self::bake_rest(&env, deflectors, shaders, materials, scene.as_ref(), parts, phase, ctl)?
+                };
+                light.apply(mesh);
+                applied = true;
+            }
+        }
+        apply_implicit(textures, &maps);
+        if !applied {
+            // a transparent shadow caster wears a lit texture: the rest sees its new alpha
+            let scene = lighter.scene(model, textures)?;
+            let light = {
+                let env = LightEnv { mesh, model, textures, lights, params, nosun, linear, shrink };
+                Self::bake_rest(&env, deflectors, shaders, materials, scene.as_ref(), parts, phase, ctl)?
+            };
+            drop(scene);
+            light.apply(mesh);
+        }
+        Ok(maps)
+    }
+
+    /// The charts and the vertices of `parts`; the vertices' light is the answer, written once
+    /// the mesh is free.
+    #[allow(clippy::too_many_arguments)]
+    fn bake_rest(
+        env: &LightEnv<'_>,
+        deflectors: &mut Deflectors,
+        shaders: &Shaders,
+        materials: &[BuildMaterial],
+        scene: &dyn LitScene,
+        parts: &[Part],
+        phase: &mut dyn FnMut(usize),
+        ctl: &Ctl<'_>,
+    ) -> Result<VertexLight> {
+        if parts.contains(&Part::Charts) {
+            phase(2);
+            deflectors.light_all(env, scene, ctl)?;
+        }
+        if parts.contains(&Part::Vertices) {
+            phase(3);
+            return Ok(VertexLight(Some(light_vertices(env, shaders, materials, scene, ctl)?)));
+        }
+        Ok(VertexLight(None))
+    }
+
+    /// The implicit light, the deflectors, the vertices, then each deflector packed as a visual
+    /// of its own. The MU light is [`Self::light_mu`].
+    pub fn light(&mut self, lighter: &dyn Lighter, ctl: &Ctl<'_>) -> Result<LightOutput> {
+        let implicit =
+            self.bake_parts(lighter, ctl, &mut |_| {}, &[Part::Implicit, Part::Charts, Part::Vertices])?;
         let pages = self.merge_lightmaps(ctl)?;
         Ok(LightOutput { implicit, pages })
     }
@@ -307,5 +398,25 @@ impl LcGlobalData {
             }
         }
         Ok(())
+    }
+}
+
+/// The parts of a build's light.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Part {
+    Mu,
+    Implicit,
+    Charts,
+    Vertices,
+}
+
+/// The vertices' new light, when they were lit.
+struct VertexLight(Option<Vec<Option<crate::color::BaseColor>>>);
+
+impl VertexLight {
+    fn apply(self, mesh: &mut Mesh) {
+        if let Some(l) = self.0 {
+            apply_vertex_light(mesh, &l);
+        }
     }
 }

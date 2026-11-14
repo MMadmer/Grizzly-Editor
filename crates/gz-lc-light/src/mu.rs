@@ -10,13 +10,15 @@ use gz_fmt_level::{Aabb, CollectorPacked};
 use rayon::prelude::*;
 use smol_str::SmolStr;
 
+use crate::bake::{LightJob, Lighter, LitScene, Sample};
+use crate::batch::{self, BATCH, Run, light_samples};
 use crate::color::{BaseColor, ColorC};
 use crate::data::{BuildMaterial, BuildParams, BuildTexture, QUALITY_DRAFT, ShaderXrlc, Shaders, shader_of};
 use crate::light::LightSet;
 use crate::math::{EPS, EPS_L, EPS_S, Matrix, XrRandom, deg2rad, exact_normalize, mad, point_words};
 use crate::mesh::{Face, FaceId, Mesh, Smoothing, Tcf, VertId};
-use crate::point::{Falloff, LP_DEFAULT, LP_DONT_HEMI, LP_DONT_RGB, LP_DONT_SUN, Tracer, light_point};
-use crate::ray::{LightCache, Opacity, RapidCollector, RayFace, RayModel, RcFace, casts};
+use crate::point::{Falloff, LP_DEFAULT, LP_DONT_HEMI, LP_DONT_RGB, LP_DONT_SUN};
+use crate::ray::{Opacity, RapidCollector, RayFace, RayModel, RcFace, casts};
 use crate::vertex::{TransGroups, mix_group};
 use crate::{Ctl, LcError, Result};
 
@@ -74,6 +76,14 @@ pub struct MuEnv<'a> {
     pub lights: &'a LightSet,
     pub nosun: bool,
     pub linear: bool,
+}
+
+impl<'a> MuEnv<'a> {
+    /// What a model's samples are lit with: every light, the level's falloff.
+    #[must_use]
+    pub fn job(&self) -> LightJob<'a> {
+        LightJob { lights: self.lights, falloff: Falloff::Level { linear: self.linear } }
+    }
 }
 
 impl MuModel {
@@ -230,38 +240,31 @@ impl MuModel {
         RayModel::new(&verts, &tris, cl.faces, Opacity::Squared, false)
     }
 
-    /// Lights a model: every vertex lit at six
-    /// points near it along normals jittered within 30 degrees (one at the draft quality),
-    /// then the vertices of one point mixed by their translucency. Answers the light per vertex
-    /// in list order. X-Ray's compiler draws the jitter from `::Random`, one generator all threads share.
+    /// The samples a model's light takes: every vertex at six points near it along normals
+    /// jittered within 30 degrees (one at the draft quality), placed by `xform`; what
+    /// [`Self::finish_light`] makes the light per vertex of. X-Ray's compiler draws the jitter from
+    /// `::Random`, one generator all threads share.
     /// With `stream` (the generator as this model's first draw finds it) every vertex jumps to
     /// the draws X-Ray's compiler gives it - three per sample, the vertices in list order - so the
     /// vertices still light in parallel; without, each vertex seeds its own from where it stands.
     #[must_use]
-    pub fn calc_lighting_with(
+    pub fn light_samples(
         &self,
         env: &MuEnv<'_>,
         xform: &Matrix,
-        model: &RayModel,
         flags: u32,
         stream: Option<XrRandom>,
-        ctl: &Ctl<'_>,
-    ) -> Vec<BaseColor> {
+    ) -> MuSamples {
         let rot = xform.without_translation().transposed().inverted_43();
-        let samples = if env.params.quality == QUALITY_DRAFT { 1u32 } else { 6 };
-        let tracer = Tracer { model, textures: env.textures, falloff: Falloff::Level { linear: env.linear } };
+        let per = if env.params.quality == QUALITY_DRAFT { 1u32 } else { 6 };
         let mesh = &self.mesh;
         let verts = mesh.vertices();
-
-        let lit: Vec<BaseColor> = verts
+        let each: Vec<Option<(Vec<Sample>, f32, f32)>> = verts
             .par_iter()
             .enumerate()
             .with_min_len(16)
-            .map_init(LightCache::default, |cache, (i, &v)| {
-                if ctl.cancelled() {
-                    return BaseColor::default();
-                }
-                let Some(vx) = mesh.vertex(v) else { return BaseColor::default() };
+            .map(|(i, &v)| {
+                let vx = mesh.vertex(v)?;
                 let (mut amb, mut trans) = (0.0f32, 0.0f32);
                 for f in &vx.adjacents {
                     if let Some(face) = mesh.face(*f) {
@@ -276,24 +279,56 @@ impl MuModel {
                 let vp = xform.transform_tiny(vx.p);
                 let (vn, _) = exact_normalize(rot.transform_dir(vx.n));
                 let mut rnd = match stream {
-                    Some(s) => s.advanced(i as u64 * u64::from(samples) * DRAWS_PER_SAMPLE),
+                    Some(s) => s.advanced(i as u64 * u64::from(per) * DRAWS_PER_SAMPLE),
                     None => XrRandom::from_words(&point_words(vp)),
                 };
-                let mut c = ColorC::default();
-                for sample in 0..samples {
-                    let a = 0.2 * sample as f32 / samples as f32;
-                    let n = rnd.dir_cone(vn, deg2rad(30.0));
-                    let p = mad(vp, n, a);
-                    light_point(&tracer, cache, &mut c, p, n, env.lights, flags, None);
+                let samples = (0..per)
+                    .map(|sample| {
+                        let a = 0.2 * sample as f32 / per as f32;
+                        let n = rnd.dir_cone(vn, deg2rad(30.0));
+                        Sample::new(mad(vp, n, a), n, flags, None)
+                    })
+                    .collect();
+                Some((samples, amb, trans))
+            })
+            .collect();
+        let mut out = MuSamples { flags, per, ..MuSamples::default() };
+        for e in each {
+            match e {
+                Some((s, amb, trans)) => {
+                    out.samples.extend(s);
+                    out.vertices.push(Some((amb, trans)));
                 }
-                c.scale(samples);
+                None => out.vertices.push(None),
+            }
+        }
+        out
+    }
+
+    /// The light of every vertex from its samples' lights (`lit[i]` of `samples.samples[i]`): the
+    /// mean, the translucency kept, the ambient added, then the vertices of one point mixed.
+    #[must_use]
+    pub fn finish_light(&self, samples: &MuSamples, lit: &[ColorC]) -> Vec<BaseColor> {
+        let per = samples.per as usize;
+        let mut at = 0usize;
+        let lit: Vec<BaseColor> = samples
+            .vertices
+            .iter()
+            .map(|v| {
+                let Some((amb, trans)) = *v else { return BaseColor::default() };
+                let run = Run { item: 0, first: at as u32, count: samples.per };
+                at += per;
+                let mut c = batch::sum(lit, &run);
+                c.scale(samples.per);
                 c.tmp = trans;
-                if flags & LP_DONT_HEMI == 0 {
+                if samples.flags & LP_DONT_HEMI == 0 {
                     c.hemi += amb;
                 }
                 BaseColor::from_c(&c)
             })
             .collect();
+        let mesh = &self.mesh;
+        let verts = mesh.vertices();
 
         // the groups: a vertex joins every group its point is in, in list order
         let mut groups = TransGroups::default();
@@ -326,21 +361,38 @@ impl MuModel {
         self.mesh.vertices().len() as u64 * samples * DRAWS_PER_SAMPLE
     }
 
-    /// Lights a model on its own: the model's own hemisphere in its own shadow, into
-    /// `color`, the jitter drawn from `stream` as X-Ray's base thread draws it.
-    pub fn calc_lighting(&mut self, env: &MuEnv<'_>, stream: XrRandom, ctl: &Ctl<'_>) -> Result<()> {
+    /// Lights a model on its own: the model's own hemisphere in its own shadow (a scene of
+    /// `lighter` made of its own ray model), into `color`, the jitter drawn from `stream` as
+    /// X-Ray's base thread draws it.
+    pub fn calc_lighting(
+        &mut self,
+        env: &MuEnv<'_>,
+        lighter: &dyn Lighter,
+        stream: XrRandom,
+        ctl: &Ctl<'_>,
+    ) -> Result<()> {
         let model = self.own_ray_model(env.shaders, env.materials)?;
         ctl.check()?;
-        self.color = self.calc_lighting_with(
-            env,
-            &Matrix::IDENTITY,
-            &model,
-            LP_DONT_RGB + LP_DONT_SUN,
-            Some(stream),
-            ctl,
-        );
+        let samples = self.light_samples(env, &Matrix::IDENTITY, LP_DONT_RGB + LP_DONT_SUN, Some(stream));
+        let scene = lighter.scene(&model, env.textures)?;
+        let mut lit = Vec::with_capacity(samples.samples.len());
+        for chunk in samples.samples.chunks(BATCH) {
+            lit.extend(light_samples(scene.as_ref(), &env.job(), chunk, ctl)?);
+        }
+        self.color = self.finish_light(&samples, &lit);
         ctl.check()
     }
+}
+
+/// The samples of a model's light and what its vertices add to them.
+#[derive(Clone, Debug, Default)]
+pub struct MuSamples {
+    /// The samples of every vertex that has them, `per` a vertex, in list order.
+    pub samples: Vec<Sample>,
+    /// Per vertex in list order: its ambient and translucency, `None` for one that is gone.
+    pub vertices: Vec<Option<(f32, f32)>>,
+    pub per: u32,
+    pub flags: u32,
 }
 
 /// Opaque unless its texture has alpha and its surface was loaded.
@@ -401,12 +453,18 @@ impl MuReference {
         }
     }
 
-    /// The reference lit in the level, then the fit.
-    pub fn calc_lighting(&mut self, model: &MuModel, env: &MuEnv<'_>, level: &RayModel, ctl: &Ctl<'_>) {
+    /// The samples of the reference's light in the level.
+    #[must_use]
+    pub fn light_samples(&self, model: &MuModel, env: &MuEnv<'_>) -> MuSamples {
         let flags = if env.nosun { LP_DONT_SUN } else { 0 } | LP_DEFAULT;
         // X-Ray's compiler lights the references on four threads from the one `::Random`: no order to
         // reproduce (its own runs differ), so each vertex seeds its own
-        self.color = model.calc_lighting_with(env, &self.xform, level, flags, None, ctl);
+        model.light_samples(env, &self.xform, flags, None)
+    }
+
+    /// The reference's light from its samples' lights, then the fit.
+    pub fn finish_light(&mut self, model: &MuModel, samples: &MuSamples, lit: &[ColorC]) {
+        self.color = model.finish_light(samples, lit);
         let n = self.color.len().min(model.color.len());
         let a: Vec<f64> = model.color.iter().take(n).map(|c| f64::from(c.get().hemi)).collect();
         for i in 0..5 {
@@ -560,13 +618,15 @@ pub fn optimize_parameters(
     (c, d)
 }
 
-/// Every model's materials and own
-/// light, then every reference's light, each set on as many workers as the pool has.
+/// Every model's materials and own light (a scene of `lighter` per model, the models on as many
+/// workers as the pool has), then every reference's light in `level`, the scene of the level,
+/// in batches.
 pub fn light_mu(
     models: &mut [MuModel],
     refs: &mut [MuReference],
     env: &MuEnv<'_>,
-    level: &RayModel,
+    lighter: &dyn Lighter,
+    level: &dyn LitScene,
     ctl: &Ctl<'_>,
 ) -> Result<()> {
     ctl.stage("the models");
@@ -587,7 +647,7 @@ pub fn light_mu(
         .map(|(m, start)| {
             ctl.check()?;
             m.calc_materials(env.shaders, env.materials);
-            m.calc_lighting(env, start, ctl)?;
+            m.calc_lighting(env, lighter, start, ctl)?;
             ctl.progress(done.fetch_add(1, Ordering::Relaxed) + 1, total);
             Ok(())
         })
@@ -595,17 +655,49 @@ pub fn light_mu(
     results.into_iter().collect::<Result<()>>()?;
     ctl.stage("the references");
     let models = &*models;
-    refs.par_iter_mut().for_each(|r| {
-        if ctl.cancelled() {
-            return;
+    let job = env.job();
+    let mut at = 0usize;
+    while at < refs.len() {
+        ctl.check()?;
+        // a batch: whole references, at most a batch of samples and a few hundred of them
+        let (mut end, mut n) = (at, 0usize);
+        while let Some(r) = refs.get(end) {
+            let est = models.get(r.model as usize).map_or(0, |m| {
+                m.mesh.vertices().len() * if env.params.quality == QUALITY_DRAFT { 1 } else { 6 }
+            });
+            if end > at && (n + est > BATCH || end - at >= REFS_A_BATCH) {
+                break;
+            }
+            n += est;
+            end += 1;
         }
-        if let Some(m) = models.get(r.model as usize) {
-            r.calc_lighting(m, env, level, ctl);
+        let chunk = &mut refs[at..end];
+        let gathered: Vec<Option<MuSamples>> =
+            chunk.par_iter().map(|r| models.get(r.model as usize).map(|m| r.light_samples(m, env))).collect();
+        let mut bases = Vec::with_capacity(gathered.len());
+        let mut samples = Vec::with_capacity(gathered.iter().flatten().map(|g| g.samples.len()).sum());
+        for g in &gathered {
+            bases.push(samples.len());
+            if let Some(g) = g {
+                samples.extend_from_slice(&g.samples);
+            }
         }
-        ctl.progress(done.fetch_add(1, Ordering::Relaxed) + 1, total);
-    });
+        let lit = light_samples(level, &job, &samples, ctl)?;
+        chunk.par_iter_mut().zip(gathered.par_iter().zip(&bases)).for_each(|(r, (g, &base))| {
+            if let (Some(g), Some(m)) = (g, models.get(r.model as usize)) {
+                let mine = lit.get(base..base + g.samples.len()).unwrap_or_default();
+                r.finish_light(m, g, mine);
+            }
+        });
+        let count = end - at;
+        at = end;
+        ctl.progress(done.fetch_add(count, Ordering::Relaxed) + count, total);
+    }
     ctl.check()
 }
+
+/// The references lit in one batch at most: a Stop between batches leaves the rest unlit.
+const REFS_A_BATCH: usize = 256;
 
 #[cfg(test)]
 mod tests {

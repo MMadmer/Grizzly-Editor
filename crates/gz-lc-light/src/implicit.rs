@@ -8,15 +8,16 @@ use gz_fmt_tex::{DdsEncoding, Image, encode_dds};
 use rayon::prelude::*;
 use smol_str::SmolStr;
 
-use crate::color::{BaseColor, ColorC, fixed16_r};
+use crate::bake::{LitScene, Sample};
+use crate::batch::{self, BATCH, Gathered, light_samples};
+use crate::color::{BaseColor, fixed16_r};
 use crate::data::{BuildMaterial, BuildTexture, QUALITY_DRAFT, ShaderXrlc, Shaders, shader_of};
 use crate::deflector::{LightEnv, jitter};
 use crate::hash2d::Hash2D;
-use crate::layer::{LmLayer, apply_borders, image_of};
+use crate::layer::{LmLayer, apply_borders, image_of, pixels_of};
 use crate::math::{Box2, from_bary, normalize, subst_alpha, u8_clr};
 use crate::mesh::{Face, FaceId, Mesh};
-use crate::point::light_point;
-use crate::ray::{LightCache, RayModel};
+use crate::ray::RayModel;
 use crate::{Ctl, LcError, Result};
 
 const HASH_SIDE: usize = 384;
@@ -71,14 +72,15 @@ pub struct ImplicitInput<'a> {
     pub linear: bool,
 }
 
-/// Every implicitly lighted texture, in the order of its index, lit; each
-/// face it was found on gets a second channel of its coordinates (`Initialize`, "compatible
-/// with lightmaps") and the texture's surface takes the hemisphere in its alpha. Nothing at the
-/// draft quality.
+/// Every implicitly lighted texture, in the order of its index, lit through `scene`; each face
+/// it was found on gets a second channel of its coordinates (`Initialize`, "compatible with
+/// lightmaps"). A map's `base` is the texture with the hemisphere in its alpha: what
+/// [`apply_implicit`] makes the texture's surface. Nothing at the draft quality.
 pub fn implicit_lighting(
     mesh: &mut Mesh,
-    textures: &mut [BuildTexture],
+    textures: &[BuildTexture],
     input: &ImplicitInput<'_>,
+    scene: &dyn LitScene,
     ctl: &Ctl<'_>,
 ) -> Result<Vec<ImplicitMap>> {
     if input.params.quality == QUALITY_DRAFT {
@@ -101,57 +103,86 @@ pub fn implicit_lighting(
         ctl.check()?;
         let Some(tex) = textures.get(tid as usize) else { continue };
         ctl.stage(&format!("the texture {}", tex.name));
+        let Some(surface) = tex.surface.as_ref() else {
+            return Err(LcError::Invalid(format!(
+                "The implicitly lighted texture '{}' has no surface.",
+                tex.name
+            )));
+        };
         for &f in &faces {
             if let Some(face) = mesh.face_mut(f) {
                 let tc = face.tc0();
                 face.add_channel(tc[0], tc[1], tc[2]);
             }
         }
-        let lmap = {
-            let env = LightEnv {
-                mesh,
-                model: input.model,
-                textures,
-                lights: input.lights,
-                params: input.params,
-                nosun: input.nosun,
-                linear: input.linear,
-            };
-            light_texture(&env, tex.width, tex.height, &faces, ctl)
+        let env = LightEnv {
+            mesh,
+            model: input.model,
+            textures,
+            lights: input.lights,
+            params: input.params,
+            nosun: input.nosun,
+            linear: input.linear,
+            shrink: true,
         };
-        ctl.check()?;
-        let mut lmap = lmap;
+        let mut lmap = light_texture(&env, tex.width, tex.height, &faces, scene, ctl)?;
         for r in (1..=254).rev() {
             if !apply_borders(&mut lmap, r) {
                 break;
             }
         }
-
-        let Some(tex) = textures.get_mut(tid as usize) else { continue };
         let (w, h) = (tex.width, tex.height);
-        let Some(surface) = tex.surface.as_mut() else {
-            return Err(LcError::Invalid(format!(
-                "The implicitly lighted texture '{}' has no surface.",
-                tex.name
-            )));
-        };
-        surface.par_iter_mut().zip(lmap.surface.par_iter()).for_each(|(c, l)| {
-            *c = subst_alpha(*c, u8_clr(fixed16_r(l.h)));
-        });
-        let base = image_of(w, h, surface);
+        let with_hemi: Vec<u32> = surface
+            .par_iter()
+            .zip(lmap.surface.par_iter())
+            .map(|(&c, l)| subst_alpha(c, u8_clr(fixed16_r(l.h))))
+            .collect();
+        let base = image_of(w, h, &with_hemi);
         let lm = image_of(w, h, &lmap.pack());
         out.push(ImplicitMap { texture: tid, name: tex.name.clone(), base, lmap: lm });
     }
     Ok(out)
 }
 
+/// Every lit texture's surface takes the hemisphere in its alpha, as its map's `base` holds it.
+pub fn apply_implicit(textures: &mut [BuildTexture], maps: &[ImplicitMap]) {
+    for m in maps {
+        if let Some(t) = textures.get_mut(m.texture as usize)
+            && let Some(surface) = t.surface.as_mut()
+        {
+            let pixels = pixels_of(&m.base);
+            if pixels.len() == surface.len() {
+                *surface = pixels;
+            }
+        }
+    }
+}
+
+/// Whether a ray of `model` reads the alpha of a texture the maps change: a transparent face that
+/// casts a shadow wears one. Then what is lit after the implicit light sees the new alpha.
+#[must_use]
+pub fn implicit_shadows(model: &RayModel, maps: &[ImplicitMap]) -> bool {
+    !maps.is_empty()
+        && model
+            .faces()
+            .iter()
+            .any(|f| f.cast_shadow && !f.opaque && maps.iter().any(|m| m.texture == f.texture))
+}
+
 /// Executes the implicit light over every row: a texel takes the light of each of its jittered
-/// samples on every face that holds it.
-fn light_texture(env: &LightEnv<'_>, w: u32, h: u32, faces: &[FaceId], ctl: &Ctl<'_>) -> LmLayer {
+/// samples on every face that holds it. The rows of a batch are gathered in parallel.
+pub(crate) fn light_texture(
+    env: &LightEnv<'_>,
+    w: u32,
+    h: u32,
+    faces: &[FaceId],
+    scene: &dyn LitScene,
+    ctl: &Ctl<'_>,
+) -> Result<LmLayer> {
     let mut lmap = LmLayer::new(w, h);
     let (wu, hu) = (w as usize, h as usize);
     if wu == 0 || hu == 0 {
-        return lmap;
+        return Ok(lmap);
     }
     let mesh = env.mesh;
     let tcs: Vec<[Vec2; 3]> =
@@ -167,45 +198,62 @@ fn light_texture(env: &LightEnv<'_>, w: u32, h: u32, faces: &[FaceId], ctl: &Ctl
     let half = Vec2::new(0.5 / dim.x, 0.5 / dim.y);
     let js = Vec2::new(0.499 / dim.x, 0.499 / dim.y);
     let jit = jitter(env.params.lm_jitter_samples);
-    let tracer = env.tracer();
     let flags = env.sun_flag();
-    lmap.surface.par_chunks_mut(wu).zip(lmap.marker.par_chunks_mut(wu)).take(hu).enumerate().for_each_init(
-        LightCache::default,
-        |cache, (v, (srow, mrow))| {
-            if ctl.cancelled() {
-                return;
-            }
-            for (u, (s, m)) in srow.iter_mut().zip(mrow.iter_mut()).enumerate() {
-                let mut c = ColorC::default();
-                let mut count = 0u32;
-                for j in jit {
-                    let p = Vec2::new(
-                        u as f32 / dim.x + half.x + j.x * js.x,
-                        v as f32 / dim.y + half.y + j.y * js.y,
-                    );
-                    for &i in hash.query(p.x, p.y) {
-                        let (Some(tc), Some(Some((pos, nrm))), Some(&f)) =
-                            (tcs.get(i as usize), world.get(i as usize), faces.get(i as usize))
-                        else {
-                            continue;
-                        };
-                        let Some(b) = (crate::mesh::Tcf { uv: *tc }).inside(p) else { continue };
-                        let wp = from_bary(pos[0], pos[1], pos[2], b);
-                        let wn = normalize(from_bary(nrm[0], nrm[1], nrm[2], b));
-                        light_point(&tracer, cache, &mut c, wp, wn, env.lights, flags, Some(f));
-                        count += 1;
+    let job = env.job();
+    let rows_per = (BATCH / (wu * jit.len()).max(1)).max(1);
+    let mut v0 = 0usize;
+    while v0 < hu {
+        ctl.check()?;
+        let v1 = (v0 + rows_per).min(hu);
+        let rows: Vec<(Gathered, Vec<u8>)> = (v0..v1)
+            .into_par_iter()
+            .map(|v| {
+                let mut g = Gathered::default();
+                let mut marks = vec![0u8; wu];
+                for (u, m) in marks.iter_mut().enumerate() {
+                    let first = g.begin();
+                    for j in jit {
+                        let p = Vec2::new(
+                            u as f32 / dim.x + half.x + j.x * js.x,
+                            v as f32 / dim.y + half.y + j.y * js.y,
+                        );
+                        for &i in hash.query(p.x, p.y) {
+                            let (Some(tc), Some(Some((pos, nrm))), Some(&f)) =
+                                (tcs.get(i as usize), world.get(i as usize), faces.get(i as usize))
+                            else {
+                                continue;
+                            };
+                            let Some(b) = (crate::mesh::Tcf { uv: *tc }).inside(p) else { continue };
+                            let wp = from_bary(pos[0], pos[1], pos[2], b);
+                            let wn = normalize(from_bary(nrm[0], nrm[1], nrm[2], b));
+                            g.samples.push(Sample::new(wp, wn, flags, Some(f)));
+                        }
+                    }
+                    if g.samples.len() as u32 > first {
+                        g.end((v * wu + u) as u32, first);
+                        *m = 255;
                     }
                 }
-                if count > 0 {
-                    c.scale(count);
-                    c.mul(0.5);
-                    *s = BaseColor::from_c(&c);
-                    *m = 255;
-                } else {
-                    *m = 0;
-                }
+                (g, marks)
+            })
+            .collect();
+        let mut all = Gathered::default();
+        for (v, (g, marks)) in (v0..v1).zip(rows) {
+            all.append(g);
+            if let Some(row) = lmap.marker.get_mut(v * wu..(v + 1) * wu) {
+                row.copy_from_slice(&marks);
             }
-        },
-    );
-    lmap
+        }
+        let lit = light_samples(scene, &job, &all.samples, ctl)?;
+        for r in &all.runs {
+            let mut c = batch::sum(&lit, r);
+            c.scale(r.count);
+            c.mul(0.5);
+            if let Some(s) = lmap.surface.get_mut(r.item as usize) {
+                *s = BaseColor::from_c(&c);
+            }
+        }
+        v0 = v1;
+    }
+    Ok(lmap)
 }
