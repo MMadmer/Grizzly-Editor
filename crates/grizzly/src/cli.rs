@@ -3,6 +3,11 @@ use std::path::{Path, PathBuf};
 /// The environment variable that names the home when `-home` does not.
 pub const HOME_VAR: &str = "GRIZZLY_HOME";
 
+/// The environment variable that makes a run a QA run when `-qa_github` does not: a test
+/// harness sets it once, and every program it starts - an editor, a commandlet, the twin for a
+/// command line - keeps to this computer, whatever its own command line says.
+pub const QA_VAR: &str = "GRIZZLY_QA_GITHUB";
+
 /// What a run without a window is asked to do: the first word of the command line that is not
 /// an option. A commandlet opens the project, runs, prints and ends (`commandlet.rs`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,7 +58,8 @@ pub struct Cli {
     pub unattended: bool,
     /// `-headless`: no window; everything but the picture, driven over the control endpoint.
     pub headless: bool,
-    /// `-qa_github`: network clients talk to the mock the environment names.
+    /// `-qa_github` (or [`QA_VAR`]): network clients talk to the mock the environment names, on
+    /// this computer, and to nothing else.
     pub qa_github: bool,
     /// `-mcp_port <n>`: where the control endpoint listens. 0 lets the system pick.
     pub mcp_port: Option<u16>,

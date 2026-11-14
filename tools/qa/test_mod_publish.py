@@ -83,7 +83,7 @@ class Editor(qa.Editor):
         env["GRIZZLY_CATALOG_HOME"] = self.catalog_home
         if with_token:
             env["GRIZZLY_GITHUB_TOKEN"] = TOKEN
-        super().__init__(project, github=True, env=env)
+        super().__init__(project, env=env)
         self.start()
 
     def close(self, **kw):

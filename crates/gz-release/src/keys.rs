@@ -53,6 +53,8 @@ struct Open {
 /// The author key of the session. Its methods do file work: call them on the IO pool.
 pub struct AuthorKeys {
     qa: bool,
+    /// Where a QA run keeps its keys when its environment names no folder: inside the editor's home.
+    qa_home: String,
     log: Log,
     open: Mutex<Option<Open>>,
     /// The home folder, found once.
@@ -91,24 +93,27 @@ impl AuthorKeys {
     pub fn of(editor: &Editor) -> Arc<Self> {
         editor.services.get_or_init(|| Self {
             qa: editor.flags.qa_github,
+            qa_home: editor.paths.home.join("catalog_home").display().to_string(),
             log: editor.log.clone(),
             open: Mutex::new(None),
             home: Mutex::new(None),
         })
     }
 
-    /// `Documents\Grizzly Editor`, or `GRIZZLY_CATALOG_HOME` under `-qa_github`.
+    /// `Documents\Grizzly Editor`. A QA run never looks there: `GRIZZLY_CATALOG_HOME`, or a folder
+    /// of the editor's own home when the environment names none.
     #[must_use]
     pub fn home(&self) -> String {
         if let Some(h) = self.home.lock().clone() {
             return h;
         }
-        let qa_home =
-            if self.qa { std::env::var("GRIZZLY_CATALOG_HOME").unwrap_or_default() } else { String::new() };
-        let home = if qa_home.is_empty() {
-            format!("{}\\Grizzly Editor", crate::documents::documents_folder())
+        let home = if self.qa {
+            std::env::var("GRIZZLY_CATALOG_HOME")
+                .ok()
+                .filter(|h| !h.trim().is_empty())
+                .unwrap_or_else(|| self.qa_home.clone())
         } else {
-            qa_home
+            format!("{}\\Grizzly Editor", crate::documents::documents_folder())
         };
         *self.home.lock() = Some(home.clone());
         home
@@ -291,6 +296,7 @@ mod tests {
     fn keys(home: &Path) -> AuthorKeys {
         AuthorKeys {
             qa: true,
+            qa_home: home.to_string_lossy().into_owned(),
             log: Log::memory(),
             open: Mutex::new(None),
             home: Mutex::new(Some(home.to_string_lossy().into_owned())),

@@ -52,15 +52,26 @@ LIMITED = os.path.join(REPO, "tools", "rust", "limited.py")
 SW_HIDDEN = 7  # SW_SHOWMINNOACTIVE
 SW_SHOWN = 4  # SW_SHOWNOACTIVATE
 
-# Every service an editor under `-qa_github` could reach, on a port of the loopback nothing listens on: a suite that
-# wants a service starts the mock and points the editor at it.
+# NOTHING A SUITE STARTS REACHES A REAL SERVICE OR THE AUTHOR'S OWN KEY. Importing this module makes the whole
+# process tree of the suite a QA run: `GRIZZLY_QA_GITHUB` is the editor's `-qa_github` for every program started
+# from here on - an editor, a commandlet, the twin for a command line, however its command line was written -
+# and in a QA run the editor speaks to this computer alone (a missing address is nowhere, never the real
+# service), reads no token but the QA ones and keeps its author keys inside its own home. Every service is on
+# a port of the loopback nothing listens on; a suite that wants one starts the mock and points its editor at
+# it. The variables a real token, key or key folder could come in by are taken out of the environment.
 NOWHERE = "http://127.0.0.1:9"
 LOOPBACK_ENV = {
+    "GRIZZLY_QA_GITHUB": "1",
     "GRIZZLY_GITHUB_API": NOWHERE,
     "GRIZZLY_GITHUB_WEB": NOWHERE,
     "GRIZZLY_VT_API": NOWHERE,
     "GRIZZLY_CATALOG_BASE": NOWHERE + "/",
 }
+OWN_SECRETS = ("GRIZZLY_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GRIZZLY_VT_KEY", "VT_API_KEY",
+               "GRIZZLY_CATALOG_HOME", "GRIZZLY_CATALOG_REPO", "GRIZZLY_UPDATE_REPO", "GRIZZLY_UPDATE_ROOT")
+os.environ.update(LOOPBACK_ENV)
+for _name in OWN_SECRETS:
+    os.environ.pop(_name, None)
 
 # ---- where a suite's time goes ------------------------------------------------------------------------------------
 # The wall time is printed when the suite ends, split by the marks it sets ("copy", "editor start", ...; the rest is
@@ -473,8 +484,8 @@ class Editor:
 
     `project` is a copy (`copy_project`; anything else is refused); without one the editor starts on the Start
     page. `port` and `home_folder` default to the suite's own; a second editor of one suite names its own. `args`
-    are more switches, `env` more variables, `github` starts it under `-qa_github` with every service on the
-    loopback nowhere (`LOOPBACK_ENV`), `headless` without a window, `visible` with the window shown (not
+    are more switches, `env` more variables (a mock's addresses, a QA token), `headless` without a window,
+    `visible` with the window shown (not
     activated) instead of hidden. `ready` says when it is up: `"project"` (the default with a project: `state` says that project is open, the
     first frame is drawn and the scene it reopens loaded), `"ping"` (anything else), or a function.
 
@@ -482,7 +493,7 @@ class Editor:
     UI thread over 100 ms and that the suite did not declare (`stalls_allowed`) fails the suite."""
 
     def __init__(self, project: str | None = None, *, port: int = 0, home_folder: str = "", args: Iterable[str] = (),
-                 env: dict | None = None, github: bool = False, headless: bool = False, visible: bool = False,
+                 env: dict | None = None, headless: bool = False, visible: bool = False,
                  ready: str | Callable[["Editor"], bool] = "", start_timeout: float = 600.0, stalls: bool = True,
                  log_output: bool = True):
         self.project = project
@@ -490,7 +501,6 @@ class Editor:
         self.home = home_folder or home()
         self.extra = list(args)
         self.env = env or {}
-        self.github = github
         self.headless = headless
         self.visible = visible
         self.ready = ready or ("project" if project else "ping")
@@ -499,6 +509,7 @@ class Editor:
         self.watch_stalls = False
         self.log_output = log_output
         self.proc: subprocess.Popen | None = None
+        self._isolated = False
 
     # -- the client of this editor
     def cmd(self, name: str, /, *, timeout: float = 300.0, **params) -> dict:
@@ -518,9 +529,7 @@ class Editor:
 
     # -- lifecycle
     def command_line(self) -> list[str]:
-        line = [exe(), "-mcp_port", str(self.port), "-home", self.home, "-nodlg"]
-        if self.github:
-            line.append("-qa_github")
+        line = [exe(), "-mcp_port", str(self.port), "-home", self.home, "-nodlg", "-qa_github"]
         if self.headless:
             line.append("-headless")
         if self.project:
@@ -537,8 +546,7 @@ class Editor:
         if check_port and self.up():
             raise RuntimeError("an editor already answers on 127.0.0.1:%d - close it first" % self.port)
         env = dict(os.environ)
-        if self.github:
-            env.update(LOOPBACK_ENV)
+        env.update(LOOPBACK_ENV)
         for name, value in self.env.items():
             # None takes a variable away: an editor must not meet the author's own token
             if value is None:
@@ -573,6 +581,7 @@ class Editor:
 
     def _is_ready(self) -> bool:
         try:
+            self._kept_to_this_computer()
             if callable(self.ready):
                 return bool(self.ready(self))
             if self.ready == "project":
@@ -580,6 +589,23 @@ class Editor:
             return bool(self.cmd("ping", timeout=30).get("ok"))
         except (OSError, ValueError):
             return False
+
+    def _kept_to_this_computer(self) -> None:
+        """The editor says it is a QA run before a suite asks it anything else: one that could reach GitHub,
+        VirusTotal, the catalog or the author's key is closed at once and the suite stops."""
+        if self._isolated:
+            return
+        ping = self.cmd("ping", timeout=30)
+        if not ping.get("ok"):
+            raise OSError("the editor does not answer yet")
+        if ping.get("qa") is not True:
+            try:
+                self.cmd("app.quit", discard=True, timeout=30)
+            except (OSError, ValueError):
+                pass
+            raise RuntimeError("this editor is not a QA run (ping answers no `qa`): it could reach a real service; "
+                               "the suite stops")
+        self._isolated = True
 
     def _project_open(self) -> bool:
         """The editor answers and `state` says the project it was started on is open: the control endpoint comes up

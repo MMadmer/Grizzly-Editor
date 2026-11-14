@@ -114,7 +114,7 @@ def same_rect(a, b, tol: float = 0.6) -> bool:
 
 def run(ctx: qa.Run) -> None:
     project, shots = ctx.project, ctx.shots
-    ed = qa.Editor(project, github=True).start()
+    ed = qa.Editor(project).start()
     try:
         before_scale = float(cmd("ui.list").get("scale") or 1.0)
         contract = cmd("ui.contract")
@@ -177,7 +177,7 @@ def shown_start() -> dict:
     """One start of an editor of its own (no project, a home and port of its own) whose window is SHOWN without
     taking the foreground: what the 0.3 s budget is about. Closed over MCP; its milestones."""
     home = tempfile.mkdtemp(prefix="grizzly_shown_")
-    shown = qa.Editor(port=qa.free_port(), home_folder=home, github=True, visible=True, stalls=False, ready="ping",
+    shown = qa.Editor(port=qa.free_port(), home_folder=home, visible=True, stalls=False, ready="ping",
                       log_output=False)
     try:
         shown.start()

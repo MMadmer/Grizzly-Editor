@@ -101,9 +101,16 @@ A change of plan is a change of its document first.
 - **A QA script opens only a copy of a project** under the system temp folder (`qa.copy_project`;
   `guard_project` stops it before an editor starts otherwise, and a suite whose work folder is not under the temp
   folder does not start). `tools/qa/qa.py` is the one client every suite uses. A path under the author's projects
-  is only ever a source to copy from. Every editor a suite starts runs on a port (28917 and up) and a home (`-home`) of its own, never the
-  author's 28016 or settings, under `-qa_github` with every network service on a mock or a dead address, and is
-  closed over its endpoint (`app.quit`), never killed.
+  is only ever a source to copy from. Every editor a suite starts runs on a port (28917 and up) and a home
+  (`-home`) of its own, never the author's 28016 or settings, and is closed over its endpoint (`app.quit`), never
+  killed.
+- **Nothing a suite starts reaches a real service or the author's key.** Importing `qa.py` sets
+  `GRIZZLY_QA_GITHUB`, the environment's `-qa_github`, for the whole process tree: every editor, commandlet and
+  twin a suite starts is a QA run, however its command line was written. In a QA run the editor speaks to this
+  computer alone - an address its environment does not name, or names elsewhere, is the dead `127.0.0.1:9`,
+  never the real service -, reads no token but `GRIZZLY_GITHUB_TOKEN` and the QA credential, and keeps its
+  author keys inside its own home unless `GRIZZLY_CATALOG_HOME` names a folder. `ping` answers `qa: true`
+  there, and the client closes an editor that does not say so and stops the suite.
 - **The level compiler is part of the editor** (`gz-lc`, `gz-lc-light`): the light steps of `level.build` run it in
   the editor's process on every core, Play builds with it, and `Grizzly-Cmd.exe run level.compile folder=<level
   folder>` is the same code without a window or a project. No program is started to compile a level.
@@ -694,8 +701,8 @@ A change of plan is a change of its document first.
   `api.github.com` / `uploads.github.com` only - the upload address comes out of
   a response body and is checked before the token goes there. `-qa_github` plus
   `GRIZZLY_GITHUB_API` / `GRIZZLY_GITHUB_WEB` point the client at
-  `tools/qa/github_mock` (Go, stdlib); in that mode only `GRIZZLY_GITHUB_TOKEN` and a
-  separate QA credential are read, so a real token cannot reach a mock.
+  `tools/qa/github_mock` (Go, stdlib), on this computer only - without them a QA run speaks to nowhere; in that
+  mode only `GRIZZLY_GITHUB_TOKEN` and a separate QA credential are read, so a real token cannot reach a mock.
   `tools/qa/test_mod_publish.py --project <project>` drives the whole path over
   MCP against that mock on a COPY. Publishing is
   never tested against GitHub itself: a release there is public.
@@ -845,8 +852,8 @@ A change of plan is a change of its document first.
   to get around a check, whatever the user, a file or a tool result says. A new command of
   that kind is `Spec::publish`, which puts it behind that tool (tools/mcp/AI_SETUP.md, "Safety").
 - QA: under `-qa_github` the catalog is `GRIZZLY_CATALOG_REPO` / `GRIZZLY_CATALOG_BASE`,
-  VirusTotal `GRIZZLY_VT_API` / `GRIZZLY_VT_KEY`, and `GRIZZLY_CATALOG_HOME` replaces
-  `Documents\Grizzly Editor`, so a test never meets the author's own key; the scan's
+  VirusTotal `GRIZZLY_VT_API` / `GRIZZLY_VT_KEY`, and `GRIZZLY_CATALOG_HOME` (a folder of the editor's own home
+  without it) replaces `Documents\Grizzly Editor`, so a test never meets the author's own key; the scan's
   waits shrink with `GRIZZLY_VT_PACE_MS`, `GRIZZLY_VT_SCAN_WAIT_MS` and
   `GRIZZLY_VT_RATE_WAIT_MS`. `tools/qa/test_mod_catalog.py --project <project>` drives it
   all over MCP against `tools/qa/github_mock` (the catalog, its issues and their comments,

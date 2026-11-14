@@ -188,7 +188,7 @@ class Editor(qa.Editor):
     """The updater's editor: headless, under -qa_github, with the fake installation named by its environment."""
 
     def __init__(self, env: dict) -> None:
-        super().__init__(github=True, headless=True, env=env, stalls=False)
+        super().__init__(headless=True, env=env, stalls=False)
         self.start()
 
 
@@ -227,7 +227,7 @@ def window_phase(ctx: qa.Run, mock: Mock, rel: Releases, base: dict, env: dict, 
     root = os.path.join(ctx.work, "Window Editor")
     install(root, v0, base)
     v5, v6 = bump(v0, 5), bump(v0, 6)
-    ed = qa.Editor(ctx.project, github=True, env={**env, "GRIZZLY_UPDATE_ROOT": root})
+    ed = qa.Editor(ctx.project, env={**env, "GRIZZLY_UPDATE_ROOT": root})
     ed.start()
     asset4 = os.path.basename(rel.archives[v4])
 

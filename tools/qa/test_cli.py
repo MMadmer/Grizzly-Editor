@@ -78,6 +78,8 @@ def phase_a(work: str) -> None:
     check(code == 0 and answer.get("name") == "Grizzly Editor" and str(answer.get("version", "")).count(".") == 2
           and not err.strip(), "A run ping: exit 0, the answer on stdout, nothing on stderr", (code, out[:200], err[:200]))
     check("\n  " in out, "A the answer is printed readable", out[:120])
+    # no command line of this suite says -qa_github: the environment the QA client sets makes every program a QA run
+    check(answer.get("qa") is True, "A a commandlet a suite starts is a QA run: it keeps to this computer", out[:200])
     code, out, err = cli("run", "ping", "-json", home=home)
     lines = [l for l in out.splitlines() if l.strip()]
     check(code == 0 and len(lines) == 1 and json.loads(lines[0]).get("ok") is True,

@@ -106,7 +106,8 @@ fn main() -> ExitCode {
 
     // a commandlet is the editor without a window
     let headless = cli.headless || cli.commandlet();
-    let flags = Flags { unattended: cli.unattended, headless, qa_github: cli.qa_github };
+    let qa_github = cli.qa_github || std::env::var(crate::cli::QA_VAR).is_ok_and(|v| !v.trim().is_empty());
+    let flags = Flags { unattended: cli.unattended, headless, qa_github };
     let editor = Editor::new(EditorOptions { flags, paths }, exec, log.clone(), registry);
     if headless {
         // From here on the end of the console it lives in (Ctrl+C, the console closed) is a quit:

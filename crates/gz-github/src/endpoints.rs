@@ -32,7 +32,7 @@ pub struct Endpoints {
     pub catalog_repo: String,
     /// The base URLs of the catalog's public files, in the order to try; each ends with `/`.
     pub mirrors: Vec<String>,
-    /// A QA run with its own API address: uploads go there instead of uploads.github.com.
+    /// A QA run: uploads go to its API's address instead of uploads.github.com.
     api_mocked: bool,
     /// The pauses between two looks at what the game will be served (3 s) and before an upload
     /// is tried again (2 s); a QA run names one shorter pause for both in
@@ -41,9 +41,23 @@ pub struct Endpoints {
     pub retry_pause_ms: u64,
 }
 
+/// Where a QA run's requests go when its environment names no mock: this computer's discard
+/// port, where nothing listens.
+pub const NOWHERE: &str = "http://127.0.0.1:9";
+
+/// An address of this computer.
+fn loopback(url: &str) -> bool {
+    url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:")
+}
+
+/// The real service, or in a QA run the mock the environment names. A QA run never speaks to
+/// the real one: a variable that is missing, or names anything but this computer, is nowhere.
 fn base(qa: bool, env: &dyn Fn(&str) -> Option<String>, variable: &str, real: &str) -> String {
-    let given = if qa { env(variable).unwrap_or_default() } else { String::new() };
-    let v = if given.is_empty() { real.to_owned() } else { given };
+    if !qa {
+        return real.trim_end_matches('/').to_owned();
+    }
+    let given = env(variable).unwrap_or_default();
+    let v = if loopback(&given) { given } else { NOWHERE.to_owned() };
     v.trim_end_matches('/').to_owned()
 }
 
@@ -57,12 +71,7 @@ impl Endpoints {
         let mirrors = if qa {
             // loopback only, like the game's own QA override
             let b = qa_text("GRIZZLY_CATALOG_BASE");
-            if (b.starts_with("http://127.0.0.1:") || b.starts_with("http://localhost:")) && b.ends_with('/')
-            {
-                vec![b]
-            } else {
-                Vec::new()
-            }
+            if loopback(&b) && b.ends_with('/') { vec![b] } else { Vec::new() }
         } else {
             CATALOG_MIRRORS.iter().map(|m| (*m).to_owned()).collect()
         };
@@ -74,7 +83,7 @@ impl Endpoints {
             client_id: if client_id.is_empty() { CLIENT_ID.to_owned() } else { client_id },
             catalog_repo: if catalog_repo.is_empty() { CATALOG_REPO.to_owned() } else { catalog_repo },
             mirrors,
-            api_mocked: qa && !qa_text("GRIZZLY_GITHUB_API").is_empty(),
+            api_mocked: qa,
             serve_pause_ms: qa_text("GRIZZLY_GITHUB_PAUSE_MS").parse().unwrap_or(3000),
             retry_pause_ms: qa_text("GRIZZLY_GITHUB_PAUSE_MS").parse().unwrap_or(2000),
         }
@@ -182,9 +191,25 @@ mod tests {
         assert!(!qa.upload_url_trusted("https://uploads.github.com/x"));
         assert!(!qa.upload_url_trusted("http://127.0.0.1:9001/x"));
 
-        // a QA run without its own API keeps GitHub's upload host
-        let qa_real = Endpoints::from_env(true, &env_of(&[]));
-        assert!(qa_real.upload_url_trusted("https://uploads.github.com/x"));
+        // a QA run whose environment names no mock, or names another computer, speaks to nowhere
+        let nowhere = Endpoints::from_env(true, &env_of(&[]));
+        assert_eq!(
+            (nowhere.api.as_str(), nowhere.web.as_str(), nowhere.vt.as_str()),
+            (NOWHERE, NOWHERE, NOWHERE)
+        );
+        assert!(!nowhere.upload_url_trusted("https://uploads.github.com/x"));
+        let abroad = Endpoints::from_env(
+            true,
+            &env_of(&[
+                ("GRIZZLY_GITHUB_API", "https://api.github.com"),
+                ("GRIZZLY_GITHUB_WEB", "https://github.com"),
+                ("GRIZZLY_VT_API", "https://www.virustotal.com/api/v3"),
+            ]),
+        );
+        assert_eq!(
+            (abroad.api.as_str(), abroad.web.as_str(), abroad.vt.as_str()),
+            (NOWHERE, NOWHERE, NOWHERE)
+        );
     }
 
     #[test]

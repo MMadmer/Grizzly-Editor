@@ -245,7 +245,7 @@ class Editor(qa.Editor):
         if vt_variable:
             env["GRIZZLY_VT_KEY"] = VT_KEY
         env.update(extra_env or {})
-        super().__init__(project, github=True, env=env)
+        super().__init__(project, env=env)
         self.start()
 
 

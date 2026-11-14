@@ -36,6 +36,9 @@ What the suites hold, beyond what their names say:
   check reads only the archive's end and its manifest; only the delta's ranges are asked for; a cut download resumes
   at its byte, also inside a record, also after a restart; a held file rolls the installation back exactly; the
   restart handshake.
+- **No suite reaches a real service** (`qa.py`, `test_cli`, `gz-github`'s endpoint tests): every program a suite
+  starts is a QA run by its environment, a QA run's addresses are this computer's or nowhere, its keys are
+  its home's, and the client refuses an editor whose `ping` does not say `qa`.
 - **Releases and the Mod Browser** (`test_mod_publish`, `test_mod_catalog`, the mock only): the whole path, the
   doors (`release.delete` only through the destroy door, `release.publish` and `mod.package` only through the
   release door), a check that a closed project's jobs do not start again.
