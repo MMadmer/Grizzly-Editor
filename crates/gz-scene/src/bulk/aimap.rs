@@ -37,7 +37,7 @@ const RCAST_VALID: f32 = 0.55;
 pub const SIDE_FLAGS: [u8; 4] = [nf::N1, nf::N2, nf::N3, nf::N4];
 const OPPOSITE: [usize; 4] = [2, 3, 0, 1];
 /// How many queued nodes are worked out ahead at once.
-const BATCH: usize = 512;
+const BATCH: usize = 2048;
 
 /// The layer's flags, as the AI map's chunk stores them.
 pub mod flags {
@@ -150,26 +150,115 @@ pub struct Gen<'a> {
     pub ignored: Vec<bool>,
 }
 
-impl Gen<'_> {
-    fn nearest_down(&self, p: Vec3, tris: &[(usize, Vec3)]) -> Option<(usize, f32)> {
-        let mut best: Option<(usize, f32)> = None;
-        let mut min = f32::MAX;
-        for (k, (i, _)) in tris.iter().enumerate() {
-            let Some(t) = self.model.tri(*i as u32) else { continue };
-            if let Some(range) = xr::ray_tri(p, Vec3::NEG_Y, t, false)
-                && range < min
-            {
-                min = range;
-                best = Some((k, range));
-            }
+/// A candidate ground triangle made ready for rays straight down: what `xr::ray_tri` works out
+/// from the triangle alone (`cull` off), worked out once per node instead of once per ray.
+#[derive(Clone, Copy)]
+struct DownTri {
+    p0: Vec3,
+    e1: Vec3,
+    e2: Vec3,
+    pvec: Vec3,
+    inv_det: f32,
+    n: Vec3,
+    /// A box in XZ outside which no ray can hit: the triangle's, with a margin that covers the
+    /// rounding of the test.
+    lo: [f32; 2],
+    hi: [f32; 2],
+}
+
+impl DownTri {
+    /// `None` for a triangle every downward ray misses (the engine's determinant test).
+    fn new(t: &[Vec3; 3], n: Vec3) -> Option<Self> {
+        let e1 = t[1] - t[0];
+        let e2 = t[2] - t[0];
+        let pvec = xr::cross(Vec3::NEG_Y, e2);
+        let det = dot(e1, pvec);
+        if det > -xr::EPS && det < xr::EPS {
+            return None;
         }
-        best
+        let inv_det = 1.0 / det;
+        // The test's barycentric coordinates carry an error of a few 1e-7 times the triangle's
+        // edges over its determinant; a ray further out than that (with a good margin) cannot hit.
+        let (l1, l2) = (xr::magnitude(e1), xr::magnitude(e2));
+        let reach = l1.max(l2) + 4.0;
+        let margin = 1e-3 + 4e-6 * (l1 * l2 / det.abs()) * reach;
+        let mut lo = [t[0].x.min(t[1].x).min(t[2].x) - margin, t[0].z.min(t[1].z).min(t[2].z) - margin];
+        let mut hi = [t[0].x.max(t[1].x).max(t[2].x) + margin, t[0].z.max(t[1].z).max(t[2].z) + margin];
+        if !(lo[0].is_finite() && lo[1].is_finite() && hi[0].is_finite() && hi[1].is_finite()) {
+            lo = [f32::NEG_INFINITY; 2];
+            hi = [f32::INFINITY; 2];
+        }
+        Some(Self { p0: t[0], e1, e2, pvec, inv_det, n, lo, hi })
     }
 
+    /// The range of the ray down from `c`, as `xr::ray_tri(c, NEG_Y, tri, false)` answers.
+    #[inline]
+    fn hit(&self, c: Vec3) -> Option<f32> {
+        let tvec = c - self.p0;
+        let u = dot(tvec, self.pvec) * self.inv_det;
+        if u < 0.0 || u > 1.0 {
+            return None;
+        }
+        let qvec = xr::cross(tvec, self.e1);
+        let v = dot(Vec3::NEG_Y, qvec) * self.inv_det;
+        if v < 0.0 || u + v > 1.0 {
+            return None;
+        }
+        Some(dot(self.e2, qvec) * self.inv_det)
+    }
+}
+
+const RAYS_SIDE: usize = (2 * RCAST_COUNT + 1) as usize;
+
+/// The nearest hit of every ray of the 9 x 9 grid (columns `px`, rows `pz`, heights `oy`, `valid`
+/// the rays that are cast), by the triangles in their order: the range and the triangle's index.
+fn nearest_down(
+    tris: &[DownTri],
+    px: &[f32; RAYS_SIDE],
+    pz: &[f32; RAYS_SIDE],
+    oy: &[f32; RCAST_TOTAL],
+    valid: &[bool; RCAST_TOTAL],
+) -> [(f32, u32); RCAST_TOTAL] {
+    let mut best = [(f32::MAX, u32::MAX); RCAST_TOTAL];
+    for (k, t) in tris.iter().enumerate() {
+        for (xi, &x) in px.iter().enumerate() {
+            if x < t.lo[0] || x > t.hi[0] {
+                continue;
+            }
+            for (zi, &z) in pz.iter().enumerate() {
+                let idx = xi * RAYS_SIDE + zi;
+                if z < t.lo[1] || z > t.hi[1] || !valid[idx] {
+                    continue;
+                }
+                if let Some(range) = t.hit(Vec3::new(x, oy[idx], z))
+                    && range < best[idx].0
+                {
+                    best[idx] = (range, k as u32);
+                }
+            }
+        }
+    }
+    best
+}
+
+/// The buffers a worker keeps between the sides it works out.
+#[derive(Default)]
+pub struct Scratch {
+    cand: Vec<u32>,
+    tris: Vec<DownTri>,
+    motion: motion::Scratch,
+}
+
+impl Gen<'_> {
     /// A node on the ground at `v_at`, or `None` (a chasm, too steep, too far up or
     /// down, floating).
     #[must_use]
     pub fn create_node(&self, v_at: Vec3, bic: bool) -> Option<AiMapNode> {
+        self.create_node_in(&mut Scratch::default(), v_at, bic)
+    }
+
+    /// [`Self::create_node`] in the caller's buffers.
+    fn create_node_in(&self, scratch: &mut Scratch, v_at: Vec3, bic: bool) -> Option<AiMapNode> {
         let ps = self.params.patch_size;
         let point_up = snap_xz(Vec3::new(v_at.x, v_at.y + RCAST_DEPTH, v_at.z), ps);
         let point_down = snap_xz(Vec3::new(v_at.x, v_at.y - RCAST_DEPTH, v_at.z), ps);
@@ -178,39 +267,43 @@ impl Gen<'_> {
         let mut b2 = Aabb::new(point_down, point_down);
         b2.grow(ps / 2.0);
         bb.merge(&b2);
-        let found = self.model.box_query(&bb, true);
-        if found.is_empty() {
-            return None;
-        }
-        // an ignored material is left out of the node's ground, which leaves a hole in the map
-        let tris: Vec<(usize, Vec3)> = found
-            .iter()
-            .filter(|&&i| {
-                let m = self.model.material.get(i as usize).copied().unwrap_or(0);
-                !self.ignored.get(usize::from(m)).copied().unwrap_or(false)
-            })
-            .filter_map(|&i| {
-                let t = self.model.tri(i)?;
-                let n = xr::mknormal(t[0], t[1], t[2]);
-                (n.y > 0.0).then_some((i as usize, n))
-            })
-            .collect();
+        let model = self.model;
+        // an ignored material is left out of the node's ground, which leaves a hole in the map;
+        // so is a face that does not look up
+        let Scratch { cand, tris, .. } = scratch;
+        model.box_query_into(&bb, true, cand, |i| {
+            let m = model.material.get(i as usize).copied().unwrap_or(0);
+            !self.ignored.get(usize::from(m)).copied().unwrap_or(false)
+                && model.normals.get(i as usize).is_some_and(|n| n.y > 0.0)
+        });
+        tris.clear();
+        tris.extend(cand.iter().filter_map(|&i| {
+            let t = model.tri(i)?;
+            DownTri::new(t, *model.normals.get(i as usize)?)
+        }));
         if tris.is_empty() {
             return None;
         }
         let coeff = 0.5 * ps / RCAST_COUNT as f32;
+        let mut px = [0f32; RAYS_SIDE];
+        let mut pz = [0f32; RAYS_SIDE];
+        for (i, (x, z)) in px.iter_mut().zip(pz.iter_mut()).enumerate() {
+            let k = (i as i32 - RCAST_COUNT) as f32;
+            *x = v_at.x + coeff * k;
+            *z = v_at.z + coeff * k;
+        }
+        let top = v_at.y + 10.0;
+        let best = nearest_down(tris, &px, &pz, &[top; RCAST_TOTAL], &[true; RCAST_TOTAL]);
         let mut points: Vec<Vec3> = Vec::with_capacity(RCAST_TOTAL);
-        let mut normals: Vec<Vec3> = Vec::with_capacity(RCAST_TOTAL);
-        for x in -RCAST_COUNT..=RCAST_COUNT {
-            let px = v_at.x + coeff * x as f32;
-            for z in -RCAST_COUNT..=RCAST_COUNT {
-                let mut p = Vec3::new(px, v_at.y + 10.0, v_at.z + coeff * z as f32);
-                if let Some((k, range)) = self.nearest_down(p, &tris) {
-                    p.y -= range;
-                    points.push(p);
-                    normals.push(tris[k].1);
-                }
+        let mut v_norm = Vec3::ZERO;
+        for (idx, &(range, k)) in best.iter().enumerate() {
+            if k == u32::MAX {
+                continue;
             }
+            let mut p = Vec3::new(px[idx / RAYS_SIDE], top, pz[idx % RAYS_SIDE]);
+            p.y -= range;
+            points.push(p);
+            v_norm += tris[k as usize].n;
         }
         if points.len() < 3 {
             return None;
@@ -219,11 +312,7 @@ impl Gen<'_> {
         if (points.len() as f32) / (RCAST_TOTAL as f32) < rc_lim {
             return None;
         }
-        let mut v_norm = Vec3::ZERO;
-        for n in &normals {
-            v_norm += *n;
-        }
-        let c = normals.len() as f32;
+        let c = points.len() as f32;
         v_norm = xr::normalize(Vec3::new(v_norm.x / c, v_norm.y / c, v_norm.z / c));
         let mut v_offs = Vec3::new(0.0, -1000.0, 0.0);
         let mut pl = Plane::build(v_offs, v_norm);
@@ -246,23 +335,36 @@ impl Gen<'_> {
         } else if y_new - y_old > self.params.can_up {
             return None;
         }
-        // the plane has to lie on the ground, not float over it
+        // the plane has to lie on the ground, not float over it: enough of the rays down onto it
+        // meet the ground within RCAST_VALID. A ray counts once any face is that near, and the
+        // rays stop when the share is decided either way.
+        let perc_lim = if bic { 0.015 } else { 0.5 };
+        let need = (0..=RCAST_TOTAL).find(|&n| n as f32 / RCAST_TOTAL as f32 >= perc_lim)?;
         let mut ok = 0usize;
-        for x in -RCAST_COUNT..=RCAST_COUNT {
-            for z in -RCAST_COUNT..=RCAST_COUNT {
-                let mut p = Vec3::new(pos.x + coeff * x as f32, pos.y, pos.z + coeff * z as f32);
-                let Some((plp, _)) = plane.intersect_ray_point(p, Vec3::NEG_Y) else { continue };
-                p.y = plp.y + RCAST_VALID * 0.01;
-                if let Some((_, range)) = self.nearest_down(p, &tris)
-                    && range < RCAST_VALID
-                {
-                    ok += 1;
+        let mut done = 0usize;
+        'rays: for xi in 0..RAYS_SIDE {
+            let x = pos.x + coeff * (xi as i32 - RCAST_COUNT) as f32;
+            for zi in 0..RAYS_SIDE {
+                if ok >= need {
+                    break 'rays;
                 }
+                if ok + (RCAST_TOTAL - done) < need {
+                    return None;
+                }
+                done += 1;
+                let z = pos.z + coeff * (zi as i32 - RCAST_COUNT) as f32;
+                let Some((plp, _)) = plane.intersect_ray_point(Vec3::new(x, pos.y, z), Vec3::NEG_Y) else {
+                    continue;
+                };
+                let c = Vec3::new(x, plp.y + RCAST_VALID * 0.01, z);
+                let near = tris.iter().any(|t| {
+                    !(x < t.lo[0] || x > t.hi[0] || z < t.lo[1] || z > t.hi[1])
+                        && t.hit(c).is_some_and(|range| range < RCAST_VALID)
+                });
+                ok += usize::from(near);
             }
         }
-        let perc = ok as f32 / RCAST_TOTAL as f32;
-        let perc_lim = if bic { 0.015 } else { 0.5 };
-        if perc < perc_lim {
+        if ok < need {
             return None;
         }
         Some(node_on(plane, pos))
@@ -270,13 +372,17 @@ impl Gen<'_> {
 
     /// The body slid at two heights reaches the point.
     #[must_use]
-    pub fn can_travel(&self, from: Vec3, mut at: Vec3) -> bool {
+    pub fn can_travel(&self, from: Vec3, at: Vec3) -> bool {
+        self.can_travel_in(&mut Scratch::default(), from, at)
+    }
+
+    fn can_travel_in(&self, scratch: &mut Scratch, from: Vec3, mut at: Vec3) -> bool {
         at.y = from.y;
         let eps = 0.1;
         let eps_y = self.params.patch_size * 1.5;
         let radius = self.params.patch_size / 2f32.sqrt();
         for height in [0.7, 2.0] {
-            let r = motion::simulate(self.model, from, at, radius, height);
+            let r = motion::simulate_in(&mut scratch.motion, self.model, from, at, radius, height);
             if fsimilar(r.x, at.x, eps) && fsimilar(r.z, at.z, eps) && fsimilar(r.y, at.y, eps_y) {
                 return true;
             }
@@ -286,12 +392,12 @@ impl Gen<'_> {
 
     /// The part of a node's build that depends on nothing but the model: whether the side can be
     /// walked to and the node there.
-    fn spec(&self, from: Vec3, at: Vec3, bic: bool) -> Option<AiMapNode> {
+    fn spec(&self, scratch: &mut Scratch, from: Vec3, at: Vec3, bic: bool) -> Option<AiMapNode> {
         let at = snap_xz(at, self.params.patch_size);
-        if !(bic || self.can_travel(from, at)) {
+        if !(bic || self.can_travel_in(scratch, from, at)) {
             return None;
         }
-        self.create_node(at, bic)
+        self.create_node_in(scratch, at, bic)
     }
 }
 
@@ -449,6 +555,7 @@ impl AiWork {
         let before = self.nodes.len();
         let mut k = 0usize;
         let mut stopped = false;
+        let mut scratch = Scratch::default();
         let reach = |p: Vec3| within.is_none_or(|(c, r)| dist_sqr(p, c).sqrt() <= r);
         while k < self.nodes.len() {
             let end = (k + BATCH).min(self.nodes.len());
@@ -463,8 +570,11 @@ impl AiWork {
                     reach(to).then_some((i, s, from, to))
                 })
                 .collect();
-            let specs: Vec<Option<AiMapNode>> =
-                jobs.par_iter().map(|&(_, _, from, to)| g.spec(from, to, bic)).collect();
+            let specs: Vec<Option<AiMapNode>> = jobs
+                .par_iter()
+                .with_min_len(8)
+                .map_init(Scratch::default, |s, &(_, _, from, to)| g.spec(s, from, to, bic))
+                .collect();
             let mut ahead: Vec<Option<usize>> = vec![None; (end - k) * 4];
             for (j, &(i, s, _, _)) in jobs.iter().enumerate() {
                 if let Some(slot) = ahead.get_mut((i - k) * 4 + s) {
@@ -488,7 +598,7 @@ impl AiWork {
                         // a node selected by one of this batch: worked out now
                         None => {
                             let from = self.nodes.get(i).map_or(Vec3::ZERO, |n| n.pos);
-                            g.spec(from, to, bic)
+                            g.spec(&mut scratch, from, to, bic)
                         }
                     };
                     let link = spec.and_then(|n| self.place(n));
@@ -1452,6 +1562,437 @@ mod tests {
         let (high, high_links, _) = flood(stepped, Vec3::new(1.4, 2.0, 0.0));
         assert_eq!((high.len(), high_links), (36, 118));
         assert!(high.iter().all(|n| (n.pos.y - 2.0).abs() < 1e-4 && n.pos.x > 0.5));
+    }
+
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn unit(&mut self) -> f32 {
+            (self.next() >> 40) as f32 / (1u64 << 24) as f32
+        }
+    }
+
+    /// A deterministic ground: a heightfield of `2 * cells^2` triangles with hills, terraces and
+    /// rough vertices, two-sided walls, a few platforms a storey up, patches of an ignored material.
+    /// Answers the model and the spawn points.
+    fn synthetic_ground(cells: usize, seed: u64) -> (CollideModel, Vec<Vec3>) {
+        let mut rng = Rng(seed);
+        let half = cells as f32 / 2.0;
+        #[allow(clippy::approx_constant, reason = "the pinned map was made with this value")]
+        let phases: Vec<f32> = (0..6).map(|_| rng.unit() * 6.28).collect();
+        let stride = cells + 1;
+        let mut hv = vec![0f32; stride * stride];
+        for iz in 0..stride {
+            for ix in 0..stride {
+                let (x, z) = (ix as f32 - half, iz as f32 - half);
+                let mut h = 3.0 * (x * 0.021 + phases[0]).sin() * (z * 0.017 + phases[1]).cos()
+                    + 1.5 * (x * 0.05 + z * 0.043 + phases[2]).sin()
+                    + 0.6 * (z * 0.11 + phases[3]).sin();
+                // terraces in some bands
+                if ((x + half) / 60.0) as i32 % 3 == 1 {
+                    h = (h / 0.8).floor() * 0.8;
+                }
+                // rough ground
+                h += (rng.unit() - 0.5) * 0.06;
+                // flat around the middle
+                let r = (x * x + z * z).sqrt();
+                if r < 15.0 {
+                    h *= r / 15.0;
+                }
+                hv[iz * stride + ix] = h;
+            }
+        }
+        let mut tris = Vec::with_capacity(cells * cells * 2 + 4096);
+        let mut material = Vec::with_capacity(tris.capacity());
+        let at = |ix: usize, iz: usize| Vec3::new(ix as f32 - half, hv[iz * stride + ix], iz as f32 - half);
+        for iz in 0..cells {
+            for ix in 0..cells {
+                let (a, b, c, d) = (at(ix, iz), at(ix, iz + 1), at(ix + 1, iz + 1), at(ix + 1, iz));
+                let m = u16::from(rng.next().is_multiple_of(197));
+                tris.push([a, b, c]);
+                tris.push([a, c, d]);
+                material.push(m);
+                material.push(m);
+            }
+        }
+        let ground = |x: f32, z: f32| {
+            let (ix, iz) = (((x + half) as usize).min(cells), ((z + half) as usize).min(cells));
+            hv[iz * stride + ix]
+        };
+        // walls, both windings, along x or z
+        for _ in 0..cells / 4 {
+            let x = (rng.unit() - 0.5) * (cells as f32 - 40.0);
+            let z = (rng.unit() - 0.5) * (cells as f32 - 40.0);
+            let len = 6.0 + rng.unit() * 14.0;
+            let along_x = rng.next() & 1 == 0;
+            let y0 = ground(x, z) - 1.0;
+            let y1 = y0 + 4.0;
+            let (p0, p1) = if along_x {
+                (Vec3::new(x, 0.0, z), Vec3::new(x + len, 0.0, z))
+            } else {
+                (Vec3::new(x, 0.0, z), Vec3::new(x, 0.0, z + len))
+            };
+            let (a, b) = (Vec3::new(p0.x, y0, p0.z), Vec3::new(p1.x, y0, p1.z));
+            let (c, d) = (Vec3::new(p1.x, y1, p1.z), Vec3::new(p0.x, y1, p0.z));
+            for t in [[a, b, c], [a, c, d], [c, b, a], [d, c, a]] {
+                tris.push(t);
+                material.push(0);
+            }
+        }
+        // platforms a storey up, with a floor facing up and its underside
+        let mut spawns = vec![Vec3::new(0.0, 0.0, 0.0)];
+        for _ in 0..6 {
+            let x = (rng.unit() - 0.5) * (cells as f32 - 60.0);
+            let z = (rng.unit() - 0.5) * (cells as f32 - 60.0);
+            let y = ground(x, z) + 3.2;
+            let s = 10.0;
+            let (a, b, c, d) = (
+                Vec3::new(x - s, y, z - s),
+                Vec3::new(x - s, y, z + s),
+                Vec3::new(x + s, y, z + s),
+                Vec3::new(x + s, y, z - s),
+            );
+            for t in [[a, b, c], [a, c, d], [c, b, a], [d, c, a]] {
+                tris.push(t);
+                material.push(0);
+            }
+            spawns.push(Vec3::new(x, y, z));
+        }
+        let n = tris.len();
+        debug_assert_eq!(n, material.len());
+        let model = CollideModel::from_tris(tris, material, vec!["default".into(), "water".into()]);
+        // the spawn points stand on what is under them
+        let spawns = spawns
+            .into_iter()
+            .filter_map(|p| {
+                let start = Vec3::new(p.x, p.y + 1.0, p.z);
+                model.ray_nearest(start, Vec3::NEG_Y, 4.0).map(|(_, r)| Vec3::new(p.x, p.y + 1.0 - r, p.z))
+            })
+            .collect();
+        (model, spawns)
+    }
+
+    /// FNV-1a over everything a node holds, in order.
+    fn nodes_hash(nodes: &[AiMapNode]) -> u64 {
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        let mut put = |w: u32| {
+            for b in w.to_le_bytes() {
+                h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+            }
+        };
+        for n in nodes {
+            for l in n.links {
+                put(l.unwrap_or(u32::MAX));
+            }
+            for v in [n.normal.x, n.normal.y, n.normal.z, n.d, n.pos.x, n.pos.y, n.pos.z] {
+                put(v.to_bits());
+            }
+            put(u32::from(n.flags));
+        }
+        h
+    }
+
+    fn run_synthetic(cells: usize, seed: u64) -> (usize, usize, u64) {
+        let (m, spawns) = synthetic_ground(cells, seed);
+        let g = Gen { model: &m, params: AiParams::default(), ignored: vec![false, true] };
+        let within =
+            Aabb::new(m.bounds.min - Vec3::new(0.0, 2.0, 0.0), m.bounds.max + Vec3::new(0.0, 2.0, 0.0));
+        let seeds = seeds(&m, &spawns, &within);
+        let (w, flood, seeded) = generate_over(&g, SceneAiMap::default(), within, &seeds, &|_, _| true);
+        assert!(!flood.stopped);
+        (w.nodes.len(), seeded, nodes_hash(&w.nodes))
+    }
+
+    /// The proof that a speed-up changed nothing: the same nodes, links and planes, on one thread
+    /// and on many.
+    #[test]
+    fn the_small_synthetic_ground_gives_the_pinned_map() {
+        let one = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        let many = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
+        let a = one.install(|| run_synthetic(64, 7));
+        let b = many.install(|| run_synthetic(64, 7));
+        assert_eq!(a, b);
+        assert_eq!(a, PINNED_SMALL, "{a:?}");
+    }
+
+    const PINNED_SMALL: (usize, usize, u64) = (9017, 7, 7_085_270_630_492_234_775);
+
+    /// `bash tools/rust/cg.sh test --release -p gz-scene synthetic_big -- --ignored --nocapture`
+    #[test]
+    #[ignore = "a measurement"]
+    fn synthetic_big() {
+        let begun = std::time::Instant::now();
+        let (m, spawns) = synthetic_ground(708, 7);
+        eprintln!(
+            "model: {} triangles, {} spawns, {:.2} s",
+            m.tris.len(),
+            spawns.len(),
+            begun.elapsed().as_secs_f32()
+        );
+        drop(m);
+        let begun = std::time::Instant::now();
+        let (nodes, seeded, hash) = run_synthetic(708, 7);
+        eprintln!(
+            "generation incl. model: {:.2} s, {nodes} nodes, {seeded} seeds, hash {hash:#018x}",
+            begun.elapsed().as_secs_f32()
+        );
+    }
+
+    /// `create_node` as it was before it was made fast: a list per call, `xr::ray_tri` per ray,
+    /// every candidate's normal worked out again, every ray of the second pass cast.
+    fn plain_create_node(g: &Gen<'_>, v_at: Vec3, bic: bool) -> Option<AiMapNode> {
+        let ps = g.params.patch_size;
+        let point_up = snap_xz(Vec3::new(v_at.x, v_at.y + RCAST_DEPTH, v_at.z), ps);
+        let point_down = snap_xz(Vec3::new(v_at.x, v_at.y - RCAST_DEPTH, v_at.z), ps);
+        let mut bb = Aabb::new(point_up, point_up);
+        bb.grow(ps / 2.0);
+        let mut b2 = Aabb::new(point_down, point_down);
+        b2.grow(ps / 2.0);
+        bb.merge(&b2);
+        // the whole model, one exact test each
+        let c =
+            Vec3::new((bb.min.x + bb.max.x) * 0.5, (bb.min.y + bb.max.y) * 0.5, (bb.min.z + bb.max.z) * 0.5);
+        let e =
+            Vec3::new((bb.max.x - bb.min.x) * 0.5, (bb.max.y - bb.min.y) * 0.5, (bb.max.z - bb.min.z) * 0.5);
+        let found: Vec<u32> = (0..g.model.tris.len() as u32)
+            .filter(|&i| xr::tri_box(c, e, &g.model.tris[i as usize], true))
+            .collect();
+        let tris: Vec<(usize, Vec3)> = found
+            .iter()
+            .filter(|&&i| !g.ignored.get(usize::from(g.model.material[i as usize])).copied().unwrap_or(false))
+            .filter_map(|&i| {
+                let t = g.model.tri(i)?;
+                let n = xr::mknormal(t[0], t[1], t[2]);
+                (n.y > 0.0).then_some((i as usize, n))
+            })
+            .collect();
+        if tris.is_empty() {
+            return None;
+        }
+        let near = |p: Vec3| {
+            let mut best: Option<(usize, f32)> = None;
+            let mut min = f32::MAX;
+            for (k, (i, _)) in tris.iter().enumerate() {
+                if let Some(range) = xr::ray_tri(p, Vec3::NEG_Y, g.model.tri(*i as u32)?, false)
+                    && range < min
+                {
+                    min = range;
+                    best = Some((k, range));
+                }
+            }
+            best
+        };
+        let coeff = 0.5 * ps / RCAST_COUNT as f32;
+        let (mut points, mut normals) = (Vec::new(), Vec::new());
+        for x in -RCAST_COUNT..=RCAST_COUNT {
+            for z in -RCAST_COUNT..=RCAST_COUNT {
+                let mut p = Vec3::new(v_at.x + coeff * x as f32, v_at.y + 10.0, v_at.z + coeff * z as f32);
+                if let Some((k, range)) = near(p) {
+                    p.y -= range;
+                    points.push(p);
+                    normals.push(tris[k].1);
+                }
+            }
+        }
+        if points.len() < 3 || (points.len() as f32) / (RCAST_TOTAL as f32) < if bic { 0.015 } else { 0.7 } {
+            return None;
+        }
+        let mut v_norm = Vec3::ZERO;
+        for n in &normals {
+            v_norm += *n;
+        }
+        let cnt = normals.len() as f32;
+        v_norm = xr::normalize(Vec3::new(v_norm.x / cnt, v_norm.y / cnt, v_norm.z / cnt));
+        let mut v_offs = Vec3::new(0.0, -1000.0, 0.0);
+        let mut pl = Plane::build(v_offs, v_norm);
+        for p in &points {
+            if pl.classify(*p) > 0.0 {
+                v_offs = *p;
+                pl = Plane::build(v_offs, v_norm);
+            }
+        }
+        let plane = Plane::build(v_offs, v_norm);
+        let (pos, _) = plane.intersect_ray_point(point_down, Vec3::Y)?;
+        if dot(Vec3::Y, plane.n) < deg2rad(60.0).cos() {
+            return None;
+        }
+        let (y_old, y_new) = (v_at.y, pos.y);
+        if y_old > y_new {
+            if y_old - y_new > g.params.can_down {
+                return None;
+            }
+        } else if y_new - y_old > g.params.can_up {
+            return None;
+        }
+        let mut ok = 0usize;
+        for x in -RCAST_COUNT..=RCAST_COUNT {
+            for z in -RCAST_COUNT..=RCAST_COUNT {
+                let mut p = Vec3::new(pos.x + coeff * x as f32, pos.y, pos.z + coeff * z as f32);
+                let Some((plp, _)) = plane.intersect_ray_point(p, Vec3::NEG_Y) else { continue };
+                p.y = plp.y + RCAST_VALID * 0.01;
+                if let Some((_, range)) = near(p)
+                    && range < RCAST_VALID
+                {
+                    ok += 1;
+                }
+            }
+        }
+        (ok as f32 / RCAST_TOTAL as f32 >= if bic { 0.015 } else { 0.5 }).then(|| node_on(plane, pos))
+    }
+
+    /// The fast `create_node` and `box_query` against the plain ones, bit for bit, on a soup
+    /// of triangles of every shape: slivers, big ones, steep ones, upside down, far from the origin.
+    #[test]
+    fn the_fast_ground_test_equals_the_plain_one() {
+        for (seed, offset) in [(3u64, Vec3::ZERO), (5, Vec3::new(2400.0, 30.0, -1800.0))] {
+            let mut rng = Rng(seed);
+            let mut tris = Vec::new();
+            // a rough floor so that nodes get made
+            for ix in -16..16 {
+                for iz in -16..16 {
+                    let (x, z) = (ix as f32, iz as f32);
+                    let mut h = || (rng.unit() - 0.5) * 0.3;
+                    let a = Vec3::new(x, h(), z) + offset;
+                    let b = Vec3::new(x, h(), z + 1.0) + offset;
+                    let c = Vec3::new(x + 1.0, h(), z + 1.0) + offset;
+                    let d = Vec3::new(x + 1.0, h(), z) + offset;
+                    tris.extend([[a, b, c], [a, c, d]]);
+                }
+            }
+            for i in 0..3000 {
+                let c = Vec3::new(rng.unit() * 30.0 - 15.0, rng.unit() * 3.0 - 1.5, rng.unit() * 30.0 - 15.0)
+                    + offset;
+                let size = match i % 5 {
+                    0 => 0.05,
+                    1 => 0.8,
+                    2 => 3.0,
+                    3 => 12.0,
+                    _ => 1.5,
+                };
+                let mut v = || {
+                    Vec3::new(
+                        rng.unit() - 0.5,
+                        (rng.unit() - 0.5) * if i % 7 == 0 { 3.0 } else { 0.3 },
+                        rng.unit() - 0.5,
+                    )
+                };
+                let (a, b, d) = (c + v() * size, c + v() * size, c + v() * size);
+                // slivers: two corners nearly together
+                let b = if i % 11 == 0 { a + (b - a) * 1e-4 } else { b };
+                tris.push([a, b, d]);
+            }
+            let n = tris.len();
+            let material: Vec<u16> = (0..n).map(|i| u16::from(i % 13 == 0)).collect();
+            let m = model_of(tris, material);
+            let g = Gen { model: &m, params: AiParams::default(), ignored: vec![false, true] };
+            let mut s = Scratch::default();
+            let (mut made, mut tried) = (0, 0);
+            for _ in 0..4000 {
+                let v_at =
+                    Vec3::new(rng.unit() * 30.0 - 15.0, rng.unit() * 3.0 - 1.5, rng.unit() * 30.0 - 15.0)
+                        + offset;
+                let bb = Aabb::new(v_at - Vec3::new(0.4, 1.0, 0.4), v_at + Vec3::new(0.4, 1.0, 0.4));
+                let plain: Vec<u32> = (0..m.tris.len() as u32)
+                    .filter(|&i| {
+                        let c = Vec3::new(
+                            (bb.min.x + bb.max.x) * 0.5,
+                            (bb.min.y + bb.max.y) * 0.5,
+                            (bb.min.z + bb.max.z) * 0.5,
+                        );
+                        let e = Vec3::new(
+                            (bb.max.x - bb.min.x) * 0.5,
+                            (bb.max.y - bb.min.y) * 0.5,
+                            (bb.max.z - bb.min.z) * 0.5,
+                        );
+                        xr::tri_box(c, e, &m.tris[i as usize], true)
+                    })
+                    .collect();
+                assert_eq!(m.box_query(&bb, true), plain);
+                for bic in [false, true] {
+                    tried += 1;
+                    let fast = g.create_node_in(&mut s, v_at, bic);
+                    let slow = plain_create_node(&g, v_at, bic);
+                    assert_eq!(
+                        fast.map(|n| nodes_hash(&[n])),
+                        slow.map(|n| nodes_hash(&[n])),
+                        "{v_at:?} {bic}"
+                    );
+                    made += usize::from(slow.is_some());
+                }
+            }
+            assert!(made > 100 && made < tried, "{made} of {tried}");
+        }
+    }
+
+    fn model_of(tris: Vec<[Vec3; 3]>, mats: Vec<u16>) -> CollideModel {
+        model(tris, mats)
+    }
+
+    /// Where one thread's time goes: the sides' travel against the nodes' ground.
+    #[test]
+    #[ignore = "a measurement"]
+    fn synthetic_split() {
+        let (m, spawns) = synthetic_ground(300, 7);
+        let g = Gen { model: &m, params: AiParams::default(), ignored: vec![false, true] };
+        let within =
+            Aabb::new(m.bounds.min - Vec3::new(0.0, 2.0, 0.0), m.bounds.max + Vec3::new(0.0, 2.0, 0.0));
+        let seeds = seeds(&m, &spawns, &within);
+        let (w, _, _) = generate_over(&g, SceneAiMap::default(), within, &seeds, &|_, _| true);
+        let mut s = Scratch::default();
+        let sample: Vec<(Vec3, Vec3)> = w
+            .nodes
+            .iter()
+            .step_by(7)
+            .flat_map(|n| (0..4).map(move |side| (n.pos, side)))
+            .map(|(p, side)| {
+                let mut q = p;
+                match side {
+                    0 => q.x -= 0.7,
+                    1 => q.z += 0.7,
+                    2 => q.x += 0.7,
+                    _ => q.z -= 0.7,
+                }
+                (p, snap_xz(q, 0.7))
+            })
+            .collect();
+        let t = std::time::Instant::now();
+        let mut travel = 0;
+        for &(from, at) in &sample {
+            travel += usize::from(g.can_travel_in(&mut s, from, at));
+        }
+        let t_travel = t.elapsed();
+        let t = std::time::Instant::now();
+        let mut made = 0;
+        for &(from, at) in &sample {
+            let mut a = at;
+            a.y = from.y;
+            made += usize::from(g.create_node_in(&mut s, a, false).is_some());
+        }
+        let t_node = t.elapsed();
+        let t = std::time::Instant::now();
+        let mut boxes = 0;
+        for &(from, at) in &sample {
+            let mut a = at;
+            a.y = from.y;
+            let bb = Aabb::new(a - Vec3::new(0.35, 1.0, 0.35), a + Vec3::new(0.35, 1.0, 0.35));
+            m.box_query_into(&bb, true, &mut s.cand, |_| true);
+            boxes += s.cand.len();
+        }
+        let t_box = t.elapsed();
+        eprintln!(
+            "{} sides: travel {:.2} us ({travel} ok), node {:.2} us ({made} made), box {:.2} us ({boxes} tris)",
+            sample.len(),
+            t_travel.as_secs_f64() * 1e6 / sample.len() as f64,
+            t_node.as_secs_f64() * 1e6 / sample.len() as f64,
+            t_box.as_secs_f64() * 1e6 / sample.len() as f64,
+        );
     }
 
     #[test]
