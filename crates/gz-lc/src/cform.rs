@@ -1,16 +1,75 @@
 //! The collision form: the collision faces of the level and of every MU reference welded into one soup,
 //! then decimated (QSlim) along edges that keep their material, sector and smoothing, and saved as `level.cform`.
+//!
+//! The soup is what X-Ray's packed collector (`gz_fmt_level::CollectorPacked`) makes of the faces added
+//! in their order; it is welded once all of them are in ([`weld_packed`]), on every core.
+
+use std::time::Instant;
 
 use glam::Vec3;
-use gz_fmt_level::{Aabb, CForm, CollectorPacked, Tri};
-use gz_lc_light::math::{EPS, mknormal};
+use gz_fmt_level::{Aabb, CForm, Tri};
+use gz_lc_light::math::{Corners, EPS, mknormal, weld_packed};
 use gz_lc_light::{
-    Ctl, FaceId, LcGlobalData, QUALITY_DRAFT, ShaderXrlc, VertId, connect_by_edge_flags, shader_of,
+    Ctl, FaceId, LcError, LcGlobalData, QUALITY_DRAFT, ShaderXrlc, VertId, connect_by_edge_flags, shader_of,
 };
 use rayon::prelude::*;
 
+use crate::geom::timed;
 use crate::qslim::{EdgeQSlim, Model, Placement, Weighting};
 use crate::{Log, Result};
+
+/// Faces as the packed collector takes them, three corners each (with the vertex each stands for)
+/// with the packed word and the flags.
+#[derive(Default)]
+struct Soup {
+    points: Corners,
+    words: Vec<u32>,
+    flags: Vec<u32>,
+}
+
+/// The soup welded: the vertices, the triangles and every triangle's flags.
+struct Welded {
+    verts: Vec<Vec3>,
+    tris: Vec<Tri>,
+    flags: Vec<u32>,
+}
+
+impl Soup {
+    fn with_capacity(faces: usize) -> Self {
+        Self {
+            points: Corners::with_capacity(faces * 3),
+            words: Vec::with_capacity(faces),
+            flags: Vec::with_capacity(faces),
+        }
+    }
+
+    /// `add_face` of a face of vertices `v` (numbers of the mesh being added) at `p`.
+    fn add_face(&mut self, v: [u32; 3], p: [Vec3; 3], material: u16, sector: u16, flags: u32) {
+        for (v, p) in v.into_iter().zip(p) {
+            self.points.push(v, p);
+        }
+        self.words.push(Tri::new([0; 3], material, sector).dummy);
+        self.flags.push(flags);
+    }
+
+    /// What the collector over `bb` gives for these faces.
+    fn weld(self, bb: &Aabb, ctl: &Ctl<'_>) -> Result<Welded> {
+        let stop = || ctl.cancelled();
+        let Some((verts, index)) = weld_packed(bb, &self.points.points, Some(&self.points.same), &stop)
+        else {
+            ctl.check()?;
+            return Err(LcError::Cancelled.into());
+        };
+        let tris = index
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(&self.words)
+            .map(|(v, &dummy)| Tri { verts: *v, dummy })
+            .collect();
+        Ok(Welded { verts, tris, flags: self.flags })
+    }
+}
 
 const MAX_DECIMATE_ERROR: f32 = 0.0005;
 const COMPACTNESS_RATIO: f64 = 0.001;
@@ -44,11 +103,9 @@ fn fsimilar(a: f32, b: f32, e: f32) -> bool {
     (a - b).abs() < e
 }
 
-/// The decimation.
-fn simplify(cl: &mut CollectorPacked, bb: &Aabb, ctl: &Ctl<'_>) -> Result<()> {
-    let verts = cl.verts().to_vec();
-    let tris = cl.tris().to_vec();
-    let flags = cl.flags().to_vec();
+/// The decimation: the welded soup in, the faces left as a new soup out.
+fn simplify(cl: Welded, ctl: &Ctl<'_>) -> Result<Soup> {
+    let Welded { verts, tris, flags } = cl;
     let mut mdl = Model::with_capacity(verts.len(), tris.len());
     for v in &verts {
         mdl.add_vertex(v.to_array());
@@ -64,7 +121,7 @@ fn simplify(cl: &mut CollectorPacked, bb: &Aabb, ctl: &Ctl<'_>) -> Result<()> {
             norm: mknormal(g(t.verts[0]), g(t.verts[1]), g(t.verts[2])),
         });
     }
-    *cl = CollectorPacked::new(bb, 0, 0);
+    let mut cl = Soup::default();
 
     let mut slim = EdgeQSlim::new(mdl);
     slim.boundary_weight = 1_000_000.0;
@@ -146,13 +203,14 @@ fn simplify(cl: &mut CollectorPacked, bb: &Aabb, ctl: &Ctl<'_>) -> Result<()> {
         let fc = mdl.face(f);
         let Some(fp) = props.get(f as usize) else { continue };
         let p = fc.map(|v| Vec3::from_array(mdl.vertex(v)));
-        cl.add_face(p[0], p[1], p[2], fp.material, fp.sector, fp.flags);
+        cl.add_face(fc, p, fp.material, fp.sector, fp.flags);
     }
-    Ok(())
+    Ok(cl)
 }
 
 /// Builds the collision form: answers `level.cform`.
 pub fn build_cform(g: &mut LcGlobalData, log: &mut Log, ctl: &Ctl<'_>) -> Result<Vec<u8>> {
+    let mut tm = Instant::now();
     // X-Ray's compiler sorts the vertex list by address; the collision vertices follow that order
     crate::geom::sort_vertices_by_addr(g);
     let mut marks: rustc_hash::FxHashSet<VertId> = rustc_hash::FxHashSet::default();
@@ -177,7 +235,7 @@ pub fn build_cform(g: &mut LcGlobalData, log: &mut Log, ctl: &Ctl<'_>) -> Result
         }
     }
     log.status(format!("Items to process: {}", faces.len()));
-    let mut cl = CollectorPacked::new(&bb, marks.len(), faces.len());
+    let mut cl = Soup::with_capacity(faces.len());
     // the multiple edges of every face, found at once and reported in face order
     let mesh = &g.mesh;
     let multi: Vec<Vec<(Vec3, Vec3)>> = faces
@@ -215,15 +273,21 @@ pub fn build_cform(g: &mut LcGlobalData, log: &mut Log, ctl: &Ctl<'_>) -> Result
         let Some(face) = g.mesh.face(f) else { continue };
         let Some(p) = g.mesh.positions(f) else { continue };
         let sector = g.materials.get(usize::from(face.material)).map_or(0, |m| m.sector);
-        cl.add_face(p[0], p[1], p[2], face.material_game, sector, face.sm_group);
+        cl.add_face(face.v.map(|v| v.0), p, face.material_game, sector, face.sm_group);
     }
     if critical > 0 {
         log.warn(format!("MultipleEdges: {critical} faces"));
     }
+    timed(log, "the level's collision faces", &mut tm);
+    // export_cform_game: the model's vertex list sorted by address (it stays so), its collision faces
+    // taken in the order of their addresses; the same for every reference of a model, found once
+    let mut chosen: Vec<Option<Vec<FaceId>>> = vec![None; g.mu_models.len()];
     for r in &g.mu_refs {
-        let Some(m) = g.mu_models.get_mut(r.model as usize) else { continue };
-        // export_cform_game: the model's vertex list sorted by address (it stays so), its collision
-        // faces taken in the order of their addresses
+        let i = r.model as usize;
+        if !chosen.get(i).is_some_and(Option::is_none) {
+            continue;
+        }
+        let Some(m) = g.mu_models.get_mut(i) else { continue };
         let mut list = m.mesh.vertices().to_vec();
         list.sort_unstable_by_key(|&v| m.mesh.vertex_addr(v));
         *m.mesh.vertices_mut() = list;
@@ -239,18 +303,29 @@ pub fn build_cform(g: &mut LcGlobalData, log: &mut Log, ctl: &Ctl<'_>) -> Result
             })
             .collect();
         faces.sort_unstable_by_key(|&f| m.mesh.face_addr(f));
-        for f in faces {
-            let (Some(face), Some(p)) = (m.mesh.face(f), m.mesh.positions(f)) else { continue };
-            let p = p.map(|q| r.xform.transform_tiny(q));
-            cl.add_face(p[0], p[1], p[2], face.material_game, r.sector, face.sm_group);
+        if let Some(slot) = chosen.get_mut(i) {
+            *slot = Some(faces);
         }
     }
-    if g.params.quality != QUALITY_DRAFT {
-        simplify(&mut cl, &bb, ctl)?;
+    for r in &g.mu_refs {
+        let i = r.model as usize;
+        let (Some(m), Some(Some(faces))) = (g.mu_models.get(i), chosen.get(i)) else { continue };
+        cl.points.begin();
+        for &f in faces {
+            let (Some(face), Some(p)) = (m.mesh.face(f), m.mesh.positions(f)) else { continue };
+            let p = p.map(|q| r.xform.transform_tiny(q));
+            cl.add_face(face.v.map(|v| v.0), p, face.material_game, r.sector, face.sm_group);
+        }
     }
-    let verts = cl.verts().to_vec();
-    let tris: Vec<Tri> = cl.tris().to_vec();
-    let form = CForm::new(verts, tris);
+    ctl.check()?;
+    timed(log, "the static models' collision faces", &mut tm);
+    let mut welded = cl.weld(&bb, ctl)?;
+    timed(log, "the weld", &mut tm);
+    if g.params.quality != QUALITY_DRAFT {
+        welded = simplify(welded, ctl)?.weld(&bb, ctl)?;
+        timed(log, "the decimation", &mut tm);
+    }
+    let form = CForm::new(welded.verts, welded.tris);
     // the faces no longer name a deflector (X-Ray's compiler clears what shares memory with the game
     // material id)
     let all = g.mesh.faces().to_vec();

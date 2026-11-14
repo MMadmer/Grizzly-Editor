@@ -2,6 +2,7 @@
 //! 2D boxes, the random generator, the exact normalize and the byte colour conversion), in its order of operations.
 
 use glam::{Vec2, Vec3};
+use smallvec::SmallVec;
 
 pub use gz_fmt_level::{Aabb, EPS, EPS_L, EPS_S, i_ceil, i_floor};
 
@@ -436,6 +437,340 @@ pub fn point_words(p: Vec3) -> [u32; 3] {
     [p.x.to_bits(), p.y.to_bits(), p.z.to_bits()]
 }
 
+// ------------------------------------------------------------------------------------------ welding
+
+/// A cell table for [`greedy_weld`]: open addressing over the runs of a list sorted by cell.
+struct CellTable {
+    keys: Vec<[i64; 3]>,
+    /// `(start, end)` of a cell's run; `start == end` for a free slot.
+    runs: Vec<(u32, u32)>,
+    mask: usize,
+}
+
+impl CellTable {
+    fn slot(key: &[i64; 3], mask: usize) -> usize {
+        let mut h = (key[0] as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        h ^= (key[1] as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+        h ^= (key[2] as u64).wrapping_mul(0x1656_67B1_9E37_79F9);
+        ((h ^ (h >> 29)) as usize) & mask
+    }
+
+    fn new(sorted: &[([i64; 3], u32)]) -> Self {
+        let mut count = 0usize;
+        let mut i = 0;
+        while let Some(&(k, _)) = sorted.get(i) {
+            count += 1;
+            i += sorted.get(i..).map_or(1, |rest| rest.iter().take_while(|e| e.0 == k).count().max(1));
+        }
+        let cap = (count * 2).next_power_of_two().max(16);
+        let mut t = Self { keys: vec![[0; 3]; cap], runs: vec![(0, 0); cap], mask: cap - 1 };
+        let mut i = 0usize;
+        while let Some(&(k, _)) = sorted.get(i) {
+            let len = sorted.get(i..).map_or(1, |rest| rest.iter().take_while(|e| e.0 == k).count().max(1));
+            let mut s = Self::slot(&k, t.mask);
+            while t.runs.get(s).is_some_and(|r| r.0 != r.1) {
+                s = (s + 1) & t.mask;
+            }
+            if let (Some(key), Some(run)) = (t.keys.get_mut(s), t.runs.get_mut(s)) {
+                *key = k;
+                *run = (i as u32, (i + len) as u32);
+            }
+            i += len;
+        }
+        t
+    }
+
+    fn get(&self, key: &[i64; 3]) -> (u32, u32) {
+        let mut s = Self::slot(key, self.mask);
+        loop {
+            match (self.runs.get(s), self.keys.get(s)) {
+                (Some(&r), Some(k)) if r.0 != r.1 => {
+                    if k == key {
+                        return r;
+                    }
+                }
+                _ => return (0, 0),
+            }
+            s = (s + 1) & self.mask;
+        }
+    }
+}
+
+/// The weld every welding loop of the compiler makes, for a whole list at once: point `i` goes to the
+/// first point before it that was kept and that `pred(kept, point)` accepts, and is kept when there is
+/// none. Answers for every point the point it went to (itself when kept); `None` when `stop` said so.
+///
+/// `pred` must hold only for points closer than `radius` on every axis, must hold for a finite point
+/// and itself, and must refuse every point that is not finite: such a point is always kept and never
+/// taken. Equal points go where the first of them went, so the search is made once per distinct point,
+/// in parallel; only the choice between the kept ones is made in order.
+///
+/// `same`, when given, names for every point an earlier one it is known to equal word for word (or
+/// itself): the corners of one vertex. Only the points that name themselves are sorted to find the
+/// equal ones; a list that does not keep that promise is not used.
+pub fn greedy_weld<P>(
+    points: &[Vec3],
+    same: Option<&[u32]>,
+    radius: f32,
+    pred: P,
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Option<Vec<u32>>
+where
+    P: Fn(Vec3, Vec3) -> bool + Sync,
+{
+    use rayon::prelude::*;
+    let n = points.len();
+    let at = |i: u32| points.get(i as usize).copied().unwrap_or(Vec3::NAN);
+    let same = same.filter(|s| {
+        s.len() == n
+            && s.par_iter().enumerate().all(|(i, &r)| {
+                (r as usize) <= i
+                    && s.get(r as usize) == Some(&r)
+                    && point_words(at(r)) == point_words(at(i as u32))
+            })
+    });
+    let root = |i: u32| same.is_none_or(|s| s.get(i as usize) == Some(&i));
+    // the first of every set of equal points
+    let mut by_bits: Vec<([u32; 3], u32)> = (0..n as u32)
+        .into_par_iter()
+        .filter_map(|i| {
+            let p = at(i);
+            (p.is_finite() && root(i)).then(|| (point_words(p), i))
+        })
+        .collect();
+    by_bits.par_sort_unstable();
+    let mut first = vec![u32::MAX; n];
+    let mut run_word = None;
+    let mut run_first = 0u32;
+    for &(w, i) in &by_bits {
+        if run_word != Some(w) {
+            run_word = Some(w);
+            run_first = i;
+        }
+        if let Some(slot) = first.get_mut(i as usize) {
+            *slot = run_first;
+        }
+    }
+    drop(by_bits);
+    if let Some(s) = same {
+        for (i, &r) in s.iter().enumerate() {
+            if r as usize != i {
+                let f = first.get(r as usize).copied().unwrap_or(u32::MAX);
+                if let Some(slot) = first.get_mut(i) {
+                    *slot = f;
+                }
+            }
+        }
+    }
+    if stop() {
+        return None;
+    }
+    let distinct: Vec<u32> =
+        (0..n as u32).into_par_iter().filter(|&i| first.get(i as usize) == Some(&i)).collect();
+    let mut rank = vec![u32::MAX; n];
+    for (r, &i) in distinct.iter().enumerate() {
+        if let Some(slot) = rank.get_mut(i as usize) {
+            *slot = r as u32;
+        }
+    }
+    // the distinct points by cells twice the radius wide: a point within the radius of another lies
+    // in one of the 27 cells around it
+    let size = 2.0 * f64::from(radius);
+    let cell = |p: Vec3| {
+        [
+            (f64::from(p.x) / size).floor() as i64,
+            (f64::from(p.y) / size).floor() as i64,
+            (f64::from(p.z) / size).floor() as i64,
+        ]
+    };
+    let mut by_cell: Vec<([i64; 3], u32)> =
+        distinct.par_iter().enumerate().map(|(r, &i)| (cell(at(i)), r as u32)).collect();
+    by_cell.par_sort_unstable();
+    let table = CellTable::new(&by_cell);
+    // what each distinct point may go to: the earlier distinct points `pred` accepts, in order
+    let candidates: Vec<SmallVec<[u32; 2]>> = distinct
+        .par_iter()
+        .enumerate()
+        .with_min_len(1024)
+        .map(|(r, &i)| {
+            let mut out = SmallVec::new();
+            if r % 1024 == 0 && stop() {
+                return out;
+            }
+            let v = at(i);
+            let c = cell(v);
+            for dx in -1i64..=1 {
+                for dy in -1i64..=1 {
+                    for dz in -1i64..=1 {
+                        let key = [c[0].saturating_add(dx), c[1].saturating_add(dy), c[2].saturating_add(dz)];
+                        let (s, e) = table.get(&key);
+                        for &(_, r2) in by_cell.get(s as usize..e as usize).unwrap_or_default() {
+                            // a run holds its points in rank order
+                            if r2 as usize >= r {
+                                break;
+                            }
+                            if let Some(&j) = distinct.get(r2 as usize)
+                                && pred(at(j), v)
+                            {
+                                out.push(r2);
+                            }
+                        }
+                    }
+                }
+            }
+            out.sort_unstable();
+            out
+        })
+        .collect();
+    if stop() {
+        return None;
+    }
+    // the choice in order: a distinct point goes to its first candidate that was kept
+    let mut to_rank: Vec<u32> = (0..distinct.len() as u32).collect();
+    for (r, cands) in candidates.iter().enumerate() {
+        let kept = cands.iter().copied().find(|&c| to_rank.get(c as usize) == Some(&c));
+        if let (Some(k), Some(slot)) = (kept, to_rank.get_mut(r)) {
+            *slot = k;
+        }
+    }
+    Some(
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let Some(&f) = first.get(i) else { return i as u32 };
+                if f == u32::MAX {
+                    return i as u32;
+                }
+                let r = rank.get(f as usize).copied().unwrap_or(u32::MAX);
+                to_rank.get(r as usize).and_then(|&t| distinct.get(t as usize)).copied().unwrap_or(i as u32)
+            })
+            .collect(),
+    )
+}
+
+/// The cells of `gz_fmt_level::CollectorPacked`: a 24 x 16 x 24 grid over a box given up front.
+#[derive(Clone, Copy, Debug)]
+pub struct PackedGrid {
+    min: Vec3,
+    scale: Vec3,
+    eps: Vec3,
+}
+
+impl PackedGrid {
+    const N: [u32; 3] = [24, 16, 24];
+
+    #[must_use]
+    pub fn new(bb: &Aabb) -> Self {
+        let scale = Vec3::new(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
+        let half_cell = |s: f32, n: u32| {
+            let e = s / n as f32 / 2.0;
+            if e < EPS_L { e } else { EPS_L }
+        };
+        Self {
+            min: bb.min,
+            scale,
+            eps: Vec3::new(
+                half_cell(scale.x, Self::N[0]),
+                half_cell(scale.y, Self::N[1]),
+                half_cell(scale.z, Self::N[2]),
+            ),
+        }
+    }
+
+    /// The floor into a `u32`, clamped from above, as the X-Ray SDK takes it.
+    fn cell(&self, v: Vec3) -> [u32; 3] {
+        let one =
+            |val: f32, min: f32, scale: f32, n: u32| (i_floor((val - min) / scale * n as f32) as u32).min(n);
+        [
+            one(v.x, self.min.x, self.scale.x, Self::N[0]),
+            one(v.y, self.min.y, self.scale.y, Self::N[1]),
+            one(v.z, self.min.z, self.scale.z, Self::N[2]),
+        ]
+    }
+
+    /// Whether the collector welds point `v` to the earlier vertex `p`: within `EPS_L` on every axis,
+    /// and `v`'s cell one of those `p` was put into.
+    #[must_use]
+    pub fn welds(&self, p: Vec3, v: Vec3) -> bool {
+        if !((p.x - v.x).abs() < EPS_L && (p.y - v.y).abs() < EPS_L && (p.z - v.z).abs() < EPS_L) {
+            return false;
+        }
+        let c = self.cell(v);
+        let a = self.cell(p);
+        let e = self.cell(Vec3::new(p.x + self.eps.x, p.y + self.eps.y, p.z + self.eps.z));
+        (0..3).all(|k| c[k] == a[k] || c[k] == e[k])
+    }
+}
+
+/// Points added in order with, for every one, the first point added for the same vertex: what
+/// [`weld_packed`] takes as `same`. A vertex is a number within one mesh, so a new mesh (or the same
+/// one placed again) begins afresh.
+#[derive(Clone, Debug, Default)]
+pub struct Corners {
+    pub points: Vec<Vec3>,
+    pub same: Vec<u32>,
+    seen: Vec<u32>,
+}
+
+impl Corners {
+    #[must_use]
+    pub fn with_capacity(points: usize) -> Self {
+        Self { points: Vec::with_capacity(points), same: Vec::with_capacity(points), seen: Vec::new() }
+    }
+
+    /// The vertices that follow are another mesh's.
+    pub fn begin(&mut self) {
+        self.seen.clear();
+    }
+
+    /// The point of vertex `v` (the same `p` every time).
+    pub fn push(&mut self, v: u32, p: Vec3) {
+        let i = self.points.len() as u32;
+        let v = v as usize;
+        if self.seen.len() <= v {
+            self.seen.resize(v + 1, u32::MAX);
+        }
+        let first = match self.seen.get_mut(v) {
+            Some(slot) if *slot == u32::MAX => {
+                *slot = i;
+                i
+            }
+            Some(slot) => *slot,
+            None => i,
+        };
+        self.points.push(p);
+        self.same.push(first);
+    }
+}
+
+/// What `gz_fmt_level::CollectorPacked` makes of a list of points added in order, three a face:
+/// the welded vertices and every point's vertex. `None` when `stop` said so. `same` as
+/// [`greedy_weld`] takes it.
+pub fn weld_packed(
+    bb: &Aabb,
+    points: &[Vec3],
+    same: Option<&[u32]>,
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Option<(Vec<Vec3>, Vec<u32>)> {
+    let grid = PackedGrid::new(bb);
+    let to = greedy_weld(points, same, EPS_L, |p, v| grid.welds(p, v), stop)?;
+    let mut index = vec![0u32; points.len()];
+    let mut verts = Vec::new();
+    for (i, (&t, &p)) in to.iter().zip(points).enumerate() {
+        let out = if t as usize == i {
+            verts.push(p);
+            (verts.len() - 1) as u32
+        } else {
+            // the vertex an earlier point made
+            index.get(t as usize).copied().unwrap_or(0)
+        };
+        if let Some(slot) = index.get_mut(i) {
+            *slot = out;
+        }
+    }
+    Some((verts, index))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,6 +803,64 @@ mod tests {
         let mut b = XrRandom::from_words(&[1, 2, 3]);
         assert_eq!(a.dir(), b.dir());
         assert!((magnitude(a.dir_cone(Vec3::Y, 0.5)) - 1.0).abs() < 1e-5);
+    }
+
+    /// The weld of a whole list is the packed collector's, point by point: lattice points nudged
+    /// within and past the epsilon and across the cells, repeats, points outside the box and
+    /// points that are not finite.
+    #[test]
+    fn the_packed_weld_is_the_collectors() {
+        let mut s = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        for (round, bb) in [
+            Aabb { min: Vec3::splat(-10.0), max: Vec3::splat(10.0) },
+            Aabb { min: Vec3::new(-3.0, -0.01, -3.0), max: Vec3::new(3.0, 0.0, 3.0) },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut points: Vec<Vec3> = Vec::new();
+            for n in 0..30_000 {
+                let mut q = || {
+                    let lattice = (next() % 9) as f32 * 0.5 - 2.0;
+                    let nudge = ((next() >> 40) as f32 / (1u64 << 24) as f32 - 0.5) * 0.004;
+                    (lattice + nudge) * if round == 1 { 0.3 } else { 1.0 }
+                };
+                let p = match n % 11 {
+                    0 if !points.is_empty() => points[(next() % points.len() as u64) as usize],
+                    1 => Vec3::new(q(), f32::NAN, q()),
+                    2 if n % 3 == 0 => Vec3::new(f32::INFINITY, q(), q()),
+                    3 => Vec3::new(q(), q(), q()) + Vec3::splat(0.0009),
+                    _ => Vec3::new(q(), q(), q()),
+                };
+                points.push(p);
+            }
+            let mut c = gz_fmt_level::CollectorPacked::new(&bb, 0, 0);
+            for t in points.as_chunks::<3>().0 {
+                c.add_face_d(t[0], t[1], t[2], 0, 0);
+            }
+            let (verts, index) = weld_packed(&bb, &points, None, &|| false).unwrap();
+            // the same with every repeat named
+            let mut seen: std::collections::HashMap<[u32; 3], u32> = std::collections::HashMap::new();
+            let same: Vec<u32> = points
+                .iter()
+                .enumerate()
+                .map(|(i, p)| *seen.entry(point_words(*p)).or_insert(i as u32))
+                .collect();
+            let (v2, i2) = weld_packed(&bb, &points, Some(&same), &|| false).unwrap();
+            let bits = |v: &[Vec3]| v.iter().map(|p| point_words(*p)).collect::<Vec<_>>();
+            assert_eq!((bits(&v2), i2), (bits(&verts), index.clone()), "round {round}, the repeats named");
+            let words = |v: &[Vec3]| v.iter().map(|p| point_words(*p)).collect::<Vec<_>>();
+            assert_eq!(words(&verts), words(c.verts()), "round {round}");
+            let expect: Vec<u32> = c.tris().iter().flat_map(|t| t.verts).collect();
+            assert_eq!(index, expect, "round {round}");
+            assert!(verts.len() < points.len() * 9 / 10, "round {round}: nothing was welded");
+        }
     }
 
     #[test]

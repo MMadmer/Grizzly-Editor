@@ -38,6 +38,7 @@
 //! - [`light_details`] / [`slot_light`] - the detail objects' light.
 
 mod bake;
+mod bvh4;
 mod color;
 pub mod crt;
 mod data;
