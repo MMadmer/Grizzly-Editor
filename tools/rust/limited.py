@@ -28,6 +28,18 @@ def end_tree(pid: int) -> None:
     )
 
 
+def own_streams() -> dict:
+    """This process's streams, for the program it starts; one that is closed or no file is left out."""
+    out = {}
+    for name, stream in (("stdin", sys.stdin), ("stdout", sys.stdout), ("stderr", sys.stderr)):
+        try:
+            stream.fileno()
+        except (AttributeError, OSError, ValueError):
+            continue
+        out[name] = stream
+    return out
+
+
 def main() -> int:
     if len(sys.argv) < 3:
         print(__doc__.strip(), file=sys.stderr)
@@ -46,7 +58,9 @@ def main() -> int:
     else:
         command[0] = shutil.which(command[0]) or command[0]
     try:
-        child = subprocess.Popen(command)
+        # the program gets this script's own streams by name: a window program (the editor) is handed
+        # no console's streams by itself, and would print into nothing
+        child = subprocess.Popen(command, **own_streams())
     except OSError as e:
         print(f"limited: {command[0]} could not be started: {e}", file=sys.stderr)
         return 2
