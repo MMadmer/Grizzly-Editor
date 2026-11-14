@@ -11,6 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+gz-base.workspace = true
 gz-editor.workspace = true
 futures.workspace = true
 parking_lot.workspace = true

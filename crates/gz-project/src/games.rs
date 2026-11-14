@@ -283,6 +283,61 @@ pub fn library_root(editor: &Editor) -> PathBuf {
     Machine::of(editor).library_root()
 }
 
+/// What every writer of the editor's library passes before it writes: the library is the
+/// editor's own, and nothing of a game is ever written - not the default game, not the open
+/// project's, not one this home has known. A library folder set to a game (an old setting, a
+/// link into one) is read and never written.
+#[derive(Clone, Debug, Default)]
+pub struct LibraryGuard {
+    games: Vec<gz_editor::fsx::WriteGuard>,
+}
+
+impl LibraryGuard {
+    /// The guard against these game folders (empty ones left out).
+    #[must_use]
+    pub fn against<'a>(games: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut seen: Vec<String> = Vec::new();
+        let mut out = Vec::new();
+        for game in games {
+            let key = clean_root(game).to_lowercase();
+            if key.is_empty() || seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+            out.push(gz_editor::fsx::WriteGuard::new(game, None));
+        }
+        Self { games: out }
+    }
+
+    /// `Ok` when the library may write `path` (a file, or a folder it writes below). Blocking: it
+    /// resolves where the paths really are, so a link cannot carry a write into a game.
+    pub fn check(&self, path: &Path) -> Result<(), String> {
+        for game in &self.games {
+            if game.check(path).is_err() {
+                return Err(format!(
+                    "{} lies in a game's folder: the library is the editor's own and a game is never written (Preferences > Library names the library's folder)",
+                    path.display()
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The guard of the library's writers ([`LibraryGuard`]), from the games this editor knows now.
+/// Never touches the disk; [`LibraryGuard::check`] does.
+#[must_use]
+pub fn library_guard(editor: &Editor) -> LibraryGuard {
+    let machine = Machine::of(editor);
+    let file = machine.snapshot();
+    let mut games = vec![file.game_root()];
+    games.extend(file.seen());
+    if let Ok((_, project)) = crate::service::Project::of(editor) {
+        games.push(project.game_root());
+    }
+    LibraryGuard::against(games.iter().map(String::as_str))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,6 +345,25 @@ mod tests {
     fn game(dir: &Path) {
         std::fs::create_dir_all(dir.join("gamedata")).unwrap();
         std::fs::write(dir.join("fsgame.ltx"), "x").unwrap();
+    }
+
+    /// The library's writers never write under a game this editor knows: its files, its folder,
+    /// and a folder that only leads into it. Another place is written; with no game known,
+    /// nothing is refused.
+    #[test]
+    fn the_library_is_never_written_inside_a_game() {
+        let t = tempfile::tempdir().unwrap();
+        let (the_game, library) = (t.path().join("game"), t.path().join("library"));
+        game(&the_game);
+        std::fs::create_dir_all(library.join("gamedata")).unwrap();
+        let guard = LibraryGuard::against([the_game.to_str().unwrap(), "", the_game.to_str().unwrap()]);
+        assert_eq!(guard.games.len(), 1);
+        let refused = guard.check(&the_game.join("gamedata").join("lanims.xr")).unwrap_err();
+        assert!(refused.contains("a game is never written"), "{refused}");
+        assert!(guard.check(&the_game).is_err());
+        assert!(guard.check(&the_game.join("gamedata").join("textures").join("new").join("a.dds")).is_err());
+        assert!(guard.check(&library.join("gamedata").join("lanims.xr")).is_ok());
+        assert!(LibraryGuard::against([""]).check(&the_game.join("gamedata").join("lanims.xr")).is_ok());
     }
 
     #[test]

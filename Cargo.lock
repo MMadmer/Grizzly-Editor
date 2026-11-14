@@ -1654,6 +1654,7 @@ version = "0.7.0"
 dependencies = [
  "futures",
  "getrandom 0.3.4",
+ "gz-base",
  "gz-editor",
  "hex",
  "keyring-core",
@@ -2398,6 +2399,7 @@ dependencies = [
  "crc32fast",
  "flate2",
  "futures",
+ "gz-base",
  "gz-editor",
  "gz-task",
  "gz-win",

@@ -97,13 +97,10 @@ fn origin(url: &str) -> &str {
     }
 }
 
-/// Whether an address is this computer's.
+/// Whether an address is this computer's (the one test of it: `gz_base::web::is_loopback`).
 #[must_use]
 pub fn is_loopback(url: &str) -> bool {
-    let o = origin(url).to_ascii_lowercase();
-    let Some(rest) = o.strip_prefix("http://") else { return false };
-    let host = rest.split(':').next().unwrap_or("");
-    host == "127.0.0.1" || host == "localhost"
+    gz_base::web::is_loopback(url)
 }
 
 fn network(e: &reqwest::Error) -> NetError {
@@ -320,5 +317,6 @@ mod tests {
         assert!(!is_loopback("http://127.0.0.1.example.com:5000/x"));
         assert!(!is_loopback("https://api.github.com/repos"));
         assert!(!is_loopback("http://localhostile:5/"));
+        assert!(!is_loopback("http://127.0.0.1:1@api.github.com/x"));
     }
 }

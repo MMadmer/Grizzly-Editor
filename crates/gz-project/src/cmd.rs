@@ -898,6 +898,22 @@ async fn project_set_library(ed: Arc<Editor>, p: LibraryParams, _origin: Origin)
                 paths::wire(&path)
             )));
         }
+        // the library is written (descriptions, game textures and sounds, light animations): a
+        // game's folder is no library, whether this editor knows the game or it only looks like one
+        let guard = crate::games::library_guard(&ed);
+        let probe = PathBuf::from(&path);
+        let a_game = ed
+            .exec
+            .io(move || {
+                guard.check(&probe).is_err() || crate::looks_like_game(&probe.to_string_lossy()).is_ok()
+            })
+            .await;
+        if a_game {
+            return Err(refuse(format!(
+                "{} is a game's folder: the library is the editor's own, and a game is never written",
+                paths::wire(&path)
+            )));
+        }
     }
     let machine = Machine::of(&ed);
     machine.edit(|m| m.with_library_root(&path)).await?;

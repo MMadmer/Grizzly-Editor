@@ -8,6 +8,7 @@ pub mod problem;
 pub mod rev;
 pub mod text;
 pub mod units;
+pub mod web;
 
 pub use origin::Origin;
 pub use path::{PathError, RelPath, file_name_problem};

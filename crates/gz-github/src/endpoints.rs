@@ -45,9 +45,9 @@ pub struct Endpoints {
 /// port, where nothing listens.
 pub const NOWHERE: &str = "http://127.0.0.1:9";
 
-/// An address of this computer.
+/// An address of this computer (the one test of it, shared with the updater).
 fn loopback(url: &str) -> bool {
-    url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:")
+    gz_base::web::is_loopback(url)
 }
 
 /// The real service, or in a QA run the mock the environment names. A QA run never speaks to
@@ -210,6 +210,12 @@ mod tests {
             (abroad.api.as_str(), abroad.web.as_str(), abroad.vt.as_str()),
             (NOWHERE, NOWHERE, NOWHERE)
         );
+        // an address that only starts like this computer's names another host
+        let hidden = Endpoints::from_env(
+            true,
+            &env_of(&[("GRIZZLY_GITHUB_API", "http://127.0.0.1:1@api.github.com")]),
+        );
+        assert_eq!(hidden.api, NOWHERE);
     }
 
     #[test]

@@ -70,7 +70,7 @@ pub use delete::{
     DeleteContext, DeleteFailed, DeleteFailure, DeleteInfo, Guard, Inside, check_delete, delete_project,
     projects_inside, system_guards,
 };
-pub use games::{Candidate, Machine, clean_root, library_root};
+pub use games::{Candidate, LibraryGuard, Machine, clean_root, library_guard, library_root};
 pub use gz_vfs::looks_like_game;
 pub use hooks::{
     AssetLists, AssetTemplates, CATEGORIES, ProjectHooks, TemplateCx, TemplateKind, editor_file_list,
