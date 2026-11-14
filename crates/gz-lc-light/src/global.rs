@@ -44,6 +44,9 @@ pub struct LcGlobalData {
     pub linear: bool,
     /// A lightmap whose light allows it shrinks or collapses (off: `-no_lm_shrink`).
     pub shrink: bool,
+    /// The game reads a lightmap page's second texture only (the sun and the hemisphere): the
+    /// charts take no static light and the first texture is a placeholder (`-lm_second_page`).
+    pub second_page_only: bool,
 }
 
 /// What the light step makes besides what it changes in the data.
@@ -79,6 +82,7 @@ impl LcGlobalData {
             nosun: false,
             linear: false,
             shrink: true,
+            second_page_only: false,
         }
     }
 
@@ -194,6 +198,7 @@ impl LcGlobalData {
             nosun: self.nosun,
             linear: self.linear,
             shrink: self.shrink,
+            second_page_only: self.second_page_only,
         })
     }
 
@@ -280,10 +285,11 @@ impl LcGlobalData {
             nosun,
             linear,
             shrink,
+            second_page_only,
             ..
         } = self;
         let model = ray.as_ref().ok_or_else(|| LcError::Invalid("The ray model is not built yet.".into()))?;
-        let (nosun, linear, shrink) = (*nosun, *linear, *shrink);
+        let (nosun, linear, shrink, second_page_only) = (*nosun, *linear, *shrink, *second_page_only);
         let mut maps = Vec::new();
         let mut applied = false;
         {
@@ -303,7 +309,17 @@ impl LcGlobalData {
             let later = parts.contains(&Part::Charts) || parts.contains(&Part::Vertices);
             if !(later && implicit_shadows(model, &maps)) {
                 let light = {
-                    let env = LightEnv { mesh, model, textures, lights, params, nosun, linear, shrink };
+                    let env = LightEnv {
+                        mesh,
+                        model,
+                        textures,
+                        lights,
+                        params,
+                        nosun,
+                        linear,
+                        shrink,
+                        second_page_only,
+                    };
                     Self::bake_rest(&env, deflectors, shaders, materials, scene.as_ref(), parts, phase, ctl)?
                 };
                 light.apply(mesh);
@@ -315,7 +331,17 @@ impl LcGlobalData {
             // a transparent shadow caster wears a lit texture: the rest sees its new alpha
             let scene = lighter.scene(model, textures)?;
             let light = {
-                let env = LightEnv { mesh, model, textures, lights, params, nosun, linear, shrink };
+                let env = LightEnv {
+                    mesh,
+                    model,
+                    textures,
+                    lights,
+                    params,
+                    nosun,
+                    linear,
+                    shrink,
+                    second_page_only,
+                };
                 Self::bake_rest(&env, deflectors, shaders, materials, scene.as_ref(), parts, phase, ctl)?
             };
             drop(scene);

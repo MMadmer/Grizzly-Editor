@@ -22,7 +22,7 @@ use crate::math::{
     u8_clr,
 };
 use crate::mesh::{DeflId, FaceId, Mesh, Tcf};
-use crate::point::{Falloff, LP_DEFAULT, LP_DONT_SUN, LP_USE_FACE_DISABLE};
+use crate::point::{Falloff, LP_DEFAULT, LP_DONT_RGB, LP_DONT_SUN, LP_USE_FACE_DISABLE};
 use crate::ray::RayModel;
 use crate::{Ctl, Result};
 
@@ -92,6 +92,8 @@ pub struct LightEnv<'a> {
     /// A lightmap whose light allows it shrinks or collapses; off, every chart keeps the size its
     /// geometry gives it (a measure of the structure without the light).
     pub shrink: bool,
+    /// The charts take no static light: the game reads the page's second texture only.
+    pub second_page_only: bool,
 }
 
 impl<'a> LightEnv<'a> {
@@ -105,6 +107,13 @@ impl<'a> LightEnv<'a> {
     #[must_use]
     pub fn sun_flag(&self) -> u32 {
         if self.nosun { LP_DONT_SUN } else { 0 }
+    }
+
+    /// What a chart's samples leave out: the sun under `-nosun`, the static lights when the game
+    /// reads the second texture of a page only.
+    #[must_use]
+    pub fn chart_flags(&self) -> u32 {
+        self.sun_flag() | if self.second_page_only { LP_DONT_RGB } else { 0 }
     }
 }
 
@@ -855,7 +864,7 @@ impl Deflectors {
         let total = ids.len();
         let jit = jitter(env.params.lm_jitter_samples).len();
         let job = env.job();
-        let sun = env.sun_flag();
+        let sun = env.chart_flags();
         let mut at = 0usize;
         while at < ids.len() {
             ctl.check()?;

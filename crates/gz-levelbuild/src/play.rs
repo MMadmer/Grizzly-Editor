@@ -100,6 +100,21 @@ fn words_of(program: &Path) -> Vec<String> {
     fs::read(program).map(|b| gz_game::version::engine_abilities(&b)).unwrap_or_default()
 }
 
+/// The engine's word for "of a lightmap page I read the second texture only".
+pub const SECOND_PAGE: &str = "lightmaps-second-page";
+/// The engine's word for "I load pieces of a level beside the level".
+pub const PIECES: &str = "level-pieces";
+
+/// Whether the game in `game` states `word`: its engine and every library that implements its
+/// words say it (a library of an older build beside a newer engine does not). Reads the
+/// version resources. Blocking.
+#[must_use]
+pub fn game_states(game: &Path, programs: &GamePrograms, word: &str) -> bool {
+    let says = |p: &Path| words_of(p).iter().any(|w| w == word);
+    programs.engines.iter().map(|e| game.join(e)).find(|p| p.is_file()).is_some_and(|exe| says(&exe))
+        && programs.stating.iter().all(|l| says(&game.join(l)))
+}
+
 /// [`Ability`] of the engine at `engine`, whose libraries that implement its words
 /// (`programs.stating`) lie in `game`: a word counts only when all of them state it, so a library of
 /// an older build beside a newer engine makes the installation one that cannot.
@@ -971,6 +986,20 @@ mod tests {
             bytes.extend(s.encode_utf16().flat_map(u16::to_le_bytes));
         }
         bytes
+    }
+
+    #[test]
+    fn a_word_is_the_games_when_its_engine_and_every_library_say_it() {
+        let base = tempfile::tempdir().unwrap();
+        let dir = base.path();
+        fs::write(dir.join("engine.bin"), saying("fsltx-in-place lightmaps-second-page level-pieces"))
+            .unwrap();
+        fs::write(dir.join("core.lib"), saying("lightmaps-second-page fsltx-in-place")).unwrap();
+        assert!(game_states(dir, &PROGRAMS, SECOND_PAGE));
+        // a library of an older build beside a newer engine: the game cannot
+        assert!(!game_states(dir, &PROGRAMS, PIECES));
+        assert!(!game_states(dir, &PROGRAMS, "lightmaps-second"));
+        assert!(!game_states(&dir.join("nowhere"), &PROGRAMS, SECOND_PAGE), "no engine, no word");
     }
 
     /// A game whose engine and library state that they run in place.
