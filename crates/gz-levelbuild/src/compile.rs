@@ -68,23 +68,10 @@ pub fn parts_of(dir: &std::path::Path, details: Option<bool>) -> Vec<Part> {
 /// Runs the request inside a job: each part on the CPU pool, the job's stage following the
 /// compiler's phases. Answers the report of every part.
 pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<serde_json::Value, JobError> {
-    let (mut opts, unknown) =
+    let (opts, unknown) =
         Options::parse(req.flags.split_whitespace()).map_err(|e| JobError::new(e.to_string()))?;
     for u in &unknown {
         editor.log.warn(format!("The compiler does not know the option '{u}'; it is left out."));
-    }
-    // what the linked game reads of a lightmap page decides what is baked into one
-    if !opts.lm_second_page {
-        let game = gz_project::Project::of(editor).map(|(_, p)| p.game_root()).unwrap_or_default();
-        if !game.trim().is_empty() {
-            let game = PathBuf::from(game);
-            opts.lm_second_page = editor
-                .exec
-                .io(move || {
-                    crate::play::game_states(&game, &crate::play::LINKED_GAME, crate::play::SECOND_PAGE)
-                })
-                .await;
-        }
     }
     // the lighter of the job, made once: a graphics card's device is made here and nowhere else
     let choice = opts.light;

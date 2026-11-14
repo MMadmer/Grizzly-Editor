@@ -100,8 +100,6 @@ fn words_of(program: &Path) -> Vec<String> {
     fs::read(program).map(|b| gz_game::version::engine_abilities(&b)).unwrap_or_default()
 }
 
-/// The engine's word for "of a lightmap page I read the second texture only".
-pub const SECOND_PAGE: &str = "lightmaps-second-page";
 /// The engine's word for "I load pieces of a level beside the level".
 pub const PIECES: &str = "level-pieces";
 
@@ -992,14 +990,13 @@ mod tests {
     fn a_word_is_the_games_when_its_engine_and_every_library_say_it() {
         let base = tempfile::tempdir().unwrap();
         let dir = base.path();
-        fs::write(dir.join("engine.bin"), saying("fsltx-in-place lightmaps-second-page level-pieces"))
-            .unwrap();
-        fs::write(dir.join("core.lib"), saying("lightmaps-second-page fsltx-in-place")).unwrap();
-        assert!(game_states(dir, &PROGRAMS, SECOND_PAGE));
+        fs::write(dir.join("engine.bin"), saying("fsltx-in-place level-pieces long-paths")).unwrap();
+        fs::write(dir.join("core.lib"), saying("level-pieces fsltx-in-place")).unwrap();
+        assert!(game_states(dir, &PROGRAMS, PIECES));
         // a library of an older build beside a newer engine: the game cannot
-        assert!(!game_states(dir, &PROGRAMS, PIECES));
-        assert!(!game_states(dir, &PROGRAMS, "lightmaps-second"));
-        assert!(!game_states(&dir.join("nowhere"), &PROGRAMS, SECOND_PAGE), "no engine, no word");
+        assert!(!game_states(dir, &PROGRAMS, LONG_PATHS));
+        assert!(!game_states(dir, &PROGRAMS, "level-piece"));
+        assert!(!game_states(&dir.join("nowhere"), &PROGRAMS, PIECES), "no engine, no word");
     }
 
     /// A game whose engine and library state that they run in place.

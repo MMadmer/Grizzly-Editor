@@ -51,16 +51,6 @@ impl LightmapPage {
         ))
     }
 
-    /// The second picture as DXT5 and a 4 x 4 placeholder in place of the first: what a game
-    /// that reads the second texture of a page only is given.
-    pub fn dds_second_only(&self) -> Result<(Vec<u8>, Vec<u8>)> {
-        let blank = Image::new(4, 4, vec![0, 0, 0, 255].repeat(16))?;
-        Ok((
-            encode_dds(std::slice::from_ref(&blank), DdsEncoding::Dxt5)?,
-            encode_dds(std::slice::from_ref(&self.hemi), DdsEncoding::Dxt5)?,
-        ))
-    }
-
     /// A plain picture of the page for a look: the base above the hemisphere, alpha kept.
     pub fn debug_tga(&self) -> Result<Vec<u8>> {
         let mut rgba = self.base.rgba.clone();

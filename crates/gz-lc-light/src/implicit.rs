@@ -124,7 +124,6 @@ pub fn implicit_lighting(
             nosun: input.nosun,
             linear: input.linear,
             shrink: true,
-            second_page_only: false,
         };
         let mut lmap = light_texture(&env, tex.width, tex.height, &faces, scene, ctl)?;
         for r in (1..=254).rev() {

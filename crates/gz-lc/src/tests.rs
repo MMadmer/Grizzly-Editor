@@ -570,32 +570,3 @@ fn the_structure_does_not_follow_the_light() {
     assert!(log.lines.iter().any(|l| l.contains("lightmap pages,")), "{:?}", log.lines);
     assert!(log.lines.iter().any(|l| l.contains("The light was baked on the CPU:")), "{:?}", log.lines);
 }
-
-/// For a game that reads a lightmap page's second texture only, the first is a placeholder of a
-/// few bytes and the second is still a whole page; what the lightmaps hold never changes the
-/// structure.
-#[test]
-fn a_game_that_reads_the_second_texture_gets_a_placeholder_for_the_first() {
-    let (both, _) = compile_with(&CpuLighter::default(), 4, &Options::default());
-    let second = Options { lm_second_page: true, ..Options::default() };
-    let (only, log) = compile_with(&CpuLighter::default(), 4, &second);
-    let sizes = |o: &crate::Output, end: &str| -> Vec<usize> {
-        o.files
-            .iter()
-            .filter(|(n, _)| n.starts_with("lmap#") && n.ends_with(end))
-            .map(|(_, b)| b.len())
-            .collect()
-    };
-    let (first, pages) = (sizes(&only, "_1.dds"), sizes(&only, "_2.dds"));
-    assert!(!pages.is_empty() && first.len() == pages.len(), "{first:?} {pages:?}");
-    assert!(first.iter().all(|&n| n < 512), "the first texture is a placeholder: {first:?}");
-    assert!(pages.iter().all(|&n| n > 500_000), "the second texture is a page: {pages:?}");
-    assert!(sizes(&both, "_1.dds").iter().all(|&n| n > 500_000), "without the switch both are pages");
-    assert_eq!(both.structure, only.structure, "what the lightmaps hold changed the structure");
-    assert!(
-        log.lines.iter().any(|l| l.contains("a page's first texture is a placeholder")),
-        "{:?}",
-        log.lines
-    );
-    assert_eq!(Options::parse(["-lm_second_page"]).unwrap().0, second);
-}

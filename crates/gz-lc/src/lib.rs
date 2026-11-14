@@ -104,10 +104,6 @@ pub struct Options {
     /// light may be - the charts, the merge and the packing measured at their real sizes under a
     /// constant light.
     pub no_lm_shrink: bool,
-    /// `-lm_second_page`: for a game that reads a lightmap page's second texture only (the sun
-    /// and the hemisphere). The lightmaps take no static light and every page's first texture is a
-    /// 4 x 4 placeholder: half of the lightmaps' bytes and the static lights' rays are not made.
-    pub lm_second_page: bool,
 }
 
 impl Options {
@@ -126,7 +122,6 @@ impl Options {
                 "no_invalidefaces" => o.no_invalid_faces = true,
                 "att" => o.linear = true,
                 "no_lm_shrink" => o.no_lm_shrink = true,
-                "lm_second_page" => o.lm_second_page = true,
                 "silent" | "o" | "keep_temp_files" => {}
                 t if t.starts_with("light=") => match LightChoice::parse(&t["light=".len()..]) {
                     Some(c) => o.light = c,
@@ -422,7 +417,6 @@ pub fn compile_project(
 
     // LIGHT: every light value through the lighter
     g.shrink = !opts.no_lm_shrink;
-    g.second_page_only = opts.lm_second_page;
     let implicit = {
         let mut phase = |i: usize| {
             for n in lighter.notes() {
@@ -458,16 +452,7 @@ pub fn compile_project(
             packed.split.len()
         ));
     }
-    let second_only = opts.lm_second_page;
-    if second_only && !pages.is_empty() {
-        log.msg(
-            "The lightmaps hold the sun and the hemisphere: a page's first texture is a placeholder.".into(),
-        );
-    }
-    let encoded: Vec<_> = pages
-        .par_iter()
-        .map(|p| if second_only { p.dds_second_only() } else { p.dds() }.map(|d| (p.name.clone(), d)))
-        .collect();
+    let encoded: Vec<_> = pages.par_iter().map(|p| p.dds().map(|d| (p.name.clone(), d))).collect();
     drop(pages);
     for r in encoded {
         let (name, (a, b)) = r?;

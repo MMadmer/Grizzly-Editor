@@ -511,11 +511,8 @@ piece.geomx    the fast (position only) buffers, as level.geomx
                from the level's folder, under a name no other piece or level can have
 ```
 
-- **What the game states** (the engine's abilities in its version resources, which the editor reads):
-  `level-pieces` - it loads pieces; `lightmaps-second-page` - of a lightmap page it reads the second texture
-  only (true of all three renderers: the deferred static blender binds `s_hemi` from the third texture name
-  and nothing from the second). The editor builds pieces only for a game that states the first and bakes
-  section 8.5's way only for one that states the second.
+- **What the game states** (an engine's ability in its version resources, which the editor reads):
+  `level-pieces` - it loads pieces. The editor builds pieces only for a game that states it.
 
 ### 8.2 E1 - the engine (the game's repository; starts now, beside stage 1)
 
@@ -540,7 +537,7 @@ all three renderers, with the base level's frame cost unchanged when no piece is
    textures and visuals at the safe point, at most one piece a frame; the pieces in range when the level loads
    are loaded inside `level_Load`; `stream = false` and the console's `r__pieces_stream 0` load all with the
    level. `level_Unload` waits for a load in flight and frees every piece before the level's own tables.
-5. *The abilities* of 8.1 in the version resources (`src/xrCore/ProductVersion.h`).
+5. *The ability* of 8.1 in the version resources (`src/xrCore/ProductVersion.h`).
 6. *The documents*: `docs/dead-air/XMS_ARCHITECTURE.md` (8.2's "honest path" becomes what is), `MODDING.md`,
    `TEST_MATRIX.md`. No word of any tool a module is made with.
 7. *The proof*: `tools/qa/pieces/` - a script that cuts the visuals inside a box out of a compiled level of
@@ -571,13 +568,15 @@ cost for a level without pieces beyond one empty check.
 3. `level.inspect part=pieces`, `build.report`'s pieces, the status of the new step, Play on a stock level
    shipping the piece, the documents.
 
-### 8.4 Baking what the game reads (stage 3, the architect)
+### 8.4 Baking what the game reads - looked at, not built
 
-For a game that states `lightmaps-second-page`: lightmap samples skip the static lights (`LP_DONT_RGB`), the
-first texture of every page is written as a 4 x 4 placeholder, the second as today (the sun in rgb, the
-hemisphere in alpha). Half of a level's lightmap bytes go, and so do the static lights' rays of every
-lightmap texel. Vertex light, the static models' light and the details keep every channel (they are cheap and
-their consumers were not audited). A game that does not state it gets both textures, as today.
+The deferred static blender reads only the second texture of a lightmap page, which made a 4 x 4
+placeholder for the first look like half of the lightmaps' bytes for nothing. The engine's own check (E1)
+says otherwise: the forward pass of alpha-blended lightmapped materials and of the `LmEbB` blender
+(`blender_deffer_aref.cpp`'s R4 branch, `Blender_Lm(EbB).cpp`, `r3/lmape.ps`) samples the first texture -
+its rgb is the base light and its alpha the sun. Which pages such materials land on is known only with
+the engine's shader library, and the gain is about 1.3 MB a page. Both textures are written, as before;
+the engine states no `lightmaps-second-page`.
 
 ### 8.5 Proofs of stage 2 and 3
 
