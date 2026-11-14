@@ -223,8 +223,8 @@ them; one critic reads everything once at the end.
 | Architect, before | W0: the seam, the bench tools, the baselines | `gz-lc-light/src/bake.rs`, `gz-lc-gpu` (skeleton, `examples/lc_bench.rs`), `tools/qa/bench_level.py` |
 | A1 | The GPU lighter | `crates/gz-lc-gpu/**` |
 | A2 | The light through the baker, visuals before light, the atlas, the wiring | `gz-lc-light/src/{deflector,mu,implicit,vertex,detail,global,lightmap,layer,point,tests}.rs`; `gz-lc/src/{lib,split,details,tests}.rs`; `gz-levelbuild/src/{compile,cmd}.rs`, its `Cargo.toml` |
-| A3 | The CPU: the tracer, the structure phases, the build's steps | `gz-lc-light/src/{ray,mesh,math,hash2d}.rs` and a new `bvh4.rs`; `gz-lc/src/{geom,cform,tree,qslim,stripify,sphere,ogf,load,mender,vcache}.rs`; `gz-levelbuild/src/{files,prj,nav,graph,spawn,breakable,details,hemi,merge,wallmarks}.rs`; `gz-scene/src/bulk/{aimap,collide,ground}.rs` and `generate_map` in `bulk/cmd.rs` |
-| Architect, beside | W1: `build.report`, `level.inspect` | `gz-levelbuild/src/{report,inspect}.rs` (new), `gz-fmt-level` (a reader of the compiled level), `pipeline.rs` (the report's hook) |
+| A3 | The CPU: the tracer and the structure phases | `gz-lc-light/src/{ray,mesh,math,hash2d}.rs` and a new `bvh4.rs`; `gz-lc/src/{geom,cform,tree,qslim,stripify,sphere,ogf,load,mender,vcache}.rs` |
+| Architect, beside | W1: `build.report`, `level.inspect`, the steps before the compiler | `gz-levelbuild/src/{report,inspect}.rs` (new) and its steps (`files`, `prj`, `nav`, `graph`, `spawn`, `pipeline`), `gz-fmt-level` (a reader of the compiled level), `gz-scene/src/bulk` (the AI map's generation) |
 | Architect, after | W2: merge, the whole build, records, QA, the documents | everything |
 | Critic (one pass) | section 4.6 | reads only |
 
@@ -245,7 +245,8 @@ A file outside a row's list is not edited by that row. A need to change one is a
    [threads=N] [samples=N] [compare=1] [out=<folder>]`, printing every phase's seconds, the lighter's samples a
    second and the SHA-256 of every file it makes (nothing is written into the level folder; `mode=details`
    lights the detail slots). Built with `bash tools/rust/cg.sh build --release -p gz-lc-gpu --example
-   lc_bench`, started as `Intermediate\cargoelease\examples\lc_bench.exe` under `limited.py`.
+   lc_bench`, started as `Intermediate\cargo
+elease\examples\lc_bench.exe` under `limited.py`.
 6. The inputs under `%TEMP%\gz_bench\`: `escape_draft\build.prj`, `escape_std\build.prj`,
    `monolith_std\` (a whole compile in 43 s: the end-to-end measure), `yantar_std\` (with `build.details`: the
    detail light; it holds two invalid faces, so it compiles with `-no_invalidefaces`), the baseline tables
@@ -350,12 +351,12 @@ the cost of the charts, the merge and the packing at real sizes (the null lighte
 **Done when:** `cargo test -p gz-lc-light -p gz-lc` pass, the structure test passes, no phase of
 `escape_draft` is slower than its baseline, clippy and fmt are clean for the three crates.
 
-### 4.4 A3 - the CPU: the tracer, the structure phases, the steps
+### 4.4 A3 - the CPU: the tracer and the structure phases
 
 **Goal.** The CPU lighter at least three times faster - on Cordon `lc_bench ... mode=rays light=cpu` gives
 43 169 samples a second at the seam, the target is 130 000 or more; on the small level 478 339, the target
-1 400 000 -; every structure phase and build step that costs two seconds or more on Cordon at least twice as
-fast, with the same output.
+1 400 000 -; every structure phase that costs two seconds or more on Cordon at least twice as fast, with the
+same output.
 
 **Read first.** `gz-lc-light/src/ray.rs`, `gz-fmt-level/src/bvh.rs` (today's tree and its guarantees - the
 module text of `ray.rs` says why a cached triangle may only save a walk); `gz-lc/src/lib.rs`; the baseline
@@ -378,25 +379,21 @@ tables in `%TEMP%\gz_bench\`.
    enough - keep those lines), then make it parallel or change the algorithm. The output of every file stays
    byte for byte: `lc_bench escape_draft light=off` prints the files' hashes - record them at the start, they
    are equal at the end.
-4. *The steps before the compiler* (`gz-levelbuild`): the game files (4.2 s on Cordon), the geometry step (up
-   to 4.4 s), the game graph and the spawn (1.4 and 1.5 s), and the AI map's generation over the ground - time
-   it on Cordon by building the AI map step on a copy whose map was cleared. A step under two seconds is left
-   alone; one over it gets its factor of two where the code allows, and `level.ai`, `level.graph`, `level.game`
-   and `level.spawn` stay byte for byte for the same scene (the generated AI map's nodes in the same order:
-   saves hold their numbers).
-
-**Measure** (once each, `limited.py 300`): `lc_bench escape_std mode=rays light=cpu` before and after;
-`lc_bench escape_draft light=off` before and after; `python tools/qa/bench_level.py --project <Test>
---steps game,ai_map,game_graph,geometry --quality draft` before and after (the release editor is built once,
-at the end, for this).
+**Measure** (once each): `lc_bench escape_std mode=rays light=cpu` before and after; `lc_bench escape_draft
+light=off` before and after (the phases' seconds and the files' hashes).
 
 **Done when:** the samples a second of the CPU lighter on Cordon are at least three times the seam's; each
 phase and step listed is at least twice as fast or the report says in a sentence why it cannot be; the hashes
-are equal; `cargo test -p gz-lc-light -p gz-lc -p gz-levelbuild -p gz-scene` pass; clippy and fmt are clean.
+are equal; `cargo test -p gz-lc-light -p gz-lc` pass; clippy and fmt are clean.
 
 ### 4.5 W1 and W2 - the architect
 
-W1, while the agents work: `build.report` and `level.inspect` (section 3.6) with their tests and cards.
+W1, while the agents work: `build.report` and `level.inspect` (section 3.6) with their tests and cards; and
+the steps before the compiler - the game files (4.2 s on Cordon), the geometry step (up to 4.4 s), the game
+graph and the spawn (1.4 and 1.5 s), the AI map's generation over the ground (timed on a copy of Cordon whose
+map was cleared). A step under two seconds is left alone; one over it gets its factor of two where the code
+allows, and `level.ai`, `level.graph`, `level.game` and `level.spawn` stay byte for byte for the same scene
+(a generated AI map's nodes in the same order: saves hold their numbers).
 
 W2, when the three branches are in: merge them (disjoint files), build the whole editor, record the compile
 records again on the CPU lighter, extend `test_level_compile.py` (the CPU run against its record byte for
@@ -432,8 +429,12 @@ with targeted tests. Its brief lists every risk up front:
 - No agents of your own. No QA suite (`tools/qa/run_all.py`, `test_*.py`) - those run once, at the end, by the
   architect. Your proofs are your crates' unit tests and the measurements your brief names.
 - Every program you start runs under `python tools/rust/limited.py <seconds> ...`; cargo through
-  `bash tools/rust/cg.sh ...`, only for your crates (`-p`). A measurement runs once, never in a series; a run
-  that passes its limit is cut, read and understood, not started again as it was.
+  `bash tools/rust/cg.sh ...`, only for your crates (`-p`). A measurement runs once, never in a series, and
+  alone on the machine: `python tools/rust/alone.py <seconds> <program> ...` (it waits for the others'
+  measurements and limits the run). A run that passes its limit is cut, read and understood, not started
+  again as it was. Other authors compile on this machine meanwhile: judge factors, not per cents.
+- A new external crate goes into your own crate's `Cargo.toml` with its version, and into your report (the
+  architect checks its licence and moves it to the workspace's table). `Cargo.lock` is not committed.
 - Code first, measurements after: write the whole of your part, then test and measure.
 - No `unsafe`, no `unwrap` / `expect` outside tests, no `static` state, no thread made by hand (rayon, the
   caller's pool), `cargo fmt`, clippy without a warning, English comments only where the why is not obvious.
