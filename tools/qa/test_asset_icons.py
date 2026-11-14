@@ -200,6 +200,14 @@ def run(ctx: qa.Run) -> None:
             check(p.get("ok"), "D the Add menu comes up over MCP", json.dumps(p)[:200])
             shot(shots, "add_menu")
             cmd("ui.popup", show="none")
+
+        # a folder that is not there yet is made with the asset: nobody has to run file.mkdir first
+        deep = cmd("file.create", kind="quest", path="qa_made/deeper")
+        where = deep.get("path", "").replace("\\", "/")
+        check(deep.get("ok") and where.startswith("qa_made/deeper/") and os.path.isfile(os.path.join(project, where)),
+              "D file.create makes the folder it is asked to put the asset into", json.dumps(deep)[:300])
+        up = cmd("file.create", kind="quest", path="../outside")
+        check(not up.get("ok"), "D and a folder outside the project is refused", json.dumps(up)[:300])
     finally:
         ed.close()
 

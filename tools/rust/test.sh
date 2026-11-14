@@ -69,8 +69,11 @@ build_secs=$(since "$t0")
 
 
 # name|package folder|executable, one per binary - one pass, a process per binary costs a
-# second per 30 binaries on this system
+# second per 30 binaries on this system. Only what was built AS A TEST: a package with an
+# integration test makes cargo build its programs as well, and those are the editor itself - run
+# with no arguments it is a window on the author's own home. An example is no test either.
 grep '"executable":"[^"]' Intermediate/test-logs/build.json |
+    grep -E '"profile":\{[^}]*"test":true\}' |
     sed -E 's/.*"manifest_path":"([^"]*)","target":\{"kind":\[[^]]*\],"crate_types":\[[^]]*\],"name":"([^"]*)".*"executable":"([^"]*)".*/\1|\2|\3/; s/\\\\/\//g' |
     awk -F'|' '{
         dir = $1; sub(/\/Cargo\.toml$/, "", dir)

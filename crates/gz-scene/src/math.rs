@@ -7,7 +7,7 @@ pub use gz_fmt_object::Mat4;
 // The engine's epsilons (`XrCore/vector.h`), re-exported so the workspace has one copy.
 pub use gz_fmt_level::{EPS, EPS_L, EPS_S};
 
-/// `FTransformR.setXYZi(-x, -y, -z)`, which is `setHPB(y, x, z)`.
+/// The rotation an object's Euler angles `r` (x, y, z) stand for: heading `y`, pitch `x`, bank `z`.
 #[must_use]
 pub fn rotation_matrix(r: Vec3) -> Mat4 {
     Mat4::hpb(r.y, r.x, r.z)

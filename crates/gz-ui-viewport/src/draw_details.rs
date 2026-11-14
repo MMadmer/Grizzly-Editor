@@ -203,7 +203,7 @@ pub fn decompress(
             let Some(&(min_scale, max_scale)) = scales.get(usize::from(object)) else { continue };
             let rx = (x as f32 / d_size as f32) * DETAIL_SLOT_SIZE + vis.min.x;
             let rz = (z as f32 / d_size as f32) * DETAIL_SLOT_SIZE + vis.min.z;
-            // `Item_P.set(rx + jitter, top, rz + jitter)`: MSVC draws the arguments last first
+            // the game draws z's jitter before x's: the same order keeps every blade where the game puts it
             let jz = r_jitter.rand_fs(jitter);
             let jx = r_jitter.rand_fs(jitter);
             let mut p = Vec3::new(rx + jx, vis.max.y, rz + jz);

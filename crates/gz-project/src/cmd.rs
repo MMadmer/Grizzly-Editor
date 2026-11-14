@@ -899,15 +899,12 @@ async fn project_set_library(ed: Arc<Editor>, p: LibraryParams, _origin: Origin)
             )));
         }
         // the library is written (descriptions, game textures and sounds, light animations): a
-        // game's folder is no library, whether this editor knows the game or it only looks like one
+        // game's folder is no library, whether this editor knows the game or the folder holds
+        // what only a game has (a folder laid out like the editor's own is a library)
         let guard = crate::games::library_guard(&ed);
         let probe = PathBuf::from(&path);
-        let a_game = ed
-            .exec
-            .io(move || {
-                guard.check(&probe).is_err() || crate::looks_like_game(&probe.to_string_lossy()).is_ok()
-            })
-            .await;
+        let a_game =
+            ed.exec.io(move || guard.check(&probe).is_err() || crate::games::holds_a_game(&probe)).await;
         if a_game {
             return Err(refuse(format!(
                 "{} is a game's folder: the library is the editor's own, and a game is never written",
@@ -1196,16 +1193,21 @@ async fn file_create(ed: Arc<Editor>, p: FileCreateParams, _origin: Origin) -> R
     };
     let root = PathBuf::from(project.root());
     let rel_folder = folder.clone();
+    let pr = project.clone();
     let made = ed
         .exec
         .io(move || -> Result<RelPath, String> {
             let dir = rel_folder.to_fs(&root);
             if !fsys::dir_exists(&dir) {
-                return Err(format!(
-                    "Cannot create the {}: the folder {} does not exist",
-                    kind.noun(),
-                    rel_folder.to_backslash()
-                ));
+                // the folder it was asked to put the asset into is made, the way file.mkdir makes one
+                let mut ops = FileOps::new(pr.root(), &no_game, pr.write_guard(None));
+                ops.mkdir(&dir.to_string_lossy()).map_err(|e| {
+                    format!(
+                        "Cannot create the {}: the folder {}: {e}",
+                        kind.noun(),
+                        rel_folder.to_backslash()
+                    )
+                })?;
             }
             let found = (1..=999u32)
                 .map(|n| (n, kind.leaf(n)))
@@ -1220,6 +1222,8 @@ async fn file_create(ed: Arc<Editor>, p: FileCreateParams, _origin: Origin) -> R
         })
         .await
         .map_err(refuse)?;
+    // a folder made on the way shows in its parent
+    project.tree.mark_fs(Path::new(project.root()));
     project.tree.mark(folder);
     Ok(json!({ "kind": kind.key(), "path": made.to_string() }))
 }

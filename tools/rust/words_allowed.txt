@@ -25,3 +25,4 @@ docs/nq/NQ_FORMAT.md | ui_scale | A field of `graph.view`'s answer.
 docs/NQ_ARCHITECTURE.md | ui_scale | The UI scale in the formula of the graph's view.
 docs/STATE.md | open_scene | A dialog id, the value of `level.show dialog=`.
 docs/UI_DESIGN.md | open_scene|open_project | The id of a dialog and of the unsaved-work question before a project opens.
+crates/gz-project/src/association.rs | GrizzlyEditor\.Project | The ProgID the `.grizzly` association registers for the user: a name of the registry, not a call.

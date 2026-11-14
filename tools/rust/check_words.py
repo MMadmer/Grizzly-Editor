@@ -90,6 +90,10 @@ MEMBER = [
     ("another program's call",
      re.compile(r"`[A-Z][A-Za-z0-9]+\([^`)]*\b(?:b|p|dw|sz|n|f)[A-Z][A-Za-z0-9]*[^`)]*\)`")),
     ("another program's member call", re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*->[A-Za-z_][A-Za-z0-9_]*")),
+    # a backticked `Name.Call` or `NAME.call(...)`: Rust names a method `Type::method`, a file has a lower-case
+    # extension and no parentheses
+    ("another program's member call",
+     re.compile(r"`[A-Z][A-Za-z0-9_]*\.(?:[A-Z][A-Za-z0-9_]*[a-z][A-Za-z0-9_]*|[a-z_][A-Za-z0-9_]*(?=\())[^`]*`")),
     ("another program's global", re.compile(r"\bg_[A-Za-z][A-Za-z0-9_]*")),
     ("another program's constant", re.compile(r"\bOBJCLASS_\w+")),
 ]
