@@ -117,3 +117,37 @@ reads the old release build, 1393 unit tests green, the 26 QA suites green (two 
 run alone, after a stall beside the others: `docs/STATE.md`, "The window", says what those are).
 
 Write `docs/plan/reports/CRITIC.md` (round 2) and answer with the same text, in the form of round 1.
+
+## Round 3
+
+Round 2's report is `docs/plan/reports/CRITIC-2.md` (one blocker, three `should`, a list of `minor`); round 1's is
+`CRITIC-1.md`. Since round 2 (`git log --oneline a57ce9cc..HEAD`) the architect and two engineers changed the
+tree; their reports are `docs/plan/reports/E4.md` (the libraries' two last commands as jobs, the library's
+writer and its guard, the texture pick, the import folder) and `E5.md` (the Place count, the `loading` proofs, the
+popups a view command puts up, the file dialog's thread, the kit sheet). You are a new reader: you wrote neither
+earlier round. Sections "Round 2" above describes round 2's task; yours is the same one step on:
+
+1. **Is each finding of round 2 closed?** In the code and the documents as they are now, the blocker hardest:
+   `library.sync` and `library.rewrite_descriptions` - does any path of either still ask a question on the
+   command's path, answer for work that did not start, or need a window? And is there any OTHER command of the
+   editor that does (look for a command handler that reaches a kit question - `confirm`, `unsaved_prompt`,
+   `notice`, `result` - or `on_ui` work that only a person's answer continues)? Then the library guard: is there
+   a write under the library's folder that does not pass it (`crates/gz-ui-previews/src/writer.rs` and every
+   `fs::` / `write_atomic` call of that crate, `crates/gz-project/src/games.rs`), and can a library folder that is a
+   game be set by any path (`project.set_library`, Preferences, `machine.ltx` as read)?
+2. **The work since round 2, by the same measure**: `library.view show=`, `world.view show=`, `mod.view show=`
+   and `ui.contract`'s `view_popups`; `gz_base::web::is_loopback`; `Section::busy`; the kit's file dialog on
+   `Executors::thread`; `check_words.py` as widened again (run it; then look for what it still cannot see);
+   the renamed rows of a texture's and a sound's description.
+3. **The request against the result, once more and as a whole** - the ten points at the top of this brief. Two
+   rounds looked at parts. Stand back: is there a point of the ten the author would say is not done, or not
+   quality? Say so only where you can show it in the code, a command's answer, a document or a picture.
+
+Pictures as they are now: `Intermediate/plan/tour/*.png` and `Intermediate/plan/tour/small/*.png` (every tab,
+dialog and menu at both sizes), `Intermediate/plan/e5/*.png` (the kit sheet, the pick lists a view command puts
+up), `Intermediate/plan/e5k/library_pick_detail.png`. The last runs on this tree: `check.sh` clean on the release
+build of 13:32 (older than the tree by the round-2 fixes; it is rebuilt at the very end) and on the debug build,
+1402 unit tests green, the 26 QA suites green (one on the runner's second run alone after a stall beside the
+others).
+
+Write `docs/plan/reports/CRITIC.md` (round 3) and answer with the same text, in the form of the earlier rounds.
