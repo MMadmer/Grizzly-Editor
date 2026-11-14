@@ -90,6 +90,8 @@ pub struct ImagePass {
 
 impl ImagePass {
     fn new(gpu: &RenderState) -> Self {
+        // made on a thread of its own, with the device the window's frame draws with
+        let _drawing = gz_win::drawing_priority();
         let device = &gpu.device;
         let entry = |binding: u32, ty: wgpu::BindingType| wgpu::BindGroupLayoutEntry {
             binding,

@@ -113,6 +113,10 @@ impl Renderer {
         gate: gz_task::Gate,
         exec: Executors,
     ) -> Result<Self> {
+        // made on a pool thread or one of its own: its buffers and pipelines take the device's
+        // locks, which the window's frame takes too (`gz_win::DrawingPriority`)
+        #[cfg(windows)]
+        let _drawing = gz_win::drawing_priority();
         let gpu = Gpu::new(device, queue, gate);
         let checker = TextureData::checker(64, 8, Color::rgb(200, 200, 200), Color::rgb(140, 140, 140));
         let white = upload_texture_to(
