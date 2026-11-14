@@ -330,9 +330,12 @@ pub trait Document {
         Ok(())
     }
     /// What stopped a save that went on after [`Document::save`] returned (a write on the
-    /// pools, a job), taken once: the answer of the command that asked for the save. The shell
-    /// asks it while it waits for a save, whether the tab is drawn or not - a tab that learns
-    /// of its saves only as it draws takes what arrived here.
+    /// pools, a job, a question), taken once. Whoever asked for the save waits for it and is
+    /// told this - a command in its answer, a person in a notice - so a tab leaves EVERY end of
+    /// a save here and raises no notice of its own: a save that neither cleans the tab nor
+    /// answers here is waited for without end. A question the person answered No to is
+    /// [`crate::SAVE_CANCELLED`]. The shell asks while it waits, whether the tab is drawn or
+    /// not - a tab that learns of its saves only as it draws takes what arrived here.
     fn save_failed(&mut self) -> Option<gz_editor::CmdError> {
         None
     }

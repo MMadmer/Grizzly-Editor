@@ -83,11 +83,10 @@ pub trait LibraryDoc {
     }
 }
 
-/// What stopped the save a command's caller asked for, kept for that caller's answer
-/// (`Document::save_failed`).
+/// What stopped a tab's save, kept for whoever waits for it (`Document::save_failed`).
 pub(crate) type SaveError = Arc<parking_lot::Mutex<Option<gz_editor::CmdError>>>;
 
-/// A caller's save runs as the job `id`: a job that fails or is stopped is that caller's answer.
+/// A save runs as the job `id`: a job that fails or is stopped is the save's answer.
 pub(crate) fn answer_job(editor: &Arc<Editor>, id: gz_editor::JobId, failed: &SaveError) {
     let (ed, failed) = (editor.clone(), failed.clone());
     let _task = editor.exec.spawn(async move {
@@ -100,7 +99,7 @@ pub(crate) fn answer_job(editor: &Arc<Editor>, id: gz_editor::JobId, failed: &Sa
     });
 }
 
-/// A caller's save found the libraries' save already running: that job's end answers the caller.
+/// A save found the libraries' save already running: that job's end is this save's answer too.
 pub(crate) fn answer_running(editor: &Arc<Editor>, failed: &SaveError) {
     if let Some(job) = editor.jobs.running_in("libraries") {
         answer_job(editor, job.id, failed);

@@ -247,19 +247,15 @@ impl LanimDoc {
         self.editor.exec.spawn(async move { LibraryStores::reload_lanims(&editor).await });
     }
 
-    /// Writes the light animation library on the IO pool, then marks it saved. A failure is a
-    /// notice for a person and, `by_caller`, the answer of the command that asked.
-    fn save_now(&self, by_caller: bool) {
+    /// Writes the light animation library on the IO pool, then marks it saved. A failure is the
+    /// answer of whoever waits for the save.
+    fn save_now(&self) {
         *self.save_error.lock() = None;
         let (editor, failed) = (self.editor.clone(), self.save_error.clone());
         self.editor.exec.spawn(async move {
             if let Err(e) = save_lanims(&editor).await {
-                if by_caller {
-                    *failed.lock() = Some(CmdError::new("failed", e));
-                    editor.exec.wake().ping();
-                } else {
-                    editor.notices.error(e);
-                }
+                *failed.lock() = Some(CmdError::new("failed", e));
+                editor.exec.wake().ping();
             }
         });
     }
@@ -789,8 +785,8 @@ impl Document for LanimDoc {
         there
     }
 
-    fn save(&mut self, cx: &mut DocCx<'_>) -> Result<(), String> {
-        self.save_now(cx.requests.by_caller());
+    fn save(&mut self, _cx: &mut DocCx<'_>) -> Result<(), String> {
+        self.save_now();
         Ok(())
     }
 

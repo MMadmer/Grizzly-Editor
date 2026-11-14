@@ -327,24 +327,20 @@ impl TexLibDoc {
             return Err("The texture folder cannot be written.".to_owned());
         }
         if self.saving() {
-            // a save is under way: a caller is answered by how that one ends
-            if by_caller {
-                super::answer_running(&self.editor, &self.save_error);
-            }
+            // a save is under way: who waits for this one is answered by how that one ends
+            super::answer_running(&self.editor, &self.save_error);
             return Ok(());
         }
         *self.save_error.lock() = None;
         let Some(items) = self.import.as_ref().and_then(Pending::get).map(|i| i.as_ref().clone()) else {
             let id = start_texture_save(&self.editor, None, None)?;
-            if by_caller {
-                super::answer_job(&self.editor, id, &self.save_error);
-            }
+            super::answer_job(&self.editor, id, &self.save_error);
             return Ok(());
         };
         if by_caller {
             import_for_caller(&self.editor, items, &self.save_error);
         } else {
-            confirm_import(&self.editor, items);
+            confirm_import(&self.editor, items, &self.save_error);
         }
         Ok(())
     }
@@ -951,20 +947,28 @@ fn import_for_caller(editor: &Arc<Editor>, items: Vec<TexItem>, failed: &super::
 }
 
 /// New Textures' Import: asks first when it replaces textures of the library, then starts.
-fn confirm_import(editor: &Arc<Editor>, items: Vec<TexItem>) {
-    let (dirs, ed) = (EditorDirs::of(editor), editor.clone());
+fn confirm_import(editor: &Arc<Editor>, items: Vec<TexItem>, failed: &super::SaveError) {
+    let (dirs, ed, failed) = (EditorDirs::of(editor), editor.clone(), failed.clone());
     let asker = if editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
     editor.exec.clone().spawn(async move {
         let (d, i) = (dirs, items.clone());
         let replaced = ed.exec.io(move || replaced_by_import(&d, &i)).await;
         let Ok(queue) = gz_app::UiQueue::of(&ed) else { return };
         queue.post(move |_shell, ctx| {
+            // every end of the import is the save's answer: its job's, a start that fails, the
+            // question answered No
+            let answer = {
+                let (ed, failed) = (ed.clone(), failed.clone());
+                move |why: CmdError| {
+                    *failed.lock() = Some(why);
+                    ed.exec.wake().ping();
+                }
+            };
             let start = {
-                let (ed, items) = (ed.clone(), items);
-                move || {
-                    if let Err(e) = start_texture_save(&ed, Some(items), None) {
-                        ed.notices.error(e);
-                    }
+                let (ed, items, failed, answer) = (ed.clone(), items, failed.clone(), answer.clone());
+                move || match start_texture_save(&ed, Some(items), None) {
+                    Ok(id) => super::answer_job(&ed, id, &failed),
+                    Err(e) => answer(CmdError::new("failed", e)),
                 }
             };
             if replaced.is_empty() {
@@ -982,9 +986,11 @@ fn confirm_import(editor: &Arc<Editor>, items: Vec<TexItem>) {
                 action: "Replace".to_owned(),
                 destructive: true,
             };
-            let line = gz_ui::dialog::confirm(ctx, asker, spec, move |answer| {
-                if answer == gz_ui::Answer::Yes {
+            let line = gz_ui::dialog::confirm(ctx, asker, spec, move |reply| {
+                if reply == gz_ui::Answer::Yes {
                     start();
+                } else {
+                    answer(CmdError::new(gz_app::SAVE_CANCELLED, "the import was cancelled"));
                 }
             });
             if let Some(line) = line {

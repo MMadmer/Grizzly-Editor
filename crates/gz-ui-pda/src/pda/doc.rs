@@ -896,7 +896,7 @@ impl Document for PdaDoc {
         true
     }
 
-    fn save(&mut self, cx: &mut DocCx<'_>) -> Result<(), String> {
+    fn save(&mut self, _cx: &mut DocCx<'_>) -> Result<(), String> {
         // written off the UI thread, the text as it is now (the tab may show another file by
         // then); the tab stays dirty until its file holds it
         let point = {
@@ -907,17 +907,12 @@ impl Document for PdaDoc {
             m.save_error = None;
             (m.path.clone(), m.text.clone())
         };
-        // a caller is answered with a failure; a person reads it in the window
-        let by_caller = cx.requests.by_caller();
+        // a failure is the answer of whoever waits for the save
         self.spawn(move |ed, tab| {
             Box::pin(async move {
                 if let Err(err) = super::save_point_and_read(&ed, &tab, point).await {
-                    if by_caller {
-                        tab.m.lock().save_error = Some(gz_editor::CmdError::new("failed", err));
-                        ed.exec.wake().ping();
-                    } else {
-                        post_notice(&ed, "Save failed", err);
-                    }
+                    tab.m.lock().save_error = Some(gz_editor::CmdError::new("failed", err));
+                    ed.exec.wake().ping();
                 }
             })
         });

@@ -236,6 +236,8 @@ def details_and_chooser(spawn: str) -> None:
     cmd("scene.choose", action="close")
     # thousands selected with Details open: the shared rows are worked out off the UI thread
     many = cmd("scene.select", classes=["object"])
+    # ... so the rows arrive a moment after the selection: waited for, not read from the frame of the select
+    qa.until(lambda: "Position" in controls("details"), 10)
     save_shot("details_many")
     shown = controls("details")
     check(many.get("selected", 0) > 3000 and "Position" in shown,

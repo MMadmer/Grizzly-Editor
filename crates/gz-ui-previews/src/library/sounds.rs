@@ -280,24 +280,19 @@ impl SoundLibDoc {
     }
 
     /// Writes the changed descriptions as a job.
-    fn queue_save(&mut self, by_caller: bool) -> Result<(), String> {
+    fn queue_save(&mut self) -> Result<(), String> {
         if self.read_only() {
             return Err("The sound folder cannot be written.".to_owned());
         }
         if self.saving() {
-            // a save is under way: a caller is answered by how that one ends
-            if by_caller {
-                super::answer_running(&self.editor, &self.save_error);
-            }
+            // a save is under way: who waits for this one is answered by how that one ends
+            super::answer_running(&self.editor, &self.save_error);
             return Ok(());
         }
         Player::of(&self.editor).stop();
         *self.save_error.lock() = None;
         let id = start_sound_save(&self.editor, None)?;
-        // a job that fails is a caller's answer; a person reads it on the job's card
-        if by_caller {
-            super::answer_job(&self.editor, id, &self.save_error);
-        }
+        super::answer_job(&self.editor, id, &self.save_error);
         Ok(())
     }
 
@@ -1069,8 +1064,8 @@ impl Document for SoundLibDoc {
         there
     }
 
-    fn save(&mut self, cx: &mut DocCx<'_>) -> Result<(), String> {
-        self.queue_save(cx.requests.by_caller())
+    fn save(&mut self, _cx: &mut DocCx<'_>) -> Result<(), String> {
+        self.queue_save()
     }
 
     fn save_failed(&mut self) -> Option<gz_editor::CmdError> {
