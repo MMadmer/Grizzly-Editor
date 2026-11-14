@@ -48,3 +48,6 @@ base64.workspace = true
 png.workspace = true
 # the Sound Library's playback, on an audio thread of its own
 cpal.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

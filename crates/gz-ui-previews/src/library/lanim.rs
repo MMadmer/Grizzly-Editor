@@ -24,6 +24,7 @@ use super::stores::{LanimFacts, LibraryFacts, LibraryStores};
 use super::{LibraryDoc, folder_text, pane, panes};
 use crate::local::{local_ends, local_heading};
 use crate::paths::EditorDirs;
+use crate::writer::LibraryWriter;
 
 pub const KIND: &str = "light_animations";
 
@@ -842,15 +843,16 @@ pub fn reload_reply(r: &gz_app::ReplyCx<'_>) {
 pub async fn save_lanims(editor: &Arc<Editor>) -> Result<(), String> {
     let stores = LibraryStores::of(editor);
     let bytes = stores.lanim.snapshot().lib.write();
-    let file = EditorDirs::of(editor).lanims();
-    let shown = file.clone();
-    editor
-        .exec
-        .io(move || gz_editor::fsx::write_atomic(&file, &bytes))
-        .await
-        .map_err(|e| format!("{} could not be written: {e}", shown.display()))?;
+    let writer = LibraryWriter::of(editor);
+    editor.exec.io(move || write_lanims(&writer, &bytes)).await?;
     let _ = stores.lanim.send(LanimCmd::Saved, Origin::Ui).await;
     Ok(())
+}
+
+/// `lanims.xr` of the library written whole, past the guard: a library that is a game is read and
+/// never written. Blocking.
+pub fn write_lanims(writer: &LibraryWriter, bytes: &[u8]) -> Result<(), String> {
+    writer.write(&writer.lanims(), bytes)
 }
 
 /// The keys `library.set` takes of a light animation.

@@ -15,7 +15,8 @@ at 1.0. --shots keeps the pictures: the first size in the folder, the second in 
 
     python tools/qa/test_tour.py --project <project> [--shots <folder>] [--only A,B]
 
-  A  every tab kind of ui.contract's document_kinds opens, comes up active and is audited
+  A  every tab kind of ui.contract's document_kinds opens, comes up active and is audited; a library tab (light
+     animations, textures, sounds) has its first entry picked first, so what an entry shows is pictured too
   B  every dialog of ui.contract opens, is the window's modal and is audited
   C  every menu of ui.contract opens to be looked at and is audited
 """
@@ -94,6 +95,21 @@ def open_tab(kind: str, project: str) -> dict:
     return cmd("ui.tab", action="open", kind=kind)
 
 
+LIBRARIES = ("light_animations", "texture_library", "sound_library")
+
+
+def pick_first(kind: str, label: str) -> None:
+    """A library tab is pictured with an entry picked: the timeline, the key actions, the description and the
+    attenuation curve are only drawn for one. A library with no entry is said so."""
+    opened = cmd("library.view", kind=kind, action="open")
+    first = opened.get("first") if opened.get("ok") else None
+    if not first:
+        print("NOTE %s: the library holds no entry, so no entry is pictured" % label, flush=True)
+        return
+    picked = cmd("library.view", kind=kind, action="select", item=first)
+    check(picked.get("ok"), label + " picks its first entry before it is pictured", qa.short(picked))
+
+
 def phase_a(project: str, tag: str, shots: str | None, contract: dict) -> None:
     opened = []
     for kind in contract.get("document_kinds", []):
@@ -106,6 +122,8 @@ def phase_a(project: str, tag: str, shots: str | None, contract: dict) -> None:
         active = cmd("ui.list").get("active_tab", "")
         check(active.split(":")[0] == kind.split(":")[0] or kind in ("pda", "beh") and active.startswith(kind[:2]),
               label + " comes up as the active tab", active)
+        if kind in LIBRARIES:
+            pick_first(kind, label)
         settled(label)
         shows_content(label)
         audited(label)

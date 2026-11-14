@@ -24,8 +24,9 @@ use super::stores::{LibraryFacts, LibraryStores, SoundFacts};
 use super::{LibraryDoc, LibraryLists, Settle, can_write, folder_text, pane, panes};
 use crate::audio::Player;
 use crate::local::{local_ends, local_heading};
-use crate::paths::{EditorDirs, file_age, list_files, set_file_age};
+use crate::paths::{EditorDirs, file_age, list_files};
 use crate::pending::Pending;
+use crate::writer::LibraryWriter;
 
 pub const KIND: &str = "sound_library";
 /// The game's rolloff: how fast a sound falls off past its minimum distance.
@@ -581,7 +582,7 @@ pub fn start_sound_save(editor: &Arc<Editor>, only: Option<Vec<String>>) -> Resu
         .collect();
     let partial = only.is_some();
     let (dirs, saving, store, ed) =
-        (EditorDirs::of(editor), stores.sound_saving.clone(), stores.sound.clone(), editor.clone());
+        (LibraryWriter::of(editor), stores.sound_saving.clone(), stores.sound.clone(), editor.clone());
     let started = editor.jobs.start(
         "sound_library",
         Some("libraries"),
@@ -634,7 +635,7 @@ pub fn start_sound_rebuild(editor: &Arc<Editor>, name: &str, thm: SoundThm) -> R
         return Err("The sound library is saving.".to_owned());
     }
     let (dirs, saving, rebuilt, ed, name) = (
-        EditorDirs::of(editor),
+        LibraryWriter::of(editor),
         stores.sound_saving.clone(),
         stores.sound_rebuilt.clone(),
         editor.clone(),
@@ -668,7 +669,7 @@ pub fn start_sound_rebuild(editor: &Arc<Editor>, name: &str, thm: SoundThm) -> R
 /// Makes the game sound of `name` from its `.wav`: Vorbis at the description's
 /// quality, its parameters as the first comment. A sound that cannot be made leaves no file.
 pub fn make_game_sound(
-    dirs: &EditorDirs,
+    dirs: &LibraryWriter,
     name: &str,
     thm: &SoundThm,
     age: Option<i64>,
@@ -676,8 +677,9 @@ pub fn make_game_sound(
     let wav_path = dirs.sounds.join(format!("{name}.wav"));
     let ogg_path = dirs.game_sounds.join(format!("{name}.ogg"));
     let failed = || {
-        let _ = std::fs::remove_file(&ogg_path);
-        format!("Can't make game sound '{}'.", ogg_path.display())
+        // a half-made file goes; the guard may refuse even that, and then there is none to remove
+        let _ = dirs.remove_file(&ogg_path);
+        format!("The game sound '{name}' could not be made:")
     };
     let made = std::fs::read(&wav_path)
         .map_err(|e| e.to_string())
@@ -689,113 +691,123 @@ pub fn make_game_sound(
         Ok(ogg) => ogg,
         Err(e) => return Err(format!("{} {e}", failed())),
     };
-    if let Some(dir) = ogg_path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if let Err(e) = gz_editor::fsx::write_atomic(&ogg_path, &ogg) {
+    if let Err(e) = dirs.write(&ogg_path, &ogg) {
         return Err(format!("{} {e}", failed()));
     }
     if let Some(age) = age {
-        let _ = set_file_age(&ogg_path, age);
+        let _ = dirs.set_age(&ogg_path, age);
     }
     Ok(())
 }
 
-/// Writes one description and makes its game sound again (the sound synchronization
-/// with the game sounds forced), every file of it at the same age.
-fn save_sound(dirs: &EditorDirs, name: &str, thm: &SoundThm, age: i64) -> Result<(), String> {
+/// Writes one description and makes its game sound again, every file of it at the same age.
+fn save_sound(dirs: &LibraryWriter, name: &str, thm: &SoundThm, age: i64) -> Result<(), String> {
     let thm_path = dirs.sounds.join(format!("{name}.thm"));
-    gz_editor::fsx::write_atomic(&thm_path, &write_sound_thm(thm))
-        .map_err(|e| format!("{} could not be written: {e}", thm_path.display()))?;
-    let _ = set_file_age(&thm_path, age);
+    dirs.write(&thm_path, &write_sound_thm(thm))?;
+    let _ = dirs.set_age(&thm_path, age);
     make_game_sound(dirs, name, thm, Some(age))?;
     let wav = dirs.sounds.join(format!("{name}.wav"));
-    let _ = set_file_age(&wav, age);
+    let _ = dirs.set_age(&wav, age);
     Ok(())
 }
 
-/// What a sound synchronisation would take away: game sounds and descriptions
-/// whose `.wav` is gone; up to ten named, and how many there are.
+/// The game sounds and descriptions whose `.wav` is gone: `name.ogg` / `name.thm` and where each is.
 #[must_use]
-pub fn orphans(dirs: &EditorDirs) -> (Vec<String>, usize) {
+pub fn orphan_files(dirs: &EditorDirs) -> Vec<(String, std::path::PathBuf)> {
     let base: rustc_hash::FxHashSet<String> =
         list_files(&dirs.sounds, &["wav"], false, true).into_iter().map(|(n, _)| n).collect();
-    let mut items = Vec::new();
-    let mut total = 0;
+    let mut out = Vec::new();
     for (dir, ext) in [(&dirs.game_sounds, "ogg"), (&dirs.sounds, "thm")] {
-        for (n, _) in list_files(dir, &[ext], false, true) {
-            if base.contains(&n) {
-                continue;
+        for (n, path) in list_files(dir, &[ext], false, true) {
+            if !base.contains(&n) {
+                out.push((format!("{n}.{ext}"), path));
             }
-            if items.len() < 10 {
-                items.push(format!("{n}.{ext}"));
-            }
-            total += 1;
         }
     }
-    (items, total)
+    out
 }
 
-/// A description for every `.wav` that has none or one of
-/// another age, its game sound made again with it and wherever it is missing or of another age
-/// than its `.wav`; the orphans renamed to `.~ogg` / `.~thm`.
+/// What a synchronisation of the sounds did.
+#[derive(Debug, Default)]
+pub struct SoundSyncReport {
+    /// The sounds whose description or game sound was written again, by name.
+    pub updated: Vec<String>,
+    /// How many were current already and left as they were.
+    pub up_to_date: usize,
+    /// The sentences of the ones that could not be written, and of the orphans that could not
+    /// be renamed.
+    pub failed: Vec<String>,
+    /// The game sounds and descriptions that have no `.wav` any more, as `name.ogg` / `name.thm`.
+    pub orphans: Vec<String>,
+    /// How many of them were renamed to `.~ogg` / `.~thm`.
+    pub retired: usize,
+}
+
+/// A description for every `.wav` that has none or one of another age, its game sound made again
+/// with it and wherever it is missing or of another age than its `.wav`. The orphans are named in
+/// the report and, with `retire_orphans`, renamed to `.~ogg` / `.~thm` (never deleted).
 pub fn synchronize_sounds(
-    dirs: &EditorDirs,
+    dirs: &LibraryWriter,
     cancel: &gz_task::Cancel,
-) -> Result<(usize, Vec<String>), String> {
+    retire_orphans: bool,
+) -> Result<SoundSyncReport, String> {
     let base = list_files(&dirs.sounds, &["wav"], false, true);
     let age = super::texsync::now();
-    let mut updated = 0;
-    let mut notes = Vec::new();
+    let mut out = SoundSyncReport::default();
     for (name, path) in &base {
         cancel.check().map_err(|_| "Stopped.".to_owned())?;
         let base_age = file_age(path);
         let thm_path = dirs.sounds.join(format!("{name}.thm"));
         let thm_age = file_age(&thm_path);
-        if thm_age.is_none() || thm_age != base_age {
+        let thm_new = thm_age.is_none() || thm_age != base_age;
+        let mut changed = false;
+        if thm_new {
             let thm = std::fs::read(&thm_path).ok().and_then(|b| read_sound_thm(&b).ok()).unwrap_or_default();
-            gz_editor::fsx::write_atomic(&thm_path, &write_sound_thm(&thm))
-                .map_err(|e| format!("{} could not be written: {e}", thm_path.display()))?;
-            let _ = set_file_age(&thm_path, age);
-            let _ = set_file_age(path, age);
-            updated += 1;
+            if let Err(e) = dirs.write(&thm_path, &write_sound_thm(&thm)) {
+                out.failed.push(e);
+                continue;
+            }
+            let _ = dirs.set_age(&thm_path, age);
+            let _ = dirs.set_age(path, age);
+            changed = true;
         }
         // the game sound is made again when the description was, or when it is missing or of
         // another age than its source
         let ogg_age = file_age(&dirs.game_sounds.join(format!("{name}.ogg")));
-        let thm_new = thm_age.is_none() || thm_age != base_age;
         if thm_new || ogg_age.is_none() || ogg_age != base_age {
             let thm = std::fs::read(&thm_path).ok().and_then(|b| read_sound_thm(&b).ok()).unwrap_or_default();
             match make_game_sound(dirs, name, &thm, Some(age)) {
                 Ok(()) => {
-                    let _ = set_file_age(&thm_path, age);
-                    let _ = set_file_age(path, age);
-                    if !thm_new {
-                        updated += 1;
-                    }
+                    let _ = dirs.set_age(&thm_path, age);
+                    let _ = dirs.set_age(path, age);
+                    changed = true;
                 }
-                Err(e) => notes.push(e),
+                Err(e) => out.failed.push(e),
             }
         }
-    }
-    let wavs: rustc_hash::FxHashSet<&str> = base.iter().map(|(n, _)| n.as_str()).collect();
-    for (dir, ext) in [(&dirs.game_sounds, "ogg"), (&dirs.sounds, "thm")] {
-        for (n, path) in list_files(dir, &[ext], false, true) {
-            cancel.check().map_err(|_| "Stopped.".to_owned())?;
-            if wavs.contains(n.as_str()) {
-                continue;
-            }
-            // EFS.MarkFile(fn, true): renamed, never deleted
-            let marked = path.with_extension(format!("~{ext}"));
-            if let Err(e) = std::fs::rename(&path, &marked) {
-                notes.push(format!("{} could not be renamed: {e}", path.display()));
-            }
+        if changed {
+            out.updated.push(name.clone());
+        } else {
+            out.up_to_date += 1;
         }
     }
-    Ok((updated, notes))
+    for (label, path) in orphan_files(dirs) {
+        cancel.check().map_err(|_| "Stopped.".to_owned())?;
+        out.orphans.push(label);
+        if !retire_orphans {
+            continue;
+        }
+        // renamed out of the way, never deleted
+        let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+        match dirs.rename(&path, &path.with_extension(format!("~{ext}"))) {
+            Ok(()) => out.retired += 1,
+            Err(e) => out.failed.push(e),
+        }
+    }
+    Ok(out)
 }
 
-/// How loud the sound is with distance: the curve the old property canvas plotted.
+/// How loud the sound is with distance: the curve the game's rolloff gives, drawn over distance.
 fn draw_attenuation(ui: &mut Ui, thm: &SoundThm, height: f32) {
     let p = palette(ui.ctx());
     let w = ui.available_width().max(64.0);

@@ -58,45 +58,6 @@ pub fn local_frame(painter: &Painter, rect: Rect, color: egui::Color32, radius: 
     );
 }
 
-/// A texture of the library picked from a searchable list, or None: the chooser of a
-/// description's detail, bump and normal map (`CreateChoose(smTexture)`). Returns the name
-/// picked ("" for None).
-pub fn local_texture_pick(ui: &mut Ui, id_salt: &str, value: &str, names: &[&str]) -> Option<String> {
-    let ctx = ui.ctx().clone();
-    let search_id = ui.make_persistent_id(("gz-ui-previews.pick", id_salt));
-    let mut picked = None;
-    let w = ui.available_width();
-    let shown = if value.is_empty() { "None" } else { gz_ui::grid::leaf_name(value) };
-    let resp = egui::ComboBox::from_id_salt(("gz-ui-previews.pick.combo", id_salt))
-        .selected_text(shown)
-        .width(w)
-        .height(320.0)
-        .show_ui(ui, |ui| {
-            let mut search = ctx.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
-            gz_ui::SearchField::new(&mut search).id_salt(id_salt).width(gz_ui::units::em(16.0)).show(ui);
-            if gz_ui::menu_item(
-                ui,
-                "None",
-                gz_ui::MenuItem { selected: value.is_empty(), ..gz_ui::MenuItem::default() },
-            ) {
-                picked = Some(String::new());
-            }
-            // a few hundred rows at most: the search narrows the rest
-            for name in names.iter().filter(|n| gz_ui::search::matches(&search, n)).take(300) {
-                if gz_ui::menu_item(
-                    ui,
-                    name,
-                    gz_ui::MenuItem { selected: *name == value, ..gz_ui::MenuItem::default() },
-                ) {
-                    picked = Some((*name).to_owned());
-                }
-            }
-            ctx.data_mut(|d| d.insert_temp(search_id, search));
-        });
-    resp.response.on_hover_text(if value.is_empty() { "None" } else { value });
-    picked
-}
-
 /// The wheel's turn this frame in notches (a line is one, 50 points one, a page ten): what a
 /// canvas zooms by. Positive turns away from the author.
 #[must_use]

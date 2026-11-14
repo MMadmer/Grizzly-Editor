@@ -28,7 +28,10 @@ What it proves:
      library.rebuild makes a game texture and a game sound; library.import brings a picture in from anywhere (refusing
      what it would replace without overwrite) and a picture dropped on the Texture Library tab runs it; library.view
      check turns the tab into New Textures; library.play plays and stops; library.reload refuses to lose unsaved
-     keys; the tabs' toolbars press actions
+     keys; the tabs' toolbars press actions; the import folder keeps no copy of a picture the command staged;
+     library.sync (both libraries) and library.rewrite_descriptions are jobs the command waits for - they make what
+     is missing, say what they made, answer a job with wait=false, refuse an unknown kind with the real ones, and
+     open no dialog
 
     python tools/qa/test_previews.py --project <project> [--shots <folder>] [--sizes]
 """
@@ -444,9 +447,10 @@ def run_library_commands(project: str, shots: str | None) -> None:
             f.write("not a picture")
         ed = qa.Editor(project, args=["-root", lib]).start()
         try:
-            library_texture(lib, art, png)
+            library_texture(lib, art, png, shots)
             library_sound(lib)
             library_lanim(lib)
+            library_maintenance(lib)
         finally:
             ed.close()
     finally:
@@ -458,7 +462,7 @@ def exists(lib: str, rel: str) -> bool:
     return os.path.isfile(os.path.join(lib, *rel.split("/")))
 
 
-def library_texture(lib: str, art: str, png: str) -> None:
+def library_texture(lib: str, art: str, png: str, shots: str | None = None) -> None:
     item = "qa\\qa_swatch"
     o = cmd("library.view", kind="texture_library", action="open")
     check(o.get("ok") and o.get("items") == 1 and o.get("first") == item, "K the texture library lists the test's texture",
@@ -472,6 +476,9 @@ def library_texture(lib: str, art: str, png: str) -> None:
     v = cmd("library.view", kind="texture_library", action="select", item=item)
     check(v.get("format") == "DXT5" and v.get("dirty") is False, "K the tab reads the new description and is clean",
           json.dumps(v)[:300])
+    qa.shot(shots, "k_texture_library_description")
+    labels = [str(x.get("label")) for x in cmd("ui.audit").get("controls", [])]
+    check(labels.count("None") >= 1, "K the description's texture picks are the kit's combo, showing None", json.dumps(labels)[:300])
     bad = cmd("library.set", kind="texture_library", item=item, set={"formt": "DXT1"})
     check(not bad.get("ok") and "did you mean 'format'" in str(bad.get("error")), "K a misspelt key is refused with the nearest one",
           json.dumps(bad)[:300])
@@ -506,6 +513,8 @@ def library_texture(lib: str, art: str, png: str) -> None:
           and exists(lib, "gamedata/textures/qa/qa_import.dds") and exists(lib, "rawdata/textures/qa/qa_import.thm"),
           "K library.import takes a picture from anywhere into the library, built", json.dumps(i)[:300])
     check(os.path.isfile(png), "K and leaves the picture where it was")
+    check(not exists(lib, "import/qa_import.png") and not exists(lib, "import/qa_import.~png"),
+          "K and the import folder keeps no copy of it")
     again = cmd("library.import", **{"from": [png]})
     check(not again.get("ok") and again.get("code") == "exists", "K a second import would replace a texture: refused, named",
           json.dumps(again)[:300])
@@ -518,6 +527,14 @@ def library_texture(lib: str, art: str, png: str) -> None:
     d = cmd("library.view", kind="texture_library", action="state", simulate_drop=os.path.join(art, "qa_drop.png"), x=x, y=y)
     check(d.get("ok") and d.get("items") == 3 and exists(lib, "rawdata/textures/qa/qa_drop.tga"),
           "K a picture dropped on the Texture Library tab is imported", json.dumps(d)[:300])
+    check(not exists(lib, "import/qa_drop.png") and not exists(lib, "import/qa_drop.~png"),
+          "K a dropped picture leaves no copy in the import folder either")
+    # a picture the author put in the import folder is theirs: taken in, renamed out of the way, never deleted
+    write_png(os.path.join(lib, "import", "qa_mine.png"))
+    mine = cmd("library.import")
+    check(mine.get("ok") and mine.get("imported") == ["qa_mine.png"] and exists(lib, "rawdata/textures/qa/qa_mine.tga")
+          and not exists(lib, "import/qa_mine.png") and exists(lib, "import/qa_mine.~png"),
+          "K a picture of the import folder's own is renamed to .~png, not deleted", json.dumps(mine)[:300])
     # Check New Textures looks in the import folder
     write_png(os.path.join(lib, "import", "qa_fresh.png"))
     c = cmd("library.view", kind="texture_library", action="check")
@@ -619,6 +636,105 @@ def library_lanim(lib: str) -> None:
     check(cmd("library.play", kind="light_animations", action="stop").get("playing") is False, "K and stops it")
     check(cmd("library.view", kind="light_animations", alpha=True).get("alpha") is True, "K alpha is a parameter")
     cmd("ui.tab", action="close", doc="light_animations", discard=True)
+
+
+def library_maintenance(lib: str) -> None:
+    """library.sync and library.rewrite_descriptions: commands like the rest - they start their job, wait for it and
+    answer what it did, with no window asked - on the library the earlier steps filled."""
+    swatch, imported = r"qa\qa_swatch", r"qa\qa_import"
+    dds = "gamedata/textures/qa/qa_swatch.dds"
+    thm = "rawdata/textures/qa/qa_import.thm"
+    os.remove(os.path.join(lib, *dds.split("/")))
+    os.remove(os.path.join(lib, *thm.split("/")))
+    s = cmd("library.sync", kind="texture_library")
+    check(s.get("ok") and "started" not in s and s.get("updated", 0) >= 2 and {swatch, imported} <= set(s.get("names", []))
+          and exists(lib, dds) and exists(lib, thm), "K library.sync kind=texture_library makes what is missing and says what it made",
+          json.dumps(s)[:300])
+    again = cmd("library.sync", kind="texture_library")
+    check(again.get("ok") and again.get("updated") == 0 and again.get("up_to_date", 0) >= 2,
+          "K and a second run finds everything current and writes nothing", json.dumps(again)[:300])
+    # wait=false answers the job at once; job.wait ends it
+    os.remove(os.path.join(lib, *dds.split("/")))
+    j = cmd("library.sync", kind="texture_library", wait=False)
+    check(j.get("ok") and isinstance(j.get("job"), int) and "updated" not in j, "K wait=false answers the job", json.dumps(j)[:300])
+    w = cmd("job.wait", job=j.get("job", -1))
+    check(w.get("ok") and w.get("state") == "done" and (w.get("result") or {}).get("updated") == 1 and exists(lib, dds),
+          "K job.wait ends it with what it made", json.dumps(w)[:300])
+    # sounds: the game sound made again; the sounds with no .wav any more are named, renamed only when asked
+    ogg = "gamedata/sounds/qa/qa_tone.ogg"
+    orphan = "gamedata/sounds/qa/qa_orphan.ogg"
+    os.remove(os.path.join(lib, *ogg.split("/")))
+    with open(os.path.join(lib, *orphan.split("/")), "wb") as f:
+        f.write(b"orphan")
+    s = cmd("library.sync", kind="sound_library")
+    check(s.get("ok") and s.get("updated", 0) >= 1 and exists(lib, ogg) and s.get("orphan_count") == 1
+          and s.get("orphans") == [r"qa\qa_orphan.ogg"] and s.get("retired") == 0 and exists(lib, orphan),
+          "K library.sync kind=sound_library makes the game sound and names the orphan it leaves", json.dumps(s)[:300])
+    s = cmd("library.sync", kind="sound_library", retire_orphans=True)
+    check(s.get("ok") and s.get("retired") == 1 and not exists(lib, orphan) and exists(lib, "gamedata/sounds/qa/qa_orphan.~ogg"),
+          "K retire_orphans renames it out of the way, nothing is deleted", json.dumps(s)[:300])
+    j = cmd("library.sync", kind="sound_library", wait=False)
+    w = cmd("job.wait", job=j.get("job", -1))
+    check(j.get("ok") and "job" in j and w.get("state") == "done" and (w.get("result") or {}).get("kind") == "sound_library",
+          "K the sound synchronisation is a job too", json.dumps([j, w])[:300])
+    # a library is named as everywhere else, and the parameters are the command's own
+    bad = cmd("library.sync", kind="textures")
+    check(not bad.get("ok") and "texture_library" in str(bad.get("error")) and "sound_library" in str(bad.get("error")),
+          "K an unknown kind is refused with the real ones", json.dumps(bad)[:300])
+    bad = cmd("library.sync", kind="light_animations")
+    check(not bad.get("ok") and "sound_library" in str(bad.get("error")), "K a library with no sources is refused", json.dumps(bad)[:300])
+    bad = cmd("library.sync", kind="texture_library", retire_orphans=True)
+    check(not bad.get("ok") and "retire_orphans" in str(bad.get("error")), "K retire_orphans is the sound library's", json.dumps(bad)[:300])
+    bad = cmd("library.sync", kind="texture_library", discard=True)
+    check(not bad.get("ok"), "K a parameter of another command is refused", json.dumps(bad)[:300])
+    # the descriptions rewritten: one with a chunk this editor does not write comes out as it writes it, its age kept
+    path = os.path.join(lib, "rawdata", "textures", "qa", "qa_swatch.thm")
+    good = open(path, "rb").read()
+    age = int(os.stat(path).st_mtime) - 100
+    with open(path, "ab") as f:
+        f.write(struct.pack("<II", 0x7777, 4) + b"junk")
+    os.utime(path, (age, age))
+    dry = cmd("library.rewrite_descriptions", dry_run=True)
+    check(dry.get("ok") and dry.get("dry_run") is True and dry.get("files", 0) >= 2 and open(path, "rb").read() != good,
+          "K dry_run counts the descriptions and writes none", json.dumps(dry)[:300])
+    r = cmd("library.rewrite_descriptions")
+    check(r.get("ok") and "started" not in r and r.get("rewritten") == 1 and r.get("unchanged", 0) >= 1
+          and r.get("names") == [r"qa\qa_swatch.thm"], "K library.rewrite_descriptions rewrites and answers the count",
+          json.dumps(r)[:300])
+    check(open(path, "rb").read() == good and int(os.stat(path).st_mtime) == age,
+          "K the description is what the editor writes and keeps its age")
+    j = cmd("library.rewrite_descriptions", wait=False)
+    w = cmd("job.wait", job=j.get("job", -1))
+    check(j.get("ok") and "job" in j and w.get("state") == "done" and (w.get("result") or {}).get("rewritten") == 0,
+          "K the rewrite is a job too", json.dumps([j, w])[:300])
+    # the window's actions: a texture synchronisation runs at once (it only makes what is missing), the rewrite and the
+    # orphans of a sound synchronisation are asked about, and the editor's logged answer (-nodlg) is No
+    os.remove(os.path.join(lib, *dds.split("/")))
+    ran = cmd("ui.palette", action="run", id="library.sync_textures")
+    check(ran.get("ok") and qa.until(lambda: exists(lib, dds), 20), "K the action Synchronize Textures runs the command without a question",
+          json.dumps(ran)[:300])
+    with open(path, "ab") as f:
+        f.write(struct.pack("<II", 0x7777, 4) + b"junk")
+    tampered = open(path, "rb").read()
+    ran = cmd("ui.palette", action="run", id="library.rewrite_descriptions")
+    for _ in range(3):
+        cmd("ui.list")
+    check(ran.get("ok") and open(path, "rb").read() == tampered and not cmd("job.list", running=True).get("jobs"),
+          "K the action Rewrite Texture Descriptions asks first: answered No, nothing is written", json.dumps(ran)[:300])
+    os.remove(os.path.join(lib, *ogg.split("/")))
+    os.remove(os.path.join(lib, "gamedata", "sounds", "qa", "qa_orphan.~ogg"))
+    with open(os.path.join(lib, *orphan.split("/")), "wb") as f:
+        f.write(b"orphan")
+    ran = cmd("ui.palette", action="run", id="library.sync_sounds")
+    check(ran.get("ok") and qa.until(lambda: exists(lib, ogg), 20), "K the action Synchronize Sounds synchronizes at once",
+          json.dumps(ran)[:300])
+    for _ in range(3):
+        cmd("ui.list")
+    check(exists(lib, orphan) and not exists(lib, "gamedata/sounds/qa/qa_orphan.~ogg"),
+          "K and asks before it renames the orphans: answered No, they stay")
+    # none of this asked a person anything
+    listed = cmd("ui.list")
+    check(listed.get("dialogs") == [], "K no command opened a dialog", json.dumps(listed.get("dialogs"))[:300])
 
 
 PHASES = "CTMLSK"

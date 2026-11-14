@@ -152,7 +152,7 @@ pub fn folder_text(project: Option<&Path>, editor_root: &Path, folder: &Path) ->
     inside(editor_root, "editor's").unwrap_or_else(|| text.into_owned())
 }
 
-/// `EFS.AppendFolderToName(name, 1, TRUE)`: a texture's prefix up to its first `_` becomes its
+/// A texture's prefix up to its first `_` becomes its
 /// folder (`wpn_ak74` is `wpn\wpn_ak74`); a name without one stays as it is.
 #[must_use]
 pub fn texture_folder_name(name: &str) -> String {
@@ -170,7 +170,7 @@ pub fn file_age(path: &Path) -> Option<i64> {
     i64::try_from(d.as_secs()).ok()
 }
 
-/// `FS.set_file_age`: the file's modification time set to `age` seconds since 1970.
+/// The file's modification time set to `age` seconds since 1970.
 pub fn set_file_age(path: &Path, age: i64) -> std::io::Result<()> {
     let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(u64::try_from(age.max(0)).unwrap_or(0));
     std::fs::OpenOptions::new().write(true).open(path)?.set_modified(at)

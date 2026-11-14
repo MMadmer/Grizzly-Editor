@@ -20,6 +20,9 @@ What it proves:
   H  a console's end: in a console of its own Ctrl+Break closes a headless editor started through the twin the way
      a quit does (exit 0, "Grizzly Editor closed" in its log, also while it opens its project); an editor with a
      window started there with -log_echo joins no console and lives on after it
+  I  library.sync and library.rewrite_descriptions in a commandlet: a throw-away library (-root) is synchronised and
+     its descriptions rewritten by the commands themselves - they answer what they did, not "started" - with no
+     window, exit 0; a library that is no kind of theirs is refused with the real ones, exit 1
 
     python tools/qa/test_cli.py --project <project>
 """
@@ -37,6 +40,7 @@ import time
 
 import qa
 from qa import check, until
+from test_previews import write_tga
 
 CLI = os.path.join(os.path.dirname(qa.exe()), "Grizzly-Cmd.exe")
 
@@ -342,20 +346,46 @@ def phase_h(work: str, project: str) -> None:
             check(until(lambda: not qa.port_open(port), 30), "H that editor closes over MCP")
 
 
+def phase_i(work: str) -> None:
+    home = home_of(work, "i")
+    lib = os.path.join(work, "library_i")
+    write_tga(os.path.join(lib, "rawdata", "textures", "qa", "qa_cli.tga"))
+    code, out, err = cli("run", "library.sync", "kind=texture_library", "-root", lib, "-json", home=home)
+    answer = (jsons(out) or [{}])[0]
+    check(code == 0 and answer.get("ok") and answer.get("updated") == 1 and "started" not in answer
+          and answer.get("names") == [r"qa\qa_cli"], "I a commandlet synchronises a library: the answer says what it made",
+          (code, out[:300], err[:200]))
+    check(os.path.isfile(os.path.join(lib, "gamedata", "textures", "qa", "qa_cli.dds"))
+          and os.path.isfile(os.path.join(lib, "rawdata", "textures", "qa", "qa_cli.thm")),
+          "I the game texture and the description are there")
+    code, out, err = cli("run", "library.sync", "kind=texture_library", "-root", lib, "-json", home=home)
+    answer = (jsons(out) or [{}])[0]
+    check(code == 0 and answer.get("updated") == 0 and answer.get("up_to_date") == 1,
+          "I a second run finds it current and writes nothing", (code, out[:300], err[:200]))
+    code, out, err = cli("run", "library.rewrite_descriptions", "-root", lib, "-json", home=home)
+    answer = (jsons(out) or [{}])[0]
+    check(code == 0 and answer.get("ok") and answer.get("unchanged") == 1 and "started" not in answer,
+          "I a commandlet rewrites the descriptions and says how many it left as they were", (code, out[:300], err[:200]))
+    code, out, err = cli("run", "library.sync", "kind=textures", "-root", lib, home=home)
+    check(code == 1 and "texture_library" in err and "sound_library" in err,
+          "I a kind that is none of the two is refused with the real ones", (code, err[:300]))
+
+
 def run(ctx: qa.Run) -> None:
     if not os.path.isfile(CLI):
         raise RuntimeError("build the editor's twin first: " + CLI)
     work = tempfile.mkdtemp(prefix="gzcli_", dir=ctx.work)
     steps = {"A": lambda: phase_a(work), "B": lambda: phase_b(work), "C": lambda: phase_c(work),
              "D": lambda: phase_d(work, ctx.project), "E": lambda: phase_e(work, ctx.project),
-             "F": lambda: phase_f(work), "G": lambda: phase_g(work), "H": lambda: phase_h(work, ctx.project)}
+             "F": lambda: phase_f(work), "G": lambda: phase_g(work), "H": lambda: phase_h(work, ctx.project),
+             "I": lambda: phase_i(work)}
     qa.run_phases(steps, ctx.only)
 
 
 def main() -> int:
     if len(sys.argv) == 6 and sys.argv[1] == "--console-inner":
         return console_inner(sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5])
-    return qa.suite("COMMAND LINE", run, doc=__doc__, phases="ABCDEFGH")
+    return qa.suite("COMMAND LINE", run, doc=__doc__, phases="ABCDEFGHI")
 
 
 if __name__ == "__main__":

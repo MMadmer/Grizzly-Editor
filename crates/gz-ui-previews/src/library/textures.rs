@@ -24,11 +24,13 @@ use serde_json::{Map, Value, json};
 use super::keys::apply_texture;
 use super::list::{Empty, LibraryList, find, shown};
 use super::stores::{LibraryFacts, LibraryStores, TexFacts};
+use super::texpick::{Names, texture_pick};
 use super::texsync::{import_picture, read_picture, sync_texture};
 use super::{LibraryDoc, LibraryLists, Settle, can_write, folder_text, pane, panes};
 use crate::local::local_heading;
 use crate::paths::{EditorDirs, list_files, texture_folder_name};
 use crate::pending::Pending;
+use crate::writer::LibraryWriter;
 
 pub const KIND: &str = "texture_library";
 /// The largest side the preview draws, pt.
@@ -426,7 +428,7 @@ impl TexLibDoc {
     }
 
     /// The rows a description has, by its type.
-    fn draw_properties(&mut self, ui: &mut Ui, item: &TexItem, names: &[&str]) {
+    fn draw_properties(&mut self, ui: &mut Ui, item: &TexItem, names: Names<'_>) {
         let before = self.params_of(item);
         let mut p = before.clone();
         let ro = if self.read_only() || self.saving() { PropFlags::READ_ONLY } else { PropFlags::NONE };
@@ -608,7 +610,7 @@ impl TexLibDoc {
                         },
                     );
                 });
-                if make && let Err(e) = crate::libtools::smaller_cube_map(&self.editor, &self.dirs, &item.name) {
+                if make && let Err(e) = crate::libtools::smaller_cube_map(&self.editor, &item.name) {
                     self.editor.notices.error(e);
                 }
             }
@@ -832,7 +834,7 @@ fn pick(
     help: &str,
     flags: PropFlags,
     value: &mut gz_editor::SmolStr,
-    names: &[&str],
+    names: Names<'_>,
     gesture: &mut String,
 ) {
     g.row(label, help, flags, 0, |ui| {
@@ -840,14 +842,14 @@ fn pick(
             read_only(ui, if value.is_empty() { "None" } else { value }, Clip::Start);
             return;
         }
-        if let Some(picked) = crate::local::local_texture_pick(ui, label, value, names) {
+        if let Some(picked) = texture_pick(ui, label, value, names) {
             *value = picked.into();
             *gesture = label.to_owned();
         }
     });
 }
 
-fn details(g: &mut Grid<'_>, ro: PropFlags, p: &mut TextureParams, names: &[&str], gesture: &mut String) {
+fn details(g: &mut Grid<'_>, ro: PropFlags, p: &mut TextureParams, names: Names<'_>, gesture: &mut String) {
     g.section("Details", true, None, |g| {
         flag(g, "Use As Diffuse", ro, &mut p.flags, TextureFlags::DIFFUSE_DETAIL, gesture);
         flag(g, "Use As Bump (R2)", ro, &mut p.flags, TextureFlags::BUMP_DETAIL, gesture);
@@ -938,10 +940,14 @@ fn confirm_import(editor: &Arc<Editor>, items: Vec<TexItem>) {
 }
 
 /// The pictures of `items` taken into the library and built, one after another.
+///
+/// `staged` names the pictures (by file name) the import itself copied into the import folder:
+/// they are removed once they are in the library, where the author's own are renamed out of the way.
 pub(crate) fn import_items(
-    dirs: &EditorDirs,
+    dirs: &LibraryWriter,
     items: &[TexItem],
     params_of: &dyn Fn(&TexItem) -> TextureParams,
+    staged: &[String],
     c: &gz_task::JobCtx,
 ) -> Result<(usize, Vec<String>), String> {
     let age = super::texsync::now();
@@ -951,13 +957,14 @@ pub(crate) fn import_items(
         c.stage(format!("Importing {}", item.name));
         c.progress(i, items.len());
         let params = params_of(item);
-        match import_picture(dirs, &item.name)
+        let mine = staged.iter().any(|n| n.eq_ignore_ascii_case(&item.name));
+        match import_picture(dirs, &item.name, mine)
             .and_then(|name| sync_texture(dirs, &name, Some(&params), true, true, age))
         {
             Ok(s) => {
                 done += 1;
                 if s.low_gloss {
-                    failed.push(format!("Invalid gloss mask '{}'.", item.name));
+                    failed.push(format!("The gloss mask of '{}' is under 10 percent.", item.name));
                 }
             }
             Err(e) => failed.push(e),
@@ -988,7 +995,7 @@ pub fn start_texture_save(
         .collect();
     let partial = only.is_some();
     let (dirs, ed, store, saving) =
-        (EditorDirs::of(editor), editor.clone(), stores.tex.clone(), stores.tex_saving.clone());
+        (LibraryWriter::of(editor), editor.clone(), stores.tex.clone(), stores.tex_saving.clone());
     let importing = import.is_some();
     let title = if importing { "Importing New Textures" } else { "Saving the Texture Library" };
     let started = editor.jobs.start("texture_library", Some("libraries"), title, move |ctx| async move {
@@ -1003,7 +1010,7 @@ pub fn start_texture_save(
                     let params_of = |item: &TexItem| {
                         edits.get(&item.name).cloned().unwrap_or_else(|| item.params.clone())
                     };
-                    return import_items(&dirs, &items, &params_of, &c);
+                    return import_items(&dirs, &items, &params_of, &[], &c);
                 }
                 let age = super::texsync::now();
                 let (mut done, mut failed) = (0usize, Vec::new());
@@ -1018,7 +1025,7 @@ pub fn start_texture_save(
                         Ok(s) => {
                             done += 1;
                             if s.low_gloss {
-                                failed.push(format!("Invalid gloss mask '{name}'."));
+                                failed.push(format!("The gloss mask of '{name}' is under 10 percent."));
                             }
                         }
                         Err(e) => failed.push(e),
@@ -1129,10 +1136,45 @@ fn plan_import(dirs: &EditorDirs, from: &[PathBuf]) -> Result<ImportPlan, String
     Ok(plan)
 }
 
+/// The blocking half of `library.import`: the pictures copied into the import folder, then every
+/// picture the request names (or the folder holds) taken into the library and built. Returns the
+/// names imported and the sentences of what failed.
+fn stage_and_import(
+    d: &LibraryWriter,
+    plan: &ImportPlan,
+    only_listed: bool,
+    set: &Map<String, Value>,
+    c: &gz_task::JobCtx,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    c.stage("Copying the pictures");
+    d.create_dir_all(&d.import)?;
+    let mut staged = Vec::new();
+    for (src, dest) in &plan.copies {
+        c.check().map_err(|_| "Stopped.".to_owned())?;
+        d.copy(src, dest)?;
+        staged.push(dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+    }
+    let mut failed = Vec::new();
+    let mut items = Vec::new();
+    for mut item in list_import(d) {
+        if only_listed && !plan.names.iter().any(|n| n.eq_ignore_ascii_case(&item.name)) {
+            continue;
+        }
+        match apply_texture(&mut item.params, set) {
+            Ok(_) => items.push(item),
+            Err(e) => failed.push(format!("{}: {e}", item.name)),
+        }
+    }
+    let names: Vec<String> = items.iter().map(|i| i.name.clone()).collect();
+    let (_, more) = import_items(d, &items, &|i| i.params.clone(), &staged, c)?;
+    failed.extend(more);
+    Ok((names, failed))
+}
+
 /// `library.import`: pictures from anywhere (or the import folder as it is) copied into the
 /// import folder and taken into the library, as one job a person can read and stop.
 pub async fn import_pictures(editor: &Arc<Editor>, req: ImportRequest) -> Result<Value, CmdError> {
-    let dirs = EditorDirs::of(editor);
+    let dirs = LibraryWriter::of(editor);
     let d = dirs.clone();
     if !editor.exec.io(move || can_write(&d.textures)).await {
         return Err(CmdError::new("read_only", "The texture folder cannot be written."));
@@ -1175,28 +1217,13 @@ pub async fn import_pictures(editor: &Arc<Editor>, req: ImportRequest) -> Result
             let result = ctx
                 .exec
                 .io(move || -> Result<(Vec<String>, Vec<String>), String> {
-                    c.stage("Copying the pictures");
-                    let _ = std::fs::create_dir_all(&d.import);
-                    for (src, dest) in &plan.copies {
-                        c.check().map_err(|_| "Stopped.".to_owned())?;
-                        std::fs::copy(src, dest)
-                            .map_err(|e| format!("{} could not be copied: {e}", src.display()))?;
+                    let staged = stage_and_import(&d, &plan, only_listed, &set, &c);
+                    // what the command copied into the import folder does not stay there,
+                    // whether the import went through or not
+                    for (_, dest) in &plan.copies {
+                        let _ = d.remove_file(dest);
                     }
-                    let mut failed = Vec::new();
-                    let mut items = Vec::new();
-                    for mut item in list_import(&d) {
-                        if only_listed && !plan.names.iter().any(|n| n.eq_ignore_ascii_case(&item.name)) {
-                            continue;
-                        }
-                        match apply_texture(&mut item.params, &set) {
-                            Ok(_) => items.push(item),
-                            Err(e) => failed.push(format!("{}: {e}", item.name)),
-                        }
-                    }
-                    let names: Vec<String> = items.iter().map(|i| i.name.clone()).collect();
-                    let (_, more) = import_items(&d, &items, &|i| i.params.clone(), &c)?;
-                    failed.extend(more);
-                    Ok((names, failed))
+                    staged
                 })
                 .await;
             saving.store(false, std::sync::atomic::Ordering::Release);
@@ -1257,7 +1284,7 @@ pub fn start_texture_rebuild(
         return Err("The texture library is saving.".to_owned());
     }
     let (dirs, ed, saving, name) =
-        (EditorDirs::of(editor), editor.clone(), stores.tex_saving.clone(), name.to_owned());
+        (LibraryWriter::of(editor), editor.clone(), stores.tex_saving.clone(), name.to_owned());
     let started = editor.jobs.start(
         "texture_library",
         Some("libraries"),
@@ -1273,7 +1300,7 @@ pub fn start_texture_rebuild(
             ed.exec.wake().ping();
             match built {
                 Ok(s) if s.low_gloss => {
-                    Ok(json!({ "rebuilt": name, "failed": [format!("Invalid gloss mask '{name}'.")] }))
+                    Ok(json!({ "rebuilt": name, "failed": [format!("The gloss mask of '{name}' is under 10 percent.")] }))
                 }
                 Ok(_) => Ok(json!({ "rebuilt": name })),
                 Err(e) => Err(gz_task::JobError::new(e)),
@@ -1510,11 +1537,11 @@ impl Document for TexLibDoc {
                 );
             }
         });
-        let names: Vec<&str> = if import { Vec::new() } else { keys.clone() };
+        let names = if import { Names::none() } else { Names::of(&all) };
         // nothing picked: the preview says so, the details stay blank
         pane(ui, details_r, "texture_library.details", false, true, |ui| {
             if let Some(item) = &current {
-                self.draw_properties(ui, item, &names);
+                self.draw_properties(ui, item, names);
             }
         });
         ui.allocate_rect(ui.max_rect(), Sense::hover());

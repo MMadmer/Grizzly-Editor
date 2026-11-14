@@ -21,18 +21,18 @@
 //!   library with undo and are saved explicitly, as a job beside the editor.
 //!
 //! [`install`] plugs the five tabs and the Libraries menu (Light Animations, Texture Library,
-//! Sound Library, Reload Objects) into the shell; Check New Textures, Synchronize Textures...,
-//! Synchronize Sounds..., Rewrite Texture Descriptions... and Reload Textures are actions too, on
+//! Sound Library, Reload Objects) into the shell; Check New Textures, Synchronize Textures,
+//! Synchronize Sounds, Rewrite Texture Descriptions... and Reload Textures are actions too, on
 //! the palette and under their tab's More ([`libtools`]). [`register`] adds `preview.model`,
 //! `preview.texture`, `library.view`, `shot.asset` and the `library.*` maintenance commands.
 //!
-//! Widgets the kit lacks, local to this crate: [`local::local_checker`] (a checkerboard lined
-//! up with a picture, clipped to the view), [`local::local_heading`] (a preview's title and its
-//! facts),
-//! [`local::local_ends`] (a row's two end labels), [`local::local_frame`],
-//! [`local::local_texture_pick`] (a texture picked from a searchable list) and
+//! Widgets the kit lacks, local to this crate: [`local::local_heading`] (a preview's title and
+//! its facts), [`local::local_ends`] (a row's two end labels), [`local::local_frame`] and
 //! [`library::list::LibraryList`] (the libraries' list: search, leaf order, muted folders, only
 //! the rows in view laid out).
+//!
+//! Every write of a library goes through [`writer::LibraryWriter`], which passes the write guard
+//! of the games this editor knows first: the library may be any folder, a game is never written.
 //!
 //! A frame never computes, decodes or touches a file: loads, decodes, uploads, walks and saves
 //! run on the pools; a frame registers what arrived with egui and draws it.
@@ -53,139 +53,15 @@ pub mod paths;
 pub mod pending;
 pub mod texture;
 pub mod texture_load;
+pub mod writer;
 
-use gz_app::{Action, ActionCx, DocCx, Enabled, Scope, ShellBuilder, args};
+use gz_app::{Action, ActionCx, Enabled, Scope, ShellBuilder, args};
 use gz_editor::Registry;
 use gz_editor::{Args, Value, json};
 use gz_ui::Icon;
-use gz_ui::dialog::{self, Answer, ConfirmSpec};
 
 use crate::library::stores::LibraryFacts;
 use crate::library::{keys, lanim, sounds, textures};
-use crate::paths::EditorDirs;
-
-fn asker(cx: &DocCx<'_>) -> dialog::Asker {
-    if cx.editor.flags.unattended { dialog::Asker::Unattended } else { dialog::Asker::Ui }
-}
-
-/// Synchronize Textures...: asks, then every source picture against its description and game
-/// texture, as a job.
-pub(crate) fn synchronize_textures(cx: &mut DocCx<'_>) {
-    let spec = ConfirmSpec {
-        id: "sync_textures".to_owned(),
-        title: "Synchronize Textures".to_owned(),
-        headline: "Synchronize the texture library with the texture sources?".to_owned(),
-        items: Vec::new(),
-        total: 0,
-        consequence:
-            "The textures whose source changed are converted again: their .dds and .thm files are replaced."
-                .to_owned(),
-        action: "Synchronize".to_owned(),
-        destructive: false,
-    };
-    let editor = cx.editor.clone();
-    let line = dialog::confirm(cx.ctx, asker(cx), spec, move |answer| {
-        if answer != Answer::Yes {
-            return;
-        }
-        let dirs = EditorDirs::of(&editor);
-        let ed = editor.clone();
-        let started = editor.jobs.start(
-            "sync_textures",
-            Some("libraries"),
-            "Synchronizing Textures",
-            move |ctx| async move {
-                let c = ctx.clone();
-                let done = ctx
-                    .exec
-                    .io(move || {
-                        library::texsync::synchronize_all(&dirs, &c.cancel, |i, n, name| {
-                            c.stage(format!("Synchronizing {name}"));
-                            c.progress(i, n);
-                        })
-                    })
-                    .await;
-                library::LibraryLists::of(&ed).textures_rev.bump();
-                match done {
-                    Ok((updated, failed)) => {
-                        for f in &failed {
-                            ed.log.error(f.clone());
-                        }
-                        Ok(serde_json::json!({ "updated": updated, "failed": failed }))
-                    }
-                    Err(e) => Err(gz_task::JobError::new(e)),
-                }
-            },
-        );
-        if let Err(busy) = started {
-            editor.notices.error(format!("Synchronize Textures waits: {busy}."));
-        }
-    });
-    if let Some(line) = line {
-        cx.editor.log.finding(&line);
-    }
-}
-
-/// Synchronize Sounds...: the orphans are counted off the frame, then the question names them
-///.
-pub(crate) fn synchronize_sounds(cx: &mut DocCx<'_>) {
-    let editor = cx.editor.clone();
-    let asker = asker(cx);
-    let dirs = EditorDirs::of(&editor);
-    let exec = editor.exec.clone();
-    editor.exec.clone().spawn(async move {
-        let d = dirs.clone();
-        let (items, total) = exec.io(move || sounds::orphans(&d)).await;
-        let Ok(queue) = gz_app::UiQueue::of(&editor) else { return };
-        queue.post(move |_shell, ctx| {
-            let spec = ConfirmSpec {
-                id: "sync_sounds".to_owned(),
-                title: "Synchronize Sounds".to_owned(),
-                headline: if total > 0 {
-                    "Synchronize the sound library? These sounds have no .wav source any more:".to_owned()
-                } else {
-                    "Synchronize the sound library with the .wav sources?".to_owned()
-                },
-                items,
-                total,
-                consequence: if total > 0 {
-                    "They are renamed to .~ogg and .~thm; the sounds whose source changed are converted again.".to_owned()
-                } else {
-                    "The sounds whose source changed are converted again and their game files replaced.".to_owned()
-                },
-                action: "Synchronize".to_owned(),
-                destructive: false,
-            };
-            let ed = editor.clone();
-            let line = dialog::confirm(ctx, asker, spec, move |answer| {
-                if answer != Answer::Yes {
-                    return;
-                }
-                let e2 = ed.clone();
-                let started = ed.jobs.start("sync_sounds", Some("libraries"), "Synchronizing Sounds", move |ctx| async move {
-                    let c = ctx.clone();
-                    let done = ctx.exec.io(move || sounds::synchronize_sounds(&dirs, &c.cancel)).await;
-                    library::LibraryLists::of(&e2).sounds_rev.bump();
-                    match done {
-                        Ok((updated, notes)) => {
-                            for n in &notes {
-                                e2.log.warn(n.clone());
-                            }
-                            Ok(serde_json::json!({ "updated": updated, "notes": notes }))
-                        }
-                        Err(e) => Err(gz_task::JobError::new(e)),
-                    }
-                });
-                if let Err(busy) = started {
-                    ed.notices.error(format!("Synchronize Sounds waits: {busy}."));
-                }
-            });
-            if let Some(line) = line {
-                editor.log.finding(&line);
-            }
-        });
-    });
-}
 
 /// The Texture Library's type filter, one checkable action per kind.
 pub(crate) const TYPE_ACTIONS: [&str; 5] = [
@@ -456,18 +332,6 @@ pub fn install(b: &mut ShellBuilder) {
             .icon(Icon::Search)
             .args(|_| args(&[("kind", "texture_library"), ("action", "check")]))
             .enabled(|cx| Enabled::when(!facts(cx).tex().read_only, "The texture folder cannot be written.")),
-    );
-    b.action(
-        Action::new("library.sync_textures", "Synchronize Textures...", "Libraries", "library.sync")
-            .icon(Icon::Refresh)
-            .args(|_| args(&[("kind", "textures")]))
-            .enabled(|cx| Enabled::when(!facts(cx).tex().read_only, "The texture folder cannot be written.")),
-    );
-    b.action(
-        Action::new("library.sync_sounds", "Synchronize Sounds...", "Libraries", "library.sync")
-            .icon(Icon::Refresh)
-            .args(|_| args(&[("kind", "sounds")]))
-            .enabled(|cx| Enabled::when(!facts(cx).sound().read_only, "The sound folder cannot be written.")),
     );
     for action in TYPE_ACTION_TABLE {
         b.action(action);

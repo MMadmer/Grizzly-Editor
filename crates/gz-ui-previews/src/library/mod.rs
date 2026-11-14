@@ -9,6 +9,7 @@ pub mod lanim;
 pub mod list;
 pub mod sounds;
 pub mod stores;
+pub mod texpick;
 pub mod texsync;
 pub mod textures;
 
@@ -85,8 +86,7 @@ pub trait LibraryDoc {
 /// Something a library tab is still reading for its selection.
 pub type Settle = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
-/// `rawdata\textures` and the like are written only when the author can write there
-/// (`FS.can_write_to_alias`).
+/// `rawdata\textures` and the like are written only when the author can write there.
 #[must_use]
 pub fn can_write(dir: &std::path::Path) -> bool {
     match std::fs::metadata(dir) {

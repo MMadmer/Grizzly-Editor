@@ -825,7 +825,7 @@ async fn library_play(editor: Arc<Editor>, p: PlayParams, _origin: Origin) -> Re
     Ok(merge(head, body))
 }
 
-fn yes_wait() -> bool {
+pub(crate) fn yes_wait() -> bool {
     true
 }
 
@@ -890,8 +890,7 @@ async fn library_rebuild(editor: Arc<Editor>, p: RebuildParams, _origin: Origin)
                 .map_err(CmdError::not_found)?
                 .to_owned();
             if p.small {
-                let dirs = crate::paths::EditorDirs::of(&editor);
-                crate::libtools::smaller_cube_map(&editor, &dirs, &name).map_err(CmdError::busy)?
+                crate::libtools::smaller_cube_map(&editor, &name).map_err(CmdError::busy)?
             } else {
                 let pending = stores.tex.snapshot().edits.get(&name).cloned();
                 crate::library::textures::start_texture_rebuild(&editor, &name, pending)
