@@ -15,6 +15,10 @@ Nothing else under `tools/` is yours (Q1 rewrites the suites at the same time), 
 (`docs/*.md`, `README.md`, `CLAUDE.md`, `tools/mcp/AI_SETUP.md`: the architect's - list in your report what the
 code makes untrue in them).
 
+The architect is working in `crates/gz-win/src/lib.rs`, `crates/gz-app/src/stalls.rs` and
+`crates/gz-app/src/window.rs` while you start: sweep those three files last, and read each again right before
+you touch it. Your QA port, if you run an editor at all, is 28993 (`GRIZZLY_QA_PORT`).
+
 Order of work, because engineer Q1 needs a tree that compiles: do part 2 (the typed findings) FIRST and
 finish it crate by crate - `bash tools/rust/cg.sh check --workspace` clean before you go on - then the sweep,
 which cannot break a build. Never leave the tree not compiling for more than a few minutes.

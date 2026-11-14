@@ -14,6 +14,10 @@ built) and try again in a few minutes. The documents (`docs/*.md`, `tools/mcp/AI
 `CLAUDE.md`) are the architect's: do not edit them; list in your report every sentence of them that the code
 makes untrue.
 
+The suites are yours, all of them: where `RULES.md` says "only your suites, never the whole set", the whole set IS
+your proof - run it when a round of changes is done, not after every edit (it takes about ten minutes; one suite
+or one phase while fixing). Your QA port is 28991 (`GRIZZLY_QA_PORT`) for a suite you start by hand.
+
 What exists already: `tools/rust/limited.py` (every program a script starts runs under it), `run_all.py`'s
 `log_trouble` (a suite fails when an editor of it logged a graphics device error or a panic - keep it) and
 `only_timings` (a suite that failed on nothing but its timings beside other suites is measured again alone,
