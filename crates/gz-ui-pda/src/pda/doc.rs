@@ -24,7 +24,7 @@ use gz_ui::{
 };
 
 use crate::assets::PdaAssets;
-use crate::local::{local_code_view, local_tab_strip};
+use crate::local::local_code_view;
 use crate::pda::canvas::{CanvasCache, draw_canvas};
 use crate::pda::{CANVAS_MIN_H, CANVAS_MIN_W, DETAILS_W, Model, PdaTab, SIDE_MIN, SOURCE_H, SOURCE_MIN};
 
@@ -292,7 +292,7 @@ impl PdaDoc {
             m.tab = t;
         }
         let mut tab = m.tab.min(3);
-        local_tab_strip(ui, "pda_details", &labels, &mut tab);
+        gz_ui::tab_strip(ui, "pda_details", &labels, &mut tab);
         m.tab = tab;
         ui.add_space(6.0);
         ScrollArea::vertical().id_salt(("gz-ui-pda.details", tab)).auto_shrink([false, false]).show(

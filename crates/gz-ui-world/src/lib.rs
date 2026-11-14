@@ -27,11 +27,9 @@
 //! popup with a search, only the rows in view laid out), [`picker::local_combo`] (a short list
 //! with a free preview), [`picker::local_multi_combo`] (ticks over names, a name the list lacks
 //! kept), [`portraits::local_portrait_gallery`] (the faces of every portrait sheet),
-//! [`local::local_section`] (a folding header outside a property grid),
-//! [`local::local_hint_field`] (a one-line field with a hint), [`local::local_number_text`] (a
-//! number that may be empty, with a hint), [`local::local_check`] (a box with its label),
-//! [`local::local_dirty_dot`], [`local::local_problems_drawer`] and
-//! [`local::local_level_picker`] (a searchable list of the linked game's levels).
+//! [`local::local_number_text`] (a number that may be empty, with a hint),
+//! [`local::local_dirty_dot`], [`local::local_problems_drawer`], [`local::local_cell`] and
+//! [`local::drawer_height`]. The levels World Rules picks are the kit's `PickList`.
 //!
 //! Nothing here writes a file or computes inside a frame: every edit is a command or a service
 //! call on the pools (`Characters::save`, `file.delete`, `world.set`, `scene.place`,

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use egui::{Align, Id, Layout, Rect, ScrollArea, Ui, UiBuilder, Vec2, pos2};
+use egui::{Align, Id, Layout, Popup, Rect, ScrollArea, Sense, Ui, UiBuilder, Vec2, pos2};
 use gz_app::{DocCx, Document, OpenRequest, ShellBuilder};
 use gz_base::Rev;
 use gz_editor::{Args, Editor, Value, json};
@@ -22,11 +22,12 @@ use gz_project::Project;
 use gz_ui::dialog::{Answer, ConfirmSpec, confirm};
 use gz_ui::grid::chips;
 use gz_ui::list::{Column, table_headers};
+use gz_ui::pick::{PickItem, PickList, pick_popup};
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
 use gz_ui::{
-    Button, Font, Icon, Kind, PropFlags, PropertyGrid, SearchField, Tone, Toolbar, icon_button, metrics,
-    palette, segmented,
+    Button, Check, Font, Icon, Kind, PropFlags, PropertyGrid, SearchField, Section, Tone, Toolbar,
+    icon_button, metrics, palette, segmented,
 };
 use gz_ui::{Col, ItemRows};
 use gz_world::{
@@ -37,10 +38,7 @@ use rustc_hash::FxHashMap;
 
 use crate::call::{self, args, s};
 use crate::lists::{Lists, ListsView};
-use crate::local::{
-    drawer_height, local_cell, local_cell_check, local_check, local_level_picker, local_number_text,
-    local_problems_drawer, local_section, open_level_picker, set_section_open,
-};
+use crate::local::{drawer_height, local_cell, local_number_text, local_problems_drawer};
 use crate::picker::{item_picker, local_combo};
 
 /// The tab's id and kind.
@@ -742,7 +740,8 @@ impl WorldDoc {
             let label = "Keep the perks picked on the new-game screen";
             let w = metrics::FRAME + 8.0 + text::width(&ctx, &Font::Body.id(), label);
             let mut perks = self.kit.perks;
-            if local_check(ui, "world.perks", label, &mut perks, w) {
+            if gz_ui::form::check(ui, Id::unique(("gz-ui-world.check", "world.perks")), label, &mut perks, w)
+            {
                 self.kit.perks = perks;
                 self.kit_dirty = true;
             }
@@ -893,13 +892,34 @@ impl WorldDoc {
         let popup = Id::unique(("gz-ui-world.pick_level", key));
         let resp = Button::new("Add Level...").enabled(game_ok, "Link a game to pick its levels").show(ui);
         if resp.clicked() {
-            open_level_picker(&ctx, popup);
+            PickList::reset(&ctx, popup);
+            Popup::open_id(&ctx, popup);
         }
-        let taken = if area { self.world.area.clone() } else { self.world.levels.clone() };
-        if let Some(level) = local_level_picker(&ctx, popup, resp.rect, ui.layer_id(), &self.levels, &taken) {
-            let list = if area { &mut self.world.area } else { &mut self.world.levels };
-            list.push(level);
-            changed = true;
+        if Popup::is_id_open(&ctx, popup) {
+            let taken = if area { &self.world.area } else { &self.world.levels };
+            let items: Vec<PickItem> = self
+                .levels
+                .iter()
+                .filter(|(name, _)| !taken.contains(name))
+                .map(|(name, caption)| {
+                    let label =
+                        if caption.is_empty() { name.clone() } else { format!("{name}  -  {caption}") };
+                    PickItem::new(name.as_str(), label)
+                })
+                .collect();
+            let empty =
+                if self.levels.is_empty() { "Link a game to pick its levels." } else { "No level matches." };
+            let list = PickList::new(popup, &items)
+                .hint("Search levels")
+                .empty(empty)
+                .width(em(24.0))
+                .max_height(280.0);
+            if let Some(n) = pick_popup(&ctx, popup, resp.rect, ui.layer_id(), list) {
+                let level = items[n].id.clone();
+                let list = if area { &mut self.world.area } else { &mut self.world.levels };
+                list.push(level);
+                changed = true;
+            }
         }
         if changed {
             let list = if area { &self.world.area } else { &self.world.levels };
@@ -965,7 +985,14 @@ impl WorldDoc {
                     let label = "Close every transition on this level";
                     let w = metrics::FRAME + 8.0 + text::width(ui.ctx(), &Font::Body.id(), label);
                     let mut on = level_locked;
-                    local_check(ui, "world.lock_level", label, &mut on, w).then_some(on)
+                    gz_ui::form::check(
+                        ui,
+                        Id::unique(("gz-ui-world.check", "world.lock_level")),
+                        label,
+                        &mut on,
+                        w,
+                    )
+                    .then_some(on)
                 },
             );
             if let Some(Some(on)) = flipped {
@@ -1057,14 +1084,17 @@ impl WorldDoc {
                         _ if closed => "Starts closed: a quest opens it",
                         _ => "Open at the start of a game",
                     };
-                    if local_cell_check(
-                        ui,
-                        &format!("world.closed.{}", t.name),
-                        &mut closed,
-                        closed_w,
-                        own,
-                        tip,
-                    ) {
+                    // the box in the middle of its column
+                    let (cell, _) =
+                        ui.allocate_exact_size(Vec2::new(closed_w, metrics::FRAME), Sense::hover());
+                    let box_rect = Rect::from_center_size(cell.center(), Vec2::splat(metrics::FRAME));
+                    let mut child =
+                        ui.new_child(UiBuilder::new().id_salt(("world.closed", &t.name)).max_rect(box_rect));
+                    let resp =
+                        Check::new(&mut closed, "").width(metrics::FRAME).enabled(own, tip).show(&mut child);
+                    let flipped = resp.changed();
+                    let _ = resp.on_hover_text(tip);
+                    if flipped {
                         toggled = Some((t.name.clone(), closed));
                     }
                 });
@@ -1112,11 +1142,13 @@ impl WorldDoc {
         let _ = text::prose(ui, &text_).on_hover_text("A new game reads these rules once and keeps them in its saves. Quests change them while the game runs.");
         ui.add_space(6.0);
         let offered = format!("{} of {MAX_PLAYER_CHOICES} offered", self.world.choice_count());
-        if local_section(ui, "world.original", "Original Game", true, Some(&offered)) {
+        if Section::new("world.original", "Original Game").count(&offered).show(ui).open {
+            ui.add_space(4.0);
             self.draw_rules(ui);
             ui.add_space(8.0);
         }
-        if local_section(ui, "world.start", "Player Start", true, None) {
+        if Section::new("world.start", "Player Start").show(ui).open {
+            ui.add_space(4.0);
             self.draw_start(ui);
             ui.add_space(8.0);
         }
@@ -1125,18 +1157,21 @@ impl WorldDoc {
         } else {
             format!("{} item{}", self.kit.items.len(), if self.kit.items.len() == 1 { "" } else { "s" })
         };
-        if local_section(ui, "world.kit", "Starting Kit", true, Some(&kit_right)) {
+        if Section::new("world.kit", "Starting Kit").count(&kit_right).show(ui).open {
+            ui.add_space(4.0);
             self.draw_kit(ui);
             ui.add_space(8.0);
         }
-        if local_section(ui, MORE, "More", false, None) {
+        if Section::new(MORE, "More").default_open(false).show(ui).open {
+            ui.add_space(4.0);
             ui.indent("gz-ui-world.more", |ui| {
                 let levels = if self.world.levels.is_empty() {
                     "Every level".to_owned()
                 } else {
                     format!("{} levels", self.world.levels.len())
                 };
-                if local_section(ui, "world.applies", "Applies On", true, Some(&levels)) {
+                if Section::new("world.applies", "Applies On").count(&levels).show(ui).open {
+                    ui.add_space(4.0);
                     let _ = text::prose(
                         ui,
                         "Where the five rules hold. The rest of the map keeps the original game.",
@@ -1150,7 +1185,8 @@ impl WorldDoc {
                 } else {
                     format!("{} levels", self.world.area.len())
                 };
-                if local_section(ui, "world.area", "Playable Area", true, Some(&area)) {
+                if Section::new("world.area", "Playable Area").count(&area).show(ui).open {
+                    ui.add_space(4.0);
                     let _ = text::prose(
                         ui,
                         "A transition out of the area stays closed. A quest can open it or grow the area.",
@@ -1159,7 +1195,8 @@ impl WorldDoc {
                     self.scope(ui, "world.area_levels", ["Anywhere", "Only These Levels"], true);
                     ui.add_space(8.0);
                 }
-                if local_section(ui, "world.transitions", "Transitions", true, None) {
+                if Section::new("world.transitions", "Transitions").show(ui).open {
+                    ui.add_space(4.0);
                     self.draw_transitions(ui);
                 }
             });
@@ -1407,7 +1444,7 @@ impl Document for WorldDoc {
 
 /// Opens More from outside: what MCP asks for (a level, a filter) is under it.
 pub(crate) fn open_more(ctx: &egui::Context) {
-    set_section_open(ctx, MORE, true);
+    gz_ui::section::set_open(ctx, MORE, true);
 }
 
 /// The `world.view` answer of a tab that is not open.

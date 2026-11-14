@@ -1,11 +1,10 @@
 //! What the release windows draw that no other surface does.
 
-use egui::{Align, Align2, Layout, Rect, Sense, Stroke, Ui, UiBuilder, Vec2, pos2};
-use gz_ui::list::Column;
+use egui::{Align, Align2, Layout, Rect, Sense, Ui, UiBuilder, Vec2, pos2};
 use gz_ui::text::{self, Clip};
 use gz_ui::theme::{Tone, metrics, palette};
 use gz_ui::units::{button_width, em};
-use gz_ui::{Button, Font, Kind, PropertyGrid};
+use gz_ui::{Button, Font, Kind};
 
 /// The kit's secret field and its button on one line, the field taking what the button leaves. Returns
 /// whether the button was pressed, or Enter in the field while the button is on.
@@ -78,34 +77,6 @@ pub(crate) fn local_card_title(
         }
     });
     pressed
-}
-
-/// A block that folds under a header, outside a property grid: the grid's own section around
-/// one block. `open` is its state until it is clicked.
-pub(crate) fn local_fold(ui: &mut Ui, role: &str, title: &str, open: bool, add: impl FnOnce(&mut Ui)) {
-    PropertyGrid::new(role).show(ui, |g| {
-        g.section(title, open, None, |g| {
-            g.block(add);
-        });
-    });
-}
-
-/// A sortable table's header: the kit's headers, with column lines in the header only (under the
-/// last row is empty table, not columns). Returns the column clicked.
-pub(crate) fn local_table_head(ui: &mut Ui, columns: &[Column<'_>]) -> Option<usize> {
-    let p = palette(ui.ctx());
-    let origin = ui.cursor().min;
-    let clicked = gz_ui::list::table_headers(ui, columns);
-    let mut x = origin.x;
-    for c in columns.iter().take(columns.len().saturating_sub(1)) {
-        x += c.width;
-        let at = x.round() - 0.5;
-        ui.painter().line_segment(
-            [pos2(at, origin.y + 5.0), pos2(at, origin.y + 19.0)],
-            Stroke::new(1.0, p.border_subtle),
-        );
-    }
-    clicked
 }
 
 /// A child laid out left to right in `rect`, for the cells of a row painted by hand.

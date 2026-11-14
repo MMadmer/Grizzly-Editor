@@ -32,64 +32,6 @@ pub fn local_list_header(ui: &mut Ui, title: &str, tip: &str) -> bool {
     icon_button(&mut child, Icon::Plus, tip, false, true).clicked()
 }
 
-/// A strip of tabs, 26 pt (a panel's tab strip): the selected one in the text colour on the
-/// base fill under an accent overline. Returns whether the choice changed.
-pub fn local_tab_strip(ui: &mut Ui, id_salt: &str, labels: &[String], current: &mut usize) -> bool {
-    let ctx = ui.ctx().clone();
-    let p = palette(&ctx);
-    let font = Font::Body.id();
-    let w = ui.available_width();
-    let (strip, _) = ui.allocate_exact_size(Vec2::new(w, metrics::PANEL_TABS), Sense::hover());
-    ui.painter().line_segment(
-        [pos2(strip.min.x, strip.max.y - 0.5), pos2(strip.max.x, strip.max.y - 0.5)],
-        Stroke::new(1.0, p.border_subtle),
-    );
-    // the tabs share the strip when it is too narrow for their labels
-    let wants: Vec<f32> = labels.iter().map(|l| text::width(&ctx, &font, l) + 24.0).collect();
-    let total: f32 = wants.iter().sum();
-    let shrink = if total > w && total > 0.0 { w / total } else { 1.0 };
-    let mut x = strip.min.x;
-    let mut changed = false;
-    for (i, label) in labels.iter().enumerate() {
-        let tw = wants.get(i).copied().unwrap_or(0.0) * shrink;
-        let r = Rect::from_min_max(pos2(x, strip.min.y), pos2(x + tw, strip.max.y));
-        x += tw;
-        let resp = ui.interact(r, ui.make_persistent_id(("gz-ui-pda.tab", id_salt, i)), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, *current == i, label));
-        if resp.clicked() && *current != i {
-            *current = i;
-            changed = true;
-        }
-        let on = *current == i;
-        let painter = ui.painter();
-        if on {
-            painter.rect_filled(r, CornerRadius::ZERO, p.base);
-            painter.rect_filled(
-                Rect::from_min_max(r.min, pos2(r.max.x, r.min.y + 2.0)),
-                CornerRadius::ZERO,
-                p.accent_bright,
-            );
-        } else if resp.hovered() {
-            painter.rect_filled(r, CornerRadius::ZERO, p.hover);
-        }
-        let shown_cut = text::paint(
-            painter,
-            &font,
-            r.center(),
-            Align2::CENTER_CENTER,
-            if on { p.text } else { p.text_secondary },
-            label,
-            Some((tw - 12.0).max(0.0)),
-            Clip::End,
-        );
-        if shown_cut {
-            gz_ui::audit::truncated(&ctx, label, label, r);
-        }
-        gz_ui::audit::control(&ctx, label, true, None, None, r);
-    }
-    changed
-}
-
 /// What a [`local_code_view`] was asked to do this frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CodeOut {

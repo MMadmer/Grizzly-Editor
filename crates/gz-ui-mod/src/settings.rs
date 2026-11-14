@@ -34,7 +34,7 @@ use parking_lot::Mutex;
 
 use crate::call::{self, Pick, Picking, args, s};
 use crate::form::{self, Aux, Form, Kind as TargetKind, PAGES, Problem};
-use crate::local::{local_picture, local_text_field, local_value_column};
+use crate::local::{local_picture, local_value_column};
 
 /// The tab's id and kind.
 pub const TAB: &str = "mod_settings";
@@ -739,16 +739,16 @@ impl ModSettingsDoc {
                 "The mod's title, as the game's Mods menu prints it. Free text: it owes nothing to the module id or the project folder, and it is not the title of a game mode.",
                 PropFlags::NONE,
                 0,
-                |ui| local_text_field(ui, "name", &mut form.name, ""),
+                |ui| gz_ui::form::row_field(ui, ("gz-ui-mod.text", "name"), &mut form.name, ""),
             );
             g.row("Version", "1 to 4 numbers separated by dots. The game compares versions to offer an update.", flags(problems, "version", PropFlags::REQUIRED), 0, |ui| {
-                local_text_field(ui, "version", &mut form.version, "1.0.0")
+                gz_ui::form::row_field(ui, ("gz-ui-mod.text", "version"), &mut form.version, "1.0.0")
             });
             messages(g, problems, "version");
-            g.row("Author", "Shown in the game's Mods menu.", PropFlags::NONE, 0, |ui| local_text_field(ui, "author", &mut form.author, ""));
+            g.row("Author", "Shown in the game's Mods menu.", PropFlags::NONE, 0, |ui| gz_ui::form::row_field(ui, ("gz-ui-mod.text", "author"), &mut form.author, ""));
             let _ = g.block(|ui| text_block(ui, "Description", "Shown in the game's Mods menu. Plain text or a string table id.", &mut form.description, 4));
             g.row("Website", "The mod's page on AP-PRO or ModDB. The game opens it from the Mods menu.", flags(problems, "website", PropFlags::NONE), 0, |ui| {
-                local_text_field(ui, "website", &mut form.website, "https://ap-pro.ru/stuff/...")
+                gz_ui::form::row_field(ui, ("gz-ui-mod.text", "website"), &mut form.website, "https://ap-pro.ru/stuff/...")
             });
             messages(g, problems, "website");
             let repo = g.row(
@@ -756,7 +756,7 @@ impl ModSettingsDoc {
                 "owner/repo. The game checks the latest release of this repository for updates. A pasted address is fine: it is kept as owner/repo.",
                 flags(problems, "github", PropFlags::NONE),
                 0,
-                |ui| local_text_field(ui, "github", &mut form.github, "owner/repo"),
+                |ui| gz_ui::form::row_field(ui, ("gz-ui-mod.text", "github"), &mut form.github, "owner/repo"),
             );
             if repo.is_some_and(|r| r.lost_focus()) {
                 form.github = normalize_github_repo(&form.github);
@@ -769,7 +769,7 @@ impl ModSettingsDoc {
                     "Technical, never shown to the player: the folder the module installs into (<game>\\modules\\<id>) and the name other modules require it by. Seeded from the project folder - change it before the first release.",
                     flags(problems, "id", PropFlags::REQUIRED),
                     1,
-                    |ui| local_text_field(ui, "id", &mut form.id, "my_mod"),
+                    |ui| gz_ui::form::row_field(ui, ("gz-ui-mod.text", "id"), &mut form.id, "my_mod"),
                 );
                 messages(g, problems, "id");
                 let row = g.row(
@@ -964,7 +964,7 @@ impl ModSettingsDoc {
                         "Technical id of the MODE, not of the mod: the module's level work is gated on it and the new-game screen offers it. It may match the module id or not.",
                         flags(problems, "pmode_id", PropFlags::REQUIRED),
                         0,
-                        |ui| local_text_field(ui, "pmode_id", &mut form.pmode_id, "my_mode"),
+                        |ui| gz_ui::form::row_field(ui, ("gz-ui-mod.text", "pmode_id"), &mut form.pmode_id, "my_mode"),
                     );
                     messages(g, problems, "pmode_id");
                     g.row(
@@ -972,7 +972,7 @@ impl ModSettingsDoc {
                         "What the new-game screen lists the mode as. It names the mode, not the mod: the Mods menu shows the Name on General instead.",
                         flags(problems, "pmode_title", PropFlags::NONE),
                         0,
-                        |ui| local_text_field(ui, "pmode_title", &mut form.pmode_title, ""),
+                        |ui| gz_ui::form::row_field(ui, ("gz-ui-mod.text", "pmode_title"), &mut form.pmode_title, ""),
                     );
                     messages(g, problems, "pmode_title");
                 }
@@ -1184,16 +1184,21 @@ impl ModSettingsDoc {
                 let f = |part: &str| format!("commands.{row}.{part}");
                 let bad = |part: &str| problems.iter().any(|p| p.field == f(part) && p.blocks);
                 let resp = match col {
-                    0 => Some(local_text_field(ui, &format!("name.{row}"), &mut c.name, "my_mod_status")),
+                    0 => Some(gz_ui::form::row_field(
+                        ui,
+                        ("gz-ui-mod.text", &format!("name.{row}")),
+                        &mut c.name,
+                        "my_mod_status",
+                    )),
                     1 => {
                         let w = ui.available_width() - metrics::ICON_BUTTON - 2.0;
                         let r = ui
                             .horizontal(|ui| {
                                 ui.set_width(ui.available_width());
                                 let r = ui.allocate_ui(Vec2::new(w, metrics::FRAME), |ui| {
-                                    local_text_field(
+                                    gz_ui::form::row_field(
                                         ui,
-                                        &format!("function.{row}"),
+                                        ("gz-ui-mod.text", &format!("function.{row}")),
                                         &mut c.function,
                                         "my_mod.status",
                                     )
@@ -1218,7 +1223,12 @@ impl ModSettingsDoc {
                         pick_at = pick_at.or(Some((row, r.rect)));
                         Some(r)
                     }
-                    2 => Some(local_text_field(ui, &format!("args.{row}"), &mut c.args, "none")),
+                    2 => Some(gz_ui::form::row_field(
+                        ui,
+                        ("gz-ui-mod.text", &format!("args.{row}")),
+                        &mut c.args,
+                        "none",
+                    )),
                     _ => {
                         let r = ui
                             .vertical_centered(|ui| {
@@ -1279,7 +1289,7 @@ impl ModSettingsDoc {
                             "The line the console's help shows for it. Plain text or a string table id.",
                             flags(problems, &f("help"), PropFlags::NONE),
                             0,
-                            |ui| local_text_field(ui, "help", &mut c.help, ""),
+                            |ui| gz_ui::form::row_field(ui, ("gz-ui-mod.text", "help"), &mut c.help, ""),
                         );
                         for part in ["name", "function", "args", "help"] {
                             messages(g, problems, &f(part));

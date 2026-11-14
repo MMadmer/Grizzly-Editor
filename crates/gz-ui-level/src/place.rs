@@ -342,6 +342,8 @@ pub enum Row {
     Note {
         category: Category,
         text: &'static str,
+        /// The list is still being read: the note carries the kit's spinner.
+        busy: bool,
     },
 }
 
@@ -514,11 +516,15 @@ pub fn rows(inputs: &Inputs, key: &Key, folders: &FxHashMap<Category, FxHashSet<
             continue;
         }
         if reading {
-            push(&mut out, Row::Note { category: cat, text: "Reading the list..." });
+            push(&mut out, Row::Note { category: cat, text: "Reading the list...", busy: true });
         } else if shown.is_empty() {
             push(
                 &mut out,
-                Row::Note { category: cat, text: "Nothing here: the linked game or the library has none." },
+                Row::Note {
+                    category: cat,
+                    text: "Nothing here: the linked game or the library has none.",
+                    busy: false,
+                },
             );
         }
         let open_folders = folders.get(&cat);
@@ -848,7 +854,18 @@ impl PlacePanel {
                             toggle_folder = Some((*category, path.clone(), !*open));
                         }
                     }
-                    Row::Note { text, .. } => {
+                    Row::Note { text, busy, .. } => {
+                        if *busy {
+                            gz_ui::state::spinner_at(
+                                &ctx,
+                                ui.painter(),
+                                Rect::from_center_size(
+                                    pos2(rect.min.x + 14.0, rect.center().y),
+                                    Vec2::splat(metrics::GLYPH),
+                                ),
+                            );
+                            gz_ui::audit::loading(&ctx, text, rect);
+                        }
                         text::paint(
                             ui.painter(),
                             &Font::Body.id(),
@@ -1080,7 +1097,7 @@ impl PlacePanel {
                 Row::Folder { category, path, depth, open } => {
                     json!({ "folder": &**path, "category": category.id(), "depth": depth, "open": open })
                 }
-                Row::Note { category, text } => json!({ "note": text, "category": category.id() }),
+                Row::Note { category, text, .. } => json!({ "note": text, "category": category.id() }),
                 Row::Item { item, depth } => json!({
                     "item": item.label,
                     "what": item.detail,

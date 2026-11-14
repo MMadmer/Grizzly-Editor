@@ -3,14 +3,20 @@
 //!
 //! - [`check`] - the kit's [`crate::Check`] for a form that names its state by an `Id`.
 //! - [`hint_field`] - a one-line text field with a hint while it is empty (the kit's
-//!   `grid::text_field` has none).
+//!   `grid::text_field` has none), named to the audit by its hint; [`row_field`] - the same as wide
+//!   as the row it is in.
 //! - [`secret_field`] - a one-line field whose text is never drawn (a password, a token).
 //!
-//! Each takes the [`Id`] its state lives under: the caller decides whether it is the panel's
-//! (`ui.make_persistent_id`) or one the form reaches from outside (`Id::unique`).
+//! Each takes the [`Id`] its state lives under (`row_field`, a salt it makes one of): the caller
+//! decides whether it is the panel's (`ui.make_persistent_id`) or one the form reaches from outside
+//! (`Id::unique`).
+
+use std::fmt::Debug;
+use std::hash::Hash;
 
 use egui::{Id, Margin, Response, TextEdit, Ui, Vec2};
 
+use crate::units::em;
 use crate::{Font, audit, metrics};
 
 /// A box and its label, `width` wide, the whole row a click target; disabled with the `Ui`: the
@@ -21,7 +27,7 @@ pub fn check(ui: &mut Ui, id: Id, label: &str, value: &mut bool, width: f32) -> 
 
 /// A one-line text field `width` wide, a frame tall, with `hint` while it is empty.
 pub fn hint_field(ui: &mut Ui, id: Id, value: &mut String, hint: &str, width: f32) -> Response {
-    ui.add(
+    let resp = ui.add(
         TextEdit::singleline(value)
             .id(id)
             .font(Font::Body.id())
@@ -29,7 +35,19 @@ pub fn hint_field(ui: &mut Ui, id: Id, value: &mut String, hint: &str, width: f3
             .hint_text(hint)
             .desired_width(width)
             .min_size(Vec2::new(width, metrics::FRAME)),
-    )
+    );
+    // the hint is what names a field with no label of its own
+    if !hint.is_empty() {
+        audit::control(ui.ctx(), hint, true, None, None, resp.rect);
+    }
+    resp
+}
+
+/// A [`hint_field`] as wide as the row it is in (3 em at least). Its state lives under
+/// `Id::unique(salt)`, so it keeps the keyboard while the form around it scrolls.
+pub fn row_field(ui: &mut Ui, salt: impl Hash + Debug, value: &mut String, hint: &str) -> Response {
+    let width = ui.available_width().max(em(3.0));
+    hint_field(ui, Id::unique(salt), value, hint, width)
 }
 
 /// A one-line field `width` wide whose text is never drawn (a password, a token, an API key):

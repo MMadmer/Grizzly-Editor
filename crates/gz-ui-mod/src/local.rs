@@ -7,13 +7,6 @@ use egui::{
 use gz_ui::units::em;
 use gz_ui::{Icon, icons, metrics, palette};
 
-/// The kit's hint field as wide as the row, under an id of this crate's own.
-pub fn local_text_field(ui: &mut Ui, id_salt: &str, value: &mut String, hint: &str) -> Response {
-    let id = ui.make_persistent_id(("gz-ui-mod.text", id_salt));
-    let w = ui.available_width().max(em(3.0));
-    gz_ui::form::hint_field(ui, id, value, hint, w)
-}
-
 /// A block inside one property row: what `add` draws flows top-down from the value's left edge,
 /// and the row grows to hold it (the row's own line is laid out left to right and centred).
 pub fn local_value_column<R>(ui: &mut Ui, id_salt: &str, add: impl FnOnce(&mut Ui) -> R) -> R {

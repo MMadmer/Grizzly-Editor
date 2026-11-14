@@ -120,16 +120,16 @@ pub async fn screens_view(editor: Arc<Editor>, p: ViewParams, _origin: Origin) -
     }
     // the same way a drop from Explorer lands: at a point of the editor's window
     if let Some(list) = arg(&args, "simulate_drop") {
-        let files: Vec<String> = list
+        let files: Vec<std::path::PathBuf> = list
             .split('|')
             .map(|f| f.trim_matches([' ', '\t', '\r', '\n']))
             .filter(|f| !f.is_empty())
-            .map(str::to_owned)
+            .map(std::path::PathBuf::from)
             .collect();
         let (x, y) = (arg_f32(&args, "x"), arg_f32(&args, "y"));
         let landed = gz_app::on_ui(&editor, move |_, ctx| {
             let ppp = ctx.pixels_per_point();
-            crate::drop::simulate_drop(ctx, files, egui::pos2(x / ppp, y / ppp));
+            gz_ui::drop::simulate_files(ctx, files, egui::pos2(x / ppp, y / ppp));
             Ok(())
         })
         .await;

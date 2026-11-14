@@ -23,14 +23,15 @@ use gz_release::{AuthorKeys, KeyState};
 use gz_ui::card::card;
 use gz_ui::file_dialog::FileRequest;
 use gz_ui::grid::read_only;
+use gz_ui::state::busy_line;
 use gz_ui::text::{self, Clip};
-use gz_ui::{Button, Dialog, DialogSize, Font, Icon, Kind, PropFlags, PropertyGrid, Tone, palette};
+use gz_ui::{Button, Dialog, DialogSize, Font, Icon, Kind, PropFlags, PropertyGrid, Section, Tone, palette};
 use parking_lot::Mutex;
 use zeroize::Zeroizing;
 
 use gz_ui_mod::KeyLine;
 
-use crate::local::{local_card_title, local_fold, local_secret_row};
+use crate::local::{local_card_title, local_secret_row};
 use crate::{open_page, reason};
 
 /// The body's height while the work area has room for it: the room a finished check takes, so a
@@ -569,7 +570,7 @@ impl SubmitUi {
     ) {
         let Some(key) = key else {
             card(ui, "card_key", "Author Key", Tone::Muted, false, |ui| {
-                wide_status(ui, Tone::Muted, "Reading the author key...");
+                busy_line(ui, "Reading the author key...");
             });
             return;
         };
@@ -654,10 +655,10 @@ impl SubmitUi {
                 }
             } else if key.locked || self.key_created {
                 self.key_details(ui, editor, key, picking, acts);
-            } else {
-                local_fold(ui, "catalog_key_more", "More", false, |ui| {
-                    self.key_details(ui, editor, key, picking, acts)
-                });
+            } else if Section::new("catalog_key_more", "More").default_open(false).show(ui).open {
+                ui.add_space(2.0);
+                self.key_details(ui, editor, key, picking, acts);
+                ui.add_space(4.0);
             }
             if !key_error.is_empty() {
                 wide_status(ui, Tone::Error, key_error);
@@ -775,9 +776,9 @@ impl SubmitUi {
                     // a check looks the packages up: until it has, "not scanned" would be a guess
                     let looking = running && view.job == Job::Check && packages.is_empty();
                     if scanning {
-                        wide_status(ui, Tone::Muted, "Scanning...");
+                        busy_line(ui, "Scanning...");
                     } else if looking {
-                        wide_status(ui, Tone::Muted, "Looking the packages up on VirusTotal...");
+                        busy_line(ui, "Looking the packages up on VirusTotal...");
                     }
                     // the requirement stays in sight until every package has a report
                     if packages.is_empty() && !looking {
@@ -993,7 +994,7 @@ fn requirements_card(ui: &mut Ui, view: &View, start_error: &str, acts: &mut Vec
             acts.push(Act::Check);
         }
         if checking {
-            wide_status(ui, Tone::Muted, "Checking...");
+            busy_line(ui, "Checking...");
         } else if !view.check.done {
             wide_status(ui, Tone::Muted, "Not checked yet.");
         }
@@ -1003,12 +1004,14 @@ fn requirements_card(ui: &mut Ui, view: &View, start_error: &str, acts: &mut Vec
         if view.check.done && open.is_empty() && !checking {
             wide_status(ui, Tone::Success, "Every requirement is met.");
         }
-        if !met.is_empty() {
-            local_fold(ui, "catalog_met", &format!("Met ({})", met.len()), false, |ui| {
-                for f in &met {
-                    wide_status(ui, Tone::Success, &f.text);
-                }
-            });
+        if !met.is_empty()
+            && Section::new("catalog_met", &format!("Met ({})", met.len())).default_open(false).show(ui).open
+        {
+            ui.add_space(2.0);
+            for f in &met {
+                wide_status(ui, Tone::Success, &f.text);
+            }
+            ui.add_space(4.0);
         }
         if !start_error.is_empty() {
             wide_status(ui, Tone::Error, start_error);
@@ -1023,7 +1026,7 @@ fn submission_card(ui: &mut Ui, view: &View, signed_in: bool, catalog_repo: &str
         // "not submitted" only once GitHub said so: every job but the scan looks the submission up
         if !view.submission_read {
             if signed_in && view.state == JobState::Running && view.job != Job::Vt {
-                wide_status(ui, Tone::Muted, "Looking up the submission...");
+                busy_line(ui, "Looking up the submission...");
             } else if signed_in && !view.submission_error.is_empty() {
                 wide_status(
                     ui,
@@ -1082,7 +1085,7 @@ fn withdrawal_card(ui: &mut Ui, view: &View, signed_in: bool, acts: &mut Vec<Act
     let running = view.state == JobState::Running;
     card(ui, "card_withdrawal", "Withdrawal", tone, failed, |ui| {
         if running && view.job == Job::Withdraw {
-            wide_status(ui, Tone::Muted, "Withdrawing...");
+            busy_line(ui, "Withdrawing...");
         }
         if w.number != 0 {
             for (tone, line) in issue_lines(

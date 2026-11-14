@@ -14,9 +14,8 @@
 //!
 //! [`install`] plugs all of it into the shell; [`register`] adds `project.page`.
 //!
-//! Widgets the kit lacks, local to this crate: [`local::local_text_field`] (the kit's field with
-//! a hint, reported to the audit by its hint) and [`local::local_rule`] (a muted rule to the edge
-//! of a row).
+//! Widget the kit lacks, local to this crate: [`local::local_rule`] (a muted rule to the edge of
+//! a row).
 //!
 //! Nothing here touches a file or computes inside a frame: lists, counts and pictures come from
 //! snapshots and queries filled on the pools; every action is an existing command

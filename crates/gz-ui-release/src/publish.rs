@@ -780,14 +780,18 @@ impl PublishDialog {
         let signed_in = source != AccountSource::None;
         let signing = matches!(self.sign.state.as_str(), "starting" | "waiting") && self.signing;
         let text_ = match account {
-            None => "Reading the account...".to_owned(),
+            None => String::new(),
             Some(_) if !signed_in => "Not signed in to GitHub: sign in or save a token".to_owned(),
             Some((s, detail)) if detail.is_empty() => s.text().to_owned(),
             Some((s, detail)) => format!("{} ({detail})", s.text()),
         };
         let help = "Where the GitHub token comes from: an environment variable, the token the editor saved in the Windows Credential Manager, or the GitHub CLI (gh auth login) - in that order.";
         g.row("Account", help, if signed_in { PropFlags::READ_ONLY } else { PropFlags::REQUIRED }, 0, |ui| {
-            read_only(ui, &text_, Clip::End)
+            if account.is_none() {
+                gz_ui::state::busy_line(ui, "Reading the account...");
+            } else {
+                read_only(ui, &text_, Clip::End);
+            }
         });
         if device
             && !signing

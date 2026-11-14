@@ -206,7 +206,7 @@ fn draw(card: &Arc<LinkCard>, ui: &mut Ui, editor: &Arc<Editor>) {
             if st.path.is_empty() {
                 text::status(ui, Tone::Muted, "Browse for the game folder.");
             } else if st.hint.is_empty() {
-                text::status(ui, Tone::Muted, "Looking at the folder...");
+                gz_ui::state::busy_line(ui, "Looking at the folder...");
             } else {
                 let hint = st.hint.clone();
                 text::status(ui, if st.hint_ok { Tone::Success } else { Tone::Error }, &hint);

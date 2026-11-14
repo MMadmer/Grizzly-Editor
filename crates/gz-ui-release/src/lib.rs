@@ -19,10 +19,10 @@
 //!   them.
 //!
 //! What this crate draws that no other surface does (`local`): `local_secret_row` (the kit's
-//! secret field and its button on one line),
-//! `local_code` (the device code in Title-sized Mono), `local_card_title` (a card's title with a
-//! badge and a button on its line), `local_fold` (a folded block outside a property grid),
-//! `local_table_head` (a sortable table's header with column lines in the header only).
+//! secret field and its button on one line, two windows), `local_code` (the device code in
+//! Title-sized Mono), `local_card_title` (a card's title with a badge and a button on its line)
+//! and `cell` (the cells of a row painted by hand). A fold is the kit's `Section`, the releases'
+//! header `list::table_headers_ruled`, a busy line `state::busy_line`.
 
 mod local;
 mod publish;

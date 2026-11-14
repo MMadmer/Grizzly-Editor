@@ -20,10 +20,10 @@
 //! [`install`] plugs both tabs and their Mod menu actions into the shell, the rows at the slots
 //! `gz-ui-mod`'s `MOD_MENU` keeps; [`register`] adds `pda.preview`, `screens.view` and `pda.open`.
 //!
-//! What this crate draws that no other surface does ([`local`], [`drop`]): `local_file_drop_zone` (a
-//! place files are dropped on), `local_list_header` (a list's title with its +),
-//! `local_tab_strip` (a panel's tabs), `local_code_view` (Mono text with a gutter, Lua data
-//! coloured, the reader's error line underlined), `local_drop_mark` (where a dragged row lands).
+//! What this crate draws that no other surface does ([`local`]): `local_list_header` (a list's
+//! title with its +), `local_code_view` (Mono text with a gutter, Lua data coloured, the reader's
+//! error line underlined), `local_drop_mark` (where a dragged row lands). Drops go through the
+//! kit's board (`gz_ui::drop::Zone`).
 //!
 //! Nothing here touches a file or computes inside a frame: files are read, decoded and written
 //! on the pools; a frame draws from the model and the caches and starts what it needs.
@@ -32,7 +32,6 @@
 
 pub mod assets;
 pub mod bitmap;
-pub mod drop;
 pub mod gamefile;
 pub mod local;
 pub mod pda;
@@ -44,8 +43,6 @@ mod tests;
 
 use gz_app::ShellBuilder;
 use gz_editor::Registry;
-
-pub use drop::{begin_drops, local_file_drop_zone, simulate_drop};
 
 /// Plugs the `pda` and `screens` tabs and their Mod menu commands into the shell.
 pub fn install(b: &mut ShellBuilder) {

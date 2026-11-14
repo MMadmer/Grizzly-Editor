@@ -23,7 +23,6 @@ use gz_ui::units::em;
 use gz_ui::{Font, Icon, MenuItem, SearchField, Tone, icons, menu_item, metrics, palette};
 
 use crate::lists::{Indexed, ListsView};
-use crate::local::local_check;
 
 /// The height of a picker's popup list.
 const POPUP_H: f32 = 320.0;
@@ -65,7 +64,7 @@ pub(crate) fn paint_field(ui: &mut Ui, text_: &str, color: Color32, busy: bool) 
             Vec2::splat(metrics::GLYPH_STATUS),
         );
         if busy {
-            crate::local::local_spinner_at(&ctx, ui.painter(), glyph);
+            gz_ui::state::spinner_at(&ctx, ui.painter(), glyph);
         } else {
             icons::draw(ui.painter(), Icon::ChevronDown, glyph, p.text_secondary);
         }
@@ -363,7 +362,13 @@ pub fn local_multi_combo(
         let unlisted: Vec<String> = picked.iter().filter(|x| !names.contains(x)).cloned().collect();
         let mut toggle = |ui: &mut Ui, name: &str, caption: &str| {
             let mut on = picked.iter().any(|x| x == name);
-            if local_check(ui, &format!("{salt}.{name}"), caption, &mut on, width) {
+            if gz_ui::form::check(
+                ui,
+                Id::unique(("gz-ui-world.check", format!("{salt}.{name}"))),
+                caption,
+                &mut on,
+                width,
+            ) {
                 if on {
                     picked.push(name.to_owned());
                 } else if let Some(at) = picked.iter().position(|x| x == name) {

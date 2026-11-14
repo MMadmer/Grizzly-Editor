@@ -43,7 +43,6 @@ use rustc_hash::FxHashMap;
 
 use crate::cards::{self, Card, Picture, Snapshot};
 use crate::folder::pick_folder;
-use crate::local::local_text_field;
 use crate::reply::{args, call_then, error_text, ok, post_ui, s};
 
 /// pt, docs/UI_DESIGN.md section 6 (Start page).
@@ -419,8 +418,8 @@ fn draw_form(ui: &mut Ui, st: &mut PageState, rect: Rect, actions: &mut Vec<Acti
     ui.spacing_mut().item_spacing.y = 4.0;
     let width = inner.width();
     text::label(ui, "New Project", Font::Strong, p.text, Clip::End);
-    let resp =
-        local_text_field(ui, "new_project.name", &mut st.name, "Latin letters, digits, _ and -", width);
+    let field = ui.make_persistent_id(("gz-ui-app.text", "new_project.name"));
+    let resp = gz_ui::form::hint_field(ui, field, &mut st.name, "Latin letters, digits, _ and -", width);
     if st.form_focus {
         resp.request_focus();
         st.form_focus = false;

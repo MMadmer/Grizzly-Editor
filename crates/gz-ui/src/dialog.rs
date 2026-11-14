@@ -30,7 +30,7 @@ use crate::audit;
 use crate::button::{Button, Kind};
 use crate::font::Font;
 use crate::icons::{self, Icon};
-use crate::state::{paint_spinner, tone_icon};
+use crate::state::{spinner_at, tone_icon};
 use crate::text::{self, Clip};
 use crate::theme::{Tone, metrics, palette};
 use crate::units::{button_width, em};
@@ -342,7 +342,7 @@ impl Footer<'_> {
         let p = palette(&ctx);
         let x = self.rect.min.x + 16.0;
         let cy = self.rect.center().y;
-        paint_spinner(
+        spinner_at(
             &ctx,
             self.ui.painter(),
             Rect::from_center_size(pos2(x + 8.0, cy), Vec2::splat(metrics::GLYPH)),

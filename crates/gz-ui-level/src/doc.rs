@@ -23,7 +23,7 @@ use crate::detail_objects::{self, DetailObjects};
 use crate::details::{self, PropsPanel};
 use crate::dock::{self, STRIP};
 use crate::layout::{self, DockLayout, PanelId, SizeClass, Slot};
-use crate::local::{TabResponse, child_at, local_tab, local_tab_width};
+use crate::local::child_at;
 use crate::menus;
 use crate::outliner::Outliner;
 use crate::status;
@@ -449,20 +449,16 @@ impl LevelDoc {
         ui.painter().rect_filled(strip, CornerRadius::ZERO, p.chrome);
         let mut x = strip.min.x + 2.0;
         let each_max = ((strip.width() - 4.0) / panels.len().max(1) as f32).max(48.0);
-        let mut picked: Option<(PanelId, TabResponse)> = None;
+        let mut picked: Option<(PanelId, gz_ui::TabResponse)> = None;
         for panel in &panels {
             let label =
                 if *panel == PanelId::Place { crate::tools::tab_label(&self.editor) } else { panel.label() };
-            let w = local_tab_width(&ctx, label).min(each_max);
+            let w = gz_ui::tabs::tab_width(&ctx, label, true).min(each_max);
             let tab = Rect::from_min_size(pos2(x, strip.min.y + 2.0), Vec2::new(w, STRIP - 2.0));
-            let resp = local_tab(
-                ui,
-                Id::unique(("gz-ui-level.tab", panel.id())),
-                tab,
-                label,
-                front == Some(*panel),
-                true,
-            );
+            let resp = gz_ui::PanelTab::new(Id::unique(("gz-ui-level.tab", panel.id())), tab, label)
+                .front(front == Some(*panel))
+                .closable(true)
+                .show(ui);
             if resp.clicked || resp.close || resp.menu {
                 picked = Some((*panel, resp));
             }

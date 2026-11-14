@@ -6,7 +6,8 @@ use crate::menu::{MenuItem, menu_item, popup_body};
 use crate::pick::{PickItem, PickList};
 use crate::rows::{Col, ItemRows, RowsEdit};
 use crate::section::{self, Section};
-use crate::testkit::{click_at, context, frame, key, typed};
+use crate::tabs::{PanelTab, TabResponse, TabStyle, flat_widths, tab_strip, tab_width};
+use crate::testkit::{click_at, context, frame, key, secondary_click_at, typed};
 use crate::{Icon, Kind};
 
 fn items() -> Vec<PickItem> {
@@ -200,4 +201,98 @@ fn a_menus_labels_start_at_one_x() {
         });
     }
     assert!(plain[0] < xs[0], "{plain:?} {xs:?}");
+}
+
+#[test]
+fn a_tab_is_as_wide_as_its_label_and_its_padding() {
+    let ctx = context();
+    let mut widths = (0.0, 0.0, 0.0);
+    // the faces exist once a frame has run
+    frame(&ctx, 0.0, Vec::new(), |_| {
+        widths = (
+            tab_width(&ctx, "Outliner", true),
+            tab_width(&ctx, "Outliner", false),
+            tab_width(&ctx, "Outliner Details", false),
+        );
+    });
+    let (closable, plain, longer) = widths;
+    // the cross's slot costs ten points more than the flat tab's padding
+    assert!((closable - plain - 10.0).abs() < 0.01, "{closable} {plain}");
+    assert!(longer > plain);
+}
+
+#[test]
+fn the_tabs_of_a_flat_strip_give_way_together() {
+    // they fit: nothing changes
+    assert_eq!(flat_widths(&[60.0, 80.0], 200.0), vec![60.0, 80.0]);
+    // they do not: every one keeps its share of what the strip has
+    let narrow = flat_widths(&[60.0, 120.0], 90.0);
+    assert!((narrow.iter().sum::<f32>() - 90.0).abs() < 0.01);
+    assert!((narrow[1] / narrow[0] - 2.0).abs() < 0.01);
+    assert!(flat_widths(&[], 90.0).is_empty());
+}
+
+#[test]
+fn a_docked_tab_answers_a_click_a_cross_and_a_menu() {
+    let ctx = context();
+    let rect = Rect::from_min_size(pos2(10.0, 10.0), Vec2::new(110.0, 24.0));
+    let id = Id::unique("test.tab");
+    let run = |t: f64, events: Vec<egui::Event>, front: bool| {
+        let mut out = TabResponse::default();
+        frame(&ctx, t, events, |ui| {
+            out = PanelTab::new(id, rect, "Outliner").front(front).closable(true).show(ui);
+        });
+        out
+    };
+    let ask = |events: Vec<Vec<egui::Event>>, front: bool, base: f64| {
+        let mut answers = Vec::new();
+        for (i, e) in events.into_iter().enumerate() {
+            answers.push(run(base + i as f64 * 0.05, e, front));
+        }
+        answers
+    };
+    // on the label
+    let on_label = ask(click_at(pos2(40.0, 22.0)), false, 0.0);
+    assert!(on_label.iter().any(|a| a.clicked && !a.close), "{on_label:?}");
+    // on the cross: it closes and is no click of the tab
+    let on_cross = ask(click_at(pos2(rect.max.x - 12.0, rect.center().y)), true, 1.0);
+    assert!(on_cross.iter().any(|a| a.close && !a.clicked), "{on_cross:?}");
+    // a right click asks for the tab's menu
+    let menu = ask(secondary_click_at(pos2(40.0, 22.0)), false, 2.0);
+    assert!(menu.iter().any(|a| a.menu), "{menu:?}");
+    // a tab that cannot close has no cross to hit
+    let mut closed = false;
+    for (i, events) in click_at(pos2(rect.max.x - 12.0, rect.center().y)).into_iter().enumerate() {
+        frame(&ctx, 3.0 + i as f64 * 0.05, events, |ui| {
+            closed |= PanelTab::new(id, rect, "Outliner").style(TabStyle::Flat).show(ui).close;
+        });
+    }
+    assert!(!closed);
+}
+
+#[test]
+fn a_tab_strip_changes_its_choice_by_a_click() {
+    let ctx = context();
+    let labels: Vec<String> = ["Problems", "Pages", "Vars", "Log"].iter().map(|s| (*s).to_owned()).collect();
+    let mut current = 0usize;
+    let mut origin = Pos2::ZERO;
+    let mut width = 0.0;
+    let mut changed = false;
+    frame(&ctx, 0.0, Vec::new(), |ui| {
+        origin = ui.cursor().min;
+        width = ui.available_width();
+        tab_strip(ui, "test.strip", &labels, &mut current);
+    });
+    // the second tab: after the first one's label and padding
+    let mut first = 0.0;
+    frame(&ctx, 0.05, Vec::new(), |_| first = tab_width(&ctx, &labels[0], false));
+    let at = pos2(origin.x + first + 10.0, origin.y + 13.0);
+    assert!(width > first);
+    for (i, events) in click_at(at).into_iter().enumerate() {
+        frame(&ctx, 0.1 + i as f64 * 0.05, events, |ui| {
+            changed |= tab_strip(ui, "test.strip", &labels, &mut current);
+        });
+    }
+    assert!(changed);
+    assert_eq!(current, 1);
 }

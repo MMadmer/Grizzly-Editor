@@ -1,7 +1,7 @@
 //! The drawing of the Characters tab: the list, the form and the preview of the character as
 //! the game will show it.
 
-use egui::{Align, Align2, Layout, Rect, Ui, UiBuilder, Vec2, pos2};
+use egui::{Align, Align2, Id, Layout, Rect, Ui, UiBuilder, Vec2, pos2};
 use gz_characters::{Character, Supply, Trade, TradeRow, game_id, text_in, text_raw};
 use gz_ui::grid::{Grid, integer, number, switch, text_block};
 use gz_ui::list::{Column, list, table_headers};
@@ -14,7 +14,7 @@ use gz_ui::{
 
 use crate::characters::{Action, CharactersDoc, field_of, problem_text, problem_tone};
 use crate::lists::{Indexed, ListsView};
-use crate::local::{local_cell, local_check, local_dirty_dot, local_hint_field, local_number_text};
+use crate::local::{local_cell, local_dirty_dot, local_number_text};
 use crate::picker::{item_picker, local_combo, local_list_picker, local_multi_combo};
 use crate::portraits::{draw_portrait, local_portrait_gallery};
 
@@ -354,7 +354,7 @@ impl CharactersDoc {
         PropertyGrid::new(ROLE).label_frac(LABEL_FRAC).show(ui, |g| {
             g.section("Identity", true, None, |g| {
                 let help = format!("a-z, 0-9 and _. The game knows the character as {module}_<id>.");
-                if g.row("ID", &help, flags(own, "id", PropFlags::REQUIRED), 0, |ui| local_hint_field(ui, "character.id", &mut edit.id, "").changed()) == Some(true) {
+                if g.row("ID", &help, flags(own, "id", PropFlags::REQUIRED), 0, |ui| gz_ui::form::row_field(ui, ("gz-ui-world.text", "character.id"), &mut edit.id, "").changed()) == Some(true) {
                     changed = true;
                 }
                 messages(g, own, "id");
@@ -399,14 +399,14 @@ impl CharactersDoc {
                 let hint = |lang: &str| inherited.map(|b| text_raw(&b.name, lang)).unwrap_or_default();
                 let (hint_rus, hint_eng) = (hint("rus"), hint("eng"));
                 if g.row("Name (rus)", "What the player reads above the NPC and in dialog.", flags(own, "name", PropFlags::NONE), 0, |ui| {
-                    local_hint_field(ui, "character.name_rus", name_rus, &hint_rus).changed()
+                    gz_ui::form::row_field(ui, ("gz-ui-world.text", "character.name_rus"), name_rus, &hint_rus).changed()
                 }) == Some(true)
                 {
                     changed = true;
                 }
                 messages(g, own, "name");
                 if g.row("Name (eng)", "Left empty, an English install reads the Russian name.", PropFlags::NONE, 0, |ui| {
-                    local_hint_field(ui, "character.name_eng", name_eng, &hint_eng).changed()
+                    gz_ui::form::row_field(ui, ("gz-ui-world.text", "character.name_eng"), name_eng, &hint_eng).changed()
                 }) == Some(true)
                 {
                     changed = true;
@@ -458,7 +458,7 @@ impl CharactersDoc {
                 if g.row("Community", "The communities of the linked game. Not set: the base's, or stalker without one.", flags(own, "community", PropFlags::NONE), 0, |ui| {
                     if lists.loaded && lists.communities.is_empty() {
                         // no linked game to read the list from, so the field stays a field
-                        local_hint_field(ui, "character.community", &mut edit.community, "stalker").on_hover_text("No linked game to list the communities of: type the id.").changed()
+                        gz_ui::form::row_field(ui, ("gz-ui-world.text", "character.community"), &mut edit.community, "stalker").on_hover_text("No linked game to list the communities of: type the id.").changed()
                     } else {
                         local_list_picker(ui, "character.community", &mut edit.community, &lists.communities, &lists.stalker_communities, Some(&unset), !lists.loaded)
                     }
@@ -638,7 +638,13 @@ fn money_row(ui: &mut Ui, edit: &mut Character, inherited: Option<&Character>) -
     let check = |ui: &mut Ui, edit: &mut Character, changed: &mut bool| {
         let mut infinite = if edit.has_money { edit.money_infinite } else { base_inf };
         let before = infinite;
-        let _ = local_check(ui, "character.money_infinite", check_label, &mut infinite, check_w);
+        let _ = gz_ui::form::check(
+            ui,
+            Id::unique(("gz-ui-world.check", "character.money_infinite")),
+            check_label,
+            &mut infinite,
+            check_w,
+        );
         if infinite != before {
             if !edit.has_money {
                 edit.has_money = true;

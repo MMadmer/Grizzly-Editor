@@ -434,6 +434,16 @@ impl<'a> Column<'a> {
 /// The header row of a table: Small secondary names over their columns, 24 pt. Returns the
 /// column whose name was clicked, for a sortable table.
 pub fn table_headers(ui: &mut Ui, columns: &[Column<'_>]) -> Option<usize> {
+    header_row(ui, columns, false)
+}
+
+/// [`table_headers`] with a line between the columns in the header only - the look of the
+/// header of [`crate::Table`], for rows drawn by the caller.
+pub fn table_headers_ruled(ui: &mut Ui, columns: &[Column<'_>]) -> Option<usize> {
+    header_row(ui, columns, true)
+}
+
+fn header_row(ui: &mut Ui, columns: &[Column<'_>], ruled: bool) -> Option<usize> {
     let p = palette(ui.ctx());
     let h = 24.0;
     let total: f32 = columns.iter().map(|c| c.width).sum();
@@ -483,6 +493,17 @@ pub fn table_headers(ui: &mut Ui, columns: &[Column<'_>]) -> Option<usize> {
                     p.text_secondary,
                 );
             }
+        }
+    }
+    if ruled {
+        let mut x = rect.min.x;
+        for c in columns.iter().take(columns.len().saturating_sub(1)) {
+            x += c.width;
+            let at = x.round() - 0.5;
+            ui.painter().line_segment(
+                [pos2(at, rect.min.y + 5.0), pos2(at, rect.max.y - 5.0)],
+                Stroke::new(1.0, p.border_subtle),
+            );
         }
     }
     ui.painter().line_segment(

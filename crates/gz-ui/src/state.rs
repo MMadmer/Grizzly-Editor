@@ -176,8 +176,9 @@ pub fn status_dot(ui: &mut Ui, tone: Tone, tip: &str) {
 pub const SPINNER_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
 
 /// Paints the spinner centred in `rect`: three quarters of a ring, one turn a second. It is the
-/// one thing of the UI that animates, so it asks for its next frame ([`SPINNER_FRAME`]).
-pub(crate) fn paint_spinner(ctx: &Context, painter: &Painter, rect: Rect) {
+/// one thing of the UI that animates, so it asks for its next frame ([`SPINNER_FRAME`]). For a
+/// field or a button that is busy; a spinner of its own is [`spinner`].
+pub fn spinner_at(ctx: &Context, painter: &Painter, rect: Rect) {
     let p = palette(ctx);
     let side = rect.width().min(rect.height());
     let r = side * 0.5 - 1.5;
@@ -201,7 +202,7 @@ pub fn spinner(ui: &mut Ui) {
     );
     if ui.is_rect_visible(rect) {
         let ctx = ui.ctx().clone();
-        paint_spinner(&ctx, ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(metrics::GLYPH)));
+        spinner_at(&ctx, ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(metrics::GLYPH)));
     }
 }
 

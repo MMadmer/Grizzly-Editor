@@ -24,10 +24,9 @@
 //!   reporting in `dlg.bake_result`.
 //! - [`register`] - `mod.view` (the tab put up to be looked at).
 //!
-//! What this crate draws that no other surface does ([`local`]): `local_text_field` (the kit's
-//! hint field as wide as the row), `local_value_column` (a block of rows inside one property
-//! row) and `local_picture` (the thumbnail's frame). The module and function pickers are the
-//! kit's `PickList`.
+//! What this crate draws that no other surface does ([`local`]): `local_value_column` (a block of
+//! rows inside one property row) and `local_picture` (the thumbnail's frame). The text fields are
+//! the kit's `form::row_field`, the module and function pickers its `PickList`.
 //!
 //! Nothing here writes a file or computes inside a frame: every action is a command that already
 //! exists (`mod.set`, `mod.thumbnail`, the PDA tab's opener, `release.key action=open`) or the

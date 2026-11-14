@@ -14,7 +14,8 @@ use crate::pick::{Combo, PickItem, PickList};
 use crate::rows::{Col, ItemRows, Table, cell_text};
 use crate::search::SearchField;
 use crate::section::Section;
-use crate::state::{badge, banner, banner_list, empty_state, spinner, status_dot};
+use crate::state::{badge, banner, banner_list, empty_state, spinner, spinner_at, status_dot};
+use crate::tabs::{PanelTab, tab_strip, tab_width};
 use crate::text::{self, Clip};
 use crate::theme::{Tone, metrics, palette};
 use crate::toolbar::{Toolbar, ToolbarStyle};
@@ -34,6 +35,8 @@ struct Sheet {
     rows: Vec<(String, i32)>,
     selected: Option<usize>,
     panel: bool,
+    tab: usize,
+    page: usize,
 }
 
 impl Default for Sheet {
@@ -50,6 +53,8 @@ impl Default for Sheet {
             rows: vec![("Bread".to_owned(), 2), ("Medkit".to_owned(), 1), ("Ammo 9x18".to_owned(), 30)],
             selected: Some(1),
             panel: true,
+            tab: 1,
+            page: 0,
         }
     }
 }
@@ -168,6 +173,33 @@ pub fn sheet(ui: &mut Ui) {
             tb.action("build", Icon::BuildMod, "Build Mod", "The one Primary", true, false, Kind::Primary);
         tb.end();
     });
+
+    heading(ui, "Panel tabs");
+    ui.horizontal(|ui| {
+        caption(ui, "Docked");
+        // a dock lays its tabs out: the front one has the cross, the others show it on hover
+        let (strip, _) = ui.allocate_exact_size(Vec2::new(em(24.0), metrics::PANEL_TABS), Sense::hover());
+        ui.painter().rect_filled(strip, CornerRadius::ZERO, p.chrome);
+        let mut x = strip.min.x + 2.0;
+        for (i, label) in ["Outliner", "Details", "Place"].into_iter().enumerate() {
+            let w = tab_width(&ctx, label, true);
+            let r = Rect::from_min_size(pos2(x, strip.min.y + 2.0), Vec2::new(w, metrics::PANEL_TABS - 2.0));
+            x += w;
+            let id = egui::Id::unique(("gz-ui.kitsheet.tab", i));
+            if PanelTab::new(id, r, label).front(s.tab == i).closable(true).show(ui).clicked {
+                s.tab = i;
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        caption(ui, "Flat strip");
+        ui.scope(|ui| {
+            ui.set_width(em(18.0));
+            let labels = ["Problems (2)", "Pages", "Vars", "Log"].map(str::to_owned);
+            let _ = tab_strip(ui, "kitsheet", &labels, &mut s.page);
+        });
+    });
+    note(ui, "The strip shares its width among the tabs when it is too narrow for their labels.");
 
     heading(ui, "Check and Switch");
     ui.horizontal(|ui| {
@@ -336,6 +368,17 @@ pub fn sheet(ui: &mut Ui) {
         status_dot(ui, Tone::Error, "A problem");
         status_dot(ui, Tone::Required, "Required");
         spinner(ui);
+        // inside a field that is busy
+        let (field, _) = ui.allocate_exact_size(Vec2::new(em(8.0), metrics::FRAME), Sense::hover());
+        ui.painter().rect_filled(field, CornerRadius::same(metrics::RADIUS), p.input);
+        spinner_at(
+            &ctx,
+            ui.painter(),
+            Rect::from_center_size(
+                pos2(field.max.x - 14.0, field.center().y),
+                Vec2::splat(metrics::GLYPH_STATUS),
+            ),
+        );
     });
     let _ = banner(
         ui,

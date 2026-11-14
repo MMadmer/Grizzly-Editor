@@ -475,7 +475,7 @@ impl ExportDialog {
                             g.message(Tone::Error, MISSING_ID);
                         }
                         None => {
-                            g.message(Tone::Muted, "Reading mod.ltx...");
+                            g.block(|ui| gz_ui::state::busy_line(ui, "Reading mod.ltx..."));
                         }
                         _ => {}
                     }

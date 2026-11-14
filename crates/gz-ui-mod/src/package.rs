@@ -24,12 +24,12 @@ use gz_ui::dialog::{ConfirmSpec, ResultAction, ResultSpec, confirm, notice};
 use gz_ui::grid::{path_field, read_only};
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
-use gz_ui::{Button, Dialog, DialogSize, Font, Kind, PathAction, PropFlags, PropertyGrid, Tone, palette};
+use gz_ui::{Button, Dialog, DialogSize, Kind, PathAction, PropFlags, PropertyGrid, Tone};
 use parking_lot::Mutex;
 
 use crate::build::{add_bake_note, asker, build_running, split_lines};
 use crate::call::{self, Pick, args, post_ui, s};
-use crate::local::{local_text_field, local_value_column};
+use crate::local::local_value_column;
 
 /// The dialog's MCP id.
 pub const PACKAGE_RELEASE: &str = "package_release";
@@ -107,13 +107,7 @@ impl KeyLine {
     pub fn draw(&mut self, ui: &mut Ui, editor: &Arc<Editor>, id_salt: &str) {
         self.take();
         let Some(state) = self.state.clone() else {
-            let _ = text::label(
-                ui,
-                "Reading the author key...",
-                Font::Body,
-                palette(ui.ctx()).text_muted,
-                Clip::End,
-            );
+            gz_ui::state::busy_line(ui, "Reading the author key...");
             return;
         };
         if !state.exists {
@@ -480,7 +474,7 @@ impl PackageDialog {
                             1,
                             |ui| {
                                 ui.set_max_width(em(8.0).min(ui.available_width()));
-                                local_text_field(ui, "requires_game", requires, "Any")
+                                gz_ui::form::row_field(ui, ("gz-ui-mod.text", "requires_game"), requires, "Any")
                             },
                         );
                         if !requires_ok {

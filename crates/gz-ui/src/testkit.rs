@@ -40,3 +40,14 @@ pub fn key(k: Key) -> Event {
 pub fn typed(text: &str) -> Event {
     Event::Text(text.to_owned())
 }
+
+/// The events of a right click at `at`.
+pub fn secondary_click_at(at: Pos2) -> Vec<Vec<Event>> {
+    let button = |pressed| Event::PointerButton {
+        pos: at,
+        button: PointerButton::Secondary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    vec![vec![Event::PointerMoved(at)], vec![button(true)], vec![button(false)], vec![]]
+}

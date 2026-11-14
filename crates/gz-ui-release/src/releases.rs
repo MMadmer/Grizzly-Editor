@@ -22,11 +22,11 @@ use gz_ui::state::{badge, banner, busy_line, empty_state};
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
 use gz_ui::{
-    Button, Font, Icon, Kind, PropFlags, PropertyGrid, Tone, Toolbar, ToolbarStyle, metrics, palette,
+    Button, Font, Icon, Kind, PropFlags, PropertyGrid, Section, Tone, Toolbar, ToolbarStyle, metrics, palette,
 };
 use parking_lot::Mutex;
 
-use crate::local::{cell, local_fold, local_table_head};
+use crate::local::cell;
 use crate::{Hub, asker, open_page, sentence};
 
 /// A tab that comes back after this long reads the list again.
@@ -406,7 +406,7 @@ impl ReleasesDoc {
         let p = palette(ctx);
         ui.horizontal(|ui| {
             ui.add_space(5.0);
-            if let Some(c) = local_table_head(ui, &columns) {
+            if let Some(c) = gz_ui::list::table_headers_ruled(ui, &columns) {
                 // a click on the sorted column turns it round; another column sorts its own way
                 self.sort = if self.sort.column == c {
                     Sort { column: c, ascending: !self.sort.ascending }
@@ -597,13 +597,15 @@ impl ReleasesDoc {
             }
         });
         ui.add_space(4.0);
-        local_fold(ui, "release_notes", "Notes", true, |ui| {
+        if Section::new("release_notes", "Notes").show(ui).open {
+            ui.add_space(2.0);
             if r.notes.is_empty() {
                 text::label(ui, "No notes.", Font::Body, p.text_muted, Clip::End);
             } else {
                 text::prose(ui, &r.notes);
             }
-        });
+            ui.add_space(4.0);
+        }
         if edit {
             self.open_edit(r);
         }

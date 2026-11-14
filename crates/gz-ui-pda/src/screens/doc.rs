@@ -33,7 +33,6 @@ use gz_ui::{
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
-use crate::drop::{begin_drops, local_file_drop_zone};
 use crate::local::{local_drop_mark, local_list_header};
 use crate::screens::{
     Change, ScreensTab, Selection, View, commit, default_show, surface_mask, take_drop, take_one,
@@ -616,7 +615,7 @@ impl Frame<'_> {
             );
         }
         let to = pos2(from.x + ui.available_width(), ui.cursor().min.y + 8.0);
-        if let Some(files) = local_file_drop_zone(ui, "drop_screens", Rect::from_min_max(from, to), false) {
+        if let Some(files) = take_files(ui, "drop_screens", Rect::from_min_max(from, to), false) {
             self.out.drops.push((files, String::new(), -1, false));
         }
     }
@@ -657,7 +656,7 @@ impl Frame<'_> {
             text::status(ui, Tone::Muted, "Drop .ogg files here.");
         }
         let to = pos2(from.x + ui.available_width(), ui.cursor().min.y + 8.0);
-        if let Some(files) = local_file_drop_zone(ui, "drop_music", Rect::from_min_max(from, to), false) {
+        if let Some(files) = take_files(ui, "drop_music", Rect::from_min_max(from, to), false) {
             self.out.drops.push((files, String::new(), -1, true));
         }
         if !self.s.tracks.is_empty() {
@@ -934,7 +933,7 @@ impl Frame<'_> {
                     }
                 }));
             }
-            if let Some(files) = local_file_drop_zone(ui, &format!("drop_layer.{i}"), at, false)
+            if let Some(files) = take_files(ui, &format!("drop_layer.{i}"), at, false)
                 && let Some(first) = files.into_iter().next()
             {
                 self.out.drops.push((vec![first], d.id.clone(), i64::try_from(i).unwrap_or(-1), false));
@@ -967,7 +966,7 @@ impl Frame<'_> {
             );
         }
         let to = pos2(from.x + ui.available_width(), ui.cursor().min.y + 8.0);
-        if let Some(files) = local_file_drop_zone(ui, "drop_layers", Rect::from_min_max(from, to), false) {
+        if let Some(files) = take_files(ui, "drop_layers", Rect::from_min_max(from, to), false) {
             self.out.drops.push((files, d.id.clone(), -1, false));
         }
     }
@@ -1208,6 +1207,15 @@ impl Frame<'_> {
 
 use gz_ui::Palette;
 
+/// The files dropped on `rect` this frame, from Explorer or from tiles of the Content Browser: the
+/// kit's drop board, so a drop is taken once whoever asks first. `catch_all` is the outermost zone
+/// of the tab.
+fn take_files(ui: &Ui, name: &str, rect: Rect, catch_all: bool) -> Option<Vec<String>> {
+    let zone = gz_ui::drop::Zone::new(name, rect, &gz_ui::drop::accepts_files);
+    let zone = if catch_all { zone.catch_all() } else { zone };
+    zone.take(ui).map(|p| p.files().iter().map(|f| f.display().to_string()).collect())
+}
+
 impl Document for ScreensDoc {
     fn id(&self) -> &str {
         "screens"
@@ -1334,8 +1342,6 @@ impl Document for ScreensDoc {
             self.local = Some(local);
             return;
         }
-        let ctx = ui.ctx().clone();
-        begin_drops(&ctx);
         let tree = Project::of(&self.editor).ok().map(|(_, p)| p.tree.snapshot());
         let levels = self.levels.lock().clone().flatten();
         let mut view = self.tab.v.lock().clone();
@@ -1417,7 +1423,7 @@ impl Document for ScreensDoc {
                     );
                 });
             // what no list or layer took falls on the tab: sorted by what it is
-            if let Some(files) = local_file_drop_zone(ui, "drop_tab", full, true) {
+            if let Some(files) = take_files(ui, "drop_tab", full, true) {
                 f.out.drops.push((files, String::new(), -1, false));
             }
         }
