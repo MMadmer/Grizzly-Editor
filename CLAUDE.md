@@ -159,7 +159,8 @@ A change of plan is a change of its document first.
 - **A commandlet is the editor without a window**: `Grizzly-Cmd.exe run <command> name=value ...`, `script <file>`,
   `help [about]`, and the short words `check [path]`, `reference <kind>`, `build`, `package`, `update`. It opens the
   project (`-project`, else the current folder), runs, waits for the jobs it started, prints, and ends with 0, 1 (a
-  command failed) or 2 (the run could not start). It listens on no port and writes its own log.
+  command failed, or the run ended with unsaved work - nothing saves by itself, and a run that loses work says
+  which on stderr) or 2 (the run could not start). It listens on no port and writes its own log.
 - **The socket** is 127.0.0.1:28016 (`-mcp_port`), one JSON object a line: `{"cmd": ..., parameters beside it or in
   "args", "gate": ...}`, or `{"batch": [...]}`.
 - **Answers give UI lengths in pt and take pt**; a picture is px and says its `scale`.
@@ -199,7 +200,8 @@ A change of plan is a change of its document first.
   copies it all in. `AGENTS.md` at the root (written once) tells an agent what the project holds, the three
   commands it needs (`reference manifest` among the kinds) and that a module states its target first.
 - **One editor per home**: a second start on a project hands the request to the running editor (`editor.lock`) and
-  exits.
+  exits. Unsaved work in the way is asked about where a person answers; an editor nobody answers (`-nodlg`, no
+  window) refuses the hand-over with `unsaved`, like any other open.
 - **The scene** is `<name>.scene` and a folder of Lua data files, one per kind family, with the painted layers as
   binary sidecars (`docs/assets/SCENE.md`, generated from the tables the reader, the writer and the Details rows
   share - a test fails on a hand edit). A spawn point's properties are named, never a positional packet; what the
@@ -378,7 +380,11 @@ A change of plan is a change of its document first.
 - The libraries are tabs too (Libraries menu, `library.view`; `gz-ui-previews`). Their files are binary (`.thm`,
   `lanims.xr`), so what they edit has commands: `library.set` (a texture's description, a sound's parameters, a
   light animation's keys), `library.play`, `library.import`, `library.rebuild`, and every toolbar button is an
-  action over one. The pending edits are a service (`LibraryStores`), not the tab's. The Texture Library
+  action over one. The pending edits are a service (`LibraryStores`), not the tab's, and unsaved work of
+  the editor's own (a `DirtySource`): `doc.list` names them, `save_all` saves them and no way out goes over
+  them, with a tab or without. A save drops only what it wrote: an entry that could not be written stays an
+  edit and is the save's answer (`failed`); a save that finds another library job running starts when that one
+  has ended. The Texture Library
   reads the `.tga` sources of `$textures$` (rawdata\textures) and takes pictures dropped on it; Check New Textures
   turns a library tab without unsaved changes into New Textures (from `$import$`)
   and the finished import brings the library back; a check that finds nothing says so in a toast, never a
@@ -508,6 +514,12 @@ A change of plan is a change of its document first.
   original must never break.
 - A mode a module brings is its `[provides_mode]` lines and nothing else: the game offers it in the
   new-game screen's list of module modes (`xms.offer_modes`) and the build writes no file for it.
+- **The target and the mode go together** (`gz_mod::target_pairing`, one rule for the file's check and
+  `mod.set`): `default` takes no mode, `existing` a mode id, `new` a `[provides_mode]`, `any` the mode `*`. A
+  pair that contradicts itself is an error at the `target` line and `mod.set` refuses it in the same sentence;
+  a choice whose detail is still to come (`existing` with no mode yet, `new` with no declared mode) is an
+  error of the check - the module cannot be built - that `mod.set` writes: the window's form saves the choice
+  first and the detail when it is picked.
 - The names are not decorative: the engine turns `new_game_<id>_mode` back
   into the mode id, and the same id is compared against `mode=` in the
   manifest and `xms.mode_active`.
@@ -1250,6 +1262,10 @@ A change of plan is a change of its document first.
 - A screen is a stack of any number of layers, one file each: picture, GIF, video, shader or HTML. The KIND IS THE FILE'S EXTENSION, nothing is declared.
   The engine mounts every layer under a name of its own (`xms_screens\<module>\<screen>_<n>`, as `[vfs]` entries made in `finish_screens`), so the folder
   layout is free and two modules' `night.mp4` never meet; a shader keeps its name, because the `.s` names its `.ps`.
+- A layer's `rect` is per cent of the screen (`0 0 100 100`), a track is an `.ogg`, and `screens.set` refuses a
+  word the game would drop, by name, before anything is written or converted. The screens' problems, like the
+  world's, are at their line of `mod.ltx`: an area says which section and key a problem is about
+  (`gz_mod::Spot`) and the manifest's check places it there.
 - HTML is litehtml drawn ONCE into a picture (the game's `CommunityHtmlCanvas`): no scripts, no network, files only beside the page. That is why a page is safe in a catalog
   module, and why it does not animate: what moves is another layer.
 - Import (`gz-screens`' `import.rs`) is the one way a file enters: inside the project it stays, from outside it is copied to `screens\`, PNG/JPG/TGA/BMP becomes a `.dds`, a `.ps` gets its `.s`.
@@ -1296,8 +1312,9 @@ A change of plan is a change of its document first.
 - **A Save answered in the window is waited for** (`gz-app`'s `save_then`): Exit, Close Tab, a tab that
   switches its file and Switch Project go on only when every save has finished - a write under way, the Save
   dialog of a scene without a file. A save that fails keeps the tab, the project and the editor open and says
-  why; the Save dialog cancelled ends the wait quietly (`SAVE_CANCELLED`). Switch Project's question names the
-  scene with the other unsaved tabs.
+  why; the Save dialog cancelled ends the wait quietly (`SAVE_CANCELLED`). The questions of Exit and Switch
+  Project name the scene, the other unsaved tabs and what no tab shows (a library a command edited), and settle
+  through `app.quit` / `project.close` with the answer.
 - A command shows NO confirmation (its caller already decided, and a call that loses data came through the
   destroy door) and never hangs on a modal — the window's path and the command
   share the implementation, but not the dialog.
@@ -1312,7 +1329,8 @@ A change of plan is a change of its document first.
   dialog phrases, string tables) or fixture data in encoding tests.
 - UI text is short. A label names the thing (Title Case in grids and on buttons);
   details go into the hover hint; a message is a sentence for the author, never a
-  bare problem code or a raw HTTP or OS error number.
+  bare problem code or a raw HTTP or OS error number (what the system refused a file operation with is said in
+  the editor's words: `gz_base::os_reason`).
 - **A file name is one string from the disk to the screen and back**, Cyrillic or not: the editor speaks to the
   file system in UTF-16 through `std`, and to egui and its commands' callers in UTF-8; never push a path through a fixed code page.
   The GAME stays cp1251: text it reads (string tables, captions, configs) is converted explicitly (`gz-base`'s

@@ -59,7 +59,11 @@ reg.cmd(
   asset's id comes from it; the file passes the write guard where it really lands.
 - `mod.set` turns a value away in the manifest's own sentence (`<key> takes <values>, not '<value>'`), the
   one the file's check gives; `mod.build` and `mod.package` refuse with every error of the manifest, one a
-  line, and report its warnings; `mod.info` lists both.
+  line, and report its warnings; `mod.info` lists both. A target and a mode that contradict each other
+  (`target = default` with a mode, `any` without `mode = *`) are refused by `mod.set` in the check's sentence
+  when the request touches them; a choice still without its detail (`existing` with no mode yet) is written.
+- `screens.set` takes a layer's `rect` in per cent of the screen and a track as an `.ogg`; a word the game
+  would drop (`fit`, `show`, `play`, `hide`, `end`) is refused by name, before anything is written.
 
 ## 2. Parameter names
 
@@ -136,7 +140,9 @@ Grizzly-Cmd.exe serve                              the editor without a window, 
 
 A commandlet is the editor without a window: it opens the project (`-project <folder or project file>`, else the
 current folder when it is a project), waits until the project is ready, runs, waits for every job the commands
-started, prints and ends. It listens on no port, writes its own log, and never asks. `-json` prints the raw answer,
+started, prints and ends. It listens on no port, writes its own log, and never asks. Nothing saves by itself:
+a run that ends with unsaved work - a scene a step changed and none saved - loses it, so it says which on stderr
+and ends with 1; the script saves (`scene.save`, `doc.save`). `-json` prints the raw answer,
 `-quiet` drops the job progress it otherwise writes to stderr, `-keep_going` runs a script past a failure. Exit
 codes: 0 done, 1 a command failed, 2 the run could not start. A first word that is neither a verb nor a project
 (a path, a project file, something that is there) is a usage line and code 2: a mistyped verb opens no window.

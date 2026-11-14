@@ -43,6 +43,10 @@ What the suites hold, beyond what their names say:
   file is refused inside a second, naming `scene.save path=`, with no dialog and no window outside; on New
   Textures that would replace a texture it answers `exists`, naming the texture and `library.import
   overwrite=true`, and nothing is imported; a check that finds nothing leaves a toast and no dialog.
+- **A library save that cannot write** (`test_previews` K): a description whose file cannot be written -
+  `doc.save` and `ui.tab action=close save=true` answer the failure naming it, the edit stays, and the same
+  save writes it once the file can be written; an edit left with no tab open is listed by `doc.list` and
+  stops `app.quit`. **A hand-over nobody answers** (`test_project_browser` U) is refused over an unsaved scene.
 - **The manifest from the editor alone** (`test_cli` J, `test_assets`; `gz-mod`'s tests and `grizzly`'s
   `manifest_reference`): a project made from nothing fails its first `check` on one error that names the key,
   its values and the command; `help mod.set` is enough to set it; the second `check` is clean; `reference
@@ -132,6 +136,17 @@ What the suites hold, beyond what their names say:
   `[provides_mode]` and the sections kept as written get no unknown-key warning; `Story` among the tags is a
   warning (`mod.set` writes it in lower case). `disable_game_updates` takes what the game takes: `true` or
   `1` is on, and no other word is accepted. A build's refusal lists every error of the manifest.
+- A target and a mode that do not go together are an error at the `target` line - the key that states what
+  the other contradicts. `new` with a `[provides_mode]` goes with or without a `mode`; `default` with a
+  `[provides_mode]` is not refused (the page pairs `default` with no mode key only). `mod.set` refuses a
+  contradiction and writes a choice whose detail is still to come: the form's choice sticks before its
+  detail is picked, and the check says what is missing.
+- A value the game clamps or reads as another (`opacity = 7`, `cheat = maybe`, `api`) is a warning, an empty
+  `version` an error; a section id the game would drop (`[screen.Bad Id]`) is a warning with the header to
+  write. A key of `[module]` / `[provides_mode]` that is a known key in another case, or one edit from one
+  of four letters or more, is a warning naming it; any other unknown key there stays unreported.
+- An area's problem says which section and key it is about (`gz_mod::Spot`) and the manifest's check places
+  it: a layer's missing file at the layer's line, a track's at its `file`, the start kit's at its row.
 - `check` walks what the project lists: the editor's own folders at the root (`temp\`, `releases\`) are
   left out unless asked for by path, so what a crashed packaging left is no problem of the project.
 - The manifest's reference is one page of `gz-mod` (`reference.rs`), asked by name before the kind table:
@@ -267,6 +282,25 @@ What the suites hold, beyond what their names say:
   A synchronisation asks nothing (it loses nothing); retiring the game
   sounds that lost their source and rewriting the descriptions are asked by the window's action, never by
   the command.
+- A library's save drops only what it wrote. Its job ended well over a description it could not write and
+  emptied the store: the tab was clean, the command said ok, and the edit was nowhere. The entries that
+  failed stay unsaved and are the save's answer; a written texture's gloss note is a note, not a failure.
+- The libraries' pending edits are unsaved work of the editor's own (`LibraryDirty`, a `DirtySource`): an edit
+  `library.set save=false` leaves with no tab open is listed, saved by `save_all` and stops `app.quit`. The
+  library tabs report their edits there (`dirty_elsewhere`); the pictures New Textures holds are the tab's.
+  A project's close refuses over them too and `discard` drops them: they are not the project's, but a close
+  that left them pending under a closed tab would hide them.
+- A save that finds another library job running (a rebuild, an import, a save of one entry) starts when that
+  one has ended: hung on that job's end it stayed unsaved for ever, and a person's wait has no deadline.
+- The Mod Settings picture's save is unsaved work until it is answered, and a failure puts the waiting
+  picture back: the tab read clean while `thumbnail.dds` was still being placed.
+- A commandlet that ends with unsaved work ends with 1 and names it. The other rule - save the scene by
+  itself, as a graph without a window is - would write a scene the run never asked to write.
+- A hand-over (`project.open from_launch=true`) asks only where a person answers; `project.open save=true`
+  refuses what `save_all` left unsaved, as `project.close save=true` does.
+- What the system refused a file operation with is said in the editor's words (`gz_base::os_reason`): the
+  system's sentence comes in the system's language and with a number. A code the editor has no words for
+  keeps its number.
 - The libraries' pending edits are a service of the editor, so a command edits what a person edits and needs
   no tab. `library.set` saves by default: a caller that sets and leaves must not lose the change; a person's
   edit stays unsaved until Save. `library.rebuild` is not `library.import`: nothing comes from outside.

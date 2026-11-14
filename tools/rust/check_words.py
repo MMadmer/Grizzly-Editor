@@ -27,7 +27,7 @@ What it reads beside the code - the tools (`tools/**`), the documents (`docs/**/
 `CLAUDE.md`) and the manifests (`Cargo.toml`, `crates/*/Cargo.toml`, `Build.ps1`): the plan's words and the
 replaced program by its names (not `C++`, `cpp` or `parity`: the documents describe the game's own code and
 the toolchain in those words), and in the tools and the editor's own documents the names of the commands 0.7
-replaced. `docs/plan` itself is the plan and is not read.
+replaced.
 
 `tools/rust/words_allowed.txt` is the short list of places where a format's or a game program's real
 name is the fact. One entry per line: `path-glob | pattern | reason` (separated by " | "); a hit is allowed when its file
@@ -118,9 +118,7 @@ def beside_the_code():
         if (path.is_file() and path.suffix in (".py", ".sh", ".go", ".md", ".txt", ".ps1")
                 and "__pycache__" not in path.parts and path.resolve() not in own):
             yield path
-    for path in sorted((ROOT / "docs").rglob("*.md")):
-        if "plan" not in path.relative_to(ROOT).parts:
-            yield path
+    yield from sorted((ROOT / "docs").rglob("*.md"))
     for name in ("README.md", "CLAUDE.md", "Cargo.toml", "Build.ps1"):
         if (ROOT / name).is_file():
             yield ROOT / name
