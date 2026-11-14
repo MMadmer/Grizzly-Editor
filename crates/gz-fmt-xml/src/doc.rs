@@ -524,13 +524,13 @@ impl Document {
         self.node(id).map_or(&[], |n| &n.attrs)
     }
 
-    /// `FirstChild(value)`: the first child whose value is `value`; any child for `None`.
+    /// The first child whose value is `value`; any child for `None`.
     #[must_use]
     pub fn first_child(&self, id: NodeId, value: Option<&str>) -> Option<NodeId> {
         self.children(id).find(|&c| value.is_none_or(|v| self.value(c) == v))
     }
 
-    /// `NextSibling(value)`.
+    /// The next sibling whose value is `value`; any sibling for `None`.
     #[must_use]
     pub fn next_sibling(&self, id: NodeId, value: Option<&str>) -> Option<NodeId> {
         let mut c = self.node(id).map(|n| n.next).filter(|&x| x != NONE).map(NodeId);

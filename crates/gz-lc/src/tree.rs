@@ -85,7 +85,7 @@ pub struct LodVertex {
     pub c_sun: u8,
 }
 
-/// An item of `g_tree`.
+/// An item of the build's tree of models.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     Ogf(Box<Ogf>),

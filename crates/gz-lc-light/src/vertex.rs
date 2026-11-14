@@ -56,7 +56,7 @@ impl TransGroups {
     }
 
     /// Adds item `id` at point `p`. With `first_only` it joins the first group it fits
-    /// (`g_trans_register`), otherwise every group it fits.
+    /// (the translucent vertices), otherwise every group it fits.
     pub fn register(&mut self, p: Vec3, id: u32, first_only: bool) {
         let eps2 = 2.0 * EPS_L;
         let k = Self::key(p.x);

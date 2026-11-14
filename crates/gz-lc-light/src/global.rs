@@ -19,7 +19,7 @@ use crate::{Ctl, LcError, Result};
 /// The data a build holds.
 #[derive(Clone, Debug)]
 pub struct LcGlobalData {
-    /// `g_params`.
+    /// The build's parameters.
     pub params: BuildParams,
     /// The compiler shader library.
     pub shaders: Shaders,
@@ -31,9 +31,9 @@ pub struct LcGlobalData {
     pub lightmaps: Vec<Lightmap>,
     pub mu_models: Vec<MuModel>,
     pub mu_refs: Vec<MuReference>,
-    /// `g_vertices`, `g_faces` and the error records.
+    /// The level's vertices and faces, and the error records.
     pub mesh: Mesh,
-    /// `g_deflectors`.
+    /// The level's deflectors.
     pub deflectors: Deflectors,
     /// `-nosun`.
     pub nosun: bool,

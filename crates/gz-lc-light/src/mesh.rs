@@ -168,7 +168,7 @@ pub struct Face {
 }
 
 impl Default for Face {
-    /// `Tface()`.
+    /// A face with no vertices, no material and no deflector yet.
     fn default() -> Self {
         Self {
             v: [NO_VERT; 3],
@@ -269,9 +269,9 @@ impl MeshErrors {
 /// How `calculate_normals` decides that two faces of a vertex share its normal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Smoothing {
-    /// Their normals are closer than the build's smoothing angle (`g_using_smooth_groups` off).
+    /// Their normals are closer than the build's smoothing angle (smoothing groups off).
     Angle,
-    /// They are in one smoothing group (`g_smooth_groups_by_faces`).
+    /// They are in one smoothing group (smoothing by the faces' groups).
     Groups,
     /// The shared edge is soft in both (`sm_group` holds edge flags): the compiler's default.
     EdgeFlags,

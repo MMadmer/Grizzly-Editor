@@ -126,7 +126,7 @@ pub(crate) struct Lexer<'a> {
     src: &'a [u8],
     p: usize,
     c: i32,
-    /// `ls->sb`: the text of the token being (or last) scanned.
+    /// The text of the token being (or last) scanned.
     pub sb: Vec<u8>,
     pub line: u32,
     pub lastline: u32,

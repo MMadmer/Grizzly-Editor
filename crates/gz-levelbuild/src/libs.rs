@@ -34,7 +34,7 @@ impl Engine {
         }
     }
 
-    /// `Resources->_FindBlender`: the engine shader exists.
+    /// Whether the engine shader exists in the library.
     #[must_use]
     pub fn has_shader(&self, name: &str) -> bool {
         self.shaders.as_ref().is_some_and(|s| s.blender(name).is_some())

@@ -148,7 +148,7 @@ impl From<&gz_fmt_xr::ParticleGroup> for GroupDef {
 }
 
 /// Where a particle's move meets a surface: the nearest hit along `dir` (a unit vector) within
-/// `dist`, its point and the surface's normal. The editor's `Tools->RayPick`.
+/// `dist`, its point and the surface's normal.
 pub trait Collider: Sync {
     fn ray_pick(&self, start: Vec3, dir: Vec3, dist: f32) -> Option<(Vec3, Vec3)>;
 }

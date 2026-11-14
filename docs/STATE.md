@@ -49,9 +49,13 @@ What the suites hold, beyond what their names say:
 
 - A real double click on a `.grizzly` file in Explorer: no test writes the user's file associations (the start
   writes them only for the author's own editor); the association itself is tested under a key of its own.
-- The unsaved-work question of a project handed over to a running editor: QA editors run `-nodlg`.
-- A drag with the real mouse - from Explorer onto the Start page or a project folder, a tile into the viewport: the
-  suites play drops through `viewport.gesture` and the kit's zones, never through the system's drag.
+- Every question a person answers: QA editors run `-nodlg`, which logs the answer, so a dialog's buttons are
+  pictured and never pressed - the unsaved-work question of a project handed over to a running editor, the
+  confirmations of an import that replaces textures, of a reload over unsaved keys, of a deletion. What stands
+  behind each button is a command, and the commands are driven.
+- A drag with the real mouse - from Explorer onto the Start page, a project folder or the Texture Library, a tile
+  into the viewport or onto a layer of a screen: the suites land drops through `viewport.gesture` and the kit's
+  zones (`simulate_drop`), never through the system's drag.
 - The editor's update against GitHub: by rule it only ever meets the mock.
 - The sound preview's playback in the chooser.
 

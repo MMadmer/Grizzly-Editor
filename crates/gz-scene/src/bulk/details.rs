@@ -93,7 +93,7 @@ fn color_dist(c: &[f32; 4], src: &[f32; 4]) -> f32 {
             .sqrt()
 }
 
-/// `Scene->GetBox(bb, list)`: the snap objects' world boxes merged.
+/// The snap objects' world boxes merged.
 #[must_use]
 pub fn objects_box(state: &SceneState, lib: &Library, ids: &[ObjId]) -> Option<Aabb> {
     let local = |r: &str| lib.cached(r).map(|o| o.bounds);

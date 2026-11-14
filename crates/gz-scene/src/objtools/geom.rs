@@ -561,8 +561,8 @@ pub struct MeshHit {
     pub t: f32,
 }
 
-/// `Scene->RayPickObject(range, start, dir, OBJCLASS_SCENEOBJECT, &pinf, 0)`: the nearest visible
-/// scene object of a visible tool, with its mesh.
+/// The nearest visible scene object of a visible tool that a ray meets within its range, with
+/// its mesh.
 #[must_use]
 pub fn pick_mesh(state: &SceneState, lib: &Library, start: Vec3, dir: Vec3, range: f32) -> Option<MeshHit> {
     let tool_visible = state.tools.part(ObjClass::SceneObject).visible;

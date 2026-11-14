@@ -95,7 +95,7 @@ impl BoneIk {
         let flags = r.r_u32()?;
         let break_force = r.r_f32()?;
         let break_torque = r.r_f32()?;
-        // `Import(F, vers)`: the version word is read as u16
+        // the version word is read as u16
         let friction = if version as u16 > 0 { r.r_f32()? } else { 0.0 };
         Ok(Self {
             version,

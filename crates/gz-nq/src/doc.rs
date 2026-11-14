@@ -203,7 +203,7 @@ impl Default for GraphDoc {
 /// A canvas edit on the selection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CanvasOp {
-    /// Closes the chain over the selection: A->B->C becomes A->C.
+    /// Closes the chain over the selection: A to B to C becomes A to C.
     Bypass,
     Delete,
     /// `wires`: the copies keep the wires into the originals.

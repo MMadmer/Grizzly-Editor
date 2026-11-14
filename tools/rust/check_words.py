@@ -17,14 +17,17 @@ What it reads in the code (`crates/**/*.rs`, `target` folders left out):
 - the names of the commands 0.7 replaced (`tools/rust/removed_commands.txt`), as a whole word in a
   comment or a string literal (a Rust identifier of the same spelling is no mention);
 - a message whose first character is a level mark (`!`, `~`, `*`, `ERROR:`): the level is a value;
-- another program's member or call cited in a comment or a string (`m_Name`, `Build(bFlag)`);
+- another program's member, global, constant or call cited in a comment or a string (`m_Name`, `g_name`,
+  `Object->Call`, `OBJCLASS_X`, `Build(bFlag)`, a backticked capitalised call that is no type of this
+  workspace: `PrepareKey(a, b)`);
 - the plan the work was done by and the documents it replaced (`docs/plan`, a phase or a stream of it,
   `docs/rust`, the migration document), anywhere: they are gone and nothing points at them.
 
 What it reads beside the code - the tools (`tools/**`), the documents (`docs/**/*.md`, `README.md`,
 `CLAUDE.md`) and the manifests (`Cargo.toml`, `crates/*/Cargo.toml`, `Build.ps1`): the plan's words and the
 replaced program by its names (not `C++`, `cpp` or `parity`: the documents describe the game's own code and
-the toolchain in those words). `docs/plan` itself is the plan and is not read.
+the toolchain in those words), and in the tools and the editor's own documents the names of the commands 0.7
+replaced. `docs/plan` itself is the plan and is not read.
 
 `tools/rust/words_allowed.txt` is the short list of places where a format's or a game program's real
 name is the fact. One entry per line: `path-glob | pattern | reason` (separated by " | "); a hit is allowed when its file
@@ -66,6 +69,13 @@ OLD = [
 
 MARK = re.compile(r"^(?:[!~*]{1,3} |ERROR: |!(?=[A-Za-z.]))")
 
+# The documents that describe the editor's commands: no removed command is named in them.
+COMMAND_DOCS = {
+    "README.md", "CLAUDE.md", "tools/mcp/AI_SETUP.md", "docs/ARCHITECTURE.md", "docs/COMMANDS.md", "docs/ASSETS.md",
+    "docs/UPDATES.md", "docs/UI_DESIGN.md", "docs/STATE.md", "docs/MOD_QUICKSTART.md", "docs/NQ_ARCHITECTURE.md",
+    "docs/nq/NQ_FORMAT.md", "docs/pda/PDA_FORMAT.md",
+}
+
 # The plan the work was done by, and the documents it left behind. Anywhere in the text.
 PLAN = [
     ("a document that is gone", re.compile(r"RUST_MIGRATION|docs[/\\]rust\b")),
@@ -79,7 +89,19 @@ MEMBER = [
     ("another program's member", re.compile(r"`m_[A-Za-z]\w*`|\bm_[A-Z][A-Za-z0-9]+\b")),
     ("another program's call",
      re.compile(r"`[A-Z][A-Za-z0-9]+\([^`)]*\b(?:b|p|dw|sz|n|f)[A-Z][A-Za-z0-9]*[^`)]*\)`")),
+    ("another program's member call", re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*->[A-Za-z_][A-Za-z0-9_]*")),
+    ("another program's global", re.compile(r"\bg_[A-Za-z][A-Za-z0-9_]*")),
+    ("another program's constant", re.compile(r"\bOBJCLASS_\w+")),
 ]
+
+# A backticked capitalised call: Rust's functions are lower case, so `Name(...)` is a type or a variant of this
+# workspace or of the standard library - or a function of another program.
+FOREIGN_CALL = re.compile(r"`([A-Z][A-Za-z0-9]+)\([^`]*\)`")
+STD_NAMES = {
+    "Some", "Ok", "Err", "Box", "Vec", "Arc", "Rc", "String", "PathBuf", "Option", "Result", "Cow", "Mutex",
+    "RwLock", "Cell", "RefCell", "Duration", "Instant", "Self", "None", "Default", "Path", "Id", "Rect", "Pos2",
+    "Vec2", "Color32", "Value",
+}
 
 # What the files beside the code are held to: the plan's words and the replaced program by name.
 BESIDE = [w for w in WORDS if w[0] in ("oracle", "Source/", "SDK 0.7", "LevelEditor", "former editor", "xrLC")]
@@ -120,6 +142,17 @@ def workspace_types() -> set[str]:
         if "/target/" in path.as_posix():
             continue
         found.update(decl.findall(path.read_text(encoding="utf8", errors="replace")))
+    return found
+
+
+def workspace_variants() -> set[str]:
+    """The enum variants and tuple constructors this workspace declares: a capitalised name that opens a line."""
+    found: set[str] = set()
+    variant = re.compile(r"^\s+([A-Z][A-Za-z0-9]*)\s*(?:[({,=]|$)", re.M)
+    for path in CRATES.rglob("*.rs"):
+        if "/target/" in path.as_posix():
+            continue
+        found.update(variant.findall(path.read_text(encoding="utf8", errors="replace")))
     return found
 
 
@@ -211,6 +244,7 @@ def main() -> int:
     rules = allowed_rules()
     removed = removed_names()
     own = workspace_types()
+    callable_here = own | workspace_variants() | STD_NAMES
     hits: list[str] = []
     used = [0] * len(rules)
     for path in sorted(CRATES.rglob("*.rs")):
@@ -224,10 +258,13 @@ def main() -> int:
             if kind != "code":
                 checks += OLD
                 checks += MEMBER
+                checks.append(("another program's call", FOREIGN_CALL))
                 checks.append(("removed command", removed))
             for label, pat in checks:
                 for m in pat.finditer(body):
                     if label.startswith("old class") and m.group(0).split("::")[0] in own:
+                        continue
+                    if pat is FOREIGN_CALL and m.group(1) in callable_here:
                         continue
                     at = line + body.count("\n", 0, m.start())
                     shown = body.splitlines()[body.count("\n", 0, m.start())] if body else ""
@@ -253,7 +290,13 @@ def main() -> int:
     for path in beside_the_code():
         rel = path.relative_to(ROOT).as_posix()
         for at, shown in enumerate(path.read_text(encoding="utf8", errors="replace").splitlines(), 1):
-            for label, pat in BESIDE + PLAN:
+            # the documents of the game's side and of the graphs' kinds name the game's own script functions,
+            # some of which are spelled like a command 0.7 replaced: the commands are held in the tools and in
+            # the editor's own documents
+            held = BESIDE + PLAN
+            if rel.startswith("tools/") or rel in COMMAND_DOCS:
+                held = held + [("removed command", removed)]
+            for label, pat in held:
                 for m in pat.finditer(shown):
                     ok = False
                     for k, (glob, apat, _reason) in enumerate(rules):

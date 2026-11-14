@@ -130,8 +130,7 @@ fn set_link_permissions(path: &Path, perm: fs::Permissions) {
 #[cfg(not(windows))]
 fn set_link_permissions(_path: &Path, _perm: fs::Permissions) {}
 
-/// Clears the read-only mark of whatever `path` is, the way `SetFileAttributes(NORMAL)` did
-/// before a copy or a delete.
+/// Clears the read-only mark of whatever `path` is, before a copy or a delete.
 pub(crate) fn clear_readonly(path: &Path) {
     if let Ok(meta) = fs::symlink_metadata(path) {
         let link = is_link(&meta);

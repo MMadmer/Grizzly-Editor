@@ -40,7 +40,7 @@ pub fn attach(state: &SceneState, base: ObjId, from: ObjId) -> Result<Outcome, C
     let (mut bx, mut fx) = (b.xform, f.xform);
     bd.apply_scale(&mut bx);
     fd.apply_scale(&mut fx);
-    // `M = from->_Transform(); M.mulA_43(_ITransform())`
+    // the joined shape's transform in the space of the one that takes it
     let m = fx.matrix().mul_a43(&bx.inverse());
     for s in &fd.shapes {
         if s.kind == CF_SPHERE {
@@ -138,7 +138,7 @@ fn unique_after(state: &SceneState, pref: &str, taken: &[String]) -> String {
     String::new()
 }
 
-/// `Scene->GetBox` of the scene objects merged with the groups'.
+/// The box of the scene objects merged with the groups'.
 fn level_box(state: &SceneState, lib: &Library) -> Option<Aabb> {
     let local = |r: &str| lib.cached(r).map(|o| o.bounds);
     let mut out: Option<Aabb> = None;

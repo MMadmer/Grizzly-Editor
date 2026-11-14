@@ -68,7 +68,7 @@ pub fn params(m: &OMotion, raw: &MotionRaw) -> Params {
     Params { min_t, max_t, t_current: raw.t_current.unwrap_or(min_t) }
 }
 
-/// `SetParam(min*30, max*30, 30)`.
+/// Sets the motion's range from seconds, at 30 frames a second.
 pub fn set_range(m: &mut OMotion, min_t: f32, max_t: f32) {
     m.frame_start = (min_t * 30.0) as i32;
     m.frame_end = (max_t * 30.0) as i32;

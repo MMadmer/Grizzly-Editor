@@ -1717,7 +1717,7 @@ game repo.
 
 | decision | lives in | written by |
 |---|---|---|
-| what the mode keeps of the original game: `original_npcs`, `random_stalkers`, `mutants`, `npc_quests`, `story_quests` (true = keep) | `mod.ltx [world]` | Mod > World Rules, `world_set` |
+| what the mode keeps of the original game: `original_npcs`, `random_stalkers`, `mutants`, `npc_quests`, `story_quests` (true = keep) | `mod.ltx [world]` | Mod > World Rules, `world.set` |
 | where those rules apply (`levels`, empty = everywhere) | `mod.ltx [world]` | same |
 | the rules the player may change on the new-game screen (`player_choice`, three at most) | `mod.ltx [world]` | same |
 | the playable area (`area`, empty = anywhere) | `mod.ltx [world]` | same |

@@ -32,7 +32,7 @@ const HDIM_X: i32 = 56;
 const HDIM_Y: i32 = 24;
 const HDIM_Z: i32 = 56;
 
-/// `std::sort(g_vertices)`: the list in the order of the vertices' addresses.
+/// The vertex list in the order of the vertices' addresses.
 pub fn sort_vertices_by_addr(g: &mut LcGlobalData) {
     let mut list = g.mesh.vertices().to_vec();
     list.sort_unstable_by_key(|&v| g.mesh.vertex_addr(v));

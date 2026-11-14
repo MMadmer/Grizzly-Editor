@@ -146,7 +146,7 @@ impl OMotion {
         evaluate_channels(&self.envelopes, t)
     }
 
-    /// `Length()`: frames, both ends included.
+    /// The length in frames, both ends included.
     #[must_use]
     pub fn length(&self) -> i32 {
         self.frame_end.wrapping_sub(self.frame_start).wrapping_add(1)
@@ -323,7 +323,7 @@ impl SMotion {
         self.name = SmolStr::new(name.to_ascii_lowercase());
     }
 
-    /// `Length()`: frames, both ends included.
+    /// The length in frames, both ends included.
     #[must_use]
     pub fn length(&self) -> i32 {
         self.frame_end.wrapping_sub(self.frame_start).wrapping_add(1)

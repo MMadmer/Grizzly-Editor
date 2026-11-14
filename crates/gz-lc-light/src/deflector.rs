@@ -303,7 +303,7 @@ impl Deflector {
         self.uv_polys.len()
     }
 
-    /// `RemapUV(dest, ...)`: the triangles mapped into the rectangle `base .. base + size` of a
+    /// The triangles mapped into the rectangle `base .. base + size` of a
     /// `lm_u` x `lm_v` texture, texel centres at its edges; rotated swaps the axes.
     #[allow(clippy::too_many_arguments)]
     #[must_use]

@@ -126,7 +126,7 @@ pub struct BuildTexture {
 }
 
 impl BuildTexture {
-    /// `Texel(x, y)`.
+    /// The texel at `x`, `y`; none outside the picture or without its pixels.
     #[must_use]
     pub fn texel(&self, x: u32, y: u32) -> Option<u32> {
         let s = self.surface.as_ref()?;

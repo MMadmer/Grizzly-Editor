@@ -404,7 +404,7 @@ fn text(v: &str) -> PropValue {
 }
 
 impl B<'_> {
-    /// `PrepareKey(pref, s_name, rest)`.
+    /// Adds a property under the entity's own key: `<name>\<rest>`.
     fn add(&mut self, rest: &str, kind: PropKind, value: PropValue, field: Field) {
         self.out.push(Prop { path: format!("{}\\{rest}", self.s), kind, value, read_only: false, field });
     }

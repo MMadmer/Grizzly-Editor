@@ -19,3 +19,9 @@ crates/gz-ui-viewport/src/pane.rs | view_mode | The id of the viewport's View Mo
 crates/gz-ui-graph/src/cmd.rs | ui_scale | A JSON field of the graph view's answer.
 crates/gz-mcp/src/lib.rs | level_build | The job group id of the level build (a job kind, not a command).
 crates/gz-entities/* | m_[A-Za-z] | The game's server entities: a packet's fields by the names the game gives them, which is how a field is found in the game.
+crates/gz-mod/src/commands.rs | g_[a-z] | Console commands of the game, by their names: the list a mod's commands are checked against.
+tools/qa/test_level_commands.py | reload_configs | A value of `level.play`'s `action`, not a command.
+docs/nq/NQ_FORMAT.md | ui_scale | A field of `graph.view`'s answer.
+docs/NQ_ARCHITECTURE.md | ui_scale | The UI scale in the formula of the graph's view.
+docs/STATE.md | open_scene | A dialog id, the value of `level.show dialog=`.
+docs/UI_DESIGN.md | open_scene|open_project | The id of a dialog and of the unsaved-work question before a project opens.

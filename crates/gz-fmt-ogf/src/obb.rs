@@ -165,7 +165,7 @@ impl Minimize1 {
         }
     }
 
-    /// `GetMinimum(t0, f0, tm, fm, t1, f1, level)`.
+    /// The minimum of a function inside a bracket of three points, searched to a depth.
     #[allow(clippy::too_many_arguments)]
     fn search3(
         &mut self,
@@ -192,7 +192,7 @@ impl Minimize1 {
         }
     }
 
-    /// `GetMinimum(t0, f0, t1, f1, level)`.
+    /// The minimum of a function between two points, searched to a depth.
     fn search2(&mut self, f: &mut dyn FnMut(f32) -> f32, t0: f32, f0: f32, t1: f32, f1: f32, level: i32) {
         self.keep(t0, f0);
         self.keep(t1, f1);

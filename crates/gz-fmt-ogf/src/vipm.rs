@@ -112,7 +112,7 @@ struct Quadric {
 impl Quadric {
     const ZERO: Quadric = Quadric { a: [[0.0; QUAD_SIZE]; QUAD_SIZE], b: [0.0; QUAD_SIZE], c: 0.0 };
 
-    /// `MxQuadric(p1, p2, p3, 0)`.
+    /// The quadric of a triangle, with no area weight.
     fn of_triangle(p1: &Vec5, p2: &Vec5, p3: &Vec5) -> Self {
         let mut e1 = [0.0; QUAD_SIZE];
         let mut e2 = [0.0; QUAD_SIZE];
@@ -385,7 +385,7 @@ impl Object {
             self.tri_mut(id)?.e[k] = Some(e);
             self.edge_add_tri(e, id)?;
         }
-        // `ListAddAfter(&CurTriRoot)`
+        // a new triangle goes to the front of the list
         self.tri_next[id] = self.tri_first;
         if let Some(f) = self.tri_first {
             self.tri_prev[f] = Some(id);
@@ -614,7 +614,7 @@ impl Object {
         Ok(true)
     }
 
-    /// `CalculateAllCollapses(object, max_window, 1.f)`.
+    /// Collapses edges, cheapest first, until none is left under the tolerance.
     fn all_collapses(&mut self, tolerance: f32, max_window: u32) -> Result<(), Failed> {
         // the errors of a point stay what they were until its edges or triangles change (the
         // positions never do): kept with the stamp they were taken at
@@ -688,7 +688,7 @@ impl Object {
         Ok(out)
     }
 
-    /// `CalculateSW(object, result, 1)`.
+    /// The sliding windows of the collapses, from the coarsest level up.
     fn sliding_windows(&mut self) -> Result<VipmResult, Failed> {
         while self.undo()? {}
         let num_verts = self.pts.len();
@@ -879,7 +879,7 @@ impl Object {
     }
 }
 
-/// `OptimiseVertexCoherencyTriList(list, n, 1)` over the first `n` triangles of the list.
+/// Orders the first `n` triangles of the list so that successive ones share vertices.
 fn optimise(list: &mut AList<u16>, n: usize) -> Result<(), Failed> {
     let slice = list.data.get_mut(..n * 3).ok_or(Failed)?;
     optimise_tri_list(slice, 1);
@@ -929,7 +929,7 @@ pub fn vipm_convert(verts: &[(Vec3, Vec2)], faces: &[[u16; 3]], max_window: u32)
         }
         o.new_tri(p, 0).ok()?;
     }
-    // `Initialize`: the counts are not used again; `SetNewLevel(0)`
+    // the counts are not used again; the object starts at its finest level
     o.set_new_level(0).ok()?;
     if !o.valid().ok()? {
         return None;

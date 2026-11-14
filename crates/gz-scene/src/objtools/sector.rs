@@ -189,7 +189,7 @@ pub fn unused_meshes(state: &SceneState, lib: &Library) -> Vec<(Arc<Object>, Arc
     out
 }
 
-/// `Scene->GetBox(box, OBJCLASS_SCENEOBJECT)`: the box of every scene object that has one.
+/// The box of every scene object that has one.
 #[must_use]
 pub fn scene_objects_box(state: &SceneState, lib: &Library) -> Option<Aabb> {
     let local = |r: &str| lib.cached(r).map(|o| o.bounds);
@@ -336,7 +336,7 @@ pub fn capture_volume(state: &SceneState, lib: &Library, id: ObjId) -> Result<Ou
         if !o.flags.visible {
             continue;
         }
-        // `Scene->SpherePick`: the object's box sphere meets the sector's
+        // the object's box sphere meets the sector's
         let Some(ob) = crate::objects::world_box(state, o, &local) else { continue };
         let (c, r) = box_sphere(&ob);
         let rr = r + vol.radius;

@@ -408,7 +408,7 @@ pub(crate) fn construct(info: &ClassInfo, section: &str, s: &dyn Settings) -> Re
         }
         Class::MonsterBase | Class::PsyDogPhantom | Class::MonsterBaseGroup => {
             monster(&mut o, s, section)?;
-            // `set_visual(pSettings->r_string(caSection, "visual"))`
+            // the visual is the section's `visual` key
             need(s, section, "visual")?;
         }
         Class::HumanStalker => {

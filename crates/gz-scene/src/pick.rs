@@ -260,9 +260,9 @@ pub fn ray_object(
     }
 }
 
-/// `RayPickObject(range, start, dir, OBJCLASS_SCENEOBJECT, ...)`: what `scene.query`,
-/// `scene.query` and the drop read. Every scene object counts, seen by a camera or not
-/// (`g_RayPickAll`); a hidden one does not. `only` restricts it to a list.
+/// The nearest scene object a ray meets within its range: what `scene.align`, `scene.query`
+/// and the drop read. Every scene object counts, seen by a camera or not; a hidden one does
+/// not. `only` restricts it to a list.
 #[must_use]
 pub fn ray_scene_objects(
     pick: &ScenePick,
