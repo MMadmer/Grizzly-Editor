@@ -235,7 +235,7 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) {
 /// `$groups$` (`rawdata\groups`): the `.group` files Groups lists.
 #[must_use]
 pub fn list_groups(root: &Path) -> Vec<String> {
-    // as `FS.file_list($groups$)`: lower case, in byte order
+    // lower case, in byte order, like every list of the editor's files
     gz_project::editor_file_list(root, "group")
 }
 

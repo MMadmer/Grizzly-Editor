@@ -34,7 +34,7 @@ pub fn register(reg: &mut Registry) {
             "mod.set",
             "Changes keys of mod.ltx by section, checked by the manifest's rules; answers the manifest and its problems.",
         )
-        .example(r#"set={"module":{"version":"1.2.0"},"update":{"github":"owner/repo"}}"#),
+        .example(r#"set={"module":{"target":"default","version":"1.2.0"},"update":{"github":"owner/repo"}}"#),
         mod_set,
     );
     reg.cmd(
@@ -166,11 +166,18 @@ pub async fn manifest_answer(ed: &Arc<Editor>, project: &Project, service: &Mani
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SetParams {
-    /// What to change, by section of mod.ltx. `module`: id, name, version, author, description,
-    /// disable_game_updates, website, mode, target, tags. `update`: github. `order`: after,
-    /// before. `requires`, `conflicts`, `exclude`: the whole list. `vars`: {name: default}.
-    /// `provides_mode`: {id, title} (an empty id drops it). `pda`: {layout}. `commands`:
-    /// {name: {function, help, args, cheat}}, null removes one. An empty text removes a key.
+    /// What to change, by section of mod.ltx: {"<section>": {"<key>": value}}. An empty text removes
+    /// a key. `module`: id (a-z 0-9 _ . -), name, version (1 to 4 numbers, 1.2.0), author,
+    /// description, website (https, ap-pro.ru or moddb.com), tags (a list from the Mod Browser's
+    /// words), disable_game_updates (true | false), and the target: `target` is `default` (the
+    /// ordinary game), `existing` (a mode of the linked game, with `mode`: its id), `new` (a mode
+    /// the module adds, with `provides_mode`) or `any` (every game, with `mode` = `*`). Setting
+    /// a mode id or `provides_mode` also sets `target` unless it is given; `mode` = `*` needs `target` = `any`. `update`: github
+    /// (owner/repo). `order`: after, before (module ids, a list). `requires`, `conflicts`,
+    /// `exclude`: the whole list, one entry per line or an array. `vars`: {name: default}.
+    /// `provides_mode`: {id, title} (an empty id drops it). `pda`: {layout} (a project-relative
+    /// .pdaasset). `commands`: {name: {function, help, args, cheat}} (function is <script>.<function>),
+    /// null removes one. Every key and value: asset.reference kind=manifest.
     set: Map<String, Value>,
 }
 
@@ -328,15 +335,20 @@ async fn module_edits(
                 edits.push(Edit::optional("module", "website", w));
             }
             "mode" => {
-                if !validate_mode_id(&text) {
-                    return Err(refuse("a mode id takes a-z, 0-9, _ . and - only, or is empty"));
+                // `*` is a classic module's: every mode
+                if text != "*" && !validate_mode_id(&text) {
+                    return Err(refuse(
+                        "a mode id takes a-z, 0-9, _ . and - only; * is every mode, empty the ordinary game",
+                    ));
                 }
                 edits.push(Edit::optional("module", "mode", &text));
                 mode.clone_from(&text);
             }
             "target" => {
                 if !["default", "existing", "new", "any"].iter().any(|t| t.eq_ignore_ascii_case(&text)) {
-                    return Err(refuse("target is default, existing, new or any"));
+                    return Err(refuse(
+                        "target is default (the ordinary game), existing (a mode of the linked game, with mode), new (a mode the module adds, with provides_mode) or any (every game, with mode *)",
+                    ));
                 }
                 edits.push(Edit::set("module", "target", text));
                 target_given = true;

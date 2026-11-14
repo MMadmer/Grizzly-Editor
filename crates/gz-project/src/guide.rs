@@ -132,6 +132,11 @@ pub fn text(root: &Path, file_name: &str, id: &str) -> String {
     line("The first key names the kind and its version (`nq = 1`, `npc = 1`, `pda = 1`); keys the editor");
     line("does not know are kept, comments survive every save, things are named by `id`, never by position.");
     line("");
+    line(
+        "`mod.ltx` is LTX, not Lua: `Grizzly-Cmd.exe reference manifest` lists every section and key. A module",
+    );
+    line("targets ONE game mode: set `[module] target = default` (the ordinary game) or `mode = <id>`.");
+    line("");
     line("## Commands");
     line("");
     line("`Grizzly-Cmd.exe` is in the editor's folder (or on PATH); run it in this folder:");
@@ -139,7 +144,8 @@ pub fn text(root: &Path, file_name: &str, id: &str) -> String {
     line(
         "- `Grizzly-Cmd.exe check [path]` - every problem with file, line and column; exit code 1 on an error.",
     );
-    line("- `Grizzly-Cmd.exe reference <kind>` - the format of a kind, with what the linked game adds.");
+    line("- `Grizzly-Cmd.exe reference <kind>` - the format of a kind (`manifest`, `quest`, `pda`, ...) and");
+    line("  what the linked game adds.");
     line("- `Grizzly-Cmd.exe build` - the module into the game, as the editor's Build button does.");
     line("");
     line("MCP (the editor's control endpoint) is for what files cannot do: the window and the 3D scene.");
@@ -181,13 +187,15 @@ mod tests {
         }
         let text = text(root, "Night.grizzly", "7c1e6c1e-5c0f-4f6e-9f43-2d5b1c9a0e11");
         let lines = text.lines().count();
-        assert!((20..=30).contains(&lines), "{lines} lines:\n{text}");
+        assert!((20..=34).contains(&lines), "{lines} lines:\n{text}");
         assert!(text.starts_with("# Night Watch\n"), "{text}");
         assert!(text.contains("module `night`"), "{text}");
         assert!(text.contains("- Quests: 2 in `quests/`."), "{text}");
         assert!(text.contains("- Characters: 1 in `npc/`."), "{text}");
         // program-files: in memory
         assert!(text.contains("Grizzly-Cmd.exe check"), "{text}");
+        // the manifest is a kind too, and the one thing a new module must state
+        assert!(text.contains("reference manifest") && text.contains("target = default"), "{text}");
         let root_text = root.display().to_string();
         assert!(!text.contains(&root_text) && !text.contains(":\\"), "{text}");
         // once: an existing page is the author's

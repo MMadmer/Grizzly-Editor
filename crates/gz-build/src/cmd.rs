@@ -91,7 +91,8 @@ pub enum BuildTarget {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct BuildParams {
-    /// Where the module goes.
+    /// Where the module goes: `game` (the linked game's modules\<id>, the default), `folder`
+    /// (modules\<id> under `path`) or `flat` (a gamedata_<id> overlay under `path`, a JSGME mod).
     #[serde(default)]
     target: BuildTarget,
     /// The folder for `folder` and `flat` (absolute). Left out with `folder`: the folder the

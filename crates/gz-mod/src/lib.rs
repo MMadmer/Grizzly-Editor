@@ -14,6 +14,8 @@
 //!   written with [`Edit::SetLines`] / [`Edit::Set`] - this crate does not know their meaning.
 //!   [`scaffold_text`], [`derive_id`].
 //! - [`edit`] - [`Edit`]: the commands of the manifest store, applied to a document.
+//! - [`reference`] - the format of `mod.ltx` as text ([`reference_text`], what
+//!   `asset.reference kind=manifest` answers), held to the model by its tests.
 //! - [`rules`] - the metadata rules the game enforces too ([`validate_id`], [`validate_version`],
 //!   [`validate_website`], [`validate_github_repo`], [`normalize_github_repo`], ...), and
 //!   [`validate`]: the manifest's own check before a build.
@@ -45,6 +47,7 @@ pub mod edit;
 pub mod exclude;
 mod io;
 pub mod model;
+pub mod reference;
 pub mod rules;
 pub mod sections;
 mod service;
@@ -59,6 +62,7 @@ pub use edit::Edit;
 pub use exclude::{ShipState, exclude_match, normalize_rel, outside_build, set_excluded, ship_state};
 pub use io::{installed_commands, read_manifest_file, scaffold, script_functions};
 pub use model::{Command, FILE, GlobalVar, Manifest, ProvidesMode, derive_id, scaffold_text};
+pub use reference::{KeyDoc, Reader, SectionDoc, is_manifest_word, reference, reference_text};
 pub use rules::{
     normalize_github_repo, valid_global_name, validate, validate_github_repo, validate_id, validate_mode_id,
     validate_version, validate_website,

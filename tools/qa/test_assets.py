@@ -4,8 +4,8 @@
 Drives the editor over MCP on a THROW-AWAY COPY of a project; every file is written with Python,
 the way an agent's own file tools write it:
 
-- A: asset.kinds lists the kinds; asset.reference answers each of them (quests with the linked
-  game's node kinds);
+- A: asset.kinds lists the eight kinds; asset.reference answers each of them (quests with the linked
+  game's node kinds, the module manifest's format by any of its names);
 - B: asset.check puts problems at their lines and columns, fail_on=error makes it fail, a file
   of a newer version is refused with the sentence;
 - C: an open quest follows its file: a comment, an unknown key and a new title written outside
@@ -97,7 +97,39 @@ def phase_a() -> None:
         check(r.get("ok") and needle in r.get("text", ""), "A asset.reference kind=%s answers" % kind,
               json.dumps(r)[:200])
     bad = cmd("asset.reference", kind="nothing")
-    check(bad.get("code") == "not_found", "A an unknown kind is not_found", json.dumps(bad)[:200])
+    check(bad.get("code") == "not_found" and "module manifest" in bad.get("error", ""),
+          "A an unknown kind is not_found and names the manifest among the kinds", json.dumps(bad)[:200])
+    # eight kinds, and every one has a reference that answers (the project's folder is a kind with none of its own)
+    names = [x.get("name") for x in k.get("kinds", [])]
+    check(len(names) == 8 and "module manifest" in names, "A asset.kinds lists eight kinds, the manifest among them",
+          names)
+    for name in names:
+        r = cmd("asset.reference", kind=name)
+        check(r.get("ok") and len(r.get("text", "")) > 200, "A asset.reference kind=%s answers a document" % name,
+              json.dumps(r)[:200])
+    manifest = next((x for x in k.get("kinds", []) if x.get("extension") == "mod.ltx"), {})
+    check("asset.reference kind=manifest" in manifest.get("reference", ""),
+          "A asset.kinds names the reference of the manifest", json.dumps(manifest)[:300])
+    for word in ("manifest", "mod.ltx", "module manifest"):
+        m = cmd("asset.reference", kind=word)
+        mtext = m.get("text", "")
+        check(m.get("ok") and m.get("kind") == "module manifest"
+              and all(w in mtext for w in ("[module]", "target = default | existing | new | any", "[provides_mode]",
+                                           "[world]", "[screen.<id>]", "mod.set set=", "Example", "id          = night_watch")),
+              "A asset.reference kind=%s answers the manifest's format with its example" % word, mtext[:300])
+    modes = mtext.find("Modes of the linked game")
+    check(mtext.find("Example") < modes < mtext.find("Left as written"),
+          "A the linked game's modes come after the example, before the closing note", mtext[-600:])
+    # a game is linked: its modes are listed, one a line, by the names a player reads; none: the page says so
+    section = [l for l in mtext[modes:mtext.find("Left as written")].splitlines()[1:] if l.strip()]
+    linked = bool(section) and not section[0].lstrip().startswith(("No game is linked", "The linked game has no mode"))
+    check(section and (not linked or all(l.startswith("  ") and len(l.strip()) > 0 for l in section)),
+          "A the modes section lists the game's modes or says why it has none", section[:6])
+    if linked:
+        modes_of = cmd("game.lookup", type="mode")
+        want = [e.get("id") for e in modes_of.get("entries", [])]
+        check(want and all(any(l.strip().split(" ")[0] == i for l in section) for i in want),
+              "A every mode game.lookup type=mode knows is in the page", (want[:5], section[:5]))
 
 
 def phase_b(project: str) -> None:

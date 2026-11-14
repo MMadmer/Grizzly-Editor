@@ -142,6 +142,16 @@ pub fn valid_global_name(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
 }
 
+/// The first problem of a new project: the fix in the file's words (the key, its values, the
+/// command), then the window.
+const NO_TARGET: &str = concat!(
+    "no target game mode: write `target = default` under [module] in mod.ltx for the ordinary game, ",
+    "`mode = <id>` with `target = existing` for a mode of the linked game, or a [provides_mode] section ",
+    "with `id = <id>` and `target = new` for a mode this module adds. ",
+    "The command: mod.set set={\"module\":{\"target\":\"default\"}}; `reference manifest` lists the modes ",
+    "and every key. In the window: Mod > Mod Settings, Game Mode"
+);
+
 /// The manifest's own check before a build, with its messages: the id,
 /// the targeting choice, the declared modes; the warnings about the mode titles and about a
 /// module that turns the game's updates off. Console commands are [`crate::validate_commands`]:
@@ -158,13 +168,7 @@ pub fn validate(m: &Manifest) -> Vec<Problem> {
     // A finished module always states which game it is for. "Nothing chosen" is not a third
     // option - it is how content ends up applied in a campaign it was never built for.
     if m.mode.is_empty() && m.provides_modes.is_empty() && !m.target.eq_ignore_ascii_case("default") {
-        out.push(
-            Problem::error(
-                "mod.target",
-                "no target game mode: open Mod > Mod Settings, Game Mode, and pick one (the ordinary game, a mode of the linked game, or a new mode this module adds)",
-            )
-            .in_field("target"),
-        );
+        out.push(Problem::error("mod.target", NO_TARGET).in_field("target").with_fix("target = default"));
     }
     if m.disable_game_updates {
         out.push(
@@ -204,6 +208,7 @@ pub fn validate(m: &Manifest) -> Vec<Problem> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -247,6 +252,27 @@ mod tests {
         assert_eq!(normalize_github_repo("https://github.com/Madmer/od#readme"), "Madmer/od");
         assert_eq!(normalize_github_repo("Madmer/od"), "Madmer/od");
         assert!(valid_global_name("kills_2") && !valid_global_name("a-b"));
+    }
+
+    #[test]
+    fn the_first_problem_names_the_key_the_values_and_the_command() {
+        let p = validate(&Manifest { id: "od".into(), ..Manifest::default() });
+        let text = &p[0].message;
+        assert_eq!((p[0].code.as_str(), p[0].field.as_deref()), ("mod.target", Some("target")));
+        assert_eq!(p[0].fix.as_deref(), Some("target = default"));
+        for word in [
+            "target = default",
+            "mode = <id>",
+            "target = existing",
+            "[provides_mode]",
+            "target = new",
+            "mod.set set=",
+        ] {
+            assert!(text.contains(word), "{word}: {text}");
+        }
+        // the key and the command come before the window
+        assert!(text.find("mod.set").unwrap() < text.find("Mod Settings").unwrap());
+        assert!(text.find("target = default").unwrap() < text.find("Mod Settings").unwrap());
     }
 
     #[test]

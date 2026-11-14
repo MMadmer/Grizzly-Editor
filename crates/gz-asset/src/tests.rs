@@ -204,3 +204,36 @@ fn the_commands_check_and_migrate_a_project() {
     drop(rt);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn the_manifest_answers_its_format_by_any_of_its_names() {
+    let root = std::env::temp_dir().join(format!("gz-asset-manifest-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let (rt, ed) = editor(root.clone());
+    let kinds = rt.block_on(ed.call("asset.kinds", Map::new(), Origin::Mcp));
+    let manifest = kinds["kinds"].as_array().unwrap().iter().find(|k| k["extension"] == "mod.ltx").unwrap();
+    assert!(manifest["reference"].as_str().unwrap().contains("asset.reference kind=manifest"), "{manifest}");
+    for word in ["manifest", "module manifest", "MOD.LTX"] {
+        let r = rt.block_on(ed.call("asset.reference", args(json!({ "kind": word })), Origin::Mcp));
+        assert_eq!(r["ok"], true, "{word}: {r}");
+        assert_eq!(r["kind"], "module manifest");
+        let text = r["text"].as_str().unwrap();
+        for part in ["[module]", "target = default", "[provides_mode]", "[world]", "Example"] {
+            assert!(text.contains(part), "{word}: {part}");
+        }
+        // with no game linked the page still answers, and says what only a game adds
+        let (example, modes, note) = (
+            text.find("Example").unwrap(),
+            text.find("Modes of the linked game").unwrap(),
+            text.find("Left as written").unwrap(),
+        );
+        assert!(example < modes && modes < note, "the modes come after the example, before the closing note");
+        assert!(text.contains("No game is linked"), "{text}");
+    }
+    let bad = rt.block_on(ed.call("asset.reference", args(json!({ "kind": "nothing" })), Origin::Mcp));
+    assert_eq!(bad["ok"], false);
+    assert!(bad["error"].as_str().unwrap().contains("module manifest"), "{bad}");
+    drop(ed);
+    drop(rt);
+    let _ = std::fs::remove_dir_all(&root);
+}

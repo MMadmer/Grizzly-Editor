@@ -43,7 +43,8 @@ pub struct CheckParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReferenceParams {
-    /// The kind: its name (`quest`), its extension (`nqasset`) or its header key (`nq`).
+    /// The kind: its name (`quest`), its extension (`nqasset`) or its header key (`nq`). The module
+    /// manifest is `manifest` (or `mod.ltx`): its sections, keys, values and defaults.
     pub kind: String,
 }
 
@@ -166,8 +167,13 @@ async fn asset_check(ed: Arc<Editor>, p: CheckParams, _o: Origin) -> Reply {
 
 async fn asset_reference(ed: Arc<Editor>, p: ReferenceParams, _o: Origin) -> Reply {
     let kinds = Kinds::of(&ed);
+    // the manifest is no Lua asset: its format is gz-mod's own page
+    if gz_mod::is_manifest_word(&p.kind) && kinds.named(&p.kind).is_none() {
+        return Ok(json!({ "kind": MANIFEST_KIND, "text": gz_mod::reference(ed.clone()).await }));
+    }
     let ops = kinds.named(&p.kind).ok_or_else(|| {
-        let names: Vec<&str> = kinds.all().iter().map(|k| k.name).collect();
+        let mut names: Vec<&str> = kinds.all().iter().map(|k| k.name).collect();
+        names.push(MANIFEST_KIND);
         CmdError::not_found(format!("'{}' is no kind of asset; the kinds are: {}", p.kind, names.join(", ")))
     })?;
     let text = (ops.reference)(ed.clone()).await;
@@ -290,6 +296,9 @@ async fn asset_migrate(ed: Arc<Editor>, p: MigrateParams, _o: Origin) -> Reply {
     Ok(json!({ "files": listed, "written": written, "dry_run": p.dry_run, "refused": refused }))
 }
 
+/// The manifest's name among the kinds: `asset.reference` takes this, `manifest` and `mod.ltx`.
+const MANIFEST_KIND: &str = "module manifest";
+
 fn kinds_answer(ed: &Editor) -> Reply {
     let mut list: Vec<serde_json::Value> = Kinds::of(ed)
         .all()
@@ -302,8 +311,9 @@ fn kinds_answer(ed: &Editor) -> Reply {
         })
         .collect();
     list.push(json!({
-        "name": "module manifest", "extension": MANIFEST, "header": "[module]", "version": 1,
-        "reference": "the game's docs/dead-air/MODDING.md", "read_by": "the game, the editor",
+        "name": MANIFEST_KIND, "extension": MANIFEST, "header": "[module]", "version": 1,
+        "reference": "asset.reference kind=manifest (the game's docs/dead-air/MODDING.md is the normative text)",
+        "read_by": "the game, the editor",
     }));
     Ok(json!({ "kinds": list }))
 }
@@ -311,7 +321,8 @@ fn kinds_answer(ed: &Editor) -> Reply {
 const TOPIC: &str = "\
 Assets are text files. Everything an author makes - quests (.nqasset), behaviour graphs
 (.behasset), characters (.npcasset), PDA interfaces (.pdaasset), the module manifest (mod.ltx) -
-is a file of the project an agent creates and edits with its own file tools. No command edits
+is a file of the project an agent creates and edits with its own file tools. The manifest is LTX,
+not Lua, and every module has one: read asset.reference kind=manifest first. No command edits
 an asset's content; the editor follows every change to the files at once.
 
 The syntax, for every Lua asset: one `return { ... }` of literals - tables, strings, numbers,
@@ -323,7 +334,8 @@ are named by `id` / `name`, never by position.
 
 The loop:
   1. asset.reference kind=<kind>   the format of a kind and what the linked game adds to it
-                                   (the node kinds, the pickers' lists)
+                                   (the node kinds, the pickers' lists); kind=manifest is mod.ltx's:
+                                   every section and key, with values and defaults
   2. edit the file
   3. asset.check [path=<file or folder>]   every problem, with file, line, column, code, text
                                    and a fix where it is mechanical; fail_on=error for a shell
@@ -340,7 +352,7 @@ pub fn register(reg: &mut Registry) {
     reg.cmd_sync(
         Spec::read(
             "asset.kinds",
-            "Lists the kinds of assets: extension, header key, version, where the reference is.",
+            "Lists the kinds of assets, the module manifest included: extension, header key, version, where the reference is.",
         ),
         |ed, _: &NoParams, _| kinds_answer(ed),
     );
@@ -353,8 +365,11 @@ pub fn register(reg: &mut Registry) {
         asset_check,
     );
     reg.cmd(
-        Spec::read("asset.reference", "The format reference of a kind, with what the linked game adds.")
-            .example("kind=quest"),
+        Spec::read(
+            "asset.reference",
+            "The format reference of a kind (kind=manifest: mod.ltx), with what the linked game adds.",
+        )
+        .example("kind=manifest"),
         asset_reference,
     );
     reg.cmd(

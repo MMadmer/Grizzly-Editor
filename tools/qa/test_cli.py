@@ -23,6 +23,10 @@ What it proves:
   I  library.sync and library.rewrite_descriptions in a commandlet: a throw-away library (-root) is synchronised and
      its descriptions rewritten by the commands themselves - they answer what they did, not "started" - with no
      window, exit 0; a library that is no kind of theirs is refused with the real ones, exit 1
+  J  a module from nothing, as an agent meets it: project.create in a temp folder, `check` says what to write in
+     mod.ltx (the key, its values, the command) at the line of the section, `help mod.set` names the target's values,
+     mod.set sets one, `check` is clean (exit 0), `reference manifest` prints the format, mod.build target=folder
+     builds it - no game is needed
 
     python tools/qa/test_cli.py --project <project>
 """
@@ -371,6 +375,69 @@ def phase_i(work: str) -> None:
           "I a kind that is none of the two is refused with the real ones", (code, err[:300]))
 
 
+def phase_j(work: str) -> None:
+    home = home_of(work, "j")
+    parent = os.path.join(work, "projects_j")
+    code, out, err = cli("run", "project.create", "name=QaManifest", "parent=" + parent, "-json", home=home)
+    answer = (jsons(out) or [{}])[0]
+    check(code == 0 and answer.get("ok"), "J project.create makes a project from nothing", (code, out[:200], err[:200]))
+    project = qa.guard_project(os.path.join(parent, "QaManifest"))
+    manifest = qa.read(os.path.join(project, "mod.ltx"))
+    check("[module]" in manifest and "target" not in manifest, "J the new mod.ltx states no target yet", manifest[:200])
+
+    # the first check: one error, at the [module] line, naming the key, its values and the command
+    code, out, err = cli("check", "-project", project, "-json", home=home)
+    problems = (jsons(out) or [{}])[0].get("problems", [])
+    first = problems[0] if problems else {}
+    text = first.get("text", "")
+    check(code == 1 and len(problems) == 1 and first.get("code") == "mod.target"
+          and first.get("file") == "mod.ltx" and first.get("line") == 1,
+          "J the first check is one error, mod.target, at the [module] line of mod.ltx", (code, out[:300], err[:200]))
+    check(all(w in text for w in ("target = default", "mode = <id>", "target = existing", "[provides_mode]",
+                                  "target = new", "mod.set set=", "reference manifest"))
+          and first.get("fix") == "target = default",
+          "J its sentence names the key, the values, the command and the fix", text)
+    check(text.find("mod.set") < text.find("Mod Settings") and text.find("target = default") < text.find("Mod Settings"),
+          "J and the window comes last", text)
+
+    # mod.set's card says the values: a target is set from what it says, with no refusal first
+    code, out, err = cli("help", "mod.set", home=home)
+    check(code == 0 and all(w in out for w in ("`default`", "`existing`", "`new`", "`any`", "provides_mode")),
+          "J help mod.set names the target's values", out[:500])
+    code, out, err = cli("run", "mod.set", 'set={"module":{"target":"default"}}', "-project", project, "-json",
+                         home=home)
+    answer = (jsons(out) or [{}])[0]
+    check(code == 0 and answer.get("ok") and answer.get("manifest", {}).get("target") == "default"
+          and "target      = default" in qa.read(os.path.join(project, "mod.ltx")),
+          "J mod.set writes target = default into mod.ltx", (code, out[:300], err[:200]))
+    code, out, err = cli("run", "mod.set", 'set={"module":{"target":"sometimes"}}', "-project", project, home=home)
+    check(code == 1 and all(w in err for w in ("default", "existing", "new", "any")),
+          "J a wrong target is refused with every value", (code, err[:300]))
+
+    code, out, err = cli("check", "-project", project, home=home)
+    check(code == 0, "J the second check is clean, exit 0", (code, out[:300], err[:200]))
+
+    # the format is printed, for the manifest as for every other kind
+    code, out, err = cli("reference", "manifest", "-project", project, home=home)
+    check(code == 0 and all(w in out for w in ("[module]", "[provides_mode]", "[world]", "target = default",
+                                               "Example", "mode = <id>")),
+          "J reference manifest prints the format with its example", (code, out[:300], err[:200]))
+    for word in ("mod.ltx", "module manifest"):
+        code, again, err = cli("reference", word, "-project", project, home=home)
+        check(code == 0 and again == out, "J reference %s is the same page" % word, (code, err[:200]))
+    code, out, err = cli("reference", "nothing", home=home)
+    check(code == 1 and "module manifest" in err, "J an unknown kind names the manifest among the kinds", err[:300])
+
+    target = os.path.join(work, "built_j")
+    code, out, err = cli("run", "mod.build", "target=folder", "path=" + target, "-project", project, "-json", home=home)
+    answer = (jsons(out) or [{}])[0]
+    check(code == 0 and answer.get("ok") and os.path.isfile(os.path.join(target, "modules", "qamanifest", "mod.ltx")),
+          "J mod.build target=folder builds the module", (code, out[:300], err[:200]))
+    agents = qa.read(os.path.join(project, "AGENTS.md"))
+    check("reference manifest" in agents and "target = default" in agents,
+          "J the project's AGENTS.md names the manifest's reference and the target", agents[:400])
+
+
 def run(ctx: qa.Run) -> None:
     if not os.path.isfile(CLI):
         raise RuntimeError("build the editor's twin first: " + CLI)
@@ -378,14 +445,14 @@ def run(ctx: qa.Run) -> None:
     steps = {"A": lambda: phase_a(work), "B": lambda: phase_b(work), "C": lambda: phase_c(work),
              "D": lambda: phase_d(work, ctx.project), "E": lambda: phase_e(work, ctx.project),
              "F": lambda: phase_f(work), "G": lambda: phase_g(work), "H": lambda: phase_h(work, ctx.project),
-             "I": lambda: phase_i(work)}
+             "I": lambda: phase_i(work), "J": lambda: phase_j(work)}
     qa.run_phases(steps, ctx.only)
 
 
 def main() -> int:
     if len(sys.argv) == 6 and sys.argv[1] == "--console-inner":
         return console_inner(sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5])
-    return qa.suite("COMMAND LINE", run, doc=__doc__, phases="ABCDEFGHI")
+    return qa.suite("COMMAND LINE", run, doc=__doc__, phases="ABCDEFGHIJ")
 
 
 if __name__ == "__main__":
