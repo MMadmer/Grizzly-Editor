@@ -24,6 +24,8 @@
 //!   [`validate_commands`] (`E401`..`E406`, `W406`..`W408`).
 //! - [`exclude`] - what the build leaves out: [`exclude_match`], [`outside_build`],
 //!   [`ship_state`], [`set_excluded`].
+//! - [`spot`] - [`Spot`]: where in `mod.ltx` a problem of an area is about (a section, a key, a
+//!   layer's key), carried by the problem and located by [`ManifestDoc::locate`].
 //! - [`text`] - the quoting of `name` / `author` / `description`, list splitting, cp1251 coverage.
 //!
 //! The service and the commands:
@@ -52,6 +54,7 @@ pub mod reference;
 pub mod rules;
 pub mod sections;
 mod service;
+pub mod spot;
 pub mod text;
 
 pub use cmd::{install, manifest_answer, manifest_json, manifest_problems, open_manifest, register};
@@ -67,13 +70,14 @@ pub use reference::{
     Check, KeyDoc, Reader, SectionDoc, is_manifest_word, key_doc, key_of, reference, reference_text,
 };
 pub use rules::{
-    DESCRIPTION_ROOM, GLOBAL_NAME_TAKES, TAG_VOCABULARY, accepts, global_name_refusal, global_twice,
-    known_tag, normalize_github_repo, parse_flag, refusal, valid_global_name, validate, validate_github_repo,
-    validate_id, validate_mode_id, validate_mode_ref, validate_own_mode_id, validate_version,
-    validate_website,
+    DESCRIPTION_ROOM, GLOBAL_NAME_TAKES, Pairing, TAG_VOCABULARY, accepts, global_name_refusal, global_twice,
+    known_tag, normalize_github_repo, parse_flag, refusal, target_pairing, valid_global_name, validate,
+    validate_github_repo, validate_id, validate_mode_id, validate_mode_ref, validate_own_mode_id,
+    validate_version, validate_website,
 };
 pub use sections::{OwnSections, SectionSet, own_sections};
 pub use service::{
     ArgCx, ArgHook, FieldHook, ManifestArgs, ManifestCmd, ManifestFields, ManifestService, ManifestState,
     command_check,
 };
+pub use spot::{Issue, Place, Spot};

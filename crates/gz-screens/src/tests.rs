@@ -188,3 +188,40 @@ fn validation_says_what_is_wrong() {
     assert_eq!(out[2], "E402 screen one: layer 2: the game shows no .png file");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[test]
+fn a_problem_carries_its_section_and_key_and_the_document_puts_it_at_the_line() {
+    let text = "[module]\r\nid = od\r\n\r\n[screens]\r\nloading_screens = only\r\n\r\n[screen.night]\r\nshow = loading\r\nlayer = art/a.dds\r\nopacity = 0.5\r\nlayer = art/gone.dds\r\ntexture = art/none.dds\r\nmusic = nope, rain\r\n\r\n[screen.bare]\r\nshow = menu\r\n\r\n[track.t1]\r\nfile = music/t.ogg\r\n\r\n[track.rain]\r\nfile = music/rain.wav\r\nplay = loading\r\n";
+    let doc = gz_mod::ManifestDoc::parse(text);
+    let s = Screens::parse(&doc);
+    let base = std::env::temp_dir().join(format!("gz-screens-spots-{}", std::process::id()));
+    std::fs::create_dir_all(base.join("art")).unwrap();
+    std::fs::write(base.join("art").join("a.dds"), b"DDS ").unwrap();
+    let found = crate::validate::issues(&base, &s, &|_| false, None);
+    let at = |code: &str, text: &str| {
+        let i = found
+            .iter()
+            .find(|i| i.code == code && i.text.contains(text))
+            .unwrap_or_else(|| panic!("{code} {text}: {found:?}"));
+        (i.spot.clone(), doc.locate(&i.spot).map(|p| p.line))
+    };
+    // a layer's file at its `layer` line, its texture at its `texture` line
+    assert_eq!(at("E401", "layer 2: the file").1, Some(11));
+    assert_eq!(at("E401", "layer 2: the shader's texture").1, Some(12));
+    // a screen named by a track that is not there at its `music` line
+    assert_eq!(at("E403", "nope").1, Some(13));
+    assert_eq!(at("E403", "nope").0, gz_mod::Spot::key("screen.night", "music"));
+    // a screen with no layers and a track that plays nowhere at their headers
+    assert_eq!(at("W406", "it has no layers").1, Some(15));
+    assert_eq!(at("W410", "track t1").1, Some(18));
+    // a track that is no .ogg and a track whose file is missing at their `file` line
+    assert_eq!(at("E409", "track rain").1, Some(22));
+    assert_eq!(at("E401", "track t1").1, Some(19));
+    // the same problems as lines are what the answers have always said
+    let lines: Vec<String> = found.iter().map(gz_mod::Issue::line).collect();
+    assert_eq!(lines, validate(&base, &s, &|_| false, None));
+    // and as problems of the manifest's check they carry the spot
+    let p = found[0].problem();
+    assert_eq!(gz_mod::Spot::of(&p), Some(found[0].spot.clone()));
+    let _ = std::fs::remove_dir_all(&base);
+}

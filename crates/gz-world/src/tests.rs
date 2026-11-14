@@ -362,3 +362,40 @@ fn a_level_changers_destination_is_walked() {
     assert!(is_level_changer("level_changer_esc", None));
     assert!(!is_level_changer("stalker", None));
 }
+
+#[test]
+fn a_problem_carries_its_section_and_key_and_the_document_puts_it_at_the_line() {
+    let text = "[module]\r\nid = od\r\n\r\n[world]\r\nmutants = false\r\nplayer_choice = original_npcs, random_stalkers, mutants, npc_quests\r\nlevels = nowhere\r\nlocked = gone\r\narea = l02_garbage\r\n\r\n[start_kit]\r\nmoney = 10\r\nwpn_knife = 0\r\nbread\r\nbread\r\ntoy\r\n";
+    let doc = gz_mod::ManifestDoc::parse(text);
+    let (w, k) = (World::parse(&doc), StartKit::parse(&doc));
+    let known = |s: &str| s != "toy";
+    let found = crate::validate::issues(&w, &k, &[], Some(&game()), Some(&known));
+    let at = |code: &str, text: &str| {
+        let i = found
+            .iter()
+            .find(|i| i.code == code && i.text.contains(text))
+            .unwrap_or_else(|| panic!("{code} {text}: {found:?}"));
+        doc.locate(&i.spot).map(|p| p.line)
+    };
+    assert_eq!(at("E202", "rules offered"), Some(6));
+    assert_eq!(at("W203", "levels names"), Some(7));
+    assert_eq!(at("W204", "locked names"), Some(8));
+    assert_eq!(at("W206", "no Player Start"), Some(9));
+    // the start kit's rows are at their own lines, not at [world]
+    assert_eq!(at("E207", "'wpn_knife' has a count"), Some(13));
+    assert_eq!(at("E207", "'bread' is listed twice"), Some(15));
+    assert_eq!(at("W208", "'toy'"), Some(16));
+    let row = StartKit {
+        declared: true,
+        items: vec![KitItem { section: String::new(), count: 1 }],
+        ..StartKit::default()
+    };
+    let found = crate::validate::issues(&World::default(), &row, &[], None, None);
+    assert_eq!(doc.locate(&found[0].spot).map(|p| p.line), Some(11));
+    // the same problems as lines are what the answers have always said
+    let lines: Vec<String> = crate::validate::issues(&w, &k, &[], Some(&game()), Some(&known))
+        .iter()
+        .map(gz_mod::Issue::line)
+        .collect();
+    assert_eq!(lines, validate(&w, &k, &[], Some(&game()), Some(&known)));
+}

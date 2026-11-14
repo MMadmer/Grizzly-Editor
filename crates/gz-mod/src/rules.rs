@@ -225,9 +225,11 @@ pub fn accepts(check: Check, value: &str) -> bool {
         Check::Repo => validate_github_repo(v),
         Check::Description => v.len() < DESCRIPTION_ROOM,
         Check::Flag => parse_flag(v).is_some(),
+        Check::FlagAnyCase => parse_flag(&v.to_ascii_lowercase()).is_some(),
         Check::Choice(words) => words.contains(&v),
         Check::Words(words) => split_list(v, ',').iter().all(|t| words.contains(&t.as_str())),
         Check::Number => is_number(v),
+        Check::Range(lo, hi) => v.parse::<f64>().is_ok_and(|x| (f64::from(lo)..=f64::from(hi)).contains(&x)),
         Check::Count => v.parse::<i64>().is_ok(),
         Check::Rect => {
             let parts: Vec<&str> = v.split_whitespace().collect();
@@ -270,6 +272,77 @@ const NO_TARGET: &str = concat!(
     "and every key. In the window: Mod > Mod Settings, Game Mode"
 );
 
+/// A `target` and a `mode` that do not go together, in the file's words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pairing {
+    /// `mod.target_default`, `mod.target_existing`, `mod.target_new` or `mod.target_any`.
+    pub code: &'static str,
+    /// The two lines as written, what goes with what: the sentence the check and `mod.set` say.
+    pub text: String,
+    /// The line to write instead, `key = value`.
+    pub fix: String,
+    /// The choice is made and its detail is not written yet (`existing` with no mode, `new` with
+    /// no `[provides_mode]`): an error of the file's check - the module cannot be built - but
+    /// no contradiction, so `mod.set` writes it. The window's form saves the choice first and
+    /// the detail when it is picked.
+    pub unfinished: bool,
+}
+
+/// Whether the target and the mode a manifest states go together, as the reference pairs them:
+/// `default` takes no mode, `existing` a mode id (not `*`), `new` a `[provides_mode]` (its mode
+/// may be named too), `any` the mode `*`. `provides`: the module declares a mode of its own.
+/// A target that is none of the four, or none written, has nothing to pair (`mod.target_value`
+/// and `mod.target` say what is wrong there).
+#[must_use]
+pub fn target_pairing(target: &str, mode: &str, provides: bool) -> Option<Pairing> {
+    let (target, mode) = (trim(target), trim(mode));
+    let kind = target.to_ascii_lowercase();
+    let star = mode == "*";
+    let lines = if mode.is_empty() {
+        format!("[module] target = {target} with no mode")
+    } else {
+        format!("[module] target = {target} with mode = {mode}")
+    };
+    let (code, rule, fix) = match kind.as_str() {
+        "default" if !mode.is_empty() => (
+            "mod.target_default",
+            format!(
+                "target = default is the ordinary game and goes with no mode. Remove the mode, or write {}.",
+                if star { "target = any for every game" } else { "target = existing for that mode" }
+            ),
+            if star { "target = any" } else { "target = existing" },
+        ),
+        "existing" if mode.is_empty() || star => (
+            "mod.target_existing",
+            format!(
+                "target = existing is a mode of the linked game and goes with that mode's id. Write {}.",
+                if star {
+                    "the mode's id, or target = any for every game"
+                } else {
+                    "mode = <id>, or target = default for the ordinary game"
+                }
+            ),
+            if star { "target = any" } else { "target = default" },
+        ),
+        "new" if !provides => (
+            "mod.target_new",
+            "target = new is a mode the module adds and goes with a [provides_mode] section. Add one with id = <id>, or write target = default for the ordinary game.".to_owned(),
+            "target = default",
+        ),
+        "any" if !star => (
+            "mod.target_any",
+            format!(
+                "target = any is every game and goes with mode = *. Write mode = *, or {}.",
+                if mode.is_empty() { "target = default for the ordinary game" } else { "target = existing for that mode" }
+            ),
+            if mode.is_empty() { "mode = *" } else { "target = existing" },
+        ),
+        _ => return None,
+    };
+    let unfinished = (kind == "existing" && mode.is_empty()) || kind == "new";
+    Some(Pairing { code, text: format!("{lines}: {rule}"), fix: fix.to_owned(), unfinished })
+}
+
 /// The rules that read several keys at once: the id, the targeting choice, the declared modes;
 /// the warnings about the mode titles and about a module that turns the game's updates off. Each
 /// problem names its key in `field`; [`validate`] puts it at its line.
@@ -283,14 +356,14 @@ fn manifest_rules(m: &Manifest) -> Vec<Problem> {
     }
     // A finished module always states which game it is for. "Nothing chosen" is not a third
     // option - it is how content ends up applied in a campaign it was never built for. A target
-    // that is none of the four is a wrong value, said by its own problem.
-    let wrong_target = !m.target.is_empty() && !accepts(Check::Target, &m.target);
-    if m.mode.is_empty()
-        && m.provides_modes.is_empty()
-        && !m.target.eq_ignore_ascii_case("default")
-        && !wrong_target
-    {
+    // that is none of the four is a wrong value, said by its own problem; one that is written
+    // must go with the mode.
+    if m.target.is_empty() && m.mode.is_empty() && m.provides_modes.is_empty() {
         out.push(Problem::error("mod.target", NO_TARGET).in_field("target").with_fix("target = default"));
+    }
+    let provides = m.provides_modes.iter().any(|p| !p.id.is_empty());
+    if let Some(pair) = target_pairing(&m.target, &m.mode, provides) {
+        out.push(Problem::error(pair.code, pair.text).in_field("target").with_fix(pair.fix));
     }
     if m.disable_game_updates {
         out.push(
@@ -344,6 +417,8 @@ impl Line<'_> {
 struct Header {
     number: u32,
     column: u32,
+    /// The name as written between the brackets.
+    written: String,
 }
 
 fn lines_of<'a>(doc: &'a ManifestDoc, raw: &'a [&'a str]) -> (Vec<Line<'a>>, Vec<(String, Header)>) {
@@ -363,7 +438,7 @@ fn lines_of<'a>(doc: &'a ManifestDoc, raw: &'a [&'a str]) -> (Vec<Line<'a>>, Vec
             crate::doc::Item::Section(name) => {
                 section = name;
                 lower = name.to_ascii_lowercase();
-                headers.push((lower.clone(), Header { number, column }));
+                headers.push((lower.clone(), Header { number, column, written: name.to_owned() }));
             }
             crate::doc::Item::Entry { key, value, .. } if !key.is_empty() => {
                 out.push(Line { number, column, section, lower: lower.clone(), key, value });
@@ -384,12 +459,46 @@ fn header_place(headers: &[(String, Header)], section: &str, p: Problem) -> Prob
 
 /// `[section] key = value:`, how a problem about a written value begins.
 fn lead(line: &Line<'_>) -> String {
-    format!("[{}] {} = {}:", line.section, line.key, line.value)
+    if trim(line.value).is_empty() {
+        format!("[{}] {} is empty:", line.section, line.key)
+    } else {
+        format!("[{}] {} = {}:", line.section, line.key, line.value)
+    }
 }
 
 /// The same line with `value`, as the fix of a problem.
 fn fixed(line: &Line<'_>, value: &str) -> String {
     format!("{} = {value}", line.key)
+}
+
+/// Whether `a` becomes `b` by one letter more, less, changed or two neighbours swapped.
+fn one_edit_apart(a: &str, b: &str) -> bool {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    if a.len().abs_diff(b.len()) > 1 {
+        return false;
+    }
+    let common = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let (ra, rb) = (a.get(common..).unwrap_or_default(), b.get(common..).unwrap_or_default());
+    match (ra, rb) {
+        ([], []) => false,
+        ([_, rest_a @ ..], [_, rest_b @ ..]) if rest_a == rest_b => true,
+        ([_, rest_a @ ..], rb) if rest_a == rb => true,
+        (ra, [_, rest_b @ ..]) if ra == rest_b => true,
+        ([x, y, rest_a @ ..], [p, q, rest_b @ ..]) => x == q && y == p && rest_a == rest_b,
+        _ => false,
+    }
+}
+
+/// The key of `keys` a written one is near: the same letters in another case, or - for a key of
+/// four letters or more, so that `id` and `api` are not guessed at - one letter off (case aside).
+fn near_key<'k>(keys: &[&'k str], written: &str) -> Option<&'k str> {
+    keys.iter()
+        .find(|k| k.eq_ignore_ascii_case(written))
+        .or_else(|| {
+            let lower = written.to_ascii_lowercase();
+            keys.iter().find(|k| k.chars().count() >= 4 && one_edit_apart(k, &lower))
+        })
+        .copied()
 }
 
 /// A lower-case spelling the key takes, when the one written is no word of it.
@@ -404,6 +513,29 @@ fn value_problems(line: &Line<'_>, doc_section: &'static SectionDoc, out: &mut V
     let Some(doc) = key_of(doc_section, line.key) else {
         // only the sections an area reads keep a closed list of keys; the others keep what they
         // do not know, as written
+        // a key of the module's own sections is kept whatever it is, but one that looks like a
+        // key of this page is most likely that key misspelled
+        if doc_section.reader == Reader::Manifest && matches!(doc_section.name, "module" | "provides_mode") {
+            let keys: Vec<&str> = doc_section.keys.iter().map(|k| k.key).collect();
+            if let Some(near) = near_key(&keys, line.key) {
+                let case = near.eq_ignore_ascii_case(line.key);
+                let text = if case {
+                    format!(
+                        "[{}] {}: keys are read exactly as spelled, and the key of this page is '{near}'. This one is kept as written and read by nobody.",
+                        line.section, line.key
+                    )
+                } else {
+                    format!(
+                        "[{}] {}: no reader takes this key. It is kept as written and the game ignores it; the key of this page that it looks like is '{near}'.",
+                        line.section, line.key
+                    )
+                };
+                let p = Problem::warning("mod.key", text)
+                    .with_fix(fixed(line, line.value).replacen(line.key, near, 1))
+                    .in_field(format!("{}.{}", line.lower, line.key));
+                out.push(line.place(p));
+            }
+        }
         if matches!(doc_section.reader, Reader::World | Reader::Screens) {
             let keys: Vec<&str> =
                 doc_section.keys.iter().map(|k| k.key).filter(|k| !k.starts_with('<')).collect();
@@ -429,7 +561,11 @@ fn value_problems(line: &Line<'_>, doc_section: &'static SectionDoc, out: &mut V
         return;
     };
     let value = trim(line.value);
-    if value.is_empty() || doc.check == Check::Id || doc.check == Check::OwnModeId {
+    // an empty value is the key left out, except where the editor refuses it (the version)
+    if (value.is_empty() && doc.check != Check::Version)
+        || doc.check == Check::Id
+        || doc.check == Check::OwnModeId
+    {
         return;
     }
     let field = format!("{}.{}", line.lower, doc.key);
@@ -457,6 +593,12 @@ fn value_problems(line: &Line<'_>, doc_section: &'static SectionDoc, out: &mut V
             let fix = match check {
                 Check::Repo => Some(normalize_github_repo(value)).filter(|r| validate_github_repo(r)),
                 Check::Flag | Check::Choice(_) | Check::Target => lowered(check, value),
+                // the game takes a number outside the range as the nearest end
+                Check::Range(lo, hi) => value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|x| x.is_finite())
+                    .map(|x| x.clamp(f64::from(lo), f64::from(hi)).to_string()),
                 _ => None,
             };
             if let Some(f) = fix {
@@ -508,6 +650,37 @@ fn tag_problems(line: &Line<'_>, field: &str, out: &mut Vec<Problem>) {
             p = p.with_fix(fixed(line, &all.join(", ")));
         }
         out.push(line.place(p));
+    }
+}
+
+/// What the game takes as the id of a screen or a track: lower case letters, digits and `_`.
+fn plain_id(id: &str) -> bool {
+    !id.is_empty() && id.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
+}
+
+/// The problems of the ids in `[screen.<id>]` and `[track.<id>]` headers: the game reads the
+/// section name without case and drops a screen or a track whose id holds anything but `a-z`,
+/// `0-9` and `_`.
+fn section_id_problems(headers: &[(String, Header)], out: &mut Vec<Problem>) {
+    for (lower, h) in headers {
+        let Some((kind, id)) = lower.split_once('.').filter(|(k, _)| matches!(*k, "screen" | "track")) else {
+            continue;
+        };
+        if id.is_empty() || plain_id(id) {
+            continue;
+        }
+        let made: String =
+            id.chars().map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() { c } else { '_' }).collect();
+        let p = Problem::warning(
+            "mod.section_id",
+            format!(
+                "[{}]: the id of a {kind} takes a-z, 0-9 and _. The game drops this {kind} as it stands; screens.set would call it {made}.",
+                h.written
+            ),
+        )
+        .with_fix(format!("[{kind}.{made}]"))
+        .in_field(lower.as_str());
+        out.push(p.at(h.number, h.column, h.number, h.column + 1));
     }
 }
 
@@ -597,6 +770,7 @@ pub fn validate(doc: &ManifestDoc) -> Vec<Problem> {
         }
     }
     var_problems(&lines, &mut out);
+    section_id_problems(&headers, &mut out);
     out.sort_by_key(|p| (p.line.unwrap_or(0), p.column.unwrap_or(0), p.severity));
     if let Some(file) = file {
         for p in &mut out {
@@ -743,7 +917,7 @@ mod tests {
     #[test]
     fn one_wrong_value_per_rule_gives_its_problem_at_its_line_with_its_code() {
         // (the lines after the three of `with`, the code, the line it is at, what it names)
-        let cases: [(&str, &str, u32, &str); 12] = [
+        let cases: [(&str, &str, u32, &str); 11] = [
             ("version = v1.2-beta\r\n", "mod.version", 4, "version takes 1 to 4 numbers"),
             (
                 "website = http://evil.example/x\r\n",
@@ -752,7 +926,6 @@ mod tests {
                 "website takes an https link on ap-pro.ru",
             ),
             ("tags = banana\r\n", "mod.tags", 4, "'banana' is no tag"),
-            ("mode = Not A Mode!\r\n", "mod.mode", 4, "mode takes a game mode id"),
             (
                 "description = \"x\"\r\n[update]\r\ngithub = not a repo\r\n",
                 "mod.github",
@@ -844,5 +1017,221 @@ mod tests {
         // an indented line: the column is the key's, not the line's
         let p = problems("[module]\r\nid = od\r\ntarget = default\r\nversion = 1.0\r\n  version = x\r\n");
         assert_eq!((p.len(), p[0].line, p[0].column), (1, Some(5), Some(3)));
+    }
+
+    #[test]
+    fn a_mode_that_is_no_mode_is_one_error_where_it_is_written() {
+        let p = problems("[module]\r\nid = od\r\ntarget = existing\r\nmode = Not A Mode!\r\n");
+        assert_eq!(codes(&p), ["mod.mode"]);
+        assert_eq!(p[0].line, Some(4));
+        assert!(p[0].message.contains("mode takes a game mode id"), "{}", p[0].message);
+    }
+
+    /// One more line after the three of [`with`], the problems it makes: code, line, words.
+    fn one(extra: &str) -> Vec<(String, u32, String)> {
+        problems(&with(extra))
+            .iter()
+            .map(|p| (p.code.to_string(), p.line.unwrap_or(0), p.message.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn the_values_the_page_lists_and_the_check_let_pass_before() {
+        // a flag, a layer's opacity, the api, an empty version: each at its line, in its words
+        let p = one("[commands]\r\nod_a = od.a\r\n[command.od_a]\r\ncheat = maybe\r\n");
+        assert_eq!((p[0].0.as_str(), p[0].1), ("mod.value", 7));
+        assert!(p[0].2.contains("cheat takes true | false"), "{}", p[0].2);
+        // the game reads these words in any case
+        assert!(one("[commands]\r\nod_a = od.a\r\n[command.od_a]\r\ncheat = True\r\n").is_empty());
+        let p = problems(&with("[screen.a]\r\nlayer = a.dds\r\nopacity = 7\r\n"));
+        assert_eq!(
+            (p[0].code.as_str(), p[0].line, p[0].fix.as_deref()),
+            ("mod.value", Some(6), Some("opacity = 1"))
+        );
+        assert!(p[0].message.contains("opacity takes 0 to 1"), "{}", p[0].message);
+        assert!(
+            one("[screen.a]\r\nlayer = a.dds\r\nopacity = 0.5\r\nweight = 2000\r\n")[0]
+                .2
+                .contains("weight takes a number, 0 to 1000")
+        );
+        assert!(one("[track.t]\r\nfile = a.ogg\r\nvolume = 1.5\r\n")[0].2.contains("volume takes 0 to 1"));
+        let p = one("api = banana\r\n");
+        assert_eq!((p[0].0.as_str(), p[0].1), ("mod.value", 4));
+        assert!(p[0].2.contains("api takes 1"), "{}", p[0].2);
+        assert!(one("api = 1\r\n").is_empty());
+        let p = problems(&with("version =\r\n"));
+        assert_eq!((p[0].code.as_str(), p[0].line), ("mod.version", Some(4)));
+        assert!(
+            p[0].message.starts_with("[module] version is empty: version takes 1 to 4 numbers"),
+            "{}",
+            p[0].message
+        );
+        // an empty value of a key that takes anything else is the key left out
+        assert!(one("tags =\r\nwebsite =\r\nmode =\r\n[update]\r\ngithub =\r\n").is_empty());
+    }
+
+    #[test]
+    fn an_id_the_game_would_drop_is_a_warning_at_its_header() {
+        let p = problems(&with(
+            "[screen.Bad Id]\r\nlayer = a.dds\r\n[track.Fine_2]\r\nfile = a.ogg\r\n[track.a-b]\r\n",
+        ));
+        assert_eq!(codes(&p), ["mod.section_id", "mod.section_id"]);
+        assert!(p.iter().all(|p| !p.is_error()));
+        assert_eq!((p[0].line, p[0].fix.as_deref()), (Some(4), Some("[screen.bad_id]")));
+        assert_eq!((p[1].line, p[1].fix.as_deref()), (Some(8), Some("[track.a_b]")));
+        assert!(
+            p[0].message.starts_with("[screen.Bad Id]: the id of a screen takes a-z, 0-9 and _."),
+            "{}",
+            p[0].message
+        );
+        // upper case is read as lower case: the game does not drop it
+        assert!(problems(&with("[Screen.Night]\r\nlayer = a.dds\r\n")).is_empty());
+    }
+
+    #[test]
+    fn a_key_near_a_key_of_the_module_is_a_warning_and_a_far_one_is_not() {
+        for (written, near) in [
+            ("versoin", "version"),
+            ("Tags", "tags"),
+            ("desciption", "description"),
+            ("webste", "website"),
+            ("authors", "author"),
+            ("MODE", "mode"),
+        ] {
+            let p = problems(&with(&format!("{written} = 2.0\r\n")));
+            assert_eq!(p.len(), 1, "{written}: {p:?}");
+            assert_eq!((p[0].code.as_str(), p[0].line), ("mod.key", Some(4)), "{written}");
+            assert_eq!(p[0].fix.as_deref(), Some(format!("{near} = 2.0").as_str()), "{written}");
+            assert!(p[0].message.contains(&format!("'{near}'")), "{}", p[0].message);
+            assert!(!p[0].is_error());
+        }
+        // far from every key, or too short to guess at: kept and said nothing about
+        assert!(one("engine_min = 1.4\r\nnotes = x\r\nap = 1\r\nids = 3\r\n").is_empty());
+        let p = problems(&with("[provides_mode]\r\nid = night\r\nTitel = x\r\nweird = 1\r\n"));
+        assert_eq!(codes(&p), ["mod.key"]);
+        assert_eq!(p[0].fix.as_deref(), Some("title = x"));
+        // another section keeps what it does not know
+        assert!(problems(&with("[update]\r\nGithub = a/b\r\n[order]\r\nafterr = x\r\n")).is_empty());
+    }
+
+    /// The problems of a manifest that states `target` and `mode` and, when `own`, a mode of its own.
+    fn pair(target: &str, mode: &str, own: bool) -> Vec<Problem> {
+        let mut text = format!("[module]\r\nid = od\r\ntarget = {target}\r\n");
+        if !mode.is_empty() {
+            text.push_str(&format!("mode = {mode}\r\n"));
+        }
+        if own {
+            text.push_str("[provides_mode]\r\nid = night\r\n");
+        }
+        problems(&text)
+    }
+
+    #[test]
+    fn a_target_and_a_mode_go_together_as_the_page_pairs_them() {
+        // the pairs that do
+        for (target, mode, own) in [
+            ("default", "", false),
+            ("existing", "night", false),
+            ("new", "", true),
+            ("new", "night", true),
+            ("any", "*", false),
+            ("any", "*", true),
+            ("Default", "", false),
+        ] {
+            let p = pair(target, mode, own);
+            assert!(p.is_empty(), "{target} {mode} {own}: {p:?}");
+        }
+        // the pairs that do not: each its own code, at the target line, with the two lines said
+        let cases = [
+            (
+                "default",
+                "night",
+                false,
+                "mod.target_default",
+                "[module] target = default with mode = night: target = default is the ordinary game and goes with no mode.",
+                "target = existing",
+            ),
+            (
+                "default",
+                "*",
+                false,
+                "mod.target_default",
+                "[module] target = default with mode = *:",
+                "target = any",
+            ),
+            (
+                "existing",
+                "",
+                false,
+                "mod.target_existing",
+                "[module] target = existing with no mode: target = existing is a mode of the linked game and goes with that mode's id.",
+                "target = default",
+            ),
+            (
+                "existing",
+                "*",
+                false,
+                "mod.target_existing",
+                "[module] target = existing with mode = *:",
+                "target = any",
+            ),
+            (
+                "new",
+                "",
+                false,
+                "mod.target_new",
+                "[module] target = new with no mode: target = new is a mode the module adds and goes with a [provides_mode] section.",
+                "target = default",
+            ),
+            (
+                "new",
+                "night",
+                false,
+                "mod.target_new",
+                "[module] target = new with mode = night:",
+                "target = default",
+            ),
+            (
+                "any",
+                "night",
+                false,
+                "mod.target_any",
+                "[module] target = any with mode = night: target = any is every game and goes with mode = *.",
+                "target = existing",
+            ),
+            (
+                "any",
+                "",
+                false,
+                "mod.target_any",
+                "[module] target = any with no mode: target = any is every game and goes with mode = *.",
+                "mode = *",
+            ),
+            ("any", "", true, "mod.target_any", "[module] target = any with no mode:", "mode = *"),
+        ];
+        for (target, mode, own, code, says, fix) in cases {
+            let p = pair(target, mode, own);
+            assert_eq!(codes(&p), [code], "{target} {mode} {own}: {p:?}");
+            assert!(p[0].is_error() && p[0].line == Some(3), "{target} {mode}: {:?}", p[0]);
+            assert!(p[0].message.starts_with(says), "{}", p[0].message);
+            assert_eq!(p[0].fix.as_deref(), Some(fix), "{target} {mode}");
+        }
+        // target = any alone is no new project's "no target game mode"
+        let p = pair("any", "", false);
+        assert!(!p[0].message.contains("no target game mode") && p[0].code != "mod.target");
+        // a wrong target says that and only that; no target at all is the new project's sentence
+        assert_eq!(codes(&pair("sideways", "night", false)), ["mod.target_value"]);
+        assert_eq!(codes(&problems("[module]\r\nid = od\r\n")), ["mod.target"]);
+    }
+
+    #[test]
+    fn the_pairing_is_the_one_sentence_the_check_and_mod_set_say() {
+        let p = target_pairing("default", "night", false).unwrap();
+        let checked = pair("default", "night", false);
+        assert_eq!(checked[0].message, p.text);
+        assert!(target_pairing("existing", "night", false).is_none());
+        assert!(
+            target_pairing("", "night", false).is_none() && target_pairing("sideways", "", false).is_none()
+        );
     }
 }

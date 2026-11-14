@@ -10,7 +10,7 @@ use futures::future::BoxFuture;
 use gz_base::{Origin, Problem};
 use gz_build::{BuildCheck, BuildChecks, BuildWalk};
 use gz_editor::{Args, CmdError, Editor, Executors, NoParams, ProjectSession, Registry, Reply, Spec};
-use gz_mod::ManifestService;
+use gz_mod::{Issue, ManifestService};
 use gz_project::Project;
 use parking_lot::RwLock;
 use schemars::JsonSchema;
@@ -22,7 +22,6 @@ use crate::model::{
     Fit, HIDE_BAR, HIDE_PERCENT, HIDE_STAGE, HIDE_TIP, LOADING, Layer, MENU, PAUSE, Screen, Screens, Track,
     atof, sanitize, scan_floats, split,
 };
-use crate::validate::validate;
 
 pub fn register(reg: &mut Registry) {
     reg.area("screens", "The module's loading and menu screens and their music ([screens] of mod.ltx)");
@@ -83,7 +82,8 @@ enum SetAction {
 #[serde(deny_unknown_fields)]
 struct SetParams {
     action: SetAction,
-    /// The screen or the track; for screen_add and track_add the wanted id.
+    /// The screen or the track; for screen_add and track_add the wanted id, made of a-z, 0-9 and _
+    /// (anything else becomes _).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     id: Option<String>,
     /// Policy: loading or menu.
@@ -107,29 +107,31 @@ struct SetParams {
     /// A screen: the game modes it shows in; empty: every mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     modes: Option<Vec<String>>,
-    /// A screen or a track: how often it is picked beside the others.
+    /// A screen or a track: how often it is picked beside the others, 0 to 1000.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     weight: Option<f32>,
     /// A screen: what of the game's loading screen it hides (bar, percent, stage, tip).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hide: Option<String>,
-    /// A screen: its new id.
+    /// A screen: its new id, made of a-z, 0-9 and _ (anything else becomes _).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     new_id: Option<String>,
     /// A layer or a track: its file, from anywhere (brought into screens\ when it is outside the
-    /// project); empty clears a layer's.
+    /// project); empty clears a layer's. A layer takes a picture, a GIF, a video, a shader or an HTML
+    /// page (a PNG, JPG, TGA or BMP becomes a .dds); a track takes an .ogg sound and nothing else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     file: Option<String>,
-    /// A shader layer: its texture.
+    /// A shader layer: its texture (a .dds).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     texture: Option<String>,
-    /// A layer: cover, contain, stretch or none.
+    /// A layer: cover (cut to fit), contain (whole) or stretch (pulled).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fit: Option<String>,
-    /// A layer: 0..1.
+    /// A layer: 0 to 1; a number outside it is cut to the nearest end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     opacity: Option<f32>,
-    /// A layer: its rectangle x, y, w, h in shares of the screen.
+    /// A layer: its place as x, y, width, height in per cent of the screen; [0, 0, 100, 100] (the
+    /// whole screen) when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     rect: Option<[f32; 4]>,
     /// A video layer: whether its sound plays.
@@ -144,7 +146,7 @@ struct SetParams {
     /// A track: the surfaces it plays on (loading, menu, pause).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     play: Option<String>,
-    /// A track: 0..1.
+    /// A track: how loud, 0 to 1; a number outside it is cut to the nearest end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     volume: Option<f32>,
 }
@@ -198,22 +200,30 @@ impl GameLevels {
     }
 }
 
-/// The problems of `s` in the open project, on the IO pool.
+/// The problems of `s` in the open project, on the IO pool, each with the section and the key
+/// it is about.
+pub async fn issues(
+    editor: &Arc<Editor>,
+    root: PathBuf,
+    manifest: &Arc<ManifestService>,
+    s: Screens,
+) -> Vec<Issue> {
+    let levels = GameLevels::of(editor).levels(editor).await;
+    let manifest = manifest.clone();
+    editor
+        .exec
+        .io(move || crate::validate::issues(&root, &s, &|rel| manifest.outside_build(rel), levels.as_deref()))
+        .await
+}
+
+/// The problems of `s` in the open project as lines, each starting with its code.
 pub async fn problems(
     editor: &Arc<Editor>,
     root: PathBuf,
     manifest: &Arc<ManifestService>,
     s: Screens,
 ) -> Vec<String> {
-    let levels = GameLevels::of(editor).levels(editor).await;
-    let manifest = manifest.clone();
-    editor.exec.io(move || validate(&root, &s, &|rel| manifest.outside_build(rel), levels.as_deref())).await
-}
-
-/// A coded line as a problem: its code, the rest its message.
-fn as_problem(line: &str) -> Problem {
-    let (code, message) = line.split_once(' ').unwrap_or((line, ""));
-    if code.starts_with('E') { Problem::error(code, message) } else { Problem::warning(code, message) }
+    issues(editor, root, manifest, s).await.iter().map(Issue::line).collect()
 }
 
 struct ScreensCheck;
@@ -243,11 +253,7 @@ impl BuildCheck for ScreensCheck {
             let snap = manifest.snapshot();
             let Some(doc) = snap.doc() else { return Vec::new() };
             let s = Screens::parse(doc);
-            problems(&editor, session.root.clone(), &manifest, s)
-                .await
-                .iter()
-                .map(|l| as_problem(l))
-                .collect()
+            issues(&editor, session.root.clone(), &manifest, s).await.iter().map(Issue::problem).collect()
         })
     }
 }
@@ -438,6 +444,18 @@ async fn drop_surface(ed: &Arc<Editor>, args: &Args) -> bool {
         && view.get("surface").and_then(Value::as_str) == Some("menu")
 }
 
+/// A refusal when `value` names something `key` does not take: the words are separated by commas
+/// and read without case, as the game reads them; the game would drop the others silently.
+fn words_refusal(key: &str, value: &str, allowed: &[&str]) -> Option<String> {
+    let bad = split(value, ',').into_iter().find(|w| !allowed.iter().any(|a| a.eq_ignore_ascii_case(w)))?;
+    Some(format!("{key} takes {} (comma separated), not '{bad}'", allowed.join(", ")))
+}
+
+/// The last part of a path as given.
+fn leaf(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
+}
+
 /// Everything an action needs while it runs on the IO pool.
 struct Cx<'a> {
     root: &'a str,
@@ -463,6 +481,11 @@ impl Cx<'_> {
         if let Some(v) = arg(self.args, "file") {
             if v.is_empty() {
                 l.file.clear();
+            } else if file_kind(&v) == FileKind::Music {
+                self.err = format!(
+                    "a layer shows a picture, a GIF, a video, a shader or an HTML page, not {}: music goes into a track (action=track_add)",
+                    leaf(&v)
+                );
             } else if let Some(rel) = self.import(&v) {
                 l.file = rel;
             }
@@ -475,7 +498,11 @@ impl Cx<'_> {
             }
         }
         if let Some(v) = arg(self.args, "fit") {
-            l.fit = Fit::parse(&v);
+            if matches!(v.as_str(), "cover" | "contain" | "stretch") {
+                l.fit = Fit::parse(&v);
+            } else {
+                self.err = format!("fit takes cover, contain or stretch, not '{v}'");
+            }
         }
         if let Some(f) = arg_float(self.args, "opacity") {
             l.opacity = f.clamp(0.0, 1.0);
@@ -492,7 +519,10 @@ impl Cx<'_> {
 
     fn apply_screen(&mut self, d: &mut Screen, others: &Screens) {
         if let Some(v) = arg(self.args, "show") {
-            d.show = parse_surfaces(&v);
+            match words_refusal("show", &v, &["loading", "menu", "pause"]) {
+                Some(why) => self.err = why,
+                None => d.show = parse_surfaces(&v),
+            }
         }
         if let Some(v) = arg(self.args, "levels") {
             d.levels = split(&v, ',');
@@ -501,7 +531,7 @@ impl Cx<'_> {
             d.modes = split(&v, ',');
         }
         if let Some(f) = arg_float(self.args, "weight") {
-            d.weight = f.max(0.0);
+            d.weight = f.clamp(0.0, 1000.0);
         }
         if let Some(v) = arg(self.args, "music") {
             d.tracks.clear();
@@ -512,7 +542,11 @@ impl Cx<'_> {
                 d.tracks = split(&v, ',');
             }
         }
-        if let Some(v) = arg(self.args, "hide") {
+        if let Some(why) = arg(self.args, "hide")
+            .and_then(|v| words_refusal("hide", &v, &["bar", "percent", "stage", "tip"]))
+        {
+            self.err = why;
+        } else if let Some(v) = arg(self.args, "hide") {
             d.hide = [("bar", HIDE_BAR), ("percent", HIDE_PERCENT), ("stage", HIDE_STAGE), ("tip", HIDE_TIP)]
                 .into_iter()
                 .filter(|(n, _)| v.contains(n))
@@ -531,16 +565,22 @@ impl Cx<'_> {
     }
 
     fn apply_track(&mut self, t: &mut Track) {
-        if let Some(v) = arg(self.args, "file")
-            && let Some(rel) = self.import(&v)
-        {
-            t.file = rel;
+        // before anything is copied or converted: a picture is no track
+        if let Some(v) = arg(self.args, "file") {
+            if file_kind(&v) != FileKind::Music {
+                self.err = format!("a track takes an .ogg sound, not {}", leaf(&v));
+            } else if let Some(rel) = self.import(&v) {
+                t.file = rel;
+            }
         }
         if let Some(v) = arg(self.args, "play") {
-            t.play = parse_surfaces(&v);
+            match words_refusal("play", &v, &["loading", "menu", "pause"]) {
+                Some(why) => self.err = why,
+                None => t.play = parse_surfaces(&v),
+            }
         }
         if let Some(f) = arg_float(self.args, "weight") {
-            t.weight = f.max(0.0);
+            t.weight = f.clamp(0.0, 1000.0);
         }
         if let Some(f) = arg_float(self.args, "volume") {
             t.volume = f.clamp(0.0, 1.0);
@@ -607,6 +647,15 @@ fn run(cx: &mut Cx<'_>, s: &mut Screens) -> Result<(), String> {
                 "menu" => 1,
                 _ => return Err("surface must be loading or menu".to_owned()),
             };
+            for (key, words) in
+                [("screens", ["only", "mix"]), ("music", ["only", "mix"]), ("end", ["loop", "next"])]
+            {
+                if let Some(v) = arg(cx.args, key)
+                    && !words.contains(&v.as_str())
+                {
+                    return Err(format!("{key} takes {} or {}, not '{v}'", words[0], words[1]));
+                }
+            }
             if let Some(v) = arg(cx.args, "screens")
                 && let Some(slot) = s.only_screens.get_mut(side)
             {

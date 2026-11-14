@@ -19,7 +19,8 @@
 //!   the caller's pool), `gz-entities` for a level changer's destination.
 //! - [`starts`] - [`Start`], [`starts::read_starts`]: the `op = start` entries of a spawn layer.
 //! - [`validate`] - [`validate::validate`]: `E201`, `E202`, `W203`..`W206`, `E207`, `W208` with
-//!   their messages.
+//!   their messages. [`validate::issues`] the same with the section and
+//!   the key of `mod.ltx` each is about, which the manifest's check puts at their lines.
 //!
 //! # The service and the commands
 //!

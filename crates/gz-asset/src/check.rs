@@ -10,6 +10,8 @@ use gz_editor::{CmdError, Editor};
 use gz_project::{Project, is_editor_only_entry, is_tooling_entry};
 use serde::Serialize;
 
+use gz_mod::{ManifestDoc, Spot};
+
 use crate::file;
 use crate::kinds::Kinds;
 
@@ -136,54 +138,44 @@ pub async fn check_file(editor: &Arc<Editor>, path: &RelPath) -> Vec<Problem> {
     out
 }
 
-/// The line of `[section]` and of `key` in it, in a manifest's text (1-based).
-fn ltx_line(text: &str, section: &str, key: Option<&str>) -> Option<(u32, u32)> {
-    let mut in_section = false;
-    let mut section_line = None;
-    for (i, raw) in text.lines().enumerate() {
-        let line = raw.trim();
-        let n = u32::try_from(i + 1).unwrap_or(u32::MAX);
-        if let Some(rest) = line.strip_prefix('[') {
-            let name = rest.split(']').next().unwrap_or("").trim();
-            in_section = name.eq_ignore_ascii_case(section);
-            if in_section {
-                section_line = Some((n, u32::try_from(raw.len() - raw.trim_start().len() + 1).unwrap_or(1)));
-                if key.is_none() {
-                    return section_line;
-                }
-            }
-            continue;
-        }
-        if in_section
-            && let Some(k) = key
-            && line.split(['=', ' ', '\t']).next().is_some_and(|x| x.eq_ignore_ascii_case(k))
-        {
-            return Some((n, u32::try_from(raw.len() - raw.trim_start().len() + 1).unwrap_or(1)));
-        }
-    }
-    section_line
-}
-
-/// Puts a manifest problem at the line it is about: `mod.<key>` codes in `[module]`, a
-/// command's problems at its section, an area's at the section it reads.
-fn place_manifest(p: Problem, text: &str, section: &str) -> Problem {
-    let (sec, key): (String, Option<String>) = if let Some(k) = p.code.strip_prefix("mod.") {
-        ("module".into(), Some(k.to_owned()))
+/// Puts a manifest problem at the line it is about, from the document's own lines: a `mod.<key>`
+/// code at its key of `[module]`, a command's problems at its section, `[pda] layout` at its
+/// key, and an area's at the [`Spot`] it names (a key of its section, a layer's key, or the
+/// section's header for a problem about the whole section); a problem that names nothing goes to
+/// the header of the section its check reads.
+fn place_manifest(p: Problem, doc: &ManifestDoc, section: &str) -> Problem {
+    let spot = if let Some(spot) = Spot::of(&p) {
+        spot
+    } else if let Some(k) = p.code.strip_prefix("mod.") {
+        Spot::key("module", k)
     } else if p.field.as_deref() == Some("commands")
         && let Some(s) = &p.subject
     {
-        (format!("command.{s}"), None)
+        Spot::section(&format!("command.{s}"))
     } else if let Some((s, k)) = p.field.as_deref().and_then(|f| f.split_once('.')) {
-        (s.to_owned(), Some(k.to_owned()))
+        Spot::key(s, k)
     } else {
-        (section.to_owned(), p.field.as_ref().map(ToString::to_string))
+        match p.field.as_deref() {
+            Some(k) => Spot::key(section, k),
+            None => Spot::section(section),
+        }
     };
-    let at = ltx_line(text, &sec, key.as_deref())
-        .or_else(|| ltx_line(text, section, None))
-        .or_else(|| ltx_line(text, "module", None));
-    let p = p.in_file(RelPath::new(MANIFEST).unwrap_or_else(|_| RelPath::root()));
+    let at = doc
+        .locate(&spot)
+        .or_else(|| doc.locate(&Spot::section(section)))
+        .or_else(|| doc.locate(&Spot::section("module")));
+    let mut p = p.in_file(RelPath::new(MANIFEST).unwrap_or_else(|_| RelPath::root()));
+    // the carrier has done its work: the problem names its key the way the manifest's own do
+    if Spot::of(&p).is_some() {
+        p.subject = None;
+        p.field = spot
+            .key
+            .as_deref()
+            .or(spot.scope.as_ref().map(|(k, _)| k.as_str()))
+            .map(|k| format!("{}.{k}", spot.section).into());
+    }
     match at {
-        Some((line, col)) => p.at(line, col, line, col + 1),
+        Some(place) => place.put(p),
         None => p,
     }
 }
@@ -207,10 +199,10 @@ pub async fn check_manifest(editor: &Arc<Editor>) -> Vec<Problem> {
     let Ok(session) = editor.project() else { return Vec::new() };
     let file = session.root.join(MANIFEST);
     let probe = file.clone();
-    let text = editor.exec.io(move || std::fs::read_to_string(probe).ok()).await;
-    let Some(text) = text else {
+    let readable = editor.exec.io(move || std::fs::metadata(probe).is_ok_and(|m| m.is_file())).await;
+    if !readable {
         return vec![Problem::error("mod.ltx", "the project has no mod.ltx: it is no module")];
-    };
+    }
     let Ok(service) = gz_mod::ManifestService::of_session(editor, &session).await else { return Vec::new() };
     let _ = service.sync().await;
     let snap = service.snapshot();
@@ -219,9 +211,9 @@ pub async fn check_manifest(editor: &Arc<Editor>) -> Vec<Problem> {
     let doc = snap.doc().cloned().unwrap_or_default();
     let mut out: Vec<Problem> = gz_mod::validate(&doc);
     let (_, commands) = gz_mod::command_check(editor, &session, m).await;
-    out.extend(commands.into_iter().map(|p| place_manifest(p, &text, "commands")));
+    out.extend(commands.into_iter().map(|p| place_manifest(p, &doc, "commands")));
     for check in Kinds::of(editor).manifest_checks() {
-        out.extend(check(editor.clone()).await.into_iter().map(|p| place_manifest(p, &text, "module")));
+        out.extend(check(editor.clone()).await.into_iter().map(|p| place_manifest(p, &doc, "module")));
     }
     if let Some(project) = session.services.get::<Project>() {
         let kinds = Kinds::of(editor);
@@ -240,7 +232,7 @@ pub async fn check_manifest(editor: &Arc<Editor>) -> Vec<Problem> {
             .await;
             for (c, problems) in areas.iter().zip(found) {
                 let section = section_of(c.stage());
-                out.extend(problems.into_iter().map(|p| place_manifest(p, &text, section)));
+                out.extend(problems.into_iter().map(|p| place_manifest(p, &doc, section)));
             }
         }
     }
@@ -279,6 +271,43 @@ pub async fn run(editor: &Arc<Editor>, path: Option<&RelPath>) -> Result<Report,
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_manifest_problem_is_put_at_the_line_its_spot_names() {
+        let doc = ManifestDoc::parse(
+            "[module]
+id = od
+version = x
+[pda]
+layout = a.pdaasset
+[screen.a]
+layer = a.dds
+  layer = b.dds
+[command.s]
+help = x
+",
+        );
+        let at = |p: Problem, section: &str| {
+            let p = place_manifest(p, &doc, section);
+            (p.line, p.column, p.file.map(|f| f.as_str().to_owned()))
+        };
+        let file = Some("mod.ltx".to_owned());
+        // an area names the layer: its own line, with the key's column
+        let layer = Spot::within("screen.a", "layer", 1, None).mark(Problem::error("E401", "x"));
+        let placed = place_manifest(layer.clone(), &doc, "screens");
+        assert_eq!((placed.subject, placed.field.as_deref()), (None, Some("screen.a.layer")));
+        assert_eq!(at(layer, "screens"), (Some(8), Some(3), file.clone()));
+        // a whole section: its header
+        let section = Spot::section("screen.a").mark(Problem::warning("W406", "x"));
+        assert_eq!(at(section, "screens"), (Some(6), Some(1), file.clone()));
+        // the older ways to say it
+        assert_eq!(at(Problem::error("mod.version", "x"), "module").0, Some(3));
+        assert_eq!(at(Problem::error("pda", "x").in_field("pda.layout"), "module").0, Some(5));
+        assert_eq!(at(Problem::error("E405", "x").about("s").in_field("commands"), "commands").0, Some(9));
+        // what names nothing is at the header of the section its check reads, else the module's
+        assert_eq!(at(Problem::error("E201", "x"), "world").0, Some(1));
+        assert_eq!(at(Problem::error("E000", "x"), "screens").0, Some(1));
+    }
 
     #[test]
     fn the_editors_scratch_is_no_content_unless_asked_for() {

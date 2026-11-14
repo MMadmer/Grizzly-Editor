@@ -54,12 +54,17 @@ pub enum Check {
     Description,
     /// `true`, `false`, `1`, `0`, `yes`, `no`, `on`, `off`.
     Flag,
+    /// The same words in any case: the game compares them without case.
+    FlagAnyCase,
     /// One of these words.
     Choice(&'static [&'static str]),
     /// Comma separated words, each one of these.
     Words(&'static [&'static str]),
     /// A number.
     Number,
+    /// A number from the first to the second, both included: the game takes anything outside
+    /// as the nearest end.
+    Range(i32, i32),
     /// A whole number.
     Count,
     /// Four numbers: x, y, width, height.
@@ -181,7 +186,7 @@ pub const SECTIONS: &[SectionDoc] = &[
                 "1",
                 "1 in a new project",
                 "The version of this file's format the module is written for.",
-            ),
+            ).judged(Check::Choice(&["1"])),
             key(
                 "target",
                 "default | existing | new | any",
@@ -345,7 +350,8 @@ pub const SECTIONS: &[SectionDoc] = &[
                 "empty",
                 "What the command takes: shown by help and as the hint while typing.",
             ),
-            key("cheat", "true | false", "false", "True: runs only in the game's debug mode."),
+            key("cheat", "true | false", "false", "True: runs only in the game's debug mode.")
+                .judged(Check::FlagAnyCase),
         ],
     },
     SectionDoc {
@@ -448,10 +454,10 @@ pub const SECTIONS: &[SectionDoc] = &[
             key("modes", "game mode ids, comma separated", "empty: every game", "Only in these game modes."),
             key(
                 "weight",
-                "a number",
+                "a number, 0 to 1000",
                 "1",
                 "How often it comes up against the others of the pool; the game's own screen weighs 1.",
-            ).judged(Check::Number),
+            ).judged(Check::Range(0, 1000)),
             key(
                 "music",
                 "any | none | video | track ids, comma separated",
@@ -479,7 +485,7 @@ pub const SECTIONS: &[SectionDoc] = &[
                 "cover",
                 "How a picture fills its place: cut to fit, whole, or pulled.",
             ).judged(Check::Choice(FIT_WORDS)),
-            key("opacity", "0 to 1", "1", "How solid the layer is.").judged(Check::Number),
+            key("opacity", "0 to 1", "1", "How solid the layer is.").judged(Check::Range(0, 1)),
             key("rect", "x y width height, per cent of the screen", "0 0 100 100", "The layer's place.").judged(Check::Rect),
             key("texture", "a project-relative .dds", "empty", "What a shader layer gets as its picture."),
             key("sound", "true | false", "true", "False keeps a video layer quiet.").judged(Check::Flag),
@@ -490,15 +496,16 @@ pub const SECTIONS: &[SectionDoc] = &[
         reader: Reader::Screens,
         summary: "One music track. The id takes a-z, 0-9 and _; a screen's music key names it.",
         keys: &[
-            key("file", "a project-relative sound file", "required", "The track."),
+            key("file", "a project-relative .ogg file", "required", "The track: the game plays .ogg only."),
             key(
                 "play",
                 SURFACES,
                 "empty: only where a screen names it",
                 "The surfaces whose shuffle it joins.",
             ).judged(Check::Words(SURFACE_WORDS)),
-            key("weight", "a number", "1", "How often it comes up against the others.").judged(Check::Number),
-            key("volume", "a number", "1", "How loud.").judged(Check::Number),
+            key("weight", "a number, 0 to 1000", "1", "How often it comes up against the others.")
+                .judged(Check::Range(0, 1000)),
+            key("volume", "0 to 1", "1", "How loud.").judged(Check::Range(0, 1)),
         ],
     },
 ];
@@ -591,9 +598,11 @@ Writing it
     it with asset.check path=mod.ltx (Grizzly-Cmd.exe check mod.ltx).
   - The check reads every value this page lists. A wrong one is an error at its line, and the build
     refuses it. A key that [world], [start_kit], [screens], [screen.<id>] or [track.<id>] do not read,
-    and a value they do not read as written, are warnings: the build goes on and the game ignores
-    them. What is written in a section the editor keeps ([budget], [redirects], any other) is left
-    as it is and never reported.
+    a value they do not read as written, an id of a [screen.<id>] or [track.<id>] section that takes
+    other characters than a-z, 0-9 and _, and a key of [module] or [provides_mode] spelled like one
+    of this page's in another case or one letter off, are warnings: the build goes on and the game
+    ignores them. What is written in a section the editor keeps ([budget], [redirects], any other)
+    is left as it is and never reported.
 
 First, the target: a module is for ONE game
   A finished module states which game it is for, and the build refuses one that does not. Pick one:
@@ -601,6 +610,8 @@ First, the target: a module is for ONE game
     a mode of the game   [module] target = existing   and   mode = <id>   (ids at the end of this page)
     a mode of its own    [module] target = new        and a [provides_mode] section with id = <id>
     every game, classic  [module] target = any        and   mode = *
+  The two lines go together, and the check and mod.set refuse a pair that does not: default takes no
+  mode; existing takes a mode id (not *); new takes a [provides_mode]; any takes mode = *.
   mod.set sets them: mod.set set={\"module\":{\"target\":\"default\"}} (setting mode also sets target
   to existing, and a [provides_mode] to new, unless target is given).
 ";
@@ -853,6 +864,16 @@ mod tests {
                             assert!(k.values.contains(w), "[{}] {}: {w}", s.name, k.key);
                         }
                     }
+                    // the range the check holds is the one the page says
+                    Check::Range(lo, hi) => {
+                        assert!(
+                            k.values.contains(&format!("{lo} to {hi}")),
+                            "[{}] {}: {}",
+                            s.name,
+                            k.key,
+                            k.values
+                        );
+                    }
                     _ => {}
                 }
             }
@@ -863,6 +884,9 @@ mod tests {
                 && !accepts(Check::Words(WORLD_RULES), "mutant")
         );
         assert!(accepts(Check::Flag, "off") && !accepts(Check::Flag, "Off"));
+        assert!(accepts(Check::FlagAnyCase, "Off") && !accepts(Check::FlagAnyCase, "maybe"));
+        assert!(accepts(Check::Range(0, 1), "0.5") && accepts(Check::Range(0, 1), "1"));
+        assert!(!accepts(Check::Range(0, 1), "7") && !accepts(Check::Range(0, 1), "x"));
     }
 
     #[test]

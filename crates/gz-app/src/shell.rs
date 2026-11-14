@@ -894,8 +894,13 @@ impl ShellState {
         let tabs = self.dirty_tabs();
         // the scene is the Level tab's; every other document goes by its tab's kind
         let shown = |kind: &str| kind == "scene" || self.tabs.iter().any(|t| t.kind == kind && t.dirty());
-        let other =
-            self.editor.dirty_docs().into_iter().filter(|d| !shown(d.kind.as_str())).map(|d| d.name).collect();
+        let other = self
+            .editor
+            .dirty_docs()
+            .into_iter()
+            .filter(|d| !shown(d.kind.as_str()))
+            .map(|d| d.name)
+            .collect();
         (tabs, other)
     }
 

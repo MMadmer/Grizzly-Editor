@@ -257,6 +257,8 @@ async fn app_quit(editor: Arc<Editor>, p: QuitParams, origin: Origin) -> Reply {
             Err(_) => Vec::new(),
         };
         crate::unsaved::save_tabs(&editor, left, origin.may_ask()).await?;
+        // what a save left unsaved keeps the editor open: it ends only over work that is on the disk
+        editor.refuse_unsaved(false)?;
         if !dirty.is_empty() {
             out.insert("saved".into(), dirty_json(&dirty));
         }

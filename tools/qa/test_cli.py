@@ -379,6 +379,34 @@ def phase_i(work: str) -> None:
           "I a kind that is none of the two is refused with the real ones", (code, err[:300]))
 
 
+def phase_u(work: str) -> None:
+    """U: nothing saves by itself. A run that ends with unsaved work loses it, so it ends with 1 and says which on
+    stderr; the same run with its save ends with 0 and the work is in the file."""
+    home = home_of(work, "u")
+    parent = os.path.join(work, "projects_u")
+    code, out, err = cli("run", "project.create", "name=QaUnsaved", "parent=" + parent, "-json", home=home)
+    project = qa.guard_project(os.path.join(parent, "QaUnsaved"))
+    check(code == 0, "U a project made from nothing", (code, out[:200], err[:200]))
+    steps = ["scene.new", "scene.save path=maps/a.scene", "scene.place kind=light position=[0,1,0]"]
+    lost = os.path.join(work, "u_lost.txt")
+    qa.write(lost, "\n".join(steps) + "\n")
+    code, out, err = cli("script", lost, "-project", project, home=home)
+    check(code == 1 and "unsaved work" in err and "scene.save" in err,
+          "U a run that ends over an unsaved scene ends with 1 and says so on stderr", (code, err[-300:]))
+    count = os.path.join(work, "u_count.txt")
+    qa.write(count, "scene.open path=maps/a.scene\nscene.objects classes=light\n")
+    code, out, err = cli("script", count, "-project", project, "-json", home=home)
+    totals = [j.get("total") for j in jsons(out) if "total" in j]
+    check(code == 0 and totals == [0], "U and the scene's file holds nothing of it", (code, totals, err[-200:]))
+    kept = os.path.join(work, "u_kept.txt")
+    qa.write(kept, "\n".join(["scene.open path=maps/a.scene", steps[2], "scene.save path=maps/a.scene"]) + "\n")
+    code, out, err = cli("script", kept, "-project", project, home=home)
+    check(code == 0 and "unsaved work" not in err, "U the same run with its save ends with 0", (code, err[-300:]))
+    code, out, err = cli("script", count, "-project", project, "-json", home=home)
+    totals = [j.get("total") for j in jsons(out) if "total" in j]
+    check(code == 0 and totals == [1], "U and the light is in the file", (code, totals, err[-200:]))
+
+
 def phase_j(work: str) -> None:
     home = home_of(work, "j")
     parent = os.path.join(work, "projects_j")
@@ -441,6 +469,7 @@ def phase_j(work: str) -> None:
     check("reference manifest" in agents and "target = default" in agents,
           "J the project's AGENTS.md names the manifest's reference and the target", agents[:400])
     manifest_values(work, home, project)
+    manifest_rest(work, home, project)
     editors_scratch(work, home, project)
 
 
@@ -536,6 +565,103 @@ def manifest_values(work: str, home: str, project: str) -> None:
     check(code == 0 and not problems, "J the manifest put right is clean", (code, json.dumps(problems)[:300]))
 
 
+# what the page lists and the check let pass before, written by hand, one per line: (the line, the code, what it names)
+LEFT = [
+    ("version     =", "mod.version", "[module] version is empty"),
+    ("versoin     = 2.0", "mod.key", "'version'"),
+    ("Tags        = story", "mod.key", "'tags'"),
+    ("api         = banana", "mod.value", "api takes 1"),
+    ("target      = default", "mod.target_default", "[module] target = default with mode = night"),
+    ("[screen.Bad Id]", "mod.section_id", "the id of a screen takes a-z, 0-9 and _"),
+    ("layer       = art/gone.dds", "E401", "screen bad id: layer 1: the file does not exist"),
+    ("opacity     = 7", "mod.value", "opacity takes 0 to 1"),
+    ("file        = music/t.wav", "E409", "track t1: the game plays .ogg files only"),
+    ("[track.t1]", "W410", "track t1: it joins no shuffle"),
+    ("cheat       = maybe", "mod.value", "cheat takes true | false"),
+    ("wpn_knife   = 0", "E207", "start kit item 'wpn_knife' has a count of 0"),
+]
+
+
+def manifest_rest(work: str, home: str, project: str) -> None:
+    """The values the page lists and the pairs of target and mode, each named at its line; the areas' problems at
+    their key; mod.set refusing the pairs with the check's sentence."""
+    path = os.path.join(project, "mod.ltx")
+    good = qa.read(path)
+
+    def found() -> tuple[int, list[dict], str]:
+        code, out, err = cli("check", "-project", project, "-json", home=home)
+        return code, (jsons(out) or [{}])[0].get("problems", []), err
+
+    lines = ["[module]", "id          = qamanifest", "name        = QaManifest", "version     =", "versoin     = 2.0",
+             "Tags        = story", "api         = banana", "target      = default", "mode        = night",
+             "[screen.Bad Id]", "layer       = art/gone.dds", "opacity     = 7", "[track.t1]",
+             "file        = music/t.wav", "[commands]", "od_a        = od_cmd.status", "[command.od_a]",
+             "cheat       = maybe", "[start_kit]", "money       = 10", "wpn_knife   = 0"]
+    qa.write(path, "\r\n".join(lines) + "\r\n")
+    code, problems, err = found()
+    check(code == 1, "J a mod.ltx with the values the page lists and the check let pass is exit 1", (code, err[:200]))
+    for row, name, says in LEFT:
+        want = lines.index(row) + 1
+        hit = [p for p in problems if p.get("code") == name and p.get("line") == want]
+        check(len(hit) >= 1 and hit[0].get("file") == "mod.ltx" and says in hit[0].get("text", ""),
+              "J check names %s at line %d of mod.ltx" % (name, want), json.dumps(problems)[:800])
+    severity = {p.get("code"): p.get("severity") for p in problems}
+    check(severity.get("mod.version") == "error" and severity.get("mod.target_default") == "error"
+          and severity.get("mod.section_id") == "warning" and severity.get("mod.key") == "warning",
+          "J the pair and the empty version are errors, the id and the key nobody reads are warnings", severity)
+
+    # the pairs of target and mode, both ways: (the lines after [module] id, the code or None for clean, what it names)
+    base = "[module]\r\nid          = qamanifest\r\n"
+    pairs = [
+        ("target      = default\r\n", None, ""),
+        ("target      = existing\r\nmode        = night\r\n", None, ""),
+        ("target      = new\r\n[provides_mode]\r\nid          = night\r\n", None, ""),
+        ("target      = any\r\nmode        = *\r\n", None, ""),
+        ("target      = any\r\nmode        = night\r\n", "mod.target_any", "target = any with mode = night"),
+        ("target      = any\r\n", "mod.target_any", "target = any with no mode"),
+        ("target      = existing\r\n", "mod.target_existing", "target = existing with no mode"),
+        ("target      = new\r\n", "mod.target_new", "target = new with no mode"),
+    ]
+    for text, name, says in pairs:
+        qa.write(path, base + text)
+        code, problems, err = found()
+        if name is None:
+            check(code == 0 and not problems, "J the pair %r is clean" % text.split("\r\n")[0:2], (code, json.dumps(problems)[:300]))
+            continue
+        hit = [p for p in problems if p.get("code") == name and p.get("line") == 3]
+        check(code == 1 and len(problems) == 1 and len(hit) == 1 and says in hit[0].get("text", "")
+              and "no target game mode" not in hit[0].get("text", "") and hit[0].get("fix"),
+              "J %s names the pair at its target line with its fix" % name, (code, json.dumps(problems)[:400]))
+
+    # mod.set refuses the same pairs with the same sentence and writes nothing
+    qa.write(path, base + "target      = default\r\n")
+    before = qa.read(path)
+    code, out, err = cli("run", "mod.set", 'set={"module":{"mode":"*"}}', "-project", project, home=home)
+    check(code == 1 and "target = default with mode = *" in err and "goes with no mode" in err and qa.read(path) == before,
+          "J mod.set refuses a mode that does not go with the target and writes nothing", (code, err[:400]))
+    code, out, err = cli("run", "mod.set", 'set={"module":{"target":"any"}}', "-project", project, home=home)
+    check(code == 1 and "target = any with no mode" in err and qa.read(path) == before,
+          "J mod.set refuses target = any alone with the check's sentence", (code, err[:400]))
+    code, out, err = cli("run", "mod.set", 'set={"module":{"mode":"night"}}', "-project", project, "-json", home=home)
+    answer = (jsons(out) or [{}])[0]
+    check(code == 0 and answer.get("ok") and answer.get("manifest", {}).get("target") == "existing",
+          "J mod.set of a mode alone still sets the target from it", (code, out[:300], err[:200]))
+    code, problems, err = found()
+    check(code == 0 and not problems, "J and that manifest is clean", (code, json.dumps(problems)[:300]))
+    code, out, err = cli("run", "mod.set", 'set={"module":{"target":"default"}}', "-project", project, home=home)
+    check(code == 1 and "target = default with mode = night" in err,
+          "J mod.set refuses target = default while a mode is set", (code, err[:300]))
+    code, out, err = cli("run", "mod.set", 'set={"module":{"target":"default","mode":""}}', "-project", project,
+                         "-json", home=home)
+    answer = (jsons(out) or [{}])[0]
+    check(code == 0 and answer.get("ok") and answer.get("manifest", {}).get("target") == "default",
+          "J target = default with the mode taken away goes through", (code, out[:300], err[:200]))
+
+    qa.write(path, good)
+    code, problems, err = found()
+    check(code == 0 and not problems, "J the manifest put right is clean again", (code, json.dumps(problems)[:300]))
+
+
 def editors_scratch(work: str, home: str, project: str) -> None:
     """What a crashed packaging leaves under temp\\ is no quest of the module: a check of the project does not read
     it, a check asked for that folder does."""
@@ -560,7 +686,7 @@ def run(ctx: qa.Run) -> None:
     steps = {"A": lambda: phase_a(work), "B": lambda: phase_b(work), "C": lambda: phase_c(work),
              "D": lambda: phase_d(work, ctx.project), "E": lambda: phase_e(work, ctx.project),
              "F": lambda: phase_f(work), "G": lambda: phase_g(work), "H": lambda: phase_h(work, ctx.project),
-             "I": lambda: phase_i(work), "J": lambda: phase_j(work)}
+             "I": lambda: phase_i(work), "J": lambda: phase_j(work), "U": lambda: phase_u(work)}
     qa.run_phases(steps, ctx.only)
 
 

@@ -24,6 +24,7 @@ The project must have a scene of a level open at start (its last_scene).
 from __future__ import annotations
 
 import json
+import re
 import os
 import sys
 import tempfile
@@ -241,6 +242,17 @@ def run(ctx: qa.Run) -> None:
         check("W203" in probs and "qa_no_level" in probs, "B a level the game lacks is W203", probs)
         check("W204" in probs and "qa_no_changer" in probs, "B a changer the game lacks is W204", probs)
         check("W206" in probs, "B an area with no Player Start is W206", probs)
+        # the check puts each of them at the key it is about, not at [world]'s header
+        written = read(mod_ltx).splitlines()
+        line_of = lambda key: next((i + 1 for i, l in enumerate(written) if re.match(r"\s*%s\s*=" % key, l)), 0)
+        found = cmd("asset.check", path="mod.ltx").get("problems", [])
+        placed = {(p.get("code"), p.get("line")) for p in found}
+        check(line_of("levels") and ("W203", line_of("levels")) in placed,
+              "B W203 is at the levels line of mod.ltx", json.dumps([p for p in found if p.get("code") == "W203"])[:300])
+        check(line_of("locked") and ("W204", line_of("locked")) in placed,
+              "B W204 is at the locked line of mod.ltx", json.dumps([p for p in found if p.get("code") == "W204"])[:300])
+        check(line_of("area") and ("W206", line_of("area")) in placed,
+              "B W206 is at the area line of mod.ltx", json.dumps([p for p in found if p.get("code") == "W206"])[:300])
         cmd("world.set", levels="", unlock="qa_no_changer")
 
         patrols = cmd("world.lookup", type="patrols", query="agr_", limit=5)

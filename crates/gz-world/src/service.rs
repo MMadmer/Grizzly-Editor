@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use gz_base::{RelPath, Rev};
 use gz_editor::{CmdError, Editor, Executors};
 use gz_game::GameLink;
-use gz_mod::ManifestService;
+use gz_mod::{Issue, ManifestService};
 use gz_nq::{NqService, PickerType, Transition, WorldLookup};
 use gz_project::Project;
 use gz_query::Query;
@@ -18,7 +18,7 @@ use rustc_hash::FxHashMap;
 use crate::game::{GameWorld, read_all_spawn};
 use crate::model::{StartKit, World};
 use crate::starts::{Start, read_starts};
-use crate::validate::validate;
+use crate::validate::issues;
 
 /// The game file the world is read from.
 pub const ALL_SPAWN: &str = "spawns\\all.spawn";
@@ -266,9 +266,15 @@ impl WorldService {
         out
     }
 
-    /// The problems of a world and a kit in the open project, with the starts they
+    /// The problems of a world and a kit in the open project as lines, with the starts they
     /// were found among.
     pub async fn problems(&self, editor: &Editor, w: &World, k: &StartKit) -> (Vec<Start>, Vec<String>) {
+        let (starts, found) = self.issues(editor, w, k).await;
+        (starts, found.iter().map(Issue::line).collect())
+    }
+
+    /// The same problems, each with the section and the key of `mod.ltx` it is about.
+    pub async fn issues(&self, editor: &Editor, w: &World, k: &StartKit) -> (Vec<Start>, Vec<Issue>) {
         let starts = self.starts(editor).await;
         let game = self.game().await;
         // the item lookup is the pickers', and only a kit with items asks it
@@ -285,8 +291,7 @@ impl WorldService {
         let known = pickers.as_ref().map(|p| {
             move |id: &str| p.known(PickerType::Item, id) || own.as_ref().is_some_and(|o| o.has(id))
         });
-        let problems =
-            validate(w, k, &starts, Some(&game), known.as_ref().map(|f| f as &dyn Fn(&str) -> bool));
+        let problems = issues(w, k, &starts, Some(&game), known.as_ref().map(|f| f as &dyn Fn(&str) -> bool));
         (starts, problems)
     }
 }

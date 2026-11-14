@@ -191,9 +191,9 @@ fn every_documented_key_of_the_areas_with_a_value_it_takes_passes_the_check() {
         text.push_str(&format!("[{}]\r\n", s.name.replace("<id>", "x")));
         for k in s.keys.iter().filter(|k| !k.key.starts_with('<')) {
             let value = match k.check {
-                Check::Flag => "true".to_owned(),
+                Check::Flag | Check::FlagAnyCase => "true".to_owned(),
                 Check::Choice(w) | Check::Words(w) => w[0].to_owned(),
-                Check::Number | Check::Count => "1".to_owned(),
+                Check::Number | Check::Count | Check::Range(..) => "1".to_owned(),
                 Check::Rect => "0 0 100 100".to_owned(),
                 _ => "a".to_owned(),
             };

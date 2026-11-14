@@ -81,6 +81,29 @@ def run(ctx: qa.Run) -> None:
         body = text(mod)
         check("[screen.night]" in body and "layer" in body and "rect" in body and "fit               = contain" in body, "A the screen reaches mod.ltx")
 
+        # the place is said in per cent by the card, the page and the file: one unit
+        check("rect              = 10 20 30 40" in body, "A rect in per cent is written as the numbers it was given", body)
+        h = cmd("help", about="screens.set")
+        helped = json.dumps(h)
+        check("per cent of the screen" in helped and "shares" not in helped and "or none" not in helped,
+              "A the card says the unit of rect and the words of fit", helped[:600])
+        page = cmd("asset.reference", kind="manifest").get("text", "")
+        check("x y width height, per cent of the screen" in page and "0 0 100 100" in page,
+              "A the manifest's page says the same unit and the default", page[-300:])
+        a = cmd("screens.set", action="layer_set", id="night", index=0, rect=[0, 0, 50, 50])
+        check(screens(a)["night"]["layers"][0]["rect"] == [0, 0, 50, 50] and "rect              = 0 0 50 50" in text(mod),
+              "A half of the screen is 0 0 50 50 in the answer and in the file", a)
+        before = text(mod)
+        a = cmd("screens.set", action="layer_set", id="night", index=0, fit="none")
+        check(not a.get("ok") and "cover, contain or stretch" in a.get("error", "") and text(mod) == before,
+              "A a fit the page does not list is refused and nothing is written", a)
+        for params, says in (({"action": "screen_set", "id": "night", "show": "loading,banana"}, "show takes loading, menu, pause"),
+                             ({"action": "screen_set", "id": "night", "hide": "everything"}, "hide takes bar, percent, stage, tip"),
+                             ({"action": "policy", "surface": "loading", "end": "forever"}, "end takes loop or next")):
+            a = cmd("screens.set", **params)
+            check(not a.get("ok") and says in a.get("error", "") and text(mod) == before,
+                  "A a word the game would drop is refused by name: " + says, a)
+
         # ---- B: files
         ogg = write(os.path.join(outside, "rain theme.ogg"), b"OggS")
         a = cmd("screens.set", action="track_add", id="rain", file=ogg, play="loading", volume=0.7)
@@ -88,6 +111,22 @@ def run(ctx: qa.Run) -> None:
         check(t.get("file") == "screens\\rain theme.ogg" and os.path.exists(os.path.join(project, "screens", "rain theme.ogg")), "B a file from outside is copied into the project", t)
         a = cmd("screens.set", action="screen_set", id="night", music="rain")
         check(screens(a)["night"]["music"] == "tracks" and screens(a)["night"]["tracks"] == ["rain"], "A a track is tied to a screen", screens(a)["night"])
+
+        # a track takes a sound: a picture is refused before anything is converted or written
+        before = text(mod)
+        png(os.path.join(outside, "title.png"))
+        shots_before = sorted(os.listdir(os.path.join(project, "screens")))
+        a = cmd("screens.set", action="track_add", id="art", file=os.path.join(outside, "title.png"))
+        check(not a.get("ok") and "a track takes an .ogg sound, not title.png" in a.get("error", ""), "B track_add of a picture is refused in a sentence", a)
+        check(text(mod) == before and sorted(os.listdir(os.path.join(project, "screens"))) == shots_before
+              and not os.path.exists(os.path.join(project, "screens", "title.dds")),
+              "B nothing was written and nothing converted or copied", sorted(os.listdir(os.path.join(project, "screens"))))
+        a = cmd("screens.set", action="track_set", id="rain", file=os.path.join(outside, "title.png"))
+        check(not a.get("ok") and "an .ogg sound" in a.get("error", "") and text(mod) == before,
+              "B track_set of a picture is refused too", a)
+        a = cmd("screens.set", action="layer_add", id="night", file=ogg)
+        check(not a.get("ok") and "music goes into a track" in a.get("error", "") and text(mod) == before,
+              "B a sound is no layer: refused and pointed at the track", a)
 
         png(os.path.join(outside, "title.png"))
         a = cmd("screens.set", action="layer_add", id="night", file=os.path.join(outside, "title.png"))

@@ -8,7 +8,7 @@ use futures::future::BoxFuture;
 use gz_base::{Origin, Problem};
 use gz_build::{BuildCheck, BuildChecks, BuildWalk};
 use gz_editor::{Args, CmdError, Editor, NoParams, ProjectSession, Registry, Reply, Spec};
-use gz_mod::{Edit, Manifest, ManifestDoc, ManifestFields};
+use gz_mod::{Edit, Issue, Manifest, ManifestDoc, ManifestFields};
 use gz_project::ProjectHooks;
 use gz_screens::GameLevels;
 use schemars::JsonSchema;
@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use crate::game::GameWorld;
 use crate::model::{KitItem, MAX_PLAYER_CHOICES, RULES, StartKit, World, base_kit, rule_index, toggle};
 use crate::service::WorldService;
-use crate::starts::{Start, fixed3, starts_json};
+use crate::starts::{fixed3, starts_json};
 
 /// The game file the base kit comes from.
 const FACTION_LOADOUTS: &str = "configs\\plugins\\faction_loadouts.ltx";
@@ -76,7 +76,8 @@ struct SetParams {
     /// Keep the story quests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     story_quests: Option<bool>,
-    /// The rules the new-game screen lets the player decide (three at most), the whole list.
+    /// The rules the new-game screen lets the player decide, by name (original_npcs, random_stalkers,
+    /// mutants, npc_quests, story_quests), three at most; the whole list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     player_choice: Option<Vec<String>>,
     /// The levels the rules apply on; empty: every level.
@@ -503,12 +504,6 @@ async fn world_lookup(ed: Arc<Editor>, p: LookupParams, _origin: Origin) -> Repl
 
 // ---- the build ------------------------------------------------------------------------------
 
-/// A coded line as a problem: its code, the rest its message.
-fn as_problem(line: &str) -> Problem {
-    let (code, message) = line.split_once(' ').unwrap_or((line, ""));
-    if code.starts_with('E') { Problem::error(code, message) } else { Problem::warning(code, message) }
-}
-
 /// A second Player Start or a fourth new-game choice is a decision the game would make for the
 /// author (the first start wins, the fourth row never shows) - refused; a level or transition the
 /// game lacks is a warning.
@@ -530,8 +525,8 @@ impl BuildCheck for WorldCheck {
             let snap = svc.manifest().snapshot();
             let Some(doc) = snap.doc() else { return Vec::new() };
             let (w, k) = (World::parse(doc), StartKit::parse(doc));
-            let (_, problems): (Vec<Start>, Vec<String>) = svc.problems(&editor, &w, &k).await;
-            problems.iter().map(|p| as_problem(p)).collect()
+            let (_, found) = svc.issues(&editor, &w, &k).await;
+            found.iter().map(Issue::problem).collect()
         })
     }
 }

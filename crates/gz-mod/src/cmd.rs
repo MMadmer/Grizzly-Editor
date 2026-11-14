@@ -16,7 +16,9 @@ use serde_json::{Map, Value, json};
 use crate::doc::{ManifestDoc, entry_line};
 use crate::edit::Edit;
 use crate::model::{Command, GlobalVar, Manifest, ProvidesMode};
-use crate::rules::{global_name_refusal, global_twice, normalize_github_repo, parse_flag, refusal, validate};
+use crate::rules::{
+    global_name_refusal, global_twice, normalize_github_repo, parse_flag, refusal, target_pairing, validate,
+};
 use crate::service::{ArgCx, ManifestArgs, ManifestFields, ManifestService, ManifestState, command_check};
 use crate::text::{display_value, split_list, trim};
 use crate::{commands, io};
@@ -171,7 +173,8 @@ struct SetParams {
     /// words), disable_game_updates (true | false), and the target: `target` is `default` (the
     /// ordinary game), `existing` (a mode of the linked game, with `mode`: its id), `new` (a mode
     /// the module adds, with `provides_mode`) or `any` (every game, with `mode` = `*`). Setting
-    /// a mode id or `provides_mode` also sets `target` unless it is given; `mode` = `*` needs `target` = `any`. `update`: github
+    /// a mode id or `provides_mode` also sets `target` unless it is given; `mode` = `*` needs `target` = `any`,
+    /// and a target and a mode that do not go together as above are refused. `update`: github
     /// (owner/repo). `order`: after, before (module ids, a list). `requires`, `conflicts`,
     /// `exclude`: the whole list, one entry per line or an array. `vars`: {name: default}.
     /// `provides_mode`: {id, title} (an empty id drops it). `pda`: {layout} (a project-relative
@@ -560,6 +563,22 @@ async fn mod_set(ed: Arc<Editor>, p: SetParams, origin: Origin) -> Reply {
 
     if let Some(why) = refusal("module", "id", &id) {
         return Err(refuse(why));
+    }
+    // a request that touches the game a module is for leaves a target and a mode that do not
+    // contradict each other; a choice whose detail is still to come is written (the check says
+    // what is missing), and a file that was already odd is not refused for an edit of something else
+    if target_given || decides_target {
+        let mut after = snap.doc().cloned().unwrap_or_default();
+        for e in &edits {
+            crate::edit::apply(&mut after, e.clone())?;
+        }
+        let after = Manifest::parse(&after);
+        let provides = after.provides_modes.iter().any(|p| !p.id.is_empty());
+        if let Some(pair) = target_pairing(&after.target, &after.mode, provides)
+            && !pair.unfinished
+        {
+            return Err(refuse(pair.text));
+        }
     }
     let changed = service.edit(edits, origin).await?;
     let mut answer = manifest_answer(&ed, &project, &service).await?;
