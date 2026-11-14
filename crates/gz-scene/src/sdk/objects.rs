@@ -461,7 +461,6 @@ impl LightData {
             ],
             cone: r.r_float(s, "cone")?,
             virtual_size: r.r_float(s, "virtual_size")?,
-            use_in_d3d: r.r_bool(s, "use_in_d3d")?,
             flags,
             lcontrol: r.r_u32(s, "light_control")?,
             anim_ref: r.r_string(s, "anim_ref_name")?.into(),
@@ -504,9 +503,6 @@ impl LightData {
             if let Some(b) = r.open_chunk(0xB425)? {
                 d.brightness = b.reader().r_f32()?;
             }
-        }
-        if let Some(c) = r.open_chunk(0xB436)? {
-            d.use_in_d3d = c.reader().r_u32()? != 0;
         }
         if let Some(c) = r.open_chunk(0xB413)? {
             d.flags = c.reader().r_u32()?;

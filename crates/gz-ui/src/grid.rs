@@ -155,6 +155,7 @@ impl<'a> PropertyGrid<'a> {
             top: origin.y,
             y: origin.y,
             row: None,
+            scope: id,
             hovered: None,
         };
         let r = add(&mut g);
@@ -183,6 +184,9 @@ pub struct Grid<'u> {
     /// Where the next row starts.
     y: f32,
     row: Option<OpenRow>,
+    /// The sections the next row is in: two rows of one label in two sections (a way's points)
+    /// are two rows.
+    scope: Id,
     hovered: Option<(String, String)>,
 }
 
@@ -215,7 +219,7 @@ impl Grid<'_> {
         let p = palette(self.ui.ctx());
         let ctx = self.ui.ctx().clone();
         let rect = Rect::from_min_max(pos2(self.x0, self.y), pos2(self.x1, self.y + HEADER_H));
-        let id = self.id.with(("section", title));
+        let id = self.scope.with(("section", title));
         let mut is_open = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(open);
         let resp = self.ui.interact(rect, id, Sense::click());
         if resp.clicked() {
@@ -258,8 +262,11 @@ impl Grid<'_> {
         audit::control(&ctx, title, true, None, None, rect);
         self.y = rect.max.y;
         if is_open {
+            let outer = self.scope;
+            self.scope = id;
             body(self);
             self.close_row();
+            self.scope = outer;
         }
         is_open
     }
@@ -282,7 +289,7 @@ impl Grid<'_> {
         let label_h = if self.stacked && !inline_value { Font::Body.line() + 2.0 } else { 0.0 };
         let y = self.y;
         let rect = Rect::from_min_max(pos2(self.x0, y), pos2(self.x1, y + label_h + ROW_H));
-        let id = self.id.with(("row", label, depth));
+        let id = self.scope.with(("row", label, depth));
         let mem = ctx.data(|d| d.get_temp::<RowMem>(id)).unwrap_or_default();
         let slots = mem.slots.max(u8::from(flags.contains(PropFlags::MODIFIED)));
 
@@ -563,7 +570,7 @@ fn field_frame(ui: &Ui, rect: Rect, hovered: bool, focused: bool) {
     let stroke = if focused {
         Stroke::new(metrics::FOCUS_RING, p.accent_bright)
     } else {
-        Stroke::new(1.0, if hovered { p.border } else { p.border_subtle })
+        Stroke::new(1.0, if hovered { p.border_strong } else { p.border })
     };
     ui.painter().rect_stroke(rect, radius, stroke, StrokeKind::Inside);
 }
@@ -832,12 +839,12 @@ pub fn color(ui: &mut Ui, value: &mut Color32) -> Response {
     resp
 }
 
-/// Three numbers tagged X, Y, Z in the axes' colours, side by side from 15 em, stacked below.
+/// Three numbers tagged X, Y, Z in the axes' colours, side by side from 10 em, stacked below.
 /// Returns whether one changed.
 pub fn vec3_field(ui: &mut Ui, id_salt: &str, value: &mut [f32; 3], speed: f32) -> bool {
     let p = palette(ui.ctx());
     let width = ui.available_width().max(em(9.0));
-    let stacked = width < em(15.0);
+    let stacked = width < em(10.0);
     let gap = 4.0;
     let each = if stacked { width } else { (width - gap * 2.0) / 3.0 };
     let tag = 18.0;

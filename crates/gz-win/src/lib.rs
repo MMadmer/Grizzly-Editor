@@ -56,7 +56,7 @@ use windows::Win32::System::Diagnostics::Debug::{
 };
 use windows::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, GetCurrentThreadId, GetProcessIoCounters,
-    GetProcessTimes, GetStartupInfoW, GetThreadPriority, IO_COUNTERS,
+    GetProcessTimes, GetStartupInfoW, GetThreadPriority, GetThreadTimes, IO_COUNTERS,
     PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
     PROCESS_POWER_THROTTLING_STATE, ProcessPowerThrottling, STARTF_USESHOWWINDOW, STARTUPINFOW,
     SetProcessInformation, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL, TerminateProcess,
@@ -92,6 +92,24 @@ fn filetime_to_system(ft: FILETIME) -> SystemTime {
     let ticks = (u64::from(ft.dwHighDateTime) << 32) | u64::from(ft.dwLowDateTime);
     let unix_100ns = ticks.saturating_sub(116_444_736_000_000_000);
     SystemTime::UNIX_EPOCH + Duration::from_nanos(unix_100ns.saturating_mul(100))
+}
+
+/// The CPU time the calling thread has used so far, kernel and user, in seconds. A stretch of
+/// wall time in which this hardly moved was spent waiting - for a lock, a file, the processor -
+/// not working.
+#[must_use]
+pub fn thread_cpu_seconds() -> f64 {
+    let mut created = FILETIME::default();
+    let mut exited = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    // SAFETY: the pseudo-handle of the current thread is always valid, and every out pointer
+    // refers to a live local of the exact type the call writes.
+    let ok = unsafe { GetThreadTimes(GetCurrentThread(), &mut created, &mut exited, &mut kernel, &mut user) };
+    if ok.is_err() {
+        return 0.0;
+    }
+    (filetime_ticks(kernel) + filetime_ticks(user)) as f64 / 1e7
 }
 
 /// The creation time and IO counters of this process.

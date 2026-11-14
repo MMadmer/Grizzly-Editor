@@ -1,4 +1,4 @@
-//! A tile's caption (`DrawTileCaption`), as a pure function of the name and a measure of text
+//! A tile's caption, as a pure function of the name and a measure of text
 //! widths.
 //!
 //! Up to `max_lines` lines. A line breaks where a name breaks for a reader: after a space, `_`,

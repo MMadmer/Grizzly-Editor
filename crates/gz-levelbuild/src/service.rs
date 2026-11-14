@@ -159,7 +159,7 @@ pub fn levels_root(session: &ProjectSession) -> PathBuf {
 #[must_use]
 pub fn default_options(editor: &Editor) -> Options {
     let game = gz_project::Project::of(editor).map(|(_, p)| p.game_root()).unwrap_or_default();
-    Options { quality: Quality::Standard, flags: String::new(), game }
+    Options { quality: Quality::Standard, flags: String::new(), game, library: 0 }
 }
 
 impl LevelBuild {
@@ -264,10 +264,20 @@ impl LevelBuild {
         let level = snap.meta.level.level_path.to_string();
         let record = lb.record(editor, &session, &level)?;
         let opts = default_options(editor);
-        let rev = svc.store.rev().mix(lb.record_rev.get()).mix(Rev(fingerprint::text_hash(&opts.game)));
+        let lib = svc.library.clone();
+        let rev = svc
+            .store
+            .rev()
+            .mix(lb.record_rev.get())
+            .mix(Rev(fingerprint::text_hash(&opts.game)))
+            .mix(lib.rev());
         let query = lb.status.get_or_init(|| Query::new(editor.exec.clone()));
         let lb2 = lb.clone();
-        match query.get(&(), rev, move || status_of(&snap, &lb2.hashes, record.as_deref(), &opts)) {
+        let made = move || {
+            let opts = Options { library: fingerprint::library_stamp(&snap, &lib), ..opts };
+            status_of(&snap, &lb2.hashes, record.as_deref(), &opts)
+        };
+        match query.get(&(), rev, made) {
             Answer::Fresh(s) | Answer::Stale(s) => Some(s),
             Answer::Pending => None,
         }
@@ -284,10 +294,19 @@ impl LevelBuild {
         let level = scene.meta.level.level_path.to_string();
         let record = lb.record_now(editor, session, &level).await;
         let opts = default_options(editor);
-        let rev = rev.mix(lb.record_rev.get()).mix(Rev(fingerprint::text_hash(&opts.game)));
+        let lib = session.services.get::<SceneService>().map(|svc| svc.library.clone());
+        let rev = rev
+            .mix(lb.record_rev.get())
+            .mix(Rev(fingerprint::text_hash(&opts.game)))
+            .mix(lib.as_ref().map_or(Rev::ZERO, |l| l.rev()));
         let query = lb.status.get_or_init(|| Query::new(editor.exec.clone()));
         let lb2 = lb.clone();
-        query.fresh(&(), rev, move || status_of(&scene, &lb2.hashes, record.as_deref(), &opts)).await
+        query
+            .fresh(&(), rev, move || {
+                let library = lib.map_or(0, |l| fingerprint::library_stamp(&scene, &l));
+                status_of(&scene, &lb2.hashes, record.as_deref(), &Options { library, ..opts })
+            })
+            .await
     }
 }
 
@@ -390,6 +409,12 @@ fn why_stale(
             return format!("Built {}.", how.join(" and "));
         }
     }
+    if rec.library != opts.library && step.classes().contains(&gz_scene::ObjClass::SceneObject) {
+        let then = Options { library: rec.library, ..opts.clone() };
+        if Some(rec.fingerprint) == fingerprint::steps(scene, objects, &then).get(&step).copied() {
+            return "A model the level's objects are made from changed.".to_owned();
+        }
+    }
     let moved = record.map(|r| fingerprint::changes(step, &r.objects, objects)).unwrap_or_default();
     if !moved.is_empty() {
         return format!("{}.", capital(&moved));
@@ -438,6 +463,7 @@ mod tests {
                     seconds: 0.0,
                     quality: opts.quality,
                     flags: opts.flags.clone(),
+                    library: if step.classes().contains(&ObjClass::SceneObject) { opts.library } else { 0 },
                     failed: None,
                 },
             );
@@ -512,5 +538,23 @@ mod tests {
         let st = status_of(&s, &cache, Some(&record), &draft);
         assert_eq!(st.get(Step::Game).unwrap().state, StepState::Failed);
         assert_eq!(st.get(Step::Game).unwrap().why, "The scene has no spawn point.");
+    }
+
+    #[test]
+    fn a_changed_model_makes_the_steps_that_read_objects_stale() {
+        let (s, _) = scene();
+        let cache = HashCache::default();
+        let then = Options { library: 1, ..Options::default() };
+        let record = built(&s, &cache, &then);
+        // the same models: nothing to build
+        assert!(status_of(&s, &cache, Some(&record), &then).to_build().is_empty());
+        // a model's file changed since
+        let now = Options { library: 2, ..Options::default() };
+        let st = status_of(&s, &cache, Some(&record), &now);
+        let geometry = st.get(Step::Geometry).unwrap();
+        assert_eq!(geometry.state, StepState::Stale);
+        assert_eq!(geometry.why, "A model the level's objects are made from changed.");
+        // what is built on those steps follows, saying which step it waits for
+        assert_eq!(st.get(Step::Light).unwrap().why, "Geometry is not fresh.");
     }
 }

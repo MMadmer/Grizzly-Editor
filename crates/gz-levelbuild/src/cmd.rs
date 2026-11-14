@@ -438,7 +438,7 @@ async fn play(ed: Arc<Editor>, p: PlayParams, _o: Origin) -> Reply {
             }
             let link = GameLink::of(&ed).map_err(|e| CmdError::new("refused", e.to_string()))?;
             link.refresh().await.map_err(|e| CmdError::new("failed", e.to_string()))?;
-            ed.log.info("* The linked game's configs are read again.");
+            ed.log.info("The linked game's configs are read again.");
             Ok(json!({ "reloaded": true }))
         }
         PlayAction::Root => {
@@ -638,7 +638,7 @@ fn start_game(
     let (exe, cwd) = (root.exe.clone(), root.root.clone());
     let line = process::command_line(&exe, &args);
     editor.log.info(format!(
-        "* Run {line} (the installed engine, started in place in the game root {}).",
+        "Run {line} (the installed engine, started in place in the game root {}).",
         cwd.display()
     ));
     let lb = LevelBuild::of(session);
@@ -659,7 +659,7 @@ fn start_game(
                 Ok(Ended::Exited(code)) => Ok(json!({ "exit_code": code })),
                 Ok(Ended::Stopped) => Err(JobError { message: "Stopped.".to_owned(), cancelled: true }),
                 Err(e) => {
-                    ed.log.error(format!("! {e}"));
+                    ed.log.error(&e);
                     Err(JobError::new(e))
                 }
             }
@@ -918,7 +918,7 @@ async fn compile_folder(ed: Arc<Editor>, p: CompileParams) -> Reply {
     let flags = p.flags();
     let names: Vec<&str> = parts.iter().map(|x| x.name()).collect();
     ed.log.info(format!(
-        "* Compile {} ({}){}.",
+        "Compile {} ({}){}.",
         dir.display(),
         names.join(", "),
         if flags.is_empty() { String::new() } else { format!(" {flags}") }

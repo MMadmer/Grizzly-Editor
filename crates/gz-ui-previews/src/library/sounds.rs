@@ -1,5 +1,5 @@
 //! The Sound Library: the `sound_library` tab over the descriptions of `rawdata\sounds`
-//! (`UISoundEditorForm.cpp`, `SoundManager.cpp`). The selected sound's game file is read and
+//!. The selected sound's game file is read and
 //! decoded on the pools - its waveform from the peak envelope - and played on the audio thread.
 //! Save writes the changed descriptions and makes their game sounds again from the `.wav`;
 //! Rebuild makes the selected one's.
@@ -16,13 +16,15 @@ use gz_fmt_sound::{
 use gz_store::{Apply, State, Store, StoreOptions, imbl};
 use gz_ui::grid::{Grid, combo, number, read_only};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Button, Font, Icon, Kind, PropFlags, PropertyGrid, Tone, Toolbar, palette, state};
+use gz_ui::{
+    Button, Font, Icon, Kind, MenuItem, PropFlags, PropertyGrid, Tone, Toolbar, menu_item, palette, state,
+};
 use serde_json::{Map, Value, json};
 
 use super::list::{Empty, LibraryList, find, shown};
 use super::{LibraryDoc, LibraryLists, Settle, can_write, folder_text, pane, panes};
 use crate::audio::Player;
-use crate::local::{local_ends, local_heading, local_section};
+use crate::local::{local_ends, local_heading};
 use crate::paths::{EditorDirs, file_age, list_files, set_file_age};
 use crate::pending::Pending;
 
@@ -64,7 +66,7 @@ pub struct SoundItem {
     pub thm: SoundThm,
 }
 
-/// Every `.wav` of `rawdata\sounds` with its `.thm` (`GetSounds`).
+/// Every `.wav` of `rawdata\sounds` with its `.thm`.
 #[must_use]
 pub fn list_sounds(dirs: &EditorDirs, pool: &gz_task::Executors) -> Vec<SoundItem> {
     let files = list_files(&dirs.sounds, &["wav"], false, true);
@@ -150,7 +152,8 @@ pub struct SoundLibDoc {
     list: LibraryList,
     pub selected: String,
     pub auto_play: bool,
-    read_only: bool,
+    /// Whether the sound folder can be written: looked at on the IO pool as the tab opens.
+    writable: Pending<bool>,
     saving: Arc<std::sync::atomic::AtomicBool>,
     game: Option<(String, Pending<Option<GameSound>>)>,
     /// A rebuild ended: the preview reads the new file.
@@ -161,10 +164,14 @@ impl SoundLibDoc {
     #[must_use]
     pub fn new(editor: &Arc<Editor>) -> Self {
         let dirs = EditorDirs::of(editor);
-        let read_only = !can_write(&dirs.sounds);
-        if read_only {
-            editor.log.warn("The sound folder cannot be written: sound descriptions are read-only.");
-        }
+        let (d, log, exec) = (dirs.sounds.clone(), editor.log.clone(), editor.exec.clone());
+        let writable = Pending::spawn(&editor.exec, async move {
+            let ok = exec.io(move || can_write(&d)).await;
+            if !ok {
+                log.warn("The sound folder cannot be written: sound descriptions are read-only.");
+            }
+            ok
+        });
         Self {
             editor: editor.clone(),
             store: Store::spawn(
@@ -177,8 +184,8 @@ impl SoundLibDoc {
             list: LibraryList::default(),
             selected: String::new(),
             // a sound plays on a click only; picking one stays silent unless Auto Play is on
-            auto_play: read_only,
-            read_only,
+            auto_play: false,
+            writable,
             saving: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             game: None,
             rebuilt: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -200,6 +207,11 @@ impl SoundLibDoc {
 
     fn saving(&self) -> bool {
         self.saving.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// The sound folder cannot be written (unknown until the IO pool has looked: writable).
+    fn read_only(&self) -> bool {
+        self.writable.get().is_some_and(|w| !*w)
     }
 
     fn thm_of(&self, item: &SoundItem) -> SoundThm {
@@ -250,10 +262,10 @@ impl SoundLibDoc {
         self.game = Some((name.to_owned(), pending));
     }
 
-    /// Writes the changed descriptions (`UpdateLib`) as a job: each `.thm`, and the parameters
+    /// Writes the changed descriptions as a job: each `.thm`, and the parameters
     /// of its game sound rewritten in place.
     fn queue_save(&mut self) -> Result<(), String> {
-        if self.read_only {
+        if self.read_only() {
             return Err("The sound folder cannot be written.".to_owned());
         }
         if self.saving() {
@@ -308,7 +320,7 @@ impl SoundLibDoc {
         Ok(())
     }
 
-    /// Makes the selected sound's game file again from its `.wav` (`RebuildGameSound`), as a job.
+    /// Makes the selected sound's game file again from its `.wav`, as a job.
     fn queue_rebuild(&mut self) -> Result<(), String> {
         let items = self.items().unwrap_or_default();
         let Some(item) = items.iter().find(|i| i.name == self.selected) else {
@@ -393,7 +405,7 @@ impl SoundLibDoc {
             }
         }
         ui.add_space(12.0);
-        if local_section(ui, "sound.attenuation", "Attenuation", true) {
+        if gz_ui::section::Section::new("sound_library.attenuation", "Attenuation").show(ui).open {
             let h = (ui.available_height() - 28.0).clamp(96.0, 240.0);
             draw_attenuation(ui, &thm, h);
         }
@@ -402,7 +414,7 @@ impl SoundLibDoc {
     fn draw_properties(&mut self, ui: &mut Ui, item: &SoundItem) {
         let before = self.thm_of(item);
         let mut t = before;
-        let ro = if self.read_only || self.saving() { PropFlags::READ_ONLY } else { PropFlags::NONE };
+        let ro = if self.read_only() || self.saving() { PropFlags::READ_ONLY } else { PropFlags::NONE };
         let game = self.game_sound();
         let mut gesture = String::new();
         let mut clamped = false;
@@ -555,7 +567,7 @@ impl SoundLibDoc {
         out.insert("shown".into(), json!(rows.len()));
         out.insert("first".into(), json!(rows.first().and_then(|&i| keys.get(i)).copied().unwrap_or("")));
         out.insert("items".into(), json!(items.len()));
-        out.insert("read_only".into(), json!(self.read_only));
+        out.insert("read_only".into(), json!(self.read_only()));
         out.insert("saving".into(), json!(self.saving()));
         out.insert("dirty".into(), json!(self.store.is_dirty()));
         out.insert("auto_play".into(), json!(self.auto_play));
@@ -596,7 +608,7 @@ impl SoundLibDoc {
     }
 }
 
-/// Makes the game sound of `name` from its `.wav` (`MakeGameSound`): Vorbis at the description's
+/// Makes the game sound of `name` from its `.wav`: Vorbis at the description's
 /// quality, its parameters as the first comment. A sound that cannot be made leaves no file.
 pub fn make_game_sound(
     dirs: &EditorDirs,
@@ -645,7 +657,7 @@ fn save_sound(dirs: &EditorDirs, name: &str, thm: &SoundThm, age: i64) -> Result
     Ok(())
 }
 
-/// What a sound synchronisation would take away (`OrphanSounds`): game sounds and descriptions
+/// What a sound synchronisation would take away: game sounds and descriptions
 /// whose `.wav` is gone; up to ten named, and how many there are.
 #[must_use]
 pub fn orphans(dirs: &EditorDirs) -> (Vec<String>, usize) {
@@ -819,9 +831,22 @@ impl Document for SoundLibDoc {
     }
 
     fn toolbar<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>, cx: &mut DocCx<'_>) {
+        let editor = self.editor.clone();
+        let writable = !self.read_only();
+        tb.group(0);
+        tb.menu("more", Icon::More, "More", "Synchronize by hand", Some("sound_library_more"), true, |ui| {
+            let off = if writable { "" } else { "The sound folder cannot be written" };
+            if menu_item(
+                ui,
+                "Synchronize Sounds...",
+                MenuItem { icon: Icon::Refresh, enabled: writable, tip: off, ..MenuItem::default() },
+            ) {
+                editor.post("library.sync", gz_app::args(&[("kind", "sounds")]));
+            }
+        });
         let dirty = self.store.is_dirty();
-        let on = !self.read_only && !self.saving() && dirty;
-        let why = if self.read_only {
+        let on = !self.read_only() && !self.saving() && dirty;
+        let why = if self.read_only() {
             "The sound folder cannot be written"
         } else if self.saving() {
             "The library is saving"
@@ -890,10 +915,10 @@ impl Document for SoundLibDoc {
             self.auto_play = !self.auto_play;
         }
         tb.group(1);
-        let rebuild = !self.read_only && !self.saving() && one;
+        let rebuild = !self.read_only() && !self.saving() && one;
         let rebuild_tip = if rebuild {
             "Build the game sound (.ogg) of this description again"
-        } else if self.read_only {
+        } else if self.read_only() {
             "The sound folder cannot be written"
         } else if self.saving() {
             "The library is saving"
@@ -915,7 +940,7 @@ impl Document for SoundLibDoc {
             self.select(Some(&name));
         }
         tb.group(0);
-        if self.read_only {
+        if self.read_only() {
             tb.status("Read-only", Tone::Warning);
         } else if self.saving() {
             tb.status("Saving...", Tone::Info);
@@ -928,6 +953,15 @@ impl Document for SoundLibDoc {
     fn body(&mut self, ui: &mut Ui, _cx: &mut DocCx<'_>) {
         let items = self.items();
         let all = items.clone().unwrap_or_default();
+        // a library with nothing in it says so once, over the whole tab
+        if items.is_some() && all.is_empty() {
+            let text_ = format!(
+                "The library lists the .wav files in {}. A sound copied there shows up the next time the library opens.",
+                folder_text(&self.editor, &self.dirs.sounds)
+            );
+            state::empty_state(ui, Icon::FileSound, "No sounds", &text_, None);
+            return;
+        }
         let [list_r, preview_r, details_r] = panes(ui, KIND);
         let keys: Vec<&str> = all.iter().map(|i| i.name.as_str()).collect();
         let rows = shown(&keys, &|_| true, &self.list.search);
@@ -968,16 +1002,10 @@ impl Document for SoundLibDoc {
                 );
             }
         });
-        pane(ui, details_r, "sound_library.details", false, true, |ui| match &current {
-            Some(item) => self.draw_properties(ui, item),
-            None => {
-                state::empty_state(
-                    ui,
-                    Icon::Settings,
-                    "No properties",
-                    "Pick a sound to edit its description.",
-                    None,
-                );
+        // nothing picked: the preview says so, the details stay blank
+        pane(ui, details_r, "sound_library.details", false, true, |ui| {
+            if let Some(item) = &current {
+                self.draw_properties(ui, item);
             }
         });
         ui.allocate_rect(ui.max_rect(), Sense::hover());

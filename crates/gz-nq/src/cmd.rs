@@ -907,7 +907,7 @@ pub fn install(editor: &Editor) {
         if let Some(svc) = NqService::get(&session) {
             let saved = svc.save_dirty(&ed).await;
             if saved > 0 {
-                ed.log.info(format!("* [nq] {saved} unsaved graph(s) saved before leaving the project"));
+                ed.log.info(format!("[nq] {saved} unsaved graph(s) saved before leaving the project"));
             }
         }
     });

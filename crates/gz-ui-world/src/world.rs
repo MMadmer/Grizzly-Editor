@@ -513,8 +513,8 @@ impl WorldDoc {
                 Action::Focus(name) => {
                     call::call_then(
                         &self.editor,
-                        "focus_object",
-                        args([("name", s(&name)), ("select", Value::Bool(true))]),
+                        "viewport.camera",
+                        args([("action", s("focus")), ("object", s(&name)), ("select", Value::Bool(true))]),
                         |reply, ctx| {
                             if !call::ok(reply) {
                                 gz_ui::state::toast(ctx, Tone::Warning, &call::error_text(reply));

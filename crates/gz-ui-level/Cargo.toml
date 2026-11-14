@@ -28,6 +28,14 @@ gz-app.workspace = true
 gz-ui-app = { path = "../gz-ui-app" }
 gz-ui-content = { path = "../gz-ui-content" }
 gz-ui-viewport = { path = "../gz-ui-viewport" }
+# the chooser's pictures of models, the Problems panel's framing
+gz-render.workspace = true
+glam.workspace = true
+wgpu.workspace = true
+gz-fmt-tex.workspace = true
+gz-fmt-object.workspace = true
+gz-fmt-sound.workspace = true
+gz-ui-previews = { path = "../gz-ui-previews" }
 egui.workspace = true
 parking_lot.workspace = true
 rustc-hash.workspace = true
@@ -40,5 +48,7 @@ gz-fmt-ogf.workspace = true
 # the system's file dialogs (Save As, the detail objects' .dti files)
 
 [dev-dependencies]
+gz-task.workspace = true
+gz-log.workspace = true
 gz-chunk.workspace = true
 tempfile.workspace = true

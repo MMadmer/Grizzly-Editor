@@ -4,9 +4,9 @@
 One editor on a copy of D:\\XFinedProjects\\Test that opens no scene by itself, with
 GRIZZLY_MCP_REQUEST_TIMEOUT_MS=250: the concurrent clients, the disconnects, the JSON arguments,
 the overflow, a scene load that times out, and the shutdown with idle clients through the palette
-(COMMAND_EXIT). The script's other shutdown runs exec_command COMMAND_QUIT, a plumbing row the
-Rust editor does not list (D15; docs/rust/STATE.md, "What the suites could not hold the Rust
-editor to"). The editor must be gone within the script's timeout.
+(the action app.quit). The script's other shutdown runs the command app.quit itself. The editor
+must be gone within the script's timeout.
+
 
 Then the editor's twin for a command line, Grizzly-Cmd.exe beside the editor (a console program
 that runs the window program and waits for it): a headless editor started through it prints

@@ -4,8 +4,8 @@
 //! it). Zones are asked in the order they are drawn, inner ones first: the first under the point
 //! takes the files.
 //!
-//! The Content Browser's payload is its `DragPayload` (the dragged entries that are files on the
-//! disk); a `String`, a `PathBuf`, a `Vec<String>` or a `Vec<PathBuf>` is taken too.
+//! The Content Browser's payload is the kit's `gz_ui::drop::Payload` (the dragged entries that are
+//! files on the disk); a `String`, a `PathBuf`, a `Vec<String>` or a `Vec<PathBuf>` is taken too.
 //!
 //! Windows tells a window that files landed, not where: the drop waits for the pointer's next
 //! position (the system moves it over the window as the drag ends) and takes the last one known
@@ -127,16 +127,10 @@ pub fn simulate_drop(ctx: &Context, files: Vec<String>, pos: Pos2) {
 
 /// The paths a dragged tile carries, if one is being dragged.
 fn payload_paths(ctx: &Context) -> Option<Vec<String>> {
-    // the Content Browser's tiles: the files they carry that are files on the disk (a game file
-    // inside an archive is not one, and a folder is not a layer)
-    if let Some(p) = DragAndDrop::payload::<gz_ui_content::DragPayload>(ctx) {
-        return Some(
-            p.entries
-                .iter()
-                .filter(|e| !e.folder)
-                .filter_map(|e| e.file.as_ref().map(|f| f.display().to_string()))
-                .collect(),
-        );
+    // the Content Browser's tiles (the kit's payload): the files they carry that are files on the
+    // disk (a game file inside an archive is not one, and a folder is not a layer)
+    if let Some(p) = gz_ui::drop::dragged(ctx) {
+        return Some(p.files().iter().map(|f| f.display().to_string()).collect());
     }
     if let Some(s) = DragAndDrop::payload::<String>(ctx) {
         return Some(vec![(*s).clone()]);

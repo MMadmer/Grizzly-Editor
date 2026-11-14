@@ -260,6 +260,13 @@ impl Log {
         self.0.last_report.lock().clone()
     }
 
+    /// Forgets the newest report: what it was about is no longer in front of the author (the
+    /// project closed). The log keeps the line.
+    pub fn forget_last_report(&self) {
+        *self.0.last_report.lock() = None;
+        self.0.rev.bump();
+    }
+
     pub fn clear(&self) {
         self.0.ring.lock().lines.clear();
         self.0.rev.bump();

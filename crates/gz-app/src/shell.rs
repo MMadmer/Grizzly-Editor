@@ -20,7 +20,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::actions::{Action, ActionCx, ActionTable};
 use crate::builder::{
     DialogDesc, DrawFn, DrawerDesc, LogState, MenuContent, MenuEntry, PageCard, PanelDesc, PrefGroup,
-    ShellBuilder, ToolbarFn, UiCommand,
+    ShellBuilder, ToolbarFn,
 };
 use crate::doc::{
     DocCx, Document, Drawer, EditAction, Factory, OpenRequest, PanelOp, Request, ShellRequests,
@@ -160,8 +160,6 @@ pub(crate) struct Parts {
     pub factories: FxHashMap<SmolStr, Factory>,
     /// What menus, toolbars, keys and the palette run (an `Editor` service too).
     pub actions: Arc<crate::actions::Actions>,
-    /// The level editor's own table, until its actions are built.
-    pub commands: Vec<UiCommand>,
     pub menus: Vec<MenuEntry>,
     pub project_toolbar: Vec<(i32, ToolbarFn)>,
     pub drawers: [Option<DrawerDesc>; 2],
@@ -173,8 +171,6 @@ pub(crate) struct Parts {
     pub log_state: Option<crate::builder::LogStateFn>,
     pub reveal: Option<crate::builder::RevealFn>,
     pub reset_layout: Option<crate::builder::ResetLayoutFn>,
-    /// The level editor's numbered table over `commands` (`list_commands`, `exec_command`).
-    pub cpp: crate::cpp::Table,
 }
 
 /// The groups areas added to Preferences: an `Editor` service the Preferences tab reads.
@@ -253,6 +249,8 @@ struct Session {
     /// Where the project's tabs are kept (the project area says: this machine's state of it).
     file: Option<PathBuf>,
     dirty: bool,
+    /// The session file's writes in the order they were asked for.
+    order: Arc<gz_editor::fsx::InOrder>,
 }
 
 /// Everything the shell draws from. UI thread only.
@@ -265,8 +263,6 @@ pub struct ShellState {
     pub(crate) tabs: Vec<Tab>,
     pub(crate) active: SmolStr,
     pub(crate) requests: ShellRequests,
-    /// Shortcuts the author bound: `None` is one taken away.
-    pub(crate) bindings: FxHashMap<SmolStr, Option<Chord>>,
     pub(crate) drawer: Option<Drawer>,
     pub(crate) drawer_focus: bool,
     pub(crate) drawer_rect: Option<Rect>,
@@ -301,14 +297,11 @@ pub struct ShellState {
     pub(crate) kitsheet: bool,
     pub(crate) tab_menu: Option<SmolStr>,
     pub(crate) drag_tab: Option<SmolStr>,
-    warned: FxHashSet<SmolStr>,
     last_settings_save: Instant,
     placement: Option<Placement>,
     last_frame: Option<Instant>,
     pub(crate) fps: f32,
     panic_guard: Arc<AtomicBool>,
-    /// `exec` logged the command it runs: `run_command` does not log it again.
-    pub(crate) quiet_log: bool,
     /// `ui.scale`: the test's scale, over the author's preference until the editor ends.
     pub(crate) test_scale: Option<f32>,
     /// The scale applied last: the preference, `-uiscale` or a test's.
@@ -373,15 +366,10 @@ impl ShellState {
     ) -> Self {
         let (iconsheet, kitsheet) = sheets;
         let settings = EditorSettings::of(&editor);
-        let mut bindings = FxHashMap::default();
-        for (id, keys) in settings.shortcuts() {
-            bindings.insert(id, Chord::parse(&keys));
-        }
         let ShellBuilder {
             factories,
             actions,
             pref_groups,
-            commands,
             menus,
             project_toolbar,
             drawers,
@@ -393,7 +381,6 @@ impl ShellState {
             log_state,
             reveal,
             reset_layout,
-            cpp,
         } = builder;
         JobMarks::of(&editor).log_state.lock().clone_from(&log_state);
         // the window's own actions first, then the areas': a later id replaces an earlier one
@@ -433,7 +420,6 @@ impl ShellState {
         let mut parts = Parts {
             factories,
             actions: shared,
-            commands,
             menus,
             project_toolbar,
             drawers,
@@ -445,16 +431,9 @@ impl ShellState {
             log_state,
             reveal,
             reset_layout,
-            cpp: crate::cpp::Table::default(),
         };
         parts.project_toolbar.sort_by_key(|(o, _)| *o);
         parts.status_chips.sort_by_key(|(o, _)| *o);
-        // the level editor's numbered table: the rows the shell knows, its panels' and the
-        // macros', then the level crates' own
-        let mut rows = crate::cpp::known_rows();
-        rows.extend(crate::cpp::shell_rows());
-        rows.extend(cpp);
-        parts.cpp = crate::cpp::Table::build(rows, &mut parts.commands);
         let hit_test = editor.services.get_or_init(crate::window::WindowLink::default).caption().clone();
         crate::unsaved::install(&editor);
         let mut s = Self {
@@ -466,7 +445,6 @@ impl ShellState {
             tabs: Vec::new(),
             active: SmolStr::default(),
             requests: ShellRequests::default(),
-            bindings,
             drawer: None,
             drawer_focus: false,
             drawer_rect: None,
@@ -495,13 +473,11 @@ impl ShellState {
             kitsheet,
             tab_menu: None,
             drag_tab: None,
-            warned: FxHashSet::default(),
             last_settings_save: Instant::now(),
             placement: None,
             last_frame: None,
             fps: 0.0,
             panic_guard,
-            quiet_log: false,
             test_scale: None,
             scale_applied: None,
             edits_now: Vec::new(),
@@ -1045,70 +1021,12 @@ impl ShellState {
         )
     }
 
-    // ---- commands and keys -----------------------------------------------------------------
-
-    /// What a command is bound to now.
-    pub(crate) fn binding(&self, i: usize) -> Option<Chord> {
-        let c = self.parts.commands.get(i)?;
-        match self.bindings.get(&c.id) {
-            Some(over) => *over,
-            None => c.default_keys,
-        }
-    }
-
-    pub(crate) fn command_index(&self, id: &str) -> Option<usize> {
-        self.parts.commands.iter().position(|c| c.id.eq_ignore_ascii_case(id))
-    }
-
-    pub(crate) fn command_enabled(&self, i: usize) -> bool {
-        self.parts
-            .commands
-            .get(i)
-            .is_some_and(|c| c.enabled.as_ref().is_none_or(|f| f(&self.editor, &self.active)))
-    }
-
-    /// Runs a command when it is on; `false` when it is not.
-    pub(crate) fn run_command(&mut self, ctx: &Context, i: usize) -> bool {
-        if !self.command_enabled(i) {
-            return false;
-        }
-        // Log Commands: a face of a numbered row logs itself; a UiCommand of its own is logged here
-        if !self.quiet_log && crate::cpp::CommandLog::of(&self.editor).on() {
-            for row in &self.parts.cpp.rows {
-                if !matches!(row.cmd.action, crate::cpp::CppAction::Ui) {
-                    continue;
-                }
-                if let Some(k) = row.faces.iter().position(|f| *f == Some(i))
-                    && let Some(sub) = row.cmd.subs.get(k)
-                {
-                    crate::cpp::log_command(&self.editor, &row.cmd.name, &sub.p1, &sub.p2, 0);
-                }
-            }
-        }
-        let Some(c) = self.parts.commands.get_mut(i) else { return false };
-        (c.run)(&mut DocCx {
-            editor: &self.editor,
-            gpu: &self.gpu,
-            ctx,
-            active_tab: &self.active,
-            requests: &mut self.requests,
-        });
-        true
-    }
+    // ---- keys ------------------------------------------------------------------------------
 
     pub(crate) fn modal_up(&self, ctx: &Context) -> bool {
         self.palette.open
             || dialog::modal_on_top(ctx).is_some()
             || ctx.memory(|m| m.top_modal_layer().is_some())
-    }
-
-    /// The scene's bindings may act: Level is up, nothing modal, no popup, no drawer.
-    pub(crate) fn scene_keys_allowed(&self, ctx: &Context) -> bool {
-        self.active == LEVEL
-            && !self.modal_up(ctx)
-            && !egui::Popup::is_any_open(ctx)
-            && self.drawer.is_none()
-            && self.key_owner_last.is_none()
     }
 
     /// What is in front of the author, for an action's checks.
@@ -1213,8 +1131,8 @@ impl ShellState {
             .and_then(|d| d.key_part(ctx))
     }
 
-    /// Keys, first taker wins: a text field, the actions (a tab's own before the window's), the
-    /// document's own keys, then the level editor's table.
+    /// Keys, first taker wins: a text field, the actions (a tab's own before the window's), then
+    /// the document's own keys (a gesture's Esc).
     fn keys(&mut self, ctx: &Context) {
         if self.start_page || ctx.egui_wants_keyboard_input() || self.modal_up(ctx) || self.capture_last {
             return;
@@ -1239,46 +1157,24 @@ impl ShellState {
             };
             if taken {
                 ctx.input_mut(|i| keys::consume(i, &chord));
-                continue;
-            }
-            if !self.scene_keys_allowed(ctx) {
-                continue;
-            }
-            // a binding of the level's table on a key the window keeps for an action is ignored
-            if self.parts.actions.table.read().global_chord(&chord).is_some() {
-                continue;
-            }
-            let found = (0..self.parts.commands.len()).find(|&i| self.binding(i) == Some(chord));
-            if let Some(i) = found {
-                ctx.input_mut(|inp| keys::consume(inp, &chord));
-                self.run_command(ctx, i);
             }
         }
     }
 
-    /// The action a chord runs now: a panel that answers its own keys keeps them, but for the
-    /// frame's own; the part of the document that has the keys narrows the rest.
+    /// The action a chord runs now: a panel that answers its own keys keeps them, and so does a
+    /// popup that is up, but for the frame's own; the part of the document that has the keys
+    /// narrows the rest.
     fn action_for_chord(&self, ctx: &Context, chord: &Chord) -> Option<&'static str> {
-        let owned = self.key_owner_last.is_some() || self.drawer.is_some();
+        let owned = self.key_owner_last.is_some() || self.drawer.is_some() || egui::Popup::is_any_open(ctx);
         let part = self.key_part(ctx);
         let cx = self.action_cx();
         self.parts.actions.table.read().for_chord(chord, &cx, part, owned).map(|a| a.id)
     }
 
-    /// What a chord runs on the active tab now, as the key pass finds it: an action's id, else a
-    /// level command's id (while the scene takes keys); `None` when neither takes it - the
-    /// document may still take it as a key of its own.
+    /// What a chord runs on the active tab now, as the key pass finds it: an action's id; `None`
+    /// when none takes it - the document may still take it as a key of its own.
     pub(crate) fn resolve_chord(&self, ctx: &Context, chord: &Chord) -> Option<String> {
-        if let Some(id) = self.action_for_chord(ctx, chord) {
-            return Some(id.to_owned());
-        }
-        if !self.scene_keys_allowed(ctx) || self.parts.actions.table.read().global_chord(chord).is_some() {
-            return None;
-        }
-        (0..self.parts.commands.len())
-            .find(|&i| self.binding(i) == Some(*chord))
-            .and_then(|i| self.parts.commands.get(i))
-            .map(|c| c.id.to_string())
+        self.action_for_chord(ctx, chord).map(str::to_owned)
     }
 
     pub(crate) fn open_palette(&mut self, query: &str) {
@@ -1287,26 +1183,6 @@ impl ShellState {
         self.palette.selected = 0;
         self.palette.focus = true;
         self.palette.scroll_to_selected = true;
-    }
-
-    /// A binding of the level's table on a key an action keeps everywhere is logged once and
-    /// never acts.
-    fn warn_collisions(&mut self) {
-        for i in 0..self.parts.commands.len() {
-            let Some(chord) = self.binding(i) else { continue };
-            let Some(c) = self.parts.commands.get(i) else { continue };
-            let owner = self.parts.actions.table.read().global_chord(&chord).map(|a| a.title);
-            if let Some(title) = owner
-                && self.warned.insert(c.id.clone())
-            {
-                self.editor.log.plain(format!(
-                    "{} is bound to {}, which {} keeps everywhere: the binding is ignored",
-                    c.label,
-                    chord.label(),
-                    title
-                ));
-            }
-        }
     }
 
     // ---- requests --------------------------------------------------------------------------
@@ -1456,7 +1332,6 @@ impl ShellState {
         let card_wants = self.parts.page_cards.iter().any(|c| (c.wants)(&self.editor));
         self.start_page = !project_ready;
         self.menus_shown = project_ready && !card_wants;
-        self.warn_collisions();
         // a job the UI started comes with its card; an MCP caller never gets one
         let running: Vec<gz_editor::JobInfo> =
             self.editor.jobs.snapshot().into_iter().filter(gz_editor::JobInfo::running).collect();
@@ -1497,6 +1372,7 @@ impl ShellState {
     }
 
     fn end_frame(&mut self, ctx: &Context) {
+        JobMarks::of(&self.editor).card_open.store(self.card_open, std::sync::atomic::Ordering::Release);
         self.popups_last = std::mem::take(&mut self.popups_cur);
         self.key_owner_last = self.key_owner_now.take();
         self.capture_last = std::mem::take(&mut self.capture_now);
@@ -1572,12 +1448,11 @@ impl ShellState {
         self.session.dirty = false;
         let Some(path) = self.session.file.clone() else { return };
         let text = self.session_text();
-        let log = self.editor.log.clone();
+        // the UI thread asks for every write of the session, so the tickets are in its order
+        let (log, order, ticket) =
+            (self.editor.log.clone(), self.session.order.clone(), self.session.order.ticket());
         self.editor.exec.spawn_io(move || {
-            if let Some(dir) = path.parent() {
-                let _ = std::fs::create_dir_all(dir);
-            }
-            if let Err(e) = gz_editor::fsx::write_atomic(&path, text.as_bytes()) {
+            if let Err(e) = order.write(ticket, &path, text.as_bytes()) {
                 log.warn(format!("the open tabs could not be written to {}: {e}", path.display()));
             }
         });
@@ -1590,10 +1465,8 @@ impl ShellState {
         }
         self.session.dirty = false;
         if let Some(path) = self.session.file.clone() {
-            if let Some(dir) = path.parent() {
-                let _ = std::fs::create_dir_all(dir);
-            }
-            if let Err(e) = gz_editor::fsx::write_atomic(&path, self.session_text().as_bytes()) {
+            let ticket = self.session.order.ticket();
+            if let Err(e) = self.session.order.write(ticket, &path, self.session_text().as_bytes()) {
                 self.editor
                     .log
                     .warn(format!("the open tabs could not be written to {}: {e}", path.display()));
@@ -1810,140 +1683,39 @@ impl ShellState {
 
     // ---- the Keyboard page's table ---------------------------------------------------------
 
-    /// Every action with its keys, then the level editor's own commands that take a shortcut,
-    /// as `app.keys` lists them.
+    /// Every action with its keys, as `app.keys` lists them.
     pub(crate) fn key_rows(&self) -> Vec<serde_json::Value> {
-        let mut out: Vec<serde_json::Value> = {
-            let t = self.parts.actions.table.read();
-            t.all().iter().map(|a| crate::actions::key_row(&t, a)).collect()
-        };
-        for i in self.level_faces() {
-            if let Some(row) = self.level_row(i) {
-                out.push(row);
-            }
-        }
-        out
+        let t = self.parts.actions.table.read();
+        t.all().iter().map(|a| crate::actions::key_row(&t, a)).collect()
     }
 
     /// One row of `key_rows`, by its id.
     pub(crate) fn key_row(&self, id: &str) -> serde_json::Value {
-        {
-            let t = self.parts.actions.table.read();
-            if let Some(a) = t.get(id) {
-                return crate::actions::key_row(&t, a);
-            }
-        }
-        self.command_index(id).and_then(|i| self.level_row(i)).unwrap_or(serde_json::Value::Null)
+        let t = self.parts.actions.table.read();
+        t.get(id).map_or(serde_json::Value::Null, |a| crate::actions::key_row(&t, a))
     }
 
-    /// The level editor's commands that take a shortcut, in its table's order.
-    fn level_faces(&self) -> Vec<usize> {
-        let mut rows: Vec<&crate::cpp::Row> = self.parts.cpp.rows.iter().collect();
-        rows.sort_by_key(|r| r.cmd.id);
-        let bindable = |f: &usize| self.parts.commands.get(*f).is_some_and(|c| c.bindable);
-        let mut out: Vec<usize> =
-            rows.iter().filter(|r| r.cmd.editable).flat_map(|r| r.faces.iter().flatten().copied()).collect();
-        out.retain(bindable);
-        let in_rows: Vec<usize> = rows.iter().flat_map(|r| r.faces.iter().flatten().copied()).collect();
-        out.extend((0..self.parts.commands.len()).filter(|f| bindable(f) && !in_rows.contains(f)));
-        out
-    }
-
-    /// The Keyboard page's name of a level command (its table's group and label).
-    fn level_name(&self, face: usize) -> Option<(String, String)> {
-        self.parts.cpp.rows.iter().find_map(|r| {
-            let k = r.faces.iter().position(|f| *f == Some(face))?;
-            let sub = r.cmd.subs.get(k)?;
-            let id = crate::cpp::sub_id(&r.cmd.name, &sub.desc);
-            Some(crate::cpp::command_name(&id, &r.cmd.desc, &sub.desc))
-        })
-    }
-
-    fn level_row(&self, i: usize) -> Option<serde_json::Value> {
-        let c = self.parts.commands.get(i).filter(|c| c.bindable)?;
-        let (group, title) = self.level_name(i).unwrap_or_else(|| (c.group.to_string(), c.label.to_string()));
-        let keys: Vec<String> = self.binding(i).map(|k| k.label()).into_iter().collect();
-        let ignored =
-            self.binding(i).and_then(|k| self.parts.actions.table.read().global_chord(&k).map(|a| a.id));
-        Some(serde_json::json!({
-            "id": c.id,
-            "title": title,
-            "group": group,
-            "keys": keys,
-            "default": c.default_keys.map(|k| k.label()).into_iter().collect::<Vec<_>>(),
-            "scope": "level",
-            "command": "",
-            "conflicts": ignored.into_iter().collect::<Vec<_>>(),
-        }))
-    }
-
-    /// Binds an action, or a level command, to `keys` (empty takes them away); answers what let
-    /// a chord go. Saved soon.
+    /// Binds an action to `keys` (empty takes them away); answers what let a chord go. Saved
+    /// soon.
     pub(crate) fn bind_keys(&mut self, id: &str, keys: Vec<Chord>) -> Result<Vec<String>, String> {
-        if self.parts.actions.table.read().get(id).is_some() {
-            let moved = self.parts.actions.table.write().bind(id, keys, &self.settings);
-            self.settings.save_soon(&self.editor);
-            return Ok(moved);
+        if self.parts.actions.table.read().get(id).is_none() {
+            return Err(format!("no action '{id}' takes keys (app.keys lists them)"));
         }
-        let i = self
-            .command_index(id)
-            .filter(|i| self.parts.commands.get(*i).is_some_and(|c| c.bindable))
-            .ok_or_else(|| format!("no action '{id}' takes keys (app.keys lists them)"))?;
-        Ok(self.bind(i, keys.first().copied()).into_iter().collect())
+        let moved = self.parts.actions.table.write().bind(id, keys, &self.settings);
+        self.settings.save_soon(&self.editor);
+        Ok(moved)
     }
 
-    /// Back to the defaults: one action's or level command's, or every one's.
+    /// Back to the defaults: one action's, or every one's.
     pub(crate) fn reset_keys(&mut self, id: Option<&str>) -> Result<(), String> {
-        match id {
-            Some(one) if self.parts.actions.table.read().get(one).is_some() => {
-                self.parts.actions.table.write().reset(Some(one), &self.settings);
-            }
-            Some(one) => {
-                let i = self
-                    .command_index(one)
-                    .ok_or_else(|| format!("no action '{one}' (app.keys lists them)"))?;
-                if let Some(c) = self.parts.commands.get(i) {
-                    let cid = c.id.clone();
-                    self.bindings.remove(&cid);
-                    self.settings.remove_shortcut(&cid);
-                }
-            }
-            None => {
-                self.parts.actions.table.write().reset(None, &self.settings);
-                let ids: Vec<SmolStr> = self.bindings.keys().cloned().collect();
-                for cid in ids {
-                    self.settings.remove_shortcut(&cid);
-                }
-                self.bindings.clear();
-            }
+        if let Some(one) = id
+            && self.parts.actions.table.read().get(one).is_none()
+        {
+            return Err(format!("no action '{one}' (app.keys lists them)"));
         }
+        self.parts.actions.table.write().reset(id, &self.settings);
         self.settings.save_soon(&self.editor);
         Ok(())
-    }
-
-    /// Binds a level command (`None` takes its shortcut away); the command that had the chord
-    /// lets it go. Answers that command's id.
-    pub(crate) fn bind(&mut self, i: usize, chord: Option<Chord>) -> Option<String> {
-        let mut moved = None;
-        if let Some(chord) = chord {
-            for j in 0..self.parts.commands.len() {
-                if j != i
-                    && self.binding(j) == Some(chord)
-                    && let Some(c) = self.parts.commands.get(j)
-                {
-                    let id = c.id.clone();
-                    self.bindings.insert(id.clone(), None);
-                    self.settings.set_shortcut(&id, "");
-                    moved = Some(id.to_string());
-                }
-            }
-        }
-        let Some(c) = self.parts.commands.get(i) else { return moved };
-        let id = c.id.clone();
-        self.bindings.insert(id.clone(), chord);
-        self.settings.set_shortcut(&id, &chord.map(|k| k.label()).unwrap_or_default());
-        self.settings.save_soon(&self.editor);
-        moved
     }
 
     /// The keys an action is bound to now, as a menu row shows them.
@@ -2041,6 +1813,9 @@ fn project_linked(editor: &Editor) -> bool {
 #[derive(Default)]
 pub(crate) struct JobMarks {
     pub cancelled: parking_lot::Mutex<FxHashSet<JobId>>,
+    /// Whether the Task Center's card is up, as the last frame left it: what `ui.tasks`
+    /// answers without the UI thread.
+    pub card_open: std::sync::atomic::AtomicBool,
     pub log_state: parking_lot::Mutex<Option<crate::builder::LogStateFn>>,
 }
 

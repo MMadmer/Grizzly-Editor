@@ -11,10 +11,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use egui::epaint::RectShape;
 use egui::{
-    Color32, CornerRadius, CursorIcon, Event, FontId, Mesh, MouseWheelUnit, Painter, PointerButton, Pos2,
-    Rect, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, pos2,
+    Color32, CornerRadius, CursorIcon, Event, FontId, MouseWheelUnit, Painter, PointerButton, Pos2, Rect,
+    Sense, Stroke, StrokeKind, Ui, Vec2, pos2,
 };
 use gz_editor::Editor;
 use gz_pda::{Clock, Hit, ItemBox, Layout, MapSpot, Preview};
@@ -265,8 +264,10 @@ impl Draw<'_> {
 
     fn tex(&self, painter: &Painter, id: &str, r: Rect, tint: u32, rounding: f32) {
         match self.assets.tex(self.editor, id) {
-            Look::Ready((tid, uv)) => {
-                painter.add(RectShape::filled(r, radius(rounding), col(tint, 1.0)).with_texture(tid, uv));
+            Look::Ready((sheet, uv)) => {
+                // the sheet comes in tiles: a piece is drawn tile by tile, its corners square
+                let _ = rounding;
+                sheet.paint(painter, r, uv, col(tint, 1.0));
             }
             // a texture the game would not find: the magenta X-Ray shows for one
             Look::Missing => {
@@ -345,7 +346,6 @@ impl Draw<'_> {
             'b' => r.max.y - total,
             _ => (r.min.y + r.max.y - total) * 0.5,
         };
-        let mut mesh = Mesh::with_texture(sheet.id);
         for ln in &lines {
             let mut x = match align {
                 'c' => (r.min.x + r.max.x - ln.w * px) * 0.5,
@@ -358,7 +358,8 @@ impl Draw<'_> {
                 if gw > 0.0 && c != b' ' {
                     let gx = font.glyphs.x.get(i).copied().unwrap_or(0.0);
                     let gy = font.glyphs.y.get(i).copied().unwrap_or(0.0);
-                    mesh.add_rect_with_uv(
+                    sheet.paint(
+                        painter,
                         Rect::from_min_max(pos2(x, y), pos2(x + gw * px, y + gh * px)),
                         sheet.uv(gx, gy, gw, gh),
                         tint,
@@ -367,9 +368,6 @@ impl Draw<'_> {
                 x += gw * px;
             }
             y += lh;
-        }
-        if !mesh.is_empty() {
-            painter.add(Shape::mesh(mesh));
         }
     }
 
@@ -381,12 +379,7 @@ impl Draw<'_> {
         match sp.rect {
             None => self.tex(painter, &sp.icon, r, sp.color, 0.0),
             Some([x, y, w, hh]) => match self.assets.sheet(self.editor, &sp.icon, SheetFrom::Project) {
-                Look::Ready(s) => {
-                    painter.add(
-                        RectShape::filled(r, CornerRadius::ZERO, col(sp.color, 1.0))
-                            .with_texture(s.id, s.uv(x, y, w, hh)),
-                    );
-                }
+                Look::Ready(s) => s.paint(painter, r, s.uv(x, y, w, hh), col(sp.color, 1.0)),
                 Look::Missing => {
                     painter.rect_filled(r, CornerRadius::ZERO, col(GAME_MISSING_TEXTURE, 1.0));
                 }
@@ -419,10 +412,7 @@ impl Draw<'_> {
         {
             let [x1, z1, x2, z2] = lm.bound;
             let r = Rect::from_two_pos(v.w2p(x1, z2), v.w2p(x2, z1));
-            painter.add(
-                RectShape::filled(r, CornerRadius::ZERO, Color32::WHITE)
-                    .with_texture(sheet.id, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
-            );
+            sheet.paint(&painter, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             let l = m.preview.layout.clone();
             let s = 11.0 * self.g.ky;
             for mk in &l.markers {

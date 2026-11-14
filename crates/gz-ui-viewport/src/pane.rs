@@ -1,8 +1,15 @@
-//! [`ViewportPane`]: the picture, the pills, the gizmos and the mouse (`UIRenderForm`,
-//! `UI_ViewportNavigation::Draw`, `DrawRenderToolBar`, `TUI::Mouse*`, the tools' controls).
+//! [`ViewportPane`]: the picture, the pills, the gizmo, the drop target and the mouse.
+//!
+//! What a left press does follows the scene's mode, read from the scene's snapshot each press:
+//! Select picks, draws a marquee with Ctrl and drags the gizmo; Place puts down what is armed
+//! at each click; Paint paints the layer its panel picked (Ctrl picks and boxes the layer's own
+//! things); Zones draws the visibility cells. A plain left drag that no mode takes flies the
+//! camera, and a click selects on release, under 4 points of movement - the camera never takes
+//! a click from a mode.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use egui::{
     Align, Align2, Color32, CornerRadius, Key, Layout, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder,
@@ -13,25 +20,26 @@ use gz_app::{Chord, DocCx};
 use gz_editor::{Editor, SmolStr, Value, json};
 use gz_render::{Color, Ray};
 use gz_scene::apply::{SelectMode, TransformEdit};
-use gz_scene::objects::{ParticlesData, SceneObjectData, WayData, default_data};
-use gz_scene::{ObjClass, ObjData, ObjId, Object, SceneCmd, SceneService};
+use gz_scene::objtools::ToolEdit;
+use gz_scene::{ObjClass, ObjData, ObjId, Object, SceneCmd, SceneMode, SceneService};
 use gz_ui::text::{self, Clip};
 use gz_ui::{Font, Icon, Kind, Palette, Toolbar, ToolbarStyle, palette};
+use parking_lot::Mutex;
 
 use crate::camera::{Buttons, FlyKey, Target};
-use crate::gizmo::{self, GizmoType, Status};
-use crate::keys;
+use crate::gizmo::{self, Anchor, GizmoType, Shapes, Space, Status};
 use crate::menus;
-use crate::service::{Action, Viewport};
+use crate::place::Placeable;
+use crate::service::Viewport;
 
 /// One gesture of the mouse in the viewport.
 enum Gesture {
     None,
     /// The camera took the press.
     Camera,
-    /// A left press the tools did not capture: a drag that follows flies the camera, a Ctrl
-    /// drag draws a marquee, and a click - the button up before the pointer went `DRAG_START`
-    /// from `start` - does what the press waits to do (`click`), as in Unreal.
+    /// A left press no mode took at once: a drag that follows flies the camera, a Ctrl drag
+    /// draws a marquee, and a click - the button up before the pointer went `DRAG_START` from
+    /// `start` - does what the press waits to do.
     Press {
         start: Pos2,
         click: Option<Click>,
@@ -41,27 +49,34 @@ enum Gesture {
         start: Pos2,
         now: Pos2,
     },
-    /// The Sector tool's mesh paint (Place with Meshes Add or Remove).
+    /// Zones: meshes painted into the selected cell.
     ToolPaint(crate::objtools::Paint),
-    /// The Sector tool's Box Pick.
+    /// Zones: a box of meshes for the selected cell.
     ToolBox {
         start: Pos2,
         now: Pos2,
     },
-    /// The AI map's brush stroke (Place with the AI Map tool).
+    /// Paint > AI Map: a stroke of the brush.
     AiPaint(crate::bulktools::Paint),
+    /// Paint > Foliage: the brush's spots on the ground, painted (or erased) on release.
+    Foliage(Box<BrushStroke>),
 }
 
-/// What a left click does once the button is up, kept from the press: a drag in between does none of it.
+/// What a left click does once the button is up, kept from the press: a drag in between does
+/// none of it.
 enum Click {
-    /// Select what the ray hits (or a tool's own pick), with the keys of the press.
-    Select { ray: Ray, b: Buttons, target: ObjClass },
-    /// Place the action's object where the ray hits.
-    Place { ray: Ray, b: Buttons },
+    /// Select what the ray hits, with the keys of the press.
+    Select { ray: Ray, b: Buttons },
+    /// A painted layer's own pick (its nodes, slots or marks).
+    Layer { ray: Ray, b: Buttons, layer: ObjClass },
+    /// Place the armed thing where the ray lands.
+    Place { ray: Ray },
+    /// Paint > Decals: lay a wallmark (Shift moves the selected one there).
+    Decal { ray: Ray, b: Buttons },
 }
 
 /// How far the pointer may go from a left press before the press is a drag: a click below it, the
-/// camera or the marquee past it (points; Unreal's drag threshold is about as much).
+/// camera or the marquee past it (points).
 const DRAG_START: f32 = 4.0;
 
 /// What a left press that waits for its click turns into this frame.
@@ -117,22 +132,80 @@ struct Held {
     dynamic: bool,
 }
 
-/// A drag of the gizmo (`TUI_CustomControl::SelectStart` .. `SelectEnd`).
+/// A drag of a gizmo handle.
 struct Drag {
     kind: GizmoType,
     status: Status,
     ray0: Ray,
-    start: Vec3,
+    /// Where the press was, points from the pane's corner.
+    press: Pos2,
+    /// The real pivot and the gizmo's axes at the press.
+    pivot: Vec3,
+    axes: [Vec3; 3],
+    space: Space,
+    /// The handles on the screen at the press (a scale drag and an edge-on ring measure on them).
+    shapes: Shapes,
+    /// A ring seen edge-on: its angle is the pointer's travel across it.
+    edge: bool,
     held: Vec<Held>,
-    /// The rotation each object has now: a rotate drag turns them step by step.
-    turned: Vec<Vec3>,
-    remainder: f32,
+    /// Way paths with selected points: those points, as at the press.
+    points: Vec<(ObjId, Vec<(usize, Vec3)>)>,
+    /// The AI map's selected nodes, as at the press.
+    nodes: Vec<(u32, Vec3)>,
+    /// The turn so far (radians), for the arc and its readout; and the part of it the AI map's
+    /// nodes were already given.
+    angle: f32,
+    applied: f32,
     merge: SmolStr,
     svc: Arc<SceneService>,
-    /// In the Way tool's Points mode: the selected points of each held way, as at the press.
-    points: Vec<(ObjId, Vec<(usize, Vec3)>)>,
-    /// With the AI Map tool: the selected nodes, as at the press.
-    nodes: Vec<(u32, Vec3)>,
+    /// Alt: the copies the drag moves, once they are made.
+    copies: Option<Arc<Mutex<Option<Vec<ObjId>>>>>,
+}
+
+/// A stroke of the Foliage brush: its spots on the ground, found as the pointer moves.
+struct BrushStroke {
+    erase: bool,
+    spots: Arc<Mutex<Vec<Vec3>>>,
+    picking: Arc<AtomicUsize>,
+    last: Pos2,
+}
+
+/// Where the ground is under the pointer, asked one pick at a time: the ghost of a drop and the
+/// brush's ring stand on it.
+#[derive(Default)]
+struct Ground {
+    busy: Arc<AtomicBool>,
+    asked: Option<Pos2>,
+    hit: Arc<Mutex<Option<(Vec3, Vec3)>>>,
+}
+
+impl Ground {
+    fn track(&mut self, editor: &Arc<Editor>, at: Pos2, ray: Ray) {
+        if self.asked == Some(at) || self.busy.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.asked = Some(at);
+        let Ok(svc) = SceneService::of(editor) else {
+            self.busy.store(false, Ordering::Release);
+            return;
+        };
+        let (ed, busy, hit) = (editor.clone(), self.busy.clone(), self.hit.clone());
+        editor.exec.spawn(async move {
+            let found = crate::place::landing(&ed, &svc, ray).await;
+            *hit.lock() = found.map(|(p, up)| (p, up.unwrap_or(Vec3::Y)));
+            busy.store(false, Ordering::Release);
+            ed.exec.wake().ping();
+        });
+    }
+
+    fn at(&self) -> Option<(Vec3, Vec3)> {
+        *self.hit.lock()
+    }
+
+    fn forget(&mut self) {
+        self.asked = None;
+        *self.hit.lock() = None;
+    }
 }
 
 /// The 3D view of the Level tab. UI thread only.
@@ -142,16 +215,16 @@ pub struct ViewportPane {
     texture: Option<(egui::TextureId, u64)>,
     gesture: Gesture,
     hover: Status,
-    last: Option<Instant>,
     serial: u64,
-    maximized: bool,
-    maximize_asked: bool,
     /// The canvas as last laid out, points.
     rect: Rect,
     /// Where the gesture fed over MCP had the pointer last frame.
     fed_at: Option<Pos2>,
     /// Where the camera holds the hidden cursor while it has the mouse (the press), points.
     hold: Option<Pos2>,
+    ground: Ground,
+    /// The pointer over the canvas this frame (points, absolute), and the ray through it.
+    pointer: Option<(Pos2, Ray)>,
 }
 
 impl ViewportPane {
@@ -166,24 +239,13 @@ impl ViewportPane {
             texture: None,
             gesture: Gesture::None,
             hover: Status::None,
-            last: None,
             serial: 0,
-            maximized: false,
-            maximize_asked: false,
             rect: Rect::NOTHING,
             fed_at: None,
             hold: None,
+            ground: Ground::default(),
+            pointer: None,
         }
-    }
-
-    /// Whether View Options' Maximize Viewport is checked (the Level tab's F11 state).
-    pub fn set_maximized(&mut self, on: bool) {
-        self.maximized = on;
-    }
-
-    /// Maximize Viewport was picked in View Options since the last ask: the Level tab toggles.
-    pub fn take_maximize_request(&mut self) -> bool {
-        std::mem::take(&mut self.maximize_asked)
     }
 
     /// Draws the viewport into the space it is given: the picture, the pills, the gizmo, input.
@@ -200,7 +262,7 @@ impl ViewportPane {
         let renderer = self.vp.start_renderer(cx.editor, cx.gpu);
         if renderer.is_none() && self.vp.renderer_starting() {
             // the renderer starts on a thread of its own: look again soon
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            ctx.request_repaint_after(Duration::from_millis(16));
         }
         let canvas_c = Color::rgb(p.canvas.r(), p.canvas.g(), p.canvas.b());
         if self.vp.read(|s| s.size != size || s.background != canvas_c) {
@@ -221,9 +283,7 @@ impl ViewportPane {
         let bg = game.map_or(p.canvas, |c| Color32::from_rgb(c.0[0], c.0[1], c.0[2]));
         painter.rect_filled(rect, CornerRadius::ZERO, bg);
         let mut finished = None;
-        // View > Render > Quality: the picture, rendered at a scale of the pane's size, fills it;
-        // a label's pixel of the picture is this many pixels of it
-        let mut label_px = ppp * self.vp.read(|s| s.view.quality);
+        let mut label_px = ppp * self.vp.read(|s| s.prefs.render_scale);
         if let Some(r) = &renderer {
             let info = r.finished();
             self.vp.rates.lock().tick(info.frame);
@@ -238,8 +298,8 @@ impl ViewportPane {
         if let Some(info) = &finished {
             draw_labels(&painter, rect, info, label_px);
         }
-        let v = self.vp.read(|s| s.view.clone());
-        if v.safe_rect {
+        let show = self.vp.read(|s| s.prefs.show);
+        if show.safe_rect {
             draw_safe_rect(&painter, rect, &p);
         }
         if let Gesture::Marquee { start, now } | Gesture::ToolBox { start, now } = &self.gesture {
@@ -247,7 +307,9 @@ impl ViewportPane {
             painter.rect_filled(r, CornerRadius::ZERO, p.accent_bright.gamma_multiply(0.12));
             painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, p.accent_bright), StrokeKind::Inside);
         }
+        self.draw_brush(&painter, rect, size, ppp, &p, &ctx);
         self.draw_gizmo(&painter, rect, size, ppp, &p);
+        self.drop_target(ui, rect, size, ppp);
         if let Some((text_, at)) = self.vp.read(|s| s.status.clone())
             && at.elapsed().as_secs_f32() < 2.0
         {
@@ -261,16 +323,16 @@ impl ViewportPane {
                 None,
                 Clip::End,
             );
-            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            ctx.request_repaint_after(Duration::from_millis(250));
         }
-        if v.stats {
+        if show.stats {
             local_stats_pill(&painter, rect, &self.vp, finished.as_ref(), &p);
         }
         self.local_axis_gizmo(ui, rect, &p);
-        self.pills(ui, rect);
+        self.pills(ui, rect, cx);
         if renderer.as_ref().is_some_and(|r| r.finished().stats.placeholders > 0) {
             // meshes still loading: look again soon
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
 
@@ -278,37 +340,24 @@ impl ViewportPane {
     pub fn inactive(&mut self, cx: &mut DocCx<'_>) {
         self.vp.sync(cx.editor);
         self.gesture = Gesture::None;
-    }
-
-    /// The scene's key bindings, routed here by the shell only while Level owns the keys.
-    pub fn shortcut(&mut self, cx: &mut DocCx<'_>, chord: &Chord) -> bool {
-        // flying with the right button: WASD and QE are the camera's
-        if self.vp.read(|s| s.nav.flying()) && fly_key(chord.key).is_some() {
-            return true;
-        }
-        // `TUI::KeyDown`: Esc leaves placing before the command bound to it runs
-        if chord.key == egui::Key::Escape && !chord.ctrl && !chord.shift && !chord.alt {
-            self.vp.with(|s| s.tool.action = crate::service::Action::Select);
-        }
-        match keys::act_of(cx.editor, chord) {
-            Some(act) => {
-                keys::run(cx.editor, act);
-                true
-            }
-            None => false,
+        if self.vp.read(|s| s.ghost.is_some()) {
+            self.vp.with(|s| s.ghost = None);
         }
     }
 
-    /// What `state` / `ui_list` answer about it.
+    /// The keys the document takes after the actions: while the camera flies, W, A, S, D, Q and
+    /// E are the camera's.
+    pub fn shortcut(&mut self, _cx: &mut DocCx<'_>, chord: &Chord) -> bool {
+        self.vp.read(|s| s.nav.flying()) && fly_key(chord.key).is_some()
+    }
+
+    /// What `state` / `ui.list` answer about it.
     #[must_use]
     pub fn mcp_state(&self) -> Value {
         let mut out = crate::cmd::view_state(&self.vp);
         if let Value::Object(m) = &mut out {
-            let ppp_rect = self.rect;
-            m.insert(
-                "rect".into(),
-                json!([ppp_rect.min.x, ppp_rect.min.y, ppp_rect.width(), ppp_rect.height()]),
-            );
+            let r = self.rect;
+            m.insert("rect".into(), json!([r.min.x, r.min.y, r.width(), r.height()]));
             m.insert("frame".into(), json!(self.vp.renderer().map_or(0, |r| r.finished().frame)));
             m.insert("serial".into(), json!(self.serial));
         }
@@ -334,28 +383,31 @@ impl ViewportPane {
 
     // ---- the mouse ---------------------------------------------------------------------------
 
+    #[allow(clippy::too_many_lines)]
     fn input(&mut self, ctx: &egui::Context, canvas: &egui::Response, rect: Rect, ppp: f32, size: [u32; 2]) {
-        // a gesture fed over MCP (`viewport_gesture`) stands for the mouse while it lasts
+        // a gesture fed over MCP (`viewport.gesture`) stands for the mouse while it lasts
         let fed = self.vp.gesture_step();
         let real = fed.is_none();
         let mut motion = None;
+        let mut carried = None;
         let (b, pressed, released, delta, pos, wheel, dt, over) = match fed {
-            Some((step, m, last)) => {
-                let at = rect.min + step.at.to_vec2();
+            Some(f) => {
+                let at = rect.min + f.step.at.to_vec2();
                 let delta = self.fed_at.map_or(Vec2::ZERO, |p| at - p);
-                self.fed_at = (!last).then_some(at);
-                if !last {
+                self.fed_at = (!f.last).then_some(at);
+                if !f.last {
                     ctx.request_repaint();
                 }
                 let b = Buttons {
-                    left: step.left,
-                    right: step.right,
-                    middle: step.middle,
-                    shift: m.shift,
-                    ctrl: m.ctrl,
-                    alt: m.alt,
+                    left: f.step.left,
+                    right: f.step.right,
+                    middle: f.step.middle,
+                    shift: f.mods.shift,
+                    ctrl: f.mods.ctrl,
+                    alt: f.mods.alt,
                 };
-                (b, step.pressed, step.released, delta, Some(at), 0.0, ctx.input(|i| i.stable_dt), true)
+                carried = f.payload.map(|p| (p, f.step.released));
+                (b, f.step.pressed, f.step.released, delta, Some(at), 0.0, ctx.input(|i| i.stable_dt), true)
             }
             None => {
                 motion = ctx.input(|i| i.pointer.motion());
@@ -379,20 +431,34 @@ impl ViewportPane {
                         i.stable_dt,
                     )
                 });
-                (b, pressed, released, delta, pos, wheel, dt, canvas.hovered())
+                (b, pressed, released, delta, pos, wheel, dt, canvas.hovered() || canvas.dragged())
             }
         };
         let latest = pos;
         let pos = pos.unwrap_or(rect.center());
-        // C++: a pointer outside is pinned to the canvas's edge
+        // a pointer outside is pinned to the canvas's edge
         let clamped = pos2(pos.x.clamp(rect.min.x, rect.max.x), pos.y.clamp(rect.min.y, rect.max.y));
         let px = G2::new((clamped.x - rect.min.x) * ppp, (clamped.y - rect.min.y) * ppp);
         let (dx, dy) = (delta.x * ppp, delta.y * ppp);
         let ray = self.vp.read(|s| s.nav.ray(size, px));
+        self.pointer = if over { ray.map(|r| (clamped, r)) } else { None };
+        let local = clamped - rect.min.to_vec2();
 
-        // the gizmo part under the mouse
+        // a drop fed over MCP: the ghost while it is carried, the placing when it is let go
+        if let Some((payload, let_go)) = carried {
+            if let Some(ray) = ray {
+                self.carry(&payload, clamped, ray, ppp);
+                if let_go {
+                    self.drop_payload(&payload, ray);
+                }
+            }
+            self.last_frame(ctx, latest, dt);
+            return;
+        }
+
+        // the gizmo handle under the mouse
         if matches!(self.gesture, Gesture::None) {
-            self.hover = if over { self.hover_status(ray.as_ref(), size) } else { Status::None };
+            self.hover = if over { self.hover_status(local, size, ppp) } else { Status::None };
         }
 
         if wheel != 0.0 && (over || !matches!(self.gesture, Gesture::None)) {
@@ -405,8 +471,12 @@ impl ViewportPane {
 
         match &mut self.gesture {
             Gesture::None => {
+                // a handle of the gizmo takes a left press before the camera (an Alt drag of it copies)
+                let handle = b.left && !b.right && !b.middle && self.hover != Status::None;
                 if pressed && over && b.any_button() {
-                    if self.vp.with(|s| s.nav.move_start(b)) {
+                    if handle && let Some(ray) = ray {
+                        self.mode_press(&b, ray, clamped, local, size, ppp);
+                    } else if self.vp.with(|s| s.nav.move_start(b)) {
                         self.gesture = Gesture::Camera;
                         if real {
                             self.hold = Some(pos);
@@ -414,7 +484,7 @@ impl ViewportPane {
                     } else if b.left
                         && let Some(ray) = ray
                     {
-                        self.tool_press(&b, ray, clamped);
+                        self.mode_press(&b, ray, clamped, local, size, ppp);
                     }
                 }
             }
@@ -455,7 +525,7 @@ impl ViewportPane {
                     PressStep::Drag => *click = None,
                     PressStep::Camera => {
                         *click = None;
-                        // a left drag no tool took is the camera's, and selects nothing
+                        // a left drag no mode took is the camera's, and selects nothing
                         if self.vp.with(|s| s.nav.left_drag_start(b)) {
                             self.gesture = Gesture::Camera;
                             if real {
@@ -471,12 +541,18 @@ impl ViewportPane {
                     let (a, z) = (*start, *now);
                     self.gesture = Gesture::None;
                     let to_px = |q: Pos2| G2::new((q.x - rect.min.x) * ppp, (q.y - rect.min.y) * ppp);
-                    let target = scene_target(&self.editor).unwrap_or(ObjClass::SceneObject);
-                    if crate::bulktools::marquee(&self.editor, &self.vp, size, to_px(a), to_px(z), target) {
-                    } else if crate::objtools::way_points_mode(&self.editor) {
-                        crate::objtools::way_points_marquee(&self.editor, &self.vp, size, to_px(a), to_px(z));
-                    } else {
-                        marquee_select(&self.editor, &self.vp, size, to_px(a), to_px(z));
+                    match scene_mode(&self.editor).and_then(SceneMode::layer) {
+                        Some(layer) => {
+                            crate::bulktools::marquee(
+                                &self.editor,
+                                &self.vp,
+                                size,
+                                to_px(a),
+                                to_px(z),
+                                layer,
+                            );
+                        }
+                        None => marquee_select(&self.editor, &self.vp, size, to_px(a), to_px(z)),
                     }
                 }
             }
@@ -491,12 +567,31 @@ impl ViewportPane {
             }
             Gesture::AiPaint(paint) => {
                 if !b.left {
-                    crate::bulktools::paint_end(&self.editor, &self.vp, b);
+                    crate::bulktools::paint_end(&self.editor);
                     self.gesture = Gesture::None;
                 } else if (dx != 0.0 || dy != 0.0)
                     && let Some(ray) = ray
                 {
-                    crate::bulktools::ai_step(&self.editor, &self.vp, paint, ray, false, false);
+                    crate::bulktools::ai_step(&self.editor, &self.vp, paint, ray, false);
+                }
+            }
+            Gesture::Foliage(stroke) => {
+                if !b.left {
+                    let Gesture::Foliage(stroke) = std::mem::replace(&mut self.gesture, Gesture::None) else {
+                        return;
+                    };
+                    crate::bulktools::foliage_end(
+                        &self.editor,
+                        &self.vp,
+                        stroke.erase,
+                        stroke.spots,
+                        stroke.picking,
+                    );
+                } else if (clamped - stroke.last).length() > 6.0
+                    && let Some(ray) = ray
+                {
+                    stroke.last = clamped;
+                    crate::bulktools::foliage_spot(&self.editor, &stroke.spots, &stroke.picking, ray);
                 }
             }
             Gesture::ToolPaint(paint) => {
@@ -520,16 +615,19 @@ impl ViewportPane {
                 } else if (dx != 0.0 || dy != 0.0)
                     && let Some(ray) = ray
                 {
-                    apply_drag(&self.vp, drag, &ray, dx, dy, &self.editor);
+                    apply_drag(&self.vp, drag, &ray, local, &self.editor);
                 }
             }
         }
+        self.last_frame(ctx, latest, dt);
+    }
 
+    /// What every frame of input ends with: the held cursor, the flying keys, the next frame
+    /// while a gesture lasts.
+    fn last_frame(&mut self, ctx: &egui::Context, latest: Option<Pos2>, dt: f32) {
         self.hold_cursor(ctx, latest);
-
         // flying: WASD and QE held move the camera every frame
-        let flying = self.vp.read(|s| s.nav.flying());
-        if flying {
+        if self.vp.read(|s| s.nav.flying()) {
             let down: Vec<FlyKey> = ctx.input(|i| {
                 [
                     (Key::W, FlyKey::W),
@@ -555,85 +653,105 @@ impl ViewportPane {
         if !matches!(self.gesture, Gesture::None) {
             ctx.request_repaint();
         }
-        self.last = Some(Instant::now());
     }
 
-    /// The gizmo's part under the ray (`Gizmo::OnFrame`), when the gizmo is up.
-    fn hover_status(&self, ray: Option<&Ray>, size: [u32; 2]) -> Status {
-        let Some(ray) = ray else { return Status::None };
-        let (kind, action, anchor, cam, class) = self
-            .vp
-            .read(|s| (s.tool.gizmo, s.tool.action, s.anchor, s.nav.camera(), scene_target(&self.editor)));
-        if action != Action::Select || kind == GizmoType::None {
-            return Status::None;
-        }
-        let Some(anchor) = anchor else { return Status::None };
-        let Some(at) = gizmo::screen_position(&cam, size, anchor.position) else { return Status::None };
-        gizmo::hover(kind, at, &anchor.rotation, ray, class == Some(ObjClass::AiMap))
+    /// The gizmo's axes as a drag of `kind` uses them.
+    fn axes(&self, kind: GizmoType, anchor: &Anchor) -> [Vec3; 3] {
+        gizmo_axes(kind, anchor, self.vp.read(|s| s.prefs.space))
     }
 
-    /// A left press the camera did not take (`TUI_CustomControl::Start`).
-    fn tool_press(&mut self, b: &Buttons, ray: Ray, at: Pos2) {
-        let (action, kind) = self.vp.read(|s| (s.tool.action, s.tool.gizmo));
-        if action == Action::Place {
-            self.serial += 1;
-            match crate::bulktools::place_press(&self.editor, &self.vp, ray, *b, self.serial) {
-                crate::bulktools::BulkGesture::Paint(p) => {
-                    self.gesture = Gesture::AiPaint(p);
-                    return;
-                }
-                crate::bulktools::BulkGesture::Done => {
-                    self.gesture = Gesture::Press { start: at, click: None };
-                    return;
-                }
-                crate::bulktools::BulkGesture::None => {}
-            }
-            match crate::objtools::place_press(&self.editor, &self.vp, ray, *b, self.serial) {
-                crate::objtools::ToolGesture::Paint(p) => self.gesture = Gesture::ToolPaint(p),
-                crate::objtools::ToolGesture::BoxPick => {
-                    self.gesture = Gesture::ToolBox { start: at, now: at }
-                }
-                crate::objtools::ToolGesture::Done => {
-                    self.gesture = Gesture::Press { start: at, click: None }
-                }
-                crate::objtools::ToolGesture::None => {
-                    // placed on the click: a drag moves the camera and places nothing
-                    self.gesture = Gesture::Press { start: at, click: Some(Click::Place { ray, b: *b }) };
-                }
-            }
-            return;
+    /// The gizmo's handles on the screen now, in points from the pane's corner; `None` while no
+    /// gizmo is up.
+    fn shapes(&self, size: [u32; 2], ppp: f32) -> Option<(GizmoType, Anchor, Shapes)> {
+        let mode = scene_mode(&self.editor)?;
+        if !matches!(mode, SceneMode::Select | SceneMode::AiMap) {
+            return None;
         }
-        let target = scene_target(&self.editor).unwrap_or(ObjClass::SceneObject);
-        let sup = gizmo::supports(target);
-        let supported = match kind {
-            GizmoType::Move => sup[0],
-            GizmoType::Rotate => sup[1],
-            GizmoType::Scale => sup[2],
-            GizmoType::None => false,
-        };
-        if supported
-            && self.hover != Status::None
-            && let Some(drag) = self.start_drag(kind, ray, target)
+        let (kind, anchor, cam) = self.vp.read(|s| (s.gizmo, s.anchor, s.nav.camera()));
+        if kind == GizmoType::None {
+            return None;
+        }
+        let anchor = anchor?;
+        let at = gizmo::screen_position(&cam, size, anchor.position)?;
+        let vp_m = cam.view_proj(size);
+        let proj = |w: Vec3| gz_render::project(&vp_m, size, w).map(|q| G2::new(q.x / ppp, q.y / ppp));
+        let axes = self.axes(kind, &anchor);
+        let shapes = gizmo::shapes(kind, at, axes, cam.forward, &proj, mode == SceneMode::AiMap)?;
+        Some((kind, anchor, shapes))
+    }
+
+    /// The gizmo handle under the pointer.
+    fn hover_status(&self, local: Pos2, size: [u32; 2], ppp: f32) -> Status {
+        match self.shapes(size, ppp) {
+            Some((kind, _, s)) => gizmo::hit(kind, &s, G2::new(local.x, local.y)),
+            None => Status::None,
+        }
+    }
+
+    /// A left press the camera did not take: what the mode does with it.
+    fn mode_press(&mut self, b: &Buttons, ray: Ray, at: Pos2, local: Pos2, size: [u32; 2], ppp: f32) {
+        self.serial += 1;
+        let mode = scene_mode(&self.editor).unwrap_or_default();
+        // a gizmo handle under the pointer: a drag of it, in Select and in the AI map's mode
+        if self.hover != Status::None
+            && let Some(drag) = self.start_drag(b, ray, local, size, ppp)
         {
             self.gesture = Gesture::Transform(Box::new(drag));
             return;
         }
-        // selected on the click: a drag moves the camera and selects nothing
-        self.gesture = Gesture::Press { start: at, click: Some(Click::Select { ray, b: *b, target }) };
+        let press = |click| Gesture::Press { start: at, click };
+        self.gesture = match mode {
+            SceneMode::Select => press(Some(Click::Select { ray, b: *b })),
+            SceneMode::Place => {
+                match crate::objtools::place_press(&self.editor, &self.vp, ray, *b, self.serial) {
+                    crate::objtools::ToolGesture::None => press(Some(Click::Place { ray })),
+                    _ => press(None),
+                }
+            }
+            SceneMode::Zones => {
+                match crate::objtools::place_press(&self.editor, &self.vp, ray, *b, self.serial) {
+                    crate::objtools::ToolGesture::Paint(p) => Gesture::ToolPaint(p),
+                    crate::objtools::ToolGesture::BoxPick => Gesture::ToolBox { start: at, now: at },
+                    crate::objtools::ToolGesture::Done => press(None),
+                    crate::objtools::ToolGesture::None => press(Some(Click::Select { ray, b: *b })),
+                }
+            }
+            SceneMode::AiMap | SceneMode::Details | SceneMode::Wallmarks if b.ctrl => {
+                let layer = mode.layer().unwrap_or(ObjClass::AiMap);
+                press(Some(Click::Layer { ray, b: *b, layer }))
+            }
+            SceneMode::AiMap => {
+                Gesture::AiPaint(crate::bulktools::ai_press(&self.editor, &self.vp, ray, self.serial))
+            }
+            SceneMode::Details => {
+                let stroke = BrushStroke {
+                    erase: b.shift,
+                    spots: Arc::new(Mutex::new(Vec::new())),
+                    picking: Arc::new(AtomicUsize::new(0)),
+                    last: at,
+                };
+                crate::bulktools::foliage_spot(&self.editor, &stroke.spots, &stroke.picking, ray);
+                Gesture::Foliage(Box::new(stroke))
+            }
+            SceneMode::Wallmarks => press(Some(Click::Decal { ray, b: *b })),
+        };
     }
 
     /// A left click, the button up: what its press waited to do.
     fn run_click(&mut self, click: Click) {
         match click {
-            Click::Place { ray, b } => place(&self.editor, &self.vp, ray, b),
-            Click::Select { ray, b, target } => {
-                if crate::bulktools::click(&self.editor, &self.vp, ray, b, target) {
-                } else if crate::objtools::way_points_mode(&self.editor) {
-                    crate::objtools::way_point_click(&self.editor, &self.vp, ray, b);
-                } else {
-                    click_select(&self.editor, &self.vp, ray, b);
-                }
+            Click::Select { ray, b } => click_select(&self.editor, &self.vp, ray, b),
+            Click::Layer { ray, b, layer } => {
+                crate::bulktools::click(&self.editor, &self.vp, ray, b, layer);
             }
+            Click::Place { ray } => {
+                let Some(what) = crate::place::armed(&self.editor) else { return };
+                let ed = self.editor.clone();
+                crate::gesture::spawn(&self.editor, async move {
+                    crate::place::place_at(&ed, &what, ray).await;
+                });
+            }
+            Click::Decal { ray, b } => crate::bulktools::mark_place(&self.editor, &self.vp, ray, b.shift),
         }
     }
 
@@ -659,166 +777,326 @@ impl ViewportPane {
         }
     }
 
-    fn start_drag(&mut self, kind: GizmoType, ray0: Ray, class: ObjClass) -> Option<Drag> {
+    fn start_drag(&mut self, b: &Buttons, ray0: Ray, press: Pos2, size: [u32; 2], ppp: f32) -> Option<Drag> {
+        let (kind, anchor, shapes) = self.shapes(size, ppp)?;
         let svc = SceneService::of(&self.editor).ok()?;
         let snap = svc.store.snapshot();
-        let start = self.vp.read(|s| s.anchor.map(|a| a.position))?;
-        if class == ObjClass::AiMap {
-            let nodes = crate::bulktools::held_nodes(&self.editor);
-            if nodes.is_empty() {
-                return None;
-            }
-            self.serial += 1;
-            return Some(Drag {
-                kind,
-                status: self.hover,
-                ray0,
-                start,
-                held: Vec::new(),
-                turned: Vec::new(),
-                remainder: 0.0,
-                merge: SmolStr::new(format!("viewport.aimap.gizmo.{}", self.serial)),
-                svc,
-                points: Vec::new(),
-                nodes,
-            });
+        let sup = gizmo::supports_of(&snap);
+        let allowed = match kind {
+            GizmoType::Move => sup[0],
+            GizmoType::Rotate => sup[1],
+            GizmoType::Scale => sup[2],
+            GizmoType::None => false,
+        };
+        if !allowed {
+            return None;
         }
-        let held: Vec<Held> = snap
-            .of_class(class)
-            .filter(|o| snap.is_selected(o.id) && o.flags.visible && o.editable())
-            .map(|o| Held {
-                id: o.id,
-                position: o.position(),
-                rotation: o.rotation(),
-                scale: o.scale(),
-                glow: o.class == ObjClass::Glow,
-                dynamic: matches!(&o.data, ObjData::SceneObject(d) if svc.library.cached(&d.reference).is_some_and(|l| l.is_dynamic())),
-            })
+        let (space, cam) = self.vp.read(|s| (s.prefs.space, s.nav.camera()));
+        let axes = self.axes(kind, &anchor);
+        let status = self.hover;
+        let axis = match status {
+            Status::Screen => -cam.forward,
+            s => s.axis().map_or(Vec3::Y, |i| axes[i]),
+        };
+        let edge = kind == GizmoType::Rotate && ray0.dir.dot(axis).abs() < 0.12;
+        let merge = SmolStr::new(format!("viewport.gizmo.{}", self.serial));
+        let base = Drag {
+            kind,
+            status,
+            ray0,
+            press,
+            pivot: anchor.position,
+            axes,
+            space,
+            shapes,
+            edge,
+            held: Vec::new(),
+            points: Vec::new(),
+            nodes: Vec::new(),
+            angle: 0.0,
+            applied: 0.0,
+            merge,
+            svc: svc.clone(),
+            copies: None,
+        };
+        if snap.tools.mode == SceneMode::AiMap {
+            let nodes = crate::bulktools::held_nodes(&self.editor);
+            return (!nodes.is_empty()).then_some(Drag { nodes, ..base });
+        }
+        let ids: Vec<ObjId> = snap
+            .selected_in_order()
+            .into_iter()
+            .filter(|id| snap.get(*id).is_some_and(|o| o.flags.visible && o.editable() && snap.changeable(o)))
             .collect();
+        let held = held_of(&svc, &snap, &ids);
         if held.is_empty() {
             return None;
         }
-        self.serial += 1;
-        let turned = held.iter().map(|h| h.rotation).collect();
-        let points = if class == ObjClass::Way && crate::objtools::way_points_mode(&self.editor) {
-            crate::objtools::held_points(&self.editor, &held.iter().map(|h| h.id).collect::<Vec<_>>())
-        } else {
-            Vec::new()
+        // Alt: the drag moves copies, made first as an undo step of their own
+        let copies = (b.alt && kind != GizmoType::None).then(|| {
+            let slot: Arc<Mutex<Option<Vec<ObjId>>>> = Arc::new(Mutex::new(None));
+            let (ed, svc2, ids2, out) = (self.editor.clone(), svc.clone(), ids.clone(), slot.clone());
+            crate::gesture::spawn(&self.editor, async move {
+                let made = gz_scene::edit::duplicate(&svc2, ids2, Vec3::ZERO, ed.ui_origin()).await;
+                let copies = match made {
+                    Ok(_) => svc2.store.snapshot().selected_in_order(),
+                    Err(e) => {
+                        ed.log.error(e.message);
+                        Vec::new()
+                    }
+                };
+                *out.lock() = Some(copies);
+                ed.exec.wake().ping();
+            });
+            slot
+        });
+        let way_ids: Vec<ObjId> = held.iter().map(|h| h.id).collect();
+        let points = crate::objtools::held_points(&self.editor, &way_ids)
+            .into_iter()
+            .filter(|(_, pts)| !pts.is_empty())
+            .collect();
+        Some(Drag { held, points, copies, ..base })
+    }
+
+    // ---- the drop target ---------------------------------------------------------------------
+
+    /// A drag of something placeable over the viewport: its ghost on the surface under the
+    /// pointer, and the placing when it is let go.
+    fn drop_target(&mut self, ui: &mut Ui, rect: Rect, size: [u32; 2], ppp: f32) {
+        let ctx = ui.ctx().clone();
+        let carried = gz_ui::drop::dragged(&ctx).filter(|p| !Placeable::of_payload(p).is_empty());
+        let dropped = gz_ui::drop::Zone::new("Viewport", rect, &crate::place::takes).take(ui);
+        let over = ctx.pointer_latest_pos().filter(|p| rect.contains(*p));
+        let ray_at = |at: Pos2| {
+            let px = G2::new((at.x - rect.min.x) * ppp, (at.y - rect.min.y) * ppp);
+            self.vp.read(|s| s.nav.ray(size, px))
         };
-        Some(Drag {
-            kind,
-            status: self.hover,
-            ray0,
-            start,
-            held,
-            turned,
-            remainder: 0.0,
-            merge: SmolStr::new(format!("viewport.gizmo.{}", self.serial)),
-            svc,
-            points,
-            nodes: Vec::new(),
-        })
+        if let Some(payload) = dropped {
+            if let Some(ray) = over.and_then(ray_at) {
+                self.drop_payload(&payload, ray);
+            }
+            return;
+        }
+        match (carried, over) {
+            (Some(payload), Some(at)) => {
+                if let Some(ray) = ray_at(at) {
+                    self.carry(&payload, at, ray, ppp);
+                    let title =
+                        Placeable::of_payload(&payload).first().map(Placeable::title).unwrap_or_default();
+                    let p = palette(&ctx);
+                    text::paint(
+                        &ui.painter_at(rect),
+                        &Font::Small.id(),
+                        at + vec2(14.0, 14.0),
+                        Align2::LEFT_TOP,
+                        p.text,
+                        &format!("Place {title}"),
+                        None,
+                        Clip::End,
+                    );
+                }
+            }
+            _ => {
+                if self.vp.read(|s| s.ghost.is_some()) && !self.fed_drop() {
+                    self.vp.with(|s| s.ghost = None);
+                    self.ground.forget();
+                }
+            }
+        }
+    }
+
+    fn fed_drop(&self) -> bool {
+        self.vp.gesture.lock().is_some()
+    }
+
+    /// The ghost of what a drag carries, where it would land now.
+    fn carry(&mut self, payload: &gz_ui::drop::Payload, at: Pos2, ray: Ray, _ppp: f32) {
+        self.ground.track(&self.editor, at, ray);
+        let align = self.vp.read(|s| s.prefs.snaps.align);
+        if let Some(ghost) = self.ground.at().and_then(|hit| crate::place::ghost_of(payload, hit, align))
+            && self.vp.read(|s| s.ghost.as_ref() != Some(&ghost))
+        {
+            self.vp.with(|s| s.ghost = Some(ghost));
+        }
+    }
+
+    /// What a drag carried, placed where it was let go, each thing one undo step, selected.
+    fn drop_payload(&mut self, payload: &gz_ui::drop::Payload, ray: Ray) {
+        self.vp.with(|s| s.ghost = None);
+        self.ground.forget();
+        let list = Placeable::of_payload(payload);
+        let ed = self.editor.clone();
+        crate::gesture::spawn(&self.editor, async move {
+            for what in &list {
+                crate::place::place_at(&ed, what, ray).await;
+            }
+        });
     }
 
     // ---- what is drawn over the picture --------------------------------------------------------
 
-    fn draw_gizmo(&self, painter: &egui::Painter, rect: Rect, size: [u32; 2], ppp: f32, p: &Palette) {
-        let (kind, action, anchor, cam) =
-            self.vp.read(|s| (s.tool.gizmo, s.tool.action, s.anchor, s.nav.camera()));
-        if action != Action::Select || kind == GizmoType::None {
+    /// The Paint modes' brush: a ring on the ground under the pointer, the danger colour while
+    /// it erases.
+    fn draw_brush(
+        &mut self,
+        painter: &egui::Painter,
+        rect: Rect,
+        size: [u32; 2],
+        ppp: f32,
+        p: &Palette,
+        ctx: &egui::Context,
+    ) {
+        let Some(mode) = scene_mode(&self.editor) else { return };
+        let radius = match mode {
+            SceneMode::Details => self.vp.read(|s| s.brush.radius),
+            SceneMode::AiMap => crate::bulktools::ai_brush_radius(&self.editor),
+            _ => return,
+        };
+        let Some((_, ray)) = self.pointer else {
+            self.ground.forget();
             return;
-        }
-        let Some(anchor) = anchor else { return };
-        let Some(at) = gizmo::screen_position(&cam, size, anchor.position) else { return };
+        };
+        let at = self.pointer.map_or(rect.center(), |(a, _)| a);
+        self.ground.track(&self.editor, at, ray);
+        let Some((centre, up)) = self.ground.at() else { return };
+        let cam = self.vp.read(|s| s.nav.camera());
         let vp_m = cam.view_proj(size);
-        let to_screen = |w: Vec3| {
-            gz_render::project(&vp_m, size, w).map(|q| pos2(rect.min.x + q.x / ppp, rect.min.y + q.y / ppp))
+        let u = up.any_orthonormal_vector();
+        let w = up.cross(u);
+        let ring: Vec<Pos2> = (0..=64)
+            .filter_map(|k| {
+                let t = k as f32 / 64.0 * std::f32::consts::TAU;
+                gz_render::project(&vp_m, size, centre + (u * t.cos() + w * t.sin()) * radius)
+                    .map(|q| pos2(rect.min.x + q.x / ppp, rect.min.y + q.y / ppp))
+            })
+            .collect();
+        let erase = mode == SceneMode::Details
+            && (ctx.input(|i| i.modifiers.shift) || matches!(&self.gesture, Gesture::Foliage(s) if s.erase));
+        let c = if erase { p.error } else { p.accent_bright };
+        if ring.len() > 2 {
+            painter.add(egui::Shape::line(ring, Stroke::new(2.0, c)));
+        }
+        ctx.request_repaint_after(Duration::from_millis(50));
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn draw_gizmo(&self, painter: &egui::Painter, rect: Rect, size: [u32; 2], ppp: f32, p: &Palette) {
+        let Some((kind, anchor, s)) = self.shapes(size, ppp) else { return };
+        let off = rect.min.to_vec2();
+        let at = |v: G2| pos2(v.x, v.y) + off;
+        let (status, drag) = match &self.gesture {
+            Gesture::Transform(d) => (d.status, Some(d)),
+            _ => (self.hover, None),
         };
-        let status = match &self.gesture {
-            Gesture::Transform(d) => d.status,
-            _ => self.hover,
+        let colour = |st: Status| match st {
+            Status::X | Status::YZ => p.axis_x,
+            Status::Y | Status::XZ => p.axis_y,
+            Status::Z | Status::XY => p.axis_z,
+            _ => p.text_secondary,
         };
-        let aimap = scene_target(&self.editor) == Some(ObjClass::AiMap);
-        let axes =
-            [(Vec3::X, p.axis_x, Status::X), (Vec3::Y, p.axis_y, Status::Y), (Vec3::Z, p.axis_z, Status::Z)];
-        let hot = |s: Status, c: Color32| if status == s { p.text } else { c };
-        let Some(o) = to_screen(at) else { return };
-        match kind {
-            GizmoType::Move => {
-                for (axis, c, s) in axes {
-                    if aimap && s != Status::Y {
-                        continue;
-                    }
-                    let c = hot(s, c);
-                    let (Some(shaft), Some(tip)) = (to_screen(at + axis * 0.82), to_screen(at + axis)) else {
-                        continue;
-                    };
-                    painter.line_segment([o, shaft], Stroke::new(3.0, c));
-                    let dir = (tip - shaft).normalized();
-                    let side = vec2(-dir.y, dir.x) * ((tip - shaft).length() * 0.35).clamp(3.0, 7.0);
-                    painter.add(egui::Shape::convex_polygon(
-                        vec![tip, shaft + side, shaft - side],
-                        c,
-                        Stroke::NONE,
-                    ));
-                }
-                let pivot = if status == Status::Xyz { p.text } else { p.text_secondary };
-                painter.rect_filled(
-                    Rect::from_center_size(o, Vec2::splat(6.0)),
-                    CornerRadius::same(1),
-                    pivot,
-                );
-            }
-            GizmoType::Scale => {
-                for (axis, c, s) in axes {
-                    let c = hot(s, c);
-                    let Some(end) = to_screen(at + axis) else { continue };
-                    painter.line_segment([o, end], Stroke::new(2.0, c));
+        let paint_of = |st: Status| if status == st { p.text } else { colour(st) };
+        let width = |st: Status| if status == st { 4.0 } else { 3.0 };
+        // the planes first, under the arrows
+        for (st, q) in &s.planes {
+            let pts: Vec<Pos2> = q.iter().map(|v| at(*v)).collect();
+            let fill = paint_of(*st).gamma_multiply(if status == *st { 0.55 } else { 0.3 });
+            painter.add(egui::Shape::convex_polygon(pts.clone(), fill, Stroke::new(1.0, paint_of(*st))));
+        }
+        for (st, a, b, head) in &s.axes {
+            let c = paint_of(*st);
+            match kind {
+                GizmoType::Scale => {
+                    painter.line_segment([at(*a), at(*b)], Stroke::new(width(*st), c));
                     painter.rect_filled(
-                        Rect::from_center_size(end, Vec2::splat(7.0)),
+                        Rect::from_center_size(at(*b), Vec2::splat(9.0)),
                         CornerRadius::same(1),
                         c,
                     );
                 }
-                let centre = if status == Status::Xyz { p.text } else { p.text_secondary };
-                painter.rect_filled(
-                    Rect::from_center_size(o, Vec2::splat(9.0)),
-                    CornerRadius::same(1),
-                    centre,
-                );
+                _ => {
+                    painter.line_segment([at(*a), at(*head)], Stroke::new(width(*st), c));
+                    let (h, tip) = (at(*head), at(*b));
+                    let dir = (tip - h).normalized();
+                    let side = vec2(-dir.y, dir.x) * ((tip - h).length() * 0.42).clamp(4.0, 8.0);
+                    painter.add(egui::Shape::convex_polygon(vec![tip, h + side, h - side], c, Stroke::NONE));
+                }
             }
-            GizmoType::Rotate => {
-                let [x, y, z] = gizmo::rotate_axes(&anchor.rotation);
-                for (axis, c, s) in
-                    [(x, p.axis_x, Status::X), (y, p.axis_y, Status::Y), (z, p.axis_z, Status::Z)]
-                {
-                    if aimap && s == Status::Y {
-                        continue;
+        }
+        for (st, ring) in &s.rings {
+            let pts: Vec<Pos2> = ring.iter().map(|v| at(*v)).collect();
+            painter.add(egui::Shape::line(pts, Stroke::new(width(*st), paint_of(*st))));
+        }
+        if let Some(r) = s.screen_ring {
+            let c = if status == Status::Screen { p.text } else { p.text_secondary };
+            painter.circle_stroke(
+                at(s.centre),
+                r,
+                Stroke::new(if status == Status::Screen { 3.0 } else { 2.0 }, c),
+            );
+        }
+        if s.centre_handle {
+            let hot = matches!(status, Status::Screen | Status::Xyz);
+            let c = if hot { p.text } else { p.text_secondary };
+            painter.rect_filled(
+                Rect::from_center_size(at(s.centre), Vec2::splat(gizmo::CENTRE * 2.0 - 2.0)),
+                CornerRadius::same(2),
+                c.gamma_multiply(if hot { 0.9 } else { 0.6 }),
+            );
+        } else {
+            painter.circle_filled(at(s.centre), 2.5, p.text_secondary);
+        }
+        // a turn under way: its arc on the ring, and the angle
+        if let Some(d) = drag.filter(|d| d.kind == GizmoType::Rotate) {
+            let cam = self.vp.read(|st| st.nav.camera());
+            // the scene's angles turn the other way round an axis: the readout says what Details will
+            let deg = -d.angle.to_degrees();
+            if !d.edge
+                && let Some(gat) = gizmo::screen_position(&cam, size, anchor.position)
+            {
+                let (axis, radius) = match d.status {
+                    Status::Screen => (-cam.forward, gizmo::SCREEN_RING),
+                    st => (st.axis().map_or(Vec3::Y, |i| d.axes[i]), gizmo::RING),
+                };
+                let u = axis.any_orthonormal_vector();
+                let w = axis.cross(u);
+                let start = gizmo::ray_plane(&d.ray0, d.pivot, axis).map(|h| h - d.pivot);
+                if let Some(v0) = start {
+                    let a0 = v0.dot(w).atan2(v0.dot(u));
+                    let vp_m = cam.view_proj(size);
+                    let proj = |v: Vec3| {
+                        gz_render::project(&vp_m, size, v)
+                            .map(|q| pos2(rect.min.x + q.x / ppp, rect.min.y + q.y / ppp))
+                    };
+                    let n = ((d.angle.abs() / 0.05).ceil() as usize).clamp(2, 128);
+                    let mut fan: Vec<Pos2> = Vec::with_capacity(n + 2);
+                    if let Some(c) = proj(gat) {
+                        fan.push(c);
                     }
-                    let c = hot(s, c);
-                    let u = axis.any_orthonormal_vector();
-                    let w = axis.cross(u);
-                    let ring: Vec<Pos2> = (0..=48)
-                        .filter_map(|i| {
-                            let t = i as f32 / 48.0 * std::f32::consts::TAU;
-                            to_screen(at + (u * t.cos() + w * t.sin()))
-                        })
-                        .collect();
-                    if ring.len() > 2 {
-                        painter.add(egui::Shape::line(
-                            ring,
-                            Stroke::new(if status == s { 3.0 } else { 2.0 }, c),
-                        ));
+                    for k in 0..=n {
+                        let t = a0 + d.angle * k as f32 / n as f32;
+                        if let Some(q) = proj(gat + (u * t.cos() + w * t.sin()) * radius) {
+                            fan.push(q);
+                        }
+                    }
+                    let c = colour(d.status);
+                    if fan.len() > 2 {
+                        let edge: Vec<Pos2> = fan[1..].to_vec();
+                        painter.add(egui::Shape::Mesh(Arc::new(fan_mesh(&fan, c.gamma_multiply(0.25)))));
+                        painter.add(egui::Shape::line(edge, Stroke::new(2.0, c)));
                     }
                 }
-                painter.circle_filled(o, 2.5, p.text_secondary);
             }
-            GizmoType::None => {}
+            let label = format!("{deg:.1}\u{b0}");
+            let place = at(s.centre) + vec2(16.0, -24.0);
+            let galley = painter.layout_no_wrap(label, Font::Body.id(), p.text);
+            let bg = Rect::from_min_size(place, galley.size()).expand2(vec2(6.0, 3.0));
+            painter.rect_filled(bg, CornerRadius::same(4), p.overlay.gamma_multiply(0.92));
+            painter.galley(place, galley, p.text);
         }
     }
 
-    /// The 64 pt clickable axis gizmo at the top right (`ViewportNavigation::Draw`); hidden
-    /// under 480 pt and when the view is too short for it.
+    /// The 64 pt clickable axis gizmo at the top right; hidden under 480 pt and when the view is
+    /// too short for it.
     fn local_axis_gizmo(&mut self, ui: &mut Ui, rect: Rect, p: &Palette) {
         if rect.width() < 480.0 {
             return;
@@ -902,26 +1180,36 @@ impl ViewportPane {
         }
     }
 
-    /// The pills (`DrawRenderToolBar`): the view options, the camera view and what is shown on
-    /// the left; the transform tool, object snap and the grid, scale and angle snaps on the
-    /// right. One overlay toolbar, so a narrow viewport folds the snaps into its overflow.
-    fn pills(&mut self, ui: &mut Ui, rect: Rect) {
+    /// The pills: the mode control, the camera, the view mode and what is shown on the left; the
+    /// transform tool, its space and the snapping on the right. One overlay toolbar, so a narrow
+    /// viewport folds the right side into its overflow first.
+    #[allow(clippy::too_many_lines)]
+    fn pills(&mut self, ui: &mut Ui, rect: Rect, cx: &mut DocCx<'_>) {
         let ed = self.editor.clone();
         let vp = self.vp.clone();
-        let target = scene_target(&ed).unwrap_or(ObjClass::SceneObject);
-        let [can_move, can_rotate, can_scale] = gizmo::supports(target);
-        // a transform the tool cannot do falls back to plain selection
-        let reset = vp.read(|s| {
-            s.tool.action == Action::Select
-                && ((s.tool.gizmo == GizmoType::Move && !can_move)
-                    || (s.tool.gizmo == GizmoType::Rotate && !can_rotate)
-                    || (s.tool.gizmo == GizmoType::Scale && !can_scale))
+        let sup = ed
+            .project_opt()
+            .and_then(|s| s.services.get::<SceneService>())
+            .map_or([true; 3], |svc| gizmo::supports_of(&svc.store.snapshot()));
+        // a transform the selection cannot take falls back to plain selection
+        let reset = vp.read(|s| match s.gizmo {
+            GizmoType::Move => !sup[0],
+            GizmoType::Rotate => !sup[1],
+            GizmoType::Scale => !sup[2],
+            GizmoType::None => false,
         });
         if reset {
-            vp.with(|s| s.tool.gizmo = GizmoType::None);
+            vp.with(|s| s.gizmo = GizmoType::None);
         }
-        let (tool, settings, view_target, ortho) =
-            vp.read(|s| (s.tool, s.settings, s.nav.current(), s.nav.ortho));
+        let mode = scene_mode(&ed);
+        // Paint (3) goes back to the layer painted last
+        if let Some(m) = mode.filter(|m| m.layer().is_some())
+            && vp.read(|s| s.paint_layer != m)
+        {
+            vp.with(|s| s.paint_layer = m);
+        }
+        let (view_target, ortho, view_mode, space) =
+            vp.read(|s| (s.nav.current(), s.nav.ortho, s.prefs.mode, s.prefs.space));
         let bar = Rect::from_min_max(
             pos2(rect.min.x + 8.0, rect.min.y + 4.0),
             pos2(
@@ -935,32 +1223,42 @@ impl ViewportPane {
                 .max_rect(bar)
                 .layout(Layout::left_to_right(Align::Center)),
         );
-        let mut maximize = false;
-        let maximized = self.maximized;
         {
             let mut tb = Toolbar::begin(&mut child, "viewport", ToolbarStyle::Overlay);
+            tb.group(4);
+            let mut current = mode_index(mode);
+            let tip = "Select | Place | Paint | Zones (1, 2, 3, 4): what a click in the viewport does";
+            if tb.segmented(
+                "mode",
+                "Mode",
+                &mut current,
+                &["Select", "Place", "Paint", "Zones"],
+                tip,
+                mode.is_some(),
+            ) && let Some(id) = crate::actions::MODES.get(current)
+            {
+                cx.requests.action(id);
+            }
             tb.group(3);
-            tb.menu("options", Icon::ViewOptions, "", "View options", Some("viewport:options"), true, |ui| {
-                menus::options_body(ui, &ed);
-                ui.separator();
-                if gz_ui::menu_item(
-                    ui,
-                    "Maximize Viewport",
-                    gz_ui::MenuItem { keys: "F11", selected: maximized, ..gz_ui::MenuItem::default() },
-                ) {
-                    maximize = true;
-                }
-            });
             let icon =
                 if view_target == Target::Perspective && !ortho { Icon::Perspective } else { Icon::Ortho };
             tb.menu(
                 "perspective",
                 icon,
                 view_target.name(),
-                "Camera view, Frame All and Frame Selection",
+                "The camera's view, framing, bookmarks",
                 Some("viewport:perspective"),
                 true,
-                |ui| menus::perspective_body(ui, &ed),
+                |ui| menus::perspective_body(ui, cx),
+            );
+            tb.menu(
+                "view_mode",
+                view_mode.icon(),
+                view_mode.title(),
+                "How the scene is lit: Studio, Unlit, Game Lit, Wireframe",
+                Some("viewport:view_mode"),
+                true,
+                |ui| menus::view_mode_body(ui, cx),
             );
             tb.menu(
                 "show",
@@ -969,173 +1267,133 @@ impl ViewportPane {
                 "What the viewport draws over the scene",
                 Some("viewport:show"),
                 true,
-                |ui| menus::show_body(ui, &ed),
+                |ui| menus::show_body(ui, cx),
             );
             tb.spring();
 
             tb.group(2);
-            let title = tool_title(target);
-            if tb.action(
-                "tool_select",
-                Icon::Select,
-                "",
-                "Select",
-                true,
-                tool.action == Action::Select && tool.gizmo == GizmoType::None,
-                Kind::Ghost,
-            ) {
-                keys::run(&ed, keys::Act::Gizmo(GizmoType::None));
-            }
-            if tb.action(
-                "tool_place",
-                Icon::Place,
-                "",
-                "Place: a click in the viewport adds what the Tools panel has picked",
-                true,
-                tool.action == Action::Place,
-                Kind::Ghost,
-            ) {
-                vp.with(|s| {
-                    s.tool.action = Action::Place;
-                    s.tool.gizmo = GizmoType::None;
-                });
-            }
-            for (id, icon, tip, cannot, kind, on) in [
-                (
-                    "tool_move",
-                    Icon::Move,
-                    "Move the selection",
-                    "cannot move objects",
-                    GizmoType::Move,
-                    can_move,
-                ),
-                (
-                    "tool_rotate",
-                    Icon::Rotate,
-                    "Rotate the selection",
-                    "cannot rotate objects",
-                    GizmoType::Rotate,
-                    can_rotate,
-                ),
-                (
-                    "tool_scale",
-                    Icon::Scale,
-                    "Scale the selection",
-                    "cannot scale objects",
-                    GizmoType::Scale,
-                    can_scale,
-                ),
+            for (id, icon) in [
+                ("viewport.select_tool", Icon::Select),
+                ("viewport.move_tool", Icon::Move),
+                ("viewport.rotate_tool", Icon::Rotate),
+                ("viewport.scale_tool", Icon::Scale),
             ] {
-                let tip = if on { tip.to_owned() } else { format!("The {title} tool {cannot}") };
-                if tb.action(
-                    id,
-                    icon,
-                    "",
-                    &tip,
-                    on,
-                    tool.action == Action::Select && tool.gizmo == kind,
-                    Kind::Ghost,
-                ) {
-                    keys::run(&ed, keys::Act::Gizmo(kind));
-                }
+                pill_action(&mut tb, cx, id, icon, "");
             }
+            let space_label = if space == Space::Local { "Local" } else { "World" };
+            pill_action(
+                &mut tb,
+                cx,
+                "viewport.toggle_space",
+                if space == Space::Local { Icon::SceneObject } else { Icon::Globe },
+                space_label,
+            );
 
             tb.group(1);
-            if tb.action(
-                "osnap",
-                Icon::SnapObject,
+            pill_action(&mut tb, cx, "viewport.surface_snap", Icon::SnapObject, "");
+            tb.menu(
+                "surface",
+                Icon::None,
                 "",
-                "Object Snap: placed and moved objects land on other objects",
+                "Surface Snap's options",
+                Some("viewport:surface"),
                 true,
-                settings.object_snap,
-                Kind::Ghost,
-            ) {
-                vp.with(|s| s.settings.object_snap = !s.settings.object_snap);
-            }
-            tb.menu("snap", Icon::None, "", "Snap options", Some("viewport:snap"), true, |ui| {
-                menus::snap_body(ui, &ed)
-            });
-
-            for (kind, icon, toggle, name, tip, menu, request) in [
-                (
-                    GizmoType::Move,
-                    Icon::SnapGrid,
-                    "grid_snap",
-                    "Grid",
-                    "Grid Snap: movement goes in steps",
-                    "grid",
-                    "viewport:grid",
-                ),
-                (
-                    GizmoType::Scale,
-                    Icon::SnapScale,
-                    "scale_snap",
-                    "Scale",
-                    "Scale Snap: scaling goes in steps",
-                    "scale",
-                    "viewport:scale",
-                ),
-                (
-                    GizmoType::Rotate,
-                    Icon::SnapAngle,
-                    "angle_snap",
-                    "Angle",
-                    "Angle Snap: rotation goes in steps",
-                    "angle",
-                    "viewport:angle",
-                ),
+                |ui| menus::surface_body(ui, cx),
+            );
+            for (kind, id, menu, request) in [
+                (GizmoType::Move, "viewport.grid_snap", "grid", "viewport:grid"),
+                (GizmoType::Rotate, "viewport.angle_snap", "angle", "viewport:angle"),
+                (GizmoType::Scale, "viewport.scale_snap", "scale", "viewport:scale"),
             ] {
                 tb.group(0);
-                let (on, step) = vp.read(|s| (s.snap_on(kind), s.step(kind)));
-                if tb.action(toggle, icon, "", tip, true, on, Kind::Ghost) {
-                    vp.with(|s| match kind {
-                        GizmoType::Move => s.tool.grid_snap = !s.tool.grid_snap,
-                        GizmoType::Scale => s.tool.scale_snap = !s.tool.scale_snap,
-                        _ => s.tool.angle_snap = !s.tool.angle_snap,
-                    });
-                }
+                let step = vp.read(|s| s.step(kind));
+                let icon = match kind {
+                    GizmoType::Move => Icon::SnapGrid,
+                    GizmoType::Rotate => Icon::SnapAngle,
+                    _ => Icon::SnapScale,
+                };
+                pill_action(&mut tb, cx, id, icon, "");
                 let value = menus::step_label(kind, step);
-                tb.menu(menu, Icon::None, &value, &format!("{name} step"), Some(request), true, |ui| {
-                    menus::step_body(ui, &ed, kind)
+                let tip = match kind {
+                    GizmoType::Move => "The grid step a move goes by",
+                    GizmoType::Rotate => "The angle a turn goes by",
+                    _ => "The step scaling goes by",
+                };
+                tb.menu(menu, Icon::None, &value, tip, Some(request), true, |ui| {
+                    menus::step_body(ui, cx, kind)
                 });
             }
-        }
-        if maximize {
-            self.maximize_asked = true;
         }
     }
 }
 
-/// The kind the mode's clicks work with (a painting mode's layer, the cells, the kind Place
-/// places); selecting takes any kind.
-fn scene_target(editor: &Editor) -> Option<ObjClass> {
+/// A pill of an action: its icon (and `label` when it has one), its title and keys as the tip,
+/// off with the reason, checked as a toggle. Pressed, it runs.
+fn pill_action(tb: &mut Toolbar<'_, '_>, cx: &mut DocCx<'_>, id: &str, icon: Icon, label: &str) {
+    let Some(actions) = gz_app::Actions::of(cx.editor) else { return };
+    let Some(a) = actions.table.read().get(id).copied() else { return };
+    let keys = actions.table.read().keys_label(id);
+    let (on, checked) =
+        actions.with_cx(cx.editor, |acx| ((a.enabled)(acx), a.checked.is_some_and(|f| f(acx))));
+    let tip = match (on.on(), keys.is_empty()) {
+        (false, _) => format!("{}: {}", a.title, on.why()),
+        (true, true) => a.title.to_owned(),
+        (true, false) => format!("{} ({keys})", a.title),
+    };
+    if tb.action(id, icon, label, &tip, on.on(), checked, Kind::Ghost) {
+        cx.requests.action(id);
+    }
+}
+
+/// The mode control's segment of a scene mode: Select, Place, Paint (any painted layer), Zones.
+fn mode_index(mode: Option<SceneMode>) -> usize {
+    match mode {
+        Some(SceneMode::Place) => 1,
+        Some(m) if m.layer().is_some() => 2,
+        Some(SceneMode::Zones) => 3,
+        _ => 0,
+    }
+}
+
+/// A fan of triangles from its first point.
+fn fan_mesh(pts: &[Pos2], c: Color32) -> egui::Mesh {
+    let mut m = egui::Mesh::default();
+    for q in pts {
+        m.colored_vertex(*q, c);
+    }
+    for i in 1..pts.len().saturating_sub(1) {
+        m.add_triangle(0, i as u32, i as u32 + 1);
+    }
+    m
+}
+
+/// The scene's mode: what a press in the viewport does. `None` without a scene.
+pub(crate) fn scene_mode(editor: &Editor) -> Option<SceneMode> {
     editor
         .project_opt()
         .and_then(|s| s.services.get::<SceneService>())
-        .map(|svc| svc.store.snapshot().tools.mode_kind())
+        .map(|svc| svc.store.snapshot().tools.mode)
 }
 
-/// The Tools panel's title of a class (`kToolClasses`).
-#[must_use]
-pub fn tool_title(class: ObjClass) -> &'static str {
-    match class {
-        ObjClass::SceneObject => "Object",
-        ObjClass::Light => "Light",
-        ObjClass::SoundSrc => "Sound Source",
-        ObjClass::SoundEnv => "Sound Environment",
-        ObjClass::Glow => "Glow",
-        ObjClass::Shape => "Shape",
-        ObjClass::SpawnPoint => "Spawn",
-        ObjClass::Way => "Way",
-        ObjClass::Sector => "Sector",
-        ObjClass::Portal => "Portal",
-        ObjClass::Group => "Group",
-        ObjClass::Particles => "Particles",
-        ObjClass::DetailObjects => "Detail Objects",
-        ObjClass::AiMap => "AI Map",
-        ObjClass::Wallmark => "Wallmark",
-        ObjClass::FogVolume => "Fog Volume",
-    }
+/// The gizmo's axes for a tool: Scale works along the objects' own axes, the AI map's nodes
+/// along the world's, the rest in the space the pill says.
+pub(crate) fn gizmo_axes(kind: GizmoType, anchor: &Anchor, space: Space) -> [Vec3; 3] {
+    if kind == GizmoType::Scale { anchor.axes(Space::Local) } else { anchor.axes(space) }
+}
+
+/// What a drag holds of `ids`, as they are now.
+fn held_of(svc: &SceneService, snap: &gz_scene::SceneState, ids: &[ObjId]) -> Vec<Held> {
+    ids.iter()
+        .filter_map(|id| snap.get(*id))
+        .map(|o| Held {
+            id: o.id,
+            position: o.position(),
+            rotation: o.rotation(),
+            scale: o.scale(),
+            glow: o.class == ObjClass::Glow,
+            dynamic: matches!(&o.data, ObjData::SceneObject(d) if svc.library.cached(&d.reference).is_some_and(|l| l.is_dynamic())),
+        })
+        .collect()
 }
 
 /// The wheel's turn this frame in notches, upward positive (egui's 40 points a line).
@@ -1165,7 +1423,7 @@ fn fly_key(key: Key) -> Option<FlyKey> {
     }
 }
 
-/// The labels the frame found visible (`OutText`), white on a black shadow.
+/// The labels the frame found visible, white on a black shadow.
 fn draw_labels(painter: &egui::Painter, rect: Rect, info: &gz_render::FrameInfo, ppp: f32) {
     let font = Font::Small.id();
     for l in info.labels.iter().filter(|l| l.visible) {
@@ -1187,7 +1445,6 @@ fn draw_safe_rect(painter: &egui::Painter, rect: Rect, p: &Palette) {
     } else {
         Rect::from_center_size(rect.center(), vec2(w, w * 0.75))
     };
-    let dim = p.dim;
     for r in [
         Rect::from_min_max(rect.min, pos2(safe.min.x, rect.max.y)),
         Rect::from_min_max(pos2(safe.max.x, rect.min.y), rect.max),
@@ -1195,7 +1452,7 @@ fn draw_safe_rect(painter: &egui::Painter, rect: Rect, p: &Palette) {
         Rect::from_min_max(pos2(safe.min.x, safe.max.y), pos2(safe.max.x, rect.max.y)),
     ] {
         if r.width() > 0.5 && r.height() > 0.5 {
-            painter.rect_filled(r, CornerRadius::ZERO, dim);
+            painter.rect_filled(r, CornerRadius::ZERO, p.dim);
         }
     }
     painter.rect_stroke(safe, CornerRadius::ZERO, Stroke::new(1.0, p.accent_bright), StrokeKind::Inside);
@@ -1244,20 +1501,17 @@ fn local_stats_pill(
     }
 }
 
-// ---- what the tools do --------------------------------------------------------------------------
+// ---- what the clicks do ---------------------------------------------------------------------
 
-/// The pick the C++ selection makes (`RaySelect`): visible objects of a visible tool, of the
-/// current class or of any class; an object inside a group that is not editable picks the group.
-fn accept(o: &Object, state: &gz_scene::SceneState, filter: Option<ObjClass>) -> bool {
-    o.flags.visible
-        && state.tools.part(o.class).visible
-        && filter.is_none_or(|c| c == o.class)
-        && (o.owner.is_none() || o.editable())
+/// What a click may pick: a visible object of a visible kind; a member of a group that is not
+/// editable by itself stands for its group.
+fn accept(o: &Object, state: &gz_scene::SceneState) -> bool {
+    o.flags.visible && state.tools.part(o.class).visible && (o.owner.is_none() || o.editable())
 }
 
-/// A click of the selection (`SelectStart`): Ctrl adds to what is selected, toggling the object
-/// hit; without it the click replaces the selection. Any kind is picked; a member of a group
-/// that is not editable by itself picks its group.
+/// A click of Select: Ctrl adds to the selection, toggling the object hit; without it the click
+/// replaces the selection. Any kind is picked. A way path's point under the click is selected
+/// with its way, so the gizmo moves that point.
 fn click_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
     let Ok(svc) = SceneService::of(editor) else { return };
     let far = vp.read(|s| s.nav.far);
@@ -1272,13 +1526,10 @@ fn click_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) 
         }
         let (snap, pick) = svc.pick().await;
         let lib = svc.library.clone();
-        let filter = None;
         let s = snap.clone();
         let hit = ed
             .exec
-            .cpu(move || {
-                pick.ray_pick(&s, &lib, ray.origin, ray.dir, far, &|o: &Object| accept(o, &s, filter))
-            })
+            .cpu(move || pick.ray_pick(&s, &lib, ray.origin, ray.dir, far, &|o: &Object| accept(o, &s)))
             .await;
         let Some(hit) = hit else { return };
         let Some(obj) = snap.get(hit.id) else { return };
@@ -1286,21 +1537,23 @@ fn click_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) 
             Some(owner) if !obj.editable() => owner,
             _ => obj.id,
         };
-        let _ = svc
-            .store
-            .send(
-                SceneCmd::Select {
-                    ids: vec![id],
-                    mode: if b.ctrl { SelectMode::Toggle } else { SelectMode::Add },
-                },
-                origin,
-            )
-            .await;
+        let mode = if b.ctrl { SelectMode::Toggle } else { SelectMode::Add };
+        let _ = svc.store.send(SceneCmd::Select { ids: vec![id], mode }, origin).await;
+        if let ObjData::Way(w) = &obj.data
+            && let Some((point, _)) = gz_scene::objtools::way::pick_point(w, ray.origin, ray.dir, far)
+        {
+            let edit = ToolEdit::SelectPoints {
+                way: obj.id,
+                points: vec![point],
+                mode: if b.ctrl { SelectMode::Toggle } else { SelectMode::Set },
+            };
+            let _ = svc.store.send(SceneCmd::ObjTool(Box::new(edit)), origin).await;
+        }
         ed.exec.wake().ping();
     });
 }
 
-/// The end of a marquee (`FrustumSelect`): what the box holds of any kind is added.
+/// The end of a marquee: what the box holds of any kind is added.
 fn marquee_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, size: [u32; 2], a: G2, b: G2) {
     let Ok(svc) = SceneService::of(editor) else { return };
     let (cam, prefs, far) = vp.read(|s| (s.nav.camera(), s.prefs, s.nav.far));
@@ -1333,372 +1586,195 @@ fn marquee_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, size: [u32; 2], a: G
 }
 
 /// One mouse move of a gizmo drag: the held objects' new transforms, as one merged undo step.
-fn apply_drag(vp: &Viewport, d: &mut Drag, ray: &Ray, dx: f32, dy: f32, editor: &Arc<Editor>) {
-    let (cam, grid, scale_step, angle, sr) = vp.read(|s| {
-        (
-            s.nav.camera(),
-            s.snap_on(GizmoType::Move).then_some(s.step(GizmoType::Move)),
-            s.snap_on(GizmoType::Scale).then_some(s.step(GizmoType::Scale)),
-            s.snap_on(GizmoType::Rotate).then_some(s.step(GizmoType::Rotate)),
-            s.prefs.tools_sr(),
-        )
-    });
-    // the AI map's nodes (`TUI_ControlAIMapNodeSelect`)
-    if !d.nodes.is_empty() {
-        match d.kind {
-            GizmoType::Move => {
-                if let Some((delta, vector)) = gizmo::move_delta(d.status, d.start, cam.forward, &d.ray0, ray)
-                {
-                    crate::bulktools::move_nodes(
-                        editor,
-                        &d.nodes,
-                        |p| gizmo::moved(p, delta, vector, grid),
-                        &d.merge,
-                        editor.ui_origin(),
-                    );
-                }
-            }
-            GizmoType::Rotate => {
-                let amount = gizmo::rotate_amount(d.status, dx, dy, sr, angle, &mut d.remainder);
-                if amount != 0.0 {
-                    let about_x = gizmo::rotate_vector(d.status).x.abs() > gz_scene::math::EPS;
-                    crate::bulktools::rotate_nodes(editor, about_x, amount, &d.merge, editor.ui_origin());
-                }
-            }
-            _ => {}
-        }
-        return;
+#[allow(clippy::too_many_lines)]
+fn apply_drag(vp: &Viewport, d: &mut Drag, ray: &Ray, now: Pos2, editor: &Arc<Editor>) {
+    // Alt: nothing moves until the copies are there; then the drag holds them
+    if let Some(slot) = &d.copies {
+        let Some(ids) = slot.lock().clone() else { return };
+        let snap = d.svc.store.snapshot();
+        d.held = held_of(&d.svc, &snap, &ids);
+        d.points.clear();
+        d.copies = None;
     }
-    let mut items = Vec::with_capacity(d.held.len());
-    let label = match d.kind {
+    let (cam, grid, angle_step, scale_step) = vp.read(|s| {
+        (s.nav.camera(), s.snap(GizmoType::Move), s.snap(GizmoType::Rotate), s.snap(GizmoType::Scale))
+    });
+    let origin = editor.ui_origin();
+    match d.kind {
         GizmoType::Move => {
-            let Some((delta, vector)) = gizmo::move_delta(d.status, d.start, cam.forward, &d.ray0, ray)
-            else {
+            let Some(delta) = gizmo::move_delta(d.status, d.pivot, d.axes, cam.forward, &d.ray0, ray) else {
                 return;
             };
+            let pivot_to = gizmo::moved(d.pivot, delta, d.status, d.axes, d.space, grid);
+            if !d.nodes.is_empty() {
+                let shift = pivot_to - d.pivot;
+                crate::bulktools::move_nodes(editor, &d.nodes, |p| p + shift, &d.merge, origin);
+                return;
+            }
+            let mut items = Vec::with_capacity(d.held.len());
             for h in &d.held {
-                let at = gizmo::moved(h.position, delta, vector, grid);
-                // Points mode: only the selected points of the way move
+                // a way path with selected points: those points move
                 if let Some((_, pts)) = d.points.iter().find(|(id, _)| *id == h.id) {
                     crate::objtools::move_points(
                         &d.svc,
                         &[(h.id, pts.clone())],
-                        at - h.position,
+                        pivot_to - d.pivot,
                         &d.merge,
-                        editor.ui_origin(),
+                        origin,
                     );
                     continue;
                 }
+                let at = if d.held.len() == 1 {
+                    gizmo::moved(h.position, delta, d.status, d.axes, d.space, grid)
+                } else {
+                    h.position + (pivot_to - d.pivot)
+                };
                 items.push((h.id, TransformEdit::Position(at)));
             }
-            "Move"
-        }
-        GizmoType::Scale => {
-            let Some((delta, vector)) = gizmo::scale_delta(d.status, d.start, &cam, &d.ray0, ray) else {
-                return;
-            };
-            for h in &d.held {
-                if h.dynamic {
-                    continue;
-                }
-                items.push((
-                    h.id,
-                    TransformEdit::Scale(gizmo::scaled(h.scale, delta, vector, d.status, h.glow, scale_step)),
-                ));
-            }
-            "Scale"
+            post(&d.svc, items, "Move", &d.merge, origin);
         }
         GizmoType::Rotate => {
-            let amount = gizmo::rotate_amount(d.status, dx, dy, sr, angle, &mut d.remainder);
-            if amount == 0.0 {
+            let axis = match d.status {
+                Status::Screen => -cam.forward,
+                st => st.axis().map_or(Vec3::Y, |i| d.axes[i]),
+            };
+            let raw = if d.edge {
+                let radius = d.shapes.screen_ring.map_or(80.0, |r| r * gizmo::RING / gizmo::SCREEN_RING);
+                gizmo::edge_angle(
+                    d.shapes.centre,
+                    G2::new(d.press.x, d.press.y),
+                    G2::new(now.x, now.y),
+                    radius,
+                )
+            } else {
+                gizmo::ring_angle(axis, d.pivot, &d.ray0, ray).unwrap_or(d.angle)
+            };
+            let angle = match angle_step {
+                Some(step) => gizmo::snapto(raw.to_degrees(), step).to_radians(),
+                None => raw,
+            };
+            if (angle - d.angle).abs() < 1e-6 && d.angle != 0.0 {
                 return;
             }
-            let axis = gizmo::rotate_vector(d.status);
-            for (h, r) in d.held.iter().zip(d.turned.iter_mut()) {
-                *r = gizmo::rotate_local(*r, axis, amount);
-                items.push((h.id, TransformEdit::Rotation(*r)));
+            d.angle = angle;
+            if !d.nodes.is_empty() {
+                let about_x = d.status == Status::X;
+                let step = angle - d.applied;
+                d.applied = angle;
+                crate::bulktools::rotate_nodes(editor, about_x, step, &d.merge, origin);
+                return;
             }
-            "Rotate"
+            let several = d.held.len() > 1;
+            let mut items = Vec::with_capacity(d.held.len() * 2);
+            for h in &d.held {
+                let (r, p) = gizmo::turned(h.rotation, h.position, d.pivot, axis, angle);
+                items.push((h.id, TransformEdit::Rotation(r)));
+                if several {
+                    items.push((h.id, TransformEdit::Position(p)));
+                }
+            }
+            post(&d.svc, items, "Rotate", &d.merge, origin);
         }
-        GizmoType::None => return,
-    };
+        GizmoType::Scale => {
+            let f = gizmo::scale_factors(
+                d.status,
+                &d.shapes,
+                G2::new(d.press.x, d.press.y),
+                G2::new(now.x, now.y),
+            );
+            let items = d
+                .held
+                .iter()
+                .filter(|h| !h.dynamic)
+                .map(|h| (h.id, TransformEdit::Scale(gizmo::scaled(h.scale, f, h.glow, scale_step))))
+                .collect();
+            post(&d.svc, items, "Scale", &d.merge, origin);
+        }
+        GizmoType::None => {}
+    }
+}
+
+fn post(
+    svc: &SceneService,
+    items: Vec<(ObjId, TransformEdit)>,
+    label: &str,
+    merge: &SmolStr,
+    origin: gz_editor::Origin,
+) {
     if items.is_empty() {
         return;
     }
-    d.svc.store.post(
-        SceneCmd::Transform { items, members: true, label: label.into(), merge: Some(d.merge.clone()) },
-        editor.ui_origin(),
+    svc.store.post(
+        SceneCmd::Transform { items, members: true, label: label.into(), merge: Some(merge.clone()) },
+        origin,
     );
 }
 
-/// Where a placed object lands (`PickGround`): with Object Snap on the surface of a scene
-/// object or a spawn point, otherwise the grid's plane, on the grid's steps when the grid snap is on. The surface's normal comes with it.
+/// Where a thing put down at the pointer meets the scene: with `surface` on the scene objects
+/// and spawn points under it (on the nearest vertex of the one hit while Snap to Vertices is
+/// on), else on the grid's plane. The surface's normal comes with it.
 pub(crate) async fn pick_ground(
     editor: &Arc<Editor>,
     svc: &Arc<SceneService>,
     ray: Ray,
-    object_snap: bool,
-    grid: Option<f32>,
+    surface: bool,
     far: f32,
 ) -> Option<(Vec3, Vec3)> {
-    if object_snap {
+    if surface {
+        let vertex = Viewport::of(editor).read(|s| s.prefs.snaps.vertex);
         let (snap, pick) = svc.pick().await;
         let lib = svc.library.clone();
-        let hit = editor
+        let found = editor
             .exec
             .cpu(move || {
-                pick.ray_pick(&snap, &lib, ray.origin, ray.dir, far, &|o: &Object| {
-                    matches!(o.class, ObjClass::SceneObject | ObjClass::SpawnPoint) && o.flags.visible
-                })
+                let hit = pick.ray_pick(&snap, &lib, ray.origin, ray.dir, far, &|o: &Object| {
+                    matches!(o.class, ObjClass::SceneObject | ObjClass::SpawnPoint)
+                        && o.flags.visible
+                        && snap.tools.part(o.class).visible
+                })?;
+                let mut at = hit.point;
+                if vertex {
+                    let reach = Vec3::splat(1.0);
+                    let near = gz_scene::math::Aabb::new(at - reach, at + reach);
+                    let tris = gz_scene::pick::box_triangles(&snap, &lib, &[hit.id], &near);
+                    if let Some(v) = tris.iter().flatten().min_by(|a, b| {
+                        a.distance_squared(hit.point).total_cmp(&b.distance_squared(hit.point))
+                    }) {
+                        at = *v;
+                    }
+                }
+                Some((at, hit.normal.unwrap_or(Vec3::Y)))
             })
             .await;
-        // oracle: the C++ vertex snap works out the nearest vertex and then lands on the hit
-        // point anyway (`RetrieveSceneObjPointAndNormal`); so does this
-        if let Some(h) = hit {
-            return Some((h.point, h.normal.unwrap_or(Vec3::Y)));
+        if found.is_some() {
+            return found;
         }
     }
     let t = ray.intersect_plane_y(0.0).filter(|t| *t > 0.0)?;
-    let mut p = ray.at(t);
-    if let Some(step) = grid {
-        p.x = gizmo::snapto(p.x, step);
-        p.z = gizmo::snapto(p.z, step);
-        p.y = 0.0;
-    }
-    Some((p, Vec3::Y))
-}
-
-/// A click of Place (`DefaultAddObject` and the tools' `AddStart`): the current class's object
-/// at the ground hit, stood on the surface with Align to Surface Normal; Alt keeps placing.
-fn place(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
-    let Ok(svc) = SceneService::of(editor) else { return };
-    let (object_snap, normal_align, grid, far) = vp.read(|s| {
-        (
-            s.settings.object_snap,
-            s.settings.normal_align,
-            s.snap_on(GizmoType::Move).then_some(s.step(GizmoType::Move)),
-            s.nav.far,
-        )
-    });
-    let class = svc.store.snapshot().tools.placing;
-    let item = vp.read(|s| s.place.get(&class).cloned());
-    let ed = editor.clone();
-    let vp = vp.clone();
-    crate::gesture::spawn(editor, async move {
-        let Some((at, normal)) = pick_ground(&ed, &svc, ray, object_snap, grid, far).await else { return };
-        let origin = ed.ui_origin();
-        let up = normal_align.then_some(normal);
-        let snap = svc.store.snapshot();
-        let placed: Option<ObjId> = match class {
-            ObjClass::Group => {
-                // `TUI_ControlGroupAdd`: the Group tool's current library group
-                let Some(reference) = item else {
-                    ed.log.info("Nothing selected.");
-                    return;
-                };
-                let mut args = gz_editor::Args::new();
-                args.insert("kind".into(), Value::String("group".into()));
-                args.insert("ref".into(), Value::String(reference.to_string()));
-                args.insert("position".into(), json!([at.x, at.y, at.z]));
-                let reply = ed.call("scene.place", args, origin).await;
-                if reply.get("ok").and_then(Value::as_bool) != Some(true) {
-                    ed.log.error(
-                        reply
-                            .get("error")
-                            .and_then(Value::as_str)
-                            .unwrap_or("the group could not be placed")
-                            .to_owned(),
-                    );
-                    return;
-                }
-                // a library group answers its object, a `.group` asset the objects it placed
-                let name = reply
-                    .get("object")
-                    .or_else(|| reply.get("objects").and_then(|l| l.get(0)))
-                    .and_then(|o| o.get("name"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                svc.store.snapshot().find_any(name).map(|o| o.id)
-            }
-            ObjClass::SpawnPoint => {
-                let Some(section) = item else {
-                    ed.log.info("Nothing selected.");
-                    return;
-                };
-                let mut args = gz_editor::Args::new();
-                args.insert("kind".into(), Value::String("spawn".into()));
-                args.insert("section".into(), Value::String(section.to_string()));
-                args.insert("position".into(), json!([at.x, at.y, at.z]));
-                let reply = ed.call("scene.place", args, origin).await;
-                if reply.get("ok").and_then(Value::as_bool) != Some(true) {
-                    ed.log.error(
-                        reply
-                            .get("error")
-                            .and_then(Value::as_str)
-                            .unwrap_or("the spawn point could not be placed")
-                            .to_owned(),
-                    );
-                    return;
-                }
-                let name =
-                    reply.get("object").and_then(|o| o.get("name")).and_then(Value::as_str).unwrap_or("");
-                let id = svc.store.snapshot().find(ObjClass::SpawnPoint, name).map(|o| o.id);
-                if let (Some(id), Some(_)) = (id, up) {
-                    let _ = svc
-                        .store
-                        .send(
-                            SceneCmd::Transform {
-                                items: vec![(id, TransformEdit::MoveTo { position: at, up })],
-                                members: true,
-                                label: "Move".into(),
-                                merge: None,
-                            },
-                            origin,
-                        )
-                        .await;
-                }
-                id
-            }
-            ObjClass::SceneObject | ObjClass::Particles => {
-                // `TUI_ControlObjectAdd::Start`: Randomize Added Objects picks the object from its
-                // list, and the scale and rotation from its ranges
-                let random = random_append(&snap, class);
-                let mut rng = gz_particles::Rng::new(
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(1, |d| d.subsec_nanos() as i32),
-                );
-                let item = match &random {
-                    Some(r) if !r.objects.is_empty() => {
-                        let i = rng.rand_i_max(i32::try_from(r.objects.len()).unwrap_or(i32::MAX)) as usize;
-                        r.objects.get(i).cloned().or(item)
-                    }
-                    _ => item,
-                };
-                let Some(reference) = item else {
-                    ed.log.info("Nothing selected.");
-                    return;
-                };
-                let data = if class == ObjClass::SceneObject {
-                    let lib = svc.library.clone();
-                    let key = gz_scene::library::normalize(&reference);
-                    if ed.exec.io(move || lib.load(&key)).await.is_err() {
-                        ed.log.error("TUI_ControlObjectAdd:: Can't load reference object.");
-                        return;
-                    }
-                    ObjData::SceneObject(SceneObjectData::library(&reference))
-                } else {
-                    ObjData::Particles(ParticlesData {
-                        reference: reference.clone(),
-                        ..ParticlesData::default()
-                    })
-                };
-                let mut o = Object::new(class, &snap.gen_name(Some(&reference)), data);
-                if let Some(r) = &random {
-                    if r.flags & gz_scene::tools::FL_APPEND_RANDOM_ROTATION != 0 {
-                        o.xform.rotation = Vec3::new(
-                            rng.rand_f_range(r.min_rotation.x, r.max_rotation.x),
-                            rng.rand_f_range(r.min_rotation.y, r.max_rotation.y),
-                            rng.rand_f_range(r.min_rotation.z, r.max_rotation.z),
-                        );
-                    }
-                    if r.flags & gz_scene::tools::FL_APPEND_RANDOM_SCALE != 0 {
-                        o.xform.scale = if r.flags & gz_scene::tools::FL_APPEND_RANDOM_PROPORTIONAL != 0 {
-                            Vec3::splat(rng.rand_f_range(r.min_scale.x, r.max_scale.x))
-                        } else {
-                            Vec3::new(
-                                rng.rand_f_range(r.min_scale.x, r.max_scale.x),
-                                rng.rand_f_range(r.min_scale.y, r.max_scale.y),
-                                rng.rand_f_range(r.min_scale.z, r.max_scale.z),
-                            )
-                        };
-                    }
-                }
-                stand(&mut o, at, up);
-                send_place(&svc, o, origin).await
-            }
-            ObjClass::Light
-            | ObjClass::Glow
-            | ObjClass::SoundSrc
-            | ObjClass::SoundEnv
-            | ObjClass::Shape
-            | ObjClass::FogVolume
-            | ObjClass::Way => {
-                let data = match class {
-                    ObjClass::Way => ObjData::Way(WayData::build(&[at], false)),
-                    ObjClass::Shape => crate::objtools::new_shape(&ed),
-                    _ => default_data(class),
-                };
-                let mut o = Object::new(class, &snap.gen_name(Some(class.name())), data);
-                stand(&mut o, at, up);
-                if let ObjData::SoundSrc(s) = &mut o.data {
-                    s.position = at;
-                }
-                send_place(&svc, o, origin).await
-            }
-            _ => {
-                ed.log.info(format!("The {} tool places nothing with a click.", tool_title(class)));
-                return;
-            }
-        };
-        if placed.is_some() && !b.alt {
-            vp.with(|s| s.tool.action = Action::Select);
-        }
-        ed.exec.wake().ping();
-    });
-}
-
-/// The Object tool's Append Random settings while Randomize Added Objects is on.
-struct RandomAppend {
-    flags: u32,
-    objects: Vec<gz_base::SmolStr>,
-    min_scale: Vec3,
-    max_scale: Vec3,
-    min_rotation: Vec3,
-    max_rotation: Vec3,
-}
-
-fn random_append(snap: &gz_scene::SceneState, class: ObjClass) -> Option<RandomAppend> {
-    if class != ObjClass::SceneObject {
-        return None;
-    }
-    let part = snap.tools.part(ObjClass::SceneObject);
-    if part.flags & gz_scene::tools::FL_APPEND_RANDOM == 0 {
-        return None;
-    }
-    let gz_scene::tools::ToolOpts::Objects(o) = &part.opts else { return None };
-    Some(RandomAppend {
-        flags: part.flags,
-        objects: o.objects.clone(),
-        min_scale: o.min_scale,
-        max_scale: o.max_scale,
-        min_rotation: o.min_rotation,
-        max_rotation: o.max_rotation,
-    })
-}
-
-/// `MoveTo(p, n)`: the position, and with a normal the rotation that stands it on the surface.
-fn stand(o: &mut Object, at: Vec3, up: Option<Vec3>) {
-    if let Some(n) = up {
-        let k = gz_scene::math::rotation_matrix(o.rotation()).row(2);
-        o.xform.rotation = gz_scene::math::normal_align(n, k);
-    }
-    o.xform.position = at;
-}
-
-async fn send_place(svc: &SceneService, o: Object, origin: gz_editor::Origin) -> Option<ObjId> {
-    match svc.store.send(SceneCmd::Place(Box::new(o)), origin).await {
-        Ok(gz_scene::SceneReply::Id(id)) => Some(id),
-        _ => None,
-    }
+    Some((ray.at(t), Vec3::Y))
 }
 
 #[cfg(test)]
 mod tests {
     use egui::{Pos2, pos2, vec2};
 
-    use super::{PressStep, held_delta, press_step};
+    use super::{PressStep, held_delta, mode_index, press_step};
     use crate::camera::Buttons;
+    use gz_scene::SceneMode;
+
+    #[test]
+    fn the_mode_control_shows_the_scenes_mode() {
+        assert_eq!(mode_index(None), 0);
+        assert_eq!(mode_index(Some(SceneMode::Select)), 0);
+        assert_eq!(mode_index(Some(SceneMode::Place)), 1);
+        // every painted layer is Paint
+        for m in [SceneMode::AiMap, SceneMode::Details, SceneMode::Wallmarks] {
+            assert_eq!(mode_index(Some(m)), 2);
+        }
+        assert_eq!(mode_index(Some(SceneMode::Zones)), 3);
+        // and each segment runs the mode's action, the one bound to its key
+        assert_eq!(crate::actions::MODES[mode_index(Some(SceneMode::Zones))], "viewport.mode_zones");
+    }
 
     #[test]
     fn a_left_press_is_a_click_until_it_moves() {
@@ -1711,7 +1787,7 @@ mod tests {
         // past it the drag is the camera's, and the button up after it does nothing
         assert_eq!(press_step(&held, start, pos2(106.0, 100.0), true), PressStep::Camera);
         assert_eq!(press_step(&up, start, pos2(106.0, 100.0), true), PressStep::Nothing);
-        // a press that waits for no click (a tool already acted) clicks nothing
+        // a press that waits for no click (a mode already acted) clicks nothing
         assert_eq!(press_step(&up, start, start, false), PressStep::Nothing);
         // Ctrl draws the marquee; another key only stops the click
         let ctrl = Buttons { ctrl: true, ..held };

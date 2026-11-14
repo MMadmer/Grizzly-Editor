@@ -135,7 +135,7 @@ fn start_rewrite(editor: &Arc<Editor>, files: Vec<(String, std::path::PathBuf)>)
     }
 }
 
-/// Cube Map \ Smaller Copy (`CreateSmallerCubeMap`): `<name>.tga` of the texture sources made
+/// Cube Map \ Smaller Copy: `<name>.tga` of the texture sources made
 /// into `<name>#small.dds` of the game textures, 32 x 32 a face, as a job.
 pub fn smaller_cube_map(editor: &Arc<Editor>, dirs: &EditorDirs, name: &str) {
     let (src, dst) =
@@ -224,12 +224,7 @@ pub fn install(b: &mut ShellBuilder) {
         )
         .icon(Icon::Refresh),
     );
-    for (order, id) in ["library.reload_objects", "library.reload_textures", "library.rewrite_descriptions"]
-        .into_iter()
-        .enumerate()
-    {
-        b.menu_action("Libraries", 2, i32::try_from(order).unwrap_or(0), id, None);
-    }
+    b.menu_action("Libraries", 1, 0, "library.reload_objects", None);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]

@@ -1,4 +1,4 @@
-//! The system's folder dialog, off the UI thread (the kit's `file_dialog`): it blocks its own
+//! The system's folder and file dialogs, off the UI thread (the kit's `file_dialog`): it blocks its own
 //! thread while the author picks, and the folder comes back to the start of a frame.
 
 use std::sync::Arc;
@@ -45,6 +45,33 @@ pub(crate) fn pick_folder(
     let picked = gz_ui::file_dialog::pick(None, asker, request, move |folder| {
         drop(release);
         let text = folder.display().to_string();
+        queue.post(move |_, ctx| {
+            done(text, ctx);
+            ctx.request_repaint();
+        });
+    });
+    if let Err(line) = picked {
+        editor.log.plain(line);
+    }
+}
+
+/// Opens the system's file dialog for `request`; `done` gets the file picked on the UI thread.
+/// One dialog at a time, as [`pick_folder`]; under `-nodlg` nothing opens.
+pub(crate) fn pick_file(
+    editor: &Arc<Editor>,
+    request: FileRequest,
+    done: impl FnOnce(String, &egui::Context) + Send + 'static,
+) {
+    let Ok(queue) = UiQueue::of(editor) else { return };
+    let busy = editor.services.get_or_init(Picking::default);
+    if busy.0.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let release = Release(busy);
+    let asker = if editor.flags.unattended { Asker::Unattended } else { Asker::Ui };
+    let picked = gz_ui::file_dialog::pick(None, asker, request, move |file| {
+        drop(release);
+        let text = file.display().to_string();
         queue.post(move |_, ctx| {
             done(text, ctx);
             ctx.request_repaint();

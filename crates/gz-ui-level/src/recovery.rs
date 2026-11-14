@@ -1,6 +1,5 @@
 //! Recover Unsaved Scene: the M page card that takes the Start page over while the open
-//! project offers a snapshot of a session that did not close cleanly
-//! (`EditorRecovery::DrawStartupRecovery`). Restore (the default) and Discard... - which asks
+//! project offers a snapshot of a session that did not close cleanly. Restore (the default) and Discard... - which asks
 //! first, naming the snapshot's time and the older snapshots - are `gz-scene`'s `recovery`
 //! command.
 //!
@@ -84,7 +83,7 @@ fn wants(editor: &Editor) -> bool {
     seen(editor).status.is_some_and(|s| s.snapshot_available && s.can_discard)
 }
 
-/// `FormatSavedAt`: a FILETIME as local `YYYY-MM-DD HH:MM:SS`.
+/// A FILETIME as local `YYYY-MM-DD HH:MM:SS`.
 #[must_use]
 pub fn format_saved_at(filetime: u64) -> String {
     // 100 ns ticks since 1601-01-01

@@ -15,7 +15,7 @@
 //! renderer.submit(Arc<FramePacket>)          -> serial        never blocks; older packets drop
 //! renderer.target()                          -> TargetHandle  the last finished frame to show
 //! renderer.finished() / wait_frame(serial)   -> FrameInfo     the frame clock, the labels
-//! renderer.capture(serial, timeout)          -> Image         screenshot_viewport, cropped
+//! renderer.capture(serial, timeout)          -> Image         shot.viewport, cropped
 //! renderer.render_offscreen(&packet, size)   -> Image         thumbnails, previews, preview.png
 //! ThumbnailCache::get_or_render(..)          -> Arc<Image>    a tile's picture, kept by content
 //! ```

@@ -1,9 +1,6 @@
 //! What the Start page's cards show, worked out off the UI thread: the list with each folder's
-//! state, the text of a card (a twin's differing parent folder), the order the page draws, the
-//! preview picture and whether it shows a scene at all.
-//!
-//! The C++ specification is `EditorProject.cpp`: `RefreshCardText`, `AncestorOf`,
-//! `SegmentRanges`, `CardOrder`, `ShowsNoScene`, `LoadPreview`.
+//! state, the project's name by its project file, the text of a card (a twin's differing parent
+//! folder), the order the page draws, the preview picture and whether it shows a scene at all.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -26,7 +23,7 @@ pub struct Seg {
 pub struct Card {
     /// The folder as `_projects.ini` spells it.
     pub path: String,
-    /// The folder's name.
+    /// The project's name: its project file's (`<Name>.grizzly`), else the folder's.
     pub name: String,
     pub state: EntryState,
     /// For two cards of one name, the nearest parent folder that tells them apart; empty for
@@ -88,15 +85,19 @@ fn same_name(a: &str, b: &str) -> bool {
     a.to_lowercase() == b.to_lowercase()
 }
 
-/// The cards of the listed folders (`path`, its state, its preview's write time): two of one
-/// name name the nearest parent folder that differs between them - two
-/// `DARF-Overnight-Delivery` cards read `GrizzlyProjects` and `Temp` instead of one word twice.
+/// One listed folder as read: its path, its state, its preview's write time, the name of its
+/// project file.
+pub type Row = (String, EntryState, Option<Rev>, Option<String>);
+
+/// The cards of the listed folders: two of one name name the nearest parent folder that differs
+/// between them - two `DARF-Overnight-Delivery` cards read `GrizzlyProjects` and `Temp` instead of
+/// one word twice.
 #[must_use]
-pub fn card_texts(rows: Vec<(String, EntryState, Option<Rev>)>) -> Vec<Card> {
+pub fn card_texts(rows: Vec<Row>) -> Vec<Card> {
     let mut cards: Vec<Card> = rows
         .into_iter()
-        .map(|(path, state, preview)| {
-            let name = entry_name(&path).to_owned();
+        .map(|(path, state, preview, file_name)| {
+            let name = file_name.unwrap_or_else(|| entry_name(&path).to_owned());
             Card { path, name, state, parent: String::new(), seg: None, preview }
         })
         .collect();
@@ -150,7 +151,7 @@ pub fn card_order(cards: &[Card], search: &str, sort: Sort) -> Vec<usize> {
     out
 }
 
-/// A card's state as `project.list` and `project_browser_menu` name it.
+/// A card's state as `project.list` and `project.page` name it.
 #[must_use]
 pub fn state_name(state: EntryState) -> &'static str {
     state.as_str()
@@ -179,6 +180,16 @@ pub fn preview_rev(folder: &str) -> Option<Rev> {
     Some(Rev((nanos ^ meta.len().rotate_left(48)) | 1))
 }
 
+/// The name of a folder's project file (`<Name>.grizzly`), when it holds one. One read of the
+/// folder.
+#[must_use]
+pub fn project_name(folder: &str) -> Option<String> {
+    gz_project::project::project_files(Path::new(folder))
+        .first()
+        .and_then(|f| f.file_stem())
+        .map(|s| s.to_string_lossy().into_owned())
+}
+
 /// Reads the list as the file has it now, and every folder's state, off the UI thread.
 pub async fn load(editor: &Arc<Editor>) -> Snapshot {
     let list = Projects::of(editor).list(editor).await;
@@ -192,8 +203,12 @@ pub async fn load(editor: &Arc<Editor>) -> Snapshot {
                 .into_iter()
                 .map(|e| {
                     let state = entry_state(&e);
-                    let preview = if state == EntryState::Project { preview_rev(&e) } else { None };
-                    (e, state, preview)
+                    let (preview, name) = if state == EntryState::Project {
+                        (preview_rev(&e), project_name(&e))
+                    } else {
+                        (None, None)
+                    };
+                    (e, state, preview, name)
                 })
                 .collect::<Vec<_>>()
         })
@@ -414,8 +429,15 @@ pub fn size_text(bytes: u64) -> String {
 mod tests {
     use super::*;
 
-    fn row(path: &str) -> (String, EntryState, Option<Rev>) {
-        (path.to_owned(), EntryState::Project, None)
+    fn row(path: &str) -> Row {
+        (path.to_owned(), EntryState::Project, None, None)
+    }
+
+    #[test]
+    fn a_card_is_named_by_its_project_file() {
+        let cards =
+            card_texts(vec![("D:/p/folder".to_owned(), EntryState::Project, None, Some("Night".to_owned()))]);
+        assert_eq!(cards.first().map(|c| c.name.as_str()), Some("Night"));
     }
 
     #[test]

@@ -9,11 +9,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use egui::{ColorImage, Context, Rect, TextureHandle, TextureId, TextureOptions, pos2};
+use egui::{Color32, ColorImage, Context, Painter, Rect, TextureOptions, pos2};
 use gz_base::Rev;
 use gz_editor::{Editor, ProjectSession};
 use gz_fmt_xml::sheets::TextureSheets;
 use gz_game::{Bundled, GameLink};
+use gz_ui::upload::{FRAME_BUDGET, Tiled};
 use gz_vfs::GameFiles;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
@@ -53,13 +54,13 @@ impl TexIds {
     }
 }
 
-/// A sheet on the GPU and its size in pixels.
+/// A sheet and its size in pixels. It reaches the GPU a few tiles a frame (the kit's
+/// `upload::Tiled`): a 2048 x 2048 sheet is four frames of a megapixel each, never 16 MB in one.
 #[derive(Clone)]
 pub struct Sheet {
-    pub id: TextureId,
+    tiled: Arc<Mutex<Tiled>>,
     pub w: f32,
     pub h: f32,
-    _handle: TextureHandle,
 }
 
 impl Sheet {
@@ -67,6 +68,18 @@ impl Sheet {
     #[must_use]
     pub fn uv(&self, x: f32, y: f32, w: f32, h: f32) -> Rect {
         Rect::from_min_max(pos2(x / self.w, y / self.h), pos2((x + w) / self.w, (y + h) / self.h))
+    }
+
+    /// Draws the piece `uv` (0..1 of the sheet) into `dest`, tinted; a tile that has not reached
+    /// the GPU yet is left out for this frame.
+    pub fn paint(&self, painter: &Painter, dest: Rect, uv: Rect, tint: Color32) {
+        self.tiled.lock().paint(painter, dest, uv, tint, Color32::TRANSPARENT);
+    }
+
+    /// Every tile is on the GPU.
+    #[must_use]
+    pub fn ready(&self) -> bool {
+        self.tiled.lock().ready()
     }
 }
 
@@ -344,12 +357,13 @@ impl PdaAssets {
                             let img = gz_fmt_tex::read_dds_level(&bytes, 0, 0).ok()?;
                             let size = [usize::try_from(img.width).ok()?, usize::try_from(img.height).ok()?];
                             let color = ColorImage::from_rgba_unmultiplied(size, &img.rgba);
-                            let handle = ctx.load_texture(name, color, TextureOptions::LINEAR);
+                            // cut here; the frames hand the tiles over (`pump`)
+                            let tiled = Tiled::new(&name, &color, TextureOptions::LINEAR);
+                            ctx.request_repaint();
                             Some(Sheet {
-                                id: handle.id(),
+                                tiled: Arc::new(Mutex::new(tiled)),
                                 w: img.width as f32,
                                 h: img.height as f32,
-                                _handle: handle,
                             })
                         })
                         .await
@@ -367,22 +381,52 @@ impl PdaAssets {
         Look::Loading
     }
 
-    /// A texture id of the descriptions - or, not being one, a texture file (`Tex`): its sheet
-    /// and uv rectangle.
-    pub fn tex(self: &Arc<Self>, editor: &Arc<Editor>, id: &str) -> Look<(TextureId, Rect)> {
+    /// Hands the GPU the next tiles of the sheets on their way, a frame's budget in all. Called
+    /// once a frame by the tab that draws them.
+    pub fn pump(&self, ctx: &Context) {
+        let sheets: Vec<Sheet> = self
+            .cache
+            .lock()
+            .sheets
+            .values()
+            .filter_map(|s| match s {
+                Slot::Ready(Some(sheet)) => Some(sheet.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut budget = FRAME_BUDGET;
+        for sheet in sheets {
+            let mut t = sheet.tiled.lock();
+            if t.ready() || budget == 0 {
+                continue;
+            }
+            let before = t.progress();
+            t.pump(ctx, budget);
+            let [w, h] = t.size();
+            let spent = ((t.progress() - before) * (w * h) as f32) as usize;
+            budget = budget.saturating_sub(spent.max(1));
+        }
+    }
+
+    /// A texture id of the descriptions - or, not being one, a texture file: its sheet and uv
+    /// rectangle.
+    pub fn tex(self: &Arc<Self>, editor: &Arc<Editor>, id: &str) -> Look<(Sheet, Rect)> {
         if id.is_empty() {
             return Look::Missing;
         }
         let Some(ids) = self.tex_ids(editor) else { return Look::Loading };
         if let Some((sheet, from, [x, y, w, h])) = ids.get(id) {
             return match self.sheet(editor, sheet, from) {
-                Look::Ready(s) => Look::Ready((s.id, s.uv(x, y, w, h))),
+                Look::Ready(s) => {
+                    let uv = s.uv(x, y, w, h);
+                    Look::Ready((s, uv))
+                }
                 Look::Loading => Look::Loading,
                 Look::Missing => Look::Missing,
             };
         }
         match self.sheet(editor, id, SheetFrom::Game) {
-            Look::Ready(s) => Look::Ready((s.id, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)))),
+            Look::Ready(s) => Look::Ready((s, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)))),
             Look::Loading => Look::Loading,
             Look::Missing => Look::Missing,
         }

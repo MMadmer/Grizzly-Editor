@@ -216,10 +216,36 @@ impl HashCache {
     }
 }
 
+/// The library objects the scene's objects are made from, as one number over their files'
+/// contents. Blocking for an object the library has not read yet: off the UI thread.
+#[must_use]
+pub fn library_stamp(scene: &SceneState, lib: &gz_scene::library::Library) -> u64 {
+    let mut refs: Vec<&str> = scene
+        .objects
+        .values()
+        .filter_map(|o| match &o.data {
+            ObjData::SceneObject(d) => Some(d.reference.as_str()),
+            _ => None,
+        })
+        .collect();
+    refs.sort_unstable();
+    refs.dedup();
+    let mut h = Stable::new();
+    for r in refs {
+        h.str(r);
+        h.word(lib.load(r).map_or(0, |o| o.stamp));
+    }
+    h.finish()
+}
+
 /// The layers and settings a step reads besides objects, hashed.
 fn layers(scene: &SceneState, step: Step, opts: &Options) -> u64 {
     let mut h = Stable::new();
     let level = &scene.meta.level;
+    // a step that reads the scene's objects reads the models they are made from
+    if step.classes().contains(&ObjClass::SceneObject) {
+        h.word(opts.library);
+    }
     match step {
         Step::Geometry => {
             debug_hash(&mut h, &level.build);

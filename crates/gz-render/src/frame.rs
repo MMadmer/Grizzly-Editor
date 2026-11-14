@@ -2,6 +2,7 @@
 //! chunks on the CPU pool when there are many draws - as command buffers in submission order.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -57,11 +58,34 @@ fn create(gpu: &Gpu, label: &str, usage: wgpu::BufferUsages, size: u64) -> wgpu:
     })
 }
 
+/// Where a read-back buffer of the label queries is: free, written by a submitted frame and being
+/// mapped, mapped and ready to read, or failed to map.
+const READ_IDLE: u8 = 0;
+const READ_MAPPING: u8 = 1;
+const READ_READY: u8 = 2;
+const READ_FAILED: u8 = 3;
+
+/// One of the two buffers the label queries are copied into. A frame writes the free one and
+/// maps it once submitted; the render thread reads it when the map has come back, a frame or so
+/// later - it never waits for the GPU to get there.
+struct Readback {
+    buffer: wgpu::Buffer,
+    state: Arc<AtomicU8>,
+    /// How many queries the frame that wrote it ran.
+    count: u32,
+}
+
 struct Queries {
     set: wgpu::QuerySet,
     capacity: u32,
     resolve: wgpu::Buffer,
-    readback: wgpu::Buffer,
+    readback: [Readback; 2],
+}
+
+impl Queries {
+    fn free_slot(&self) -> Option<usize> {
+        self.readback.iter().position(|r| r.state.load(Ordering::Acquire) == READ_IDLE)
+    }
 }
 
 /// What one recorder keeps between frames: the render thread has one, an offscreen picture
@@ -86,8 +110,9 @@ pub(crate) struct Recorded {
     pub buffers: Vec<wgpu::CommandBuffer>,
     /// A texture it drew was still loading.
     pub pending: bool,
-    /// Label occlusion queries waiting in the read-back buffer.
+    /// Label occlusion queries the frame copies into a read-back buffer, and which one.
     pub queries: u32,
+    pub label_slot: Option<usize>,
 }
 
 impl FrameResources {
@@ -150,11 +175,17 @@ impl FrameResources {
         for i in 1..4 {
             helper_at[i] = helper_at[i - 1] + counts[i - 1];
         }
-        let queries = packet.label_points.len().min(MAX_LABEL_QUERIES) as u32;
+        let mut queries = packet.label_points.len().min(MAX_LABEL_QUERIES) as u32;
         self.labels
             .write(gpu, bytemuck::cast_slice(packet.label_points.get(..queries as usize).unwrap_or(&[])));
         if queries > 0 {
             self.ensure_queries(gpu, queries);
+        }
+        // both read-backs still on their way: this frame asks nothing, its labels keep what the
+        // last answer said
+        let label_slot = self.queries.as_ref().filter(|_| queries > 0).and_then(Queries::free_slot);
+        if label_slot.is_none() {
+            queries = 0;
         }
 
         if stale {
@@ -190,7 +221,11 @@ impl FrameResources {
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gz-render clear") });
             drop(begin(&mut enc, targets, size, Clear::Both(packet.clear), true, None));
-            return Recorded { buffers: vec![enc.finish()], pending, queries: 0 };
+            return Recorded { buffers: vec![enc.finish()], pending, queries: 0, label_slot: None };
+        };
+        let readback = match (self.queries.as_ref(), label_slot) {
+            (Some(q), Some(i)) => q.readback.get(i).map(|r| &r.buffer),
+            _ => None,
         };
         let ctx = Ctx {
             gpu,
@@ -207,6 +242,7 @@ impl FrameResources {
             helper_counts: counts,
             labels: &self.labels.buffer,
             queries: self.queries.as_ref().filter(|_| queries > 0),
+            readback,
             query_count: queries,
             clear: packet.clear,
             outline: packet.id_pass,
@@ -244,7 +280,8 @@ impl FrameResources {
             }
             vec![enc.finish()]
         };
-        Recorded { buffers, pending, queries: ctx.query_count * u32::from(ctx.queries.is_some()) }
+        let queries = ctx.query_count * u32::from(ctx.queries.is_some());
+        Recorded { buffers, pending, queries, label_slot: label_slot.filter(|_| queries > 0) }
     }
 
     fn upload_roof(&mut self, gpu: &Gpu, packet: &FramePacket) -> bool {
@@ -286,6 +323,16 @@ impl FrameResources {
         }
         let capacity = count.next_power_of_two().max(64);
         let bytes = u64::from(capacity) * 8;
+        let readback = || Readback {
+            buffer: create(
+                gpu,
+                "gz-render label read-back",
+                wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                bytes,
+            ),
+            state: Arc::new(AtomicU8::new(READ_IDLE)),
+            count: 0,
+        };
         self.queries = Some(Queries {
             set: gpu.device.create_query_set(&wgpu::QuerySetDescriptor {
                 label: Some("gz-render labels"),
@@ -299,26 +346,53 @@ impl FrameResources {
                 wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
                 bytes,
             ),
-            readback: create(
-                gpu,
-                "gz-render label read-back",
-                wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                bytes,
-            ),
+            readback: [readback(), readback()],
         });
     }
 
-    /// After the frame's submission: which depth-tested labels had a pixel pass the depth test.
-    pub fn label_visibility(&self, gpu: &Gpu, count: u32) -> Vec<bool> {
-        let Some(q) = &self.queries else { return Vec::new() };
-        if count == 0 {
-            return Vec::new();
+    /// After the frame that wrote read-back `slot` was submitted: maps it without waiting; the
+    /// device's next poll that finds the frame done makes it ready ([`Self::take_labels`]).
+    pub fn read_labels(&mut self, slot: usize, count: u32) {
+        let Some(r) = self.queries.as_mut().and_then(|q| q.readback.get_mut(slot)) else { return };
+        r.count = count;
+        r.state.store(READ_MAPPING, Ordering::Release);
+        let state = r.state.clone();
+        r.buffer.slice(..u64::from(count) * 8).map_async(wgpu::MapMode::Read, move |res| {
+            state.store(if res.is_ok() { READ_READY } else { READ_FAILED }, Ordering::Release);
+        });
+    }
+
+    /// A read-back is still on its way: the render thread polls the device for it.
+    pub fn labels_in_flight(&self) -> bool {
+        self.queries
+            .as_ref()
+            .is_some_and(|q| q.readback.iter().any(|r| r.state.load(Ordering::Acquire) == READ_MAPPING))
+    }
+
+    /// The answers of a read-back that came back since the last call: its slot and which
+    /// depth-tested labels had a pixel pass the depth test. A map that failed frees its slot and
+    /// answers nothing.
+    pub fn take_labels(&mut self) -> Option<(usize, Vec<bool>)> {
+        let q = self.queries.as_mut()?;
+        for (i, r) in q.readback.iter_mut().enumerate() {
+            match r.state.load(Ordering::Acquire) {
+                READ_READY => {
+                    let bytes = u64::from(r.count) * 8;
+                    let seen: Option<Vec<bool>> =
+                        r.buffer.slice(..bytes).get_mapped_range().ok().map(|view| {
+                            view.as_chunks::<8>().0.iter().map(|c| c.iter().any(|b| *b != 0)).collect()
+                        });
+                    r.buffer.unmap();
+                    r.state.store(READ_IDLE, Ordering::Release);
+                    if let Some(seen) = seen {
+                        return Some((i, seen));
+                    }
+                }
+                READ_FAILED => r.state.store(READ_IDLE, Ordering::Release),
+                _ => {}
+            }
         }
-        let bytes = u64::from(count) * 8;
-        let slice = q.readback.slice(..bytes);
-        let Ok(raw) = map_read(gpu, &slice) else { return vec![true; count as usize] };
-        q.readback.unmap();
-        raw.as_chunks::<8>().0.iter().map(|c| c.iter().any(|b| *b != 0)).collect()
+        None
     }
 }
 
@@ -355,6 +429,8 @@ struct Ctx<'a> {
     helper_counts: [u32; 4],
     labels: &'a wgpu::Buffer,
     queries: Option<&'a Queries>,
+    /// The read-back buffer this frame's label queries are copied into.
+    readback: Option<&'a wgpu::Buffer>,
     query_count: u32,
     clear: [f64; 4],
     outline: bool,
@@ -452,11 +528,11 @@ fn encode_job(ctx: &Ctx<'_>, job: &Job<'_>, enc: &mut wgpu::CommandEncoder) {
                 draw_helpers(ctx, &mut pass, &ctx.gpu.line_overlay, 1);
                 draw_helpers(ctx, &mut pass, &ctx.gpu.tri_overlay, 3);
             }
-            if let Some(q) = ctx.queries
+            if let (Some(q), Some(readback)) = (ctx.queries, ctx.readback)
                 && ctx.query_count > 0
             {
                 enc.resolve_query_set(&q.set, 0..ctx.query_count, &q.resolve, 0);
-                enc.copy_buffer_to_buffer(&q.resolve, 0, &q.readback, 0, u64::from(ctx.query_count) * 8);
+                enc.copy_buffer_to_buffer(&q.resolve, 0, readback, 0, u64::from(ctx.query_count) * 8);
             }
         }
     }

@@ -38,11 +38,9 @@ PROGRAMS = ["Grizzly.exe", "Grizzly-Cmd.exe", "grizzly-mcp.exe", "LICENSE.txt", 
 SYMBOLS = ["Grizzly.pdb", "Grizzly_Cmd.pdb", "grizzly_mcp.pdb"]
 # the tracked data the editor reads at run time, under its data root
 RUNTIME = ["fs.ltx", "fsgame.ltx", "gamedata", "rawdata"]
-# tracked data no code of the editor opens, with the reason it stays out of the installation
-LEFT_OUT = {
-    "gamedata/shaders/": "shader sources of an earlier renderer: the editor draws with WGSL shaders built into it",
-    "gamedata/DOT_NOT_DELETE.txt": "a placeholder that keeps the folder in git",
-}
+# tracked data that stays out of the installation, each with its reason: none today - everything
+# tracked under the data root is something the editor reads
+LEFT_OUT: dict[str, str] = {}
 
 
 def workspace_version(repo: str = REPO) -> str:

@@ -285,10 +285,10 @@ fn start_recovery_timer(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
                 continue;
             }
             match snapshot(&ed, &svc).await {
-                Ok(()) => ed.log.info("* recovery: snapshot saved"),
+                Ok(()) => ed.log.info("recovery: snapshot saved"),
                 Err(e) => {
                     svc.recovery.retry_later();
-                    ed.log.warn(format!("! recovery: autosave failed: {e}"));
+                    ed.log.warn(format!("recovery: autosave failed: {e}"));
                 }
             }
         }
@@ -451,6 +451,11 @@ pub async fn load_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: Pat
         *s.files.lock() = opened.files.map(Arc::new);
         *s.problems.lock() = opened.problems;
         s.set_opened();
+        if let Ok((_, project)) = gz_project::Project::of(&ed)
+            && let Err(e) = project.note_recent_scene(&f).await
+        {
+            ed.log.warn(e.message);
+        }
         ed.log.info(format!("the scene is open: {count} objects"));
         Ok(serde_json::json!({ "objects": count }))
     });

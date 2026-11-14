@@ -137,10 +137,12 @@ applies; `{"batch": [ ... ]}` runs several in order and answers `results`. One a
 |---|---|
 | `app` | the program: version, quit, preferences, keys, layout |
 | `job` | every long piece of work: list, get, wait, stop |
-| `project` | open, close, create, delete, the project list, recovery, collect |
+| `project` | open, close, create, delete, the project list, recovery, collect, the Start page (`project.page`) |
 | `game` | the linked game: link, what it offers (modes, sections, the pickers' lists: `game.lookup`) |
 | `file` | the project's files: list, copy, move, rename, delete, create from a template, import |
 | `asset` | the text assets: kinds, check, reference, find, migrate |
+| `content` | the Content Browser as the window shows it: source, Library kind, folder, search, selection (`content.view`) |
+| `preview`, `library` | the model and texture previews; the Texture, Sound and Light Animation libraries |
 | `mod` | the module: info, build, package, exclude, thumbnail |
 | `release` | GitHub releases and the Mod Browser: publish, list, edit, delete, the catalog |
 | `screens`, `world`, `characters`, `pda` | what those tabs do beyond editing their files (imports, presets, previews) |

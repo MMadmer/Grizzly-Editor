@@ -32,14 +32,14 @@ pub enum ListKey {
     SoundEnvironments,
     LightAnims,
     BaseScenes,
-    /// `OnFillRespawnItemProfile`: the sections of the game's `mp\\respawn_items.ltx`.
+    /// The sections of the game's `mp\\respawn_items.ltx`.
     RespawnItems,
-    /// `FillSkeletonAnims`: the motions of a model (`meshes\<model>.ogf`), its own and those of
+    /// The motions of a model (`meshes\<model>.ogf`), its own and those of
     /// the `.omf` files it names; empty for an object without a model.
     SkeletonMotions(SmolStr),
-    /// `FillSkeletonBones`: the bones of a model.
+    /// The bones of a model.
     SkeletonBones(SmolStr),
-    /// `FillGameAnim`: the game's `anims\*.anm` and `*.anms`.
+    /// The game's `anims\*.anm` and `*.anms`.
     GameAnims,
 }
 
@@ -247,8 +247,7 @@ fn mesh_file(roots: &[PathBuf], game: Option<&gz_vfs::GameFiles>, name: &str, ex
 }
 
 /// The bones of a model, or every motion it can play - its own and those of each `.omf` its
-/// motion references name (the `LL_MotionsSlotCount` slots) - as `FillSkeletonBones` and
-/// `FillSkeletonAnims` list them. A model that cannot be read, or has no skeleton, lists none.
+/// motion references name. A model that cannot be read, or has no skeleton, lists none.
 fn skeleton_list(
     roots: &[PathBuf],
     game: Option<&gz_vfs::GameFiles>,
@@ -531,7 +530,7 @@ mod tests {
         let roots = vec![dir.path().to_path_buf()];
 
         assert_eq!(skeleton_list(&roots, None, "monsters\\dog\\dog", true), ["root", "spine", "head"]);
-        // every slot once, a missing file skipped, as `FillSkeletonAnims` merges them
+        // every motion once, a missing file skipped
         assert_eq!(skeleton_list(&roots, None, "monsters\\dog\\dog", false), ["idle", "run", "walk"]);
         // no skeleton, no file: nothing to pick, never an error
         assert!(skeleton_list(&roots, None, "statue", false).is_empty());

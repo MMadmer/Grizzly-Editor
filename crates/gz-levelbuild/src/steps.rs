@@ -232,6 +232,10 @@ pub struct Options {
     pub flags: String,
     /// The linked game's folder: the spawn joins its game graph.
     pub game: String,
+    /// The library objects the scene's objects are made from, as their files' contents
+    /// (`fingerprint::library_stamp`): a model edited outside the editor makes the steps that
+    /// read the scene's objects stale.
+    pub library: u64,
 }
 
 /// The steps a request names, with what they need, in [`Step::ORDER`].

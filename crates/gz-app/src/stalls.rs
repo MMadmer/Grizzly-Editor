@@ -37,7 +37,8 @@ pub struct Stall {
     pub when: u64,
     /// The tab that was up.
     pub tab: SmolStr,
-    /// What ran: `ui pass`, `event: <kind>`, `command: <function>`.
+    /// What ran: `ui pass`, `event: <kind>`, `command: <function>`; the window adds how much of it
+    /// the UI thread spent on the processor - a stall with little of it was a wait, not work.
     pub during: String,
 }
 

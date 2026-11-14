@@ -347,17 +347,17 @@ def run(project: str) -> None:
             check(os.path.isfile(p), "D %s ships" % rel, p)
 
         # ------------------------------------------------------------------ E: the browser
-        mcp("content_browser_navigation", action="navigate", source="project", folder="npc")
+        mcp("content.view", action="go", source="project", folder="npc")
         c = mcp("file.create", kind="behaviour")
         check(c.get("ok") and str(c.get("path", "")).lower().endswith(".behasset"),
               "E Create > NPC Behaviour makes a .behasset in the open folder", json.dumps(c)[:200])
         if c.get("path"):
             # F2 over MCP: the box holds the NAME - the extension is the kind and is not on offer
-            box = mcp("content_browser_selection", action="rename", name=c["path"]).get("rename") or {}
+            box = mcp("content.view", action="rename", path=c["path"]).get("rename") or {}
             check(box.get("text") == "NewBehaviour" and box.get("select") == len("NewBehaviour"),
                   "E the inline rename box holds the name alone, all of it selected", json.dumps(box))
-            mcp("content_browser_selection", action="clear")
-            check(not mcp("content_browser_selection").get("rename"), "E clear closes the box without renaming")
+            mcp("content.view", action="clear")
+            check(not mcp("content.view").get("rename"), "E clear closes the box without renaming")
             dotted = mcp("file.rename", path=c["path"], name="patrol.v2")
             check(dotted.get("ok") and os.path.isfile(os.path.join(project, "npc", "patrol.v2.behasset")),
                   "E a name with a dot in it is still only a name", json.dumps(dotted)[:200])

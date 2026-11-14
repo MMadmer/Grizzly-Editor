@@ -1,4 +1,4 @@
-//! Light Animations: the `light_animations` tab over `gamedata\lanims.xr` (`UIEditLightAnim.cpp`).
+//! Light Animations: the `light_animations` tab over `gamedata\lanims.xr`.
 //!
 //! The list, the colour at the frame the pointer is on, a timeline drawn by hand with the keys
 //! and the pointer, a key bar, and the animation's properties. Edits go through a `Store` with
@@ -741,8 +741,22 @@ impl Document for LanimDoc {
 
     fn body(&mut self, ui: &mut Ui, _cx: &mut DocCx<'_>) {
         let snap = self.store.snapshot();
-        let [list_r, preview_r, details_r] = panes(ui, KIND);
         let keys = Self::keys(&snap.lib);
+        // a library with nothing in it (or that cannot be read) says so once, over the whole tab
+        if snap.loaded && keys.is_empty() {
+            match &snap.error {
+                Some(e) => state::empty_state(ui, Icon::Warning, "The library cannot be read", e, None),
+                None => {
+                    let text_ = format!(
+                        "lanims.xr in {} holds no light animation.",
+                        folder_text(&self.editor, &EditorDirs::of(&self.editor).gamedata)
+                    );
+                    state::empty_state(ui, Icon::Light, "No light animations", &text_, None)
+                }
+            };
+            return;
+        }
+        let [list_r, preview_r, details_r] = panes(ui, KIND);
         let rows = shown(&keys, &|_| true, &self.list.search);
         // only an empty list says where the library is read from
         let empty_text = if snap.loaded && keys.is_empty() {
@@ -787,16 +801,10 @@ impl Document for LanimDoc {
                 }
             });
         }
-        pane(ui, details_r, "light_animations.details", false, true, |ui| match &item {
-            Some(item) => self.draw_properties(ui, item),
-            None => {
-                state::empty_state(
-                    ui,
-                    Icon::Settings,
-                    "No properties",
-                    "Pick a light animation to edit it.",
-                    None,
-                );
+        // nothing picked: the preview says so, the details stay blank
+        pane(ui, details_r, "light_animations.details", false, true, |ui| {
+            if let Some(item) = &item {
+                self.draw_properties(ui, item);
             }
         });
         ui.allocate_rect(ui.max_rect(), Sense::hover());

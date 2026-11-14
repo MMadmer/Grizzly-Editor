@@ -23,13 +23,13 @@ pub enum TexSource {
 }
 
 impl TexSource {
-    /// `project` (or nothing), `editor`, `darf`, or the old numbers; `None` for anything else.
+    /// `project` (or nothing), `library` or `game`; `None` for anything else.
     #[must_use]
     pub fn parse(text: &str) -> Option<Self> {
         match text {
-            "" | "project" | "0" => Some(TexSource::Project),
-            "editor" | "1" => Some(TexSource::Editor),
-            "darf" | "2" => Some(TexSource::Game),
+            "" | "project" => Some(TexSource::Project),
+            "library" => Some(TexSource::Editor),
+            "game" => Some(TexSource::Game),
             _ => None,
         }
     }
@@ -38,8 +38,8 @@ impl TexSource {
     pub fn arg(self) -> &'static str {
         match self {
             TexSource::Project => "project",
-            TexSource::Editor => "editor",
-            TexSource::Game => "darf",
+            TexSource::Editor => "library",
+            TexSource::Game => "game",
         }
     }
 }
@@ -211,7 +211,7 @@ pub fn container_of(p: &[u8], name: &str) -> &'static str {
 }
 
 /// Bytes the whole chain takes on the GPU: block formats round every level up to whole blocks
-/// (`EstimateBytes`).
+///.
 #[must_use]
 pub fn gpu_bytes(fi: &FormatInfo, width: u32, height: u32, mips: u32) -> u64 {
     (0..mips)
@@ -500,7 +500,7 @@ mod tests {
         let f = dxgi(71).unwrap().0;
         assert_eq!(gpu_bytes(&f, 8, 8, 4), 8 * 4 + 8 + 8 + 8);
         assert_eq!(human_bytes(2048), "2.0 KB");
-        assert_eq!(TexSource::parse("darf"), Some(TexSource::Game));
-        assert_eq!(TexSource::parse("x"), None);
+        assert_eq!(TexSource::parse("game"), Some(TexSource::Game));
+        assert_eq!(TexSource::parse("darf"), None);
     }
 }

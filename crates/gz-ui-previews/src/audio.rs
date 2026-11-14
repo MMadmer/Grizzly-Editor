@@ -60,7 +60,7 @@ impl Player {
     pub fn of(editor: &Editor) -> Arc<Player> {
         let wake = editor.exec.wake().clone();
         let log = editor.log.clone();
-        // View > Mute Sounds and COMMAND_MUTE_SOUND: the sound plays on, unheard
+        // View > Mute Sounds and a mute held for a while: the sound plays on, unheard
         let muted = gz_app::gpu::Gpu::of(editor).mute_flag();
         editor.services.get_or_init(move || {
             let (tx, rx) = unbounded();

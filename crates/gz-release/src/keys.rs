@@ -194,7 +194,7 @@ impl AuthorKeys {
             return Err(format!("can't write {target}"));
         }
         self.remember_key_path(&target);
-        self.log.info(format!("* [catalog] author key {} created in {target}", key.public.id()));
+        self.log.info(format!("[catalog] author key {} created in {target}", key.public.id()));
         *self.open.lock() = Some(Open { key, path: target });
         Ok(())
     }
@@ -211,7 +211,7 @@ impl AuthorKeys {
             let key = file.open("")?;
             *self.open.lock() = Some(Open { key, path: path.to_owned() });
         }
-        self.log.info(format!("* [catalog] author key file: {path}"));
+        self.log.info(format!("[catalog] author key file: {path}"));
         Ok(())
     }
 

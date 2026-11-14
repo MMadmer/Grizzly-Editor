@@ -70,7 +70,7 @@ mod tests {
         let rt =
             gz_task::Runtime::start(gz_task::ExecOptions { async_threads: 1, cpu_threads: 2, io_threads: 1 })
                 .unwrap();
-        let renderer = Renderer::new(device, queue, rt.exec()).unwrap();
+        let renderer = Renderer::new(device, queue, gz_task::Gate::default(), rt.exec()).unwrap();
         let assets = renderer.assets().clone();
         let red = assets.add_mesh(
             "test\\box",

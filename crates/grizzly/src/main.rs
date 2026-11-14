@@ -380,8 +380,7 @@ mod tests {
         }
         assert!(shell.has_drawer(Drawer::Content) && shell.has_drawer(Drawer::Log));
         assert!(shell.has_start_page());
-        // the scene's file rows are the Level tab's, with its Open Scene and Save As dialogs
-        assert!(shell.cpp_subs("COMMAND_LOAD").is_some());
-        assert_eq!(shell.cpp_subs("COMMAND_SAVE"), Some(vec!["Save".to_owned(), "Save As".to_owned()]));
+        // the scene's file rows are the Level tab's actions, with its Open Scene and Save As dialogs
+        assert!(shell.has_action("level.open_scene") && shell.has_action("level.save_as"));
     }
 }

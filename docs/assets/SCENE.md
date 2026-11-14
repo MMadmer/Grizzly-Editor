@@ -123,7 +123,6 @@ The lights the build bakes and the game shines.
 | `breaking` | boolean | false | It flickers out now and then. |
 | `shadows` | boolean | false | Objects cast shadows in it. |
 | `fuzzy` | `{ shape = "sphere" \| "box", radius = m, box = { x, y, z }, points = { { x, y, z }, ... } }` | none | A point light spread over random points of a sphere or a box, for softer lightmaps. |
-| `viewport` | boolean | true | One of the lights the viewport's Lighting view mode shows. |
 | `light_flags` | integer | 0 | Bits of the light's flags no key names, kept as they were. |
 
 ## Glows - `glows` of `glows.lua`
@@ -199,7 +198,7 @@ Spawn points: what the game spawns, and the editor's own points.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `section` | string (spawn_section) | - | The game's section the spawned thing is made from (`game.lookup kind=spawn_section` lists them). |
+| `section` | string (spawn_section) | - | The game's section the spawned thing is made from (`game.lookup type=spawn_section` lists them). |
 | `point` | `"player_start"` `"respawn"` `"env_mod"` | - | A point of the editor's own instead of a section: the module's Player Start, a respawn point of the multiplayer games, an environment modifier. |
 | `props` | the entity's named properties that differ from a new entity of the section (`story_id`, `custom_data`, `visual`, `trader = { money = 500 }`, ...); `asset.reference kind=scene` lists them | none | What this spawn says beyond its section's defaults. |
 | `raw` | string | none | The entity's spawn packet as hex, for an entity the named properties cannot carry (its class is not known, or it holds more than its class writes): written back as it was. |

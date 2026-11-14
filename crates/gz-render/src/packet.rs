@@ -24,10 +24,8 @@ use crate::math::{Aabb, Frustum};
 use crate::mesh::MeshVertex;
 use crate::view::{View, ViewFlags, ViewMode};
 
-/// The most lights the game-lighting mode draws, nearest first (`EGameLighting::MAX_LIGHTS`).
+/// The most lights the game-lighting mode draws, nearest first.
 pub(crate) const MAX_LIGHTS: usize = 128;
-/// The directional lights the C++ editor's fixed-function emulation takes.
-const MAX_EDITOR_LIGHTS: usize = 4;
 /// The most labels a frame tests for depth.
 pub(crate) const MAX_LABEL_QUERIES: usize = 4096;
 /// Lists at least this long are culled and sorted in parallel.
@@ -241,12 +239,8 @@ pub fn build_packet_with(
     let eye = view.camera.position;
     let forward = view.camera.forward;
 
-    // the weather is drawn under Game Lighting, and round any view with Environment on
-    let env = if view.mode == ViewMode::GameLighting || (view.style.environment && !wireframe) {
-        list.environment.as_ref()
-    } else {
-        None
-    };
+    // the weather is drawn under Game Lighting alone
+    let env = if view.mode == ViewMode::GameLighting { list.environment.as_ref() } else { None };
     let sky_def = env.and_then(|e| e.sky.as_ref());
 
     // the meshes, each once; the placeholder last
@@ -393,10 +387,6 @@ pub fn build_packet_with(
                 instance: gpu,
                 dynamic: None,
             };
-            // Edged Faces: the surface's edges once more, over it
-            if view.style.edged && !wireframe && pass != Pass::Blended && m.kind != EditorMaterial::Sky {
-                items.push(Item { pipe: MeshPipe::of(m.kind, two_sided, true), ..item.clone() });
-            }
             if pass == Pass::Blended { blended.push(item) } else { items.push(item) }
         }
     }
@@ -494,16 +484,6 @@ pub fn build_packet_with(
                 sub: sub as u32,
                 batch: bi,
             });
-            if view.style.edged && !wireframe && pass != Pass::Blended && m.kind != EditorMaterial::Sky {
-                batch_parts.push(BatchPart {
-                    order: pass_order(pass),
-                    pipe: MeshPipe::of(m.kind, two_sided, true),
-                    material,
-                    mesh,
-                    sub: sub as u32,
-                    batch: bi,
-                });
-            }
         }
     }
 
@@ -600,29 +580,10 @@ pub fn build_packet_with(
     // lights: those that reach the view, nearest first
     let mut lights: Vec<LightGpu> = Vec::new();
     let mut lights_in_view = 0;
-    let editor_lights = view.mode == ViewMode::Lit && view.flags.contains(ViewFlags::SCENE_LIGHTS);
-    if editor_lights {
-        // the emulation takes the first four directional lights, in the list's order
-        for l in &list.lights {
-            let LightKind::Directional { direction, ranged } = l.kind else { continue };
-            lights_in_view += 1;
-            if lights.len() < MAX_EDITOR_LIGHTS {
-                lights.push(LightGpu {
-                    pos_range: l.position.extend(if ranged { l.range } else { f32::MAX }).to_array(),
-                    color_cos: l.color.extend(0.0).to_array(),
-                    dir: direction
-                        .try_normalize()
-                        .unwrap_or(-Vec3::Y)
-                        .extend(if ranged { 1.0 } else { 2.0 })
-                        .to_array(),
-                });
-            }
-        }
-    } else if env.is_some() {
+    if env.is_some() {
         let mut near: Vec<(f32, &crate::draw_list::Light)> = list
             .lights
             .iter()
-            .filter(|l| !matches!(l.kind, LightKind::Directional { .. }))
             .filter(|l| l.range > 0.0 && frustum.intersects_sphere(l.position, l.range))
             .map(|l| (l.position.distance_squared(eye), l))
             .collect();
@@ -634,7 +595,6 @@ pub fn build_packet_with(
                 LightKind::Spot { direction, cos_half } => {
                     (direction.try_normalize().unwrap_or(Vec3::Z), cos_half.clamp(0.0, 0.9999))
                 }
-                LightKind::Directional { .. } => (Vec3::ZERO, 0.0),
             };
             LightGpu {
                 pos_range: l.position.extend(l.range).to_array(),
@@ -695,23 +655,8 @@ pub fn build_packet_with(
     if view.camera.projection.is_ortho() {
         flags |= 4;
     }
-    if editor_lights {
-        flags |= 8;
-    }
-    if st.flat {
-        flags |= 16;
-    }
-    if !st.textures {
-        flags |= 32;
-    }
     if st.fog {
         flags |= 64;
-    }
-    if !st.linear {
-        flags |= 128;
-    }
-    if st.edged && !wireframe {
-        flags |= 256;
     }
     let mut frame = FrameUniform {
         view_proj: view_proj.to_cols_array_2d(),
@@ -733,7 +678,6 @@ pub fn build_packet_with(
         frame.sun_color = e.sun_color.extend(0.0).to_array();
         frame.fog_color = e.fog_color.extend(1.0).to_array();
         frame.fog = [e.fog_near, e.fog_far, 0.0, 0.0];
-        // Fog without Environment is the editor's own; Game Lighting always fogs
         if let Some(r) = &roof {
             frame.roof = [r.origin[0], r.origin[1], 1.0 / r.cell.max(1e-3), r.cells as f32];
         }
@@ -741,9 +685,8 @@ pub fn build_packet_with(
         let fog = (e.fog_color * e.exposure).clamp(Vec3::ZERO, Vec3::ONE);
         clear = [f64::from(fog.x), f64::from(fog.y), f64::from(fog.z), 1.0];
     }
-    // `CToolCustom::GetCurrentFog` without the weather: from 0.1 x 0.85 of the far plane to 0.91
-    // of it, in the tools' fog colour (white)
-    if st.fog && (env.is_none() || (mode != ViewMode::GameLighting && !st.environment)) {
+    // fog without the weather: from 0.1 x 0.85 of the far plane to 0.91 of it, white
+    if st.fog && env.is_none() {
         let far = view.camera.projection.far();
         frame.fog = [(1.0 - 0.9) * 0.85 * far, 0.91 * far, 0.0, 0.0];
         frame.fog_color = [1.0, 1.0, 1.0, 1.0];

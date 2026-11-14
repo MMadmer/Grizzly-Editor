@@ -42,14 +42,6 @@ pub fn local_heading(ui: &mut Ui, title: &str, title_clip: Clip, facts: &[(&str,
     }
 }
 
-/// A folding header outside a property grid (the C++ `XUI::Section`): a chevron and the title,
-/// the whole row a click target; `open` is its state until it is clicked. Returns whether it is
-/// open.
-pub fn local_section(ui: &mut Ui, id_salt: &str, title: &str, open: bool) -> bool {
-    let id = ui.make_persistent_id(("gz-ui-previews.section", id_salt));
-    gz_ui::form::raised_section(ui, id, title, open, None)
-}
-
 /// A muted line of Small text at the left and another at the right of one row: a timeline's
 /// first and last frame, a curve's two ends.
 pub fn local_ends(ui: &mut Ui, left: &str, right: &str) {

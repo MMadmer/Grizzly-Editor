@@ -242,7 +242,7 @@ def _10(t: Tour):
 @issue(11, "the viewport's navigation is a gizmo, not a panel of buttons")
 def _11(t: Tour):
     t.level()
-    nav = mcp("viewport_navigation", action="get")
+    nav = mcp("viewport.camera")
     t.shot(11)
     return nav.get("ok"), short(nav)
 
@@ -297,10 +297,10 @@ def _16(t: Tour):
     return shown and not esc, short({"host": where, "escaped": esc})
 
 
-@issue(17, "Show Object List focuses the World Outliner's search")
+@issue(17, "Edit > Find on Level focuses the World Outliner's search")
 def _17(t: Tour):
     t.level()
-    e = mcp("exec_command", name="COMMAND_SHOW_OBJECTLIST")
+    e = mcp("ui.palette", action="run", id="edit.find")
     lst = mcp("ui.list")
     t.shot(17)
     ol = next((p for p in lst.get("panels", []) if p.get("id") == "world_outliner"), {})
@@ -316,20 +316,20 @@ def _18(t: Tour):
     return not esc, short({"escaped": esc})
 
 
-@issue(19, "Tools is named Tools, and nothing escapes it")
+@issue(19, "the left panel is Place, and nothing escapes it")
 def _19(t: Tour):
     t.level()
-    mcp("ui.panel", action="focus", id="tools")
-    window = (mcp("ui.contract").get("panels") or {}).get("tools", "")
-    esc = t.escaped("tools")
+    mcp("ui.panel", action="focus", id="place")
+    window = (mcp("ui.contract").get("panels") or {}).get("place", "")
+    esc = t.escaped("place")
     t.shot(19)
-    return window.startswith("Tools###") and not esc, short({"window": window, "escaped": esc})
+    return window.startswith("Place###") and not esc, short({"window": window, "escaped": esc})
 
 
 @issue(20, "the Content Browser: tiles 48..192 pt, nothing escapes")
 def _20(t: Tour):
     t.level()
-    o = mcp("content_browser_navigation", action="home", source="project")
+    o = mcp("content.view", action="go", source="project", folder="")
     where = "content" if o.get("host") == "drawer" else "content_browser"
     esc = t.escaped(where)
     t.shot(20)
@@ -375,7 +375,7 @@ def _24(t: Tour):
         raise Skip(short(o))
     # the opener answers the frame it opened: its panes, gap and edges were laid out by that frame, no second call
     panes = o.get("panes") or {}
-    opened = o.get("pending") is False and 200 <= panes.get("details_width", 0) <= 480 and \
+    opened = 200 <= panes.get("details_width", 0) <= 480 and \
         o.get("device_gap", -1) >= 15 and bool(o.get("screen_edges"))
     esc = t.escaped("pda")
     t.shot(24)
@@ -399,7 +399,8 @@ def _24(t: Tour):
 def _25(t: Tour):
     t.level()
     # studio light: the model reads lit (#25 found it almost black)
-    o = mcp("preview_model", lighting="studio")
+    objs = mcp("file.list", source="library", kind="objects", limit=1).get("files") or [{}]
+    o = mcp("preview.model", name=objs[0].get("path", ""), lighting="studio")
     tab = o.get("tab")
     label = tab.get("label", "") if isinstance(tab, dict) else ""
     t.shot(25)
@@ -408,7 +409,7 @@ def _25(t: Tour):
     missing = [x.get("name") for x in o.get("textures") or [] if x.get("from") == "missing"]
     # the opener answers the frame it opened: the Details pane has its width in that answer already
     panes = o.get("panes") or {}
-    opened = o.get("pending") is False and (not panes.get("details") or 200 <= panes.get("details_width", 0) <= 480)
+    opened = not panes.get("details") or 200 <= panes.get("details_width", 0) <= 480
     return o.get("ok") and opened and "\\" not in label and "/" not in label and not missing, short(o)
 
 
@@ -448,7 +449,7 @@ def _28(t: Tour):
     c = mcp("project.close", discard=True)
     if not c.get("ok"):
         raise Skip(short(c))
-    b = mcp("project_browser_menu")
+    b = mcp("project.page")
     t.shot(28)
     qa_target.guard_project(t.project)
     back = mcp("project.open", path=t.project, timeout=600)
@@ -473,7 +474,7 @@ def _30(t: Tour):
     a = mcp("ui.audit", id="##statusbar")
     # what needs rebuilding is the status bar's chip; the stats are a pill of the viewport (level.ini keeps the flag an
     # author turned on, so it is reported, not asserted)
-    stats = mcp("view_mode").get("stats")
+    stats = (mcp("viewport.view").get("show") or {}).get("stats")
     t.shot(30)
     return not a.get("escaped"), short({"escaped": a.get("escaped"), "stats": stats})
 

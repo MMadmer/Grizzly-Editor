@@ -182,7 +182,7 @@ async fn run_spawn(
     let (path, failed) = written?;
     log_lines(editor, &failed);
     if let Some(p) = &path {
-        editor.log.info(format!("* [XMS] spawn layer: {} op(s) -> {}", bake.result.exported, p.display()))
+        editor.log.info(format!("[XMS] spawn layer: {} op(s) -> {}", bake.result.exported, p.display()))
     }
     Ok(SpawnRun { bake, path })
 }
@@ -244,7 +244,7 @@ pub async fn export_collision(editor: &Arc<Editor>, l: &Layer) -> Reply {
         .await
         .map_err(|e| CmdError::new("io", e))?;
     editor.log.info(format!(
-        "* [XMS] collision overlay: {} object(s), {} tri(s) -> {}",
+        "[XMS] collision overlay: {} object(s), {} tri(s) -> {}",
         made.objects_used,
         made.form.tris.len(),
         path.display()
@@ -307,7 +307,7 @@ pub async fn export_cut(editor: &Arc<Editor>, l: &Layer) -> Reply {
         .await
         .map_err(|e| CmdError::new("io", e))?;
     editor.log.info(format!(
-        "* [XMS] level cut: {} new volume(s), {total} total -> {} (+ hide entries in overlay_visuals.ltx)",
+        "[XMS] level cut: {} new volume(s), {total} total -> {} (+ hide entries in overlay_visuals.ltx)",
         made.added,
         path.display()
     ));
@@ -391,7 +391,7 @@ pub async fn export_visuals(editor: &Arc<Editor>, l: &Layer) -> Reply {
         })
         .await
         .map_err(|e| CmdError::new("io", e))?;
-    editor.log.info(format!("* [XMS] visual overlay: {} ogf(s) -> {}", names.len(), visuals_dir.display()));
+    editor.log.info(format!("[XMS] visual overlay: {} ogf(s) -> {}", names.len(), visuals_dir.display()));
     Ok(json!({
         "exported": names.len(),
         "skipped_dynamic": made.skipped_dynamic,

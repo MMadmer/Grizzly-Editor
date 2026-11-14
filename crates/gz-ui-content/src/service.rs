@@ -6,27 +6,26 @@
 //! their part on the UI thread (`on_ui`): the two never wait for each other. Jobs on the pools
 //! write only into the catalogs and the inbox.
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gz_base::{Rev, RevCounter};
 use gz_editor::Editor;
-use gz_project::{FileTree, Project};
+use gz_project::Project;
 use gz_query::{Answer, Query};
 use parking_lot::Mutex;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::catalog::{Catalog, View, build_view, veiled_folders};
-use crate::model::{CATEGORIES, HISTORY_LIMIT, Host, Location, Source, category, normalize_folder};
+use crate::catalog::{Catalog, View, ViewInput, build_view, home_view, veiled_folders};
+use crate::model::{HISTORY_LIMIT, HOME, Host, KINDS, Location, Source, normalize_folder};
 use crate::pictures::Pictures;
 use crate::select::{Entry, Selection};
 
-/// A catalog's key: the source and, for the Editor source, the category.
+/// A catalog's key: the source and, for the Library, the kind.
 pub(crate) type CatKey = (Source, usize);
 
 #[must_use]
 pub(crate) fn cat_key(loc: &Location) -> CatKey {
-    (loc.source, if loc.source == Source::Editor { loc.category } else { 0 })
+    (loc.source, if loc.source == Source::Library { loc.category } else { 0 })
 }
 
 #[derive(Default)]
@@ -45,14 +44,13 @@ pub(crate) struct CatState {
     /// The revision the catalog was built for, mixed with the listing scope.
     pub rev: Rev,
     pub busy: bool,
-    pub error: Option<String>,
 }
 
 /// The sources' catalogs, built on the pools.
 pub(crate) struct Catalogs {
     slots: Mutex<FxHashMap<CatKey, Slot>>,
-    /// Bumped by Refresh for each Editor category: its folder is walked again.
-    editor_want: [RevCounter; 10],
+    /// Bumped by Refresh for each Library kind: it is read again.
+    library_want: [RevCounter; KINDS.len()],
     /// Moves when the project or the linked game changes: what was listed is another source.
     pub scope: RevCounter,
     /// What a finished build pings: the window draws the next frame.
@@ -63,7 +61,7 @@ impl Catalogs {
     pub(crate) fn new(wake: gz_task::Wake) -> Self {
         Self {
             slots: Mutex::new(FxHashMap::default()),
-            editor_want: Default::default(),
+            library_want: Default::default(),
             scope: RevCounter::new(),
             wake,
         }
@@ -73,9 +71,13 @@ impl Catalogs {
 /// How a source is read now.
 enum Want {
     Project(Arc<Project>, Rev),
-    Game(Arc<Project>, Rev),
-    Editor(PathBuf, usize, Rev),
+    Library(usize, Rev),
     Nothing(Option<String>),
+}
+
+/// The game's revision now, for the kinds that list it.
+fn game_rev(editor: &Editor) -> Rev {
+    Project::of(editor).map_or(Rev::ZERO, |(_, p)| p.game_rev())
 }
 
 fn want_of(editor: &Editor, cats: &Catalogs, key: CatKey) -> Want {
@@ -87,26 +89,16 @@ fn want_of(editor: &Editor, cats: &Catalogs, key: CatKey) -> Want {
             }
             Err(_) => Want::Nothing(None),
         },
-        Source::Game => match Project::of(editor) {
-            Ok((_, p)) if !p.game_root().is_empty() => {
-                let rev = p.game_rev();
-                Want::Game(p, rev)
-            }
-            Ok(_) => Want::Nothing(Some(gz_project::NOT_LINKED.to_owned())),
-            Err(_) => Want::Nothing(Some("no project is open".to_owned())),
-        },
-        Source::Editor => {
-            let rev = cats.editor_want.get(key.1).map_or(Rev::ZERO, RevCounter::get).next();
-            Want::Editor(gz_project::library_root(editor), key.1, rev)
-        }
+        Source::Library if key.1 >= HOME => Want::Nothing(None),
+        Source::Library => Want::Library(key.1, library_rev(editor, cats, key.1)),
     }
 }
 
-fn editor_catalog(root: &Path, cat: usize) -> Catalog {
-    match crate::catalog::editor_folder(root, cat) {
-        Some(dir) if dir.is_dir() => Catalog::from_tree(&FileTree::scan(&dir), Source::Editor, cat, false),
-        _ => Catalog::empty(Source::Editor, cat),
-    }
+/// What a Library kind's catalog is current with: its Refresh and, for a kind that lists the
+/// game, the game's revision.
+fn library_rev(editor: &Editor, cats: &Catalogs, kind: usize) -> Rev {
+    let own = cats.library_want.get(kind).map_or(Rev::ZERO, RevCounter::get).next();
+    if crate::library::reads_game(kind) { own.mix(game_rev(editor)) } else { own }
 }
 
 impl Catalogs {
@@ -128,7 +120,7 @@ impl Catalogs {
         let mut slots = self.slots.lock();
         let slot = slots.entry(key).or_default();
         let fresh = match &want {
-            Want::Project(_, rev) | Want::Game(_, rev) | Want::Editor(_, _, rev) => {
+            Want::Project(_, rev) | Want::Library(_, rev) => {
                 slot.rev == *rev && (slot.cat.is_some() || slot.error.is_some())
             }
             Want::Nothing(why) => {
@@ -137,11 +129,7 @@ impl Catalogs {
                 true
             }
         };
-        // a game not read yet has revision zero: the first read is what mounts it
-        let game_unread = matches!(want, Want::Game(_, rev) if rev == Rev::ZERO)
-            && slot.cat.is_none()
-            && slot.error.is_none();
-        if (!fresh || game_unread) && !slot.building {
+        if !fresh && !slot.building {
             slot.building = true;
             let me = self.clone();
             let exec = editor.exec.clone();
@@ -150,29 +138,18 @@ impl Catalogs {
                     let snap = project.tree.snapshot();
                     exec.spawn_cpu(move || {
                         let rev = snap.rev();
-                        let cat = Catalog::from_tree(&snap, Source::Project, 0, true);
+                        let cat = Catalog::from_project(&snap);
                         me.store(key, rev, Some(cat), None);
                         me.wake.ping();
                     });
                 }
-                Want::Game(project, _) => {
-                    let ex = exec.clone();
+                Want::Library(kind, _) => {
+                    let ed = editor.clone();
                     exec.spawn(async move {
-                        let read = ex.io(move || project.game_snapshot()).await;
-                        match read {
-                            Ok((files, rev)) => {
-                                let cat = ex.cpu(move || Catalog::from_game(files)).await;
-                                me.store(key, rev, Some(cat), None);
-                            }
-                            Err(e) => me.store(key, Rev::ZERO, None, Some(e)),
-                        }
-                        me.wake.ping();
-                    });
-                }
-                Want::Editor(root, cat, rev) => {
-                    exec.spawn_io(move || {
-                        let built = editor_catalog(&root, cat);
-                        me.store(key, rev, Some(built), None);
+                        let cat = crate::library::build(&ed, kind).await;
+                        // read after the build: the first read of the game is what mounts it
+                        let rev = library_rev(&ed, &me, kind);
+                        me.store(key, rev, Some(cat), None);
                         me.wake.ping();
                     });
                 }
@@ -184,7 +161,6 @@ impl Catalogs {
             cat: slot.and_then(|s| s.cat.clone()),
             rev: slot.map_or(Rev::ZERO, |s| s.rev).mix(scope),
             busy: slot.is_some_and(|s| s.building),
-            error: slot.and_then(|s| s.error.clone()),
         }
     }
 
@@ -201,7 +177,14 @@ impl Catalogs {
         key: CatKey,
     ) -> Result<Arc<Catalog>, String> {
         match want_of(editor, self, key) {
-            Want::Nothing(why) => Err(why.unwrap_or_else(|| "no project is open".to_owned())),
+            Want::Nothing(why) => Err(why.unwrap_or_else(|| {
+                if key.0 == Source::Library {
+                    "the Library's top is no listing"
+                } else {
+                    "no project is open"
+                }
+                .to_owned()
+            })),
             Want::Project(project, _) => {
                 project.tree.refresh().await;
                 let snap = project.tree.snapshot();
@@ -211,39 +194,26 @@ impl Catalogs {
                 {
                     return Ok(cat);
                 }
-                let cat = editor.exec.cpu(move || Catalog::from_tree(&snap, Source::Project, 0, true)).await;
+                let cat = editor.exec.cpu(move || Catalog::from_project(&snap)).await;
                 self.store(key, rev, Some(cat), None);
                 self.peek(key).ok_or_else(|| "the project could not be listed".to_owned())
             }
-            Want::Game(project, _) => {
-                let (files, rev) =
-                    editor.exec.io(move || project.game_snapshot()).await.inspect_err(|e| {
-                        self.store(key, Rev::ZERO, None, Some(e.clone()));
-                    })?;
-                if let Some(cat) =
-                    self.slots.lock().get(&key).filter(|s| s.rev == rev).and_then(|s| s.cat.clone())
-                {
-                    return Ok(cat);
-                }
-                let cat = editor.exec.cpu(move || Catalog::from_game(files)).await;
-                self.store(key, rev, Some(cat), None);
-                self.peek(key).ok_or_else(|| "the game could not be listed".to_owned())
-            }
-            Want::Editor(root, cat, rev) => {
+            Want::Library(kind, rev) => {
                 if let Some(found) =
                     self.slots.lock().get(&key).filter(|s| s.rev == rev).and_then(|s| s.cat.clone())
                 {
                     return Ok(found);
                 }
-                let built = editor.exec.io(move || editor_catalog(&root, cat)).await;
+                let built = crate::library::build(editor, kind).await;
+                let rev = library_rev(editor, self, kind);
                 self.store(key, rev, Some(built), None);
-                self.peek(key).ok_or_else(|| "the library could not be listed".to_owned())
+                self.peek(key).ok_or_else(|| "the Library could not be listed".to_owned())
             }
         }
     }
 
-    /// Lists a source again: the project's tree re-walks, the game is checked against the disk,
-    /// an Editor category is walked again.
+    /// Lists a source again: the project's tree re-walks, a Library kind is read again (the game
+    /// checked against the disk first for the kinds that list it).
     pub(crate) fn refresh(self: &Arc<Self>, editor: &Arc<Editor>, key: CatKey) {
         match key.0 {
             Source::Project => {
@@ -251,32 +221,36 @@ impl Catalogs {
                     p.tree.mark_all();
                 }
             }
-            Source::Game => {
-                if let Ok((_, p)) = Project::of(editor) {
+            Source::Library => {
+                if crate::library::reads_game(key.1)
+                    && let Ok((_, p)) = Project::of(editor)
+                {
                     let me = self.clone();
                     let ex = editor.exec.clone();
                     editor.exec.spawn(async move {
                         let _ = ex.io(move || p.refresh_game()).await;
-                        me.slots.lock().remove(&key);
                         me.wake.ping();
                     });
                 }
-            }
-            Source::Editor => {
-                if let Some(c) = self.editor_want.get(key.1) {
+                if let Some(c) = self.library_want.get(key.1) {
                     c.bump();
                 }
             }
         }
     }
 
-    /// Forgets the project's and the game's listings: another project, another game.
+    /// Forgets the listings that belong to the project or its game: another project, another
+    /// game. The library's own kinds stay.
     pub(crate) fn forget_scoped(&self, project: bool) {
         let mut slots = self.slots.lock();
         if project {
             slots.remove(&(Source::Project, 0));
         }
-        slots.remove(&(Source::Game, 0));
+        for k in 0..KINDS.len() {
+            if crate::library::reads_game(k) {
+                slots.remove(&(Source::Library, k));
+            }
+        }
         self.scope.bump();
     }
 }
@@ -308,15 +282,33 @@ pub(crate) struct HostView {
     /// The grid's scroll and viewport height at its last frame.
     pub scroll: f32,
     pub viewport: f32,
+    /// The grid's width and the entries it showed at its last frame, for fitting.
+    pub grid_w: f32,
+    pub entries: usize,
 }
 
 impl HostView {
     fn new(list: bool) -> Self {
-        Self { tile: 0.0, list, grid_h: 0.0, frame: None, scroll: 0.0, viewport: 0.0 }
+        Self {
+            tile: 0.0,
+            list,
+            grid_h: 0.0,
+            frame: None,
+            scroll: 0.0,
+            viewport: 0.0,
+            grid_w: 0.0,
+            entries: 0,
+        }
     }
 
+    /// The side its tiles are drawn at; under [`crate::model::LIST_BELOW`] the folder is a list.
     pub fn shown_tile(&self, host: Host) -> f32 {
-        crate::model::shown_tile(self.tile, self.grid_h, host.tile_default())
+        crate::model::shown_tile(self.tile, self.grid_h, host.tile_default(), self.entries, self.grid_w)
+    }
+
+    /// Whether it draws the list.
+    pub fn shows_list(&self, host: Host) -> bool {
+        self.list || self.shown_tile(host) < crate::model::LIST_BELOW
     }
 
     pub fn recent(&self, now: u64) -> bool {
@@ -337,12 +329,11 @@ pub(crate) struct Rename {
 /// One entry of the clipboard.
 #[derive(Clone, Debug)]
 pub(crate) struct Clip {
-    /// How the source names it.
+    /// The project's path, a file of the library by its full path, a game file
+    /// `gamedata`-relative.
     pub src: String,
     /// Where it goes below the paste target, its own name last.
     pub rel: String,
-    /// On disk (the project, the library), absolute.
-    pub abs: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -357,6 +348,13 @@ pub(crate) struct Clipboard {
 pub(crate) struct Marquee {
     pub start: egui::Pos2,
     pub base: Vec<Entry>,
+}
+
+/// The browser's own tiles on their way: from which catalog, which entries.
+#[derive(Clone, Debug)]
+pub(crate) struct Dragging {
+    pub key: CatKey,
+    pub entries: Vec<Entry>,
 }
 
 /// What follows the pointer while tiles are dragged: the icon, the asset kind, the picture, the
@@ -402,6 +400,9 @@ pub(crate) struct Inner {
     /// A drag of tiles started here, and what follows the pointer.
     pub drag_started: bool,
     pub drag_icon: Option<DragIcon>,
+    /// What the drag carries: the kit's payload, and the entries for the browser's own folders.
+    pub drag_payload: Option<gz_ui::drop::Payload>,
+    pub dragging: Option<Dragging>,
     /// Where the grid's own menu is up.
     pub grid_menu_at: egui::Pos2,
     /// Open, picked from a menu: run where the frame has the shell's requests.
@@ -438,6 +439,8 @@ impl Default for Inner {
             listed: None,
             drag_started: false,
             drag_icon: None,
+            drag_payload: None,
+            dragging: None,
             grid_menu_at: egui::Pos2::ZERO,
             pending_open: None,
         }
@@ -455,7 +458,10 @@ fn push_history(history: &mut Vec<Location>, loc: &Location) {
 }
 
 fn remove_scoped(list: &mut Vec<Location>, project: bool, game: bool) {
-    list.retain(|l| !((project && l.source == Source::Project) || (game && l.source == Source::Game)));
+    list.retain(|l| {
+        !((project && l.source == Source::Project)
+            || (game && l.source == Source::Library && crate::library::reads_game(l.category)))
+    });
 }
 
 impl Inner {
@@ -490,7 +496,7 @@ impl Inner {
         }
     }
 
-    /// Reads the view settings from the layout once (`LoadView`).
+    /// Reads the view settings from the layout once.
     pub fn load_view(&mut self, ctx: &egui::Context) {
         if self.view_loaded {
             return;
@@ -511,7 +517,7 @@ impl Inner {
         self.sources_pane = gz_ui::layout::get(ctx, "content_browser.sources_pane", 1.0) != 0.0;
     }
 
-    /// Writes the view settings into the layout (`StoreView`).
+    /// Writes the view settings into the layout.
     pub fn store_view(&mut self, ctx: &egui::Context) {
         self.view_loaded = true;
         self.view_dirty = false;
@@ -524,8 +530,8 @@ impl Inner {
         gz_ui::layout::set(ctx, "content_browser.sources_pane", if self.sources_pane { 1.0 } else { 0.0 });
     }
 
-    /// The project and the game the listing belongs to changed: what pointed into them goes
-    /// (`EnsureListing`, `SyncFavoriteScopes`). Returns whether anything changed.
+    /// The project and the game the listing belongs to changed: what pointed into them goes.
+    /// Returns whether anything changed.
     pub fn sync_scope(&mut self, project_root: &str, game_root: &str, cats: &Catalogs) -> bool {
         let project_changed = !self.scope.0.eq_ignore_ascii_case(project_root);
         let game_changed = !self.scope.1.eq_ignore_ascii_case(game_root);
@@ -539,7 +545,7 @@ impl Inner {
         remove_scoped(&mut self.favorites, project_changed, game);
         cats.forget_scoped(project_changed);
         if (self.loc.source == Source::Project && project_changed)
-            || (self.loc.source == Source::Game && game)
+            || (self.loc.source == Source::Library && game && crate::library::reads_game(self.loc.category))
         {
             self.loc.folder.clear();
             self.sel.clear();
@@ -555,7 +561,7 @@ impl Inner {
         self.scroll_to_selection = false;
     }
 
-    /// Goes to a location (`ApplyLocation`). `record` keeps where it came from in Back.
+    /// Goes to a location. `record` keeps where it came from in Back.
     pub fn apply_location(
         &mut self,
         mut target: Location,
@@ -564,9 +570,7 @@ impl Inner {
         has_project: bool,
     ) -> Result<(), String> {
         target.folder = normalize_folder(&target.folder).map_err(str::to_owned)?;
-        if target.category >= CATEGORIES.len() {
-            return Err("asset category is out of range".into());
-        }
+        target = Location::new(target.source, target.category, &target.folder);
         if target.source == Source::Project && !has_project {
             return Err("no project is open".into());
         }
@@ -636,9 +640,14 @@ impl Inner {
         Err(if last.is_empty() { "forward history is empty".into() } else { last })
     }
 
-    /// Up: the root has no parent, which is no failure.
+    /// Up: a Library kind's root goes to the Library's top; the top and the project's root have
+    /// no parent, which is no failure.
     pub fn go_up(&mut self, cats: &Catalogs, has_project: bool) -> Result<(), String> {
         if self.loc.folder.is_empty() {
+            if self.loc.source == Source::Library && !self.loc.home() {
+                let target = Location::new(Source::Library, HOME, "");
+                return self.apply_location(target, true, cats, has_project);
+            }
             return Ok(());
         }
         let parent = crate::model::parent_of(&self.loc.folder).to_owned();
@@ -646,17 +655,18 @@ impl Inner {
         self.apply_location(target, true, cats, has_project)
     }
 
+    /// Home: the project's root, or the Library's top.
     pub fn go_home(&mut self, cats: &Catalogs, has_project: bool) -> Result<(), String> {
-        let target = Location { folder: String::new(), ..self.loc.clone() };
+        let target = Location::new(self.loc.source, HOME, "");
         self.apply_location(target, true, cats, has_project)
     }
 
-    /// The source shown changes: its root, the category kept.
+    /// The source shown changes: the project's root, or the Library's top.
     pub fn switch_source(&mut self, source: Source, cats: &Catalogs, has_project: bool) {
         if self.loc.source == source {
             return;
         }
-        let target = Location::new(source, self.loc.category, "");
+        let target = Location::new(source, HOME, "");
         let _ = self.apply_location(target, true, cats, has_project);
     }
 
@@ -673,17 +683,15 @@ impl Inner {
         self.favorites.iter().position(|f| f.same(loc))
     }
 
-    /// Adds a favorite (`AddFavorite` + `ValidateFavorite`).
+    /// Adds a favorite.
     pub fn add_favorite(
         &mut self,
         mut loc: Location,
         cats: &Catalogs,
         has_project: bool,
     ) -> Result<(), String> {
-        if loc.category >= CATEGORIES.len() {
-            return Err("asset category is out of range".into());
-        }
         loc.folder = normalize_folder(&loc.folder).map_err(str::to_owned)?;
+        loc = Location::new(loc.source, loc.category, &loc.folder);
         if loc.source == Source::Project && !has_project {
             return Err("no project is open".into());
         }
@@ -700,7 +708,7 @@ impl Inner {
             let cat = cats.peek(cat_key(&loc));
             let Some(node) = cat.as_ref().and_then(|c| c.folder(&loc.folder)) else {
                 return Err(match cats.slots.lock().get(&cat_key(&loc)).and_then(|s| s.error.clone()) {
-                    Some(e) if loc.source == Source::Game => e,
+                    Some(e) if loc.source == Source::Library => e,
                     _ => "folder is not available in this source".into(),
                 });
             };
@@ -794,18 +802,59 @@ impl ContentBrowser {
         }
     }
 
+    /// What a folder view of `loc` reads besides its catalog, with the revision it is current
+    /// with: the module's `[exclude]` for the project, the project's library list for the
+    /// Library's objects and groups (the project file is a file of the project's tree).
+    fn inputs(editor: &Editor, loc: &Location) -> (Arc<[String]>, Option<Arc<Project>>, Rev) {
+        match loc.source {
+            Source::Project => {
+                let (rules, rev) = Self::rules(editor);
+                (rules, None, rev)
+            }
+            Source::Library if matches!(loc.category, crate::model::OBJECTS | crate::model::GROUPS) => {
+                match Project::of(editor) {
+                    Ok((_, p)) => {
+                        let rev = p.tree.rev();
+                        (Arc::from(Vec::new()), Some(p), rev)
+                    }
+                    Err(_) => (Arc::from(Vec::new()), None, Rev::ZERO),
+                }
+            }
+            Source::Library => (Arc::from(Vec::new()), None, Rev::ZERO),
+        }
+    }
+
+    fn make_view(
+        catalog: &Catalog,
+        source: Source,
+        folder: &str,
+        search: &str,
+        rules: &[String],
+        project: Option<&Project>,
+    ) -> View {
+        let wanted: Option<FxHashSet<String>> =
+            project.map(|p| p.library().into_iter().map(|r| r.replace('/', "\\").to_lowercase()).collect());
+        let input =
+            ViewInput { rules: (source == Source::Project).then_some(rules), wanted: wanted.as_ref() };
+        build_view(catalog, folder, search, input)
+    }
+
     /// A folder's view without waiting: fresh, the last one while the new one is made, or
     /// nothing yet.
     pub(crate) fn view(&self, editor: &Editor, loc: &Location, search: &str, cat: &CatState) -> Answer<View> {
+        if loc.home() {
+            let key: ViewKey = ((Source::Library, HOME), String::new(), search.to_owned());
+            let search = search.to_owned();
+            return self.views.get(&key, Rev::ZERO.next(), move || home_view(&search));
+        }
         let Some(catalog) = cat.cat.clone() else { return Answer::Pending };
-        let (rules, rules_rev) = Self::rules(editor);
-        let project = loc.source == Source::Project;
-        let rev = cat.rev.mix(if project { rules_rev } else { Rev::ZERO });
+        let (rules, project, input_rev) = Self::inputs(editor, loc);
+        let rev = cat.rev.mix(input_rev);
         let key: ViewKey = (cat_key(loc), loc.folder.to_lowercase(), search.to_owned());
-        let folder = loc.folder.clone();
-        let search = search.to_owned();
-        self.views
-            .get(&key, rev, move || build_view(&catalog, &folder, &search, project.then_some(&rules[..])))
+        let (folder, search, source) = (loc.folder.clone(), search.to_owned(), loc.source);
+        self.views.get(&key, rev, move || {
+            Self::make_view(&catalog, source, &folder, &search, &rules, project.as_deref())
+        })
     }
 
     /// The same, awaited: what a command reads.
@@ -815,18 +864,21 @@ impl ContentBrowser {
         loc: &Location,
         search: &str,
     ) -> Result<Arc<View>, String> {
+        if loc.home() {
+            return Ok(Arc::new(home_view(search)));
+        }
         let key = cat_key(loc);
         let catalog = self.cats.fresh(editor, key).await?;
         let state = self.cats.ensure(editor, key);
-        let (rules, rules_rev) = Self::rules(editor);
-        let project = loc.source == Source::Project;
-        let rev = state.rev.mix(if project { rules_rev } else { Rev::ZERO });
+        let (rules, project, input_rev) = Self::inputs(editor, loc);
+        let rev = state.rev.mix(input_rev);
         let vkey: ViewKey = (key, loc.folder.to_lowercase(), search.to_owned());
-        let folder = loc.folder.clone();
-        let search = search.to_owned();
+        let (folder, search, source) = (loc.folder.clone(), search.to_owned(), loc.source);
         Ok(self
             .views
-            .fresh(&vkey, rev, move || build_view(&catalog, &folder, &search, project.then_some(&rules[..])))
+            .fresh(&vkey, rev, move || {
+                Self::make_view(&catalog, source, &folder, &search, &rules, project.as_deref())
+            })
             .await)
     }
 
@@ -849,20 +901,8 @@ impl ContentBrowser {
     }
 }
 
-/// The category caption of a location, `""` outside the range.
-#[must_use]
-pub(crate) fn category_name(i: usize) -> &'static str {
-    CATEGORIES.get(i).map_or("", |c| c.caption)
-}
-
 /// A folder's lower-case key, as the tree keeps its open state.
 #[must_use]
 pub(crate) fn tree_key(path: &str) -> String {
     path.to_lowercase()
-}
-
-/// Whether the Editor category lists files at all.
-#[must_use]
-pub(crate) fn category_has_files(i: usize) -> bool {
-    category(i).folder.is_some()
 }

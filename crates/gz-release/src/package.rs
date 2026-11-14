@@ -460,7 +460,7 @@ async fn finish_release(
     };
     out.descriptor = path.to_string_lossy().into_owned();
     editor.log.info(format!(
-        "* [XMS] release {} {}: {} file(s), {} byte(s) in {} package(s) -> {}",
+        "[XMS] release {} {}: {} file(s), {} byte(s) in {} package(s) -> {}",
         m.id,
         m.version,
         out.files,

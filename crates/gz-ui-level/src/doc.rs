@@ -1,4 +1,4 @@
-//! The Level document: tab 1, never closed (`UIMainForm::RegisterLevel` / `DrawLevel`).
+//! The Level document: tab 1, never closed.
 //!
 //! It holds the view state of the Level tab - the dock, the panels' own state, the viewport
 //! pane, the open chooser and dialogs - and draws from snapshots. Commands of the UI, MCP and the
@@ -6,6 +6,7 @@
 
 use std::any::Any;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use egui::{CornerRadius, Id, Rect, Ui, Vec2, pos2};
@@ -13,7 +14,7 @@ use gz_app::chrome::MenuBar;
 use gz_app::{Chord, DocCx, Document, EditAction, PanelInfo, PanelOp, UiQueue};
 use gz_base::Rev;
 use gz_editor::{Args, Editor, Value};
-use gz_scene::{ObjClass, SceneService};
+use gz_scene::SceneService;
 use gz_ui::{Icon, MenuItem, Toolbar, audit, menu_item, palette};
 use rustc_hash::FxHashMap;
 
@@ -26,11 +27,11 @@ use crate::local::{TabResponse, child_at, local_tab, local_tab_width};
 use crate::menus;
 use crate::outliner::Outliner;
 use crate::status;
-use crate::toolbar::{self, ToolbarState};
+use crate::toolbar;
 use crate::tools::ToolsPanel;
 
 /// What the Level document is asked to do on its next frame.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub enum Act {
     /// Reset Layout; `true` also forgot every split and grid width.
     ResetLayout(bool),
@@ -40,6 +41,24 @@ pub enum Act {
     Panel(PanelId, PanelOp),
     /// Expand All (`true`) / Collapse All of Details (0) or Level Settings (1).
     Fold(usize, bool),
+    /// A chooser on a property, its row read off the UI thread (`scene.choose`).
+    Choose(Box<Chooser>),
+    /// Closes the chooser that is open.
+    CloseChooser,
+    /// The viewport over the whole tab: on, off, or the other way (`None`).
+    Maximize(Option<bool>),
+}
+
+/// What the Level tab shows that its actions ask about without the document at hand.
+#[derive(Default)]
+struct ViewFlags {
+    maximized: AtomicBool,
+}
+
+/// Whether the viewport takes the whole Level tab (F11).
+#[must_use]
+pub fn maximized(editor: &Editor) -> bool {
+    editor.services.get::<ViewFlags>().is_some_and(|f| f.maximized.load(Ordering::Relaxed))
 }
 
 /// Queues an act for the Level document's next frame.
@@ -70,12 +89,11 @@ pub struct LevelDoc {
     focused: Option<PanelId>,
     viewport_focused: bool,
     pub outliner: Outliner,
-    tools: ToolsPanel,
+    pub tools: ToolsPanel,
     pub details: PropsPanel,
     pub world: PropsPanel,
     chooser: Option<Chooser>,
-    detail_objects: DetailObjects,
-    toolbar: ToolbarState,
+    pub detail_objects: DetailObjects,
     /// The content edit the author chose to lose (Don't Save): not dirty until the next edit.
     discarded: Option<u64>,
     /// The scene's dirty state last frame: a save takes a new preview.
@@ -91,8 +109,7 @@ struct PreviewOnClose;
 impl LevelDoc {
     #[must_use]
     pub fn new(editor: &Arc<Editor>) -> Self {
-        // the Start page's picture of the project, while the scene is still up (C++
-        // `EditorProject::CapturePreview` before the clear)
+        // the Start page's picture of the project, taken while the scene is still up
         editor.services.get_or_init(|| {
             gz_project::ProjectHooks::of(editor)
                 .on_before_close(|ed, _session| async move { write_preview(&ed).await });
@@ -108,12 +125,11 @@ impl LevelDoc {
             focused: None,
             viewport_focused: false,
             outliner: Outliner::new(editor),
-            tools: ToolsPanel::new(),
+            tools: ToolsPanel::new(editor),
             details: PropsPanel::new(editor, details::SELECTION),
             world: PropsPanel::new(editor, details::WORLD),
             chooser: None,
             detail_objects: DetailObjects::default(),
-            toolbar: ToolbarState::default(),
             discarded: None,
             was_dirty: false,
             preview_at: None,
@@ -163,7 +179,17 @@ impl LevelDoc {
     }
 
     fn run_pending(&mut self, cx: &mut DocCx<'_>) {
-        for act in std::mem::take(&mut self.pending) {
+        let acts = std::mem::take(&mut self.pending);
+        self.run_acts(cx, acts);
+        self.editor
+            .services
+            .get_or_init(ViewFlags::default)
+            .maximized
+            .store(self.maximized, Ordering::Relaxed);
+    }
+
+    fn run_acts(&mut self, cx: &mut DocCx<'_>, acts: Vec<Act>) {
+        for act in acts {
             match act {
                 Act::ResetLayout(_) => self.reset_layout(cx.ctx),
                 Act::FindInOutliner => {
@@ -182,11 +208,17 @@ impl LevelDoc {
                 }
                 Act::Fold(t, open) => {
                     if t == details::WORLD {
-                        self.world.fold_all(open);
+                        self.world.fold_all(cx.ctx, open);
                     } else {
-                        self.details.fold_all(open);
+                        self.details.fold_all(cx.ctx, open);
                     }
                 }
+                Act::Choose(c) => {
+                    cx.requests.activate(crate::LEVEL);
+                    self.chooser = Some(*c);
+                }
+                Act::CloseChooser => self.chooser = None,
+                Act::Maximize(on) => self.maximized = on.unwrap_or(!self.maximized),
             }
         }
     }
@@ -245,7 +277,7 @@ impl LevelDoc {
     }
 
     /// The Preferences' recovery rows reach the scene's autosave, and the author's input holds
-    /// it off for the interaction delay (`EditorRecovery::Tick`).
+    /// it off for the interaction delay.
     fn sync_recovery(&self, ctx: &egui::Context) {
         let Some(svc) = self.scene() else { return };
         let settings = gz_app::EditorSettings::of(&self.editor);
@@ -290,53 +322,38 @@ impl LevelDoc {
         }
     }
 
-    /// The chooser `property_choose` opened over MCP, or that closed under one.
-    fn follow_mcp_chooser(&mut self) {
+    /// A tool's chooser asked for over MCP: the one the tool's button opens.
+    fn follow_tool_chooser(&mut self) {
         let Some(svc) = self.scene() else { return };
-        // a tool's chooser asked for over MCP: the one the panel's button opens
         let tool = svc.view.lock().tool_chooser.take();
         if tool.as_deref() == Some("group_pivot") && self.chooser.is_none() {
             self.chooser = crate::tools::pivot_chooser(&svc.store.snapshot());
         }
-        let choosing = svc.view.lock().choosing.clone();
-        match (&choosing, &self.chooser) {
-            (Some(key), None) => {
-                let snap = svc.store.snapshot();
-                self.chooser = details::chooser_for(&snap, &svc.library, key, &svc.prop_cx());
-                if self.chooser.is_none() {
-                    svc.view.lock().choosing = None;
-                }
-            }
-            (None, Some(c)) if matches!(c.purpose, Purpose::Property { target: 0, .. }) => {
-                self.chooser = None
-            }
-            _ => {}
-        }
     }
 
-    fn draw_chooser(&mut self, ui: &mut Ui) {
+    /// The chooser that is open, for `level.show` and `scene.choose`.
+    #[must_use]
+    pub fn chooser(&self) -> Option<&Chooser> {
+        self.chooser.as_ref()
+    }
+
+    /// The chooser that is open, to move its search or its highlight (`scene.choose`).
+    pub fn chooser_mut(&mut self) -> Option<&mut Chooser> {
+        self.chooser.as_mut()
+    }
+
+    fn draw_chooser(&mut self, ui: &mut Ui, cx: &DocCx<'_>) {
         let Some(mut c) = self.chooser.take() else { return };
-        let outcome = choose::draw(ui, &self.editor, &mut c);
+        let outcome = choose::draw(ui, &self.editor, Some((&cx.gpu.device, &cx.gpu.queue)), &mut c);
         let editor = self.editor.clone();
         let svc = self.scene();
         match outcome {
             Outcome::Open => self.chooser = Some(c),
-            Outcome::Cancelled => {
-                if let (Purpose::Property { target: 0, .. }, Some(svc)) = (&c.purpose, &svc) {
-                    svc.view.lock().choosing = None;
-                }
-            }
+            Outcome::Cancelled => {}
             Outcome::Picked(items) => {
                 let first = items.first().cloned().unwrap_or_default();
                 match &c.purpose {
                     Purpose::Property { target, key } => {
-                        if *target == details::SELECTION
-                            && let Some(svc) = &svc
-                        {
-                            let mut v = svc.view.lock();
-                            v.choosing = None;
-                            v.chosen.clone_from(&first);
-                        }
                         let mut args = Args::new();
                         args.insert("world".into(), Value::Bool(*target == details::WORLD));
                         // a multi-select row (a respawn point's profiles) takes the list
@@ -346,17 +363,7 @@ impl LevelDoc {
                         args.insert("set".into(), Value::Object(set));
                         editor.post("scene.set", args);
                     }
-                    Purpose::ToolObject if c.multi => crate::tools::add_several(&editor, &items),
-                    Purpose::ToolObject => {
-                        crate::tools::set_choice(&editor, ObjClass::SceneObject, &first);
-                    }
-                    Purpose::ToolGroup => crate::tools::set_choice(&editor, ObjClass::Group, &first),
-                    Purpose::DetailObjects => {
-                        if let Some(svc) = &svc {
-                            detail_objects::add_objects(ui, &editor, svc, &items);
-                        }
-                    }
-                    Purpose::RandomObjects => self.tools.set_random_objects(items),
+                    Purpose::DetailObjects => crate::tools_bulk::add_objects(&editor, &items),
                     Purpose::ToolCommand { cmd, action, arg } => {
                         let mut args = Args::new();
                         args.insert("action".into(), Value::String((*action).into()));
@@ -444,13 +451,15 @@ impl LevelDoc {
         let each_max = ((strip.width() - 4.0) / panels.len().max(1) as f32).max(48.0);
         let mut picked: Option<(PanelId, TabResponse)> = None;
         for panel in &panels {
-            let w = local_tab_width(&ctx, panel.label()).min(each_max);
+            let label =
+                if *panel == PanelId::Place { crate::tools::tab_label(&self.editor) } else { panel.label() };
+            let w = local_tab_width(&ctx, label).min(each_max);
             let tab = Rect::from_min_size(pos2(x, strip.min.y + 2.0), Vec2::new(w, STRIP - 2.0));
             let resp = local_tab(
                 ui,
                 Id::unique(("gz-ui-level.tab", panel.id())),
                 tab,
-                panel.label(),
+                label,
                 front == Some(*panel),
                 true,
             );
@@ -595,12 +604,13 @@ impl LevelDoc {
 
     fn draw_panel(&mut self, ui: &mut Ui, cx: &mut DocCx<'_>, panel: PanelId) {
         match panel {
-            PanelId::Tools => self.tools.draw(ui, cx.editor, &mut self.chooser),
+            PanelId::Place => self.tools.draw(ui, cx.editor, &mut self.chooser),
             PanelId::Outliner => self.outliner.draw(ui, cx.editor),
             PanelId::Details => self.details.draw(ui, cx.editor, &mut self.chooser),
             PanelId::LevelSettings => self.world.draw(ui, cx.editor, &mut self.chooser),
             PanelId::ContentBrowser => crate::content::content_browser(ui, cx),
             PanelId::OutputLog => crate::content::output_log(ui, cx),
+            PanelId::Problems => crate::problems::draw(ui, cx.editor),
         }
         if std::mem::take(&mut self.tools.want_detail_objects) {
             self.detail_objects.open = true;
@@ -634,7 +644,7 @@ fn px(r: Rect, ppp: f32) -> [f32; 4] {
     [(r.min.x * ppp).round(), (r.min.y * ppp).round(), (r.width() * ppp).round(), (r.height() * ppp).round()]
 }
 
-/// `CapturePreview`: the viewport's own pass, no helpers, written as the project's
+/// The Start page's picture of the project: the viewport's own pass, no helpers, written as the project's
 /// `preview.png`; a picture of nothing keeps the last good one.
 pub fn store_preview(editor: &Arc<Editor>) {
     let ed = editor.clone();
@@ -712,11 +722,7 @@ impl Document for LevelDoc {
     }
 
     fn toolbar<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>, cx: &mut DocCx<'_>) {
-        let mut save = false;
-        toolbar::draw(tb, cx.editor, &mut self.toolbar, &mut save);
-        if save {
-            self.save_scene(cx.ctx);
-        }
+        toolbar::draw(tb, cx);
     }
 
     fn body(&mut self, ui: &mut Ui, cx: &mut DocCx<'_>) {
@@ -728,13 +734,13 @@ impl Document for LevelDoc {
             self.preview_at = None;
         }
         self.run_pending(cx);
-        self.follow_mcp_chooser();
+        self.follow_tool_chooser();
         self.draw_dock(ui, cx);
         self.draw_floating(cx);
         if let Some(p) = self.focused.filter(|p| p.owns_keys()) {
             cx.requests.own_keys(p.id());
         }
-        self.draw_chooser(ui);
+        self.draw_chooser(ui, cx);
         self.detail_objects.draw(ui, cx.editor, &mut self.chooser);
         crate::motion_ui::draw(ui, cx.editor);
         self.sync_view();
@@ -747,17 +753,10 @@ impl Document for LevelDoc {
     }
 
     fn menus(&mut self, bar: &mut MenuBar<'_, '_>, cx: &mut DocCx<'_>) {
-        let picks = menus::draw(bar, cx, self.maximized);
-        if picks.maximize {
-            self.maximized = !self.maximized;
-        }
+        menus::draw(bar, cx);
     }
 
     fn shortcut(&mut self, cx: &mut DocCx<'_>, chord: &Chord) -> bool {
-        if chord.key == egui::Key::F11 && !chord.ctrl && !chord.shift && !chord.alt {
-            self.maximized = !self.maximized;
-            return true;
-        }
         // the browser and the log answer their own keys
         if self.focused.is_some_and(PanelId::owns_keys) {
             return false;
@@ -769,29 +768,26 @@ impl Document for LevelDoc {
     }
 
     fn edit(&mut self, cx: &mut DocCx<'_>, action: EditAction, run: bool) -> bool {
-        let id = match action {
-            EditAction::Undo => "COMMAND_UNDO",
-            EditAction::Redo => "COMMAND_REDO",
-            EditAction::Delete => "COMMAND_DELETE_SELECTION",
-            EditAction::Find => "COMMAND_SHOW_OBJECTLIST",
-            // `UIMainForm::LevelEdit`: the clipboard of scene objects; Duplicate is a copy pasted
-            EditAction::Cut | EditAction::Copy | EditAction::Paste | EditAction::Duplicate => {
-                if run {
-                    crate::level_cmds::edit(
-                        cx.editor,
-                        match action {
-                            EditAction::Cut => "cut",
-                            EditAction::Copy => "copy",
-                            EditAction::Paste => "paste",
-                            _ => "duplicate",
-                        },
-                    );
-                }
-                return self.scene().is_some_and(|s| s.store.snapshot().valid);
-            }
+        let Some(svc) = self.scene().filter(|s| s.store.snapshot().valid) else {
+            return false;
         };
-        if run {
-            menus::run_scene_command(id, cx.editor, cx.ctx);
+        if !run {
+            return true;
+        }
+        match action {
+            EditAction::Undo | EditAction::Redo => {
+                let undo = action == EditAction::Undo;
+                cx.editor.exec.spawn(async move {
+                    let _ = if undo { svc.store.undo().await } else { svc.store.redo().await };
+                });
+            }
+            EditAction::Delete => crate::level_cmds::delete(cx.editor, &svc),
+            EditAction::Find => self.pending.push(Act::FindInOutliner),
+            // the clipboard of scene objects, whatever kinds the selection holds
+            EditAction::Cut => crate::level_cmds::edit(cx.editor, "cut"),
+            EditAction::Copy => crate::level_cmds::edit(cx.editor, "copy"),
+            EditAction::Paste => crate::level_cmds::edit(cx.editor, "paste"),
+            EditAction::Duplicate => crate::level_cmds::edit(cx.editor, "duplicate"),
         }
         true
     }
@@ -823,6 +819,8 @@ impl Document for LevelDoc {
     fn mcp_state(&self) -> serde_json::Value {
         serde_json::json!({
             "layout_custom": self.layout.as_ref().is_some_and(|l| l.custom),
+            "chooser": self.chooser.as_ref().map(Chooser::state),
+
             "viewport_maximized": self.maximized,
             "viewport": self.pane.as_ref().map_or(serde_json::Value::Null, gz_ui_viewport::ViewportPane::mcp_state),
         })

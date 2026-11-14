@@ -136,9 +136,9 @@ pub fn build_spawn(
         .iter()
         .find(|l| l.name.eq_ignore_ascii_case(level))
         .map(|l| l.id)
-        .ok_or_else(|| BuildError::new(format!("! The game graph has no level {level}.")))?;
+        .ok_or_else(|| BuildError::new(format!("The game graph has no level {level}.")))?;
     let cross =
-        graph.cross_table(level_id).ok_or_else(|| BuildError::new("! The game graph has no cross table."))?;
+        graph.cross_table(level_id).ok_or_else(|| BuildError::new("The game graph has no cross table."))?;
     let mut spawns: Vec<Entity> = Vec::new();
     let mut story: BTreeMap<u32, String> = BTreeMap::new();
     let mut actors = 0usize;
@@ -157,13 +157,13 @@ pub fn build_spawn(
         if class == Class::CreatureActor {
             actors += 1;
             if actors > 1 {
-                return Err(BuildError::new("! Too many actors on the level"));
+                return Err(BuildError::new("The level has more than one actor."));
             }
             // oracle: the C++ keeps the mark the spawn point got from `$player`; the game makes
             // no level current without it (`CALifeGraphRegistry::update`), so the one actor
             // carries it here whatever the scene saved
             if !e.is_player() && e.set_player().is_err() {
-                return Err(BuildError::new(format!("! The actor {} cannot be made the player.", e.name())));
+                return Err(BuildError::new(format!("The actor {} cannot be made the player.", e.name())));
             }
         }
         if let Some(id) = e.story_id() {
@@ -179,14 +179,12 @@ pub fn build_spawn(
         spawns.push(e);
     }
     if spawns.is_empty() {
-        return Err(BuildError::new("! There are no spawn-points!"));
+        return Err(BuildError::new("The level has no spawn points."));
     }
 
     log.push("Correct objects ...".to_owned());
     let Some(first) = level_vertices(graph, level_id) else {
-        return Err(BuildError::new(format!(
-            "! There are no graph vertices in the game graph for the level '{level}' !"
-        )));
+        return Err(BuildError::new(format!("The game graph has no vertices for the level '{level}'.")));
     };
     let first_lv = graph.vertices.get(usize::from(first)).map_or(INVALID, |v| v.level_vertex);
     let mut artefact_points: Vec<LevelPoint> = Vec::new();
@@ -273,7 +271,7 @@ pub fn build_spawn(
         fill_level_changer(e, level, level_id, graph, &graph_points, &mut log)?;
     }
     if actors == 0 {
-        return Err(BuildError::new("! There is no ACTOR spawn point!"));
+        return Err(BuildError::new("The level has no actor spawn point."));
     }
     if verify_restrictors && !verify_space_restrictors(level, nav, &spawns, &mut log) {
         log.push("! Failed build spawn!".to_owned());

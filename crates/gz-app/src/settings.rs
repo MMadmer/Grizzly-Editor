@@ -64,9 +64,9 @@ pub const PREFS: [PrefDef; 33] = [
     def("bp_lim_depth", PrefType::Bool, 1.0, 0.0, 1.0),
     def("bp_cull", PrefType::Bool, 1.0, 0.0, 1.0),
     def("bp_depth_tolerance", PrefType::Float, 0.1, 0.0, 10000.0),
-    def("snap_angle_step", PrefType::Angle, 5.625, 0.1, 180.0),
+    def("snap_angle_step", PrefType::Angle, 15.0, 0.1, 180.0),
     def("snap_grid_step", PrefType::Float, 0.1, 0.01, 1000.0),
-    def("snap_scale_step", PrefType::Float, 0.1, 0.01, 1000.0),
+    def("snap_scale_step", PrefType::Float, 0.25, 0.01, 1000.0),
     def("snap_moveto", PrefType::Float, 0.5, 0.01, 1000.0),
     def("grid_cell_size", PrefType::Float, 1.0, 0.1, 10.0),
     def("grid_cell_count", PrefType::U32, 100.0, 10.0, 1000.0),
@@ -172,6 +172,8 @@ struct Inner {
 pub struct EditorSettings {
     path: PathBuf,
     inner: Mutex<Inner>,
+    /// The file's writes in the order they were asked for.
+    order: Arc<gz_editor::fsx::InOrder>,
     /// The Preferences page last shown.
     pub page: Mutex<SmolStr>,
 }
@@ -190,6 +192,7 @@ impl EditorSettings {
         Self {
             path: path.to_path_buf(),
             inner: Mutex::new(Inner { doc, prefs, extra: Vec::new(), dirty: false }),
+            order: Arc::default(),
             page: Mutex::new(SmolStr::new("General")),
         }
     }
@@ -380,19 +383,6 @@ impl EditorSettings {
         s.dirty = true;
     }
 
-    /// The file a Run Macro slot runs (`[macros] COMMAND_RUN_MACRO."Slot #1"`); empty for none.
-    #[must_use]
-    pub fn macro_file(&self, key: &str) -> String {
-        let s = self.inner.lock();
-        s.doc.get("macros", key).map(|v| gz_ltx::doc::unquote(v).to_owned()).unwrap_or_default()
-    }
-
-    pub fn set_macro_file(&self, key: &str, file: &str) {
-        let mut s = self.inner.lock();
-        s.doc.set("macros", key, &gz_ltx::doc::quote(file));
-        s.dirty = true;
-    }
-
     /// The adapter the device is made on, by name (`[render] gpu_adapter`); empty is the system's
     /// default.
     #[must_use]
@@ -404,44 +394,6 @@ impl EditorSettings {
     pub fn set_gpu_adapter(&self, name: &str) {
         let mut s = self.inner.lock();
         s.doc.set("render", "gpu_adapter", &gz_ltx::doc::quote(name));
-        s.dirty = true;
-    }
-
-    /// File > Recent Scene: `[editor_prefs] recent_files_N`, newest first.
-    #[must_use]
-    pub fn recent_scenes(&self) -> Vec<String> {
-        let s = self.inner.lock();
-        let mut out: Vec<String> = Vec::new();
-        for i in 0..64 {
-            let Some(v) = s.doc.get("editor_prefs", &format!("recent_files_{i}")) else { continue };
-            let v = gz_ltx::doc::unquote(v).to_owned();
-            if !v.is_empty() && !out.contains(&v) {
-                out.push(v);
-            }
-        }
-        out
-    }
-
-    /// `name` goes first; the list keeps fewer than `scene_recent_count` entries.
-    pub fn add_recent_scene(&self, name: &str) {
-        let limit = self.pref("scene_recent_count").unwrap_or(10.0).max(0.0) as usize;
-        let mut list = self.recent_scenes();
-        list.retain(|n| n != name);
-        list.insert(0, name.to_owned());
-        // one fewer than the count, as the list always kept
-        while !list.is_empty() && list.len() >= limit {
-            list.pop();
-        }
-        let mut s = self.inner.lock();
-        for i in 0..64 {
-            let key = format!("recent_files_{i}");
-            match list.get(i) {
-                Some(n) => s.doc.set("editor_prefs", &key, &gz_ltx::doc::quote(n)),
-                None => {
-                    s.doc.remove("editor_prefs", &key);
-                }
-            }
-        }
         s.dirty = true;
     }
 
@@ -484,10 +436,10 @@ impl EditorSettings {
 
     /// Writes the file if something changed, on the IO pool.
     pub fn save_soon(&self, editor: &Editor) {
-        if let Some((path, text)) = self.take_dirty() {
-            let log = editor.log.clone();
+        if let Some((ticket, path, text)) = self.take_dirty() {
+            let (log, order) = (editor.log.clone(), self.order.clone());
             editor.exec.spawn_io(move || {
-                if let Err(e) = gz_editor::fsx::write_atomic(&path, text.as_bytes()) {
+                if let Err(e) = order.write(ticket, &path, text.as_bytes()) {
                     log.warn(format!(
                         "the editor's settings could not be written to {}: {e}",
                         path.display()
@@ -499,19 +451,20 @@ impl EditorSettings {
 
     /// Writes the file now if something changed: the editor is closing.
     pub fn save_now(&self, editor: &Editor) {
-        if let Some((path, text)) = self.take_dirty()
-            && let Err(e) = gz_editor::fsx::write_atomic(&path, text.as_bytes())
+        if let Some((ticket, path, text)) = self.take_dirty()
+            && let Err(e) = self.order.write(ticket, &path, text.as_bytes())
         {
             editor.log.warn(format!("the editor's settings could not be written to {}: {e}", path.display()));
         }
     }
 
-    fn take_dirty(&self) -> Option<(PathBuf, String)> {
+    /// The text to write and its place among the file's writes, taken under one lock.
+    fn take_dirty(&self) -> Option<(u64, PathBuf, String)> {
         let mut s = self.inner.lock();
         if !std::mem::take(&mut s.dirty) {
             return None;
         }
-        Some((self.path.clone(), s.doc.to_string()))
+        Some((self.order.ticket(), self.path.clone(), s.doc.to_string()))
     }
 }
 

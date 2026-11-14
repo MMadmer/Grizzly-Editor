@@ -1,65 +1,52 @@
-//! The tool classes as the Tools panel and the World Outliner name them (`kToolClasses` of
-//! `UILeftBarForm.cpp`): one icon, a tile label and a title per class.
+//! The kinds of thing a level holds, as the Level tab shows them: one icon each, the name of
+//! one (`ObjClass::desc`, "Spawn Point") and of several (`ObjClass::label_plural`, "Spawn
+//! Points"), and the order the World Outliner lists them in - by that name, so an author finds
+//! a kind where its name says, never by an internal number.
 
 use gz_scene::ObjClass;
 use gz_ui::Icon;
 
-/// One tool class.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ToolClass {
-    pub class: ObjClass,
-    pub icon: Icon,
-    /// What a tile shows: the title, or a short form where the title is wider than a tile of
-    /// the 240 pt panel.
-    pub label: &'static str,
-    /// What the header ("<title> Tool"), the Outliner's class rows and the palette call it.
-    pub title: &'static str,
-}
-
-const fn tc(class: ObjClass, icon: Icon, label: &'static str, title: &'static str) -> ToolClass {
-    ToolClass { class, icon, label, title }
-}
-
-/// In the order of the Tools panel's tiles.
-pub const TOOL_CLASSES: [ToolClass; 16] = [
-    tc(ObjClass::SceneObject, Icon::SceneObject, "Object", "Object"),
-    tc(ObjClass::Light, Icon::Light, "Light", "Light"),
-    tc(ObjClass::SoundSrc, Icon::SoundSource, "Sound", "Sound Source"),
-    tc(ObjClass::SoundEnv, Icon::SoundEnv, "Sound Env", "Sound Environment"),
-    tc(ObjClass::Glow, Icon::Glow, "Glow", "Glow"),
-    tc(ObjClass::Shape, Icon::Shape, "Shape", "Shape"),
-    tc(ObjClass::SpawnPoint, Icon::Spawn, "Spawn", "Spawn"),
-    tc(ObjClass::Way, Icon::Way, "Way", "Way"),
-    tc(ObjClass::Sector, Icon::Sector, "Sector", "Sector"),
-    tc(ObjClass::Portal, Icon::Portal, "Portal", "Portal"),
-    tc(ObjClass::Group, Icon::Group, "Group", "Group"),
-    tc(ObjClass::Particles, Icon::Particles, "Particles", "Particles"),
-    tc(ObjClass::DetailObjects, Icon::DetailObjects, "Detail Obj.", "Detail Objects"),
-    tc(ObjClass::AiMap, Icon::AIMap, "AI Map", "AI Map"),
-    tc(ObjClass::Wallmark, Icon::Wallmark, "Wallmark", "Wallmark"),
-    tc(ObjClass::FogVolume, Icon::FogVolume, "Fog", "Fog Volume"),
-];
-
-fn find(class: ObjClass) -> Option<&'static ToolClass> {
-    TOOL_CLASSES.iter().find(|c| c.class == class)
-}
-
-/// `ToolClassIcon`.
+/// The icon of a kind.
 #[must_use]
 pub fn icon(class: ObjClass) -> Icon {
-    find(class).map_or(Icon::SceneObject, |c| c.icon)
+    match class {
+        ObjClass::Group => Icon::Group,
+        ObjClass::Glow => Icon::Glow,
+        ObjClass::SceneObject => Icon::SceneObject,
+        ObjClass::Light => Icon::Light,
+        ObjClass::Shape => Icon::Shape,
+        ObjClass::SoundSrc => Icon::SoundSource,
+        ObjClass::SpawnPoint => Icon::Spawn,
+        ObjClass::Way => Icon::Way,
+        ObjClass::Sector => Icon::Sector,
+        ObjClass::Portal => Icon::Portal,
+        ObjClass::SoundEnv => Icon::SoundEnv,
+        ObjClass::Particles => Icon::Particles,
+        ObjClass::DetailObjects => Icon::DetailObjects,
+        ObjClass::AiMap => Icon::AIMap,
+        ObjClass::Wallmark => Icon::Wallmark,
+        ObjClass::FogVolume => Icon::FogVolume,
+    }
 }
 
-/// `ToolClassLabel`.
-#[must_use]
-pub fn label(class: ObjClass) -> &'static str {
-    find(class).map_or("Object", |c| c.label)
-}
-
-/// `ToolClassTitle`.
+/// What one is called, Title Case: "Sound Source".
 #[must_use]
 pub fn title(class: ObjClass) -> &'static str {
-    find(class).map_or("Object", |c| c.title)
+    class.desc()
+}
+
+/// What several are called, Title Case: the Outliner's kind rows, "Spawn Points".
+#[must_use]
+pub fn plural(class: ObjClass) -> &'static str {
+    class.label_plural()
+}
+
+/// The kinds of placed objects (the painted layers are not listed), ordered by their name.
+#[must_use]
+pub fn listed() -> Vec<ObjClass> {
+    let mut out: Vec<ObjClass> = ObjClass::ALL.iter().copied().filter(|c| c.is_object_tool()).collect();
+    out.sort_by_key(|c| plural(*c));
+    out
 }
 
 #[cfg(test)]
@@ -67,11 +54,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_class_has_a_tile() {
-        for c in ObjClass::ALL {
-            assert!(find(c).is_some(), "{c:?}");
-        }
+    fn kinds_are_named_and_ordered_by_their_names() {
+        let l = listed();
+        assert_eq!(l.first(), Some(&ObjClass::FogVolume));
+        let names: Vec<&str> = l.iter().map(|c| plural(*c)).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        assert_eq!(names, sorted);
+        assert!(!l.contains(&ObjClass::AiMap));
         assert_eq!(title(ObjClass::SoundEnv), "Sound Environment");
-        assert_eq!(label(ObjClass::DetailObjects), "Detail Obj.");
+        // every kind its own icon
+        let mut icons: Vec<Icon> = ObjClass::ALL.iter().map(|c| icon(*c)).collect();
+        icons.dedup();
+        assert_eq!(icons.len(), ObjClass::ALL.len());
     }
 }

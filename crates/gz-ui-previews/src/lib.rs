@@ -7,12 +7,11 @@
 //!   renderer - with Frame, Reset View | Wireframe, Bones | Studio / Unlit | Details. The model
 //!   is read, measured and made into a mesh on the pools ([`model_load`]); a visual only the
 //!   linked game holds draws with the game's textures through [`loader::Sources`], which reads
-//!   the project, then the editor, then the game. `UIVisualPreview.cpp`.
+//!   the project, then the editor, then the game.
 //! - **The texture preview** ([`texture`], the `texture` tab): the file read and uploaded on the
 //!   pools, as the GPU takes it when it can (BC1-BC7, 32-bit, every level the file holds),
 //!   decoded to B8G8R8A8 otherwise ([`texture_load`]); Fit, 1:1, Zoom | RGBA / R / G / B / A |
 //!   Mip | Details, pan and zoom at the cursor, a checker clipped to the view.
-//!   `UIImagePreview.cpp`.
 //! - **The libraries** ([`library`]): Light Animations (`gamedata\lanims.xr`, a timeline drawn by
 //!   hand, the exact colour at a frame), the Texture Library (the `.tga` sources of
 //!   `rawdata\textures` with their `.thm`; Check New Textures turns it into New Textures over the
@@ -20,17 +19,16 @@
 //!   (`rawdata\sounds`: a waveform from the peak envelope, playback on an audio thread of its own,
 //!   [`audio`]). Lists are walks on the IO pool kept per revision; edits live in a `Store` per
 //!   library with undo and are saved explicitly, as a job beside the editor.
-//!   `UIEditLightAnim.cpp`, `UIImageEditorForm.cpp`, `UISoundEditorForm.cpp`,
-//!   `ImageManager.cpp`, `SoundManager.cpp`.
 //!
 //! [`install`] plugs the five tabs and the Libraries menu (Light Animations, Texture Library,
-//! Sound Library, Check New Textures, Synchronize Textures..., Synchronize Sounds..., Reload
-//! Objects, Reload Textures, Rewrite Texture Descriptions...) into the shell, with the C++ rows
-//! `COMMAND_RELOAD_TEXTURES`, `COMMAND_RELOAD_OBJECTS` and `COMMAND_MUTE_SOUND` ([`libtools`]); [`register`] adds `preview_model`, `texture_preview`, `library` and `asset_preview`.
+//! Sound Library, Reload Objects) into the shell; Check New Textures, Synchronize Textures...,
+//! Synchronize Sounds..., Rewrite Texture Descriptions... and Reload Textures are actions too, on
+//! the palette and under their tab's More ([`libtools`]). [`register`] adds `preview.model`,
+//! `preview.texture`, `library.view`, `shot.asset` and the `library.*` maintenance commands.
 //!
 //! Widgets the kit lacks, local to this crate: [`local::local_checker`] (a checkerboard lined
 //! up with a picture, clipped to the view), [`local::local_heading`] (a preview's title and its
-//! facts), [`local::local_section`] (a folding header outside a property grid),
+//! facts),
 //! [`local::local_ends`] (a row's two end labels), [`local::local_frame`],
 //! [`local::local_texture_pick`] (a texture picked from a searchable list) and
 //! [`library::list::LibraryList`] (the libraries' list: search, leaf order, muted folders, only
@@ -64,15 +62,12 @@ use gz_ui::dialog::{self, Answer, ConfirmSpec};
 use crate::library::{lanim, sounds, textures};
 use crate::paths::EditorDirs;
 
-/// The crate's name, as the registry records who registered a command.
-const AREA: &str = "gz-ui-previews";
-
 fn asker(cx: &DocCx<'_>) -> dialog::Asker {
     if cx.editor.flags.unattended { dialog::Asker::Unattended } else { dialog::Asker::Ui }
 }
 
 /// Synchronize Textures...: asks, then every source picture against its description and game
-/// texture, as a job (`CommandRefreshTextures`).
+/// texture, as a job.
 pub(crate) fn synchronize_textures(cx: &mut DocCx<'_>) {
     let spec = ConfirmSpec {
         id: "sync_textures".to_owned(),
@@ -130,7 +125,7 @@ pub(crate) fn synchronize_textures(cx: &mut DocCx<'_>) {
 }
 
 /// Synchronize Sounds...: the orphans are counted off the frame, then the question names them
-/// (`CommandSyncSounds`).
+///.
 pub(crate) fn synchronize_sounds(cx: &mut DocCx<'_>) {
     let editor = cx.editor.clone();
     let asker = asker(cx);
@@ -241,20 +236,16 @@ pub fn install(b: &mut ShellBuilder) {
             .icon(Icon::Refresh)
             .args(|_| args(&[("kind", "sounds")])),
     );
-    for (group, order, id) in [
-        (0, 0, "library.light_animations"),
-        (0, 1, "library.textures"),
-        (0, 2, "library.sounds"),
-        (1, 0, "library.check_textures"),
-        (1, 1, "library.sync_textures"),
-        (1, 2, "library.sync_sounds"),
-    ] {
-        b.menu_action("Libraries", group, order, id, None);
+    // the menu opens the libraries; what they do by hand is under each tab's More
+    for (order, id) in
+        ["library.light_animations", "library.textures", "library.sounds"].into_iter().enumerate()
+    {
+        b.menu_action("Libraries", 0, i32::try_from(order).unwrap_or(0), id, None);
     }
     libtools::install(b);
 }
 
-/// The commands of this package: `preview_model`, `texture_preview`, `library`, `asset_preview`.
+/// The commands of this package: `preview.model`, `preview.texture`, `library.view`, `shot.asset`, `library.*`.
 pub fn register(reg: &mut Registry) {
     cmd::register(reg);
     libtools::register(reg);

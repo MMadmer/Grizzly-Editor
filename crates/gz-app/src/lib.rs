@@ -17,8 +17,6 @@
 //! - [`register`] - the commands of the window: `state`, `ui.*`, `app.*`, `doc.*`, `shot.window`,
 //!   `perf.stalls`
 //! - [`stalls`] - the stall monitor: every UI pass and event over 100 ms, for `perf.stalls`
-//! - [`cpp`], [`macros`] - the level editor's numbered command table (`list_commands`,
-//!   `exec_command`, Run Macro): they leave with the level's actions (stream L2)
 //! - [`gpu`] - the adapter the device is made on and the driver's hint (View > Render > GPU);
 //!   the sounds' mute switch
 //! - Panels outside the window: the window runs egui's immediate viewports as native windows of
@@ -35,12 +33,9 @@ pub mod builder;
 pub mod chrome;
 mod cmds;
 pub mod contract;
-pub mod cpp;
-mod cpp_cmds;
 pub mod doc;
 pub mod gpu;
 pub mod keys;
-pub mod macros;
 pub mod palette;
 pub mod project;
 mod queue;
@@ -58,10 +53,9 @@ mod window;
 pub use actions::{Action, ActionCx, Actions, Enabled, ReplyCx, Scope, args, menu_row, toolbar_button};
 pub use builder::{
     DialogDesc, DrawerDesc, LogState, MenuContent, MenuEntry, PageCard, PanelDesc, PrefGroup, PrefKind,
-    PrefRow, ShellBuilder, UiCommand,
+    PrefRow, ShellBuilder,
 };
 pub use cmds::register;
-pub use cpp::{CommandVar, CppAction, CppCommand, CppSub};
 pub use doc::{DocCx, Document, Drawer, EditAction, OpenRequest, PanelInfo, PanelOp, ShellRequests, tab_id};
 pub use keys::Chord;
 pub use queue::{UiQueue, no_window, on_ui};
@@ -74,4 +68,6 @@ pub use shell::{
 pub use shots::{PictureGate, encode_png};
 pub use tasks::{TaskCard, TaskCardTable};
 pub use unsaved::save_tabs;
-pub use window::{FrameReport, GpuOwners, Shell, StartProfile, UserEvent, WindowLink, WindowOptions, run};
+pub use window::{
+    FrameReport, GpuOwners, Shell, StartProfile, UserEvent, WindowLink, WindowOptions, gpu_gate, run,
+};

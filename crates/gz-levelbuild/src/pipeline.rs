@@ -392,6 +392,10 @@ pub(crate) async fn run(
 ) -> Result<Value, JobError> {
     let lb = LevelBuild::of(session);
     let inp = inputs(editor, ctx).await?;
+    // the models the scene's objects are made from are part of what the steps read
+    let (snap, lib) = (inp.snap.clone(), inp.lib.clone());
+    let library = editor.exec.io(move || fingerprint::library_stamp(&snap, &lib)).await;
+    let req = &Request { opts: Options { library, ..req.opts.clone() }, ..req.clone() };
     let level = inp.snap.meta.level.level_path.to_string();
     if level.trim().is_empty() {
         return Err(JobError::new("The scene has no level path: set it in Level Settings."));
@@ -456,7 +460,7 @@ pub(crate) async fn run(
         return Ok(json!({ "level": level, "ran": [], "fresh": true }));
     }
     editor.log.info(format!(
-        "* Building {level}: {}.",
+        "Building {level}: {}.",
         plan.iter().map(|s| s.title()).collect::<Vec<_>>().join(", ")
     ));
     let mut ran: Vec<Value> = Vec::new();
@@ -472,7 +476,7 @@ pub(crate) async fn run(
         // a step that needs one that failed waits for it; the others go on
         let held = |n: &Step| failed.iter().any(|(f, _)| f == n) || skipped.contains(n);
         if let Some(blocker) = with_needs(&[step]).into_iter().find(|n| *n != step && held(n)) {
-            editor.log.warn(format!("! {} is left for later: it needs {}.", step.title(), blocker.title()));
+            editor.log.warn(format!("{} is left for later: it needs {}.", step.title(), blocker.title()));
             skipped.push(step);
             continue;
         }
@@ -496,11 +500,16 @@ pub(crate) async fn run(
                         seconds,
                         quality: req.opts.quality,
                         flags: req.opts.flags.clone(),
+                        library: if step.classes().contains(&gz_scene::ObjClass::SceneObject) {
+                            req.opts.library
+                        } else {
+                            0
+                        },
                         failed: None,
                     },
                 );
                 save_record(editor, &lb, &cx.record, &dir, &objects).await;
-                editor.log.info(format!("* {} done in {seconds:.1} s.", step.title()));
+                editor.log.info(format!("{} done in {seconds:.1} s.", step.title()));
                 ran.push(json!({
                     "step": step.name(),
                     "title": step.title(),
@@ -510,7 +519,7 @@ pub(crate) async fn run(
                 }));
             }
             Err(e) if e.cancelled => {
-                editor.log.warn(format!("! The build of {level} was stopped in {}.", step.title()));
+                editor.log.warn(format!("The build of {level} was stopped in {}.", step.title()));
                 finish_problems(&lb, &plan[..=k], cx.problems);
                 return Err(e);
             }
@@ -524,6 +533,11 @@ pub(crate) async fn run(
                         seconds,
                         quality: req.opts.quality,
                         flags: req.opts.flags.clone(),
+                        library: if step.classes().contains(&gz_scene::ObjClass::SceneObject) {
+                            req.opts.library
+                        } else {
+                            0
+                        },
                         failed: Some(e.message.clone()),
                     },
                 );
@@ -536,7 +550,7 @@ pub(crate) async fn run(
                     object: None,
                     position: None,
                 });
-                editor.log.error(format!("! {}: {}", step.title(), e.message));
+                editor.log.error(format!("{}: {}", step.title(), e.message));
                 failed.push((step, e.message));
             }
         }
@@ -557,7 +571,7 @@ pub(crate) async fn run(
         }
         return Err(JobError::new(text.join(" ")));
     }
-    editor.log.info(format!("* {level} is built."));
+    editor.log.info(format!("{level} is built."));
     Ok(json!({ "level": level, "ran": ran, "problems": problems }))
 }
 
@@ -588,7 +602,7 @@ async fn save_record(
         })
         .await;
     if let Err(e) = saved {
-        editor.log.warn(format!("! The build's record could not be written into {}: {e}", dir.display()));
+        editor.log.warn(format!("The build's record could not be written into {}: {e}", dir.display()));
     }
 }
 
@@ -746,7 +760,7 @@ async fn step_ai_map(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
         cx.record.ai_map = Some(Generated { inputs, nodes: nodes_now });
         note =
             json!({ "generated": true, "nodes": made.nodes, "seeds": made.seeds, "stopped": made.stopped });
-        cx.editor.log.info(format!("* The AI map was generated over the ground: {} nodes.", made.nodes));
+        cx.editor.log.info(format!("The AI map was generated over the ground: {} nodes.", made.nodes));
     } else if !generated_by_build {
         note = json!({ "generated": false, "kept": "The AI map was made by hand: it is kept. scene.ai_map action=generate makes it again over the ground." });
     }

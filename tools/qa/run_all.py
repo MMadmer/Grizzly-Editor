@@ -256,6 +256,15 @@ def run_one(name: str, extra: list[str], port_lock: threading.Lock) -> dict:
                 code = proc.wait(timeout=30)
         reader.join(timeout=30)
     seconds = time.monotonic() - t0
+    trouble = log_trouble(home)
+    # GRIZZLY_QA_KEEP_LOGS=<folder>: the editors' logs of this suite are copied there before its home goes
+    keep = os.environ.get("GRIZZLY_QA_KEEP_LOGS")
+    if keep:
+        os.makedirs(keep, exist_ok=True)
+        for root, _dirs, files in os.walk(home):
+            for f in files:
+                if f.endswith(".log"):
+                    shutil.copyfile(os.path.join(root, f), os.path.join(keep, "%s-%s" % (name, f)))
     remove_tree(home)
     # what a suite left in its temp folder - all of it, when its timeout ended it
     left = [os.path.join(tmp, n) for n in os.listdir(tmp)] if os.path.isdir(tmp) else []
@@ -265,6 +274,8 @@ def run_one(name: str, extra: list[str], port_lock: threading.Lock) -> dict:
     remove_tree(tmp)
     text = "\n".join(lines)
     failed = [line[5:].split("  <- ")[0].strip() for line in lines if line.startswith("FAIL ")]
+    # what no suite asks about: an editor of the suite that the graphics device complained to, or that panicked
+    failed.extend(trouble)
     if timed_out:
         failed.append("timed out after %d s" % spec["timeout"])
     elif code != 0 and not failed:
@@ -272,6 +283,39 @@ def run_one(name: str, extra: list[str], port_lock: threading.Lock) -> dict:
         failed.append("exit code %d: %s" % (code, tail[0][:200]))
     ok = code == 0 and not timed_out and not failed
     return {"ok": ok, "seconds": round(seconds, 1), "failed": failed, "code": code}
+
+
+TROUBLE = ("the graphics device reported an error", "panicked at")
+
+# what a check that times something is called: the UI thread's stalls, and answers given while a job runs
+TIMINGS = ("holds the UI thread under", "no UI pass waited", "is answered at once", "no stall")
+
+
+def only_timings(result: dict) -> bool:
+    """The suite failed, and every check that failed in it timed something."""
+    failed = result.get("failed") or []
+    return bool(failed) and not result.get("ok") and all(any(mark in line for mark in TIMINGS) for line in failed)
+
+
+def log_trouble(home: str) -> list[str]:
+    """The lines of the editors' logs under a suite's home that mean trouble whatever the suite checked: an error
+    of the graphics device (a frame drawn into a surface of the wrong size, a refused configuration) and a panic.
+    One line per kind and log, cut short."""
+    found: list[str] = []
+    for root, _dirs, files in os.walk(home):
+        for name in files:
+            if not name.endswith(".log"):
+                continue
+            try:
+                with open(os.path.join(root, name), encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+            except OSError:
+                continue
+            for mark in TROUBLE:
+                lines = [l.strip() for l in text.splitlines() if mark in l]
+                if lines:
+                    found.append("%s: %d line(s) like '%s'" % (name, len(lines), lines[0][:160]))
+    return found
 
 
 def settle(limit: float = 20.0) -> float:
@@ -362,6 +406,12 @@ def main() -> int:
             report(futures[f], f.result())
     for n in alone:
         settle()
+        report(n, run_one(n, extra, lock))
+    # a time measured beside other suites says how busy the machine was: a suite that failed on nothing but its
+    # timings is measured again with the machine to itself, and that run is its result
+    for n in [n for n in together if only_timings(results[n])]:
+        settle()
+        print("again, alone: %s (beside the others: %s)" % (n, "; ".join(results[n]["failed"][:3])), flush=True)
         report(n, run_one(n, extra, lock))
     wall = time.monotonic() - t0
     bad = [n for n, r in results.items() if not r["ok"]]

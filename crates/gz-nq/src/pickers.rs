@@ -6,7 +6,8 @@
 //! the tree does not include, its `all.spawn` - never from a hardcoded list. Captions are what
 //! the player reads: items through `inv_name`, NPCs through their profile's `<name>`, levels and
 //! communities through their own ids, smarts through `misc\smart_names.ltx`. Story ids and
-//! restrictors also come from the project (its `spawn\custom_data` and its levels' `spawn.part`),
+//! restrictors also come from the project (its `spawn\custom_data`, its scenes' `spawns.lua` and
+//! an X-Ray SDK scene's `spawn.part`),
 //! and the open scene adds its own on top ([`Pickers::compose`]).
 //!
 //! What is built: [`build_game`] (one linked game; the builders run in parallel on the caller's
@@ -994,6 +995,8 @@ pub struct ProjectFiles {
     pub custom_data: Vec<(String, String)>,
     /// `rawdata\levels\**\spawn.part`.
     pub spawn_parts: Vec<(String, String)>,
+    /// `<scene>\spawns.lua` of every `<scene>.scene` of the project.
+    pub scene_spawns: Vec<(String, String)>,
     /// `gamedata\configs\gameplay\**\*.xml`.
     pub gameplay: Vec<(String, String)>,
     /// `gamedata\configs\ui\textures_descr\**\*.xml`.
@@ -1165,6 +1168,56 @@ fn project_restrictors(files: &ProjectFiles, part: &mut ProjectPart) {
     }
 }
 
+/// The restrictors and authored story ids of the project's scenes: a scene keeps its spawn points
+/// in `<scene>\spawns.lua`, each with its name, its section and the entity's named properties. A
+/// file that does not read gives nothing: `asset.check` is what says why.
+fn scene_spawn_objects(files: &ProjectFiles, part: &mut ProjectPart) {
+    for (rel, text) in &files.scene_spawns {
+        // the level a scene's spawns belong to is the scene: the folder the file lies in
+        let mut segs = rel.rsplit(['/', '\\']);
+        segs.next();
+        let level = segs.next().unwrap_or("");
+        let Ok(data) = gz_luadata::parse(text) else { continue };
+        let Some(spawns) = data.get("spawns") else { continue };
+        for spawn in spawns.arr() {
+            let name = spawn.get_string("name", "");
+            if name.is_empty() {
+                continue;
+            }
+            let at = spawn
+                .get("pos")
+                .map(gz_luadata::Value::arr)
+                .filter(|p| p.len() == 3)
+                .map_or_else(String::new, |p| {
+                    format!("{}, {}, {}", p[0].to_number(0.0), p[1].to_number(0.0), p[2].to_number(0.0))
+                });
+            note_spawn_object(&spawn.get_string("section", ""), &name, level, &at, part);
+            let Some(custom) = spawn.get("props").and_then(|p| p.get("custom_data")).and_then(|c| c.as_str())
+            else {
+                continue;
+            };
+            let mut in_story = false;
+            for l in ltx_lines(custom) {
+                if l.starts_with('[') {
+                    in_story = section_name(l).eq_ignore_ascii_case("story_object");
+                    continue;
+                }
+                if in_story
+                    && let Some(("story_id", sid)) = key_value(l)
+                    && !sid.is_empty()
+                {
+                    part.stories.push((
+                        PickerType::Story,
+                        sid.to_owned(),
+                        String::new(),
+                        format!("project: {name}"),
+                    ));
+                }
+            }
+        }
+    }
+}
+
 /// The module's own dialogs and portraits (`BuildProjectLooks`).
 fn project_looks(files: &ProjectFiles, part: &mut ProjectPart) {
     for (_, text) in &files.gameplay {
@@ -1185,6 +1238,7 @@ pub fn build_project(files: &ProjectFiles) -> ProjectPart {
     let mut part = ProjectPart::default();
     project_stories(files, &mut part.stories);
     project_restrictors(files, &mut part);
+    scene_spawn_objects(files, &mut part);
     project_looks(files, &mut part);
     part
 }
@@ -1234,6 +1288,30 @@ mod tests {
         assert!(p.known(PickerType::Story, "gate_guard"));
         assert!(p.known(PickerType::Story, "esc_x"));
         assert!(p.known(PickerType::Spot, "treasure"));
+    }
+
+    #[test]
+    fn a_scenes_own_spawn_file_feeds_the_restrictors_and_story_ids() {
+        let text = "return {\n  spawns = {\n    { name = \"depot_zone\", section = \"space_restrictor\", pos = { 4.5, 0, -12 } },\n    \
+                    { name = \"keeper\", section = \"stalker\", props = { custom_data = [[\n[story_object]\nstory_id = depot_keeper\n]] } },\n  },\n}\n";
+        let files = ProjectFiles {
+            scene_spawns: vec![("levels/depot/spawns.lua".into(), text.into())],
+            ..ProjectFiles::default()
+        };
+        let part = build_project(&files);
+        let p = Pickers::compose(None, &part, &[], &[]);
+        assert!(p.known(PickerType::Restrictor, "depot_zone"));
+        assert_eq!(
+            p.entries(PickerType::Restrictor).first().map(|e| e.extra.as_str()),
+            Some("depot (4, 0, -12)")
+        );
+        assert!(p.known(PickerType::Story, "depot_keeper"));
+        // a file that does not read is nobody's problem here
+        let broken = ProjectFiles {
+            scene_spawns: vec![("levels/depot/spawns.lua".into(), "return {".into())],
+            ..ProjectFiles::default()
+        };
+        assert!(build_project(&broken).restrictors.is_empty());
     }
 
     #[test]

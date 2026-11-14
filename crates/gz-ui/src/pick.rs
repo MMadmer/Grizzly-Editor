@@ -752,9 +752,9 @@ impl<'a> Combo<'a> {
             } else if open || resp.has_focus() {
                 p.accent_bright
             } else if hot {
-                p.border
+                p.border_strong
             } else {
-                p.border_subtle
+                p.border
             };
             painter.rect(
                 rect,

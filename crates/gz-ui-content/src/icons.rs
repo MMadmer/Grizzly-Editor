@@ -1,11 +1,8 @@
-//! Which picture-less glyph a tile draws (`TileIcon`) and which icon each of the editor's own
-//! asset kinds gets (`EditorAssetIcons::IconFor`). The names are what `content_browser_selection`
-//! answers in `icons` and `glyphs`.
+//! Which picture-less glyph a tile draws and which icon each of the editor's own asset kinds
+//! gets. The names are what `content.view` answers in `icons` and `glyphs`.
 
 use gz_project::AssetKind;
 use gz_ui::Icon;
-
-use crate::model::{Source, category};
 
 /// The drawn icon of one of the editor's own kinds.
 #[must_use]
@@ -21,7 +18,7 @@ pub fn own_icon(kind: AssetKind) -> Icon {
     }
 }
 
-/// `EditorAssetIcons::Name`: the `icons` answer and the tooltip's last line.
+/// The `icons` answer and the tooltip's last line.
 #[must_use]
 pub fn own_name(kind: AssetKind) -> &'static str {
     kind.name()
@@ -54,6 +51,7 @@ const TYPES: &[(&str, Icon)] = &[
     (".7z", Icon::FileArchive),
     (".rar", Icon::FileArchive),
     (".level", Icon::Level),
+    (".scene", Icon::Level),
     (".group", Icon::Group),
 ];
 
@@ -65,9 +63,9 @@ pub fn extension(path: &str) -> Option<&str> {
 }
 
 /// The glyph a tile draws while it has no picture: a folder, one of the editor's own kinds, the
-/// file type; an Editor entry without an extension by its category.
+/// file type; a Library entry without an extension by its kind (`kind_icon`).
 #[must_use]
-pub fn tile_icon(path: &str, folder: bool, own: Option<AssetKind>, source: Source, cat: usize) -> Icon {
+pub fn tile_icon(path: &str, folder: bool, own: Option<AssetKind>, kind_icon: Option<Icon>) -> Icon {
     if folder {
         return Icon::Folder;
     }
@@ -75,7 +73,7 @@ pub fn tile_icon(path: &str, folder: bool, own: Option<AssetKind>, source: Sourc
         return own_icon(kind);
     }
     let Some(ext) = extension(path) else {
-        return if source == Source::Editor { category(cat).icon } else { Icon::File };
+        return kind_icon.unwrap_or(Icon::File);
     };
     if let Some((_, icon)) = TYPES.iter().find(|(e, _)| e.eq_ignore_ascii_case(ext)) {
         return *icon;
@@ -88,7 +86,7 @@ pub fn tile_icon(path: &str, folder: bool, own: Option<AssetKind>, source: Sourc
     Icon::File
 }
 
-/// An image the tile path decodes (`IsImageExt`).
+/// An image the tile path decodes.
 #[must_use]
 pub fn is_image(path: &str) -> bool {
     extension(path).is_some_and(|e| {
@@ -96,7 +94,7 @@ pub fn is_image(path: &str) -> bool {
     })
 }
 
-/// A model whose picture is rendered (`IsVisualExt`, `IsObjectExt`).
+/// A model whose picture is rendered.
 #[must_use]
 pub fn is_model(path: &str) -> bool {
     extension(path).is_some_and(|e| e.eq_ignore_ascii_case(".ogf") || e.eq_ignore_ascii_case(".object"))
@@ -108,17 +106,17 @@ mod tests {
 
     #[test]
     fn glyphs() {
-        assert_eq!(tile_icon("a\\b", true, None, Source::Project, 0).name(), "folder");
-        assert_eq!(tile_icon("qa\\notes.txt", false, None, Source::Project, 0).name(), "file_text");
-        assert_eq!(tile_icon("q.nqasset", false, Some(AssetKind::Quest), Source::Project, 0).name(), "quest");
+        assert_eq!(tile_icon("a\\b", true, None, None).name(), "folder");
+        assert_eq!(tile_icon("qa\\notes.txt", false, None, None).name(), "file_text");
+        assert_eq!(tile_icon("q.nqasset", false, Some(AssetKind::Quest), None).name(), "quest");
         assert_eq!(
-            tile_icon("t.npcasset", false, Some(AssetKind::CharacterTemplate), Source::Project, 0).name(),
+            tile_icon("t.npcasset", false, Some(AssetKind::CharacterTemplate), None).name(),
             "character_template"
         );
-        assert_eq!(tile_icon("gamedata.db3", false, None, Source::Game, 0), Icon::FileArchive);
-        assert_eq!(tile_icon("noext", false, None, Source::Editor, 6), Icon::Particles);
-        assert_eq!(tile_icon("noext", false, None, Source::Game, 6), Icon::File);
-        assert_eq!(tile_icon(".gitignore", false, None, Source::Project, 0), Icon::File);
+        assert_eq!(tile_icon("gamedata.db3", false, None, None), Icon::FileArchive);
+        assert_eq!(tile_icon("noext", false, None, Some(Icon::Particles)), Icon::Particles);
+        assert_eq!(tile_icon("noext", false, None, None), Icon::File);
+        assert_eq!(tile_icon(".gitignore", false, None, None), Icon::File);
         assert!(is_image("ui\\x.DDS") && !is_image("x.ogf") && is_model("m.Object"));
         assert_eq!(own_name(AssetKind::Pda), "PDA interface");
     }

@@ -113,7 +113,10 @@ pub struct CodeOut {
 
 /// A code text: Cascadia Mono, line numbers in a gutter, an error line marked; the field is as
 /// tall as the text, so the pane scrolls - the gutter with it - and follows the caret. `goto`
-/// scrolls to a line (1-based) once.
+/// scrolls to a line (1-based) once. Lines do not wrap: the pane scrolls sideways.
+///
+/// A large text is laid out over the frames before the field shows it ([`warm_up`]): one layout
+/// of a 60 KB layout file is a quarter of a second, a frame nobody may wait for.
 pub fn local_code_view(
     ui: &mut Ui,
     id_salt: &str,
@@ -142,6 +145,9 @@ pub fn local_code_view(
             .vertical_scroll_offset((4.0 + (*goto as f32 - 1.0) * line_h - rect.height() / 3.0).max(0.0));
         *goto = 0;
     }
+    if !warm_up(ui, edit_id, value, &font) {
+        return out;
+    }
     scroll.show(ui, |ui| {
         let under = ui.painter().add(Shape::Noop);
         let lines = 1 + value.bytes().filter(|&b| b == b'\n').count();
@@ -151,9 +157,8 @@ pub fn local_code_view(
             // the gutter is a column of its own: the field starts after it
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.add_space(gutter);
-            let mut layouter = |ui: &Ui, text_: &dyn egui::TextBuffer, wrap: f32| {
-                lua_galley(ui, text_.as_str(), &font, wrap)
-            };
+            let mut layouter =
+                |ui: &Ui, text_: &dyn egui::TextBuffer, _wrap: f32| lua_galley(ui, text_.as_str(), &font);
             let edit = TextEdit::multiline(value)
                 .id(edit_id)
                 .font(font.clone())
@@ -175,6 +180,7 @@ pub fn local_code_view(
             let mut chars = 0usize;
             let mut caret_line = 0u32;
             let painter = ui.painter();
+            let clip = ui.clip_rect();
             for row in &shown.galley.rows {
                 let r = row.rect().translate(origin.to_vec2());
                 let n = row.row.char_count_excluding_newline().0;
@@ -208,13 +214,16 @@ pub fn local_code_view(
                     } else {
                         p.text_disabled
                     };
-                    painter.text(
-                        pos2(left + gutter - 8.0, r.min.y),
-                        Align2::RIGHT_TOP,
-                        line.to_string(),
-                        font.clone(),
-                        color,
-                    );
+                    // only the numbers on screen are laid out
+                    if r.max.y >= clip.min.y && r.min.y <= clip.max.y {
+                        painter.text(
+                            pos2(left + gutter - 8.0, r.min.y),
+                            Align2::RIGHT_TOP,
+                            line.to_string(),
+                            font.clone(),
+                            color,
+                        );
+                    }
                 }
                 chars += n + usize::from(row.ends_with_newline);
                 starts = row.ends_with_newline;
@@ -247,47 +256,70 @@ pub fn local_drop_mark(ui: &Ui, rect: Rect) {
 /// usual layout, and a file this large is no usual layout.
 const COLOUR_LIMIT: usize = 256 * 1024;
 
-/// Above this the coloured text is laid out off the UI thread; until it is, the text shows in one
-/// colour.
-const COLOUR_SYNC_LIMIT: usize = 8 * 1024;
+/// Above this a text is laid out over several frames before the field shows it.
+const WARM_FROM: usize = 16 * 1024;
+/// What one frame lays out of it.
+const WARM_STEP: usize = 8 * 1024;
 
-/// The text laid out for the field: coloured at once when it is short, else coloured on a thread
-/// of its own (a layout of thousands of coloured runs takes longer than a frame).
-fn lua_galley(ui: &Ui, text_: &str, font: &egui::FontId, wrap: f32) -> std::sync::Arc<egui::Galley> {
+/// The text laid out for the field, coloured. The galley cache keeps every line (paragraph) of it
+/// apart, so an edit lays out its own line again and nothing else.
+fn lua_galley(ui: &Ui, text_: &str, font: &egui::FontId) -> std::sync::Arc<egui::Galley> {
+    let mut job = lua_job(ui.ctx(), text_, font);
+    job.wrap.max_width = f32::INFINITY;
+    ui.fonts_mut(|f| f.layout_job(job))
+}
+
+/// The job up to `end` (a line's end): the very lines of the whole job, so the galley cache that
+/// keeps each line apart has them when the whole is laid out.
+fn prefix_job(job: &egui::text::LayoutJob, end: usize) -> egui::text::LayoutJob {
+    use egui::epaint::text::ByteIndex;
+    let mut out = job.clone();
+    out.text.truncate(end);
+    out.sections.retain(|sec| sec.byte_range.start.0 < end);
+    for sec in &mut out.sections {
+        sec.byte_range.end = ByteIndex(sec.byte_range.end.0.min(end));
+    }
+    out
+}
+
+/// Lays a large text out a few kilobytes a frame, each frame the part done so far again (the
+/// galley cache keeps the lines a frame used, and hands them back), and shows how far it is;
+/// `true` once the whole text is laid out, which the field then finds in the cache.
+fn warm_up(ui: &mut Ui, id: egui::Id, value: &str, font: &egui::FontId) -> bool {
     use std::hash::{Hash, Hasher};
+    if value.len() <= WARM_FROM {
+        return true;
+    }
     let ctx = ui.ctx().clone();
-    if text_.len() <= COLOUR_SYNC_LIMIT {
-        let mut job = lua_job(&ctx, text_, font);
-        job.wrap.max_width = wrap;
-        return ui.fonts_mut(|f| f.layout_job(job));
-    }
     let mut h = rustc_hash::FxHasher::default();
-    text_.hash(&mut h);
-    wrap.to_bits().hash(&mut h);
+    value.hash(&mut h);
     let want = h.finish();
-    // one slot: the galley of the last text coloured, and the text being coloured now
-    let slot = egui::Id::unique("gz-ui-pda.lua_galley");
-    let pending = slot.with("pending");
-    if let Some((k, g)) = ctx.data(|d| d.get_temp::<(u64, std::sync::Arc<egui::Galley>)>(slot))
-        && k == want
-    {
-        return g;
+    let key = id.with("warm");
+    let done =
+        ctx.data(|d| d.get_temp::<(u64, usize)>(key)).filter(|(k, _)| *k == want).map_or(0, |(_, n)| n);
+    if done >= value.len() {
+        // the whole job is laid out every frame from here on: the field's own layouter
+        return true;
     }
-    if ctx.data(|d| d.get_temp::<u64>(pending)) != Some(want) {
-        ctx.data_mut(|d| d.insert_temp(pending, want));
-        let (c, t, f) = (ctx.clone(), text_.to_owned(), font.clone());
-        let _ = std::thread::Builder::new().name("gz-ui-pda.colour".to_owned()).spawn(move || {
-            let mut job = lua_job(&c, &t, &f);
-            job.wrap.max_width = wrap;
-            let g = c.fonts_mut(|fonts| fonts.layout_job(job));
-            c.data_mut(|d| d.insert_temp(slot, (want, g)));
-            c.request_repaint();
-        });
+    let mut job = lua_job(&ctx, value, font);
+    job.wrap.max_width = f32::INFINITY;
+    let from = (done + WARM_STEP).min(value.len());
+    let end = value
+        .as_bytes()
+        .get(from..)
+        .and_then(|rest| rest.iter().position(|&b| b == b'\n'))
+        .map_or(value.len(), |i| from + i + 1);
+    let part = if end >= value.len() { job } else { prefix_job(&job, end) };
+    let _ = ui.fonts_mut(|f| f.layout_job(part));
+    ctx.data_mut(|d| d.insert_temp(key, (want, end)));
+    if end >= value.len() {
+        // the whole is laid out: the field takes it from the cache in this very frame
+        return true;
     }
-    let p = palette(&ctx);
-    let mut plain = egui::text::LayoutJob::simple(text_.to_owned(), font.clone(), p.text, wrap);
-    plain.wrap.max_width = wrap;
-    ui.fonts_mut(|f| f.layout_job(plain))
+    ctx.request_repaint();
+    let share = (end as f32 / value.len() as f32 * 100.0).round();
+    gz_ui::state::busy_line(ui, &format!("Laying out the text: {share:.0}%"));
+    false
 }
 
 /// The text as Lua data in four colours of the palette: keys, strings, numbers, comments; the
@@ -411,7 +443,21 @@ fn lua_spans<'t>(t: &'t str) -> Vec<(&'t str, LuaToken)> {
 
 #[cfg(test)]
 mod lua_tests {
-    use super::{LuaToken, lua_spans};
+    use super::{LuaToken, lua_spans, prefix_job};
+
+    #[test]
+    fn a_prefix_keeps_the_lines_of_the_whole() {
+        let mut job = egui::text::LayoutJob::default();
+        let fmt = |color| egui::TextFormat { color, ..egui::TextFormat::default() };
+        job.append("a = 1,\n", 0.0, fmt(egui::Color32::RED));
+        job.append("b = \"x\",\n", 0.0, fmt(egui::Color32::GREEN));
+        job.append("c = 3", 0.0, fmt(egui::Color32::BLUE));
+        let cut = job.text.find('b').unwrap() + "b = \"x\",\n".len();
+        let part = prefix_job(&job, cut);
+        assert_eq!(part.text, "a = 1,\nb = \"x\",\n");
+        assert_eq!(part.sections.len(), 2);
+        assert!(part.sections.iter().all(|s| s.byte_range.end.0 <= cut));
+    }
 
     #[test]
     fn lua_data_in_four_colours() {

@@ -301,10 +301,10 @@ def run(project: str) -> None:
         check("qa_hidden" not in chars, "B nor a character inside .vscode", json.dumps(chars))
         check("qa_courier" in chars, "B the project's own character is listed")
         for rel in (".git", ".gitignore", ".vscode"):
-            r = mcp("content_browser_open", name=rel)
+            r = mcp("content.view", action="reveal", source="project", path=rel)
             check(not r.get("ok"), "B the content browser does not show " + rel, json.dumps(r)[:160])
-        r = mcp("content_browser_open", name="gamedata/textures/qa")
-        sel = mcp("content_browser_selection", action="select", name="gamedata\\textures\\qa\\Thumbs.db")
+        r = mcp("content.view", action="reveal", source="project", path="gamedata/textures/qa/")
+        sel = mcp("content.view", action="go", source="project", folder="gamedata/textures/qa") and mcp("content.view", action="select", path="gamedata\\textures\\qa\\Thumbs.db")
         check(r.get("ok") and not sel.get("ok"), "B nor a Thumbs.db deep in gamedata", json.dumps(sel)[:160])
 
         # ------------------------------------------------------------------ C: the author's exclusions

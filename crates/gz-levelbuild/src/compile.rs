@@ -70,12 +70,12 @@ pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<ser
     let (opts, unknown) =
         Options::parse(req.flags.split_whitespace()).map_err(|e| JobError::new(e.to_string()))?;
     for u in &unknown {
-        editor.log.warn(format!("! The compiler does not know the option '{u}'; it is left out."));
+        editor.log.warn(format!("The compiler does not know the option '{u}'; it is left out."));
     }
     let threads = editor.exec.cpu_pool().current_num_threads();
     let sources = Sources::of_root(&editor.paths.root);
     editor.log.info(format!(
-        "* Compiling {} on {threads} threads; data from {}.",
+        "Compiling {} on {threads} threads; data from {}.",
         req.level,
         sources.game_data.display()
     ));
@@ -117,19 +117,19 @@ pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<ser
         let report = match done {
             Ok(r) => r,
             Err(e) if e.cancelled() => {
-                editor.log.warn(format!("! The compile of {} was stopped.", req.level));
+                editor.log.warn(format!("The compile of {} was stopped.", req.level));
                 return Err(JobError { message: "Stopped.".to_owned(), cancelled: true });
             }
             Err(e) => {
                 let text = format!("{} failed on {}: {e}", capital(part.title()), req.level);
-                editor.log.error(format!("! {text}"));
+                editor.log.error(&text);
                 return Err(JobError::new(text));
             }
         };
         for w in &report.warnings {
-            editor.log.warn(format!("! {w}"));
+            editor.log.warn(w);
         }
-        editor.log.info(format!("* {} ended in {:.1} s.", capital(part.title()), report.seconds));
+        editor.log.info(format!("{} ended in {:.1} s.", capital(part.title()), report.seconds));
         total += report.seconds;
         parts.push(json!({
             "part": part.name(),

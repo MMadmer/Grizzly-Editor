@@ -1,31 +1,38 @@
 # Grizzly Editor
 
 The level and mod editor for **Dead Air: Refined** (the S.T.A.L.K.E.R. X-Ray 1.6 family), written in
-Rust. A mod is a project folder of its own; the editor builds it into a module the game loads from
-`modules\<id>`, packages and publishes its releases, and lists it in the game's Mod Browser. Mods
-target Dead Air Refined strictly.
+Rust. A mod is a project folder of its own - plain text files and a scene; the editor builds it into a
+module the game loads from `modules\<id>`, packages and publishes its releases, and lists it in the
+game's Mod Browser. Mods target Dead Air Refined strictly.
 
 ### What it does
 
-* **Mod projects** — a Start page of project cards; every write (scenes, builds, imports, logs)
-  lands in the project, the editor's own library (`rawdata`, `gamedata`) and the linked game stay
-  read-only sources to copy out of.
-* **The level** — the scene of the X-Ray SDK (objects, lights, spawn points, way paths, shapes,
-  sectors and portals, details, the AI map, wallmarks, particles, sounds), an Unreal-style viewport
-  (RMB fly + WASD/QE, MMB pan, Alt orbit, gizmos), the World Outliner, Details and Level Settings.
-  The level's changes ship as additive deltas (`.xspawn`, `overlay.xcform`, visuals); **Play**
-  builds the level and starts the linked game on it.
-* **Content Browser** — the project, the editor's library and the linked game's files in one
-  browser, with thumbnails, search, drag and drop and one set of commands for files and folders.
-* **Quests and behaviour graphs** — node graphs in `.nqasset` / `.behasset` files (declarative Lua)
-  that the game's NQ runtime interprets; the editor validates and ships them. See
-  [docs/nq/NQ_FORMAT.md](docs/nq/NQ_FORMAT.md).
-* **The module's own content** — characters (`.npcasset`), PDA interfaces (`.pdaasset`), loading
+* **Projects that stand alone** - a project is a folder with a `<Name>.grizzly` file: move it, rename
+  it, clone it on another computer and open it by that file. Nothing inside names a place outside it;
+  the linked game is found by the editor.
+* **The level** - one selection over every kind of object, the modes Select, Place, Paint and Zones,
+  a Place panel with one search over everything placeable, the World Outliner, Details and Level
+  Settings, an Unreal-style viewport (RMB fly + WASD/QE, MMB pan, Alt orbit, gizmos). **Build Level**
+  is one job that builds what is stale - game files, the AI map, the game graph, the spawn, geometry
+  and light, with the level compiler inside the editor - and **Play** starts the linked game on the
+  result. A mod's level changes ship as additive layers (`.xspawn`, `overlay.xcform`, visuals).
+* **Content Browser** - the project and the editor's Library in one browser, with thumbnails, search,
+  drag and drop and one set of commands for files and folders.
+* **Quests and behaviour graphs** - node graphs in `.nqasset` / `.behasset` files that the game's NQ
+  runtime interprets: two flow directions, five wire styles, comment frames, reroutes, bookmarks, a
+  searchable node picker, auto layout. See [docs/nq/NQ_FORMAT.md](docs/nq/NQ_FORMAT.md).
+* **The module's own content** - characters (`.npcasset`), PDA interfaces (`.pdaasset`), loading
   and menu screens with their music, the mode's world rules and start kit.
-* **One-click build and release** — `Mod → Build Mod into Game` (`Ctrl+B`) does a clean build into
+* **Assets are text** - every asset is a declarative Lua file a person or an agent edits directly;
+  the editor keeps comments and unknown keys, rewrites only what changed, follows the files as they
+  change on disk, and reads every older version of a format. See [docs/ASSETS.md](docs/ASSETS.md).
+* **One-click build and release** - `Mod → Build Mod into Game` (`Ctrl+B`) does a clean build into
   `<game>\modules\<id>` beside the editor; **Publish Release** packages the module and publishes it
   as a GitHub release the game's Mods menu updates players from. See
   [docs/MOD_QUICKSTART.md](docs/MOD_QUICKSTART.md).
+* **It updates itself** - a released build looks for a newer version, downloads only what differs,
+  continues a download that was cut, and replaces itself with a rollback if anything fails. See
+  [docs/UPDATES.md](docs/UPDATES.md).
 
 ### Building
 
@@ -38,48 +45,45 @@ libraries the editor links):
 pwsh -NoProfile -File .\Build.ps1
 ```
 
-It builds the editor in release - `Grizzly.exe` (the level compilers are part of it), `Grizzly-Cmd.exe` (the
-editor for a command line: a console program that runs `Grizzly.exe`, waits for it and passes its output and
-exit code on) and the MCP bridge `grizzly-mcp.exe` - and puts them with their PDBs and the third-party notices
-(`licenses\`) into
-`Bin\x64\Release`, touching nothing else there, and says how long it took. `-Debug` builds the debug
-configuration, `-Out <folder>` puts the files elsewhere. The repository holds no C or C++ of its own;
-the C++ editor and compilers it replaced are the tags `cpp-editor-last` and `cpp-compilers-last`.
+It builds the editor in release - `Grizzly.exe` (the level compilers are part of it), `Grizzly-Cmd.exe`
+(the editor for a command line) and the MCP bridge `grizzly-mcp.exe` - and puts them with their PDBs
+and the third-party notices (`licenses\`) into `Bin\x64\Release`, touching nothing else there, and says
+how long it took. `-Debug` builds the debug configuration, `-Out <folder>` puts the files elsewhere,
+`-Package` also makes the release archive the updater installs from.
 
 While working on the editor: `bash tools/rust/cg.sh build -p grizzly -p gz-mcp-bridge` (the debug
-build in `Intermediate\cargo\debug`). Five entry points prove a change: `bash tools/rust/check.sh`,
-`bash tools/rust/test.sh`, `python tools/qa/diff_editors.py`, `python tools/qa/diff_compile.py` and
-`python tools/qa/run_all.py`.
-The architecture and the contract with the game are [docs/RUST_MIGRATION.md](docs/RUST_MIGRATION.md);
-the rules of the repository are [CLAUDE.md](CLAUDE.md).
+build in `Intermediate\cargo\debug`). Three entry points prove a change: `bash tools/rust/check.sh`,
+`bash tools/rust/test.sh` and `python tools/qa/run_all.py`. The architecture and the contract with the
+game are [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); the rules of the repository are
+[CLAUDE.md](CLAUDE.md).
 
-### Command line
+### Commands: the window, a shell, an agent
+
+Everything the editor can do is a command with a name, typed parameters and one answer
+([docs/COMMANDS.md](docs/COMMANDS.md)). The window's menus, buttons and keys run commands; a shell
+runs them without a window; an agent runs them over MCP.
 
 ```powershell
-Bin\x64\Release\Grizzly.exe -project "<project>"
+Bin\x64\Release\Grizzly.exe "<project folder or .grizzly file>"     # the editor on a project
+Bin\x64\Release\Grizzly-Cmd.exe help                                # every command, by area
+Bin\x64\Release\Grizzly-Cmd.exe check                               # every problem of the project in this folder
+Bin\x64\Release\Grizzly-Cmd.exe reference quest                     # the format of a kind of asset
+Bin\x64\Release\Grizzly-Cmd.exe build                               # the module into the linked game
+Bin\x64\Release\Grizzly-Cmd.exe run level.build                     # any command; `script <file>` runs several
 ```
 
-`-project <folder>` opens that project at start, skipping the Start page. `-nodlg` never opens a
-dialog (a question gets its logged answer, a crash writes a symbolised stack and a dump and exits
-with code 3) - for unattended runs. `-headless` runs everything but the picture, driven over MCP;
-`-home <folder>` keeps the project list, settings and logs there; `-mcp_port <n>` moves the
-control endpoint; `-minimized` starts the window minimised.
+`Grizzly.exe` is a window program; `Grizzly-Cmd.exe` beside it is the same editor for a shell: it waits,
+passes the output on and ends with 0, 1 (a command failed) or 2. `-nodlg` never opens a dialog (a
+question gets its logged answer, a crash writes a symbolised stack and a dump and exits with code 3).
+`-home <folder>` keeps the project list, settings and logs there; `-mcp_port <n>` moves the control
+endpoint; `-minimized` starts the window minimised.
 
-`Grizzly.exe` is a window program. From a shell, `Grizzly-Cmd.exe` beside it runs the same editor
-with the same options, waits for it and passes its output and exit code on (`Grizzly-Cmd.exe
--headless -compile <level folder> > compile.log`).
+### For an agent
 
-### AI integration (MCP)
-
-The editor hosts a local automation endpoint on `127.0.0.1:28016` from its start (the Start page
-included, and without a window under `-headless`). Every action of the UI has a command, and the
-stdio bridge `grizzly-mcp.exe` serves them as MCP tools - the catalogue
-[`crates/gz-mcp/tools.json`](crates/gz-mcp/tools.json): screenshots that are always current
-(working even when the window is covered or minimized), the scene, the content browser, quests,
-characters, builds and releases, plus `grizzly_list_commands` / `grizzly_exec_command` for the
-editor's whole command table.
-
-Setup instructions for any AI agent - including a ready-to-paste prompt block - are in
+A project is plain text: an agent edits the files with its own tools and checks them with
+`Grizzly-Cmd.exe check` - no connection to the editor is needed, and an open editor follows every
+change. To drive a running editor, connect the stdio bridge `grizzly-mcp.exe`: six tools - state, help,
+run, destroy, release, look - over every command. Setup is one page:
 [`tools/mcp/AI_SETUP.md`](tools/mcp/AI_SETUP.md). Claude Code one-liner:
 
 ```bash
@@ -88,11 +92,11 @@ claude mcp add -s user grizzly-editor -- "<repo>/Bin/x64/Release/grizzly-mcp.exe
 
 ### Credits
 
-* GSC Game World — the original X-Ray engine and editors. This project is not
-  sanctioned by GSC Game World; they remain the copyright holders of the
-  original source code.
-* [RedPanda Projects](https://github.com/RedPandaProjects/XRayEngine) — the
-  x64 port of the SDK the C++ editor was based on.
+* GSC Game World - the original X-Ray engine and its SDK, whose file formats and level compilers this
+  editor implements. This project is not sanctioned by GSC Game World; they remain the copyright
+  holders of the original source code.
+* [RedPanda Projects](https://github.com/RedPandaProjects/XRayEngine) - the x64 port of the X-Ray SDK
+  this editor grew out of.
 
 ## License
 

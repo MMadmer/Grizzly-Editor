@@ -11,22 +11,40 @@ The scene's own files (docs/assets/SCENE.md):
   K  one object moved in the editor and saved: the comment is still there and only that object's line changed
   X  a light and a glow selected together are deleted together, in one undo step, and a locked object is not
 
-Every gesture goes through viewport_gesture, which feeds the viewport's own input - the same code a mouse reaches:
+Every gesture goes through viewport.gesture, which feeds the viewport's own input - the same code a mouse reaches:
 
-  R  Random Append: the Object tool in Place with Randomize Added Objects on - a click adds one object of the random
-     set, its scale and rotation out of the set's ranges
-  A  Attach on Click of the Spawn tool: a click on a shape gives it to the selected spawn point; the switch goes off
+  R  random placement: Place mode with objects armed and the scene's random placement on - a click adds one object of
+     the random set, its scale and rotation out of the set's ranges, and Place mode stays up for the next click
+  A  Attach on Click with spawn points armed: a click on a shape gives it to the selected spawn point; the switch
+     goes off
   L  the left button as in Unreal: a left drag that starts on an object moves the camera and selects nothing, a
      click on it selects it when the button comes up; in Place a left drag places nothing
-  M  a marquee (Ctrl + drag) selects what its box holds
+  M  a marquee (Ctrl + drag) selects what its box holds, a light and an object alike
   G  a move drag on the gizmo's X arrow moves the selection along X alone
+  Q  a drop: Place panel rows' payloads (an object, a spawn section, the AI Map Bounds volume) and a Content Browser
+     entry dropped on the viewport land on the ground under the pointer, each one undo step, selected
+  H  the gizmo's other handles: the XZ plane square moves in its plane, the Y ring turns by 90 degrees (the angle
+     snap's steps), Local space follows the object's own axes, an Alt drag moves a copy
+  B  nothing blocks: a marquee over thousands of objects, a gizmo drag and a flight of the camera hold the UI thread
+     under the stall limit (perf.stalls)
   P  the Group tool's Pivot chooser (ui_dialog id=group_pivot) lists the group's objects; align_pivot is its pick
   V  a motion's playback with Camera View: the camera rides on the object while it plays, and stops with it
   D  detail objects painted on the ground (scene.details): two meshes, a stroke - the viewport's picture differs
      over the ground where they stand -, the eraser, a colour-index picture imported
   W  a wallmark of a texture the game has, laid on the ground (scene.wallmarks): the picture differs where it lies,
      and only there
-  S  a screenshot is current: the scene opened again, ONE screenshot_editor and ONE screenshot_viewport right after it
+The Level tab's left panel and World Outliner (level.view answers what they draw and sets what a person sets there):
+
+  T  the Place panel: its categories, a search that opens what matches (a spawn section found by its in-game name),
+     a row's payload is the viewport's, a click arms Place mode and a second one stops it, Recent keeps it, a category
+     folds; typing in the search costs the UI thread nothing
+  U  the World Outliner: kinds in the order of their names, an eye and a lock per kind and per object, a way path's
+     points By Hierarchy, a selection made elsewhere scrolled into view, 3000 objects selected and the search typed in
+     with no stall
+  N  the modes' panels: Paint > AI Map (its nodes counted, an AI Map Bounds volume placed from it), Foliage, Decals;
+     Zones with its first line; the Colour Indices dialog; pictures of each at 1600 x 900 and 1280 x 720
+
+  S  a screenshot is current: the scene opened again, ONE shot.window and ONE shot.viewport right after it
      show the scene (the viewport is not flat) and say nothing is pending
   (The level compiler and Play's roots are test_level_commands.py's.)
 
@@ -53,12 +71,12 @@ import qa_target
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MCP = qa_target.MCP
-PHASES = "FOKXRALMGPVDWS"
+PHASES = "FOKXRALMGQHBPVDWTUNS"
 SCENE = "rawdata/levels/l01_escape.scene"
 LEVEL = "rawdata/levels/l01_escape.level"
 # open ground of Escape east of the village, no tree over it; every phase works round a point of its own
-SPOTS = {"R": (-119.0, -162.0), "A": (-130.0, -147.0), "L": (-125.0, -156.0), "M": (-100.0, -154.0), "G": (-119.0, -136.0),
-         "P": (-101.0, -136.0), "V": (-130.0, -166.0), "D": (-110.0, -190.0), "W": (-110.0, -190.0)}
+SPOTS = {"Q": (-112.0, -150.0), "H": (-127.0, -140.0), "R": (-119.0, -162.0), "A": (-130.0, -147.0), "L": (-125.0, -156.0), "M": (-100.0, -154.0), "G": (-119.0, -136.0),
+         "P": (-101.0, -136.0), "U": (-104.0, -170.0), "V": (-130.0, -166.0), "D": (-110.0, -190.0), "W": (-110.0, -190.0)}
 BOX = "dynamics\\equipment_cache\\equipment_box_01"
 CABINET = "statics\\shkaf\\cabinet_village_140x210_ph"
 TERRAIN = "scenes\\escape\\escape_terrain"
@@ -106,7 +124,7 @@ def short(d) -> str:
 def picture(name: str):
     """The viewport's picture now (RGB), kept under --shots."""
     from PIL import Image
-    pic = mcp("screenshot_viewport")
+    pic = mcp("shot.viewport")
     data = base64.b64decode(pic.get("png_base64") or b"")
     if SHOTS and data:
         os.makedirs(SHOTS, exist_ok=True)
@@ -175,7 +193,7 @@ def look_down(phase: str, height: float = 12.0) -> tuple[float, float, float]:
     y = CTX.ground.get(phase)
     if y is None:
         y = CTX.ground[phase] = ground_y(x, z)
-    mcp("camera_set", x=x, y=y + height, z=z, h=0.0, p=-math.pi / 2 + 1e-4, b=0.0)
+    mcp("viewport.camera", action="set", position=[x, y + height, z], rotation=[0.0, -89.99, 0.0])
     return x, y, z
 
 
@@ -185,7 +203,7 @@ def arm(kind: str) -> None:
 
 
 def gesture(**kw) -> dict:
-    r = mcp("viewport_gesture", **kw)
+    r = mcp("viewport.gesture", **kw)
     if r.get("ok") and r.get("viewport"):
         CTX.size = tuple(r["viewport"])
     return r
@@ -374,8 +392,8 @@ def phase_r() -> None:
     r = (rnd.get("set") or {}).get("random_placement") or {}
     check(rnd.get("ok") and r.get("on") and r.get("objects") == [BOX, CABINET] and r.get("rotation") == [[0, 0, 0], [0, 180, 0]],
           "R random_placement of the scene sets Randomize Added Objects and its ranges", short(rnd))
-    # the object stands upright: the terrain's normal would tilt it (Normal Align)
-    mcp("viewport_controls", tool="place", object_snap=True, grid_snap=False, normal_align=False)
+    # the object stands upright: the terrain's normal would tilt it (Align to Surface)
+    mcp("viewport.view", surface_snap=True, grid_snap=False, surface_align=False)
     before = picture("r_before")
     g = gesture(kind="click", at=CTX.centre())
     placed = g.get("placed") or []
@@ -384,18 +402,18 @@ def phase_r() -> None:
     check(o.get("reference") in (BOX, CABINET), "R its reference comes out of the random set", short(o))
     s, rot = o.get("scale") or [0, 0, 0], o.get("rotation") or [9, 9, 9]
     check(0.5 <= s[0] <= 2.0 and s[0] == s[1] == s[2], "R its scale is one factor out of 0.5..2", str(s))
-    check(abs(rot[0]) < 1e-3 and abs(rot[2]) < 1e-3 and 0.0 <= rot[1] <= math.pi + 1e-3,
+    check(abs(rot[0]) < 1e-2 and abs(rot[2]) < 1e-2 and -1e-2 <= rot[1] <= 180.01,
           "R its rotation turns about Y alone, within 0..180 degrees", str(rot))
     x, _, z = o.get("position") or [0, 0, 0]
     check(abs(x - SPOTS["R"][0]) < 0.5 and abs(z - SPOTS["R"][1]) < 0.5, "R it stands where the click was",
           "%s vs %s" % (o.get("position"), SPOTS["R"]))
-    check(g.get("tool") == "select", "R the tool goes back to Select after the click", str(g.get("tool")))
+    check(g.get("mode") == "place", "R Place mode stays up for the next click", str(g.get("mode")))
     w, h = before.size
     middle = (w // 2 - h // 16, h // 2 - h // 16, w // 2 + h // 16, h // 2 + h // 16)
     _, near = until_changed("r_after", before, middle, share=0.1)
     check(near > 0.1, "R the picture shows it where it was clicked (%.1f %% of the middle changed)" % (near * 100))
     random_placement()
-    mcp("viewport_controls", normal_align=True)
+    mcp("scene.mode", mode="select")
 
 
 # ---- A: Attach on Click ---------------------------------------------------------------------------------------------
@@ -413,7 +431,6 @@ def phase_a() -> None:
     arm("spawn")
     on = mcp("scene.attach", on_click=True)
     check(on.get("on_click") is True, "A scene.attach on_click=true turns Attach on Click on", short(on))
-    mcp("viewport_controls", tool="place")
     g = gesture(kind="click", at=CTX.centre())
     att = [c for c in (g.get("moved") or []) + (g.get("changed") or []) if c.get("name") == spawn_name]
     check(g.get("ok") and att and att[0].get("attached") == shape_name, "A a click on the shape gives it to the spawn point",
@@ -425,8 +442,8 @@ def phase_a() -> None:
     back = g.get("placed") or []
     check(len(back) == 1 and back[0].get("class") == "shape" and back[0].get("name"),
           "A the point's own sphere goes back into the scene under a name of its own (DetachObject)", short(back))
-    check(g.get("tool") == "select" and not mcp("scene.attach", on_click=False).get("on_click"),
-          "A the tool goes back to Select and Attach on Click goes off", str(g.get("tool")))
+    check(not mcp("scene.attach", on_click=False).get("on_click"), "A and Attach on Click goes off", str(g.get("mode")))
+    mcp("scene.mode", mode="select")
 
 
 # ---- M: a marquee ---------------------------------------------------------------------------------------------------
@@ -436,7 +453,8 @@ def phase_l() -> None:
     arm("object")
     box = place(BOX, x, y, z, ground=True)
     deselect()
-    mcp("viewport_controls", tool="select")
+    mcp("scene.mode", mode="select")
+    mcp("viewport.view", tool="select")
     cx, cy = CTX.centre()
     g = gesture(kind="drag", at=[cx, cy], to=[cx + CTX.size[1] * 0.2, cy])
     check(g.get("ok") and g.get("camera_moved") and not g.get("picked"),
@@ -448,27 +466,31 @@ def phase_l() -> None:
     # Place: the object goes down on the click, and a drag places nothing
     deselect()
     random_placement(on=True, objects=[BOX])
-    mcp("viewport_controls", tool="place", object_snap=True, grid_snap=False)
+    arm("object")
+    mcp("viewport.view", surface_snap=True, grid_snap=False)
     look_down("L")
     g = gesture(kind="drag", at=[cx - CTX.size[1] * 0.1, cy], to=[cx + CTX.size[1] * 0.1, cy])
     check(g.get("ok") and g.get("camera_moved") and not g.get("placed"),
           "L in Place a left drag moves the camera and places nothing", short(g))
     random_placement()
-    mcp("viewport_controls", tool="select")
+    mcp("scene.mode", mode="select")
 
 
 def phase_m() -> None:
     x, y, z = look_down("M")
     names = [place(BOX, x + dx, y, z, ground=True) for dx in (-1.5, 1.5)]
     far = place(BOX, x + 9.0, y, z, ground=True)
+    lamp = (mcp("scene.place", kind="light", position=[x, y + 1.0, z + 1.0]).get("object") or {}).get("name")
+    names.append(lamp)
     deselect()
-    mcp("viewport_controls", tool="select")
+    mcp("viewport.view", tool="select")
     cx, cy = CTX.centre()
     # 12 m up with a 60 degree field: a metre is about 0.07 of the height; the box takes 4 m round the spot
     half = CTX.size[1] * 0.18
     g = gesture(kind="drag", at=[cx - half, cy - half], to=[cx + half, cy + half], mods="ctrl")
     picked = set(g.get("picked") or [])
-    check(g.get("ok") and set(names) <= picked, "M Ctrl + drag selects the objects its box holds", short(g))
+    check(g.get("ok") and set(names) <= picked, "M Ctrl + drag selects what its box holds, the light with the boxes",
+          short(g))
     check(far not in picked, "M and not the one outside it", short(g.get("picked")))
     check(not g.get("camera_moved") and not g.get("moved"), "M the camera and the objects stay where they are", short(g))
 
@@ -479,7 +501,7 @@ def phase_g() -> None:
     x, y, z = look_down("G")
     name = place(BOX, x, y, z, ground=True)
     mcp("scene.select", objects=[name])
-    mcp("viewport_controls", tool="move", grid_snap=False)
+    mcp("viewport.view", tool="move", grid_snap=False, space="world")
     h = gesture(kind="hover", at=CTX.centre())
     gz = h.get("gizmo") or {}
     check(gz.get("tool") == "move" and gz.get("x") and gz.get("pivot"), "G a hover answers where the gizmo's arrows are",
@@ -501,7 +523,145 @@ def phase_g() -> None:
     undo = mcp("doc.undo", doc="level")
     back = position(name)
     check(undo.get("ok") and abs(back[0] - a[0]) < 1e-3, "G the drag is one undo step", short(undo) + " " + short(back))
-    mcp("viewport_controls", tool="select")
+    mcp("viewport.view", tool="select")
+
+
+# ---- Q: a drop --------------------------------------------------------------------------------------------------------
+
+def phase_q() -> None:
+    x, y, z = look_down("Q")
+    deselect()
+    mcp("viewport.view", surface_snap=True, grid_snap=False, surface_align=False)
+    g = gesture(kind="drop", at=CTX.centre(), payload=["object:" + BOX])
+    placed = g.get("placed") or []
+    o = placed[0] if placed else {}
+    px, py, pz = o.get("position") or [0, 0, 0]
+    check(g.get("ok") and len(placed) == 1 and o.get("reference") == BOX,
+          "Q a Place panel row dropped on the viewport places its object", short(g))
+    # the box stands with its pivot where the ray met the ground; a drop of it from 200 m up lands it by its bottom
+    check(abs(px - x) < 0.5 and abs(pz - z) < 0.5 and abs(py - y) < 4.0,
+          "Q on the ground under the pointer", "%s vs %s" % (o.get("position"), [x, y, z]))
+    check(g.get("selection") == [o.get("name")], "Q and the placed object is the selection", short(g.get("selection")))
+    undo = mcp("doc.undo", doc="level")
+    gone = not any(x.get("name") == o.get("name") for x in mcp("scene.objects", query=o.get("name") or "-").get("objects") or [])
+    check(undo.get("ok") and gone, "Q the drop is one undo step", short(undo))
+    # what the Content Browser drags: its entries by path and kind; a spawn section lands too
+    g = gesture(kind="drop", at=CTX.centre(), assets=[{"path": "rawdata/objects/" + BOX.replace("\\", "/") + ".object",
+                                                    "kind": "object"}])
+    placed = g.get("placed") or []
+    check(g.get("ok") and len(placed) == 1 and (placed[0] or {}).get("reference") == BOX,
+          "Q a Content Browser entry dropped on the viewport places it", short(g))
+    g = gesture(kind="drop", at=CTX.centre(), payload=["spawn:space_restrictor"])
+    placed = g.get("placed") or []
+    check(g.get("ok") and placed and placed[0].get("class") == "spawn", "Q a spawn section drops as a spawn point",
+          short(g))
+    # the Place panel's AI Map Bounds row: a box of that use, dropped like any other row
+    g = gesture(kind="drop", at=CTX.centre(), payload=["shape:ai_map_bounds"])
+    placed = g.get("placed") or []
+    name = placed[0].get("name") if placed else None
+    props = json.dumps(mcp("scene.get", objects=[name], keys=["usage"]) if name else {}).lower()
+    check(g.get("ok") and placed and placed[0].get("class") == "shape" and ("ai_map_bounds" in props or "ai map bounds" in props),
+          "Q the AI Map Bounds row drops as a box of that use", short(g) + " " + props[:200])
+    if name:
+        mcp("scene.delete", objects=[name])
+    bad = mcp("viewport.gesture", kind="drop", at=CTX.centre(), payload=["tree:oak"])
+    check(not bad.get("ok") and "kind" in str(bad.get("error")), "Q a payload of no placeable kind is refused", short(bad))
+
+
+# ---- H: the gizmo's planes, rings, space and Alt ----------------------------------------------------------------------
+
+def handle_drag(name: str, handle: str, dx: float, dy: float, mods=None) -> dict:
+    h = gesture(kind="hover", at=CTX.centre())
+    at = (h.get("gizmo") or {}).get(handle)
+    if not at:
+        return {"ok": False, "error": "no handle " + handle, "gizmo": h.get("gizmo")}
+    extra = {"mods": mods} if mods else {}
+    return gesture(kind="drag", at=at, to=[round(at[0] + dx, 1), round(at[1] + dy, 1)], steps=24, **extra)
+
+
+def phase_h() -> None:
+    x, y, z = look_down("H")
+    # a look from the side and above: the XZ square and the Y ring face the camera enough to be held
+    mcp("viewport.camera", action="set", position=[x - 6.0, y + 6.0, z - 6.0], rotation=[-45.0, -35.0, 0.0])
+    name = place(BOX, x, y, z, ground=True)
+    mcp("scene.select", objects=[name])
+    mcp("viewport.view", tool="move", grid_snap=False, space="world")
+    g = handle_drag(name, "xz", 60.0, 30.0)
+    moved = [m for m in g.get("moved") or [] if m.get("name") == name]
+    a, b = ((moved[0].get("from") or {}).get("position"), (moved[0].get("to") or {}).get("position")) if moved else ([0] * 3, [0] * 3)
+    check(g.get("ok") and moved and math.hypot(b[0] - a[0], b[2] - a[2]) > 0.3,
+          "H a drag of the XZ square moves the object", short(g))
+    check(moved and abs(b[1] - a[1]) < 1e-3, "H in its plane alone: its height stays", "%s -> %s" % (a, b))
+    mcp("doc.undo", doc="level")
+    # the Y ring, a quarter turn with the angle snap's steps of 15 degrees
+    mcp("viewport.view", tool="rotate", angle_snap=True, angle_step=15)
+    h = gesture(kind="hover", at=CTX.centre())
+    gz = h.get("gizmo") or {}
+    if not check(gz.get("y") and gz.get("pivot"), "H the rotate gizmo has its Y ring and its centre", short(gz)):
+        return
+    (px, py), (rx, ry) = gz["pivot"], gz["y"]
+    # round the pivot from the ring's lowest point a quarter of the way: the pointer sweeps 90 degrees on the screen
+    r = math.hypot(rx - px, ry - py)
+    steps = 24
+    best = None
+    for sign in (1, -1):
+        to = [round(px + sign * r, 1), round(py, 1)]
+        g = gesture(kind="drag", at=[rx, ry], to=to, steps=steps)
+        moved = [m for m in g.get("moved") or [] if m.get("name") == name]
+        if moved:
+            rot = (moved[0].get("to") or {}).get("rotation") or [0, 0, 0]
+            best = rot
+            mcp("doc.undo", doc="level")
+            if abs(abs(rot[1]) - 90.0) < 0.5:
+                break
+    check(best and abs(abs(best[1]) - 90.0) < 0.5 and abs(best[0]) < 0.5 and abs(best[2]) < 0.5,
+          "H the Y ring turns the object a quarter turn about Y, on a step of 15 degrees", short(best))
+    # Local space follows the object's own axes: turned 45 degrees, its X arrow is not the world's
+    mcp("scene.set", objects=[name], rotation=[0.0, 45.0, 0.0])
+    mcp("viewport.view", tool="move", space="local")
+    g = handle_drag(name, "x", 60.0, 0.0)
+    moved = [m for m in g.get("moved") or [] if m.get("name") == name]
+    a, b = ((moved[0].get("from") or {}).get("position"), (moved[0].get("to") or {}).get("position")) if moved else ([0] * 3, [0] * 3)
+    d = [b[0] - a[0], b[2] - a[2]]
+    check(moved and abs(abs(d[0]) - abs(d[1])) < 0.2 * max(abs(d[0]), 1e-3) and abs(d[0]) > 0.1,
+          "H in Local space the X arrow moves along the object's own X, 45 degrees off the world's", str(d))
+    mcp("doc.undo", doc="level")
+    mcp("viewport.view", space="world")
+    # Alt: the drag moves a copy and leaves the object where it stood
+    g = handle_drag(name, "x", 60.0, 0.0, mods=["alt"])
+    placed = g.get("placed") or []
+    check(g.get("ok") and len(placed) == 1 and placed[0].get("name") != name,
+          "H an Alt drag of a handle makes a copy", short(g))
+    still = position(name)
+    check(placed and abs(still[0] - x) < 0.5 and abs(placed[0]["position"][0] - still[0]) > 0.1,
+          "H the copy moves, the object stays", "%s / %s" % (still, placed[0].get("position") if placed else None))
+    mcp("viewport.view", tool="select")
+
+
+# ---- B: nothing blocks ------------------------------------------------------------------------------------------------
+
+def phase_b() -> None:
+    mcp("perf.stalls", clear=True)
+    # high over the level: the box takes most of it
+    mcp("viewport.camera", action="set", position=[-30.0, 700.0, -80.0], rotation=[0.0, -89.9, 0.0])
+    mcp("viewport.view", tool="select")
+    deselect()
+    w, h = CTX.size
+    g = gesture(kind="drag", at=[10, 50], to=[w - 10, h - 10], mods="ctrl", steps=12)
+    check(g.get("ok") and g.get("selected", 0) >= 3000, "B a marquee over the level selects %d objects" % g.get("selected", 0),
+          short({k: g.get(k) for k in ("ok", "selected", "error")}))
+    stalls_since("B", "a marquee over thousands of objects")
+    deselect()
+    # a gizmo drag of one object and a flight of the camera
+    x, y, z = look_down("G")
+    name = place(BOX, x, y, z, ground=True)
+    mcp("scene.select", objects=[name])
+    mcp("viewport.view", tool="move")
+    handle_drag(name, "x", 80.0, 0.0)
+    gesture(kind="drag", at=CTX.centre(), to=[CTX.centre()[0] + 200, CTX.centre()[1] + 40], button="right", steps=60)
+    gesture(kind="drag", at=CTX.centre(), to=[CTX.centre()[0] - 200, CTX.centre()[1]], button="right", steps=60)
+    mcp("viewport.view", tool="select")
+    stalls_since("B", "a gizmo drag and a flight of the camera")
 
 
 # ---- P: the Group tool's pivot --------------------------------------------------------------------------------------
@@ -527,7 +687,7 @@ def phase_p() -> None:
     controls = {str(c.get("label")): c for c in audit.get("controls") or []}
     check(audit.get("ok") and not audit.get("escaped") and (controls.get("Select") or {}).get("enabled") is False
           and "Cancel" in controls, "P its Select waits for a pick, and nothing leaves it", short(sorted(controls)))
-    refused = mcp("viewport_gesture", kind="click", at=CTX.centre())
+    refused = mcp("viewport.gesture", kind="click", at=CTX.centre())
     check(not refused.get("ok") and "a dialog is up" in str(refused.get("error")), "P a gesture is refused while it is up",
           short(refused))
     mcp("ui.dialog", action="close", id="dlg.choose")
@@ -539,6 +699,205 @@ def phase_p() -> None:
     no_group = mcp("scene.select", none=True) and mcp("ui.dialog", action="open", id="group_pivot")
     check(not no_group.get("ok") and "Select a group" in str(no_group.get("error")),
           "P without a selected group it says so", short(no_group))
+
+
+# ---- T, U, N: the left panel and the World Outliner ------------------------------------------------------------------
+
+def view(**kw) -> dict:
+    return mcp("level.view", timeout=120, **kw)
+
+
+def panel_shot(name: str) -> None:
+    if SHOTS:
+        pic = mcp("shot.window", timeout=60)
+        if pic.get("png_base64"):
+            os.makedirs(SHOTS, exist_ok=True)
+            with open(os.path.join(SHOTS, name + ".png"), "wb") as f:
+                f.write(base64.b64decode(pic["png_base64"]))
+
+
+def items(v: dict) -> list[dict]:
+    return [r for r in (v.get("place") or {}).get("rows") or [] if "item" in r]
+
+
+def stalls_since(phase: str, what: str) -> None:
+    st = mcp("perf.stalls", clear=True)
+    check(st.get("ok") and not st.get("stalls"), "%s %s holds the UI thread under %s ms" % (phase, what, st.get("limit_ms")),
+          short(st.get("stalls")))
+
+
+def phase_t() -> None:
+    mcp("scene.mode", mode="select")
+    mcp("perf.stalls", clear=True)
+    v = view(place_search="", limit=200)
+    cats = [c.get("id") for c in (v.get("place") or {}).get("categories") or []]
+    check(v.get("ok") and v.get("panel") == "Place" and v.get("mode") == "select",
+          "T in Select mode the left panel is Place", short(v.get("panel")))
+    want = ["objects", "lights", "spawn_points", "shapes", "sounds", "particles", "way_paths", "groups"]
+    check([c for c in cats if c != "recent"] == want, "T the categories in their order", json.dumps(cats))
+    # one search over everything, folders opened where it matches
+    v = view(place_search="cabinet", limit=400)
+    rows = items(v)
+    check(rows and all("cabinet" in (r["item"] + " " + r["what"]).lower() for r in rows),
+          "T a search lists only what matches (%d)" % len(rows), short(rows[:3]))
+    check(any(r.get("folder") for r in (v.get("place") or {}).get("rows") or []),
+          "T and opens the folders that hold it", short((v.get("place") or {}).get("rows")[:4]))
+    # a spawn section by the name the player reads
+    v = view(place_search="medkit", limit=400)
+    spawns = [r for r in items(v) if r.get("category") == "spawn_points"]
+    check(any(r["item"] != r["what"] for r in spawns), "T a spawn point reads its in-game name, the section beside it",
+          short(spawns[:3]))
+    panel_shot("t_place_search")
+    # what a row drags is the viewport's own payload: <kind>:<reference>
+    v = view(place_search="Glow")
+    glow = [r for r in items(v) if r["item"] == "Glow"]
+    check(glow and glow[0].get("payload") == "glow", "T the Glow row drags 'glow'", short(glow))
+    cab = [r for r in items(view(place_search=CABINET.split("\\")[-1])) if r.get("what") == CABINET]
+    check(cab and cab[0].get("payload") == "object:" + CABINET, "T an object's row drags object:<reference>", short(cab))
+    # a click arms it: Place mode with its kind; a second click stops placing
+    v = view(place="object", ref=CABINET)
+    mode = mcp("scene.mode")
+    check(v.get("mode") == "place" and (v.get("place") or {}).get("armed") == "object:" + CABINET
+          and mode.get("kind") == "object", "T arming a row puts Place mode up with it", short(v.get("place", {}).get("armed")) + " " + short(mode))
+    panel_shot("t_place_armed")
+    v = view(place="none", place_search="")
+    check(v.get("mode") == "select" and not (v.get("place") or {}).get("armed"), "T place=none stops placing",
+          short(v.get("mode")))
+    rec = [r for r in (v.get("place") or {}).get("rows") or [] if r.get("category") == "recent" and "item" in r]
+    check(rec and rec[0].get("payload") == "object:" + CABINET, "T Recent keeps what was placed last", short(rec[:2]))
+    # a category folds and opens again
+    v = view(category="lights", open=False)
+    lights = [c for c in (v.get("place") or {}).get("categories") or [] if c.get("id") == "lights"]
+    check(lights and lights[0].get("open") is False, "T Lights folds", short(lights))
+    view(category="lights", open=True)
+    bad = view(place="boat")
+    check(not bad.get("ok") and "boat" in str(bad.get("error")), "T an unknown kind is refused, naming the kinds", short(bad))
+    # typing: every keystroke a new search, worked out off the UI thread
+    mcp("perf.stalls", clear=True)
+    for i in range(1, 9):
+        view(place_search="dynamics\\equipment"[: i * 2])
+    view(place_search="")
+    stalls_since("T", "typing in the Place panel's search")
+
+
+def outliner_rows(v: dict) -> list[dict]:
+    return (v.get("outliner") or {}).get("rows") or []
+
+
+def phase_u() -> None:
+    mcp("scene.mode", mode="select")
+    mcp("scene.select", none=True)
+    v = view(outliner_search="", layout="type", kinds=[], limit=10)
+    names = [k.get("name") for k in (v.get("outliner") or {}).get("kinds") or []]
+    check(names and names == sorted(names), "U the kinds come in the order of their names", json.dumps(names))
+    # an eye and a lock per kind
+    mcp("scene.set", classes=["light"], hidden=True, locked=True)
+    v = view(kinds=["light"], limit=5)
+    head = [r for r in outliner_rows(v) if r.get("kind") == "light"]
+    check(head and head[0].get("visible") is False and head[0].get("locked") is True,
+          "U the Lights row shows its kind hidden and locked", short(head))
+    mcp("scene.set", classes=["light"], hidden=False, locked=False)
+    # and per object
+    x, y, z = look_down("U")
+    name = place(BOX, x, y, z, ground=True)
+    mcp("scene.set", objects=[name], locked=True)
+    v = view(kinds=[], outliner_search=name, limit=5)
+    row = [r for r in outliner_rows(v) if r.get("object") == name]
+    check(row and row[0].get("locked") is True and row[0].get("visible") is True, "U an object's row shows its own lock",
+          short(row))
+    mcp("scene.set", objects=[name], locked=False)
+    # By Hierarchy: a way path lists its points once it is open
+    way = mcp("scene.place", kind="way", points=[[x, y, z], [x + 2, y, z], [x + 4, y, z]])
+    wname = (way.get("object") or {}).get("name") or ""
+    v = view(layout="hierarchy", outliner_search=wname, unfold=[wname], limit=10)
+    pts = [r for r in outliner_rows(v) if "point" in r]
+    check(len(pts) == 3 and all(p["point"].startswith(wname + "/") for p in pts),
+          "U By Hierarchy a way path lists its points", short(outliner_rows(v)))
+    panel_shot("u_outliner_hierarchy")
+    view(layout="type", outliner_search="")
+    panel_shot("u_outliner_type")
+    # a selection made elsewhere scrolls its row into view, once the listing is of the scene as it is
+    objs = mcp("scene.objects", classes=["object"], limit=1, offset=3000)
+    far = ((objs.get("objects") or [{}])[0]).get("name")
+    mcp("scene.select", objects=[far])
+    v = view(limit=1)
+    o = v.get("outliner") or {}
+    for _ in range(10):
+        if not o.get("scroll_pending"):
+            break
+        mcp("shot.window")
+        o = view(limit=1).get("outliner") or {}
+    check(far and not o.get("scroll_pending") and o.get("scroll_y", 0) > 1000,
+          "U a selection made elsewhere scrolls its row into view (%.0f pt)" % o.get("scroll_y", 0), short(o))
+    # 3000 objects selected and the search typed in, the Outliner open: nothing holds the UI thread
+    mcp("perf.stalls", clear=True)
+    mcp("scene.select", all=True, timeout=120)
+    mcp("shot.window", timeout=60)
+    for t in ("c", "ca", "cab", "cabi", "cabinet"):
+        view(outliner_search=t, limit=1)
+    view(outliner_search="", limit=1)
+    mcp("scene.select", none=True)
+    stalls_since("U", "selecting every object and typing in the Outliner's search")
+
+
+def phase_n() -> None:
+    mcp("scene.select", none=True)
+    for mode, label in (("ai_map", "AI Map"), ("details", "Foliage"), ("wallmarks", "Decals")):
+        mcp("scene.mode", mode=mode)
+        v = view(limit=1)
+        check(v.get("panel") == "Paint" and (v.get("paint") or {}).get("layer") == label,
+              "N Paint > %s: the left panel is its" % label, short(v.get("paint")))
+        panel_shot("n_paint_" + mode)
+    mcp("scene.mode", mode="ai_map")
+    ai = (view(limit=1).get("paint") or {}).get("ai_map") or {}
+    check(ai.get("nodes", 0) > 1000, "N the AI map's nodes are counted (%s)" % ai.get("nodes"), short(ai))
+    # the Place panel arms the bounds volume like every other row; the AI Map panel's Place Bounds Volume puts
+    # one down at once, in front of the camera
+    v = view(place="shape", usage="ai_map_bounds")
+    check((v.get("place") or {}).get("armed") == "shape:ai_map_bounds", "N the Place panel arms the bounds volume",
+          short(v.get("place", {}).get("armed")))
+    view(place="none")
+    mcp("scene.mode", mode="ai_map")
+    before = {o["name"] for o in mcp("scene.objects", classes=["shape"], limit=1000).get("objects") or []}
+    mcp("scene.place", kind="shape", box=True, usage="ai_map_bounds", on_surface=True)
+    vol = None
+    for _ in range(20):
+        now = {o["name"] for o in mcp("scene.objects", classes=["shape"], limit=1000).get("objects") or []}
+        vol = next(iter(now - before), None)
+        if vol:
+            break
+        time.sleep(0.1)
+    ai = (view(limit=1).get("paint") or {}).get("ai_map") or {}
+    check(vol and ai.get("bounds") == vol, "N Place Bounds Volume puts an AI Map Bounds volume down that the map lies in",
+          short(ai))
+    if vol:
+        mcp("scene.delete", objects=[vol])
+    mcp("scene.mode", mode="zones")
+    v = view(limit=1)
+    check(v.get("panel") == "Zones" and str((v.get("zones") or {}).get("first_line", "")).startswith("The build makes"),
+          "N Zones says first what the build does by itself", short(v.get("zones")))
+    panel_shot("n_zones")
+    mcp("scene.mode", mode="details")
+    v = view(colour_indices=True)
+    modal = mcp("shot.window").get("modal") or {}
+    check(v.get("colour_indices") is True and modal.get("id") == "dlg.colour_indices",
+          "N the Colour Indices dialog comes up over level.view", short(modal))
+    panel_shot("n_colour_indices")
+    mcp("ui.dialog", action="close", id="dlg.colour_indices")
+    view(colour_indices=False)
+    # each mode's panel at 1600 x 900 and 1280 x 720
+    for w, h in ((1600, 900), (1280, 720)):
+        mcp("app.window", action="resize", width=w, height=h)
+        for mode in ("select", "ai_map", "details", "wallmarks", "zones"):
+            mcp("scene.mode", mode=mode)
+            v = view(limit=1)
+            panel_shot("n_%dx%d_%s" % (w, h, mode))
+            audit = mcp("ui.audit", id="place")
+            check(audit.get("ok") and not audit.get("escaped"), "N %d x %d, %s: nothing escapes the left panel" % (w, h, mode),
+                  short(audit.get("escaped")))
+    mcp("app.window", action="resize", width=1600, height=900)
+    mcp("scene.mode", mode="select")
+    stalls_since("N", "the modes' panels")
 
 
 # ---- V: playback with Camera View -----------------------------------------------------------------------------------
@@ -558,7 +917,7 @@ def phase_v() -> None:
     st = mcp("scene.motion", object=name)
     check(all(s.get("ok") for s in steps) and (st.get("motion") or {}).get("keys", 0) >= 2,
           "V a motion of two keys, two seconds long", short([s for s in steps if not s.get("ok")] or st))
-    cam0 = (mcp("camera_get").get("camera") or {}).get("position")
+    cam0 = (mcp("viewport.camera").get("camera") or {}).get("position")
     still = picture("v_still")
     on = mcp("scene.motion", object=name, action="camera_view", on=True)
     play = mcp("scene.motion", object=name, action="play")
@@ -566,15 +925,15 @@ def phase_v() -> None:
           "V Camera View on, the motion plays", short(play))
     time.sleep(0.6)
     _, view = until_changed("v_playing", still, share=0.2)
-    cam1 = (mcp("camera_get").get("camera") or {}).get("position") or [0, 0, 0]
+    cam1 = (mcp("viewport.camera").get("camera") or {}).get("position") or [0, 0, 0]
     obj = position(name)
     check(cam1 != cam0 and x < cam1[0] < x + 10.0, "V the camera rides on the playing object", "%s -> %s" % (cam0, cam1))
     check(abs(obj[0] - x) < 1e-3, "V and the scene keeps the object where it stands until the pause", str(obj))
     check(view > 0.2, "V the viewport shows the view from the object (%.0f %% changed)" % (view * 100))
     paused = mcp("scene.motion", object=name, action="pause")
-    cam2 = (mcp("camera_get").get("camera") or {}).get("position")
+    cam2 = (mcp("viewport.camera").get("camera") or {}).get("position")
     time.sleep(0.3)
-    cam3 = (mcp("camera_get").get("camera") or {}).get("position")
+    cam3 = (mcp("viewport.camera").get("camera") or {}).get("position")
     m = paused.get("motion") or {}
     check(paused.get("ok") and not m.get("playing") and 0.0 < m.get("current", 0) <= 2.0,
           "V pause stops it at the time it reached", short(paused))
@@ -661,7 +1020,7 @@ def flat(img, box=None) -> float:
 
 
 # where a fresh load of Escape puts the camera; the scene fills most of the view from there
-ESCAPE_VIEW = {"x": 0.0, "y": 3.0, "z": -10.0, "h": 0.0, "p": 0.0, "b": 0.0}
+ESCAPE_VIEW = {"position": [0.0, 3.0, -10.0], "rotation": [0.0, 0.0, 0.0]}
 
 
 def phase_s() -> None:
@@ -671,7 +1030,7 @@ def phase_s() -> None:
     check(opened.get("ok"), "S the scene opens again", short(opened))
     mcp("ui.tab", action="open", doc="level")
     # the view a fresh load of Escape has (the phases before moved it): the picture must be of it
-    mcp("camera_set", **ESCAPE_VIEW)
+    mcp("viewport.camera", action="set", **ESCAPE_VIEW)
     # one call each, nothing waited for in between: the answer holds until the picture is current
     shot = mcp("shot.window", timeout=60)
     view = [p for p in mcp("ui.list").get("panels", []) if p.get("id") == "viewport"]
@@ -686,15 +1045,15 @@ def phase_s() -> None:
             os.makedirs(SHOTS, exist_ok=True)
             img.save(os.path.join(SHOTS, "current_editor.png"))
     check(shot.get("ok") and not shot.get("pending") and spread > 8.0,
-          "S the first screenshot_editor after the load shows the scene in the viewport (spread %.1f)" % spread,
+          "S the first shot.window after the load shows the scene in the viewport (spread %.1f)" % spread,
           short({k: v for k, v in shot.items() if k != "png_base64"}))
     opened = mcp("scene.open", path=SCENE, discard=True, timeout=300)
-    mcp("camera_set", **ESCAPE_VIEW)
-    pic = mcp("screenshot_viewport", timeout=60)
+    mcp("viewport.camera", action="set", **ESCAPE_VIEW)
+    pic = mcp("shot.viewport", timeout=60)
     data = base64.b64decode(pic.get("png_base64") or b"")
     spread = flat(Image.open(io.BytesIO(data)).convert("RGB")) if data else 0.0
     check(pic.get("ok") and not pic.get("pending") and spread > 8.0,
-          "S the first screenshot_viewport after the load shows the scene (spread %.1f)" % spread,
+          "S the first shot.viewport after the load shows the scene (spread %.1f)" % spread,
           short({k: v for k, v in pic.items() if k != "png_base64"}))
 
 
@@ -702,8 +1061,8 @@ def job_of(job_id: int) -> dict:
     return next((j for j in mcp("job.list").get("jobs", []) if j.get("id") == job_id), {})
 
 
-STEPS = {"F": phase_f, "O": phase_o, "K": phase_k, "X": phase_x, "R": phase_r, "A": phase_a, "L": phase_l, "M": phase_m, "G": phase_g, "P": phase_p, "V": phase_v, "D": phase_d,
-         "W": phase_w, "S": phase_s}
+STEPS = {"F": phase_f, "O": phase_o, "K": phase_k, "X": phase_x, "R": phase_r, "A": phase_a, "L": phase_l, "M": phase_m, "G": phase_g, "Q": phase_q, "H": phase_h, "B": phase_b, "P": phase_p, "V": phase_v, "D": phase_d,
+         "W": phase_w, "T": phase_t, "U": phase_u, "N": phase_n, "S": phase_s}
 
 
 def main() -> int:
@@ -760,12 +1119,13 @@ def main() -> int:
         mcp("ui.tab", action="open", doc="level")
         if not check(opened.get("ok"), "the Escape scene is open", short(opened)):
             return 1
-        refused = mcp("viewport_gesture", kind="click", at=[-5, 10])
+        stalls_since("the open", "opening Escape (6000 objects)")
+        refused = mcp("viewport.gesture", kind="click", at=[-5, 10])
         check(not refused.get("ok") and "outside the viewport" in str(refused.get("error")),
               "a point outside the viewport is refused", short(refused))
         gesture(kind="hover", at=[10, 10])
         # the scene's AI map covers the ground: the pictures are of what the phases make
-        mcp("exec_command", name="COMMAND_TOGGLE_AIMAP_VISIBILITY")
+        mcp("viewport.view", hide=["ai_map"])
         qa_target.mark("scene")
         for p in only:
             t = time.monotonic()
@@ -777,7 +1137,7 @@ def main() -> int:
                 check(False, "%s ran to its end" % p, repr(exc))
             print("TIME phase %s %.1f s" % (p, time.monotonic() - t), flush=True)
         mcp("ui.tab", action="open", kind="preferences")
-        elsewhere = mcp("viewport_gesture", kind="click", at=CTX.centre())
+        elsewhere = mcp("viewport.gesture", kind="click", at=CTX.centre())
         check(not elsewhere.get("ok") and "Level tab is not the active one" in str(elsewhere.get("error")),
               "a gesture is refused while another tab is up", short(elsewhere))
     finally:

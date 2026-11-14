@@ -1,6 +1,6 @@
-//! The camera of each scene, kept beside the project's session (`<project>\temp\viewport.ltx`):
-//! a scene opens where the author last looked at it. The scene file's own camera (`SceneMeta`)
-//! is the fallback for a scene this project never showed.
+//! The camera of each scene and its camera bookmarks, kept beside the project's session
+//! (`<project>\temp\viewport.ltx`): a scene opens where the author last looked at it. The scene
+//! file's own camera (`SceneMeta`) is the fallback for a scene this project never showed.
 
 use std::path::Path;
 
@@ -24,6 +24,12 @@ pub struct Saved {
 pub fn scene_key(root: &Path, file: &Path) -> String {
     let rel = file.strip_prefix(root).unwrap_or(file);
     rel.to_string_lossy().replace('/', "\\").to_lowercase()
+}
+
+/// The key a scene's camera bookmark `n` is kept under, beside the scene's own camera.
+#[must_use]
+pub fn bookmark_key(scene: &str, n: u8) -> String {
+    format!("{scene}|bookmark{n}")
 }
 
 fn vec3(text: &str) -> Option<Vec3> {

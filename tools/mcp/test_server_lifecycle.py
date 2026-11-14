@@ -231,7 +231,7 @@ def test_shutdown(
             request = (
                 b'{"cmd":"ui.palette","action":"run","id":"app.quit"}\n'
                 if via_palette
-                else b'{"cmd":"exec_command","name":"COMMAND_QUIT"}\n'
+                else b'{"cmd":"app.quit","discard":true}\n'
             )
             quitter.sendall(request)
             try:

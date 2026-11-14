@@ -1,16 +1,18 @@
-//! The commands of the previews: `preview_model`, `texture_preview`, `library`, `asset_preview`
-//! (`LevelMcpPreview.cpp`, `EditorLibraryMcp`, `LevelMcpContent.cpp`). The wire is the C++ one.
+//! The commands of the previews: `preview.model`, `preview.texture`, `library.view` and
+//! `shot.asset`.
 //!
 //! A command that changes what a tab draws applies itself, then waits for the frames that show
-//! it and reads the tab again: the answer is the frame it asked for, `pending` is always false.
+//! it and reads the tab again: the answer is the frame it asked for.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
 use gz_app::on_ui;
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Origin, Reply};
+use gz_editor::{Args, CmdError, Editor, Origin, Registry, Reply, Spec};
 use gz_render::{Instance, InstanceFlags, Renderer, View, ViewFlags, build_packet};
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::library::lanim::LanimDoc;
@@ -30,14 +32,6 @@ fn invalid(text: impl Into<String>) -> CmdError {
     CmdError::invalid(text)
 }
 
-/// `ArgFlag`: `None` when the argument is not there.
-fn flag(args: &Args, key: &str) -> Option<bool> {
-    if !args.has(key) {
-        return None;
-    }
-    Some(args.bool(key).unwrap_or(false))
-}
-
 /// The frames an answer owes: drawn, and read again. Without a window there are none.
 async fn owe_frames(editor: &Editor, n: u64) {
     if editor.frames.has_window() {
@@ -45,7 +39,7 @@ async fn owe_frames(editor: &Editor, n: u64) {
     }
 }
 
-/// Opens a tab through the shell's own opener (`ui_tab open`), so a person and an agent share
+/// Opens a tab through the shell's own opener (`ui.tab open`), so a person and an agent share
 /// one path; an error reply becomes this command's error.
 async fn open_tab(
     editor: &Arc<Editor>,
@@ -90,9 +84,49 @@ fn merge(head: Map<String, Value>, tail: Map<String, Value>) -> Value {
     Value::Object(out)
 }
 
-// ---- preview_model -----------------------------------------------------------------------------
+// ---- preview.model -----------------------------------------------------------------------------
 
-/// What the model tab answers: `tab`, `active`, its state, `pending`.
+/// How the model preview lights the model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum Lighting {
+    /// A headlight along the view and a key from above, over an ambient.
+    Studio,
+    /// The textures as they are.
+    Unlit,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ModelParams {
+    /// A visual (`dynamics\box\box_1a`) or a library object (`props\box_wood_01`) to show; left
+    /// out: the tab open now.
+    #[serde(default)]
+    name: Option<String>,
+    /// Where `name` is looked for: `library` (the project, the library, then the game - the
+    /// default), `project`, or `game` (the linked game's visuals only).
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    lighting: Option<Lighting>,
+    /// Draws the triangles' edges only.
+    #[serde(default)]
+    wireframe: Option<bool>,
+    /// Draws the skeleton over the model.
+    #[serde(default)]
+    bones: Option<bool>,
+    /// Shows the Details panel.
+    #[serde(default)]
+    details: Option<bool>,
+    /// Frames the model, keeping the angle.
+    #[serde(default)]
+    frame: bool,
+    /// Back to the three-quarter view, framed.
+    #[serde(default)]
+    reset: bool,
+}
+
+/// What the model tab answers: `tab`, `active` and its state.
 async fn model_answer(editor: &Arc<Editor>) -> Reply {
     let (active, state) = on_ui(editor, |shell, _| {
         let active = shell.active() == "model";
@@ -103,26 +137,20 @@ async fn model_answer(editor: &Arc<Editor>) -> Reply {
     let mut head = Map::new();
     head.insert("tab".into(), json!("model"));
     head.insert("active".into(), json!(active));
-    let mut tail = state.unwrap_or_else(|| Map::from_iter([("open".to_owned(), json!(false))]));
-    tail.insert("pending".into(), json!(false));
+    let tail = state.unwrap_or_else(|| Map::from_iter([("open".to_owned(), json!(false))]));
     Ok(merge(head, tail))
 }
 
-async fn preview_model(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
-    let name = engine_name(args.str("name").unwrap_or_default());
-    let source = ModelSource::parse(args.str("source").unwrap_or_default());
-    let lighting = match args.str("lighting").unwrap_or_default() {
-        "" => None,
-        "studio" => Some(0),
-        "unlit" => Some(1),
-        _ => return Err(invalid("lighting must be studio or unlit")),
-    };
-    let (wireframe, bones, details) =
-        (flag(&args, "wireframe"), flag(&args, "bones"), flag(&args, "details"));
-    let (frame, reset) = (args.flag("frame"), args.flag("reset"));
-    if args.flag("answer_only") {
-        return model_answer(&editor).await;
+async fn preview_model(editor: Arc<Editor>, p: ModelParams, _origin: Origin) -> Reply {
+    let name = engine_name(p.name.as_deref().unwrap_or_default());
+    let source_word = p.source.clone().unwrap_or_else(|| "library".to_owned());
+    if !matches!(source_word.as_str(), "library" | "project" | "game") {
+        return Err(invalid("source takes library, project or game"));
     }
+    let source = ModelSource::parse(&source_word);
+    let lighting = p.lighting.map(|l| usize::from(l == Lighting::Unlit));
+    let (wireframe, bones, details) = (p.wireframe, p.bones, p.details);
+    let (frame, reset) = (p.frame, p.reset);
 
     if !name.is_empty() {
         // already showing this one: the tab comes forward
@@ -144,7 +172,7 @@ async fn preview_model(editor: Arc<Editor>, args: Args, _origin: Origin) -> Repl
                 return Err(invalid("not found in the linked game install"));
             }
             editor.services.get_or_init(ModelPreload::default).put(&name, source, pending);
-            open_tab(&editor, "model", Some(&name), Some(source.arg())).await?;
+            open_tab(&editor, "model", Some(&name), Some(&source_word)).await?;
         }
     } else {
         let open = on_ui(&editor, |shell, ctx| Ok(shell.activate(ctx, "model"))).await?;
@@ -203,7 +231,46 @@ async fn preview_model(editor: Arc<Editor>, args: Args, _origin: Origin) -> Repl
     model_answer(&editor).await
 }
 
-// ---- texture_preview ---------------------------------------------------------------------------
+// ---- preview.texture ---------------------------------------------------------------------------
+
+/// What `preview.texture` does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum TextureAction {
+    /// Answers the tab's state; the view settings given still apply.
+    #[default]
+    State,
+    /// Opens `path` from `source`.
+    Open,
+    /// Closes the tab.
+    Close,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct TextureParams {
+    #[serde(default)]
+    action: TextureAction,
+    /// open: the texture - a project path (`gamedata\textures\ui\x.dds`), a library name
+    /// without its extension (`ui\x`) or a game path (`textures\ui\x.dds`).
+    #[serde(default)]
+    path: Option<String>,
+    /// open: `project`, `library` or `game`.
+    #[serde(default)]
+    source: Option<String>,
+    /// `fit`, or a factor (`1` is one texel to one pixel).
+    #[serde(default)]
+    zoom: Option<String>,
+    /// rgba, r, g, b or a.
+    #[serde(default)]
+    channel: Option<String>,
+    /// The mip level shown, from 0.
+    #[serde(default)]
+    mip: Option<u32>,
+    /// Shows the Details panel.
+    #[serde(default)]
+    details: Option<bool>,
+}
 
 async fn texture_answer(editor: &Arc<Editor>) -> Reply {
     let (active, state) = on_ui(editor, |shell, _| {
@@ -215,23 +282,18 @@ async fn texture_answer(editor: &Arc<Editor>) -> Reply {
     let mut head = Map::new();
     head.insert("tab".into(), json!("texture"));
     head.insert("active".into(), json!(active));
-    let mut tail = state.unwrap_or_else(|| Map::from_iter([("open".to_owned(), json!(false))]));
-    tail.insert("pending".into(), json!(false));
+    let tail = state.unwrap_or_else(|| Map::from_iter([("open".to_owned(), json!(false))]));
     Ok(merge(head, tail))
 }
 
-async fn texture_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
-    let action = args.str_or("action", "state").to_owned();
-    if args.flag("answer_only") {
-        return texture_answer(&editor).await;
-    }
+async fn texture_preview(editor: Arc<Editor>, p: TextureParams, _origin: Origin) -> Reply {
     let mut asked = false;
-    match action.as_str() {
-        "open" => {
-            let path = args.str("path").unwrap_or_default().replace('/', "\\");
-            let source = TexSource::parse(args.str("source").unwrap_or_default());
+    match p.action {
+        TextureAction::Open => {
+            let path = p.path.as_deref().unwrap_or_default().replace('/', "\\");
+            let source = TexSource::parse(p.source.as_deref().unwrap_or_default());
             let Some(source) = source.filter(|_| !path.is_empty()) else {
-                return Err(invalid("open takes path= and source=project|editor|darf"));
+                return Err(invalid("open takes path= and source=project|library|game"));
             };
             let (p, s) = (path.clone(), source);
             let showing = on_ui(&editor, move |shell, ctx| {
@@ -262,7 +324,7 @@ async fn texture_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
             }
             asked = true;
         }
-        "close" => {
+        TextureAction::Close => {
             let open = on_ui(&editor, |shell, _| Ok(shell.document_mut("texture").is_some())).await?;
             if open {
                 let mut a = Args::new();
@@ -273,20 +335,19 @@ async fn texture_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
             }
             return texture_answer(&editor).await;
         }
-        "state" => {}
-        _ => return Err(invalid("action must be open, state or close")),
+        TextureAction::State => {}
     }
     let open = on_ui(&editor, |shell, _| Ok(shell.document_mut("texture").is_some())).await?;
     if !open {
         return texture_answer(&editor).await;
     }
-    let zoom_text = args.str("zoom").unwrap_or_default().to_owned();
+    let zoom_text = p.zoom.clone().unwrap_or_default();
     let zoom = match zoom_text.as_str() {
         "" => None,
         "fit" => Some(0.0),
         z => Some(z.trim().parse::<f32>().unwrap_or(0.0)),
     };
-    let channel_text = args.str("channel").unwrap_or_default();
+    let channel_text = p.channel.as_deref().unwrap_or_default();
     let channel = if channel_text.is_empty() {
         None
     } else {
@@ -296,8 +357,7 @@ async fn texture_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
     {
         return Err(invalid("zoom is fit or a factor, channel rgba, r, g, b or a"));
     }
-    let mip = args.i64("mip").filter(|m| *m >= 0).map(|m| u32::try_from(m).unwrap_or(u32::MAX));
-    let details = flag(&args, "details");
+    let (mip, details) = (p.mip, p.details);
     asked = asked || zoom.is_some() || channel.is_some() || mip.is_some() || details.is_some();
     let (active, drawn) = on_ui(&editor, move |shell, ctx| {
         let frame_nr = ctx.cumulative_frame_nr();
@@ -313,16 +373,60 @@ async fn texture_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
     texture_answer(&editor).await
 }
 
-// ---- library -----------------------------------------------------------------------------------
+// ---- library.view ------------------------------------------------------------------------------
 
-async fn library(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
-    let kind = args.str("kind").unwrap_or_default().to_owned();
+/// What `library.view` does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum LibraryAction {
+    /// Answers the tab's state (the tab must be open).
+    #[default]
+    State,
+    /// Opens the tab and brings it up.
+    Open,
+    /// Selects `item` in the tab's list.
+    Select,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct LibraryParams {
+    /// light_animations, texture_library or sound_library.
+    kind: String,
+    #[serde(default)]
+    action: LibraryAction,
+    /// select: the entry by its name (or a part of it).
+    #[serde(default)]
+    item: Option<String>,
+    /// select (light animations): the frame shown.
+    #[serde(default)]
+    frame: Option<i64>,
+    /// The list's search; empty clears it.
+    #[serde(default)]
+    query: Option<String>,
+}
+
+async fn library(editor: Arc<Editor>, p: LibraryParams, _origin: Origin) -> Reply {
+    let kind = p.kind.clone();
     if !KINDS.contains(&kind.as_str()) {
         return Err(invalid("kind must be light_animations, texture_library or sound_library"));
     }
-    let action = args.str_or("action", "state").to_owned();
-    if !matches!(action.as_str(), "open" | "state" | "select") {
-        return Err(invalid("action must be open, state or select"));
+    let action = match p.action {
+        LibraryAction::State => "state",
+        LibraryAction::Open => "open",
+        LibraryAction::Select => "select",
+    }
+    .to_owned();
+    // what the tabs read: their own words for the same things
+    let mut args = Args::new();
+    if let Some(i) = &p.item {
+        args.insert("item".into(), json!(i));
+    }
+    if let Some(f) = p.frame {
+        args.insert("frame".into(), json!(f));
+    }
+    if let Some(q) = &p.query {
+        args.insert("search".into(), json!(q));
     }
     // open brings the tab up; state and select never switch tabs
     if action == "open" {
@@ -394,7 +498,21 @@ async fn library(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     Ok(merge(head, std::mem::take(&mut body)))
 }
 
-// ---- asset_preview -----------------------------------------------------------------------------
+// ---- shot.asset --------------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AssetShotParams {
+    /// The asset: a library object (`props\box_wood_01`), a group, a texture name (`ui\x`) or a
+    /// visual (`dynamics\box\box_1a`).
+    name: String,
+    /// objects (the default), groups, textures, raw_textures, or visuals - which the name is.
+    #[serde(default)]
+    kind: Option<String>,
+    /// visuals: `game` takes the linked game's visual only.
+    #[serde(default)]
+    source: Option<String>,
+}
 
 /// The renderer the thumbnails are drawn with, made on first use from the window's device; one
 /// picture at a time.
@@ -410,9 +528,10 @@ async fn thumb_renderer(editor: &Arc<Editor>) -> Result<Arc<Renderer>, String> {
             return Err("the editor runs without a graphics device".to_owned());
         };
         let (device, queue, exec) = (gpu.device.clone(), gpu.queue.clone(), editor.exec.clone());
+        let gate = gz_app::gpu_gate(editor);
         let made = editor
             .exec
-            .cpu(move || Renderer::new(device, queue, exec).map(Arc::new).map_err(|e| e.to_string()))
+            .cpu(move || Renderer::new(device, queue, gate, exec).map(Arc::new).map_err(|e| e.to_string()))
             .await;
         if let Ok(r) = &made {
             // the window stops the render thread while its loop still runs
@@ -427,7 +546,7 @@ async fn thumb_renderer(editor: &Arc<Editor>) -> Result<Arc<Renderer>, String> {
 const THUMB_SIDE: u32 = 256;
 
 /// A model drawn offscreen at the three-quarter view, framed: what a game mesh shows instead of a
-/// baked thumbnail (`RenderVisualThumbnail`, `RenderObjectThumbnail`).
+/// baked thumbnail.
 async fn render_model(editor: &Arc<Editor>, name: &str, source: ModelSource) -> Result<Vec<u8>, String> {
     let data = load_model(editor.clone(), name.to_owned(), source).await;
     if !data.shown() {
@@ -525,50 +644,31 @@ fn png_reply(name: &str, png: &[u8], rendered: bool) -> Value {
     Value::Object(out)
 }
 
-async fn asset_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
-    let Some(raw) = args.text("name") else {
-        return Err(invalid("missing 'name' argument (see file.list source=library)"));
-    };
-    let name = engine_name(raw);
-    let source = args.str("source").unwrap_or_default().to_lowercase();
-    match source.as_str() {
-        "object" => {
-            let png = render_model(&editor, &name, ModelSource::Visual)
-                .await
-                .map_err(|_| invalid("cannot render this library object"))?;
-            return Ok(png_reply(&name, &png, true));
-        }
-        "visual" | "darf" => {
-            let src = ModelSource::parse(&source);
-            if src == ModelSource::Game {
-                let sources = crate::loader::Sources::of(&editor).await;
-                if sources.game.is_none() {
-                    return Err(invalid("no game is linked: link one with game_link"));
-                }
-                if sources.find_game_visual(&name).is_none() {
-                    return Err(invalid("not found in the game's files (see file.list source=game)"));
-                }
-            }
-            let png = render_model(&editor, &name, src)
-                .await
-                .map_err(|_| invalid("cannot render a preview for this model"))?;
-            return Ok(png_reply(&name, &png, true));
-        }
-        _ => {}
+async fn asset_shot(editor: Arc<Editor>, p: AssetShotParams, _origin: Origin) -> Reply {
+    let name = engine_name(&p.name);
+    if name.is_empty() {
+        return Err(invalid("name names the asset (see file.list source=library)"));
     }
-    let category = match args.text("category") {
-        None => "Objects",
-        Some(c) => match gz_project::CATEGORIES.iter().find(|n| n.eq_ignore_ascii_case(c)) {
-            Some(n) => *n,
-            None => return Err(invalid("unknown category")),
-        },
+    let category = match p.kind.as_deref().unwrap_or("objects").trim().to_ascii_lowercase().as_str() {
+        "objects" | "object" => "Objects",
+        "groups" | "group" => "Groups",
+        "textures" | "texture" => "Textures",
+        "raw_textures" => "Textures (raw)",
+        "visuals" | "visual" => "Visuals",
+        _ => return Err(invalid("kind takes objects, groups, textures, raw_textures or visuals")),
     };
-    if !matches!(category, "Objects" | "Groups" | "Textures" | "Textures (raw)" | "Visuals") {
-        // names with no picture of their own: a level, a particle effect, a sound, an entity
-        // section, a light animation
-        return Err(invalid(
-            "this category has no thumbnails: Objects, Groups, Textures, Textures (raw) and Visuals have",
-        ));
+    if category == "Visuals" && p.source.as_deref() == Some("game") {
+        let sources = crate::loader::Sources::of(&editor).await;
+        if sources.game.is_none() {
+            return Err(invalid("no game is linked: link one with game.link"));
+        }
+        if sources.find_game_visual(&name).is_none() {
+            return Err(invalid("not found in the game's files (see file.list source=game)"));
+        }
+        let png = render_model(&editor, &name, ModelSource::Game)
+            .await
+            .map_err(|_| invalid("cannot render a preview for this model"))?;
+        return Ok(png_reply(&name, &png, true));
     }
     let sources = crate::loader::Sources::of(&editor).await;
     let (n, c) = (name.clone(), category);
@@ -586,11 +686,29 @@ async fn asset_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Repl
     Ok(png_reply(&name, &png, false))
 }
 
-pub fn register(reg: &mut gz_editor::Registry) {
-    reg.add(crate::AREA, "preview_model", preview_model);
-    reg.add(crate::AREA, "texture_preview", texture_preview);
-    reg.add(crate::AREA, "library", library);
-    reg.add(crate::AREA, "asset_preview", asset_preview);
+/// Registers `preview.model`, `preview.texture`, `library.view` and `shot.asset`.
+pub fn register(reg: &mut Registry) {
+    reg.area("preview", "The model and texture previews: one asset in a tab of its own");
+    reg.cmd(
+        Spec::view("preview.model", "Shows a model in the model preview, or changes how it is shown.")
+            .example("name=dynamics\\box\\box_1a lighting=unlit"),
+        preview_model,
+    );
+    reg.cmd(
+        Spec::view("preview.texture", "Shows a texture in the texture preview, or changes how it is shown.")
+            .example("action=open path=ui\\ui_icon source=library zoom=fit"),
+        texture_preview,
+    );
+    reg.cmd(
+        Spec::view("library.view", "Opens a library tab, picks its entry or answers what it shows.")
+            .example("kind=texture_library action=select item=wood_table"),
+        library,
+    );
+    reg.cmd(
+        Spec::read("shot.asset", "A picture of an asset: its thumbnail, or the model rendered.")
+            .example("name=props\\box_wood_01 kind=objects"),
+        asset_shot,
+    );
 }
 
 #[cfg(test)]
@@ -598,12 +716,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn flags_are_absent_or_read() {
-        let mut a = Args::new();
-        assert_eq!(flag(&a, "wireframe"), None);
-        a.insert("wireframe".into(), json!("true"));
-        assert_eq!(flag(&a, "wireframe"), Some(true));
-        a.insert("bones".into(), json!(0));
-        assert_eq!(flag(&a, "bones"), Some(false));
+    fn the_parameters_read_what_a_caller_writes() {
+        let m: ModelParams =
+            serde_json::from_value(json!({ "lighting": "unlit", "wireframe": true })).unwrap();
+        assert_eq!((m.lighting, m.wireframe), (Some(Lighting::Unlit), Some(true)));
+        let t: TextureParams = serde_json::from_value(json!({ "action": "open", "mip": 2 })).unwrap();
+        assert_eq!((t.action, t.mip), (TextureAction::Open, Some(2)));
+        assert!(
+            serde_json::from_value::<LibraryParams>(json!({ "kind": "texture_library", "x": 1 })).is_err()
+        );
     }
 }

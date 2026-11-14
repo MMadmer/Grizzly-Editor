@@ -1,15 +1,26 @@
-.vs/
-gamedata/shaders/r5/.vs/
-_appdata_/
-_appdata_cs_/
-_appdata_soc_/
+# Builds and scratch
 /Bin/
 Intermediate/
-/Lib/
+logs/
+temp/
 import/
-#rawdata/
-rawdata_soc/
-rawdata_cs/
+__pycache__/
+*.pyc
+
+# The editor's data root is the repository root for an editor run from it: its own files there
+# (the project list, settings, machine state, lock, update stage) are this machine's
+/*.ini
+/grizzly_editor.ltx
+/machine.ltx
+/editor.lock
+/projects/
+/update/
+/.update/
+_appdata_/
+
+# The library and the game data beside the editor are local: a linked game or the author's own
+# files. Only what the editor itself needs is tracked - the bundled quest catalog and PDA reader
+# (the fallback when no game is linked), its own textures and its own library objects.
 rawdata/backup/
 rawdata/groups/
 rawdata/levels/
@@ -18,43 +29,19 @@ rawdata/particles/
 rawdata/sounds/
 rawdata/textures/
 rawdata/*.dti
-logs/
-temp/
-#gamedata
-gamedata_soc/
-gamedata_cs/
 gamedata/*.*
 gamedata/ai/
 gamedata/anims/
-# Everything under configs is local runtime data - except the bundled NQ catalog,
-# the fallback the editor reads when no game is linked. Git cannot re-include a
-# file whose parent directory is excluded, hence the /* form on the parent.
 gamedata/configs/*
 !gamedata/configs/nq/
-# ... and the PDA layout reader with its texture sheet, the preview's fallback likewise
 !gamedata/configs/pda/
 gamedata/levels/
 gamedata/meshes/
 gamedata/scripts/
-gamedata/shaders/r1/
-gamedata/shaders/r2/
-gamedata/shaders/r3/
-gamedata/shaders/shared/
+gamedata/shaders/
 gamedata/sounds/
 gamedata/spawns/
 gamedata/textures/
-/*.ini
-*.vcxproj.user
 
-# local documentation search index, not project content
+# A local documentation search index, not project content
 /docs/index.bleve/
-
-# Python bytecode from tools/mcp
-__pycache__/
-*.pyc
-
-# Per-user editor state: window size, GPU name, recent files.
-# $local_root$ resolves here, so this IS the live prefs file, not a template.
-level.ini
-# the Rust editor's settings (window, layout, preferences), written beside its data root
-/grizzly_editor.ltx

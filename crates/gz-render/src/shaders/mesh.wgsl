@@ -112,7 +112,7 @@ fn studio(n: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
     return hemi * 0.55 + vec3<f32>(head * 0.45 + key * 0.22);
 }
 
-// EGameLighting's glit_light: the weather's ambient, hemisphere and sun, the scene's lights with
+// Game lighting: the weather's ambient, hemisphere and sun, the scene's lights with
 // the game's falloff, a roof map telling indoors from outdoors, the tonemap's exposure.
 fn game_light(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     var outside = 1.0;
@@ -145,52 +145,18 @@ fn game_light(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     return l * frame.ambient.w;
 }
 
-// calc_ffp_lighting of the C++ editor: the directional lights enabled for this point - the sun
-// always (dir.w 2), a scene light within its range (dir.w 1, SelectLightsForObject) - over no
-// ambient; with none of them the surface as it is.
-fn editor_light(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
-    var l = vec3<f32>(0.0);
-    var enabled = 0u;
-    let count = frame.mode.y;
-    for (var i = 0u; i < count; i = i + 1u) {
-        let lp = lights[i].pos_range;
-        if (lights[i].dir.w < 1.5 && distance(p, lp.xyz) > lp.w) {
-            continue;
-        }
-        enabled = enabled + 1u;
-        l = l + lights[i].color_cos.rgb * max(0.0, dot(n, -lights[i].dir.xyz));
-    }
-    if (enabled == 0u) {
-        return vec3<f32>(1.0);
-    }
-    return l;
-}
-
 fn shade(world: vec3<f32>, normal: vec3<f32>, front: bool) -> vec3<f32> {
     let mode = frame.mode.x;
     if (mode == MODE_UNLIT || mode == MODE_WIRE) {
         return vec3<f32>(1.0);
     }
     var n = safe_normalize(normal);
-    // Shade Mode > Flat: the face's own normal
-    if ((frame.mode.z & 16u) != 0u) {
-        let f = cross(dpdx(world), dpdy(world));
-        if (dot(f, f) > 1e-12) {
-            n = normalize(f);
-            if (dot(n, normal) < 0.0) {
-                n = -n;
-            }
-        }
-    }
     // a two-sided surface seen from its back is lit on the side the camera sees
     if (!front) {
         n = -n;
     }
     if (mode == MODE_GAME) {
         return game_light(world, n);
-    }
-    if ((frame.mode.z & 8u) != 0u) {
-        return editor_light(world, n);
     }
     return studio(n, world);
 }
@@ -206,18 +172,7 @@ fn fogged(c: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
 }
 
 fn surface(in: VsOut) -> vec4<f32> {
-    // Textures off: every surface white
-    if ((frame.mode.z & 32u) != 0u) {
-        return material.color * in.color;
-    }
-    let linear = textureSample(base_tex, samp, in.uv);
-    // Linear Filtering off: the nearest texel of the top level
-    if ((frame.mode.z & 128u) != 0u) {
-        let dims = vec2<f32>(textureDimensions(base_tex, 0));
-        let t = clamp(vec2<i32>(floor(fract(in.uv) * dims)), vec2<i32>(0), vec2<i32>(dims) - vec2<i32>(1));
-        return textureLoad(base_tex, t, 0) * material.color * in.color;
-    }
-    return linear * material.color * in.color;
+    return textureSample(base_tex, samp, in.uv) * material.color * in.color;
 }
 
 @fragment
@@ -241,14 +196,14 @@ fn fs_blend(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
     return vec4<f32>(fogged(c.rgb * shade(in.world, in.normal, front), in.world), c.a);
 }
 
-// D3DBLEND_ONE, D3DBLEND_ONE: the colour is added as it is, its alpha does nothing
+// additive: the colour is added as it is, its alpha does nothing
 @fragment
 fn fs_add(in: VsOut) -> @location(0) vec4<f32> {
     let c = surface(in);
     return vec4<f32>(c.rgb, 0.0);
 }
 
-// D3DBLEND_DESTCOLOR with ZERO or SRCCOLOR: the blend multiplies what is behind by the colour
+// multiplying: the blend multiplies what is behind by the colour
 @fragment
 fn fs_mul(in: VsOut) -> @location(0) vec4<f32> {
     let c = surface(in);
@@ -305,10 +260,6 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_wire(in: VsOut) -> @location(0) vec4<f32> {
     let inst = instances[in.inst];
-    // Edged Faces: the edges over the surfaces, in the wire colour
-    if (frame.mode.x != MODE_WIRE && (frame.mode.z & 256u) == 0u) {
-        return vec4<f32>((material.color * in.color).rgb, 1.0);
-    }
     let selected = (inst.flags & INST_SELECTED) != 0u && frame.mode.w != 0u;
     return vec4<f32>(select(frame.wire.rgb, frame.selection.rgb, selected), 1.0);
 }

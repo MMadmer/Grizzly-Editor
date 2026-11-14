@@ -1,13 +1,13 @@
-//! A spawn's model posed by its startup animation (`CSpawnPoint::CLE_Visual`): the first frame,
+//! A spawn's model posed by its startup animation: the first frame,
 //! paused, until the Details row `Model\Animation` (First Frame, Play, Pause, Stop, Last Frame)
-//! or `spawn_animation` over MCP says otherwise. Nothing of it is saved; the scene never changes.
+//! or `viewport.play what=animation` says otherwise. Nothing of it is saved; the scene never changes.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use glam::Mat4;
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Reply, json};
+use gz_editor::{CmdError, Editor, Reply, json};
 use gz_fmt_ogf::{MotionSet, Visual, read_omf};
 use gz_render::{AssetLoader, AssetRef};
 use gz_scene::model::ObjData;
@@ -18,12 +18,12 @@ use smol_str::SmolStr;
 
 use crate::loader::SceneLoader;
 
-/// `SetBlendLastFrameCB`: Last Frame stops this far before a cycle's end.
+/// Last Frame stops this far before a cycle's end.
 const LAST_FRAME_BACK: f32 = 0.4444;
 /// Paused poses kept before the cache starts again.
 const POSE_CACHE: usize = 4096;
 
-/// What a spawn's model does now. No entry is the first frame, paused (`PlayAnimationFirstFrame`).
+/// What a spawn's model does now. No entry is the first frame, paused.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Mode {
     Playing {
@@ -58,7 +58,7 @@ struct Cycle {
 }
 
 impl Rig {
-    /// `ID_Cycle_Safe`: a definition of that name that is no effect, in the order the sets load.
+    /// The cycle of that name that is no effect, in the order the sets load.
     fn cycle(&self, name: &str) -> Option<Cycle> {
         self.sets.iter().enumerate().find_map(|(set, s)| {
             let d = s.defs.iter().find(|d| d.flags & 1 == 0 && d.name.eq_ignore_ascii_case(name))?;
@@ -192,7 +192,7 @@ impl SpawnAnims {
         out
     }
 
-    /// A press of one of the row's buttons (`OnAnimControlClick`), by its caption or action.
+    /// A press of one of the row's buttons, by its caption or action.
     fn press(
         &self,
         id: ObjId,
@@ -214,7 +214,7 @@ impl SpawnAnims {
         let mode = match action {
             "first" | "first frame" => Mode::Paused(0.0),
             "play" => Mode::Playing { since: now, from: 0.0 },
-            // `TogglelendCB`: Pause pauses a playing cycle and goes on with a paused one
+            // Pause pauses a playing cycle and goes on with a paused one
             "pause" => match current {
                 Mode::Playing { .. } => Mode::Paused(time_of(current)),
                 Mode::Paused(t) => Mode::Playing { since: now, from: t },
@@ -303,18 +303,18 @@ fn load_rig(loader: &SceneLoader, name: &str) -> Option<Rig> {
     Some(Rig { visual, sets })
 }
 
-/// `spawn_animation`: `object` (a spawn's name), `action` first | play | pause | stop | last |
-/// state (the default). Answers the object, its visual and animation, whether the skeleton and
-/// the cycle were found, the state, the time and the cycle's length (s).
-pub(crate) async fn spawn_animation(editor: Arc<Editor>, a: Args) -> Reply {
-    let name = a
-        .str("object")
-        .or_else(|| a.str("name"))
-        .ok_or_else(|| CmdError::invalid("missing 'object' argument"))?;
+/// `viewport.play what=animation`: a spawn's startup animation played, paused, stopped or put at
+/// a frame (`action`), and its state.
+pub(crate) async fn animation_command(editor: &Arc<Editor>, name: &str, action: &str) -> Reply {
+    let editor = editor.clone();
     let svc = SceneService::of(&editor)?;
     let snap = svc.store.snapshot();
-    let o = snap.find_relaxed(name).ok_or_else(|| CmdError::not_found("object not found"))?.clone();
-    let of = model_of(&o).ok_or_else(|| CmdError::invalid("the object is no spawn with a model"))?;
+    let o = snap
+        .find_relaxed(name)
+        .ok_or_else(|| CmdError::not_found(format!("there is no object '{name}'")))?
+        .clone();
+    let of =
+        model_of(&o).ok_or_else(|| CmdError::invalid(format!("'{name}' is no spawn point with a model")))?;
     let anims = SpawnAnims::of(&editor);
     // the rig as the viewport has it, read now when no pass asked for it yet
     let rig = {
@@ -339,9 +339,8 @@ pub(crate) async fn spawn_animation(editor: Arc<Editor>, a: Args) -> Reply {
         }
     };
     let loaded = anims.loader.lock().is_some();
-    let action = a.str("action").unwrap_or("state").to_ascii_lowercase();
     if action != "state" {
-        anims.press(o.id, of.clone(), rig.as_deref(), &action)?;
+        anims.press(o.id, of.clone(), rig.as_deref(), action)?;
         crate::service::Viewport::of(&editor).touch();
         editor.exec.wake().ping();
     }

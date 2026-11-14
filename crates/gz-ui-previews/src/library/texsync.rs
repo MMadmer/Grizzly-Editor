@@ -48,7 +48,7 @@ pub struct Synced {
     pub low_gloss: bool,
 }
 
-/// Writes a texture's description and its game texture (`SynchronizeTexture`): `params` are
+/// Writes a texture's description and its game texture: `params` are
 /// the edited ones, `None` keeps those on disk (or makes the defaults of a new picture).
 pub fn sync_texture(
     dirs: &EditorDirs,
@@ -128,7 +128,7 @@ pub fn sync_texture(
     Ok(out)
 }
 
-/// A picture of the import folder taken into the library (`SafeCopyLocalToServer`): copied as a
+/// A picture of the import folder taken into the library: copied as a
 /// `.tga` under its folder name (`wpn_ak74` into `wpn\`), its age kept, the import file renamed
 /// to `.~<ext>`. Returns the library name.
 pub fn import_picture(dirs: &EditorDirs, file: &str) -> Result<String, String> {

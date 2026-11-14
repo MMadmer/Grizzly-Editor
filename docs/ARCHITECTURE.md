@@ -27,7 +27,7 @@ ways in), `docs/ASSETS.md` (text assets and projects), `docs/UPDATES.md` (the ed
 | Executor | Runs | Rule |
 |---|---|---|
 | UI thread | the message pump, the egui pass with its tessellation, command emission, the presentation of the window | reads snapshots with one atomic load; never blocks; runs above normal priority |
-| Render threads | the device is made on a thread of its own; the viewport's renderer, the offscreen passes (thumbnails, previews) and every readback run on theirs | a slow GPU frame of the viewport delays no input and no command |
+| Render threads | the device is made on a thread of its own; the viewport's renderer, the offscreen passes (thumbnails, previews) and every readback run on theirs | a slow GPU frame of the viewport delays no input and no command; a render thread never waits for the GPU, and every submission passes the window's gate (`gz_app::gpu_gate`, a `gz_task::Gate`), which the window closes while it configures a surface - the graphics runtime refuses a configuration a submission crosses |
 | Async runtime (tokio, multi-thread) | store actors, the control endpoint, network, timers, job orchestration | no blocking call inside; file work goes to the IO pool |
 | CPU pool (rayon) | data-parallel work: validation, hashing, meshes, culling, layout, compression, the level compiler | pure functions over snapshots |
 | IO pool (bounded) | blocking file operations | sized to overlap latency: a start costs touches, not bytes |

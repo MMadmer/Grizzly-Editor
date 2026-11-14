@@ -223,6 +223,8 @@ fn label_layout() -> wgpu::VertexBufferLayout<'static> {
 pub(crate) struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    /// Passed by every submission: the window closes it while it configures a surface.
+    pub gate: gz_task::Gate,
     pub samples: u32,
     pub bc: bool,
     pub max_side: u32,
@@ -343,7 +345,7 @@ fn cube() -> wgpu::BindingType {
 }
 
 impl Gpu {
-    pub fn new(device: wgpu::Device, queue: wgpu::Queue) -> Self {
+    pub fn new(device: wgpu::Device, queue: wgpu::Queue, gate: gz_task::Gate) -> Self {
         let features = device.features();
         let bc = features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
         let msaa = COLOR_FORMAT.guaranteed_format_features(features).flags.sample_count_supported(4)
@@ -566,6 +568,7 @@ impl Gpu {
         Self {
             device,
             queue,
+            gate,
             samples,
             bc,
             max_side,

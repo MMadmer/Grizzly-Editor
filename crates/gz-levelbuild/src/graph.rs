@@ -25,7 +25,7 @@ type MergedVertex = (u8, Vec3, u32, [u8; 4], Vec<(u16, f32)>, Vec<LevelPoint>);
 /// `CLevelGraphEditor::build`: the level graph of the AI Map tool's nodes (CoP layout).
 pub fn level_graph(nodes: &[AiMapNode], params: &AiParams, guid: Guid) -> Result<LevelGraph> {
     if nodes.is_empty() {
-        return Err(BuildError::new("! AIMap is empty!"));
+        return Err(BuildError::new("The AI map is empty."));
     }
     export_level_graph(nodes, params, guid, XRAI_VERSION_COP).map_err(|e| BuildError::new(e.to_string()))
 }
@@ -122,10 +122,10 @@ pub fn build_game_graph(
     }
     log.push(format!("{} graph points loaded", vertices.len()));
     if vertices.is_empty() {
-        return Err(BuildError::new("! GameGraph points not found on level!"));
+        return Err(BuildError::new("The level has no game graph points."));
     }
     if vertices.len() >= usize::from(u16::MAX) {
-        return Err(BuildError::new("! There are too many graph points on the level."));
+        return Err(BuildError::new("The level has too many game graph points."));
     }
     log.push("Building cross table".to_owned());
     let (results, distances) = cross_distances(nav, &vertices);

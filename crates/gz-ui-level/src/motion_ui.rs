@@ -1,5 +1,4 @@
-//! The motion rows' buttons that need more than a value (`CCustomObject::OnMotionControlClick`,
-//! `OnMotionFilesClick`, `OnMotionCommandsClick`): Play and Pause on the viewport's frames, the
+//! The motion rows' buttons that need more than a value: Play and Pause on the viewport's frames, the
 //! `.anm` files through the system's dialogs, and the Scale Keys / Normalize Keys sheets
 //! (`dlg.scale_keys`, `dlg.normalize_keys`). Each ends in `scene.motion`.
 
@@ -59,14 +58,15 @@ fn selected_object(editor: &Editor) -> Option<(String, Option<(f32, f32)>)> {
 /// A press of a motion button the row itself does not do; `true` when it was one.
 pub fn press(editor: &Arc<Editor>, key: &str, caption: &str) -> bool {
     let Some((object, range)) = selected_object(editor) else { return false };
-    // a spawn's playback buttons (`OnAnimControlClick`): the viewport plays its model
+    // a spawn's playback buttons: the viewport plays its model
     if key.ends_with(gz_scene::props::SPAWN_ANIMATION) {
         let mut a = Args::new();
-        a.insert("object".into(), json!(object));
+        a.insert("what".into(), json!("animation"));
+        a.insert("objects".into(), json!([object]));
         a.insert("action".into(), json!(caption.to_ascii_lowercase()));
         let ed = editor.clone();
         editor.exec.spawn(async move {
-            let r = ed.call("spawn_animation", a, ed.ui_origin()).await;
+            let r = ed.call("viewport.play", a, ed.ui_origin()).await;
             if r.get("ok").and_then(Value::as_bool) != Some(true) {
                 ed.notices.error(
                     r.get("error")

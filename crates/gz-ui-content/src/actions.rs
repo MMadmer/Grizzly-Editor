@@ -1,7 +1,8 @@
-//! What the browser does: every action is an editor command (`content_rename`, `content_move`,
-//! `content_copy`, `content_delete`, `content_mkdir`, `content_create`, `mod.exclude`,
-//! `darf_copy`, `ui_tab`, `open_scene`, `place_object`, `game_link`), so the window and MCP share
-//! one code path. The browser changes no file itself.
+//! What the browser does: every action is an editor command (`file.rename`, `file.move`,
+//! `file.copy`, `file.delete`, `file.mkdir`, `file.create`, `file.import`, `mod.exclude`,
+//! `ui.tab`, `scene.open`, `scene.place`), so the window and MCP share one code path. The browser
+//! changes no file itself, but for a picture from Explorer made into a texture of the project
+//! (`import_files`).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,8 +11,8 @@ use gz_app::{DocCx, Drawer, OpenRequest, PanelOp};
 use gz_editor::{Args, Editor, Value, json};
 use gz_ui::dialog::{self, Answer, Asker, ConfirmSpec};
 
-use crate::catalog::Catalog;
-use crate::model::{LEVELS, Location, OBJECTS, Source, VISUALS, category, leaf_of, parent_of};
+use crate::catalog::{Catalog, Origin};
+use crate::model::{self, Location, Source, leaf_of, parent_of};
 use crate::select::Entry;
 use crate::service::{CatKey, Clip, Clipboard, ContentBrowser, Inner, Rename};
 use crate::{PANEL_ID, icons};
@@ -69,104 +70,70 @@ pub(crate) enum Open {
     Doc(OpenRequest),
     /// A scene, through the scene's command.
     Scene(String),
+    /// A base scene of the library: brought into the project, then opened there.
+    BaseScene(String),
 }
 
-/// `meshes\dynamics\box\box_1a.ogf` -> `dynamics\box\box_1a`: the visual name a model is opened by
-/// (`ToVisualName`).
-#[must_use]
-pub(crate) fn visual_name(path: &str) -> String {
-    let lower = path.to_ascii_lowercase();
-    let rest = if lower.starts_with("meshes\\") || lower.starts_with("meshes/") { &path[7..] } else { path };
-    let rest = icons::extension(rest).map_or(rest, |e| &rest[..rest.len() - e.len()]);
-    rest.replace('/', "\\")
-}
-
-/// A game entry under `levels\` belongs to one of the game's levels; the folder right under it is
-/// the level.
-#[must_use]
-pub(crate) fn game_level(source: Source, path: &str) -> Option<&str> {
-    if source != Source::Game {
-        return None;
-    }
-    let rest = path.get(..7).filter(|h| h.eq_ignore_ascii_case("levels\\")).and(path.get(7..))?;
-    let name = rest.split('\\').next().filter(|n| !n.is_empty())?;
-    Some(name)
-}
-
-/// What opening an entry means (`OpenAsset`). `root` is where the source keeps its files on disk.
-pub(crate) fn what_opens(
-    source: Source,
-    cat: usize,
-    path: &str,
-    root: Option<&std::path::Path>,
-) -> Result<Open, String> {
+/// What opening an entry means. `cat` is the catalog it is listed in.
+pub(crate) fn what_opens(cat: &Catalog, path: &str) -> Result<Open, String> {
     if path.is_empty() {
         return Err("empty asset name".into());
     }
     let ext = icons::extension(path).map(str::to_ascii_lowercase).unwrap_or_default();
-    // a scene (or an X-Ray SDK level to import) opens in the Level tab
-    let editor_level = source == Source::Editor && cat == LEVELS;
-    if ext == ".scene" || ext == ".level" || editor_level {
-        let scene = match (source, root) {
-            (Source::Project, Some(r)) => r.join(path).display().to_string(),
-            (Source::Editor, Some(r)) => {
-                let file = if ext == ".level" { path.to_owned() } else { format!("{path}.level") };
-                r.join(file).display().to_string()
+    if cat.source == Source::Library {
+        return match cat.category {
+            // a base scene of the library comes into the project, then opens there
+            model::SCENES => Ok(Open::BaseScene(crate::catalog::stem(path).to_owned())),
+            model::OBJECTS => Ok(Open::Doc(OpenRequest {
+                arg: Some("library".to_owned()),
+                ..OpenRequest::file("model", path)
+            })),
+            model::TEXTURES => {
+                let (name, source) = match cat.file(path).map(|f| f.origin) {
+                    Some(Origin::Game) => (cat.game_path(path).unwrap_or_else(|| path.to_owned()), "game"),
+                    _ => (crate::catalog::stem(path).to_owned(), "library"),
+                };
+                Ok(Open::Doc(OpenRequest {
+                    arg: Some(source.to_owned()),
+                    ..OpenRequest::file("texture", &name)
+                }))
             }
-            _ => path.to_owned(),
+            _ => Err(format!("no viewer for this asset kind yet: '{path}'")),
         };
+    }
+    // a scene (or an X-Ray SDK level, converted as it opens) opens in the Level tab
+    if ext == ".scene" || ext == ".level" {
+        let scene = cat.disk_path(path).map_or_else(|| path.to_owned(), |p| p.display().to_string());
         return Ok(Open::Scene(scene));
     }
-    if let Some(level) = game_level(source, path) {
-        // the game's levels are compiled: the editor opens the source scene of that name
-        return Ok(Open::Scene(level.to_owned()));
-    }
-    let model =
-        ext == ".ogf" || ext == ".object" || (source == Source::Editor && (cat == VISUALS || cat == OBJECTS));
-    if model {
-        let target = match source {
-            Source::Game => visual_name(path),
-            Source::Editor if cat == VISUALS => visual_name(path),
-            _ => path.to_owned(),
-        };
+    if ext == ".ogf" || ext == ".object" {
+        // an object of the project's library folder opens by its reference, as a scene names it
+        let lower = path.to_ascii_lowercase();
+        let name =
+            if ext == ".object" && lower.starts_with("rawdata\\objects\\") { &path[16..] } else { path };
         return Ok(Open::Doc(OpenRequest {
-            arg: Some(source.wire().to_owned()),
-            ..OpenRequest::file("model", &target)
+            arg: Some("project".to_owned()),
+            ..OpenRequest::file("model", name)
         }));
     }
-    let project_only = |what: &str| -> Result<(), String> {
-        if source == Source::Project {
-            Ok(())
-        } else {
-            Err(format!("{path}: {what} open from the project only"))
-        }
-    };
     match ext.as_str() {
-        ".pdaasset" => {
-            project_only("PDA layouts")?;
-            return Ok(Open::Doc(OpenRequest::file("pda", path)));
-        }
-        ".npcasset" => {
-            project_only("characters")?;
-            return Ok(Open::Doc(OpenRequest::file("characters", path)));
-        }
+        ".pdaasset" => return Ok(Open::Doc(OpenRequest::file("pda", path))),
+        ".npcasset" => return Ok(Open::Doc(OpenRequest::file("characters", path))),
         ".nqasset" | ".behasset" => {
-            project_only("quest graphs")?;
             return Ok(Open::Doc(OpenRequest::file(if ext == ".nqasset" { "quest" } else { "beh" }, path)));
         }
         _ => {}
     }
-    let texture = icons::is_image(path) || (source == Source::Editor && (cat == 4 || cat == 5));
-    if texture {
+    if icons::is_image(path) {
         return Ok(Open::Doc(OpenRequest {
-            arg: Some(source.wire().to_owned()),
+            arg: Some("project".to_owned()),
             ..OpenRequest::file("texture", path)
         }));
     }
     Err(format!("no viewer for this asset kind yet: '{path}'"))
 }
 
-/// A double click from the window: into a folder, a game level's scene, an asset's tab.
+/// A double click from the window: into a folder, an asset's tab.
 pub(crate) fn open_entry(
     cx: &mut DocCx<'_>,
     st: &mut Inner,
@@ -175,46 +142,47 @@ pub(crate) fn open_entry(
     has_project: bool,
 ) {
     let source = st.loc.source;
-    let cat = st.loc.category;
     if entry.folder {
-        // a game level is a folder on disk and a scene to the author
-        if game_level(source, &entry.path).is_some_and(|l| entry.path.len() == 7 + l.len()) {
-            open_asset(cx, source, cat, &entry.path, None);
-            return;
-        }
         // into the folder a search found: the search has done its job
         st.search.clear();
-        let target = Location::new(source, cat, &entry.path);
+        let target = if st.loc.home() {
+            Location::new(Source::Library, model::find_kind(&entry.path).unwrap_or(model::HOME), "")
+        } else {
+            Location::new(source, st.loc.category, &entry.path)
+        };
         if st.apply_location(target, true, &browser.cats, has_project).is_ok() {
             st.pics.cancel();
         }
         return;
     }
     st.sel.only(entry.clone());
-    let root = browser.cats.peek(crate::service::cat_key(&st.loc)).and_then(|c| c.disk_root.clone());
-    open_asset(cx, source, cat, &entry.path, root.as_deref());
-}
-
-fn open_asset(cx: &mut DocCx<'_>, source: Source, cat: usize, path: &str, root: Option<&std::path::Path>) {
-    match what_opens(source, cat, path, root) {
+    let Some(cat) = browser.cats.peek(crate::service::cat_key(&st.loc)) else { return };
+    match what_opens(&cat, &entry.path) {
         Ok(Open::Doc(req)) => cx.requests.open(req),
         Ok(Open::Scene(scene)) => cx.editor.post("scene.open", args(&[("path", json!(scene))])),
+        Ok(Open::BaseScene(name)) => {
+            let ed = cx.editor.clone();
+            cx.editor.exec.spawn(async move {
+                match bring_in_base_scene(&ed, &name).await {
+                    Ok(scene) => {
+                        if let Err((e, _)) = call(&ed, "scene.open", &[("path", json!(scene))]).await {
+                            ed.notices.error(e);
+                        }
+                    }
+                    Err(e) => ed.notices.error(e),
+                }
+            });
+        }
         Err(e) if e.starts_with("no viewer") => {
-            cx.editor.notices.note(format!("No viewer for this kind of file yet: '{path}'"))
+            cx.editor.notices.note(format!("No viewer for this kind of entry yet: '{}'", entry.path))
         }
         Err(e) => cx.editor.notices.error(e),
     }
 }
 
 /// The same for MCP: the outcome comes back instead of a notice.
-pub(crate) async fn open_for_mcp(
-    editor: &Arc<Editor>,
-    source: Source,
-    cat: usize,
-    path: &str,
-    root: Option<PathBuf>,
-) -> Result<(), String> {
-    match what_opens(source, cat, path, root.as_deref())? {
+pub(crate) async fn open_for_mcp(editor: &Arc<Editor>, cat: &Catalog, path: &str) -> Result<(), String> {
+    match what_opens(cat, path)? {
         Open::Doc(req) => {
             let mut pairs = vec![("action", json!("open")), ("kind", json!(req.kind))];
             if let Some(p) = &req.path {
@@ -228,22 +196,47 @@ pub(crate) async fn open_for_mcp(
         Open::Scene(scene) => {
             call(editor, "scene.open", &[("path", json!(scene))]).await.map(|_| ()).map_err(|(e, _)| e)
         }
+        Open::BaseScene(name) => {
+            let scene = bring_in_base_scene(editor, &name).await?;
+            call(editor, "scene.open", &[("path", json!(scene))]).await.map(|_| ()).map_err(|(e, _)| e)
+        }
     }
 }
 
-/// The library reference a placeable entry is placed by (`ResolveDropRef`): a project
-/// `rawdata\objects` file or an Editor Objects entry, the extension clamped.
+/// A base scene of the library copied into the project (a scene the project has already is the
+/// author's copy, left as it is); answers the project's scene file.
+pub(crate) async fn bring_in_base_scene(editor: &Arc<Editor>, name: &str) -> Result<String, String> {
+    let Some(project) = editor.project_root() else { return Err("no project is open".to_owned()) };
+    let root = gz_project::library_root(editor);
+    let n = name.to_owned();
+    let made = editor.exec.io(move || gz_project::project::import_base_scene(&root, &project, &n)).await?;
+    if let Ok((_, p)) = gz_project::Project::of(editor)
+        && let Some(dir) = made.parent()
+    {
+        p.tree.mark_fs(dir);
+    }
+    Ok(made.display().to_string())
+}
+
+/// What a tile places in a level, as `scene.place` takes it: `(kind, field, value)` - the field
+/// is `ref`, or `section` for a spawn. `None` for what is not placed.
 #[must_use]
-pub(crate) fn placeable_ref(source: Source, cat: usize, path: &str) -> Option<String> {
-    let is_object = icons::extension(path).is_some_and(|e| e.eq_ignore_ascii_case(".object"));
-    let strip = |p: &str| icons::extension(p).map_or(p, |e| &p[..p.len() - e.len()]).to_owned();
-    match source {
-        Source::Project if is_object => path
-            .get(..16)
-            .filter(|h| h.eq_ignore_ascii_case("rawdata\\objects\\"))
-            .and(path.get(16..))
-            .map(strip),
-        Source::Editor if cat == OBJECTS && is_object => Some(strip(path)),
+pub(crate) fn placeable(cat: &Catalog, path: &str) -> Option<(String, &'static str, String)> {
+    let asset = crate::payload_of(cat, path, false);
+    let p = asset.path;
+    match asset.kind.as_str() {
+        // an object by its reference: below `rawdata\objects`, without the extension
+        "object" => {
+            let below =
+                if p.to_ascii_lowercase().starts_with("rawdata\\objects\\") { &p[16..] } else { p.as_str() };
+            Some((asset.kind, "ref", crate::catalog::stem(below).to_owned()))
+        }
+        // a group of the project by its file, one of the library by its reference
+        "group" if cat.source == Source::Library => {
+            Some((asset.kind, "ref", crate::catalog::stem(&p).to_owned()))
+        }
+        "group" | "sound" | "particles" => Some((asset.kind, "ref", p)),
+        "spawn" => Some((asset.kind, "section", p)),
         _ => None,
     }
 }
@@ -252,7 +245,7 @@ pub(crate) fn placeable_ref(source: Source, cat: usize, path: &str) -> Option<St
 
 /// Opens the rename box on an entry: a folder is its whole name; one of the editor's own assets
 /// shows its name without the extension; any other file keeps its extension out of the selection
-/// (`BeginRename`).
+///.
 pub(crate) fn begin_rename(st: &mut Inner, entry: &Entry) {
     if st.loc.source != Source::Project {
         return;
@@ -272,7 +265,7 @@ pub(crate) fn begin_rename(st: &mut Inner, entry: &Entry) {
     st.rename = Some(Rename { entry: entry.clone(), text, select, focus: true });
 }
 
-/// The box is done: `content_rename` with what it holds (`CommitRename`). The browser follows a
+/// The box is done: `file.rename` with what it holds, the asset's companions renamed with it. The browser follows a
 /// renamed folder it shows or holds in its history.
 pub(crate) fn commit_rename(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>, st: &mut Inner) {
     let Some(r) = st.rename.take() else { return };
@@ -286,11 +279,30 @@ pub(crate) fn commit_rename(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>,
         return;
     }
     let was = r.entry.path.to_string();
+    let companions: Vec<String> = browser
+        .cats
+        .peek((Source::Project, 0))
+        .and_then(|c| c.file(&was).map(|f| f.companions.iter().map(ToString::to_string).collect()))
+        .unwrap_or_default();
     let inbox = browser.inbox.clone();
     let ed = editor.clone();
     editor.exec.spawn(async move {
         match call(&ed, "file.rename", &[("path", json!(was)), ("name", json!(r.text))]).await {
             Ok(reply) => {
+                // the thumbnail and the scene's folder take the new name too
+                let new_stem =
+                    crate::catalog::stem(leaf_of(reply.get("path").and_then(Value::as_str).unwrap_or("")))
+                        .to_owned();
+                let old_stem = crate::catalog::stem(leaf_of(&was)).to_owned();
+                for c in &companions {
+                    let leaf = leaf_of(c);
+                    let renamed = format!("{new_stem}{}", leaf.get(old_stem.len()..).unwrap_or(""));
+                    if let Err((e, _)) =
+                        call(&ed, "file.rename", &[("path", json!(c)), ("name", json!(renamed))]).await
+                    {
+                        ed.log.warn(format!("'{c}' kept its name: {e}"));
+                    }
+                }
                 let to = reply.get("path").and_then(Value::as_str).unwrap_or("").replace('/', "\\");
                 let parent = parent_of(&was);
                 let now = if parent.is_empty() {
@@ -314,7 +326,7 @@ fn counted(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-/// The confirmation of a deletion: it names what goes (`DeleteSelection`).
+/// The confirmation of a deletion: it names what goes.
 #[must_use]
 pub(crate) fn delete_spec(entries: &[Entry], cat: Option<&Catalog>) -> ConfirmSpec {
     let mut folders = 0usize;
@@ -362,7 +374,8 @@ pub(crate) fn delete_spec(entries: &[Entry], cat: Option<&Catalog>) -> ConfirmSp
     }
 }
 
-/// Asks, then deletes the selection for good through `content_delete`.
+/// Asks, then deletes the selection for good through `file.delete`, every asset with its
+/// companions.
 pub(crate) fn delete_selection(
     ctx: &egui::Context,
     editor: &Arc<Editor>,
@@ -390,7 +403,7 @@ pub(crate) fn delete_selection(
         {
             return;
         }
-        let list = doomed.iter().map(|e| e.path.to_string()).collect::<Vec<_>>();
+        let list = with_companions(&doomed, cat.as_deref());
         inbox.lock().clear_selection = true;
         let ed2 = ed.clone();
         ed.exec.spawn(async move {
@@ -415,24 +428,67 @@ pub(crate) fn delete_selection(
     }
 }
 
+/// The paths of entries with what goes with each of them (a thumbnail, a scene's folder).
+#[must_use]
+pub(crate) fn with_companions(entries: &[Entry], cat: Option<&Catalog>) -> Vec<String> {
+    let mut out = Vec::with_capacity(entries.len());
+    for e in entries {
+        out.push(e.path.to_string());
+        if !e.folder
+            && let Some(f) = cat.and_then(|c| c.file(&e.path))
+        {
+            out.extend(f.companions.iter().map(ToString::to_string));
+        }
+    }
+    out
+}
+
 // ---- the clipboard ------------------------------------------------------------------------------
 
-/// The clipboard entries of `entries`: a project folder goes as a folder (the copier walks it); a
-/// game folder, which is no folder on disk, is the files under it, each keeping its place below
-/// the folder's own name (`ClipboardCopy`, `ClipExpandFolder`).
+/// One file's clip: the project's by its path, the Library's by where its bytes are - a file of
+/// the library on disk, or a game file (`gamedata`-relative); an entry without a file has none.
+fn clip_of(cat: &Catalog, f: &crate::catalog::FileItem, rel: String) -> Option<Clip> {
+    match (cat.source, f.origin) {
+        (Source::Project, _) => Some(Clip { src: f.path.to_string(), rel }),
+        (Source::Library, Origin::Disk) => {
+            let abs = cat.disk_path(&f.path)?;
+            Some(Clip { src: abs.display().to_string(), rel })
+        }
+        (Source::Library, Origin::Game) => Some(Clip { src: cat.game_path(&f.path)?, rel }),
+        (Source::Library, Origin::None) => None,
+    }
+}
+
+/// The clipboard entries of `entries`, each asset with its companions: a project folder goes as a
+/// folder (the copier walks it); a Library folder is the files under it, each keeping its place
+/// below the folder's own name.
 #[must_use]
 pub(crate) fn clips_of(entries: &[Entry], cat: &Catalog) -> Vec<Clip> {
     let mut out = Vec::new();
     for e in entries {
         let leaf = leaf_of(&e.path);
-        if e.folder && cat.disk_root.is_none() {
-            for f in cat.files_below(&e.path) {
-                let below = f.path.get(e.path.len() + 1..).unwrap_or("");
-                out.push(Clip { src: f.path.to_string(), rel: format!("{leaf}\\{below}"), abs: None });
+        if e.folder {
+            if cat.source == Source::Project {
+                out.push(Clip { src: e.path.to_string(), rel: leaf.to_owned() });
+            } else {
+                for f in cat.files_below(&e.path) {
+                    let below = f.path.get(e.path.len() + 1..).unwrap_or("");
+                    out.extend(clip_of(cat, f, format!("{leaf}\\{below}")));
+                    for c in &f.companions {
+                        let below = c.get(e.path.len() + 1..).unwrap_or("");
+                        let cf = crate::catalog::FileItem { path: c.clone(), ..f.clone() };
+                        out.extend(clip_of(cat, &cf, format!("{leaf}\\{below}")));
+                    }
+                }
             }
             continue;
         }
-        out.push(Clip { src: e.path.to_string(), rel: leaf.to_owned(), abs: cat.disk_path(&e.path) });
+        let Some(f) = cat.file(&e.path) else { continue };
+        out.extend(clip_of(cat, f, leaf.to_owned()));
+        for c in &f.companions {
+            let cf = crate::catalog::FileItem { path: c.clone(), ..f.clone() };
+            out.extend(clip_of(cat, &cf, leaf_of(c).to_owned()));
+        }
     }
     out
 }
@@ -491,13 +547,9 @@ pub(crate) async fn transfer(
             (false, true) => dst.to_owned(),
             (false, false) => format!("{dst}\\{sub}"),
         };
-        let src = match source {
-            Source::Project => c.src,
-            // the library is on disk: its files go by their full path
-            Source::Editor => c.abs.map_or(c.src, |p| p.display().to_string()),
-            // a gamedata-relative path, which the copier finds in the game's archives
-            Source::Game => c.src,
-        };
+        // the project's by its path, the library's by its full path, the game's gamedata-relative
+        // (the copier finds it in the game's archives)
+        let src = c.src;
         match groups.iter_mut().find(|(f, _)| f.eq_ignore_ascii_case(&folder)) {
             Some((_, list)) => list.push(src),
             None => groups.push((folder, vec![src])),
@@ -528,7 +580,7 @@ pub(crate) async fn transfer(
     (files, first_error.map(|e| format!("{failed} failed, first: {e}")))
 }
 
-/// Paste into the folder shown; what would be replaced is asked about first (`ClipboardPaste`).
+/// Paste into the folder shown; what would be replaced is asked about first.
 pub(crate) fn paste(
     ctx: &egui::Context,
     editor: &Arc<Editor>,
@@ -594,31 +646,31 @@ pub(crate) fn paste(
     }
 }
 
-/// A drop of tiles onto a project folder: project entries move there, read-only ones are copied.
+/// A drop of the browser's own tiles onto a project folder: project entries move there, the
+/// Library's are copied in (Bring into Project into that folder).
 pub(crate) fn drop_into(
     editor: &Arc<Editor>,
     browser: &Arc<ContentBrowser>,
-    payload: &crate::DragPayload,
-    category: usize,
+    from: &crate::service::Dragging,
     dst: &str,
 ) {
-    let key: CatKey = (payload.source, if payload.source == Source::Editor { category } else { 0 });
+    let key: CatKey = from.key;
     let Some(cat) = browser.cats.peek(key) else { return };
     // a folder never goes into itself or below itself
-    let entries: Vec<Entry> = payload
+    let entries: Vec<Entry> = from
         .entries
         .iter()
         .filter(|e| {
-            payload.source != Source::Project
+            key.0 != Source::Project
                 || !(crate::model::is_ancestor(&e.path, dst) || parent_of(&e.path).eq_ignore_ascii_case(dst))
         })
-        .map(|e| Entry::new(&e.path, e.folder))
+        .cloned()
         .collect();
     if entries.is_empty() {
         return;
     }
     let clips = clips_of(&entries, &cat);
-    let cut = payload.source == Source::Project;
+    let cut = key.0 == Source::Project;
     let ed = editor.clone();
     let dst = dst.to_owned();
     editor.exec.spawn(async move {
@@ -633,6 +685,173 @@ pub(crate) fn drop_into(
         }
         ed.exec.wake().ping();
     });
+}
+
+/// Pictures the game does not read (PNG, JPG, TGA, BMP).
+fn convertible_picture(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| ["png", "jpg", "jpeg", "tga", "bmp"].iter().any(|x| e.eq_ignore_ascii_case(x)))
+}
+
+/// Files from Explorer dropped on a project folder: copied in (`file.copy`); a picture dropped
+/// into a folder under `gamedata\textures` becomes a `.dds` there, the way the game reads it.
+pub(crate) fn import_files(editor: &Arc<Editor>, files: Vec<PathBuf>, dst: &str) {
+    let ed = editor.clone();
+    let dst = dst.to_owned();
+    editor.exec.spawn(async move {
+        let textures = dst.to_ascii_lowercase().starts_with("gamedata\\textures");
+        let (pictures, plain): (Vec<PathBuf>, Vec<PathBuf>) =
+            files.into_iter().partition(|f| textures && convertible_picture(f));
+        let mut done = 0u64;
+        let mut errors: Vec<String> = Vec::new();
+        if !plain.is_empty() {
+            let list: Vec<String> = plain.iter().map(|p| p.display().to_string()).collect();
+            let to = if dst.is_empty() { ".".to_owned() } else { dst.clone() };
+            match call(
+                &ed,
+                "file.copy",
+                &[("path", json!(list)), ("to", json!(to)), ("recursive", json!(true))],
+            )
+            .await
+            {
+                Ok(r) => done += count(&r, "files"),
+                Err((e, r)) => {
+                    done += count(&r, "files");
+                    let reason = first_reason(&r);
+                    errors.push(if reason.is_empty() { e } else { reason });
+                }
+            }
+        }
+        if !pictures.is_empty() {
+            match gz_project::Project::of(&ed) {
+                Ok((_, project)) => {
+                    let root = PathBuf::from(project.root());
+                    let guard = project.write_guard(None);
+                    let folder = root.join(&dst);
+                    let made = ed
+                        .exec
+                        .io(move || {
+                            let mut made = 0u64;
+                            let mut failed = Vec::new();
+                            for f in pictures {
+                                match picture_to_dds(&f, &folder, &guard) {
+                                    Ok(()) => made += 1,
+                                    Err(e) => failed.push(e),
+                                }
+                            }
+                            (made, failed)
+                        })
+                        .await;
+                    done += made.0;
+                    errors.extend(made.1);
+                    project.tree.mark_fs(&root.join(&dst));
+                }
+                Err(e) => errors.push(e.message),
+            }
+        }
+        match errors.first() {
+            None => ed.log.info(format!(
+                "Imported {done} file(s) into {}.",
+                if dst.is_empty() { "the project's root" } else { &dst }
+            )),
+            Some(e) => {
+                ed.notices.error(format!("Imported {done} file(s); {} failed, first: {e}", errors.len()))
+            }
+        }
+        ed.exec.wake().ping();
+    });
+}
+
+/// One picture made into `<folder>\<name>.dds` with a game texture's defaults.
+fn picture_to_dds(
+    file: &std::path::Path,
+    folder: &std::path::Path,
+    guard: &gz_editor::fsx::WriteGuard,
+) -> Result<(), String> {
+    let name = file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let target = folder.join(format!("{name}.dds"));
+    guard.check(&target).map_err(|e| e.to_string())?;
+    let ext = file.extension().map(|e| e.to_string_lossy().to_ascii_lowercase());
+    let bytes = std::fs::read(file).map_err(|e| format!("{} cannot be read: {e}", file.display()))?;
+    let loaded = gz_fmt_tex::load_image(&bytes, ext.as_deref())
+        .map_err(|e| format!("{} is no picture the editor reads: {e}", file.display()))?;
+    let params = gz_fmt_tex::TextureParams {
+        width: i32::try_from(loaded.image.width).unwrap_or(0),
+        height: i32::try_from(loaded.image.height).unwrap_or(0),
+        ..gz_fmt_tex::TextureParams::default()
+    };
+    let made = gz_fmt_tex::make_game_texture(&loaded.image, &params, None).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
+    gz_editor::fsx::write_atomic(&target, &made.dds)
+        .map_err(|e| format!("{} cannot be written: {e}", target.display()))
+}
+
+/// Bring into Project: Library entries copied into the project where a scene finds them - an
+/// object with its textures and thumbnail (`file.import`), a texture or a sound of the game or
+/// the library under the project's `gamedata`, a group under `rawdata\groups`, a base scene
+/// under `rawdata\levels`.
+pub(crate) async fn bring_into_project(
+    editor: &Arc<Editor>,
+    cat: &Catalog,
+    entries: &[Entry],
+) -> (u64, Vec<String>) {
+    let (mut done, mut errors) = (0u64, Vec::new());
+    let Some(k) = model::kind(cat.category).filter(|_| cat.source == Source::Library) else {
+        return (0, vec!["only the Library's entries are brought into the project".to_owned()]);
+    };
+    let mut files: Vec<&crate::catalog::FileItem> = Vec::new();
+    for e in entries {
+        if e.folder {
+            files.extend(cat.files_below(&e.path));
+        } else if let Some(f) = cat.file(&e.path) {
+            files.push(f);
+        }
+    }
+    for f in files {
+        let result = match (cat.category, f.origin) {
+            (model::SCENES, _) => {
+                bring_in_base_scene(editor, crate::catalog::stem(&f.path)).await.map(|_| ())
+            }
+            (_, Origin::None) => {
+                Err(format!("{} has no file of its own: it is placed, not brought in", f.path))
+            }
+            (_, Origin::Game) => {
+                let path = cat.game_path(&f.path).unwrap_or_default();
+                call(editor, "file.import", &[("from", json!("game")), ("path", json!(path))])
+                    .await
+                    .map(|_| ())
+                    .map_err(|(e, _)| e)
+            }
+            (_, Origin::Disk) => {
+                let path = format!("{}\\{}", k.library_folder, f.path);
+                let mut result =
+                    call(editor, "file.import", &[("from", json!("library")), ("path", json!(path))])
+                        .await
+                        .map(|_| ())
+                        .map_err(|(e, _)| e);
+                // an object's file.import brings its thumbnail along; anything else takes its own
+                if cat.category != model::OBJECTS && result.is_ok() {
+                    for c in &f.companions {
+                        let path = format!("{}\\{c}", k.library_folder);
+                        if let Err((e, _)) =
+                            call(editor, "file.import", &[("from", json!("library")), ("path", json!(path))])
+                                .await
+                        {
+                            result = Err(e);
+                        }
+                    }
+                }
+                result
+            }
+        };
+        match result {
+            Ok(()) => done += 1,
+            Err(e) if e.contains("in the project already") => done += 1,
+            Err(e) => errors.push(e),
+        }
+    }
+    (done, errors)
 }
 
 // ---- making things ------------------------------------------------------------------------------
@@ -679,7 +898,7 @@ pub(crate) fn new_folder(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>, st
     });
 }
 
-/// Add > Quest, Behaviour Graph, Character, PDA Interface: `content_create` in the folder shown,
+/// Add > Quest, Behaviour Graph, Character, PDA Interface: `file.create` in the folder shown,
 /// then its name is up for typing.
 pub(crate) fn create(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>, st: &Inner, kind: &'static str) {
     let folder = st.loc.folder.clone();
@@ -705,7 +924,7 @@ pub(crate) fn create(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>, st: &I
     });
 }
 
-/// The Add menu's items: the label, the tip, the `content_create` kind (`None`: a folder).
+/// The Add menu's items: the label, the tip, the `file.create` kind (`None`: a folder).
 pub(crate) const ADD_ITEMS: [(&str, &str, Option<&str>); 5] = [
     ("New Folder", "A folder in the folder shown.", None),
     ("Quest", "A quest graph (.nqasset).", Some("quest")),
@@ -720,7 +939,7 @@ pub(crate) const ADD_ITEMS: [(&str, &str, Option<&str>); 5] = [
 
 // ---- Exclude from Build ---------------------------------------------------------------------------
 
-/// What the build-contents row of the menu offers for a selection (`DrawBuildToggle`).
+/// What the build-contents row of the menu offers for a selection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum BuildToggle {
     /// Nothing of it ships ever: the row is off.
@@ -773,8 +992,7 @@ pub(crate) fn set_excluded(editor: &Arc<Editor>, paths: Vec<String>, excluded: b
 
 // ---- outside the editor ---------------------------------------------------------------------------
 
-/// Show in Explorer: the entry selected in a window of Explorer; `dry_run` only answers the path
-/// (`RevealInExplorer`).
+/// Show in Explorer: the entry selected in a window of Explorer; `dry_run` only answers the path.
 pub(crate) fn reveal_in_explorer(
     project_root: Option<PathBuf>,
     entry: &str,
@@ -802,36 +1020,67 @@ pub(crate) fn reveal_in_explorer(
     Ok(path)
 }
 
-/// Link Game... of the Game source's empty state: the folder picker on a thread of its own, then
-/// `game.link`.
+/// Link Game...: Preferences > Game, where the default game is picked.
 pub(crate) fn link_game(editor: &Arc<Editor>) {
-    let ed = editor.clone();
-    let asker = if editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
-    let request = gz_ui::file_dialog::FileRequest::folder("Link Game");
-    let picked = gz_ui::file_dialog::pick(None, asker, request, move |folder| {
-        let path = folder.display().to_string();
-        let ed2 = ed.clone();
-        ed.exec.spawn(async move {
-            if let Err((e, _)) = call(&ed2, "game.link", &[("path", json!(path))]).await {
-                ed2.notices.error(format!("Link Game: {e}"));
-            }
-            ed2.exec.wake().ping();
-        });
-    });
-    if let Err(line) = picked {
-        editor.log.plain(line);
-    }
+    editor.post("app.prefs", args(&[("action", json!("show")), ("page", json!("game"))]));
 }
 
-/// Place in Scene: `scene.place` with the entry's library reference.
-pub(crate) fn place(editor: &Arc<Editor>, reference: String) {
-    editor.post("scene.place", args(&[("kind", json!("object")), ("ref", json!(reference))]));
+/// Place in Level: what the entry is, on the surface under the viewport's centre - the viewport's
+/// own drop (`viewport.gesture`) at the middle of its rectangle, the snapping that is on included,
+/// one undo step, the placed thing selected. Where the Level tab is not up, `scene.place` puts it
+/// on the surface below a point ten metres along the camera's view.
+pub(crate) fn place(
+    editor: &Arc<Editor>,
+    asset: gz_ui::drop::Asset,
+    (kind, field, value): (String, &'static str, String),
+) {
+    let ed = editor.clone();
+    editor.exec.spawn(async move {
+        if let Some(at) = viewport_centre(&ed).await {
+            let assets = json!([{ "path": asset.path, "kind": asset.kind }]);
+            let pairs = [("kind", json!("drop")), ("at", json!(at)), ("assets", assets)];
+            if call(&ed, "viewport.gesture", &pairs).await.is_ok() {
+                ed.exec.wake().ping();
+                return;
+            }
+        }
+        let mut pairs = vec![("kind", json!(kind)), (field, json!(value)), ("on_surface", json!(true))];
+        if let Ok(cam) = call(&ed, "viewport.camera", &[]).await {
+            let v = |k: &str| -> Option<[f64; 3]> {
+                let a = cam.get(k)?.as_array()?;
+                Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?, a.get(2)?.as_f64()?])
+            };
+            if let (Some(p), Some(d)) = (v("position"), v("direction")) {
+                pairs.push(("position", json!([p[0] + d[0] * 10.0, p[1] + d[1] * 10.0, p[2] + d[2] * 10.0])));
+            }
+        }
+        if let Err((e, _)) = call(&ed, "scene.place", &pairs).await {
+            ed.notices.error(format!("Place in Level: {e}"));
+        }
+        ed.exec.wake().ping();
+    });
+}
+
+/// The middle of the viewport, in points from its top left, while the Level tab shows it.
+async fn viewport_centre(editor: &Arc<Editor>) -> Option<[f64; 2]> {
+    let list = call(editor, "ui.list", &[]).await.ok()?;
+    let panel = list
+        .get("panels")?
+        .as_array()?
+        .iter()
+        .find(|p| p.get("id").and_then(Value::as_str) == Some("viewport"))?;
+    if panel.get("visible").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    let r = panel.get("rect")?.as_array()?;
+    let (w, h) = (r.get(2)?.as_f64()?, r.get(3)?.as_f64()?);
+    (w > 1.0 && h > 1.0).then_some([(w * 0.5).round(), (h * 0.5).round()])
 }
 
 // ---- reaching the browser -------------------------------------------------------------------------
 
 /// Brings the browser up from the window: the panel while Level draws it, the Content Drawer over
-/// anything else (`MakeVisible`).
+/// anything else.
 pub(crate) fn make_visible(cx: &mut DocCx<'_>, st: &Inner) {
     let now = cx.ctx.cumulative_frame_nr();
     if cx.active_tab == gz_app::tabs::LEVEL && st.host(crate::Host::Panel).recent(now) {
@@ -860,52 +1109,98 @@ pub(crate) fn reveal_from_tab(cx: &mut DocCx<'_>, path: &str) {
     make_visible(cx, &st);
 }
 
-/// An Editor category's files that back an entry, mirrored into the project's layout
-/// (`CopyLibraryItem` without a destination): `(from, project folder)` pairs that exist.
-#[must_use]
-pub(crate) fn library_files(editor_root: &std::path::Path, cat: usize, path: &str) -> Vec<(PathBuf, String)> {
-    let c = category(cat);
-    let stem = icons::extension(path).map_or(path, |e| &path[..path.len() - e.len()]);
-    let mut out = Vec::new();
-    for lib in c.lib {
-        let from = editor_root.join(lib.folder).join(format!("{stem}{}", lib.ext));
-        if from.is_file() {
-            let sub = parent_of(stem);
-            let dst = if sub.is_empty() { lib.folder.to_owned() } else { format!("{}\\{sub}", lib.folder) };
-            out.push((from, dst));
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn what_a_double_click_opens() {
-        assert_eq!(visual_name("meshes\\dynamics\\box\\box_1a.ogf"), "dynamics\\box\\box_1a");
-        assert_eq!(game_level(Source::Game, "levels\\l05_bar\\level.ai"), Some("l05_bar"));
-        assert_eq!(game_level(Source::Project, "levels\\x"), None);
-        assert!(
-            matches!(what_opens(Source::Game, 0, "levels\\l05_bar", None), Ok(Open::Scene(s)) if s == "l05_bar")
-        );
-        let Ok(Open::Doc(q)) = what_opens(Source::Project, 0, "quests\\a.nqasset", None) else { panic!() };
+        let mut project = Catalog::empty(Source::Project, 0);
+        project.disk_root = Some(PathBuf::from("D:\\p"));
+        for p in ["quests\\a.nqasset", "levels\\e.scene", "notes.txt", "gamedata\\textures\\x.dds"] {
+            project.add(crate::catalog::FileItem {
+                path: p.into(),
+                size: 1,
+                asset: gz_project::kind_of(p, None),
+                origin: Origin::Disk,
+                label: None,
+                note: None,
+                companions: Vec::new(),
+            });
+        }
+        let Ok(Open::Doc(q)) = what_opens(&project, "quests\\a.nqasset") else { panic!() };
         assert_eq!((q.kind.as_str(), q.path.as_deref()), ("quest", Some("quests\\a.nqasset")));
-        assert!(what_opens(Source::Game, 0, "x.nqasset", None).is_err());
-        let Ok(Open::Doc(t)) = what_opens(Source::Game, 0, "textures\\ui\\x.dds", None) else { panic!() };
-        assert_eq!((t.kind.as_str(), t.arg.as_deref()), ("texture", Some("darf")));
-        assert!(what_opens(Source::Project, 0, "notes.txt", None).is_err_and(|e| e.starts_with("no viewer")));
+        assert!(
+            matches!(what_opens(&project, "levels\\e.scene"), Ok(Open::Scene(s)) if s.ends_with("e.scene"))
+        );
+        assert!(what_opens(&project, "notes.txt").is_err_and(|e| e.starts_with("no viewer")));
+        let mut tex = Catalog::empty(Source::Library, model::TEXTURES);
+        tex.game_prefix = "textures".into();
+        tex.add(crate::catalog::FileItem {
+            path: "ui\\x.dds".into(),
+            size: 1,
+            asset: None,
+            origin: Origin::Game,
+            label: None,
+            note: None,
+            companions: Vec::new(),
+        });
+        let Ok(Open::Doc(t)) = what_opens(&tex, "ui\\x.dds") else { panic!() };
+        assert_eq!(
+            (t.kind.as_str(), t.arg.as_deref(), t.path.as_deref()),
+            ("texture", Some("game"), Some("textures\\ui\\x.dds"))
+        );
+        let scenes = Catalog::empty(Source::Library, model::SCENES);
+        assert!(matches!(what_opens(&scenes, "jupiter.level"), Ok(Open::BaseScene(n)) if n == "jupiter"));
     }
 
     #[test]
-    fn references_and_names() {
+    fn what_is_placed_and_how_it_drags() {
+        let mut objects = Catalog::empty(Source::Library, model::OBJECTS);
+        objects.disk_root = Some(PathBuf::from("D:\\lib\\rawdata\\objects"));
+        objects.add(crate::catalog::FileItem {
+            path: "box\\b.object".into(),
+            size: 1,
+            asset: None,
+            origin: Origin::Disk,
+            label: None,
+            note: None,
+            companions: Vec::new(),
+        });
+        assert_eq!(placeable(&objects, "box\\b.object"), Some(("object".into(), "ref", "box\\b".into())));
+        let a = crate::payload_of(&objects, "box\\b.object", false);
+        assert_eq!((a.kind.as_str(), a.path.as_str()), ("object", "box\\b.object"));
+        assert!(a.file.is_some_and(|f| f.ends_with("b.object")));
+        let mut spawns = Catalog::empty(Source::Library, model::SPAWNS);
+        spawns.add(crate::catalog::FileItem {
+            path: "weapons\\pistols\\wpn_pm".into(),
+            size: 0,
+            asset: None,
+            origin: Origin::None,
+            label: Some("PM".into()),
+            note: None,
+            companions: Vec::new(),
+        });
         assert_eq!(
-            placeable_ref(Source::Project, 0, "rawdata\\objects\\box\\b.object").as_deref(),
-            Some("box\\b")
+            placeable(&spawns, "weapons\\pistols\\wpn_pm"),
+            Some(("spawn".into(), "section", "wpn_pm".into()))
         );
-        assert_eq!(placeable_ref(Source::Project, 0, "gamedata\\b.object"), None);
-        assert_eq!(placeable_ref(Source::Editor, 0, "box\\b.object").as_deref(), Some("box\\b"));
+        let a = crate::payload_of(&spawns, "weapons\\pistols\\wpn_pm", false);
+        assert_eq!((a.kind.as_str(), a.path.as_str()), ("spawn", "wpn_pm"));
+        let mut project = Catalog::empty(Source::Project, 0);
+        project.add(crate::catalog::FileItem {
+            path: "rawdata\\objects\\box\\b.object".into(),
+            size: 1,
+            asset: None,
+            origin: Origin::Disk,
+            label: None,
+            note: None,
+            companions: Vec::new(),
+        });
+        assert_eq!(
+            placeable(&project, "rawdata\\objects\\box\\b.object").map(|p| p.2),
+            Some("box\\b".into())
+        );
         let spec = delete_spec(&[Entry::new("a\\b.txt", false)], None);
         assert_eq!(spec.headline, "Delete b.txt?");
         let spec = delete_spec(&[Entry::new("a", true), Entry::new("b.txt", false)], None);

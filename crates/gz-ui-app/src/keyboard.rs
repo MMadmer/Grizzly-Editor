@@ -27,7 +27,7 @@ use crate::reply::{args, call_then, error_text, ok, s};
 /// A row of the page.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyRow {
-    /// The action's id (`edit.undo`), or a COMMAND_* id of the level editor's own table.
+    /// The action's id (`edit.undo`, `level.build`).
     pub id: String,
     pub title: String,
     pub group: String,

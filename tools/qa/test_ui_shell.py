@@ -232,7 +232,7 @@ def phase_a(project, shots, ed, before_scale, contract) -> None:
     check(ping.get("name") == "Grizzly Editor" and str(ping.get("version", "")).count(".") == 2,
           "A ping names the editor and the version it was built as", short(ping))
     panel_ids = set((contract.get("panels") or {}).keys())
-    check({"tools", "world_outliner", "details", "level_settings", "content_browser", "output_log", "viewport"} <= panel_ids,
+    check({"place", "world_outliner", "details", "level_settings", "content_browser", "output_log", "viewport"} <= panel_ids,
           "A ui.contract lists the seven Level panels", short(contract))
     check(set((contract.get("drawers") or {}).keys()) == {"content", "log"}, "A ui.contract lists the two drawers", short(contract))
     dialogs = contract.get("dialogs") or {}
@@ -426,7 +426,7 @@ def phase_d(project, shots, ed, before_scale, contract) -> None:
 
 def phase_e(project, shots, ed, before_scale, contract) -> None:
     mcp("ui.tab", action="activate", doc="level")
-    for panel in ("world_outliner", "details", "level_settings", "tools"):
+    for panel in ("world_outliner", "details", "level_settings", "place"):
         c = mcp("ui.panel", action="close", id=panel)
         check(c.get("ok") and c.get("open") is False, "E %s closes" % panel, short(c))
         o = mcp("ui.panel", action="open", id=panel)
@@ -535,8 +535,11 @@ def phase_g(project, shots, ed, before_scale, contract) -> None:
     check(p.get("ok") and lst.get("popups"), "G the folded Menu button puts its menus up", short(lst))
     mcp("ui.popup", show="none")
     resize(*COMPACT)
-    check(mcp("ui.list").get("size_class") == "compact", "G 1280 x 720 pt is the Compact class")
+    lst = mcp("ui.list")
+    check(lst.get("size_class") == "compact", "G 1280 x 720 pt is the Compact class")
+    level_rects(lst, "compact", shots)
     resize(*WIDE)
+    level_rects(mcp("ui.list"), "wide", shots)
     fr = mcp("ui.frame")
     check(fr.get("folded") is False, "G a wide window shows the menus again", short(fr))
     refused = mcp("ui.popup", show="menu:Menu")
@@ -547,6 +550,33 @@ def phase_g(project, shots, ed, before_scale, contract) -> None:
         check(s.get("ok") and near(fr.get("caption_h", 0), 32, 0.6) and near(float(fr.get("scale") or 0), scale, .01),
               "G ui.scale %.1f: the caption stays 32 pt, drawn at that scale" % scale, short(fr))
     mcp("ui.scale", value=before_scale)
+
+
+def level_rects(lst: dict, cls: str, shots) -> None:
+    """The Level tab's dock at a size class: Place left (260 Wide, 240 Compact), the Outliner over Details on the
+    right (340, 300), the browser and the log under the viewport in Wide and in drawers in Compact; the viewport takes
+    the rest."""
+    mcp("ui.tab", action="activate", doc="level")
+    lst = mcp("ui.list")
+    panels = {p.get("id"): p for p in lst.get("panels") or []}
+    rect = lambda pid: list((panels.get(pid) or {}).get("rect") or [0, 0, 0, 0])  # pt
+    left, right = (260, 340) if cls == "wide" else (240, 300)
+    place, outliner, details, view = rect("place"), rect("world_outliner"), rect("details"), rect("viewport")
+    gap = 2.0 + 0.6
+    check(near(place[2], left, gap) and (panels.get("place") or {}).get("visible"),
+          "G %s: Place is the left panel, %d pt" % (cls, left), json.dumps(place))
+    check(near(outliner[2], right, gap) and near(details[2], right, gap) and outliner[1] < details[1],
+          "G %s: the Outliner over Details on the right, %d pt" % (cls, right), json.dumps([outliner, details]))
+    check(view[0] >= place[0] + place[2] - 0.6 and view[0] + view[2] <= outliner[0] + 0.6 and view[2] >= 360,
+          "G %s: the viewport between them takes the rest" % cls, json.dumps(view))
+    cb = panels.get("content_browser") or {}
+    if cls == "wide":
+        strip = rect("content_browser")
+        check(cb.get("docked") and cb.get("visible") and near(strip[3], 240, gap) and strip[0] >= view[0] - 0.6,
+              "G wide: the Content Browser under the viewport only, 240 pt", json.dumps(strip))
+    else:
+        check(not cb.get("visible"), "G compact: the Content Browser lives in its drawer", short(cb))
+    shot(shots, "level_" + cls)
 
 
 def phase_h(project, shots, ed, before_scale, contract) -> None:

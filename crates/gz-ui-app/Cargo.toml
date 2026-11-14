@@ -23,6 +23,8 @@ gz-update.workspace = true
 egui.workspace = true
 parking_lot.workspace = true
 serde_json.workspace = true
+serde.workspace = true
+schemars.workspace = true
 rustc-hash.workspace = true
 png.workspace = true
 # the system's folder dialog (Open Folder..., a location, the game folder)

@@ -39,7 +39,7 @@
 //!
 //! Nothing here writes a file or computes inside a frame: every edit is a command or a service
 //! call on the pools (`Characters::save`, `file.delete`, `world_set`, `place_spawn`,
-//! `focus_object`, `preview_model`); what a frame shows comes from snapshots and from data read
+//! `viewport.camera`, `preview_model`); what a frame shows comes from snapshots and from data read
 //! on the pools.
 
 #![forbid(unsafe_code)]

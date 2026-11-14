@@ -338,6 +338,14 @@ fn doc_of(s: &Value) -> String {
     if !own.is_empty() {
         return own;
     }
+    // an optional choice: its words are in the one alternative that is not "nothing"
+    for key in ["anyOf", "oneOf"] {
+        let Some(alts) = s.get(key).and_then(Value::as_array) else { continue };
+        let real: Vec<&Value> = alts.iter().filter(|a| a.get("type") != Some(&json!("null"))).collect();
+        if real.len() == 1 && alts.len() > 1 {
+            return doc_of(real[0]);
+        }
+    }
     // a choice whose every value says what it is documents itself: "a: ...; b: ..."
     for key in ["oneOf", "anyOf"] {
         let Some(alts) = s.get(key).and_then(Value::as_array) else { continue };
@@ -383,11 +391,22 @@ fn form_of(s: &Value) -> (String, Kind) {
             if real.len() == 1 {
                 return form_of(real[0]);
             }
-            // an enum whose variants carry their own docs: every alternative is a constant
-            let consts: Vec<&Value> =
-                real.iter().filter_map(|a| a.get("const").or_else(|| single_enum(a))).collect();
-            if !real.is_empty() && consts.len() == real.len() {
-                return (choices(consts.into_iter()), Kind::Text);
+            // an enum some of whose variants carry their own docs: every alternative is a
+            // constant, or the list of the variants that say nothing
+            let mut words: Vec<&Value> = Vec::new();
+            let all_words = real.iter().all(|a| {
+                if let Some(c) = a.get("const") {
+                    words.push(c);
+                    true
+                } else if let Some(list) = a.get("enum").and_then(Value::as_array) {
+                    words.extend(list.iter());
+                    true
+                } else {
+                    false
+                }
+            });
+            if !real.is_empty() && all_words {
+                return (choices(words.into_iter()), Kind::Text);
             }
             let forms: Vec<String> = real.iter().map(|a| form_of(a).0).collect();
             return (forms.join(" or "), Kind::Other);

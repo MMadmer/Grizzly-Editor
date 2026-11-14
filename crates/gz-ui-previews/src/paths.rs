@@ -1,5 +1,5 @@
-//! Where the editor keeps what these tabs read: its own `gamedata` and `rawdata` (the C++ editor's
-//! `fs.ltx` aliases), the open project, and how a folder is named to the author.
+//! Where the editor keeps what these tabs read: its own `gamedata` and `rawdata` (what `fs.ltx`
+//! names them), the open project, and how a folder is named to the author.
 
 use std::path::{Path, PathBuf};
 

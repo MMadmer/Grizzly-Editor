@@ -1,4 +1,4 @@
-//! View > Game Lighting, pure (`EGameLighting`, `GameLightingScene`): the weather of the linked
+//! Game Lit, pure: the weather of the linked
 //! game at an hour, the game's render settings, the lights the game would draw and the roof map
 //! that tells indoors from out.
 
@@ -8,14 +8,14 @@ use glam::Vec3;
 use gz_ltx::{Ltx, LtxDoc};
 use gz_render::{Environment, Frustum, Light, LightKind, RoofMap};
 use gz_scene::library::Library;
-use gz_scene::objects::{LT_DIRECT, LT_POINT, light_flags};
+use gz_scene::objects::{LT_POINT, light_flags};
 use gz_scene::{ObjClass, ObjData, SceneState};
 use rayon::prelude::*;
 use smol_str::SmolStr;
 
 use crate::camera::dir_hp;
 
-/// `EGameLighting::MAX_LIGHTS`.
+/// The most lights a frame of Game Lit draws.
 pub const MAX_LIGHTS: usize = 128;
 /// The roof map is `ROOF_CELLS`^2 cells of `ROOF_CELL` metres round the camera.
 pub const ROOF_CELLS: u32 = 256;
@@ -33,7 +33,7 @@ pub struct Weather {
     pub sky: WeatherSky,
 }
 
-/// The sky of the two sections round the hour (`CEnvDescriptorMixer::lerp`): both cube maps,
+/// The sky of the two sections round the hour, as the game mixes them: both cube maps,
 /// how far from the first to the second, the colour and the turn blended.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WeatherSky {
@@ -67,7 +67,7 @@ fn read_color(doc: &LtxDoc, sect: &str, key: &str) -> Vec3 {
     Vec3::from(v)
 }
 
-/// The way `CEnvDescriptor::load` builds the sun's direction: the altitude goes in as heading.
+/// The sun's direction the way the game builds it from a weather: the altitude goes in as heading.
 fn read_sun_dir(doc: &LtxDoc, sect: &str) -> Vec3 {
     let num = |k: &str| doc.get(sect, k).and_then(|t| t.trim().parse::<f32>().ok());
     match (num("sun_altitude"), num("sun_longitude")) {
@@ -76,7 +76,7 @@ fn read_sun_dir(doc: &LtxDoc, sect: &str) -> Vec3 {
     }
 }
 
-/// `LoadWeather`: the two sections around the hour blended, around midnight as the game does.
+/// The weather at an hour: the two sections around it blended, around midnight as the game does.
 pub fn weather_at(doc: &LtxDoc, name: &str, hour: f32) -> Result<Weather, String> {
     let mut keys: Vec<(i32, &str)> =
         doc.sections().filter_map(|s| section_seconds(s).map(|t| (t, s))).collect();
@@ -123,7 +123,7 @@ pub fn weather_at(doc: &LtxDoc, name: &str, hour: f32) -> Result<Weather, String
     })
 }
 
-/// `DefaultWeather`: Atmosfear's first night of a new game, `af3_slight_clear_<moon phase>`,
+/// The weather a new game's first night has: Atmosfear's, `af3_slight_clear_<moon phase>`,
 /// the phase counting the days since 2010 from alife's `start_date` (one more from noon) in an
 /// 8-day cycle; else the first clear weather, else the first one.
 #[must_use]
@@ -176,7 +176,7 @@ impl Default for GameSettings {
 }
 
 impl GameSettings {
-    /// `LoadGameSettings`: console commands, one "name value" a line.
+    /// The game's render settings from its `user.ltx`: console commands, one "name value" a line.
     #[must_use]
     pub fn read(text: &str) -> Self {
         let mut s = Self::default();
@@ -198,7 +198,7 @@ impl GameSettings {
         s
     }
 
-    /// `TonemapScale`: the exposure the game's tonemap gives a frame of mean luminance `lum`.
+    /// The exposure the game's tonemap gives a frame of mean luminance `lum`.
     #[must_use]
     pub fn tonemap_scale(&self, lum: f32) -> f32 {
         let amount = if self.tonemap { self.tonemap_amount } else { 0.0 };
@@ -223,7 +223,7 @@ impl GameSettings {
     }
 }
 
-/// A light the game would draw (`SGameLightSource`).
+/// A light the game would draw.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GameLight {
     /// "level", "lamp", "lamp_ambient", "campfire".
@@ -370,7 +370,7 @@ pub fn collect(
     all
 }
 
-/// `Gather`: the lights whose reach the camera sees, nearest first, cut to [`MAX_LIGHTS`]; and
+/// The lights whose reach the camera sees, nearest first, cut to [`MAX_LIGHTS`]; and
 /// how many there were before the cut.
 #[must_use]
 pub fn gather(all: &[GameLight], frustum: &Frustum, eye: Vec3) -> (Vec<GameLight>, usize) {
@@ -405,7 +405,7 @@ pub fn roof_stale(map: Option<&RoofMap>, eye: Vec3) -> bool {
     }
 }
 
-/// `BakeRoof`: for every cell the height of the topmost static surface over it, straight down
+/// The roof map: for every cell the height of the topmost static surface over it, straight down
 /// from above the region; the static library objects bucketed by 16 x 16 tiles. Rows run in
 /// parallel on the caller's pool. Returns the map and how many objects it tested.
 #[must_use]
@@ -496,50 +496,6 @@ pub fn bake_roof(state: &SceneState, lib: &Library, eye: Vec3, revision: u64) ->
     (RoofMap { origin, cell, cells, heights: heights.into(), revision }, candidates.len())
 }
 
-/// `ESceneLightTool::flShowSun`.
-pub const LIGHT_SHOW_SUN: u32 = 1 << 31;
-
-/// `ESceneLightTool::BeforeRender`: the lights the editor's own lighting sets for a frame - every
-/// visible scene light switched on for the viewport (`m_UseInD3D`, the Light tool's Viewport
-/// Lighting) that affects anything and whose range the view sees, in the scene's order, then the
-/// sun when the tool shows it. The C++ editor's fixed-function emulation lights with the
-/// directional ones alone (`EDevice_PushFFConstants`): those are what is kept.
-#[must_use]
-pub fn editor_lights(state: &SceneState, frustum: &Frustum) -> Vec<Light> {
-    let mut out = Vec::new();
-    for o in state.of_class(ObjClass::Light) {
-        let ObjData::Light(l) = &o.data else { continue };
-        if !o.flags.visible
-            || !l.use_in_d3d
-            || l.flags & (light_flags::AFFECT_STATIC | light_flags::AFFECT_DYNAMIC) == 0
-            || l.kind != LT_DIRECT
-            || !frustum.intersects_sphere(o.position(), l.range)
-        {
-            continue;
-        }
-        let r = o.rotation();
-        out.push(Light {
-            kind: LightKind::Directional { direction: dir_hp(r.y, r.x), ranged: true },
-            position: o.position(),
-            range: l.range,
-            color: Vec3::new(l.color[0], l.color[1], l.color[2]) * l.brightness,
-        });
-    }
-    let tool = state.tools.part(ObjClass::Light);
-    if tool.flags & LIGHT_SHOW_SUN != 0
-        && let gz_scene::tools::ToolOpts::Light(lt) = &tool.opts
-    {
-        let [p, h] = lt.sun_shadow_dir;
-        out.push(Light {
-            kind: LightKind::Directional { direction: dir_hp(h, p), ranged: false },
-            position: Vec3::ZERO,
-            range: 0.0,
-            color: Vec3::ONE,
-        });
-    }
-    out
-}
-
 /// The renderer's environment for a weather, the settings and the exposure.
 #[must_use]
 pub fn environment(
@@ -569,14 +525,14 @@ pub fn environment(
     }
 }
 
-/// `ClearColor`: the fog colour at the exposure, as the background.
+/// The fog colour at the exposure, as the background.
 #[must_use]
 pub fn clear_color(w: &Weather, exposure: f32) -> gz_render::Color {
     let c = |v: f32| ((v * exposure).clamp(0.0, 1.0) * 255.0) as u8;
     gz_render::Color::rgb(c(w.fog_color.x), c(w.fog_color.y), c(w.fog_color.z))
 }
 
-/// `HourText`: "22:00".
+/// An hour as the clock reads it: "22:00".
 #[must_use]
 pub fn hour_text(hour: f32) -> String {
     let minutes = (hour * 60.0 + 0.5).floor() as i32;
@@ -613,41 +569,6 @@ mod tests {
         assert!(weather_at(&LtxDoc::parse("[x]\na = 1\n"), "w", 1.0).is_err());
         assert_eq!(section_seconds("22:00:00"), Some(79200));
         assert_eq!(section_seconds("sky"), None);
-    }
-
-    #[test]
-    fn the_editor_lights_follow_use_in_d3d() {
-        use gz_scene::objects::LightData;
-        use gz_scene::{Object, SceneState};
-        let mut s = SceneState::default();
-        let direct = |on: bool| {
-            let mut o = Object::new(
-                ObjClass::Light,
-                if on { "on" } else { "off" },
-                ObjData::Light(LightData {
-                    kind: LT_DIRECT,
-                    use_in_d3d: on,
-                    range: 50.0,
-                    ..LightData::default()
-                }),
-            );
-            o.xform.position = Vec3::new(0.0, 0.0, 10.0);
-            o
-        };
-        s.insert(direct(true));
-        s.insert(direct(false));
-        // a point light is switched on but the emulation takes directional lights only
-        s.insert(Object::new(ObjClass::Light, "point", ObjData::Light(LightData::default())));
-        let cam = gz_render::Camera::looking(Vec3::ZERO, Vec3::Z);
-        let f = cam.frustum([100, 100]);
-        let got = editor_lights(&s, &f);
-        assert_eq!(got.len(), 1);
-        assert!(matches!(got[0].kind, LightKind::Directional { ranged: true, .. }));
-        // the sun comes last, along the tool's direction
-        s.tools.part_mut(ObjClass::Light).flags |= LIGHT_SHOW_SUN;
-        let got = editor_lights(&s, &f);
-        assert_eq!(got.len(), 2);
-        assert!(matches!(got[1].kind, LightKind::Directional { ranged: false, .. }));
     }
 
     #[test]

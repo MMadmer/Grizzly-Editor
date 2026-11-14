@@ -1,20 +1,45 @@
 //! Widgets the kit lacks, local to this crate until a second surface wants them
-//! (docs/UI_DESIGN.md, section 4: "A widget the kit lacks is written as a local one").
+//! (docs/UI_DESIGN.md, section 4), and the one copy of what every panel of the crate does with
+//! commands: [`run`] (a command off the UI thread, its answer a notice), [`confirm`],
+//! [`removal`], [`plural`], [`args`].
 
 use std::sync::Arc;
 
 use egui::{Align2, CornerRadius, Id, Rect, Response, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2};
+use gz_editor::{Args, Editor, Value};
+use gz_query::Query;
 use gz_ui::text::{self, Clip};
 use gz_ui::{Button, Font, Icon, Kind, audit, icons, metrics, palette};
 
-/// `XUI_LocalEyeToggle`: an eye (or a crossed-out eye) in a square `side` pt, hover-filled.
-/// Returns whether it was clicked.
+/// `local_eye_toggle`: an eye (or a crossed-out eye) filling `rect`, hover-filled. Returns
+/// whether it was clicked.
 pub fn local_eye_toggle(ui: &mut Ui, id: Id, rect: Rect, visible: bool, tip: &str) -> bool {
+    let icon = if visible { Icon::Eye } else { Icon::EyeOff };
+    local_glyph_toggle(ui, id, rect, icon, visible, true, tip)
+}
+
+/// `local_lock_toggle`: a closed lock while `locked`; an open one only under the pointer, so a
+/// column of unlocked rows stays quiet. Returns whether it was clicked.
+pub fn local_lock_toggle(
+    ui: &mut Ui,
+    id: Id,
+    rect: Rect,
+    locked: bool,
+    row_hovered: bool,
+    tip: &str,
+) -> bool {
+    let icon = if locked { Icon::Lock } else { Icon::Unlock };
+    local_glyph_toggle(ui, id, rect, icon, locked, locked || row_hovered, tip)
+}
+
+/// A square glyph button of a list's column: bright while `on`, drawn only while `shown` or
+/// hovered.
+fn local_glyph_toggle(ui: &mut Ui, id: Id, rect: Rect, icon: Icon, on: bool, shown: bool, tip: &str) -> bool {
     let p = palette(ui.ctx());
     let resp = ui.interact(rect, id, Sense::click());
     let hovered = resp.hovered();
     let held = resp.is_pointer_button_down_on();
-    if ui.is_rect_visible(rect) {
+    if ui.is_rect_visible(rect) && (shown || hovered) {
         if hovered || held {
             ui.painter().rect_filled(
                 rect,
@@ -22,19 +47,127 @@ pub fn local_eye_toggle(ui: &mut Ui, id: Id, rect: Rect, visible: bool, tip: &st
                 if held { p.pressed } else { p.hover },
             );
         }
-        let tone = match (visible, hovered) {
+        let tone = match (on, hovered) {
             (true, true) => p.text,
-            (true, false) => p.text_secondary,
-            (false, true) => p.text_secondary,
+            (true, false) | (false, true) => p.text_secondary,
             (false, false) => p.text_disabled,
         };
         let g = Rect::from_center_size(rect.center(), Vec2::splat(metrics::GLYPH_ROW));
-        icons::draw(ui.painter(), if visible { Icon::Eye } else { Icon::EyeOff }, g, tone);
+        icons::draw(ui.painter(), icon, g, tone);
     }
     audit::control(ui.ctx(), tip, true, None, Some(tip), rect);
     let clicked = resp.clicked();
     resp.on_hover_text(tip);
     clicked
+}
+
+/// A Ghost button in the error colour that opens a question naming what goes ("Clear...").
+pub fn local_danger(ui: &mut Ui, label: &str, tip: &str, enabled: bool, why: &str) -> bool {
+    let mut b = Button::new(label).kind(Kind::GhostDanger).enabled(enabled, why);
+    if enabled {
+        b = b.tip(tip);
+    }
+    b.show(ui).clicked()
+}
+
+/// `n word` or `n words`.
+#[must_use]
+pub fn plural(n: usize, word: &str) -> String {
+    format!("{n} {word}{}", if n == 1 { "" } else { "s" })
+}
+
+/// The arguments of a command from name-value pairs.
+#[must_use]
+pub fn args(pairs: &[(&str, Value)]) -> Args {
+    let mut a = Args::new();
+    for (k, v) in pairs {
+        a.insert((*k).into(), v.clone());
+    }
+    a
+}
+
+/// Runs a command off the UI thread, as the panels' buttons do: a refusal becomes an error
+/// notice; what the command says it did (`message`, `note`, the first `failed` line, a stopped
+/// generation, a validation) a note.
+pub fn run(editor: &Arc<Editor>, command: &'static str, a: Args) {
+    let ed = editor.clone();
+    let origin = editor.ui_origin();
+    editor.exec.spawn(async move {
+        let reply = ed.call(command, a, origin).await;
+        if reply.get("ok").and_then(Value::as_bool) != Some(true) {
+            let text = reply.get("error").and_then(Value::as_str).unwrap_or("The command failed.").to_owned();
+            ed.notices.error(text);
+            return;
+        }
+        if let Some(note) = reply_note(&reply) {
+            ed.notices.note(note);
+        }
+    });
+}
+
+/// The sentence a panel shows of a command's answer, when it has one.
+fn reply_note(reply: &Value) -> Option<String> {
+    let s = |k: &str| reply.get(k).and_then(Value::as_str).map(str::to_owned);
+    if let Some(m) = s("message").or_else(|| s("note")) {
+        return Some(m);
+    }
+    if let Some(f) =
+        reply.get("failed").and_then(Value::as_array).and_then(|f| f.first()).and_then(Value::as_str)
+    {
+        return Some(f.to_owned());
+    }
+    if reply.get("stopped").and_then(Value::as_bool) == Some(true) {
+        let n = reply.get("added").and_then(Value::as_u64).unwrap_or(0);
+        return Some(format!("Generation stopped: the {n} nodes made so far are kept."));
+    }
+    if reply.get("valid").and_then(Value::as_bool) == Some(true) {
+        return Some("The cells are valid.".to_owned());
+    }
+    reply
+        .get("problems")
+        .and_then(Value::as_array)
+        .and_then(|p| p.first())
+        .and_then(Value::as_str)
+        .map(|p| format!("{p} (the Output Log lists every problem)"))
+}
+
+/// Asks the kit's confirmation (the person, or the logged answer under `-nodlg`) and runs `then`
+/// on Yes.
+pub fn confirm(
+    ctx: &egui::Context,
+    editor: &Editor,
+    spec: gz_ui::ConfirmSpec,
+    then: impl FnOnce() + Send + 'static,
+) {
+    let line = gz_ui::dialog::confirm(ctx, crate::tools::asker(editor), spec, move |answer| {
+        if answer == gz_ui::Answer::Yes {
+            then();
+        }
+    });
+    if let Some(line) = line {
+        editor.log.plain(line);
+    }
+}
+
+/// The question of a removal of `items`: Cancel the default, Undo named as the way back.
+#[must_use]
+pub fn removal(
+    id: &str,
+    title: &str,
+    headline: &str,
+    items: Vec<String>,
+    action: &str,
+) -> gz_ui::ConfirmSpec {
+    gz_ui::ConfirmSpec {
+        id: id.into(),
+        title: title.into(),
+        headline: headline.into(),
+        total: items.len(),
+        items,
+        consequence: "Edit > Undo brings them back.".into(),
+        action: action.into(),
+        destructive: true,
+    }
 }
 
 /// A button of a [`local_button_flow`].
@@ -61,7 +194,7 @@ impl<'a> LocalButton<'a> {
     }
 }
 
-/// `XUI_LocalButtonFlow`: Secondary buttons side by side, wrapping onto the next line when the
+/// `local_button_flow`: Secondary buttons side by side, wrapping onto the next line when the
 /// row is full. Returns the index pressed.
 pub fn local_button_flow(ui: &mut Ui, buttons: &[LocalButton<'_>]) -> Option<usize> {
     let mut pressed = None;
@@ -80,7 +213,7 @@ pub fn local_button_flow(ui: &mut Ui, buttons: &[LocalButton<'_>]) -> Option<usi
     pressed
 }
 
-/// `XUI_Local::PanelHeader`: an icon, the name and, muted, what it is.
+/// `local_panel_header`: an icon, the name and, muted, what it is.
 pub fn local_panel_header(ui: &mut Ui, icon: Icon, name: &str, kind: &str) {
     let p = palette(ui.ctx());
     let ctx = ui.ctx().clone();
@@ -125,97 +258,7 @@ pub fn local_panel_header(ui: &mut Ui, icon: Icon, name: &str, kind: &str) {
     }
 }
 
-/// What a tool tile was asked.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct TileClick {
-    pub tile: bool,
-    pub eye: bool,
-}
-
-/// `DrawTile` of the Tools panel: [icon][label][eye], the active tool filled with the accent.
-// every argument is one the caller decides at each call; a struct of them would only rename them
-#[allow(clippy::too_many_arguments)]
-pub fn local_tool_tile(
-    ui: &mut Ui,
-    id: Id,
-    rect: Rect,
-    icon: Icon,
-    label: &str,
-    title: &str,
-    active: bool,
-    visible: bool,
-) -> TileClick {
-    let p = palette(ui.ctx());
-    let ctx = ui.ctx().clone();
-    let eye = 18.0;
-    let eye_rect = Rect::from_min_size(
-        pos2((rect.max.x - eye - 2.0).round(), (rect.center().y - eye * 0.5).round()),
-        Vec2::splat(eye),
-    );
-    let tile_resp = ui.interact(rect, id, Sense::click());
-    // the eye after the tile: the later widget wins the pointer
-    let eye_resp = ui.interact(eye_rect, id.with("eye"), Sense::click());
-    let hovered = tile_resp.hovered() && !eye_resp.hovered();
-    let held = tile_resp.is_pointer_button_down_on();
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        let fill = if active {
-            p.accent
-        } else if held {
-            p.pressed
-        } else if hovered {
-            p.hover
-        } else {
-            p.raised
-        };
-        painter.rect_filled(rect, CornerRadius::same(metrics::RADIUS), fill);
-        if eye_resp.hovered() {
-            painter.rect_filled(
-                eye_rect,
-                CornerRadius::same(metrics::RADIUS),
-                if active { p.selection_focused } else { p.hover },
-            );
-        }
-        let g = Rect::from_min_size(
-            pos2((rect.min.x + 4.0).round(), (rect.center().y - 8.0).round()),
-            Vec2::splat(16.0),
-        );
-        icons::draw(painter, icon, g, if active { p.text } else { p.text_secondary });
-        let x = (rect.min.x + 24.0).round();
-        let room = (eye_rect.min.x - 2.0 - x).max(0.0);
-        let color = if active || visible { p.text } else { p.text_secondary };
-        let cut = text::paint(
-            painter,
-            &Font::Body.id(),
-            pos2(x, rect.center().y),
-            Align2::LEFT_CENTER,
-            color,
-            label,
-            Some(room),
-            Clip::End,
-        );
-        if cut {
-            audit::truncated(&ctx, label, label, rect);
-        }
-        let eye_tone = if active {
-            p.text
-        } else if visible {
-            if eye_resp.hovered() { p.text } else { p.text_muted }
-        } else {
-            p.text_disabled
-        };
-        let eg = Rect::from_center_size(eye_rect.center(), Vec2::splat(metrics::GLYPH_ROW));
-        icons::draw(painter, if visible { Icon::Eye } else { Icon::EyeOff }, eg, eye_tone);
-    }
-    let tip = format!("{title} tool");
-    audit::control(&ctx, &tip, true, None, None, rect);
-    let out = TileClick { tile: tile_resp.clicked() && !eye_resp.hovered(), eye: eye_resp.clicked() };
-    eye_resp.on_hover_text(if visible { "Hide in the viewport" } else { "Show in the viewport" });
-    tile_resp.on_hover_text(tip);
-    out
-}
-
-/// `XUI_LocalThumbnail` without a picture: an inset square with the kind's glyph.
+/// `local_thumbnail`: a picture's place without a picture: an inset square with the kind's glyph.
 pub fn local_thumbnail(ui: &mut Ui, side: f32, icon: Icon, tip: &str) {
     let p = palette(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
@@ -352,14 +395,13 @@ struct TreeRow {
     folder: bool,
 }
 
-/// What a [`local_tree_list`] keeps between frames: the rows for the items it was given, the
-/// search and the open folders, rebuilt only when one of them changes.
-#[derive(Clone, Default)]
+/// What a [`local_tree_list`] keeps between frames: its rows worked out off the UI thread
+/// (a `Query` keyed by the search and the open folders, its revision the items' list), and the
+/// last rows shown while new ones come.
+#[derive(Clone)]
 struct TreeState {
-    items: Option<Arc<Vec<String>>>,
-    search: String,
-    open_epoch: u64,
-    rows: Arc<Vec<TreeRow>>,
+    query: Query<(String, u64), Vec<TreeRow>>,
+    shown: Arc<Vec<TreeRow>>,
 }
 
 #[derive(Clone, Default)]
@@ -369,7 +411,7 @@ struct OpenFolders {
 }
 
 /// The rows a tree shows: folders (open ones show what they hold) and items, every folder that
-/// holds a match open while a search is on (`UIItemListForm::SetFilter`).
+/// holds a match open while a search is on.
 fn tree_rows(items: &[String], search: &str, open: &rustc_hash::FxHashSet<String>) -> Vec<TreeRow> {
     let mut out: Vec<TreeRow> = Vec::new();
     // the folders already emitted, as a stack of the current path's parts
@@ -380,7 +422,7 @@ fn tree_rows(items: &[String], search: &str, open: &rustc_hash::FxHashSet<String
             continue;
         }
         let parts: Vec<&str> = item.split('\\').collect();
-        let Some((leaf, dirs)) = parts.split_last() else { continue };
+        let Some((_leaf, dirs)) = parts.split_last() else { continue };
         // the common prefix with what is open in the stack
         let common =
             stack.iter().zip(dirs.iter()).take_while(|(a, b)| a.rsplit('\\').next() == Some(**b)).count();
@@ -398,18 +440,19 @@ fn tree_rows(items: &[String], search: &str, open: &rustc_hash::FxHashSet<String
             stack.push(path);
         }
         if visible {
-            let _ = leaf;
             out.push(TreeRow { depth: stack.len() as u16, path: item.clone(), folder: false });
         }
     }
     out
 }
 
-/// The tree list of a tool (Object, Spawn, Particles): `\`-separated items as folders and
-/// leaves, filtered by `search`, `height` tall (rows outside the view are not laid out).
+/// The tree list of a chooser: `\`-separated items as folders and leaves, filtered by
+/// `search`, `height` tall (rows outside the view are not laid out; the rows themselves are
+/// worked out off the UI thread, so a keystroke in a list of thousands costs the frame nothing).
 /// Returns the item clicked; `picked` is drawn selected.
 pub fn local_tree_list(
     ui: &mut Ui,
+    editor: &Editor,
     id_salt: &str,
     items: &Arc<Vec<String>>,
     search: &str,
@@ -421,18 +464,18 @@ pub fn local_tree_list(
     let id = ui.make_persistent_id(("gz-ui-level.tree", id_salt));
     let open_id = id.with("open");
     let open = ctx.data(|d| d.get_temp::<OpenFolders>(open_id)).unwrap_or_default();
-    let mut state = ctx.data(|d| d.get_temp::<TreeState>(id)).unwrap_or_default();
-    let stale = !state.items.as_ref().is_some_and(|i| Arc::ptr_eq(i, items))
-        || state.search != search
-        || state.open_epoch != open.epoch;
-    if stale {
-        state.rows = Arc::new(tree_rows(items, search, &open.set));
-        state.items = Some(items.clone());
-        state.search = search.to_owned();
-        state.open_epoch = open.epoch;
-        ctx.data_mut(|d| d.insert_temp(id, state.clone()));
+    let mut state = ctx
+        .data(|d| d.get_temp::<TreeState>(id))
+        .unwrap_or_else(|| TreeState { query: Query::new(editor.exec.clone()), shown: Arc::new(Vec::new()) });
+    // the list's identity is its revision: a list read again is another Arc
+    let rev = gz_base::Rev(Arc::as_ptr(items) as usize as u64);
+    let key = (search.to_owned(), open.epoch);
+    let (list, s, set) = (items.clone(), search.to_owned(), open.set.clone());
+    if let Some(rows) = state.query.get(&key, rev, move || tree_rows(&list, &s, &set)).value() {
+        state.shown = rows.clone();
     }
-    let rows = state.rows.clone();
+    ctx.data_mut(|d| d.insert_temp(id, state.clone()));
+    let rows = state.shown;
     let mut clicked = None;
     let mut toggle: Option<String> = None;
     let row_h = metrics::ROW;
@@ -548,5 +591,44 @@ mod tests {
         let it = items(&["props\\box_1", "props\\barrel", "trees\\pine"]);
         let rows = tree_rows(&it, "box", &rustc_hash::FxHashSet::default());
         assert_eq!(rows.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(), vec!["props", "props\\box_1"]);
+    }
+
+    /// The eye and the lock of a row in frames of the kit: each answers its click.
+    #[test]
+    fn the_eye_and_the_lock_answer_their_clicks() {
+        use egui::{Event, Modifiers, PointerButton, Pos2, RawInput};
+        let ctx = egui::Context::default();
+        gz_ui::theme::install(&ctx, gz_ui::theme::Accent::default());
+        let eye = Rect::from_min_size(pos2(10.0, 10.0), Vec2::splat(22.0));
+        let lock = Rect::from_min_size(pos2(32.0, 10.0), Vec2::splat(22.0));
+        let mut frame = |events: Vec<Event>, t: f64| -> (bool, bool) {
+            let mut got = (false, false);
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))),
+                time: Some(t),
+                events,
+                ..RawInput::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                got.0 = local_eye_toggle(ui, Id::unique("eye"), eye, true, "Hide");
+                got.1 = local_lock_toggle(ui, Id::unique("lock"), lock, false, false, "Lock");
+            });
+            out.textures_delta.clear();
+            got
+        };
+        let click = |at: Pos2, frame: &mut dyn FnMut(Vec<Event>, f64) -> (bool, bool), t: f64| {
+            let b = |pressed| Event::PointerButton {
+                pos: at,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            frame(vec![Event::PointerMoved(at)], t);
+            frame(vec![b(true)], t + 0.05);
+            frame(vec![b(false)], t + 0.1)
+        };
+        assert_eq!(click(eye.center(), &mut frame, 0.0), (true, false));
+        // an unlocked lock is drawn only under the pointer, and still takes its click
+        assert_eq!(click(lock.center(), &mut frame, 1.0), (false, true));
     }
 }

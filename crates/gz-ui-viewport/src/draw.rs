@@ -1,8 +1,7 @@
-//! A scene snapshot as the renderer's `DrawList`, pure (`EScene::Render` and each class's
-//! `Render`): every object's meshes as instances by handle, and the helper shapes each class
-//! draws - light and sound ranges, shapes, way points and links, spawn marks, portals, sector
-//! bounds, the selection boxes - in the C++ colours and forms. Labels are the renderer's: it
-//! tells which are visible and the overlay draws them.
+//! A scene snapshot as the renderer's `DrawList`, pure: every object's meshes as instances by
+//! handle, and the helper shapes each kind draws - light and sound ranges, shapes, way points and
+//! links, spawn marks, portals, sector bounds, the selection boxes, the ghost of a drop. Labels are
+//! the renderer's: it tells which are visible and the overlay draws them.
 
 use std::sync::Arc;
 
@@ -20,43 +19,43 @@ use gz_scene::objects::{
 use gz_scene::pick::ScenePick;
 use gz_scene::{ObjClass, ObjData, ObjId, Object, SceneState};
 
-/// `ESceneSpawnTool::flShowSpawnType`, `flPickSpawnType`.
-const SPAWN_SHOW_TYPE: u32 = 1 << 31;
-const SPAWN_PICK_TYPE: u32 = 1 << 30;
-/// `ESceneLightTool::flShowControlName`.
-const LIGHT_SHOW_NAME: u32 = 1 << 30;
-/// `ESceneGlowTool::flDrawCross`.
-const GLOW_DRAW_CROSS: u32 = 1 << 30;
-
-/// `ELight.cpp`: `SEL_COLOR`, `NORM_COLOR`, `NORM_DYN_COLOR`.
+/// A light's mark: selected, static, dynamic.
 const LIGHT_SEL: u32 = 0x00FF_FFFF;
 const LIGHT_NORM: u32 = 0x00FF_FF00;
 const LIGHT_DYN: u32 = 0x0000_FF00;
-/// `ESound_Source.cpp`.
+/// A sound source's ranges and mark.
 const SOUND_SEL0: u32 = 0x00A0_A0F0;
 const SOUND_SEL1: u32 = 0x00FF_FFFF;
 const SOUND_NORM: u32 = 0x0000_00FF;
-/// `EShape.cpp`, the sound environment's and the fog volume's `SetDrawColor`.
+/// The shapes' fill and edge, the sound environment's and the fog volumes'.
 const SHAPE_TRANSP: u32 = 0x3C80_8080;
 const SHAPE_EDGE: u32 = 0xFF20_2020;
 const ENV_TRANSP: u32 = 0x2050_50FF;
 const FOG_OCCLUSION_TRANSP: u32 = 0x2050_A050;
 const FOG_GROUP_EDGE: u32 = 0xFFFF_2020;
-/// `SpawnPoint.cpp`.
+/// The player start, the respawn points' teams, the environment modifiers.
 const PLAYERSTART_COLOR: u32 = 0xFF30_C060;
 const RP_COLORS: [u32; 6] = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0x00ffff, 0xff00ff];
 const ENVMOD_COLOR: u32 = 0x00FF_AE00;
-/// `CGroupObject::Render`.
+/// A selected group's box.
 const GROUP_SEL: u32 = 0xFF70_70FF;
-/// `glow.cpp`'s romboid, `EParticlesObject`'s cross.
+/// A glow's romboid, a particle system's cross.
 pub(crate) const GLOW_COLOR: u32 = 0x00FF_8507;
 const PARTICLES_COLOR: u32 = 0xFFFF_EBAA;
 
-/// What a frame shows besides the scene's surfaces.
-#[derive(Clone, Debug)]
+/// What a frame shows besides the scene's surfaces (the Show pill's switches).
+#[derive(Clone, Debug, Default)]
 pub struct DrawOptions {
-    /// Spawn objects' shapes, marks, icons, labels and selection boxes (`g_SpawnHelpers`).
+    /// Spawn objects' shapes, marks, icons, labels and selection boxes.
     pub helpers: bool,
+    /// A spawn point's section over it.
+    pub spawn_names: bool,
+    /// A light's light control over it.
+    pub light_names: bool,
+    /// A selected glow's cross.
+    pub glow_crosses: bool,
+    /// What a drag over the viewport would place, where it would land.
+    pub ghost: Option<crate::service::Ghost>,
     /// The game-lighting mode's weather and the lights it draws.
     pub game: Option<(Environment, Vec<Light>)>,
 }
@@ -80,7 +79,7 @@ pub fn ga(b: &gz_fmt_level::Aabb) -> Option<Aabb> {
     b.is_valid().then(|| Aabb::new(b.min, b.max))
 }
 
-/// A line colour from the engine's `0xAARRGGBB`: lines ignore the alpha the C++ passes.
+/// A line colour from `0xAARRGGBB`: lines are drawn opaque whatever the alpha says.
 fn line(argb: u32) -> Color {
     Color::from_argb(argb).with_alpha(255)
 }
@@ -110,7 +109,7 @@ fn line_sphere(h: &mut Helpers, p: Vec3, r: f32, c: Color, cross: bool) {
     }
 }
 
-/// `DrawSelectionBoxB`: the corners of a box carried by a matrix.
+/// The corners of a box carried by a matrix.
 fn selection_box(h: &mut Helpers, local: &Aabb, world: &Mat4, c: Color) {
     if local.is_empty() {
         return;
@@ -128,7 +127,7 @@ fn romboid(h: &mut Helpers, p: Vec3, r: f32, c: Color) {
     );
 }
 
-/// `DrawEntity`: the flag of a spawn point in its own space, and its icon's square.
+/// The flag of a spawn point in its own space, and its icon's square.
 fn entity_flag(h: &mut Helpers, rp: &Mat4, c: Color) {
     let pts = [
         Vec3::ZERO,
@@ -150,7 +149,7 @@ fn entity_flag(h: &mut Helpers, rp: &Mat4, c: Color) {
     h.shape(ShapeKind::Plane, plane, Some(c.with_alpha(140)), None, true);
 }
 
-/// A shape's spheres and boxes in the object's space (`CEditShape::Render`).
+/// A shape's spheres and boxes in the object's space.
 fn shapes(h: &mut Helpers, data: &ShapeData, world: &Mat4, transp: Color, edge: Color, selected: bool) {
     let a = u32::from(transp.0[3]);
     let fill_c = if selected { transp.with_alpha((a * 2).min(255) as u8) } else { transp };
@@ -175,7 +174,7 @@ fn world_box(state: &SceneState, lib: &Library, o: &Object) -> Option<Aabb> {
     objects::world_box(state, o, &local).and_then(|b| ga(&b))
 }
 
-/// The name a spawn point's label shows (`flShowSpawnType`).
+/// The name a spawn point's label shows (Show > Spawn Names).
 fn spawn_label(o: &Object, d: &objects::SpawnData) -> String {
     if let Some(s) = d.section() {
         return s.to_owned();
@@ -209,7 +208,6 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
         let world = gm(&o.world());
         let rp = gm(&o.xform.matrix_rp());
         let p = o.position();
-        let flags = tools.part(o.class).flags;
         let mut push = |mesh, transform: Mat4, bounds: Option<Aabb>| {
             let mut i = Instance::new(mesh, transform).with_id(o.id.0);
             if selected {
@@ -279,7 +277,7 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
                         }
                     }
                 }
-                if flags & LIGHT_SHOW_NAME != 0
+                if opts.light_names
                     && let gz_scene::tools::ToolOpts::Light(lt) = &tools.part(ObjClass::Light).opts
                     && let Some(name) = lt.name_of(d.lcontrol)
                 {
@@ -292,7 +290,7 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
                 if selected {
                     let b = Aabb::new(p - Vec3::splat(g.radius), p + Vec3::splat(g.radius));
                     selection_box(h, &b, &Mat4::IDENTITY, Color::WHITE);
-                    if flags & GLOW_DRAW_CROSS != 0 {
+                    if opts.glow_crosses {
                         h.cross(p, g.radius, false, Color::WHITE, true);
                     }
                 }
@@ -301,7 +299,7 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
             ObjData::SoundEnv(d) => shapes(h, &d.shape, &world, fill(ENV_TRANSP), line(SHAPE_EDGE), selected),
             ObjData::FogVolume(d) => {
                 let transp = fill(if d.kind == FV_OCCLUSION { FOG_OCCLUSION_TRANSP } else { ENV_TRANSP });
-                // `ESceneFogVolumeTool::Selected`: the volumes of a selected one's group show it
+                // the volumes of a selected one's fog group show it
                 let grouped = d.group_id != u32::MAX
                     && state
                         .selection
@@ -385,9 +383,8 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
                             );
                         }
                     }
-                    let spawn_flags = tools.part(ObjClass::SpawnPoint).flags;
-                    if spawn_flags & SPAWN_SHOW_TYPE != 0 {
-                        h.label(p, spawn_label(o, d), Color::WHITE, spawn_flags & SPAWN_PICK_TYPE != 0);
+                    if opts.spawn_names {
+                        h.label(p, spawn_label(o, d), Color::WHITE, true);
                     }
                     if selected && let Some(b) = world_box(state, lib, o) {
                         selection_box(h, &b, &Mat4::IDENTITY, Color::WHITE);
@@ -479,7 +476,7 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
                     let next = pd.vertices.get((i + 1) % pd.vertices.len()).copied().unwrap_or(*v);
                     h.line(*v, next, edge, true);
                 }
-                // `DrawFaceNormal`
+                // the portal's normal
                 let mut n = Vec3::ZERO;
                 for (i, a) in pd.vertices.iter().enumerate() {
                     let b = pd.vertices.get((i + 1) % pd.vertices.len()).copied().unwrap_or(*a);
@@ -508,6 +505,9 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
         }
     }
     debug_draw(&mut out.list.helpers, &state.tools.debug);
+    if let Some(g) = &opts.ghost {
+        ghost(&mut out, lib, assets, g);
+    }
     if let Some((env, lights)) = &opts.game {
         out.list.environment = Some(env.clone());
         out.list.lights.clone_from(lights);
@@ -515,7 +515,33 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
     out
 }
 
-/// `CToolCustom::Render`: the compiler's error list - points, lines and faces, each with its
+/// What a drag would place, where it would land: an object's model outlined as a selection, and
+/// for every kind a cross on the spot and its box, so the landing point reads on any surface.
+fn ghost(out: &mut Built, lib: &Library, assets: &Assets, g: &crate::service::Ghost) {
+    let up = g.up.unwrap_or(Vec3::Y);
+    let turn = Quat::from_rotation_arc(Vec3::Y, up.normalize_or(Vec3::Y));
+    let at = Mat4::from_rotation_translation(turn, g.position);
+    let mut local = Aabb::new(Vec3::splat(-0.5), Vec3::splat(0.5));
+    if g.what.kind == crate::place::Kind::Object
+        && let Some(r) = g.what.reference.as_deref()
+    {
+        let bounds = lib.cached(r).and_then(|l| ga(&l.bounds));
+        let mesh = assets.object(r);
+        let mut i = Instance::new(mesh, at).with_flags(InstanceFlags::SELECTED);
+        i.bounds = bounds;
+        out.list.instances.push(i);
+        out.owners.push(ObjId(u32::MAX));
+        if let Some(b) = bounds.or_else(|| assets.mesh_bounds(mesh)) {
+            local = b;
+        }
+    }
+    let h = &mut out.list.helpers;
+    let c = Color::rgb(255, 176, 48);
+    h.cross(g.position, 0.5, false, c, false);
+    selection_box(h, &local, &at, c);
+}
+
+/// The level's problems where they are - points, lines and faces, each with its
 /// crosses and its caption ("P: 3", "L: 0", "F: 12" or the point's own text).
 fn debug_draw(h: &mut gz_render::Helpers, d: &gz_scene::debug::DebugDraw) {
     // `DrawCross(p, 0.01, ...)`
@@ -609,13 +635,13 @@ pub fn frustum_reach(view_proj: &Mat4) -> Aabb {
     b
 }
 
-/// The rectangle's corners in the picture, as `SelectionFrustum` walks them.
+/// The rectangle's corners in the picture, clockwise from the top left.
 fn rect_corners(a: glam::Vec2, b: glam::Vec2) -> [glam::Vec2; 4] {
     let (x0, x1, y0, y1) = (a.x.min(b.x), a.x.max(b.x), a.y.min(b.y), a.y.max(b.y));
     [glam::Vec2::new(x0, y0), glam::Vec2::new(x1, y0), glam::Vec2::new(x1, y1), glam::Vec2::new(x0, y1)]
 }
 
-/// How deep a box selects with Limited Depth on (`SelectionFrustum`): the farthest scene object
+/// How deep a box selects with Limited Depth on: the farthest scene object
 /// hit through the rectangle's four corners, plus `tolerance`; `None` (the whole view) when no
 /// corner meets one nearer than `far`.
 #[must_use]
@@ -641,7 +667,7 @@ pub fn box_depth(
     (depth >= near).then_some(depth + tolerance)
 }
 
-/// The objects a box of the picture holds (`FrustumSelect`): a frustum through the rectangle
+/// The objects a box of the picture holds: a frustum through the rectangle
 /// (pixels of a picture `size` big), tested against each object's world box; with `depth` it
 /// ends at the plane through the corners' rays that far out (Limited Depth).
 #[must_use]
@@ -675,7 +701,7 @@ pub fn frustum_select(
     );
     let frustum = gz_render::Frustum::from_view_proj(&(s * camera.view_proj(size)));
     // Limited Depth: the plane through three of the corners' points `depth` out, the camera on
-    // its inner side, closes the box (`SelectionFrustum`'s last plane)
+    // its inner side, closes the box
     let limit = depth.and_then(|d| {
         let p: Vec<Vec3> = rect_corners(a, b)
             .iter()
@@ -724,7 +750,7 @@ pub fn frustum_select(
         .collect()
 }
 
-/// The box Frame All and Frame Selection fit (`EScene::ZoomExtents` of the current class).
+/// The box Frame All and Frame Selection fit for one kind.
 #[must_use]
 pub fn class_box(state: &SceneState, lib: &Library, class: ObjClass, selected_only: bool) -> Option<Aabb> {
     if let Some(b) = bulk_box(state, class, selected_only) {
@@ -742,7 +768,7 @@ pub fn class_box(state: &SceneState, lib: &Library, class: ObjClass, selected_on
     (!b.is_empty()).then_some(b)
 }
 
-/// An object's box for framing (`focus_object`): its world box, or two metres round its pivot.
+/// An object's box for framing (`viewport.camera action=focus`): its world box, or two metres round its pivot.
 #[must_use]
 pub fn object_box(state: &SceneState, lib: &Library, o: &Object) -> Aabb {
     world_box(state, lib, o).unwrap_or_else(|| {
@@ -780,13 +806,23 @@ pub fn selection_gizmo_points(state: &SceneState, lib: &Library) -> Vec<(Vec3, V
     if state.tools.mode == gz_scene::SceneMode::AiMap {
         return gizmo_points(state, lib, ObjClass::AiMap);
     }
-    state
+    let mut out = Vec::new();
+    for o in state
         .selected_in_order()
         .iter()
         .filter_map(|id| state.get(*id))
         .filter(|o| o.flags.visible && o.editable() && state.changeable(o))
-        .map(|o| (o.position(), o.rotation(), world_box(state, lib, o)))
-        .collect()
+    {
+        // a way path with selected points: the gizmo stands on those points, which it moves
+        if let ObjData::Way(w) = &o.data
+            && w.points.iter().any(|p| p.selected)
+        {
+            out.extend(w.points.iter().filter(|p| p.selected).map(|p| (p.position, Vec3::ZERO, None)));
+            continue;
+        }
+        out.push((o.position(), o.rotation(), world_box(state, lib, o)));
+    }
+    out
 }
 
 /// What the gizmo of the current class's selection stands on: each selected, visible, editable
@@ -807,7 +843,7 @@ pub fn gizmo_points(state: &SceneState, lib: &Library, class: ObjClass) -> Vec<(
         .collect()
 }
 
-/// `GetBBox` of the bulk tools: the AI map's box or its selected nodes (half a patch round each),
+/// The box of a painted layer: the AI map's box or its selected nodes (half a patch round each),
 /// the wallmarks or the selected ones; `None` for another class, `Some(None)` for nothing there.
 #[must_use]
 pub fn bulk_box(state: &SceneState, class: ObjClass, selected_only: bool) -> Option<Option<Aabb>> {
@@ -861,11 +897,11 @@ mod tests {
         let s = scene();
         let lib = Library::new(Vec::new());
         let assets = Assets::headless(gz_render::MaterialTable::default());
-        let b = build(&s, &lib, &assets, &DrawOptions { helpers: true, game: None });
+        let b = build(&s, &lib, &assets, &DrawOptions { helpers: true, ..DrawOptions::default() });
         // lights and glows have no mesh: only helpers (a glow's sprite is a pass's extra)
         assert!(b.list.instances.is_empty());
         assert!(!b.list.helpers.shapes.is_empty());
-        // a point light is its turned cross (`DrawPointLight`), no loose lines
+        // a point light is its turned cross, no loose lines
         assert!(b.list.helpers.lines.is_empty());
         assert!(b.list.helpers.shapes.iter().any(|sh| sh.kind == ShapeKind::Cross { rot45: true }));
         // the selected light draws its range: a sphere of 8 m
@@ -885,8 +921,8 @@ mod tests {
         s.insert(Object::new(ObjClass::Light, "spot", ObjData::Light(d)));
         let lib = Library::new(Vec::new());
         let assets = Assets::headless(gz_render::MaterialTable::default());
-        let b = build(&s, &lib, &assets, &DrawOptions { helpers: true, game: None });
-        // 32 edges of the cone and its axis (`DrawSpotLight`)
+        let b = build(&s, &lib, &assets, &DrawOptions { helpers: true, ..DrawOptions::default() });
+        // 32 edges of the cone and its axis
         assert_eq!(b.list.helpers.lines.len(), 33);
     }
 
@@ -897,7 +933,7 @@ mod tests {
         s.tools.part_mut(ObjClass::Glow).visible = false;
         let lib = Library::new(Vec::new());
         let assets = Assets::headless(gz_render::MaterialTable::default());
-        let b = build(&s, &lib, &assets, &DrawOptions { helpers: true, game: None });
+        let b = build(&s, &lib, &assets, &DrawOptions { helpers: true, ..DrawOptions::default() });
         assert!(b.list.helpers.is_empty());
     }
 

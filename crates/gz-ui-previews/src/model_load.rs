@@ -22,36 +22,38 @@ pub enum ModelSource {
 
 impl ModelSource {
     #[must_use]
+    /// `game` for the linked game's visual; anything else (`project`, `library`) finds the name
+    /// in the project, the library, then the game.
     pub fn parse(text: &str) -> Self {
-        if text.eq_ignore_ascii_case("darf") { ModelSource::Game } else { ModelSource::Visual }
+        if text.eq_ignore_ascii_case("game") { ModelSource::Game } else { ModelSource::Visual }
     }
 
     #[must_use]
     pub fn arg(self) -> &'static str {
         match self {
-            ModelSource::Visual => "visual",
-            ModelSource::Game => "darf",
+            ModelSource::Visual => "library",
+            ModelSource::Game => "game",
         }
     }
 }
 
-/// `VisualTypeName`.
+/// What a visual is, as the Details panel names it.
 #[must_use]
 pub fn visual_type_name(kind: u8) -> &'static str {
     match kind {
-        MT::NORMAL => "static mesh",
-        MT::HIERRARHY => "hierarchy",
-        MT::PROGRESSIVE => "progressive mesh",
-        MT::SKELETON_ANIM => "animated skeleton",
-        MT::SKELETON_RIGID => "rigid skeleton",
-        MT::SKELETON_GEOMDEF_PM => "skinned mesh (PM)",
-        MT::SKELETON_GEOMDEF_ST => "skinned mesh (ST)",
+        MT::NORMAL => "Static Mesh",
+        MT::HIERRARHY => "Hierarchy",
+        MT::PROGRESSIVE => "Progressive Mesh",
+        MT::SKELETON_ANIM => "Animated Skeleton",
+        MT::SKELETON_RIGID => "Rigid Skeleton",
+        MT::SKELETON_GEOMDEF_PM => "Skinned Mesh (PM)",
+        MT::SKELETON_GEOMDEF_ST => "Skinned Mesh (ST)",
         MT::LOD => "LOD",
-        MT::TREE_ST => "tree (ST)",
-        MT::TREE_PM => "tree (PM)",
-        MT::PARTICLE_EFFECT => "particle effect",
-        MT::PARTICLE_GROUP => "particle group",
-        _ => "unknown",
+        MT::TREE_ST => "Tree (ST)",
+        MT::TREE_PM => "Tree (PM)",
+        MT::PARTICLE_EFFECT => "Particle Effect",
+        MT::PARTICLE_GROUP => "Particle Group",
+        _ => "Unknown",
     }
 }
 
@@ -104,7 +106,7 @@ pub struct ModelData {
     pub name: String,
     /// Why it cannot be shown; empty when it can.
     pub error: String,
-    /// `static mesh`, `animated skeleton`, ..., `library object`; empty without a model.
+    /// `Static Mesh`, `Animated Skeleton`, ..., `Library Object`; empty without a model.
     pub kind: String,
     pub verts: u32,
     pub tris: u32,
@@ -235,7 +237,7 @@ fn from_object(name: &str, bytes: &[u8], sources: Sources) -> ModelData {
     ModelData {
         name: name.to_owned(),
         error: String::new(),
-        kind: "library object".to_owned(),
+        kind: "Library Object".to_owned(),
         verts: u32::try_from(verts).unwrap_or(u32::MAX),
         tris: u32::try_from(tris).unwrap_or(u32::MAX),
         bones: u32::try_from(object.bones.len()).unwrap_or(u32::MAX),
@@ -269,7 +271,7 @@ fn texture_names(visual: &Visual) -> Vec<String> {
 }
 
 /// The motion a skeleton is posed with: `idle`, else the first cycle it ships, else the first
-/// motion (`PoseSkeleton`).
+/// motion.
 fn pick_motion(motions: &MotionSet) -> Option<usize> {
     if let Some(i) = motions.motions.iter().position(|m| m.name.eq_ignore_ascii_case("idle")) {
         return Some(i);
@@ -469,8 +471,8 @@ mod tests {
     fn kinds() {
         assert!(supported(MT::SKELETON_ANIM));
         assert!(!supported(MT::LOD));
-        assert_eq!(visual_type_name(MT::TREE_PM), "tree (PM)");
-        assert_eq!(ModelSource::parse("DARF"), ModelSource::Game);
+        assert_eq!(visual_type_name(MT::TREE_PM), "Tree (PM)");
+        assert_eq!(ModelSource::parse("Game"), ModelSource::Game);
         assert_eq!(ModelSource::parse(""), ModelSource::Visual);
     }
 

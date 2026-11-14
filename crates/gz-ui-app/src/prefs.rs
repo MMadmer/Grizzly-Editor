@@ -927,7 +927,7 @@ impl PreferencesDoc {
                     }
                     if keys > 0 {
                         ui.add_space(8.0);
-                        if crate::local::local_section(ui, "prefs.keyboard_results", KEYBOARD, true) {
+                        if gz_ui::section::Section::new("prefs.keyboard_results", KEYBOARD).show(ui).open {
                             let (ed, search) = (self.editor.clone(), self.search.clone());
                             self.keyboard.draw(ui, &ed, &search);
                         }

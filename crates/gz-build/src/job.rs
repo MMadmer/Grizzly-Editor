@@ -371,7 +371,7 @@ pub async fn run_build(
         Ok(()) => out.ok = true,
         Err(err) => out.err = err,
     }
-    editor.log.detail(format!("* [XMS] build stages: {}", feeder.profile.text()));
+    editor.log.detail(format!("[XMS] build stages: {}", feeder.profile.text()));
     out.warnings = warnings.join("\n");
     out.cancelled = !out.ok && out.err == "cancelled";
     builds.end();
@@ -445,7 +445,7 @@ async fn build(
         Ok(files) => out.files = files,
         Err(refusal) => {
             if refusal.err.starts_with("cannot copy ") {
-                editor.log.warn(format!("! [XMS] build: {}", refusal.err));
+                editor.log.warn(format!("[XMS] build: {}", refusal.err));
             }
             out.stale_names = refusal.stale_names;
             out.stale_count = refusal.stale_count;
@@ -455,7 +455,7 @@ async fn build(
 
     out.left_out = walk.left_out_texts();
     if !out.left_out.is_empty() {
-        editor.log.info(format!("* [XMS] left out of the build: {}", listed(&out.left_out, ", ")));
+        editor.log.info(format!("[XMS] left out of the build: {}", listed(&out.left_out, ", ")));
     }
     // The editor takes any name; the game reads a module through the ANSI APIs of a cp1251
     // system, where a character cp1251 lacks comes back as '?' and the file never opens. It
@@ -471,7 +471,7 @@ async fn build(
         })
         .collect();
     for name in &unreadable {
-        editor.log.warn(format!("! [XMS] build: the game cannot open {name} - a character outside cp1251"));
+        editor.log.warn(format!("[XMS] build: the game cannot open {name} - a character outside cp1251"));
     }
     if !unreadable.is_empty() {
         warnings.push(format!(
@@ -481,7 +481,7 @@ async fn build(
         ));
     }
     editor.log.info(format!(
-        "* [XMS] export {}: {} file(s) -> {dst}",
+        "[XMS] export {}: {} file(s) -> {dst}",
         if flat { "flat" } else { "module" },
         out.files
     ));

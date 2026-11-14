@@ -769,14 +769,14 @@ impl CharactersDoc {
             return;
         }
         let source = if self.lists.visuals.get(&visual.to_lowercase()).is_some_and(|e| e.extra == "project") {
-            "visual"
+            "library"
         } else {
-            "darf"
+            "game"
         };
         let ed = self.editor.clone();
         call::call_then(
             &self.editor,
-            "preview_model",
+            "preview.model",
             args([("name", s(&visual)), ("source", s(source))]),
             move |reply, ctx| {
                 if !call::ok(reply) {

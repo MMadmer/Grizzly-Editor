@@ -10,11 +10,13 @@
 
 mod cancel;
 mod exec;
+mod gate;
 mod jobs;
 mod wake;
 
 pub use cancel::{Cancel, Cancelled};
 pub use exec::{ExecOptions, Executors, Runtime};
+pub use gate::Gate;
 pub use jobs::{
     JobBusy, JobCtx, JobError, JobId, JobInfo, JobScope, JobState, Jobs, Owner, current_scope, in_scope,
     in_scope_sync,

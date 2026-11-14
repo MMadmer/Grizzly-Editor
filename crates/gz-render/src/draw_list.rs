@@ -24,7 +24,7 @@ bitflags::bitflags! {
         /// Left out of the id target: never outlined, never picked by id.
         const NO_ID = 1 << 4;
         /// A sky mesh whose normals are its cube-map coordinates, kept as they are while the
-        /// instance turns it (`dxEnvironmentRender`'s sky box).
+        /// instance turns it (the game's sky box).
         const SKY_TC = 1 << 5;
         /// Lies on another surface (a wallmark): drawn a little nearer than it is.
         const DECAL = 1 << 6;
@@ -98,13 +98,6 @@ pub enum LightKind {
         direction: Vec3,
         cos_half: f32,
     },
-    /// A light along `direction` (the editor's sun, a scene light of the direct type), only in
-    /// the editor's own lighting ([`crate::ViewFlags::SCENE_LIGHTS`]). `ranged`: it lights only
-    /// what lies within its range of its position, as the editor enables a light per object.
-    Directional {
-        direction: Vec3,
-        ranged: bool,
-    },
 }
 
 /// A light of the scene, drawn in [`crate::ViewMode::GameLighting`] with the game's falloff,
@@ -119,7 +112,7 @@ pub struct Light {
 }
 
 /// The height of the topmost surface over each cell of a square map: a point below it is
-/// indoors, out of the sun and most of the sky (`EGameLighting`'s roof map).
+/// indoors, out of the sun and most of the sky.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RoofMap {
     /// The corner of the map on the ground plane: x and z.
@@ -213,7 +206,7 @@ pub enum SpriteSize {
     /// Metres.
     #[default]
     World,
-    /// A glow's radius (`CTLSprite::Render`): `width * radius / depth` pixels, whatever its
+    /// A glow's radius: `width * radius / depth` pixels, whatever its
     /// distance.
     Screen,
     /// A fixed share of the picture: `radius` is in clip units across.

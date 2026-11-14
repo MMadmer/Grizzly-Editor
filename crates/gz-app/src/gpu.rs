@@ -99,7 +99,7 @@ pub struct Gpu {
     hint: AtomicU8,
     hint_read: AtomicBool,
     hint_reading: AtomicBool,
-    /// `COMMAND_MUTE_SOUND`'s mute for a while.
+    /// A mute held for a while, over what View > Mute Sounds says.
     mute_held: AtomicBool,
     /// What the player reads: muted now.
     muted: Arc<AtomicBool>,
@@ -165,8 +165,8 @@ impl Gpu {
         self.muted.clone()
     }
 
-    /// `MuteSounds(p1)` (`COMMAND_MUTE_SOUND`): on holds the sounds muted until a call with off,
-    /// which goes back to what View > Mute Sounds says.
+    /// On holds the sounds muted until a call with off, which goes back to what View > Mute Sounds
+    /// says.
     pub fn mute_held(&self, editor: &Editor, on: bool) {
         self.mute_held.store(on, Ordering::Release);
         self.refresh_mute(editor);

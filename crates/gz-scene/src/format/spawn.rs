@@ -507,7 +507,7 @@ pub static FIELDS: &[Field<Object>] = &[
         unit: "",
         ty: Ty::Pick("spawn_section"),
         default: "",
-        help: "The game's section the spawned thing is made from (`game.lookup kind=spawn_section` lists them).",
+        help: "The game's section the spawned thing is made from (`game.lookup type=spawn_section` lists them).",
         applies: is_entity,
         get: |o| match spawn(o).and_then(|d| d.entity.as_ref()) {
             Some(e) => text(e.section()),

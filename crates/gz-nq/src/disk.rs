@@ -266,7 +266,7 @@ impl NqService {
             match self.save(editor, &d).await {
                 Ok(()) => {
                     saved += 1;
-                    editor.log.info(format!("* [nq] unsaved graph written before it was closed: {path}"));
+                    editor.log.info(format!("[nq] unsaved graph written before it was closed: {path}"));
                 }
                 Err(e) => editor
                     .log

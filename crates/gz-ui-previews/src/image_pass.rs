@@ -5,6 +5,10 @@
 //! stores it - BC blocks included - and shows it blended by its straight alpha, one channel
 //! over black, the alpha as grey, or opaque (a rendered picture), with a linear or a nearest
 //! sampler. Nothing is computed per frame but a few uniforms.
+//!
+//! The pipeline is made on a thread of its own the first time a preview asks for it (a pipeline
+//! compile is tens of milliseconds): a preview tab asks as it opens, so it is there before its
+//! picture is, and no frame waits for it.
 
 use std::sync::Arc;
 
@@ -181,18 +185,39 @@ impl ImagePass {
         }
     }
 
-    /// The pass of this window.
+    /// The pass of this window once it is made. The first call starts making it on a thread of
+    /// its own and answers `None` until it is there; `wake` asks for the frame that draws with it.
     #[must_use]
-    pub fn of(gpu: &RenderState) -> Arc<ImagePass> {
-        let mut r = gpu.renderer.write();
-        if let Some(p) = r.callback_resources.get::<Arc<ImagePass>>() {
-            return p.clone();
+    pub fn get(gpu: &RenderState, wake: &gz_task::Wake) -> Option<Arc<ImagePass>> {
+        if let Some(p) = gpu.renderer.read().callback_resources.get::<Arc<ImagePass>>() {
+            return Some(p.clone());
         }
-        let p = Arc::new(ImagePass::new(gpu));
-        r.callback_resources.insert(p.clone());
-        p
+        {
+            let mut r = gpu.renderer.write();
+            if r.callback_resources.get::<Preparing>().is_some() {
+                return None;
+            }
+            r.callback_resources.insert(Preparing);
+        }
+        let (state, wake) = (gpu.clone(), wake.clone());
+        let started =
+            std::thread::Builder::new().name("gz-ui-previews image pass".to_owned()).spawn(move || {
+                let pass = Arc::new(ImagePass::new(&state));
+                state.renderer.write().callback_resources.insert(pass);
+                wake.ping();
+            });
+        if started.is_err() {
+            // no thread to make it on: made here, once
+            let pass = Arc::new(ImagePass::new(gpu));
+            gpu.renderer.write().callback_resources.insert(pass.clone());
+            return Some(pass);
+        }
+        None
     }
 }
+
+/// The pass is being made.
+struct Preparing;
 
 /// A picture ready to draw: its view bound with a sampler and the draw's own uniforms. Made when
 /// the view changes, never per frame; one draw a frame each.
@@ -202,9 +227,15 @@ pub struct ImageDraw {
 }
 
 impl ImageDraw {
+    /// `None` while the pass is being made (see [`ImagePass::get`]).
     #[must_use]
-    pub fn new(gpu: &RenderState, view: &wgpu::TextureView, nearest: bool) -> Arc<Self> {
-        let pass = ImagePass::of(gpu);
+    pub fn new(
+        gpu: &RenderState,
+        view: &wgpu::TextureView,
+        nearest: bool,
+        wake: &gz_task::Wake,
+    ) -> Option<Arc<Self>> {
+        let pass = ImagePass::get(gpu, wake)?;
         let uniforms = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gz-ui-previews image"),
             size: 32,
@@ -227,7 +258,7 @@ impl ImageDraw {
                 wgpu::BindGroupEntry { binding: 2, resource: uniforms.as_entire_binding() },
             ],
         });
-        Arc::new(Self { bind, uniforms })
+        Some(Arc::new(Self { bind, uniforms }))
     }
 }
 

@@ -3,7 +3,7 @@
 C++ one, on copies in the system temp folder (export_target and the build target inside it):
 
   * the Rust editor, its window shown (not activated) at 2160 x 1350 with View > Real Time on and a scene open:
-    frame_pacing at rest and during the clean build (the frame's own work apart from the wait for the
+    perf.frames at rest and during the clean build (the frame's own work apart from the wait for the
     presentation), the editor's CPU use over the build (process CPU time / wall time / logical cores),
     the clean build's and a rebuild's seconds (nothing changed);
   * the C++ editor (the kept Bin\\x64\\CppEditor\\LevelEditor.exe, minimised, on 28016 - not run when it is not
@@ -136,10 +136,10 @@ def rust(project: str, work: str, scene: str) -> dict:
         if scene:
             out["scene"] = mcp(port, "scene.open", path="rawdata/levels/" + scene, timeout=600).get("ok")
             mcp(port, "ui.tab", action="open", doc="level")
-        mcp(port, "view_mode", real_time=True)
-        mcp(port, "frame_pacing")
+        mcp(port, "viewport.view", real_time=True)
+        mcp(port, "perf.frames")
         time.sleep(float(os.environ.get("BENCH_IDLE", "3")))
-        idle = mcp(port, "frame_pacing")
+        idle = mcp(port, "perf.frames")
         out["idle"] = {k: idle.get(k) for k in ("sampled_frames", "frame_work_ms", "frame_wait_ms", "slow_frames",
                                                  "measured_frame_ms")}
         target = os.path.join(work, "rust_game")
@@ -160,10 +160,10 @@ def rust(project: str, work: str, scene: str) -> dict:
             if row and (not stages or stages[-1][1] != label):
                 stages.append((time.monotonic() - t0, label))
             if time.monotonic() - last_pacing > 0.5:
-                samples.append(mcp(port, "frame_pacing"))
+                samples.append(mcp(port, "perf.frames"))
                 last_pacing = time.monotonic()
         job.join()
-        samples.append(mcp(port, "frame_pacing"))
+        samples.append(mcp(port, "perf.frames"))
         out["stages"] = [(round(t, 2), l) for t, l in stages]
         wall, cpu = time.monotonic() - t0, cpu_seconds(proc.pid) - cpu0
         cores = os.cpu_count() or 1

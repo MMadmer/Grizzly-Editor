@@ -524,8 +524,8 @@ enum KeysAction {
     Clear,
     /// Back to the defaults: `action`'s, or every action's without one.
     Reset,
-    /// What `keys` run on the active tab now, found the way a key press is: an action's id, a
-    /// level command's id, or nothing.
+    /// What `keys` run on the active tab now, found the way a key press is: an action's id, or
+    /// nothing.
     Resolve,
 }
 
@@ -535,8 +535,7 @@ struct KeysParams {
     /// What to do.
     #[serde(default)]
     action: KeysAction,
-    /// The action's id (`edit.undo`, `graph.frame_all`, ...) or, for the level editor's own table,
-    /// its COMMAND_* id.
+    /// The action's id (`edit.undo`, `graph.frame_all`, `level.build`, ...).
     #[serde(default)]
     id: Option<String>,
     /// The keys: "Ctrl+Shift+S", "F5", "Num Del"; several separated by commas.

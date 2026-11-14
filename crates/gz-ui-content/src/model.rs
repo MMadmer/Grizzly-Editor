@@ -1,50 +1,36 @@
-//! The browser's vocabulary: sources, the Editor source's categories, locations, hosts, and the
-//! small pure rules the C++ kept beside them.
+//! The browser's vocabulary: the two sources, the Library's kinds, locations, hosts, and the
+//! small pure rules beside them.
 
 use gz_ui::Icon;
 
-/// Where the browser lists from. The wire numbers them 0, 1, 2 and names them project, editor,
-/// darf.
+/// Where the browser lists from. The wire names them `project` and `library`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum Source {
     /// The open project's own files: the only writable one.
     #[default]
     Project,
-    /// The editor's own library, one category at a time.
-    Editor,
-    /// The linked game install: archives and loose `gamedata` as one tree. Read only.
-    Game,
+    /// What can be brought into the project or placed: the linked game and the editor's library
+    /// merged, by kind ([`KINDS`]). Read only.
+    Library,
 }
 
 impl Source {
-    pub const ALL: [Source; 3] = [Source::Project, Source::Editor, Source::Game];
+    pub const ALL: [Source; 2] = [Source::Project, Source::Library];
 
     #[must_use]
-    pub fn index(self) -> i64 {
+    pub fn index(self) -> usize {
         match self {
             Source::Project => 0,
-            Source::Editor => 1,
-            Source::Game => 2,
+            Source::Library => 1,
         }
     }
 
-    #[must_use]
-    pub fn from_index(i: i64) -> Option<Self> {
-        match i {
-            0 => Some(Source::Project),
-            1 => Some(Source::Editor),
-            2 => Some(Source::Game),
-            _ => None,
-        }
-    }
-
-    /// `source_name` on the wire.
+    /// `project` or `library` on the wire.
     #[must_use]
     pub fn wire(self) -> &'static str {
         match self {
             Source::Project => "project",
-            Source::Editor => "editor",
-            Source::Game => "darf",
+            Source::Library => "library",
         }
     }
 
@@ -53,12 +39,11 @@ impl Source {
     pub fn label(self) -> &'static str {
         match self {
             Source::Project => "Project",
-            Source::Editor => "Editor",
-            Source::Game => "Game",
+            Source::Library => "Library",
         }
     }
 
-    /// `project`, `editor`, `darf` (any case).
+    /// `project` or `library` (any case).
     #[must_use]
     pub fn parse_name(name: &str) -> Option<Self> {
         Source::ALL.into_iter().find(|s| s.wire().eq_ignore_ascii_case(name))
@@ -70,142 +55,136 @@ impl Source {
     }
 }
 
-/// A file of the editor's library that backs an Editor entry: a folder of the editor's data root
-/// and an extension. A texture brings its `.thm` and its source along.
+/// One kind of the Library: a top-level folder of it, with what its entries are.
 #[derive(Clone, Copy, Debug)]
-pub struct LibFile {
-    pub folder: &'static str,
-    pub ext: &'static str,
-}
-
-/// One category of the Editor source. `folder` is the folder of the editor's data root it lists;
-/// `None` for a category that lives inside one shared file.
-#[derive(Clone, Copy, Debug)]
-pub struct Category {
+pub struct LibKind {
+    /// What the author reads: the folder's name.
     pub caption: &'static str,
-    pub folder: Option<&'static str>,
-    /// The shared file a folderless category lives in.
-    pub shared_file: &'static str,
-    pub lib: &'static [LibFile],
-    /// The glyph of an entry with no extension of its own.
+    /// The wire word (`content.view kind=`).
+    pub word: &'static str,
     pub icon: Icon,
+    /// What an entry is when dragged: the kit payload's `kind`, which is the `scene.place` kind
+    /// for the kinds that are placed.
+    pub payload: &'static str,
+    /// It is placed in a level (Place in Level, a drop on the viewport).
+    pub placed: bool,
+    /// The extension of its files (with the dot); `""` for entries without a file of their own.
+    pub ext: &'static str,
+    /// Where the editor's library keeps them, below its root; `""` for none.
+    pub library_folder: &'static str,
+    /// Where the game keeps them, `gamedata`-relative; `""` when the game holds none of them.
+    pub game_folder: &'static str,
 }
 
-const LIB_OBJECT: &[LibFile] = &[LibFile { folder: "rawdata\\objects", ext: ".object" }];
-const LIB_LEVEL: &[LibFile] = &[LibFile { folder: "rawdata\\levels", ext: ".level" }];
-const LIB_GROUP: &[LibFile] = &[LibFile { folder: "rawdata\\groups", ext: ".group" }];
-const LIB_VISUAL: &[LibFile] = &[
-    LibFile { folder: "gamedata\\meshes", ext: ".ogf" },
-    LibFile { folder: "gamedata\\meshes", ext: ".omf" },
-];
-const LIB_TEXTURE: &[LibFile] = &[
-    LibFile { folder: "gamedata\\textures", ext: ".dds" },
-    LibFile { folder: "rawdata\\textures", ext: ".thm" },
-    LibFile { folder: "rawdata\\textures", ext: ".tga" },
-];
-const LIB_SOUND: &[LibFile] = &[
-    LibFile { folder: "gamedata\\sounds", ext: ".ogg" },
-    LibFile { folder: "rawdata\\sounds", ext: ".thm" },
-    LibFile { folder: "rawdata\\sounds", ext: ".wav" },
-];
-
-/// The Editor source's categories, in the C++ order (`kCategories`, `EditorUiContract`'s
-/// `CATEGORIES`).
-pub const CATEGORIES: [Category; 10] = [
-    Category {
+/// The Library's kinds, in the order the browser lists them.
+pub const KINDS: [LibKind; 7] = [
+    LibKind {
         caption: "Objects",
-        folder: Some("rawdata\\objects"),
-        shared_file: "",
-        lib: LIB_OBJECT,
+        word: "objects",
         icon: Icon::SceneObject,
+        payload: "object",
+        placed: true,
+        ext: ".object",
+        library_folder: "rawdata\\objects",
+        game_folder: "",
     },
-    Category {
-        caption: "Levels",
-        folder: Some("rawdata\\levels"),
-        shared_file: "",
-        lib: LIB_LEVEL,
-        icon: Icon::Level,
-    },
-    Category {
+    LibKind {
         caption: "Groups",
-        folder: Some("rawdata\\groups"),
-        shared_file: "",
-        lib: LIB_GROUP,
+        word: "groups",
         icon: Icon::Group,
+        payload: "group",
+        placed: true,
+        ext: ".group",
+        library_folder: "rawdata\\groups",
+        game_folder: "",
     },
-    Category {
-        caption: "Visuals",
-        folder: Some("gamedata\\meshes"),
-        shared_file: "",
-        lib: LIB_VISUAL,
-        icon: Icon::FileModel,
-    },
-    Category {
+    LibKind {
         caption: "Textures",
-        folder: Some("gamedata\\textures"),
-        shared_file: "",
-        lib: LIB_TEXTURE,
+        word: "textures",
         icon: Icon::FileTexture,
+        payload: "texture",
+        placed: false,
+        ext: ".dds",
+        library_folder: "gamedata\\textures",
+        game_folder: "textures",
     },
-    Category {
-        caption: "Textures (raw)",
-        folder: Some("rawdata\\textures"),
-        shared_file: "",
-        lib: LIB_TEXTURE,
-        icon: Icon::FileTexture,
-    },
-    Category {
-        caption: "Particles",
-        folder: None,
-        shared_file: "gamedata\\particles.xr",
-        lib: &[],
-        icon: Icon::Particles,
-    },
-    Category {
+    LibKind {
         caption: "Sounds",
-        folder: Some("gamedata\\sounds"),
-        shared_file: "",
-        lib: LIB_SOUND,
+        word: "sounds",
         icon: Icon::FileSound,
+        payload: "sound",
+        placed: true,
+        ext: ".ogg",
+        library_folder: "gamedata\\sounds",
+        game_folder: "sounds",
     },
-    Category {
-        caption: "Entities",
-        folder: None,
-        shared_file: "gamedata\\configs\\system.ltx",
-        lib: &[],
+    LibKind {
+        caption: "Particles",
+        word: "particles",
+        icon: Icon::Particles,
+        payload: "particles",
+        placed: true,
+        ext: "",
+        library_folder: "",
+        game_folder: "",
+    },
+    LibKind {
+        caption: "Spawn Sections",
+        word: "spawn_sections",
         icon: Icon::Spawn,
+        payload: "spawn",
+        placed: true,
+        ext: "",
+        library_folder: "",
+        game_folder: "",
     },
-    Category {
-        caption: "Light Anims",
-        folder: None,
-        shared_file: "gamedata\\lanims.xr",
-        lib: &[],
-        icon: Icon::Light,
+    LibKind {
+        caption: "Base Scenes",
+        word: "base_scenes",
+        icon: Icon::Level,
+        payload: "scene",
+        placed: false,
+        ext: ".level",
+        library_folder: "rawdata\\levels",
+        game_folder: "",
     },
 ];
 
-/// The Levels category: its entries open as scenes.
-pub const LEVELS: usize = 1;
-/// The Visuals and Objects categories: their entries are models.
 pub const OBJECTS: usize = 0;
-pub const VISUALS: usize = 3;
+pub const GROUPS: usize = 1;
+pub const TEXTURES: usize = 2;
+pub const SOUNDS: usize = 3;
+pub const PARTICLES: usize = 4;
+pub const SPAWNS: usize = 5;
+pub const SCENES: usize = 6;
+/// The Library's own top: its kinds as folders.
+pub const HOME: usize = KINDS.len();
 
+/// A kind of the Library; `None` for [`HOME`] and anything past it.
 #[must_use]
-pub fn category(i: usize) -> &'static Category {
-    CATEGORIES.get(i).unwrap_or(&CATEGORIES[0])
+pub fn kind(i: usize) -> Option<&'static LibKind> {
+    KINDS.get(i)
 }
 
-/// A category by its caption, any case.
+/// A kind by its wire word or its caption, any case; `home` (or nothing) is the Library's top.
 #[must_use]
-pub fn find_category(name: &str) -> Option<usize> {
-    if name.is_empty() {
-        return None;
+pub fn find_kind(name: &str) -> Option<usize> {
+    let n = name.trim();
+    if n.is_empty() || n.eq_ignore_ascii_case("home") {
+        return Some(HOME);
     }
-    CATEGORIES.iter().position(|c| c.caption.eq_ignore_ascii_case(name))
+    let w = n.replace([' ', '-'], "_");
+    KINDS.iter().position(|k| k.word.eq_ignore_ascii_case(&w) || k.caption.eq_ignore_ascii_case(n))
 }
 
-/// Where the browser is: a source, the Editor source's category, a folder relative to the
-/// source's root (backslashes, `""` for the root).
+/// The wire word of a kind index (`home` for the top).
+#[must_use]
+pub fn kind_word(i: usize) -> &'static str {
+    kind(i).map_or("home", |k| k.word)
+}
+
+/// Where the browser is: a source, the Library's kind ([`HOME`] at its top; 0 for the project),
+/// a folder relative to the kind's (or the project's) root, backslashes, `""` for the root.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Location {
     pub source: Source,
@@ -216,39 +195,47 @@ pub struct Location {
 impl Location {
     #[must_use]
     pub fn new(source: Source, category: usize, folder: &str) -> Self {
+        let category = if source == Source::Project { 0 } else { category.min(HOME) };
+        let folder = if source == Source::Library && category == HOME { "" } else { folder };
         Self { source, category, folder: folder.to_owned() }
     }
 
-    /// Two locations are one when they show the same folder; a category counts only for the
-    /// Editor source (`SameLocation`).
+    /// The Library's top, which lists its kinds.
+    #[must_use]
+    pub fn home(&self) -> bool {
+        self.source == Source::Library && self.category >= HOME
+    }
+
+    /// The kind shown, when the Library shows one.
+    #[must_use]
+    pub fn lib_kind(&self) -> Option<&'static LibKind> {
+        if self.source == Source::Library { kind(self.category) } else { None }
+    }
+
+    /// Two locations are one when they show the same folder; a kind counts only for the Library.
     #[must_use]
     pub fn same(&self, other: &Location) -> bool {
         self.source == other.source
-            && (self.source != Source::Editor || self.category == other.category)
+            && (self.source != Source::Library || self.category == other.category)
             && self.folder.eq_ignore_ascii_case(&other.folder)
     }
 
-    /// What the source's root is called in the breadcrumb and the tree.
+    /// What the root of the folder shown is called: the kind, the Library, the project.
     #[must_use]
     pub fn root_label(&self) -> &'static str {
         match self.source {
             Source::Project => "Project",
-            Source::Game => "Game",
-            Source::Editor => category(self.category).caption,
+            Source::Library => kind(self.category).map_or("Library", |k| k.caption),
         }
     }
 
-    /// "Game / textures / ui": where a favorite points (`FavoriteLabel`).
+    /// "Library / Textures / ui": where a favorite points.
     #[must_use]
     pub fn label(&self) -> String {
-        let mut label = String::from(match self.source {
-            Source::Project => "Project",
-            Source::Game => "Game",
-            Source::Editor => "Editor",
-        });
-        if self.source == Source::Editor {
+        let mut label = String::from(self.source.label());
+        if let Some(k) = self.lib_kind() {
             label.push_str(" / ");
-            label.push_str(category(self.category).caption);
+            label.push_str(k.caption);
         }
         for part in self.folder.split('\\').filter(|p| !p.is_empty()) {
             label.push_str(" / ");
@@ -259,7 +246,7 @@ impl Location {
 }
 
 /// Normalises a folder argument: `/` and `\` separate, empty parts go, `.` / `..` and the
-/// characters no name may hold are refused (`NormalizeFolderPath`).
+/// characters no name may hold are refused.
 pub fn normalize_folder(input: &str) -> Result<String, &'static str> {
     let mut out = String::with_capacity(input.len());
     for part in input.split(['\\', '/']) {
@@ -308,7 +295,7 @@ pub fn is_ancestor(parent: &str, path: &str) -> bool {
     parent.len() == path.len() || path.as_bytes().get(parent.len()) == Some(&b'\\')
 }
 
-/// A name argument as the C++ took it: `/` made `\`, doubled `\` collapsed, a trailing `\` cut.
+/// A name argument made plain: `/` made `\`, doubled `\` collapsed, a trailing `\` cut.
 #[must_use]
 pub fn normalize_name(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
@@ -397,23 +384,37 @@ pub const LIST_COLUMN_EM: f32 = 12.0;
 /// The history kept each way.
 pub const HISTORY_LIMIT: usize = 64;
 
+/// Tiles under this side are the list: a 48 pt tile cuts a folder's name mid-word.
+pub const LIST_BELOW: f32 = 64.0;
+
 /// The side a host's tiles are drawn at (pt). `picked` 0 is no size picked: the largest side up
-/// to the host's default at which the grid shows two whole rows, in 8 pt steps, 48 at least
-/// (`ShownTile`).
+/// to the host's default, in 8 pt steps, at which the grid shows two whole rows - or every row
+/// when the folder needs fewer - 48 at least. `entries` and `width` say how many rows the folder
+/// needs.
 #[must_use]
-pub fn shown_tile(picked: f32, grid_height: f32, most: f32) -> f32 {
+pub fn shown_tile(picked: f32, grid_height: f32, most: f32, entries: usize, width: f32) -> f32 {
     if picked > 0.0 {
         return picked;
     }
     if grid_height <= 0.0 {
         return most;
     }
-    let fit = (grid_height - TILE_GAP) * 0.5 - gz_ui::Font::Small.line() * 2.0 - TILE_PAD;
-    ((fit / 8.0).floor() * 8.0).clamp(gz_app::contract::TILE_MIN, most)
+    let min = gz_app::contract::TILE_MIN;
+    let mut side = most;
+    while side > min {
+        let per_row = (((width + TILE_GAP) / (side + TILE_GAP)).floor() as usize).max(1);
+        let need = if entries == 0 { 2 } else { entries.div_ceil(per_row).min(2) };
+        let cell = side + gz_ui::Font::Small.line() * 2.0 + TILE_PAD + TILE_GAP;
+        if ((grid_height + TILE_GAP) / cell).floor() as usize >= need {
+            return side;
+        }
+        side -= 8.0;
+    }
+    min
 }
 
 /// The side, in pixels, an image's picture is made for when drawn `px` pixels wide: the power of
-/// two at or over it, 32 to 512 (`GetThumb`).
+/// two at or over it, 32 to 512.
 #[must_use]
 pub fn picture_side(px: f32) -> u32 {
     let mut want = 32u32;
@@ -434,6 +435,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_contract_names_the_library_kinds() {
+        let captions: Vec<&str> = KINDS.iter().map(|k| k.caption).collect();
+        assert_eq!(captions, gz_app::contract::CATEGORIES);
+    }
+
+    #[test]
     fn folders_normalise() {
         assert_eq!(normalize_folder("a//b\\c/").unwrap(), "a\\b\\c");
         assert_eq!(normalize_folder("").unwrap(), "");
@@ -444,12 +451,14 @@ mod tests {
 
     #[test]
     fn locations() {
-        let a = Location::new(Source::Editor, 2, "x\\Y");
-        assert!(a.same(&Location::new(Source::Editor, 2, "X\\y")));
-        assert!(!a.same(&Location::new(Source::Editor, 3, "x\\y")));
-        assert!(Location::new(Source::Game, 2, "t").same(&Location::new(Source::Game, 5, "T")));
-        assert_eq!(Location::new(Source::Game, 0, "textures\\ui").label(), "Game / textures / ui");
-        assert_eq!(Location::new(Source::Editor, 4, "").label(), "Editor / Textures");
+        let a = Location::new(Source::Library, 2, "x\\Y");
+        assert!(a.same(&Location::new(Source::Library, 2, "X\\y")));
+        assert!(!a.same(&Location::new(Source::Library, 3, "x\\y")));
+        assert!(Location::new(Source::Project, 2, "t").same(&Location::new(Source::Project, 5, "T")));
+        assert_eq!(Location::new(Source::Library, TEXTURES, "ui").label(), "Library / Textures / ui");
+        assert_eq!(Location::new(Source::Project, 0, "a\\b").label(), "Project / a / b");
+        let home = Location::new(Source::Library, HOME, "ignored");
+        assert!(home.home() && home.folder.is_empty() && home.root_label() == "Library");
         assert!(is_ancestor("rawdata", "rawdata\\levels"));
         assert!(!is_ancestor("raw", "rawdata"));
         assert!(is_ancestor("", "x"));
@@ -465,12 +474,17 @@ mod tests {
         assert_eq!(picture_side(10.0), 32);
         assert_eq!(picture_side(96.0), 128);
         assert_eq!(picture_side(5000.0), 512);
-        assert_eq!(shown_tile(120.0, 50.0, 96.0), 120.0);
-        assert_eq!(shown_tile(0.0, 0.0, 96.0), 96.0);
+        assert_eq!(shown_tile(120.0, 50.0, 96.0, 10, 800.0), 120.0);
+        assert_eq!(shown_tile(0.0, 0.0, 96.0, 10, 800.0), 96.0);
         // the Wide strip: under two rows even of the smallest tiles
-        assert_eq!(shown_tile(0.0, 150.0, 64.0), 48.0);
-        assert_eq!(shown_tile(0.0, 400.0, 96.0), 96.0);
-        assert!(find_category("textures (RAW)") == Some(5) && find_category("").is_none());
+        assert_eq!(shown_tile(0.0, 150.0, 64.0, 300, 800.0), 48.0);
+        assert_eq!(shown_tile(0.0, 400.0, 96.0, 300, 800.0), 96.0);
+        // seven folders in a low drawer fit one row: no need to shrink for a second one
+        assert_eq!(shown_tile(0.0, 162.0, 96.0, 7, 1200.0), 96.0);
+        assert_eq!(find_kind("Spawn Sections"), Some(SPAWNS));
+        assert_eq!(find_kind("base_scenes"), Some(SCENES));
+        assert_eq!(find_kind(""), Some(HOME));
+        assert!(find_kind("visuals").is_none());
         assert!(!search_active("  \t"));
     }
 }

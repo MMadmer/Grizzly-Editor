@@ -175,6 +175,10 @@ impl Editor {
     pub fn set_project(&self, session: Option<Arc<ProjectSession>>) -> Option<Arc<ProjectSession>> {
         let old = self.project.swap(session);
         self.project_rev.bump();
+        // what the status line last said was about the project that is gone
+        if old.is_some() {
+            self.log.forget_last_report();
+        }
         // the jobs of the project that closed go with it, with a window or without one
         let stopped = self.jobs.stop_orphans();
         if stopped > 0 {

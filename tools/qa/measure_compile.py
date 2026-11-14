@@ -14,11 +14,11 @@ so no window reaches the author's screen and the window still draws), opens the 
             folder compiled headless right after (`Grizzly-Cmd.exe run level.compile folder=<folder>`, a process of its own, the editor
             idle beside it);
   card      with --card, one more compile in the editor with the Task Center's card up (its spinner animates);
-  orbit     with --orbit, one more compile in the editor while the camera orbits (viewport_gesture: an Alt+left
+  orbit     with --orbit, one more compile in the editor while the camera orbits (viewport.gesture: an Alt+left
             drag, one step a frame) until it ends.
 --cool N waits N seconds of nothing before every compile, editor and headless alike: on a laptop the first
 seconds of full load run on the turbo's power budget, and a compile that follows another starts without it (the
-processors' speed of each run is recorded, `clock_percent`). Each editor window reads frame_pacing (UI frames and scene passes counted apart, the passes by reason, frame_work_ms
+processors' speed of each run is recorded, `clock_percent`). Each editor window reads perf.frames (UI frames and scene passes counted apart, the passes by reason, frame_work_ms
 mean / p95 / max, slow_frames) and the process's CPU time over its wall time (GetProcessTimes: 16.0 is every core of
 this machine busy); the headless run its own process's. Everything goes to Intermediate/compile/measure.log as it
 happens and the numbers to Intermediate/compile/measure.json.
@@ -128,7 +128,7 @@ PACING_KEYS = ("frame_work_ms", "frame_wait_ms", "slow_frames", "sampled_frames"
 def window(handle, until, frames: bool = True, step=None) -> dict:
     """Frames asked for every quarter second (with `frames`) or `step()` called in a loop until `until()` says stop;
     the frame pacing and the CPU load of it."""
-    mcp("frame_pacing", action="stats")
+    mcp("perf.frames")
     clock = Clock()
     t0, c0 = time.monotonic(), cpu_of(handle)
     last = t0
@@ -143,7 +143,7 @@ def window(handle, until, frames: bool = True, step=None) -> dict:
             last = time.monotonic()
             log(f"    ... {last - t0:.0f} s, load {(cpu_of(handle) - c0) / (last - t0):.1f}")
     wall, cpu = time.monotonic() - t0, cpu_of(handle) - c0
-    fp = mcp("frame_pacing", action="stats")
+    fp = mcp("perf.frames")
     out = {"seconds": round(wall, 3), "load": round(cpu / max(wall, 1e-6), 3), "clock_percent": clock.done()}
     out.update({k: fp.get(k) for k in PACING_KEYS})
     return out
@@ -306,7 +306,7 @@ def main() -> int:
             return False
         # the pictures of the scene loaded before anything is measured (a window's)
         if not args.headless_editor:
-            mcp("screenshot_viewport", timeout=60)
+            mcp("shot.viewport", timeout=60)
         if args.away:
             mcp("ui.tab", action="open", kind="preferences")
         return True
@@ -365,7 +365,7 @@ def main() -> int:
                         dirs_exist_ok=True)
         if not start_editor(project):
             return 1
-        mcp("frame_pacing", action="stats")
+        mcp("perf.frames")
         time.sleep(1)
         idle_until = time.monotonic() + 10
         result["idle"] = idle = window(ed["handle"], lambda: time.monotonic() > idle_until)
@@ -398,14 +398,14 @@ def main() -> int:
             result["card"], _ = compile_in_editor("card", card=True)
 
         if args.orbit:
-            view = mcp("viewport_gesture", kind="hover", at=[200, 200], timeout=60).get("viewport") or [800, 500]
+            view = mcp("viewport.gesture", kind="hover", at=[200, 200], timeout=60).get("viewport") or [800, 500]
             w, h = view[0], view[1]
             cx, cy = w / 2, h / 2
             side = [1]
 
             def orbit() -> None:
                 side[0] = -side[0]
-                mcp("viewport_gesture", kind="drag", at=[cx - side[0] * w * 0.3, cy], to=[cx + side[0] * w * 0.3, cy],
+                mcp("viewport.gesture", kind="drag", at=[cx - side[0] * w * 0.3, cy], to=[cx + side[0] * w * 0.3, cy],
                     steps=60, mods="alt", timeout=60)
 
             result["orbit"], _ = compile_in_editor("orbit", step=orbit)

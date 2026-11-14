@@ -24,6 +24,9 @@ pub struct LibraryObject {
     pub verts: Arc<[Vec3]>,
     pub tris: Arc<[[u32; 3]]>,
     pub bvh: Option<Bvh>,
+    /// The file's bytes as one number, the same on every machine; 0 for an object made in
+    /// memory. What a build compares to know the model changed.
+    pub stamp: u64,
 }
 
 impl std::fmt::Debug for LibraryObject {
@@ -51,7 +54,16 @@ impl LibraryObject {
         let bvh = Bvh::build(&verts, &tris).ok();
         let b = object.bounding_box();
         let bounds = Aabb::new(b.min, b.max);
-        Self { name: SmolStr::new(name), file, object, bounds, verts: verts.into(), tris: tris.into(), bvh }
+        Self {
+            name: SmolStr::new(name),
+            file,
+            object,
+            bounds,
+            verts: verts.into(),
+            tris: tris.into(),
+            bvh,
+            stamp: 0,
+        }
     }
 
     /// `IsDynamic`: a dynamic object cannot be scaled.
@@ -157,7 +169,12 @@ impl Library {
         let file = self.file_of(key).ok_or_else(|| format!("Can't find file '{key}.object'"))?;
         let bytes = std::fs::read(&file).map_err(|e| format!("Can't read '{}': {e}", file.display()))?;
         let object = EditObject::read(&bytes).map_err(|e| format!("Can't load '{}': {e}", file.display()))?;
-        Ok(Arc::new(LibraryObject::from_object(key, file, object)))
+        let mut made = LibraryObject::from_object(key, file, object);
+        // FNV-1a over the file: stable, and cheap beside reading the model
+        made.stamp = bytes
+            .iter()
+            .fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3));
+        Ok(Arc::new(made))
     }
 
     /// Loads many references at once on the rayon pool this is called in. Blocking.

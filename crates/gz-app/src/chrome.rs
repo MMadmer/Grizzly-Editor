@@ -312,7 +312,6 @@ enum Row {
 
 /// What a row picked asks the shell to do once the menu is drawn.
 enum Pick {
-    Command(usize),
     Action(SmolStr),
 }
 
@@ -628,7 +627,7 @@ impl ShellState {
     }
 
     fn entry_row(&mut self, ui: &mut Ui, ctx: &Context, i: usize, picks: &mut Vec<Pick>) {
-        let (command, label) = match self.parts.menus.get(i).map(|e| &e.content) {
+        match self.parts.menus.get(i).map(|e| &e.content) {
             Some(MenuContent::Action { id, label }) => {
                 let (id, label) = (id.clone(), label.clone());
                 let Some(a) = self.action(&id) else { return };
@@ -648,9 +647,7 @@ impl ShellState {
                 if menu_item(ui, &text, item) {
                     picks.push(Pick::Action(id));
                 }
-                return;
             }
-            Some(MenuContent::Command { command, label }) => (command.clone(), label.clone()),
             Some(MenuContent::Custom(_)) => {
                 if let Some(MenuContent::Custom(draw)) = self.parts.menus.get_mut(i).map(|e| &mut e.content) {
                     draw(
@@ -664,27 +661,8 @@ impl ShellState {
                         },
                     );
                 }
-                return;
             }
-            None => return,
-        };
-        // a row named by an action's id draws the action
-        if self.action(&command).is_some() {
-            if let Some(entry) = self.parts.menus.get_mut(i) {
-                entry.content = MenuContent::Action { id: command, label };
-            }
-            self.entry_row(ui, ctx, i, picks);
-            return;
-        }
-        let Some(c) = self.command_index(&command) else { return };
-        let keys = self.binding(c).map(|k| k.label()).unwrap_or_default();
-        let (text, icon) = match self.parts.commands.get(c) {
-            Some(cmd) => (label.map_or_else(|| cmd.label.to_string(), |l| l.to_string()), cmd.icon),
-            None => return,
-        };
-        let item = MenuItem { icon, keys: &keys, enabled: self.command_enabled(c), ..MenuItem::default() };
-        if menu_item(ui, &text, item) {
-            picks.push(Pick::Command(c));
+            None => {}
         }
     }
 
@@ -733,15 +711,9 @@ impl ShellState {
     }
 
     fn run_pick(&mut self, ctx: &Context, pick: Pick) {
-        match pick {
-            Pick::Command(i) => {
-                self.run_command(ctx, i);
-            }
-            Pick::Action(id) => {
-                if let Err(e) = self.run_action(&id) {
-                    state::toast(ctx, Tone::Warning, &e);
-                }
-            }
+        let Pick::Action(id) = pick;
+        if let Err(e) = self.run_action(&id) {
+            state::toast(ctx, Tone::Warning, &e);
         }
     }
 
@@ -1878,23 +1850,6 @@ impl ShellState {
                 recent: None,
             });
         }
-        for (i, c) in self.parts.commands.iter().enumerate() {
-            if !c.in_palette {
-                continue;
-            }
-            rows.push(PaletteRow {
-                id: c.id.to_string(),
-                kind: "command",
-                label: c.label.to_string(),
-                category: c.group.to_string(),
-                detail: String::new(),
-                shortcut: self.binding(i).map(|k| k.label()).unwrap_or_default(),
-                icon: c.icon,
-                enabled: self.command_enabled(i),
-                why: String::new(),
-                recent: None,
-            });
-        }
         rows
     }
 
@@ -1914,7 +1869,7 @@ impl ShellState {
         self.palette.ranked.clone()
     }
 
-    /// Runs a palette row by its id: an action's, `panel:<id>`, `tab:<id>` or a level command's.
+    /// Runs a palette row by its id: an action's, `panel:<id>` or `tab:<id>`.
     pub(crate) fn palette_run(&mut self, ctx: &Context, id: &str) -> Result<(), String> {
         if let Some(panel) = id.strip_prefix("panel:") {
             return self
@@ -1931,12 +1886,7 @@ impl ShellState {
             self.palette.ranked_for = None;
             return Ok(());
         }
-        match self.command_index(id) {
-            Some(i) if self.parts.commands.get(i).is_some_and(|c| c.in_palette) => {
-                if self.run_command(ctx, i) { Ok(()) } else { Err("it is off here".to_owned()) }
-            }
-            _ => Err(format!("no row '{id}' (ui.palette query lists them)")),
-        }
+        Err(format!("no row '{id}' (ui.palette query lists them)"))
     }
 
     fn draw_palette(&mut self, ui: &mut Ui) {

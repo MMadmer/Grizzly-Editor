@@ -228,7 +228,7 @@ struct TabParams {
     /// The file to open, project-relative (a model: meshes-relative).
     #[serde(default)]
     path: Option<String>,
-    /// Where a texture is read from: project, editor or darf.
+    /// Where a texture is read from: project, library or game.
     #[serde(default)]
     source: Option<String>,
     /// Save unsaved changes first (closing, or a singleton that switches to another file).
@@ -305,8 +305,8 @@ async fn ui_tab(editor: Arc<Editor>, p: TabParams, origin: Origin) -> Reply {
                 "model" if path.is_empty() => {
                     return Err(invalid("path= names the model (a visual, meshes-relative)"));
                 }
-                "texture" if !matches!(source.as_str(), "" | "project" | "editor" | "darf") => {
-                    return Err(invalid("source must be project, editor or darf"));
+                "texture" if !matches!(source.as_str(), "" | "project" | "library" | "game") => {
+                    return Err(invalid("source must be project, library or game"));
                 }
                 "mod_settings" | "releases" if !has_project => return Err(CmdError::no_project()),
                 _ => {}
@@ -380,7 +380,8 @@ enum PanelAction {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct PanelParams {
-    /// tools, world_outliner, details, level_settings, content_browser, output_log or viewport.
+    /// A panel of the Level tab: place, world_outliner, details, level_settings, content_browser,
+    /// output_log, problems or viewport (`ui.contract` lists them).
     id: String,
     /// What to do with it.
     #[serde(default)]
@@ -396,9 +397,8 @@ async fn ui_panel(editor: Arc<Editor>, p: PanelParams, _origin: Origin) -> Reply
     let answer = on_ui(&editor, move |shell, ctx| {
         let id = p.id;
         if !shell.has_panel(&id) {
-            return Err(invalid(
-                "id must be tools, world_outliner, details, level_settings, content_browser, output_log or viewport",
-            ));
+            let ids: Vec<&str> = contract::PANELS.iter().map(|(id, _)| *id).collect();
+            return Err(invalid(format!("no panel '{id}': the panels are {}", ids.join(", "))));
         }
         let op = match (p.floating, p.action) {
             (Some(true), _) => PanelOp::Float,
@@ -1011,16 +1011,20 @@ async fn ui_tasks(editor: Arc<Editor>, p: TasksParams, _origin: Origin) -> Reply
         .collect();
     let finished: Vec<Value> =
         crate::tasks::finished_rows(&editor).iter().map(|j| crate::tasks::finished_json(j, now)).collect();
+    // only a change of what the window shows goes to the UI thread; a read never waits for it -
+    // not for a frame, and not for a window whose graphics device is still being made
     let mut card = Value::Null;
     if let Ok(q) = crate::queue::UiQueue::of(&editor) {
-        card = q
-            .run(move |shell, _| {
-                if let Some(show) = p.show {
+        card = match p.show {
+            Some(show) => {
+                q.run(move |shell, _| {
                     shell.show_card(show);
-                }
-                Ok(json!(shell.card_open))
-            })
-            .await?;
+                    Ok(json!(shell.card_open))
+                })
+                .await?
+            }
+            None => json!(marks.card_open.load(std::sync::atomic::Ordering::Acquire)),
+        };
     }
     Ok(json!({
         "running": running,
@@ -1129,7 +1133,6 @@ pub fn register(reg: &mut Registry) {
     );
     crate::app_cmds::register(reg);
     crate::shots::register(reg);
-    crate::cpp_cmds::register(reg);
 }
 
 #[cfg(test)]
@@ -1142,7 +1145,7 @@ mod tests {
         assert_eq!(c["palette"], "grizzly_command_palette");
         assert!(c["menus"].as_array().is_some_and(|m| m.iter().any(|v| v == "Menu")));
         assert_eq!(c["drawers"].as_object().map(|d| d.len()), Some(2));
-        assert_eq!(c["panels"].as_object().map(|d| d.len()), Some(7));
+        assert_eq!(c["panels"].as_object().map(|d| d.len()), Some(8));
     }
 
     #[test]

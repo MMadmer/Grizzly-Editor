@@ -145,41 +145,41 @@ def run(project: str, shot: str | None) -> None:
         module = mcp("mod.info").get("manifest", {}).get("id", "")
 
         # ------------------------------------------------------------------ B: the browser
-        r = mcp("content_browser_open", name=f"gamedata/{FOLDER}", source="project")
+        r = mcp("content.view", action="reveal", source="project", path=f"gamedata/{FOLDER}/")
         check(r.get("ok"), "B a folder with a Cyrillic name opens in the content browser", json.dumps(r, ensure_ascii=False)[:200])
         entry = f"gamedata\\{FOLDER}\\{CYRILLIC}"
-        r = mcp("content_browser_selection", action="select", name=entry)
+        r = mcp("content.view", action="select", path=entry)
         check(r.get("ok") and same(entry, r.get("selection", [])),
               "B a Cyrillic file is listed under its own name", json.dumps(r, ensure_ascii=False)[:240])
         beyond = f"gamedata\\{FOLDER}\\{BEYOND}"
-        r = mcp("content_browser_selection", action="select", name=beyond)
+        r = mcp("content.view", action="select", path=beyond)
         check(r.get("ok") and same(beyond, r.get("selection", [])),
               "B so is a name outside cp1251", json.dumps(r, ensure_ascii=False)[:240])
-        r = mcp("content_browser_selection", action="rename", name=entry)
+        r = mcp("content.view", action="rename", path=entry)
         box = (r.get("rename") or {}).get("text", "")
         check(r.get("ok") and box == CYRILLIC, "B the rename box holds the name as it is", repr(box))
-        mcp("content_browser_selection", action="clear")
+        mcp("content.view", action="clear")
         long_entry = f"gamedata\\{FOLDER}\\{LONG}"
-        r = mcp("content_browser_selection", action="rename", name=long_entry)
+        r = mcp("content.view", action="rename", path=long_entry)
         box = (r.get("rename") or {}).get("text", "")
         check(r.get("ok") and box == LONG and len(LONG.encode("utf-8")) > 127,
               "B the rename box holds a long Cyrillic name whole (%d bytes)" % len(LONG.encode("utf-8")), repr(box))
-        mcp("content_browser_selection", action="clear")
+        mcp("content.view", action="clear")
 
         # the search folds case, Cyrillic included, and lists only what matches
-        r = mcp("content_browser_navigation", search="ночная")
-        check(r.get("ok") and r.get("search") == "ночная", "B the search takes a Cyrillic query",
+        r = mcp("content.view", query="ночная")
+        check(r.get("ok") and r.get("query") == "ночная", "B the search takes a Cyrillic query",
               json.dumps(r, ensure_ascii=False)[:240])
-        hit = mcp("content_browser_selection", action="select", name=entry)
-        miss = mcp("content_browser_selection", action="select", name=beyond)
+        hit = mcp("content.view", action="select", path=entry)
+        miss = mcp("content.view", action="select", path=beyond)
         check(hit.get("ok") and not miss.get("ok"),
               "B a lower-case Cyrillic query finds the capitalised name, and only what matches",
               json.dumps(hit, ensure_ascii=False)[:160] + " | " + json.dumps(miss, ensure_ascii=False)[:160])
-        r = mcp("content_browser_navigation", search="")
-        check(r.get("ok") and r.get("search") == "", "B an empty search lists the folder again", json.dumps(r)[:200])
-        mcp("content_browser_selection", action="clear")
+        r = mcp("content.view", query="")
+        check(r.get("ok") and r.get("query") == "", "B an empty search lists the folder again", json.dumps(r)[:200])
+        mcp("content.view", action="clear")
         if shot:
-            mcp("content_browser_selection", action="select", name=entry)
+            mcp("content.view", action="select", path=entry)
             pic = mcp("shot.window")
             if pic.get("png_base64"):
                 with open(shot, "wb") as f:
@@ -244,14 +244,14 @@ def run(project: str, shot: str | None) -> None:
             moved = "Медведь \U0001F43B\U0001F332.txt"
             with open(os.path.join(folder, made), "wb") as f:
                 f.write(b"bear")
-            mcp("content_browser_open", name=f"gamedata/{FOLDER}", source="project")
-            mcp("content_browser_navigation", action="refresh")
+            mcp("content.view", action="reveal", source="project", path=f"gamedata/{FOLDER}/")
+            mcp("content.view", action="refresh")
             entry = f"gamedata\\{FOLDER}\\{made}"
-            r = mcp("content_browser_selection", action="select", name=entry)
+            r = mcp("content.view", action="select", path=entry)
             check(r.get("ok") and same(entry, r.get("selection", [])),
                   "G a name made on disk with a character beyond the BMP is listed under that name",
                   json.dumps(r, ensure_ascii=False)[:240])
-            mcp("content_browser_selection", action="clear")
+            mcp("content.view", action="clear")
             r = mcp("file.rename", escaped=True, path=f"gamedata/{FOLDER}/{made}", name=moved)
             on_disk = os.listdir(folder)
             check(r.get("ok") and moved in on_disk and made not in on_disk,

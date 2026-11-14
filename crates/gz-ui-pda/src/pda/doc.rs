@@ -757,6 +757,7 @@ impl Document for PdaDoc {
         self.start();
         let ctx = ui.ctx().clone();
         self.assets.set_ctx(&ctx);
+        self.assets.pump(&ctx);
         self.assets.sync(&self.editor);
         let device = self.assets.device(&self.editor);
         let p = palette(&ctx);

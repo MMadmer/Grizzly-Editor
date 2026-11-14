@@ -82,13 +82,13 @@ own. Fixed bones are checked against the model's bones: `all` becomes every bone
 model lacks is dropped with a warning (the game would assert `wrong fixed bone` the moment the
 object comes online).
 
-**Furnishing by MCP:** `view_mode helpers=false` draws spawn objects as models only (no
+**Furnishing by MCP:** `viewport.view hide=spawn_helpers` draws spawn objects as models only (no
 restrictor shapes, cover gizmos, icons or labels) for clean screenshots; `scene.query action=walls`
 is a horizontal lidar slice of the level's static geometry (walls, columns, stock furniture) over
 an area at one height; `scene.query action=ground` answers the ceiling and the floor over a point.
 Both pick the whole level, not only what the camera sees.
 
-**Lighting a place:** View > Game Lighting (MCP `game_lighting`, `view_mode preset=game`) lights
+**Lighting a place:** the View Mode pill's Game Lit (MCP `viewport.view mode=game hour=22`) lights
 the viewport the way the game will at an hour and weather of the linked game - the first night of
 a new game by default: the weather's ambient, sky and moon, every hanging lamp, burning campfire
 and dynamic level light near the camera, the game's tonemap adapted to the frame. Place lamps by

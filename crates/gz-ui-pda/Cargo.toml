@@ -27,8 +27,6 @@ gz-ui.workspace = true
 gz-app.workspace = true
 # the Mod menu's slots
 gz-ui-mod = { path = "../gz-ui-mod" }
-# the Content Browser's drag payload
-gz-ui-content = { path = "../gz-ui-content" }
 egui.workspace = true
 futures.workspace = true
 parking_lot.workspace = true

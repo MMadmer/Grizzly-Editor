@@ -168,8 +168,12 @@ fn print(reply: &Value, as_json: bool) -> bool {
         .filter(|(k, _)| k.as_str() != "ok" && (ok || !matches!(k.as_str(), "error" | "usage" | "code")))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    // an answer that is a document (`help`, `asset.reference`) prints as the document: what stands
+    // beside the text only names it
+    let named_only =
+        rest.iter().all(|(k, v)| k == "text" || v.is_string() || v.is_number() || v.is_boolean());
     match rest.get("text").and_then(Value::as_str) {
-        Some(text) if rest.len() == 1 => {
+        Some(text) if named_only => {
             out(text.trim_end());
         }
         _ if rest.is_empty() => {}

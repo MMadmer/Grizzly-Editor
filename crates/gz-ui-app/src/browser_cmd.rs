@@ -1,11 +1,14 @@
-//! `project_browser_menu`: brings a card's menu or the Delete Project confirmation into view - to
-//! look at, never to act. The wire is `EditorProject::McpBrowserMenu`.
+//! `project.page`: the Start page as it is drawn - its cards, the search and the sort, the New
+//! Project form - and a card's menu or the Delete Project confirmation brought into view, to look
+//! at, never to act.
 
 use std::sync::Arc;
 
 use gz_base::Origin;
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Reply, Value, json};
+use gz_editor::{CmdError, Editor, Registry, Reply, Spec, Value, json};
 use gz_project::{DeleteInfo, EntryState, Sort, paths};
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Map;
 
 use crate::cards;
@@ -16,7 +19,51 @@ fn refuse(message: impl Into<String>) -> CmdError {
     CmdError::new("refused", message)
 }
 
-/// The fields a deletion answers with, flat (`AppendDeleteJson` with no `counts` object).
+/// What `project.page` puts up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum Show {
+    /// The card's menu, as its `...` button opens it.
+    Menu,
+    /// The Delete Project confirmation of the card, as Delete... opens it.
+    Confirm,
+    /// Takes the menu and the confirmation down; nothing is deleted.
+    None,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PageParams {
+    /// What to put up; left out: nothing changes.
+    #[serde(default)]
+    show: Option<Show>,
+    /// The project folder whose card the menu or the confirmation is about.
+    #[serde(default)]
+    path: Option<String>,
+    /// The search over the cards; empty clears it.
+    #[serde(default)]
+    query: Option<String>,
+    /// recent (Last Opened) or name.
+    #[serde(default)]
+    sort: Option<String>,
+    /// Opens (true) or closes (false) the New Project form in the first slot.
+    #[serde(default)]
+    new_project: Option<bool>,
+}
+
+/// Registers `project.page`.
+pub(crate) fn register(reg: &mut Registry) {
+    reg.cmd(
+        Spec::view(
+            "project.page",
+            "Shows the Start page's cards, search, sort and New Project form; puts a card's menu up to look at.",
+        )
+        .example("show=menu path=D:/Projects/Night"),
+        project_page,
+    );
+}
+
+/// The fields a deletion answers with, flat.
 fn delete_fields(out: &mut Map<String, Value>, d: &DeleteInfo) {
     out.insert("path".into(), json!(paths::wire(&d.path)));
     out.insert("name".into(), json!(paths::wire(&d.name)));
@@ -53,29 +100,27 @@ fn menu_json(path: &str, shown: bool, state: EntryState) -> Value {
     json!({ "path": paths::wire(path), "shown": shown, "state": cards::state_name(state), "items": items })
 }
 
-pub(crate) async fn project_browser_menu(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
+async fn project_page(ed: Arc<Editor>, p: PageParams, _origin: Origin) -> Reply {
     let page = StartPage::of(&ed);
-    let show = args.str("show").unwrap_or_default().to_owned();
-    let path = args.text("path").map(paths::to_backslash).unwrap_or_default();
-    let search = args.str("search").map(str::to_owned);
-    let sort = args.text("sort").map(str::to_owned);
-    if let Some(open) = args.bool("new_project") {
-        page.state.lock().form_open = open;
-    }
+    let path = p.path.as_deref().map(paths::to_backslash).unwrap_or_default();
+    let search = p.query.clone();
+    let sort = p.sort.clone();
     let active = ed.project_opt().is_some();
-    if (!show.is_empty() || search.is_some() || sort.is_some()) && active {
-        return Err(refuse("the project browser is not on screen: a project is open"));
+    if (p.show.is_some() || search.is_some() || sort.is_some() || p.new_project.is_some()) && active {
+        return Err(refuse("the Start page is not on screen: a project is open"));
+    }
+    if let Some(open) = p.new_project {
+        page.state.lock().form_open = open;
     }
 
     // everything is checked before anything changes
     let sort = match sort.as_deref() {
         None => None,
-        Some(key) => Some(Sort::parse(key).ok_or_else(|| refuse("sort: recent or name"))?),
+        Some(key) => Some(Sort::parse(key).ok_or_else(|| CmdError::invalid("sort takes recent or name"))?),
     };
-    let (none, menu, confirm) = (show == "none", show == "menu", show == "confirm");
-    if !show.is_empty() && !none && !menu && !confirm {
-        return Err(refuse("show: menu, confirm or none"));
-    }
+    let (none, menu, confirm) =
+        (p.show == Some(Show::None), p.show == Some(Show::Menu), p.show == Some(Show::Confirm));
+    let show = p.show.is_some();
 
     if active {
         // the page is not drawn while a project is open: nothing of it is up
@@ -100,7 +145,7 @@ pub(crate) async fn project_browser_menu(ed: Arc<Editor>, args: Args, _origin: O
         start::apply_snapshot(&mut st, snap);
     }
 
-    let target = if !show.is_empty() && !none {
+    let target = if show && !none {
         let found = page
             .state
             .lock()
@@ -109,7 +154,7 @@ pub(crate) async fn project_browser_menu(ed: Arc<Editor>, args: Args, _origin: O
             .find(|c| !path.is_empty() && paths::same_path(&c.path, &path))
             .map(|c| (c.path.clone(), c.name.clone()));
         let Some((target, name)) = found else {
-            return Err(refuse(format!("no card of the project browser shows '{path}'")));
+            return Err(CmdError::not_found(format!("no card of the Start page shows '{path}'")));
         };
         let probe = target.clone();
         let state = ed.exec.io(move || gz_project::list::entry_state(&probe)).await;
@@ -223,6 +268,7 @@ pub(crate) async fn project_browser_menu(ed: Arc<Editor>, args: Args, _origin: O
 
     let mut out = Map::new();
     out.insert("browser".into(), json!(true));
+    out.insert("new_project".into(), json!(page.state.lock().form_shown()));
     out.insert("menu".into(), menu_out.unwrap_or(Value::Null));
     out.insert("confirm".into(), confirm_out.unwrap_or(Value::Null));
     out.insert("search".into(), json!(search_now));

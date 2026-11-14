@@ -170,7 +170,7 @@ def escaped(window: str) -> list:
 
 def cards(state: dict | None = None) -> list:
     """The Start page's cards as the page draws them: [(lowered forward-slash path, parent), ...]."""
-    data = state or mcp("project_browser_menu")
+    data = state or mcp("project.page")
     return [(fwd(c.get("path", "")).lower(), c.get("parent", "")) for c in data.get("cards", [])]
 
 
@@ -434,7 +434,7 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
         pic = shot(shots, "start_page")
         check(pic.get("ok") and pic.get("modal") is None and not pic.get("outside"),
               "S the Start page is a page, not a modal, and nothing lives outside the window", short(pic))
-        page = mcp("project_browser_menu")
+        page = mcp("project.page")
         check(page.get("ok") and page.get("browser") and [c for c, _ in cards(page)] == listed_order,
               "S a card per entry, in the order of the list (Last Opened)", short(page))
         parents = dict(cards(page))
@@ -448,11 +448,19 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
                            "open": "placeholder", "gone": "placeholder"},
               "P a card shows its preview; a black or empty grey one, none, or a gone folder gets the placeholder",
               json.dumps(pictures))
-        mcp("project_browser_menu", new_project=True)
+        audit = mcp("ui.audit", id="start_page")
+        labels = [c.get("label") for c in audit.get("controls", [])]
+        check("New Project" in labels and "Open Folder..." in labels and "Open Project File..." in labels,
+              "S New Project is a card of the grid; Open Folder... and Open Project File... head the page", json.dumps(labels)[:400])
+        cards_before = [c.get("rect") for c in audit.get("controls", []) if c.get("label") == "Actions"]
+        f = mcp("project.page", new_project=True)
+        check(f.get("ok") and f.get("new_project") is True, "S the New Project form comes up in its card", short(f))
         audit = mcp("ui.audit", id="start_page")
         create = [c for c in audit.get("controls", []) if c.get("label") == "Create"]
         check(audit.get("ok") and create and not create[0].get("enabled") and create[0].get("why"),
               "S Create is off while the form has no name, and says why", short(audit))
+        cards_after = [c.get("rect") for c in audit.get("controls", []) if c.get("label") == "Actions"]
+        check(cards_before and cards_before == cards_after, "S the form opens in its slot: no card moves", json.dumps([cards_before, cards_after])[:300])
         before = mcp("ui.scale").get("scale")
         for scale in (1.0, 1.5):
             mcp("ui.scale", value=scale)
@@ -466,41 +474,41 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
         if before:
             mcp("ui.scale", value=before)
 
-        found = cards(mcp("project_browser_menu", search="qaLOCKED"))
+        found = cards(mcp("project.page", query="qaLOCKED"))
         check([c for c, _ in found] == [fwd(p["locked"]).lower()], "S the search ignores case", json.dumps(found))
-        found = cards(mcp("project_browser_menu", search="twin " + TWIN.lower()))
+        found = cards(mcp("project.page", query="twin " + TWIN.lower()))
         check([c for c, _ in found] == [fwd(p["open"]).lower()], "S every word of the search must match", json.dumps(found))
         shot(shots, "start_page_search")
-        mcp("project_browser_menu", search="")
-        found = [c for c, _ in cards(mcp("project_browser_menu", sort="name"))]
+        mcp("project.page", query="")
+        found = [c for c, _ in cards(mcp("project.page", sort="name"))]
         by_name = sorted(listed_order, key=lambda path: path.rstrip("/").rsplit("/", 1)[-1])
         check(found == by_name, "S sort by Name orders the cards by name", json.dumps(found))
-        bad = mcp("project_browser_menu", sort="size")
+        bad = mcp("project.page", sort="size")
         check(not bad.get("ok"), "S a sort it does not know is refused", short(bad))
-        found = [c for c, _ in cards(mcp("project_browser_menu", sort="recent"))]
+        found = [c for c, _ in cards(mcp("project.page", sort="recent"))]
         check(found == listed_order, "S sort by Last Opened puts the list's order back", json.dumps(found))
 
         # ------------------------------------------------------------------ B: to look at, never to act
-        m = mcp("project_browser_menu", show="menu", path=p["delete"])
+        m = mcp("project.page", show="menu", path=p["delete"])
         check(m.get("ok") and m.get("browser") and same((m.get("menu") or {}).get("path", ""), p["delete"]),
               "B show=menu asks for the card's menu", short(m))
         shot(shots, "menu")
-        m = mcp("project_browser_menu")
+        m = mcp("project.page")
         menu = m.get("menu") or {}
         check(menu.get("shown") and [(i.get("label"), i.get("enabled")) for i in menu.get("items", [])] ==
               [("Show in Explorer", True), ("Delete...", True)],
               "B the menu is drawn: Show in Explorer and Delete...", short(m))
 
-        m = mcp("project_browser_menu", show="menu", path=p["gone"])
+        m = mcp("project.page", show="menu", path=p["gone"])
         shot(shots, "menu_missing")
-        m = mcp("project_browser_menu")
+        m = mcp("project.page")
         menu = m.get("menu") or {}
         check(menu.get("shown") and menu.get("state") == "missing" and
               [(i.get("label"), i.get("enabled")) for i in menu.get("items", [])] ==
               [("Show in Explorer", False), ("Remove from List", True)],
               "B a gone folder's menu: Show in Explorer disabled, Remove from List", short(m))
 
-        m = mcp("project_browser_menu", show="confirm", path=p["delete"])
+        m = mcp("project.page", show="confirm", path=p["delete"])
         c = m.get("confirm") or {}
         e = w.expect["delete"]
         check(m.get("ok") and c.get("view") == "question" and not c.get("refused") and
@@ -513,25 +521,25 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
               "B the confirmation is the top-level dialog dlg.delete_project", short(pic))
         esc = escaped("dlg.delete_project")
         check(not esc, "B nothing escapes the confirmation", json.dumps(esc)[:600])
-        m = mcp("project_browser_menu")
+        m = mcp("project.page")
         check((m.get("confirm") or {}).get("shown") and m.get("menu") is None,
               "B the confirmation is drawn, and the menu is down", short(m))
 
-        m = mcp("project_browser_menu", show="confirm", path=p["nested"])
+        m = mcp("project.page", show="confirm", path=p["nested"])
         c = m.get("confirm") or {}
         check(c.get("view") == "refused" and "another project" in c.get("reason", "") and
               any(same(n, os.path.join(p["nested"], "inner")) for n in c.get("nested", [])),
               "B a refusal is what the confirmation shows, naming the project inside", short(m))
         shot(shots, "confirm_refused")
-        bad = mcp("project_browser_menu", show="confirm", path=p["gone"])
+        bad = mcp("project.page", show="confirm", path=p["gone"])
         check(not bad.get("ok"), "B a gone folder has no confirmation: Remove from List asks nothing", short(bad))
-        bad = mcp("project_browser_menu", show="menu", path=p["outside"])
+        bad = mcp("project.page", show="menu", path=p["outside"])
         check(not bad.get("ok"), "B a folder that is not a card has no menu", short(bad))
-        bad = mcp("project_browser_menu", show="everything")
+        bad = mcp("project.page", show="everything")
         check(not bad.get("ok"), "B an unknown show is refused", short(bad))
-        m = mcp("project_browser_menu", show="none")
+        m = mcp("project.page", show="none")
         pic = shot(shots, "browser")
-        m = mcp("project_browser_menu")
+        m = mcp("project.page")
         check(m.get("ok") and m.get("menu") is None and m.get("confirm") is None and pic.get("modal") is None,
               "B show=none takes both down", short(m))
         check(os.path.isfile(os.path.join(p["delete"], "mod.ltx")) and os.path.isfile(os.path.join(p["nested"], "mod.ltx")),
@@ -550,7 +558,7 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
         check(os.path.isfile(keep) and open(keep, encoding="utf-8").read().startswith("a junction's target"),
               "C the junction went as a link: the folder it pointed at keeps its files")
         check(fwd(p["delete"]).lower() not in listed(), "C the entry left the list")
-        bad = mcp("project_browser_menu", show="menu", path=p["delete"])
+        bad = mcp("project.page", show="menu", path=p["delete"])
         check(not bad.get("ok"), "C and its card is gone", short(bad))
 
         # ------------------------------------------------------------------ D: refusals
@@ -652,10 +660,10 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
         check(not d.get("ok") and d.get("refused") and "open project" in d.get("error", "") and
               os.path.isfile(os.path.join(p["open"], "mod.ltx")),
               "H the open project is refused", short(d))
-        m = mcp("project_browser_menu", show="menu", path=p["nested"])
+        m = mcp("project.page", show="menu", path=p["nested"])
         check(not m.get("ok") and "not on screen" in m.get("error", ""),
               "H no card menu while a project is open", short(m))
-        m = mcp("project_browser_menu")
+        m = mcp("project.page")
         check(m.get("ok") and m.get("browser") is False, "H the report still answers, browser:false", short(m))
         link = mcp("game.info", candidates=True)
         st = mcp("state")

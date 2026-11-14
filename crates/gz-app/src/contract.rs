@@ -19,13 +19,14 @@ pub const CARD_REMOVE_FROM_LIST: &str = "Remove from List";
 pub const DELETE_PROJECT_DIALOG: &str = "Delete Project###dlg.delete_project";
 
 /// The Level tab's panels: the MCP id and the window (its id after `###`).
-pub const PANELS: [(&str, &str); 7] = [
-    ("tools", "Tools###LeftBar"),
+pub const PANELS: [(&str, &str); 8] = [
+    ("place", "Place###LeftBar"),
     ("world_outliner", "World Outliner"),
     ("details", "Details###Properties"),
     ("level_settings", "Level Settings###World Properties"),
     ("content_browser", "Content Browser"),
     ("output_log", "Output Log###Log"),
+    ("problems", "Problems###level.problems"),
     ("viewport", "Viewport###Render"),
 ];
 
@@ -79,7 +80,7 @@ pub const KIT_DIALOGS: [&str; 28] = [
     "dlg.numeric_vector",
     "dlg.rename_object",
     "dlg.delete_object",
-    "dlg.detail_objects",
+    "dlg.colour_indices",
     "dlg.nq_project_find",
     "dlg.nq_task_rename",
     "dlg.nq_task_references",
@@ -131,7 +132,8 @@ pub const MENUS: [&str; 11] =
     ["File", "Edit", "Scene", "Build", "View", "Graph", "Mod", "Libraries", "Window", "Help", "Menu"];
 
 /// The viewport's menus (`viewport:<menu>`).
-pub const VIEWPORT_MENUS: [&str; 7] = ["options", "perspective", "show", "snap", "grid", "scale", "angle"];
+pub const VIEWPORT_MENUS: [&str; 7] =
+    ["perspective", "view_mode", "show", "surface", "grid", "angle", "scale"];
 
 /// `ui.scale`: tests only, never saved.
 pub const UI_SCALE_MIN: f32 = 1.0;
@@ -143,19 +145,9 @@ pub const INTERFACE_SCALES: [&str; 6] = ["auto", "100", "125", "150", "175", "20
 /// The theme presets: the wire key and the name the author reads.
 pub const THEME_PRESETS: [(&str, &str); 2] = [("grizzly-purple", "Grizzly Purple"), ("graphite", "Graphite")];
 
-/// The content browser's categories.
-pub const CATEGORIES: [&str; 10] = [
-    "Objects",
-    "Levels",
-    "Groups",
-    "Visuals",
-    "Textures",
-    "Textures (raw)",
-    "Particles",
-    "Sounds",
-    "Entities",
-    "Light Anims",
-];
+/// The kinds of the Content Browser's Library, as it names them.
+pub const CATEGORIES: [&str; 7] =
+    ["Objects", "Groups", "Textures", "Sounds", "Particles", "Spawn Sections", "Base Scenes"];
 
 /// The window of a panel, a drawer or a dialog by its MCP id.
 #[must_use]
@@ -190,6 +182,6 @@ mod tests {
         assert_eq!(window_of_known("log"), Some("Output Log###drawer.log"));
         assert_eq!(window_of_known("start_page"), Some("Start Page###start_page"));
         assert_eq!(window_of_known("nothing"), None);
-        assert_eq!(PANELS.len(), 7);
+        assert_eq!(PANELS.len(), 8);
     }
 }

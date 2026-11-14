@@ -1,7 +1,8 @@
-//! The viewport's gestures of the zones, the way paths (adding, picking, boxing and moving
-//! points in Points mode) and the shapes. Each reads a snapshot, picks on the CPU pool and sends one of
-//! `gz-scene`'s object tool edits - the same functions `scene.zones`, `way_tool` and `shape_tool`
-//! call; a drag is one merged undo step sealed on release.
+//! The viewport's gestures of the zones (cells made from meshes, meshes painted or boxed into a
+//! cell), of Place mode's way paths (a click adds a point to the selected way) and attaching on a
+//! click. Each reads a snapshot, picks on the CPU pool and sends one of `gz-scene`'s object tool
+//! edits - the same functions `scene.zones`, `scene.way` and `scene.shape` call; a drag is one
+//! merged undo step sealed on release.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,37 +10,32 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use glam::{Vec2 as G2, Vec3, Vec4};
 use gz_editor::{Editor, SmolStr, Value};
 use gz_render::Ray;
-use gz_scene::apply::SelectMode;
-use gz_scene::objtools::{self, Ctl, ToolEdit, cmd as tools_cmd, geom, sector, shape, way};
+use gz_scene::objtools::{self, Ctl, ToolEdit, cmd as tools_cmd, geom, sector, shape};
 use gz_scene::{ObjClass, ObjData, ObjId, Object, SceneCmd, SceneService};
 
 use crate::camera::Buttons;
-use crate::service::{Action, Viewport};
+use crate::service::Viewport;
 
-/// Whether a click in the viewport adds now (Place), what the Sector tool's Edit section is for.
+/// Whether a click in the viewport places now: the scene is in Place mode.
 #[must_use]
 pub fn placing(editor: &Editor) -> bool {
-    Viewport::of(editor).read(|s| s.tool.action == Action::Place)
+    crate::pane::scene_mode(editor) == Some(gz_scene::SceneMode::Place)
 }
 
-/// Switches the viewport between Place and Select.
-pub fn set_placing(editor: &Editor, on: bool) {
-    Viewport::of(editor).with(|s| {
-        s.tool.action = if on { Action::Place } else { Action::Select };
-        if on {
-            s.tool.gizmo = crate::gizmo::GizmoType::None;
-        }
-    });
+/// Puts Place mode up (with the kind it has armed) or Select back.
+pub fn set_placing(editor: &Arc<Editor>, on: bool) {
+    let mut a = gz_editor::Args::new();
+    a.insert("mode".into(), Value::String(if on { "place" } else { "select" }.into()));
+    editor.post("scene.mode", a);
 }
 
 /// What a press of an object tool started.
 pub(crate) enum ToolGesture {
     /// The press was the tool's whole gesture.
     Done,
-    /// Meshes added to (or taken from) the selected sector as the mouse moves (`saAddMesh`,
-    /// `saDelMesh`).
+    /// Meshes added to (or taken from) the selected sector as the mouse moves.
     Paint(Paint),
-    /// A box drawn to pick meshes (`saMeshBoxSelection`).
+    /// A box drawn to pick meshes.
     BoxPick,
     /// No tool of these took the press.
     None,
@@ -101,7 +97,7 @@ pub(crate) fn place_press(
         }
         // with a way path selected, Place adds points to it
         ObjClass::Way if !objtools::selected_of(&snap, ObjClass::Way).is_empty() => {
-            way_add_point(editor, vp, ray, b);
+            way_add_point(editor, vp, ray);
             ToolGesture::Done
         }
         ObjClass::Shape if t.attach_on_click => {
@@ -162,7 +158,7 @@ pub(crate) fn paint_step(editor: &Arc<Editor>, vp: &Viewport, p: &Paint, ray: Ra
     });
 }
 
-/// `AddSector` / `AddSectors`: the mesh (or every mesh of the object) under the mouse becomes a
+/// New Cell From Mesh / From Object: the mesh (or every mesh of the object) under the mouse becomes a
 /// sector; New Sector From Mesh goes off after one unless Alt is held.
 fn sector_new(editor: &Arc<Editor>, vp: &Viewport, ray: Ray, b: Buttons, multiple: bool) {
     let Some(svc) = svc(editor) else { return };
@@ -253,9 +249,9 @@ pub(crate) fn box_pick_end(editor: &Arc<Editor>, vp: &Viewport, size: [u32; 2], 
     });
 }
 
-/// A point of the one selected way where the ground is hit,
-/// linked from its selected point with Auto Link; Alt keeps adding.
-fn way_add_point(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
+/// A point of the one selected way where the ground is hit, linked from its selected point with
+/// Auto Link. Place mode stays up for the next one.
+fn way_add_point(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray) {
     let Some(svc) = svc(editor) else { return };
     let snap = svc.store.snapshot();
     let sel: Vec<ObjId> = snap
@@ -268,17 +264,11 @@ fn way_add_point(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons)
         return;
     };
     let way_id = *way_id;
-    let (object_snap, grid, far) = vp.read(|s| {
-        (
-            s.settings.object_snap,
-            s.snap_on(crate::gizmo::GizmoType::Move).then_some(s.step(crate::gizmo::GizmoType::Move)),
-            s.nav.far,
-        )
-    });
-    let (ed, vp) = (editor.clone(), vp.clone());
+    let _ = vp;
+    let ed = editor.clone();
     let origin = editor.ui_origin();
     crate::gesture::spawn(editor, async move {
-        if let Some((at, _)) = crate::pane::pick_ground(&ed, &svc, ray, object_snap, grid, far).await {
+        if let Some((at, _)) = crate::place::landing(&ed, &svc, ray).await {
             let r = objtools::commit(&ed, &svc, origin, Ctl::default(), move |s, _, _| {
                 tools_cmd::add_point_batch(s, way_id, at)
             })
@@ -286,9 +276,6 @@ fn way_add_point(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons)
             if let Err(e) = r {
                 ed.log.error(e.message);
             }
-        }
-        if !b.alt {
-            vp.with(|s| s.tool.action = Action::Select);
         }
         ed.exec.wake().ping();
     });
@@ -299,7 +286,7 @@ fn way_add_point(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons)
 fn shape_attach(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
     let Some(svc) = svc(editor) else { return };
     let far = vp.read(|s| s.nav.far);
-    let (ed, vp) = (editor.clone(), vp.clone());
+    let ed = editor.clone();
     let origin = editor.ui_origin();
     crate::gesture::spawn(editor, async move {
         let (snap, pick) = svc.pick().await;
@@ -330,7 +317,6 @@ fn shape_attach(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) 
         {
             Ok(_) if !b.alt => {
                 let _ = objtools::set_state(&svc, origin, |st| st.attach_on_click = false).await;
-                vp.with(|s| s.tool.action = Action::Select);
             }
             Ok(_) => {}
             Err(e) => ed.log.error(e.message),
@@ -344,7 +330,7 @@ fn shape_attach(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) 
 fn spawn_attach(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
     let Some(svc) = svc(editor) else { return };
     let far = vp.read(|s| s.nav.far);
-    let (ed, vp) = (editor.clone(), vp.clone());
+    let ed = editor.clone();
     let origin = editor.ui_origin();
     crate::gesture::spawn(editor, async move {
         let (snap, pick) = svc.pick().await;
@@ -369,7 +355,6 @@ fn spawn_attach(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) 
             ed.log.error(r.get("error").and_then(Value::as_str).unwrap_or("Attach impossible.").to_owned());
         } else if !b.alt {
             let _ = objtools::set_state(&svc, origin, |st| st.spawn_attach = false).await;
-            vp.with(|s| s.tool.action = Action::Select);
         }
         ed.exec.wake().ping();
     });
@@ -380,118 +365,6 @@ fn spawn_attach(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) 
 pub fn new_shape(editor: &Arc<Editor>) -> ObjData {
     let sphere = svc(editor).is_some_and(|s| s.store.snapshot().tools.obj.shape_sphere);
     ObjData::Shape(shape::new_shape_data(sphere))
-}
-
-/// Whether clicks work on way points now: Place mode with way paths armed and one selected (its
-/// points are picked, added and moved like objects).
-#[must_use]
-pub fn way_points_mode(editor: &Arc<Editor>) -> bool {
-    svc(editor).is_some_and(|s| {
-        let snap = s.store.snapshot();
-        snap.tools.mode == gz_scene::SceneMode::Place
-            && snap.tools.placing == ObjClass::Way
-            && !objtools::selected_of(&snap, ObjClass::Way).is_empty()
-    })
-}
-
-/// A click of the selection in Points mode: without Ctl the points of
-/// the selected ways are let go first; the nearest point of a visible way is selected (Ctrl
-/// toggles it).
-pub(crate) fn way_point_click(editor: &Arc<Editor>, vp: &Viewport, ray: Ray, b: Buttons) {
-    let Some(svc) = svc(editor) else { return };
-    let far = vp.read(|s| s.nav.far);
-    let any = vp.read(|s| s.settings.pick_any_class);
-    let ed = editor.clone();
-    let origin = editor.ui_origin();
-    crate::gesture::spawn(editor, async move {
-        let snap = svc.store.snapshot();
-        if !b.ctrl {
-            if any {
-                let others: Vec<_> = snap
-                    .selected_in_order()
-                    .into_iter()
-                    .filter(|id| snap.get(*id).is_some_and(|o| o.class != ObjClass::Way))
-                    .collect();
-                let _ =
-                    svc.store.send(SceneCmd::Select { ids: others, mode: SelectMode::Remove }, origin).await;
-            }
-            for id in objtools::selected_of(&snap, ObjClass::Way) {
-                let _ = svc
-                    .store
-                    .send(
-                        SceneCmd::ObjTool(Box::new(ToolEdit::SelectPoints {
-                            way: id,
-                            points: Vec::new(),
-                            mode: SelectMode::Set,
-                        })),
-                        origin,
-                    )
-                    .await;
-            }
-        }
-        let snap = svc.store.snapshot();
-        let mut best: Option<(ObjId, usize, f32)> = None;
-        if snap.tools.part(ObjClass::Way).visible {
-            for o in snap.of_class(ObjClass::Way).filter(|o| o.flags.visible) {
-                let ObjData::Way(w) = &o.data else { continue };
-                if let Some((i, d)) = way::pick_point(w, ray.origin, ray.dir, best.map_or(far, |x| x.2)) {
-                    best = Some((o.id, i, d));
-                }
-            }
-        }
-        if let Some((id, i, _)) = best {
-            let mode = if b.ctrl { SelectMode::Toggle } else { SelectMode::Add };
-            let _ = svc
-                .store
-                .send(
-                    SceneCmd::ObjTool(Box::new(ToolEdit::SelectPoints { way: id, points: vec![i], mode })),
-                    origin,
-                )
-                .await;
-        }
-        ed.exec.wake().ping();
-    });
-}
-
-/// A marquee in Points mode: the points of the selected ways inside
-/// the box are selected.
-pub(crate) fn way_points_marquee(editor: &Arc<Editor>, vp: &Viewport, size: [u32; 2], a: G2, b: G2) {
-    let Some(svc) = svc(editor) else { return };
-    let cam = vp.read(|s| s.nav.camera());
-    let Some(planes) = rect_planes(&cam, size, a, b) else { return };
-    let ed = editor.clone();
-    let origin = editor.ui_origin();
-    crate::gesture::spawn(editor, async move {
-        let snap = svc.store.snapshot();
-        for id in objtools::selected_of(&snap, ObjClass::Way) {
-            let Some(ObjData::Way(w)) = snap.get(id).map(|o| &o.data) else { continue };
-            let r = gz_scene::objects::WAYPOINT_RADIUS;
-            let inside: Vec<usize> = w
-                .points
-                .iter()
-                .enumerate()
-                .filter(|(_, p)| {
-                    let c = p.position + Vec3::Y * r;
-                    planes.iter().all(|pl| pl.truncate().dot(c) + pl.w >= -r)
-                })
-                .map(|(i, _)| i)
-                .collect();
-            if !inside.is_empty() {
-                let _ = svc
-                    .store
-                    .send(
-                        SceneCmd::ObjTool(Box::new(ToolEdit::SelectPoints {
-                            way: id,
-                            points: inside,
-                            mode: SelectMode::Add,
-                        })),
-                        origin,
-                    )
-                    .await;
-            }
-        }
-        ed.exec.wake().ping();
-    });
 }
 
 /// The selected points of the ways a move drag holds, as they are at the press.

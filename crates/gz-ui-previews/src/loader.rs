@@ -26,7 +26,7 @@ pub enum Found {
 }
 
 impl Found {
-    /// What `preview_model` answers as a texture's `from`.
+    /// What `preview.model` answers as a texture's `from`.
     #[must_use]
     pub fn from_name(&self) -> &'static str {
         match self {

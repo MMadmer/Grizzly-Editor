@@ -12,6 +12,9 @@ What it proves:
      helicopter's Motion the game's .anm files - and an empty one says why
   D  Preferences opens as a tab, ui_audit finds nothing escaping it, and it closes
   E  shortcuts: app.keys lists the actions, bind (moved from the action that had it), clear - and every shortcut is back as it was
+  G  Details and the chooser: a light's Transform section with its position on one line, a Reset arrow on a value off its
+     default; a light and a glow selected show only the rows they share; the chooser of a spawn's model is tall, lists
+     the models with pictures and previews the highlighted one; the chooser of a spawn section; pictures under --shots
   F  the editor's preferences file and layout come back byte for byte
 
     python tools/qa/test_properties.py --project <project>
@@ -41,6 +44,8 @@ PREFS = os.path.join(REPO, "level.ini")
 PROJECTS = qa_target.projects_ini()
 
 results: list[tuple[bool, str]] = []
+SHOTS: str | None = None
+
 
 
 def check(ok: bool, text: str, detail: str = "") -> bool:
@@ -187,6 +192,133 @@ def choosers(spawn: str) -> None:
         mcp("scene.delete", objects=[heli])
 
 
+def save_shot(name: str) -> None:
+    """A picture of the window under --shots, as it is now."""
+    if not SHOTS:
+        mcp("shot.window", timeout=120)
+        return
+    import base64
+    pic = mcp("shot.window", timeout=120)
+    data = base64.b64decode(pic.get("png_base64") or b"")
+    if data:
+        os.makedirs(SHOTS, exist_ok=True)
+        with open(os.path.join(SHOTS, name + ".png"), "wb") as f:
+            f.write(data)
+
+
+def red_pixels_in(panel: str, name: str) -> int:
+    """The pure red pixels of a panel in a picture of the window: what egui paints over two widgets of one id."""
+    import base64
+    import io
+    from PIL import Image
+    pic = mcp("shot.window", timeout=120)
+    data = base64.b64decode(pic.get("png_base64") or b"")
+    if SHOTS and data:
+        os.makedirs(SHOTS, exist_ok=True)
+        with open(os.path.join(SHOTS, name + ".png"), "wb") as f:
+            f.write(data)
+    img = Image.open(io.BytesIO(data)).convert("RGB")
+    scale = float(pic.get("scale") or 1.0)
+    panels = {p.get("id"): p for p in mcp("ui.list").get("panels", [])}
+    rect = (panels.get(panel) or {}).get("rect") or [0, 0, img.width / scale, img.height / scale]
+    x, y, w, h = (v * scale for v in rect)
+    box = img.crop((int(x), int(y), int(x + w), int(y + h)))
+    return sum(1 for r, g, b in box.getdata() if r > 200 and g < 60 and b < 60)
+
+
+def controls(panel: str) -> dict:
+
+    """The kit's controls a panel drew last frame, by their labels."""
+    audit = mcp("ui.audit", id=panel)
+    return {c.get("label"): c for c in audit.get("controls", []) if c.get("label")}
+
+
+def details_and_chooser(spawn: str) -> None:
+    """G: Details of a light, of a light and a glow, and the chooser of a model and of a spawn section."""
+    lamp = (mcp("scene.place", kind="light", position=[4, 1, 4]).get("object") or {}).get("name", "")
+    glow = (mcp("scene.place", kind="glow", position=[4, 1, 6]).get("object") or {}).get("name", "")
+    if not check(bool(lamp) and bool(glow), "G a light and a glow to look at"):
+        return
+    mcp("scene.set", objects=[lamp], key="range", value=12)
+    mcp("scene.select", objects=[lamp])
+    mcp("ui.panel", id="details", action="open")
+    for size, tag in (((1600, 900), "1600"), ((1280, 720), "1280")):
+        mcp("app.window", action="resize", width=size[0], height=size[1])
+        save_shot("details_light_" + tag)
+    mcp("app.window", action="resize", width=1600, height=900)
+    save_shot("details_light_1600")
+    c = controls("details")
+    check("Transform" in c and "Position" in c and "Light" in c, "G a light's Details: Transform, Position, its Light section",
+          json.dumps(sorted(c))[:400])
+    check("Reset to default" in c, "G a value off its default has a Reset arrow", json.dumps(sorted(c))[:400])
+    red = red_pixels_in("details", "details_light_check")
+    check(red == 0, "G Details of a light draws no widget twice (%d red pixels)" % red)
+    hint = [k for k in c if k.startswith("Search ") and k.endswith(("property", "properties"))]
+    check(bool(hint) or "Search" in json.dumps(sorted(c)), "G the search says how many properties it searches",
+          json.dumps(sorted(c))[:300])
+    mcp("scene.select", objects=[lamp, glow])
+    save_shot("details_light_and_glow")
+    c = controls("details")
+    check("Position" in c and "Range" not in c, "G a light and a glow show the rows they share, not the light's Range",
+          json.dumps(sorted(c))[:400])
+    for kind in ("glow", "sound"):
+        one = (mcp("scene.place", kind=kind, position=[6, 1, 6]).get("object") or {}).get("name", "")
+        if one:
+            mcp("scene.select", objects=[one])
+            save_shot("details_" + kind)
+            mcp("scene.delete", objects=[one])
+    mcp("scene.select", objects=[spawn])
+    save_shot("details_spawn")
+    mcp("scene.delete", objects=[lamp, glow])
+    # a way path: its points are sections of their own with rows of one label each; no two widgets
+    # share an id (egui paints such a clash in red over the panel)
+    ways = mcp("scene.objects", classes=["way"], limit=1).get("objects") or []
+    if check(bool(ways), "G the scene has a way path"):
+        mcp("scene.select", objects=[ways[0]["name"]])
+        red = red_pixels_in("details", "details_way")
+        check(red == 0, "G Details of a way path draws no widget twice (%d red pixels)" % red)
+
+    # the chooser of the spawn's model: tall, the models with pictures, the highlighted one previewed
+    opened = mcp("scene.choose", object=spawn, key="props.visual", query="stalker_neutral", timeout=120)
+    ch = opened.get("chooser") or {}
+    check(opened.get("ok") and ch.get("preview") == "model" and ch.get("shown", 0) > 0,
+          "G the chooser of a model opens with its search and its preview (%s rows)" % ch.get("shown"), json.dumps(opened)[:400])
+    first = (ch.get("first") or [""])[0]
+    if first:
+        moved = mcp("scene.choose", action="move", highlight=first)
+        check((moved.get("chooser") or {}).get("highlight") == first, "G a row highlighted is the preview's",
+              json.dumps(moved)[:300])
+    time.sleep(1.0)
+    pic = mcp("shot.window", timeout=120)
+    modal = pic.get("modal") or {}
+    rect = modal.get("rect") or [0, 0, 0, 0]
+    check(modal.get("id") == "dlg.choose" and rect[3] > 0.55 * pic.get("height", 1),
+          "G the chooser is a tall dialog (%s px of %s)" % (rect[3], pic.get("height")), json.dumps(modal)[:300])
+    save_shot("chooser_model")
+    closed = mcp("scene.choose", action="close")
+    check(closed.get("ok") and closed.get("chooser") is None, "G scene.choose closes it", json.dumps(closed)[:200])
+    sections = mcp("scene.choose", object=spawn, key="section", query="stalker")
+    sc = sections.get("chooser") or {}
+    check(sections.get("ok") and sc.get("list") == "spawn sections" and sc.get("shown", 0) > 0,
+          "G the chooser of a spawn section lists the game's sections (%s)" % sc.get("shown"), json.dumps(sections)[:300])
+    save_shot("chooser_spawn_section")
+    mcp("scene.choose", action="close")
+    # thousands selected with Details open: the shared rows are worked out off the UI thread
+    many = mcp("scene.select", classes=["object"])
+    save_shot("details_many")
+    shown = controls("details")
+    check(many.get("selected", 0) > 3000 and "Position" in shown,
+          "G %s objects selected with Details open show their shared rows" % many.get("selected"), json.dumps(sorted(shown))[:300])
+    scrolled = mcp("ui.scroll", id="details", to="bottom")
+    check(scrolled.get("ok") and scrolled.get("scroll_max_y", 0) > 0, "G ui.scroll reaches Details' rows", json.dumps(scrolled)[:300])
+    mcp("scene.select", none=True)
+    empty = mcp("ui.scroll", id="details", to="top")
+    check(empty.get("ok"), "G ui.scroll answers for Details with nothing selected", json.dumps(empty)[:300])
+    stalls = mcp("perf.stalls")
+    check(stalls.get("ok") and not stalls.get("stalls"), "G no UI pass stalled (worst %s ms)" % stalls.get("worst_ms"),
+          json.dumps(stalls.get("stalls"))[:400])
+
+
 def run(project: str) -> None:
     ed = Editor()
     try:
@@ -278,17 +410,18 @@ def run(project: str) -> None:
             check(not refused.get("ok") and refused.get("code") == "not_found", "C a model nobody has is refused",
                   json.dumps(refused)[:300])
             # the spawn's playback over MCP: read, stopped, at its first frame; nothing of the scene changes
-            sa = mcp("spawn_animation", object=name)
+            sa = mcp("viewport.play", what="animation", objects=[name])
             check(sa.get("ok") and sa.get("object") == name and sa.get("state") in ("playing", "paused", "stopped"),
-                  "C spawn_animation reads the spawn's playback", json.dumps(sa)[:300])
-            stopped = mcp("spawn_animation", object=name, action="stop")
-            first = mcp("spawn_animation", object=name, action="first")
+                  "C viewport.play reads the spawn's playback", json.dumps(sa)[:300])
+            stopped = mcp("viewport.play", what="animation", objects=[name], action="stop")
+            first = mcp("viewport.play", what="animation", objects=[name], action="first")
             check(stopped.get("state") == "stopped" and first.get("state") == "paused" and first.get("time") == 0,
-                  "C spawn_animation stops the model and puts it at its first frame",
+                  "C viewport.play stops the model and puts it at its first frame",
                   json.dumps(stopped)[:200] + " / " + json.dumps(first)[:200])
-            none = mcp("spawn_animation", object="qa_no_such_object")
-            check(not none.get("ok"), "C spawn_animation refuses an object that is not there", json.dumps(none)[:200])
+            none = mcp("viewport.play", what="animation", objects=["qa_no_such_object"])
+            check(not none.get("ok"), "C viewport.play refuses an object that is not there", json.dumps(none)[:200])
             choosers(name)
+            details_and_chooser(name)
             mcp("scene.delete", objects=[name])
 
         # ------------------------------------------------------------ D: Preferences
@@ -304,10 +437,10 @@ def run(project: str) -> None:
         # the snap steps of Preferences ARE the viewport toolbar's
         before = mcp("app.prefs", action="get", key="snap_angle_step")
         mcp("app.prefs", action="set", key="snap_angle_step", value="11.25")
-        angle = mcp("viewport_controls").get("angle", {})
+        angle = mcp("viewport.view").get("angle", {})
         check(abs(float(angle.get("step", 0)) - 11.25) < 1e-3, "D the angle snap of Preferences is the toolbar's",
               json.dumps(angle))
-        mcp("app.prefs", action="set", key="snap_angle_step", value=str(before.get("value", "5.625")))
+        mcp("app.prefs", action="set", key="snap_angle_step", value=str(before.get("value", "15")))
         closed = mcp("ui.tab", action="close", doc="preferences")
         check(closed.get("ok"), "D and closes", json.dumps(closed)[:300])
 
@@ -317,9 +450,11 @@ def run(project: str) -> None:
         every = {i: ", ".join(r.get("keys") or []) for i, r in key_rows.items()}
         check(listed.get("ok") and len(every) > 10, "E app.keys lists the actions", json.dumps(listed)[:300])
         names = {i: (r.get("group"), r.get("title")) for i, r in key_rows.items()}
-        check(names.get('COMMAND_ZOOM_EXTENTS."Selected"') == ("View", "Frame Selection") and
+        check(names.get("level.build") == ("Build", "Build Level") and
               names.get("app.preferences") == ("Edit", "Preferences"), "E actions go by their official names",
-              json.dumps({k: names.get(k) for k in ('COMMAND_ZOOM_EXTENTS."Selected"', "app.preferences")}))
+              json.dumps({k: names.get(k) for k in ("level.build", "app.preferences")}))
+        check(not [i for i in key_rows if i.startswith("COMMAND_")], "E no shortcut has an id of the old command table",
+              json.dumps([i for i in key_rows if i.startswith("COMMAND_")])[:300])
         undo = "edit.undo" if "edit.undo" in every else ""
         about = "help.about" if "help.about" in every else ""
         if check(bool(undo) and bool(about), "E Undo and About take shortcuts", json.dumps(sorted(every))[:300]):
@@ -348,7 +483,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--project", required=True, help="a project to COPY and run against")
     ap.add_argument("--keep", action="store_true", help="keep the throw-away copy")
+    ap.add_argument("--shots", help="a folder for the pictures of Details and the choosers")
     args = ap.parse_args()
+    global SHOTS
+    SHOTS = args.shots
 
     src = os.path.abspath(args.project)
     if not os.path.isfile(os.path.join(src, "rawdata", "levels", "l01_escape.level")):

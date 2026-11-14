@@ -341,11 +341,12 @@ fn visuals(p: &Palette) -> Visuals {
     };
     let mut v = Visuals::dark();
     v.dark_mode = true;
-    // an input reads as an input: a 1 pt outline at rest, a stronger one under the pointer
+    // an input reads as an input: a 1 pt outline at rest that is not its own fill's colour, a
+    // stronger one under the pointer
     v.widgets = Widgets {
         noninteractive: widget(p.base, p.border_subtle, p.text),
-        inactive: widget(p.button, p.border_subtle, p.text),
-        hovered: widget(p.button_hover, p.border, p.text),
+        inactive: widget(p.button, p.border, p.text),
+        hovered: widget(p.button_hover, p.border_strong, p.text),
         active: widget(p.pressed, p.border_strong, p.text),
         open: widget(p.hover, p.border, p.text),
     };

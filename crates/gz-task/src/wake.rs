@@ -15,7 +15,7 @@ pub struct Wake(Arc<Inner>);
 struct Inner {
     f: ArcSwapOption<WakeFn>,
     /// The code that pinged last: the window names it as the cause of the frame it draws for
-    /// the ping (`frame_pacing`'s `ui_frame_causes`).
+    /// the ping (`perf.frames`' `ui_frame_causes`).
     last: Mutex<Option<&'static Location<'static>>>,
 }
 

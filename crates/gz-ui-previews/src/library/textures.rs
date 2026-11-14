@@ -1,7 +1,9 @@
-//! The Texture Library: the `texture_library` tab over the descriptions of `rawdata\textures`
-//! (`UIImageEditorForm.cpp`), and New Textures - the same tab over the import folder - that
-//! Check New Textures turns it into. Save writes the changed descriptions and builds their game
-//! textures as a job beside the editor.
+//! The Texture Library: the `texture_library` tab over the descriptions of `rawdata\textures`, and
+//! New Textures - the same tab over the import folder. The library looks at the import folder by
+//! itself as it opens and offers what is new there (Import New Textures); Save writes the changed
+//! descriptions and builds their game textures as a job beside the editor. The manual work -
+//! checking the import folder, synchronizing with the sources, rewriting the descriptions,
+//! reloading the textures - is under the tab's More.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -63,7 +65,7 @@ pub fn list_library(dirs: &EditorDirs, pool: &gz_task::Executors) -> Vec<TexItem
     })
 }
 
-/// New Textures: the pictures at the import folder's root (`GetLocalNewTextures`), each with a
+/// New Textures: the pictures at the import folder's root, each with a
 /// description of its own, the one a game texture of its name has, or a new picture's defaults.
 #[must_use]
 pub fn list_import(dirs: &EditorDirs) -> Vec<TexItem> {
@@ -145,7 +147,10 @@ pub struct TexLibDoc {
     list: LibraryList,
     pub selected: String,
     filter: [bool; 5],
-    read_only: bool,
+    /// Whether the texture folder can be written: looked at on the IO pool as the tab opens.
+    writable: Pending<bool>,
+    /// The pictures the import folder holds that the library does not, counted as the tab opens.
+    new_pictures: Pending<usize>,
     /// A save is running.
     saving: Arc<std::sync::atomic::AtomicBool>,
     preview: Option<Preview>,
@@ -157,10 +162,17 @@ impl TexLibDoc {
     #[must_use]
     pub fn new(editor: &Arc<Editor>, import: bool) -> Self {
         let dirs = EditorDirs::of(editor);
-        let read_only = !can_write(&dirs.textures);
-        if read_only {
-            editor.log.warn("The texture folder cannot be written: texture descriptions are read-only.");
-        }
+        let (d, log, exec) = (dirs.textures.clone(), editor.log.clone(), editor.exec.clone());
+        let writable = Pending::spawn(&editor.exec, async move {
+            let ok = exec.io(move || can_write(&d)).await;
+            if !ok {
+                log.warn("The texture folder cannot be written: texture descriptions are read-only.");
+            }
+            ok
+        });
+        let (d, exec) = (dirs.clone(), editor.exec.clone());
+        let new_pictures =
+            Pending::spawn(&editor.exec, async move { exec.io(move || list_import(&d).len()).await });
         let mut doc = Self {
             editor: editor.clone(),
             store: Store::spawn(
@@ -174,7 +186,8 @@ impl TexLibDoc {
             list: LibraryList::default(),
             selected: String::new(),
             filter: [true; 5],
-            read_only,
+            writable,
+            new_pictures,
             saving: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             preview: None,
         };
@@ -199,11 +212,19 @@ impl TexLibDoc {
     /// The library comes back (a finished import, nothing new to import).
     fn back_to_library(&mut self) {
         self.import = None;
+        let (d, exec) = (self.dirs.clone(), self.editor.exec.clone());
+        self.new_pictures =
+            Pending::spawn(&self.editor.exec, async move { exec.io(move || list_import(&d).len()).await });
         self.selected.clear();
         self.preview = None;
         self.list.search.clear();
         self.store.post(TexCmd::Reset, Origin::Ui);
         LibraryLists::of(&self.editor).textures_rev.bump();
+    }
+
+    /// The texture folder cannot be written (unknown until the IO pool has looked: writable).
+    fn read_only(&self) -> bool {
+        self.writable.get().is_some_and(|w| !*w)
     }
 
     fn import_mode(&self) -> bool {
@@ -281,10 +302,10 @@ impl TexLibDoc {
         }
     }
 
-    /// Writes what changed (`UpdateLib`) as a job: descriptions, then game textures; New
+    /// Writes what changed as a job: descriptions, then game textures; New
     /// Textures copies its pictures into the library first.
     fn queue_save(&mut self) -> Result<(), String> {
-        if self.read_only {
+        if self.read_only() {
             return Err("The texture folder cannot be written.".to_owned());
         }
         if self.saving() {
@@ -464,7 +485,7 @@ impl TexLibDoc {
     fn draw_properties(&mut self, ui: &mut Ui, item: &TexItem, names: &[&str]) {
         let before = self.params_of(item);
         let mut p = before.clone();
-        let ro = if self.read_only || self.saving() { PropFlags::READ_ONLY } else { PropFlags::NONE };
+        let ro = if self.read_only() || self.saving() { PropFlags::READ_ONLY } else { PropFlags::NONE };
         let mut gesture = String::new();
         PropertyGrid::new("texture_library").show(ui, |g| {
             token(
@@ -663,7 +684,7 @@ impl TexLibDoc {
         out.insert("first".into(), json!(rows.first().and_then(|&i| keys.get(i)).copied().unwrap_or("")));
         out.insert("items".into(), json!(items.len()));
         out.insert("import".into(), json!(self.import_mode()));
-        out.insert("read_only".into(), json!(self.read_only));
+        out.insert("read_only".into(), json!(self.read_only()));
         out.insert("saving".into(), json!(self.saving()));
         out.insert("dirty".into(), json!(self.dirty_now()));
         out.insert("selected".into(), json!(self.selected));
@@ -937,13 +958,13 @@ impl Document for TexLibDoc {
     fn toolbar<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>, cx: &mut DocCx<'_>) {
         let dirty = self.dirty_now();
         let import = self.import_mode();
-        let on = !self.read_only && !self.saving() && dirty;
+        let on = !self.read_only() && !self.saving() && dirty;
         let tip = if import {
             "Import the new textures into the library and build their game textures"
         } else {
             "Save the changed descriptions and rebuild their game textures"
         };
-        let why = if self.read_only {
+        let why = if self.read_only() {
             "The texture folder cannot be written"
         } else if self.saving() {
             "The library is saving"
@@ -991,10 +1012,53 @@ impl Document for TexLibDoc {
             );
         }
         tb.group(2);
-        if self.read_only {
+        if self.read_only() {
             tb.status("Read-only", Tone::Warning);
         } else if self.saving() {
             tb.status("Saving...", Tone::Info);
+        }
+        tb.group(0);
+        let editor = self.editor.clone();
+        let mut check = false;
+        let writable = !self.read_only();
+        tb.menu(
+            "more",
+            Icon::More,
+            "More",
+            "Import, synchronize and rewrite by hand",
+            Some("texture_library_more"),
+            true,
+            |ui| {
+                let off = if writable { "" } else { "The texture folder cannot be written" };
+                if menu_item(
+                    ui,
+                    "Check New Textures",
+                    MenuItem { icon: Icon::Search, enabled: writable, tip: off, ..MenuItem::default() },
+                ) {
+                    check = true;
+                }
+                if menu_item(
+                    ui,
+                    "Synchronize Textures...",
+                    MenuItem { icon: Icon::Refresh, enabled: writable, tip: off, ..MenuItem::default() },
+                ) {
+                    editor.post("library.sync", gz_app::args(&[("kind", "textures")]));
+                }
+                if menu_item(
+                    ui,
+                    "Rewrite Texture Descriptions...",
+                    MenuItem { icon: Icon::Refresh, enabled: writable, tip: off, ..MenuItem::default() },
+                ) {
+                    editor.post("library.rewrite_descriptions", gz_editor::Args::new());
+                }
+                ui.separator();
+                if menu_item(ui, "Reload Textures", MenuItem { icon: Icon::Reload, ..MenuItem::default() }) {
+                    editor.post("library.reload", gz_app::args(&[("kind", "textures")]));
+                }
+            },
+        );
+        if check && !import {
+            self.start_import();
         }
     }
 
@@ -1015,7 +1079,6 @@ impl Document for TexLibDoc {
             self.back_to_library();
         }
         let items = self.items();
-        let [list_r, preview_r, details_r] = panes(ui, KIND);
         let all = items.clone().unwrap_or_default();
         let keys: Vec<&str> = all.iter().map(|i| i.name.as_str()).collect();
         // the one on show leaves with its kind
@@ -1031,21 +1094,30 @@ impl Document for TexLibDoc {
             format!("Nothing in {} is new to the library.", folder_text(&self.editor, &self.dirs.import))
         } else {
             format!(
-                "The library lists the .tga images in {}. To add one, put the image into {} and check for new textures.",
+                "The library lists the .tga images in {}. To add one, put the picture into {} and import it.",
                 folder_text(&self.editor, &self.dirs.textures),
                 folder_text(&self.editor, &self.dirs.import)
             )
         };
+        // a library with nothing in it says so once, over the whole tab, with what fills it
+        if items.is_some() && none && !import {
+            let act = state::empty_state(
+                ui,
+                Icon::FileTexture,
+                "No textures",
+                &where_,
+                (!self.read_only()).then_some("Import New Textures"),
+            );
+            if act {
+                self.start_import();
+            }
+            return;
+        }
+        let [list_r, preview_r, details_r] = panes(ui, KIND);
         let empty = if items.is_none() {
             Empty { title: "Reading the library...", text: "", action: None }
         } else if import {
             Empty { title: "No new textures", text: &where_, action: None }
-        } else if none {
-            Empty {
-                title: "No textures",
-                text: &where_,
-                action: (!self.read_only).then_some("Check New Textures"),
-            }
         } else {
             Empty {
                 title: "No textures of these kinds",
@@ -1054,11 +1126,22 @@ impl Document for TexLibDoc {
             }
         };
         let selected = self.selected.clone();
+        // what the import folder holds that the library does not: offered over the list
+        let fresh = if import { 0 } else { self.new_pictures.get().map_or(0, |n| *n) };
+        let mut import_now = false;
         let out = pane(ui, list_r, "texture_library.list.pane", false, false, |ui| {
+            if fresh > 0 && !self.read_only() {
+                let line = format!(
+                    "{fresh} new {} in the import folder.",
+                    if fresh == 1 { "picture" } else { "pictures" }
+                );
+                import_now = state::banner(ui, Tone::Info, &line, Some("Import"), None).is_some();
+                ui.add_space(4.0);
+            }
             self.list.draw(ui, KIND, &keys, &rows, &selected, &empty)
         });
-        if out.acted {
-            // Check New Textures turns this tab into New Textures
+        if out.acted || import_now {
+            // New Textures: the import folder in this tab
             self.start_import();
         }
         if let Some(i) = out.picked {
@@ -1079,16 +1162,10 @@ impl Document for TexLibDoc {
             }
         });
         let names: Vec<&str> = if import { Vec::new() } else { keys.clone() };
-        pane(ui, details_r, "texture_library.details", false, true, |ui| match &current {
-            Some(item) => self.draw_properties(ui, item, &names),
-            None => {
-                state::empty_state(
-                    ui,
-                    Icon::Settings,
-                    "No properties",
-                    "Pick a texture to edit its description.",
-                    None,
-                );
+        // nothing picked: the preview says so, the details stay blank
+        pane(ui, details_r, "texture_library.details", false, true, |ui| {
+            if let Some(item) = &current {
+                self.draw_properties(ui, item, &names);
             }
         });
         ui.allocate_rect(ui.max_rect(), Sense::hover());

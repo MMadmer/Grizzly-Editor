@@ -337,4 +337,44 @@ mod cards {
             ["kind", "position", "count", "names", "snap"]
         );
     }
+
+    /// A choice some of whose words say what they are is still one list of words.
+    #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    #[allow(dead_code)]
+    enum Mixed {
+        Back,
+        Forward,
+        /// Shows where the browser stands.
+        Get,
+    }
+
+    #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct MixedParams {
+        /// What to do.
+        action: Mixed,
+        #[serde(default)]
+        light: Option<Light>,
+    }
+
+    /// How it is lit.
+    #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    #[allow(dead_code)]
+    enum Light {
+        /// A key light from above.
+        Studio,
+        /// The textures as they are.
+        Unlit,
+    }
+
+    #[test]
+    fn a_choice_with_some_words_documented_is_one_list() {
+        let shape = Shape::of::<MixedParams>();
+        assert_eq!(shape.params[0].form, "back|forward|get");
+        // an optional choice with no doc of its own says what its type and its words say
+        assert_eq!(shape.params[1].form, "studio|unlit");
+        assert!(!shape.params[1].doc.is_empty(), "{:?}", shape.params[1]);
+    }
 }

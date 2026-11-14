@@ -322,6 +322,16 @@ impl Project {
         self.state.edit(f).await.map(|_| ())
     }
 
+    /// Notes a scene that was just opened as the newest of this machine's recent scenes (File >
+    /// Recent Scene). A scene outside the project is not noted.
+    pub async fn note_recent_scene(&self, file: &std::path::Path) -> Result<(), CmdError> {
+        let Some(rel) = crate::project::scene_in_project(&self.root, &file.to_string_lossy()) else {
+            return Ok(());
+        };
+        let wire = rel.replace('\\', "/");
+        self.edit_state(|s| s.with_recent_scene(&wire)).await
+    }
+
     /// Applies `f` to the project file as the disk has it now and writes it when it changed. A
     /// file that no longer reads is not written over: the author's text wins.
     pub async fn edit_file(

@@ -1,50 +1,47 @@
-//! The Level tab's 3D view: the scene drawn by the renderer, the camera, picking, the transform
-//! tools and the overlays (docs/UI_DESIGN.md, section 6, "Viewport").
-//!
-//! It holds the view's toolbar, the gizmo, every mode's gestures, the drawing of each kind, the
-//! game lighting preview, and the handlers named in [`register`].
+//! The Level tab's 3D view: the scene drawn by the renderer, the camera, the mode control and
+//! the pills, the gizmo, the drop target, the Paint modes' brush, and the overlays
+//! (docs/UI_DESIGN.md, section 6, "Viewport").
 //!
 //! # How it is put together
 //!
 //! - [`Viewport`] (an `Editor` service) holds the view state: the camera ([`camera::Nav`]), the
-//!   view options, the transform tool and its snaps, Game Lighting, the render size, and the
-//!   renderer. The pane, the MCP handlers and the scene's keys all work on it.
+//!   view mode, what is shown, the snapping and the gizmo's tool and space (the settings it keeps
+//!   in the editor's settings file), Game Lit's weather, the armed thing, the drop's ghost, the
+//!   brush, the render size, and the renderer. The pane, the commands and the actions all work
+//!   on it.
 //! - **Scene snapshot -> `DrawList`** is the pure [`draw::build`], run on the CPU pool only when
-//!   the scene's revision, the library, the camera or the view options changed. Visibility comes
-//!   from the scene's own pick tree. The packet goes to `gz_render::Renderer::submit`; the UI
-//!   shows `target()` and never waits for the scene.
-//! - **Picking and tools read snapshots and emit [`gz_scene::SceneCmd`]s**: a click asks the pick
-//!   tree on the CPU pool, a drag sends merged-undo transforms and seals the gesture on release.
-//! - **The object tools' gestures** ([`objtools`]): the Sector tool's mesh paint and Box Pick,
-//!   the Way tool's Points mode (click, marquee, move, add), Shape's Attach on Click - each a
-//!   `gz_scene::objtools` edit, the same the tools' commands send.
-//! - **The bulk tools' gestures** (`bulktools`): the AI map's brush stroke, the node click,
-//!   marquee and gizmo drags, the detail slots' click and marquee, a wallmark laid (Ctrl moves the
-//!   selected one), Delete and the selection keys - the `gz_scene::bulk::cmd` functions the
-//!   `scene.ai_map`, `scene.details` and `scene.wallmarks` commands run.
-//! - **Overlays are egui** over the picture: the pills, the axis gizmo, the transform gizmo, the
-//!   stats pill, the labels the renderer reports visible, the safe rect, the marquee.
+//!   the scene's revision, the library, the camera or the view changed. Visibility comes from the
+//!   scene's own pick tree. The packet goes to `gz_render::Renderer::submit`; the UI shows
+//!   `target()` and never waits for the scene.
+//! - **The mode decides a left press** (`gz_scene::SceneMode`, the scene's view state): Select
+//!   picks any visible, unlocked object, draws a marquee with Ctrl and drags the gizmo; Place puts
+//!   down the armed thing ([`place`]); Paint paints the layer its panel picked (`bulktools`);
+//!   Zones draws the visibility cells ([`objtools`]). Picks and placements run on the pools and
+//!   send `gz_scene::SceneCmd`s or the scene's commands; a drag is one undo step.
+//! - **The gizmo** ([`gizmo`]) is pure: its handles on the screen, the hit test, what a drag of
+//!   each handle does in World or Local space.
+//! - **Every pill row and key is an action** ([`actions`]) over the viewport's commands
+//!   (`viewport.camera`, `viewport.view`, `viewport.play`, `viewport.gesture`, `shot.viewport`,
+//!   `perf.frames`) or the scene's.
+//! - **Overlays are egui** over the picture: the pills, the axis gizmo, the transform gizmo with
+//!   its arc, the brush's ring, the stats pill, the labels the renderer reports visible, the safe
+//!   frame, the marquee.
 //! - **The extras of a pass** (`draw_extra`), on the same CPU task: particle systems playing
-//!   ([`draw_particles`], a `gz-particles` system per particle object, stepped by the time since
-//!   the last pass while it plays and its emitter is in view), the glows' sprites, the AI map
-//!   ([`draw_aimap`], tile meshes made once per tile revision near the camera), detail objects
-//!   ([`draw_details`], slots decompressed round the camera, drawn as batches) and static
-//!   wallmarks ([`draw_wallmarks`]). While a system in view plays every request makes a pass.
+//!   ([`draw_particles`]), the glows' sprites, the AI map ([`draw_aimap`]), detail objects
+//!   ([`draw_details`]) and static wallmarks ([`draw_wallmarks`]).
 //!
 //! # API
 //!
 //! ```text
-//! ViewportPane::new(editor, gpu)         the pane the Level tab embeds
+//! ViewportPane::new(editor, gpu)          the pane the Level tab embeds
 //! pane.ui(ui, cx) / inactive(cx) / shortcut(cx, chord) / mcp_state()
-//! view_menu(ui, cx)                      the View menu's viewport options (DrawViewportOptions)
-//! capture_preview(editor).await          preview.png: a pass of its own, no helpers
-//! set_place_item(editor, class, name)    what Place adds for a class (the Tools panel's pick)
-//! placing(editor) / set_placing(editor)  whether a click adds (the Sector tool's Edit section)
-//! register(reg)                          camera_get, camera_set, focus_object, view_mode,
-//!                                        viewport_controls, viewport_navigation, game_lighting,
-//!                                        frame_pacing, screenshot_viewport, particles_tool
-//! play_particles(editor, names, on).await the Particles tool's Play / Stop
-//! install(b)                             the viewport's commands on the Keyboard page
+//! view_menu(ui, cx)                       the View menu's rows (view modes, framing)
+//! capture_preview(editor).await           preview.png: a pass of its own, no helpers
+//! Placeable, PlaceKind, arm, armed        what the Place panel drags and arms
+//! brush / set_brush                       the Paint mode's brush, for its panel
+//! placing / set_placing                   Place mode up or not
+//! register(reg), install(b)               the commands; the actions and Preferences > Viewport
+//! play_particles(editor, names, on).await particle systems played in the viewport
 //! ```
 //!
 //! Widgets the kit lacks, local here: `pane::local_axis_gizmo` (the 64 pt clickable axis
@@ -52,6 +49,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod actions;
 mod bulktools;
 pub mod camera;
 mod cmd;
@@ -63,20 +61,22 @@ pub mod draw_particles;
 pub mod draw_wallmarks;
 mod gesture;
 pub mod gizmo;
-pub mod keys;
 pub mod lighting;
 mod loader;
 mod menus;
 pub mod objtools;
 mod pane;
+pub mod place;
+mod prefs;
 mod service;
 mod session;
 pub mod spawn_anim;
 
+pub use actions::install;
 pub use cmd::register;
 pub use draw_particles::{any_playing as particles_playing, play as play_particles};
-pub use keys::install;
 pub use menus::view_menu;
 pub use objtools::{placing, set_placing};
 pub use pane::ViewportPane;
-pub use service::{Action, Viewport, capture_preview, set_place_item};
+pub use place::{Kind as PlaceKind, Placeable, arm, armed};
+pub use service::{Brush, ViewMode, Viewport, brush, capture_preview, set_brush};

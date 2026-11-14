@@ -6,8 +6,7 @@
 //!
 //! What the author triggers by name is an [`Action`] (`ShellBuilder::action`): a menu row names
 //! it (`menu_action`), a toolbar draws it (`actions::toolbar_button`), the palette and the
-//! Keyboard page list it. [`UiCommand`] is the level editor's own table of the same things until
-//! its actions are built; nothing else registers one.
+//! Keyboard page list it.
 
 use std::sync::Arc;
 
@@ -17,89 +16,14 @@ use rustc_hash::FxHashMap;
 
 use crate::actions::Action;
 use crate::doc::{DocCx, Drawer, Factory};
-use crate::keys::Chord;
 
-pub type RunFn = Box<dyn FnMut(&mut DocCx<'_>)>;
-pub type EnabledFn = Box<dyn Fn(&Editor, &str) -> bool>;
 pub type DrawFn = Box<dyn FnMut(&mut egui::Ui, &mut DocCx<'_>)>;
 pub type ToolbarFn = Box<dyn for<'t> FnMut(&mut Toolbar<'_, 't>, &mut DocCx<'_>)>;
-
-/// A command of the level editor's own table: what its menu items, palette rows and shortcuts
-/// run until they are actions.
-pub struct UiCommand {
-    /// The shortcut id, as the Keyboard page and `shortcuts` know it: `COMMAND_UNDO`,
-    /// `COMMAND_ZOOM_EXTENTS."Selected"`.
-    pub id: SmolStr,
-    /// The Keyboard page's group and the palette's category: "Edit", "Mod", ...
-    pub group: SmolStr,
-    /// The official name: "Undo", "Build Into Game".
-    pub label: SmolStr,
-    pub icon: Icon,
-    /// What it is bound to until the author binds it to something else.
-    pub default_keys: Option<Chord>,
-    /// It takes a shortcut (the Keyboard page lists it).
-    pub bindable: bool,
-    /// The palette lists it.
-    pub in_palette: bool,
-    pub run: RunFn,
-    /// Off: the menu greys it out and the palette does not run it. `(editor, active tab)`.
-    pub enabled: Option<EnabledFn>,
-}
-
-impl UiCommand {
-    #[must_use]
-    pub fn new(
-        id: &str,
-        group: &str,
-        label: &str,
-        icon: Icon,
-        run: impl FnMut(&mut DocCx<'_>) + 'static,
-    ) -> Self {
-        Self {
-            id: SmolStr::new(id),
-            group: SmolStr::new(group),
-            label: SmolStr::new(label),
-            icon,
-            default_keys: None,
-            bindable: true,
-            in_palette: true,
-            run: Box::new(run),
-            enabled: None,
-        }
-    }
-
-    #[must_use]
-    pub fn keys(mut self, keys: &str) -> Self {
-        self.default_keys = Chord::parse(keys);
-        self
-    }
-
-    #[must_use]
-    pub fn enabled(mut self, f: impl Fn(&Editor, &str) -> bool + 'static) -> Self {
-        self.enabled = Some(Box::new(f));
-        self
-    }
-
-    /// Takes no shortcut: not on the Keyboard page.
-    #[must_use]
-    pub fn unbindable(mut self) -> Self {
-        self.bindable = false;
-        self
-    }
-
-    #[must_use]
-    pub fn hidden_from_palette(mut self) -> Self {
-        self.in_palette = false;
-        self
-    }
-}
 
 /// What a menu row is.
 pub enum MenuContent {
     /// A row that runs an action; `label` overrides its title ("Build to Folder...").
     Action { id: SmolStr, label: Option<SmolStr> },
-    /// A row of the level editor's own table; `label` overrides the command's name.
-    Command { command: SmolStr, label: Option<SmolStr> },
     /// Rows drawn by their owner: a list that changes (Recent Scene), toggles with checks.
     Custom(DrawFn),
 }
@@ -246,7 +170,6 @@ pub struct ShellBuilder {
     pub(crate) factories: FxHashMap<SmolStr, Factory>,
     pub(crate) actions: Vec<Action>,
     pub(crate) pref_groups: Vec<PrefGroup>,
-    pub(crate) commands: Vec<UiCommand>,
     pub(crate) menus: Vec<MenuEntry>,
     pub(crate) project_toolbar: Vec<(i32, ToolbarFn)>,
     pub(crate) drawers: [Option<DrawerDesc>; 2],
@@ -258,17 +181,9 @@ pub struct ShellBuilder {
     pub(crate) log_state: Option<LogStateFn>,
     pub(crate) reveal: Option<RevealFn>,
     pub(crate) reset_layout: Option<ResetLayoutFn>,
-    pub(crate) cpp: Vec<crate::cpp::CppCommand>,
 }
 
 impl ShellBuilder {
-    /// A row of the level's numbered command table (`list_commands`, `exec_command`): its number,
-    /// name, description, sub-commands with their keys, and its action. A row of an id registered twice
-    /// keeps the later one; one whose action is not there is left out.
-    pub fn cpp_command(&mut self, command: crate::cpp::CppCommand) {
-        self.cpp.push(command);
-    }
-
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -294,16 +209,6 @@ impl ShellBuilder {
     #[must_use]
     pub fn has_start_page(&self) -> bool {
         self.start_page.is_some()
-    }
-
-    /// The sub-commands of a row of the numbered table by its name, as the last registration left it.
-    #[must_use]
-    pub fn cpp_subs(&self, name: &str) -> Option<Vec<String>> {
-        self.cpp
-            .iter()
-            .rev()
-            .find(|c| c.name == name)
-            .map(|c| c.subs.iter().map(|s| s.desc.to_string()).collect())
     }
 
     /// The factory of a document kind. A kind registered twice keeps the later factory.
@@ -362,23 +267,6 @@ impl ShellBuilder {
     /// Rows an area adds to Preferences.
     pub fn pref_group(&mut self, group: PrefGroup) {
         self.pref_groups.push(group);
-    }
-
-    /// A command of the level editor's own table. An id registered twice keeps the later one.
-    pub fn command(&mut self, command: UiCommand) {
-        self.commands.retain(|c| c.id != command.id);
-        self.commands.push(command);
-    }
-
-    /// A menu row running an action, or (until its table goes) a command of the level editor's.
-    pub fn menu_item(&mut self, menu: &str, group: i32, order: i32, command: &str) {
-        self.menus.push(MenuEntry {
-            menu: SmolStr::new(menu),
-            submenu: None,
-            group,
-            order,
-            content: MenuContent::Command { command: SmolStr::new(command), label: None },
-        });
     }
 
     /// Any menu contribution.

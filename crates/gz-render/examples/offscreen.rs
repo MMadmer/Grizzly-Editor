@@ -28,7 +28,8 @@ fn run() -> Result<(), String> {
     let rt = gz_task::Runtime::start(gz_task::ExecOptions::default()).map_err(|e| e.to_string())?;
     let (device, queue, info) = futures::executor::block_on(headless_device())?;
     println!("adapter: {} ({:?})", info.name, info.backend);
-    let renderer = Renderer::new(device, queue, rt.exec()).map_err(|e| e.to_string())?;
+    let renderer =
+        Renderer::new(device, queue, gz_task::Gate::default(), rt.exec()).map_err(|e| e.to_string())?;
     println!(
         "msaa: {}x, BC textures as they are: {}",
         renderer.samples(),

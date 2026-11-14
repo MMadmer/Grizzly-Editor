@@ -45,6 +45,9 @@ pub struct StepRecord {
     pub quality: Quality,
     /// The compiler's flags it was built with (`-noise`); empty for none.
     pub flags: String,
+    /// The models the scene's objects were made from when it was built
+    /// (`fingerprint::library_stamp`); 0 for a step that reads none.
+    pub library: u64,
     /// The sentence the step failed with; a failed step is never fresh.
     pub failed: Option<String>,
 }
@@ -111,6 +114,9 @@ impl BuildState {
             if !r.flags.is_empty() {
                 t.set("flags", r.flags.as_str());
             }
+            if r.library != 0 {
+                t.set("library", hex(r.library));
+            }
             if let Some(f) = &r.failed {
                 t.set("failed", f.as_str());
             }
@@ -172,6 +178,7 @@ impl BuildState {
                         seconds: t.get_number("seconds", 0.0),
                         quality: Quality::parse(&t.get_string("quality", "standard")).unwrap_or_default(),
                         flags: t.get_string("flags", ""),
+                        library: t.get("library").and_then(Value::as_str).and_then(unhex).unwrap_or(0),
                         failed: t.get("failed").and_then(Value::as_str).map(str::to_owned),
                     },
                 );
@@ -238,6 +245,7 @@ mod tests {
                 seconds: 1.25,
                 quality: Quality::Draft,
                 flags: String::new(),
+                library: 0x00c0_ffee,
                 failed: None,
             },
         );
@@ -249,6 +257,7 @@ mod tests {
                 seconds: 63.5,
                 quality: Quality::Final,
                 flags: "-noise -nosun".into(),
+                library: 0,
                 failed: Some("The compile failed: \"x\"".into()),
             },
         );

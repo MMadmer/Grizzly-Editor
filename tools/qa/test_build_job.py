@@ -9,7 +9,7 @@ Over MCP on a THROW-AWAY COPY of a project, with a gigabyte of payload so that a
   * a build reuses what the last one already holds (the very same file on disk) and takes what changed;
   * a module the game holds open is refused with its name, and stays whole;
   * a packaging runs the same way and answers what mod.package answers;
-  * the UI's frames keep their own time while a build runs (frame_pacing: the frame's work apart from the wait for
+  * the UI's frames keep their own time while a build runs (perf.frames: the frame's work apart from the wait for
     the presentation, View > Real Time on so that the editor draws every frame);
   * T: with a request timeout of 0.3 s (GRIZZLY_MCP_REQUEST_TIMEOUT_MS, an editor started for it) a build is answered
     as still running - ok false, running true, its job and where to follow it, never "editor busy" - and the job
@@ -155,8 +155,8 @@ class Run:
     # ---- A: the editor goes on while a build copies ---------------------------------------------------------------
     def a(self) -> None:
         mcp("ui.tab", action="open", doc="level")
-        mcp("view_mode", real_time=True)
-        mcp("frame_pacing")
+        mcp("viewport.view", real_time=True)
+        mcp("perf.frames")
         job = Job("mod.build", target="folder", path=self.target)
         row = wait_for_copy(job)
         check(bool(row), "A the Task Center follows the build's copying", json.dumps(job_row())[:300])
@@ -182,8 +182,8 @@ class Run:
                 with open(os.path.join(self.shots, "job_card.png"), "wb") as f:
                     f.write(base64.b64decode(pic["png_base64"]))
         job.join()
-        pacing = mcp("frame_pacing")
-        mcp("view_mode", real_time=False)
+        pacing = mcp("perf.frames")
+        mcp("viewport.view", real_time=False)
         work = pacing.get("frame_work_ms") or {}
         check(pacing.get("sampled_frames", 0) > 0 and work.get("mean", 99.0) < FRAME_WORK_MEAN_MS
               and work.get("max", 999.0) < FRAME_WORK_MAX_MS,

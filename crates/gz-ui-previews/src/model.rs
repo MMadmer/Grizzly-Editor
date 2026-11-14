@@ -2,7 +2,7 @@
 //!
 //! An orbit viewport of its own - a `gz_render::Renderer` whose target is sized to the canvas,
 //! fed a draw list built here (the model, a floor grid under it, the bones when asked) - beside a
-//! Details pane of what the model is made of. The C++ specification is `UIVisualPreview.cpp`.
+//! Details pane of what the model is made of.
 
 use std::sync::Arc;
 
@@ -68,7 +68,7 @@ impl Orbit {
         o
     }
 
-    /// Back to the three-quarter view, framed (`ResetCamera`).
+    /// Back to the three-quarter view, framed.
     pub fn reset(&mut self, bounds: &gz_render::Aabb) {
         let dir = START_OFFSET.normalize();
         self.pitch = dir.y.asin();
@@ -77,7 +77,7 @@ impl Orbit {
     }
 
     /// The bounding sphere framed with a small margin, from wherever the camera looks now
-    /// (`FrameModel`).
+    ///.
     pub fn frame(&mut self, bounds: &gz_render::Aabb) {
         self.pan = Vec3::ZERO;
         if bounds.is_empty() {
@@ -170,7 +170,7 @@ pub fn round_step(x: f32) -> f32 {
     }
 }
 
-/// The floor the model stands on (`DrawFloor`): lines at a round step in metres under the
+/// The floor the model stands on: lines at a round step in metres under the
 /// lowest point of the box and a margin wider than it; every fifth stronger, the lines through
 /// the origin the strongest. Each line with its tier: 0 minor, 1 every fifth, 2 the origin's.
 #[must_use]
@@ -238,6 +238,8 @@ pub struct ModelDoc {
     editor: Arc<Editor>,
     name: String,
     source: ModelSource,
+    /// Where it was opened from: `project`, `library` or `game`.
+    opened_from: String,
     load: Option<Pending<ModelData>>,
     renderer: Option<Pending<Result<Arc<Renderer>, String>>>,
     /// The load the renderer holds the mesh of.
@@ -274,12 +276,15 @@ impl ModelDoc {
     ) -> Self {
         let renderer = editor.services.get::<WindowLink>().and_then(|l| l.gpu()).map(|gpu| {
             let (device, queue) = (gpu.device.clone(), gpu.queue.clone());
+            let gate = gz_app::gpu_gate(editor);
             let exec = editor.exec.clone();
             let pools = exec.clone();
             Pending::spawn(&exec, async move {
                 let inner = pools.clone();
                 pools
-                    .cpu(move || Renderer::new(device, queue, inner).map(Arc::new).map_err(|e| e.to_string()))
+                    .cpu(move || {
+                        Renderer::new(device, queue, gate, inner).map(Arc::new).map_err(|e| e.to_string())
+                    })
                     .await
             })
         });
@@ -287,6 +292,7 @@ impl ModelDoc {
             editor: editor.clone(),
             name,
             source,
+            opened_from: String::new(),
             load,
             renderer,
             uploaded: 0,
@@ -336,7 +342,7 @@ impl ModelDoc {
         self.renderer.as_ref().and_then(Pending::get).and_then(|r| r.as_ref().as_ref().ok().cloned())
     }
 
-    /// Drawn in the frame being built or the one before it (`DrawnLately`).
+    /// Drawn in the frame being built or the one before it.
     #[must_use]
     pub fn drawn_lately(&self, frame: u64) -> bool {
         self.drawn_frame.is_some_and(|f| f + 1 >= frame)
@@ -364,7 +370,7 @@ impl ModelDoc {
         }
     }
 
-    /// The view asked for over MCP; `None` keeps (`McpView`).
+    /// The view asked for over MCP; `None` keeps.
     pub fn apply_view(
         &mut self,
         lighting: Option<usize>,
@@ -530,6 +536,71 @@ impl ModelDoc {
         ) {
             self.show_details = !self.show_details;
         }
+        tb.separator();
+        tb.group(1);
+        let reference = self.object_ref(&data);
+        let place_tip = if reference.is_some() {
+            "Place it in the level, on the surface in front of the camera"
+        } else {
+            "Only a library object (.object) is placed in a level"
+        };
+        if tb.action(
+            "place",
+            Icon::Place,
+            "Place in Level",
+            place_tip,
+            reference.is_some(),
+            false,
+            Kind::Ghost,
+        ) && let Some(r) = &reference
+        {
+            self.editor.post(
+                "scene.place",
+                gz_app::args(&[("kind", "object"), ("ref", r.as_str()), ("on_surface", "true")]),
+            );
+        }
+        let reveal = self.reveal_args(&data);
+        let reveal_tip = if reveal.is_some() {
+            "Select it in the Content Browser"
+        } else {
+            "The Content Browser lists the project's files and the Library's objects"
+        };
+        if tb.action(
+            "reveal",
+            Icon::Reveal,
+            "Show in Content Browser",
+            reveal_tip,
+            reveal.is_some(),
+            false,
+            Kind::Ghost,
+        ) && let Some(args) = reveal
+        {
+            self.editor.post("content.view", args);
+        }
+    }
+
+    /// The library reference of an object on show (`props\box`), as `scene.place` takes it.
+    fn object_ref(&self, data: &ModelData) -> Option<String> {
+        data.object.as_ref()?;
+        let name = crate::paths::strip_ext(&self.name);
+        let lower = name.to_ascii_lowercase();
+        Some(if lower.starts_with("rawdata\\objects\\") { name[16..].to_owned() } else { name.to_owned() })
+    }
+
+    /// What `content.view` reveals the model by: an object of the Library or the project.
+    fn reveal_args(&self, data: &ModelData) -> Option<gz_editor::Args> {
+        let r = self.object_ref(data)?;
+        let in_project = self.opened_from == "project";
+        let path = format!("{r}.object");
+        Some(if in_project {
+            gz_app::args(&[
+                ("action", "reveal"),
+                ("source", "project"),
+                ("path", &format!("rawdata\\objects\\{path}")),
+            ])
+        } else {
+            gz_app::args(&[("action", "reveal"), ("source", "library"), ("kind", "objects"), ("path", &path)])
+        })
     }
 
     fn draw_viewport(&mut self, ui: &mut Ui, rect: Rect) {
@@ -615,8 +686,10 @@ impl ModelDoc {
         }
 
         if let (Some(handle), Some(gpu)) = (renderer.target(), self.gpu.as_ref()) {
-            if self.target.as_ref().is_none_or(|(serial, _)| *serial != handle.serial) {
-                self.target = Some((handle.serial, ImageDraw::new(gpu, &handle.view, true)));
+            if self.target.as_ref().is_none_or(|(serial, _)| *serial != handle.serial)
+                && let Some(draw) = ImageDraw::new(gpu, &handle.view, true, self.editor.exec.wake())
+            {
+                self.target = Some((handle.serial, draw));
             }
             if let Some((_, draw)) = &self.target {
                 let [u, v] = handle.uv();
@@ -670,7 +743,7 @@ impl ModelDoc {
                     for t in &data.textures {
                         let (word, why) = match t.from {
                             "project" => ("Project", "The project's own file"),
-                            "editor" => ("Editor", "The editor's library"),
+                            "editor" => ("Library", "The editor's library (Preferences > Library)"),
                             "game" => ("Game", "The linked game's archives or its gamedata folder"),
                             _ => ("Not found", "Neither the editor nor the linked game has it: the preview draws the placeholder"),
                         };
@@ -701,7 +774,7 @@ impl ModelDoc {
         });
     }
 
-    /// `preview_model`'s fields after `tab` and `active` (`McpState`).
+    /// `preview_model`'s fields after `tab` and `active`.
     #[must_use]
     pub fn state_json(&self) -> serde_json::Map<String, Value> {
         let mut out = serde_json::Map::new();
@@ -778,6 +851,8 @@ impl Document for ModelDoc {
         self.drawn_frame = Some(frame);
         if self.gpu.is_none() {
             self.gpu = Some(cx.gpu.clone());
+            // the picture's pass is made while the picture loads
+            let _ = crate::image_pass::ImagePass::get(cx.gpu, cx.editor.exec.wake());
         }
         let full = ui.max_rect();
         let data = self.data();
@@ -922,7 +997,9 @@ pub fn factory(editor: &Arc<Editor>, req: &OpenRequest) -> Result<Box<dyn Docume
         let (ed, n) = (editor.clone(), name.clone());
         Pending::spawn(&editor.exec, load(ed, n, source))
     });
-    Ok(Box::new(ModelDoc::new(editor, name, source, Some(load))))
+    let mut doc = ModelDoc::new(editor, name, source, Some(load));
+    doc.opened_from = req.arg.clone().unwrap_or_default();
+    Ok(Box::new(doc))
 }
 
 #[cfg(test)]

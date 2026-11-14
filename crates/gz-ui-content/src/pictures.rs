@@ -1,11 +1,16 @@
 //! Tile pictures: asked for by key while a tile draws, made on the pools, uploaded on a later
-//! frame, drawn when they are there (`GetThumb`, `MakeImageThumb`, `StoreThumb`).
+//! frame, drawn when they are there.
 //!
 //! An image's picture is made for the size it is drawn at: the power of two at or over its
 //! pixels, 32 to 512; drawn at another size, it is made again once the old one has shown a
-//! frame. At most [`BUDGET`] pictures live; the coldest that no tile drew this frame goes, and
-//! its texture is released [`RELEASE_AFTER`] frames later, after any draw list that still
-//! names it. A folder change drops what has not started yet.
+//! frame. An object's picture is its `.thm` thumbnail when it has one (a group's always is),
+//! rendered otherwise. At most [`BUDGET`] pictures live; the coldest that no tile drew this frame
+//! goes, and its texture is released [`RELEASE_AFTER`] frames later, after any draw list that
+//! still names it. A folder change drops what has not started yet.
+//!
+//! **Uploads are budgeted**: a frame hands the GPU at most [`UPLOAD_BUDGET`] pixels of finished
+//! pictures (one at least); the rest wait for the next frames, which are asked for. Scrolling
+//! through a folder of 300 objects never puts them all into one frame.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -28,6 +33,9 @@ pub const RELEASE_AFTER: u64 = 3;
 /// Pictures made at once.
 const IMAGES_AT_ONCE: usize = 6;
 const MODELS_AT_ONCE: usize = 2;
+/// The pixels of finished pictures one frame uploads: four 512 x 512 pictures, or sixty-four
+/// of 128 x 128.
+pub const UPLOAD_BUDGET: usize = gz_ui::upload::FRAME_BUDGET;
 /// A file larger than this gets no picture.
 const MAX_BYTES: u64 = 64 << 20;
 /// Models above it are not rendered for a tile.
@@ -97,6 +105,8 @@ struct Shared {
     generation: AtomicU64,
     images: AtomicUsize,
     models: AtomicUsize,
+    /// Asked again by a later frame: the renderer was not up yet.
+    retry: Mutex<Vec<PicKey>>,
 }
 
 /// The pictures of the browser. UI thread only, but for the results the jobs hand in.
@@ -133,17 +143,58 @@ fn read(from: &Bytes, limit: u64) -> Option<Vec<u8>> {
     }
 }
 
+/// Where the `.thm` beside a library object's file is: an object of the disk only.
+fn thumbnail_beside(from: &Bytes) -> Option<Bytes> {
+    let Bytes::Disk(path) = from else { return None };
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("object"))
+        .then(|| Bytes::Disk(path.with_extension("thm")))
+}
+
+/// A `.thm`'s 128 x 128 picture (an object's or a group's). For a group's own file, the `.thm`
+/// beside it.
+fn thumbnail(from: &Bytes) -> Option<Made> {
+    let from = match from {
+        Bytes::Disk(p) if !p.extension().is_some_and(|e| e.eq_ignore_ascii_case("thm")) => {
+            Bytes::Disk(p.with_extension("thm"))
+        }
+        other => other.clone(),
+    };
+    let bytes = read(&from, 4 << 20)?;
+    let pixels = match gz_fmt_tex::read_thm(&bytes).ok()? {
+        gz_fmt_tex::Thm::Object(o) => o.pixels,
+        gz_fmt_tex::Thm::Group(g) => g.pixels,
+        gz_fmt_tex::Thm::Texture(t) => t.pixels?,
+        gz_fmt_tex::Thm::Sound(_) => return None,
+    };
+    let side = gz_fmt_tex::THUMB_SIDE;
+    Some(Made { rgba: pixels, w: side, h: side, source_size: None, alpha: TileAlpha::Opaque })
+}
+
 impl Pictures {
-    /// The jobs' results become textures; textures no draw list names any more go.
+    /// The jobs' results become textures, up to the frame's upload budget; textures no draw list
+    /// names any more go.
     pub fn begin_frame(&mut self, ctx: &Context, frame: u64) {
         self.dead.retain(|(at, _)| at + RELEASE_AFTER > frame);
+        for key in std::mem::take(&mut *self.shared.retry.lock()) {
+            self.pending.remove(&key);
+        }
         let done = std::mem::take(&mut *self.shared.done.lock());
         let generation = self.shared.generation.load(Ordering::Acquire);
+        let mut spent = 0usize;
+        let mut later = Vec::new();
         for d in done {
-            self.pending.remove(&d.key);
             if d.generation != generation {
+                self.pending.remove(&d.key);
                 continue;
             }
+            let px = d.made.as_ref().map_or(0, |m| m.w as usize * m.h as usize);
+            if spent > 0 && spent + px > UPLOAD_BUDGET {
+                later.push(d);
+                continue;
+            }
+            spent += px;
+            self.pending.remove(&d.key);
             let pic = match d.made {
                 Some(m) => {
                     let image = ColorImage::from_rgba_unmultiplied([m.w as usize, m.h as usize], &m.rgba);
@@ -183,7 +234,17 @@ impl Pictures {
                 self.dead.push((frame, t));
             }
         }
+        if !later.is_empty() {
+            self.shared.done.lock().splice(0..0, later);
+            ctx.request_repaint();
+        }
         self.evict(frame);
+    }
+
+    /// Finished pictures still waiting for their upload.
+    #[must_use]
+    pub fn waiting_uploads(&self) -> usize {
+        self.shared.done.lock().len()
     }
 
     fn evict(&mut self, frame: u64) {
@@ -314,7 +375,75 @@ impl Pictures {
                         ping(&ed);
                     });
                 }
+                Picture::Thumb => {
+                    if shared.images.load(Ordering::Acquire) >= IMAGES_AT_ONCE {
+                        continue;
+                    }
+                    shared.images.fetch_add(1, Ordering::AcqRel);
+                    self.pending.insert(r.key.clone());
+                    editor.exec.spawn_io(move || {
+                        let live = shared.generation.load(Ordering::Acquire) == generation;
+                        let made = if live { thumbnail(&r.from) } else { None };
+                        shared.images.fetch_sub(1, Ordering::AcqRel);
+                        shared.done.lock().push(Done {
+                            key: r.key,
+                            side: r.side,
+                            generation,
+                            model: true,
+                            made,
+                        });
+                        ping(&ed);
+                    });
+                }
                 Picture::Model => {
+                    // an object with its thumbnail beside it needs no renderer
+                    if let Some(thm) = thumbnail_beside(&r.from) {
+                        if shared.images.load(Ordering::Acquire) >= IMAGES_AT_ONCE {
+                            continue;
+                        }
+                        shared.images.fetch_add(1, Ordering::AcqRel);
+                        self.pending.insert(r.key.clone());
+                        let thumbs = thumbs.clone();
+                        let renderer = thumbs.renderer(editor, gpu, &thumbs);
+                        editor.exec.spawn_io(move || {
+                            let live = shared.generation.load(Ordering::Acquire) == generation;
+                            let thumb = if live { thumbnail(&thm) } else { None };
+                            if live && thumb.is_none() && renderer.is_none() {
+                                shared.images.fetch_sub(1, Ordering::AcqRel);
+                                shared.retry.lock().push(r.key);
+                                ping(&ed);
+                                return;
+                            }
+                            let made = if live {
+                                thumb.or_else(|| {
+                                    let renderer = renderer?;
+                                    read(&r.from, MAX_MODEL_BYTES)
+                                        .and_then(|bytes| {
+                                            thumbs.render(&renderer, &r.name, &bytes, r.side, background).ok()
+                                        })
+                                        .map(|img| Made {
+                                            w: img.width,
+                                            h: img.height,
+                                            rgba: img.rgba.clone(),
+                                            source_size: None,
+                                            alpha: TileAlpha::Opaque,
+                                        })
+                                })
+                            } else {
+                                None
+                            };
+                            shared.images.fetch_sub(1, Ordering::AcqRel);
+                            shared.done.lock().push(Done {
+                                key: r.key,
+                                side: r.side,
+                                generation,
+                                model: true,
+                                made,
+                            });
+                            ping(&ed);
+                        });
+                        continue;
+                    }
                     let Some(renderer) = thumbs.renderer(editor, gpu, thumbs) else { continue };
                     if shared.models.load(Ordering::Acquire) >= MODELS_AT_ONCE {
                         continue;

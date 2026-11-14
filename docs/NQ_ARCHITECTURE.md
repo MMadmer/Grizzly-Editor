@@ -1,17 +1,17 @@
 # NQ — Node Quest Graph. Architecture of the node-based quest graph
 
-This document describes how the node-graph quest system lands in Grizzly Editor
-and Dead Air Refined: the `.nqasset` format, the action catalog, the execution
-model, the engine changes, the editor UI, MCP, export, tests and the phased
-rollout plan. It is a working implementation guide: every decision is made, no
-questions stay open (the decision register and its reasons are §18). All code
-anchors follow the current trees `D:\Games\Grizzly-Editor` (the editor) and
-`D:\Games\Dead Air\DeadAir-x64` (the engine); the unpacked game scripts are
+This document describes the node-graph quest system of Grizzly Editor and
+Dead Air Refined: the `.nqasset` format, the action catalog, the execution
+model, the engine changes, the editor's half, its commands, the build gate and
+the tests. Every decision is made, no questions stay open (the decision register
+and its reasons are §18). Engine anchors (`*.cpp`, `*.script` with line numbers)
+are the game's tree, `D:\Games\Dead Air\DeadAir-x64`; the unpacked game scripts are
 `D:\Games\Dead Air\_analysis\original\scripts` (read-only, the reference).
 
-Status: **implemented, covered by runtime regression tests and the editor MCP
-build gate.** Until the editor's first release the format may change freely
-(the rule from `CLAUDE.md`); after the release §2 freezes.
+Status: **implemented, covered by runtime regression tests and the editor's
+build gate.** The file carries its format version (`nq = 1`); a change of the
+format is a new version with its migration step (`docs/ASSETS.md` section 2),
+paired with the game. After the editor's release §2 freezes.
 
 ---
 
@@ -52,7 +52,7 @@ build gate.** Until the editor's first release the format may change freely
    the toolbar's [+ Add] or the grid's menu), a major document tab with an infinite canvas (RMB pan,
    zoom from 5% to 200%, left-to-right or top-down flow, nodes as cards that list their actions),
    the Graph panel on the left and the Details panel on the right, its own undo,
-   full MCP (`graph.*`), validation = the build gate.
+   every operation a command (`graph.*`), validation = the build gate.
 9. **Object references**: string story ids (CoC-style `[story_object]`),
    `ref` names for what the quest itself spawned, profiles/communities for
    "any NPC".
@@ -62,8 +62,9 @@ build gate.** Until the editor's first release the format may change freely
 11. **No XML/ltx stubs from the editor**: info portions are unnecessary (the
     engine does not crash on unknown ids, and quest flags live in its
     variables), dialogs and tasks are registered by the runtime.
-12. **Rollout is 6 phases**; the game and the editor are built in parallel by
-    subagents after the contract is fixed (§17).
+12. **One rule list on both sides**: the editor's validator and the runtime share
+    the problem codes (§15), so a file is judged the same where it is written and
+    where it runs.
 13. **NPC behaviour is its own asset on the same graph engine** (§19): a
     behaviour graph (`.behasset`) drives NPCs through **roles** that its caller
     binds, so one file serves any cast. It reaches the NPCs by generating logic
@@ -131,10 +132,9 @@ only) is never affected in any case: NQ writes exclusively through
 
 The runtime scans **the whole module root recursively** for `*.nqasset`
 (the `xms_native_list_files` native, §12.3), so the file's location inside the
-module does not matter. Export (`EditorMod::Export`,
-`cpp-editor-last:Source/Editors/XrECore/Editor/EditorModManifest.cpp:843-1063`) already copies
-every non-editor-only folder whole (`:939-960`) — `.nqasset` needs no separate
-export hook, only the **validation gate** (§13.10).
+module does not matter. The module build ships every folder of the project that
+is not the editor's own, so `.nqasset` needs no export step of its own, only the
+**validation gate** (§13.10).
 
 ### 3.2 Game (engine repo)
 
@@ -153,7 +153,7 @@ src\xrGame\xms_game.cpp            ; new natives (§12.3)
 src\xrGame\PhraseDialog.{h,cpp}    ; virtual dialogs (§12.3)
 src\xrGame\actor_communication.cpp ; dialog distribution hook (§12.3)
 src\xrGame\console_commands.cpp    ; the `nq` command
-docs\dead-air\NQ_RUNTIME.md        ; runtime specification (split out of this doc in phase 0)
+docs\dead-air\NQ_RUNTIME.md        ; runtime specification
 ```
 
 No `script.ltx` change is needed: `axr_main.on_game_start()` iterates every root
@@ -162,25 +162,22 @@ No `script.ltx` change is needed: `axr_main.on_game_start()` iterates every root
 
 ### 3.3 Editor
 
-The Rust editor's quest code is `gz-nq` (the model, reading and writing through `gz-luadata`, the catalog, the validator, the pickers, the documents and their commands) and `gz-ui-graph` (the tab, the canvas, the panels). The C++ files this section names are the tree at the tag `cpp-editor-last`.
-
 ```
-Source\Editors\XrECore\Editor\Nq\        ; model, IO, catalog, validator, document, MCP, export gate
-  NqAsset.h/.cpp        NqLua.h/.cpp        NqCatalog.h/.cpp
-  NqValidate.h/.cpp     NqPickers.h/.cpp    NqDoc.h/.cpp
-  NqExport.cpp          NqMcp.cpp
-Source\Editors\LevelEditor\UI\QuestGraph\ ; the document tab, canvas, Graph and Details panels
-  UIQuestGraph.h/.cpp   ; UIQuestGraph (document registry, Open/Update/Close) + UIQuestGraphWindow (per-document tab)
-  NqCanvas.h/.cpp       ; the canvas, and NqLook: a kind's icon, family colour and title as the document says it
-  NqInspector.h/.cpp    ; the Graph panel and the Details panel
-gamedata\configs\nq\catalog.ltx           ; bundled catalog fallback (copy of the game's)
-docs\NQ_ARCHITECTURE.md                   ; this document
-docs\nq\examples\*.nqasset                ; reference quests (phase 0)
-tools\mcp\grizzly_mcp.py, tools\mcp\AI_SETUP.md ; the graph.* commands
+crates\gz-nq\                    ; the domain: everything but the picture
+  asset, kind, disk               ; the model, the kinds' key order, reading and saving (the difference)
+  catalog, caps, defaults         ; the kind catalog; what a document may use; the preferences a graph falls back on
+  validate, check, references     ; the rule list (§15), the build gate, proven references
+  pickers, index                  ; the game-data lists; the project's graphs by id
+  doc                             ; the open document: operations, undo, the view
+  canvas, layout, measure, arrange, wires, text   ; the file's canvas, boxes, auto layout, wire routes, words
+  service, cmd                    ; the area's service; graph.edit / arrange / get / find
+crates\gz-ui-graph\              ; the tab: scene, canvas, inspector, params, look, actions, cmd (graph.view)
+gamedata\configs\nq\catalog.ltx  ; the bundled catalog, a fallback (byte-identical to the game's)
+docs\nq\NQ_FORMAT.md, docs\nq\examples\*.nqasset   ; the format reference and the reference quests
 ```
 
-Layering: everything that is not UI lives in `XrECore` (so `EditorMod::Export`
-can call the validator); UI lives in `LevelEditor`.
+Layering: everything that is not a picture lives in `gz-nq`, so the module build,
+`asset.check` and a commandlet validate without a window; the tab is `gz-ui-graph`.
 
 ---
 
@@ -362,8 +359,8 @@ never looking at the canvas. What guarantees this:
 3. **The schema is served on demand.** `asset.reference kind=quest` returns every kind
    with its groups, purpose (`use`), parameters (type/required/default/enum), pins
    and a one-line description — enough to write a quest from scratch. The same
-   catalog lives in `docs\nq\NQ_FORMAT.md` (phase 0) and in the `AI_SETUP.md`
-   prompt block.
+   catalog lives in `docs\nq\NQ_FORMAT.md`, and `asset.reference kind=quest`
+   prints the linked game's.
 4. **Problems come as text.** `asset.check` returns every problem of a file, a
    folder or the project with its code (§15), its sentence, its line and column and
    - where the fix is mechanical - what to write instead; an open document's
@@ -497,9 +494,9 @@ complete(node, pin):
 ### 6.1 Catalog format (`configs\nq\catalog.ltx` + `configs\nq\kinds\*.ltx`)
 
 One kind = one section. LTX was chosen because both sides read it natively
-(`ini_file` in the game, `CInifile` in the editor) and modules can extend it (a
+(`ini_file` in the game, `gz-ltx` in the editor) and modules can extend it (a
 file in `gamedata\configs\nq\kinds\` is visible through the module's VFS mount;
-the editor scans the same folder through `EditorGameContent`).
+the editor reads the same folder of the linked game, of the installed modules and of the open project).
 
 ```ini
 [nq.catalog]                       ; catalog header (core catalog.ltx only)
@@ -781,9 +778,8 @@ The mapping:
   spawn's `custom_data`, the `story_objects.script` registry
   (`get_story_object_id(sid)`, `_g.script:1548`; not persisted, rebuilt from the
   spawn). A mod-placed NPC gets a story id through its `custom_data` in the
-  `.xspawn` (`cpp-editor-last:Source/Editors/LevelEditor/Editor/EditorModScene.cpp:774-792` wrote `custom_data` as a file) —
-  the editor appends `[story_object]` via the "assign story id" button in the
-  picker (§13.6). Vanilla NPCs — by their story ids.
+  `.xspawn`: the author writes `[story_object]` into the spawn point's Custom
+  Data. Vanilla NPCs — by their story ids.
 - **`ref`** — the name of an object this quest created (`spawn.*`,
   `objective.kill{spawn}`, the `objective.reach` anchor). Stored as
   `refs[name] = { id, kind, section, smart, hold }`, survives saves. Additionally
@@ -978,48 +974,32 @@ the QA script hooks in via `[common]`, waits for `actor_on_first_update`, then
 
 ## 13. Editor side: implementation
 
-The Rust editor's quest code is `gz-nq` (the model, reading and writing through `gz-luadata`, the catalog, the validator, the pickers, the documents and their commands) and `gz-ui-graph` (the tab, the canvas, the panels). The C++ files this section names (and its line numbers) are the tree at the tag `cpp-editor-last`.
+The editor's half is `gz-nq` (the domain: everything but the picture) and `gz-ui-graph` (the tab). What the tab
+looks like is also `docs/UI_DESIGN.md`'s; this section states what the two crates hold to.
 
-### 13.1 Model (`NqAsset.h`)
+### 13.1 Model (`asset.rs`)
 
-```cpp
-struct SNqAction { xr_string kind; SNqParams params; };            // params: an ordered key→variant-value map
-struct SNqCond   { xr_string kind; SNqParams params; bool negate; };
-struct SNqNode   { xr_string id, kind, comment; bool once, once_set; SNqParams params;
-                   xr_vector<SNqCond> cond; xr_vector<SNqAction> on_enter, on_exit;
-                   xr_vector<std::pair<xr_string, xr_vector<xr_string>>> out; Fvector2 pos; };
-struct SNqObjective { xr_string id; SNqValue title, descr, target; bool visible; };
-struct SNqTask   { xr_string id, type, icon; SNqValue title, descr, target;
-                   xr_vector<SNqObjective> objectives; bool auto_complete; };
-struct SNqQuest  { int nq; xr_string id, title, activation; xr_vector<SNqVar> vars;
-                   xr_vector<SNqTask> tasks; xr_vector<SNqNode> nodes; };
-```
+A graph is read into plain data: its header, `vars`, `tasks` with their objectives (a quest) or `roles` (a
+behaviour graph), `nodes` and the `canvas`. A node has `id`, `kind`, `once`, `disabled`, `collapsed`, `params`,
+`cond`, `on_enter`, `on_exit`, `out` (a pin and its targets), `pos` and `comment`. A parameter's value is whatever
+the file holds - nil, a boolean, a number, a string, a table with its keys in order; its type comes from the
+catalog when the validator or the tab looks at it. Unset stays unset: a default is never written into the model.
 
-`SNqValue` — a variant (nil/bool/number/string/table with ordered keys) — whatever
-the parser returned; typing comes from the catalog at validation/draw time.
+### 13.2 Catalog (`catalog.rs`, `service.rs`)
 
-### 13.2 Catalog (`NqCatalog`)
+The catalog is the linked game's `configs\nq\catalog.ltx` with every `configs\nq\kinds\*.ltx` it has (archives
+and loose files alike), then the kinds of the installed modules - `<game>\modules\*\gamedata\configs\nq\kinds\*.ltx`
+and `<game>\mods\*\…`, both roots - and last the open project's own (its installed copy skipped), so a module's
+kinds work before its first build; without a game, the bundled `gamedata\configs\nq\catalog.ltx`. It is kept by
+the revision of the game link and of the project's kind files, so nothing drops it by hand. Titles are cp1251 in
+the game and UTF-8 here.
+`asset.reference kind=quest` says the source (`game`/`bundled`) and `version`.
 
-Loading: first `EditorGameContent::Find("configs\\nq\\catalog.ltx")` plus every
-`configs\nq\kinds\*.ltx` of the connected game (`EditorGameContent` reads archives
-`database\*.xdb*` archives and loose `gamedata\**`), plus the extensions of
-installed modules — `<game>\modules\*\gamedata\configs\nq\kinds\*.ltx` and
-`<game>\mods\*\…` (both roots, modeled on `EditorGameModes::ScanInstalledModules`);
-otherwise — the bundle `<sdk>\gamedata\configs\nq\catalog.ltx`. Cached until
-`Invalidate()` (link change). `title` — cp1251 → UTF-8 via `Cp1251ToUtf8`
-(`EditorGameModes.cpp:17-31`).
-`asset.reference kind=quest` and the status bar's tip show the source (`game`/`bundled`) and `version`.
+### 13.3 Reading/writing (`disk.rs`, `gz-luadata`)
 
-### 13.3 Reading/writing (`NqLua`)
-
-- Reading goes through the LuaJIT C API (already linked:
-  `cpp-editor-last:cmake/EditorTargets.cmake:118-126`, `lua51.dll` is staged): `luaL_newstate`
-  without opening libraries → `luaL_loadbuffer` → an empty environment
-  (`lua_newtable; lua_setfenv`) → `lua_pcall` → walking the result (`lua_next`)
-  into `SNqValue`. A syntax error/non-table → a message with line:column from
-  Lua. One `lua_State` per operation, closed immediately.
-- Custom `code` syntax check: `luaL_loadbuffer` of the chunk without execution
-  (the same path) — warning W050 "Lua syntax error".
+- Reading is `gz-luadata`'s reader of Lua data: literals only - code is refused, with its line and column -
+  into the lossless document, then into the model. Nothing of the file is run.
+- A node's custom `code` is checked for syntax without being run (`gz_luadata::syntax_check`): W050.
 - Writing — the difference into the file (`gz-luadata`'s `LuaDoc::apply_diff`,
   `gz-asset`'s save path): a changed value is rewritten where it stands, a new key
   goes where the kind's order puts it (`nq, id, title, activation, vars, tasks,
@@ -1031,79 +1011,63 @@ otherwise — the bundle `<sdk>\gamedata\configs\nq\catalog.ltx`. Cached until
 - The outline (§4.5) is the document's (`graph.get`, `graph.edit`,
   `graph.arrange`); nothing writes it into the file.
 
-### 13.4 Document and undo (`NqDoc`)
+### 13.4 Document and undo (`doc.rs`)
 
-- `NqDoc { path, quest, dirty, undo/redo (a ring of SNqQuest snapshots, 200), selection,
-  view {cx, cy, zoom_idx} }`. Every mutation goes through `NqDoc::Apply(op)` (the
-  same operations as `graph.edit`, §13.11) → a snapshot into undo →
-  re-validation (incremental is unnecessary: the graph is small).
-- Open documents — the `UIQuestGraph::Docs()` registry; the path is the key.
-  Re-opening focuses the tab.
-- `Ctrl+Z/Y`, `Ctrl+S`, `Del`, `Ctrl+C/V/A` are handled by the document window
-  while it is focused (`ImGui::IsWindowFocused(RootAndChildWindows)`); the scene
-  commands `COMMAND_UNDO/REDO` do not fire then, the scene undo stack is
-  untouched.
+- A document is the path, the graph, whether it is dirty, undo and redo (snapshots of the graph), the selection
+  and the view (centre, zoom level). Every mutation is an operation of `graph.edit` (§13.11) - the tab's
+  gestures apply the same operations -, followed by a snapshot into undo and a validation (incremental is
+  unnecessary: the graph is small).
+- The open documents are the shell's tabs; the path is the key and opening one again brings its tab up.
+- The tab's keys are its actions (`gz-ui-graph`'s `actions.rs`), live on the canvas or on the tab. No key of a
+  graph reaches the scene, whose undo is its own.
 - An external file change (an AI rewrote it) reaches the document through the
   project's watcher: a document without unsaved edits reads the file again and
   keeps its view; one with unsaved edits rebases them onto the file
   (`docs/ASSETS.md` section 4). A save writes only the values the document
   changed, into the file's text as it is.
 
-### 13.5 Validator (`NqValidate`)
+### 13.5 Validator (`validate.rs`)
 
-One rule list for the editor and the runtime (codes §15). Returns
-`SNqProblem { severity, code, node_id, slot ("enter:2"/"exit:0"/"cond:1"/"param:npc"), message }`.
-Errors block the build; warnings do not.
+One rule list for the editor and the runtime (codes §15). A problem is
+`{ severity, code, node, slot ("enter:2"/"exit:0"/"cond:1"/"param:npc"), message }` with its sentence and, through
+`gz-asset`, the line and column of the thing in the file. Errors block the build; warnings and notes do not (a
+disabled node is a note).
 
-### 13.6 Game-data pickers (`NqPickers`)
+### 13.6 Game-data pickers (`pickers.rs`)
 
-Indices build lazily from the connected game, cached in
-`_appdata_\nq_index_<hash>.ltx` (project sources — `story_id` from `custom_data`
-and the whole `restrictor` — bypass the cache):
+The lists are built from the linked game on the pools, once per game link, never from a hardcoded list; what the
+project and the open scene add is laid on top. `game.lookup type=<list>` answers any of them.
 
 | Type | Source |
 |---|---|
-| `item_section` | `pSettings` (already the game's, `EditorGameConfigs`), sections with `inv_name` |
-| `squad_section` | `pSettings`, sections with `class = ON_OFF_S` |
+| `item_section` | the game's `system.ltx` tree, sections with `inv_name` |
+| `squad_section` | the same tree, sections with `class = ON_OFF_S` |
 | `level` | `configs\game_levels.ltx` |
 | `smart` | sections of `configs\misc\simulation.ltx` (names) + positions/levels from the `all.spawn` scan (below) |
-| `story_id` | two sources: (1) `pSettings` — sections with a `story_id` key (this is how DA declares unique NPCs: `configs\creatures\spawn_sections_*.ltx`, e.g. `esc_2_12_stalker_wolf`, `esc_2_12_stalker_trader`; `story_objects.check_spawn_ini_for_story_id` reads `system_ini():r_string_ex(section,"story_id")`) — the main and cheap one; (2) a scan of the connected game's `spawns\all.spawn` (`[story_object] story_id` in `custom_data` — restrictors, anomaly spots) through `XrSE_Factory`, cached in `_appdata_`; plus `[story_object]` from the current project's `.xspawn`. Without `all.spawn` — only (1) and the project ones, no W060 is issued |
+| `story_id` | two sources: (1) the `system.ltx` tree — sections with a `story_id` key (this is how DA declares unique NPCs: `configs\creatures\spawn_sections_*.ltx`, e.g. `esc_2_12_stalker_wolf`, `esc_2_12_stalker_trader`; `story_objects.check_spawn_ini_for_story_id` reads `system_ini():r_string_ex(section,"story_id")`) — the main and cheap one; (2) the linked game's `spawns\all.spawn` (`[story_object] story_id` in `custom_data` — restrictors, anomaly spots; read by `gz-fmt-spawn`); plus `[story_object]` of the project's spawn layers and scenes. Without `all.spawn` — only (1) and the project ones, no W060 is issued |
 | `profile` | `system.ltx [profiles] specific_characters_files` → `character_desc_*.xml` (id + name through the string table) |
 | `community` | `configs\creatures\game_relations.ltx [communities]` |
 | `info` | `[info_portions] files` → `gameplay\info_*.xml` |
 | `spot_type` | the fixed core list |
-| `restrictor` | **project only**: `rawdata\levels\<level>\spawn.part` (plain ltx text), objects with the `space_restrictor` spawn section — the object NAME is taken (key `000003`), because the runtime looks the zone up by NAME (`db.zone_by_name`), not by story id. Built bypassing the cache, so a freshly placed restrictor is visible immediately; `extra` = the level |
+| `restrictor` | **project only**: the spawn points of the project's scenes with the `space_restrictor` section (`<scene>\spawns.lua`; an X-Ray SDK scene's `spawn.part` as well) — the object NAME is taken, because the runtime looks the zone up by NAME (`db.zone_by_name`), not by story id. The open scene's own are laid on top, so a freshly placed restrictor is there at once; `extra` = the level |
 | `quest_id`/`task_id`/`var_name`/`ref_name`/`node id` | from the open document and the project's other `.nqasset` files |
 
-A picker = a combo with search; manual input is always allowed (a value outside
-the index — W060). `place` has a "take from the viewport" button: the scene's
-current level + the point under the cursor / the selected object's position.
-`npc_ref` has a "scene objects" tab (spawn points marked as mod content): picking
-an object without a story id offers to write
-`[story_object] story_id = nq_<mod>_<name>` into its `custom_data` (the scene
-goes dirty).
+A picker is the kit's ranked pick list over every entry; a value outside the list is kept and shown, never
+corrected (W060 says so). A `place` has a camera button: the viewport camera's position and level.
 
-### 13.7 Content browser and window
+### 13.7 Content browser and tab
 
-- `UIContentBrowser.cpp`: the `IsQuestExt(".nqasset")` predicate; the quest's
-  vector icon on the tile; `OpenAsset` → `UIQuestGraph::Open(path, err)`; the
-  **Add** menu (`DrawAddMenu`: the toolbar's [+ Add] and the grid's empty-space
-  menu) offers **Quest** - off, saying why, outside the open project's own
-  source -, creation modeled on `CreateFolder`: a
-  free name `NewQuest.nqasset`, `NewQuest2.nqasset`, the template = a minimal
-  quest (`trigger.start → flow.end`), `BeginRename` — **generalized to files**
-  (folder-only until now, `:2286-2359`): renaming a file = `MoveFileA`; the `id`
-  inside the asset is not synchronized (the id and the file name are independent;
-  the id is edited in the Graph panel, W061 when they differ — a hint only).
-- The window: a `UIQuestGraphWindow` per document, a major tab of the
-  editor's shell (`XUI::Shell::Open`, ids `quest:<rel>` / `beh:<rel>`, reopened
-  from `<project>\temp\session.ltx`) that owns the whole work area: the tab's
-  toolbar sits on the shell's toolbar row, its Graph menu in the caption, its
-  counts in the status bar. `UIQuestGraph::Update()` is pumped from
-  `CLevelMain::OnDrawUI()`. The work area: the Graph panel, the canvas, the
-  Details panel, and a drawer under them (par. 13.9).
-- Nothing that redraws the frame may be called from `Draw()` (the `CLAUDE.md`
-  rule, `XrUIManager::InUIPass()`).
+- The content browser draws a quest's and a behaviour graph's own icon, opens one on a double click and offers
+  both in its **Add** menu (the toolbar's [+ Add] and the grid's empty-space menu; `file.create kind=quest`) -
+  off, saying why, outside the open project's own files: a free name (`NewQuest`, `NewQuest2`), the template a
+  minimal graph (`trigger.start → flow.end`), the name box open. Renaming the file does not change the `id`
+  inside it (the id and the file name are independent; the id is edited in the Graph panel, W061 when they
+  differ — a hint only).
+- A graph is a major tab of the shell (`quest:<rel>` / `beh:<rel>`, reopened with the project) that owns the
+  whole work area: the tab's toolbar sits on the shell's toolbar row, its Graph menu in the caption, its counts
+  in the status bar. The work area: the Graph panel, the canvas, the Details panel, and a drawer under them
+  (par. 13.9).
+- Nothing in a frame's drawing waits or redraws the frame: the scene of a revision is made off the UI thread.
 
 ### 13.8 Canvas (`gz-ui-graph`'s `canvas`, `scene`; `gz-nq`'s `layout`, `arrange`, `wires`)
 
@@ -1237,16 +1201,13 @@ is picked (⋯ opens the picker, the kit's ranked list over every entry).
 
 ### 13.10 Export and build
 
-- In `EditorMod::Export`, before copying (after the mode gate,
-  `EditorModManifest.cpp:855-862`) — `NqExport::Validate(project_root, err)`:
-  finds every project `*.nqasset` (except source-only), parses, validates, checks
-  `id` uniqueness within the module; on errors —
-  `err = "quest graph errors: N (see log)"` + a per-line log, the build
-  **refuses** (like "no target game mode"); MCP receives the same `err`.
-- Assets are copied as is (already the shared folder-copy path); no generated
-  files.
+- The module build (`gz-build`) asks the graphs' gate (`check.rs`) before it writes anything: every
+  `*.nqasset` / `*.behasset` the build ships is parsed and validated in parallel, `id`s must be unique within
+  the module, and a behaviour graph may not run itself through a chain of others (`E113`). Errors refuse the
+  build with a sentence that counts them and one log line per problem; `mod.build` answers the same.
+- Assets are copied as they are; no generated files.
 
-### 13.11 MCP
+### 13.11 Commands
 
 The graph commands are `gz-nq`'s `cmd.rs` (`graph.edit`, `graph.arrange`, `graph.get`,
 `graph.find`) and `gz-ui-graph`'s (`graph.view`); a graph's tab is a document of the shell, so
@@ -1264,18 +1225,18 @@ the operations of `graph.edit`.
 | `graph.view` | the tab's view: zoom, centre, selection and its growth, the history, bookmarks, the panels and their widths, the split, scrolls, a menu or the picker up to look at (`menu=node\|wire\|canvas\|frame\|picker\|replace`, a picker from a pin), focus, the drawer; it answers what the frames that show the change drew, in one call |
 
 A quest is a file: an agent reads and writes it with its own tools, and the open
-tab follows. The destructiveness rule: MCP commands show no dialogs; closing a tab
+tab follows. The destructiveness rule: a command shows no dialog; closing a tab
 (`ui.tab action=close`) or reloading one (`doc.reload`) over unsaved edits needs
 `discard`.
 
-`NqProjectIndex` never calls `NqDocs::Open`: it reads the sorted file list
+The project's index of graphs (`index.rs`) opens no document: it reads the sorted file list
 directly and reuses a parse only on an exact content-hash match. An open
 **dirty** document overlays its file read-only; a clean document does not hide an
 external edit on disk. The fingerprint is built from normalized paths, the full
 content hash, the source and the parseability status, so an identical project
 snapshot yields an identical value.
 
-`NqReferences` infers no meaning from names like `task`, `id` and so on: a
+References (`references.rs`) infer no meaning from names like `task`, `id` and so on: a
 reference exists only when the active catalog declared that specific parameter as
 `task_id` (or another requested type). For `cond_list` and `cases_cond` the kind
 of every nested condition again comes from the catalog. An unknown
@@ -1351,21 +1312,21 @@ state; existing state does not migrate.
 | W063 | a spawn row's value is over the section's own ceiling (`ammo_mag_size` / `box_size`) — the runtime clamps it — editor only |
 | W070 | a quest without `flow.end` (will finish implicitly) |
 
-The runtime prints the same codes to the log; the editor — to the problems row
-and MCP.
+The runtime prints the same codes to the log; the editor — to the Problems drawer
+and `asset.check`.
 
 ---
 
 ## 16. Test plan
 
-**Editor (headless, `Grizzly.exe -headless -project <project> -nodlg` + MCP):**
+**Editor (the QA suites on a copy of a project, and `Grizzly-Cmd.exe`):**
 1. `file.create kind=quest` → the file is the template, `asset.check` finds 0 errors.
 2. The reference quest (§4.4) written as a file → 0 errors; opened and saved
    unchanged it is byte for byte the same file (`tools/qa/test_assets.py`).
 3. `graph.edit` of an operation set → the expected problems (E007 on a broken edge,
    E010 on broken alternation, E020, W011 …).
 4. `asset.reference kind=quest` contains every bundle kind; with a game linked — the game's.
-5. `mod_export` with a broken quest → `ok:false`, the error text; with a valid one →
+5. `mod.build` with a broken quest → refused with the error text; with a valid one →
    the file in `<game>\modules\<id>\…\*.nqasset` is identical to the project's.
 6. UI smoke: `graph.view` → `shot.window` (the tab, nodes, action rows,
    wires in every style and both flows); `graph.view frame=all` of the 110-node quest leaves
@@ -1403,27 +1364,7 @@ and MCP.
 
 ---
 
-## 17. Rollout plan
-
-Done: every phase below. Since the move to Rust the editor's half is `gz-nq` and `gz-ui-graph`
-(`docs/RUST_MIGRATION.md`); the table is the record of how it was rolled out.
-
-The working rule: every phase runs as separate subagents (per the `CLAUDE.md`
-rules); once the contract is fixed, the game and editor phases go **in
-parallel**. Commits follow the phases, each verified by its own DoD.
-
-| Phase | Repo | What we do | Who | DoD |
-|---|---|---|---|---|
-| **0. Contract** | both | split `docs\dead-air\NQ_RUNTIME.md` (game) and `docs\nq\NQ_FORMAT.md` (editor: format+catalog+validation) out of this doc; write `configs\nq\catalog.ltx` v1 (game) and its copy in `<sdk>\gamedata\configs\nq\`; 3 reference `.nqasset` in `docs\nq\examples\` | 1 agent | both repos hold the same catalog; the examples pass a manual §15 check |
-| **1. Engine** | game | the §12.3 changes (#1–#8), an incremental `tools\build\build_x64.ps1` build, smoke: the `nq` command answers, `xms.list_files/read_file` see a test module | 1 agent | the incremental build is clean; vanilla with no modules — zero new log lines |
-| **2a. Runtime core** | game | `xms_nq.script`, `xms_nq_load`, `xms_nq_util`, `xms_nq_kinds` (flow.*, wait.*, trigger.*, extra: item/money/var/info/signal/news/quest, level+event conds), persistence, the console | 1 agent (parallel with 2b) | game test plan items 1, 6, 7, 8, 9 |
-| **2b. Runtime dialogs/objectives/tasks** | game | `xms_nq_dialog`, `xms_nq_task`, the `dialog.*`, `objective.*`, `spawn.*`, `squad.*`, `map.*`, `relation.*` kinds | 1 agent | items 2, 3, 4, 5 |
-| **3. Editor core** | editor | `Nq*` in `XrECore`: the model, `NqLua` (C API), the catalog, the validator, the pickers (indices), `NqDoc`+undo, the `NqExport` gate, `NqMcp` + python + `AI_SETUP.md`; the creation template | 1–2 agents (IO/validator/catalog ↔ pickers/MCP/export), parallel with 1–2 | editor test plan items 1–5, 7 (no UI) |
-| **4. Editor UI** | editor | `UIQuestGraph`, `NqCanvas`, `NqInspector`, the content browser (Create/Open/file rename), the toolbar, the problems row, hotkeys, `graph.view`/`graph.arrange` | 1 agent after 3 (model/ops stable) | item 6; a manual check against the sketch |
-| **5. Integration and QA** | both | e2e: MCP builds the 3 references → `mod_export` → the game per §12.5; fixes | 1 agent | every §16 item green |
-| **6. Documentation** | both | `MODDING.md` (the NQ section, a link to `NQ_RUNTIME.md`), `MOD_QUICKSTART.md` (the "Quests" section), `AI_SETUP.md`, README lines; project memory | 1 agent | the docs describe what was built |
-
-Risks and how they are closed:
+## 17. Risks and how they are closed
 
 | Risk | Closure |
 |---|---|
@@ -1451,14 +1392,14 @@ Risks and how they are closed:
 | Phrases are individual nodes | a dialog editor inside a node | the user: "a node = a phrase"; the graph link of phrases to the rest of the quest (an edge from a phrase into the world) gives non-linearity for free |
 | Tokens + a deferred queue | immediate recursive transitions | reentrancy inside `SayPhrase` and engine callbacks; determinism; the engine assert when every continuation is filtered |
 | The dialog distribution hook + virtual dialogs in the engine | XML stubs from the editor / `character_dialogs.xml` | without an engine change a topic cannot be added to a specific NPC dynamically, and editor-made stubs violate the interpretation principle; the change is ~100 lines and additive |
-| An in-house canvas on ImDrawList | imnodes / imgui-node-editor | neither is in the tree, both are horizontal, imnodes has no zoom, imgui-node-editor is pinned to an ImGui version (ours is 1.88 with patches); we need vertical flow, nodes that list their actions, 10 fixed zooms and MCP view control |
+| An in-house canvas on the kit's painter | a node-editor library | the graph needs both flows, nodes that list their actions, semantic zoom, five wire styles and ONE source of a node's box and of a wire's route, shared by the layout, the drawing, the hit tests and the commands |
 | One `xms.nq` blob in `.scov` | a blob per module / `.scoc` via `save_state` | do not fight the module author for their blob; `.scov` is the only sanctioned channel (SAVE_COMPATIBILITY); removing a mod breaks nothing |
 | Tasks via `CGameTask` directly | `task_manager` + ltx | `task_ini` is read once at script load, there is no registration |
 | Texts as raw cp1251 | generate a string table | `translate()` returns the key; a string table = one more generated file, and we generate none |
 | Quest flags are `vars`, not info portions | info portions | info portions are not persisted outside the actor's `.scop` and the engine does not need them; `info.give` is kept for vanilla interop |
 | String story ids | numeric `xms.story_id` | game scripts address objects by string ids (`story_objects`), the editor writes them into `custom_data` with no engine changes |
 | A recursive module scan | a list in the manifest | the manifest cannot be read from Lua, one more desync point; the folder is the single source |
-| Validation is the build gate | warn and export anyway | the project rule: the build refuses with a clear message; an AI gets the same codes through MCP |
+| Validation is the build gate | warn and export anyway | the project rule: the build refuses with a clear message; an AI gets the same codes from `asset.check` |
 | Node deletion without confirmation | a modal | the document has undo; the file is untouched until save; closing a dirty tab asks and names the asset |
 | The outline, `pos` optional | "the graph is readable only on the canvas" | the user's requirement: an AI creates and edits quests as text, without screenshots |
 | The editor keeps the file's node order and writes only what changed | a canonical rewrite on save | the author's (and an agent's) order, comments and layout are theirs; a diff shows exactly the edit |
@@ -1814,35 +1755,35 @@ section at all.
 
 ### 20.3 The editor side
 
-- `EditorWorld` (XrECore): the all.spawn reader (levels, level changers with the
-  level they stand on and the one they lead to, the game's patrol names), the
+- `gz-world`: the all.spawn reader (levels, level changers with the
+  level they stand on and the one they lead to, the game's patrol names; `game.rs` over `gz-fmt-spawn`), the
   project's Player Starts (the spawn layer, with the open scene standing in for
-  its own level), validation, the World Rules tab and the MCP commands
-  `world_get` / `world_set` / `world_transitions` (`world_view` looks at the tab).
+  its own level) and validation; the World Rules tab is `gz-ui-world`'s; the commands are
+  `world.info` / `world.set` / `world.lookup` (`world.view` looks at the tab).
 - The tab saves every edit at once, like Exclude from Build: the manifest is
   re-read first, so the Mod Settings tab's own edits are never written over, and
-  every tab showing a part of `mod.ltx` follows `EditorMod::ManifestGeneration`.
-- **Player Start** is a point type of the Spawn tool (`ptPlayerStart`,
-  `$player_start`): the actor figure, an arrow for the facing, never part of the
-  level build. `scene.place kind=spawn section=player_start` places it over MCP.
-- A stalker's **Order** properties (`SXmsOrder` on `CSpawnPoint`, chunk
-  `0xE430`) - kind, route, look path, radius, run, target, distance, hostile -
+  every tab showing a part of `mod.ltx` follows the manifest's revision (`gz-mod`'s service).
+- **Player Start** is a spawn point of its own (`$player_start`, in the Place panel): the actor
+  figure, an arrow for the facing, never part of the
+  level build. `scene.place kind=spawn section=player_start` places it.
+- A stalker's **Order** properties (the spawn point's `order` in the scene's file, `order.*` for
+  `scene.set`) - kind, route, look path, radius, run, target, distance, hostile -
   are appended to its custom data as `[xms_order]` by the bake. An `[xms_order]`
   typed into the custom data by hand is replaced, with a warning.
 - Way paths bake to `[path:<name>]` with their points, flags, point names and
-  links - the same data the level build writes for a level's own patrols. MCP
+  links - the same data the level build writes for a level's own patrols.
   `scene.place kind=way points=` draws one from points; the way path picker lists the linked game's
   own patrols after the scene's, since a stock route is often exactly what an
   order wants.
-- `level_changer` is a picker type (`NqPickers::tLevelChanger`, fed by
-  `EditorWorld`); a quest's `{ role = }` in a destination or target is `E024`.
+- `level_changer` is a picker type (`gz-nq`'s `pickers.rs`, fed by
+  `gz-world`); a quest's `{ role = }` in a destination or target is `E024`.
 - Codes: `E201` a second Player Start, `E202` a fourth player choice - both stop
   a build; `W203` a level and `W204` a transition the linked game lacks, `W205`
   the start outside the area, `W206` an area with no Player Start.
-- **The start kit** (`SStartKit`, `mod.ltx [start_kit]`) is edited in the same tab
+- **The start kit** (`mod.ltx [start_kit]`) is edited in the same tab
   and saved the same way. A row is born with its item (the picker adds it): the tab
   saves at once, and a row without one would not survive the save. The picker is
-  the Characters tab's kit picker (`EditorCharacters::ItemPicker`) - one widget for
+  the Characters tab's kit picker (`gz-ui-world`'s `picker.rs`) - one widget for
   every kit. *Game's Base Kit* reads `[shared]` of the linked game's
   `plugins\faction_loadouts.ltx`. `E207` a row with no item, a count below 1 or a
   repeated item stops a build; `W208` an item the linked game lacks only warns
@@ -1869,7 +1810,7 @@ the next load.
   break quests mid-way. The story changes the world through `world.*`.
 - **Three player choices** - the new-game screen of the linked game has three
   free rows next to the campaign column; a fourth would be a rule the player
-  never sees. Refused in the window, the MCP path and the build.
+  never sees. Refused in the window, by `world.set` and by the build.
 - **Only named squads count as original characters.** A squad section with a
   `story_id` is a character the game placed on purpose; a monster faction is a
   mutant; everything else is the simulation. Story effects that spawn random

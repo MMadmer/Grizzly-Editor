@@ -1,14 +1,16 @@
 //! What the World Outliner lists, as a pure function of a scene snapshot and the panel's
-//! filter (`UIWorldOutliner::Rebuild` / `ApplyFilter` / `BuildHierarchy` /
-//! `ApplyHierarchyFilter` / `BuildHierarchyRows`).
+//! filter: By Type (a row per kind, ordered by the kind's name, with its objects under it) or By
+//! Hierarchy (groups with their members, way paths with their points), the search, the type
+//! filter, Selected Only and the visibility filter.
 //!
 //! The rows are computed off the UI thread, keyed by the scene's revision and the filter; the
-//! panel lays out only the rows that show.
+//! panel lays out only the rows that show. [`scroll_decision`] says when a selection made
+//! elsewhere may scroll the list: only on a listing computed for the scene as it is now.
 
 use std::cmp::Ordering;
 
 use gz_base::SmolStr;
-use gz_scene::{ObjClass, ObjId, SceneState};
+use gz_scene::{ObjClass, ObjData, ObjId, SceneState};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// The visibility filter.
@@ -234,14 +236,16 @@ pub fn natural_compare(lhs: &str, rhs: &str) -> Ordering {
 /// One row the panel lays out.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Row {
-    /// A class's row (By Type): its eye, its title and `shown of total` while filtering.
+    /// A kind's row (By Type): its eye and lock, its name and `shown of total` while filtering.
     Class { class: ObjClass, shown: usize, total: usize, open: bool },
     /// An object. By Hierarchy, `depth` is its nesting, `direct` says it matched itself (or is
     /// only there for a match under it) and `children` whether it has rows under it.
     Object { id: ObjId, class: ObjClass, depth: u16, direct: bool, children: bool, expanded: bool },
+    /// A point of an open way path (By Hierarchy): `index` into its points.
+    Point { way: ObjId, index: u32, depth: u16 },
 }
 
-/// A class of the scene, as the Filters menu lists it.
+/// A kind of the scene, as the Filters menu lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Group {
     pub class: ObjClass,
@@ -249,11 +253,13 @@ pub struct Group {
     pub shown: usize,
 }
 
-/// What the panel draws, and what `outliner_filter` answers.
+/// What the panel draws, and what `level.view` answers of the Outliner.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Listing {
+    /// The scene's revision it was computed for.
+    pub rev: gz_base::Rev,
     pub rows: Vec<Row>,
-    /// The classes with objects, sorted by class name.
+    /// The kinds with objects, ordered by their names.
     pub groups: Vec<Group>,
     /// Objects that pass the filter, in classes not switched off.
     pub shown: usize,
@@ -277,9 +283,8 @@ impl Listing {
 pub fn compute(state: &SceneState, filter: &Filter, folds: &Folds) -> Listing {
     let terms = parse_terms(&filter.text);
     let filtering = filter.filtering();
-    let mut classes: Vec<ObjClass> =
-        ObjClass::ALL.iter().copied().filter(|c| c.is_object_tool() && state.count(*c) > 0).collect();
-    classes.sort_by_key(|c| c.name());
+    let classes: Vec<ObjClass> =
+        crate::classes::listed().into_iter().filter(|c| state.count(*c) > 0).collect();
 
     let mut out = Listing::default();
     // per class: every object, and the ones the filter keeps
@@ -458,16 +463,32 @@ fn hierarchy_rows(
             continue;
         }
         let Some(o) = state.get(nodes[i]) else { continue };
-        let has_children = children[i].iter().any(|c| included[*c]);
+        let points = match &o.data {
+            ObjData::Way(w) => w.points.len(),
+            _ => 0,
+        };
+        let has_children = points > 0 || children[i].iter().any(|c| included[*c]);
         let expanded = open_set.contains(&(o.class, o.name.as_str()));
+        // a way's points open only when asked: a search for a way must not list every point
+        let points_open = expanded;
         rows.push(Row::Object {
             id: nodes[i],
             class: o.class,
             depth,
             direct: direct[i],
             children: has_children,
-            expanded: filtering || expanded,
+            expanded: if points > 0 { points_open } else { filtering || expanded },
         });
+        if points > 0 {
+            if points_open {
+                rows.extend((0..points).map(|k| Row::Point {
+                    way: nodes[i],
+                    index: k as u32,
+                    depth: depth + 1,
+                }));
+            }
+            continue;
+        }
         if !has_children || (!filtering && !expanded) {
             continue;
         }
@@ -480,28 +501,43 @@ fn hierarchy_rows(
     rows
 }
 
-/// `McpSetFilter`'s type list: `;`-separated class names, every one a class of the scene.
-/// Answers the classes to hide, or the error text naming the unknown ones and what the scene
-/// has.
-pub fn types_to_hide(groups: &[Group], types: &str) -> Result<Vec<ObjClass>, String> {
+/// The type filter of `level.view`: the kinds to show, by their keys (`light`, `spawn`) or
+/// names. Answers the kinds to hide, or the sentence naming the unknown ones and what the
+/// scene has.
+pub fn types_to_hide(groups: &[Group], types: &[String]) -> Result<Vec<ObjClass>, String> {
     if types.is_empty() {
         return Ok(Vec::new());
     }
-    let wanted: Vec<&str> = types.split(';').map(|t| t.trim_matches(' ')).filter(|t| !t.is_empty()).collect();
-    let unknown: Vec<&str> = wanted
-        .iter()
-        .copied()
-        .filter(|w| !groups.iter().any(|g| g.class.name().eq_ignore_ascii_case(w)))
-        .collect();
+    let wanted: Vec<ObjClass> = types.iter().filter_map(|t| ObjClass::by_key(t)).collect();
+    let unknown: Vec<&str> =
+        types.iter().map(String::as_str).filter(|t| ObjClass::by_key(t).is_none()).collect();
     if !unknown.is_empty() {
-        let has: Vec<&str> = groups.iter().map(|g| g.class.name()).collect();
-        return Err(format!("unknown object type(s): {}; scene has: {}", unknown.join(", "), has.join(", ")));
+        let has: Vec<&str> = groups.iter().map(|g| g.class.key()).collect();
+        return Err(format!("No kind is called {}; the scene holds {}.", unknown.join(", "), has.join(", ")));
     }
-    Ok(groups
-        .iter()
-        .filter(|g| !wanted.iter().any(|w| g.class.name().eq_ignore_ascii_case(w)))
-        .map(|g| g.class)
-        .collect())
+    Ok(groups.iter().filter(|g| !wanted.contains(&g.class)).map(|g| g.class).collect())
+}
+
+/// What a selection made elsewhere does to the list's scroll on this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScrollDecision {
+    /// The listing is not of the scene as it is now: keep the target for a later frame.
+    Wait,
+    /// Bring this row into view; the target is done.
+    Scroll(usize),
+    /// The object does not show (filtered out, gone): the target is dropped.
+    Drop,
+}
+
+/// Where to scroll for a selected object: only a listing computed for the scene's revision
+/// `now`, with the folds that reveal the object (`fresh`), may place it - an older one holds old
+/// row indices.
+#[must_use]
+pub fn scroll_decision(target: ObjId, listing: &Listing, now: gz_base::Rev, fresh: bool) -> ScrollDecision {
+    if !fresh || listing.rev != now {
+        return ScrollDecision::Wait;
+    }
+    listing.row_of(target).map_or(ScrollDecision::Drop, ScrollDecision::Scroll)
 }
 
 #[cfg(test)]
@@ -563,11 +599,57 @@ mod tests {
     #[test]
     fn unknown_types_are_named() {
         let groups = vec![
-            Group { class: ObjClass::Way, total: 1, shown: 1 },
             Group { class: ObjClass::Light, total: 1, shown: 1 },
+            Group { class: ObjClass::Way, total: 1, shown: 1 },
         ];
-        assert_eq!(types_to_hide(&groups, "way"), Ok(vec![ObjClass::Light]));
-        let e = types_to_hide(&groups, "way;boat").unwrap_err();
-        assert!(e.starts_with("unknown object type(s): boat; scene has: way, light"));
+        assert_eq!(types_to_hide(&groups, &["way".into()]), Ok(vec![ObjClass::Light]));
+        assert_eq!(types_to_hide(&groups, &["Way Path".into()]), Ok(vec![ObjClass::Light]));
+        let e = types_to_hide(&groups, &["way".into(), "boat".into()]).unwrap_err();
+        assert_eq!(e, "No kind is called boat; the scene holds light, way.");
+    }
+
+    #[test]
+    fn kinds_come_in_the_order_of_their_names() {
+        let s = scene(&[("w1", ObjClass::Way), ("l1", ObjClass::Light), ("g1", ObjClass::Glow)]);
+        let l = compute(&s, &Filter::default(), &Folds::default());
+        let order: Vec<ObjClass> = l.groups.iter().map(|g| g.class).collect();
+        assert_eq!(order, vec![ObjClass::Glow, ObjClass::Light, ObjClass::Way]);
+    }
+
+    #[test]
+    fn a_way_lists_its_points_when_open() {
+        let mut s = SceneState::default();
+        let w = gz_scene::objects::WayData {
+            kind: 0,
+            points: vec![
+                gz_scene::objects::WayPoint::new("p0", gz_scene::math::Vec3::ZERO),
+                gz_scene::objects::WayPoint::new("p1", gz_scene::math::Vec3::ZERO),
+            ],
+        };
+        s.insert(Object::new(ObjClass::Way, "path", ObjData::Way(w)));
+        let f = Filter { hierarchy: true, ..Filter::default() };
+        let closed = compute(&s, &f, &Folds::default());
+        assert_eq!(closed.rows.len(), 1);
+        assert!(matches!(closed.rows[0], Row::Object { children: true, expanded: false, .. }));
+        let folds = Folds { collapsed: Vec::new(), expanded: vec![(ObjClass::Way, "path".into())] };
+        let open = compute(&s, &f, &folds);
+        assert_eq!(open.rows.len(), 3);
+        assert!(matches!(open.rows[2], Row::Point { index: 1, depth: 1, .. }));
+    }
+
+    #[test]
+    fn a_stale_listing_never_places_the_scroll() {
+        let s = scene(&[("l1", ObjClass::Light), ("l2", ObjClass::Light)]);
+        let id = s.find(ObjClass::Light, "l2").map(|o| o.id).unwrap();
+        let mut l = compute(&s, &Filter::default(), &Folds::default());
+        l.rev = gz_base::Rev(4);
+        // computed for an older scene, or not the fresh answer for these folds: wait
+        assert_eq!(scroll_decision(id, &l, gz_base::Rev(5), true), ScrollDecision::Wait);
+        assert_eq!(scroll_decision(id, &l, gz_base::Rev(4), false), ScrollDecision::Wait);
+        assert_eq!(scroll_decision(id, &l, gz_base::Rev(4), true), ScrollDecision::Scroll(2));
+        let f = Filter { text: "l1".into(), ..Filter::default() };
+        let mut cut = compute(&s, &f, &Folds::default());
+        cut.rev = gz_base::Rev(4);
+        assert_eq!(scroll_decision(id, &cut, gz_base::Rev(4), true), ScrollDecision::Drop);
     }
 }

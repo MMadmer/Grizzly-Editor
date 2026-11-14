@@ -4,14 +4,6 @@
 use egui::{Id, Response, Stroke, Ui, pos2};
 use gz_ui::palette;
 
-/// A folding header outside a property grid (the C++ `XUI::Section`): a chevron and the title,
-/// the whole row a click target. `open` is its state until it is clicked; the state is kept by
-/// `id_salt`. Returns whether it is open.
-pub fn local_section(ui: &mut Ui, id_salt: &str, title: &str, open: bool) -> bool {
-    let id = ui.make_persistent_id(("gz-ui-app.section", id_salt));
-    gz_ui::form::section(ui, id, title, open)
-}
-
 /// A one-line text field with a hint while it is empty, `width` wide, in the kit's look (the
 /// kit's `text_field` has no hint of its own).
 pub fn local_text_field(ui: &mut Ui, id_salt: &str, value: &mut String, hint: &str, width: f32) -> Response {

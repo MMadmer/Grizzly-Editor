@@ -1,10 +1,10 @@
 //! The Level dock as data: the size classes, the panels, the four side slots around the
-//! viewport, the layout each class builds and when a layout counts as customised
-//! (`BuildLevelLayout`, `UIMainForm::SizeClass` / `ResetLayout` of `UIMainForm.cpp`).
+//! viewport, the layout each class builds and when a layout counts as customised.
 //!
-//! Wide (1400 x 640 pt and up): Tools 260 left, a 340 right column (the Outliner, 40 %, over
-//! Details + Level Settings), a 240 strip under the viewport only with the Content Browser and
-//! the Output Log. Compact: Tools 240, the right column 300, the browser and the log in drawers.
+//! Wide (1400 x 640 pt and up): Place (the mode's panel) 260 left, a 340 right column (the
+//! Outliner, 40 %, over Details + Level Settings), a 240 strip under the viewport only with the
+//! Content Browser and the Output Log. Compact: Place 240, the right column 300, the browser and
+//! the log in drawers.
 //!
 //! What persists goes into the kit's layout store (`level.*` keys), which the editor's
 //! settings file keeps: the sizes (the splitters' keys), and per panel its slot and whether it
@@ -24,7 +24,7 @@ pub enum SizeClass {
 }
 
 impl SizeClass {
-    /// `UIMainForm::SizeClass`: by the window's size in pt.
+    /// The class of a window of this size, pt.
     #[must_use]
     pub fn of(width: f32, height: f32) -> Self {
         if width >= 1400.0 && height >= 640.0 { SizeClass::Wide } else { SizeClass::Compact }
@@ -57,33 +57,40 @@ impl SizeClass {
 /// The panels the dock holds (the viewport is its centre, not one of them).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PanelId {
-    Tools,
+    Place,
     Outliner,
     Details,
     LevelSettings,
     ContentBrowser,
     OutputLog,
+    /// The build's problems, beside the Output Log.
+    Problems,
 }
 
+/// How many panels the dock holds.
+pub const PANELS: usize = 7;
+
 impl PanelId {
-    pub const ALL: [PanelId; 6] = [
-        PanelId::Tools,
+    pub const ALL: [PanelId; PANELS] = [
+        PanelId::Place,
         PanelId::Outliner,
         PanelId::Details,
         PanelId::LevelSettings,
         PanelId::ContentBrowser,
         PanelId::OutputLog,
+        PanelId::Problems,
     ];
 
     #[must_use]
     pub fn index(self) -> usize {
         match self {
-            PanelId::Tools => 0,
+            PanelId::Place => 0,
             PanelId::Outliner => 1,
             PanelId::Details => 2,
             PanelId::LevelSettings => 3,
             PanelId::ContentBrowser => 4,
             PanelId::OutputLog => 5,
+            PanelId::Problems => 6,
         }
     }
 
@@ -91,12 +98,13 @@ impl PanelId {
     #[must_use]
     pub fn id(self) -> &'static str {
         match self {
-            PanelId::Tools => "tools",
+            PanelId::Place => "place",
             PanelId::Outliner => "world_outliner",
             PanelId::Details => "details",
             PanelId::LevelSettings => "level_settings",
             PanelId::ContentBrowser => "content_browser",
             PanelId::OutputLog => "output_log",
+            PanelId::Problems => "problems",
         }
     }
 
@@ -115,12 +123,13 @@ impl PanelId {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            PanelId::Tools => "Tools",
+            PanelId::Place => "Place",
             PanelId::Outliner => "World Outliner",
             PanelId::Details => "Details",
             PanelId::LevelSettings => "Level Settings",
             PanelId::ContentBrowser => "Content Browser",
             PanelId::OutputLog => "Output Log",
+            PanelId::Problems => "Problems",
         }
     }
 
@@ -128,11 +137,13 @@ impl PanelId {
     #[must_use]
     pub fn min_size(self) -> (f32, f32) {
         match self {
-            PanelId::Tools => (240.0, 200.0),
+            PanelId::Place => (240.0, 200.0),
             PanelId::Outliner => (220.0, 160.0),
             PanelId::Details | PanelId::LevelSettings => (280.0, 200.0),
             PanelId::ContentBrowser => (360.0, 150.0),
             PanelId::OutputLog => (320.0, 110.0),
+            // it shares the Compact right column, 300 pt, with Details
+            PanelId::Problems => (280.0, 110.0),
         }
     }
 
@@ -231,18 +242,18 @@ pub struct DockLayout {
     /// The author moved a panel or a splitter: crossing a class keeps the layout.
     pub custom: bool,
     /// Where each panel docks (`PanelId::index`); `None` lives in a drawer only.
-    pub slot: [Option<Slot>; 6],
-    pub open: [bool; 6],
+    pub slot: [Option<Slot>; PANELS],
+    pub open: [bool; PANELS],
     /// The tab in front of each slot.
     pub front: [Option<PanelId>; 4],
     /// Out in a window of its own.
-    pub floating: [bool; 6],
+    pub floating: [bool; PANELS],
     /// Where its window stood: x, y, w, h in pt of the screen.
-    pub float_rect: [Option<[f32; 4]>; 6],
+    pub float_rect: [Option<[f32; 4]>; PANELS],
 }
 
 impl DockLayout {
-    /// `BuildLevelLayout` for a class, with every panel of the class open (`ws.built`); the
+    /// The layout a class builds, with every panel of the class open; the
     /// open state of a panel the class has no room for stays as it was.
     #[must_use]
     pub fn built(class: SizeClass, before: Option<&DockLayout>) -> Self {
@@ -255,8 +266,10 @@ impl DockLayout {
             Some(Slot::RightBottom),
             strip,
             strip,
+            // the build's problems: beside the log, or with Details where the log is a drawer
+            Some(if wide { Slot::Bottom } else { Slot::RightBottom }),
         ];
-        let mut open = [true; 6];
+        let mut open = [true; PANELS];
         if !wide {
             for p in [PanelId::ContentBrowser, PanelId::OutputLog] {
                 open[p.index()] = before.is_some_and(|b| b.open[p.index()]);
@@ -268,13 +281,13 @@ impl DockLayout {
             slot,
             open,
             front: [
-                Some(PanelId::Tools),
+                Some(PanelId::Place),
                 Some(PanelId::Outliner),
                 Some(PanelId::Details),
                 if wide { Some(PanelId::ContentBrowser) } else { None },
             ],
-            floating: [false; 6],
-            float_rect: before.map_or([None; 6], |b| b.float_rect),
+            floating: [false; PANELS],
+            float_rect: before.map_or([None; PANELS], |b| b.float_rect),
         }
     }
 
@@ -340,7 +353,7 @@ impl DockLayout {
     }
 
     /// Whether the slot is drawn: it holds an open panel, and the strip under the viewport only
-    /// in the Wide class or in a customised layout (`DrawLevel`'s `strip`).
+    /// in the Wide class or in a customised layout.
     #[must_use]
     pub fn slot_shown(&self, s: Slot, class: SizeClass) -> bool {
         if s == Slot::Bottom && class != SizeClass::Wide && !self.custom {
@@ -491,7 +504,7 @@ fn front_key(s: Slot) -> String {
     format!("level.front.{}", s.index())
 }
 
-/// Sizes rounded to 8 pt, as the C++ node signature compares them.
+/// Sizes rounded to 8 pt: a splitter a few points off its place is not a layout of the author's.
 #[must_use]
 pub fn round8(v: f32) -> i32 {
     (v / 8.0).round() as i32

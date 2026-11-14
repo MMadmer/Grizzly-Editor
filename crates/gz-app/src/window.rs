@@ -241,11 +241,20 @@ impl Default for WindowOptions {
     }
 }
 
+/// The gate a renderer of this editor is made with: the window's, or one of its own for an editor
+/// without a window (nothing configures a surface there).
+#[must_use]
+pub fn gpu_gate(editor: &Editor) -> gz_task::Gate {
+    editor.services.get::<WindowLink>().map(|l| l.gpu_gate()).unwrap_or_default()
+}
+
 /// How other threads reach the window: pictures of it, and the GPU it draws with.
 #[derive(Default)]
 pub struct WindowLink {
     captures: Mutex<Vec<egui::ScreenshotCallback>>,
     gpu: Mutex<Option<RenderState>>,
+    /// Closed while a surface is configured; every thread that submits to the device passes it.
+    gate: gz_task::Gate,
     caption: Arc<gz_win::CaptionHitTest>,
     /// The titles of the windows of the editor's own the picture does not hold.
     outside: Mutex<Vec<String>>,
@@ -262,6 +271,14 @@ impl WindowLink {
     #[must_use]
     pub fn gpu(&self) -> Option<RenderState> {
         self.gpu.lock().clone()
+    }
+
+    /// The gate of the window's device: a renderer on that device is made with it, so that no
+    /// submission of its thread crosses a surface's configuration (the graphics runtime refuses
+    /// one that does, and the window would keep a surface of the old size).
+    #[must_use]
+    pub fn gpu_gate(&self) -> gz_task::Gate {
+        self.gate.clone()
     }
 
     /// What the window's hit test answers from: the shell publishes the caption every frame.
@@ -358,9 +375,16 @@ struct App {
     polls: Vec<tokio::task::JoinHandle<()>>,
     /// A frame is due.
     dirty: bool,
-    /// What made the next frame due, for `frame_pacing`'s `ui_frame_causes`: a ping of the
+    /// What made the next frame due, for `perf.frames`' `ui_frame_causes`: a ping of the
     /// editor's wake from another thread, an event of the window, egui's own request.
     woken: bool,
+    /// A wake is on its way to the loop and was not taken yet: one message stands for every ping
+    /// since. A job that pings a thousand times a second would otherwise fill the loop's queue,
+    /// and the loop empties its queue before it draws - the frame the pings ask for came a
+    /// second late.
+    wake_pending: Arc<AtomicBool>,
+    /// The same for the message that says a later frame was asked for.
+    later_pending: Arc<AtomicBool>,
     input: bool,
     asked: bool,
     /// Tells the loop from any thread that egui asked for a later frame.
@@ -483,20 +507,26 @@ impl App {
         let repaint_at = self.repaint_at.clone();
         let wake = self.editor.exec.wake().clone();
         let proxy = self.proxy.clone();
+        let later_pending = self.later_pending.clone();
         ctx.set_request_repaint_callback(move |info| {
             let when = Instant::now() + info.delay;
-            {
+            let sooner = {
                 // the soonest frame asked for wins until a frame answers it
                 let mut at = repaint_at.lock();
-                if at.is_none_or(|a| when < a) {
+                let sooner = at.is_none_or(|a| when < a);
+                if sooner {
                     *at = Some(when);
                 }
-            }
+                sooner
+            };
             // A frame asked for later is not drawn now: a 100 ms request answered at once (the
             // status bar's job chip) drew every frame the window could while a job ran
             if info.delay.is_zero() {
                 wake.ping();
-            } else {
+            } else if sooner && !later_pending.swap(true, Ordering::AcqRel) {
+                // the loop only has to learn of a time sooner than the one it waits for, and one
+                // message says so: a thread that asks a thousand times a second must not fill the
+                // loop's queue
                 let _ = proxy.send_event(UserEvent::Later);
             }
         });
@@ -624,6 +654,8 @@ impl App {
     fn run_frame(&mut self, event_loop: &ActiveEventLoop) {
         let Some(live) = self.live.as_mut() else { return };
         let began = Instant::now();
+        // what the UI thread itself spent on the processor: a stall with little of it was a wait
+        let cpu_began = gz_win::thread_cpu_seconds();
         // before anything is read: a request held for frames counts only frames begun after it
         self.editor.frames.begin();
         self.dirty = false;
@@ -751,7 +783,16 @@ impl App {
             } else {
                 report.during.clone()
             };
-            crate::stalls::Stalls::of(&self.editor).note(&self.editor, work_ms, &report.active_tab, &during);
+            if work_ms > crate::stalls::STALL_MS {
+                let cpu_ms = (gz_win::thread_cpu_seconds() - cpu_began) * 1000.0;
+                let during = format!("{during}; {cpu_ms:.0} ms of it on the processor");
+                crate::stalls::Stalls::of(&self.editor).note(
+                    &self.editor,
+                    work_ms,
+                    &report.active_tab,
+                    &during,
+                );
+            }
         }
         self.editor.frames.publish(FrameStamp {
             frame: self.frame,
@@ -799,7 +840,12 @@ impl App {
             };
             // the device exists: making a surface awaits nothing, so the future ends on its first
             // poll and the UI thread blocks on nothing
-            match sh.painter.set_window(id, Some(window.clone())).now_or_never() {
+            let gate = gpu_gate(editor);
+            let made = {
+                let _alone = gate.close();
+                sh.painter.set_window(id, Some(window.clone())).now_or_never()
+            };
+            match made {
                 Some(Ok(())) => {}
                 Some(Err(e)) => {
                     editor.log.warn(format!("a panel's window could not be drawn into: {e}"));
@@ -887,7 +933,12 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
         // `Later`: `about_to_wait` sets the loop's wait from the time egui asked for
+        if matches!(event, UserEvent::Later) {
+            self.later_pending.store(false, Ordering::Release);
+        }
         if matches!(event, UserEvent::Wake) {
+            // cleared before the frame is marked due: a ping from here on sends a message again
+            self.wake_pending.store(false, Ordering::Release);
             self.dirty = true;
             self.woken = true;
         }
@@ -901,11 +952,16 @@ impl ApplicationHandler<UserEvent> for App {
         }
         let kind = event_name(&event);
         let began = Instant::now();
+        let cpu_began = gz_win::thread_cpu_seconds();
         self.handle_window_event(event_loop, window_id, event);
         let ms = began.elapsed().as_secs_f32() * 1000.0;
         if self.frame > 1 {
             let tab = self.editor.frames.current().active_tab;
-            crate::stalls::Stalls::of(&self.editor).note(&self.editor, ms, &tab, &format!("event: {kind}"));
+            if ms > crate::stalls::STALL_MS {
+                let cpu_ms = (gz_win::thread_cpu_seconds() - cpu_began) * 1000.0;
+                let during = format!("event: {kind}; {cpu_ms:.0} ms of it on the processor");
+                crate::stalls::Stalls::of(&self.editor).note(&self.editor, ms, &tab, &during);
+            }
         }
     }
 
@@ -1042,6 +1098,7 @@ impl App {
                                 std::num::NonZeroU32::new(size.width),
                                 std::num::NonZeroU32::new(size.height),
                             ) {
+                                let _alone = self.link.gate.close();
                                 painter.on_window_resized(*id, w, h);
                             }
                         }
@@ -1069,6 +1126,7 @@ impl App {
                     (std::num::NonZeroU32::new(size.width), std::num::NonZeroU32::new(size.height))
                 {
                     live.size_px = [size.width, size.height];
+                    let _alone = self.link.gate.close();
                     live.shared.borrow_mut().painter.on_window_resized(ViewportId::ROOT, w, h);
                 }
                 self.dirty = true;
@@ -1139,8 +1197,13 @@ pub fn run(
         .map_err(|e| format!("the event loop did not start: {e}"))?;
     let proxy = event_loop.create_proxy();
     let wake_proxy = proxy.clone();
+    let wake_pending = Arc::new(AtomicBool::new(false));
+    let pending = wake_pending.clone();
     editor.exec.wake().set(move || {
-        let _ = wake_proxy.send_event(UserEvent::Wake);
+        // one message at a time: the loop clears the flag as it takes the message
+        if !pending.swap(true, Ordering::AcqRel) {
+            let _ = wake_proxy.send_event(UserEvent::Wake);
+        }
     });
     let link = editor.services.get_or_init(WindowLink::default);
     let leaving = Arc::new(AtomicBool::new(false));
@@ -1156,6 +1219,8 @@ pub fn run(
         polls: Vec::new(),
         dirty: true,
         woken: false,
+        wake_pending,
+        later_pending: Arc::new(AtomicBool::new(false)),
         input: false,
         asked: false,
         proxy,

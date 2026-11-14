@@ -177,7 +177,7 @@ pub struct Floated {
     pub rect: Option<[f32; 4]>,
 }
 
-/// A panel in a native window of its own (`ImGuiWindowFlags` of a dragged-out dock node):
+/// A panel in a window of its own (dragged out of the dock):
 /// egui's immediate viewport, titled with the panel's name, where it stood last, at least the
 /// panel's minimum size. `body` draws into it.
 pub fn floating_window(

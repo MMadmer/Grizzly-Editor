@@ -125,9 +125,9 @@ class Load:
     def reader(self, seed: int) -> None:
         rnd = random.Random(seed)
         reads = [("state", {}), ("scene.info", {}), ("scene.objects", {"classes": ["spawn"], "limit": 20}),
-                 ("game.lookup", {"type": "quest_id"}), ("mod.info", {}), ("ui.tasks", {}), ("frame_pacing", {}),
-                 ("camera_get", {}), ("ui.list", {}), ("scene.get", {}), ("scene.objects", {"selected": True}),
-                 ("list_commands", {}), ("asset.check", {"path": "mod.ltx"}), ("world.info", {}), ("scene.info", {"summary": False})]
+                 ("game.lookup", {"type": "quest_id"}), ("mod.info", {}), ("ui.tasks", {}), ("perf.frames", {}),
+                 ("viewport.camera", {}), ("ui.list", {}), ("scene.get", {}), ("scene.objects", {"selected": True}),
+                 ("help", {}), ("asset.check", {"path": "mod.ltx"}), ("world.info", {}), ("scene.info", {"summary": False})]
         while self.running():
             cmd, args = rnd.choice(reads)
             a, dt, why = call(cmd, **args)
@@ -140,7 +140,7 @@ class Load:
             a, dt, why = call("scene.place", kind="spawn", section="graph_point", position=[x, -20.0, z])
             self.note("scene.place", a, dt, why)
             name = ((a or {}).get("object") or {}).get("name", "graph_point")
-            for cmd, args in (("camera_set", {"x": x, "y": 10.0, "z": z}),
+            for cmd, args in (("viewport.camera", {"action": "set", "position": [x, 10.0, z]}),
                               ("scene.select", {"objects": [name]}),
                               ("scene.set", {"objects": [name], "position": [x, -19.0, z]}),
                               ("doc.undo", {"doc": "level"}), ("doc.redo", {"doc": "level"}),
@@ -156,7 +156,7 @@ class Load:
                               ("shot.window", {}),
                               ("ui.drawer", {"action": "close"}),
                               ("ui.tab", {"action": "activate", "doc": "level"}),
-                              ("ui.panel", {"action": "focus", "id": rnd.choice(["details", "world_outliner", "tools"])}),
+                              ("ui.panel", {"action": "focus", "id": rnd.choice(["details", "world_outliner", "place"])}),
                               ("ui.palette", {"action": "query", "query": rnd.choice(["log", "scene", "build"])}),
                               ("ui.audit", {})):
                 a, dt, why = call(cmd, **args)

@@ -1,4 +1,4 @@
-//! Import Base Scene (`Import Base Scene###dlg.import_base_scene`, M; `EditorProject::DrawUI`):
+//! Import Base Scene (`Import Base Scene###dlg.import_base_scene`, M):
 //! the editor library's source scenes with a search, "In project" on what the project holds;
 //! Import copies one into the project (`gz_project::project::import_base_scene`, on the IO
 //! pool). The list and what the project holds of it are read once, as the dialog opens.

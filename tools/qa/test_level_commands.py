@@ -10,6 +10,11 @@
      and the light, "Built at Draft quality."; the same draft build again builds nothing; the level folder holds
      what the game loads (level, level.geom, level.cform, level.ai, level.graph, level.ltx) and build.state, the
      spawn is in gamedata\\spawns
+  U  building from the window: the Level toolbar's Build Level, Play and Stop are labelled actions; Build Level's
+     menu lists every step under its title, why it is not fresh in the row's tip; the status bar's Build chip names
+     the stale steps and opens the same popover; Validate's problems are the Problems panel's rows, and going to one
+     selects its object; Edit > Delete (the action) deletes a light and a glow together; the menus' rows are actions
+     off without a selection; pictures under --shots
   R  the status after a restart: the scene saved, the editor closed and started again on the copy - level.status
      says what it said before; a scene object moved - the steps that read it are stale ("1 object moved."), the
      others not
@@ -47,7 +52,8 @@ import qa_target
 
 MCP = qa_target.MCP
 SCENE = "mp_test"
-PHASES = "ABRSCEYKLZ"
+PHASES = "ABURSCEYKLZ"
+SHOTS: str | None = None
 results: list[tuple[bool, str]] = []
 
 
@@ -235,6 +241,116 @@ def phase_b() -> None:
         text = f.read()
     check("build = 1" in text and "light = {" in text and "objects = {" in text,
           "B build.state is Lua data with every step's fingerprint and the objects", text[:200])
+
+
+# ---- U ------------------------------------------------------------------------------------------------------------
+
+def save_shot(name: str) -> None:
+    import base64
+    pic = mcp("shot.window", timeout=120)
+    data = base64.b64decode(pic.get("png_base64") or b"")
+    if SHOTS and data:
+        os.makedirs(SHOTS, exist_ok=True)
+        with open(os.path.join(SHOTS, name + ".png"), "wb") as f:
+            f.write(data)
+
+
+def audit_controls() -> dict:
+    audit = mcp("ui.audit")
+    return {c.get("label"): c for c in audit.get("controls", []) if c.get("label")}
+
+
+def phase_u() -> None:
+    mcp("ui.tab", action="activate", doc="level")
+    mcp("app.window", action="resize", width=1600, height=900)
+    c = audit_controls()
+    check(all(x in c for x in ("Save", "Build Level", "Play", "Stop", "More")),
+          "U the Level toolbar: Save, Build Level, Play, Stop, More, each labelled", short(sorted(c)))
+    old = [x for x in ("Build Collision", "Build AI Map", "Build Game Graph", "Build All") if x in c]
+    check(not old, "U no icon-only build button is left", ", ".join(old))
+    states = status_states()
+    shown = mcp("level.show", popover="build")
+    check(shown.get("ok") and shown.get("popover_open"), "U Build Level's menu opens", short(shown))
+    save_shot("build_menu")
+    c = audit_controls()
+    titles = [s.get("title") for s in states.values()]
+    missing = [t for t in titles if t not in c]
+    check(states and not missing and "Rebuild All" in c and "Advanced" in c,
+          "U it lists every step by its title, Rebuild All and Advanced", "missing: " + ", ".join(missing))
+    # ("Details" is also a panel's tab: its row is told apart by nothing in the audit)
+    whys = [(s.get("title"), s.get("why")) for s in states.values() if s.get("why") and s.get("title") != "Details"]
+    wrong = [t for t, w in whys if (c.get(t) or {}).get("help") != w]
+    check(not wrong, "U a step's row says why it is not fresh in its tip", ", ".join(wrong))
+    mcp("level.show", popover="none")
+    if mcp("level.show").get("build"):
+        chip = mcp("level.show", popover="rebuild")
+        check(chip.get("popover_open"), "U the Build chip opens the same popover", short(chip))
+        save_shot("build_chip_popover")
+        c = audit_controls()
+        check(any(k.startswith("Build: ") for k in c) and "Build Level" in c,
+              "U the chip names the stale steps", short([k for k in c if k.startswith("Build")]))
+        mcp("level.show", popover="none")
+    # the popover while a build runs: drawn from the status, nothing waits for the build
+    started = mcp("level.build", force=True, quality="draft", wait=False)
+    during = mcp("level.show", popover="build")
+    check(started.get("ok") and during.get("popover_open"), "U Build Level's menu opens while a build runs",
+          short(started) + short(during))
+    save_shot("build_menu_during_build")
+    mcp("level.show", popover="none")
+    if started.get("job"):
+        mcp("job.wait", job=started["job"], timeout=600)
+    # the menus: their rows are actions, off without a selection
+    mcp("scene.select", none=True)
+    mcp("ui.popup", show="menu:Scene")
+    save_shot("menu_scene")
+    c = audit_controls()
+    check(c.get("Select All", {}).get("enabled") is True and c.get("Hide Unselected", {}).get("enabled") is False,
+          "U Scene: Select All is on, Hide Unselected off without a selection",
+          short({k: c.get(k) for k in ("Select All", "Hide Unselected")}))
+    for menu in ("Build", "View", "File", "Edit"):
+        mcp("ui.popup", show="menu:" + menu)
+        save_shot("menu_" + menu.lower())
+    mcp("ui.popup", show="none")
+    keys = {r.get("id"): r for r in mcp("app.keys", query="Build Level").get("keys", [])}
+    check("level.build" in keys and keys["level.build"].get("command") == "level.build",
+          "U Build Level is an action over level.build", short(keys.get("level.build")))
+    # Edit > Delete through its action: a light and a glow go together
+    light = (mcp("scene.place", kind="light", position=[1, 2, 1]).get("object") or {}).get("name")
+    glow = (mcp("scene.place", kind="glow", position=[1, 2, 3]).get("object") or {}).get("name")
+    mcp("scene.select", objects=[light, glow])
+    mcp("ui.tab", action="activate", doc="level")
+    ran = mcp("ui.palette", action="run", id="edit.delete")
+    deadline = time.monotonic() + 10
+    left = {light, glow}
+    while left and time.monotonic() < deadline:
+        names = {o.get("name") for o in mcp("scene.objects", classes=["light", "glow"], limit=5000).get("objects") or []}
+        left = {light, glow} & names
+        time.sleep(0.2)
+    check(ran.get("ok") and not left, "U Edit > Delete deletes a light and a glow selected together",
+          short(ran) + " left: " + ", ".join(sorted(left)))
+    # the problems: Validate's findings are the Problems panel's rows; going to one selects its object
+    mcp("level.validate", timeout=300)
+    listed = mcp("level.problems", limit=1000)
+    total = listed.get("total", 0)
+    mcp("ui.panel", action="open", id="problems")
+    rows = (mcp("level.show").get("problems") or {}).get("rows")
+    deadline = time.monotonic() + 10
+    while rows != total and time.monotonic() < deadline:
+        time.sleep(0.2)
+        rows = (mcp("level.show").get("problems") or {}).get("rows")
+    check(rows == total, "U the Problems panel lists the build's %s problems" % total, "rows %s" % rows)
+    save_shot("problems")
+    named = [(i, p) for i, p in enumerate(listed.get("problems") or []) if p.get("object")]
+    if named:
+        i, p = named[0]
+        went = mcp("level.show", problem=i)
+        sel = mcp("scene.info").get("selection") or {}
+        names = sel.get("objects") if isinstance(sel, dict) else sel
+        check(went.get("ok") and p["object"] in json.dumps(names), "U going to a problem selects its object",
+              short(went) + short(sel))
+    elif total:
+        went = mcp("level.show", problem=0)
+        check(went.get("ok"), "U going to a problem without an object answers", short(went))
 
 
 # ---- R ------------------------------------------------------------------------------------------------------------
@@ -457,7 +573,7 @@ def phase_z() -> None:
     check(st.get("ok") and not stalls, "Z no UI pass stalled (worst %s ms)" % st.get("worst_ms"), short(stalls[:5]))
 
 
-STEPS = {"A": phase_a, "B": phase_b, "R": phase_r, "S": phase_s, "C": phase_c, "E": phase_e, "Y": phase_y,
+STEPS = {"A": phase_a, "B": phase_b, "U": phase_u, "R": phase_r, "S": phase_s, "C": phase_c, "E": phase_e, "Y": phase_y,
          "K": phase_k, "L": phase_l, "Z": phase_z}
 
 
@@ -487,7 +603,11 @@ def main() -> int:
     ap.add_argument("--project", required=True, help="a project to COPY and run against")
     ap.add_argument("--only", help="phase letters, e.g. A,B")
     ap.add_argument("--keep", action="store_true", help="keep the throw-away copy")
+    ap.add_argument("--shots", help="a folder for the pictures of phase U")
     args = ap.parse_args()
+    global SHOTS
+    SHOTS = args.shots
+
     only = [p.strip().upper() for p in (args.only or PHASES).split(",") if p.strip()]
     if len(only) == 1 and len(only[0]) > 1:
         only = list(only[0])

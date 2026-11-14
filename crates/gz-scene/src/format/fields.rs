@@ -753,18 +753,6 @@ static LIGHT: &[Field<Object>] = &[
     ),
     field!(
         Light,
-        "viewport",
-        "Lights the Viewport",
-        "Usage",
-        "",
-        Ty::Bool,
-        "true",
-        "One of the lights the viewport's Lighting view mode shows.",
-        |d| Value::Bool(d.use_in_d3d),
-        |d, v| d.use_in_d3d = as_bool(v)?
-    ),
-    field!(
-        Light,
         "light_flags",
         "Other Light Flags",
         "Usage",

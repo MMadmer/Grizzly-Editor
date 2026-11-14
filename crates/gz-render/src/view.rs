@@ -11,10 +11,10 @@ pub enum ViewMode {
     Lit,
     /// Textures as they are.
     Unlit,
-    /// The edges of every mesh, no hidden lines removed (`D3DFILL_WIREFRAME`).
+    /// The edges of every mesh, no hidden lines removed.
     Wireframe,
     /// The scene's lights and the weather of [`crate::Environment`], per pixel, the way the game
-    /// lights the level (`EGameLighting`). Without an environment it is `Lit`.
+    /// lights the level. Without an environment it is `Lit`.
     GameLighting,
 }
 
@@ -43,15 +43,10 @@ bitflags::bitflags! {
         /// gizmo or helpers whatever the other flags say, and no instance flagged
         /// [`crate::InstanceFlags::HIDDEN_IN_PREVIEW`].
         const PREVIEW = 1 << 3;
-        /// [`ViewMode::Lit`] by the list's directional lights the way the C++ editor's
-        /// fixed-function emulation lights (`EDevice_PushFFConstants`, at most four, no
-        /// ambient), and a surface no light reaches as it is (`calc_ffp_lighting` returns 1);
-        /// without it the studio light.
-        const SCENE_LIGHTS = 1 << 4;
     }
 }
 
-/// The floor grid (`CDrawUtilities::UpdateGrid`): `cells` each way from the origin, a thick line
+/// The floor grid: `cells` each way from the origin, a thick line
 /// every `subdiv` cells.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Grid {
@@ -75,28 +70,12 @@ impl Default for Grid {
     }
 }
 
-/// The View menu's render switches (`psDeviceFlags`, `dwShadeMode`): how surfaces are drawn
-/// besides the view mode.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// What a frame shows besides its view mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ViewStyle {
-    /// `D3DSHADE_FLAT`: one normal per face.
-    pub flat: bool,
-    /// `rsRenderTextures`: off draws every surface white.
-    pub textures: bool,
-    /// `rsFilterLinear`: off samples the nearest texel.
-    pub linear: bool,
-    /// `rsEdgedFaces`: the edges drawn over the surfaces.
-    pub edged: bool,
-    /// `rsFog`: the weather's fog with [`ViewStyle::environment`], the editor's own otherwise.
+    /// Fog in a view without the weather: white, from a tenth of the far plane to nearly all of
+    /// it. Game lighting always fogs with the weather's own.
     pub fog: bool,
-    /// `rsEnvironment`: the weather's sky and fog colour round the scene in every view mode.
-    pub environment: bool,
-}
-
-impl Default for ViewStyle {
-    fn default() -> Self {
-        Self { flat: false, textures: true, linear: true, edged: false, fog: false, environment: false }
-    }
 }
 
 /// A frame's view.
@@ -137,8 +116,7 @@ impl View {
     /// The same view as a picture: [`ViewFlags::PREVIEW`] alone.
     #[must_use]
     pub fn as_preview(&self) -> Self {
-        // the picture is lit as the view is
-        Self { flags: ViewFlags::PREVIEW | (self.flags & ViewFlags::SCENE_LIGHTS), ..*self }
+        Self { flags: ViewFlags::PREVIEW, ..*self }
     }
 
     pub(crate) fn shows(&self, flag: ViewFlags) -> bool {

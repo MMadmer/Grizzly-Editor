@@ -1,6 +1,6 @@
 [package]
 name = "gz-ui-content"
-description = "The Content Browser: the project's files, the editor's library and the linked game's content as folders and tiles."
+description = "The Content Browser: the project's files and the Library - the linked game and the editor's library by kind - as tiles."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -30,4 +30,8 @@ glam.workspace = true
 parking_lot.workspace = true
 rustc-hash.workspace = true
 serde_json.workspace = true
-# the system's folder dialog (Link Game...)
+serde.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

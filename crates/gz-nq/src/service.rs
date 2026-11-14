@@ -436,7 +436,7 @@ impl NqService {
         let rev = self
             .game_rev(editor)
             .mix(self.world_lookup().map_or(Rev::ZERO, |w| w.rev()))
-            .mix(stamp(&self.tree(), PROJECT_PICKER_FILES))
+            .mix(project_picker_stamp(&self.tree()))
             .mix(scene.as_ref().map_or(Rev::ZERO, |s| s.rev()))
             .mix(Rev(u64::from(game.is_some())));
         if let Some(p) = self.pickers.peek_at(&(), rev) {
@@ -486,7 +486,7 @@ impl NqService {
 
     async fn project_part(&self) -> Arc<ProjectPart> {
         let tree = self.tree();
-        let rev = stamp(&tree, PROJECT_PICKER_FILES);
+        let rev = project_picker_stamp(&tree);
         if let Some(p) = self.project_pickers.peek_at(&(), rev) {
             return p;
         }
@@ -858,6 +858,38 @@ const PROJECT_PICKER_FILES: &[(&str, &str)] = &[
     ("gamedata/configs/ui/textures_descr", "xml"),
 ];
 
+/// The spawn files of the project's scenes: `<name>.scene` keeps its spawn points in
+/// `<name>\spawns.lua` beside it.
+fn scene_spawn_files(tree: &FileTree) -> Vec<(RelPath, gz_project::Entry)> {
+    tree.files_with_extension("scene")
+        .into_iter()
+        .filter_map(|scene| {
+            let s = scene.as_str();
+            let folder = s.get(..s.len().checked_sub(".scene".len())?)?;
+            let rel = RelPath::new(&format!("{folder}/spawns.lua")).ok()?;
+            let entry = tree.entry(&rel)?.clone();
+            entry.is_file().then_some((rel, entry))
+        })
+        .collect()
+}
+
+/// What the project's part of the pickers is made from, stamped: the folders above and the
+/// scenes' spawn files.
+fn project_picker_stamp(tree: &FileTree) -> Rev {
+    let mut h = stamp(tree, PROJECT_PICKER_FILES).0;
+    for (rel, e) in scene_spawn_files(tree) {
+        h = index::hash_bytes(h, rel.key().as_bytes());
+        if let EntryKind::File { size, modified, .. } = e.kind {
+            h = index::hash_bytes(h, &size.to_le_bytes());
+            let t = modified
+                .and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            h = index::hash_bytes(h, &t.to_le_bytes());
+        }
+    }
+    Rev(h)
+}
+
 /// The stamp of the files below some folders with an extension: their paths, sizes and write
 /// times. It moves only when one of them does - an unrelated file of the project leaves it be.
 fn stamp(tree: &FileTree, dirs: &[(&str, &str)]) -> Rev {
@@ -968,10 +1000,25 @@ fn read_tree_files(
     .collect()
 }
 
+fn read_scene_spawns(exec: &Executors, root: &Path, tree: &FileTree) -> Vec<(String, String)> {
+    let items: Vec<(String, PathBuf)> = scene_spawn_files(tree)
+        .into_iter()
+        .filter(|(_, e)| matches!(e.kind, EntryKind::File { size, .. } if size > 0 && size < (64 << 20)))
+        .map(|(rel, _)| (rel.as_str().to_owned(), rel.to_fs(root)))
+        .collect();
+    exec.par_io(items, |(rel, abs)| {
+        std::fs::read(&abs).ok().map(|b| (rel, String::from_utf8_lossy(&b).into_owned()))
+    })
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
 fn read_project_files(exec: &Executors, root: &Path, tree: &FileTree) -> ProjectFiles {
     ProjectFiles {
         custom_data: read_tree_files(exec, root, tree, "spawn/custom_data", "ltx", None, 1 << 20),
         spawn_parts: read_tree_files(exec, root, tree, "rawdata/levels", "part", Some("spawn"), 64 << 20),
+        scene_spawns: read_scene_spawns(exec, root, tree),
         gameplay: read_tree_files(exec, root, tree, "gamedata/configs/gameplay", "xml", None, 8 << 20),
         textures_descr: read_tree_files(
             exec,

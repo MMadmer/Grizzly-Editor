@@ -24,12 +24,12 @@ pub struct FrameStamp {
     /// What the frame waited for the presentation: the swap chain's image (vsync, the frame
     /// latency), the submission, the present.
     pub wait_ms: f32,
-    /// What the frame was drawn for (`frame_pacing`'s `ui_frame_causes`): `repaint <file>:<line>`
+    /// What the frame was drawn for (`perf.frames`' `ui_frame_causes`): `repaint <file>:<line>`
     /// (egui asked, from that line), `wake` (another thread pinged the window), `input`.
     pub cause: SmolStr,
 }
 
-/// One presented frame's times, kept for `frame_pacing`.
+/// One presented frame's times, kept for `perf.frames`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameTime {
     pub frame: u64,

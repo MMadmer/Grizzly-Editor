@@ -1,7 +1,7 @@
 //! A model's tile picture: rendered offscreen by a renderer of the browser's own, made on first
-//! need, and kept by content in a `gz_render::ThumbnailCache` (`EThumbnailVisual`).
+//! need, and kept by content in a `gz_render::ThumbnailCache`.
 //!
-//! The shot is the C++ one: a three-quarter view from above (the camera offset 1, 0.8, -1 from
+//! The shot: a three-quarter view from above (the camera offset 1, 0.8, -1 from
 //! the model's centre), 45 degrees, far enough for the bounding sphere and a little more, on the
 //! colour of the tile's square.
 
@@ -92,11 +92,12 @@ impl Thumbs {
         }
         let (device, queue) = (device.clone(), queue.clone());
         let exec = editor.exec.clone();
+        let gate = gz_app::gpu_gate(editor);
         let weak: Weak<Editor> = Arc::downgrade(editor);
         let weak_owner = weak.clone();
         let me = me.clone();
         editor.exec.spawn_cpu(move || {
-            match Renderer::new(device, queue, exec.clone()) {
+            match Renderer::new(device, queue, gate, exec.clone()) {
                 Ok(r) => {
                     r.assets().set_loader(Some(Arc::new(move |what: AssetRef<'_>| match what {
                         AssetRef::Texture(name) => match weak.upgrade() {

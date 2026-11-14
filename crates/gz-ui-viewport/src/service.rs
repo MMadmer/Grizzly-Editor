@@ -8,125 +8,229 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use glam::Vec3;
+use gz_app::settings::{PrefDef, PrefType};
 use gz_base::Rev;
 use gz_editor::{CmdError, Editor, SmolStr};
-use gz_render::{Color, FramePacket, Image, Renderer, View, ViewFlags, ViewMode};
+use gz_render::{Color, FramePacket, Image, Renderer, View, ViewFlags, ViewMode as Shading};
 use gz_scene::{ObjClass, SceneService};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
 use crate::camera::Nav;
 use crate::draw::{self, DrawOptions};
-use crate::gizmo::{Anchor, GizmoType};
+use crate::gizmo::{Anchor, GizmoType, Space};
 use crate::lighting::{self, GameLight, GameSettings, Weather};
 use crate::loader::SceneLoader;
 use crate::session::{self, Saved};
 
-/// What a click in the viewport does (`ETAction`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Action {
+/// How the viewport shades the scene: the View Mode pill.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ViewMode {
+    /// A light along the view, a key light from above and an ambient: every surface reads.
     #[default]
-    Select,
-    /// `etaAdd`: a click adds what the Tools panel has picked.
-    Place,
-}
-
-/// How surfaces are filled (`dwFillMode`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Fill {
-    #[default]
-    Solid,
+    Studio,
+    /// The textures as they are.
+    Unlit,
+    /// The weather and the scene's lights at an hour, per pixel, the way the game lights the level.
+    Game,
+    /// The edges of every mesh.
     Wireframe,
-    /// Drawn as the wireframe: the renderer has no point mode.
-    Point,
 }
 
-impl Fill {
+impl ViewMode {
+    pub const ALL: [ViewMode; 4] = [ViewMode::Studio, ViewMode::Unlit, ViewMode::Game, ViewMode::Wireframe];
+
     #[must_use]
     pub fn key(self) -> &'static str {
         match self {
-            Fill::Solid => "solid",
-            Fill::Wireframe => "wireframe",
-            Fill::Point => "point",
+            Self::Studio => "studio",
+            Self::Unlit => "unlit",
+            Self::Game => "game",
+            Self::Wireframe => "wireframe",
         }
+    }
+
+    #[must_use]
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Studio => "Studio",
+            Self::Unlit => "Unlit",
+            Self::Game => "Game Lit",
+            Self::Wireframe => "Wireframe",
+        }
+    }
+
+    #[must_use]
+    pub fn icon(self) -> gz_ui::Icon {
+        match self {
+            Self::Studio | Self::Game => gz_ui::Icon::Lit,
+            Self::Unlit => gz_ui::Icon::Unlit,
+            Self::Wireframe => gz_ui::Icon::Wireframe,
+        }
+    }
+
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|m| m.key().eq_ignore_ascii_case(text.trim()))
+    }
+
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|m| *m == self).unwrap_or(0)
+    }
+
+    fn of_index(i: usize) -> Self {
+        Self::ALL.get(i).copied().unwrap_or_default()
     }
 }
 
-/// The render flags `view_mode` reads and sets (`psDeviceFlags`), and the spawn helpers.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ViewOpts {
-    pub fill: Fill,
-    pub flat: bool,
-    /// The studio light; off draws the textures as they are.
-    pub lighting: bool,
-    pub textures: bool,
-    pub edged_faces: bool,
-    pub filter_linear: bool,
-    pub fog: bool,
-    pub environment: bool,
+/// What the viewport draws besides the scene: the Show pill. One place for each switch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Show {
     pub grid: bool,
+    /// The frame the game's 4:3 screen shows.
     pub safe_rect: bool,
     pub stats: bool,
-    /// `g_SpawnHelpers`.
-    pub helpers: bool,
-    /// `ai_map_shown`: Show AI Map (the `\` key).
-    pub ai_map_shown: bool,
-    /// View > Render > Quality (`m_ScreenQuality`): the render size over the pane's, 0.25..2.
-    /// A session's choice, as in the C++.
-    pub quality: f32,
+    /// Spawn points' flags, their shapes and boxes.
+    pub spawn_helpers: bool,
+    pub spawn_names: bool,
+    /// The light controls' names over the lights.
+    pub light_names: bool,
+    pub glow_crosses: bool,
+    /// The AI map's nodes.
+    pub ai_map: bool,
+    pub fog: bool,
 }
 
-impl Default for ViewOpts {
+impl Default for Show {
     fn default() -> Self {
         Self {
-            fill: Fill::Solid,
-            flat: false,
-            lighting: true,
-            textures: true,
-            edged_faces: false,
-            filter_linear: true,
-            fog: false,
-            environment: false,
             grid: true,
             safe_rect: false,
             stats: false,
-            helpers: true,
-            ai_map_shown: true,
-            quality: 1.0,
+            spawn_helpers: true,
+            spawn_names: false,
+            light_names: false,
+            glow_crosses: false,
+            ai_map: true,
+            fog: false,
         }
     }
 }
 
-/// The transform tool and its snaps (`LTools->GetAction`, the gizmo's type and steps).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Tool {
-    pub action: Action,
-    pub gizmo: GizmoType,
-    /// The grid, scale and angle snaps are on.
-    pub grid_snap: bool,
-    pub scale_snap: bool,
-    pub angle_snap: bool,
+/// A switch of the Show pill: its key (the command's parameter and the setting's) and where it
+/// lives. Its title is its action's (`viewport.show_<key>`).
+pub struct ShowFlag {
+    pub key: &'static str,
+    pub get: fn(&Show) -> bool,
+    pub set: fn(&mut Show, bool),
 }
 
-/// `Tools->GetSettings`: object snap, vertex snap, normal alignment, picking any class.
+/// The Show pill's switches in its order.
+pub const SHOW_FLAGS: [ShowFlag; 9] = [
+    ShowFlag { key: "grid", get: |s| s.grid, set: |s, v| s.grid = v },
+    ShowFlag { key: "safe_rect", get: |s| s.safe_rect, set: |s, v| s.safe_rect = v },
+    ShowFlag { key: "stats", get: |s| s.stats, set: |s, v| s.stats = v },
+    ShowFlag { key: "spawn_helpers", get: |s| s.spawn_helpers, set: |s, v| s.spawn_helpers = v },
+    ShowFlag { key: "spawn_names", get: |s| s.spawn_names, set: |s, v| s.spawn_names = v },
+    ShowFlag { key: "light_names", get: |s| s.light_names, set: |s, v| s.light_names = v },
+    ShowFlag { key: "glow_crosses", get: |s| s.glow_crosses, set: |s, v| s.glow_crosses = v },
+    ShowFlag { key: "ai_map", get: |s| s.ai_map, set: |s, v| s.ai_map = v },
+    ShowFlag { key: "fog", get: |s| s.fog, set: |s, v| s.fog = v },
+];
+
+/// The snapping pills: the steps' switches and how a placed or moved object meets a surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Settings {
-    pub object_snap: bool,
-    pub vertex_snap: bool,
-    pub normal_align: bool,
-    pub pick_any_class: bool,
+pub struct Snaps {
+    pub grid: bool,
+    pub angle: bool,
+    pub scale: bool,
+    /// A placed or dropped object lands on the surface under the pointer (else on the grid's
+    /// plane).
+    pub surface: bool,
+    /// ... and stands on its slope.
+    pub align: bool,
+    /// ... on the nearest vertex of what it lands on.
+    pub vertex: bool,
 }
 
-impl Default for Settings {
-    /// `CToolCustom`'s defaults.
+impl Default for Snaps {
     fn default() -> Self {
-        Self { object_snap: true, vertex_snap: true, normal_align: true, pick_any_class: true }
+        Self { grid: true, angle: true, scale: false, surface: true, align: false, vertex: false }
     }
 }
 
-/// View > Game Lighting (`EGameLighting`).
+/// The steps the snapping pills offer: metres, degrees, factors.
+pub const MOVE_STEPS: [f32; 9] = [0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
+pub const ANGLE_STEPS: [f32; 7] = [5.0, 10.0, 15.0, 22.5, 30.0, 45.0, 90.0];
+pub const SCALE_STEPS: [f32; 6] = [0.05, 0.1, 0.25, 0.5, 1.0, 2.0];
+
+/// The render size over the pane's (Preferences > Viewport > Render Scale), by its choice.
+pub const RENDER_SCALES: [(f32, &str); 4] = [(0.25, "25 %"), (0.5, "50 %"), (1.0, "100 %"), (2.0, "200 %")];
+
+/// The settings the viewport keeps in the editor's settings file (`[preferences]`), read and set
+/// by `app.prefs` like every other.
+pub(crate) const SETTINGS: [PrefDef; 19] = [
+    pdef("viewport_mode", PrefType::U32, 0.0, 0.0, 3.0),
+    pdef("viewport_show_grid", PrefType::Bool, 1.0, 0.0, 1.0),
+    pdef("viewport_show_safe_rect", PrefType::Bool, 0.0, 0.0, 1.0),
+    pdef("viewport_show_stats", PrefType::Bool, 0.0, 0.0, 1.0),
+    pdef("viewport_show_spawn_helpers", PrefType::Bool, 1.0, 0.0, 1.0),
+    pdef("viewport_show_spawn_names", PrefType::Bool, 0.0, 0.0, 1.0),
+    pdef("viewport_show_light_names", PrefType::Bool, 0.0, 0.0, 1.0),
+    pdef("viewport_show_glow_crosses", PrefType::Bool, 0.0, 0.0, 1.0),
+    pdef("viewport_show_ai_map", PrefType::Bool, 1.0, 0.0, 1.0),
+    pdef("viewport_show_fog", PrefType::Bool, 0.0, 0.0, 1.0),
+    pdef("viewport_snap_grid", PrefType::Bool, 1.0, 0.0, 1.0),
+    pdef("viewport_snap_angle", PrefType::Bool, 1.0, 0.0, 1.0),
+    pdef("viewport_snap_scale", PrefType::Bool, 0.0, 0.0, 1.0),
+    pdef("viewport_snap_surface", PrefType::Bool, 1.0, 0.0, 1.0),
+    pdef("viewport_snap_align", PrefType::Bool, 0.0, 0.0, 1.0),
+    pdef("viewport_snap_vertex", PrefType::Bool, 0.0, 0.0, 1.0),
+    pdef("viewport_local_space", PrefType::Bool, 0.0, 0.0, 1.0),
+    pdef("viewport_render_scale", PrefType::U32, 2.0, 0.0, 3.0),
+    pdef("viewport_gpu_preference", PrefType::U32, 0.0, 0.0, 2.0),
+];
+
+const fn pdef(key: &'static str, ty: PrefType, default: f64, lo: f64, hi: f64) -> PrefDef {
+    PrefDef { key, ty, default, lo, hi }
+}
+
+/// The key of a Show switch's setting.
+#[must_use]
+pub(crate) fn show_key(flag: &str) -> String {
+    format!("viewport_show_{flag}")
+}
+
+/// Where a drag over the viewport would place what it carries: the ghost the pass draws.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ghost {
+    pub what: crate::place::Placeable,
+    pub position: Vec3,
+    /// The surface's up where it lands, when the object stands on its slope.
+    pub up: Option<Vec3>,
+}
+
+/// The painting brush the Paint mode's panel sets and the viewport paints with.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Brush {
+    /// Foliage: the detail mesh it paints (a mesh of the scene's detail layer).
+    pub mesh: Option<SmolStr>,
+    /// Foliage: metres. The AI map's brush is the map's own, in patches.
+    pub radius: f32,
+    /// Foliage: how dense, 0..1.
+    pub density: f32,
+}
+
+impl Default for Brush {
+    fn default() -> Self {
+        Self { mesh: None, radius: 4.0, density: 1.0 }
+    }
+}
+
+/// Game Lit: the weather and the hour the scene is lit by.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GameLighting {
+    /// Game Lit is the view mode (the settings' `viewport_mode`).
     pub enabled: bool,
     /// The weather asked for; empty is the default for the hour.
     pub weather: String,
@@ -184,14 +288,14 @@ impl GameLighting {
         self.settings.exposure(self.exposure, self.auto_exposure)
     }
 
-    /// What the frame lights with: on, with a weather that read.
+    /// What the frame lights with: Game Lit, with a weather that read.
     #[must_use]
     pub fn active(&self) -> bool {
         self.enabled && self.weather_ok
     }
 }
 
-/// The preferences the view follows, as last applied.
+/// The preferences and the viewport's own settings the view follows, as last applied.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Prefs {
     pub near: f32,
@@ -209,10 +313,15 @@ pub struct Prefs {
     pub snap_grid: f32,
     pub snap_angle: f32,
     pub snap_scale: f32,
-    /// Tools > Box Selection > Limited Depth and Depth Tolerance (`bp_lim_depth`,
-    /// `bp_depth_tolerance`).
+    /// Tools > Box Selection > Limited Depth and Depth Tolerance.
     pub bp_lim_depth: bool,
     pub bp_depth_tolerance: f32,
+    pub mode: ViewMode,
+    pub show: Show,
+    pub snaps: Snaps,
+    pub space: Space,
+    /// The render size over the pane's.
+    pub render_scale: f32,
 }
 
 impl Default for Prefs {
@@ -231,10 +340,15 @@ impl Default for Prefs {
             grid_size: 1.0,
             grid_count: 100,
             snap_grid: 0.1,
-            snap_angle: 5.625,
-            snap_scale: 0.1,
+            snap_angle: 15.0,
+            snap_scale: 0.25,
             bp_lim_depth: true,
             bp_depth_tolerance: 0.1,
+            mode: ViewMode::default(),
+            show: Show::default(),
+            snaps: Snaps::default(),
+            space: Space::World,
+            render_scale: 1.0,
         }
     }
 }
@@ -244,6 +358,20 @@ impl Prefs {
         let s = gz_app::EditorSettings::of(editor);
         let d = Self::default();
         let f = |k: &str, def: f32| s.pref(k).map_or(def, |v| v as f32);
+        let on = |k: &str, def: bool| s.pref(k).map_or(def, |v| v != 0.0);
+        let mut show = d.show;
+        for flag in &SHOW_FLAGS {
+            (flag.set)(&mut show, on(&show_key(flag.key), (flag.get)(&d.show)));
+        }
+        let snaps = Snaps {
+            grid: on("viewport_snap_grid", d.snaps.grid),
+            angle: on("viewport_snap_angle", d.snaps.angle),
+            scale: on("viewport_snap_scale", d.snaps.scale),
+            surface: on("viewport_snap_surface", d.snaps.surface),
+            align: on("viewport_snap_align", d.snaps.align),
+            vertex: on("viewport_snap_vertex", d.snaps.vertex),
+        };
+        let scale_i = s.pref("viewport_render_scale").map_or(2, |v| v as usize);
         Self {
             near: f("view_np", d.near),
             far: f("view_fp", d.far),
@@ -260,12 +388,17 @@ impl Prefs {
             snap_grid: f("snap_grid_step", d.snap_grid),
             snap_angle: f("snap_angle_step", d.snap_angle),
             snap_scale: f("snap_scale_step", d.snap_scale),
-            bp_lim_depth: s.pref("bp_lim_depth").map_or(d.bp_lim_depth, |v| v != 0.0),
+            bp_lim_depth: on("bp_lim_depth", d.bp_lim_depth),
             bp_depth_tolerance: f("bp_depth_tolerance", d.bp_depth_tolerance),
+            mode: ViewMode::of_index(s.pref("viewport_mode").map_or(0, |v| v as usize)),
+            show,
+            snaps,
+            space: if on("viewport_local_space", false) { Space::Local } else { Space::World },
+            render_scale: RENDER_SCALES.get(scale_i).map_or(1.0, |(v, _)| *v),
         }
     }
 
-    /// `m_MouseSR`: the tools' rotation per pixel.
+    /// The tools' rotation per point of an edge-on ring's drag.
     #[must_use]
     pub fn tools_sr(&self) -> f32 {
         0.02 * self.tools_sens_rot * self.tools_sens_rot
@@ -276,22 +409,25 @@ impl Prefs {
 #[derive(Clone, Debug)]
 pub struct ViewState {
     pub nav: Nav,
-    pub view: ViewOpts,
-    pub tool: Tool,
-    pub settings: Settings,
+    /// The transform tool (Select, Move, Rotate, Scale): what the gizmo is.
+    pub gizmo: GizmoType,
     pub game: GameLighting,
     pub prefs: Prefs,
     /// The render size in pixels the pane last laid out (1280 x 720 before it ever did).
     pub size: [u32; 2],
-    /// The gizmo's anchor of the current class's selection, as the last scene pass found it.
+    /// The gizmo's anchor of the selection, as the last scene pass found it.
     pub anchor: Option<Anchor>,
-    /// What Place adds, per class (the Tools panel's pick).
-    pub place: FxHashMap<ObjClass, SmolStr>,
+    /// What Place mode places, and the ghost of a drag over the viewport.
+    pub armed: Option<crate::place::Placeable>,
+    pub ghost: Option<Ghost>,
+    /// The Paint mode's brush, and the layer Paint goes back to.
+    pub brush: Brush,
+    pub paint_layer: gz_scene::SceneMode,
     /// A short line the pane shows for a moment (the camera's speed).
     pub status: Option<(String, Instant)>,
     /// What is behind the scene: the theme's canvas colour, as the pane last drew it.
     pub background: Color,
-    /// The pane as last laid out: its size in points and the points' pixels (`viewport_gesture`).
+    /// The pane as last laid out: its size in points and the points' pixels (`viewport.gesture`).
     pub pane_pt: [f32; 2],
     pub ppp: f32,
     scene_key: Option<String>,
@@ -327,14 +463,15 @@ impl Default for ViewState {
     fn default() -> Self {
         Self {
             nav: Nav::default(),
-            view: ViewOpts::default(),
-            tool: Tool::default(),
-            settings: Settings::default(),
+            gizmo: GizmoType::None,
             game: GameLighting::default(),
             prefs: Prefs::default(),
             size: [1280, 720],
             anchor: None,
-            place: FxHashMap::default(),
+            armed: None,
+            ghost: None,
+            brush: Brush::default(),
+            paint_layer: gz_scene::SceneMode::Details,
             status: None,
             // the kit's token `canvas` (151419) until the pane draws with the theme's
             background: Color::rgb(0x15, 0x14, 0x19),
@@ -352,7 +489,7 @@ impl Default for ViewState {
 }
 
 impl ViewState {
-    /// The steps of the grid, scale and angle snaps (the preferences), and whether each is on.
+    /// The step of the grid, scale or angle snap (the preferences).
     #[must_use]
     pub fn step(&self, kind: GizmoType) -> f32 {
         match kind {
@@ -363,17 +500,24 @@ impl ViewState {
         }
     }
 
+    /// Whether the grid, scale or angle snap is on.
     #[must_use]
     pub fn snap_on(&self, kind: GizmoType) -> bool {
         match kind {
-            GizmoType::Move => self.tool.grid_snap,
-            GizmoType::Scale => self.tool.scale_snap,
-            GizmoType::Rotate => self.tool.angle_snap,
+            GizmoType::Move => self.prefs.snaps.grid,
+            GizmoType::Scale => self.prefs.snaps.scale,
+            GizmoType::Rotate => self.prefs.snaps.angle,
             GizmoType::None => false,
         }
     }
 
-    /// `aspect` as the camera's maths use it: height over width (`fASPECT`).
+    /// The step a drag of `kind` snaps to, when its snap is on.
+    #[must_use]
+    pub fn snap(&self, kind: GizmoType) -> Option<f32> {
+        self.snap_on(kind).then(|| self.step(kind))
+    }
+
+    /// `aspect` as the camera's maths use it: height over width.
     #[must_use]
     pub fn aspect(&self) -> f32 {
         if self.size[0] == 0 { 1.0 } else { self.size[1] as f32 / self.size[0] as f32 }
@@ -381,18 +525,16 @@ impl ViewState {
 
     /// What a scene pass reads of the view state. Two states equal here give the same picture;
     /// the bookkeeping beside it (the cameras kept per scene and the pose's save timer, the
-    /// status line, Place's picks, the pane's points) and what a pass publishes itself (the
+    /// status line, the armed thing, the pane's points) and what a pass publishes itself (the
     /// anchor, the game lights drawn, the roof map) are left out.
     fn drawn(&self) -> Drawn {
         let g = &self.game;
         Drawn {
             nav: self.nav.clone(),
-            view: self.view.clone(),
-            tool: self.tool,
-            settings: self.settings,
             prefs: self.prefs,
             size: self.size,
             background: self.background,
+            ghost: self.ghost.clone(),
             game: GameDrawn {
                 enabled: g.enabled,
                 weather: g.weather.clone(),
@@ -411,12 +553,10 @@ impl ViewState {
 #[derive(PartialEq)]
 struct Drawn {
     nav: Nav,
-    view: ViewOpts,
-    tool: Tool,
-    settings: Settings,
     prefs: Prefs,
     size: [u32; 2],
     background: Color,
+    ghost: Option<Ghost>,
     game: GameDrawn,
 }
 
@@ -453,7 +593,7 @@ struct BuildKey {
     spawn: u64,
 }
 
-/// Why a scene pass was built (`frame_pacing` counts them by this).
+/// Why a scene pass was built (`perf.frames` counts them by this).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reason {
     /// The first pass of the renderer.
@@ -468,7 +608,7 @@ pub enum Reason {
     Spawn,
     /// A texture the shown picture draws was loaded again.
     Stale,
-    /// A picture asked over MCP (`screenshot_viewport`, Game Lighting's answer).
+    /// A picture asked over MCP (`shot.viewport`, Game Lit's lights in `viewport.view`).
     Picture,
     /// The project's `preview.png`.
     Preview,
@@ -577,7 +717,7 @@ pub struct Viewport {
     /// The last pass found a particle system in view playing.
     animating: AtomicBool,
     anim_tick: AtomicU64,
-    /// A gesture fed over MCP (`viewport_gesture`): the pane takes one step of it a frame.
+    /// A gesture fed over MCP (`viewport.gesture`): the pane takes one step of it a frame.
     pub(crate) gesture: Mutex<Option<crate::gesture::Pending>>,
     /// The tasks the pane's gestures started that have not ended.
     pub(crate) tracked: std::sync::atomic::AtomicUsize,
@@ -633,11 +773,11 @@ impl Viewport {
     /// The viewport of this editor, made on first use.
     pub fn of(editor: &Editor) -> Arc<Viewport> {
         editor.services.get_or_init(|| {
-            let mut state = ViewState::default();
-            // the tool switches as the last session left them
-            if let Some(f) = gz_app::EditorSettings::of(editor).tools_settings() {
-                apply_tool_flags(&mut state.settings, &mut state.tool, f);
-            }
+            // the viewport's own settings, as the last session left them
+            let settings = gz_app::EditorSettings::of(editor);
+            settings.add_defs(&SETTINGS);
+            let mut state = ViewState { prefs: Prefs::read(editor), ..ViewState::default() };
+            state.game.enabled = state.prefs.mode == ViewMode::Game;
             Viewport {
                 state: Mutex::new(state),
                 rev: AtomicU64::new(1),
@@ -665,7 +805,7 @@ impl Viewport {
         });
     }
 
-    /// Whether the last pass found a particle system in view playing (`frame_pacing`'s
+    /// Whether the last pass found a particle system in view playing (`perf.frames`'
     /// `realtime_render`).
     #[must_use]
     pub fn animating(&self) -> bool {
@@ -725,7 +865,7 @@ impl Viewport {
         let mut start = self.renderer_start.lock();
         let spawned = std::thread::Builder::new().name("gz-render-start".into()).spawn(move || {
             let me = Viewport::of(&ed);
-            let made = Renderer::new(device, queue, ed.exec.clone());
+            let made = Renderer::new(device, queue, gz_app::gpu_gate(&ed), ed.exec.clone());
             me.install(&ed, made);
             me.renderer_starting.store(false, Ordering::Release);
         });
@@ -770,7 +910,12 @@ impl Viewport {
             }
         }
         if self.renderer().is_none() && !*self.renderer_failed.lock() {
-            let made = Renderer::new(gpu.device.clone(), gpu.queue.clone(), editor.exec.clone());
+            let made = Renderer::new(
+                gpu.device.clone(),
+                gpu.queue.clone(),
+                gz_app::gpu_gate(editor),
+                editor.exec.clone(),
+            );
             self.install(editor, made);
         }
         self.renderer()
@@ -822,7 +967,7 @@ impl Viewport {
         let prefs = Prefs::read(editor);
         let changed = self.read(|s| s.prefs != prefs);
         if changed {
-            self.with(|s| {
+            let read_weather = self.with(|s| {
                 let fly_changed = s.prefs.fly_speed != prefs.fly_speed;
                 s.prefs = prefs;
                 s.nav.near = prefs.near;
@@ -833,7 +978,15 @@ impl Viewport {
                 if fly_changed {
                     s.nav.fly_speed = prefs.fly_speed;
                 }
+                s.game.enabled = prefs.mode == ViewMode::Game;
+                s.game.enabled && !s.game.weather_ok && !s.game.loading
             });
+            // Game Lit reads the linked game's weather the first time it comes up
+            if read_weather {
+                let (vp, ed) = (Viewport::of(editor), editor.clone());
+                self.with(|s| s.game.loading = true);
+                editor.exec.spawn(async move { vp.load_weather(&ed, true).await });
+            }
         }
         self.sync_loader(editor);
         self.sync_scene_camera(editor);
@@ -958,6 +1111,50 @@ impl Viewport {
         }
     }
 
+    /// Keeps the cameras of every scene (and their bookmarks) in the project's session, off the
+    /// UI thread.
+    fn write_cameras(&self, editor: &Arc<Editor>) {
+        let Some(root) = editor.project_root() else { return };
+        let text = self.read(|s| session::write(&s.cameras));
+        let file = root.join("temp").join(session::FILE);
+        let log = editor.log.clone();
+        editor.exec.spawn_io(move || {
+            if let Some(dir) = file.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            if let Err(e) = gz_editor::fsx::write_atomic(&file, text.as_bytes()) {
+                log.warn(format!("the viewport's cameras could not be kept in {}: {e}", file.display()));
+            }
+        });
+    }
+
+    /// Keeps the camera in bookmark `n` of the open scene; `false` without one.
+    pub(crate) fn store_bookmark(&self, editor: &Arc<Editor>, n: u8) -> bool {
+        let stored = self.with(|s| {
+            let key = s.scene_key.clone()?;
+            let pose = Saved { hpb: s.nav.hpb, position: s.nav.position };
+            s.cameras.insert(session::bookmark_key(&key, n), pose);
+            Some(())
+        });
+        if stored.is_some() {
+            self.write_cameras(editor);
+        }
+        stored.is_some()
+    }
+
+    /// Puts the camera where bookmark `n` of the open scene keeps it; `false` when it keeps none.
+    pub(crate) fn go_to_bookmark(&self, n: u8) -> bool {
+        self.with(|s| {
+            let key = s.scene_key.clone()?;
+            let c = s.cameras.get(&session::bookmark_key(&key, n)).copied()?;
+            s.nav.set(c.hpb, c.position);
+            s.nav.target = c.position + s.nav.direction() * 10.0;
+            s.nav.reset_state();
+            Some(())
+        })
+        .is_some()
+    }
+
     /// Asks for a scene pass when anything it draws changed ([`due`]); otherwise the pane keeps
     /// the picture it has. Never blocks: the pass is built on the CPU pool and handed to the
     /// render thread.
@@ -1074,7 +1271,7 @@ impl Viewport {
         // the particle library is read only for a scene that has particle systems
         let has_particles = snap.as_ref().is_some_and(|s| s.state.count(ObjClass::Particles) > 0);
         let particles = if has_particles { parts.library(editor).await } else { None };
-        // a motion playing: its object where the motion has it now (`AnimationOnFrame`)
+        // a motion playing: its object where the motion has it now
         let posed = snap.as_ref().and_then(|s| motion_pose(editor, &s.state));
         let playing = posed.is_some();
         if let Some((_, Some((hpb, at)))) = &posed {
@@ -1088,30 +1285,21 @@ impl Viewport {
             .exec
             .cpu(move || {
                 let cam = st.nav.camera();
-                // Quality scales the render size; the picture of the project keeps the pane's
-                let size = if preview { st.size } else { scaled(st.size, st.view.quality) };
+                // the render scale sizes the picture; the picture of the project keeps the pane's
+                let size = if preview { st.size } else { scaled(st.size, st.prefs.render_scale) };
+                let show = st.prefs.show;
                 let mut view = View::new(cam, size);
                 view.background = st.background;
-                view.mode = if st.view.fill != Fill::Solid {
-                    ViewMode::Wireframe
-                } else if st.game.active() {
-                    ViewMode::GameLighting
-                } else if st.view.lighting {
-                    ViewMode::Lit
-                } else {
-                    ViewMode::Unlit
+                view.mode = match st.prefs.mode {
+                    ViewMode::Wireframe => Shading::Wireframe,
+                    ViewMode::Unlit => Shading::Unlit,
+                    ViewMode::Game if st.game.active() => Shading::GameLighting,
+                    // Game Lit lights as the studio does until its weather has been read
+                    ViewMode::Game | ViewMode::Studio => Shading::Lit,
                 };
                 view.flags = ViewFlags::HELPERS | ViewFlags::SELECTION;
-                // View > Render: Shade Mode, Textures, Linear Filtering, Edged Faces; Fog, Environment
-                view.style = gz_render::ViewStyle {
-                    flat: st.view.flat,
-                    textures: st.view.textures,
-                    linear: st.view.filter_linear,
-                    edged: st.view.edged_faces,
-                    fog: st.view.fog,
-                    environment: st.view.environment,
-                };
-                if st.view.grid {
+                view.style = gz_render::ViewStyle { fog: show.fog };
+                if show.grid {
                     view.flags |= ViewFlags::GRID;
                 }
                 view.grid.cells = st.prefs.grid_count.max(1);
@@ -1154,7 +1342,14 @@ impl Viewport {
                 } else {
                     None
                 };
-                let opts = DrawOptions { helpers: st.view.helpers && !preview, game };
+                let opts = DrawOptions {
+                    helpers: show.spawn_helpers && !preview,
+                    spawn_names: show.spawn_names,
+                    light_names: show.light_names,
+                    glow_crosses: show.glow_crosses,
+                    ghost: if preview { None } else { st.ghost.clone() },
+                    game,
+                };
                 let mut built = draw::build(state, library, &assets, &opts);
                 // the spawns' models in their startup animation's pose
                 let poses = anims.poses(&ed, state);
@@ -1164,21 +1359,6 @@ impl Viewport {
                             inst.pose = Some(p.clone());
                         }
                     }
-                }
-                // Environment outside Game Lighting: the chosen weather's sky and fog colour
-                if st.view.environment && !st.game.active() && st.game.weather_ok {
-                    built.list.environment = Some(lighting::environment(
-                        &st.game.at,
-                        &st.game.settings,
-                        st.game.exposure_now(),
-                        st.game.indoor_hemi,
-                        None,
-                    ));
-                }
-                // the editor's own lighting: the Light tool's lights switched on for the viewport
-                if view.mode == ViewMode::Lit {
-                    view.flags |= ViewFlags::SCENE_LIGHTS;
-                    built.list.lights = lighting::editor_lights(state, &frustum);
                 }
                 let animating = crate::draw_extra::extend(
                     &extras,
@@ -1191,7 +1371,7 @@ impl Viewport {
                         camera: &cam,
                         size,
                         particles,
-                        ai_map_shown: st.view.ai_map_shown,
+                        ai_map_shown: show.ai_map,
                     },
                     &mut built,
                 );
@@ -1228,8 +1408,8 @@ impl Viewport {
         });
         if let Some((ms, count, Some(o))) = log_bake {
             let half = lighting::ROOF_CELLS as f32 * lighting::ROOF_CELL * 0.5;
-            editor.log.info(format!(
-                "* game lighting: roof map {0}x{0} around ({1:.0}, {2:.0}) from {count} objects in {ms} ms",
+            editor.log.detail(format!(
+                "game lighting: roof map {0}x{0} around ({1:.0}, {2:.0}) from {count} objects in {ms} ms",
                 lighting::ROOF_CELLS,
                 o[0] + half,
                 o[1] + half
@@ -1337,19 +1517,20 @@ impl Viewport {
     }
 
     /// Draws the scene now and reads the picture back, cropped to the render size
-    /// (`screenshot_viewport`): a pass of its own, also while Level is hidden. The pass is built
+    /// (`shot.viewport`): a pass of its own, also while Level is hidden. The pass is built
     /// again until nothing it draws is still loading (up to `limit`); `pending` says what still
     /// was when the limit ran out.
     pub async fn picture(self: &Arc<Self>, editor: &Arc<Editor>) -> Result<(Image, Vec<String>), CmdError> {
-        let renderer =
-            self.renderer_any(editor).ok_or_else(|| CmdError::new("no_window", "viewport RT unavailable"))?;
+        let renderer = self.renderer_any(editor).ok_or_else(|| {
+            CmdError::new("no_window", "the viewport draws nothing: the editor runs without a window")
+        })?;
         self.settle().await;
         let deadline = Instant::now() + PICTURE_LIMIT;
         let (packet, pending) = loop {
             let packet = self
                 .make_packet(editor, &renderer, false, Reason::Picture)
                 .await
-                .ok_or_else(|| CmdError::internal("viewport RT unavailable"))?;
+                .ok_or_else(|| CmdError::internal("the viewport could not draw the scene"))?;
             let pending = Self::pending_of(&renderer, &packet);
             if pending.is_empty() || Instant::now() >= deadline {
                 break (packet, pending);
@@ -1367,17 +1548,16 @@ impl Viewport {
             b.packet = Some(packet);
         }
         let r = renderer.clone();
-        let image = editor
-            .exec
-            .io(move || r.capture(serial, Duration::from_secs(10)))
-            .await
-            .map_err(|e| CmdError::internal(format!("viewport RT unavailable: {e}")))?;
+        let image =
+            editor.exec.io(move || r.capture(serial, Duration::from_secs(10))).await.map_err(|e| {
+                CmdError::internal(format!("the viewport's picture could not be read back: {e}"))
+            })?;
         editor.exec.wake().ping();
         Ok((image, pending))
     }
 
     /// Reads the linked game's weather for the hour, its render settings and its weathers, off
-    /// the UI thread (`Reload`, `SetWeather`). `reload` reads `user.ltx` again.
+    /// the UI thread. `reload` reads `user.ltx` again.
     pub async fn load_weather(self: &Arc<Self>, editor: &Arc<Editor>, reload: bool) {
         let (weather, hour, have_settings) = self.with(|s| {
             s.game.loading = true;
@@ -1414,7 +1594,7 @@ impl Viewport {
         editor.exec.wake().ping();
     }
 
-    /// `frame_pacing`'s measure: the frames presented between two asks, the frame the last ask
+    /// `perf.frames`' measure: the frames presented between two asks, the frame the last ask
     /// saw (`None` at the first), and the scene passes built since then.
     pub(crate) fn pacing(&self, frame: u64, causes: Causes) -> Pacing {
         let now = Instant::now();
@@ -1468,7 +1648,7 @@ struct WeatherRead {
     at: Result<Weather, String>,
 }
 
-/// `LoadWeather` over the linked game's files: the list, the default for the hour, the file.
+/// The weather read from the linked game's files: the list, the default for the hour, the file.
 async fn read_weather(
     editor: &Arc<Editor>,
     weather: &str,
@@ -1545,29 +1725,16 @@ pub async fn capture_preview(editor: &Arc<Editor>) -> Result<Image, String> {
     editor.exec.io(move || r.render_offscreen(&packet, size).map_err(|e| e.to_string())).await
 }
 
-/// What Place adds for a class: the Tools panel's pick (a library object, a spawn section, a
-/// particle system). `None` clears it.
-pub fn set_place_item(editor: &Editor, class: ObjClass, name: Option<&str>) {
-    Viewport::of(editor).with(|s| match name.filter(|n| !n.is_empty()) {
-        Some(n) => {
-            s.place.insert(class, SmolStr::new(n));
-        }
-        None => {
-            s.place.remove(&class);
-        }
-    });
-}
+// ---- the viewport's settings; the camera other surfaces read ------------------------------------
 
-// ---- View > Render, Mute Sounds, Real Time; the camera other surfaces read ------------------
-
-/// The render size at a quality (`m_ScreenQuality`): at least a pixel a side.
-fn scaled(size: [u32; 2], quality: f32) -> [u32; 2] {
-    let q = if quality.is_finite() { quality.clamp(0.25, 2.0) } else { 1.0 };
+/// The render size at a scale: at least a pixel a side.
+fn scaled(size: [u32; 2], scale: f32) -> [u32; 2] {
+    let q = if scale.is_finite() { scale.clamp(0.25, 2.0) } else { 1.0 };
     [((size[0] as f32 * q).round() as u32).max(1), ((size[1] as f32 * q).round() as u32).max(1)]
 }
 
-/// View > Real Time (`rsRenderRealTime`), kept with the render settings: the viewport draws
-/// every frame instead of when something changed.
+/// Real Time (Preferences > Viewport): the viewport draws every frame instead of when something
+/// it shows changed.
 pub(crate) fn real_time(editor: &Editor) -> bool {
     gz_app::EditorSettings::of(editor).render_flag("real_time")
 }
@@ -1576,59 +1743,22 @@ pub(crate) fn real_time(editor: &Editor) -> bool {
 #[derive(Default)]
 struct ReloadSeen(AtomicU64);
 
-/// `ETFlags` bits the viewport keeps (`etfNormalAlign`, `etfOSnap`, `etfVSnap`, `etfASnap`,
-/// `etfMSnap`, `etfPickAnyClass`); the other bits of `tools_settings` are written back as read.
-/// How long a picture waits for what its pass draws to load before it answers with `pending`.
-const PICTURE_LIMIT: Duration = Duration::from_secs(15);
+/// The GPU preference the settings held when it was last applied; `u64::MAX` before the first
+/// look, which only takes note of it.
+struct GpuPreferenceSeen(AtomicU64);
 
-const ETF_NORMAL_ALIGN: u32 = 1 << 2;
-const ETF_OSNAP: u32 = 1 << 4;
-const ETF_VSNAP: u32 = 1 << 6;
-const ETF_ASNAP: u32 = 1 << 7;
-const ETF_MSNAP: u32 = 1 << 8;
-const ETF_PICK_ANY_CLASS: u32 = 1 << 9;
-const ETF_KEPT: u32 = ETF_NORMAL_ALIGN | ETF_OSNAP | ETF_VSNAP | ETF_ASNAP | ETF_MSNAP | ETF_PICK_ANY_CLASS;
-
-/// The `tools_settings` value last read or written; `u64::MAX` before the first read.
-struct ToolFlagsSeen(AtomicU64);
-
-impl Default for ToolFlagsSeen {
+impl Default for GpuPreferenceSeen {
     fn default() -> Self {
         Self(AtomicU64::new(u64::MAX))
     }
 }
 
-fn tool_flags(settings: &Settings, tool: &Tool, rest: u32) -> u32 {
-    let mut f = rest & !ETF_KEPT;
-    for (bit, on) in [
-        (ETF_NORMAL_ALIGN, settings.normal_align),
-        (ETF_OSNAP, settings.object_snap),
-        (ETF_VSNAP, settings.vertex_snap),
-        (ETF_ASNAP, tool.angle_snap),
-        (ETF_MSNAP, tool.grid_snap),
-        (ETF_PICK_ANY_CLASS, settings.pick_any_class),
-    ] {
-        if on {
-            f |= bit;
-        }
-    }
-    f
-}
-
-fn apply_tool_flags(settings: &mut Settings, tool: &mut Tool, f: u32) {
-    settings.normal_align = f & ETF_NORMAL_ALIGN != 0;
-    settings.object_snap = f & ETF_OSNAP != 0;
-    settings.vertex_snap = f & ETF_VSNAP != 0;
-    tool.angle_snap = f & ETF_ASNAP != 0;
-    tool.grid_snap = f & ETF_MSNAP != 0;
-    settings.pick_any_class = f & ETF_PICK_ANY_CLASS != 0;
-}
-
-/// The qualities View > Render > Quality offers.
-pub const QUALITIES: [(f32, &str); 4] = [(0.25, "25%"), (0.5, "50%"), (1.0, "100%"), (2.0, "200%")];
+/// How long a picture waits for what its pass draws to load before it answers with `pending`.
+const PICTURE_LIMIT: Duration = Duration::from_secs(15);
 
 impl Viewport {
-    /// Fills the camera slot quests read, once; asks for the next frame while Real Time is on.
+    /// Fills the camera slot quests read, once; applies a GPU preference changed in the settings;
+    /// asks for the next frame while Real Time is on.
     fn sync_render(&self, editor: &Arc<Editor>) {
         let cam = gz_editor::ViewCamera::of(editor);
         if !cam.filled() {
@@ -1645,44 +1775,29 @@ impl Viewport {
                 Some(gz_editor::CameraPose { position, level })
             });
         }
-        // the tool switches live in `[editor_prefs] tools_settings`, as the C++ keeps them
-        let prefs = gz_app::EditorSettings::of(editor);
-        let kept = editor.services.get_or_init(ToolFlagsSeen::default);
-        let mut last = kept.0.load(Ordering::Acquire);
-        if last == u64::MAX {
-            // what `of` started from, so a switch changed before the first frame is written
-            let f = prefs
-                .tools_settings()
-                .unwrap_or_else(|| tool_flags(&Settings::default(), &Tool::default(), 0));
-            kept.0.store(u64::from(f), Ordering::Release);
-            last = u64::from(f);
-        }
-        let now = self.read(|s| tool_flags(&s.settings, &s.tool, last as u32));
-        if u64::from(now) != last {
-            prefs.set_tools_settings(now);
-            kept.0.store(u64::from(now), Ordering::Release);
+        let settings = gz_app::EditorSettings::of(editor);
+        let wanted = settings.pref("viewport_gpu_preference").map_or(0, |v| v as u64);
+        let seen = editor.services.get_or_init(GpuPreferenceSeen::default);
+        let before = seen.0.swap(wanted, Ordering::AcqRel);
+        if before != u64::MAX && before != wanted {
+            let hint = gz_app::gpu::DriverHint::ALL
+                .get(wanted as usize)
+                .copied()
+                .unwrap_or(gz_app::gpu::DriverHint::Auto);
+            gz_app::gpu::Gpu::of(editor).set_hint(editor, hint);
         }
         // Libraries > Reload Textures: a new loader of the same sources drops what was loaded
-        let wanted = gz_app::gpu::TextureReload::generation(editor);
+        let reload = gz_app::gpu::TextureReload::generation(editor);
         let seen = editor.services.get_or_init(ReloadSeen::default);
-        if seen.0.swap(wanted, Ordering::AcqRel) != wanted {
+        if seen.0.swap(reload, Ordering::AcqRel) != reload {
             self.reload_assets(editor);
         }
         if real_time(editor)
             && let Ok(q) = gz_app::UiQueue::of(editor)
         {
-            let fps = gz_app::EditorSettings::of(editor)
-                .pref("active_idle_fps")
-                .unwrap_or(120.0)
-                .clamp(30.0, 240.0);
+            let fps = settings.pref("active_idle_fps").unwrap_or(120.0).clamp(30.0, 240.0);
             q.post(move |_, ctx| ctx.request_repaint_after(Duration::from_secs_f64(1.0 / fps)));
         }
-    }
-
-    /// View > Render > Quality.
-    pub fn set_quality(&self, quality: f32) {
-        let q = QUALITIES.iter().map(|(v, _)| *v).find(|v| (v - quality).abs() < 0.01).unwrap_or(1.0);
-        self.with(|s| s.view.quality = q);
     }
 
     /// Libraries > Reload Textures: the renderer drops what it loaded and reads it again when
@@ -1694,93 +1809,84 @@ impl Viewport {
     }
 }
 
-/// View > Mute Sounds.
+/// Changes one of the viewport's settings and applies it at once; [`save`] writes the file.
+pub(crate) fn set_setting(editor: &Arc<Editor>, key: &str, value: f64) {
+    gz_app::EditorSettings::of(editor).set_pref(key, value);
+    Viewport::of(editor).sync(editor);
+    editor.exec.wake().ping();
+}
+
+/// Writes the editor's settings after a change: once per command, never once per value.
+pub fn save(editor: &Editor) {
+    gz_app::EditorSettings::of(editor).save_soon(editor);
+}
+
+/// The view mode.
+pub fn set_mode(editor: &Arc<Editor>, mode: ViewMode) {
+    set_setting(editor, "viewport_mode", mode.index() as f64);
+}
+
+/// A switch of the Show pill by its key; `false` for a key that names none.
+pub fn set_show(editor: &Arc<Editor>, key: &str, on: bool) -> bool {
+    if !SHOW_FLAGS.iter().any(|f| f.key == key) {
+        return false;
+    }
+    set_setting(editor, &show_key(key), f64::from(u8::from(on)));
+    true
+}
+
+/// A snapping switch: `grid`, `angle`, `scale`, `surface`, `align`, `vertex`.
+pub fn set_snap(editor: &Arc<Editor>, key: &str, on: bool) {
+    set_setting(editor, &format!("viewport_snap_{key}"), f64::from(u8::from(on)));
+}
+
+/// A snap's step: the preference the pill and Preferences > Tools > Snap share.
+pub fn set_step(editor: &Arc<Editor>, kind: GizmoType, v: f32) {
+    let key = match kind {
+        GizmoType::Move => "snap_grid_step",
+        GizmoType::Scale => "snap_scale_step",
+        GizmoType::Rotate => "snap_angle_step",
+        GizmoType::None => return,
+    };
+    set_setting(editor, key, f64::from(v));
+}
+
+/// The gizmo's space.
+pub fn set_space(editor: &Arc<Editor>, space: Space) {
+    set_setting(editor, "viewport_local_space", f64::from(u8::from(space == Space::Local)));
+}
+
+/// Mute Sounds (Preferences > Viewport).
 pub fn set_mute_sounds(editor: &Editor, on: bool) {
     gz_app::gpu::Gpu::of(editor).set_mute_sounds(editor, on);
 }
 
-/// View > Real Time.
+/// Real Time (Preferences > Viewport).
 pub fn set_real_time(editor: &Editor, on: bool) {
-    let settings = gz_app::EditorSettings::of(editor);
-    settings.set_render_flag("real_time", on);
-    settings.save_soon(editor);
+    gz_app::EditorSettings::of(editor).set_render_flag("real_time", on);
     Viewport::of(editor).touch();
     editor.exec.wake().ping();
 }
 
-/// The render options `view_mode` takes besides the view flags: `quality` (25, 50, 100, 200 or
-/// 0.25..2), `mute_sounds`, `real_time`, `gpu` (an adapter's name; `default` or empty is the
-/// system's), `driver_hint` (auto, performance, power_saving). A bad one changes nothing.
-pub(crate) fn render_args(editor: &Arc<Editor>, a: &gz_editor::Args) -> Result<(), CmdError> {
-    use gz_editor::ArgsExt;
-    let quality = match a.f32("quality") {
-        Some(v) => {
-            let q = if v > 4.0 { v / 100.0 } else { v };
-            if !QUALITIES.iter().any(|(x, _)| (x - q).abs() < 0.01) {
-                return Err(CmdError::invalid("quality must be 25, 50, 100 or 200"));
-            }
-            Some(q)
-        }
-        None => None,
-    };
-    let hint = match a.str("driver_hint").filter(|h| !h.is_empty()) {
-        Some(h) => Some(
-            gz_app::gpu::DriverHint::parse(h)
-                .ok_or_else(|| CmdError::invalid("driver_hint must be auto, performance or power_saving"))?,
-        ),
-        None => None,
-    };
-    let gpu = gz_app::gpu::Gpu::of(editor);
-    let gpu_name = match a.text("gpu") {
-        Some(n) if n.is_empty() || n.eq_ignore_ascii_case("default") => Some(String::new()),
-        Some(n) => {
-            let known = gpu.adapters().is_none_or(|ad| ad.names.iter().any(|x| x == n));
-            if !known {
-                return Err(CmdError::invalid(format!("no adapter '{n}' (view_mode lists gpu.adapters)")));
-            }
-            Some(n.to_owned())
-        }
-        None => None,
-    };
-    if let Some(q) = quality {
-        Viewport::of(editor).set_quality(q);
-    }
-    if let Some(on) = a.bool("mute_sounds") {
-        set_mute_sounds(editor, on);
-    }
-    if let Some(on) = a.bool("real_time") {
-        set_real_time(editor, on);
-    }
-    if let Some(name) = gpu_name {
-        let settings = gz_app::EditorSettings::of(editor);
-        settings.set_gpu_adapter(&name);
-        settings.save_soon(editor);
-    }
-    if let Some(h) = hint {
-        gpu.set_hint(editor, h);
-    }
-    Ok(())
+/// The Paint mode's brush.
+pub fn set_brush(editor: &Editor, brush: Brush) {
+    Viewport::of(editor).with(|s| s.brush = brush);
+    editor.exec.wake().ping();
 }
 
-/// What `view_mode` answers of them.
-pub(crate) fn render_json(editor: &Arc<Editor>) -> gz_editor::Value {
-    let vp = Viewport::of(editor);
-    let settings = gz_app::EditorSettings::of(editor);
-    let gpu = gz_app::gpu::Gpu::of(editor);
-    let adapters = gpu.adapters().unwrap_or_default();
-    let quality = vp.read(|s| s.view.quality);
-    gz_editor::json!({
-        "quality": (quality * 100.0).round() as i64,
-        "mute_sounds": settings.render_flag("mute_sounds"),
-        "real_time": real_time(editor),
-        "gpu": {
-            "active": adapters.active,
-            "adapter": settings.gpu_adapter(),
-            "adapters": adapters.names,
-            "driver_hint": gpu.hint(editor).key(),
-            "note": "the adapter and the driver hint take effect after a restart",
-        },
+/// The camera bookmarks the open scene keeps.
+#[must_use]
+pub fn bookmarks(editor: &Editor) -> Vec<u8> {
+    Viewport::of(editor).read(|s| {
+        let Some(key) = &s.scene_key else { return Vec::new() };
+        (1..=9u8).filter(|n| s.cameras.contains_key(&session::bookmark_key(key, *n))).collect()
     })
+}
+
+/// The Paint mode's brush as it is.
+#[must_use]
+pub fn brush(editor: &Editor) -> Brush {
+    Viewport::of(editor).read(|s| s.brush.clone())
 }
 
 /// The scene with a playing motion's object posed where its motion has it now, and the camera
@@ -1846,21 +1952,22 @@ mod pass_tests {
 
 #[cfg(test)]
 mod render_tests {
-    use super::{Settings, Tool, apply_tool_flags, scaled, tool_flags};
+    use super::{Prefs, SHOW_FLAGS, Show, ViewMode, scaled};
 
     #[test]
-    fn the_tool_switches_round_trip_and_keep_the_other_bits() {
-        let (mut s, mut t) = (Settings::default(), Tool::default());
-        s.pick_any_class = false;
-        t.angle_snap = true;
-        // etfCSParent and etfGSnap are not the viewport's: they stay as read
-        let f = tool_flags(&s, &t, 1 | 1 << 3 | 1 << 9);
-        assert_eq!(f & 1, 1);
-        assert_eq!(f & (1 << 3), 1 << 3);
-        assert_eq!(f & (1 << 9), 0);
-        let (mut s2, mut t2) = (Settings::default(), Tool::default());
-        apply_tool_flags(&mut s2, &mut t2, f);
-        assert_eq!((s2, t2.angle_snap, t2.grid_snap), (s, true, false));
+    fn every_show_switch_has_a_key_a_title_and_its_own_field() {
+        let mut keys: Vec<&str> = SHOW_FLAGS.iter().map(|f| f.key).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), SHOW_FLAGS.len());
+        for f in &SHOW_FLAGS {
+            let mut s = Show::default();
+            let was = (f.get)(&s);
+            (f.set)(&mut s, !was);
+            assert_ne!(s, Show::default(), "{} sets its own field", f.key);
+        }
+        assert_eq!(ViewMode::parse("Game"), Some(ViewMode::Game));
+        assert_eq!(Prefs::default().snap_angle, 15.0);
     }
 
     #[test]

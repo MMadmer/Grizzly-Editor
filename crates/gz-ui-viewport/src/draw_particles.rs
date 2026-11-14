@@ -1,15 +1,15 @@
-//! The scene's particle systems playing in the viewport (`EParticlesObject`, the Particles
-//! tool's Play / Stop, `UIParticlesTool::PlaySelected`): a system per particle object made from
+//! The scene's particle systems playing in the viewport (`viewport.play what=particles`): a
+//! system per particle object made from
 //! the linked game's `particles.xr` the first time it is played, stepped on the CPU pool as part
 //! of a scene pass - one task per system, only while it plays and its emitter is in view - and
-//! drawn as sprite batches. Command `particles_tool action=play|stop|status [names]`.
+//! drawn as sprite batches. `viewport.play what=particles` plays and stops them.
 
 use std::sync::Arc;
 use std::time::Instant;
 
 use glam::{Mat4, Vec3};
 use gz_base::Rev;
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Reply, SmolStr, Value, json};
+use gz_editor::{CmdError, Editor, Reply, SmolStr, Value, json};
 use gz_particles::{Align, Collider, Cull, Library, System};
 use gz_render::{
     Aabb, Assets, Color, DrawList, Frustum, InstanceFlags, MaterialDesc, Sprite, SpriteAlign, SpriteBatch,
@@ -30,7 +30,7 @@ struct Entry {
     /// None when the library has no effect or group of that name (`Compile` failed), and while a
     /// pass steps it outside the lock (`out`).
     system: Option<System>,
-    /// What the system was last told it stands at (`UpdateParent`).
+    /// What the system was last told it stands at.
     transform: Mat4,
     /// A pass took the system out to step it: what `status` answers meanwhile (playing,
     /// particles, group).
@@ -231,7 +231,7 @@ pub async fn play(editor: &Arc<Editor>, names: &[String], on: bool) -> Result<Ve
     Ok(out)
 }
 
-/// `Tools->RayPick` (`CLevelTool::RayPick`): the nearest visible scene object, else the ground
+/// What a ray meets: the nearest visible scene object, else the ground
 /// plane y = 0 the editor falls back to.
 struct SceneCollider<'a> {
     state: &'a SceneState,
@@ -258,7 +258,7 @@ impl Collider for SceneCollider<'_> {
     }
 }
 
-/// The emitter's box (`EParticlesObject::GetBox`).
+/// The emitter's box.
 fn emitter_box(p: Vec3) -> Aabb {
     Aabb::new(p - Vec3::splat(PSOBJECT_SIZE), p + Vec3::splat(PSOBJECT_SIZE))
 }
@@ -307,7 +307,7 @@ pub(crate) fn step_and_draw(parts: &Particles, p: &Pass<'_>, list: &mut DrawList
                 s.update_parent(&world, Vec3::ZERO, false);
                 e.transform = world;
             }
-            // `OnFrame` and `Render` both ask whether the emitter's box is in view
+            // a system steps and draws only while its emitter's box is in view
             let seen = p.shown && o.flags.visible && p.frustum.intersects_aabb(&emitter_box(o.position()));
             if seen && s.is_playing() {
                 e.out = Some((true, s.particle_count(), s.is_group()));
@@ -404,20 +404,22 @@ fn status(parts: &Particles, state: &SceneState) -> Vec<Value> {
         .collect()
 }
 
-/// `particles_tool action=play|stop|status [names]`.
-pub(crate) async fn particles_tool(ed: Arc<Editor>, a: Args) -> Reply {
-    let action = a.str("action").filter(|s| !s.is_empty()).unwrap_or("status").to_ascii_lowercase();
-    let names = a.list("names").or_else(|| a.list("name")).unwrap_or_default();
-    let changed = match action.as_str() {
-        "play" => Some(play(&ed, &names, true).await?),
-        "stop" => Some(play(&ed, &names, false).await?),
-        "status" => None,
-        _ => return Err(CmdError::invalid("action must be play, stop or status")),
+/// `viewport.play what=particles`: plays (`Some(true)`) or stops the named systems (every one
+/// without names), and says what plays.
+pub(crate) async fn play_command(ed: &Arc<Editor>, names: &[String], on: Option<bool>) -> Reply {
+    let changed = match on {
+        Some(on) => Some(play(ed, names, on).await?),
+        None => None,
     };
-    let svc = SceneService::of(&ed)?;
+    let action = match on {
+        Some(true) => "play",
+        Some(false) => "stop",
+        None => "state",
+    };
+    let svc = SceneService::of(ed)?;
     let snap = svc.store.snapshot();
-    let parts = Particles::of(&ed);
-    let library = parts.library(&ed).await;
+    let parts = Particles::of(ed);
+    let library = parts.library(ed).await;
     let systems = status(&parts, &snap.state);
     let playing = systems.iter().filter(|s| s["playing"].as_bool() == Some(true)).count();
     let mut out = json!({

@@ -20,7 +20,7 @@ use crate::ini;
 pub const STATES: &str = "projects";
 /// The editor-wide file under the home.
 pub const MACHINE_FILE: &str = "machine.ltx";
-const RECENT: usize = 10;
+const RECENT: usize = 25;
 
 /// `<home>\projects\<id>.ltx`.
 #[must_use]

@@ -18,7 +18,7 @@ layouts", is its game half.
   ```
 
   **Mod > PDA Interface** in the editor, the preview's **Use in Module** button and
-  MCP `pda_use` all write that line. The first layout a module gets is its layout: a
+  `mod.set set={"pda": {"layout": "<path>"}}` all write that line. The first layout a module gets is its layout: a
   `.pdaasset` that appears in a project whose manifest names none is written into the line
   as it appears (the content browser's Add, `file.create kind=pda`, an agent's own file),
   and the line goes when the file it names is removed.
@@ -233,7 +233,7 @@ screen). The preview draws the player with `actor_level_spot`. A bad entry is
 
 ## The preview tab (the editor)
 
-**Mod > PDA Interface**, a double click on a `.pdaasset` and MCP `pda_preview action=open`
+**Mod > PDA Interface**, a double click on a `.pdaasset` and `pda.preview action=open`
 bring up the editor's `pda` tab: one of them, switching to the next layout it is given.
 
 - **Toolbar:** Save, Revert, Reload | Aspect (4:3 / 16:9), Language (rus / eng), Zoom
@@ -317,7 +317,7 @@ flag, target, battery, signal, eye, camera, skull.
 An error stops the build; in the game, a layout with an error is not shown and the
 stock PDA stays (the log says why).
 
-## MCP
+## Commands
 
 | command | what |
 |---|---|
@@ -325,10 +325,11 @@ stock PDA stays (the log says why).
 | `file.create kind=pda path=<folder>` | a new layout from the template; the module's first is used at once |
 | `asset.check path=<file or folder>` | every problem of a layout, the game reader's codes at their line and column |
 | `asset.reference kind=pda` | this document |
-| `pda_use` | set or clear `[pda] layout` |
-| `pda_preview` | open / state / click (`id`, `id` + `row`, `n`, or a canvas `x`,`y`) / page / key / aspect / lang / reset / reload / close; apply (`text=` into the Source pane, unsaved) / save / revert. With any action: `pane=source\|details\|both\|none`, `tab=problems\|pages\|vars\|log`, `zoom=fit\|100\|<0.25..4>`, and `save=` / `discard=` for unsaved edits. The answer gives `active`, `text_dirty`, `panes` (`source`, `details`, `tab`, `details_width`, `source_height` in pt), `zoom`, `scale` (what the frame drew at), `device_gap` (pt between the device and the canvas' nearest edge, below 0 when cut), `screen_edges` (the device's sides that lie on the game's screen edge: `top`, `bottom`, `left`, `right`), `read_line`; the state gives `map.bound`, the preview level's world rect, and `map.spots`: the player and the `preview.markers` the slot shows, in canvas units. The answer is the frame the call asked for - the editor holds it until the tab was drawn, so an opener's panes, `scale`, `device_gap` and `screen_edges` need no second call (`pending` is false) |
+| `pda.open` | opens the module's layout in its tab, made from the template when the module has none |
+| `mod.set set={"pda": {"layout": "<path>"}}` | set `[pda] layout`; an empty path clears it |
+| `pda.preview` | open / state / click (`id`, `id` + `row`, `n`, or a canvas `x`,`y`) / page / key / aspect / lang / reset / reload / close; apply (`text=` into the Source pane, unsaved) / save / revert. With any action: `pane=source\|details\|both\|none`, `tab=problems\|pages\|vars\|log`, `zoom=fit\|100\|<0.25..4>`, and `save=` / `discard=` for unsaved edits. The answer gives `active`, `text_dirty`, `panes` (`source`, `details`, `tab`, `details_width`, `source_height` in pt), `zoom`, `scale` (what the frame drew at), `device_gap` (pt between the device and the canvas' nearest edge, below 0 when cut), `screen_edges` (the device's sides that lie on the game's screen edge: `top`, `bottom`, `left`, `right`), `read_line`; the state gives `map.bound`, the preview level's world rect, and `map.spots`: the player and the `preview.markers` the slot shows, in canvas units. The answer is the frame the call asked for - the editor holds it until the tab was drawn, so an opener's panes, `scale`, `device_gap` and `screen_edges` need no second call |
 
 The preview follows the file: a write shows at once; with edits in the Source pane it is
 merged into them (`disk_note` in the answer names what both changed).
 `open` activates the tab; every other action leaves the active tab alone.
-`shot.window` after `pda_preview action=open` is what the author sees.
+`shot.window` after `pda.preview action=open` is what the author sees.

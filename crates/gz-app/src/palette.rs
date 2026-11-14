@@ -1,7 +1,6 @@
 //! The Command Palette's rows and their order (docs/UI_DESIGN.md, section 5).
 //!
-//! A row is an action, an open tab, a panel of the Level tab, or a command of the level editor's
-//! own table. Only what a row shows is matched - its name, its category or path, its keys - with
+//! A row is an action, an open tab or a panel of the Level tab. Only what a row shows is matched - its name, its category or path, its keys - with
 //! the kit's ranking (`gz_ui::rank`: word prefixes first, then letters in order). Without a query
 //! the actions run last from the palette lead, then the open tabs, then everything else in its
 //! group's order.

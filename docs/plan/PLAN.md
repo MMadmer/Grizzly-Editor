@@ -108,7 +108,8 @@ records removed; the command core (`gz-editor`); version 0.7.0; the contracts (`
 
 | Stream | Brief | Owns | Model |
 |---|---|---|---|
-| Q Suites and sweep | `briefs/Q-suites-sweep.md` | `tools/qa`, the check scripts, the untyped registry API removed; comments, names, messages and test modules in every crate | Sonnet 5.5, high |
+| Q1 Suites and checks | `briefs/Q1-suites-checks.md` | `tools/qa`, the check scripts, `tools/mcp`'s scripts; the untyped registry API removed (six files of `gz-editor`, `gz-mcp`, `gz-mcp-bridge`) | Sonnet 5.5, high |
+| Q2 The sweep | `briefs/Q2-sweep.md` | comments, names, messages and test modules in every other crate; typed findings instead of marks in messages; the word check | Sonnet 5.5, high |
 | the architect | - | the documents: `ARCHITECTURE.md` (replaces `RUST_MIGRATION.md`), `STATE.md` (replaces `docs/rust/`), `AI_SETUP.md`, `README.md`, `CLAUDE.md`; dead tracked data | - |
 
 An engineer gets one or two large pieces of work, not five, and there are no more engineers than that takes:

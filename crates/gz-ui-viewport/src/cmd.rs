@@ -1,25 +1,24 @@
-//! The viewport's commands over MCP; the wire is `LevelMcpScene.cpp` (`camera_get`,
-//! `camera_set`, `focus_object`, `viewport_navigation`, `viewport_controls`, `view_mode`),
-//! `GameLightingScene.cpp` (`game_lighting`), `LevelMcp.cpp` (`frame_pacing`) and
-//! `GrizzlyMCP.cpp` (`screenshot_viewport`).
+//! The viewport's commands: `viewport.camera`, `viewport.view`, `viewport.play`,
+//! `viewport.gesture` (in `gesture.rs`), `shot.viewport` and `perf.frames`.
 
 use std::sync::Arc;
 
 use base64::Engine;
 use glam::Vec3;
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Origin, Registry, Reply, Value, json};
+use gz_editor::{CmdError, Editor, Origin, Registry, Reply, Spec, Value, json};
 use gz_scene::apply::SelectMode;
 use gz_scene::{SceneCmd, SceneService};
+use schemars::JsonSchema;
+use serde::Deserialize;
 
 use crate::camera::Target;
-use crate::gizmo::{self, GizmoType};
+use crate::gizmo::{self, GizmoType, Space};
 use crate::lighting::{self, hour_text};
 use crate::menus;
-use crate::service::{Action, Fill, Viewport};
+use crate::place::Placeable;
+use crate::service::{self, ANGLE_STEPS, Brush, MOVE_STEPS, SCALE_STEPS, SHOW_FLAGS, ViewMode, Viewport};
 
-const AREA: &str = "gz-ui-viewport";
-
-/// `%.Nf` as a JSON number.
+/// A number rounded to `digits` decimals, as JSON.
 fn r(v: f32, digits: i32) -> f64 {
     let k = 10f64.powi(digits);
     (f64::from(v) * k).round() / k
@@ -29,17 +28,26 @@ fn v3(v: Vec3, digits: i32) -> Value {
     json!([r(v.x, digits), r(v.y, digits), r(v.z, digits)])
 }
 
-/// `%g` of a float as a JSON number: 0.1 is 0.1, not 0.100000001.
+/// A step as JSON: 0.1 is 0.1, not 0.100000001.
 fn g(v: f32) -> Value {
     menus::fmt_g(v).parse::<f64>().map_or_else(|_| json!(f64::from(v)), |x| json!(x))
 }
 
-/// `AppendCameraJson`.
+/// The camera: where it is, which way it looks (degrees: heading, pitch, bank), the view.
 fn camera_json(vp: &Viewport) -> Value {
-    vp.read(|s| json!({ "position": v3(s.nav.position, 3), "hpb": v3(s.nav.hpb, 4), "direction": v3(s.nav.direction(), 3) }))
+    vp.read(|s| {
+        let hpb = s.nav.hpb;
+        json!({
+            "position": v3(s.nav.position, 3),
+            "rotation": [r(hpb.x.to_degrees(), 2), r(hpb.y.to_degrees(), 2), r(hpb.z.to_degrees(), 2)],
+            "direction": v3(s.nav.direction(), 3),
+            "view": s.nav.current().key(),
+            "orthographic": s.nav.ortho,
+        })
+    })
 }
 
-/// What `state` and `ui_list` say of the viewport.
+/// What `state` and `ui.list` say of the viewport.
 #[must_use]
 pub fn view_state(vp: &Viewport) -> Value {
     vp.read(|s| {
@@ -48,440 +56,540 @@ pub fn view_state(vp: &Viewport) -> Value {
             "height": s.size[1],
             "view": s.nav.current().key(),
             "orthographic": s.nav.ortho,
-            "camera": { "position": v3(s.nav.position, 3), "hpb": v3(s.nav.hpb, 4), "direction": v3(s.nav.direction(), 3) },
-            "tool": tool_name(s.tool.action, s.tool.gizmo),
-            "gizmo": s.anchor.is_some() && s.tool.action == Action::Select && s.tool.gizmo != GizmoType::None,
-            "fill": s.view.fill.key(),
-            "lighting": s.view.lighting,
-            "grid": s.view.grid,
-            "safe_rect": s.view.safe_rect,
-            "stats": s.view.stats,
-            "helpers": s.view.helpers,
-            "game_lighting": s.game.enabled,
+            "mode": s.prefs.mode.key(),
+            "tool": s.gizmo.key(),
+            "space": s.prefs.space.key(),
+            "gizmo": s.anchor.is_some() && s.gizmo != GizmoType::None,
         })
     })
 }
 
-fn tool_name(action: Action, gizmo: GizmoType) -> &'static str {
-    match (action, gizmo) {
-        (Action::Place, _) => "place",
-        (_, GizmoType::Move) => "move",
-        (_, GizmoType::Rotate) => "rotate",
-        (_, GizmoType::Scale) => "scale",
-        _ => "select",
-    }
-}
-
-/// Registers `camera_get`, `camera_set`, `focus_object`, `viewport_navigation`,
-/// `viewport_controls`, `view_mode`, `game_lighting`, `frame_pacing`, `screenshot_viewport`,
-/// `group_thumbnail`, `particles_tool`, `spawn_animation`, `viewport_gesture`.
+/// Registers the viewport's commands.
 pub fn register(reg: &mut Registry) {
-    reg.add_sync(AREA, "camera_get", |ed, _a, _o| Ok(json!({ "camera": camera_json(&Viewport::of(ed)) })));
-    reg.add(AREA, "camera_set", |ed, a, _o| async move { camera_set(&ed, &a) });
-    reg.add(AREA, "focus_object", focus_object);
-    reg.add(AREA, "viewport_navigation", viewport_navigation);
-    reg.add(AREA, "viewport_controls", |ed, a, _o| async move { viewport_controls(&ed, &a) });
-    reg.add(AREA, "view_mode", |ed, a, _o| async move { view_mode(&ed, &a).await });
-    reg.add(AREA, "game_lighting", |ed, a, _o| async move { game_lighting(&ed, &a).await });
-    reg.add(AREA, "frame_pacing", |ed, a, _o| async move { frame_pacing(&ed, &a) });
-    reg.add(AREA, "screenshot_viewport", |ed, _a, _o| async move { screenshot_viewport(&ed).await });
-    reg.add(AREA, "group_thumbnail", |ed, _a, _o| async move { group_thumbnail(&ed).await });
-    reg.add(AREA, "particles_tool", |ed, a, _o| crate::draw_particles::particles_tool(ed, a));
-    reg.add(AREA, "spawn_animation", |ed, a, _o| crate::spawn_anim::spawn_animation(ed, a));
-    reg.add(AREA, "viewport_gesture", |ed, a, _o| crate::gesture::viewport_gesture(ed, a));
+    reg.area("viewport", "The level's 3D view: the camera, the view mode, what is shown, snapping, gestures");
+    reg.cmd(
+        Spec::view(
+            "viewport.camera",
+            "The viewport's camera: where it is, an axis view, framing objects, camera bookmarks.",
+        )
+        .example("action=set position=0,20,-30 rotation=0,-30,0"),
+        camera,
+    );
+    reg.cmd(
+        Spec::view(
+            "viewport.view",
+            "How the viewport shows the scene: the view mode, what is shown, the transform tool and its space, snapping, Game Lit's weather, the brush, what Place mode places.",
+        )
+        .example("mode=game hour=22 show=grid,stats hide=fog tool=move grid_step=0.5"),
+        view,
+    );
+    reg.cmd(
+        Spec::view(
+            "viewport.play",
+            "Plays or stops what moves in the viewport: particle systems, a spawn's startup animation.",
+        )
+        .example("what=particles action=play objects=campfire_01"),
+        play,
+    );
+    reg.cmd(
+        Spec::write(
+            "viewport.gesture",
+            "A click, a drag, a hover or a drop played in the viewport as the mouse would: what it picked, placed or moved.",
+        )
+        .example("kind=drop at=400,300 payload=object:props\\box_wood_01"),
+        crate::gesture::gesture,
+    );
+    reg.cmd(
+        Spec::read("shot.viewport", "A picture of the viewport's scene as the commands before it left it."),
+        shot_viewport,
+    );
+    reg.cmd(
+        Spec::read(
+            "perf.frames",
+            "The window's frames and the viewport's scene passes since the last ask: rates, times, causes.",
+        ),
+        perf_frames,
+    );
 }
 
-/// A change made over MCP is drawn: the pane's next frame builds the pass.
-fn redraw(ed: &Editor) {
-    ed.exec.wake().ping();
+// ---- viewport.camera ----------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum CameraAction {
+    /// Where the camera is.
+    #[default]
+    Get,
+    /// Moves it: `position`, `rotation`, `view`, `orthographic`.
+    Set,
+    /// Frames one object (`object`) or the selection.
+    Focus,
+    /// Frames the scene or the selection (`scope`).
+    Frame,
+    /// Goes to camera bookmark `slot`, or keeps the camera in it (`store`).
+    Bookmark,
 }
 
-fn camera_set(ed: &Arc<Editor>, a: &Args) -> Reply {
-    let vp = Viewport::of(ed);
-    let (mut pos, mut hpb) = vp.read(|s| (s.nav.position, s.nav.hpb));
-    let mut any = false;
-    for (i, k) in ["x", "y", "z"].iter().enumerate() {
-        if let Some(v) = a.f32(k) {
-            pos[i] = v;
-            any = true;
-        }
-    }
-    for (i, k) in ["h", "p", "b"].iter().enumerate() {
-        if let Some(v) = a.f32(k) {
-            hpb[i] = v;
-            any = true;
-        }
-    }
-    if !any {
-        return Err(CmdError::invalid("pass at least one of x,y,z,h,p,b"));
-    }
-    vp.with(|s| {
-        s.nav.set(hpb, pos);
-        s.nav.reset_state();
-    });
-    redraw(ed);
-    Ok(json!({ "camera": camera_json(&vp) }))
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum FrameScope {
+    #[default]
+    All,
+    Selection,
 }
 
-async fn focus_object(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
-    let name = a.str("name").ok_or_else(|| CmdError::invalid("missing 'name' argument"))?;
-    let svc = SceneService::of(&ed)?;
-    let snap = svc.store.snapshot();
-    let obj = snap.find_relaxed(name).ok_or_else(|| CmdError::not_found("object not found"))?.clone();
-    if a.bool("select").unwrap_or(false) {
-        // exactly like a manual pick
-        svc.store.send(SceneCmd::Select { ids: vec![obj.id], mode: SelectMode::Set }, o).await?;
-    }
-    let lib = svc.library.clone();
-    let s = snap.clone();
-    let b = ed.exec.cpu(move || crate::draw::object_box(&s, &lib, &obj)).await;
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CameraParams {
+    /// What to do; left out: get.
+    #[serde(default)]
+    action: CameraAction,
+    /// set: where the camera stands, metres.
+    #[serde(default)]
+    position: Option<[f32; 3]>,
+    /// set: which way it looks, degrees: heading, pitch, bank.
+    #[serde(default)]
+    rotation: Option<[f32; 3]>,
+    /// set: an axis view (front, back, left, right, top, bottom) or the free one (perspective).
+    #[serde(default)]
+    view: Option<String>,
+    /// set: an orthographic projection.
+    #[serde(default)]
+    orthographic: Option<bool>,
+    /// focus: the object by name; left out: the selection.
+    #[serde(default)]
+    object: Option<String>,
+    /// focus: select it too.
+    #[serde(default)]
+    select: bool,
+    /// frame: the whole scene (all) or the selection.
+    #[serde(default)]
+    scope: FrameScope,
+    /// bookmark: which, 1 to 9.
+    #[serde(default)]
+    slot: Option<u8>,
+    /// bookmark: keep the camera in the slot instead of going to it.
+    #[serde(default)]
+    store: bool,
+}
+
+async fn camera(ed: Arc<Editor>, p: CameraParams, o: Origin) -> Reply {
     let vp = Viewport::of(&ed);
-    vp.with(|s| {
+    match p.action {
+        CameraAction::Get => {}
+        CameraAction::Set => {
+            let target = match p.view.as_deref() {
+                Some(v) => Some(Target::parse(v).ok_or_else(|| {
+                    CmdError::invalid("view is perspective, front, back, left, right, top or bottom")
+                })?),
+                None => None,
+            };
+            if p.position.is_none() && p.rotation.is_none() && target.is_none() && p.orthographic.is_none() {
+                return Err(CmdError::invalid("set takes position, rotation, view or orthographic"));
+            }
+            let finite = |v: [f32; 3], what: &str| {
+                if v.iter().all(|x| x.is_finite()) {
+                    Ok(Vec3::from_array(v))
+                } else {
+                    Err(CmdError::invalid(format!("{what} must be three numbers")))
+                }
+            };
+            let position = p.position.map(|v| finite(v, "position")).transpose()?;
+            let rotation = p.rotation.map(|v| finite(v, "rotation")).transpose()?;
+            vp.with(|s| {
+                if let Some(t) = target {
+                    s.nav.set_target(t);
+                }
+                if position.is_some() || rotation.is_some() {
+                    let hpb = rotation.map_or(s.nav.hpb, |d| {
+                        Vec3::new(d.x.to_radians(), d.y.to_radians(), d.z.to_radians())
+                    });
+                    let at = position.unwrap_or(s.nav.position);
+                    s.nav.set(hpb, at);
+                    s.nav.reset_state();
+                }
+                if let Some(on) = p.orthographic {
+                    s.nav.ortho = on;
+                }
+            });
+        }
+        CameraAction::Focus => {
+            let svc = SceneService::of(&ed)?;
+            let snap = svc.store.snapshot();
+            let target = match p.object.as_deref() {
+                Some(name) => {
+                    let obj = snap
+                        .find_relaxed(name)
+                        .ok_or_else(|| CmdError::not_found(format!("no object '{name}'")))?;
+                    if p.select {
+                        svc.store
+                            .send(SceneCmd::Select { ids: vec![obj.id], mode: SelectMode::Set }, o)
+                            .await?;
+                    }
+                    let (s, lib, obj) = (snap.clone(), svc.library.clone(), obj.clone());
+                    Some(ed.exec.cpu(move || crate::draw::object_box(&s, &lib, &obj)).await)
+                }
+                None => {
+                    let (s, lib) = (snap.clone(), svc.library.clone());
+                    ed.exec.cpu(move || crate::draw::scene_box(&s, &lib, true)).await
+                }
+            };
+            let b = target.ok_or_else(|| CmdError::invalid("nothing is selected to frame"))?;
+            vp.with(|s| {
+                let size = s.size;
+                s.nav.zoom_extents(&b, size);
+            });
+        }
+        CameraAction::Frame => {
+            if !frame(&ed, p.scope == FrameScope::Selection).await {
+                return Err(CmdError::invalid(match p.scope {
+                    FrameScope::Selection => "nothing is selected to frame",
+                    FrameScope::All => "the scene has nothing to frame",
+                }));
+            }
+        }
+        CameraAction::Bookmark => {
+            let n =
+                p.slot.filter(|n| (1..=9).contains(n)).ok_or_else(|| CmdError::invalid("slot is 1 to 9"))?;
+            if p.store {
+                if !vp.store_bookmark(&ed, n) {
+                    return Err(CmdError::invalid("open a scene to keep a camera bookmark of it"));
+                }
+            } else if !vp.go_to_bookmark(n) {
+                return Err(CmdError::not_found(format!("camera bookmark {n} keeps no camera")));
+            }
+        }
+    }
+    ed.exec.wake().ping();
+    Ok(json!({ "camera": camera_json(&vp), "bookmarks": service::bookmarks(&ed) }))
+}
+
+/// Frame All or Frame Selection: the scene's objects (a painting mode's layer), or the selected
+/// ones, in view. `false` when there is no box to frame.
+pub async fn frame(editor: &Arc<Editor>, selected: bool) -> bool {
+    let Ok(svc) = SceneService::of(editor) else { return false };
+    let snap = svc.store.snapshot();
+    let lib = svc.library.clone();
+    let found = editor.exec.cpu(move || crate::draw::scene_box(&snap, &lib, selected)).await;
+    let Some(b) = found else { return false };
+    Viewport::of(editor).with(|s| {
         let size = s.size;
         s.nav.zoom_extents(&b, size);
     });
-    redraw(&ed);
-    let p = vp.read(|s| s.nav.position);
-    Ok(json!({ "camera": v3(p, 2) }))
+    editor.exec.wake().ping();
+    true
 }
 
-async fn viewport_navigation(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
-    let vp = Viewport::of(&ed);
-    let view = a.str("view").unwrap_or("");
-    let scope = a.str("scope").unwrap_or("");
-    let action =
-        a.str("action").filter(|s| !s.is_empty()).unwrap_or(if view.is_empty() { "get" } else { "set" });
-    if action.eq_ignore_ascii_case("set") {
-        let Some(t) = Target::parse(view) else {
-            return Err(CmdError::invalid(
-                "view must be perspective, front, back, left, right, top, or bottom",
-            ));
-        };
-        vp.with(|s| s.nav.set_target(t));
-        redraw(&ed);
-    } else if action.eq_ignore_ascii_case("frame") {
-        let selection = scope.eq_ignore_ascii_case("selection");
-        let bad = !selection && !scope.is_empty() && !scope.eq_ignore_ascii_case("all");
-        if bad || !crate::keys::frame(&ed, selection).await {
-            return Err(CmdError::invalid("scope must be all or selection, and a scene must be ready"));
+// ---- viewport.view ------------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum Lights {
+    /// The lights the last frame of Game Lit drew.
+    Drawn,
+    /// Every light of the level as Game Lit sees it.
+    All,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ViewParams {
+    /// The view mode: studio, unlit, game (Game Lit) or wireframe.
+    #[serde(default)]
+    mode: Option<String>,
+    /// The transform tool: select, move, rotate or scale.
+    #[serde(default)]
+    tool: Option<String>,
+    /// The gizmo's axes: world or local.
+    #[serde(default)]
+    space: Option<String>,
+    /// Show pill switches to turn on: grid, safe_rect, stats, spawn_helpers, spawn_names,
+    /// light_names, glow_crosses, ai_map, fog.
+    #[serde(default)]
+    show: Option<Vec<String>>,
+    /// Show pill switches to turn off.
+    #[serde(default)]
+    hide: Option<Vec<String>>,
+    /// Moves go in steps of the grid.
+    #[serde(default)]
+    grid_snap: Option<bool>,
+    /// Turns go in steps of the angle.
+    #[serde(default)]
+    angle_snap: Option<bool>,
+    /// Scaling goes in steps.
+    #[serde(default)]
+    scale_snap: Option<bool>,
+    /// A placed or dropped thing lands on the surface under the pointer.
+    #[serde(default)]
+    surface_snap: Option<bool>,
+    /// ... and stands on its slope.
+    #[serde(default)]
+    surface_align: Option<bool>,
+    /// ... on the nearest vertex of what it lands on.
+    #[serde(default)]
+    vertex_snap: Option<bool>,
+    /// The grid step, metres (0.01 0.05 0.1 0.25 0.5 1 2 5 10, or any above 0).
+    #[serde(default)]
+    grid_step: Option<f32>,
+    /// The angle step, degrees (5 10 15 22.5 30 45 90, or any above 0).
+    #[serde(default)]
+    angle_step: Option<f32>,
+    /// The scale step, a factor (0.05 0.1 0.25 0.5 1 2, or any above 0).
+    #[serde(default)]
+    scale_step: Option<f32>,
+    /// Game Lit: the weather by its file's name; empty is the default for the hour.
+    #[serde(default)]
+    weather: Option<String>,
+    /// Game Lit: the hour, 0 to 24.
+    #[serde(default)]
+    hour: Option<f32>,
+    /// Game Lit: 0 is the game's tonemap, else a factor.
+    #[serde(default)]
+    exposure: Option<f32>,
+    /// Game Lit: how much of the sky's light reaches under a roof, 0 to 1.
+    #[serde(default)]
+    indoor_hemi: Option<f32>,
+    /// Game Lit: bake the map of what is under a roof again.
+    #[serde(default)]
+    rebake: bool,
+    /// Game Lit: read the weather and the game's render settings again.
+    #[serde(default)]
+    reload: bool,
+    /// Answer the linked game's weathers.
+    #[serde(default)]
+    weathers: bool,
+    /// Answer Game Lit's lights: the ones drawn, or every light of the level.
+    #[serde(default)]
+    lights: Option<Lights>,
+    /// The Paint mode's brush: the detail mesh it paints.
+    #[serde(default)]
+    brush_mesh: Option<String>,
+    /// The brush's radius, metres.
+    #[serde(default)]
+    brush_radius: Option<f32>,
+    /// The brush's density, 0 to 1.
+    #[serde(default)]
+    brush_density: Option<f32>,
+    /// What Place mode places: `<kind>` or `<kind>:<reference>` (`object:props\box_01`,
+    /// `spawn:stalker`, `light`); arming puts Place mode up. Empty: nothing.
+    #[serde(default)]
+    arm: Option<String>,
+    /// The viewport draws every frame.
+    #[serde(default)]
+    real_time: Option<bool>,
+    /// The scene's sounds stay silent.
+    #[serde(default)]
+    mute_sounds: Option<bool>,
+    /// The graphics adapter by its name for the next start; empty or `default`: the system's.
+    #[serde(default)]
+    gpu: Option<String>,
+}
+
+fn step(value: Option<f32>, what: &str) -> Result<Option<f32>, CmdError> {
+    match value {
+        Some(v) if !(v.is_finite() && v > 0.0) => {
+            Err(CmdError::invalid(format!("{what} must be a step above 0")))
         }
-    } else if !action.eq_ignore_ascii_case("get") {
-        return Err(CmdError::invalid("action must be get, set, or frame"));
+        other => Ok(other),
     }
-    let view = vp.read(|s| s.nav.current().key());
-    Ok(json!({ "view": view, "camera": camera_json(&vp) }))
 }
 
-/// The viewport's right pills. Arguments that are left out keep their value; a request with a
-/// bad one changes nothing.
-fn viewport_controls(ed: &Arc<Editor>, a: &Args) -> Reply {
-    let vp = Viewport::of(ed);
-    // the snap steps are the Preferences' own: read what was set there since the last pass
-    vp.sync(ed);
-    let [sup_move, sup_rotate, sup_scale] = ed
+fn show_keys(list: Option<&[String]>) -> Result<Vec<&str>, CmdError> {
+    let mut out = Vec::new();
+    for k in list.unwrap_or_default() {
+        let k = k.trim();
+        if !SHOW_FLAGS.iter().any(|f| f.key == k) {
+            let all: Vec<&str> = SHOW_FLAGS.iter().map(|f| f.key).collect();
+            return Err(CmdError::invalid(format!(
+                "'{k}' is not shown or hidden; there are {}",
+                all.join(", ")
+            )));
+        }
+        out.push(k);
+    }
+    Ok(out)
+}
+
+async fn view(ed: Arc<Editor>, p: ViewParams, _o: Origin) -> Reply {
+    let vp = Viewport::of(&ed);
+    vp.sync(&ed);
+    // everything is read first: a request with a bad value changes nothing
+    let mode = p
+        .mode
+        .as_deref()
+        .map(|m| {
+            ViewMode::parse(m).ok_or_else(|| CmdError::invalid("mode is studio, unlit, game or wireframe"))
+        })
+        .transpose()?;
+    let tool = p
+        .tool
+        .as_deref()
+        .map(|t| {
+            GizmoType::parse(t).ok_or_else(|| CmdError::invalid("tool is select, move, rotate or scale"))
+        })
+        .transpose()?;
+    let space = match p.space.as_deref().map(str::trim) {
+        Some("world") => Some(Space::World),
+        Some("local") => Some(Space::Local),
+        Some(_) => return Err(CmdError::invalid("space is world or local")),
+        None => None,
+    };
+    let (show, hide) = (show_keys(p.show.as_deref())?, show_keys(p.hide.as_deref())?);
+    let steps = [
+        (GizmoType::Move, step(p.grid_step, "grid_step")?),
+        (GizmoType::Rotate, step(p.angle_step, "angle_step")?),
+        (GizmoType::Scale, step(p.scale_step, "scale_step")?),
+    ];
+    let armed = match p.arm.as_deref().map(str::trim) {
+        Some("" | "none") => Some(None),
+        Some(key) => Some(Some(Placeable::parse(key).ok_or_else(|| {
+            CmdError::invalid("arm is <kind> or <kind>:<reference>, the kind one scene.place takes")
+        })?)),
+        None => None,
+    };
+    let sup = ed
         .project_opt()
         .and_then(|s| s.services.get::<SceneService>())
         .map_or([true; 3], |svc| gizmo::supports_of(&svc.store.snapshot()));
-    let tool_arg = a.str("tool").filter(|t| !t.is_empty());
-    let (mut action, mut kind) = vp.read(|s| (s.tool.action, s.tool.gizmo));
-    if let Some(t) = tool_arg {
-        action = Action::Select;
-        kind = GizmoType::None;
-        let supported = if t.eq_ignore_ascii_case("place") {
-            action = Action::Place;
-            true
-        } else if t.eq_ignore_ascii_case("move") {
-            kind = GizmoType::Move;
-            sup_move
-        } else if t.eq_ignore_ascii_case("rotate") {
-            kind = GizmoType::Rotate;
-            sup_rotate
-        } else if t.eq_ignore_ascii_case("scale") {
-            kind = GizmoType::Scale;
-            sup_scale
-        } else if t.eq_ignore_ascii_case("select") {
-            true
-        } else {
-            return Err(CmdError::invalid("tool must be select, place, move, rotate or scale"));
+    if let Some(t) = tool {
+        let i = match t {
+            GizmoType::Move => Some(0),
+            GizmoType::Rotate => Some(1),
+            GizmoType::Scale => Some(2),
+            GizmoType::None => None,
         };
-        if !supported {
+        if i.is_some_and(|i| !sup[i]) {
             return Err(CmdError::invalid(format!(
-                "the selection cannot {t}: not every selected object takes it"
+                "the selection cannot {}: not every selected object takes it",
+                t.key()
             )));
         }
     }
-    let snaps = [
-        ("grid", "grid_snap", GizmoType::Move),
-        ("scale", "scale_snap", GizmoType::Scale),
-        ("angle", "angle_snap", GizmoType::Rotate),
-    ];
-    let mut wanted = Vec::with_capacity(3);
-    for (name, toggle, k) in snaps {
-        let (step, on) = vp.read(|s| (s.step(k), s.snap_on(k)));
-        let given = a.f32(name);
-        if let Some(v) = given
-            && v.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
-        {
-            return Err(CmdError::invalid(format!("{name} must be a step above 0")));
-        }
-        wanted.push((k, given.unwrap_or(step), given.is_some(), a.bool(toggle).unwrap_or(on)));
-    }
-    if tool_arg.is_some() {
-        vp.with(|s| {
-            s.tool.action = action;
-            s.tool.gizmo = kind;
-        });
-    }
-    for (k, step, has_step, on) in &wanted {
-        if *has_step {
-            menus::set_step(ed, *k, *step);
-        }
-        vp.with(|s| match k {
-            GizmoType::Move => s.tool.grid_snap = *on,
-            GizmoType::Scale => s.tool.scale_snap = *on,
-            _ => s.tool.angle_snap = *on,
-        });
-    }
-    vp.with(|s| {
-        s.settings.object_snap = a.bool("object_snap").unwrap_or(s.settings.object_snap);
-        s.settings.vertex_snap = a.bool("vertex_snap").unwrap_or(s.settings.vertex_snap);
-        s.settings.normal_align = a.bool("normal_align").unwrap_or(s.settings.normal_align);
-    });
-    redraw(ed);
-    vp.read(|s| {
-        let snap = |k: GizmoType| json!({ "on": s.snap_on(k), "step": g(s.step(k)) });
-        Ok(json!({
-            "tool": tool_name(s.tool.action, s.tool.gizmo),
-            "grid": snap(GizmoType::Move),
-            "scale": snap(GizmoType::Scale),
-            "angle": snap(GizmoType::Rotate),
-            "object_snap": s.settings.object_snap,
-            "vertex_snap": s.settings.vertex_snap,
-            "normal_align": s.settings.normal_align,
-            "supports": { "move": sup_move, "rotate": sup_rotate, "scale": sup_scale },
-        }))
-    })
-}
-
-const PRESETS: [&str; 5] = ["unlit", "lit", "game", "wireframe", "point"];
-
-async fn view_mode(ed: &Arc<Editor>, a: &Args) -> Reply {
-    let vp = Viewport::of(ed);
-    // View > Render > GPU and Quality, Mute Sounds, Real Time
-    crate::service::render_args(ed, a)?;
-    let mut game_on: Option<bool> = None;
-    // presets first, so explicit fields can still override them
-    if let Some(preset) = a.str("preset").filter(|p| !p.is_empty()) {
-        match preset.to_ascii_lowercase().as_str() {
-            "lit" => vp.with(|s| {
-                s.view.fill = Fill::Solid;
-                s.view.lighting = true;
-                s.view.textures = true;
-            }),
-            "unlit" => vp.with(|s| {
-                s.view.fill = Fill::Solid;
-                s.view.lighting = false;
-                s.view.textures = true;
-            }),
-            "game" => {
-                vp.with(|s| {
-                    s.view.fill = Fill::Solid;
-                    s.view.textures = true;
-                });
-                game_on = Some(true);
+    let gpu = match p.gpu.as_deref() {
+        Some(n) if n.is_empty() || n.eq_ignore_ascii_case("default") => Some(String::new()),
+        Some(n) => {
+            let known = gz_app::gpu::Gpu::of(&ed).adapters().is_none_or(|a| a.names.iter().any(|x| x == n));
+            if !known {
+                return Err(CmdError::invalid(format!(
+                    "no graphics adapter '{n}' (render.gpu.adapters lists them)"
+                )));
             }
-            "wireframe" => vp.with(|s| s.view.fill = Fill::Wireframe),
-            "point" => vp.with(|s| s.view.fill = Fill::Point),
-            _ => return Err(CmdError::invalid("unknown preset").with_data(json!({ "presets": PRESETS }))),
+            Some(n.to_owned())
         }
-    }
-    if let Some(fill) = a.str("fill").filter(|f| !f.is_empty()) {
-        let f = match fill.to_ascii_lowercase().as_str() {
-            "solid" => Fill::Solid,
-            "wireframe" => Fill::Wireframe,
-            "point" => Fill::Point,
-            _ => return Err(CmdError::invalid("fill must be solid, wireframe or point")),
-        };
-        vp.with(|s| s.view.fill = f);
-    }
-    if let Some(shade) = a.str("shade").filter(|f| !f.is_empty()) {
-        let flat = match shade.to_ascii_lowercase().as_str() {
-            "flat" => true,
-            "gouraud" => false,
-            _ => return Err(CmdError::invalid("shade must be flat or gouraud")),
-        };
-        vp.with(|s| s.view.flat = flat);
-    }
-    vp.with(|s| {
-        let v = &mut s.view;
-        for (name, slot) in [
-            ("lighting", &mut v.lighting),
-            ("textures", &mut v.textures),
-            ("edged_faces", &mut v.edged_faces),
-            ("filter_linear", &mut v.filter_linear),
-            ("fog", &mut v.fog),
-            ("environment", &mut v.environment),
-            ("grid", &mut v.grid),
-            ("safe_rect", &mut v.safe_rect),
-            ("stats", &mut v.stats),
-            ("helpers", &mut v.helpers),
-        ] {
-            if let Some(b) = a.bool(name) {
-                *slot = b;
-            }
-        }
-    });
-    if let Some(b) = a.bool("game_lighting") {
-        game_on = Some(b);
-    }
-    if let Some(on) = game_on {
-        let need = vp.with(|s| {
-            let need = on && !s.game.enabled && !s.game.weather_ok;
-            s.game.enabled = on;
-            need
-        });
-        if need {
-            vp.load_weather(ed, true).await;
-        }
-    }
-    redraw(ed);
-    let render = crate::service::render_json(ed);
-    vp.read(|s| {
-        let v = &s.view;
-        let mut out = json!({
-            "fill": v.fill.key(),
-            "shade": if v.flat { "flat" } else { "gouraud" },
-            "lighting": v.lighting,
-            "textures": v.textures,
-            "edged_faces": v.edged_faces,
-            "filter_linear": v.filter_linear,
-            "fog": v.fog,
-            "environment": v.environment,
-            "grid": v.grid,
-            "safe_rect": v.safe_rect,
-            "stats": v.stats,
-            "helpers": v.helpers,
-            "game_lighting": s.game.enabled,
-            "presets": PRESETS,
-        });
-        if let (Some(o), Value::Object(r)) = (out.as_object_mut(), render) {
-            o.extend(r);
-        }
-        Ok(out)
-    })
-}
+        None => None,
+    };
 
-/// `GameLighting_JsonState`.
-fn game_state(vp: &Viewport) -> Value {
-    vp.read(|s| {
-        let gl = &s.game;
-        let mut counts = [0u32; 4];
-        for l in &gl.drawn {
-            let i = match l.kind {
-                "level" => 0,
-                "lamp" => 1,
-                "lamp_ambient" => 2,
-                _ => 3,
-            };
-            if let Some(c) = counts.get_mut(i) {
-                *c += 1;
-            }
+    if let Some(m) = mode {
+        service::set_mode(&ed, m);
+    }
+    if let Some(t) = tool {
+        vp.with(|s| s.gizmo = t);
+    }
+    if let Some(s) = space {
+        service::set_space(&ed, s);
+    }
+    for k in show {
+        service::set_show(&ed, k, true);
+    }
+    for k in hide {
+        service::set_show(&ed, k, false);
+    }
+    for (key, v) in [
+        ("grid", p.grid_snap),
+        ("angle", p.angle_snap),
+        ("scale", p.scale_snap),
+        ("surface", p.surface_snap),
+        ("align", p.surface_align),
+        ("vertex", p.vertex_snap),
+    ] {
+        if let Some(on) = v {
+            service::set_snap(&ed, key, on);
         }
-        let st = &gl.settings;
-        let (cells, origin) = gl.roof.as_ref().map_or((0, [0.0, 0.0]), |m| (m.cells, m.origin));
-        json!({
-            "enabled": gl.enabled,
-            "weather": gl.weather,
-            "hour": r(gl.hour, 2),
-            "clock": hour_text(gl.hour),
-            "weather_ok": gl.weather_ok,
-            "error": gl.error,
-            "ambient": v3(gl.at.ambient, 4),
-            "hemi": v3(gl.at.hemi, 4),
-            "sun_color": v3(gl.at.sun_color, 4),
-            "sun_dir": v3(gl.at.sun_dir, 4),
-            "fog_color": v3(gl.at.fog_color, 4),
-            "lumscale": { "sun": r(st.lumscale_sun, 3), "hemi": r(st.lumscale_hemi, 3), "amb": r(st.lumscale_amb, 3) },
-            "tonemap": { "on": st.tonemap, "middlegray": r(st.tonemap_middlegray, 3), "lowlum": r(st.tonemap_lowlum, 4), "amount": r(st.tonemap_amount, 3) },
-            "exposure": r(gl.exposure_now(), 3),
-            "exposure_setting": r(gl.exposure, 3),
-            "auto_exposure": r(gl.auto_exposure, 3),
-            "scene_lum": r(gl.scene_lum, 4),
-            "indoor_hemi": r(gl.indoor_hemi, 3),
-            "lights": { "drawn": gl.drawn.len(), "in_view": gl.in_view, "level": counts[0], "lamp": counts[1], "lamp_ambient": counts[2], "campfire": counts[3] },
-            "roof": { "cells": cells, "cell": r(lighting::ROOF_CELL, 2), "origin": [r(origin[0], 1), r(origin[1], 1)], "bake_ms": gl.roof_bake_ms },
-        })
-    })
-}
-
-fn light_json(l: &lighting::GameLight) -> Value {
-    json!({ "kind": l.kind, "owner": l.owner, "pos": v3(l.position, 2), "range": r(l.range, 2), "color": v3(l.color, 3), "spot_cos": r(l.spot_cos, 3) })
-}
-
-async fn game_lighting(ed: &Arc<Editor>, a: &Args) -> Reply {
-    let vp = Viewport::of(ed);
+    }
+    for (kind, v) in steps {
+        if let Some(v) = v {
+            service::set_step(&ed, kind, v);
+        }
+    }
+    if p.brush_mesh.is_some() || p.brush_radius.is_some() || p.brush_density.is_some() {
+        let mut b = service::brush(&ed);
+        if let Some(m) = &p.brush_mesh {
+            b.mesh = Some(m.trim().replace('/', "\\").into()).filter(|m: &gz_editor::SmolStr| !m.is_empty());
+        }
+        if let Some(r) = p.brush_radius {
+            b.radius = r.clamp(0.5, 200.0);
+        }
+        if let Some(d) = p.brush_density {
+            b.density = d.clamp(0.0, 1.0);
+        }
+        service::set_brush(&ed, b);
+    }
+    if let Some(a) = armed {
+        crate::place::arm(&ed, a);
+    }
+    if let Some(on) = p.real_time {
+        service::set_real_time(&ed, on);
+    }
+    if let Some(on) = p.mute_sounds {
+        service::set_mute_sounds(&ed, on);
+    }
+    if let Some(name) = gpu {
+        gz_app::EditorSettings::of(&ed).set_gpu_adapter(&name);
+    }
+    service::save(&ed);
+    // Game Lit
     let mut weather_changed = false;
-    if let Some(w) = a.get("weather").and_then(Value::as_str) {
-        // empty = the default for the hour (the first night of a new game)
-        let w = w.to_owned();
+    if let Some(w) = &p.weather {
+        let w = w.trim().to_owned();
         vp.with(|s| s.game.weather = w);
         weather_changed = true;
     }
-    if let Some(h) = a.f32("hour") {
-        vp.with(|s| s.game.hour = h);
+    if let Some(h) = p.hour {
+        vp.with(|s| s.game.hour = h.rem_euclid(24.0));
         weather_changed = true;
     }
-    if let Some(e) = a.f32("exposure") {
+    if let Some(e) = p.exposure {
         vp.with(|s| s.game.exposure = e.max(0.0));
     }
-    if let Some(i) = a.f32("indoor_hemi") {
+    if let Some(i) = p.indoor_hemi {
         vp.with(|s| s.game.indoor_hemi = i.clamp(0.0, 1.0));
     }
-    let reload = a.flag("reload");
-    if reload || weather_changed {
-        vp.load_weather(ed, reload).await;
+    if p.reload || weather_changed || (p.weathers && vp.read(|s| s.game.weathers.is_empty())) {
+        vp.load_weather(&ed, p.reload).await;
     }
-    if a.flag("rebake") {
+    if p.rebake {
         vp.with(|s| {
             s.game.rebake = true;
             s.game.roof = None;
         });
     }
-    let want = a.bool("enabled").unwrap_or(vp.read(|s| s.game.enabled));
-    let need = vp.with(|s| {
-        let need = want && !s.game.weather_ok && !s.game.loading && !reload && !weather_changed;
-        s.game.enabled = want;
-        need
-    });
-    if need {
-        vp.load_weather(ed, true).await;
+    if mode == Some(ViewMode::Game) && vp.read(|s| !s.game.weather_ok) {
+        vp.load_weather(&ed, true).await;
     }
-    if a.flag("weathers") && vp.read(|s| s.game.weathers.is_empty()) {
-        vp.load_weather(ed, false).await;
-    }
-    // the answer names what the next frame draws
+    // the lights the answer names are the next frame's
     if vp.read(|s| s.game.active())
-        && let Some(rend) = vp.renderer_any(ed)
+        && (p.lights.is_some() || weather_changed)
+        && let Some(rend) = vp.renderer_any(&ed)
     {
         vp.settle().await;
-        if let Some(p) = vp.make_packet(ed, &rend, false, crate::service::Reason::Picture).await {
-            rend.submit(p);
+        if let Some(packet) = vp.make_packet(&ed, &rend, false, service::Reason::Picture).await {
+            rend.submit(packet);
         }
     }
-    redraw(ed);
-    let mut out = game_state(&vp);
+    ed.exec.wake().ping();
+
+    let mut out = view_answer(&ed, &vp, sup);
     if let Value::Object(m) = &mut out {
-        if a.flag("weathers") {
+        if p.weathers {
             m.insert("weathers".into(), json!(vp.read(|s| s.game.weathers.clone())));
         }
-        let everywhere = a.flag("all");
-        if everywhere || a.flag("list") {
-            // the lights drawn now, or with all=true every light of the level
-            let list: Vec<Value> = if everywhere {
-                match SceneService::of(ed) {
+        if let Some(which) = p.lights {
+            let list: Vec<Value> = match which {
+                Lights::Drawn => vp.read(|s| s.game.drawn.iter().map(light_json).collect()),
+                Lights::All => match SceneService::of(&ed) {
                     Ok(svc) => {
                         let snap = svc.store.snapshot();
-                        let data = vp.game_data_for(ed).await;
+                        let data = vp.game_data_for(&ed).await;
                         let lights = ed
                             .exec
                             .cpu(move || lighting::collect(&snap, data.0.as_deref(), data.1.as_deref()))
@@ -489,43 +597,190 @@ async fn game_lighting(ed: &Arc<Editor>, a: &Args) -> Reply {
                         lights.iter().map(light_json).collect()
                     }
                     Err(_) => Vec::new(),
-                }
-            } else {
-                vp.read(|s| s.game.drawn.iter().map(light_json).collect())
+                },
             };
-            m.insert("light_list".into(), Value::Array(list));
+            m.insert("lights".into(), Value::Array(list));
         }
     }
-    let failed = vp.read(|s| s.game.enabled && !s.game.weather_ok);
-    if failed {
+    let failed =
+        vp.read(|s| s.game.enabled && !s.game.loading && !s.game.weather_ok && !s.game.error.is_empty());
+    if failed && (mode == Some(ViewMode::Game) || weather_changed) {
         let text = vp.read(|s| s.game.error.clone());
-        return Err(CmdError::new("game_lighting", text).with_data(out));
+        return Err(
+            CmdError::new("failed", format!("Game Lit could not read the weather: {text}")).with_data(out)
+        );
     }
     Ok(out)
 }
 
-/// The editor's frame clock: the idle cap is a preference, the rest is measured between asks.
-fn frame_pacing(ed: &Arc<Editor>, a: &Args) -> Reply {
+/// `viewport.view`'s answer: everything it sets, as it is now.
+fn view_answer(ed: &Arc<Editor>, vp: &Viewport, sup: [bool; 3]) -> Value {
     let settings = gz_app::EditorSettings::of(ed);
-    let requested = a.i64("active_idle_fps").unwrap_or(-1);
-    let action =
-        a.str("action").filter(|s| !s.is_empty()).unwrap_or(if requested >= 0 { "set" } else { "get" });
-    if action.eq_ignore_ascii_case("set") {
-        if !(30..=240).contains(&requested) {
-            return Err(CmdError::invalid("active_idle_fps must be between 30 and 240"));
+    let gpu = gz_app::gpu::Gpu::of(ed);
+    let adapters = gpu.adapters().unwrap_or_default();
+    let render = json!({
+        "scale": vp.read(|s| (s.prefs.render_scale * 100.0).round() as i64),
+        "real_time": service::real_time(ed),
+        "mute_sounds": settings.render_flag("mute_sounds"),
+        "gpu": { "active": adapters.active, "adapter": settings.gpu_adapter(), "adapters": adapters.names },
+    });
+    let armed = crate::place::armed(ed).map(|a| a.key());
+    vp.read(|s| {
+        let show: serde_json::Map<String, Value> =
+            SHOW_FLAGS.iter().map(|f| (f.key.to_owned(), json!((f.get)(&s.prefs.show)))).collect();
+        let snap = |k: GizmoType| json!({ "on": s.snap_on(k), "step": g(s.step(k)) });
+        let gl = &s.game;
+        let Brush { mesh, radius, density } = &s.brush;
+        json!({
+            "mode": s.prefs.mode.key(),
+            "tool": s.gizmo.key(),
+            "space": s.prefs.space.key(),
+            "show": show,
+            "grid": snap(GizmoType::Move),
+            "angle": snap(GizmoType::Rotate),
+            "scale": snap(GizmoType::Scale),
+            "steps": { "grid": MOVE_STEPS, "angle": ANGLE_STEPS, "scale": SCALE_STEPS },
+            "surface_snap": s.prefs.snaps.surface,
+            "surface_align": s.prefs.snaps.align,
+            "vertex_snap": s.prefs.snaps.vertex,
+            "supports": { "move": sup[0], "rotate": sup[1], "scale": sup[2] },
+            "armed": armed,
+            "brush": { "mesh": mesh, "radius": r(*radius, 2), "density": r(*density, 2) },
+            "paint_layer": s.paint_layer.word(),
+            "game": {
+                "weather": gl.weather,
+                "hour": r(gl.hour, 2),
+                "clock": hour_text(gl.hour),
+                "weather_ok": gl.weather_ok,
+                "loading": gl.loading,
+                "error": gl.error,
+                "exposure": r(gl.exposure_now(), 3),
+                "exposure_setting": r(gl.exposure, 3),
+                "indoor_hemi": r(gl.indoor_hemi, 3),
+                "sun_dir": v3(gl.at.sun_dir, 4),
+                "fog_color": v3(gl.at.fog_color, 4),
+                "lights_drawn": gl.drawn.len(),
+                "lights_in_view": gl.in_view,
+                "roof": gl.roof.as_ref().map(|m| json!({ "cells": m.cells, "origin": [r(m.origin[0], 1), r(m.origin[1], 1)], "bake_ms": gl.roof_bake_ms })),
+            },
+            "render": render,
+        })
+    })
+}
+
+fn light_json(l: &lighting::GameLight) -> Value {
+    json!({ "kind": l.kind, "owner": l.owner, "position": v3(l.position, 2), "range": r(l.range, 2), "color": v3(l.color, 3), "spot_cos": r(l.spot_cos, 3) })
+}
+
+// ---- viewport.play ------------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum PlayWhat {
+    /// Particle systems.
+    Particles,
+    /// A spawn's startup animation (its model's motion).
+    Animation,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum PlayAction {
+    /// What plays.
+    #[default]
+    State,
+    Play,
+    Stop,
+    /// An animation: pauses it, or goes on with a paused one.
+    Pause,
+    /// An animation: its model at its first frame.
+    First,
+    /// An animation: its model at its last frame.
+    Last,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PlayParams {
+    /// What plays.
+    what: PlayWhat,
+    /// What to do; left out: say what plays.
+    #[serde(default)]
+    action: PlayAction,
+    /// The objects by name: particle systems (left out: every one), or the one spawn of an
+    /// animation (left out: the selected one).
+    #[serde(default)]
+    objects: Option<Vec<String>>,
+}
+
+async fn play(ed: Arc<Editor>, p: PlayParams, _o: Origin) -> Reply {
+    let names = p.objects.unwrap_or_default();
+    match p.what {
+        PlayWhat::Particles => {
+            let on = match p.action {
+                PlayAction::Play => Some(true),
+                PlayAction::Stop => Some(false),
+                PlayAction::State => None,
+                _ => return Err(CmdError::invalid("particles play, stop or say their state")),
+            };
+            crate::draw_particles::play_command(&ed, &names, on).await
         }
-        settings.set_pref("active_idle_fps", requested as f64);
-        settings.save_soon(ed);
-    } else if action.eq_ignore_ascii_case("reset") {
-        settings.set_pref("active_idle_fps", 120.0);
-        settings.save_soon(ed);
-    } else if !action.eq_ignore_ascii_case("get") && !action.eq_ignore_ascii_case("stats") {
-        return Err(CmdError::invalid("action must be get, stats, set, or reset"));
+        PlayWhat::Animation => {
+            let object = match names.as_slice() {
+                [one] => one.clone(),
+                [] => {
+                    let svc = SceneService::of(&ed)?;
+                    let snap = svc.store.snapshot();
+                    let sel = snap.selected_in_order();
+                    let [id] = sel.as_slice() else {
+                        return Err(CmdError::invalid("name the spawn, or select one"));
+                    };
+                    snap.get(*id).map(|o| o.name.to_string()).unwrap_or_default()
+                }
+                _ => return Err(CmdError::invalid("an animation plays on one spawn at a time")),
+            };
+            let action = match p.action {
+                PlayAction::State => "state",
+                PlayAction::Play => "play",
+                PlayAction::Stop => "stop",
+                PlayAction::Pause => "pause",
+                PlayAction::First => "first",
+                PlayAction::Last => "last",
+            };
+            crate::spawn_anim::animation_command(&ed, &object, action).await
+        }
     }
+}
+
+// ---- shot.viewport, perf.frames -----------------------------------------------------------------
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct NoParams {}
+
+async fn shot_viewport(ed: Arc<Editor>, _p: NoParams, _o: Origin) -> Reply {
+    let vp = Viewport::of(&ed);
+    let (image, pending) = vp.picture(&ed).await?;
+    let (w, h) = (image.width, image.height);
+    let png = ed.exec.cpu(move || gz_app::encode_png(image.width, image.height, &image.rgba)).await?;
+    let encoded = ed.exec.cpu(move || base64::engine::general_purpose::STANDARD.encode(png)).await;
+    let scale = vp.read(|s| r(s.ppp, 3));
+    // what was still loading when the wait ran out: never a silent half picture
+    let mut out = json!({ "png_base64": encoded, "width": w, "height": h, "scale": scale });
+    if !pending.is_empty()
+        && let Value::Object(m) = &mut out
+    {
+        m.insert("pending".into(), json!(pending));
+    }
+    Ok(out)
+}
+
+async fn perf_frames(ed: Arc<Editor>, _p: NoParams, _o: Origin) -> Reply {
+    let settings = gz_app::EditorSettings::of(&ed);
     let stamp = ed.frames.current();
-    let p = Viewport::of(ed).pacing(stamp.frame, ed.frames.causes());
-    let (fps, ms, since) = (p.fps, p.frame_ms, p.since);
-    let window = ed.frames.has_window();
+    let vp = Viewport::of(&ed);
+    let p = vp.pacing(stamp.frame, ed.frames.causes());
+    let since = p.since;
     let times: Vec<_> = since
         .map(|f| ed.frames.times_after(f).into_iter().filter(|t| t.frame <= stamp.frame).collect())
         .unwrap_or_default();
@@ -537,28 +792,18 @@ fn frame_pacing(ed: &Arc<Editor>, a: &Args) -> Reply {
         .map(|(r, at)| json!({ "reason": r.key(), "ago_ms": (at.elapsed().as_secs_f64() * 1000.0).round() }));
     Ok(json!({
         "active_idle_fps": settings.pref("active_idle_fps").map_or(120, |v| v as u64),
-        "background_poll_ms": 0,
-        "measured_fps": (fps * 1000.0).round() / 1000.0,
-        "measured_frame_ms": (ms * 1000.0).round() / 1000.0,
-        // the editor draws on demand: a frame is explicit work, none is waiting
-        "mode": if window { "explicit_work" } else { "background" },
-        "last_wait_reason": "",
-        "app_active": window,
-        "play_in_editor": false,
-        // a particle system in view plays: the viewport draws every frame
-        "realtime_render": Viewport::of(ed).animating(),
-        "redraw_pending": false,
-        "idle_cap_active": false,
+        "measured_fps": (p.fps * 1000.0).round() / 1000.0,
+        "measured_frame_ms": (p.frame_ms * 1000.0).round() / 1000.0,
+        "window": ed.frames.has_window(),
+        // a particle system in view plays, or Real Time is on: the viewport draws every frame
+        "realtime_render": vp.animating() || service::real_time(&ed),
         "frames": stamp.frame,
-        "waits": 0,
-        "waited_ms": 0.0,
-        // the frames presented since the last ask: their own CPU time apart from the wait for the
+        // the frames presented since the last ask: their own work apart from the wait for the
         // presentation - a frame that waited for vsync is not a slow frame
         "sampled_frames": times.count,
         "frame_work_ms": { "mean": times.work_mean, "p95": times.work_p95, "max": times.work_max },
         "frame_wait_ms": { "mean": times.wait_mean, "max": times.wait_max },
         "slow_frames": times.slow,
-        // the window since the last ask: UI frames presented and scene passes built, apart
         "window_seconds": (p.seconds * 1000.0).round() / 1000.0,
         "ui_frames": since.map_or(0, |f| stamp.frame.saturating_sub(f)),
         "ui_frame_causes": p.causes.iter().take(8).map(|(k, n)| json!([k.as_str(), n])).collect::<Vec<_>>(),
@@ -568,7 +813,7 @@ fn frame_pacing(ed: &Arc<Editor>, a: &Args) -> Reply {
     }))
 }
 
-/// What `frame_pacing` says of the frames since its last ask.
+/// What `perf.frames` says of the frames since its last ask.
 #[derive(Default)]
 struct FrameTimes {
     count: usize,
@@ -598,80 +843,5 @@ fn frame_times(t: &[gz_editor::FrameTime]) -> FrameTimes {
         wait_mean: mean(&|x| x.wait_ms),
         wait_max: ms(t.iter().map(|x| x.wait_ms).fold(0.0, f32::max)),
         slow: t.iter().filter(|x| x.work_ms > 1000.0 / 60.0).count(),
-    }
-}
-
-/// The Group tool's Make Thumbnail (`ESceneGroupTool::MakeThumbnail`): the one selected group
-/// as the viewport shows it - the scene's own pass, without grid, selection or helpers - as the
-/// `.thm` beside its library `.group`, naming the group's objects, its age the group file's.
-/// The C++ writes `$objects$\<scene name>.thm`, where no reader looks; this is where the Groups
-/// chooser reads a group's picture.
-async fn group_thumbnail(ed: &Arc<Editor>) -> Reply {
-    let svc = SceneService::of(ed)?;
-    let snap = svc.store.snapshot();
-    let groups: Vec<_> =
-        snap.of_class(gz_scene::ObjClass::Group).filter(|g| snap.is_selected(g.id)).cloned().collect();
-    let [group] = groups.as_slice() else {
-        return Err(CmdError::invalid("Select 1 GroupObject."));
-    };
-    let gz_scene::ObjData::Group(gd) = &group.data else {
-        return Err(CmdError::invalid("Select 1 GroupObject."));
-    };
-    if gd.reference.is_empty() {
-        return Err(CmdError::invalid(format!("ERROR: '{}' - has empty reference.", group.name)));
-    }
-    let objects: Vec<String> =
-        gd.members.iter().filter_map(|m| snap.get(*m)).map(|o| o.name.to_string()).collect();
-    let image =
-        crate::service::capture_preview(ed).await.map_err(|_| CmdError::invalid("Can't make screenshot."))?;
-    let rel = gd.reference.replace('/', "\\");
-    let dir = svc.root.join("rawdata").join("groups");
-    let (group_file, thm_file) = (dir.join(format!("{rel}.group")), dir.join(format!("{rel}.thm")));
-    let thm = thm_file.clone();
-    ed.exec
-        .io(move || -> Result<(), String> {
-            // the middle square of the picture, boxed down to the thumbnail's side
-            let side = image.width.min(image.height).max(1);
-            let (x0, y0) = ((image.width - side) / 2, (image.height - side) / 2);
-            let mut square = Vec::with_capacity((side * side * 4) as usize);
-            for y in y0..y0 + side {
-                let at = ((y * image.width + x0) * 4) as usize;
-                square.extend_from_slice(&image.rgba[at..at + (side * 4) as usize]);
-            }
-            let square = gz_fmt_tex::Image { width: side, height: side, rgba: square };
-            let t = gz_fmt_tex::THUMB_SIDE;
-            let small =
-                gz_fmt_tex::resize(&square, t, t, gz_fmt_tex::MipFilter::Box).map_err(|e| e.to_string())?;
-            let bytes = gz_fmt_tex::write_group_thm(&gz_fmt_tex::GroupThm { pixels: small.rgba, objects })
-                .map_err(|e| e.to_string())?;
-            if let Some(d) = thm.parent() {
-                std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
-            }
-            std::fs::write(&thm, bytes).map_err(|e| e.to_string())?;
-            if let Ok(age) = std::fs::metadata(&group_file).and_then(|m| m.modified())
-                && let Ok(f) = std::fs::File::options().write(true).open(&thm)
-            {
-                let _ = f.set_modified(age);
-            }
-            Ok(())
-        })
-        .await
-        .map_err(|e| CmdError::io(format!("Can't save thumbnail: {} ({e})", thm_file.display())))?;
-    Ok(json!({ "file": thm_file.display().to_string() }))
-}
-
-async fn screenshot_viewport(ed: &Arc<Editor>) -> Reply {
-    let vp = Viewport::of(ed);
-    let (image, pending) = vp.picture(ed).await.map_err(|e| {
-        CmdError::new(&e.code, "viewport RT unavailable").with_data(json!({ "detail": e.message }))
-    })?;
-    let (w, h) = (image.width, image.height);
-    let png = ed.exec.cpu(move || gz_app::encode_png(image.width, image.height, &image.rgba)).await?;
-    let encoded = ed.exec.cpu(move || base64::engine::general_purpose::STANDARD.encode(png)).await;
-    // what was still loading when the wait ran out: never a silent half picture
-    if pending.is_empty() {
-        Ok(json!({ "png_base64": encoded, "width": w, "height": h }))
-    } else {
-        Ok(json!({ "png_base64": encoded, "width": w, "height": h, "pending": pending }))
     }
 }

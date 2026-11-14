@@ -1,24 +1,26 @@
 //! The Start page (`Start Page###start_page`): the project browser the work area shows while no
 //! project is open - a page, not a modal (docs/UI_DESIGN.md, section 6, "Start page").
 //!
-//! New Project and Open Folder... head the list; the form (Name with its rule as the hint,
-//! Create, Location under More) comes up on New Project, or by itself with no project on the
-//! list. Then a search, the Last Opened / Name sort (`_projects.ini [browser] sort`) and 232 x
-//! 184 pt cards. A card's `...` menu (or a right click) offers Show in Explorer and Delete..., or
-//! Remove from List for a folder that is no project any more; Delete opens
-//! `Delete Project###dlg.delete_project`, which names what disappears.
+//! Open Folder..., Open Project File..., a search (24 em at most) and the Last Opened / Name sort
+//! (`_projects.ini [browser] sort`) head the page; then the cards, 232 x 184 pt, the first slot
+//! New Project. That card turns into the form in its place (Name with its rule as the hint,
+//! Location under More, Create the Primary) - nothing else moves - and is the form by itself
+//! when no project is on the list. A card shows the project by its project file. Its `...` menu
+//! (or a right click) offers Show in Explorer and Delete..., or Remove from List for a folder
+//! that is no project any more; Delete opens `Delete Project###dlg.delete_project`, which names
+//! what disappears. A project file or a project folder dropped on the page opens. The editor's
+//! version stands in the page's corner.
 //!
 //! Everything the page shows comes from [`PageState`], filled off the UI thread: the list and
 //! the folders' states ([`cards::load`]), the previews (a [`Query`] keyed by the folder and the
-//! picture's write time), the delete check's count. The C++ specification is
-//! `EditorProject::DrawBrowser` and what it calls.
+//! picture's write time), the delete check's count.
 
 use std::sync::Arc;
 
 use egui::epaint::RectShape;
 use egui::{
-    Align, Align2, Color32, ColorImage, CornerRadius, Frame, Id, Layout, Margin, Popup, Rect, ScrollArea,
-    Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, UiBuilder, Vec2, pos2,
+    Align, Align2, Color32, ColorImage, CornerRadius, Id, Layout, Popup, Rect, ScrollArea, Sense, Stroke,
+    StrokeKind, TextureHandle, TextureOptions, Ui, UiBuilder, Vec2, pos2,
 };
 use gz_app::{DocCx, ShellBuilder, contract};
 use gz_base::Rev;
@@ -26,8 +28,10 @@ use gz_editor::{Editor, Value};
 use gz_project::{DeleteContext, DeleteInfo, EntryState, Project, Projects, Sort, paths};
 use gz_query::{Answer, Query};
 use gz_ui::dialog::Footer;
+use gz_ui::drop::{Payload, Zone};
 use gz_ui::grid::{PathAction, path_field};
-use gz_ui::state::{badge, banner, busy_line, empty_state, toast};
+use gz_ui::section::Section;
+use gz_ui::state::{badge, banner, busy_line, toast};
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
 use gz_ui::{
@@ -39,7 +43,7 @@ use rustc_hash::FxHashMap;
 
 use crate::cards::{self, Card, Picture, Snapshot};
 use crate::folder::pick_folder;
-use crate::local::{local_section, local_text_field};
+use crate::local::local_text_field;
 use crate::reply::{args, call_then, error_text, ok, post_ui, s};
 
 /// pt, docs/UI_DESIGN.md section 6 (Start page).
@@ -51,8 +55,10 @@ pub const PREVIEW_H: f32 = 120.0;
 /// The sort's labels and the keys `_projects.ini` and MCP know them by.
 pub const SORT_LABELS: [&str; 2] = ["Last Opened", "Name"];
 
-/// The longest path the C++ editor built (`MAX_PATH`).
+/// The longest path Windows takes without the long-path prefix.
 const MAX_PATH: usize = 260;
+/// The search field's widest, em.
+const SEARCH_EM: f32 = 24.0;
 
 /// What the New Project form's look at its target found.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -100,6 +106,8 @@ pub(crate) struct PageState {
     pub search: String,
     pub sort: Sort,
     pub form_open: bool,
+    /// The form just opened: the Name field takes the keys.
+    form_focus: bool,
     pub name: String,
     pub parent: String,
     /// The author (or a browse) set the location: a reread list does not change it.
@@ -120,6 +128,14 @@ pub(crate) struct PageState {
     /// Textures of cards that left: released on the next frame, the one being drawn may hold them.
     dead: Vec<TextureHandle>,
     last_frame: Option<u64>,
+}
+
+impl PageState {
+    /// The New Project form is up: opened, or up by itself with no project on the list.
+    #[must_use]
+    pub fn form_shown(&self) -> bool {
+        self.form_open || (self.loaded && self.cards.is_empty())
+    }
 }
 
 /// The Start page's service: its state and the previews being decoded.
@@ -249,6 +265,8 @@ fn menu_id() -> Id {
 enum Action {
     Open(String),
     OpenFolder,
+    OpenFile,
+    Dropped(String),
     BrowseLocation,
     Create,
     SaveSort(Sort),
@@ -293,6 +311,7 @@ fn draw(page: &Arc<StartPage>, ui: &mut Ui, cx: &mut DocCx<'_>) {
 
     let mut actions = Vec::new();
     let mut menu_shown = None;
+    let page_rect = ui.max_rect();
     gz_ui::card::page(ui, contract::WINDOW_START_PAGE, |ui| {
         let p = palette(ui.ctx());
         text::label(ui, "Projects", Font::Page, p.text, Clip::End);
@@ -304,48 +323,40 @@ fn draw(page: &Arc<StartPage>, ui: &mut Ui, cx: &mut DocCx<'_>) {
             }
             ui.add_space(8.0);
         }
-        let avail_w = ui.available_width();
-        let origin = ui.cursor().min;
-        let height = (ui.clip_rect().max.y - origin.y).max(240.0);
-        let form = st.form_open || (st.loaded && st.cards.is_empty());
-        if avail_w < FORM_W + 24.0 + CARD_W + 32.0 {
-            // narrower than the form beside one card: one column, and the page scrolls as a whole
-            if form {
-                draw_form(ui, &mut st, &mut actions);
-                ui.add_space(24.0);
-            }
-            draw_projects(ui, &mut st, page, &mut actions, false);
-        } else {
-            let mut x = origin.x;
-            if form {
-                let r = Rect::from_min_size(origin, Vec2::new(FORM_W, height));
-                let mut col = ui.new_child(
-                    UiBuilder::new()
-                        .id_salt("gz-ui-app.start.form")
-                        .max_rect(r)
-                        .layout(Layout::top_down(Align::Min)),
-                );
-                draw_form(&mut col, &mut st, &mut actions);
-                x += FORM_W + 24.0;
-            }
-            let r = Rect::from_min_max(pos2(x, origin.y), pos2(origin.x + avail_w, origin.y + height));
-            let mut col = ui.new_child(
-                UiBuilder::new()
-                    .id_salt("gz-ui-app.start.projects")
-                    .max_rect(r)
-                    .layout(Layout::top_down(Align::Min)),
-            );
-            draw_projects(&mut col, &mut st, page, &mut actions, true);
-            ui.allocate_rect(Rect::from_min_size(origin, Vec2::new(avail_w, height)), Sense::hover());
-        }
+        draw_projects(ui, &mut st, page, &mut actions);
         menu_shown = draw_menu(ui, &mut st, &mut actions);
     });
     st.menu_shown = menu_shown;
+    draw_version(ui, page_rect);
+    // a project file or a project folder dropped anywhere on the page opens
+    let takes = |p: &Payload| !p.files().is_empty();
+    if let Some(dropped) = Zone::new("Start Page", page_rect, &takes).catch_all().take(ui)
+        && let Some(path) = dropped.files().into_iter().next()
+    {
+        actions.push(Action::Dropped(path.display().to_string()));
+    }
     draw_confirm(ui, &mut st, &mut actions);
 
     for action in actions {
         run(action, &mut st, &editor, page);
     }
+}
+
+/// The editor's version in the page's bottom right corner.
+fn draw_version(ui: &Ui, page: Rect) {
+    let p = palette(ui.ctx());
+    let line = format!("Grizzly Editor {}", env!("CARGO_PKG_VERSION"));
+    let at = pos2(page.max.x - 16.0, page.max.y - 10.0);
+    text::paint(
+        ui.painter(),
+        &Font::Small.id(),
+        at,
+        Align2::RIGHT_BOTTOM,
+        p.text_muted,
+        &line,
+        None,
+        Clip::End,
+    );
 }
 
 /// The form's look at its target, taken again only when a field changes: every keystroke would
@@ -394,46 +405,59 @@ fn check_new_folder(st: &mut PageState, editor: &Arc<Editor>, page: &Arc<StartPa
     });
 }
 
-/// The status line under a field of the form.
-fn form_message(ui: &mut Ui, tone: Tone, text_: &str) {
-    ui.add_space(2.0);
-    text::status(ui, tone, text_);
-}
-
-/// Left of the cards: New Project (Name, Create, Location under More).
-fn draw_form(ui: &mut Ui, st: &mut PageState, actions: &mut Vec<Action>) {
+/// The New Project card turned into the form, in its slot: Name, Location under More, Cancel |
+/// Create. It never grows past the card.
+fn draw_form(ui: &mut Ui, st: &mut PageState, rect: Rect, actions: &mut Vec<Action>) {
     let p = palette(ui.ctx());
-    let width = ui.available_width().min(FORM_W);
-    text::label(ui, "New Project", Font::Title, p.text, Clip::End);
-    ui.add_space(4.0);
-    text::secondary(ui, "Name");
+    ui.painter().rect_filled(rect, CornerRadius::same(6), p.raised);
+    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, p.accent), StrokeKind::Inside);
+    let inner = rect.shrink(12.0);
+    let mut ui = ui.new_child(
+        UiBuilder::new().id_salt("gz-ui-app.start.form").max_rect(inner).layout(Layout::top_down(Align::Min)),
+    );
+    let ui = &mut ui;
+    ui.spacing_mut().item_spacing.y = 4.0;
+    let width = inner.width();
+    text::label(ui, "New Project", Font::Strong, p.text, Clip::End);
     let resp =
         local_text_field(ui, "new_project.name", &mut st.name, "Latin letters, digits, _ and -", width);
+    if st.form_focus {
+        resp.request_focus();
+        st.form_focus = false;
+    }
     let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
 
-    // the worst first
+    // the worst first, one line
     let name_ok = valid_name(&st.name);
-    if !st.name.is_empty() && !name_ok {
-        form_message(ui, Tone::Error, "Use Latin letters, digits, _ and - only.");
+    let message = if !st.create_error.is_empty() {
+        Some((Tone::Error, st.create_error.clone()))
+    } else if !st.name.is_empty() && !name_ok {
+        Some((Tone::Error, "Use Latin letters, digits, _ and - only.".to_owned()))
     } else if st.new_state == NewState::NotFullPath {
-        form_message(ui, Tone::Error, "The location must be a full path.");
+        Some((Tone::Error, "The location must be a full path.".to_owned()))
     } else if st.new_state == NewState::ProjectThere {
-        form_message(ui, Tone::Info, "A project with this name is there already: Create opens it.");
+        Some((Tone::Info, "A project with this name is there: Create opens it.".to_owned()))
     } else if st.new_state == NewState::FolderThere {
-        form_message(ui, Tone::Warning, "The folder exists: the project is made inside it.");
+        Some((Tone::Warning, "The folder exists: the project is made inside it.".to_owned()))
+    } else {
+        None
+    };
+    // one line: what is wrong, else where the folder is made (its start cut, its end kept)
+    match message {
+        Some((tone, m)) => {
+            text::label(ui, &m, Font::Small, p.tone(tone), Clip::End).on_hover_text(m.as_str());
+        }
+        None => {
+            let parent =
+                if st.parent.is_empty() { "Pick a location under More." } else { st.parent.as_str() };
+            text::label(ui, parent, Font::Small, p.text_muted, Clip::Start)
+                .on_hover_text(format!("The project's folder is made in {parent}"));
+        }
     }
-    if !st.create_error.is_empty() {
-        let e = st.create_error.clone();
-        form_message(ui, Tone::Error, &e);
-    }
-    ui.add_space(8.0);
-    if local_section(
-        ui,
-        "new_project.more",
-        "More",
-        st.parent.is_empty() || st.new_state == NewState::NotFullPath,
-    ) {
-        text::secondary(ui, "Location");
+    let more = Section::new("start.new_project.more", "More")
+        .default_open(st.parent.is_empty() || st.new_state == NewState::NotFullPath)
+        .show(ui);
+    if more.open {
         let r = Rect::from_min_size(ui.cursor().min, Vec2::new(width, gz_ui::metrics::FRAME));
         let mut row = ui.new_child(
             UiBuilder::new()
@@ -448,7 +472,6 @@ fn draw_form(ui: &mut Ui, st: &mut PageState, actions: &mut Vec<Action>) {
         }
         ui.allocate_rect(r, Sense::hover());
     }
-    ui.add_space(8.0);
 
     let why = if st.parent.is_empty() {
         Some("Pick a location first.")
@@ -463,85 +486,119 @@ fn draw_form(ui: &mut Ui, st: &mut PageState, actions: &mut Vec<Action>) {
     } else {
         None
     };
-    if Button::new("Create").primary().enabled(why.is_none(), why.unwrap_or("")).show(ui).clicked()
+    // the footer stands at the card's foot
+    let foot = Rect::from_min_max(pos2(inner.min.x, inner.max.y - gz_ui::metrics::FRAME), inner.max);
+    let mut row = ui.new_child(
+        UiBuilder::new()
+            .id_salt("gz-ui-app.start.form_foot")
+            .max_rect(foot)
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    row.spacing_mut().item_spacing.x = 8.0;
+    if Button::new("Create").primary().enabled(why.is_none(), why.unwrap_or("")).show(&mut row).clicked()
         || (enter && why.is_none())
     {
         actions.push(Action::Create);
     }
+    let lone = st.loaded && st.cards.is_empty();
+    if Button::new("Cancel")
+        .enabled(!lone, "With no project on the list the form stays up.")
+        .show(&mut row)
+        .clicked()
+    {
+        st.form_open = false;
+        st.create_error.clear();
+    }
 }
 
-/// Right of the form: New Project, Open Folder..., the search and the sort, then the cards on an
-/// inset panel of their own.
-fn draw_projects(
-    ui: &mut Ui,
-    st: &mut PageState,
-    page: &Arc<StartPage>,
-    actions: &mut Vec<Action>,
-    own_scroll: bool,
-) {
+/// The first slot while the form is down: New Project as a card.
+fn draw_new_card(ui: &mut Ui, st: &mut PageState, rect: Rect) {
     let ctx = ui.ctx().clone();
     let p = palette(&ctx);
+    let id = ui.make_persistent_id("gz-ui-app.start.new_card");
+    let resp = ui.interact(rect, id, Sense::click());
+    let hovered = resp.hovered();
+    let painter = ui.painter();
+    painter.rect_filled(rect, CornerRadius::same(6), if hovered { p.hover } else { p.raised });
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(6),
+        Stroke::new(1.0, if hovered { p.border } else { p.border_subtle }),
+        StrokeKind::Inside,
+    );
+    let side = 32.0;
+    let icon = Rect::from_center_size(rect.center() - Vec2::new(0.0, 14.0), Vec2::splat(side));
+    icons::draw(painter, Icon::Plus, icon, if hovered { p.text } else { p.text_secondary });
+    text::paint(
+        painter,
+        &Font::Strong.id(),
+        pos2(rect.center().x, icon.max.y + 18.0),
+        Align2::CENTER_CENTER,
+        p.text,
+        "New Project",
+        None,
+        Clip::End,
+    );
+    gz_ui::audit::control(
+        &ctx,
+        "New Project",
+        true,
+        None,
+        Some("Makes a new project folder with its project file"),
+        rect,
+    );
+    if resp.on_hover_text("Makes a new project folder with its project file").clicked() {
+        st.form_open = true;
+        st.form_focus = true;
+    }
+}
+
+/// Open Folder..., Open Project File..., the search and the sort, then the cards.
+fn draw_projects(ui: &mut Ui, st: &mut PageState, page: &Arc<StartPage>, actions: &mut Vec<Action>) {
+    let ctx = ui.ctx().clone();
     let body = Font::Body.id();
     let sort_w: f32 = SORT_LABELS.iter().map(|l| 20.0 + text::width(&ctx, &body, l)).sum();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        if Button::new("New Project").primary().tip("Opens the form that makes a new project.").show(ui).clicked() {
-            st.form_open = !st.form_open;
-        }
         if Button::new("Open Folder...").tip("Opens a folder that holds a project file (.grizzly) or mod.ltx, such as a fresh clone of a mod's repository.").show(ui).clicked() {
             actions.push(Action::OpenFolder);
         }
-        let w = (ui.available_width() - sort_w - 8.0).max(em(8.0));
-        SearchField::new(&mut st.search).hint("Search projects").width(w).show(ui);
-        let mut sort = usize::from(st.sort == Sort::Name);
-        if segmented(ui, &mut sort, &SORT_LABELS, None) {
-            st.sort = if sort == 1 { Sort::Name } else { Sort::Recent };
-            actions.push(Action::SaveSort(st.sort));
+        if Button::new("Open Project File...").tip("Opens a project by its project file (.grizzly).").show(ui).clicked() {
+            actions.push(Action::OpenFile);
         }
+        let w = (ui.available_width() - sort_w - 16.0).clamp(em(8.0), em(SEARCH_EM));
+        SearchField::new(&mut st.search).hint("Search projects").width(w).show(ui);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let mut sort = usize::from(st.sort == Sort::Name);
+            if segmented(ui, &mut sort, &SORT_LABELS, None) {
+                st.sort = if sort == 1 { Sort::Name } else { Sort::Recent };
+                actions.push(Action::SaveSort(st.sort));
+            }
+        });
     });
-    ui.add_space(8.0);
-
+    ui.add_space(16.0);
     let order = cards::card_order(&st.cards, &st.search, st.sort);
-    Frame::new().fill(p.inset).corner_radius(CornerRadius::same(6)).inner_margin(Margin::same(16)).show(
-        ui,
+    // the room under the toolbar scrolls; the version line keeps the page's corner
+    let room = Rect::from_min_max(ui.cursor().min, pos2(ui.max_rect().max.x, ui.clip_rect().max.y - 28.0));
+    let mut area = ui.new_child(UiBuilder::new().id_salt("gz-ui-app.start.cards_room").max_rect(room));
+    ScrollArea::vertical().id_salt("gz-ui-app.start.cards").auto_shrink([false, false]).show(
+        &mut area,
         |ui| {
-            ui.set_width(ui.available_width());
-            let mut fill = |ui: &mut Ui| {
-                if !st.loaded {
-                    busy_line(ui, "Reading the project list...");
-                } else if st.cards.is_empty() {
-                    empty_state(
-                        ui,
-                        Icon::Folder,
-                        "No projects yet",
-                        "Create one with New Project, or open a folder that holds one.",
-                        None,
-                    );
-                } else if order.is_empty() {
-                    empty_state(
-                        ui,
-                        Icon::Search,
-                        "No matching projects",
-                        "No project name or folder holds every word of the search.",
-                        None,
-                    );
-                } else {
-                    draw_grid(ui, st, page, &order, actions);
-                }
-            };
-            if own_scroll {
-                ScrollArea::vertical()
-                    .id_salt("gz-ui-app.start.cards")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| fill(ui));
-            } else {
-                fill(ui);
+            if !st.loaded {
+                busy_line(ui, "Reading the project list...");
+                return;
+            }
+            draw_grid(ui, st, page, &order, actions);
+            if !st.cards.is_empty() && order.is_empty() {
+                ui.add_space(16.0);
+                text::status(ui, Tone::Muted, "No project name or folder holds every word of the search.");
             }
         },
     );
+    ui.allocate_rect(room, Sense::hover());
 }
 
-/// The cards in rows as wide as the room allows.
+/// The cards in rows as wide as the room allows, New Project in the first slot.
 fn draw_grid(
     ui: &mut Ui,
     st: &mut PageState,
@@ -552,17 +609,27 @@ fn draw_grid(
     let avail = ui.available_width();
     let per_row = (((avail + CARD_GAP) / (CARD_W + CARD_GAP)) as usize).max(1);
     let origin = ui.cursor().min;
-    for (n, &i) in order.iter().enumerate() {
-        let at = pos2(
+    let slot = |n: usize| {
+        pos2(
             origin.x + (n % per_row) as f32 * (CARD_W + CARD_GAP),
             origin.y + (n / per_row) as f32 * (CARD_H + CARD_GAP),
-        );
-        draw_card(ui, st, page, i, at, actions);
+        )
+    };
+    let first = Rect::from_min_size(slot(0), Vec2::new(CARD_W, CARD_H));
+    // with no project on the list the form is up by itself
+    if st.form_shown() {
+        draw_form(ui, st, first, actions);
+    } else {
+        draw_new_card(ui, st, first);
+    }
+    for (n, &i) in order.iter().enumerate() {
+        draw_card(ui, st, page, i, slot(n + 1), actions);
     }
     // the grid as one block, so the scroll knows how far it reaches
-    let rows = order.len().div_ceil(per_row);
+    let count = order.len() + 1;
+    let rows = count.div_ceil(per_row);
     let w = avail.min(per_row as f32 * (CARD_W + CARD_GAP) - CARD_GAP);
-    let h = if rows > 0 { rows as f32 * (CARD_H + CARD_GAP) - CARD_GAP } else { 0.0 };
+    let h = rows as f32 * (CARD_H + CARD_GAP) - CARD_GAP;
     ui.allocate_rect(Rect::from_min_size(origin, Vec2::new(w, h)), Sense::hover());
 }
 
@@ -1073,6 +1140,12 @@ fn run(action: Action, st: &mut PageState, editor: &Arc<Editor>, page: &Arc<Star
         Action::OpenFolder => {
             pick_folder(editor, "Open Project Folder", "", move |folder, _| open_folder(&ed, &pg, folder))
         }
+        Action::OpenFile => {
+            let request = gz_ui::file_dialog::FileRequest::open("Open Project File")
+                .filter("Grizzly Editor project", &["grizzly"]);
+            crate::folder::pick_file(editor, request, move |file, _| open_folder(&ed, &pg, file))
+        }
+        Action::Dropped(path) => open_folder(editor, page, path),
         Action::BrowseLocation => {
             let start = st.parent.clone();
             pick_folder(editor, "Project Location", &start, move |folder, _| {
@@ -1160,15 +1233,21 @@ fn run(action: Action, st: &mut PageState, editor: &Arc<Editor>, page: &Arc<Star
     }
 }
 
-/// Open Folder...: a folder that holds a project file or `mod.ltx` opens; anything else says why.
+/// Open Folder..., Open Project File..., a drop: a project file, or a folder that holds one or
+/// `mod.ltx`, opens; anything else says why.
 fn open_folder(editor: &Arc<Editor>, page: &Arc<StartPage>, folder: String) {
     let (ed, pg) = (editor.clone(), page.clone());
     let _task = editor.exec.spawn(async move {
         let probe = folder.clone();
-        let is_project =
-            ed.exec.io(move || gz_project::list::has_manifest(std::path::Path::new(&probe))).await;
+        let is_project = ed
+            .exec
+            .io(move || {
+                gz_project::project::project_folder_of(std::path::Path::new(&probe))
+                    .is_some_and(|dir| gz_project::list::has_manifest(&dir))
+            })
+            .await;
         if !is_project {
-            let text_ = format!("Not a project folder - it holds no project file and no mod.ltx: {folder}");
+            let text_ = format!("Not a project - no project file and no mod.ltx: {folder}");
             post_ui(&ed, move |_| set_page_error(&pg, text_));
             return;
         }
@@ -1180,7 +1259,7 @@ fn open_folder(editor: &Arc<Editor>, page: &Arc<StartPage>, folder: String) {
     });
 }
 
-/// What `project_browser_menu` answers of a card's picture: `picture` when the card shows its
+/// What `project.page` answers of a card's picture: `picture` when the card shows its
 /// `preview.png`, `placeholder` when it shows the icon instead.
 pub(crate) async fn preview_state(page: &StartPage, card: &Card) -> &'static str {
     let (EntryState::Project, Some(rev)) = (card.state, card.preview) else { return "placeholder" };
@@ -1189,7 +1268,7 @@ pub(crate) async fn preview_state(page: &StartPage, card: &Card) -> &'static str
     if value.is_some() { "picture" } else { "placeholder" }
 }
 
-/// The JSON of a card as `project_browser_menu` lists it.
+/// The JSON of a card as `project.page` lists it.
 pub(crate) fn card_json(card: &Card, preview: &str) -> Value {
     serde_json::json!({
         "path": paths::wire(&card.path),

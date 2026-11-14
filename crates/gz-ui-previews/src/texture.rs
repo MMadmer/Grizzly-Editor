@@ -2,8 +2,7 @@
 //!
 //! The file is read and uploaded on the pools ([`crate::texture_load`]); a frame only registers
 //! the level on show with egui and draws it: Fit, 1:1, Zoom | RGBA / R / G / B / A | Mip |
-//! Details, pan and zoom at the cursor, a checker clipped to the view. The C++ specification is
-//! `UIImagePreview.cpp`.
+//! Details, pan and zoom at the cursor, a checker clipped to the view.
 
 use std::sync::Arc;
 
@@ -46,7 +45,7 @@ pub fn parse_channel(text: &str) -> Option<usize> {
     }
 }
 
-/// Where the image lands in the canvas (`DrawImage`): fit keeps the aspect and never blows a
+/// Where the image lands in the canvas: fit keeps the aspect and never blows a
 /// small texture up past 1:1. All in pixels; returns the image's top-left corner, the scale and
 /// the pan as it stays.
 #[must_use]
@@ -67,6 +66,7 @@ pub fn place(avail: Vec2, img: Vec2, zoom: f32, pan: Vec2, keep: f32) -> (egui::
 
 /// The texture tab.
 pub struct TextureDoc {
+    editor: Arc<Editor>,
     name: String,
     source: TexSource,
     load: Pending<TexFile>,
@@ -92,6 +92,7 @@ impl TextureDoc {
     #[must_use]
     pub fn new(editor: &Arc<Editor>, name: String, source: TexSource, load: Pending<TexFile>) -> Self {
         Self {
+            editor: editor.clone(),
             name,
             source,
             load,
@@ -143,7 +144,7 @@ impl TextureDoc {
         self.pan = Vec2::ZERO;
     }
 
-    /// The view asked for over MCP (`McpView`): `zoom` 0 fits; `None` keeps.
+    /// The view asked for over MCP: `zoom` 0 fits; `None` keeps.
     pub fn apply_view(
         &mut self,
         zoom: Option<f32>,
@@ -167,6 +168,35 @@ impl TextureDoc {
             self.mip = m.min(t.mips.saturating_sub(1));
         }
         Ok(())
+    }
+
+    /// What `content.view` reveals the texture by: a file of the project, or one of the Library's
+    /// textures (below `textures`, with its extension).
+    fn reveal_args(&self) -> Option<gz_editor::Args> {
+        if self.name.is_empty() {
+            return None;
+        }
+        let name = self.name.replace('/', "\\");
+        Some(match self.source {
+            TexSource::Project => {
+                gz_app::args(&[("action", "reveal"), ("source", "project"), ("path", &name)])
+            }
+            TexSource::Editor | TexSource::Game => {
+                let lower = name.to_ascii_lowercase();
+                let rel = if lower.starts_with("textures\\") { &name[9..] } else { name.as_str() };
+                let file = if rel.to_ascii_lowercase().ends_with(".dds") {
+                    rel.to_owned()
+                } else {
+                    format!("{rel}.dds")
+                };
+                gz_app::args(&[
+                    ("action", "reveal"),
+                    ("source", "library"),
+                    ("kind", "textures"),
+                    ("path", &file),
+                ])
+            }
+        })
     }
 
     fn toolbar_items<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>) {
@@ -270,6 +300,21 @@ impl TextureDoc {
         ) {
             self.show_details = !self.show_details;
         }
+        tb.separator();
+        tb.group(1);
+        let reveal = self.reveal_args();
+        if tb.action(
+            "reveal",
+            Icon::Reveal,
+            "Show in Content Browser",
+            if reveal.is_some() { "Select it in the Content Browser" } else { none },
+            reveal.is_some(),
+            false,
+            Kind::Ghost,
+        ) && let Some(args) = reveal
+        {
+            self.editor.post("content.view", args);
+        }
     }
 
     /// The level on show, linear and nearest: views made once per level, the channel views are
@@ -280,7 +325,10 @@ impl TextureDoc {
         let mip = self.mip.min(t.mips.saturating_sub(1));
         if self.draws.as_ref().is_none_or(|(m, _, _)| *m != mip) {
             let view = mip_view(tex, mip);
-            self.draws = Some((mip, ImageDraw::new(gpu, &view, false), ImageDraw::new(gpu, &view, true)));
+            let wake = self.editor.exec.wake();
+            let linear = ImageDraw::new(gpu, &view, false, wake)?;
+            let nearest = ImageDraw::new(gpu, &view, true, wake)?;
+            self.draws = Some((mip, linear, nearest));
         }
         self.draws.as_ref().map(|(_, a, b)| (a.clone(), b.clone()))
     }
@@ -407,7 +455,7 @@ impl TextureDoc {
                 // where it lives and its path are two rows: an ellipsis at the start of one line ate the origin's label
                 let (word, hint) = match t.origin.id() {
                     "project" => ("Project", "A file of the project"),
-                    "library" => ("Editor library", "A file of the editor's own library"),
+                    "library" => ("Library", "A file of the editor's library (Preferences > Library)"),
                     "game_folder" => ("Game folder", "A loose file under the linked game's gamedata folder"),
                     "game_archive" => {
                         ("Game archive", "The linked game keeps this texture packed in its database archives")
@@ -452,7 +500,7 @@ impl TextureDoc {
         });
     }
 
-    /// `texture_preview`'s fields after `tab` and `active` (`McpState`).
+    /// `texture_preview`'s fields after `tab` and `active`.
     #[must_use]
     pub fn state_json(&self) -> serde_json::Map<String, Value> {
         let mut out = serde_json::Map::new();
@@ -534,6 +582,8 @@ impl Document for TextureDoc {
         self.drawn_frame = Some(frame);
         if self.gpu.is_none() {
             self.gpu = Some(cx.gpu.clone());
+            // the picture's pass is made while the picture loads
+            let _ = crate::image_pass::ImagePass::get(cx.gpu, cx.editor.exec.wake());
         }
         // Libraries > Reload Textures: the file is read again
         let reload = gz_app::gpu::TextureReload::generation(cx.editor);
@@ -659,10 +709,10 @@ impl TexturePreload {
 pub fn factory(editor: &Arc<Editor>, req: &OpenRequest) -> Result<Box<dyn Document>, String> {
     let name = req.path.as_deref().unwrap_or("").replace('/', "\\");
     if name.is_empty() {
-        return Err("open takes path= and source=project|editor|darf".to_owned());
+        return Err("open takes path= and source=project|library|game".to_owned());
     }
     let source = TexSource::parse(req.arg.as_deref().unwrap_or(""))
-        .ok_or_else(|| "source must be project, editor or darf".to_owned())?;
+        .ok_or_else(|| "source must be project, library or game".to_owned())?;
     let preload = editor.services.get_or_init(TexturePreload::default);
     let pending = preload.take(&name, source).unwrap_or_else(|| {
         let (ed, n) = (editor.clone(), name.clone());

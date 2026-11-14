@@ -4,8 +4,12 @@
 //! [`LogModel`] keeps a cursor into `gz_log::Log` and takes only the lines written since the last
 //! look, so nothing copies the whole log per frame. It counts what the author acts on - the
 //! errors and warnings since the project opened, each distinct line once - and marks with a row
-//! where that count starts. The view lays out only the rows on screen. The C++ specification is
-//! `UILogForm.cpp`.
+//! where that count starts. The view lays out only the rows on screen, whole: the first one is
+//! never cut in half.
+//!
+//! A line's level is its colour, and its word (`error`, `warning`, `info`) is one more word the
+//! search finds it by. The marks plain text carries (`! `, `~ `, `* ` of the game and the
+//! compilers) set the level and are not shown.
 
 use std::sync::Arc;
 
@@ -40,6 +44,25 @@ pub enum LineLevel {
     Info,
     Warning,
     Error,
+}
+
+impl LineLevel {
+    /// The word the search finds a line of this level by.
+    #[must_use]
+    pub fn word(self) -> &'static str {
+        match self {
+            LineLevel::Plain => "",
+            LineLevel::Info => "info",
+            LineLevel::Warning => "warning",
+            LineLevel::Error => "error",
+        }
+    }
+}
+
+/// A line's text without the mark that set its level.
+#[must_use]
+pub fn without_mark(text: &str) -> &str {
+    ["! ", "~ ", "* "].iter().find_map(|m| text.strip_prefix(m)).unwrap_or(text)
 }
 
 /// A line of the view.
@@ -121,6 +144,8 @@ struct Inner {
     auto_scroll: bool,
     /// Frames to come that show the end: the first one stops at the size the view had before.
     scroll_down: u8,
+    /// Where the view settles after a scroll that left a row cut: the nearest whole row.
+    snap: Option<f32>,
     hosts: [Option<u64>; 2],
 }
 
@@ -145,6 +170,7 @@ impl Default for Inner {
             level: 0,
             auto_scroll: true,
             scroll_down: 2,
+            snap: None,
             hosts: [None, None],
         }
     }
@@ -187,11 +213,16 @@ impl Inner {
             Level::Info | Level::Detail => LineLevel::Info,
             Level::Plain => level_of(&text),
         };
+        // the status bar's counts and its line: what an author acts on, not the chatter
+        let serious = matches!(level, LineLevel::Error | LineLevel::Warning) && !is_trace_frame(&text);
+        // the mark said the level: the colour says it from here on
+        let text: Arc<str> = match without_mark(&text) {
+            shown if shown.len() != text.len() => shown.into(),
+            _ => text,
+        };
         if level == LineLevel::Info && text.starts_with(PROJECT_OPENED) {
             self.count_from_here(COUNT_MARK);
         }
-        // the status bar's counts and its line: what an author acts on, not the chatter
-        let serious = matches!(level, LineLevel::Error | LineLevel::Warning) && !is_trace_frame(&text);
         let counted = serious && self.counted_texts.insert(hash_text(&text));
         if counted {
             if level == LineLevel::Error {
@@ -202,7 +233,7 @@ impl Inner {
         }
         // a detail (a profile, stage times) is the machinery talking: never the status bar's line
         if serious || (record.level == Level::Info && notable_note(&text)) {
-            self.last = gz_log::marked(record.level, &text);
+            self.last = text.to_string();
         }
         self.lines.push(Line { text, level, epoch: self.epoch, mark: false, counted });
     }
@@ -244,7 +275,12 @@ impl Inner {
         if self.level == 2 && line.level != LineLevel::Error {
             return false;
         }
+        if self.search.is_empty() {
+            return true;
+        }
+        let word = line.level.word();
         gz_ui::search::matches(&self.search, &line.text)
+            || (!word.is_empty() && gz_ui::search::matches(&self.search, &format!("{word} {}", line.text)))
     }
 
     /// The new lines through the filter; a changed filter looks at every line again.
@@ -424,21 +460,27 @@ pub fn output_log(ui: &mut Ui, editor: &Editor, host: LogHost) {
             );
             return;
         }
-        let row_h = Font::Mono.line();
-        ui.spacing_mut().item_spacing = Vec2::new(8.0, 1.0);
+        // a row is its line and a point under it; the view holds whole rows, so a view at its end
+        // and one a scroll left between rows both start at a row's top
+        let row_h = Font::Mono.line() + 1.0;
+        ui.spacing_mut().item_spacing = Vec2::new(8.0, 0.0);
         let total = m.visible.len();
+        let rows_fit = (ui.available_height() / row_h).floor().max(1.0);
         let mut area = ScrollArea::both()
             .id_salt("gz-ui-app.log.lines")
             .auto_shrink([false, false])
+            .max_height(rows_fit * row_h)
             .stick_to_bottom(m.auto_scroll);
         if m.scroll_down > 0 {
-            area = area.vertical_scroll_offset(total as f32 * (row_h + 1.0));
+            area = area.vertical_scroll_offset(total as f32 * row_h);
             m.scroll_down -= 1;
+        } else if let Some(y) = m.snap.take() {
+            area = area.vertical_scroll_offset(y);
         }
         let font = Font::Mono.id();
         let lines = &m.lines;
         let visible = &m.visible;
-        area.show_rows(ui, row_h, total, |ui, range| {
+        let shown = area.show_rows(ui, row_h, total, |ui, range| {
             for k in range {
                 let Some(line) = visible.get(k).and_then(|&i| lines.get(i as usize)) else { continue };
                 let color = match (line.mark, line.level) {
@@ -474,6 +516,14 @@ pub fn output_log(ui: &mut Ui, editor: &Editor, host: LogHost) {
                 });
             }
         });
+        // a scroll that came to rest between rows settles on the nearest whole one
+        let y = shown.state.clamped_offset().y;
+        let rest = y % row_h;
+        let moving = ctx.input(|i| i.pointer.any_down() || i.smooth_scroll_delta.y != 0.0);
+        if !moving && rest > 0.5 && rest < row_h - 0.5 {
+            m.snap = Some((y / row_h).round() * row_h);
+            ctx.request_repaint();
+        }
     });
     if show_all {
         m.search.clear();
@@ -532,6 +582,22 @@ mod tests {
     }
 
     #[test]
+    fn a_mark_sets_the_level_and_is_not_shown_and_the_level_is_a_word() {
+        let log = Log::memory();
+        log.plain("~ texture 'x' is missing");
+        log.plain("plain words");
+        let mut m = Inner::default();
+        m.sync(&log);
+        let first = m.lines.first().expect("a line");
+        assert_eq!((first.level, &*first.text), (LineLevel::Warning, "texture 'x' is missing"));
+        m.search = "warning texture".to_owned();
+        m.refilter_now();
+        assert_eq!(m.visible.len(), 1);
+        assert_eq!(without_mark("* note"), "note");
+        assert_eq!(without_mark("*note"), "*note");
+    }
+
+    #[test]
     fn counts_start_where_the_project_opened_each_text_once() {
         let log = Log::memory();
         log.warn("before");
@@ -544,7 +610,7 @@ mod tests {
         let mut m = Inner::default();
         m.sync(&log);
         assert_eq!((m.errors, m.warnings), (1, 1));
-        assert_eq!(m.last, "! broke", "the line as the C++ log held it");
+        assert_eq!(m.last, "broke", "the status line says the sentence; the colour said the level");
         // the mark stands before the line that opened the project
         assert!(m.lines.get(1).is_some_and(|l| l.mark && &*l.text == COUNT_MARK));
         m.level = 1;

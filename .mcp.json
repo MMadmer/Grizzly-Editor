@@ -1,8 +1,7 @@
 {
   "mcpServers": {
     "grizzly-editor": {
-      "command": "python",
-      "args": ["tools/mcp/grizzly_mcp.py"]
+      "command": "Bin/x64/Release/grizzly-mcp.exe"
     }
   }
 }

@@ -84,64 +84,6 @@ pub fn local_tree_row(
     TreeRow { clicked, toggled, response }
 }
 
-/// A folding header outside a property grid (the C++ `XUI::Section`): a chevron, the title and
-/// a count on the right. Its state is kept by `id_salt`; `open` is the state until it is
-/// clicked. Returns whether it is open.
-pub fn local_section(ui: &mut Ui, id_salt: &str, title: &str, open: bool, right: Option<&str>) -> bool {
-    let ctx = ui.ctx().clone();
-    let p = palette(&ctx);
-    let id = ui.make_persistent_id(("gz-ui-content.section", id_salt));
-    let mut is_open = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(open);
-    let (rect, _) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), metrics::SECTION_HEADER), Sense::hover());
-    let resp = ui.interact(rect, id.with("header"), Sense::click());
-    if resp.clicked() {
-        is_open = !is_open;
-    }
-    ctx.data_mut(|d| d.insert_temp(id, is_open));
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        if resp.hovered() {
-            painter.rect_filled(rect, CornerRadius::same(3), p.hover);
-        }
-        let chevron = Rect::from_min_size(
-            pos2(rect.min.x + 4.0, rect.center().y - metrics::GLYPH_STATUS * 0.5),
-            Vec2::splat(metrics::GLYPH_STATUS),
-        );
-        icons::draw(
-            painter,
-            if is_open { Icon::ChevronDown } else { Icon::ChevronRight },
-            chevron,
-            p.text_secondary,
-        );
-        let mut right_x = rect.max.x - 6.0;
-        if let Some(r) = right {
-            let font = Font::Small.id();
-            right_x -= text::width(&ctx, &font, r) + 8.0;
-            painter.text(
-                pos2(rect.max.x - 6.0, rect.center().y),
-                Align2::RIGHT_CENTER,
-                r,
-                font,
-                p.text_muted,
-            );
-        }
-        let x = chevron.max.x + 6.0;
-        text::paint(
-            painter,
-            &Font::Strong.id(),
-            pos2(x, rect.center().y),
-            Align2::LEFT_CENTER,
-            p.text,
-            title,
-            Some((right_x - x).max(0.0)),
-            Clip::End,
-        );
-    }
-    gz_ui::audit::control(&ctx, title, true, None, None, rect);
-    is_open
-}
-
 /// The folder path as crumbs: the root, then each folder, chevrons between; the leading crumbs
 /// fold into "…" until the rest fits, the folder shown always stays and gives up its middle
 /// last. Returns the path picked (`""` for the root), when one was.
@@ -321,10 +263,12 @@ pub fn local_checker(painter: &egui::Painter, rect: Rect) {
     }
 }
 
-/// A heading inside a menu: Small muted text (ImGui's `SeparatorText`).
+/// A heading inside a menu: Small muted text.
 pub fn local_menu_heading(ui: &mut Ui, title: &str) {
     let p = palette(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 22.0), Sense::hover());
+    // as wide as its words: a popup sizes itself by what its rows ask for
+    let w = text::width(ui.ctx(), &Font::Small.id(), title) + 16.0;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(w, 22.0), Sense::hover());
     ui.painter().text(
         pos2(rect.min.x + 8.0, rect.center().y + 2.0),
         Align2::LEFT_CENTER,
