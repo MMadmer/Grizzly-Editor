@@ -4,8 +4,16 @@
 //! crease angle, a corner split where two groups meet, then orthogonalised against the normal.
 //! The normals are the caller's, the texture coordinates are taken as
 //! they come.
+//!
+//! The positions are visited in the order of `operator<(D3DXVECTOR3)`, the triangles of one position
+//! in the order they name it - X-Ray's `std::map` of positions, made here by a stable sort on every
+//! core; the visit itself stays in that order (a split at one position changes the edges the next
+//! one sees).
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
+
+use rayon::prelude::*;
+use smallvec::SmallVec;
 
 /// A mender vertex.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -130,7 +138,12 @@ enum Which {
 struct Mender {
     tris: Vec<Tri>,
     original: usize,
+    /// What a position's visit works with, kept from one position to the next.
+    groups: Vec<SmallVec<[usize; 8]>>,
+    stack: Vec<usize>,
 }
+
+type Groups = Vec<SmallVec<[usize; 8]>>;
 
 impl Mender {
     fn vector(&self, t: usize, w: Which) -> V {
@@ -148,29 +161,28 @@ impl Mender {
     }
 
     fn find_neighbors(&self, tri: usize, possible: &[usize]) -> (usize, usize) {
-        let mut found = Vec::with_capacity(2);
+        let mut found = [NO_GROUP; 2];
+        let mut n = 0;
         let Some(t) = self.tris.get(tri) else { return (NO_GROUP, NO_GROUP) };
         for &p in possible {
             if p != tri && self.tris.get(p).is_some_and(|o| shares_edge(t, o)) {
-                found.push(p);
-                if found.len() == 2 {
+                if let Some(slot) = found.get_mut(n) {
+                    *slot = p;
+                }
+                n += 1;
+                if n == 2 {
                     break;
                 }
             }
         }
-        (found.first().copied().unwrap_or(NO_GROUP), found.get(1).copied().unwrap_or(NO_GROUP))
+        (found[0], found[1])
     }
 
     /// Builds the groups, its recursion walked with a stack in the same order.
-    fn build_groups(
-        &mut self,
-        start: usize,
-        possible: &[usize],
-        groups: &mut Vec<Vec<usize>>,
-        w: Which,
-        crease: f32,
-    ) {
-        let mut stack = vec![start];
+    fn build_groups(&mut self, start: usize, possible: &[usize], groups: &mut Groups, w: Which, crease: f32) {
+        let mut stack = std::mem::take(&mut self.stack);
+        stack.clear();
+        stack.push(start);
         while let Some(tri) = stack.pop() {
             if tri == NO_GROUP || self.tris.get(tri).is_none_or(|t| t.handled) {
                 continue;
@@ -194,7 +206,9 @@ impl Mender {
                 if let Some(t) = self.tris.get_mut(tri) {
                     t.group = groups.len();
                 }
-                groups.push(vec![tri]);
+                let mut g = SmallVec::new();
+                g.push(tri);
+                groups.push(g);
             }
             if let Some(t) = self.tris.get_mut(tri) {
                 t.handled = true;
@@ -202,6 +216,7 @@ impl Mender {
             stack.push(n2);
             stack.push(n1);
         }
+        self.stack = stack;
     }
 
     fn update_indices(&mut self, old: usize, new: usize, group: &[usize]) {
@@ -241,13 +256,14 @@ impl Mender {
                 t.group = NO_GROUP;
             }
         }
-        let mut groups: Vec<Vec<usize>> = Vec::new();
+        let mut groups = std::mem::take(&mut self.groups);
+        groups.clear();
         for &p in possible {
             if self.tris.get(p).is_some_and(|t| !t.handled) {
                 self.build_groups(p, possible, &mut groups, w, crease);
             }
         }
-        let vectors: Vec<V> = groups
+        let vectors: SmallVec<[V; 8]> = groups
             .iter()
             .map(|g| {
                 let mut sum = [0.0f32; 3];
@@ -257,9 +273,9 @@ impl Mender {
                 normalized(sum)
             })
             .collect();
-        let mut others: HashSet<usize> = HashSet::new();
+        let mut others: SmallVec<[usize; 16]> = SmallVec::new();
         for (gi, group) in groups.iter().enumerate() {
-            let mut this: Vec<usize> = Vec::new();
+            let mut this: SmallVec<[usize; 16]> = SmallVec::new();
             let vector = vectors.get(gi).copied().unwrap_or([0.0; 3]);
             for t in 0..group.len() {
                 let tid = group[t];
@@ -292,6 +308,7 @@ impl Mender {
             }
             others.extend(this);
         }
+        self.groups = groups;
     }
 }
 
@@ -344,27 +361,79 @@ pub fn mend_until(
     binormal_crease: f32,
     stop: &(dyn Fn() -> bool + Sync),
 ) -> Option<Vec<u32>> {
+    mend_with(verts, indices, tangent_crease, binormal_crease, stop, false)
+}
+
+/// [`mend_until`]; `by_map` orders the positions through X-Ray's map itself, as a position with a
+/// NaN always is.
+fn mend_with(
+    verts: &mut Vec<MVertex>,
+    indices: &mut [u32],
+    tangent_crease: f32,
+    binormal_crease: f32,
+    stop: &(dyn Fn() -> bool + Sync),
+    by_map: bool,
+) -> Option<Vec<u32>> {
     let mut mapping: Vec<u32> = (0..verts.len() as u32).collect();
-    let mut m = Mender { tris: Vec::with_capacity(indices.len() / 3), original: verts.len() };
-    let mut children: BTreeMap<Key, Vec<usize>> = BTreeMap::new();
-    for t in indices.as_chunks::<3>().0 {
-        let idx = [t[0] as usize, t[1] as usize, t[2] as usize];
-        let get = |i: usize| verts.get(i).copied().unwrap_or_default();
-        let (tangent, binormal) = gradients(&get(idx[0]), &get(idx[1]), &get(idx[2]));
-        m.tris.push(Tri { indices: idx, tangent, binormal, handled: false, group: NO_GROUP });
-    }
-    for (i, t) in m.tris.iter().enumerate() {
-        for k in t.indices {
-            let p = verts.get(k).map_or([0.0; 3], |v| v.pos);
-            children.entry(Key(p)).or_default().push(i);
+    let original = verts.len();
+    let tris: Vec<Tri> = {
+        let verts = &*verts;
+        indices
+            .as_chunks::<3>()
+            .0
+            .par_iter()
+            .with_min_len(4096)
+            .map(|t| {
+                let idx = [t[0] as usize, t[1] as usize, t[2] as usize];
+                let get = |i: usize| verts.get(i).copied().unwrap_or_default();
+                let (tangent, binormal) = gradients(&get(idx[0]), &get(idx[1]), &get(idx[2]));
+                Tri { indices: idx, tangent, binormal, handled: false, group: NO_GROUP }
+            })
+            .collect()
+    };
+    let mut m = Mender { tris, original, groups: Vec::new(), stack: Vec::new() };
+    // every corner's position with its triangle, in the order the triangles name them
+    let corners: Vec<(Key, usize)> = m
+        .tris
+        .iter()
+        .enumerate()
+        .flat_map(|(i, t)| t.indices.map(|k| (Key(verts.get(k).map_or([0.0; 3], |v| v.pos)), i)))
+        .collect();
+    if by_map || corners.iter().any(|(k, _)| k.0.iter().any(|c| c.is_nan())) {
+        // a NaN is equal to every position in that order: only X-Ray's map itself knows where it goes
+        let mut children: BTreeMap<Key, Vec<usize>> = BTreeMap::new();
+        for (key, i) in corners {
+            children.entry(key).or_default().push(i);
         }
-    }
-    for (n, (key, possible)) in children.iter().enumerate() {
-        if n.is_multiple_of(4096) && stop() {
-            return None;
+        for (n, (key, possible)) in children.iter().enumerate() {
+            if n.is_multiple_of(4096) && stop() {
+                return None;
+            }
+            m.process(possible, verts, &mut mapping, key.0, Which::Tangent, tangent_crease);
+            m.process(possible, verts, &mut mapping, key.0, Which::Binormal, binormal_crease);
         }
-        m.process(possible, verts, &mut mapping, key.0, Which::Tangent, tangent_crease);
-        m.process(possible, verts, &mut mapping, key.0, Which::Binormal, binormal_crease);
+    } else {
+        let mut corners = corners;
+        // stable: a position's triangles keep their order
+        corners.par_sort_by(|a, b| a.0.cmp(&b.0));
+        let mut possible: Vec<usize> = Vec::with_capacity(16);
+        let mut at = 0usize;
+        let mut n = 0usize;
+        while let Some(&(key, _)) = corners.get(at) {
+            if n.is_multiple_of(4096) && stop() {
+                return None;
+            }
+            possible.clear();
+            while let Some(&(k, i)) = corners.get(at)
+                && k == key
+            {
+                possible.push(i);
+                at += 1;
+            }
+            m.process(&possible, verts, &mut mapping, key.0, Which::Tangent, tangent_crease);
+            m.process(&possible, verts, &mut mapping, key.0, Which::Binormal, binormal_crease);
+            n += 1;
+        }
     }
     for (slot, t) in indices.as_chunks_mut::<3>().0.iter_mut().zip(&m.tris) {
         for (s, &x) in slot.iter_mut().zip(&t.indices) {
@@ -399,6 +468,55 @@ mod tests {
             assert!((x.tangent[0] - 1.0).abs() < 1e-5, "{:?}", x.tangent);
             assert!((x.binormal[2] - 1.0).abs() < 1e-5, "{:?}", x.binormal);
         }
+    }
+
+    /// The sorted positions visit the corners as X-Ray's map does: a grid of shared corners with
+    /// mirrored and sheared texture coordinates (many splits), repeated positions, -0 beside +0.
+    #[test]
+    fn the_sorted_positions_mend_as_the_map_did() {
+        let mut s = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        let n = 30;
+        let mut verts = Vec::new();
+        for z in 0..=n {
+            for x in 0..=n {
+                let flip = if next() % 3 == 0 { -1.0 } else { 1.0 };
+                let px = if x == 0 && next() % 2 == 0 { -0.0 } else { x as f32 };
+                let p = [px, (next() % 4) as f32 * 0.1, z as f32];
+                verts.push(v(p, flip * x as f32 * 0.3, z as f32 * 0.2 + (next() % 5) as f32 * 0.05));
+                // the same position again with other coordinates: a seam
+                if next() % 4 == 0 {
+                    verts.push(v(p, -(x as f32), z as f32));
+                }
+            }
+        }
+        let mut idx = Vec::new();
+        for _ in 0..4000 {
+            let a = (next() % verts.len() as u64) as u32;
+            let b = (next() % verts.len() as u64) as u32;
+            let c = (next() % verts.len() as u64) as u32;
+            idx.extend([a, b, c]);
+        }
+        let (mut v1, mut i1) = (verts.clone(), idx.clone());
+        let m1 = mend_with(&mut v1, &mut i1, 0.5, 0.5, &|| false, true).unwrap();
+        let (mut v2, mut i2) = (verts.clone(), idx.clone());
+        let m2 = mend_with(&mut v2, &mut i2, 0.5, 0.5, &|| false, false).unwrap();
+        assert!(v2.len() > verts.len() + 100, "{} split: the test proves little", v2.len() - verts.len());
+        assert_eq!(m1, m2);
+        assert_eq!(i1, i2);
+        let bits = |v: &[MVertex]| {
+            v.iter()
+                .flat_map(|x| {
+                    x.tangent.iter().chain(&x.binormal).chain(&x.pos).map(|c| c.to_bits()).collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(bits(&v1), bits(&v2));
     }
 
     #[test]

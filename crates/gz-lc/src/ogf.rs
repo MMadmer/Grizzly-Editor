@@ -95,10 +95,66 @@ pub struct Ogf {
     pub mu_sw_id: u32,
 }
 
+/// Vertices by cells twice `EPS_L` wide: a vertex within `EPS_L` of a point lies in one of the 27
+/// cells around it. A cell lists its vertices in the order they were built.
+#[derive(Default)]
+struct Grid {
+    cells: rustc_hash::FxHashMap<[i64; 3], SmallVec<[u32; 4]>>,
+}
+
+impl Grid {
+    fn cell(p: Vec3) -> [i64; 3] {
+        let size = 2.0 * f64::from(EPS_L);
+        [
+            (f64::from(p.x) / size).floor() as i64,
+            (f64::from(p.y) / size).floor() as i64,
+            (f64::from(p.z) / size).floor() as i64,
+        ]
+    }
+
+    fn insert(&mut self, p: Vec3, i: usize) {
+        self.cells.entry(Self::cell(p)).or_default().push(i as u32);
+    }
+
+    fn forget(&mut self, p: Vec3, i: usize) {
+        if let Some(list) = self.cells.get_mut(&Self::cell(p))
+            && let Some(at) = list.iter().rposition(|&x| x as usize == i)
+        {
+            list.remove(at);
+        }
+    }
+
+    /// The first vertex near `p` that `accept` takes.
+    fn first(&self, p: Vec3, accept: impl Fn(usize) -> bool) -> Option<usize> {
+        let c = Self::cell(p);
+        let mut best: Option<usize> = None;
+        for dx in -1i64..=1 {
+            for dy in -1i64..=1 {
+                for dz in -1i64..=1 {
+                    let key = [c[0].saturating_add(dx), c[1].saturating_add(dy), c[2].saturating_add(dz)];
+                    let Some(list) = self.cells.get(&key) else { continue };
+                    for &i in list {
+                        let i = i as usize;
+                        if best.is_some_and(|b| b <= i) {
+                            break;
+                        }
+                        if accept(i) {
+                            best = Some(i);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        best
+    }
+}
+
 fn similar3(a: Vec3, b: Vec3, e: f32) -> bool {
     (a.x - b.x).abs() < e && (a.y - b.y).abs() < e && (a.z - b.z).abs() < e
 }
 
+#[cfg(test)]
 fn face_equal(a: &[u16; 3], f: &[u16; 3]) -> bool {
     (a[0] == f[0] && a[1] == f[1] && a[2] == f[2])
         || (a[0] == f[0] && a[2] == f[1] && a[1] == f[2])
@@ -133,6 +189,7 @@ impl Ogf {
         true
     }
 
+    #[cfg(test)]
     fn build_vertex(&mut self, v: &OgfVertex) -> u16 {
         if let Some(i) = self.data.vertices.iter().position(|x| self.similar(x, v)) {
             return i as u16;
@@ -141,6 +198,7 @@ impl Ogf {
         (self.data.vertices.len() - 1) as u16
     }
 
+    #[cfg(test)]
     fn x_build_vertex(&mut self, p: Vec3) -> u16 {
         if let Some(i) = self.fast.vertices.iter().position(|x| similar3(*x, p, EPS_L)) {
             return i as u16;
@@ -149,7 +207,82 @@ impl Ogf {
         (self.fast.vertices.len() - 1) as u16
     }
 
+    /// `_BuildFace` of every face in turn, as [`Self::build_face`] builds them: a vertex is the first
+    /// similar one built before it, found through a grid of the positions (similar vertices lie
+    /// within `EPS_L` of each other), and a face that repeats one through a set of the faces.
+    pub fn build_faces<'a>(&mut self, faces: impl IntoIterator<Item = &'a [OgfVertex; 3]>, tc: bool) {
+        let mut grid = Grid::default();
+        for (i, v) in self.data.vertices.iter().enumerate() {
+            grid.insert(v.p, i);
+        }
+        let mut xgrid = Grid::default();
+        for (i, &p) in self.fast.vertices.iter().enumerate() {
+            xgrid.insert(p, i);
+        }
+        let key = |f: &[u16; 3]| {
+            let mut k = *f;
+            k.sort_unstable();
+            k
+        };
+        let mut seen: rustc_hash::FxHashSet<[u16; 3]> = self.data.faces.iter().map(key).collect();
+        for v in faces {
+            let count = self.data.vertices.len();
+            let mut f = [0u16; 3];
+            for (slot, x) in f.iter_mut().zip(v) {
+                let found =
+                    grid.first(x.p, |i| self.data.vertices.get(i).is_some_and(|y| self.similar(y, x)));
+                *slot = match found {
+                    Some(i) => i as u16,
+                    None => {
+                        self.data.vertices.push(x.clone());
+                        grid.insert(x.p, self.data.vertices.len() - 1);
+                        (self.data.vertices.len() - 1) as u16
+                    }
+                };
+            }
+            if degenerate(&f) {
+                for (i, y) in self.data.vertices.iter().enumerate().skip(count) {
+                    grid.forget(y.p, i);
+                }
+                self.data.vertices.truncate(count);
+                continue;
+            }
+            // a repeated face is the same three corners in any order
+            if !seen.insert(key(&f)) {
+                continue;
+            }
+            self.data.faces.push(f);
+            if tc {
+                continue;
+            }
+            let xcount = self.fast.vertices.len();
+            let mut x = [0u16; 3];
+            for (slot, corner) in x.iter_mut().zip(v) {
+                let p = corner.p;
+                let found =
+                    xgrid.first(p, |i| self.fast.vertices.get(i).is_some_and(|&q| similar3(q, p, EPS_L)));
+                *slot = match found {
+                    Some(i) => i as u16,
+                    None => {
+                        self.fast.vertices.push(p);
+                        xgrid.insert(p, self.fast.vertices.len() - 1);
+                        (self.fast.vertices.len() - 1) as u16
+                    }
+                };
+            }
+            if degenerate(&x) {
+                for (i, &q) in self.fast.vertices.iter().enumerate().skip(xcount) {
+                    xgrid.forget(q, i);
+                }
+                self.fast.vertices.truncate(xcount);
+            } else {
+                self.fast.faces.push(x);
+            }
+        }
+    }
+
     /// `_BuildFace` (with `x_BuildFace` when `tc` is off: the fast path holds opaque faces).
+    #[cfg(test)]
     pub fn build_face(&mut self, v: &[OgfVertex; 3], tc: bool) {
         let count = self.data.vertices.len();
         let f = [self.build_vertex(&v[0]), self.build_vertex(&v[1]), self.build_vertex(&v[2])];
@@ -495,6 +628,65 @@ mod tests {
             b: Basis::default(),
             color: BaseColor::default(),
             uv: SmallVec::from_slice(&[uv]),
+        }
+    }
+
+    /// The grid and the set build what the scans built: corners a hair apart and a hair more, on the
+    /// borders of the grid's cells, with texture coordinates within a texel and past it, normals that
+    /// differ, faces repeated in any order and degenerate ones, the fast path too.
+    #[test]
+    fn the_faces_are_built_as_the_scans_built_them() {
+        let mut s = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        let mut corners: Vec<OgfVertex> = Vec::new();
+        for _ in 0..600 {
+            let lattice = |n: &mut dyn FnMut() -> u64| (n() % 8) as f32 * 0.002 - 0.004;
+            let nudge = |n: &mut dyn FnMut() -> u64| (n() % 5) as f32 * 0.0004 - 0.0008;
+            let p = Vec3::new(
+                lattice(&mut next) + nudge(&mut next),
+                lattice(&mut next),
+                lattice(&mut next) + nudge(&mut next),
+            );
+            let uv = Vec2::new((next() % 4) as f32 * 0.002, (next() % 3) as f32 * 0.003);
+            let mut v = vert(p, uv);
+            if next() % 5 == 0 {
+                v.n = Vec3::new(0.0, 0.9995, 0.0316);
+            }
+            corners.push(v);
+        }
+        let mut faces: Vec<[OgfVertex; 3]> = Vec::new();
+        for i in 0..3000 {
+            let mut pick = || corners[(next() % corners.len() as u64) as usize].clone();
+            let f = [pick(), pick(), pick()];
+            if i % 9 == 0
+                && let Some(last) = faces.last().cloned()
+            {
+                faces.push([last[2].clone(), last[0].clone(), last[1].clone()]);
+            }
+            faces.push(f);
+        }
+        for tc in [false, true] {
+            let blank = Ogf {
+                textures: vec![OgfTexture { name: "t".into(), width: 256, height: 128 }],
+                ..Ogf::default()
+            };
+            let mut old = blank.clone();
+            for f in &faces {
+                old.build_face(f, tc);
+            }
+            let mut new = blank;
+            new.build_faces(&faces, tc);
+            assert!(old == new, "tc {tc}");
+            assert!(
+                old.data.faces.len() > 500 && old.data.faces.len() + 300 < faces.len(),
+                "{} faces",
+                old.data.faces.len()
+            );
         }
     }
 

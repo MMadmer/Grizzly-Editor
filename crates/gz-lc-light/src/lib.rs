@@ -40,6 +40,7 @@
 
 mod bake;
 mod batch;
+mod bvh4;
 mod color;
 pub mod crt;
 mod data;

@@ -4,11 +4,15 @@
 //! 32-entry LRU cache and their remaining use, in time linear in the faces. Ties go to the
 //! lower face index, so the order is the same on any machine.
 
+use smallvec::SmallVec;
+
 const CACHE: usize = 32;
 const DECAY: f32 = 1.5;
 const LAST_TRI: f32 = 0.75;
 const VALENCE_SCALE: f32 = 2.0;
 const VALENCE_POWER: f32 = 0.5;
+/// The remaining uses whose scores are tabled.
+const SCORED: usize = 64;
 
 fn vertex_score(cache_pos: Option<usize>, remaining: u32) -> f32 {
     if remaining == 0 {
@@ -50,13 +54,27 @@ pub fn optimize_faces(indices: &[u16], vertex_count: usize) -> Vec<u32> {
     }
     let mut remaining: Vec<u32> = (0..vcount).map(|v| (start[v + 1] - start[v]) as u32).collect();
     let mut cache_pos: Vec<Option<usize>> = vec![None; vcount];
+    // the scores of the common cases, made once: the same calls give the same values
+    let table: Vec<[f32; SCORED]> = (0..=CACHE)
+        .map(|p| {
+            let at = (p < CACHE).then_some(p);
+            std::array::from_fn(|r| vertex_score(at, r as u32))
+        })
+        .collect();
+    let vertex_score = |at: Option<usize>, remaining: u32| {
+        let row = table.get(at.unwrap_or(CACHE));
+        match row.and_then(|r| r.get(remaining as usize)) {
+            Some(&s) => s,
+            None => vertex_score(at, remaining),
+        }
+    };
     let mut vscore: Vec<f32> = (0..vcount).map(|v| vertex_score(None, remaining[v])).collect();
     let corner = |t: usize| [indices[t * 3], indices[t * 3 + 1], indices[t * 3 + 2]];
     let mut tscore: Vec<f32> =
         (0..n).map(|t| corner(t).iter().map(|&v| vscore[usize::from(v)]).sum()).collect();
     let mut added = vec![false; n];
     let mut out = Vec::with_capacity(n);
-    let mut cache: Vec<u16> = Vec::with_capacity(CACHE + 3);
+    let mut cache: SmallVec<[u16; 36]> = SmallVec::new();
     let mut scan = 0usize;
     let best_of_all = |added: &[bool], tscore: &[f32], from: usize| -> Option<usize> {
         let mut best: Option<usize> = None;
@@ -76,7 +94,7 @@ pub fn optimize_faces(indices: &[u16], vertex_count: usize) -> Vec<u32> {
         for &v in &c {
             remaining[usize::from(v)] -= 1;
         }
-        let mut grown: Vec<u16> = Vec::with_capacity(CACHE + 3);
+        let mut grown: SmallVec<[u16; 36]> = SmallVec::new();
         for &v in &c {
             if !grown.contains(&v) {
                 grown.push(v);

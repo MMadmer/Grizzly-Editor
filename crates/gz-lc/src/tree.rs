@@ -376,11 +376,8 @@ fn build_ogf(g: &LcGlobalData, faces: &[gz_lc_light::FaceId]) -> Option<Ogf> {
         }
     }
     let opaque = gz_lc_light::cache_opacity(f0, &g.materials, &g.textures);
-    for &f in faces {
-        if let Some(v) = face_vertices(g, f) {
-            o.build_face(&v, !opaque);
-        }
-    }
+    let corners: Vec<[OgfVertex; 3]> = faces.iter().filter_map(|&f| face_vertices(g, f)).collect();
+    o.build_faces(&corners, !opaque);
     let optimize_uv = g.shader(material).flags & ShaderXrlc::OPTIMIZE_UV != 0;
     o.optimize(optimize_uv);
     Some(o)
@@ -401,6 +398,7 @@ pub fn flex2ogf(
             log.warn(format!("! ERROR: subdiv #{i} has more than {SS_HIGH_X2} faces ({})", s.len()));
         }
     }
+    let mut tm = std::time::Instant::now();
     let ogfs: Vec<Option<Ogf>> =
         splits.par_iter().map(|s| if ctl.cancelled() { None } else { build_ogf(g, s) }).collect();
     ctl.check()?;
@@ -409,6 +407,7 @@ pub fn flex2ogf(
         tree.nodes.push(TreeNode { base: NodeBase::new(0, o.sector), item: Item::Ogf(Box::new(o)) });
         tree.bounds_jobs.push(BoundsOf::Tree(id));
     }
+    crate::geom::timed(log, "the visuals made", &mut tm);
     // the bounds of these come before the progressive pass: it reorders the vertices
     let draft = g.params.quality == gz_lc_light::QUALITY_DRAFT;
     let logs: Vec<Vec<String>> = tree
@@ -430,6 +429,7 @@ pub fn flex2ogf(
         })
         .collect();
     ctl.check()?;
+    crate::geom::timed(log, "the visuals made progressive and stripified", &mut tm);
     for l in logs.into_iter().flatten() {
         log.msg(l);
     }
@@ -482,6 +482,7 @@ fn mu_face_vertices(
 /// `calc_ogf` of every model: a visual per subdivision, with its tangent basis, made
 /// progressive and stripified; the bounds are taken by the caller in model order.
 pub fn mu_calc_ogf(g: &LcGlobalData, tree: &mut Tree, log: &mut Log, ctl: &Ctl<'_>) -> Result<()> {
+    let mut tm = std::time::Instant::now();
     let draft = g.params.quality == gz_lc_light::QUALITY_DRAFT;
     let results: Vec<(Vec<Ogf>, Vec<String>)> = g
         .mu_models
@@ -499,11 +500,13 @@ pub fn mu_calc_ogf(g: &LcGlobalData, tree: &mut Tree, log: &mut Log, ctl: &Ctl<'
                 let mut o = Ogf { material, sector: 0, ..Ogf::default() };
                 o.textures.push(texture_of(g, material));
                 let faces = m.mesh.faces();
-                for &f in faces.iter().skip(s.start as usize).take(s.count as usize) {
-                    if let Some(v) = mu_face_vertices(m, f, &index) {
-                        o.build_face(&v, true);
-                    }
-                }
+                let corners: Vec<[OgfVertex; 3]> = faces
+                    .iter()
+                    .skip(s.start as usize)
+                    .take(s.count as usize)
+                    .filter_map(|&f| mu_face_vertices(m, f, &index))
+                    .collect();
+                o.build_faces(&corners, true);
                 let optimize_uv = g.shader(material).flags & ShaderXrlc::OPTIMIZE_UV != 0;
                 o.optimize(optimize_uv);
                 let _ = pending_bounds(&mut o);
@@ -516,6 +519,7 @@ pub fn mu_calc_ogf(g: &LcGlobalData, tree: &mut Tree, log: &mut Log, ctl: &Ctl<'
         })
         .collect();
     ctl.check()?;
+    crate::geom::timed(log, "the models' visuals", &mut tm);
     for (mi, (ogfs, l)) in results.into_iter().enumerate() {
         for si in 0..ogfs.len() {
             tree.bounds_jobs.push(BoundsOf::Mu(mi, si));
@@ -745,6 +749,7 @@ pub fn build_sectors(extra: &mut Extra, tree: &mut Tree, log: &mut Log) -> Resul
         return Err(Error::Invalid("A visual has no sector.".into()));
     }
     let count = usize::from(max) + 1;
+    let mut tm = std::time::Instant::now();
     log.msg(format!("{count} sectors accepted."));
     let present: Vec<bool> =
         (0..count).map(|s| tree.nodes.iter().any(|n| usize::from(n.base.sector) == s)).collect();
@@ -767,6 +772,7 @@ pub fn build_sectors(extra: &mut Extra, tree: &mut Tree, log: &mut Log) -> Resul
     for s in &mut sectors {
         s.portals.sort_unstable();
     }
+    crate::geom::timed(log, "the hierarchies", &mut tm);
     Ok(sectors)
 }
 
@@ -856,9 +862,14 @@ fn build_hierarchy(extra: &mut Extra, tree: &mut Tree, sid: u16, log: &mut Log) 
 
 // --------------------------------------------------------------------------------- bounds
 
+/// The calls [`take_bounds`] computes at once after a restart.
+const BOUNDS_WINDOW: usize = 64;
+
 /// The spheres of every bounds call in X-Ray's order: each drawn from the `rand` stream at
-/// the offset the calls before it leave, computed in parallel; a call that restarts (and draws
-/// more) has the ones after it computed again from where it ended.
+/// the offset the calls before it leave, computed in parallel a window of calls at a time; a call
+/// that restarts (and draws more) has the ones after it in its window computed again from where it
+/// ended. The window doubles while no call restarts and halves when one does, so a restart costs at
+/// most one window of work, never the whole rest.
 pub fn take_bounds(tree: &mut Tree, rng: &mut MsvcRand) {
     let jobs = tree.bounds_jobs.clone();
     let points: Vec<Vec<Vec3>> = jobs
@@ -881,15 +892,18 @@ pub fn take_bounds(tree: &mut Tree, rng: &mut MsvcRand) {
     let mut results: Vec<Option<Bounds>> = vec![None; jobs.len()];
     let mut start = 0usize;
     let mut state = *rng;
+    let mut window = BOUNDS_WINDOW;
     while start < jobs.len() {
+        let end = (start + window).min(jobs.len());
+        let part = points.get(start..end).unwrap_or_default();
         // the draws each call takes when it does not restart
-        let mut offsets = Vec::with_capacity(jobs.len() - start);
+        let mut offsets = Vec::with_capacity(part.len());
         let mut at = 0u64;
-        for p in &points[start..] {
+        for p in part {
             offsets.push(at);
             at += p.len().saturating_sub(1) as u64;
         }
-        let computed: Vec<(Bounds, MsvcRand, MsvcRand)> = points[start..]
+        let computed: Vec<(Bounds, MsvcRand, MsvcRand)> = part
             .par_iter()
             .zip(offsets.par_iter())
             .map(|(p, &off)| {
@@ -899,19 +913,19 @@ pub fn take_bounds(tree: &mut Tree, rng: &mut MsvcRand) {
                 (b, begin, r)
             })
             .collect();
-        let mut next = jobs.len();
-        for (k, (b, begin, end)) in computed.into_iter().enumerate() {
-            let expect = begin.advanced(points[start + k].len().saturating_sub(1) as u64);
-            results[start + k] = Some(b);
-            if end != expect {
-                state = end;
+        let mut next = end;
+        for (k, (b, begin, after)) in computed.into_iter().enumerate() {
+            let expect = begin.advanced(part.get(k).map_or(0, |p| p.len().saturating_sub(1)) as u64);
+            if let Some(slot) = results.get_mut(start + k) {
+                *slot = Some(b);
+            }
+            state = after;
+            if after != expect {
                 next = start + k + 1;
                 break;
             }
-            if start + k + 1 == jobs.len() {
-                state = end;
-            }
         }
+        window = if next < end { (window / 2).max(BOUNDS_WINDOW) } else { (window * 2).min(1 << 16) };
         start = next;
     }
     *rng = state;
