@@ -1,7 +1,7 @@
 //! The project area's groups of Preferences: **Game** (the editor's default game - its folder,
 //! version, how it was found, Change..., Find Again - and the open project's own, with Use
 //! Default Game), **Library** (the folder scenes take what the project lacks from) and, on
-//! General, **Project Files** (Open .grizzly Files with This Editor, Register Now).
+//! General, **Project Files** (Open .grizzly Files with This Editor, File Association with its Register Now).
 //!
 //! Every change is a command (`game.link`, `project.set_library`, `project.associate`). Nothing
 //! here reads a file in a frame: what the rows show is the last `game.info` / `project.info` /
@@ -340,7 +340,7 @@ const PROJECT_FILES: [PrefRow; 2] = [
         kind: PrefKind::Switch { get: associate_on, set: set_associate, default: true },
     },
     PrefRow {
-        label: "Register Now",
+        label: "File Association",
         help: "Makes project files open with this editor now.",
         kind: PrefKind::Button {
             text: "Register Now",

@@ -315,12 +315,10 @@ pub async fn export_cut(editor: &Arc<Editor>, l: &Layer) -> Reply {
     Ok(json!({ "cuts": made.added, "overlap": overlap, "path": json_path(&path) }))
 }
 
-/// `\\computer\user`, the build name stamped into an exported model.
-fn build_name() -> String {
-    let pc = std::env::var("COMPUTERNAME").unwrap_or_default();
-    let user = std::env::var("USERNAME").unwrap_or_default();
-    format!("\\\\{pc}\\{user}")
-}
+/// Who built an exported model, as its description says it: the editor and its version. Never
+/// the computer or the user - the file ships with the module, and the same export is the same
+/// bytes on every machine.
+const BUILD_NAME: &str = concat!("Grizzly Editor ", env!("CARGO_PKG_VERSION"));
 
 /// The visual overlay: each static object of the selection as a model in world space, with its
 /// registry entry.
@@ -347,7 +345,7 @@ pub async fn export_visuals(editor: &Arc<Editor>, l: &Layer) -> Reply {
         .exec
         .cpu(move || {
             let look = lookup(lib);
-            overlay::visuals(&snap, selected_only, &look, &build_name(), materials)
+            overlay::visuals(&snap, selected_only, &look, BUILD_NAME, materials)
         })
         .await;
     let visuals_dir = dir.join("visuals");

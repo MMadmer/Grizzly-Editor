@@ -168,7 +168,7 @@ pub struct SectorData {
     pub default: bool,
     /// The scene object and mesh of every item.
     pub items: Vec<(SmolStr, SmolStr)>,
-    /// `m_map_idx`: 255 for the default map.
+    /// The index of the path's map: 255 for the default map.
     pub map_idx: u8,
 }
 

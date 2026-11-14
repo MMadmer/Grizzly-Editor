@@ -42,8 +42,10 @@ reg.cmd(
 - **Effect** - what the call can do, which decides the door it may come through (section 4):
   `read` (changes nothing), `view` (changes what the editor shows, nothing an author keeps), `write` (changes the
   project or the settings; undoable or repeatable), `destroy` (loses data for good), `publish` (reaches other
-  people). A parameter that turns a call into a losing one (`discard`) is named in the card
-  (`destroys_with`): with it the call counts as `destroy`.
+  people). A parameter that turns a call into a losing one (`discard`, `overwrite`), or the value of one that does
+  (`action=discard`), is named in the card (`destroys_with`): with it the call counts as `destroy`. A `read`
+  command writes no file: where the same thing can be read and written, they are two commands (`scene.info`
+  answers a scene's summary, `scene.summary` writes it as text).
 - A command never opens a question. It did what it was asked, or it says why not.
 
 ## 2. Parameter names

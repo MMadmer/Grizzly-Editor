@@ -1,7 +1,7 @@
 //! The module's level layer: what a scene adds to, takes from and lays over a level of the
 //! game, without a single base file of the game rewritten.
 //!
-//! The files are part of the contract with the game (`docs/RUST_MIGRATION.md` section 9) and are
+//! The files are part of the contract with the game (`docs/ARCHITECTURE.md` section 9) and are
 //! written as the game reads them: `\r\n` line ends, a fixed key order, `%f` / `%g` / `%u` /
 //! `%08x` as the C runtime prints them ([`cfmt`]).
 //!

@@ -353,7 +353,7 @@ impl PoolSim {
     }
 }
 
-/// A mesh: the level's (`g_vertices`, `g_faces`) or an MU model's (`m_vertices`, `m_faces`).
+/// A mesh: the level's, or an MU model's.
 #[derive(Clone, Debug, Default)]
 pub struct Mesh {
     verts: Vec<Option<Vertex>>,

@@ -488,7 +488,7 @@ impl Document {
         NodeId(0)
     }
 
-    /// The first element of the document (`m_root`).
+    /// The first element of the document.
     #[must_use]
     pub fn root(&self) -> Option<NodeId> {
         self.children(self.document()).find(|&c| self.kind(c) == Some(Kind::Element))

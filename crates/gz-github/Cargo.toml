@@ -23,7 +23,7 @@ reqwest = { workspace = true, features = ["system-proxy"] }
 getrandom = "0.3"
 zeroize = "1"
 
-# The Credential Manager under the C++ editor's own target names (`GrizzlyEditor:GitHub`), which
+# The Credential Manager under the editor's own target names (`GrizzlyEditor:GitHub`), which
 # the `keyring` facade cannot name: its store, used directly.
 [target.'cfg(windows)'.dependencies]
 keyring-core = "1"

@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# The allow-list of docs/RUST_MIGRATION.md section 6: this crate does not inherit the workspace's
+# The one crate that may hold `unsafe` (CLAUDE.md, "How the editor is built"): it does not inherit the workspace's
 # `unsafe_code = "forbid"`. Every unsafe block carries a SAFETY line.
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

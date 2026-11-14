@@ -21,6 +21,8 @@ const KNOWN: &[(&str, &[&str])] = &[("", TOP)];
 #[must_use]
 pub fn kind() -> KindOps {
     let mut k = KindOps::of(AssetKind::Project);
+    // the editor alone reads a project file: the game knows modules, not projects
+    k.limits.game = false;
     k.known = KNOWN;
     k.reference_doc = "docs/assets/PROJECT.md";
     k.check = check;

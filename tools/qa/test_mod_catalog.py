@@ -446,7 +446,7 @@ def window_drawn(data: bytes, modal: dict) -> str:
 
 
 def submit_names() -> tuple[str, str]:
-    """The Submit window's title and the id the dialog on top is answered by, from the running editor's ui_contract."""
+    """The Submit window's title and the id the dialog on top is answered by, from the running editor's `ui.contract`."""
     window = str((cmd("ui.contract").get("dialogs") or {}).get("submit") or SUBMIT_WINDOW)
     title, _, _ = window.partition("###")
     return title, "submit"

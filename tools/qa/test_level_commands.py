@@ -22,7 +22,8 @@
      compiler runs - the job ends cancelled, the geometry is fresh, the light is not
   C  level.compile on a folder: refused for a folder that holds no build.prj, naming it; the level folder compiled
      again, waited for with job.wait, its report naming the compiler's phases and files
-  E  level.export: the static geometry as OBJ, the spawn layer of one object named
+  E  level.export: the static geometry as OBJ, the spawn layer of one object named, the visuals - models that name
+     the editor that built them and neither this computer nor this user
   Y  Play takes no folder it did not make: level.play start / root with root= a folder that is a project, inside one,
      holds a file of somebody else's, is the editor's or relative - every one refused before anything is built or
      written, the folders unchanged, no game started
@@ -34,6 +35,8 @@
      validates; level.build only=detail_light builds the details and their light
 
     python tools/qa/test_level_commands.py --project <project> [--only A,B,...]
+  D  the doors: saving as a scene that is there, and discarding the recovery snapshots, pass the destroy door alone;
+     scene.info writes no file, scene.summary writes the summary and refuses a file that is there
 """
 from __future__ import annotations
 
@@ -49,7 +52,7 @@ from qa import check, cmd, short
 
 
 SCENE = "mp_test"
-PHASES = "ABURSCEYKL"
+PHASES = "ABURSCEYKLD"
 SHOTS: str | None = None
 def listing(folder: str) -> list[tuple[str, int]]:
     out = []
@@ -373,6 +376,52 @@ def phase_e() -> None:
           "E level.export kind=spawn of one object named writes the spawn layer", short(r))
     r = cmd("level.export", kind="cut", objects=["no_such_object"])
     check(not r.get("ok") and r.get("code") == "not_found", "E an object that is not there is named back", short(r))
+    # an exported model ships with the module: it says the editor built it, never this computer or this user
+    r = cmd("level.export", kind="visuals", all=True, timeout=300)
+    visuals = r.get("dir") or ""
+    models = [os.path.join(visuals, n) for n in os.listdir(visuals)] if os.path.isdir(visuals) else []
+    models = [m for m in models if m.endswith(".ogf")]
+    words = [w.encode("ascii", "ignore").lower() for w in (os.environ.get("COMPUTERNAME", ""), os.environ.get("USERNAME", ""))
+             if len(w) > 2]
+    named = [os.path.basename(m) for m in models if any(w in open(m, "rb").read().lower() for w in words)]
+    stamped = sum(1 for m in models if b"Grizzly Editor " in open(m, "rb").read())
+    check(r.get("ok") and models and not named and stamped == len(models),
+          "E level.export kind=visuals: %d models name the editor and neither this computer nor this user" % len(models),
+          short({"answer": r, "named": named[:3], "stamped": stamped}))
+
+
+# ---- D: the doors -------------------------------------------------------------------------------------------------
+
+def phase_d() -> None:
+    """What loses a scene's files or its unsaved work passes the destroy door alone."""
+    # the scene's own files are on the disk first: it may have come from an import and never been saved
+    own = (cmd("scene.save").get("file") or "").replace("\\", "/")
+    other = os.path.splitext(own)[0] + "_qa_other.scene"
+    made = cmd("scene.save", path=other)
+    check(made.get("ok") and made.get("file", "").replace("\\", "/") == other, "D scene.save path= saves as a new scene", short(made))
+    back = cmd("scene.save", path=own)
+    check(not back.get("ok") and back.get("code") == "exists" and "overwrite" in str(back.get("error")),
+          "D saving as a scene that is there is refused, naming overwrite", short(back))
+    run_door = qa.gate("run", "scene.save", path=own, overwrite=True)
+    check(not run_door.get("ok") and run_door.get("code") == "gate",
+          "D scene.save overwrite=true does not pass the run door", short(run_door))
+    destroy_door = qa.gate("destroy", "scene.save", path=own, overwrite=True)
+    check(destroy_door.get("ok") and destroy_door.get("file", "").replace("\\", "/") == own,
+          "D ... and replaces the scene through the destroy door", short(destroy_door))
+    discard = qa.gate("run", "scene.recover", action="discard")
+    check(not discard.get("ok") and discard.get("code") == "gate",
+          "D scene.recover action=discard does not pass the run door", short(discard))
+    listed = qa.gate("run", "scene.recover", action="get")
+    check(listed.get("ok"), "D scene.recover action=get does", short(listed))
+    info = cmd("scene.info", summary=True, path="import/qa_summary.txt")
+    check(not info.get("ok") and info.get("code") == "invalid" and "path" in str(info.get("error")),
+          "D scene.info reads: it takes no file to write", short(info))
+    text = os.path.join(CTX.project, "import", "qa_summary.txt")
+    wrote = cmd("scene.summary", path="import/qa_summary.txt", timeout=120)
+    check(wrote.get("ok") and os.path.isfile(text) and os.path.getsize(text) > 0,
+          "D scene.summary writes the summary as a text file", short(wrote))
+    again = cmd("scene.summary", path="import/qa_summary.txt", timeout=120)
+    check(not again.get("ok") and again.get("code") == "exists", "D ... and refuses a file that is there", short(again))
 
 
 # ---- Y ------------------------------------------------------------------------------------------------------------
@@ -491,7 +540,7 @@ def phase_l() -> None:
 
 
 STEPS = {"A": phase_a, "B": phase_b, "U": phase_u, "R": phase_r, "S": phase_s, "C": phase_c, "E": phase_e, "Y": phase_y,
-         "K": phase_k, "L": phase_l}
+         "K": phase_k, "L": phase_l, "D": phase_d}
 
 
 def run(ctx: qa.Run) -> None:

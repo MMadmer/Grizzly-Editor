@@ -1,4 +1,4 @@
-//! The stall monitor: the proof that nothing blocks the UI thread (docs/plan section 6,
+//! The stall monitor: the proof that nothing blocks the UI thread (CLAUDE.md,
 //! docs/UI_DESIGN.md section 5).
 //!
 //! The window times every UI pass and every event it handles. One that takes longer than

@@ -127,7 +127,7 @@ impl Camera {
         Self { position, forward, up, projection: Projection::default() }
     }
 
-    /// The engine's camera (`m_CamMat.setHPB(h, p, 0)`): forward is the matrix's `k` row, up its
+    /// The engine's camera, set from a heading and a pitch with no bank: forward is the matrix's `k` row, up its
     /// `j` row. Heading 0 and pitch 0 look along +Z.
     #[must_use]
     pub fn from_hpb(position: Vec3, heading: f32, pitch: f32) -> Self {

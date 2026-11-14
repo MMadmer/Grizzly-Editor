@@ -100,6 +100,10 @@ What the suites hold, beyond what their names say:
   the section's numbered `values` and is decoded when a game that knows the class is linked.
 - Names are unique in any case and written in the case given. A number is the shortest text that reads back to the
   same value.
+- Saving a scene as another scene that is there, converting over a `.scene` that is there and discarding the
+  recovery snapshots lose files: each passes the destroy door alone (`overwrite`, `action=discard`).
+- An exported model's description says the editor and its version built it, never the computer or the user:
+  the file ships, and the same export is the same bytes on every machine.
 - `scene.way`, `scene.shape` and `scene.fog_group` are commands of their own: they change several objects or
   sub-objects at once, which `scene.set` (one object's keys) cannot say.
 - The detail objects' drawing is switched on by the strokes that lay them, not by a step the author has to find.

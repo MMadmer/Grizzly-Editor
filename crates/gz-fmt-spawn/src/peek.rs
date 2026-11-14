@@ -22,9 +22,9 @@ pub struct PacketHead {
     pub id_parent: u16,
     pub version: u16,
     pub spawn_id: u16,
-    /// `m_tGraphID`, when the state is a `CSE_ALifeObject`'s (every entity of `all.spawn`).
+    /// The game graph vertex, when the state is a `CSE_ALifeObject`'s (every entity of `all.spawn`).
     pub game_vertex: Option<u16>,
-    /// `m_tNodeID`.
+    /// The AI map node.
     pub level_vertex: Option<u32>,
 }
 

@@ -96,7 +96,8 @@ pub struct Spec {
     pub summary: &'static str,
     pub effect: Effect,
     /// Parameters that turn the call into one that loses data when given and not false
-    /// (`discard`): such a call counts as [`Effect::Destroy`].
+    /// (`discard`), or a parameter with the value that does (`action=discard`): such a call
+    /// counts as [`Effect::Destroy`].
     pub destroys_with: &'static [&'static str],
     /// The arguments of a typical call, as they are written on a command line
     /// (`kind=object ref=props/box pos=1,2,3`). Empty when the parameters say it all.
@@ -156,7 +157,13 @@ impl Spec {
     /// What this call does, given its arguments.
     #[must_use]
     pub fn effect_of(&self, args: &Map<String, Value>) -> Effect {
-        let loses = self.destroys_with.iter().any(|p| args.get(*p).is_some_and(truthy));
+        let loses = self.destroys_with.iter().any(|p| match p.split_once('=') {
+            Some((name, value)) => args
+                .get(name)
+                .and_then(Value::as_str)
+                .is_some_and(|given| given.trim().eq_ignore_ascii_case(value)),
+            None => args.get(*p).is_some_and(truthy),
+        });
         if loses && self.effect < Effect::Destroy { Effect::Destroy } else { self.effect }
     }
 }

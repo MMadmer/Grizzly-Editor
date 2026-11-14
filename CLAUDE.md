@@ -9,7 +9,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 
 - **The editor has not shipped yet.** Until the first public release the
   editor architecture and the "game ↔ new (XMS) mods" protocol may be rebuilt
-  freely: no fallbacks to earlier editor revisions, no migrations of its old
+  freely: no fallbacks to earlier revisions of the editor, no migrations of its old
   export formats, no deprecation scaffolding. If the manifest or delta format
   changes tomorrow, the old one simply ceases to exist.
 - **What an author writes is versioned from 0.7** and that is the exception: a quest, a behaviour graph, a
@@ -136,9 +136,9 @@ A change of plan is a change of its document first.
 - **The effect decides the door.** Over MCP the bridge `grizzly-mcp.exe` has six tools: `grizzly_help`,
   `grizzly_state`, `grizzly_run` (read, view, write; `batch` runs several), `grizzly_destroy` (loses data for good:
   `destructiveHint`, so a client asks its user on exactly those calls), `grizzly_release` (reaches players),
-  `grizzly_look` (a picture). A parameter that turns a call into a losing one (`discard`, `overwrite`) is named in
-  the card (`destroys_with`). Unsaved work is lost only through the destroy door; every other path refuses with
-  `unsaved`.
+  `grizzly_look` (a picture). A parameter that turns a call into a losing one (`discard`, `overwrite`), or the
+  value of one that does (`action=discard`), is named in the card (`destroys_with`). Unsaved work and another
+  file's contents are lost only through the destroy door; every other path refuses with `unsaved` or `exists`.
 - **Long work is a job the command waits for**; `wait=false` answers the job at once, `job.list` / `get` / `wait` /
   `stop` work on any job, and a request that outlasts the transport answers `code: running` with the job. No command
   answers "pending, ask again".
@@ -249,7 +249,7 @@ A change of plan is a change of its document first.
 - The editor is MIT (`LICENSE`; `Build.ps1` puts it beside the programs as `LICENSE.txt`). No strong copyleft (GPL,
   LGPL) is linked: `tools/rust/notices.py` holds the list of licenses a linked crate may have (MPL-2.0, copyleft
   per file, is on it) and fails on any other, so a new dependency keeps it so.
-- `licenses\THIRD_PARTY_NOTICES.txt` is made by `python tools/rust/notices.py` from what the two programs link; a
+- `licenses\THIRD_PARTY_NOTICES.txt` is made by `python tools/rust/notices.py` from what the three programs link; a
   dependency added or removed means running it again (`check.sh` says so).
 - Test run: `Grizzly.exe -project "<folder or project file>" -nodlg` (`-nodlg` = no modals: the logged answers - No
   for a question, OK for a note; a crash = symbolised stack + dump + exit code 3). `-headless` runs it without a

@@ -82,7 +82,7 @@ fn unit_corners() -> [Vec3; 8] {
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct ShapeData {
     pub shapes: Vec<ShapeDef>,
-    /// `m_shape_type`.
+    /// What the shape is for the game: a common shape or a level bound.
     pub usage: u8,
 }
 

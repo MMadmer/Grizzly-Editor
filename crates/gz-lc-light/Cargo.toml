@@ -1,6 +1,6 @@
 [package]
 name = "gz-lc-light"
-description = "The level compiler's data model and its light: the mesh, deflectors, lightmaps, MU models, the ray model, and the light of lightmaps, vertices, implicit textures, MU models and detail objects (XrLCLight, xrDO_Light)."
+description = "The level compiler's data model and its light: the mesh, deflectors, lightmaps, MU models, the ray model, and the light of lightmaps, vertices, implicit textures, MU models and detail objects."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

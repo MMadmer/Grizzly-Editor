@@ -1,6 +1,6 @@
 [package]
 name = "gz-fmt-xml"
-description = "The game's XML: a tolerant tree with CXml's navigation, the include pre-pass, string tables and texture descriptions."
+description = "The game's XML: a tolerant tree with the navigation the game's own reader has, the include pre-pass, string tables and texture descriptions."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

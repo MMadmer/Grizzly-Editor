@@ -227,7 +227,8 @@ pub fn save_as(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
         ctx,
         save_request("Save Scene As", ("Scene", &["scene"]), svc.root.clone(), &name),
         |ed, f| {
-            run(ed, "scene.save", args(&[("path", path_text(&f))]));
+            // the system's dialog asked before it gave a file that is there
+            run(ed, "scene.save", args(&[("path", path_text(&f)), ("overwrite", Value::Bool(true))]));
         },
     )
 }
@@ -391,7 +392,12 @@ fn draw_summary(ui: &mut egui::Ui, editor: &Arc<Editor>) {
                     &format!("{level}.txt"),
                 ),
                 |ed, f| {
-                    run(ed, "scene.info", args(&[("summary", Value::Bool(true)), ("path", path_text(&f))]))
+                    // the system's dialog asked before it gave a file that is there
+                    run(
+                        ed,
+                        "scene.summary",
+                        args(&[("path", path_text(&f)), ("overwrite", Value::Bool(true))]),
+                    )
                 },
             );
         }

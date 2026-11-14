@@ -181,7 +181,7 @@ pub struct VisualOverlay {
 
 /// The visual overlay from the level name on: every static object exported in world space on a
 /// private copy (the shared library instance is never transformed), in parallel on the pool the
-/// caller runs it in. `build_name` is the machine stamp of a model (`\\computer\user`); [`registry`]
+/// caller runs it in. `build_name` is who built a model, as its description says it; [`registry`]
 /// names the files that were written. `materials`, when the game's are known, refuses a
 /// surface whose material the game lacks.
 pub fn visuals(

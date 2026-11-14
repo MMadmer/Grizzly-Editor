@@ -100,7 +100,7 @@ claude mcp add -s user grizzly-editor -- "<repo>/Bin/x64/Release/grizzly-mcp.exe
 
 ## License
 
-Grizzly Editor is released under the MIT License ([LICENSE](LICENSE)). The third-party code the two
+Grizzly Editor is released under the MIT License ([LICENSE](LICENSE)). The third-party code the three
 programs carry is listed with its licenses in
 [licenses/THIRD_PARTY_NOTICES.txt](licenses/THIRD_PARTY_NOTICES.txt), made from what they link
 (`python tools/rust/notices.py`); `Build.ps1` puts both files beside the programs.

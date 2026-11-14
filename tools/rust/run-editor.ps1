@@ -1,4 +1,4 @@
-# Runs the Rust editor once for a look, safely beside other runs.
+# Runs the editor once for a look, safely beside other runs.
 #
 #   pwsh -NoProfile -File tools\rust\run-editor.ps1 -Driver <script.py> [-EditorArgs '-project "C:\x"']
 #

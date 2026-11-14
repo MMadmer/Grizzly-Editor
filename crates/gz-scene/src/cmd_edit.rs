@@ -30,6 +30,15 @@ use crate::service::{self, SceneService};
 pub(crate) fn register(reg: &mut Registry) {
     reg.cmd(
         Spec::write(
+            "scene.summary",
+            "Writes what the open scene uses - objects, faces, textures and their memory - as a text file.",
+        )
+        .destroys_with(&["overwrite"])
+        .example("path=import/escape.txt"),
+        scene_summary,
+    );
+    reg.cmd(
+        Spec::write(
             "scene.place",
             "Places an object, a light, a spawn point, a way path or another thing in the scene.",
         )
@@ -1354,13 +1363,16 @@ fn texture_info(roots: &[PathBuf], name: &str) -> Option<(gz_fmt_tex::TexturePar
     Some((params, frames))
 }
 
-/// Collects the Summary Info (kept for the sheet), writes it as text into `path` when given,
-/// and answers its rows.
+/// A summary's rows as an answer gives them.
+pub(crate) fn summary_rows(s: &crate::summary::Summary) -> Value {
+    Value::Array(s.rows().into_iter().map(|(k, v)| json!({ "key": k, "value": v })).collect())
+}
+
+/// Collects the Summary Info and keeps it for the sheet.
 pub(crate) async fn collect_summary(
     ed: &Arc<Editor>,
     svc: &Arc<SceneService>,
-    path: Option<String>,
-) -> Result<Value, CmdError> {
+) -> Result<Arc<crate::summary::Summary>, CmdError> {
     let session = ed.project()?;
     let snap = svc.store.snapshot();
     svc.prefetch_library(ed, &snap).await;
@@ -1379,21 +1391,46 @@ pub(crate) async fn collect_summary(
     }
     let s = Arc::new(summary);
     *SummaryStore::of(&session).summary.lock() = Some(s.clone());
-    if let Some(path) = path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-        let raw = PathBuf::from(path.replace('/', "\\"));
-        let file = if raw.is_absolute() { raw } else { svc.root.join(raw) };
-        edit::writable(ed, &file)?;
-        let text = s.export();
-        let f2 = file.clone();
-        ed.exec
-            .io(move || {
-                if let Some(d) = f2.parent() {
-                    std::fs::create_dir_all(d)?;
-                }
-                gz_editor::fsx::write_atomic(&f2, text.as_bytes())
-            })
-            .await
-            .map_err(|e| CmdError::io(format!("the summary could not be written: {e}")))?;
+    Ok(s)
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SummaryParams {
+    /// The text file to write (project-relative or absolute).
+    path: String,
+    /// Replace a file that is there already.
+    #[serde(default)]
+    overwrite: bool,
+}
+
+async fn scene_summary(ed: Arc<Editor>, p: SummaryParams, _o: Origin) -> Reply {
+    let svc = crate::service::need_scene(&ed).await?;
+    let path = p.path.trim();
+    if path.is_empty() {
+        return Err(CmdError::invalid("path names the text file to write"));
     }
-    Ok(Value::Array(s.rows().into_iter().map(|(k, v)| json!({ "key": k, "value": v })).collect()))
+    let raw = PathBuf::from(path.replace('/', "\\"));
+    let file = if raw.is_absolute() { raw } else { svc.root.join(raw) };
+    edit::writable(&ed, &file)?;
+    let there = file.clone();
+    if !p.overwrite && ed.exec.io(move || there.exists()).await {
+        return Err(CmdError::new(
+            "exists",
+            format!("{} is there already (overwrite=true replaces it)", crate::cmd::wire(&svc.root, &file)),
+        ));
+    }
+    let summary = collect_summary(&ed, &svc).await?;
+    let text = summary.export();
+    let to = file.clone();
+    ed.exec
+        .io(move || {
+            if let Some(d) = to.parent() {
+                std::fs::create_dir_all(d)?;
+            }
+            gz_editor::fsx::write_atomic(&to, text.as_bytes())
+        })
+        .await
+        .map_err(|e| CmdError::io(format!("the summary could not be written: {e}")))?;
+    Ok(json!({ "file": crate::cmd::wire(&svc.root, &file), "summary": summary_rows(&summary) }))
 }

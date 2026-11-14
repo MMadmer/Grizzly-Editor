@@ -24,7 +24,7 @@ struct Item {
     free: Vec<Effect>,
 }
 
-/// The emitter's transform as a child sees it (`emitter->m_XFORM` when it draws in its space).
+/// The emitter's transform as a child sees it (the emitter's own, when it draws in its space).
 #[derive(Clone, Copy)]
 struct Emitter {
     xform: Option<Mat4>,

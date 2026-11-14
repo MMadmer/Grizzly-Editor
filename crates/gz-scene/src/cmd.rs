@@ -44,6 +44,7 @@ pub fn register(reg: &mut Registry) {
     );
     reg.cmd(
         Spec::write("scene.save", "Saves the scene into its files; path saves it as another scene.")
+            .destroys_with(&["overwrite"])
             .example("path=levels/escape_night.scene"),
         scene_save,
     );
@@ -52,6 +53,7 @@ pub fn register(reg: &mut Registry) {
             "scene.convert",
             "Writes an X-Ray SDK .level of the project as a .scene beside it; the .level stays as it is.",
         )
+        .destroys_with(&["overwrite"])
         .example("path=maps/escape.level"),
         scene_convert,
     );
@@ -107,6 +109,7 @@ pub fn register(reg: &mut Registry) {
             "scene.recover",
             "The scene's recovery snapshots: what there is, take one now, restore the newest, discard them.",
         )
+        .destroys_with(&["action=discard"])
         .example("action=restore"),
         scene_recover,
     );
@@ -359,7 +362,7 @@ async fn scene_open(ed: Arc<Editor>, p: OpenParams, _o: Origin) -> Reply {
     wait_scene_jobs(&ed).await;
     settle_scene(&ed, &svc, p.save, p.discard).await?;
     service::load_scene(&ed, &svc, full).await.map_err(|e| CmdError::new("load_failed", e))?;
-    info_reply(&ed, &svc, false, None).await
+    info_reply(&ed, &svc, false).await
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -390,6 +393,9 @@ struct SaveParams {
     /// lives there. Left out: its own file.
     #[serde(default)]
     path: Option<String>,
+    /// With path: replace another scene that is there already (its files are lost).
+    #[serde(default)]
+    overwrite: bool,
 }
 
 /// The `.scene` a save path means.
@@ -415,6 +421,22 @@ async fn scene_save(ed: Arc<Editor>, p: SaveParams, _o: Origin) -> Reply {
             .clone()
             .ok_or_else(|| CmdError::invalid("the scene has no file yet: scene.save path=<file>"))?,
     };
+    // another scene's files are never replaced by the way: the caller names it
+    let own = svc.store.snapshot().meta.file.clone();
+    let same =
+        own.as_ref().is_some_and(|o| o.to_string_lossy().eq_ignore_ascii_case(&file.to_string_lossy()));
+    if !same && !p.overwrite {
+        let there = file.clone();
+        if ed.exec.io(move || there.exists()).await {
+            return Err(CmdError::new(
+                "exists",
+                format!(
+                    "{} is another scene: saving as it replaces its files (overwrite=true)",
+                    wire(&svc.root, &file)
+                ),
+            ));
+        }
+    }
     let written = service::save_scene(&ed, &svc, file.clone()).await.map_err(CmdError::io)?;
     Ok(json!({ "file": wire(&svc.root, &file), "written": written }))
 }
@@ -550,12 +572,9 @@ async fn scene_convert(ed: Arc<Editor>, p: ConvertParams, _o: Origin) -> Reply {
 #[serde(deny_unknown_fields)]
 struct InfoParams {
     /// Also count what the scene uses: objects, faces, textures and their memory (Scene >
-    /// Summary Info).
+    /// Summary Info). `scene.summary` writes it as a text file.
     #[serde(default)]
     summary: bool,
-    /// With summary: write it as text into this file of the project as well.
-    #[serde(default)]
-    path: Option<String>,
 }
 
 fn camera_json(s: &SceneState) -> Value {
@@ -591,7 +610,7 @@ fn kinds_json(s: &SceneState) -> Value {
     )
 }
 
-async fn info_reply(ed: &Arc<Editor>, svc: &Arc<SceneService>, summary: bool, path: Option<String>) -> Reply {
+async fn info_reply(ed: &Arc<Editor>, svc: &Arc<SceneService>, summary: bool) -> Reply {
     let s = svc.store.snapshot();
     let load = svc.load.lock().clone();
     let problems: Vec<Value> =
@@ -615,7 +634,7 @@ async fn info_reply(ed: &Arc<Editor>, svc: &Arc<SceneService>, summary: bool, pa
         "problems": problems,
     });
     if summary {
-        let rows = crate::cmd_edit::collect_summary(ed, svc, path).await?;
+        let rows = crate::cmd_edit::summary_rows(&*crate::cmd_edit::collect_summary(ed, svc).await?);
         if let Value::Object(m) = &mut out {
             m.insert("summary".into(), rows);
         }
@@ -625,7 +644,7 @@ async fn info_reply(ed: &Arc<Editor>, svc: &Arc<SceneService>, summary: bool, pa
 
 async fn scene_info(ed: Arc<Editor>, p: InfoParams, _o: Origin) -> Reply {
     let svc = service::need_scene(&ed).await?;
-    info_reply(&ed, &svc, p.summary, p.path).await
+    info_reply(&ed, &svc, p.summary).await
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]

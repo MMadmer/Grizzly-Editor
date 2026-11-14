@@ -32,7 +32,7 @@ fn wsqrt(v: f32) -> f32 {
     f64::from(v).sqrt() as f32
 }
 
-/// `Matrix3<float>`, row major (`m_afEntry`).
+/// A 3x3 matrix of `f32`, row major.
 type M3 = [f32; 9];
 
 /// The rotation matrix of an axis and an angle.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The game loads a level the Rust editor built and started with Play (plan D1, phase 6's gate): on a THROW-AWAY
+"""The game loads a level the editor built and started with Play: on a THROW-AWAY
 COPY of a project, in a game root of the editor's own, on a hidden desktop, within three minutes.
 
     python tools/qa/test_play_game.py --project D:\\XFinedProjects\\Test [--scene <scene>] [--keep-log <file>]
@@ -229,7 +229,7 @@ def unlink_archives(root: str) -> None:
 
 
 def sweep_stale() -> None:
-    """What a run that was killed left in the temp folder. A root of an earlier editor's copied run may still hold
+    """What a run that was killed left in the temp folder. A root of an earlier run may still hold
     a junction to the game's archives: the link goes first, then the folders - never a delete through the link. A
     root a game still runs from is left alone."""
     temp = tempfile.gettempdir()

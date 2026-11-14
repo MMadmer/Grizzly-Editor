@@ -36,7 +36,7 @@ const BI_NONE: u16 = u16::MAX;
 /// What the export takes from the machine and the library.
 #[derive(Clone, Debug, Default)]
 pub struct ExportOptions {
-    /// `m_LibName`: the object's library name, written into the description.
+    /// The object's library name, written into the description.
     pub source_file: SmolStr,
     /// `"\\\\" + computer + "\\" + user`.
     pub build_name: SmolStr,
@@ -312,7 +312,7 @@ struct SkelSplit {
     faces: Vec<[u16; 3]>,
     used_bones: Vec<u16>,
     bbox: Aabb,
-    /// `m_SWR`: the sliding windows of a progressive split.
+    /// The sliding windows of a progressive split.
     swr: Vec<crate::vipm::Swr>,
 }
 

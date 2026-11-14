@@ -254,7 +254,7 @@ pub struct SpawnData {
     pub order: XmsOrder,
     pub rpoint: RPoint,
     pub env: EnvMod,
-    /// The shape a zone carries (`m_AttachedObject`): out of the scene's lists.
+    /// The shape a zone carries: out of the scene's lists.
     pub attached: Option<Arc<Object>>,
 }
 

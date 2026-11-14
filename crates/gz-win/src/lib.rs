@@ -203,7 +203,7 @@ impl Drop for DrawingPriority {
 /// Takes this process out of Windows' execution-speed power throttling (EcoQoS): Windows runs
 /// the threads of a process whose window is behind others, minimised or on another desktop at
 /// an efficient, lower speed, and a level compile in the editor's pools then took 11 - 17 %
-/// longer than the same compile headless (docs/rust/STATE.md, "After phase 8c"). No priority
+/// longer than the same compile headless. No priority
 /// changes. Answers whether it took.
 pub fn keep_full_speed() -> bool {
     let state = PROCESS_POWER_THROTTLING_STATE {

@@ -69,7 +69,7 @@ impl Geom {
         self.at(self.screen.x1, self.screen.y1)
     }
 
-    /// Canvas units to points, per axis (the game's `m_scale`, then the view's).
+    /// Canvas units to points, per axis (the game's scale, then the view's).
     #[must_use]
     pub fn cx(&self, canvas_w: f32) -> f32 {
         if canvas_w > 0.0 { self.screen.width() / canvas_w * self.kx } else { self.kx }

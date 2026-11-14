@@ -69,7 +69,7 @@ pub struct EffectDef {
     /// One minus friction, resilience, squared cutoff (`m_fCollide*`).
     pub collide: [f32; 3],
     pub velocity_scale: Vec3,
-    /// `m_APDefaultRotation`.
+    /// The rotation a particle starts with when its alignment gives none.
     pub ap_default_rotation: Vec3,
     pub actions: Vec<gz_fmt_xr::Action>,
 }

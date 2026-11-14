@@ -33,7 +33,7 @@ pub const MAX_LAYER: u32 = 512 - 2 * BORDER;
 /// The grid a deflector's triangles are found in.
 const HASH_SIDE: usize = 128;
 
-/// The sample offsets of a texel for `m_lm_jitter_samples` (1, 9, anything else
+/// The sample offsets of a texel for the build's jitter sample count (1, 9, anything else
 /// is 4).
 #[must_use]
 pub fn jitter(samples: u32) -> &'static [Vec2] {

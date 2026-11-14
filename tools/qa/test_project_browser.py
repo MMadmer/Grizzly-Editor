@@ -252,7 +252,7 @@ class Work:
                   lambda x, y: (230, 230, 230) if x < 30 and 10 < y < 40 and x % 3 else (83, 83, 83))
 
         # H: the project that is opened - named like the nested one, so the two cards are twins (S). L: its last
-        # scene is named by an absolute path inside it, the way an older editor wrote it
+        # scene is named by an absolute path inside it, the way the old layout had it
         self.p["open"] = self.path("Twin", TWIN)
         write(os.path.join(self.p["open"], "mod.ltx"), mod("qa_open"))
         self.p["scene"] = os.path.join(self.p["open"], "rawdata", "levels", "qa_scene.level")

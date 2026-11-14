@@ -102,7 +102,7 @@ def tree(root: str) -> dict[str, str]:
     return out
 
 
-# ---- ltx, the way CInifile reads it ----------------------------------------------
+# ---- ltx, the way the game reads it ------------------------------------------------
 def strip_comment(line: str) -> str:
     quoted = False
     for i, c in enumerate(line):
@@ -114,7 +114,7 @@ def strip_comment(line: str) -> str:
 
 
 def clean_value(value: str) -> str:
-    """CInifile drops the blanks of a value, outside quotes."""
+    """The game drops the blanks of a value, outside quotes."""
     out, quoted = [], False
     for c in value:
         if c == '"':

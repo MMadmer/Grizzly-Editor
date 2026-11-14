@@ -56,7 +56,7 @@ no updater: it checks nothing and offers nothing.
 
 ## 3. The check
 
-- When: once per start, after the first frame is on the screen (Preferences > Updates > Check at Startup, on by
+- When: once per start, after the first frame is on the screen (Preferences > General > Updates > Check at Startup, on by
   default; kept in the editor's home, `update\settings.ltx`), and on Help > Check for Updates. Never in a run without
   a window unless asked (`update.check`); a download a start finds staged continues in any run but a commandlet
   (section 4).

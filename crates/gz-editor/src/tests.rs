@@ -293,6 +293,12 @@ mod cards {
         assert_eq!(call("project.close", json!({ "discard": "false" }), Gate::Run)["ok"], true);
         assert_eq!(call("file.delete", json!({}), Gate::Run)["code"], "gate");
         assert_eq!(call("file.delete", json!({}), Gate::Destroy)["ok"], true);
+        // a card may name the value that loses data, not only a parameter
+        let recover =
+            Spec::write("scene.recover", "The recovery snapshots.").destroys_with(&["action=discard"]);
+        assert_eq!(recover.effect_of(&args(json!({ "action": "restore" }))), crate::Effect::Write);
+        assert_eq!(recover.effect_of(&args(json!({}))), crate::Effect::Write);
+        assert_eq!(recover.effect_of(&args(json!({ "action": "Discard" }))), crate::Effect::Destroy);
         assert_eq!(
             call("scene.place", json!({}), Gate::Destroy)["error"],
             "scene.place is an ordinary command: run it with grizzly_run"

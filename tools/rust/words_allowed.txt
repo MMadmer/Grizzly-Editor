@@ -18,3 +18,4 @@ crates/gz-app/src/contract.rs | view_mode | The id of the viewport's View Mode m
 crates/gz-ui-viewport/src/pane.rs | view_mode | The id of the viewport's View Mode menu.
 crates/gz-ui-graph/src/cmd.rs | ui_scale | A JSON field of the graph view's answer.
 crates/gz-mcp/src/lib.rs | level_build | The job group id of the level build (a job kind, not a command).
+crates/gz-entities/* | m_[A-Za-z] | The game's server entities: a packet's fields by the names the game gives them, which is how a field is found in the game.
