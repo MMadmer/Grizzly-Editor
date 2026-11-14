@@ -14,6 +14,7 @@ workspace = true
 gz-base.workspace = true
 gz-task.workspace = true
 gz-log.workspace = true
+gz-win.workspace = true
 gz-store.workspace = true
 gz-query.workspace = true
 gz-editor.workspace = true

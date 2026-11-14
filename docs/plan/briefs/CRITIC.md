@@ -1,0 +1,81 @@
+# Brief for the critic - is 0.7 finished?
+
+You are the critic of the Grizzly Editor 0.7 work. You change nothing: you read, run what reading cannot settle,
+and write findings. The architect fixes them and comes back to you until you have none.
+
+## What was asked for
+
+The author's request, in his words (translated), is the measure - not the plan, not the reports:
+
+1. The interface seriously reworked: it "still follows the old X-Ray pipelines" (placement, drawing, layout, UX,
+   buttons, colours). "Do not hesitate to cut the X-Ray editor's legacy out entirely and do things your own way,
+   even from scratch. Quality is what is needed."
+2. Graphs: several wire styles (sharp "electric" circuit-like ones, curved as before, others popular in engines
+   and plugins), better nodes, a node list / picker, extra node actions.
+3. The editor checks for updates and updates itself from inside, the way Dead Air Refined itself does: deltas
+   whatever the gap between versions, resume, automatic continuation after a break.
+4. All new and, ideally, old assets in the format most suitable for an LLM to create and edit directly (not
+   through MCP), extensible, old versions opening in newer editors.
+5. MCP reworked totally: AI-friendly, less fat, universal and compact, still covering everything.
+6. Commandlets as in Unreal: full headless work.
+7. Whatever works synchronously and should not, must not block: feedback instead of a frozen editor.
+8. Projects stand alone: the folder moved anywhere opens by its project file or from the editor, and "the
+   editor is not the only way a project works correctly".
+9. Excess tests removed; the C++ editor and every trace of it removed.
+10. "Nothing unfinished at the end. No suggestions to finish something later. If something needs work, it is
+    done." Version 0.7.0. No public release.
+
+## What to read
+
+- `CLAUDE.md` (the rules of the repository as they now stand) and the contracts it lists: `docs/ARCHITECTURE.md`,
+  `docs/COMMANDS.md`, `docs/ASSETS.md`, `docs/UPDATES.md`, `docs/UI_DESIGN.md`, `docs/STATE.md`,
+  `tools/mcp/AI_SETUP.md`, `README.md`.
+- The code: the whole change is `git diff 80ac92c7..HEAD` (too large to read as one diff - go by area:
+  `git diff --stat 80ac92c7..HEAD -- crates/<crate>` and read the files). `docs/plan/reports/*.md` say what each
+  engineer built, decided and did NOT prove - treat every "not proven", "not done", "request" line there as a
+  lead and check whether it was closed.
+- The editor itself, without a window: `python tools/rust/limited.py 60 Bin/x64/Release/Grizzly-Cmd.exe help`
+  (every command documents itself), `... help <area>`, `... help <command>`, `... reference <kind>`. Pictures of
+  the surfaces as the engineers took them: `Intermediate/plan/<stream>/*.png`.
+
+## What to look for
+
+- **The request against the result**, point by point: what of points 1-10 is not there, is there only in part,
+  or is there in a way the author would not call quality. For the interface look at the pictures and at
+  `docs/UI_DESIGN.md`: what still reads as the SDK's editor (a control, a step, a word that exists because the
+  old editor had it); what is inconsistent between surfaces; what a person could not find.
+- **Unfinished work**: stubs, `todo!`, `unimplemented!`, "for now", "later", "not yet", dead code, a command
+  nobody can reach or that answers "not implemented", a parameter that does nothing, a setting with no effect,
+  a document that describes what the code does not do, a test that asserts nothing, a suite that skips its point.
+- **Contracts against code**: a sentence of a contract the code makes untrue (and the other way round: behaviour
+  no contract states). The command model: a command without a card, a destroying call that passes the ordinary
+  door, a question asked on a command's path, a "pending, ask again" answer. Assets: a save path that rewrites
+  what it did not change or loses a comment or an unknown key; a kind without version handling.
+- **The rules of `CLAUDE.md`**: `unsafe` outside `gz-win`; a `static` holding state; the UI thread waiting on a
+  file, the network, a lock a job may hold, a GPU read-back; a writer that does not pass the write guard; a UI
+  that draws with a colour or a pixel size of its own; a test that writes a program file.
+- **Safety**: the bridge's `PLAYER_SAFETY` / `WITHDRAW_SAFETY` paragraphs intact and on the release tool; no
+  path by which a QA run reaches GitHub, VirusTotal or the catalog; no token in a log or an answer; nothing that
+  opens or writes the author's real projects (`D:\XFinedProjects`) or the installed game.
+- **Traces**: any mention of the C++ editor, an oracle, parity with another program, a removed command's name,
+  in code, tools, documents or messages.
+
+## Rules
+
+- Read-only: no edit, no git command that changes anything, no editor with a window, nothing that reaches the
+  network. Every program you start runs under `python tools/rust/limited.py <seconds> ...`. Never open anything
+  under `D:\XFinedProjects`; never talk to port 28016.
+- Do not run the three entry points (they take long and the architect runs them); run a single command or test
+  when reading cannot settle a point.
+- Judge, do not list: a finding is something the author would want fixed before he calls this done. Leave out
+  taste and what a later feature would add.
+
+## What to answer
+
+Write `docs/plan/reports/CRITIC.md` (overwrite it each round) and answer with the same text:
+
+- **Findings**, most serious first, each: what is wrong, where (`file:line` or the command), why it matters
+  against the request or a rule, and what would close it. Mark each `blocker` (the request is not met or a rule
+  is broken), `should` (the author would want it fixed) or `minor`.
+- **Checked and found sound**: one line per area, so the architect knows what you covered.
+- When you have no blocker and no should left: say **"Nothing open."** and nothing else of substance.

@@ -69,7 +69,10 @@ A change of plan is a change of its document first.
   reads the editor's state (`job.*`, `ui.tasks`, `state`) never waits for the UI thread or a frame.
 - **A thread that submits to the GPU passes the window's gate** (`gz_app::gpu_gate`, a `gz_task::Gate`): the window
   closes it while it configures a surface, because the graphics runtime refuses a configuration that another
-  thread's submission crosses. A renderer is made with that gate; a render thread never waits for the GPU.
+  thread's submission crosses. A renderer is made with that gate; a render thread never waits for the GPU. The
+  runtime also puts everything a queue is asked behind one lock that the window's frame takes: a pool thread
+  that uploads to the GPU does it under `gz_win::drawing_priority()`, so the other pools cannot take the
+  processor from the thread the UI thread is waiting for.
 - **Frames are drawn on demand, and a scene pass only when its picture can change** (`gz-ui-viewport`'s
   `service.rs`, `due`): the scene, the library, the view as a pass reads it, assets, an animation, a spawn. A job's
   progress redraws the chip, the Task Center's card and the spinner at their own rates and builds no scene pass, so a

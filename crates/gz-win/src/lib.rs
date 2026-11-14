@@ -61,7 +61,8 @@ use windows::Win32::System::Threading::{
     GetProcessTimes, GetStartupInfoW, GetThreadPriority, GetThreadTimes, IO_COUNTERS,
     PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
     PROCESS_POWER_THROTTLING_STATE, ProcessPowerThrottling, STARTF_USESHOWWINDOW, STARTUPINFOW,
-    SetProcessInformation, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL, TerminateProcess,
+    SetProcessInformation, SetThreadPriority, THREAD_PRIORITY, THREAD_PRIORITY_ABOVE_NORMAL,
+    TerminateProcess,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowThreadProcessId, SW_MINIMIZE, SW_SHOWMINIMIZED, SW_SHOWMINNOACTIVE,
@@ -165,6 +166,38 @@ pub fn raise_this_thread_priority() -> bool {
     // SAFETY: the pseudo-handle of the calling thread is always valid and the priority is one of
     // the documented constants; the call changes nothing but this thread's scheduling.
     unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL).is_ok() }
+}
+
+/// The calling thread at the drawing threads' priority for as long as this lives.
+///
+/// The graphics runtime serialises everything a queue is asked - the window's frame, a render
+/// thread's submission, an upload - behind one lock. A pool thread that holds it (an asset going
+/// to the GPU) and loses the processor to the other pools keeps the UI thread waiting for as long
+/// as the machine is busy: the lower thread sets the higher one's pace. So whatever takes that
+/// lock runs above normal while it has it, like the threads that draw.
+#[must_use = "the priority goes back when this is dropped"]
+pub struct DrawingPriority {
+    was: i32,
+}
+
+/// Raises the calling thread to the drawing threads' priority until the guard is dropped. A thread
+/// already there (the UI thread, a render thread) stays as it is.
+pub fn drawing_priority() -> DrawingPriority {
+    let was = this_thread_priority();
+    if was < THREAD_PRIORITY_ABOVE_NORMAL.0 {
+        let _ = raise_this_thread_priority();
+    }
+    DrawingPriority { was }
+}
+
+impl Drop for DrawingPriority {
+    fn drop(&mut self) {
+        if self.was < THREAD_PRIORITY_ABOVE_NORMAL.0 {
+            // SAFETY: the pseudo-handle of the calling thread is always valid and the priority is
+            // the one this very thread had; the call changes nothing but its scheduling.
+            let _ = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY(self.was)) };
+        }
+    }
 }
 
 /// Takes this process out of Windows' execution-speed power throttling (EcoQoS): Windows runs

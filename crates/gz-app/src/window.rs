@@ -362,6 +362,47 @@ struct Live {
     size_px: [u32; 2],
 }
 
+/// The thread that polls the device so a captured frame's read-back is mapped. It is made with the
+/// window and never in a frame: making a thread is a system call, and on a busy machine the frame
+/// that asked for one stood in it for a tenth of a second.
+struct Polls {
+    ask: Option<std::sync::mpsc::Sender<egui_wgpu::wgpu::Device>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Polls {
+    fn new() -> Self {
+        let (ask, asked) = std::sync::mpsc::channel::<egui_wgpu::wgpu::Device>();
+        let thread = std::thread::Builder::new()
+            .name("gz-readback".into())
+            .spawn(move || {
+                while let Ok(device) = asked.recv() {
+                    let _ = device.poll(egui_wgpu::wgpu::PollType::Wait {
+                        submission_index: None,
+                        timeout: Some(Duration::from_secs(2)),
+                    });
+                }
+            })
+            .ok();
+        Self { ask: Some(ask), thread }
+    }
+
+    /// A captured frame was submitted: the poll that hands its picture over is the thread's.
+    fn poll(&self, device: egui_wgpu::wgpu::Device) {
+        if let Some(ask) = &self.ask {
+            let _ = ask.send(device);
+        }
+    }
+
+    /// Ends the thread once the poll it is in is over (2 s at most).
+    fn end(&mut self) {
+        self.ask = None;
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 struct App {
     editor: Arc<Editor>,
     link: Arc<WindowLink>,
@@ -371,8 +412,8 @@ struct App {
     /// The window is up and its device is being made.
     pending: Option<Pending>,
     profile: Profile,
-    /// The screenshots' read-backs, polled off the UI thread; joined before the device goes.
-    polls: Vec<tokio::task::JoinHandle<()>>,
+    /// The screenshots' read-backs, polled off the UI thread; ended before the device goes.
+    polls: Polls,
     /// A frame is due.
     dirty: bool,
     /// What made the next frame due, for `perf.frames`' `ui_frame_causes`: a ping of the
@@ -737,14 +778,7 @@ impl App {
                 // the picture is handed over when the read-back buffer is mapped, which happens
                 // on a poll; no later frame may come to do it, and the UI thread waits on no GPU
                 // read-back: a worker polls
-                let device = gpu.device.clone();
-                self.polls.retain(|h| !h.is_finished());
-                self.polls.push(self.editor.exec.handle().spawn_blocking(move || {
-                    let _ = device.poll(egui_wgpu::wgpu::PollType::Wait {
-                        submission_index: None,
-                        timeout: Some(Duration::from_secs(2)),
-                    });
-                }));
+                self.polls.poll(gpu.device.clone());
             }
             waited
         };
@@ -956,16 +990,23 @@ impl ApplicationHandler<UserEvent> for App {
         let kind = event_name(&event);
         let began = Instant::now();
         let cpu_began = gz_win::thread_cpu_seconds();
+        let stalls = crate::stalls::Stalls::of(&self.editor);
+        stalls.pass_begins();
         self.handle_window_event(event_loop, window_id, event);
         let ms = began.elapsed().as_secs_f32() * 1000.0;
         if self.frame > 1 {
             let tab = self.editor.frames.current().active_tab;
             if ms > crate::stalls::STALL_MS {
                 let cpu_ms = (gz_win::thread_cpu_seconds() - cpu_began) * 1000.0;
-                let during = format!("event: {kind}; {cpu_ms:.0} ms of it on the processor");
-                crate::stalls::Stalls::of(&self.editor).note(&self.editor, ms, &tab, &during);
+                let mut during = format!("event: {kind}; {cpu_ms:.0} ms of it on the processor");
+                if let Some(stack) = stalls.pass_ends() {
+                    during.push_str("; it stood in ");
+                    during.push_str(&stack.join(" <- "));
+                }
+                stalls.note(&self.editor, ms, &tab, &during);
             }
         }
+        let _ = stalls.pass_ends();
     }
 
     /// The mouse's own motion (raw input), as egui's `MouseMoved`: what the viewport's camera turns
@@ -1025,10 +1066,7 @@ impl ApplicationHandler<UserEvent> for App {
         step("the shell", &mut || drop(std::mem::replace(&mut self.shell, Box::new(Gone))));
         // 4. the device handle given out; the read-backs still polling end first (2 s at most),
         // and a device still being made is let go on this thread
-        let rt = self.editor.exec.handle().clone();
-        for h in std::mem::take(&mut self.polls) {
-            let _ = rt.block_on(h);
-        }
+        self.polls.end();
         if let Some(mut p) = self.pending.take() {
             if let Some(t) = p.thread.take() {
                 let _ = t.join();
@@ -1219,7 +1257,7 @@ pub fn run(
         live: None,
         pending: None,
         profile: Arc::new(Mutex::new(profile)),
-        polls: Vec::new(),
+        polls: Polls::new(),
         dirty: true,
         woken: false,
         wake_pending,

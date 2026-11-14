@@ -166,6 +166,13 @@ What the suites hold, beyond what their names say:
   frame was asked for): a job that pings a thousand times a second fills no queue.
 - A stall's record says how much of it the UI thread spent on the processor: a stall with little of it was
   a wait, not work.
+- A pool thread that uploads to the GPU does it at the drawing threads' priority: the graphics runtime puts
+  every use of a queue behind one lock, and a holder the other pools had taken the processor from kept the
+  window's frame waiting.
+- No frame makes a thread: the read-back of a pictured frame is polled by one thread made with the window.
+- A resize configures the surface on the UI thread, which waits there for the frames in flight; the graphics
+  driver's own waits inside a present are the driver's. On a machine with no processor to spare either can pass
+  100 ms, so a suite that fails on a stall alone beside other suites is run again alone before it counts.
 - A QA editor's window is hidden, not iconic: a launcher that asks for a minimised start gets a window that never
   comes up, and it is pictured and resized as if it were on the screen.
 - The action table is a service of the editor with the last frame's facts, so a surface's own menu answers "on" and

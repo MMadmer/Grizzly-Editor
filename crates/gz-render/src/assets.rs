@@ -907,6 +907,10 @@ fn finish_mesh_info(inner: &mut Inner, data: &MeshData, uploaded: Option<Uploade
 
 fn upload_mesh(gpu: &AssetGpu, data: &MeshData) -> Uploaded {
     use wgpu::util::DeviceExt;
+    // a pool thread that holds the device must not lose the processor to the other pools: the
+    // window's frame waits for the same device
+    #[cfg(windows)]
+    let _drawing = gz_win::drawing_priority();
     let (wire, ranges) = data.wire_indices();
     let wire_bytes: &[u8] = if wire.is_empty() { &[0u8; 8] } else { bytemuck::cast_slice(&wire) };
     let index_bytes: &[u8] =
@@ -944,6 +948,10 @@ pub(crate) fn upload_texture_to(
     label: &str,
 ) -> Result<Arc<GpuTexture>> {
     data.check()?;
+    // the queue's lock is the one the window's frame takes: whoever holds it draws, for as long
+    // as it holds it (`gz_win::DrawingPriority`)
+    #[cfg(windows)]
+    let _drawing = gz_win::drawing_priority();
     if data.format.is_block() && !bc {
         return Err(invalid("the graphics device does not sample block-compressed textures"));
     }

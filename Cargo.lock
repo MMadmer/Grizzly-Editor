@@ -2289,6 +2289,7 @@ dependencies = [
  "gz-task",
  "gz-ui",
  "gz-vfs",
+ "gz-win",
  "imbl",
  "parking_lot 0.13.0",
  "png",

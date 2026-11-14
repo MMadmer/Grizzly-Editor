@@ -39,6 +39,8 @@ pub fn upload(
         return Err("the graphics device does not sample block-compressed textures".to_owned());
     }
     let mips = u32::try_from(levels.len()).unwrap_or(1);
+    // the queue's lock is the one the window's frame takes: whoever holds it draws meanwhile
+    let _drawing = gz_win::drawing_priority();
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
