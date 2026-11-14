@@ -13,6 +13,7 @@ waited ten minutes and stopped it. Measured on that level on this machine (i7-11
 | What | Seconds |
 |---|---|
 | The steps before the compiler (game files 4.2, AI map kept 0.2, game graph 1.4, spawn 1.5, geometry 0.7-4.4) | about 10 |
+| The AI map generated over Cordon's whole ground (a new level's first build): 2.48 M nodes | 13.2 |
 | The compiler, draft quality (no lightmaps), all 20 phases | 38.3 |
 | ... of it: ray model 6.0, sectors 6.3, tessellation 5.8, optimizing 3.3, tangent basis 2.7, visuals 2.3, collision 2.2, static models' visuals 2.0, static models' light 1.8, subdividing 1.8, normals 1.2, vertex light 1.0 | |
 | The compiler, standard quality: the first 8 phases (tessellation 15.6, collision 8.4) | 38 |
@@ -215,8 +216,8 @@ World Partition builders and Derived Data Cache; IXRay's `xrLC/Light` (Embree, C
 ## 4. The work
 
 Three implementing agents in parallel on disjoint files, each in a git worktree of its own cut from the seam
-commit; the architect writes the seam before them, the readable results beside them, and integrates after
-them; one critic reads everything once at the end.
+commit, and a fourth, lighter one for the readable results; the architect writes the seam before them, takes
+the steps before the compiler, and integrates after them; one critic reads everything once at the end.
 
 | Who | What | Files it owns |
 |---|---|---|
@@ -224,7 +225,8 @@ them; one critic reads everything once at the end.
 | A1 | The GPU lighter | `crates/gz-lc-gpu/**` |
 | A2 | The light through the baker, visuals before light, the atlas, the wiring | `gz-lc-light/src/{deflector,mu,implicit,vertex,detail,global,lightmap,layer,point,tests}.rs`; `gz-lc/src/{lib,split,details,tests}.rs`; `gz-levelbuild/src/{compile,cmd}.rs`, its `Cargo.toml` |
 | A3 | The CPU: the tracer and the structure phases | `gz-lc-light/src/{ray,mesh,math,hash2d}.rs` and a new `bvh4.rs`; `gz-lc/src/{geom,cform,tree,qslim,stripify,sphere,ogf,load,mender,vcache}.rs` |
-| Architect, beside | W1: `build.report`, `level.inspect`, the steps before the compiler | `gz-levelbuild/src/{report,inspect}.rs` (new) and its steps (`files`, `prj`, `nav`, `graph`, `spawn`, `pipeline`), `gz-fmt-level` (a reader of the compiled level), `gz-scene/src/bulk` (the AI map's generation) |
+| A4 | `build.report`, `level.inspect` (section 3.6) | `gz-fmt-level/src/compiled.rs` (new: a reader of the compiled level), `gz-levelbuild/src/{report,inspect}.rs` (new), the report's call in `pipeline.rs` |
+| Architect, beside | W1: the steps before the compiler | `gz-levelbuild`'s steps (`files`, `prj`, `nav`, `graph`, `spawn`), `gz-scene/src/bulk` (the AI map's generation) |
 | Architect, after | W2: merge, the whole build, records, QA, the documents | everything |
 | Critic (one pass) | section 4.6 | reads only |
 
@@ -388,10 +390,10 @@ are equal; `cargo test -p gz-lc-light -p gz-lc` pass; clippy and fmt are clean.
 
 ### 4.5 W1 and W2 - the architect
 
-W1, while the agents work: `build.report` and `level.inspect` (section 3.6) with their tests and cards; and
-the steps before the compiler - the game files (4.2 s on Cordon), the geometry step (up to 4.4 s), the game
-graph and the spawn (1.4 and 1.5 s), the AI map's generation over the ground (timed on a copy of Cordon whose
-map was cleared). A step under two seconds is left alone; one over it gets its factor of two where the code
+A4 builds `build.report` and `level.inspect` (section 3.6) with their tests and cards. W1 is the steps
+before the compiler - the game files (4.2 s on Cordon), the geometry step (up to 4.4 s), the game graph and
+the spawn (1.4 and 1.5 s), the AI map's generation over the ground (13.2 s for Cordon's 2.48 M nodes, already
+flooding in parallel waves). A step under two seconds is left alone; one over it gets its factor of two where the code
 allows, and `level.ai`, `level.graph`, `level.game` and `level.spawn` stay byte for byte for the same scene
 (a generated AI map's nodes in the same order: saves hold their numbers).
 
