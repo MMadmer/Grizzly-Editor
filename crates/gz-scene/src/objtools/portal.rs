@@ -436,7 +436,7 @@ pub fn update(
     let (center, _) = geom::box_sphere(&bounds);
     let mut b = Built { data, simplified: Vec::new(), center, normal: Vec3::ZERO, valid: false };
     if b.data.vertices.len() < 3 {
-        log.push(format!("Portal: '{name}' can't create.\nInvalid portal. (m_Vertices.size()<3)"));
+        log.push(format!("Portal '{name}' was not made: it has fewer than three vertices."));
         return b;
     }
     let mut n = Vec3::ZERO;
@@ -445,7 +445,7 @@ pub fn update(
     }
     let m = n.length();
     if m.abs() <= EPS_S {
-        log.push("Portal: Degenerate portal found.".to_owned());
+        log.push("A portal was not made: it has no usable area.".to_owned());
         return b;
     }
     b.normal = n / m;
@@ -465,7 +465,9 @@ pub fn update(
         if a < bb {
             invert(&mut b);
         } else if a == bb {
-            log.push(format!("Check portal orientation: '{name}'"));
+            log.push(format!(
+                "Portal '{name}' could not tell its front from its back: check its orientation."
+            ));
         }
     }
     b
@@ -558,7 +560,9 @@ pub fn compute(
             let name = names();
             todo.push((name, PortalData { front: fa, back: fb, vertices }, *pair));
         } else {
-            log.push(format!("No portal can be made from one edge; check the geometry.\n'{fa}'<->'{fb}'"));
+            log.push(format!(
+                "No portal can be made from one edge between '{fa}' and '{fb}': check the geometry."
+            ));
         }
     }
     let rays = sector_rays(&items_of);
@@ -582,7 +586,7 @@ pub fn compute(
             portals.push(b.data);
         } else {
             log.push(format!(
-                "The portal cannot be simplified; check the geometry.\n'{}'<->'{}'",
+                "The portal between '{}' and '{}' cannot be simplified: check the geometry.",
                 b.data.front, b.data.back
             ));
         }

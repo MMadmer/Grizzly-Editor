@@ -21,7 +21,7 @@ use gz_ui::{
     Button, Font, Icon, Kind, PropFlags, PropertyGrid, Section, Switch, Tone, icons, metrics, palette,
 };
 
-use crate::local::{args, confirm, local_danger, local_eye_toggle, plural, removal, run};
+use crate::local::{args, confirm, local_eye_toggle, plural, removal, run};
 
 /// What the first line says: the build makes the cells by itself.
 pub const BUILD_LINE: &str = "The build makes the cells and their portals by itself: one cell for a level without any, the meshes no cell holds into the default cell, and the portals the cells lack. Draw cells here only to cut the level up by hand.";
@@ -118,13 +118,13 @@ pub(crate) fn zones_panel(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
     let sel_portals = selected_names(snap, ObjClass::Portal);
     let mut gone = sel_cells.clone();
     gone.extend(sel_portals.iter().cloned());
-    if local_danger(
-        ui,
-        "Remove Selected...",
-        "Remove the selected cells (with their portals) and portals",
-        !gone.is_empty(),
-        "Select cells or portals first",
-    ) {
+    if Button::new("Remove Selected...")
+        .kind(Kind::GhostDanger)
+        .enabled(!gone.is_empty(), "Select cells or portals first")
+        .tip("Remove the selected cells (with their portals) and portals")
+        .show(ui)
+        .clicked()
+    {
         let ed = editor.clone();
         let names: Vec<Value> = gone.iter().map(|n| Value::String(n.clone())).collect();
         confirm(
@@ -273,13 +273,13 @@ fn more(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState, sel_cells: &[Strin
         {
             zones(editor, "invert", &[]);
         }
-        if local_danger(
-            ui,
-            "Remove the Default Cell...",
-            "Remove the default cell",
-            has_default,
-            "There is no default cell",
-        ) {
+        if Button::new("Remove the Default Cell...")
+            .kind(Kind::GhostDanger)
+            .enabled(has_default, "There is no default cell")
+            .tip("Remove the default cell")
+            .show(ui)
+            .clicked()
+        {
             let ed = editor.clone();
             confirm(
                 ui.ctx(),

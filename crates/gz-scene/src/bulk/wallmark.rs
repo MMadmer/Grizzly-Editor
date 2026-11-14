@@ -256,7 +256,7 @@ impl Wallmarks {
         self.flags & flags::DRAW != 0
     }
 
-    /// `SelectObjects(flag)`.
+    /// Selects or deselects every mark.
     pub fn select_all(&mut self, on: bool) {
         for m in self.slots.iter_mut().flat_map(|s| &mut s.items) {
             if on {
@@ -518,7 +518,7 @@ pub fn build_mark(hit: [Vec3; 3], contact: Vec3, around: &[[Vec3; 3]], lay: &Lay
     })
 }
 
-/// `RayQuery(OPT_ONLYNEAREST | OPT_CULL)` over scene objects: the nearest front face, its range
+/// A ray over scene objects: the nearest front face, its range
 /// and its world triangle.
 #[must_use]
 pub fn ray_triangle(
@@ -553,7 +553,7 @@ pub fn ray_triangle(
     best
 }
 
-/// `BoxQuery(OPT_FULL_TEST)` over scene objects: the world triangles meeting a box, object by
+/// A box over scene objects: the world triangles meeting it, object by
 /// object in the list's order, each object's in its own order.
 #[must_use]
 pub fn box_triangles(state: &SceneState, lib: &Library, ids: &[ObjId], b: &Aabb) -> Vec<[Vec3; 3]> {

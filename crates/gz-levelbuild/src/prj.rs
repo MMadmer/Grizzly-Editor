@@ -161,7 +161,7 @@ impl Sectors {
         Self { list, default }
     }
 
-    /// `PortalUtils.FindSector`.
+    /// The sector a mesh of an object lies in.
     fn of_mesh(&self, object: &str, mesh: &str) -> u16 {
         self.list
             .iter()
@@ -201,7 +201,7 @@ fn is_mu_static(o: &gz_fmt_object::Object) -> bool {
 }
 
 /// The surfaces a scene object wears: the library's, with the scene's own shader, compiler
-/// shader, material, texture and vertex map where it keeps them (`m_Surfaces`).
+/// shader, material, texture and vertex map where it keeps them.
 #[must_use]
 pub fn object_surfaces(o: &Object, lo: &LibraryObject) -> Vec<Surface> {
     let mut out = lo.object.surfaces.clone();
@@ -327,12 +327,12 @@ impl Builder {
         (self.materials.len() - 1) as u32
     }
 
-    /// `BuildMaterial(surf, sector, allow_draft)`.
+    /// The material of a surface in a sector.
     fn material(&mut self, cx: &Ctx<'_>, s: &Surface, sector: u16, allow_draft: bool) -> Result<u32> {
         self.material_of(cx, &s.shader, &s.shader_xrlc, &s.texture, sector, allow_draft)
     }
 
-    /// `BuildMaterial(esh_name, csh_name, tx_name, 1, sector, allow_draft)`.
+    /// The material of an engine shader, a compiler shader and a texture in a sector.
     fn material_of(
         &mut self,
         cx: &Ctx<'_>,
@@ -770,7 +770,7 @@ pub fn level_box(scene: &SceneState, lib: Lookup<'_>) -> Option<Aabb> {
     b.is_valid().then_some(b)
 }
 
-/// `CompileStatic(false)`: the whole scene. `lods` gives a LOD picture by texture name.
+/// The static geometry of the whole scene. `lods` gives a LOD picture by texture name.
 pub fn compile(
     scene: &SceneState,
     lib: Lookup<'_>,

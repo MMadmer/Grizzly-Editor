@@ -50,7 +50,7 @@ pub struct BulkToolState {
     pub link_mode: LinkMode,
     /// The game materials the AI map is not generated on.
     pub ignored: Vec<SmolStr>,
-    /// `m_Selected`: per detail slot.
+    /// Whether each detail slot is selected.
     pub slots_selected: Arc<[bool]>,
 }
 

@@ -34,7 +34,7 @@ use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
 use crate::drop::{begin_drops, local_file_drop_zone};
-use crate::local::{local_check, local_drop_mark, local_list_header};
+use crate::local::{local_drop_mark, local_list_header};
 use crate::screens::{
     Change, ScreensTab, Selection, View, commit, default_show, surface_mask, take_drop, take_one,
 };
@@ -200,7 +200,10 @@ pub struct ScreensDoc {
 
 fn mask_check(ui: &mut Ui, label: &str, mask: &mut u32, bit: u32, invert: bool) -> bool {
     let mut on = if invert { *mask & bit == 0 } else { *mask & bit != 0 };
-    if !local_check(ui, label, &mut on) {
+    let flipped = ui
+        .push_id(("gz-ui-pda.check", label), |ui| gz_ui::Switch::new(&mut on, label).show(ui).changed())
+        .inner;
+    if !flipped {
         return false;
     }
     if on != invert {

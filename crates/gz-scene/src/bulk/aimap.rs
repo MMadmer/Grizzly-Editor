@@ -2,7 +2,7 @@
 //! the collision model and linked, the flood that generates the map from the nodes there are,
 //! the brush, the link edits, smoothing, selection and picking.
 //!
-//! An edit works on [`AiWork`], a flat copy of the nodes with the tool's hash (`m_HASH`: 129 x
+//! An edit works on [`AiWork`], a flat copy of the nodes with the tool's hash (129 x
 //! 129 buckets over the map's box); [`AiWork::into_part`] makes the scene's tiles again, sharing
 //! every tile the edit left as it was.
 //!
@@ -98,7 +98,7 @@ fn node_on(plane: Plane, pos: Vec3) -> AiMapNode {
     AiMapNode { links: [None; 4], normal: plane.n, d: plane.d, pos, flags: 0 }
 }
 
-/// `m_HASH`: the nodes by bucket of the map's box.
+/// The nodes by bucket of the map's box.
 #[derive(Clone, Debug)]
 pub struct Hash {
     min: Vec3,
@@ -119,7 +119,7 @@ impl Hash {
         }
     }
 
-    /// `HashMap(V)`: the bucket of a point, `None` outside the box.
+    /// The bucket of a point, `None` outside the box.
     #[must_use]
     pub fn cell(&self, v: Vec3) -> Option<usize> {
         let ix = i_floor((v.x - self.min.x) * self.scale_x) as u32;
@@ -371,7 +371,7 @@ impl AiWork {
         }
     }
 
-    /// `FindNode(vAt, eps)`: the first node of the point's bucket that close.
+    /// The first node of the point's bucket within `eps` of it.
     #[must_use]
     pub fn find_node(&self, at: Vec3, eps: f32) -> Option<u32> {
         self.hash
@@ -396,7 +396,8 @@ impl AiWork {
         }
     }
 
-    /// `BuildNode(vFrom, vAt, bIC, bSuperIC)`.
+    /// One node at `at`, reached from `from`. `bic` skips the travel and ground rules; `super_ic`
+    /// still makes the node where no ground is found.
     pub fn build_node(
         &mut self,
         g: &Gen<'_>,
@@ -513,7 +514,7 @@ impl AiWork {
         Flood { added: self.nodes.len() - before, stopped }
     }
 
-    /// `BuildNodes(bFromSelectedOnly)`: the generation over the map's box.
+    /// The generation over the map's box.
     pub fn generate(
         &mut self,
         g: &Gen<'_>,
@@ -523,7 +524,7 @@ impl AiWork {
         self.flood(g, false, selected_only, None, progress)
     }
 
-    /// `BuildNodes(pos, sz, bIC)`: the brush - nodes from the ground under `pos` out to `sz`
+    /// The brush: nodes from the ground under `pos` out to `sz`
     /// patches. `Err` when the ground cannot be found.
     pub fn brush(&mut self, g: &Gen<'_>, pos: Vec3, sz: u32, bic: bool) -> Result<usize, &'static str> {
         let mut p = snap_xz(pos, self.ps());
@@ -540,7 +541,7 @@ impl AiWork {
         Ok(self.nodes.len() - before)
     }
 
-    /// `AddNode(pos, bIC, bAutoLink, sz)`: one node, selected and linked when asked, or the
+    /// One node, selected and linked when asked, or the
     /// brush for a size over one.
     pub fn add_node(
         &mut self,
@@ -770,7 +771,7 @@ impl AiWork {
         n
     }
 
-    /// `SelectObjects(flag)`.
+    /// Selects or deselects every node.
     pub fn select_all(&mut self, on: bool) {
         for n in &mut self.nodes {
             if on {
@@ -788,7 +789,7 @@ impl AiWork {
         }
     }
 
-    /// `SelectNodesByLink(link)`: only the nodes with that many links are selected.
+    /// Selects only the nodes with that many links.
     pub fn select_by_links(&mut self, links: usize) -> usize {
         let mut c = 0;
         for n in &mut self.nodes {
@@ -856,7 +857,7 @@ impl AiWork {
         gone
     }
 
-    /// `Clear(bOnlyNodes)`.
+    /// Takes every node out.
     pub fn clear_nodes(&mut self) {
         self.nodes.clear();
         self.rehash();

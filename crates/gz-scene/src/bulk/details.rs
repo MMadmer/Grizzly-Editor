@@ -286,8 +286,8 @@ struct IndexDist {
     cnt: [f32; 4],
 }
 
-/// The colour index map the slots are filled from: colour -> object indices (`m_ColorIndices`,
-/// a map, so in the order of the colours).
+/// The colour index map the slots are filled from: colour -> object indices (a map, so in the
+/// order of the colours).
 #[must_use]
 pub fn color_map(d: &SceneDetails) -> BTreeMap<u32, Vec<u8>> {
     let mut out: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
@@ -678,8 +678,7 @@ pub fn remove_mesh(d: &SceneDetails, object: u8) -> SceneDetails {
     out
 }
 
-/// `UpdateObjects(bUpdateTex, bUpdateSelectedOnly)`: the objects of every slot, or of the
-/// selected ones, again.
+/// The objects of every slot, or of the selected ones, made again.
 pub fn update_objects(
     d: &SceneDetails,
     selected: Option<&[bool]>,
@@ -788,7 +787,7 @@ pub fn slots_in_frustum(d: &SceneDetails, planes: &[Vec4]) -> Vec<usize> {
         .collect()
 }
 
-/// The slot selection resized to the slots (`m_Selected.resize`: what was there stays).
+/// The slot selection resized to the slots (what was there stays).
 #[must_use]
 pub fn resized(sel: &[bool], n: usize) -> Arc<[bool]> {
     let mut v: Vec<bool> = sel.iter().copied().take(n).collect();

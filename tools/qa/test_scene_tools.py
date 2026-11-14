@@ -30,9 +30,10 @@ Every gesture goes through viewport.gesture, which feeds the viewport's own inpu
   P  the Group tool's Pivot chooser (ui.dialog id=group_pivot) lists the group's objects; align_pivot is its pick
   V  a motion's playback with Camera View: the camera rides on the object while it plays, and stops with it
   D  detail objects painted on the ground (scene.details): two meshes, a stroke - the viewport's picture differs
-     over the ground where they stand -, the eraser, a colour-index picture imported
+     over the ground where they stand -, the eraser, a colour-index picture imported; the viewport's own brush: a
+     left drag lays what it paints, the same drag with Shift erases it and the camera stays
   W  a wallmark of a texture the game has, laid on the ground (scene.wallmarks): the picture differs where it lies,
-     and only there
+     and only there; Shift + click moves the selected mark to the pointer, a click without Shift lays another
 The Level tab's left panel and World Outliner (level.view answers what they draw and sets what a person sets there):
 
   T  the Place panel: its categories, a search that opens what matches (a spawn section found by its in-game name),
@@ -944,6 +945,22 @@ def phase_d() -> None:
     check(imported.get("ok") and imported.get("filled", 0) > 0, "D a colour-index picture imports as painted slots",
           short(imported))
     cmd("scene.details", action="clear")
+    # the viewport's own brush: a left drag in Foliage mode lays what the brush paints; Shift reaches the stroke
+    # (it erases) and is no camera
+    cmd("viewport.view", brush_mesh=objects[0], brush_radius=3.0, brush_density=1.0)
+    cmd("scene.mode", mode="details")
+    cx, cy = CTX.centre()
+    half = CTX.size[1] * 0.1
+    stroke = {"kind": "drag", "at": [cx - half, cy], "to": [cx + half, cy]}
+    laid = gesture(**stroke)
+    filled = cmd("scene.details").get("filled", 0)
+    check(laid.get("ok") and filled > 0 and not laid.get("camera_moved"),
+          "D a left drag in Foliage mode paints with the brush (%s slots) and leaves the camera" % filled, short(laid))
+    gone = gesture(mods="shift", **stroke)
+    left = cmd("scene.details").get("filled", 1)
+    check(gone.get("ok") and left == 0 and not gone.get("camera_moved"),
+          "D the same drag with Shift erases it, and Shift moves no camera (%s slots left)" % left, short(gone))
+    cmd("scene.mode", mode="select")
 
 
 # ---- W: a wallmark drawn --------------------------------------------------------------------------------------------
@@ -972,6 +989,28 @@ def phase_w() -> None:
     check(changed(without, hidden, (w // 2 - r, h // 2 - r, w // 2 + r, h // 2 + r), level=8) < 0.02,
           "W draw=false hides it again")
     cmd("scene.wallmarks", action="set", draw=True)
+    # Shift + click moves the selected mark to the pointer: the middle goes bare, the mark shows where it was sent
+    cmd("scene.mode", mode="wallmarks")
+    cmd("scene.wallmarks", action="select", what="all")
+    reach = CTX.size[1] * 0.3
+    cx, cy = CTX.centre()
+    sent = gesture(kind="click", at=[cx + reach, cy], mods="shift")
+    info = cmd("scene.wallmarks", action="info")
+    check(sent.get("ok") and info.get("marks") == 1 and info.get("selected") == 1,
+          "W Shift + click moves the selected mark and lays no other", short(info))
+    centre = (w // 2, h // 2)
+    there = (centre[0] + int(h * 0.3), centre[1])
+    shown, got = until_changed("w_moved", without, (there[0] - r, there[1] - r, there[0] + r, there[1] + r),
+                               level=8, share=0.3)
+    check(got > 0.3, "W the picture shows the mark where Shift + click sent it (%.0f %% changed)" % (got * 100))
+    check(changed(without, shown, (centre[0] - r, centre[1] - r, centre[0] + r, centre[1] + r), level=8) < 0.02,
+          "W and not where it was")
+    laid = gesture(kind="click", at=[cx - reach, cy])
+    info = cmd("scene.wallmarks", action="info")
+    check(laid.get("ok") and info.get("marks") == 2, "W a click without Shift lays another mark", short(info))
+    cmd("scene.wallmarks", action="select", what="all")
+    cmd("scene.wallmarks", action="remove")
+    cmd("scene.mode", mode="select")
 
 
 def flat(img, box=None) -> float:

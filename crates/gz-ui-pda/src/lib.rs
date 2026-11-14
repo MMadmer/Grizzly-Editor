@@ -20,12 +20,10 @@
 //! [`install`] plugs both tabs and their Mod menu actions into the shell, the rows at the slots
 //! `gz-ui-mod`'s `MOD_MENU` keeps; [`register`] adds `pda.preview`, `screens.view` and `pda.open`.
 //!
-//! Widgets the kit lacks, local to this crate ([`local`], [`drop`]): `local_file_drop_zone` (a
+//! What this crate draws that no other surface does ([`local`], [`drop`]): `local_file_drop_zone` (a
 //! place files are dropped on), `local_list_header` (a list's title with its +),
 //! `local_tab_strip` (a panel's tabs), `local_code_view` (Mono text with a gutter, Lua data
-//! coloured, the reader's error line underlined), `local_drop_mark` (where a dragged row lands);
-//! `local_section` and `local_check` are the kit's `Section` and `Switch` under the names the
-//! surfaces call.
+//! coloured, the reader's error line underlined), `local_drop_mark` (where a dragged row lands).
 //!
 //! Nothing here touches a file or computes inside a frame: files are read, decoded and written
 //! on the pools; a frame draws from the model and the caches and starts what it needs.

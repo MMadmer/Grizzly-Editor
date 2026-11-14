@@ -93,7 +93,7 @@ impl Filter {
         self.hidden.contains(&c)
     }
 
-    /// `Filtering()`: something narrows what shows.
+    /// Whether something narrows what shows.
     #[must_use]
     pub fn filtering(&self) -> bool {
         !parse_terms(&self.text).is_empty() || self.selected_only || self.visibility != Visibility::All

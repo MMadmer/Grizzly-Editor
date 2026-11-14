@@ -148,13 +148,13 @@ pub fn sector_portals(state: &SceneState, sector: &str) -> Vec<ObjId> {
         .collect()
 }
 
-/// `PortalUtils.GetSelectedSector`: the one selected sector. `Ok(None)` when none is.
+/// The one selected sector. `Ok(None)` when none is.
 pub fn selected_sector(state: &SceneState) -> Result<Option<ObjId>, CmdError> {
     let sel = selected_of(state, ObjClass::Sector);
     match sel.as_slice() {
         [] => Ok(None),
         [one] => Ok(Some(*one)),
-        _ => Err(CmdError::invalid("Please select only one sector.")),
+        _ => Err(CmdError::invalid("Select only one sector.")),
     }
 }
 
@@ -286,9 +286,9 @@ fn item_of(o: &Object, lo: &LibraryObject, mesh: usize) -> Option<(SmolStr, Smol
 
 /// A red default sector of every mesh no sector holds, selected.
 pub fn create_default(state: &SceneState, lib: &Library) -> Result<Outcome, CmdError> {
-    let refused = || CmdError::invalid("The default sector could not be created");
+    let refused = || CmdError::invalid("The default sector could not be made.");
     if state.find(ObjClass::Sector, DEFAULT_SECTOR).is_some() {
-        return Err(CmdError::invalid("The default sector is there already"));
+        return Err(CmdError::invalid("There is a default sector already."));
     }
     if scene_objects_box(state, lib).is_none() {
         return Err(refused());

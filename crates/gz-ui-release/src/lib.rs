@@ -18,8 +18,8 @@
 //!   draws; the Mod menu's rows go where `gz_ui_mod::mod_menu_slot` puts
 //!   them.
 //!
-//! Widgets the kit lacks, local to this crate (`local`): `local_secret_field` (a one-line field
-//! whose text is never drawn), `local_secret_row` (that field and its button on one line),
+//! What this crate draws that no other surface does (`local`): `local_secret_row` (the kit's
+//! secret field and its button on one line),
 //! `local_code` (the device code in Title-sized Mono), `local_card_title` (a card's title with a
 //! badge and a button on its line), `local_fold` (a folded block outside a property grid),
 //! `local_table_head` (a sortable table's header with column lines in the header only).

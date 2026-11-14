@@ -29,7 +29,7 @@ use parking_lot::Mutex;
 
 use crate::build::{add_bake_note, asker, build_running, split_lines};
 use crate::call::{self, Pick, args, post_ui, s};
-use crate::local::{local_password_field, local_text_field, local_value_column};
+use crate::local::{local_text_field, local_value_column};
 
 /// The dialog's MCP id.
 pub const PACKAGE_RELEASE: &str = "package_release";
@@ -134,7 +134,8 @@ impl KeyLine {
                 ui.horizontal(|ui| {
                     let button = gz_ui::units::button_width(ui.ctx(), "Unlock", Kind::Secondary, false, 0.0);
                     let width = (ui.available_width() - button - 8.0).max(em(6.0));
-                    let field = local_password_field(ui, &format!("{id_salt}.key_password"), &mut self.password, "Author key password", width)
+                    let field_id = ui.make_persistent_id(("gz-ui-mod.password", id_salt));
+                    let field = gz_ui::form::secret_field(ui, field_id, &mut self.password, "Author key password", width)
                         .on_hover_text("The author key file is protected. Its password is asked once per session and never stored.");
                     let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     let has = !self.password.is_empty();

@@ -93,7 +93,7 @@ fn with_alpha(argb: u32, a: u32) -> Color {
     Color::from_argb((argb & 0x00FF_FFFF) | (a.min(255) << 24))
 }
 
-/// `DrawCross(p, szx1, szy1, szz1, szx2, szy2, szz2)`: the arms may differ each way.
+/// A cross at `p` whose arms may differ each way.
 #[allow(clippy::too_many_arguments)]
 fn cross6(h: &mut Helpers, p: Vec3, x1: f32, y1: f32, z1: f32, x2: f32, y2: f32, z2: f32, c: Color) {
     h.line(Vec3::new(p.x + x2, p.y, p.z), Vec3::new(p.x - x1, p.y, p.z), c, true);
@@ -101,7 +101,7 @@ fn cross6(h: &mut Helpers, p: Vec3, x1: f32, y1: f32, z1: f32, x2: f32, y2: f32,
     h.line(Vec3::new(p.x, p.y, p.z + z2), Vec3::new(p.x, p.y, p.z - z1), c, true);
 }
 
-/// `DrawLineSphere(p, r, c, bCross)`.
+/// A line sphere at `p`, with a cross through its centre when `cross`.
 fn line_sphere(h: &mut Helpers, p: Vec3, r: f32, c: Color, cross: bool) {
     h.sphere(p, r, None, Some(c), true);
     if cross {
@@ -544,7 +544,6 @@ fn ghost(out: &mut Built, lib: &Library, assets: &Assets, g: &crate::service::Gh
 /// The level's problems where they are - points, lines and faces, each with its
 /// crosses and its caption ("P: 3", "L: 0", "F: 12" or the point's own text).
 fn debug_draw(h: &mut gz_render::Helpers, d: &gz_scene::debug::DebugDraw) {
-    // `DrawCross(p, 0.01, ...)`
     let cross = |h: &mut gz_render::Helpers, p: Vec3, c: Color| h.cross(p, 0.01, false, c, false);
     let mut n = 0;
     for pt in &d.points {
@@ -829,7 +828,7 @@ pub fn selection_gizmo_points(state: &SceneState, lib: &Library) -> Vec<(Vec3, V
 /// object's pivot, rotation and box.
 #[must_use]
 pub fn gizmo_points(state: &SceneState, lib: &Library, class: ObjClass) -> Vec<(Vec3, Vec3, Option<Aabb>)> {
-    // the AI map's selected nodes stand for one object: their box (`GetBBox(bSelOnly)`)
+    // the AI map's selected nodes stand for one object: their box
     if class == ObjClass::AiMap {
         return bulk_box(state, class, true)
             .flatten()

@@ -1,49 +1,17 @@
-//! Widgets the kit lacks, local to this crate until a second surface wants them
-//! (docs/UI_DESIGN.md, section 4: "A widget the kit lacks is written as a local one").
+//! What Mod Settings and Package draw that no other surface does.
 
 use egui::{
-    Align, CornerRadius, Id, Key, LayerId, Layout, Margin, Popup, Rect, Response, ScrollArea, Sense, Stroke,
-    StrokeKind, TextEdit, TextureId, Ui, UiBuilder, Vec2, pos2,
+    Align, CornerRadius, Layout, Rect, Response, Sense, Stroke, StrokeKind, TextureId, Ui, UiBuilder, Vec2,
+    pos2,
 };
-use gz_ui::menu::menu_popup;
 use gz_ui::units::em;
-use gz_ui::{Font, Icon, MenuItem, SearchField, Tone, icons, menu_item, metrics, palette};
+use gz_ui::{Icon, icons, metrics, palette};
 
-/// A one-line text field with a hint while it is empty, as wide as it gets (the kit's
-/// `text_field` has no hint).
+/// The kit's hint field as wide as the row, under an id of this crate's own.
 pub fn local_text_field(ui: &mut Ui, id_salt: &str, value: &mut String, hint: &str) -> Response {
     let id = ui.make_persistent_id(("gz-ui-mod.text", id_salt));
     let w = ui.available_width().max(em(3.0));
     gz_ui::form::hint_field(ui, id, value, hint, w)
-}
-
-/// A password field: the text is never shown.
-pub fn local_password_field(
-    ui: &mut Ui,
-    id_salt: &str,
-    value: &mut String,
-    hint: &str,
-    width: f32,
-) -> Response {
-    let id = ui.make_persistent_id(("gz-ui-mod.password", id_salt));
-    let resp = ui.add(
-        TextEdit::singleline(value)
-            .id(id)
-            .password(true)
-            .font(Font::Body.id())
-            .margin(Margin::symmetric(8, 4))
-            .hint_text(hint)
-            .desired_width(width)
-            .min_size(Vec2::new(width, metrics::FRAME)),
-    );
-    gz_ui::audit::control(ui.ctx(), hint, true, None, None, resp.rect);
-    resp
-}
-
-/// A switch with its label after it; a click on either flips it. `width` is the room it takes.
-pub fn local_check(ui: &mut Ui, id_salt: &str, label: &str, value: &mut bool, width: f32) -> bool {
-    let id = ui.make_persistent_id(("gz-ui-mod.check", id_salt));
-    gz_ui::form::check(ui, id, label, value, width)
 }
 
 /// A block inside one property row: what `add` draws flows top-down from the value's left edge,
@@ -97,84 +65,4 @@ pub fn local_picture(ui: &mut Ui, texture: Option<TextureId>, side: f32) -> Resp
         }
     }
     resp
-}
-
-/// A row of a [`local_pick_list`]: what it picks, what it shows, and its tooltip.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PickRow {
-    pub value: String,
-    pub label: String,
-    pub tip: String,
-}
-
-/// What a [`local_pick_list`] is.
-pub struct PickList<'a> {
-    pub popup: Id,
-    /// Where it opens: under this rectangle.
-    pub anchor: Rect,
-    pub layer: LayerId,
-    pub hint: &'a str,
-    /// Said when no row is left.
-    pub empty: &'a str,
-    /// It just opened: the search takes the keyboard.
-    pub focus: bool,
-}
-
-/// A searchable list in a popup (Add Module..., the Function picker): a search field, then the
-/// rows `rows` makes of what is typed; a click or Enter (the first row) picks. Open it with
-/// `Popup::open_id(ctx, popup)`. Returns the value picked.
-pub fn local_pick_list(
-    ctx: &egui::Context,
-    spec: &PickList<'_>,
-    search: &mut String,
-    rows: impl FnOnce(&str) -> Vec<PickRow>,
-) -> Option<String> {
-    if !Popup::is_id_open(ctx, spec.popup) {
-        return None;
-    }
-    let width = em(24.0);
-    let p = palette(ctx);
-    menu_popup(ctx, spec.popup, spec.anchor, spec.layer, |ui| {
-        ui.set_width(width);
-        let field =
-            SearchField::new(search).hint(spec.hint).width(width).id_salt("gz-ui-mod.pick_search").show(ui);
-        if spec.focus {
-            field.request_focus();
-        }
-        let list = rows(search.as_str());
-        let mut picked = None;
-        // Enter takes the first row
-        if !list.is_empty() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter)) {
-            picked = list.first().map(|r| r.value.clone());
-        }
-        ui.add_space(4.0);
-        ScrollArea::vertical()
-            .id_salt("gz-ui-mod.pick_rows")
-            .max_height(240.0)
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                if list.is_empty() {
-                    let color = p.tone(Tone::Muted);
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(spec.empty).font(Font::Body.id()).color(color))
-                            .wrap(),
-                    );
-                }
-                for row in &list {
-                    let out =
-                        ui.push_id(row.value.as_str(), |ui| menu_item(ui, &row.label, MenuItem::default()));
-                    if !row.tip.is_empty() {
-                        out.response.on_hover_text(row.tip.as_str());
-                    }
-                    if out.inner {
-                        picked = Some(row.value.clone());
-                    }
-                }
-            });
-        if picked.is_some() {
-            ui.close();
-        }
-        picked
-    })
-    .flatten()
 }

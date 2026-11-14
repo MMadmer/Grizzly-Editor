@@ -89,9 +89,9 @@ fn pairs(w: &WayData) -> Vec<(usize, usize)> {
 /// The link edits of the Links section.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkOp {
-    /// Create 1-Link: `RemoveLink(); Add1Link()`.
+    /// Create 1-Link: takes every link away, then links each pair one way.
     Create1,
-    /// Create 2-Link: `Add2Link()`.
+    /// Create 2-Link: links each pair both ways.
     Create2,
     Convert1,
     Convert2,

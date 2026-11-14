@@ -1,38 +1,13 @@
-//! Widgets the kit lacks, local to these windows (UI_DESIGN section 4: a widget the kit lacks
-//! starts as `local_<name>` and moves into the kit when a second surface wants it).
+//! What the release windows draw that no other surface does.
 
-use egui::{Align, Align2, Layout, Margin, Rect, Sense, Stroke, TextEdit, Ui, UiBuilder, Vec2, pos2};
+use egui::{Align, Align2, Layout, Rect, Sense, Stroke, Ui, UiBuilder, Vec2, pos2};
 use gz_ui::list::Column;
 use gz_ui::text::{self, Clip};
 use gz_ui::theme::{Tone, metrics, palette};
 use gz_ui::units::{button_width, em};
-use gz_ui::{Button, Font, Kind, PropertyGrid, audit};
+use gz_ui::{Button, Font, Kind, PropertyGrid};
 
-/// A one-line field whose text is never drawn (a password, a token, an API key): dots, a hint
-/// while it is empty. `width` is the field's. Returns whether Enter was pressed in it.
-pub(crate) fn local_secret_field(
-    ui: &mut Ui,
-    id_salt: &str,
-    value: &mut String,
-    hint: &str,
-    width: f32,
-) -> bool {
-    let p = palette(ui.ctx());
-    let response = ui.add(
-        TextEdit::singleline(value)
-            .id_salt(("gz-ui-release.secret", id_salt))
-            .password(true)
-            .font(Font::Body.id())
-            .margin(Margin::symmetric(8, 4))
-            .hint_text(egui::RichText::new(hint).color(p.text_muted))
-            .desired_width(width)
-            .min_size(Vec2::new(width, metrics::FRAME)),
-    );
-    audit::control(ui.ctx(), hint, true, None, None, response.rect);
-    response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
-}
-
-/// A secret field and its button on one line, the field taking what the button leaves. Returns
+/// The kit's secret field and its button on one line, the field taking what the button leaves. Returns
 /// whether the button was pressed, or Enter in the field while the button is on.
 pub(crate) fn local_secret_row(
     ui: &mut Ui,
@@ -49,7 +24,9 @@ pub(crate) fn local_secret_row(
     let field_w = (ui.available_width() - bw - gap).max(em(6.0));
     let mut pressed = false;
     ui.horizontal(|ui| {
-        let entered = local_secret_field(ui, id_salt, value, hint, field_w);
+        let id = ui.make_persistent_id(("gz-ui-release.secret", id_salt));
+        let field = gz_ui::form::secret_field(ui, id, value, hint, field_w);
+        let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         pressed = Button::new(button).enabled(enabled, why).show(ui).clicked() || (entered && enabled);
     });
     pressed

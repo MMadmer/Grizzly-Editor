@@ -15,9 +15,9 @@
 //! `EPS_L` found through its cell), so connected faces make parts and the parts export.
 //!
 //! What the X-Ray SDK does, kept because the files follow it:
-//! - The fragments' sizes come from `Random.randI`, the engine's global generator seeded from
+//! - The fragments' sizes come from the engine's global generator, seeded from
 //!   the CPU clock at start and advanced by everything before; here a generator of its own
-//!   starts at 1 (`CRandom`'s default).
+//!   starts at 1 (the engine's default seed).
 //! - The surfaces of a mesh are walked in file order (the X-Ray SDK walks a map keyed by surface
 //!   pointers), which numbers the parts.
 //! - A failing part leaves the `brkbl#N.ogf` files of the parts before it on the disk in the X-Ray SDK;
@@ -287,7 +287,7 @@ impl Extractor {
         }
     }
 
-    /// `Initialize(bb, eps, ..)`: the welding grid over the tool's box.
+    /// The welding grid over the tool's box.
     fn init(&mut self, bb: &Aabb, eps: f32) {
         self.packer = Some(VcPacked::new(bb, eps));
     }

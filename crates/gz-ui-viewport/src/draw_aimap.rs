@@ -22,7 +22,7 @@ use rustc_hash::FxHashMap;
 
 use crate::draw::{Built, ga};
 
-/// `m_Shader.create("editor\\ai_node", "ed\\ed_ai_arrows_01")`.
+/// The node arrows' shader and texture.
 const SHADER: &str = "editor\\ai_node";
 const TEXTURE: &str = "ed\\ed_ai_arrows_01";
 /// The hide-nodes flag.

@@ -23,6 +23,7 @@ use gz_release::browser::{TAG_VOCABULARY, tag_label};
 use gz_ui::dialog::{Asker, ConfirmSpec, confirm};
 use gz_ui::grid::{Grid, chips, combo, read_only, switch, text_block};
 use gz_ui::list::list;
+use gz_ui::pick::{PickItem, PickList as KitPickList, pick_popup};
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
 use gz_ui::{
@@ -33,9 +34,7 @@ use parking_lot::Mutex;
 
 use crate::call::{self, Pick, Picking, args, s};
 use crate::form::{self, Aux, Form, Kind as TargetKind, PAGES, Problem};
-use crate::local::{
-    PickList, PickRow, local_check, local_pick_list, local_picture, local_text_field, local_value_column,
-};
+use crate::local::{local_picture, local_text_field, local_value_column};
 
 /// The tab's id and kind.
 pub const TAB: &str = "mod_settings";
@@ -157,8 +156,6 @@ pub struct ModSettingsDoc {
     modes: Option<Arc<ModeScan>>,
     installed: Option<Vec<Installed>>,
     gated: (usize, usize),
-    search: String,
-    pick_focus: Option<Id>,
     /// The command whose help shows under the table.
     command_sel: usize,
     /// The project's scripts were asked for since the project opened.
@@ -192,8 +189,6 @@ impl ModSettingsDoc {
             modes: None,
             installed: None,
             gated: (0, 0),
-            search: String::new(),
-            pick_focus: None,
             command_sel: 0,
             scripts_asked: false,
             picture: PictureView::default(),
@@ -875,7 +870,8 @@ impl ModSettingsDoc {
                             ui.spacing_mut().item_spacing.x = 0.0;
                             for tag in row {
                                 let mut on = form.tags.iter().any(|t| t == tag);
-                                if local_check(ui, tag, tag_label(tag), &mut on, cell) {
+                                let id = Id::unique(("gz-ui-mod.check", tag));
+                                if gz_ui::form::check(ui, id, tag_label(tag), &mut on, cell) {
                                     form.set_tag(TAG_VOCABULARY, tag, on);
                                 }
                             }
@@ -1052,14 +1048,12 @@ impl ModSettingsDoc {
         let layer = ui.layer_id();
         if let Some(i) = opened {
             let id = picker_id(i);
-            self.search.clear();
+            KitPickList::reset(&ctx, id);
             Popup::open_id(&ctx, id);
-            self.pick_focus = Some(id);
         }
         for (i, anchor) in anchors.iter().enumerate() {
             let Some(anchor) = *anchor else { continue };
             let popup = picker_id(i);
-            let focus = self.pick_focus.take_if(|f| *f == popup).is_some();
             let me = form::relation_id(&self.form.id);
             let taken: Vec<String> =
                 relation_lines(&self.form, i).iter().map(|l| form::relation_id(l)).collect();
@@ -1071,30 +1065,30 @@ impl ModSettingsDoc {
             } else {
                 "No game is linked. Type a module id to add it as it is."
             };
-            let spec = PickList { popup, anchor, layer, hint: "Search, or type a module id", empty, focus };
-            let picked = local_pick_list(&ctx, &spec, &mut self.search, |search| {
-                let is_taken = |id: &str| id == me || taken.iter().any(|t| t == id);
-                let mut rows: Vec<PickRow> = installed
-                    .iter()
-                    .filter(|m| !is_taken(&m.id))
-                    .map(|m| (m, module_label(installed, &m.id)))
-                    .filter(|(_, label)| gz_ui::search::matches(search, label))
-                    .map(|(m, label)| PickRow { value: m.id.clone(), label, tip: String::new() })
-                    .collect();
-                let typed = form::relation_id(search);
-                if !typed.is_empty()
-                    && !installed.iter().any(|m| m.id == typed)
-                    && !is_taken(&typed)
-                    && validate_id(&typed)
-                {
-                    rows.push(PickRow {
-                        value: typed.clone(),
-                        label: format!("Add {typed}"),
-                        tip: "Not installed in the linked game: the id is taken as typed.".to_owned(),
-                    });
-                }
-                rows
-            });
+            let is_taken = |id: &str| id == me || taken.iter().any(|t| t == id);
+            let mut items: Vec<PickItem> = installed
+                .iter()
+                .filter(|m| !is_taken(&m.id))
+                .map(|m| PickItem::new(m.id.as_str(), module_label(installed, &m.id)))
+                .collect();
+            // an id the game does not list is taken as typed
+            let typed = form::relation_id(&KitPickList::query(&ctx, popup));
+            if !typed.is_empty()
+                && !installed.iter().any(|m| m.id == typed)
+                && !is_taken(&typed)
+                && validate_id(&typed)
+            {
+                items.push(
+                    PickItem::new(typed.as_str(), format!("Add {typed}"))
+                        .detail("Not installed in the linked game: the id is taken as typed."),
+                );
+            }
+            let list = KitPickList::new(popup, &items)
+                .hint("Search, or type a module id")
+                .empty(empty)
+                .width(em(24.0))
+                .max_height(240.0);
+            let picked = pick_popup(&ctx, popup, anchor, layer, list).map(|n| items[n].id.clone());
             if let Some(id) = picked {
                 relation_lines_mut(&mut self.form, i).push(id);
             }
@@ -1305,28 +1299,25 @@ impl ModSettingsDoc {
         }
         if let Some(i) = opened {
             let id = function_picker_id(i);
-            self.search.clear();
+            KitPickList::reset(&ctx, id);
             Popup::open_id(&ctx, id);
-            self.pick_focus = Some(id);
         }
         if let Some((i, anchor)) = pick_at.or_else(|| opened.map(|i| (i, Rect::NOTHING))) {
             let popup = function_picker_id(i);
-            let focus = self.pick_focus.take_if(|f| *f == popup).is_some();
             let functions = &self.aux.functions;
             let empty = if functions.is_empty() {
                 "The project's gamedata\\scripts has no function yet: write one, then pick it here."
             } else {
                 "No function matches."
             };
-            let spec =
-                PickList { popup, anchor, layer, hint: "Search the project's functions", empty, focus };
-            let picked = local_pick_list(&ctx, &spec, &mut self.search, |search| {
-                functions
-                    .iter()
-                    .filter(|f| gz_ui::search::matches(search, f))
-                    .map(|f| PickRow { value: f.clone(), label: f.clone(), tip: String::new() })
-                    .collect()
-            });
+            let items: Vec<PickItem> =
+                functions.iter().map(|f| PickItem::new(f.as_str(), f.as_str())).collect();
+            let list = KitPickList::new(popup, &items)
+                .hint("Search the project's functions")
+                .empty(empty)
+                .width(em(24.0))
+                .max_height(240.0);
+            let picked = pick_popup(&ctx, popup, anchor, layer, list).map(|n| items[n].id.clone());
             if let Some(f) = picked
                 && let Some(c) = self.form.commands.get_mut(i)
             {

@@ -336,7 +336,7 @@ impl Frustum {
         Self { planes: planes.iter().map(|p| unit(p.n, p.d)).collect() }
     }
 
-    /// `CreateFromMatrix(M, FRUSTUM_P_LRTB)`: left, right, top, bottom.
+    /// The frustum of a matrix: left, right, top, bottom planes.
     #[must_use]
     pub fn from_matrix_lrtb(m: &M43) -> Self {
         let c = |r: usize, k: usize| m.0[r][k];

@@ -42,7 +42,7 @@ fn text(reply: &Value, key: &str) -> String {
     reply.get(key).and_then(Value::as_str).unwrap_or("").replace('/', "\\")
 }
 
-/// `Num(n) + " object(s) ..."`.
+/// `n` and what it counts, or nothing for zero.
 fn count_line(n: i64, rest: &str) -> Option<String> {
     (n != 0).then(|| format!("{n} {rest}"))
 }

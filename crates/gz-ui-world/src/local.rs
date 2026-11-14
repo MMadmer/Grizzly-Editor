@@ -1,5 +1,4 @@
-//! Widgets the kit lacks, local to this crate until a second surface wants them
-//! (docs/UI_DESIGN.md, section 4: "A widget the kit lacks is written as a local one").
+//! What the World Rules and Characters tabs draw that no other surface does.
 
 use std::f32::consts::TAU;
 
@@ -39,8 +38,8 @@ pub fn local_section(ui: &mut Ui, key: &str, title: &str, open: bool, right: Opt
     is_open
 }
 
-/// A one-line text field with a hint while it is empty, as wide as it gets (the kit's
-/// `text_field` has no hint). Its id is its own: it keeps the keyboard while the form scrolls.
+/// The kit's hint field as wide as the row, under an id of this crate's own so it keeps the
+/// keyboard while the form scrolls.
 pub fn local_hint_field(ui: &mut Ui, salt: &str, value: &mut String, hint: &str) -> Response {
     let w = ui.available_width().max(em(3.0));
     gz_ui::form::hint_field(ui, Id::unique(("gz-ui-world.text", salt)), value, hint, w)

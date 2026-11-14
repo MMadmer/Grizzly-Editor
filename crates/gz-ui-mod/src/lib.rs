@@ -24,11 +24,10 @@
 //!   reporting in `dlg.bake_result`.
 //! - [`register`] - `mod.view` (the tab put up to be looked at).
 //!
-//! Widgets the kit lacks, local to this crate ([`local`]): `local_text_field` (a one-line field
-//! with a hint), `local_password_field`, `local_check` (a switch with its label, the tags'
-//! checkboxes), `local_value_column` (a block of rows inside one property row), `local_picture`
-//! (the thumbnail's frame) and `local_pick_list` (a searchable list in a popup: Add Module...,
-//! the Function picker).
+//! What this crate draws that no other surface does ([`local`]): `local_text_field` (the kit's
+//! hint field as wide as the row), `local_value_column` (a block of rows inside one property
+//! row) and `local_picture` (the thumbnail's frame). The module and function pickers are the
+//! kit's `PickList`.
 //!
 //! Nothing here writes a file or computes inside a frame: every action is a command that already
 //! exists (`mod.set`, `mod.thumbnail`, the PDA tab's opener, `release.key action=open`) or the

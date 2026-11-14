@@ -179,6 +179,7 @@ pub struct PickList<'a> {
     width: f32,
     max_h: f32,
     search: bool,
+    empty: Option<&'a str>,
 }
 
 fn fingerprint(items: &[PickItem], query: &str, recent: &[String], favs: &[String]) -> u64 {
@@ -235,6 +236,7 @@ impl<'a> PickList<'a> {
             width: em(18.0),
             max_h: 360.0,
             search: true,
+            empty: None,
         }
     }
 
@@ -270,6 +272,20 @@ impl<'a> PickList<'a> {
     pub fn without_search(mut self) -> Self {
         self.search = false;
         self
+    }
+
+    /// What the list says when no row is left: a sentence, wrapped to the list's width.
+    pub fn empty(mut self, text: &'a str) -> Self {
+        self.empty = Some(text);
+        self
+    }
+
+    /// What is typed in the search now, as of the last frame the list was shown: a caller that
+    /// offers a row for what was typed reads it here.
+    #[must_use]
+    pub fn query(ctx: &Context, id_salt: impl Hash + std::fmt::Debug) -> String {
+        let id = Id::unique(("gz-ui.pick", id_salt));
+        ctx.data(|d| d.get_temp::<State>(id)).map(|s| s.query).unwrap_or_default()
     }
 
     /// Forgets the query and the highlight: the list opens fresh next time.
@@ -413,14 +429,16 @@ impl<'a> PickList<'a> {
         };
         let total: f32 = st.lines.iter().enumerate().map(|(n, l)| height_of(n, l)).sum();
         if st.lines.is_empty() {
-            let (r, _) = ui.allocate_exact_size(Vec2::new(self.width, ROW_H * 2.0), Sense::hover());
-            ui.painter().text(
-                r.center(),
-                Align2::CENTER_CENTER,
-                if self.items.is_empty() { "Nothing to pick" } else { "No matches" },
-                Font::Body.id(),
-                p.text_muted,
+            let said =
+                self.empty.unwrap_or(if self.items.is_empty() { "Nothing to pick" } else { "No matches" });
+            let galley =
+                ui.painter().layout(said.to_owned(), Font::Body.id(), p.text_muted, self.width - 16.0);
+            let (r, _) = ui.allocate_exact_size(
+                Vec2::new(self.width, (galley.size().y + 16.0).max(ROW_H * 2.0)),
+                Sense::hover(),
             );
+            let at = r.center() - galley.size() * 0.5;
+            ui.painter().galley(at, galley, p.text_muted);
         } else {
             let reveal = std::mem::take(&mut st.reveal);
             let hi = st.hi;

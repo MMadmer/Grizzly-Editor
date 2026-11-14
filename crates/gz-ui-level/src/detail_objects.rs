@@ -15,7 +15,7 @@ use gz_editor::Editor;
 use gz_fmt_level::{ColorIndex, DetailColorIndices, SceneDetails};
 use gz_scene::{SceneCmd, SceneService};
 use gz_ui::text::Clip;
-use gz_ui::{ConfirmSpec, Dialog, DialogSize, Font, Kind, Tone, grid, list, palette};
+use gz_ui::{Button, ConfirmSpec, Dialog, DialogSize, Font, Kind, Tone, grid, list, palette};
 
 use crate::choose::{Chooser, Purpose};
 use crate::local::{LocalButton, confirm, local_button_flow, plural};
@@ -141,13 +141,13 @@ impl DetailObjects {
             Some(2) => export(editor, m.indices.clone()),
             _ => {}
         }
-        if crate::local::local_danger(
-            ui,
-            "Clear All...",
-            "Take every colour out",
-            !m.indices.colors.is_empty(),
-            "There are no colours",
-        ) {
+        if Button::new("Clear All...")
+            .kind(Kind::GhostDanger)
+            .enabled(!m.indices.colors.is_empty(), "There are no colours")
+            .tip("Take every colour out")
+            .show(ui)
+            .clicked()
+        {
             let n = m.indices.colors.len();
             let spec = ConfirmSpec {
                 id: "clear_colour_indices".into(),
@@ -284,13 +284,21 @@ fn export(editor: &Arc<Editor>, indices: DetailColorIndices) {
     let ed = editor.clone();
     let request =
         FileRequest::save("Export Colour Indices", "details.dti").filter("Colour indices", &["dti"]);
+    // the guard of every writer: nothing under the linked game's folder
+    let guard = gz_project::Project::of(editor).map(|(_, p)| p.write_guard(None)).unwrap_or_default();
     let picked = gz_ui::file_dialog::pick(None, crate::tools::asker(editor), request, move |path| {
-        match gz_editor::fsx::write_atomic(&path, &indices.write()) {
-            Ok(()) => ed.log.info(format!("Colour indices exported to {}", path.display())),
-            Err(e) => ed
-                .notices
-                .error(format!("The colour indices could not be written to {}: {e}", path.display())),
-        }
+        let io = ed.clone();
+        io.exec.spawn_io(move || {
+            let done = guard.check(&path).map_err(|e| e.to_string()).and_then(|()| {
+                gz_editor::fsx::write_atomic(&path, &indices.write()).map_err(|e| {
+                    format!("The colour indices could not be written to {}: {e}", path.display())
+                })
+            });
+            match done {
+                Ok(()) => ed.log.info(format!("Colour indices exported to {}", path.display())),
+                Err(e) => ed.notices.error(e),
+            }
+        });
     });
     if let Err(line) = picked {
         editor.log.finding(&line);

@@ -105,7 +105,7 @@ pub struct Summary {
     pub bbox: Option<Aabb>,
 }
 
-/// `ChangeFileExt(name, "")`, lower case.
+/// The name without its extension, lower case.
 fn tex_key(name: &str) -> String {
     let cut = name.rfind('.').filter(|i| !name[*i..].contains(['\\', '/'])).unwrap_or(name.len());
     name[..cut].to_lowercase()
@@ -371,7 +371,7 @@ impl Summary {
     }
 }
 
-/// `ZeroMemory(&info)`: what a texture without a description reports.
+/// What a texture without a description reports.
 fn blank_params() -> TextureParams {
     TextureParams {
         fmt: gz_fmt_tex::TextureFormat::DXT1,
@@ -408,7 +408,7 @@ fn vertex_count(e: &gz_fmt_object::Object) -> i64 {
     e.meshes.iter().map(|m| m.points.len() as i64).sum()
 }
 
-/// `GetSurfFaceCount(name)`: its faces, twice when two-sided.
+/// The faces of a surface: twice when two-sided.
 fn surf_face_count(e: &gz_fmt_object::Object, surface: usize) -> i64 {
     let twice = e.surfaces.get(surface).is_some_and(|s| s.two_sided());
     e.meshes

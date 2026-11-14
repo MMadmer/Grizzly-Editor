@@ -30,7 +30,7 @@ use zeroize::Zeroizing;
 
 use gz_ui_mod::KeyLine;
 
-use crate::local::{local_card_title, local_fold, local_secret_field, local_secret_row};
+use crate::local::{local_card_title, local_fold, local_secret_row};
 use crate::{open_page, reason};
 
 /// The body's height while the work area has room for it: the room a finished check takes, so a
@@ -602,12 +602,14 @@ impl SubmitUi {
                     let help = "Optional. Protects the file if it ever leaves your hands; the editor asks for it once per session. Forgotten, it cannot be recovered - and neither can the key.";
                     g.row("Password", help, PropFlags::NONE, 0, |ui| {
                         let w = ui.available_width();
-                        local_secret_field(ui, "new_password", &mut self.password, "Optional", w);
+                        let id = ui.make_persistent_id("gz-ui-release.new_password");
+                        gz_ui::form::secret_field(ui, id, &mut self.password, "Optional", w);
                     });
                     let wrong = differ && !self.repeat.is_empty();
                     g.row("Repeat", "The password once more.", if wrong { PropFlags::INVALID } else { PropFlags::NONE }, 0, |ui| {
                         let w = ui.available_width();
-                        local_secret_field(ui, "repeat_password", &mut self.repeat, "Repeat the password", w);
+                        let id = ui.make_persistent_id("gz-ui-release.repeat_password");
+                        gz_ui::form::secret_field(ui, id, &mut self.repeat, "Repeat the password", w);
                     });
                     if wrong {
                         g.message(Tone::Error, "The passwords differ.");

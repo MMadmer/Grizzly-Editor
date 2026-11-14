@@ -1,10 +1,9 @@
-//! Widgets the kit lacks, local to this crate until a second surface wants them
-//! (docs/UI_DESIGN.md, section 4: "A widget the kit lacks is written as a local one").
+//! What the Content Browser draws that no other surface does.
 
 use egui::text::{CCursor, CCursorRange};
 use egui::{
-    Align2, Color32, CornerRadius, Id, Key, Margin, Pos2, Rect, Response, Sense, Stroke, TextEdit, Ui,
-    UiBuilder, Vec2, pos2,
+    Align2, CornerRadius, Id, Key, Margin, Pos2, Rect, Response, Sense, Stroke, TextEdit, Ui, UiBuilder,
+    Vec2, pos2,
 };
 use gz_ui::text::{self, Clip};
 use gz_ui::{Font, Icon, icons, metrics, palette};
@@ -284,10 +283,4 @@ pub fn local_marquee(painter: &egui::Painter, a: Pos2, b: Pos2) {
     let r = Rect::from_two_pos(a, b);
     painter.rect_filled(r, CornerRadius::ZERO, p.selection_focused.gamma_multiply(0.35));
     painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, p.accent_bright), egui::StrokeKind::Inside);
-}
-
-/// A colour at a fraction of its alpha.
-#[must_use]
-pub fn faded(c: Color32, a: f32) -> Color32 {
-    c.gamma_multiply(a)
 }

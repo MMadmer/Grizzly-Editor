@@ -296,7 +296,7 @@ enum Order {
     CollinearContain,
 }
 
-/// `CollinearTest(P, Q0, Q1)`.
+/// Where `p` lies against the line through `q0` and `q1`.
 fn collinear_test(p: Vec2, q0: Vec2, q1: Vec2) -> Order {
     let d = q1 - q0;
     let a = p - q0;
@@ -459,7 +459,7 @@ fn remove_collinear(points: &[Vec2], idx: Vec<usize>) -> Vec<usize> {
 
 // ---- the library meshes -----------------------------------------------------------------------
 
-/// `IsStatic() || IsMUStatic()`: no sound occluder, no dynamic object, no HOM.
+/// Static in either sense: no sound occluder, no dynamic object, no HOM.
 #[must_use]
 pub fn is_static_any(lo: &LibraryObject) -> bool {
     let f = lo.object.flags;
@@ -468,7 +468,7 @@ pub fn is_static_any(lo: &LibraryObject) -> bool {
         && !f.contains(ObjectFlags::HOM)
 }
 
-/// `IsMUStatic()`.
+/// Static and used more than once.
 #[must_use]
 pub fn is_mu_static(lo: &LibraryObject) -> bool {
     is_static_any(lo) && lo.object.flags.contains(ObjectFlags::MULTIPLE_USAGE)
@@ -480,7 +480,7 @@ pub fn mesh_index(lo: &LibraryObject, name: &str) -> Option<usize> {
     lo.object.meshes.iter().position(|m| m.name.eq_ignore_ascii_case(name))
 }
 
-/// `GetFaceCount(true, true)`: two-sided surfaces count twice, `materials\occ` not at all.
+/// The faces of a mesh: two-sided surfaces count twice, `materials\occ` not at all.
 #[must_use]
 pub fn face_count(lo: &LibraryObject, mesh: usize) -> usize {
     let Some(m) = lo.object.meshes.get(mesh) else { return 0 };
@@ -506,7 +506,7 @@ pub fn mesh_world_box(lo: &LibraryObject, mesh: usize, world: &Mat4) -> Option<A
     Some(xform_corners(m.bbox.min, m.bbox.max, world))
 }
 
-/// Every face of a mesh in world space (`m_Vertices[pv[k].pindex]` carried by the transform).
+/// Every face of a mesh in world space (each vertex carried by the transform).
 #[must_use]
 pub fn mesh_world_faces(lo: &LibraryObject, mesh: usize, world: &Mat4) -> Vec<[Vec3; 3]> {
     let Some(m) = lo.object.meshes.get(mesh) else { return Vec::new() };

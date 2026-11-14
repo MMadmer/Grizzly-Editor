@@ -29,8 +29,8 @@ use gz_scene::{ObjClass, ObjData, SceneState};
 use crate::libs::Engine;
 use crate::prj::lod_texture_name;
 
-/// What a validation is asked to test (`Validate(bNeedOkMsg, bTestPortal, bTestHOM, bTestGlow,
-/// bTestShaderCompatible, bFullTest)`).
+/// What a validation is asked to test: portals, the hierarchical occlusion test, glows, shader
+/// compatibility and the full test.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Tests {
     pub portal: bool,
@@ -50,7 +50,7 @@ impl Tests {
 }
 
 /// A texture of the game by its path under `textures\` (`lod\lod_props_box.dds`): the path a
-/// message names and whether the file is there (`FS.get_file_age(...) != -1`).
+/// message names and whether the file is there.
 pub type TextureCheck<'a> = &'a (dyn Fn(&str) -> (String, bool) + Sync);
 
 /// The blenders that bake into a light map: the default, its alpha
@@ -62,7 +62,7 @@ pub(crate) fn lmapped(engine: &Engine, shader: &str) -> Option<bool> {
     Some(LMAPPED.contains(&b.class_name().as_str()))
 }
 
-/// `EFS.ChangeFileExt`: the extension after the last dot of the file name replaced.
+/// The extension after the last dot of the file name replaced.
 fn change_ext(name: &str, ext: &str) -> String {
     let file_at = name.rfind(['\\', '/']).map_or(0, |i| i + 1);
     match name[file_at..].rfind('.') {

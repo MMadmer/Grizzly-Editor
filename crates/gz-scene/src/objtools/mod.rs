@@ -63,7 +63,7 @@ pub struct ObjToolState {
     /// The Spawn tool's Attach on Click: a click attaches the object under it to the spawn point.
     pub spawn_attach: bool,
     pub edit_level_bound: bool,
-    /// `m_group_counter` of the fog volumes.
+    /// The counter the fog volumes' group names are numbered from.
     pub fog_group_counter: u32,
 }
 
@@ -85,7 +85,7 @@ impl Default for ObjToolState {
 /// How an added object is named.
 #[derive(Clone, Debug, PartialEq)]
 pub enum NameRule {
-    /// `GenObjectName(cls, buf, pref)`: `pref`, `pref_00` ...; `00`, `01` ... without one.
+    /// `pref`, `pref_00` ...; `00`, `01` ... without one.
     Gen(Option<String>),
     /// This name, made unique the same way when it is taken.
     Fixed(String),
@@ -99,10 +99,9 @@ pub struct Batch {
     pub remove: Vec<ObjId>,
     pub replace: Vec<Object>,
     pub add: Vec<(Object, NameRule)>,
-    /// `AppendObject(obj, true)`: the class of each added object is deselected and the added one
-    /// selected.
+    /// The class of each added object is deselected and the added one selected.
     pub select_added: bool,
-    /// The added objects are selected besides what is selected (`Select(true)` of each).
+    /// The added objects are selected besides what is selected (each is added to the selection).
     pub also_select_added: bool,
     /// Objects selected after the change (on top of `select_added`).
     pub select: Vec<ObjId>,
@@ -323,8 +322,7 @@ pub(crate) fn show_level_bounds(state: &mut SceneState, on: bool) {
     }
 }
 
-/// The ids of a class's selected visible objects in their order (`GetQueryObjects(lst, cls, 1, 1,
-/// 0)`).
+/// The ids of a class's selected visible objects in their order.
 #[must_use]
 pub fn selected_of(state: &SceneState, class: ObjClass) -> Vec<ObjId> {
     state.of_class(class).filter(|o| state.is_selected(o.id) && o.flags.visible).map(|o| o.id).collect()

@@ -1,5 +1,4 @@
-//! Widgets the kit lacks, local to this crate until a second surface wants them
-//! (docs/UI_DESIGN.md, section 4: "A widget the kit lacks is written as a local one").
+//! What the PDA and Screens tabs draw that no other surface does.
 
 use egui::{
     Align2, CornerRadius, Frame, Key, Margin, Modifiers, Rect, Sense, Shape, Stroke, StrokeKind, TextEdit,
@@ -31,11 +30,6 @@ pub fn local_list_header(ui: &mut Ui, title: &str, tip: &str) -> bool {
     let mut child =
         ui.new_child(egui::UiBuilder::new().id_salt(("gz-ui-pda.list_header", title)).max_rect(b));
     icon_button(&mut child, Icon::Plus, tip, false, true).clicked()
-}
-
-/// The kit's `Section` header; `open` is its state until it is clicked.
-pub fn local_section(ui: &mut Ui, id_salt: &str, title: &str, open: bool) -> bool {
-    gz_ui::Section::new(id_salt, title).default_open(open).show(ui).open
 }
 
 /// A strip of tabs, 26 pt (a panel's tab strip): the selected one in the text colour on the
@@ -94,11 +88,6 @@ pub fn local_tab_strip(ui: &mut Ui, id_salt: &str, labels: &[String], current: &
         gz_ui::audit::control(&ctx, label, true, None, None, r);
     }
     changed
-}
-
-/// The kit's `Switch` with its label after it: a setting of the tab that applies at once.
-pub fn local_check(ui: &mut Ui, label: &str, value: &mut bool) -> bool {
-    ui.push_id(("gz-ui-pda.check", label), |ui| gz_ui::Switch::new(value, label).show(ui).changed()).inner
 }
 
 /// What a [`local_code_view`] was asked to do this frame.

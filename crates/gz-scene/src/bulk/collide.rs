@@ -209,7 +209,7 @@ impl CollideModel {
         }
     }
 
-    /// `BoxQuery(bb, full ? OPT_FULL_TEST : 0)`: the triangles meeting the box, in model order.
+    /// The triangles meeting the box (`full`: the exact test, not the boxes alone), in model order.
     #[must_use]
     pub fn box_query(&self, bb: &Aabb, full: bool) -> Vec<u32> {
         let mut cand = Vec::new();
@@ -223,7 +223,7 @@ impl CollideModel {
         cand
     }
 
-    /// `RayQuery(OPT_ONLYNEAREST | OPT_CULL)`: the nearest front face within `range` (strictly
+    /// The nearest front face within `range` (strictly
     /// ahead), and its range.
     #[must_use]
     pub fn ray_nearest(&self, start: Vec3, dir: Vec3, range: f32) -> Option<(u32, f32)> {

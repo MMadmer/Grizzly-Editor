@@ -209,7 +209,7 @@ fn game_names(files: &gz_vfs::GameFiles, dir: &str, ext: &str) -> Vec<String> {
     out
 }
 
-/// `anims\a\b.anm` as `FS.file_list` names it under `$game_anims$`: `a\b.anm`.
+/// `anims\a\b.anm` as the game's file list names it under `$game_anims$`: `a\b.anm`.
 fn game_files_named(files: &gz_vfs::GameFiles, dir: &str, ext: &str) -> Vec<String> {
     let prefix = format!("{dir}/");
     files

@@ -65,7 +65,7 @@ fn class_of(e: &Entity) -> Option<Class> {
     e.class_info().map(|c| c.class)
 }
 
-/// The offset of `m_tSpawnID` in a spawn packet.
+/// The offset of the spawn id in a spawn packet.
 fn spawn_id_offset(p: &[u8]) -> Option<usize> {
     let mut at = 2usize;
     for _ in 0..2 {
@@ -113,7 +113,7 @@ fn level_vertices(graph: &GameGraph, level_id: u8) -> Option<u16> {
 
 /// Every spawn element on the level vertex under it and the
 /// game vertex that owns that, the zones' artefact points, the patrol paths, the header, the
-/// game graph. `level` names the level (`m_FNLevelPath`).
+/// game graph. `level` names the level's path.
 // the artefact points of a zone come in the walk's order here; the X-Ray SDK shuffles them
 // with `rand`.
 /// `verify_restrictors` is Play's "Verify Space Restrictors": every space restrictor that asks
@@ -595,7 +595,7 @@ mod tests {
                 file.vertices.len()
             ));
         }
-        // the levels whose objects the file holds (`m_level_spawns`): Play's are one of the graph's
+        // the levels whose objects the file holds: Play's are one of the graph's
         if h.level_count == 0 || h.level_count as usize > g.levels.len() {
             bad.push(format!("level count {} for {} levels", h.level_count, g.levels.len()));
         }

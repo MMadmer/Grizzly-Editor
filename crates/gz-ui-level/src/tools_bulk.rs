@@ -25,7 +25,7 @@ use rustc_hash::FxHashMap;
 
 use crate::choose::{Chooser, Purpose};
 use crate::lists::ListKey;
-use crate::local::{LocalButton, args, confirm, local_button_flow, local_danger, plural, removal, run};
+use crate::local::{LocalButton, args, confirm, local_button_flow, plural, removal, run};
 
 /// What the panels keep between frames: numbers being dragged or typed, the mesh the foliage
 /// brush paints, and the counts worked out off the UI thread.
@@ -186,7 +186,13 @@ pub(crate) fn aimap_panel(
         {
             act(editor, "scene.ai_map", "generate", &[]);
         }
-        if local_danger(ui, "Clear...", "Remove every node of the AI map", nodes > 0, "The AI map is empty") {
+        if Button::new("Clear...")
+            .kind(Kind::GhostDanger)
+            .enabled(nodes > 0, "The AI map is empty")
+            .tip("Remove every node of the AI map")
+            .show(ui)
+            .clicked()
+        {
             let ed = editor.clone();
             confirm(
                 ui.ctx(),
@@ -334,13 +340,13 @@ fn aimap_more(
         Some(5) => act(editor, "scene.ai_map", "link", &[("side", json!("all")), ("mode", json!("invert"))]),
         _ => {}
     }
-    if local_danger(
-        ui,
-        "Delete Selected...",
-        "Remove the selected nodes and their links",
-        selected > 0,
-        sel_why,
-    ) {
+    if Button::new("Delete Selected...")
+        .kind(Kind::GhostDanger)
+        .enabled(selected > 0, sel_why)
+        .tip("Remove the selected nodes and their links")
+        .show(ui)
+        .clicked()
+    {
         let ed = editor.clone();
         confirm(
             ui.ctx(),
@@ -654,7 +660,13 @@ pub(crate) fn foliage_panel(
                 &[("object", json!(m.as_str())), ("density", Value::from(b.density))],
             );
         }
-        if local_danger(ui, "Clear...", "Empty every slot of the foliage", slots > 0, "Nothing grows yet") {
+        if Button::new("Clear...")
+            .kind(Kind::GhostDanger)
+            .enabled(slots > 0, "Nothing grows yet")
+            .tip("Empty every slot of the foliage")
+            .show(ui)
+            .clicked()
+        {
             let ed = editor.clone();
             confirm(
                 ui.ctx(),
@@ -833,13 +845,13 @@ pub(crate) fn decals_panel(
     if let Some((key, v)) = send {
         act(editor, "scene.wallmarks", "set", &[(key, Value::from(v))]);
     }
-    if local_danger(
-        ui,
-        "Delete Selected...",
-        "Remove the selected decals",
-        selected > 0 && w.draws(),
-        "Select decals first",
-    ) {
+    if Button::new("Delete Selected...")
+        .kind(Kind::GhostDanger)
+        .enabled(selected > 0 && w.draws(), "Select decals first")
+        .tip("Remove the selected decals")
+        .show(ui)
+        .clicked()
+    {
         let ed = editor.clone();
         confirm(
             ui.ctx(),

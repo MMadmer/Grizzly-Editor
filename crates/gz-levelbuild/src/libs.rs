@@ -40,14 +40,14 @@ impl Engine {
         self.shaders.as_ref().is_some_and(|s| s.blender(name).is_some())
     }
 
-    /// `ShaderXRLC.Get(name)`'s flags; `None` for a shader the library lacks.
+    /// The compiler flags of a shader; `None` for a shader the library lacks.
     #[must_use]
     pub fn xrlc_flags(&self, name: &str) -> Option<u32> {
         let lib = self.xrlc.as_ref()?;
         lib.shaders.iter().find(|s| s.name().eq_ignore_ascii_case(name)).map(|s| s.flags)
     }
 
-    /// `GetMaterialIdx(name)`: the material's index in the library.
+    /// The material's index in the library.
     // a name the library lacks gives the index past the end, as the X-Ray SDK's iterator
     // arithmetic does in a release build.
     #[must_use]

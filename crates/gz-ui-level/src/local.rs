@@ -1,7 +1,6 @@
-//! Widgets the kit lacks, local to this crate until a second surface wants them
-//! (docs/UI_DESIGN.md, section 4), and the one copy of what every panel of the crate does with
-//! commands: [`run`] (a command off the UI thread, its answer a notice), [`confirm`],
-//! [`removal`], [`plural`], [`args`].
+//! What the Level tab's panels draw that no other surface does, and the one copy of what every
+//! panel of the crate does with commands: [`run`] (a command off the UI thread, its answer a
+//! notice), [`confirm`], [`removal`], [`plural`], [`args`].
 
 use std::sync::Arc;
 
@@ -59,15 +58,6 @@ fn local_glyph_toggle(ui: &mut Ui, id: Id, rect: Rect, icon: Icon, on: bool, sho
     let clicked = resp.clicked();
     resp.on_hover_text(tip);
     clicked
-}
-
-/// A Ghost button in the error colour that opens a question naming what goes ("Clear...").
-pub fn local_danger(ui: &mut Ui, label: &str, tip: &str, enabled: bool, why: &str) -> bool {
-    let mut b = Button::new(label).kind(Kind::GhostDanger).enabled(enabled, why);
-    if enabled {
-        b = b.tip(tip);
-    }
-    b.show(ui).clicked()
 }
 
 /// `n word` or `n words`.

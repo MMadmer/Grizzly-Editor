@@ -97,7 +97,7 @@ fn try_merge(layer_cnt: usize, images: &[SourceImage], order: &[usize], dw: u32,
     Some(Merged { w: dw, h: dh, layers, offsets, scales, rotated, remap })
 }
 
-/// `CreateMergedTexture(layer_cnt, ...)` over the size range: the narrower side doubles until
+/// The merged texture over the size range: the narrower side doubles until
 /// the pictures fit. `None` when they do not fit in the largest size.
 // the X-Ray SDK sorts with `area > || longest edge >`, which is no strict ordering; here the
 // pictures are sorted by area, then longest edge, largest first, keeping the order of equals.

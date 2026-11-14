@@ -24,7 +24,7 @@ use gz_ui::{
 };
 
 use crate::assets::PdaAssets;
-use crate::local::{local_code_view, local_section, local_tab_strip};
+use crate::local::{local_code_view, local_tab_strip};
 use crate::pda::canvas::{CanvasCache, draw_canvas};
 use crate::pda::{CANVAS_MIN_H, CANVAS_MIN_W, DETAILS_W, Model, PdaTab, SIDE_MIN, SOURCE_H, SOURCE_MIN};
 
@@ -490,7 +490,7 @@ fn draw_pages(ui: &mut Ui, m: &mut Model) {
         });
     }
     ui.add_space(8.0);
-    if local_section(ui, "pda_keys", "Keys", true) {
+    if gz_ui::Section::new("pda_keys", "Keys").default_open(true).show(ui).open {
         let keys = [
             ("map", "Map key", layout.key_map.clone()),
             ("contacts", "Contacts key", layout.key_contacts.clone()),

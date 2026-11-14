@@ -1,9 +1,9 @@
 //! The editor camera and its navigation, pure.
 //!
 //! The camera is heading-pitch-bank and a position, as the engine keeps it; `gz_render::Camera`
-//! is made from it for a frame. The navigation is the editor's: the UE-style claims (RMB look and
-//! fly with WASD + QE, MMB or LMB+RMB pan, Alt+LMB orbit, Alt+RMB dolly, a left drag nothing took
-//! flies) and, with Shift held, the legacy plane move.
+//! is made from it for a frame. The navigation: RMB look and fly with WASD + QE, MMB or LMB+RMB
+//! pan, Alt+LMB orbit, Alt+RMB dolly, a left drag nothing took flies. Shift, Ctrl and a plain left
+//! press are the tools', never the camera's.
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
@@ -175,7 +175,7 @@ pub struct Nav {
     pub fly_speed: f32,
     pub fly_alt: f32,
     pub orbit_dist: f32,
-    /// `m_SM`, `m_SR`: from the preferences' camera sensitivities.
+    /// Move and turn speed per pixel, from the preferences' camera sensitivities.
     pub sm: f32,
     pub sr: f32,
     pub near: f32,
@@ -183,15 +183,15 @@ pub struct Nav {
     /// The vertical field of view in degrees.
     pub fov: f32,
     pub ortho: bool,
-    /// The view the camera was put in (`g_CurrentTarget`).
+    /// The view the camera was put in.
     view: Target,
     /// The free camera before an axis view: heading-pitch-bank, position, target.
     saved: Option<(Vec3, Vec3, Vec3)>,
     moving: bool,
-    ue: bool,
     nav_input: bool,
     keys: u8,
-    shift: Buttons,
+    /// The buttons and modifiers of the last event the camera saw.
+    held: Buttons,
 }
 
 impl Default for Nav {
@@ -212,10 +212,9 @@ impl Default for Nav {
             view: Target::Perspective,
             saved: None,
             moving: false,
-            ue: false,
             nav_input: false,
             keys: 0,
-            shift: Buttons::default(),
+            held: Buttons::default(),
         };
         n.build();
         n
@@ -223,13 +222,13 @@ impl Default for Nav {
 }
 
 impl Nav {
-    /// `SetSensitivity(sm, sr)`.
+    /// Sets the move and turn speed from the preferences' sensitivities.
     pub fn set_sensitivity(&mut self, sm: f32, sr: f32) {
         self.sm = 0.2 * sm * sm;
         self.sr = 0.02 * sr * sr;
     }
 
-    /// `Set(hpb, pos)`.
+    /// Puts the camera at a pose.
     pub fn set(&mut self, hpb: Vec3, position: Vec3) {
         self.hpb = hpb;
         self.position = position;
@@ -248,7 +247,7 @@ impl Nav {
         }
     }
 
-    /// The camera's matrix (`m_CamMat`): rows right, up, forward.
+    /// The camera's matrix: rows right, up, forward.
     #[must_use]
     pub fn matrix(&self) -> XMat {
         XMat::hpb(self.hpb.x, self.hpb.y, self.hpb.z)
@@ -297,7 +296,7 @@ impl Nav {
     /// Flying with the right button: WASD and QE belong to the camera.
     #[must_use]
     pub fn flying(&self) -> bool {
-        self.moving && self.ue && self.shift.right
+        self.moving && self.held.right
     }
 
     fn pivot_for_orbit(&mut self) {
@@ -310,29 +309,19 @@ impl Nav {
         }
     }
 
-    /// RMB, MMB or Alt+LMB claim the mouse for UE-style navigation, Shift for the
-    /// legacy move. `true` when the camera took the press.
+    /// RMB, MMB or Alt+LMB claim the mouse for the camera. `true` when the camera took the press.
     pub fn move_start(&mut self, b: Buttons) -> bool {
-        let ue_claim = !b.shift && (b.right || b.middle || (b.alt && b.left));
-        if b.shift || ue_claim {
-            // a claim while a move runs still sets the mode
-            if self.moving && self.ue != ue_claim {
-                self.ue = ue_claim;
-            }
-            if !self.moving {
-                self.moving = true;
-                self.ue = ue_claim;
-                self.keys = 0;
-                self.nav_input = false;
-                if self.ue {
-                    self.pivot_for_orbit();
-                }
-            }
-            self.shift = b;
-            return true;
+        self.held = b;
+        if !(b.right || b.middle || (b.alt && b.left)) {
+            return false;
         }
-        self.shift = b;
-        false
+        if !self.moving {
+            self.moving = true;
+            self.keys = 0;
+            self.nav_input = false;
+            self.pivot_for_orbit();
+        }
+        true
     }
 
     /// A left drag nothing took is the camera's.
@@ -341,26 +330,22 @@ impl Nav {
             return false;
         }
         self.moving = true;
-        self.ue = true;
         self.keys = 0;
         self.nav_input = false;
-        self.shift = b;
+        self.held = b;
         self.pivot_for_orbit();
         true
     }
 
     /// `true` when the move ended.
     pub fn move_end(&mut self, b: Buttons) -> bool {
-        self.shift = b;
-        let nav_end = self.ue && !b.any_button();
-        let legacy_end = !self.ue && (!b.left || !b.shift);
-        if nav_end || legacy_end {
-            self.moving = false;
-            self.ue = false;
-            self.keys = 0;
-            return true;
+        self.held = b;
+        if b.any_button() {
+            return false;
         }
-        false
+        self.moving = false;
+        self.keys = 0;
+        true
     }
 
     fn rotate(&mut self, dx: f32, dy: f32, aspect: f32) {
@@ -369,69 +354,44 @@ impl Nav {
         self.build();
     }
 
-    fn pan(&mut self, dx: f32, dz: f32) {
-        let m = self.matrix();
-        let mut k = m.row(2);
-        k.y = 0.0;
-        self.position += k.normalize_or_zero() * (dz * -self.sm);
-        let mut i = m.row(0);
-        i.y = 0.0;
-        self.position += i.normalize_or_zero() * (dx * self.sm);
-        self.build();
-    }
-
-    fn scale(&mut self, dy: f32) {
-        self.position.y += dy * -self.sm;
-        self.build();
-    }
-
-    /// `Process`: a mouse move of `dx`, `dy` pixels while the camera moves. `aspect` is the
-    /// picture's height over its width. `true` when the camera took it.
+    /// A mouse move of `dx`, `dy` pixels while the camera moves. `aspect` is the picture's height
+    /// over its width. `true` when the camera took it.
     pub fn process(&mut self, b: Buttons, dx: f32, dy: f32, aspect: f32) -> bool {
         if !self.moving {
             return false;
         }
-        self.shift = b;
+        self.held = b;
         if dx == 0.0 && dy == 0.0 {
             return true;
         }
         self.view = Target::Perspective;
-        if self.ue {
-            self.nav_input = true;
-            let (l, r, m, a) = (b.left, b.right, b.middle, b.alt);
-            let cam = self.matrix();
-            if a && l && !r {
-                // orbit round the pivot at a fixed distance
-                self.hpb.x -= self.sr * dx;
-                self.hpb.y -= self.sr * dy * aspect;
-                self.position = self.target - dir_hp(self.hpb.x, self.hpb.y) * self.orbit_dist;
-                self.build();
-            } else if a && r && !l {
-                // dolly: drag up is in, drag down out
-                let d = dy * self.sm;
-                self.position -= cam.row(2) * d;
-                self.orbit_dist = (self.orbit_dist + d).clamp(0.5, 5000.0);
-                self.build();
-            } else if (l && r) || m {
-                // pan: grab the world - a drag right moves the camera left
-                self.position += cam.row(0) * (-dx * self.sm);
-                self.position.y += dy * self.sm;
-                self.build();
-            } else if r {
-                self.rotate(dx, dy, aspect);
-            } else if l {
-                // the vertical flies forward and back, the horizontal turns
-                self.position += cam.row(2) * (-dy * self.sm);
-                self.hpb.x -= self.sr * dx;
-                self.build();
-            }
-        } else if b.left && b.right {
-            // csPlaneMove
+        self.nav_input = true;
+        let (l, r, m, a) = (b.left, b.right, b.middle, b.alt);
+        let cam = self.matrix();
+        if a && l && !r {
+            // orbit round the pivot at a fixed distance
+            self.hpb.x -= self.sr * dx;
+            self.hpb.y -= self.sr * dy * aspect;
+            self.position = self.target - dir_hp(self.hpb.x, self.hpb.y) * self.orbit_dist;
+            self.build();
+        } else if a && r && !l {
+            // dolly: drag up is in, drag down out
+            let d = dy * self.sm;
+            self.position -= cam.row(2) * d;
+            self.orbit_dist = (self.orbit_dist + d).clamp(0.5, 5000.0);
+            self.build();
+        } else if (l && r) || m {
+            // pan: grab the world - a drag right moves the camera left
+            self.position += cam.row(0) * (-dx * self.sm);
+            self.position.y += dy * self.sm;
+            self.build();
+        } else if r {
             self.rotate(dx, dy, aspect);
-        } else if b.left {
-            self.pan(dx, dy);
-        } else if b.right {
-            self.scale(dy);
+        } else if l {
+            // the vertical flies forward and back, the horizontal turns
+            self.position += cam.row(2) * (-dy * self.sm);
+            self.hpb.x -= self.sr * dx;
+            self.build();
         }
         true
     }
@@ -447,7 +407,7 @@ impl Nav {
     }
 
     pub fn key_up(&mut self, key: FlyKey) -> bool {
-        if !(self.moving && self.ue) {
+        if !self.moving {
             return false;
         }
         self.keys &= !key.bit();
@@ -470,7 +430,7 @@ impl Nav {
         self.keys = k;
     }
 
-    /// `Update(dt)`: WASD and QE fly along the view (QE along the world's up). `true` when the
+    /// WASD and QE fly along the view (QE along the world's up). `true` when the
     /// camera moved.
     pub fn update(&mut self, dt: f32) -> bool {
         if !(self.flying() && self.keys != 0) {
@@ -505,7 +465,7 @@ impl Nav {
         true
     }
 
-    /// `Wheel`: while flying it tunes the speed and answers the status line; otherwise it
+    /// The wheel: while flying it tunes the speed and answers the status line; otherwise it
     /// dollies along the view.
     pub fn wheel(&mut self, steps: f32) -> Option<String> {
         if self.flying() {
@@ -642,9 +602,11 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_left_press_is_the_tools() {
+    fn a_plain_or_shift_left_press_is_the_tools() {
         let mut n = Nav::default();
         assert!(!n.move_start(Buttons { left: true, ..Buttons::default() }));
+        assert!(!n.move_start(Buttons { left: true, shift: true, ..Buttons::default() }));
+        assert!(!n.is_moving());
         assert!(n.move_start(Buttons { left: true, alt: true, ..Buttons::default() }));
     }
 

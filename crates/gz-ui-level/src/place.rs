@@ -13,8 +13,8 @@
 //! only the rows on screen and never reads a file; the pictures are read and decoded on the
 //! pools and reach the GPU a few a frame.
 //!
-//! **What crosses to the viewport** is the viewport's own `Placeable` (stream L2a's
-//! `gz_ui_viewport::place`): a dragged row is its payload (`Payload::Row { surface: "place", key:
+//! **What crosses to the viewport** is the viewport's own `Placeable`
+//! (`gz_ui_viewport::place`): a dragged row is its payload (`Payload::Row { surface: "place", key:
 //! "<kind>[:<reference>]" }`), a click arms it (`place::arm`). The one row Place mode cannot
 //! arm - the AI Map Bounds volume, a box with a use of its own - is placed at once, on the ground
 //! in front of the camera, and selected.

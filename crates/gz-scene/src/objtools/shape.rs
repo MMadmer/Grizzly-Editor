@@ -126,7 +126,7 @@ pub fn detach_selected(state: &SceneState) -> Result<Outcome, CmdError> {
     Ok((b, json!({ "shapes": sel.len(), "parts": made })))
 }
 
-/// `GenObjectName(OBJCLASS_SHAPE, buf, pref)` with the names this batch gives already.
+/// A shape name made unique the way new names are, with the names this batch gives already.
 fn unique_after(state: &SceneState, pref: &str, taken: &[String]) -> String {
     let pref = pref.to_lowercase();
     for i in 0u32.. {
