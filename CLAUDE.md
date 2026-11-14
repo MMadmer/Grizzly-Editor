@@ -650,7 +650,13 @@ A change of plan is a change of its document first.
   `modules\<id>`.
 - Manifest metadata rules (`gz-mod`'s `rules.rs`: `validate_version`, `validate_website`,
   `validate_github_repo`, the quoting of `name`/`author`/`description`) mirror
-  section 1 of the same document. The website allow-list (AP-PRO, ModDB) is
+  section 1 of the same document. **One table judges a value everywhere**: the reference's rows
+  (`reference.rs`: each key with what it takes) feed `accepts`; `refusal` is what `mod.set` and the form
+  turn a value away with, and `validate` - positioned, a line for every problem - is what `asset.check`,
+  `mod.info` and every build say of the file. What the editor refuses to save is an error there (version,
+  website, tags, target, a mode id, the repository, a global's name); a key or a value of `[world]`,
+  `[screens]`, `[screen.<id>]`, `[track.<id>]` that no reader takes is a warning; a key of a section the
+  editor keeps as written is never reported. The tag vocabulary is `gz_mod::TAG_VOCABULARY`. The website allow-list (AP-PRO, ModDB) is
   enforced on BOTH sides: the game ignores any other link, the editor refuses
   to save it. Extending it is a game release first.
 - `releases\` is editor-only (`gz-project`'s `rules.rs` `is_editor_only`): never shown

@@ -198,3 +198,46 @@ found). The release build is older than the tree and is rebuilt at the very end.
 
 Write `docs/plan/reports/CRITIC.md` (round 4) and answer with the same text, in the form of the earlier rounds. If
 nothing is open, say "Nothing open." and list what you checked.
+
+## Round 5
+
+Round 4's report is `docs/plan/reports/CRITIC-4.md` (one blocker, three `should`, a list of `minor`); rounds 1-3
+are `CRITIC-1.md`, `CRITIC-2.md`, `CRITIC-3.md`. Since round 4 (`git log --oneline a4db4af1..HEAD`) the architect
+and one engineer changed the tree; the engineer's report is `docs/plan/reports/E7.md` (the manifest's check reads
+the values). You are a new reader: you wrote none of the earlier rounds. The sections above describe the task;
+yours is the same one step on:
+
+1. **Is each finding of round 4 closed?** In the code and the documents as they are now.
+   - The blocker, losing unsaved work outside the destroy door. `app.switch_project` (`gz-app`'s `app_cmds.rs`) is
+     `project.close` with the caller's answer; the window's `switch_project` (`chrome.rs`) names the scene;
+     `lets_go` (`gz-project`'s `cmd.rs`) and `app.quit` no longer take `-nodlg` for a command's caller. Round 4
+     found this on a path no round had walked, so walk them ALL: every command and every window action that ends
+     or replaces a scene, a document, a project or the editor (`scene.new`, `scene.open`, `scene.recover`,
+     `scene.convert`, `project.open`, `project.close`, `project.create`, `project.delete`, `app.quit`,
+     `app.switch_project`, `ui.tab action=close|open`, `doc.reload`, `asset.take_theirs`, `graph.*` / `pda.*` /
+     `characters.view` / `library.*` with `discard`, Play, an update's restart, a second start handed over to the
+     running editor): does any of them drop unsaved work - the scene's, a tab's, a library's pending edits -
+     without `discard` (or the value that destroys) through the destroy door, for any origin, on any editor
+     (`-nodlg`, `-headless`, a commandlet)? Say which you drove and which you judged by the code.
+   - Finding 4, the window's saves. `save_then` and `SAVE_CANCELLED` (`unsaved.rs`), the Level tab's `GaveUp`
+     (`gz-ui-level`'s `doc.rs`), "every end of a save is its answer" (`Document::save_failed`, `doc.rs`). A
+     person's save has no deadline now: is there a tab whose save, for a person, can neither clean the tab nor
+     answer - so the wait never ends and a later save by hand runs the continuation (Exit, Close, Switch) long
+     after it was asked for? Read every `Document::save` again with that question.
+   - Finding 3, `file.create`: the guard, the folders it refuses, the name free in the project.
+   - Finding 2, the manifest's check (E7): write a manifest by hand - is there a value `mod.set` or the form
+     refuses that `check` passes, a correct manifest `check` refuses, or a sentence of `reference manifest` the
+     check makes untrue? Run the corpus test (`bash tools/rust/cg.sh test -p gz-mod`).
+   - The minors of round 4.
+2. **The work since round 4, by the same measure**: the commits `e28553e0`, `8ad534c7` and the one after it.
+3. **The request against the result, as a whole** - the ten points at the top of this brief. Is there a point
+   the author would say is not done, or not quality? Say so only where you can show it.
+
+Pictures: `Intermediate/plan/tour/*.png` and `small/*.png`, taken at `a4db4af1`; no surface changed since. The
+last runs on this tree, each once and bounded: `check.sh` clean; the unit tests green (one page test of `gz-mod`
+fixed and run again); the 26 QA suites green on the debug build - three on the runner's second run alone after a
+stall beside the others, `test_properties` after the fix of a check of its own that read Details too early. The
+release build is older than the tree and is rebuilt at the very end.
+
+Write `docs/plan/reports/CRITIC.md` (round 5) and answer with the same text, in the form of the earlier rounds. If
+nothing is open, say "Nothing open." and list what you checked.

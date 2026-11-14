@@ -47,6 +47,9 @@ What the suites hold, beyond what their names say:
   `manifest_reference`): a project made from nothing fails its first `check` on one error that names the key,
   its values and the command; `help mod.set` is enough to set it; the second `check` is clean; `reference
   manifest` prints the page, and a key a reader of the manifest takes without its words there fails a test.
+  A wrong value of each rule written into `mod.ltx` by hand is named by `check` with its line (nine errors,
+  three warnings), `mod.build` refuses and `mod.info` lists them; the manifests of the author's projects and
+  of the game's modules pass clean; a quest under `temp\release_stage_1` fails no check.
 - **Releases and the Mod Browser** (`test_mod_publish`, `test_mod_catalog`, the mock only): the whole path, the
   doors (`release.delete` only through the destroy door, `release.publish` and `mod.package` only through the
   release door), a check that a closed project's jobs do not start again.
@@ -67,7 +70,8 @@ What the suites hold, beyond what their names say:
 - The editor's update against GitHub: by rule it only ever meets the mock.
 - The sound preview's playback in the chooser.
 - What the manifest's reference says a key of `[world]`, `[start_kit]` or `[screens]` does in the game: it is
-  read from the readers' code and the game's document, not from a run of the game.
+  read from the readers' code and the game's document, not from a run of the game. `mod.package` was seen
+  refusing a manifest through the check on one wrong tag; the other errors take the same path.
 - The window's questions over unsaved work - Exit, Close Tab, a tab that switches its file, Switch Project -
   and the Save dialog of a scene that has no file, picked or cancelled: a person's clicks and the system's
   dialog, which no suite answers. The commands behind them are driven (`test_scene_tools` Z, `test_pda` H);
@@ -121,6 +125,15 @@ What the suites hold, beyond what their names say:
   the way; it takes a name no file of the kind has anywhere in the project (the asset's id comes from the
   name: two quests made in two folders were one id); and the file passes the write guard where it really
   lands - through a link in the project it reached the linked game.
+- The manifest's check reads the values from the reference's own rows: one table says what a key takes on
+  the page, in `mod.set`, in the form and in the file's check. Every written line of a judged key is judged,
+  not only the last of a repeated key. What the editor refuses to save is an error; a key or a value of an
+  area's section that no reader takes is a warning (the module still builds); `[module]`,
+  `[provides_mode]` and the sections kept as written get no unknown-key warning; `Story` among the tags is a
+  warning (`mod.set` writes it in lower case). `disable_game_updates` takes what the game takes: `true` or
+  `1` is on, and no other word is accepted. A build's refusal lists every error of the manifest.
+- `check` walks what the project lists: the editor's own folders at the root (`temp\`, `releases\`) are
+  left out unless asked for by path, so what a crashed packaging left is no problem of the project.
 - The manifest's reference is one page of `gz-mod` (`reference.rs`), asked by name before the kind table:
   `[world]`, `[start_kit]` and `[screens]` are described there and held to their readers by a test of
   `grizzly`, which sees every crate - not by a hook each of those crates would have to offer. The first

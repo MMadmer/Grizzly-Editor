@@ -57,6 +57,9 @@ reg.cmd(
   (a tooling name at any depth, the editor's own folders at the root), a name Windows keeps for a device and
   a file in the way, each in a sentence; the new file's name is free in the whole project, because the
   asset's id comes from it; the file passes the write guard where it really lands.
+- `mod.set` turns a value away in the manifest's own sentence (`<key> takes <values>, not '<value>'`), the
+  one the file's check gives; `mod.build` and `mod.package` refuse with every error of the manifest, one a
+  line, and report its warnings; `mod.info` lists both.
 
 ## 2. Parameter names
 

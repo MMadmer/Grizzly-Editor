@@ -11,7 +11,9 @@ Two ways to work on a Grizzly project, and they combine:
 
 ```text
 Grizzly-Cmd.exe check [path]          every problem of the project (or of one file) with file, line and column;
-                                      exit code 1 when an error is among them
+                                      exit code 1 when an error is among them. `check mod.ltx` reads the
+                                      manifest's values too: what the editor would not save is an error,
+                                      a key or value no reader takes a warning
 Grizzly-Cmd.exe reference <kind>      the format of a kind (quest, behaviour, character, pda, scene, project,
                                       manifest - mod.ltx),
                                       with what the linked game adds: node kinds, their parameters and pins
