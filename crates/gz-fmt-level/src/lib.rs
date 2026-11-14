@@ -41,6 +41,10 @@
 //! - [`BuildProject`] and the `b_*` records ([`BuildFace`], [`BuildMaterial`], [`Portal`],
 //!   [`BuildLight`], [`BuildGlow`], ...) - `build.prj`.
 //!
+//! **What a build made**
+//! - [`CompiledLevel`] - `level`: the visuals, shader table, sectors, portals, lights and glows, read for
+//!   looking at (`CompiledLevel::read`).
+//!
 //! **Arithmetic the formats share**
 //! - [`Aabb`], [`i_floor`], [`i_ceil`], [`pv_compress`], [`pv_decompress`].
 
@@ -51,6 +55,7 @@ mod bvh;
 mod bytes;
 mod cform;
 mod collector;
+mod compiled;
 mod details;
 mod level_game;
 mod math;
@@ -73,6 +78,10 @@ pub use build_prj::{
 pub use bvh::{Bvh, Ray, RayHit, ray_triangle};
 pub use cform::{CFORM_VERSION, CForm, Tri};
 pub use collector::{Collector, CollectorPacked};
+pub use compiled::{
+    CompiledGlow, CompiledLevel, CompiledLight, CompiledPortal, CompiledSector, Geometry, ShaderEntry,
+    Visual, VisualKind, parse_shader,
+};
 pub use details::{
     ColorIndex, DETAIL_SLOT_SIZE, DETAIL_VERSION, DETMGR_VERSION, DETOBJ_VERSION, DO_NO_WAVING,
     DetailColorIndices, DetailHeader, DetailModel, DetailObjectRef, DetailSlot, DetailVertex, LevelDetails,
