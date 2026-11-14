@@ -327,8 +327,11 @@ impl TexLibDoc {
             return Err("The texture folder cannot be written.".to_owned());
         }
         if self.saving() {
-            // a save is under way: who waits for this one is answered by how that one ends
-            super::answer_running(&self.editor, &self.save_error);
+            // a job of the library runs: this save starts when it has ended
+            *self.save_error.lock() = None;
+            super::save_after_running(&self.editor, &self.save_error, |ed| {
+                start_texture_save(ed, None, None)
+            });
             return Ok(());
         }
         *self.save_error.lock() = None;
@@ -1066,15 +1069,19 @@ pub fn start_texture_save(
         let c = ctx.clone();
         let result = ctx
             .exec
-            .io(move || -> Result<(usize, Vec<String>), String> {
+            .io(move || -> Result<Written, String> {
                 if let Some(items) = import {
                     let params_of = |item: &TexItem| {
                         edits.get(&item.name).cloned().unwrap_or_else(|| item.params.clone())
                     };
-                    return import_items(&dirs, &items, &params_of, &[], &c);
+                    return import_items(&dirs, &items, &params_of, &[], &c)
+                        .map(|(n, f)| (n, f, Vec::new(), Vec::new()));
                 }
                 let age = super::texsync::now();
-                let (mut done, mut failed) = (0usize, Vec::new());
+                // `kept`: the textures that could not be written - their edits stay; `notes`: what
+                // was written and still deserves a word
+                let (mut done, mut failed, mut kept, mut notes) =
+                    (0usize, Vec::new(), Vec::new(), Vec::new());
                 for (i, (name, params)) in edits.iter().enumerate() {
                     c.check().map_err(|_| "Stopped.".to_owned())?;
                     c.stage(format!("Building {name}"));
@@ -1086,35 +1093,41 @@ pub fn start_texture_save(
                         Ok(s) => {
                             done += 1;
                             if s.low_gloss {
-                                failed.push(format!("The gloss mask of '{name}' is under 10 percent."));
+                                notes.push(format!("The gloss mask of '{name}' is under 10 percent."));
                             }
                         }
-                        Err(e) => failed.push(e),
+                        Err(e) => {
+                            failed.push(e);
+                            kept.push(name.clone());
+                        }
                     }
                 }
-                Ok((done, failed))
+                Ok((done, failed, kept, notes))
             })
             .await;
         saving.store(false, std::sync::atomic::Ordering::Release);
         LibraryLists::of(&ed).textures_rev.bump();
         match result {
-            Ok((done, failed)) => {
+            Ok((done, failed, kept, notes)) => {
                 for f in &failed {
                     ed.log.error(f.clone());
                 }
-                let dropped = if partial { TexCmd::Drop { names: written } } else { TexCmd::Reset };
+                for n in &notes {
+                    ed.log.warn(n.clone());
+                }
+                // what was written is unsaved no more; what could not be written stays an edit,
+                // and `failed` is the save's answer for whoever waits for it - the job raises no
+                // notice of its own
+                let dropped = if partial || !kept.is_empty() {
+                    TexCmd::Drop { names: written.into_iter().filter(|n| !kept.contains(n)).collect() }
+                } else {
+                    TexCmd::Reset
+                };
                 let _ = store.send(dropped, Origin::Ui).await;
                 if importing {
                     after_import_ui(&ed);
                 }
-                if !failed.is_empty() {
-                    ed.notices.error(format!(
-                        "{} of the textures could not be built: {}",
-                        failed.len(),
-                        failed.join(" ")
-                    ));
-                }
-                Ok(json!({ "written": done, "failed": failed }))
+                Ok(json!({ "written": done, "failed": failed, "notes": notes }))
             }
             Err(e) => Err(gz_task::JobError::new(e)),
         }
@@ -1311,6 +1324,10 @@ pub async fn import_pictures(editor: &Arc<Editor>, req: ImportRequest) -> Result
     job_answer(editor, id).await
 }
 
+/// What a save wrote: how many, the sentences of what failed, the names whose edits stay (they could
+/// not be written), and the notes about what was written.
+type Written = (usize, Vec<String>, Vec<String>, Vec<String>);
+
 /// What a job of this library answered, as a command's answer: the job's own result, or why it
 /// failed.
 pub(crate) async fn job_answer(editor: &Arc<Editor>, id: JobId) -> Result<Value, CmdError> {
@@ -1414,6 +1431,11 @@ impl Document for TexLibDoc {
     }
     fn dirty(&self) -> bool {
         self.dirty_now()
+    }
+    /// The pending edits are the editor's (`LibraryStores` reports, saves and drops them); the
+    /// pictures New Textures holds are the tab's alone.
+    fn dirty_elsewhere(&self) -> bool {
+        !self.import_mode()
     }
     fn padded(&self) -> bool {
         false

@@ -888,30 +888,42 @@ impl ShellState {
         self.tabs.iter().filter(|t| t.dirty()).map(|t| (t.id.to_string(), t.label())).collect()
     }
 
-    /// Quit, after the question that names every dirty document.
+    /// The unsaved work the window's questions name: the dirty tabs, and what no tab shows - a
+    /// library a command edited with its tab closed.
+    pub(crate) fn unsaved_work(&self) -> (Vec<(String, String)>, Vec<String>) {
+        let tabs = self.dirty_tabs();
+        // the scene is the Level tab's; every other document goes by its tab's kind
+        let shown = |kind: &str| kind == "scene" || self.tabs.iter().any(|t| t.kind == kind && t.dirty());
+        let other =
+            self.editor.dirty_docs().into_iter().filter(|d| !shown(d.kind.as_str())).map(|d| d.name).collect();
+        (tabs, other)
+    }
+
+    /// Quit, after the question that names every unsaved document. Save waits for the tabs' saves;
+    /// `app.quit` then saves what is left, or drops it, and ends the editor.
     pub(crate) fn request_exit(&mut self, ctx: &Context) {
-        let dirty = self.dirty_tabs();
-        if dirty.is_empty() {
+        let (dirty, other) = self.unsaved_work();
+        if dirty.is_empty() && other.is_empty() {
             self.editor.request_quit();
             return;
         }
-        let what: Vec<String> = dirty.iter().map(|(_, l)| l.clone()).collect();
+        let what: Vec<String> = dirty.iter().map(|(_, l)| l.clone()).chain(other).collect();
         let ids: Vec<String> = dirty.into_iter().map(|(id, _)| id).collect();
         let queue = self.queue.clone();
         let editor = self.editor.clone();
+        let quit = |editor: &Arc<Editor>, how: &str| {
+            let mut args = gz_editor::Args::new();
+            args.insert(how.to_owned(), serde_json::Value::Bool(true));
+            editor.post("app.quit", args);
+        };
         let line = dialog::unsaved_prompt(ctx, self.asker(), "exit", &what, move |answer| match answer {
             Answer::Cancel => {}
             // every save is waited for: the editor does not end over a write under way, or under
             // the Save dialog of a scene that has no file yet
             Answer::Yes => {
-                crate::unsaved::save_then(&editor, &queue, ids, |shell, _| shell.editor.request_quit());
+                crate::unsaved::save_then(&editor, &queue, ids, move |shell, _| quit(&shell.editor, "save"));
             }
-            _ => queue.post(move |shell, ctx| {
-                for id in &ids {
-                    shell.discard_tab(ctx, id);
-                }
-                shell.editor.request_quit();
-            }),
+            _ => quit(&editor, "discard"),
         });
         if let Some(line) = line {
             self.editor.log.finding(&line);

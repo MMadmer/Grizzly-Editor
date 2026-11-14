@@ -6,10 +6,11 @@ use serde::{Deserialize, Serialize};
 pub enum Origin {
     /// The author, through the window: a question opens a dialog.
     Ui,
-    /// A caller over MCP: the caller decided. A confirmation is Yes, and losing data takes the
-    /// explicit `*_discard` command.
+    /// A command's caller: the caller decided, so nothing is asked. Losing data takes the
+    /// parameter that says so (`discard`, `overwrite`), through the destroy door.
     Mcp,
-    /// `-nodlg`: the logged answers (No / OK).
+    /// The window's own action under `-nodlg`: the logged answers (No for a question, OK for
+    /// a note).
     Unattended,
 }
 

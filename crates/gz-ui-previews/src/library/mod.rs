@@ -90,20 +90,43 @@ pub(crate) type SaveError = Arc<parking_lot::Mutex<Option<gz_editor::CmdError>>>
 pub(crate) fn answer_job(editor: &Arc<Editor>, id: gz_editor::JobId, failed: &SaveError) {
     let (ed, failed) = (editor.clone(), failed.clone());
     let _task = editor.exec.spawn(async move {
-        let Some(info) = ed.jobs.wait(id).await else { return };
-        if info.state != gz_editor::JobState::Done {
-            let why = info.error.unwrap_or_else(|| "the save was stopped".to_owned());
-            *failed.lock() = Some(gz_editor::CmdError::new("failed", why));
+        // the job's own answer: a job that failed or was stopped, and one that ended with entries it
+        // could not write (`failed`), which stay unsaved
+        if let Err(why) = textures::job_answer(&ed, id).await {
+            *failed.lock() = Some(gz_editor::CmdError::new("failed", why.message));
             ed.exec.wake().ping();
         }
     });
 }
 
-/// A save found the libraries' save already running: that job's end is this save's answer too.
-pub(crate) fn answer_running(editor: &Arc<Editor>, failed: &SaveError) {
+/// Starts a save of a library as its job and answers how it ended. The libraries run one job at
+/// a time - a save, a rebuild, an import, a synchronisation: one that runs ends first, and then
+/// this save writes what is unsaved, the edits made meanwhile among it.
+pub(crate) async fn save_job(
+    editor: &Arc<Editor>,
+    start: impl FnOnce(&Arc<Editor>) -> Result<gz_editor::JobId, String>,
+) -> Result<(), String> {
     if let Some(job) = editor.jobs.running_in("libraries") {
-        answer_job(editor, job.id, failed);
+        let _ended = editor.jobs.wait(job.id).await;
     }
+    let id = start(editor)?;
+    textures::job_answer(editor, id).await.map(|_| ()).map_err(|e| e.message)
+}
+
+/// A tab's save found a job of the libraries running: its own save starts when that one has
+/// ended, and how it ends is the save's answer.
+pub(crate) fn save_after_running(
+    editor: &Arc<Editor>,
+    failed: &SaveError,
+    start: impl FnOnce(&Arc<Editor>) -> Result<gz_editor::JobId, String> + Send + 'static,
+) {
+    let (ed, failed) = (editor.clone(), failed.clone());
+    let _task = editor.exec.spawn(async move {
+        if let Err(why) = save_job(&ed, start).await {
+            *failed.lock() = Some(gz_editor::CmdError::new("failed", why));
+            ed.exec.wake().ping();
+        }
+    });
 }
 
 /// Something a library tab is still reading for its selection.

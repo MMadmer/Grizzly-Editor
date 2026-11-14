@@ -628,6 +628,24 @@ def run(ctx: qa.Run) -> None:
         check(o.get("ok") and c.get("ok") and got is not None and got.replace("/", "\\").lower() == rel,
               "L a project closed before its scene loaded keeps it", repr(got))
 
+        # ------------------------------------------------------------------ U: a hand-over never drops unsaved work
+        # a second start hands its project to the running editor (project.open from_launch=true): where no person
+        # answers the question - this editor runs -nodlg - it is refused like any other open
+        qa.guard_project(p["created"])
+        o = cmd("project.open", path=p["created"])
+        cmd("scene.new")
+        lamp = cmd("scene.place", kind="light", position=[0, 1, 0])
+        handed = cmd("project.open", path=p["open"], from_launch=True)
+        still = cmd("project.info")
+        unsaved = [d.get("kind") for d in cmd("doc.list").get("unsaved", [])]
+        check(o.get("ok") and lamp.get("ok") and not handed.get("ok") and handed.get("code") == "unsaved"
+              and fwd(str(still.get("root", still.get("path", "")))).lower() == fwd(p["created"]).lower()
+              and "scene" in unsaved,
+              "U a project handed over to an editor nobody answers is refused over the unsaved scene",
+              short(handed) + " / " + short(still) + " / " + str(unsaved))
+        cmd("scene.new", discard=True)
+        c = cmd("project.close")
+
         # ------------------------------------------------------------------ W: an asset never lands in the game
         # a game made for this check alone, linked in the suite's own home; a folder of the project that is a
         # link into it takes no asset - the file passes the write guard where it really lands

@@ -721,7 +721,7 @@ impl ShellState {
     /// them. Save waits for the saves; the project's close then settles what is left and refuses
     /// over a document that is still unsaved.
     pub(crate) fn switch_project(&mut self, ctx: &Context) {
-        let dirty = self.dirty_tabs();
+        let (dirty, other) = self.unsaved_work();
         let editor = self.editor.clone();
         let close = |editor: &Arc<gz_editor::Editor>, how: Option<&str>| {
             let mut args = gz_editor::Args::new();
@@ -730,11 +730,11 @@ impl ShellState {
             }
             editor.post("project.close", args);
         };
-        if dirty.is_empty() {
+        if dirty.is_empty() && other.is_empty() {
             close(&editor, None);
             return;
         }
-        let what: Vec<String> = dirty.iter().map(|(_, l)| l.clone()).collect();
+        let what: Vec<String> = dirty.iter().map(|(_, l)| l.clone()).chain(other).collect();
         let ids: Vec<String> = dirty.into_iter().map(|(id, _)| id).collect();
         let queue = self.queue.clone();
         let line = gz_ui::dialog::unsaved_prompt(ctx, self.asker(), "switch_project", &what, move |answer| {

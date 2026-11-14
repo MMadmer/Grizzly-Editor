@@ -658,6 +658,10 @@ impl Document for LanimDoc {
     fn dirty(&self) -> bool {
         self.store.is_dirty()
     }
+    /// The pending edits are the editor's: `LibraryStores` reports, saves and drops them.
+    fn dirty_elsewhere(&self) -> bool {
+        true
+    }
     fn padded(&self) -> bool {
         false
     }

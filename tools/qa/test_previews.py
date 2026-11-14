@@ -649,8 +649,43 @@ def library_sound(lib: str) -> None:
     labels = {x.get("label") for x in cmd("ui.audit", id="##toolbar").get("controls", [])}
     check({"Play", "Stop", "Auto Play", "Rebuild", "Save", "More"} <= labels, "K the Sound Library's toolbar presses actions",
           json.dumps(sorted(l for l in labels if l))[:300])
+    # a description that cannot be written (a folder has its name): the save says so, keeps the edit and the
+    # tab stays unsaved - it never answers ok over work that is not on the disk
+    thm = os.path.join(lib, "rawdata", "sounds", "qa", "qa_tone.thm")
+    held = thm + ".held"
+    os.replace(thm, held)
+    os.makedirs(thm)
+    edit = cmd("library.set", kind="sound_library", item=item, set={"max_dist": 55.0}, save=False)
+    failed = cmd("doc.save", doc="sound_library")
+    after = cmd("library.view", kind="sound_library", action="select", item=item)
+    check(edit.get("ok") and not failed.get("ok") and "qa_tone" in str(failed.get("error"))
+          and "could not be written" in str(failed.get("error")) and "os error" not in str(failed.get("error"))
+          and after.get("dirty") is True and after.get("max_dist") == 55.0,
+          "K a save that cannot write a description says so, and the edit stays unsaved",
+          json.dumps(failed)[:300] + " / " + json.dumps({k: after.get(k) for k in ("dirty", "max_dist")}))
+    closing = cmd("ui.tab", action="close", doc="sound_library", save=True)
+    check(not closing.get("ok") and cmd("library.view", kind="sound_library", action="state").get("dirty") is True,
+          "K ui.tab close save=true over the same failure is refused, the tab stays", json.dumps(closing)[:300])
+    os.rmdir(thm)
+    os.replace(held, thm)
+    saved = cmd("doc.save", doc="sound_library")
+    after = cmd("library.view", kind="sound_library", action="select", item=item)
+    check(saved.get("ok") and after.get("dirty") is False and after.get("max_dist") == 55.0,
+          "K the same save writes it once the file can be written", json.dumps(saved)[:300])
     nowin = cmd("ui.tab", action="close", doc="sound_library", discard=True)
     check(nowin.get("ok"), "K the sound tab closes")
+    # an edit left unsaved with no tab open is unsaved work all the same: listed, and no way out goes over it
+    lone = cmd("library.set", kind="sound_library", item=item, set={"min_dist": 3.5}, save=False)
+    listed = [d.get("kind") for d in cmd("doc.list").get("unsaved", [])]
+    quit_ = cmd("app.quit")
+    alive = cmd("ping")
+    check(lone.get("ok") and "sound_library" in listed and not quit_.get("ok") and quit_.get("code") == "unsaved"
+          and alive.get("ok"), "K a library edit without a tab is listed as unsaved, and app.quit is refused over it",
+          json.dumps(listed) + " / " + json.dumps(quit_)[:300])
+    kept = cmd("library.set", kind="sound_library", item=item, set={"min_dist": 3.5})
+    listed = [d.get("kind") for d in cmd("doc.list").get("unsaved", [])]
+    check(kept.get("ok") and "sound_library" not in listed, "K saved, nothing of the library is unsaved",
+          json.dumps(kept)[:300] + " / " + json.dumps(listed))
 
 
 def library_lanim(lib: str) -> None:

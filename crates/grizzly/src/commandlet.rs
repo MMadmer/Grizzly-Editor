@@ -300,6 +300,17 @@ pub fn run(runtime: &Runtime, editor: &Arc<Editor>, cli: &Cli) -> ExitCode {
                 }
             }
         }
+        // the run ends here and nothing saves by itself: work a step left unsaved is lost with
+        // it, and a run that loses work has failed and says what
+        let unsaved = editor.dirty_docs();
+        if !unsaved.is_empty() {
+            let names: Vec<&str> = unsaved.iter().map(|d| d.name.as_str()).collect();
+            err(&format!(
+                "error: the run ended with unsaved work, which is lost: {}. Save it in the run (scene.save, doc.save).",
+                names.join(", ")
+            ));
+            failed = true;
+        }
         u8::from(failed)
     });
     if let Some(task) = progress {

@@ -114,6 +114,9 @@ struct PictureView {
     unreadable: bool,
     /// A picture is being made into `thumbnail.dds`.
     making: bool,
+    /// A save of the picture is under way, with what it took (the waiting picture, the
+    /// removal): unsaved until it is answered, and put back when it fails.
+    saving: Option<(Option<String>, bool)>,
     /// Moves when a picture was made: the file of the same name is read again.
     made: u64,
     /// The picture chosen and made into `temp\thumbnail_pending.dds`: it takes the place of
@@ -317,6 +320,18 @@ impl ModSettingsDoc {
         }
         if let Some(result) = done {
             self.picture.made += 1;
+            let took = self.picture.saving.take();
+            if let Err(e) = &result {
+                // the save did not carry the picture's change out: it waits again, and whoever
+                // waits for the save is told
+                if let Some((pending, remove)) = took {
+                    if self.picture.pending.is_none() {
+                        self.picture.pending = pending;
+                    }
+                    self.picture.remove |= remove;
+                }
+                self.save_error = Some(e.clone());
+            }
             self.aux.picture_error = result.err().unwrap_or_default();
             self.aux_gen += 1;
         }
@@ -515,6 +530,8 @@ impl ModSettingsDoc {
         }
         let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
         let pending = self.picture.pending.take();
+        self.picture.saving = Some((pending.clone(), self.picture.remove));
+        self.save_error = None;
         self.picture.remove = false;
         self.picture.making = true;
         let root = std::path::PathBuf::from(&self.root);
@@ -525,7 +542,10 @@ impl ModSettingsDoc {
                     let target = root.join(gz_release::browser::THUMBNAIL_NAME);
                     let placed = ed.exec.io(move || place_thumbnail(Path::new(&p), &target)).await;
                     if let Err(e) = placed {
-                        inbox.lock().picture_pending = Some(Err(e));
+                        let mut i = inbox.lock();
+                        i.picture_done = Some(Err(e));
+                        i.picture_pending = Some(Err(String::new()));
+                        drop(i);
                         call::wake_ui(&ed);
                         return;
                     }
@@ -565,7 +585,8 @@ impl ModSettingsDoc {
     /// The tab holds edits `mod.ltx` does not have yet.
     #[must_use]
     pub fn dirty(&self) -> bool {
-        self.form != self.base || self.picture_waits()
+        // a save of the picture under way is not saved yet
+        self.form != self.base || self.picture_waits() || self.picture.saving.is_some()
     }
 
     /// Opens a page; what its pickers and checks read is read now.

@@ -65,6 +65,41 @@ pub fn split_list(text: &str) -> impl Iterator<Item = &str> {
     text.split(',').map(str::trim).filter(|s| !s.is_empty())
 }
 
+/// Why the system refused a file operation, in the editor's words: the system's own sentence comes in
+/// the system's language and with a number, and a message is a sentence for the author. `code` is
+/// the Windows error; one the editor has no words for keeps its number, the last resort.
+#[must_use]
+pub fn os_reason(code: u32) -> String {
+    let words = match code {
+        0 => "the system gave no reason",
+        2 | 3 => "it is not there",
+        5 => "access is denied: it is read-only, or another program holds it",
+        19 => "the disk is write-protected",
+        32 | 33 => "another program holds it open",
+        39 | 112 => "the disk is full",
+        80 | 183 => "something of that name is already there",
+        123 | 161 | 267 => "the name is not one Windows takes",
+        145 => "the folder is not empty",
+        206 => "the path is too long",
+        _ => return format!("the system refused it (system error {code})"),
+    };
+    words.to_owned()
+}
+
+/// [`os_reason`] of an I/O error; one the system gave no code for says its own words.
+#[must_use]
+pub fn io_reason(e: &std::io::Error) -> String {
+    match e.raw_os_error().and_then(|c| u32::try_from(c).ok()) {
+        Some(code) => os_reason(code),
+        None => match e.kind() {
+            std::io::ErrorKind::NotFound => os_reason(2),
+            std::io::ErrorKind::PermissionDenied => os_reason(5),
+            std::io::ErrorKind::AlreadyExists => os_reason(183),
+            _ => e.to_string(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

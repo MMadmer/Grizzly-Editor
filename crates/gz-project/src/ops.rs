@@ -129,7 +129,7 @@ fn ensure_dir_reason(dir: &str) -> Result<(), String> {
     }
     match std::fs::create_dir_all(dir) {
         Ok(()) if fsys::dir_exists(Path::new(dir)) => Ok(()),
-        Ok(()) => Err("cannot create the target folder (win32 0)".into()),
+        Ok(()) => Err(fsys::win32_text("cannot create the target folder", 0)),
         Err(e) => Err(win32_reason("cannot create the target folder", &e)),
     }
 }
@@ -192,7 +192,7 @@ impl<'a> FileOps<'a> {
         rep: &mut Report,
     ) {
         if !ensure_dir(dst_dir) {
-            rep.fail(dst_dir, "cannot create the target folder (win32 0)");
+            rep.fail(dst_dir, fsys::win32_text("cannot create the target folder", 0));
             return;
         }
         rep.dirs += 1;
@@ -492,7 +492,7 @@ impl<'a> FileOps<'a> {
                 }
                 Ok(out)
             }
-            Ok(()) => Err("cannot create the folder (win32 0)".into()),
+            Ok(()) => Err(fsys::win32_text("cannot create the folder", 0)),
             Err(e) => Err(win32_reason("cannot create the folder", &e)),
         }
     }

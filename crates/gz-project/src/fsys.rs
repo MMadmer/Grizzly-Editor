@@ -16,7 +16,7 @@ pub(crate) const ERROR_SHARING_VIOLATION: u32 = 32;
 pub(crate) const ERROR_LOCK_VIOLATION: u32 = 33;
 pub(crate) const ERROR_DIR_NOT_EMPTY: u32 = 145;
 
-/// The Win32 code of an error, for the "(win32 N)" of a message.
+/// The Win32 code of an error, for [`win32_text`].
 pub(crate) fn win32(e: &io::Error) -> u32 {
     if let Some(code) = e.raw_os_error().and_then(|c| u32::try_from(c).ok()) {
         return code;
@@ -29,9 +29,9 @@ pub(crate) fn win32(e: &io::Error) -> u32 {
     }
 }
 
-/// `what (win32 N)`.
+/// `what: why`, the system's refusal in the editor's words ([`gz_base::os_reason`]).
 pub(crate) fn win32_text(what: &str, code: u32) -> String {
-    format!("{what} (win32 {code})")
+    format!("{what}: {}", gz_base::os_reason(code))
 }
 
 #[cfg(windows)]

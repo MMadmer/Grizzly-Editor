@@ -15,6 +15,7 @@ pub use path::{PathError, RelPath, file_name_problem};
 pub use problem::{Finding, Findings, Problem, Severity};
 pub use rev::{Rev, RevCounter};
 pub use smol_str::SmolStr;
+pub use text::{io_reason, os_reason};
 pub use units::{Pt, Px, Scale};
 
 /// Immutable bytes shared between threads.

@@ -285,8 +285,9 @@ impl SoundLibDoc {
             return Err("The sound folder cannot be written.".to_owned());
         }
         if self.saving() {
-            // a save is under way: who waits for this one is answered by how that one ends
-            super::answer_running(&self.editor, &self.save_error);
+            // a job of the library runs: this save starts when it has ended
+            *self.save_error.lock() = None;
+            super::save_after_running(&self.editor, &self.save_error, |ed| start_sound_save(ed, None));
             return Ok(());
         }
         Player::of(&self.editor).stop();
@@ -600,29 +601,39 @@ pub fn start_sound_save(editor: &Arc<Editor>, only: Option<Vec<String>>) -> Resu
             let c = ctx.clone();
             let result = ctx
                 .exec
-                .io(move || -> Result<(usize, Vec<String>), String> {
+                .io(move || -> Result<(usize, Vec<String>, Vec<String>), String> {
                     let age = super::texsync::now();
-                    let (mut done, mut notes) = (0usize, Vec::new());
+                    // `kept`: the entries that could not be written - their edits stay
+                    let (mut done, mut notes, mut kept) = (0usize, Vec::new(), Vec::new());
                     for (i, (name, thm)) in edits.iter().enumerate() {
                         c.check().map_err(|_| "Stopped.".to_owned())?;
                         c.stage(format!("Saving {name}"));
                         c.progress(i, edits.len());
                         match save_sound(&dirs, name, thm, age) {
                             Ok(()) => done += 1,
-                            Err(e) => notes.push(e),
+                            Err(e) => {
+                                notes.push(e);
+                                kept.push(name.clone());
+                            }
                         }
                     }
-                    Ok((done, notes))
+                    Ok((done, notes, kept))
                 })
                 .await;
             saving.store(false, std::sync::atomic::Ordering::Release);
             LibraryLists::of(&ed).sounds_rev.bump();
             match result {
-                Ok((done, notes)) => {
+                Ok((done, notes, kept)) => {
                     for n in &notes {
                         ed.log.warn(n.clone());
                     }
-                    let dropped = if partial { SoundCmd::Drop { names: written } } else { SoundCmd::Reset };
+                    // what was written is unsaved no more; what could not be written stays an edit,
+                    // and `failed` is the save's answer for whoever waits for it
+                    let dropped = if partial || !kept.is_empty() {
+                        SoundCmd::Drop { names: written.into_iter().filter(|n| !kept.contains(n)).collect() }
+                    } else {
+                        SoundCmd::Reset
+                    };
                     let _ = store.send(dropped, Origin::Ui).await;
                     Ok(json!({ "written": done, "failed": notes }))
                 }
@@ -902,6 +913,10 @@ impl Document for SoundLibDoc {
     }
     fn dirty(&self) -> bool {
         self.store.is_dirty()
+    }
+    /// The pending edits are the editor's: `LibraryStores` reports, saves and drops them.
+    fn dirty_elsewhere(&self) -> bool {
+        true
     }
     fn padded(&self) -> bool {
         false

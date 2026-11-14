@@ -10,15 +10,83 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use gz_editor::{Editor, Origin};
+use gz_editor::{DirtyDoc, DirtySource, Editor, Origin, SettleFuture, SmolStr};
 use gz_fmt_xr::LightAnims;
 use gz_store::{Store, StoreOptions};
 use parking_lot::Mutex;
 
 use super::lanim::{LanimCmd, LanimState};
-use super::sounds::SoundEdits;
-use super::textures::TexEdits;
+use super::sounds::{SoundCmd, SoundEdits};
+use super::textures::{TexCmd, TexEdits};
 use crate::paths::EditorDirs;
+
+/// Marks [`LibraryDirty`] as registered.
+#[derive(Default)]
+struct DirtyListed(AtomicBool);
+
+/// The libraries' unsaved edits, as the editor's unsaved work: `library.set save=false` leaves
+/// one with no tab open, and the editor must not end over it either.
+struct LibraryDirty;
+
+/// The kinds and the names the three libraries go by.
+const LIBRARIES: [(&str, &str); 3] = [
+    ("texture_library", "Texture Library"),
+    ("sound_library", "Sound Library"),
+    ("light_animations", "Light Animations"),
+];
+
+impl DirtySource for LibraryDirty {
+    fn dirty(&self, editor: &Editor) -> Vec<DirtyDoc> {
+        let Some(stores) = editor.services.get::<LibraryStores>() else { return Vec::new() };
+        let dirty = [stores.tex.is_dirty(), stores.sound.is_dirty(), stores.lanim.is_dirty()];
+        LIBRARIES
+            .iter()
+            .zip(dirty)
+            .filter(|(_, d)| *d)
+            .map(|((kind, name), _)| DirtyDoc {
+                kind: SmolStr::new(kind),
+                name: (*name).to_owned(),
+                path: None,
+            })
+            .collect()
+    }
+
+    fn save<'a>(&'a self, editor: &'a Arc<Editor>) -> SettleFuture<'a> {
+        Box::pin(async move {
+            let Some(stores) = editor.services.get::<LibraryStores>() else { return Ok(()) };
+            if stores.tex.is_dirty() {
+                super::save_job(editor, |ed| super::textures::start_texture_save(ed, None, None))
+                    .await
+                    .map_err(|e| format!("Texture Library: {e}"))?;
+            }
+            if stores.sound.is_dirty() {
+                super::save_job(editor, |ed| super::sounds::start_sound_save(ed, None))
+                    .await
+                    .map_err(|e| format!("Sound Library: {e}"))?;
+            }
+            if stores.lanim.is_dirty() {
+                super::lanim::save_lanims(editor).await.map_err(|e| format!("Light Animations: {e}"))?;
+            }
+            Ok(())
+        })
+    }
+
+    fn discard<'a>(&'a self, editor: &'a Arc<Editor>) -> SettleFuture<'a> {
+        Box::pin(async move {
+            let Some(stores) = editor.services.get::<LibraryStores>() else { return Ok(()) };
+            if stores.tex.is_dirty() {
+                stores.tex.send(TexCmd::Reset, Origin::Mcp).await.map(|_| ()).map_err(|e| e.message)?;
+            }
+            if stores.sound.is_dirty() {
+                stores.sound.send(SoundCmd::Reset, Origin::Mcp).await.map(|_| ()).map_err(|e| e.message)?;
+            }
+            if stores.lanim.is_dirty() {
+                LibraryStores::reload_lanims(editor).await;
+            }
+            Ok(())
+        })
+    }
+}
 
 /// The pending edits of the libraries. An `Editor` service.
 pub struct LibraryStores {
@@ -36,6 +104,12 @@ pub struct LibraryStores {
 impl LibraryStores {
     #[must_use]
     pub fn of(editor: &Editor) -> Arc<LibraryStores> {
+        // the edits are unsaved work whether a tab shows them or not: listed, saved and dropped
+        // with every other document of the editor
+        let listed = editor.services.get_or_init(DirtyListed::default);
+        if !listed.0.swap(true, Ordering::SeqCst) {
+            editor.add_dirty_source(Arc::new(LibraryDirty));
+        }
         editor.services.get_or_init(|| LibraryStores {
             tex: Store::spawn("texture library", TexEdits::default(), &editor.exec, StoreOptions::default()),
             sound: Store::spawn(

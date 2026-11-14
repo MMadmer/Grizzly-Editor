@@ -216,15 +216,29 @@ async fn project_open(ed: Arc<Editor>, p: OpenParams, origin: Origin) -> Reply {
         return Ok(json!({ "note": "already open", "path": paths::wire(open.root()) }));
     }
     if ed.project_opt().is_some() && !p.save && !lets_go(p.discard, origin) && !ed.dirty_docs().is_empty() {
-        if p.from_launch && !ed.flags.headless && ProjectHooks::of(&ed).ask_before_launch(&ed, &folder) {
+        // the question is a person's: an editor without one (no window, -nodlg) refuses like any
+        // other open, and the unsaved work stays
+        if p.from_launch
+            && !ed.flags.headless
+            && !ed.flags.unattended
+            && ProjectHooks::of(&ed).ask_before_launch(&ed, &folder)
+        {
             return Ok(json!({ "asking": true, "path": paths::wire(&folder) }));
         }
         ed.refuse_unsaved(false)?;
     }
     if p.save && ed.project_opt().is_some() {
         ed.save_all().await?;
+        // what a save could not write is not dropped by the open that follows
+        let left = ed.dirty_docs();
+        if let Some(d) = left.first() {
+            return Err(refuse_with(
+                format!("{}: it is still unsaved", d.name),
+                Map::from_iter([("dirty".to_owned(), serde_json::to_value(&left).unwrap_or(Value::Null))]),
+            ));
+        }
     }
-    let discard = lets_go(p.discard, origin) || p.save;
+    let discard = lets_go(p.discard, origin);
     let opened = open(&ed, &folder, discard, false, p.scene.unwrap_or(true)).await?;
     Ok(json!({ "path": paths::wire(&opened.root), "id": opened.id, "file": paths::wire(&opened.file) }))
 }
@@ -620,9 +634,14 @@ async fn project_create(ed: Arc<Editor>, p: CreateParams, _origin: Origin) -> Re
             .await;
         match made {
             Ok(true) => {}
-            Ok(false) => return Err(refuse(format!("The folder cannot be created: {folder} (win32 0)."))),
+            Ok(false) => {
+                return Err(refuse(fsys::win32_text(&format!("The folder {folder} cannot be created"), 0)));
+            }
             Err(code) => {
-                return Err(refuse(format!("The folder cannot be created: {folder} (win32 {code}).")));
+                return Err(refuse(fsys::win32_text(
+                    &format!("The folder {folder} cannot be created"),
+                    code,
+                )));
             }
         }
     }

@@ -52,7 +52,7 @@ impl LibraryWriter {
     pub fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), String> {
         self.check(path)?;
         gz_editor::fsx::write_atomic(path, bytes)
-            .map_err(|e| format!("{} could not be written: {e}", path.display()))
+            .map_err(|e| format!("{} could not be written: {}", path.display(), gz_base::io_reason(&e)))
     }
 
     /// Makes a folder and its parents.
