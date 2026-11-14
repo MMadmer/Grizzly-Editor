@@ -35,7 +35,15 @@ list of widgets), and `crates/gz-ui/src/kitsheet.rs` (`-kitsheet` shows every ki
 5. **The two text-field wrappers** - `gz-ui-app`'s and `gz-ui-mod`'s `local_text_field` are both the kit's
    `hint_field` with one thing added (an audit name; the row's width). If the addition is one argument, the kit's
    `hint_field` takes it and both wrappers go; if they truly differ, they stay and you say why.
-6. `-kitsheet` shows every widget you add to the kit, in every state it has (`crates/gz-ui/src/kitsheet.rs`), and
+6. **One drop board** - `gz-ui-pda`'s `drop.rs` (`begin_drops`, `local_file_drop_zone`) is a second copy of the
+   kit's drop board (`crates/gz-ui/src/drop.rs`, `Zone`): with two boards a drop can be taken by one and not the
+   other. Screens & Music takes its drops through the kit's `Zone` (the Texture Library does since engineer E1:
+   `crates/gz-ui-previews/src/library/textures.rs`); `gz-ui-pda`'s copy goes. Inner zones are still asked first.
+7. **Busy marks drawn by hand** - `crates/gz-ui-release/src/submit.rs` (`wide_status(ui, Tone::Muted,
+   "Checking...")`, around line 994) and `publish.rs` ("Contacting GitHub...", around line 814) are busy lines of
+   cards drawn by hand: they call the kit's `card::card_busy` / `state::busy_line`, so `ui.audit` reports them as
+   `loading`. Look through the surface crates for any other hand-drawn spinner-and-text and do the same.
+8. `-kitsheet` shows every widget you add to the kit, in every state it has (`crates/gz-ui/src/kitsheet.rs`), and
    the kit's own tests (`crates/gz-ui/src/tests.rs`, `testkit.rs`) hold what can be held without a window (the tab
    strip's widths and overflow, the pick list's new behaviour).
 
@@ -44,8 +52,8 @@ Do NOT redesign anything: the surfaces look and behave as they do. This is the s
 ## Rules
 
 - Files that are yours: `crates/gz-ui/src/**` (the kit), every `crates/gz-ui-*/src/local.rs` and their callers in
-  the same crates, `tools/qa/test_world.py`, `test_pda.py`, `test_mod_publish.py` only where a check must follow a
-  widget's id. Nobody else edits code while you work; the architect edits documents only.
+  the same crates (`gz-ui-pda`'s `drop.rs` and its users, `gz-ui-release`'s windows), `tools/qa/test_world.py`,
+  `test_pda.py`, `test_screens.py`, `test_mod_publish.py` only where a check must follow a widget's id. Nobody else edits code while you work; the architect edits documents only.
 - No git command that changes anything (no add, commit, checkout, stash, reset, rm): the architect commits. Do
   not spawn sub-agents.
 - Every program runs under `python tools/rust/limited.py <seconds> ...`. Every cargo command goes through
@@ -74,7 +82,7 @@ Do NOT redesign anything: the surfaces look and behave as they do. This is the s
   `python tools/rust/limited.py 120 python tools/rust/check_words.py` prints no line of yours.
 - `bash tools/rust/cg.sh test -p gz-ui` and the tests of every crate you changed green.
 - `python tools/rust/limited.py 500 python tools/qa/run_all.py test_tour test_ui_shell test_world test_pda
-  test_characters test_mod_publish test_mod_catalog test_level_commands test_scene_tools` green (a suite that fails
+  test_screens test_characters test_mod_publish test_mod_catalog test_level_commands test_scene_tools` green (a suite that fails
   on a stall alone beside the others is run again alone by the runner; that is not yours).
 - Write `docs/plan/reports/E3.md`: what moved into the kit, what was removed, what stays local and why (the final
   table), what the before / after pictures show, what you did NOT prove. Answer with a summary of it.
