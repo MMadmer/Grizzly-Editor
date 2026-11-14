@@ -36,8 +36,8 @@ The goals, in the author's order:
    because somebody built it again (section 2).
 3. What the build makes can be read by an agent as text (section 3.6).
 4. Where it comes cheap: smaller levels, a better picture, a cheaper frame.
-5. An architecture of levels that can grow into pieces of a level made by modules, sub-levels and streaming
-   (section 8) - prepared here, built after.
+5. An architecture of levels: pieces of a level made by its author or by modules, streamed by distance
+   (section 8) - built in this same run.
 
 The game's own obligations bound all of it and nothing else does: saves stay compatible with Dead Air, Dead Air's
 mods keep working, the game keeps reading the level files it reads today. How a level is built is the editor's
@@ -86,7 +86,7 @@ multiply-add, no fast-math, one order of operations in every SIMD lane), and the
    adapter is there and answers a self-check like the CPU does; anything the GPU fails at is lit on the CPU and
    the build goes on - a build never fails because of a graphics card.
 4. **The game's formats stay**: `level`, `level.geom`, `level.geomx`, `level.cform`, `level.ai`, the lightmap
-   pages (1024 x 1024 DXT5 pairs), `level.details`. Nothing in the game's repository changes in this work.
+   pages (1024 x 1024 DXT5 pairs), `level.details`. The game gains one thing, additively: pieces (section 8).
 5. **Deterministic, measured, stoppable**: every phase gives the same result on any number of threads; every
    long loop checks the job's Stop per item or chunk; the tools of section 6 say what each stage costs.
 
@@ -210,8 +210,7 @@ World Partition builders and Derived Data Cache; IXRay's `xrLC/Light` (Embree, C
   of section 7 are missed, added by the architect in W2 and nowhere else; conservative texel rasterisation,
   leak-fixing rays, seam stitching and bicubic sampling are a quality project (the last needs the game's
   shader); a vertex-cache and overdraw pass on the visuals and a new lightmap texture format change what the
-  game reads or how it draws and belong with section 8's engine work; re-lighting only what changed under a
-  content hash is the natural next step once a bake is pieces (section 8).
+  game reads or how it draws (section 8.6 says what was decided of each).
 
 ## 4. The work
 
@@ -470,24 +469,134 @@ target is cut and read, not waited for.
 - `build.report` and `level.inspect` there, documented, tested.
 - The contracts say what is; this plan is gone; nothing half done.
 
-## 8. After this work: pieces of a level, sub-levels, streaming
+## 8. Stage 2 and 3: pieces of a level, streaming, and baking what the game reads
 
-Not built here; prepared here, so that it is a project of its own and not a rewrite.
+The author's word (2026-11-15): everything in this one run, to the end. The engine's side was mapped first
+(the game's repository, read only): one loader source (`src/Layers/xrRender_R2/r2_loader.cpp`) is compiled into
+all three renderers that ship (R4 DirectX 11 - the default -, R5 DirectX 12, R6 Vulkan); a visual names its
+shader, its buffers and its children by index into level-wide tables; the static collision and the AI map
+cannot change after a level has loaded (one collision model whose triangle indices live in query results;
+saves hold `level_vertex_id`s); the weather's far plane is 1000 m on most weathers and down to 150-200 m in fog.
 
-- **A piece of a level** is what a module adds to a map it does not own - a lit building in Cordon - as a
-  compiled mini-level: its own visuals with lightmaps, collision, sectors and portals for its interiors, AI
-  nodes on the host's grid. The game's contract already names the hook (`XMS_ARCHITECTURE.md` 8.2: "a patch
-  compiler bakes its own lightmap and appends entries to the shader table"); today a module's overlay
-  visuals are lit dynamically only. This work makes the piece buildable: the baker lights any sample set in
-  any scene, so a piece is lit with the host's collision as shadow casters and written with pages of its own;
-  structure never depends on light, so a piece and its host are built apart and still fit.
-- **Sub-levels** are pieces the map's own author cuts it into: built apart and in parallel, each with its
-  `build.report`, a change in one never rebuilding another.
-- **Streaming** is the game loading pieces by distance. X-Ray levels (1-2 km, all geometry in memory) do not
-  need it today; it becomes worth its engine work when maps outgrow memory or load times.
+### 8.1 What a piece is
 
-What the game's side has to gain for the first two (a paired project in the game's repository, held to its
-save contract): loading a piece's visual tree and lightmap pages beside the host's and appending its shaders,
-its sectors and portals stitched to a host sector, its details and static lights. The editor's side after this
-work: a piece as a build target (`level.build piece=`), the host's collision read as occluders, the piece's
-files written under the module's `levels\<level>\pieces\<name>`.
+A **piece** is a compiled part of a level's static picture that the game loads beside the level: its own
+visuals, vertex and index buffers, shader table and lightmap pages. It is made by the level's own author (the
+level cut into streaming cells) or by a module for a level it does not own (a lit building in Cordon).
+
+- **Only the picture is a piece.** Collision, the AI map, the game graph and the spawn stay as they are and
+  where they are - whole in a level's own files, or in a module's `overlay.xcform`, `overlay.aimap` and
+  `.xspawn` - composed once when the level loads. Nothing a save refers to can stream, so nothing does.
+- **A piece hangs on the level's sectors.** It brings no sectors or portals: each of its root visuals is a
+  child of a sector root of the level - a sector id the piece names (a level's own cells), or the sector
+  found at the visual's centre (a module's piece). The level's sector ids never move (`level.ltx`'s
+  `sub_level_map` keys on them).
+- **Files**, in `<module>\levels\<level>\pieces\<name>\`, read physically per module like
+  `overlay_visuals.ltx`, under the module's and the modes' gates:
+
+```text
+piece.ltx      the manifest (text):
+               [piece] version = 1
+                       box = minx, miny, minz, maxx, maxy, maxz
+                       sector = auto | <sector id>      one sector for every root, or by each root
+                       stream = true | false            false: loaded with the level and kept
+                       mode = <id>                      optional extra mode gate
+piece          chunks as the level file has them: 1 header, 2 shader table, 3 visuals; and
+               32 roots: u32 count, then per root u32 visual index, u16 sector (0xFFFF: the sector at
+               the visual's centre), u16 reserved. Children are indices into the piece's own visuals.
+piece.geom     chunks 9 vertex buffers, 10 index buffers, 11 sliding windows, as level.geom
+piece.geomx    the fast (position only) buffers, as level.geomx
+<name>.dds     a texture the piece's shader table names and that lies in the piece's folder is the
+               piece's own (its lightmap pages `lmap#N_1`, `lmap#N_2`): it is loaded from there, never
+               from the level's folder, under a name no other piece or level can have
+```
+
+- **What the game states** (the engine's abilities in its version resources, which the editor reads):
+  `level-pieces` - it loads pieces; `lightmaps-second-page` - of a lightmap page it reads the second texture
+  only (true of all three renderers: the deferred static blender binds `s_hemi` from the third texture name
+  and nothing from the second). The editor builds pieces only for a game that states the first and bakes
+  section 8.5's way only for one that states the second.
+
+### 8.2 E1 - the engine (the game's repository; starts now, beside stage 1)
+
+**Goal.** The game loads pieces with the level, streams them by distance, and frees them with the level, in
+all three renderers, with the base level's frame cost unchanged when no piece is there.
+
+1. *A piece's own tables.* While a piece's visuals load, `getShader`, `getVB`, `getVB_Format`, `getIB`,
+   `getSWI` and `getVisual` answer from that piece's tables (a `thread_local` "piece being loaded", so a
+   piece can be read on a task while the main thread loads a dynamic model). A piece's visuals never enter the
+   level's `Visuals`, its shaders never the level's table.
+2. *The piece's textures*: a name of the piece's shader table whose file lies in the piece's folder is
+   registered with the texture manager under a unique name that keeps its first characters (the deferred
+   blender tells a lightmap by the name starting `lmap`) and resolves to that physical file; freed with the
+   piece.
+3. *Attach and detach* as `AttachOverlayVisual` does it (the sector root's children, the root box grown only
+   when the piece sticks out), at the frame's safe point (the top of `CRender::Calculate`, where the
+   vegetation switches already move nodes), telling every system that keeps the visual tree - the clusters,
+   the GPU trees of R5 / R6, the ray tracing scene, the temporal history - the way `da_veg_apply_switch` does.
+4. *Streaming.* A manager checked every few frames at the safe point: a piece loads when the camera is
+   nearer than the far plane plus the piece's radius plus a margin, and leaves at a quarter more than that
+   after at least five seconds; reading the files and creating the buffers happen on a task, the shaders,
+   textures and visuals at the safe point, at most one piece a frame; the pieces in range when the level loads
+   are loaded inside `level_Load`; `stream = false` and the console's `r__pieces_stream 0` load all with the
+   level. `level_Unload` waits for a load in flight and frees every piece before the level's own tables.
+5. *The abilities* of 8.1 in the version resources (`src/xrCore/ProductVersion.h`).
+6. *The documents*: `docs/dead-air/XMS_ARCHITECTURE.md` (8.2's "honest path" becomes what is), `MODDING.md`,
+   `TEST_MATRIX.md`. No word of any tool a module is made with.
+7. *The proof*: `tools/qa/pieces/` - a script that cuts the visuals inside a box out of a compiled level of
+   the game into a piece of a test module (its buffers, shader table and lightmap pages) and hides the
+   originals with a cut box; a runner that starts the game on that level with and without the module and
+   compares the two frames (`Compare-Frames.py`), reads the log for the piece's lines (loaded, attached,
+   unloaded, counts) and for a clean exit; streaming proven by moving the camera past the piece's distance
+   and back by console commands; a save made with the module on loads with it off and the other way round.
+   Each launch at most 300 s, six launches in all.
+
+**Bounds.** The save contract and the XMS contract are untouched (pieces are a new, versioned, additive
+format; `overlay_visuals.ltx`, `.xcform` and `XAM1` behave as before). All three renderers build. No per-frame
+cost for a level without pieces beyond one empty check.
+
+### 8.3 A5 - the editor (after stage 1 is merged)
+
+1. *A module's piece of a level the game has*: a step of the level build, `piece` - needed on a stock level
+   whose scene holds authored static objects, for a game that states `level-pieces`. The build project is
+   made of the authored objects alone; every other static object of the scene goes in as occluders - faces
+   the ray model holds (with their textures' alpha) and nothing else reads. The compiler in piece mode runs
+   the structure, the light and the atlas, and writes `piece`, `piece.geom`, `piece.geomx`, the pages and
+   `piece.ltx` into `<project>\levels\<level>\pieces\<module id>\`, and the authored objects' collision into
+   `overlay.xcform` (its cut list kept). Its scratch (`build.prj`) lives under the project's `temp\`.
+2. *A level's own streaming cells*: Level Settings > Streaming Cells (off, or a cell size in metres;
+   `scene.set` key `build.cell_size`). With cells on, the light step writes the level as its base (sectors,
+   portals, lights, every visual larger than a cell) and one piece a cell for the rest, each with pages of
+   its own; visuals never merge across a cell's border. Off: the level as today.
+3. `level.inspect part=pieces`, `build.report`'s pieces, the status of the new step, Play on a stock level
+   shipping the piece, the documents.
+
+### 8.4 Baking what the game reads (stage 3, the architect)
+
+For a game that states `lightmaps-second-page`: lightmap samples skip the static lights (`LP_DONT_RGB`), the
+first texture of every page is written as a 4 x 4 placeholder, the second as today (the sun in rgb, the
+hemisphere in alpha). Half of a level's lightmap bytes go, and so do the static lights' rays of every
+lightmap texel. Vertex light, the static models' light and the details keep every channel (they are cheap and
+their consumers were not audited). A game that does not state it gets both textures, as today.
+
+### 8.5 Proofs of stage 2 and 3
+
+- The engine's own runner (8.2.7) on a fixture piece.
+- End to end: `test_play_game` builds a module's piece over a level of the game (two authored objects),
+  plays the module in the real game from Play's root, and reads the game's log for the piece attached with
+  its lightmap pages; and builds a small level with cells and plays it.
+- `test_level_compile`: a piece's structure is the same on both lighters; the cells' visuals together are
+  the level's visuals.
+- Saves: the engine's runner (a save across the module on and off).
+
+### 8.6 Decided, not deferred
+
+- **Adaptive sky sampling** - built only if Cordon at standard quality on `auto` misses five minutes after
+  everything else; it trades light through small openings for rays.
+- **Sectors and portals inside a piece** - not built: the engine's sector graph is per render context and
+  static after load, and `level.ltx` keys on sector ids; a piece's interior draws correctly without them and
+  only loses portal culling inside itself.
+- **Streaming of collision, AI, details, HOM, sound geometry** - not built: one model each, composed at
+  load; saves and live queries refer to them.
+- **Texel quality work, bicubic sampling, a new lightmap format, another vertex-cache pass** - not built: no
+  defect to fix was measured, and each changes what every level looks like or how every level draws.
