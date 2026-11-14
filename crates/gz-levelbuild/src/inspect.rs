@@ -37,7 +37,6 @@ const LEVEL_MARKERS: [&str; 10] = [
 ];
 
 // Until `cmd::register` calls it, only the tests do.
-#[allow(dead_code)]
 pub(crate) fn register(reg: &mut Registry) {
     reg.cmd(
         Spec::read(

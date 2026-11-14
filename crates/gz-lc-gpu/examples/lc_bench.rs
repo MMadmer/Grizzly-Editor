@@ -146,6 +146,10 @@ fn compile(a: &Args, prj: &BuildProject, opts: &Options, lighter: &dyn Lighter) 
                     std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
                 }
             }
+            for line in log.lines.iter().filter(|l| l.contains("lightmap pages")) {
+                say!("pages {}", line.trim_start_matches([' ', '|']));
+            }
+            say!("structure {:016x}", out.structure);
             say!("total {seconds:9.3} s  ({} invalid faces)", out.invalid_faces);
             Ok(())
         }

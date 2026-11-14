@@ -90,6 +90,7 @@ pub fn register(reg: &mut Registry) {
         .example("folder=D:/Levels/l01_escape nosun=true"),
         |ed, p: CompileParams, _o| async move { compile_folder(ed, p).await },
     );
+    crate::inspect::register(reg);
 }
 
 /// A build or a compile is running.
