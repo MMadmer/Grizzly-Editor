@@ -101,10 +101,11 @@ pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<ser
                 Progress::Progress { done, total } => worker.progress(done, total),
             };
             let ctl = Ctl::new(&ctx2.cancel, &report);
+            let lighter = gz_lc_light::CpuLighter::default();
             let mut lc_log = Log::with_echo(Box::new(echo));
             match part {
-                Part::Level => gz_lc::compile(&input, &opts2, &ctl, &mut lc_log),
-                Part::Details => gz_lc::compile_details(&input, &ctl, &mut lc_log),
+                Part::Level => gz_lc::compile(&input, &opts2, &lighter, &ctl, &mut lc_log),
+                Part::Details => gz_lc::compile_details(&input, &lighter, &ctl, &mut lc_log),
             }
         });
         // a silent phase still reaches the job and the log: what is pending is passed on at the

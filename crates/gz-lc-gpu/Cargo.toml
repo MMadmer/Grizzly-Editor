@@ -1,0 +1,24 @@
+[package]
+name = "gz-lc-gpu"
+description = "The level compiler's light on a graphics card: sample points lit by a compute shader over a tree of its own, on wgpu; and the choice of a build's lighter."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-lc-light.workspace = true
+
+[dev-dependencies]
+# the bench (`examples/lc_bench.rs`) runs the compiler on a level folder
+gz-lc.workspace = true
+gz-fmt-level.workspace = true
+gz-task.workspace = true
+glam.workspace = true
+rayon.workspace = true
+sha2.workspace = true
+hex.workspace = true

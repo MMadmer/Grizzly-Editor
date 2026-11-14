@@ -6,7 +6,7 @@ use gz_fmt_level::{
     MuModel, MuReference, Portal, XRCL_CURRENT_VERSION,
 };
 use gz_fmt_xr::ShaderXrlc;
-use gz_lc_light::{Ctl, Shaders, TextureUse, default_shader, prepare_texture};
+use gz_lc_light::{CpuLighter, Ctl, Shaders, TextureUse, default_shader, prepare_texture};
 
 use crate::sphere::MsvcRand;
 use crate::{Log, Options, compile_project};
@@ -209,7 +209,17 @@ fn compile(threads: usize) -> Vec<(String, Vec<u8>)> {
     let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
     pool.install(|| {
         let mut log = Log::default();
-        compile_project(&prj, shaders, textures, &Options::default(), &Ctl::quiet(), &mut log).unwrap().files
+        compile_project(
+            &prj,
+            shaders,
+            textures,
+            &Options::default(),
+            &CpuLighter::default(),
+            &Ctl::quiet(),
+            &mut log,
+        )
+        .unwrap()
+        .files
     })
 }
 
@@ -397,7 +407,8 @@ fn stopped_compile(
     };
     let ctl = Ctl::new(&cancel, &report);
     let mut log = Log::with_echo(Box::new(echo));
-    let out = compile_project(prj, shaders, textures, &Options::default(), &ctl, &mut log);
+    let out =
+        compile_project(prj, shaders, textures, &Options::default(), &CpuLighter::default(), &ctl, &mut log);
     let after = pulled.lock().unwrap().map(|t| t.elapsed());
     (out, log.lines, after)
 }

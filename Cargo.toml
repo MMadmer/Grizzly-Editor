@@ -68,6 +68,7 @@ gz-export-level = { path = "crates/gz-export-level" }
 gz-levelbuild = { path = "crates/gz-levelbuild" }
 gz-lc-light = { path = "crates/gz-lc-light" }
 gz-lc = { path = "crates/gz-lc" }
+gz-lc-gpu = { path = "crates/gz-lc-gpu" }
 gz-editor = { path = "crates/gz-editor" }
 # layer 4
 gz-mcp = { path = "crates/gz-mcp" }

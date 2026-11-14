@@ -4,7 +4,8 @@
 
 use gz_fmt_level::{BuildProject, LevelDetails};
 use gz_lc_light::{
-    BuildTexture, Ctl, DetailScene, LightSet, RcastForm, Shaders, light_details, post_process_materials,
+    BuildTexture, Ctl, DetailScene, LightSet, Lighter, RcastForm, Shaders, light_details,
+    post_process_materials,
 };
 
 use crate::{Error, Log, Result};
@@ -18,9 +19,12 @@ pub fn compile_details_in_memory(
     build_details: &[u8],
     build_cform: &[u8],
     build_lights: &[u8],
+    lighter: &dyn Lighter,
     ctl: &Ctl<'_>,
     log: &mut Log,
 ) -> Result<Vec<u8>> {
+    // the slots still light through their own rays: the baker takes them over
+    let _ = lighter;
     let damaged = |name: &'static str| move |e: String| Error::Invalid(format!("{name} is damaged: {e}"));
     crate::whole_chunks("build.cform", build_cform)?;
     crate::whole_chunks("build.lights", build_lights)?;

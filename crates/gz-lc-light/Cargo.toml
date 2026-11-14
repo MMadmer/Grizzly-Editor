@@ -17,6 +17,7 @@ gz-fmt-level.workspace = true
 gz-fmt-tex.workspace = true
 gz-fmt-xr.workspace = true
 glam.workspace = true
+bytemuck.workspace = true
 rayon.workspace = true
 smallvec.workspace = true
 smol_str.workspace = true

@@ -12,7 +12,7 @@ use crate::light::LightSet;
 use crate::lightmap::{Lightmap, LightmapPage, merge_lightmaps};
 use crate::mesh::{FaceId, Mesh, Smoothing};
 use crate::mu::{MuEnv, MuModel, MuReference, cache_opacity, light_mu};
-use crate::ray::{RapidCollector, RayFace, RayModel, RcFace, RcastForm, casts};
+use crate::ray::{RayModel, RcastForm};
 use crate::vertex::{apply_vertex_light, light_vertices};
 use crate::{Ctl, LcError, Result};
 
@@ -162,61 +162,15 @@ impl LcGlobalData {
     /// [`Self::build_rapid`] stopped by `ctl` between faces.
     pub fn build_rapid_with(&mut self, bounds: &Aabb, ctl: &Ctl<'_>) -> Result<RcastForm> {
         self.ray = None;
-        let faces = self.mesh.faces().to_vec();
-        for &f in &faces {
-            if let Some(face) = self.mesh.face_mut(f) {
-                face.flags.processed = false;
-            }
-        }
-        let mut cl = RapidCollector::new(bounds, self.mesh.vertices().len(), faces.len());
-        let mut adjacent: Vec<FaceId> = Vec::with_capacity(36);
-        for (n, &f) in faces.iter().enumerate() {
-            if n.is_multiple_of(4096) {
-                ctl.check()?;
-            }
-            let Some(face) = self.mesh.face(f) else { continue };
-            if !casts(shader_of(face.material, &self.shaders, &self.materials)) {
-                continue;
-            }
-            adjacent.clear();
-            for v in face.v {
-                if let Some(vx) = self.mesh.vertex(v) {
-                    adjacent.extend_from_slice(&vx.adjacents);
-                }
-            }
-            adjacent.sort_unstable();
-            adjacent.dedup();
-            let already = adjacent
-                .iter()
-                .any(|&t| t != f && self.mesh.face(t).is_some_and(|x| x.flags.processed && face.is_equal(x)));
-            if already {
-                continue;
-            }
-            let Some(p) = self.mesh.positions(f) else { continue };
-            let tc0 = face.tc0();
-            let texture =
-                self.materials.get(usize::from(face.material)).map_or(u32::MAX, |m| u32::from(m.surface));
-            let ray =
-                RayFace { face: Some(f), cast_shadow: true, opaque: face.flags.opaque, texture, uv: tc0 };
-            let rc = RcFace {
-                material: face.material,
-                material_game: u32::from(face.material_game),
-                t: tc0,
-                reserved: 0,
-            };
-            let sm = face.sm_group;
-            cl.add(p, ray, rc, sm);
-            if let Some(face) = self.mesh.face_mut(f) {
-                face.flags.processed = true;
-            }
-        }
-        for r in &self.mu_refs {
-            if let Some(m) = self.mu_models.get_mut(r.model as usize) {
-                m.export_cform_rcast(&mut cl, &r.xform, &self.shaders, &self.materials);
-            }
-        }
-        ctl.check()?;
-        let (model, form) = cl.finish(*bounds)?;
+        let (model, form) = crate::ray::build_ray_model(
+            &mut self.mesh,
+            &mut self.mu_models,
+            &self.mu_refs,
+            &self.shaders,
+            &self.materials,
+            bounds,
+            ctl,
+        )?;
         self.ray = Some(model);
         Ok(form)
     }

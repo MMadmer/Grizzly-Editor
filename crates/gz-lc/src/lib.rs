@@ -44,7 +44,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use gz_fmt_level::BuildProject;
-use gz_lc_light::{Ctl, LcError, Shaders, Smoothing, TextureUse};
+use gz_lc_light::{Ctl, LcError, LcGlobalData, LightChoice, Lighter, Shaders, Smoothing, TextureUse};
 
 pub use details::compile_details_in_memory;
 pub use load::{Extra, Sources};
@@ -96,6 +96,9 @@ pub struct Options {
     /// `-threads=<n>`: the compile on a pool of its own of `n` threads instead of the caller's.
     /// The result does not depend on the number of threads: a test compiles on one to prove it.
     pub threads: Option<usize>,
+    /// `-light=auto|gpu|cpu|off`: where the light is baked. The compiler lights with the lighter it
+    /// is given; this is the word its caller makes that lighter from.
+    pub light: LightChoice,
 }
 
 impl Options {
@@ -114,6 +117,14 @@ impl Options {
                 "no_invalidefaces" => o.no_invalid_faces = true,
                 "att" => o.linear = true,
                 "silent" | "o" | "keep_temp_files" => {}
+                t if t.starts_with("light=") => match LightChoice::parse(&t["light=".len()..]) {
+                    Some(c) => o.light = c,
+                    None => {
+                        return Err(Error::Refused(format!(
+                            "{a}: the light is baked on auto, gpu, cpu or off."
+                        )));
+                    }
+                },
                 t if t.starts_with("threads=") => match t["threads=".len()..].parse::<usize>() {
                     Ok(n) if n > 0 => o.threads = Some(n),
                     _ => {
@@ -278,17 +289,50 @@ pub const READING: &str = "Reading the build project";
 pub const DETAIL_PHASES: [&str; 2] =
     ["Reading the level for the detail light", "Lighting the detail objects"];
 
-/// The whole compile in memory: a read `build.prj` with the given shaders and prepared textures
-/// loaded into the compiler's model, then every phase. `log` follows it phase by phase; `ctl`
-/// stops it within a moment in any phase (every long loop checks it per item or per chunk).
-pub fn compile_project(
+/// The scene the light is traced in, for a measurement: a read `build.prj` taken through the
+/// phases up to the ray model (the load, the optimisation, the tessellation, the normals, the
+/// collision, the tangent basis), with [`LcGlobalData::ray`] built. Writes nothing.
+pub fn light_scene(
     prj: &BuildProject,
     shaders: Shaders,
     textures: Vec<gz_lc_light::BuildTexture>,
     opts: &Options,
     ctl: &Ctl<'_>,
+) -> Result<LcGlobalData> {
+    let mut log = Log::default();
+    let (mut g, extra) = load::load(prj, shaders, textures, !opts.nosmg)?;
+    g.nosun = opts.nosun;
+    g.linear = opts.linear;
+    let smoothing = if opts.nosmg { Smoothing::Angle } else { Smoothing::EdgeFlags };
+    if !opts.no_optimize {
+        geom::pre_optimize(&mut g, &extra.scene_bb, &mut log, opts.no_invalid_faces, ctl)?;
+    }
+    geom::correct_tjunctions(&g, &mut log, ctl)?;
+    geom::adaptive_ht(&mut g, &extra.scene_bb, &mut log, ctl)?;
+    g.calc_normals(smoothing, ctl)?;
+    g.mu_calc_normals(smoothing, ctl)?;
+    cform::build_cform(&mut g, &mut log, ctl)?;
+    geom::tangent_basis(&mut g, &mut log, ctl)?;
+    g.light_prepare();
+    g.build_rapid_with(&extra.scene_bb, ctl)?;
+    Ok(g)
+}
+
+/// The whole compile in memory: a read `build.prj` with the given shaders and prepared textures
+/// loaded into the compiler's model, then every phase. `log` follows it phase by phase; `ctl`
+/// stops it within a moment in any phase (every long loop checks it per item or per chunk).
+/// `lighter` is what bakes the light.
+pub fn compile_project(
+    prj: &BuildProject,
+    shaders: Shaders,
+    textures: Vec<gz_lc_light::BuildTexture>,
+    opts: &Options,
+    lighter: &dyn Lighter,
+    ctl: &Ctl<'_>,
     log: &mut Log,
 ) -> Result<Output> {
+    // the phases still light through `light_point` themselves: the baker takes them over one by one
+    let _ = lighter;
     log.phase(PHASES[0]);
     let (mut g, mut extra) = load::load(prj, shaders, textures, !opts.nosmg)?;
     g.nosun = opts.nosun;
@@ -567,7 +611,13 @@ fn write_all(dir: &Path, out: &Output, pages: bool, report: &mut Report) -> Resu
 
 /// A level folder's `build.prj` compiled, the files written beside it, `build.err` (the faces the
 /// compiler refused, which the viewport draws) among them.
-pub fn compile(input: &Input, opts: &Options, ctl: &Ctl<'_>, log: &mut Log) -> Result<Report> {
+pub fn compile(
+    input: &Input,
+    opts: &Options,
+    lighter: &dyn Lighter,
+    ctl: &Ctl<'_>,
+    log: &mut Log,
+) -> Result<Report> {
     if let Some(n) = opts.threads {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(n)
@@ -575,7 +625,7 @@ pub fn compile(input: &Input, opts: &Options, ctl: &Ctl<'_>, log: &mut Log) -> R
             .map_err(|e| Error::Invalid(format!("The compiler's {n} threads did not start: {e}")))?;
         let opts = Options { threads: None, ..opts.clone() };
         log.msg(format!("* {n} worker threads of its own (-threads={n})"));
-        return pool.install(|| compile(input, &opts, ctl, log));
+        return pool.install(|| compile(input, &opts, lighter, ctl, log));
     }
     let t = Instant::now();
     log.phase(READING);
@@ -587,7 +637,7 @@ pub fn compile(input: &Input, opts: &Options, ctl: &Ctl<'_>, log: &mut Log) -> R
     log.status("Processing the textures".into());
     let textures = input.sources.textures(&prj.textures, TextureUse::Level { radiosity: false })?;
     ctl.check().map_err(adapt)?;
-    let out = match compile_project(&prj, shaders, textures, opts, ctl, log) {
+    let out = match compile_project(&prj, shaders, textures, opts, lighter, ctl, log) {
         Ok(out) => out,
         Err(e) if e.cancelled() => {
             clean_stage(&input.level);
@@ -615,7 +665,7 @@ pub fn compile(input: &Input, opts: &Options, ctl: &Ctl<'_>, log: &mut Log) -> R
 
 /// The detail slots of a level folder lit: `build.details` into `level.details` from `build.cform`,
 /// `build.lights` and `build.prj` of the level folder.
-pub fn compile_details(input: &Input, ctl: &Ctl<'_>, log: &mut Log) -> Result<Report> {
+pub fn compile_details(input: &Input, lighter: &dyn Lighter, ctl: &Ctl<'_>, log: &mut Log) -> Result<Report> {
     let t = Instant::now();
     log.phase(DETAIL_PHASES[0]);
     let dir = &input.level;
@@ -627,8 +677,9 @@ pub fn compile_details(input: &Input, ctl: &Ctl<'_>, log: &mut Log) -> Result<Re
     let lights = read(&dir.join("build.lights"))?;
     ctl.check().map_err(adapt)?;
     log.phase(DETAIL_PHASES[1]);
-    let bytes = compile_details_in_memory(&prj, shaders, textures, &details, &cform, &lights, ctl, log)
-        .inspect_err(|_| clean_stage(dir))?;
+    let bytes =
+        compile_details_in_memory(&prj, shaders, textures, &details, &cform, &lights, lighter, ctl, log)
+            .inspect_err(|_| clean_stage(dir))?;
     ctl.check().map_err(adapt)?;
     let mut out = Output::default();
     out.put("level.details", bytes);

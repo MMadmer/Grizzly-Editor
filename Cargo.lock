@@ -1695,9 +1695,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "gz-lc-gpu"
+version = "0.7.0"
+dependencies = [
+ "glam",
+ "gz-fmt-level",
+ "gz-lc",
+ "gz-lc-light",
+ "gz-task",
+ "hex",
+ "rayon",
+ "sha2",
+]
+
+[[package]]
 name = "gz-lc-light"
 version = "0.7.0"
 dependencies = [
+ "bytemuck",
  "glam",
  "gz-chunk",
  "gz-fmt-level",

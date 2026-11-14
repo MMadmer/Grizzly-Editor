@@ -26,8 +26,9 @@ use gz_fmt_level::{Aabb, Bvh, CollectorPacked, Ray, RayHit, ray_triangle};
 use crate::data::{BuildMaterial, BuildTexture, ShaderXrlc, Shaders, shader_of};
 use crate::light::LightSet;
 use crate::math::{color_get_a, i_floor};
-use crate::mesh::FaceId;
-use crate::{LcError, Result};
+use crate::mesh::{FaceId, Mesh};
+use crate::mu::{MuModel, MuReference};
+use crate::{Ctl, LcError, Result};
 
 /// The collision form's current version.
 pub const CFORM_VERSION: u32 = 4;
@@ -100,6 +101,30 @@ impl RayModel {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.tris.is_empty()
+    }
+
+    /// Every triangle's corners, by index: what another lighter builds its own tree from.
+    #[must_use]
+    pub fn tris(&self) -> &[[Vec3; 3]] {
+        &self.tris
+    }
+
+    /// What a ray needs of every triangle, by index.
+    #[must_use]
+    pub fn faces(&self) -> &[RayFace] {
+        &self.faces
+    }
+
+    /// How a transparent texel lets light through.
+    #[must_use]
+    pub fn opacity(&self) -> Opacity {
+        self.opacity
+    }
+
+    /// Whether rays see only the faces turned towards them.
+    #[must_use]
+    pub fn cull(&self) -> bool {
+        self.cull
     }
 
     #[must_use]
@@ -404,6 +429,73 @@ impl RapidCollector {
         let model = RayModel::new(&verts, &tris, self.faces, Opacity::Squared, false)?;
         Ok((model, RcastForm { bounds, verts, tris, dummy, faces: self.rc_faces }))
     }
+}
+
+/// The ray model of a build: the shadow-casting faces of the level (one of each set of equal
+/// faces) and of every static model's reference, with the soup as `build.cform` holds it.
+/// `bounds` is the box of the build's vertices; `ctl` stops it between faces.
+pub fn build_ray_model(
+    mesh: &mut Mesh,
+    mu_models: &mut [MuModel],
+    mu_refs: &[MuReference],
+    shaders: &Shaders,
+    materials: &[BuildMaterial],
+    bounds: &Aabb,
+    ctl: &Ctl<'_>,
+) -> Result<(RayModel, RcastForm)> {
+    let faces = mesh.faces().to_vec();
+    for &f in &faces {
+        if let Some(face) = mesh.face_mut(f) {
+            face.flags.processed = false;
+        }
+    }
+    let mut cl = RapidCollector::new(bounds, mesh.vertices().len(), faces.len());
+    let mut adjacent: Vec<FaceId> = Vec::with_capacity(36);
+    for (n, &f) in faces.iter().enumerate() {
+        if n.is_multiple_of(4096) {
+            ctl.check()?;
+        }
+        let Some(face) = mesh.face(f) else { continue };
+        if !casts(shader_of(face.material, shaders, materials)) {
+            continue;
+        }
+        adjacent.clear();
+        for v in face.v {
+            if let Some(vx) = mesh.vertex(v) {
+                adjacent.extend_from_slice(&vx.adjacents);
+            }
+        }
+        adjacent.sort_unstable();
+        adjacent.dedup();
+        let already = adjacent
+            .iter()
+            .any(|&t| t != f && mesh.face(t).is_some_and(|x| x.flags.processed && face.is_equal(x)));
+        if already {
+            continue;
+        }
+        let Some(p) = mesh.positions(f) else { continue };
+        let tc0 = face.tc0();
+        let texture = materials.get(usize::from(face.material)).map_or(u32::MAX, |m| u32::from(m.surface));
+        let ray = RayFace { face: Some(f), cast_shadow: true, opaque: face.flags.opaque, texture, uv: tc0 };
+        let rc = RcFace {
+            material: face.material,
+            material_game: u32::from(face.material_game),
+            t: tc0,
+            reserved: 0,
+        };
+        let sm = face.sm_group;
+        cl.add(p, ray, rc, sm);
+        if let Some(face) = mesh.face_mut(f) {
+            face.flags.processed = true;
+        }
+    }
+    for r in mu_refs {
+        if let Some(m) = mu_models.get_mut(r.model as usize) {
+            m.export_cform_rcast(&mut cl, &r.xform, shaders, materials);
+        }
+    }
+    ctl.check()?;
+    cl.finish(*bounds)
 }
 
 #[cfg(test)]

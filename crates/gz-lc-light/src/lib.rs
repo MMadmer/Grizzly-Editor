@@ -26,6 +26,9 @@
 //!   `build.cform`; [`RapidCollector`] - the collector of the collision soup.
 //!
 //! **The light**
+//! - [`Lighter`] / [`LitScene`] / [`Sample`] - the baker: every light value of a build is sample
+//!   points lit in a scene, by [`CpuLighter`] (the reference) or by another lighter behind
+//!   [`AutoLighter`].
 //! - [`light_point`] - the light a point gets.
 //! - [`Deflector::light`], [`Deflectors::light_all`] - the lightmaps of the deflectors.
 //! - [`merge_lightmaps`] - the deflectors into pages.
@@ -34,6 +37,7 @@
 //! - [`light_mu`] - the MU models and references.
 //! - [`light_details`] / [`slot_light`] - the detail objects' light.
 
+mod bake;
 mod color;
 pub mod crt;
 mod data;
@@ -56,6 +60,10 @@ mod vertex;
 #[cfg(test)]
 mod tests;
 
+pub use bake::{
+    AutoLighter, CHUNK, CpuLighter, LightChoice, LightJob, Lighter, LitScene, NO_SKIP, NULL_LIGHT,
+    NullLighter, Sample,
+};
 pub use color::{BaseColor, ColorC, fixed16_r, fixed16_w};
 pub use data::{
     BuildMaterial, BuildParams, BuildTexture, NO_SHADER, QUALITY_DRAFT, ShaderXrlc, Shaders, TextureUse,
@@ -90,7 +98,8 @@ pub use point::{
     Falloff, LP_DEFAULT, LP_DONT_HEMI, LP_DONT_RGB, LP_DONT_SUN, LP_USE_FACE_DISABLE, Tracer, light_point,
 };
 pub use ray::{
-    CFORM_VERSION, LightCache, NO_TRI, Opacity, RapidCollector, RayFace, RayModel, RcFace, RcastForm, casts,
+    CFORM_VERSION, LightCache, NO_TRI, Opacity, RapidCollector, RayFace, RayModel, RcFace, RcastForm,
+    build_ray_model, casts,
 };
 pub use vertex::{TransGroups, apply_vertex_light, light_vertices, mix_group};
 
