@@ -503,6 +503,16 @@ pub(crate) async fn run(
     let total = plan.len();
     for (k, step) in plan.iter().copied().enumerate() {
         if let Err(stop) = ctx.check() {
+            crate::report::write(
+                editor,
+                &dir,
+                &level,
+                req.opts.quality,
+                &ran,
+                &cx.problems,
+                crate::report::End::Stopped { step: None },
+            )
+            .await;
             finish_problems(&lb, &plan[..k], cx.problems);
             return Err(stop.into());
         }
@@ -545,6 +555,16 @@ pub(crate) async fn run(
             }
             Err(e) if e.cancelled => {
                 editor.log.warn(format!("The build of {level} was stopped in {}.", step.title()));
+                crate::report::write(
+                    editor,
+                    &dir,
+                    &level,
+                    req.opts.quality,
+                    &ran,
+                    &cx.problems,
+                    crate::report::End::Stopped { step: Some(step) },
+                )
+                .await;
                 finish_problems(&lb, &plan[..=k], cx.problems);
                 return Err(e);
             }
@@ -575,6 +595,16 @@ pub(crate) async fn run(
                 });
                 editor.log.error(format!("{}: {}", step.title(), e.message));
                 let not_run: Vec<&str> = plan[k + 1..].iter().map(|s| s.title()).collect();
+                crate::report::write(
+                    editor,
+                    &dir,
+                    &level,
+                    req.opts.quality,
+                    &ran,
+                    &cx.problems,
+                    crate::report::End::Failed { step, seconds, text: &e.message },
+                )
+                .await;
                 finish_problems(&lb, &plan[..=k], cx.problems);
                 return Err(JobError::new(ended_text(step, &e.message, &ran, &not_run)));
             }
@@ -583,6 +613,16 @@ pub(crate) async fn run(
     ctx.fraction(1.0);
     let replaced = stock_problem(&mut cx, stock).await;
     let problems = cx.problems.len();
+    crate::report::write(
+        editor,
+        &dir,
+        &level,
+        req.opts.quality,
+        &ran,
+        &cx.problems,
+        crate::report::End::Built,
+    )
+    .await;
     finish_problems(&lb, &plan, cx.problems);
     editor.log.info(format!("{level} is built."));
     Ok(json!({ "level": level, "ran": ran, "problems": problems, "stock": stock, "replaces": replaced }))
