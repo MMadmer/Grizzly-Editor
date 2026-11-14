@@ -30,6 +30,10 @@ pub struct CollideModel {
     pub tris: Vec<[Vec3; 3]>,
     /// Per triangle: an index into [`Self::materials`].
     pub material: Vec<u16>,
+    /// Per triangle: `xr::mknormal` of its corners, worked out once.
+    pub normals: Vec<Vec3>,
+    /// Per triangle: its box, `[min x, y, z, max x, y, z]`.
+    tri_bounds: Vec<[f32; 6]>,
     /// The game materials of the surfaces, by name.
     pub materials: Vec<SmolStr>,
     pub bounds: Aabb,
@@ -136,6 +140,15 @@ impl CollideModel {
             }
         }
         self.bounds = b;
+        self.normals = self.tris.iter().map(|t| xr::mknormal(t[0], t[1], t[2])).collect();
+        self.tri_bounds = self
+            .tris
+            .iter()
+            .map(|t| {
+                let (lo, hi) = (t[0].min(t[1]).min(t[2]), t[0].max(t[1]).max(t[2]));
+                [lo.x, lo.y, lo.z, hi.x, hi.y, hi.z]
+            })
+            .collect();
         if !b.is_valid() {
             self.nx = 0;
             self.nz = 0;
@@ -197,6 +210,15 @@ impl CollideModel {
 
     /// The triangles whose cells a box's XZ footprint covers, ascending, each once.
     fn candidates(&self, min: Vec3, max: Vec3, out: &mut Vec<u32>) {
+        if self.gather(min, max, out) {
+            out.sort_unstable();
+            out.dedup();
+        }
+    }
+
+    /// The triangles of the cells a box's XZ footprint covers, cell by cell; answers whether
+    /// that is more than one cell (a triangle may then stand in the list twice, out of order).
+    fn gather(&self, min: Vec3, max: Vec3, out: &mut Vec<u32>) -> bool {
         out.clear();
         if self.nx == 0
             || !(min.x <= self.bounds.max.x
@@ -204,7 +226,7 @@ impl CollideModel {
                 && min.z <= self.bounds.max.z
                 && max.z >= self.bounds.min.z)
         {
-            return;
+            return false;
         }
         let (x0, x1, z0, z1) =
             (self.cell_x(min.x), self.cell_x(max.x), self.cell_z(min.z), self.cell_z(max.z));
@@ -217,24 +239,43 @@ impl CollideModel {
                 }
             }
         }
-        if z1 > z0 || x1 > x0 {
-            out.sort_unstable();
-            out.dedup();
-        }
+        z1 > z0 || x1 > x0
     }
 
     /// The triangles meeting the box (`full`: the exact test, not the boxes alone), in model order.
     #[must_use]
     pub fn box_query(&self, bb: &Aabb, full: bool) -> Vec<u32> {
-        let mut cand = Vec::new();
-        self.candidates(bb.min, bb.max, &mut cand);
+        let mut out = Vec::new();
+        self.box_query_into(bb, full, &mut out, |_| true);
+        out
+    }
+
+    /// [`Self::box_query`] into a buffer of the caller's, keeping only the triangles `keep` takes
+    /// (asked before the exact test, which is the dear one).
+    pub fn box_query_into(&self, bb: &Aabb, full: bool, out: &mut Vec<u32>, keep: impl Fn(u32) -> bool) {
+        let multi = self.gather(bb.min, bb.max, out);
+        // Most of a cell's triangles are far from the box: the boxes of the triangles drop them
+        // before they are ordered and tested exactly. The margin covers the rounding of the exact
+        // test's own arithmetic, so a triangle it would take is never dropped here.
+        let reach = bb.min.abs().max(bb.max.abs()).max_element();
+        let m = 0.01 + 1e-6 * reach;
+        let (lo, hi) = (bb.min - Vec3::splat(m), bb.max + Vec3::splat(m));
+        out.retain(|&i| {
+            keep(i)
+                && self.tri_bounds.get(i as usize).is_none_or(|b| {
+                    !(b[3] < lo.x || b[0] > hi.x || b[4] < lo.y || b[1] > hi.y || b[5] < lo.z || b[2] > hi.z)
+                })
+        });
+        if multi {
+            out.sort_unstable();
+            out.dedup();
+        }
         // `getcenter` and `getradius`
         let c =
             Vec3::new((bb.min.x + bb.max.x) * 0.5, (bb.min.y + bb.max.y) * 0.5, (bb.min.z + bb.max.z) * 0.5);
         let e =
             Vec3::new((bb.max.x - bb.min.x) * 0.5, (bb.max.y - bb.min.y) * 0.5, (bb.max.z - bb.min.z) * 0.5);
-        cand.retain(|&i| self.tris.get(i as usize).is_some_and(|t| tri_box(c, e, t, full)));
-        cand
+        out.retain(|&i| keep(i) && self.tris.get(i as usize).is_some_and(|t| tri_box(c, e, t, full)));
     }
 
     /// The nearest front face within `range` (strictly

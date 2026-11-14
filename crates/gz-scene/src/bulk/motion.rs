@@ -228,10 +228,30 @@ fn collide_with_world(cl: &mut Collision, tris: &[ClTri], mut position: Vec3, mu
     }
 }
 
+/// The buffers one move works in, kept between moves by a caller that makes many.
+#[derive(Default)]
+pub struct Scratch {
+    found: Vec<u32>,
+    tris: Vec<ClTri>,
+}
+
 /// Where an ellipsoid of `radius` and `height` standing at
 /// `start` ends up when it is moved towards `end`.
 #[must_use]
 pub fn simulate(model: &CollideModel, start: Vec3, end: Vec3, radius: f32, height: f32) -> Vec3 {
+    simulate_in(&mut Scratch::default(), model, start, end, radius, height)
+}
+
+/// [`simulate`] in the caller's buffers.
+#[must_use]
+pub fn simulate_in(
+    scratch: &mut Scratch,
+    model: &CollideModel,
+    start: Vec3,
+    end: Vec3,
+    radius: f32,
+    height: f32,
+) -> Vec3 {
     let half_height = height / 2.0;
     let mk = |p: Vec3| {
         Aabb::new(
@@ -242,7 +262,8 @@ pub fn simulate(model: &CollideModel, start: Vec3, end: Vec3, radius: f32, heigh
     let (b1, b2) = (mk(start), mk(end));
     let mut bb = Aabb::new(b1.min.min(b2.min), b1.max.max(b2.max));
     bb.grow(0.05);
-    let found = model.box_query(&bb, true);
+    let Scratch { found, tris } = scratch;
+    model.box_query_into(&bb, true, found, |_| true);
 
     let xf = Vec3::new(1.0 / radius, 1.0 / half_height, 1.0 / radius);
     let mut lposition = start;
@@ -254,32 +275,29 @@ pub fn simulate(model: &CollideModel, start: Vec3, end: Vec3, radius: f32, heigh
     let mut lvelocity = (end - start) * xf;
 
     let mut cl = Collision { last_safe: lposition, ..Collision::default() };
-    let tris: Vec<ClTri> = found
-        .iter()
-        .filter_map(|&i| model.tri(i))
-        .map(|v| {
-            let p = [v[0] * xf, v[1] * xf, v[2] * xf];
-            let n = xr::mknormal(p[0], p[1], p[2]);
-            let d = -dot(n, p[0]);
-            let (e10, e21, e02) = (p[1] - p[0], p[2] - p[1], p[0] - p[2]);
-            let (s10, s21, s02) = (magnitude(e10), magnitude(e21), magnitude(e02));
-            ClTri {
-                e10: div(e10, s10),
-                e10s: s10,
-                e21: div(e21, s21),
-                e21s: s21,
-                e02: div(e02, s02),
-                e02s: s02,
-                p,
-                n,
-                d,
-            }
-        })
-        .collect();
+    tris.clear();
+    tris.extend(found.iter().filter_map(|&i| model.tri(i)).map(|v| {
+        let p = [v[0] * xf, v[1] * xf, v[2] * xf];
+        let n = xr::mknormal(p[0], p[1], p[2]);
+        let d = -dot(n, p[0]);
+        let (e10, e21, e02) = (p[1] - p[0], p[2] - p[1], p[0] - p[2]);
+        let (s10, s21, s02) = (magnitude(e10), magnitude(e21), magnitude(e02));
+        ClTri {
+            e10: div(e10, s10),
+            e10s: s10,
+            e21: div(e21, s21),
+            e21s: s21,
+            e02: div(e02, s02),
+            e02s: s02,
+            p,
+            n,
+            d,
+        }
+    }));
 
     let mut pos = lposition;
     for _ in 0..3 {
-        pos = collide_with_world(&mut cl, &tris, lposition, lvelocity);
+        pos = collide_with_world(&mut cl, tris, lposition, lvelocity);
         if fsimilar(pos.x, target.x, EPS) && fsimilar(pos.z, target.z, EPS) {
             break;
         }
