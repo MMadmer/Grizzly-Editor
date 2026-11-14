@@ -1,6 +1,6 @@
 //! The Mod Browser's content rules (MOD_CATALOG 8) and the script report (10.3), the same
-//! tokenizer, rules and messages as the catalog's own `tools/catalog.py` (ported through the
-//! C++ `EditorCatalog`): change both or neither. A module outside the catalog ships what it
+//! tokenizer, rules and messages as the catalog's own `tools/catalog.py`):
+//! change both or neither. A module outside the catalog ships what it
 //! likes, so the release is written either way; the findings are warnings and
 //! `catalog_content` in the answer.
 
@@ -117,7 +117,7 @@ const ALLOWED: &[&str] = &[
     "lanims",
 ];
 
-/// MOD_CATALOG 8 for a path (module-relative, `/`): `Err` says why not (`PathAllowed`).
+/// MOD_CATALOG 8 for a path (module-relative, `/`): `Err` says why not.
 pub fn path_allowed(path: &str) -> Result<(), String> {
     if path.is_empty() || path.starts_with('/') || path.contains(['\\', ':']) {
         return Err("unsafe path".to_owned());
@@ -165,8 +165,7 @@ fn u32_at(b: &[u8], at: usize) -> Option<u32> {
     b.get(at..at + 4).map(|x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]))
 }
 
-/// MOD_CATALOG 8 for what a file starts with: `Err` names the program or container it is
-/// (`BytesAllowed`).
+/// MOD_CATALOG 8 for what a file starts with: `Err` names the program or container it is.
 pub fn bytes_allowed(data: &[u8]) -> Result<(), &'static str> {
     if data.len() >= 0x40 && data.starts_with(b"MZ") {
         let offset = u32_at(data, 0x3C).unwrap_or(0) as usize;
@@ -187,7 +186,7 @@ fn is_script(path: &str) -> bool {
 }
 
 /// How much of a file [`check_content`] reads: all of a script (16 MiB at most), the first
-/// 64 KiB of anything else (`ContentHead`).
+/// 64 KiB of anything else.
 #[must_use]
 pub fn content_head(path: &str, size: u64) -> u64 {
     let limit = if is_script(path) { 16 << 20 } else { 64 << 10 };
@@ -195,8 +194,7 @@ pub fn content_head(path: &str, size: u64) -> u64 {
 }
 
 /// The head read so far (`got` of `size` bytes) may point further: an MZ header names where its
-/// PE header is. The bytes [`check_content`] needs, `got` when the head is enough
-/// (`ContentNeed`).
+/// PE header is. The bytes [`check_content`] needs, `got` when the head is enough.
 #[must_use]
 pub fn content_need(head: &[u8], size: u64) -> u64 {
     let got = head.len() as u64;
@@ -207,7 +205,7 @@ pub fn content_need(head: &[u8], size: u64) -> u64 {
     if need > got && need <= size { need } else { got }
 }
 
-/// One file of a module against 8 and, for a script, 10.3 (`CheckContent`). `path` is
+/// One file of a module against 8 and, for a script, 10.3. `path` is
 /// module-relative with `/`; a non-script needs only its first bytes.
 pub fn check_content(path: &str, data: &[u8], out: &mut Vec<Finding>) {
     if let Err(why) = path_allowed(path) {
@@ -450,7 +448,7 @@ const REVIEW: &[(&[u8], &str)] = &[
     (b"dir_delete", "getFS():dir_delete"),
 ];
 
-/// 10.3 over one script (`ScriptReport`): what only a module that runs unprotected would do.
+/// 10.3 over one script: what only a module that runs unprotected would do.
 pub fn script_report(path: &str, text: &[u8], out: &mut Vec<Finding>) {
     let tokens = tokenize(text);
     let add = |out: &mut Vec<Finding>, level: Level, line: u32, what: &str| {

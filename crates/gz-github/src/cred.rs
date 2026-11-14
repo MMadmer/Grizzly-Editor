@@ -1,4 +1,4 @@
-//! The Windows Credential Manager: generic credentials under the C++ editor's own target names
+//! The Windows Credential Manager: generic credentials under the editor's own target names
 //! (`GrizzlyEditor:GitHub`, `GrizzlyEditor:VirusTotal`, `...:qa` in a QA run), the secret stored
 //! as its raw bytes - so a token either editor saved is the other's too. Blocking: call on the
 //! IO pool.
@@ -14,7 +14,7 @@ mod imp {
 
     fn entry(target: &str) -> Option<keyring_core::Entry> {
         let store = windows_native_keyring_store::Store::new().ok()?;
-        // CRED_PERSIST_LOCAL_MACHINE, as the C++ wrote it
+        // CRED_PERSIST_LOCAL_MACHINE, as it was always written
         let modifiers = HashMap::from([("target", target), ("persistence", "Local")]);
         store.build("GrizzlyEditor", "", Some(&modifiers)).ok()
     }

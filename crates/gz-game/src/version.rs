@@ -1,9 +1,8 @@
-//! The linked game's version: the file version of its `xrEngine.exe`, `major.minor.build`
-//! (`EditorMod::LinkedGameVersion`, which asked `GetFileVersionInfo`).
+//! The linked game's version: the file version of its `xrEngine.exe`, `major.minor.build`.
 //!
 //! The version resource holds a `VS_FIXEDFILEINFO`: signature `0xFEEF04BD`, structure version
 //! `0x00010000`, then `dwFileVersionMS` and `dwFileVersionLS`. The first such block of the file
-//! is the one `VerQueryValue(..., "\\")` answers.
+//! is the one the version query answers.
 
 const SIGNATURE: [u8; 4] = 0xFEEF_04BDu32.to_le_bytes();
 const STRUCT_VERSION: u32 = 0x0001_0000;

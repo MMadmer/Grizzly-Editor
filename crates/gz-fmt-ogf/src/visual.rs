@@ -1,6 +1,5 @@
-//! A visual of any type: `dxRender_Visual::Load`, `Fvisual`, `FProgressive`,
-//! `FHierrarhyVisual`, `FLOD`, `FTreeVisual`, `CSkeletonX`, `CKinematics`,
-//! `CKinematicsAnimated`.
+//! A visual of any type: the plain, progressive, hierarchy, LOD and tree visuals and the
+//! animated, rigid and skinned skeletons.
 
 use std::sync::Arc;
 
@@ -25,7 +24,7 @@ pub struct BufferRef {
     pub count: u32,
 }
 
-/// `FSlideWindow`.
+/// A slide window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SlideWindow {
     pub offset: u32,
@@ -40,7 +39,7 @@ pub struct SlideWindows {
     pub windows: Vec<SlideWindow>,
 }
 
-/// `FLOD::_vertex` (28 bytes with its padding).
+/// The LOD vertex (28 bytes with its padding).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LodVertex {
     pub position: Vec3,
@@ -93,7 +92,7 @@ pub struct Visual {
     pub bones: Vec<BoneName>,
     pub ik: Vec<BoneIk>,
     pub user_data: Option<String>,
-    /// `OGF_S_LODS`: the model a skeleton's LOD is.
+    /// The model a skeleton's LOD is.
     pub lod_ref: Option<SmolStr>,
     /// `OGF_S_MOTION_REFS` (a comma list) or `OGF_S_MOTION_REFS2`.
     pub motion_refs: Vec<SmolStr>,
@@ -286,7 +285,7 @@ impl Visual {
             v.ik = read_ik(c.bytes(), v.bones.len())?;
         }
         if let Some(c) = body(&r, chunk::S_USERDATA)? {
-            // the engine reads the chunk as an ini (`CInifile` over the chunk): a text that ends
+            // the engine reads the chunk as an ini: a text that ends
             // with the chunk, without a terminator, is whole too
             let bytes = c.bytes();
             let text = bytes.split(|&b| b == 0).next().unwrap_or(&[]);

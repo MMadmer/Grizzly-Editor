@@ -1,8 +1,7 @@
-//! The compiler's error list drawn over the scene (`CToolCustom::SDebugDraw`): Build > Import /
-//! Export / Clear Error List and Scene > Clear Debug Draw (`EScene::LoadCompilerError` /
-//! `SaveCompilerError`, `ClearDebugDraw`).
+//! The compiler's error list drawn over the scene: Build > Import /
+//! Export / Clear Error List and Scene > Clear Debug Draw.
 //!
-//! The file is the C++ structures written as they lie in memory: chunk 10 the points (56 bytes:
+//! The file holds the compiler's structures as they lie in memory: chunk 10 the points (56 bytes:
 //! the position, the colour, two flags, the padding and the `xr_string` of a caption), 11 the
 //! lines (32 bytes), 12 the wire faces (44 bytes); the compiler's own older chunks 0 (points) and
 //! 2 (faces) are read too.
@@ -88,7 +87,6 @@ fn records(body: &[u8], size: usize) -> Result<Vec<&[u8]>, SceneError> {
     Ok(rest.chunks_exact(size).take(n).collect())
 }
 
-/// `EScene::LoadCompilerError`.
 pub fn read_compiler_error(bytes: &[u8]) -> Result<DebugDraw, SceneError> {
     let r = Reader::new(bytes);
     let mut d = DebugDraw::default();
@@ -148,7 +146,7 @@ fn w_vec3(out: &mut Vec<u8>, v: Vec3) {
     }
 }
 
-/// `EScene::SaveCompilerError`: the three lists as the C++ structures lie in memory (a caption
+/// The three lists as the compiler's structures lie in memory (a caption
 /// that fits the small buffer inline, a longer one as an empty string: its heap is not ours to
 /// write).
 #[must_use]
@@ -219,7 +217,7 @@ mod tests {
         let back = read_compiler_error(&bytes).unwrap();
         assert_eq!(back.points, d.points);
         assert_eq!(back.wire_faces, d.wire_faces);
-        // the lines are written, not read (the C++ load skips them)
+        // the lines are written, not read
         assert!(back.lines.is_empty());
     }
 

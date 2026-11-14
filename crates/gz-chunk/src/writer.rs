@@ -2,7 +2,7 @@ use glam::{Quat, Vec2, Vec3, Vec4};
 
 use crate::{COMPRESSED, lzhuf};
 
-/// Builds a byte stream with the engine's `IWriter` vocabulary. Infallible: it writes to memory,
+/// Builds a byte stream with the engine's writer vocabulary. Infallible: it writes to memory,
 /// and the caller puts the bytes on disk in one go.
 #[derive(Clone, Debug, Default)]
 pub struct Writer {

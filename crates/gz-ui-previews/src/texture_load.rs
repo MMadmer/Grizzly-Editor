@@ -1,5 +1,5 @@
 //! What the texture preview loads: a file's bytes wherever it lives, taken by the GPU as they
-//! are when it can, decoded otherwise (`UIImagePreview::Show`, `NativeDds`).
+//! are when it can, decoded otherwise.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -44,7 +44,7 @@ impl TexSource {
     }
 }
 
-/// A pixel format the preview names (`SFormatInfo`).
+/// A pixel format the preview names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FormatInfo {
     pub name: &'static str,
@@ -226,7 +226,7 @@ pub fn gpu_bytes(fi: &FormatInfo, width: u32, height: u32, mips: u32) -> u64 {
         .sum()
 }
 
-/// `HumanBytes`.
+/// Human-readable bytes.
 #[must_use]
 pub fn human_bytes(bytes: u64) -> String {
     if bytes >= 1024 * 1024 {
@@ -238,7 +238,7 @@ pub fn human_bytes(bytes: u64) -> String {
     }
 }
 
-/// Where the file lives, as `texture_preview` answers it.
+/// Where the file lives, as `preview.texture` answers it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Origin {
     None,

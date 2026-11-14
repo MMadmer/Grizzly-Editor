@@ -1,10 +1,10 @@
-//! The motion of a dynamic scene object (`CustomObjectAnimation.cpp`): the engine's `COMotion`
-//! (six envelopes) and the `SAnimParams` the Details rows edit - the frame range, the current
+//! The motion of a dynamic scene object: the motion's
+//! six envelopes and the animation parameters the Details rows edit - the frame range, the current
 //! time, the key time - with the key commands, the playback controls and the files.
 //!
 //! The chunk an object was read with is kept and written back byte for byte until an edit makes
 //! a new one ([`MotionRaw::from_model`]). Every function here is pure: it answers the motion
-//! after the edit and, where the C++ calls `AnimationUpdate`, where the object stands.
+//! after the edit and, where the animation moves the object, where it stands.
 
 use std::sync::Arc;
 
@@ -14,16 +14,16 @@ use gz_fmt_object::{Envelope, Key, OMotion};
 use crate::math::Vec3;
 use crate::model::{MotionRaw, Object, co};
 
-/// `flAutoKey`: a move of the selected object makes a key at the current time.
+/// A move of the selected object makes a key at the current time.
 pub const AUTO_KEY: u32 = 1 << 30;
-/// `flCameraView`: the camera looks from the object.
+/// The camera looks from the object.
 pub const CAMERA_VIEW: u32 = 1 << 31;
 /// One frame of the controls (`1.f/30.f`).
 pub const FRAME: f32 = 1.0 / 30.0;
 /// `EPS_L` of the engine, `fsimilar`'s default.
 const EPS_L: f32 = 0.001;
 
-/// `COMotion::Load` of the chunk (the `.anm` body without its chunk header).
+/// The motion read from the chunk (the `.anm` body without its chunk header).
 #[must_use]
 pub fn decode(blob: &[u8]) -> Option<OMotion> {
     let mut w = gz_chunk::Writer::new();
@@ -31,7 +31,7 @@ pub fn decode(blob: &[u8]) -> Option<OMotion> {
     gz_fmt_object::read_anm(&w.into_bytes()).ok()
 }
 
-/// `COMotion::Save`: the chunk's body.
+/// The chunk's body.
 #[must_use]
 pub fn encode(m: &OMotion) -> Vec<u8> {
     let file = gz_fmt_object::write_anm(m);
@@ -52,7 +52,7 @@ impl MotionRaw {
     }
 }
 
-/// `SAnimParams` as the rows show them.
+/// The animation parameters as the rows show them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Params {
     pub min_t: f32,
@@ -60,7 +60,7 @@ pub struct Params {
     pub t_current: f32,
 }
 
-/// `SAnimParams::Set(motion)`, with the time the object was saved at.
+/// The animation parameters set from a motion, with the time the object was saved at.
 #[must_use]
 pub fn params(m: &OMotion, raw: &MotionRaw) -> Params {
     let fps = if m.fps == 0.0 { 30.0 } else { m.fps };
@@ -75,14 +75,14 @@ pub fn set_range(m: &mut OMotion, min_t: f32, max_t: f32) {
     m.fps = 30.0;
 }
 
-/// `_Evaluate`, as `AnimationUpdate` stands the object: the position and the negated angles.
+/// The motion evaluated where the object stands: the position and the negated angles.
 #[must_use]
 pub fn pose_at(m: &OMotion, t: f32) -> (Vec3, Vec3) {
     let (p, r) = m.evaluate(t);
     (p, -r)
 }
 
-/// `AnimationCreateKey`: a key of every channel at `t` from where the object stands.
+/// A key of every channel at `t` from where the object stands.
 pub fn create_key(m: &mut OMotion, t: f32, position: Vec3, rotation: Vec3) {
     let r = -rotation;
     let v = [position.x, position.y, position.z, r.y, r.x, r.z];
@@ -91,14 +91,14 @@ pub fn create_key(m: &mut OMotion, t: f32, position: Vec3, rotation: Vec3) {
     }
 }
 
-/// `COMotion::DeleteKey`.
+/// Deletes a key.
 pub fn delete_key(m: &mut OMotion, t: f32) {
     for e in &mut m.envelopes {
         e.delete_key(t);
     }
 }
 
-/// `CEnvelope::FindNearestKey` on the first channel: the keys before and after `t` (`t` itself
+/// The keys before and after `t` on the first channel (`t` itself
 /// where there is none).
 #[must_use]
 pub fn nearest_keys(m: &OMotion, t: f32) -> (f32, f32) {
@@ -117,7 +117,7 @@ pub fn nearest_keys(m: &OMotion, t: f32) -> (f32, f32) {
     (keys.last().map_or(t, |k| k.time), t)
 }
 
-/// `CEnvelope::FindKey`.
+/// The key at a time.
 fn find_key(keys: &[Key], t: f32, eps: f32) -> Option<usize> {
     for (i, k) in keys.iter().enumerate() {
         if (k.time - t).abs() < eps {
@@ -130,7 +130,7 @@ fn find_key(keys: &[Key], t: f32, eps: f32) -> Option<usize> {
     None
 }
 
-/// `CEnvelope::FindNearestKey` as indices (`None` = `keys.end()`).
+/// The nearest keys as indices (`None` = past the end).
 fn nearest_idx(keys: &[Key], t: f32, eps: f32) -> (Option<usize>, Option<usize>) {
     for (i, k) in keys.iter().enumerate() {
         let min = Some(if i == 0 { i } else { i - 1 });
@@ -144,7 +144,7 @@ fn nearest_idx(keys: &[Key], t: f32, eps: f32) -> (Option<usize>, Option<usize>)
     (if keys.is_empty() { None } else { Some(keys.len() - 1) }, None)
 }
 
-/// `CEnvelope::ScaleKeys`.
+/// Scales the keys in time.
 fn scale_envelope(e: &mut Envelope, from: f32, to: f32, scale: f32, eps: f32) -> bool {
     let keys = &mut e.keys;
     let min_k = find_key(keys, from, eps).or_else(|| nearest_idx(keys, from, eps).1);
@@ -176,7 +176,7 @@ fn scale_envelope(e: &mut Envelope, from: f32, to: f32, scale: f32, eps: f32) ->
     true
 }
 
-/// `COMotion::ScaleKeys`: every channel until one refuses.
+/// Every channel until one refuses.
 pub fn scale_keys(m: &mut OMotion, from: f32, to: f32, scale: f32) -> bool {
     let eps = 1.0 / if m.fps == 0.0 { 30.0 } else { m.fps };
     for e in &mut m.envelopes {
@@ -187,7 +187,7 @@ pub fn scale_keys(m: &mut OMotion, from: f32, to: f32, scale: f32) -> bool {
     true
 }
 
-/// `COMotion::NormalizeKeys`: the keys between the two times moved so the object travels at
+/// The keys between the two times moved so the object travels at
 /// `speed` metres a second, the rest kept their spacing.
 pub fn normalize_keys(m: &mut OMotion, from: f32, to: f32, speed: f32) -> bool {
     if to < from || m.envelopes[0].keys.is_empty() {
@@ -228,8 +228,8 @@ pub fn normalize_keys(m: &mut OMotion, from: f32, to: f32, speed: f32) -> bool {
     true
 }
 
-/// `COMotion::GetLength(&mn, &mx)`: the longest channel's span and the first and last times of
-/// the last channel that has keys (each channel writes them in turn, as in the C++).
+/// The longest channel's span and the first and last times of
+/// the last channel that has keys (each channel writes them in turn).
 #[must_use]
 pub fn length(m: &OMotion) -> (f32, f32, f32) {
     let (mut len, mut mn, mut mx) = (0.0f32, 0.0f32, 0.0f32);
@@ -414,7 +414,7 @@ pub fn apply(o: &Object, edit: &MotionEdit) -> Result<Edited, String> {
             ("Motion Frame", true)
         }
         MotionEdit::KeyTime(to) => {
-            // `OnMotionKeyTimeChange`: the pose at the current time keyed again at the new one
+            // the pose at the current time keyed again at the new one
             let (pos, rot) = m.evaluate(t);
             delete_key(&mut m, t);
             let v = [pos.x, pos.y, pos.z, rot.y, rot.x, rot.z];

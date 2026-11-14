@@ -1,5 +1,4 @@
-//! The typed editors of the Details panel (`NqInspector::DrawParams` / `DrawTyped` and the
-//! editors behind them): one per catalog parameter type, each a row (or a few) of the kit's
+//! The typed editors of the Details panel: one per catalog parameter type, each a row (or a few) of the kit's
 //! property grid. What comes from a list is picked, not typed; a value the list does not hold is
 //! kept and shown, never corrected; a problem is a sentence under its row.
 //!
@@ -82,7 +81,7 @@ impl TextEdit {
         };
     }
 
-    /// The text Apply left for a field, once (`TakeTextEdit`).
+    /// The text Apply left for a field, once.
     pub fn take(&mut self, target: &str) -> Option<String> {
         if !self.apply || self.target != target {
             return None;
@@ -156,7 +155,7 @@ fn modes(list: &[&str]) -> Vec<String> {
     list.iter().map(|s| (*s).to_owned()).collect()
 }
 
-/// Which single key of a mode table is set (`ModeOf`).
+/// Which single key of a mode table is set.
 fn mode_of(v: &Value, modes: &[String]) -> String {
     if !v.is_table() {
         return String::new();
@@ -250,7 +249,7 @@ fn first_line(s: &str) -> String {
     }
 }
 
-/// The catalog default stated again is the same as saying nothing (`EqualsDefault`).
+/// The catalog default stated again is the same as saying nothing.
 fn equals_default(p: &Param, v: &Value) -> bool {
     let Some(d) = p.default.as_deref() else { return false };
     match v {
@@ -271,7 +270,7 @@ pub fn value_text(v: &Value) -> String {
     }
 }
 
-/// `bool`, `number`, `text` (`TypeName`).
+/// `bool`, `number`, `text`.
 #[must_use]
 pub fn type_name(v: &Value) -> &'static str {
     match v {
@@ -296,7 +295,7 @@ pub fn convert(v: &Value, to: usize) -> Value {
     }
 }
 
-/// A value edited as the type of the variable it belongs to (`DrawTypedValue`).
+/// A value edited as the type of the variable it belongs to.
 pub fn typed_value(
     ui: &mut Ui,
     role: &'static str,
@@ -360,8 +359,8 @@ impl ParamCx<'_> {
         egui::Popup::open_id(&self.ctx, id);
     }
 
-    /// The rows a picker of a type offers, and the note of an empty one (`PickerPopup`'s
-    /// gathering): every entry, once; the kit's list ranks them as the author types.
+    /// The rows a picker of a type offers, and the note of an empty one:
+    /// every entry, once; the kit's list ranks them as the author types.
     fn pick_rows(&self, ty: &str) -> (Vec<PickItem>, String) {
         let mut rows: Vec<PickItem> = Vec::new();
         let doc_scoped = matches!(
@@ -472,7 +471,7 @@ impl ParamCx<'_> {
 // ---- the parameters of a kind -------------------------------------------------------------
 
 /// Every parameter of a kind, then the ones the file has and the catalog does not (kept as Lua)
-/// (`DrawParams`). Returns whether anything changed.
+/// . Returns whether anything changed.
 pub fn draw_params(ui: &mut Ui, cx: &mut ParamCx<'_>, k: &Kind, params: &mut Value, depth: u32) -> bool {
     let mut ch = false;
     if !params.is_table() {
@@ -516,7 +515,7 @@ pub fn draw_params(ui: &mut Ui, cx: &mut ParamCx<'_>, k: &Kind, params: &mut Val
     ch
 }
 
-/// One parameter (`DrawParam`): its typed editor, the catalog default written back as nothing.
+/// One parameter: its typed editor, the catalog default written back as nothing.
 pub fn draw_param(
     ui: &mut Ui,
     cx: &mut ParamCx<'_>,
@@ -559,7 +558,7 @@ pub fn draw_param(
     ch
 }
 
-/// The editor of a parameter type (`DrawTyped`).
+/// The editor of a parameter type.
 #[allow(clippy::too_many_lines)]
 pub fn typed(
     ui: &mut Ui,
@@ -730,7 +729,7 @@ pub fn typed(
     }
 }
 
-/// A string with a picker beside it, marked when the index does not know it (`DrawPicked`).
+/// A string with a picker beside it, marked when the index does not know it.
 pub fn picked(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, ty: &str, s: &mut String) -> bool {
     let pt = PickerType::from_name(ty);
     let unknown = !s.is_empty()
@@ -763,7 +762,7 @@ pub fn picked(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, ty: &str
 }
 
 /// A text: one line typed in its row, a longer one shown by its first line and edited in a
-/// dialog; a text per language puts each language on a row of its own (`DrawText`).
+/// dialog; a text per language puts each language on a row of its own.
 pub fn draw_text(
     ui: &mut Ui,
     cx: &mut ParamCx<'_>,
@@ -895,7 +894,7 @@ fn line_field(
     ch
 }
 
-/// A number and its unit (`DrawDuration`).
+/// A number and its unit.
 pub fn duration(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value) -> bool {
     let units = modes(&["seconds", "game_minutes", "game_hours"]);
     let mut unit = mode_of(v, &units);
@@ -951,7 +950,7 @@ fn pick_type_of(mode: &str) -> &str {
 }
 
 /// The row of a value that takes one of several forms: the form picked here, what it needs on
-/// rows under it (`ModeRow`).
+/// rows under it.
 fn mode_row(
     ui: &mut Ui,
     role: &'static str,
@@ -973,7 +972,7 @@ fn fresh_pos(level: &str, radius: Option<f64>) -> Value {
     t
 }
 
-/// A creature or a spot a quest points at: the form, then its value (`DrawNpcRef`).
+/// A creature or a spot a quest points at: the form, then its value.
 pub fn npc_ref(
     ui: &mut Ui,
     cx: &mut ParamCx<'_>,
@@ -1062,7 +1061,7 @@ pub fn npc_ref(
     ch
 }
 
-/// One concrete object (`DrawObjectRef`): a story id, a ref, and for an object a character.
+/// One concrete object: a story id, a ref, and for an object a character.
 pub fn object_ref(
     ui: &mut Ui,
     cx: &mut ParamCx<'_>,
@@ -1106,7 +1105,7 @@ pub fn object_ref(
     ch
 }
 
-/// The steps of whichever task the sibling `task` (or `spot_task`) names (`DrawObjectiveId`).
+/// The steps of whichever task the sibling `task` (or `spot_task`) names.
 pub fn objective_id(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value) -> bool {
     let owner = cx.siblings.as_ref().and_then(|s| s.get("task").or_else(|| s.get("spot_task"))).cloned();
     let task = owner.as_ref().and_then(Value::as_str).and_then(|id| cx.tasks.iter().find(|t| t.id == id));
@@ -1137,7 +1136,7 @@ pub fn objective_id(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v:
     }
 }
 
-/// A place (`DrawPlace`): a position, a zone, a smart, a ref, or a point ahead of the player.
+/// A place: a position, a zone, a smart, a ref, or a point ahead of the player.
 pub fn place(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value) -> bool {
     let list = modes(&["pos", "restrictor", "smart", "ref", "actor"]);
     let mut mode = mode_of(v, &list);
@@ -1203,7 +1202,7 @@ pub fn place(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut V
     ch
 }
 
-/// A spot spelled out by hand: its level, the point, the radius (`DrawPosition`).
+/// A spot spelled out by hand: its level, the point, the radius.
 pub fn position(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, depth: u32, v: &mut Value) -> bool {
     let mut ch = false;
     let mut lvl = v.get_string("level", "");
@@ -1274,7 +1273,7 @@ pub fn position(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, depth: u32, v: &m
     ch
 }
 
-/// Where a step sends people (`DrawDestination`): a way path first - the best destination.
+/// Where a step sends people: a way path first - the best destination.
 pub fn destination(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value) -> bool {
     let mut list = modes(&["path", "ref", "story", "character"]);
     // a role is a behaviour graph's cast; a quest only sees one it has to correct
@@ -1331,7 +1330,7 @@ pub fn destination(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: 
     ch
 }
 
-/// `who`: one role or several, ticked from what the graph declares (`DrawWho`).
+/// `who`: one role or several, ticked from what the graph declares.
 pub fn who(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value) -> bool {
     let roles = &cx.graph.roles;
     let mut picked_roles: Vec<String> = match v {
@@ -1393,7 +1392,7 @@ pub fn who(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Val
     ch
 }
 
-/// Who a follow walks after, or who an attack is aimed at (`DrawRoleTarget`).
+/// Who a follow walks after, or who an attack is aimed at.
 pub fn role_target(
     ui: &mut Ui,
     cx: &mut ParamCx<'_>,
@@ -1447,7 +1446,7 @@ pub fn role_target(
 }
 
 /// What a caller hands the graph it runs: one row per role THAT graph declares, read from the
-/// asset the sibling `asset` names (`DrawRoleBindings`).
+/// asset the sibling `asset` names.
 pub fn role_bindings(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value) -> bool {
     let asset_id = cx.siblings.as_ref().map(|s| s.get_string("asset", "")).unwrap_or_default();
     let mut roles: Vec<gz_nq::Role> = Vec::new();
@@ -1541,7 +1540,7 @@ pub fn role_bindings(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v
     ch
 }
 
-/// spawn.npc: one row per NPC - a character of the project or a section (`DrawNpcList`).
+/// spawn.npc: one row per NPC - a character of the project or a section.
 #[allow(clippy::too_many_lines)]
 pub fn npc_list(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value) -> bool {
     if !v.is_table() {
@@ -1702,7 +1701,7 @@ pub fn npc_list(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mu
     ch
 }
 
-/// A squad to create (`DrawSpawnSpec`).
+/// A squad to create.
 pub fn spawn_spec(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value) -> bool {
     if !v.is_table() {
         *v = Value::table();
@@ -1836,12 +1835,12 @@ pub fn spawn_spec(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
     ch
 }
 
-/// Whether a row schema carries anything beyond what to make and how many (`RowsHaveState`).
+/// Whether a row schema carries anything beyond what to make and how many.
 fn rows_have_state(k: Option<&Kind>) -> bool {
     k.is_some_and(|k| k.rows.iter().any(|r| r.name != "section" && r.name != "count"))
 }
 
-/// One line for a row that carries state (`RowStateSummary`).
+/// One line for a row that carries state.
 fn row_state_summary(e: &Value) -> String {
     let mut s = String::new();
     for key in ["condition", "ammo", "ammo_kind", "upgrades", "ref"] {
@@ -1865,7 +1864,7 @@ fn row_state_summary(e: &Value) -> String {
     s
 }
 
-/// The upgrades installed on the item, ticked from what its section can take (`DrawUpgrades`).
+/// The upgrades installed on the item, ticked from what its section can take.
 fn upgrades(
     ui: &mut Ui,
     cx: &mut ParamCx<'_>,
@@ -1942,7 +1941,7 @@ fn upgrades(
     ch
 }
 
-/// The state of one row, filtered by what its section can carry (`DrawRowState`).
+/// The state of one row, filtered by what its section can carry.
 fn row_state(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, depth: u32, k: &Kind, e: &mut Value) -> bool {
     let mut ch = false;
     let sect = e.get_string("section", "");
@@ -2017,7 +2016,7 @@ fn row_state(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, depth: u32, k: &Kind
     ch
 }
 
-/// The rows of "what to bring": a section with a count, or one concrete object (`DrawItemList`).
+/// The rows of "what to bring": a section with a count, or one concrete object.
 #[allow(clippy::too_many_lines)]
 pub fn item_list(
     ui: &mut Ui,
@@ -2235,7 +2234,7 @@ pub fn item_list(
 }
 
 /// The list of rows of an item action: the one-line spelling shown as a one-row list until the
-/// first edit rewrites it as `items` (`DrawItemRowsParams`).
+/// first edit rewrites it as `items`.
 fn item_rows_params(ui: &mut Ui, cx: &mut ParamCx<'_>, k: &Kind, params: &mut Value, depth: u32) -> bool {
     let mut rows = match params.get("items") {
         Some(it) => it.clone(),
@@ -2284,7 +2283,7 @@ fn item_rows_params(ui: &mut Ui, cx: &mut ParamCx<'_>, k: &Kind, params: &mut Va
     false
 }
 
-/// item.spawn's one destination (`DrawItemSpawnParams`).
+/// item.spawn's one destination.
 fn item_spawn_where(ui: &mut Ui, cx: &mut ParamCx<'_>, params: &mut Value, depth: u32) -> bool {
     let mut v = params.get("where").cloned().unwrap_or_default();
     let row = Row::new("Where", "Where they land: on the ground, inside a container or NPC, in a stash or a corpse, or in a fresh corpse", depth).flags(PropFlags::REQUIRED);
@@ -2299,7 +2298,7 @@ fn item_spawn_where(ui: &mut Ui, cx: &mut ParamCx<'_>, params: &mut Value, depth
     false
 }
 
-/// The whole fetch node as one form: the rows, then the modifiers (`DrawFetchParams`).
+/// The whole fetch node as one form: the rows, then the modifiers.
 fn fetch_params(ui: &mut Ui, cx: &mut ParamCx<'_>, k: &Kind, params: &mut Value, depth: u32) -> bool {
     let mut ch = false;
     let mut rows = match params.get("items") {
@@ -2373,7 +2372,7 @@ fn fetch_params(ui: &mut Ui, cx: &mut ParamCx<'_>, k: &Kind, params: &mut Value,
     ch
 }
 
-/// WHERE the node puts the loot it creates: one mode at a time (`DrawLootSpawn`).
+/// WHERE the node puts the loot it creates: one mode at a time.
 #[allow(clippy::too_many_lines)]
 pub fn loot_spawn(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value) -> bool {
     let list = modes(&["place", "into", "stash", "npc", "corpse", "new_corpse"]);
@@ -2599,7 +2598,7 @@ pub fn loot_spawn(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
     ch
 }
 
-/// The cases of a node: each one a pin (`DrawCases`).
+/// The cases of a node: each one a pin.
 pub fn cases(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value, weights: bool) -> bool {
     if !v.is_table() {
         *v = Value::table();
@@ -2692,8 +2691,7 @@ pub fn cases(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut V
     ch
 }
 
-/// A condition list inside parameters: generic values edited as typed conditions
-/// (`DrawCondValue`).
+/// A condition list inside parameters: generic values edited as typed conditions.
 pub fn cond_value(
     ui: &mut Ui,
     cx: &mut ParamCx<'_>,
@@ -2710,8 +2708,7 @@ pub fn cond_value(
     true
 }
 
-/// The conditions of a node or a case: "If" then "And", each with its kind and its parameters
-/// (`DrawCondList`).
+/// The conditions of a node or a case: "If" then "And", each with its kind and its parameters.
 pub fn cond_list(
     ui: &mut Ui,
     cx: &mut ParamCx<'_>,
@@ -2773,7 +2770,7 @@ pub fn cond_list(
     ch
 }
 
-/// Lua in a row: its first line; the body is written in a dialog with a syntax check (`DrawLua`).
+/// Lua in a row: its first line; the body is written in a dialog with a syntax check.
 pub fn lua(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value) -> bool {
     let target = format!("{:?}/{salt}/lua", ui.scope_id());
     let mut code = v.to_text("");
@@ -2800,7 +2797,7 @@ pub fn lua(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Val
     ch
 }
 
-/// A bool, a number or a string typed by its content (`DrawScalarValue`).
+/// A bool, a number or a string typed by its content.
 pub fn scalar_value(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value) -> bool {
     let mut s = match &*v {
         Value::Bool(b) => (if *b { "true" } else { "false" }).to_owned(),
@@ -2822,7 +2819,7 @@ pub fn scalar_value(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v:
     true
 }
 
-/// A value the catalog does not know, kept and edited as Lua (`DrawRaw`).
+/// A value the catalog does not know, kept and edited as Lua.
 pub fn raw(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value) -> bool {
     let mut s = gz_luadata::write_value(v, 0);
     if !text_row_edit(ui, cx.role, salt, row, &mut s) {
@@ -2837,7 +2834,7 @@ pub fn raw(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Val
     }
 }
 
-/// A combo of the variables the graph declares (`DrawVarNameCombo`).
+/// A combo of the variables the graph declares.
 pub fn var_name_combo(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, name: &mut String) -> bool {
     let names: Vec<String> = cx.vars.iter().map(|v| v.name.clone()).collect();
     if names.is_empty() && name.is_empty() {

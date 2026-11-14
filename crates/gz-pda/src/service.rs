@@ -28,8 +28,7 @@ use crate::read::{
 const BUNDLED_SHEET: &str = "configs\\pda\\ui_xms_pda.xml";
 
 /// What a texture id may be: an id of a texture description of the game, of Refined's sheet or
-/// of the project, or a file under `textures\` of the project or the game
-/// (`EditorPdaInternal::TextureKnown`).
+/// of the project, or a file under `textures\` of the project or the game.
 pub struct KnownTextures {
     game: Arc<GameFiles>,
     game_sheets: Option<Arc<TextureSheets>>,
@@ -86,7 +85,7 @@ fn load_reader(files: Option<&GameFiles>, bundled: &Path) -> Result<Arc<Reader>,
     }
 }
 
-/// A file of the project as the C++ `NqLua::ReadFile` read it: at most 16 MB, a UTF-8 BOM cut.
+/// A file of the project as the editor's Lua reader reads it: at most 16 MB, a UTF-8 BOM cut.
 pub fn read_text(path: &Path) -> Result<String, String> {
     let meta = std::fs::metadata(path).map_err(|_| "cannot open file".to_owned())?;
     if meta.len() > 16 << 20 {
@@ -97,7 +96,7 @@ pub fn read_text(path: &Path) -> Result<String, String> {
     Ok(lossy(bytes))
 }
 
-/// Two project paths name one file: `/` and `\` alike, ASCII case ignored (`SamePath`).
+/// Two project paths name one file: `/` and `\` alike, ASCII case ignored.
 #[must_use]
 pub fn same_path(a: &str, b: &str) -> bool {
     let norm = |s: &str| {
@@ -106,7 +105,7 @@ pub fn same_path(a: &str, b: &str) -> bool {
     norm(a) == norm(b)
 }
 
-/// A path relative to the project root with `/` (`NqUtil::ProjectRelative`): the path as it
+/// A path relative to the project root with `/`: the path as it
 /// was when it is not inside.
 #[must_use]
 pub fn project_relative(root: &str, abs: &str) -> String {
@@ -167,12 +166,12 @@ impl PdaService {
         value.as_ref().clone()
     }
 
-    /// Where the reader came from (`ReaderSource`): empty when there is none.
+    /// Where the reader came from: empty when there is none.
     pub async fn reader_source(&self, editor: &Editor) -> String {
         self.reader(editor).await.map(|r| r.source.clone()).unwrap_or_default()
     }
 
-    /// The layout of a text (`EditorPda::Read`), computed on the CPU pool once per text, reader
+    /// The layout of a text, computed on the CPU pool once per text, reader
     /// and inputs. `chunk` is the file's base name, `lang` the language of the texts.
     pub async fn evaluate(
         &self,
@@ -185,7 +184,7 @@ impl PdaService {
         let reader = match self.reader(editor).await {
             Ok(r) => r,
             Err(message) => {
-                // a file that does not even parse says so first, as the C++ read it first
+                // a file that does not even parse says so first
                 let (t, c) = (text.clone(), chunk.to_owned());
                 let parsed = self.exec.cpu(move || gz_luadata::parse_named(&t, &c).map(|_| ())).await;
                 return Err(match parsed {
@@ -205,7 +204,7 @@ impl PdaService {
         value.as_ref().clone()
     }
 
-    /// What W320 knows, `None` when no game is linked: the C++ checked textures only then.
+    /// What W320 knows, `None` when no game is linked: textures are checked only then.
     async fn known_textures(&self, editor: &Editor, session: &ProjectSession) -> Option<Arc<KnownTextures>> {
         let link = GameLink::of(editor).ok()?;
         let (files, game_rev) = link.snapshot().await.ok()?;
@@ -275,8 +274,7 @@ impl PdaService {
         self.exec.io(move || seen.into_iter().filter(|t| !known.knows(t)).collect()).await
     }
 
-    /// The `.pdaasset` files of the project the build ships, project-relative with `\`, sorted
-    /// (`EditorPda::List`).
+    /// The `.pdaasset` files of the project the build ships, project-relative with `\`, sorted.
     pub async fn list(&self, editor: &Editor) -> Result<Vec<String>, CmdError> {
         let (session, project) = Project::of(editor)?;
         let manifest = ManifestService::of_session(editor, &session).await?;
@@ -342,12 +340,12 @@ impl PdaService {
     }
 }
 
-/// The lines of the build's PDA check, as the C++ wrote them (each a whole line).
+/// The lines of the build's PDA check (each a whole line).
 fn line(severity_error: bool, text: String) -> Problem {
     if severity_error { Problem::error("pda", text) } else { Problem::warning("pda", text) }
 }
 
-/// The build's question (`ValidateForBuild`): the layout the module uses, its E-problems as
+/// The build's question: the layout the module uses, its E-problems as
 /// errors, the rest as warnings. A layout the build leaves out, a missing file and one that
 /// does not parse are errors too.
 pub async fn validate_for_build(editor: &Arc<Editor>, session: &Arc<ProjectSession>) -> Vec<Problem> {
@@ -429,7 +427,7 @@ impl BuildCheck for PdaCheck {
 }
 
 /// Hangs the area on the editor: the build's check, the template of `file.create kind=pda`
-/// (`NewPda` gets the id `new_pda`, `NewPda2` gets `new_pda2`, titled `New PDA`), the PDA kind
+/// (the new PDA gets the id `new_pda`, the second one `new_pda2`, titled `New PDA`), the PDA kind
 /// of `gz-asset` with its manifest check, and - on every open project, through its watcher -
 /// the first layout that appears in a module that uses none made the module's layout, and the
 /// used layout's file going away clearing `[pda] layout`.

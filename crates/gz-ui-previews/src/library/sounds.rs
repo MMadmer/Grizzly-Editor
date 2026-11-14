@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use egui::{CornerRadius, Pos2, Sense, Stroke, Ui, Vec2, pos2};
 use gz_app::{DocCx, Document, EditAction, OpenRequest};
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Origin};
+use gz_editor::{Args, CmdError, Editor, Origin};
 use gz_fmt_sound::{
     OggParams, Pcm, Peak, SoundThm, decode_ogg, encode_game_sound, read_sound_thm, read_wav, write_sound_thm,
 };
@@ -29,7 +29,7 @@ use crate::paths::{EditorDirs, file_age, list_files, set_file_age};
 use crate::pending::Pending;
 
 pub const KIND: &str = "sound_library";
-/// The game's rolloff (`psSoundRolloff`): how fast a sound falls off past its minimum distance.
+/// The game's rolloff: how fast a sound falls off past its minimum distance.
 pub const ROLLOFF: f32 = 0.75;
 const CURVE_POINTS: usize = 96;
 const WAVE_BUCKETS: usize = 512;
@@ -124,14 +124,14 @@ pub struct GameSound {
     pub pcm: Option<Arc<Pcm>>,
 }
 
-/// `Max from Min` (`OnAttClick` 0): the distance where the sound falls to 1%, and a tenth more.
+/// Max from Min: the distance where the sound falls to 1%, and a tenth more.
 #[must_use]
 pub fn max_from_min(min: f32) -> f32 {
     let d = min / (0.01 * ROLLOFF);
     d + 0.1 * d
 }
 
-/// `Min from Max` (`OnAttClick` 1).
+/// Min from Max.
 #[must_use]
 pub fn min_from_max(max: f32) -> f32 {
     ROLLOFF * (max - (0.1 / 1.1) * max) * 0.01
@@ -592,11 +592,11 @@ impl SoundLibDoc {
         args: &Args,
         items: &[SoundItem],
     ) -> Result<Map<String, Value>, String> {
-        if let Some(s) = args.str("search") {
+        if let Some(s) = args.get("search").and_then(Value::as_str) {
             self.list.search = s.to_owned();
         }
         if action == "select" {
-            let item = args.str("item").unwrap_or_default();
+            let item = args.get("item").and_then(Value::as_str).unwrap_or_default();
             let keys: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
             let Some(at) = find(&keys, item) else {
                 return Err(format!("no sound is named or matches '{item}'"));
@@ -644,7 +644,7 @@ pub fn make_game_sound(
     Ok(())
 }
 
-/// Writes one description and makes its game sound again (`UpdateLib`: `SynchronizeSounds`
+/// Writes one description and makes its game sound again (the sound synchronization
 /// with the game sounds forced), every file of it at the same age.
 fn save_sound(dirs: &EditorDirs, name: &str, thm: &SoundThm, age: i64) -> Result<(), String> {
     let thm_path = dirs.sounds.join(format!("{name}.thm"));
@@ -679,7 +679,7 @@ pub fn orphans(dirs: &EditorDirs) -> (Vec<String>, usize) {
     (items, total)
 }
 
-/// `SynchronizeSounds` + `CleanupSounds`: a description for every `.wav` that has none or one of
+/// A description for every `.wav` that has none or one of
 /// another age, its game sound made again with it and wherever it is missing or of another age
 /// than its `.wav`; the orphans renamed to `.~ogg` / `.~thm`.
 pub fn synchronize_sounds(
@@ -867,7 +867,7 @@ impl Document for SoundLibDoc {
             let asker =
                 if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
             if let Some(line) = gz_ui::dialog::notice(cx.ctx, asker, Tone::Error, "Save failed", &e) {
-                self.editor.log.plain(line);
+                self.editor.log.finding(&line);
             }
         }
         tb.group(3);
@@ -931,7 +931,7 @@ impl Document for SoundLibDoc {
             let asker =
                 if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
             if let Some(line) = gz_ui::dialog::notice(cx.ctx, asker, Tone::Error, "Rebuild failed", &e) {
-                self.editor.log.plain(line);
+                self.editor.log.finding(&line);
             }
         }
         if self.rebuilt.swap(false, std::sync::atomic::Ordering::AcqRel) && !self.selected.is_empty() {

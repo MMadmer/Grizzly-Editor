@@ -145,7 +145,7 @@ pub fn confirm(
         }
     });
     if let Some(line) = line {
-        editor.log.plain(line);
+        editor.log.finding(&line);
     }
 }
 

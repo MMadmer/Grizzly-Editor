@@ -1,5 +1,5 @@
-//! Perlin's noise as `noise.cpp` has it: the table `noise3Init` builds from `srand(1)`, `noise3`
-//! and `fractalsum3`. The table is data a [`crate::Library`] makes once and shares.
+//! Perlin's noise: the table built from `srand(1)`, the noise function
+//! and the fractal sum. The table is data a [`crate::Library`] makes once and shares.
 
 use glam::Vec3;
 
@@ -143,7 +143,7 @@ mod tests {
             assert!((len - 1.0).abs() < 1e-4, "{len}");
             assert_eq!(n.p[B + i], n.p[i]);
         }
-        // oracle: the shuffle's first swap is with p[256], still 0 then (noise.cpp), so one value
+        // the shuffle's first swap is with p[256], still 0 then, so one value
         // may leave the first 256 entries and 0 come twice: a permutation but for that one
         assert!(seen.iter().filter(|s| **s).count() >= B - 1);
     }

@@ -1,10 +1,9 @@
-//! Text helpers shared by the outline, the pickers, the validator and the commands (`NqText`,
-//! the string half of `NqUtil`).
+//! Text helpers shared by the outline, the pickers, the validator and the commands.
 
 use gz_luadata::Value;
 
 /// The display string of a `text` value: a string as it is, a table by `rus`, then `eng`, then
-/// its first keyed value (`NqText::Preview`).
+/// its first keyed value.
 #[must_use]
 pub fn preview(v: &Value) -> String {
     match v {
@@ -29,7 +28,7 @@ pub fn valid_id(id: &str) -> bool {
 }
 
 /// The id a file name stands for: lower case, any byte outside `[a-z0-9_]` as `_`
-/// (`NqText::IdFromName`; byte by byte, so a Cyrillic letter is two `_`).
+/// (byte by byte, so a Cyrillic letter is two `_`).
 #[must_use]
 pub fn id_from_name(name: &str) -> String {
     name.bytes()
@@ -40,8 +39,7 @@ pub fn id_from_name(name: &str) -> String {
         .collect()
 }
 
-/// At most `max_bytes` of `s`, cut at the start of a code point, with `...` when cut
-/// (`NqUtil::ClipUtf8`).
+/// At most `max_bytes` of `s`, cut at the start of a code point, with `...` when cut.
 #[must_use]
 pub fn clip_utf8(s: &str, max_bytes: usize) -> String {
     if s.len() <= max_bytes {
@@ -56,13 +54,13 @@ pub fn clip_utf8(s: &str, max_bytes: usize) -> String {
     r
 }
 
-/// Trims spaces, tabs and line ends (`NqUtil::Trim`).
+/// Trims spaces, tabs and line ends.
 #[must_use]
 pub fn trim(s: &str) -> &str {
     s.trim_matches([' ', '\t', '\r', '\n'])
 }
 
-/// Splits at `sep`, every piece trimmed, empty pieces dropped (`NqUtil::Split`).
+/// Splits at `sep`, every piece trimmed, empty pieces dropped.
 #[must_use]
 pub fn split(s: &str, sep: char) -> Vec<String> {
     s.split(sep).map(trim).filter(|p| !p.is_empty()).map(str::to_owned).collect()
@@ -137,7 +135,7 @@ pub fn c_atof(s: &str) -> f64 {
 }
 
 /// Whether every character of a UTF-8 text has a cp1251 form; the first six that do not, joined
-/// with spaces (`NqUtil::Cp1251Covers`).
+/// with spaces.
 #[must_use]
 pub fn cp1251_covers(text: &str) -> (bool, String) {
     let mut seen: Vec<char> = Vec::new();
@@ -165,8 +163,8 @@ pub fn cp1251_covers(text: &str) -> (bool, String) {
     (seen.is_empty(), bad)
 }
 
-/// ASCII and Russian letters folded to lower case, byte by byte the way the C++ folded UTF-8
-/// (`FoldSearch` / `FoldNoCase`: А..Я to а..я, Ё to ё).
+/// ASCII and Russian letters folded to lower case, byte by byte, as UTF-8
+/// is folded: the capital letters to the small ones.
 #[must_use]
 pub fn fold(text: &str) -> String {
     let b = text.as_bytes();
@@ -203,7 +201,7 @@ pub fn fold(text: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
-/// `hay` holds `needle`, both folded; an empty needle is in everything (`ContainsNoCase`).
+/// `hay` holds `needle`, both folded; an empty needle is in everything.
 #[must_use]
 pub fn contains_no_case(hay: &str, needle: &str) -> bool {
     if needle.is_empty() {
@@ -216,7 +214,7 @@ pub fn contains_no_case(hay: &str, needle: &str) -> bool {
 }
 
 /// One line of a reference table for the outline: `story:esc_m_trader`, `ref:boars`,
-/// `spawn simulation_boar@smart ref=boars`, `level:x pos=(..) r=5` (`NqText::RefSummary`).
+/// `spawn simulation_boar@smart ref=boars`, `level:x pos=(..) r=5`.
 #[must_use]
 pub fn ref_summary(v: &Value) -> String {
     if !v.is_table() {
@@ -272,8 +270,7 @@ pub fn ref_summary(v: &Value) -> String {
     value_summary(v, 48)
 }
 
-/// A short summary of a value: strings quoted and clipped, tables as `k=v`
-/// (`NqText::ValueSummary`).
+/// A short summary of a value: strings quoted and clipped, tables as `k=v`.
 #[must_use]
 pub fn value_summary(v: &Value, max_len: usize) -> String {
     match v {
@@ -364,7 +361,7 @@ pub fn is_trigger_kind(kind: &str) -> bool {
 }
 
 /// `quest` / `Quest` (and their plurals) as whole words turned into `graph`: how a behaviour
-/// graph speaks of itself (`Regraph`).
+/// graph speaks of itself.
 #[must_use]
 pub fn regraph(text: &str) -> String {
     let b = text.as_bytes();
@@ -397,8 +394,7 @@ pub fn regraph(text: &str) -> String {
     out
 }
 
-/// The title of a kind as the document speaks: a behaviour graph never says "quest"
-/// (`NqLook::KindTitle`).
+/// The title of a kind as the document speaks: a behaviour graph never says "quest".
 #[must_use]
 pub fn kind_title(catalog: &crate::Catalog, kind: &str, behaviour: bool) -> String {
     let title = catalog.find(kind).map_or_else(|| kind.to_owned(), |k| k.title.clone());
@@ -612,7 +608,7 @@ pub fn summary(catalog: &crate::Catalog, kind: &str, params: &Value, names: Opti
     out
 }
 
-/// What the document is called in a sentence: `quest` or `graph` (`NqLook::DocNoun`).
+/// What the document is called in a sentence: `quest` or `graph`.
 #[must_use]
 pub fn doc_noun(behaviour: bool) -> &'static str {
     if behaviour { "graph" } else { "quest" }

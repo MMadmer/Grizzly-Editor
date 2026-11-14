@@ -164,7 +164,7 @@ impl EcKey {
         &self.d
     }
 
-    /// Whether the scalar gives this public point (`KeyConsistent`).
+    /// Whether the scalar gives this public point.
     #[must_use]
     pub fn matches(&self, point: &PublicPoint) -> bool {
         self.public == *point

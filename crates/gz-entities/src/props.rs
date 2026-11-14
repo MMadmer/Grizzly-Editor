@@ -1,7 +1,7 @@
-//! The property sheet: what `FillProps` of each class lists, with typed get and set.
+//! The property sheet: what each class lists, with typed get and set.
 //!
-//! Paths are `PrepareKey(pref, ...)` without the prefix the caller adds: almost every one
-//! starts with the spawn section (`stalker\ALife\Story ID`); a few are the C++'s bare ones
+//! Paths are the property keys without the prefix the caller adds: almost every one
+//! starts with the spawn section (`stalker\ALife\Story ID`); a few are bare ones
 //! (`Game Type`, `ALife\Count`). Lists the game builds at run time (story ids, levels,
 //! character profiles, smart cover descriptions) are named by [`ListKind`] and resolved by the
 //! caller; what the scripts know (smart covers) comes in through [`PropContext`].
@@ -65,7 +65,7 @@ impl PropValue {
     }
 }
 
-/// A list the game makes at run time (`SFillPropData`).
+/// A list the game makes at run time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ListKind {
@@ -83,29 +83,29 @@ pub enum ListKind {
     SmartCovers,
 }
 
-/// What a choose dialog lists (`EChooseMode`).
+/// What a choose dialog lists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChooseKind {
-    /// `smVisual`.
+    /// Choosing a visual.
     Visual,
-    /// `smSkeletonAnims`: the motions of the model `param` names.
+    /// The motions of the model `param` names.
     SkeletonAnims,
-    /// `smSkeletonBones`: the bones of the model `param` names.
+    /// The bones of the model `param` names.
     SkeletonBones,
-    /// `smGameAnim`.
+    /// Choosing a game animation.
     GameAnim,
-    /// `smLAnim`: light animations.
+    /// Choosing a light animation.
     LightAnim,
-    /// `smTexture`, under `folder`.
+    /// Choosing a texture, under `folder`.
     Texture,
-    /// `smSoundSource`.
+    /// Choosing a sound source.
     SoundSource,
-    /// `smSpawnItem`: the sections `param` lists.
+    /// The sections `param` lists.
     SpawnItem,
 }
 
-/// How a property is edited, with the C++ widget's limits.
+/// How a property is edited, with the widget's limits.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PropKind {
@@ -137,7 +137,7 @@ pub enum PropKind {
     },
     /// A `BOOL`.
     Bool,
-    /// One bit of a flags word; `off` / `on` name the two states when the C++ names them.
+    /// One bit of a flags word; `off` / `on` name the two states when the game names them.
     Flag {
         size: u8,
         bit: u32,
@@ -216,7 +216,7 @@ pub struct PropContext {
     /// sections (id = name), an empty name for -1 (no story id) added by the reader.
     pub story_names: BTreeMap<u32, SmolStr>,
     pub spawn_story_names: BTreeMap<u32, SmolStr>,
-    /// The Spawn tool's name of a section (`SectionToEditor`: its `$spawn` list path).
+    /// The Spawn tool's name of a section (its `$spawn` list path).
     pub profiles: BTreeMap<SmolStr, SmolStr>,
     /// `fp_data.locations`: a graph point's four location lists (`[location_N]` of `game.ltx`,
     /// name = the value as written, id = `atoi` of the key), in file order.
@@ -255,7 +255,7 @@ impl PropContext {
 }
 
 impl PropContext {
-    /// `is_combat_cover` of xrServer_Objects_Alife_Smartcovers.cpp.
+    /// Whether a smart cover description is a combat cover.
     fn is_combat_cover(&self, description: &str) -> bool {
         if description.is_empty() {
             return false;
@@ -264,14 +264,14 @@ impl PropContext {
     }
 }
 
-/// What a change asks the editor to do (the C++ `OnChangeEvent` handlers).
+/// What a change asks the editor to do.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct SetEffect {
-    /// `flVisualChange`: reload the model.
+    /// Reload the model.
     pub visual_changed: bool,
-    /// `flVisualAnimationChange`: restart the animation.
+    /// Restart the animation.
     pub animation_changed: bool,
-    /// `flMotionChange`.
+    /// The change affects the object's motion.
     pub motion_changed: bool,
     /// The set of properties may differ now: list them again.
     pub refresh: bool,
@@ -415,7 +415,7 @@ impl B<'_> {
     }
 
     fn alife(&mut self, _h: &Header, o: &Object) {
-        // oracle: `CSE_Abstract::FillProps` has its Game Type row commented out
+        // the game's property sheet has its Game Type row commented out
         let a = &o.alife;
         self.add("Custom data", PropKind::Text, text(&a.ini_string), Field::CustomData);
         // the address quests use: [story_object] in the custom data, surfaced as its own field
@@ -993,11 +993,11 @@ fn table_props(
     }
 }
 
-/// `FillProps` of the entity's class.
+/// The properties of the entity's class.
 pub(crate) fn list(h: &Header, info: &ClassInfo, o: &Object, ctx: &PropContext) -> Vec<Prop> {
     let mut b = B { out: Vec::with_capacity(32), s: &h.section };
     match info.class {
-        // oracle: `CSE_Abstract::FillProps` lists nothing (its Game Type row is commented out)
+        // the game's property sheet lists nothing here (its Game Type row is commented out)
         Class::Spectator => {}
         Class::Temporary => {}
         Class::GraphPoint => {
@@ -1248,7 +1248,7 @@ fn want_bool(p: &Prop, v: &PropValue) -> Result<bool> {
     v.as_bool().ok_or_else(|| EntityError::WrongType { path: p.path.clone(), expected: "true or false" })
 }
 
-/// `ScriptStoryOf`: `[story_object] story_id = <x>` inside the custom data; "" when absent.
+/// `[story_object] story_id = <x>` inside the custom data; "" when absent.
 fn script_story_of(ini: &str) -> String {
     let Some(sec) = ini.find("[story_object]") else { return String::new() };
     let mut pos = sec + "[story_object]".len();
@@ -1279,7 +1279,7 @@ fn script_story_of(ini: &str) -> String {
     String::new()
 }
 
-/// `WithScriptStory`: the custom data with its `[story_object]` block replaced (removed for an
+/// The custom data with its `[story_object]` block replaced (removed for an
 /// empty id), everything else as the author wrote it.
 fn with_script_story(ini: &str, id: &str) -> String {
     let mut text = ini.to_owned();
@@ -1531,7 +1531,7 @@ mod tests {
         assert_eq!(p[0], "stalker\\Money");
         assert_eq!(p[1], "stalker\\Trader\\Infinite ammo");
         assert_eq!(p[2], "stalker\\npc profile");
-        // no Game Type row: `CSE_Abstract::FillProps` has it commented out
+        // no Game Type row: the game's property sheet has it commented out
         assert_eq!(p[3], "stalker\\Custom data");
         assert_eq!(p[4], "stalker\\ALife\\Story ID (script)");
         assert!(p.contains(&"stalker\\ALife\\Can switch online".to_owned()));
@@ -1624,7 +1624,7 @@ mod script_story_tests {
     use super::{script_story_of, with_script_story};
 
     #[test]
-    fn the_story_object_block_is_read_and_replaced_as_the_cpp_does() {
+    fn the_story_object_block_is_read_and_replaced() {
         let ini = "[logic]\r\ncfg = a.ltx\r\n[story_object]\r\nstory_id = trader\r\n";
         assert_eq!(script_story_of(ini), "trader");
         assert_eq!(script_story_of("[story_object]\nbare_id\n"), "bare_id");

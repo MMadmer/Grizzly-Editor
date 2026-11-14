@@ -1,6 +1,6 @@
 //! Portraits: a portrait is a rectangle of a sheet that holds a hundred of them. Every sheet is
 //! read and decoded on the pools the first time a face on it is shown, uploaded once and kept
-//! while the project is open (`SSheet`, `Portrait`, `DrawPortrait`, `IconPicker`).
+//! while the project is open.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -147,7 +147,7 @@ impl Sheets {
 }
 
 /// The face the player sees, `height` tall (and 1.42 times as wide), or a frame with a person in
-/// it while there is none (`DrawPortrait`).
+/// it while there is none.
 pub fn draw_portrait(
     ui: &mut Ui,
     editor: &Arc<Editor>,
@@ -191,7 +191,7 @@ struct Shown {
 }
 
 /// The portrait, picked from a gallery of every face the linked game and the project have: by
-/// looking, not by remembering `ui_inGame2_neutral_2_mask` (`IconPicker`). Only the rows in view
+/// looking, not by remembering `ui_inGame2_neutral_2_mask`. Only the rows in view
 /// are laid out, and only their sheets read. Returns whether the value changed.
 pub fn local_portrait_gallery(
     ui: &mut Ui,

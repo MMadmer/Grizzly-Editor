@@ -1,4 +1,4 @@
-//! The Shape tool's edits (`EShape.cpp`, `ESceneShapeTools.cpp`): attaching one shape to another,
+//! The Shape tool's edits: attaching one shape to another,
 //! detaching a shape's parts into shapes of their own, and the level bound.
 
 use gz_editor::{CmdError, json};
@@ -10,8 +10,8 @@ use crate::math::{Aabb, Mat4, Transform, Vec3};
 use crate::model::{ObjData, ObjId, Object, SceneState};
 use crate::objects::{CF_SPHERE, SHAPE_LEVEL_BOUND, ShapeData, ShapeDef};
 
-/// What a click of the Shape tool adds (`TUI_ControlShapeAdd::AfterAppendCallback`): a unit
-/// sphere (`Fsphere::identity`) or the identity box.
+/// What a click of the Shape tool adds: a unit
+/// sphere or the identity box.
 #[must_use]
 pub fn new_shape_data(sphere: bool) -> ShapeData {
     if sphere {
@@ -28,7 +28,7 @@ fn shape_of(o: &Object) -> Result<&ShapeData, CmdError> {
     }
 }
 
-/// `CEditShape::Attach(from)`: both scales applied, `from`'s shapes carried into the base's space
+/// Attaches `from` to the shape: both scales applied, `from`'s shapes carried into the base's space
 /// and added to it, `from` removed.
 pub fn attach(state: &SceneState, base: ObjId, from: ObjId) -> Result<Outcome, CmdError> {
     if base == from {
@@ -64,7 +64,7 @@ pub fn attach(state: &SceneState, base: ObjId, from: ObjId) -> Result<Outcome, C
     Ok((batch, json!({ "shape": b.name.as_str(), "attached": f.name.as_str() })))
 }
 
-/// `TUI_ControlShapeAdd::Start` with Attach on Click: the one selected shape takes `from`.
+/// Adds a shape with Attach on Click: the one selected shape takes `from`.
 pub fn attach_to_selected(state: &SceneState, from: ObjId) -> Result<Outcome, CmdError> {
     let sel = selected_of(state, ObjClass::Shape);
     let [base] = sel.as_slice() else { return Err(CmdError::invalid("Select one shape.")) };
@@ -72,7 +72,7 @@ pub fn attach_to_selected(state: &SceneState, from: ObjId) -> Result<Outcome, Cm
 }
 
 /// The Detach confirmation's answer: the shapes are deselected, then each selected shape of
-/// several parts (`CEditShape::Detach`) keeps its first part and the others become shapes named
+/// several parts keeps its first part and the others become shapes named
 /// after it, all of them selected.
 pub fn detach_selected(state: &SceneState) -> Result<Outcome, CmdError> {
     let sel = selected_of(state, ObjClass::Shape);
@@ -154,7 +154,7 @@ fn level_box(state: &SceneState, lib: &Library) -> Option<Aabb> {
     out
 }
 
-/// `ESceneShapeTool::OnEditLevelBounds(recalc)`: the level bound shape, made when there is none
+/// Edits the level bound: the level bound shape, made when there is none
 /// (`level_bbox`, one identity box), fitted to the scene objects and groups when asked or made.
 /// `state_after` rides along (Edit Level Bound switched on).
 pub fn edit_level_bound(

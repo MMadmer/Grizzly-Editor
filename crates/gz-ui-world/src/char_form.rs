@@ -25,7 +25,7 @@ const TABLE_ROW: f32 = 26.0;
 /// The portrait at the head of a list row: a 22 pt face, as wide as a portrait is.
 const THUMB_W: f32 = 30.0;
 
-/// A row's flags with Invalid when one of its problems is an error (`RowFlags`).
+/// A row's flags with Invalid when one of its problems is an error.
 /// "name.eng: here "Ivan", on disk "Petro"": one value both the form and the file changed.
 pub(crate) fn conflict_line(c: &gz_luadata::Conflict) -> String {
     let show = |v: &Option<gz_luadata::Value>| match v {
@@ -43,14 +43,14 @@ fn flags(own: &[String], field: &str, base: PropFlags) -> PropFlags {
     }
 }
 
-/// The sentences of a row's problems under it (`FieldMessages`).
+/// The sentences of a row's problems under it.
 fn messages(g: &mut Grid<'_>, own: &[String], field: &str) {
     for p in own.iter().filter(|p| field_of(p) == field) {
         g.message(problem_tone(p), &problem_text(p));
     }
 }
 
-/// The same, as lines of their own outside the grid (`FieldStatus`).
+/// The same, as lines of their own outside the grid.
 fn status_lines(ui: &mut Ui, own: &[String], field: &str) {
     for p in own.iter().filter(|p| field_of(p) == field) {
         let _ = text::status(ui, problem_tone(p), &problem_text(p));
@@ -62,7 +62,7 @@ fn cell<R>(ui: &mut Ui, w: f32, add: impl FnOnce(&mut Ui) -> R) -> R {
     local_cell(ui, Vec2::new(w.max(1.0), metrics::FRAME), Layout::left_to_right(Align::Center), add).inner
 }
 
-/// The line under a table row (`BordersInnerH`).
+/// The line under a table row.
 fn row_rule(ui: &mut Ui) {
     let p = palette(ui.ctx());
     let r = ui.min_rect();
@@ -75,7 +75,7 @@ fn item_label(items: &Indexed, section: &str) -> String {
     items.get(section).map_or_else(|| section.to_owned(), Indexed::label)
 }
 
-/// "sells ..., a stock of N item(s), asks .. and pays .. of the cost" (`TradeSummary`).
+/// "sells ..., a stock of N item(s), asks .. and pays .. of the cost".
 fn trade_summary(t: &Trade) -> String {
     let sells = if t.sells.is_empty() { "its stock only".to_owned() } else { t.sells.join(", ") };
     format!(
@@ -549,7 +549,7 @@ impl CharactersDoc {
     }
 }
 
-/// The rank by the linked game's names and the exact number beside it (`RankPicker`).
+/// The rank by the linked game's names and the exact number beside it.
 fn rank_row(ui: &mut Ui, edit: &mut Character, lists: &ListsView) -> bool {
     let mut changed = false;
     let number = em(6.0);
@@ -596,7 +596,7 @@ fn rank_row(ui: &mut Ui, edit: &mut Character, lists: &ListsView) -> bool {
 }
 
 /// Money: from, to and Never runs out on the row; empty while the character sets none, the
-/// base's amounts as the hints (`MoneyRow`, `MoneyField`).
+/// base's amounts as the hints.
 fn money_row(ui: &mut Ui, edit: &mut Character, inherited: Option<&Character>) -> bool {
     let ctx = ui.ctx().clone();
     let (base_min, base_max, base_inf) = inherited
@@ -762,7 +762,7 @@ fn draw_kit(
     changed
 }
 
-/// The shop's rows: what it sells and buys, and its prices (`DrawTradeRows`).
+/// The shop's rows: what it sells and buys, and its prices.
 fn trade_rows(g: &mut Grid<'_>, t: &mut Trade, lists: &ListsView, own: &[String]) -> bool {
     let mut changed = false;
     let cats: &[String] = &lists.trade_categories;
@@ -809,7 +809,7 @@ fn trade_rows(g: &mut Grid<'_>, t: &mut Trade, lists: &ListsView, own: &[String]
 }
 
 /// The stock: what is on its shelf after every restock, each line with its chance; Add Item and
-/// Not a Trader (`DrawStock`).
+/// Not a Trader.
 fn draw_stock(ui: &mut Ui, t: &mut Trade, inherited: &Trade, lists: &ListsView, own: &[String]) -> bool {
     let p = palette(ui.ctx());
     let mut changed = false;
@@ -889,8 +889,7 @@ fn draw_stock(ui: &mut Ui, t: &mut Trade, inherited: &Trade, lists: &ListsView, 
     changed
 }
 
-/// Not a trader, or trading as the base does: a line saying which, and the way to change it
-/// (`DrawTradeOff`).
+/// Not a trader, or trading as the base does: a line saying which, and the way to change it.
 fn draw_trade_off(ui: &mut Ui, t: &mut Trade, inherited: &Trade, base: &str) -> bool {
     let mut changed = false;
     let from_base = !t.declared && inherited.is_trader();

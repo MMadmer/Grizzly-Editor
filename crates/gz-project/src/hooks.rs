@@ -87,7 +87,7 @@ impl ProjectHooks {
         f.map_or_else(|| Ok(String::new()), |f| f(editor))
     }
 
-    /// Whether a scene with something in it is open (`EditorProject::SetLiveSceneQuery`): a
+    /// Whether a scene with something in it is open: a
     /// different game is not linked under it.
     pub fn provide_live_scene(&self, f: impl Fn(&Editor) -> bool + Send + Sync + 'static) {
         *self.live_scene.write() = Some(Arc::new(f));
@@ -311,7 +311,7 @@ impl AssetLists {
     }
 }
 
-/// A library listing as the editor's file system gave it (`FS.file_list` with `FS_ClampExt`):
+/// A library listing as the editor's file system gives it (with the extension clamped):
 /// every file under `root` with the extension `ext` (any case), as its path below `root` without
 /// the extension, lower case, backslashes, in byte order.
 #[must_use]

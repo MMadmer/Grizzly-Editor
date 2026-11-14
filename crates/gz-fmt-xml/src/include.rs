@@ -1,4 +1,4 @@
-//! `ParseFile` of `xrXMLParser.cpp`: the textual pre-pass that expands `#include` lines.
+//! The textual pre-pass that expands `#include` lines.
 
 use crate::doc::XmlWarning;
 
@@ -8,7 +8,7 @@ fn is_term(c: u8) -> bool {
     c == b'\r' || c == b'\n'
 }
 
-/// The lines as `IReader::r_string` returns them: a run of line breaks ends a line, so blank
+/// The lines as the engine's reader returns them: a run of line breaks ends a line, so blank
 /// lines vanish.
 fn lines(text: &str) -> impl Iterator<Item = &str> {
     let b = text.as_bytes();
@@ -34,12 +34,12 @@ fn lines(text: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-/// Expands a file the way `CXml::Load` does before it parses: every line written back with
+/// Expands a file the way the engine does before it parses: every line written back with
 /// `\r\n`, a line that starts with `#` and holds `#include` replaced by the file named between
 /// its first pair of quotes. `include` gets the name as written (relative to the config root,
 /// as the game resolves it) and returns that file's text.
 ///
-/// The C++ stops on a missing include; here it is a warning and the line is dropped.
+/// The engine stops on a missing include; here it is a warning and the line is dropped.
 pub fn preprocess(text: &str, include: &dyn Fn(&str) -> Option<String>) -> (String, Vec<XmlWarning>) {
     let mut out = String::with_capacity(text.len() + 64);
     let mut warnings = Vec::new();

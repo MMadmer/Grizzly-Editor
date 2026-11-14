@@ -181,7 +181,7 @@ pub(crate) fn save_group_as(
         );
     });
     if let Err(line) = picked {
-        editor.log.plain(line);
+        editor.log.finding(&line);
     }
 }
 
@@ -214,7 +214,7 @@ pub(crate) fn ask_reset_all(editor: &Arc<Editor>, ctx: &egui::Context, who: Aske
         }
     });
     if let Some(l) = line {
-        editor.log.plain(l);
+        editor.log.finding(&l);
     }
 }
 

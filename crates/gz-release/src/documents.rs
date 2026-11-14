@@ -1,4 +1,4 @@
-//! The user's Documents folder, where the C++ editor's `SHGetKnownFolderPath(FOLDERID_Documents)`
+//! The user's Documents folder, where the shell's known-folder query
 //! finds it - redirected to OneDrive or another drive included. `%USERPROFILE%\Documents` when the
 //! shell does not answer.
 

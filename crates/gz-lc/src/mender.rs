@@ -1,13 +1,13 @@
-//! NVIDIA's MeshMender as the compiler calls it (`Public/NVMeshMenderTwo.cpp`): the tangent and
+//! NVIDIA's MeshMender as the compiler calls it: the tangent and
 //! the binormal of every triangle from its texture gradients, smoothed around each position over
-//! the triangles that share an edge by index (`RESPECT_SPLITS`) and whose vectors are within the
+//! the triangles that share an edge by index and whose vectors are within the
 //! crease angle, a corner split where two groups meet, then orthogonalised against the normal.
-//! The normals are the caller's (`DONT_CALCULATE_NORMALS`), the texture coordinates are taken as
-//! they come (`DONT_FIX_CYLINDRICAL`).
+//! The normals are the caller's, the texture coordinates are taken as
+//! they come.
 
 use std::collections::{BTreeMap, HashSet};
 
-/// `MeshMender::Vertex`.
+/// A mender vertex.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MVertex {
     pub pos: [f32; 3],
@@ -50,9 +50,9 @@ fn length(a: V) -> f32 {
     (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
 }
 
-/// `Vec3Normalize(pOut, pV)`: `pOut` scaled by the inverse length of `pV`.
-// oracle: the C++ scales what `pOut` holds, not `pV`; the two differ in
-// `OrthogonalizeTangentsAndBinormals`, where the old tangent is scaled by the new one's length
+/// Normalizes: `pOut` scaled by the inverse length of `pV`.
+// X-Ray's compiler scales what `pOut` holds, not `pV`; the two differ in
+// the tangent orthogonalisation, where the old tangent is scaled by the new one's length
 fn normalize_into(out: V, v: V) -> V {
     let s = 1.0 / (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
     [out[0] * s, out[1] * s, out[2] * s]
@@ -90,7 +90,7 @@ impl Ord for Key {
     }
 }
 
-/// `GetGradients`.
+/// The texture gradients.
 fn gradients(v0: &MVertex, v1: &MVertex, v2: &MVertex) -> (V, V) {
     let p = sub(v1.pos, v0.pos);
     let q = sub(v2.pos, v0.pos);
@@ -114,7 +114,7 @@ fn tri_has_edge(p0: usize, p1: usize, a: usize, b: usize, c: usize) -> bool {
         || (p0 == a && p1 == c)
 }
 
-/// `SharesEdgeRespectSplits`.
+/// Whether two triangles share an edge, respecting the splits.
 fn shares_edge(a: &Tri, b: &Tri) -> bool {
     let [a1, b1, c1] = a.indices;
     let [a2, b2, c2] = b.indices;
@@ -137,7 +137,7 @@ impl Mender {
         self.tris.get(t).map_or([0.0; 3], |x| if w == Which::Tangent { x.tangent } else { x.binormal })
     }
 
-    /// `CanSmoothTangentsChecker` / `CanSmoothBinormalsChecker`.
+    /// Whether the tangents / binormals of two triangles can be smoothed.
     fn can_smooth(&self, t1: usize, t2: usize, w: Which, min_crease: f32) -> bool {
         let a = normalized(self.vector(t1, w));
         let b = normalized(self.vector(t2, w));
@@ -161,7 +161,7 @@ impl Mender {
         (found.first().copied().unwrap_or(NO_GROUP), found.get(1).copied().unwrap_or(NO_GROUP))
     }
 
-    /// `BuildGroups`, its recursion walked with a stack in the same order.
+    /// Builds the groups, its recursion walked with a stack in the same order.
     fn build_groups(
         &mut self,
         start: usize,
@@ -225,7 +225,7 @@ impl Mender {
         }
     }
 
-    /// `ProcessTangents` / `ProcessBinormals`.
+    /// Processes the tangents / binormals.
     fn process(
         &mut self,
         possible: &[usize],
@@ -295,7 +295,7 @@ impl Mender {
     }
 }
 
-/// `OrthogonalizeTangentsAndBinormals`.
+/// Orthogonalizes the tangents and binormals.
 fn orthogonalize(verts: &mut [MVertex]) {
     for v in verts.iter_mut() {
         let (tan, nrm, bin) = (v.tangent, v.normal, v.binormal);
@@ -323,8 +323,8 @@ fn orthogonalize(verts: &mut [MVertex]) {
     }
 }
 
-/// `MeshMender::Mend(verts, indices, mapping, 1, 0.5, 0.5, 0, DONT_CALCULATE_NORMALS,
-/// RESPECT_SPLITS, DONT_FIX_CYLINDRICAL)`: answers `mappingNewToOldVert`; `verts` may grow and
+/// The mend: `Mend(verts, indices, mapping, 1, 0.5, 0.5, 0, DONT_CALCULATE_NORMALS,
+/// RESPECT_SPLITS, DONT_FIX_CYLINDRICAL)`: answers the mapping from new to old vertices; `verts` may grow and
 /// `indices` point at the new vertices.
 pub fn mend(
     verts: &mut Vec<MVertex>,

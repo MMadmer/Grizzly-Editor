@@ -8,8 +8,8 @@ use smol_str::SmolStr;
 
 use crate::{ObjectError, Result};
 
-/// How the strings of a file are stored. The C++ editor copies bytes; this keeps a read and a
-/// write of the same file identical.
+/// How the strings of a file are stored. Bytes are kept as they are, so a read and a
+/// write of the same file are identical.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum TextEncoding {
     #[default]
@@ -180,7 +180,7 @@ mod tests {
         let mut r = Reader::new(b"\r\n\x05");
         assert_eq!(r_term_string(&mut r), b"\r");
         assert_eq!(r.r_u8().unwrap(), 5);
-        // a count of ten is eaten as a terminator: the C++ does the same
+        // a count of ten is eaten as a terminator: the X-Ray SDK does the same
         let mut r = Reader::new(b"x\r\n\x0a\0\0\0");
         assert_eq!(r_term_string(&mut r), b"x");
         assert_eq!(r.elapsed(), 3);

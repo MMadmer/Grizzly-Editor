@@ -1,8 +1,8 @@
-//! The static wallmarks as `ESceneWallmarkTool::OnRender` draws them: each mark's triangles
+//! The static wallmarks as the wallmark tool draws them: each mark's triangles
 //! with its slot's shader and texture, white, a little nearer than the wall, those the view sees
 //! and that are big enough on the picture; a selected mark's box.
 //!
-//! The marks are read from the tool's chunk as `LoadStream` reads it, once per chunk; a mark is a
+//! The marks are read from the tool's chunk, once per chunk; a mark is a
 //! mesh of its own.
 
 use std::sync::Arc;
@@ -18,13 +18,13 @@ use smol_str::SmolStr;
 
 use crate::draw::Built;
 
-/// `flDrawWallmark`.
+/// The draw-wallmark flag.
 const DRAW_WALLMARK: u32 = 1 << 0;
-/// `wallmark::flSelected`.
+/// The selected flag.
 const SELECTED: u8 = 1 << 0;
-/// `MAX_WALLMARK_VERTEX_COUNT`: a mark with more is dropped when it is read.
+/// A mark with more is dropped when it is read.
 const MAX_VERTICES: u32 = 8192;
-/// `FVF::LIT`: position, colour, texture coordinates.
+/// Position, colour, texture coordinates.
 const LIT: usize = 24;
 
 /// One mark as the file holds it.
@@ -56,7 +56,7 @@ fn vec3(r: &mut Reader<'_>) -> Option<Vec3> {
     Some(Vec3::new(r.r_f32().ok()?, r.r_f32().ok()?, r.r_f32().ok()?))
 }
 
-/// `LoadStream`: version 3 (no mark sizes) or 4, a mark of too many vertices dropped.
+/// Version 3 (no mark sizes) or 4, a mark of too many vertices dropped.
 #[must_use]
 pub fn read(bytes: &[u8]) -> Option<Wallmarks> {
     let r = Reader::new(bytes);
@@ -120,7 +120,7 @@ pub fn read(bytes: &[u8]) -> Option<Wallmarks> {
     Some(Wallmarks { flags, slots })
 }
 
-/// A mark's mesh: its triangles in white (`OnRender` fills every vertex with 255, 255, 255, 255).
+/// A mark's mesh: its triangles in white (every vertex is filled with 255, 255, 255, 255).
 fn mark_mesh(m: &Mark, material: &MaterialDesc) -> Option<MeshData> {
     let tris = m.verts.len() / 3 * 3;
     if tris == 0 {

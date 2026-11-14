@@ -168,11 +168,11 @@ struct ImportParams {
     surface: Option<String>,
 }
 
-/// The linked game's levels, as the world area reads them (`EditorWorld::LevelExists`).
+/// The linked game's levels, as the world area reads them.
 pub type LevelsHook = Arc<dyn Fn(Arc<Editor>) -> BoxFuture<'static, Option<Vec<String>>> + Send + Sync>;
 
 /// Where the world area hangs what W407 asks: the levels of the linked game. Until it does, or
-/// while it answers `None`, levels are not checked - as the C++ skipped them while
+/// while it answers `None`, levels are not checked.
 /// `EditorWorld::Available()` was false. Lives in `editor.services`.
 #[derive(Default)]
 pub struct GameLevels {
@@ -198,7 +198,7 @@ impl GameLevels {
     }
 }
 
-/// The problems of `s` in the open project (`EditorScreens::Validate`), on the IO pool.
+/// The problems of `s` in the open project, on the IO pool.
 pub async fn problems(
     editor: &Arc<Editor>,
     root: PathBuf,
@@ -263,7 +263,7 @@ fn refuse(message: impl Into<String>) -> CmdError {
     CmdError::new("refused", message)
 }
 
-/// A number as `JsonNumber` wrote it: a whole one as an integer, any other `%.15g`.
+/// A number as a JSON number: a whole one as an integer, any other `%.15g`.
 fn json_number(v: f32) -> Value {
     let n = f64::from(v);
     if n.fract() == 0.0 && n.abs() < 9.0e15 {
@@ -272,7 +272,7 @@ fn json_number(v: f32) -> Value {
     gz_luadata::format_g(n, 15).parse::<f64>().map_or(json!(n), |p| json!(p))
 }
 
-/// `loading,menu,pause` without spaces, as the answer names a mask (`MaskText`).
+/// `loading,menu,pause` without spaces, as the answer names a mask.
 fn mask_text(mask: u32, names: &[(u32, &str)]) -> String {
     names.iter().filter(|(b, _)| mask & b != 0).map(|(_, n)| *n).collect::<Vec<_>>().join(",")
 }
@@ -352,7 +352,7 @@ pub fn answer(s: &Screens, problems: &[String]) -> Value {
 
 // ---- arguments the way GrizzlyMCP read them -------------------------------------------------
 
-/// `ArgString`: present means given, even empty; a bare number or flag is its text.
+/// Present means given, even empty; a bare number or flag is its text.
 fn arg(args: &Args, key: &str) -> Option<String> {
     match args.get(key)? {
         Value::String(s) => Some(s.clone()),
@@ -363,7 +363,7 @@ fn arg(args: &Args, key: &str) -> Option<String> {
     }
 }
 
-/// `ArgFloat`: a number, or text that starts like one.
+/// A number, or text that starts like one.
 fn arg_float(args: &Args, key: &str) -> Option<f32> {
     match args.get(key)? {
         Value::Number(n) => n.as_f64().map(|v| v as f32),
@@ -375,7 +375,7 @@ fn arg_float(args: &Args, key: &str) -> Option<f32> {
     }
 }
 
-/// `ArgInt`: a number (cut toward zero) or text that starts like one; `def` otherwise.
+/// A number (cut toward zero) or text that starts like one; `def` otherwise.
 fn arg_int(args: &Args, key: &str, def: i64) -> i64 {
     match args.get(key) {
         Some(Value::Number(n)) => n.as_i64().or_else(|| n.as_f64().map(|v| v as i64)).unwrap_or(def),
@@ -387,7 +387,7 @@ fn arg_int(args: &Args, key: &str, def: i64) -> i64 {
     }
 }
 
-/// `ArgBool`: `true` / `1` / `false` / `0` at the start of the value; `def` otherwise.
+/// `true` / `1` / `false` / `0` at the start of the value; `def` otherwise.
 fn arg_bool(args: &Args, key: &str) -> Option<bool> {
     match args.get(key)? {
         Value::Bool(b) => Some(*b),
@@ -410,7 +410,7 @@ fn arg_bool(args: &Args, key: &str) -> Option<bool> {
     }
 }
 
-/// `ParseSurfaces`: every surface named anywhere in the text.
+/// Every surface named anywhere in the text.
 fn parse_surfaces(text: &str) -> u32 {
     [("loading", LOADING), ("menu", MENU), ("pause", PAUSE)]
         .into_iter()
@@ -418,7 +418,7 @@ fn parse_surfaces(text: &str) -> u32 {
         .fold(0, |m, (_, b)| m | b)
 }
 
-/// What a screen or a track made by a drop shows on (`DefaultShow`): the surface the Screens
+/// What a screen or a track made by a drop shows on: the surface the Screens
 /// tab shows - the loading screen, or the menu and the pause screen.
 fn default_show(menu: bool) -> u32 {
     if menu { MENU | PAUSE } else { LOADING }
@@ -547,7 +547,7 @@ impl Cx<'_> {
         }
     }
 
-    /// Files brought from anywhere (`TakeFiles`): imported in parallel, then put where they go -
+    /// Files brought from anywhere: imported in parallel, then put where they go -
     /// music into the tracks, anything else on the screen `screen` (its layer `layer`, or a new
     /// one), or as a new screen of its own.
     fn take_files(&mut self, s: &mut Screens, files: Vec<String>, screen: &str, layer: i64, to_music: bool) {

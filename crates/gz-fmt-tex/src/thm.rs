@@ -39,7 +39,7 @@ pub enum ThmKind {
     Sound,
 }
 
-/// A texture's description. Today's editor writes no picture into it; files of older editors
+/// A texture's description. The editor writes no picture into it; files of the X-Ray SDK editor
 /// carry one, and it is kept.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextureThm {
@@ -166,14 +166,14 @@ fn expect(version: u16, want: u16, ty: u32, want_ty: u32) -> Result<()> {
     Ok(())
 }
 
-/// Reads a texture description (`ETextureThumbnail::Load`).
+/// Reads a texture description.
 pub fn read_texture_thm(bytes: &[u8]) -> Result<TextureThm> {
     let file = Reader::new(bytes);
     expect(version_of(&file)?, THM_TEXTURE_VERSION, type_of(&file)?, TYPE_TEXTURE)?;
     Ok(TextureThm { pixels: read_pixels(&file)?, params: TextureParams::read(&file)? })
 }
 
-/// Writes a texture description (`ETextureThumbnail::Save`). Without a picture the bytes are
+/// Writes a texture description. Without a picture the bytes are
 /// what today's editor writes.
 pub fn write_texture_thm(thm: &TextureThm) -> Result<Vec<u8>> {
     let mut w = Writer::with_capacity(256);
@@ -186,7 +186,7 @@ pub fn write_texture_thm(thm: &TextureThm) -> Result<Vec<u8>> {
     Ok(w.into_bytes())
 }
 
-/// Reads a library object's thumbnail (`EObjectThumbnail::Load`).
+/// Reads a library object's thumbnail.
 pub fn read_object_thm(bytes: &[u8]) -> Result<ObjectThm> {
     let file = Reader::new(bytes);
     expect(version_of(&file)?, THM_OBJECT_VERSION, type_of(&file)?, TYPE_OBJECT)?;
@@ -196,7 +196,7 @@ pub fn read_object_thm(bytes: &[u8]) -> Result<ObjectThm> {
     Ok(ObjectThm { pixels, face_count: r.r_u32()?, vertex_count: r.r_u32()? })
 }
 
-/// Writes a library object's thumbnail (`EObjectThumbnail::Save`).
+/// Writes a library object's thumbnail.
 pub fn write_object_thm(thm: &ObjectThm) -> Result<Vec<u8>> {
     let mut w = Writer::with_capacity(4096);
     w.chunk(THM_CHUNK_VERSION, |w| w.w_u16(THM_OBJECT_VERSION));
@@ -209,7 +209,7 @@ pub fn write_object_thm(thm: &ObjectThm) -> Result<Vec<u8>> {
     Ok(w.into_bytes())
 }
 
-/// Reads a group's thumbnail (`EGroupThumbnail::Load`).
+/// Reads a group's thumbnail.
 pub fn read_group_thm(bytes: &[u8]) -> Result<GroupThm> {
     let file = Reader::new(bytes);
     expect(version_of(&file)?, THM_GROUP_VERSION, type_of(&file)?, TYPE_OBJECT)?;
@@ -228,7 +228,7 @@ pub fn read_group_thm(bytes: &[u8]) -> Result<GroupThm> {
     Ok(GroupThm { pixels, objects })
 }
 
-/// Writes a group's thumbnail (`EGroupThumbnail::Save`).
+/// Writes a group's thumbnail.
 pub fn write_group_thm(thm: &GroupThm) -> Result<Vec<u8>> {
     let mut w = Writer::with_capacity(4096);
     w.chunk(THM_CHUNK_VERSION, |w| w.w_u16(THM_GROUP_VERSION));

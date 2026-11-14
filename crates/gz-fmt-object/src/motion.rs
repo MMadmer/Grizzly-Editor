@@ -1,5 +1,5 @@
 //! Motions: an object motion (`.anm`) and a skeletal motion (`.skl`, `.skls`, and the motions
-//! an `.object` embeds). `motion.cpp`.
+//! an `.object` embeds).
 
 use glam::Vec3;
 use gz_chunk::{Reader, Writer};
@@ -27,7 +27,7 @@ pub enum Channel {
 }
 
 bitflags::bitflags! {
-    /// `ESMFlags`.
+    /// The motion flags.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
     pub struct SMotionFlags: u8 {
         const FX = 1 << 0;
@@ -75,7 +75,7 @@ impl MotionMark {
     }
 }
 
-/// `COMotion`: the motion of a whole object - six envelopes.
+/// The motion of a whole object - six envelopes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OMotion {
     pub name: SmolStr,
@@ -99,7 +99,7 @@ impl Default for OMotion {
 }
 
 impl OMotion {
-    /// `COMotion::Load` from a stream positioned at the motion.
+    /// Loads an object motion from a stream positioned at the motion.
     pub(crate) fn read(r: &mut Reader<'_>, text: &mut Text) -> Result<OMotion> {
         let name = text.r_str(r)?;
         let frame_start = r.r_i32()?;
@@ -175,7 +175,7 @@ impl BoneMotion {
     pub const WORLD_ORIENT: u8 = 1 << 0;
 }
 
-/// `CSMotion`: a skeletal motion.
+/// A skeletal motion.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SMotion {
     pub name: SmolStr,
@@ -213,7 +213,7 @@ impl Default for SMotion {
 }
 
 impl SMotion {
-    /// `CSMotion::Load` from a stream positioned at the motion.
+    /// Loads a skeletal motion from a stream positioned at the motion.
     pub(crate) fn read(r: &mut Reader<'_>, text: &mut Text) -> Result<SMotion> {
         let mut m = SMotion { name: text.r_str(r)?, ..SMotion::default() };
         m.frame_start = r.r_i32()?;
@@ -267,7 +267,7 @@ impl SMotion {
                     m.bone_motions.push(bm);
                 }
             }
-            // oracle: the C++ reads nothing for an older motion and carries on into garbage
+            // the X-Ray SDK reads nothing for an older motion and carries on into garbage
             v => return Err(ObjectError::Version { what: "The skeletal motion", version: u32::from(v) }),
         }
         if version >= 0x0007 {
@@ -291,7 +291,7 @@ impl SMotion {
         Ok(())
     }
 
-    /// `CSMotion::Save`.
+    /// Saves a skeletal motion.
     pub(crate) fn write(&self, w: &mut Writer, enc: TextEncoding) {
         w_str(w, &self.name, enc);
         w.w_i32(self.frame_start);
@@ -318,7 +318,7 @@ impl SMotion {
         }
     }
 
-    /// `SetName`: motion names are lower case.
+    /// Motion names are lower case.
     pub fn set_name(&mut self, name: &str) {
         self.name = SmolStr::new(name.to_ascii_lowercase());
     }
@@ -336,19 +336,19 @@ impl SMotion {
         self.bone_motions.get(bone).map(|bm| evaluate_channels(&bm.envelopes, t))
     }
 
-    /// `FindBoneMotion`.
+    /// Finds a bone's motion.
     #[must_use]
     pub fn find_bone_motion(&self, name: &str) -> Option<usize> {
         self.bone_motions.iter().position(|bm| bm.name == name)
     }
 
-    /// `GetMotionFlags`; zero for a bone the motion does not hold.
+    /// The motion flags of a bone; zero for a bone the motion does not hold.
     #[must_use]
     pub fn bone_flags(&self, bone: usize) -> u8 {
         self.bone_motions.get(bone).map_or(0, |bm| bm.flags)
     }
 
-    /// `SortBonesBySkeleton`: one bone motion per bone, in the skeleton's order. A bone the
+    /// One bone motion per bone, in the skeleton's order. A bone the
     /// motion lacks gets one key from its rest pose; a bone motion the skeleton lacks is dropped.
     pub fn sort_bones_by_skeleton(&mut self, bones: &[Bone]) {
         let mut sorted = Vec::with_capacity(bones.len());
@@ -357,11 +357,11 @@ impl SMotion {
                 Some(i) => i,
                 None => {
                     let mut bm = BoneMotion { name: bone.name.clone(), ..BoneMotion::default() };
-                    // oracle: the flags come from the motion's first bone, and heading takes
+                    // the flags come from the motion's first bone, and heading takes
                     // the bone's x, pitch its y
                     self.bone_motions.push(BoneMotion::default());
                     bm.flags = self.bone_motions[0].flags;
-                    // oracle: the C++ reads the bone's animated offset here, which nothing has
+                    // the X-Ray SDK reads the bone's animated offset here, which nothing has
                     // set yet on this path; the rest pose is what it holds once the object is up
                     let (o, rot) = (bone.rest_offset, bone.rest_rotate);
                     bm.envelopes[Channel::PositionX as usize].insert_key(0.0, o.x);
@@ -380,7 +380,7 @@ impl SMotion {
         self.bone_motions = sorted;
     }
 
-    /// `CheckBoneCompliance`: gives every bone the motion lacks an empty bone motion.
+    /// Gives every bone the motion lacks an empty bone motion.
     pub fn add_missing_bones(&mut self, bones: &[Bone]) {
         for bone in bones {
             if self.find_bone_motion(&bone.name).is_none() {

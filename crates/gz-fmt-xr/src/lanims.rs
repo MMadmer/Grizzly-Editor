@@ -1,4 +1,4 @@
-//! `lanims.xr`: colour animations of lights. `LightAnimLibrary.cpp`.
+//! `lanims.xr`: colour animations of lights.
 
 use std::collections::BTreeMap;
 
@@ -14,7 +14,7 @@ const CHUNK_ITEM_KEYS: u32 = 2;
 /// `LANIM_VERSION`.
 pub const LANIM_VERSION: u16 = 1;
 
-/// `CLAItem`: keys are `frame -> 0xAARRGGBB`.
+/// Keys are `frame -> 0xAARRGGBB`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LightAnim {
     pub name: SmolStr,
@@ -36,7 +36,7 @@ fn color_argb(a: u32, r: u32, g: u32, b: u32) -> u32 {
     ((a & 0xff) << 24) | ((r & 0xff) << 16) | ((g & 0xff) << 8) | (b & 0xff)
 }
 
-/// `Fcolor::set(u32)`.
+/// Sets a colour from a `u32`.
 fn fcolor(dw: u32) -> [f32; 4] {
     let f = 1.0f32 / 255.0;
     [
@@ -54,7 +54,7 @@ fn pack(c: [f32; 4]) -> u32 {
 }
 
 impl LightAnim {
-    /// `InterpolateRGB`: `None` for a frame past the end or an animation without keys.
+    /// `None` for a frame past the end or an animation without keys.
     #[must_use]
     pub fn color_at(&self, frame: i32) -> Option<u32> {
         if frame > self.frame_count {
@@ -79,7 +79,7 @@ impl LightAnim {
         Some(pack(c))
     }
 
-    /// `CalculateRGB`: the colour at `t` seconds, and the frame it is.
+    /// The colour at `t` seconds, and the frame it is.
     #[must_use]
     pub fn calculate(&self, t: f32) -> Option<(u32, i32)> {
         let length = self.frame_count as f32 / self.fps;
@@ -87,7 +87,7 @@ impl LightAnim {
         Some((self.color_at(frame)?, frame))
     }
 
-    /// `CalculateBGR`.
+    /// Calculates the BGR colour.
     #[must_use]
     pub fn calculate_bgr(&self, t: f32) -> Option<(u32, i32)> {
         let (c, f) = self.calculate(t)?;
@@ -138,7 +138,7 @@ impl LightAnims {
         Ok(Self { version, items, encoding: text.encoding() })
     }
 
-    /// `ELightAnimLibrary::Save`.
+    /// Saves the light animation library.
     #[must_use]
     pub fn write(&self) -> Vec<u8> {
         let mut w = Writer::new();

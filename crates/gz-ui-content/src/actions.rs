@@ -424,7 +424,7 @@ pub(crate) fn delete_selection(
         });
     });
     if let Some(line) = line {
-        editor.log.plain(line);
+        editor.log.finding(&line);
     }
 }
 
@@ -642,7 +642,7 @@ pub(crate) fn paste(
         }
     });
     if let Some(line) = line {
-        editor.log.plain(line);
+        editor.log.finding(&line);
     }
 }
 

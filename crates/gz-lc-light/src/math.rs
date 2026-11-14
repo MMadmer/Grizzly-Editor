@@ -1,5 +1,5 @@
-//! The engine's arithmetic the compiler's results depend on (`xrCore`'s `Fvector`, `Fmatrix`,
-//! `Fbox2`, `CRandom`, `exact_normalize`, `u8_clr`), in its order of operations.
+//! The engine's arithmetic the compiler's results depend on (vectors, matrices,
+//! 2D boxes, the random generator, the exact normalize and the byte colour conversion), in its order of operations.
 
 use glam::{Vec2, Vec3};
 
@@ -60,50 +60,50 @@ pub fn subst_alpha(c: u32, a: u8) -> u32 {
     (c & 0x00ff_ffff) | (u32::from(a) << 24)
 }
 
-/// `Fvector::dotproduct`, left to right.
+/// The dot product, left to right.
 #[must_use]
 pub fn dot(a: Vec3, b: Vec3) -> f32 {
     a.x * b.x + a.y * b.y + a.z * b.z
 }
 
-/// `Fvector::crossproduct`.
+/// The cross product.
 #[must_use]
 pub fn cross(a: Vec3, b: Vec3) -> Vec3 {
     Vec3::new(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
 }
 
-/// `Fvector::magnitude`.
+/// The magnitude of a vector.
 #[must_use]
 pub fn magnitude(v: Vec3) -> f32 {
     (v.x * v.x + v.y * v.y + v.z * v.z).sqrt()
 }
 
-/// `Fvector::distance_to_sqr`.
+/// The squared distance between two points.
 #[must_use]
 pub fn distance_sqr(a: Vec3, b: Vec3) -> f32 {
     (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z)
 }
 
-/// `Fvector::distance_to`.
+/// The distance between two points.
 #[must_use]
 pub fn distance(a: Vec3, b: Vec3) -> f32 {
     distance_sqr(a, b).sqrt()
 }
 
-/// `Fvector2::distance_to`.
+/// The distance between two 2D points.
 #[must_use]
 pub fn distance2(a: Vec2, b: Vec2) -> f32 {
     ((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)).sqrt()
 }
 
-/// `Fvector::normalize`: scaled by `sqrt(1 / |v|^2)`.
+/// Scaled by `sqrt(1 / |v|^2)`.
 #[must_use]
 pub fn normalize(v: Vec3) -> Vec3 {
     let mag = (1.0 / (v.x * v.x + v.y * v.y + v.z * v.z)).sqrt();
     Vec3::new(v.x * mag, v.y * mag, v.z * mag)
 }
 
-/// `Fvector::normalize_safe`: left as it is when its length is below the smallest float.
+/// Left as it is when its length is below the smallest float.
 #[must_use]
 pub fn normalize_safe(v: Vec3) -> Vec3 {
     let m = v.x * v.x + v.y * v.y + v.z * v.z;
@@ -119,7 +119,7 @@ pub fn normalize_safe(v: Vec3) -> Vec3 {
 /// a zero vector.
 #[must_use]
 pub fn exact_normalize(v: Vec3) -> (Vec3, bool) {
-    // the squares are summed in float and only then widened, as the C++ does
+    // the squares are summed in float and only then widened, as the engine does
     let sqr = f64::from(v.x * v.x + v.y * v.y + v.z * v.z);
     if sqr > f64::from(1.192_092_9e-5_f32) {
         let l = 1.0 / sqr.sqrt();
@@ -155,7 +155,7 @@ pub fn exact_normalize(v: Vec3) -> (Vec3, bool) {
     (Vec3::new(l.copysign(a0) as f32, (a1 * l) as f32, (a2 * l) as f32), true)
 }
 
-/// `Fvector::from_bary`.
+/// The point from barycentric coordinates.
 #[must_use]
 pub fn from_bary(a: Vec3, b: Vec3, c: Vec3, w: Vec3) -> Vec3 {
     Vec3::new(
@@ -165,26 +165,26 @@ pub fn from_bary(a: Vec3, b: Vec3, c: Vec3, w: Vec3) -> Vec3 {
     )
 }
 
-/// `Fvector::mad(p, d, m)`: `p + d * m`.
+/// `p + d * m`.
 #[must_use]
 pub fn mad(p: Vec3, d: Vec3, m: f32) -> Vec3 {
     Vec3::new(p.x + d.x * m, p.y + d.y * m, p.z + d.z * m)
 }
 
-/// `Fvector::mknormal`: the normal of a triangle, `normalize_safe`d.
+/// The normal of a triangle, `normalize_safe`d.
 #[must_use]
 pub fn mknormal(p0: Vec3, p1: Vec3, p2: Vec3) -> Vec3 {
     normalize_safe(cross(p1 - p0, p2 - p1))
 }
 
-/// `Fvector::lerp`.
+/// Linear interpolation of two vectors.
 #[must_use]
 pub fn lerp(a: Vec3, b: Vec3, t: f32) -> Vec3 {
     let inv = 1.0 - t;
     Vec3::new(a.x * inv + b.x * t, a.y * inv + b.y * t, a.z * inv + b.z * t)
 }
 
-/// `Fvector::max`, component by component, the engine's `_max`.
+/// The maximum of two vectors, component by component, the engine's `_max`.
 #[must_use]
 pub fn max3(a: Vec3, b: Vec3) -> Vec3 {
     Vec3::new(max_f(a.x, b.x), max_f(a.y, b.y), max_f(a.z, b.z))
@@ -202,14 +202,14 @@ pub fn min_f(a: f32, b: f32) -> f32 {
     if a < b { a } else { b }
 }
 
-/// `Fbox::getsphere`: the box's centre and the distance from it to `max`.
+/// The box's centre and the distance from it to `max`.
 #[must_use]
 pub fn sphere_of(b: &Aabb) -> (Vec3, f32) {
     let c = b.center();
     (c, distance(c, b.max))
 }
 
-/// `Fbox2`.
+/// A 2D box.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Box2 {
     pub min: Vec2,
@@ -220,7 +220,7 @@ impl Box2 {
     /// `invalidate`.
     pub const INVALID: Box2 = Box2 { min: Vec2::splat(f32::MAX), max: Vec2::splat(-f32::MAX) };
 
-    /// The box of a triangle's three points, the way `CDeflector::Bounds` makes it.
+    /// The box of a triangle's three points, the way the deflector makes it.
     #[must_use]
     pub fn of_tri(uv: &[Vec2; 3]) -> Self {
         let mut b = Box2 { min: uv[0], max: uv[0] };
@@ -240,7 +240,7 @@ impl Box2 {
     }
 }
 
-/// `Fmatrix`: rows `i`, `j`, `k`, `c` (`_11 .. _44`), points as rows multiplied from the left.
+/// Rows `i`, `j`, `k`, `c` (`_11 .. _44`), points as rows multiplied from the left.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Matrix {
     pub m: [[f32; 4]; 4],
@@ -351,8 +351,8 @@ impl Matrix {
     }
 }
 
-/// `CRandom`: the engine's linear congruential generator. The compiler seeds one per sample from
-/// the sample's own data, or - where the C++ draws from its one `::Random` in an order that does
+/// The engine's linear congruential generator. The compiler seeds one per sample from
+/// the sample's own data, or - where X-Ray's compiler draws from its one `::Random` in an order that does
 /// not depend on threads (the MU models' own light) - jumps to the draw that sample takes; it
 /// never shares one between threads.
 #[derive(Clone, Copy, Debug)]
@@ -397,13 +397,13 @@ impl XrRandom {
         Self { hold: (self.hold as u32).wrapping_mul(acc_a).wrapping_add(acc_c) as i32 }
     }
 
-    /// `randI`.
+    /// A random integer.
     pub fn rand_i(&mut self) -> i32 {
         self.hold = self.hold.wrapping_mul(214_013).wrapping_add(2_531_011);
         (self.hold >> 16) & 0x7fff
     }
 
-    /// `randF`: `0..=1`.
+    /// A random float: `0..=1`.
     pub fn rand_f(&mut self) -> f32 {
         self.rand_i() as f32 / 32767.0
     }
@@ -413,7 +413,7 @@ impl XrRandom {
         self.rand_f() * max
     }
 
-    /// `Fvector::random_dir`.
+    /// A random direction.
     pub fn dir(&mut self) -> Vec3 {
         let z = self.rand_f_max(PI).cos();
         let a = self.rand_f_max(PI_MUL_2);
@@ -422,7 +422,7 @@ impl XrRandom {
         Vec3::new(r * ca, r * sa, z)
     }
 
-    /// `Fvector::random_dir(axis, angle)`: a direction in a cone.
+    /// A direction in a cone.
     pub fn dir_cone(&mut self, axis: Vec3, angle: f32) -> Vec3 {
         let rnd = self.dir();
         let s = self.rand_f_max(angle.tan());

@@ -201,7 +201,7 @@ fn draw(ui: &mut Ui, cx: &mut DocCx<'_>) {
                 }
             });
             if let Some(line) = line {
-                editor.log.plain(line);
+                editor.log.finding(&line);
             }
         }
         _ => {}

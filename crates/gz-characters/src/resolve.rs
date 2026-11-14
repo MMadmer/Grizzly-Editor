@@ -1,11 +1,11 @@
 //! Inheritance: `base` names another character to start from - every field this one does not
 //! set comes from there, and the kits are MERGED (the base's rows plus these, a row of the same
 //! section replacing the inherited count in its place, `count = 0` taking one away). A character
-//! marked `abstract` exists only to be inherited from (`EditorCharacters::Resolve`).
+//! marked `abstract` exists only to be inherited from.
 
 use crate::model::{Character, Supply};
 
-/// `src` wins wherever it actually says something; everything else stays (`ApplyOver`).
+/// `src` wins wherever it actually says something; everything else stays.
 pub fn apply_over(dst: &mut Character, src: &Character) {
     if !src.name.is_nil() {
         dst.name = src.name.clone();
@@ -56,7 +56,7 @@ pub fn apply_over(dst: &mut Character, src: &Character) {
     }
 }
 
-/// Rows of no item left after the merge (`DropEmptyRows`).
+/// Rows of no item left after the merge.
 pub fn drop_empty_rows(rows: &mut Vec<Supply>) {
     rows.retain(|r| r.count >= 1);
 }

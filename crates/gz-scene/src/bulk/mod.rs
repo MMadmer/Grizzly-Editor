@@ -55,7 +55,6 @@ pub struct BulkToolState {
 }
 
 impl Default for BulkToolState {
-    /// `UIAIMapTool`'s constructor.
     fn default() -> Self {
         Self {
             ignore_constraints: false,

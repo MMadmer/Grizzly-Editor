@@ -1,15 +1,15 @@
-//! The ray model the light is traced in: the collision soup of `CBuild::BuildRapid` (the
-//! level's shadow-casting faces welded by `CDB::CollectorPacked`, the MU references'
-//! `export_cform_rcast`) in a BVH (`gz_fmt_level::Bvh`, built on the caller's pool), with what a
+//! The ray model the light is traced in: the collision soup (the
+//! level's shadow-casting faces welded,
+//! the MU references' collision faces) in a BVH (`gz_fmt_level::Bvh`, built on the caller's pool), with what a
 //! ray needs of every triangle: the face it stands for, whether it casts a shadow, whether it is
-//! opaque, its texture and texture coordinates. `trace` is `rayTrace` with `getLastRP_Scale`.
+//! opaque, its texture and texture coordinates. `trace` also gives the last hit's scale.
 //!
-//! **The order of hits.** The C++ multiplies the transparencies of the hits in the order its
+//! **The order of hits.** X-Ray's compiler multiplies the transparencies of the hits in the order its
 //! tree reports them and stops at the first opaque one; here an opaque hit stops the walk (the
 //! answer is 0 either way) and the transparent ones are multiplied nearest first, so the answer
 //! is the same whatever tree holds the triangles.
 //!
-//! **The cached triangle.** The C++ keeps, per light, the opaque triangle that last stopped a
+//! **The cached triangle.** X-Ray's compiler keeps, per light, the opaque triangle that last stopped a
 //! ray and tests it before the tree; that state lives in the shared light and makes the answer
 //! depend on which texel came first. Here the cache is the worker's ([`LightCache`]) and is
 //! tested with the tree's own box and triangle tests (`ray_triangle`: a hit there is a hit of the
@@ -29,7 +29,7 @@ use crate::math::{color_get_a, i_floor};
 use crate::mesh::FaceId;
 use crate::{LcError, Result};
 
-/// `CFORM_CURRENT_VERSION`.
+/// The collision form's current version.
 pub const CFORM_VERSION: u32 = 4;
 /// A cache slot that holds no triangle.
 pub const NO_TRI: u32 = u32::MAX;
@@ -43,13 +43,13 @@ pub enum Opacity {
     Linear,
 }
 
-/// What a ray needs of one triangle (the `CDB::TRI::pointer` of the C++, resolved).
+/// What a ray needs of one triangle (the pointer of X-Ray's compiler, resolved).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RayFace {
     /// The level face it stands for: a ray cast from that face skips it. `None` for an MU
     /// model's face and a face of `build.cform`.
     pub face: Option<FaceId>,
-    /// `bLIGHT_CastShadow` of its shader.
+    /// Whether the face's shader casts a shadow.
     pub cast_shadow: bool,
     /// Lets no light through; a transparent face's texture alpha is read.
     pub opaque: bool,
@@ -65,7 +65,7 @@ pub struct RayModel {
     tris: Vec<[Vec3; 3]>,
     faces: Vec<RayFace>,
     opacity: Opacity,
-    /// `CDB::OPT_CULL`: the detail compiler's rays see only the faces turned towards them.
+    /// The detail compiler's rays see only the faces turned towards them.
     cull: bool,
 }
 
@@ -112,7 +112,7 @@ impl RayModel {
         self.faces.get(i as usize)
     }
 
-    /// The triangles that touch a box (`box_query` with `OPT_FULL_TEST`), by index.
+    /// The triangles that touch a box (a full test), by index.
     pub fn query_box(&self, b: &Aabb, out: &mut Vec<u32>) {
         self.bvh.query_box(b, out);
     }
@@ -122,7 +122,7 @@ impl RayModel {
     }
 
     /// How much of a transparent face's light gets through where the ray met it; `None` when
-    /// its texture has no surface (the C++ takes the face as opaque then).
+    /// its texture has no surface (X-Ray's compiler takes the face as opaque then).
     fn transparency(&self, textures: &[BuildTexture], face: &RayFace, hit: &RayHit) -> Option<f32> {
         let t = textures.get(face.texture as usize)?;
         let surface = t.surface.as_ref()?;
@@ -146,7 +146,7 @@ impl RayModel {
         })
     }
 
-    /// `rayTrace`: how much light gets from `p` along `d` (of unit length) over `range`: 1 for a
+    /// How much light gets from `p` along `d` (of unit length) over `range`: 1 for a
     /// free way, 0 behind an opaque face, the product of the transparencies otherwise. A face
     /// that casts no shadow, and `skip`, are passed through.
     #[allow(clippy::too_many_arguments)]
@@ -245,14 +245,14 @@ pub struct RcFace {
     pub reserved: u16,
 }
 
-/// The collision soup `BuildRapid` makes, as `build.cform` holds it.
+/// The collision soup, as `build.cform` holds it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RcastForm {
     /// `scene_bb`.
     pub bounds: Aabb,
     pub verts: Vec<Vec3>,
     pub tris: Vec<[u32; 3]>,
-    /// The word after a triangle's corners; the C++ writes the low half of a face pointer, the
+    /// The word after a triangle's corners; X-Ray's compiler writes the low half of a face pointer, the
     /// compiler the triangle's index.
     pub dummy: Vec<u32>,
     pub faces: Vec<RcFace>,
@@ -294,7 +294,7 @@ impl RcastForm {
         w.into_bytes()
     }
 
-    /// Reads `build.cform` (`global_claculation_data::xrLoad`, "Load CFORM").
+    /// Reads `build.cform`.
     pub fn read(bytes: &[u8]) -> Result<Self> {
         let file = Reader::new(bytes);
         let main = file.need_chunk(0)?;
@@ -364,13 +364,13 @@ impl RcastForm {
     }
 }
 
-/// `bLIGHT_CastShadow`.
+/// Whether a shader casts a shadow.
 #[must_use]
 pub fn casts(s: &ShaderXrlc) -> bool {
     s.flags & ShaderXrlc::LIGHT_CAST_SHADOW != 0
 }
 
-/// What `BuildRapid` collects into a `CollectorPacked`: the soup with its faces.
+/// What the collector gathers: the soup with its faces.
 #[derive(Debug)]
 pub struct RapidCollector {
     pub collector: CollectorPacked,

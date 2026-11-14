@@ -1,10 +1,10 @@
-//! The light of the vertex-lit faces (`xrLightVertex.cpp`, `LightVertex`): every vertex of a
+//! The light of the vertex-lit faces: every vertex of a
 //! face whose shader asks for vertex light gets the static light and the sun (its hemisphere
 //! was found before and is kept), then the vertices at one point share their light by their
-//! translucency (`g_trans`).
+//! translucency.
 //!
-//! The C++ registers a vertex into its point's group as its thread finishes it; here the
-//! vertices are lit in parallel and registered in list order, which is the order the C++ has
+//! X-Ray's compiler registers a vertex into its point's group as its thread finishes it; here the
+//! vertices are lit in parallel and registered in list order, which is the order it has
 //! on one thread.
 
 use std::collections::BTreeMap;
@@ -22,7 +22,7 @@ use crate::point::{LP_DONT_HEMI, light_point};
 use crate::ray::LightCache;
 use crate::{Ctl, Result};
 
-/// A key of the C++ multimap of points by x: equal keys stay in the order they came.
+/// A key of the map of points by x: equal keys stay in the order they came.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Key(f32, u32);
 
@@ -40,7 +40,7 @@ impl Ord for Key {
     }
 }
 
-/// The groups of vertices at one point (`g_trans`, `mapVert`): a vertex joins the first group
+/// The groups of vertices at one point: a vertex joins the first group
 /// whose first vertex is within `EPS_L` of it, groups ordered by their first vertex's x.
 #[derive(Debug, Default)]
 pub struct TransGroups {
@@ -51,12 +51,12 @@ pub struct TransGroups {
 
 impl TransGroups {
     fn key(x: f32) -> f32 {
-        // -0 and +0 are one key, as the C++ compares them
+        // -0 and +0 are one key, as X-Ray's compiler compares them
         if x == 0.0 { 0.0 } else { x }
     }
 
     /// Adds item `id` at point `p`. With `first_only` it joins the first group it fits
-    /// (`g_trans_register`), otherwise every group it fits (`xrMU_Model::calc_lighting`).
+    /// (`g_trans_register`), otherwise every group it fits.
     pub fn register(&mut self, p: Vec3, id: u32, first_only: bool) {
         let eps2 = 2.0 * EPS_L;
         let k = Self::key(p.x);
@@ -81,7 +81,7 @@ impl TransGroups {
         }
     }
 
-    /// The groups in the C++ map order, each a list of items.
+    /// The groups in X-Ray's map order, each a list of items.
     #[must_use]
     pub fn in_order(&self) -> Vec<&[u32]> {
         self.map.values().filter_map(|&g| self.groups.get(g).map(|(_, l)| l.as_slice())).collect()
@@ -115,7 +115,7 @@ pub fn mix_group(colors: &[ColorC], scale: f32) -> Vec<ColorC> {
         .collect()
 }
 
-/// `GetTranslucency`: whether a face of the vertex asks for vertex light, and the mean
+/// Whether a face of the vertex asks for vertex light, and the mean
 /// translucency of its faces.
 fn translucency(
     env: &LightEnv<'_>,
@@ -137,7 +137,7 @@ fn translucency(
     (vertex_light, t / vx.adjacents.len() as f32)
 }
 
-/// `LightVertex`: answers the new light of the listed vertices in list order (`None` for one
+/// Answers the new light of the listed vertices in list order (`None` for one
 /// that keeps its own). The caller writes them back ([`apply_vertex_light`]).
 pub fn light_vertices(
     env: &LightEnv<'_>,

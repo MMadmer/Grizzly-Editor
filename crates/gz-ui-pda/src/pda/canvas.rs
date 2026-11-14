@@ -1,4 +1,4 @@
-//! The preview's canvas (`DrawCanvas`): the 2D PDA - the device's art from the linked game's
+//! The preview's canvas: the 2D PDA - the device's art from the linked game's
 //! `pda.xml` / `pda_16.xml`, its screen with the layout's flat item list drawn in canvas units
 //! scaled per axis, the screen noise, the close button - and the mouse on it: the left button
 //! plays the layout, the right or middle one drags the device, the wheel scrolls what the game
@@ -97,7 +97,7 @@ pub fn clock_now() -> Clock {
 
 // ---- where the device goes ------------------------------------------------------------------
 
-/// The game's screen in points (`DeviceSize`): `zoom` x its 768 lines in pixels, or - at 0 -
+/// The game's screen in points: `zoom` x its 768 lines in pixels, or - at 0 -
 /// as big as lets the device fit `avail` on both axes with the margin round it.
 #[must_use]
 pub fn device_size(dev: &Device, wide: bool, avail: Vec2, zoom: f32, ppp: f32) -> Vec2 {
@@ -135,7 +135,7 @@ fn clamp_pan(m: &mut Model, dev: &Device, wide: bool, avail: Vec2, size: Vec2) {
     m.pan.y = m.pan.y.clamp(-my, my);
 }
 
-/// Places the device in `[p0, p0 + avail)` (`PlaceDevice`).
+/// Places the device in `[p0, p0 + avail)`.
 pub fn place_device(m: &mut Model, dev: &Device, p0: Pos2, avail: Vec2, ppp: f32) -> Geom {
     let wide = m.preview.aspect == gz_pda::Aspect::Wide;
     let size = device_size(dev, wide, avail, m.zoom, ppp);
@@ -177,7 +177,7 @@ fn zoom_at(
     place_device(m, dev, p0, avail, ppp)
 }
 
-/// Every item's rectangle in points and whether it shows (`ComputeLayout`).
+/// Every item's rectangle in points and whether it shows.
 #[must_use]
 pub fn item_rects(preview: &Preview, g: &Geom) -> (Vec<ItemBox>, Vec<(Rect, bool)>) {
     let boxes = preview.boxes();
@@ -290,7 +290,7 @@ impl Draw<'_> {
         painter.galley(at, galley, self.p.text_secondary);
     }
 
-    /// A label in the game's bitmap font (`DrawLabel`): a text exactly as wide as in the game.
+    /// A label in the game's bitmap font: a text exactly as wide as in the game.
     #[allow(clippy::too_many_arguments)]
     fn label(
         &self,
@@ -478,7 +478,7 @@ impl Draw<'_> {
         it.color
     }
 
-    /// One item and what it holds (`DrawItem`).
+    /// One item and what it holds.
     fn item(
         &mut self,
         painter: &Painter,
@@ -514,7 +514,7 @@ impl Draw<'_> {
                 self.label(painter, &text, &it.font, it.text_color, it.align, it.valign, it.wrap, a);
             }
             "button" => {
-                // the same placement CUIPdaItem::InitParts makes, in canvas units (docs/pda/PDA_FORMAT.md)
+                // the same placement the game's item parts make, in canvas units (docs/pda/PDA_FORMAT.md)
                 let (w, h) = (it.w, it.h);
                 let stacked = !it.icon.is_empty() && it.has_text && it.align == 'c' && it.valign != 'c';
                 let sel = m.preview.selected(i);

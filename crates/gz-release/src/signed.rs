@@ -38,7 +38,7 @@ fn fail(signer: &str, message: &str) -> VerifyError {
     VerifyError { signer: signer.to_owned(), message: message.to_owned() }
 }
 
-/// A signed text checked against the key it has to be signed with (`Verify`). `Ok` names the
+/// A signed text checked against the key it has to be signed with. `Ok` names the
 /// signer's key id.
 pub fn verify_text(text: &str, public_key: &str) -> Result<String, VerifyError> {
     let bytes = text.as_bytes();

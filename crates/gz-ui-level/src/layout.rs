@@ -113,7 +113,7 @@ impl PanelId {
         Self::ALL.into_iter().find(|p| p.id() == id)
     }
 
-    /// The window the contract names (`EditorUiContract`).
+    /// The window the contract names.
     #[must_use]
     pub fn window(self) -> &'static str {
         gz_app::contract::panel_window(self.id())

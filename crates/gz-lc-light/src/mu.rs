@@ -1,5 +1,4 @@
-//! The MU models - meshes placed many times by reference (`xrMU_Model*.cpp`,
-//! `xrMU_Model_Reference*.cpp`, `mu_model_light*.cpp`, `fitter.cpp`): loading from `build.prj`,
+//! The MU models - meshes placed many times by reference: loading from `build.prj`,
 //! the material subdivisions, the opacity of the faces, the collision of a reference, and the
 //! light: a model's own (its hemisphere in its own shadow), each reference's in the level, and
 //! the linear fit `c_scale` / `c_bias` that turns the first into the second.
@@ -21,10 +20,10 @@ use crate::ray::{LightCache, Opacity, RapidCollector, RayFace, RayModel, RcFace,
 use crate::vertex::{TransGroups, mix_group};
 use crate::{Ctl, LcError, Result};
 
-/// `Fvector::random_dir(axis, angle)` draws three numbers: the direction's two, the cone's one.
+/// The random direction in a cone draws three numbers: the direction's two, the cone's one.
 const DRAWS_PER_SAMPLE: u64 = 3;
 
-/// `xrMU_Model::_subdiv`: a run of faces of one material; the rest is the geometry export's.
+/// A run of faces of one material; the rest is the geometry export's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Subdiv {
     pub material: u32,
@@ -54,7 +53,7 @@ impl Subdiv {
     }
 }
 
-/// `xrMU_Model`.
+/// An MU model.
 #[derive(Clone, Debug, Default)]
 pub struct MuModel {
     pub name: SmolStr,
@@ -72,14 +71,13 @@ pub struct MuEnv<'a> {
     pub materials: &'a [BuildMaterial],
     pub textures: &'a [BuildTexture],
     pub params: &'a BuildParams,
-    /// `L_static`.
     pub lights: &'a LightSet,
     pub nosun: bool,
     pub linear: bool,
 }
 
 impl MuModel {
-    /// `xrMU_Model::Load`: the vertices with no normal, the faces with their one set of
+    /// The vertices with no normal, the faces with their one set of
     /// coordinates, normal and smoothing group.
     pub fn load(src: &gz_fmt_level::MuModel) -> Result<Self> {
         let mut mesh = Mesh::new_model();
@@ -112,12 +110,12 @@ impl MuModel {
         Ok(Self { name: src.name.clone(), lod_id: src.lod_id, mesh, subdivs: Vec::new(), color: Vec::new() })
     }
 
-    /// `calc_normals(xrMU_Model&)`.
+    /// Calculates the normals of an MU model.
     pub fn calc_normals(&mut self, sm_angle: f32, smoothing: Smoothing) {
         self.mesh.calc_normals(sm_angle, smoothing);
     }
 
-    /// `calc_faceopacity`: `CacheOpacity` of every face.
+    /// The opacity of every face, cached.
     pub fn calc_faceopacity(&mut self, materials: &[BuildMaterial], textures: &[BuildTexture]) {
         let faces = self.mesh.faces().to_vec();
         for f in faces {
@@ -232,12 +230,12 @@ impl MuModel {
         RayModel::new(&verts, &tris, cl.faces, Opacity::Squared, false)
     }
 
-    /// `xrMU_Model::calc_lighting(dest, xform, model, lights, flags)`: every vertex lit at six
+    /// Lights a model: every vertex lit at six
     /// points near it along normals jittered within 30 degrees (one at the draft quality),
     /// then the vertices of one point mixed by their translucency. Answers the light per vertex
-    /// in list order. The C++ draws the jitter from `::Random`, one generator all threads share.
+    /// in list order. X-Ray's compiler draws the jitter from `::Random`, one generator all threads share.
     /// With `stream` (the generator as this model's first draw finds it) every vertex jumps to
-    /// the draws the C++ gives it - three per sample, the vertices in list order - so the
+    /// the draws X-Ray's compiler gives it - three per sample, the vertices in list order - so the
     /// vertices still light in parallel; without, each vertex seeds its own from where it stands.
     #[must_use]
     pub fn calc_lighting_with(
@@ -324,8 +322,8 @@ impl MuModel {
         self.mesh.vertices().len() as u64 * samples * DRAWS_PER_SAMPLE
     }
 
-    /// `xrMU_Model::calc_lighting()`: the model's own hemisphere in its own shadow, into
-    /// `color`, the jitter drawn from `stream` as the C++ base thread draws it.
+    /// Lights a model on its own: the model's own hemisphere in its own shadow, into
+    /// `color`, the jitter drawn from `stream` as X-Ray's base thread draws it.
     pub fn calc_lighting(&mut self, env: &MuEnv<'_>, stream: XrRandom) -> Result<()> {
         let model = self.own_ray_model(env.shaders, env.materials)?;
         self.color =
@@ -334,7 +332,7 @@ impl MuModel {
     }
 }
 
-/// `base_Face::CacheOpacity`: opaque unless its texture has alpha and its surface was loaded.
+/// Opaque unless its texture has alpha and its surface was loaded.
 #[must_use]
 pub fn cache_opacity(face: &Face, materials: &[BuildMaterial], textures: &[BuildTexture]) -> bool {
     let Some(m) = materials.get(usize::from(face.material)) else { return true };
@@ -342,7 +340,7 @@ pub fn cache_opacity(face: &Face, materials: &[BuildMaterial], textures: &[Build
     !(t.has_alpha && t.has_surface)
 }
 
-/// `xrMU_Reference`.
+/// An MU reference.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MuReference {
     pub model: u32,
@@ -357,7 +355,7 @@ pub struct MuReference {
 }
 
 impl MuReference {
-    /// `xrMU_Reference::Load`.
+    /// Loads an MU reference.
     #[must_use]
     pub fn load(src: &gz_fmt_level::MuReference) -> Self {
         Self {
@@ -371,8 +369,8 @@ impl MuReference {
         }
     }
 
-    /// `export_cform_game`: the model's collision faces through the transform, with their game
-    /// material and the reference's sector. The C++ takes them in the order of their addresses;
+    /// The model's collision faces through the transform, with their game
+    /// material and the reference's sector. X-Ray's compiler takes them in the order of their addresses;
     /// here in the model's.
     pub fn export_cform_game(
         &self,
@@ -392,10 +390,10 @@ impl MuReference {
         }
     }
 
-    /// `xrMU_Reference::calc_lighting`: the reference lit in the level, then the fit.
+    /// The reference lit in the level, then the fit.
     pub fn calc_lighting(&mut self, model: &MuModel, env: &MuEnv<'_>, level: &RayModel) {
         let flags = if env.nosun { LP_DONT_SUN } else { 0 } | LP_DEFAULT;
-        // the C++ lights the references on four threads from the one `::Random`: no order to
+        // X-Ray's compiler lights the references on four threads from the one `::Random`: no order to
         // reproduce (its own runs differ), so each vertex seeds its own
         self.color = model.calc_lighting_with(env, &self.xform, level, flags, None);
         let n = self.color.len().min(model.color.len());
@@ -407,7 +405,7 @@ impl MuReference {
             self.c_bias.set_channel(i, bias);
         }
         for i in 0..5 {
-            // oracle: the C++ fits against the model's channel 4 (the sun, 0 in the model's own
+            // X-Ray's compiler fits against the model's channel 4 (the sun, 0 in the model's own
             // light) here, after the regression above took the hemisphere
             let a: Vec<f64> = model.color.iter().take(n).map(|c| f64::from(c.get().channel(4))).collect();
             let b: Vec<f64> = self.color.iter().take(n).map(|c| f64::from(c.get().channel(i))).collect();
@@ -419,7 +417,7 @@ impl MuReference {
     }
 }
 
-/// `vfComputeLinearRegression`: `C` and `D` of `A * C + D = B` by least squares, in double,
+/// `C` and `D` of `A * C + D = B` by least squares, in double,
 /// `C` rounded to float before `D` is taken from it.
 #[must_use]
 pub fn linear_regression(a: &[f64], b: &[f64]) -> (f32, f32) {
@@ -484,7 +482,7 @@ pub fn simple_optimize(a: &[f64], b: &[f64], out_scale: &mut f32, out_bias: &mut
     }
 }
 
-/// `vfOptimizeParameters`: a gradient descent of `A * C + D = B` over several parameters
+/// A gradient descent of `A * C + D = B` over several parameters
 /// (`A[test][param]`), from `C = 1`, `D = 0`. Nothing of the compiler calls it; it is kept with
 /// the fitter.
 #[allow(clippy::too_many_arguments)]
@@ -551,7 +549,7 @@ pub fn optimize_parameters(
     (c, d)
 }
 
-/// `CMUThread` and `CMULight` (`run_mu_light`, `wait_mu_*`): every model's materials and own
+/// Every model's materials and own
 /// light, then every reference's light, each set on as many workers as the pool has.
 pub fn light_mu(
     models: &mut [MuModel],
@@ -563,8 +561,8 @@ pub fn light_mu(
     ctl.stage("MU : Models...");
     let done = AtomicUsize::new(0);
     let total = models.len() + refs.len();
-    // `CMUThread`: the models one after another on one thread, the jitter from `::Random` as the
-    // process starts it (`CRandom()`, holdrand 1: x64's `FPU::initialize` seeds nothing), so each
+    // the models one after another on one thread, the jitter from `::Random` as the
+    // process starts it (holdrand 1: x64's float unit seeds nothing), so each
     // model's first draw is known before any is lit
     let mut stream = XrRandom::new(1);
     let mut starts = Vec::with_capacity(models.len());
@@ -622,7 +620,7 @@ mod tests {
         let err =
             |c: f32, d: f32| -> f32 { (0..8).map(|i| (c * i as f32 + d - (i as f32 + 1.0)).powi(2)).sum() };
         let (c, d) = optimize_parameters(&a, &b, 1e-6, 1.0, 0.01, 10.0, 10000);
-        // the C++ moves both parameters by one step, so it lands on the best line of slope - bias = 1
+        // X-Ray's compiler moves both parameters by one step, so it lands on the best line of slope - bias = 1
         assert!(err(c[0], d[0]) < err(1.0, 0.0), "{c:?} {d:?}");
         assert!((c[0] - d[0] - 1.0).abs() < 1e-4);
     }

@@ -39,14 +39,14 @@ impl DocKind {
     }
 }
 
-/// The extension of the last path segment, lower case, with its dot (`NqUtil::Extension`).
+/// The extension of the last path segment, lower case, with its dot.
 #[must_use]
 pub fn extension(path: &str) -> String {
     let base = path.rsplit(['\\', '/']).next().unwrap_or(path);
     base.rfind('.').and_then(|d| base.get(d..)).map(str::to_ascii_lowercase).unwrap_or_default()
 }
 
-/// The file name without folders and without its last extension (`NqUtil::BaseName`).
+/// The file name without folders and without its last extension.
 #[must_use]
 pub fn base_name(path: &str) -> String {
     let base = path.rsplit(['\\', '/']).next().unwrap_or(path);
@@ -249,7 +249,7 @@ pub struct Role {
     pub default: Value,
 }
 
-/// A quest or a behaviour graph (`SNqQuest`).
+/// A quest or a behaviour graph.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Graph {
     /// The format version of the header key; 0 when the key is missing.
@@ -284,7 +284,7 @@ impl Default for Graph {
     }
 }
 
-/// Node ids to their index; the first of two equal ids wins, as the C++ index did.
+/// Node ids to their index; the first of two equal ids wins.
 pub type NodeIndex<'a> = FxHashMap<&'a str, usize>;
 
 impl Graph {
@@ -383,7 +383,7 @@ impl Graph {
     }
 
     /// The phrases reachable from a topic through `next` pins of phrases, with their depth (0 =
-    /// the topic); a phrase met at both parities is reported at both (`DialogChain`).
+    /// the topic); a phrase met at both parities is reported at both.
     #[must_use]
     pub fn dialog_chain(&self, topic: &str) -> Vec<(usize, u32)> {
         let idx = self.index();
@@ -421,7 +421,7 @@ impl Graph {
         queue
     }
 
-    /// The stable topological order from the triggers (`TopoOrder`): siblings stay together, a
+    /// The stable topological order from the triggers: siblings stay together, a
     /// dialog is written as one block before the world nodes it leads to, unreachable nodes keep
     /// their order at the end.
     #[must_use]
@@ -482,7 +482,7 @@ impl Graph {
         out
     }
 
-    /// A node id derived from `base` that is free: `step`, `step2`, ... (`FreeNodeId`).
+    /// A node id derived from `base` that is free: `step`, `step2`, ....
     #[must_use]
     pub fn free_node_id(&self, base: &str) -> String {
         let b = if base.is_empty() { "node" } else { base };
@@ -501,7 +501,7 @@ impl Graph {
 
 // ---- reading ----------------------------------------------------------------------------------
 
-/// An action from its table (`ActionFromValue`).
+/// An action from its table.
 pub fn action_from_value(v: &Value) -> Result<Action, String> {
     if !v.is_table() {
         return Err("action must be a table { kind = ..., params = { ... } }".to_owned());
@@ -520,7 +520,7 @@ pub fn action_from_value(v: &Value) -> Result<Action, String> {
     Ok(a)
 }
 
-/// A condition from its table (`CondFromValue`).
+/// A condition from its table.
 pub fn cond_from_value(v: &Value) -> Result<Cond, String> {
     if !v.is_table() {
         return Err("condition must be a table { kind = ..., params = { ... } }".to_owned());
@@ -542,7 +542,7 @@ pub fn cond_from_value(v: &Value) -> Result<Cond, String> {
     Ok(c)
 }
 
-/// A task from its table (`TaskFromValue`).
+/// A task from its table.
 #[must_use]
 pub fn task_from_value(id: &str, v: &Value) -> Task {
     let mut t = Task { id: id.to_owned(), ..Task::default() };
@@ -605,7 +605,7 @@ fn pin_rank(catalog: &Catalog, n: &Node, pin: &str) -> usize {
 }
 
 /// Orders a node's pins by the catalog: case pins in case order, then the declared pins, the
-/// unknown ones last by name (`CanonicalizePins`).
+/// unknown ones last by name.
 pub fn canonicalize_pins(catalog: &Catalog, n: &mut Node) {
     if n.out.len() < 2 {
         return;
@@ -631,7 +631,7 @@ pub fn canonicalize_all_pins(catalog: &Catalog, g: &mut Graph) {
     }
 }
 
-/// A node from its table (`NodeFromValue`): `None` when it is no node at all; what it holds but
+/// A node from its table: `None` when it is no node at all; what it holds but
 /// cannot be typed is reported in `errs` and left out.
 pub fn node_from_value(catalog: &Catalog, v: &Value, errs: &mut Vec<String>) -> Option<Node> {
     if !v.is_table() {
@@ -764,7 +764,7 @@ pub fn node_from_value(catalog: &Catalog, v: &Value, errs: &mut Vec<String>) -> 
     Some(n)
 }
 
-/// The typed graph of a file's value (`QuestFromValue`). Shape problems are collected as
+/// The typed graph of a file's value. Shape problems are collected as
 /// messages; the rest is read anyway, so the author sees as much as can be read.
 #[must_use]
 pub fn graph_from_value(catalog: &Catalog, v: &Value) -> (Graph, Vec<String>) {
@@ -889,13 +889,13 @@ pub struct ReadError {
 }
 
 impl ReadError {
-    /// The message with ` (line L)` after it (`NqDoc::Load`, `ReadQuest`).
+    /// The message with ` (line L)` after it.
     #[must_use]
     pub fn with_line(&self) -> String {
         if self.line > 0 { format!("{} (line {})", self.message, self.line) } else { self.message.clone() }
     }
 
-    /// The message with ` (line L:C)` or ` (line L)` after it (`SetFromLua`, `quest_write`).
+    /// The message with ` (line L:C)` or ` (line L)` after it.
     #[must_use]
     pub fn with_position(&self) -> String {
         if self.line > 0 && self.column > 0 {
@@ -906,7 +906,7 @@ impl ReadError {
     }
 }
 
-/// The value of a file, or why it is no declarative table (`ParseValue`). `chunk` is the file's
+/// The value of a file, or why it is no declarative table. `chunk` is the file's
 /// base name.
 pub fn parse_value(text: &str, chunk: &str) -> Result<Value, ReadError> {
     gz_luadata::parse_named(text, chunk).map_err(|e| ReadError {
@@ -916,7 +916,7 @@ pub fn parse_value(text: &str, chunk: &str) -> Result<Value, ReadError> {
     })
 }
 
-/// A graph from its text; any shape problem fails it, one message per line (`ParseQuest`).
+/// A graph from its text; any shape problem fails it, one message per line.
 pub fn parse(catalog: &Catalog, text: &str, chunk: &str) -> Result<Graph, ReadError> {
     let v = parse_value(text, chunk)?;
     let (g, shape) = graph_from_value(catalog, &v);
@@ -932,7 +932,7 @@ fn put(t: &mut Table, key: &str, v: impl Into<Value>) {
     t.put(key, v);
 }
 
-/// An action as the writer emits it (`ActionToValue`).
+/// An action as the writer emits it.
 #[must_use]
 pub fn action_to_value(a: &Action) -> Value {
     let mut t = Table::new();
@@ -943,7 +943,7 @@ pub fn action_to_value(a: &Action) -> Value {
     Value::Table(t)
 }
 
-/// A condition as the writer emits it (`CondToValue`).
+/// A condition as the writer emits it.
 #[must_use]
 pub fn cond_to_value(c: &Cond) -> Value {
     let mut t = Table::new();
@@ -957,7 +957,7 @@ pub fn cond_to_value(c: &Cond) -> Value {
     Value::Table(t)
 }
 
-/// A node as the writer emits it (`NodeToValue`).
+/// A node as the writer emits it.
 #[must_use]
 pub fn node_to_value(n: &Node) -> Value {
     let mut t = Table::new();
@@ -1008,7 +1008,7 @@ pub fn node_to_value(n: &Node) -> Value {
     Value::Table(t)
 }
 
-/// One node as a Lua table literal (`NqLua::WriteNode`).
+/// One node as a Lua table literal.
 #[must_use]
 pub fn write_node(n: &Node, indent: usize) -> String {
     gz_luadata::write_node(&node_to_value(n), indent)
@@ -1236,7 +1236,7 @@ fn conds_summary(list: &[Cond]) -> String {
         .join(" and ")
 }
 
-/// One outline line of a node (`OutlineNode`).
+/// One outline line of a node.
 #[must_use]
 pub fn outline_node(catalog: &Catalog, n: &Node) -> String {
     let trig = catalog.is_trigger(&n.kind);
@@ -1297,7 +1297,7 @@ pub fn outline_node(catalog: &Catalog, n: &Node) -> String {
     line
 }
 
-/// The outline: the document line, then one line per node in topological order (`Outline`).
+/// The outline: the document line, then one line per node in topological order.
 /// A behaviour graph has no activation and no tasks, and never says "quest".
 #[must_use]
 pub fn outline(catalog: &Catalog, q: &Graph) -> String {
@@ -1354,8 +1354,7 @@ fn start_finish() -> Vector<Node> {
     v
 }
 
-/// What a new quest starts as: `trigger.start -> flow.end`, titled "New quest"
-/// (`NqExport::TemplateText`).
+/// What a new quest starts as: `trigger.start -> flow.end`, titled "New quest".
 #[must_use]
 pub fn quest_template(id: &str) -> String {
     let q = Graph {
@@ -1367,8 +1366,7 @@ pub fn quest_template(id: &str) -> String {
     write(&Catalog::empty(), &q)
 }
 
-/// What a new behaviour graph starts as: one role `squad`, `trigger.start -> flow.end`
-/// (`NqExport::BehaviourTemplateText`).
+/// What a new behaviour graph starts as: one role `squad`, `trigger.start -> flow.end`.
 #[must_use]
 pub fn behaviour_template(id: &str) -> String {
     let q = Graph {
@@ -1387,8 +1385,7 @@ pub fn behaviour_template(id: &str) -> String {
     write(&Catalog::empty(), &q)
 }
 
-/// The template of a file name: the id is what the name gives (`NewQuestTemplate` /
-/// `NewBehaviourTemplate`).
+/// The template of a file name: the id is what the name gives (a quest or a behaviour template).
 #[must_use]
 pub fn template_for(path: &str) -> String {
     let id = text::id_from_name(&base_name(path));

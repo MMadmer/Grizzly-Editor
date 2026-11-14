@@ -34,7 +34,7 @@
 //! - `appdata\` (logs, saves, screenshots, the player's `user.ltx`, the caches and the game's
 //!   content records, seeded once and never cleared), `modules\` (empty).
 //!
-//! A root an earlier editor ran a copied engine in stays Play's: the programs its marker lists
+//! A root in which a copied engine ran stays Play's: the programs its marker lists
 //! (`program = `), its `database` junction (unlinked, never followed) and its `.dead-air-x64`
 //! are removed when Play prepares it.
 //!
@@ -189,7 +189,7 @@ pub fn fsgame_in_place(text: &str, game: &Path) -> String {
     out
 }
 
-/// What a copied engine of an earlier editor kept in its root: its content records and the
+/// What a copied engine kept in its root: its content records and the
 /// junction to the game's archives. Removed when Play prepares such a root.
 const OLD_CONTENT_DIR: &str = ".dead-air-x64";
 const OLD_ARCHIVES_LINK: &str = "database";
@@ -513,7 +513,7 @@ fn prepare_checked(
 
     // from here on the disk changes: the marker first, then each entry claimed before it is written
     let mut claims = Claims::open(root, state)?;
-    // the copies an earlier editor ran: Play's own, so they go
+    // the copied programs: Play's own, so they go
     for name in &old_programs {
         let p = root.join(name);
         if fs::symlink_metadata(&p).is_ok_and(|m| m.is_file()) {
@@ -604,8 +604,8 @@ pub const GAME_PATH_LIMIT: usize = 255;
 /// `MAX_PATH` less the terminator: what Windows takes from a long-path aware engine while its
 /// long paths are off.
 pub const WINDOWS_PATH_LIMIT: usize = 259;
-/// The longest working folder Windows starts a program in (`CreateProcessW` refuses a longer one
-/// with `ERROR_DIRECTORY`, a long-path aware caller or not): `MAX_PATH` less the backslash and
+/// The longest working folder Windows starts a program in (a longer one is refused
+/// with a directory error, a long-path aware caller or not): `MAX_PATH` less the backslash and
 /// the terminator. The game runs in its root, so no root is deeper than this.
 pub const WORKING_FOLDER_LIMIT: usize = 258;
 

@@ -1,4 +1,4 @@
-//! The lookups behind the parameter pickers and `W060` (`NqPickers`): items, squads, levels,
+//! The lookups behind the parameter pickers and `W060`: items, squads, levels,
 //! smarts, story ids, profiles, communities, info portions, map spots, restrictors, spawn
 //! sections, dialogs, portraits, ranks, level changers.
 //!
@@ -12,7 +12,7 @@
 //!
 //! What is built: [`build_game`] (one linked game; the builders run in parallel on the caller's
 //! pool), [`build_project`] (the project's own files), [`Pickers::compose`] (both, the scene on
-//! top, in the C++ order).
+//! top, in a fixed order).
 
 use gz_fmt_xml::strings::StringTable;
 use gz_ltx::{Ltx, Section};
@@ -21,7 +21,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::text::{self, clip_utf8, contains_no_case, fold, split, trim};
 
-/// A picker type, in the C++ order (`EType`).
+/// A picker type, in a fixed order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PickerType {
     Item,
@@ -62,7 +62,7 @@ impl PickerType {
         Self::LevelChanger,
     ];
 
-    /// The catalog type name (`kTypeNames`).
+    /// The catalog type name.
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
@@ -84,7 +84,7 @@ impl PickerType {
         }
     }
 
-    /// The picker of a catalog type, `None` when the type has none (`TypeFromName`).
+    /// The picker of a catalog type, `None` when the type has none.
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|t| t.name() == name)
@@ -196,7 +196,7 @@ pub struct Pickers {
 }
 
 impl Pickers {
-    /// Composes the view in the C++ order: the game's index (or the fixed spot list without a
+    /// Composes the view in a fixed order: the game's index (or the fixed spot list without a
     /// game), then the project's stories, restrictors and looks, the project-fed lists sorted,
     /// then the scene's restrictors and story ids.
     #[must_use]
@@ -257,7 +257,7 @@ impl Pickers {
     }
 
     /// Up to `limit` entries matching `query`: id or caption prefixes first, then substrings;
-    /// story ids of placed objects before the respawn templates (`Search`).
+    /// story ids of placed objects before the respawn templates.
     #[must_use]
     pub fn search(&self, t: PickerType, query: &str, limit: usize) -> Vec<&PickerEntry> {
         let limit = if limit == 0 { 100 } else { limit };
@@ -340,7 +340,7 @@ fn find_from(text: &str, pat: &str, from: usize) -> Option<usize> {
     text.get(from..).and_then(|r| r.find(pat)).map(|i| from + i)
 }
 
-/// The ids of `<tag id="...">` openings with where each tag starts (`ScanIds`).
+/// The ids of `<tag id="...">` openings with where each tag starts.
 fn scan_ids(text: &str, tag: &str) -> Vec<(String, usize)> {
     let pat = format!("<{tag}");
     let mut out = Vec::new();
@@ -383,8 +383,7 @@ fn key_value(line: &str) -> Option<(&str, &str)> {
     Some((trim(line.get(..eq).unwrap_or("")), trim(line.get(eq + 1..).unwrap_or(""))))
 }
 
-/// Profiles, the captions of the named ones and every portrait a game character wears
-/// (`BuildProfiles`).
+/// Profiles, the captions of the named ones and every portrait a game character wears.
 fn build_profiles(inp: &GameInput<'_>) -> (Vec<Raw>, FxHashMap<String, String>, FxHashSet<String>) {
     let mut raw = Vec::new();
     let mut captions: FxHashMap<String, String> = FxHashMap::default();
@@ -428,8 +427,7 @@ fn build_profiles(inp: &GameInput<'_>) -> (Vec<Raw>, FxHashMap<String, String>, 
     (raw, captions, icons)
 }
 
-/// The caption of a spawn section: an NPC by its profile, an item by its `inv_name`
-/// (`SectionCaption`).
+/// The caption of a spawn section: an NPC by its profile, an item by its `inv_name`.
 fn section_caption(
     ltx: Option<&Ltx>,
     sect: &str,
@@ -451,7 +449,7 @@ fn section_caption(
     String::new()
 }
 
-/// Items, spawn sections, squads and the story ids of config sections (`BuildFromSettings`).
+/// Items, spawn sections, squads and the story ids of config sections.
 fn build_from_settings(inp: &GameInput<'_>, profiles: &FxHashMap<String, String>) -> Vec<Raw> {
     let mut raw = Vec::new();
     let Some(ltx) = inp.ltx else { return raw };
@@ -513,7 +511,7 @@ fn build_from_settings(inp: &GameInput<'_>, profiles: &FxHashMap<String, String>
     raw
 }
 
-/// The levels of `game_levels.ltx` with their captions (`BuildLevels`).
+/// The levels of `game_levels.ltx` with their captions.
 fn build_levels(inp: &GameInput<'_>) -> Vec<Raw> {
     let mut raw = Vec::new();
     let text = read_text(inp.files, "configs/game_levels.ltx");
@@ -560,7 +558,7 @@ fn build_levels(inp: &GameInput<'_>) -> Vec<Raw> {
     raw
 }
 
-/// The transitions of the linked game, captioned with where they lead (`BuildLevelChangers`).
+/// The transitions of the linked game, captioned with where they lead.
 fn build_level_changers(transitions: &[Transition], levels: &[Raw]) -> Vec<Raw> {
     transitions
         .iter()
@@ -579,8 +577,7 @@ fn build_level_changers(transitions: &[Transition], levels: &[Raw]) -> Vec<Raw> 
         .collect()
 }
 
-/// The smart terrains of `misc\simulation.ltx`, captioned through `misc\smart_names.ltx`
-/// (`BuildSmarts`).
+/// The smart terrains of `misc\simulation.ltx`, captioned through `misc\smart_names.ltx`.
 fn build_smarts(inp: &GameInput<'_>) -> Vec<Raw> {
     let mut keys: FxHashMap<String, String> = FxHashMap::default();
     let names = read_text(inp.files, "configs/misc/smart_names.ltx");
@@ -612,7 +609,7 @@ fn build_smarts(inp: &GameInput<'_>) -> Vec<Raw> {
     raw
 }
 
-/// The communities of `creatures\game_relations.ltx` (`BuildCommunities`).
+/// The communities of `creatures\game_relations.ltx`.
 fn build_communities(inp: &GameInput<'_>, text: &str) -> Vec<Raw> {
     let mut raw = Vec::new();
     let mut sect = String::new();
@@ -645,7 +642,7 @@ fn build_communities(inp: &GameInput<'_>, text: &str) -> Vec<Raw> {
     raw
 }
 
-/// The ranks of `[game_relations] rating` / `rating_names` (`BuildRanks`): the value where a
+/// The ranks of `[game_relations] rating` / `rating_names`: the value where a
 /// rank starts is its extra.
 fn build_ranks(inp: &GameInput<'_>, text: &str) -> Vec<Raw> {
     let (mut rating, mut names, mut sect) = (String::new(), String::new(), String::new());
@@ -682,7 +679,7 @@ fn files_list(ltx: Option<&Ltx>, section: &str, key: &str) -> Vec<String> {
     ltx.and_then(|l| ltx_line(l, section, key)).map(|v| split(v, ',')).unwrap_or_default()
 }
 
-/// The info portions of `[info_portions] files` (`BuildInfos`).
+/// The info portions of `[info_portions] files`.
 fn build_infos(inp: &GameInput<'_>) -> Vec<Raw> {
     let mut raw = Vec::new();
     for f in files_list(inp.ltx, "info_portions", "files") {
@@ -694,7 +691,7 @@ fn build_infos(inp: &GameInput<'_>) -> Vec<Raw> {
     raw
 }
 
-/// The dialogs of one file, captioned with the first line they say (`AddDialogs`).
+/// The dialogs of one file, captioned with the first line they say.
 fn add_dialogs(text: &str, st: Option<&StringTable>, extra: &str, raw: &mut Vec<Raw>) {
     let ids = scan_ids(text, "dialog");
     for (i, (id, at)) in ids.iter().enumerate() {
@@ -714,7 +711,7 @@ fn add_dialogs(text: &str, st: Option<&StringTable>, extra: &str, raw: &mut Vec<
     }
 }
 
-/// The dialogs of `[dialogs] files` (`BuildDialogs`).
+/// The dialogs of `[dialogs] files`.
 fn build_dialogs(inp: &GameInput<'_>) -> Vec<Raw> {
     let mut raw = Vec::new();
     for f in files_list(inp.ltx, "dialogs", "files") {
@@ -751,8 +748,7 @@ struct SheetTexture {
     h: i64,
 }
 
-/// Every `<texture>` of a description with the sheet it is cut from, comments dropped
-/// (`ReadTextureDescr`).
+/// Every `<texture>` of a description with the sheet it is cut from, comments dropped.
 fn read_texture_descr(raw: &str) -> Vec<SheetTexture> {
     let mut text = String::with_capacity(raw.len());
     let mut pos = 0;
@@ -807,7 +803,7 @@ fn icon_extra(t: &SheetTexture, project: bool) -> String {
 }
 
 /// Portraits: every picture of a portrait sheet, and of any other sheet only those a game
-/// character wears (`BuildIcons`).
+/// character wears.
 fn build_icons(inp: &GameInput<'_>, used: &FxHashSet<String>) -> Vec<Raw> {
     const PREFIX: &str = "configs/ui/textures_descr/";
     let mut raw = Vec::new();
@@ -844,7 +840,7 @@ fn is_word(c: u8) -> bool {
 }
 
 /// The story ids of the objects the game placed, read out of `all.spawn` - a `story_id` line of
-/// a config section belongs to a respawn template (`BuildSpawnStories`).
+/// a config section belongs to a respawn template.
 fn build_spawn_stories(inp: &GameInput<'_>, profiles: &FxHashMap<String, String>) -> Vec<Raw> {
     const MARK: &[u8] = b"[story_object]";
     let mut raw = Vec::new();
@@ -935,8 +931,8 @@ fn build_spawn_stories(inp: &GameInput<'_>, profiles: &FxHashMap<String, String>
     raw
 }
 
-/// The linked game's part of the pickers (`Build` with a game): the builders run in parallel on
-/// the caller's pool and are folded in the C++ order, each list then sorted by id.
+/// The linked game's part of the pickers: the builders run in parallel on
+/// the caller's pool and are folded in a fixed order, each list then sorted by id.
 #[must_use]
 pub fn build_game(inp: &GameInput<'_>) -> GameIndex {
     let (profiles, captions, used_icons) = build_profiles(inp);
@@ -1003,7 +999,7 @@ pub struct ProjectFiles {
     pub textures_descr: Vec<(String, String)>,
 }
 
-/// `[story_object] story_id = ...` of the project's custom data (`BuildProjectStories`).
+/// `[story_object] story_id = ...` of the project's custom data.
 fn project_stories(files: &ProjectFiles, out: &mut Vec<Raw>) {
     for (_, text) in &files.custom_data {
         let mut in_story = false;
@@ -1031,8 +1027,7 @@ fn parse_three(s: &str) -> Option<(f32, f32, f32)> {
     }
 }
 
-/// One object of a level's spawn: a restrictor is an entry of its own, a smart only a place hint
-/// (`NoteSpawnObject`).
+/// One object of a level's spawn: a restrictor is an entry of its own, a smart only a place hint.
 fn note_spawn_object(section: &str, name: &str, level: &str, at: &str, part: &mut ProjectPart) {
     if name.is_empty() {
         return;
@@ -1054,7 +1049,7 @@ fn note_spawn_object(section: &str, name: &str, level: &str, at: &str, part: &mu
 
 const ZERO_POS: &str = "0.000000, 0.000000, 0.000000";
 
-/// The restrictors and authored story ids of the project's levels (`BuildProjectRestrictors`):
+/// The restrictors and authored story ids of the project's levels:
 /// a `spawn.part` is plain ltx text, the object name the runtime looks a zone up by is in it.
 fn project_restrictors(files: &ProjectFiles, part: &mut ProjectPart) {
     for (rel, text) in &files.spawn_parts {
@@ -1218,7 +1213,7 @@ fn scene_spawn_objects(files: &ProjectFiles, part: &mut ProjectPart) {
     }
 }
 
-/// The module's own dialogs and portraits (`BuildProjectLooks`).
+/// The module's own dialogs and portraits.
 fn project_looks(files: &ProjectFiles, part: &mut ProjectPart) {
     for (_, text) in &files.gameplay {
         if text.contains("<dialog") {

@@ -1,10 +1,10 @@
-//! Portals: computed from the sectors' faces (`portalutils.cpp`'s `sCollector`), simplified and
-//! turned to face the right way (`portal.cpp`'s `Update` / `Simplify`), inverted, and the
-//! duplicates removed (`EScenePortalTools.cpp`'s `RemoveSimilar`).
+//! Portals: computed from the sectors' faces, simplified and
+//! turned to face the right way, inverted, and the
+//! duplicates removed.
 //!
-//! The faces are welded on a grid in the C++ order, the edges between two sectors found per face
+//! The faces are welded on a grid in a fixed order, the edges between two sectors found per face
 //! (in parallel, collected in face order), sorted, chained into loops and each loop exported as
-//! a portal. Each portal's checks run in parallel; its orientation is the C++ vote of 100 random
+//! a portal. Each portal's checks run in parallel; its orientation is a vote of 100 random
 //! ray pairs, from a generator of its own.
 
 use std::sync::Arc;
@@ -24,9 +24,9 @@ use crate::math::{Aabb, Mat4, Vec3};
 use crate::model::{ObjData, ObjId, SceneState};
 use crate::objects::PortalData;
 
-/// `clpMX`, `clpMY`, `clpMZ`.
+/// The clip planes of the portal polygon.
 const CLP: [usize; 3] = [64, 24, 64];
-/// `XR_MAX_PORTAL_VERTS`.
+/// The most vertices a portal may have.
 pub const MAX_PORTAL_VERTS: usize = 6;
 
 #[derive(Clone, Copy, Debug)]
@@ -47,7 +47,7 @@ struct Edge {
     v: [u32; 2],
 }
 
-/// `sCollector`: welded vertices, faces, the edges between sectors and the loops of them.
+/// Welded vertices, faces, the edges between sectors and the loops of them.
 struct Collector {
     verts: Vec<Vec3>,
     adj: Vec<Vec<u32>>,
@@ -75,7 +75,7 @@ impl Collector {
 
     fn cell(&self, v: Vec3, a: usize) -> usize {
         let f = ((v[a] - self.min[a]) / self.scale[a] * CLP[a] as f32).floor();
-        // oracle: the C++ asserts the cell is inside; a flat box (scale 0) gives NaN there
+        // a flat box (scale 0) gives NaN there; the cell must be inside
         if f.is_finite() { (f.max(0.0) as usize).min(CLP[a]) } else { 0 }
     }
 
@@ -83,7 +83,7 @@ impl Collector {
         (x * (CLP[1] + 1) + y) * (CLP[2] + 1) + z
     }
 
-    /// `VPack`: the first vertex within `EPS_L` in the vertex's cell, or a new one put into its
+    /// The first vertex within `EPS_L` in the vertex's cell, or a new one put into its
     /// cell and the neighbours its epsilon reaches.
     fn pack(&mut self, v: Vec3) -> u32 {
         let (ix, iy, iz) = (self.cell(v, 0), self.cell(v, 1), self.cell(v, 2));
@@ -177,9 +177,7 @@ impl Collector {
 }
 
 /// `sort_edges`: each edge's vertices and sectors in order, the list sorted and made unique.
-// oracle: the C++ sorts with `memcmp` over the first 16 bytes, which on x64 are the two sector
-// pointers only, and `std::unique` then removes only neighbours; here the sort is by sectors
-// (their order in the scene stands in for the pointers) and then vertices, so every duplicate
+// the sort is by sectors (their order in the scene) and then vertices, so every duplicate
 // goes
 fn sort_edges(edges: &mut Vec<Edge>) {
     for e in edges.iter_mut() {
@@ -194,8 +192,8 @@ fn sort_edges(edges: &mut Vec<Edge>) {
     edges.dedup();
 }
 
-/// `make_portals`: chains of edges of one sector pair. The search looks only at the edges of
-/// the chain's pair, which are together in the sorted list: the first match is the C++ one.
+/// Chains of edges of one sector pair. The search looks only at the edges of
+/// the chain's pair, which are together in the sorted list: the first match is the one used.
 fn make_portals(edges: &mut [Edge]) -> Vec<(Vec<usize>, [usize; 2])> {
     let mut used = vec![false; edges.len()];
     let mut out = Vec::new();
@@ -260,7 +258,7 @@ fn make_portals(edges: &mut [Edge]) -> Vec<(Vec<usize>, [usize; 2])> {
     out
 }
 
-/// What the faces of a sector answer a ray (`CSector::RayPick`): the items' visible meshes, each
+/// What the faces of a sector answer a ray: the items' visible meshes, each
 /// with the inverse of its object's transform.
 #[derive(Clone, Default)]
 pub struct SectorRays {
@@ -317,7 +315,7 @@ fn tri_area(p0: Vec2, p1: Vec2, p2: Vec2) -> f64 {
     (p * (p - e1) * (p - e2) * (p - e3)).sqrt()
 }
 
-/// `Isect2DLvs2DL`: where the line through `p1 p2` meets the line through `p3 p4`.
+/// Where the line through `p1 p2` meets the line through `p3 p4`.
 fn isect_lines(p1: Vec2, p2: Vec2, p3: Vec2, p4: Vec2) -> Option<Vec2> {
     let (a1, b1) = (f64::from(p2.y) - f64::from(p1.y), f64::from(p1.x) - f64::from(p2.x));
     let c1 = f64::from(p2.x) * f64::from(p1.y) - f64::from(p1.x) * f64::from(p2.y);
@@ -330,7 +328,7 @@ fn isect_lines(p1: Vec2, p2: Vec2, p3: Vec2, p4: Vec2) -> Option<Vec2> {
     Some(Vec2::new(((b1 * c2 - b2 * c1) / denom) as f32, ((a2 * c1 - a1 * c2) / denom) as f32))
 }
 
-/// `SimplifyVertices`: the edge whose two neighbours' lines meet closest replaced by that
+/// The edge whose two neighbours' lines meet closest replaced by that
 /// meeting point - one vertex fewer.
 fn simplify_vertices(v: &mut Vec<Vec2>) {
     let n = v.len();
@@ -357,7 +355,7 @@ fn simplify_vertices(v: &mut Vec<Vec2>) {
     v.remove(l2a);
 }
 
-/// A portal being built: what `CPortal` holds besides its name.
+/// A portal being built: what a portal holds besides its name.
 #[derive(Clone, Debug)]
 pub struct Built {
     pub data: PortalData,
@@ -367,7 +365,7 @@ pub struct Built {
     pub valid: bool,
 }
 
-/// `CPortal::Simplify`: the plane, the 2D hull of the vertices on it, at most six corners.
+/// The plane, the 2D hull of the vertices on it, at most six corners.
 fn simplify(b: &mut Built) {
     let (offset, normal) = plane_fit(&b.data.vertices);
     let from = offset;
@@ -418,15 +416,15 @@ fn simplify(b: &mut Built) {
     }
 }
 
-/// `CPortal::InvertOrientation`.
+/// Inverts a portal's orientation.
 pub fn invert(b: &mut Built) {
     b.data.vertices.reverse();
     b.simplified.reverse();
     b.normal = -b.normal;
 }
 
-/// `CPortal::Update(bLoadMode)`: the centre, the normal, the simplified model; with the sectors'
-/// rays the orientation vote. Messages in the C++ words go to `log`.
+/// Updates a portal: the centre, the normal, the simplified model; with the sectors'
+/// rays the orientation vote. Messages go to `log`.
 pub fn update(
     data: PortalData,
     name: &str,
@@ -473,8 +471,8 @@ pub fn update(
     b
 }
 
-/// The portals the sectors' faces give: each loop's portal, the number of loops (what the C++
-/// counts as "computed"), and the C++ messages.
+/// The portals the sectors' faces give: each loop's portal, the number of loops (what counts
+/// as "computed"), and the messages.
 pub struct Computed {
     pub portals: Vec<PortalData>,
     pub loops: usize,
@@ -484,8 +482,8 @@ pub struct Computed {
 /// Why a computation stopped early.
 pub struct Stopped;
 
-/// `CalculateSelectedPortals(sectors)` over the snapshot: `sectors` in the order the C++ walks
-/// them; `names` gives the new portals' names in order; `stop` is asked between the steps.
+/// Calculates the selected portals over the snapshot: `sectors` in walk order;
+/// `names` gives the new portals' names in order; `stop` is asked between the steps.
 pub fn compute(
     state: &SceneState,
     lib: &Library,
@@ -505,7 +503,7 @@ pub fn compute(
         sector_names.push(s.name.clone());
     }
     stage("Welding the vertices");
-    // the transforms in parallel; the weld in the C++ order
+    // the transforms in parallel; the weld in a fixed order
     let faces: Vec<Vec<(usize, [Vec3; 3])>> = items_of
         .par_iter()
         .enumerate()
@@ -560,9 +558,7 @@ pub fn compute(
             let name = names();
             todo.push((name, PortalData { front: fa, back: fb, vertices }, *pair));
         } else {
-            log.push(format!(
-                "Can't create Portal from one edge :(\nPlease check geometry.\n'{fa}'<->'{fb}'"
-            ));
+            log.push(format!("No portal can be made from one edge; check the geometry.\n'{fa}'<->'{fb}'"));
         }
     }
     let rays = sector_rays(&items_of);
@@ -586,7 +582,7 @@ pub fn compute(
             portals.push(b.data);
         } else {
             log.push(format!(
-                "Can't simplify Portal :(\nPlease check geometry.\n'{}'<->'{}'",
+                "The portal cannot be simplified; check the geometry.\n'{}'<->'{}'",
                 b.data.front, b.data.back
             ));
         }
@@ -626,8 +622,8 @@ fn portal_box(p: &PortalData) -> Aabb {
     }
 }
 
-/// `RemoveSimilar`: the portals that repeat another of the same sectors (one plane, the box
-/// inside the other's), in the C++ order.
+/// The portals that repeat another of the same sectors (one plane, the box
+/// inside the other's), in a fixed order.
 #[must_use]
 pub fn similar_portals(state: &SceneState) -> Vec<ObjId> {
     let all: Vec<(ObjId, PortalData)> = state

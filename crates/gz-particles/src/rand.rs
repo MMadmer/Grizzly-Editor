@@ -1,5 +1,5 @@
-//! The engine's two random sources: `CRandom` (`xrCore/_random.h`, the `::Random` that
-//! `drand48()` reads) and the CRT's `rand()` that `NRand` and the noise table use. Both are the
+//! The engine's two random sources: the process-wide generator (the one the
+//! double-precision draw reads) and the C runtime's `rand()` that the noise and the particle noise use. Both are the
 //! same LCG; a system owns one of each so its draws do not depend on anything else running.
 
 /// `CRandom` and MSVC's `rand()`: `holdrand = holdrand * 214013 + 2531011`, bits 16..31.
@@ -71,7 +71,7 @@ impl Rngs {
         self.random.rand_f()
     }
 
-    /// `PAPI::NRand`: a normal distribution of `sigma` by rejection, the sign from `rand()`.
+    /// A normal distribution of `sigma` by rejection, the sign from `rand()`.
     pub(crate) fn nrand(&mut self, sigma: f32) -> f32 {
         const ONE_OVER_SIGMA_EXP: f32 = 1.0 / 0.7975;
         if sigma == 0.0 {

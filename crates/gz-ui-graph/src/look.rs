@@ -167,13 +167,13 @@ pub fn kind_color(p: &Palette, cat: &Catalog, kind: &str, alpha: f32) -> Color32
     family_color(p, family_of(kind_icon(cat, kind)), alpha)
 }
 
-/// The title of a kind as the document speaks (`NqLook::KindTitle`).
+/// The title of a kind as the document speaks.
 #[must_use]
 pub fn kind_title(cat: &Catalog, kind: &str, behaviour: bool) -> String {
     gz_nq::text::kind_title(cat, kind, behaviour)
 }
 
-/// The description of a kind as the document speaks (`NqLook::KindDesc`).
+/// The description of a kind as the document speaks.
 #[must_use]
 pub fn kind_desc(cat: &Catalog, kind: &str, behaviour: bool) -> String {
     match cat.find(kind) {
@@ -249,13 +249,13 @@ pub fn kind_combo(
     }
 }
 
-/// "quest" or "graph" in a sentence (`NqLook::DocNoun`).
+/// "quest" or "graph" in a sentence.
 #[must_use]
 pub fn doc_noun(behaviour: bool) -> &'static str {
     gz_nq::text::doc_noun(behaviour)
 }
 
-/// `spot_task` -> `Spot task`: a catalog name read as a label (`Pretty`).
+/// `spot_task` -> `Spot task`: a catalog name read as a label.
 #[must_use]
 pub fn pretty(name: &str) -> String {
     const WORDS: [(&str, &str); 6] =
@@ -281,7 +281,7 @@ pub fn pretty(name: &str) -> String {
     if out.is_empty() { name.to_owned() } else { out }
 }
 
-/// `3 nodes`, `1 error` (`Plural`).
+/// `3 nodes`, `1 error`.
 #[must_use]
 pub fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })

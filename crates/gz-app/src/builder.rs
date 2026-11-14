@@ -59,7 +59,7 @@ pub type RevealFn = Box<dyn FnMut(&str, &mut DocCx<'_>)>;
 /// Rebuilds the layout (`true`: every split too).
 pub type ResetLayoutFn = Box<dyn FnMut(bool, &mut DocCx<'_>)>;
 
-/// A dialog that opens by id (`ui_dialog open`).
+/// A dialog that opens by id (`ui.dialog open`).
 pub struct DialogDesc {
     /// The MCP id: `import_base_scene`, `package_release`, ...
     pub id: SmolStr,

@@ -1,5 +1,4 @@
-//! Bones of a source model: the rest pose, the collision shape and the joint (`Bone.h`,
-//! `BoneEditor.cpp`).
+//! Bones of a source model: the rest pose, the collision shape and the joint.
 
 use glam::{Vec2, Vec3};
 use gz_chunk::{Reader, Writer};
@@ -20,7 +19,7 @@ const CHUNK_FLAGS: u32 = 0x0008;
 const CHUNK_IK_JOINT_BREAK: u32 = 0x0009;
 const CHUNK_IK_JOINT_FRICTION: u32 = 0x0010;
 
-/// `SBoneShape::EShapeType`.
+/// The shape types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShapeType {
     None = 0,
@@ -29,7 +28,7 @@ pub enum ShapeType {
     Cylinder = 3,
 }
 
-/// `SBoneShape`: the collision shape of a bone. All three bodies are stored whatever the type.
+/// The collision shape of a bone. All three bodies are stored whatever the type.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoneShape {
     /// See [`ShapeType`]; kept as stored.
@@ -81,8 +80,8 @@ impl BoneShape {
         }
     }
 
-    /// `Valid()`: a shape of a type has a size. The box test looks at its x three times, as
-    /// the C++ does.
+    /// Whether a shape of a type has a size. The box test looks at its x three times, as
+    /// the X-Ray SDK does.
     #[must_use]
     pub fn valid(&self) -> bool {
         let zero = |v: f32| v.abs() < crate::xmath::EPS_S;
@@ -136,7 +135,7 @@ impl BoneShape {
     }
 }
 
-/// `EJointType`.
+/// The joint types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum JointType {
     Rigid = 0,
@@ -147,7 +146,7 @@ pub enum JointType {
     Slider = 5,
 }
 
-/// `SJointLimit`: the range of one axis, as the editor keeps it.
+/// The range of one axis, as the editor keeps it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct JointLimit {
     /// `x` the low end, `y` the high end.
@@ -162,7 +161,7 @@ impl Default for JointLimit {
     }
 }
 
-/// `SJointIKData`.
+/// The joint IK data.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct JointIk {
     /// See [`JointType`]; kept as stored.
@@ -237,7 +236,7 @@ impl JointIk {
     }
 }
 
-/// `CBone`: a bone of a source model.
+/// A bone of a source model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bone {
     /// Lower case.
@@ -279,7 +278,7 @@ impl Default for Bone {
 }
 
 impl Bone {
-    /// `Load_0`: the first form, fields in a row.
+    /// The first form, fields in a row.
     pub(crate) fn read_v0(r: &mut Reader<'_>, text: &mut Text) -> Result<Bone> {
         let mut b = Bone {
             name: lower(&text.r_str(r)?),
@@ -294,11 +293,11 @@ impl Bone {
         Ok(b)
     }
 
-    /// `Load_1`: the chunked form.
+    /// The chunked form.
     pub(crate) fn read(r: &Reader<'_>, text: &mut Text) -> Result<Bone> {
         let version = need_chunk(r, CHUNK_VERSION)?.r_u16()?;
         if version != 0x0001 && version != BONE_VERSION {
-            // oracle: the C++ returns with an empty bone here
+            // the X-Ray SDK returns with an empty bone here
             return Err(ObjectError::Version { what: "The bone", version: u32::from(version) });
         }
         let mut def = need_chunk(r, CHUNK_DEF)?;
@@ -317,7 +316,7 @@ impl Bone {
         Ok(b)
     }
 
-    /// `LoadData`: what a `.bones` file and the second half of a bone hold.
+    /// What a `.bones` file and the second half of a bone hold.
     pub(crate) fn read_data(&mut self, r: &Reader<'_>, text: &mut Text) -> Result<()> {
         self.name = lower(&text.r_str(&mut need_chunk(r, CHUNK_DEF)?)?);
         self.game_mtl = text.r_str(&mut need_chunk(r, CHUNK_MATERIAL)?)?;
@@ -356,7 +355,7 @@ impl Bone {
         self.write_data(w, enc);
     }
 
-    /// `SaveData`.
+    /// Saves the bone data.
     pub(crate) fn write_data(&self, w: &mut Writer, enc: TextEncoding) {
         w.chunk(CHUNK_DEF, |w| w_str(w, &self.name, enc));
         w.chunk(CHUNK_MATERIAL, |w| w_str(w, &self.game_mtl, enc));

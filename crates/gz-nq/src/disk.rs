@@ -270,7 +270,7 @@ impl NqService {
                 }
                 Err(e) => editor
                     .log
-                    .warn(format!("! [nq] {path} could NOT be saved ({e}) - the unsaved changes are lost")),
+                    .warn(format!("[nq] {path} could not be saved ({e}) - the unsaved changes are lost")),
             }
         }
         saved

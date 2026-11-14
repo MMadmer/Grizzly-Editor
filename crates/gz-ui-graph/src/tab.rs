@@ -1,4 +1,4 @@
-//! The graph tab (`UIQuestGraphWindow`): one [`gz_app::Document`] per file. Its toolbar, the
+//! The graph tab: one [`gz_app::Document`] per file. Its toolbar, the
 //! Graph panel | the canvas | the Details panel with the drawer under them, the banner of an
 //! external change, the Shortcuts card, the Graph menu and the keys.
 //!
@@ -125,7 +125,7 @@ fn key_text(row: &KeyRow, keys_of: &dyn Fn(&str) -> String) -> String {
     }
 }
 
-/// The document id of a graph tab: `quest:<rel>` or `beh:<rel>`, `/` separated (`DocId`).
+/// The document id of a graph tab: `quest:<rel>` or `beh:<rel>`, `/` separated.
 #[must_use]
 pub fn doc_id(wire: &str, behaviour: bool) -> String {
     format!("{}:{}", if behaviour { "beh" } else { "quest" }, wire.replace('\\', "/"))
@@ -335,7 +335,7 @@ pub struct GraphTab {
     keys_rect: Option<Rect>,
     pub pane_details: Option<Rect>,
     pub pane_drawer: Option<Rect>,
-    /// Frames a quest_view change still owes before its answer describes it.
+    /// Frames a graph.view change still owes before its answer describes it.
     pub view_frames: u32,
     pub drawn_frame: u64,
     message: String,
@@ -629,7 +629,7 @@ impl GraphTab {
 
     // ---- the panes ----------------------------------------------------------------------------
 
-    /// Asks for the Graph panel (`SetGraphPanel`): on a rail it is the one over the canvas.
+    /// Asks for the Graph panel: on a rail it is the one over the canvas.
     pub fn set_graph_panel(&mut self, on: bool) {
         if self.rail && self.show_graph {
             self.graph_overlay = on;
@@ -680,12 +680,12 @@ impl GraphTab {
         self.post(ctx, DocOp::View(ViewOp::Drawer(SmolStr::new(d.name()))));
     }
 
-    /// Whether quest_view's `scroll=` has a pane on screen (`CanScroll`).
+    /// Whether graph.view's `scroll=` has a pane on screen.
     pub fn can_scroll(&self, w: &str) -> Result<(), String> {
         let graph = self.graph_on_screen();
         if w == "tasks" || w == "variables" || w.starts_with("task:") {
             if !graph {
-                return Err("the Graph panel is not on screen: quest_view graph_panel=show first".into());
+                return Err("the Graph panel is not on screen: graph.view graph_panel=show first".into());
             }
             if let Some(rest) = w.strip_prefix("task:") {
                 if self.behaviour {
@@ -703,7 +703,7 @@ impl GraphTab {
         if w == "top" || w == "bottom" {
             if self.mirror.selection.len() == 1 {
                 if !self.show_details {
-                    return Err("the Details panel is hidden: quest_view details=show first".into());
+                    return Err("the Details panel is hidden: graph.view details=show first".into());
                 }
                 return Ok(());
             }
@@ -714,7 +714,7 @@ impl GraphTab {
         }
         if w.starts_with("action:") {
             if !self.show_details {
-                return Err("the Details panel is hidden: quest_view details=show first".into());
+                return Err("the Details panel is hidden: graph.view details=show first".into());
             }
             if !Inspector::has_action(&self.mirror) {
                 return Err("no action is open: pass slot=enter:N or slot=exit:N".into());
@@ -762,7 +762,7 @@ impl GraphTab {
         (results, index)
     }
 
-    /// Goes to a find result (wrapping); -1 is the last (`NavigateFind`).
+    /// Goes to a find result (wrapping); -1 is the last.
     pub fn navigate_find(&mut self, ctx: &egui::Context, to: i64) {
         self.post(ctx, DocOp::View(ViewOp::FindGo(to)));
     }
@@ -1230,7 +1230,7 @@ impl GraphTab {
         self.run_ops(&ctx, ops);
         self.flush_selection(&ctx);
         self.flush_view(&ctx);
-        // what the frame drew, for quest_minimap
+        // what the frame drew, for graph.view
         let ppp = ctx.pixels_per_point();
         let drawn = (
             [(canvas_w * ppp) as u32, (main_h * ppp) as u32],
@@ -1535,7 +1535,7 @@ impl GraphTab {
 
     // ---- the actions of the toolbar, the menu and the keys ------------------------------------
 
-    /// Saves (`Save`) on the IO pool: what changed goes into the file's own text, over whatever
+    /// Saves on the IO pool: what changed goes into the file's own text, over whatever
     /// the file took in meanwhile.
     pub fn save_now(&mut self, ctx: &egui::Context) -> Result<(), String> {
         let Some(doc) = self.shared() else { return Ok(()) };
@@ -1665,7 +1665,7 @@ impl GraphTab {
                 run();
             }
         }) {
-            self.editor.log.info(line);
+            self.editor.log.finding(&line);
         }
     }
 
@@ -1866,7 +1866,7 @@ impl Document for GraphTab {
     }
 
     fn alive(&self) -> bool {
-        // the document may have been closed without us (MCP quest_close): the tab follows
+        // the document may have been closed without us (closed over MCP): the tab follows
         let Some(doc) = &self.doc else { return true };
         let Some(session) = self.editor.project_opt() else { return false };
         NqService::get(&session).is_some_and(|svc| svc.docs().iter().any(|d| Arc::ptr_eq(d, doc)))

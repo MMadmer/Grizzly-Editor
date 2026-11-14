@@ -1,5 +1,5 @@
-//! `CDB::Collector` and `CDB::CollectorPacked`: triangle soups with welded vertices. The order
-//! of the vertices and triangles they give is the order the C++ gives.
+//! Triangle soups with welded vertices. The order
+//! of the vertices and triangles they give is the order the X-Ray SDK gives.
 
 use std::collections::BTreeSet;
 
@@ -11,7 +11,7 @@ use crate::cform::Tri;
 use crate::math::{EPS, EPS_L, i_floor, similar};
 use crate::{Aabb, CForm};
 
-/// `CDB::Collector`: collects faces, optionally welding vertices closer than an epsilon.
+/// Collects faces, optionally welding vertices closer than an epsilon.
 #[derive(Clone, Debug, Default)]
 pub struct Collector {
     verts: Vec<Vec3>,
@@ -19,7 +19,7 @@ pub struct Collector {
     grid: WeldGrid,
 }
 
-/// What makes `VPack` linear: vertices bucketed by cells twice the epsilon wide, so that a vertex
+/// What makes the packed weld linear: vertices bucketed by cells twice the epsilon wide, so that a vertex
 /// within the epsilon of a point always lies in one of the 27 cells around it.
 #[derive(Clone, Debug, Default)]
 struct WeldGrid {
@@ -95,13 +95,13 @@ impl Collector {
         Self::default()
     }
 
-    /// `VPack`: the index of the first vertex similar to `v`, or of `v` appended.
+    /// The index of the first vertex similar to `v`, or of `v` appended.
     fn v_pack(&mut self, v: Vec3, eps: f32) -> u32 {
         let found = if eps > 0.0 && eps.is_finite() && v.is_finite() {
             self.grid.sync(&self.verts, eps);
             self.grid.find(&self.verts, v)
         } else {
-            // an odd epsilon or point: the plain scan of the C++
+            // an odd epsilon or point: the plain scan of the X-Ray SDK
             self.verts.iter().position(|p| similar(*p, v, eps)).map(|i| i as u32)
         };
         if let Some(i) = found {
@@ -127,7 +127,7 @@ impl Collector {
         self.push_plain(v0, v1, v2, dummy);
     }
 
-    /// `add_face_packed`: vertices welded within `eps` (the C++ default is [`EPS`]).
+    /// Adds a face with the vertices welded within `eps` (the X-Ray SDK's default is [`EPS`]).
     pub fn add_face_packed(&mut self, v0: Vec3, v1: Vec3, v2: Vec3, material: u16, sector: u16, eps: f32) {
         self.add_face_packed_d(v0, v1, v2, Tri::new([0; 3], material, sector).dummy, eps);
     }
@@ -140,11 +140,11 @@ impl Collector {
         self.faces.push(Tri { verts: [a, b, c], dummy });
     }
 
-    /// The epsilon `add_face_packed` uses when the C++ caller passes none.
+    /// The epsilon the packed add uses when the caller passes none.
     pub const DEFAULT_EPS: f32 = EPS;
 
-    /// `remove_duplicate_T`: drops triangles that repeat an earlier one (the same three vertices
-    /// in any order and the same word). The survivors end up where the C++ leaves them - it fills
+    /// Drops triangles that repeat an earlier one (the same three vertices
+    /// in any order and the same word). The survivors end up where the X-Ray SDK leaves them - it fills
     /// a hole with the last triangle - without its quadratic scan.
     pub fn remove_duplicate_tris(&mut self) {
         type Key = ([u32; 3], u32);
@@ -191,10 +191,10 @@ impl Collector {
         }
     }
 
-    /// `calc_adjacency`: for every triangle edge (`face * 3 + edge`) the triangle on the other
+    /// Calculates the adjacency: for every triangle edge (`face * 3 + edge`) the triangle on the other
     /// side, or `u32::MAX`.
-    // oracle: vertex ids are compared as u16, so a collector of more than 65536 vertices pairs
-    // edges that only share the low 16 bits; the C++ asserts fewer than 65536 faces instead.
+    // vertex ids are compared as u16, so a collector of more than 65536 vertices pairs
+    // edges that only share the low 16 bits; the X-Ray SDK asserts fewer than 65536 faces instead.
     #[must_use]
     pub fn calc_adjacency(&self) -> Vec<u32> {
         struct Edge {
@@ -255,7 +255,7 @@ const CLP_MX: u32 = 24;
 const CLP_MY: u32 = 16;
 const CLP_MZ: u32 = 24;
 
-/// `CDB::CollectorPacked`: welds within [`EPS_L`] through a fixed 24 x 16 x 24 grid over a box
+/// Welds within [`EPS_L`] through a fixed 24 x 16 x 24 grid over a box
 /// given up front; every face also carries a caller's flags word.
 #[derive(Clone, Debug)]
 pub struct CollectorPacked {
@@ -303,7 +303,7 @@ impl CollectorPacked {
         ((ix * (CLP_MY + 1) + iy) * (CLP_MZ + 1) + iz) as usize
     }
 
-    /// The grid cell of a point: the C++ takes the floor into a `u32` and clamps from above, so
+    /// The grid cell of a point: the X-Ray SDK takes the floor into a `u32` and clamps from above, so
     /// a point below the box lands in the last cell.
     fn cell(&self, v: Vec3) -> (u32, u32, u32) {
         let one =
@@ -444,7 +444,7 @@ mod tests {
         }
     }
 
-    /// `Collector::VPack` as the C++ writes it.
+    /// The packed collector's add, as the X-Ray SDK writes it.
     fn naive_pack(verts: &mut Vec<Vec3>, v: Vec3, eps: f32) -> u32 {
         if let Some(i) = verts.iter().position(|p| similar(*p, v, eps)) {
             return i as u32;
@@ -454,7 +454,7 @@ mod tests {
     }
 
     /// The packed collector's weld is its grid's: the first similar vertex of the point's cell
-    /// list, the lists filled as the C++ fills them.
+    /// list, the lists filled as the X-Ray SDK fills them.
     #[test]
     fn packed_welding_matches_the_cell_scan() {
         let mut rng = Rng(0x2545_F491_4F6C_DD1D);
@@ -524,7 +524,7 @@ mod tests {
         assert_eq!(c.tris()[0].sector(), 4);
     }
 
-    /// `remove_duplicate_T` as the C++ writes it.
+    /// Duplicate removal, as the X-Ray SDK writes it.
     fn naive_dedup(faces: &mut Vec<Tri>) {
         fn same(a: &Tri, b: &Tri) -> bool {
             let (mut x, mut y) = (a.verts, b.verts);

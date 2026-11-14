@@ -230,7 +230,7 @@ impl VertexFormat {
 }
 
 impl VertexBuffer {
-    /// `OGF_VERTICES`: the type word, the count, the vertices. A skinned model's geometry
+    /// The type word, the count, the vertices. A skinned model's geometry
     /// (`skinned`) reads the type words 1 to 4 as link counts.
     pub(crate) fn read(body: &[u8], skinned: bool) -> Result<Self> {
         let mut r = Reader::new(body);

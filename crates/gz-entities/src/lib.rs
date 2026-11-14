@@ -1,10 +1,10 @@
 //! The game's server entities without the game DLL.
 //!
-//! The C++ editor gets its entity factory from the game: for a spawn section it makes a
+//! The game's own tools get their entity factory from the game DLL: for a spawn section it makes a
 //! `CSE_*` object that reads and writes itself as a network packet and lists its editable
 //! properties. This crate is that factory as data and code: the class table ([`class`]), the
 //! constructors that read a section's defaults, `STATE_*` / `UPDATE_*` of every class in the
-//! game's layout, Dead Air's script-class fields, and the property description of `FillProps`.
+//! game's layout, Dead Air's script-class fields, and the property description of each class.
 //!
 //! ```text
 //! Entity::create(section, settings)              a new entity, as the factory makes it

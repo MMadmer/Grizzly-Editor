@@ -1,5 +1,4 @@
-//! The visuals of the level as `XrLC` makes them (`OGF_Face.h`, `OGF_Face.cpp`,
-//! `OGF_Face_Stripify.cpp`, `OGF_CalculateTB.cpp`, `OGF_RemoveIsolatedVerts.cpp`): a model of one
+//! The visuals of the level as the compiler makes them: a model of one
 //! material built face by face with its vertices welded, its texture coordinates moved near the
 //! origin, made progressive, ordered for the vertex cache; the nodes of the tree above them.
 
@@ -25,7 +24,7 @@ pub const PM_METRIC_MU: f32 = 0.05;
 /// `VIPM_Convert(u32(25), ...)`.
 const PM_MAX_WINDOW: u32 = 25;
 
-/// `OGF_Texture`: a name and the size of the surface it stands for.
+/// A name and the size of the surface it stands for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OgfTexture {
     pub name: SmolStr,
@@ -44,7 +43,7 @@ pub struct OgfVertex {
     pub uv: SmallVec<[Vec2; 3]>,
 }
 
-/// `FSlideWindow`.
+/// A slide window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SlideWindow {
     pub offset: u32,
@@ -79,7 +78,7 @@ impl<V> Default for Container<V> {
     }
 }
 
-/// `OGF`: a model of one material.
+/// A model of one material.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Ogf {
     pub material: u16,
@@ -89,7 +88,7 @@ pub struct Ogf {
     /// `fast_path_data`: positions only.
     pub fast: Container<Vec3>,
     pub bounds: Option<Bounds>,
-    /// The points `CalcBounds` reads, kept from when the C++ calls it until the spheres are
+    /// The points the bounds read, kept from when X-Ray's compiler calls it until the spheres are
     /// taken in its order.
     pub snapshot: Vec<Vec3>,
     /// `_subdiv::sw_id` of an MU model's visual: its sliding windows in the shared container.
@@ -174,7 +173,7 @@ impl Ogf {
         }
     }
 
-    /// `Optimize`: with `bOptimizeUV`, every group of faces joined by their vertices gets its
+    /// Optimizes: with the UV optimisation, every group of faces joined by their vertices gets its
     /// first texture coordinates moved by whole tiles near the origin.
     pub fn optimize(&mut self, optimize_uv: bool) {
         if self.data.vertices.is_empty() || !optimize_uv {
@@ -231,7 +230,7 @@ impl Ogf {
         }
     }
 
-    /// The positions `GetGeometry` gives.
+    /// The positions the geometry gives.
     #[must_use]
     pub fn geometry(&self) -> Vec<Vec3> {
         self.data.vertices.iter().map(|v| v.p).collect()
@@ -242,7 +241,7 @@ impl Ogf {
         !self.data.swi.is_empty()
     }
 
-    /// `MakeProgressive`: the VIPM collapses of the model, kept when they remove at least
+    /// The VIPM collapses of the model, kept when they remove at least
     /// `metric` of its vertices; then the same for the fast path. Answers the log lines.
     pub fn make_progressive(&mut self, metric: f32, draft: bool, log: &mut Vec<String>) {
         if self.data.faces.len() < PM_FACE_LIMIT || draft {
@@ -332,7 +331,7 @@ impl Ogf {
         }
     }
 
-    /// `Stripify`: a progressive model is left as it is; the fast path through the D3DX
+    /// A progressive model is left as it is; the fast path through the D3DX
     /// orders, the model through NvTriStrip and the first-use renumbering.
     pub fn stripify(&mut self, log: &mut Vec<String>) {
         if self.progressive() {
@@ -398,7 +397,7 @@ impl Ogf {
         self.data.vertices = verts;
     }
 
-    /// `CalculateTB`: the tangents and binormals through MeshMender, the vertices it splits
+    /// The tangents and binormals through MeshMender, the vertices it splits
     /// added.
     pub fn calculate_tb(&mut self) {
         self.remove_isolated();
@@ -451,7 +450,7 @@ impl Ogf {
     }
 }
 
-/// `u8_vec4(Fvector N, A)`: a normal in a byte per axis.
+/// A normal in a byte per axis.
 #[must_use]
 pub fn u8_vec4(n: Vec3, a: u8) -> [u8; 4] {
     let x = (n.x + 1.0) * (0.5 * 255.0);

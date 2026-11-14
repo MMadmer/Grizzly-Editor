@@ -188,7 +188,7 @@ fn refuse(message: impl Into<String>) -> CmdError {
 
 // ---- the request as the changes read it -------------------------------------------------
 
-/// `ArgString`: present means given, even empty; a bare number or flag is its text.
+/// Present means given, even empty; a bare number or flag is its text.
 fn arg(args: &Args, key: &str) -> Option<String> {
     match args.get(key)? {
         Value::String(s) => Some(s.clone()),
@@ -199,7 +199,7 @@ fn arg(args: &Args, key: &str) -> Option<String> {
     }
 }
 
-/// `ArgBool`: `true` / `1` / `false` / `0` at the start of the value; absent otherwise.
+/// `true` / `1` / `false` / `0` at the start of the value; absent otherwise.
 fn arg_bool(args: &Args, key: &str) -> Option<bool> {
     match args.get(key)? {
         Value::Bool(b) => Some(*b),
@@ -222,7 +222,7 @@ fn arg_bool(args: &Args, key: &str) -> Option<bool> {
     }
 }
 
-/// `ArgInt`: a number (cut toward zero) or text that starts like one.
+/// A number (cut toward zero) or text that starts like one.
 fn arg_int(args: &Args, key: &str) -> Option<i64> {
     match args.get(key)? {
         Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|v| v as i64)),
@@ -235,7 +235,7 @@ fn arg_int(args: &Args, key: &str) -> Option<i64> {
     }
 }
 
-/// `ArgList`: a comma separated list, every name trimmed, empty ones dropped; `None` when the
+/// A comma separated list, every name trimmed, empty ones dropped; `None` when the
 /// argument is absent.
 fn arg_list(args: &Args, key: &str) -> Option<Vec<String>> {
     arg(args, key).map(|t| gz_nq::text::split(&t, ','))
@@ -439,7 +439,7 @@ async fn world_set(ed: Arc<Editor>, p: SetParams, origin: Origin) -> Reply {
     Ok(world_answer(&ed, &svc, m, doc).await)
 }
 
-/// The linked game's own base kit (`GameBaseKit`); `None` when the game has none.
+/// The linked game's own base kit; `None` when the game has none.
 async fn game_base_kit(ed: &Editor) -> Option<StartKit> {
     let link = gz_game::GameLink::of(ed).ok()?;
     let files = link.files().await.ok()?;

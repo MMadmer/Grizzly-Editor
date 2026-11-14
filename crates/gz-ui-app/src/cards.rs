@@ -259,8 +259,7 @@ pub struct Picture {
 }
 
 /// Decodes a `preview.png` and averages it down by a whole factor to at most
-/// [`PREVIEW_MAX_W`] wide. A picture of no scene (a black or empty grey frame an older editor
-/// kept) is `None`: the card draws its placeholder; the file itself is the project's and stays.
+/// [`PREVIEW_MAX_W`] wide. A picture of no scene (a black or empty grey frame) is `None`: the card draws its placeholder; the file itself is the project's and stays.
 #[must_use]
 pub fn decode_preview(bytes: &[u8]) -> Option<Picture> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
@@ -344,7 +343,7 @@ pub fn crop_uv(have_w: f32, have_h: f32, want_w: f32, want_h: f32) -> egui::Rect
 }
 
 /// What a deletion or its check answered over the wire, back as the confirmation shows it (the
-/// `project_delete` reply: the counts under `deleted`, paths with forward slashes).
+/// `project.delete` reply: the counts under `deleted`, paths with forward slashes).
 #[must_use]
 pub fn info_from_reply(reply: &serde_json::Value) -> gz_project::DeleteInfo {
     use serde_json::Value;

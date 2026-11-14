@@ -1,8 +1,8 @@
-//! Screens & Music (`EditorScreens.cpp`): the tab ([`doc`]), `screens.view` ([`cmd`]) and what
+//! Screens & Music: the tab ([`doc`]), `screens.view` ([`cmd`]) and what
 //! both keep - which surface the tab edits, what is selected, the last status - plus the one way
 //! an edit is saved: the manifest is read again, the change made to what it holds and written
-//! through `gz-mod`'s store (`Commit`), and the one way a file arrives: `gz_screens::import` off
-//! the UI thread, then put where it was dropped (`TakeFiles`).
+//! through `gz-mod`'s store, and the one way a file arrives: `gz_screens::import` off
+//! the UI thread, then put where it was dropped.
 
 pub mod cmd;
 pub mod doc;
@@ -58,7 +58,7 @@ pub fn surface_mask(surface: usize) -> u32 {
     if surface == 0 { LOADING } else { MENU | PAUSE }
 }
 
-/// Where a new screen or track shows (`DefaultShow`): the tab's surface.
+/// Where a new screen or track shows: the tab's surface.
 #[must_use]
 pub fn default_show(surface: usize) -> u32 {
     surface_mask(surface)
@@ -92,7 +92,7 @@ impl Selection {
 /// when it is saved.
 pub type Change = Arc<dyn Fn(&mut Screens) -> Selection + Send + Sync>;
 
-/// Files from anywhere, imported, put where they were dropped (`TakeFiles`): music into the
+/// Files from anywhere, imported, put where they were dropped: music into the
 /// tracks, anything else on the screen `screen` (its layer `layer`, or a new one), or each as a
 /// new screen of its own. `err` gets the last refusal.
 pub fn take_files(
@@ -184,7 +184,7 @@ async fn save(editor: &Arc<Editor>, change: Change) -> Result<Selection, String>
     Ok(sel)
 }
 
-/// Files dropped on the tab or picked for it (`TakeDrop`): imported off the UI thread, in
+/// Files dropped on the tab or picked for it: imported off the UI thread, in
 /// parallel, then put where they landed and saved. A refused import is the status.
 pub async fn take_drop(
     editor: &Arc<Editor>,

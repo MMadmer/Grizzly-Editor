@@ -23,7 +23,7 @@ use gz_project::{DeleteContext, Guard, paths};
 /// or overwrites there.
 pub const MARKER: &str = "play_root.txt";
 const MARKER_HEAD: &str = "; A game root made by Play of the level editor. Play clears only what it writes here: the entries\r\n; below, gamedata\\, the staged level; nothing else in this folder is touched.\r\n";
-/// What an earlier editor listed for the engine it copied into the root: read, so Play removes
+/// What a copying Play listed for the engine it copied into the root: read, so Play removes
 /// those copies, and never written.
 const PROGRAM_KEY: &str = "program = ";
 const ENTRY_KEY: &str = "entry = ";
@@ -35,8 +35,8 @@ pub enum RootState {
     Missing,
     /// An empty folder: Play makes its root in it.
     Empty,
-    /// Play's own root, with the entries its marker lists and the programs an earlier editor
-    /// copied there.
+    /// Play's own root, with the entries its marker lists and the programs a copying Play
+    /// put there.
     Marked { programs: Vec<String>, entries: Vec<String> },
 }
 
@@ -306,7 +306,7 @@ mod tests {
         assert_eq!(check_root(&cx, &missing).unwrap(), RootState::Missing);
         fs::create_dir_all(&missing).unwrap();
         assert_eq!(check_root(&cx, &missing).unwrap(), RootState::Empty);
-        // the programs an earlier editor copied are listed too
+        // the programs a copying Play put there are listed too
         let text = format!("{MARKER_HEAD}program = engine.bin\r\nprogram = ..\\x\r\nentry = gamedata\r\n");
         fs::write(missing.join(MARKER), text).unwrap();
         fs::create_dir_all(missing.join("gamedata")).unwrap();

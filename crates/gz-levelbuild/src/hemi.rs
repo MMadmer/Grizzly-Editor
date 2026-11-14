@@ -1,5 +1,5 @@
-//! `xrHemisphere.cpp`: the hemisphere tables of the light build, generated from the C++ tables.
-//! Each value is the C++ `double` literal narrowed to `float`, as the C++ initialiser does.
+//! The hemisphere tables of the light build, generated from the X-Ray SDK's tables.
+//! Each value is the X-Ray SDK's `double` literal narrowed to `float`, as the X-Ray SDK's initialiser does.
 
 #![allow(clippy::unreadable_literal, clippy::excessive_precision)]
 

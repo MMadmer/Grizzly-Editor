@@ -339,7 +339,7 @@ impl Drop for ManifestService {
     }
 }
 
-/// What `mod_commands` and the build ask of the project's console commands: the functions its
+/// What `mod.info` and the build ask of the project's console commands: the functions its
 /// scripts define and the problems of `[commands]` (the linked game's other modules included).
 pub async fn command_check(
     editor: &Editor,
@@ -406,7 +406,7 @@ pub struct ArgCx {
     pub manifest: Manifest,
 }
 
-/// Turns an argument into edits of the manifest, or a refusal (the C++ text) that stops the
+/// Turns an argument into edits of the manifest, or a refusal that stops the
 /// whole call before anything is written. May do file work (the thumbnail is converted).
 pub type ArgHook = Arc<dyn Fn(ArgCx) -> BoxFuture<'static, Result<Vec<Edit>, String>> + Send + Sync>;
 

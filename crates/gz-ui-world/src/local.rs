@@ -130,7 +130,7 @@ pub fn drawer_height(open: bool, avail: f32) -> f32 {
     if open { header + 180.0_f32.min(avail * 0.4) } else { header }
 }
 
-/// The problems drawer at the bottom of a tab (`XUI_LocalProblemsDrawer`): a header that says how
+/// The problems drawer at the bottom of a tab: a header that says how
 /// many, the list under it while open. `lines` are the sentences with their tones; `ok` is said
 /// when there are none.
 pub fn local_problems_drawer(ui: &mut Ui, open: &mut bool, height: f32, lines: &[(Tone, String)], ok: &str) {
@@ -214,7 +214,7 @@ pub fn local_problems_drawer(ui: &mut Ui, open: &mut bool, height: f32, lines: &
 }
 
 /// A level of the linked game picked from a searchable list, the ones listed already left out
-/// (`XUI_LocalLevelPicker`). `levels` are `(name, caption)`. Open it with `Popup::open_id`.
+/// . `levels` are `(name, caption)`. Open it with `Popup::open_id`.
 /// Returns the level picked.
 pub fn local_level_picker(
     ctx: &Context,

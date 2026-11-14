@@ -1,5 +1,4 @@
-//! `xrCompileDO` (`xrDO_Light.cpp`, `compiler.cpp`, `global_calculation_data.cpp`,
-//! `global_slots_data.cpp`): `build.details` copied into `level.details`, every slot's palette
+//! The detail compiler: `build.details` copied into `level.details`, every slot's palette
 //! processed and its light taken from `build.cform` and `build.lights` with the build's
 //! materials and textures.
 

@@ -1,5 +1,4 @@
 //! `gamemtl.xr`: the game materials and the effects of every pair of them.
-//! `XrGameMaterialLibraryInterface.cpp` (`SGameMtl::Load`, `SGameMtlPair::Load`), `GameMtlLib.cpp`.
 
 use gz_chunk::Reader;
 use smol_str::SmolStr;
@@ -23,10 +22,10 @@ const PAIR_PAIR: u32 = 0x1000;
 const PAIR_BREAKING: u32 = 0x1002;
 const PAIR_STEP: u32 = 0x1003;
 const PAIR_COLLIDE: u32 = 0x1005;
-/// `GAMEMTL_CURRENT_VERSION`.
+/// The current version.
 pub const GAMEMTL_VERSION: u16 = 1;
 
-/// `SGameMtl`.
+/// A game material.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GameMaterial {
     pub id: u32,
@@ -42,7 +41,7 @@ pub struct GameMaterial {
     pub bounce_damage_factor: f32,
     pub vis_transparency_factor: f32,
     pub snd_occlusion_factor: f32,
-    /// `fShootFactorMP`: the shoot factor when the file has none of its own.
+    /// The shoot factor when the file has none of its own.
     pub shoot_factor_mp: f32,
     pub flotation_factor: Option<f32>,
     pub injurious_speed: Option<f32>,
@@ -50,11 +49,11 @@ pub struct GameMaterial {
 }
 
 impl GameMaterial {
-    /// `SGameMtl::flBreakable`.
+    /// The breakable flag.
     pub const BREAKABLE: u32 = 1 << 0;
-    /// `SGameMtl::flClimable`.
+    /// The climable flag.
     pub const CLIMABLE: u32 = 1 << 5;
-    /// `SGameMtl::flDynamic` (`XrGameMaterialLibraryInterface.h`: bit 8).
+    /// The dynamic flag (bit 8).
     pub const DYNAMIC: u32 = 1 << 8;
 
     #[must_use]
@@ -63,7 +62,7 @@ impl GameMaterial {
     }
 }
 
-/// `SGameMtlPair`: lists are the comma lists as stored.
+/// Lists are the comma lists as stored.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GameMaterialPair {
     pub mtl0: u32,

@@ -21,7 +21,7 @@
 //!   [`validate_commands`] (`E401`..`E406`, `W406`..`W408`).
 //! - [`exclude`] - what the build leaves out: [`exclude_match`], [`outside_build`],
 //!   [`ship_state`], [`set_excluded`].
-//! - [`text`] - the quoting of `name` / `author` / `description`, `SplitList`, cp1251 coverage.
+//! - [`text`] - the quoting of `name` / `author` / `description`, list splitting, cp1251 coverage.
 //!
 //! The service and the commands:
 //!

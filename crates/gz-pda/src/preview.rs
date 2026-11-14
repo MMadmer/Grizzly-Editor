@@ -1,6 +1,6 @@
-//! The preview's running interface as data (`EditorPdaPreview.cpp`, `SPreview`): which page
+//! The preview's running interface as data: which page
 //! shows, what actions changed, the log of what ran - and how a click, a key or an action
-//! changes it, the way the game's `CUIPdaLayout` plays them. Everything here is in canvas
+//! changes it, the way the game's layout drawing plays them. Everything here is in canvas
 //! units; the tab only scales it and draws, `pda.preview` only forwards.
 //!
 //! What cannot run outside the game is said instead: `signal:` and `lua:` are a toast and a
@@ -259,7 +259,7 @@ impl Preview {
     fn placeholder(&self, name: &str, now: &Clock) -> Option<String> {
         let l = &self.layout;
         if let Some((_, stand_in)) = BUILTINS.iter().find(|(b, _)| *b == name) {
-            // the last preview var of that name wins, as the C++ loop let it
+            // the last preview var of that name wins
             if let Some((_, v)) = l.preview_vars.iter().rev().find(|(k, _)| k == name) {
                 return Some(v.clone());
             }
@@ -296,7 +296,7 @@ impl Preview {
         self.layout.items.iter().filter(|it| it.parent == list + 1 && it.kind == "row").count()
     }
 
-    /// Every item's box in canvas units and whether it shows (`ComputeLayout`).
+    /// Every item's box in canvas units and whether it shows.
     #[must_use]
     pub fn boxes(&self) -> Vec<ItemBox> {
         let l = &self.layout;
@@ -358,7 +358,7 @@ impl Preview {
     }
 
     /// The topmost clickable item under a canvas point; a coloured panel above it stops the
-    /// search (`HitTest`).
+    /// search.
     #[must_use]
     pub fn hit_test(&self, boxes: &[ItemBox], x: f32, y: f32) -> Hit {
         for (i, a) in boxes.iter().enumerate().rev() {

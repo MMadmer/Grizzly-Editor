@@ -1,4 +1,4 @@
-//! The geometry of every glyph (XrUIIcons.cpp is the spec).
+//! The geometry of every glyph.
 //!
 //! Every glyph lives on a 16-unit grid with a 1-unit margin and is stroked 1.5 units wide. The
 //! whole set is built once, on the first draw: arcs are tessellated then, fills get their winding,

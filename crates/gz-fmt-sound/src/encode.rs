@@ -1,9 +1,9 @@
-//! Making a game sound from a `.wav` (`CSoundManager::MakeGameSound`): the samples encoded as
+//! Making a game sound from a `.wav`: the samples encoded as
 //! Ogg Vorbis at the description's quality, the game's parameters as the stream's first comment.
 //!
-//! The C++ editor ran `oggenc`'s code with VBR at the description's quality, stream serial 0 and
+//! Encoding follows `oggenc` with VBR at the description's quality, stream serial 0 and
 //! one binary comment; this is the same through `vorbis_rs` (libvorbis with the aoTuV tunings,
-//! so the bytes differ from the C++ file while the stream and its comment read the same). The
+//! so the bytes differ from the original file while the stream and its comment read the same). The
 //! encoder takes text comments only, so the block is put into the comment header afterwards by
 //! [`write_ogg_params`], which lays the header pages out again.
 

@@ -1,10 +1,6 @@
 //! The Characters and World Rules tabs (docs/UI_DESIGN.md, section 6, "Characters" and "World
 //! Rules"; CLAUDE.md, "Characters" and "The mode's world").
 //!
-//! The C++ specification is the drawing half of `EditorCharacters.cpp` (the list, the form and
-//! its sections, the pickers, the trade section, `dlg.delete_character`, `McpView`) and of
-//! `EditorWorld.cpp` (the rules table, Applies On, Playable Area, Transitions, Player Start, the
-//! Starting Kit, `dlg.empty_world`, the problems drawer, `McpView`).
 //!
 //! - **Characters** ([`characters`]): the `characters` singleton tab - a list of 260 pt with a
 //!   search, dirty dots and Template badges, a splitter, and a form of up to 760 pt: Identity,
@@ -15,7 +11,7 @@
 //!   `dlg.delete_character` and runs `file.delete`; unsaved edits ask before any switch.
 //!   Validation runs on change, on the pools.
 //! - **World Rules** ([`world`]): the `world_rules` singleton tab, saved to `mod.ltx` as it is
-//!   edited through `world_set`: Original Game, Player Start and Starting Kit on the surface,
+//!   edited through `world.set`: Original Game, Player Start and Starting Kit on the surface,
 //!   Applies On, Playable Area and Transitions under one folded More; a problems bar and drawer
 //!   only when there are problems. Empty World... asks through `dlg.empty_world`.
 //! - **The lists** ([`lists`]): what the pickers offer - the linked game's items, communities,
@@ -38,8 +34,8 @@
 //! [`local::local_level_picker`] (a searchable list of the linked game's levels).
 //!
 //! Nothing here writes a file or computes inside a frame: every edit is a command or a service
-//! call on the pools (`Characters::save`, `file.delete`, `world_set`, `place_spawn`,
-//! `viewport.camera`, `preview_model`); what a frame shows comes from snapshots and from data read
+//! call on the pools (`Characters::save`, `file.delete`, `world.set`, `scene.place`,
+//! `viewport.camera`, `preview.model`); what a frame shows comes from snapshots and from data read
 //! on the pools.
 
 #![forbid(unsafe_code)]

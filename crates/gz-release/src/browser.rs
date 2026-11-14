@@ -34,7 +34,7 @@ pub fn known_tag(tag: &str) -> bool {
     TAG_VOCABULARY.contains(&tag)
 }
 
-/// A tag's English label for the editor's UI (`TagLabel`).
+/// A tag's English label for the editor's UI.
 #[must_use]
 pub fn tag_label(tag: &str) -> &str {
     match tag {
@@ -54,7 +54,7 @@ pub fn tag_label(tag: &str) -> &str {
     }
 }
 
-/// A comma list into the tags `[module] tags` holds (`ApplyTags`): lower case, each once, in
+/// A comma list into the tags `[module] tags` holds: lower case, each once, in
 /// the order given; a word outside the vocabulary refuses the whole list.
 pub fn parse_tags(value: &str) -> Result<Vec<String>, String> {
     let mut unique: Vec<String> = Vec::new();
@@ -93,7 +93,7 @@ fn read_limited(path: &Path, limit: u64) -> Option<Vec<u8>> {
     std::fs::read(path).ok()
 }
 
-/// Any picture (PNG, JPG, TGA, BMP) to the thumbnail the game takes (`MakeThumbnail`): the
+/// Any picture (PNG, JPG, TGA, BMP) to the thumbnail the game takes: the
 /// middle square scaled to 256, DXT1 (DXT5 with transparency), every level.
 pub fn make_thumbnail(picture: &Path) -> Result<Vec<u8>, String> {
     let unreadable = || format!("can't read the picture {} (PNG, JPG, TGA or BMP)", picture.display());

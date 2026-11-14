@@ -1,4 +1,4 @@
-//! A mesh of a source model (`EditMesh.cpp`, `EditMeshIO.cpp`, `EditMeshModify.cpp`).
+//! A mesh of a source model: reading, writing and modifying it.
 
 use std::sync::Arc;
 
@@ -130,7 +130,7 @@ pub struct SurfFaces {
     pub faces: Arc<[u32]>,
 }
 
-/// `st_SVert::bone`.
+/// The skin vertex's bone.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoneWeight {
     pub id: u16,
@@ -148,7 +148,7 @@ pub struct SkinVertex {
 
 pub type VMapRefs = SmallVec<[VMapPt; 2]>;
 
-/// `CEditableMesh`.
+/// A mesh.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mesh {
     pub name: SmolStr,
@@ -185,7 +185,7 @@ impl Default for Mesh {
     }
 }
 
-/// A vertex map as a file holds it, before `RebuildVMaps`.
+/// A vertex map as a file holds it, before it is rebuilt.
 struct RawVMap {
     name: SmolStr,
     dim: usize,
@@ -198,7 +198,7 @@ fn bad(mesh: &str, what: impl std::fmt::Display) -> ObjectError {
 }
 
 impl Mesh {
-    /// `LoadMesh`. `surfaces` are the object's: a face list names its surface.
+    /// Loads a mesh. `surfaces` are the object's: a face list names its surface.
     pub(crate) fn read(r: &Reader<'_>, surfaces: &[Surface], text: &mut Text) -> Result<Mesh> {
         let version = chunk_u32(r, CHUNK_VERSION).ok_or(gz_chunk::ChunkError::Missing(CHUNK_VERSION))?;
         if version != MESH_VERSION {
@@ -297,15 +297,15 @@ impl Mesh {
             }
             list.sort_unstable();
             let entry = SurfFaces { surface: surface as u32, faces: Arc::from(list) };
-            // a surface named twice keeps its last list, as the C++ map does
+            // a surface named twice keeps its last list, as the X-Ray SDK's map does
             match surf_faces.iter_mut().find(|s| s.surface == entry.surface) {
                 Some(old) => *old = entry,
                 None => surf_faces.push(entry),
             }
         }
-        // oracle: the C++ keeps these lists in a map keyed by the surface's address, so its
+        // the X-Ray SDK keeps these lists in a map keyed by the surface's address, so its
         // order is whatever the allocator gave; the file's order is kept here, which makes a
-        // read and a write of a file the C++ saved identical
+        // read and a write of a file the X-Ray SDK saved identical
 
         let (raw_vmaps, old_form) = Self::read_vmaps(r, text, &name)?;
         let mut mesh = Mesh {
@@ -322,7 +322,7 @@ impl Mesh {
         };
         mesh.rebuild_from_raw(&raw_vmaps)?;
         if old_form {
-            // the C++ rebuilds twice on this path
+            // the X-Ray SDK rebuilds twice on this path
             mesh.rebuild_vmaps()?;
         }
         Ok(mesh)
@@ -342,7 +342,7 @@ impl Mesh {
         for _ in 0..count {
             let name = text.r_str(&mut c)?;
             let (dim, polymap, kind) = match form {
-                // the C++ keeps two bits of the dimension and of the type, one of the flag
+                // the X-Ray SDK keeps two bits of the dimension and of the type, one of the flag
                 2 => (c.r_u8()? & 3, c.r_u8()? & 1 != 0, c.r_u8()? & 3),
                 1 => (c.r_u8()? & 3, false, c.r_u8()? & 3),
                 _ => (2, false, 0),
@@ -368,7 +368,7 @@ impl Mesh {
         Ok((out, form != 2))
     }
 
-    /// `RebuildVMaps` over maps as a file holds them.
+    /// Rebuilds the vertex maps over maps as a file holds them.
     fn rebuild_from_raw(&mut self, raw: &[RawVMap]) -> Result<()> {
         let source = |pt: VMapPt| -> Option<(&RawVMap, [f32; 2])> {
             let map = raw.get(pt.vmap as usize)?;
@@ -380,7 +380,7 @@ impl Mesh {
         self.rebuild_with(|pt| source(pt).map(|(m, v)| (m.name.clone(), m.kind == 0, v)))
     }
 
-    /// `RebuildVMaps`: lays the vertex maps out again - one point map per name for the first
+    /// Lays the vertex maps out again - one point map per name for the first
     /// corner that reaches a vertex, a polygon map for every further corner, one map per
     /// weight name - and points every reference at its new entry.
     pub fn rebuild_vmaps(&mut self) -> Result<()> {
@@ -398,7 +398,7 @@ impl Mesh {
         res
     }
 
-    /// The walk of `RebuildVMaps`; `source` gives the name, the kind (UV or weight) and the
+    /// The walk of the vertex-map rebuild; `source` gives the name, the kind (UV or weight) and the
     /// value of an old entry.
     fn rebuild_with(&mut self, source: impl Fn(VMapPt) -> Option<(SmolStr, bool, [f32; 2])>) -> Result<()> {
         let mut vert_claimed = vec![false; self.points.len()];
@@ -471,7 +471,7 @@ impl Mesh {
         Ok(())
     }
 
-    /// `SaveMesh`. `surfaces` are the object's: a face list is stored under its surface's name.
+    /// Saves a mesh. `surfaces` are the object's: a face list is stored under its surface's name.
     pub(crate) fn write(&self, w: &mut Writer, surfaces: &[Surface], enc: TextEncoding) {
         w.chunk(CHUNK_VERSION, |w| w.w_u16(MESH_VERSION as u16));
         w.chunk(CHUNK_MESHNAME, |w| w_str(w, &self.name, enc));
@@ -547,7 +547,7 @@ impl Mesh {
         });
     }
 
-    /// `RecomputeBBox`.
+    /// Recomputes the bounding box.
     pub fn recompute_bbox(&mut self) {
         let Some(first) = self.points.first() else {
             self.bbox = Aabb::ZERO;
@@ -564,7 +564,7 @@ impl Mesh {
         self.points.get(i as usize).copied().unwrap_or(Vec3::ZERO)
     }
 
-    /// `GenerateFNormals`: one normal per face.
+    /// One normal per face.
     #[must_use]
     pub fn face_normals(&self) -> Vec<Vec3> {
         self.faces
@@ -573,7 +573,7 @@ impl Mesh {
             .collect()
     }
 
-    /// `GenerateVNormals`: three normals per face, one per corner. A corner's normal is the
+    /// Three normals per face, one per corner. A corner's normal is the
     /// sum of the normals of the faces around its vertex that it reaches over soft edges.
     #[must_use]
     pub fn vertex_normals(&self) -> Vec<Vec3> {
@@ -663,7 +663,7 @@ impl Mesh {
         out
     }
 
-    /// `GetFaceTC`: the UVs of a face, from the first vertex map entry of every corner.
+    /// The UVs of a face, from the first vertex map entry of every corner.
     #[must_use]
     pub fn face_uv(&self, face: usize) -> Option<[Vec2; 3]> {
         let f = self.faces.get(face)?;
@@ -691,7 +691,7 @@ impl Mesh {
         None
     }
 
-    /// `GenerateSVertices`: three skin vertices per face. `normals` are [`Mesh::vertex_normals`];
+    /// Three skin vertices per face. `normals` are [`Mesh::vertex_normals`];
     /// `influence` is the most bones a vertex keeps (1 to 4).
     pub fn skin_vertices(&self, bones: &[Bone], influence: u32, normals: &[Vec3]) -> Result<Vec<SkinVertex>> {
         let influence = influence.clamp(1, 4) as usize;

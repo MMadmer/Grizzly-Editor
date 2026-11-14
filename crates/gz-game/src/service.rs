@@ -133,7 +133,7 @@ impl GameLink {
         value.as_ref().clone().map_err(GameError::Read)
     }
 
-    /// The game's `system.ltx` tree, as the editor's `CInifile` reads it, with its warnings.
+    /// The game's `system.ltx` tree, as the editor's the ini reader reads it, with its warnings.
     pub async fn config_tree(&self) -> Result<Arc<ConfigTree>, GameError> {
         self.derive(&self.configs, (), |files, exec| {
             if files.find("configs", "").is_empty() {
@@ -327,7 +327,7 @@ pub async fn read_game_or_bundled(editor: &Editor, rel: &str) -> Result<(Vec<u8>
 }
 
 /// The spawn roster of the linked game, or the editor's own when no game is linked or its
-/// configs do not load - the editor's `pSettings` stayed its own then.
+/// configs do not load - the settings stay the editor's own then.
 pub async fn spawn_roster(editor: &Editor) -> Arc<[SpawnSection]> {
     if let Ok(link) = GameLink::of(editor) {
         match link.spawn_sections().await {

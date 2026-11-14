@@ -1,9 +1,9 @@
-//! The face and vertex orders the skeleton exporter gives a split: `D3DX_OptimizeFaces` and
-//! `D3DX_OptimizeVertices` of `XrETools/CreateDX.cpp`, over the in-tree optimiser of
-//! `optimize_vertex_order.cpp` (Tom Forsyth's lookahead with a two-level FIFO cache model,
-//! quality mode) and its `BinaryHeap.h`. Ported operation for operation, float for float.
+//! The face and vertex orders the skeleton exporter gives a split: the face and vertex
+//! optimisation of the exporter's tools, over the in-tree optimiser
+//! (Tom Forsyth's lookahead with a two-level FIFO cache model,
+//! quality mode) and its binary heap. Operation for operation, float for float.
 //!
-//! The C++ runs the outermost search as a recursion as deep as the mesh has faces; here it is
+//! The X-Ray SDK runs the outermost search as a recursion as deep as the mesh has faces; here it is
 //! a loop. What the recursion undoes after its deepest call is never read again, so the order
 //! that comes out is the same.
 
@@ -155,7 +155,7 @@ impl Cache {
         }
     }
 
-    /// `CacheAddTri`: the extra misses this tri costs; `dry` only measures.
+    /// The extra misses this tri costs; `dry` only measures.
     fn add(&mut self, index: [u16; 3], dry: bool) -> f32 {
         let mut record = CacheTri { index, types: [CacheTypeTri::default(); 2] };
         let mut total = 0.0f32;
@@ -213,7 +213,7 @@ impl Cache {
         total
     }
 
-    /// `CacheRemoveTri`.
+    /// Removes a triangle from the cache.
     fn remove(&mut self) {
         let Some(ct) = self.history.pop() else { return };
         for (t, &(len, _)) in CACHE_TYPES.iter().enumerate() {
@@ -319,7 +319,7 @@ impl Optimizer {
         }
     }
 
-    /// `FindBestScoreLookahead`.
+    /// The best score with lookahead.
     fn lookahead_score(&mut self, countdown: i32, current: f32, input_best: f32, out: usize) -> f32 {
         let la = countdown.min(self.lookahead);
         let mut best = input_best;
@@ -413,7 +413,7 @@ impl Optimizer {
         new_best
     }
 
-    /// `FindBestScore`, its outer recursion unrolled.
+    /// The best score, its outer recursion unrolled.
     fn best_order(&mut self) {
         let mut countdown = self.tris.len() as i32;
         let mut current = 0.0f32;
@@ -509,7 +509,7 @@ impl Optimizer {
                 }
             }
 
-            // oracle: the C++ asserts a best was found; the first candidate stands in
+            // the X-Ray SDK asserts a best was found; the first candidate stands in
             let bs = best_slot.unwrap_or(cur_slot);
             let b = self.slots[bs];
             self.put(out, b);
@@ -533,7 +533,7 @@ impl Optimizer {
     }
 }
 
-/// `_OptimiseVertexCoherencyTriList(list, n, mode)`: the faces of `indices` in a cache-friendly
+/// The faces of `indices` in a cache-friendly
 /// order. Mode 1 is the cheap one (`LOOKAHEAD` 1, cutoff 4), any other the quality one (5, 16)
 /// - the progressive pass asks for 1, the face optimiser of a plain skeleton for 2.
 pub(crate) fn optimise_tri_list(indices: &mut [u16], mode: u32) {
@@ -567,7 +567,7 @@ pub(crate) fn optimise_tri_list(indices: &mut [u16], mode: u32) {
     indices[..n * 3].copy_from_slice(&o.result);
 }
 
-/// `D3DX_OptimizeFaces`: `remap[new face] = old face`.
+/// `remap[new face] = old face`.
 #[must_use]
 pub fn optimize_faces(indices: &[u16]) -> Vec<u32> {
     let n = indices.len() / 3;
@@ -589,7 +589,7 @@ pub fn optimize_faces(indices: &[u16]) -> Vec<u32> {
         .collect()
 }
 
-/// `D3DX_OptimizeVertices`: `remap[old vertex] = new vertex`, in order of first use, the
+/// `remap[old vertex] = new vertex`, in order of first use, the
 /// unused ones after.
 #[must_use]
 pub fn optimize_vertices(indices: &[u16], num_vertices: usize) -> Vec<u32> {
@@ -637,7 +637,7 @@ mod tests {
 
     #[test]
     fn vertices_follow_their_first_use() {
-        // 2 -> 0, 0 -> 1, then the unused 1 and 3 in their own order (CreateDX.cpp)
+        // 2 -> 0, 0 -> 1, then the unused 1 and 3 in their own order
         assert_eq!(optimize_vertices(&[2, 0, 2], 4), vec![1, 2, 0, 3]);
     }
 

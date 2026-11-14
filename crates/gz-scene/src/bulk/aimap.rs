@@ -33,7 +33,7 @@ const RCAST_COUNT: i32 = 4;
 const RCAST_TOTAL: usize = ((2 * RCAST_COUNT + 1) * (2 * RCAST_COUNT + 1)) as usize;
 const RCAST_DEPTH: f32 = 1.0;
 const RCAST_VALID: f32 = 0.55;
-/// `flN1` .. `flN4`: a side done in this pass.
+/// The flags of the four sides: a side done in this pass.
 pub const SIDE_FLAGS: [u8; 4] = [nf::N1, nf::N2, nf::N3, nf::N4];
 const OPPOSITE: [usize; 4] = [2, 3, 0, 1];
 /// How many queued nodes are worked out ahead at once.
@@ -45,7 +45,7 @@ pub mod flags {
     pub const SLOW_CALCULATE: u32 = 1 << 2;
 }
 
-/// What a side button does to the links (`EMode`).
+/// What a side button does to the links.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LinkMode {
     #[default]
@@ -75,14 +75,14 @@ impl LinkMode {
     }
 }
 
-/// `SnapXZ`.
+/// Snaps a position to the node grid on the XZ plane.
 fn snap_xz(mut v: Vec3, ps: f32) -> Vec3 {
     v.x = snapto(v.x, ps);
     v.z = snapto(v.z, ps);
     v
 }
 
-/// The point straight under or over a node's corner on its plane (`PointLF` and its kin); the
+/// The point straight under or over a node's corner on its plane; the
 /// corner itself when the plane stands upright.
 fn corner(n: &AiMapNode, dx: f32, dz: f32, ps: f32) -> Vec3 {
     let s = ps / 2.0;
@@ -166,7 +166,7 @@ impl Gen<'_> {
         best
     }
 
-    /// `CreateNode`: a node on the ground at `v_at`, or `None` (a chasm, too steep, too far up or
+    /// A node on the ground at `v_at`, or `None` (a chasm, too steep, too far up or
     /// down, floating).
     #[must_use]
     pub fn create_node(&self, v_at: Vec3, bic: bool) -> Option<AiMapNode> {
@@ -268,7 +268,7 @@ impl Gen<'_> {
         Some(node_on(plane, pos))
     }
 
-    /// `CanTravel`: the body slid at two heights reaches the point.
+    /// The body slid at two heights reaches the point.
     #[must_use]
     pub fn can_travel(&self, from: Vec3, mut at: Vec3) -> bool {
         at.y = from.y;
@@ -284,7 +284,7 @@ impl Gen<'_> {
         false
     }
 
-    /// The part of `BuildNode` that depends on nothing but the model: whether the side can be
+    /// The part of a node's build that depends on nothing but the model: whether the side can be
     /// walked to and the node there.
     fn spec(&self, from: Vec3, at: Vec3, bic: bool) -> Option<AiMapNode> {
         let at = snap_xz(at, self.params.patch_size);
@@ -335,7 +335,7 @@ impl AiWork {
         self.header.params.patch_size
     }
 
-    /// `CalculateNodesBBox`.
+    /// The bounding box of the nodes.
     #[must_use]
     pub fn nodes_bbox(&self) -> Aabb {
         let mut b = Aabb::INVALID;
@@ -345,7 +345,7 @@ impl AiWork {
         b
     }
 
-    /// `RealUpdateSnapList`: the box is the snap objects' and the nodes'. `snap_box` is `None`
+    /// The box is the snap objects' and the nodes'. `snap_box` is `None`
     /// for an empty snap list; answers whether the list has objects.
     pub fn update_box(&mut self, snap_box: Option<Aabb>) -> bool {
         let nodes_bb = self.nodes_bbox();
@@ -381,7 +381,7 @@ impl AiWork {
             .find(|&i| self.nodes.get(i as usize).is_some_and(|n| similar(at, n.pos, eps)))
     }
 
-    /// The order-dependent part of `BuildNode`: a node there already is returned, a new one
+    /// The order-dependent part of a node's build: a node there already is returned, a new one
     /// registered when its bucket exists.
     fn place(&mut self, n: AiMapNode) -> Option<u32> {
         if let Some(old) = self.find_node(n.pos, 0.05) {
@@ -434,7 +434,7 @@ impl AiWork {
         self.nodes.get(i).is_some_and(|n| n.flags & nf::SELECTED != 0)
     }
 
-    /// The queue of `BuildNodes`: from node `0`, every node tries the sides it has no link on;
+    /// The queue of the node build: from node `0`, every node tries the sides it has no link on;
     /// `within` limits the sides (the brush's circle), `selected_only` the nodes (and selects
     /// the neighbours each one reaches). `progress(done, total)` answers `false` to stop.
     fn flood(
@@ -564,14 +564,14 @@ impl AiWork {
         }
     }
 
-    /// `GetNode`: the node there is where a node would be made.
+    /// The node there is where a node would be made.
     fn get_node(&self, g: &Gen<'_>, at: Vec3, bic: bool) -> Option<u32> {
         let at = snap_xz(at, self.ps());
         let n = g.create_node(at, bic)?;
         self.find_node(n.pos, 0.05)
     }
 
-    /// `UpdateLinks`: a node and its neighbours linked both ways where they can be walked.
+    /// A node and its neighbours linked both ways where they can be walked.
     pub fn update_links(&mut self, g: &Gen<'_>, n: u32, bic: bool) {
         let ps = self.ps();
         let Some(pos) = self.nodes.get(n as usize).map(|x| x.pos) else { return };
@@ -594,7 +594,7 @@ impl AiWork {
         }
     }
 
-    /// `FindNeighbor`: the node on a side - the one nearest in height with constraints off, the
+    /// The node on a side - the one nearest in height with constraints off, the
     /// nearer of the nearest up and down within the limits otherwise.
     #[must_use]
     pub fn find_neighbor(&self, n: usize, side: usize, bic: bool) -> Option<u32> {
@@ -648,8 +648,7 @@ impl AiWork {
         }
     }
 
-    /// `MakeLinks(side_flag, mode, bIgnoreConstraints)`: the links of the selected nodes on the
-    /// sides `side_flag` names (`flN1` .. `flN4`). Answers how many links changed.
+    /// Links the selected nodes on the sides `side_flag` names (the four sides). Answers how many links changed.
     pub fn make_links(&mut self, side_flag: u8, mode: LinkMode, bic: bool) -> usize {
         if side_flag == 0 {
             return 0;
@@ -723,7 +722,7 @@ impl AiWork {
         changed
     }
 
-    /// `RemoveLinks`: the links between selected nodes go.
+    /// The links between selected nodes go.
     pub fn remove_links(&mut self) -> usize {
         let sel: Vec<bool> = (0..self.nodes.len()).map(|i| self.selected(i)).collect();
         let mut n = 0;
@@ -782,7 +781,7 @@ impl AiWork {
         }
     }
 
-    /// `InvertSelection`.
+    /// Inverts the selection.
     pub fn invert_selection(&mut self) {
         for n in &mut self.nodes {
             n.flags ^= nf::SELECTED;
@@ -804,7 +803,7 @@ impl AiWork {
         c
     }
 
-    /// Sets the selection of some nodes (`RaySelect` / `FrustumSelect` with a flag of 1 or 0).
+    /// Sets the selection of some nodes (a ray pick or a frustum pick, with a flag of 1 or 0).
     pub fn select(&mut self, ids: &[u32], on: bool) -> usize {
         let mut c = 0;
         for &i in ids {
@@ -863,7 +862,7 @@ impl AiWork {
         self.rehash();
     }
 
-    /// `ResetNodes`: the selected nodes lie level again.
+    /// The selected nodes lie level again.
     pub fn reset_selected(&mut self) -> usize {
         let mut c = 0;
         for n in &mut self.nodes {
@@ -877,7 +876,7 @@ impl AiWork {
         c
     }
 
-    /// `SmoothNodes`: each selected node's plane fitted to the corners it shares with its
+    /// Each selected node's plane fitted to the corners it shares with its
     /// neighbours (those within the smooth height).
     pub fn smooth_selected(&mut self) -> usize {
         let ps = self.ps();
@@ -999,7 +998,7 @@ impl AiWork {
         c
     }
 
-    /// `RotateProcess`: the selected nodes' planes turned about X (`about_x`) or Z, a plane that
+    /// The selected nodes' planes turned about X (`about_x`) or Z, a plane that
     /// would face down by more than 0.02 staying as it is.
     pub fn rotate_selected(&mut self, about_x: bool, angle: f32) -> usize {
         let r = if about_x { M43::rotate_x(-angle) } else { M43::rotate_z(angle) };
@@ -1016,7 +1015,7 @@ impl AiWork {
         c
     }
 
-    /// `UpdateHLSelected`: the nodes a selected node links to are highlighted.
+    /// The nodes a selected node links to are highlighted.
     pub fn update_highlight(&mut self) {
         let targets: Vec<u32> = self
             .nodes
@@ -1034,7 +1033,7 @@ impl AiWork {
         }
     }
 
-    /// `PickNode`: the nearest node whose patch the ray crosses within half a patch of its
+    /// The nearest node whose patch the ray crosses within half a patch of its
     /// centre, nearer than `dist`.
     #[must_use]
     pub fn pick(&self, start: Vec3, dir: Vec3, dist: f32) -> Option<(u32, f32)> {
@@ -1062,7 +1061,7 @@ impl AiWork {
         best
     }
 
-    /// `FrustumSelect`'s test: the nodes whose box (0.35 of a patch round the centre) meets every
+    /// The frustum test: the nodes whose box (0.35 of a patch round the centre) meets every
     /// plane of a frustum (`n . p + w >= 0` inside).
     #[must_use]
     pub fn in_frustum(&self, planes: &[Vec4]) -> Vec<u32> {
@@ -1156,7 +1155,7 @@ pub fn generate_over(
     (w, flood, seeded)
 }
 
-/// A node packed over a box (`SaveStream`'s arithmetic).
+/// A node packed over a box.
 #[must_use]
 pub fn encode(n: &AiMapNode, bbox: &Aabb, params: &AiParams) -> SceneAiNode {
     SceneAiNode {
@@ -1181,7 +1180,7 @@ pub fn link_histogram(nodes: &[AiMapNode]) -> [usize; 5] {
 }
 
 /// What a map is made of, to tell a whole terrain flooded from nodes made twice or off the
-/// ground (`aimap_tool action=stats`).
+/// ground (`scene.ai_map action=stats`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MapStats {
     pub nodes: usize,
@@ -1190,7 +1189,7 @@ pub struct MapStats {
     /// Patches that hold more than one node (floors over each other).
     pub layered_cells: usize,
     pub max_per_cell: usize,
-    /// Nodes of one patch closer in height than `FindNode`'s 0.05 m: made twice.
+    /// Nodes of one patch closer in height than 0.05 m: made twice.
     pub duplicates: usize,
     /// Nodes whose centre is off the patch grid.
     pub off_grid: usize,
@@ -1256,7 +1255,7 @@ pub fn stats(nodes: &[AiMapNode], ps: f32, model: Option<&CollideModel>) -> MapS
 /// The four sides as the panel names them, in the order the chunk stores their links.
 pub const SIDES: [&str; 4] = ["left", "forward", "right", "back"];
 
-/// `ConvertV2L`: a side of the panel's pad (away from the camera, left, right, towards the
+/// A side of the panel's pad (away from the camera, left, right, towards the
 /// camera) as a side of the map, by the camera's heading.
 #[must_use]
 pub fn side_for_heading(pad: usize, heading: f32) -> usize {
@@ -1390,7 +1389,7 @@ mod tests {
         vec![[a, b, c], [a, c, d], [c, b, a], [d, c, a]]
     }
 
-    /// `AddNode` at the seed, then `BuildNodes(false)` (`GenerateMap` without the snap list's
+    /// Adds a node at the seed, then builds the nodes (without the snap list's
     /// box work): the nodes, the directed links and the link histogram.
     fn flood(tris: Vec<[Vec3; 3]>, seed: Vec3) -> (Vec<AiMapNode>, usize, [usize; 5]) {
         let n = tris.len();
@@ -1409,7 +1408,7 @@ mod tests {
     /// (`rc_lim`), the body (radius 0.7 / sqrt 2 = 0.495) slid to the next patch and stopped where
     /// it touches something, 0.1 m short of it failing. No edge below lies on a ray.
     #[test]
-    fn generation_counts_follow_the_cpp_algorithm() {
+    fn generation_counts_of_a_few_floors() {
         let floor = || quad(Vec3::new(-3.6, 0.0, -3.6), 3.6, 3.6);
 
         // a flat 7.2 m square: centres -2.8..2.8 (9 a side); at 3.5 only 6 of 9 ray columns are

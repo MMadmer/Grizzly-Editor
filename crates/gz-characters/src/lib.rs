@@ -22,7 +22,7 @@
 //!   `W107`, `W114`..`W117`, `E118`, `E119`, `W120`..`W122`, `E123`); the lookups come from
 //!   `gz_nq::Pickers`, the models through [`validate::Models`].
 //! - [`game`] - what is read of the linked game: [`game::trade_categories`]
-//!   (`misc\trade\trade_presets.ltx`), [`game::ogf_bone_names`] (`OGF_S_BONE_NAMES`),
+//!   (`misc\trade\trade_presets.ltx`), [`game::ogf_bone_names`],
 //!   [`game::stalker_damage_bones`].
 //!
 //! # The service

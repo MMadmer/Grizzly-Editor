@@ -724,32 +724,6 @@ mod tests {
     }
 
     #[test]
-    fn names_are_the_cpp_tables() {
-        let pairs = [
-            (Icon::ChevronDown, "chevron_down"),
-            (Icon::SaveAll, "save_all"),
-            (Icon::EyeOff, "eye_off"),
-            (Icon::BuildAIMap, "build_ai_map"),
-            (Icon::BuildGameGraph, "build_game_graph"),
-            (Icon::AIMap, "ai_map"),
-            (Icon::FogVolume, "fog_volume"),
-            (Icon::CharacterTemplate, "character_template"),
-            (Icon::PdaInterface, "pda_interface"),
-            (Icon::SpawnNpc, "spawn_npc"),
-            (Icon::PdaMsg, "pda_msg"),
-            (Icon::FindInProject, "find_in_project"),
-            (Icon::Zoom100, "zoom_100"),
-            (Icon::PlayerStart, "player_start"),
-            (Icon::Mcp, "mcp"),
-            (Icon::Drawer, "drawer"),
-            (Icon::None, "none"),
-        ];
-        for (icon, name) in pairs {
-            assert_eq!(icon.name(), name);
-        }
-    }
-
-    #[test]
     fn concave_fills_are_triangulated() {
         let all = glyphs();
         for icon in [Icon::StarFilled, Icon::BookmarkFilled] {

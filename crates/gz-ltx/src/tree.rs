@@ -1,4 +1,4 @@
-//! The engine's resolved view of a config tree (`CInifile`): what `system.ltx` and the hundreds
+//! The engine's resolved view of a config tree: what `system.ltx` and the hundreds
 //! of files it includes mean once the engine has read them.
 //!
 //! # API
@@ -8,7 +8,7 @@
 //!   pulls in; [`include_path`] resolves a name the way the engine does (the including file's
 //!   folder + the name, concatenated, nothing normalised).
 //! - [`Ltx::assemble`] (`root`, a [`Loader`], [`Dialect`]) -> [`Loaded`]: the same tree as the
-//!   sequential C++ load. [`Builder`] does the same in steps for the game's composition:
+//!   sequential load. [`Builder`] does the same in steps for the game's composition:
 //!   [`Builder::load`], [`Builder::overlay`] (a module's whole-file overlay), [`Builder::patch`]
 //!   (a `.ltxp` directive file), [`Builder::finish`].
 //! - [`Ltx`]: immutable, `Send + Sync`, O(1) section lookup, `Arc`-shared strings.
@@ -19,13 +19,13 @@
 //!   `r_fcolor`, `r_color`, `r_clsid`, `r_token`; `sections` (by name, the engine's order),
 //!   `sections_in_file_order`, `section`.
 //!
-//! What the C++ treats as fatal - a missing section or key, a duplicate section, an unknown
+//! What the engine treats as fatal - a missing section or key, a duplicate section, an unknown
 //! parent, a missing include, a section line without `]` - is an [`LtxError`] naming the
 //! section, the key, the file and the line.
 //!
 //! # Semantics (both dialects)
 //!
-//! - A line is what `IReader::r_string` returns: runs of `\r` / `\n` end it, so blank lines
+//! - A line is what the engine's reader returns: runs of `\r` / `\n` end it, so blank lines
 //!   vanish; it is trimmed of everything up to the space.
 //! - A comment starts at the first `;`, or at the first `/` when the next character is `/` and
 //!   no `;` comes before it; it does not start inside the first pair of quotes.
@@ -39,12 +39,12 @@
 //! - Items are kept sorted by key (byte order), which is the order `r_line` walks; sections are
 //!   sorted by name.
 //!
-//! # The editor's dialect ([`Dialect::Editor`], `Source/XrCore/Xr_ini.cpp`)
+//! # The editor's dialect ([`Dialect::Editor`])
 //!
 //! A missing include is skipped with a warning (the editor cannot see the game's archives).
 //! A multi-line value that outgrows the engine's 4096-byte buffer is an error.
 //!
-//! # The game's dialect ([`Dialect::Game`], Dead Air Refined's `xrCore/Xr_ini.cpp` + XMS)
+//! # The game's dialect ([`Dialect::Game`], Dead Air Refined's ini reader + XMS)
 //!
 //! - `#include_optional "name"`: an include that may be absent. A plain missing include is an
 //!   error.
@@ -56,7 +56,7 @@
 //! - Layers ([`Loader::layer`]): with merging on ([`Builder::set_merge`]), a section that
 //!   exists in another layer is merged instead of refused - new keys are appended, a key from a
 //!   layer at least as high wins - and the merged keys follow the sorted ones.
-//! - `.ltxp` directive patches ([`Builder::patch`], `XMS/xms_ltx.cpp`): `[section]` (created,
+//! - `.ltxp` directive patches ([`Builder::patch`]): `[section]` (created,
 //!   `: parents` inherited, when new), `[!section]` deletes it, `key = value` sets (the value
 //!   kept as written), `+key = a, b` appends missing list items, `-key = a` removes them,
 //!   `!key` deletes the key; `;` starts a comment. New keys go to the end of the section.
@@ -68,9 +68,9 @@ use rustc_hash::FxHashMap;
 /// Which reader's rules apply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dialect {
-    /// The C++ editor's `CInifile`.
+    /// The editor's ini reader: a missing include is skipped with a warning.
     Editor,
-    /// The game's `CInifile` and its module composition.
+    /// The game's the ini reader and its module composition.
     Game,
 }
 
@@ -179,7 +179,7 @@ fn is_term(c: u8) -> bool {
     c == b'\r' || c == b'\n'
 }
 
-/// `IReader::advance_term_string`: the next line and where reading goes on.
+/// The next line and where reading goes on.
 fn next_line(data: &[u8], mut pos: usize) -> (usize, usize, usize) {
     let start = pos;
     let mut sz = 0;
@@ -291,7 +291,7 @@ fn arc(s: &str) -> Arc<str> {
     Arc::from(s)
 }
 
-/// Parses one file the way `CInifile::Load` reads it.
+/// Parses one file the way the engine's ini reader does.
 #[must_use]
 pub fn parse_file(text: &str, dialect: Dialect) -> ParsedFile {
     let data = text.as_bytes();
@@ -482,8 +482,8 @@ pub trait Loader: Sync {
     /// The parsed file at a path [`include_path`] produced (or the root as given), `None`
     /// when it does not exist.
     fn file(&self, path: &str) -> Option<&ParsedFile>;
-    /// The names of the files below `dir` (as the game's `FS.file_list` without
-    /// `FS_RootOnly` lists them) that match `mask` (`*` any run of characters). Game dialect only.
+    /// The names of the files below `dir` (as the game's file listing without
+    /// its root-only flag lists them) that match `mask` (`*` any run of characters). Game dialect only.
     fn list(&self, dir: &str, mask: &str) -> Vec<String> {
         let _ = (dir, mask);
         Vec::new()
@@ -495,7 +495,7 @@ pub trait Loader: Sync {
     }
 }
 
-/// The composition of a tree, step by step, the way the game builds `pSettings`.
+/// The composition of a tree, step by step, the way the game builds its settings.
 pub struct Builder {
     dialect: Dialect,
     merge: bool,
@@ -526,7 +526,7 @@ impl Builder {
         }
     }
 
-    /// Cross-layer merging of duplicate sections (`XMS::SetLtxMergeEnabled`; game dialect).
+    /// Cross-layer merging of duplicate sections (game dialect).
     pub fn set_merge(&mut self, on: bool) {
         self.merge = on && self.dialect == Dialect::Game;
     }
@@ -555,7 +555,7 @@ impl Builder {
         self.find(&name.to_ascii_lowercase())
     }
 
-    /// Loads a file and everything it includes (`CInifile::Load` on a fresh reader).
+    /// Loads a file and everything it includes (on a fresh reader).
     pub fn load(&mut self, path: &str, loader: &dyn Loader) -> Result<(), LtxError> {
         let Some(file) = loader.file(path) else {
             return Err(LtxError::MissingRoot { file: path.to_owned() });
@@ -691,7 +691,7 @@ impl Builder {
         let path = format!("{dir}{}", inc.name);
         let inc_dir = folder_of(&path).to_owned();
         if inc.wildcard {
-            // oracle: the game adds the mask's folder to a folder that already holds it
+            // the game adds the mask's folder to a folder that already holds it
             let (mut list_dir, mut mask) = (inc_dir.clone(), inc.name.to_string());
             if let Some(sep) = mask.rfind('\\') {
                 list_dir.push_str(mask.get(..sep).unwrap_or(""));
@@ -987,8 +987,8 @@ fn c_long(s: &[u8]) -> (i64, usize) {
     (if neg { -v } else { v }, i)
 }
 
-/// `_strtoui64(s, NULL, 10)`: blanks, a sign, digits; `u64::MAX` when it overflows, and a minus
-/// sign negates in two's complement, as the CRT does.
+/// The C runtime's string-to-u64: blanks, a sign, digits; `u64::MAX` when it overflows, and a minus
+/// sign negates in two's complement, as the C runtime does.
 fn c_strtoui64(s: &[u8]) -> u64 {
     let mut i = 0;
     while s.get(i).copied().is_some_and(c_space) {
@@ -1130,7 +1130,7 @@ impl<'a, F: Fn(&str) -> Option<&'a ParsedFile> + Sync> Loader for MapLoader<'a, 
 }
 
 impl Ltx {
-    /// Loads `root` and everything it includes, as the engine does in one `CInifile`.
+    /// Loads `root` and everything it includes, as the engine does in one the ini reader.
     pub fn assemble(root: &str, loader: &dyn Loader, dialect: Dialect) -> Result<Loaded, LtxError> {
         let mut b = Builder::new(dialect);
         b.load(root, loader)?;
@@ -1241,8 +1241,8 @@ impl Ltx {
     pub fn r_s64(&self, section: &str, key: &str) -> Result<i64, LtxError> {
         Ok(c_long(self.text(section, key)?.as_bytes()).0)
     }
-    /// `_strtoui64`: a negative number wraps.
-    /// `_strtoui64(.., 10)`: a GUID half above `i64::MAX` reads whole.
+    /// The string-to-u64 of a negative number wraps.
+    /// The string-to-u64 of a GUID half above `i64::MAX` reads whole.
     pub fn r_u64(&self, section: &str, key: &str) -> Result<u64, LtxError> {
         Ok(c_strtoui64(self.text(section, key)?.as_bytes()))
     }
@@ -1258,7 +1258,7 @@ impl Ltx {
     pub fn r_fvector4(&self, section: &str, key: &str) -> Result<[f32; 4], LtxError> {
         Ok(scan_floats(self.text(section, key)?))
     }
-    /// `Fcolor` as `[r, g, b, a]`.
+    /// A colour as `[r, g, b, a]`.
     pub fn r_fcolor(&self, section: &str, key: &str) -> Result<[f32; 4], LtxError> {
         Ok(scan_floats(self.text(section, key)?))
     }
@@ -1281,13 +1281,13 @@ impl Ltx {
         let v: String = self.text(section, key)?.chars().take(7).collect::<String>().to_ascii_lowercase();
         Ok(matches!(v.as_str(), "on" | "yes" | "true" | "1"))
     }
-    /// `TEXT2CLSID`: eight characters, padded with spaces, as a big-endian `u64`.
+    /// Eight characters, padded with spaces, as a big-endian `u64`.
     pub fn r_clsid(&self, section: &str, key: &str) -> Result<u64, LtxError> {
         let t = self.text(section, key)?.as_bytes();
         let t = t.split(|&c| c == 0).next().unwrap_or(&[]);
         let mut id: u64 = 0;
         for k in 0..8 {
-            // a char of the C++ is signed: a byte above 0x7f spreads over the higher ones
+            // the game reads a char as signed: a byte above 0x7f spreads over the higher ones
             let c = t.get(k).copied().unwrap_or(b' ') as i8 as i64 as u64;
             id |= c << (56 - 8 * k);
         }

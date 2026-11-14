@@ -1,4 +1,4 @@
-//! Writing the two files the C++ editor kept with `WritePrivateProfileString`: `key=value`
+//! Writing the two files kept in the Win32 profile format: `key=value`
 //! lines, no spaces, `\r\n`. An existing line keeps its own spelling ([`LtxDoc::set`]); only a
 //! file that has no entry yet to take the shape from is given the Win32 one.
 
@@ -19,7 +19,7 @@ pub(crate) fn set(doc: &mut LtxDoc, section: &str, key: &str, value: &str) {
     *doc = LtxDoc::parse(&text);
 }
 
-/// A value as `GetPrivateProfileString` hands it back: the outer quotes off.
+/// A value as the Win32 profile reader hands it back: the outer quotes off.
 pub(crate) fn get<'a>(doc: &'a LtxDoc, section: &str, key: &str) -> Option<&'a str> {
     doc.get(section, key).map(gz_ltx::unquote)
 }

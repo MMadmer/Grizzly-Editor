@@ -1,4 +1,4 @@
-//! `EDetailManager::Export`: `build.details` - the detail objects the slots use, their
+//! `build.details` - the detail objects the slots use, their
 //! textures merged into `build_details.dds`, the slots with their colours zeroed for the light
 //! compiler.
 
@@ -49,7 +49,7 @@ pub fn used_textures(details: &SceneDetails, lib: Lookup<'_>) -> Vec<String> {
     set.into_iter().collect()
 }
 
-/// `EDetail::Update`: the first mesh as an indexed list, equal corners welded, degenerate and
+/// The first mesh as an indexed list, equal corners welded, degenerate and
 /// repeated triangles dropped.
 fn geometry(lo: &LibraryObject) -> (Vec<DetailVertex>, Vec<u16>) {
     let mut verts: Vec<DetailVertex> = Vec::new();
@@ -102,7 +102,7 @@ fn geometry(lo: &LibraryObject) -> (Vec<DetailVertex>, Vec<u16>) {
 
 /// `build.details` and `build_details.dds`. `textures` gives a used texture's RGBA pixels by
 /// name, as [`used_textures`] listed them.
-// oracle: the C++ orders the textures by shared-string address before packing them; here they
+// the X-Ray SDK orders the textures by shared-string address before packing them; here they
 // are in name order.
 /// A texture by name: its RGBA and size.
 pub type TextureSource<'a> = &'a dyn Fn(&str) -> Option<(Vec<u8>, u32, u32)>;

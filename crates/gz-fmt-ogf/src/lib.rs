@@ -7,12 +7,12 @@
 //! read_omf(&[u8]) / MotionSet::read_chunks -> bone parts, motion definitions, quantised keys
 //! motion_set.to_omf()                    -> the same file back
 //! motion_set.pose(motion, t) -> Vec<BoneKey>   one motion at time t, as the engine samples it
-//! export_static(&Object, &ExportOptions) -> Vec<u8>   ExportObjectOGF.cpp
-//! export_skeleton(&Object, &ExportOptions, influence) -> Export   ExportSkeleton.cpp
+//! export_static(&Object, &ExportOptions) -> Vec<u8>   the static exporter
+//! export_skeleton(&Object, &ExportOptions, influence) -> Export   the skeleton exporter
 //!                                           (a progressive one through the VIPM pass, `vipm`)
-//! export_breakable(&BreakablePart) -> Export   SBPart::Export (GeometryPartExtractor.cpp)
-//! export_omf(&Object) -> Vec<u8>         CEditableObject::PrepareOMF
-//! min_box / rapid_box -> Obb             ComputeOBB_WML / ComputeOBB_RAPID
+//! export_breakable(&BreakablePart) -> Export   a breakable part's rigid skeleton
+//! export_omf(&Object) -> Vec<u8>         the motions of an object as an `.omf`
+//! min_box / rapid_box -> Obb             the minimal box and the moment box
 //! ```
 //!
 //! Vertex data is decoded into one neutral [`Vertex`] (position, normal, tangent, binormal, two

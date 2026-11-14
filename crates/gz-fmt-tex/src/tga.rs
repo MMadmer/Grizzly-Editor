@@ -39,7 +39,7 @@ fn pixel(raw: &[u8], bytes: usize, grey: bool, alpha_bits: u8) -> [u8; 4] {
 
 /// Reads a TGA: true colour, grey or colour-mapped, 8 to 32 bits, plain or run-length encoded.
 ///
-/// The image manager itself takes true colour of 24 or 32 bits only (`CImage::LoadTGA`); for
+/// The image manager itself takes true colour of 24 or 32 bits only; for
 /// those the result is its result, and the picture has alpha when it has 32 bits.
 pub fn read_tga(bytes: &[u8]) -> Result<Loaded> {
     let head = bytes.get(..HEADER).ok_or(TexError::Truncated { need: HEADER.saturating_sub(bytes.len()) })?;
@@ -105,7 +105,7 @@ pub fn read_tga(bytes: &[u8]) -> Result<Loaded> {
         }
     };
 
-    // oracle: the loader picks the row order by the right-to-left bit and then flips by the
+    // the loader picks the row order by the right-to-left bit and then flips by the
     // top-to-bottom bit, which is right for the two origins every tool writes (bottom-left,
     // top-left) and upside down for the right-hand ones; kept
     let flip_rows = (desc & 0x10 == 0) != (desc & 0x20 != 0);
@@ -160,9 +160,9 @@ pub fn read_tga(bytes: &[u8]) -> Result<Loaded> {
     Ok(Loaded { image: Image { width, height, rgba }, has_alpha })
 }
 
-/// Writes a TGA the way the editor does (`TGAdesc::maketga`): uncompressed, rows top-down.
+/// Writes a TGA the way the editor does: uncompressed, rows top-down.
 ///
-/// oracle: the editor pads each 24-bit row to four bytes, which no reader - its own included -
+/// the editor pads each 24-bit row to four bytes, which no reader - its own included -
 /// expects; the rows are written without padding here.
 pub fn write_tga(image: &Image, depth: TgaDepth) -> Result<Vec<u8>> {
     image.check()?;

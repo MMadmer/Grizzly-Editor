@@ -1,4 +1,4 @@
-//! Chunk ids, the header, the description: `Fmesh.h`, `fmesh.cpp`.
+//! Chunk ids, the header, the description of the `.ogf` format.
 
 use glam::Vec3;
 use gz_chunk::{Reader, Writer};
@@ -53,7 +53,7 @@ pub mod chunk {
     pub const COLLISION_INDICES: u32 = 26;
 }
 
-/// `xrOGF_FormatVersion`.
+/// The format version.
 pub const FORMAT_VERSION: u8 = 4;
 
 /// `ogf_header`: 44 bytes.
@@ -93,7 +93,7 @@ impl Header {
         w.w_f32(self.sphere_radius);
     }
 
-    /// A header of `kind` around a box, its sphere from `Fbox::getsphere`.
+    /// A header of `kind` around a box, its sphere the box's bounding sphere.
     pub(crate) fn around(kind: u8, b: &gz_fmt_object::Aabb) -> Self {
         let (c, r) = b.sphere();
         Self {

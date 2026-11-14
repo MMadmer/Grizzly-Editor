@@ -9,20 +9,20 @@ use crate::{Result, SoundError};
 /// The version of the comment block the editor writes.
 pub const OGG_COMMENT_VERSION: u32 = 0x0003;
 
-/// What the engine plays a sound with (`CSoundRender_Source::LoadWave`).
+/// What the engine plays a sound with.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct OggParams {
     pub min_dist: f32,
     pub max_dist: f32,
     pub base_volume: f32,
-    /// The engine's sound type (`ESoundTypes`).
+    /// The engine's sound type.
     pub game_type: u32,
     /// How far NPCs hear the sound.
     pub max_ai_dist: f32,
 }
 
 impl From<&SoundThm> for OggParams {
-    /// What the editor puts into the game sound made from a description (`MakeGameSound`).
+    /// What the editor puts into the game sound made from a description.
     fn from(thm: &SoundThm) -> Self {
         Self {
             min_dist: thm.min_dist,

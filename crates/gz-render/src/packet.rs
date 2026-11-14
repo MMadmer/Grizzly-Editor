@@ -773,7 +773,7 @@ fn normalize_safe(v: Vec3) -> Vec3 {
     if m > f32::MIN_POSITIVE { v * (1.0 / m).sqrt() } else { v }
 }
 
-/// `FillSprite` for every sprite of a batch: two triangles each, as the engine's quad index
+/// Every sprite of a batch: two triangles each, as the engine's quad index
 /// buffer winds them, facing this view's camera.
 fn expand_sprites(b: &SpriteBatch, view: &View, size: [u32; 2], out: &mut Vec<MeshVertex>) {
     let cam = &view.camera;

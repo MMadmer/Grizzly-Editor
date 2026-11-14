@@ -24,14 +24,13 @@
 //!
 //! Paths are keys: lower case, forward slashes, relative to `gamedata`. The archives are those
 //! of `fsgame.ltx`'s archive folders (`$arch_dir...$`, `database\` without one), in its order,
-//! each folder by name; a later archive replaces a path an earlier one holds (`Register`), and
+//! each folder by name; a later archive replaces a path an earlier one holds, and
 //! the loose tree (`$game_data$`) replaces both. A name ending in a separator is a folder marker
 //! and no file. Hidden entries are skipped as the engine skips them; tooling entries (`.git`,
-//! `Thumbs.db`, ...) of a module as XMS skips them (the loose `gamedata` keeps them, as the C++
-//! editor's DARF content listed them).
+//! `Thumbs.db`, ...) of a module as XMS skips them (the loose `gamedata` keeps them).
 //!
-//! oracle: an archive's own `[header] entry_point` is ignored, as the C++ editor's DARF mount
-//! ignored it: every archive of a game is relative to `gamedata`.
+//! an archive's own `[header] entry_point` is ignored:
+//! every archive of a game is relative to `gamedata`.
 //!
 //! # The saved index
 //!

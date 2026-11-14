@@ -9,7 +9,7 @@
 //!   edit of a way's points the store applies directly (the viewport's gestures).
 //! - The geometry ([`sector`], [`portal`], [`shape`]) is pure, over a snapshot and the library;
 //!   the long parts run as jobs on the CPU pool ([`cmd`]).
-//! - [`cmd::register`] adds `way_tool`, `shape_tool`, `light_tool` and `fog_tool`; [`zones`] the
+//! - [`cmd::register`] adds `scene.way`, `scene.shape` and `scene.fog_group`; [`zones`] the
 //!   visibility cells' `scene.zones` and what the build completes of them.
 
 pub mod cmd;
@@ -34,7 +34,7 @@ use crate::model::{ObjData, ObjId, Object, SceneState};
 use crate::objects::SHAPE_LEVEL_BOUND;
 use crate::service::SceneService;
 
-/// What the Sector tool's Edit section holds (`UISectorTool`).
+/// What the Sector tool's Edit section holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SectorMode {
     /// New Sector From Mesh.

@@ -14,7 +14,7 @@ pub const RPOINT_CHOOSE_NAME: &str = "$rpoint";
 pub const ENVMOD_CHOOSE_NAME: &str = "$env_mod";
 pub const PLAYERSTART_CHOOSE_NAME: &str = "$player_start";
 
-/// `EPointType`.
+/// The kinds of a spawn point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PointKind {
     RPoint = 0,
@@ -36,10 +36,9 @@ impl PointKind {
     }
 }
 
-/// `SXmsOrder`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct XmsOrder {
-    /// `okNone` 0, `okGuard`, `okPatrol`, `okWander`, `okFollow`.
+    /// The order kinds: none 0, guard, patrol, wander, follow.
     pub kind: u8,
     pub route: SmolStr,
     pub look: SmolStr,
@@ -68,13 +67,13 @@ impl Default for XmsOrder {
 }
 
 impl XmsOrder {
-    /// `KindKey`: `None` for none.
+    /// `None` for none.
     #[must_use]
     pub fn kind_key(kind: u8) -> Option<&'static str> {
         ORDER_KEYS.get(kind as usize).copied().filter(|k| !k.is_empty())
     }
 
-    /// `KindFromKey`: 0 when unknown.
+    /// 0 when unknown.
     #[must_use]
     pub fn kind_from_key(key: &str) -> u8 {
         (1..5u8).find(|i| ORDER_KEYS[*i as usize].eq_ignore_ascii_case(key)).unwrap_or(0)
@@ -135,7 +134,7 @@ impl XmsOrder {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RPoint {
     pub team: u8,
-    /// `rptActorSpawn` 0, `rptArtefactSpawn`, `rptItemSpawn` 2.
+    /// The respawn point kinds: actor spawn 0, artefact spawn, item spawn 2.
     pub kind: u8,
     pub game_type: u16,
     pub profile: SmolStr,
@@ -177,7 +176,7 @@ impl Default for EnvMod {
     }
 }
 
-/// `eViewDist`, `eFogColor`, ... of an environment modifier.
+/// The parameters of an environment modifier: view distance, fog colour, ...
 pub mod env_flags {
     pub const VIEW_DIST: u16 = 1 << 0;
     pub const FOG_COLOR: u16 = 1 << 1;
@@ -246,12 +245,11 @@ impl SpawnEntity {
     }
 }
 
-/// `CSpawnPoint`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpawnData {
     pub kind: PointKind,
     pub entity: Option<SpawnEntity>,
-    /// `SSpawnData::m_flags` (`eSDTypeRespawn`).
+    /// The spawn data flags.
     pub sd_flags: u8,
     pub order: XmsOrder,
     pub rpoint: RPoint,
@@ -279,7 +277,7 @@ impl SpawnData {
         self.entity.as_ref().map(SpawnEntity::section)
     }
 
-    /// `CanTakeOrder`: a stalker (`AI_STL_S`).
+    /// Whether a point can take an order: a stalker.
     #[must_use]
     pub fn can_take_order(&self) -> bool {
         self.entity

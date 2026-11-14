@@ -18,6 +18,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use gz_base::{Finding, Findings};
 use gz_fmt_object::ObjectFlags;
 use gz_fmt_object::xmath::{EPS_L, similar};
 use gz_fmt_xr::ShaderXrlc;
@@ -40,10 +41,10 @@ pub struct Tests {
 }
 
 impl Tests {
-    /// What a level build tests (`SceneBuilder::Compile`; its portal test runs when the scene
+    /// What a level build tests (its portal test runs when the scene
     /// has sectors or portals, which `validate` looks at itself).
     pub const BUILD: Tests = Tests { portal: true, hom: true, glow: true, shaders: true, full: true };
-    /// What making the game files tests (`SceneBuilder::MakeGame`).
+    /// What making the game files tests.
     pub const MAKE_GAME: Tests =
         Tests { portal: false, hom: false, glow: false, shaders: false, full: false };
 }
@@ -52,7 +53,7 @@ impl Tests {
 /// message names and whether the file is there (`FS.get_file_age(...) != -1`).
 pub type TextureCheck<'a> = &'a (dyn Fn(&str) -> (String, bool) + Sync);
 
-/// The blenders that bake into a light map (`IBlender::canBeLMAPped`): the default, its alpha
+/// The blenders that bake into a light map: the default, its alpha
 /// test, BmmD, LmEbB and LaEmB.
 const LMAPPED: [&str; 5] = ["LM      ", "LM_AREF ", "BmmDold ", "LmEbB   ", "LaEmB   "];
 
@@ -71,14 +72,14 @@ fn change_ext(name: &str, ext: &str) -> String {
 }
 
 /// The LOD texture files a multiple-usage object needs, under `textures\`: the picture and its
-/// normal map (`GetLODTextureName` + `.dds`, `_nm.dds`).
+/// normal map.
 #[must_use]
 pub fn lod_texture_files(lib_name: &str) -> [String; 2] {
     let name = lod_texture_name(lib_name);
     [change_ext(&name, ".dds"), change_ext(&format!("{name}_nm"), ".dds")]
 }
 
-/// `IsMUStatic` of a resolved reference.
+/// Whether a resolved reference is multiple-usage static.
 #[must_use]
 pub fn is_mu_static(lo: &LibraryObject) -> bool {
     let f = lo.object.flags;
@@ -92,7 +93,7 @@ fn scene_objects(
     look: &dyn Fn(&str) -> Option<Arc<LibraryObject>>,
     full: bool,
     texture: TextureCheck<'_>,
-    log: &mut Vec<String>,
+    log: &mut Vec<Finding>,
 ) -> bool {
     let objects: Vec<_> = snap.of_class(ObjClass::SceneObject).collect();
     // each object resolves and its surfaces are complete; the first failing one ends it
@@ -110,7 +111,10 @@ fn scene_objects(
         let mut surfaces_good = true;
         for s in &lo.object.surfaces {
             if s.texture.is_empty() || s.shader.is_empty() {
-                log.push(format!("!Invalid surface found: Object [{}], Surface [{}].", lo.name, s.name));
+                log.warn(format!(
+                    "Object '{}': the surface '{}' has no texture or no shader.",
+                    lo.name, s.name
+                ));
                 surfaces_good = false;
             }
         }
@@ -119,7 +123,7 @@ fn scene_objects(
             break;
         }
     }
-    // the duplicates of each object, then its LOD textures (`RefCompare`: both resolve to one
+    // the duplicates of each object, then its LOD textures (both resolve to one
     // library object)
     let resolved: Vec<_> = objects
         .iter()
@@ -137,8 +141,8 @@ fn scene_objects(
             let same = resolved[ib].as_ref().is_some_and(|lb| normalize(&lb.name) == normalize(&la.name));
             if same && similar(a.position(), b.position(), EPS_L) {
                 good = false;
-                log.push(format!(
-                    "Duplicate object position '{}'-'{}' with reference '{}'.",
+                log.info(format!(
+                    "Objects '{}' and '{}' of '{}' sit at the same position.",
                     a.name, b.name, la.name
                 ));
             }
@@ -148,7 +152,7 @@ fn scene_objects(
             for file in lod_texture_files(&la.name) {
                 let (path, there) = texture(&file);
                 if !there {
-                    log.push(format!("!There is no texture '{path}'"));
+                    log.warn(format!("The texture '{path}' is missing."));
                     missing = true;
                 }
             }
@@ -161,7 +165,7 @@ fn scene_objects(
 }
 
 /// The wallmarks' check: the engine shader of every slot with marks.
-fn wallmarks(snap: &SceneState, engine: &Engine, log: &mut Vec<String>) -> bool {
+fn wallmarks(snap: &SceneState, engine: &Engine, log: &mut Vec<Finding>) -> bool {
     let slots = snap.bulk.wallmarks.as_ref().map(|w| crate::wallmarks::read(&w.raw)).unwrap_or_default();
     let mut good = true;
     for s in &slots {
@@ -169,7 +173,7 @@ fn wallmarks(snap: &SceneState, engine: &Engine, log: &mut Vec<String>) -> bool 
             continue;
         }
         if !engine.has_shader(&s.shader) || lmapped(engine, &s.shader) == Some(true) {
-            log.push(format!("Wallmarks: Invalid or missing shader '{}'.", s.shader));
+            log.info(format!("The wallmark shader '{}' is missing or cannot be used.", s.shader));
             good = false;
         }
     }
@@ -178,15 +182,12 @@ fn wallmarks(snap: &SceneState, engine: &Engine, log: &mut Vec<String>) -> bool 
 
 /// The sounds' check: the first sound environment with the same inner and outer
 /// environment, or the first sound source without a wave, fails it.
-fn sounds(snap: &SceneState, log: &mut Vec<String>) -> bool {
+fn sounds(snap: &SceneState, log: &mut Vec<Finding>) -> bool {
     for o in snap.of_class(ObjClass::SoundEnv) {
         if let ObjData::SoundEnv(e) = &o.data
             && e.inner == e.outer
         {
-            log.push(format!(
-                "SoundEnvironment: '{}' inner and outer environment must be different.",
-                o.name
-            ));
+            log.info(format!("Sound environment '{}' has the same inner and outer environment.", o.name));
             return false;
         }
     }
@@ -194,21 +195,21 @@ fn sounds(snap: &SceneState, log: &mut Vec<String>) -> bool {
         if let ObjData::SoundSrc(s) = &o.data
             && s.wav.is_empty()
         {
-            log.push(format!("SoundSource: '{}' hasn't wave.", o.name));
+            log.info(format!("Sound source '{}' has no wave.", o.name));
             return false;
         }
     }
     true
 }
 
-/// The scene's validation: `Ok` with the log lines, `Err` with them when it failed.
+/// The scene's validation: `Ok` with its findings, `Err` with them when it failed.
 pub fn validate(
     snap: &SceneState,
     lib: &Library,
     engine: &Engine,
     tests: Tests,
     texture: TextureCheck<'_>,
-) -> Result<Vec<String>, Vec<String>> {
+) -> Result<Vec<Finding>, Vec<Finding>> {
     let look = |r: &str| lib.cached(r);
     let mut log = Vec::new();
     let mut ok = true;
@@ -225,7 +226,7 @@ pub fn validate(
                     let ObjData::Light(l) = &o.data else { continue };
                     if controls.and_then(|c| c.name_of(l.lcontrol)).is_none() {
                         good = false;
-                        log.push(format!("{}: '{}' - Invalid light control.", class.desc(), o.name));
+                        log.info(format!("{} '{}' has an invalid light control.", class.desc(), o.name));
                     }
                 }
                 good
@@ -248,7 +249,7 @@ pub fn validate(
             _ => true,
         };
         if !good {
-            log.push(format!("ERROR: Validate '{}' failed!", class.desc()));
+            log.error(format!("The {} check failed.", class.desc()));
             ok = false;
         }
     }
@@ -266,31 +267,31 @@ pub fn validate(
             look(&d.reference).is_some_and(|lo| lo.object.flags.contains(ObjectFlags::HOM))
         });
         if !has_hom {
-            log.push("!Level doesn't contain HOM objects!".to_owned());
+            log.warn("The level has no HOM objects.");
         }
     }
     if snap.count(ObjClass::SpawnPoint) == 0 {
-        log.push("*ERROR: Can't find any Spawn Object.".to_owned());
+        log.error("The level has no spawn point.");
         ok = false;
     }
     if snap.count(ObjClass::Light) == 0 {
-        log.push("*ERROR: Can't find any Light Object.".to_owned());
+        log.error("The level has no light.");
         ok = false;
     }
     if snap.count(ObjClass::SceneObject) == 0 {
-        log.push("*ERROR: Can't find any Scene Object.".to_owned());
+        log.error("The level has no scene object.");
         ok = false;
     }
     if tests.glow && snap.count(ObjClass::Glow) == 0 {
-        log.push("*ERROR: Can't find any Glow Object.".to_owned());
+        log.error("The level has no glow.");
         ok = false;
     }
-    // `FindDuplicateName`: the first name another object also has
+    // the first name another object also has
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let duplicate = snap.objects.values().find(|o| !seen.insert(o.name.to_ascii_lowercase()));
     if let Some(o) = duplicate {
-        log.push(format!("Duplicate object name already exists: '{}'", o.name));
-        log.push("*ERROR: Found duplicate object name.".to_owned());
+        log.info(format!("The object name '{}' is used twice.", o.name));
+        log.error("Two objects have the same name.");
         ok = false;
     }
 
@@ -317,16 +318,16 @@ pub fn validate(
                     (true, Some(flags)) => {
                         let vertex_lit = flags & ShaderXrlc::LIGHT_VERTEX != 0;
                         if lmapped(engine, &s.shader).is_some_and(|lm| lm == vertex_lit) {
-                            log.push(format!(
-                                "Object '{}': engine shader '{}' non compatible with compiler shader '{}'",
+                            log.info(format!(
+                                "Object '{}': the engine shader '{}' does not fit the compiler shader '{}'.",
                                 lo.name, s.shader, s.shader_xrlc
                             ));
                             good = false;
                         }
                     }
                     _ => {
-                        log.push(format!(
-                            "Object '{}': invalid or missing shader [E:'{}', C:'{}']",
+                        log.info(format!(
+                            "Object '{}': the engine shader '{}' or the compiler shader '{}' is invalid or missing.",
                             lo.name, s.shader, s.shader_xrlc
                         ));
                         good = false;
@@ -335,11 +336,11 @@ pub fn validate(
             }
         }
         if !good {
-            log.push("*ERROR: Scene has non compatible shaders. See log.".to_owned());
+            log.error("The scene has shaders that do not fit each other (see the lines above).");
             ok = false;
         }
         if statics == 0 {
-            log.push("*ERROR: Can't find static geometry.".to_owned());
+            log.error("The level has no static geometry.");
             ok = false;
         }
     }
@@ -351,7 +352,7 @@ pub fn validate(
     for o in snap.of_class(ObjClass::Particles) {
         let ObjData::Particles(p) = &o.data else { continue };
         if p.reference.is_empty() {
-            log.push("*ERROR: Particle System hasn't reference.".to_owned());
+            log.error("A particle system has no reference.");
             ok = false;
         }
     }
@@ -359,13 +360,14 @@ pub fn validate(
     if ok {
         Ok(log)
     } else {
-        log.push("Validation FAILED!".to_owned());
+        log.info("The scene failed its checks.");
         Err(log)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use gz_base::Severity;
     use gz_chunk::Writer;
     use gz_scene::Object;
     use gz_scene::objects::{SectorData, SoundEnvData, SoundSrcData};
@@ -373,16 +375,20 @@ mod tests {
 
     use super::*;
 
-    fn run(snap: &SceneState, tests: Tests) -> Result<Vec<String>, Vec<String>> {
+    fn run(snap: &SceneState, tests: Tests) -> Result<Vec<Finding>, Vec<Finding>> {
         let lib = Library::new(Vec::new());
         let check = |n: &str| (format!("gamedata\\textures\\{n}"), false);
         validate(snap, &lib, &Engine::default(), tests, &check)
     }
 
-    fn lines(r: &Result<Vec<String>, Vec<String>>) -> &[String] {
+    fn found(r: &Result<Vec<Finding>, Vec<Finding>>) -> &[Finding] {
         match r {
             Ok(l) | Err(l) => l,
         }
+    }
+
+    fn says(r: &Result<Vec<Finding>, Vec<Finding>>, severity: Severity, text: &str) -> bool {
+        found(r).iter().any(|f| f.severity == severity && f.text == text)
     }
 
     #[test]
@@ -392,11 +398,11 @@ mod tests {
         s.insert(Object::new(ObjClass::SoundEnv, "env_1", ObjData::SoundEnv(env)));
         let r = run(&s, Tests::MAKE_GAME);
         assert!(r.is_err());
-        assert!(
-            lines(&r)
-                .iter()
-                .any(|l| l == "SoundEnvironment: 'env_1' inner and outer environment must be different.")
-        );
+        assert!(says(
+            &r,
+            Severity::Note,
+            "Sound environment 'env_1' has the same inner and outer environment."
+        ));
     }
 
     #[test]
@@ -405,7 +411,7 @@ mod tests {
         s.insert(Object::new(ObjClass::SoundSrc, "snd_1", ObjData::SoundSrc(SoundSrcData::default())));
         let r = run(&s, Tests::MAKE_GAME);
         assert!(r.is_err());
-        assert!(lines(&r).iter().any(|l| l == "SoundSource: 'snd_1' hasn't wave."));
+        assert!(says(&r, Severity::Note, "Sound source 'snd_1' has no wave."));
     }
 
     #[test]
@@ -413,19 +419,18 @@ mod tests {
         let mut s = SceneState::default();
         s.insert(Object::new(ObjClass::Sector, "sector_1", ObjData::Sector(SectorData::default())));
         let r = run(&s, Tests::BUILD);
-        let l = lines(&r);
         assert!(r.is_err());
-        assert!(l.iter().any(|x| x == "*ERROR: Sector: 'sector_1' - face count < 4!"));
-        assert!(l.iter().any(|x| x == "ERROR: Validate 'Sector' failed!"));
+        assert!(says(&r, Severity::Error, "Sector 'sector_1' has too few faces."));
+        assert!(says(&r, Severity::Error, "The Sector check failed."));
         // the portal test cannot box a scene without scene objects
-        assert!(l.iter().any(|x| x == "Validation failed! Can't compute bbox."));
+        assert!(found(&r).iter().any(|x| x.text.contains("bounding box")));
         // making the game files runs no portal test
         let r = run(&s, Tests::MAKE_GAME);
-        assert!(!lines(&r).iter().any(|x| x.contains("Can't compute bbox")));
+        assert!(!found(&r).iter().any(|x| x.text.contains("bounding box")));
     }
 
     #[test]
-    fn lod_texture_names_follow_the_cpp() {
+    fn lod_texture_names() {
         assert_eq!(
             lod_texture_files("props\\box"),
             ["lod\\lod_props_box.dds".to_owned(), "lod\\lod_props_box_nm.dds".to_owned()]
@@ -465,9 +470,24 @@ mod tests {
         let mut s = SceneState::default();
         s.bulk.wallmarks = Some(Arc::new(WallmarkPart::read(&part.into_bytes()).unwrap()));
         let r = run(&s, Tests::MAKE_GAME);
-        let l = lines(&r);
-        assert!(l.iter().any(|x| x == "Wallmarks: Invalid or missing shader 'effects\\wallmark'."));
-        let failed = format!("ERROR: Validate '{}' failed!", ObjClass::Wallmark.desc());
-        assert!(l.contains(&failed), "{l:?}");
+        assert!(says(
+            &r,
+            Severity::Note,
+            "The wallmark shader 'effects\\wallmark' is missing or cannot be used."
+        ));
+        let failed = format!("The {} check failed.", ObjClass::Wallmark.desc());
+        assert!(says(&r, Severity::Error, &failed), "{:?}", found(&r));
+    }
+
+    #[test]
+    fn no_text_starts_with_a_mark_because_the_level_is_a_value() {
+        // a scene with one empty sector fails nearly every check there is
+        let mut s = SceneState::default();
+        s.insert(Object::new(ObjClass::Sector, "sector_1", ObjData::Sector(SectorData::default())));
+        let r = run(&s, Tests::BUILD);
+        assert!(found(&r).len() > 4);
+        for f in found(&r) {
+            assert!(!f.text.starts_with(['!', '~', '*']) && !f.text.starts_with("ERROR"), "{f:?}");
+        }
     }
 }

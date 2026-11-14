@@ -61,15 +61,10 @@ pub(crate) fn s(text: &str) -> Value {
     Value::String(text.to_owned())
 }
 
-/// Logs the line a kit question returned: `!` an error, `~` a warning, `*` a note.
-pub(crate) fn log_line(editor: &Editor, line: Option<String>) {
-    let Some(line) = line else { return };
-    if line.starts_with('!') {
-        editor.log.error(line);
-    } else if line.starts_with('~') {
-        editor.log.warn(line);
-    } else {
-        editor.log.info(line);
+/// Logs what a kit question returned, at its level.
+pub(crate) fn log_line(editor: &Editor, line: Option<gz_base::Finding>) {
+    if let Some(f) = line {
+        editor.log.finding(&f);
     }
 }
 

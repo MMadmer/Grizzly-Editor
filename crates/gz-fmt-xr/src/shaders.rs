@@ -1,5 +1,5 @@
-//! `shaders.xr` (`CResourceManager::OnDeviceCreate`, `CBlender_DESC`, `CConstant`, `CMatrix`)
-//! and `shaders_xrlc.xr` (`Shader_xrLC_LIB`).
+//! `shaders.xr`
+//! and `shaders_xrlc.xr`.
 
 use gz_chunk::{Reader, Writer};
 use smol_str::SmolStr;
@@ -19,7 +19,7 @@ impl WaveForm {
     }
 }
 
-/// `CMatrix`: a texture coordinate transform.
+/// A texture coordinate transform.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MatrixDef {
     pub name: SmolStr,
@@ -32,10 +32,10 @@ pub struct MatrixDef {
     pub scroll_v: WaveForm,
 }
 
-/// One blender: `CBlender_DESC` and the rest of its chunk, the property stream its class reads.
+/// One blender: its description and the rest of its chunk, the property stream its class reads.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Blender {
-    /// `CLASS_ID`: eight characters.
+    /// The class id: eight characters.
     pub class_id: [u8; 8],
     pub name: SmolStr,
     pub computer: SmolStr,
@@ -59,7 +59,7 @@ impl Blender {
 /// `shaders.xr`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Shaders {
-    /// `CConstant`: name and the R, G, B, A waves.
+    /// Name and the R, G, B, A waves.
     pub constants: Vec<(SmolStr, [WaveForm; 4])>,
     pub matrices: Vec<MatrixDef>,
     pub blenders: Vec<Blender>,

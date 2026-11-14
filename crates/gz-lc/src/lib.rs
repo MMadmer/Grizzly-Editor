@@ -87,7 +87,7 @@ pub struct Options {
     pub noise: bool,
     /// `-nosmg`: smoothing by angle, the faces' smoothing groups ignored.
     pub nosmg: bool,
-    /// `-no_optimize`: `PreOptimize` is skipped.
+    /// `-no_optimize`: the pre-optimisation is skipped.
     pub no_optimize: bool,
     /// `-no_invalidefaces`: invalid faces do not stop the compile.
     pub no_invalid_faces: bool,

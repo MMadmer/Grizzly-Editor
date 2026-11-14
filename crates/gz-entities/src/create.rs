@@ -1,6 +1,6 @@
-//! The constructors: what `xrFactory_Create` makes of a spawn section.
+//! The constructors: what the game's object factory makes of a spawn section.
 //!
-//! Every read of the section the C++ constructors make is made here, in their order. A key a
+//! Every read of the section the game's constructors make is made here, in their order. A key a
 //! constructor reads without asking first is required: the engine stops on a missing one, and
 //! this returns [`EntityError::MissingKey`].
 
@@ -45,7 +45,7 @@ fn need_u32(s: &dyn Settings, section: &str, key: &str) -> Result<u32> {
     need_i32(s, section, key).map(|v| v as u32)
 }
 
-/// `ALife::g_tfString2HitType`, which stops the engine on a name it does not know.
+/// The hit type by name; the engine stops on a name it does not know.
 fn need_hit_type(s: &dyn Settings, section: &str, key: &str) -> Result<()> {
     let value = need(s, section, key)?;
     if HIT_TYPES.iter().any(|t| value.eq_ignore_ascii_case(t)) {
@@ -164,7 +164,7 @@ pub(crate) fn ensure_parts(o: &mut Object, class: Class) {
     }
 }
 
-/// `CSE_ALifeTraderAbstract::init`: the custom data gains a `[game_info]` section.
+/// The custom data gains a `[game_info]` section.
 fn trader_init(o: &mut Object) {
     o.alife.ini_string = SmolStr::new(format!("{}\r\n[game_info]\r\n", o.alife.ini_string));
 }
@@ -288,7 +288,7 @@ pub(crate) fn construct(info: &ClassInfo, section: &str, s: &dyn Settings) -> Re
         script_version: 0,
         write_script_version: current_script_version(s),
         client_data: Vec::new(),
-        // oracle: `m_tSpawnID` is left uninitialised for the classes below `CSE_ALifeObject`
+        // the game leaves `m_tSpawnID` uninitialised for the classes below `CSE_ALifeObject`
         spawn_id: if class.is_alife() { u16::MAX } else { 0 },
         text: TextEncoding::Cp1251,
     };

@@ -1,7 +1,7 @@
 //! The class table: which server class a `class = ...` key of a spawn section makes.
 //!
 //! Two sources, as in the game: the classes the engine registers itself
-//! (`object_factory_register.cpp`) and the ones Dead Air's `class_registrator.script`
+//! and the ones Dead Air's `class_registrator.script`
 //! registers on top. A script class is a Lua class derived from an engine class; some of them
 //! write fields of their own after the engine's state ([`ScriptKind`]).
 
@@ -67,7 +67,7 @@ pub enum Class {
 }
 
 impl Class {
-    /// The C++ name.
+    /// The engine's class name.
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
@@ -312,7 +312,7 @@ pub enum ScriptKind {
 /// One row of the class table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClassInfo {
-    /// The class key, padded to eight characters as `TEXT2CLSID` pads it.
+    /// The class key, padded to eight characters as the game pads it.
     pub clsid: &'static str,
     pub class: Class,
     /// The Lua class (`module.class`), empty for an engine class.
@@ -320,7 +320,7 @@ pub struct ClassInfo {
     pub script: ScriptKind,
 }
 
-/// `TEXT2CLSID`: the key cut to eight bytes and padded with spaces.
+/// The key cut to eight bytes and padded with spaces.
 #[must_use]
 pub fn clsid_key(text: &str) -> [u8; 8] {
     let mut key = [b' '; 8];
@@ -447,7 +447,7 @@ static TABLE: &[ClassInfo] = &[
     script("S_EXPLO ", C::ItemExplosive, "se_item.se_explosive", S::None),
     script("S_PDA   ", C::ItemPda, "se_item.se_pda", S::None),
     script("ON_OFF_S", C::OnlineOfflineGroup, "sim_squad_scripted.sim_squad_scripted", S::Squad),
-    // object_factory_register.cpp of the game
+    // the classes the game's object factory registers
     engine("O_ACTOR ", C::CreatureActor),
     engine("SPECT   ", C::Spectator),
     engine("AI_FLESH", C::MonsterBase),

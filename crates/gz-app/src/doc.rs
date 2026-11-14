@@ -221,7 +221,7 @@ impl ShellRequests {
         self.list.push(Request::TaskCard(shown));
     }
 
-    /// Puts a popup up by its `ui_popup` name.
+    /// Puts a popup up by its `ui.popup` name.
     pub fn popup(&mut self, name: &str) {
         self.list.push(Request::Popup(name.to_owned()));
     }
@@ -263,7 +263,7 @@ pub struct DocCx<'a> {
 pub trait Document {
     /// "level", "quest:<rel>", "characters", ...
     fn id(&self) -> &str;
-    /// One of `ui_contract`'s document kinds.
+    /// One of `ui.contract`'s document kinds.
     fn kind(&self) -> &'static str;
     /// An own asset shows its name without the extension.
     fn label(&self) -> String;

@@ -2,14 +2,14 @@
 
 use gz_fmt_xr::{GameMaterials, Shaders, ShadersXrlc};
 
-/// `SGameMtl` flags the build reads: the material library's own.
+/// The game material flags the build reads: the material library's own.
 pub mod mtl_flags {
     pub const BREAKABLE: u32 = gz_fmt_xr::GameMaterial::BREAKABLE;
     pub const CLIMABLE: u32 = gz_fmt_xr::GameMaterial::CLIMABLE;
     pub const DYNAMIC: u32 = gz_fmt_xr::GameMaterial::DYNAMIC;
 }
 
-/// `Shader_xrLC` flags (`Shader_xrLC.h`).
+/// The compiler shader flags.
 pub mod xrlc_flags {
     pub const COLLISION: u32 = 1 << 0;
     pub const RENDERING: u32 = 1 << 1;
@@ -48,7 +48,7 @@ impl Engine {
     }
 
     /// `GetMaterialIdx(name)`: the material's index in the library.
-    // oracle: a name the library lacks gives the index past the end, as the C++ iterator
+    // a name the library lacks gives the index past the end, as the X-Ray SDK's iterator
     // arithmetic does in a release build.
     #[must_use]
     pub fn material_index(&self, name: &str) -> u16 {
@@ -57,7 +57,7 @@ impl Engine {
             as u16
     }
 
-    /// `CSurface::_GameMtl`: the material's id, `None` when the name is unknown.
+    /// The material's id, `None` when the name is unknown.
     #[must_use]
     pub fn material_id(&self, name: &str) -> Option<u32> {
         self.materials.as_ref()?.by_name(name).map(|m| m.id)

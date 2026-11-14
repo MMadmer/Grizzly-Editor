@@ -1,4 +1,4 @@
-//! The list of a library tab (`XUI_LocalLibraryList`): a search, then one row per item - its
+//! The list of a library tab: a search, then one row per item - its
 //! leaf, then its folder, muted, giving way first - in the order of the leaves, by folder only
 //! among equal names. Only the rows in view are laid out.
 

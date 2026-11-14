@@ -1,4 +1,4 @@
-//! The implicit light (`xrLight_Implicit.cpp`, `ImplicitDeflector`, `ImplicitCalcGlobs`): a
+//! The implicit light: a
 //! texture marked "implicitly lighted" (terrain) is lit texel by texel through its own texture
 //! coordinates on every face that wears it without a deflector; the hemisphere goes into the
 //! texture's alpha and the light into a lightmap of the texture's size (`<texture>_lm`).
@@ -19,7 +19,6 @@ use crate::point::light_point;
 use crate::ray::{LightCache, RayModel};
 use crate::{Ctl, LcError, Result};
 
-/// `IHASH`.
 const HASH_SIDE: usize = 384;
 
 /// What the implicit light makes of one texture.
@@ -45,7 +44,7 @@ impl ImplicitMap {
     }
 }
 
-/// `DataFace::hasImplicitLighting`: a rendered face whose texture is implicitly lighted.
+/// A rendered face whose texture is implicitly lighted.
 #[must_use]
 pub fn has_implicit_lighting(
     face: &Face,
@@ -72,7 +71,7 @@ pub struct ImplicitInput<'a> {
     pub linear: bool,
 }
 
-/// `ImplicitLighting`: every implicitly lighted texture, in the order of its index, lit; each
+/// Every implicitly lighted texture, in the order of its index, lit; each
 /// face it was found on gets a second channel of its coordinates (`Initialize`, "compatible
 /// with lightmaps") and the texture's surface takes the hemisphere in its alpha. Nothing at the
 /// draft quality.
@@ -147,7 +146,7 @@ pub fn implicit_lighting(
     Ok(out)
 }
 
-/// `ImplicitExecute::Execute` over every row: a texel takes the light of each of its jittered
+/// Executes the implicit light over every row: a texel takes the light of each of its jittered
 /// samples on every face that holds it.
 fn light_texture(env: &LightEnv<'_>, w: u32, h: u32, faces: &[FaceId]) -> LmLayer {
     let mut lmap = LmLayer::new(w, h);

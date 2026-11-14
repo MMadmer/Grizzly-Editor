@@ -9,8 +9,8 @@ pub const EPS: f32 = 0.000_01;
 /// `EPS_L` of the engine.
 pub const EPS_L: f32 = 0.001;
 
-/// The engine's `iFloor`: a bit trick, kept bit for bit so that values outside `i32` and NaN land
-/// where the C++ puts them. Shifts mask their count to five bits, as x86 does.
+/// The engine's floor: a bit trick, kept bit for bit so that values outside `i32` and NaN land
+/// where the X-Ray SDK puts them. Shifts mask their count to five bits, as x86 does.
 #[must_use]
 pub fn i_floor(x: f32) -> i32 {
     let a = x.to_bits() as i32;
@@ -27,7 +27,7 @@ pub fn i_floor(x: f32) -> i32 {
     r
 }
 
-/// The engine's `iCeil`, the same trick.
+/// The engine's ceiling, the same trick.
 #[must_use]
 pub fn i_ceil(x: f32) -> i32 {
     let a = x.to_bits() as i32;
@@ -50,7 +50,7 @@ const PV_ZSIGN: u16 = 0x2000;
 const PV_TOP: u16 = 0x1f80;
 const PV_BOTTOM: u16 = 0x007f;
 
-/// `pvCompress`: a direction in 16 bits (three signs, 13 bits of position on the octant).
+/// A direction in 16 bits (three signs, 13 bits of position on the octant).
 #[must_use]
 pub fn pv_compress(vec: Vec3) -> u16 {
     let mut packed = 0u16;
@@ -79,7 +79,7 @@ pub fn pv_compress(vec: Vec3) -> u16 {
     packed
 }
 
-/// `pvDecompress`: the unit direction of a [`pv_compress`] value.
+/// The unit direction of a [`pv_compress`] value.
 #[must_use]
 pub fn pv_decompress(packed: u16) -> Vec3 {
     let mut xbits = i32::from((packed & PV_TOP) >> 7);
@@ -104,20 +104,20 @@ pub fn pv_decompress(packed: u16) -> Vec3 {
     out
 }
 
-/// `Fvector::normalize(v)`: scaled by `sqrt(1 / |v|^2)`, in that order of operations.
+/// Normalizes a vector: scaled by `sqrt(1 / |v|^2)`, in that order of operations.
 #[must_use]
 pub fn normalize(v: Vec3) -> Vec3 {
     let mag = (1.0 / (v.x * v.x + v.y * v.y + v.z * v.z)).sqrt();
     Vec3::new(v.x * mag, v.y * mag, v.z * mag)
 }
 
-/// `Fvector::dotproduct`, summed left to right.
+/// The dot product, summed left to right.
 #[must_use]
 pub fn dot(a: Vec3, b: Vec3) -> f32 {
     a.x * b.x + a.y * b.y + a.z * b.z
 }
 
-/// `Fvector::similar`: every component closer than `eps`.
+/// Every component closer than `eps`.
 #[must_use]
 pub fn similar(a: Vec3, b: Vec3, eps: f32) -> bool {
     (a.x - b.x).abs() < eps && (a.y - b.y).abs() < eps && (a.z - b.z).abs() < eps
@@ -133,7 +133,7 @@ fn max_f(a: f32, b: f32) -> f32 {
     if a > b { a } else { b }
 }
 
-/// An axis-aligned box with the engine's `Fbox` behaviour.
+/// An axis-aligned box with the engine's box behaviour.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Aabb {
     pub min: Vec3,
@@ -147,7 +147,7 @@ impl Default for Aabb {
 }
 
 impl Aabb {
-    /// `Fbox::invalidate`: holds nothing; the first [`Self::modify`] makes it a point.
+    /// Holds nothing; the first [`Self::modify`] makes it a point.
     pub const INVALID: Aabb = Aabb { min: Vec3::splat(f32::MAX), max: Vec3::splat(-f32::MAX) };
 
     #[must_use]
@@ -155,7 +155,7 @@ impl Aabb {
         Self { min, max }
     }
 
-    /// `Fbox::setb`: from a centre and half extents.
+    /// From a centre and half extents.
     #[must_use]
     pub fn from_center(center: Vec3, half: Vec3) -> Self {
         Self {
@@ -174,25 +174,25 @@ impl Aabb {
         out
     }
 
-    /// `Fbox::modify`: grows to hold a point.
+    /// Grows to hold a point.
     pub fn modify(&mut self, p: Vec3) {
         self.min = Vec3::new(min_f(self.min.x, p.x), min_f(self.min.y, p.y), min_f(self.min.z, p.z));
         self.max = Vec3::new(max_f(self.max.x, p.x), max_f(self.max.y, p.y), max_f(self.max.z, p.z));
     }
 
-    /// `Fbox::merge`: grows to hold another box.
+    /// Grows to hold another box.
     pub fn merge(&mut self, other: &Aabb) {
         self.modify(other.min);
         self.modify(other.max);
     }
 
-    /// `Fbox::grow`.
+    /// Grows a box.
     pub fn grow(&mut self, by: f32) {
         self.min = Vec3::new(self.min.x - by, self.min.y - by, self.min.z - by);
         self.max = Vec3::new(self.max.x + by, self.max.y + by, self.max.z + by);
     }
 
-    /// `Fbox::getcenter`.
+    /// The centre of a box.
     #[must_use]
     pub fn center(&self) -> Vec3 {
         Vec3::new(

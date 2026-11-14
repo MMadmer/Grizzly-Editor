@@ -20,7 +20,7 @@
 //!   DXT5, BC4, BC5, RGBA, BGRA, RGB.
 //!
 //! **Descriptions (`.thm`)**
-//! - [`TextureParams`] - `STextureParams`, with [`TextureParams::dds_request`] (what DDS a
+//! - [`TextureParams`] - a texture description, with [`TextureParams::dds_request`] (what DDS a
 //!   description asks for), [`TextureParams::for_new_texture`], [`TextureParams::apply_type_defaults`],
 //!   [`TextureParams::memory_usage`].
 //! - [`read_thm`] - any thumbnail file as a [`Thm`]; [`thm_kind`] - which one it is.

@@ -1,5 +1,5 @@
-//! Patrol paths: chunk 3 of `all.spawn`. `CPatrolPathStorage::save`, the graph of
-//! `CGraphAbstractSerialize<CPatrolPoint, float, u32>`, `CPatrolPoint::save`.
+//! Patrol paths: chunk 3 of `all.spawn`: a graph of
+//! patrol points.
 
 use glam::Vec3;
 use gz_chunk::{Reader, Writer};
@@ -9,7 +9,7 @@ use smol_str::SmolStr;
 use crate::graph::{encode, r_name};
 use crate::{Result, SpawnError, damaged};
 
-/// `CPatrolPoint`.
+/// A patrol point.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PatrolPoint {
     pub name: SmolStr,

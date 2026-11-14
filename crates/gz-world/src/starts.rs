@@ -3,8 +3,7 @@
 
 use serde_json::{Value, json};
 
-/// A Player Start: baked into a spawn layer, or placed in the open scene and not baked yet
-/// (`SStart`).
+/// A Player Start: baked into a spawn layer, or placed in the open scene and not baked yet.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Start {
     pub level: String,
@@ -38,7 +37,7 @@ fn parse_vec(text: &str, v: &mut [f32; 3]) {
     }
 }
 
-/// The `op = start` entries of one spawn layer (`ReadStarts`): `[obj:<name>]` sections whose
+/// The `op = start` entries of one spawn layer: `[obj:<name>]` sections whose
 /// `op` is `start`, with their level, position and direction.
 #[must_use]
 pub fn read_starts(text: &str, source: &str) -> Vec<Start> {
@@ -95,7 +94,7 @@ pub fn fixed3(v: [f32; 3], digits: usize) -> Value {
     Value::Array(v.iter().map(|x| fixed(*x, digits)).collect())
 }
 
-/// The starts of the answers (`JsonStarts`).
+/// The starts of the answers.
 #[must_use]
 pub fn starts_json(starts: &[Start]) -> Value {
     Value::Array(

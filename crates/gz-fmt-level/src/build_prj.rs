@@ -1,8 +1,8 @@
-//! `build.prj`: what the editor's level build hands to the compilers - the `b_*` records of
-//! `communicate.h`, one chunk per kind.
+//! `build.prj`: what the editor's level build hands to the compilers - the `b_*` records,
+//! one chunk per kind.
 //!
 //! The records are C structs dumped as they lie in memory. Their padding bytes and what follows
-//! a name's terminator are whatever the C++ had there; they are written as zeros here.
+//! a name's terminator are whatever the X-Ray SDK had there; they are written as zeros here.
 
 use std::sync::Arc;
 
@@ -18,10 +18,10 @@ use crate::{LevelError, Result};
 
 /// `XRCL_CURRENT_VERSION`: the version the build writes.
 pub const XRCL_CURRENT_VERSION: u32 = 18;
-/// `XR_MAX_PORTAL_VERTS`.
+/// The most vertices a portal may have.
 pub const MAX_PORTAL_VERTS: usize = 6;
 
-/// Chunk ids of `build.prj` (`EBUILD_CHUNKS`).
+/// Chunk ids of `build.prj`.
 pub mod chunk {
     pub const VERSION: u32 = 0;
     pub const PARAMETERS: u32 = 1;
@@ -63,14 +63,14 @@ pub struct BuildParams {
     pub lm_jitter_samples: u32,
     pub lm_rms_zero: u32,
     pub lm_rms: u32,
-    /// `EBuildQuality`: 0 draft, 1 high, 2 custom.
+    /// 0 draft, 1 high, 2 custom.
     pub quality: u16,
     pub reserved: u16,
     pub f_reserved: [f32; 6],
 }
 
 impl Default for BuildParams {
-    /// `b_params::Init`: high quality.
+    /// The default parameters: high quality.
     fn default() -> Self {
         Self {
             sm_angle: 75.0,
@@ -236,10 +236,10 @@ impl Portal {
     }
 }
 
-/// `Flight`: a light as Direct3D 9 describes one.
+/// A light as Direct3D 9 describes one.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Light {
-    /// `D3DLIGHTTYPE`: 1 point, 2 spot, 3 directional.
+    /// 1 point, 2 spot, 3 directional.
     pub kind: u32,
     /// r, g, b, a.
     pub diffuse: [f32; 4],
@@ -422,7 +422,7 @@ fn chunk_info(id: u32) -> Option<(&'static str, usize)> {
     })
 }
 
-/// The chunks the C++ compiler cannot do without (`CBuild::Load` opens them unchecked).
+/// The chunks the compiler cannot do without (it opens them unchecked).
 const REQUIRED: [u32; 7] = [
     chunk::VERSION,
     chunk::PARAMETERS,

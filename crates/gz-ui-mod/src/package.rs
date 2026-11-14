@@ -3,9 +3,8 @@
 //! the `dlg.replace_release` question before an earlier packaging of the version is replaced;
 //! `dlg.package_result` when the job ends.
 //!
-//! The C++ specification is `EditorModManifest.cpp` from `RequestPackageRelease` to
-//! `DrawPackageDialog`, and `EditorCatalog::DrawKeyLine` for the key row ([`KeyLine`], shared
-//! with Submit to Mod Browser). The packaging is `gz-release`'s job; `mod_package` is its MCP
+//! The key row ([`KeyLine`], shared
+//! with Submit to Mod Browser). The packaging is `gz-release`'s job; `mod.package` is its MCP
 //! path, which asks nothing.
 
 use std::cell::RefCell;
@@ -43,7 +42,7 @@ struct KeyInbox {
     problem: Option<String>,
 }
 
-/// The author key as one row (`EditorCatalog::DrawKeyLine`): what signs the release, or why
+/// The author key as one row: what signs the release, or why
 /// nothing will; a protected key asks for its password in the row, once per session. The state
 /// is read on the IO pool when asked ([`KeyLine::refresh`]), never by a frame.
 #[derive(Default)]
@@ -66,8 +65,7 @@ impl KeyLine {
         });
     }
 
-    /// The key is protected and its password was not given yet this session
-    /// (`EditorCatalog::KeyWantsPassword`).
+    /// The key is protected and its password was not given yet this session.
     #[must_use]
     pub fn wants_password(&self) -> bool {
         self.state.as_ref().is_some_and(|k| k.exists && k.error.is_empty() && k.locked)
@@ -190,7 +188,7 @@ fn cannot_package(editor: &Arc<Editor>, ctx: &egui::Context, err: &str) {
     crate::build::show_result(editor, ctx, spec);
 }
 
-/// Package Release... from the menu or the toolbar (`RequestPackageRelease`): a build that runs
+/// Package Release... from the menu or the toolbar: a build that runs
 /// brings its card up, a manifest the release gate refuses is the result, else the dialog.
 pub fn request(cx: &mut DocCx<'_>) {
     if cx.editor.project_opt().is_none() {
@@ -229,7 +227,7 @@ pub fn request(cx: &mut DocCx<'_>) {
     });
 }
 
-/// What a packaging did (`ReportPackage`).
+/// What a packaging did.
 #[must_use]
 pub fn package_report(m: &Manifest, r: &PackageResult) -> ResultSpec {
     let mut rows = Vec::new();
@@ -284,7 +282,7 @@ pub fn package_report(m: &Manifest, r: &PackageResult) -> ResultSpec {
     spec
 }
 
-/// Starts the packaging job (`QueuePackage`); its end raises the result.
+/// Starts the packaging job; its end raises the result.
 fn queue_package(editor: &Arc<Editor>, ctx: &egui::Context, m: Manifest, out_dir: String, requires: String) {
     match Releases::start(editor, PackageRequest { out_dir, requires_game: Some(requires) }) {
         Ok(job) => {

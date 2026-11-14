@@ -1,7 +1,7 @@
-//! Text rules of `mod.ltx` as the C++ `Load` / `Save` and the game apply them
+//! Text rules of `mod.ltx` as the loader and the game apply them
 //! (`MOD_UPDATES.md` 1.1: quoting).
 
-/// What the C++ `Trim` takes off both ends.
+/// What the trim takes off both ends.
 pub const WS: &[char] = gz_ltx::doc::MANIFEST_WS;
 
 #[must_use]
@@ -75,7 +75,7 @@ pub fn needs_quotes(s: &str) -> bool {
     s.starts_with([' ', '\t']) || s.ends_with([' ', '\t'])
 }
 
-/// A display text the way `AppendText` writes it: carriage returns dropped (CRLF from a paste
+/// A display text as it is written: carriage returns dropped (CRLF from a paste
 /// becomes one `\n`), quoted when `always` or when the bare form would not survive.
 #[must_use]
 pub fn display_value(value: &str, always: bool) -> String {
@@ -89,7 +89,7 @@ pub fn text_value(value: &str) -> String {
     unquote(value).unwrap_or_else(|| value.to_owned())
 }
 
-/// The C++ `SplitList`: entries trimmed, empty ones dropped; `\r` counts as `\n` for a line
+/// Splits a list: entries trimmed, empty ones dropped; `\r` counts as `\n` for a line
 /// list.
 #[must_use]
 pub fn split_list(src: &str, sep: char) -> Vec<String> {
@@ -98,7 +98,7 @@ pub fn split_list(src: &str, sep: char) -> Vec<String> {
     parts.into_iter().map(trim).filter(|s| !s.is_empty()).map(str::to_owned).collect()
 }
 
-/// The characters of `text` the game's cp1251 cannot show, as `NqUtil::Cp1251Covers` names
+/// The characters of `text` the game's cp1251 cannot show, as the Nq text rules name
 /// them: the first six distinct ones, space separated. `None` when every character fits.
 #[must_use]
 pub fn outside_cp1251(text: &str) -> Option<String> {

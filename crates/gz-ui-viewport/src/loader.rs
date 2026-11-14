@@ -1,5 +1,5 @@
 //! Where the renderer's bytes come from: the project, then the editor's own library, then the
-//! linked game - the order the C++ editor's file system looked in.
+//! linked game - in that order.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

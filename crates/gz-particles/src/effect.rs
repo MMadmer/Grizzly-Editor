@@ -1,6 +1,6 @@
-//! One particle effect as the engine plays it: the particle store (`PAPI::ParticleEffect`), the
-//! playback of `CParticleEffect` (33 ms steps, the time limit, the deferred stop) and what
-//! `CPEDef` adds to the actions - frame animation, collision and the sprites `Render` fills.
+//! One particle effect as the engine plays it: the particle store, the
+//! playback of the effect (33 ms steps, the time limit, the deferred stop) and what
+//! the effect definition adds to the actions - frame animation, collision and the sprites the render fills.
 
 use std::sync::Arc;
 
@@ -15,7 +15,7 @@ use crate::{STEP, STEP_MS};
 /// xrCore's `EPS_L`.
 const EPS_L: f32 = 0.001_000_0;
 
-/// `PAPI::Particle`.
+/// A particle.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Particle {
     pub pos: Vec3,
@@ -53,16 +53,16 @@ pub(crate) enum Event {
     Death(usize, Particle),
 }
 
-/// `OnEffectParticleBirth`: what a new particle gets from its effect's definition.
+/// What a new particle gets from its effect's definition.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Birth {
-    /// `dfRandomFrame`: the frame count.
+    /// The frame count.
     pub random_frame: Option<i32>,
-    /// `dfAnimated` with `dfRandomPlayback`.
+    /// The animated flag with random playback.
     pub random_playback: bool,
 }
 
-/// `PAPI::ParticleEffect`: the particles and how many there may be.
+/// The particles and how many there may be.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Store {
     pub list: Vec<Particle>,
@@ -110,7 +110,7 @@ impl Store {
     }
 }
 
-/// How a sprite is turned (`FillSprite`'s two forms).
+/// How a sprite is turned (two forms).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Align {
     /// Facing the camera: its top and right are the camera's.
@@ -121,12 +121,12 @@ pub enum Align {
     Dir(Vec3),
 }
 
-/// Which faces the engine culls (`dfCulling`, `dfCullCCW`).
+/// Which faces the engine culls.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Cull {
     #[default]
     None,
-    /// `CULL_CW`: clockwise faces go.
+    /// Clockwise faces go.
     Clockwise,
     /// `CULL_CCW`.
     CounterClockwise,
@@ -158,7 +158,7 @@ pub struct SpriteBatch {
     pub sprites: Vec<Sprite>,
 }
 
-/// `CParticleEffect`.
+/// A particle effect.
 #[derive(Clone, Debug)]
 pub(crate) struct Effect {
     pub def: Option<Arc<EffectDef>>,
@@ -176,7 +176,7 @@ pub(crate) struct Effect {
 }
 
 impl Effect {
-    /// `CParticleEffect` + `Compile`: the actions loaded, the birth rule set; not playing.
+    /// A particle effect, compiled: the actions loaded, the birth rule set; not playing.
     pub(crate) fn new(def: Option<Arc<EffectDef>>) -> Self {
         let mut store = Store::new(1);
         let mut actions = Vec::new();
@@ -216,7 +216,7 @@ impl Effect {
         self.xform_on.then_some(self.xform)
     }
 
-    /// `IsLooped`: no time limit.
+    /// No time limit.
     pub(crate) fn is_looped(&self) -> bool {
         self.def.as_ref().is_none_or(|d| d.flags & flags::TIME_LIMIT == 0)
     }
@@ -244,7 +244,7 @@ impl Effect {
         }
     }
 
-    /// `UpdateParent`.
+    /// Updates the parent.
     pub(crate) fn update_parent(&mut self, m: &Mat4, vel: Vec3, xform: bool) {
         self.xform_on = xform;
         if xform {
@@ -257,7 +257,7 @@ impl Effect {
         }
     }
 
-    /// `OnFrame`: as many 33 ms steps as the time owes, three at most.
+    /// As many 33 ms steps as the time owes, three at most.
     pub(crate) fn on_frame(&mut self, dt_ms: u32, cx: &mut Ctx<'_>, collider: Option<&dyn Collider>) {
         let Some(def) = self.def.clone().filter(|_| self.playing) else {
             let e = Vec3::splat(EPS_L);
@@ -309,8 +309,8 @@ impl Effect {
         }
     }
 
-    /// `ExecuteCollision`: each particle's last move tested against the surfaces, twice at
-    /// most; a hit bounces it, or takes it away with `dfCollisionDel`.
+    /// Each particle's last move tested against the surfaces, twice at
+    /// most; a hit bounces it, or takes it away with the collision-delete flag.
     fn collide(&mut self, def: &EffectDef, dt: f32, collider: Option<&dyn Collider>) {
         let [omf, res, cutoff] = def.collide;
         for i in (0..self.store.list.len()).rev() {
@@ -346,7 +346,7 @@ impl Effect {
         }
     }
 
-    /// The effect's sprites (`Render`), when it is a sprite effect with particles.
+    /// The effect's sprites, when it is a sprite effect with particles.
     pub(crate) fn sprites(&self) -> Option<SpriteBatch> {
         let def = self.def.as_ref()?;
         if def.flags & flags::SPRITE == 0 || self.store.list.is_empty() {
@@ -427,7 +427,7 @@ impl Effect {
     }
 }
 
-/// `CPEDef::ExecuteAnimate`.
+/// Executes the frame animation.
 fn animate(def: &EffectDef, list: &mut [Particle], dt: f32) {
     let k = def.frame.speed * dt;
     let count = def.frame.frame_count as f32;
@@ -444,7 +444,7 @@ fn animate(def: &EffectDef, list: &mut [Particle], dt: f32) {
     }
 }
 
-/// `Fmatrix::setHPB`'s rows `i`, `j`, `k` (`setXYZ(v)` is `setHPB(v.y, v.x, v.z)`).
+/// The rows `i`, `j`, `k` of the heading-pitch-bank rotation (the XYZ form is the same with the angles in another order).
 pub(crate) fn hpb_rows(h: f32, p: f32, b: f32) -> [Vec3; 3] {
     let (sh, ch) = h.sin_cos();
     let (sp, cp) = p.sin_cos();
@@ -457,7 +457,7 @@ pub(crate) fn hpb_rows(h: f32, p: f32, b: f32) -> [Vec3; 3] {
     ]
 }
 
-/// `Fvector::setHP`.
+/// The heading and pitch of a direction.
 pub(crate) fn dir_hp(h: f32, p: f32) -> Vec3 {
     let (sh, ch) = h.sin_cos();
     let (sp, cp) = p.sin_cos();

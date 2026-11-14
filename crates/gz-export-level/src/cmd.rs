@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
+use gz_base::Finding;
 use gz_build::BuildChecks;
 use gz_editor::fsx::WriteGuard;
 use gz_editor::{CmdError, Editor, ProjectSession, Reply, Value, json};
@@ -46,7 +47,7 @@ pub struct Layer {
 /// `SceneStarts` slot with the scene's Player Starts (`E201` counts them for the scene's level).
 /// Called once at start.
 pub fn install(editor: &Arc<Editor>) {
-    BuildChecks::of(editor).set_bake(|ed, session| -> BoxFuture<'static, String> {
+    BuildChecks::of(editor).set_bake(|ed, session| -> BoxFuture<'static, Vec<Finding>> {
         Box::pin(async move { bake_note(&ed, &session).await })
     });
     gz_world::SceneStarts::of(editor).provide(|ed| {
@@ -100,9 +101,9 @@ fn ctx(editor: &Arc<Editor>, l: &Layer) -> Result<Ctx, CmdError> {
     Ok(Ctx { session, guard, svc, snap, level })
 }
 
-fn log_lines(editor: &Editor, lines: &[String]) {
-    for l in lines {
-        if l.starts_with('!') { editor.log.warn(l) } else { editor.log.info(l) }
+fn log_lines(editor: &Editor, found: &[Finding]) {
+    for f in found {
+        editor.log.finding(f);
     }
 }
 
@@ -426,46 +427,44 @@ pub async fn bake_layer(
     }))
 }
 
-/// The open scene mirrored into its level's `.xspawn` before a module build, as a note - a line
-/// for the layer and a `WARNING: ` line per thing left out. Empty without an open scene.
-async fn bake_note(editor: &Arc<Editor>, session: &Arc<ProjectSession>) -> String {
-    let Some(svc) = session.services.get::<SceneService>() else { return String::new() };
+/// The open scene mirrored into its level's `.xspawn` before a module build: a note for the
+/// layer, a warning per thing left out, an error when the bake failed. Empty without an open
+/// scene.
+async fn bake_note(editor: &Arc<Editor>, session: &Arc<ProjectSession>) -> Vec<Finding> {
+    let Some(svc) = session.services.get::<SceneService>() else { return Vec::new() };
     let snap = svc.store.snapshot();
-    let Some(level) = resolve_level(None, &snap.meta.name()) else { return String::new() };
+    let Some(level) = resolve_level(None, &snap.meta.name()) else { return Vec::new() };
     if !snap.valid {
-        return String::new();
+        return Vec::new();
     }
     let guard =
         session.services.get::<gz_project::Project>().map(|p| p.write_guard(None)).unwrap_or_default();
     let c = Ctx { session: session.clone(), guard, svc, snap, level: level.clone() };
-    let (mut note, warnings) = match run_spawn(editor, &c, false, None, None, true).await {
+    let mut note = Vec::new();
+    match run_spawn(editor, &c, false, None, None, true).await {
         Ok(run) => {
             let r = &run.bake.result;
-            let mut n = if r.exported > 0 {
+            note.push(Finding::info(if r.exported > 0 {
                 format!("Scene baked: {} object(s) -> spawn\\{level}.xspawn", r.exported)
             } else {
                 format!("Scene baked: empty, spawn\\{level}.xspawn cleared")
-            };
+            }));
             if r.missing > 0 {
-                n.push_str(&format!(
-                    "\nWARNING: {} object(s) NOT baked - their model exists neither in the game nor in the project (see the log)",
+                note.push(Finding::warning(format!(
+                    "{} object(s) not baked: their model exists neither in the game nor in the project (see the log).",
                     r.missing
-                ));
+                )));
             }
             if r.invisible > 0 {
-                n.push_str(&format!(
-                    "\nWARNING: {} object(s) keep a model the engine draws nothing for - they work but stay invisible (see the log)",
+                note.push(Finding::warning(format!(
+                    "{} object(s) keep a model the engine draws nothing for: they work but stay invisible (see the log).",
                     r.invisible
-                ));
+                )));
             }
-            (n, r.warnings.clone())
+            // every left-out path and order, by name: the note is what the build shows
+            note.extend(r.warnings.iter().map(Finding::warning));
         }
-        Err(e) => (format!("Scene bake FAILED for '{level}': {e}"), Vec::new()),
-    };
-    // every left-out path and order, by name: the note is what the build shows
-    for w in warnings {
-        note.push_str("\nWARNING: ");
-        note.push_str(&w);
+        Err(e) => note.push(Finding::error(format!("The scene of '{level}' could not be baked: {e}"))),
     }
     note
 }

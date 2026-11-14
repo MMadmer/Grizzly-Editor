@@ -22,11 +22,11 @@ use crate::draw_details::{self, DetailCache};
 use crate::draw_particles::{self, Particles};
 use crate::draw_wallmarks::WallmarkCache;
 
-/// `ESceneGlowTool::flTestVisibility`.
+/// The glow test-visibility flag.
 const GLOW_TEST_VISIBILITY: u32 = 1 << 31;
-/// `CGlow::gfFixedSize`.
+/// The glow's fixed-size flag.
 const GLOW_FIXED_SIZE: u16 = 1 << 0;
-/// `ssaDISCARD` of the editor's renderer.
+/// The discard flag of the editor's renderer.
 const SSA_DISCARD: f32 = 4.0;
 
 /// The caches of the extras: an `Editor` service. No lock is ever held across the drawing - it runs
@@ -130,7 +130,7 @@ pub(crate) fn extend(extras: &Extras, parts: &Particles, x: &Input<'_>, built: &
     playing
 }
 
-/// `CGlow::Render`: the glow's sprite with its texture and shader at its radius - unless the
+/// The glow's sprite with its texture and shader at its radius - unless the
 /// tool tests visibility and a scene object stands between it and the camera - and the romboid
 /// of a tested glow.
 fn glows(x: &Input<'_>, built: &mut Built) {

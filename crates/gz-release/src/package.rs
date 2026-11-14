@@ -1,4 +1,4 @@
-//! Package Release (`EditorMod::PackageRelease`): a job that stages the COMPLETE module through
+//! Package Release: a job that stages the COMPLETE module through
 //! the real build (`gz_build::run_build` into the project's `temp\release_stage_<pid>`), so a
 //! release ships what a build ships and refuses what a build refuses; then writes into
 //! `<project>\releases\<version>` the packages, the file index and - last, because it vouches
@@ -70,7 +70,7 @@ pub struct PackageResult {
     pub packed: u64,
     pub requires_game: String,
     /// What the scene's bake did.
-    pub baked: String,
+    pub baked: Vec<gz_base::Finding>,
     pub warnings: String,
     pub signed: bool,
     pub key_id: String,
@@ -401,7 +401,7 @@ async fn stage_and_pack(
 }
 
 /// The descriptor, the job's last step: it goes last, because it is the file that vouches for
-/// the other two kinds (`FinishRelease`).
+/// the other two kinds.
 async fn finish_release(
     editor: &Arc<Editor>,
     root: &Path,
@@ -497,9 +497,9 @@ fn open_exclusive(path: &Path) -> Option<File> {
     std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(path).ok()
 }
 
-/// Stages whose editor is gone go (`RemoveDeadStages`). A stage without the mark - the C++
-/// editor's, which judges by its process id - is left to it.
-// oracle: the C++ asks whether the pid in the folder name is alive; std has no such question, so
+/// Stages whose editor is gone go. A stage without the mark (one made by a
+/// version that judged by its process id) is left alone.
+// the stage's owner is asked by the mark, as std cannot ask whether the pid in the folder name is alive;
 // the mark stands in for it
 fn remove_dead_stages(temp: &Path, ours: &Path) {
     let Ok(listing) = std::fs::read_dir(temp) else { return };
@@ -942,7 +942,7 @@ impl PackJob {
 }
 
 /// The files an earlier packaging of this id and version left in the release folder - the ones
-/// the next packaging replaces (`ListPackagedFiles`): what the window asks about before it
+/// the next packaging replaces: what the window asks about before it
 /// packages again. Over MCP they are simply replaced. Blocking: call it on the IO pool.
 #[must_use]
 pub fn packaged_files(project_root: &Path, out_dir: &str, id: &str, version: &str) -> Vec<String> {
@@ -975,7 +975,7 @@ fn delete_outright(path: &Path) {
 
 /// Where every file of package `pack` really sits, asked of the FINISHED archive: the data
 /// offset from the local header found there, the packed length and the method from its central
-/// directory (`ReadPackageLayout`). Nothing is assumed about what the writer did.
+/// directory. Nothing is assumed about what the writer did.
 fn read_back(zip_path: &Path, files: &mut [Staged], pack: u32) -> Result<(), String> {
     let shown = zip_path.display().to_string();
     let layout = read_layout(zip_path).map_err(|_| format!("can't read back {shown}"))?;

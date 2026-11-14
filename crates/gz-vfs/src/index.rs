@@ -1,6 +1,6 @@
 //! A sorted, immutable `path -> where` table with its paths in one string.
 //!
-//! The order is the C++ editor's: its keys had backslashes, so `/` sorts as `\` would
+//! The order is the game's: its keys had backslashes, so `/` sorts as `\` would
 //! (`a1.ogg` before `a/x.ogg`), and listings come out in the order they always did.
 
 use std::cmp::Ordering;

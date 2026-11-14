@@ -6,7 +6,7 @@
 //!   reserves it, so the labels of a popup start at one x.
 //! - [`popup_frame`], [`popup_body`], [`menu_popup`] - the theme's popup: overlay fill, a hairline,
 //!   the popup shadow, rows that touch, at least 200 pt wide.
-//! - [`show_popup`] / [`take_popup_request`] - a popup asked for by name (MCP `ui_popup`); the
+//! - [`show_popup`] / [`take_popup_request`] - a popup asked for by name (MCP `ui.popup`); the
 //!   widget that owns the name opens it on its next frame.
 
 use egui::{

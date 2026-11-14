@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use gz_base::{Origin, SmolStr};
+use gz_base::{Finding, Origin, SmolStr};
 use gz_editor::{CmdError, Editor, JsonSchema, Registry, Reply, Spec, Value, json};
 use gz_fmt_xr::ShadersXrlc;
 use rustc_hash::FxHashSet;
@@ -48,7 +48,7 @@ pub struct Completion {
     /// Portals the build computed.
     pub portals: usize,
     /// What the computation said, with the cells it is about.
-    pub notes: Vec<(String, Vec<String>)>,
+    pub notes: Vec<(Finding, Vec<String>)>,
 }
 
 /// A computation was asked to stop.
@@ -108,14 +108,14 @@ pub fn complete(
             }
         }
         out.notes.push((
-            format!(
+            Finding::info(format!(
                 "The build put {} no visibility cell holds into the default cell.",
                 if out.default_meshes == 1 {
                     "1 mesh".to_owned()
                 } else {
                     format!("{} meshes", out.default_meshes)
                 }
-            ),
+            )),
             vec![DEFAULT_SECTOR.to_owned()],
         ));
     }
@@ -152,7 +152,7 @@ pub fn complete(
             .filter(|s| out.state.find(ObjClass::Sector, &s.to_lowercase()).is_some())
             .map(str::to_owned)
             .collect();
-        out.notes.push((line.replace('\n', " "), cells));
+        out.notes.push((Finding::warning(line.replace('\n', " ")), cells));
     }
     Ok(out)
 }
@@ -685,7 +685,7 @@ mod tests {
         assert!(
             c.notes
                 .iter()
-                .any(|(t, cells)| t.contains("default cell") && cells == &[DEFAULT_SECTOR.to_owned()])
+                .any(|(f, cells)| f.text.contains("default cell") && cells == &[DEFAULT_SECTOR.to_owned()])
         );
     }
 }

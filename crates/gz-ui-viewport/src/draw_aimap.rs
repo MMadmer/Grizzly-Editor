@@ -1,4 +1,4 @@
-//! The AI map as `ESceneAIMapTool::OnRender` draws it: every node a quad laid on its plane
+//! The AI map as the AI map tool draws it: every node a quad laid on its plane
 //! (`ed\ed_ai_arrows_01`, the frame of its links), grey, lighter when highlighted, white when
 //! selected, the nodes within the tool's view radius of the camera; the map's box when the AI
 //! Map is the current tool.
@@ -25,7 +25,7 @@ use crate::draw::{Built, ga};
 /// `m_Shader.create("editor\\ai_node", "ed\\ed_ai_arrows_01")`.
 const SHADER: &str = "editor\\ai_node";
 const TEXTURE: &str = "ed\\ed_ai_arrows_01";
-/// `ESceneAIMapTool::flHideNodes`.
+/// The hide-nodes flag.
 const HIDE_NODES: u32 = 1 << 1;
 /// The cell a tile's mesh is cut into.
 const CELL: f32 = 16.0;
@@ -55,7 +55,7 @@ pub struct Node {
     pub flags: u8,
 }
 
-/// The tool's load arithmetic for one node (`UnpackPosition`, the compressed normal).
+/// The tool's load arithmetic for one node (the position unpack, the compressed normal).
 #[must_use]
 pub fn unpack(n: &SceneAiNode, bbox: &gz_fmt_level::Aabb, params: &AiParams) -> Node {
     let pos = n.pos.unpack(bbox, params);
@@ -82,7 +82,7 @@ pub fn of_node(n: &AiMapNode) -> Node {
     Node { pos: n.pos, normal, links, flags: n.flags }
 }
 
-/// A node's quad as `OnRender` fills it: the corners of a square 0.9 of the patch on the node's
+/// A node's quad: the corners of a square 0.9 of the patch on the node's
 /// plane straight under or over them, a centimetre off it.
 pub fn node_quad(n: &Node, patch: f32, out: &mut Vec<MeshVertex>, indices: &mut Vec<u32>) {
     let st = patch * 0.9 * 0.5;
@@ -100,7 +100,7 @@ pub fn node_quad(n: &Node, patch: f32, out: &mut Vec<MeshVertex>, indices: &mut 
     let corners = [(-st, -st), (st, -st), (st, st), (-st, st)];
     for ((dx, dz), uv) in corners.into_iter().zip(tc) {
         let v = Vec3::new(n.pos.x + dx, n.pos.y, n.pos.z + dz);
-        // `intersectRayPoint` along +Y; a plane that stands upright keeps the corner as it is
+        // a ray-plane intersection along +Y; a plane that stands upright keeps the corner as it is
         let denom = n.normal.y;
         let on = if denom.abs() < 1e-7 { v } else { v - Vec3::Y * ((n.normal.dot(v) + d) / denom) };
         let mut vert = MeshVertex::new(on + n.normal * 0.01, n.normal, uv);

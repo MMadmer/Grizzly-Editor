@@ -1,5 +1,4 @@
-//! Texture Library, Cube Map \ Smaller Copy (`CImageManager::CreateSmallerCubeMap` over
-//! `ETOOLS::SimplifyCubeMap`, `ETools_cm.cpp`): a cube strip (six square faces side by side)
+//! Texture Library, Cube Map \ Smaller Copy: a cube strip (six square faces side by side)
 //! sampled down to 32 x 32 a face, each pixel the root mean square of a cone of directions of
 //! the source.
 
@@ -30,7 +29,7 @@ fn fis_zero(v: f32) -> bool {
     v.abs() < EPS_S
 }
 
-/// `Fvector::getHP`.
+/// The heading and pitch of a direction.
 fn get_hp(v: V3) -> (f32, f32) {
     let [x, y, z] = v;
     if fis_zero(x) && fis_zero(z) {
@@ -55,13 +54,13 @@ fn get_hp(v: V3) -> (f32, f32) {
     (h, p)
 }
 
-/// `Fvector::setHP`.
+/// A direction from a heading and a pitch.
 fn set_hp(h: f32, p: f32) -> V3 {
     let (sh, ch, sp, cp) = (h.sin(), h.cos(), p.sin(), p.cos());
     [-cp * sh, sp, cp * ch]
 }
 
-/// The six planes the faces lie on, as `CCubeMapHelper` builds them: `n` and `d`.
+/// The six planes the faces lie on: `n` and `d`.
 fn planes() -> [(V3, f32); 6] {
     let build = |p: V3, n: V3| {
         let n = normalize(n);
@@ -97,7 +96,7 @@ fn xys_from_vector(planes: &[(V3, f32); 6], n: V3, width: u32, height: u32) -> (
     let mut t_dist = f32::MAX;
     let mut t_side = 0u32;
     for (side, (pn, pd)) in planes.iter().enumerate() {
-        // `intersectRayDist` from the origin
+        // a ray-distance test from the origin
         let denom = dot(*pn, n);
         if denom.abs() < EPS_S {
             continue;
@@ -128,7 +127,7 @@ fn offset(width: u32, side: u32, x: u32, y: u32) -> usize {
 }
 
 /// The smaller copy of a cube strip: `src` is six `h` x `h` faces side by side (`h` a power of
-/// two, at least 32), the copy six 32 x 32 faces. The C++ refuses any other size with
+/// two, at least 32), the copy six 32 x 32 faces. Any other size is refused with
 /// "Texture '<name>' - invalid size: [w, h]": the error carries the size.
 pub fn simplify(src: &Image) -> Result<Image> {
     src.check()?;

@@ -95,7 +95,7 @@ fn number(v: &str) -> u32 {
 }
 
 impl VtPolicy {
-    /// The index's policy (`ReadVtPolicy`); the defaults for what it does not say.
+    /// The index's policy; the defaults for what it does not say.
     #[must_use]
     pub fn read(index: &str) -> Self {
         let mut out = Self::default();
@@ -184,7 +184,7 @@ pub struct VtReport {
     pub results: Vec<VtEngine>,
 }
 
-/// A lookup's answer read (`VtLookup`): `None` = not a report, the error is [`problem`]'s.
+/// A lookup's answer read: `None` = not a report, the error is [`problem`]'s.
 pub(crate) fn read_report(status: u16, body: &Value) -> Option<VtReport> {
     let attributes = body.get("data")?.get("attributes")?;
     let results: Vec<VtEngine> = attributes

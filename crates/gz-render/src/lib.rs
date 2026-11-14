@@ -1,7 +1,7 @@
 //! The editor's renderer: what the viewport, the previews and the thumbnails are drawn with.
 //!
-//! A forward renderer on `wgpu` with the editor's own materials (`docs/RUST_MIGRATION.md` 5.8,
-//! deliberate difference D2): the viewport shows what an author needs to place and judge things -
+//! A forward renderer on `wgpu` with the editor's own materials (`docs/ARCHITECTURE.md`):
+//! the viewport shows what an author needs to place and judge things -
 //! geometry, textures, transparency, placement, selection; the look of the game is the game's.
 //! No window and no egui: the crate takes the device and the queue the window draws with and
 //! renders into textures it owns. It knows no scene either: its input is a [`DrawList`].
@@ -29,11 +29,11 @@
 //!   the blended ones back to front and tessellates the helpers. The packet is immutable and
 //!   self-contained: handles and instance data.
 //! - **Geometry of the frame alone**: [`SpriteBatch`]es (particles, glows) become quads facing
-//!   the packet's camera (`FillSprite`: camera-, axis- or path-aligned, turned, an atlas frame,
+//!   the packet's camera (camera-, axis- or path-aligned, turned, an atlas frame,
 //!   culled by face as the engine culls), one draw per batch sorted with the blended ones;
 //!   [`Batch`]es (detail objects) are many copies of one mesh the caller culled, drawn instanced
 //!   without a test each; an [`Environment`]'s [`Sky`] is the weather's half box with its two
-//!   cube maps blended (`dxEnvironmentRender::RenderSky`).
+//!   cube maps blended.
 //! - **The render thread** owns the targets: it takes the newest packet, records the passes (in
 //!   parallel chunks on the CPU pool when a pass is large), submits, waits for the GPU, bumps the
 //!   frame counter and pings `Wake`. The UI never waits for it.

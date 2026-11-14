@@ -19,7 +19,7 @@ use gz_ui::{Font, Icon, Kind, Tone, palette};
 use gz_update::{State, UpdateService, size_text};
 use serde_json::json;
 
-/// `ui_dialog open id=update`.
+/// `ui.dialog open id=update`.
 pub const DIALOG_ID: &str = "update";
 pub const DIALOG_WINDOW: &str = "Update###dlg.update";
 /// Help > Check for Updates...: a check, and the dialog that follows it.

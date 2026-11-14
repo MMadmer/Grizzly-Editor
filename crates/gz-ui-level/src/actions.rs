@@ -237,7 +237,7 @@ fn settled(r: &ReplyCx<'_>, command: &'static str, args: Args) {
             });
         });
     if let Some(l) = line {
-        r.editor.log.plain(l);
+        r.editor.log.finding(&l);
     }
 }
 
@@ -270,8 +270,8 @@ pub fn show_validation(r: &ReplyCx<'_>) {
     };
     let mut spec = ResultSpec::new("validate_result", "Validate Scene", tone, &headline);
     spec.warnings = lines;
-    if let Some(l) = gz_ui::dialog::result(r.ctx, crate::tools::asker(r.editor), spec) {
-        r.editor.log.plain(l);
+    for l in gz_ui::dialog::result(r.ctx, crate::tools::asker(r.editor), spec) {
+        r.editor.log.finding(&l);
     }
 }
 

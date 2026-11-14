@@ -1,4 +1,4 @@
-//! What a single item SECTION can carry (`NqItemCaps`), so a spawn row is offered and checked
+//! What a single item SECTION can carry, so a spawn row is offered and checked
 //! for the fields that mean something for it: an epinephrine has no magazine and no wear, a
 //! rifle has no doses.
 //!
@@ -26,7 +26,7 @@ pub const UPGRADES: u32 = 8;
 pub const AMMO_BOX: u32 = 16;
 pub const ALL: u32 = 0x1F;
 
-/// What one section can carry (`SCaps`).
+/// What one section can carry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Caps {
     /// [`ALL`] when `known` is false.
@@ -304,7 +304,7 @@ impl ItemCaps {
         c
     }
 
-    /// What `section` can carry (`NqItemCaps::Of`).
+    /// What `section` can carry.
     pub fn of(&self, section: &str) -> Arc<Caps> {
         if section.is_empty() {
             return Arc::new(Caps::default());

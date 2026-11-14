@@ -22,7 +22,7 @@ pub fn scale_matrix(s: Vec3) -> Mat4 {
     m
 }
 
-/// `getHPB` read back as `getXYZ`: the angles `rotation_matrix` builds the matrix from.
+/// The angles `rotation_matrix` builds the matrix from, read back from a rotation matrix.
 #[must_use]
 pub fn get_xyz(m: &Mat4) -> Vec3 {
     let (i, j, k) = (m.row(0), m.row(1), m.row(2));
@@ -35,7 +35,7 @@ pub fn get_xyz(m: &Mat4) -> Vec3 {
     Vec3::new(p, h, b)
 }
 
-/// `CCustomObject::NormalAlign`: the rotation that stands an object on a surface normal.
+/// The rotation that stands an object on a surface normal.
 #[must_use]
 pub fn normal_align(up: Vec3, dir: Vec3) -> Vec3 {
     let n = up;
@@ -52,8 +52,8 @@ pub fn normal_align(up: Vec3, dir: Vec3) -> Vec3 {
     get_xyz(&m)
 }
 
-/// Position, rotation (radians, `x` pitch, `y` heading, `z` bank) and scale, as
-/// `CCustomObject` keeps them.
+/// Position, rotation (radians, `x` pitch, `y` heading, `z` bank) and scale of a scene
+/// object.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transform {
     pub position: Vec3,
@@ -73,19 +73,18 @@ impl Transform {
         Self { position, ..Self::default() }
     }
 
-    /// `FTransformRP`: rotation then translation.
+    /// Rotation then translation.
     #[must_use]
     pub fn matrix_rp(&self) -> Mat4 {
         Mat4::mul(&Mat4::translation(self.position), &rotation_matrix(self.rotation))
     }
 
-    /// `FTransform`: scale, rotation, translation.
+    /// Scale, rotation, translation.
     #[must_use]
     pub fn matrix(&self) -> Mat4 {
         Mat4::mul(&self.matrix_rp(), &scale_matrix(self.scale))
     }
 
-    /// `FITransform`.
     #[must_use]
     pub fn inverse(&self) -> Mat4 {
         Mat4::invert_43(&self.matrix())
@@ -98,13 +97,13 @@ impl Transform {
     }
 }
 
-/// `Fbox::xform`: the box around a box carried by a matrix.
+/// The box around a box carried by a matrix.
 #[must_use]
 pub fn xform_box(b: &Aabb, m: &Mat4) -> Aabb {
     if !b.is_valid() {
         return Aabb::INVALID;
     }
-    // the C++ way to the bit (a box's bounds are part of the level files): the min corner carried,
+    // a box's bounds are part of the level files, so the result is bit-exact: the min corner carried,
     // then each edge vector (a column of the matrix times the box's size) added to the min or the
     // max by its sign
     let edges =
@@ -132,7 +131,7 @@ pub fn point_box(p: Vec3, r: f32) -> Aabb {
     Aabb::new(p - Vec3::splat(r), p + Vec3::splat(r))
 }
 
-/// `Fbox::Pick2`: where a ray enters a box. `None` when it misses, `Some((t, false))` from
+/// Where a ray enters a box. `None` when it misses, `Some((t, false))` from
 /// outside, `Some((0, true))` when the origin is inside.
 #[must_use]
 pub fn ray_box(origin: Vec3, dir: Vec3, b: &Aabb) -> Option<(f32, bool)> {
@@ -179,7 +178,7 @@ pub fn ray_point(origin: Vec3, dir: Vec3, center: Vec3, radius: f32) -> Option<f
     if (d2 * d2 - d * d) < radius * radius && d > radius { Some(d) } else { None }
 }
 
-/// `ClipTriangleToRect` of the drop to ground: a triangle clipped to an XZ rectangle, heights
+/// A triangle clipped to an XZ rectangle for the drop to ground, heights
 /// kept (Sutherland-Hodgman, at most 15 points).
 #[must_use]
 pub fn clip_triangle_xz(tri: &[Vec3; 3], x0: f32, x1: f32, z0: f32, z1: f32) -> Vec<Vec3> {
@@ -213,7 +212,7 @@ pub fn clip_triangle_xz(tri: &[Vec3; 3], x0: f32, x1: f32, z0: f32, z1: f32) -> 
     src
 }
 
-/// `Fvector::mknormal`: the normal of a triangle, unit length (zero for a degenerate one).
+/// The normal of a triangle, unit length (zero for a degenerate one).
 #[must_use]
 pub fn tri_normal(a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
     (b - a).cross(c - a).normalize_or_zero()

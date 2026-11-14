@@ -8,10 +8,10 @@
 //!   folded in order.
 //!
 //! Two readings, [`Mode`]:
-//! - [`Mode::Editor`] is the C++ editor's own scan (`NqPickers.cpp` `LoadStringTable`, the
+//! - [`Mode::Editor`] is the editor's own scan (the
 //!   captions of pickers and game modes): the text between `<text>` and `</text>` as written,
 //!   trimmed, no entity decoded; inside one file and across files the first definition wins.
-//! - [`Mode::Game`] is the game's `CStringTable`: the XML tree, text condensed and decoded; a
+//! - [`Mode::Game`] is the game's string table: the XML tree, text condensed and decoded; a
 //!   later definition overrides an earlier one, in a file and across files.
 //!
 //! In both, `\n` in a text stays the two characters `\` `n`; the game's UI breaks the line when
@@ -95,7 +95,7 @@ pub fn file_strings(text: &str, mode: Mode) -> (Vec<(String, String)>, Vec<XmlWa
     }
 }
 
-/// `LoadStringTable`: a scan for `<string id="` ... `<text>` ... `</text>`.
+/// A scan for `<string id="` ... `<text>` ... `</text>`.
 fn editor_scan(text: &str) -> Vec<(String, String)> {
     const OPEN: &str = "<string id=\"";
     let find = |pat: &str, from: usize| text.get(from..).and_then(|r| r.find(pat)).map(|i| from + i);
@@ -119,7 +119,7 @@ fn editor_scan(text: &str) -> Vec<(String, String)> {
     out
 }
 
-/// `CStringTable::Load`: every `string` of the root, its `id` and the text of `string:text`.
+/// Every `string` of the root, its `id` and the text of `string:text`.
 fn game_read(text: &str) -> (Vec<(String, String)>, Vec<XmlWarning>) {
     let doc = Document::parse(text);
     let mut warnings = doc.warnings().to_vec();

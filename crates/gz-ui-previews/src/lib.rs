@@ -120,7 +120,7 @@ pub(crate) fn synchronize_textures(cx: &mut DocCx<'_>) {
         }
     });
     if let Some(line) = line {
-        cx.editor.log.plain(line);
+        cx.editor.log.finding(&line);
     }
 }
 
@@ -179,7 +179,7 @@ pub(crate) fn synchronize_sounds(cx: &mut DocCx<'_>) {
                 }
             });
             if let Some(line) = line {
-                editor.log.plain(line);
+                editor.log.finding(&line);
             }
         });
     });

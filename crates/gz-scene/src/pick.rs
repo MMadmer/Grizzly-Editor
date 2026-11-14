@@ -1,4 +1,4 @@
-//! Picking against a snapshot (`ScenePick.cpp`, the classes' `RayPick`): a tree over the
+//! Picking against a snapshot: a tree over the
 //! objects' world boxes gives the candidates, each candidate is tested in its own space - a
 //! scene object against its library object's `Bvh`. Nothing here locks the scene.
 
@@ -118,7 +118,7 @@ impl ScenePick {
         out
     }
 
-    /// `RayPickObject`: the nearest hit of the objects `accept` takes (visibility is the
+    /// The nearest hit of the objects `accept` takes (visibility is the
     /// caller's rule). Candidates are tested in parallel.
     #[must_use]
     pub fn ray_pick(
@@ -206,7 +206,7 @@ pub fn ray_library(lo: &LibraryObject, obj: &Object, start: Vec3, dir: Vec3, ran
     })
 }
 
-/// The class's `RayPick`.
+/// The class's ray pick.
 #[must_use]
 pub fn ray_object(
     state: &SceneState,
@@ -260,8 +260,8 @@ pub fn ray_object(
     }
 }
 
-/// `RayPickObject(range, start, dir, OBJCLASS_SCENEOBJECT, ...)`: what `scan_walls`,
-/// `probe_vertical` and the drop read. Every scene object counts, seen by a camera or not
+/// `RayPickObject(range, start, dir, OBJCLASS_SCENEOBJECT, ...)`: what `scene.query`,
+/// `scene.query` and the drop read. Every scene object counts, seen by a camera or not
 /// (`g_RayPickAll`); a hidden one does not. `only` restricts it to a list.
 #[must_use]
 pub fn ray_scene_objects(
@@ -278,7 +278,7 @@ pub fn ray_scene_objects(
     })
 }
 
-/// `BoxQuery`: the world triangles of these scene objects that may meet a box.
+/// The world triangles of these scene objects that may meet a box.
 #[must_use]
 pub fn box_triangles(state: &SceneState, lib: &Library, ids: &[ObjId], b: &Aabb) -> Vec<[Vec3; 3]> {
     let mut out = Vec::new();

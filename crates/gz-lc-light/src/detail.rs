@@ -1,5 +1,4 @@
-//! The light of the detail objects (`xrDO_Light`, `detail_slot_calculate.cpp`,
-//! `global_calculation_data.cpp`, `global_slots_data.cpp`, `LightThread.cpp`): every slot of
+//! The light of the detail objects: every slot of
 //! `level.details` that holds an object is lit at 15 x 15 points on the ground under it, the
 //! mean quantised into its five colours.
 
@@ -17,19 +16,19 @@ use crate::point::{Falloff, Tracer, light_point};
 use crate::ray::{LightCache, RayModel, RcastForm};
 use crate::{Ctl, Result};
 
-/// `LIGHT_Count`: the points of a slot run from -7 to 7 on each axis.
+/// The points of a slot run from -7 to 7 on each axis.
 pub const LIGHT_COUNT: i32 = 7;
 
-/// `global_claculation_data`: what the detail compiler reads (`xrLoad`), less the slots.
+/// `global_claculation_data`: what the detail compiler reads, less the slots.
 #[derive(Clone, Debug)]
 pub struct DetailScene {
     pub lights: LightSet,
     pub shaders: Shaders,
     pub materials: Vec<BuildMaterial>,
     pub textures: Vec<BuildTexture>,
-    /// `RCAST_Model` of `build.cform`: only front faces stop a ray, the alpha passes linearly.
+    /// The ray model of `build.cform`: only front faces stop a ray, the alpha passes linearly.
     pub model: RayModel,
-    /// `LevelBB`.
+    /// The level's bounding box.
     pub bounds: Aabb,
     pub header: DetailHeader,
 }
@@ -71,7 +70,7 @@ impl DetailScene {
         b
     }
 
-    /// `DetailHeader::GetSlotRect`: the slot's square on the ground, pulled in by `EPS_L`.
+    /// The slot's square on the ground, pulled in by `EPS_L`.
     #[must_use]
     pub fn slot_rect(&self, x: i32, z: i32) -> [f32; 4] {
         let h = DETAIL_SLOT_SIZE * 0.5;
@@ -96,7 +95,7 @@ fn center_half(b: &Aabb) -> (Vec3, Vec3) {
     (Vec3::new(b.min.x + d.x, b.min.y + d.y, b.min.z + d.z), d)
 }
 
-/// `CDB::TestRayTri` with culling: `range` of a front face's hit.
+/// A ray-triangle test with culling: `range` of a front face's hit.
 fn test_ray_tri_cull(c: Vec3, d: Vec3, p: &[Vec3; 3]) -> Option<f32> {
     let e1 = p[1] - p[0];
     let e2 = p[2] - p[0];
@@ -138,7 +137,7 @@ pub fn slot_light(
     if found.is_empty() {
         return None;
     }
-    // the C++ walks them in its tree's order; a fixed order here decides between equal heights
+    // X-Ray's compiler walks them in its tree's order; a fixed order here decides between equal heights
     found.sort_unstable();
 
     let selected = scene.lights.select(sp, sr);
@@ -189,7 +188,7 @@ pub struct DetailStats {
     pub no_ground: usize,
 }
 
-/// `xrCompileDO`'s light: every slot's palette processed and, unless it is empty (or outside
+/// The detail light: every slot's palette processed and, unless it is empty (or outside
 /// `only`, the square `do_light.ltx` asks for: centre x, centre z, radius), lit - the slots of
 /// a row in parallel, every row in parallel.
 pub fn light_details(

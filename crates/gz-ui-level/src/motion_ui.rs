@@ -106,7 +106,7 @@ pub fn press(editor: &Arc<Editor>, key: &str, caption: &str) -> bool {
                 motion_call(&ed, &object, a);
             });
             if let Err(line) = picked {
-                editor.log.plain(line);
+                editor.log.finding(&line);
             }
         }
         ("motion.commands", "Scale Keys..." | "Normalize Keys...") => {

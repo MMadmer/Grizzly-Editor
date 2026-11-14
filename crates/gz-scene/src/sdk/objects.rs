@@ -81,7 +81,7 @@ fn kept_sections(r: &IniReader, sect: &str) -> Vec<(String, Vec<(String, String)
         .collect()
 }
 
-/// `ReadObjectLTX`.
+/// Reads an object from an LTX scene.
 pub fn read_ltx(r: &IniReader, sect: &str, cx: &mut ReadCx<'_>) -> Result<Loaded, SceneError> {
     if !r.section_exist(sect) || !r.line_exist(sect, "clsid") {
         return Err(SceneError::load(format!("{}: object section '{sect}' is invalid", r.file())));
@@ -163,7 +163,7 @@ pub fn read_ltx(r: &IniReader, sect: &str, cx: &mut ReadCx<'_>) -> Result<Loaded
             let version = r.r_u32(sect, "version")?;
             let reference = r.opt_string(sect, "ref_name").unwrap_or_default();
             if version < 0x11 || !r.line_exist(sect, "ingroup_count") || reference.is_empty() {
-                refused("CGroupObject: unsupported file version, or no objects or reference.".into(), cx)
+                refused("group: unsupported file version, or no objects or reference.".into(), cx)
             } else {
                 let n = r.r_u32(sect, "ingroup_count")?;
                 for i in 0..n.min(1 << 16) {
@@ -175,7 +175,7 @@ pub fn read_ltx(r: &IniReader, sect: &str, cx: &mut ReadCx<'_>) -> Result<Loaded
                     members.push(m);
                 }
                 if members.is_empty() {
-                    refused("CGroupObject: the group holds no objects.".into(), cx)
+                    refused("group: the group holds no objects.".into(), cx)
                 } else {
                     ObjData::Group(GroupData { reference: reference.into(), members: Vec::new() })
                 }
@@ -190,7 +190,7 @@ fn unreachable_class() -> ObjData {
     ObjData::Kept(KeptObject::Stream { why: "not an object class".into(), body: Blob::from(&[][..]) })
 }
 
-/// `ReadObjectsStream`: the numbered chunks of a list.
+/// The numbered chunks of a list.
 pub fn read_stream_list(list: &Reader<'_>, cx: &mut ReadCx<'_>) -> Result<Vec<Loaded>, SceneError> {
     let mut out = Vec::new();
     for i in 0u32.. {
@@ -200,7 +200,7 @@ pub fn read_stream_list(list: &Reader<'_>, cx: &mut ReadCx<'_>) -> Result<Vec<Lo
     Ok(out)
 }
 
-/// `ReadObjectStream`.
+/// Reads an object from a stream.
 pub fn read_stream(r: &Reader<'_>, cx: &mut ReadCx<'_>) -> Result<Loaded, SceneError> {
     let class_id = r
         .open_chunk(CHUNK_OBJECT_CLASS)?
@@ -328,7 +328,7 @@ pub fn read_stream(r: &Reader<'_>, cx: &mut ReadCx<'_>) -> Result<Loaded, SceneE
                 _ => String::new(),
             };
             if version < 0x11 || reference.is_empty() {
-                refused("CGroupObject: unsupported file version, or no reference.".into(), cx)
+                refused("group: unsupported file version, or no reference.".into(), cx)
             } else {
                 if let Some(list) = b.open_chunk(1)? {
                     for mut m in read_stream_list(&list.reader(), cx)? {
@@ -340,7 +340,7 @@ pub fn read_stream(r: &Reader<'_>, cx: &mut ReadCx<'_>) -> Result<Loaded, SceneE
                     }
                 }
                 if members.is_empty() {
-                    refused("CGroupObject: the group holds no objects.".into(), cx)
+                    refused("group: the group holds no objects.".into(), cx)
                 } else {
                     ObjData::Group(GroupData { reference: reference.into(), members: Vec::new() })
                 }
@@ -382,11 +382,11 @@ impl SceneObjectData {
         Ok(Self { reference: reference.into(), flags, surfaces })
     }
 
-    /// `LoadStream`; version `0x10` carries the placement in a chunk of its own, which
+    /// The stream reader; version `0x10` carries the placement in a chunk of its own, which
     /// `placement` receives.
     pub fn read_stream(r: &Reader<'_>, placement: &mut Option<[Vec3; 3]>) -> Result<Body<Self>, SceneError> {
         let Some(version) = chunk_u16(r, 0x0900)? else {
-            return Ok(Body::Refused("CSceneObject: no version".into()));
+            return Ok(Body::Refused("scene object: no version".into()));
         };
         if version == 0x10
             && let Some(c) = r.open_chunk(0x0904)?
@@ -395,7 +395,7 @@ impl SceneObjectData {
             *placement = Some([q.r_vec3()?, q.r_vec3()?, q.r_vec3()?]);
         }
         let Some(c) = r.open_chunk(0x0902)? else {
-            return Ok(Body::Refused("CSceneObject: no reference".into()));
+            return Ok(Body::Refused("scene object: no reference".into()));
         };
         let mut q = c.reader();
         if version <= 0x11 {
@@ -431,7 +431,7 @@ impl SceneObjectData {
 impl LightData {
     pub fn read_ltx(r: &IniReader, s: &str) -> Result<Body<Self>, SceneError> {
         if r.r_u32(s, "version")? != LIGHT_VERSION {
-            return Ok(Body::Refused("CLight: Unsupported version.".into()));
+            return Ok(Body::Refused("light: Unsupported version.".into()));
         }
         let flags = r.r_u32(s, "light_flags")?;
         let fuzzy = if flags & light_flags::POINT_FUZZY != 0 {
@@ -469,11 +469,11 @@ impl LightData {
         }))
     }
 
-    /// `LoadStream`; the old `Flight` chunk carries the position, which `position` receives.
+    /// The stream reader; the old `Flight` chunk carries the position, which `position` receives.
     pub fn read_stream(r: &Reader<'_>, position: &mut Option<Vec3>) -> Result<Body<Self>, SceneError> {
         let version = chunk_u16(r, 0xB411)?.unwrap_or(0);
         if version != 0x10 && version != LIGHT_VERSION as u16 {
-            return Ok(Body::Refused("CLight: Unsupported version.".into()));
+            return Ok(Body::Refused("light: Unsupported version.".into()));
         }
         let mut d = Self::default();
         if let Some(c) = r.open_chunk(0xB442)? {
@@ -487,7 +487,7 @@ impl LightData {
             d.virtual_size = q.r_f32()?;
         } else {
             let Some(c) = r.open_chunk(0xB435)? else {
-                return Ok(Body::Refused("CLight: no parameters".into()));
+                return Ok(Body::Refused("light: no parameters".into()));
             };
             let mut q = c.reader();
             d.kind = q.r_u32()?;
@@ -511,7 +511,7 @@ impl LightData {
             d.lcontrol = c.reader().r_u32()?;
         }
         if d.kind == LT_DIRECT {
-            return Ok(Body::Refused("CLight: Can't load sun.".into()));
+            return Ok(Body::Refused("light: Can't load sun.".into()));
         }
         if let Some(c) = r.open_chunk(0xB438)? {
             d.anim_ref = c.reader().r_stringz()?.into();
@@ -526,7 +526,7 @@ impl LightData {
             let box_dim = q.r_vec3()?;
             let n = usize::try_from(q.r_i16()?.max(0)).unwrap_or(0);
             if n * 12 > q.len() {
-                return Err(SceneError::load("CLight: the fuzzy points are cut short"));
+                return Err(SceneError::load("light: the fuzzy points are cut short"));
             }
             let mut points = Vec::with_capacity(n);
             for _ in 0..n {
@@ -544,7 +544,7 @@ impl LightData {
 impl GlowData {
     pub fn read_ltx(r: &IniReader, s: &str) -> Result<Body<Self>, SceneError> {
         if r.r_u32(s, "version")? != GLOW_VERSION {
-            return Ok(Body::Refused("CGlow: Unsupported version.".into()));
+            return Ok(Body::Refused("glow: Unsupported version.".into()));
         }
         Ok(Body::Read(Self {
             shader: r.r_string(s, "shader_name")?.into(),
@@ -557,14 +557,14 @@ impl GlowData {
     pub fn read_stream(r: &Reader<'_>, position: &mut Option<Vec3>) -> Result<Body<Self>, SceneError> {
         let version = chunk_u16(r, 0xC411)?.unwrap_or(0);
         if version != 0x11 && version != GLOW_VERSION as u16 {
-            return Ok(Body::Refused("CGlow: Unsupported version.".into()));
+            return Ok(Body::Refused("glow: Unsupported version.".into()));
         }
         let mut d = Self::default();
         if let Some(c) = r.open_chunk(0xC414)? {
             d.shader = c.reader().r_stringz()?.into();
         }
         let (Some(t), Some(p)) = (r.open_chunk(0xC415)?, r.open_chunk(0xC413)?) else {
-            return Ok(Body::Refused("CGlow: the texture or the parameters are missing".into()));
+            return Ok(Body::Refused("glow: the texture or the parameters are missing".into()));
         };
         d.texture = t.reader().r_stringz()?.into();
         let mut q = p.reader();
@@ -616,7 +616,7 @@ impl SoundSrcData {
             _ => None,
         };
         let Some((c, ai)) = params else {
-            return Ok(Body::Refused("ESoundSource: Can't load Sound Source. Unsupported version.".into()));
+            return Ok(Body::Refused("sound source: unsupported version.".into()));
         };
         let mut q = c.reader();
         d.position = q.r_vec3()?;
@@ -672,7 +672,7 @@ impl ParticlesData {
 }
 
 impl ShapeData {
-    /// The `shape_*` keys (`CEditShape::LoadLTX` after the common part).
+    /// The `shape_*` keys (after the common part).
     pub fn read_ltx(r: &IniReader, s: &str) -> Result<Self, SceneError> {
         let version = r.r_u32(s, "version")?;
         let count = r.r_u32(s, "shapes_count")?;
@@ -698,15 +698,15 @@ impl ShapeData {
 
     pub fn read_stream(r: &Reader<'_>) -> Result<Body<Self>, SceneError> {
         if r.open_chunk(0)?.is_none() {
-            return Ok(Body::Refused("CEditShape: no version".into()));
+            return Ok(Body::Refused("shape: no version".into()));
         }
         let Some(c) = r.open_chunk(1)? else {
-            return Ok(Body::Refused("CEditShape: no shapes".into()));
+            return Ok(Body::Refused("shape: no shapes".into()));
         };
         let mut q = c.reader();
         let n = q.r_u32()? as usize;
         if n.saturating_mul(68) > q.len() {
-            return Err(SceneError::load("CEditShape: the shape list is cut short"));
+            return Err(SceneError::load("shape: the shape list is cut short"));
         }
         let mut shapes = Vec::with_capacity(n);
         for _ in 0..n {
@@ -731,8 +731,8 @@ impl SoundEnvData {
         if r.r_u32(s, "version")? != SOUND_ENV_VERSION {
             return Ok(Body::Refused("ESoundSource: Unsupported version.".into()));
         }
-        // oracle: the C++ LTX reader never reads env_inner / env_outer back, so an LTX scene
-        // loses them on load; kept that way so both editors answer the same.
+        // the LTX reader never reads env_inner / env_outer back, so an LTX scene
+        // loses them on load; kept that way
         Ok(Body::Read(Self {
             shape: ShapeData::read_ltx(r, s)?,
             inner: SmolStr::default(),
@@ -795,7 +795,7 @@ impl FogData {
 impl WayData {
     pub fn read_ltx(r: &IniReader, s: &str) -> Result<Body<Self>, SceneError> {
         if r.r_u32(s, "version")? != WAYOBJECT_VERSION {
-            return Ok(Body::Refused("CWayPoint: Unsupported version.".into()));
+            return Ok(Body::Refused("way point: Unsupported version.".into()));
         }
         let n = r.r_u32(s, "wp_count")?;
         let mut w = Self { kind: 0, points: Vec::new() };
@@ -808,7 +808,7 @@ impl WayData {
                 links: Vec::new(),
             });
         }
-        // oracle: the links come back in the file's key order (`link_wp_0_10` before
+        // the links come back in the file's key order (`link_wp_0_10` before
         // `link_wp_0_2`), which is the order they are created in again
         for (key, _) in r.lines(s) {
             let Some(rest) = key.strip_prefix("link_wp_") else { continue };
@@ -829,13 +829,13 @@ impl WayData {
     pub fn read_stream(r: &Reader<'_>) -> Result<Body<Self>, SceneError> {
         let version = match r.open_chunk(1)? {
             Some(c) => c.reader().r_u16()?,
-            None => return Ok(Body::Refused("CWayPoint: no version".into())),
+            None => return Ok(Body::Refused("way point: no version".into())),
         };
         if u32::from(version) != WAYOBJECT_VERSION {
-            return Ok(Body::Refused("CWayPoint: Unsupported version.".into()));
+            return Ok(Body::Refused("way point: Unsupported version.".into()));
         }
         let (Some(pc), Some(lc), Some(tc)) = (r.open_chunk(2)?, r.open_chunk(3)?, r.open_chunk(4)?) else {
-            return Ok(Body::Refused("CWayPoint: a chunk is missing".into()));
+            return Ok(Body::Refused("way point: a chunk is missing".into()));
         };
         let mut q = pc.reader();
         let n = q.r_u16()? as usize;
@@ -854,7 +854,7 @@ impl WayData {
             let to = q.r_u16()? as usize;
             let prob = q.r_f32()?;
             if from >= w.points.len() || to >= w.points.len() {
-                return Err(SceneError::load("CWayPoint: a link names a point that does not exist"));
+                return Err(SceneError::load("way point: a link names a point that does not exist"));
             }
             w.create_link(from, to, prob);
         }
@@ -867,7 +867,7 @@ impl SectorData {
     pub fn read_ltx(r: &IniReader, s: &str) -> Result<Body<Self>, SceneError> {
         let version = r.r_u32(s, "version")?;
         if version < 0x11 {
-            return Ok(Body::Refused("CSector: Unsupported version.".into()));
+            return Ok(Body::Refused("sector: Unsupported version.".into()));
         }
         let mut d = Self {
             color: fcolor_from(r.r_color(s, "sector_color")?),
@@ -893,10 +893,10 @@ impl SectorData {
             None => 0,
         };
         if u32::from(version) != SECTOR_VERSION {
-            return Ok(Body::Refused("CSector: Unsupported version.".into()));
+            return Ok(Body::Refused("sector: Unsupported version.".into()));
         }
         let (Some(cc), Some(pc)) = (r.open_chunk(0xF020)?, r.open_chunk(0xF025)?) else {
-            return Ok(Body::Refused("CSector: a chunk is missing".into()));
+            return Ok(Body::Refused("sector: a chunk is missing".into()));
         };
         let mut q = cc.reader();
         let mut d = Self { color: [q.r_f32()?, q.r_f32()?, q.r_f32()?, q.r_f32()?], ..Self::default() };
@@ -919,7 +919,7 @@ impl SectorData {
 impl PortalData {
     pub fn read_ltx(r: &IniReader, s: &str) -> Result<Body<Self>, SceneError> {
         if r.r_u32(s, "version")? != PORTAL_VERSION {
-            return Ok(Body::Refused("CPortal: Unsupported version.".into()));
+            return Ok(Body::Refused("portal: Unsupported version.".into()));
         }
         let mut d = Self {
             front: r.r_string(s, "sector_front")?.into(),
@@ -939,7 +939,7 @@ impl PortalData {
             None => 0,
         };
         if u32::from(version) != PORTAL_VERSION {
-            return Ok(Body::Refused("CPortal: Unsupported version.".into()));
+            return Ok(Body::Refused("portal: Unsupported version.".into()));
         }
         let mut d = Self::default();
         if let Some(c) = r.open_chunk(0xFA30)? {
@@ -949,12 +949,12 @@ impl PortalData {
             d.back = c.reader().r_stringz()?.into();
         }
         let Some(c) = r.open_chunk(0xFA50)? else {
-            return Ok(Body::Refused("CPortal: no vertices".into()));
+            return Ok(Body::Refused("portal: no vertices".into()));
         };
         let mut q = c.reader();
         let n = q.r_u16()? as usize;
         if n * 12 > q.len() {
-            return Err(SceneError::load("CPortal: the vertices are cut short"));
+            return Err(SceneError::load("portal: the vertices are cut short"));
         }
         for _ in 0..n {
             d.vertices.push(q.r_vec3()?);
@@ -964,14 +964,14 @@ impl PortalData {
 }
 
 impl SpawnData {
-    /// The `_spawndata` section (`SSpawnData::LoadLTX`).
+    /// The `_spawndata` section.
     pub fn read_entity_ltx(
         r: &IniReader,
         s: &str,
         settings: Option<&dyn Settings>,
     ) -> Result<(SpawnEntity, u8), SceneError> {
         if !r.line_exist(s, "name") {
-            return Err(SceneError::load("SPAWNPOINT: Can't load Spawn Data."));
+            return Err(SceneError::load("spawn point: the spawn data cannot be loaded."));
         }
         let section: SmolStr = r.r_string(s, "name")?.into();
         let fl = r.opt_u32(s, "fl").unwrap_or(0) as u8;
@@ -989,7 +989,7 @@ impl SpawnData {
         Ok((entity, fl))
     }
 
-    /// The point's own keys (`CSpawnPoint::LoadLTX` without the common part and the attached
+    /// The point's own keys (without the common part and the attached
     /// object).
     pub fn read_ltx(
         r: &IniReader,
@@ -997,11 +997,11 @@ impl SpawnData {
         settings: Option<&dyn Settings>,
     ) -> Result<Body<Self>, SceneError> {
         if !r.line_exist(s, "version") || r.r_u32(s, "version")? < 0x14 {
-            return Ok(Body::Refused("SPAWNPOINT: Unsupported version.".into()));
+            return Ok(Body::Refused("spawn point: Unsupported version.".into()));
         }
         let version = r.r_u32(s, "version")?;
         let Some(kind) = PointKind::from_u32(r.r_u32(s, "type")?) else {
-            return Ok(Body::Refused("SPAWNPOINT: Unsupported spawn version.".into()));
+            return Ok(Body::Refused("spawn point: Unsupported spawn version.".into()));
         };
         let mut d = Self::of_kind(kind);
         match kind {
@@ -1064,17 +1064,17 @@ impl SpawnData {
         Ok(Body::Read(d))
     }
 
-    /// `CSpawnPoint::LoadStream` without the common part and the attached object.
+    /// The point's stream form, without the common part and the attached object.
     pub fn read_stream(r: &Reader<'_>, settings: Option<&dyn Settings>) -> Result<Body<Self>, SceneError> {
         let version = match r.find_chunk(0xE411) {
             Some((b, false)) if b.len() == 2 => u16::from_le_bytes([b[0], b[1]]),
-            _ => return Ok(Body::Refused("SPAWNPOINT: no version".into())),
+            _ => return Ok(Body::Refused("spawn point: no version".into())),
         };
         if version < 0x14 {
-            return Ok(Body::Refused("SPAWNPOINT: Unsupported version.".into()));
+            return Ok(Body::Refused("spawn point: Unsupported version.".into()));
         }
         if let Some(c) = r.open_chunk(0xE419)? {
-            let bad = || SceneError::load("SPAWNPOINT: Can't load Spawn Data.");
+            let bad = || SceneError::load("spawn point: the spawn data cannot be loaded.");
             let refb = c.bytes();
             if refb.is_empty() || refb.len() > 64 || refb.last() != Some(&0) {
                 return Err(bad());
@@ -1120,16 +1120,16 @@ impl SpawnData {
             Some((b, false)) if b.len() == 4 => {
                 PointKind::from_u32(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
             }
-            _ => return Ok(Body::Refused("SPAWNPOINT: no type".into())),
+            _ => return Ok(Body::Refused("spawn point: no type".into())),
         };
         let Some(kind) = kind else {
-            return Ok(Body::Refused("SPAWNPOINT: Unsupported spawn version.".into()));
+            return Ok(Body::Refused("spawn point: Unsupported spawn version.".into()));
         };
         let mut d = Self::of_kind(kind);
         match kind {
             PointKind::RPoint => {
                 let c =
-                    r.open_chunk(0xE413)?.ok_or_else(|| SceneError::load("SPAWNPOINT: no respawn data"))?;
+                    r.open_chunk(0xE413)?.ok_or_else(|| SceneError::load("spawn point: no respawn data"))?;
                 let mut q = c.reader();
                 d.rpoint.team = q.r_u8()?;
                 d.rpoint.kind = q.r_u8()?;
@@ -1141,9 +1141,9 @@ impl SpawnData {
             PointKind::EnvMod => {
                 let c = r
                     .open_chunk(0xE422)?
-                    .ok_or_else(|| SceneError::load("SPAWNPOINT: no environment data"))?;
+                    .ok_or_else(|| SceneError::load("spawn point: no environment data"))?;
                 if c.bytes().len() != 28 {
-                    return Err(SceneError::load("SPAWNPOINT: bad environment data"));
+                    return Err(SceneError::load("spawn point: bad environment data"));
                 }
                 let mut q = c.reader();
                 let e = &mut d.env;
@@ -1162,7 +1162,7 @@ impl SpawnData {
                 }
             }
             PointKind::PlayerStart => {}
-            PointKind::Spawn => return Ok(Body::Refused("SPAWNPOINT: a spawn without its entity".into())),
+            PointKind::Spawn => return Ok(Body::Refused("spawn point: a spawn without its entity".into())),
         }
         Ok(Body::Read(d))
     }

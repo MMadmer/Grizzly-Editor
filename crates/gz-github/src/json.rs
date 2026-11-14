@@ -1,4 +1,4 @@
-//! Reading GitHub's and VirusTotal's answers the forgiving way the C++ `SJson` did: a missing key
+//! Reading GitHub's and VirusTotal's answers the forgiving way: a missing key
 //! or one of another type reads as empty, `0` or `false`.
 
 use serde_json::Value;

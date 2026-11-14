@@ -397,7 +397,7 @@ impl EditorSettings {
         s.dirty = true;
     }
 
-    /// `[editor_prefs] tools_settings`: the tool switches (`CToolCustom::m_Settings`, `ETFlags`),
+    /// `[editor_prefs] tools_settings`: the tool switches,
     /// `None` while the file holds none.
     #[must_use]
     pub fn tools_settings(&self) -> Option<u32> {
@@ -416,7 +416,7 @@ impl EditorSettings {
     }
 
     /// A switch of the View menu kept with the render settings: `mute_sounds`
-    /// (`rsMuteSounds`), `real_time` (`rsRenderRealTime`).
+    /// , `real_time`.
     #[must_use]
     pub fn render_flag(&self, key: &str) -> bool {
         self.inner.lock().doc.get("render", key).is_some_and(gz_ltx::doc::parse_bool)

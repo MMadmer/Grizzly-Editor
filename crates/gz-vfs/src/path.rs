@@ -64,7 +64,7 @@ pub fn is_tooling_entry(name: &str) -> bool {
 }
 
 /// `Ok` when `game_root` looks like an X-Ray game: the folder, `fsgame.ltx`, and `database\` or
-/// `gamedata\`. The reason otherwise, worded as `EditorGameContent::LooksLikeGame` words it.
+/// `gamedata\`. The reason otherwise is a sentence of the game check.
 pub fn looks_like_game(game_root: &str) -> Result<(), &'static str> {
     if game_root.is_empty() {
         return Err("no folder selected");

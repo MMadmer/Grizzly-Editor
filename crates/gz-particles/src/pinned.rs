@@ -1,5 +1,5 @@
 //! One pinned step of every action the module tests of `actions.rs` leave out, the numbers
-//! worked out from the C++ arithmetic.
+//! worked out from the engine's arithmetic.
 
 use glam::Vec3;
 use gz_fmt_xr::{Action as Stored, ActionKind, ActionParams, Domain as FDomain};

@@ -10,8 +10,8 @@
 //! mac     = <base64url of the tag>
 //! ```
 //!
-//! or, unprotected, `public` and `private` (the plain scalar) only. The messages are the C++
-//! `EditorCatalog` ones.
+//! or, unprotected, `public` and `private` (the plain scalar) only. The messages are the catalog's
+//! own.
 
 use zeroize::{Zeroize, Zeroizing};
 
@@ -57,10 +57,10 @@ pub fn field<'a>(text: &'a str, name: &str) -> &'a str {
     ""
 }
 
-/// Reads the text of a key file (`ParseKeyFile`).
+/// Reads the text of a key file.
 pub fn parse(text: &str) -> Result<KeyFile, String> {
     if !text.starts_with("xms-key 1") {
-        // oracle: the article is the C++ text's
+        // the article is the catalog's text's
         return Err("not an Grizzly key file".to_owned());
     }
     let public_text = field(text, "public").to_owned();
@@ -123,7 +123,7 @@ impl KeyFile {
         PublicPoint::parse(&self.public_text)
     }
 
-    /// Opens the private key (`OpenKeyFile`): the tag is checked before anything is decrypted,
+    /// Opens the private key: the tag is checked before anything is decrypted,
     /// and the scalar must give the public point the file names.
     pub fn open(&self, password: &str) -> Result<EcKey, String> {
         let point = self.public().ok_or_else(|| "the key file's public key is damaged".to_owned())?;
@@ -147,7 +147,7 @@ impl KeyFile {
     }
 }
 
-/// The text of a new key file (`KeyFileText`); `salt` and `nonce` are 16 random bytes each,
+/// The text of a new key file; `salt` and `nonce` are 16 random bytes each,
 /// unused without a password. A new file always takes [`KDF_ROUNDS`]; a reader takes whatever
 /// the file states.
 #[must_use]

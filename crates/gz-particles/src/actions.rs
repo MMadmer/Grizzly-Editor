@@ -1,5 +1,5 @@
-//! Every action of `particle_actions_collection.cpp`, run over an effect's particles. An action
-//! keeps its values as loaded (the "local" ones) and the copies `Transform` carries into the
+//! Every action of the particle library, run over an effect's particles. An action
+//! keeps its values as loaded (the "local" ones) and the copies the transform carries into the
 //! world; `execute` reads the world copies.
 
 use glam::{Mat4, Vec3};
@@ -16,9 +16,9 @@ const P_MAXFLOAT: f32 = 1.0e16;
 pub(crate) const EPS: f32 = 0.000_010_0;
 pub(crate) const EPS_S: f32 = 0.000_000_1;
 
-/// `ParticleAction::ALLOW_ROTATE`.
+/// The rotate-allowed flag.
 pub(crate) const ALLOW_ROTATE: u32 = 1 << 1;
-/// `PASource` flags.
+/// The source flags.
 const SOURCE_SINGLE_SIZE: u32 = 1 << 29;
 const SOURCE_SILENT: u32 = 1 << 30;
 
@@ -215,7 +215,7 @@ pub(crate) struct Action {
 }
 
 impl Action {
-    /// `CreateAction` + `Load`: the local copies and the world copies start the same.
+    /// Creates an action and loads it: the local copies and the world copies start the same.
     pub(crate) fn new(a: &Stored) -> Self {
         use ActionParams as P;
         let op = match (&a.kind, &a.params) {
@@ -394,7 +394,7 @@ impl Action {
         Self { flags: a.flags, op }
     }
 
-    /// `PlayEffect`: sources speak again, explosions and turbulence start over.
+    /// Sources speak again, explosions and turbulence start over.
     pub(crate) fn on_play(&mut self) {
         match &mut self.op {
             Op::Source(_) => self.flags &= !SOURCE_SILENT,
@@ -403,14 +403,14 @@ impl Action {
         }
     }
 
-    /// `StopEffect`: sources fall silent.
+    /// Sources fall silent.
     pub(crate) fn on_stop(&mut self) {
         if matches!(self.op, Op::Source(_)) {
             self.flags |= SOURCE_SILENT;
         }
     }
 
-    /// `CParticleManager::Transform`: the world copies from the local ones; a source's parent
+    /// The world copies from the local ones; a source's parent
     /// velocity from the emitter's.
     pub(crate) fn transform(&mut self, full: &Mat4, vel: Vec3) {
         let m = if self.flags & ALLOW_ROTATE != 0 {
@@ -453,7 +453,7 @@ impl Action {
         }
     }
 
-    /// `Execute`: one step of `dt` seconds. `tm_max` is what `KillOld` says the oldest age is.
+    /// One step of `dt` seconds. `tm_max` is what `KillOld` says the oldest age is.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn execute(&mut self, e: &mut Store, dt: f32, tm_max: &mut f32, cx: &mut Ctx<'_>) {
         let flags = self.flags;
@@ -703,7 +703,7 @@ impl Action {
                 let k = *scale * dt;
                 let r = rot.abs();
                 for m in &mut e.list {
-                    // oracle: the engine scales all three axes by the x axis's sign
+                    // the engine scales all three axes by the x axis's sign
                     let sign = if m.rot.x >= 0.0 { k } else { -k };
                     m.rot += (r - m.rot.abs()) * sign;
                 }
@@ -758,7 +758,7 @@ impl Action {
     }
 }
 
-/// `Fcolor::set(u32)`: r, g, b, a over 0..1.
+/// Sets a colour from a `u32`: r, g, b, a over 0..1.
 fn unpack(c: u32) -> [f32; 4] {
     let f = 1.0f32 / 255.0;
     [
@@ -831,7 +831,7 @@ fn avoid(e: &mut Store, d: &Domain, look_ahead: f32, magnitude: f32, epsilon: f3
                     let vofs = vn * vn.dot(offset) - offset;
                     let foffset = (u + v) - offset;
                     let fofs = un * un.dot(foffset) - foffset;
-                    // oracle: the fourth edge repeats the third one
+                    // the fourth edge repeats the third one
                     let gofs = un * un.dot(foffset) - foffset;
                     let (ud, vd, fd, gd) = (
                         uofs.length_squared(),
@@ -1005,7 +1005,7 @@ fn bounce(e: &mut Store, d: &Domain, omf: f32, res: f32, cutoff: f32, dt: f32, r
     }
 }
 
-/// `PASource::Execute`: new particles at the rate, the fraction dithered in time.
+/// New particles at the rate, the fraction dithered in time.
 fn source(s: &SourceOp, flags: u32, e: &mut Store, dt: f32, rng: &mut Rngs) {
     if flags & SOURCE_SILENT != 0 {
         return;
@@ -1018,8 +1018,8 @@ fn source(s: &SourceOp, flags: u32, e: &mut Store, dt: f32, rng: &mut Rngs) {
     if count + i64::from(rate) > i64::from(e.max) {
         rate = (i64::from(e.max) - count) as i32;
     }
-    // with `flVertexB_tracks` (bit 31) posB is the position; without it the engine passes an
-    // uninitialised posB - oracle: the position stands in (Move overwrites it before anything
+    // with the vertex-B-tracks flag (bit 31) posB is the position; without it the engine passes an
+    // uninitialised posB - the position stands in (Move overwrites it before anything
     // reads it)
     for _ in 0..rate.max(0) {
         let pos = s.position.generate(rng);

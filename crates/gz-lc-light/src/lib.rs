@@ -1,38 +1,38 @@
-//! The level compiler's data model and its light: what `XrLCLight` and `xrDO_Light` are.
+//! The level compiler's data model and its light, and the detail objects' light.
 //!
-//! Plain owned data with ids in place of pointers and no global: the C++ `lc_global_data()` is
-//! an [`LcGlobalData`] the caller holds, `gl_data` of the detail compiler a [`DetailScene`].
+//! Plain owned data with ids in place of pointers and no global: the global data of the level
+//! compiler is an [`LcGlobalData`] the caller holds, the detail compiler's a [`DetailScene`].
 //! Every long loop runs on the caller's rayon pool (the crate makes no pool and no thread),
 //! takes a [`Ctl`] to stop and to report, and gives the same result on any number of threads:
 //! a texel's samples come from the fixed jitter tables, a random number from the sample's own
 //! position, results are gathered in input order. No module touches a file.
 //!
 //! **The model**
-//! - [`Mesh`] / [`Vertex`] / [`Face`] / [`VertId`] / [`FaceId`] - `Tvertex`, `Tface`, `g_vertices`,
-//!   `g_faces`: creation, adjacency, `VReplace`, `CalcNormal`, `Verify`, `isolate_vertices`,
-//!   [`Mesh::calc_normals`] (`calculate_normals`); [`MeshErrors`] (`err_save`).
+//! - [`Mesh`] / [`Vertex`] / [`Face`] / [`VertId`] / [`FaceId`] - the vertex and face lists:
+//!   creation, adjacency, normals, checks, vertex isolation;
+//!   [`Mesh::calc_normals`]; [`MeshErrors`].
 //! - [`Shaders`], [`BuildTexture`], [`prepare_texture`], [`post_process_materials`], [`shader_of`].
-//! - [`RLight`] / [`LightSet`] - `R_Light`, `base_lighting`: [`LightSet::from_project`],
-//!   [`LightSet::select`], `build.lights`.
+//! - [`RLight`] / [`LightSet`] - the lights and their three sets:
+//!   [`LightSet::from_project`],
 //! - [`ColorC`] / [`BaseColor`] - `base_color_c`, `base_color`.
 //! - [`LmLayer`], [`apply_borders`], [`blit`], [`blit_r`] - `lm_layer` and its blits.
-//! - [`Deflector`] / [`Deflectors`] - `CDeflector`, `g_deflectors`: `OA_*`, `RemapUV`, `Light`.
-//! - [`Lightmap`] / [`LightmapPage`] / [`PageMask`] - `CLightmap`, the page surface.
-//! - [`MuModel`] / [`MuReference`] - `xrMU_Model`, `xrMU_Reference`.
-//! - [`LcGlobalData`] - `xrLC_GlobalData` and the calls `XrLC` makes into it.
+//! - [`Deflector`] / [`Deflectors`] - the deflectors: their projection, the UV remap and the light.
+//! - [`Lightmap`] / [`LightmapPage`] / [`PageMask`] - the lightmap and the page surface.
+//! - [`MuModel`] / [`MuReference`] - the multiple-usage models and their references.
+//! - [`LcGlobalData`] - the global data and the calls the level compiler makes into it.
 //!
 //! **The ray model**
-//! - [`RayModel`] / [`RayFace`] / [`LightCache`] - `RCAST_Model` and `rayTrace`; [`RcastForm`] -
-//!   `build.cform`; [`RapidCollector`] - `BuildRapid`'s collector.
+//! - [`RayModel`] / [`RayFace`] / [`LightCache`] - the ray model and the ray trace; [`RcastForm`] -
+//!   `build.cform`; [`RapidCollector`] - the collector of the collision soup.
 //!
 //! **The light**
-//! - [`light_point`] - `LightPoint`.
+//! - [`light_point`] - the light a point gets.
 //! - [`Deflector::light`], [`Deflectors::light_all`] - the lightmaps of the deflectors.
-//! - [`merge_lightmaps`] - `xrPhase_MergeLM`: the deflectors into pages.
-//! - [`light_vertices`] - `LightVertex`.
-//! - [`implicit_lighting`] - `ImplicitLighting`.
+//! - [`merge_lightmaps`] - the deflectors into pages.
+//! - [`light_vertices`] - the light of the vertices.
+//! - [`implicit_lighting`] - the implicit light.
 //! - [`light_mu`] - the MU models and references.
-//! - [`light_details`] / [`slot_light`] - `xrCompileDO`.
+//! - [`light_details`] / [`slot_light`] - the detail objects' light.
 
 mod color;
 pub mod crt;
@@ -122,7 +122,7 @@ pub type Result<T, E = LcError> = std::result::Result<T, E>;
 /// What a long loop reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Report<'a> {
-    /// The stage it is in (`Phase` / `Status` of the C++).
+    /// The stage it is in.
     Stage(&'a str),
     /// Items done of a total (`Progress`); may come from any worker, in any order.
     Progress { done: usize, total: usize },

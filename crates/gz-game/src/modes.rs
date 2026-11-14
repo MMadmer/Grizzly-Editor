@@ -1,4 +1,4 @@
-//! The game modes a module can target, read out of the linked game (`EditorGameModes.cpp`).
+//! The game modes a module can target, read out of the linked game.
 //!
 //! Dead Air has no config listing its modes: a mode is a checkbox the new-game script creates
 //! (`scripts\ui_mm_faction_select.script`), laid out in `configs\ui\ui_mm_faction_select_16.xml`
@@ -6,7 +6,7 @@
 //! `<dar2_mode>` holds campaigns, `<dar2_option>` rule toggles. A global mod replaces both
 //! files, so the list is scanned, never hardcoded. Modules add theirs with `[provides_mode]`.
 //!
-//! The reading is the C++ editor's text scan, byte for byte, quirks included.
+//! The reading is a text scan, byte for byte, quirks included.
 
 use gz_base::text::cp1251_to_utf8;
 use gz_vfs::{GameFiles, ModuleRoot};
@@ -84,7 +84,7 @@ fn atoi(s: &[u8]) -> i32 {
     i32::try_from(v).unwrap_or(if neg { i32::MIN } else { i32::MAX })
 }
 
-/// `AttrInt`: the number of `attr="` inside the tag that starts at `tag_at`. The name has to
+/// The number of `attr="` inside the tag that starts at `tag_at`. The name has to
 /// START where it is found - `x=` also lives inside `max=`.
 fn attr_int(text: &[u8], tag_at: usize, attr: &str, def: i32) -> i32 {
     let Some(close) = find_byte(text, b'>', tag_at) else { return def };
@@ -242,7 +242,7 @@ fn resolve_in(text: &[u8], ids: &[Vec<u8>], captions: &mut [String]) {
     }
 }
 
-/// `CaptionFromManifest`: valid UTF-8 as it is, anything else read as cp1251.
+/// Valid UTF-8 as it is, anything else read as cp1251.
 fn manifest_text(raw: &[u8]) -> String {
     match std::str::from_utf8(raw) {
         Ok(s) => s.to_owned(),
@@ -274,7 +274,7 @@ fn trim_start<'a>(mut s: &'a [u8], set: &[u8]) -> &'a [u8] {
 /// it. The scan stops at the next line holding a `[`.
 #[must_use]
 pub fn provides_mode(manifest: &[u8], module: &str) -> Vec<GameMode> {
-    // the C++ read the file as a C string
+    // the file is read as a C string
     let text = manifest.split(|&b| b == 0).next().unwrap_or(&[]);
     let mut out = Vec::new();
     let Some(sect) = find(text, b"[provides_mode]", 0) else { return out };
@@ -306,7 +306,7 @@ pub fn provides_mode(manifest: &[u8], module: &str) -> Vec<GameMode> {
 }
 
 /// Appends the modules' modes, `modules\` first: one module in both roots, or two modules
-/// naming one id, declare it once (`ScanInstalledModules`).
+/// naming one id, declare it once.
 pub fn add_module_modes(out: &mut Vec<GameMode>, roots: [Vec<GameMode>; 2]) {
     let was = out.len();
     for found in roots {
@@ -325,7 +325,7 @@ pub fn module_modes(files: &GameFiles) -> [Vec<GameMode>; 2] {
     ModuleRoot::ALL.map(|root| {
         let mut found = Vec::new();
         for m in files.modules().iter().filter(|m| m.root == root) {
-            // the C++ opened the manifest from the disk and read files up to 1 MB
+            // the manifest is read from the disk, files up to 1 MB
             let Some(size) = m.get("mod.ltx").map(|f| f.size) else { continue };
             if size == 0 || size >= 1 << 20 {
                 continue;
@@ -370,7 +370,7 @@ fn resolve_captions(files: &GameFiles, boxes: &[Checkbox]) -> Vec<String> {
     captions
 }
 
-/// `EditorGameModes::Scan` over a mounted game. Blocking; parallel reads on the caller's pool.
+/// Scans the modes over a mounted game. Blocking; parallel reads on the caller's pool.
 #[must_use]
 pub fn scan(files: &GameFiles) -> ModeScan {
     // the 16:9 layout is what the game uses; the 4:3 one is a fallback

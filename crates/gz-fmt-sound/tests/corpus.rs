@@ -3,7 +3,7 @@
 //!
 //! Two exceptions are counted, not failed. A first comment that is no parameter block (an
 //! encoder's `ENCODER=` tag, a block cut short) is refused by the reader, as the game refuses it
-//! (`CSoundRender_Source::LoadWave` logs "Invalid ogg-comment version" and plays with defaults).
+//! (the game's loader logs "Invalid ogg-comment version" and plays with defaults).
 //! A block with bytes after its 24 is written back as the 24 the game reads; the file must then
 //! keep its parameters and write back to itself.
 

@@ -1,7 +1,6 @@
-//! The geometry phases of `CBuild::Run` before the light: `PreOptimize` and `IsolateVertices`
-//! (`xrPreOptimize.cpp`), `CorrectTJunctions` (`xrT_Junction.cpp`), `xrPhase_AdaptiveHT`
-//! (`xrPhase_AdaptiveHT.cpp`, the qslim variant of which is commented out in the C++),
-//! `xrPhase_TangentBasis` (`xrPhase_TangentBasis.cpp`).
+//! The geometry phases before the light: the pre-optimisation and the vertex isolation,
+//! the T-junction correction, the adaptive hierarchical tesselation (its qslim variant is
+//! commented out in X-Ray's compiler) and the tangent basis.
 
 use glam::{Vec2, Vec3};
 use gz_lc_light::math::{EPS, EPS_L, distance, distance_sqr, i_floor, lerp};
@@ -14,7 +13,7 @@ use rayon::prelude::*;
 use crate::mender::{MVertex, mend};
 use crate::{Error, Log, Result};
 
-/// `Fvector2::averageA`.
+/// The average of two 2D vectors.
 fn average(a: Vec2, b: Vec2) -> Vec2 {
     Vec2::new((a.x + b.x) * 0.5, (a.y + b.y) * 0.5)
 }
@@ -40,7 +39,7 @@ pub fn sort_vertices_by_addr(g: &mut LcGlobalData) {
     *g.mesh.vertices_mut() = list;
 }
 
-/// `CBuild::PreOptimize`: vertices within the weld distance merged through an overlapping hash
+/// Vertices within the weld distance merged through an overlapping hash
 /// grid, degenerate faces dropped, every other face verified, unused vertices dropped.
 pub fn pre_optimize(
     g: &mut LcGlobalData,
@@ -160,7 +159,7 @@ pub fn pre_optimize(
     Ok(())
 }
 
-/// `SqrDistance2Segment`.
+/// The squared distance from a point to a segment.
 fn sqr_distance_to_segment(p: Vec3, a: Vec3, b: Vec3) -> f32 {
     let c = p - a;
     let v = b - a;
@@ -177,14 +176,14 @@ fn sqr_distance_to_segment(p: Vec3, a: Vec3, b: Vec3) -> f32 {
     distance_sqr(p, r)
 }
 
-/// `CBuild::CorrectTJunctions`: the junctions and the long edges are counted, nothing changes.
+/// The junctions and the long edges are counted, nothing changes.
 /// A face's T-junction candidates (edge ends, the vertex on it) and its long edges.
 type JunctionsAndEdges = (Vec<(VertId, VertId, VertId)>, Vec<(VertId, VertId)>);
 
 pub fn correct_tjunctions(g: &LcGlobalData, log: &mut Log) {
     let mesh = &g.mesh;
     let pos = |v: VertId| mesh.vertex(v).map_or(Vec3::ZERO, |x| x.p);
-    // per face: (junction candidates, long edges), merged in face order as the C++ meets them
+    // per face: (junction candidates, long edges), merged in face order as X-Ray's compiler meets them
     let per_face: Vec<JunctionsAndEdges> = mesh
         .faces()
         .par_iter()
@@ -251,7 +250,7 @@ fn set_soft(flags: &mut u32, e: u16, soft: bool) {
     }
 }
 
-/// `CBuild::u_Tesselate(callback_edge_longest, 0, 0)`: every edge longer than
+/// Tesselates: every edge longer than
 /// [`AHT_MAX_EDGE`] split in the middle, each face sharing it replaced by two.
 fn tesselate(g: &mut LcGlobalData, log: &mut Log) {
     let mut counter = 0u32;
@@ -295,7 +294,7 @@ fn tesselate(g: &mut LcGlobalData, log: &mut Log) {
             .into_iter()
             .filter(|&a| g.mesh.face(a).is_some_and(|x| !x.flags.splitted && x.v.contains(&v2)))
             .collect();
-        // the C++ sorts them by address
+        // X-Ray's compiler sorts them by address
         adj.sort_unstable_by_key(|&a| g.mesh.face_addr(a));
         adj.dedup();
         counter += 1;
@@ -374,7 +373,7 @@ fn tesselate(g: &mut LcGlobalData, log: &mut Log) {
     compact_lists(g);
 }
 
-/// `CBuild::u_SmoothVertColors(count)`: each vertex takes the mean of the vertices of its faces.
+/// Smooths the vertex colours: each vertex takes the mean of the vertices of its faces.
 fn smooth_vert_colors(g: &mut LcGlobalData, count: u32) {
     for _ in 0..count {
         let mesh = &g.mesh;
@@ -390,7 +389,7 @@ fn smooth_vert_colors(g: &mut LcGlobalData, count: u32) {
                         }
                     }
                 }
-                // the C++ sorts the circle by address
+                // X-Ray's compiler sorts the circle by address
                 circle.sort_unstable_by_key(|&c| mesh.vertex_addr(c));
                 circle.dedup();
                 let mut avg = ColorC::default();
@@ -412,7 +411,7 @@ fn smooth_vert_colors(g: &mut LcGlobalData, count: u32) {
     }
 }
 
-/// `CBuild::xrPhase_AdaptiveHT`: the long edges tesselated, every vertex's hemisphere taken in
+/// The long edges tesselated, every vertex's hemisphere taken in
 /// the level's own shadow at half strength, then smoothed five times.
 pub fn adaptive_ht(
     g: &mut LcGlobalData,
@@ -433,7 +432,7 @@ pub fn adaptive_ht(
     ctl.check()?;
 
     log.status("Precalculating...".into());
-    // the C++ builds the model and then caches the opacity it reads while tracing
+    // X-Ray's compiler builds the model and then caches the opacity it reads while tracing
     g.light_prepare();
     g.build_rapid(scene_bb)?;
     log.status("Precalculating : base hemisphere ...".into());
@@ -473,10 +472,10 @@ pub fn adaptive_ht(
     Ok(())
 }
 
-/// `CBuild::xrPhase_TangentBasis`: one vertex per corner and texture coordinate through
+/// One vertex per corner and texture coordinate through
 /// MeshMender; every face gets its corners' tangent and binormal and the coordinates back.
 pub fn tangent_basis(g: &mut LcGlobalData, log: &mut Log) {
-    // the C++ sorts g_vertices by address here and keeps that order
+    // X-Ray's compiler sorts the vertex list by address here and keeps that order
     sort_vertices_by_addr(g);
     let mesh = &g.mesh;
     let mut slot: Vec<u32> = vec![u32::MAX; mesh.vertices().last().map_or(0, |v| v.0 as usize + 1)];

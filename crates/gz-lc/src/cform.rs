@@ -1,6 +1,5 @@
-//! `CBuild::BuildCForm` (`xrBuildCForm.cpp`) and `SimplifyCFORM` (`xrOptimizeCFORM_qslim.cpp`):
-//! the collision faces of the level and of every MU reference welded into one soup, decimated by
-//! QSlim along edges that keep their material, sector and smoothing, saved as `level.cform`.
+//! The collision form: the collision faces of the level and of every MU reference welded into one soup,
+//! then decimated (QSlim) along edges that keep their material, sector and smoothing, and saved as `level.cform`.
 
 use glam::Vec3;
 use gz_fmt_level::{Aabb, CForm, CollectorPacked, Tri};
@@ -45,7 +44,7 @@ fn fsimilar(a: f32, b: f32, e: f32) -> bool {
     (a - b).abs() < e
 }
 
-/// `SimplifyCFORM`.
+/// The decimation.
 fn simplify(cl: &mut CollectorPacked, bb: &Aabb) {
     let verts = cl.verts().to_vec();
     let tris = cl.tris().to_vec();
@@ -75,10 +74,10 @@ fn simplify(cl: &mut CollectorPacked, bb: &Aabb) {
     slim.weighting = Weighting::Uniform;
     slim.initialize();
 
-    // the edges that must stay, found for every face at once: the C++ marks the faces around
+    // the edges that must stay, found for every face at once: X-Ray's compiler marks the faces around
     // both ends of an edge (0 for N1, 1 for N0, then +1 for each time a face is in N1) and takes
     // those marked 2 - counted here without the marks; the constraints are then applied in the
-    // C++ order
+    // original order
     let rm = [(0usize, 1usize), (1, 2), (2, 0)];
     let valid = slim.valid_faces;
     let model = &slim.model;
@@ -147,9 +146,9 @@ fn simplify(cl: &mut CollectorPacked, bb: &Aabb) {
     }
 }
 
-/// `CBuild::BuildCForm`: answers `level.cform`.
+/// Builds the collision form: answers `level.cform`.
 pub fn build_cform(g: &mut LcGlobalData, log: &mut Log) -> Vec<u8> {
-    // the C++ sorts the vertex list by address; the collision vertices follow that order
+    // X-Ray's compiler sorts the vertex list by address; the collision vertices follow that order
     crate::geom::sort_vertices_by_addr(g);
     let mut marks: rustc_hash::FxHashSet<VertId> = rustc_hash::FxHashSet::default();
     let mut faces: Vec<FaceId> = Vec::with_capacity(g.mesh.faces().len());
@@ -243,7 +242,7 @@ pub fn build_cform(g: &mut LcGlobalData, log: &mut Log) -> Vec<u8> {
     let verts = cl.verts().to_vec();
     let tris: Vec<Tri> = cl.tris().to_vec();
     let form = CForm::new(verts, tris);
-    // the faces no longer name a deflector (the C++ clears what shares memory with the game
+    // the faces no longer name a deflector (X-Ray's compiler clears what shares memory with the game
     // material id)
     let all = g.mesh.faces().to_vec();
     for f in all {

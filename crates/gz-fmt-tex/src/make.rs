@@ -23,7 +23,7 @@ pub struct GameTexture {
     pub low_gloss: bool,
 }
 
-/// Makes the game texture of a source picture (`CImageManager::MakeGameTexture`).
+/// Makes the game texture of a source picture.
 ///
 /// The picture's own size is used; the size in the description is not consulted. `normal_map`
 /// is the description's special normal map, for a bump map that names one.
@@ -49,7 +49,7 @@ pub fn make_game_texture(
 }
 
 /// Whether a source picture has a size the game takes: powers of two, or a cube strip six
-/// times as wide as it is high (`IsValidSize`).
+/// times as wide as it is high.
 #[must_use]
 pub fn is_valid_size(width: u32, height: u32) -> bool {
     let pow2 = |v: u32| v & v.wrapping_sub(1) == 0;
@@ -60,7 +60,7 @@ pub fn is_valid_size(width: u32, height: u32) -> bool {
 }
 
 /// The 128 x 128 picture a thumbnail stores: the source through the box filter
-/// (`MakeThumbnailImage`). RGBA, rows top-down.
+/// . RGBA, rows top-down.
 pub fn thumbnail_pixels(source: &Image) -> Result<Vec<u8>> {
     Ok(imf_resample(source, THUMB_SIDE, THUMB_SIDE, ImfFilter::Box)?.rgba)
 }
@@ -76,7 +76,7 @@ fn opaque_or_alpha(alpha: bool) -> DdsRequest {
     }
 }
 
-/// A module's `thumbnail.dds` (`EditorCatalog::MakeThumbnail`): the middle square of the
+/// A module's `thumbnail.dds`: the middle square of the
 /// picture averaged down, or spread up, to 256 x 256; DXT1, or DXT5 when a pixel comes out
 /// with alpha under 250; every level. The picture must be at least 16 pixels on each side.
 pub fn make_thumbnail_dds(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
@@ -144,7 +144,7 @@ pub fn make_thumbnail_dds(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8
     Ok(dds)
 }
 
-/// Whether bytes are a thumbnail the game's Mod Browser takes (`EditorCatalog::ValidThumbnail`):
+/// Whether bytes are a thumbnail the game's Mod Browser takes:
 /// a DDS of 256 x 256, DXT1 or DXT5, one level or all nine, of exactly the size those take, and
 /// no more than 256 KiB.
 #[must_use]
@@ -179,7 +179,7 @@ pub fn valid_thumbnail_dds(bytes: &[u8]) -> bool {
     bytes.len() == expected
 }
 
-/// A screen layer's picture as a DDS (`EditorCatalog::MakeScreenPicture`): the picture
+/// A screen layer's picture as a DDS: the picture
 /// stretched, nearest pixel, to the next size that is a multiple of four; DXT1, or DXT5 when a
 /// pixel has alpha under 250.
 pub fn make_screen_picture_dds(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
@@ -207,12 +207,12 @@ pub fn make_screen_picture_dds(rgba: &[u8], width: u32, height: u32) -> Result<V
             alpha
         })
         .reduce(|| false, |a, b| a || b);
-    // oracle: the description asks for no mip levels here, and the compressor makes them anyway
+    // the description asks for no mip levels here, and the compressor makes them anyway
     build_dds(&Image { width: tw as u32, height: th as u32, rgba: data }, &opaque_or_alpha(alpha))
 }
 
 /// How much of a texture survives being halved and brought back, as the image manager measures
-/// it (`CheckCompliance`): the picture goes down through Lanczos and up through the cubic, and
+/// it: the picture goes down through Lanczos and up through the cubic, and
 /// the loss is the distance in colour, as percent. The editor packs the pair as
 /// `average * 1000 + worst`. A picture one pixel wide or high loses nothing.
 pub fn check_compliance(source: &Image, has_alpha: bool) -> Result<(u32, u32)> {
@@ -290,7 +290,7 @@ fn border_pass(pixels: &[u8], w: usize, h: usize, reference: u8) -> Option<Vec<u
 }
 
 /// Spreads the colour of the opaque parts of a picture into its transparent parts, ring by
-/// ring, and leaves the alpha as it was (`CImageManager::ApplyBorders`). Alpha over 200 counts
+/// ring, and leaves the alpha as it was. Alpha over 200 counts
 /// as opaque.
 pub fn apply_borders(source: &Image) -> Result<Image> {
     source.check()?;
@@ -424,8 +424,8 @@ mod tests {
         let px = thumbnail_pixels(&Image::filled(256, 384, [9, 8, 7, 255]).unwrap()).unwrap();
         assert_eq!(px.len(), 128 * 128 * 4);
         assert!(px.as_chunks::<4>().0.iter().all(|p| p[..3] == [9, 8, 7]));
-        // `imf_Process` never brings its weights to a sum of one (xrImage_Resampler.cpp): at
-        // 300 -> 128 a flat picture comes out striped, as the C++ thumbnail does
+        // the resampler never brings its weights to a sum of one: at
+        // 300 -> 128 a flat picture comes out striped, as in the X-Ray SDK's thumbnail
         let px = thumbnail_pixels(&Image::filled(300, 200, [9, 8, 7, 255]).unwrap()).unwrap();
         assert_eq!(px.len(), 128 * 128 * 4);
         assert!(px.as_chunks::<4>().0.iter().any(|p| p[..3] != [9, 8, 7]));

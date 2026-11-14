@@ -96,7 +96,7 @@ pub fn can_write(dir: &std::path::Path) -> bool {
     }
 }
 
-/// `LibraryFolderText` for a folder of the editor (or the project).
+/// The text of a library folder of the editor (or the project).
 #[must_use]
 pub fn folder_text(editor: &Editor, dir: &std::path::Path) -> String {
     crate::paths::folder_text(editor.project_root().as_deref(), &gz_project::library_root(editor), dir)

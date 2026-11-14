@@ -1,6 +1,6 @@
 //! What the model preview loads: a compiled visual (`.ogf`) or a library object (`.object`),
-//! read, measured and made into a mesh on the pools (`UIVisualPreview::Show*`, `SetVisual`,
-//! `SetEditable`, `ReadTextures`).
+//! read, measured and made into a mesh on the pools (the visual preview's show, set visual,
+//! set editable and texture reads).
 
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ use gz_render::{Aabb, MaterialTable, MeshData, object_rest, visual_pose};
 
 use crate::loader::{Found, Sources};
 
-/// Where `preview_model` looks: the editor's file system (and the project) or the linked game.
+/// Where `preview.model` looks: the editor's file system (and the project) or the linked game.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModelSource {
     Visual,
@@ -57,7 +57,7 @@ pub fn visual_type_name(kind: u8) -> &'static str {
     }
 }
 
-/// `IsSupportedVisualType`: the kinds the preview builds.
+/// The kinds the preview builds.
 #[must_use]
 pub fn supported(kind: u8) -> bool {
     matches!(
@@ -410,7 +410,7 @@ fn from_visual(name: &str, bytes: &[u8], found: &Found, sources: Sources) -> Mod
     let (mut verts, mut tris) = (0usize, 0usize);
     for m in visual.meshes() {
         verts += m.vertices.as_ref().map_or(0, |v| v.vertices.len());
-        // a progressive mesh draws its first slide window: that is its triangle count (`dwPrimitives`)
+        // a progressive mesh draws its first slide window: that is its triangle count
         let all = m.indices.as_ref().map_or(0, |i| i.len() / 3);
         tris += m.swi.as_ref().and_then(|s| s.windows.first()).map_or(all, |w| usize::from(w.num_tris));
     }

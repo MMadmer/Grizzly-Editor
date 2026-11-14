@@ -1,24 +1,24 @@
 //! `[world]` and `[start_kit]` of `mod.ltx`: read from the manifest document's raw lines the way
-//! the C++ `EditorMod::Load` read them, written back as the C++ `Save` wrote them.
+//! the manifest loader reads them, written back as its saver writes them.
 
 use gz_mod::doc::entry_line;
 use gz_mod::text::split_list;
 use gz_mod::{Edit, ManifestDoc};
 use serde_json::{Map, Value, json};
 
-/// The five rules, in the order the file and the answers spell them (`WorldRuleKey`).
+/// The five rules, in the order the file and the answers spell them.
 pub const RULES: [&str; 5] = ["original_npcs", "random_stalkers", "mutants", "npc_quests", "story_quests"];
 
 /// The rows of the new-game screen a mode can offer.
 pub const MAX_PLAYER_CHOICES: usize = 3;
 
-/// The pad of a key in `[world]` and `[start_kit]` (`kWorldKeyWidth`).
+/// The pad of a key in `[world]` and `[start_kit]`.
 pub const KEY_WIDTH: usize = 15;
 
 pub const WORLD: &str = "world";
 pub const START_KIT: &str = "start_kit";
 
-/// The rule of a key, any case (`WorldRuleFromKey`).
+/// The rule of a key, any case.
 #[must_use]
 pub fn rule_index(key: &str) -> Option<usize> {
     RULES.iter().position(|r| r.eq_ignore_ascii_case(key))
@@ -47,7 +47,7 @@ fn split_line(line: &str) -> (&str, &str) {
     }
 }
 
-/// What of the original game the module's mode keeps (`SWorld`). The engine reads it; it
+/// What of the original game the module's mode keeps. The engine reads it; it
 /// takes effect on a new game.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct World {
@@ -119,7 +119,7 @@ impl World {
         w
     }
 
-    /// The world is the stock game's: the section is then not written (`SWorld::Empty`).
+    /// The world is the stock game's: the section is then not written.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.keep.iter().all(|k| *k)
@@ -177,7 +177,7 @@ impl World {
     }
 
     /// What closes a transition at the start of a game, in the engine's order
-    /// (`XmsWorld::TransitionOpen`): the changer itself, its level, the area (`ClosedBy`).
+    /// : the changer itself, its level, the area.
     #[must_use]
     pub fn closed_by(&self, name: &str, level: &str, to_level: &str) -> &'static str {
         if self.locked.iter().any(|l| l == name) {
@@ -192,7 +192,7 @@ impl World {
     }
 
     /// `{"rules":{...},"player_choice":[...],"levels":[...],"area":[...],"locked_levels":[...],
-    /// "locked":[...],"declared":...}` (`JsonWorld`).
+    /// "locked":[...],"declared":...}`.
     #[must_use]
     pub fn json(&self) -> Value {
         let mut rules = Map::new();
@@ -211,7 +211,7 @@ impl World {
     }
 }
 
-/// Adds or takes out a name of a list (`Toggle`).
+/// Adds or takes out a name of a list.
 pub fn toggle(v: &mut Vec<String>, name: &str, on: bool) {
     let at = v.iter().position(|x| x == name);
     match (on, at) {
@@ -230,7 +230,7 @@ pub struct KitItem {
     pub count: i32,
 }
 
-/// What a new game of the module's mode begins with (`SStartKit`). It REPLACES the new-game
+/// What a new game of the module's mode begins with. It REPLACES the new-game
 /// screen's loadout. The section being there is what declares a kit: an empty one starts the
 /// player with nothing but the PDA.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -316,7 +316,7 @@ impl StartKit {
     }
 
     /// `{"declared":..,"money":N|null,"perks":..,"items":[{"section","count"}]}`; money is null
-    /// while the kit leaves it to the new-game screen (`JsonStartKit`).
+    /// while the kit leaves it to the new-game screen.
     #[must_use]
     pub fn json(&self) -> Value {
         let items: Vec<Value> =
@@ -332,7 +332,7 @@ impl StartKit {
 
 /// The game's own base kit - `[shared]` of `plugins\faction_loadouts.ltx`, what every faction
 /// gets before the extra kits: the rows and the money (a money list `1000,3000` gives its first
-/// amount). `None` when the text holds neither (`GameBaseKit`).
+/// amount). `None` when the text holds neither.
 #[must_use]
 pub fn base_kit(text: &str) -> Option<StartKit> {
     let mut out = StartKit { declared: true, ..StartKit::default() };

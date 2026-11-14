@@ -195,7 +195,7 @@ The kit is the crate `gz-ui`, on egui; its API is the crate's own (`cargo doc -p
 
 **Who answers a question** (the caller's `Asker`)
 1. `Mcp`: the caller has decided. `confirm` answers Yes and the action runs before the reply; losing data needs `save=` or `discard=`, otherwise the command answers `unsaved` with what is dirty; nothing opens, a note is logged. Under `-nodlg`, `app.quit` and `project.close` discard.
-2. `Unattended` (`-nodlg`): the logged answers - a question answered No is `~ [dlg suppressed]`, a note `* `, an error `! `.
+2. `Unattended` (`-nodlg`): the logged answers - a question answered No is the warning `[dlg suppressed] <question>  -> auto-answer: No`, a note is logged as information, an error as an error.
 3. `Ui`: the dialog opens, and `then` runs after the frame that answered.
 
 Errors and notes for the author become queued notices once the UI draws.
@@ -420,7 +420,7 @@ None of them acts while a modal is up. `app.keys action=resolve keys=<chord>` an
 - Docked in the Wide layout; a drawer otherwise.
 - Toolbar: the kit's SearchField, All / Warnings / Errors with counts (the status bar's counts), Auto-scroll, Copy, Clear.
 - Mono lines, virtualized and whole: the view holds whole rows, and a scroll that comes to rest between two settles on the nearer, so the first row is never cut in half. A muted row with a rule marks where the count starts ("The project opened - warnings and errors are counted from here"). The Warnings / Errors filter lists each distinct line once. The view opens at its end whenever it comes up (panel tab picked, drawer opened).
-- A line's level is its colour, and its word - error, warning, info - is a word the search finds it by (`warning texture`). The marks plain text carries (`! `, `~ `, `* ` of the game and the compilers) set the level and are not shown; the editor's own messages carry none. The status line is the sentence alone.
+- A line's level is its colour, and its word - error, warning, info - is a word the search finds it by (`warning texture`). A message's level is a value (`gz_base::Finding`, a log record's level) and no text carries a mark for it: the level compiler's own lines have theirs read once, where they enter the build (`gz-levelbuild`'s `compile.rs`), and only the log file writes one in front of a line (`! `, `~ `, `* `). The status line is the sentence alone.
 **Command Palette:** section 5.
 
 **Quest and Behaviour graph**

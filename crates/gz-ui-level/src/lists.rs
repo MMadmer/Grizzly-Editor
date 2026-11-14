@@ -473,7 +473,7 @@ mod tests {
         assert_eq!(ListKey::SkeletonMotions("a\\b".into()).empty_text(), "The model a\\b has no motions.");
     }
 
-    /// A skeleton of `bones` naming the motion files `refs` (`OGF_S_MOTION_REFS`).
+    /// A skeleton of `bones` naming the motion files `refs`.
     fn skeleton(bones: &[&str], refs: &str) -> Vec<u8> {
         use gz_fmt_ogf::{MT, chunk};
         let mut w = gz_chunk::Writer::new();

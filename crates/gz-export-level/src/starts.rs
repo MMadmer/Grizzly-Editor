@@ -1,4 +1,4 @@
-//! The open scene's Player Starts (`CollectSceneStarts`): what `gz-world`'s `E201` counts for
+//! The open scene's Player Starts: what `gz-world`'s `E201` counts for
 //! the scene's level instead of that level's baked file - the build bakes the scene first, and
 //! between two bakes the scene is what the author sees.
 

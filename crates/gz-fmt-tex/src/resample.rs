@@ -8,7 +8,7 @@ use rayon::prelude::*;
 
 use crate::{Image, Result, TexError, checked_len};
 
-/// `EIMF_Type`.
+/// The resample types.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ImfFilter {
     /// `imf_filter`: the cubic `2|t|^3 - 3|t|^2 + 1`.
@@ -100,7 +100,7 @@ impl ImfFilter {
     }
 }
 
-// the C++ resampler's literal, one ulp from `f32::consts::PI`: the filter weights stay its own
+// the X-Ray SDK's resampler's literal, one ulp from `f32::consts::PI`: the filter weights stay its own
 #[allow(clippy::approx_constant)]
 fn sinc(x: f32) -> f32 {
     let x = x * 3.141_592_6;
@@ -122,7 +122,7 @@ fn contributions(src: usize, dst: usize, filter: ImfFilter) -> Vec<Contrib> {
         } else {
             j
         };
-        // oracle: a tap mirrored past the far edge takes the last pixel; one that lands before
+        // a tap mirrored past the far edge takes the last pixel; one that lands before
         // the first pixel read outside the picture, here it takes the first
         n.clamp(0, size - 1) as u32
     };

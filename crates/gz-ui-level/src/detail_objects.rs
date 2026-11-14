@@ -267,7 +267,7 @@ fn import(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
                     let mut model = current(&svc);
                     model.indices = indices;
                     commit(&svc, &ed, model);
-                    ed.log.info(format!("* Colour indices imported from {}", path.display()));
+                    ed.log.info(format!("Colour indices imported from {}", path.display()));
                 }
                 Err(e) => ed
                     .notices
@@ -275,7 +275,7 @@ fn import(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
             },
         );
     if let Err(line) = picked {
-        editor.log.plain(line);
+        editor.log.finding(&line);
     }
 }
 
@@ -286,13 +286,13 @@ fn export(editor: &Arc<Editor>, indices: DetailColorIndices) {
         FileRequest::save("Export Colour Indices", "details.dti").filter("Colour indices", &["dti"]);
     let picked = gz_ui::file_dialog::pick(None, crate::tools::asker(editor), request, move |path| {
         match gz_editor::fsx::write_atomic(&path, &indices.write()) {
-            Ok(()) => ed.log.info(format!("* Colour indices exported to {}", path.display())),
+            Ok(()) => ed.log.info(format!("Colour indices exported to {}", path.display())),
             Err(e) => ed
                 .notices
                 .error(format!("The colour indices could not be written to {}: {e}", path.display())),
         }
     });
     if let Err(line) = picked {
-        editor.log.plain(line);
+        editor.log.finding(&line);
     }
 }

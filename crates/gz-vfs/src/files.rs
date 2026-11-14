@@ -19,7 +19,7 @@ const READ_BATCH: usize = 64;
 /// Why a game cannot be mounted.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum MountError {
-    /// The folder is no game: the reason as `LooksLikeGame` words it.
+    /// The folder is no game: the reason the game check words it.
     #[error("{0}")]
     NotAGame(&'static str),
 }

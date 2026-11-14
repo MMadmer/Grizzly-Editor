@@ -6,7 +6,7 @@ use std::path::Path;
 
 /// The editor's scratch and captured preview, by their name in the project root: never shown as
 /// content, never exported. The project file (`*.grizzly`) is the project itself and goes with
-/// them. `project.ltx` is what an earlier editor kept there - this machine's paths: one that a
+/// them. `project.ltx` is what the project folder kept there - this machine's paths: one that a
 /// project still holds (it is converted and removed when the project is opened) never ships.
 const EDITOR_ONLY: [&str; 9] = [
     "import",

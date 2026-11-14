@@ -1,10 +1,7 @@
 //! The mode's world: what a module's mode keeps of the ORIGINAL game, where the player may go,
 //! which ways start closed and what a new game begins with.
 //!
-//! The C++ specification is `EditorWorld.h/.cpp` (the reader of the linked game's `all.spawn`,
-//! `Starts`, `Validate`, the JSON of `[world]` / `[start_kit]`, `GameBaseKit`, the MCP
-//! handlers) and the `[world]` / `[start_kit]` parts of `EditorModManifest.cpp` (`Load`,
-//! `Save`). Its drawing is the World Rules tab (`gz-ui-world`).
+//! The editor's reader of the linked game's `all.spawn`, the start entries, the checks, the JSON of `[world]` / `[start_kit]` and the MCP handlers are here; the drawing is the World Rules tab (`gz-ui-world`).
 //!
 //! **The game is never written.** The linked game's `all.spawn` is read - its levels, its level
 //! changers, its patrol names - and nothing else; the engine lays a module's world over the
@@ -15,14 +12,14 @@
 //! - [`model`] - [`World`] (`[world]`: the five [`RULES`], `levels`, `player_choice` - three at
 //!   most, `area`, `locked_levels`, `locked`, unknown lines kept) and [`StartKit`] (`[start_kit]`:
 //!   money, perks, items). Both are read from `gz_mod`'s [`gz_mod::ManifestDoc`] (its raw section
-//!   lines) and written back as [`gz_mod::Edit`]s in the C++ layout; their JSON;
+//!   lines) and written back as [`gz_mod::Edit`]s; their JSON;
 //!   [`model::base_kit`] (`[shared]` of the game's `plugins\faction_loadouts.ltx`).
 //! - [`game`] - [`GameWorld`]: [`game::read_all_spawn`] over the bytes of `all.spawn` -
 //!   `gz-fmt-spawn` for the container, the game graph and the patrols (indexed in parallel on
 //!   the caller's pool), `gz-entities` for a level changer's destination.
 //! - [`starts`] - [`Start`], [`starts::read_starts`]: the `op = start` entries of a spawn layer.
 //! - [`validate`] - [`validate::validate`]: `E201`, `E202`, `W203`..`W206`, `E207`, `W208` with
-//!   the C++ messages.
+//!   their messages.
 //!
 //! # The service and the commands
 //!

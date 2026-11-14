@@ -5,7 +5,7 @@
 //! (health, position, team, condition, ammunition) are written from the state, and a read
 //! takes only the fields that exist in the update alone.
 //!
-//! oracle: `UPDATE_Read` assigns those shared fields too. Nothing in the editor calls it, and
+//! The game's `UPDATE_Read` assigns those shared fields too. Nothing in the editor calls it, and
 //! doing so would make a read spawn packet write back differently (a weapon's condition comes
 //! back from eight bits). The game does it when it loads `all.spawn`, which is its business.
 
@@ -305,7 +305,7 @@ pub(crate) fn update_write(o: &Object, h: &Header, class: Class, w: &mut NetWrit
         Class::StationaryMgun => {
             let (working, dir) = o.mgun().map_or((false, Vec3::ZERO), |m| (m.working, m.dest_enemy_dir));
             w.w_u8(u8::from(working));
-            // `save_data(Fvector)`: raw
+            // raw vector save
             let mut raw = [0u8; 12];
             for (slot, c) in raw.as_chunks_mut::<4>().0.iter_mut().zip(dir.to_array()) {
                 slot.copy_from_slice(&c.to_le_bytes());

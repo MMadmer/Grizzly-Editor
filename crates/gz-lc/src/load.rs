@@ -1,6 +1,6 @@
-//! `CBuild::Load` (`Build_Load.cpp`): `build.prj` read into the compiler's model with the
+//! The load: `build.prj` read into the compiler's model with the
 //! compiler shaders and the textures' descriptions and surfaces; and the same for the detail
-//! compiler (`global_claculation_data::xrLoad`).
+//! compiler.
 
 use std::path::{Path, PathBuf};
 
@@ -111,7 +111,7 @@ impl Sources {
     }
 }
 
-/// What `CBuild` keeps of `build.prj` besides the model.
+/// What the compiler keeps of `build.prj` besides the model.
 #[derive(Clone, Debug, Default)]
 pub struct Extra {
     pub scene_bb: Aabb,
@@ -123,7 +123,7 @@ pub struct Extra {
     pub lights_dynamic: Vec<BuildLightDynamic>,
 }
 
-/// `CBuild::Load`. `smoothing_groups` is off for `-nosmg` (the faces keep no group).
+/// Loads the level. `smoothing_groups` is off for `-nosmg` (the faces keep no group).
 pub fn load(
     prj: &BuildProject,
     shaders: Shaders,
@@ -158,7 +158,7 @@ pub fn load(
         }
     }
     g.load_mu(prj)?;
-    // `FS.r_close(F)` after `CBuild::Load`: the pools' later blocks go where build.prj was
+    // the pools' later blocks go where build.prj was
     g.mesh.mark_loaded();
     let mut bb = Aabb::INVALID;
     for p in prj.verts.iter() {

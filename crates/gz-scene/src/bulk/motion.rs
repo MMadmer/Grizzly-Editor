@@ -1,6 +1,6 @@
-//! `ESceneAIMapTools_MotionSimulator.cpp`: an ellipsoid of the given radius and height slid from
+//! An ellipsoid of the given radius and height slid from
 //! one point to another over the collision model - what decides whether a node can be walked to.
-//! Ported float for float: the sphere-space triangles, the collision response that slides along
+//! Float for float with the engine's own movement: the sphere-space triangles, the collision response that slides along
 //! the nearest contact, the push out of a stuck position.
 
 use glam::Vec3;
@@ -27,7 +27,7 @@ struct ClTri {
     d: f32,
 }
 
-/// `SCollisionData`.
+/// The collision data of one move.
 #[derive(Clone, Copy, Debug, Default)]
 struct Collision {
     velocity: Vec3,
@@ -48,7 +48,7 @@ fn mul(v: Vec3, s: f32) -> Vec3 {
     Vec3::new(v.x * s, v.y * s, v.z * s)
 }
 
-/// `closestPointOnEdge`.
+/// The closest point on an edge.
 fn closest_on_edge(a: Vec3, b: Vec3, ed: Vec3, elen: f32, p: Vec3) -> Vec3 {
     let c = p - a;
     let t = dot(ed, c);
@@ -76,7 +76,7 @@ fn closest_on_tri(t: &ClTri, p: Vec3) -> Vec3 {
     result
 }
 
-/// `intersectRaySphere`: the distance to the sphere along the ray, -1 for a miss.
+/// The distance to the sphere along the ray, -1 for a miss.
 fn ray_sphere(ro: Vec3, rv: Vec3, so: Vec3, sr: f32) -> f32 {
     let q = so - ro;
     let c = magnitude(q);
@@ -88,12 +88,12 @@ fn ray_sphere(ro: Vec3, rv: Vec3, so: Vec3, sr: f32) -> f32 {
     v - d.sqrt()
 }
 
-/// `CheckPointInSphere`.
+/// Whether a point is inside a sphere.
 fn in_sphere(p: Vec3, so: Vec3, sr: f32) -> bool {
     xr::dist_sqr(so, p) < sr * sr
 }
 
-/// `intersectRayPlane`.
+/// The intersection of a ray with a plane.
 fn ray_plane(ro: Vec3, rd: Vec3, po: Vec3, pn: Vec3) -> f32 {
     let numer = dot(ro - po, pn);
     let denom = dot(pn, rd);
@@ -110,7 +110,7 @@ fn check_collision(cl: &mut Collision, tris: &[ClTri]) {
     let nv = normalize_safe(cl.velocity);
     let distance_to_travel = magnitude(velocity);
     for t in tris {
-        // backfaces are ignored (a NaN normal too, as the C++ compare does)
+        // backfaces are ignored (a NaN normal too)
         let facing = dot(t.n, nv) < 0.0;
         if !facing {
             continue;
@@ -228,7 +228,7 @@ fn collide_with_world(cl: &mut Collision, tris: &[ClTri], mut position: Vec3, mu
     }
 }
 
-/// `ESceneAIMapTool::MotionSimulate`: where an ellipsoid of `radius` and `height` standing at
+/// Where an ellipsoid of `radius` and `height` standing at
 /// `start` ends up when it is moved towards `end`.
 #[must_use]
 pub fn simulate(model: &CollideModel, start: Vec3, end: Vec3, radius: f32, height: f32) -> Vec3 {

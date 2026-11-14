@@ -1,4 +1,4 @@
-//! The drop to ground (`DropObjectsToGround`, the End key): where objects land, computed from a
+//! The drop to ground (the End key): where objects land, computed from a
 //! snapshot and applied as one transform command.
 
 use crate::class::ObjClass;
@@ -8,7 +8,6 @@ use crate::model::{ObjId, SceneState};
 use crate::objects;
 use crate::pick::{ScenePick, box_triangles, ray_scene_objects};
 
-/// `kDropReach`.
 pub const DROP_REACH: f32 = 1000.0;
 
 /// Where an object lands: its new position and, when aligned, its new rotation.
@@ -19,7 +18,7 @@ pub struct Landing {
     pub rotation: Option<Vec3>,
 }
 
-/// `DropObjectsToGround`: every object of `batch` settled on the scene objects under it - the
+/// Every object of `batch` settled on the scene objects under it - the
 /// whole box swept down (`line == false`, every triangle in the column clipped to the
 /// footprint, the tallest point wins) or one ray from the pivot (`line == true`).
 #[must_use]

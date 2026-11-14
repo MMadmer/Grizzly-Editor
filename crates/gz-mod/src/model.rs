@@ -1,4 +1,4 @@
-//! The typed view of `mod.ltx`: what the C++ `SManifest` knew, read the way `EditorMod::Load`
+//! The typed view of `mod.ltx`: the manifest's fields, read the way the manifest loader
 //! reads it. Read-only: every change is an [`crate::Edit`] of the document.
 
 use std::sync::Arc;
@@ -81,7 +81,7 @@ impl Command {
     }
 }
 
-/// `mod.ltx` read into the fields of the C++ model. Unknown keys and sections are not here:
+/// `mod.ltx` read into the manifest's fields. Unknown keys and sections are not here:
 /// they stay in the [`ManifestDoc`], as written.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Manifest {
@@ -148,7 +148,7 @@ fn truthy(v: &str) -> bool {
 }
 
 impl Manifest {
-    /// Reads the model out of a document, line by line, as `EditorMod::Load` does: section names
+    /// Reads the model out of a document, line by line: section names
     /// without case, keys exactly, a key written twice keeps the last value.
     #[must_use]
     pub fn parse(doc: &ManifestDoc) -> Self {
@@ -299,7 +299,7 @@ pub fn derive_id(project_name: &str) -> String {
     if out.is_empty() { "unnamed_mod".to_owned() } else { out }
 }
 
-/// The `mod.ltx` a project gets when it has none, byte for byte what `EnsureScaffold` wrote:
+/// The `mod.ltx` a project gets when it has none:
 /// the id and the name from the folder, version 1.0.0, api 1. Nothing else - a module has
 /// whatever layout its author gives it.
 #[must_use]
@@ -355,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn scaffold_is_the_cpp_one() {
+    fn scaffold_text_is_fixed() {
         assert_eq!(
             scaffold_text("My Mod"),
             "[module]\r\nid          = my_mod\r\nname        = My Mod\r\nversion     = 1.0.0\r\napi         = 1\r\n"

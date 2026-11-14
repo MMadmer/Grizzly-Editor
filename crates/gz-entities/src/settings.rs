@@ -1,4 +1,4 @@
-//! The game's configuration as the entity constructors see it (`pSettings`).
+//! The game's configuration as the entity constructors see it.
 //!
 //! This crate depends on no config crate: whoever holds the resolved `system.ltx` implements
 //! [`Settings`] for it. [`MapSettings`] is a plain in-memory implementation for tests and
@@ -53,7 +53,7 @@ pub trait Settings {
     }
 }
 
-/// `IsBOOL`.
+/// Whether a value is a boolean.
 #[must_use]
 pub fn is_bool_true(text: &str) -> bool {
     ["on", "yes", "true", "1"].iter().any(|t| text.eq_ignore_ascii_case(t))

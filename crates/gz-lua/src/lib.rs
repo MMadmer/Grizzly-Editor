@@ -3,8 +3,8 @@
 //! so the two can never read an asset differently; this crate knows no asset of its own.
 //!
 //! The interpreter is LuaJIT 2.1 (`mlua`, vendored), the one the game runs: table iteration
-//! order - which `pairs` walks - is the game's. The JIT compiler is switched off, as the C++
-//! editor switched it off, so the instruction limit sees every instruction.
+//! order - which `pairs` walks - is the game's. The JIT compiler is switched off,
+//! so the instruction limit sees every instruction.
 //!
 //! # API
 //!

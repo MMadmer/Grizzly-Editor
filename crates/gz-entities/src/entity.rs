@@ -1,5 +1,5 @@
 //! An entity: the `CSE_Abstract` header, the decoded parts of its class, and the bytes it
-//! was read from. `Spawn_Write` / `Spawn_Read` of `xrServer_Object_Base.cpp`.
+//! was read from.
 
 use std::sync::Arc;
 
@@ -142,11 +142,11 @@ pub(crate) struct Known {
     /// in Dead Air's `all.spawn`). The engine skips them by the size word; they are written back.
     pub(crate) tail: Arc<[u8]>,
     /// The same for a scene's LTX section: the numbered values after the ones its class reads
-    /// (the C++ editor runs the repository's Call of Pripyat scripts, whose zones write a
+    /// (the editor's repository scripts, Call of Pripyat's, whose zones write a
     /// `last_spawn_time` byte). Written back after the state.
     pub(crate) ini_tail: Arc<[SmolStr]>,
     /// The numbered values a scene section held, until it is changed: written back as they
-    /// were, as `raw_spawn` is for a packet (a value the C++ wrote as a number where this
+    /// were, as `raw_spawn` is for a packet (a value written as a number where this
     /// layout reads a string keeps its spelling).
     pub(crate) raw_ini: Option<Arc<[SmolStr]>>,
     /// Made here (`create`) or read from a scene section: the editor's scripts read nothing of
@@ -299,8 +299,8 @@ fn new_writer(h: &Header, ini: bool) -> NetWriter {
     if ini { NetWriter::with_ini(h.text) } else { NetWriter::new(h.text) }
 }
 
-/// What the editor's own script classes add to a packet the editor writes anew: the C++ editor
-/// runs the repository's scripts (`gamedata\scripts`, Call of Pripyat's), and in the editor
+/// What the editor's own script classes add to a packet the editor writes anew: the
+/// repository's scripts (`gamedata\scripts`, Call of Pripyat's) run in editor mode, and there
 /// their `STATE_Read` returns at once (`if editor() then return end`), so they write their
 /// defaults whatever the scene holds - the zones `last_spawn_time` absent (`w_u8(0)`), a smart
 /// terrain its empty lists, no base control, no respawn, population 0 and the save marker over
@@ -344,7 +344,7 @@ impl Entity {
     pub fn create(section: &str, settings: &dyn Settings) -> Result<Self> {
         let info = class_of_section(section, settings)
             .ok_or_else(|| EntityError::UnknownClass(SmolStr::new(section)))?;
-        // a group template is named after its monster section, as the C++ names it
+        // a group template is named after its monster section
         let (mut header, object) = construct(info, section, settings)?;
         // the layout it is written in, as the header of its packet read back says
         header.version = SPAWN_VERSION;
@@ -364,9 +364,9 @@ impl Entity {
         })
     }
 
-    /// `CSpawnPoint::SSpawnData::Create`: the factory's entity of a new spawn point, marked
+    /// The factory's entity of a new spawn point, marked
     /// `M_SPAWN_OBJECT_ASPLAYER` when its section says `$player = true`. The game takes the
-    /// player from that mark alone (`CALifeGraphRegistry::update`): without it no level is
+    /// player from that mark alone: without it no level is
     /// current and the new game stops at the actor's `on_register`.
     pub fn create_spawn_point(section: &str, settings: &dyn Settings) -> Result<Self> {
         let mut e = Self::create(section, settings)?;
@@ -578,7 +578,7 @@ impl Entity {
         }
     }
 
-    /// The numbered values of an LTX scene section (`SaveLTX`). `None` when the entity writes
+    /// The numbered values of an LTX scene section. `None` when the entity writes
     /// raw bytes a section cannot hold (client data, a chunk) or is opaque without values.
     #[must_use]
     pub fn to_scene(&self) -> Option<Vec<IniValue>> {
@@ -638,7 +638,7 @@ impl Entity {
         }
     }
 
-    /// The C++ class name, `"unknown"` for an opaque entity.
+    /// The class name, `"unknown"` for an opaque entity.
     #[must_use]
     pub fn class_name(&self) -> &'static str {
         self.class_info().map_or("unknown", |i| i.class.name())
@@ -804,7 +804,7 @@ impl Entity {
         Ok(())
     }
 
-    /// A climable object's game material (`CSE_ALifeObjectClimable::material`), what the level
+    /// A climable object's game material, what the level
     /// build gives the ladders it makes (`set_additional_info`).
     pub fn set_climable_material(&mut self, material: &str) -> Result<()> {
         let k = self.known_mut()?;
@@ -857,7 +857,7 @@ impl Entity {
         Ok(())
     }
 
-    /// The properties `FillProps` lists, in its order. An opaque entity lists its header,
+    /// The properties the class lists, in its order. An opaque entity lists its header,
     /// read-only.
     #[must_use]
     pub fn properties(&self, ctx: &PropContext) -> Vec<Prop> {

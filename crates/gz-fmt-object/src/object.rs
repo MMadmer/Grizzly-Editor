@@ -1,4 +1,4 @@
-//! A whole `.object` (`EditObject.h`, `EditObjectIO.cpp`, `EditObjectMotions.cpp`).
+//! A whole `.object`: its read and write and its motions.
 
 use glam::Vec3;
 use gz_chunk::{Chunk, ChunkError, Reader, Writer};
@@ -54,7 +54,7 @@ bitflags::bitflags! {
     }
 }
 
-/// `CSurface`: a material slot.
+/// A material slot.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Surface {
     pub name: SmolStr,
@@ -87,7 +87,7 @@ impl Default for Surface {
 }
 
 impl Surface {
-    /// `SetTexture`: a texture is named without its extension.
+    /// A texture is named without its extension.
     pub fn set_texture(&mut self, name: &str) {
         self.texture = SmolStr::new(match name.rfind('.') {
             Some(dot) => &name[..dot],
@@ -107,14 +107,14 @@ impl Surface {
     }
 }
 
-/// `SBonePart`: a named group of bones that motions can play on.
+/// A named group of bones that motions can play on.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BonePart {
     pub alias: SmolStr,
     pub bones: Vec<SmolStr>,
 }
 
-/// `CEditableObject`.
+/// The editable object.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Object {
     pub flags: ObjectFlags,
@@ -192,7 +192,7 @@ impl Object {
         Ok(object)
     }
 
-    /// `CEditableObject::Load(IReader&)`.
+    /// Loads an object from a reader.
     fn read_body(f: &Reader<'_>, text: &mut Text) -> Result<Object> {
         let version = chunk_u32(f, CHUNK_VERSION).ok_or(ChunkError::Missing(CHUNK_VERSION))?;
         if version != OBJECT_VERSION {
@@ -353,7 +353,7 @@ impl Object {
                 s.fvf = c.r_u32()?;
                 tc_count = c.r_u32()?;
             }
-            // the C++ stops on both
+            // the X-Ray SDK stops on both
             if s.shader.is_empty() {
                 return Err(invalid(format_args!("Surface '{}' has no shader.", s.name)));
             }
@@ -372,7 +372,7 @@ impl Object {
         Ok(out)
     }
 
-    /// Writes a `.object` file: `CEditableObject::Save`.
+    /// Writes a `.object` file.
     #[must_use]
     pub fn write(&self) -> Vec<u8> {
         let enc = self.encoding;
@@ -467,31 +467,31 @@ impl Object {
         !self.bones.is_empty()
     }
 
-    /// `IsAnimated`: it has motions of its own or refers to motion files.
+    /// It has motions of its own or refers to motion files.
     #[must_use]
     pub fn is_animated(&self) -> bool {
         !self.motions.is_empty() || !self.motion_refs.is_empty()
     }
 
-    /// `FindSurfaceByName`: names compare without case.
+    /// Names compare without case.
     #[must_use]
     pub fn surface_index(&self, name: &str) -> Option<usize> {
         self.surfaces.iter().position(|s| s.name.eq_ignore_ascii_case(name))
     }
 
-    /// `FindBoneByNameIdx`.
+    /// Finds a bone by name and index.
     #[must_use]
     pub fn bone_index(&self, name: &str) -> Option<usize> {
         self.bones.iter().position(|b| b.name == name)
     }
 
-    /// `GetBoneIndexByWMap`.
+    /// Finds a bone by weight map index.
     #[must_use]
     pub fn bone_index_by_wmap(&self, wmap: &str) -> Option<usize> {
         self.bones.iter().position(|b| b.wmap == wmap)
     }
 
-    /// `GetRootBoneID`.
+    /// The root bone's id.
     #[must_use]
     pub fn root_bone(&self) -> Option<usize> {
         self.bones.iter().position(Bone::is_root)
@@ -505,7 +505,7 @@ impl Object {
             .collect()
     }
 
-    /// `UpdateBox`: the box around the boxes of all meshes.
+    /// The box around the boxes of all meshes.
     #[must_use]
     pub fn bounding_box(&self) -> Aabb {
         let mut b = Aabb::INVALID;
@@ -517,7 +517,7 @@ impl Object {
         b
     }
 
-    /// `PrepareBones`: puts the bones into hierarchy order - children sorted by name under
+    /// Puts the bones into hierarchy order - children sorted by name under
     /// their parent, the root first - and resolves every parent.
     pub fn prepare_bones(&mut self) -> Result<()> {
         if self.bones.is_empty() {
@@ -546,7 +546,7 @@ impl Object {
                 children[p].push(i);
             }
         }
-        // oracle: with several parentless bones the C++ keeps the tree of the last one only
+        // with several parentless bones the X-Ray SDK keeps the tree of the last one only
         let root = bones
             .iter()
             .rposition(|b| b.name == root_name && b.parent.is_empty())
@@ -588,7 +588,7 @@ impl Object {
         Ok(())
     }
 
-    /// `VerifyBoneParts`: drops names that are no bone from every part; true when every bone
+    /// Drops names that are no bone from every part; true when every bone
     /// then sits in exactly one part.
     pub fn verify_bone_parts(&mut self) -> bool {
         let mut used = vec![0u32; self.bones.len()];
@@ -605,7 +605,7 @@ impl Object {
         used.iter().all(|n| *n == 1)
     }
 
-    /// `VerifyMeshNames`: gives every mesh a name of its own.
+    /// Gives every mesh a name of its own.
     fn verify_mesh_names(&mut self) {
         let mut idx = 0u32;
         for i in 0..self.meshes.len() {

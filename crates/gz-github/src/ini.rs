@@ -1,5 +1,5 @@
 //! The ini text of the catalog's files (its index, `mods/<id>.ltx`) and of a release descriptor,
-//! read the way `EditorCatalog::IniSection` reads it: trimmed lines, `;` starts a comment line, a
+//! read the way the catalog reads it: trimmed lines, `;` starts a comment line, a
 //! `;` outside quotes ends a value.
 
 fn trim_spaces(s: &str) -> &str {
@@ -62,7 +62,7 @@ pub fn unquote(value: &str) -> String {
     let mut out = String::with_capacity(inner.len());
     let mut chars = inner.chars().peekable();
     while let Some(c) = chars.next() {
-        // oracle: a backslash right before the closing quote stays as it is
+        // a backslash right before the closing quote stays as it is
         if c != '\\' || chars.peek().is_none() {
             out.push(c);
             continue;

@@ -230,7 +230,7 @@ fn leaf(file: &str) -> &str {
 }
 
 /// The problems of one screen or track, without their code and tag: "screen <id>:" after the
-/// code (`ProblemsOf`).
+/// code.
 fn problems_of<'a>(problems: &'a [String], what: &str, id: &str) -> Vec<(bool, &'a str)> {
     let tag = format!("{what} {id}:");
     problems
@@ -253,7 +253,7 @@ fn row_dot(problems: &[String], what: &str, id: &str) -> Option<Tone> {
     }
 }
 
-/// What a screen's music is called (`MusicLabel`).
+/// What a screen's music is called.
 fn music_label(d: &Screen) -> String {
     match d.music.as_str() {
         "none" => "Silence".to_owned(),
@@ -352,7 +352,7 @@ impl ScreensDoc {
         }
     }
 
-    /// The model follows the manifest (`Refresh`): read again off the UI thread when its
+    /// The model follows the manifest: read again off the UI thread when its
     /// revision moved, checked again at most once a second when the manifest or the files moved.
     fn refresh(&mut self) {
         let Some(session) = self.editor.project_opt() else { return };
@@ -522,7 +522,7 @@ impl ScreensDoc {
             });
         });
         if let Err(line) = picked {
-            self.editor.log.plain(line);
+            self.editor.log.finding(&line);
         }
     }
 }
@@ -675,7 +675,7 @@ impl Frame<'_> {
         }
     }
 
-    /// Where the layers go (`DrawPreview`): pictures as they are, a GIF's first frame, the rest
+    /// Where the layers go: pictures as they are, a GIF's first frame, the rest
     /// marked where it goes.
     fn preview(&mut self, ui: &mut Ui, d: &Screen) {
         let ctx = ui.ctx().clone();

@@ -1,5 +1,5 @@
 //! Coded problems of a character, the way quests report them: `E<nnn>` stops a build, `W<nnn>`
-//! is a warning (`EditorCharacters::Validate`). A problem is the C++ line: `<code> <where>:
+//! is a warning. A problem is a line: `<code> <where>:
 //! <sentence>`, where is the project-relative file.
 
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use crate::model::{Character, text_empty, text_in, text_languages, valid_id};
 
 /// The linked game's models, as validation asks about them.
 pub trait Models {
-    /// The game holds a file at this path (`EditorGameContent::Find`).
+    /// The game holds a file at this path.
     fn exists(&self, rel: &str) -> bool;
     /// The bone names of a skeletal model; empty when it is not skeletal or does not read.
     fn bones(&self, rel: &str) -> Arc<[String]>;
@@ -19,9 +19,9 @@ pub trait Models {
     fn damage_bones(&self) -> &[String];
 }
 
-/// The lookups of the linked game and the project, as validation asks them (`NqPickers`).
+/// The lookups of the linked game and the project, as validation asks them.
 pub trait Lookups {
-    /// A linked game backs the lists (`NqPickers::Available`).
+    /// A linked game backs the lists.
     fn available(&self) -> bool;
     /// The list of a type holds anything (`!NqPickers::Index(t).empty()`).
     fn has_any(&self, t: PickerType) -> bool;
@@ -67,7 +67,7 @@ fn outside_cp1251(text: &str) -> Option<String> {
 }
 
 /// A model on a skeleton of its own - Clear Sky's Forester has no eyes and no jaw - passes every
-/// other check and stops the game the moment the NPC comes online (`CheckSkeleton`).
+/// other check and stops the game the moment the NPC comes online.
 fn check_skeleton(models: &dyn Models, rel: &str, place: &str, problems: &mut Vec<String>) {
     let have = models.bones(rel);
     // not skeletal or unreadable: nothing to tell
@@ -159,7 +159,7 @@ pub fn validate(c: &Character, cx: &Cx<'_>, problems: &mut Vec<String>) {
     // a text cp1251 cannot carry loses characters in game: the string table is cp1251
     let mut langs = Vec::new();
     text_languages(&c.name, &mut langs);
-    // oracle: a language both texts carry is checked (and reported) twice
+    // a language both texts carry is checked (and reported) twice
     text_languages(&c.bio, &mut langs);
     for lang in &langs {
         let text = text_in(&c.name, lang) + &text_in(&c.bio, lang);
@@ -190,7 +190,7 @@ pub fn validate(c: &Character, cx: &Cx<'_>, problems: &mut Vec<String>) {
     }
 }
 
-// a NaN chance or markup must fail the range checks, as the C++ ones did
+// a NaN chance or markup must fail the range checks
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn validate_trade(
     c: &Character,

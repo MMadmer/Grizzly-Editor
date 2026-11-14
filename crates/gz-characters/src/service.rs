@@ -23,7 +23,7 @@ use crate::model::{Character, id_from_name, load_text, read_file, text_in};
 use crate::resolve::resolve;
 use crate::validate::{Cx, Lookups, Models, validate};
 
-/// Every character of the project, read, sorted by id and resolved (`LoadResolved`).
+/// Every character of the project, read, sorted by id and resolved.
 #[derive(Clone, Debug, Default)]
 pub struct Roster {
     /// The state of the files it was read from.
@@ -43,7 +43,7 @@ pub struct Roster {
 
 impl Roster {
     /// The roster of these files: `(file, text or the read's error)`, in path order
-    /// (`LoadAll` + `Resolve`).
+    /// (loaded, then resolved).
     #[must_use]
     pub fn build(stamp: Rev, files: Vec<(String, Result<String, String>)>) -> Self {
         let mut problems = Vec::new();
@@ -361,7 +361,7 @@ impl Characters {
         self.roster().await
     }
 
-    /// The briefs of the project's characters (`EditorCharacters::Briefs`).
+    /// The briefs of the project's characters.
     pub async fn briefs(&self) -> Arc<[CharacterBrief]> {
         self.roster().await.briefs.clone()
     }
@@ -420,8 +420,7 @@ impl Characters {
 
     // ---- what validation reads ------------------------------------------------------------------
 
-    /// What validation reads of the linked game now; [`Checker::unlinked`] without one
-    /// (`EditorGameContent::Mounted`).
+    /// What validation reads of the linked game now; [`Checker::unlinked`] without one.
     pub async fn checker(&self, editor: &Editor) -> Checker {
         let Ok(link) = GameLink::of(editor) else { return Checker::unlinked() };
         let Ok((files, rev)) = link.snapshot().await else { return Checker::unlinked() };

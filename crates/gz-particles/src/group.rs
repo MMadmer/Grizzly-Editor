@@ -1,6 +1,6 @@
-//! `CParticleGroup`: effects that start and stop at their times, and the child effects a
-//! particle of one starts - for its life (`OnPlayChild`), at its birth (`OnBirthChild`) or at its
-//! death (`OnDeadChild`).
+//! Effects that start and stop at their times, and the child effects a
+//! particle of one starts - for its life, at its birth or at its
+//! death.
 
 use std::sync::Arc;
 
@@ -14,7 +14,7 @@ use crate::system::{Collider, GroupDef, GroupEffect, Library, group_flags};
 /// xrCore's `EPS_L`.
 const EPS_L: f32 = 0.001_000_0;
 
-/// `SItem`: one effect of the group and its children.
+/// One effect of the group and its children.
 #[derive(Debug)]
 struct Item {
     effect: Effect,
@@ -30,7 +30,7 @@ struct Emitter {
     xform: Option<Mat4>,
 }
 
-/// The matrix and velocity a child starts with (`StartRelatedChild`, `StartFreeChild`).
+/// The matrix and velocity a child starts with.
 fn child_parent(em: Emitter, m: &Particle) -> (Mat4, Vec3) {
     let vel = (m.pos - m.pos_b) / STEP;
     match em.xform {
@@ -54,7 +54,7 @@ impl Item {
         self.effect.play();
     }
 
-    /// `SItem::Stop`: the effect and every child; without a deferred stop the children go.
+    /// The effect and every child; without a deferred stop the children go.
     fn stop(&mut self, deferred: bool) {
         self.effect.stop(deferred);
         for c in self.related.iter_mut().chain(self.free.iter_mut()) {
@@ -104,8 +104,7 @@ impl Item {
         self.free.push(c);
     }
 
-    /// The group's callbacks for what the effect's particles did (`OnGroupParticleBirth`,
-    /// `OnGroupParticleDead`), in the order they happened.
+    /// The group's callbacks for what the effect's particles did (a birth, a death), in the order they happened.
     fn handle_events(&mut self, def: &GroupEffect, lib: &Library, warnings: &mut Vec<String>) {
         let events = std::mem::take(&mut self.effect.store.events);
         let em = Emitter { xform: self.effect.xform() };
@@ -131,7 +130,7 @@ impl Item {
         }
     }
 
-    /// `SItem::OnFrame`.
+    /// One item's frame step.
     #[allow(clippy::too_many_arguments)]
     fn on_frame(
         &mut self,
@@ -189,7 +188,7 @@ impl Item {
     }
 }
 
-/// `CParticleGroup`.
+/// A particle group.
 #[derive(Debug)]
 pub(crate) struct Group {
     def: Arc<GroupDef>,
@@ -255,7 +254,7 @@ impl Group {
         }
     }
 
-    /// `OnFrame`.
+    /// The frame step.
     pub(crate) fn on_frame(
         &mut self,
         dt_ms: u32,

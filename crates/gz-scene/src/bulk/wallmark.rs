@@ -23,20 +23,20 @@ use crate::model::{ObjData, ObjId, SceneState};
 
 /// `WM_VERSION`.
 pub const WM_VERSION: u16 = 4;
-/// `MAX_WALLMARK_VERTEX_COUNT`.
+/// The most vertices a wallmark may have.
 pub const MAX_VERTICES: usize = 8192;
 /// What a new tool's marks are drawn with.
 pub const DEFAULT_SHADER: &str = "effects\\wallmarkmult";
 
 /// The tool's flags.
 pub mod flags {
-    /// `flDrawWallmark`.
+    /// The flag that draws the wallmarks.
     pub const DRAW: u32 = 1 << 0;
-    /// `flAxisAlign`: a mark is laid by the world's axes, not the camera's.
+    /// A mark is laid by the world's axes, not the camera's.
     pub const AXIS_ALIGN: u32 = 1 << 1;
 }
 
-/// `wallmark::flSelected`.
+/// The selected flag of a mark.
 pub const SELECTED: u8 = 1 << 0;
 
 const WM_CHUNK_VERSION: u32 = 1;
@@ -46,7 +46,7 @@ const WM_CHUNK_ITEMS: u32 = 4;
 const WM_CHUNK_ITEMS2: u32 = 5;
 const LIT: usize = 24;
 
-/// `FVF::LIT`: position, colour, texture coordinates.
+/// Position, colour, texture coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LitVert {
     pub p: Vec3,
@@ -116,7 +116,7 @@ fn read_vec3(r: &mut Reader<'_>) -> Result<Vec3, SceneError> {
 }
 
 impl Wallmarks {
-    /// `LoadStream`: version 3 (no mark sizes, the multiply shader) or 4; a slot without marks is
+    /// Version 3 (no mark sizes, the multiply shader) or 4; a slot without marks is
     /// not kept, a mark of more than [`MAX_VERTICES`] vertices is dropped.
     pub fn read(bytes: &[u8]) -> Result<Self, SceneError> {
         let unsupported = || SceneError::load("Static Wallmark: Unsupported version.");
@@ -195,7 +195,7 @@ impl Wallmarks {
         Ok(out)
     }
 
-    /// `SaveStream`.
+    /// Saves the marks to a stream.
     #[must_use]
     pub fn write(&self) -> Vec<u8> {
         let mut w = Writer::new();
@@ -240,7 +240,7 @@ impl Wallmarks {
         w.into_bytes()
     }
 
-    /// `ObjectCount`.
+    /// The number of marks.
     #[must_use]
     pub fn count(&self) -> usize {
         self.slots.iter().map(|s| s.items.len()).sum()
@@ -267,7 +267,7 @@ impl Wallmarks {
         }
     }
 
-    /// `InvertSelection`.
+    /// Inverts the selection.
     pub fn invert_selection(&mut self) {
         for m in self.slots.iter_mut().flat_map(|s| &mut s.items) {
             m.flags ^= SELECTED;
@@ -310,7 +310,7 @@ impl Wallmarks {
         n
     }
 
-    /// `RaySelect`'s pick: the nearest mark whose box the ray enters from outside.
+    /// The nearest mark whose box the ray enters from outside.
     #[must_use]
     pub fn pick(&self, start: Vec3, dir: Vec3, dist: f32) -> Option<(usize, usize, f32)> {
         let mut best = None;
@@ -329,7 +329,7 @@ impl Wallmarks {
         best
     }
 
-    /// `FrustumSelect`'s test: the marks whose box meets every plane (`n . p + w >= 0` inside).
+    /// The frustum test: the marks whose box meets every plane (`n . p + w >= 0` inside).
     #[must_use]
     pub fn in_frustum(&self, planes: &[glam::Vec4]) -> Vec<(usize, usize)> {
         let mut out = Vec::new();
@@ -343,7 +343,7 @@ impl Wallmarks {
         out
     }
 
-    /// The box of the marks (`GetBBox`), of the selected ones only with `selected`.
+    /// The box of the marks, of the selected ones only with `selected`.
     #[must_use]
     pub fn bbox(&self, selected: bool) -> Option<Aabb> {
         let mut b = Aabb::INVALID;
@@ -380,7 +380,7 @@ impl Wallmarks {
         (si, slot.items.len() - 1, false)
     }
 
-    /// The one selected mark (`MoveSelectedWallmarkTo` refuses two).
+    /// The one selected mark (moving two is refused).
     #[must_use]
     pub fn single_selected(&self) -> Option<(usize, usize)> {
         let mut found = None;
@@ -405,12 +405,12 @@ pub struct Lay {
     pub height: f32,
     pub rotate: f32,
     pub axis_align: bool,
-    /// `EDevice->vCameraTop` / `vCameraRight`: used unless the mark is axis-aligned.
+    /// Used unless the mark is axis-aligned.
     pub camera_top: Vec3,
     pub camera_right: Vec3,
 }
 
-/// `BuildMatrix`: the projection of a mark onto the surface at `from` with normal `n`.
+/// The projection of a mark onto the surface at `from` with normal `n`.
 #[must_use]
 pub fn build_matrix(n: Vec3, from: Vec3, lay: &Lay) -> M43 {
     let (inv_w, inv_h) = (2.0 / lay.width, 2.0 / lay.height);
@@ -459,7 +459,7 @@ pub fn build_mark(hit: [Vec3; 3], contact: Vec3, around: &[[Vec3; 3]], lay: &Lay
     };
     let mut out: Vec<LitVert> = Vec::new();
     let mut visited = vec![false; tris.len()];
-    // `RecurseTri` from triangle 0, its recursion as a stack of (triangle, next edge)
+    // the recursion from triangle 0, as a stack of (triangle, next edge)
     let mut stack: Vec<(usize, usize)> = Vec::new();
     let mut enter = |t: usize, out: &mut Vec<LitVert>, stack: &mut Vec<(usize, usize)>| {
         if visited.get(t).copied().unwrap_or(true) {

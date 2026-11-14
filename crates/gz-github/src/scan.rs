@@ -1,4 +1,4 @@
-//! The author's VirusTotal scan of a release (MOD_CATALOG 11, `EditorVirusTotal`). The catalog
+//! The author's VirusTotal scan of a release (MOD_CATALOG 11). The catalog
 //! only looks packages up by their SHA-256: it refuses a submission whose package VirusTotal does
 //! not know and holds back such a release of a listed module. Getting the packages known is the
 //! author's job, with their own free key - Submit to Mod Browser scans before it sends anything,

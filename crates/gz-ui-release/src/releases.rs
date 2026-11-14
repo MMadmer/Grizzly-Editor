@@ -2,8 +2,7 @@
 //! github` holds, drafts included, as a sortable table - Tag | Title | State | Published (local)
 //! | Files - with the selected release's details beside it. Edit... opens `dlg.edit_release`,
 //! Delete... asks through the kit's confirmation, which names the release, its files and its tag
-//! and what players get instead. A failure is a banner sentence naming what failed. The C++ is
-//! the Releases half of `EditorModPublish.cpp`.
+//! and what players get instead. A failure is a banner sentence naming what failed.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -221,7 +220,7 @@ pub(crate) fn ask_delete(
         });
     });
     if let Some(line) = line {
-        editor.log.info(line);
+        editor.log.finding(&line);
     }
 }
 

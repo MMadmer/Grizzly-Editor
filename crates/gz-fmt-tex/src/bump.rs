@@ -1,4 +1,4 @@
-//! Bump maps: the two game textures made of one height-and-gloss picture (`DXTCompressBump`).
+//! Bump maps: the two game textures made of one height-and-gloss picture.
 //!
 //! The source keeps the height in its colour and the gloss in its alpha. The first texture
 //! (`name.dds`, DXT5) holds gloss in red and the normal in alpha, blue, green - x, y, z. DXT5
@@ -80,7 +80,7 @@ fn normals_from_height(height_gloss: &[u8], w: usize, h: usize, scale: f32) -> V
     let mut out = vec![0u8; w * h * 4];
     out.par_chunks_mut(w * 4).enumerate().for_each(|(j, row)| {
         let up = (j + 1) % h;
-        // oracle: the bordered copy the convolution reads takes its row below the first from
+        // the bordered copy the convolution reads takes its row below the first from
         // one row short of the last, so the wrap downwards is off by one; kept
         let down = if j > 0 { j - 1 } else { h.saturating_sub(2) };
         for (i, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
@@ -101,13 +101,13 @@ fn normals_from_height(height_gloss: &[u8], w: usize, h: usize, scale: f32) -> V
 const DXT5_WITH_MIPS: DdsRequest =
     DdsRequest { encoding: DdsEncoding::Dxt5, mips: true, filter: MipFilter::Box };
 
-/// Makes the two textures of a bump map (`DXTCompressBump`).
+/// Makes the two textures of a bump map.
 ///
 /// `height_gloss` is the source picture. `normal_map`, when given, replaces the normals derived
 /// from the height; it must be of the same size. `virtual_height` is the description's
 /// `bump_virtual_height`, in metres.
 ///
-/// oracle: the editor measures the error against a decompression of the first texture that
+/// the editor measures the error against a decompression of the first texture that
 /// reads no blocks at all - the file it has just written lacks the linear-size flag its
 /// decompressor relies on - so its `#` texture is made from whatever the memory held. Here the
 /// first level is decompressed as that code means to.

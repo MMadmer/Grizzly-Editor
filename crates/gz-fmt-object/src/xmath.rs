@@ -9,25 +9,25 @@ pub const EPS_S: f32 = 0.000_000_1;
 pub const EPS: f32 = 0.000_010_0;
 pub const EPS_L: f32 = 0.001_000_0;
 
-/// `Fvector::similar`.
+/// Whether two vectors are similar.
 #[must_use]
 pub fn similar(a: Vec3, b: Vec3, eps: f32) -> bool {
     (a.x - b.x).abs() < eps && (a.y - b.y).abs() < eps && (a.z - b.z).abs() < eps
 }
 
-/// `Fvector::magnitude`.
+/// The magnitude of a vector.
 #[must_use]
 pub fn magnitude(v: Vec3) -> f32 {
     (v.x * v.x + v.y * v.y + v.z * v.z).sqrt()
 }
 
-/// `Fvector::crossproduct`.
+/// The cross product.
 #[must_use]
 pub fn cross(a: Vec3, b: Vec3) -> Vec3 {
     Vec3::new(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
 }
 
-/// `Fvector::mknormal`: the normal of a triangle, left as it is when the triangle has no area.
+/// The normal of a triangle, left as it is when the triangle has no area.
 #[must_use]
 pub fn mknormal(p0: Vec3, p1: Vec3, p2: Vec3) -> Vec3 {
     let v01 = Vec3::new(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z);
@@ -51,7 +51,7 @@ pub fn cvtt(f: f32) -> i32 {
     if f.is_nan() || f >= 2_147_483_648.0 || f < -2_147_483_648.0 { i32::MIN } else { f as i32 }
 }
 
-/// `Fbox`: an axis-aligned box.
+/// An axis-aligned box.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Aabb {
     pub min: Vec3,
@@ -106,7 +106,7 @@ impl Aabb {
     }
 }
 
-/// `Fmatrix`: four rows `i`, `j`, `k`, `c` - the three axes and the translation.
+/// Four rows `i`, `j`, `k`, `c` - the three axes and the translation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Mat4(pub [[f32; 4]; 4]);
 
@@ -362,7 +362,7 @@ impl Mat4 {
     }
 }
 
-/// `Fquaternion::slerp`, with the engine's polynomial arc cosine.
+/// Spherical linear interpolation of quaternions, with the engine's polynomial arc cosine.
 #[must_use]
 pub fn slerp(q0: Quat, q1: Quat, tm: f32) -> Quat {
     fn acos_approx(x: f32) -> f32 {
@@ -401,7 +401,7 @@ pub fn slerp(q0: Quat, q1: Quat, tm: f32) -> Quat {
     )
 }
 
-/// `Fvector::lerp`.
+/// Linear interpolation of vectors.
 #[must_use]
 pub fn lerp(p1: Vec3, p2: Vec3, t: f32) -> Vec3 {
     let invt = 1.0 - t;

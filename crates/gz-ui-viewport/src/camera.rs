@@ -1,7 +1,7 @@
-//! The editor camera and its navigation (`CUI_Camera`, `UI_ViewportNavigation`), pure.
+//! The editor camera and its navigation, pure.
 //!
 //! The camera is heading-pitch-bank and a position, as the engine keeps it; `gz_render::Camera`
-//! is made from it for a frame. The navigation is the C++ one: the UE-style claims (RMB look and
+//! is made from it for a frame. The navigation is the editor's: the UE-style claims (RMB look and
 //! fly with WASD + QE, MMB or LMB+RMB pan, Alt+LMB orbit, Alt+RMB dolly, a left drag nothing took
 //! flies) and, with Shift held, the legacy plane move.
 
@@ -11,7 +11,7 @@ use glam::Vec3;
 use gz_fmt_object::Mat4 as XMat;
 use gz_render::{Aabb, Camera, Projection};
 
-/// The mouse buttons and the modifiers of a gesture (`TShiftState`).
+/// The mouse buttons and the modifiers of a gesture.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Buttons {
     pub left: bool,
@@ -28,14 +28,14 @@ impl Buttons {
         self.left || self.right || self.middle
     }
 
-    /// `ssRBOnly`: the right button and nothing else.
+    /// The right button and nothing else.
     #[must_use]
     pub fn right_only(&self) -> bool {
         self.right && !self.left && !self.middle && !self.shift && !self.ctrl && !self.alt
     }
 }
 
-/// The views of the Perspective pill and the axis gizmo (`ViewportNavigation::Target`).
+/// The views of the Perspective pill and the axis gizmo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Target {
     Perspective,
@@ -86,7 +86,7 @@ impl Target {
         }
     }
 
-    /// `TryParseTarget`: the key or the name, any case; "reset" is the free view.
+    /// The key or the name, any case; "reset" is the free view.
     #[must_use]
     pub fn parse(text: &str) -> Option<Target> {
         if text.is_empty() {
@@ -100,7 +100,7 @@ impl Target {
             .find(|t| text.eq_ignore_ascii_case(t.key()) || text.eq_ignore_ascii_case(t.name()))
     }
 
-    /// The camera's heading-pitch-bank of an axis view (`ViewFront` ... `ViewBottom`).
+    /// The camera's heading-pitch-bank of an axis view (front ... bottom).
     #[must_use]
     pub fn hpb(self) -> Option<Vec3> {
         match self {
@@ -122,7 +122,7 @@ pub fn angle_difference(a: f32, b: f32) -> f32 {
     if d > PI { TAU - d } else { d }
 }
 
-/// `Fvector::setHP`: the direction a heading and a pitch look along.
+/// The direction a heading and a pitch look along.
 #[must_use]
 pub fn dir_hp(h: f32, p: f32) -> Vec3 {
     let (sh, ch) = h.sin_cos();
@@ -130,7 +130,7 @@ pub fn dir_hp(h: f32, p: f32) -> Vec3 {
     Vec3::new(-cp * sh, sp, cp * ch)
 }
 
-/// The keys held while flying (`nmForward` ...).
+/// The keys held while flying (forward ...).
 mod fly {
     pub const FORWARD: u8 = 1 << 0;
     pub const BACK: u8 = 1 << 1;
@@ -164,7 +164,7 @@ impl FlyKey {
     }
 }
 
-/// The editor camera (`CUI_Camera`) and the view the navigation keeps (`ViewportNavigation`).
+/// The editor camera and the view the navigation keeps.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Nav {
     /// Heading, pitch, bank in radians.
@@ -236,7 +236,7 @@ impl Nav {
         self.build();
     }
 
-    /// `BuildCamera`: the angles kept within a turn either way.
+    /// The angles kept within a turn either way.
     pub fn build(&mut self) {
         for a in [&mut self.hpb.x, &mut self.hpb.y, &mut self.hpb.z] {
             if *a > TAU {
@@ -288,7 +288,7 @@ impl Nav {
         self.moving
     }
 
-    /// `WasNavInput`: the last right press moved the camera, so it opens no menu.
+    /// The last right press moved the camera, so it opens no menu.
     #[must_use]
     pub fn was_nav_input(&self) -> bool {
         self.nav_input
@@ -310,7 +310,7 @@ impl Nav {
         }
     }
 
-    /// `MoveStart`: RMB, MMB or Alt+LMB claim the mouse for UE-style navigation, Shift for the
+    /// RMB, MMB or Alt+LMB claim the mouse for UE-style navigation, Shift for the
     /// legacy move. `true` when the camera took the press.
     pub fn move_start(&mut self, b: Buttons) -> bool {
         let ue_claim = !b.shift && (b.right || b.middle || (b.alt && b.left));
@@ -335,7 +335,7 @@ impl Nav {
         false
     }
 
-    /// `LeftDragStart`: a left drag nothing took is the camera's.
+    /// A left drag nothing took is the camera's.
     pub fn left_drag_start(&mut self, b: Buttons) -> bool {
         if self.moving {
             return false;
@@ -349,7 +349,7 @@ impl Nav {
         true
     }
 
-    /// `MoveEnd`: `true` when the move ended.
+    /// `true` when the move ended.
     pub fn move_end(&mut self, b: Buttons) -> bool {
         self.shift = b;
         let nav_end = self.ue && !b.any_button();
@@ -386,7 +386,7 @@ impl Nav {
     }
 
     /// `Process`: a mouse move of `dx`, `dy` pixels while the camera moves. `aspect` is the
-    /// picture's height over its width (`fASPECT`). `true` when the camera took it.
+    /// picture's height over its width. `true` when the camera took it.
     pub fn process(&mut self, b: Buttons, dx: f32, dy: f32, aspect: f32) -> bool {
         if !self.moving {
             return false;
@@ -436,7 +436,7 @@ impl Nav {
         true
     }
 
-    /// `KeyDown` while flying: `true` when the camera took the key.
+    /// The key press while flying: `true` when the camera took the key.
     pub fn key_down(&mut self, key: FlyKey) -> bool {
         if !self.flying() {
             return false;
@@ -522,7 +522,7 @@ impl Nav {
         None
     }
 
-    /// Frames a box keeping the view's direction (`ZoomExtents`, fitted by `gz_render::frame_fit`).
+    /// Frames a box keeping the view's direction (fitted by `gz_render::frame_fit`).
     pub fn zoom_extents(&mut self, bounds: &Aabb, size: [u32; 2]) {
         if bounds.is_empty() {
             return;
@@ -537,7 +537,7 @@ impl Nav {
         self.build();
     }
 
-    /// `MatchesOrientation`: the camera still looks the way the view put it.
+    /// The camera still looks the way the view put it.
     fn matches(&self, target: Target) -> bool {
         let Some(want) = target.hpb() else { return true };
         let tol = 0.1f32.to_radians();
@@ -546,13 +546,13 @@ impl Nav {
             && angle_difference(self.hpb.z, want.z) <= tol
     }
 
-    /// `CurrentTarget`: an axis view the camera turned away from is the free view again.
+    /// An axis view the camera turned away from is the free view again.
     #[must_use]
     pub fn current(&self) -> Target {
         if self.matches(self.view) { self.view } else { Target::Perspective }
     }
 
-    /// `SetTarget`: an axis view keeps the position and turns the camera; the free view comes
+    /// An axis view keeps the position and turns the camera; the free view comes
     /// back to the pose it had before the first axis view.
     pub fn set_target(&mut self, target: Target) {
         let previous = self.current();
@@ -575,13 +575,13 @@ impl Nav {
         self.build();
     }
 
-    /// `ResetState`: the free view, nothing remembered.
+    /// The free view, nothing remembered.
     pub fn reset_state(&mut self) {
         self.view = Target::Perspective;
         self.saved = None;
     }
 
-    /// `MouseRayFromPoint` through a pixel of a picture `size` big.
+    /// A ray through a pixel of a picture `size` big.
     #[must_use]
     pub fn ray(&self, size: [u32; 2], pixel: glam::Vec2) -> Option<gz_render::Ray> {
         gz_render::pick_ray(&self.camera(), size, pixel)

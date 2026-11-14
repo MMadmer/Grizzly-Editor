@@ -3,7 +3,7 @@
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-/// base64url without padding (`B64u`).
+/// base64url without padding.
 #[must_use]
 pub fn encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
@@ -27,7 +27,7 @@ pub fn encode(data: &[u8]) -> String {
 }
 
 /// Reads base64url or standard base64, padded or not, line breaks and spaces skipped
-/// (`UnB64u`). `None` for any other character. Bits left over at the end are dropped.
+/// . `None` for any other character. Bits left over at the end are dropped.
 #[must_use]
 pub fn decode(text: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(text.len() * 3 / 4);

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, Ui, Vec2, pos2};
 use gz_app::{DocCx, Document, EditAction, OpenRequest};
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Origin, SmolStr};
+use gz_editor::{Args, CmdError, Editor, Origin, SmolStr};
 use gz_fmt_xr::{LightAnim, LightAnims};
 use gz_store::{Apply, State, Store, StoreOptions};
 use gz_ui::dialog::{self, Answer, ConfirmSpec};
@@ -78,7 +78,7 @@ fn item_mut<'a>(lib: &'a mut LightAnims, name: &str) -> Result<&'a mut LightAnim
         .ok_or_else(|| CmdError::not_found(format!("no light animation is named '{name}'")))
 }
 
-/// `CLAItem::Resize`: growing moves the key at the old end to the new end; shrinking drops the
+/// Growing moves the key at the old end to the new end; shrinking drops the
 /// keys past the new last frame.
 pub fn resize(item: &mut LightAnim, count: i32) {
     let count = count.max(1);
@@ -97,13 +97,13 @@ pub fn resize(item: &mut LightAnim, count: i32) {
     }
 }
 
-/// `CLAItem::PrevKeyFrame`: the key before `frame`, else the first.
+/// The key before `frame`, else the first.
 #[must_use]
 pub fn prev_key(item: &LightAnim, frame: i32) -> i32 {
     item.keys.range(..frame).next_back().or_else(|| item.keys.iter().next()).map_or(0, |(f, _)| *f)
 }
 
-/// `CLAItem::NextKeyFrame`: the key after `frame`, else the last.
+/// The key after `frame`, else the last.
 #[must_use]
 pub fn next_key(item: &LightAnim, frame: i32) -> i32 {
     item.keys.range(frame + 1..).next().or_else(|| item.keys.iter().next_back()).map_or(0, |(f, _)| *f)
@@ -266,7 +266,7 @@ impl LanimDoc {
             });
         });
         if let Some(line) = line {
-            self.editor.log.plain(line);
+            self.editor.log.finding(&line);
         }
     }
 
@@ -612,7 +612,7 @@ impl LanimDoc {
         }
     }
 
-    /// The fields of `library` for this tab (`UIEditLightAnim::Mcp`).
+    /// The fields of `library` for this tab.
     fn state(&self) -> Map<String, Value> {
         let snap = self.store.snapshot();
         let keys = Self::keys(&snap.lib);
@@ -655,11 +655,11 @@ impl LanimDoc {
 
 impl LibraryDoc for LanimDoc {
     fn mcp(&mut self, action: &str, args: &Args) -> Result<Map<String, Value>, String> {
-        if let Some(s) = args.str("search") {
+        if let Some(s) = args.get("search").and_then(Value::as_str) {
             self.list.search = s.to_owned();
         }
         if action == "select" {
-            let item = args.str("item").unwrap_or_default().to_owned();
+            let item = args.get("item").and_then(Value::as_str).unwrap_or_default().to_owned();
             let snap = self.store.snapshot();
             let keys = Self::keys(&snap.lib);
             let Some(at) = find(&keys, &item) else {
@@ -667,7 +667,7 @@ impl LibraryDoc for LanimDoc {
             };
             let name = keys.get(at).copied().unwrap_or_default().to_owned();
             self.select(&name);
-            if let Some(frame) = args.i64("frame").filter(|f| *f >= 0) {
+            if let Some(frame) = args.get("frame").and_then(Value::as_i64).filter(|f| *f >= 0) {
                 self.pointer = i32::try_from(frame).unwrap_or(i32::MAX);
                 let item = self.current(&snap.lib);
                 self.clamp_pointer(item.as_ref());

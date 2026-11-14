@@ -1,4 +1,4 @@
-//! The tolerant XML tree and the navigation of `CXml`.
+//! The tolerant XML tree and its navigation.
 
 use std::borrow::Cow;
 
@@ -152,7 +152,7 @@ impl<'a> Parser<'a> {
         id
     }
 
-    /// `GetEntity`: the character an `&...;` stands for, and how many bytes it took.
+    /// The character an `&...;` stands for, and how many bytes it took.
     fn entity(&self, at: &str) -> Option<(char, usize)> {
         if let Some(num) = at.strip_prefix("&#") {
             let semi = num.find(';')?;
@@ -179,7 +179,7 @@ impl<'a> Parser<'a> {
         None
     }
 
-    /// Text up to `end`, entities decoded, condensed when `condense` (`ReadText`).
+    /// Text up to `end`, entities decoded, condensed when `condense`.
     fn read_text(&mut self, end: &str, condense: bool) -> String {
         let mut out = String::new();
         let mut white = false;
@@ -543,7 +543,7 @@ impl Document {
         None
     }
 
-    /// `NavigateToNode`: `path` is `a:b:c`; the first step takes the `index`-th child named
+    /// `path` is `a:b:c`; the first step takes the `index`-th child named
     /// `a`, each further step the first child of that name.
     #[must_use]
     pub fn navigate(&self, start: NodeId, path: &str, index: usize) -> Option<NodeId> {
@@ -559,7 +559,7 @@ impl Document {
         node
     }
 
-    /// `NavigateToNodeWithAttribute`: the first child `tag` of `start` whose `attr` is `value`.
+    /// The first child `tag` of `start` whose `attr` is `value`.
     #[must_use]
     pub fn navigate_with_attr(&self, start: NodeId, tag: &str, attr: &str, value: &str) -> Option<NodeId> {
         let n = self.count(Some(start), Some(tag));
@@ -569,7 +569,7 @@ impl Document {
         })
     }
 
-    /// `SearchForAttribute`: depth first over `start` and its siblings named `tag`.
+    /// Depth first over `start` and its siblings named `tag`.
     #[must_use]
     pub fn search_for_attribute(
         &self,
@@ -597,7 +597,7 @@ impl Document {
         None
     }
 
-    /// `GetNodesNum`: the children named `tag` (all children for `None`).
+    /// The children named `tag` (all children for `None`).
     #[must_use]
     pub fn count(&self, node: Option<NodeId>, tag: Option<&str>) -> usize {
         node.map_or(0, |n| self.children(n).filter(|&c| tag.is_none_or(|t| self.value(c) == t)).count())
@@ -625,7 +625,7 @@ impl Document {
         self.read(node).map_or(default, |s| atof(s) as f32)
     }
 
-    /// `ReadAttrib`: an element's attribute.
+    /// An element's attribute.
     #[must_use]
     pub fn attr(&self, node: Option<NodeId>, name: &str) -> Option<&str> {
         let n = self.node(node?)?;

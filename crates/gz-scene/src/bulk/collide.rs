@@ -1,7 +1,7 @@
-//! The collision model the AI map is generated over (`GenerateMap`'s `CDB::Collector` of the snap
-//! objects' faces): every face of a surface whose compiler shader collides, a two-sided one twice
+//! The collision model the AI map is generated over (the faces of the snap
+//! objects): every face of a surface whose compiler shader collides, a two-sided one twice
 //! (the second time turned round), in the snap list's order; and the queries the generation asks
-//! of it - `BoxQuery(OPT_FULL_TEST)` and `RayQuery(OPT_ONLYNEAREST | OPT_CULL)`.
+//! of it - a full box test and a nearest-hit ray test with culling.
 //!
 //! A uniform grid over XZ finds the candidates; a query answers the triangles in the order they
 //! were added, which is the collector's order.
@@ -56,7 +56,7 @@ fn collides(shaders: Option<&ShadersXrlc>, name: &str, unknown: &mut usize) -> b
 }
 
 impl CollideModel {
-    /// The faces of the scene objects named, as `GenerateMap` collects them.
+    /// The faces of the scene objects named, as the generation collects them.
     #[must_use]
     pub fn build(state: &SceneState, lib: &Library, snap: &[SmolStr], shaders: Option<&ShadersXrlc>) -> Self {
         let mut tris: Vec<[Vec3; 3]> = Vec::new();

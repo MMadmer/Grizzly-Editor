@@ -1,4 +1,4 @@
-//! The module's own page the Mod Browser shows (`EditorCatalog::WebsiteIsModulePage`): an AP-PRO
+//! The module's own page the Mod Browser shows: an AP-PRO
 //! file page or forum topic, or a ModDB mod / addon page.
 
 fn slug_char(c: u8) -> bool {

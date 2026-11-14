@@ -166,7 +166,7 @@ impl Default for Environment {
     }
 }
 
-/// The sky of a weather as `dxEnvironmentRender::RenderSky` draws it: a half box round the
+/// The sky of a weather as the engine draws it: a half box round the
 /// camera, the two hours' cube maps blended by `weight`, times `color`, turned by `rotation`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sky {
@@ -213,7 +213,7 @@ pub enum SpriteSize {
     ScreenFixed,
 }
 
-/// A quad the frame builds facing the camera (`FillSprite`).
+/// A quad the frame builds facing the camera.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sprite {
     pub position: Vec3,
@@ -275,7 +275,7 @@ pub struct Line {
 pub enum ShapeKind {
     /// -0.5 to 0.5 on every axis.
     Box,
-    /// Radius 1 round the origin: three great circles when wired (`DrawLineSphere`).
+    /// Radius 1 round the origin: three great circles when wired.
     Sphere,
     /// The apex at the origin, opening along +Z to a base of radius 1 at z = 1.
     Cone,
@@ -284,11 +284,11 @@ pub enum ShapeKind {
     /// The XZ square -0.5 to 0.5, facing +Y.
     Plane,
     /// Three lines through the origin, 1 each way; `rot45` adds the same turned by 45 degrees
-    /// about every axis (`DrawCross`, a point light's mark).
+    /// about every axis (a point light's mark).
     Cross { rot45: bool },
-    /// The corner brackets of a selected object's box (`DrawSelectionBox`).
+    /// The corner brackets of a selected object's box.
     SelectionBox,
-    /// An octahedron of radius 1 (`DrawRomboid`).
+    /// An octahedron of radius 1.
     Romboid,
 }
 
@@ -344,7 +344,7 @@ impl Helpers {
         self.shape(ShapeKind::Box, bounds.unit_transform(), fill, wire, depth_tested);
     }
 
-    /// `DrawLineSphere`: three circles.
+    /// Three circles: a sphere.
     pub fn sphere(
         &mut self,
         center: Vec3,
@@ -357,7 +357,7 @@ impl Helpers {
         self.shape(ShapeKind::Sphere, m, fill, wire, depth_tested);
     }
 
-    /// `DrawCone`: the apex, the axis, the height and the base radius.
+    /// The apex, the axis, the height and the base radius.
     #[allow(clippy::too_many_arguments)]
     pub fn cone(
         &mut self,
@@ -374,7 +374,7 @@ impl Helpers {
         self.shape(ShapeKind::Cone, m, fill, wire, depth_tested);
     }
 
-    /// `DrawLink`: a line from `a` to `b` with an arrow head of `head` metres at `b`.
+    /// A line from `a` to `b` with an arrow head of `head` metres at `b`.
     pub fn arrow(&mut self, a: Vec3, b: Vec3, head: f32, color: Color, depth_tested: bool) {
         self.line(b, a, color, depth_tested);
         let Some(d) = (b - a).try_normalize() else { return };
@@ -387,18 +387,18 @@ impl Helpers {
         }
     }
 
-    /// `DrawCross` with every arm `size` long.
+    /// A cross with every arm `size` long.
     pub fn cross(&mut self, at: Vec3, size: f32, rot45: bool, color: Color, depth_tested: bool) {
         let m = Mat4::from_scale_rotation_translation(Vec3::splat(size), Quat::IDENTITY, at);
         self.shape(ShapeKind::Cross { rot45 }, m, None, Some(color), depth_tested);
     }
 
-    /// `DrawPointLight`.
+    /// A point light's mark.
     pub fn point_light(&mut self, at: Vec3, radius: f32, color: Color) {
         self.cross(at, radius, true, color, true);
     }
 
-    /// `DrawSpotLight`: the cone's edges from the light and its axis.
+    /// The cone's edges from the light and its axis.
     pub fn spot_light(&mut self, at: Vec3, dir: Vec3, range: f32, angle: f32, color: Color) {
         let d = dir.try_normalize().unwrap_or(Vec3::Z);
         let half = (std::f32::consts::FRAC_PI_2 - angle * 0.5).max(0.0);

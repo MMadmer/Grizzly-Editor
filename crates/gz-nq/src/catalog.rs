@@ -1,9 +1,9 @@
-//! The kind catalog (`NqCatalog`): what every node, action and condition kind takes, which pins
+//! The kind catalog: what every node, action and condition kind takes, which pins
 //! it has and which document may carry it.
 //!
 //! The game owns it: `configs\nq\catalog.ltx` of the linked game (the editor's bundled copy when
 //! none is linked), the `configs\nq\kinds\*.ltx` beside it, those of every installed module and,
-//! last, those of the open project. [`parse_text`] reads one file exactly as the C++ hand-rolled
+//! last, those of the open project. [`parse_text`] reads one file by a hand-rolled
 //! reader does; [`Catalog::assemble`] folds the files in that order - a later file redefining a
 //! kind replaces it.
 
@@ -13,14 +13,14 @@ use smol_str::SmolStr;
 
 use crate::text::{c_atof, c_atoi, split, trim};
 
-/// A use of a kind (`EUse`).
+/// A use of a kind.
 pub const USE_TRIGGER: u8 = 1;
 pub const USE_MAIN: u8 = 2;
 pub const USE_EXTRA: u8 = 4;
 pub const USE_COND: u8 = 8;
 
 /// The catalog type names: what tells a parameter definition line from a kind attribute that
-/// shares its name (`kTypes`).
+/// shares its name.
 const TYPES: &[&str] = &[
     "string",
     "int",
@@ -88,7 +88,7 @@ pub fn is_type_name(s: &str) -> bool {
     TYPES.contains(&s)
 }
 
-/// A parameter of a kind, or a key of one row of its list parameter (`SParam`).
+/// A parameter of a kind, or a key of one row of its list parameter.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Param {
     pub name: String,
@@ -128,7 +128,7 @@ fn parse_param(name: &str, spec: &str) -> Param {
     p
 }
 
-/// One kind (`SKind`).
+/// One kind.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Kind {
     /// `dialog.topic`.
@@ -229,16 +229,16 @@ fn lower(s: &str) -> String {
     s.to_ascii_lowercase()
 }
 
-/// Reads one catalog file into `kinds` (`ParseCatalogText`). The text is decoded already.
+/// Reads one catalog file into `kinds`. The text is decoded already.
 ///
-/// A hand-rolled reader, as in the C++: a module may redeclare a kind, and a parameter may be
+/// A hand-rolled reader: a module may redeclare a kind, and a parameter may be
 /// named like a kind attribute (`task.set_text: title`), so lines are read in order.
 pub fn parse_text(text: &str, source: &str, kinds: &mut Vec<Kind>, header: &mut Header) {
     let mut sect = String::new();
     let mut cur: Option<usize> = None;
     let mut param_names: Vec<String> = Vec::new();
-    // oracle: the row names are not reset by a new section - a kind without `rows` sees the
-    // previous kind's names, as the C++ reader does
+    // the row names are not reset by a new section - a kind without `rows` sees the
+    // previous kind's names
     let mut row_names: Vec<String> = Vec::new();
     let mut after_params = false;
     for raw in text.split('\n') {
@@ -385,7 +385,7 @@ pub struct Catalog {
     pub files: Vec<String>,
     /// Why there are no kinds, when there are none.
     pub error: String,
-    /// Changes with every load (the C++ `Generation`).
+    /// Changes with every load.
     pub generation: u32,
 }
 
@@ -436,7 +436,7 @@ impl Catalog {
         Self { kinds, by_id, by_alias, ..Self::default() }
     }
 
-    /// Whether it holds any kind (`Ensure`).
+    /// Whether it holds any kind.
     #[must_use]
     pub fn loaded(&self) -> bool {
         !self.kinds.is_empty()
@@ -454,7 +454,7 @@ impl Catalog {
     }
 
     /// Whether a kind roots the graph: the catalog's `use = trigger` without `main`, the name
-    /// when the catalog does not know it (`NqText::IsTrigger`).
+    /// when the catalog does not know it.
     #[must_use]
     pub fn is_trigger(&self, kind: &str) -> bool {
         if kind.is_empty() {
@@ -466,13 +466,13 @@ impl Catalog {
         }
     }
 
-    /// The kinds usable at a position, in catalog order, of one document kind (`KindsFor`).
+    /// The kinds usable at a position, in catalog order, of one document kind.
     #[must_use]
     pub fn kinds_for(&self, use_mask: u8, behaviour: bool) -> Vec<&Kind> {
         self.kinds.iter().filter(|k| k.uses & use_mask != 0 && k.in_doc(behaviour)).collect()
     }
 
-    /// `quest_catalog`'s reply fields (`McpCatalog`), or the error.
+    /// `asset.kinds`'s reply fields, or the error.
     pub fn to_json(&self) -> Result<Json, String> {
         if !self.loaded() {
             return Err(if self.error.is_empty() {
@@ -567,7 +567,7 @@ fn kind_json(k: &Kind) -> Json {
 }
 
 /// The groups of parameters a kind takes only one of at a time; each entry is a comma separated
-/// list of names (`ExclusiveForms`). The catalog line cannot say this yet.
+/// list of names. The catalog line cannot say this yet.
 #[must_use]
 pub fn exclusive_forms(kind: &str) -> &'static [&'static str] {
     match kind {
@@ -577,13 +577,13 @@ pub fn exclusive_forms(kind: &str) -> &'static [&'static str] {
     }
 }
 
-/// The index of the form `param` belongs to (`FormIndex`).
+/// The index of the form `param` belongs to.
 #[must_use]
 pub fn form_index(kind: &str, param: &str) -> Option<usize> {
     exclusive_forms(kind).iter().position(|f| f.split(',').any(|p| p == param))
 }
 
-/// Whether a value already present rules out the form `param` belongs to (`FormRuledOut`).
+/// Whether a value already present rules out the form `param` belongs to.
 #[must_use]
 pub fn form_ruled_out(kind: &str, param: &str, params: &gz_luadata::Value) -> bool {
     let Some(mine) = form_index(kind, param) else { return false };

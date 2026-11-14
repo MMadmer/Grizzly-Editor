@@ -1,6 +1,6 @@
-//! `xrLC_GlobalData`: everything the level compiler holds while it builds, as a value the
-//! caller owns (the C++ `lc_global_data()` and `inlc_global_data()`), and the calls `XrLC` makes
-//! into `XrLCLight` as its methods.
+//! Everything the level compiler holds while it builds, as a value the
+//! caller owns, and the calls the level compiler makes
+//! into the light as its methods.
 
 use glam::Vec3;
 use gz_fmt_level::{Aabb, BuildProject};
@@ -16,7 +16,7 @@ use crate::ray::{RapidCollector, RayFace, RayModel, RcFace, RcastForm, casts};
 use crate::vertex::{apply_vertex_light, light_vertices};
 use crate::{Ctl, LcError, Result};
 
-/// `xrLC_GlobalData`.
+/// The data a build holds.
 #[derive(Clone, Debug)]
 pub struct LcGlobalData {
     /// `g_params`.
@@ -25,9 +25,7 @@ pub struct LcGlobalData {
     pub shaders: Shaders,
     pub materials: Vec<BuildMaterial>,
     pub textures: Vec<BuildTexture>,
-    /// `L_static`.
     pub lights: LightSet,
-    /// `RCAST_Model`.
     pub ray: Option<RayModel>,
     /// The pages made by the merge.
     pub lightmaps: Vec<Lightmap>,
@@ -43,7 +41,7 @@ pub struct LcGlobalData {
     pub linear: bool,
 }
 
-/// What `CBuild::Light` makes besides what it changes in the data.
+/// What the light step makes besides what it changes in the data.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LightOutput {
     /// The implicitly lighted textures.
@@ -78,7 +76,7 @@ impl LcGlobalData {
         }
     }
 
-    /// `CBuild::Load`'s MU part: the models and the references of `build.prj`.
+    /// The MU part of the load: the models and the references of `build.prj`.
     pub fn load_mu(&mut self, prj: &BuildProject) -> Result<()> {
         self.mu_models = prj.mu_models.iter().map(MuModel::load).collect::<Result<_>>()?;
         // the models share one vertex and one face pool, filled model after model
@@ -98,13 +96,13 @@ impl LcGlobalData {
         Ok(())
     }
 
-    /// `base_Face::Shader`.
+    /// A face's shader.
     #[must_use]
     pub fn shader(&self, material: u16) -> &ShaderXrlc {
         shader_of(material, &self.shaders, &self.materials)
     }
 
-    /// `DataFace::hasImplicitLighting`.
+    /// Whether a face is implicitly lit.
     #[must_use]
     pub fn has_implicit_lighting(&self, f: FaceId) -> bool {
         self.mesh
@@ -112,7 +110,7 @@ impl LcGlobalData {
             .is_some_and(|face| has_implicit_lighting(face, &self.shaders, &self.materials, &self.textures))
     }
 
-    /// `CBuild::Light_prepare`: `CacheOpacity` of every face and every model's.
+    /// The opacity cache of every face and every model's.
     pub fn light_prepare(&mut self) {
         let faces = self.mesh.faces().to_vec();
         for f in faces {
@@ -125,15 +123,15 @@ impl LcGlobalData {
         }
     }
 
-    /// `CBuild::CalcNormals` (`calculate_normals<Vertex>`).
+    /// Calculates the normals of the vertices and faces.
     pub fn calc_normals(&mut self, smoothing: Smoothing) -> isize {
         self.mesh.calc_normals(self.params.sm_angle, smoothing)
     }
 
-    /// `CBuild::MU_ModelsCalculateNormals`.
+    /// Calculates the normals of the MU models.
     pub fn mu_calc_normals(&mut self, smoothing: Smoothing) {
         let angle = self.params.sm_angle;
-        // one after another through the pools they share, as the C++ does
+        // one after another through the pools they share
         let mut vpool = self.mu_models.last().map(|m| m.mesh.vpool.clone()).unwrap_or_default();
         let mut fpool = self.mu_models.last().map(|m| m.mesh.fpool.clone()).unwrap_or_default();
         for m in &mut self.mu_models {
@@ -149,7 +147,7 @@ impl LcGlobalData {
         }
     }
 
-    /// `CBuild::BuildRapid`: the shadow-casting faces of the level (one of each set of equal
+    /// The shadow-casting faces of the level (one of each set of equal
     /// faces) and of every reference into the ray model, which replaces the one before; answers
     /// the soup as `build.cform` holds it. `bounds` is the box of the build's vertices.
     pub fn build_rapid(&mut self, bounds: &Aabb) -> Result<RcastForm> {
@@ -250,7 +248,7 @@ impl LcGlobalData {
         out
     }
 
-    /// `CBuild::LMaps`: every deflector lit.
+    /// Every deflector lit.
     pub fn light_deflectors(&mut self, ctl: &Ctl<'_>) -> Result<()> {
         let mut defls = std::mem::take(&mut self.deflectors);
         let out = self.light_env().and_then(|env| defls.light_all(&env, ctl));
@@ -258,7 +256,7 @@ impl LcGlobalData {
         out
     }
 
-    /// `LightVertex`.
+    /// The light of a vertex.
     pub fn light_vertices(&mut self, ctl: &Ctl<'_>) -> Result<()> {
         let light = {
             let env = self.light_env()?;
@@ -268,7 +266,7 @@ impl LcGlobalData {
         Ok(())
     }
 
-    /// `ImplicitLighting`.
+    /// The implicit lighting.
     pub fn implicit_lighting(&mut self, ctl: &Ctl<'_>) -> Result<Vec<ImplicitMap>> {
         let model =
             self.ray.as_ref().ok_or_else(|| LcError::Invalid("The ray model is not built yet.".into()))?;
@@ -284,13 +282,13 @@ impl LcGlobalData {
         implicit_lighting(&mut self.mesh, &mut self.textures, &input, ctl)
     }
 
-    /// `CBuild::xrPhase_MergeLM`.
+    /// Merges the lightmaps into pages.
     pub fn merge_lightmaps(&mut self, ctl: &Ctl<'_>) -> Result<Vec<LightmapPage>> {
         merge_lightmaps(&mut self.deflectors, &mut self.mesh, &self.materials, &mut self.lightmaps, ctl)
     }
 
-    /// `CBuild::Light`: the implicit light, the deflectors, the vertices, then the merge into
-    /// pages. The MU light is [`Self::light_mu`], which the C++ runs beside these from the
+    /// The implicit light, the deflectors, the vertices, then the merge into
+    /// pages. The MU light is [`Self::light_mu`], which X-Ray's compiler runs beside these from the
     /// moment the ray model exists.
     pub fn light(&mut self, ctl: &Ctl<'_>) -> Result<LightOutput> {
         let implicit = self.implicit_lighting(ctl)?;
@@ -300,7 +298,7 @@ impl LcGlobalData {
         Ok(LightOutput { implicit, pages })
     }
 
-    /// The box of the listed vertices (`scene_bb` of `CBuild::Load`).
+    /// The box of the listed vertices.
     #[must_use]
     pub fn scene_bounds(&self) -> Aabb {
         let mut bb = Aabb::INVALID;
@@ -312,8 +310,7 @@ impl LcGlobalData {
         bb
     }
 
-    /// `CBuild::Load`'s vertices and faces of `build.prj` (`EB_Vertices`, `EB_Faces`,
-    /// `EB_SmoothGroups`): the faces checked (`Verify` is the caller's), their vertices joined.
+    /// The vertices and faces of `build.prj`: the faces checked (the check is the caller's), their vertices joined.
     pub fn load_mesh(&mut self, prj: &BuildProject) -> Result<()> {
         let verts: Vec<_> = prj.verts.iter().map(|&p| self.mesh.create_vertex(p)).collect();
         for (i, b) in prj.faces.iter().enumerate() {

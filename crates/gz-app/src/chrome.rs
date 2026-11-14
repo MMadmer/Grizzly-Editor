@@ -752,7 +752,7 @@ impl ShellState {
             });
         });
         if let Some(line) = line {
-            self.editor.log.plain(line);
+            self.editor.log.finding(&line);
         }
     }
 
@@ -2076,7 +2076,7 @@ impl ShellState {
         }
     }
 
-    // ---- ui_popup ------------------------------------------------------------------------
+    // ---- ui.popup ------------------------------------------------------------------------
 
     /// Puts a popup up to be looked at, the way a click does; the one up before goes. `Err`
     /// says why it cannot.
@@ -2091,14 +2091,14 @@ impl ShellState {
         match kind {
             "menu" => {
                 if !contract::MENUS.contains(&arg) {
-                    return Err(format!("no menu '{arg}' (ui_contract lists the menus)"));
+                    return Err(format!("no menu '{arg}' (ui.contract lists the menus)"));
                 }
                 let graph = active.starts_with("quest:") || active.starts_with("beh:");
                 if arg == "Graph" && !graph {
-                    return Err("the Graph menu belongs to a graph tab: ui_tab activate one first".to_owned());
+                    return Err("the Graph menu belongs to a graph tab: ui.tab activate one first".to_owned());
                 }
                 if matches!(arg, "Scene" | "Build" | "View") && active != LEVEL {
-                    return Err(format!("the {arg} menu belongs to the Level tab: ui_tab action=activate id=level first"));
+                    return Err(format!("the {arg} menu belongs to the Level tab: ui.tab action=activate id=level first"));
                 }
                 if arg == "Menu" && !self.folded {
                     return Err("the menus are folded into the Menu button only while the window is narrower than 1100 pt".to_owned());
@@ -2141,8 +2141,8 @@ impl ShellState {
             }
             "rebuild" if self.parts.status_chips.is_empty() => Err("nothing needs rebuilding: the Rebuild chip is up only while the scene has changes the level builders have not seen".to_owned()),
             "toolbar_split" if arg.is_empty() => Err("toolbar_split:<id> names the split button (build_mod on every tab)".to_owned()),
-            "cb_context" if arg.is_empty() => Err("cb_context:<path> names an entry as content_browser_selection lists it".to_owned()),
-            "viewport" if !contract::VIEWPORT_MENUS.contains(&arg) => Err(format!("no viewport menu '{arg}' (ui_contract lists them)")),
+            "cb_context" if arg.is_empty() => Err("cb_context:<path> names an entry as content.view lists it".to_owned()),
+            "viewport" if !contract::VIEWPORT_MENUS.contains(&arg) => Err(format!("no viewport menu '{arg}' (ui.contract lists them)")),
             "toolbar_overflow" | "toolbar_split" | "cb_context" | "cb_add" | "cb_view" | "cb_favorites" | "cb_grid" | "outliner_filters" | "outliner_more" | "viewport" | "rebuild" => {
                 if matches!(kind, "outliner_filters" | "outliner_more" | "viewport") {
                     self.activate(ctx, LEVEL);
@@ -2156,7 +2156,7 @@ impl ShellState {
                 gz_ui::menu::show_popup(ctx, &name);
                 Ok(())
             }
-            _ => Err(format!("unknown popup '{show}' (ui_contract lists them)")),
+            _ => Err(format!("unknown popup '{show}' (ui.contract lists them)")),
         }
     }
 }

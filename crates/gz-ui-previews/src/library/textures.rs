@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use egui::{Color32, CornerRadius, Rect, Sense, TextureHandle, Ui, Vec2, pos2};
 use gz_app::{DocCx, Document, EditAction, OpenRequest};
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Origin};
+use gz_editor::{Args, CmdError, Editor, Origin};
 use gz_fmt_tex::{
     BumpMode, MipFilterId, TextureFlags, TextureFormat, TextureMaterial, TextureParams, TextureType,
     read_texture_thm, texture_tile,
@@ -481,7 +481,7 @@ impl TexLibDoc {
         );
     }
 
-    /// `STextureParams::FillProp`: the rows a description has, by its type.
+    /// The rows a description has, by its type.
     fn draw_properties(&mut self, ui: &mut Ui, item: &TexItem, names: &[&str]) {
         let before = self.params_of(item);
         let mut p = before.clone();
@@ -650,7 +650,7 @@ impl TexLibDoc {
                     });
                 }
             }
-            // `OnCubeMapBtnClick`: the strip made into a smaller one beside its game texture
+            // the strip made into a smaller one beside its game texture
             if p.ty == TextureType::CUBE_MAP && !self.import_mode() {
                 let mut make = false;
                 g.section("Cube Map", true, None, |g| {
@@ -719,11 +719,11 @@ impl TexLibDoc {
         args: &Args,
         items: &[TexItem],
     ) -> Result<Map<String, Value>, String> {
-        if let Some(s) = args.str("search") {
+        if let Some(s) = args.get("search").and_then(Value::as_str) {
             self.list.search = s.to_owned();
         }
         if action == "select" {
-            let item = args.str("item").unwrap_or_default();
+            let item = args.get("item").and_then(Value::as_str).unwrap_or_default();
             let keys: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
             let Some(at) = find(&keys, item) else {
                 return Err(format!("no texture is named or matches '{item}'"));
@@ -987,7 +987,7 @@ impl Document for TexLibDoc {
             let asker =
                 if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
             if let Some(line) = gz_ui::dialog::notice(cx.ctx, asker, Tone::Error, "Save failed", &e) {
-                self.editor.log.plain(line);
+                self.editor.log.finding(&line);
             }
         }
         if !import {
@@ -1074,7 +1074,7 @@ impl Document for TexLibDoc {
             if let Some(line) =
                 gz_ui::dialog::notice(ui.ctx(), asker, Tone::Info, "Check New Textures", &text_)
             {
-                self.editor.log.plain(line);
+                self.editor.log.finding(&line);
             }
             self.back_to_library();
         }

@@ -1,6 +1,6 @@
 //! `STATE_Read` and `STATE_Write` of every class.
 //!
-//! One function per C++ class, calling the functions of its bases in the order the C++ calls
+//! One function per class, calling the functions of its bases in the order the game calls
 //! `inherited::STATE_*`. Every `m_wVersion` branch is kept. Where the game's classes and the
 //! editor's differ, the layout is the game's and the comment says so.
 
@@ -14,7 +14,7 @@ use crate::packet::{NetReader, NetWriter, PacketResult};
 use crate::script::Script;
 use crate::{EntityError, Result};
 
-/// `weaponSidecarConditionSaveMask`: bits of the condition type that never reach a packet.
+/// Bits of the condition type that never reach a packet.
 const WEAPON_CONDITION_SAVE_MASK: u32 = (1 << 25) | (1 << 26);
 
 /// What a `STATE_Read` works on.
@@ -92,7 +92,7 @@ fn r_cform(c: &mut ReadCtx<'_, '_>) -> PacketResult<()> {
     let count = c.r.r_u8()?;
     for _ in 0..count {
         let shape = match c.r.r_u8()? {
-            // raw `Fsphere` in a binary packet, a vector and a float in a scene section:
+            // raw sphere in a binary packet, a vector and a float in a scene section:
             // the same sixteen bytes either way
             0 => Shape::Sphere { center: c.r.r_vec3()?, radius: c.r.r_float()? },
             1 => {
@@ -125,7 +125,7 @@ fn w_cform(o: &Object, w: &mut NetWriter) {
     }
 }
 
-/// `SPHBonesData::net_Load`. The game's layout: one 64-bit bone mask (the editor's engine
+/// The bone data's load. The game's layout: one 64-bit bone mask (the editor's engine
 /// carries four).
 fn r_saved_bones(r: &mut NetReader<'_>) -> PacketResult<SavedBones> {
     let bones_mask = r.r_u64()?;
@@ -142,7 +142,7 @@ fn r_saved_bones(r: &mut NetReader<'_>) -> PacketResult<SavedBones> {
     Ok(SavedBones { bones_mask, root_bone, min, max, bones })
 }
 
-/// `SPHBonesData::net_Save`.
+/// The bone data's save.
 fn w_saved_bones(b: &SavedBones, w: &mut NetWriter) {
     w.w_u64(b.bones_mask);
     w.w_u16(b.root_bone);
@@ -1166,7 +1166,7 @@ fn w_zombie(o: &Object, w: &mut NetWriter) {
     w.w_float(z.attack_angle);
 }
 
-/// `CALifeHumanBrain::on_state_read`.
+/// The human brain's part of the state.
 fn r_human_brain(c: &mut ReadCtx<'_, '_>) -> PacketResult<()> {
     let v = c.v;
     let r = &mut *c.r;
@@ -1201,7 +1201,7 @@ fn r_human_brain(c: &mut ReadCtx<'_, '_>) -> PacketResult<()> {
     Ok(())
 }
 
-/// `CSE_ALifeHumanAbstract::STATE_Read`: the trader part comes first.
+/// The trader part comes first.
 fn r_human(c: &mut ReadCtx<'_, '_>) -> Result<()> {
     r_trader_abstract(c)?;
     r_monster(c)?;
@@ -1217,7 +1217,7 @@ fn r_human(c: &mut ReadCtx<'_, '_>) -> Result<()> {
 fn w_human(o: &Object, w: &mut NetWriter) {
     w_trader_abstract(o, w);
     w_monster(o, w);
-    // `CALifeHumanBrain::on_state_write`: not for a scene section
+    // not for a scene section
     if !w.is_ini()
         && let Some(human) = o.human()
     {

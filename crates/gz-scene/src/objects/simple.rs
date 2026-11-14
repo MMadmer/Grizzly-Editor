@@ -6,13 +6,13 @@ use crate::math::Vec3;
 
 // ---------------------------------------------------------------- scene objects
 
-/// `CSceneObject::flUseSurface`.
+/// The flag that makes a scene object use its surface.
 pub const SO_USE_SURFACE: u32 = 1 << 0;
-/// `flVisualMode`: the reference names an `.ogf`.
+/// The reference names an `.ogf`.
 pub const SO_VISUAL_MODE: u32 = 1 << 1;
 
 /// A surface of the reference with the scene's own shader, compiler shader, material,
-/// texture and vertex map (`flUseSurface`).
+/// texture and vertex map.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct SurfaceOverride {
     pub name: SmolStr,
@@ -23,7 +23,6 @@ pub struct SurfaceOverride {
     pub vmap: SmolStr,
 }
 
-/// `CSceneObject`.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct SceneObjectData {
     /// The library object (`props\box_1`) or, in visual mode, the `.ogf` path.
@@ -54,15 +53,15 @@ pub mod light_flags {
     pub const POINT_FUZZY: u32 = 1 << 4;
     pub const CAST_SHADOW: u32 = 1 << 5;
 }
-/// `D3DLIGHT_POINT`, `D3DLIGHT_SPOT`, `D3DLIGHT_DIRECTIONAL`.
+/// The light kinds: point, spot, directional.
 pub const LT_POINT: u32 = 1;
 pub const LT_SPOT: u32 = 2;
 pub const LT_DIRECT: u32 = 3;
 
-/// `CLight::SFuzzyData`.
+/// The fuzzy light data.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Fuzzy {
-    /// `fstSphere` 0, `fstBox` 1.
+    /// The fuzzy light shapes: sphere 0, box 1.
     pub shape: u8,
     pub sphere_radius: f32,
     pub box_dim: Vec3,
@@ -75,7 +74,6 @@ impl Default for Fuzzy {
     }
 }
 
-/// `CLight`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LightData {
     pub kind: u32,
@@ -93,7 +91,7 @@ pub struct LightData {
 }
 
 impl Default for LightData {
-    /// `CLight::Construct`.
+    /// A new light.
     fn default() -> Self {
         Self {
             kind: LT_POINT,
@@ -116,7 +114,6 @@ impl LightData {}
 
 // ---------------------------------------------------------------- glows
 
-/// `CGlow`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GlowData {
     pub shader: SmolStr,
@@ -140,13 +137,12 @@ impl GlowData {}
 
 // ---------------------------------------------------------------- sound sources
 
-/// `ESoundSource`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SoundSrcData {
     pub kind: u32,
     pub wav: SmolStr,
     pub flags: u32,
-    /// `m_Params.position`: what `GetPosition` answers.
+    /// The sound source's position.
     pub position: Vec3,
     pub volume: f32,
     pub freq: f32,
@@ -181,11 +177,10 @@ impl SoundSrcData {}
 
 // ---------------------------------------------------------------- particle systems
 
-/// `EParticlesObject`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParticlesData {
     pub reference: SmolStr,
-    /// `m_GameType` (`SetDefaults` is every bit).
+    /// The particles' game type; the default is every bit.
     pub game_type: u16,
 }
 

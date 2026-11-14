@@ -34,7 +34,7 @@ pub(crate) struct HelperGeometry {
     pub tris_overlay: Vec<LineVertex>,
 }
 
-/// `UpdateGrid`: the thin lines first, then the thick ones, each set along x then along z.
+/// The thin lines first, then the thick ones, each set along x then along z.
 pub(crate) fn grid_lines(grid: &Grid, out: &mut Vec<LineVertex>) {
     let n = grid.cells.min(10_000) as i64;
     let step = grid.cell_size.max(1e-3);

@@ -1,4 +1,4 @@
-//! The two side panels of a graph tab (`NqInspector`): the Graph panel (the document's own
+//! The two side panels of a graph tab: the Graph panel (the document's own
 //! settings in one scroll: its header, its tasks or roles, its variables, then the module's
 //! globals - each a section with a + on its header) and the Details panel (the selected node, its selected action under a splitter, the
 //! help footer). Edits are staged on a copy while a widget is worked and committed as one
@@ -104,7 +104,7 @@ fn task_value(t: &Task) -> Value {
     tv
 }
 
-/// A global's default as written in mod.ltx, as the value it is (`GlobalValue`).
+/// A global's default as written in mod.ltx, as the value it is.
 #[must_use]
 pub fn global_value(text_: &str) -> Value {
     match text_ {
@@ -123,7 +123,7 @@ pub fn global_value(text_: &str) -> Value {
     }
 }
 
-/// A global's value as mod.ltx keeps it: a string always quoted (`GlobalText`).
+/// A global's value as mod.ltx keeps it: a string always quoted.
 #[must_use]
 pub fn global_text(v: &Value) -> String {
     match v {
@@ -179,7 +179,7 @@ pub struct Inspector {
     pub vars_share: f32,
     details_column: f32,
     pending_action: Option<f32>,
-    /// quest_view scroll=: taken by the pane it names.
+    /// graph.view scroll=: taken by the pane it names.
     pub scroll: Option<String>,
     /// A pane to scroll to its end on the next frame, once its content is measured.
     bottom_next: Option<&'static str>,
@@ -225,8 +225,7 @@ fn op(fields: &[(&str, Value)]) -> Value {
     t
 }
 
-/// A variable renamed in a value: `var` / `var.set` / `var.add` tables nested anywhere
-/// (`RenameVarInValue`).
+/// A variable renamed in a value: `var` / `var.set` / `var.add` tables nested anywhere.
 fn rename_var_in(v: &mut Value, from: &str, to: &str) {
     let Value::Table(t) = v else { return };
     let kind = t.get("kind").and_then(Value::as_str).unwrap_or("").to_owned();
@@ -413,7 +412,7 @@ impl Inspector {
         self.header_edit = None;
     }
 
-    /// Staged edits reach the document once no widget is being worked (`CommitIdle`).
+    /// Staged edits reach the document once no widget is being worked.
     pub fn commit_idle(&mut self, ctx: &egui::Context, cx: &mut PanelCx<'_>) {
         if ctx.egui_wants_keyboard_input() || ctx.dragged_id().is_some() {
             return;
@@ -786,7 +785,7 @@ impl Inspector {
         ch
     }
 
-    /// The cast of a behaviour graph: named slots its caller fills (`DrawRolesSection`).
+    /// The cast of a behaviour graph: named slots its caller fills.
     fn draw_roles(&mut self, ui: &mut Ui, cx: &mut PanelCx<'_>) -> bool {
         let mut ch = false;
         let (open, add) = fold(ui, &self.key("roles"), "Roles", None, true, Some((Icon::Plus, "Add a role")));
@@ -1016,7 +1015,7 @@ impl Inspector {
     }
 
     /// Renames a declared variable and every var.set / var.add / var reference to it, as one step
-    /// of the whole graph (`RenameVar`). False when the name is taken.
+    /// of the whole graph. False when the name is taken.
     fn rename_var(&mut self, cx: &mut PanelCx<'_>, from: &str, to: &str) -> bool {
         if to.is_empty() || from == to || self.header.vars.iter().any(|v| v.name == to) {
             return false;
@@ -1218,7 +1217,7 @@ impl Inspector {
         let _ = cx;
     }
 
-    /// Writes the globals into mod.ltx `[vars]` through the manifest's store (`SaveGlobals`).
+    /// Writes the globals into mod.ltx `[vars]` through the manifest's store.
     fn save_globals(&mut self, editor: &Arc<Editor>) {
         self.globals_dirty = false;
         let lines: Vec<String> = self
@@ -1246,7 +1245,7 @@ impl Inspector {
 
     // ---- the Details panel --------------------------------------------------------------------
 
-    /// The Details panel into `rect` (`DrawDetails`).
+    /// The Details panel into `rect`.
     #[allow(clippy::too_many_lines)]
     pub fn draw_details(&mut self, ui: &mut Ui, rect: Rect, cx: &mut PanelCx<'_>) {
         self.sync_node(cx);

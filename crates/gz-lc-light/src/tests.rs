@@ -116,7 +116,7 @@ fn global(lights: LightSet) -> LcGlobalData {
     LcGlobalData::new(params(), shaders, materials, textures, lights)
 }
 
-/// One deflector over the faces, as `xrPhase_UVmap` makes it.
+/// One deflector over the faces, as the UV mapping makes it.
 fn deflect(g: &mut LcGlobalData, start: FaceId) -> DeflId {
     let id = g.deflectors.create();
     let n = g.mesh.face(start).unwrap().n;
@@ -514,7 +514,7 @@ fn a_detail_slot_is_lit_at_its_points_and_its_corners_decide_its_objects() {
     // the free slots: sun 1 and sky 1 at each of the 225 points, the mean halved: 0.5 is
     // floor(7.5) = 7 of 15; the roofed one: 0. The two beside the roof have their row of 15
     // points on the roof's edge: a vertical ray there meets the edge (its origin on the roof's
-    // box face along a still axis, as the C++'s slab test takes it), 210 of 225 lit: 6
+    // box face along a still axis, as X-Ray's slab test takes it), 210 of 225 lit: 6
     assert_eq!(slots[0].colors(), [7, 7, 0, 0, 0]);
     assert_eq!(slots[1].colors(), [6, 6, 0, 0, 0]);
     assert_eq!(slots[2].colors(), [6, 6, 0, 0, 0]);

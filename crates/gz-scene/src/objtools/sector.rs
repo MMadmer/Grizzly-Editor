@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use glam::Vec4;
-use gz_base::SmolStr;
+use gz_base::{Finding, Findings, SmolStr};
 use gz_editor::{CmdError, Value, json};
 use gz_fmt_xr::{ShaderXrlc, ShadersXrlc};
 
@@ -15,7 +15,7 @@ use crate::math::{Aabb, Vec3};
 use crate::model::{ObjData, ObjId, Object, SceneState};
 use crate::objects::{PortalData, SectorData, fcolor_from};
 
-/// `DEFAULT_SECTOR_NAME`, as the scene keeps names.
+/// The default sector's name, as the scene keeps names.
 pub const DEFAULT_SECTOR: &str = "sector_default";
 
 /// A sector's item resolved: the scene object, its library object and the mesh.
@@ -39,7 +39,7 @@ fn data(o: &Object) -> Option<&SectorData> {
     }
 }
 
-/// The items of a sector that resolve (`LoadSectorDef` keeps only those).
+/// The items of a sector that resolve (the others are dropped).
 #[must_use]
 pub fn items(state: &SceneState, lib: &Library, s: &SectorData) -> Vec<Item> {
     s.items
@@ -84,7 +84,7 @@ pub fn volume(items: &[Item]) -> Volume {
     Volume { bounds, center, radius }
 }
 
-/// `EVisible`.
+/// Whether a mesh is visible.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Visible {
     None,
@@ -121,7 +121,7 @@ impl Volume {
     }
 }
 
-/// What `AddMesh` checks: a static object, a mesh no sector holds, not this sector's already.
+/// What adding a mesh checks: a static object, a mesh no sector holds, not this sector's already.
 #[must_use]
 pub fn can_add(
     state: &SceneState,
@@ -135,7 +135,7 @@ pub fn can_add(
         && !items.iter().any(|i| is_item(i, object, mesh))
 }
 
-/// The portals that name a sector (`RemoveSectorPortal`).
+/// The portals that name a sector.
 #[must_use]
 pub fn sector_portals(state: &SceneState, sector: &str) -> Vec<ObjId> {
     state
@@ -167,7 +167,7 @@ fn covered(state: &SceneState) -> rustc_hash::FxHashSet<(String, String)> {
         .collect()
 }
 
-/// `CaptureAllUnusedMeshes`: every mesh of a static scene object no sector holds, in scene
+/// Every mesh of a static scene object no sector holds, in scene
 /// order, with its face count.
 #[must_use]
 pub fn unused_meshes(state: &SceneState, lib: &Library) -> Vec<(Arc<Object>, Arc<LibraryObject>, usize)> {
@@ -211,11 +211,11 @@ fn shader<'a>(lib: &'a ShadersXrlc, name: &str) -> Option<&'a ShaderXrlc> {
 
 /// What is wrong with one sector.
 #[must_use]
-pub fn validate_sector(name: &str, items: &[Item], shaders: Option<&ShadersXrlc>) -> Vec<String> {
+pub fn validate_sector(name: &str, items: &[Item], shaders: Option<&ShadersXrlc>) -> Vec<Finding> {
     let mut out = Vec::new();
     let faces: usize = items.iter().map(|i| geom::face_count(&i.lib, i.mesh)).sum();
     if faces <= 4 {
-        out.push(format!("*ERROR: Sector: '{name}' - face count < 4!"));
+        out.error(format!("Sector '{name}' has too few faces."));
     }
     let Some(shaders) = shaders else { return out };
     let mut renderable = false;
@@ -224,8 +224,8 @@ pub fn validate_sector(name: &str, items: &[Item], shaders: Option<&ShadersXrlc>
         for sf in &m.surf_faces {
             let Some(surf) = it.lib.object.surfaces.get(sf.surface as usize) else { continue };
             match shader(shaders, &surf.shader_xrlc) {
-                None => out.push(format!(
-                    "*ERROR: Sector: '{name}' - shader '{}' does not exist on material '{}'.",
+                None => out.error(format!(
+                    "Sector '{name}': the compiler shader '{}' of material '{}' does not exist.",
                     surf.shader_xrlc, surf.name
                 )),
                 Some(s) => renderable |= s.flags & ShaderXrlc::RENDERING != 0,
@@ -233,7 +233,7 @@ pub fn validate_sector(name: &str, items: &[Item], shaders: Option<&ShadersXrlc>
         }
     }
     if !renderable {
-        out.push(format!("*ERROR: Sector: '{name}' - can't find any renderable face!"));
+        out.error(format!("Sector '{name}' has no renderable face."));
     }
     out
 }
@@ -241,21 +241,21 @@ pub fn validate_sector(name: &str, items: &[Item], shaders: Option<&ShadersXrlc>
 /// Whether every static mesh has a sector and every sector is sound, and the messages. `shaders` is the compiler shader library (`None`: not readable,
 /// the shader checks are left out).
 #[must_use]
-pub fn validate(state: &SceneState, lib: &Library, shaders: Option<&ShadersXrlc>) -> (bool, Vec<String>) {
+pub fn validate(state: &SceneState, lib: &Library, shaders: Option<&ShadersXrlc>) -> (bool, Vec<Finding>) {
     let mut msgs = Vec::new();
     if scene_objects_box(state, lib).is_none() {
-        msgs.push("Validation failed! Can't compute bbox.".to_owned());
+        msgs.info("The scene's bounding box cannot be computed, so the cells are not checked.");
         return (false, msgs);
     }
     let mut ok = true;
     let unused = unused_meshes(state, lib);
     let faces: usize = unused.iter().map(|(_, lo, m)| geom::face_count(lo, *m)).sum();
     if faces != 0 {
-        msgs.push(format!("*ERROR: Scene has '{faces}' non associated face!"));
+        msgs.error(format!("{faces} face(s) of the scene objects belong to no cell."));
         for (o, lo, m) in &unused {
             let mesh = lo.object.meshes.get(*m).map(|x| x.name.as_str()).unwrap_or("");
-            msgs.push(format!(
-                "! - scene object: '{}' [O:'{}', M:'{}']",
+            msgs.warn(format!(
+                "Scene object '{}' ('{}', mesh '{}') has faces in no cell.",
                 o.name,
                 o.ref_name().unwrap_or(""),
                 mesh
@@ -274,7 +274,7 @@ pub fn validate(state: &SceneState, lib: &Library, shaders: Option<&ShadersXrlc>
     (ok, msgs)
 }
 
-/// A new sector as `xr_new<CSector>` makes it.
+/// A new sector.
 #[must_use]
 pub fn new_sector(items: Vec<(SmolStr, SmolStr)>) -> Object {
     Object::new(ObjClass::Sector, "", ObjData::Sector(SectorData { items, ..SectorData::default() }))
@@ -284,7 +284,7 @@ fn item_of(o: &Object, lo: &LibraryObject, mesh: usize) -> Option<(SmolStr, Smol
     Some((o.name.clone(), lo.object.meshes.get(mesh)?.name.clone()))
 }
 
-/// `CreateDefaultSector`: a red default sector of every mesh no sector holds, selected.
+/// A red default sector of every mesh no sector holds, selected.
 pub fn create_default(state: &SceneState, lib: &Library) -> Result<Outcome, CmdError> {
     let refused = || CmdError::invalid("The default sector could not be created");
     if state.find(ObjClass::Sector, DEFAULT_SECTOR).is_some() {
@@ -370,7 +370,7 @@ pub fn capture_volume(state: &SceneState, lib: &Library, id: ObjId) -> Result<Ou
     Ok((b, json!({ "sector": sector.name.as_str(), "added": added })))
 }
 
-/// One edit of a sector's meshes (`AddMesh` / `DelMesh`) with what it says.
+/// One edit of a sector's meshes with what it says.
 #[derive(Default)]
 struct MeshEdits {
     added: usize,
@@ -378,7 +378,7 @@ struct MeshEdits {
     emptied: bool,
 }
 
-/// `AddMesh` / `DelMesh` of a list of meshes on the sector: a gesture's click, its paint or its
+/// Adds or deletes meshes on the sector from a list: a gesture's click, its paint or its
 /// box. `first_only_per_object` is the box's Remove rule: after a mesh of an object came out, the
 /// object's other meshes are not looked at. A sector that loses its last mesh goes, with its
 /// portals.
@@ -525,7 +525,7 @@ pub fn new_from_object(
 }
 
 /// The meshes of the visible scene objects a box pick's frustum holds, in scene order
-/// (`FrustumPick` of the objects, then of their meshes).
+/// (the objects, then their meshes).
 #[must_use]
 pub fn meshes_in_frustum(state: &SceneState, lib: &Library, planes: &[Vec4]) -> Vec<(ObjId, usize)> {
     let local = |r: &str| lib.cached(r).map(|o| o.bounds);
@@ -550,7 +550,7 @@ pub fn meshes_in_frustum(state: &SceneState, lib: &Library, planes: &[Vec4]) -> 
     out
 }
 
-/// What `sector_tool` lists of a sector: its name, the default mark, counts (`GetCounts`).
+/// What `scene.zones` lists of a sector: its name, the default mark, counts.
 #[must_use]
 pub fn sector_json(state: &SceneState, lib: &Library, o: &Object) -> Value {
     let Some(d) = data(o) else { return Value::Null };
@@ -608,6 +608,24 @@ mod tests {
         assert!(create_default(&s, &lib).is_err());
         let (ok, msgs) = validate(&s, &lib, None);
         assert!(!ok);
-        assert_eq!(msgs, vec!["Validation failed! Can't compute bbox.".to_owned()]);
+        assert_eq!(
+            msgs,
+            vec![Finding::info("The scene's bounding box cannot be computed, so the cells are not checked.")]
+        );
+    }
+
+    #[test]
+    fn findings_carry_their_level_and_no_mark() {
+        use gz_base::Severity;
+        let empty = validate_sector("sector_1", &[], None);
+        assert_eq!(empty, vec![Finding::error("Sector 'sector_1' has too few faces.")]);
+        let mut all = empty;
+        all.warn("a warning");
+        all.info("a note");
+        assert_eq!(
+            all.iter().map(|f| f.severity).collect::<Vec<_>>(),
+            [Severity::Error, Severity::Warning, Severity::Note]
+        );
+        assert!(all.iter().all(|f| !f.text.starts_with(['!', '~', '*'])));
     }
 }

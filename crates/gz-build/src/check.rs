@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use gz_base::{Problem, Severity};
+use gz_base::{Finding, Problem, Severity};
 use gz_editor::{Editor, ProjectSession};
 use parking_lot::RwLock;
 
@@ -37,8 +37,9 @@ pub trait BuildCheck: Send + Sync {
 }
 
 /// The scene's bake, run before anything else: a build ships what the author sees. It answers
-/// a note - a line per layer, and a `WARNING: ` line per thing left out.
-pub type BakeHook = Arc<dyn Fn(Arc<Editor>, Arc<ProjectSession>) -> BoxFuture<'static, String> + Send + Sync>;
+/// what it did - a note per layer, a warning per thing left out, an error when it failed.
+pub type BakeHook =
+    Arc<dyn Fn(Arc<Editor>, Arc<ProjectSession>) -> BoxFuture<'static, Vec<Finding>> + Send + Sync>;
 
 /// The checks of every area. Lives in `editor.services`.
 #[derive(Default)]
@@ -65,7 +66,10 @@ impl BuildChecks {
 
     pub fn set_bake(
         &self,
-        bake: impl Fn(Arc<Editor>, Arc<ProjectSession>) -> BoxFuture<'static, String> + Send + Sync + 'static,
+        bake: impl Fn(Arc<Editor>, Arc<ProjectSession>) -> BoxFuture<'static, Vec<Finding>>
+        + Send
+        + Sync
+        + 'static,
     ) {
         *self.bake.write() = Some(Arc::new(bake));
     }
@@ -76,7 +80,7 @@ impl BuildChecks {
     }
 }
 
-/// A problem as a line of the build's answer: a C++ coded problem (`E404`, `W120`) keeps its
+/// A problem as a line of the build's answer: a coded problem (`E404`, `W120`) keeps its
 /// code in front, as the validators wrote their lines; any other code stays out of the text.
 #[must_use]
 pub fn problem_line(p: &Problem) -> String {
@@ -87,7 +91,7 @@ pub fn problem_line(p: &Problem) -> String {
     if coded { format!("{} {}", p.code, p.message) } else { p.message.clone() }
 }
 
-/// What one check said, sorted the way the C++ `SortProblems` did.
+/// What one check said, sorted by the validators' order.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Verdict {
     /// The refusal, empty when the check let the build through.
@@ -96,7 +100,7 @@ pub(crate) struct Verdict {
 }
 
 impl Verdict {
-    /// `first_only`: the manifest's check refused with its first error alone, as the C++ did.
+    /// `first_only`: the manifest's check refused with its first error alone.
     pub(crate) fn of(problems: &[Problem], headline: Option<&str>, first_only: bool) -> Self {
         let mut errors: Vec<String> =
             problems.iter().filter(|p| p.severity == Severity::Error).map(problem_line).collect();

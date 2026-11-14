@@ -3,8 +3,7 @@
 //! Author Key; Requirements (failures first, the met ones folded under "Met (n)", the VirusTotal
 //! findings left out); "VirusTotal (required)" - the one place the verdict appears, its open
 //! state in the Required tone, never grey; Submission; Withdrawal, whose Withdraw... raises the
-//! sheet `dlg.catalog_withdraw`. Every card button is Secondary. The C++ is the window half of
-//! `EditorCatalogSubmit.cpp`.
+//! sheet `dlg.catalog_withdraw`. Every card button is Secondary.
 //!
 //! A submission is public from its first second, and the catalog judges it by itself: no text
 //! here says anyone reviews or merges it.
@@ -306,7 +305,7 @@ fn pick_file(editor: &Arc<Editor>, facts: &Arc<Mutex<Facts>>, save: bool, start:
         done.slot.lock().picked = Some(if save { Picked::Target(p) } else { Picked::Use(p) });
     });
     if let Err(line) = picked {
-        editor.log.plain(line);
+        editor.log.finding(&line);
     }
 }
 
@@ -325,7 +324,7 @@ impl Drop for PickDone {
 }
 
 impl SubmitUi {
-    /// Mod > Submit to Mod Browser, `ui_dialog open id=submit`: the window, and the requirements
+    /// Mod > Submit to Mod Browser, `ui.dialog open id=submit`: the window, and the requirements
     /// as they stand now.
     pub(crate) fn request(&mut self, editor: &Arc<Editor>) {
         if editor.project_opt().is_none() {

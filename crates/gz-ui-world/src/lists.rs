@@ -1,5 +1,5 @@
 //! What the pickers of both tabs offer, read on the pools and only looked at by a frame
-//! (`NqPickers::Index`, `EditorCharacters::TradeCategories`, the models of `Visuals()`).
+//! (the pickers' indexes, the trade categories, the visuals' models).
 //!
 //! [`Lists`] lives as long as the open project. A frame asks [`Lists::want`] - a comparison of
 //! two revisions - and reads [`Lists::view`]; when the linked game or the project's files moved,
@@ -105,8 +105,7 @@ pub struct Lists {
 }
 
 /// A community a stalker can be of. The linked game's list also carries the monsters' (their
-/// own section, plus "monster") and the player's own, and none of those makes an NPC
-/// (`StalkerCommunity`).
+/// own section, plus "monster") and the player's own, and none of those makes an NPC.
 fn stalker_community(e: &PickerEntry) -> bool {
     if e.extra == "monster_communities" || e.id == "monster" {
         return false;

@@ -1,7 +1,7 @@
-//! Detail objects as `EDetailManager::OnRender` draws them: the models of the slots round the
-//! camera placed the way the game places them (`CDetailManager::cache_Decompress`: the same
+//! Detail objects as the detail tool draws them: the models of the slots round the
+//! camera placed the way the game places them (the same
 //! dither, jitter, yaw, scale and the same random seeds per slot, each dropped onto the
-//! ground's surface), faded with distance (`UpdateVisibleM`), drawn instanced; the slot grid's
+//! ground's surface), faded with distance, drawn instanced; the slot grid's
 //! boxes within 75 m; the base texture over the ground.
 //!
 //! Slots decompress on the CPU pool as part of a scene pass, those of the 49 x 49 cache window
@@ -57,7 +57,7 @@ pub fn dither_map() -> [[i32; 16]; 16] {
     out
 }
 
-/// `Interpolate`: the four corner values across the slot.
+/// The four corner values across the slot.
 fn interpolate(base: &[f32; 4], x: u32, y: u32, size: u32) -> f32 {
     let f = size as f32;
     let fx = x as f32 / f;
@@ -73,7 +73,7 @@ fn interpolate(base: &[f32; 4], x: u32, y: u32, size: u32) -> f32 {
     (cx + cy) / 2.0
 }
 
-/// `InterpolateAndDither`.
+/// The interpolation and dither.
 fn interpolate_and_dither(
     alpha255: &[f32; 4],
     x: u32,
@@ -91,7 +91,7 @@ fn interpolate_and_dither(
     c > dither[col][row]
 }
 
-/// `CDB::TestRayTri` with culling: the distance along `dir` to a front-facing triangle.
+/// A ray-triangle test with culling: the distance along `dir` to a front-facing triangle.
 fn ray_tri(c: Vec3, d: Vec3, t: &[Vec3; 3]) -> Option<f32> {
     let e1 = t[1] - t[0];
     let e2 = t[2] - t[0];
@@ -140,7 +140,7 @@ pub fn slot_box(slot: &DetailSlot, sx: i32, sz: i32) -> Aabb {
     Aabb::new(min - Vec3::splat(EPS_L), max + Vec3::splat(EPS_L))
 }
 
-/// `QueryDB`: the slot of the world grid, or none outside the header's.
+/// The slot of the world grid, or none outside the header's.
 fn query(d: &SceneDetails, sx: i32, sz: i32) -> Option<&DetailSlot> {
     let x = sx.checked_add(d.header.offs_x)?;
     let z = sz.checked_add(d.header.offs_z)?;
@@ -229,7 +229,7 @@ pub fn decompress(
     out
 }
 
-/// `Fmatrix::rotateY(yaw)` at `p`, times a scale.
+/// A rotation about Y by `yaw` at `p`, times a scale.
 #[must_use]
 pub fn item_transform(i: &Item, scale: f32) -> Mat4 {
     Mat4::from_translation(i.pos) * Mat4::from_rotation_y(i.yaw) * Mat4::from_scale(Vec3::splat(scale))
@@ -369,7 +369,7 @@ impl DetailCache {
             .collect();
         self.slots.extend(made);
 
-        // `UpdateVisibleM`: per slot the fade, per item the size on the picture
+        // per slot the fade, per item the size on the picture
         let fade_limit = DM_FADE * DM_FADE;
         let fade_start = 1.0f32;
         let fade_range = fade_limit - fade_start;
@@ -427,7 +427,7 @@ impl DetailCache {
         }
     }
 
-    /// `SBase::Render`: the ground's surfaces with the base texture laid over the box.
+    /// The ground's surfaces with the base texture laid over the box.
     fn base_texture(&mut self, d: &SceneDetails, p: &Pass<'_>, ground: &[ObjId], built: &mut Built) {
         let Some(texture) = d.base_texture.as_ref().filter(|t| !t.is_empty()) else { return };
         let blended = d.flags & tool_flags::BASE_TEXTURE_BLENDED != 0;
@@ -466,7 +466,7 @@ impl DetailCache {
     }
 }
 
-/// `flSlotBoxesDraw`: every slot within 75 m that the view sees, its box shrunk by 5 cm, in the
+/// Every slot within 75 m that the view sees, its box shrunk by 5 cm, in the
 /// inactive grey (a slot is selected by the details' editing tools).
 fn slot_boxes(d: &SceneDetails, selected: &[bool], p: &Pass<'_>, built: &mut Built) {
     let h = &d.header;

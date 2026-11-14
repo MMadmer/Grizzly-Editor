@@ -1,6 +1,6 @@
 //! What the graph area keeps while a project is open: the open documents, and the catalog, the
 //! pickers, the item capabilities, the project index and the problems as `Query`s keyed by the
-//! revisions they read (`NqDocs`, `NqCatalog::Ensure`, `NqPickers::Ensure`, `NqProjectIndex`).
+//! revisions they read.
 //! Nothing is dropped by hand: a link change, a file the tree sees change, an edit of a
 //! document or of `mod.ltx` moves a revision, and what read it is computed anew on its next use.
 
@@ -31,7 +31,7 @@ use crate::pickers::{self, GameIndex, PickerEntry, Pickers, ProjectFiles, Projec
 pub use crate::validate::CharacterBrief;
 use crate::validate::{self, Context, NqProblem};
 
-/// The project's characters, filled by the characters area (`EditorCharacters::Briefs`).
+/// The project's characters, filled by the characters area.
 pub trait CharacterLookup: Send + Sync {
     /// Moves whenever the briefs do.
     fn rev(&self) -> Rev;
@@ -39,8 +39,7 @@ pub trait CharacterLookup: Send + Sync {
 }
 
 /// What the open scene adds, filled by the scene area: its restrictors, its authored story ids,
-/// its way paths and the level it is (`SetSceneRestrictors`, `SetSceneStories`,
-/// `SetSceneWayPaths`, `NqDocs::CurrentLevel`).
+/// its way paths and the level it is.
 pub trait SceneLookup: Send + Sync {
     fn rev(&self) -> Rev;
     fn restrictors(&self) -> Vec<PickerEntry>;
@@ -50,14 +49,13 @@ pub trait SceneLookup: Send + Sync {
     fn level(&self) -> Option<String>;
 }
 
-/// What the world area reads out of the linked game's `all.spawn` (`EditorWorld::Transitions`,
-/// `EditorWorld::GamePatrols`).
+/// What the world area reads out of the linked game's `all.spawn` (the transitions, the patrols).
 pub trait WorldLookup: Send + Sync {
     fn rev(&self) -> Rev;
     fn transitions(&self) -> Vec<Transition>;
     fn patrols(&self) -> Vec<String>;
     /// Resolves once the linked game's world of the current revision is read: a command that
-    /// lists level changers waits for it, as the C++ read `all.spawn` when asked.
+    /// lists level changers waits for it.
     fn ready(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
 }
 
@@ -141,8 +139,7 @@ impl DocHandle {
     }
 }
 
-/// `"a\\b"` and `/` normalised to single backslashes, `\.\` dropped, a trailing separator cut
-/// (`NqUtil::NormalizePath`).
+/// `"a\\b"` and `/` normalised to single backslashes, `\.\` dropped, a trailing separator cut.
 #[must_use]
 pub fn normalize_path(p: &str) -> String {
     let mut out = String::with_capacity(p.len());
@@ -162,7 +159,7 @@ pub fn normalize_path(p: &str) -> String {
     out
 }
 
-/// The key a path is compared by (`NqUtil::PathKey`).
+/// The key a path is compared by.
 #[must_use]
 pub fn path_key(p: &str) -> String {
     normalize_path(p).to_lowercase()
@@ -195,7 +192,7 @@ pub struct ValidateEnv {
 }
 
 impl ValidateEnv {
-    /// The problems of a graph at `wire` (`NqDocs::Validate`).
+    /// The problems of a graph at `wire`.
     #[must_use]
     pub fn validate(&self, g: &Graph, wire: &str) -> Vec<NqProblem> {
         let others = self.index.other_ids(Some(wire));
@@ -321,7 +318,7 @@ impl NqService {
 
     // ---- paths ---------------------------------------------------------------------------------
 
-    /// Whether an absolute path lies inside the project (`NqDocs::InsideProject`).
+    /// Whether an absolute path lies inside the project.
     #[must_use]
     pub fn inside(&self, abs: &str) -> bool {
         let k = path_key(abs);
@@ -330,8 +327,7 @@ impl NqService {
             && k.as_bytes().get(self.root_key.len()) == Some(&b'\\')
     }
 
-    /// The wire form of an absolute path: project-relative with `/`, or itself with `/`
-    /// (`NqUtil::ProjectRelative`).
+    /// The wire form of an absolute path: project-relative with `/`, or itself with `/`.
     #[must_use]
     pub fn wire(&self, abs: &str) -> String {
         let n = normalize_path(abs);
@@ -339,7 +335,7 @@ impl NqService {
         rel.replace('\\', "/")
     }
 
-    /// A path as a document is named by (`NqDocs::Resolve`): project-relative or absolute,
+    /// A path as a document is named by: project-relative or absolute,
     /// `.nqasset` added without an extension; `for_write` keeps it inside the project and a graph.
     pub fn resolve(&self, path: &str, for_write: bool) -> Result<DocPath, String> {
         if path.is_empty() {
@@ -387,7 +383,7 @@ impl NqService {
     }
 
     /// The catalog of the linked game (the bundled copy without one), the installed modules'
-    /// kinds and the project's own, in that order (`NqCatalog::Load`).
+    /// kinds and the project's own, in that order.
     pub async fn catalog(&self, editor: &Editor) -> Arc<Catalog> {
         let manifest = self.manifest_now(editor).await;
         let own =
@@ -528,7 +524,7 @@ impl NqService {
         self.way_paths()
     }
 
-    /// The way paths of the open scene, then the linked game's own patrols (`SceneWayPaths`).
+    /// The way paths of the open scene, then the linked game's own patrols.
     #[must_use]
     pub fn way_paths(&self) -> Vec<PickerEntry> {
         let mut out = self.scene_lookup().map(|s| s.way_paths()).unwrap_or_default();
@@ -598,7 +594,7 @@ impl NqService {
         r
     }
 
-    /// Every graph of the project (`NqProjectIndex::Snapshot`); `overlay` lays dirty open
+    /// Every graph of the project; `overlay` lays dirty open
     /// documents over their files.
     pub async fn index(&self, editor: &Editor, overlay: bool) -> Arc<IndexSnapshot> {
         let catalog = self.catalog(editor).await;
@@ -737,7 +733,7 @@ impl NqService {
         Arc::new(ValidateEnv { catalog, pickers, caps, characters, globals, level, index, own_sections, rev })
     }
 
-    /// The problems of an open document (`NqDoc::Validate`): computed once per content and per
+    /// The problems of an open document: computed once per content and per
     /// state of what it reads; the reader's shape problems of its load come first.
     pub async fn problems(&self, editor: &Editor, doc: &DocHandle) -> Arc<Vec<NqProblem>> {
         let env = self.env(editor, true).await;
@@ -764,7 +760,7 @@ impl NqService {
 
     // ---- documents -----------------------------------------------------------------------------
 
-    /// The open document of a path (`NqDocs::Get`).
+    /// The open document of a path.
     #[must_use]
     pub fn get_doc(&self, path: &str) -> Option<Arc<DocHandle>> {
         let p = self.resolve(path, false).ok()?;
@@ -1032,7 +1028,7 @@ fn read_project_files(exec: &Executors, root: &Path, tree: &FileTree) -> Project
     }
 }
 
-/// Gathers and folds the catalog's files in the C++ order. Blocking: the IO pool.
+/// Gathers and folds the catalog's files in a fixed order. Blocking: the IO pool.
 fn load_catalog(
     game: Option<&GameFiles>,
     bundled: &Bundled,

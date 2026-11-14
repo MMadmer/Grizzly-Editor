@@ -51,7 +51,7 @@ impl BaseImage {
         self.w > 0 && self.h > 0 && !self.data.is_empty()
     }
 
-    /// `GetColor`.
+    /// The colour of a slot.
     #[must_use]
     pub fn color(&self, u: i32, v: i32) -> Option<u32> {
         if !self.valid() || u >= self.w as i32 || v >= self.h as i32 || u < 0 || v < 0 {
@@ -60,20 +60,20 @@ impl BaseImage {
         self.data.get(v as usize * self.w as usize + u as usize).copied()
     }
 
-    /// `GetPixelUFromX`.
+    /// The pixel column of an X position.
     fn pixel_u(&self, x: f32, b: &Aabb) -> i32 {
         let u = (x - b.min.x) / (b.max.x - b.min.x);
         i_floor(u * (self.w - 1) as f32 + 0.5).max(0)
     }
 
-    /// `GetPixelVFromZ`.
+    /// The pixel row of a Z position.
     fn pixel_v(&self, z: f32, b: &Aabb) -> i32 {
         let v = 1.0 - (z - b.min.z) / (b.max.z - b.min.z);
         i_floor(v * (self.h - 1) as f32 + 0.5).max(0)
     }
 }
 
-/// `Fcolor::set(u32)`.
+/// Sets a colour from a `u32`.
 fn fcolor(c: u32) -> [f32; 4] {
     let f = 1.0f32 / 255.0;
     [
@@ -109,7 +109,7 @@ pub fn objects_box(state: &SceneState, lib: &Library, ids: &[ObjId]) -> Option<A
     any.then_some(b)
 }
 
-/// `UpdateHeader`: the slot grid over the box.
+/// The slot grid over the box.
 #[must_use]
 pub fn header_for(bbox: &Aabb, old: &DetailHeader) -> DetailHeader {
     let mn_x = i_floor(bbox.min.x / DETAIL_SLOT_SIZE);
@@ -125,7 +125,7 @@ pub fn header_for(bbox: &Aabb, old: &DetailHeader) -> DetailHeader {
     }
 }
 
-/// `GetSlotRect`: x1, z1, x2, z2.
+/// X1, z1, x2, z2.
 fn slot_rect(h: &DetailHeader, sx: u32, sz: u32) -> [f32; 4] {
     let x = h.from_slot_x(sx as i32);
     let z = h.from_slot_z(sz as i32);
@@ -238,7 +238,7 @@ impl Ground {
     }
 }
 
-/// `UpdateSlotBBox`: the height of the faces under a slot, a little over and under them; an
+/// The height of the faces under a slot, a little over and under them; an
 /// empty slot where there are none.
 fn slot_box(ground: &Ground, bbox: &Aabb, h: &DetailHeader, sx: u32, sz: u32) -> DetailSlot {
     let r = slot_rect(h, sx, sz);
@@ -278,7 +278,6 @@ fn slot_box(ground: &Ground, bbox: &Aabb, h: &DetailHeader, sx: u32, sz: u32) ->
     slot
 }
 
-/// `SIndexDist`.
 #[derive(Clone, Copy, Debug, Default)]
 struct IndexDist {
     index: u32,
@@ -303,7 +302,7 @@ pub fn color_map(d: &SceneDetails) -> BTreeMap<u32, Vec<u8>> {
     out
 }
 
-/// `FindClosestIndex`.
+/// The closest index.
 fn find_closest(c: &[f32; 4], map: &BTreeMap<u32, Vec<u8>>, best: &mut Vec<IndexDist>) {
     let mut dist = f32::MAX;
     let mut index = None;
@@ -348,7 +347,7 @@ fn find_closest(c: &[f32; 4], map: &BTreeMap<u32, Vec<u8>>, best: &mut Vec<Index
     }
 }
 
-/// `CalcClosestCount`.
+/// The count of the closest indices.
 fn closest_count(part: usize, c: &[f32; 4], best: &mut [IndexDist]) {
     let mut dist = f32::MAX;
     let mut idx = None;
@@ -381,7 +380,7 @@ pub fn slot_objects(
     seed: u32,
 ) {
     let rr = slot_rect(h, sx, sz);
-    // `GetSlotTCRect`: v runs against z
+    // v runs against z
     let (x1, x2) = (base.pixel_u(rr[0], bbox), base.pixel_u(rr[2], bbox));
     let (y2, y1) = (base.pixel_v(rr[1], bbox), base.pixel_v(rr[3], bbox));
     let mut best: Vec<IndexDist> = Vec::with_capacity(4);
@@ -726,7 +725,7 @@ fn objects_for(
         .collect()
 }
 
-/// `InvalidateSlots`: no slot names an object.
+/// No slot names an object.
 #[must_use]
 pub fn invalidate_slots(d: &SceneDetails) -> SceneDetails {
     let slots: Vec<DetailSlot> = d
@@ -743,13 +742,13 @@ pub fn invalidate_slots(d: &SceneDetails) -> SceneDetails {
     SceneDetails { slots: slots.into(), ..d.clone() }
 }
 
-/// `ClearSlots`.
+/// Clears the slots.
 #[must_use]
 pub fn clear_slots(d: &SceneDetails) -> SceneDetails {
     SceneDetails { header: DetailHeader::default(), slots: Arc::from([]), ..d.clone() }
 }
 
-/// A slot's box (`RaySelect` / `FrustumSelect` / the boxes drawn).
+/// A slot's box (for picks and the boxes drawn).
 #[must_use]
 pub fn slot_aabb(d: &SceneDetails, i: usize) -> Option<Aabb> {
     let h = &d.header;
@@ -762,7 +761,7 @@ pub fn slot_aabb(d: &SceneDetails, i: usize) -> Option<Aabb> {
     ))
 }
 
-/// `RaySelect`'s pick: the nearest slot box the ray meets.
+/// The nearest slot box the ray meets.
 #[must_use]
 pub fn pick_slot(d: &SceneDetails, start: Vec3, dir: Vec3, dist: f32) -> Option<usize> {
     let mut best = None;
@@ -780,7 +779,7 @@ pub fn pick_slot(d: &SceneDetails, start: Vec3, dir: Vec3, dist: f32) -> Option<
     best
 }
 
-/// `FrustumSelect`'s test over the slot boxes.
+/// The frustum test over the slot boxes.
 #[must_use]
 pub fn slots_in_frustum(d: &SceneDetails, planes: &[Vec4]) -> Vec<usize> {
     (0..d.slots.len())

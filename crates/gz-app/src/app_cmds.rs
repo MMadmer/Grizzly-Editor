@@ -364,7 +364,7 @@ async fn app_about(editor: Arc<Editor>, _p: NoParams, origin: Origin) -> Reply {
             if let Some(line) =
                 gz_ui::dialog::notice(ctx, shell.asker(), Tone::Info, "About Grizzly Editor", &t)
             {
-                shell.editor.log.plain(line);
+                shell.editor.log.finding(&line);
             }
             Ok(())
         })

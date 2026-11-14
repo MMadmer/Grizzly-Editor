@@ -179,7 +179,7 @@ impl Judged {
     }
 }
 
-/// The compile step: `luaL_loadbuffer` with `=chunk`.
+/// The compile step: LuaJIT's buffer loader with `=chunk`.
 fn compile_step(src: &[u8], chunk: &[u8]) -> Result<parse::Compiled, Judged> {
     let (raw, at) = match compile(src) {
         Ok(Some(c)) => return Ok(c),

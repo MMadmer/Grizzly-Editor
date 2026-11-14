@@ -1,5 +1,5 @@
-//! LZO1X, the compression of the engine's `rtc_compress` / `rtc_decompress`
-//! (`XrCore/rt_compressor.cpp` over LZO 2.10), read only.
+//! LZO1X, the compression of the engine's runtime compressor
+//! (over LZO 2.10), read only.
 //!
 //! `rtc` adds no framing of its own: the stream is a bare LZO1X block, without a size and
 //! without a checksum. Whoever stores one keeps the two sizes beside it:

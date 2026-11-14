@@ -1,5 +1,5 @@
-//! What the quest editor reads of the open scene (`CollectSceneRestrictors`,
-//! `CollectSceneWayPaths`, `CollectSceneStories` of `UI_LevelMain.cpp`): `gz-nq`'s
+//! What the quest editor reads of the open scene (its restrictors, its way paths and its
+//! story ids): `gz-nq`'s
 //! `SceneLookup` slot, filled when a project opens.
 
 use std::sync::{Arc, Weak};

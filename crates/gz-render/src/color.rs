@@ -36,7 +36,7 @@ impl Color {
         self.0.map(|c| f32::from(c) / 255.0)
     }
 
-    /// The colour with its channels multiplied by `k` (alpha kept): `Fcolor::mul_rgb`.
+    /// The colour with its channels multiplied by `k` (alpha kept).
     #[must_use]
     pub fn scaled(self, k: f32) -> Self {
         let s = |c: u8| (f32::from(c) * k).round().clamp(0.0, 255.0) as u8;

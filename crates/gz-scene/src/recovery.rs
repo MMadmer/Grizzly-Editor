@@ -93,7 +93,6 @@ impl RecoveryPrefs {
     }
 }
 
-/// `SRecoveryEntry`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Entry {
     pub snapshot: String,
@@ -105,7 +104,7 @@ pub struct Entry {
     pub source_size: u64,
 }
 
-/// `HashFile`: FNV-1a over the bytes.
+/// FNV-1a over the bytes.
 #[must_use]
 pub fn fnv1a(bytes: &[u8]) -> u64 {
     let mut h = 14_695_981_039_346_656_037u64;
@@ -116,13 +115,13 @@ pub fn fnv1a(bytes: &[u8]) -> u64 {
     h
 }
 
-/// `IsSafeLeaf`: a bare file name.
+/// A bare file name.
 #[must_use]
 pub fn is_safe_leaf(name: &str) -> bool {
     !name.is_empty() && !name.contains(['\\', '/', ':']) && name != "." && name != ".."
 }
 
-/// `BuildManifest`.
+/// The recovery manifest written for an entry.
 #[must_use]
 pub fn build_manifest(entries: &[Entry]) -> String {
     let mut out = format!("[recovery]\r\nversion=1\r\ncount={}\r\n", entries.len());
@@ -135,7 +134,7 @@ pub fn build_manifest(entries: &[Entry]) -> String {
     out
 }
 
-/// `ReadManifest` (the `GetPrivateProfile*` reads: a missing value is 0 or empty).
+/// The recovery manifest read back (a missing value is 0 or empty).
 #[must_use]
 pub fn read_manifest(text: &str) -> Vec<Entry> {
     let mut sections: Vec<(String, Vec<(String, String)>)> = Vec::new();
@@ -190,14 +189,13 @@ fn file_time(t: SystemTime) -> u64 {
     t.duration_since(UNIX_EPOCH).map_or(0, |d| EPOCH_DIFF + (d.as_nanos() / 100) as u64)
 }
 
-/// `GetFileMetadata`: write time and size.
+/// Write time and size.
 #[must_use]
 pub fn file_meta(path: &Path) -> Option<(u64, u64)> {
     let m = std::fs::metadata(path).ok()?;
     Some((m.modified().map(file_time).unwrap_or(0), m.len()))
 }
 
-/// `EOperationState`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpState {
     Idle,
@@ -263,7 +261,7 @@ pub struct Status {
 }
 
 impl Status {
-    /// The fields in the C++ order.
+    /// The fields in the file's order.
     #[must_use]
     pub fn to_json(&self) -> Value {
         json!({
@@ -348,7 +346,7 @@ impl Recovery {
         root.join("backup").join("recovery")
     }
 
-    /// `BindProject` / `TryAcquireSessionOwner`: claims the project's session; a marker left by
+    /// Claims the project's session; a marker left by
     /// the last session means it did not end cleanly, and its newest valid snapshot is offered.
     pub fn bind(&self, root: &Path) {
         let mut s = self.inner.lock();
@@ -407,7 +405,7 @@ impl Recovery {
         self.inner.lock().last_input = Instant::now();
     }
 
-    /// `CanReplaceScene`.
+    /// Whether the scene may be replaced now.
     pub fn can_replace_scene(&self) -> Result<(), String> {
         if self.inner.lock().offer {
             return Err("restore or discard the pending crash recovery before replacing the scene".into());
@@ -415,7 +413,7 @@ impl Recovery {
         Ok(())
     }
 
-    /// `CanSerializeScene` without the editor's busy states.
+    /// Whether the scene may be serialized now, without the editor's busy states.
     pub fn can_snapshot(&self, game_linked: bool) -> Result<(), String> {
         let s = self.inner.lock();
         if s.bound.is_none() || s.shared || !s.owns {
@@ -563,7 +561,7 @@ impl Recovery {
         Ok(())
     }
 
-    /// `CanRestoreStartup`: what the restore needs; the snapshot's path and source.
+    /// What the restore needs; the snapshot's path and source.
     pub fn begin_restore(&self, dirty: bool, game_linked: bool) -> Result<(u64, PathBuf, String), String> {
         self.check_offer()?;
         if !game_linked {
@@ -607,7 +605,7 @@ impl Recovery {
         }
     }
 
-    /// `RequestDiscard` and its work.
+    /// Discards the recovery data and does its work.
     pub fn discard(&self) -> Result<u64, String> {
         self.check_offer()?;
         let id = self.begin(OpState::DiscardPending);
@@ -633,7 +631,7 @@ impl Recovery {
         }
     }
 
-    /// `OnSceneSaved` / `OnSceneReplaced`: the snapshots belong to a scene that is gone.
+    /// The snapshots belong to a scene that is gone.
     pub fn reset(&self) {
         let (root, ok) = {
             let s = self.inner.lock();
@@ -658,7 +656,7 @@ impl Recovery {
         s.next_save = Instant::now() + interval;
     }
 
-    /// `EndProjectSession`: a clean end takes the recovery data and the marker away.
+    /// A clean end takes the recovery data and the marker away.
     pub fn end(&self, dirty: bool) {
         let mut s = self.inner.lock();
         let Some(root) = s.bound.take() else { return };
@@ -679,7 +677,7 @@ impl Recovery {
         s.op_id = 0;
     }
 
-    /// `GetStatus`.
+    /// The recovery status.
     #[must_use]
     pub fn status(&self, dirty: bool, game_linked: bool) -> Status {
         let enabled = self.prefs.lock().enabled;
@@ -786,7 +784,7 @@ fn delete_snapshots_not_in(dir: &Path, keep: &[Entry]) {
     }
 }
 
-/// `DeleteRecoveryData`.
+/// Deletes the recovery data.
 fn delete_recovery_data(dir: &Path) -> Result<(), String> {
     let manifest = dir.join("manifest.ltx");
     if manifest.exists() {

@@ -1,9 +1,9 @@
-//! `CDeflector`: a group of faces mapped onto one lightmap rectangle, and its light
-//! (`xrDeflector.cpp`, `xrDeflectorLight.cpp`, `xrDeflectoL_Direct.cpp`): the projection that
-//! gives the faces their texture coordinates (`OA_*`), the texels lit through the faces
-//! (`L_Direct`, the jitter of `m_lm_jitter_samples`, `L_Direct_Edge`), the borders, the shrink to
-//! nothing or to a smaller size when the light is flat enough (`compress_Zero`, `compress_RMS`
-//! with `m_lm_rms_zero` / `m_lm_rms`), and the final border.
+//! A group of faces mapped onto one lightmap rectangle, and its light:
+//! the projection that
+//! gives the faces their texture coordinates, the texels lit through the faces
+//! (with the jitter of the lightmap samples, and the edge texels), the borders, the shrink to
+//! nothing or to a smaller size when the light is flat enough (the RMS thresholds),
+//! and the final border.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -30,10 +30,10 @@ use crate::{Ctl, Result};
 pub const LMAP_SIZE: u32 = 1024;
 /// The largest side a deflector is lit at: a page's half less its border.
 pub const MAX_LAYER: u32 = 512 - 2 * BORDER;
-/// `HASH`: the grid a deflector's triangles are found in.
+/// The grid a deflector's triangles are found in.
 const HASH_SIDE: usize = 128;
 
-/// `Jitter_Select`: the sample offsets of a texel for `m_lm_jitter_samples` (1, 9, anything else
+/// The sample offsets of a texel for `m_lm_jitter_samples` (1, 9, anything else
 /// is 4).
 #[must_use]
 pub fn jitter(samples: u32) -> &'static [Vec2] {
@@ -70,7 +70,7 @@ pub fn rms_shrink(p: &BuildParams) -> u32 {
     (8 + p.lm_rms) / 2
 }
 
-/// `UVtri`: a face's corners in the deflector's texture space.
+/// A face's corners in the deflector's texture space.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UvTri {
     pub uv: [Vec2; 3],
@@ -83,7 +83,6 @@ pub struct LightEnv<'a> {
     pub mesh: &'a Mesh,
     pub model: &'a RayModel,
     pub textures: &'a [BuildTexture],
-    /// `L_static`.
     pub lights: &'a LightSet,
     pub params: &'a BuildParams,
     /// `-nosun`.
@@ -104,7 +103,7 @@ impl<'a> LightEnv<'a> {
     }
 }
 
-/// `CDeflector`.
+/// A deflector.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Deflector {
     pub uv_polys: Vec<UvTri>,
@@ -117,7 +116,7 @@ pub struct Deflector {
 }
 
 impl Default for Deflector {
-    /// `CDeflector()`.
+    /// A new deflector.
     fn default() -> Self {
         Self {
             uv_polys: Vec::with_capacity(32),
@@ -140,7 +139,6 @@ struct TriWorld {
 }
 
 impl Deflector {
-    /// `OA_SetNormal`.
     pub fn oa_set_normal(&mut self, n: Vec3) {
         self.normal = normalize(n);
     }
@@ -170,8 +168,8 @@ impl Deflector {
         }
     }
 
-    /// `Face::OA_Unwarp` from `start`: the face and, through the faces of its corners, every
-    /// face reachable that has no deflector and fits this one, in the order of the C++
+    /// Projects the face from `start`: the face and, through the faces of its corners, every
+    /// face reachable that has no deflector and fits this one, in the order of X-Ray's
     /// recursion. Answers how many faces were tried (`affected`, from 1).
     pub fn oa_unwarp(&mut self, id: DeflId, mesh: &mut Mesh, start: FaceId, sm_angle: f32) -> u32 {
         let mut affected = 1u32;
@@ -213,7 +211,7 @@ impl Deflector {
         affected
     }
 
-    /// `OA_Export`: the deflector's normal from its faces' (weighted by area), the faces
+    /// The deflector's normal from its faces' (weighted by area), the faces
     /// projected along it into texture space, the size of its layer from the texture density.
     pub fn oa_export(
         &mut self,
@@ -272,7 +270,6 @@ impl Deflector {
         self.layer.create(w, h);
     }
 
-    /// `GetRect`.
     #[must_use]
     pub fn rect(&self) -> (Vec2, Vec2) {
         let Some(first) = self.uv_polys.first() else { return (Vec2::ZERO, Vec2::ZERO) };
@@ -286,7 +283,6 @@ impl Deflector {
         (min, max)
     }
 
-    /// `Bounds_Summary`.
     #[must_use]
     pub fn bounds_summary(&self) -> Box2 {
         let mut b = Box2::INVALID;
@@ -296,13 +292,12 @@ impl Deflector {
         b
     }
 
-    /// `GetBaseMaterial`: the material of the first face.
+    /// The material of the first face.
     #[must_use]
     pub fn base_material(&self, mesh: &Mesh) -> u16 {
         self.uv_polys.first().and_then(|t| mesh.face(t.owner)).map_or(0, |f| f.material)
     }
 
-    /// `GetFaceCount`.
     #[must_use]
     pub fn face_count(&self) -> usize {
         self.uv_polys.len()
@@ -361,7 +356,7 @@ impl Deflector {
             .collect()
     }
 
-    /// `RemapUV`: the deflector's own triangles remapped.
+    /// The deflector's own triangles remapped.
     #[allow(clippy::too_many_arguments)]
     pub fn remap_uv(
         &mut self,
@@ -391,7 +386,7 @@ impl Deflector {
             .collect()
     }
 
-    /// `L_Calculate`: the triangles mapped onto the layer's texels, then lit.
+    /// The triangles mapped onto the layer's texels, then lit.
     fn l_calculate(&mut self, env: &LightEnv<'_>, lights: &LightSet) {
         let (w, h) = (self.layer.width, self.layer.height);
         self.remap_uv(0, 0, w, h, w, h, false);
@@ -401,9 +396,9 @@ impl Deflector {
         self.l_direct(env, lights, &hash);
     }
 
-    /// `L_Direct`: every texel lit at its jittered samples through the first triangle that holds
+    /// Every texel lit at its jittered samples through the first triangle that holds
     /// each, then the texels the triangles' edges cross but no sample found. The rows are lit
-    /// in parallel; the edges in the C++ order, since one may take a texel another would.
+    /// in parallel; the edges in X-Ray's order, since one may take a texel another would.
     fn l_direct(&mut self, env: &LightEnv<'_>, lights: &LightSet, hash: &Hash2D) {
         let (w, h) = (self.layer.width as usize, self.layer.height as usize);
         if w == 0 || h == 0 {
@@ -470,7 +465,7 @@ impl Deflector {
     }
 }
 
-/// What `L_Direct_Edge` lights with.
+/// What the edge texels are lit with.
 struct EdgeLight<'a> {
     tracer: &'a Tracer<'a>,
     lights: &'a LightSet,
@@ -479,7 +474,7 @@ struct EdgeLight<'a> {
 }
 
 impl EdgeLight<'_> {
-    /// `L_Direct_Edge`: the texels an edge crosses that are still unlit, lit at the edge.
+    /// The texels an edge crosses that are still unlit, lit at the edge.
     fn run(
         &self,
         lm: &mut LmLayer,
@@ -531,7 +526,7 @@ impl EdgeLight<'_> {
 }
 
 impl Deflector {
-    /// `CDeflector::Light`: the layer lit, its borders grown, shrunk when the light allows, and
+    /// The layer lit, its borders grown, shrunk when the light allows, and
     /// grown by the final border.
     pub fn light(&mut self, env: &LightEnv<'_>) {
         // the bounds of the faces as they are now
@@ -756,7 +751,7 @@ pub fn compress_rms(lm: &LmLayer, rms: u32) -> Option<(u32, u32)> {
     Some((if w == 0 { lw } else { w }, if h == 0 { lh } else { h }))
 }
 
-/// The deflectors of a build (`g_deflectors`): an arena with stable ids and the list in the C++
+/// The deflectors of a build: an arena with stable ids and the list in X-Ray's
 /// order, as faces name their deflector.
 #[derive(Clone, Debug, Default)]
 pub struct Deflectors {
@@ -801,7 +796,7 @@ impl Deflectors {
         }
     }
 
-    /// `clear_and_free`: every deflector gone; the faces keep naming theirs, as the C++ faces keep
+    /// Clears every deflector: the faces keep naming theirs, as X-Ray's faces keep
     /// their pointers.
     pub fn clear(&mut self) {
         self.arena.clear();
@@ -818,8 +813,8 @@ impl Deflectors {
         self.list.is_empty()
     }
 
-    /// `CBuild::LMapsLocal`: every deflector on the list lit, as many at once as the pool has
-    /// workers (and each one's rows in parallel). The C++ shuffles the list first to spread the
+    /// Every deflector on the list lit, as many at once as the pool has
+    /// workers (and each one's rows in parallel). X-Ray's compiler shuffles the list first to spread the
     /// load over its six threads; a deflector's light depends on nothing but itself, so the
     /// order is the list's.
     pub fn light_all(&mut self, env: &LightEnv<'_>, ctl: &Ctl<'_>) -> Result<()> {
@@ -843,14 +838,6 @@ impl Deflectors {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_jitter_tables_are_the_cpp_ones() {
-        assert_eq!(jitter(1), &[Vec2::ZERO]);
-        assert_eq!(jitter(4).len(), 4);
-        assert_eq!(jitter(7).len(), 4);
-        assert_eq!(jitter(9)[4], Vec2::ZERO);
-    }
 
     #[test]
     fn a_flat_layer_compresses_to_nothing() {

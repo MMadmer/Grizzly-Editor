@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 
 use egui::Context;
+use gz_base::Finding;
 
 use crate::dialog::Asker;
 
@@ -78,10 +79,10 @@ impl FileRequest {
     }
 }
 
-/// The line logged when nothing opens.
+/// What is logged when nothing opens.
 #[must_use]
-pub fn suppressed_line(title: &str) -> String {
-    format!("~ [dlg suppressed] {title}")
+pub fn suppressed_line(title: &str) -> Finding {
+    Finding::warning(format!("[dlg suppressed] {title}"))
 }
 
 /// Whether a dialog would open for `asker` on `ctx` (a caller's scope held there wins).
@@ -93,14 +94,14 @@ pub fn may_open(ctx: Option<&Context>, asker: Asker) -> bool {
 
 /// Opens the system's dialog for a person, on a thread of its own; `then` runs there with the
 /// path picked. For any other asker (or the caller's scope on `ctx`) nothing opens: the error is
-/// the line to log, and the caller refuses with [`NAME_THE_FILE`]. A thread that could not start
-/// is an error too.
+/// the finding to log, and the caller refuses with [`NAME_THE_FILE`]. A thread that could not
+/// start is an error too.
 pub fn pick(
     ctx: Option<&Context>,
     asker: Asker,
     request: FileRequest,
     then: impl FnOnce(PathBuf) + Send + 'static,
-) -> Result<(), String> {
+) -> Result<(), Finding> {
     if !may_open(ctx, asker) {
         return Err(suppressed_line(&request.title));
     }
@@ -109,7 +110,7 @@ pub fn pick(
             then(picked);
         }
     });
-    spawned.map(drop).map_err(|e| format!("~ the file dialog did not open: {e}"))
+    spawned.map(drop).map_err(|e| Finding::warning(format!("The file dialog did not open: {e}.")))
 }
 
 fn run(request: &FileRequest) -> Option<PathBuf> {
@@ -140,10 +141,10 @@ mod tests {
     #[test]
     fn nothing_opens_for_a_caller_who_cannot_answer() {
         let line = pick(None, Asker::Unattended, FileRequest::open("Open Scene"), |_| panic!("no path"));
-        assert_eq!(line, Err("~ [dlg suppressed] Open Scene".to_owned()));
+        assert_eq!(line, Err(Finding::warning("[dlg suppressed] Open Scene")));
         let line =
             pick(None, Asker::Mcp, FileRequest::save("Save Scene As", "a.level"), |_| panic!("no path"));
-        assert_eq!(line, Err("~ [dlg suppressed] Save Scene As".to_owned()));
+        assert_eq!(line, Err(Finding::warning("[dlg suppressed] Save Scene As")));
     }
 
     #[test]
@@ -153,7 +154,7 @@ mod tests {
         let scope = answer_as(&ctx, Asker::Mcp);
         assert!(!may_open(Some(&ctx), Asker::Ui));
         let line = pick(Some(&ctx), Asker::Ui, FileRequest::folder("Link Game"), |_| panic!("no path"));
-        assert_eq!(line, Err("~ [dlg suppressed] Link Game".to_owned()));
+        assert_eq!(line, Err(Finding::warning("[dlg suppressed] Link Game")));
         drop(scope);
         assert!(may_open(Some(&ctx), Asker::Ui));
     }

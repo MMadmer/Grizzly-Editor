@@ -66,7 +66,7 @@ fn ask(editor: &Arc<Editor>) {
             if let Some(line) =
                 notice(ctx, asker(&ed), Tone::Error, "Collect Library Assets", &error_text(reply))
             {
-                ed.log.plain(line);
+                ed.log.finding(&line);
             }
             return;
         }
@@ -84,7 +84,7 @@ fn ask(editor: &Arc<Editor>) {
                 "What the project takes from the library is not in the library either: the Problems name it."
             };
             if let Some(line) = notice(ctx, asker(&ed), Tone::Info, "Collect Library Assets", text) {
-                ed.log.plain(line);
+                ed.log.finding(&line);
             }
             return;
         }
@@ -109,7 +109,7 @@ fn ask(editor: &Arc<Editor>) {
             }
         });
         if let Some(line) = line {
-            ed.log.plain(line);
+            ed.log.finding(&line);
         }
     });
 }

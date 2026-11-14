@@ -46,7 +46,7 @@ const TOKEN_NAMES: [&str; 33] = [
     "~=", "::", "<number>", "<name>", "<string>", "<eof>",
 ];
 
-/// The reserved words, in token order (`TK_and` .. `TK_while`).
+/// The reserved words, in token order.
 const RESERVED: usize = 22;
 
 const LEX_EOF: i32 = -1;

@@ -1,4 +1,4 @@
-//! The Way tool's links and points (`WayPoint.cpp`): the link edits of the selected points, a
+//! The Way tool's links and points: the link edits of the selected points, a
 //! point added to a way, the points removed, and the point picking of Points mode.
 
 use crate::math::Vec3;
@@ -14,7 +14,7 @@ fn take_link(w: &mut WayData, from: usize, at: usize) -> Option<f32> {
     (at < p.links.len()).then(|| p.links.remove(at).1)
 }
 
-/// `CWayPoint::InvertLink`.
+/// Inverts a link.
 fn invert_link(w: &mut WayData, a: usize, b: usize) {
     let la = find_link(w, a, b);
     let lb = find_link(w, b, a);
@@ -28,7 +28,7 @@ fn invert_link(w: &mut WayData, a: usize, b: usize) {
     }
 }
 
-/// `CWayPoint::Convert1Link`: a two-way link becomes `a` to `b`.
+/// A two-way link becomes `a` to `b`.
 fn convert_1link(w: &mut WayData, a: usize, b: usize) {
     let (la, lb) = (find_link(w, a, b), find_link(w, b, a));
     if la.is_none() || lb.is_none() {
@@ -41,7 +41,7 @@ fn convert_1link(w: &mut WayData, a: usize, b: usize) {
     w.create_link(a, b, pa);
 }
 
-/// `CWayPoint::Convert2Link`: a one-way link becomes two-way.
+/// A one-way link becomes two-way.
 fn convert_2link(w: &mut WayData, a: usize, b: usize) {
     let (la, lb) = (find_link(w, a, b), find_link(w, b, a));
     if la.is_some() == lb.is_some() {
@@ -53,7 +53,7 @@ fn convert_2link(w: &mut WayData, a: usize, b: usize) {
     w.create_link(a, b, pa);
 }
 
-/// `CWayPoint::DeleteLink`.
+/// Deletes a link.
 fn delete_link(w: &mut WayData, a: usize, b: usize) -> bool {
     match find_link(w, a, b) {
         Some(i) => take_link(w, a, i).is_some(),
@@ -61,7 +61,7 @@ fn delete_link(w: &mut WayData, a: usize, b: usize) -> bool {
     }
 }
 
-/// `CWayPoint::RemoveLink`: both directions, when the first one was there.
+/// Both directions, when the first one was there.
 fn remove_link(w: &mut WayData, a: usize, b: usize) -> bool {
     if delete_link(w, a, b) {
         delete_link(w, b, a);
@@ -132,7 +132,7 @@ impl LinkOp {
     }
 }
 
-/// `CWayObject::RemoveLink`: between every two selected points, both ways.
+/// Between every two selected points, both ways.
 fn remove_links(w: &mut WayData) {
     let s = selected(w);
     for a in &s {
@@ -142,7 +142,7 @@ fn remove_links(w: &mut WayData) {
     }
 }
 
-/// One link edit of a way; whether the C++ would count it as a change (`EditSelectedWays`).
+/// One link edit of a way; whether it counts as a change.
 pub fn edit_links(w: &mut WayData, op: LinkOp) -> bool {
     match op {
         LinkOp::Create1 => {
@@ -188,7 +188,7 @@ pub fn edit_links(w: &mut WayData, op: LinkOp) -> bool {
     }
 }
 
-/// `AppendWayPoint` + `MoveTo` + Auto Link: the points deselected, a new selected point there,
+/// Appends a way point, moves it and links it automatically: the points deselected, a new selected point there,
 /// linked from the point that was selected first. Answers the new point's index.
 pub fn add_point(w: &mut WayData, at: Vec3, auto_link: bool) -> usize {
     let last = w.points.iter().position(|p| p.selected);
@@ -206,7 +206,7 @@ pub fn add_point(w: &mut WayData, at: Vec3, auto_link: bool) -> usize {
     i
 }
 
-/// `RemoveSelectedPoints`: the links to them go, then the points; the other links follow their
+/// The links to them go, then the points; the other links follow their
 /// points' new indices.
 pub fn remove_selected_points(w: &mut WayData) -> usize {
     let gone: Vec<bool> = w.points.iter().map(|p| p.selected).collect();
@@ -238,7 +238,7 @@ pub fn remove_selected_points(w: &mut WayData) -> usize {
     count
 }
 
-/// `CWayPoint::RayPick`: the distance along the ray to a point's mark.
+/// The distance along the ray to a point's mark.
 #[must_use]
 pub fn point_ray(position: Vec3, start: Vec3, dir: Vec3) -> Option<f32> {
     let mut ray2 = position - start;
@@ -265,7 +265,7 @@ pub fn pick_point(w: &WayData, start: Vec3, dir: Vec3, range: f32) -> Option<(us
     best
 }
 
-/// A point's name or its index, as `way_tool` takes them.
+/// A point's name or its index, as `scene.way` takes them.
 #[must_use]
 pub fn point_index(w: &WayData, key: &str) -> Option<usize> {
     w.points
@@ -289,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn create_1link_ends_up_pointing_back_as_the_cpp_does() {
+    fn create_1link_ends_up_pointing_back() {
         // AddSingleLink(A, B) and then InvertLink(A, B): the link runs from B to A
         let mut w = way(2);
         assert!(edit_links(&mut w, LinkOp::Create1));

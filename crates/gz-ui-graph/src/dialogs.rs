@@ -479,7 +479,7 @@ impl TaskRefs {
 }
 
 /// Edit Text / Edit Lua: a text of more than one line edited in a dialog; Apply leaves it for the
-/// field that asked (`DrawTextEdit`).
+/// field that asked.
 pub fn draw_text_edit(ui: &mut egui::Ui, te: &mut TextEdit) {
     if !te.open {
         return;

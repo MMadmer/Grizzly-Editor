@@ -51,7 +51,7 @@ pub(crate) fn pick_folder(
         });
     });
     if let Err(line) = picked {
-        editor.log.plain(line);
+        editor.log.finding(&line);
     }
 }
 
@@ -78,6 +78,6 @@ pub(crate) fn pick_file(
         });
     });
     if let Err(line) = picked {
-        editor.log.plain(line);
+        editor.log.finding(&line);
     }
 }

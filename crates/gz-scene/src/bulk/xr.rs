@@ -1,7 +1,7 @@
-//! The engine's arithmetic the bulk tools depend on, written the way `xrCore` writes it so a
-//! result comes out float for float: `Fvector::normalize`, `normalize_safe`, `mknormal`,
-//! `Fplane`, `snapto`, `fsimilar`, `CFrustum::ClipPoly`, the ray-triangle tests of `ETools` and
-//! `xrCDB`, the box-triangle test of `xrCDB_box.cpp` and the 4x3 matrices of `_matrix.h`.
+//! The engine's arithmetic the bulk tools depend on, written the way the engine writes it so a
+//! result comes out float for float: vector normalizing, `normalize_safe`, `mknormal`,
+//! planes, `snapto`, `fsimilar`, frustum polygon clipping, the ray-triangle tests,
+//! the box-triangle test and the 4x3 matrices.
 
 use glam::Vec3;
 pub use gz_fmt_level::i_floor;
@@ -18,14 +18,14 @@ pub fn dot(a: Vec3, b: Vec3) -> f32 {
     a.x * b.x + a.y * b.y + a.z * b.z
 }
 
-/// `Fvector::magnitude`.
+/// The magnitude of a vector.
 #[inline]
 #[must_use]
 pub fn magnitude(v: Vec3) -> f32 {
     (v.x * v.x + v.y * v.y + v.z * v.z).sqrt()
 }
 
-/// `Fvector::normalize(v)`: no guard.
+/// Normalizes a vector: no guard.
 #[inline]
 #[must_use]
 pub fn normalize(v: Vec3) -> Vec3 {
@@ -33,7 +33,7 @@ pub fn normalize(v: Vec3) -> Vec3 {
     Vec3::new(v.x * mag, v.y * mag, v.z * mag)
 }
 
-/// `Fvector::normalize_safe(v)`: a vector too short stays as it is.
+/// Normalizes a vector safely: a vector too short stays as it is.
 #[inline]
 #[must_use]
 pub fn normalize_safe(v: Vec3) -> Vec3 {
@@ -46,28 +46,28 @@ pub fn normalize_safe(v: Vec3) -> Vec3 {
     }
 }
 
-/// `Fvector::crossproduct(a, b)`.
+/// The cross product.
 #[inline]
 #[must_use]
 pub fn cross(a: Vec3, b: Vec3) -> Vec3 {
     Vec3::new(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
 }
 
-/// `Fvector::mknormal`: `(p1 - p0) x (p2 - p1)`, `normalize_safe`d.
+/// `(p1 - p0) x (p2 - p1)`, `normalize_safe`d.
 #[inline]
 #[must_use]
 pub fn mknormal(p0: Vec3, p1: Vec3, p2: Vec3) -> Vec3 {
     normalize_safe(cross(p1 - p0, p2 - p1))
 }
 
-/// `Fvector::mad(a, v, s)`: `a + v * s`.
+/// `a + v * s`.
 #[inline]
 #[must_use]
 pub fn mad(a: Vec3, v: Vec3, s: f32) -> Vec3 {
     Vec3::new(a.x + v.x * s, a.y + v.y * s, a.z + v.z * s)
 }
 
-/// `Fvector::similar(v, eps)`.
+/// Whether two vectors are similar within `eps`.
 #[inline]
 #[must_use]
 pub fn similar(a: Vec3, b: Vec3, eps: f32) -> bool {
@@ -106,7 +106,7 @@ pub fn deg2rad(v: f32) -> f32 {
     v * std::f32::consts::PI / 180.0
 }
 
-/// `Fplane`: the unit normal and `d`.
+/// The unit normal and `d`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Plane {
     pub n: Vec3,
@@ -127,8 +127,8 @@ impl Plane {
         dot(self.n, v) + self.d
     }
 
-    /// `intersectRayPoint`: the point along `dir` on the plane; `None` when the ray runs along
-    /// it. The C++ returns the point also for a hit behind the start, with `FALSE`: `.1` says
+    /// The point along `dir` on the plane; `None` when the ray runs along
+    /// it. The engine returns the point also for a hit behind the start, with a false flag: `.1` says
     /// whether the hit is ahead.
     #[must_use]
     pub fn intersect_ray_point(&self, p: Vec3, dir: Vec3) -> Option<(Vec3, bool)> {
@@ -142,7 +142,7 @@ impl Plane {
     }
 }
 
-/// `TestRayTriA` / `CDB::TestRayTri` (one body): Moller-Trumbore with the engine's epsilons; the
+/// The ray-triangle test (one body): Moller-Trumbore with the engine's epsilons; the
 /// range is not checked against anything.
 #[must_use]
 pub fn ray_tri(c: Vec3, d: Vec3, p: &[Vec3; 3], cull: bool) -> Option<f32> {
@@ -186,8 +186,8 @@ pub fn ray_tri(c: Vec3, d: Vec3, p: &[Vec3; 3], cull: bool) -> Option<f32> {
     }
 }
 
-/// `TestRayTri2`: the range to the triangle's plane, and whether the hit is inside the triangle.
-/// `None` when the ray runs along the plane (the C++ range is -1 then).
+/// The range to the triangle's plane, and whether the hit is inside the triangle.
+/// `None` when the ray runs along the plane.
 #[must_use]
 pub fn ray_tri2(c: Vec3, d: Vec3, p: &[Vec3; 3]) -> (bool, f32) {
     let edge1 = p[1] - p[0];
@@ -247,8 +247,8 @@ fn min_max3(a: f32, b: f32, c: f32) -> (f32, f32) {
     (mn, mx)
 }
 
-/// `box_collider::_tri` of `xrCDB_box.cpp`: whether a triangle meets a box given by its centre
-/// and extents; `class3` adds the nine edge axes (`OPT_FULL_TEST`).
+/// Whether a triangle meets a box given by its centre
+/// and extents; `class3` adds the nine edge axes.
 #[must_use]
 pub fn tri_box(center: Vec3, extents: Vec3, t: &[Vec3; 3], class3: bool) -> bool {
     let v0x = t[0].x - center.x;
@@ -322,7 +322,7 @@ pub fn tri_box(center: Vec3, extents: Vec3, t: &[Vec3; 3], class3: bool) -> bool
     x2(e2.z, e2.y, fez2, fey2) && y1(e2.z, e2.x, fez2, fex2) && z12(e2.y, e2.x, fey2, fex2)
 }
 
-/// `CFrustum`'s planes after `CreateFromMatrix` / `CreateFromPlanes`: unit normals; inside is
+/// A frustum's planes: unit normals; inside is
 /// where `classify` is negative.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Frustum {
@@ -330,7 +330,7 @@ pub struct Frustum {
 }
 
 impl Frustum {
-    /// `CreateFromPlanes`: each plane scaled to a unit normal.
+    /// Each plane scaled to a unit normal.
     #[must_use]
     pub fn from_planes(planes: &[Plane]) -> Self {
         Self { planes: planes.iter().map(|p| unit(p.n, p.d)).collect() }
@@ -354,7 +354,7 @@ impl Frustum {
         Self { planes: vec![mk(1.0, 0), mk(-1.0, 0), mk(-1.0, 1), mk(1.0, 1)] }
     }
 
-    /// `ClipPoly`: the polygon cut to the inside of every plane; `None` once fewer than three
+    /// The polygon cut to the inside of every plane; `None` once fewer than three
     /// points are left.
     #[must_use]
     pub fn clip_poly(&self, poly: &[Vec3]) -> Option<Vec<Vec3>> {
@@ -405,7 +405,7 @@ fn unit(n: Vec3, d: f32) -> Plane {
     Plane { n: Vec3::new(n.x * denom, n.y * denom, n.z * denom), d: d * denom }
 }
 
-/// `Fmatrix`: rows `i`, `j`, `k`, `c` (`m[r][k]` is `_{r+1}{k+1}`).
+/// Rows `i`, `j`, `k`, `c` (`m[r][k]` is `_{r+1}{k+1}`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct M43(pub [[f32; 4]; 4]);
 
@@ -428,14 +428,14 @@ impl M43 {
         ])
     }
 
-    /// `rotateZ`.
+    /// Rotation about Z.
     #[must_use]
     pub fn rotate_z(a: f32) -> Self {
         let (s, c) = (a.sin(), a.cos());
         M43([[c, s, 0.0, 0.0], [-s, c, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]])
     }
 
-    /// `rotateX`.
+    /// Rotation about X.
     #[must_use]
     pub fn rotate_x(a: f32) -> Self {
         let (s, c) = (a.sin(), a.cos());
@@ -492,7 +492,7 @@ impl M43 {
     }
 }
 
-/// `Fbox::Pick2`: where a ray meets a box and whether its origin is inside (the point is the
+/// Where a ray meets a box and whether its origin is inside (the point is the
 /// origin then); `None` for a miss.
 #[must_use]
 pub fn box_pick2(min: Vec3, max: Vec3, start: Vec3, dir: Vec3) -> Option<(Vec3, bool)> {

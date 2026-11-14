@@ -1,6 +1,6 @@
 //! Skeletal motions: `OGF_S_SMPARAMS` (bone parts and motion definitions) and `OGF_S_MOTIONS`
-//! (quantised keys), embedded in a model or alone in an `.omf`. `motions_value::load`,
-//! `CMotionDef::Load`, `motion_marks`, and the sampling of `AnimationKeyCalculate.h`.
+//! (quantised keys), embedded in a model or alone in an `.omf`. The motion loader, the motion
+//! definitions, the motion marks and the key sampling.
 
 use std::sync::Arc;
 
@@ -14,14 +14,14 @@ use crate::{Result, invalid};
 pub(crate) const FL_T_KEY_PRESENT: u8 = 1 << 0;
 pub(crate) const FL_R_KEY_ABSENT: u8 = 1 << 1;
 pub(crate) const FL_T_KEY_16: u8 = 1 << 2;
-/// `KEY_QuantI`.
+/// The key quantisation.
 const KEY_QUANT_I: f32 = 1.0 / 32767.0;
 /// `SAMPLE_FPS`: the engine plays every motion at thirty keys a second.
 pub const SAMPLE_FPS: f32 = 30.0;
-/// `xrOGF_SMParamsVersion`.
+/// The `.omf` parameters version.
 pub const SMPARAMS_VERSION: u16 = 4;
 
-/// `CPartDef`: a named group of bones; each bone with the key slot it occupies.
+/// A named group of bones; each bone with the key slot it occupies.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartDef {
     pub name: SmolStr,
@@ -229,7 +229,7 @@ impl BoneMotion {
         }
     }
 
-    /// `Dequantize`: the key at `t` seconds, from the two frames around it.
+    /// The key at `t` seconds, from the two frames around it.
     #[must_use]
     pub fn sample(&self, t: f32) -> BoneKey {
         let time = (t * SAMPLE_FPS).max(0.0);
@@ -403,7 +403,7 @@ impl MotionSet {
         }
     }
 
-    /// An `.omf`: the keys, then the parameters, as `PrepareOMF` writes them.
+    /// An `.omf`: the keys, then the parameters, as the exporter writes them.
     #[must_use]
     pub fn to_omf(&self) -> Vec<u8> {
         let mut w = Writer::new();

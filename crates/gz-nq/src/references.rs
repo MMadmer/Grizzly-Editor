@@ -1,4 +1,4 @@
-//! Catalog-typed reference discovery (`NqReferences`): a value is a reference only when the
+//! Catalog-typed reference discovery: a value is a reference only when the
 //! catalog declares its exact type - parameter names are never guessed. The walk reports where
 //! it had to give up (`blocking` diagnostics), so a caller knows whether the answer is complete;
 //! the task rename refuses on exactly those.
@@ -26,7 +26,7 @@ pub struct Reference {
     pub source: String,
 }
 
-/// Something the walk could not prove (`SDiagnostic`).
+/// Something the walk could not prove.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Diagnostic {
     pub path: String,
@@ -74,7 +74,7 @@ impl Reference {
     }
 }
 
-/// What a search found (`SResult`).
+/// What a search found.
 #[derive(Clone, Debug, Default)]
 pub struct FindResult {
     pub references: Vec<Reference>,
@@ -1172,7 +1172,7 @@ impl Walker<'_> {
 }
 
 /// Every exact reference of `ty` = `value` in the snapshot, or in the one graph whose
-/// project-relative path key is `scope` (`Find`).
+/// project-relative path key is `scope`.
 pub fn find(
     snapshot: &IndexSnapshot,
     catalog: &Catalog,
@@ -1246,7 +1246,7 @@ pub fn find(
     Ok(out)
 }
 
-/// Renames a task and every proven `task_id` reference to it (`RenameTask`): all or nothing.
+/// Renames a task and every proven `task_id` reference to it: all or nothing.
 /// `Err` carries the diagnostics that refused it.
 pub fn rename_task(
     q: &Graph,

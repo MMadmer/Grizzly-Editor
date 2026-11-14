@@ -1,0 +1,20 @@
+# Places where a format's or a game program's real name is the fact. One entry per line:
+#   path-glob | pattern (a regular expression) | reason
+# A hit is allowed when its file matches the glob and its text matches the pattern. An entry that
+# matches nothing fails the check, so the list cannot outlive its reasons.
+crates/gz-lc/src/*.rs | ^[!~*]|^ERROR: | The compiler's own log lines keep their text and their marks (`! `, `* `, `***`); gz-levelbuild's compile step reads each mark once, where the line enters the editor.
+crates/gz-levelbuild/src/compile.rs | ^[!~*]|^ERROR: | The one reader of the compiler's marks: it turns a mark into a level and drops it from the text.
+crates/gz-levelbuild/src/cmd.rs | level_build|scene_validate|scene_export_obj | Job kind ids shown by `job.list` and `level.status`: ids of jobs, not commands.
+crates/gz-levelbuild/src/lib.rs | level_build | The job group id of the level build.
+crates/gz-app/src/shots.rs | level_build | The job kind a picture reports as busy.
+crates/gz-ui/src/icons.rs | play_game|play_clean|reload_configs | The names `Icon::name` gives these three glyphs (`ui.list` shows them).
+crates/gz-ui-level/src/actions.rs | open_scene|reload_configs | A dialog id and an action id of the Level tab, not commands.
+crates/gz-ui-level/src/cmd.rs | open_scene | A value of the `window` parameter of `level.show`: a window id.
+crates/gz-ui-level/src/level_cmds.rs | scene_summary | The id of the Summary Info dialog.
+crates/gz-ui-app/src/launch.rs | open_project | The id of the unsaved-changes question raised before a project opens.
+crates/gz-scene/src/bulk/cmd.rs | deselect_all | A value of the selection `which` word.
+crates/gz-scene/src/sdk/mod.rs | snap_objects | A key of the X-Ray SDK `.level` scene file format.
+crates/gz-app/src/contract.rs | view_mode | The id of the viewport's View Mode menu.
+crates/gz-ui-viewport/src/pane.rs | view_mode | The id of the viewport's View Mode menu.
+crates/gz-ui-graph/src/cmd.rs | ui_scale | A JSON field of the graph view's answer.
+crates/gz-mcp/src/lib.rs | level_build | The job group id of the level build (a job kind, not a command).

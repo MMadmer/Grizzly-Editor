@@ -1,4 +1,4 @@
-//! The PDA preview (`EditorPdaPreview.cpp`): the model one tab and `pda.preview` share, the
+//! The PDA preview: the model one tab and `pda.preview` share, the
 //! operations on it, the tab ([`doc`]), its canvas ([`canvas`]) and the command ([`cmd`]).
 //!
 //! The model is a service of the open project behind one lock: the file, the Source pane's
@@ -51,14 +51,13 @@ pub struct Geom {
 }
 
 impl Geom {
-    /// One point per game unit at the window's corner: what a preview no frame drew answers in
-    /// (`EnsureGeometry`).
+    /// One point per game unit at the window's corner: what a preview no frame drew answers in.
     #[must_use]
     pub fn unit(screen: FRect) -> Self {
         Self { origin: Pos2::ZERO, kx: 1.0, ky: 1.0, screen }
     }
 
-    /// A game point (`VPx`).
+    /// A game point.
     #[must_use]
     pub fn at(&self, vx: f32, vy: f32) -> Pos2 {
         Pos2::new(self.origin.x + vx * self.kx, self.origin.y + vy * self.ky)
@@ -183,15 +182,14 @@ impl Model {
         if self.rel.is_empty() { base_name(&self.path) } else { self.rel.clone() }
     }
 
-    /// Back to the start page with every var and panel as the file declares them
-    /// (`ResetState`).
+    /// Back to the start page with every var and panel as the file declares them.
     pub fn reset_state(&mut self) {
         self.preview.reset();
         self.hovered = None;
         self.pressed = None;
     }
 
-    /// What a reading of the text gives (`Reload`): the layout when it read; the page stays when
+    /// What a reading of the text gives: the layout when it read; the page stays when
     /// `keep` and the layout still has it - an edit should not throw the author back.
     pub fn apply_read(&mut self, res: Result<Arc<Layout>, ReadError>, keep: bool) {
         let page = self.preview.page.clone();
@@ -306,7 +304,7 @@ fn wake(editor: &Editor) {
     editor.exec.wake().ping();
 }
 
-/// Reads the Source pane's text with the game's reader (`Reload`); a newer reading started
+/// Reads the Source pane's text with the game's reader; a newer reading started
 /// meanwhile wins.
 pub async fn read(editor: &Arc<Editor>, tab: &Arc<PdaTab>, keep: bool) {
     let Ok(session) = editor.project() else { return };
@@ -347,7 +345,7 @@ fn newer_version(editor: &Editor, text: &str) -> Option<(String, u32)> {
     }
 }
 
-/// Reads a file into the preview (`LoadFile`): the Source pane gets its text, clean. The page
+/// Reads a file into the preview: the Source pane gets its text, clean. The page
 /// stays when it is the same file. `false` when the file cannot be read. A new file is
 /// followed: the project's watcher tells the tab when it changes outside the editor.
 pub async fn load_file(editor: &Arc<Editor>, tab: &Arc<PdaTab>, abs: &str) -> bool {
@@ -389,7 +387,7 @@ fn follow_file(editor: &Arc<Editor>, tab: &Arc<PdaTab>, rel: &str) {
     });
 }
 
-/// Writes the Source pane's text to the file (`SaveText`).
+/// Writes the Source pane's text to the file.
 pub async fn save_text(editor: &Arc<Editor>, tab: &Arc<PdaTab>) -> Result<(), String> {
     let (path, text) = {
         let m = tab.m.lock();
@@ -429,7 +427,7 @@ pub async fn save_and_read(editor: &Arc<Editor>, tab: &Arc<PdaTab>) -> Result<()
 }
 
 /// The game's textures, fonts and reader are read again; the file too, unless the Source pane
-/// holds edits (`ReloadAll`).
+/// holds edits.
 pub async fn reload_all(editor: &Arc<Editor>, tab: &Arc<PdaTab>) {
     if let Ok(session) = editor.project() {
         PdaService::of_session(editor, &session).drop_reader();
@@ -448,7 +446,7 @@ pub async fn reload_all(editor: &Arc<Editor>, tab: &Arc<PdaTab>) {
 
 /// The file follows the disk: written behind the preview (an agent, another editor), it is
 /// read again; with edits in the Source pane the two are merged ([`merge`]). Gone, the tab goes
-/// - unless it holds edits, which Save writes again (`FileWritten`).
+/// - unless it holds edits, which Save writes again.
 pub async fn follow(editor: &Arc<Editor>, tab: &Arc<PdaTab>) {
     let (path, disk, dirty) = {
         let m = tab.m.lock();
@@ -580,7 +578,7 @@ async fn take_theirs_of(editor: Arc<Editor>, rel: gz_base::RelPath) -> Result<us
     Ok(0)
 }
 
-/// The layout Mod > PDA Interface opens (`ShowModuleLayout`): the one the module uses, else the
+/// The layout Mod > PDA Interface opens: the one the module uses, else the
 /// project's first, else a new one from the template, made the module's layout. Project-relative.
 pub async fn module_layout(editor: &Arc<Editor>) -> Option<String> {
     let (session, project) = Project::of(editor).ok()?;

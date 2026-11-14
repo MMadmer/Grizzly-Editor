@@ -1,4 +1,4 @@
-//! The engine's level graph lookups (`ILevelGraph`, `level_graph*.cpp`) the graph and spawn
+//! The engine's level graph lookups the graph and spawn
 //! builders use, over a [`LevelGraph`].
 
 use std::cmp::Ordering;
@@ -10,7 +10,7 @@ use gz_fmt_level::{AiNode, LevelGraph, LevelGraphHeader, i_floor, pv_decompress}
 
 /// `MAX_NODE_BIT_COUNT` of the node layout the editor writes.
 const MAX_NODE_BIT_COUNT: u32 = 24;
-/// The straight-line search's default range (`SBaseParameters` of `CStraightLineParams`).
+/// The straight-line search's default range.
 pub const MAX_RANGE: f32 = 6000.0;
 pub const INVALID: u32 = u32::MAX;
 
@@ -355,7 +355,7 @@ impl LevelNav {
         }
     }
 
-    /// The A* of `CGraphEngineEditor` over the level graph: a step costs a cell, the estimate is
+    /// The A* over the level graph: a step costs a cell, the estimate is
     /// twice the Manhattan distance in cells. The path from `start` to `goal`, both included.
     fn search(&self, start: u32, goal: u32) -> Option<Vec<u32>> {
         let cell = self.header.cell_size;
@@ -407,7 +407,7 @@ impl LevelNav {
         None
     }
 
-    /// `CLevelStraightLinePathManager`: the length of the A* path from `v0` (at `p0`) to `v1`
+    /// The length of the A* path from `v0` (at `p0`) to `v1`
     /// (at `p1`), its corners cut where a straight walk stays on the graph. `None` when there
     /// is no path.
     #[must_use]
@@ -457,7 +457,7 @@ impl LevelNav {
         })
     }
 
-    /// `SFlooder`: every vertex a walk of less than `radius` reaches from `start` within the
+    /// Every vertex a walk of less than `radius` reaches from `start` within the
     /// circle of `radius` cells, in the order the walk meets them.
     #[must_use]
     pub fn flood(&self, start: u32, radius: f32) -> Vec<u32> {
@@ -493,7 +493,7 @@ impl LevelNav {
     }
 }
 
-/// `Fbox2::pick_exact`: the ray from `start` along `dir` meets the box.
+/// The ray from `start` along `dir` meets the box.
 fn pick_exact(min: Vec2, max: Vec2, start: Vec2, dir: Vec2) -> bool {
     let (mut t0, mut t1) = (0.0f32, f32::MAX);
     for a in 0..2 {

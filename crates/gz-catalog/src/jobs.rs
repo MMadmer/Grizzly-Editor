@@ -1,4 +1,4 @@
-//! The jobs of Submit to Mod Browser (`EditorCatalogSubmit`'s worker): `check` (MOD_CATALOG 7
+//! The jobs of Submit to Mod Browser: `check` (MOD_CATALOG 7
 //! against the latest release fetched anonymously, the way the game fetches it), `vt` (the
 //! author's scan), `submit` (check, scan, then the issue), `submission` (where the submission, a
 //! withdrawal and the listing stand) and `withdraw`.
@@ -648,7 +648,7 @@ fn entry_head(file: &mut File, e: &gz_release::zip::Stored, rel_path: &str) -> V
     data
 }
 
-/// The content findings of a release's local copy (`CheckLocalRelease`). Blocking.
+/// The content findings of a release's local copy. Blocking.
 fn local_release_findings(
     root: &Path,
     id: &str,

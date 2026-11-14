@@ -1,4 +1,4 @@
-//! Files dropped on a surface (`XrUIFileDrop.cpp`), as [`local_file_drop_zone`]: from Explorer
+//! Files dropped on a surface, as [`local_file_drop_zone`]: from Explorer
 //! (egui's dropped files - only where they land counts, nothing lights up on their way) and from
 //! the Content Browser's tiles (an egui drag-and-drop payload: a tile lights up the zone under
 //! it). Zones are asked in the order they are drawn, inner ones first: the first under the point

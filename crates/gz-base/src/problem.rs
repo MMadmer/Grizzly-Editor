@@ -161,6 +161,62 @@ impl Problem {
     }
 }
 
+/// One line a check or an export reports about its work: how serious it is and the sentence for
+/// the author. The level is a value, never a mark at the front of the text. Unlike a
+/// [`Problem`] it names no place; the producer's caller attaches the object or the file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Finding {
+    pub severity: Severity,
+    pub text: String,
+}
+
+impl Finding {
+    pub fn new(severity: Severity, text: impl Into<String>) -> Self {
+        Self { severity, text: text.into() }
+    }
+
+    /// Stops the work the finding belongs to.
+    pub fn error(text: impl Into<String>) -> Self {
+        Self::new(Severity::Error, text)
+    }
+
+    /// The work goes on, but something in it is not as the author meant.
+    pub fn warning(text: impl Into<String>) -> Self {
+        Self::new(Severity::Warning, text)
+    }
+
+    /// What the work did; nothing to fix.
+    pub fn info(text: impl Into<String>) -> Self {
+        Self::new(Severity::Note, text)
+    }
+
+    #[must_use]
+    pub fn is_error(&self) -> bool {
+        self.severity == Severity::Error
+    }
+}
+
+/// A list of findings that takes a new one by its level.
+pub trait Findings {
+    fn error(&mut self, text: impl Into<String>);
+    fn warn(&mut self, text: impl Into<String>);
+    fn info(&mut self, text: impl Into<String>);
+}
+
+impl Findings for Vec<Finding> {
+    fn error(&mut self, text: impl Into<String>) {
+        self.push(Finding::error(text));
+    }
+
+    fn warn(&mut self, text: impl Into<String>) {
+        self.push(Finding::warning(text));
+    }
+
+    fn info(&mut self, text: impl Into<String>) {
+        self.push(Finding::info(text));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +237,23 @@ mod tests {
         assert_eq!(p.line_text(), "quests/a.nqasset:4:7: error E030: 'x' is no character of the project");
         let back: Problem = serde_json::from_value(j).unwrap();
         assert_eq!(back, p);
+    }
+
+    #[test]
+    fn a_finding_holds_its_level_as_a_value() {
+        assert_eq!(Finding::error("a").severity, Severity::Error);
+        assert_eq!(Finding::warning("b").severity, Severity::Warning);
+        assert_eq!(Finding::info("c").severity, Severity::Note);
+        assert!(Finding::error("a").is_error());
+        assert!(!Finding::info("c").is_error());
+        assert_eq!(Finding::info("c").text, "c");
+        let mut all: Vec<Finding> = Vec::new();
+        all.error("a");
+        all.warn("b");
+        all.info("c");
+        assert_eq!(
+            all.iter().map(|f| f.severity).collect::<Vec<_>>(),
+            [Severity::Error, Severity::Warning, Severity::Note]
+        );
     }
 }

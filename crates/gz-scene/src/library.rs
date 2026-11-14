@@ -1,4 +1,4 @@
-//! The object library (`ELibrary`): `.object` files by reference name, loaded on demand,
+//! The object library: `.object` files by reference name, loaded on demand,
 //! parsed once and shared. The project's own `rawdata\objects` comes before the editor's.
 
 use std::path::{Path, PathBuf};
@@ -18,7 +18,7 @@ pub struct LibraryObject {
     pub name: SmolStr,
     pub file: PathBuf,
     pub object: EditObject,
-    /// `GetBox`, in object space.
+    /// The object's bounding box, in object space.
     pub bounds: Aabb,
     /// The visible meshes' triangles, object space, for picking.
     pub verts: Arc<[Vec3]>,
@@ -66,7 +66,7 @@ impl LibraryObject {
         }
     }
 
-    /// `IsDynamic`: a dynamic object cannot be scaled.
+    /// A dynamic object cannot be scaled.
     #[must_use]
     pub fn is_dynamic(&self) -> bool {
         self.object.is_dynamic()
@@ -84,7 +84,7 @@ impl LibraryObject {
     }
 }
 
-/// The reference name as the C++ keys it: lower case, backslashes, no `.object`.
+/// The reference name as the library keys it: lower case, backslashes, no `.object`.
 #[must_use]
 pub fn normalize(name: &str) -> String {
     let n = name.replace('/', "\\").to_lowercase();
@@ -143,7 +143,7 @@ impl Library {
         self.roots.iter().map(|r| r.join(&rel)).find(|p| p.is_file())
     }
 
-    /// `CreateEditObject`: a reference loaded once and shared. Blocking: call it on the IO pool.
+    /// A reference loaded once and shared. Blocking: call it on the IO pool.
     pub fn load(&self, name: &str) -> Result<Arc<LibraryObject>, String> {
         let key = normalize(name);
         match self.cache.lock().get(&key) {
@@ -189,14 +189,14 @@ impl Library {
         });
     }
 
-    /// Forgets what was read: the files changed (`ReloadObjects`).
+    /// Forgets what was read: the files changed.
     pub fn clear(&self) {
         self.cache.lock().clear();
         *self.listing.lock() = None;
         self.rev.bump();
     }
 
-    /// `GetObjects`: every reference name the roots hold, sorted, each once. Read once and kept
+    /// Every reference name the roots hold, sorted, each once. Read once and kept
     /// until [`Self::clear`]. Blocking.
     pub fn list(&self) -> Arc<Vec<String>> {
         if let Some(l) = self.listing.lock().as_ref() {

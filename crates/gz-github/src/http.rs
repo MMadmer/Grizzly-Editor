@@ -1,4 +1,4 @@
-//! The HTTP exchange (`CHttp::Send`): one request, its answer or the sentence why there was none.
+//! The HTTP exchange: one request, its answer or the sentence why there was none.
 //! `reqwest` on `native-tls`, so TLS trusts the Windows certificate store - a machine whose
 //! antivirus inspects HTTPS keeps working - and the system's proxy settings apply.
 //!

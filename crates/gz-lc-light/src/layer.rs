@@ -1,8 +1,8 @@
-//! `lm_layer`: a deflector's (or a lightmap page's) texels and their markers, the blits that
-//! copy one layer into another (`xrDeflector.cpp`), the border growth (`ApplyBorders`) and the
-//! packing into pixels (`Pack`, `Pack_hemi`).
+//! A lightmap layer: a deflector's (or a lightmap page's) texels and their markers, the blits that
+//! copy one layer into another, the border growth and the
+//! packing into pixels.
 //!
-//! A marker says how a texel got its light: 255 lit directly, `ref` grown by `ApplyBorders` at
+//! A marker says how a texel got its light: 255 lit directly, `ref` grown by the border growth at
 //! that level, 0 not at all.
 
 use gz_fmt_tex::Image;
@@ -64,7 +64,7 @@ impl LmLayer {
         [u8_clr(c.rgb.x), u8_clr(c.rgb.y), u8_clr(c.rgb.z), u8_clr(c.sun), u8_clr(c.hemi)]
     }
 
-    /// `Pack`: `rgb` and the sun in alpha, `0xAARRGGBB`.
+    /// `rgb` and the sun in alpha, `0xAARRGGBB`.
     #[must_use]
     pub fn pack(&self) -> Vec<u32> {
         self.surface
@@ -77,7 +77,7 @@ impl LmLayer {
             .collect()
     }
 
-    /// `Pack_hemi`: the sun in rgb, the hemisphere in alpha.
+    /// The sun in rgb, the hemisphere in alpha.
     #[must_use]
     pub fn pack_hemi(&self) -> Vec<u32> {
         self.surface
@@ -122,9 +122,9 @@ pub fn pixels_of(image: &Image) -> Vec<u32> {
     image.rgba.as_chunks::<4>().0.iter().map(|p| color_rgba(p[0], p[1], p[2], p[3])).collect()
 }
 
-/// `lblit` / `blit(lm_layer&, ...)`: the texels of `src` (`ss_x` x `ss_y` of them) whose marker is
+/// The blit: the texels of `src` (`ss_x` x `ss_y` of them) whose marker is
 /// at least `a_ref`, into `dst` (`ds_x` wide) at `(px, py)`. Texels outside `dst` are skipped
-/// where the C++ asserts.
+/// where X-Ray's compiler asserts.
 #[allow(clippy::too_many_arguments)]
 pub fn blit(
     dst: &mut LmLayer,
@@ -190,9 +190,9 @@ pub fn lblit(dst: &mut LmLayer, src: &LmLayer, px: u32, py: u32, a_ref: u32) {
     blit(dst, dw, dh, src, sw, sh, px, py, a_ref);
 }
 
-/// `ApplyBorders`: every unlit texel next to texels marked above `r` takes their mean and the
-/// marker `r`. Every texel reads the layer as it was before the pass (as `NEW_ApplyBorders`
-/// does through its saved lines), so the rows are grown in parallel. Answers whether a texel
+/// Every unlit texel next to texels marked above `r` takes their mean and the
+/// marker `r`. Every texel reads the layer as it was before the pass (as X-Ray's compiler does
+/// through its saved lines), so the rows are grown in parallel. Answers whether a texel
 /// grew.
 pub fn apply_borders(lm: &mut LmLayer, r: u32) -> bool {
     let (w, h) = (lm.width as usize, lm.height as usize);
@@ -214,7 +214,7 @@ pub fn apply_borders(lm: &mut LmLayer, r: u32) -> bool {
                 }
                 let mut sum = ColorC::default();
                 let mut count = 0u32;
-                // the C++ order: the row above, left, right, the row below
+                // X-Ray's order: the row above, left, right, the row below
                 let take = |dx: isize, dy: isize, sum: &mut ColorC, count: &mut u32| {
                     let (nx, ny) = (x as isize + dx, y as isize + dy);
                     if nx < 0 || ny < 0 || nx >= w as isize || ny >= h as isize {

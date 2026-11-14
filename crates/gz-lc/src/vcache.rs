@@ -1,4 +1,4 @@
-//! The face order of `D3DXOptimizeFaces` (D3DX9, the fast path of `OGF::Stripify`). D3DX9 is
+//! The face order of D3DX's face optimisation (the fast path of the stripifier). D3DX9 is
 //! closed code; this is Tom Forsyth's linear-speed vertex cache optimisation, the published
 //! method of the same goal: every step emits the face whose corners score best against a
 //! 32-entry LRU cache and their remaining use, in time linear in the faces. Ties go to the

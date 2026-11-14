@@ -11,7 +11,7 @@ pub mod units;
 
 pub use origin::Origin;
 pub use path::{PathError, RelPath, file_name_problem};
-pub use problem::{Problem, Severity};
+pub use problem::{Finding, Findings, Problem, Severity};
 pub use rev::{Rev, RevCounter};
 pub use smol_str::SmolStr;
 pub use units::{Pt, Px, Scale};

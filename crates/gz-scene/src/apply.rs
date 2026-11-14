@@ -12,7 +12,7 @@ use crate::model::{ObjData, ObjId, Object, SceneState, co};
 use crate::objects::{GroupData, SpawnEntity, XmsOrder};
 use crate::tools::{BulkData, LevelOptions, SceneMode, ToolPart};
 
-/// One edit of a transform, with the class rules of `SetPosition`, `SetRotation`, `SetScale`.
+/// One edit of a transform, with the class rules of the position, rotation and scale setters.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TransformEdit {
     Position(Vec3),
@@ -75,7 +75,7 @@ pub enum SceneCmd {
         name: SmolStr,
     },
     /// Transforms, one undo step. `members` moves a group's objects with it (the Details
-    /// panel's `NumSet*`); the MCP setters move the group alone, as the C++ ones do.
+    /// panel's number rows); the MCP setters move the group alone.
     Transform {
         items: Vec<(ObjId, TransformEdit)>,
         members: bool,
@@ -118,7 +118,7 @@ pub enum SceneCmd {
     Group {
         name: SmolStr,
     },
-    /// `UngroupObjects` of every selected group.
+    /// Ungroups every selected group.
     Ungroup,
     /// Objects computed from a snapshot with `serial` (a property set, a visual, a bone list).
     ReplaceObjects {
@@ -133,9 +133,9 @@ pub enum SceneCmd {
         serial: u64,
         label: String,
     },
-    /// `flAuthorPlaced` on the selection; answers how many changed.
+    /// Marks the selection as placed by the author; answers how many changed.
     MarkAuthored(bool),
-    /// `flBaseRemoved` on the selected spawns that are not authored; answers changed, skipped.
+    /// Marks the selected spawns that are not authored as removed from the base; answers changed, skipped.
     MarkRemoved(bool),
     /// A stalker's standing order.
     SetOrder {
@@ -177,22 +177,21 @@ pub enum SceneCmd {
         /// The files now hold the scene: nothing of it is unsaved.
         clean: bool,
     },
-    /// `CSpawnPoint::AttachObject` (a shape of the scene becomes the point's own) or, with no
-    /// object, `DetachObject` (the point's shape goes back into the scene). One undo step.
+    /// Attaches a shape of the scene to a spawn point (it becomes the point's own) or, with no
+    /// object, detaches it (the point's shape goes back into the scene). One undo step.
     SpawnAttach {
         spawn: ObjId,
         object: Option<ObjId>,
     },
-    /// `CGroupObject::UpdateReference(true)` for each group (the Group tool's Reload
-    /// References): its objects made again from the library `.group` read into `loaded`, the
-    /// group where it stood. With as many objects as before, a member marked unique stays as it
-    /// was and the others take their old names. The sectors are not touched (the C++ saves and
-    /// restores them around the reload). One undo step.
+    /// Reloads each group (the Group tool's Reload References): its objects made again from the
+    /// library `.group` read into `loaded`, the group where it stood. With as many objects as before,
+    /// a member marked unique stays as it was and the others take their old names. The sectors are
+    /// not touched. One undo step.
     ReloadGroups {
         groups: Vec<(ObjId, Box<crate::objects::Loaded>)>,
     },
-    /// The Group tool's add (`TUI_ControlGroupAdd`): a library group read into `loaded`, under
-    /// its name, set where `at` says (`SetReference` on the object `DefaultAddObject` made),
+    /// The Group tool's add: a library group read into `loaded`, under
+    /// its name, set where `at` says (the placed object's reference is set), selected. One undo step.
     /// selected. One undo step.
     PlaceGroup {
         loaded: Box<crate::objects::Loaded>,
@@ -258,7 +257,7 @@ fn set_rotation(o: &mut Object, r: Vec3) {
 fn set_scale(o: &mut Object, v: Vec3) {
     match &mut o.data {
         ObjData::Glow(g) => {
-            // `CGlow::SetScale`: the component that changed is the radius
+            // the component that changed is the radius
             let s = o.xform.scale;
             let mut r = g.radius;
             for a in 0..3 {
@@ -328,7 +327,7 @@ impl SceneState {
         Ok(())
     }
 
-    /// One transform, with a group's members carried when `members` (`NumSetPosition` & co).
+    /// One transform, with a group's members carried when `members` is set.
     fn transform(&mut self, id: ObjId, e: TransformEdit, members: bool) -> Result<(), CmdError> {
         let before = (**self.get(id).ok_or_else(|| missing(id))?).clone();
         let mut after = before.clone();
@@ -350,7 +349,7 @@ impl SceneState {
                 })?;
             }
         }
-        // `UpdateTransform`: Auto Key keys a selected motion's object where it now stands
+        // Auto Key keys a selected motion's object where it now stands
         if after.flags.co & (co::MOTION | crate::objmotion::AUTO_KEY)
             == co::MOTION | crate::objmotion::AUTO_KEY
             && self.selection.contains(&id)
@@ -436,8 +435,7 @@ impl SceneState {
         groups.len()
     }
 
-    /// A group as read, its objects carried from where the file had it to `at`
-    /// (`NumSetPosition`, `NumSetRotation`, `NumSetScale`).
+    /// A group as read, its objects carried from where the file had it to `at`.
     fn insert_group_at(
         &mut self,
         loaded: crate::objects::Loaded,
@@ -1016,12 +1014,11 @@ impl State for SceneState {
                 };
                 self.check_editable(spawn)?;
                 let mut sd = (**sd).clone();
-                // the point's own shape goes back into the scene first (`DetachObject`)
+                // the point's own shape goes back into the scene first
                 if let Some(old) = sd.attached.take() {
                     let mut back = (*old).clone();
-                    // oracle: the C++ appends the point's own shape (`EnsureShape` made it with no
-                    // name) as it is - a nameless object nothing can address; it is named as the
-                    // Shape tool names a new one
+                    // the point's own shape is kept as it is, nameless; it is named as the
+                    // Shape tool names a new one, so it can be addressed
                     let base = if back.name.is_empty() { "shape" } else { back.name.as_str() };
                     back.name = SmolStr::new(self.gen_name(Some(base)));
                     back.owner = None;
@@ -1033,7 +1030,7 @@ impl State for SceneState {
                 let mut n = sp.clone();
                 if let Some(oid) = object {
                     let shape = (**self.get(oid).ok_or_else(|| missing(oid))?).clone();
-                    // `bAllowed`: a shape, onto an entity that has one
+                    // a shape, onto an entity that has one
                     let has_shape = sd
                         .entity
                         .as_ref()
@@ -1153,7 +1150,7 @@ mod tests {
 
     #[test]
     fn deleting_a_scene_object_takes_it_out_of_its_sectors() {
-        // `ESceneSectorTool::OnObjectRemove`: the sector that held the object alone goes, the
+        // the sector that held the object alone goes, the
         // other keeps the meshes of the object that stays
         use crate::objects::{SectorData, default_data};
         let mut s = SceneState::default();

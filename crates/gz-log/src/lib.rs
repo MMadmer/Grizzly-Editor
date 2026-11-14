@@ -4,8 +4,9 @@
 //! down a channel to one writer thread that owns the file, and into a ring the Output Log reads.
 //! Writing never waits on the disk.
 //!
-//! The file keeps the engine's line marks, which tools and people already read: `! ` an error,
-//! `~ ` a warning, `* ` information (a report or a detail), no mark for plain text.
+//! The file marks each line with its level, a convention tools and people already read: `! ` an
+//! error, `~ ` a warning, `* ` information (a report or a detail), no mark for plain text. The
+//! mark is the file writer's alone; a record carries its level as a value and its text as written.
 //!
 //! A **report** is a line the author may want to read now: an error, a warning, or an
 //! information line that says what the editor did. A **detail** is information of the editor's
@@ -41,8 +42,7 @@ pub enum Level {
 }
 
 impl Level {
-    #[must_use]
-    pub fn mark(self) -> &'static str {
+    fn file_mark(self) -> &'static str {
         match self {
             Level::Plain => "",
             Level::Detail | Level::Info => "* ",
@@ -55,18 +55,6 @@ impl Level {
     #[must_use]
     pub fn reports(self) -> bool {
         matches!(self, Level::Info | Level::Warning | Level::Error)
-    }
-}
-
-/// A line as the log holds it: its level's mark in front (`~ [nq] ...`), unless the text
-/// carries one already.
-#[must_use]
-pub fn marked(level: Level, text: &str) -> String {
-    let mark = level.mark();
-    if mark.is_empty() || ["! ", "~ ", "* "].iter().any(|m| text.starts_with(m)) {
-        text.to_owned()
-    } else {
-        format!("{mark}{text}")
     }
 }
 
@@ -208,6 +196,16 @@ impl Log {
         self.write(Level::Error, text.to_string());
     }
 
+    /// A check's or an export's finding, at the level it carries.
+    pub fn finding(&self, finding: &gz_base::Finding) {
+        let level = match finding.severity {
+            gz_base::Severity::Error => Level::Error,
+            gz_base::Severity::Warning => Level::Warning,
+            gz_base::Severity::Required | gz_base::Severity::Note => Level::Info,
+        };
+        self.write(level, finding.text.as_str());
+    }
+
     /// Waits until everything written so far is on disk. For a crash handler and for `main`.
     pub fn flush(&self) {
         if let Some(tx) = &self.0.tx {
@@ -289,11 +287,12 @@ fn write_loop(rx: &Receiver<Msg>, mut out: Option<BufWriter<File>>, echo: bool) 
     let echo = std::cell::Cell::new(echo);
     let put = |record: &Record, out: &mut Option<BufWriter<File>>| {
         if let Some(out) = out {
-            let _ = out.write_all(record.level.mark().as_bytes());
+            let _ = out.write_all(record.level.file_mark().as_bytes());
             let _ = out.write_all(record.text.as_bytes());
             let _ = out.write_all(b"\r\n");
         }
-        if echo.get() && writeln!(std::io::stderr().lock(), "{}{}", record.level.mark(), record.text).is_err()
+        if echo.get()
+            && writeln!(std::io::stderr().lock(), "{}{}", record.level.file_mark(), record.text).is_err()
         {
             echo.set(false);
         }
@@ -365,6 +364,6 @@ mod tests {
         log.warn("a warning");
         assert_eq!(log.last_report().map(|r| r.level), Some(Level::Warning));
         assert_eq!(log.tail(10).len(), 4);
-        assert_eq!(Level::Detail.mark(), "* ");
+        assert_eq!(Level::Detail.file_mark(), "* ");
     }
 }

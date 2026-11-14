@@ -16,7 +16,7 @@
 //!   waveform is drawn from.
 //! - [`SoundThm`], [`read_sound_thm`], [`write_sound_thm`] - the sound's thumbnail file.
 //! - [`read_wav`], [`encode_game_sound`] - a game sound made from its `.wav`: Vorbis at the
-//!   description's quality, the parameters as its first comment (`MakeGameSound`).
+//!   description's quality, the parameters as its first comment.
 
 mod encode;
 mod ogg;

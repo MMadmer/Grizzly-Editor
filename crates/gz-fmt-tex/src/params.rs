@@ -1,4 +1,4 @@
-//! `STextureParams`: what a texture description says about its texture.
+//! What a texture description says about its texture.
 
 use gz_base::SmolStr;
 use gz_chunk::{Reader, Writer};
@@ -39,7 +39,7 @@ macro_rules! open_enum {
 }
 
 open_enum! {
-    /// `ETType`.
+    /// The texture types.
     TextureType {
         IMAGE = 0 => Some("2D Texture"),
         CUBE_MAP = 1 => Some("Cube Map"),
@@ -50,7 +50,7 @@ open_enum! {
 }
 
 open_enum! {
-    /// `ETFormat`.
+    /// The texture formats.
     TextureFormat {
         DXT1 = 0 => Some("DXT1"),
         ADXT1 = 1 => Some("DXT1 Alpha"),
@@ -74,7 +74,7 @@ open_enum! {
 }
 
 open_enum! {
-    /// `ETBumpMode`.
+    /// The bump modes.
     BumpMode {
         RESERVED = 0 => None,
         NONE = 1 => Some("None"),
@@ -84,7 +84,7 @@ open_enum! {
 }
 
 open_enum! {
-    /// `ETMaterial`.
+    /// The material kinds.
     TextureMaterial {
         OREN_NAYAR_BLIN = 0 => Some("OrenNayar <-> Blin"),
         BLIN_PHONG = 1 => Some("Blin <-> Phong"),
@@ -115,7 +115,7 @@ open_enum! {
 }
 
 bitflags::bitflags! {
-    /// `STextureParams::fl*`. Bits the editor does not name are kept.
+    /// The description's flags. Bits the editor does not name are kept.
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
     pub struct TextureFlags: u32 {
         const GENERATE_MIP_MAPS = 1 << 0;
@@ -134,7 +134,7 @@ bitflags::bitflags! {
     }
 }
 
-/// `STextureParams`. Colours are `0xAARRGGBB` as the file holds them.
+/// A texture description. Colours are `0xAARRGGBB` as the file holds them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextureParams {
     pub fmt: TextureFormat,
@@ -161,7 +161,7 @@ pub struct TextureParams {
 }
 
 impl Default for TextureParams {
-    /// `STextureParams::Clear`.
+    /// Clears a description.
     fn default() -> Self {
         Self {
             fmt: TextureFormat::DXT1,
@@ -196,7 +196,7 @@ pub struct DdsRequest {
 }
 
 impl TextureParams {
-    /// Reads the description's chunks from a thumbnail file (`STextureParams::Load`).
+    /// Reads the description's chunks from a thumbnail file.
     pub fn read(file: &Reader<'_>) -> Result<Self> {
         let mut p = Self::default();
 
@@ -243,7 +243,7 @@ impl TextureParams {
         Ok(p)
     }
 
-    /// Writes the description's chunks (`STextureParams::Save`).
+    /// Writes the description's chunks.
     pub fn write(&self, w: &mut Writer) {
         w.chunk(THM_CHUNK_TEXTUREPARAM, |w| {
             w.w_u32(self.fmt.0);
@@ -308,7 +308,7 @@ impl TextureParams {
         p
     }
 
-    /// What picking a type in the editor resets (`STextureParams::OnTypeChange`).
+    /// What picking a type in the editor resets.
     pub fn apply_type_defaults(&mut self) {
         let processing = TextureFlags::BINARY_ALPHA
             | TextureFlags::ALPHA_BORDER
@@ -352,7 +352,7 @@ impl TextureParams {
         mem.wrapping_mul(frames.max(1))
     }
 
-    /// The DDS the editor makes for this description (`DXTCompressImage`).
+    /// The DDS the editor makes for this description.
     ///
     /// Only Box, Triangle and Kaiser pick a filter of their own (Kaiser is Catmull-Rom); every
     /// other name is the resizer's default.
@@ -380,7 +380,7 @@ impl TextureParams {
             MipFilterId::KAISER => MipFilter::CatmullRom,
             _ => MipFilter::Default,
         };
-        // oracle: DXTCompressImage generates the whole chain whatever flGenerateMipMaps says,
+        // DXTCompressImage generates the whole chain whatever flGenerateMipMaps says,
         // and applies neither the fade nor the border options
         Ok(DdsRequest { encoding, mips: true, filter })
     }

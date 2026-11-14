@@ -19,7 +19,7 @@ fn c_str(s: &str) -> &str {
     s.split('\0').next().unwrap_or("")
 }
 
-/// A Lua reserved word (`IsLuaKeyword`).
+/// A Lua reserved word.
 #[must_use]
 pub fn is_keyword(s: &str) -> bool {
     KEYWORDS.contains(&c_str(s))
@@ -38,7 +38,7 @@ pub fn is_ident(s: &str) -> bool {
     b.iter().all(|&c| c.is_ascii_alphanumeric() || c == b'_') && !is_keyword(s)
 }
 
-/// A number as the file shows it (`FormatNumber`): a whole number below 9e15 as an integer, a
+/// A number as the file shows it: a whole number below 9e15 as an integer, a
 /// value that is exactly a float at float precision, anything else in the shortest of 15 or 17
 /// significant digits that reads back.
 #[must_use]
@@ -80,7 +80,7 @@ fn parse_c(s: &str) -> Option<f64> {
     }
 }
 
-/// Whether a string is written in a long bracket (`WantsLongBracket`): it holds a newline and
+/// Whether a string is written in a long bracket: it holds a newline and
 /// nothing the lexer would normalise away (`\r`) or that needs an escape anyway.
 #[must_use]
 pub fn wants_long_bracket(s: &str) -> bool {

@@ -1,15 +1,15 @@
 //! The pickers: what comes from a list is PICKED, not typed (CLAUDE.md, "Characters").
 //!
 //! - [`local_list_picker`] - a long list (items, dialogs, models, communities) in a popup with a
-//!   search on top and only the rows in view laid out (`ListPicker`); the field shows "caption
+//!   search on top and only the rows in view laid out; the field shows "caption
 //!   (id)". A value the list does not hold is kept, shown in the warning colour and said so in
 //!   the tip - never replaced: the text path may name what only the module brings.
 //! - [`item_picker`] - the one item picker of both tabs: a kit row, a stock row, the mode's start
-//!   kit (`EditorCharacters::ItemPicker`).
+//!   kit.
 //! - [`local_combo`] - a short list with a preview of its own (Base, Rank, the transitions'
 //!   level).
 //! - [`local_multi_combo`] - ticks over names, the picked joined in the preview; a picked name
-//!   the list lacks stays ticked and says so (`XUI_LocalMultiCombo`).
+//!   the list lacks stays ticked and says so.
 
 use std::sync::Arc;
 

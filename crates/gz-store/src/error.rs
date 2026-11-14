@@ -58,7 +58,7 @@ impl CmdError {
     }
 
     /// A command that did not do all it was asked and says so in its own fields alone: the
-    /// reply is `{"ok":false, ...data}` with no `error` (the C++ file operations' report).
+    /// reply is `{"ok":false, ...data}` with no `error` (a file operation's report).
     pub fn report(data: serde_json::Value) -> Self {
         Self { code: SmolStr::new("report"), message: String::new(), data: Some(data) }
     }

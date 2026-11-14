@@ -1,6 +1,5 @@
 //! The game graph (`game.graph`, or chunk 4 of `all.spawn`) and the level cross tables
-//! (`level.gct`, or the tail of the game graph). `IGameGraph::save`, `game_graph_space.h`,
-//! `game_level_cross_table.h`.
+//! (`level.gct`, or the tail of the game graph).
 
 use std::sync::Arc;
 
@@ -11,13 +10,13 @@ use smol_str::SmolStr;
 use crate::bytes::Bytes;
 use crate::{Result, SpawnError, damaged};
 
-/// `xrGUID`: two `u64`, kept as the sixteen bytes they are.
+/// Two `u64`, kept as the sixteen bytes they are.
 pub type Guid = [u8; 16];
 
 const VERTEX_SIZE: usize = 42;
 const EDGE_SIZE: usize = 6;
 const POINT_SIZE: usize = 20;
-/// `CGameLevelCrossTable::CHeader`: version, two counts, two guids.
+/// Version, two counts, two guids.
 pub const CROSS_TABLE_HEADER_SIZE: usize = 44;
 const CELL_SIZE: usize = 6;
 
@@ -31,7 +30,7 @@ pub(crate) fn guid(r: &mut Reader<'_>) -> Result<Guid> {
     Ok(g)
 }
 
-/// `GameGraph::SLevel`.
+/// A level of the game graph.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GraphLevel {
     pub name: SmolStr,
@@ -41,7 +40,7 @@ pub struct GraphLevel {
     pub guid: Guid,
 }
 
-/// `GameGraph::CVertex` (42 bytes, packed).
+/// A vertex of the game graph (42 bytes, packed).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GraphVertex {
     pub local_point: Vec3,
@@ -58,14 +57,14 @@ pub struct GraphVertex {
     pub death_point_count: u8,
 }
 
-/// `GameGraph::CEdge`.
+/// An edge of the game graph.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GraphEdge {
     pub vertex_id: u16,
     pub distance: f32,
 }
 
-/// `GameGraph::CLevelPoint`.
+/// A level point of the game graph.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LevelPoint {
     pub point: Vec3,

@@ -1,6 +1,6 @@
 //! The release package's ZIP (MOD_UPDATES 2.3): stored or deflated entries, ZIP64 where
 //! needed, no encryption, no spanning, UTF-8 names flagged. The writer is the shape minizip
-//! gave the C++ editor (made by 63 - the FAT host of spec 6.3, the one that defines UTF-8 names;
+//! gives (made by 63 - the FAT host of spec 6.3, the one that defines UTF-8 names;
 //! level 9 raw deflate; ZIP64 for an entry of 0xFF000000 bytes and up). The reader walks the
 //! central directory and every local header itself, so the file index states where the data
 //! REALLY sits in the finished archive.

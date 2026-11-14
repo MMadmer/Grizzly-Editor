@@ -47,7 +47,7 @@ fn count_line(n: i64, rest: &str) -> Option<String> {
     (n != 0).then(|| format!("{n} {rest}"))
 }
 
-/// What a bake's answer says, as `BakeDone` / `BakeFailed` show it.
+/// What a bake's answer says, as the result shows it.
 fn report(kind: &str, failed: &str, reply: &Value) -> (ResultSpec, String) {
     if !call::ok(reply) {
         let spec = ResultSpec::new(
@@ -130,7 +130,7 @@ fn report(kind: &str, failed: &str, reply: &Value) -> (ResultSpec, String) {
     (spec, folder)
 }
 
-/// The folder of a file (`OpenFolderOf` with `is_file`).
+/// The folder of a file (with `is_file`).
 fn parent(path: &str) -> String {
     path.rfind(['\\', '/']).map_or_else(|| path.to_owned(), |i| path.get(..i).unwrap_or("").to_owned())
 }

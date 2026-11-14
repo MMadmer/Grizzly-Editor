@@ -55,7 +55,7 @@ pub struct ShellOptions {
     /// `-kitsheet`: the work area shows every widget of the kit in every state, and the tokens.
     pub kitsheet: bool,
     /// `-uiscale <f>` (0.5..4): the UI at this scale, whatever the monitor says
-    /// (`CommandLineScale`). Taken again when the window meets another monitor's scale.
+    /// . Taken again when the window meets another monitor's scale.
     pub ui_scale: Option<f32>,
 }
 
@@ -549,7 +549,7 @@ impl ShellState {
         &self.active
     }
 
-    /// Every tab, as `ui_tab action=list` answers it.
+    /// Every tab, as `ui.tab action=list` answers it.
     #[must_use]
     pub fn tabs_json(&self) -> Vec<serde_json::Value> {
         self.tabs.iter().map(|t| t.info_json(t.id == self.active)).collect()
@@ -647,7 +647,7 @@ impl ShellState {
             return Err(OpenError::Other(if crate::contract::DOCUMENT_KINDS.contains(&req.kind.as_str()) {
                 format!("no tab of the kind '{}' is installed in this shell", req.kind)
             } else {
-                format!("unknown kind '{}' (ui_contract lists the document kinds)", req.kind)
+                format!("unknown kind '{}' (ui.contract lists the document kinds)", req.kind)
             }));
         };
         let doc = factory(&self.editor, &req).map_err(OpenError::Other)?;
@@ -770,7 +770,7 @@ impl ShellState {
             });
         });
         if let Some(line) = line {
-            self.editor.log.plain(line);
+            self.editor.log.finding(&line);
         }
     }
 
@@ -916,7 +916,7 @@ impl ShellState {
             });
         });
         if let Some(line) = line {
-            self.editor.log.plain(line);
+            self.editor.log.finding(&line);
         }
     }
 
@@ -1249,7 +1249,7 @@ impl ShellState {
             return Err(if crate::contract::DIALOGS.iter().any(|(d, _)| *d == id) {
                 format!("the dialog '{id}' is not installed in this shell")
             } else {
-                format!("unknown dialog '{id}' (ui_contract lists them)")
+                format!("unknown dialog '{id}' (ui.contract lists them)")
             });
         };
         let needs_project = self.parts.dialogs.get(i).is_some_and(|d| d.needs_project);
@@ -1832,7 +1832,7 @@ impl JobMarks {
 
 pub fn default_log_state(editor: &Editor) -> LogState {
     let (errors, warnings) = editor.log.counts();
-    let last = editor.log.last_report().map(|r| gz_log::marked(r.level, &r.text)).unwrap_or_default();
+    let last = editor.log.last_report().map(|r| r.text.clone()).unwrap_or_default();
     LogState { last, errors, warnings }
 }
 

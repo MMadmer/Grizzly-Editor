@@ -1,6 +1,6 @@
 //! Names: the level an export is for, op names, path names, a section taken out of a text.
 
-/// `ResolveLevelName`: an explicit `level` wins, otherwise the open scene's file name without
+/// An explicit `level` wins, otherwise the open scene's file name without
 /// its folder and extension (`...\l01_escape.level` -> `l01_escape`). `None` without either.
 #[must_use]
 pub fn resolve_level(arg: Option<&str>, scene_file_stem: &str) -> Option<String> {
@@ -20,7 +20,7 @@ fn cut_bytes(s: &str, n: usize) -> &str {
     s.get(..cut).unwrap_or_default()
 }
 
-/// `SanitizeOpName`: an op name is a section name and a file-name part, so every byte that is
+/// An op name is a section name and a file-name part, so every byte that is
 /// not `a-z A-Z 0-9 _ - .` becomes `_` (a Cyrillic letter is two of them); 127 bytes at most;
 /// an empty name is `unnamed`.
 #[must_use]
@@ -36,14 +36,14 @@ pub fn sanitize_op_name(src: &str) -> String {
     out
 }
 
-/// `ValidPathName`: a way path's name is a patrol name, an ltx section and a picker entry at
+/// A way path's name is a patrol name, an ltx section and a picker entry at
 /// once.
 #[must_use]
 pub fn valid_path_name(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
 }
 
-/// `StripIniSection`: the section `name` (any case), header to the next header, taken out of
+/// The section `name` (any case), header to the next header, taken out of
 /// `text`; `true` when there was one.
 pub fn strip_ini_section(text: &mut String, name: &str) -> bool {
     let mut out = String::with_capacity(text.len());

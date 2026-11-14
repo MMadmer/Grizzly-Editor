@@ -1,5 +1,5 @@
-//! The definitions of a `particles.xr` (`CPEDef`, `CPGDef`), the library that finds them
-//! (`CPSLibrary`) and a playing [`System`] - an effect or a group - with its own random sources.
+//! The definitions of a `particles.xr`, the library that finds them
+//!  and a playing [`System`] - an effect or a group - with its own random sources.
 
 use std::sync::Arc;
 
@@ -12,13 +12,13 @@ use crate::group::Group;
 use crate::noise::Noise;
 use crate::rand::Rngs;
 
-/// `CPEDef` flags.
+/// The effect definition flags.
 pub mod flags {
     pub use gz_fmt_xr::effect_flags::*;
     pub const CULL_CCW: u32 = 1 << 23;
 }
 
-/// `CPGDef::SEffect` flags.
+/// The group's effect flags.
 pub mod group_flags {
     pub const DEFERRED_STOP: u32 = 1 << 0;
     pub const ON_PLAY_CHILD: u32 = 1 << 1;
@@ -28,7 +28,7 @@ pub mod group_flags {
     pub const ON_DEAD_CHILD: u32 = 1 << 6;
 }
 
-/// `SFrame`: the atlas a framed effect plays.
+/// The atlas a framed effect plays.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frame {
     /// One frame's size in texture coordinates.
@@ -40,14 +40,14 @@ pub struct Frame {
 }
 
 impl Default for Frame {
-    /// `InitDefault`.
+    /// The default values.
     fn default() -> Self {
         Self { tex_size: Vec2::new(32.0 / 256.0, 64.0 / 128.0), dim_x: 8, frame_count: 16, speed: 24.0 }
     }
 }
 
 impl Frame {
-    /// `CalculateTC`: the left-top and right-bottom texture coordinates of a frame.
+    /// The left-top and right-bottom texture coordinates of a frame.
     #[must_use]
     pub fn tc(&self, frame: i32) -> (Vec2, Vec2) {
         let (col, row) = if self.dim_x == 0 { (0, 0) } else { (frame % self.dim_x, frame / self.dim_x) };
@@ -56,7 +56,7 @@ impl Frame {
     }
 }
 
-/// `CPEDef`: an effect as loaded.
+/// An effect as loaded.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectDef {
     pub name: SmolStr,
@@ -75,7 +75,7 @@ pub struct EffectDef {
 }
 
 impl From<&gz_fmt_xr::ParticleEffect> for EffectDef {
-    /// `CPEDef::Load`, with the constructor's defaults for what the file does not hold.
+    /// Loads an effect definition, with the constructor's defaults for what the file does not hold.
     fn from(e: &gz_fmt_xr::ParticleEffect) -> Self {
         Self {
             name: e.name.clone(),
@@ -102,7 +102,7 @@ impl From<&gz_fmt_xr::ParticleEffect> for EffectDef {
     }
 }
 
-/// `CPGDef::SEffect`.
+/// A group's effect.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GroupEffect {
     pub effect: SmolStr,
@@ -115,7 +115,7 @@ pub struct GroupEffect {
     pub flags: u32,
 }
 
-/// `CPGDef`: a group as loaded.
+/// A group as loaded.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GroupDef {
     pub name: SmolStr,
@@ -153,7 +153,7 @@ pub trait Collider: Sync {
     fn ray_pick(&self, start: Vec3, dir: Vec3, dist: f32) -> Option<(Vec3, Vec3)>;
 }
 
-/// `CPSLibrary`: the effects and groups of one `particles.xr`, sorted by name.
+/// The effects and groups of one `particles.xr`, sorted by name.
 #[derive(Debug)]
 pub struct Library {
     effects: Vec<Arc<EffectDef>>,
@@ -162,7 +162,7 @@ pub struct Library {
 }
 
 impl Library {
-    /// `CPSLibrary::Load` over a read file: sorted the way the engine sorts (`xr_strcmp`), the
+    /// Loads the library over a read file: sorted the way the engine sorts, the
     /// first of two equal names kept in front.
     #[must_use]
     pub fn new(p: &gz_fmt_xr::Particles) -> Self {
@@ -174,14 +174,14 @@ impl Library {
         Self { effects, groups, noise: Noise::new() }
     }
 
-    /// `FindPED`.
+    /// Finds an effect definition.
     #[must_use]
     pub fn effect(&self, name: &str) -> Option<&Arc<EffectDef>> {
         let i = self.effects.partition_point(|e| e.name.as_bytes() < name.as_bytes());
         self.effects.get(i).filter(|e| e.name == name)
     }
 
-    /// `FindPGD`.
+    /// Finds a group definition.
     #[must_use]
     pub fn group(&self, name: &str) -> Option<&Arc<GroupDef>> {
         let i = self.groups.partition_point(|g| g.name.as_bytes() < name.as_bytes());
@@ -266,7 +266,7 @@ impl System {
         }
     }
 
-    /// `UpdateParent`: the emitter's transform and velocity; `xform` draws the particles in the
+    /// The emitter's transform and velocity; `xform` draws the particles in the
     /// emitter's space instead of carrying the actions into the world (the editor passes false).
     pub fn update_parent(&mut self, m: &Mat4, vel: Vec3, xform: bool) {
         match &mut self.kind {
@@ -275,7 +275,7 @@ impl System {
         }
     }
 
-    /// `OnFrame`: `dt_ms` milliseconds of play.
+    /// `dt_ms` milliseconds of play.
     pub fn on_frame(&mut self, dt_ms: u32, collider: Option<&dyn Collider>) {
         let mut cx = Ctx { rng: &mut self.rng, noise: &self.lib.noise };
         match &mut self.kind {

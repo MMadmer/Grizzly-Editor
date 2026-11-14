@@ -18,7 +18,7 @@ pub struct IndexLevel {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct IndexEntity {
-    /// The vertex of the spawn graph (`ALife::_SPAWN_ID`).
+    /// The vertex of the spawn graph.
     pub spawn_id: u16,
     pub section: SmolStr,
     pub name: SmolStr,

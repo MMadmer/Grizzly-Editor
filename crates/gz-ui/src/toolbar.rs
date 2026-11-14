@@ -753,7 +753,7 @@ impl<'u, 'a> Toolbar<'u, 'a> {
         tool_button(self.ui, rect, id, &face).clicked() && enabled
     }
 
-    /// A button that opens a menu (a caret after its label). `request` is the name `ui_popup`
+    /// A button that opens a menu (a caret after its label). `request` is the name `ui.popup`
     /// opens it by. Off, it keeps its caret and width, its tip says why, and it never opens.
     /// `add` draws the menu's rows while it is open; returns whether it is open.
     #[allow(clippy::too_many_arguments)]

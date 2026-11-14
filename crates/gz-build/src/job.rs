@@ -53,8 +53,8 @@ pub struct BuildResult {
     pub err: String,
     /// The problems that did not stop the build, a line each.
     pub warnings: String,
-    /// What the scene's bake did.
-    pub bake_note: String,
+    /// What the scene's bake did: a note per layer, a warning per thing left out.
+    pub bake_note: Vec<gz_base::Finding>,
     /// What the walk passed by: tooling, `[exclude]`, links - project-relative.
     pub left_out: Vec<String>,
     /// The clean build's refusal: the first ten of the files it would delete, and how many.
@@ -486,7 +486,6 @@ async fn build(
         out.files
     ));
     // what is installed in the linked game changed: its modes and modules follow
-    // (C++ EditorGameModes::Invalidate)
     let game = project.game_root();
     if !flat && !game.is_empty() && gz_project::paths::same_path(&req.target, &game) {
         let p = project.clone();

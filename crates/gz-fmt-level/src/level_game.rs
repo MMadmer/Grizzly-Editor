@@ -7,7 +7,7 @@ use smol_str::SmolStr;
 
 use crate::{LevelError, Result};
 
-/// The chunk of way objects in `level.game` (`WAY_PATROLPATH_CHUNK`).
+/// The chunk of way objects in `level.game`.
 pub const WAY_CHUNK: u32 = 0x1000;
 /// The chunk of respawn points in `level.game` (`RPOINT_CHUNK`).
 pub const RPOINT_CHUNK: u32 = 0x2000;
@@ -101,7 +101,7 @@ pub struct RPoint {
     pub pos: Vec3,
     pub rot: Vec3,
     pub team: u8,
-    /// `ERPpointType`: 0 actor, 1 artefact, 2 item.
+    /// 0 actor, 1 artefact, 2 item.
     pub kind: u8,
     /// The game types the point serves (reserved and 0 in old files).
     pub game_type: u16,
@@ -190,7 +190,7 @@ pub struct EnvModifier {
     pub ambient: Vec3,
     pub sky_color: Vec3,
     pub hemi_color: Vec3,
-    /// Which of the values apply (`EEnvModUsedParams`). Files older than version `0x16` have
+    /// Which of the values apply. Files older than version `0x16` have
     /// none: every value applies.
     pub flags: u16,
 }

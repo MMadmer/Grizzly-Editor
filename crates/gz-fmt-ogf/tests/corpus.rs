@@ -43,8 +43,8 @@ fn the_games_models_and_motions_read() {
             };
             match read {
                 Ok(()) => Ok(()),
-                // the C++ exporter's default part: bone indices without names (ExportSkeleton.cpp,
-                // pinned by the crate's export tests); the engine reads a name before each index
+                // the X-Ray SDK exporter's default part: bone indices without names (pinned
+                // by the crate's export tests); the engine reads a name before each index
                 // and cannot load such a file either
                 Err(_) if nameless_default_part(&bytes) => {
                     nameless.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

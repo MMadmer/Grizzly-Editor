@@ -151,7 +151,7 @@ pub fn ship_state(rules: &[String], rel: &str) -> ShipState {
 }
 
 /// `[exclude]` after the browser's Exclude from Build (`excluded`) or Include in Build of one
-/// entry: `Ok(None)` when nothing changes, `Err` with the C++ text when it cannot be done.
+/// entry: `Ok(None)` when nothing changes, `Err` with the text when it cannot be done.
 pub fn set_excluded(rules: &[String], rel: &str, excluded: bool) -> Result<Option<Vec<String>>, String> {
     let rel = normalize_rel(rel);
     if rel.is_empty() {

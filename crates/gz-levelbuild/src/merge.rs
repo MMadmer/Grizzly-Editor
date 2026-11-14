@@ -1,4 +1,4 @@
-//! `CImageManager::CreateMergedTexture`: pictures packed into one atlas (the first free place
+//! Pictures packed into one atlas (the first free place
 //! that fits, rotated when only that fits), and the UV remap into it.
 
 use glam::Vec2;
@@ -99,7 +99,7 @@ fn try_merge(layer_cnt: usize, images: &[SourceImage], order: &[usize], dw: u32,
 
 /// `CreateMergedTexture(layer_cnt, ...)` over the size range: the narrower side doubles until
 /// the pictures fit. `None` when they do not fit in the largest size.
-// oracle: the C++ sorts with `area > || longest edge >`, which is no strict ordering; here the
+// the X-Ray SDK sorts with `area > || longest edge >`, which is no strict ordering; here the
 // pictures are sorted by area, then longest edge, largest first, keeping the order of equals.
 #[must_use]
 pub fn merge_textures(
@@ -136,7 +136,7 @@ pub fn merge_textures(
     }
 }
 
-/// `MergedTextureRemapUV`.
+/// Remaps the UVs of a merged texture.
 #[must_use]
 pub fn remap_uv(uv: Vec2, offs: Vec2, scale: Vec2, rotated: bool) -> Vec2 {
     if rotated {
@@ -146,7 +146,7 @@ pub fn remap_uv(uv: Vec2, offs: Vec2, scale: Vec2, rotated: bool) -> Vec2 {
     }
 }
 
-/// `MakeGameTexture` of a merged layer: 32 bit, mip maps, dithered, the advanced filter.
+/// Makes the game texture of a merged layer: 32 bit, mip maps, dithered, the advanced filter.
 pub fn game_texture(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>> {
     let image = Image::new(w, h, rgba.to_vec()).map_err(|e| BuildError::new(e.to_string()))?;
     let params = TextureParams {

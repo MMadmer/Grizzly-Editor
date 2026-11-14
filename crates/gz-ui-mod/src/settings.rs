@@ -40,10 +40,10 @@ use crate::local::{
 /// The tab's id and kind.
 pub const TAB: &str = "mod_settings";
 
-/// The scratch file a chosen picture waits in (`PendingThumbnailPath`).
+/// The scratch file a chosen picture waits in.
 const PENDING_NAME: &str = "thumbnail_pending.dds";
 
-/// `PlaceThumbnail`: the waiting picture takes the place of `thumbnail.dds` (the read-only mark
+/// The waiting picture takes the place of `thumbnail.dds` (the read-only mark
 /// cleared; on another volume a copy).
 fn place_thumbnail(pending: &Path, target: &Path) -> Result<(), String> {
     let cant = || format!("can't write {}", target.display());
@@ -207,7 +207,7 @@ impl ModSettingsDoc {
 
     // ---- the data ------------------------------------------------------------------------------
 
-    /// The form as `mod.ltx` says it, the reads of the checks started (`LoadSettingsForm`).
+    /// The form as `mod.ltx` says it, the reads of the checks started.
     fn reset(&mut self, root: String) {
         self.root = root;
         self.base_rev = None;
@@ -230,7 +230,7 @@ impl ModSettingsDoc {
     }
 
     /// Follows the store: the first snapshot fills the form, a later one reaches every field the
-    /// author has not touched (`SyncSettingsForm`). A frame only compares revisions.
+    /// author has not touched. A frame only compares revisions.
     fn sync(&mut self) {
         let Some(session) = self.editor.project_opt() else { return };
         let root = session.root.to_string_lossy().into_owned();
@@ -469,7 +469,7 @@ impl ModSettingsDoc {
     }
 
     /// A picture the author picked is made into the scratch `temp\thumbnail_pending.dds`
-    /// (`ConvertThumbnail`); nothing reaches the module before the tab is saved.
+    /// ; nothing reaches the module before the tab is saved.
     fn set_picture(&mut self, path: &str) {
         self.picture.making = true;
         let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
@@ -509,7 +509,7 @@ impl ModSettingsDoc {
         self.picture.pending.is_some() || self.picture.remove
     }
 
-    /// Saves the picture's change (`SaveSettings`' thumbnail part): the waiting picture moved to
+    /// Saves the picture's change: the waiting picture moved to
     /// `thumbnail.dds` and named, or the removal carried out.
     fn save_picture(&mut self) {
         if !self.picture_waits() {
@@ -570,7 +570,7 @@ impl ModSettingsDoc {
         self.form != self.base || self.picture_waits()
     }
 
-    /// Opens a page; what its pickers and checks read is read now (`kSettingsPages` click).
+    /// Opens a page; what its pickers and checks read is read now.
     pub fn set_page(&mut self, page: usize) {
         self.page = page.min(PAGES.len() - 1);
         match self.page {
@@ -647,7 +647,7 @@ impl ModSettingsDoc {
         }
     }
 
-    /// Saves once nothing is being typed in and nothing blocks (`DrawSettingsBody`).
+    /// Saves once nothing is being typed in and nothing blocks.
     fn save_when_idle(&mut self, ctx: &egui::Context) {
         if self.form == self.base || self.saving.is_some() || self.failed.as_ref() == Some(&self.form) {
             return;
@@ -1585,7 +1585,7 @@ fn relation_lines_mut(f: &mut Form, i: usize) -> &mut Vec<String> {
     }
 }
 
-/// "Name  (id)" for a module the linked game has, the id alone otherwise (`ModuleLabel`).
+/// "Name  (id)" for a module the linked game has, the id alone otherwise.
 fn module_label(installed: &[Installed], id: &str) -> String {
     match installed.iter().find(|m| m.id == id) {
         Some(m) if !m.name.is_empty() && m.name != id => format!("{}  ({id})", m.name),
@@ -1593,7 +1593,7 @@ fn module_label(installed: &[Installed], id: &str) -> String {
     }
 }
 
-/// A row's flags with Invalid when one of its problems is an error (`RowFlags`).
+/// A row's flags with Invalid when one of its problems is an error.
 fn flags(problems: &[Problem], field: &str, base: PropFlags) -> PropFlags {
     if problems.iter().any(|p| p.field == field && p.tone == Tone::Error) {
         base | PropFlags::INVALID
@@ -1602,7 +1602,7 @@ fn flags(problems: &[Problem], field: &str, base: PropFlags) -> PropFlags {
     }
 }
 
-/// The sentences of a row's problems under it (`RowMessages`).
+/// The sentences of a row's problems under it.
 fn messages(g: &mut Grid<'_>, problems: &[Problem], field: &str) {
     for p in problems.iter().filter(|p| p.field == field) {
         g.message(p.tone, &p.text);
@@ -1610,12 +1610,12 @@ fn messages(g: &mut Grid<'_>, problems: &[Problem], field: &str) {
 }
 
 /// Every module of the linked game - `modules\`, then the JSGME `mods\` that still holds what was
-/// installed before the split - by its manifest (`ScanInstalledModules`). Blocking.
+/// installed before the split - by its manifest. Blocking.
 #[must_use]
 pub fn installed_modules(files: &gz_vfs::GameFiles) -> Vec<Installed> {
     let mut out: Vec<Installed> = Vec::new();
     for m in files.modules() {
-        // the C++ read manifests up to 1 MB from the disk
+        // the manifest reads are limited to 1 MB from the disk
         let Some(size) = m.get("mod.ltx").map(|f| f.size) else { continue };
         if size == 0 || size >= 1 << 20 {
             continue;

@@ -1,7 +1,7 @@
 //! The audit: what a frame cut short, let escape, or drew disabled - and why.
 //!
 //! Kit widgets report themselves here while they draw, but only in a frame somebody asked to
-//! audit (`ui_audit` is held for that frame), so an ordinary frame pays one flag check per
+//! audit (`ui.audit` is held for that frame), so an ordinary frame pays one flag check per
 //! widget and no allocation.
 
 use std::sync::Arc;

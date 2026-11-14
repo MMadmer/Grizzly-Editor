@@ -9,7 +9,7 @@
 //! - [`icons`] - [`Icon`], `icons::draw`
 //! - [`text`] - measured and ellipsized text: [`Clip`], `text::label`, `text::paint`, `text::prose`
 //! - [`button`] - [`Button`], [`Kind`], `icon_button`, `segmented`, `keycaps`
-//! - [`audit`] - what a frame cut short or let escape, for `ui_audit`
+//! - [`audit`] - what a frame cut short or let escape, for `ui.audit`
 //! - [`layout`] - sizes the author dragged, by key
 //! - [`units`] - [`units::em`] (16 pt), [`units::button_width`] for rows laid out by hand
 //! - [`search`] - [`SearchField`] (magnifier, clear, Esc clears, Ctrl+F focuses) and

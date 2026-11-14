@@ -1,4 +1,4 @@
-//! The validator (`NqValidate`): one rule list with the codes the game runtime prints; errors
+//! The validator: one rule list with the codes the game runtime prints; errors
 //! block the build, warnings do not. A pure function of the graph, the catalog and what the
 //! [`Context`] says about the project and the linked game.
 
@@ -21,7 +21,7 @@ pub enum Severity {
     Note,
 }
 
-/// One problem: `CODE node[slot]: message` (`SNqProblem`).
+/// One problem: `CODE node[slot]: message`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NqProblem {
     pub severity: Severity,
@@ -103,7 +103,7 @@ impl NqProblem {
     }
 }
 
-/// The reader's shape problems as `E003` (`ShapeErrors`).
+/// The reader's shape problems as `E003`.
 #[must_use]
 pub fn shape_errors(shape: &[String]) -> Vec<NqProblem> {
     shape
@@ -133,7 +133,7 @@ pub fn to_json(v: &[NqProblem]) -> Json {
     Json::Array(v.iter().map(NqProblem::to_json).collect())
 }
 
-/// `problems: none`, or `problems:` and one line per problem (`ToText`).
+/// `problems: none`, or `problems:` and one line per problem.
 #[must_use]
 pub fn to_text(v: &[NqProblem]) -> String {
     if v.is_empty() {
@@ -160,7 +160,7 @@ pub struct CharacterBrief {
     pub file: String,
 }
 
-/// What the validator knows besides the graph (`SContext`).
+/// What the validator knows besides the graph.
 #[derive(Clone, Copy, Default)]
 pub struct Context<'a> {
     /// The document's file, for `E001` and `W061`; `None` also skips the project's characters
@@ -1583,7 +1583,7 @@ impl<'a> V<'a> {
         }
     }
 
-    /// A kind belongs to a quest, to a behaviour graph, or to both (`CheckDoc`).
+    /// A kind belongs to a quest, to a behaviour graph, or to both.
     fn check_doc(&mut self, k: &Kind, node: Option<&str>, slot: &str) -> bool {
         let behaviour = self.q.is_behaviour();
         if k.in_doc(behaviour) {
@@ -1598,8 +1598,7 @@ impl<'a> V<'a> {
         false
     }
 
-    /// `who` names roles the graph declares; so does `{ role = }` in a place or a target
-    /// (`CheckWho`).
+    /// `who` names roles the graph declares; so does `{ role = }` in a place or a target.
     fn check_who(&mut self, k: &Kind, params: &Value, node: Option<&str>, slot: &str) {
         let mut names: Vec<String> = Vec::new();
         if k.param("who").is_some()
@@ -1815,7 +1814,7 @@ impl<'a> V<'a> {
         for topic in q.nodes.iter().filter(|n| text::is_topic_kind(&n.kind)) {
             let actor_first = topic.params.get_string("initiator", "actor") != "npc";
             let hops = q.dialog_chain(&topic.id);
-            let mut parity = vec![0u8; q.nodes.len()];
+            let mut side = vec![0u8; q.nodes.len()];
             for &(ni, depth) in &hops {
                 if let Some(c) = in_chain.get_mut(ni) {
                     *c = true;
@@ -1823,11 +1822,11 @@ impl<'a> V<'a> {
                 if depth == 0 {
                     continue;
                 }
-                if let Some(pp) = parity.get_mut(ni) {
+                if let Some(pp) = side.get_mut(ni) {
                     *pp |= if depth & 1 == 1 { 2 } else { 1 };
                 }
             }
-            for (ni, &par) in parity.iter().enumerate() {
+            for (ni, &par) in side.iter().enumerate() {
                 if par == 0 {
                     continue;
                 }
@@ -1942,7 +1941,7 @@ impl<'a> V<'a> {
     }
 
     /// `W030`: a ref a path from a trigger reaches without its declaring node; `E030` when
-    /// nothing declares it (`CheckRefs`).
+    /// nothing declares it.
     fn check_refs(&mut self) {
         let q = self.q;
         let idx = q.index();
@@ -2326,7 +2325,7 @@ impl<'a> V<'a> {
     }
 }
 
-/// The full rule set (`NqValidate::Run`).
+/// The full rule set.
 #[must_use]
 pub fn run(q: &Graph, catalog: &Catalog, ctx: &Context<'_>) -> Vec<NqProblem> {
     let mut v = V {
@@ -2382,7 +2381,7 @@ pub fn run(q: &Graph, catalog: &Catalog, ctx: &Context<'_>) -> Vec<NqProblem> {
 }
 
 /// The refs the graph declares and what made each (`squad`, `object`, `item`), first of a name
-/// only (`DeclaredRefsEx`).
+/// only.
 #[must_use]
 pub fn declared_refs(q: &Graph, catalog: &Catalog) -> Vec<(String, &'static str)> {
     let ctx = Context::default();

@@ -1,8 +1,8 @@
 //! The FROZEN release contract with the game's module updater (game repo,
 //! `docs/dead-air/MOD_UPDATES.md`, section 2): the asset names, the file index, the descriptor,
 //! the split into packages. It changes by adding optional keys and records and in no other way -
-//! a published release has to install forever. Built as text exactly as `EditorModManifest.cpp`
-//! builds it (key order, spacing, line ends): the descriptor is signed byte for byte.
+//! a published release has to install forever. Built as text in a fixed form
+//! (key order, spacing, line ends): the descriptor is signed byte for byte.
 
 use std::path::Path;
 
@@ -40,7 +40,7 @@ pub fn package_name(id: &str, version: &str, part: usize, parts: usize) -> Strin
 }
 
 /// `<stem>.zip` or `<stem>.part<N>.zip`, any case - matched whole, so `test-1.0` never claims a
-/// package of `test-1.0.1` that shares the folder (`IsPackageName`).
+/// package of `test-1.0.1` that shares the folder.
 #[must_use]
 pub fn is_package_name(name: &str, stem: &str) -> bool {
     let Some(head) = name.get(..stem.len()) else { return false };
@@ -60,7 +60,7 @@ pub fn is_package_name(name: &str, stem: &str) -> bool {
 }
 
 /// Whether a folder entry is a file an earlier packaging of this id and version left: the
-/// descriptor, the file index or a package (`ListReleaseFiles`).
+/// descriptor, the file index or a package.
 #[must_use]
 pub fn is_release_file(name: &str, id: &str, version: &str) -> bool {
     let stem = format!("{id}-{version}");
@@ -70,7 +70,7 @@ pub fn is_release_file(name: &str, id: &str, version: &str) -> bool {
 }
 
 /// MOD_UPDATES 2.2: what a path below `modules/<id>/` may look like. The game refuses a whole
-/// package over one bad name, so the editor refuses first (`PackagePathOk`).
+/// package over one bad name, so the editor refuses first.
 #[must_use]
 pub fn package_path_ok(path: &str) -> bool {
     for part in path.split('/') {
@@ -96,7 +96,7 @@ pub fn package_path_ok(path: &str) -> bool {
     true
 }
 
-/// Everything that decides whether this manifest can be released at all (`ReleaseGate`).
+/// Everything that decides whether this manifest can be released at all.
 pub fn release_gate(m: &Manifest) -> Result<(), String> {
     if !validate_id(&m.id) {
         return Err("module id missing or invalid in mod.ltx (allowed: a-z 0-9 _ . -)".to_owned());
@@ -138,7 +138,7 @@ pub fn check_requires_game(v: &str) -> Result<(), String> {
 
 /// `<project>\releases\<version>` by default; a relative folder is taken against the project,
 /// never the process's working directory. Inside the project only `releases\` is allowed:
-/// anywhere else the packages would ship inside the next build (`ResolveReleaseDir`).
+/// anywhere else the packages would ship inside the next build.
 pub fn resolve_release_dir(project_root: &Path, out_dir: &str, version: &str) -> Result<String, String> {
     let root_text = project_root.to_string_lossy().into_owned();
     let asked = gz_build::target::normalize_path(out_dir);
@@ -250,7 +250,7 @@ pub struct ReleaseFacts<'a> {
     pub unpacked: u64,
 }
 
-/// The descriptor up to the end of `[packages]` (2.1, `FinishRelease`); the card and the
+/// The descriptor up to the end of `[packages]` (2.1); the card and the
 /// signature follow.
 #[must_use]
 pub fn descriptor_head(r: &ReleaseFacts<'_>, index: &Asset, packages: &[Asset]) -> String {

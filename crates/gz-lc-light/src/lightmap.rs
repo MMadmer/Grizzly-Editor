@@ -1,5 +1,5 @@
-//! `CLightmap` and the merge of the deflectors into lightmap pages (`CBuild::xrPhase_MergeLM`,
-//! `xrPhase_MergeLM_Surface.cpp`): the deflectors sorted, as many as eight pages could hold
+//! The lightmap and the merge of the deflectors into lightmap pages:
+//! the deflectors sorted, as many as eight pages could hold
 //! placed one by one at the first free spot of a 1024 x 1024 page (or turned a quarter),
 //! captured into it - the faces get their lightmap coordinates - and the page saved: its border
 //! filled and its texels packed into the two pictures the game reads (`lmap#N_1`, `lmap#N_2`).
@@ -19,7 +19,7 @@ use crate::{Ctl, LcError, Result};
 const ALPHA_REF: u8 = (254 - BORDER) as u8;
 const SIDE: usize = LMAP_SIZE as usize;
 
-/// `CLightmap`: a page while deflectors are captured into it, then the name the faces' geometry
+/// A page while deflectors are captured into it, then the name the faces' geometry
 /// refers to it by.
 #[derive(Clone, Debug, Default)]
 pub struct Lightmap {
@@ -43,7 +43,7 @@ pub struct LightmapPage {
 }
 
 impl LightmapPage {
-    /// Both pictures as DXT5 without mip levels, as the C++ asks of its encoder.
+    /// Both pictures as DXT5 without mip levels.
     pub fn dds(&self) -> Result<(Vec<u8>, Vec<u8>)> {
         Ok((
             encode_dds(std::slice::from_ref(&self.base), DdsEncoding::Dxt5)?,
@@ -124,7 +124,7 @@ impl Lightmap {
     }
 }
 
-/// `L_rect`: a placed rectangle, corners inclusive.
+/// A placed rectangle, corners inclusive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rect {
     pub ax: u32,
@@ -145,7 +145,7 @@ impl Rect {
     }
 }
 
-/// The placement mask of a page (`surface` of `xrPhase_MergeLM_Surface.cpp`): 255 where a
+/// The placement mask of a page: 255 where a
 /// placed deflector's texel lies.
 #[derive(Clone, Debug)]
 pub struct PageMask {
@@ -169,11 +169,11 @@ impl PageMask {
         self.bits.get(y * SIDE + x).copied().unwrap_or(255)
     }
 
-    /// `Place_Perpixel`: whether the deflector's texels fit at `(ax, ay)` without meeting a
-    /// placed one. oracle: the C++ tests an upright layer's rows eight texels at a time while
+    /// Whether the deflector's texels fit at `(ax, ay)` without meeting a
+    /// placed one. X-Ray's compiler tests an upright layer's rows eight texels at a time while
     /// more than eight are left (`_mm_max_epu8` against `alpha_ref`: a texel marked exactly
     /// `alpha_ref` counts as free there) and the rest one by one (`>= alpha_ref`: taken);
-    /// a turned layer one by one. The port tests the same way: where a deflector lands decides
+    /// a turned layer one by one. This compiler tests the same way: where a deflector lands decides
     /// which page the ones after it reach, and with it the level's visuals.
     fn fits(&self, ax: usize, ay: usize, lm: &LmLayer, rotated: bool) -> bool {
         let s_x = lm.width as usize + 2 * BORDER as usize;
@@ -212,7 +212,7 @@ impl PageMask {
 
     /// The first free spot in row-major order where a `w` x `h` rectangle of the layer fits.
     /// The rows are searched in parallel and the first row that has one wins, which is the
-    /// C++'s answer.
+    /// original's answer.
     fn first_fit(&self, w: usize, h: usize, lm: &LmLayer, rotated: bool) -> Option<(usize, usize)> {
         let (x_max, y_max) = ((SIDE + 1).checked_sub(w)?, (SIDE + 1).checked_sub(h)?);
         (0..y_max).into_par_iter().find_map_first(|y| {
@@ -242,9 +242,9 @@ fn better(a: (u32, u16, u16, u32), b: (u32, u16, u16, u32)) -> std::cmp::Orderin
     b.cmp(&a)
 }
 
-/// `CBuild::xrPhase_MergeLM`: every deflector not merged yet placed into pages, each page
+/// Every deflector not merged yet placed into pages, each page
 /// captured and saved in turn; `lightmaps` gets the pages, the pictures are answered in order.
-/// The deflectors are destroyed afterwards, as the C++ does. The C++ takes ties of the sort in
+/// The deflectors are destroyed afterwards. X-Ray's compiler takes ties of the sort in
 /// the order its shuffled list had them; here in the list's own order.
 pub fn merge_lightmaps(
     defls: &mut Deflectors,
@@ -308,7 +308,7 @@ pub fn merge_lightmaps(
             ctl.progress(i + 1, count);
         }
         if placed == 0 {
-            // an empty page holds any layer `OA_Export` makes; one made otherwise may not fit
+            // an empty page holds any layer the export makes; one made otherwise may not fit
             let big =
                 layer.first().and_then(|&d| defls.get(d)).map_or((0, 0), |x| (x.layer.width, x.layer.height));
             return Err(LcError::Invalid(format!(
@@ -368,8 +368,8 @@ mod tests {
         assert_eq!(taken as u32, want);
     }
 
-    /// oracle: a texel marked exactly `alpha_ref` is free in the C++'s eight-at-a-time columns
-    /// of an upright layer and taken in the rest (`Place_Perpixel`).
+    /// a texel marked exactly `alpha_ref` is free in X-Ray's eight-at-a-time columns
+    /// of an upright layer and taken in the rest.
     #[test]
     fn a_texel_marked_alpha_ref_is_free_only_in_the_wide_columns() {
         // a layer of 20 texels to a row with the border: columns 0..16 are tested eight at a time

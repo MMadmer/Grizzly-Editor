@@ -1,16 +1,15 @@
-//! The progressive (VIPM) pass of a skeleton split: `VIPM_Convert(u32(-1), 1.f, 1)` of
-//! `XrETools/PropSlimTools.cpp` - Tom Forsyth's edge collapses (`object.cpp`) over his linked
-//! mesh (`mesh.h`, `DLink.h`, `ArbitraryList.h`), the collapse error from QSlim's 5D quadric
-//! (`MxQMetric.cpp`: position and UV, in double), the sliding windows (`object_sliding.cpp`).
+//! The progressive (VIPM) pass of a skeleton split: Tom Forsyth's edge collapses over his linked
+//! mesh, the collapse error from QSlim's 5D quadric
+//! (position and UV, in double), the sliding windows.
 //!
-//! The C++ keeps points, edges and triangles as linked objects; here they are arenas indexed by
-//! number, and every list the C++ walks keeps the C++ order: a point's edge and triangle lists
+//! The X-Ray SDK keeps points, edges and triangles as linked objects; here they are arenas indexed by
+//! number, and every list it walks keeps its order: a point's edge and triangle lists
 //! are arrays emptied by "copy the last over it" (`erase_fast`), the object's triangle list
 //! takes a new triangle at its head, the points are walked from the last appended to the
-//! first. `ArbitraryList::resize` keeps what lies past the size within the reservation, and
+//! first. The array `resize` keeps what lies past the size within the reservation, and
 //! `insert` overwrites rather than inserts: both are kept (`AList`).
 
-// the loops index as the C++ does, several arrays at once
+// the loops index several arrays at once
 #![allow(clippy::needless_range_loop)]
 
 use glam::{Vec2, Vec3};
@@ -20,7 +19,7 @@ use crate::optimize::optimise_tri_list;
 const INVALID: u32 = u32::MAX;
 const QUAD_SIZE: usize = 5;
 
-/// `VIPM_SWR`: one sliding window.
+/// One sliding window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Swr {
     pub offset: u32,
@@ -28,7 +27,7 @@ pub struct Swr {
     pub num_verts: u16,
 }
 
-/// `VIPM_Result`.
+/// The result of the pass.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct VipmResult {
     /// `permute_verts[old] = new`.
@@ -57,7 +56,7 @@ impl<T: Copy + Default> AList<T> {
             return;
         }
         let reserve = (n * 3) >> 1;
-        // the C++ copies the whole old reservation; what `new T[]` adds is uninitialised there
+        // the X-Ray SDK copies the whole old reservation; what a fresh allocation adds is uninitialised there
         self.data.resize(reserve, T::default());
     }
 
@@ -102,7 +101,7 @@ fn unitize(v: &mut Vec5) {
     }
 }
 
-/// `MxQuadric` of dimension 5.
+/// A quadric of dimension 5.
 #[derive(Clone, Copy)]
 struct Quadric {
     a: [[f64; QUAD_SIZE]; QUAD_SIZE],
@@ -241,7 +240,7 @@ struct Collapse {
     bin: usize,
 }
 
-/// Why the pass gave nothing (the C++ asserts, or returns NULL).
+/// Why the pass gave nothing (the X-Ray SDK asserts, or returns nothing).
 #[derive(Debug)]
 pub(crate) struct Failed;
 
@@ -254,9 +253,9 @@ struct Object {
     tri_first: Option<usize>,
     tri_next: Vec<Option<usize>>,
     tri_prev: Vec<Option<usize>>,
-    /// In creation order; the C++ list walks it newest first.
+    /// In creation order; the X-Ray SDK's list walks it newest first.
     collapses: Vec<Collapse>,
-    /// `pNextCollapse`: `None` is `&CollapseRoot`.
+    /// `None` is `&CollapseRoot`.
     next_collapse: Option<usize>,
     level: i32,
 }
@@ -304,7 +303,7 @@ impl Object {
         out
     }
 
-    /// `MeshPt::FindTriEdge`: the first edge of `a` to `b` with a free side for `a`, `b`.
+    /// The first edge of `a` to `b` with a free side for `a`, `b`.
     fn find_tri_edge(&self, a: usize, b: usize) -> Result<Option<usize>, Failed> {
         for &e in &self.pt(a)?.edges {
             let ed = self.edge(e)?;
@@ -318,7 +317,7 @@ impl Object {
         Ok(None)
     }
 
-    /// `MeshPt::FindEdge`.
+    /// Finds an edge of a point.
     fn find_edge(&self, a: usize, b: usize) -> Result<Option<usize>, Failed> {
         for &e in &self.pt(a)?.edges {
             let ed = self.edge(e)?;
@@ -329,7 +328,7 @@ impl Object {
         Ok(None)
     }
 
-    /// `MeshPt::FindTri`: the triangle `a`, `b`, `c` in this winding.
+    /// The triangle `a`, `b`, `c` in this winding.
     fn find_tri(&self, a: usize, b: usize, c: usize) -> Result<Option<usize>, Failed> {
         for &t in &self.pt(a)?.tris {
             let p = self.tri(t)?.p;
@@ -352,7 +351,7 @@ impl Object {
         Ok(id)
     }
 
-    /// `MeshEdge::AddTri`.
+    /// Adds a triangle to an edge.
     fn edge_add_tri(&mut self, e: usize, t: usize) -> Result<(), Failed> {
         let p = self.tri(t)?.p;
         let ed = self.edge_mut(e)?;
@@ -421,7 +420,7 @@ impl Object {
         for p in tri.p {
             Self::remove_from(&mut self.touch(p)?.tris, t);
         }
-        // `ListDel`
+        // removes from the list
         let (prev, next) = (self.tri_prev[t], self.tri_next[t]);
         match prev {
             Some(p) => self.tri_next[p] = next,
@@ -442,7 +441,7 @@ impl Object {
         Ok(())
     }
 
-    /// `CollapseAllowedForLevel`.
+    /// Whether a collapse is allowed for a level.
     fn allowed_for_level(&self, p: usize, level: i32) -> Result<bool, Failed> {
         let mut ok = true;
         for &t in &self.pt(p)?.tris {
@@ -453,8 +452,8 @@ impl Object {
         Ok(ok)
     }
 
-    /// `FindCollapseError(binned, edge, TRUE)` for every edge of the binned point in turn: the
-    /// quadric of its triangles summed once (the C++ caches the sum for the point it saw last)
+    /// The collapse error for every edge of the binned point in turn: the
+    /// quadric of its triangles summed once (the X-Ray SDK caches the sum for the point it saw last)
     /// and taken at each kept point.
     fn collapse_errors(&self, binned: usize, out: &mut Vec<f32>) -> Result<(), Failed> {
         let mut sum = Quadric::ZERO;
@@ -484,9 +483,9 @@ impl Object {
         Ok(p)
     }
 
-    /// `CreateEdgeCollapse`.
+    /// Creates an edge collapse.
     fn create_edge_collapse(&mut self, binned: usize, kept: usize) -> Result<(), Failed> {
-        // the C++ also takes the collapse's error here; nothing reads it but a debug total
+        // the X-Ray SDK also takes the collapse's error here; nothing reads it but a debug total
         self.find_edge(kept, binned)?.ok_or(Failed)?;
         let binned_tris: Vec<usize> = self.pt(binned)?.tris.clone();
         let mut need_new_level = false;
@@ -554,7 +553,7 @@ impl Object {
         (i + 1 < self.collapses.len()).then_some(i + 1)
     }
 
-    /// `UndoCollapse`.
+    /// Undoes a collapse.
     fn undo(&mut self) -> Result<bool, Failed> {
         let Some(i) = self.list_next(self.next_collapse) else { return Ok(false) };
         self.next_collapse = Some(i);
@@ -581,7 +580,7 @@ impl Object {
         Ok(true)
     }
 
-    /// `DoCollapse`.
+    /// Does a collapse.
     fn redo(&mut self) -> Result<bool, Failed> {
         let Some(i) = self.next_collapse else { return Ok(false) };
         if self.collapses[i].level != self.level {
@@ -601,8 +600,8 @@ impl Object {
         Ok(true)
     }
 
-    /// `Valid`: no two triangles of the same three points in any order (`MeshTri::Equal`'s
-    /// six permutations: the same sorted triple; the C++ compares every pair).
+    /// Whether the mesh is valid: no two triangles of the same three points in any order (the
+    /// six permutations: the same sorted triple; the X-Ray SDK compares every pair).
     fn valid(&self) -> Result<bool, Failed> {
         let mut seen = std::collections::HashSet::new();
         for t in self.tri_list() {
@@ -665,7 +664,7 @@ impl Object {
             let ed = self.edge(e)?;
             let kept = if ed.p[0] == Some(p) { ed.p[1] } else { ed.p[0] }.ok_or(Failed)?;
             self.create_edge_collapse(p, kept)?;
-            // the level counts as unsigned against the limit, as the C++ compares it
+            // the level counts as unsigned against the limit, as the X-Ray SDK compares it
             if self.level as u32 > max_window {
                 break;
             }
@@ -887,8 +886,8 @@ fn optimise(list: &mut AList<u16>, n: usize) -> Result<(), Failed> {
     Ok(())
 }
 
-/// `VIPM_Init`, `VIPM_AppendVertex` for every vertex, `VIPM_AppendFace` for every face,
-/// `VIPM_Convert(u32(-1), 1.f, 1)`. `None` where the C++ answers NULL ("Can't make
+/// Runs the pass: init, every vertex appended, every face appended, then the conversion.
+/// `None` where the X-Ray SDK answers nothing ("Can't make
 /// progressive") or stops on an assertion.
 pub(crate) fn convert(verts: &[(Vec3, Vec2)], faces: &[[u16; 3]]) -> Option<VipmResult> {
     vipm_convert(verts, faces, u32::MAX)

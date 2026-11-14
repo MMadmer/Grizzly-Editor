@@ -1,5 +1,5 @@
 //! Coded problems of the mode's world, the way quests and characters report them: `E2nn` stops a
-//! build, `W2nn` is a warning (`EditorWorld::Validate`).
+//! build, `W2nn` is a warning.
 //!
 //! `E201` more than one Player Start, `E202` more than three player choices, `W203` a level the
 //! linked game lacks, `W204` a transition the linked game lacks, `W205` the player starts outside

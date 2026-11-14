@@ -1,5 +1,5 @@
-//! The subdivisions of the level (`g_XSplit`): `xrPhase_ResolveMaterials`, `Detach`,
-//! `xrPhase_UVmap` (`xrPhase_UVmap.cpp`), `xrPhase_Subdivide`, `xrPhase_MergeGeometry`.
+//! The subdivisions of the level: resolving the materials, detaching, the UV mapping,
+//! the subdividing and the geometry merging.
 
 use glam::Vec3;
 use gz_fmt_level::Aabb;
@@ -19,7 +19,7 @@ const SS_MAXSIZE: f32 = 32.0;
 
 pub type Split = Vec<FaceId>;
 
-/// `Detach`: the faces get vertices of their own, one copy per vertex they share.
+/// The faces get vertices of their own, one copy per vertex they share.
 pub fn detach(g: &mut LcGlobalData, faces: &[FaceId]) {
     let mut copies: FxHashMap<VertId, VertId> = FxHashMap::default();
     for &f in faces {
@@ -44,7 +44,7 @@ fn shader_flags(g: &LcGlobalData, f: FaceId) -> u32 {
     g.mesh.face(f).map_or(0, |x| g.shader(x.material).flags)
 }
 
-/// `CBuild::xrPhase_ResolveMaterials`: one subdivision per material in the order the faces meet
+/// One subdivision per material in the order the faces meet
 /// them, the rendered faces only, the empty ones dropped, each detached.
 pub fn resolve_materials(g: &mut LcGlobalData, log: &mut Log) -> Vec<Split> {
     let mut order: Vec<u16> = Vec::new();
@@ -76,7 +76,7 @@ pub fn resolve_materials(g: &mut LcGlobalData, log: &mut Log) -> Vec<Split> {
     splits
 }
 
-/// `CBuild::xrPhase_UVmap`: the lightmapped subdivisions cut into deflectors, each grown from
+/// The lightmapped subdivisions cut into deflectors, each grown from
 /// its largest face over the faces that fit its normal, each a subdivision of its own.
 pub fn uv_map(g: &mut LcGlobalData, splits: &mut Vec<Split>, log: &mut Log, ctl: &Ctl<'_>) -> Result<()> {
     let mut sp = 0usize;
@@ -185,7 +185,7 @@ fn contains(b: &Aabb, p: Vec3) -> bool {
     p.x >= b.min.x && p.x <= b.max.x && p.y >= b.min.y && p.y <= b.max.y && p.z >= b.min.z && p.z <= b.max.z
 }
 
-/// `CBuild::xrPhase_Subdivide`: a subdivision larger than 32 m on an axis, of more than 2048
+/// A subdivision larger than 32 m on an axis, of more than 2048
 /// faces or with a deflector too large for a page is cut in two along its longest axis, its
 /// deflector re-made for each half.
 pub fn subdivide(g: &mut LcGlobalData, splits: &mut Vec<Split>, log: &mut Log, ctl: &Ctl<'_>) -> Result<()> {
@@ -314,7 +314,7 @@ fn grow(b: &mut Aabb, s: f32) {
     b.max += Vec3::splat(s);
 }
 
-/// `NeedMerge`: few faces, and smaller than 32 m on some axis; answers the grown box.
+/// Few faces, and smaller than 32 m on some axis; answers the grown box.
 fn need_merge(g: &LcGlobalData, s: &[FaceId]) -> (bool, Aabb) {
     let mut bb = faces_box(g, s);
     grow(&mut bb, EPS_S);
@@ -340,14 +340,14 @@ fn volume(b: &Aabb) -> f32 {
     s.x * s.y * s.z
 }
 
-/// `ValidateMergeLinearSize`; its `4*c_SS_maxsize/3` is integer arithmetic: 42 m.
+/// Whether a merge is valid by linear size; its `4*c_SS_maxsize/3` is integer arithmetic: 42 m.
 fn linear_ok(merged: Vec3, o1: Vec3, o2: Vec3, i: usize) -> bool {
     let m = axis(merged, i);
     let limit = (4 * SS_MAXSIZE as u32 / 3) as f32;
     !(m > limit && m > axis(o1, i) + 1.0 && m > axis(o2, i) + 1.0)
 }
 
-/// `ValidateMerge`: the volume of the merged box, if the merge is allowed.
+/// The volume of the merged box, if the merge is allowed.
 fn validate_merge(f1: usize, base: &Aabb, base_orig: &Aabb, f2: usize, bb: &Aabb) -> Option<f32> {
     if f1 + f2 > 4 * SS_HIGH / 3 {
         return None;
@@ -369,14 +369,14 @@ fn validate_merge(f1: usize, base: &Aabb, base_orig: &Aabb, f2: usize, bb: &Aabb
     Some(v)
 }
 
-/// `CBuild::xrPhase_MergeGeometry`: small subdivisions take the candidate of the same material
+/// Small subdivisions take the candidate of the same material
 /// and page whose merge gives the smallest box, until none is small any more; the smallest
-/// volume wins, the first of equal ones as in the C++. `FaceEqual` of the first faces is a key
+/// volume wins, the first of equal ones as in X-Ray's compiler. The first faces' equality is a key
 /// that merging never changes (the merged front is the taken one's, of the same key), so each
 /// subdivision looks only at the later ones of its key; a taken one is marked gone, which keeps
 /// the others' order.
 pub fn merge_geometry(g: &LcGlobalData, splits: &mut Vec<Split>, log: &mut Log, ctl: &Ctl<'_>) -> Result<()> {
-    // `FaceEqual`: the material, the number of texture channels, the lightmap page
+    // the material, the number of texture channels, the lightmap page
     let key = |s: &Split| s.first().and_then(|&f| g.mesh.face(f)).map(|x| (x.material, x.tc.len(), x.lmap));
     let keys: Vec<_> = splits.iter().map(key).collect();
     let mut groups: FxHashMap<(u16, usize, Option<u32>), Vec<usize>> = FxHashMap::default();
@@ -409,7 +409,7 @@ pub fn merge_geometry(g: &LcGlobalData, splits: &mut Vec<Split>, log: &mut Log, 
                 if !need {
                     return None;
                 }
-                // the C++ starts from flt_max and takes only a smaller volume
+                // X-Ray's compiler starts from flt_max and takes only a smaller volume
                 validate_merge(n1, &base, &base_orig, splits[i].len(), &bb)
                     .filter(|&v| v < f32::MAX)
                     .map(|v| (v, i))

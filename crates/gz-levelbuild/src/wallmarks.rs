@@ -1,5 +1,5 @@
-//! The Wallmark tool's marks (`ESceneWallmarkTool`): read off the scene's part, written as
-//! `level.wallmarks` (`Export`) and as faces of the build project (`ExportStatic`).
+//! The Wallmark tool's marks: read off the scene's part, written as
+//! `level.wallmarks` (`Export`) and as faces of the build project.
 
 use glam::{Vec2, Vec3};
 use gz_chunk::{Reader, Writer};
@@ -11,7 +11,7 @@ const WM_CHUNK_ITEMS2: u32 = 5;
 /// `sizeof(FVF::LIT)`: position, colour, texture coordinates.
 const LIT: usize = 24;
 
-/// One mark: its bounding sphere and its triangles (`FVF::LIT`, three per face).
+/// One mark: its bounding sphere and its triangles (three per face).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mark {
     pub center: Vec3,
@@ -27,8 +27,8 @@ pub struct Slot {
     pub marks: Vec<Mark>,
 }
 
-/// `LoadStream`'s items: the old chunk (no size) or the new one (width, height, rotation per
-/// mark). Slots without marks are dropped (`RefiningSlots`). A part that does not read gives
+/// The old chunk's items (no size) or the new one's (width, height, rotation per
+/// mark). Slots without marks are dropped. A part that does not read gives
 /// what was read up to there.
 #[must_use]
 pub fn read(part: &[u8]) -> Vec<Slot> {

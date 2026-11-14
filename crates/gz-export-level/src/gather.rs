@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use gz_base::{Finding, Findings};
 use gz_editor::fsx::WriteGuard;
 use gz_entities::Settings;
 use gz_scene::objects::PointKind;
@@ -177,7 +178,7 @@ pub fn apply_spawn(
     stale: &[PathBuf],
     bake: &SpawnBake,
     guard: &WriteGuard,
-) -> Result<(Option<PathBuf>, Vec<String>), String> {
+) -> Result<(Option<PathBuf>, Vec<Finding>), String> {
     let cd_dir = root.join("spawn").join("custom_data");
     // every folder the pass writes, where it really is: never one of the linked game's
     let mut folders = vec![root.join("spawn"), cd_dir.clone()];
@@ -199,8 +200,8 @@ pub fn apply_spawn(
         let copied = dst.parent().is_some_and(|d| std::fs::create_dir_all(d).is_ok())
             && std::fs::copy(src, &dst).is_ok();
         if !copied {
-            log.push(format!(
-                "! [XMS] spawn export: can't stage '{}' -> gamedata\\meshes\\{visual}.ogf",
+            log.warn(format!(
+                "[XMS] spawn export: can't stage '{}' -> gamedata\\meshes\\{visual}.ogf",
                 src.display()
             ));
         }
@@ -209,7 +210,7 @@ pub fn apply_spawn(
         if write_file(&cd_dir.join(file), text.as_bytes()).is_err() {
             let op =
                 file.strip_suffix(".ltx").and_then(|f| f.strip_prefix(&format!("{level}_"))).unwrap_or(file);
-            log.push(format!("! [XMS] spawn export: can't write custom_data for '{op}'"));
+            log.warn(format!("[XMS] spawn export: can't write custom_data for '{op}'"));
         }
     }
     let path = xspawn_path(root, level);
@@ -231,7 +232,7 @@ pub fn apply_spawn(
 }
 
 /// Writes a file of the level's overlay folder, the folder made first. `what` names the file
-/// in the C++ error (`overlay.xcform`).
+/// in the error (`overlay.xcform`).
 pub fn write_level_file(
     root: &Path,
     level: &str,

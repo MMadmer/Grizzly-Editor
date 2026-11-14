@@ -1,6 +1,6 @@
-//! `LightPoint`: the light a point with a normal gets from a light set, in three layers - the
+//! The light a point with a normal gets from a light set, in three layers - the
 //! static lights into `rgb`, the hemisphere into `hemi`, the sun into `sun`. The level
-//! compiler's (`xrDeflectorLight.cpp`) and the detail compiler's (`detail_slot_calculate.cpp`)
+//! compiler's and the detail compiler's
 //! differ only in how a point light of the static set falls off.
 
 use glam::Vec3;
@@ -14,13 +14,13 @@ use crate::ray::{LightCache, NO_TRI, RayModel};
 
 /// `LP_DEFAULT`.
 pub const LP_DEFAULT: u32 = 0;
-/// `LP_UseFaceDisable` (asks for nothing the tracer does).
+/// Asks for nothing the tracer does.
 pub const LP_USE_FACE_DISABLE: u32 = 1 << 0;
-/// `LP_dont_rgb`.
+/// Leaves the static (rgb) light out.
 pub const LP_DONT_RGB: u32 = 1 << 1;
-/// `LP_dont_hemi`.
+/// Leaves the hemisphere out.
 pub const LP_DONT_HEMI: u32 = 1 << 2;
-/// `LP_dont_sun`.
+/// Leaves the sun out.
 pub const LP_DONT_SUN: u32 = 1 << 3;
 
 /// How a point light of the static set falls off.
@@ -76,7 +76,7 @@ fn towards(l: &RLight, p: Vec3, n: Vec3) -> Option<(f32, Vec3, f32)> {
     (d > 0.0).then_some((sq_d, ldir, d))
 }
 
-/// `LightPoint`: adds the light of `lights` at `p` (normal `n`) to `c`. `skip` is the face the
+/// Adds the light of `lights` at `p` (normal `n`) to `c`. `skip` is the face the
 /// point lies on.
 #[allow(clippy::too_many_arguments)]
 pub fn light_point(
@@ -135,7 +135,7 @@ pub fn light_point(
                     if d <= 0.0 {
                         continue;
                     }
-                    // the C++ jitters the light's position here and then traces from the point
+                    // X-Ray's compiler jitters the light's position here and then traces from the point
                     // along the direction it took before: the jitter changes nothing
                     let r = sq_d.sqrt();
                     let scale =

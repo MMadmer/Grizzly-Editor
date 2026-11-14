@@ -1,4 +1,4 @@
-//! `xrImage_Filter.cpp`: a general kernel filter over float triples with wrapped edges, and the
+//! A general kernel filter over float triples with wrapped edges, and the
 //! Gaussian blur kernel. Nothing of the compilers calls it; it is kept with the light's image
 //! tools.
 

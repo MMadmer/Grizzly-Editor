@@ -21,7 +21,7 @@ fn every_xml_of_the_game_parses() {
         |e| {
             let bytes = game.read(e).map_err(|e| e.to_string())?;
             let text = decode(&bytes);
-            // `#include "ui\..."` names a path below configs, as `CXml::Load` resolves it
+            // `#include "ui\..."` names a path below configs, as the engine resolves it
             let include =
                 |name: &str| game.read_path(&format!("configs/{name}")).ok().map(|b| decode(&b).into_owned());
             let (text, mut warnings) = preprocess(&text, &include);

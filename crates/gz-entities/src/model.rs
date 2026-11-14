@@ -1,7 +1,7 @@
-//! The data of a server entity, one struct per C++ base class.
+//! The data of a server entity, one struct per base class of the game.
 //!
 //! An [`Object`] holds the parts its class is made of; which ones is decided by the class, and
-//! the constructor in `create.rs` makes exactly those. Defaults here are what the C++
+//! the constructor in `create.rs` makes exactly those. Defaults here are what the game's
 //! constructors set without looking at the section.
 
 use glam::Vec3;
@@ -183,7 +183,7 @@ pub struct SavedBone {
     pub enabled: bool,
 }
 
-/// `SPHBonesData`: the bones a physics shell was saved with.
+/// The bones a physics shell was saved with.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SavedBones {
@@ -249,7 +249,7 @@ impl Default for Group {
     }
 }
 
-/// The physics state an item or a physic object sends in its update (`SPHNetState`), with the
+/// The physics state an item or a physic object sends in its update, with the
 /// item count it is sent under.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -389,7 +389,7 @@ pub struct Monster {
     pub prev_graph_id: u16,
     pub distance_from_point: f32,
     pub distance_to_point: f32,
-    /// `SpaceRestrictionSection` of the spawn section: what the restrictor choosers list.
+    /// The space restriction section of the spawn section: what the restrictor choosers list.
     pub space_restriction_section: SmolStr,
 }
 
@@ -410,7 +410,7 @@ impl Default for Monster {
     }
 }
 
-/// `CSE_ALifeHumanAbstract` and `CSE_ALifeHumanStalker`: the brain's preferences and the start
+/// The brain's preferences and the start
 /// dialog.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -424,7 +424,7 @@ pub struct Human {
 
 impl Default for Human {
     fn default() -> Self {
-        // oracle: the brain fills both with `Random.randI(3)`; a new entity gets zeros here.
+        // the brain fills both with a random 0..2; a new entity gets zeros here.
         Self {
             equipment_preferences: SmallVec::from_slice(&[0; 5]),
             weapon_preferences: SmallVec::from_slice(&[0; 4]),
@@ -459,7 +459,7 @@ impl Default for Temporary {
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Restrictor {
-    /// `RestrictionSpace::ERestrictorTypes`.
+    /// The restrictor types.
     pub restrictor_type: u8,
 }
 
@@ -494,7 +494,7 @@ impl Default for LevelChanger {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Physic {
-    /// `EPOType`.
+    /// The physic object types.
     pub kind: u32,
     pub mass: f32,
     pub fixed_bones: SmolStr,
@@ -573,9 +573,9 @@ pub struct Helicopter {
 #[serde(default)]
 pub struct Car {
     pub health: f32,
-    /// `SDoorState`: open state and health.
+    /// Open state and health.
     pub doors: Vec<(u8, f32)>,
-    /// `SWheelState`: health.
+    /// A wheel's state: health.
     pub wheels: Vec<f32>,
 }
 
@@ -914,7 +914,7 @@ impl Default for Zombie {
     }
 }
 
-/// `CSE_ALifeOnlineOfflineGroup`: member ids, sorted and unique as the engine keeps them.
+/// Member ids, sorted and unique as the engine keeps them.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Squad {

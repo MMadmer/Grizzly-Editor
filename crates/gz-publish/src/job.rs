@@ -4,7 +4,7 @@
 //!
 //! Two jobs of one card (`key` `publish`): the packaging runs in the group `build` - one build-like
 //! job at a time - and ends by starting the scan and the upload in the group `publish`, so a build
-//! may run while the files go up. `mod_publish` answers when the packaging has ended and the
+//! may run while the files go up. `release.publish` answers when the packaging has ended and the
 //! upload is on its way; `status` follows the rest.
 
 use std::collections::BTreeMap;
@@ -587,7 +587,7 @@ impl Publisher {
         }
     }
 
-    /// `mod_publish status`: `ok` is false for a job that failed or was stopped.
+    /// `release.publish status`: `ok` is false for a job that failed or was stopped.
     #[must_use]
     pub fn status_json(&self) -> (bool, Value) {
         let job = self.view();
@@ -618,8 +618,8 @@ impl Publisher {
         )
     }
 
-    /// The status with the packaging half of the answer, as `mod_package` gives it: what
-    /// `mod_publish` answers once the packaging has ended.
+    /// The status with the packaging half of the answer, as `mod.package` gives it: what
+    /// `release.publish` answers once the packaging has ended.
     #[must_use]
     pub fn started_json(&self) -> (bool, Value) {
         let (ok, mut status) = self.status_json();

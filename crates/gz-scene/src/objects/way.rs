@@ -8,7 +8,6 @@ use crate::math::{Aabb, Vec3};
 pub const WAYPOINT_SIZE: f32 = 1.5;
 pub const WAYPOINT_RADIUS: f32 = WAYPOINT_SIZE * 0.5;
 
-/// `CWayPoint`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WayPoint {
     pub name: SmolStr,
@@ -25,7 +24,7 @@ impl WayPoint {
         Self { name: SmolStr::new(name), position, flags: 0, selected: false, links: Vec::new() }
     }
 
-    /// `GetBox` of one point.
+    /// The box of one point.
     #[must_use]
     pub fn bounds(&self) -> Aabb {
         let p = self.position;
@@ -36,16 +35,15 @@ impl WayPoint {
     }
 }
 
-/// `CWayObject`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WayData {
-    /// `wtPatrolPath` 0.
+    /// The way kinds: patrol path 0.
     pub kind: u32,
     pub points: Vec<WayPoint>,
 }
 
 impl Default for WayData {
-    /// `Construct`: one point named `wp`.
+    /// One point named `wp`.
     fn default() -> Self {
         let mut p = WayPoint::new("wp", Vec3::ZERO);
         p.selected = true;
@@ -54,7 +52,7 @@ impl Default for WayData {
 }
 
 impl WayData {
-    /// `CreateLink`: a point never links to itself.
+    /// A point never links to itself.
     pub fn create_link(&mut self, from: usize, to: usize, prob: f32) {
         if from != to
             && to < self.points.len()
@@ -64,7 +62,7 @@ impl WayData {
         }
     }
 
-    /// `AppendLink`: only once.
+    /// Appends a link: only once.
     pub fn append_link(&mut self, from: usize, to: usize, prob: f32) -> bool {
         let to32 = u32::try_from(to).unwrap_or(u32::MAX);
         if self.points.get(from).is_some_and(|p| p.links.iter().any(|(t, _)| *t == to32)) {
@@ -74,7 +72,7 @@ impl WayData {
         true
     }
 
-    /// `AppendWayPoint`'s name: `wp`, `wp_00`, `wp_01` ...
+    /// The name of a new point: `wp`, `wp_00`, `wp_01` ...
     #[must_use]
     pub fn next_point_name(&self) -> String {
         for i in 0u32.. {
@@ -86,7 +84,7 @@ impl WayData {
         String::new()
     }
 
-    /// `BuildPath`: the points, each linked to the next, the last back to the first when
+    /// The points, each linked to the next, the last back to the first when
     /// `looped` and there are more than two.
     #[must_use]
     pub fn build(positions: &[Vec3], looped: bool) -> Self {
@@ -110,7 +108,7 @@ impl WayData {
         w
     }
 
-    /// `GetBox`.
+    /// The way's box.
     #[must_use]
     pub fn bounds(&self) -> Aabb {
         let mut b = Aabb::INVALID;
@@ -135,7 +133,7 @@ impl WayData {
         }
     }
 
-    /// `RayPick`: the nearest point's box.
+    /// The nearest point's box.
     #[must_use]
     pub fn ray_pick(&self, start: Vec3, dir: Vec3, distance: f32) -> Option<f32> {
         let mut best = distance;
@@ -150,21 +148,20 @@ impl WayData {
     }
 }
 
-/// `Fcolor::set(u32)`.
+/// Sets a colour from a `u32`.
 #[must_use]
 pub fn fcolor_from(argb: u32) -> [f32; 4] {
     let f = |s: u32| ((argb >> s) & 0xff) as f32 / 255.0;
     [f(16), f(8), f(0), f(24)]
 }
 
-/// `Fcolor::get()`.
+/// Gets the colour as a `u32`.
 #[must_use]
 pub fn fcolor_get(c: [f32; 4]) -> u32 {
     let q = |v: f32| ((v * 255.0).floor() as i32).clamp(0, 255) as u32;
     (q(c[3]) << 24) | (q(c[0]) << 16) | (q(c[1]) << 8) | q(c[2])
 }
 
-/// `CSector`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SectorData {
     pub color: [f32; 4],
@@ -183,7 +180,7 @@ impl Default for SectorData {
 
 impl SectorData {}
 
-/// `CPortal`: a polygon between two sectors, in world coordinates.
+/// A polygon between two sectors, in world coordinates.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct PortalData {
     pub front: SmolStr,

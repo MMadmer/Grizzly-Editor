@@ -3,7 +3,7 @@
 //! game and of the repository reads its header (only the header is read from disk).
 //!
 //! A description another tool wrote with chunk sizes that disagree with what they hold (a
-//! converted classic mod has such) is written in the C++ layout, as `ETextureParams::Save`
+//! converted classic mod has such) is written in the X-Ray SDK's layout, as the X-Ray SDK's saver
 //! writes it: that text must then write back to itself. One whose chunk list runs past the
 //! file's end is refused, as damage.
 
@@ -95,7 +95,7 @@ fn every_description_writes_back_its_bytes() {
         |p| thm_round_trip(&std::fs::read(p).map_err(|e| e.to_string())?, &n),
     );
     println!(
-        "thm: every {THM_STRIDE}th of {total} in the repository, all of the projects; {} byte for byte, {} in the C++ layout, {} damaged",
+        "thm: every {THM_STRIDE}th of {total} in the repository, all of the projects; {} byte for byte, {} in the X-Ray SDK's layout, {} damaged",
         n.same.load(Ordering::Relaxed),
         n.normalised.load(Ordering::Relaxed),
         n.damaged.load(Ordering::Relaxed)

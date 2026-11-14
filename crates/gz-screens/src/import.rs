@@ -1,4 +1,4 @@
-//! The one way a file enters the screens (`EditorScreens.cpp` `Import`): a file of the project
+//! The one way a file enters the screens: a file of the project
 //! stays where it is, one from outside is copied into `<project>\screens`, a PNG / JPG / TGA /
 //! BMP becomes a `.dds`, and a `.ps` gets the `.s` the game asks for. THE KIND IS THE FILE'S
 //! EXTENSION: nothing is declared.
@@ -36,14 +36,14 @@ impl FileKind {
     }
 }
 
-/// The extension of a path's last component, lower case, with its dot (`NqUtil::Extension`).
+/// The extension of a path's last component, lower case, with its dot.
 #[must_use]
 pub fn extension(path: &str) -> String {
     let leaf = path.rsplit(['\\', '/']).next().unwrap_or(path);
     leaf.rfind('.').and_then(|d| leaf.get(d..)).unwrap_or("").to_ascii_lowercase()
 }
 
-/// The base name without its extension (`NqUtil::BaseName`).
+/// The base name without its extension.
 #[must_use]
 pub fn stem(path: &str) -> String {
     let leaf = path.rsplit(['\\', '/']).next().unwrap_or(path);
@@ -68,7 +68,7 @@ pub fn file_kind(path: &str) -> FileKind {
     }
 }
 
-/// `NqUtil::NormalizePath`: `\` separators, no doubled ones, no `\.\`, no trailing one.
+/// `\` separators, no doubled ones, no `\.\`, no trailing one.
 #[must_use]
 pub fn normalize_path(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
@@ -117,7 +117,7 @@ fn source_of(root: &str, given: &str) -> String {
     if absolute { n } else { format!("{root}\\{n}") }
 }
 
-/// The plan for a file (`Import` before it touches the disk): `Err` with the C++ refusal for a
+/// The plan for a file (before it touches the disk): `Err` with the refusal for a
 /// kind the game neither shows nor plays.
 pub fn plan(root: &str, given: &str) -> Result<Plan, String> {
     let root = normalize_path(root);
@@ -165,7 +165,7 @@ fn ensure_shader_script(ps: &str) -> Result<(), String> {
     fs::write(&script, text).map_err(|_| format!("can't write {script}"))
 }
 
-/// A screen layer's picture as a `.dds` (`EditorCatalog::MakeScreenPicture`).
+/// A screen layer's picture as a `.dds`.
 fn make_picture(image: &str, dds: &str) -> Result<(), String> {
     let unreadable = || format!("can't read the picture {image} (PNG, JPG, TGA or BMP)");
     let bytes = fs::read(image).map_err(|_| unreadable())?;
@@ -180,7 +180,7 @@ fn make_picture(image: &str, dds: &str) -> Result<(), String> {
     fs::write(dds, out).map_err(|_| "the DXT compressor failed".to_owned())
 }
 
-/// Imports a file into the project (`Import`) and answers its project-relative path with `\`.
+/// Imports a file into the project and answers its project-relative path with `\`.
 /// Blocking file work: run it on the IO pool. Several imports may run at once.
 pub fn import(root: &str, given: &str) -> Result<String, String> {
     let root = normalize_path(root);

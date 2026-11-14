@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use gz_base::{Finding, Findings};
 use gz_fmt_level::{Aabb, VisualsWriter, XcForm, XcTri, append_cuts, unique_visual_name};
 use gz_fmt_object::Object as EditObject;
 use gz_fmt_ogf::{ExportOptions, export_static};
@@ -29,7 +30,7 @@ pub struct Collision {
     pub objects_used: u32,
 }
 
-/// `DoExportXCForm` from the level name on: the scene objects' meshes in world space, a game
+/// The collision overlay from the level name on: the scene objects' meshes in world space, a game
 /// material per face from its surface (`materials\default` where the surface names none or a
 /// face is in no surface), over the cut list `existing` holds.
 pub fn collision(
@@ -62,8 +63,8 @@ pub fn collision(
             verts.extend(mesh.points.iter().map(|p| xf.transform_tiny(*p)));
             // per-face material via the surface -> faces map; faces no surface covers (broken
             // surface data) fall back to the default game material
-            // oracle: the C++ map is keyed by surface pointers, so its material order follows
-            // heap addresses; this walks the surfaces in file order.
+            // the material order follows the surfaces in file order (a map keyed by
+            // surface identity would follow the heap's addresses).
             let mut fmtl: Vec<Option<usize>> = vec![None; fc];
             for sf in &mesh.surf_faces {
                 let gm = lo
@@ -123,7 +124,7 @@ pub struct Cut {
     pub added: usize,
 }
 
-/// `DoExportCut` from the level name on: the objects' world bounds (grown by `grow` metres)
+/// The cut from the level name on: the objects' world bounds (grown by `grow` metres)
 /// added to the cut list and to the `[cut_N]` hide entries - both ACCUMULATE, and a box already
 /// present (within tolerance) is skipped, so re-exporting the same selection changes nothing.
 pub fn cut(
@@ -175,12 +176,12 @@ pub struct VisualOverlay {
     pub skipped_dynamic: u32,
     /// A missing `.object` source or an export failure.
     pub skipped_failed: u32,
-    pub log: Vec<String>,
+    pub log: Vec<Finding>,
 }
 
-/// `DoExportOGF` from the level name on: every static object exported in world space on a
+/// The visual overlay from the level name on: every static object exported in world space on a
 /// private copy (the shared library instance is never transformed), in parallel on the pool the
-/// caller runs it in. `build_name` is the C++ `\\computer\user` stamp of a model; [`registry`]
+/// caller runs it in. `build_name` is the machine stamp of a model (`\\computer\user`); [`registry`]
 /// names the files that were written. `materials`, when the game's are known, refuses a
 /// surface whose material the game lacks.
 pub fn visuals(
@@ -201,7 +202,7 @@ pub fn visuals(
         if d.visual_mode() {
             continue;
         }
-        // no reference loaded: the C++ passes such an object by without counting it
+        // no reference loaded: such an object is passed by without counting it
         let Some(lo) = lib(&d.reference) else { continue };
         // TranslateToWorld only bakes vertices - skeletons keep local bones
         if lo.object.is_skeleton() || lo.object.is_dynamic() {
@@ -234,7 +235,7 @@ pub fn visuals(
                 out.files.push(VisualFile { name, bytes });
             }
             Err(e) => {
-                out.log.push(format!("! [XMS] visual overlay: '{name}' was not exported: {e}"));
+                out.log.warn(format!("[XMS] visual overlay: '{name}' was not exported: {e}"));
                 out.skipped_failed += 1;
             }
         }

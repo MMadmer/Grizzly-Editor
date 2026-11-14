@@ -11,7 +11,7 @@ use gz_world::WorldService;
 pub struct ExportService;
 
 impl ExportService {
-    /// `EditorWorld::GamePatrolExists`'s set: the patrol names of the linked game's
+    /// The patrol names of the linked game's
     /// `spawns\all.spawn`. Empty without a game or a readable spawn file.
     pub async fn game_patrols(editor: &Editor) -> Arc<HashSet<String>> {
         match WorldService::of(editor).await {

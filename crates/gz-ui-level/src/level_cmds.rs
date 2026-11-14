@@ -52,7 +52,7 @@ fn file_dialog(
 ) -> Result<(), String> {
     let ed = editor.clone();
     gz_ui::file_dialog::pick(Some(ctx), asker(editor), request, move |f| then(&ed, f)).map_err(|line| {
-        editor.log.plain(line);
+        editor.log.finding(&line);
         gz_ui::file_dialog::NAME_THE_FILE.to_owned()
     })
 }
@@ -92,7 +92,7 @@ fn settle_then(editor: &Arc<Editor>, ctx: &Context, go: impl FnOnce(&Arc<Editor>
             Answer::Cancel => {}
         });
     if let Some(l) = line {
-        editor.log.plain(l);
+        editor.log.finding(&l);
     }
 }
 

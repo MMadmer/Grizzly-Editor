@@ -58,7 +58,7 @@ pub fn rewrite_thumbnails(editor: &Arc<Editor>) {
                     "The texture library holds no texture descriptions.",
                 );
                 if let Some(line) = line {
-                    ed.log.plain(line);
+                    ed.log.finding(&line);
                 }
                 return;
             }
@@ -81,13 +81,13 @@ pub fn rewrite_thumbnails(editor: &Arc<Editor>) {
                 }
             });
             if let Some(line) = line {
-                ed.log.plain(line);
+                ed.log.finding(&line);
             }
         });
     });
 }
 
-/// `RewriteThumbnailsNow`: each description read and written again.
+/// Each description read and written again.
 fn start_rewrite(editor: &Arc<Editor>, files: Vec<(String, std::path::PathBuf)>) {
     let ed = editor.clone();
     let started = editor.jobs.start(

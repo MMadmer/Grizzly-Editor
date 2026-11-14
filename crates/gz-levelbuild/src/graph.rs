@@ -1,10 +1,11 @@
 //! The AI map as a level graph, the level's game graph with its cross table
-//! (`CGameGraphBuilder`), and a game graph of several levels (`CGraphMerger`).
+//! , and a game graph of several levels.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use glam::Vec3;
+use gz_base::{Finding, Findings};
 use gz_fmt_level::{AiMapNode, AiParams, LevelGraph, XRAI_VERSION_COP, export_level_graph};
 use gz_fmt_spawn::{Bytes, CrossTable, GameGraph, GraphEdge, GraphLevel, GraphVertex, Guid, LevelPoint};
 
@@ -22,7 +23,7 @@ const EPS_L: f32 = 0.0001;
 /// death points.
 type MergedVertex = (u8, Vec3, u32, [u8; 4], Vec<(u16, f32)>, Vec<LevelPoint>);
 
-/// `CLevelGraphEditor::build`: the level graph of the AI Map tool's nodes (CoP layout).
+/// The level graph of the AI Map tool's nodes (CoP layout).
 pub fn level_graph(nodes: &[AiMapNode], params: &AiParams, guid: Guid) -> Result<LevelGraph> {
     if nodes.is_empty() {
         return Err(BuildError::new("The AI map is empty."));
@@ -30,7 +31,7 @@ pub fn level_graph(nodes: &[AiMapNode], params: &AiParams, guid: Guid) -> Result
     export_level_graph(nodes, params, guid, XRAI_VERSION_COP).map_err(|e| BuildError::new(e.to_string()))
 }
 
-/// A graph point of the scene (`CSE_ALifeGraphPoint`).
+/// A graph point of the scene.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GraphPoint {
     pub name: String,
@@ -74,11 +75,11 @@ pub struct LevelGameGraph {
     pub graph: GameGraph,
     /// The graph points that became vertices, in vertex order.
     pub points: Vec<GraphPoint>,
-    /// The C++ log lines.
-    pub log: Vec<String>,
+    /// What the build did and what it dropped.
+    pub log: Vec<Finding>,
 }
 
-/// `CGameGraphBuilder::build_graph`: the graph points on the AI map, each level vertex given to
+/// The graph points on the AI map, each level vertex given to
 /// the nearest of them (the cross table), edges between points whose areas touch with their path
 /// lengths, then every edge a shorter detour makes redundant taken out.
 pub fn build_game_graph(
@@ -88,28 +89,31 @@ pub fn build_game_graph(
     level_guid: Guid,
     game_guid: Guid,
 ) -> Result<LevelGameGraph> {
-    let mut log = vec!["Building level game graph".to_owned(), format!("{} nodes loaded", nav.count())];
+    let mut log = vec![
+        Finding::info("Building level game graph"),
+        Finding::info(format!("{} nodes loaded", nav.count())),
+    ];
     let mut vertices: Vec<Vertex> = Vec::new();
     let mut kept: Vec<GraphPoint> = Vec::new();
     for p in points {
         let near = vertices.iter().any(|v| v.point.distance_squared(p.position) < EPS_L);
         let fmt = |why: &str| {
             format!(
-                "! removing graph point [{}][{:.6}][{:.6}][{:.6}] because {why}",
+                "Graph point [{}][{:.6}][{:.6}][{:.6}] is removed because {why}.",
                 p.name, p.position.x, p.position.y, p.position.z
             )
         };
         if near {
-            log.push(fmt("it is too close to the another graph point"));
+            log.warn(fmt("it is too close to another graph point"));
             continue;
         }
         let node = if nav.valid_position(p.position) { nav.vertex_id(p.position) } else { INVALID };
         if !nav.valid_id(node) {
-            log.push(fmt("it is outside of the AI map"));
+            log.warn(fmt("it is outside the AI map"));
             continue;
         }
         if vertices.iter().any(|v| v.level_vertex == node) {
-            log.push(fmt("it has the same AI node as another graph point"));
+            log.warn(fmt("it has the same AI node as another graph point"));
             continue;
         }
         vertices.push(Vertex {
@@ -120,14 +124,14 @@ pub fn build_game_graph(
         });
         kept.push(p.clone());
     }
-    log.push(format!("{} graph points loaded", vertices.len()));
+    log.info(format!("{} graph points loaded", vertices.len()));
     if vertices.is_empty() {
         return Err(BuildError::new("The level has no game graph points."));
     }
     if vertices.len() >= usize::from(u16::MAX) {
         return Err(BuildError::new("The level has too many game graph points."));
     }
-    log.push("Building cross table".to_owned());
+    log.info("Building cross table");
     let (results, distances) = cross_distances(nav, &vertices);
     let cell = nav.header.cell_size;
     let mut cells: Vec<u8> = Vec::with_capacity(nav.count() as usize * 6);
@@ -138,8 +142,8 @@ pub fn build_game_graph(
     }
     drop(distances);
 
-    log.push("Building graph".to_owned());
-    log.push("Generating edges".to_owned());
+    log.info("Building graph");
+    log.info("Generating edges");
     for v in 0..vertices.len() {
         let neighbours = fill_neighbours(nav, &results, &vertices, v as u32);
         for nb in neighbours {
@@ -148,13 +152,13 @@ pub fn build_game_graph(
         }
     }
     let edge_count: usize = vertices.iter().map(|v| v.edges.len()).sum();
-    log.push(format!("{edge_count} edges built"));
-    log.push("Checking graph connectivity".to_owned());
-    log.push("Optimizing graph".to_owned());
-    log.push(format!("edges before optimization : {edge_count}"));
+    log.info(format!("{edge_count} edges built"));
+    log.info("Checking graph connectivity");
+    log.info("Optimizing graph");
+    log.info(format!("edges before optimization : {edge_count}"));
     optimize(&mut vertices);
     let edge_count: usize = vertices.iter().map(|v| v.edges.len()).sum();
-    log.push(format!("edges after optimization : {edge_count}"));
+    log.info(format!("edges after optimization : {edge_count}"));
 
     let graph = assemble(
         &vertices,
@@ -177,7 +181,7 @@ pub fn build_game_graph(
             cells: Bytes::from_vec(cells),
         }],
     )?;
-    log.push("Level graph is generated successfully".to_owned());
+    log.info("Level graph is generated successfully");
     Ok(LevelGameGraph { graph, points: kept, log })
 }
 
@@ -269,7 +273,7 @@ fn fill_neighbours(nav: &LevelNav, owner: &[u32], vertices: &[Vertex], g: u32) -
 }
 
 /// `path_distance`: straight when the straight walk stays on the map, the path length otherwise.
-fn path_distance(nav: &LevelNav, vertices: &[Vertex], a: u32, b: u32, log: &mut Vec<String>) -> Result<f32> {
+fn path_distance(nav: &LevelNav, vertices: &[Vertex], a: u32, b: u32, log: &mut Vec<Finding>) -> Result<f32> {
     let (v0, v1) = (&vertices[a as usize], &vertices[b as usize]);
     let pure = glam::Vec2::new(v0.point.x - v1.point.x, v0.point.z - v1.point.z).length();
     if nav.valid_id(nav.check_position_in_direction(v0.level_vertex, v0.point, v1.point)) {
@@ -278,7 +282,7 @@ fn path_distance(nav: &LevelNav, vertices: &[Vertex], a: u32, b: u32, log: &mut 
     match nav.path_distance(v0.level_vertex, v0.point, v1.level_vertex, v1.point) {
         Some(d) => Ok(d),
         None => {
-            log.push(format!("Cannot build path from [{a}] to [{b}]"));
+            log.error(format!("No path from graph point [{a}] to [{b}]."));
             Err(BuildError::new(format!(
                 "Cannot build path from [{:.6}][{:.6}][{:.6}] to [{:.6}][{:.6}][{:.6}], check AI map",
                 v0.point.x, v0.point.y, v0.point.z, v1.point.x, v1.point.y, v1.point.z
@@ -300,7 +304,7 @@ fn optimize(vertices: &mut [Vertex]) {
             triples.push((w.min(back.unwrap_or(w)), i, to));
         }
     }
-    // oracle: std::sort with a greater-than predicate leaves equal weights in an unspecified
+    // std::sort with a greater-than predicate leaves equal weights in an unspecified
     // order; here they keep the order they were made in
     triples.sort_by(|a, b| b.0.total_cmp(&a.0));
     for (_, v0, v1) in triples {
@@ -365,14 +369,14 @@ fn assemble(
     })
 }
 
-/// The first level id a level added to the linked game's graph takes (`XMS::LevelId`: the
+/// The first level id a level added to the linked game's graph takes (the
 /// game's own levels live well below it).
 const JOINED_LEVEL_ID: u8 = 128;
-/// Where an added level lies in global space (`XmsGame::ComposeGameGraph`: away from the base map).
+/// Where an added level lies in global space (away from the base map).
 const JOINED_OFFSET: Vec3 = Vec3::new(10000.0, 0.0, 10000.0);
 
 /// Play's game graph: the level's own graph appended to the linked game's, the way the game
-/// adds a module's level (`XmsGame::ComposeGameGraph`). The game's vertices, their ids and the
+/// adds a module's level. The game's vertices, their ids and the
 /// graph's guid stay as they are - the game's scripts name its vertices by number - and the level
 /// follows them under a level id of its own, its vertices and cross table renumbered after them.
 /// `None` when the linked game already has a level of that name: the game's composer adds no level
@@ -479,12 +483,12 @@ pub struct LevelPart {
     pub nav: Arc<LevelNav>,
 }
 
-/// `CGraphMerger`: the levels' graphs one after another (by level id), every vertex in world
+/// The levels' graphs one after another (by level id), every vertex in world
 /// space, the death points of each vertex, the connection points joined by edges, the cross
 /// tables renumbered.
-// oracle: the C++ picks a vertex's death points with `random_shuffle`; here they are the
+// the X-Ray SDK picks a vertex's death points with `random_shuffle`; here they are the
 // first ones of its area, so a merge is reproducible.
-pub fn merge_levels(parts: &[LevelPart], guid: Guid) -> Result<(GameGraph, Vec<String>)> {
+pub fn merge_levels(parts: &[LevelPart], guid: Guid) -> Result<(GameGraph, Vec<Finding>)> {
     let mut log = Vec::new();
     let mut parts: Vec<&LevelPart> = parts.iter().collect();
     parts.sort_by_key(|p| p.id);
@@ -548,8 +552,8 @@ pub fn merge_levels(parts: &[LevelPart], guid: Guid) -> Result<(GameGraph, Vec<S
                 continue;
             }
             let Some(target) = parts.iter().find(|t| t.caption == gp.connection_level) else {
-                log.push(format!(
-                    "Cannot find level {}. Connection point will not be generated!",
+                log.warn(format!(
+                    "Level {} is not part of the merge: its connection point is not generated.",
                     gp.connection_level
                 ));
                 continue;
@@ -563,7 +567,7 @@ pub fn merge_levels(parts: &[LevelPart], guid: Guid) -> Result<(GameGraph, Vec<S
             let to = offsets[&target.id] + t_local as u32;
             let from = (off + local) as usize;
             let distance = merged[from].1.distance(merged[to as usize].1);
-            log.push(format!(
+            log.info(format!(
                 "Level {} with id {} has VALID connection point {}, which references to graph point {} on the level {} with id {}",
                 p.name, p.id, gp.name, gp.connection_point, target.name, target.id
             ));
@@ -646,6 +650,7 @@ pub fn merge_levels(parts: &[LevelPart], guid: Guid) -> Result<(GameGraph, Vec<S
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use gz_base::Severity;
     use gz_fmt_level::AiMapNode;
 
     /// A `w` x `h` grid of flat nodes, one metre apart, linked to their neighbours.
@@ -691,7 +696,9 @@ pub(crate) mod tests {
         let g = build_game_graph(&nav, &points, "l01", [1; 16], [2; 16]).unwrap();
         assert_eq!(g.graph.vertices.len(), 2);
         assert_eq!(g.points.len(), 2);
-        assert!(g.log.iter().any(|l| l.contains("too_close") && l.contains("too close")));
+        assert!(g.log.iter().any(|l| l.severity == Severity::Warning
+            && l.text.contains("too_close")
+            && l.text.contains("too close")));
         // a and b share a border: one edge each way, the straight distance
         assert_eq!(g.graph.edges.len(), 2);
         assert!((g.graph.edges[0].distance - 5.0).abs() < 1e-4);
@@ -820,7 +827,7 @@ pub(crate) mod tests {
         assert_eq!(g.cross_tables.len(), 2);
         assert_eq!(g.cross_tables[1].cell(0).unwrap().0, 2);
         assert_eq!(g.cross_tables[1].game_guid, [9; 16]);
-        assert_eq!(log.iter().filter(|l| l.contains("VALID connection point")).count(), 2);
+        assert_eq!(log.iter().filter(|l| l.text.contains("VALID connection point")).count(), 2);
         // the graph writes and reads back
         let bytes: Arc<[u8]> = g.to_bytes().into();
         let back = GameGraph::parse_file(&bytes).unwrap();

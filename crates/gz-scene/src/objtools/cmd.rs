@@ -93,7 +93,7 @@ fn way_json(s: &SceneState, o: &Object, w: &WayData) -> Value {
     json!({ "name": o.name.as_str(), "selected": s.is_selected(o.id), "points": points })
 }
 
-/// `EditSelectedWays`: a link edit of every selected way, on its selected points.
+/// A link edit of every selected way, on its selected points.
 pub fn link_batch(s: &SceneState, op: LinkOp) -> Result<Outcome, CmdError> {
     let ways = selected_of(s, ObjClass::Way);
     let any_point = ways

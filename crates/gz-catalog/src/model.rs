@@ -45,7 +45,7 @@ fn leading_u64(s: &str) -> u64 {
 }
 
 impl Release {
-    /// The descriptor read (`FetchRelease`), the signature checked against `public_key`.
+    /// The descriptor read, the signature checked against `public_key`.
     #[must_use]
     pub fn read(bytes: Vec<u8>, public_key: &str) -> Self {
         let text = String::from_utf8_lossy(&bytes).into_owned();

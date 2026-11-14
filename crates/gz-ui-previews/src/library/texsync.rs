@@ -1,4 +1,4 @@
-//! What the Texture Library writes (`CImageManager`): a description (`.thm`) beside its source
+//! What the Texture Library writes: a description (`.thm`) beside its source
 //! picture in `rawdata\textures`, the game texture (`.dds`) in `gamedata\textures`, and - for
 //! New Textures - the source copied over from the import folder. Blocking, for jobs.
 

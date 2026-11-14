@@ -1,5 +1,5 @@
 //! A game archive (`.db*`, `.xdb*`): a chunk file whose chunk 1 is the directory of the files
-//! inside it (`CLocatorAPI::LoadArchive`). Only the directory is read when the game mounts;
+//! inside it. Only the directory is read when the game mounts;
 //! a file's bytes are read when it is asked for.
 
 use std::fs::File;

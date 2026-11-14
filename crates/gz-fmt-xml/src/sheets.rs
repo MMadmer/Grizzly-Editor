@@ -1,8 +1,7 @@
 //! Texture descriptions (`configs\ui\textures_descr\*.xml`): which sheet a UI texture id is
 //! cut from, and where.
 //!
-//! The reading is the C++ editor's (`EditorPdaPreview.cpp` `ParseDescr`, `NqPickers.cpp`
-//! `ReadTextureDescr`): comments dropped, then every `<file ...>` names the sheet of the
+//! The reading: comments dropped, then every `<file ...>` names the sheet of the
 //! `<texture ...>` tags after it, whatever the nesting. A texture without an id, a sheet or a
 //! positive size is no entry.
 //!
@@ -59,7 +58,7 @@ fn strip_comments(raw: &str) -> String {
     text
 }
 
-/// `TagAttr`: the value of `name="..."` inside a tag, `""` when it is not there; a name that
+/// The value of `name="..."` inside a tag, `""` when it is not there; a name that
 /// is the tail of a longer one does not count.
 fn tag_attr(tag: &str, name: &str) -> String {
     let key = format!("{name}=\"");
@@ -80,7 +79,7 @@ fn tag_attr(tag: &str, name: &str) -> String {
     String::new()
 }
 
-/// The entries of one description, in order (`ReadTextureDescr`), before the size check.
+/// The entries of one description, in order, before the size check.
 fn scan(raw: &str) -> Vec<TextureEntry> {
     let text = strip_comments(raw);
     let find = |pat: &str, from: usize| text.get(from..).and_then(|r| r.find(pat)).map(|i| from + i);
@@ -144,7 +143,7 @@ pub struct TextureSheets {
 
 impl TextureSheets {
     /// Builds the map from descriptions in order (the game's files, then the project's); a
-    /// later one redefines an id (`ParseDescr`: a positive size read as floats).
+    /// later one redefines an id (a positive size read as floats).
     #[must_use]
     pub fn build(files: &[&str]) -> Self {
         let parsed: Vec<Vec<TextureEntry>> = files.par_iter().map(|t| scan(t)).collect();

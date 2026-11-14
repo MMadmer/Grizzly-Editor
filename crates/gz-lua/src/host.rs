@@ -11,8 +11,7 @@ use parking_lot::Mutex;
 
 use crate::convert::{from_lua, to_lua};
 
-/// What a reader's environment holds: plain Lua, nothing that reaches the machine. The C++
-/// editor gave the PDA reader exactly these.
+/// What a reader's environment holds: plain Lua, nothing that reaches the machine.
 pub const SANDBOX_GLOBALS: [&str; 18] = [
     "string",
     "table",
@@ -46,7 +45,7 @@ const SCRIPTS_PER_STATE: usize = 4;
 /// What one call may cost.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
-    /// Instructions one call may run, the script's own load included (the C++ allowed a PDA
+    /// Instructions one call may run, the script's own load included (a PDA
     /// read 8,000,000: a big layout needs a few hundred thousand).
     pub instructions: u64,
     /// Bytes a state may hold (best effort: LuaJIT may not let the allocator be replaced).

@@ -1,4 +1,4 @@
-//! The flat layout the game's reader produces (`EditorPda::SLayout`), read off its answer.
+//! The flat layout the game's reader produces, read off its answer.
 
 use gz_luadata::{Table, Value};
 
@@ -18,7 +18,7 @@ impl PdaProblem {
     }
 }
 
-/// One item of the flat list: the fields the game's `CUIPdaLayout` reads, in canvas units,
+/// One item of the flat list: the fields the game's layout drawing reads, in canvas units,
 /// colours as ARGB.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
@@ -143,7 +143,7 @@ impl Default for Item {
 pub struct Page {
     pub id: String,
     pub title: String,
-    /// The stock PDA section the page shows (`eptTasks`), empty for a page of widgets.
+    /// The stock PDA section the page shows, empty for a page of widgets.
     pub stock: String,
 }
 
@@ -261,7 +261,7 @@ impl Layout {
     }
 }
 
-// ---- reading the reader's answer the way the C++ read the Lua stack --------------------------
+// ---- reading the reader's answer from the Lua stack --------------------------
 
 fn field<'a>(t: &'a Table, k: &str) -> Option<&'a Value> {
     t.fields.iter().find(|(name, _)| name == k).map(|(_, v)| v)
@@ -289,7 +289,7 @@ fn get_f32(t: &Table, k: &str, def: f64) -> f32 {
     get_num(t, k, def) as f32
 }
 
-/// `(int)` of a double, as the C++ cast it: toward zero, saturated.
+/// `(int)` of a double: toward zero, saturated.
 fn get_int(t: &Table, k: &str, def: i64) -> i64 {
     get_num(t, k, def as f64) as i64
 }
@@ -464,7 +464,7 @@ pub fn from_reader(r: &Table) -> Layout {
     out
 }
 
-/// `%g` of a number, the way the C++ formatted a preview var.
+/// `%g` of a number, as a preview var is formatted.
 fn g(n: f64) -> String {
     gz_luadata::format_g(n, 6)
 }

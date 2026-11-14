@@ -99,7 +99,7 @@ impl Filter {
         !parse_terms(&self.text).is_empty() || self.selected_only || self.visibility != Visibility::All
     }
 
-    /// The badge on Filters: how many of its switches are on (`ActiveFilters`).
+    /// The badge on Filters: how many of its switches are on.
     #[must_use]
     pub fn active_filters(&self, any_hidden: bool) -> usize {
         usize::from(self.selected_only)
@@ -116,14 +116,14 @@ pub struct Folds {
     pub expanded: Vec<(ObjClass, SmolStr)>,
 }
 
-/// One search term (`STerm`).
+/// One search term.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Term {
     pub text: String,
     pub exclude: bool,
 }
 
-/// `ParseFilter`: words AND-ed, `-word` excluded, `"two words"` kept together; lower case.
+/// Words AND-ed, `-word` excluded, `"two words"` kept together; lower case.
 #[must_use]
 pub fn parse_terms(filter: &str) -> Vec<Term> {
     let low = filter.to_lowercase();
@@ -168,7 +168,7 @@ pub fn parse_terms(filter: &str) -> Vec<Term> {
     out
 }
 
-/// `NameMatches`.
+/// Whether a name matches the search.
 #[must_use]
 pub fn name_matches(terms: &[Term], name: &str) -> bool {
     if terms.is_empty() {
@@ -178,7 +178,7 @@ pub fn name_matches(terms: &[Term], name: &str) -> bool {
     terms.iter().all(|t| low.contains(&t.text) != t.exclude)
 }
 
-/// `NaturalCompare`: digit runs compare as numbers (leading zeros break ties), the rest
+/// Digit runs compare as numbers (leading zeros break ties), the rest
 /// without case.
 #[must_use]
 pub fn natural_compare(lhs: &str, rhs: &str) -> Ordering {

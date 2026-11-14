@@ -1,4 +1,4 @@
-//! What is wrong with the screens and music (`EditorScreens::Validate`). Each line starts with
+//! What is wrong with the screens and music. Each line starts with
 //! its code: `E4nn` stops a build, `W4nn` does not.
 //!
 //! `E401` a layer's or a track's file does not exist, `E402` a layer's file is no kind the game

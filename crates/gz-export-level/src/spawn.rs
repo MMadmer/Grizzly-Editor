@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
+use gz_base::{Finding, Findings};
 use gz_entities::{Entity, Settings, Shape};
 use gz_scene::math::{Mat4, Vec3, get_xyz};
 use gz_scene::objects::{CF_SPHERE, PointKind, SpawnEntity};
@@ -32,7 +33,7 @@ pub struct SpawnInput<'a> {
     /// empty scene clears the file (the build's bake). The menu and MCP exports merge.
     pub mirror: bool,
     pub visuals: &'a Visuals,
-    /// The linked game's configs (`pSettings`).
+    /// The linked game's configs.
     pub settings: Option<&'a (dyn Settings + Sync)>,
     /// The linked game's patrol names.
     pub game_patrols: &'a HashSet<String>,
@@ -75,13 +76,13 @@ pub struct SpawnBake {
     pub custom_data: Vec<(String, String)>,
     /// Models to stage: source file -> `gamedata\meshes\<visual>.ogf`.
     pub stage: Vec<(PathBuf, String)>,
-    /// The log lines (`! [XMS] spawn export: ...`).
-    pub log: Vec<String>,
+    /// What the bake did and what it left out.
+    pub log: Vec<Finding>,
 }
 
 impl SpawnBake {
     fn warn(&mut self, text: String) {
-        self.log.push(format!("! [XMS] spawn export: {text}"));
+        self.log.warn(format!("[XMS] spawn export: {text}"));
         self.result.warnings.push(text);
     }
 }
@@ -97,7 +98,7 @@ fn entity_of<'a>(
     }
 }
 
-/// `DoExportSpawn` from the level name on.
+/// The spawn layer from the level name on.
 pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
     let mut out = SpawnBake::default();
     let scene = input.scene;
@@ -156,8 +157,8 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
                 Found::Staged | Found::Game => true,
                 Found::Project(src) => {
                     out.stage.push((src.clone(), visual.clone()));
-                    out.log.push(format!(
-                        "* [XMS] spawn export: staged '{}' -> gamedata\\meshes\\{visual}.ogf",
+                    out.log.info(format!(
+                        "[XMS] spawn export: staged '{}' -> gamedata\\meshes\\{visual}.ogf",
                         so.reference
                     ));
                     staged_now.insert(visual.clone());
@@ -167,8 +168,8 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
             }
         };
         if !reachable {
-            out.log.push(format!(
-                "! [XMS] spawn export: visual '{visual}' of '{op}' is neither in the game nor in the project - op skipped, it would crash the game"
+            out.log.warn(format!(
+                "[XMS] spawn export: visual '{visual}' of '{op}' is neither in the game nor in the project - op skipped, it would crash the game"
             ));
             out.result.missing += 1;
             out.result.skipped += 1;
@@ -251,7 +252,7 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
         }
         let Some(entity) = entity_of(raw, input.settings) else {
             // the configs that read the entity are not there: nothing of it can be baked safely
-            out.log.push(format!("! [XMS] spawn export: '{}' ({sp_section}) cannot be read without the linked game's configs - op skipped", o.name));
+            out.log.warn(format!("[XMS] spawn export: '{}' ({sp_section}) cannot be read without the linked game's configs - op skipped", o.name));
             out.result.skipped += 1;
             continue;
         };
@@ -280,14 +281,14 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
                     // the chooser lists the editor's own meshes too: a model picked there is staged
                     // into the project, so the module carries it like any project mesh
                     out.stage.push((src, vname.clone()));
-                    out.log.push(format!(
-                        "* [XMS] spawn export: staged an editor model -> gamedata\\meshes\\{vname}.ogf"
+                    out.log.info(format!(
+                        "[XMS] spawn export: staged an editor model -> gamedata\\meshes\\{vname}.ogf"
                     ));
                     staged_now.insert(vname.clone());
                 }
                 Found::Missing => {
-                    out.log.push(format!(
-                        "! [XMS] spawn export: visual '{vname}' of '{op}' exists neither in the game, the project, nor the editor's data - op skipped, it would crash the game"
+                    out.log.warn(format!(
+                        "[XMS] spawn export: visual '{vname}' of '{op}' exists neither in the game, the project, nor the editor's data - op skipped, it would crash the game"
                     ));
                     out.result.missing += 1;
                     out.result.skipped += 1;
@@ -299,8 +300,8 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
         // no model anywhere is the same crash spelled differently; a section with its own
         // default (the inventory_box ghost) is fine without a line
         if vname.is_empty() && section_visual.is_none() && object.and_then(|ob| ob.physic()).is_some() {
-            out.log.push(format!(
-                "! [XMS] spawn export: '{op}' ({sp_section}) has no model at all - op skipped, it would crash the game; pick one in Model\\Visual"
+            out.log.warn(format!(
+                "[XMS] spawn export: '{op}' ({sp_section}) has no model at all - op skipped, it would crash the game; pick one in Model\\Visual"
             ));
             out.result.missing += 1;
             out.result.skipped += 1;
@@ -318,8 +319,8 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
             // a collision-only model (named *collider*) is invisible by design
             if !vname.contains("collider") && bytes.as_deref().is_some_and(ogf_is_ghost) {
                 out.result.invisible += 1;
-                out.log.push(format!(
-                    "! [XMS] spawn export: '{op}' keeps '{vname}', a model the engine draws nothing for - the object works but stays invisible in game; pick a real mesh in Model\\Visual"
+                out.log.warn(format!(
+                    "[XMS] spawn export: '{op}' keeps '{vname}', a model the engine draws nothing for - the object works but stays invisible in game; pick a real mesh in Model\\Visual"
                 ));
             }
         }
@@ -517,7 +518,7 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
     // base spawns is "empty": its mirror pass deletes the file and a merge export refuses.
     if out.result.exported == 0 {
         if input.mirror {
-            out.log.push(format!("* [XMS] spawn layer: scene is empty, {level} cleared"));
+            out.log.info(format!("[XMS] spawn layer: scene is empty, {level} cleared"));
             out.custom_data.clear();
             out.stage.clear();
             return Ok(out);
@@ -553,7 +554,7 @@ fn entity_visual(entity: &Entity, settings: Option<&(dyn Settings + Sync)>) -> S
     vname
 }
 
-/// `CanTakeOrder` on a point whose entity was decoded for this bake only.
+/// Whether a point can take an order, for a point whose entity was decoded for this bake only.
 fn entity_takes_order(e: &Entity) -> bool {
     e.class_info().is_some_and(|c| c.clsid.trim() == "AI_STL_S")
 }
@@ -563,7 +564,7 @@ fn similar(a: f32, b: f32) -> bool {
     (a - b).abs() < 0.0001
 }
 
-/// `MergeSpawnText`: the entries exported now rewritten, every other section kept verbatim -
+/// The entries exported now rewritten, every other section kept verbatim -
 /// hand-written ops in the same file survive a re-export.
 #[must_use]
 pub fn merge_spawn_text(old: &str, replaced: &[String], fresh: &str) -> String {
@@ -625,6 +626,21 @@ mod tests {
     use gz_scene::objects::{SceneObjectData, SpawnData, WayData, WayPoint, XmsOrder};
 
     use super::*;
+
+    #[test]
+    fn a_bake_logs_at_the_level_of_each_line() {
+        use gz_base::Severity;
+        let mut bake = SpawnBake::default();
+        bake.warn("something was left out".to_owned());
+        bake.log.info("staged a model");
+        bake.log.error("the file could not be written");
+        assert_eq!(
+            bake.log.iter().map(|f| f.severity).collect::<Vec<_>>(),
+            [Severity::Warning, Severity::Note, Severity::Error]
+        );
+        assert!(bake.log.iter().all(|f| !f.text.starts_with(['!', '~', '*'])));
+        assert_eq!(bake.result.warnings, ["something was left out"]);
+    }
 
     fn settings() -> MapSettings {
         MapSettings::new().section("script", &[("current_server_entity_version", "12")]).section(
@@ -696,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    fn the_spawn_layer_is_written_as_the_cpp_writes_it() {
+    fn the_spawn_layer_is_written_in_its_fixed_form() {
         let st = settings();
         let s = scene(&st);
         let mut visuals = Visuals::default();

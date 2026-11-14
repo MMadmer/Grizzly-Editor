@@ -1,4 +1,4 @@
-//! `level.cform`: the static collision of a level - a header, vertices and `CDB::TRI` records.
+//! `level.cform`: the static collision of a level - a header, vertices and triangle records.
 
 use std::sync::Arc;
 
@@ -7,13 +7,13 @@ use glam::Vec3;
 use crate::bytes::{aabb_at, fits, push_aabb, push_vec3s, put_u32, read_vec3s, u32_at};
 use crate::{Aabb, LevelError, Result};
 
-/// `CFORM_CURRENT_VERSION`.
+/// The current version.
 pub const CFORM_VERSION: u32 = 4;
 
 const HEADER: usize = 36;
 const TRI: usize = 16;
 
-/// `CDB::TRI`: three vertex indices and a word of `material:14, suppress_shadows:1,
+/// Three vertex indices and a word of `material:14, suppress_shadows:1,
 /// suppress_wm:1, sector:16`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Tri {
@@ -70,7 +70,7 @@ impl Tri {
     }
 }
 
-/// A collision form: `hdrCFORM`, the vertices, the triangles.
+/// A collision form: the header, the vertices, the triangles.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CForm {
     pub version: u32,

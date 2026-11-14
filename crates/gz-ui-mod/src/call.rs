@@ -134,7 +134,7 @@ pub(crate) fn pick_path(
         });
     });
     if let Err(line) = picked {
-        editor.log.plain(line);
+        editor.log.finding(&line);
     }
 }
 
@@ -149,16 +149,9 @@ impl Drop for Release {
     }
 }
 
-/// Logs the lines a kit question or result returned: `!` an error, `~` a warning, `*` a note.
-pub(crate) fn log_lines(editor: &Editor, lines: Option<String>) {
-    let Some(lines) = lines else { return };
-    for line in lines.lines() {
-        if line.starts_with('!') {
-            editor.log.error(line.to_owned());
-        } else if line.starts_with('~') {
-            editor.log.warn(line.to_owned());
-        } else {
-            editor.log.info(line.to_owned());
-        }
+/// Logs what a kit question, note or result returned, each at its own level.
+pub(crate) fn log_lines(editor: &Editor, found: impl IntoIterator<Item = gz_base::Finding>) {
+    for f in found {
+        editor.log.finding(&f);
     }
 }

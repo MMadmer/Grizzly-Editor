@@ -2,9 +2,9 @@
 //! from, the device sign-in, the publication of a packaged release, the Mod Browser catalog's
 //! issues and VirusTotal with the author's own key.
 //!
-//! The C++ specification is `EditorGithub.cpp` (the client, the account, `Publish`, the release
-//! list, the catalog requests, VirusTotal and its pacing), `EditorVirusTotal.cpp` (the scan) and
-//! the VirusTotal policy of `EditorCatalog.cpp` (`ReadVtPolicy`, `VtVerdict`, the index keys, the
+//! What is here: the client, the account, publishing, the release
+//! list, the catalog requests, VirusTotal and its pacing, the scan and
+//! the VirusTotal policy (the verdicts, the index keys, the
 //! catalog files' ini text). Nothing here touches the editor's state: the areas that use it -
 //! Publish Release (`gz-publish`) and Submit to Mod Browser (`gz-catalog`) - keep their own.
 //!

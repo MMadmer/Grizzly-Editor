@@ -60,10 +60,10 @@ impl XcForm {
     }
 
     /// Reads the file the way the editor reads back what it wrote before, so that an export on
-    /// top of it gives the bytes the C++ gives. `true` when the whole file was taken.
-    // oracle: ReadXCForm wants 18 bytes for a 16-byte triangle, so a file with more than
+    /// top of it gives the bytes the X-Ray SDK gives. `true` when the whole file was taken.
+    // the X-Ray SDK's reader wants 18 bytes for a 16-byte triangle, so a file with more than
     // 2 + 12 * cuts triangles stops before the triangles and its cuts are not read. Whatever was
-    // read up to that point stays, as it does in the C++ struct.
+    // read up to that point stays, as it does in the X-Ray SDK's struct.
     #[must_use]
     pub fn read_back(bytes: &[u8]) -> (Self, bool) {
         let (form, err) = Self::parse(bytes, true);
@@ -176,7 +176,7 @@ impl XcForm {
         w.into_bytes()
     }
 
-    /// The index of a material name, added at the end when it is new: the editor's `MtlIndex`.
+    /// The index of a material name, added at the end when it is new.
     pub fn material_index(materials: &mut Vec<SmolStr>, name: &str) -> usize {
         if let Some(i) = materials.iter().position(|m| m == name) {
             return i;

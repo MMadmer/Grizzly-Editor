@@ -1,12 +1,12 @@
-//! The bounding spheres of `OGF_Base::CalcBounds` (`OGF_Face_Sphere.cpp`): Gaertner's miniball
-//! (`Fsphere_compute`, xrCore `_sphere.cpp`), the box's own sphere, and Magic Software's
-//! randomised minimum sphere (`Mgc::MinSphere`, `MgcCont3DMinSphere.cpp`), the smallest valid
+//! The bounding spheres: Gaertner's miniball,
+//! the box's own sphere, and Magic Software's
+//! randomised minimum sphere, the smallest valid
 //! one kept.
 //!
-//! `MinSphere` permutes the points with the C runtime's `rand()`, seeded with 367 at its first
+//! The minimum sphere permutes the points with the C runtime's `rand()`, seeded with 367 at its first
 //! call; every call of the compiler runs on its main thread, so the stream is one sequence over
 //! the whole compile. [`MsvcRand`] is that generator; the caller hands it from call to call in
-//! the C++ order.
+//! X-Ray's order.
 
 use glam::Vec3;
 use gz_lc_light::math::{Aabb, EPS_L, EPS_S, distance, distance_sqr};
@@ -24,7 +24,7 @@ impl MsvcRand {
         Self { state: seed }
     }
 
-    /// The stream `MinSphere` draws from: `srand(367)`.
+    /// The stream the minimum sphere draws from: `srand(367)`.
     #[must_use]
     pub fn min_sphere() -> Self {
         Self::new(367)
@@ -310,7 +310,7 @@ impl Miniball {
     }
 }
 
-/// `Fsphere_compute`.
+/// The miniball.
 #[must_use]
 pub fn miniball(points: &[Vec3]) -> (Vec3, f32) {
     let mut mb = Miniball::new(points);
@@ -596,11 +596,11 @@ fn update4(i: usize, perm: &[Vec3], s: &mut Support) -> Sph {
         13 => s.idx[0] = i,
         _ => s.n = 5,
     }
-    // oracle: with no candidate the C++ reads `akS[-1]`; the restart below throws it away
+    // with no candidate X-Ray's compiler reads before the array; the restart below throws it away
     cands.get(index).map_or(Sph { c: Vec3::ZERO, r: 0.0 }, |c| c.0)
 }
 
-/// `Mgc::MinSphere`: the points permuted with `rand`, the support grown point by point; a
+/// The points permuted with `rand`, the support grown point by point; a
 /// support that would need a fifth point starts again with a new permutation.
 pub fn min_sphere(points: &[Vec3], rng: &mut MsvcRand) -> (Vec3, f32) {
     if points.is_empty() {
@@ -646,13 +646,13 @@ pub fn min_sphere(points: &[Vec3], rng: &mut MsvcRand) -> (Vec3, f32) {
     (Vec3::ZERO, f32::MAX)
 }
 
-/// `SphereValid`: every point within the sphere grown by `EPS_L`.
+/// Every point within the sphere grown by `EPS_L`.
 fn valid(points: &[Vec3], c: Vec3, r: f32) -> bool {
     let r = r + EPS_L;
     points.iter().all(|p| distance_sqr(c, *p) <= r * r + EPS_S)
 }
 
-/// What `CalcBounds` leaves in an `OGF_Base`.
+/// What the bounds leave in a visual.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bounds {
     pub bbox: Aabb,

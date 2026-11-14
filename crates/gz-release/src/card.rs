@@ -1,7 +1,7 @@
 //! The descriptor's `[card]` (MOD_CATALOG 4): what the Mod Browser shows of a module that is not
 //! installed - the manifest with every string table id resolved from the project, the mode, the
-//! tags, the thumbnail and `mod.ltx` pinned by size and hash. Built as text exactly as
-//! `EditorCatalog::CardSection` builds it: it is signed byte for byte.
+//! tags, the thumbnail and `mod.ltx` pinned by size and hash. Built as text in a fixed form:
+//! it is signed byte for byte.
 
 use std::path::Path;
 
@@ -67,7 +67,7 @@ impl StringTables {
         Self { rus, eng }
     }
 
-    /// `<string id="id"><text>...</text>` of a language, UTF-8 (`LookUpString`): the first file
+    /// `<string id="id"><text>...</text>` of a language, UTF-8: the first file
     /// that holds the id at the first place it is named, the text as written there with the
     /// tables' own `\n` made a line break.
     #[must_use]
@@ -122,7 +122,7 @@ fn resolve(tables: &StringTables, value: &str) -> (String, String) {
     (rus, eng)
 }
 
-/// A card text in quotes: `"` and `\` escaped, a line break `\n`, CR dropped (`QuoteText`).
+/// A card text in quotes: `"` and `\` escaped, a line break `\n`, CR dropped.
 #[must_use]
 pub fn quote_text(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
@@ -157,7 +157,7 @@ fn card_text(out: &mut String, key: &str, tables: &StringTables, value: &str) {
     }
 }
 
-/// The `[card]` section, starting with its blank line (`CardSection`).
+/// The `[card]` section, starting with its blank line.
 #[must_use]
 pub fn card_section(
     m: &Manifest,
@@ -209,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn the_card_as_the_cpp_writes_it() {
+    fn the_card_is_written_in_its_fixed_form() {
         let m = manifest(
             "[module]\r\nid = od\r\nname = od_name\r\nauthor = Madmer\r\ndescription = \"Night shifts.\\nA \\\"new\\\" mode.\"\r\nwebsite = https://ap-pro.ru/stuff/x/overnight-delivery-r600/\r\nmode = od_mode\r\ntags = story, quests\r\n\r\n[provides_mode]\r\nid = od_mode\r\ntitle = od_mode_title\r\n",
         );

@@ -156,7 +156,7 @@ fn trim(s: &str) -> &str {
 }
 
 /// The languages a text carries: `rus` for a plain string, every key with a string value of a
-/// table (`TextLanguages`).
+/// table.
 pub fn text_languages(v: &Value, langs: &mut Vec<String>) {
     match v {
         Value::String(_) => langs.push("rus".to_owned()),
@@ -168,7 +168,7 @@ pub fn text_languages(v: &Value, langs: &mut Vec<String>) {
 }
 
 /// A text in one language, falling back to `rus` and then to any language - what the game
-/// shows an English install of a Russian-only character (`TextIn`).
+/// shows an English install of a Russian-only character.
 #[must_use]
 pub fn text_in(v: &Value, lang: &str) -> String {
     match v {
@@ -185,7 +185,7 @@ pub fn text_in(v: &Value, lang: &str) -> String {
 }
 
 /// What is actually STORED for a language, without falling back: the form binds to this, or
-/// "not set" and "set to the same text" would look alike (`TextRaw`).
+/// "not set" and "set to the same text" would look alike.
 #[must_use]
 pub fn text_raw(v: &Value, lang: &str) -> String {
     match v {
@@ -195,7 +195,7 @@ pub fn text_raw(v: &Value, lang: &str) -> String {
     }
 }
 
-/// No language holds more than blanks (`TextEmpty`).
+/// No language holds more than blanks.
 #[must_use]
 pub fn text_empty(v: &Value) -> bool {
     let mut langs = Vec::new();
@@ -204,7 +204,7 @@ pub fn text_empty(v: &Value) -> bool {
 }
 
 /// Writes one language back without losing the others: a plain string stays one while only
-/// `rus` is in play and becomes a table the moment a second language exists (`TextSet`).
+/// `rus` is in play and becomes a table the moment a second language exists.
 pub fn text_set(v: &mut Value, lang: &str, text: &str) {
     if let Value::Table(t) = v {
         if text.is_empty() {
@@ -234,7 +234,7 @@ pub fn text_set(v: &mut Value, lang: &str, text: &str) {
 }
 
 /// `{ rus = "..." }` and `"..."` mean the same thing downstream, so the simple case stays simple
-/// in the file (`TextCollapse`).
+/// in the file.
 pub fn text_collapse(v: &mut Value) {
     let Value::Table(t) = v else { return };
     let [(key, Value::String(s))] = t.fields.as_slice() else { return };
@@ -246,7 +246,7 @@ pub fn text_collapse(v: &mut Value) {
 
 // ---- ids -----------------------------------------------------------------------------------
 
-/// `[a-z0-9_]`, not starting with a digit, up to 48 (`ValidId`).
+/// `[a-z0-9_]`, not starting with a digit, up to 48.
 #[must_use]
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
@@ -256,14 +256,13 @@ pub fn valid_id(id: &str) -> bool {
 }
 
 /// `<module>_<id>`: the name the game knows the character by - the profile, the spawn section,
-/// the squad section's stem (`GameId`).
+/// the squad section's stem.
 #[must_use]
 pub fn game_id(module_id: &str, char_id: &str) -> String {
     if module_id.is_empty() { char_id.to_owned() } else { format!("{module_id}_{char_id}") }
 }
 
-/// A file name as an id: lower case, anything outside `[a-z0-9_]` an underscore
-/// (`NqText::IdFromName`).
+/// A file name as an id: lower case, anything outside `[a-z0-9_]` an underscore.
 #[must_use]
 pub fn id_from_name(name: &str) -> String {
     gz_nq::text::id_from_name(name)
@@ -271,7 +270,7 @@ pub fn id_from_name(name: &str) -> String {
 
 // ---- reading -------------------------------------------------------------------------------
 
-/// `int(double)`: toward zero (the C++ cast; out of range saturates here).
+/// `int(double)`: toward zero (out of range saturates here).
 fn to_int(n: f64) -> i32 {
     n as i32
 }
@@ -314,7 +313,7 @@ fn read_trade(t: &Value, trade: &mut Trade) {
                             r.count = to_int(row.get_number("count", 1.0));
                             r.chance = row.get_number("chance", 1.0) as f32;
                         }
-                        // oracle: any other row is kept as an empty one, which E118 then names
+                        // any other row is kept as an empty one, which E118 then names
                         _ => {}
                     }
                     trade.stock.push(r);

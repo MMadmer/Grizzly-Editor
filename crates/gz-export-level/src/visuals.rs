@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Where a model was found, in the order the C++ looked.
+/// Where a model was found, in the order it is looked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Found {
     /// `<project>\gamedata\meshes\<visual>.ogf` is there already.
@@ -34,7 +34,7 @@ pub struct SpawnVisual {
 /// What [`crate::gather`] found for the models a bake names.
 #[derive(Clone, Debug, Default)]
 pub struct Visuals {
-    /// A prop's reference (`RefName`, as the scene holds it) -> where its model is.
+    /// A prop's reference (as the scene holds it) -> where its model is.
     pub props: HashMap<String, Found>,
     /// A spawn element's visual (configs form: `props\box`) -> where it is.
     pub spawns: HashMap<String, SpawnVisual>,
@@ -62,7 +62,7 @@ fn u32_at(d: &[u8], off: usize) -> u32 {
     d.get(off..off + 4).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
-/// `OgfIsGhost`: X-Ray's way of saying "there, but not drawn" - a model whose every child that
+/// X-Ray's way of saying "there, but not drawn" - a model whose every child that
 /// names a texture names `glow\glow_ghost` (the stash's default).
 #[must_use]
 pub fn ogf_is_ghost(data: &[u8]) -> bool {
@@ -114,7 +114,7 @@ pub fn ogf_bone_names(data: &[u8]) -> Vec<String> {
                 let n = strlen(p);
                 out.push(String::from_utf8_lossy(&data[p..p + n]).into_owned());
                 p += n + 1;
-                // the parent's name, then the bone's box (Fobb, 15 floats)
+                // the parent's name, then the bone's box (an oriented box, 15 floats)
                 if p < end {
                     p += strlen(p) + 1 + 60;
                 } else {
@@ -129,7 +129,7 @@ pub fn ogf_bone_names(data: &[u8]) -> Vec<String> {
     out
 }
 
-/// `CheckedFixedBones`: a physics object's fixed bones as the game will take them. The engine
+/// A physics object's fixed bones as the game will take them. The engine
 /// asserts "wrong fixed bone" on the first name the visual lacks, the moment the object comes
 /// online - so `all` becomes every bone of the model and an unknown name is dropped (the root
 /// bone stays, the body never falls free). Returns the bones to write and the ones dropped.

@@ -1,5 +1,5 @@
-//! The breakable and climable objects `BuildGame` adds to `level.spawn`
-//! (`ESceneObjectToolsExportBreakable.cpp` over `GeometryPartExtractor.cpp`).
+//! The breakable and climable objects the game files add to `level.spawn`
+//! (an export over the faces of the static scene objects).
 //!
 //! The faces of the static scene objects whose game material is breakable (climable) are
 //! gathered in world space; the parts are their connected sets; each part is boxed (RAPID), laid
@@ -7,25 +7,24 @@
 //! become the bones of a rigid skeleton (`meshes\brkbl#N.ogf` beside the level, a
 //! `breakable_object` naming it) or a box shape (`climable_object`).
 //!
-//! Where this differs from the C++ of this repository: its `VCPacked::add_vert` lost its vertex
-//! lookup (the body is what is left of the SDK's welding), so no two faces share a corner, every
-//! face is a part of its own without a neighbour and is refused - the C++ editor of the branch
-//! point writes no breakable or climable object, only "Error face found at pos ..." and "Can't
-//! export invalid part #N" per face. That is a bug of the fork, not a rule: [`VcPacked`] welds as
-//! the SDK did (a 24 x 16 x 24 grid over the tool's box, a corner joins an earlier one within
+//! Where this differs from the X-Ray SDK's tool: its welding lost its vertex
+//! lookup, so no two faces share a corner, every
+//! face is a part of its own without a neighbour and is refused - the X-Ray SDK writes no breakable or climable
+//! object, only a message per face. That is a bug there, not a rule: [`VcPacked`] welds properly
+//! (a 24 x 16 x 24 grid over the tool's box, a corner joins an earlier one within
 //! `EPS_L` found through its cell), so connected faces make parts and the parts export.
 //!
-//! What the C++ does, kept because the files follow it:
+//! What the X-Ray SDK does, kept because the files follow it:
 //! - The fragments' sizes come from `Random.randI`, the engine's global generator seeded from
 //!   the CPU clock at start and advanced by everything before; here a generator of its own
 //!   starts at 1 (`CRandom`'s default).
-//! - The surfaces of a mesh are walked in file order (the C++ walks a map keyed by surface
+//! - The surfaces of a mesh are walked in file order (the X-Ray SDK walks a map keyed by surface
 //!   pointers), which numbers the parts.
-//! - A failing part leaves the C++'s `brkbl#N.ogf` files of the parts before it on the disk;
+//! - A failing part leaves the `brkbl#N.ogf` files of the parts before it on the disk in the X-Ray SDK;
 //!   here a failing build writes none.
 
 use glam::{Vec2, Vec3};
-use gz_base::SmolStr;
+use gz_base::{Finding, Findings, SmolStr};
 use gz_entities::{Entity, PropContext, PropValue, Settings, Shape};
 use gz_fmt_level::i_floor;
 use gz_fmt_object::xmath::{Aabb, Mat4};
@@ -44,7 +43,7 @@ pub struct Exported {
     pub spawns: Vec<Vec<u8>>,
     /// `meshes\brkbl#N.ogf` and their bytes, relative to the level folder.
     pub meshes: Vec<(String, Vec<u8>)>,
-    pub log: Vec<String>,
+    pub log: Vec<Finding>,
 }
 
 /// The surface a face comes from.
@@ -56,7 +55,7 @@ struct Surf {
     two_sided: bool,
 }
 
-/// `SBFace`.
+/// A face of a breakable part's surface.
 #[derive(Clone, Debug)]
 struct Face {
     vert_id: [usize; 3],
@@ -70,7 +69,7 @@ struct Face {
 }
 
 impl Face {
-    /// `CalcArea`.
+    /// The area of a face.
     fn area(&self) -> f32 {
         let v0 = sub(self.o[1], self.o[0]);
         let v1 = sub(self.o[2], self.o[0]);
@@ -85,7 +84,7 @@ fn sub(a: Vec3, b: Vec3) -> Vec3 {
     Vec3::new(a.x - b.x, a.y - b.y, a.z - b.z)
 }
 
-/// `SBBone`.
+/// A bone of a breakable part.
 #[derive(Clone, Debug)]
 struct Bone {
     name: String,
@@ -96,7 +95,7 @@ struct Bone {
     area: f32,
 }
 
-/// `SBPart`.
+/// A breakable part.
 #[derive(Clone, Debug)]
 struct Part {
     faces: Vec<usize>,
@@ -108,7 +107,7 @@ struct Part {
     valid: bool,
 }
 
-/// `CRandom` with the C++ remainder semantics of `randI(min, max)`.
+/// The generator with the remainder semantics of `randI(min, max)`.
 struct Random(i32);
 
 impl Random {
@@ -118,7 +117,7 @@ impl Random {
     }
 
     /// `randI(min, max)`: `min + randI() % (max - min)`, the remainder taking the dividend's
-    /// sign; `None` where the C++ divides by zero.
+    /// sign; `None` where the X-Ray SDK divides by zero.
     fn range(&mut self, min: i32, max: i32) -> Option<i32> {
         let span = max.wrapping_sub(min);
         if span == 0 {
@@ -128,13 +127,13 @@ impl Random {
     }
 }
 
-/// `Fmatrix::set(i, j, k, c)`.
+/// Sets the matrix from its rows and the position.
 fn obb_matrix(rotate: &[Vec3; 3], c: Vec3) -> Mat4 {
     let [i, j, k] = rotate;
     Mat4([[i.x, i.y, i.z, 0.0], [j.x, j.y, j.z, 0.0], [k.x, k.y, k.z, 0.0], [c.x, c.y, c.z, 1.0]])
 }
 
-/// `Fmatrix::getXYZ`: `getHPB(y, x, z)`.
+/// `getHPB(y, x, z)`.
 fn get_xyz(m: &Mat4) -> Vec3 {
     let (i, j, k) = (m.row(0), m.row(1), m.row(2));
     let cy = (j.y * j.y + i.y * i.y).sqrt();
@@ -146,13 +145,13 @@ fn get_xyz(m: &Mat4) -> Vec3 {
     Vec3::new(p, h, b)
 }
 
-/// `Fvector::normalize`: no guard.
+/// Normalizes a vector: no guard.
 fn normalize(v: Vec3) -> Vec3 {
     let mag = (1.0 / (v.x * v.x + v.y * v.y + v.z * v.z)).sqrt();
     Vec3::new(v.x * mag, v.y * mag, v.z * mag)
 }
 
-/// `Fvector::normalize_safe`.
+/// Normalizes a vector safely.
 fn normalize_safe(v: Vec3) -> Vec3 {
     let m = v.x * v.x + v.y * v.y + v.z * v.z;
     if m > f32::MIN_POSITIVE {
@@ -167,7 +166,7 @@ fn f2(v: f32) -> String {
     format!("{:.2}", f64::from(v))
 }
 
-/// `CGeomPartExtractor`.
+/// The part extractor.
 struct Extractor {
     surfaces: Vec<Surf>,
     faces: Vec<Face>,
@@ -178,7 +177,7 @@ struct Extractor {
     packer: Option<VcPacked>,
 }
 
-/// The SDK's `VCPacked` (`GeometryCollector.cpp`): corners welded within `eps`, looked up
+/// The vertex welding: corners welded within `eps`, looked up
 /// through a grid of 24 x 16 x 24 cells over a box; a new corner is entered into its cell and
 /// the cells its `+VMeps` corner reaches.
 struct VcPacked {
@@ -212,8 +211,8 @@ impl VcPacked {
         Self { verts: Vec::new(), cells: vec![Vec::new(); n], min: bb.min, scale, veps, eps, clp }
     }
 
-    /// The cell index on one axis: `iFloor`, the `u32` it is stored in clamped to the grid (a
-    /// negative one wraps and ends at the last cell, as in the C++).
+    /// The cell index on one axis: the floor, the `u32` it is stored in clamped to the grid (a
+    /// negative one wraps and ends at the last cell, as in the X-Ray SDK).
     fn axis(&self, v: f32, a: usize) -> u32 {
         let f = (v - self.min[a]) / self.scale[a] * self.clp[a] as f32;
         let i = if f.is_finite() { i_floor(f) } else { 0 };
@@ -293,7 +292,7 @@ impl Extractor {
         self.packer = Some(VcPacked::new(bb, eps));
     }
 
-    /// `AppendFace`: each corner welded onto an earlier one it is `similar` to.
+    /// Each corner welded onto an earlier one it is `similar` to.
     fn append_face(&mut self, surf: usize, v: [Vec3; 3], n: [Vec3; 3], uv: [Vec2; 3]) {
         let mut vert_id = [0usize; 3];
         for (k, id) in vert_id.iter_mut().enumerate() {
@@ -307,7 +306,7 @@ impl Extractor {
     }
 
     /// `Process`: the faces around every vertex, the connected parts, each prepared.
-    fn process(&mut self, rng: &mut Random, log: &mut Vec<String>) -> Result<()> {
+    fn process(&mut self, rng: &mut Random, log: &mut Vec<Finding>) -> Result<()> {
         self.adjs = vec![Vec::new(); self.verts];
         for (fi, f) in self.faces.iter().enumerate() {
             for &v in &f.vert_id {
@@ -320,7 +319,7 @@ impl Extractor {
             if self.faces[start].marked {
                 continue;
             }
-            // `recurse_tri`, depth first in the C++ order
+            // the recursion, depth first in the X-Ray SDK's order
             let mut part = Vec::new();
             let mut stack: Vec<(usize, usize, usize)> = Vec::new();
             self.faces[start].marked = true;
@@ -363,7 +362,7 @@ impl Extractor {
         Ok(())
     }
 
-    /// `SBPart::use_face`.
+    /// Uses a face.
     fn use_face(&mut self, f: usize, cnt: &mut u32, bone: u32, area: &mut f32) {
         let face = &mut self.faces[f];
         face.marked = true;
@@ -372,7 +371,7 @@ impl Extractor {
         *cnt += 1;
     }
 
-    /// `SBPart::recurse_fragment`, its recursion as a stack.
+    /// Recurses over a fragment, its recursion as a stack.
     fn recurse_fragment(&mut self, start: usize, cnt: &mut u32, bone: u32, max: u32, area: &mut f32) {
         let mut stack: Vec<(Vec<usize>, usize)> = vec![(self.fill_nearest(start, cnt, bone, max, area), 0)];
         while let Some((list, i)) = stack.last_mut() {
@@ -410,8 +409,8 @@ impl Extractor {
         out
     }
 
-    /// `SBPart::prepare`.
-    fn prepare(&mut self, p: usize, rng: &mut Random, log: &mut Vec<String>) -> Result<()> {
+    /// Prepares a part.
+    fn prepare(&mut self, p: usize, rng: &mut Random, log: &mut Vec<Finding>) -> Result<()> {
         let faces = self.parts[p].faces.clone();
         let mut pts = Vec::with_capacity(faces.len() * 3);
         for &f in &faces {
@@ -451,7 +450,7 @@ impl Extractor {
             let face = &mut self.faces[f];
             if face.adjs.is_empty() {
                 let o = face.o[0];
-                log.push(format!("Error face found at pos: [{},{},{}]", f2(o.x), f2(o.y), f2(o.z)));
+                log.warn(format!("A face at [{},{},{}] touches no other face.", f2(o.x), f2(o.y), f2(o.z)));
                 valid = false;
             }
             for k in 0..3 {
@@ -540,7 +539,7 @@ impl Extractor {
                         total += 1;
                     }
                 }
-                // the C++ would loop for ever here; the counts never let it
+                // the X-Ray SDK would loop for ever here; the counts never let it
                 if before == total {
                     break;
                 }
@@ -566,7 +565,7 @@ impl Extractor {
         }
 
         // the fragments' centres; the first one's goes to zero, and the others keep theirs
-        // (oracle: `offs` is a reference to the first bone's offset, zeroed by the first pass)
+        // (`offs` is a reference to the first bone's offset, zeroed by the first pass)
         for &f in faces {
             let face = &self.faces[f];
             let b = usize::try_from(face.bone_id)
@@ -589,7 +588,7 @@ impl Extractor {
         Ok(bones)
     }
 
-    /// The part as `SBPart::Export` reads it.
+    /// The part as the export reads it.
     fn ogf_part(&self, p: &Part) -> BreakablePart {
         let faces = p
             .faces
@@ -623,10 +622,10 @@ impl Extractor {
     }
 }
 
-/// `build_mesh` for every mesh of every static scene object: the faces of the surfaces whose
-/// game material has `mask`, in world space. `Err` with the C++ messages when a material is
+/// The faces of every mesh of every static scene object: the faces of the surfaces whose
+/// game material has `mask`, in world space. `Err` with the messages when a material is
 /// unknown or (for breakables) an engine shader is missing or bakes into a light map; the
-/// objects after a failing one are still gathered, as the C++ breaks the mesh loop only.
+/// objects after a failing one are still gathered, as the X-Ray SDK breaks the mesh loop only.
 fn gather(
     scene: &SceneState,
     lib: Lookup<'_>,
@@ -634,7 +633,7 @@ fn gather(
     mask: u32,
     ignore_shader: bool,
     ex: &mut Extractor,
-    log: &mut Vec<String>,
+    log: &mut Vec<Finding>,
 ) -> bool {
     let mut ok = true;
     for o in scene.of_class(ObjClass::SceneObject) {
@@ -656,16 +655,16 @@ fn gather(
             for sf in &mesh.surf_faces {
                 let Some(s) = lo.object.surfaces.get(sf.surface as usize) else { continue };
                 let Some(id) = engine.material_id(&s.game_mtl) else {
-                    log.push(format!(
-                        "Object '{}', surface '{}' contain invalid game material.",
+                    log.error(format!(
+                        "Object '{}', surface '{}' has an invalid game material.",
                         lo.name, s.name
                     ));
                     ok = false;
                     break 'meshes;
                 };
                 let Some(flags) = engine.material_flags(id) else {
-                    log.push(format!(
-                        "Object '{}', surface '{}' contain undefined game material.",
+                    log.error(format!(
+                        "Object '{}', surface '{}' has an undefined game material.",
                         lo.name, s.name
                     ));
                     ok = false;
@@ -676,16 +675,16 @@ fn gather(
                 }
                 if !ignore_shader {
                     if !engine.has_shader(&s.shader) {
-                        log.push(format!(
-                            "Can't find engine shader '{}'. Object '{}', surface '{}'. Export interrupted.",
+                        log.error(format!(
+                            "The engine shader '{}' of object '{}', surface '{}', does not exist. The export stopped.",
                             s.shader, lo.name, s.name
                         ));
                         ok = false;
                         break 'meshes;
                     }
                     if lmapped(engine, &s.shader) == Some(true) {
-                        log.push(format!(
-                            "Object '{}', surface '{}' contain static engine shader - '{}'. Export interrupted.",
+                        log.error(format!(
+                            "Object '{}', surface '{}' uses the static engine shader '{}'. The export stopped.",
                             lo.name, s.name, s.shader
                         ));
                         ok = false;
@@ -719,7 +718,7 @@ fn gather(
     ok
 }
 
-/// `ESceneObjectTool::GetBox`: the box of every scene object that has one.
+/// The box of every scene object that has one.
 fn tool_box(scene: &SceneState, lib: Lookup<'_>) -> Option<Aabb> {
     let local = |r: &str| lib(r).map(|o| o.bounds);
     let mut bb: Option<Aabb> = None;
@@ -756,7 +755,7 @@ fn entity(
     Ok(e)
 }
 
-/// `ExportBreakableObjects`: false when the export failed (the build fails then).
+/// False when the export failed (the build fails then).
 fn breakables(
     scene: &SceneState,
     lib: Lookup<'_>,
@@ -777,18 +776,18 @@ fn breakables(
     }
     for (i, p) in ex.parts.iter().enumerate() {
         if !p.valid {
-            out.log.push(format!("Can't export invalid part #{i}"));
+            out.log.warn(format!("The breakable part #{i} is invalid and is left out."));
             continue;
         }
         let sn = format!("meshes\\brkbl#{i}.ogf");
         match export_breakable(&ex.ogf_part(p)) {
             Ok(e) => {
-                out.log.extend(e.warnings);
+                out.log.extend(e.warnings.into_iter().map(Finding::warning));
                 out.meshes.push((sn.clone(), e.bytes));
             }
             Err(err) => {
-                out.log.push(err.to_string());
-                out.log.push("Invalid breakable object.".to_owned());
+                out.log.error(err.to_string());
+                out.log.error("A breakable object is invalid.");
                 ok = false;
                 break;
             }
@@ -807,7 +806,7 @@ fn breakables(
     Ok(ok)
 }
 
-/// `OrientToNorm`: the box's thinnest axis must be the one the normal leans on most; that axis
+/// The box's thinnest axis must be the one the normal leans on most; that axis
 /// (and the next) turn to face it.
 fn orient_to_norm(n: &mut Vec3, rotate: &mut [Vec3; 3], hs: Vec3) -> bool {
     let (mut max_proj, mut min_size) = (0usize, 0usize);
@@ -830,7 +829,7 @@ fn orient_to_norm(n: &mut Vec3, rotate: &mut [Vec3; 3], hs: Vec3) -> bool {
     true
 }
 
-/// `ExportClimableObjects`.
+/// Exports the climable objects.
 fn climables(
     scene: &SceneState,
     lib: Lookup<'_>,
@@ -851,7 +850,7 @@ fn climables(
     }
     for i in 0..ex.parts.len() {
         if !ex.parts[i].valid {
-            out.log.push(format!("Can't export invalid part #{i}"));
+            out.log.warn(format!("The climable part #{i} is invalid and is left out."));
             continue;
         }
         let sn = format!("clmbl#{i}");
@@ -876,7 +875,12 @@ fn climables(
         };
         if !orient_to_norm(&mut normal, &mut p.obb.rotate, p.obb.halfsize) {
             let o = p.ref_offset;
-            out.log.push(format!("Invalid climable object found. [{}, {}, {}]", f2(o.x), f2(o.y), f2(o.z)));
+            out.log.warn(format!(
+                "A climable object at [{}, {}, {}] is invalid and is left out.",
+                f2(o.x),
+                f2(o.y),
+                f2(o.z)
+            ));
             continue;
         }
         let m = obb_matrix(&p.obb.rotate, p.obb.translate);
@@ -891,8 +895,8 @@ fn climables(
     Ok(ok)
 }
 
-/// `ESceneObjectTool::ExportGame` past its objects: the breakable objects, then the climable
-/// ones. `Ok(false)` with the log when the C++ export fails.
+/// The export past the objects: the breakable objects, then the climable
+/// ones. `Ok(false)` with the log when the export fails.
 pub fn export(
     scene: &SceneState,
     lib: Lookup<'_>,
@@ -964,7 +968,7 @@ mod tests {
 
     #[test]
     fn two_boxes_without_welding_give_a_part_per_face_none_valid() {
-        // what the C++ build of this repository does with any scene: no corner is shared
+        // what the X-Ray SDK does with any scene: no corner is shared
         let mut ex = Extractor::new(2);
         ex.surfaces.push(surf());
         box_faces(&mut ex, Vec3::ZERO, 1.0, false);
@@ -974,7 +978,7 @@ mod tests {
         assert_eq!(ex.parts.len(), 24);
         assert!(ex.parts.iter().all(|p| !p.valid && p.faces.len() == 1));
         assert_eq!(log.len(), 24);
-        assert_eq!(log[0], "Error face found at pos: [-1.00,-1.00,-1.00]");
+        assert_eq!(log[0], Finding::warning("A face at [-1.00,-1.00,-1.00] touches no other face."));
     }
 
     #[test]
@@ -1137,11 +1141,14 @@ mod tests {
         let empty = Engine { materials: Some(GameMaterials::default()), ..Engine::default() };
         let (ok, out) = export(&scene, &look, &empty, None).unwrap();
         assert!(!ok);
-        assert_eq!(out.log[0], "Object 'props\\ladder', surface 's' contain invalid game material.");
+        assert_eq!(
+            out.log[0],
+            Finding::error("Object 'props\\ladder', surface 's' has an invalid game material.")
+        );
     }
 
     #[test]
-    fn the_random_range_keeps_the_cpp_remainder() {
+    fn the_random_range_keeps_the_remainder_semantics() {
         let mut r = Random(1);
         // the first draw of a generator started at 1 is 41
         assert_eq!(r.range(0, 1000), Some(41));

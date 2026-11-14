@@ -2,12 +2,11 @@
 //! Into Game, the Build to Folder and Export Flat Gamedata dialogs, the clean-target question and
 //! the result.
 //!
-//! The C++ specification is `EditorModManifest.cpp` from `ReportMissingId` to `DrawExportDialog`.
 //! A build runs beside the editor as `gz-build`'s job: the dialog closes when it starts, the
 //! Task Center's card follows it ([`crate::cards`]), and its end raises the kit's one result
 //! dialog. A clean build that would delete files it did not write refuses first; the window
 //! then asks `dlg.clean_target`, naming up to ten of them, and Yes builds again with `clean`.
-//! MCP builds (`mod_export`) never come here: they ask nothing and open nothing.
+//! MCP builds (`mod.build`) never come here: they ask nothing and open nothing.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -43,7 +42,7 @@ pub(crate) fn asker(editor: &Editor) -> Asker {
 }
 
 /// The last result of each kind the window showed (or, under `-nodlg`, logged): what
-/// `ui_dialog open id=build_result` puts up again to be looked at.
+/// `ui.dialog open id=build_result` puts up again to be looked at.
 #[derive(Default)]
 struct LastResults(Mutex<BTreeMap<String, ResultSpec>>);
 
@@ -82,7 +81,7 @@ fn last_result(editor: &Editor, id: &str) -> Option<ResultSpec> {
     }
 }
 
-/// A build or a packaging runs now (`EditorMod::JobRunning`).
+/// A build or a packaging runs now.
 #[must_use]
 pub fn build_running(editor: &Editor) -> bool {
     editor.jobs.running_in("build").is_some()
@@ -103,14 +102,13 @@ pub fn game_root(editor: &Editor) -> String {
     Project::of(editor).map(|(_, p)| p.game_root()).unwrap_or_default()
 }
 
-/// A project is open and a game is linked (`EditorMod::CanBuildIntoGame`).
+/// A project is open and a game is linked.
 #[must_use]
 pub fn can_build_into_game(editor: &Editor) -> bool {
     !game_root(editor).is_empty()
 }
 
-/// Where Build Into Game writes: `<game>\modules\<id>`; empty without a game or a valid id
-/// (`EditorMod::BuildTargetText`).
+/// Where Build Into Game writes: `<game>\modules\<id>`; empty without a game or a valid id.
 #[must_use]
 pub fn build_target_text(editor: &Editor) -> String {
     let root = game_root(editor);
@@ -148,7 +146,7 @@ fn with_manifest_id(
     });
 }
 
-/// The result naming a missing module id, with Mod Settings as its action (`ReportMissingId`).
+/// The result naming a missing module id, with Mod Settings as its action.
 pub(crate) fn report_missing_id(editor: &Arc<Editor>, ctx: &egui::Context, title: &str) {
     let mut spec = ResultSpec::new("build_result", title, Tone::Error, MISSING_ID);
     let ed = editor.clone();
@@ -159,13 +157,17 @@ pub(crate) fn report_missing_id(editor: &Arc<Editor>, ctx: &egui::Context, title
     show_result(editor, ctx, spec);
 }
 
-/// A bake note is a line per layer and a `WARNING:` line per thing left out: the first go to the
-/// rows of the result, the others to its warnings (`AddBakeNote`).
-pub(crate) fn add_bake_note(note: &str, rows: &mut Vec<(String, String)>, warnings: &mut Vec<String>) {
-    for line in note.lines().map(str::trim_end).filter(|l| !l.is_empty()) {
-        match line.strip_prefix("WARNING: ") {
-            Some(w) => warnings.push(w.to_owned()),
-            None => rows.push(("Scene".to_owned(), line.to_owned())),
+/// What the scene's bake did: its notes go to the rows of the result, what it left out or
+/// failed at to its warnings.
+pub(crate) fn add_bake_note(
+    note: &[gz_base::Finding],
+    rows: &mut Vec<(String, String)>,
+    warnings: &mut Vec<String>,
+) {
+    for f in note {
+        match f.severity {
+            gz_base::Severity::Note => rows.push(("Scene".to_owned(), f.text.clone())),
+            _ => warnings.push(f.text.clone()),
         }
     }
 }
@@ -175,7 +177,7 @@ pub(crate) fn split_lines(text: &str, out: &mut Vec<String>) {
     out.extend(text.lines().map(str::trim_end).filter(|l| !l.is_empty()).map(str::to_owned));
 }
 
-/// What a build or an export did, in the result dialog every build shares (`ReportBuild`).
+/// What a build or an export did, in the result dialog every build shares.
 #[must_use]
 pub fn build_report(kind: BuildKind, r: &BuildResult, id: &str) -> ResultSpec {
     let flat = kind == BuildKind::Flat;
@@ -223,7 +225,7 @@ pub fn build_report(kind: BuildKind, r: &BuildResult, id: &str) -> ResultSpec {
     spec
 }
 
-/// The clean-target question as the kit's confirmation (`AskClean`).
+/// The clean-target question as the kit's confirmation.
 #[must_use]
 pub fn clean_confirm(q: &CleanQuestion) -> ConfirmSpec {
     ConfirmSpec {
@@ -238,7 +240,7 @@ pub fn clean_confirm(q: &CleanQuestion) -> ConfirmSpec {
     }
 }
 
-/// Starts a build of the open project from the window (`StartBuild`): the module id first, then
+/// Starts a build of the open project from the window: the module id first, then
 /// the job; its end raises the clean-target question or the result.
 pub fn start_build(editor: &Arc<Editor>, kind: BuildKind, target: String, clean: bool) {
     with_manifest_id(editor, move |ed, id, ctx| {
@@ -316,7 +318,7 @@ fn build_ended(
     show_result(editor, ctx, build_report(kind, &r, id));
 }
 
-/// Build Into Game from the menu, the shortcut or the toolbar (`RequestBuildIntoGame`): a build
+/// Build Into Game from the menu, the shortcut or the toolbar: a build
 /// that runs brings its card up; without a game the result says so.
 pub fn request_build_into_game(cx: &mut DocCx<'_>) {
     if build_running(cx.editor) {
@@ -337,7 +339,7 @@ pub fn request_build_into_game(cx: &mut DocCx<'_>) {
     start_build(cx.editor, BuildKind::IntoGame, root, false);
 }
 
-/// Build to Folder... or Export Flat Gamedata... from the menu or the toolbar (`PrepareExport`):
+/// Build to Folder... or Export Flat Gamedata... from the menu or the toolbar:
 /// a build that runs brings its card up, a missing module id is the result, else the dialog.
 pub fn request_export(cx: &mut DocCx<'_>, flat: bool) {
     if cx.editor.project_opt().is_none() {
@@ -387,7 +389,7 @@ impl ExportDialog {
         }
     }
 
-    /// Opens it: the last target, or the linked game the first time (`PrepareExport`).
+    /// Opens it: the last target, or the linked game the first time.
     fn open(&mut self, cx: &mut DocCx<'_>) -> Result<(), String> {
         let (_, project) = Project::of(cx.editor).map_err(|e| e.message)?;
         if build_running(cx.editor) {
@@ -558,8 +560,8 @@ mod tests {
             ok: true,
             files: 3,
             path: "D:\\G\\modules\\od".into(),
-            warnings: "~ one\n".into(),
-            bake_note: "spawn layer: 2\nWARNING: lost".into(),
+            warnings: "one\n".into(),
+            bake_note: vec![gz_base::Finding::info("spawn layer: 2"), gz_base::Finding::warning("lost")],
             ..BuildResult::default()
         };
         let spec = build_report(BuildKind::IntoGame, &r, "od");
@@ -569,7 +571,7 @@ mod tests {
         assert!(spec.headline.starts_with("The module is in the game: 3 files."));
         let keys: Vec<&str> = spec.rows.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(keys, ["Folder", "Scene", "Console"]);
-        assert_eq!(spec.warnings, ["lost", "~ one"]);
+        assert_eq!(spec.warnings, ["lost", "one"]);
         assert!(spec.action.is_some());
     }
 

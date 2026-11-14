@@ -1,6 +1,6 @@
 //! Where the previews find a file: the open project, the editor's own folders, the linked game.
 //!
-//! The order is the texture loader's (`CRender::texture_load`, `UIVisualPreview::ReadTextures`):
+//! The order is the texture loader's:
 //! the editor's folders - the project's when the file lies in it - then the linked game. A
 //! [`Sources`] is a snapshot of the three, made once per load; it is also the
 //! [`gz_render::AssetLoader`] the model preview's renderer reads through.
@@ -152,7 +152,7 @@ impl Sources {
         local.into_iter().find_map(|p| self.local(p))
     }
 
-    /// A motion file a model names (`OGF_S_MOTION_REFS`): below `meshes\`, where the model was
+    /// A motion file a model names: below `meshes\`, where the model was
     /// found first.
     #[must_use]
     pub fn find_motions(&self, name: &str, game_first: bool) -> Option<Found> {

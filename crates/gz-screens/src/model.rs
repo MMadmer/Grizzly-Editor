@@ -1,5 +1,5 @@
-//! The model of `[screens]`, `[screen.<id>]` and `[track.<id>]` (`EditorMod::SScreens`): read off
-//! the manifest document, written back as the C++ `AppendScreens` wrote it.
+//! The model of `[screens]`, `[screen.<id>]` and `[track.<id>]`: read off
+//! the manifest document, written back by the screens' edits.
 
 use gz_mod::doc::Item;
 use gz_mod::{Edit, ManifestDoc};
@@ -199,7 +199,7 @@ pub fn scan_floats(s: &str, n: usize) -> Vec<f32> {
     out
 }
 
-/// `NqUtil::Split`: pieces between `sep`, trimmed, empty ones dropped.
+/// Pieces between `sep`, trimmed, empty ones dropped.
 #[must_use]
 pub fn split(s: &str, sep: char) -> Vec<String> {
     s.split(sep)
@@ -209,7 +209,7 @@ pub fn split(s: &str, sep: char) -> Vec<String> {
         .collect()
 }
 
-/// The surfaces of a file's `show` / `play` (`ScreenSurfaces`): names separated by `,`.
+/// The surfaces of a file's `show` / `play`: names separated by `,`.
 #[must_use]
 pub fn surfaces(value: &str) -> u32 {
     split(value, ',').iter().fold(0, |m, n| {
@@ -239,7 +239,7 @@ pub fn number(v: f32) -> String {
     gz_luadata::format_g(f64::from(v), 6)
 }
 
-/// An id made of a name: lower case letters, digits and `_` (`Sanitize`).
+/// An id made of a name: lower case letters, digits and `_`.
 #[must_use]
 pub fn sanitize(name: &str) -> String {
     let out: String = name
@@ -323,7 +323,7 @@ fn parse_track_key(t: &mut Track, key: &str, val: &str) {
     }
 }
 
-/// `key = value` with the key padded to 17, as `AppendScreens` writes a row.
+/// `key = value` with the key padded to 17, as a screens row is written.
 fn row(key: &str, value: &str) -> String {
     format!("{key:<17} = {value}")
 }
@@ -337,7 +337,7 @@ enum Sec {
 }
 
 impl Screens {
-    /// The model of a manifest document (`EditorMod::Load`): a section header read lower case,
+    /// The model of a manifest document: a section header read lower case,
     /// every `[screen.<id>]` header a screen of its own, keys and values as written.
     #[must_use]
     pub fn parse(doc: &ManifestDoc) -> Self {
@@ -530,13 +530,13 @@ impl Screens {
         self.tracks.iter_mut().find(|d| d.id == id)
     }
 
-    /// A screen id made of `base` that no screen has (`NewScreenId`).
+    /// A screen id made of `base` that no screen has.
     #[must_use]
     pub fn new_screen_id(&self, base: &str) -> String {
         unique_id(base, |id| self.screen(id).is_some())
     }
 
-    /// A track id made of `base` that no track has (`NewTrackId`).
+    /// A track id made of `base` that no track has.
     #[must_use]
     pub fn new_track_id(&self, base: &str) -> String {
         unique_id(base, |id| self.track(id).is_some())

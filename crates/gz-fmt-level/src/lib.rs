@@ -8,9 +8,9 @@
 //!
 //! **Collision**
 //! - [`CForm`] / [`Tri`] - `level.cform`: `CForm::read`, `CForm::write`, `CForm::new`.
-//! - [`Collector`] - `CDB::Collector`: `add_face`, `add_face_packed` (welds like the C++, same
+//! - [`Collector`] - the collision collector: `add_face`, `add_face_packed` (welds like the X-Ray SDK, same
 //!   order), `remove_duplicate_tris`, `calc_adjacency`, `into_cform`.
-//! - [`CollectorPacked`] - `CDB::CollectorPacked`: the 24 x 16 x 24 welding grid, per-face flags.
+//! - [`CollectorPacked`] - the packed collector: the 24 x 16 x 24 welding grid, per-face flags.
 //! - [`XcForm`] / [`XcTri`] - `overlay.xcform`: `XcForm::read` (as the game reads),
 //!   `XcForm::read_back` (as the editor re-reads its own file), `XcForm::write`, `add_cuts`.
 //! - [`OverlayVisuals`], [`VisualsWriter`], [`append_cuts`], [`sanitize_file_name`],
@@ -42,7 +42,7 @@
 //!   [`BuildLight`], [`BuildGlow`], ...) - `build.prj`.
 //!
 //! **Arithmetic the formats share**
-//! - [`Aabb`] (`Fbox`), [`i_floor`], [`i_ceil`], [`pv_compress`], [`pv_decompress`].
+//! - [`Aabb`], [`i_floor`], [`i_ceil`], [`pv_compress`], [`pv_decompress`].
 
 mod ai_map;
 mod ai_scene;

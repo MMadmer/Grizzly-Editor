@@ -1,7 +1,7 @@
-//! `all.spawn` / `*.spawn`: `CGameSpawnConstructor::save_spawn` and the game's
-//! `CALifeSpawnRegistry::load`.
+//! `all.spawn` / `*.spawn`: the file the spawn constructor writes and the game's
+//! spawn registry loads.
 //!
-//! Chunk 0 the header, 1 the spawn graph (per vertex its id and `CServerEntityWrapper::save`:
+//! Chunk 0 the header, 1 the spawn graph (per vertex its id and the entity wrapper:
 //! the spawn packet and the update packet, each after a `u16` length), 2 the artefact spawn
 //! points, 3 the patrol paths, 4 the game graph (`XRAI_VERSION_PRIQUEL` and later). Any other
 //! chunk is kept as it is.
@@ -19,7 +19,7 @@ use crate::{Result, SpawnError, damaged};
 /// The first version whose spawn file embeds the game graph.
 pub const XRAI_VERSION_PRIQUEL: u32 = 9;
 
-/// `CALifeSpawnHeader`.
+/// The spawn header.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpawnHeader {
     pub version: u32,
@@ -32,7 +32,7 @@ pub struct SpawnHeader {
 /// One vertex of the spawn graph: an entity.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpawnVertex {
-    /// `ALife::_SPAWN_ID`.
+    /// A spawn id.
     pub id: u16,
     /// The spawn packet, `M_SPAWN` word first.
     pub spawn: Bytes,

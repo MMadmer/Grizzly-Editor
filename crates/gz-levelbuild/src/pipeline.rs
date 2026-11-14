@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use gz_base::Severity;
+use gz_base::{Finding, Severity};
 use gz_editor::{Editor, JobCtx, JobError, ProjectSession, json};
 use gz_entities::Settings;
 use gz_fmt_object::ObjectFlags;
@@ -274,27 +274,28 @@ fn object_in(scene: &SceneState, line: &str) -> Option<String> {
     None
 }
 
-/// A validation's lines as problems: what starts with `*` or `ERROR` is an error, what starts
-/// with `!` a warning; the object a line names is its object.
-fn line_problems(scene: &SceneState, step: Step, code: &'static str, lines: &[String]) -> Vec<LevelProblem> {
-    lines
+/// A check's findings as problems: the errors and the warnings, each with the object its text names.
+fn finding_problems(
+    scene: &SceneState,
+    step: Step,
+    code: &'static str,
+    found: &[Finding],
+) -> Vec<LevelProblem> {
+    found
         .iter()
-        .filter_map(|l| {
-            let t = l.trim();
-            let severity = if t.starts_with('*') || t.starts_with("ERROR") {
-                Severity::Error
-            } else if t.starts_with('!') {
-                Severity::Warning
-            } else {
-                return None;
-            };
-            let text = t.trim_start_matches(['*', '!', ' ']).trim_start_matches("ERROR:").trim().to_owned();
-            Some(LevelProblem { step, code, severity, text, object: object_in(scene, t), position: None })
+        .filter(|f| matches!(f.severity, Severity::Error | Severity::Warning))
+        .map(|f| LevelProblem {
+            step,
+            code,
+            severity: f.severity,
+            text: f.text.clone(),
+            object: object_in(scene, &f.text),
+            position: None,
         })
         .collect()
 }
 
-/// The scene's check before a build step: its lines go to the log and become problems; a scene that fails
+/// The scene's check before a build step: its findings go to the log and become problems; a scene that fails
 /// is not built.
 pub(crate) async fn validate_scene(
     editor: &Arc<Editor>,
@@ -315,18 +316,14 @@ pub(crate) async fn validate_scene(
             crate::validate::validate(&s2, &lib, &engine, tests, &texture)
         })
         .await;
-    let (lines, ok) = match checked {
+    let (found, ok) = match checked {
         Ok(l) => (l, true),
         Err(l) => (l, false),
     };
-    for line in &lines {
-        if line.starts_with('*') || line.starts_with('!') {
-            editor.log.warn(line);
-        } else {
-            editor.log.info(line);
-        }
+    for f in &found {
+        editor.log.finding(f);
     }
-    problems.extend(line_problems(&scene, step, "validation", &lines));
+    problems.extend(finding_problems(&scene, step, "validation", &found));
     if ok {
         Ok(())
     } else {
@@ -620,9 +617,9 @@ async fn run_step(cx: &mut StepCx<'_>, step: Step) -> Result<Made, JobError> {
     }
 }
 
-fn log_lines(editor: &Editor, lines: &[String]) {
-    for l in lines {
-        if l.starts_with('!') { editor.log.warn(l) } else { editor.log.info(l) }
+fn log_lines(editor: &Editor, found: &[Finding]) {
+    for f in found {
+        editor.log.finding(f);
     }
 }
 
@@ -643,7 +640,7 @@ async fn step_game(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
     let (made, log) = cx
         .editor
         .exec
-        .cpu(move || -> crate::Result<(NamedFiles, Vec<String>)> {
+        .cpu(move || -> crate::Result<(NamedFiles, Vec<Finding>)> {
             let look = crate::files::lookup(lib);
             let mut out = vec![("level.ltx".to_owned(), crate::files::level_ltx(&scene, &look))];
             let g = crate::files::game_files(&scene, &look, &engine, sync_settings(&settings))?;
@@ -772,7 +769,7 @@ async fn step_ai_map(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
         .exec
         .cpu(move || graph::level_graph(&nodes, &params, guid()))
         .await
-        .map_err(|e| JobError::new(e.0.trim_start_matches(['!', ' ']).to_owned()))?;
+        .map_err(|e| JobError::new(e.0))?;
     let bytes = lg.write().map_err(|e| JobError::new(e.to_string()))?;
     write_files(cx.editor, cx.dir.clone(), vec![("level.ai".to_owned(), bytes)]).await?;
     // the fingerprint after a generation is that of the scene with the new map
@@ -830,10 +827,8 @@ async fn step_game_graph(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
             graph::build_game_graph(&nav, &points, &level, lg.header.guid, guid())
         })
         .await
-        .map_err(|e| JobError::new(e.0.trim_start_matches(['!', ' ']).to_owned()))?;
-    for l in &built.log {
-        cx.editor.log.info(l);
-    }
+        .map_err(|e| JobError::new(e.0))?;
+    log_lines(cx.editor, &built.log);
     let bytes = built.graph.to_bytes();
     write_files(cx.editor, cx.dir.clone(), vec![("level.graph".to_owned(), bytes)]).await?;
     let lb = LevelBuild::of(cx.session);
@@ -932,10 +927,8 @@ async fn step_spawn(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
             spawn::build_spawn(&level, &nav, &play_graph, elements, &ways, guid(), verify)
         })
         .await
-        .map_err(|e| JobError::new(e.0.trim_start_matches(['!', ' ']).to_owned()))?;
-    for l in &built.log {
-        cx.editor.log.info(l);
-    }
+        .map_err(|e| JobError::new(e.0))?;
+    log_lines(cx.editor, &built.log);
     let spawns = cx.session.root.join("gamedata").join("spawns");
     write_files(cx.editor, spawns, vec![("editor.spawn".to_owned(), built.bytes)]).await?;
     Ok(Made { files: vec!["gamedata/spawns/editor.spawn".to_owned()], ..Made::default() })
@@ -953,12 +946,12 @@ async fn step_geometry(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
         .cpu(move || gz_scene::objtools::zones::complete(&work, &lib, &|| c.cancel.is_cancelled()))
         .await
         .map_err(|_| JobError { message: "Stopped.".to_owned(), cancelled: true })?;
-    for (text, cells) in &completion.notes {
+    for (note, cells) in &completion.notes {
         cx.problems.push(LevelProblem {
             step: Step::Geometry,
             code: "zones",
-            severity: if text.starts_with("The build put") { Severity::Note } else { Severity::Warning },
-            text: text.clone(),
+            severity: note.severity,
+            text: note.text.clone(),
             object: cells.first().cloned(),
             position: None,
         });
@@ -985,7 +978,7 @@ async fn step_geometry(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
     let (made, log) = cx
         .editor
         .exec
-        .cpu(move || -> crate::Result<(NamedFiles, Vec<String>)> {
+        .cpu(move || -> crate::Result<(NamedFiles, Vec<Finding>)> {
             let look = crate::files::lookup(lib);
             let lod_src = |n: &str| lods.get(n).cloned();
             let c = prj::compile(&s2, &look, &engine, &lod_src)?;
@@ -1130,5 +1123,26 @@ async fn show_errors(cx: &mut StepCx<'_>) {
     }
     if let Ok(svc) = SceneService::of(cx.editor) {
         let _ = svc.store.send(gz_scene::SceneCmd::DebugDraw(Arc::new(d)), gz_base::Origin::Mcp).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gz_base::Findings;
+
+    use super::*;
+
+    #[test]
+    fn only_errors_and_warnings_become_problems_and_none_starts_with_a_mark() {
+        let mut found = Vec::new();
+        found.error("The level has no spawn point.");
+        found.warn("The level has no HOM objects.");
+        found.info("The scene failed its checks.");
+        let problems = finding_problems(&SceneState::default(), Step::Geometry, "validation", &found);
+        assert_eq!(
+            problems.iter().map(|p| p.severity).collect::<Vec<_>>(),
+            [Severity::Error, Severity::Warning]
+        );
+        assert!(problems.iter().all(|p| !p.text.starts_with(['!', '~', '*']) && p.code == "validation"));
     }
 }

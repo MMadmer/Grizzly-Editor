@@ -1,4 +1,4 @@
-//! Path text the way the C++ editor spells and compares it: backslashes, ASCII case ignored,
+//! Path text the way the editor spells and compares it: backslashes, ASCII case ignored,
 //! no trailing separator but a drive root's.
 //!
 //! Two kinds of normalisation live here and they are not interchangeable. [`full_path`] and
@@ -35,7 +35,7 @@ pub fn trim_trailing(mut s: String) -> String {
     s
 }
 
-/// `GetFullPathName`: separators, `.` and `..` resolved against the working directory; no
+/// Separators, `.` and `..` resolved against the working directory; no
 /// trailing separator but a drive root's. `None` for an empty or unusable path.
 #[must_use]
 pub fn full_path(path: &str) -> Option<String> {

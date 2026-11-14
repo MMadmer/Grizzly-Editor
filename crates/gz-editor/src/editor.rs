@@ -86,7 +86,7 @@ pub struct DirtyDoc {
 pub type SettleFuture<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 
 /// How an area says what unsaved work it holds - asked before anything that would lose it - and
-/// saves or drops it on request (`project_close save=true`, `window_control close save=true`).
+/// saves or drops it on request (`project.close save=true`, `app.window close save=true`).
 pub trait DirtySource: Send + Sync {
     fn dirty(&self, editor: &Editor) -> Vec<DirtyDoc>;
 

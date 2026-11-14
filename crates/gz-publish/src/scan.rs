@@ -1,4 +1,4 @@
-//! `ScanFirst`: a module the Mod Browser lists has every release scanned on VirusTotal before
+//! A module the Mod Browser lists has every release scanned on VirusTotal before
 //! anything is created on GitHub. The catalog only looks packages up and holds back a release
 //! VirusTotal does not know, and a listed module's players take a release through their updates
 //! at once - so it leaves only with a VirusTotal report of every package.
@@ -53,7 +53,7 @@ pub(crate) async fn scan_first(
             return Ok("The Mod Browser catalog did not answer, and without a VirusTotal key nothing was scanned: if this module is in the Mod Browser, the release is offered there only once VirusTotal knows its packages.".to_owned());
         }
         return Err(format!(
-            "{} is in the Mod Browser, and every release of it is scanned on VirusTotal with your own free key before it goes out. Add the key in Mod > Submit to Mod Browser (MCP: mod_catalog action=vt_key) - a free account at virustotal.com has one.",
+            "{} is in the Mod Browser, and every release of it is scanned on VirusTotal with your own free key before it goes out. Add the key in Mod > Submit to Mod Browser (MCP: release.catalog action=vt_key) - a free account at virustotal.com has one.",
             plan.module_id
         ));
     };

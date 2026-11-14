@@ -500,7 +500,7 @@ impl TextureDoc {
         });
     }
 
-    /// `texture_preview`'s fields after `tab` and `active`.
+    /// `preview.texture`'s fields after `tab` and `active`.
     #[must_use]
     pub fn state_json(&self) -> serde_json::Map<String, Value> {
         let mut out = serde_json::Map::new();

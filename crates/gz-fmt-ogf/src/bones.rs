@@ -1,5 +1,5 @@
-//! Bone data of a skeleton: `OGF_S_BONE_NAMES` and `OGF_S_IKDATA` (`SkeletonCustom.cpp`,
-//! `CBone::ExportOGF`, `SJointIKData::Export` / `Import`).
+//! Bone data of a skeleton: `OGF_S_BONE_NAMES` and `OGF_S_IKDATA` (the bone names, the
+//! joint IK data of a bone).
 
 use glam::Vec3;
 use gz_chunk::{Reader, Writer};
@@ -8,7 +8,7 @@ use smol_str::SmolStr;
 
 use crate::Result;
 
-/// `Fobb`: three axes, the centre, the half sizes (60 bytes).
+/// Three axes, the centre, the half sizes (60 bytes).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Obb {
     pub rotate: [Vec3; 3],
@@ -23,7 +23,6 @@ impl Default for Obb {
 }
 
 impl Obb {
-    /// `Fobb::invalidate`.
     pub const INVALID: Obb =
         Obb { rotate: [Vec3::X, Vec3::Y, Vec3::Z], translate: Vec3::ZERO, halfsize: Vec3::ZERO };
 
@@ -141,7 +140,7 @@ impl BoneIk {
         w.w_vec3(self.center_of_mass);
     }
 
-    /// `CBone::ExportOGF` of a source bone.
+    /// The IK data and the bone record of a source bone.
     #[must_use]
     pub fn from_bone(b: &gz_fmt_object::Bone) -> Self {
         let ik = &b.ik;
@@ -197,7 +196,7 @@ pub(crate) fn write_names(names: &[BoneName], w: &mut Writer) {
     }
 }
 
-/// `OGF_S_IKDATA`: one record per bone.
+/// One record per bone.
 pub(crate) fn read_ik(body: &[u8], bones: usize) -> Result<Vec<BoneIk>> {
     let mut r = Reader::new(body);
     if bones.saturating_mul(BoneShape::SIZE) > r.elapsed() {

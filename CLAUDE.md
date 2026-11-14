@@ -339,9 +339,9 @@ A change of plan is a change of its document first.
   default, Esc cancels, a question raised inside one is a sheet of it (`Dialog::sheet`). Who answers a question is the
   caller's `Asker` (`gz-ui`'s `dialog.rs`; `confirm`, `unsaved_prompt`, `notice`, `result` alike): **`Ui`** - a
   person: the dialog opens and `then` runs after the frame that answered; **`Mcp`** - a command's caller, who
-  decided: nothing opens; **`Unattended`** (-nodlg) - the logged answers (`~ [dlg suppressed]` for a No). Errors
-  and notes are queued notices once the UI draws. Builds started from the window report in the one kit `result`
-  dialog; a command's caller gets its answer and no window.
+  decided: nothing opens; **`Unattended`** (-nodlg) - the logged answers (the warning `[dlg suppressed] <question>
+  -> auto-answer: No` for a No). Errors and notes are queued notices once the UI draws. Builds started from the
+  window report in the one kit `result` dialog; a command's caller gets its answer and no window.
 - **`gz-app`'s `contract.rs` is the ONE place for a constant QA pins** - panel / drawer / dialog window
   names, document kinds, popups, menus, card menu labels. The code that draws it reads it from there,
   `ui.contract` answers it, and QA reads `ui.contract` instead of hardcoding a title.

@@ -1,5 +1,4 @@
-//! The game's `system.ltx` tree as the editor reads it (`EditorGameConfigs::Activate`, which
-//! unpacked the configs to disk and handed them to the editor's `CInifile`). Here nothing is
+//! The game's `system.ltx` tree as the editor reads it. Nothing is
 //! unpacked: the includes are discovered breadth-first, every level read and parsed in
 //! parallel straight from the index, then assembled in the engine's order.
 
@@ -58,7 +57,7 @@ impl Loader for Parsed {
 }
 
 /// Reads `root` and every file it includes from `source`, and assembles them with the editor's
-/// `CInifile` rules (a missing include is skipped with a warning). `io` runs the reads (the IO
+/// the ini reader rules (a missing include is skipped with a warning). `io` runs the reads (the IO
 /// pool); parsing runs on the caller's pool. `missing` is the error when `root` is not there.
 pub fn load_tree(
     source: &dyn FileSource,
@@ -120,7 +119,7 @@ mod tests {
 
     #[test]
     fn includes_breadth_first() {
-        // a parent must be loaded before the section that inherits it: `CInifile::Load` stores a
+        // a parent must be loaded before the section that inherits it: the ini reader stores a
         // section only when the next one of its file starts, so [root] comes from an include
         let src = source(&[
             (

@@ -1,6 +1,6 @@
 //! The Publish Release dialog (L, `Publish Release###dlg.publish_release`), the edit dialog of a
 //! release (M, `dlg.edit_release`) and the result of a publish started here (the kit's `result`,
-//! `dlg.publish_result`). The C++ is the drawing half of `EditorModPublish.cpp`.
+//! `dlg.publish_result`).
 //!
 //! The dialog only SHOWS the module - one Release line (name, version, repository) above the
 //! Notes - and never writes `mod.ltx`: Mod Settings edits it. Tag, Title, Options, Requires Game,
@@ -956,7 +956,7 @@ impl PublishDialog {
                         "Publish Release",
                         &format!("Cannot publish the release: {}.", reason(&e)),
                     ) {
-                        editor.log.info(line);
+                        editor.log.finding(&line);
                     }
                     return;
                 }
@@ -1013,8 +1013,8 @@ impl PublishDialog {
             }
         }
         spec.warnings = job.warnings.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect();
-        if let Some(line) = dialog::result(ctx, asker(editor), spec) {
-            editor.log.info(line);
+        for line in dialog::result(ctx, asker(editor), spec) {
+            editor.log.finding(&line);
         }
         // a release that went out from the window shows up in the Releases tab
         *hub_refresh = true;
@@ -1130,7 +1130,7 @@ impl ReleaseUi {
         self.publish.queued.load(Ordering::Relaxed)
     }
 
-    /// `ui_dialog open id=publish_release`, the menu, the toolbar: a running job brings its card
+    /// `ui.dialog open id=publish_release`, the menu, the toolbar: a running job brings its card
     /// back instead.
     pub(crate) fn request_publish(&mut self, cx: &mut DocCx<'_>) -> Result<(), String> {
         if self.publish_queued() {

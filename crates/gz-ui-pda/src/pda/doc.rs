@@ -56,9 +56,9 @@ fn asker(editor: &Editor) -> Asker {
     if editor.flags.unattended { Asker::Unattended } else { Asker::Ui }
 }
 
-fn log_line(editor: &Editor, line: Option<String>) {
-    if let Some(l) = line {
-        editor.log.info(l);
+fn log_line(editor: &Editor, line: Option<gz_base::Finding>) {
+    if let Some(f) = line {
+        editor.log.finding(&f);
     }
 }
 
@@ -452,7 +452,7 @@ fn post_notice(editor: &Arc<Editor>, title: &'static str, text: String) {
                 title,
                 &text,
             ) {
-                log.info(line);
+                log.finding(&line);
             }
         }),
         Err(_) => editor.notices.error(format!("{title}: {text}")),
@@ -981,7 +981,7 @@ fn module_layout_now(editor: &Editor) -> Option<String> {
     files.into_iter().next()
 }
 
-/// Mod > PDA Interface (`ShowModuleLayout`): the module's layout in the tab; a project without
+/// Mod > PDA Interface: the module's layout in the tab; a project without
 /// one gets one from the template, made the module's.
 fn open_module_layout(cx: &mut DocCx<'_>) {
     if cx.editor.project_opt().is_none() {

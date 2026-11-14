@@ -1,16 +1,15 @@
-//! QSlim as `SimplifyCFORM` runs it (`XrQSlim`: `MxStdModel`, `MxBlockModel`, `MxStdSlim`,
-//! `MxQSlim`, `MxEdgeQSlim`, `MxHeap`, `MxQuadric3`): edge contractions ordered by the quadric
+//! QSlim as the collision-form simplification runs it: edge contractions ordered by the quadric
 //! error, endpoint placement, uniform weighting, the boundary and manual constraints, the
 //! meshing penalties.
 //!
-//! Vertices, faces and edges are numbered as the C++ allocates them; an edge's id stands for
-//! its address where the C++ sorts edges by pointer (`apply_contraction`). Lists keep the C++
-//! order, a removal from one is "copy the last over it" (`MxDynBlock::remove`).
+//! Vertices, faces and edges are numbered as X-Ray's compiler allocates them; an edge's id stands for
+//! its address where X-Ray's compiler sorts edges by pointer (`apply_contraction`). Lists keep X-Ray's
+//! order, a removal from one is "copy the last over it".
 
 use rayon::prelude::*;
 use smallvec::SmallVec;
 
-/// `MX_PLACE_ENDPOINTS` and friends.
+/// The placement modes (endpoints and friends).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Placement {
     Endpoints = 0,
@@ -19,7 +18,7 @@ pub enum Placement {
     Optimal = 3,
 }
 
-/// `MX_WEIGHT_UNIFORM`, `MX_WEIGHT_AREA`.
+/// The weighting modes: uniform and by area.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Weighting {
     Uniform,
@@ -93,7 +92,7 @@ fn triangle_compactness(v1: V3, v2: V3, v3: V3) -> f64 {
     FOUR_ROOT3 * area / (norm2(sub3(v2, v1)) + norm2(sub3(v3, v2)) + norm2(sub3(v1, v3)))
 }
 
-/// `MxQuadric3`.
+/// A quadric of three dimensions.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Quadric {
     a2: f64,
@@ -176,7 +175,7 @@ struct Tags {
 
 const VALID: u8 = 1;
 
-/// `MxPairContraction`.
+/// A pair contraction.
 #[derive(Clone, Debug, Default)]
 struct Contraction {
     v1: u32,
@@ -187,7 +186,7 @@ struct Contraction {
     dead_faces: Vec<u32>,
 }
 
-/// `MxStdModel`: what `SimplifyCFORM` builds and reads back.
+/// What the simplification builds and reads back.
 #[derive(Clone, Debug, Default)]
 pub struct Model {
     verts: Vec<[f32; 3]>,
@@ -417,7 +416,7 @@ impl Model {
         c
     }
 
-    /// `MxStdModel::apply_contraction`.
+    /// Applies a contraction to the model.
     fn apply_contraction(&mut self, c: &Contraction) {
         if let Some(p) = self.verts.get_mut(c.v1 as usize) {
             for (x, d) in p.iter_mut().zip(c.dv1) {
@@ -479,7 +478,7 @@ struct Edge {
     pos: i32,
 }
 
-/// `MxEdgeQSlim` with the settings of its caller.
+/// The edge simplification with the settings of its caller.
 pub struct EdgeQSlim {
     pub model: Model,
     quadrics: Vec<Quadric>,
@@ -498,7 +497,7 @@ pub struct EdgeQSlim {
 }
 
 impl EdgeQSlim {
-    /// `MxEdgeQSlim(m)` with `MxStdSlim`'s defaults.
+    /// The edge simplification with the defaults.
     #[must_use]
     pub fn new(model: Model) -> Self {
         let valid_faces = (0..model.faces.len() as u32).filter(|&f| model.face_is_valid(f)).count() as u32;
@@ -699,7 +698,7 @@ impl EdgeQSlim {
         if let Some(x) = self.edges.get_mut(e) {
             x.pos = NOT_IN_HEAP;
         }
-        // oracle: the C++ compares against the slot `i` also when it was the last one, reading
+        // X-Ray's compiler compares against the slot `i` also when it was the last one, reading
         // past the heap's length; that slot then holds the removed edge itself (equal keys)
         if i < self.heap.len() {
             if self.key(self.at(i)) < self.key(e) {
@@ -723,7 +722,7 @@ impl EdgeQSlim {
         id
     }
 
-    /// `collect_edges`: every edge of the model once, in the C++ order. `create_edge` rates
+    /// Collects the edges: every edge of the model once, in X-Ray's order. `create_edge` rates
     /// each edge as it is made; a rating reads the quadrics and the model only, so all are
     /// rated at once and then go into the heap in that order.
     pub fn collect_edges(&mut self) {
@@ -841,7 +840,7 @@ impl EdgeQSlim {
         failed
     }
 
-    /// `apply_mesh_penalties`: the key of an edge whose placement is `vnew`, `key`. The C++
+    /// Applies the mesh penalties: the key of an edge whose placement is `vnew`, `key`. X-Ray's compiler
     /// marks the faces around both ends (0 for those of v2, 1 for those of v1, then +1 for each
     /// time a face is v2's) and looks at those marked 1: a face of v1 that v2 lacks, and a face
     /// of v2 once over that v1 lacks - counted here without the marks, so edges can be rated at
@@ -939,7 +938,7 @@ impl EdgeQSlim {
                 edges.extend_from_slice(l);
             }
         }
-        // the C++ sorts the edges by their addresses: here by the order they were made
+        // X-Ray's compiler sorts the edges by their addresses: here by the order they were made
         edges.sort_unstable();
         edges.dedup();
         // rated at once (a rating reads the model and the quadrics only), put in the heap in order

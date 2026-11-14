@@ -1,12 +1,13 @@
-//! The level's files beside `build.prj`: `level.ltx` (`BuildLTX`), the game files of
-//! `BuildGame`, the occlusion models (`BuildHOMModel`, `BuildSOMModel`), the AI map export, the
-//! scene statistic (`BuildSceneStat`) and the collision form (`CFromBuilder`).
+//! The level's files beside `build.prj`: `level.ltx`, the game files,
+//! the occlusion models, the AI map export, the
+//! scene statistic and the collision form.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
 use glam::Vec3;
+use gz_base::{Finding, Findings};
 use gz_chunk::Writer;
 use gz_entities::Settings;
 use gz_fmt_level::{
@@ -23,13 +24,13 @@ use crate::libs::{Engine, xrlc_flags};
 use crate::prj::{Lookup, SceneStat, level_box, object_surfaces};
 use crate::{BuildError, Result};
 
-/// `IWriter::w_string`: the text and a line end.
+/// The text and a line end.
 fn line(out: &mut Vec<u8>, s: &str) {
     out.extend_from_slice(s.as_bytes());
     out.extend_from_slice(b"\r\n");
 }
 
-/// `BuildLTX`: `level.ltx` - the map usage, the level map's rectangle and texture, the build
+/// `level.ltx` - the map usage, the level map's rectangle and texture, the build
 /// options' text, the sectors' maps.
 #[must_use]
 pub fn level_ltx(scene: &SceneState, lib: Lookup<'_>) -> Vec<u8> {
@@ -79,14 +80,14 @@ pub fn level_ltx(scene: &SceneState, lib: Lookup<'_>) -> Vec<u8> {
     out
 }
 
-/// The files of `BuildGame`, by name; a file the C++ writes only when it has something is
+/// The game files, by name; a file the X-Ray SDK writes only when it has something is
 /// absent then.
 #[derive(Clone, Debug, Default)]
 pub struct GameFiles {
     pub files: BTreeMap<&'static str, Vec<u8>>,
     /// The breakable parts' models, `meshes\brkbl#N.ogf` relative to the level folder.
     pub meshes: Vec<(String, Vec<u8>)>,
-    pub log: Vec<String>,
+    pub log: Vec<Finding>,
 }
 
 /// `u32_3f`: a colour as three floats.
@@ -95,7 +96,7 @@ fn u32_3f(c: u32) -> Vec3 {
     Vec3::new(f * ((c >> 16) & 0xff) as f32, f * ((c >> 8) & 0xff) as f32, f * (c & 0xff) as f32)
 }
 
-/// A spawn element's packet as `ExportGame` writes it: the entity named, placed and shaped
+/// A spawn element's packet: the entity named, placed and shaped
 /// like the point.
 pub fn export_entity(
     o: &Object,
@@ -107,7 +108,7 @@ pub fn export_entity(
         SpawnEntity::Decoded(d) => (**d).clone(),
         raw => match settings.and_then(|s| raw.decode(s)) {
             Some(d) => d,
-            None => return Err(BuildError::new(format!("!Invalid spawn data: {}", o.name))),
+            None => return Err(BuildError::new(format!("The spawn data of '{}' is invalid.", o.name))),
         },
     };
     let _ = entity.set_name(&o.name);
@@ -120,14 +121,14 @@ pub fn export_entity(
             _ => None,
         });
         let Some((scale, s)) = shape else {
-            return Err(BuildError::new(format!("Spawn Point: '{}' must contain attached shape.", o.name)));
+            return Err(BuildError::new(format!("The spawn point '{}' needs an attached shape.", o.name)));
         };
         let _ = entity.set_shapes(&gz_export_level::spawn::entity_shapes(scale, &s.shapes));
     }
     Ok(Some((entity, pt.sd_flags & 1 != 0)))
 }
 
-/// `BuildGame`: the spawn elements' packets (`level.spawn`, the respawned ones in
+/// The spawn elements' packets (`level.spawn`, the respawned ones in
 /// `level_rs.spawn`) - the Scene Object tool's breakable and climable objects first, as the
 /// tools export in class order -, the patrol paths and respawn points (`level.game`), the
 /// environment modifiers, the static sounds and particles, the fog volumes.
@@ -148,12 +149,12 @@ pub fn game_files(
         if class == ObjClass::SceneObject {
             let (ok, made) = crate::breakable::export(scene, lib, engine, settings)?;
             if !ok {
-                // the export's own lines say why; the C++ showed them before its error
-                let mut text = made.log.join("\n");
+                // the export's own lines say why, ahead of the sentence that the files were not built
+                let mut text = made.log.iter().map(|f| f.text.as_str()).collect::<Vec<_>>().join("\n");
                 if !text.is_empty() {
                     text.push('\n');
                 }
-                text.push_str("ERROR: Failed to build game. ");
+                text.push_str("The game files could not be built.");
                 return Err(BuildError::new(text));
             }
             out.log.extend(made.log);
@@ -284,7 +285,9 @@ pub fn game_files(
                 }
                 Some(gr) if f.kind == FV_OCCLUSION => gr.occluders.push(o.world().0),
                 _ => {
-                    out.log.push("! incorrect fog volumes grouping".to_owned());
+                    out.log.warn(
+                        "The fog volumes are grouped wrongly: an emitter must be followed by its occluders.",
+                    );
                     ok = false;
                     break 'groups;
                 }
@@ -296,12 +299,12 @@ pub fn game_files(
     }
     out.files.insert("level.fog_vol", write_fog_volumes(&fog));
     if !ok {
-        return Err(BuildError::new("ERROR: Failed to build game. "));
+        return Err(BuildError::new("The game files could not be built."));
     }
     Ok(out)
 }
 
-/// `BuildHOMModel`: the occluders - every face of a HOM object, the `materials\occ` faces of
+/// The occluders - every face of a HOM object, the `materials\occ` faces of
 /// the others - in world space with their two-sided flag. `None` when there is none.
 #[must_use]
 pub fn hom(scene: &SceneState, lib: Lookup<'_>) -> Option<Vec<u8>> {
@@ -340,7 +343,7 @@ pub fn hom(scene: &SceneState, lib: Lookup<'_>) -> Option<Vec<u8>> {
     Some(w.into_bytes())
 }
 
-/// `BuildSOMModel`: the sound occluders with their materials' occlusion factors. `None` when
+/// The sound occluders with their materials' occlusion factors. `None` when
 /// there is none; an error when a surface's material is unknown.
 pub fn som(scene: &SceneState, lib: Lookup<'_>, engine: &Engine) -> Result<Option<Vec<u8>>> {
     let mut body = Writer::new();
@@ -356,13 +359,13 @@ pub fn som(scene: &SceneState, lib: Lookup<'_>, engine: &Engine) -> Result<Optio
                 let Some(s) = lo.object.surfaces.get(sf.surface as usize) else { continue };
                 let Some(id) = engine.material_id(&s.game_mtl) else {
                     return Err(BuildError::new(format!(
-                        "Object '{}', surface '{}' contain invalid game material.",
+                        "Object '{}', surface '{}' has an invalid game material.",
                         lo.name, s.name
                     )));
                 };
                 let Some(mtl) = engine.materials.as_ref().and_then(|l| l.by_id(id)) else {
                     return Err(BuildError::new(format!(
-                        "Object '{}', surface '{}' contain undefined game material.",
+                        "Object '{}', surface '{}' has an undefined game material.",
                         lo.name, s.name
                     )));
                 };
@@ -393,20 +396,20 @@ pub fn som(scene: &SceneState, lib: Lookup<'_>, engine: &Engine) -> Result<Optio
 /// The AI Map tool's nodes as the scene holds them.
 #[must_use]
 pub fn ai_nodes(scene: &SceneState) -> Option<(Vec<gz_fmt_level::AiMapNode>, gz_fmt_level::AiParams)> {
-    // the tool's exact nodes, as the C++ exports them (the packed ones are rounded)
+    // the tool's exact nodes, as the X-Ray SDK exports them (the packed ones are rounded)
     let part = scene.bulk.ai_map.as_ref()?;
     let nodes = part.all_nodes();
     (!nodes.is_empty()).then_some((nodes, part.header.params))
 }
 
-/// `ESceneAIMapTool::Export`: `build.aimap`. `None` for an empty map.
+/// `build.aimap`. `None` for an empty map.
 #[must_use]
 pub fn build_aimap(scene: &SceneState) -> Option<Vec<u8>> {
     let (nodes, params) = ai_nodes(scene)?;
     BuildAiMap::export(&nodes, &params).map(|m| m.write())
 }
 
-/// `CSceneStat::flush`: the picture (`level_stat.tga`, red the static vertices, green the
+/// The picture (`level_stat.tga`, red the static vertices, green the
 /// models', bottom-up) and the text (`level_stat.txt`).
 #[must_use]
 pub fn scene_stat(stat: &SceneStat) -> (Vec<u8>, Vec<u8>) {
@@ -419,7 +422,7 @@ pub fn scene_stat(stat: &SceneStat) -> (Vec<u8>, Vec<u8>) {
         let f = v as f32 / max as f32 * 255.0 + 0.5;
         if f.is_finite() { i_floor(f) as u8 } else { 0 }
     };
-    // `CImage::Vflip` then a top-down TGA: the last row of the grid comes first
+    // a vertical flip then a top-down TGA: the last row of the grid comes first
     let mut rgba = Vec::with_capacity((sx * sz * 4) as usize);
     for iz in (0..sz).rev() {
         for ix in 0..sx {
@@ -441,7 +444,7 @@ pub fn scene_stat(stat: &SceneStat) -> (Vec<u8>, Vec<u8>) {
     (tga, txt.into_bytes())
 }
 
-/// `CFromBuilder::build`: the static and multiple-usage objects' collision faces in world
+/// The static and multiple-usage objects' collision faces in world
 /// space - not `materials\occ`, not a compiler shader without collision, not a degenerate face,
 /// both sides of a two-sided one. `None` when nothing is collected.
 #[must_use]

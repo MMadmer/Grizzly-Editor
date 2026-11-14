@@ -1,10 +1,10 @@
-//! The compiler's mesh: `MeshStructure.h`'s `Tvertex` / `Tface` over `DataVertex` / `DataFace`
-//! (the level) and `data_vertex` / `data_face` (an MU model), `base_Vertex` / `base_Face`, and
-//! the vertex and face lists of `xrLC_GlobalData` (`g_vertices`, `g_faces`).
+//! The compiler's mesh: the vertex and face types of the compiler over the level's
+//! and an MU model's vertex and face data, and
+//! the vertex and face lists of the global data.
 //!
 //! Vertices and faces live in arenas and name each other by id; an id is never reused, as a
-//! pointer of the C++ is unique while its object lives. The lists keep the C++ order: a new
-//! element goes to the end, an unregistered one is swapped with the last (`~Tface`, `~Tvertex`).
+//! pointer of X-Ray's compiler is unique while its object lives. The lists keep its order: a new
+//! element goes to the end, an unregistered one is swapped with the last.
 //! A vertex's adjacency is the list of its faces in the order they were added.
 
 use glam::{DVec3, Vec2, Vec3};
@@ -100,7 +100,7 @@ impl Tcf {
     }
 }
 
-/// `_TCF::barycentric` of three points.
+/// The barycentric coordinates of a point in a triangle.
 #[must_use]
 pub fn barycentric(uv: &[Vec2; 3], p: Vec2) -> Vec3 {
     let v02 = uv[0] - uv[2];
@@ -128,7 +128,7 @@ pub fn is_inside(b: Vec3) -> bool {
 pub struct FaceFlags {
     pub splitted: bool,
     pub processed: bool,
-    /// For the ray tracer (`CacheOpacity`).
+    /// For the ray tracer.
     pub opaque: bool,
     /// For the tesselation.
     pub locked: bool,
@@ -160,7 +160,7 @@ pub struct Face {
     pub flags: FaceFlags,
     pub n: Vec3,
     pub tc: SmallVec<[Tcf; 2]>,
-    /// `pDeflector`: the deflector the face is mapped by.
+    /// The deflector the face is mapped by.
     pub deflector: Option<DeflId>,
     /// `lmap_layer`: the lightmap page that holds it.
     pub lmap: Option<u32>,
@@ -187,43 +187,43 @@ impl Default for Face {
 }
 
 impl Face {
-    /// `getTC0`.
+    /// The texture coordinates of channel 0.
     #[must_use]
     pub fn tc0(&self) -> [Vec2; 3] {
         self.tc.first().map_or([Vec2::ZERO; 3], |t| t.uv)
     }
 
-    /// `AddChannel`.
+    /// Adds a channel.
     pub fn add_channel(&mut self, p1: Vec2, p2: Vec2, p3: Vec2) {
         self.tc.push(Tcf { uv: [p1, p2, p3] });
     }
 
-    /// `RenderEqualTo`.
+    /// Whether two vertices render alike.
     #[must_use]
     pub fn render_equal_to(&self, o: &Face) -> bool {
         self.material == o.material
     }
 
-    /// `VIndex`.
+    /// The vertex index.
     #[must_use]
     pub fn v_index(&self, v: VertId) -> Option<usize> {
         self.v.iter().position(|&x| x == v)
     }
 
-    /// `isDegenerated`.
+    /// Whether the face is degenerate.
     #[must_use]
     pub fn is_degenerated(&self) -> bool {
         self.v[0] == self.v[1] || self.v[0] == self.v[2] || self.v[1] == self.v[2]
     }
 
-    /// `EdgeVerts`.
+    /// The vertices of an edge.
     #[must_use]
     pub fn edge_verts(&self, e: usize) -> (VertId, VertId) {
         let [a, b] = EDGE2IDX[e % 3];
         (self.v[a], self.v[b])
     }
 
-    /// `isEqual`: the same three vertices in any order.
+    /// The same three vertices in any order.
     #[must_use]
     pub fn is_equal(&self, f: &Face) -> bool {
         let (a, b) = (&self.v, &f.v);
@@ -237,7 +237,7 @@ impl Face {
 }
 
 /// The error records of a build (`err_invalid`, `err_multiedge`, `err_tjunction`) and the count
-/// of invalid faces (`dwInvalidFaces`).
+/// of invalid faces.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MeshErrors {
     /// Three points per invalid face.
@@ -250,7 +250,7 @@ pub struct MeshErrors {
 }
 
 impl MeshErrors {
-    /// `CBuild::err_save`: the error file (`build_<user>.err`).
+    /// The error file (`build_<user>.err`).
     #[must_use]
     pub fn write_err(&self) -> Vec<u8> {
         let mut w = Writer::new();
@@ -300,16 +300,16 @@ pub fn connect_by_edge_flags(start: u32, test: u32, start_edge: u16, test_edge: 
     is_soft_edge(start, start_edge) && is_soft_edge(test, test_edge)
 }
 
-/// `poolSS<T, 8 * 1024>` as far as the order of its addresses goes: a freed object is the
+/// A pool of X-Ray's compiler as far as the order of its addresses goes: a freed object is the
 /// first given out again (the free list is a stack), else the next slot after the last; blocks
 /// come at rising addresses - but a block made after [`Self::mark_loaded`] lies below every block
-/// made before it. Where the C++ sorts objects by their pointers the compiler sorts by
-/// [`Self::order`], and so meets them in the C++ order.
+/// made before it. Where X-Ray's compiler sorts objects by their pointers the compiler sorts by
+/// [`Self::order`], and so meets them in X-Ray's order.
 ///
-/// oracle: the blocks' places are the heap's. `xrLC` reads `build.prj` into one buffer, loads
-/// the level's vertices and faces into blocks above it, and frees it when `CBuild::Load` returns
-/// (`FS.r_close`, xrLC.cpp); the blocks the compile makes later (the tesselation's faces) go into
-/// that space. Seen on l03u_agr_underground with the compilers of `cpp-compilers-last`: with the
+/// the blocks' places are the heap's. X-Ray's compiler reads `build.prj` into one buffer, loads
+/// the level's vertices and faces into blocks above it, and frees it when the load returns
+/// the blocks the compile makes later (the tesselation's faces) go into
+/// that space. Seen on l03u_agr_underground against X-Ray's compiler's output: with the
 /// tesselation's block in rising order its split order differs from 512137 faces on.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PoolSim {
@@ -319,7 +319,7 @@ pub struct PoolSim {
     loaded: Option<u64>,
 }
 
-/// `poolSS`'s granularity: the objects of one block.
+/// The pool's granularity: the objects of one block.
 const POOL_BLOCK: u64 = 8 * 1024;
 
 impl PoolSim {
@@ -360,7 +360,7 @@ pub struct Mesh {
     faces: Vec<Option<Face>>,
     vert_list: Vec<VertId>,
     face_list: Vec<FaceId>,
-    /// The address of every vertex and face as the C++ pools give them out.
+    /// The address of every vertex and face as X-Ray's pools give them out.
     vaddr: Vec<u64>,
     faddr: Vec<u64>,
     /// The vertex pool (the MU models share one: the caller moves it from model to model).
@@ -457,19 +457,19 @@ impl Mesh {
         (self.vpool.next, self.fpool.next)
     }
 
-    /// Where the C++ pool put a vertex (see [`PoolSim`]).
+    /// Where X-Ray's pool put a vertex (see [`PoolSim`]).
     #[must_use]
     pub fn vertex_addr(&self, v: VertId) -> u64 {
         self.vaddr.get(v.0 as usize).map_or(u64::MAX, |&a| self.vpool.order(a))
     }
 
-    /// Where the C++ pool put a face.
+    /// Where X-Ray's pool put a face.
     #[must_use]
     pub fn face_addr(&self, f: FaceId) -> u64 {
         self.faddr.get(f.0 as usize).map_or(u64::MAX, |&a| self.fpool.order(a))
     }
 
-    /// The end of `CBuild::Load`: the face pool's later blocks lie below the load's (see
+    /// The end of the load: the face pool's later blocks lie below the load's (see
     /// [`PoolSim`]). The vertex pool's do not: the tesselation's faces take the space first.
     pub fn mark_loaded(&mut self) {
         self.fpool.mark_loaded();
@@ -511,7 +511,7 @@ impl Mesh {
         id
     }
 
-    /// A face on the list with its three vertices (`SetVertices`).
+    /// A face on the list with its three vertices.
     pub fn create_face(&mut self, v: [VertId; 3]) -> FaceId {
         let f = self.create_face_raw();
         for (i, v) in v.into_iter().enumerate() {
@@ -547,18 +547,18 @@ impl Mesh {
         }
     }
 
-    /// `SetVertex`.
+    /// Sets a vertex.
     pub fn set_vertex(&mut self, f: FaceId, idx: usize, v: VertId) {
         self.raw_set_vertex(f, idx, v);
         self.prep_add(v, f);
     }
 
-    /// `VReplace`: every slot holding `what` takes `to`, the adjacency follows.
+    /// Every slot holding `what` takes `to`, the adjacency follows.
     pub fn v_replace(&mut self, f: FaceId, what: VertId, to: VertId) {
         self.replace(f, what, to, true);
     }
 
-    /// `VReplace_not_remove`: `what` keeps the face in its adjacency.
+    /// `what` keeps the face in its adjacency.
     pub fn v_replace_not_remove(&mut self, f: FaceId, what: VertId, to: VertId) {
         self.replace(f, what, to, false);
     }
@@ -575,7 +575,7 @@ impl Mesh {
         }
     }
 
-    /// `~Tface` / `destroy_face`: off the list when `unregister` (swapped with the last), out of
+    /// Destroys a face: off the list when `unregister` (swapped with the last), out of
     /// its vertices' adjacency, gone.
     pub fn destroy_face(&mut self, f: FaceId, unregister: bool) {
         if unregister && let Some(at) = self.face_list.iter().position(|&x| x == f) {
@@ -590,7 +590,7 @@ impl Mesh {
         }
     }
 
-    /// `~Tvertex` / `destroy_vertex`.
+    /// Destroys a vertex.
     pub fn destroy_vertex(&mut self, v: VertId, unregister: bool) {
         if unregister && let Some(at) = self.vert_list.iter().position(|&x| x == v) {
             self.vert_list.swap_remove(at);
@@ -617,7 +617,7 @@ impl Mesh {
         Some([self.vertex(face.v[0])?.n, self.vertex(face.v[1])?.n, self.vertex(face.v[2])?.n])
     }
 
-    /// `EdgeLen`.
+    /// The length of an edge.
     #[must_use]
     pub fn edge_len(&self, f: FaceId, e: usize) -> f32 {
         let Some(p) = self.positions(f) else { return 0.0 };
@@ -625,14 +625,14 @@ impl Mesh {
         distance(p[a], p[b])
     }
 
-    /// `CalcArea`: Heron's formula.
+    /// The area: Heron's formula.
     #[must_use]
     pub fn calc_area(&self, f: FaceId) -> f32 {
         let Some(p) = self.positions(f) else { return 0.0 };
         area_of(&p)
     }
 
-    /// `CalcMaxEdge`.
+    /// The longest edge.
     #[must_use]
     pub fn calc_max_edge(&self, f: FaceId) -> f32 {
         let Some(p) = self.positions(f) else { return 0.0 };
@@ -646,7 +646,7 @@ impl Mesh {
         }
     }
 
-    /// `CalcCenter`.
+    /// The centre.
     #[must_use]
     pub fn calc_center(&self, f: FaceId) -> Vec3 {
         let Some(p) = self.positions(f) else { return Vec3::ZERO };
@@ -654,7 +654,7 @@ impl Mesh {
         Vec3::new(s.x / 3.0, s.y / 3.0, s.z / 3.0)
     }
 
-    /// `CalcNormal`: the face's normal from its corners, with the double precision fallback.
+    /// The face's normal from its corners, with the double precision fallback.
     pub fn calc_normal(&mut self, f: FaceId) {
         let Some(p) = self.positions(f) else { return };
         let n = cross(p[1] - p[0], p[2] - p[1]);
@@ -676,7 +676,7 @@ impl Mesh {
         }
     }
 
-    /// `CalcNormal2`: in double; a face with no area gets the axis of its largest component and
+    /// In double; a face with no area gets the axis of its largest component and
     /// is recorded as invalid.
     pub fn calc_normal2(&mut self, f: FaceId) {
         let Some(p) = self.positions(f) else { return };
@@ -715,7 +715,7 @@ impl Mesh {
         }
     }
 
-    /// `Face::Verify`: an area, texture coordinates that span half a texel of a 4096 texture
+    /// An area, texture coordinates that span half a texel of a 4096 texture
     /// and a normal; `false` (and a recorded failure) for a face without them.
     pub fn verify_face(&mut self, f: FaceId) -> bool {
         let a = self.calc_area(f);
@@ -726,7 +726,7 @@ impl Mesh {
         let Some(tc) = self.face(f).map(Face::tc0) else { return false };
         let eps = 0.5 / 4096.0;
         let p = distance2(tc[0], tc[1]) + distance2(tc[1], tc[2]) + distance2(tc[2], tc[0]);
-        // oracle: the C++ tests the area's validity a second time where the perimeter's is meant
+        // X-Ray's compiler tests the area's validity a second time where the perimeter's is meant
         if !a.is_finite() || p < eps {
             self.failure(f);
             return false;
@@ -739,7 +739,7 @@ impl Mesh {
         true
     }
 
-    /// `CreateCopy_NOADJ`: a listed vertex with the position, normal and light of `v`.
+    /// A listed vertex with the position, normal and light of `v`.
     pub fn create_copy_noadj(&mut self, v: VertId) -> VertId {
         let (p, n, c) =
             self.vertex(v).map_or((Vec3::ZERO, Vec3::ZERO, BaseColor::default()), |x| (x.p, x.n, x.c));
@@ -751,7 +751,7 @@ impl Mesh {
         id
     }
 
-    /// `CreateCopy`: the same with the adjacency.
+    /// The same with the adjacency.
     pub fn create_copy(&mut self, v: VertId) -> VertId {
         let adj = self.vertex(v).map(|x| x.adjacents.clone()).unwrap_or_default();
         let id = self.create_copy_noadj(v);
@@ -761,7 +761,7 @@ impl Mesh {
         id
     }
 
-    /// `normalFromAdj`: the sum of the adjacent faces' normals, `exact_normalize`d.
+    /// The sum of the adjacent faces' normals, `exact_normalize`d.
     pub fn normal_from_adj(&mut self, v: VertId) {
         let Some(vx) = self.vertex(v) else { return };
         let mut n = Vec3::ZERO;
@@ -834,8 +834,7 @@ impl Mesh {
         }
     }
 
-    /// `itterate_adjacents::RecurseTri` from the first face of `adj`: the faces around the
-    /// vertex that share its normal with it, in the order the recursion meets them.
+    /// The faces around the first face of `adj`'s vertex that share its normal with it, in the order the recursion meets them.
     fn smoothing_group(&mut self, adj: &[FaceId], sm_cos: f32, smoothing: Smoothing) -> Vec<FaceId> {
         let mut out = Vec::new();
         // (start face, the next test face) - the recursion without the call stack
@@ -878,7 +877,7 @@ impl Mesh {
         }
         for i in 0..vcount {
             let Some(&v) = self.vert_list.get(i) else { break };
-            // the C++ sorts a vertex's faces by their addresses
+            // X-Ray's compiler sorts a vertex's faces by their addresses
             let (faddr, fpool) = (&self.faddr, &self.fpool);
             let Some(vx) = self.verts.get_mut(v.0 as usize).and_then(Option::as_mut) else { continue };
             vx.adjacents
@@ -920,7 +919,7 @@ impl Mesh {
     }
 }
 
-/// Heron's formula over three corners, as `CalcArea` takes the edges.
+/// Heron's formula over three corners, as the area takes the edges.
 #[must_use]
 pub fn area_of(p: &[Vec3; 3]) -> f32 {
     let (e1, e2, e3) = (distance(p[0], p[1]), distance(p[0], p[2]), distance(p[1], p[2]));

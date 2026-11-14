@@ -341,8 +341,8 @@ impl MeshData {
         Self::built(vertices, indices, material)
     }
 
-    /// `dxEnvironmentRender`'s half box: twelve corners from just under the horizon up, each
-    /// with its cube-map direction in its normal (`hbox_verts`, `hbox_faces`).
+    /// The sky's half box: twelve corners from just under the horizon up, each
+    /// with its cube-map direction in its normal.
     #[must_use]
     pub fn sky_box() -> Self {
         const VERTS: [([f32; 3], [f32; 3]); 12] = [

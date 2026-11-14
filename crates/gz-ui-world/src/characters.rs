@@ -37,7 +37,7 @@ const PREVIEW_MIN: f32 = 300.0;
 
 /// The tab's id and kind.
 pub const TAB: &str = "characters";
-/// The scroll `ui_scroll id=characters` moves: the work area of the tab that is up.
+/// The scroll `ui.scroll id=characters` moves: the work area of the tab that is up.
 pub(crate) const HOST: &str = "###doc.host";
 
 /// What replaces the edited character once the unsaved question is answered.
@@ -171,7 +171,7 @@ pub(crate) async fn problems_of(
     ed.exec.io(move || own_problems(&roster, sel, &edit, &checker)).await
 }
 
-/// The row a coded problem belongs under (`FieldOf`); empty: the header's.
+/// The row a coded problem belongs under; empty: the header's.
 #[must_use]
 pub fn field_of(problem: &str) -> &'static str {
     const MAP: [(&str, &str); 21] = [
@@ -201,7 +201,7 @@ pub fn field_of(problem: &str) -> &'static str {
 }
 
 /// "E103 characters/x.npcasset: no name - ..." as the sentence the author reads: "No name -
-/// ...". The code and the file are for MCP and the log (`ProblemText`).
+/// ...". The code and the file are for MCP and the log.
 #[must_use]
 pub fn problem_text(problem: &str) -> String {
     let mut text_ = match problem.find(": ") {
@@ -267,7 +267,7 @@ pub struct CharactersDoc {
     pub(crate) lists: ListsView,
     pub(crate) sheets: Option<Arc<Sheets>>,
     pub(crate) actions: Vec<Action>,
-    /// How far the form scrolled at most, the last frame: where `ui_scroll to=bottom` goes.
+    /// How far the form scrolled at most, the last frame: where `ui.scroll to=bottom` goes.
     scroll_max: f32,
     /// The model viewer of the preview, by `source|visual`.
     model: Option<(String, Box<dyn Document>)>,
@@ -362,7 +362,7 @@ impl CharactersDoc {
     }
 
     /// A roster arrived: the list as the disk has it, edits in progress kept - the edited
-    /// character is found again by its file (`ReloadAll`); a file asked for is selected.
+    /// character is found again by its file; a file asked for is selected.
     pub(crate) fn take_roster(&mut self, roster: Arc<Roster>, module: String) {
         let file = self.edit.file.clone();
         self.module_id = module;
@@ -404,7 +404,7 @@ impl CharactersDoc {
             .position(|c| id.is_some_and(|i| c.id == i) || path.is_some_and(|p| norm(&c.file) == norm(p)))
     }
 
-    /// Selects a character of the roster (`None`: nothing), its edits gone (`SelectIndex`).
+    /// Selects a character of the roster (`None`: nothing), its edits gone.
     pub(crate) fn select(&mut self, index: Option<usize>) {
         let roster = self.roster.clone();
         let picked = index.and_then(|i| roster.as_ref().and_then(|r| r.raw.get(i)).map(|c| (i, c.clone())));
@@ -462,7 +462,7 @@ impl CharactersDoc {
         self.edit_gen += 1;
     }
 
-    /// The text fields take what is stored (`PullToBuffers`).
+    /// The text fields take what is stored.
     fn pull(&mut self) {
         self.name_rus = text_raw(&self.edit.name, "rus");
         self.name_eng = text_raw(&self.edit.name, "eng");
@@ -481,7 +481,7 @@ impl CharactersDoc {
         text_collapse(&mut self.edit.bio);
     }
 
-    /// What the base chain gives this character (`RecomputeInherited`): the base resolved.
+    /// What the base chain gives this character: the base resolved.
     pub(crate) fn recompute_inherited(&mut self) {
         self.inherited = if self.edit.base.is_empty() {
             None
@@ -596,7 +596,7 @@ impl CharactersDoc {
 
     // ---- saving ---------------------------------------------------------------------------------
 
-    /// How the edited character is saved (`SaveEdited`): a new one goes to
+    /// How the edited character is saved: a new one goes to
     /// `characters/<id>.npcasset`, and a file of `characters/` follows the id the author settles
     /// on while nothing has that name yet.
     pub(crate) fn save_plan(&mut self) -> Result<SavePlan, String> {
@@ -657,7 +657,7 @@ impl CharactersDoc {
         }
     }
 
-    /// The unsaved edits go: the character as its file says (`Discard`).
+    /// The unsaved edits go: the character as its file says.
     pub(crate) fn discard_edits(&mut self) {
         let sel = self.sel;
         self.select(sel);
@@ -675,7 +675,7 @@ impl CharactersDoc {
         }
     }
 
-    /// Unsaved edits ask before anything replaces them: Save, Don't Save, or stay (`AskThen`).
+    /// Unsaved edits ask before anything replaces them: Save, Don't Save, or stay.
     pub(crate) fn ask_then(&mut self, then: Then) {
         if !self.dirty {
             self.run_then(then);
@@ -698,7 +698,7 @@ impl CharactersDoc {
         });
     }
 
-    /// A new character, unsaved, heading the list (`NewCharacter`).
+    /// A new character, unsaved, heading the list.
     pub(crate) fn new_character(&mut self) {
         let taken = |id: &str| self.roster.as_ref().is_some_and(|r| r.raw.iter().any(|c| c.id == id));
         let mut id = "new_character".to_owned();
@@ -725,7 +725,7 @@ impl CharactersDoc {
         self.edit_gen += 1;
     }
 
-    /// Names what disappears and asks (`AskDelete`): the file goes for good.
+    /// Names what disappears and asks: the file goes for good.
     fn ask_delete(&mut self, ctx: &egui::Context) {
         if self.edit.file.is_empty() {
             return;

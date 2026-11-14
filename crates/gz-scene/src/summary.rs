@@ -1,12 +1,13 @@
-//! Scene > Summary Info (`SceneSummaryInfo.cpp`): what the scene's tools report of themselves
-//! (`GetSummaryInfo`), the textures and library objects it names with what their files say, as
-//! a property sheet (`SSceneSummary::FillProp`) and as the text file `ExportSummaryInfo` writes.
+//! Scene > Summary Info: what the scene's tools report of themselves,
+//! the textures and library objects it names with what their files say, as
+//! a property sheet and as a text file.
 //!
 //! [`collect`] is pure over a snapshot and the library; [`Summary::prepare`] takes what the files
 //! say (texture descriptions, `.seq` lengths) as a lookup, read by the caller on the IO pool.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use gz_base::{Finding, Findings};
 use gz_fmt_tex::{BumpMode, TextureFlags, TextureParams};
 
 use crate::class::ObjClass;
@@ -15,7 +16,6 @@ use crate::math::{Aabb, Vec3};
 use crate::model::{ObjData, SceneState};
 use crate::objects::{self, LT_POINT, LT_SPOT, light_flags};
 
-/// `ESummaryTextureType`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TexKind {
     Base = 0,
@@ -51,11 +51,11 @@ impl TexKind {
     }
 }
 
-/// `STextureInfo`.
+/// A texture's row of the summary.
 #[derive(Clone, Debug)]
 pub struct TextureInfo {
     pub kind: TexKind,
-    /// `STextureParams` of its description; `None` before `prepare` or when there is none.
+    /// The texture's parameters from its description; `None` before `prepare` or when there is none.
     pub params: Option<TextureParams>,
     /// The frames of its `.seq`, 1 without one.
     pub frames: u32,
@@ -65,7 +65,7 @@ pub struct TextureInfo {
     pub pixel_area: f32,
 }
 
-/// `SObjectInfo`.
+/// An object's row of the summary.
 #[derive(Clone, Debug, Default)]
 pub struct ObjectInfo {
     pub refs: u32,
@@ -73,7 +73,7 @@ pub struct ObjectInfo {
     pub info: Vec<(String, String)>,
 }
 
-/// `SSceneSummary`.
+/// The scene summary.
 #[derive(Clone, Debug, Default)]
 pub struct Summary {
     pub level_name: String,
@@ -127,7 +127,7 @@ fn tri_area(a: Vec3, b: Vec3, c: Vec3) -> f32 {
 }
 
 impl Summary {
-    /// `AppendTexture`.
+    /// Adds a texture.
     fn append_texture(&mut self, name: &str, kind: TexKind, area: f32, pixel_area: f32, object: &str) {
         let t = self.textures.entry(name.to_owned()).or_insert_with(|| TextureInfo {
             kind,
@@ -142,7 +142,7 @@ impl Summary {
         t.pixel_area += pixel_area;
     }
 
-    /// `AppendObject`.
+    /// Adds an object.
     fn append_object(&mut self, name: &str) {
         self.objects.entry(name.to_owned()).or_default().refs += 1;
     }
@@ -157,18 +157,18 @@ impl Summary {
         }
     }
 
-    /// `SSceneSummary::Prepare`: each texture's description (`tex(name)` gives its parameters
+    /// Each texture's description (`tex(name)` gives its parameters
     /// and the frames of its `.seq`; an implicitly lit one moves to Implicit) and each library
     /// object's rows.
     pub fn prepare(
         &mut self,
         lib: &Library,
         tex: &dyn Fn(&str) -> Option<(TextureParams, u32)>,
-    ) -> Vec<String> {
+    ) -> Vec<Finding> {
         let mut log = Vec::new();
         for (name, t) in &mut self.textures {
             if name.is_empty() {
-                log.push("!Empty texture name found.".to_owned());
+                log.warn("A texture has an empty name.");
                 continue;
             }
             match tex(name) {
@@ -179,12 +179,12 @@ impl Summary {
                     t.params = Some(p);
                     t.frames = frames;
                 }
-                None => log.push(format!("!Can't get info from texture: '{name}'")),
+                None => log.warn(format!("The texture '{name}' cannot be read.")),
             }
         }
         for (name, o) in &mut self.objects {
             if name.is_empty() {
-                log.push("!Empty object name found.".to_owned());
+                log.warn("An object has an empty name.");
                 continue;
             }
             let Some(lo) = lib.cached(name) else { continue };
@@ -201,7 +201,7 @@ impl Summary {
         log
     }
 
-    /// `SSceneSummary::FillProp`: the sheet's rows, key and value, in its order.
+    /// The sheet's rows, key and value, in its order.
     #[must_use]
     pub fn rows(&self) -> Vec<(String, String)> {
         let mut r: Vec<(String, String)> = Vec::new();
@@ -300,7 +300,7 @@ impl Summary {
         r
     }
 
-    /// `ExportSummaryInfo`: the text, every line ended by `\r\n` (`IWriter::w_string`).
+    /// The text, every line ended by `\r\n`.
     #[must_use]
     pub fn export(&self) -> String {
         let mut out = String::new();
@@ -344,7 +344,7 @@ impl Summary {
                 let detail = p.flags.intersects(TextureFlags::DIFFUSE_DETAIL | TextureFlags::BUMP_DETAIL)
                     && !p.detail_name.is_empty();
                 let bump = p.bump_mode == BumpMode::USE && !p.bump_name.is_empty();
-                // oracle: without the detail fields the bump mask's %s reads the detail name
+                // without the detail fields the bump mask reads the detail name
                 match (detail, bump) {
                     (true, true) => {
                         s.push_str(&format!(",{},{},{}", p.detail_name, f2(p.detail_scale), p.bump_name))
@@ -389,7 +389,7 @@ fn density(t: &TextureInfo, p: &TextureParams) -> f32 {
     ((t.pixel_area * p.width as f32 * p.height as f32) / t.effective_area).sqrt()
 }
 
-/// `CEditableObject::GetFaceCount()`: two-sided surfaces twice, `materials\occ` left out.
+/// The face count of an object: two-sided surfaces twice, `materials\occ` left out.
 fn face_count(e: &gz_fmt_object::Object) -> i64 {
     let mut n = 0i64;
     for m in &e.meshes {
@@ -419,7 +419,7 @@ fn surf_face_count(e: &gz_fmt_object::Object, surface: usize) -> i64 {
         .sum()
 }
 
-/// `CalculateSurfaceArea` / `CalculateSurfacePixelArea` of one surface over every mesh.
+/// One surface's area and pixel area over every mesh.
 fn surface_areas(e: &gz_fmt_object::Object, surface: usize) -> (f32, f32) {
     let twice = e.surfaces.get(surface).is_some_and(|s| s.two_sided());
     let (mut area, mut pixel) = (0.0f32, 0.0f32);
@@ -446,7 +446,7 @@ fn surface_areas(e: &gz_fmt_object::Object, surface: usize) -> (f32, f32) {
     (area, pixel)
 }
 
-/// `EScene::CollectSummaryInfo`: every tool's `GetSummaryInfo`, in the tools' order.
+/// Every tool's summary rows, in the tools' order.
 #[must_use]
 pub fn collect(state: &SceneState, lib: &Library) -> Summary {
     use gz_fmt_object::ObjectFlags as F;
@@ -456,7 +456,7 @@ pub fn collect(state: &SceneState, lib: &Library) -> Summary {
     classes.sort_by_key(|c| c.id());
     for class in classes {
         if class == ObjClass::DetailObjects {
-            // `EDetailManager::GetSummaryInfo`: the first surface's texture of each object
+            // the first surface's texture of each object
             if let Some(d) = &state.bulk.details {
                 for r in &d.model.indices.objects {
                     let Some(lo) = lib.cached(&r.reference) else { continue };
@@ -556,7 +556,6 @@ pub fn collect(state: &SceneState, lib: &Library) -> Summary {
     s
 }
 
-/// `GetLODTextureName`.
 fn lod_texture_name(lib_name: &str) -> String {
     let name = format!("lod_{}", lib_name.replace('\\', "_"));
     match name.split_once('_') {

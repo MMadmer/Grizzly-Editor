@@ -434,7 +434,7 @@ impl PdaAssets {
 
     // ---- fonts ----------------------------------------------------------------------------
 
-    /// A font of the game and its sheet (`FontOf`); `Missing` without a linked game or when it
+    /// A font of the game and its sheet; `Missing` without a linked game or when it
     /// does not read - the editor's own font stands in then.
     pub fn font(self: &Arc<Self>, editor: &Arc<Editor>, name: &str) -> Look<(Arc<BitmapFont>, Sheet)> {
         let key = if name.is_empty() { "letterica18".to_owned() } else { name.to_owned() };

@@ -1,5 +1,4 @@
-//! LightWave envelopes: keys, their two file forms and the evaluation (`Envelope.cpp`,
-//! `interp.cpp`).
+//! LightWave envelopes: keys, their two file forms and the evaluation.
 
 use gz_chunk::{Reader, Writer};
 
@@ -77,7 +76,7 @@ impl Key {
         }
     }
 
-    /// `st_Key::equal`: everything but the time, within the engine's epsilon.
+    /// Everything but the time, within the engine's epsilon.
     fn equal(&self, o: &Key) -> bool {
         let sim = |a: f32, b: f32| (a - b).abs() < EPS;
         sim(self.value, o.value)
@@ -136,7 +135,7 @@ impl Envelope {
         }
     }
 
-    /// `CEnvelope::Evaluate`: the value at `time`.
+    /// The value at `time`.
     #[must_use]
     pub fn evaluate(&self, mut time: f32) -> f32 {
         let keys = &self.keys;
@@ -198,7 +197,7 @@ impl Envelope {
             }
         }
 
-        // the span that holds the time; the C++ walks off the end when an oscillation leaves
+        // the span that holds the time; the X-Ray SDK walks off the end when an oscillation leaves
         // the key range, this stops at the last span
         let mut k = 0usize;
         while k + 2 < sz && time > keys[k + 1].time {
@@ -254,14 +253,14 @@ impl Envelope {
         }
     }
 
-    /// `RotateKeys`: adds an angle to every value.
+    /// Adds an angle to every value.
     pub fn rotate_keys(&mut self, angle: f32) {
         for k in &mut self.keys {
             k.value += angle;
         }
     }
 
-    /// `GetLength`: the time between the first and the last key.
+    /// The time between the first and the last key.
     #[must_use]
     pub fn length(&self) -> f32 {
         match (self.keys.first(), self.keys.last()) {
@@ -314,7 +313,7 @@ fn bezier(x0: f32, x1: f32, x2: f32, x3: f32, t: f32) -> f32 {
 /// The parameter at which the time curve of a 2D Bezier span passes `time`, by bisection.
 fn bez2_time(x0: f32, x1: f32, x2: f32, x3: f32, time: f32) -> f32 {
     let (mut t0, mut t1) = (0.0f32, 1.0f32);
-    // the C++ recurses until it is within tolerance; a float interval is exhausted long
+    // the X-Ray SDK recurses until it is within tolerance; a float interval is exhausted long
     // before this many halvings
     for _ in 0..64 {
         let t = t0 + (t1 - t0) * 0.5;

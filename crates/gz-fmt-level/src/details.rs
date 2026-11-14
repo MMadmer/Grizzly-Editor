@@ -410,8 +410,7 @@ impl LevelDetails {
     }
 }
 
-/// An object of the tool: a reference to a library object and how it is scattered
-/// (`EDetail::Save`).
+/// An object of the tool: a reference to a library object and how it is scattered.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DetailObjectRef {
     /// The library object, `trees\grass\grass_01`.
@@ -545,7 +544,7 @@ impl DetailColorIndices {
     }
 }
 
-/// Flags of the tool (`EDetailManager::fl*`).
+/// Flags of the tool.
 pub mod tool_flags {
     pub const BASE_TEXTURE_DRAW: u32 = 1 << 31;
     pub const BASE_TEXTURE_BLENDED: u32 = 1 << 30;
@@ -585,7 +584,7 @@ impl Default for SceneDetails {
 }
 
 impl SceneDetails {
-    /// Reads the tool's chunk of a scene (`LoadStream`).
+    /// Reads the tool's chunk of a scene.
     pub fn read(bytes: &[u8]) -> Result<Self> {
         let r = Reader::new(bytes);
         let version = r.need_chunk(CHUNK_VERSION)?.reader().r_u32()?;
@@ -632,8 +631,8 @@ impl SceneDetails {
         Ok(out)
     }
 
-    /// The tool's chunk of a scene (`SaveStream`). The slot count written is the header's
-    /// `size_x * size_z`, as in the C++; the slots themselves are written as they are.
+    /// The tool's chunk of a scene. The slot count written is the header's
+    /// `size_x * size_z`, as the X-Ray SDK writes it; the slots themselves are written as they are.
     #[must_use]
     pub fn write(&self) -> Vec<u8> {
         let mut w = Writer::with_capacity(256 + self.slots.len() * SLOT);

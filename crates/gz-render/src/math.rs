@@ -60,7 +60,7 @@ impl Aabb {
         self.max - self.min
     }
 
-    /// `Fbox::getsphere`: the centre and the half diagonal.
+    /// The centre and the half diagonal.
     #[must_use]
     pub fn sphere(&self) -> (Vec3, f32) {
         if self.is_empty() {

@@ -1,9 +1,7 @@
 //! The Mod Settings form as data: what the tab shows of `mod.ltx`, its checks and what an edit
 //! sends. Pure - no egui, no editor.
 //!
-//! The C++ specification is `EditorModManifest.cpp` from `SSettingsForm` to `SaveSettings`
-//! (`FormFromManifest`, `SyncSettingsForm`, `SettingsKind`, `CheckSettings`, `CheckRelations`,
-//! `CheckCommands`, `PageTone`). The tab saves as it is edited: a form that differs from what
+//! The tab saves as it is edited: a form that differs from what
 //! it was loaded from, holds no problem that blocks and has no field being typed in, is sent as
 //! the commands [`plan`] makes of it.
 
@@ -32,7 +30,7 @@ pub const CONTENTS: usize = 4;
 pub const PDA: usize = 5;
 pub const COMMANDS: usize = 6;
 
-/// The pages in the nav's order (`kSettingsPages`).
+/// The pages in the nav's order.
 pub const PAGES: [PageInfo; 7] = [
     PageInfo {
         id: "general",
@@ -77,7 +75,7 @@ pub fn page_index(id: &str) -> Option<usize> {
     PAGES.iter().position(|p| p.id == id)
 }
 
-/// The room the C++ form gave the description (one byte for the terminator).
+/// The room the form gives the description (one byte for the terminator).
 const DESCRIPTION_ROOM: usize = 4096;
 
 /// What the tab shows of `mod.ltx`.
@@ -121,7 +119,7 @@ fn cut_to(text: &str, room: usize) -> String {
 }
 
 impl Form {
-    /// The form over a manifest (`FormFromManifest`).
+    /// The form over a manifest.
     #[must_use]
     pub fn of(m: &Manifest) -> Self {
         let first = m.provides_modes.first();
@@ -150,7 +148,7 @@ impl Form {
     }
 
     /// `mod.ltx` changed: every field the author has not touched (still what `base` says)
-    /// follows `fresh` (`SyncSettingsForm`). The command list is one field.
+    /// follows `fresh`. The command list is one field.
     pub fn follow(&mut self, base: &Form, fresh: &Form) {
         macro_rules! follow {
             ($($f:ident),*) => {
@@ -189,7 +187,7 @@ impl Form {
         self.exclude.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect()
     }
 
-    /// Which game the module targets (`SettingsKind`); `None` while it was never chosen.
+    /// Which game the module targets; `None` while it was never chosen.
     #[must_use]
     pub fn kind(&self) -> Option<Kind> {
         let t = self.target.as_str();
@@ -211,7 +209,7 @@ impl Form {
         }
     }
 
-    /// Picks a kind (`SetSettingsKind`): the fields of the others go. `first_mode` is the first
+    /// Picks a kind: the fields of the others go. `first_mode` is the first
     /// mode of the linked game, which an Existing Mode starts on.
     pub fn set_kind(&mut self, kind: Kind, first_mode: Option<&str>) {
         match kind {
@@ -246,7 +244,7 @@ impl Form {
     }
 
     /// Ticks or unticks a tag; the tags stay in the vocabulary's order, and a hand-written word
-    /// the game ignores goes (`TagsRow`).
+    /// the game ignores goes.
     pub fn set_tag(&mut self, vocabulary: &[&str], tag: &str, on: bool) {
         let kept: Vec<String> = vocabulary
             .iter()
@@ -334,7 +332,7 @@ fn problem(page: usize, field: &str, tone: Tone, blocks: bool, text: impl Into<S
 }
 
 /// The id of a relation line: a `[requires]` line may carry a value after `=`, which the game
-/// does not read; the id is what it compares, in lower case (`RelationId`).
+/// does not read; the id is what it compares, in lower case.
 #[must_use]
 pub fn relation_id(line: &str) -> String {
     line.split('=').next().unwrap_or("").trim().to_ascii_lowercase()
@@ -371,7 +369,7 @@ fn check_relations(f: &Form, out: &mut Vec<Problem>) {
     }
 }
 
-/// The game's own short words a module could pick: refused (`StockCommandWord`; kept in step
+/// The game's own short words a module could pick: refused (kept in step
 /// with `gz_mod::commands`).
 fn stock_command_word(name: &str) -> bool {
     const WORDS: [&str; 23] = [
@@ -402,7 +400,7 @@ fn stock_command_word(name: &str) -> bool {
     WORDS.contains(&name)
 }
 
-/// The game's own command families: a warning (`StockCommandFamily`).
+/// The game's own command families: a warning.
 fn stock_command_family(name: &str) -> Option<&'static str> {
     const FAMILIES: [&str; 32] = [
         "xms_", "r_", "r1_", "r2_", "r3_", "r4_", "r__", "rs_", "g_", "sv_", "cl_", "net_", "dbg_", "debug_",
@@ -506,7 +504,7 @@ pub fn same_path(a: &str, b: &str) -> bool {
     a.replace('/', "\\").eq_ignore_ascii_case(&b.replace('/', "\\"))
 }
 
-/// The problems of the form, in the C++ order (`CheckSettings`).
+/// The problems of the form, in a fixed order.
 #[must_use]
 pub fn check(f: &Form, aux: &Aux) -> Vec<Problem> {
     let mut out = Vec::new();
@@ -626,7 +624,7 @@ pub fn blocking(problems: &[Problem]) -> (Option<&Problem>, usize) {
     (first, first.map_or(0, |_| 1 + it.count()))
 }
 
-/// The worst tone of a page's problems: the dot beside it in the nav (`PageTone`).
+/// The worst tone of a page's problems: the dot beside it in the nav.
 #[must_use]
 pub fn page_tone(problems: &[Problem], page: usize) -> Option<Tone> {
     let rank = |t: Tone| match t {
@@ -789,7 +787,7 @@ fn page_end(p: &[u8]) -> bool {
     matches!(p.first(), None | Some(b'?' | b'#'))
 }
 
-/// Whether `url` is the module's own page on AP-PRO or ModDB (`EditorCatalog::WebsiteIsModulePage`;
+/// Whether `url` is the module's own page on AP-PRO or ModDB (
 /// the same rule as the Mod Browser area's, kept here so the form needs no catalog).
 #[must_use]
 pub fn website_is_module_page(url: &str) -> bool {

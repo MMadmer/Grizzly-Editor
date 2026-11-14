@@ -103,7 +103,7 @@ pub const KIT_DIALOGS: [&str; 28] = [
 /// The Task Center's card.
 pub const TASK_CARD: &str = "Tasks###tasks_card";
 
-/// The Command Palette: the modal's id (`screenshot_editor` `modal.id`).
+/// The Command Palette: the modal's id (`shot.window` `modal.id`).
 pub const PALETTE_ID: &str = "grizzly_command_palette";
 /// Its window.
 pub const PALETTE_WINDOW: &str = "Command Palette###grizzly_command_palette";

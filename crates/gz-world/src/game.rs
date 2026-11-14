@@ -22,7 +22,7 @@ pub struct GameTransition {
     pub position: [f32; 3],
 }
 
-/// What was read out of the linked game (`EditorWorld`'s `SGame`).
+/// What was read out of the linked game.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GameWorld {
     /// The file read; the lists are empty otherwise and `error` says why.
@@ -43,19 +43,19 @@ impl GameWorld {
         Self { error: error.into(), ..Self::default() }
     }
 
-    /// The level exists, any case (`LevelExists`).
+    /// The level exists, any case.
     #[must_use]
     pub fn level_exists(&self, name: &str) -> bool {
         self.levels.iter().any(|l| l.eq_ignore_ascii_case(name))
     }
 
-    /// A transition by its object name (`FindTransition`).
+    /// A transition by its object name.
     #[must_use]
     pub fn transition(&self, name: &str) -> Option<&GameTransition> {
         self.transitions.iter().find(|t| t.name == name)
     }
 
-    /// The game has a patrol path of this name (`GamePatrolExists`).
+    /// The game has a patrol path of this name.
     #[must_use]
     pub fn patrol_exists(&self, name: &str) -> bool {
         self.patrols.binary_search_by(|p| p.as_str().cmp(name)).is_ok()
@@ -86,7 +86,7 @@ impl Settings for LtxSettings<'_> {
 }
 
 /// A section the linked game spawns as a level changer: class `LVL_CHNG`, or - without the
-/// configs - a name that says so (`IsLevelChangerSection`).
+/// configs - a name that says so.
 pub(crate) fn is_level_changer(section: &str, ltx: Option<&Ltx>) -> bool {
     let s = section.to_ascii_lowercase();
     match ltx {
@@ -97,8 +97,8 @@ pub(crate) fn is_level_changer(section: &str, ltx: Option<&Ltx>) -> bool {
     }
 }
 
-/// Where a level changer leads, walked the way the C++ reader did (`ReadSpawnPacket`): the
-/// header `CSE_Abstract::Spawn_Read` reads, then the state chain object -> shape -> restrictor
+/// Where a level changer leads, walked the way the engine reads it: the
+/// header of a spawn packet, then the state chain object -> shape -> restrictor
 /// -> changer. What a packet the entity table cannot decode still says.
 pub(crate) fn walk_destination(packet: &[u8]) -> Option<String> {
     let mut s = Reader::new(packet);
@@ -137,7 +137,7 @@ pub(crate) fn walk_destination(packet: &[u8]) -> Option<String> {
     Some(gz_base::text::cp1251_to_utf8(s.r_stringz_raw().ok()?).into_owned())
 }
 
-/// Where a level changer leads: the entity's own reading, the C++ walk when the entity table
+/// Where a level changer leads: the entity's own reading, the walk when the entity table
 /// keeps it opaque.
 fn destination(packet: &[u8], settings: Option<&LtxSettings<'_>>) -> Option<String> {
     if let Some(st) = settings

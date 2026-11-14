@@ -1,4 +1,4 @@
-//! `senvironment.xr`: the sound environments (EAX presets). `SoundRender_Environment.cpp`.
+//! `senvironment.xr`: the sound environments (EAX presets).
 
 use gz_chunk::{Reader, Writer};
 use smol_str::SmolStr;
@@ -8,7 +8,7 @@ use crate::{Encoding, Result, Text, numbered, w_str};
 /// `sdef_env_version`.
 pub const SENV_VERSION: u32 = 4;
 
-/// `CSoundRender_Environment`.
+/// A sound environment.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SoundEnvironment {
     /// The version it was read with; it is written as version 4.
@@ -37,7 +37,7 @@ pub struct SoundEnvironments {
 }
 
 impl SoundEnvironments {
-    /// `SoundEnvironment_LIB::Load`: an environment older than version 3 is skipped.
+    /// An environment older than version 3 is skipped.
     pub fn read(bytes: &[u8]) -> Result<Self> {
         let r = Reader::new(bytes);
         let mut text = Text::default();
@@ -75,7 +75,7 @@ impl SoundEnvironments {
         Ok(Self { environments, encoding: text.encoding() })
     }
 
-    /// `SoundEnvironment_LIB::Save`.
+    /// Saves the sound environment library.
     #[must_use]
     pub fn write(&self) -> Vec<u8> {
         let mut w = Writer::new();

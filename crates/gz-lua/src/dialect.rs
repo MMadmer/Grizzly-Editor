@@ -1,6 +1,6 @@
 //! The editor's LuaJIT dialect in the vendored LuaJIT.
 //!
-//! The C++ editor's LuaJIT is a fork that also reads `//` line comments and `/* */` block
+//! The game's LuaJIT is a fork that also reads `//` line comments and `/* */` block
 //! comments (`gz_luadata` ports its lexer). The vendored LuaJIT reads neither, so a text the
 //! editor accepts is rewritten before it is compiled here: each such comment becomes one space.
 //! The fork counts no line inside `/* */`, so the line breaks of a block comment go with it and

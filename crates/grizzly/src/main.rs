@@ -235,7 +235,7 @@ fn build_registry() -> Registry {
     let mut registry = Registry::new();
     core_cmds::register(&mut registry);
     // the frame's commands, also headless (they answer "no window" there); an area that owns one
-    // of them (ui_panel) registers after this and keeps its own
+    // of them (ui.panel) registers after this and keeps its own
     gz_app::register(&mut registry);
     gz_project::register(&mut registry);
     gz_game::register(&mut registry);
@@ -246,7 +246,7 @@ fn build_registry() -> Registry {
     gz_release::register(&mut registry);
     gz_publish::register(&mut registry);
     gz_update::register(&mut registry);
-    // after gz-release: the real mod_catalog replaces its key-only stand-in
+    // after gz-release: the real release.catalog replaces its key-only stand-in
     gz_catalog::register(&mut registry);
     gz_screens::register(&mut registry);
     gz_world::register(&mut registry);
@@ -258,7 +258,7 @@ fn build_registry() -> Registry {
     gz_ui_previews::register(&mut registry);
     gz_ui_pda::register(&mut registry);
     gz_ui_release::register(&mut registry);
-    // after gz-scene: it wraps property_inspector with the panels' side
+    // after gz-scene: it wraps scene.get with the panels' side
     gz_ui_level::register(&mut registry);
     gz_ui_viewport::register(&mut registry);
     gz_ui_graph::register(&mut registry);
@@ -332,7 +332,7 @@ mod tests {
         let mut wrong = Vec::new();
         for c in registry.commands() {
             assert!(seen.insert(c.name), "{} is registered twice", c.name);
-            let Some(spec) = &c.spec else { continue };
+            let spec = &c.spec;
             let name = spec.name;
             let well_named = name.split('.').count() <= 2
                 && name.split('.').all(|part| {

@@ -78,7 +78,7 @@ fn child(rel: &str, name: &str) -> String {
 
 /// Lists one folder. `None` when it cannot be listed (gone, no access). Hidden entries are
 /// skipped as the engine skips them (`_A_HIDDEN`), and tooling with `skip_tooling` (a module, as
-/// XMS skips it; the game's own `gamedata` lists it, as the C++ editor's DARF content did).
+/// XMS skips it; the game's own `gamedata` lists it).
 pub(crate) fn scan(base: &Path, rel: &str, skip_tooling: bool) -> Option<DirRec> {
     let dir = dir_path(base, rel);
     // the stamp is taken BEFORE the listing: a change while listing makes the record stale

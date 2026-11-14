@@ -17,7 +17,7 @@ pub enum Projection {
 }
 
 impl Default for Projection {
-    /// The editor's camera: 60 degrees, 0.2 m to 1500 m (`fFOV`, `m_Znear`, `m_Zfar`).
+    /// The editor's camera: 60 degrees, 0.2 m to 1500 m (field of view, near and far plane).
     fn default() -> Self {
         Self::Perspective { fov_y: 60f32.to_radians(), near: 0.2, far: 1500.0 }
     }
@@ -218,7 +218,7 @@ pub fn project(view_proj: &Mat4, size: [u32; 2], point: Vec3) -> Option<Vec3> {
 }
 
 /// The camera moved back along its own forward axis until `bounds` fills the picture
-/// (`CUI_Camera::ZoomExtents`, fitted against both fields of view). An orthographic camera also
+/// (fitted against both fields of view). An orthographic camera also
 /// gets the height that holds the box.
 #[must_use]
 pub fn frame_fit(camera: &Camera, bounds: &Aabb, size: [u32; 2]) -> Camera {

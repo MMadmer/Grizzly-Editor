@@ -1,5 +1,5 @@
 //! What the scene takes from the linked game: the configs spawn entities are made and decoded
-//! with (`pSettings`), and the Spawn tool's list. The one place this crate meets `gz-game`.
+//! with, and the Spawn tool's list. The one place this crate meets `gz-game`.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -10,7 +10,7 @@ use gz_game::{Bundled, GameLink, SpawnSection};
 use gz_ltx::Ltx;
 use gz_vfs::GameFiles;
 
-/// `pSettings` over the linked game's `system.ltx` tree (or the editor's own copy).
+/// The game's settings over the linked game's `system.ltx` tree (or the editor's own copy).
 pub struct GameSettings {
     ltx: Arc<Ltx>,
     files: Option<Arc<GameFiles>>,
@@ -41,7 +41,7 @@ impl GameSettings {
     }
 
     /// The Details sheet's lists that come from the configs: the story ids, and the graph
-    /// points' locations of `game.ltx` (`SFillPropData::load`). Blocking: reads `game.ltx`.
+    /// points' locations of `game.ltx`. Blocking: reads `game.ltx`.
     #[must_use]
     pub fn prop_context(&self) -> gz_entities::PropContext {
         let game = self.game_ltx();
@@ -62,7 +62,7 @@ impl GameSettings {
             .with_locations([lines(0), lines(1), lines(2), lines(3)])
     }
 
-    /// `$game_config$\game.ltx` and what it includes, as the editor's `CInifile` reads it.
+    /// `$game_config$\game.ltx` and what it includes.
     fn game_ltx(&self) -> Option<Ltx> {
         use gz_ltx::tree::{Dialect, ParsedFile, include_path, parse_file};
         let mut files: rustc_hash::FxHashMap<String, ParsedFile> = rustc_hash::FxHashMap::default();

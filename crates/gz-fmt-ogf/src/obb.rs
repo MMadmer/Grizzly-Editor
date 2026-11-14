@@ -1,13 +1,12 @@
-//! The oriented boxes the exporters fit: `ComputeOBB_WML` (Wild Magic's `MinBox3`, a Powell
-//! minimisation of the box volume over three angles: `WmlContMinBox3.cpp`, `WmlMinimizeN.cpp`,
-//! `WmlMinimize1.cpp`, `Matrix3::FromAxisAngle`) for bones, and `ComputeOBB_RAPID` (RAPID's
-//! moment box: `RAPIDMinBox.cpp` over `Fmatrix33::Meigen`) for the parts of a breakable object.
+//! The oriented boxes the exporters fit: Wild Magic's minimal box (a Powell
+//! minimisation of the box volume over three angles) for bones, and RAPID's
+//! moment box (over an eigen decomposition) for the parts of a breakable object.
 //!
-//! Float for float: `f32` where the C++ has `float`, `Math<float>::Cos` / `Sin` / `Sqrt` as
-//! the double functions rounded to float, the C++ order of every operation. Where the C++ reads
+//! Float for float: `f32` where the X-Ray SDK has `float`, cosine, sine and square root as
+//! the double functions rounded to float, the X-Ray SDK's order of every operation. Where the X-Ray SDK reads
 //! memory it never wrote, this writes a value of its own (said at each place).
 
-// the loops index as the C++ does, several arrays at once
+// the loops index several arrays at once
 #![allow(clippy::needless_range_loop)]
 
 use glam::Vec3;
@@ -20,7 +19,7 @@ const PI: f32 = std::f64::consts::PI as f32;
 const HALF_PI: f32 = 0.5 * PI;
 const MAX_REAL: f32 = f32::MAX;
 
-/// `Math<float>::Cos` / `Sin` / `Sqrt`: the double function, rounded to float.
+/// The double function, rounded to float.
 fn wcos(v: f32) -> f32 {
     f64::from(v).cos() as f32
 }
@@ -36,7 +35,7 @@ fn wsqrt(v: f32) -> f32 {
 /// `Matrix3<float>`, row major (`m_afEntry`).
 type M3 = [f32; 9];
 
-/// `Matrix3::FromAxisAngle`.
+/// The rotation matrix of an axis and an angle.
 fn from_axis_angle(axis: [f32; 3], angle: f32) -> M3 {
     let cs = wcos(angle);
     let sn = wsin(angle);
@@ -90,7 +89,7 @@ fn mat_mul_vec(m: &M3, v: [f32; 3]) -> [f32; 3] {
     out
 }
 
-/// The rotation of three angles (`Volume` / `MinimalBoxForAngles`).
+/// The rotation of three angles.
 fn rotation(angle: &[f32; 3]) -> M3 {
     let cos0 = wcos(angle[0]);
     let sin0 = wsin(angle[0]);
@@ -99,7 +98,7 @@ fn rotation(angle: &[f32; 3]) -> M3 {
     from_axis_angle([cos0 * sin1, sin0 * sin1, cos1], angle[2])
 }
 
-/// The extremes of the points in the rotated frame; the `else if` is the C++'s.
+/// The extremes of the points in the rotated frame; the `else if` is kept as in the X-Ray SDK.
 fn extremes(points: &[Vec3], rot: &M3) -> ([f32; 3], [f32; 3]) {
     let first = points.first().copied().unwrap_or(Vec3::ZERO);
     let mut lo = vec_mul_mat(first, rot);
@@ -117,7 +116,7 @@ fn extremes(points: &[Vec3], rot: &M3) -> ([f32; 3], [f32; 3]) {
     (lo, hi)
 }
 
-/// `MinBox3::Volume`.
+/// The volume of a box.
 fn volume(points: &[Vec3], angle: &[f32; 3]) -> f32 {
     let (lo, hi) = extremes(points, &rotation(angle));
     (hi[0] - lo[0]) * (hi[1] - lo[1]) * (hi[2] - lo[2])
@@ -130,7 +129,7 @@ struct Box3 {
     extent: [f32; 3],
 }
 
-/// `MinBox3::MinimalBoxForAngles`.
+/// The minimal box for three angles.
 fn box_for_angles(points: &[Vec3], angle: &[f32; 3]) -> Box3 {
     let rot = rotation(angle);
     let (lo, hi) = extremes(points, &rot);
@@ -263,7 +262,7 @@ impl Minimize1 {
         }
     }
 
-    /// `GetBracketedMinimum`: parabolic steps inside a bracket.
+    /// Parabolic steps inside a bracket.
     #[allow(clippy::too_many_arguments)]
     fn bracketed(
         &mut self,
@@ -316,7 +315,7 @@ impl Minimize1 {
                     f1 = fv;
                 }
             } else {
-                // oracle: the C++ searches both halves and then goes on with the same bracket
+                // the search covers both halves and then goes on with the same bracket
                 self.search2(f, t0, f0, tm, fm, level);
                 self.search2(f, tm, fm, t1, f1, level);
             }
@@ -324,9 +323,9 @@ impl Minimize1 {
     }
 }
 
-/// `MinimizeN<float>` in three dimensions: Powell's direction set over `Minimize1`.
+/// Powell's direction set over a one-dimensional minimisation, in three dimensions.
 ///
-/// The directions are pointers into one storage in the C++, and the cycling at the end of a
+/// The directions are pointers into one storage in the X-Ray SDK, and the cycling at the end of a
 /// pass moves the pointers without refreshing the last one: from the second pass on a
 /// direction is used twice and an older conjugate one is lost. `slot` / `conj` keep that.
 fn minimize_n(
@@ -425,7 +424,7 @@ fn min_box3(points: &[Vec3]) -> Box3 {
     let a1 = [PI, HALF_PI, PI];
     let vol = |a: &[f32; 3]| volume(points, a);
     let mut min_volume = MAX_REAL;
-    // oracle: the C++ leaves the start uninitialised when no sample is below FLT_MAX
+    // the start is uninitialised in the X-Ray SDK when no sample is below FLT_MAX
     let mut initial = [0.0f32; 3];
     const STEPS: i32 = 3;
     let inv_max = 1.0f32 / STEPS as f32;
@@ -458,25 +457,25 @@ fn v3(a: [f32; 3]) -> Vec3 {
     Vec3::new(a[0], a[1], a[2])
 }
 
-/// `ComputeOBB_WML`: the minimal box of the points; `Fobb::invalidate` for fewer than three.
+/// The minimal box of the points; an invalid box for fewer than three.
 #[must_use]
 pub fn min_box(points: &[Vec3]) -> Obb {
     if points.len() < 3 {
         return Obb::INVALID;
     }
     let b = min_box3(points);
-    // oracle: a box whose volume is not below FLT_MAX leaves the C++ Fobb as it was declared
+    // a box whose volume is not below FLT_MAX stays as it was declared in the X-Ray SDK
     // (uninitialised); its own box stands in here
     let mut obb = Obb { rotate: b.axis.map(v3), translate: v3(b.center), halfsize: v3(b.extent) };
     orthogonalise(&mut obb);
     obb
 }
 
-/// `Fmatrix33`, `m[row][col]`; the rows are the axes `i`, `j`, `k`.
+/// A 3x3 matrix, `m[row][col]`; the rows are the axes `i`, `j`, `k`.
 type F33 = [[f32; 3]; 3];
 
-/// `Fmatrix33::Meigen`: the Jacobi rotations, the eigenvalues and the eigenvectors as columns.
-// oracle: after 50 sweeps without convergence the C++ returns without writing the vectors (the
+/// The Jacobi rotations, the eigenvalues and the eigenvectors as columns.
+// after 50 sweeps without convergence the X-Ray SDK returns without writing the vectors (the
 // box keeps what its memory held); the vectors reached stand in here
 fn meigen(mut a: F33) -> (F33, [f32; 3]) {
     let mut v: F33 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
@@ -489,7 +488,7 @@ fn meigen(mut a: F33) -> (F33, [f32; 3]) {
         m[i][j] = g - s * (h + g * tau);
         m[k][l] = h + s * (g - h * tau);
     }
-    // (p, q) pairs in the order of the C++ blocks, with the rotations each applies
+    // (p, q) pairs in the order of the X-Ray SDK's blocks, with the rotations each applies
     struct Block {
         p: usize,
         q: usize,
@@ -606,8 +605,8 @@ fn compute_moment(p: Vec3, q: Vec3, r: Vec3) -> Moment {
     Moment { area, m, s }
 }
 
-/// `ComputeOBB_RAPID`: the box along the covariance of the triangles `points` holds three by
-/// three; `Fobb::invalidate` for none.
+/// The box along the covariance of the triangles `points` holds three by
+/// three; an invalid box for none.
 #[must_use]
 pub fn rapid_box(points: &[Vec3]) -> Obb {
     let tris = points.len() / 3;
@@ -725,7 +724,7 @@ mod tests {
     }
 
     #[test]
-    fn the_grid_start_and_the_volume_are_the_cpp_ones() {
+    fn the_grid_start_gives_a_unit_cube_its_volume() {
         // the eight corners of a unit cube: the first grid sample (0, 0, 0) is the identity
         // rotation of axis (0, 0, 1) and already gives volume 1; nothing beats it
         let pts: Vec<Vec3> =

@@ -1,6 +1,6 @@
-//! The lights of a build: `R_Light`, the three sets of `base_lighting` (static, hemisphere,
-//! sun), the selection of a sphere's lights, the conversion from `build.prj` (`CBuild::Load`,
-//! "Loading lights") and `build.lights`, which the detail compiler reads.
+//! The lights of a build: the three sets of the base lighting (static, hemisphere,
+//! sun), the selection of a sphere's lights, the conversion from `build.prj`
+//! and `build.lights`, which the detail compiler reads.
 
 use glam::Vec3;
 use gz_chunk::{Reader, Writer};
@@ -22,10 +22,10 @@ pub const LT_SECONDARY: u16 = 2;
 /// `D3DLIGHT_DIRECTIONAL`.
 const D3DLIGHT_DIRECTIONAL: u32 = 3;
 
-/// The size of an `R_Light` record in `build.lights`.
+/// The size of a light record in `build.lights`.
 pub const R_LIGHT_SIZE: usize = 104;
 
-/// `R_Light`. The C++ also keeps the triangle that last shadowed it here; the compiler keeps
+/// A light. X-Ray's compiler also keeps the triangle that last shadowed it here; the compiler keeps
 /// that per worker ([`crate::ray::LightCache`]), so a light set is shared, never written.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RLight {
@@ -46,7 +46,7 @@ pub struct RLight {
 }
 
 impl RLight {
-    /// The light of a `Flight` (`CBuild::Load`): its colour split into a direction of colour and
+    /// The light of a `Flight`: its colour split into a direction of colour and
     /// an energy, the range stretched by a tenth.
     #[must_use]
     pub fn from_flight(l: &gz_fmt_level::Light) -> Self {
@@ -158,7 +158,7 @@ impl LightSet {
 
     /// The lights of `build.prj`: every static light goes to its controller's layer, and the
     /// layers named `$hemi`, `$sun` and `$static` become the three sets. A build without a
-    /// hemisphere or a sun is refused, as the C++ asserts.
+    /// hemisphere or a sun is refused.
     pub fn from_project(controls: &[LightControl], statics: &[BuildLight]) -> Result<Self> {
         let mut layers: Vec<Vec<RLight>> = vec![Vec::new(); controls.len()];
         for l in statics {
@@ -193,7 +193,7 @@ impl LightSet {
         Ok(set)
     }
 
-    /// `build.lights` (`CBuild::Run`, "Saving lights"): chunks 0, 1 and 2 hold the static, the
+    /// `build.lights`: chunks 0, 1 and 2 hold the static, the
     /// hemisphere and the sun lights.
     #[must_use]
     pub fn write_build_lights(&self) -> Vec<u8> {
@@ -204,7 +204,7 @@ impl LightSet {
         w.into_bytes()
     }
 
-    /// Reads `build.lights` (`global_claculation_data::xrLoad`, "Lights").
+    /// Reads `build.lights`.
     pub fn read_build_lights(bytes: &[u8]) -> Result<Self> {
         let file = Reader::new(bytes);
         let mut out = LightSet::default();

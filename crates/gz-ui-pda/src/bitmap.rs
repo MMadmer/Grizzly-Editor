@@ -1,11 +1,10 @@
-//! The game's bitmap fonts as the preview draws them (`EditorPdaPreview.cpp`, `FontOf`,
-//! `LayoutText`): a font names a section of `configs\fonts.ltx`, whose `texture` names a glyph
+//! The game's bitmap fonts as the preview draws them: a font names a section of `configs\fonts.ltx`, whose `texture` names a glyph
 //! sheet and its `.ini` of `[symbol_coords]`; text is cp1251 and every byte is one glyph, so a
 //! text is exactly as wide here as in the game. Pure functions.
 
 use crate::gamefile::{LtxSection, comma_floats, ltx_value, trim};
 
-/// The `fonts.ltx` section a layout's font name means (`FontSection`); the default font is
+/// The `fonts.ltx` section a layout's font name means; the default font is
 /// `letterica18`.
 #[must_use]
 pub fn font_section(name: &str) -> &'static str {
@@ -89,7 +88,7 @@ impl Line {
     }
 }
 
-/// The lines a label shows in `max_w` glyph pixels (`LayoutText`): every paragraph (`\n`) one
+/// The lines a label shows in `max_w` glyph pixels: every paragraph (`\n`) one
 /// line cut with `...`, or with `wrap` its words wrapped - a word wider than the line breaks
 /// where it must.
 #[must_use]

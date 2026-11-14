@@ -20,7 +20,7 @@ use crate::crypto::EcKey;
 use crate::keyfile::{self, KEY_FILE_LIMIT};
 use crate::signed::sign_text;
 
-/// What the key looks like now: the `key` object of `mod_catalog`.
+/// What the key looks like now: the `key` object of `release.catalog`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct KeyState {
     pub exists: bool,
@@ -174,7 +174,7 @@ impl AuthorKeys {
         state
     }
 
-    /// A new key in a new file, and the path remembered (`CreateKey`). Never overwrites a file;
+    /// A new key in a new file, and the path remembered. Never overwrites a file;
     /// never inside the open project (`project_root`).
     pub fn create(
         &self,
@@ -200,12 +200,12 @@ impl AuthorKeys {
     }
 
     /// Another copy of the key - from another computer, a stick - is the one used from now on
-    /// (`UseKeyFile`). An unprotected one opens at once; a protected one waits for [`Self::unlock`].
+    /// . An unprotected one opens at once; a protected one waits for [`Self::unlock`].
     pub fn use_file(&self, path: &str, project_root: Option<&Path>) -> Result<(), String> {
         let Some(text) = read_limited(path, KEY_FILE_LIMIT) else { return Err(format!("can't read {path}")) };
         inside_project(path, project_root)?;
         let file = keyfile::parse(&text)?;
-        // oracle: the path is remembered before an unprotected file proves it opens
+        // the path is remembered before an unprotected file proves it opens
         self.remember_key_path(path);
         if !file.protected {
             let key = file.open("")?;
@@ -215,7 +215,7 @@ impl AuthorKeys {
         Ok(())
     }
 
-    /// The password of a protected key file (`Unlock`); the key stays open until the editor
+    /// The password of a protected key file; the key stays open until the editor
     /// closes.
     pub fn unlock(&self, password: &str) -> Result<(), String> {
         let path = self.current_key_path();

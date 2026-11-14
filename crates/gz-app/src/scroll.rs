@@ -1,4 +1,4 @@
-//! `ui_scroll` for surfaces the shell does not draw itself: a panel, a drawer's body, a dialog.
+//! `ui.scroll` for surfaces the shell does not draw itself: a panel, a drawer's body, a dialog.
 //!
 //! A surface that scrolls reports where it stands each frame with [`report_scroll`] and takes a
 //! request with [`take_scroll`] before it draws its scroll area. Both go through the context's
@@ -7,7 +7,7 @@
 use egui::{Context, Id};
 use rustc_hash::FxHashMap;
 
-/// Where `ui_scroll` asks a surface to go.
+/// Where `ui.scroll` asks a surface to go.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ScrollTo {
     Top,

@@ -1,4 +1,4 @@
-//! `NET_Packet`: the byte stream server entities are written to and read from.
+//! The byte stream server entities are written to and read from.
 //!
 //! A packet has two faces. The binary one is what the game reads. The second one exists only
 //! in the editor's LTX scenes: every typed write is mirrored into numbered keys of an ini
@@ -12,7 +12,7 @@ use smol_str::SmolStr;
 pub const M_UPDATE: u16 = 0;
 /// `M_SPAWN`: the type word of a spawn packet.
 pub const M_SPAWN: u16 = 1;
-/// `NET_PacketSizeLimit`: the engine's packet buffer. A longer packet cannot be loaded by it.
+/// The engine's packet buffer. A longer packet cannot be loaded by it.
 pub const NET_PACKET_SIZE_LIMIT: usize = 16 * 1024;
 
 const PI_MUL_2: f32 = 6.283_185_5;
@@ -32,7 +32,7 @@ pub enum PacketError {
 
 pub type PacketResult<T> = Result<T, PacketError>;
 
-/// How text is put into bytes. The game reads cp1251; the C++ editor writes the bytes its
+/// How text is put into bytes. The game reads cp1251; the X-Ray SDK's editor writes the bytes its
 /// UTF-8 process holds. A packet that was read keeps the encoding it came with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TextEncoding {
@@ -77,7 +77,7 @@ impl<S: AsRef<str>> IniSource for Vec<S> {
     }
 }
 
-/// One mirrored write of the ini face, typed as the engine's `IIniFileStream` types it.
+/// One mirrored write of the ini face, typed as the engine types it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum IniValue {
     U8(u8),
@@ -97,19 +97,19 @@ pub enum IniValue {
 }
 
 impl IniValue {
-    /// The key of the `index`-th value (from 1), as `SIniFileStream::gen_name` makes it.
+    /// The key of the `index`-th value (from 1), as the engine's ini stream names it.
     #[must_use]
     pub fn key(index: u32) -> String {
         format!("{index:06}")
     }
 
-    /// The text `CInifile::w_*` writes for this value.
+    /// The text the ini writer writes for this value.
     #[must_use]
     pub fn to_ltx(&self) -> String {
         match self {
             Self::U8(v) => v.to_string(),
             Self::U16(v) => v.to_string(),
-            // oracle: `w_u32` prints with "%d", so the upper half comes out negative.
+            // `w_u32` prints with "%d", so the upper half comes out negative.
             Self::U32(v) => (*v as i32).to_string(),
             Self::U64(v) => v.to_string(),
             Self::S8(v) => v.to_string(),
@@ -230,7 +230,7 @@ fn scan_floats<const N: usize>(text: &str) -> [f32; N] {
     out
 }
 
-/// `CInifile::r_string_wb`: the value without the quotes around it.
+/// The value without the quotes around it.
 fn unquote(text: &str) -> &str {
     let t = text.strip_suffix('"').unwrap_or(text);
     t.strip_prefix('"').unwrap_or(t)
@@ -482,7 +482,7 @@ impl<'a> NetReader<'a> {
         Ok(pv_decompress(t) * s)
     }
 
-    /// The four rows `i`, `j`, `k`, `c` of an `Fmatrix`, three floats each.
+    /// The four rows `i`, `j`, `k`, `c` of a 4x4 matrix, three floats each.
     pub fn r_matrix(&mut self) -> PacketResult<[Vec3; 4]> {
         Ok([self.r_vec3()?, self.r_vec3()?, self.r_vec3()?, self.r_vec3()?])
     }
@@ -546,10 +546,10 @@ const PV_ZSIGN: u16 = 0x2000;
 const PV_TOP: u16 = 0x1f80;
 const PV_BOTTOM: u16 = 0x007f;
 
-/// `pvCompress`: a direction (any length) into 16 bits.
+/// A direction (any length) into 16 bits.
 #[must_use]
 pub fn pv_compress(vec: Vec3) -> u16 {
-    // the game's guard; the oracle divides by zero here
+    // the game's guard; a plain division would divide by zero here
     if !vec.is_finite() || (vec.x.abs() < EPS_S && vec.y.abs() < EPS_S && vec.z.abs() < EPS_S) {
         return 0;
     }
@@ -576,7 +576,7 @@ pub fn pv_compress(vec: Vec3) -> u16 {
     out
 }
 
-/// `pvDecompress`: the unit vector 16 bits stand for.
+/// The unit vector 16 bits stand for.
 #[must_use]
 pub fn pv_decompress(packed: u16) -> Vec3 {
     let mut xbits = i32::from((packed & PV_TOP) >> 7);
@@ -585,7 +585,7 @@ pub fn pv_decompress(packed: u16) -> Vec3 {
         xbits = 127 - xbits;
         ybits = 127 - ybits;
     }
-    // `pvUVAdjustment`, computed in place of the engine's table
+    // the UV adjustment, computed in place of the engine's table
     let (x, y, z) = (xbits as f32, ybits as f32, (126 - xbits - ybits) as f32);
     let adj = 1.0 / (y * y + z * z + x * x).sqrt();
     let mut v = Vec3::new(adj * x, adj * y, adj * z);
@@ -869,7 +869,7 @@ mod tests {
             assert!((back - v).length() < 0.02, "{v:?} -> {back:?}");
         }
         // the diagonal floors to 41 / 41 (x * w is just under 42), so z takes 44: the engine's
-        // quantisation is that coarse there (`_compressed_normal.cpp`)
+        // quantisation is that coarse there
         let diag = Vec3::new(1.0, 1.0, 1.0).normalize();
         assert_eq!(pv_compress(diag), (41 << 7) | 41);
         let back = pv_decompress(pv_compress(diag));

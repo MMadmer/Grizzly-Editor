@@ -1,7 +1,5 @@
-//! The visual tree and its files: `Flex2OGF` (`xrFlex2OGF.cpp`), the MU models' visuals
-//! (`xrMU_Model_Calc_ogf.cpp`, `xrMU_Model_export_geometry.cpp`, `xrMU_Model_export_OGF.cpp`),
-//! the sectors and their hierarchy (`xrSectors.cpp`, `Sector.cpp`), and the savers
-//! (`xrSaveOGF.cpp`, `OGF_Face_Save.cpp`, `OGF_Face.cpp`'s node and LOD writers, `vbm.h`).
+//! The visual tree and its files: the level's visuals, the MU models' visuals,
+//! the sectors and their hierarchy, and the savers
 
 use glam::{Vec2, Vec3};
 use gz_chunk::Writer;
@@ -114,11 +112,11 @@ pub struct Tree {
     pub xvb: VbContainer,
     pub xib: IbContainer,
     pub shaders: Vec<String>,
-    /// The bounds the C++ takes with `CalcBounds`, in its order: what each is of.
+    /// The bounds X-Ray's compiler takes, in its order: what each is of.
     pub bounds_jobs: Vec<BoundsOf>,
 }
 
-/// What a `CalcBounds` call measures.
+/// What a bounds call measures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoundsOf {
     Tree(usize),
@@ -126,7 +124,7 @@ pub enum BoundsOf {
 }
 
 impl Tree {
-    /// `RegisterShader`: a name's index, case ignored, added when new.
+    /// A name's index, case ignored, added when new.
     pub fn register_shader(&mut self, name: &str) -> u16 {
         if let Some(i) = self.shaders.iter().position(|s| s.eq_ignore_ascii_case(name)) {
             return i as u16;
@@ -135,7 +133,7 @@ impl Tree {
         (self.shaders.len() - 1) as u16
     }
 
-    /// `GetGeometry` of a tree item.
+    /// The geometry of a tree item.
     fn geometry(&self, id: usize, out: &mut Vec<Vec3>) {
         let Some(n) = self.nodes.get(id) else { return };
         match &n.item {
@@ -156,7 +154,7 @@ impl Tree {
 
 // --------------------------------------------------------------------------------- containers
 
-/// A vertex declaration as `D3DVERTEXELEMENT9` records, the end mark included.
+/// A vertex declaration as vertex element records, the end mark included.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Decl {
     pub bytes: Vec<u8>,
@@ -232,7 +230,7 @@ fn decl_mu() -> Decl {
 const VB_MAX_SIZE: usize = 4096 * 1024;
 const VB_MAX_VERTICES: usize = 65535;
 
-/// `VBContainer`.
+/// The vertex buffer container.
 #[derive(Clone, Debug, Default)]
 pub struct VbContainer {
     decls: Vec<Decl>,
@@ -240,7 +238,7 @@ pub struct VbContainer {
 }
 
 impl VbContainer {
-    /// `Begin`, `Add`, `End`: the container's id and the first vertex.
+    /// Begin, add, end: the container's id and the first vertex.
     pub fn add(&mut self, d: &Decl, bytes: Vec<u8>) -> (u32, u32) {
         let collected = bytes.len();
         let verts = collected / d.stride as usize;
@@ -274,7 +272,7 @@ impl VbContainer {
     }
 }
 
-/// `IBContainer`.
+/// The index buffer container.
 #[derive(Clone, Debug, Default)]
 pub struct IbContainer {
     data: Vec<Vec<u16>>,
@@ -356,8 +354,8 @@ fn texture_of(g: &LcGlobalData, material: u16) -> OgfTexture {
     })
 }
 
-/// `CBuild::Flex2OGF`'s first half for one subdivision: the textures and the faces, then
-/// `Optimize`.
+/// The first half of a subdivision's visual: the textures and the faces, then
+/// the optimisation.
 fn build_ogf(g: &LcGlobalData, faces: &[gz_lc_light::FaceId]) -> Option<Ogf> {
     let &first = faces.first()?;
     let f0 = g.mesh.face(first)?;
@@ -388,7 +386,7 @@ fn build_ogf(g: &LcGlobalData, faces: &[gz_lc_light::FaceId]) -> Option<Ogf> {
     Some(o)
 }
 
-/// `CBuild::Flex2OGF`: one visual per subdivision, built in parallel; the bounds are the
+/// One visual per subdivision, built in parallel; the bounds are the
 /// caller's (they draw from the one `rand` stream), then progressive and stripified.
 pub fn flex2ogf(g: &LcGlobalData, splits: Vec<Split>, tree: &mut Tree, noise: bool, log: &mut Log) {
     for (i, s) in splits.iter().enumerate() {
@@ -426,8 +424,8 @@ pub fn flex2ogf(g: &LcGlobalData, splits: Vec<Split>, tree: &mut Tree, noise: bo
 
 const SS_HIGH_X2: usize = 2 * 2 * 1024;
 
-/// The points `CalcBounds` will read, taken now (a placeholder holds them until the caller
-/// takes the spheres in the C++ order).
+/// The points the bounds will read, taken now (a placeholder holds them until the caller
+/// takes the spheres in X-Ray's order).
 fn pending_bounds(o: &mut Ogf) -> Bounds {
     o.bounds = None;
     let pts = o.geometry();
@@ -683,7 +681,7 @@ pub fn mu_export_refs(g: &LcGlobalData, extra: &Extra, tree: &mut Tree) -> Resul
     Ok(())
 }
 
-/// The box `CalcBounds` will give an item, known before its sphere: the box of its points
+/// The box the bounds will give an item, known before its sphere: the box of its points
 /// grown by `EPS_L` (the union of its children's boxes for a node).
 fn set_box(tree: &mut Tree, id: usize) {
     let mut pts = Vec::new();
@@ -701,7 +699,7 @@ fn set_box(tree: &mut Tree, id: usize) {
 
 // --------------------------------------------------------------------------------- sectors
 
-/// `ValidateMerge` of the hierarchy.
+/// Validates the merge of the hierarchy.
 fn validate_node(base: &Aabb, bb: &Aabb, limit: f32) -> Option<f32> {
     let mut m = *base;
     m.merge(bb);
@@ -714,14 +712,13 @@ fn validate_node(base: &Aabb, bb: &Aabb, limit: f32) -> Option<f32> {
     Some(s.x * s.y * s.z)
 }
 
-/// `CSector`.
 #[derive(Clone, Debug, Default)]
 pub struct Sector {
     pub root: usize,
     pub portals: Vec<u16>,
 }
 
-/// `CBuild::BuildSectors`: per sector the hierarchy of nodes over its visuals, then the
+/// Per sector the hierarchy of nodes over its visuals, then the
 /// portals.
 pub fn build_sectors(extra: &mut Extra, tree: &mut Tree, log: &mut Log) -> Result<Vec<Sector>> {
     let max = tree.nodes.iter().map(|n| n.base.sector).max().unwrap_or(0);
@@ -840,7 +837,7 @@ fn build_hierarchy(extra: &mut Extra, tree: &mut Tree, sid: u16, log: &mut Log) 
 
 // --------------------------------------------------------------------------------- bounds
 
-/// The spheres of every `CalcBounds` call in the C++ order: each drawn from the `rand` stream at
+/// The spheres of every bounds call in X-Ray's order: each drawn from the `rand` stream at
 /// the offset the calls before it leave, computed in parallel; a call that restarts (and draws
 /// more) has the ones after it computed again from where it ended.
 pub fn take_bounds(tree: &mut Tree, rng: &mut MsvcRand) {
@@ -956,7 +953,7 @@ fn tex_list(textures: &[OgfTexture]) -> String {
     s
 }
 
-/// `OGF::PreSave`: the visual's vertices and faces into the shared containers.
+/// The visual's vertices and faces into the shared containers.
 fn pre_save(g: &LcGlobalData, tree: &mut Tree, id: usize) {
     let Some(TreeNode { item: Item::Ogf(o), .. }) = tree.nodes.get(id) else { return };
     let vertex_colored = g.shader(o.material).flags & ShaderXrlc::LIGHT_VERTEX != 0;
@@ -1128,7 +1125,7 @@ fn save_item(g: &LcGlobalData, extra: &Extra, tree: &mut Tree, id: usize, w: &mu
                         w.w_vec3(v.v);
                         w.w_vec2(v.t);
                         w.w_u32(v.c_rgb_hemi);
-                        // oracle: the struct's three bytes of padding are whatever the C++ had
+                        // the struct's three bytes of padding are whatever X-Ray's compiler had
                         w.w(&[v.c_sun, 0, 0, 0]);
                     }
                 }
@@ -1137,7 +1134,7 @@ fn save_item(g: &LcGlobalData, extra: &Extra, tree: &mut Tree, id: usize, w: &mu
     }
 }
 
-/// `CBuild::SaveTREE`: the visuals' buffers in the order of their first texture, the visuals in
+/// The visuals' buffers in the order of their first texture, the visuals in
 /// tree order, the two geometry files, the shader table.
 pub fn save_tree(
     g: &LcGlobalData,
@@ -1169,7 +1166,7 @@ pub fn save_tree(
         let mut w = Writer::new();
         w.chunk(1, |w| {
             w.w_u16(14);
-            // oracle: the C++ leaves the quality of the geometry files' header uninitialised
+            // X-Ray's compiler leaves the quality of the geometry files' header uninitialised
             w.w_u16(0);
         });
         w.chunk(9, |w| vb.save(w));
@@ -1188,7 +1185,7 @@ pub fn save_tree(
     (main, fast)
 }
 
-/// `CBuild::SaveSectors`.
+/// Saves the sectors.
 pub fn save_sectors(sectors: &[Sector], level: &mut Writer) {
     let mut m = Writer::new();
     for (i, s) in sectors.iter().enumerate() {
@@ -1222,7 +1219,7 @@ pub fn save_glows(g: &LcGlobalData, extra: &Extra, tree: &mut Tree, level: &mut 
     });
 }
 
-/// `CBuild::SaveLights`.
+/// Saves the lights.
 pub fn save_lights(extra: &Extra, level: &mut Writer) {
     level.chunk(6, |w| {
         for l in &extra.lights_dynamic {
@@ -1246,7 +1243,7 @@ fn write_flight(w: &mut Writer, l: &gz_fmt_level::Light) {
     }
 }
 
-/// `CBuild::BuildPortals`.
+/// Builds the portals.
 pub fn save_portals(extra: &Extra, level: &mut Writer) {
     level.chunk(4, |w| {
         for p in &extra.portals {

@@ -1335,7 +1335,7 @@ fn tile(
         }
     }
 
-    // the menu MCP's ui_popup puts up, the way a right click does, at the entry
+    // the menu MCP's ui.popup puts up, the way a right click does, at the entry
     if visible && take_popup_request(&f.ctx, &format!("cb_context:{path}")) {
         out.menu = Some((ve.entry.clone(), cell.right_bottom()));
     }

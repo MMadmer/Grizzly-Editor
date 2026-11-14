@@ -1,10 +1,9 @@
-//! NVIDIA's NvTriStrip as `xrStripify` runs it (`nv_library/NvTriStrip.cpp`,
-//! `NvTriStripObjects.cpp`, `VertexCache.cpp`; `OGF_Face_Stripify.cpp`): lists only, no stitching,
+//! NVIDIA's NvTriStrip as the compiler runs it: lists only, no stitching,
 //! the experiments that grow strips from reset points, the split into cache-sized pieces and their
 //! order by vertex cache hits; then the indices renumbered in first use.
 //!
-//! Faces, edges and strips live in arenas and name each other by index where the C++ keeps
-//! pointers; every list is walked in the C++ order.
+//! Faces, edges and strips live in arenas and name each other by index where X-Ray's compiler keeps
+//! pointers; every list is walked in X-Ray's order.
 
 const NONE: usize = usize::MAX;
 const CACHE_INEFFICIENCY: i32 = 6;
@@ -73,7 +72,7 @@ impl VertexCache {
 struct Stripifier {
     faces: Vec<FaceInfo>,
     edges: Vec<EdgeInfo>,
-    /// `allEdgeInfos`: the head of every vertex's edge list.
+    /// The head of every vertex's edge list.
     heads: Vec<usize>,
     strips: Vec<StripInfo>,
     cache_size: usize,
@@ -273,7 +272,7 @@ impl Stripifier {
         self.faces.get(f).copied().unwrap_or(FaceInfo::new(-1, -1, -1))
     }
 
-    /// `NvStripInfo::Build`.
+    /// Builds a strip.
     fn build(&mut self, s: usize) {
         let Some(start) = self.strips.get(s).map(|x| x.start) else { return };
         let mut forward = vec![start.face];
@@ -531,7 +530,7 @@ impl Stripifier {
     }
 }
 
-/// `GenerateStrips` with `SetListsOnly(true)`, `SetMinStripSize(0)`, `SetCacheSize(cache)`:
+/// Generates the strips with lists only, no minimum strip size and the given cache size:
 /// the faces in strip order as one list.
 #[must_use]
 pub fn generate_list(indices: &[u16], cache: u32) -> Vec<u16> {

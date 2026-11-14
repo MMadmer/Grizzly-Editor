@@ -132,7 +132,7 @@ impl BaseColor {
         self.s = fixed16_w(sun);
     }
 
-    /// The raw twelve bytes, as the C++ writes the struct.
+    /// The raw twelve bytes of the struct.
     #[must_use]
     pub fn to_bytes(&self) -> [u8; 12] {
         let mut out = [0u8; 12];

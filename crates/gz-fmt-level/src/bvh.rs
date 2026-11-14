@@ -362,7 +362,7 @@ impl Probe {
     fn enter(&self, node: &Node, t_max: f32) -> Option<f32> {
         let (lo, hi) = (Vec3A::from(node.min), Vec3A::from(node.max));
         // along a still axis the ray is inside the slab for every distance when its origin is,
-        // faces included (the C++ slab test of xrCDB_ray.cpp answers the same through its NaN
+        // faces included (the X-Ray SDK's slab test answers the same through its NaN
         // filter), and never otherwise
         if (self.still & (self.origin.cmplt(lo) | self.origin.cmpgt(hi))).any() {
             return None;
@@ -843,7 +843,7 @@ impl Bvh {
 
     /// The triangles inside or crossing a convex volume given by planes `(normal, d)`, in no
     /// particular order; `out` is appended to. A point is outside a plane when
-    /// `normal . p + d > 0` - the engine's `CFrustum` convention, normals pointing out. A
+    /// `normal . p + d > 0` - the engine's frustum convention, normals pointing out. A
     /// triangle is taken unless all of its vertices are outside one plane, which keeps a few
     /// near the corners of the volume, as the engine's frustum query does.
     pub fn query_frustum(&self, planes: &[Vec4], out: &mut Vec<u32>) {

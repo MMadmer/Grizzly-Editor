@@ -2,15 +2,15 @@
 //! path (the library is 5.6 GB), all `.skl`, `.skls` and `.anm`. Each reads; written, it reads
 //! back to the same value, and a second write gives the same bytes.
 //!
-//! Byte equality with the file as read is not the rule for an `.object`: the C++ writes its
+//! Byte equality with the file as read is not the rule for an `.object`: the X-Ray SDK writes its
 //! surfaces' face lists in the order of the surfaces' addresses and leaves unused vertex-map
-//! reference slots uninitialised (docs/rust/STATE.md, "From the object/mesh port"). How many come
+//! reference slots uninitialised. How many come
 //! back byte for byte is printed.
 //!
-//! Two things of the library are what the C++ makes of them, not faults: a file whose object body
-//! chunk is empty or missing is no object (`IReader::open_chunk` answers null for a chunk of size
+//! Two things of the library are what the X-Ray SDK makes of them, not faults: a file whose object body
+//! chunk is empty or missing is no object (the X-Ray SDK's reader answers null for a chunk of size
 //! 0), and an envelope key of a version-1 motion holds its TCB and bezier parameters as floats,
-//! which every write quantises to 16 bits over [-32, 32] (`st_Key::Save`, `w_float_q16`): those
+//! which every write quantises to 16 bits over [-32, 32]: those
 //! fields read back within half a step.
 
 use std::path::PathBuf;
@@ -98,7 +98,7 @@ fn objects_read_write_and_read_back() {
             let bytes = std::fs::read(p).map_err(|e| e.to_string())?;
             let o = match Object::read(&bytes) {
                 Ok(o) => o,
-                // no object for the C++ either
+                // no object for the X-Ray SDK either
                 Err(ObjectError::NotAnObject) if body_empty(&bytes) => return Ok(()),
                 Err(e) => return Err(e.to_string()),
             };
@@ -171,7 +171,7 @@ fn motions_read_and_write_back() {
             if again != written {
                 return Err("a second write gives other bytes".into());
             }
-            // `CSMotion::Save` writes today's version: a motion of version 6 gains the marks' count
+            // the X-Ray SDK writes today's version: a motion of version 6 gains the marks' count
             // (4 bytes); only a file of today's version must come back byte for byte
             let current = ext != "skl" || smotion_version(bytes.get(8..).unwrap_or(&[])) == Some(7);
             if !current {

@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap;
 use crate::SceneError;
 use crate::math::Vec3;
 
-/// A file being read, with the C++ reader's rules.
+/// A file being read.
 #[derive(Clone, Debug)]
 pub struct IniReader {
     ltx: Ltx,
@@ -72,7 +72,7 @@ impl IniReader {
         Ok(self.ltx.r_string_raw(&s, key).ok().flatten().unwrap_or("").to_owned())
     }
 
-    /// `r_string` of a name or a path: the C++ stores what it read.
+    /// A name or a path read as a string: what was read is stored.
     pub fn r_string(&self, section: &str, key: &str) -> Result<String, SceneError> {
         self.r_string_raw(section, key)
     }

@@ -1,5 +1,5 @@
-//! The project's graphs as one read-only view (`NqProjectIndex`) and the node search shared by
-//! `quest_find` and `quest_project_find`.
+//! The project's graphs as one read-only view and the node search shared by
+//! `graph.find` and `asset.find`.
 //!
 //! The service builds the [`IndexSnapshot`] from the project's file tree (a file is read and
 //! parsed again only when its stamp moved) with the dirty open documents laid over their disk
@@ -36,7 +36,7 @@ impl IndexEntry {
         if self.memory { "memory" } else { "disk" }
     }
 
-    /// A readable whole graph: what the id lists count (`SProjectQuest::readable`).
+    /// A readable whole graph: what the id lists count.
     #[must_use]
     pub fn usable(&self) -> bool {
         self.readable && self.complete
@@ -59,7 +59,7 @@ pub struct IndexSnapshot {
 }
 
 impl IndexSnapshot {
-    /// The ids of the other usable graphs, both kinds: one id space per module (`OtherQuestIds`).
+    /// The ids of the other usable graphs, both kinds: one id space per module.
     #[must_use]
     pub fn other_ids(&self, except_rel: Option<&str>) -> Vec<String> {
         self.entries
@@ -70,7 +70,7 @@ impl IndexSnapshot {
             .collect()
     }
 
-    /// The ids of one kind (`ProjectIdsOfKind`).
+    /// The ids of one kind.
     #[must_use]
     pub fn ids_of_kind(&self, behaviour: bool) -> Vec<String> {
         self.entries
@@ -166,7 +166,7 @@ pub struct Term {
     pub exclude: bool,
 }
 
-/// The terms of a query (`ParseSearch`), folded.
+/// The terms of a query, folded.
 #[must_use]
 pub fn parse_query(query: &str) -> Vec<Term> {
     let b = trim(query).as_bytes();
@@ -209,14 +209,14 @@ pub fn parse_query(query: &str) -> Vec<Term> {
     out
 }
 
-/// Every term holds (`SearchMatches`).
+/// Every term holds.
 #[must_use]
 pub fn matches(text: &str, terms: &[Term]) -> bool {
     let folded = fold(text);
     !terms.is_empty() && terms.iter().all(|t| folded.contains(&t.text) != t.exclude)
 }
 
-/// A field holds one of the including terms (`SearchFieldHit`).
+/// A field holds one of the including terms.
 #[must_use]
 pub fn field_hit(text: &str, terms: &[Term]) -> bool {
     let folded = fold(text);
@@ -260,7 +260,7 @@ pub fn find_in_graph(g: &Graph, terms: &[Term], title: &dyn Fn(&str) -> String) 
     out
 }
 
-/// What a project search found (`SFindResponse`).
+/// What a project search found.
 #[derive(Clone, Debug, Default)]
 pub struct ProjectFind {
     pub results: Vec<(String, FindHit, &'static str)>,
@@ -270,7 +270,7 @@ pub struct ProjectFind {
     pub fingerprint: u64,
 }
 
-/// The nodes of every graph a query finds (`FindNodes`); a graph that could not be read is a
+/// The nodes of every graph a query finds; a graph that could not be read is a
 /// diagnostic and makes the answer incomplete.
 #[must_use]
 pub fn find_nodes(snapshot: &IndexSnapshot, catalog: &Catalog, query: &str) -> ProjectFind {

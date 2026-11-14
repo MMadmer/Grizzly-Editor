@@ -4,7 +4,7 @@ use glam::{Quat, Vec2, Vec3, Vec4};
 
 use crate::{COMPRESSED, ChunkError, Result, lzhuf};
 
-/// A cursor over bytes, with the engine's `IReader` vocabulary.
+/// A cursor over bytes, with the engine's reader vocabulary.
 #[derive(Clone, Debug)]
 pub struct Reader<'a> {
     data: &'a [u8],
@@ -147,7 +147,7 @@ impl<'a> Reader<'a> {
         Ok(Quat::from_xyzw(self.r_f32()?, self.r_f32()?, self.r_f32()?, self.r_f32()?))
     }
 
-    /// A 4x4 matrix, row after row as the engine's `Fmatrix` lies in memory.
+    /// A 4x4 matrix, row after row as the engine's matrix lies in memory.
     pub fn r_matrix(&mut self) -> Result<[[f32; 4]; 4]> {
         let mut m = [[0.0f32; 4]; 4];
         for row in &mut m {

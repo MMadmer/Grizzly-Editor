@@ -1,6 +1,6 @@
-//! What a build lights with: the compiler shaders (`Shader_xrLC_LIB`), the materials
+//! What a build lights with: the compiler shaders, the materials
 //! (`b_material`, `post_process_materials`, `shader()`) and the textures with their surfaces
-//! (`b_BuildTexture`, the texture part of `CBuild::Load` and `global_claculation_data::xrLoad`).
+//! (`b_BuildTexture`, the texture part of the level load).
 
 use gz_fmt_tex::{Image, TextureFlags, TextureFormat, TextureParams};
 use smol_str::SmolStr;
@@ -11,12 +11,12 @@ use crate::{LcError, Result};
 pub use gz_fmt_level::{BuildMaterial, BuildParams};
 pub use gz_fmt_xr::ShaderXrlc;
 
-/// `ebqDraft`.
+/// The draft quality.
 pub const QUALITY_DRAFT: u16 = 0;
 /// `b_material::shader_xrlc` of a material without a compiler shader.
 pub const NO_SHADER: u16 = 65535;
 
-/// `Shader_xrLC()`: what a shader is before the library says otherwise.
+/// What a shader is before the library says otherwise.
 #[must_use]
 pub fn default_shader() -> ShaderXrlc {
     let mut name_raw = [0u8; 128];
@@ -34,7 +34,7 @@ pub fn default_shader() -> ShaderXrlc {
     }
 }
 
-/// `Shader_xrLC_LIB`: the compiler shaders of `shaders_xrlc.xr`.
+/// The compiler shaders of `shaders_xrlc.xr`.
 #[derive(Clone, Debug)]
 pub struct Shaders {
     pub list: Vec<ShaderXrlc>,
@@ -53,13 +53,13 @@ impl Shaders {
         Self { list, fallback: default_shader() }
     }
 
-    /// `GetID`: the index of a shader by its name, case ignored.
+    /// The index of a shader by its name, case ignored.
     #[must_use]
     pub fn id_of(&self, name: &str) -> Option<usize> {
         self.list.iter().position(|s| s.name().eq_ignore_ascii_case(name))
     }
 
-    /// `Get(id)`. The C++ indexes past the library for a material without a compiler shader
+    /// The material by id. X-Ray's compiler indexes past the library for a material without a compiler shader
     /// (`reserved = 65535`); here such a material has the default shader.
     #[must_use]
     pub fn get(&self, id: u16) -> &ShaderXrlc {
@@ -97,7 +97,7 @@ pub fn shader_of<'a>(material: u16, shaders: &'a Shaders, materials: &[BuildMate
     shaders.get(id)
 }
 
-/// `STextureParams::HasAlphaChannel` as the compiler has it (no BC7).
+/// The texture's alpha channel as the compiler has it (no BC7).
 #[must_use]
 pub fn has_alpha_channel(fmt: TextureFormat) -> bool {
     matches!(
@@ -120,7 +120,7 @@ pub struct BuildTexture {
     pub height: u32,
     pub has_alpha: bool,
     pub surface: Option<Vec<u32>>,
-    /// `flHasSurface`: the surface was loaded (it may have been dropped since).
+    /// The surface was loaded (it may have been dropped since).
     pub has_surface: bool,
     pub thm: TextureParams,
 }
@@ -133,7 +133,7 @@ impl BuildTexture {
         s.get(y as usize * self.width as usize + x as usize).copied()
     }
 
-    /// `Vflip`.
+    /// Flips a picture vertically.
     pub fn vflip(&mut self) {
         let (w, h) = (self.width as usize, self.height as usize);
         let Some(s) = self.surface.as_mut() else { return };
@@ -156,7 +156,7 @@ impl BuildTexture {
     }
 }
 
-/// The pixels of a picture as the compiler holds them (`R8G8B8A8` and `SwapRB`: `0xAARRGGBB`).
+/// The pixels of a picture as the compiler holds them (`0xAARRGGBB`).
 #[must_use]
 pub fn surface_of(image: &Image) -> Vec<u32> {
     image.rgba.as_chunks::<4>().0.iter().map(|p| color_rgba(p[0], p[1], p[2], p[3])).collect()
@@ -171,9 +171,9 @@ pub fn texture_key(name: &str) -> String {
 /// Which light a texture is prepared for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextureUse {
-    /// `CBuild::Load`: `radiosity` loads every surface; rows stay as the file has them.
+    /// `radiosity` loads every surface; rows stay as the file has them.
     Level { radiosity: bool },
-    /// `global_claculation_data::xrLoad`: the surface is flipped.
+    /// The surface is flipped.
     Details,
 }
 
@@ -216,7 +216,7 @@ pub fn prepare_texture(
     let Some(image) = load(&key) else {
         return Err(LcError::Invalid(format!("The surface of the texture '{key}' could not be loaded.")));
     };
-    // the C++ of the detail compiler keeps the description's size here and reads past a smaller
+    // the detail compiler of X-Ray keeps the description's size here and reads past a smaller
     // surface; both compilers take the surface's own size
     bt.width = image.width;
     bt.height = image.height;

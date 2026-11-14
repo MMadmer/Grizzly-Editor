@@ -247,7 +247,7 @@ fn state_help(state: EntryState) -> &'static str {
     }
 }
 
-/// The confirmation's id, as `screenshot_editor` names the modal: `dlg.delete_project`.
+/// The confirmation's id, as `shot.window` names the modal: `dlg.delete_project`.
 #[must_use]
 pub fn delete_dialog_name() -> &'static str {
     contract::DELETE_PROJECT_DIALOG.split_once("###").map_or(contract::DELETE_PROJECT_DIALOG, |(_, n)| n)

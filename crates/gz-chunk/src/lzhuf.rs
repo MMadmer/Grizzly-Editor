@@ -1,9 +1,9 @@
 //! LZHUF, the compression of a chunk whose id carries the compressed flag
-//! (`_compressLZ` / `_decompressLZ` of the engine, `XrCore/LzHuf.cpp`).
+//! (the engine's compress and decompress routines).
 //!
 //! The stream is `u32` unpacked size, then LZSS (4096 byte window, matches of 3..60 bytes) coded
 //! with an adaptive Huffman tree. This is the framing of every compressed chunk, of the
-//! directory chunk of a game archive and of `IWriter::w_compressed`.
+//! directory chunk of a game archive and of the engine's compressed writes.
 //!
 //! - [`decompress`] unpacks a stream; [`decompress_limited`] also refuses a stated size above
 //!   the caller's own limit (the game passes the size of the archive file).
@@ -346,7 +346,7 @@ impl Lzss {
         z
     }
 
-    /// `InsertNode`: adds the string at `r` to its tree and finds the longest match for it.
+    /// Adds the string at `r` to its tree and finds the longest match for it.
     fn insert_node(&mut self, r: usize) {
         let mut cmp: i32 = 1;
         let mut p = N + 1 + usize::from(self.text_buf[r]);
@@ -476,7 +476,7 @@ pub fn decompress_limited(packed: &[u8], limit: usize) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(size);
     let mut huff = Huff::new();
     let mut bits = BitReader::new(data);
-    // oracle: the engine leaves the last F bytes of the window as an earlier call left them; a
+    // the engine leaves the last F bytes of the window as an earlier call left them; a
     // stream its encoder wrote never reads them, so they are zero here.
     let mut window = [0u8; N];
     for b in &mut window[..N - F] {
@@ -606,7 +606,7 @@ mod tests {
         assert_eq!(TABLES.d_len[0xf0], 8);
     }
 
-    // Traced through LzHuf.cpp by hand: with the initial tree the code of 'a' (leaf 97) is the
+    // Traced by hand: with the initial tree the code of 'a' (leaf 97) is the
     // nine bits 111101101, of 'b' after 'a' was counted 111101110, of the length code 257 the
     // eight bits 10001101; position 0 is three zero bits and six zero bits.
     #[test]

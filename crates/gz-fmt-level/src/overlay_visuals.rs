@@ -98,7 +98,7 @@ impl OverlayVisuals {
     }
 }
 
-/// A scene object's name as a file name: the editor's `SanitizeFileName`. Path separators,
+/// A scene object's name as a file name. Path separators,
 /// wildcards, quotes and spaces become `_`; an empty name is `unnamed`; at most 255 bytes.
 #[must_use]
 pub fn sanitize_file_name(name: &str) -> String {

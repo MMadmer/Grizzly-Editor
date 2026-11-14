@@ -1,13 +1,13 @@
-//! `fsgame.ltx`: where the game's loose data and its archives are (`CLocatorAPI::_initialize`).
+//! `fsgame.ltx`: where the game's loose data and its archives are.
 //!
 //! A line is `$alias$ = recurse | notif | root | add | ext | caption`; `root` is an alias
 //! defined above it or a folder, `add` is appended to it. `$fs_root$` is the game folder.
 //!
-//! oracle: the engine registers every `.db*` / `.xdb*` it meets while scanning ANY alias. Here
+//! the engine registers every `.db*` / `.xdb*` it meets while scanning ANY alias. Here
 //! the archives are those of the `$arch_dir...$` aliases - the engine's own convention for
 //! archive folders - in the order the file names them, each folder by name, so the loose tree,
 //! the saves and the logs are not walked for archives a second time. Without such an alias it is
-//! `database\`, as the C++ editor's DARF mount read it.
+//! `database\`.
 
 use std::path::{Path, PathBuf};
 
@@ -24,7 +24,7 @@ pub(crate) struct Layout {
     pub archive_dirs: Vec<(PathBuf, bool)>,
 }
 
-/// `CInifile::IsBOOL`.
+/// Whether a value is a boolean.
 fn is_bool(v: &str) -> bool {
     ["on", "yes", "true", "1"].iter().any(|t| t.eq_ignore_ascii_case(v))
 }
@@ -105,7 +105,7 @@ fn hidden(_meta: &std::fs::Metadata) -> bool {
 }
 
 /// The archives of the folders in mount order: within a folder by name, a sub-folder walked
-/// where it falls in that order (`CLocatorAPI::Recurse`); empty and hidden files are none.
+/// where it falls in that order; empty and hidden files are none.
 pub(crate) fn archives(dirs: &[(PathBuf, bool)]) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     for (dir, recurse) in dirs {

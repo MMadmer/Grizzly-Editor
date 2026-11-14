@@ -1,9 +1,9 @@
-//! The spawn file of the scene (`CLevelSpawnConstructor` + `CGameSpawnConstructor` of the level
-//! editor: one level, the editor's game graph embedded).
+//! The spawn file of the scene (one level, the editor's game graph embedded).
 
 use std::collections::BTreeMap;
 
 use glam::Vec3;
+use gz_base::{Finding, Findings};
 use gz_entities::model::alife_flags;
 use gz_entities::{Class, Entity, Shape};
 use gz_fmt_object::Mat4;
@@ -18,7 +18,7 @@ use crate::{BuildError, Result};
 /// `y_shift_correction`: a spawn is looked up a little above where it stands.
 const Y_SHIFT: f32 = 0.15;
 
-/// A spawn element as the scene has it, its entity made ready for export (`PreExportSpawn`):
+/// A spawn element as the scene has it, its entity made ready for export:
 /// name, position, rotation and the attached shape's geometry.
 #[derive(Clone, Debug)]
 pub struct Element {
@@ -58,14 +58,14 @@ pub struct Way {
 #[derive(Clone, Debug)]
 pub struct SpawnBuild {
     pub bytes: Vec<u8>,
-    pub log: Vec<String>,
+    pub log: Vec<Finding>,
 }
 
 fn class_of(e: &Entity) -> Option<Class> {
     e.class_info().map(|c| c.class)
 }
 
-/// The offset of `m_tSpawnID` in a spawn packet (`CSE_Abstract::Spawn_Write`).
+/// The offset of `m_tSpawnID` in a spawn packet.
 fn spawn_id_offset(p: &[u8]) -> Option<usize> {
     let mut at = 2usize;
     for _ in 0..2 {
@@ -111,10 +111,10 @@ fn level_vertices(graph: &GameGraph, level_id: u8) -> Option<u16> {
     graph.vertices.iter().position(|v| v.level_id == level_id).map(|i| i as u16)
 }
 
-/// `CGameSpawnConstructor::build`: every spawn element on the level vertex under it and the
+/// Every spawn element on the level vertex under it and the
 /// game vertex that owns that, the zones' artefact points, the patrol paths, the header, the
 /// game graph. `level` names the level (`m_FNLevelPath`).
-// oracle: the artefact points of a zone come in the walk's order here; the C++ shuffles them
+// the artefact points of a zone come in the walk's order here; the X-Ray SDK shuffles them
 // with `rand`.
 /// `verify_restrictors` is Play's "Verify Space Restrictors": every space restrictor that asks
 /// for it must lie on the AI map (`verify_space_restrictors`; the editor never runs the separator
@@ -128,8 +128,11 @@ pub fn build_spawn(
     guid: Guid,
     verify_restrictors: bool,
 ) -> Result<SpawnBuild> {
-    let mut log =
-        vec!["Start build spawn".to_owned(), format!("level  0 {level}"), "Loading spawns ...".to_owned()];
+    let mut log = vec![
+        Finding::info("Start build spawn"),
+        Finding::info(format!("level  0 {level}")),
+        Finding::info("Loading spawns ..."),
+    ];
     // `game_graph().header().level(level_name)`: Play's graph holds the linked game's levels too
     let level_id = graph
         .levels
@@ -159,8 +162,8 @@ pub fn build_spawn(
             if actors > 1 {
                 return Err(BuildError::new("The level has more than one actor."));
             }
-            // oracle: the C++ keeps the mark the spawn point got from `$player`; the game makes
-            // no level current without it (`CALifeGraphRegistry::update`), so the one actor
+            // the X-Ray SDK keeps the mark the spawn point got from `$player`; the game makes
+            // no level current without it, so the one actor
             // carries it here whatever the scene saved
             if !e.is_player() && e.set_player().is_err() {
                 return Err(BuildError::new(format!("The actor {} cannot be made the player.", e.name())));
@@ -168,8 +171,8 @@ pub fn build_spawn(
         }
         if let Some(id) = e.story_id() {
             if let Some(other) = story.get(&id) {
-                log.push(format!("Object {}, story id {id}", e.name()));
-                log.push(format!("Object {other}, story id {id}"));
+                log.info(format!("Object {}, story id {id}", e.name()));
+                log.info(format!("Object {other}, story id {id}"));
                 return Err(BuildError::new(format!(
                     "There are several objects which has the same unique story ID, level {level}"
                 )));
@@ -182,7 +185,7 @@ pub fn build_spawn(
         return Err(BuildError::new("The level has no spawn points."));
     }
 
-    log.push("Correct objects ...".to_owned());
+    log.info("Correct objects ...");
     let Some(first) = level_vertices(graph, level_id) else {
         return Err(BuildError::new(format!("The game graph has no vertices for the level '{level}'.")));
     };
@@ -199,7 +202,7 @@ pub fn build_spawn(
         let node = nav.vertex(INVALID, position);
         if !nav.inside(node, position) {
             let moved = nav.vertex_position(node);
-            log.push(format!(
+            log.info(format!(
                 "[{level}][{}][{}] : position changed from [{:.6}][{:.6}][{:.6}] -> [{:.6}][{:.6}][{:.6}]",
                 e.section(),
                 e.name(),
@@ -215,7 +218,7 @@ pub fn build_spawn(
         let Some((gv, dist)) = cross.cell(node) else {
             let p = e.position();
             return Err(BuildError::new(format!(
-                "Can't find a corresponding GRAPH VERTEX for the spawn-point {}\nSpawn node  : {node}\nSpawn point : [{:7.2}][{:7.2}][{:7.2}]",
+                "No game graph vertex corresponds to the spawn point {}.\nSpawn node  : {node}\nSpawn point : [{:7.2}][{:7.2}][{:7.2}]",
                 e.name(),
                 p.x,
                 p.y,
@@ -225,7 +228,7 @@ pub fn build_spawn(
         let _ = e.set_vertices(gv, node, dist);
     }
 
-    log.push("Generate artefact spawn positions ...".to_owned());
+    log.info("Generate artefact spawn positions ...");
     for e in &mut spawns {
         let Some(zone) = class_of(e)
             .filter(|c| c.is_anomalous_zone())
@@ -274,18 +277,10 @@ pub fn build_spawn(
         return Err(BuildError::new("The level has no actor spawn point."));
     }
     if verify_restrictors && !verify_space_restrictors(level, nav, &spawns, &mut log) {
-        log.push("! Failed build spawn!".to_owned());
-        return Err(BuildError::new(format!(
-            "! Failed build spawn! 
-See log.
-{}",
-            log.join(
-                "
-"
-            )
-        )));
+        let lines: Vec<&str> = log.iter().map(|f| f.text.as_str()).collect();
+        return Err(BuildError::new(format!("The spawn could not be built:\n{}", lines.join("\n"))));
     }
-    log.push(format!("Actor is on the level {level}"));
+    log.info(format!("Actor is on the level {level}"));
 
     // the patrol paths of the way objects, by name
     let mut by_name: BTreeMap<&str, &Way> = BTreeMap::new();
@@ -323,18 +318,18 @@ See log.
     file.artefact_points = artefact_points;
     file.declared_patrols = patrols.len() as u32;
     file.patrols = patrols;
-    log.push("Spawn build completed".to_owned());
+    log.info("Spawn build completed");
     Ok(SpawnBuild { bytes: file.to_bytes(), log })
 }
 
-/// A space restrictor laid over the AI map (`CSpaceRestrictorWrapper`).
+/// A space restrictor laid over the AI map.
 struct Restriction<'a> {
     xform: Mat4,
     position: Vec3,
     shapes: &'a [Shape],
 }
 
-/// `Fplane::build(p0, p1, p2)` and `classify`: how far `p` is in front of the plane.
+/// Builds a plane from three points and classifies a point: how far `p` is in front of the plane.
 fn plane_classify(p0: Vec3, p1: Vec3, p2: Vec3, p: Vec3) -> f32 {
     let n = (p1 - p0).cross(p2 - p0).normalize_or_zero();
     n.dot(p) - n.dot(p0)
@@ -429,11 +424,11 @@ impl Restriction<'_> {
     }
 }
 
-/// `CLevelSpawnConstructor::verify_space_restrictors` without the separator check (the editor
+/// Verifies the space restrictors without the separator check (the editor
 /// builds with `no_separator_check`): every restrictor of a type that restricts and that asks
 /// for the check must have a border on the AI map.
-fn verify_space_restrictors(level: &str, nav: &LevelNav, spawns: &[Entity], log: &mut Vec<String>) -> bool {
-    log.push(format!("Level [{level}] : searching for AI map separators space restrictors"));
+fn verify_space_restrictors(level: &str, nav: &LevelNav, spawns: &[Entity], log: &mut Vec<Finding>) -> bool {
+    log.info(format!("Level [{level}] : searching for AI map separators space restrictors"));
     let mut ok = true;
     for e in spawns {
         let Some(obj) = e.object() else { continue };
@@ -447,11 +442,11 @@ fn verify_space_restrictors(level: &str, nav: &LevelNav, spawns: &[Entity], log:
         xform.0[3] = [p.x, p.y, p.z, 1.0];
         let wrap = Restriction { xform, position: p, shapes: e.shapes() };
         if !wrap.has_border(nav) {
-            log.push(format!("! space restrictor has no border {}", e.name()));
+            log.error(format!("The space restrictor '{}' has no border on the AI map.", e.name()));
             ok = false;
         }
     }
-    log.push(format!("Level [{level}] : no separators found"));
+    log.info(format!("Level [{level}] : no separators found"));
     ok
 }
 
@@ -464,14 +459,18 @@ fn fill_level_changer(
     level_id: u8,
     graph: &GameGraph,
     points: &[(String, Vec3, Vec3)],
-    log: &mut Vec<String>,
+    log: &mut Vec<Finding>,
 ) -> Result<()> {
     let Some(dest) = e.level_changer() else { return Ok(()) };
     if !dest.level.eq_ignore_ascii_case(level) {
         return Ok(());
     }
     let Some((_, position, angles)) = points.iter().find(|(n, _, _)| *n == dest.point.as_str()) else {
-        log.push(format!("Graph point {} not found (level changer {})", dest.point, e.name()));
+        log.warn(format!(
+            "The level changer '{}' names the graph point '{}', which does not exist.",
+            e.name(),
+            dest.point
+        ));
         return Ok(());
     };
     let similar = |a: Vec3, b: Vec3| {
@@ -492,7 +491,7 @@ fn fill_level_changer(
     Ok(())
 }
 
-/// `CPatrolPath::load_editor`: each point on the level vertex under it, moved onto it when it
+/// Each point on the level vertex under it, moved onto it when it
 /// stands outside, with the game vertex of that.
 fn patrol(nav: &LevelNav, cross: &gz_fmt_spawn::CrossTable, w: &Way) -> PatrolPath {
     let points = w
@@ -573,8 +572,8 @@ mod tests {
             .section("medkit", &item)
     }
 
-    /// What the game's loader relies on in a spawn file (`CALifeSpawnRegistry::load`,
-    /// `CGameGraph`, `AISpaceBase::Load` / `Validate`, `CALifeGraphRegistry::setup_current_level`),
+    /// What the game's loader relies on in a spawn file (the spawn registry's load,
+    /// the game graph, the AI space's load and validation, the current level's setup),
     /// read back with the repository's reader.
     fn check_spawn_file(bytes: &[u8], level: &str, level_ai: &[u8], st: &MapSettings) -> Vec<String> {
         let mut bad = Vec::new();

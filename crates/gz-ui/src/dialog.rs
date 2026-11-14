@@ -23,6 +23,7 @@ use egui::{
     Align, Align2, Area, Context, CornerRadius, Frame, Id, Key, Layout, Margin, Modal, Modifiers, Order,
     Popup, Pos2, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, Ui, UiBuilder, UiKind, Vec2, pos2,
 };
+use gz_base::{Finding, Severity};
 use parking_lot::Mutex;
 
 use crate::audit;
@@ -607,7 +608,7 @@ fn show_impl<R>(
             g.stack.push(Drawn { name: name.to_owned(), rect });
         }
         // the audit names the dialog as its window is named, `Title###dlg.<name>`: what
-        // `ui_audit id=dlg.<name>` and the contract's window names look for
+        // `ui.audit id=dlg.<name>` and the contract's window names look for
         let window = format!("{title}###{name}");
         audit::surface(ctx, &window, || {
             audit::control(ctx, "Close", true, None, Some("Close"), cross);
@@ -1011,15 +1012,15 @@ fn or<'s>(value: &'s str, fallback: &'s str) -> &'s str {
     if value.is_empty() { fallback } else { value }
 }
 
-/// The line a note goes into the log as: `!` an error, `~` a warning, `*` the rest.
-fn log_line(tone: Tone, what: &str, text_: &str) -> String {
-    let mark = match tone {
-        Tone::Error => "!",
-        Tone::Warning => "~",
-        _ => "*",
+/// What a note goes into the log as: an error, a warning, or information.
+fn logged(tone: Tone, what: &str, text_: &str) -> Finding {
+    let severity = match tone {
+        Tone::Error => Severity::Error,
+        Tone::Warning => Severity::Warning,
+        _ => Severity::Note,
     };
     let sep = if !what.is_empty() && !text_.is_empty() { ": " } else { "" };
-    format!("{mark} {what}{sep}{text_}")
+    Finding::new(severity, format!("{what}{sep}{text_}"))
 }
 
 /// Held while a caller who has decided runs something of the window (an MCP caller's row of the
@@ -1050,22 +1051,22 @@ pub(crate) fn who(ctx: &Context, asker: Asker) -> Asker {
 }
 
 /// Asks to confirm an action. `Mcp` runs `then(Yes)` before returning, `Unattended` runs
-/// `then(No)`; both return the line to log. `Ui` queues the dialog and returns `None`.
+/// `then(No)`; both return the finding to log. `Ui` queues the dialog and returns `None`.
 pub fn confirm(
     ctx: &Context,
     asker: Asker,
     spec: ConfirmSpec,
     then: impl FnOnce(Answer) + Send + 'static,
-) -> Option<String> {
+) -> Option<Finding> {
     let what = or(&spec.headline, or(&spec.title, "Confirm")).to_owned();
     match who(ctx, asker) {
         Asker::Mcp => {
             then(Answer::Yes);
-            Some(format!("* [mcp] {what} -> Yes"))
+            Some(Finding::info(format!("[mcp] {what} -> Yes")))
         }
         Asker::Unattended => {
             then(Answer::No);
-            Some(format!("~ [dlg suppressed] {what}  -> auto-answer: No"))
+            Some(Finding::warning(format!("[dlg suppressed] {what}  -> auto-answer: No")))
         }
         Asker::Ui => {
             let title = or(&spec.title, "Confirm").to_owned();
@@ -1078,23 +1079,23 @@ pub fn confirm(
 
 /// Asks to save before something is lost: Save (Yes), Don't Save (No), Cancel. `what` names
 /// the dirty documents. `Mcp` answers Cancel (a command decides with its `save` / `discard`
-/// argument before it asks), `Unattended` No; both return the line to log.
+/// argument before it asks), `Unattended` No; both return the finding to log.
 pub fn unsaved_prompt(
     ctx: &Context,
     asker: Asker,
     id: &str,
     what: &[String],
     then: impl FnOnce(Answer) + Send + 'static,
-) -> Option<String> {
+) -> Option<Finding> {
     let joined = what.join(", ");
     match who(ctx, asker) {
         Asker::Mcp => {
             then(Answer::Cancel);
-            Some(format!("* [mcp] unsaved changes ({joined}) -> Cancel"))
+            Some(Finding::info(format!("[mcp] unsaved changes ({joined}) -> Cancel")))
         }
         Asker::Unattended => {
             then(Answer::No);
-            Some(format!("~ [dlg suppressed] Unsaved changes: {joined}  -> auto-answer: No"))
+            Some(Finding::warning(format!("[dlg suppressed] Unsaved changes: {joined}  -> auto-answer: No")))
         }
         Asker::Ui => {
             let headline = match what {
@@ -1114,10 +1115,10 @@ pub fn unsaved_prompt(
     }
 }
 
-/// A note for the author: an error, a warning, information. Returns the line to log; only `Ui`
+/// A note for the author: an error, a warning, information. Returns the finding to log; only `Ui`
 /// opens it.
-pub fn notice(ctx: &Context, asker: Asker, tone: Tone, title: &str, text_: &str) -> Option<String> {
-    let line = log_line(tone, title, text_);
+pub fn notice(ctx: &Context, asker: Asker, tone: Tone, title: &str, text_: &str) -> Option<Finding> {
+    let line = logged(tone, title, text_);
     if who(ctx, asker) == Asker::Ui {
         let fallback = match tone {
             Tone::Error => "Error",
@@ -1136,20 +1137,17 @@ pub fn notice(ctx: &Context, asker: Asker, tone: Tone, title: &str, text_: &str)
 }
 
 /// The result of a run started from the UI: a toned headline, rows, Not Shipped, up to 8
-/// warnings, the action and OK. Returns the lines to log (one per line of the string); only `Ui`
-/// opens it.
-pub fn result(ctx: &Context, asker: Asker, spec: ResultSpec) -> Option<String> {
-    let mut lines = log_line(spec.tone, &spec.title, &spec.headline);
-    for w in &spec.warnings {
-        lines.push_str("\n~ ");
-        lines.push_str(w);
-    }
+/// warnings, the action and OK. Returns the findings to log (the headline at the tone of the
+/// result, then each warning); only `Ui` opens it.
+pub fn result(ctx: &Context, asker: Asker, spec: ResultSpec) -> Vec<Finding> {
+    let mut lines = vec![logged(spec.tone, &spec.title, &spec.headline)];
+    lines.extend(spec.warnings.iter().map(Finding::warning));
     if who(ctx, asker) == Asker::Ui {
         let title = or(&spec.title, "Result").to_owned();
         let name = full_name(or(&spec.id, "result"));
         queue(ctx, QKind::Result(spec), title, name, None);
     }
-    Some(lines)
+    lines
 }
 
 /// The dialogs the last frame drew, topmost last.
@@ -1194,8 +1192,9 @@ pub fn close_dialog(ctx: &Context, id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Answer, Asker, ConfirmSpec, DialogSize, ResultSpec, answer_as, full_name, handle, log_line};
+    use super::{Answer, Asker, ConfirmSpec, DialogSize, ResultSpec, answer_as, full_name, handle, logged};
     use crate::theme::Tone;
+    use gz_base::Finding;
 
     /// Raises each kind of question as `asker` and returns what each answered: confirm, unsaved;
     /// with the number of dialogs queued by the four calls.
@@ -1257,10 +1256,10 @@ mod tests {
     }
 
     #[test]
-    fn log_lines_are_marked_by_tone() {
-        assert_eq!(log_line(Tone::Error, "Build", "failed"), "! Build: failed");
-        assert_eq!(log_line(Tone::Warning, "", "careful"), "~ careful");
-        assert_eq!(log_line(Tone::Info, "Done", ""), "* Done");
+    fn a_note_is_logged_at_the_level_of_its_tone() {
+        assert_eq!(logged(Tone::Error, "Build", "failed"), Finding::error("Build: failed"));
+        assert_eq!(logged(Tone::Warning, "", "careful"), Finding::warning("careful"));
+        assert_eq!(logged(Tone::Info, "Done", ""), Finding::info("Done"));
     }
 
     #[test]
@@ -1278,14 +1277,14 @@ mod tests {
             let _ = tx.send(a);
         });
         assert_eq!(rx.try_recv().ok(), Some(Answer::Yes));
-        assert_eq!(line.as_deref(), Some("* [mcp] Delete Overnight Delivery? -> Yes"));
+        assert_eq!(line, Some(Finding::info("[mcp] Delete Overnight Delivery? -> Yes")));
         let line = super::confirm(&ctx, Asker::Unattended, spec, move |a| {
             let _ = tx2.send(a);
         });
         assert_eq!(rx.try_recv().ok(), Some(Answer::No));
         assert_eq!(
-            line.as_deref(),
-            Some("~ [dlg suppressed] Delete Overnight Delivery?  -> auto-answer: No")
+            line,
+            Some(Finding::warning("[dlg suppressed] Delete Overnight Delivery?  -> auto-answer: No"))
         );
     }
 }

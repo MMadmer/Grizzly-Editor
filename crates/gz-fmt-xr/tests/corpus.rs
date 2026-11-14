@@ -92,7 +92,7 @@ fn dead_airs_short_target_colours_read_with_the_engines_defaults() {
         .collect();
     assert_eq!(short.len(), 50, "{short:?}");
     assert_eq!(short.first().copied(), Some("a_ufp_particles\\group_ufp\\atom_flame"));
-    // the short form reads as `PATargetColor`'s whole-life window, wherever it stands
+    // the short form reads as the target colour's whole-life window, wherever it stands
     for e in &p.effects {
         for a in &e.actions {
             if let ActionParams::TargetColor { time_from, time_to, times_stored: 0, .. } = a.params {

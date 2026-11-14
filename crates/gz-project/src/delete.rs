@@ -107,7 +107,7 @@ pub struct DeleteContext {
 /// every listed project points at on this machine (its game, where it builds to). Reads the
 /// listed projects' files and their state in `home`.
 ///
-/// The user's folders are where the shell keeps them (`SHGetKnownFolderPath`), redirected ones
+/// The user's folders are where the shell keeps them, redirected ones
 /// included.
 #[must_use]
 pub fn system_guards(
@@ -185,7 +185,7 @@ pub fn system_guards(
     out
 }
 
-/// A folder a volume is mounted into is the root of that volume (C++ `GetVolumePathName`).
+/// A folder a volume is mounted into is the root of that volume.
 fn volume_root(path: &str) -> bool {
     #[cfg(windows)]
     return gz_win::is_volume_root(Path::new(path));

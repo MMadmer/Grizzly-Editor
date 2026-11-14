@@ -1,4 +1,4 @@
-//! The sound thumbnail (`ESoundThumbnail`): the parameters the editor keeps beside a `.wav`.
+//! The sound thumbnail: the parameters the editor keeps beside a `.wav`.
 
 use gz_chunk::{Reader, Writer};
 
@@ -23,7 +23,7 @@ pub struct SoundThm {
     /// How far NPCs hear the sound; at most `max_dist`.
     pub max_ai_dist: f32,
     pub base_volume: f32,
-    /// The engine's sound type (`ESoundTypes`).
+    /// The engine's sound type.
     pub game_type: u32,
 }
 
@@ -40,7 +40,7 @@ impl Default for SoundThm {
     }
 }
 
-/// Reads a sound thumbnail (`ESoundThumbnail::Load`).
+/// Reads a sound thumbnail.
 pub fn read_sound_thm(bytes: &[u8]) -> Result<SoundThm> {
     let file = Reader::new(bytes);
     let version = file.need_chunk(THM_CHUNK_VERSION)?.reader().r_u16()?;
@@ -70,7 +70,7 @@ pub fn read_sound_thm(bytes: &[u8]) -> Result<SoundThm> {
     Ok(thm)
 }
 
-/// Writes a sound thumbnail (`ESoundThumbnail::Save`).
+/// Writes a sound thumbnail.
 #[must_use]
 pub fn write_sound_thm(thm: &SoundThm) -> Vec<u8> {
     let mut w = Writer::with_capacity(96);

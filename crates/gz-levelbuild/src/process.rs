@@ -1,4 +1,4 @@
-//! The game as a process of its own (`CLevelTool::RunGame`): started with its command line, its
+//! The game as a process of its own: started with its command line, its
 //! output followed line by line, Stop ends the whole process tree. Nothing else the editor builds
 //! with is a program: the level compilers run in the editor's process (`crate::compile`), and the
 //! AI map, the game graph and the spawn are built there too.
@@ -16,7 +16,7 @@ pub fn arguments(params: &str) -> Vec<String> {
     params.split_whitespace().map(str::to_owned).collect()
 }
 
-/// The C++ log line's command (`* Run xrEngine.exe -fsltx fsgame.ltx ...`): the executable's
+/// The command of the log line (`Run xrEngine.exe -fsltx fsgame.ltx ...`): the executable's
 /// file name and the arguments.
 #[must_use]
 pub fn command_line(exe: &Path, args: &[String]) -> String {

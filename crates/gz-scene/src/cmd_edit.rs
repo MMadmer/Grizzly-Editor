@@ -1374,8 +1374,8 @@ pub(crate) async fn collect_summary(
             (s, log)
         })
         .await;
-    for l in log {
-        ed.log.warn(l);
+    for l in &log {
+        ed.log.finding(l);
     }
     let s = Arc::new(summary);
     *SummaryStore::of(&session).summary.lock() = Some(s.clone());

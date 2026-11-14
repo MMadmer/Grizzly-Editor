@@ -31,7 +31,7 @@ pub fn install_hooks(editor: &Arc<Editor>) {
                 }
             };
             if let Some(line) = gz_ui::dialog::unsaved_prompt(ctx, asker, "open_project", &what, then) {
-                ed.log.plain(line);
+                ed.log.finding(&line);
             }
         });
         true

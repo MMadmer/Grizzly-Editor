@@ -1,7 +1,5 @@
-//! `particles.xr`: particle effects and groups. `PSLibrary.cpp` (`CPSLibrary::Load`),
-//! `ParticleEffectDef.cpp` (`CPEDef::Load`), `ParticleGroup.cpp` (`CPGDef::Load`), and the
-//! compiled action stream of `particle_actions_collection_io.cpp` /
-//! `CParticleManager::LoadActions`.
+//! `particles.xr`: particle effects and groups, and the
+//! compiled action stream.
 
 use glam::{Vec2, Vec3};
 use gz_chunk::Reader;
@@ -36,7 +34,7 @@ const PGD_CHUNK_FLAGS: u32 = 0x0003;
 const PGD_CHUNK_EFFECTS: u32 = 0x0004;
 const PGD_CHUNK_TIME_LIMIT: u32 = 0x0005;
 
-/// `CPEDef` flags.
+/// The effect definition flags.
 pub mod effect_flags {
     pub const SPRITE: u32 = 1 << 0;
     pub const FRAMED: u32 = 1 << 10;
@@ -54,10 +52,10 @@ pub mod effect_flags {
     pub const CULLING: u32 = 1 << 22;
 }
 
-/// `pDomain` (68 bytes).
+/// A domain (68 bytes).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Domain {
-    /// `PDomainEnum`: point, line, triangle, plane, box, sphere, cylinder, cone, blob, disc,
+    /// Point, line, triangle, plane, box, sphere, cylinder, cone, blob, disc,
     /// rectangle.
     pub kind: u32,
     pub p1: Vec3,
@@ -70,7 +68,7 @@ pub struct Domain {
     pub radius2_sqr: f32,
 }
 
-/// `PActionEnum`.
+/// The action kinds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActionKind {
     Avoid,
@@ -284,7 +282,7 @@ pub struct Action {
     pub params: ActionParams,
 }
 
-/// `CPEDef::SFrame`.
+/// A frame of an effect definition.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EffectFrame {
     pub tex_size: Vec2,
@@ -294,7 +292,7 @@ pub struct EffectFrame {
     pub speed: f32,
 }
 
-/// `CPEDef`.
+/// An effect definition.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParticleEffect {
     pub name: SmolStr,
@@ -313,7 +311,7 @@ pub struct ParticleEffect {
     pub editor_actions: Option<Vec<u8>>,
 }
 
-/// `CPGDef::SEffect`.
+/// An effect of a group definition.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GroupEffect {
     pub effect: SmolStr,
@@ -325,7 +323,7 @@ pub struct GroupEffect {
     pub flags: u32,
 }
 
-/// `CPGDef`.
+/// A group definition.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParticleGroup {
     pub name: SmolStr,
@@ -356,7 +354,7 @@ fn domain(r: &mut Reader<'_>) -> Result<Domain> {
     })
 }
 
-/// The two layouts of `PATargetColor`: Shadow of Chernobyl's 20 bytes, or 28 with the time
+/// The two layouts of the target colour action: Shadow of Chernobyl's 20 bytes, or 28 with the time
 /// window after them.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ColorForm {
@@ -368,7 +366,7 @@ fn action(r: &mut Reader<'_>, color_form: ColorForm) -> Result<Action> {
     let id = r.r_u32()?;
     let kind = ActionKind::from_id(id)
         .ok_or_else(|| invalid(format!("particle action type {id} is not one the game has")))?;
-    // `ParticleAction::Load`: the flags and the type again
+    // the flags and the type again
     let flags = r.r_u32()?;
     r.r_u32()?;
     use ActionKind as A;
@@ -435,7 +433,7 @@ fn action(r: &mut Reader<'_>, color_form: ColorForm) -> Result<Action> {
         A::TargetColor => {
             let (color, alpha, scale) = (r.r_vec3()?, f(r)?, f(r)?);
             let (time_from, time_to, times_stored) = match color_form {
-                // `PATargetColor`'s constructor: the whole life
+                // the target colour's constructor: the whole life
                 ColorForm::Short => (0.0, 1.0, 0),
                 ColorForm::Long => (f(r)?, f(r)?, 2),
             };
@@ -521,7 +519,7 @@ fn read_list(
     }
 }
 
-/// `LoadActions`: a count and the actions. Dead Air's library keeps Shadow of Chernobyl's
+/// A count and the actions. Dead Air's library keeps Shadow of Chernobyl's
 /// 20-byte `TargetColor` in 50 effects, also before other actions (the game's own reader takes
 /// the short form only at the list's end): each colour action takes the form that makes the
 /// whole list read to its end; a list that reads in no form exactly is read as far as it goes,
@@ -647,7 +645,7 @@ fn group(body: &[u8], text: &mut Text) -> Result<Option<ParticleGroup>> {
 }
 
 impl Particles {
-    /// `CPSLibrary::Load`: a definition of another version is skipped, as the game skips it.
+    /// A definition of another version is skipped, as the game skips it.
     pub fn read(bytes: &[u8]) -> Result<Self> {
         let r = Reader::new(bytes);
         let version = need(&r, PS_CHUNK_VERSION, "library version")?.r_u16()?;

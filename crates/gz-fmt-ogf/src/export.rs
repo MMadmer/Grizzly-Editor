@@ -1,9 +1,9 @@
-//! Export from an editable object: `ExportObjectOGF.cpp` (static) and `ExportSkeleton.cpp`
-//! (skinned, with bone data and motions).
+//! Export from an editable object: the static exporter
+//! and the skeleton exporter (skinned, with bone data and motions).
 //!
-//! What the C++ does, kept here because files depend on it:
+//! What the exporters do, kept here because files depend on it:
 //! - neither exporter welds vertices: every face corner is a vertex of its own;
-//! - both `CalculateTB` bodies are commented out: a static model carries no tangents, a
+//! - neither exporter calculates tangents: a static model carries none, a
 //!   skinned one the constructor's (1, 0, 0) and (0, 0, 1);
 //! - the static exporter's VIPM pass returns at once, so it never writes a progressive mesh;
 //!   a skeleton flagged progressive goes through the VIPM pass (`vipm`) instead of the face
@@ -33,7 +33,7 @@ const MAX_BONE: usize = 223;
 /// `BI_NONE`.
 const BI_NONE: u16 = u16::MAX;
 
-/// What the C++ takes from the machine and the library.
+/// What the export takes from the machine and the library.
 #[derive(Clone, Debug, Default)]
 pub struct ExportOptions {
     /// `m_LibName`: the object's library name, written into the description.
@@ -45,7 +45,7 @@ pub struct ExportOptions {
     pub materials: Option<std::sync::Arc<gz_fmt_xr::GameMaterials>>,
 }
 
-/// An exported model and what the C++ would have logged.
+/// An exported model and what the export would have logged.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Export {
     pub bytes: Vec<u8>,
@@ -111,13 +111,13 @@ impl Part {
         Some(p as u16)
     }
 
-    /// `CObjectOGFCollectorPacked::add_face`: false asks for a new part.
+    /// False asks for a new part.
     fn add_face(&mut self, v: [OgfVert; 3], warnings: &mut Vec<String>) -> bool {
         if similar(v[0].p, v[1].p, EPS) || similar(v[0].p, v[2].p, EPS) || similar(v[1].p, v[2].p, EPS) {
             warnings.push("Degenerate face found. Removed.".to_owned());
             return true;
         }
-        // oracle: a vertex packed before the part filled up stays in it, its face is lost
+        // a vertex packed before the part filled up stays in it, its face is lost
         let (Some(a), Some(b), Some(c)) = (self.pack(v[0]), self.pack(v[1]), self.pack(v[2])) else {
             return false;
         };
@@ -149,7 +149,7 @@ fn save_static_part(w: &mut Writer, obj: &Object, surface: usize, part: &Part) {
     });
 }
 
-/// `CExportObjectOGF::Export` of a whole object (`PrepareRigidOGF`).
+/// Exports a whole object.
 pub fn export_static(obj: &Object, opts: &ExportOptions) -> Result<Export> {
     if obj.meshes.is_empty() {
         return Err(fail("The object has no meshes."));
@@ -183,7 +183,7 @@ pub fn export_static(obj: &Object, opts: &ExportOptions) -> Result<Export> {
                 split.parts.push(Part::default());
                 split.current = Some(split.parts.len() - 1);
             }
-            // oracle: the counter drops once per face, so a two-sided list is walked twice
+            // the counter drops once per face, so a two-sided list is walked twice
             loop {
                 for &f in sf.faces.iter() {
                     let face = mesh
@@ -288,7 +288,7 @@ struct SkelVert {
 }
 
 impl SkelVert {
-    /// `SSkelVert::set`: the bones sorted by id.
+    /// The bones sorted by id.
     fn new(sv: &SkinVertex, bones: &[Bw]) -> Self {
         let mut b: SmallVec<[Bw; 4]> = bones.iter().copied().collect();
         b.sort_by_key(|x| x.id);
@@ -317,7 +317,7 @@ struct SkelSplit {
 }
 
 impl SkelSplit {
-    /// `CSkeletonCollectorPacked::add_face`: false for a degenerate face, which is left out.
+    /// False for a degenerate face, which is left out.
     fn add_face(&mut self, v: [&SkelVert; 3], warnings: &mut Vec<String>) -> Result<bool> {
         if similar(v[0].offs, v[1].offs, EPS)
             || similar(v[0].offs, v[2].offs, EPS)
@@ -338,13 +338,13 @@ impl SkelSplit {
         Ok(true)
     }
 
-    /// `MakeProgressive`: the collapse order (vertices permuted, faces in window order) and
+    /// The collapse order (vertices permuted, faces in window order) and
     /// the sliding windows. When the pass gives nothing the split stays as it is, unoptimised,
-    /// as the C++ leaves it ("Can't make progressive.").
+    /// as the X-Ray SDK's exporter leaves it ("The model could not be made progressive.").
     fn make_progressive(&mut self, warnings: &mut Vec<String>) {
         let verts: Vec<(Vec3, Vec2)> = self.verts.iter().map(|v| (v.offs, v.uv)).collect();
         let Some(r) = crate::vipm::convert(&verts, &self.faces) else {
-            warnings.push("!..Can't make progressive.".to_owned());
+            warnings.push("The model could not be made progressive.".to_owned());
             return;
         };
         let source = self.verts.clone();
@@ -357,7 +357,7 @@ impl SkelSplit {
         self.swr = r.swr;
     }
 
-    /// `MakeStripify`: the face order of the cache model, then the vertices in first use.
+    /// The face order of the cache model, then the vertices in first use.
     fn stripify(&mut self) {
         let flat: Vec<u16> = self.faces.iter().flatten().copied().collect();
         let remap = optimize_faces(&flat);
@@ -459,7 +459,7 @@ impl SkelSplit {
     }
 }
 
-/// `BuildGroups`: the break-apart group of every bone.
+/// The break-apart group of every bone.
 fn build_groups(obj: &Object, bone: usize, groups: &mut [u16], mut id: u16, last: &mut u16) {
     if obj.bones[bone].ik.breakable() {
         *last += 1;
@@ -602,7 +602,7 @@ fn prepare_mesh(
     Ok(())
 }
 
-/// `CExportSkeleton::Export`: the geometry, the bones and, for an animated object, the motions.
+/// The geometry, the bones and, for an animated object, the motions.
 pub fn export_skeleton(obj: &Object, opts: &ExportOptions, influence: u8) -> Result<Export> {
     let mut warnings = Vec::new();
     let (mut splits, total) = prepare_geometry(obj, influence, &mut warnings)?;
@@ -672,7 +672,7 @@ pub fn export_skeleton(obj: &Object, opts: &ExportOptions, influence: u8) -> Res
 
 // ------------------------------------------------------------------ breakable parts
 
-/// A face of a breakable part, in the part's own frame (`SBFace` after `SBPart::prepare`).
+/// A face of a breakable part, in the part's own frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BreakableFace {
     pub o: [Vec3; 3],
@@ -685,7 +685,7 @@ pub struct BreakableFace {
     pub two_sided: bool,
 }
 
-/// A fragment of a breakable part (`SBBone`).
+/// A fragment of a breakable part.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BreakableBone {
     pub name: SmolStr,
@@ -696,24 +696,24 @@ pub struct BreakableBone {
     pub area: f32,
 }
 
-/// `SBPart`: what `SBPart::Export` writes.
+/// What a breakable part's export writes.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BreakablePart {
     pub faces: Vec<BreakableFace>,
     pub bones: Vec<BreakableBone>,
 }
 
-/// `SBoneShape::stBox`, `sfRemoveAfterBreak`, `jtNone`, `SJointIKData::flBreakable`.
+/// The box shape, the remove-after-break flag, the no-joint type and the breakable flag of the joint IK data.
 const SHAPE_BOX: u16 = 1;
 const SHAPE_REMOVE_AFTER_BREAK: u16 = 1 << 1;
 const JOINT_NONE: u32 = 4;
 const IK_BREAKABLE: u32 = 1;
 
-/// `SBPart::Export(F, 1)`: the rigid skeleton of a breakable part - one split per shader and
+/// The rigid skeleton of a breakable part - one split per shader and
 /// texture, one bone per fragment, each bone a removable box of its points.
 ///
-/// The faces are not optimised (the C++ writes them in the order they came); the IK record's
-/// friction, which `SJointIKData::Reset` leaves uninitialised in the C++, is 0 here, as is the
+/// The faces are not optimised (they are written in the order they came); the IK record's
+/// friction, which the X-Ray SDK leaves uninitialised, is 0 here, as is the
 /// count of degenerate faces a split starts with (also uninitialised there).
 pub fn export_breakable(part: &BreakablePart) -> Result<Export> {
     if part.bones.len() > 63 {
@@ -756,7 +756,7 @@ pub fn export_breakable(part: &BreakablePart) -> Result<Export> {
             for x in &mut v {
                 x.norm = -x.norm;
             }
-            // oracle: `add_face` counts the face and the caller counts it again
+            // `add_face` counts the face and the caller counts it again
             if !split.add_face([&v[0], &v[2], &v[1]], &mut warnings)? {
                 *invalid += 2;
             }
@@ -821,7 +821,7 @@ pub fn export_breakable(part: &BreakablePart) -> Result<Export> {
                 box_halfsize: obb.halfsize,
                 ..gz_fmt_object::BoneShape::default()
             };
-            // `SJointLimit::Reset` is a zero limit: its negation is written, -0
+            // a joint limit's reset is a zero limit: its negation is written, -0
             let limit = [-0.0f32, -0.0, 1.0, 1.0];
             BoneIk {
                 version: crate::bones::IKDATA_VERSION,
@@ -846,7 +846,7 @@ pub fn export_breakable(part: &BreakablePart) -> Result<Export> {
     Ok(Export { bytes: w.into_bytes(), warnings })
 }
 
-/// `CEditableObject::PrepareOMF`: the motion keys and definitions alone.
+/// The motion keys and definitions alone.
 pub fn export_omf(obj: &Object) -> Result<Export> {
     let mut warnings = Vec::new();
     let mut w = Writer::new();
@@ -865,7 +865,6 @@ fn write_motions(obj: &Object, w: &mut Writer, warnings: &mut Vec<String>) -> Re
     motion_defs(obj, w)
 }
 
-/// `AlineYtoGlobalFrame`.
 fn align_y(m: &mut Mat4) {
     let mut i = m.row(0);
     let mut k = m.row(2);
@@ -891,7 +890,7 @@ fn align_y(m: &mut Mat4) {
     m.set_row(2, k);
 }
 
-/// `ExportMotionKeys`: the `OGF_S_MOTIONS` chunk.
+/// The `OGF_S_MOTIONS` chunk.
 fn motion_keys(obj: &Object, warnings: &mut Vec<String>) -> Result<Vec<u8>> {
     let bones = &obj.bones;
     let gt = Mat4::mul(
@@ -941,7 +940,7 @@ fn motion_keys(obj: &Object, warnings: &mut Vec<String>) -> Result<Vec<u8>> {
                 if frame == m.frame_start {
                     anchor = Mat4::invert_43(&pose.world[anchor_bone]);
                 }
-                // `CalculateRootObjectAnimation`
+                // the root object's animation is calculated
                 let bottom = (1..bones.len())
                     .filter(|i| !bones[*i].is_root())
                     .map(|i| pose.world[i].c().y)
@@ -1036,7 +1035,7 @@ fn motion_keys(obj: &Object, warnings: &mut Vec<String>) -> Result<Vec<u8>> {
     Ok(w.into_bytes())
 }
 
-/// `ExportMotionDefs`: `OGF_S_MOTION_REFS2`, or `OGF_S_SMPARAMS`.
+/// `OGF_S_MOTION_REFS2`, or `OGF_S_SMPARAMS`.
 fn motion_defs(obj: &Object, w: &mut Writer) -> Result<()> {
     if !obj.motion_refs.is_empty() {
         w.chunk(chunk::S_MOTION_REFS2, |w| {
@@ -1061,7 +1060,7 @@ fn motion_defs(obj: &Object, w: &mut Writer) -> Result<()> {
     w.open_chunk(chunk::S_SMPARAMS);
     w.w_u16(crate::motion::SMPARAMS_VERSION);
     if parts.is_empty() {
-        // oracle: the default part writes the bone indices without their names, which the
+        // the default part writes the bone indices without their names, which the
         // engine's reader expects; such a file does not load
         w.w_u16(1);
         w.w_stringz("default");
@@ -1233,7 +1232,7 @@ mod tests {
         // no bone motions: every bone keeps its rest pose
         obj.motions =
             vec![SMotion { name: "idle".into(), frame_start: 0, frame_end: 1, ..SMotion::default() }];
-        // a skeleton without bone parts gets the oracle's default part, which the engine
+        // a skeleton without bone parts gets the X-Ray SDK's default part, which the engine
         // cannot read (`a_skeleton_without_parts_writes_the_unreadable_default_part`)
         obj.bone_parts = vec![gz_fmt_object::BonePart {
             alias: "default".into(),
@@ -1244,7 +1243,7 @@ mod tests {
 
     #[test]
     fn a_skeleton_without_parts_writes_the_unreadable_default_part() {
-        // ExportSkeleton.cpp writes the bone indices without their names; the engine's
+        // the X-Ray SDK's skeleton exporter writes the bone indices without their names; the engine's
         // `motions_value::load` reads a name before each index, so neither it nor this reader
         // takes such a file
         let mut obj = skeleton();
@@ -1318,7 +1317,7 @@ mod tests {
     }
 
     #[test]
-    fn key_quantisation_follows_the_cpp() {
+    fn key_quantisation_matches_the_original_exporter() {
         // truncation toward zero, and the x86 answer for a NaN
         assert_eq!(cvtt(0.9 * 127.0), 114);
         assert_eq!(cvtt(-0.9 * 127.0), -114);

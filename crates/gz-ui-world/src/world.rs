@@ -2,11 +2,10 @@
 //!
 //! What the module's mode keeps of the original game, where the player starts and with what -
 //! on the surface; where the rules apply, the playable area and the transitions that start closed
-//! - under one folded More. The tab is saved as it is edited: every edit is a `world_set` call,
+//! - under one folded More. The tab is saved as it is edited: every edit is a `world.set` call,
 //!   sent one after another; `mod.ltx` is the one truth and the tab follows the manifest's store.
 //!   The Player Starts and the problems are read again a second apart, on the pools. A problems bar
-//!   (and the drawer it opens) shows only when there are problems. The C++ specification is the
-//!   World Rules tab of `EditorWorld.cpp` (`DrawRules` .. `DrawWorldBody`, `McpView`).
+//!   (and the drawer it opens) shows only when there are problems.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -56,7 +55,7 @@ const HOST: &str = crate::characters::HOST;
 const COLUMN_W: f32 = 900.0;
 const TABLE_ROW: f32 = 26.0;
 
-/// The five rules as the author reads them (`kRules`).
+/// The five rules as the author reads them.
 const RULE_TEXT: [(&str, &str); 5] = [
     (
         "Original characters",
@@ -77,7 +76,7 @@ const RULE_TEXT: [(&str, &str); 5] = [
     ),
 ];
 
-/// "W203 world: locked names 'x', ..." as the sentence the author reads (`ProblemLine`).
+/// "W203 world: locked names 'x', ..." as the sentence the author reads.
 #[must_use]
 pub fn problem_line(problem: &str) -> String {
     let mut text_ = match problem.find(": ") {
@@ -95,7 +94,7 @@ pub fn problem_line(problem: &str) -> String {
     text_
 }
 
-/// What the rules shape, in one sentence (`ModeText`).
+/// What the rules shape, in one sentence.
 #[must_use]
 pub fn mode_text(m: &Manifest, modes: Option<&ModeScan>) -> String {
     if let Some(p) = m.provides_modes.first() {
@@ -119,7 +118,7 @@ pub fn mode_text(m: &Manifest, modes: Option<&ModeScan>) -> String {
     "No game mode is chosen yet: pick one in Mod Settings, Game Mode.".to_owned()
 }
 
-/// A kit's items as `world_set start_kit=` takes them: `section` or `section=N`.
+/// A kit's items as `world.set start_kit=` takes them: `section` or `section=N`.
 #[must_use]
 pub fn kit_list(items: &[KitItem]) -> String {
     items
@@ -209,7 +208,7 @@ pub struct WorldDoc {
     inbox: Arc<Mutex<Inbox>>,
     lists: ListsView,
     actions: Vec<Action>,
-    /// How far the page scrolled at most, the last frame: where `ui_scroll to=bottom` goes.
+    /// How far the page scrolled at most, the last frame: where `ui.scroll to=bottom` goes.
     scroll_max: f32,
 }
 
@@ -260,7 +259,7 @@ impl WorldDoc {
     // ---- the data -------------------------------------------------------------------------------
 
     /// mod.ltx is the one truth: the tab follows the manifest's store whenever nothing of its own
-    /// is on the way there (`RefreshWorld`). A frame only compares revisions.
+    /// is on the way there. A frame only compares revisions.
     fn sync(&mut self) {
         let Some(session) = self.editor.project_opt() else { return };
         let root = session.root.to_string_lossy().into_owned();
@@ -436,7 +435,7 @@ impl WorldDoc {
 
     // ---- saving ---------------------------------------------------------------------------------
 
-    /// An edit goes to mod.ltx (`Commit`): `world_set` with what changed, after the ones before.
+    /// An edit goes to mod.ltx (`Commit`): `world.set` with what changed, after the ones before.
     fn send(&self, a: Args) {
         self.outbox.queue.lock().push_back(a);
         run_outbox(&self.editor, &self.outbox, &self.inbox);
@@ -529,7 +528,7 @@ impl WorldDoc {
     }
 
     /// Takes everything of the original game out: reversible, but it is five decisions at once,
-    /// so it asks (`AskEmptyWorld`).
+    /// so it asks.
     fn ask_empty_world(&mut self, ctx: &egui::Context) {
         let kept: Vec<String> = RULE_TEXT
             .iter()
@@ -708,8 +707,7 @@ impl WorldDoc {
         }
     }
 
-    /// What a new game of the mode begins with, in place of the new-game screen's loadout
-    /// (`DrawStartKit`).
+    /// What a new game of the mode begins with, in place of the new-game screen's loadout.
     fn draw_kit(&mut self, ui: &mut Ui) {
         if !self.kit.declared {
             let _ = text::prose(
@@ -1240,12 +1238,12 @@ impl WorldDoc {
     }
 }
 
-/// The caption of a level, the name itself when it has none (`EditorWorld::Caption`).
+/// The caption of a level, the name itself when it has none.
 fn level_caption(captions: &FxHashMap<String, String>, level: &str) -> String {
     captions.get(level).filter(|c| !c.is_empty()).cloned().unwrap_or_else(|| level.to_owned())
 }
 
-/// "Caption  (name)", the name alone when it has no caption (`LevelLabel`).
+/// "Caption  (name)", the name alone when it has no caption.
 fn level_label(captions: &FxHashMap<String, String>, level: &str) -> String {
     let caption = level_caption(captions, level);
     if caption == level { level.to_owned() } else { format!("{caption}  ({level})") }

@@ -10,7 +10,7 @@ use std::path::Path;
 use gz_editor::fsx::WriteGuard;
 use gz_project::{is_editor_only_entry, paths};
 
-/// The longest path the C++ editor built (`MAX_PATH`).
+/// The longest path a build writes (`MAX_PATH`).
 const MAX_PATH: usize = 260;
 
 /// Forward slashes in, JSON-escaped doubled backslashes in - one clean path out: separators

@@ -1,4 +1,4 @@
-//! `level.ai`: the navigation graph the game walks - `hdrNODES` and one packed node per cell.
+//! `level.ai`: the navigation graph the game walks - the header and one packed node per cell.
 //!
 //! Five node layouts exist, by header version; all are read and written:
 //!
@@ -70,13 +70,13 @@ impl NodeLayout {
     }
 }
 
-/// `hdrNODES`.
+/// The header of `level.ai`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LevelGraphHeader {
     pub version: u32,
-    /// The side of a cell, `hdrNODES::size`.
+    /// The side of a cell, the header's `size`.
     pub cell_size: f32,
-    /// The height range heights are packed over, `hdrNODES::size_y`.
+    /// The height range heights are packed over, the header's `size_y`.
     pub factor_y: f32,
     pub aabb: Aabb,
     pub guid: [u8; 16],
@@ -95,7 +95,7 @@ impl LevelGraphHeader {
         i_floor((self.aabb.max.x - self.aabb.min.x) / self.cell_size + EPS_L + 1.5) as u32
     }
 
-    /// `CLevelGraph::vertex_position`: the world position of a packed one.
+    /// The world position of a packed one.
     #[must_use]
     pub fn unpack_position(&self, xz: u32, y: u16) -> Vec3 {
         let row = self.row_length().max(1);
@@ -106,7 +106,7 @@ impl LevelGraphHeader {
         )
     }
 
-    /// `CLevelGraph::vertex_position` the other way: the cell and height of a world position, as
+    /// The other way round: the cell and height of a world position, as
     /// the game looks a position up.
     #[must_use]
     pub fn pack_position(&self, p: Vec3) -> (u32, u16) {
@@ -118,7 +118,7 @@ impl LevelGraphHeader {
         (pxz as u32, py as u16)
     }
 
-    /// `CNodePositionCompressor`: the cell and height the level graph builders give a node.
+    /// The cell and height the level graph builders give a node.
     /// Differs from [`Self::pack_position`] by an epsilon inside the floor.
     #[must_use]
     pub fn compress_position(&self, p: Vec3, patch_size: f32) -> (u32, u16) {

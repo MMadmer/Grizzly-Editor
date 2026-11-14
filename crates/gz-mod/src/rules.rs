@@ -142,7 +142,7 @@ pub fn valid_global_name(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
 }
 
-/// The manifest's own check before a build, in the C++ order and with its messages: the id,
+/// The manifest's own check before a build, with its messages: the id,
 /// the targeting choice, the declared modes; the warnings about the mode titles and about a
 /// module that turns the game's updates off. Console commands are [`crate::validate_commands`]:
 /// they need the project's scripts.

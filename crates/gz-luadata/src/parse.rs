@@ -64,8 +64,8 @@ enum Idx {
     Str,
 }
 
-/// A jump list: `None` is `NO_JMP`; `Some(novalue)` says whether one of its jumps produces no
-/// value (`jmp_novalue`).
+/// A jump list: `None` is no jump; `Some(novalue)` says whether one of its jumps produces no
+/// value.
 type Jl = Option<bool>;
 
 fn jl_append(a: &mut Jl, b: Jl) {
@@ -253,7 +253,7 @@ pub(crate) struct Parser<'a> {
     ret: Option<Vec<u32>>,
 }
 
-/// Compiles `src` as LuaJIT's `luaL_loadbuffer` does. `Ok(None)`: the text is a bytecode dump.
+/// Compiles `src` as LuaJIT's buffer loader does. `Ok(None)`: the text is a bytecode dump.
 pub(crate) fn compile(src: &[u8]) -> R<Option<Compiled>> {
     let mut p = Parser {
         ls: Lexer::new(src),

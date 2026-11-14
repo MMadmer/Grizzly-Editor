@@ -65,8 +65,8 @@ pub struct WorldService {
     refreshing: AtomicBool,
 }
 
-/// What `gz_nq` reads of the world: the level changers and the patrols (`EditorWorld::
-/// Transitions`, `GamePatrols`).
+/// What `gz_nq` reads of the world: the level changers and the patrols (the transitions and the game's
+/// patrols).
 struct Lookup(Arc<WorldService>);
 
 impl WorldLookup for Lookup {
@@ -142,7 +142,7 @@ impl WorldService {
     }
 
     /// The linked game's world, read once per game revision: `all.spawn` read on the IO pool,
-    /// parsed on the CPU pool (`EnsureGame`).
+    /// parsed on the CPU pool.
     pub async fn game(&self) -> Arc<GameWorld> {
         let rev = self.project.game_rev();
         if let Some(g) = self.game.peek_at(&(), rev) {
@@ -231,7 +231,7 @@ impl WorldService {
             .collect()
     }
 
-    /// Every Player Start (`Starts`): the spawn layers' `op = start` entries, with the open
+    /// Every Player Start: the spawn layers' `op = start` entries, with the open
     /// scene's own starts standing in for its level's file.
     pub async fn starts(&self, editor: &Editor) -> Vec<Start> {
         let (scene_level, scene) = SceneStarts::of(editor).get(editor).unwrap_or_default();
@@ -266,7 +266,7 @@ impl WorldService {
         out
     }
 
-    /// The problems of a world and a kit in the open project (`Validate`), with the starts they
+    /// The problems of a world and a kit in the open project, with the starts they
     /// were found among.
     pub async fn problems(&self, editor: &Editor, w: &World, k: &StartKit) -> (Vec<Start>, Vec<String>) {
         let starts = self.starts(editor).await;

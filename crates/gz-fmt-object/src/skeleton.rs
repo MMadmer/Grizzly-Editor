@@ -1,4 +1,4 @@
-//! Poses of a source skeleton: the rest pose and an animated one (`EditObjectMotions.cpp`).
+//! Poses of a source skeleton: the rest pose and an animated one.
 //!
 //! Bones are expected in hierarchy order - a parent before its children - which is the order
 //! `Object::read` leaves them in.
@@ -8,7 +8,7 @@ use glam::Vec3;
 use crate::bone::Bone;
 use crate::xmath::Mat4;
 
-/// `CalculateBindPose`: per bone, the rest transform in its parent's space, in the model's
+/// Per bone, the rest transform in its parent's space, in the model's
 /// space, and the inverse of the latter.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RestPose {
@@ -52,14 +52,14 @@ pub struct BoneState {
 }
 
 impl BoneState {
-    /// `CBone::Reset`: the rest pose of a bone.
+    /// The rest pose of a bone.
     #[must_use]
     pub fn rest(bone: &Bone) -> Self {
         Self { offset: bone.rest_offset, rotate: bone.rest_rotate, world_orient: false }
     }
 }
 
-/// `CalculateAnimation`: per bone, the transform in its parent's space and in the model's.
+/// Per bone, the transform in its parent's space and in the model's.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Pose {
     pub local: Vec<Mat4>,

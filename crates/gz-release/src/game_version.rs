@@ -1,4 +1,4 @@
-//! The linked game's version (`LinkedGameVersion`): `MAJOR.MINOR.PATCH` of the file version
+//! The linked game's version: `MAJOR.MINOR.PATCH` of the file version
 //! `xrEngine.exe` carries in its version resource - what a release asks for as `requires_game`
 //! when nothing else is given. Read from the PE file itself: the headers, then the resource
 //! section only.

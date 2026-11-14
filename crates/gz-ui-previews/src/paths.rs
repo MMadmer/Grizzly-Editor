@@ -84,7 +84,7 @@ pub fn engine_name(name: &str) -> String {
     out
 }
 
-/// A path for a JSON answer: forward slashes (`NqUtil::JsonPath`).
+/// A path for a JSON answer: forward slashes.
 #[must_use]
 pub fn json_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
@@ -122,7 +122,7 @@ pub fn strip_ext(name: &str) -> &str {
     }
 }
 
-/// `LibraryFolderText`: a folder of the open project or of the editor is named by where it sits
+/// A folder of the open project or of the editor is named by where it sits
 /// in it ("the editor's rawdata\textures folder"), anything else by its whole path.
 #[must_use]
 pub fn folder_text(project: Option<&Path>, editor_root: &Path, folder: &Path) -> String {

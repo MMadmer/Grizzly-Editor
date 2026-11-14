@@ -42,7 +42,7 @@ const SCENE_NODE: usize = 21;
 /// A `build.aimap` node: the same without the flags.
 const BUILD_NODE: usize = 20;
 
-/// Node flags of the tool (`SAINode::fl*`).
+/// Node flags of the tool.
 pub mod node_flags {
     pub const SELECTED: u8 = 1 << 0;
     pub const HL_SELECTED: u8 = 1 << 1;
@@ -52,7 +52,7 @@ pub mod node_flags {
     pub const N4: u8 = 1 << 7;
 }
 
-/// `SAIParams`: how the map was generated.
+/// How the map was generated.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AiParams {
     pub patch_size: f32,
@@ -85,7 +85,7 @@ impl AiParams {
     }
 }
 
-/// `SNodePositionOld`: a position in patches (x, z) and 1/65535 of the map's height (y).
+/// A position in patches (x, z) and 1/65535 of the map's height (y).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PackedPos {
     pub x: i16,
@@ -94,7 +94,7 @@ pub struct PackedPos {
 }
 
 impl PackedPos {
-    /// `ESceneAIMapTool::PackPosition`.
+    /// Packs a position.
     #[must_use]
     pub fn pack(p: Vec3, bbox: &Aabb, params: &AiParams) -> Self {
         let sp = 1.0 / params.patch_size;
@@ -104,7 +104,7 @@ impl PackedPos {
         Self { x: px as i16, y: py as u16, z: pz as i16 }
     }
 
-    /// `ESceneAIMapTool::UnpackPosition`.
+    /// Unpacks a position.
     #[must_use]
     pub fn unpack(&self, bbox: &Aabb, params: &AiParams) -> Vec3 {
         Vec3::new(
@@ -156,7 +156,7 @@ impl SceneAiNode {
     }
 }
 
-/// A node as the tool works on it (`SAINode`).
+/// A node as the tool works on it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AiMapNode {
     /// Left, forward, right, back: indices into the node list.
@@ -188,7 +188,7 @@ impl AiMapNode {
     }
 }
 
-/// `CalculateNodesBBox`: the box of the node centres.
+/// The box of the node centres.
 #[must_use]
 pub fn nodes_bbox(nodes: &[AiMapNode]) -> Aabb {
     let mut bb = Aabb::INVALID;
@@ -201,7 +201,7 @@ pub fn nodes_bbox(nodes: &[AiMapNode]) -> Aabb {
 /// The AI Map tool's part of a scene.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SceneAiMap {
-    /// The tool's flags (`flHideNodes` = 2, `flSlowCalculate` = 4).
+    /// The tool's flags: hide nodes (2) and slow calculate (4).
     pub flags: u32,
     /// The box positions are packed over.
     pub bbox: Aabb,
@@ -253,7 +253,7 @@ fn read_nodes(body: &[u8], size: usize, with_flags: bool) -> Result<Vec<SceneAiN
 }
 
 impl SceneAiMap {
-    /// Reads the tool's chunk of a scene (`LoadStream`).
+    /// Reads the tool's chunk of a scene.
     pub fn read(bytes: &[u8]) -> Result<Self> {
         let r = Reader::new(bytes);
         let version = u16_at(fixed(&r, CHUNK_VERSION, 2, "version")?.bytes(), 0);
@@ -284,7 +284,7 @@ impl SceneAiMap {
         Ok(out)
     }
 
-    /// The tool's chunk of a scene (`SaveStream`).
+    /// The tool's chunk of a scene.
     #[must_use]
     pub fn write(&self) -> Vec<u8> {
         let mut w = Writer::with_capacity(160 + self.nodes.len() * SCENE_NODE);
@@ -408,20 +408,20 @@ pub fn compress_cover(cover: f32, max: i32) -> u8 {
 
 /// The cover the editor's own graph gives every node at standing height: it packs the height
 /// constant 1.5 where the compiler packs a measured cover.
-// oracle: CLevelGraphEditor passes high_cover_height / low_cover_height to compress(); 15 and 9
+// the high and low cover heights are passed to the compression; 15 and 9
 // are what that gives.
 pub const EDITOR_HIGH_COVER: u8 = 15;
 /// The same at crouching height (0.6 packed).
 pub const EDITOR_LOW_COVER: u8 = 9;
 
-/// The `level.ai` the editor builds from the tool's nodes (`CLevelGraphEditor::build`): header
+/// The `level.ai` the editor builds from the tool's nodes: header
 /// over the box of the node centres, nodes packed, sorted by cell and renumbered. `version` is
 /// 10, or 8 for a Shadow of Chernobyl project; `guid` is a fresh one from the caller.
 ///
 /// Every node gets [`EDITOR_HIGH_COVER`] / [`EDITOR_LOW_COVER`]; real covers are the AI
-/// compiler's work. The four unused bits of a node's link block are 0 here - in the C++ they are
+/// compiler's work. The four unused bits of a node's link block are 0 here; the X-Ray SDK leaves
 /// whatever the stack held.
-// oracle: for Shadow of Chernobyl the C++ writes version 8 into the header and still packs the
+// for Shadow of Chernobyl the X-Ray SDK writes version 8 into the header and still packs the
 // 23-byte node of version 10, which no game reads; here version 8 gets its own 21-byte node.
 pub fn export_level_graph(
     nodes: &[AiMapNode],
@@ -467,7 +467,7 @@ pub fn export_level_graph(
     Ok(LevelGraph { header, nodes: packed.into() })
 }
 
-/// `CNodeRenumberer`: sorts the nodes by cell (stable) and rewrites the links to match.
+/// Sorts the nodes by cell (stable) and rewrites the links to match.
 pub fn renumber(nodes: &mut [AiNode]) {
     let n = nodes.len() as u32;
     let mut sorted: Vec<u32> = (0..n).collect();

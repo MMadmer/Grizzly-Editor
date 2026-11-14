@@ -8,8 +8,7 @@
 //! never cut in half.
 //!
 //! A line's level is its colour, and its word (`error`, `warning`, `info`) is one more word the
-//! search finds it by. The marks plain text carries (`! `, `~ `, `* ` of the game and the
-//! compilers) set the level and are not shown.
+//! search finds it by. The level is the record's own; no text carries a mark.
 
 use std::sync::Arc;
 
@@ -59,12 +58,6 @@ impl LineLevel {
     }
 }
 
-/// A line's text without the mark that set its level.
-#[must_use]
-pub fn without_mark(text: &str) -> &str {
-    ["! ", "~ ", "* "].iter().find_map(|m| text.strip_prefix(m)).unwrap_or(text)
-}
-
 /// A line of the view.
 #[derive(Clone, Debug)]
 struct Line {
@@ -76,30 +69,6 @@ struct Line {
     mark: bool,
     /// One of the status bar's errors or warnings: the first of its text in its window.
     counted: bool,
-}
-
-/// The level of a plain line by the engine's marks: `! ` an error, `~ ` a warning, `* ` a note.
-#[must_use]
-pub fn level_of(text: &str) -> LineLevel {
-    if text.starts_with("! ") {
-        LineLevel::Error
-    } else if text.starts_with("~ ") {
-        LineLevel::Warning
-    } else if text.starts_with("* ") {
-        LineLevel::Info
-    } else {
-        LineLevel::Plain
-    }
-}
-
-/// `! [LUA]  2 : [Lua] ...script(32) : ...` - a frame of the traceback under a script error, not
-/// an error of its own.
-#[must_use]
-pub fn is_trace_frame(line: &str) -> bool {
-    let Some(rest) = line.strip_prefix("! [LUA]") else { return false };
-    let rest = rest.trim_start_matches(' ');
-    let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-    digits > 0 && rest.get(digits..).is_some_and(|r| r.starts_with(" :"))
 }
 
 /// A note the status bar may show: a report of the editor, not its machinery talking.
@@ -211,15 +180,10 @@ impl Inner {
             Level::Error => LineLevel::Error,
             Level::Warning => LineLevel::Warning,
             Level::Info | Level::Detail => LineLevel::Info,
-            Level::Plain => level_of(&text),
+            Level::Plain => LineLevel::Plain,
         };
         // the status bar's counts and its line: what an author acts on, not the chatter
-        let serious = matches!(level, LineLevel::Error | LineLevel::Warning) && !is_trace_frame(&text);
-        // the mark said the level: the colour says it from here on
-        let text: Arc<str> = match without_mark(&text) {
-            shown if shown.len() != text.len() => shown.into(),
-            _ => text,
-        };
+        let serious = matches!(level, LineLevel::Error | LineLevel::Warning);
         if level == LineLevel::Info && text.starts_with(PROJECT_OPENED) {
             self.count_from_here(COUNT_MARK);
         }
@@ -563,17 +527,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn marks_and_trace_frames() {
-        assert_eq!(level_of("! boom"), LineLevel::Error);
-        assert_eq!(level_of("~ hm"), LineLevel::Warning);
-        assert_eq!(level_of("* note"), LineLevel::Info);
-        assert_eq!(level_of("plain"), LineLevel::Plain);
-        assert!(is_trace_frame("! [LUA]  2 : [Lua] x.script(32) : y"));
-        assert!(!is_trace_frame("! [LUA] error in x.script"));
-        assert!(!is_trace_frame("! other"));
-    }
-
-    #[test]
     fn the_status_line_skips_the_machinery() {
         assert!(!notable_note("startup: 0.14 s, 120 file reads"));
         assert!(!notable_note("  Loading fonts   0.02 s"));
@@ -582,19 +535,18 @@ mod tests {
     }
 
     #[test]
-    fn a_mark_sets_the_level_and_is_not_shown_and_the_level_is_a_word() {
+    fn the_level_is_the_records_and_the_text_is_shown_as_written_and_the_level_is_a_word() {
         let log = Log::memory();
-        log.plain("~ texture 'x' is missing");
+        log.warn("texture 'x' is missing");
         log.plain("plain words");
         let mut m = Inner::default();
         m.sync(&log);
         let first = m.lines.first().expect("a line");
         assert_eq!((first.level, &*first.text), (LineLevel::Warning, "texture 'x' is missing"));
+        assert_eq!(m.lines.get(1).map(|l| l.level), Some(LineLevel::Plain));
         m.search = "warning texture".to_owned();
         m.refilter_now();
         assert_eq!(m.visible.len(), 1);
-        assert_eq!(without_mark("* note"), "note");
-        assert_eq!(without_mark("*note"), "*note");
     }
 
     #[test]
@@ -606,7 +558,6 @@ mod tests {
         log.warn("again and again");
         log.error("broke");
         log.info("startup: 1 s");
-        log.write(Level::Error, "! [LUA]  1 : [Lua] a.script(1) : f");
         let mut m = Inner::default();
         m.sync(&log);
         assert_eq!((m.errors, m.warnings), (1, 1));

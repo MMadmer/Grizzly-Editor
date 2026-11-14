@@ -7,13 +7,13 @@ use gz_ltx::Ltx;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpawnSection {
     pub section: String,
-    /// The list path of its `$spawn` value (`ListPath`).
+    /// The list path of its `$spawn` value.
     pub group: String,
     /// `class` as written.
     pub class: String,
 }
 
-/// `UISpawnTool::ListPath`: the `$spawn` value's `\`-separated parts, each trimmed of blanks and
+/// The `$spawn` value's `\`-separated parts, each trimmed of blanks and
 /// a stray leading `;`, empty parts dropped.
 #[must_use]
 pub fn list_path(spawn: &str) -> String {

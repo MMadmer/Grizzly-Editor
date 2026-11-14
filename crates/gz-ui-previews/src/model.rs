@@ -774,7 +774,7 @@ impl ModelDoc {
         });
     }
 
-    /// `preview_model`'s fields after `tab` and `active`.
+    /// `preview.model`'s fields after `tab` and `active`.
     #[must_use]
     pub fn state_json(&self) -> serde_json::Map<String, Value> {
         let mut out = serde_json::Map::new();

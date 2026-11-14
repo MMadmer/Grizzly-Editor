@@ -137,7 +137,7 @@ fn every_entity_of_all_spawn_decodes_and_writes_back() {
                         return Err(differs("spawn", &spawn, &v.spawn));
                     }
                 } else {
-                    // an older packet is written in today's layout, as `Spawn_Write` writes it: that
+                    // an older packet is written in today's layout, as the game writes it: that
                     // one must read back to itself
                     let mut up = Entity::from_spawn_packet(&spawn, &settings).map_err(|e| e.to_string())?;
                     let _ = up.set_name(&name);
@@ -147,7 +147,7 @@ fn every_entity_of_all_spawn_decodes_and_writes_back() {
                     upgraded.fetch_add(1, Ordering::Relaxed);
                 }
                 // `UPDATE_Write` of the physics block derives its mask from the values (a count of
-                // no items, velocities under EPS_S) and always writes the freeze byte as 1: the C++
+                // no items, velocities under EPS_S) and always writes the freeze byte as 1: the game
                 // normalises what the spawn compiler wrote, and so does this crate. The rule held to:
                 // the update written anew reads back to itself.
                 let update = fresh.update_packet().unwrap_or_default();

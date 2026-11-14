@@ -17,7 +17,7 @@ use crate::settings::EditorSettings;
 
 const GPU_PREF_KEY: &str = r"HKCU\Software\Microsoft\DirectX\UserGpuPreferences";
 
-/// The driver's hint (`EGpuPreference`): the value Windows stores.
+/// The driver's hint: the value Windows stores.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DriverHint {
     Auto,
@@ -53,7 +53,7 @@ impl DriverHint {
         Self::ALL.into_iter().find(|h| h.key().eq_ignore_ascii_case(text))
     }
 
-    /// `GetGpuPreference`: what the stored value says.
+    /// What the stored value says.
     #[must_use]
     pub fn of_value(value: &str) -> Self {
         if value.contains("GpuPreference=2") {
@@ -147,7 +147,7 @@ impl Gpu {
         self.hint_read.load(Ordering::Acquire)
     }
 
-    /// `SetGpuPreference`: written on the IO pool; Windows applies it at the next start.
+    /// Written on the IO pool; Windows applies it at the next start.
     pub fn set_hint(&self, editor: &Arc<Editor>, hint: DriverHint) {
         self.hint.store(hint.code(), Ordering::Release);
         self.hint_read.store(true, Ordering::Release);
@@ -256,7 +256,7 @@ mod tests {
     }
 }
 
-/// Libraries > Reload Textures (`CommandReloadTextures`, `EDevice->ReloadTextures`): a
+/// Libraries > Reload Textures: a
 /// generation every texture cache of the window compares with the one it loaded at - the
 /// viewport's renderer, the previews - and reads its textures again when it moved.
 #[derive(Default)]

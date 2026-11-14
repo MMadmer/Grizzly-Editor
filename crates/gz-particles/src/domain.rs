@@ -1,12 +1,12 @@
-//! `pDomain` (`particle_core.cpp`): a region of space that positions, velocities and the rest
-//! are drawn from or tested against. The file stores domains already built, so only `Within`,
-//! `Generate` and the transforms are needed.
+//! A domain: a region of space that positions, velocities and the rest
+//! are drawn from or tested against. The file stores domains already built, so only the containment test,
+//! the generation and the transforms are needed.
 
 use glam::{Mat4, Vec3};
 
 use crate::rand::Rngs;
 
-/// `PDomainEnum`.
+/// The domain kinds.
 pub mod kind {
     pub const POINT: u32 = 0;
     pub const LINE: u32 = 1;
@@ -51,13 +51,13 @@ impl From<&gz_fmt_xr::Domain> for Domain {
     }
 }
 
-/// `Fvector::normalize_safe`: left as it is when its length is no number above zero.
+/// Left as it is when its length is no number above zero.
 pub(crate) fn normalize_safe(v: Vec3) -> Vec3 {
     let m = v.length_squared();
     if m > f32::MIN_POSITIVE { v * (1.0 / m).sqrt() } else { v }
 }
 
-/// `Fbox::xform`: the box carried by a matrix, by its three edges.
+/// The box carried by a matrix, by its three edges.
 fn xform_box(min: Vec3, max: Vec3, m: &Mat4) -> (Vec3, Vec3) {
     let vx = m.x_axis.truncate() * (max.x - min.x);
     let vy = m.y_axis.truncate() * (max.y - min.y);

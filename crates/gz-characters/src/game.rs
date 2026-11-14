@@ -9,7 +9,7 @@ pub const TRADE_PRESETS: &str = "configs\\misc\\trade\\trade_presets.ltx";
 
 /// The trade categories of `trade_presets.ltx`: every section that lists items, `unused` left
 /// out (nobody trades in those). A section that only inherits (`[medic]:unused,trash,...`) is a
-/// recipe made of categories, not one itself (`ReadPresets`).
+/// recipe made of categories, not one itself.
 #[must_use]
 pub fn trade_categories(text: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -52,7 +52,7 @@ pub fn trade_categories(text: &str) -> Vec<String> {
 const BONE_NAMES: u32 = gz_fmt_ogf::chunk::S_BONE_NAMES;
 
 /// The bone names of a skeletal model, in the file's order; `None` when it carries none or the
-/// chunk does not read (`OgfBoneNames`). Only the top-level chunk list and that one chunk are
+/// chunk does not read. Only the top-level chunk list and that one chunk are
 /// looked at: nothing else of the model is decoded.
 #[must_use]
 pub fn ogf_bone_names(data: &[u8]) -> Option<Vec<String>> {
@@ -75,7 +75,7 @@ pub fn ogf_bone_names(data: &[u8]) -> Option<Vec<String>> {
 }
 
 /// The bones the damage section of a stalker names: the engine stops on the first one a model
-/// lacks (`CDamageManager::load_section`). Every character's spawn section is `:stalker`.
+/// lacks. Every character's spawn section is `:stalker`.
 #[must_use]
 pub fn stalker_damage_bones(ltx: &Ltx) -> Vec<String> {
     let Ok(sect) = ltx.r_string("stalker", "damage") else { return Vec::new() };

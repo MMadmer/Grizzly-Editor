@@ -20,7 +20,7 @@ pub enum AssetKind {
 }
 
 impl AssetKind {
-    /// What the author calls it (`EditorAssetIcons::Name`).
+    /// What the author calls it.
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {

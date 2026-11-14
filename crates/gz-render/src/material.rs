@@ -26,11 +26,11 @@ pub enum EditorMaterial {
     Wireframe,
     /// Not a surface's: the selection outline pass.
     SelectionOutline,
-    /// Its colour times its alpha added (`D3DBLEND_SRCALPHA`, `D3DBLEND_ONE`).
+    /// Its colour times its alpha added.
     AlphaAdd,
-    /// What is behind times its colour (`D3DBLEND_DESTCOLOR`, `D3DBLEND_ZERO`).
+    /// What is behind times its colour.
     Multiply,
-    /// What is behind times twice its colour (`D3DBLEND_DESTCOLOR`, `D3DBLEND_SRCCOLOR`): grey
+    /// What is behind times twice its colour: grey
     /// leaves it as it is.
     Multiply2x,
     /// A distortion the R1 renderer the editor uses does not draw: nothing.
@@ -139,7 +139,7 @@ pub const DEFAULT_RULES: &[(&str, EditorMaterial)] = &[
     ("terrain\\*", EditorMaterial::Terrain),
     ("*lightplanes*", EditorMaterial::Additive),
     ("effects\\glow*", EditorMaterial::Additive),
-    // the particle blender's modes (`Blender_Particle`): set, blend, add, mul, alpha-add; the
+    // the particle blender's modes: set, blend, add, mul, alpha-add; the
     // x-shaders of shaders\r1 add or distort
     ("particles\\alpha_add*", EditorMaterial::AlphaAdd),
     ("particles\\xadd*", EditorMaterial::Additive),

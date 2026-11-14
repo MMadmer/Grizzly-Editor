@@ -139,7 +139,8 @@ impl Stalls {
     /// The UI thread begins a pass (a frame, an event): from here the heartbeat may read its
     /// stack when the pass runs long and a person asked for that.
     pub fn pass_begins(&self) {
-        *self.pass.lock() = Some(Pass { thread: gz_win::current_thread_id(), began: Instant::now(), stack: None });
+        *self.pass.lock() =
+            Some(Pass { thread: gz_win::current_thread_id(), began: Instant::now(), stack: None });
     }
 
     /// The pass is over; answers the stack read during it, as names.
@@ -153,7 +154,10 @@ impl Stalls {
         let thread = {
             let pass = self.pass.lock();
             match pass.as_ref() {
-                Some(p) if p.stack.is_none() && now.duration_since(p.began).as_secs_f32() * 1000.0 >= STALL_MS => {
+                Some(p)
+                    if p.stack.is_none()
+                        && now.duration_since(p.began).as_secs_f32() * 1000.0 >= STALL_MS =>
+                {
                     p.thread
                 }
                 _ => return,

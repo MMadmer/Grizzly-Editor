@@ -92,7 +92,7 @@ fn import(editor: &Arc<Editor>, name: String, there: bool) {
             Err(e) => {
                 let asker = if ed.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
                 if let Some(line) = gz_ui::dialog::notice(ctx, asker, Tone::Error, "Import Base Scene", &e) {
-                    ed.log.plain(line);
+                    ed.log.finding(&line);
                 }
                 let _ = shell;
             }

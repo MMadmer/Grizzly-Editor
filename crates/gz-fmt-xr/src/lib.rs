@@ -9,7 +9,7 @@
 //! SoundEnvironments::read / write                                        senvironment.xr
 //! ```
 //!
-//! Readers take `&[u8]`; writers return `Vec<u8>` and write what the C++ editor writes. Names
+//! Readers take `&[u8]`; writers return `Vec<u8>` and write what the X-Ray SDK editor writes. Names
 //! are read as UTF-8 when they are and as cp1251 otherwise, and written back the way they came.
 //! Hostile input is an `Err`.
 

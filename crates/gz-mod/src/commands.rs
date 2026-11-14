@@ -1,4 +1,4 @@
-//! Console commands (`[commands]`); the game half is `XmsGame::RegisterModuleCommands`.
+//! Console commands (`[commands]`); the game registers them for the module.
 
 use gz_base::{Problem, Severity};
 
@@ -154,7 +154,7 @@ fn problem(code: &str, text: String, name: &str) -> Problem {
     Problem::new(code, severity, text).about(name).in_field("commands")
 }
 
-/// The build's check of `[commands]`, with the C++ codes and texts: `E401` a bad name, `E402` a
+/// The build's check of `[commands]`, with its codes and texts: `E401` a bad name, `E402` a
 /// name twice, `E403` a function that is not `<script>.<function>`, `E404` one the project's
 /// scripts lack, `E405` a `[command.<name>]` with no `[commands]` line, `E406` a name the game
 /// has; `W406` a name of a family of the game's own, `W407` a name another module of the linked
@@ -243,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn checks_with_the_cpp_codes() {
+    fn checks_with_the_documented_codes() {
         let cmd = |name: &str, function: &str| Command {
             name: name.into(),
             function: function.into(),

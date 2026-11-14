@@ -1,6 +1,6 @@
-//! MSVC's `std::sort` (`<algorithm>`, `_Sort_unchecked`): introsort - insertion sort up to 32
+//! MSVC's `std::sort` (`<algorithm>`): introsort - insertion sort up to 32
 //! elements, a partition around Tukey's ninther above that, heap sort once 1.5 log2 n divisions
-//! are spent. It is not stable, and where the C++ sorts with ties its output follows that order
+//! are spent. It is not stable, and where X-Ray's compiler sorts with ties its output follows that order
 //! of equal elements; [`sort_by`] gives the same order.
 
 const ISORT_MAX: usize = 32;

@@ -1,5 +1,4 @@
-//! What the preview reads of the game's own files, as the C++ preview read them
-//! (`EditorPdaPreview.cpp`): plain text scans, not the engine's parsers - the device of
+//! What the preview reads of the game's own files: plain text scans, not the engine's parsers - the device of
 //! `pda.xml` / `pda_16.xml`, a level's map from its `level.ltx`, a value of a plain ltx text.
 //! Pure functions over text.
 
@@ -87,7 +86,7 @@ pub fn comma_floats(s: &str, n: usize) -> Option<Vec<f32>> {
     Some(out)
 }
 
-/// `NqUtil::Trim`: spaces, tabs and line ends off both ends.
+/// Spaces, tabs and line ends off both ends.
 #[must_use]
 pub fn trim(s: &str) -> &str {
     s.trim_matches([' ', '\t', '\r', '\n'])
@@ -109,7 +108,7 @@ pub fn strip_comments(raw: &str) -> String {
     text
 }
 
-/// `TagAttr`: the value of `name="..."` inside a tag, `""` when it is not there; a name that is
+/// The value of `name="..."` inside a tag, `""` when it is not there; a name that is
 /// the tail of a longer one does not count.
 #[must_use]
 pub fn tag_attr(tag: &str, name: &str) -> String {
@@ -134,7 +133,7 @@ fn find_from(text: &str, pat: &str, from: usize) -> Option<usize> {
     text.get(from..).and_then(|r| r.find(pat)).map(|i| from + i)
 }
 
-/// The value of `key` in `[section]` of a plain ltx text (`LtxValue`): the first header of that
+/// The value of `key` in `[section]` of a plain ltx text: the first header of that
 /// name standing at a line's start (or after white space), the first `key = value` line of it,
 /// `;` comments cut; a key it lacks is looked for in its `[child]:parent`, four levels deep.
 #[must_use]
@@ -265,7 +264,7 @@ impl LtxSection {
     }
 }
 
-/// A rectangle in the game's 1024 x 768 units (`Frect`: corners).
+/// A rectangle in the game's 1024 x 768 units (corners).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FRect {
     pub x1: f32,
@@ -425,7 +424,7 @@ impl Device {
         if wide { wide_side } else { standard }
     }
 
-    /// The device itself (`DeviceRect`): its art, the screen and the close button. Fit fits this,
+    /// The device itself: its art, the screen and the close button. Fit fits this,
     /// not the game's whole screen - on 16:9 the art covers only the middle of it.
     #[must_use]
     pub fn rect(&self, wide: bool) -> FRect {
@@ -435,7 +434,7 @@ impl Device {
     }
 }
 
-/// A level's map (`SLevelMap`): its texture and the world rectangle it shows.
+/// A level's map: its texture and the world rectangle it shows.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LevelMap {
     /// Lower case, textures-relative.

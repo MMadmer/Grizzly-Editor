@@ -466,7 +466,7 @@ impl KeyboardPage {
             });
         });
         if let Some(line) = line {
-            editor.log.plain(line);
+            editor.log.finding(&line);
         }
     }
 

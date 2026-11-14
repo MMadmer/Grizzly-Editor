@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
+use gz_base::{Finding, Severity};
 use gz_editor::{Editor, JobCtx, JobError, json};
 use gz_lc::{Input, Log, Options, Sources};
 use gz_lc_light::{Ctl, Report as Progress};
@@ -126,7 +127,9 @@ pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<ser
                 return Err(JobError::new(text));
             }
         };
-        for w in &report.warnings {
+        // the compiler's marks are read here, once: nothing downstream shows one
+        let warnings: Vec<&str> = report.warnings.iter().map(|w| read_mark(w.trim()).1).collect();
+        for w in &warnings {
             editor.log.warn(w);
         }
         editor.log.info(format!("{} ended in {:.1} s.", capital(part.title()), report.seconds));
@@ -136,7 +139,7 @@ pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<ser
             "seconds": report.seconds,
             "phases": report.phases.iter().map(|(n, s)| json!({ "name": n, "seconds": s })).collect::<Vec<_>>(),
             "files": report.files.iter().map(|(n, s)| json!({ "name": n, "size": s })).collect::<Vec<_>>(),
-            "warnings": report.warnings,
+            "warnings": warnings,
             "invalid_faces": report.invalid_faces,
         }));
     }
@@ -147,6 +150,22 @@ pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<ser
         "seconds": total,
         "parts": parts,
     }))
+}
+
+/// The level the compiler's own marks give a line (`! ` an error, `~ ` a warning, `* ` or `*** `
+/// a report), read once where the line enters the editor, and the line without them.
+fn read_mark(line: &str) -> (Option<Severity>, &str) {
+    for (mark, severity) in [
+        ("*** ", Severity::Warning),
+        ("! ", Severity::Error),
+        ("~ ", Severity::Warning),
+        ("* ", Severity::Note),
+    ] {
+        if let Some(text) = line.strip_prefix(mark) {
+            return (Some(severity), text);
+        }
+    }
+    (None, line)
 }
 
 /// What the compile tells the job and the Output Log, passed on four times a second: the lights
@@ -211,7 +230,10 @@ impl Throttle {
         let (stage, progress) = (p.stage.take(), p.progress.take());
         drop(p);
         for l in &lines {
-            self.2.plain(l);
+            match read_mark(l) {
+                (Some(severity), text) => self.2.finding(&Finding::new(severity, text)),
+                (None, text) => self.2.plain(text),
+            }
         }
         if let Some(s) = stage {
             self.1.stage(s);
@@ -225,4 +247,22 @@ impl Throttle {
 fn capital(s: &str) -> String {
     let mut c = s.chars();
     c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_mark_is_read_once_into_a_level_and_dropped() {
+        assert_eq!(read_mark("! ERROR: split failed"), (Some(Severity::Error), "ERROR: split failed"));
+        assert_eq!(read_mark("~ slow"), (Some(Severity::Warning), "slow"));
+        assert_eq!(
+            read_mark("* New phase started: Lights"),
+            (Some(Severity::Note), "New phase started: Lights")
+        );
+        assert_eq!(read_mark("*** 3 junctions found."), (Some(Severity::Warning), "3 junctions found."));
+        assert_eq!(read_mark("    |    | detail"), (None, "    |    | detail"));
+        assert_eq!(read_mark("*not a mark"), (None, "*not a mark"));
+    }
 }

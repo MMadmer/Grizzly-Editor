@@ -5,7 +5,7 @@ use egui::{Align2, Color32, Rect, Sense, Ui, Vec2, pos2, vec2};
 use gz_ui::{Clip, Font, Icon, icons, palette, text};
 
 /// The line at the top of a pane: the icon and the name of what it shows, a muted id after it
-/// (`PaneHeader`). `right` keeps room at the end for the caller's buttons.
+/// . `right` keeps room at the end for the caller's buttons.
 pub fn local_pane_header(ui: &mut Ui, icon: Icon, icon_color: Color32, title: &str, sub: &str, right: f32) {
     let ctx = ui.ctx().clone();
     let p = palette(&ctx);

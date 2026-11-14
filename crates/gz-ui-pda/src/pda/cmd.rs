@@ -21,7 +21,7 @@ fn invalid(text: impl Into<String>) -> CmdError {
     CmdError::invalid(text)
 }
 
-/// `ArgString`: present means given, even empty; a bare number or flag is its text.
+/// Present means given, even empty; a bare number or flag is its text.
 fn arg(args: &Args, key: &str) -> Option<String> {
     match args.get(key)? {
         Value::String(s) => Some(s.clone()),
@@ -31,12 +31,12 @@ fn arg(args: &Args, key: &str) -> Option<String> {
     }
 }
 
-/// A string argument the way `ArgString` filled it in: emptied when it is not there.
+/// A string argument: emptied when it is not there.
 fn arg_or_empty(args: &Args, key: &str) -> String {
     arg(args, key).unwrap_or_default()
 }
 
-/// `ArgBool`: `true` / `1` at the start of the value.
+/// `true` / `1` at the start of the value.
 fn arg_bool(args: &Args, key: &str) -> bool {
     match args.get(key) {
         Some(Value::Bool(b)) => *b,
@@ -49,7 +49,7 @@ fn arg_bool(args: &Args, key: &str) -> bool {
     }
 }
 
-/// `ArgInt`: a number (cut toward zero) or text that starts like one; `def` otherwise.
+/// A number (cut toward zero) or text that starts like one; `def` otherwise.
 fn arg_int(args: &Args, key: &str, def: i64) -> i64 {
     match args.get(key) {
         Some(Value::Number(n)) => n.as_i64().or_else(|| n.as_f64().map(|v| v as i64)).unwrap_or(def),
@@ -65,7 +65,7 @@ fn arg_int(args: &Args, key: &str, def: i64) -> i64 {
     }
 }
 
-/// `ArgFloat`: a number, or text that starts like one.
+/// A number, or text that starts like one.
 fn arg_float(args: &Args, key: &str) -> Option<f32> {
     match args.get(key)? {
         Value::Number(n) => n.as_f64().map(|v| v as f32),
@@ -425,7 +425,7 @@ async fn shown(editor: &Arc<Editor>) -> (bool, u64) {
         .unwrap_or((false, 0))
 }
 
-/// The answer (`AnswerPreview` and `JsonState`): the panes, the zoom and what the last frame
+/// The answer: the panes, the zoom and what the last frame
 /// drew, then the state in canvas units.
 async fn answer(editor: &Arc<Editor>, tab: &Arc<PdaTab>, assets: &Arc<PdaAssets>, active: bool) -> Value {
     let device = assets.device_wait(editor).await;

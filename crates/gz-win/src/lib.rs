@@ -40,8 +40,8 @@ pub use console::{ConsoleStreams, attach_parent_console, on_console_end};
 pub use folders::{KnownFolder, free_space, is_volume_root, known_folder, volume_path_name};
 pub use instance::{allow_foreground, process_alive};
 pub use job::end_with_this_process;
-pub use stack::{current_thread_id, symbol_names, thread_stack};
 pub use registry::{Association, delete_user_key, installed_game_roots, long_paths_enabled};
+pub use stack::{current_thread_id, symbol_names, thread_stack};
 pub use update::{NamedEvent, rename_in_place};
 
 use std::fs::File;

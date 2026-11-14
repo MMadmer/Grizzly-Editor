@@ -9,7 +9,7 @@
 const CLIENT_ID: &str = "";
 
 /// The Mod Browser catalog of Dead Air: Refined and where its public files are served; the game
-/// carries the same mirrors (`xms_catalog.cpp`, `kMirrors`) - change both together.
+/// carries the same mirrors - change both together.
 pub const CATALOG_REPO: &str = "MMadmer/darf-mods";
 pub const CATALOG_MIRRORS: [&str; 3] = [
     "https://mmadmer.github.io/darf-mods/",

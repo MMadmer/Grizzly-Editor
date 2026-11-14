@@ -308,7 +308,7 @@ pub fn mip_count(width: u32, height: u32) -> u32 {
 
 /// Every level under a picture, largest first, down to 1 x 1; each is made from the one above.
 ///
-/// oracle: the compressor asks for a level of height (or width) zero once the shorter side has
+/// the compressor asks for a level of height (or width) zero once the shorter side has
 /// reached one pixel, the resize fails and the level keeps whatever the memory held. Here such
 /// a level is one pixel on that side and filtered like the rest.
 pub fn mip_chain(base: &Image, filter: MipFilter) -> Result<Vec<Image>> {

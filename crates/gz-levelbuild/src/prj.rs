@@ -1,8 +1,9 @@
-//! `SceneBuilder::CompileStatic`: the build project the level compiler reads (`build.prj`).
+//! The build project the level compiler reads (`build.prj`).
 
 use std::sync::Arc;
 
 use glam::{Vec2, Vec3};
+use gz_base::{Finding, Findings};
 use gz_fmt_level::{
     Aabb, BuildFace, BuildGlow, BuildLight, BuildLightDynamic, BuildLod, BuildMaterial, BuildParams,
     BuildProject, BuildTexture, Light, LightControl, LodFace, MuModel, MuReference, Portal,
@@ -27,9 +28,9 @@ const LOD_SAMPLE_COUNT: u32 = 8;
 const LOD_IMAGE_SIZE: u32 = 64;
 const D3DLIGHT_DIRECTIONAL: u32 = 3;
 const EPS_S: f32 = 0.000_001;
-/// `ebqDraft`.
+/// The draft quality.
 const QUALITY_DRAFT: u16 = 0;
-/// `CGlow::gfFixedSize`.
+/// The glow's fixed size.
 const GLOW_FIXED_SIZE: u16 = 1 << 0;
 
 /// A library object by reference.
@@ -37,7 +38,7 @@ pub type Lookup<'a> = &'a (dyn Fn(&str) -> Option<Arc<LibraryObject>> + Sync);
 /// A LOD picture by texture name (`lod\lod_props_box`): its RGBA pixels, width, height.
 pub type LodSource<'a> = &'a (dyn Fn(&str) -> Option<(Vec<u8>, u32, u32)> + Sync);
 
-/// `CSceneStat`: vertices per square metre, for the scene statistic.
+/// Vertices per square metre, for the scene statistic.
 #[derive(Clone, Debug, Default)]
 pub struct SceneStat {
     pub min: Vec3,
@@ -84,10 +85,10 @@ pub struct Compiled {
     pub stat: SceneStat,
     /// `level_lods.dds` and `level_lods_nm.dds` when the scene has LODs.
     pub lod_textures: Option<(Vec<u8>, Vec<u8>)>,
-    pub log: Vec<String>,
+    pub log: Vec<Finding>,
 }
 
-/// The sectors of the scene, numbered (`RenumerateSectors`), with their volumes.
+/// The sectors of the scene, numbered, with their volumes.
 struct Sectors {
     list: Vec<SectorVol>,
     default: u16,
@@ -102,7 +103,7 @@ struct SectorVol {
     radius: f32,
 }
 
-/// `EVisible`.
+/// Whether a mesh is visible.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Visible {
     None,
@@ -112,7 +113,7 @@ enum Visible {
 }
 
 impl SectorVol {
-    /// `CSector::Intersect(center, radius)`.
+    /// Whether a sphere intersects the sector.
     fn intersect(&self, c: Vec3, r: f32) -> Visible {
         let dist = self.center.distance(c);
         let half = (self.bbox.max - self.bbox.min) * 0.5;
@@ -168,7 +169,7 @@ impl Sectors {
             .map_or(self.default, |s| s.num)
     }
 
-    /// `CalculateSector`.
+    /// The sector of a mesh.
     fn at(&self, p: Vec3, r: f32) -> u16 {
         for s in &self.list {
             let v = s.intersect(p, r);
@@ -187,7 +188,7 @@ fn reference(o: &Object) -> Option<&str> {
     }
 }
 
-/// `CEditableObject::IsStatic` / `IsMUStatic`.
+/// Whether an object is static / multiple-usage static.
 fn is_static(o: &gz_fmt_object::Object) -> bool {
     !o.flags.intersects(
         ObjectFlags::SOUND_OCCLUDER | ObjectFlags::DYNAMIC | ObjectFlags::HOM | ObjectFlags::MULTIPLE_USAGE,
@@ -220,7 +221,7 @@ pub fn object_surfaces(o: &Object, lo: &LibraryObject) -> Vec<Surface> {
     out
 }
 
-/// `CalcArea`: Heron's formula.
+/// The area: Heron's formula.
 fn calc_area(a: Vec3, b: Vec3, c: Vec3) -> f32 {
     let (e1, e2, e3) = (a.distance(b), a.distance(c), b.distance(c));
     let p = (e1 + e2 + e3) / 2.0;
@@ -262,7 +263,7 @@ struct Builder {
     lods: Vec<(BuildLod, String, Vec<u8>, Vec<u8>)>,
     mu_models: Vec<MuModel>,
     mu_refs: Vec<MuReference>,
-    log: Vec<String>,
+    log: Vec<Finding>,
 }
 
 struct Ctx<'a> {
@@ -360,7 +361,7 @@ impl Builder {
         }))
     }
 
-    /// `BuildMesh`: the mesh's points through `parent`, its faces per surface; `real` places
+    /// The mesh's points through `parent`, its faces per surface; `real` places
     /// the faces in the world for the area check. Appends to `verts` / `faces` / `smgroups`.
     #[allow(clippy::too_many_arguments)]
     fn mesh(
@@ -394,11 +395,17 @@ impl Builder {
                 )));
             };
             if flags & mtl_flags::BREAKABLE != 0 {
-                self.log.push(format!("Surface: '{}' contains breakable game material.", surf.name));
+                self.log.info(format!(
+                    "Surface '{}' has a breakable game material and is not part of the static geometry.",
+                    surf.name
+                ));
                 continue;
             }
             if flags & mtl_flags::CLIMABLE != 0 {
-                self.log.push(format!("Surface: '{}' contains climable game material.", surf.name));
+                self.log.info(format!(
+                    "Surface '{}' has a climable game material and is not part of the static geometry.",
+                    surf.name
+                ));
                 continue;
             }
             if flags & mtl_flags::DYNAMIC != 0 {
@@ -444,8 +451,8 @@ impl Builder {
                 }
             }
             if invalid > 0 {
-                self.log.push(format!(
-                    "!Object '{}' - '{}' has {invalid} invalid face(s). Removed.",
+                self.log.warn(format!(
+                    "Object '{}', mesh '{}': {invalid} invalid face(s) are removed.",
                     object.name, mesh.name
                 ));
             }
@@ -453,7 +460,7 @@ impl Builder {
         Ok(())
     }
 
-    /// `BuildObjectLOD`: `None` for an object without a LOD.
+    /// `None` for an object without a LOD.
     fn lod(&mut self, cx: &Ctx<'_>, lo: &LibraryObject, sector: u16) -> Result<Option<u16>> {
         if !lo.object.flags.contains(ObjectFlags::USING_LOD) {
             return Ok(None);
@@ -476,22 +483,22 @@ impl Builder {
             lod.faces[frame as usize] = LodFace { v: p, t };
         }
         let Some((data, w, h)) = (cx.lods)(&name) else {
-            return Err(BuildError::new(format!("!Can't find LOD texture: '{name}'")));
+            return Err(BuildError::new(format!("The LOD texture '{name}' is missing.")));
         };
         let nm = format!("{name}_nm");
         let Some((ndata, nw, nh)) = (cx.lods)(&nm) else {
-            return Err(BuildError::new(format!("!Can't find LOD texture: '{nm}'")));
+            return Err(BuildError::new(format!("The LOD texture '{nm}' is missing.")));
         };
         let want = (LOD_IMAGE_SIZE * LOD_SAMPLE_COUNT, LOD_IMAGE_SIZE);
         if (w, h) != want || (nw, nh) != want {
-            return Err(BuildError::new(format!("!LOD texture '{name}' is not {}x{}", want.0, want.1)));
+            return Err(BuildError::new(format!("The LOD texture '{name}' is not {}x{}.", want.0, want.1)));
         }
         self.lods.push((lod, name, data, ndata));
         Ok(Some((self.lods.len() - 1) as u16))
     }
 }
 
-/// `GetLODTextureName`: `lod_` and the library name with `\` as `_`, in the folder its first
+/// `lod_` and the library name with `\` as `_`, in the folder its first
 /// part names (`lod\lod_props_box`).
 #[must_use]
 pub fn lod_texture_name(lib_name: &str) -> String {
@@ -502,7 +509,7 @@ pub fn lod_texture_name(lib_name: &str) -> String {
     }
 }
 
-/// `GetLODFrame`: the quad of one of the eight views, in object space, and its texture
+/// The quad of one of the eight views, in object space, and its texture
 /// coordinates in the 8 x 1 strip.
 fn lod_frame(frame: u32, min: Vec3, max: Vec3) -> ([Vec3; 4], [Vec2; 4]) {
     let tex_w = (LOD_SAMPLE_COUNT * LOD_IMAGE_SIZE) as f32;
@@ -538,7 +545,7 @@ fn lod_frame(frame: u32, min: Vec3, max: Vec3) -> ([Vec3; 4], [Vec2; 4]) {
     (pos.map(|p| m.transform_tiny(p)), [lt, Vec2::new(rb.x, lt.y), rb, Vec2::new(lt.x, rb.y)])
 }
 
-/// `xrHemisphereBuild`: the directions (away from the sky) and their share of `energy`.
+/// The directions (away from the sky) and their share of `energy`.
 #[must_use]
 pub fn hemisphere(quality: u8, energy: f32) -> Vec<(Vec3, f32)> {
     let table: &[[f32; 3]] = match quality {
@@ -558,7 +565,7 @@ pub fn hemisphere(quality: u8, energy: f32) -> Vec<(Vec3, f32)> {
         .collect()
 }
 
-/// `Fvector::setHP`.
+/// The heading and pitch of a direction.
 fn set_hp(h: f32, p: f32) -> Vec3 {
     let (sh, ch) = h.sin_cos();
     let (sp, cp) = p.sin_cos();
@@ -569,7 +576,7 @@ fn directional(diffuse: [f32; 4], direction: Vec3) -> Light {
     Light { kind: D3DLIGHT_DIRECTIONAL, diffuse, direction, ..Light::default() }
 }
 
-/// `Flight::mul`: the colours scaled.
+/// The colours scaled.
 fn light_mul(mut l: Light, k: f32) -> Light {
     for c in [&mut l.diffuse, &mut l.specular, &mut l.ambient] {
         c[0] *= k;
@@ -580,7 +587,7 @@ fn light_mul(mut l: Light, k: f32) -> Light {
 }
 
 impl Builder {
-    /// `BuildHemiLights`.
+    /// Builds the hemisphere lights.
     fn hemi(&mut self, quality: u8, control: &str) {
         let id = self.light_control(control);
         if quality > 0 {
@@ -594,7 +601,7 @@ impl Builder {
         }
     }
 
-    /// `BuildSun`.
+    /// Builds the sun.
     fn sun(&mut self, quality: u8, dir: [f32; 2]) -> Result<()> {
         let id = self.light_control(LCONTROL_SUN);
         let samples = match quality {
@@ -628,12 +635,12 @@ impl Builder {
     fn light(&mut self, o: &Object, sectors: &Sectors, scene: &SceneState) -> Result<()> {
         let ObjData::Light(e) = &o.data else { return Ok(()) };
         if e.flags & (light_flags::AFFECT_STATIC | light_flags::AFFECT_DYNAMIC) == 0 {
-            return Err(BuildError::new(format!("Failed to build object: '{}'", o.name)));
+            return Err(BuildError::new(format!("The object '{}' could not be built.", o.name)));
         }
         let lt = scene.tools.part(ObjClass::Light).light().cloned().unwrap_or_default();
         let Some(control) = lt.name_of(e.lcontrol).map(str::to_owned) else {
-            self.log.push(format!("Invalid light control name: light '{}'.", o.name));
-            return Err(BuildError::new(format!("Failed to build object: '{}'", o.name)));
+            self.log.error(format!("Light '{}' has an invalid light control name.", o.name));
+            return Err(BuildError::new(format!("The object '{}' could not be built.", o.name)));
         };
         let rot = o.rotation();
         let light = Light {
@@ -677,7 +684,7 @@ impl Builder {
                     }
                 }
                 if dyn_sectors.is_empty() {
-                    return Err(BuildError::new(format!("Failed to build object: '{}'", o.name)));
+                    return Err(BuildError::new(format!("The object '{}' could not be built.", o.name)));
                 }
             }
         }
@@ -725,7 +732,7 @@ impl Builder {
     /// `BuildGlow`.
     fn glow(&mut self, cx: &Ctx<'_>, o: &Object, sectors: &Sectors) -> Result<()> {
         let ObjData::Glow(g) = &o.data else { return Ok(()) };
-        let fail = || BuildError::new(format!("Failed to build object: '{}'", o.name));
+        let fail = || BuildError::new(format!("The object '{}' could not be built.", o.name));
         let surface = self.texture(&g.texture).map_err(|_| fail())?;
         let shader = self.shader(cx, &g.shader).map_err(|_| fail())?;
         let sector = sectors.at(o.position(), g.radius);
@@ -747,7 +754,7 @@ impl Builder {
     }
 }
 
-/// `GetBounding`: the scene objects' box.
+/// The scene objects' box.
 #[must_use]
 pub fn level_box(scene: &SceneState, lib: Lookup<'_>) -> Option<Aabb> {
     let mut b = Aabb::INVALID;
@@ -771,9 +778,9 @@ pub fn compile(
     lods: LodSource<'_>,
 ) -> Result<Compiled> {
     let level_box = level_box(scene, lib)
-        .ok_or_else(|| BuildError::new("ERROR: Failed to acquire level bounding volume "))?;
+        .ok_or_else(|| BuildError::new("The level's bounding volume cannot be computed."))?;
     if scene.objects.is_empty() {
-        return Err(BuildError::new("ERROR: Failed static remote build "));
+        return Err(BuildError::new("The static geometry could not be built."));
     }
     let opts = &scene.meta.level;
     let cx = Ctx { engine, quality: opts.build.quality, lods };
@@ -783,7 +790,7 @@ pub fn compile(
     let lt = scene.tools.part(ObjClass::Light).light().cloned().unwrap_or_default();
 
     // the hemisphere, then the sun
-    // oracle: the C++ takes the hemisphere's control from the light tool's `m_HemiControl`,
+    // the X-Ray SDK takes the hemisphere's control from the light tool's setting,
     // which the scene file does not keep; it is `$hemi` here, as on every scene the tool made.
     b.hemi(opts.light_hemi_quality, LCONTROL_HEMI);
     b.sun(opts.light_sun_quality, lt.sun_shadow_dir)?;
@@ -799,7 +806,7 @@ pub fn compile(
                         let num = |name: &str| {
                             sectors.list.iter().find(|v| v.name == name).map_or(sectors.default, |v| v.num)
                         };
-                        // `BuildPortal` writes `m_SimplifyVertices`, which the load's `Update(true)` made
+                        // a portal writes its simplified vertices, which the load's update made
                         let simple =
                             gz_scene::objtools::portal::update(p.clone(), &o.name, None, 0, &mut Vec::new());
                         b.portals.push(Portal::new(num(&p.front), num(&p.back), &simple.simplified));
@@ -819,9 +826,9 @@ pub fn compile(
                             let sector = sectors.of_mesh(&o.name, &m.name);
                             let r = b.mesh(&cx, &world, &world, o, &lo, &surfaces, m, sector, &mut out);
                             if let Err(e) = r {
-                                b.log.push(e.0.clone());
+                                b.log.error(e.0.clone());
                                 return Err(BuildError::new(format!(
-                                    "{}\nFailed to build object: '{}'",
+                                    "{}\nThe object '{}' could not be built.",
                                     e.0, o.name
                                 )));
                             }
@@ -852,7 +859,7 @@ pub fn compile(
                                     )
                                     .map_err(|e| {
                                         BuildError::new(format!(
-                                            "{}\nFailed to build object: '{}'",
+                                            "{}\nThe object '{}' could not be built.",
                                             e.0, o.name
                                         ))
                                     })?;
@@ -885,7 +892,7 @@ pub fn compile(
             }
         }
         // the Wallmark tool's marks: faces of their own material, after the objects
-        // oracle: the C++ leaves a mark face's game material and smoothing group as the
+        // the X-Ray SDK leaves a mark face's game material and smoothing group as the
         // allocation held them; they are 0 here.
         if class == ObjClass::Wallmark
             && let Some(part) = &scene.bulk.wallmarks
@@ -933,9 +940,7 @@ pub fn compile(
             })
             .collect();
         let Some(merged) = merge::merge_textures(2, images, 512, 4096, 64, 4096) else {
-            return Err(BuildError::new(
-                "Failed to build merged LOD texture. Merged texture more than [4096x4096].",
-            ));
+            return Err(BuildError::new("The merged LOD texture would be larger than 4096x4096."));
         };
         for (k, (lod, ..)) in b.lods.iter_mut().enumerate() {
             let id = merged.remap[k];
@@ -1000,7 +1005,7 @@ fn split_tex(name: &str) -> (&str, &str) {
     (dir, stem)
 }
 
-/// `IWriter::w_string`: the text and a line end.
+/// The text and a line end.
 fn w_line(out: &mut String, s: &str) {
     out.push_str(s);
     out.push_str("\r\n");
@@ -1019,10 +1024,10 @@ pub struct ObjExport {
     pub objects: usize,
 }
 
-/// `EScene::ExportObj`: `SceneBuilder::Compile` with `m_save_as_object` - the static and
+/// Builds the scene into world space for an OBJ export - the static and
 /// multiple-usage scene objects (the selected ones with `selected_only`) built into world space
 /// with Z turned round, every multiple-usage object a model of its own - then
-/// `SaveBuildAsObject`. `obj_name` is the `.obj` file's stem (its `mtllib` line).
+/// saved as an OBJ file. `obj_name` is the `.obj` file's stem (its `mtllib` line).
 pub fn export_obj(
     scene: &SceneState,
     lib: Lookup<'_>,
@@ -1045,7 +1050,8 @@ pub fn export_obj(
         let surfaces = object_surfaces(o, &lo);
         let world = o.world();
         let tm = Mat4::mul(&cv, &Mat4::mul(&Mat4::mul(&cv, &world), &cv));
-        let fail = |e: BuildError| BuildError::new(format!("{}\nFailed to build object: '{}'", e.0, o.name));
+        let fail =
+            |e: BuildError| BuildError::new(format!("{}\nThe object '{}' could not be built.", e.0, o.name));
         if is_static(&lo.object) {
             let mut out =
                 (std::mem::take(&mut b.verts), std::mem::take(&mut b.faces), std::mem::take(&mut b.smgroups));
@@ -1087,7 +1093,7 @@ pub fn export_obj(
         w_line(&mut mtl, "Ka  0 0 0");
         w_line(&mut mtl, "Kd  1 1 1");
         w_line(&mut mtl, "Ks  0 0 0");
-        // oracle: the C++ format ends in its own "\n" before the line end
+        // the X-Ray SDK's format ends in its own "\n" before the line end
         w_line(&mut mtl, &format!("map_Kd T:\\\\{dir}\\{stem}.tga\n"));
     }
     let mut obj = String::new();

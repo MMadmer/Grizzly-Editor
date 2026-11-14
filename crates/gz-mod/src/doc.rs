@@ -1,11 +1,11 @@
 //! `mod.ltx` as written: `gz_ltx`'s lossless line model read by the manifest's rules.
 //!
-//! The lines are `gz_ltx::LtxDoc`'s, read with [`Syntax::Manifest`] - the way the C++
-//! `EditorMod::Load` and the game's XMS reader read them: the line is trimmed, a `;` outside a
+//! The lines are `gz_ltx::LtxDoc`'s, read with [`Syntax::Manifest`] - the way the manifest
+//! loader and the game's XMS reader read them: the line is trimmed, a `;` outside a
 //! quoted value starts a comment (`\"` escapes inside, so `website = https://...` keeps its
 //! `//`), a `[` starts a header whose name ends at the first `]`, a key ends at the first `=`.
-//! What this crate adds is the manifest's meaning: where the C++ `Save` writes a section and a
-//! key, and the widths its `AppendKey` pads keys to.
+//! What this crate adds is the manifest's meaning: where a section and a
+//! key are written, and the widths keys are padded to.
 
 use std::fmt;
 
@@ -13,7 +13,7 @@ use gz_ltx::{LtxDoc, Placement, Syntax};
 
 pub use gz_ltx::LineItem as Item;
 
-/// The pad of a key in the editor's own lines: `AppendKey`'s 11 ("description"), 15 for the
+/// The pad of a key in the editor's own lines: 11 ("description"), 15 for the
 /// longer keys of `[world]` and its kind, 17 for the screens.
 #[must_use]
 pub fn key_width(section: &str) -> usize {
@@ -27,7 +27,7 @@ pub fn key_width(section: &str) -> usize {
     }
 }
 
-/// Where the C++ `EditorMod::Save` writes a section; sections it does not know close the file.
+/// Where a section is written; sections it does not know close the file.
 fn section_rank(section: &str) -> usize {
     let s = section.to_ascii_lowercase();
     const ORDER: [&str; 11] = [
@@ -57,7 +57,7 @@ fn section_rank(section: &str) -> usize {
     }
 }
 
-/// Where `Save` writes a key inside its section; `usize::MAX` for a key it writes after the
+/// Where a key is written inside its section; `usize::MAX` for a key written after the
 /// known ones (an item of the start kit, a line it keeps as it was).
 fn key_rank(section: &str, key: &str) -> usize {
     let s = section.to_ascii_lowercase();
@@ -98,10 +98,10 @@ fn key_rank(section: &str, key: &str) -> usize {
     order.iter().position(|o| *o == key).unwrap_or(usize::MAX)
 }
 
-/// The manifest's placement of new lines: the C++ `Save` order and `AppendKey`'s widths.
+/// The manifest's placement of new lines: the section order and the key widths.
 const PLACEMENT: Placement = Placement { section_rank, key_rank, key_width };
 
-/// `key = value` with the key padded to `width`, as `AppendKey` writes it.
+/// `key = value` with the key padded to `width`.
 #[must_use]
 pub fn entry_line(key: &str, value: &str, width: usize) -> String {
     gz_ltx::doc::padded_entry(key, value, width)
@@ -166,7 +166,7 @@ impl ManifestDoc {
         self.0.entries(section).collect()
     }
 
-    /// The entry lines of a section without their comments: what the C++ kept of a raw-line
+    /// The entry lines of a section without their comments: what is kept of a raw-line
     /// section (`[requires]`, `[exclude]`).
     #[must_use]
     pub fn section_lines(&self, section: &str) -> Vec<&str> {
@@ -180,8 +180,8 @@ impl ManifestDoc {
     }
 
     /// Sets a key. An existing line (the last of that key) keeps its key, its spacing and its
-    /// comment; a new line goes where the C++ `Save` writes it, shaped like its neighbours; a
-    /// missing section is added where `Save` writes it.
+    /// comment; a new line goes where the section's order puts it, shaped like its neighbours; a
+    /// missing section is added where its order puts it.
     pub fn set(&mut self, section: &str, key: &str, value: &str) {
         self.0.set(section, key, value);
     }
@@ -250,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_like_the_cpp() {
+    fn reads_like_the_manifest_loader() {
         let doc = ManifestDoc::parse(SAMPLE);
         assert_eq!(doc.get("MODULE", "website"), Some("https://www.moddb.com/mods/demo"));
         assert_eq!(doc.get("module", "name"), Some("\"Over; Night\""));
@@ -262,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn new_keys_and_sections_go_where_the_cpp_save_writes_them() {
+    fn new_keys_and_sections_go_where_the_manifest_order_puts_them() {
         let text = "[module]\r\nid          = demo\r\nwebsite     = x\r\ntags        = story\r\nmy_key      = 1\r\n\r\n[update]\r\ngithub      = a/b\r\n\r\n; the mode\r\n[provides_mode]\r\nid          = demo\r\n\r\n[custom]\r\nk = v\r\n";
         let mut doc = ManifestDoc::parse(text);
         doc.set("module", "disable_game_updates", "true");
@@ -294,7 +294,7 @@ mod tests {
             )
         );
         doc.set("update", "github", "Madmer/demo");
-        // before [exclude] and the comment that leans on it, as the C++ `Save` orders them
+        // before [exclude] and the comment that leans on it, as the sections are ordered
         assert!(doc.to_string().contains(
             "demo\r\n\r\n[update]\r\ngithub      = Madmer/demo\r\n\r\n; what is left out\r\n[exclude]\r\n"
         ));

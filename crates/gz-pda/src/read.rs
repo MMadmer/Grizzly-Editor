@@ -1,4 +1,4 @@
-//! Reading a layout: the asset through the game's own reader (`EditorPda::Read`), and the
+//! Reading a layout: the asset through the game's own reader, and the
 //! template a new layout starts as.
 
 use std::sync::Arc;
@@ -53,7 +53,7 @@ impl ReadError {
     }
 }
 
-/// The base name of a path without its extension (`NqUtil::BaseName`).
+/// The base name of a path without its extension.
 #[must_use]
 pub fn base_name(path: &str) -> String {
     let leaf = path.rsplit(['\\', '/']).next().unwrap_or(path);
@@ -63,7 +63,7 @@ pub fn base_name(path: &str) -> String {
     }
 }
 
-/// The extension of a path's last component, lower case, with its dot (`NqUtil::Extension`).
+/// The extension of a path's last component, lower case, with its dot.
 #[must_use]
 pub fn extension(path: &str) -> String {
     let leaf = path.rsplit(['\\', '/']).next().unwrap_or(path);
@@ -75,7 +75,7 @@ pub fn is_pda_path(path: &str) -> bool {
     extension(path) == ".pdaasset"
 }
 
-/// Runs `text` through the game's reader (`EditorPda::Read`). `chunk` is the file's base name
+/// Runs `text` through the game's reader. `chunk` is the file's base name
 /// (the name its messages carry), `lang` the language of the texts (`rus` when empty). A file
 /// that parses always comes back as a layout with its coded problems; one that does not is an
 /// error with its line. Blocking: run it on the CPU pool.
@@ -126,7 +126,7 @@ pub fn evaluate(
     Ok(layout)
 }
 
-/// A new layout: a starting point with the three pages every app has (`EditorPda::Template`).
+/// A new layout: a starting point with the three pages every app has.
 #[must_use]
 pub fn template(id: &str, title: &str) -> String {
     let safe: String = if id.is_empty() { "app" } else { id }

@@ -20,7 +20,7 @@
 //! - [`gpu`] - the adapter the device is made on and the driver's hint (View > Render > GPU);
 //!   the sounds' mute switch
 //! - Panels outside the window: the window runs egui's immediate viewports as native windows of
-//!   their own while `[ui] floating_panels` is on (read at start); `screenshot_editor` names them
+//!   their own while `[ui] floating_panels` is on (read at start); `shot.window` names them
 //!   in `outside`
 //!
 //! Widgets the kit lacks, local to this crate: [`chrome::local_submenu`] (a menu row that opens a

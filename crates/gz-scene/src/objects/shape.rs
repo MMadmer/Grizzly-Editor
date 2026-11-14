@@ -6,11 +6,11 @@ use crate::math::{Aabb, Mat4, Transform, Vec3, ray_box};
 
 pub const CF_SPHERE: u8 = 0;
 pub const CF_BOX: u8 = 1;
-/// `eShapeCommon` / `eShapeLevelBound`.
+/// The shape flags: common and level bound.
 pub const SHAPE_COMMON: u8 = 0;
 pub const SHAPE_LEVEL_BOUND: u8 = 1;
 
-/// `CShapeData::shape_def`: a type and a 64-byte union (a sphere's centre and radius in its
+/// A type and a 64-byte union (a sphere's centre and radius in its
 /// first four floats, or a box matrix). The three padding bytes after the type and the unused
 /// floats of a sphere are kept, so a binary part writes back byte for byte.
 #[derive(Clone, Debug, PartialEq)]
@@ -78,7 +78,7 @@ fn unit_corners() -> [Vec3; 8] {
     })
 }
 
-/// `CEditShape`'s own data.
+/// The shape object's own data.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct ShapeData {
     pub shapes: Vec<ShapeDef>,
@@ -93,7 +93,7 @@ impl ShapeData {
         Self { shapes: vec![ShapeDef::boxed(&Mat4::IDENTITY)], usage: SHAPE_COMMON }
     }
 
-    /// `ComputeBounds`: the local box.
+    /// The local box.
     #[must_use]
     pub fn local_box(&self) -> Aabb {
         let mut b = Aabb::INVALID;
@@ -111,14 +111,14 @@ impl ShapeData {
         b
     }
 
-    /// `GetBox`: the local box carried by the object's transform.
+    /// The local box carried by the object's transform.
     #[must_use]
     pub fn world_box(&self, xf: &Transform) -> Option<Aabb> {
         let b = self.local_box();
         b.is_valid().then(|| crate::math::xform_box(&b, &xf.matrix()))
     }
 
-    /// `CEditShape::SetScale`: one sphere scales evenly, one box on each axis, several evenly.
+    /// One sphere scales evenly, one box on each axis, several evenly.
     #[must_use]
     pub fn constrain_scale(&self, v: Vec3) -> Vec3 {
         match self.shapes.as_slice() {
@@ -127,7 +127,7 @@ impl ShapeData {
         }
     }
 
-    /// `CEditShape::RayPick`.
+    /// The shape's ray pick.
     #[must_use]
     pub fn ray_pick(&self, xf: &Transform, start: Vec3, dir: Vec3, distance: f32) -> Option<f32> {
         let inv = xf.inverse();
@@ -160,7 +160,7 @@ impl ShapeData {
         (dist < distance).then_some(dist)
     }
 
-    /// `ApplyScale`: the object's scale moved into the shapes.
+    /// The object's scale moved into the shapes.
     pub fn apply_scale(&mut self, xf: &mut Transform) {
         let s = crate::math::scale_matrix(xf.scale);
         for sh in &mut self.shapes {
@@ -179,7 +179,7 @@ impl ShapeData {
     }
 }
 
-/// `Fsphere::intersect`: the first distance along a unit ray to a sphere.
+/// The first distance along a unit ray to a sphere.
 fn ray_sphere(start: Vec3, dir: Vec3, c: Vec3, r: f32) -> Option<f32> {
     let q = c - start;
     let cl = q.length();
@@ -193,7 +193,7 @@ fn ray_sphere(start: Vec3, dir: Vec3, c: Vec3, r: f32) -> Option<f32> {
     (t > 0.0).then_some(t)
 }
 
-/// `ESoundEnvironment`: a box with the environments inside and outside it.
+/// A box with the environments inside and outside it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SoundEnvData {
     pub shape: ShapeData,
@@ -209,14 +209,13 @@ impl Default for SoundEnvData {
 
 impl SoundEnvData {}
 
-/// `fvEmitter` / `fvOcclusion`.
+/// The fog volume kinds: emitter and occlusion.
 pub const FV_EMITTER: u8 = 0;
 pub const FV_OCCLUSION: u8 = 1;
 
-/// `EFogVolume`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FogData {
-    /// oracle: `EFogVolume` reads and writes through `CCustomObject`, not `CEditShape`, so its
+    /// A fog volume reads and writes through the common object part, not the shape's, so its
     /// shape is never saved: every fog volume is the unit box it is made with.
     pub shape: ShapeData,
     pub kind: u8,

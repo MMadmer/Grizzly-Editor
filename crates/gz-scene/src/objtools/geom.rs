@@ -1,7 +1,7 @@
-//! The arithmetic the object tools share: the engine's random numbers (`CRandom`), Magic
-//! Software's plane fit (`Mgc::OrthogonalPlaneFit` over `Mgc::Eigen`) and 2D convex hull
-//! (`Mgc::ConvexHull2D::ByIncremental` + `RemoveCollinear`), the library meshes as the sectors
-//! and portals see them, and the frustum's polygon test (`CFrustum::testPolyInside`).
+//! The arithmetic the object tools share: the engine's random numbers, Magic
+//! Software's plane fit and 2D convex hull,
+//! the library meshes as the sectors
+//! and portals see them, and the frustum's polygon test.
 
 use std::sync::Arc;
 
@@ -51,7 +51,7 @@ impl CRandom {
         self.rand_i() as f32 / 32767.0 * max
     }
 
-    /// `Fvector::random_dir()`.
+    /// A random direction.
     pub fn random_dir(&mut self) -> Vec3 {
         let z = self.rand_f(std::f32::consts::PI).cos();
         let a = self.rand_f(std::f32::consts::TAU);
@@ -59,7 +59,7 @@ impl CRandom {
         Vec3::new(r * a.cos(), r * a.sin(), z)
     }
 
-    /// `Fvector::random_dir(axis, angle)`: the axis bent by a random amount, normalised.
+    /// A random direction: the axis bent by a random amount, normalised.
     pub fn random_dir_cone(&mut self, axis: Vec3, angle: f32) -> Vec3 {
         let rnd = self.random_dir();
         let k = self.rand_f(angle.tan());
@@ -67,7 +67,7 @@ impl CRandom {
     }
 }
 
-/// `Fvector::normalize`: no guard, as the engine's (a zero vector stays NaN-free here only by
+/// No guard, as the engine's (a zero vector stays NaN-free here only by
 /// being returned as it is).
 #[must_use]
 pub fn normalize(v: Vec3) -> Vec3 {
@@ -75,26 +75,26 @@ pub fn normalize(v: Vec3) -> Vec3 {
     if m > f32::MIN_POSITIVE { v * (1.0 / m).sqrt() } else { v }
 }
 
-/// `Fvector::mknormal`: `(p1 - p0) x (p2 - p1)`, normalised when it can be.
+/// `(p1 - p0) x (p2 - p1)`, normalised when it can be.
 #[must_use]
 pub fn mknormal(p0: Vec3, p1: Vec3, p2: Vec3) -> Vec3 {
     normalize((p1 - p0).cross(p2 - p1))
 }
 
-/// `Fvector::similar` with `EPS_L`.
+/// Whether two vectors are similar within `EPS_L`.
 #[must_use]
 pub fn similar(a: Vec3, b: Vec3, eps: f32) -> bool {
     (a.x - b.x).abs() < eps && (a.y - b.y).abs() < eps && (a.z - b.z).abs() < eps
 }
 
-/// `Fbox::getsphere`: the centre and the distance from it to `max`.
+/// The centre and the distance from it to `max`.
 #[must_use]
 pub fn box_sphere(b: &Aabb) -> (Vec3, f32) {
     let c = b.center();
     (c, c.distance(b.max))
 }
 
-/// `Fbox::xform` of the eight corners (`getpoint` order).
+/// A box transformed by a matrix, from its eight corners.
 #[must_use]
 pub fn xform_corners(min: Vec3, max: Vec3, m: &Mat4) -> Aabb {
     let mut out = Aabb::INVALID;
@@ -114,7 +114,7 @@ pub fn xform_corners(min: Vec3, max: Vec3, m: &Mat4) -> Aabb {
     out
 }
 
-/// `Fbox::intersect`.
+/// Whether two boxes intersect.
 #[must_use]
 pub fn boxes_meet(a: &Aabb, b: &Aabb) -> bool {
     !(a.max.x < b.min.x
@@ -125,7 +125,7 @@ pub fn boxes_meet(a: &Aabb, b: &Aabb) -> bool {
         || a.min.z > b.max.z)
 }
 
-/// `Fbox::contains(point)`.
+/// Whether a box contains a point.
 #[must_use]
 pub fn box_holds(b: &Aabb, p: Vec3) -> bool {
     p.x >= b.min.x && p.x <= b.max.x && p.y >= b.min.y && p.y <= b.max.y && p.z >= b.min.z && p.z <= b.max.z
@@ -133,7 +133,7 @@ pub fn box_holds(b: &Aabb, p: Vec3) -> bool {
 
 // ---- Mgc::Eigen and the plane fit -------------------------------------------------------------
 
-/// `Eigen::Tridiagonal3`.
+/// The tridiagonal reduction of a 3x3 matrix.
 fn tridiagonal3(m: &mut [[f32; 3]; 3], diag: &mut [f32; 3], subd: &mut [f32; 3]) {
     let (m00, mut m01, mut m02, m11, m12, m22) = (m[0][0], m[0][1], m[0][2], m[1][1], m[1][2], m[2][2]);
     diag[0] = m00;
@@ -158,7 +158,7 @@ fn tridiagonal3(m: &mut [[f32; 3]; 3], diag: &mut [f32; 3], subd: &mut [f32; 3])
     }
 }
 
-/// `Eigen::QLAlgorithm` for 3x3.
+/// The QL algorithm for a 3x3 matrix.
 fn ql_algorithm(diag: &mut [f32; 3], subd: &mut [f32; 3], m: &mut [[f32; 3]; 3]) -> bool {
     const SIZE: usize = 3;
     const MAX_ITER: usize = 32;
@@ -226,7 +226,7 @@ fn ql_algorithm(diag: &mut [f32; 3], subd: &mut [f32; 3], m: &mut [[f32; 3]; 3])
     true
 }
 
-/// `Eigen::DecreasingSort`.
+/// Sorts the eigenvalues in decreasing order.
 fn decreasing_sort(val: &mut [f32; 3], vec: &mut [[f32; 3]; 3]) {
     for i0 in 0..2 {
         let mut i1 = i0;
@@ -247,7 +247,7 @@ fn decreasing_sort(val: &mut [f32; 3], vec: &mut [[f32; 3]; 3]) {
     }
 }
 
-/// `Mgc::OrthogonalPlaneFit`: the points' average and the unit normal of the least-squares plane
+/// The points' average and the unit normal of the least-squares plane
 /// (the eigenvector of the smallest eigenvalue).
 #[must_use]
 pub fn plane_fit(points: &[Vec3]) -> (Vec3, Vec3) {
@@ -276,7 +276,7 @@ pub fn plane_fit(points: &[Vec3]) -> (Vec3, Vec3) {
     (offset, Vec3::new(m[0][2], m[1][2], m[2][2]))
 }
 
-/// `Fplane::build(point, normal)`: the normal normalised, `d = -n . p`.
+/// A plane from a point and a normal: the normal normalised, `d = -n . p`.
 #[must_use]
 pub fn plane_build(p: Vec3, n: Vec3) -> Vec4 {
     let n = normalize(n);
@@ -474,7 +474,7 @@ pub fn is_mu_static(lo: &LibraryObject) -> bool {
     is_static_any(lo) && lo.object.flags.contains(ObjectFlags::MULTIPLE_USAGE)
 }
 
-/// `FindMeshByName`: case-insensitive.
+/// Finds a mesh by name: case-insensitive.
 #[must_use]
 pub fn mesh_index(lo: &LibraryObject, name: &str) -> Option<usize> {
     lo.object.meshes.iter().position(|m| m.name.eq_ignore_ascii_case(name))
@@ -499,7 +499,7 @@ pub fn face_count(lo: &LibraryObject, mesh: usize) -> usize {
         .sum()
 }
 
-/// A mesh's box carried by the object's transform (`GetBox` + `Fbox::xform`).
+/// A mesh's box carried by the object's transform.
 #[must_use]
 pub fn mesh_world_box(lo: &LibraryObject, mesh: usize, world: &Mat4) -> Option<Aabb> {
     let m = lo.object.meshes.get(mesh)?;
@@ -525,8 +525,8 @@ pub fn mesh_bvh(lo: &LibraryObject, mesh: usize) -> Option<Bvh> {
     Bvh::build(&m.points, &tris).ok()
 }
 
-/// `CEditableMesh::RayPick` (`OPT_ONLYNEAREST | OPT_CULL`) of a mesh's tree with the object's
-/// inverse transform: whether it is hit closer than `range`.
+/// A mesh's tree with the object's inverse transform: whether the ray hits it closer than `range`
+/// (nearest hit, culling).
 #[must_use]
 pub fn mesh_ray_hits(bvh: &Bvh, inv: &Mat4, start: Vec3, dir: Vec3, range: f32) -> bool {
     let mut ray = Ray::new(inv.transform_tiny(start), inv.transform_dir(dir), range);
@@ -552,7 +552,7 @@ pub fn mesh_of_triangle(lo: &LibraryObject, tri: u32) -> Option<usize> {
     None
 }
 
-/// A scene object hit by a ray with the mesh under the hit (`RayPickObject` with `e_mesh`).
+/// A scene object hit by a ray with the mesh under the hit.
 #[derive(Clone, Debug)]
 pub struct MeshHit {
     pub object: Arc<Object>,
@@ -595,7 +595,7 @@ pub fn pick_mesh(state: &SceneState, lib: &Library, start: Vec3, dir: Vec3, rang
 
 // ---- the frustum ------------------------------------------------------------------------------
 
-/// `CFrustum::testPolyInside`: some part of the polygon is inside every plane (a point is inside
+/// Some part of the polygon is inside every plane (a point is inside
 /// when `n . p + w >= 0`). The polygon is clipped plane by plane and fails once fewer than three
 /// points are left.
 #[must_use]
@@ -637,7 +637,7 @@ pub fn poly_inside(planes: &[Vec4], poly: &[Vec3]) -> bool {
     src.len() >= 3
 }
 
-/// `CSceneObject::FrustumPick` as far as the box tells: the object's world box meets every plane.
+/// Whether the frustum picks the object, as far as the box tells: the object's world box meets every plane.
 #[must_use]
 pub fn box_in_frustum(planes: &[Vec4], b: &Aabb) -> bool {
     b.is_valid()
@@ -652,7 +652,7 @@ pub fn box_in_frustum(planes: &[Vec4], b: &Aabb) -> bool {
         })
 }
 
-/// `CEditableMesh::FrustumPick`: a visible mesh with a face inside the frustum.
+/// A visible mesh with a face inside the frustum.
 #[must_use]
 pub fn mesh_in_frustum(lo: &LibraryObject, mesh: usize, world: &Mat4, planes: &[Vec4]) -> bool {
     let Some(m) = lo.object.meshes.get(mesh) else { return false };

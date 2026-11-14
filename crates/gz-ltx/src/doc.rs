@@ -1,8 +1,8 @@
 //! A lossless LTX document: the one line model of the LTX text the editor edits.
 //!
 //! Two readers of LTX lines exist and the document speaks both ([`Syntax`]): the engine's
-//! `CInifile` (project files, the project list, the editor's settings) and the module manifest
-//! reader of the game's XMS and the C++ `EditorMod::Load` (`mod.ltx`). They differ in what starts
+//! ini reader (project files, the project list, the editor's settings) and the module manifest
+//! reader of the game's XMS and the editor's manifest loader (`mod.ltx`). They differ in what starts
 //! a comment, what a header carries and how a section written twice reads; the lines, their
 //! breaks and every edit are the same code.
 
@@ -11,13 +11,13 @@ use std::ops::Range;
 
 use gz_base::SmolStr;
 
-/// What the manifest reader (the C++ `Trim`) takes off both ends of a line.
+/// What the manifest reader's trim takes off both ends of a line.
 pub const MANIFEST_WS: &[char] = &[' ', '\t', '\r', '\n'];
 
 /// The rules a line is read by.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Syntax {
-    /// The engine's `CInifile`: `;` and `//` start a comment outside quotes, a `#` line is a
+    /// The engine's ini reader: `;` and `//` start a comment outside quotes, a `#` line is a
     /// directive, a header names its parents (`[s] : base`), a quoted value left open continues
     /// on the next lines, and a section written twice is read at its first header. The section
     /// named `""` is what stands before the first header.
@@ -87,14 +87,14 @@ enum Kind {
     /// Byte ranges inside the raw line: the key, the value (both trimmed), the code (the line
     /// without its comment, trimmed) and whether there was an `=`.
     Entry { key: Range<usize>, value: Range<usize>, code: Range<usize>, eq: bool },
-    /// Blank, comment, an `#include` of `CInifile`, a header it cannot read: kept, never
+    /// Blank, comment, an `#include` of the ini reader, a header it cannot read: kept, never
     /// interpreted.
     Other,
 }
 
 #[derive(Clone, Debug)]
 struct Line {
-    /// The line as written, without its line break. A quoted value of `CInifile` that spans
+    /// The line as written, without its line break. A quoted value of the ini reader that spans
     /// lines keeps its inner line breaks here.
     raw: String,
     eol: Eol,
@@ -122,7 +122,7 @@ impl Line {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineItem<'a> {
     Section(&'a str),
-    /// `code` is the line without its comment: what the C++ kept of a raw line (`[requires]`).
+    /// `code` is the line without its comment: what is kept of a raw line (`[requires]`).
     Entry {
         key: &'a str,
         value: &'a str,
@@ -166,7 +166,7 @@ pub fn find_manifest_comment(s: &str) -> Option<usize> {
     None
 }
 
-/// Where the code of a `CInifile` line ends and its comment starts: `;` or `//` outside quotes.
+/// Where the code of an ini line ends and its comment starts: `;` or `//` outside quotes.
 fn ini_code_end(line: &str) -> usize {
     let bytes = line.as_bytes();
     let mut in_quote = false;
@@ -234,7 +234,7 @@ impl Syntax {
                 }
             };
         }
-        // `CInifile` looks for the `=` from the line's start, the manifest reader in its code
+        // the ini reader looks for the `=` from the line's start, the manifest reader in its code
         let from = if self == Syntax::Ini { 0 } else { code.start };
         match raw.get(from..end).and_then(|s| s.find('=')) {
             Some(at) => {
@@ -278,7 +278,7 @@ fn one_line(text: &str) -> String {
     text.replace(['\r', '\n'], " ")
 }
 
-/// `key = value` with the key padded to `width`, as the C++ `AppendKey` writes it.
+/// `key = value` with the key padded to `width`.
 #[must_use]
 pub fn padded_entry(key: &str, value: &str, width: usize) -> String {
     let line = format!("{key:<width$} = {value}");
@@ -305,7 +305,7 @@ impl Default for LtxDoc {
 }
 
 impl LtxDoc {
-    /// An empty `CInifile` document with the engine's `\r\n` line breaks.
+    /// An empty the ini reader document with the engine's `\r\n` line breaks.
     #[must_use]
     pub fn new() -> Self {
         Self::new_as(Syntax::Ini, Placement::default())
@@ -317,7 +317,7 @@ impl LtxDoc {
         Self { lines: Vec::new(), eol: Eol::CrLf, syntax, placement }
     }
 
-    /// Reads a `CInifile` document. Never fails: a line that is not LTX is kept as it is.
+    /// Reads an ini document. Never fails: a line that is not LTX is kept as it is.
     #[must_use]
     pub fn parse(text: &str) -> Self {
         Self::parse_as(text, Syntax::Ini, Placement::default())
@@ -337,7 +337,7 @@ impl LtxDoc {
             let mut line_eol = first_eol;
             let mut kind = syntax.classify(first);
             let mut raw = first.to_owned();
-            // a quoted value left open continues on the next lines, as CInifile reads it
+            // a quoted value left open continues on the next lines, as the ini reader reads it
             if syntax == Syntax::Ini
                 && let Kind::Entry { key, value, .. } = &kind
                 && sub(&raw, value).bytes().filter(|&b| b == b'"').count() % 2 == 1
@@ -416,7 +416,7 @@ impl LtxDoc {
             .map_or(self.lines.len(), |n| start + n)
     }
 
-    /// The bodies of a section: the lines after its header (`CInifile`: the first one; the
+    /// The bodies of a section: the lines after its header (the ini reader: the first one; the
     /// manifest: each one), up to the next header.
     fn bodies(&self, section: &str) -> Vec<Range<usize>> {
         if self.syntax == Syntax::Ini {
@@ -474,7 +474,7 @@ impl LtxDoc {
         })
     }
 
-    /// The entry lines of a section without their comments: what the C++ kept of a raw-line
+    /// The entry lines of a section without their comments: what is kept of a raw-line
     /// section (`[requires]`, `[exclude]`).
     #[must_use]
     pub fn section_lines(&self, section: &str) -> Vec<&str> {
@@ -565,7 +565,7 @@ impl LtxDoc {
         self.append_section(section);
     }
 
-    /// The text a new `key = value` line of `CInifile` takes, shaped like `model`.
+    /// The text a new `key = value` line of the ini reader takes, shaped like `model`.
     fn ini_shape(model: Option<&Line>, key: &str, value: &str) -> String {
         let mut raw = String::new();
         let mut separator = " = ".to_owned();
@@ -814,7 +814,7 @@ impl LtxDoc {
         self.close_lines();
     }
 
-    /// Removes a section (`CInifile`: its first header; the manifest: every header of that
+    /// Removes a section (the ini reader: its first header; the manifest: every header of that
     /// name) with its body. A comment block that leans on the next header stays with that
     /// header. Returns whether the section existed.
     pub fn remove_section(&mut self, section: &str) -> bool {
