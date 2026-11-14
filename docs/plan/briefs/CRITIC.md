@@ -86,3 +86,34 @@ Write `docs/plan/reports/CRITIC.md` (overwrite it each round) and answer with th
   is broken), `should` (the author would want it fixed) or `minor`.
 - **Checked and found sound**: one line per area, so the architect knows what you covered.
 - When you have no blocker and no should left: say **"Nothing open."** and nothing else of substance.
+
+## Round 2
+
+Round 1's report is `docs/plan/reports/CRITIC-1.md` (one blocker, eight `should`, seven `minor`). Since then
+(`git log --oneline 0dcaf211..HEAD`) the architect and three engineers changed the tree; their reports are
+`docs/plan/reports/E1.md` (the library commands, a surface's error and busy states, the character's model),
+`E2.md` (the viewport's camera, the pick list, the comments) and `E3.md` (the kit merges). You are a new reader:
+you did not write round 1.
+
+1. **Is each finding of round 1 closed?** Check every one in the code and the documents as they are now - not in
+   the commit messages and not in the engineers' reports. For the blocker look hardest: is there any way left by
+   which a program a suite starts reaches GitHub, VirusTotal, the catalog, the module's website or the author's
+   own key file (`tools/qa/qa.py`, every `subprocess` in `tools/qa/*.py`, `crates/gz-github/src/endpoints.rs`,
+   `crates/gz-release/src/keys.rs`, `crates/grizzly/src/main.rs`, the updater's `crates/gz-update/src/net.rs`)?
+2. **The new work, by the same measure as round 1**: the commands `library.set` / `play` / `import` / `rebuild`
+   and what `library.view` and `library.reload` gained; `scene.summary` and the doors of `scene.save`,
+   `scene.convert`, `scene.recover`; `ui.audit`'s `loading` and `errors`; `Executors::thread`; the label limit of
+   the viewport; the kit's new widgets (`tabs`, `checker`, the `Combo`'s new states, `form::row_field`,
+   `secret_field`, `table_headers_ruled`) and what each `local.rs` still holds against `docs/UI_DESIGN.md`
+   section 8; `tools/rust/check_words.py` as widened. Unfinished work, contract sentences the code makes untrue,
+   rules of `CLAUDE.md` broken, traces - as before.
+3. **What the engineers say they did not prove** (the "not proven" sections of E1, E2, E3 and of `docs/STATE.md`
+   section 2): judge each - is it a gap the author would want closed before he calls this done, or is the
+   statement in `docs/STATE.md` enough?
+
+Pictures as they are now: `Intermediate/plan/tour/*.png` (1707 x 912 pt at 1.5) and `Intermediate/plan/tour/small/*.png`
+(1280 x 720 pt at 1.0) - look at both sets. The last runs on this tree: `check.sh` clean but for the step that
+reads the old release build, 1393 unit tests green, the 26 QA suites green (two of them on the runner's second
+run alone, after a stall beside the others: `docs/STATE.md`, "The window", says what those are).
+
+Write `docs/plan/reports/CRITIC.md` (round 2) and answer with the same text, in the form of round 1.

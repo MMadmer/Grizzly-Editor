@@ -191,8 +191,10 @@ What the suites hold, beyond what their names say:
   no tab. `library.set` saves by default: a caller that sets and leaves must not lose the change; a person's
   edit stays unsaved until Save. `library.rebuild` is not `library.import`: nothing comes from outside.
 - A resize configures the surface on the UI thread, which waits there for the frames in flight; the graphics
-  driver's own waits inside a present are the driver's. On a machine with no processor to spare either can pass
-  100 ms, so a suite that fails on a stall alone beside other suites is run again alone before it counts.
+  driver's own waits inside a present are the driver's, the graphics runtime's memory allocator has one lock
+  for every thread, and Windows' text services make a thread of their own when a field first takes the
+  keyboard. On a machine with no processor to spare each can pass 100 ms, so a suite that fails on a stall
+  alone beside other suites is run again alone before it counts.
 - A QA editor's window is hidden, not iconic: a launcher that asks for a minimised start gets a window that never
   comes up, and it is pictured and resized as if it were on the screen.
 - The action table is a service of the editor with the last frame's facts, so a surface's own menu answers "on" and
