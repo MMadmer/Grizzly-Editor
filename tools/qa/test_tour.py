@@ -29,6 +29,13 @@ SIZES = ((1707, 912, 1.5), (1280, 720, 1.0))
 FILES = {"texture": "ui\\ui_icon_equipment", "model": "dynamics\\weapons\\wpn_ak74\\wpn_ak74"}
 
 
+def settled(label: str) -> None:
+    """The surface shows its content, not a busy line: it is audited and pictured as the author sees it."""
+    ready = qa.until(lambda: not cmd("ui.audit").get("loading"), 20)
+    check(ready, "%s: shows its content within 20 s, not a busy line" % label,
+          qa.short(cmd("ui.audit").get("loading")))
+
+
 def audited(label: str) -> None:
     """Nothing escapes its window and no text is cut to nothing. A text cut with an ellipsis that still shows its
     end - a path, a status line, which the tooltip holds whole - is the design, and is only noted."""
@@ -76,6 +83,7 @@ def phase_a(project: str, tag: str, shots: str | None, contract: dict) -> None:
         active = cmd("ui.list").get("active_tab", "")
         check(active.split(":")[0] == kind.split(":")[0] or kind in ("pda", "beh") and active.startswith(kind[:2]),
               label + " comes up as the active tab", active)
+        settled(label)
         audited(label)
         pictured(label, shots if tag == "max" else None, "tab_%s" % kind.replace(":", "_"))
         opened.append(active)
@@ -94,6 +102,7 @@ def phase_b(tag: str, shots: str | None, contract: dict) -> None:
             continue
         shown = [d.get("id") for d in cmd("ui.list").get("dialogs", [])]
         check(dialog_id in shown, label + " is listed among the open dialogs", shown)
+        settled(label)
         audited(label)
         pictured(label, shots if tag == "max" else None, "dialog_%s" % dialog_id, modal=dialog_id)
         cmd("ui.dialog", action="close", id=dialog_id)

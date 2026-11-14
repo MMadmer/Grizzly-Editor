@@ -3,6 +3,7 @@ use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 
+use parking_lot::{Condvar, Mutex};
 use rayon::prelude::*;
 use tokio::sync::oneshot;
 
@@ -20,6 +21,32 @@ pub struct ExecOptions {
 pub struct Runtime {
     rt: tokio::runtime::Runtime,
     exec: Executors,
+}
+
+/// The work of a thread started with [`Executors::thread`]: over, or still running.
+#[derive(Clone)]
+pub struct Started(Arc<(Mutex<bool>, Condvar)>);
+
+impl Started {
+    /// Waits until the thread's work has ended.
+    pub fn join(&self) {
+        let (done, ended) = &*self.0;
+        let mut done = done.lock();
+        while !*done {
+            ended.wait(&mut done);
+        }
+    }
+}
+
+/// Says the work is over when it goes, a panic included.
+struct Ends(Started);
+
+impl Drop for Ends {
+    fn drop(&mut self) {
+        let (done, ended) = &*self.0.0;
+        *done.lock() = true;
+        ended.notify_all();
+    }
 }
 
 /// The handle work is started through. Clone it freely.
@@ -123,6 +150,39 @@ impl Executors {
         F: FnOnce() -> R + Send + 'static,
     {
         run_on(&self.0.io, f).await
+    }
+
+    /// A thread of its own for `f`, for work that outlives a pool's turn (a device's loop, a
+    /// renderer's start). The thread is made by an IO pool thread, never by the caller: making
+    /// one is a system call, a virus scanner holds it for seconds on a program it has not seen
+    /// before, and the caller is mostly the UI thread in a frame. When the system has no thread
+    /// to give, the work runs on the pool thread that asked.
+    pub fn thread(&self, name: &str, f: impl FnOnce() + Send + 'static) -> Started {
+        let started = Started(Arc::new((Mutex::new(false), Condvar::new())));
+        let ends = Ends(started.clone());
+        let name = name.to_owned();
+        self.spawn_io(move || {
+            let work: Box<dyn FnOnce() + Send> = Box::new(move || {
+                let _ends = ends;
+                f();
+            });
+            // kept where both can reach it: a thread that was not made leaves it to this one
+            let slot = Arc::new(Mutex::new(Some(work)));
+            let theirs = slot.clone();
+            let made = std::thread::Builder::new().name(name).spawn(move || {
+                let work = theirs.lock().take();
+                if let Some(work) = work {
+                    work();
+                }
+            });
+            if made.is_err() {
+                let work = slot.lock().take();
+                if let Some(work) = work {
+                    work();
+                }
+            }
+        });
+        started
     }
 
     /// Fire and forget on the CPU pool.

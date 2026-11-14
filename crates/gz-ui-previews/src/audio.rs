@@ -59,7 +59,7 @@ impl Player {
     #[must_use]
     pub fn of(editor: &Editor) -> Arc<Player> {
         let wake = editor.exec.wake().clone();
-        let log = editor.log.clone();
+        let exec = editor.exec.clone();
         // View > Mute Sounds and a mute held for a while: the sound plays on, unheard
         let muted = gz_app::gpu::Gpu::of(editor).mute_flag();
         editor.services.get_or_init(move || {
@@ -67,12 +67,9 @@ impl Player {
             let playing = Arc::new(AtomicBool::new(false));
             let error = Arc::new(Mutex::new(None));
             let (p, e) = (playing.clone(), error.clone());
-            if let Err(err) = std::thread::Builder::new()
-                .name("gz-audio".into())
-                .spawn(move || run(&rx, &p, &e, &wake, &muted))
-            {
-                log.warn(format!("the audio thread did not start: {err}"));
-            }
+            // asked for in a frame (the toolbar reads the player's state): the pool makes the
+            // thread, and what is sent meanwhile waits in the channel
+            let _ = exec.thread("gz-audio", move || run(&rx, &p, &e, &wake, &muted));
             Player { tx, playing, error }
         })
     }

@@ -188,7 +188,7 @@ impl ImagePass {
     /// The pass of this window once it is made. The first call starts making it on a thread of
     /// its own and answers `None` until it is there; `wake` asks for the frame that draws with it.
     #[must_use]
-    pub fn get(gpu: &RenderState, wake: &gz_task::Wake) -> Option<Arc<ImagePass>> {
+    pub fn get(gpu: &RenderState, exec: &gz_task::Executors) -> Option<Arc<ImagePass>> {
         if let Some(p) = gpu.renderer.read().callback_resources.get::<Arc<ImagePass>>() {
             return Some(p.clone());
         }
@@ -199,19 +199,12 @@ impl ImagePass {
             }
             r.callback_resources.insert(Preparing);
         }
-        let (state, wake) = (gpu.clone(), wake.clone());
-        let started =
-            std::thread::Builder::new().name("gz-ui-previews image pass".to_owned()).spawn(move || {
-                let pass = Arc::new(ImagePass::new(&state));
-                state.renderer.write().callback_resources.insert(pass);
-                wake.ping();
-            });
-        if started.is_err() {
-            // no thread to make it on: made here, once
-            let pass = Arc::new(ImagePass::new(gpu));
-            gpu.renderer.write().callback_resources.insert(pass.clone());
-            return Some(pass);
-        }
+        let (state, wake) = (gpu.clone(), exec.wake().clone());
+        let _ = exec.thread("gz-ui-previews image pass", move || {
+            let pass = Arc::new(ImagePass::new(&state));
+            state.renderer.write().callback_resources.insert(pass);
+            wake.ping();
+        });
         None
     }
 }
@@ -233,9 +226,9 @@ impl ImageDraw {
         gpu: &RenderState,
         view: &wgpu::TextureView,
         nearest: bool,
-        wake: &gz_task::Wake,
+        exec: &gz_task::Executors,
     ) -> Option<Arc<Self>> {
-        let pass = ImagePass::get(gpu, wake)?;
+        let pass = ImagePass::get(gpu, exec)?;
         let uniforms = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gz-ui-previews image"),
             size: 32,

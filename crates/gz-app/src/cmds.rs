@@ -747,7 +747,8 @@ async fn ui_audit(editor: Arc<Editor>, p: AuditParams, _origin: Origin) -> Reply
         let window = p.id.filter(|i| !i.is_empty()).map(|i| shell.window_of(&i));
         let ppp = ctx.pixels_per_point();
         let keep = |surface: &str| window.as_ref().is_none_or(|w| surface == w || surface.ends_with(w.as_str()));
-        let (mut truncated, mut escaped, mut controls) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut truncated, mut escaped, mut controls, mut loading) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for e in entries {
             match e {
                 audit::AuditEntry::Truncated { surface, full, shown, rect } if keep(&surface) => {
@@ -759,10 +760,19 @@ async fn ui_audit(editor: Arc<Editor>, p: AuditParams, _origin: Origin) -> Reply
                 audit::AuditEntry::Control { surface, label, enabled, why, help, rect } if keep(&surface) => {
                     controls.push(json!({ "window": surface, "label": label, "enabled": enabled, "why": why.unwrap_or_default(), "help": help.unwrap_or_default(), "rect": px_to_pt(rect, ppp) }));
                 }
+                audit::AuditEntry::Loading { surface, what, rect } if keep(&surface) => {
+                    loading.push(json!({ "window": surface, "label": what, "rect": px_to_pt(rect, ppp) }));
+                }
                 _ => {}
             }
         }
-        Ok(json!({ "truncated": truncated, "escaped": escaped, "controls": controls, "scale": scale(ppp) }))
+        Ok(json!({
+            "truncated": truncated,
+            "escaped": escaped,
+            "controls": controls,
+            "loading": loading,
+            "scale": scale(ppp),
+        }))
     })
     .await
 }
@@ -1084,7 +1094,10 @@ pub fn register(reg: &mut Registry) {
     );
     reg.cmd(Spec::view("ui.split", "Lists the layout store's sizes, or sets one by its key."), ui_split);
     reg.cmd(
-        Spec::read("ui.audit", "What the next frame cut short, let escape or drew off, with the reasons."),
+        Spec::read(
+            "ui.audit",
+            "What the next frame cut short, let escape or drew off, with the reasons, and what it still loads.",
+        ),
         ui_audit,
     );
     reg.cmd(

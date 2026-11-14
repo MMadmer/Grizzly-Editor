@@ -325,9 +325,9 @@ impl TextureDoc {
         let mip = self.mip.min(t.mips.saturating_sub(1));
         if self.draws.as_ref().is_none_or(|(m, _, _)| *m != mip) {
             let view = mip_view(tex, mip);
-            let wake = self.editor.exec.wake();
-            let linear = ImageDraw::new(gpu, &view, false, wake)?;
-            let nearest = ImageDraw::new(gpu, &view, true, wake)?;
+            let exec = &self.editor.exec;
+            let linear = ImageDraw::new(gpu, &view, false, exec)?;
+            let nearest = ImageDraw::new(gpu, &view, true, exec)?;
             self.draws = Some((mip, linear, nearest));
         }
         self.draws.as_ref().map(|(_, a, b)| (a.clone(), b.clone()))
@@ -583,7 +583,7 @@ impl Document for TextureDoc {
         if self.gpu.is_none() {
             self.gpu = Some(cx.gpu.clone());
             // the picture's pass is made while the picture loads
-            let _ = crate::image_pass::ImagePass::get(cx.gpu, cx.editor.exec.wake());
+            let _ = crate::image_pass::ImagePass::get(cx.gpu, &cx.editor.exec);
         }
         // Libraries > Reload Textures: the file is read again
         let reload = gz_app::gpu::TextureReload::generation(cx.editor);

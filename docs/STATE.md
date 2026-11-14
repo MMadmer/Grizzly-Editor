@@ -169,7 +169,12 @@ What the suites hold, beyond what their names say:
 - A pool thread that uploads to the GPU does it at the drawing threads' priority: the graphics runtime puts
   every use of a queue behind one lock, and a holder the other pools had taken the processor from kept the
   window's frame waiting.
-- No frame makes a thread: the read-back of a pictured frame is polled by one thread made with the window.
+- No frame makes a thread: making one is a system call, and a virus scanner held it for three seconds on an
+  editor it had not seen before. The read-back of a pictured frame is polled by one thread made with the window;
+  a thread a surface needs on first use (the sound player's, the renderer's start, the image pass's) is made by
+  a pool thread (`gz_task::Executors::thread`).
+- `ui.audit` answers `loading`, the busy lines a frame shows: a caller that judges or pictures a surface waits
+  for an empty list first, and the tour does - it found the stall above by staying on a tab until it was ready.
 - A resize configures the surface on the UI thread, which waits there for the frames in flight; the graphics
   driver's own waits inside a present are the driver's. On a machine with no processor to spare either can pass
   100 ms, so a suite that fails on a stall alone beside other suites is run again alone before it counts.

@@ -215,3 +215,22 @@ fn a_projects_jobs_stop_when_it_closes_and_the_editors_go_on() {
     jobs.cancel(editor);
     rt.block_on(jobs.wait(editor));
 }
+
+/// A thread of its own is made by a pool thread, not by the one that asked, and its work is
+/// waited for by `join`, a panic in it included.
+#[test]
+fn a_thread_of_its_own_is_made_off_the_callers_thread_and_joined() {
+    let rt = runtime();
+    let ran = Arc::new(parking_lot::Mutex::new(None));
+    let seen = ran.clone();
+    let started = rt.exec().thread("gz-test-own", move || {
+        std::thread::sleep(Duration::from_millis(20));
+        *seen.lock() = std::thread::current().name().map(str::to_owned);
+    });
+    started.join();
+    assert_eq!(ran.lock().as_deref(), Some("gz-test-own"));
+    // joined a second time, it is over already
+    started.join();
+    let failed = rt.exec().thread("gz-test-panics", || panic!("the work fails"));
+    failed.join();
+}

@@ -598,7 +598,7 @@ The window's commands are typed cards of the registry (`docs/COMMANDS.md`): `hel
 | `ui.toast text= [tone= action= label=]` | a note, optionally with a button that runs an action |
 | `ui.scroll id= to=top\|bottom\|<pt>\|item:<name>` | a panel, a drawer, a dialog or the work area; answers `scroll_y`, `scroll_max_y` |
 | `ui.split [key= value=]` | the layout store's sizes; with no key, every key |
-| `ui.audit [id=]` | what the next frame cut short (`truncated`), let escape (`escaped`), and its `controls` (enabled, why, help) |
+| `ui.audit [id=]` | what the next frame cut short (`truncated`), let escape (`escaped`), its `controls` (enabled, why, help), and `loading`: the busy lines it shows - a surface that has not got its content yet, so a caller waits for an empty list before it judges or pictures one |
 | `ui.scale [value=]` | the scale for tests until the editor ends; never saved |
 | `ui.contract` | the constants QA pins (`gz-app`'s `contract.rs`): panels, drawers, dialogs, kit dialogs, document kinds, popups, menus, viewport menus, the palette's id, the Task card, tile range and defaults, accents, categories, card menu labels, the scale range, the interface scales, the stall limit |
 | `ui.reset_layout [scope=level\|all]` | Window > Reset Layout; `all` also forgets every split |

@@ -1,4 +1,4 @@
-//! The audit: what a frame cut short, let escape, or drew disabled - and why.
+//! The audit: what a frame cut short, let escape, drew disabled - and why - or still waits for.
 //!
 //! Kit widgets report themselves here while they draw, but only in a frame somebody asked to
 //! audit (`ui.audit` is held for that frame), so an ordinary frame pays one flag check per
@@ -29,6 +29,8 @@ pub enum AuditEntry {
         help: Option<String>,
         rect: [f32; 4],
     },
+    /// A surface that shows a busy line instead of its content: what it is waiting for.
+    Loading { surface: SmolStr, what: String, rect: [f32; 4] },
 }
 
 #[derive(Default)]
@@ -124,6 +126,16 @@ pub fn escaped(ctx: &Context, what: &str, rect: Rect) {
     if s.wanted {
         let surface = current(&s);
         s.entries.push(AuditEntry::Escaped { surface, what: what.to_owned(), rect: px(ctx, rect) });
+    }
+}
+
+/// A busy line was drawn: the surface around it has not got its content yet.
+pub fn loading(ctx: &Context, what: &str, rect: Rect) {
+    let h = handle(ctx);
+    let mut s = h.0.lock();
+    if s.wanted {
+        let surface = current(&s);
+        s.entries.push(AuditEntry::Loading { surface, what: what.to_owned(), rect: px(ctx, rect) });
     }
 }
 

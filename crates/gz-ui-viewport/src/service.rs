@@ -707,7 +707,7 @@ pub struct Viewport {
     renderer: Mutex<Option<Arc<Renderer>>>,
     renderer_failed: Mutex<bool>,
     /// The thread that makes the renderer, while it runs.
-    renderer_start: Mutex<Option<std::thread::JoinHandle<()>>>,
+    renderer_start: Mutex<Option<gz_task::Started>>,
     renderer_starting: AtomicBool,
     build: Mutex<BuildCtl>,
     loader_key: Mutex<Option<(Option<PathBuf>, Rev)>>,
@@ -862,29 +862,19 @@ impl Viewport {
             return None;
         }
         let (ed, device, queue) = (editor.clone(), gpu.device.clone(), gpu.queue.clone());
-        let mut start = self.renderer_start.lock();
-        let spawned = std::thread::Builder::new().name("gz-render-start".into()).spawn(move || {
+        // asked for in the Level tab's first frame: the pool makes the thread
+        let started = editor.exec.thread("gz-render-start", move || {
             let me = Viewport::of(&ed);
             let made = Renderer::new(device, queue, gz_app::gpu_gate(&ed), ed.exec.clone());
             me.install(&ed, made);
             me.renderer_starting.store(false, Ordering::Release);
         });
-        match spawned {
-            Ok(h) => {
-                *start = Some(h);
-                // a picture taken meanwhile waits for it
-                set_gate(editor);
-                // the window's device goes after the start has ended
-                let me = Viewport::of(editor);
-                gz_app::GpuOwners::of(editor)
-                    .on_exit("the viewport's renderer start", move || me.join_start());
-            }
-            Err(e) => {
-                self.renderer_starting.store(false, Ordering::Release);
-                *self.renderer_failed.lock() = true;
-                editor.log.error(format!("the viewport's renderer did not start: {e}"));
-            }
-        }
+        *self.renderer_start.lock() = Some(started);
+        // a picture taken meanwhile waits for it
+        set_gate(editor);
+        // the window's device goes after the start has ended
+        let me = Viewport::of(editor);
+        gz_app::GpuOwners::of(editor).on_exit("the viewport's renderer start", move || me.join_start());
         None
     }
 
@@ -894,9 +884,9 @@ impl Viewport {
     }
 
     fn join_start(&self) {
-        let handle = self.renderer_start.lock().take();
-        if let Some(h) = handle {
-            let _ = h.join();
+        let started = self.renderer_start.lock().take();
+        if let Some(started) = started {
+            started.join();
         }
     }
 

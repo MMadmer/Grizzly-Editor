@@ -687,7 +687,7 @@ impl ModelDoc {
 
         if let (Some(handle), Some(gpu)) = (renderer.target(), self.gpu.as_ref()) {
             if self.target.as_ref().is_none_or(|(serial, _)| *serial != handle.serial)
-                && let Some(draw) = ImageDraw::new(gpu, &handle.view, true, self.editor.exec.wake())
+                && let Some(draw) = ImageDraw::new(gpu, &handle.view, true, &self.editor.exec)
             {
                 self.target = Some((handle.serial, draw));
             }
@@ -852,7 +852,7 @@ impl Document for ModelDoc {
         if self.gpu.is_none() {
             self.gpu = Some(cx.gpu.clone());
             // the picture's pass is made while the picture loads
-            let _ = crate::image_pass::ImagePass::get(cx.gpu, cx.editor.exec.wake());
+            let _ = crate::image_pass::ImagePass::get(cx.gpu, &cx.editor.exec);
         }
         let full = ui.max_rect();
         let data = self.data();

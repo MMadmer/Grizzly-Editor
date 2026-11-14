@@ -59,12 +59,15 @@ A change of plan is a change of its document first.
 - **State changes through a store's commands only** (`gz-store`: one writer per store, an immutable snapshot
   published). No `static` holding state, no singleton: stores, pools and services are handles passed down from the
   editor; `Rc` / `RefCell` only in a surface's own view state.
-- **The UI thread never waits** on a file, the network, a lock a job may hold, a GPU readback or a pipeline compile.
+- **The UI thread never waits** on a file, the network, a lock a job may hold, a GPU readback or a pipeline compile,
+  and it makes no thread: a thread of its own is started with `Executors::thread`, where a pool thread makes it
+  (a virus scanner holds the system call for seconds on a program it has not seen).
   It is measured, not promised: the window times every UI pass and event, one over 100 ms is a stall
   (`gz-app`'s `stalls.rs`, `perf.stalls`), and every QA suite ends on an empty list. A long pass during which no
   thread of the editor got a processor (the heartbeat thread was late too) is kept apart as `starved` and is no
   stall. A stall's record says how much of it the UI thread spent on the processor (little: it waited), and with
-  `GRIZZLY_DEBUG_STALLS=1` the functions it stood in - read that before guessing what a stall was. Work that takes time is a job (`gz-task`) with a stage the author can read and a Stop; a job belongs to the
+  `GRIZZLY_DEBUG_STALLS=1` the functions it stood in - read that before guessing what a stall was. Work that
+  takes time is a job (`gz-task`) with a stage the author can read and a Stop; a job belongs to the
   editor or to the project that was open when it started, and closing the project stops it. A command that only
   reads the editor's state (`job.*`, `ui.tasks`, `state`) never waits for the UI thread or a frame.
 - **A thread that submits to the GPU passes the window's gate** (`gz_app::gpu_gate`, a `gz_task::Gate`): the window

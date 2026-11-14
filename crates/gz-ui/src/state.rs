@@ -180,14 +180,19 @@ pub fn spinner(ui: &mut Ui) {
     }
 }
 
-/// A spinner and what is being done, on one line.
+/// A spinner and what is being done, on one line. An audited frame reports it: a caller that
+/// looks at the surface knows it has not got its content yet.
 pub fn busy_line(ui: &mut Ui, text_: &str) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        spinner(ui);
-        let color = palette(ui.ctx()).text;
-        text::label(ui, text_, Font::Body, color, Clip::End);
-    });
+    let row = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            spinner(ui);
+            let color = palette(ui.ctx()).text;
+            text::label(ui, text_, Font::Body, color, Clip::End);
+        })
+        .response
+        .rect;
+    crate::audit::loading(ui.ctx(), text_, row);
 }
 
 /// A toned bar across the row: an icon, a sentence that wraps, up to two actions on the right.
