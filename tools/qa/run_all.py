@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""THE way the QA suites are run: side by side against the Rust editor, each on its own port,
-editor home, project copy and mock port, with a hard timeout, and each suite's last result kept.
+"""THE way the QA suites are run: side by side against the editor, each on its own port, editor home,
+project copy and mock port, with a hard timeout, and each suite's last result kept.
 
     python tools/qa/run_all.py                 every suite
     python tools/qa/run_all.py --failed        only the suites that failed last time
@@ -10,8 +10,8 @@ editor home, project copy and mock port, with a hard timeout, and each suite's l
     python tools/qa/run_all.py --with-game     also the suites that start the real game (test_play_game: the game
                                                loads a level Play made; half a minute, so not in the everyday set)
 
-Prints `PASS/FAIL <suite> <seconds> <failed checks>` per suite and a total; exit code 1 on any
-failure. Each suite's output is Intermediate/qa/<suite>.log; the results Intermediate/qa/state.json.
+Prints `PASS/FAIL <suite> <seconds> <failed checks>` per suite and a total, and says every minute which suites
+are still running; exit code 1 on any failure. Each suite's output is Intermediate/qa/<suite>.log; the results Intermediate/qa/state.json.
 A suite marked `alone` (it times frames or loads) runs after the others, by itself; one marked `game` starts the
 real game and runs only with --with-game (or when named).
 Every editor a suite starts gets the suite's home on its command line and in GRIZZLY_HOME; the run fails when the
@@ -23,7 +23,6 @@ import argparse
 import concurrent.futures
 import json
 import os
-import re
 import shutil
 import socket
 import subprocess
@@ -33,7 +32,7 @@ import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import kept  # noqa: E402
+from qa import remove_tree  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -41,45 +40,46 @@ OUT = os.path.join(REPO, "Intermediate", "qa")
 STATE = os.path.join(OUT, "state.json")
 OD = r"D:\XFinedProjects\DARF-Overnight-Delivery"
 TEST = r"D:\XFinedProjects\Test"
-# the editor the suites drive: the debug build, or the binary GRIZZLY_QA_EXE names (qa_target.exe())
+# the editor the suites drive: the debug build, or the binary GRIZZLY_QA_EXE names (qa.exe())
 RUST_EXE = os.environ.get("GRIZZLY_QA_EXE") or os.path.join(REPO, "Intermediate", "cargo", "debug", "Grizzly.exe")
 
-# name -> script, arguments, timeout (s), alone
+# name -> arguments, timeout (s: every suite is held to two minutes), alone, game
 SUITES: dict[str, dict] = {
     "test_project_browser": {"args": ["--no-explorer"], "timeout": 120},
     # a project moved and opened in a home that never saw it; a second start hands over (two homes, its own ports)
-    "test_portable": {"args": ["--project", TEST], "timeout": 300},
+    "test_portable": {"args": ["--project", TEST], "timeout": 120},
     # its phase A times a start to the shown window (0.3 s): alone, like the other suites that time something
     "test_ui_shell": {"args": ["--project", OD], "timeout": 120, "alone": True},
-    "test_ui_tour": {"args": ["--project", OD], "timeout": 180},
+    # every tab kind, dialog and menu at two sizes: audited and pictured once
+    "test_tour": {"args": ["--project", OD], "timeout": 120},
     "test_asset_icons": {"args": ["--project", OD], "timeout": 120},
     "test_unicode_names": {"args": ["--project", OD], "timeout": 120},
-    "test_build_contents": {"args": ["--project", OD], "timeout": 180},
+    "test_build_contents": {"args": ["--project", OD], "timeout": 120},
     # it times the UI's frames during a build: alone, like the other suites that time something
-    "test_build_job": {"args": ["--project", OD], "timeout": 180, "alone": True},
-    "test_characters": {"args": ["--project", OD], "timeout": 180},
-    "test_behaviours": {"args": ["--project", OD], "timeout": 180},
-    "test_graph_ui": {"args": ["--project", OD], "timeout": 180},
-    "test_assets": {"args": ["--project", OD], "timeout": 180},
-    "test_pda": {"args": ["--project", OD], "timeout": 180},
-    "test_screens": {"args": ["--project", OD], "timeout": 180},
-    "test_world": {"args": ["--project", TEST], "timeout": 180},
-    "test_properties": {"args": ["--project", TEST], "timeout": 180},
+    "test_build_job": {"args": ["--project", OD], "timeout": 120, "alone": True},
+    "test_characters": {"args": ["--project", OD], "timeout": 120},
+    "test_behaviours": {"args": ["--project", OD], "timeout": 120},
+    "test_graph_ui": {"args": ["--project", OD], "timeout": 120},
+    "test_assets": {"args": ["--project", OD], "timeout": 120},
+    "test_pda": {"args": ["--project", OD], "timeout": 120},
+    "test_screens": {"args": ["--project", OD], "timeout": 120},
+    "test_world": {"args": ["--project", TEST], "timeout": 120},
+    "test_properties": {"args": ["--project", TEST], "timeout": 120},
     "test_scene_tools": {"args": ["--project", TEST], "timeout": 120},
-    "test_level_commands": {"args": ["--project", TEST], "timeout": 300},
+    "test_level_commands": {"args": ["--project", TEST], "timeout": 120},
     # the compiler's regression net: two small scenes at draft quality from a cold start, against tools/qa/golden
-    "test_level_compile": {"args": ["--project", TEST], "timeout": 240},
-    "test_previews": {"args": ["--project", OD], "timeout": 180},
-    "test_mod_publish": {"args": ["--project", OD], "timeout": 240},
-    "test_mod_catalog": {"args": ["--project", OD], "timeout": 300},
-    # the editor updates itself: a fake installation of harmless files against the mock, no project
-    "test_update": {"args": [], "timeout": 120},
-    "test_mcp_bridge": {"args": [], "timeout": 120},
-    "test_stress": {"args": ["--project", TEST], "timeout": 120, "alone": True},
-    "test_server_lifecycle": {"script": os.path.join(REPO, "tools", "mcp", "run_lifecycle.py"), "args": [],
-                              "timeout": 180, "alone": True},
-    "benchmark_scene_load": {"script": os.path.join(REPO, "tools", "mcp", "run_benchmark.py"), "args": [],
-                             "timeout": 300, "alone": True},
+    "test_level_compile": {"args": ["--project", TEST], "timeout": 120},
+    "test_previews": {"args": ["--project", OD], "timeout": 120},
+    "test_mod_publish": {"args": ["--project", OD], "timeout": 120},
+    "test_mod_catalog": {"args": ["--project", OD], "timeout": 120},
+    # the editor updates itself: a fake installation of harmless files against the mock (headless), then the window's face of it
+    "test_update": {"args": ["--project", TEST], "timeout": 120},
+    # the Go mock of GitHub and VirusTotal that the updater's, the publisher's and the catalog's suites stand on
+    "test_github_mock": {"args": [], "timeout": 120},
+    # the bridge, the six doors and the socket under load
+    "test_bridge": {"args": ["--project", TEST], "timeout": 120},
+    # the commandlets and the editor's process lifecycle (a console of its own for Ctrl+Break)
+    "test_cli": {"args": ["--project", TEST], "timeout": 120},
     # the real game in a root of its own (three minutes at most for the game itself)
     "test_play_game": {"args": ["--project", TEST], "timeout": 300, "alone": True, "game": True},
 }
@@ -118,58 +118,6 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-# IO_REPARSE_TAG name-surrogate bit: a junction or a symbolic link, not a placeholder of a cloud folder
-_NAME_SURROGATE = 0x20000000
-
-
-def unlink_links(path: str) -> list[str]:
-    """Every junction and symbolic link under `path`, the link itself removed and never followed: what it points at
-    (the game's archives, for one) stays. Answers the links removed."""
-    gone: list[str] = []
-    try:
-        entries = list(os.scandir(path))
-    except OSError:
-        return gone
-    for e in entries:
-        try:
-            st = e.stat(follow_symlinks=False)
-        except OSError:
-            continue
-        if e.is_symlink() or getattr(st, "st_reparse_tag", 0) & _NAME_SURROGATE:
-            try:
-                (os.rmdir if e.is_dir() else os.unlink)(e.path)
-            except OSError:
-                os.unlink(e.path)
-            gone.append(e.path)
-        elif e.is_dir(follow_symlinks=False):
-            gone += unlink_links(e.path)
-    return gone
-
-
-def remove_tree(path: str) -> bool:
-    """A suite's folders, gone for good: read-only entries too (a copy's git objects), with a few retries for a
-    file an editor lets go of a moment late. Says so when something stayed."""
-    if not path or not os.path.exists(path):
-        return True
-
-    def writable(func, p, _exc):
-        try:
-            os.chmod(p, 0o666)
-            func(p)
-        except OSError:
-            pass
-
-    # a link goes first, as a link: a delete never walks into what it points at
-    unlink_links(path)
-    for _ in range(20):
-        shutil.rmtree(path, onerror=writable)
-        if not os.path.exists(path):
-            return True
-        time.sleep(0.25)
-    print("! %s could not be removed" % path, flush=True)
-    return False
-
-
 def load_state() -> dict:
     try:
         with open(STATE, encoding="utf-8") as f:
@@ -203,7 +151,27 @@ def ours() -> list[int]:
     return pids
 
 
+# the suites running now, with the second each started at: the pulse says every minute how far a run is
+RUNNING: dict[str, float] = {}
+PULSE_SECONDS = 60.0
+
+
+def pulse(done: threading.Event, total: int, finished: list) -> None:
+    while not done.wait(PULSE_SECONDS):
+        now = time.monotonic()
+        names = ", ".join("%s %ds" % (n, now - t) for n, t in sorted(RUNNING.items(), key=lambda kv: kv[1]))
+        print("... %d of %d suites ended; running: %s" % (len(finished), total, names or "none"), flush=True)
+
+
 def run_one(name: str, extra: list[str], port_lock: threading.Lock) -> dict:
+    RUNNING[name] = time.monotonic()
+    try:
+        return run_suite(name, extra, port_lock)
+    finally:
+        RUNNING.pop(name, None)
+
+
+def run_suite(name: str, extra: list[str], port_lock: threading.Lock) -> dict:
     spec = SUITES[name]
     script = spec.get("script") or os.path.join(HERE, name + ".py")
     with port_lock:
@@ -215,7 +183,7 @@ def run_one(name: str, extra: list[str], port_lock: threading.Lock) -> dict:
     tmp = tempfile.mkdtemp(prefix="gzqa_")
     env = dict(os.environ)
     env.update({"TEMP": tmp, "TMP": tmp,
-                "GRIZZLY_QA_TARGET": "rust", "GRIZZLY_QA_PORT": str(port), "GRIZZLY_QA_HOME": home,
+                "GRIZZLY_QA_PORT": str(port), "GRIZZLY_QA_HOME": home,
                 # an editor started without -home takes this one
                 "GRIZZLY_HOME": home,
                 # the QA credentials of the Credential Manager are this suite's own: two suites side by
@@ -264,7 +232,7 @@ def run_one(name: str, extra: list[str], port_lock: threading.Lock) -> dict:
         for root, _dirs, files in os.walk(home):
             for f in files:
                 if f.endswith(".log"):
-                    shutil.copyfile(os.path.join(root, f), os.path.join(keep, "%s-%s" % (name, f)))
+                    shutil.copyfile(os.path.join(root, f), os.path.join(keep, "%s-%d-%s" % (name, int(time.time()), f)))
     remove_tree(home)
     # what a suite left in its temp folder - all of it, when its timeout ended it
     left = [os.path.join(tmp, n) for n in os.listdir(tmp)] if os.path.isdir(tmp) else []
@@ -273,7 +241,8 @@ def run_one(name: str, extra: list[str], port_lock: threading.Lock) -> dict:
               flush=True)
     remove_tree(tmp)
     text = "\n".join(lines)
-    failed = [line[5:].split("  <- ")[0].strip() for line in lines if line.startswith("FAIL ")]
+    failed = [line[5:].split("  <- ")[0].strip() for line in lines if line.startswith(("FAIL ", "SLOW "))]
+    slow = [line[5:].split("  <- ")[0].strip() for line in lines if line.startswith("SLOW ")]
     # what no suite asks about: an editor of the suite that the graphics device complained to, or that panicked
     failed.extend(trouble)
     if timed_out:
@@ -282,19 +251,16 @@ def run_one(name: str, extra: list[str], port_lock: threading.Lock) -> dict:
         tail = [l for l in text.strip().splitlines() if l.strip()][-1:] or ["no output"]
         failed.append("exit code %d: %s" % (code, tail[0][:200]))
     ok = code == 0 and not timed_out and not failed
-    return {"ok": ok, "seconds": round(seconds, 1), "failed": failed, "code": code}
+    return {"ok": ok, "seconds": round(seconds, 1), "failed": failed, "slow": slow, "code": code}
 
 
 TROUBLE = ("the graphics device reported an error", "panicked at")
 
-# what a check that times something is called: the UI thread's stalls, and answers given while a job runs
-TIMINGS = ("holds the UI thread under", "no UI pass waited", "no UI pass stalled", "is answered at once", "no stall")
-
-
 def only_timings(result: dict) -> bool:
-    """The suite failed, and every check that failed in it timed something."""
-    failed = result.get("failed") or []
-    return bool(failed) and not result.get("ok") and all(any(mark in line for mark in TIMINGS) for line in failed)
+    """The suite failed, and every check that failed in it timed something (`qa.check(..., timing=True)` prints
+    those as SLOW)."""
+    failed, slow = result.get("failed") or [], set(result.get("slow") or [])
+    return bool(failed) and not result.get("ok") and all(f in slow for f in failed)
 
 
 def log_trouble(home: str) -> list[str]:
@@ -356,7 +322,8 @@ def main() -> int:
     ap.add_argument("--extra", nargs=argparse.REMAINDER, default=[], help="arguments for a single suite")
     args = ap.parse_args()
 
-    state = load_state()
+    # a suite that is gone takes its last result with it
+    state = {k: v for k, v in load_state().items() if k in SUITES}
     names = [n for n in SUITES if args.with_game or not SUITES[n].get("game")]
     if args.suites:
         unknown = [n for n in args.suites if n not in SUITES]
@@ -370,11 +337,15 @@ def main() -> int:
         print("nothing to run: every suite passed last time")
         return 0
     if not os.path.isfile(RUST_EXE):
-        print("build the Rust editor first: bash tools/rust/cg.sh build -p grizzly -p gz-mcp-bridge")
+        print("build the editor first: bash tools/rust/cg.sh build -p grizzly -p gz-mcp-bridge")
         return 2
     left = ours()
+    end = time.monotonic() + 30
+    while left and time.monotonic() < end:
+        time.sleep(1.0)
+        left = ours()
     if left:
-        print("Rust editors of an earlier run are still running (pids %s): close them first" % left)
+        print("Editors of an earlier run are still running (pids %s): close them first" % left)
         return 2
     os.makedirs(OUT, exist_ok=True)
     if args.only and len(names) != 1:
@@ -384,11 +355,7 @@ def main() -> int:
     together = [n for n in names if not SUITES[n].get("alone")]
     alone = [n for n in names if SUITES[n].get("alone")]
     lock = threading.Lock()
-    back = kept.recover()
-    if back:
-        print("put back what a run that died left aside: " + ", ".join(back))
     root_before = {p: read_opt(p) for p in ROOT_FILES}
-    kept.to_disk({os.path.basename(p): data for p, data in root_before.items()})
     t0 = time.monotonic()
     results: dict[str, dict] = {}
 
@@ -400,6 +367,8 @@ def main() -> int:
                                      "; ".join(r["failed"][:6]) + (" ..." if len(r["failed"]) > 6 else "")),
               flush=True)
 
+    quiet = threading.Event()
+    threading.Thread(target=pulse, args=(quiet, len(names), results), daemon=True).start()
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
         futures = {pool.submit(run_one, n, extra, lock): n for n in together}
         for f in concurrent.futures.as_completed(futures):
@@ -413,14 +382,19 @@ def main() -> int:
         settle()
         print("again, alone: %s (beside the others: %s)" % (n, "; ".join(results[n]["failed"][:3])), flush=True)
         report(n, run_one(n, extra, lock))
+    quiet.set()
     wall = time.monotonic() - t0
     bad = [n for n, r in results.items() if not r["ok"]]
+    # an editor that was told to close may still be closing: it gets a minute
     left = ours()
+    end = time.monotonic() + 60
+    while left and time.monotonic() < end:
+        time.sleep(1.0)
+        left = ours()
     if left:
-        print("! Rust editors left running after the run: pids %s" % left)
+        print("! Editors left running after the run: pids %s" % left)
         bad.append("editors left running")
     touched = root_files_changed(root_before)
-    kept.done()
     if touched:
         print("! an editor wrote into the repository root: %s (put back)" % ", ".join(touched))
         bad.append("repository root written")

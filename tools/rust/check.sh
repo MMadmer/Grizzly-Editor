@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-# The rules the code is held to, in one run:
+# The rules the code is held to, in one run. The editor has three entry points that prove a change, and
+# this is the first: `bash tools/rust/check.sh` (the rules), `bash tools/rust/test.sh` (the unit and
+# corpus tests), `python tools/qa/run_all.py` (the QA suites against the built editor).
 #   - clippy over the workspace and every target, without a warning;
 #   - `cargo fmt --check` without a difference;
 #   - `unsafe` in `crates/gz-win` only (the count inside is printed);
 #   - the editor builds and answers `help` from a shell (the commands document themselves: the
 #     registry's own test in crates/grizzly holds every card to the rules); GRIZZLY_QA_EXE checks
-#     that binary instead.
+#     that binary instead;
+#   - no command without a card: the registry has no way to add one (`Registry::cmd` takes a card and a
+#     parameter type) and `help` names none without;
+#   - the text encodings, the tests' files, the executables' icon, the third-party notices;
+#   - no forbidden word in the code (tools/rust/check_words.py), the last step.
 # Exit code 1 when any of them fails.
 set -u
 cd "$(dirname "$0")/../.." || exit 2
@@ -72,8 +78,13 @@ else
     twin="$(dirname "$exe")/Grizzly-Cmd.exe"
     # a commandlet: no window, no port, its own log; the answer on stdout and 0
     if listing=$($limited 60 "$twin" help -home Intermediate/check-home 2>&1) && echo "$listing" | grep -q "^Areas$"; then
-        bare=$(echo "$listing" | sed -n 's/^Without a card (\([0-9]*\)).*/\1/p')
-        echo "commands: help answers${bare:+; $bare commands still without a card}"
+        if echo "$listing" | grep -q "^Without a card"; then
+            echo "$listing" | grep "^Without a card" | cut -c1-300
+            echo "commands: some command has no card"
+            bad=1
+        else
+            echo "commands: help answers, every command has a card"
+        fi
     else
         echo "$listing" | head -5
         echo "commands: Grizzly-Cmd.exe help did not answer"
@@ -81,19 +92,30 @@ else
     fi
 fi
 
-# ---- the repository's text, the tests' files, the executables' icon ----
+# ---- the registry's door, the repository's text, the tests' files, the executables' icon ----
+# - no untyped registration: the way to add a command without a card is gone from gz-editor;
 # - text encodings: no C1 control character or broken UTF-8, cp1251 where the game's parsers read it
-#   (tools/lint/check_encoding.py);
+#   (tools/rust/check_encoding.py);
 # - no test writes a program file (tools/rust/check_test_files.py);
 # - Grizzly.exe, Grizzly-Cmd.exe and grizzly-mcp.exe of the release build (Bin/x64/Release, Build.ps1) carry the
 #   editor's icon, the editor is a window program, its twin for a command line and the bridge console ones
 #   (tools/rust/check_icon.py), checked when they are built; the twin answers what the editor answers, with
 #   its exit code.
+echo "== untyped registry"
+untyped=$(grep -nE 'pub fn add(_sync)?[<(]|fn bare_effect|trait ArgsExt' crates/gz-editor/src/*.rs || true)
+if [ -n "$untyped" ]; then
+    printf '%s\n' "$untyped" | head -10
+    echo "untyped registry: a command can be registered without a card (Registry::add / add_sync, ArgsExt, bare_effect)"
+    bad=1
+else
+    echo "untyped registry: a command is registered with its card and its parameter type, or not at all"
+fi
+
 echo "== encoding"
-if python tools/lint/check_encoding.py --quiet; then
+if python tools/rust/check_encoding.py --quiet; then
     echo "encoding: clean"
 else
-    echo "encoding: failed (python tools/lint/check_encoding.py --strict lists the files)"
+    echo "encoding: failed (python tools/rust/check_encoding.py --strict lists the files)"
     bad=1
 fi
 
@@ -135,6 +157,15 @@ fi
 # ---- the third-party notices are what the lock file gives ----
 echo "== notices"
 python tools/rust/notices.py --check || bad=1
+
+# ---- no word of the program the editor replaced, no command it no longer has ----
+echo "== words"
+if python tools/rust/check_words.py; then
+    echo "words: clean"
+else
+    echo "words: failed (python tools/rust/check_words.py lists the hits)"
+    bad=1
+fi
 
 [ $bad -eq 0 ] && echo "check: ok" || echo "check: FAILED"
 exit $bad

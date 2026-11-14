@@ -1723,7 +1723,7 @@ game repo.
 | the playable area (`area`, empty = anywhere) | `mod.ltx [world]` | same |
 | transitions that start closed (`locked`, `locked_levels`) | `mod.ltx [world]` | same |
 | where a new game starts | the spawn layer, `[obj:<name>] op = start` | the scene bake of a Player Start |
-| what a new game begins with, in place of the new-game screen's loadout (items, money, whether the screen's perks stay) | `mod.ltx [start_kit]` | World Rules tab (Starting Kit), `world_set start_*` |
+| what a new game begins with, in place of the new-game screen's loadout (items, money, whether the screen's perks stay) | `mod.ltx [start_kit]` | World Rules tab (Starting Kit), `world.set start_*` |
 | the module's own patrol paths | the spawn layer, `[path:<name>]` | the scene bake of a way path |
 | what a placed stalker does from its first frame | its custom data, `[xms_order]` | the scene bake of its Order properties |
 | what changes while the game runs | the quest graph: `world.*`, `order.*`, `transition_open` | the quest editor |

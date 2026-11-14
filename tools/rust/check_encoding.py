@@ -1,25 +1,21 @@
 # -*- coding: utf-8 -*-
-"""Catch text that would reach the user as question marks.
+"""Catch text that would reach the user as question marks, and game files in the wrong encoding.
 
-The editor draws with ImGui, which replaces a codepoint it has no glyph for with
-the font's fallback character - '?'. Two authoring accidents produce exactly that:
+Two authoring accidents draw as '?' on the screen, and the check fails on both:
 
-  * C1 control codepoints (U+0080-U+009F). No font has glyphs for them. They turn
-    up when UTF-8 bytes are decoded as latin1 and re-encoded, so one Russian word
-    becomes a run of them.
-  * bytes that are not valid UTF-8 at all. A cp1251-encoded source file whose
-    string literal is drawn by the UI hands ImGui exactly that; it decodes to
-    U+FFFD, which also falls back to '?'.
+  * C1 control codepoints (U+0080-U+009F). No font has glyphs for them. They turn up when UTF-8 bytes are decoded as
+    latin1 and re-encoded, so one Russian word becomes a run of them.
+  * UTF-8 that was decoded through a single-byte code page and saved again (mojibake), and bytes that are not UTF-8
+    at all in a file that must be.
 
-Comments are not checked: this inherited X-Ray tree carries thousands of cp1251
-comment lines that no user will ever see. Only STRING LITERALS are inspected,
-because only those can be drawn, logged or written to a file.
+A third accident is silent rather than loud: a file the game's parsers read as cp1251 (a config, a string table, a
+script under gamedata) saved as UTF-8, or the other way round. Those are reported as problems the tree inherits from
+the game's own files; --strict makes them fail too.
 
-A third accident is silent rather than loud: a file that must be cp1251 for the
-game's ini parser (the NQ catalog) saved as UTF-8, or the other way round.
+Every tracked text file is read whole; binary formats are left out.
 
 Usage:
-    python tools/lint/check_encoding.py [--root <repo>] [--quiet]
+    python tools/rust/check_encoding.py [--root <repo>] [--quiet] [--strict]
 
 Exit code 1 when anything is found, 0 when clean.
 """
@@ -45,11 +41,9 @@ SKIP_EXT = {
 }
 
 # These two are always accidents: nothing legitimate produces them, and both end
-# up on screen as '?'. Everything else this tool reports is inherited X-Ray text
-# that predates the project, so it is shown but does not stop a build.
+# up on screen as '?'. Everything else this tool reports is inherited from the game's own
+# files, so it is shown but does not stop a build.
 FATAL_CODES = {'C1CTRL', 'MOJIBAKE'}
-
-CODE_EXT = {'.cpp', '.cxx', '.cc', '.c', '.h', '.hpp', '.inl'}
 
 # Everything under a gamedata tree is read by the game's own byte-oriented
 # parsers, which assume cp1251. A file there saved as UTF-8 does not fail loudly:
@@ -100,107 +94,6 @@ def demojibake(text):
     return None
 
 
-def string_literals(src):
-    """Yield (line_number, literal_body) for every C/C++ string literal, skipping
-    comments and character literals. Deliberately small: it only has to be right
-    about where a comment ends and a string begins."""
-    i, n, line = 0, len(src), 1
-    while i < n:
-        c = src[i]
-        if c == '\n':
-            line += 1
-            i += 1
-            continue
-        # comments
-        if c == '/' and i + 1 < n:
-            if src[i + 1] == '/':
-                while i < n and src[i] != '\n':
-                    i += 1
-                continue
-            if src[i + 1] == '*':
-                i += 2
-                while i + 1 < n and not (src[i] == '*' and src[i + 1] == '/'):
-                    if src[i] == '\n':
-                        line += 1
-                    i += 1
-                i += 2
-                continue
-        # raw string R"delim( ... )delim"
-        if c == 'R' and i + 1 < n and src[i + 1] == '"':
-            j = src.find('(', i + 2)
-            if j != -1:
-                delim = src[i + 2:j]
-                end = src.find(')' + delim + '"', j + 1)
-                if end != -1:
-                    body = src[j + 1:end]
-                    yield line, body
-                    line += body.count('\n')
-                    i = end + len(delim) + 2
-                    continue
-        # character literal
-        if c == "'":
-            i += 1
-            while i < n and src[i] != "'":
-                if src[i] == '\\':
-                    i += 1
-                if src[i:i + 1] == '\n':
-                    line += 1
-                i += 1
-            i += 1
-            continue
-        # string literal
-        if c == '"':
-            start_line = line
-            i += 1
-            body = []
-            while i < n and src[i] != '"':
-                if src[i] == '\\' and i + 1 < n:
-                    body.append(src[i:i + 2])
-                    i += 2
-                    continue
-                if src[i] == '\n':      # unterminated, bail out safely
-                    line += 1
-                    break
-                body.append(src[i])
-                i += 1
-            i += 1
-            yield start_line, ''.join(body)
-            continue
-        i += 1
-
-
-def check_code(rel, data, problems):
-    """Source files: only string literals matter, in whatever encoding the file is."""
-    try:
-        text = data.decode('utf-8')
-        utf8 = True
-    except UnicodeDecodeError:
-        text = data.decode('cp1251', 'replace')
-        utf8 = False
-
-    for line, lit in string_literals(text):
-        if not lit:
-            continue
-        non_ascii = [c for c in lit if ord(c) > 0x7F]
-        if not non_ascii:
-            continue
-        if not utf8:
-            problems.append((rel, line, 'CP1251LITERAL',
-                             'non-ASCII text in a string literal of a cp1251-encoded file - if this '
-                             'string is drawn, the UI shows "?": %s' % lit.strip()[:100]))
-            continue
-        ctl = sorted({c for c in lit if 0x80 <= ord(c) <= 0x9F})
-        if ctl:
-            problems.append((rel, line, 'C1CTRL',
-                             'C1 control codepoints (%s) in a string literal - no font has glyphs, '
-                             'the UI draws "?"' % ' '.join('U+%04X' % ord(c) for c in ctl)))
-        fixed = demojibake(lit)
-        if fixed:
-            problems.append((rel, line, 'MOJIBAKE',
-                             'double-encoded string literal; the intended reading is: %s'
-                             % fixed.strip()[:100]))
-
-
 def check_text(rel, data, problems):
     """Everything else: the whole file is content, so check all of it."""
     try:
@@ -246,8 +139,6 @@ def check_file(root, rel, problems):
         return
     if expects_cp1251(rel):
         check_cp1251(rel, data, problems)
-    elif os.path.splitext(rel.lower())[1] in CODE_EXT:
-        check_code(rel, data, problems)
     else:
         check_text(rel, data, problems)
 

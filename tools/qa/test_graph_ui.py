@@ -20,28 +20,18 @@ at 1280x720 pt with UI scale 1.0:
 - I: panning the big quest leaves perf.stalls empty;
 - J: a behaviour graph's tab says "graph", never "quest".
 
-The editor's level.ini, level_imgui.ini and _projects.ini come back byte for byte.
-
     python tools/qa/test_graph_ui.py --project <project> [--shots <dir>] [--only A,B]
 """
 from __future__ import annotations
 
-import argparse
 import base64
 import json
 import os
-import socket
-import subprocess
 import sys
-import tempfile
-import time
 
-import qa_target
+import qa
+from qa import check, cmd
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(HERE))
-MCP = qa_target.MCP
-KEPT = qa_target.KEPT
 
 BIG = "quests/qa_big.nqasset"
 WIRES = "quests/qa_wires.nqasset"
@@ -51,40 +41,18 @@ SIZES = ((1707, 912, 1.5), (1280, 720, 1.0))
 STYLES = ("curved", "straight", "circuit", "angled", "subway")
 TRIGGERS = ("trigger.start", "trigger.when")
 
-results: list[tuple[bool, str]] = []
 shots_dir: str | None = None
 only: set[str] = set()
-
-
-def check(ok: bool, text: str, detail: str = "") -> bool:
-    results.append((bool(ok), text))
-    print(("PASS " if ok else "FAIL ") + text + (("  <- " + detail) if detail and not ok else ""), flush=True)
-    return bool(ok)
 
 
 def wanted(phase: str) -> bool:
     return not only or phase in only
 
 
-def mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
-    payload = {"cmd": cmd}
-    payload.update(extra)
-    with socket.create_connection(MCP, timeout=10) as s:
-        s.settimeout(timeout)
-        s.sendall((json.dumps(payload) + "\n").encode())
-        buf = b""
-        while not buf.endswith(b"\n"):
-            chunk = s.recv(1 << 20)
-            if not chunk:
-                break
-            buf += chunk
-    return json.loads(buf.decode("utf-8"))
-
-
 def shot(name: str) -> None:
     if not shots_dir:
         return
-    r = mcp("shot.window")
+    r = cmd("shot.window")
     if r.get("ok") and r.get("png_base64"):
         with open(os.path.join(shots_dir, name + ".png"), "wb") as f:
             f.write(base64.b64decode(r["png_base64"]))
@@ -95,15 +63,15 @@ def doc(rel: str) -> str:
 
 
 def view(rel: str, **extra) -> dict:
-    return mcp("graph.view", doc=doc(rel), **extra)
+    return cmd("graph.view", doc=doc(rel), **extra)
 
 
 def edit(rel: str, ops: list) -> dict:
-    return mcp("graph.edit", doc=doc(rel), ops=ops)
+    return cmd("graph.edit", doc=doc(rel), ops=ops)
 
 
 def get(rel: str, **extra) -> dict:
-    return mcp("graph.get", doc=doc(rel), **extra)
+    return cmd("graph.get", doc=doc(rel), **extra)
 
 
 def pane(v: dict, name: str):
@@ -112,42 +80,6 @@ def pane(v: dict, name: str):
 
 def boxes_of(rel: str) -> dict:
     return {b.get("id"): b for b in get(rel, boxes=True).get("boxes", [])}
-
-
-class Editor:
-    def __init__(self) -> None:
-        self.proc: subprocess.Popen | None = None
-
-    def start(self, project: str) -> None:
-        exe = qa_target.exe()
-        startup = subprocess.STARTUPINFO()
-        startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
-        startup.wShowWindow = 7
-        qa_target.guard_project(project)
-        self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project],
-                                     cwd=os.path.dirname(exe), startupinfo=startup)
-        deadline = time.monotonic() + 240
-        while time.monotonic() < deadline:
-            try:
-                if mcp("mod.info", timeout=30).get("ok"):
-                    return
-            except OSError:
-                pass
-            if self.proc.poll() is not None:
-                raise RuntimeError("the editor exited during startup")
-            time.sleep(0.05)
-        raise RuntimeError("the editor never opened the project")
-
-    def close(self) -> None:
-        try:
-            mcp("app.quit", discard=True)
-        except OSError:
-            pass
-        if self.proc:
-            try:
-                self.proc.wait(timeout=120)
-            except subprocess.TimeoutExpired:
-                print("! the editor did not close on its own", flush=True)
 
 
 WIRES_TEXT = """return {
@@ -235,7 +167,7 @@ def phase_a() -> None:
 
 def phase_b(tag: str) -> None:
     for flow in ("right", "down"):
-        r = mcp("graph.arrange", doc=doc(WIRES), action="layout", flow=flow)
+        r = cmd("graph.arrange", doc=doc(WIRES), action="layout", flow=flow)
         check(r.get("ok") and r.get("flow") == flow, "%s B the graph flows %s" % (tag, flow), json.dumps(r)[:200])
         for style in STYLES:
             e = edit(WIRES, [{"op": "wires", "style": style}])
@@ -331,10 +263,10 @@ def phase_e() -> None:
 
 def phase_f() -> None:
     view(FAMILY, select=["talk", "go", "wait"])
-    r = mcp("graph.arrange", doc=doc(FAMILY), action="align", how="top")
+    r = cmd("graph.arrange", doc=doc(FAMILY), action="align", how="top")
     b = boxes_of(FAMILY)
     check(r.get("ok") and b["talk"]["y"] == b["go"]["y"] == b["wait"]["y"], "F align top", json.dumps([b["talk"], b["go"], b["wait"]]))
-    r = mcp("graph.arrange", doc=doc(FAMILY), action="distribute", how="horizontal")
+    r = cmd("graph.arrange", doc=doc(FAMILY), action="distribute", how="horizontal")
     b = boxes_of(FAMILY)
     xs = sorted((b[i]["x"], b[i]["w"]) for i in ("talk", "go", "wait"))
     gaps = [xs[i + 1][0] - xs[i][0] - xs[i][1] for i in range(2)]
@@ -342,7 +274,7 @@ def phase_f() -> None:
     view(FAMILY, select=["start"])
     v = view(FAMILY, grow="downstream")
     check(set(v.get("selected", [])) >= {"start", "talk", "finish"}, "F select downstream grows along the wires", json.dumps(v.get("selected")))
-    r = mcp("graph.arrange", doc=doc(FAMILY), action="layout")
+    r = cmd("graph.arrange", doc=doc(FAMILY), action="layout")
     check(r.get("ok"), "F auto layout", json.dumps(r)[:200])
     edit(FAMILY, [{"op": "bookmark", "name": "Finale", "node": "finish"}])
     view(FAMILY, select="none")
@@ -354,7 +286,7 @@ def phase_f() -> None:
 def phase_g(tag: str) -> None:
     if tag.startswith("1707"):
         # the fixture's positions are an old layout's: the auto layout of today
-        r = mcp("graph.arrange", doc=doc(BIG), action="layout")
+        r = cmd("graph.arrange", doc=doc(BIG), action="layout")
         check(r.get("ok"), tag + " G the big quest is laid out", json.dumps(r)[:200])
         boxes = r.get("boxes", [])
         w = max(b["x"] + b["w"] for b in boxes) - min(b["x"] for b in boxes)
@@ -394,18 +326,17 @@ def phase_h(tag: str, width: int) -> None:
 def phase_i() -> None:
     view(BIG, frame="all")
     view(BIG, zoom_level=14)
-    mcp("perf.stalls", clear=True)
+    cmd("perf.stalls", clear=True)
     c = view(BIG).get("center", [0, 0])
     for i in range(24):
         view(BIG, center=[c[0] + 60 * i, c[1] + 25 * i])
-    s = mcp("perf.stalls")
-    check(s.get("ok") and not s.get("stalls"), "I panning the big quest leaves perf.stalls empty", json.dumps(s)[:300])
+    qa.stalls("I panning the big quest leaves perf.stalls empty")
 
 
 def phase_j(tag: str) -> None:
     v = view(SMALL, frame="all", graph_panel="show")
     check(v.get("ok"), tag + " J the behaviour graph opens", json.dumps(v)[:200])
-    audit = mcp("ui.audit")
+    audit = cmd("ui.audit")
     said = []
     for key in ("controls", "truncated"):
         for e in audit.get(key, []):
@@ -418,25 +349,31 @@ def phase_j(tag: str) -> None:
     check(not said, tag + " J the behaviour graph's tab never says quest", json.dumps(said[:5]))
 
 
-def run(project: str) -> None:
-    ed = Editor()
+def run(ctx: qa.Run) -> None:
+    global shots_dir, only
+    project = ctx.project
+    only = {x.strip().upper() for x in ctx.only.split(",") if x.strip()}
+    if ctx.shots:
+        shots_dir = os.path.abspath(ctx.shots)
+        os.makedirs(shots_dir, exist_ok=True)
+    ed = qa.Editor(project)
     try:
-        ed.start(project)
-        big = open(os.path.join(REPO, "crates", "gz-nq", "src", "fixtures", "big_quest.nqasset"), encoding="utf-8").read()
+        ed.start()
+        big = open(os.path.join(qa.REPO, "crates", "gz-nq", "src", "fixtures", "big_quest.nqasset"), encoding="utf-8").read()
         # the fixture keeps the id of the quest it was made from: a copy beside it takes its own
         big = big.replace('id = "n7_control"', 'id = "qa_big"', 1)
         for rel, text in ((BIG, big), (WIRES, WIRES_TEXT), (FAMILY, FAMILY_TEXT), (SMALL, SMALL_TEXT)):
             write(project, rel, text)
-            c = mcp("asset.check", path=rel)
+            c = cmd("asset.check", path=rel)
             errs = [p for p in c.get("problems", []) if p.get("severity") == "error"]
             check(c.get("ok") and not errs, "%s is written and has no error" % rel, json.dumps(errs)[:300])
-            o = mcp("ui.tab", action="open", kind="beh" if rel.endswith(".behasset") else "quest", path=rel)
+            o = cmd("ui.tab", action="open", kind="beh" if rel.endswith(".behasset") else "quest", path=rel)
             check(o.get("ok"), "%s opens in its tab" % rel, json.dumps(o)[:200])
 
         for width, height, scale in SIZES:
             tag = "%dx%d@%g" % (width, height, scale)
-            mcp("ui.scale", value=scale)
-            r = mcp("app.window", action="resize", width=width, height=height)
+            cmd("ui.scale", value=scale)
+            r = cmd("app.window", action="resize", width=width, height=height)
             check(r.get("ok"), tag + " the window takes the size", json.dumps(r)[:200])
             if wanted("A") and width == SIZES[0][0]:
                 phase_a()
@@ -461,69 +398,23 @@ def run(project: str) -> None:
 
         # the Graph panel folds to a rail on a narrow tab
         if wanted("H"):
-            mcp("ui.scale", value=1.0)
-            mcp("app.window", action="resize", width=700, height=600)
+            cmd("ui.scale", value=1.0)
+            cmd("app.window", action="resize", width=700, height=600)
             v = view(BIG, frame="all")
             check(v.get("graph_panel") == "rail", "H a narrow window folds the Graph panel to a rail", str(v.get("graph_panel")))
             v = view(BIG, graph_panel="show")
             check(v.get("graph_panel") == "overlay", "H graph_panel=show opens it over the canvas", str(v.get("graph_panel")))
 
         for rel in (BIG, WIRES, FAMILY, SMALL):
-            mcp("ui.tab", action="close", doc=doc(rel), discard=True)
-            d = mcp("file.delete", path=rel)
+            cmd("ui.tab", action="close", doc=doc(rel), discard=True)
+            d = cmd("file.delete", path=rel)
             check(d.get("ok"), "%s is removed" % rel, json.dumps(d)[:160])
     finally:
         ed.close()
 
 
 def main() -> int:
-    global shots_dir, only
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--project", required=True)
-    ap.add_argument("--shots", help="a folder for the screenshots")
-    ap.add_argument("--only", help="phases, comma separated: A,B,C,D,E,F,G,H,I,J")
-    ap.add_argument("--keep", action="store_true")
-    args = ap.parse_args()
-    only = {x.strip().upper() for x in (args.only or "").split(",") if x.strip()}
-
-    src = os.path.abspath(args.project)
-    if not os.path.isdir(src):
-        print("no such project: " + src)
-        return 2
-    if args.shots:
-        shots_dir = os.path.abspath(args.shots)
-        os.makedirs(shots_dir, exist_ok=True)
-
-    work = tempfile.mkdtemp(prefix="grizzly_graphui_")
-    copy = os.path.join(work, "QaGraphUi")
-    qa_target.copy_project(src, copy)
-    print("running against a copy: " + copy, flush=True)
-
-    kept = {}
-    for path in KEPT:
-        if os.path.isfile(path):
-            with open(path, "rb") as f:
-                kept[path] = f.read()
-
-    try:
-        run(copy)
-    except Exception as exc:  # noqa: BLE001
-        check(False, "the run finished", repr(exc))
-    finally:
-        for path in KEPT:
-            if path in kept:
-                with open(path, "wb") as f:
-                    f.write(kept[path])
-            elif os.path.isfile(path):
-                os.remove(path)
-        if not args.keep:
-            qa_target.remove_tree(work)
-    same = all(open(p, "rb").read() == kept[p] for p in kept if os.path.isfile(p))
-    check(same, "level.ini, level_imgui.ini and _projects.ini are back byte for byte")
-
-    ok = sum(1 for good, _ in results if good)
-    print(f"GRAPH UI: DONE {ok}/{len(results)}", flush=True)
-    return 0 if ok == len(results) else 1
+    return qa.suite("GRAPH UI", run, doc=__doc__, phases="ABCDEFGHIJ")
 
 
 if __name__ == "__main__":

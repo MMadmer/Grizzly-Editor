@@ -14,82 +14,15 @@ never says "quest".
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
-import shutil
-import socket
-import subprocess
 import sys
 import tempfile
-import time
 
 import graph_ref
-import qa_target
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(HERE))
-MCP = qa_target.MCP
-
-results: list[tuple[bool, str]] = []
-
-
-def check(ok: bool, text: str, detail: str = "") -> bool:
-    results.append((bool(ok), text))
-    print(("PASS " if ok else "FAIL ") + text + (("  <- " + detail) if detail and not ok else ""), flush=True)
-    return bool(ok)
-
-
-def mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
-    payload = {"cmd": cmd}
-    payload.update(extra)
-    with socket.create_connection(MCP, timeout=10) as s:
-        s.settimeout(timeout)
-        s.sendall((json.dumps(payload) + "\n").encode())
-        buf = b""
-        while not buf.endswith(b"\n"):
-            chunk = s.recv(1 << 20)
-            if not chunk:
-                break
-            buf += chunk
-    return json.loads(buf.decode("utf-8"))
-
-
-class Editor:
-    def __init__(self) -> None:
-        self.proc: subprocess.Popen | None = None
-
-    def start(self, project: str) -> None:
-        exe = qa_target.exe()
-        startup = subprocess.STARTUPINFO()
-        startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
-        startup.wShowWindow = 7
-        qa_target.guard_project(project)
-        self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project],
-                                     cwd=os.path.dirname(exe), startupinfo=startup)
-        deadline = time.monotonic() + 240
-        while time.monotonic() < deadline:
-            try:
-                if mcp("mod.info", timeout=30).get("ok"):
-                    return
-            except OSError:
-                pass
-            if self.proc.poll() is not None:
-                raise RuntimeError("the editor exited during startup")
-            time.sleep(0.05)
-        raise RuntimeError("the editor never opened the project")
-
-    def close(self) -> None:
-        try:
-            mcp("app.quit")
-        except OSError:
-            pass
-        if self.proc:
-            try:
-                self.proc.wait(timeout=120)
-            except subprocess.TimeoutExpired:
-                print("! the editor did not close on its own", flush=True)
-
+import qa
+from qa import check, cmd
 
 AMBUSH = """return {
     beh   = 1,
@@ -235,7 +168,7 @@ def write(path: str, text: str) -> dict:
     os.makedirs(os.path.dirname(full), exist_ok=True)
     with open(full, "w", encoding="utf-8", newline="") as f:
         f.write(text)
-    return mcp("asset.check", path=path)
+    return cmd("asset.check", path=path)
 
 
 def read(path: str) -> str:
@@ -249,15 +182,17 @@ def remove(path: str) -> None:
         os.remove(full)
 
 
-def run(project: str) -> None:
+def run(ctx: qa.Run) -> None:
+    project = ctx.project
     PROJECT[0] = project
-    ed = Editor()
+    os.makedirs(os.path.join(project, "quests"), exist_ok=True)
+    os.makedirs(os.path.join(project, "npc"), exist_ok=True)
+    ed = qa.Editor(project).start()
     out_dir = tempfile.mkdtemp(prefix="grizzly_beh_")
     try:
-        ed.start(project)
 
         # ------------------------------------------------------------------ A: the vocabulary
-        ref = mcp("asset.reference", kind="behaviour")
+        ref = cmd("asset.reference", kind="behaviour")
         by_id = graph_ref.kinds(str(ref.get("text", "")))
         kinds = list(by_id.values())
         check("npc.goto" in by_id, "A the catalog carries the role steps", str(len(kinds)))
@@ -272,7 +207,7 @@ def run(project: str) -> None:
               json.dumps(place))
 
         # ------------------------------------------------------------------ B: the asset
-        made = mcp("file.create", kind="behaviour", path="npc")
+        made = cmd("file.create", kind="behaviour", path="npc")
         check(made.get("ok"), "B file.create makes a behaviour graph", json.dumps(made)[:300])
         made_text = read(made.get("path", "npc/NewBehaviour.behasset"))
         check(made_text.startswith("return {\n  beh = 1,\n") and "type" not in made_text.split("nodes")[0],
@@ -288,26 +223,26 @@ def run(project: str) -> None:
         check(w2.get("ok"), "B a quest that runs it is written", json.dumps(w2)[:300])
         check(errors(w2.get("problems")) == "", "B with no errors either", codes(w2.get("problems")))
 
-        opened = mcp("ui.tab", action="open", kind="beh", path="npc/qa_ambush.behasset")
+        opened = cmd("ui.tab", action="open", kind="beh", path="npc/qa_ambush.behasset")
         check(opened.get("ok"), "B its tab opens", json.dumps(opened)[:200])
-        got = mcp("graph.get", doc="beh:npc/qa_ambush.behasset")
+        got = cmd("graph.get", doc="beh:npc/qa_ambush.behasset")
         head = got.get("outline", "").split("\n")[0]
         check(head.startswith("behaviour qa_ambush ") and "roles:" in head and "quest" not in head and "active:" not in head,
               "B its outline says behaviour and names its roles", head[:160])
-        saved = mcp("doc.save", doc="beh:npc/qa_ambush.behasset")
+        saved = cmd("doc.save", doc="beh:npc/qa_ambush.behasset")
         check(saved.get("ok") and read("npc/qa_ambush.behasset") == AMBUSH,
               "B opened and saved unchanged, the file is byte for byte what was written", json.dumps(saved)[:200])
-        mcp("ui.tab", action="close", doc="beh:npc/qa_ambush.behasset")
+        cmd("ui.tab", action="close", doc="beh:npc/qa_ambush.behasset")
 
-        look = mcp("game.lookup", type="behaviour_id")
+        look = cmd("game.lookup", type="behaviour_id")
         ids = [e.get("id") for e in look.get("entries", [])]
         check("qa_ambush" in ids and "qa_caller" not in ids, "B lookup behaviour_id offers graphs, not quests",
               json.dumps(ids))
-        look_q = mcp("game.lookup", type="quest_id")
+        look_q = cmd("game.lookup", type="quest_id")
         qids = [e.get("id") for e in look_q.get("entries", [])]
         check("qa_caller" in qids and "qa_ambush" not in qids, "B and quest_id offers quests, not graphs",
               json.dumps(qids))
-        roles = mcp("game.lookup", type="role", path="npc/qa_ambush.behasset")
+        roles = cmd("game.lookup", type="role", path="npc/qa_ambush.behasset")
         rnames = sorted(e.get("id") for e in roles.get("entries", []))
         check(rnames == ["attackers", "leader"], "B lookup role lists what the graph declares", json.dumps(rnames))
 
@@ -329,7 +264,7 @@ def run(project: str) -> None:
         c6 = codes(b6.get("problems")) + " " + json.dumps(b6)[:400]
         check((not b6.get("ok")) or "E003" in c6 or "type" in c6, "C a type key is refused", c6[:300])
 
-        v = mcp("asset.check", path="npc/qa_ambush.behasset")
+        v = cmd("asset.check", path="npc/qa_ambush.behasset")
         check(v.get("ok") and v.get("counts", {}).get("error", 1) == 0, "C the good graph still checks clean",
               json.dumps(v)[:200])
 
@@ -338,56 +273,56 @@ def run(project: str) -> None:
                     "npc/qa_loop.behasset", "npc/qa_liar.behasset", "quests/qa_typed.nqasset"):
             remove(bad)
 
-        built = mcp("mod.build", target="folder", path=out_dir)
+        built = cmd("mod.build", target="folder", path=out_dir)
         check(built.get("ok"), "D the module builds with a behaviour graph in it", json.dumps(built)[:300])
-        manifest = mcp("mod.info").get("manifest", {})
+        manifest = cmd("mod.info").get("manifest", {})
         root = os.path.join(out_dir, "modules", manifest.get("id", ""))
         for rel in ("npc/qa_ambush.behasset", "quests/qa_caller.nqasset"):
             p = os.path.join(root, rel.replace("/", os.sep))
             check(os.path.isfile(p), "D %s ships" % rel, p)
 
         # ------------------------------------------------------------------ E: the browser
-        mcp("content.view", action="go", source="project", folder="npc")
-        c = mcp("file.create", kind="behaviour")
+        cmd("content.view", action="go", source="project", folder="npc")
+        c = cmd("file.create", kind="behaviour")
         check(c.get("ok") and str(c.get("path", "")).lower().endswith(".behasset"),
               "E Create > NPC Behaviour makes a .behasset in the open folder", json.dumps(c)[:200])
         if c.get("path"):
             # F2 over MCP: the box holds the NAME - the extension is the kind and is not on offer
-            box = mcp("content.view", action="rename", path=c["path"]).get("rename") or {}
+            box = cmd("content.view", action="rename", path=c["path"]).get("rename") or {}
             check(box.get("text") == "NewBehaviour" and box.get("select") == len("NewBehaviour"),
                   "E the inline rename box holds the name alone, all of it selected", json.dumps(box))
-            mcp("content.view", action="clear")
-            check(not mcp("content.view").get("rename"), "E clear closes the box without renaming")
-            dotted = mcp("file.rename", path=c["path"], name="patrol.v2")
+            cmd("content.view", action="clear")
+            check(not cmd("content.view").get("rename"), "E clear closes the box without renaming")
+            dotted = cmd("file.rename", path=c["path"], name="patrol.v2")
             check(dotted.get("ok") and os.path.isfile(os.path.join(project, "npc", "patrol.v2.behasset")),
                   "E a name with a dot in it is still only a name", json.dumps(dotted)[:200])
-            turned = mcp("file.rename", path="npc/patrol.v2.behasset", name="patrol.nqasset")
+            turned = cmd("file.rename", path="npc/patrol.v2.behasset", name="patrol.nqasset")
             check(not turned.get("ok") and "kind" in str(turned.get("error", "")),
                   "E a rename cannot turn a behaviour graph into a quest", json.dumps(turned)[:200])
             c["path"] = "npc/patrol.v2.behasset"
-            renamed = mcp("file.rename", path=c["path"], name="patrol_route")
+            renamed = cmd("file.rename", path=c["path"], name="patrol_route")
             check(renamed.get("ok") and str(renamed.get("path", renamed.get("to", ""))).lower().endswith(".behasset")
                   or os.path.isfile(os.path.join(project, "npc", "patrol_route.behasset")),
                   "E renamed without an extension it stays a behaviour graph", json.dumps(renamed)[:200])
-            mcp("file.delete", path="npc/patrol_route.behasset")
+            cmd("file.delete", path="npc/patrol_route.behasset")
 
         # ------------------------------------------------------------------ G: the tab
         # a behaviour graph is its own document: its tab shows the roles where a quest keeps
         # its tasks, frames readable and never says "quest" (docs/UI_DESIGN.md section 6)
-        v = mcp("graph.view", doc="beh:npc/qa_ambush.behasset", frame="all", graph_panel="show", details="show",
+        v = cmd("graph.view", doc="beh:npc/qa_ambush.behasset", frame="all", graph_panel="show", details="show",
                 select=["dig_in"], slot="enter:0")
         check(v.get("ok"), "G the behaviour graph opens in its tab", json.dumps(v)[:200])
         # a role's Title, Binding and Default sit under its folded More: open it to look at them
-        mcp("graph.view", doc="beh:npc/qa_ambush.behasset", roles_more="show")
-        mcp("ui.audit")
-        mcp("ui.audit")
-        v = mcp("graph.view", doc="beh:npc/qa_ambush.behasset")
+        cmd("graph.view", doc="beh:npc/qa_ambush.behasset", roles_more="show")
+        cmd("ui.audit")
+        cmd("ui.audit")
+        v = cmd("graph.view", doc="beh:npc/qa_ambush.behasset")
         panes = v.get("panes") or {}
         check(v.get("title_px", 0) >= 11 and v.get("detail") != "block", "G its titles are readable after Frame All",
               json.dumps([v.get("title_px"), v.get("detail")]))
         check(all(panes.get(k) for k in ("graph", "canvas", "details", "node", "action")),
               "G the Graph panel, the canvas and the node with its action are drawn", json.dumps(panes))
-        audit = mcp("ui.audit")
+        audit = cmd("ui.audit")
         said = [str(e.get("label", "")) + " " + str(e.get("help", ""))
                 for key in ("controls", "truncated") for e in audit.get(key, [])
                 if ("doc.host" in str(e.get("window", "")) or "toolbar" in str(e.get("window", "")))
@@ -396,58 +331,22 @@ def run(project: str) -> None:
         labels = [str(e.get("label", "")) for e in audit.get("controls", []) if "doc.host" in str(e.get("window", ""))]
         check("Binding" in labels and "Remove the role" not in labels,
               "G a role's Group and Optional share one Binding row, and no bin sits beside its name", json.dumps(labels[:40]))
-        mcp("graph.view", doc="beh:npc/qa_ambush.behasset", select="none", slot="none")
+        cmd("graph.view", doc="beh:npc/qa_ambush.behasset", select="none", slot="none")
 
         # ------------------------------------------------------------------ F: clean up
         for rel in ("npc/qa_ambush.behasset", "quests/qa_caller.nqasset"):
             kind = "beh" if rel.endswith(".behasset") else "quest"
-            mcp("ui.tab", action="close", doc="%s:%s" % (kind, rel), discard=True)
-            d = mcp("file.delete", path=rel)
+            cmd("ui.tab", action="close", doc="%s:%s" % (kind, rel), discard=True)
+            d = cmd("file.delete", path=rel)
             check(d.get("ok"), "F %s is removed" % rel, json.dumps(d)[:160])
 
     finally:
         ed.close()
-        qa_target.remove_tree(out_dir)
+        qa.remove_tree(out_dir)
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--project", required=True)
-    ap.add_argument("--keep", action="store_true")
-    args = ap.parse_args()
-
-    src = os.path.abspath(args.project)
-    if not os.path.isdir(src):
-        print("no such project: " + src)
-        return 2
-
-    work = tempfile.mkdtemp(prefix="grizzly_behproj_")
-    copy = os.path.join(work, "QaBehaviours")
-    qa_target.copy_project(src, copy, ignore=())
-    os.makedirs(os.path.join(copy, "quests"), exist_ok=True)
-    os.makedirs(os.path.join(copy, "npc"), exist_ok=True)
-    print("running against a copy: " + copy, flush=True)
-
-    ini = os.path.join(REPO, "_projects.ini")
-    ini_backup = None
-    if os.path.isfile(ini):
-        with open(ini, "rb") as f:
-            ini_backup = f.read()
-
-    try:
-        run(copy)
-    except Exception as exc:  # noqa: BLE001
-        check(False, "the run finished", repr(exc))
-    finally:
-        if ini_backup is not None:
-            with open(ini, "wb") as f:
-                f.write(ini_backup)
-        if not args.keep:
-            qa_target.remove_tree(work)
-
-    ok = sum(1 for good, _ in results if good)
-    print(f"BEHAVIOURS: DONE {ok}/{len(results)}", flush=True)
-    return 0 if ok == len(results) else 1
+    return qa.suite("BEHAVIOURS", run, doc=__doc__, ignore=())
 
 
 if __name__ == "__main__":

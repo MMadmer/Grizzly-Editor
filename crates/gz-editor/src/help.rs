@@ -39,13 +39,11 @@ impl Registry {
     fn area_names(&self) -> Vec<&'static str> {
         let mut names: Vec<&'static str> = self.areas().iter().map(|a| a.name).collect();
         for c in self.commands() {
-            if c.spec.is_some() && c.name.contains('.') && !names.contains(&c.area) {
+            if c.name.contains('.') && !names.contains(&c.area) {
                 names.push(c.area);
             }
         }
-        names.retain(|n| {
-            self.commands().iter().any(|c| c.spec.is_some() && c.area == *n && c.name.contains('.'))
-        });
+        names.retain(|n| self.commands().iter().any(|c| c.area == *n && c.name.contains('.')));
         names
     }
 
@@ -58,11 +56,10 @@ impl Registry {
         let width = areas.iter().map(|a| a.len()).max().unwrap_or(0);
         out.push_str("\nAreas\n");
         for a in &areas {
-            let n = self.commands().iter().filter(|c| c.spec.is_some() && c.area == *a).count();
+            let n = self.commands().iter().filter(|c| c.area == *a).count();
             let _ = writeln!(out, "  {a:width$}  {} ({n})", self.summary_of(a));
         }
-        let top: Vec<&CommandInfo> =
-            self.commands().iter().filter(|c| c.spec.is_some() && !c.name.contains('.')).collect();
+        let top: Vec<&CommandInfo> = self.commands().iter().filter(|c| !c.name.contains('.')).collect();
         if !top.is_empty() {
             out.push_str("\nGeneral\n");
             lines(&mut out, &top);
@@ -74,19 +71,12 @@ impl Registry {
                 let _ = writeln!(out, "  {:width$}  {}", t.name, t.summary);
             }
         }
-        let bare: Vec<&str> = self.commands().iter().filter(|c| c.spec.is_none()).map(|c| c.name).collect();
-        if !bare.is_empty() {
-            let _ = writeln!(out, "\nWithout a card ({}): {}", bare.len(), bare.join(" "));
-        }
         out
     }
 
     fn area_text(&self, area: &str) -> Option<String> {
-        let list: Vec<&CommandInfo> = self
-            .commands()
-            .iter()
-            .filter(|c| c.spec.is_some() && c.area == area && c.name.contains('.'))
-            .collect();
+        let list: Vec<&CommandInfo> =
+            self.commands().iter().filter(|c| c.area == area && c.name.contains('.')).collect();
         if list.is_empty() {
             return None;
         }
@@ -120,9 +110,7 @@ impl Registry {
 fn lines(out: &mut String, list: &[&CommandInfo]) {
     let width = list.iter().map(|c| c.name.len()).max().unwrap_or(0);
     for c in list {
-        if let Some(s) = &c.spec {
-            let _ = writeln!(out, "  {:width$}  {:7}  {}", c.name, s.effect.word(), s.summary);
-        }
+        let _ = writeln!(out, "  {:width$}  {:7}  {}", c.name, c.spec.effect.word(), c.spec.summary);
     }
 }
 
@@ -137,13 +125,8 @@ fn help(ed: &Editor, about: &str) -> Reply {
     } else if let Some(topic) = reg.topics().iter().find(|t| t.name == about) {
         (topic.text)(ed)
     } else {
-        let near: Vec<&str> = reg
-            .commands()
-            .iter()
-            .filter(|c| c.spec.is_some() && c.name.contains(about))
-            .map(|c| c.name)
-            .take(12)
-            .collect();
+        let near: Vec<&str> =
+            reg.commands().iter().filter(|c| c.name.contains(about)).map(|c| c.name).take(12).collect();
         let hint = if near.is_empty() {
             String::new()
         } else {

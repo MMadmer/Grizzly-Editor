@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, urlencode, urlsplit
 
-from mock_server import mock_exe
+from qa import mock_exe
 
 
 TOKEN = "qa-token"

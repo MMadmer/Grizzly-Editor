@@ -51,24 +51,20 @@ playing and the suite does not start.
 """
 from __future__ import annotations
 
-import argparse
-import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
 import time
 
-import qa_target
+import qa
+from qa import check, cmd
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(HERE))
+
 GAME = r"D:\Games\Dead Air"
 LAUNCHER = os.path.join(GAME, "DeadAir-x64", "tools", "qa", "Start-DetachedHiddenDesktopProcess.ps1")
 GAME_LIMIT = 180.0
-MCP = qa_target.MCP
 MP_SPAWNS = ("tdm_blue_0001,tdm_green_0001,ah_cta_blue_0001,ah_cta_green_0001,ah_artefact_0001,cta_artefakt_blue,"
              "cta_artefakt_green,spectator_0001,dm_0000,ah_cta_green_base_box,ah_cta_blue_base_box,tdm_weapons_0001,"
              "tdm_weapons_0000,cta_wpn_toz34,cta_medkit,cta_ammo_12x76_zhekan,cta_ammo_12x76_zhekan_0000,"
@@ -119,38 +115,12 @@ LOADED = {
 }
 FATAL = ("FATAL ERROR", "Expression    :", "stack trace:", "[error]", "! Cannot find level")
 
-results: list[tuple[bool, str]] = []
-
-
-def check(ok, text: str, detail: str = "") -> bool:
-    results.append((bool(ok), text))
-    print(("PASS " if ok else "FAIL ") + text + (("  <- " + detail) if detail and not ok else ""), flush=True)
-    return bool(ok)
-
-
-def mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
-    with socket.create_connection(MCP, timeout=10) as s:
-        s.settimeout(timeout)
-        s.sendall((json.dumps({"cmd": cmd, **extra}) + "\n").encode())
-        buf = b""
-        while not buf.endswith(b"\n"):
-            chunk = s.recv(1 << 20)
-            if not chunk:
-                break
-            buf += chunk
-    return json.loads(buf.decode("utf-8"))
-
-
-def short(a: dict) -> str:
-    return json.dumps(a, ensure_ascii=False)[:400]
-
-
 def wait_idle(limit: float) -> dict:
     """Until no build, compiler or game runs (level.play action=status), or `limit` seconds."""
     deadline = time.monotonic() + limit
     st = {}
     while time.monotonic() < deadline:
-        st = mcp("level.play", action="status")
+        st = cmd("level.play", action="status")
         if not st.get("running") and not st.get("building"):
             return st
         time.sleep(0.5)
@@ -272,7 +242,7 @@ def sweep_stale() -> None:
                 continue
             unlink_archives(path)
         print("removing what an earlier run left: %s" % path, flush=True)
-        qa_target.remove_tree(path)
+        qa.remove_tree(path)
 
 
 def listing(top: str) -> dict[str, tuple[int, int]]:
@@ -306,12 +276,12 @@ def listing(top: str) -> dict[str, tuple[int, int]]:
 def prepare_scene(scene: str) -> bool:
     """The scene opened and made ready for Play (SCENES), saved."""
     cfg = SCENES[scene]
-    opened = mcp("scene.open", path="rawdata/levels/%s.level" % scene, discard=True)
-    if not check(opened.get("ok"), "the scene opens", short(opened)):
+    opened = cmd("scene.open", path="rawdata/levels/%s.level" % scene, discard=True)
+    if not check(opened.get("ok"), "the scene opens", qa.short(opened)):
         return False
     remove = cfg["remove"]
     if remove == "*":
-        listed = mcp("scene.objects", classes=["spawn"], limit=100000).get("objects", [])
+        listed = cmd("scene.objects", classes=["spawn"], limit=100000).get("objects", [])
         names = [o["name"] for o in listed]
     else:
         names = remove.split(",")
@@ -326,32 +296,32 @@ def prepare_scene(scene: str) -> bool:
         world["level.path"] = cfg["level"]
     steps.append(("scene.set", {"world": True, "set": world}))
     steps.append(("scene.save", {}))
-    for cmd, args in steps:
-        a = mcp(cmd, **args)
-        if not check(a.get("ok"), f"{cmd} answers ok", short(a)):
+    for name, args in steps:
+        a = cmd(name, **args)
+        if not check(a.get("ok"), f"{name} answers ok", qa.short(a)):
             return False
     return True
 
 
-def run(project: str, root: str, scene: str, keep_log: str | None) -> None:
+def run_scene(project: str, root: str, scene: str, keep_log: str | None) -> None:
     cfg = SCENES[scene]
     level = cfg["level"]
     loaded = {k: v.replace("<level>", level) for k, v in LOADED.items()}
-    shutil.copy2(os.path.join(REPO, "rawdata", "levels", scene + ".level"),
+    shutil.copy2(os.path.join(qa.REPO, "rawdata", "levels", scene + ".level"),
                  os.path.join(project, "rawdata", "levels", scene + ".level"))
-    shutil.copytree(os.path.join(REPO, "rawdata", "levels", scene), os.path.join(project, "rawdata", "levels", scene),
+    shutil.copytree(os.path.join(qa.REPO, "rawdata", "levels", scene), os.path.join(project, "rawdata", "levels", scene),
                     dirs_exist_ok=True)
     if not prepare_scene(scene):
         return
     t = time.monotonic()
     flags = {f.lstrip("-"): True for f in cfg["flags"].split()}
-    done = mcp("level.build", timeout=280, **flags)
+    done = cmd("level.build", timeout=280, **flags)
     ran = {r.get("step"): r for r in done.get("ran") or []}
     report = (ran.get("light") or {}).get("note") or {}
     compile_secs = time.monotonic() - t
     check(done.get("ok") and report.get("parts") and "ai_map" in ran and "spawn" in ran,
           "level.build builds the level, the editor's level compiler in its process (%.1f s, %s threads)"
-          % (compile_secs, report.get("threads")), short({k: v for k, v in done.items() if k != "ran"}))
+          % (compile_secs, report.get("threads")), qa.short({k: v for k, v in done.items() if k != "ran"}))
     print("TIME build %.1f s" % compile_secs, flush=True)
     wait_idle(30)
     level_dir = os.path.join(project, "gamedata", "levels", level)
@@ -380,11 +350,11 @@ def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str |
     # Play makes its root only in an empty folder (play_root.txt marks it its own): made first, then the root's own
     # settings written into it, then Play
     t = time.monotonic()
-    made = mcp("level.play", action="root", root=root)
+    made = cmd("level.play", action="root", root=root)
     engine = os.path.join(GAME, "xrEngine.exe").replace("\\", "/")
     check(made.get("ok") and made.get("was") == "empty" and made.get("exe_path", "").lower() == engine.lower(),
           "Play makes its root in the empty folder for the installed engine in place (%.1f s, paths up to %s)"
-          % (time.monotonic() - t, made.get("path_limit")), short(made))
+          % (time.monotonic() - t, made.get("path_limit")), qa.short(made))
     check(made.get("ok") and not no_way_named(made), "action=root's answer names no way to run the game",
           str(no_way_named(made)))
     top = sorted(os.listdir(root)) if os.path.isdir(root) else []
@@ -397,12 +367,12 @@ def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str |
           "the root's fsgame.ltx names the installed archives: " + arch.strip())
     user_ltx(root)
     t0, play_wall = time.monotonic(), time.time()
-    play = mcp("level.play", action="start", root=root, params="-i -always_active -silent_error_mode -force_flushlog")
+    play = cmd("level.play", action="start", root=root, params="-i -always_active -silent_error_mode -force_flushlog")
     if not check(play.get("ok") and play.get("started") and play.get("exe", "").lower() == engine.lower(),
-                 "Play starts the installed engine in place on its root", short(play)):
+                 "Play starts the installed engine in place on its root", qa.short(play)):
         return False
     check(not no_way_named(play), "Play's answer names no way to run the game", str(no_way_named(play)))
-    print("play: " + short(play), flush=True)
+    print("play: " + qa.short(play), flush=True)
     staged = os.path.join(root, "gamedata", "levels", level)
     check(all(os.path.isfile(os.path.join(staged, f)) for f in ("level", "level.ai", "level.geom")) and
           os.path.isfile(os.path.join(root, "gamedata", "spawns", "editor.spawn")),
@@ -416,7 +386,7 @@ def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str |
             time.sleep(5)
             text = engine_log(root)
             break
-        if not mcp("level.play", action="status").get("running"):
+        if not cmd("level.play", action="status").get("running"):
             text = engine_log(root)
             break
         if not text and time.monotonic() - t0 > 60:
@@ -424,8 +394,8 @@ def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str |
             break
         time.sleep(1)
     seconds = time.monotonic() - t0
-    still = mcp("level.play", action="status").get("running")
-    mcp("level.play", action="stop")
+    still = cmd("level.play", action="status").get("running")
+    cmd("level.play", action="stop")
     wait_idle(30)
     left = games_in(root)
     for pid in left:
@@ -464,7 +434,7 @@ def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str |
         # what the editor's log says of the run (the game's own output lines go there)
         import glob
         lines = []
-        for p in glob.glob(qa_target.log_glob()):
+        for p in glob.glob(os.path.join(qa.home(), "logs", "grizzly_*.log")):
             lines += [l for l in open(p, encoding="utf-8", errors="replace").read().splitlines()
                       if "Run " in l or "game" in l.lower() or "play" in l.lower() or l.startswith("!")]
         with open(os.path.join(os.path.dirname(os.path.abspath(keep_log)), "editor.log"), "w", encoding="utf-8") as f:
@@ -476,38 +446,25 @@ def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str |
     return True
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--project", required=True)
-    ap.add_argument("--keep-log")
-    ap.add_argument("--scene", default=SCENE, choices=sorted(SCENES), help="the scene Play takes (default mp_test)")
-    args = ap.parse_args()
-    if not qa_target.RUST:
-        print("the Rust editor's Play only: set GRIZZLY_QA_TARGET=rust")
-        return 2
-    try:
-        socket.create_connection(MCP, timeout=1).close()
-        print(qa_target.busy_text())
-        return 2
-    except OSError:
-        pass
+def run(ctx: qa.Run) -> None:
+    args = ctx.args
     if players():
-        print("the installed game runs and the suite did not start it (pids %s): the author is playing" % players())
-        return 2
+        raise RuntimeError("the installed game runs and the suite did not start it (pids %s): the author is playing"
+                           % players())
+    if qa.port_open():
+        raise RuntimeError("an editor already answers on 127.0.0.1:%d - close it first" % qa.PORT)
     sweep_stale()
     before = listing(GAME)
     archives = len(os.listdir(os.path.join(GAME, "database")))
-    work = tempfile.mkdtemp(prefix="gzpg_")
+    work = ctx.work
     # a folder of its own in the temp folder; the game run in place on it is told apart by this path
     root = tempfile.mkdtemp(prefix="gzpr_")
-    project = ""
-    launcher = None
+    project = ctx.project
     pid_file, launcher_file = os.path.join(work, "editor.pid"), os.path.join(work, "launcher.pid")
     try:
-        project = qa_target.copy_project(os.path.abspath(args.project), os.path.join(work, "project"))
-        qa_target.guard_project(project)
-        exe = qa_target.exe()
-        line = " ".join(f'"{a}"' if " " in a else a for a in [*qa_target.ARGS, "-headless", "-nodlg", "-project", project])
+        exe = qa.exe()
+        line = " ".join(f'"{a}"' if " " in a else a for a in
+                        ["-mcp_port", str(qa.PORT), "-home", qa.home(), "-headless", "-nodlg", "-project", project])
         # the value goes with a space in front: pwsh -File takes a value that starts with '-' for a parameter;
         # no pipe either - the launcher's own launcher inherits it and the call would wait for it to end
         launcher = subprocess.run(
@@ -515,19 +472,20 @@ def main() -> int:
              "-ProcessIdFile", pid_file, "-LauncherIdFile", launcher_file, "-DesktopName", "GrizzlyPlayQa",
              "-TimeoutSeconds", "900"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
         check(launcher.returncode == 0, "the editor is started on a hidden desktop")
+        # the project is open once `state` says so: the endpoint answers before the project has finished opening
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             try:
-                if mcp("mod.info", timeout=30).get("ok"):
+                if cmd("state", timeout=30).get("project"):
                     break
             except OSError:
                 time.sleep(0.1)
-        qa_target.mark("editor start (hidden desktop)")
-        run(project, root, args.scene, args.keep_log)
+        qa.mark("editor start (hidden desktop)")
+        run_scene(project, root, args.scene, args.keep_log)
     finally:
         try:
-            mcp("level.play", action="stop", timeout=30)
-            mcp("app.quit", discard=True, timeout=30)
+            cmd("level.play", action="stop", timeout=30)
+            cmd("app.quit", discard=True, timeout=30)
         except OSError:
             pass
         deadline = time.monotonic() + 60
@@ -550,17 +508,21 @@ def main() -> int:
             print("kept for a look: %s, %s" % (work, root), flush=True)
         else:
             unlink_archives(root)
-            qa_target.remove_tree(root)
-            qa_target.remove_tree(work)
+            qa.remove_tree(root)
             check(not os.path.exists(root) and len(os.listdir(os.path.join(GAME, "database"))) == archives,
                   "the root is gone and the installed database keeps its %d entries" % archives)
     after = listing(GAME)
     differ = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
     check(not differ, "nothing of the installed game changed (%d entries listed before and after)" % len(before),
           ", ".join(differ[:10]))
-    failed = [t for ok, t in results if not ok]
-    print("PLAY GAME: %d pass, %d fail" % (len(results) - len(failed), len(failed)), flush=True)
-    return 1 if failed else 0
+
+
+def main() -> int:
+    def more(ap) -> None:
+        ap.add_argument("--keep-log")
+        ap.add_argument("--scene", default=SCENE, choices=sorted(SCENES), help="the scene Play takes (default mp_test)")
+
+    return qa.suite("PLAY GAME", run, doc=__doc__, add_args=more)
 
 
 if __name__ == "__main__":

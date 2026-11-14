@@ -315,17 +315,20 @@ mod tests {
         let done = Arc::new(AtomicBool::new(false));
         let mut reg = gz_editor::Registry::new();
         let d2 = done.clone();
-        reg.add("test", "slow_edit", move |_ed, _a, _o| {
-            let d = d2.clone();
-            async move {
-                tokio::time::sleep(Duration::from_millis(300)).await;
-                d.store(true, Ordering::Release);
-                Ok(json!({ "edited": true }))
-            }
-        });
+        reg.cmd(
+            gz_editor::Spec::write("test.slow_edit", "Edits slowly, for the timeout test."),
+            move |_ed, _: gz_editor::NoParams, _o| {
+                let d = d2.clone();
+                async move {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    d.store(true, Ordering::Release);
+                    Ok(json!({ "edited": true }))
+                }
+            },
+        );
         let editor = Editor::new(gz_editor::EditorOptions::default(), rt.exec(), log, reg);
         let ask = |name: &str| Request { cmd: name.to_owned(), args: Args::new(), gate: Gate::Any };
-        let reply = rt.block_on(run_request(&editor, ask("slow_edit"), Duration::from_millis(50)));
+        let reply = rt.block_on(run_request(&editor, ask("test.slow_edit"), Duration::from_millis(50)));
         // no job behind it: the busy answer
         assert_eq!(reply["error"], "editor busy (timeout)");
         assert!(reply.get("running").is_none());
@@ -333,7 +336,7 @@ mod tests {
         // the caller was answered; the command was not cut: it ends by itself
         rt.block_on(async { tokio::time::sleep(Duration::from_millis(600)).await });
         assert!(done.load(Ordering::Acquire), "the command ran to its end");
-        let reply = rt.block_on(run_request(&editor, ask("slow_edit"), Duration::from_secs(5)));
+        let reply = rt.block_on(run_request(&editor, ask("test.slow_edit"), Duration::from_secs(5)));
         assert_eq!(reply["edited"], true);
     }
 
@@ -343,20 +346,23 @@ mod tests {
         let (log, _guard) = gz_editor::Log::start(None, false).unwrap();
         let mut reg = gz_editor::Registry::new();
         // a command that starts a job and answers when it ended, as `level_build` does
-        reg.add("test", "slow_build", |ed, _a, _o| async move {
-            let id = ed
-                .jobs
-                .start("level_build", Some("level_build"), "Building the level", |ctx| async move {
-                    ctx.stage("Compiling");
-                    tokio::time::sleep(Duration::from_millis(400)).await;
-                    Ok(json!({ "built": true }))
-                })
-                .map_err(|b| gz_editor::CmdError::busy(b.to_string()))?;
-            let info = ed.jobs.wait(id).await.unwrap();
-            Ok(json!({ "built": info.result.is_some() }))
-        });
+        reg.cmd(
+            gz_editor::Spec::write("test.slow_build", "Builds slowly, for the job test."),
+            |ed, _: gz_editor::NoParams, _o| async move {
+                let id = ed
+                    .jobs
+                    .start("level_build", Some("level_build"), "Building the level", |ctx| async move {
+                        ctx.stage("Compiling");
+                        tokio::time::sleep(Duration::from_millis(400)).await;
+                        Ok(json!({ "built": true }))
+                    })
+                    .map_err(|b| gz_editor::CmdError::busy(b.to_string()))?;
+                let info = ed.jobs.wait(id).await.unwrap();
+                Ok(json!({ "built": info.result.is_some() }))
+            },
+        );
         let editor = Editor::new(gz_editor::EditorOptions::default(), rt.exec(), log, reg);
-        let request = Request { cmd: "slow_build".to_owned(), args: Args::new(), gate: Gate::Any };
+        let request = Request { cmd: "test.slow_build".to_owned(), args: Args::new(), gate: Gate::Any };
         let reply = rt.block_on(run_request(&editor, request, Duration::from_millis(100)));
         assert_eq!(reply["ok"], false);
         assert_eq!(reply["code"], "running", "{reply}");
@@ -365,7 +371,7 @@ mod tests {
         assert_eq!(reply["jobs"][0]["stage"], "Compiling");
         assert_eq!(reply["follow"], json!(["job.wait"]));
         let error = reply["error"].as_str().unwrap();
-        assert!(error.starts_with("slow_build is still running: its job level_build #"), "{error}");
+        assert!(error.starts_with("test.slow_build is still running: its job level_build #"), "{error}");
         assert!(!error.contains("busy"));
         // the job ends by itself, and the next call answers its result
         let id = gz_task::JobId(reply["jobs"][0]["id"].as_u64().unwrap());
@@ -417,20 +423,26 @@ mod tests {
         let rt = gz_task::Runtime::start(gz_task::ExecOptions::default()).unwrap();
         let (log, _guard) = gz_editor::Log::start(None, false).unwrap();
         let mut reg = gz_editor::Registry::new();
-        reg.add_sync("test", "fine", |_ed, _a, _o| Ok(json!({ "done": true })));
-        reg.add_sync("test", "broken", |_ed, _a, _o| Err(gz_editor::CmdError::invalid("no")));
+        reg.cmd_sync(
+            gz_editor::Spec::read("test.fine", "Answers at once."),
+            |_ed, _: &gz_editor::NoParams, _o| Ok(json!({ "done": true })),
+        );
+        reg.cmd_sync(
+            gz_editor::Spec::read("test.broken", "Always fails."),
+            |_ed, _: &gz_editor::NoParams, _o| Err(gz_editor::CmdError::invalid("no")),
+        );
         let editor = Editor::new(gz_editor::EditorOptions::default(), rt.exec(), log, reg);
         let batch = |text: &str| {
             let Ok(Line::Batch { requests, keep_going }) = line(text) else { panic!() };
             rt.block_on(run_batch(&editor, requests, keep_going, Duration::from_secs(5)))
         };
-        let reply = batch(r#"{"batch":[{"cmd":"fine"},{"cmd":"broken"},{"cmd":"fine"}]}"#);
+        let reply = batch(r#"{"batch":[{"cmd":"test.fine"},{"cmd":"test.broken"},{"cmd":"test.fine"}]}"#);
         assert_eq!(
             (reply["ok"].clone(), reply["ran"].clone(), reply["of"].clone()),
             (json!(false), json!(2), json!(3))
         );
         assert_eq!(reply["results"][1]["code"], "invalid");
-        let reply = batch(r#"{"batch":[{"cmd":"broken"},{"cmd":"fine"}],"keep_going":true}"#);
+        let reply = batch(r#"{"batch":[{"cmd":"test.broken"},{"cmd":"test.fine"}],"keep_going":true}"#);
         assert_eq!((reply["ok"].clone(), reply["ran"].clone()), (json!(false), json!(2)));
         assert_eq!(reply["results"][1]["done"], true);
     }

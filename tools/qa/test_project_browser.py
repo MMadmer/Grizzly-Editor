@@ -47,130 +47,33 @@ What it proves:
 from __future__ import annotations
 
 import _winapi
-import argparse
-import base64
 import json
 import os
 import shutil
-import socket
 import stat
 import subprocess
 import sys
 import tempfile
-import time
 
-import qa_target
+import qa
+from qa import check, cmd, short, shot
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(HERE))
-MCP = qa_target.MCP
-INI = qa_target.projects_ini()
+
+INI = os.path.join(qa.home(), "_projects.ini")
 # two cards carry this name (S): as long as a real mod's, so a card that cuts it shows
 TWIN = "QaNested-Long-Delivery"
 
-results: list[tuple[bool, str]] = []
-
-
-def check(ok, text: str, detail: str = "") -> bool:
-    results.append((bool(ok), text))
-    print(("PASS " if ok else "FAIL ") + text + (("  <- " + detail) if detail and not ok else ""), flush=True)
-    return bool(ok)
-
-
-def mcp(cmd: str, timeout: float = 120.0, **extra) -> dict:
-    payload = {"cmd": cmd}
-    payload.update(extra)
-    with socket.create_connection(MCP, timeout=10) as s:
-        s.settimeout(timeout)
-        s.sendall((json.dumps(payload) + "\n").encode())
-        buf = b""
-        while not buf.endswith(b"\n"):
-            chunk = s.recv(1 << 20)
-            if not chunk:
-                break
-            buf += chunk
-    return json.loads(buf.decode("utf-8"))
-
-
-def short(data: dict) -> str:
-    return json.dumps(data)[:600]
-
-
-def port_in_use() -> bool:
-    try:
-        with socket.create_connection(MCP, timeout=1):
-            return True
-    except OSError:
-        return False
-
-
-class Editor:
-    def __init__(self) -> None:
-        self.proc: subprocess.Popen | None = None
-
-    def start(self) -> dict:
-        exe = qa_target.exe()
-        if not os.path.isfile(exe):
-            raise RuntimeError("build the editor first: " + exe)
-        startup = subprocess.STARTUPINFO()
-        startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
-        startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
-        # no -project: the project browser is what this test is about
-        self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg"], cwd=os.path.dirname(exe), startupinfo=startup)
-        deadline = time.monotonic() + 600
-        while time.monotonic() < deadline:
-            try:
-                st = mcp("state", timeout=30)
-                if st.get("ok"):
-                    return st
-            except OSError:
-                pass
-            if self.proc.poll() is not None:
-                raise RuntimeError("the editor exited during startup")
-            time.sleep(0.05)
-        raise RuntimeError("the editor never answered")
-
-    def close(self) -> None:
-        # never killed: a killed editor leaves project.ltx behind half written
-        try:
-            mcp("app.quit")
-        except OSError:
-            pass
-        if self.proc:
-            try:
-                self.proc.wait(timeout=120)
-            except subprocess.TimeoutExpired:
-                print("! the editor did not close on its own", flush=True)
-
-
-def shot(folder: str | None, name: str) -> dict:
-    """The editor as it looks now. Always taken - it is what makes a background editor draw the frames
-    the answers after it report on -, saved only when --shots names a folder. The answer comes back
-    (modal, outside) without its picture."""
-    pic = mcp("shot.window")
-    if folder and pic.get("png_base64"):
-        os.makedirs(folder, exist_ok=True)
-        path = os.path.join(folder, name + ".png")
-        with open(path, "wb") as f:
-            f.write(base64.b64decode(pic["png_base64"]))
-        print("screenshot: " + path, flush=True)
-    elif not pic.get("ok"):
-        print("! screenshot %s: %s" % (name, pic.get("error")), flush=True)
-    pic.pop("png_base64", None)
-    return pic
-
-
 def escaped(window: str) -> list:
-    """What the last frame let escape from a window (ui_audit), or the error as the one entry."""
-    audit = mcp("ui.audit", id=window)
+    """What the last frame let escape from a window (ui.audit), or the error as the one entry."""
+    audit = cmd("ui.audit", id=window)
     if not audit.get("ok"):
-        return [audit.get("error", "ui_audit failed")]
+        return [audit.get("error", "ui.audit failed")]
     return audit.get("escaped", [])
 
 
 def cards(state: dict | None = None) -> list:
     """The Start page's cards as the page draws them: [(lowered forward-slash path, parent), ...]."""
-    data = state or mcp("project.page")
+    data = state or cmd("project.page")
     return [(fwd(c.get("path", "")).lower(), c.get("parent", "")) for c in data.get("cards", [])]
 
 
@@ -258,7 +161,7 @@ def is_junction(path: str) -> bool:
 
 def listed(state: dict | None = None) -> dict:
     """project.list as {lowered forward-slash path: entry}."""
-    data = state or mcp("project.list")
+    data = state or cmd("project.list")
     return {fwd(p.get("path", "")).lower(): p for p in data.get("projects", [])}
 
 
@@ -278,7 +181,6 @@ class Work:
         return os.path.commonpath([self.root.lower(), full.lower()]) == self.root.lower()
 
     def build(self) -> None:
-        r = self.root
         mod = lambda i: "[module]\nid = %s\nname = %s\nversion = 1.0.0\n" % (i, i)
 
         # C: the project that is deleted, with everything a real one gathers
@@ -323,7 +225,7 @@ class Work:
         write(os.path.join(self.p["holdsgame"], "mod.ltx"), mod("qa_holds_game"))
         holds_id = "00000000-0000-4000-8000-0000000a11ed"
         write(os.path.join(self.p["holdsgame"], "QaHoldsGame.grizzly"), grizzly(holds_id))
-        write(qa_target.project_state(holds_id), "[game]\nroot = %s\n" % os.path.join(self.p["holdsgame"], "game"))
+        write(qa.project_state(holds_id), "[game]\nroot = %s\n" % os.path.join(self.p["holdsgame"], "game"))
         write(os.path.join(self.p["holdsgame"], "game", "fsgame.ltx"), "; a game\n")
         self.p["game"] = self.path("GameX")
         write(os.path.join(self.p["game"], "fsgame.ltx"), "; a game\n")
@@ -413,11 +315,19 @@ def close_explorer(folder: str, seconds: float = 15.0) -> int:
         return 0
 
 
-def run(w: Work, shots: str | None, explorer: bool) -> None:
-    ed = Editor()
+def run(ctx: qa.Run) -> None:
+    shots, explorer = ctx.shots, not ctx.args.no_explorer
+    w = Work()
+    print("throw-away projects in: " + w.root, flush=True)
     p = w.p
+    ed = qa.Editor()
     try:
-        st = ed.start()
+        w.build()
+        # the list is the test's own: the editor offers no real project to anything below
+        with open(INI, "wb") as f:
+            f.write(w.ini())
+        ed.start()
+        st = cmd("state")
         check(not st.get("project"), "A the editor starts on the Start page", short(st))
 
         # ------------------------------------------------------------------ A: the list
@@ -434,7 +344,7 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
         pic = shot(shots, "start_page")
         check(pic.get("ok") and pic.get("modal") is None and not pic.get("outside"),
               "S the Start page is a page, not a modal, and nothing lives outside the window", short(pic))
-        page = mcp("project.page")
+        page = cmd("project.page")
         check(page.get("ok") and page.get("browser") and [c for c, _ in cards(page)] == listed_order,
               "S a card per entry, in the order of the list (Last Opened)", short(page))
         parents = dict(cards(page))
@@ -448,67 +358,67 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
                            "open": "placeholder", "gone": "placeholder"},
               "P a card shows its preview; a black or empty grey one, none, or a gone folder gets the placeholder",
               json.dumps(pictures))
-        audit = mcp("ui.audit", id="start_page")
+        audit = cmd("ui.audit", id="start_page")
         labels = [c.get("label") for c in audit.get("controls", [])]
         check("New Project" in labels and "Open Folder..." in labels and "Open Project File..." in labels,
               "S New Project is a card of the grid; Open Folder... and Open Project File... head the page", json.dumps(labels)[:400])
         cards_before = [c.get("rect") for c in audit.get("controls", []) if c.get("label") == "Actions"]
-        f = mcp("project.page", new_project=True)
+        f = cmd("project.page", new_project=True)
         check(f.get("ok") and f.get("new_project") is True, "S the New Project form comes up in its card", short(f))
-        audit = mcp("ui.audit", id="start_page")
+        audit = cmd("ui.audit", id="start_page")
         create = [c for c in audit.get("controls", []) if c.get("label") == "Create"]
         check(audit.get("ok") and create and not create[0].get("enabled") and create[0].get("why"),
               "S Create is off while the form has no name, and says why", short(audit))
         cards_after = [c.get("rect") for c in audit.get("controls", []) if c.get("label") == "Actions"]
         check(cards_before and cards_before == cards_after, "S the form opens in its slot: no card moves", json.dumps([cards_before, cards_after])[:300])
-        before = mcp("ui.scale").get("scale")
+        before = cmd("ui.scale").get("scale")
         for scale in (1.0, 1.5):
-            mcp("ui.scale", value=scale)
+            cmd("ui.scale", value=scale)
             shot(shots, "start_page_%g" % scale)
             esc = escaped("start_page")
             check(not esc, "S nothing escapes the Start page at UI scale %g" % scale, json.dumps(esc)[:600])
             # the twins' parent lives in the path line: it no longer takes the name's room
-            cut = [t for t in mcp("ui.audit", id="start_page").get("truncated", []) if t.get("label") == TWIN]
+            cut = [t for t in cmd("ui.audit", id="start_page").get("truncated", []) if t.get("label") == TWIN]
             check(not cut, "S a card's name has its row to itself: the twins' long name is whole at UI scale %g" % scale,
                   json.dumps(cut)[:600])
         if before:
-            mcp("ui.scale", value=before)
+            cmd("ui.scale", value=before)
 
-        found = cards(mcp("project.page", query="qaLOCKED"))
+        found = cards(cmd("project.page", query="qaLOCKED"))
         check([c for c, _ in found] == [fwd(p["locked"]).lower()], "S the search ignores case", json.dumps(found))
-        found = cards(mcp("project.page", query="twin " + TWIN.lower()))
+        found = cards(cmd("project.page", query="twin " + TWIN.lower()))
         check([c for c, _ in found] == [fwd(p["open"]).lower()], "S every word of the search must match", json.dumps(found))
         shot(shots, "start_page_search")
-        mcp("project.page", query="")
-        found = [c for c, _ in cards(mcp("project.page", sort="name"))]
+        cmd("project.page", query="")
+        found = [c for c, _ in cards(cmd("project.page", sort="name"))]
         by_name = sorted(listed_order, key=lambda path: path.rstrip("/").rsplit("/", 1)[-1])
         check(found == by_name, "S sort by Name orders the cards by name", json.dumps(found))
-        bad = mcp("project.page", sort="size")
+        bad = cmd("project.page", sort="size")
         check(not bad.get("ok"), "S a sort it does not know is refused", short(bad))
-        found = [c for c, _ in cards(mcp("project.page", sort="recent"))]
+        found = [c for c, _ in cards(cmd("project.page", sort="recent"))]
         check(found == listed_order, "S sort by Last Opened puts the list's order back", json.dumps(found))
 
         # ------------------------------------------------------------------ B: to look at, never to act
-        m = mcp("project.page", show="menu", path=p["delete"])
+        m = cmd("project.page", show="menu", path=p["delete"])
         check(m.get("ok") and m.get("browser") and same((m.get("menu") or {}).get("path", ""), p["delete"]),
               "B show=menu asks for the card's menu", short(m))
         shot(shots, "menu")
-        m = mcp("project.page")
+        m = cmd("project.page")
         menu = m.get("menu") or {}
         check(menu.get("shown") and [(i.get("label"), i.get("enabled")) for i in menu.get("items", [])] ==
               [("Show in Explorer", True), ("Delete...", True)],
               "B the menu is drawn: Show in Explorer and Delete...", short(m))
 
-        m = mcp("project.page", show="menu", path=p["gone"])
+        m = cmd("project.page", show="menu", path=p["gone"])
         shot(shots, "menu_missing")
-        m = mcp("project.page")
+        m = cmd("project.page")
         menu = m.get("menu") or {}
         check(menu.get("shown") and menu.get("state") == "missing" and
               [(i.get("label"), i.get("enabled")) for i in menu.get("items", [])] ==
               [("Show in Explorer", False), ("Remove from List", True)],
               "B a gone folder's menu: Show in Explorer disabled, Remove from List", short(m))
 
-        m = mcp("project.page", show="confirm", path=p["delete"])
+        m = cmd("project.page", show="confirm", path=p["delete"])
         c = m.get("confirm") or {}
         e = w.expect["delete"]
         check(m.get("ok") and c.get("view") == "question" and not c.get("refused") and
@@ -521,32 +431,32 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
               "B the confirmation is the top-level dialog dlg.delete_project", short(pic))
         esc = escaped("dlg.delete_project")
         check(not esc, "B nothing escapes the confirmation", json.dumps(esc)[:600])
-        m = mcp("project.page")
+        m = cmd("project.page")
         check((m.get("confirm") or {}).get("shown") and m.get("menu") is None,
               "B the confirmation is drawn, and the menu is down", short(m))
 
-        m = mcp("project.page", show="confirm", path=p["nested"])
+        m = cmd("project.page", show="confirm", path=p["nested"])
         c = m.get("confirm") or {}
         check(c.get("view") == "refused" and "another project" in c.get("reason", "") and
               any(same(n, os.path.join(p["nested"], "inner")) for n in c.get("nested", [])),
               "B a refusal is what the confirmation shows, naming the project inside", short(m))
         shot(shots, "confirm_refused")
-        bad = mcp("project.page", show="confirm", path=p["gone"])
+        bad = cmd("project.page", show="confirm", path=p["gone"])
         check(not bad.get("ok"), "B a gone folder has no confirmation: Remove from List asks nothing", short(bad))
-        bad = mcp("project.page", show="menu", path=p["outside"])
+        bad = cmd("project.page", show="menu", path=p["outside"])
         check(not bad.get("ok"), "B a folder that is not a card has no menu", short(bad))
-        bad = mcp("project.page", show="everything")
+        bad = cmd("project.page", show="everything")
         check(not bad.get("ok"), "B an unknown show is refused", short(bad))
-        m = mcp("project.page", show="none")
+        m = cmd("project.page", show="none")
         pic = shot(shots, "browser")
-        m = mcp("project.page")
+        m = cmd("project.page")
         check(m.get("ok") and m.get("menu") is None and m.get("confirm") is None and pic.get("modal") is None,
               "B show=none takes both down", short(m))
         check(os.path.isfile(os.path.join(p["delete"], "mod.ltx")) and os.path.isfile(os.path.join(p["nested"], "mod.ltx")),
               "B looking deleted nothing")
 
         # ------------------------------------------------------------------ C: a deletion
-        d = mcp("project.delete", path=p["delete"])
+        d = cmd("project.delete", path=p["delete"])
         gone = d.get("deleted") or {}
         check(d.get("ok") and not d.get("refused") and d.get("removed_from_list") and
               (gone.get("files"), gone.get("folders"), gone.get("links"), gone.get("bytes")) ==
@@ -558,7 +468,7 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
         check(os.path.isfile(keep) and open(keep, encoding="utf-8").read().startswith("a junction's target"),
               "C the junction went as a link: the folder it pointed at keeps its files")
         check(fwd(p["delete"]).lower() not in listed(), "C the entry left the list")
-        bad = mcp("project.page", show="menu", path=p["delete"])
+        bad = cmd("project.page", show="menu", path=p["delete"])
         check(not bad.get("ok"), "C and its card is gone", short(bad))
 
         # ------------------------------------------------------------------ D: refusals
@@ -566,7 +476,7 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
             path = p.get(key_or_path, key_or_path)
             assert not os.path.isabs(path) or w.inside(path), path
             before = sorted(os.walk(path)) if os.path.isdir(path) else None
-            r = mcp("project.delete", path=path)
+            r = cmd("project.delete", path=path)
             after = sorted(os.walk(path)) if os.path.isdir(path) else None
             ok = not r.get("ok") and r.get("refused") and words.lower() in r.get("error", "").lower() and \
                 before == after and not r.get("removed_from_list")
@@ -590,7 +500,7 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
         refused("ingame", "lies inside the linked game of the project QaLinker",
                 "a folder inside the game an old project.ltx names")
 
-        d = mcp("project.delete", path=p["missing"])
+        d = cmd("project.delete", path=p["missing"])
         check(d.get("ok") and d.get("missing") and d.get("removed_from_list") and
               (d.get("deleted") or {}).get("files") == 0 and not os.path.lexists(p["missing"]),
               "D a missing folder only leaves the list", short(d))
@@ -599,7 +509,7 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
         # ------------------------------------------------------------------ E: a file in use
         held = open(os.path.join(p["locked"], "data", "locked.bin"), "rb")
         try:
-            d = mcp("project.delete", path=p["locked"])
+            d = cmd("project.delete", path=p["locked"])
             failed = d.get("failed") or []
             check(not d.get("ok") and not d.get("refused") and d.get("failed_total") == 1 and
                   failed and same(failed[0].get("path", ""), os.path.join(p["locked"], "data", "locked.bin")) and
@@ -612,32 +522,32 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
                   "E and it is still in the list")
         finally:
             held.close()
-        d = mcp("project.delete", path=p["locked"])
+        d = cmd("project.delete", path=p["locked"])
         check(d.get("ok") and d.get("removed_from_list") and not os.path.lexists(p["locked"]),
               "E once the file is free, a second call finishes it", short(d))
 
         # ------------------------------------------------------------------ F: Remove from List
-        f = mcp("project.forget", path=p["nested"])
+        f = cmd("project.forget", path=p["nested"])
         check(not f.get("ok") and os.path.isdir(p["nested"]) and fwd(p["nested"]).lower() in listed(),
               "F a folder that holds a project is not taken off the list", short(f))
-        f = mcp("project.forget", path=p["notproject"])
+        f = cmd("project.forget", path=p["notproject"])
         check(f.get("ok") and fwd(p["notproject"]).lower() not in listed() and
               os.path.isfile(os.path.join(p["notproject"], "readme.txt")),
               "F a folder without a project leaves the list, and nothing on disk changes", short(f))
-        f = mcp("project.forget", path=p["outside"])
+        f = cmd("project.forget", path=p["outside"])
         check(not f.get("ok"), "F a folder outside the list is refused", short(f))
 
         # ------------------------------------------------------------------ G: Show in Explorer
-        r = mcp("project.reveal", path=p["outside"], dry_run=True)
+        r = cmd("project.reveal", path=p["outside"], dry_run=True)
         check(not r.get("ok") and "not in the project list" in r.get("error", ""),
               "G a folder outside the list is not shown", short(r))
-        r = mcp("project.reveal", path=p["gone"], dry_run=True)
+        r = cmd("project.reveal", path=p["gone"], dry_run=True)
         check(not r.get("ok") and "does not exist" in r.get("error", ""), "G a gone folder is not shown", short(r))
-        r = mcp("project.reveal", path=p["nested"], dry_run=True)
+        r = cmd("project.reveal", path=p["nested"], dry_run=True)
         check(r.get("ok") and not r.get("opened") and same(r.get("path", ""), p["nested"]),
               "G dry_run resolves the listed folder and opens nothing", short(r))
         if explorer:
-            r = mcp("project.reveal", path=p["nested"])
+            r = cmd("project.reveal", path=p["nested"])
             closed = close_explorer(p["nested"]) if r.get("ok") else 0
             check(r.get("ok") and r.get("opened") and closed >= 1,
                   "G a real reveal opens an Explorer window on the folder (closed again: %d)" % closed, short(r))
@@ -645,8 +555,8 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
                 print("! an Explorer window on %s may still be open" % p["nested"], flush=True)
 
         # ------------------------------------------------------------------ H: the open project
-        qa_target.guard_project(p["open"])
-        o = mcp("project.open", path=p["open"])
+        qa.guard_project(p["open"])
+        o = cmd("project.open", path=p["open"])
         check(o.get("ok"), "H a listed project opens", short(o))
         made = project_file(p["open"])
         check(made and os.path.basename(made) == TWIN + ".grizzly" and o.get("id") and
@@ -656,39 +566,39 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
               short(o))
         entry = listed().get(fwd(p["open"]).lower()) or {}
         check(entry.get("id") == o.get("id"), "H the list knows the project by its id", short(entry))
-        d = mcp("project.delete", path=p["open"])
+        d = cmd("project.delete", path=p["open"])
         check(not d.get("ok") and d.get("refused") and "open project" in d.get("error", "") and
               os.path.isfile(os.path.join(p["open"], "mod.ltx")),
               "H the open project is refused", short(d))
-        m = mcp("project.page", show="menu", path=p["nested"])
+        m = cmd("project.page", show="menu", path=p["nested"])
         check(not m.get("ok") and "not on screen" in m.get("error", ""),
               "H no card menu while a project is open", short(m))
-        m = mcp("project.page")
+        m = cmd("project.page")
         check(m.get("ok") and m.get("browser") is False, "H the report still answers, browser:false", short(m))
-        link = mcp("game.info", candidates=True)
-        st = mcp("state")
+        link = cmd("game.info", candidates=True)
+        st = cmd("state")
         pic = shot(shots, "link_game")
         check(link.get("ok") and not link.get("valid") and st.get("start_page") and pic.get("modal") is None,
               "H a project with no game known at all shows the Link Game card, which is no modal", short(pic))
-        info = mcp("project.info")
+        info = cmd("project.info")
         check(info.get("ok") and info.get("id") == o.get("id") and (info.get("game") or {}).get("valid") is False,
               "H project.info names the file, the id and the game in use", short(info))
         esc = escaped("start_page")
         check(not esc, "H nothing escapes the Link Game card", json.dumps(esc)[:600])
 
         # ------------------------------------------------------------------ N: New Project over MCP
-        n = mcp("project.create", parent=w.root, name="QaCreated")
+        n = cmd("project.create", parent=w.root, name="QaCreated")
         check(not n.get("ok") and "project is open" in n.get("error", "") and not os.path.exists(p["created"]),
               "N project.create is refused while a project is open", short(n))
-        c = mcp("project.close")
+        c = cmd("project.close")
         check(c.get("ok") and c.get("start_page"), "N project.close goes back to the Start page", short(c))
-        n = mcp("project.create", parent=w.root, name="Qa Created!")
+        n = cmd("project.create", parent=w.root, name="Qa Created!")
         check(not n.get("ok") and "Latin letters" in n.get("error", ""), "N a name with spaces or signs is refused", short(n))
-        n = mcp("project.create", parent="relative/folder", name="QaCreated")
+        n = cmd("project.create", parent="relative/folder", name="QaCreated")
         check(not n.get("ok") and "full path" in n.get("error", "") and not os.path.exists(p["created"]),
               "N a relative location is refused", short(n))
-        n = mcp("project.create", parent=w.root, name="QaCreated")
-        st = mcp("state")
+        n = cmd("project.create", parent=w.root, name="QaCreated")
+        st = cmd("state")
         check(n.get("ok") and same(n.get("path", ""), p["created"]) and n.get("existed") is False and
               os.path.isfile(os.path.join(p["created"], "mod.ltx")) and st.get("project"),
               "N project.create makes the project and opens it", short(n))
@@ -702,71 +612,34 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
         got = last_scene(p["open"])
         check(got is not None and got.replace("/", "\\").lower() == rel,
               "L an old absolute last_scene inside the project is the project file's scene, below its root", repr(got))
-        c = mcp("project.close")
+        c = cmd("project.close")
         # a copy of a project names the original's scene: it is never opened, and forgotten on close
         set_last_scene(p["created"], p["scene"])
-        qa_target.guard_project(p["created"])
-        o = mcp("project.open", path=p["created"])
-        c = mcp("project.close")
+        qa.guard_project(p["created"])
+        o = cmd("project.open", path=p["created"])
+        c = cmd("project.close")
         got = last_scene(p["created"])
         check(o.get("ok") and c.get("ok") and got == "",
               "L a scene outside the project is not reopened, and the project file forgets it", repr(got))
-        qa_target.guard_project(p["open"])
-        o = mcp("project.open", path=p["open"])
-        c = mcp("project.close")
+        qa.guard_project(p["open"])
+        o = cmd("project.open", path=p["open"])
+        c = cmd("project.close")
         got = last_scene(p["open"])
         check(o.get("ok") and c.get("ok") and got is not None and got.replace("/", "\\").lower() == rel,
               "L a project closed before its scene loaded keeps it", repr(got))
-        stalls = mcp("perf.stalls")
-        check(stalls.get("ok") and not stalls.get("stalls"),
-              "Z no UI pass held the UI thread over 100 ms (worst %s ms)" % stalls.get("worst_ms"),
-              json.dumps(stalls.get("stalls"))[:600])
     finally:
         ed.close()
+        try:
+            w.remove()
+        except OSError as exc:
+            print("! could not remove %s: %s" % (w.root, exc), flush=True)
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--shots", help="a folder for screenshots of the menu and the confirmation")
-    ap.add_argument("--no-explorer", action="store_true", help="skip the one real Explorer window")
-    ap.add_argument("--keep", action="store_true", help="keep the throw-away folder")
-    args = ap.parse_args()
+    def more(ap) -> None:
+        ap.add_argument("--no-explorer", action="store_true", help="skip the one real Explorer window")
 
-    if port_in_use():
-        print("an editor already answers on %s:%d - close it first; this test starts its own" % MCP)
-        return 2
-    w = Work()
-    print("throw-away projects in: " + w.root, flush=True)
-    ini_backup = None
-    if os.path.isfile(INI):
-        with open(INI, "rb") as f:
-            ini_backup = f.read()
-    try:
-        w.build()
-        # the list is the test's own: the editor offers no real project to anything below
-        with open(INI, "wb") as f:
-            f.write(w.ini())
-        run(w, os.path.abspath(args.shots) if args.shots else None, not args.no_explorer)
-    except Exception as exc:  # noqa: BLE001 - the report is the point
-        check(False, "the run finished", repr(exc))
-    finally:
-        if ini_backup is None:
-            if os.path.isfile(INI):
-                os.remove(INI)
-        else:
-            with open(INI, "wb") as f:
-                f.write(ini_backup)
-        restored = ini_backup is None and not os.path.exists(INI) or \
-            ini_backup is not None and open(INI, "rb").read() == ini_backup
-        check(restored, "Z _projects.ini is back byte for byte")
-        if not args.keep:
-            try:
-                w.remove()
-            except OSError as exc:
-                print("! could not remove %s: %s" % (w.root, exc), flush=True)
-    ok = sum(1 for good, _ in results if good)
-    print(f"PROJECT BROWSER: DONE {ok}/{len(results)}", flush=True)
-    return 0 if ok == len(results) else 1
+    return qa.suite("PROJECT BROWSER", run, doc=__doc__, add_args=more, project=False)
 
 
 if __name__ == "__main__":

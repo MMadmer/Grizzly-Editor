@@ -12,7 +12,7 @@ use serde_json::{Map, Value};
 
 use crate::args::Args;
 use crate::editor::Editor;
-use crate::spec::{Effect, Gate, Params, Shape, Spec};
+use crate::spec::{Effect, Gate, Params, Shape, Spec, distance};
 
 /// What a command answers: the fields of its reply, or why it did not happen.
 pub type Reply = Result<Value, CmdError>;
@@ -23,11 +23,10 @@ type Handler = Box<dyn Fn(Arc<Editor>, Args, Origin) -> BoxFut + Send + Sync>;
 #[derive(Clone, Copy, Debug)]
 pub struct CommandInfo {
     pub name: &'static str,
-    /// The area of a command with a card; the crate that registered one without.
+    /// The word before the dot of the name; the whole name for a command that has no area.
     pub area: &'static str,
-    /// What the command says about itself. `None` for a command registered by a bare name,
-    /// with arguments it reads itself.
-    pub spec: Option<Spec>,
+    /// What the command says about itself.
+    pub spec: Spec,
 }
 
 /// A command's card and its parameters, read off their type the first time somebody asks.
@@ -74,20 +73,9 @@ impl Registry {
         Self::default()
     }
 
-    /// Registers an async command. A name registered twice keeps the later handler.
-    pub fn add<F, Fut>(&mut self, area: &'static str, name: &'static str, f: F)
-    where
-        F: Fn(Arc<Editor>, Args, Origin) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Reply> + Send + 'static,
-    {
-        if self.map.insert(name, Box::new(move |ed, args, origin| Box::pin(f(ed, args, origin)))).is_none() {
-            self.info.push(CommandInfo { name, area, spec: None });
-        }
-    }
-
-    /// Registers a command with its card: `spec` says what it is and `P` what it takes. The
-    /// request is read into `P` before `f` runs, so a wrong or unknown parameter never reaches
-    /// the command.
+    /// Registers an async command with its card: `spec` says what it is and `P` what it takes.
+    /// The request is read into `P` before `f` runs, so a wrong or unknown parameter never
+    /// reaches the command. A name registered twice keeps the later handler.
     pub fn cmd<P, F, Fut>(&mut self, spec: Spec, f: F)
     where
         P: Params,
@@ -104,7 +92,7 @@ impl Registry {
                 Err(e) => Box::pin(async move { Err(e) }),
             });
         if self.map.insert(name, handler).is_none() {
-            self.info.push(CommandInfo { name, area: spec.area(), spec: Some(spec) });
+            self.info.push(CommandInfo { name, area: spec.area(), spec });
         }
         self.cards.insert(name, Card { spec, shape, make });
     }
@@ -158,22 +146,7 @@ impl Registry {
     /// What a call of `name` with `args` does; `None` for a name nobody registered.
     #[must_use]
     pub fn effect_of(&self, name: &str, args: &Args) -> Option<Effect> {
-        match self.cards.get(name) {
-            Some(c) => Some(c.spec.effect_of(args)),
-            None => self.map.contains_key(name).then(|| bare_effect(name, args)),
-        }
-    }
-
-    /// Registers a command that answers at once from what is in memory - a read of snapshots.
-    /// It must not touch a file or wait.
-    pub fn add_sync<F>(&mut self, area: &'static str, name: &'static str, f: F)
-    where
-        F: Fn(&Editor, &Args, Origin) -> Reply + Send + Sync + 'static,
-    {
-        self.add(area, name, move |ed, args, origin| {
-            let reply = f(&ed, &args, origin);
-            async move { reply }
-        });
+        self.cards.get(name).map(|c| c.spec.effect_of(args))
     }
 
     #[must_use]
@@ -216,10 +189,10 @@ impl Registry {
         }
     }
 
-    /// "unknown command", with the commands of the same area or with the same verb.
+    /// "unknown command", with the five nearest of the commands of the same area or with the same verb.
     fn unknown(&self, name: &str) -> String {
         let (area, verb) = name.split_once('.').unwrap_or(("", name));
-        let mut near: Vec<&str> = self
+        let mut near: Vec<(usize, &str)> = self
             .info
             .iter()
             .map(|c| c.name)
@@ -227,35 +200,16 @@ impl Registry {
                 Some((a, v)) => (!area.is_empty() && a == area) || v == verb,
                 None => !verb.is_empty() && n.contains(verb),
             })
-            .take(12)
+            .map(|n| (distance(verb, n.split_once('.').map_or(n, |(_, v)| v)), n))
             .collect();
         near.sort_unstable();
+        near.truncate(5);
         if near.is_empty() {
             format!("unknown command '{name}' - help lists the commands")
         } else {
-            format!("unknown command '{name}' - did you mean: {}? help lists the commands", near.join(", "))
+            let names: Vec<&str> = near.into_iter().map(|(_, n)| n).collect();
+            format!("unknown command '{name}' - did you mean: {}? help lists the commands", names.join(", "))
         }
-    }
-}
-
-/// What a command without a card does, as far as the doors need it: the ones that lose data or
-/// reach players, by name. It shrinks as commands get their cards and goes with the last of them.
-fn bare_effect(name: &str, args: &Args) -> Effect {
-    let on = |key: &str| {
-        args.get(key).is_some_and(|v| match v {
-            Value::Bool(b) => *b,
-            Value::String(s) => matches!(s.as_str(), "true" | "1" | "yes" | "on"),
-            Value::Number(n) => n.as_f64().is_some_and(|x| x != 0.0),
-            _ => false,
-        })
-    };
-    let action = args.get("action").and_then(Value::as_str).unwrap_or("");
-    match name {
-        "mod_package" | "mod_publish" => Effect::Publish,
-        "mod_catalog" if matches!(action, "submit" | "withdraw") => Effect::Publish,
-        "mod_releases" if action == "delete" => Effect::Destroy,
-        _ if on("discard") => Effect::Destroy,
-        _ => Effect::Write,
     }
 }
 

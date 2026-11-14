@@ -23,111 +23,30 @@ What it proves:
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
-import socket
 import subprocess
 import sys
 import tempfile
 import time
 
-import qa_target
+import qa
+from qa import check, short
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(HERE))
+
 SCENE = "l01_escape"
-
-results: list[tuple[bool, str]] = []
-
-
-def check(ok, text: str, detail: str = "") -> bool:
-    results.append((bool(ok), text))
-    print(("PASS " if ok else "FAIL ") + text + (("  <- " + detail) if detail and not ok else ""), flush=True)
-    return bool(ok)
-
-
-def short(data) -> str:
-    return json.dumps(data)[:600]
-
-
-def mcp(port: int, cmd: str, timeout: float = 300.0, **extra) -> dict:
-    payload = {"cmd": cmd}
-    payload.update(extra)
-    with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
-        s.settimeout(timeout)
-        s.sendall((json.dumps(payload) + "\n").encode())
-        buf = b""
-        while not buf.endswith(b"\n"):
-            chunk = s.recv(1 << 20)
-            if not chunk:
-                break
-            buf += chunk
-    return json.loads(buf.decode("utf-8"))
-
-
-def answers(port: int) -> bool:
-    try:
-        return bool(mcp(port, "ping", timeout=5).get("ok"))
-    except OSError:
-        return False
-
-
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def start(args: list[str], env: dict) -> subprocess.Popen:
-    exe = qa_target.exe()
-    if not os.path.isfile(exe):
-        raise RuntimeError("build the editor first: " + exe)
-    startup = subprocess.STARTUPINFO()
-    startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
-    startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
-    return subprocess.Popen([exe, *args], cwd=os.path.dirname(exe), startupinfo=startup, env=env)
-
-
-def wait_open(port: int, proc: subprocess.Popen, seconds: float = 300) -> dict:
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        try:
-            info = mcp(port, "project.info", timeout=30)
-            if info.get("ok"):
-                return info
-        except OSError:
-            pass
-        if proc.poll() is not None:
-            raise RuntimeError("the editor exited during startup (code %s)" % proc.returncode)
-        time.sleep(0.1)
-    raise RuntimeError("the editor never opened the project")
-
 
 def wait_scene(port: int, seconds: float = 300) -> str:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         # a minimised editor draws only when asked: the frame that reopens the scene is drawn here
-        mcp(port, "ui.list")
-        info = mcp(port, "scene.info", timeout=60)
+        qa.call(port, "ui.list")
+        info = qa.call(port, "scene.info", timeout=60)
         if SCENE in (info.get("file") or "").lower():
             return info.get("file") or ""
         time.sleep(1)
     return ""
-
-
-def quit_editor(port: int, proc: subprocess.Popen) -> bool:
-    try:
-        mcp(port, "app.quit", discard=True)
-    except OSError:
-        pass
-    try:
-        proc.wait(timeout=120)
-        return True
-    except subprocess.TimeoutExpired:
-        print("! the editor did not close on its own", flush=True)
-        return False
 
 
 def project_file(folder: str) -> str:
@@ -194,13 +113,15 @@ def names_outside(path: str, words: list[str]) -> list[str]:
     return found
 
 
-def run(src: str, work: str) -> None:
-    port = qa_target.PORT
-    home1 = qa_target.HOME
-    env1 = dict(os.environ)
-    a = os.path.join(work, "QaPortable")
-    qa_target.copy_project(src, a)
-    print("copy: " + a, flush=True)
+def opened(ed: qa.Editor) -> bool:
+    """The editor answers and has a project open."""
+    return bool(ed.cmd("project.info", timeout=30).get("ok"))
+
+
+def run(ctx: qa.Run) -> None:
+    work, a = ctx.work, ctx.project
+    port = qa.PORT
+    home1 = qa.home()
     legacy = os.path.join(a, "project.ltx")
     scene_rel = "rawdata\\levels\\%s.level" % SCENE
     if not os.path.isfile(legacy) and not project_file(a):
@@ -217,9 +138,10 @@ def run(src: str, work: str) -> None:
         open(pf, "w", encoding="utf-8", newline="").write(text)
 
     # ------------------------------------------------------------------ A: the first open converts it
-    ed1 = start([*qa_target.ARGS, "-nodlg", "-project", a], env1)
+    ed1 = qa.Editor(a, ready=opened, stalls=False)
     try:
-        info = wait_open(port, ed1)
+        ed1.start()
+        info = ed1.cmd("project.info")
         pf = project_file(a)
         text = open(pf, encoding="utf-8").read() if pf else ""
         check(pf and os.path.basename(pf) == "QaPortable.grizzly" and re.search(r'id = "[0-9a-f-]{36}"', text) and
@@ -235,8 +157,7 @@ def run(src: str, work: str) -> None:
         guide_time = os.path.getmtime(os.path.join(a, "AGENTS.md")) if os.path.isfile(os.path.join(a, "AGENTS.md")) else 0
         pf_text = text
     finally:
-        mcp(port, "project.close", discard=True) if answers(port) else None
-        quit_editor(port, ed1)
+        ed1.close()
 
     # ------------------------------------------------------------------ M: moved, a fresh home, a double click
     moved_parent = os.path.join(work, "elsewhere", "deeper")
@@ -245,19 +166,18 @@ def run(src: str, work: str) -> None:
     os.rename(a, b)
     moved_at = time.time()
     home2 = tempfile.mkdtemp(prefix="grizzly_home_portable_")
-    env2 = dict(os.environ)
     # the home never saw the project or the game; the game's installer entry is what the finder is given
-    env2["GRIZZLY_HOME"] = home2
-    env2["GRIZZLY_GAME_SEARCH"] = "installed:" + game_root
+    env2 = {"GRIZZLY_HOME": home2, "GRIZZLY_GAME_SEARCH": "installed:" + game_root}
     pf_moved = project_file(b)
-    ed2 = start(["-mcp_port", str(port), "-home", home2, "-nodlg", pf_moved], env2)
+    ed2 = qa.Editor(port=port, home_folder=home2, args=[pf_moved], env=env2, ready=opened)
     try:
-        info = wait_open(port, ed2)
+        ed2.start()
+        info = ed2.cmd("project.info")
         check(fwd(info.get("path", "")).lower() == fwd(b).lower() and info.get("id") == project_id,
               "M the project opens at its new place by its project file, the same id", short(info))
 
         # -------------------------------------------------------------- G: the game is found, the scene is up
-        g = mcp(port, "game.info")
+        g = qa.call(port, "game.info")
         check(g.get("valid") and fwd(g.get("root", "")).lower() == fwd(game_root).lower() and
               g.get("source") == "installed" and g.get("default_found") == "installed",
               "G the game is found by itself in a home that never saw it", short(g))
@@ -265,7 +185,7 @@ def run(src: str, work: str) -> None:
         check(SCENE in scene.lower(), "G the project's scene is up", scene)
 
         # -------------------------------------------------------------- W: nothing inside names a place outside
-        words = [a, b, os.path.dirname(b), home1, home2, os.environ.get("COMPUTERNAME", ""), REPO]
+        words = [a, b, os.path.dirname(b), home1, home2, os.environ.get("COMPUTERNAME", ""), qa.REPO]
         words = [w for w in words if w]
         bad = {}
         for path in written_since(b, moved_at):
@@ -293,68 +213,64 @@ def run(src: str, work: str) -> None:
             os.makedirs(os.path.dirname(os.path.join(library, rel)), exist_ok=True)
             with open(os.path.join(library, rel), "w", encoding="utf-8", newline="") as f:
                 f.write(data)
-        lib = mcp(port, "project.set_library", path=library)
+        lib = qa.call(port, "project.set_library", path=library)
         check(lib.get("ok") and fwd(lib.get("path", "")).lower() == fwd(library).lower(),
               "C the library is a preference of the home", short(lib))
         text = open(pf_moved, encoding="utf-8").read()
         with open(pf_moved, "w", encoding="utf-8", newline="") as f:
             f.write(text.replace("\n}", '\n  library = { "qa\\\\crate", "qa\\\\nowhere" },\n}', 1))
         before = sorted(written_since(b, time.time() - 1e9))
-        c = mcp(port, "project.collect", dry_run=True)
+        c = qa.call(port, "project.collect", dry_run=True)
         after = sorted(written_since(b, time.time() - 1e9))
         check(c.get("ok") and c.get("dry_run") is True and c.get("files") == 2 and c.get("bytes") == 13 and
               c.get("missing") == ["qa\\nowhere"] and before == after,
               "C project.collect dry_run says what it would copy (2 files, 13 bytes, one ref nowhere), and copies nothing",
               short(c))
-        c = mcp(port, "project.collect")
+        c = qa.call(port, "project.collect")
         landed = os.path.join(b, "rawdata", "objects", "qa", "crate.object")
-        listed = mcp(port, "project.info").get("library")
+        listed = qa.call(port, "project.info").get("library")
         check(c.get("ok") and os.path.isfile(landed) and os.path.isfile(landed[:-len("object")] + "thm") and
               listed == ["qa\\nowhere"],
               "C project.collect copies it in; the list keeps only what no library has", short(c) + " " + json.dumps(listed))
-        problems = mcp(port, "asset.check", path=os.path.basename(pf_moved))
+        problems = qa.call(port, "asset.check", path=os.path.basename(pf_moved))
         check(any(p.get("code") == "W403" and "qa\\nowhere" in p.get("text", "") for p in problems.get("problems", [])),
               "C a reference that resolves nowhere is a problem of the project file", short(problems))
-        mcp(port, "project.set_library", path="")
+        qa.call(port, "project.set_library", path="")
 
         # -------------------------------------------------------------- H: a second start hands over
         other = os.path.join(work, "QaSecond")
         os.makedirs(other)
         with open(os.path.join(other, "mod.ltx"), "w", encoding="utf-8", newline="") as f:
             f.write("[module]\r\nid = qa_second\r\nname = QaSecond\r\nversion = 1.0.0\r\n")
-        qa_target.guard_project(other)
-        port3 = free_port()
+        qa.guard_project(other)
+        port3 = qa.free_port()
         t = time.monotonic()
-        second = start(["-mcp_port", str(port3), "-home", home2, "-nodlg", other], env2)
+        second = qa.Editor(port=port3, home_folder=home2, args=[other], env=env2, stalls=False).launch()
         try:
-            code = second.wait(timeout=120)
+            code = second.proc.wait(timeout=120)
         except subprocess.TimeoutExpired:
             code = None
         took = time.monotonic() - t
-        check(code == 0 and not answers(port3), "H a second start hands its project over and ends (code %s, %.1f s)"
+        check(code == 0 and not qa.port_open(port3), "H a second start hands its project over and ends (code %s, %.1f s)"
               % (code, took))
-        info = mcp(port, "project.info")
+        info = qa.call(port, "project.info")
         check(fwd(info.get("path", "")).lower() == fwd(other).lower(),
               "H the running editor opened the project the second start was given", short(info))
-        third = start(["-mcp_port", str(port3), "-home", home2, "-nodlg"], env2)
+        third = qa.Editor(port=port3, home_folder=home2, env=env2, stalls=False).launch()
         try:
-            code = third.wait(timeout=120)
+            code = third.proc.wait(timeout=120)
         except subprocess.TimeoutExpired:
             code = None
-        check(code == 0 and answers(port) and fwd(mcp(port, "project.info").get("path", "")).lower() == fwd(other).lower(),
+        check(code == 0 and qa.port_open(port) and fwd(qa.call(port, "project.info").get("path", "")).lower() == fwd(other).lower(),
               "H a start without a project only brings the window forward", "code %s" % code)
         lock = os.path.join(home2, "editor.lock")
-        check(os.path.isfile(lock) and ("pid=%d" % ed2.pid) in open(lock, encoding="utf-8").read(),
+        check(os.path.isfile(lock) and ("pid=%d" % ed2.proc.pid) in open(lock, encoding="utf-8").read(),
               "H the home's lock names the running editor", lock)
-        stalls = mcp(port, "perf.stalls")
-        check(stalls.get("ok") and not stalls.get("stalls"),
-              "Z no UI pass held the UI thread over 100 ms (worst %s ms)" % stalls.get("worst_ms"),
-              json.dumps(stalls.get("stalls"))[:600])
     finally:
-        closed = quit_editor(port, ed2)
+        closed = ed2.close() is not None
         check(closed, "Z the editor closes over MCP")
         check(not os.path.exists(os.path.join(home2, "editor.lock")), "Z and lets go of its home")
-        qa_target.remove_tree(home2)
+        qa.remove_tree(home2)
 
 
 def fwd(p: str) -> str:
@@ -362,28 +278,7 @@ def fwd(p: str) -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--project", required=True, help="a project to COPY; it needs rawdata\\levels\\%s.level" % SCENE)
-    ap.add_argument("--keep", action="store_true", help="keep the throw-away folder")
-    args = ap.parse_args()
-    src = os.path.abspath(args.project)
-    if not os.path.isfile(os.path.join(src, "rawdata", "levels", SCENE + ".level")):
-        print("the project has no rawdata\\levels\\%s.level: %s" % (SCENE, src))
-        return 2
-    if answers(qa_target.PORT):
-        print(qa_target.busy_text())
-        return 2
-    work = os.path.realpath(tempfile.mkdtemp(prefix="grizzly_portable_"))
-    try:
-        run(src, work)
-    except Exception as exc:  # noqa: BLE001 - the report is the point
-        check(False, "the run finished", repr(exc))
-    finally:
-        if not args.keep:
-            qa_target.remove_tree(work)
-    ok = sum(1 for good, _ in results if good)
-    print(f"PORTABLE: DONE {ok}/{len(results)}", flush=True)
-    return 0 if ok == len(results) else 1
+    return qa.suite("PORTABLE", run, doc=__doc__, copy_name="QaPortable", requires=["rawdata/levels/%s.level" % SCENE])
 
 
 if __name__ == "__main__":

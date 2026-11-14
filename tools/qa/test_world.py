@@ -22,94 +22,17 @@ The project must have a scene of a level open at start (its last_scene).
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
-import shutil
-import socket
-import subprocess
 import sys
 import tempfile
 import time
 
-import qa_target
+import qa
+from qa import check, cmd
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(HERE))
-MCP = qa_target.MCP
+
 RULES = ["original_npcs", "random_stalkers", "mutants", "npc_quests", "story_quests"]
-
-results: list[tuple[bool, str]] = []
-
-
-def check(ok: bool, text: str, detail: str = "") -> bool:
-    results.append((bool(ok), text))
-    print(("PASS " if ok else "FAIL ") + text + (("  <- " + detail) if detail and not ok else ""), flush=True)
-    return bool(ok)
-
-
-def mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
-    payload = {"cmd": cmd}
-    payload.update(extra)
-    with socket.create_connection(MCP, timeout=10) as s:
-        s.settimeout(timeout)
-        s.sendall((json.dumps(payload) + "\n").encode())
-        buf = b""
-        while not buf.endswith(b"\n"):
-            chunk = s.recv(1 << 20)
-            if not chunk:
-                break
-            buf += chunk
-    return json.loads(buf.decode("utf-8"))
-
-
-class Editor:
-    def __init__(self) -> None:
-        self.proc: subprocess.Popen | None = None
-
-    def start(self, project: str) -> None:
-        exe = qa_target.exe()
-        if not os.path.isfile(exe):
-            raise RuntimeError("build the editor first: " + exe)
-        startup = subprocess.STARTUPINFO()
-        startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
-        startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
-        qa_target.guard_project(project)
-        self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project],
-                                     cwd=os.path.dirname(exe), startupinfo=startup)
-        deadline = time.monotonic() + 600
-        while time.monotonic() < deadline:
-            try:
-                if mcp("mod.info", timeout=30).get("ok"):
-                    self.settle()
-                    return
-            except OSError:
-                pass
-            if self.proc.poll() is not None:
-                raise RuntimeError("the editor exited during startup")
-            time.sleep(0.05)
-        raise RuntimeError("the editor never opened the project")
-
-    @staticmethod
-    def settle() -> None:
-        # A minimized editor draws only when asked, and its first frame reopens the project's last scene - a blocking
-        # load. That frame is drawn here and the load runs out: the checks read the editor, not a load's busy frames.
-        mcp("ui.list")
-        deadline = time.monotonic() + 600
-        while mcp("ui.tasks").get("active") and time.monotonic() < deadline:
-            time.sleep(0.05)
-
-    def close(self) -> None:
-        try:
-            mcp("app.quit")
-        except OSError:
-            pass
-        if self.proc:
-            try:
-                self.proc.wait(timeout=120)
-            except subprocess.TimeoutExpired:
-                print("! the editor did not close on its own", flush=True)
-
 
 def read(path: str) -> str:
     with open(path, "rb") as f:
@@ -120,7 +43,7 @@ def wait_scene(level: str, seconds: float = 600) -> bool:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         try:
-            info = mcp("scene.info", timeout=60)
+            info = cmd("scene.info", timeout=60)
             if level in (info.get("file") or "").lower():
                 return True
         except OSError:
@@ -159,90 +82,90 @@ QUEST_E024 = """return {
 
 def run_ui_checks() -> None:
     """The World Rules tab: opened, pointed and looked at over MCP, and nothing of it leaves its window."""
-    v = mcp("world.view")
+    v = cmd("world.view")
     check(v.get("ok") and v.get("tab") == "world_rules", "U world.view answers", json.dumps(v)[:300])
     check(v.get("status") == "Saved to mod.ltx as you edit", "U the tab says it saves as you edit", json.dumps(v)[:300])
-    opened = mcp("ui.tab", action="open", kind="world_rules")
-    check(opened.get("ok") and opened.get("tab", {}).get("id") == "world_rules", "U ui_tab opens World Rules",
+    opened = cmd("ui.tab", action="open", kind="world_rules")
+    check(opened.get("ok") and opened.get("tab", {}).get("id") == "world_rules", "U ui.tab opens World Rules",
           json.dumps(opened)[:300])
-    v = mcp("world.view", drawer="open", level="l03_agroprom", filter="underground")
+    v = cmd("world.view", drawer="open", level="l03_agroprom", filter="underground")
     check(v.get("ok") and v.get("active") and v.get("drawer") == "open", "U world.view opens the problems drawer",
           json.dumps(v)[:300])
     check(v.get("level") == "l03_agroprom" and v.get("filter") == "underground", "U and points the transitions at a level",
           json.dumps(v)[:300])
-    bad = mcp("world.view", level="qa_no_level")
+    bad = cmd("world.view", level="qa_no_level")
     check(not bad.get("ok") and "qa_no_level" in bad.get("error", ""), "U a level the game lacks is refused by name",
           json.dumps(bad))
-    bad = mcp("world.view", drawer="sideways")
+    bad = cmd("world.view", drawer="sideways")
     check(not bad.get("ok"), "U and so is a drawer state that is not open or close", json.dumps(bad))
-    audit = mcp("ui.audit", id="world_rules")
+    audit = cmd("ui.audit", id="world_rules")
     check(audit.get("ok") and not audit.get("escaped"), "U nothing escapes the World Rules tab",
           json.dumps(audit.get("escaped"))[:400])
     labels = {c.get("label") for c in audit.get("controls", [])}
     for section in ("Original Game", "Player Start", "Place in Scene"):
         check(section in labels, "U the tab shows " + section, json.dumps(sorted(x for x in labels if x))[:400])
     # the rest is drawn once the page scrolls to it
-    scrolled = mcp("ui.scroll", id="world_rules", to="bottom")
+    scrolled = cmd("ui.scroll", id="world_rules", to="bottom")
     check(scrolled.get("ok"), "U the page scrolls", json.dumps(scrolled)[:300])
-    labels = {c.get("label") for c in mcp("ui.audit", id="world_rules").get("controls", [])}
+    labels = {c.get("label") for c in cmd("ui.audit", id="world_rules").get("controls", [])}
     for section in ("Applies On", "Transitions"):
         check(section in labels, "U the tab shows " + section, json.dumps(sorted(x for x in labels if x))[:400])
-    toolbar = {c.get("label") for c in mcp("ui.audit", id="##toolbar").get("controls", [])}
+    toolbar = {c.get("label") for c in cmd("ui.audit", id="##toolbar").get("controls", [])}
     check("Reload Game Data" in toolbar and "Empty World..." in toolbar, "U its toolbar offers Reload Game Data and Empty World...",
           json.dumps(sorted(x for x in toolbar if x))[:400])
-    mcp("world.view", drawer="close", filter="")
-    closed = mcp("ui.tab", action="close", doc="world_rules")
+    cmd("world.view", drawer="close", filter="")
+    closed = cmd("ui.tab", action="close", doc="world_rules")
     check(closed.get("ok"), "U the tab closes: it saves as it goes, so nothing is unsaved", json.dumps(closed)[:300])
-    check(mcp("world.view").get("open") is False, "U and world.view says it is closed")
+    check(cmd("world.view").get("open") is False, "U and world.view says it is closed")
 
 
-def run(project: str) -> None:
-    ed = Editor()
+def run(ctx: qa.Run) -> None:
+    project = ctx.project
+    ed = qa.Editor(project).start()
     out_dir = tempfile.mkdtemp(prefix="grizzly_world_")
     try:
-        ed.start(project)
-        manifest = mcp("mod.info").get("manifest", {})
+        manifest = cmd("mod.info").get("manifest", {})
         module = manifest.get("id", "")
         check(bool(module), "A the project has a module id", json.dumps(manifest)[:200])
         mod_ltx = os.path.join(project, "mod.ltx")
 
         # ------------------------------------------------------------ A: the manifest
-        g = mcp("world.info")
+        g = cmd("world.info")
         check(g.get("ok"), "A world.info answers", json.dumps(g)[:300])
         check(world(g).get("declared") is False, "A a fresh project declares no world", json.dumps(world(g)))
         check("[world]" not in read(mod_ltx), "A and mod.ltx has no [world]")
 
-        s = mcp("world.set", preset="empty")
+        s = cmd("world.set", preset="empty")
         rules = world(s).get("rules", {})
         check(s.get("ok") and all(rules.get(r) is False for r in RULES), "A preset=empty removes all five", json.dumps(rules))
         text = read(mod_ltx)
         check("[world]" in text and all(f"{r}" in text for r in RULES) and text.count("= false") >= 5,
               "A mod.ltx spells every rule out", text[-400:])
 
-        s = mcp("world.set", original_npcs=True)
+        s = cmd("world.set", original_npcs=True)
         rules = world(s).get("rules", {})
         check(rules.get("original_npcs") is True and rules.get("mutants") is False,
               "A one rule changes alone", json.dumps(rules))
 
-        bad = mcp("world.set", player_choice="random_stalkers,mutants,npc_quests,story_quests")
+        bad = cmd("world.set", player_choice="random_stalkers,mutants,npc_quests,story_quests")
         check(not bad.get("ok") and "room for 3" in bad.get("error", ""),
               "A a fourth player choice is refused", json.dumps(bad))
-        check(world(mcp("world.info")).get("player_choice") == [], "A and nothing was saved")
-        bad = mcp("world.set", player_choice="bogus_rule")
+        check(world(cmd("world.info")).get("player_choice") == [], "A and nothing was saved")
+        bad = cmd("world.set", player_choice="bogus_rule")
         check(not bad.get("ok") and "bogus_rule" in bad.get("error", ""), "A an unknown rule is refused by name", json.dumps(bad))
 
-        s = mcp("world.set", player_choice="random_stalkers,mutants")
+        s = cmd("world.set", player_choice="random_stalkers,mutants")
         check(world(s).get("player_choice") == ["random_stalkers", "mutants"], "A two choices are kept",
               json.dumps(world(s)))
         check("player_choice" in read(mod_ltx) and "random_stalkers, mutants" in read(mod_ltx),
               "A as one line of mod.ltx")
-        check(world(mcp("mod.info").get("manifest", {})).get("player_choice") == ["random_stalkers", "mutants"],
+        check(world(cmd("mod.info").get("manifest", {})).get("player_choice") == ["random_stalkers", "mutants"],
               "A mod.info reports the world too")
 
         # ------------------------------------------------------------ B: the linked game
-        t = mcp("world.lookup", type="transitions")
+        t = cmd("world.lookup", type="transitions")
         check(t.get("ok"), "B the linked game's transitions are read", json.dumps(t)[:300])
-        levels = [l["name"] for l in mcp("world.lookup", type="levels").get("levels", [])]
+        levels = [l["name"] for l in cmd("world.lookup", type="levels").get("levels", [])]
         trans = t.get("transitions", [])
         check("l03_agroprom" in levels and "l01_escape" in levels, "B its levels come from all.spawn", str(levels[:12]))
         check(len(trans) > 20, "B and dozens of level changers", str(len(trans)))
@@ -255,9 +178,9 @@ def run(project: str) -> None:
         check(all(tr["closed"] is False for tr in trans), "B nothing is closed before an area or a lock")
 
         area = ["l03_agroprom", "l03u_agr_underground"]
-        s = mcp("world.set", area=",".join(area))
+        s = cmd("world.set", area=",".join(area))
         check(world(s).get("area") == area, "B the area is saved", json.dumps(world(s)))
-        t = mcp("world.lookup", type="transitions", level="l03_agroprom")
+        t = cmd("world.lookup", type="transitions", level="l03_agroprom")
         at = t.get("transitions", [])
         check(len(at) > 0 and all(tr["level"] == "l03_agroprom" for tr in at), "B level= narrows the list")
         outside = [tr for tr in at if tr["to"] not in area]
@@ -267,25 +190,25 @@ def run(project: str) -> None:
         check(inside and all(not tr["closed"] for tr in inside), "B a way inside stays open", json.dumps(inside)[:300])
 
         way_down = inside[0]["name"] if inside else ""
-        mcp("world.set", lock=way_down)
-        t = {tr["name"]: tr for tr in mcp("world.lookup", type="transitions", level="l03_agroprom").get("transitions", [])}
+        cmd("world.set", lock=way_down)
+        t = {tr["name"]: tr for tr in cmd("world.lookup", type="transitions", level="l03_agroprom").get("transitions", [])}
         check(t.get(way_down, {}).get("closed_by") == "locked", "B lock= closes one changer", json.dumps(t.get(way_down)))
-        mcp("world.set", lock_level="l03_agroprom")
-        t = mcp("world.lookup", type="transitions", level="l03_agroprom").get("transitions", [])
+        cmd("world.set", lock_level="l03_agroprom")
+        t = cmd("world.lookup", type="transitions", level="l03_agroprom").get("transitions", [])
         check(all(tr["closed"] for tr in t), "B lock_level= closes the whole level")
         check(any(tr["closed_by"] == "locked" for tr in t) and any(tr["closed_by"] == "level" for tr in t),
               "B in the engine's order: the changer, then its level", json.dumps([tr["closed_by"] for tr in t]))
-        s = mcp("world.set", unlock=way_down, unlock_level="l03_agroprom")
+        s = cmd("world.set", unlock=way_down, unlock_level="l03_agroprom")
         check(world(s).get("locked") == [] and world(s).get("locked_levels") == [], "B and both open again", json.dumps(world(s)))
 
-        s = mcp("world.set", levels="qa_no_level", lock="qa_no_changer")
+        s = cmd("world.set", levels="qa_no_level", lock="qa_no_changer")
         probs = " ".join(s.get("problems", []))
         check("W203" in probs and "qa_no_level" in probs, "B a level the game lacks is W203", probs)
         check("W204" in probs and "qa_no_changer" in probs, "B a changer the game lacks is W204", probs)
         check("W206" in probs, "B an area with no Player Start is W206", probs)
-        mcp("world.set", levels="", unlock="qa_no_changer")
+        cmd("world.set", levels="", unlock="qa_no_changer")
 
-        patrols = mcp("world.lookup", type="patrols", query="agr_", limit=5)
+        patrols = cmd("world.lookup", type="patrols", query="agr_", limit=5)
         agr_patrols = patrols.get("patrols", [])
         check(len(agr_patrols) > 0 and patrols.get("total", 0) > len(agr_patrols),
               "B the game's own patrol paths are listed", json.dumps(patrols)[:300])
@@ -295,59 +218,59 @@ def run(project: str) -> None:
 
         # ------------------------------------------------------------ C: the scene
         # the editor does not reopen the last scene by itself on every start: ask for it
-        scene_now = (mcp("scene.info").get("file") or "").lower()
+        scene_now = (cmd("scene.info").get("file") or "").lower()
         if "l01_escape" not in scene_now:
-            opened = mcp("scene.open", timeout=900, path="rawdata/levels/l01_escape.level")
+            opened = cmd("scene.open", timeout=900, path="rawdata/levels/l01_escape.level")
             if not check(opened.get("ok"), "C the project's Escape scene opens", json.dumps(opened)[:200]):
                 # everything below stands on that scene: waiting for one that did not open only burns minutes
                 raise RuntimeError("the Escape scene did not open")
         check(wait_scene("l01_escape"), "C the project's Escape scene is open")
-        start = mcp("scene.place", kind="spawn", section="player_start", position=[-223.0, -20.0, -143.0], on_surface=True)
+        start = cmd("scene.place", kind="spawn", section="player_start", position=[-223.0, -20.0, -143.0], on_surface=True)
         start_name = placed_name(start)
         check(start.get("ok") and start_name, "C a Player Start is placed", json.dumps(start)[:300])
-        g = mcp("world.info")
+        g = cmd("world.info")
         starts = g.get("starts", [])
         check(len(starts) == 1 and starts[0]["source"] == "scene" and starts[0]["level"] == "l01_escape",
               "C world.info sees it in the scene at once", json.dumps(starts))
         check("W205" in " ".join(g.get("problems", [])), "C a start outside the area is W205", json.dumps(g.get("problems")))
 
-        way = mcp("scene.place", kind="way", name="qa_patrol", points=[[-220, -20, -140], [-210, -20, -140], [-210, -20, -150]],
+        way = cmd("scene.place", kind="way", name="qa_patrol", points=[[-220, -20, -140], [-210, -20, -140], [-210, -20, -150]],
                   on_surface=True)
         check(way.get("ok") and way.get("points") == 3, "C a way path is drawn over MCP", json.dumps(way)[:300])
-        again = mcp("scene.place", kind="way", name="qa_patrol", points=[[-200, -20, -140]])
+        again = cmd("scene.place", kind="way", name="qa_patrol", points=[[-200, -20, -140]])
         check(not again.get("ok"), "C a second object of the same name is refused")
         game_named = agr_patrols[0] if agr_patrols else ""
-        clash = mcp("scene.place", kind="way", name=game_named, points=[[-230, -20, -140], [-235, -20, -145]]) if game_named else {}
+        clash = cmd("scene.place", kind="way", name=game_named, points=[[-230, -20, -140], [-235, -20, -145]]) if game_named else {}
         check(clash.get("ok"), "C a path named like one of the game's can be drawn", json.dumps(clash)[:200])
 
         stalker = ""
-        roster = mcp("game.lookup", type="spawn_section", query="stalker", limit=400).get("entries", [])
+        roster = cmd("game.lookup", type="spawn_section", query="stalker", limit=400).get("entries", [])
         for row in roster:
             if row.get("extra") != "AI_STL_S":
                 continue
-            placed = mcp("scene.place", kind="spawn", section=row["id"], position=[-215.0, -20.0, -145.0], on_surface=True)
+            placed = cmd("scene.place", kind="spawn", section=row["id"], position=[-215.0, -20.0, -145.0], on_surface=True)
             if placed.get("ok"):
                 stalker = placed_name(placed)
                 break
         check(bool(stalker), "C a stalker is placed", str(len(roster)))
 
         def order_of(name: str) -> dict:
-            got = (mcp("scene.get", objects=[name], keys=["order"]).get("objects") or [{}])[0]
+            got = (cmd("scene.get", objects=[name], keys=["order"]).get("objects") or [{}])[0]
             return {p["key"]: p.get("value") for p in got.get("properties") or []}
 
         o = order_of(stalker)
         check(o.get("order.kind") == "None", "C a fresh stalker has no order", json.dumps(o)[:300])
-        o = mcp("scene.set", objects=[stalker], key="order.kind", value="patrol")
+        o = cmd("scene.set", objects=[stalker], key="order.kind", value="patrol")
         check(not o.get("ok") and "route" in o.get("error", ""), "C a patrol without a route is refused", json.dumps(o))
-        o = mcp("scene.set", objects=[stalker], set={"order": {"kind": "patrol", "route": "qa_patrol", "run": True, "hostile": True}})
+        o = cmd("scene.set", objects=[stalker], set={"order": {"kind": "patrol", "route": "qa_patrol", "run": True, "hostile": True}})
         got = order_of(stalker)
         check(o.get("ok") and got.get("order.kind") == "Patrol" and got.get("order.route") == "qa_patrol"
               and got.get("order.run") is True and got.get("order.hostile") is True,
               "C the order is the stalker's: a patrol of the route, running, hostile", json.dumps(got))
-        o = mcp("scene.set", objects=[start_name], key="order.kind", value="guard")
+        o = cmd("scene.set", objects=[start_name], key="order.kind", value="guard")
         check(not o.get("ok"), "C a Player Start takes no order")
 
-        e = mcp("level.export", kind="spawn", all=True)
+        e = cmd("level.export", kind="spawn", all=True)
         check(e.get("ok"), "C the spawn layer bakes", json.dumps(e)[:400])
         check(e.get("starts") == 1 and e.get("orders") == 1, "C with the start and the order",
               json.dumps({k: e.get(k) for k in ("starts", "paths", "orders")}))
@@ -366,15 +289,15 @@ def run(project: str) -> None:
               "C the order rides in the NPC's custom data", order_text[-300:])
 
         # ------------------------------------------------------------ D: one start
-        second = mcp("scene.place", kind="spawn", section="player_start", position=[-205.0, -20.0, -150.0])
-        g = mcp("world.info")
+        second = cmd("scene.place", kind="spawn", section="player_start", position=[-205.0, -20.0, -150.0])
+        g = cmd("world.info")
         probs = " ".join(g.get("problems", []))
         check("E201" in probs and start_name in probs and placed_name(second) in probs,
               "D two Player Starts are E201, both named", probs)
-        ex = mcp("mod.build", target="folder", path=out_dir)
+        ex = cmd("mod.build", target="folder", path=out_dir)
         check(not ex.get("ok") and "E201" in ex.get("error", ""), "D the build refuses them", json.dumps(ex)[:300])
-        mcp("scene.delete", objects=[placed_name(second)])
-        ex = mcp("mod.build", target="folder", path=out_dir)
+        cmd("scene.delete", objects=[placed_name(second)])
+        ex = cmd("mod.build", target="folder", path=out_dir)
         check(ex.get("ok"), "D with one start the module builds", json.dumps(ex)[:400])
         check("W205" in ex.get("warnings", ""), "D and the build says the start is outside the area", ex.get("warnings", "")[:300])
         root = os.path.join(out_dir, "modules", module)
@@ -386,7 +309,7 @@ def run(project: str) -> None:
         check(shipped_layer.count("op        = start") == 1, "D with one start")
 
         # ------------------------------------------------------------ E: quests
-        look = mcp("game.lookup", type="level_changer", query="", limit=500)
+        look = cmd("game.lookup", type="level_changer", query="", limit=500)
         entries = look.get("entries", [])
         check(len(entries) > 20, "E level_changer is a picker type", json.dumps(look)[:300])
         changer = next((x["id"] for x in entries if x.get("id") == way_down), entries[0]["id"] if entries else "")
@@ -394,89 +317,38 @@ def run(project: str) -> None:
         os.makedirs(os.path.dirname(qpath), exist_ok=True)
         with open(qpath, "w", encoding="utf-8") as f:
             f.write(QUEST_E024.replace("%CHANGER%", changer))
-        v = mcp("asset.check", path=qpath)
+        v = cmd("asset.check", path=qpath)
         vp = " ".join(p if isinstance(p, str) else json.dumps(p) for p in v.get("problems", []))
         check("E024" in vp and "a quest has no roles" in vp, "E { role = } in a quest is E024", vp[:400])
         check("W060" not in vp, "E a changer of the linked game is known", vp[:400])
-        mcp("file.delete", path="quests/qa_world_roles.nqasset")
+        cmd("file.delete", path="quests/qa_world_roles.nqasset")
 
         # ------------------------------------------------------------ F: stock again
-        s = mcp("world.set", preset="stock", area="")
+        s = cmd("world.set", preset="stock", area="")
         check(world(s).get("declared") is False, "F preset=stock is the stock game again", json.dumps(world(s)))
         check("[world]" not in read(mod_ltx), "F and mod.ltx carries no [world]")
 
         # ------------------------------------------------------------ G: the rules as the tab draws them
-        mcp("world.set", original_npcs=False, random_stalkers=True, mutants=True, player_choice="mutants")
-        mcp("world.view", open=True)
-        labels = {c.get("label") for c in mcp("ui.audit", id="world_rules").get("controls", [])}
+        cmd("world.set", original_npcs=False, random_stalkers=True, mutants=True, player_choice="mutants")
+        cmd("world.view", open=True)
+        labels = {c.get("label") for c in cmd("ui.audit", id="world_rules").get("controls", [])}
         check({"Remove", "Keep", "Player Decides"} <= labels, "G each rule is one segmented control: Remove, Keep, Player Decides",
               json.dumps(sorted(x for x in labels if x))[:400])
-        k = mcp("world.set", start_kit="wpn_knife, bandage=2")
+        k = cmd("world.set", start_kit="wpn_knife, bandage=2")
         check(k.get("ok") and len(k.get("start_kit", {}).get("items", [])) == 2, "G the start kit is a list of rows",
               json.dumps(k.get("start_kit"))[:300])
-        removed = mcp("world.set", start_kit_remove=True)
+        removed = cmd("world.set", start_kit_remove=True)
         check(removed.get("ok") and not removed.get("start_kit", {}).get("declared"), "G Remove Kit takes it out",
               json.dumps(removed.get("start_kit"))[:200])
-        mcp("world.set", preset="stock")
-        stalls = mcp("perf.stalls")
-        check(stalls.get("ok") and not stalls.get("stalls"), "G no UI pass waited", json.dumps(stalls)[:300])
+        cmd("world.set", preset="stock")
     finally:
         ed.close()
-        qa_target.remove_tree(out_dir)
+        qa.remove_tree(out_dir)
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--project", required=True, help="a project to COPY and run against")
-    ap.add_argument("--keep", action="store_true", help="keep the throw-away copy")
-    args = ap.parse_args()
-
-    src = os.path.abspath(args.project)
-    if not os.path.isdir(src):
-        print("no such project: " + src)
-        return 2
-    # C to F place things in the Escape scene; <project> has one
-    if not os.path.isfile(os.path.join(src, "rawdata", "levels", "l01_escape.level")):
-        print("the project has no rawdata\\levels\\l01_escape.level - the world checks need that scene: " + src)
-        return 2
-
-    work = tempfile.mkdtemp(prefix="grizzly_worldproj_")
-    copy = os.path.join(work, "QaWorld")
-    qa_target.copy_project(src, copy, ignore=())
-    print("running against a copy: " + copy, flush=True)
-    # the copy opens its OWN scene: project.ltx names the last one by absolute path
-    pl = os.path.join(copy, "project.ltx")
-    if os.path.isfile(pl):
-        text = read(pl)
-        low = text.lower()
-        at = low.find(src.lower())
-        while at >= 0:
-            text = text[:at] + copy + text[at + len(src):]
-            low = text.lower()
-            at = low.find(src.lower(), at + len(copy))
-        with open(pl, "w", encoding="utf-8", newline="") as f:
-            f.write(text)
-
-    ini = os.path.join(REPO, "_projects.ini")
-    ini_backup = None
-    if os.path.isfile(ini):
-        with open(ini, "rb") as f:
-            ini_backup = f.read()
-
-    try:
-        run(copy)
-    except Exception as exc:  # noqa: BLE001 - the report is the point
-        check(False, "the run finished", repr(exc))
-    finally:
-        if ini_backup is not None:
-            with open(ini, "wb") as f:
-                f.write(ini_backup)
-        if not args.keep:
-            qa_target.remove_tree(work)
-
-    ok = sum(1 for good, _ in results if good)
-    print(f"WORLD: DONE {ok}/{len(results)}", flush=True)
-    return 0 if ok == len(results) else 1
+    # C to F place things in the Escape scene
+    return qa.suite("WORLD", run, doc=__doc__, ignore=(), requires=["rawdata/levels/l01_escape.level"])
 
 
 if __name__ == "__main__":

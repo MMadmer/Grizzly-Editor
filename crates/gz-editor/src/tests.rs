@@ -220,7 +220,6 @@ mod cards {
             Spec::destroy("file.delete", "Deletes a file for good."),
             |_ed, _: &crate::NoParams, _| Ok(Value::Null),
         );
-        reg.add_sync("test", "old_style", |_ed, _a, _o| Ok(Value::Null));
         reg.install_help();
         let editor = Editor::new(EditorOptions::default(), rt.exec(), log, reg);
         (rt, editor)
@@ -312,7 +311,7 @@ mod cards {
         let top = text(Value::Null);
         assert!(top.contains("  scene    The open level (1)"), "{top}");
         assert!(top.contains("  project   (1)"), "{top}");
-        assert!(top.contains("Without a card (1): old_style"), "{top}");
+        assert!(!top.contains("Without a card"), "{top}");
         assert!(top.contains("  help  read"), "{top}");
         let area = text(json!("scene"));
         assert!(

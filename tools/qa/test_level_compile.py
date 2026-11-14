@@ -19,7 +19,6 @@ missing fails the scene with the sentence that says so.
 """
 from __future__ import annotations
 
-import argparse
 import glob
 import hashlib
 import json
@@ -32,23 +31,15 @@ import sys
 import tempfile
 import time
 
-import qa_target
+import qa
+from qa import check
+
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GOLDEN = os.path.join(HERE, "golden", "compile")
-LIMITED = os.path.join(qa_target.REPO, "tools", "rust", "limited.py")
 SCENES = ["mp_test", "mp_close_combat"]
 # the build's own record and the files of the editor's other steps are not the compiler's
 NOT_COMPARED = {"build.state", "build.err"}
-results: list[tuple[bool, str]] = []
-
-
-def check(ok: bool, text: str, detail: str = "") -> bool:
-    results.append((bool(ok), text))
-    print(("PASS " if ok else "FAIL ") + text + (("  <- " + detail) if detail and not ok else ""), flush=True)
-    return bool(ok)
-
-
 def chunks(data: bytes) -> dict[int, bytes]:
     """The top-level chunks of an X-Ray chunk file by id (the compressed flag taken off)."""
     out: dict[int, bytes] = {}
@@ -145,22 +136,22 @@ def set_scene(project: str, rel: str) -> None:
 
 
 def compile_scene(src: str, scene: str, record: bool) -> None:
-    lib = os.path.join(qa_target.REPO, "rawdata", "levels")
+    lib = os.path.join(qa.REPO, "rawdata", "levels")
     if not os.path.isfile(os.path.join(lib, scene + ".level")):
         check(False, "%s is in the editor's library (rawdata\\levels)" % scene)
         return
     work = tempfile.mkdtemp(prefix="gzqa_compile_")
     try:
-        project = qa_target.copy_project(src, os.path.join(work, "project"), trimmed=True)
+        project = qa.copy_project(src, os.path.join(work, "project"), trimmed=True)
         levels = os.path.join(project, "rawdata", "levels")
         os.makedirs(levels, exist_ok=True)
         shutil.copy2(os.path.join(lib, scene + ".level"), levels)
         shutil.copytree(os.path.join(lib, scene), os.path.join(levels, scene), dirs_exist_ok=True)
         set_scene(project, "rawdata/levels/%s.level" % scene)
-        exe = os.path.join(os.path.dirname(qa_target.exe()), "Grizzly-Cmd.exe")
+        exe = os.path.join(os.path.dirname(qa.exe()), "Grizzly-Cmd.exe")
         t = time.monotonic()
-        p = subprocess.run([sys.executable, LIMITED, "100", exe, "run", "level.build", "steps=light", "quality=draft",
-                            "-project", project, "-home", qa_target.HOME, "-json", "-quiet"],
+        p = subprocess.run([sys.executable, qa.LIMITED, "100", exe, "run", "level.build", "steps=light", "quality=draft",
+                            "-project", project, "-home", qa.home(), "-json", "-quiet"],
                            capture_output=True, text=True, timeout=120)
         seconds = time.monotonic() - t
         line = (p.stdout.strip().splitlines() or ["{}"])[-1]
@@ -192,24 +183,24 @@ def compile_scene(src: str, scene: str, record: bool) -> None:
             scene, len(got["files"]), got.get("visuals"), got.get("sectors"), got.get("portals"),
             (got.get("cform") or {}).get("triangles")), "; ".join(diff[:8]))
     finally:
-        qa_target.remove_tree(work)
+        qa.remove_tree(work)
+
+
+def run(ctx: qa.Run) -> None:
+    src = os.path.abspath(ctx.args.project)
+    if not os.path.isdir(src):
+        raise RuntimeError("no such project: " + src)
+    for scene in ctx.args.scene or SCENES:
+        compile_scene(src, scene, ctx.args.record)
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--project", required=True, help="a project to COPY and build in")
-    ap.add_argument("--record", action="store_true", help="write the records instead of comparing")
-    ap.add_argument("--scene", action="append", help="only this scene (again for more)")
-    args = ap.parse_args()
-    src = os.path.abspath(args.project)
-    if not os.path.isdir(src):
-        print("no such project: " + src)
-        return 2
-    for scene in args.scene or SCENES:
-        compile_scene(src, scene, args.record)
-    ok = sum(1 for good, _ in results if good)
-    print(f"LEVEL COMPILE: DONE {ok}/{len(results)}", flush=True)
-    return 0 if results and ok == len(results) else 1
+    def more(ap) -> None:
+        ap.add_argument("--project", required=True, help="a project to COPY and build in")
+        ap.add_argument("--record", action="store_true", help="write the records instead of comparing")
+        ap.add_argument("--scene", action="append", help="only this scene (again for more)")
+
+    return qa.suite("LEVEL COMPILE", run, doc=__doc__, add_args=more, project=False)
 
 
 if __name__ == "__main__":

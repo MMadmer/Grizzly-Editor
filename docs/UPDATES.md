@@ -150,4 +150,7 @@ API, as the repository is `GRIZZLY_UPDATE_REPO`. The mock's harness routes `/__a
 its byte; an editor restarted mid-download continues; a `200` to a ranged request falls back to the whole archive; a
 record that does not match the manifest is refused and nothing is applied; apply replaces, removes what the new
 version dropped and touches nothing unmanaged; a file held open rolls the whole transaction back; the restart
-handshake reports the new start. Nothing is ever fetched from, or published to, GitHub itself.
+handshake reports the new start. Its window phase, on a copy of a project and an installation a version behind,
+holds what the author sees: the chip in each state (available, downloading, waiting, ready, failed, manual), the
+startup toast, Help > Check for Updates..., the Update dialog's buttons per state and the Updates group of
+Preferences > General. Nothing is ever fetched from, or published to, GitHub itself.

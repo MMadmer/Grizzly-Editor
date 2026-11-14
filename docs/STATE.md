@@ -12,7 +12,7 @@ The three entry points on the final tree, each run bounded (`tools/rust/limited.
 
 | Entry point | Holds |
 |---|---|
-| `bash tools/rust/check.sh` | clippy and fmt clean; `unsafe` only in `gz-win`; one file dialog function; the editor answers `help` from a shell; text encodings; no test writes a program file; the release programs' icon and kind, the console twin's answer and exit code; the notices; no forbidden word |
+| `bash tools/rust/check.sh` | clippy and fmt clean; `unsafe` only in `gz-win`; one file dialog function; the editor answers `help` from a shell; every command has a card and none is registered without its type; text encodings; no test writes a program file; the release programs' icon and kind, the console twin's answer and exit code; the notices; no forbidden word |
 | `bash tools/rust/test.sh --all` | the unit tests of every crate and the corpus tests over the editor's library and the linked game |
 | `python tools/qa/run_all.py --with-game` | the QA suites, each on a copy of a project, on a port and a home of its own, each ending on an empty `perf.stalls`; a suite fails when an editor of it logged a graphics device error or a panic |
 

@@ -7,7 +7,7 @@
 # - The editor's own files (_projects.ini, the settings file) are backed up before and put
 #   back byte for byte after, whatever the run did.
 # - The editor starts minimised and never takes the foreground; it is closed with
-#   window_control and killed only if it does not leave.
+#   app.quit and killed only if it does not leave.
 #
 # The driver is a Python script that gets the port as its first argument and talks to the
 # editor over the socket (one JSON line in, one out). Its output is this script's output.

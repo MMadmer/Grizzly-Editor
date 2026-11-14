@@ -12,83 +12,15 @@ whole, with nothing escaping its window.
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
-import shutil
-import socket
-import subprocess
 import sys
 import tempfile
 import time
 
-import qa_target
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(HERE))
-MCP = qa_target.MCP
-
-results: list[tuple[bool, str]] = []
-
-
-def check(ok: bool, text: str, detail: str = "") -> bool:
-    results.append((bool(ok), text))
-    print(("PASS " if ok else "FAIL ") + text + (("  <- " + detail) if detail and not ok else ""), flush=True)
-    return bool(ok)
-
-
-def mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
-    payload = {"cmd": cmd}
-    payload.update(extra)
-    with socket.create_connection(MCP, timeout=10) as s:
-        s.settimeout(timeout)
-        s.sendall((json.dumps(payload) + "\n").encode())
-        buf = b""
-        while not buf.endswith(b"\n"):
-            chunk = s.recv(1 << 20)
-            if not chunk:
-                break
-            buf += chunk
-    return json.loads(buf.decode("utf-8"))
-
-
-class Editor:
-    def __init__(self) -> None:
-        self.proc: subprocess.Popen | None = None
-
-    def start(self, project: str) -> None:
-        exe = qa_target.exe()
-        if not os.path.isfile(exe):
-            raise RuntimeError("build the editor first: " + exe)
-        startup = subprocess.STARTUPINFO()
-        startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
-        startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
-        qa_target.guard_project(project)
-        self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project],
-                                     cwd=os.path.dirname(exe), startupinfo=startup)
-        deadline = time.monotonic() + 240
-        while time.monotonic() < deadline:
-            try:
-                if mcp("mod.info", timeout=30).get("ok"):
-                    return
-            except OSError:
-                pass
-            if self.proc.poll() is not None:
-                raise RuntimeError("the editor exited during startup")
-            time.sleep(0.05)
-        raise RuntimeError("the editor never opened the project")
-
-    def close(self) -> None:
-        try:
-            mcp("app.quit")
-        except OSError:
-            pass
-        if self.proc:
-            try:
-                self.proc.wait(timeout=120)
-            except subprocess.TimeoutExpired:
-                print("! the editor did not close on its own", flush=True)
+import qa
+from qa import check, cmd
 
 
 COURIER = """return {
@@ -266,7 +198,7 @@ def char_write(text: str) -> dict:
     os.makedirs(os.path.dirname(full), exist_ok=True)
     with open(full, "w", encoding="utf-8") as f:
         f.write(text)
-    r = mcp("asset.check", path=rel)
+    r = cmd("asset.check", path=rel)
     return {"ok": r.get("ok"), "file": rel, "problems": problem_lines(r), "answer": r}
 
 
@@ -280,7 +212,7 @@ def char_delete(cid: str) -> bool:
 
 def char_ids() -> list[str]:
     """The project's characters as the editor knows them (the pickers' list)."""
-    return sorted(e.get("id") for e in mcp("game.lookup", type="character_id", limit=500).get("entries", []))
+    return sorted(e.get("id") for e in cmd("game.lookup", type="character_id", limit=500).get("entries", []))
 
 
 def until(what, seconds: float = 10.0):
@@ -293,12 +225,12 @@ def until(what, seconds: float = 10.0):
     return got
 
 
-def quest_write(rel: str, text: str) -> dict:
+def write_quest(rel: str, text: str) -> dict:
     full = os.path.join(PROJECT[0], rel.replace("/", os.sep))
     os.makedirs(os.path.dirname(full), exist_ok=True)
     with open(full, "w", encoding="utf-8") as f:
         f.write(text)
-    return mcp("asset.check", path=rel)
+    return cmd("asset.check", path=rel)
 
 
 def remove(rel: str) -> None:
@@ -307,14 +239,14 @@ def remove(rel: str) -> None:
         os.remove(full)
 
 
-def run_spawn_checks(mcp, check, module, out_dir, os, json):
+def run_spawn_checks(module, out_dir):
     """spawn.npc: the character is named by its asset id, and a ref per NPC."""
     # its own cast: a template and a character that starts from it
     char_write(QA_TPL)
     char_write(QA_RUNNER)
     until(lambda: "qa_runner" in char_ids())
     import graph_ref
-    by_id = graph_ref.kinds(str(mcp("asset.reference", kind="quest").get("text", "")))
+    by_id = graph_ref.kinds(str(cmd("asset.reference", kind="quest").get("text", "")))
     kind = by_id.get("spawn.npc", {})
     check(bool(kind), "F the catalog carries spawn.npc")
     rows = [r.get("name") for r in kind.get("rows", [])] if isinstance(kind.get("rows"), list) else []
@@ -324,23 +256,23 @@ def run_spawn_checks(mcp, check, module, out_dir, os, json):
     unique = next((r for r in kind.get("rows", []) if r.get("name") == "unique"), {})
     check("default" not in unique, "F unique declares no flat default - it follows what the row names", json.dumps(unique))
 
-    look = mcp("game.lookup", type="character_id")
+    look = cmd("game.lookup", type="character_id")
     entries = {e.get("id"): e for e in look.get("entries", [])}
     check("qa_courier" in entries and "qa_runner" in entries, "F lookup character_id lists the project's characters",
           json.dumps(sorted(entries)))
     check("template" in str(entries.get("qa_tpl", {}).get("extra", "")), "F and says which one is a template",
           json.dumps(entries.get("qa_tpl")))
 
-    w = quest_write("quests/qa_spawner.nqasset", SPAWNER)
+    w = write_quest("quests/qa_spawner.nqasset", SPAWNER)
     errs = " ".join(p.get("code", "") for p in w.get("problems", []) if str(p.get("code", "")).startswith("E"))
     check(w.get("ok") and errs == "", "F a quest that spawns characters by their asset id validates", errs or json.dumps(w)[:200])
-    refs = mcp("game.lookup", type="ref_name", path="quests/qa_spawner.nqasset")
+    refs = cmd("game.lookup", type="ref_name", path="quests/qa_spawner.nqasset")
     names = sorted(e.get("id") for e in refs.get("entries", []))
     check(names == ["courier", "extra", "guard"], "F every row's ref is a ref of the graph", json.dumps(names))
-    outline = str(mcp("graph.get", doc="quests/qa_spawner.nqasset").get("outline", ""))
+    outline = str(cmd("graph.get", doc="quests/qa_spawner.nqasset").get("outline", ""))
     check("npcs={qa_courier" in outline, "F the outline reads a row as who it creates, not as the ref it keeps", outline[:300])
 
-    b = quest_write("quests/qa_spawner_bad.nqasset", SPAWNER_BAD)
+    b = write_quest("quests/qa_spawner_bad.nqasset", SPAWNER_BAD)
     text = " | ".join("%s %s" % (p.get("code"), p.get("text", "")) for p in b.get("problems", []))
     check("not a character of this project" in text, "F a character that does not exist is refused", text[:300])
     check("template" in text, "F a template cannot be spawned, and the message says why", text[:300])
@@ -348,7 +280,7 @@ def run_spawn_checks(mcp, check, module, out_dir, os, json):
     check("unknown key 'uniqe'" in text, "F a misspelt key is an error, not a silent no-op", text[:300])
     remove("quests/qa_spawner_bad.nqasset")
 
-    built = mcp("mod.build", target="folder", path=out_dir)
+    built = cmd("mod.build", target="folder", path=out_dir)
     check(built.get("ok"), "F the module builds with the spawner in it", json.dumps(built)[:200])
     shipped = os.path.join(out_dir, "modules", module, "quests", "qa_spawner.nqasset")
     check(os.path.isfile(shipped), "F and the quest ships", shipped)
@@ -359,7 +291,7 @@ def run_spawn_checks(mcp, check, module, out_dir, os, json):
     # deleting the character turns the same quest into an error - no restart, no refresh
     char_delete("qa_runner")
     until(lambda: "qa_runner" not in char_ids())
-    v = mcp("asset.check", path="quests/qa_spawner.nqasset")
+    v = cmd("asset.check", path="quests/qa_spawner.nqasset")
     text = " | ".join("%s %s" % (p.get("code"), p.get("text", "")) for p in v.get("problems", []))
     check("qa_runner" in text and "not a character" in text, "F a deleted character is an error in the quest that names it", text[:300])
 
@@ -367,11 +299,11 @@ def run_spawn_checks(mcp, check, module, out_dir, os, json):
     remove("quests/qa_spawner.nqasset")
 
 
-def run_base_checks(mcp, check, read, module, out_dir, os, json):
+def run_base_checks(module, out_dir):
     """Inheritance: a shared kit written once, and what refuses to inherit."""
     k = char_write(KIT)
     check(k.get("ok"), "E a template is written", json.dumps(k)[:200])
-    look = until(lambda: next((e for e in mcp("game.lookup", type="character_id", limit=500).get("entries", [])
+    look = until(lambda: next((e for e in cmd("game.lookup", type="character_id", limit=500).get("entries", [])
                                if e.get("id") == "qa_kit"), None))
     check("template" in str((look or {}).get("extra", "")), "E and the editor knows it is one", json.dumps(look))
     check(k.get("problems") == [], "E a template needs no name and no model",
@@ -384,7 +316,7 @@ def run_base_checks(mcp, check, read, module, out_dir, os, json):
     check(g.get("problems") == [], "E with no problems: its name and model come from the base",
           json.dumps(g.get("problems")))
 
-    built = mcp("mod.build", target="folder", path=out_dir)
+    built = cmd("mod.build", target="folder", path=out_dir)
     check(built.get("ok"), "E the module builds", json.dumps(built)[:200])
     root = os.path.join(out_dir, "modules", module)
     for name in ("qa_kit", "qa_kitguard"):
@@ -398,50 +330,50 @@ def run_base_checks(mcp, check, read, module, out_dir, os, json):
           json.dumps(o.get("problems")))
     char_write(LOOP_A)
     char_write(LOOP_B)
-    loops = until(lambda: "E112" in " ".join(problem_lines(mcp("asset.check", path="characters"))))
+    loops = until(lambda: "E112" in " ".join(problem_lines(cmd("asset.check", path="characters"))))
     check(bool(loops), "E a base that comes back to itself is reported",
-          json.dumps(problem_lines(mcp("asset.check", path="characters")))[:300])
+          json.dumps(problem_lines(cmd("asset.check", path="characters")))[:300])
 
     for gone in ("qa_orphan", "qa_loop_a", "qa_loop_b", "qa_kitguard", "qa_kit"):
         char_delete(gone)
 
 
-def run_ui_checks(mcp, check, json):
+def run_ui_checks():
     """The Characters tab: opened on a character over MCP, looked at, and nothing of it leaves its window."""
-    v = mcp("characters.view")
+    v = cmd("characters.view")
     check(v.get("ok") and v.get("tab") == "characters", "U characters.view answers", json.dumps(v)[:300])
-    v = mcp("characters.view", select="qa_courier")
+    v = cmd("characters.view", select="qa_courier")
     check(v.get("ok") and v.get("active") and v.get("selected") == "qa_courier", "U it opens the tab on a character",
           json.dumps(v)[:300])
     check(v.get("dirty") is False and v.get("problems") == [], "U with nothing unsaved and no problems", json.dumps(v)[:300])
     check(v.get("count") == 2 and v.get("file", "").endswith("qa_courier.npcasset"), "U the list has both, the form its file",
           json.dumps(v)[:300])
-    check(mcp("ui.list").get("active_tab") == "characters", "U Characters is the active tab")
-    audit = mcp("ui.audit", id="characters")
+    check(cmd("ui.list").get("active_tab") == "characters", "U Characters is the active tab")
+    audit = cmd("ui.audit", id="characters")
     check(audit.get("ok") and not audit.get("escaped"), "U nothing escapes the Characters tab",
           json.dumps(audit.get("escaped"))[:400])
     labels = {c.get("label") for c in audit.get("controls", [])}
     for want in ("Identity", "Name and Bio"):
         check(want in labels, "U the form draws " + want, json.dumps(sorted(x for x in labels if x))[:400])
-    toolbar = {c.get("label") for c in mcp("ui.audit", id="##toolbar").get("controls", [])}
+    toolbar = {c.get("label") for c in cmd("ui.audit", id="##toolbar").get("controls", [])}
     check({"Save", "Revert", "Delete..."} <= toolbar, "U its toolbar holds Save, Revert and Delete...",
           json.dumps(sorted(x for x in toolbar if x))[:400])
-    frame = mcp("shot.window")
+    frame = cmd("shot.window")
     check(frame.get("ok"), "U the tab is drawn with its preview column", json.dumps({k: frame.get(k) for k in ("width", "height")}))
     # what is below the fold is drawn once the form scrolls to it
-    scrolled = mcp("ui.scroll", id="characters", to="bottom")
+    scrolled = cmd("ui.scroll", id="characters", to="bottom")
     check(scrolled.get("ok"), "U the form scrolls", json.dumps(scrolled)[:300])
-    labels = {c.get("label") for c in mcp("ui.audit", id="characters").get("controls", [])}
+    labels = {c.get("label") for c in cmd("ui.audit", id="characters").get("controls", [])}
     for want in ("Starting Kit", "Add Item"):
         check(want in labels, "U the form draws " + want, json.dumps(sorted(x for x in labels if x))[:400])
-    v = mcp("characters.view", path="characters/qa_guard.npcasset")
+    v = cmd("characters.view", path="characters/qa_guard.npcasset")
     check(v.get("ok") and v.get("selected") == "qa_guard", "U a character is found by its path too", json.dumps(v)[:300])
-    gone = mcp("characters.view", select="qa_nobody")
+    gone = cmd("characters.view", select="qa_nobody")
     check(not gone.get("ok") and "qa_nobody" in gone.get("error", ""), "U one that does not exist is refused by name",
           json.dumps(gone))
-    closed = mcp("ui.tab", action="close", doc="characters")
+    closed = cmd("ui.tab", action="close", doc="characters")
     check(closed.get("ok"), "U the tab closes when nothing is unsaved", json.dumps(closed)[:300])
-    check(mcp("characters.view").get("open") is False, "U and characters.view says it is closed")
+    check(cmd("characters.view").get("open") is False, "U and characters.view says it is closed")
 
 
 def read(path: str) -> str:
@@ -449,13 +381,14 @@ def read(path: str) -> str:
         return f.read().decode("cp1251", "replace")
 
 
-def run(project: str) -> None:
-    ed = Editor()
+def run(ctx: qa.Run) -> None:
+    project = ctx.project
+    ed = qa.Editor(project)
     out_dir = tempfile.mkdtemp(prefix="grizzly_chars_")
     try:
-        ed.start(project)
+        ed.start()
 
-        manifest = mcp("mod.info").get("manifest", {})
+        manifest = cmd("mod.info").get("manifest", {})
         module = manifest.get("id", "")
         check(bool(module), "A the project has a module id", json.dumps(manifest)[:200])
 
@@ -480,7 +413,7 @@ def run(project: str) -> None:
         ids = until(lambda: char_ids() == ["qa_courier", "qa_guard"]) and char_ids()
         check(ids == ["qa_courier", "qa_guard"], "A both are known to the editor", str(char_ids()))
 
-        ref = mcp("asset.reference", kind="character")
+        ref = cmd("asset.reference", kind="character")
         check(ref.get("ok") and "| `supplies` |" in ref.get("text", ""), "A asset.reference kind=character lists the keys",
               json.dumps(ref)[:200])
 
@@ -500,7 +433,7 @@ def run(project: str) -> None:
         odd = char_write(COURIER.replace('"qa_courier"', '"qa_martian"')
                          .replace('community = "stalker"', 'community = "martians"'))
         odd_problems = " ".join(odd.get("problems", []))
-        if mcp("game.lookup", type="community", limit=5).get("entries"):
+        if cmd("game.lookup", type="community", limit=5).get("entries"):
             check("W114" in odd_problems and "martians" in odd_problems,
                   "B a community the linked game does not list is a warning that names it", odd_problems)
             check("W114" not in " ".join(w.get("problems", [])), "B and one it does list is not")
@@ -514,7 +447,7 @@ def run(project: str) -> None:
                          .replace('rank      = 300,', 'rank      = 300,\n    start_dialog = "qa_no_such_dialog",')
                          .replace('supplies  = {', 'supplies  = {\n        { section = "qa_no_such_item" },'))
         odd_problems = " ".join(odd.get("problems", []))
-        if mcp("game.lookup", type="character_icon", limit=5).get("entries"):
+        if cmd("game.lookup", type="character_icon", limit=5).get("entries"):
             check("W115" in odd_problems, "B a portrait the linked game does not have is a warning", odd_problems)
             check("W116" in odd_problems, "B and so is a dialog", odd_problems)
             check("W117" in odd_problems and "qa_no_such_item" in odd_problems, "B and an item of the kit", odd_problems)
@@ -527,17 +460,17 @@ def run(project: str) -> None:
         forester = char_write(COURIER.replace('"qa_courier"', '"qa_forester"')
                               .replace("stalker_neutral\\\\stalker_neutral_1", "stalker_lesnik\\\\stalker_lesnik_1"))
         forester_problems = " ".join(forester.get("problems", []))
-        if mcp("game.lookup", type="character_icon", limit=5).get("entries"):
+        if cmd("game.lookup", type="character_icon", limit=5).get("entries"):
             check("E123" in forester_problems and "eye_left" in forester_problems and "jaw_1" in forester_problems,
                   "B a model on a skeleton of its own is an error naming the bones it lacks", forester_problems)
             check("E123" not in " ".join(w.get("problems", [])), "B while a stalker model has them all")
         char_delete("qa_forester")
 
         # ---------------------------------------------------------------- U: the Characters tab
-        run_ui_checks(mcp, check, json)
+        run_ui_checks()
 
         # ---------------------------------------------------------------- C: the build
-        built = mcp("mod.build", target="folder", path=out_dir)
+        built = cmd("mod.build", target="folder", path=out_dir)
         check(built.get("ok"), "C the module builds", json.dumps(built)[:300])
 
         root = os.path.join(out_dir, "modules", module)
@@ -550,17 +483,17 @@ def run(project: str) -> None:
         check(not made, "C and the build makes nothing of them", json.dumps(made)[:300])
 
         # ---------------------------------------------------------------- E: inheritance
-        run_base_checks(mcp, check, read, module, out_dir, os, json)
+        run_base_checks(module, out_dir)
 
         # ---------------------------------------------------------------- F: spawning by asset
-        run_spawn_checks(mcp, check, module, out_dir, os, json)
+        run_spawn_checks(module, out_dir)
 
         # ---------------------------------------------------------------- D: removal
         check(char_delete("qa_guard"), "D a character's file is removed")
         check(char_delete("qa_courier"), "D and so is the last one")
         until(lambda: char_ids() == [])
 
-        built2 = mcp("mod.build", target="folder", path=out_dir)
+        built2 = cmd("mod.build", target="folder", path=out_dir)
         check(built2.get("ok"), "D the module builds again", json.dumps(built2)[:200])
         gone = [os.path.join(b, f) for b, _, fs in os.walk(root) for f in fs if f.lower().endswith(".npcasset")]
         check(not gone, "D and with them what the module ships", json.dumps(gone)[:200])
@@ -584,52 +517,14 @@ def run(project: str) -> None:
               "S one neither the game nor the module has is still W117", json.dumps(lines)[:400])
         char_delete("qa_own")
         os.remove(own)
-        stalls = mcp("perf.stalls")
-        check(stalls.get("ok") and not stalls.get("stalls"), "S no UI pass waited", json.dumps(stalls)[:300])
 
     finally:
         ed.close()
-        qa_target.remove_tree(out_dir)
+        qa.remove_tree(out_dir)
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--project", required=True, help="a project to COPY and run against")
-    ap.add_argument("--keep", action="store_true", help="keep the throw-away copy")
-    args = ap.parse_args()
-
-    src = os.path.abspath(args.project)
-    if not os.path.isdir(src):
-        print("no such project: " + src)
-        return 2
-
-    work = tempfile.mkdtemp(prefix="grizzly_charproj_")
-    copy = os.path.join(work, "QaCharacters")
-    # the run deletes the author's characters (A): the author's quests, which name them, stay
-    # behind, or the module no longer builds (E030) for a reason that is not this suite's
-    qa_target.copy_project(src, copy, ignore=(".git", "releases", "temp", "logs", "backup", "quests"))
-    print("running against a copy: " + copy, flush=True)
-
-    ini = os.path.join(REPO, "_projects.ini")
-    ini_backup = None
-    if os.path.isfile(ini):
-        with open(ini, "rb") as f:
-            ini_backup = f.read()
-
-    try:
-        run(copy)
-    except Exception as exc:  # noqa: BLE001 - the report is the point
-        check(False, "the run finished", repr(exc))
-    finally:
-        if ini_backup is not None:
-            with open(ini, "wb") as f:
-                f.write(ini_backup)
-        if not args.keep:
-            qa_target.remove_tree(work)
-
-    ok = sum(1 for good, _ in results if good)
-    print(f"CHARACTERS: DONE {ok}/{len(results)}", flush=True)
-    return 0 if ok == len(results) else 1
+    return qa.suite("CHARACTERS", run, doc=__doc__, ignore=(".git", "releases", "temp", "logs", "backup", "quests"))
 
 
 if __name__ == "__main__":

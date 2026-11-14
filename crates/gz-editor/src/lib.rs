@@ -27,7 +27,7 @@ mod saver;
 mod services;
 mod spec;
 
-pub use args::{Args, ArgsExt};
+pub use args::Args;
 pub use camera::{CameraPose, ViewCamera};
 pub use editor::{
     AppPaths, DirtyDoc, DirtySource, Editor, EditorOptions, Flags, ProjectSession, SettleFuture,

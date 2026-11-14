@@ -23,24 +23,18 @@ The target and the release folder are inside the copy: nothing reaches the linke
 """
 from __future__ import annotations
 
-import argparse
 import base64
 import hashlib
 import json
 import os
-import shutil
-import socket
-import subprocess
 import sys
-import tempfile
 import threading
 import time
 
-import qa_target
+import qa
+from qa import check, cmd
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(HERE))
-MCP = qa_target.MCP
+
 PAYLOAD_FILES = 24
 PAYLOAD_MB = 48
 PHASES = "ABCDTE"
@@ -50,52 +44,6 @@ FRAME_WORK_MEAN_MS = 16.0
 # and the worst frame of the build: 18.0-46.5 ms measured once tessellation left rayon's global pool (STATE.md, "The
 # reviewer's findings, closed"); 36-218 ms before, the UI thread asleep in `par_iter`
 FRAME_WORK_MAX_MS = 64.0
-
-results: list[tuple[bool, str]] = []
-
-
-def check(ok: bool, text: str, detail: str = "") -> bool:
-    results.append((bool(ok), text))
-    print(("PASS " if ok else "FAIL ") + text + (("  <- " + detail) if detail and not ok else ""), flush=True)
-    return bool(ok)
-
-
-def mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
-    payload = {"cmd": cmd}
-    payload.update(extra)
-    with socket.create_connection(MCP, timeout=10) as s:
-        s.settimeout(timeout)
-        s.sendall((json.dumps(payload) + "\n").encode())
-        buf = b""
-        while not buf.endswith(b"\n"):
-            chunk = s.recv(1 << 20)
-            if not chunk:
-                break
-            buf += chunk
-    return json.loads(buf.decode("utf-8"))
-
-
-def start_editor(project: str, env: dict | None = None) -> subprocess.Popen:
-    exe = qa_target.exe()
-    startup = subprocess.STARTUPINFO()
-    startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
-    # shown, never activated: a minimised editor draws no frame by itself, and A times the frames
-    startup.wShowWindow = 4  # SW_SHOWNOACTIVATE
-    qa_target.guard_project(project)
-    proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project], cwd=os.path.dirname(exe), startupinfo=startup,
-                            env={**os.environ, **(env or {})})
-    deadline = time.monotonic() + 240
-    while time.monotonic() < deadline:
-        try:
-            if mcp("mod.info", timeout=30).get("ok"):
-                return proc
-        except OSError:
-            pass
-        if proc.poll() is not None:
-            raise RuntimeError("the editor exited during startup")
-        time.sleep(0.05)
-    raise RuntimeError("the editor never opened the project")
-
 
 def fingerprint(root: str) -> dict[str, str]:
     out = {}
@@ -116,11 +64,11 @@ class Job(threading.Thread):
         self.start()
 
     def run(self) -> None:
-        self.answer = mcp(self.cmd, timeout=590.0, **self.extra)
+        self.answer = cmd(self.cmd, timeout=590.0, **self.extra)
 
 
 def job_row() -> dict:
-    rows = mcp("ui.tasks").get("running") or []
+    rows = cmd("ui.tasks").get("running") or []
     return next((r for r in rows if r.get("key")), {})
 
 
@@ -148,48 +96,48 @@ class Run:
     def ensure_built(self) -> None:
         """What B, C and D start from: a module built from the payload as it was written."""
         if not self.built:
-            r = mcp("mod.build", target="folder", path=self.target, timeout=590.0)
+            r = cmd("mod.build", target="folder", path=self.target, timeout=590.0)
             self.built = bool(r.get("ok"))
             check(self.built, "the module is built for the phase", json.dumps(r)[:300])
 
     # ---- A: the editor goes on while a build copies ---------------------------------------------------------------
     def a(self) -> None:
-        mcp("ui.tab", action="open", doc="level")
-        mcp("viewport.view", real_time=True)
-        mcp("perf.frames")
+        cmd("ui.tab", action="open", doc="level")
+        cmd("viewport.view", real_time=True)
+        cmd("perf.frames")
         job = Job("mod.build", target="folder", path=self.target)
         row = wait_for_copy(job)
         check(bool(row), "A the Task Center follows the build's copying", json.dumps(job_row())[:300])
         check("Check, Copy, Install" == row.get("steps"), "A it names the steps", json.dumps(row)[:300])
         check(" of " in row.get("numbers", "") and "files" in row.get("numbers", ""), "A it says how far in bytes and files",
               json.dumps(row)[:300])
-        refused = mcp("mod.build", target="folder", path=self.target) if job.is_alive() else {"error": "the build ended first"}
+        refused = cmd("mod.build", target="folder", path=self.target) if job.is_alive() else {"error": "the build ended first"}
         check("running" in refused.get("error", ""), "A a second build is refused while one runs", json.dumps(refused)[:300])
         worst = 0.0
         copying = 0
         while job.is_alive() and copying < 60:
             began = time.monotonic()
-            mcp("ping", timeout=30)
+            cmd("ping", timeout=30)
             worst = max(worst, time.monotonic() - began)
             copying += 1
             time.sleep(.05)
-        check(worst < .75, f"A a command is answered at once while it copies ({worst * 1000:.0f} ms at worst, {copying} asked)")
+        check(worst < .75, f"A a command is answered at once while it copies ({worst * 1000:.0f} ms at worst, {copying} asked)", timing=True)
         if job.is_alive() and self.shots:
-            mcp("ui.popup", show="tasks")
-            pic = mcp("shot.window")
+            cmd("ui.popup", show="tasks")
+            pic = cmd("shot.window")
             if pic.get("png_base64"):
                 os.makedirs(self.shots, exist_ok=True)
                 with open(os.path.join(self.shots, "job_card.png"), "wb") as f:
                     f.write(base64.b64decode(pic["png_base64"]))
         job.join()
-        pacing = mcp("perf.frames")
-        mcp("viewport.view", real_time=False)
+        pacing = cmd("perf.frames")
+        cmd("viewport.view", real_time=False)
         work = pacing.get("frame_work_ms") or {}
         check(pacing.get("sampled_frames", 0) > 0 and work.get("mean", 99.0) < FRAME_WORK_MEAN_MS
               and work.get("max", 999.0) < FRAME_WORK_MAX_MS,
               "A the frames keep their own time during the build (%s frames, work mean %s ms, p95 %s, max %s; wait max %s)"
               % (pacing.get("sampled_frames"), work.get("mean"), work.get("p95"), work.get("max"),
-                 (pacing.get("frame_wait_ms") or {}).get("max")), json.dumps(pacing)[:400])
+                 (pacing.get("frame_wait_ms") or {}).get("max")), json.dumps(pacing)[:400], timing=True)
         check(job.answer.get("ok") and job.answer.get("files", 0) >= PAYLOAD_FILES, "A the build answers when it has ended",
               json.dumps(job.answer)[:300])
         check(not os.path.exists(self.scratch), "A it leaves no scratch folder beside the module")
@@ -204,8 +152,8 @@ class Run:
                 f.write((i + 1000).to_bytes(4, "little"))
         job = Job("mod.build", target="folder", path=self.target)
         check(bool(wait_for_copy(job)), "B the changed files are being copied")
-        running = [j for j in mcp("job.list", running=True).get("jobs", []) if j.get("kind") == "build"] or             mcp("job.list", running=True).get("jobs", [])
-        stopped = mcp("job.stop", job=running[0].get("id")) if running else {"ok": False, "error": "no job runs"}
+        running = [j for j in cmd("job.list", running=True).get("jobs", []) if j.get("kind") == "build"] or             cmd("job.list", running=True).get("jobs", [])
+        stopped = cmd("job.stop", job=running[0].get("id")) if running else {"ok": False, "error": "no job runs"}
         job.join()
         check(stopped.get("ok") and job.answer.get("code") == "cancelled", "B Stop ends the build", json.dumps(job.answer)[:300])
         check(fingerprint(self.module) == before, "B the last build is exactly as it was")
@@ -218,13 +166,13 @@ class Run:
     # ---- C: what the last build holds is not written again ----------------------------------------------------------
     def c(self) -> None:
         self.ensure_built()
-        built = mcp("mod.build", target="folder", path=self.target, timeout=590.0)
+        built = cmd("mod.build", target="folder", path=self.target, timeout=590.0)
         check(built.get("ok"), "C a build after that goes through", json.dumps(built)[:300])
         again_ids = {n: os.stat(os.path.join(self.module, n)).st_ino for n in fingerprint(self.module) if n.endswith(".dds")}
         with open(os.path.join(self.payload, "p_05.dds"), "r+b") as f:
             f.write(b"NEW!")
         began = time.monotonic()
-        built = mcp("mod.build", target="folder", path=self.target, timeout=590.0)
+        built = cmd("mod.build", target="folder", path=self.target, timeout=590.0)
         spent = time.monotonic() - began
         rel = os.path.join("gamedata", "textures", "qa_job", "p_05.dds")
         now = {n: os.stat(os.path.join(self.module, n)).st_ino for n in again_ids}
@@ -241,7 +189,7 @@ class Run:
         before = fingerprint(self.module)
         held = open(os.path.join(self.module, rel), "rb")
         try:
-            refused = mcp("mod.build", target="folder", path=self.target, timeout=590.0)
+            refused = cmd("mod.build", target="folder", path=self.target, timeout=590.0)
         finally:
             held.close()
         check("in use" in refused.get("error", ""), "D a module in use is refused and named", json.dumps(refused)[:300])
@@ -254,7 +202,7 @@ class Run:
         try:
             target = os.path.join(os.path.dirname(self.game), "game_t").replace("\\", "/")
             began = time.monotonic()
-            a = mcp("mod.build", target="folder", path=target, timeout=60)
+            a = cmd("mod.build", target="folder", path=target, timeout=60)
             took = time.monotonic() - began
             jobs = a.get("jobs") or [{}]
             check(a.get("ok") is False and a.get("running") is True and jobs[0].get("kind") == "build"
@@ -267,12 +215,12 @@ class Run:
             deadline = time.monotonic() + 240
             info = {}
             while time.monotonic() < deadline:
-                info = next((j for j in mcp("job.list").get("jobs", []) if j.get("id") == job_id), {})
+                info = next((j for j in cmd("job.list").get("jobs", []) if j.get("id") == job_id), {})
                 if info.get("state") != "running":
                     break
                 time.sleep(0.2)
             check(info.get("state") == "done", "T the job ends by itself, done, as jobs shows", json.dumps(info)[:300])
-            quick = mcp("mod.info")
+            quick = cmd("mod.info")
             check(quick.get("ok") and "running" not in quick, "T a command that ends in time answers as before",
                   json.dumps(quick)[:200])
         finally:
@@ -297,68 +245,48 @@ class Run:
         check(job.answer.get("ok") and job.answer.get("packages"), "E the packaging answers as it always did",
               json.dumps(job.answer)[:300])
         check(seen_pack, "E the Task Center follows it to its packing step")
-        check(worst < .75, f"E a command is answered at once while it packs ({worst * 1000:.0f} ms at worst)")
+        check(worst < .75, f"E a command is answered at once while it packs ({worst * 1000:.0f} ms at worst)", timing=True)
         names = os.listdir(os.path.join(self.project, "temp")) if os.path.isdir(os.path.join(self.project, "temp")) else []
         check(not [n for n in names if n.startswith("release_stage_")], "E its stage is gone", str(names))
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--project", required=True)
-    parser.add_argument("--only", help="phase letters, e.g. A,C")
-    parser.add_argument("--shots")
-    args = parser.parse_args()
-    asked = [p for p in (args.only or PHASES).replace(",", "").upper() if p.strip()]
-    only = [p for p in PHASES if p in asked]
-    if any(p not in PHASES for p in asked):
-        print("no such phase: %s (%s)" % (args.only, PHASES))
-        return 2
-    source = os.path.abspath(args.project)
-    work = tempfile.mkdtemp(prefix="grizzly_job_")
-    project = os.path.join(work, "project")
-    game = os.path.join(work, "game")
-    release = os.path.join(work, "release")
-    proc = None
+def run(ctx: qa.Run) -> None:
+    only = [p for p in PHASES if p in (ctx.only.replace(",", "").upper() or PHASES)]
+    project = ctx.project
+    game = os.path.join(ctx.work, "game")
+    release = os.path.join(ctx.work, "release")
+    payload = os.path.join(project, "gamedata", "textures", "qa_job")
+    os.makedirs(payload)
+    # only the phases that copy need the gigabyte: a packaging alone gets the two files it packs
+    files = PAYLOAD_FILES if set(only) - {"E"} else 0
+    block = os.urandom(PAYLOAD_MB << 20)
+    for i in range(files):
+        with open(os.path.join(payload, f"p_{i:02}.dds"), "wb") as f:
+            f.write(i.to_bytes(4, "little") + block)
+    qa.mark("payload")
+    # shown, never activated: a hidden editor draws no frame by itself, and A times the frames
+    ed = qa.Editor(project, visible=True).start()
     try:
-        qa_target.copy_project(source, project, ignore=(".git", "releases", "temp", "logs", "backup", "preview.png"))
-        payload = os.path.join(project, "gamedata", "textures", "qa_job")
-        os.makedirs(payload)
-        # only the phases that copy need the gigabyte: a packaging alone gets the two files it packs
-        files = PAYLOAD_FILES if set(only) - {"E"} else 0
-        block = os.urandom(PAYLOAD_MB << 20)
-        for i in range(files):
-            with open(os.path.join(payload, f"p_{i:02}.dds"), "wb") as f:
-                f.write(i.to_bytes(4, "little") + block)
-        qa_target.mark("payload")
-        proc = start_editor(project)
-        qa_target.mark("editor start")
-        run = Run(project, game, release, args.shots)
+        run_ = Run(project, game, release, ctx.shots)
 
         def restart(env: dict) -> None:
-            nonlocal proc
-            mcp("app.quit")
-            proc.wait(timeout=120)
-            proc = start_editor(project, env)
+            ed.close()
+            ed.env = dict(env)
+            ed.start()
 
-        run.restart = restart
-        run.module = os.path.join(game, "modules", mcp("mod.info").get("manifest", {}).get("id"))
+        run_.restart = restart
+        run_.module = os.path.join(game, "modules", cmd("mod.info").get("manifest", {}).get("id"))
         for p in only:
             t = time.monotonic()
-            getattr(run, p.lower())()
+            getattr(run_, p.lower())()
             print("TIME phase %s %.1f s" % (p, time.monotonic() - t), flush=True)
-        stalls = mcp("perf.stalls")
-        check(stalls.get("ok") and not stalls.get("stalls"), "no UI pass waited", json.dumps(stalls)[:300])
     finally:
-        if proc:
-            try:
-                mcp("app.quit")
-                proc.wait(timeout=120)
-            except (OSError, subprocess.TimeoutExpired) as error:
-                print("! the editor did not close:", error, flush=True)
-        qa_target.remove_tree(work)
-    failed = [text for ok, text in results if not ok]
-    print(f"{len(results) - len(failed)}/{len(results)} passed")
-    return 1 if failed else 0
+        ed.close()
+
+
+def main() -> int:
+    return qa.suite("BUILD JOB", run, doc=__doc__, ignore=(".git", "releases", "temp", "logs", "backup", "preview.png"),
+                    phases=PHASES)
 
 
 if __name__ == "__main__":

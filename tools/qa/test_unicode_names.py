@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """File names are UTF-8 from the disk to the screen and back.
 
-The editor runs with UTF-8 as its ANSI code page (LevelEditor.manifest). Before, a
-Cyrillic name came out of the ANSI file APIs as cp1251 bytes that ImGui cannot draw,
-and a name typed into the editor reached the disk as UTF-8 bytes read as cp1251. This
+The editor speaks to the file system in UTF-16 and to the window and MCP in UTF-8: no name goes through a
+code page. This
 drives the editor over MCP on a THROW-AWAY COPY of a project holding a Cyrillic folder,
 a Cyrillic file, a name outside cp1251 altogether and a quest with a Cyrillic file name,
 and checks every way a name travels: the content browser, the rename box, a rename to
@@ -13,29 +12,27 @@ A name outside cp1251 tells the two code pages apart: under cp1251 the file APIs
 it back as question marks and nothing can open it. A long Cyrillic name (more bytes than
 the rename box once held) and the browser's search (case folded, Cyrillic too) ride along.
 
-    python tools/qa/test_unicode_names.py --project <project> [--shot out.png]
+    python tools/qa/test_unicode_names.py --project <project> [--shots <folder>]
 """
 from __future__ import annotations
 
-import argparse
 import base64
 import glob
 import io
 import json
 import os
-import shutil
-import socket
-import subprocess
 import sys
 import tempfile
-import time
 import zipfile
 
-import qa_target
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(HERE))
-MCP = qa_target.MCP
+import qa
+from qa import check
+
+
+def cmd(name: str, /, escaped: bool = False, **params) -> dict:
+    """Raw UTF-8 by default; escaped=True sends non-ASCII as escapes, the way the MCP bridge does."""
+    return qa.cmd(name, escaped=escaped, **params)
 
 FOLDER = "qa_юникод"
 CYRILLIC = "Ночная доставка.txt"
@@ -54,68 +51,6 @@ QUEST = """return {
 }
 """
 
-results: list[tuple[bool, str]] = []
-
-
-def check(ok: bool, text: str, detail: str = "") -> bool:
-    results.append((bool(ok), text))
-    print(("PASS " if ok else "FAIL ") + text + (("  <- " + detail) if detail and not ok else ""), flush=True)
-    return bool(ok)
-
-
-def mcp(cmd: str, timeout: float = 300.0, escaped: bool = False, **extra) -> dict:
-    """escaped=True sends non-ASCII as \\u escapes, the way the MCP bridge does; raw UTF-8 otherwise"""
-    payload = {"cmd": cmd}
-    payload.update(extra)
-    with socket.create_connection(MCP, timeout=10) as s:
-        s.settimeout(timeout)
-        s.sendall((json.dumps(payload, ensure_ascii=escaped) + "\n").encode("utf-8"))
-        buf = b""
-        while not buf.endswith(b"\n"):
-            chunk = s.recv(1 << 20)
-            if not chunk:
-                break
-            buf += chunk
-    # strict: an answer that is not valid UTF-8 is itself a failure of this suite
-    return json.loads(buf.decode("utf-8"))
-
-
-class Editor:
-    def __init__(self) -> None:
-        self.proc: subprocess.Popen | None = None
-
-    def start(self, project: str) -> None:
-        exe = qa_target.exe()
-        startup = subprocess.STARTUPINFO()
-        startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
-        startup.wShowWindow = 7
-        qa_target.guard_project(project)
-        self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project],
-                                     cwd=os.path.dirname(exe), startupinfo=startup)
-        deadline = time.monotonic() + 240
-        while time.monotonic() < deadline:
-            try:
-                if mcp("mod.info", timeout=30).get("ok"):
-                    return
-            except OSError:
-                pass
-            if self.proc.poll() is not None:
-                raise RuntimeError("the editor exited during startup")
-            time.sleep(0.05)
-        raise RuntimeError("the editor never opened the project")
-
-    def close(self) -> None:
-        try:
-            mcp("app.quit")
-        except OSError:
-            pass
-        if self.proc:
-            try:
-                self.proc.wait(timeout=120)
-            except subprocess.TimeoutExpired:
-                print("! the editor did not close on its own", flush=True)
-
-
 def write(root: str, rel: str, text: str) -> None:
     path = os.path.join(root, *rel.split("/"))
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -129,77 +64,80 @@ def same(entry: str, listed: list) -> bool:
     return any(str(x).replace("/", "\\").lower() == key for x in listed)
 
 
-def run(project: str, shot: str | None) -> None:
+def run(ctx: qa.Run) -> None:
+    project = ctx.project
+    shot = os.path.join(ctx.shots, "cyrillic.png") if ctx.shots else None
+    if shot:
+        os.makedirs(ctx.shots, exist_ok=True)
     write(project, f"gamedata/{FOLDER}/{CYRILLIC}", "night\n")
     write(project, f"gamedata/{FOLDER}/{BEYOND}", "map\n")
     write(project, f"gamedata/{FOLDER}/{LONG}", "long\n")
     write(project, f"quests/{QUEST_FILE}", QUEST)
     folder = os.path.join(project, "gamedata", FOLDER)
 
-    ed = Editor()
+    ed = qa.Editor(project)
     target = tempfile.mkdtemp(prefix="grizzly_unicode_target_")
     pkg = tempfile.mkdtemp(prefix="grizzly_unicode_pkg_")
-    started = time.time()
     try:
-        ed.start(project)
-        module = mcp("mod.info").get("manifest", {}).get("id", "")
+        ed.start()
+        module = cmd("mod.info").get("manifest", {}).get("id", "")
 
         # ------------------------------------------------------------------ B: the browser
-        r = mcp("content.view", action="reveal", source="project", path=f"gamedata/{FOLDER}/")
+        r = cmd("content.view", action="reveal", source="project", path=f"gamedata/{FOLDER}/")
         check(r.get("ok"), "B a folder with a Cyrillic name opens in the content browser", json.dumps(r, ensure_ascii=False)[:200])
         entry = f"gamedata\\{FOLDER}\\{CYRILLIC}"
-        r = mcp("content.view", action="select", path=entry)
+        r = cmd("content.view", action="select", path=entry)
         check(r.get("ok") and same(entry, r.get("selection", [])),
               "B a Cyrillic file is listed under its own name", json.dumps(r, ensure_ascii=False)[:240])
         beyond = f"gamedata\\{FOLDER}\\{BEYOND}"
-        r = mcp("content.view", action="select", path=beyond)
+        r = cmd("content.view", action="select", path=beyond)
         check(r.get("ok") and same(beyond, r.get("selection", [])),
               "B so is a name outside cp1251", json.dumps(r, ensure_ascii=False)[:240])
-        r = mcp("content.view", action="rename", path=entry)
+        r = cmd("content.view", action="rename", path=entry)
         box = (r.get("rename") or {}).get("text", "")
         check(r.get("ok") and box == CYRILLIC, "B the rename box holds the name as it is", repr(box))
-        mcp("content.view", action="clear")
+        cmd("content.view", action="clear")
         long_entry = f"gamedata\\{FOLDER}\\{LONG}"
-        r = mcp("content.view", action="rename", path=long_entry)
+        r = cmd("content.view", action="rename", path=long_entry)
         box = (r.get("rename") or {}).get("text", "")
         check(r.get("ok") and box == LONG and len(LONG.encode("utf-8")) > 127,
               "B the rename box holds a long Cyrillic name whole (%d bytes)" % len(LONG.encode("utf-8")), repr(box))
-        mcp("content.view", action="clear")
+        cmd("content.view", action="clear")
 
         # the search folds case, Cyrillic included, and lists only what matches
-        r = mcp("content.view", query="ночная")
+        r = cmd("content.view", query="ночная")
         check(r.get("ok") and r.get("query") == "ночная", "B the search takes a Cyrillic query",
               json.dumps(r, ensure_ascii=False)[:240])
-        hit = mcp("content.view", action="select", path=entry)
-        miss = mcp("content.view", action="select", path=beyond)
+        hit = cmd("content.view", action="select", path=entry)
+        miss = cmd("content.view", action="select", path=beyond)
         check(hit.get("ok") and not miss.get("ok"),
               "B a lower-case Cyrillic query finds the capitalised name, and only what matches",
               json.dumps(hit, ensure_ascii=False)[:160] + " | " + json.dumps(miss, ensure_ascii=False)[:160])
-        r = mcp("content.view", query="")
+        r = cmd("content.view", query="")
         check(r.get("ok") and r.get("query") == "", "B an empty search lists the folder again", json.dumps(r)[:200])
-        mcp("content.view", action="clear")
+        cmd("content.view", action="clear")
         if shot:
-            mcp("content.view", action="select", path=entry)
-            pic = mcp("shot.window")
+            cmd("content.view", action="select", path=entry)
+            pic = cmd("shot.window")
             if pic.get("png_base64"):
                 with open(shot, "wb") as f:
                     f.write(base64.b64decode(pic["png_base64"]))
                 print("screenshot: " + shot, flush=True)
 
         # ------------------------------------------------------------------ C: a rename reaches the disk
-        r = mcp("file.rename", escaped=True, path=f"gamedata/{FOLDER}/{CYRILLIC}", name=RENAMED)
+        r = cmd("file.rename", escaped=True, path=f"gamedata/{FOLDER}/{CYRILLIC}", name=RENAMED)
         on_disk = sorted(os.listdir(folder))
         check(r.get("ok") and RENAMED in on_disk and CYRILLIC not in on_disk,
               "C a rename sent as \\u escapes (like the bridge) writes that name to disk, not its bytes read as cp1251",
               json.dumps(r, ensure_ascii=False)[:160] + " disk=" + repr(on_disk))
 
         # ------------------------------------------------------------------ D: quests
-        quests = [q.get("extra", "") for q in mcp("game.lookup", type="quest_id", limit=500).get("entries", [])]
+        quests = [q.get("extra", "") for q in cmd("game.lookup", type="quest_id", limit=500).get("entries", [])]
         check(any(q.replace("\\", "/").endswith("quests/" + QUEST_FILE) for q in quests),
               "D a quest with a Cyrillic file name is found under that name", repr(quests)[:240])
 
         # ------------------------------------------------------------------ E: the build
-        built = mcp("mod.build", target="folder", path=target.replace("\\", "/"))
+        built = cmd("mod.build", target="folder", path=target.replace("\\", "/"))
         shipped = os.path.join(target, "modules", module, "gamedata", FOLDER)
         names = sorted(os.listdir(shipped)) if os.path.isdir(shipped) else []
         check(built.get("ok") and RENAMED in names and BEYOND in names,
@@ -216,7 +154,7 @@ def run(project: str, shot: str | None) -> None:
               "E the build warns about the two names outside cp1251, and only those", warned[-300:])
 
         # ------------------------------------------------------------------ F: the release package
-        pk = mcp("mod.package", path=pkg.replace("\\", "/"))
+        pk = cmd("mod.package", path=pkg.replace("\\", "/"))
         zips = sorted(glob.glob(os.path.join(pkg, "*.zip")))
         entries: dict[str, zipfile.ZipInfo] = {}
         for z in zips:
@@ -234,82 +172,36 @@ def run(project: str, shot: str | None) -> None:
         check(all(w.split(f"modules/{module}/", 1)[1] in text.replace("\\", "/") for w in want),
               "F the file index names them the same way", text[:200])
 
-        if qa_target.RUST:
-            # -------------------------------------------------------------- G: a name from the disk and back
-            # The Rust editor speaks to the file system in UTF-16 alone: no code page is involved, so its log
-            # line about one says nothing. What is checked is the round trip itself, with a name beyond the
-            # Basic Multilingual Plane (a UTF-16 surrogate pair): made on disk behind the editor's back, listed
-            # by the browser under that name, renamed by the editor to another such name, found on disk so.
-            made = "Медведь \U0001F43B.txt"
-            moved = "Медведь \U0001F43B\U0001F332.txt"
-            with open(os.path.join(folder, made), "wb") as f:
-                f.write(b"bear")
-            mcp("content.view", action="reveal", source="project", path=f"gamedata/{FOLDER}/")
-            mcp("content.view", action="refresh")
-            entry = f"gamedata\\{FOLDER}\\{made}"
-            r = mcp("content.view", action="select", path=entry)
-            check(r.get("ok") and same(entry, r.get("selection", [])),
-                  "G a name made on disk with a character beyond the BMP is listed under that name",
-                  json.dumps(r, ensure_ascii=False)[:240])
-            mcp("content.view", action="clear")
-            r = mcp("file.rename", escaped=True, path=f"gamedata/{FOLDER}/{made}", name=moved)
-            on_disk = os.listdir(folder)
-            check(r.get("ok") and moved in on_disk and made not in on_disk,
-                  "G and the editor's rename writes such a name to disk as it is",
-                  json.dumps(r, ensure_ascii=False)[:160] + " disk=" + repr(on_disk))
-        stalls = mcp("perf.stalls")
-        check(stalls.get("ok") and not stalls.get("stalls"), "no UI pass waited", json.dumps(stalls)[:300])
+        # -------------------------------------------------------------- G: a name from the disk and back
+        # The Rust editor speaks to the file system in UTF-16 alone: no code page is involved, so its log
+        # line about one says nothing. What is checked is the round trip itself, with a name beyond the
+        # Basic Multilingual Plane (a UTF-16 surrogate pair): made on disk behind the editor's back, listed
+        # by the browser under that name, renamed by the editor to another such name, found on disk so.
+        made = "Медведь \U0001F43B.txt"
+        moved = "Медведь \U0001F43B\U0001F332.txt"
+        with open(os.path.join(folder, made), "wb") as f:
+            f.write(b"bear")
+        cmd("content.view", action="reveal", source="project", path=f"gamedata/{FOLDER}/")
+        cmd("content.view", action="refresh")
+        entry = f"gamedata\\{FOLDER}\\{made}"
+        r = cmd("content.view", action="select", path=entry)
+        check(r.get("ok") and same(entry, r.get("selection", [])),
+              "G a name made on disk with a character beyond the BMP is listed under that name",
+              json.dumps(r, ensure_ascii=False)[:240])
+        cmd("content.view", action="clear")
+        r = cmd("file.rename", escaped=True, path=f"gamedata/{FOLDER}/{made}", name=moved)
+        on_disk = os.listdir(folder)
+        check(r.get("ok") and moved in on_disk and made not in on_disk,
+              "G and the editor's rename writes such a name to disk as it is",
+              json.dumps(r, ensure_ascii=False)[:160] + " disk=" + repr(on_disk))
     finally:
         ed.close()
         for d in (target, pkg):
-            qa_target.remove_tree(d)
-
-    if not qa_target.RUST:
-        # ------------------------------------------------------------------ G: the process
-        logs = [p for p in glob.glob(qa_target.log_glob())
-                if not p.endswith("_lua.log") and os.path.getmtime(p) >= started]
-        text = io.open(logs[0], encoding="utf-8", errors="replace").read() if logs else ""
-        check("file names: UTF-8" in text, "G the editor ran with UTF-8 as its ANSI code page",
-              "log: " + (logs[0] if logs else "none written since the start"))
+            qa.remove_tree(d)
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--project", required=True)
-    ap.add_argument("--shot", help="save a screenshot of the browser showing the Cyrillic file")
-    ap.add_argument("--keep", action="store_true")
-    args = ap.parse_args()
-
-    src = os.path.abspath(args.project)
-    if not os.path.isdir(src):
-        print("no such project: " + src)
-        return 2
-
-    work = tempfile.mkdtemp(prefix="grizzly_unicodeproj_")
-    copy = os.path.join(work, "QaUnicodeNames")
-    qa_target.copy_project(src, copy, ignore=(".git", ".gitignore",))
-    print("running against a copy: " + copy, flush=True)
-
-    ini = os.path.join(REPO, "_projects.ini")
-    ini_backup = None
-    if os.path.isfile(ini):
-        with open(ini, "rb") as f:
-            ini_backup = f.read()
-
-    try:
-        run(copy, os.path.abspath(args.shot) if args.shot else None)
-    except Exception as exc:  # noqa: BLE001
-        check(False, "the run finished", repr(exc))
-    finally:
-        if ini_backup is not None:
-            with open(ini, "wb") as f:
-                f.write(ini_backup)
-        if not args.keep:
-            qa_target.remove_tree(work)
-
-    ok = sum(1 for good, _ in results if good)
-    print(f"UNICODE NAMES: DONE {ok}/{len(results)}", flush=True)
-    return 0 if ok == len(results) else 1
+    return qa.suite("UNICODE NAMES", run, doc=__doc__, ignore=(".git", ".gitignore"))
 
 
 if __name__ == "__main__":

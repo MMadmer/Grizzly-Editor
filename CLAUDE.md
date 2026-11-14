@@ -82,8 +82,9 @@ A change of plan is a change of its document first.
 - **`unsafe` only in `gz-win`** (the Win32 that `std` lacks), every block with a `// SAFETY:` line, and no
   `unsafe impl Send` / `Sync` anywhere. Every other crate is `#![forbid(unsafe_code)]` through the workspace lints.
 - **Three entry points prove a change**: `bash tools/rust/check.sh` (clippy, fmt, `unsafe` only in `gz-win`, one
-  file dialog function, the build answering `help` from a shell, the text encodings, no test writing a program file,
-  the icon and the console twin of the release binaries, the notices), `bash tools/rust/test.sh` (only the test
+  file dialog function, the build answering `help` from a shell, every command with a card and none registered
+  without its type, the text encodings, no test writing a program file, the icon and the console twin of the
+  release binaries, the notices, no word of another program - `check_words.py`), `bash tools/rust/test.sh` (only the test
   binaries that changed since they were green; `--all` for everything and the whole corpus), `python
   tools/qa/run_all.py` (the QA suites side by side; `--with-game` adds the one that starts the real game).
   `GRIZZLY_QA_EXE` points the suites and `check.sh` at another binary (`Bin\x64\Release\Grizzly.exe`, the release
@@ -94,9 +95,10 @@ A change of plan is a change of its document first.
 - **Nothing a script starts may wait for ever**: a program runs under `python tools/rust/limited.py <seconds>
   <program> ...`, which ends it with everything it started when the time is up (exit code 124). A run that takes
   minutes is watched: something says every two minutes how far it is.
-- **A QA script opens only a copy of a project** under the system temp folder (`qa_target.copy_project`;
-  `guard_project` stops it before an editor starts otherwise). A path under the author's projects is only ever a source
-  to copy from. Every editor a suite starts runs on a port (28917 and up) and a home (`-home`) of its own, never the
+- **A QA script opens only a copy of a project** under the system temp folder (`qa.copy_project`;
+  `guard_project` stops it before an editor starts otherwise, and a suite whose work folder is not under the temp
+  folder does not start). `tools/qa/qa.py` is the one client every suite uses. A path under the author's projects
+  is only ever a source to copy from. Every editor a suite starts runs on a port (28917 and up) and a home (`-home`) of its own, never the
   author's 28016 or settings, under `-qa_github` with every network service on a mock or a dead address, and is
   closed over its endpoint (`app.quit`), never killed.
 - **The level compiler is part of the editor** (`gz-lc`, `gz-lc-light`): the light steps of `level.build` run it in
@@ -225,7 +227,7 @@ A change of plan is a change of its document first.
   takes nothing from one. The console twin runs `Grizzly.exe` beside it with the same arguments and its own
   streams, waits and ends with the editor's exit code. A windowless run never outlives it
   (`gz_win::end_with_this_process`); a run with a window does, and starts minimised when the twin was
-  (`-minimized`, which the editor takes like a launcher's request). `check.sh` and `test_server_lifecycle` hold
+  (`-minimized`, which the editor takes like a launcher's request). `check.sh` and `test_cli.py` hold
   all of it. A commandlet writes a log of its own (`grizzly_cmd_<user>.log`): it never takes the log of an editor
   open on the same home.
 - **No test writes a program file** (`.exe`, `.dll`, `.com`, `.scr`, `.bat`, `.cmd`, `.ps1`, `.msi`, or bytes that
@@ -354,7 +356,8 @@ A change of plan is a change of its document first.
   and the finished import brings the library back. An empty library says what it
   reads (rawdata\sounds, gamedata\lanims.xr).
 - QA (each on a COPY, in a home of its own, ending on `perf.stalls`): `python tools/qa/run_all.py` lists the suites;
-  `tools/qa/test_ui_shell.py` holds the frame, `test_ui_tour.py` the surfaces at 1707x912 / 1.5 and 1280x720 / 1.0.
+  `tools/qa/test_ui_shell.py` holds the frame, `test_tour.py` every tab kind, dialog and menu
+  of `ui.contract`, audited and pictured at 1707x912 / 1.5 and 1280x720 / 1.0.
 
 ## The Level tab
 
@@ -832,7 +835,7 @@ A change of plan is a change of its document first.
   players is a `publish` command - `mod.package`, `release.publish`, `release.catalog` - and comes through one
   tool, `grizzly_release`, whose description ends with the `PLAYER_SAFETY` and `WITHDRAW_SAFETY` paragraphs;
   `initialize` answers `instructions` with the
-  same rules (all of it in `crates/gz-mcp-bridge/src/main.rs`, word for word; `tools/qa/test_mcp_bridge.py` holds them to the
+  same rules (all of it in `crates/gz-mcp-bridge/src/main.rs`, word for word; `tools/qa/test_bridge.py` holds them to the
   reference text): no malware, exploits, stealers, cheats aimed at others or code meant to
   escape protected mode, nothing hidden from the catalog's checks or VirusTotal, nothing
   done to another author's module or to the catalog repository, no change to the editor
@@ -854,7 +857,7 @@ A change of plan is a change of its document first.
   unscanned with its warning, and no VirusTotal request at all for a module the index
   does not list. Run both on a COPY of a real project - the author's own mod (Overnight
   Delivery) is the reference - with its `project.ltx` `export_target` pointed away from
-  the game (`qa_target.copy_project` does both).
+  the game (`qa.copy_project` does both).
 
 ## Characters (the module's own NPCs)
 

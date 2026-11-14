@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end check of Mod > Submit to Mod Browser (mod_catalog) against tools/qa/github_mock (Go).
+"""End-to-end check of Mod > Submit to Mod Browser (release.catalog) against tools/qa/github_mock (Go).
 
 Drives the editor over MCP on a THROW-AWAY COPY of a project. The editor runs with -qa_github:
 GitHub, the catalog repository, the catalog's public files and VirusTotal are all the mock, and the
@@ -15,7 +15,7 @@ implementation (tools/catalog/xms_catalog.py and catalog.py), never from the edi
   D  the signed [card] of the release descriptor (4), verified with xms_catalog.py
   E  the release published to the mock
   F  the listing requirements (7) against the published release and the catalog index - a package VirusTotal does
-     not know is a 'required' finding, never a note; the window (the kit dialog ui_contract names, dlg.catalog_submit)
+     not know is a 'required' finding, never a note; the window (the kit dialog ui.contract names, dlg.catalog_submit)
      opened and closed over MCP (show / hide), drawn where a screenshot holds it although the layout file saved its
      place far below the editor, and while the editor is minimized (every later picture is taken of a minimized
      editor); its height stays put while the check runs and after it ends, its footer is inside it and nothing of it
@@ -41,33 +41,26 @@ without its checks, when it was not asked for.
 """
 from __future__ import annotations
 
-import argparse
 import base64
 import ctypes
 import ctypes.wintypes
 import hashlib
 import json
 import os
-import re
-import shutil
-import socket
 import struct
 import subprocess
 import sys
-import tempfile
 import time
 import traceback
 import urllib.parse
 import urllib.request
 import zlib
 
-from mock_server import mock_exe
+import qa
+from qa import check, free_port
 
-import qa_target
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(HERE))
-MCP = qa_target.MCP
+
 TOKEN = "qa_token_catalog_0123456789abcdef"
 VT_KEY = "qa-vt-key-5b9e2c71d4"
 GITHUB_REPO = "QaOwner/qa-mod"
@@ -91,25 +84,17 @@ TRUSTED = "EngineT"
 VT_PAGE = "https://www.virustotal.com/gui/file/"
 JOB_SECONDS = 120.0
 SECRETS = (PASSWORD, PASSWORD2, VT_KEY, TOKEN)
-# the Submit window's ImGui name, "<title>###dlg.<name>": what ui_contract's dialogs.submit says, this when it says
-# nothing (the layout below is written before an editor runs)
+# the Submit window's name, "<title>###dlg.<name>": what ui.contract's dialogs.submit says
 SUBMIT_WINDOW = "Submit to Mod Browser###dlg.catalog_submit"
 # the withdrawal's question, a sheet over the Submit window
 WITHDRAW_SHEET = "dlg.catalog_withdraw"
-# the editor's ImGui layout ($local_root$) and its preferences - the window's size and state among them: the
-# editor writes both when it closes
-LAYOUT = os.path.join(REPO, "level_imgui.ini")
 # the mock's VirusTotal rate window in phase J: VirusTotal's is a minute, the harness's a few seconds
 VT_WINDOW_S = 3.0
-PREFS = os.path.join(REPO, "level.ini")
 
 # the game repository's reference implementation, imported in main()
 xc = None
 cat = None
 
-results: list[tuple[bool, str]] = []
-# a phase run for another's sake records nothing
-QUIET = [False]
 PHASES = "ABCDEFGHWLIJ"
 NEEDS = {"C": "B", "D": "AB", "E": "AB", "F": "ABE", "G": "ABE", "H": "ABEG", "W": "ABEGH", "J": "AB", "L": "AB"}
 # every MCP answer, for the secret scan
@@ -120,32 +105,24 @@ class Abort(Exception):
     """Going on would do harm - e.g. write a key outside the QA home."""
 
 
-def check(ok: bool, text: str, detail: str = "") -> bool:
-    if QUIET[0]:
-        return bool(ok)
-    results.append((bool(ok), text))
-    print(("PASS " if ok else "FAIL ") + text + (("  <- " + detail) if detail and not ok else ""), flush=True)
-    return bool(ok)
-
-
 def phase(name: str, step, *args) -> None:
     """One phase; a phase that throws is a FAIL of its own and the next one still runs. A phase --only left out runs
     quietly when a phase asked for needs it, and not at all otherwise."""
     if name not in ONLY[0]:
         if name not in NEEDED[0]:
             return
-        QUIET[0] = True
+    setup = name not in ONLY[0]
     t0 = time.monotonic()
-    try:
-        step(*args)
-    except Abort:
-        raise
-    except Exception as exc:  # noqa: BLE001 - the report is the point
-        traceback.print_exc()
-        check(False, "%s ran to its end" % name, repr(exc))
-    finally:
-        print("TIME phase %s%s %.1f s" % (name, " (setup)" if QUIET[0] else "", time.monotonic() - t0), flush=True)
-        QUIET[0] = False
+    with qa.quiet(setup):
+        try:
+            step(*args)
+        except Abort:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the report is the point
+            traceback.print_exc()
+            check(False, "%s ran to its end" % name, repr(exc))
+        finally:
+            print("TIME phase %s%s %.1f s" % (name, " (setup)" if setup else "", time.monotonic() - t0), flush=True)
 
 
 # the phases asked for, and those they need
@@ -153,85 +130,39 @@ ONLY = [PHASES]
 NEEDED = [""]
 
 
-def mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
-    payload = {"cmd": cmd}
-    payload.update(extra)
-    with socket.create_connection(MCP, timeout=10) as s:
-        s.settimeout(timeout)
-        s.sendall((json.dumps(payload) + "\n").encode())
-        buf = b""
-        while not buf.endswith(b"\n"):
-            chunk = s.recv(1 << 20)
-            if not chunk:
-                break
-            buf += chunk
-    data = json.loads(buf.decode("utf-8"))
+def cmd(name: str, /, **params) -> dict:
+    """A command of the editor; every answer is kept for the secret scan."""
+    data = qa.cmd(name, **params)
     answers.append(json.dumps(data, ensure_ascii=False))
     return data
 
 
-
 def manifest_now() -> dict:
     """The manifest as mod.info answers it (`manifest`), its problems beside it."""
-    info = mcp("mod.info")
+    info = cmd("mod.info")
     return {**info.get("manifest", {}), "ok": info.get("ok"), "error": info.get("error")}
 
 
 def set_fields(fields: dict) -> dict:
     module = {k: v for k, v in fields.items() if k != "github"}
     update = {"github": fields["github"]} if "github" in fields else {}
-    return mcp("mod.set", set={"module": module, **({"update": update} if update else {})})
+    return cmd("mod.set", set={"module": module, **({"update": update} if update else {})})
 
 
 def thumbnail_from(picture: str) -> dict:
-    return mcp("mod.thumbnail", **{"from": picture})
-
-def mcp_up() -> bool:
-    try:
-        socket.create_connection(MCP, timeout=1).close()
-        return True
-    except OSError:
-        return False
-
-
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
+    return cmd("mod.thumbnail", **{"from": picture})
 
 def short(data) -> str:
     return json.dumps(data, ensure_ascii=False)[:600]
 
 
-class Mock:
+class Mock(qa.Mock):
     def __init__(self, port: int, work: str, name: str, *flags: str, repo: str = GITHUB_REPO):
-        self.port = port
-        self.base = f"http://127.0.0.1:{port}"
         self.log = os.path.join(work, name + ".log")
         # a failing handler prints its traceback there; the operator reads it after a FAIL
         self.errors = open(os.path.join(work, name + ".stderr.txt"), "w", encoding="utf-8")
-        self.proc = subprocess.Popen(
-            [mock_exe(), "--port", str(port), "--token", TOKEN,
-             "--repo", repo, "--catalog-repo", CATALOG_REPO, "--vt-key", VT_KEY, "--log", self.log, *flags],
-            stdout=subprocess.PIPE, stderr=self.errors, text=True)
-        line = self.proc.stdout.readline()
-        if not line or json.loads(line)["port"] != port:
-            raise RuntimeError("the mock did not take its port: " + line)
-
-    def get(self, path: str):
-        with urllib.request.urlopen(self.base + path, timeout=10) as r:
-            return json.loads(r.read().decode("utf-8"))
-
-    def post(self, path: str, body: bytes = b"", content_type: str = "application/octet-stream"):
-        request = urllib.request.Request(self.base + path, data=body, method="POST",
-                                         headers={"Content-Type": content_type})
-        with urllib.request.urlopen(request, timeout=10) as r:
-            raw = r.read()
-        return json.loads(raw.decode("utf-8")) if raw else None
-
-    def state(self) -> dict:
-        return self.get("/__state")
+        super().__init__(port, "--token", TOKEN, "--repo", repo, "--catalog-repo", CATALOG_REPO, "--vt-key", VT_KEY,
+                         "--log", self.log, *flags, stderr=self.errors)
 
     def catalog(self) -> dict:
         return self.get("/__catalog")
@@ -290,16 +221,13 @@ class Mock:
         self.errors.close()
 
 
-class Editor:
-    def __init__(self, exe: str, project: str, port: int, home: str, vt_variable: bool, extra_env: dict | None = None):
-        if mcp_up():
-            raise RuntimeError(qa_target.busy_text())
-        if not os.path.isfile(exe):
-            raise RuntimeError("build the editor first: " + exe)
-        env = dict(os.environ)
-        for name in ("GRIZZLY_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GRIZZLY_VT_KEY", "VT_API_KEY"):
-            env.pop(name, None)
+class Editor(qa.Editor):
+    """The suite's editor, started under -qa_github with every service on the mock's port."""
+
+    def __init__(self, project: str, port: int, home: str, vt_variable: bool, extra_env: dict | None = None):
         origin = f"http://127.0.0.1:{port}"
+        env: dict = {name: None for name in ("GRIZZLY_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GRIZZLY_VT_KEY",
+                                              "VT_API_KEY")}
         env.update({
             "GRIZZLY_GITHUB_API": origin,
             "GRIZZLY_GITHUB_WEB": origin,
@@ -317,46 +245,21 @@ class Editor:
         if vt_variable:
             env["GRIZZLY_VT_KEY"] = VT_KEY
         env.update(extra_env or {})
-        startup = subprocess.STARTUPINFO()
-        startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
-        startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
-        qa_target.guard_project(project)
-        self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-qa_github", "-nodlg", "-project", project],
-                                     cwd=os.path.dirname(exe), env=env, startupinfo=startup)
-        deadline = time.monotonic() + 240
-        while time.monotonic() < deadline:
-            try:
-                if mcp("mod.info", timeout=30).get("ok"):
-                    return
-            except OSError:
-                pass
-            if self.proc.poll() is not None:
-                raise RuntimeError("the editor exited during startup")
-            time.sleep(0.05)
-        raise RuntimeError("the editor never opened the project")
-
-    def close(self) -> None:
-        try:
-            mcp("app.quit")
-        except (OSError, ValueError):
-            pass
-        try:
-            self.proc.wait(timeout=120)
-        except subprocess.TimeoutExpired:
-            print("! the editor did not close on its own - leaving it to the operator", flush=True)
+        super().__init__(project, github=True, env=env)
+        self.start()
 
 
 # ---- MCP helpers ---------------------------------------------------------------------------------
 
 def wait_catalog(seconds: float = JOB_SECONDS) -> None:
     """Waits for a Mod Browser job the window started (Submit's own check) to end."""
-    for j in mcp("job.list", running=True).get("jobs", []):
+    for j in cmd("job.list", running=True).get("jobs", []):
         if j.get("group") == "catalog":
-            mcp("job.wait", job=j.get("id"), timeout=seconds + 30)
+            cmd("job.wait", job=j.get("id"), timeout=seconds + 30)
 
 
 def status() -> dict:
-    return mcp("release.catalog_status")
+    return cmd("release.catalog_status")
 
 
 def follow(data: dict, seconds: float = JOB_SECONDS) -> dict:
@@ -373,11 +276,11 @@ def catalog(action: str = "status", seconds: float = JOB_SECONDS, **extra) -> di
     reads = {"status": "status", "check": "check", "submission": "submission"}
     reaches = {"vt": "scan", "submit": "submit", "withdraw": "withdraw"}
     if action in reads:
-        return mcp("release.catalog_status", action=reads[action], timeout=seconds + 30, **extra)
+        return cmd("release.catalog_status", action=reads[action], timeout=seconds + 30, **extra)
     if action in reaches:
-        return mcp("release.catalog", action=reaches[action], timeout=seconds + 30, **extra)
+        return cmd("release.catalog", action=reaches[action], timeout=seconds + 30, **extra)
     if action == "show":
-        r = mcp("release.view", submit=True, withdraw_question=extra.get("confirm") == "withdraw")
+        r = cmd("release.view", submit=True, withdraw_question=extra.get("confirm") == "withdraw")
         if not r.get("ok"):
             return r
         # the window checks the requirements as it opens: its job, once it is there
@@ -388,20 +291,20 @@ def catalog(action: str = "status", seconds: float = JOB_SECONDS, **extra) -> di
             st = status()
         return st
     if action == "hide":
-        r = mcp("release.view", submit=False)
+        r = cmd("release.view", submit=False)
         return {**status(), "ok": r.get("ok")} if r.get("ok") else r
     if action == "cancel":
-        for j in mcp("job.list", running=True).get("jobs", []):
+        for j in cmd("job.list", running=True).get("jobs", []):
             if j.get("group") == "catalog":
-                mcp("job.stop", job=j.get("id"))
+                cmd("job.stop", job=j.get("id"))
         return status()
     if action.startswith("key_"):
         how = {"key_create": "create", "key_use": "open", "key_unlock": "open"}[action]
-        r = mcp("release.key", action=how, **extra)
+        r = cmd("release.key", action=how, **extra)
     elif action == "vt_key":
-        r = mcp("release.account", action="save_vt_key", **extra)
+        r = cmd("release.account", action="save_vt_key", **extra)
     elif action == "vt_key_forget":
-        r = mcp("release.account", action="forget_vt_key")
+        r = cmd("release.account", action="forget_vt_key")
     else:
         raise ValueError("no such Mod Browser action: " + action)
     return {**status(), **r} if r.get("ok") else r
@@ -416,7 +319,7 @@ def shot(folder: str | None, name: str) -> dict:
     """The editor as it looks now, for the operator - only when --shots names a folder."""
     if not folder:
         return {}
-    pic = mcp("shot.window")
+    pic = cmd("shot.window")
     if pic.get("png_base64"):
         path = os.path.join(folder, name + ".png")
         write_bytes(path, base64.b64decode(pic["png_base64"]))
@@ -476,28 +379,6 @@ def png_size(data: bytes) -> tuple[int, int]:
     if len(data) < 24:
         return (0, 0)
     return (int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big"))
-
-
-def platform_windows(pid: int) -> list[str]:
-    """Titles of the visible windows ImGui opened for the process on its own ('ImGui Platform' class): what they
-    draw is in no screenshot of the editor, which mirrors the main window alone."""
-    user32 = ctypes.windll.user32
-    found: list[str] = []
-
-    @ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
-    def each(hwnd, _):
-        owner = ctypes.wintypes.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
-        if owner.value == pid and user32.IsWindowVisible(hwnd):
-            text = ctypes.create_unicode_buffer(256)
-            user32.GetClassNameW(hwnd, text, 256)
-            if "ImGui" in text.value:
-                user32.GetWindowTextW(hwnd, text, 256)
-                found.append(text.value)
-        return True
-
-    user32.EnumWindows(each, 0)
-    return found
 
 
 def png_rows(data: bytes, count: int) -> tuple[int, int, int, list[bytes]]:
@@ -564,18 +445,9 @@ def window_drawn(data: bytes, modal: dict) -> str:
     return "its rect %s holds %d colour(s): nothing is drawn there" % ([x, y, w, h], len(colours))
 
 
-def stale_layout(layout: bytes, title: str, y: int) -> bytes:
-    """The layout with the window's saved place y pixels down, below any editor window and any monitor."""
-    text = layout.decode("utf-8")
-    head = "[Window][%s]" % title
-    # the window's own entry goes - it may name a viewport of its own as well - and a new one comes last
-    text = re.sub(r"^%s\r?\n(?:[^\[\r\n].*(?:\r?\n|$))*" % re.escape(head), "", text, flags=re.M)
-    return (text.rstrip("\r\n") + "\n\n%s\nPos=784,%d\nSize=971,700\nCollapsed=0\n" % (head, y)).encode("utf-8")
-
-
 def submit_names() -> tuple[str, str]:
     """The Submit window's title and the id the dialog on top is answered by, from the running editor's ui_contract."""
-    window = str((mcp("ui.contract").get("dialogs") or {}).get("submit") or SUBMIT_WINDOW)
+    window = str((cmd("ui.contract").get("dialogs") or {}).get("submit") or SUBMIT_WINDOW)
     title, _, _ = window.partition("###")
     return title, "submit"
 
@@ -635,7 +507,7 @@ def texts(data: dict, code: str) -> list[str]:
 
 def publish(wait_seconds: float = 240.0) -> dict:
     """release.publish with the manifest as it is; it answers when the release is out or refused."""
-    return mcp("release.publish", timeout=wait_seconds + 30)
+    return cmd("release.publish", timeout=wait_seconds + 30)
 
 
 # ---- files ----------------------------------------------------------------------------------------
@@ -880,9 +752,8 @@ def uploads_of(vt_state: dict, sha: str) -> int:
 # ---- the run -------------------------------------------------------------------------------------------
 
 class Run:
-    def __init__(self, args, work: str, copy: str):
-        self.exe = args.editor
-        self.shots = os.path.abspath(args.shots) if args.shots else None
+    def __init__(self, shots: str | None, work: str, copy: str):
+        self.shots = os.path.abspath(shots) if shots else None
         self.work = work
         self.copy = copy
         self.home = os.path.join(work, "catalog_home")
@@ -911,18 +782,16 @@ class Run:
 
     def window_in_shot(self, pic: dict, text: str) -> None:
         """The window is in the picture: drawn into the editor's own window, which is what a screenshot mirrors - not
-        into a platform window of its own (a dimmed editor with no dialog), and not into a frame the editor drew
-        nothing of itself into (a minimized editor: one flat colour)."""
+        into a window of its own, and not into a frame the editor drew nothing into (one flat colour)."""
         if not self.submit[0]:
             self.submit = submit_names()
         title, name = self.submit
         outside = pic.get("outside")
-        platform = platform_windows(self.pid)
         modal = pic.get("modal") or {}
         if not (pic.get("ok") is True and pic.get("png_base64")):
             why = "no picture: " + short(pic)
-        elif not isinstance(outside, list) or title in outside or title in platform:
-            why = "in a window of its own: outside=%s, platform windows=%s" % (outside, platform)
+        elif not isinstance(outside, list) or title in outside:
+            why = "in a window of its own: outside=%s" % (outside,)
         elif (modal.get("id") != name) if name else (modal.get("title") != title):
             why = "the modal on top is not %s: %s" % (name or title, short(pic.get("modal")))
         else:
@@ -947,7 +816,7 @@ class Run:
         editor = None
         try:
             # a lowered line sends even this small package the way a module over 32 MB goes
-            editor = Editor(self.exe, self.copy, port, self.home, vt_variable=False,
+            editor = Editor(self.copy, port, self.home, vt_variable=False,
                             extra_env={"GRIZZLY_VT_DIRECT_LIMIT": "1000"})
             self.pid = editor.proc.pid
             phase("A", self.keys)
@@ -975,8 +844,8 @@ class Run:
     def keys(self) -> None:
         st = catalog()
         key = st.get("key") or {}
-        if not check(st.get("ok"), "A mod_catalog answers with the status", short(st)):
-            raise Abort("mod_catalog does not answer - this editor build has no Submit to Mod Browser")
+        if not check(st.get("ok"), "A release.catalog answers with the status", short(st)):
+            raise Abort("release.catalog does not answer - this editor build has no Submit to Mod Browser")
         if not check(same_path(key.get("path", ""), self.key_path),
                      "A the key would go to <GRIZZLY_CATALOG_HOME>\\Keys\\author.xkey", short(st)):
             raise Abort("the editor does not keep its key in GRIZZLY_CATALOG_HOME - stopped before it writes one elsewhere")
@@ -1096,16 +965,16 @@ class Run:
         check(r.get("ok") and named in ("art/qa_ready.dds", "thumbnail.dds") and
               read_bytes(os.path.join(self.copy, *named.split("/"))) == data and read_bytes(ready) == data,
               "B a valid thumbnail DDS inside the project is used as is", f"{short(r)} {named}")
-        r = mcp("mod.thumbnail", remove=True)
+        r = cmd("mod.thumbnail", remove=True)
         m = manifest_now()
         check(r.get("ok") and m.get("thumbnail") == "" and os.path.isfile(ready) and
               os.path.isfile(thumb) == (named != "thumbnail.dds"),
               "B clearing deletes thumbnail.dds only when that is the file the key named", f"{short(r)} {named}")
-        qa_target.remove_tree(os.path.join(self.copy, "art"))
+        qa.remove_tree(os.path.join(self.copy, "art"))
 
         r = thumbnail_from(opaque)
         check(r.get("ok") and os.path.isfile(thumb), "B the opaque picture again", short(r))
-        r = mcp("mod.thumbnail", remove=True)
+        r = cmd("mod.thumbnail", remove=True)
         m = manifest_now()
         check(r.get("ok") and m.get("thumbnail") == "" and not os.path.exists(thumb),
               "B thumbnail '' clears the key and deletes the thumbnail.dds it named", f"{short(r)} {m.get('thumbnail')}")
@@ -1116,16 +985,16 @@ class Run:
         check(r.get("ok") and dds_info(read_bytes(thumb)).get("fourcc") == "DXT1", "B and the opaque one for the release",
               short(r))
 
-        r = mcp("mod.set", set={"module": {"tags": "story,quests"}})
+        r = cmd("mod.set", set={"module": {"tags": "story,quests"}})
         check(r.get("ok") and manifest_now().get("tags") == ["story", "quests"], "B tags story,quests are kept in order",
               short(r))
-        r = mcp("mod.set", set={"module": {"tags": "story,nonsense"}})
+        r = cmd("mod.set", set={"module": {"tags": "story,nonsense"}})
         check(not r.get("ok") and "unknown tag" in str(r.get("error")) and "nonsense" in str(r.get("error")),
               "B a word outside the vocabulary is refused and named", short(r))
         check(manifest_now().get("tags") == ["story", "quests"], "B and the tags stay as they were")
-        r = mcp("mod.set", set={"module": {"tags": ""}})
+        r = cmd("mod.set", set={"module": {"tags": ""}})
         check(r.get("ok") and manifest_now().get("tags") == [], "B tags '' clears them", short(r))
-        mcp("mod.set", set={"module": {"tags": "story,quests"}})
+        cmd("mod.set", set={"module": {"tags": "story,quests"}})
 
     # ------------------------------------------------------------------------------ C: content policy
     def content(self) -> None:
@@ -1140,7 +1009,7 @@ class Run:
         for path, data in planted.items():
             write_bytes(path, data)
         try:
-            r = mcp("mod.package")
+            r = cmd("mod.package")
             content = r.get("catalog_content") or []
             blocked = [c.get("text", "") for c in content if c.get("level") == "block"]
             reviewed = [c.get("text", "") for c in content if c.get("level") == "review"]
@@ -1167,11 +1036,11 @@ class Run:
                 if os.path.exists(path):
                     os.remove(path)
             for folder in ("bin", "qa_disguised", "qa_keys"):
-                qa_target.remove_tree(os.path.join(self.copy, folder))
+                qa.remove_tree(os.path.join(self.copy, folder))
 
     # ------------------------------------------------------------------------------ D: the signed descriptor
     def descriptor(self) -> None:
-        r = mcp("mod.package")
+        r = cmd("mod.package")
         check(r.get("ok") and r.get("signed") is True and r.get("key_id") == self.key_id,
               "D the package is signed with the author key", short(r))
         check(not [c for c in r.get("catalog_content") or [] if c.get("level") == "block"],
@@ -1275,19 +1144,18 @@ class Run:
         check(data.get("ok") and (data.get("job") or {}).get("kind") == "check",
               "F show opens the window and starts a check", short(data.get("job")))
         # the dialog fits itself once, when it opens: a check that ends later scrolls inside it instead of growing it
-        early = mcp("shot.window").get("modal") or {}
+        early = cmd("shot.window").get("modal") or {}
         data = follow(data)
         check(job_done(data, "check") and not blocks(data), "F the check it started runs to the end", short(data.get("job")))
-        # main() saved the window's place far below the editor, and ImGui gives a window outside the main viewport
-        # a platform window of its own - one no screenshot of the editor holds
-        pic = mcp("shot.window")
+        # a modal lives in the editor's own window: the picture of the window holds it
+        pic = cmd("shot.window")
         self.window_in_shot(pic, "F the window opens inside the editor, and a screenshot holds it, wherever the layout "
                             "saved it")
         late = pic.get("modal") or {}
         h0, h1 = mrect(early)[3], mrect(late)[3]
         check(h0 > 0 and abs(h0 - h1) <= 1, "F the window keeps its height while the check runs and after it ends",
               "%s -> %s" % (h0, h1))
-        audit = mcp("ui.audit", id="submit")
+        audit = cmd("ui.audit", id="submit")
         controls = audit.get("controls") or []
         submit = [c for c in controls if c.get("label") in ("Scan and Submit", "Scan and Update", "Update Submission", "Submit")]
         check(audit.get("ok") and not audit.get("escaped") and len(submit) == 1 and inside(submit[0].get("rect"), late) and
@@ -1304,19 +1172,19 @@ class Run:
         follow(catalog("show"))
         check(resize_editor(self.pid, 1500, 1000), "F the editor's window takes another size")
         time.sleep(0.5)
-        pic = mcp("shot.window")
+        pic = cmd("shot.window")
         self.window_in_shot(pic, "F after the resize the window is still inside the editor")
         why = centred(pic)
         check(not why, "F after the resize the window is centred in the editor", why)
         shot(self.shots, "catalog_window_resized")
         catalog("hide")
 
-        # a minimized editor has no client area, and ImGui draws nothing of a minimized window: a screenshot of it
-        # was one flat colour. It stays minimized from here on, so every later picture is taken of a minimized editor
-        st = mcp("app.window", action="minimize")
+        # a minimized editor is pictured the way it looks restored (never one flat colour). It stays minimized from
+        # here on, so every later picture is taken of a minimized editor
+        st = cmd("app.window", action="minimize")
         check(st.get("ok") and st.get("minimized") is True, "F the editor is minimized", short(st))
         follow(catalog("show"))
-        pic = mcp("shot.window")
+        pic = cmd("shot.window")
         self.window_in_shot(pic, "F a screenshot of the minimized editor holds the window as well")
         why = centred(pic)
         check(not why, "F the minimized editor's picture has the window centred", why)
@@ -1511,17 +1379,17 @@ class Run:
         # withdraws anything
         posted = len(api_requests(mock, "POST", "/issues"))
         follow(catalog("show", confirm="withdraw"))
-        pic = mcp("shot.window")
+        pic = cmd("shot.window")
         modal = pic.get("modal") or {}
         check(modal.get("id") == WITHDRAW_SHEET, "W show confirm=withdraw puts the withdrawal's question on top", short(modal))
-        audit = mcp("ui.audit", id=WITHDRAW_SHEET)
+        audit = cmd("ui.audit", id=WITHDRAW_SHEET)
         labels = [c.get("label") for c in audit.get("controls") or []]
         check("Withdraw" in labels and "Cancel" in labels and not audit.get("escaped"),
               "W the question offers Withdraw and Cancel, and nothing of it leaves its window",
               short(audit.get("escaped")) + " " + short(labels))
         shot(self.shots, "catalog_withdraw_sheet")
         catalog("hide")
-        pic = mcp("shot.window")
+        pic = cmd("shot.window")
         check(not pic.get("modal") and len(api_requests(mock, "POST", "/issues")) == posted and
               not submissions(mock.catalog(), "QaOwner", WITHDRAW_TITLE),
               "W hide takes the window and its question down, and nothing was sent", short(pic.get("modal")))
@@ -1625,31 +1493,30 @@ class Run:
         check(not in_paths, "I %s: no secret in any address" % run, str(in_paths))
         said = [a[:200] for a in answers if any(s in a for s in SECRETS)]
         check(not said, "I %s: no MCP answer holds a password, the VirusTotal key or the token" % run, str(said))
-        leaked = leaks_in([os.path.join(REPO, "logs"), self.copy, self.home])
+        leaked = leaks_in([os.path.join(qa.home(), "logs"), self.copy, self.home])
         check(not leaked, "I %s: no log, project file or key file holds one either" % run, str(leaked))
 
     # ------------------------------------------------------------------------------ run 2 / J: the maintainer
     def lifecycle(self, mock: Mock) -> None:
         """L: a Mod Browser job is the project's - closing the project stops it, and nothing starts it again."""
-        started = mcp("release.catalog_status", action="check", wait=False)
+        started = cmd("release.catalog_status", action="check", wait=False)
         check(started.get("ok") and started.get("job"), "L a check starts as a job", short(started))
-        closed = mcp("project.close", discard=True)
+        closed = cmd("project.close", discard=True)
         check(closed.get("ok"), "L the project closes", short(closed))
         deadline = time.monotonic() + 10
         running = ["?"]
         while time.monotonic() < deadline:
-            running = [j for j in mcp("job.list", running=True).get("jobs", []) if j.get("group") == "catalog"]
+            running = [j for j in cmd("job.list", running=True).get("jobs", []) if j.get("group") == "catalog"]
             if not running:
                 break
             time.sleep(0.1)
         check(not running, "L job.list running=true holds no Mod Browser job once the project closed", short(running))
         time.sleep(1.0)
-        again = [j for j in mcp("job.list", running=True).get("jobs", []) if j.get("group") == "catalog"]
+        again = [j for j in cmd("job.list", running=True).get("jobs", []) if j.get("group") == "catalog"]
         check(not again, "L and none starts again", short(again))
-        reopened = mcp("project.open", path=self.copy, timeout=120)
+        reopened = cmd("project.open", path=self.copy, timeout=120)
         check(reopened.get("ok"), "L the project opens again", short(reopened))
-        stalls = mcp("perf.stalls")
-        check(stalls.get("ok") and not stalls.get("stalls"), "L no UI pass waited", short(stalls))
+        qa.stalls("L no UI pass waited", clear=True)
 
     def maintainer(self) -> None:
         if "J" not in ONLY[0]:
@@ -1661,7 +1528,7 @@ class Run:
                     "--vt-rate", "2", "--vt-rate-window", str(int(VT_WINDOW_S * 1000)), repo=MAINTAINER_REPO)
         editor = None
         try:
-            editor = Editor(self.exe, self.copy, port, self.home, vt_variable=True,
+            editor = Editor(self.copy, port, self.home, vt_variable=True,
                             extra_env={"GRIZZLY_VT_RATE_WAIT_MS": "200"})
             self.pid = editor.proc.pid
             phase("J", self.own_listing, mock)
@@ -1678,7 +1545,7 @@ class Run:
         check(st.get("ok") and key.get("exists") is True and key.get("locked") is True and key.get("key_id") == self.key_id,
               "J a new session finds the remembered key, locked", short(key))
         check(st.get("vt_key") is True, "J GRIZZLY_VT_KEY is a VirusTotal key too", short(st))
-        r = mcp("mod.set", set={"update": {"github": MAINTAINER_REPO}})
+        r = cmd("mod.set", set={"update": {"github": MAINTAINER_REPO}})
         check(r.get("ok"), "J the module moves to the maintainer's repository", short(r))
         st = catalog("key_unlock", password=PASSWORD)
         check(st.get("ok") and (st.get("key") or {}).get("locked") is False, "J unlocked", short(st))
@@ -1767,86 +1634,41 @@ class Run:
               short(data.get("job")) + " " + job_error(data))
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--project", required=True, help="a project to COPY and run against")
-    parser.add_argument("--editor", default=qa_target.exe())
-    parser.add_argument("--game-repo", default=r"D:\Games\Dead Air\DeadAir-x64",
-                        help="the game repository: its tools/catalog holds the reference implementation")
-    parser.add_argument("--shots", help="a folder for screenshots of the Submit to Mod Browser window")
-    parser.add_argument("--keep", action="store_true", help="keep the throw-away copy, the catalog home and the mock logs")
-    parser.add_argument("--only", help="phase letters, e.g. A,F (%s)" % PHASES)
-    args = parser.parse_args()
-    asked = "".join(p for p in (args.only or PHASES).replace(",", "").upper() if p.strip())
-    only = "".join(p for p in PHASES if p in asked)
-    if any(p not in PHASES for p in asked):
-        print("no such phase in %s: %s" % (PHASES, args.only))
-        return 2
+def run(ctx: qa.Run) -> None:
+    global xc, cat
+    args = ctx.args
+    only = "".join(p for p in PHASES if p in (ctx.only.replace(",", "").upper() or PHASES))
     ONLY[0] = only
     NEEDED[0] = "".join(sorted({n for p in only for n in NEEDS.get(p, "")} - set(only)))
     # an answer may carry text the console's code page lacks: printed escaped, never a crash of the harness
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(errors="backslashreplace")
-
-    src = os.path.abspath(args.project)
-    if not os.path.isdir(src):
-        print("no such project: " + src)
-        return 2
-    tools =os.path.join(os.path.abspath(args.game_repo), "tools", "catalog")
+    tools = os.path.join(os.path.abspath(args.game_repo), "tools", "catalog")
     if not os.path.isfile(os.path.join(tools, "xms_catalog.py")) or not os.path.isfile(os.path.join(tools, "catalog.py")):
-        print("no reference implementation in " + tools)
-        return 2
-    global xc, cat
+        raise RuntimeError("no reference implementation in " + tools)
     sys.path.insert(0, tools)
     import xms_catalog  # noqa: E402
     import catalog  # noqa: E402
     xc, cat = xms_catalog, catalog
 
-    work = tempfile.mkdtemp(prefix="grizzly_catalogproj_")
-    copy = os.path.join(work, "QaModCatalog")
-    # trimmed (qa_target.TRIMMED): no phase is about the size of a package
-    qa_target.copy_project(src, copy, ignore=(".git", ".gitignore", "releases", "temp", "logs", "backup"), trimmed=True)
-    print("running against a copy: " + copy, flush=True)
-
-    ini = os.path.join(REPO, "_projects.ini")
-    ini_backup = read_bytes(ini)
     real_home = os.path.join(documents_folder(), "Grizzly Editor")
     real_before = snapshot(real_home)
-    # F wants the Submit to Mod Browser window in the picture although the layout saved it far below the editor (a
-    # fresh checkout has no layout yet: the entry is all it holds). The editor rewrites its layout and preferences
-    # when it closes, so both come back byte for byte after the last one has
-    layout_backup = read_bytes(LAYOUT)
-    prefs_backup = read_bytes(PREFS)
-    # the Rust shell keeps no ImGui layout: a window is never placed from a stale entry, so the precondition has no
-    # meaning there - the check behind it (the window in the picture, centred, more than a flat fill) stays
-    if not qa_target.RUST:
-        write_bytes(LAYOUT, stale_layout(layout_backup or b"", SUBMIT_WINDOW, 3000))
-
     try:
-        run = Run(args, work, copy)
-        run.author()
-        run.maintainer()
-    except Exception as exc:  # noqa: BLE001 - the report is the point
-        check(False, "the run finished", repr(exc))
+        run_ = Run(ctx.shots, ctx.work, ctx.project)
+        run_.author()
+        run_.maintainer()
     finally:
-        if ini_backup is not None:
-            write_bytes(ini, ini_backup)
-        for path, backup in ((LAYOUT, layout_backup), (PREFS, prefs_backup)):
-            if backup is not None:
-                write_bytes(path, backup)
-            elif os.path.isfile(path):
-                os.remove(path)
-        check(read_bytes(LAYOUT) == layout_backup and read_bytes(PREFS) == prefs_backup,
-              "Z the editor's layout and preferences files are back as they were")
         check(snapshot(real_home) == real_before, "Z the real Documents\\Grizzly Editor was not touched")
-        if not args.keep:
-            qa_target.remove_tree(work)
-        else:
-            print("kept: " + work, flush=True)
 
-    passed = sum(1 for ok, _ in results if ok)
-    print(f"MODCATALOG: DONE {passed}/{len(results)}", flush=True)
-    return 0 if passed == len(results) else 1
+
+def main() -> int:
+    def more(ap) -> None:
+        ap.add_argument("--game-repo", default=r"D:\Games\Dead Air\DeadAir-x64",
+                        help="the game repository: its tools/catalog holds the reference implementation")
+
+    # trimmed: no phase is about the size of a package
+    return qa.suite("MOD CATALOG", run, doc=__doc__, add_args=more, trimmed=True, phases=PHASES,
+                    ignore=(".git", ".gitignore", "releases", "temp", "logs", "backup"))
 
 
 if __name__ == "__main__":
