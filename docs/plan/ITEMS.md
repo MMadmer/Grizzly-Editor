@@ -184,31 +184,34 @@ The author's wish: as far as it can be done, a module must not cost a save its c
 Dead Air - what a module brought simply is not there when the save is loaded in the original game. Characters
 and everything else a module adds included.
 
-- `.scop` always describes a world the original game can load. What only a module explains lives in `.scov`
-  (the game's `docs\dead-air\SAVE_COMPATIBILITY.md`: the one extension container, chunks, bound to its `.scop`,
-  ignored by the original game, stale after the original game saved over the pair) and is laid over the `.scop`
-  world when Refined loads the save.
-- **Objects**: an ALife object goes to `.scov` instead of `.scop` when its section was made by a module (an item,
-  a character, a squad of a module), when a module's spawn layer added it, when it stands on a level a module
-  added, or when it is inside such an object (a stock medkit in a module character's pockets). Loaded back after
-  the `.scop` objects when its section still exists; left out with one line when its module is gone.
+- **What a module brings never enters the original game's save format.** `.scop` always describes a world the
+  original game can load; everything of a module lives in `.scov` (the game's `docs\dead-air\SAVE_COMPATIBILITY.md`:
+  the one extension container, chunks, ignored by the original game) and is laid over the `.scop` world when
+  Refined loads the save. So a save can go to the original game and come back, and the module's content is no
+  problem there and not lost here.
+- **Objects**: an ALife object is a module's - and is written to `.scov`, by module - when its section was made
+  by a module (an item, a character, a squad), when a module's spawn layer added it, when it stands on a level a
+  module added, when a module's script declared it its own (what a quest spawns into the world; not what it hands
+  to the player), or when it is inside such an object (a stock medkit in a module character's pockets).
+- **Its id stays taken**: `.scop` holds, under the same id, an inert placeholder of a class the original game has
+  always had (no visual, no shape, never online). The original keeps it and never gives the id to anything else;
+  Refined replaces it by the object it stands for. No id is ever remapped, so every reference - a quest's, a
+  smart terrain's - means the same object after any trip. A placeholder is no content.
+- **The lineage**: the placeholders carry the id of the Refined save whose `.scov` the world belongs with. The
+  original game carries it forward under any save name; Refined, loading a `.scop` whose own sidecar is missing or
+  stale, finds the `.scov` of that lineage among the saves and takes the module families from it.
 - **State of the game's own objects that names a module's data** follows the weapon-extension precedent: the
   `.scop` record keeps what the original game understands, `.scov` the rest - an upgrade of a module installed on
   a stock item, an ammo type a module added to a stock weapon's list that is loaded in it.
-- **What scripts save** that names such objects (a smart terrain's list of the NPCs it holds, tasks a module gave)
-  is taken out of the stock stream and kept in `.scov` where the stock scripts would stop on it in the original
-  game; found by reading what each stock `STATE_Write` / `save_state` writes.
-- **A module switched off inside Refined is kept, not erased.** The player who disables a module and plays on has
-  a working save without that module's content - and gets the content back where it stopped when the module is
-  switched on again (an update of it in between, a story mod set aside for a while). The module's records stay in
-  `.scov` as they were written, byte for byte, through every save made without it; the ids of its objects stay
-  reserved meanwhile, so nothing else takes them and every reference to them - a quest's, a smart terrain's -
-  still means the same object when they return. The quest runtime keeps the state of a quest whose module is
-  absent the same way, untouched and not run. What cannot come back safely is dropped with a line saying why,
-  when the module is there again: a section the module no longer has, a section whose class changed (the record
-  is in the old class's format), an item whose owner is gone. `xms_forget <module>` drops a module's kept content
-  from the game in progress for a player who will not bring it back. A save the ORIGINAL game wrote over the
-  pair makes `.scov` stale, as the save contract says: everything kept there is gone with it.
+- **What scripts save**: nothing a stock script writes into `.scop` or `.scoc` names a module's object or task -
+  such entries are taken out of the stock stream and kept with the module's data.
+- **A module that is absent - switched off or removed, the same case - is kept, not erased.** The player plays on
+  with a working save and without that module's content, and gets it back where it stopped when the module
+  returns (an update in between, a story mod set aside). Its records stay in `.scov` byte for byte through every
+  save made without it, its placeholders keep its ids, the quest runtime keeps its quests untouched and not run.
+  What cannot come back safely is dropped with a line saying why, when the module is there again: a section the
+  module no longer has, a section whose class changed (the record is in the old class's format), an item whose
+  owner is gone. `xms_forget <module>` drops a module's kept content for a player who will not bring it back.
 - Limits are said, not hidden: the player saved on a module's level; a module that changes the game's own objects
   in place; a mode of a module (a game of its own, which the original never starts).
 - A game with no module, and a save with nothing of a module in it, are written byte for byte as before.
