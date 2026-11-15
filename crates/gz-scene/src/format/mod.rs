@@ -907,8 +907,87 @@ pub struct SceneFiles {
     /// The folder's files that did not parse when they were last read: a save leaves each as it
     /// is, so nothing the author wrote in it is lost.
     pub broken: Vec<&'static str>,
+    /// For a file of `broken` that read before: the documents and the state of its last
+    /// reading. What the scene changes of its objects while it does not read is told against
+    /// that and goes over the file's text when it reads again.
+    pub held: Vec<(&'static str, Arc<SceneFiles>)>,
     /// The `.scene` was read in an older version: the next save writes it in the current one.
     pub migrated: bool,
+}
+
+/// A class file's value with every list emptied: the file before anything was put in it.
+fn lists_emptied(file: &Value) -> Value {
+    let mut out = Table::new();
+    for (key, value) in file.as_table().map(|t| t.fields.as_slice()).unwrap_or_default() {
+        match value {
+            Value::Table(_) => out.put(key, Value::Table(Table::new())),
+            other => out.put(key, other.clone()),
+        }
+    }
+    Value::Table(out)
+}
+
+impl SceneFiles {
+    /// Takes over from `before` (the documents there were until now) the last good reading of
+    /// every file that does not read now: the one `before` held, or `before` itself when the
+    /// file read in it.
+    pub fn hold_broken(&mut self, before: Option<&SceneFiles>) {
+        self.held = self
+            .broken
+            .iter()
+            .filter_map(|file| {
+                let before = before?;
+                if let Some(h) = before.held.iter().find(|(f, _)| f == file) {
+                    return Some(h.clone());
+                }
+                before.docs.iter().any(|d| d.file == *file).then(|| {
+                    let mut last = before.clone();
+                    last.held.clear();
+                    (*file, Arc::new(last))
+                })
+            })
+            .collect();
+    }
+
+    /// What the scene holds of a file that did not read, as two values of the file: when it last
+    /// read (an empty table when it never did here) and as a save would write it now. `None`
+    /// when the scene changed nothing of its objects.
+    pub fn pending(
+        &self,
+        now: &SceneState,
+        file: &'static str,
+        settings: Option<&(dyn Settings + Sync)>,
+    ) -> Result<Option<(Value, Value)>, String> {
+        let empty = || Value::Table(Table::new());
+        let of = |docs: &[Doc]| docs.iter().find(|d| d.file == file).map(|d| d.doc.value());
+        match self.held.iter().find(|(f, _)| *f == file) {
+            Some((_, last)) => {
+                let plan = write(now, Some(last), settings)?;
+                if !plan.files.iter().any(|o| o.file == file) {
+                    return Ok(None);
+                }
+                // no document after the save: the scene has none of its objects left
+                Ok(Some((of(&last.docs).unwrap_or_else(empty), of(&plan.after.docs).unwrap_or_else(empty))))
+            }
+            // it never read here: whatever the scene holds of its lists was put there in this
+            // session - told against the same lists with nothing in them, so the objects are
+            // added to the file's own
+            None => Ok(of(&write(now, None, settings)?.after.docs).map(|ours| (lists_emptied(&ours), ours))),
+        }
+    }
+
+    /// The files that do not read and of whose objects the scene holds changes.
+    pub fn pending_files(
+        &self,
+        now: &SceneState,
+        settings: Option<&(dyn Settings + Sync)>,
+    ) -> Vec<&'static str> {
+        self.broken
+            .iter()
+            .copied()
+            .filter(|f| matches!(self.pending(now, f, settings), Ok(Some(_))))
+            .collect()
+    }
 }
 
 /// A group written with a `ref` and no `members`: placed from its asset when the scene is read.
@@ -1355,7 +1434,7 @@ pub fn read_with(
         }
     }
     Ok(Read {
-        files: SceneFiles { scene: scene_doc, docs, base: state.clone(), broken, migrated },
+        files: SceneFiles { scene: scene_doc, docs, base: state.clone(), broken, held: Vec::new(), migrated },
         state,
         problems,
         unplaced,
@@ -1552,6 +1631,8 @@ pub fn write(
             docs,
             base: state.clone(),
             broken: broken.clone(),
+            // a file that still does not read keeps its last good reading
+            held: files.map(|f| f.held.clone()).unwrap_or_default(),
             migrated: false,
         },
         kept: broken,

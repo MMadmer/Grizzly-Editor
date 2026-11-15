@@ -444,13 +444,35 @@ async fn scene_save(ed: Arc<Editor>, p: SaveParams, _o: Origin) -> Reply {
     let mut out = json!({ "file": wire(&svc.root, &file), "written": written });
     // a part file that does not read was left as it is: the caller must know its objects' changes
     // are not on the disk
-    let skipped: Vec<&'static str> = svc.files().map(|f| f.broken.clone()).unwrap_or_default();
-    if let (false, Value::Object(m)) = (skipped.is_empty(), &mut out) {
+    let files = svc.files();
+    let skipped: Vec<&'static str> = files.as_ref().map(|f| f.broken.clone()).unwrap_or_default();
+    if let (false, Some(files), Value::Object(m)) = (skipped.is_empty(), files, &mut out) {
+        // of those, the files of whose objects the scene holds changes nobody has written
+        let settings = crate::game::settings(&ed).await;
+        let snap = svc.store.snapshot();
+        let unwritten = ed
+            .exec
+            .cpu(move || {
+                files.pending_files(
+                    &snap,
+                    settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync)),
+                )
+            })
+            .await;
+        let kept = if unwritten.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " What the scene changed of the objects of {} is not written: the open scene keeps it and writes it once the file reads again - closed before that, it is lost.",
+                unwritten.join(", ")
+            )
+        };
         m.insert("skipped".into(), json!(skipped));
+        m.insert("unwritten".into(), json!(unwritten));
         m.insert(
             "warning".into(),
             json!(format!(
-                "{} of the scene does not read and was left as it is: what the scene changed of its objects is not written. Fix the file (asset.check names the line) and save again.",
+                "{} of the scene does not read and was left as it is.{kept} Fix the file (asset.check names the line) and save again.",
                 skipped.join(", ")
             )),
         );
@@ -1678,6 +1700,7 @@ async fn scene_recover(ed: Arc<Editor>, p: RecoverParams, o: Origin) -> Reply {
 async fn restore(ed: &Arc<Editor>, svc: &Arc<SceneService>, linked: bool, o: Origin) -> Result<(), String> {
     let (_, dir, source) = svc.recovery.begin_restore(svc.store.is_dirty(), linked)?;
     let settings = crate::game::settings(ed).await;
+    let on_disk = settings.clone();
     let root = svc.root.clone();
     let d = dir.clone();
     let opened = ed
@@ -1704,6 +1727,23 @@ async fn restore(ed: &Arc<Editor>, svc: &Arc<SceneService>, linked: bool, o: Ori
                 Ok(_) => {
                     svc.forget_files();
                     svc.set_opened();
+                    // unsaved, over its files as they are on the disk now: a save writes what
+                    // differs, and a file that does not read there stays the author's
+                    if let Some(real) = svc.store.snapshot().meta.file.clone() {
+                        let root = svc.root.clone();
+                        let there = ed
+                            .exec
+                            .io(move || {
+                                let st = on_disk.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync));
+                                real.is_file()
+                                    .then(|| service::open_files(&root, &real, st))
+                                    .and_then(Result::ok)
+                            })
+                            .await;
+                        if let Some(service::Opened { files: Some(files), problems, .. }) = there {
+                            svc.attach_files(files, problems);
+                        }
+                    }
                     svc.store.send(SceneCmd::Touch, o).await.map(|_| ()).map_err(|e| e.message)
                 }
                 Err(e) => Err(e.message),

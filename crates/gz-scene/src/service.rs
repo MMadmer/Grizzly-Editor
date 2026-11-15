@@ -204,6 +204,13 @@ impl SceneService {
         self.files.lock().clone()
     }
 
+    /// The scene is saved against `files` from now on: the documents on the disk as they were
+    /// just read, with the problems that reading found.
+    pub(crate) fn attach_files(&self, files: SceneFiles, problems: Vec<Problem>) {
+        *self.files.lock() = Some(Arc::new(files));
+        *self.problems.lock() = problems;
+    }
+
     /// The scene is no longer the one its files hold (a new scene).
     pub(crate) fn forget_files(&self) {
         *self.files.lock() = None;
@@ -363,6 +370,16 @@ fn snapshot_of(
     out.push((format!("{name}.{}", format::EXT), plan.after.scene.text().as_bytes().to_vec()));
     for d in &plan.after.docs {
         out.push((format!("{name}/{}", d.file), d.doc.text().as_bytes().to_vec()));
+    }
+    // a file that does not read now: its objects as the scene holds them, written whole, so a
+    // restore has them (the file on the disk is the author's and stays as it is)
+    if !plan.kept.is_empty() {
+        let whole = format::write(state, None, settings)?;
+        for f in whole.files {
+            if let (true, Some(bytes)) = (plan.kept.contains(&f.file.as_str()), f.bytes) {
+                out.push((format!("{name}/{}", f.file), bytes));
+            }
+        }
     }
     for l in format::layers::LAYERS {
         if format::layers::has(l, &state.bulk) {
@@ -896,7 +913,23 @@ pub(crate) async fn outside_change(
         }
     };
     let Some(theirs) = opened.files else { return Ok(()) };
-    if !svc.store.is_dirty() {
+    // a file that did not read and reads again: what the scene changed of its objects meanwhile
+    // is unsaved work like any other, whatever a save in between marked
+    let held = match svc.files() {
+        Some(mine) if mine.broken.iter().any(|f| !theirs.broken.contains(f)) => {
+            let (s, st, again) = (snap.clone(), settings.clone(), theirs.broken.clone());
+            ed.exec
+                .cpu(move || {
+                    let st = st.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync));
+                    mine.broken
+                        .iter()
+                        .any(|f| !again.contains(f) && matches!(mine.pending(&s, f, st), Ok(Some(_))))
+                })
+                .await
+        }
+        _ => false,
+    };
+    if !svc.store.is_dirty() && !held {
         svc.prefetch_library(ed, &opened.state).await;
         svc.store
             .send(
@@ -909,6 +942,8 @@ pub(crate) async fn outside_change(
             )
             .await
             .map_err(|e| e.message)?;
+        let mut theirs = theirs;
+        theirs.hold_broken(svc.files().as_deref());
         *svc.files.lock() = Some(Arc::new(theirs));
         *svc.problems.lock() = opened.problems;
         ed.log
@@ -1006,6 +1041,30 @@ fn rebase(
         }
         let theirs_doc = theirs.docs.iter().find(|d| d.file == cf.file);
         let mine_doc = mine.docs.iter().find(|d| d.file == cf.file);
+        // it did not read on this side and reads again: what the scene changed of its objects
+        // meanwhile goes over the new text, like any other unsaved change
+        if let (Some(t), true) = (theirs_doc, mine.broken.contains(&cf.file)) {
+            let text = match mine.pending(now, cf.file, settings)? {
+                Some((base, ours)) => {
+                    let (doc, conflicts) = gz_luadata::LuaDoc::rebase_with(
+                        &base,
+                        &ours,
+                        t.doc.text(),
+                        &format::class_rules(cf),
+                        cf.file,
+                        gz_luadata::Limits::scene(),
+                    )
+                    .map_err(|e| format!("{}: {}", cf.file, e.message))?;
+                    for c in conflicts {
+                        problems.push(conflict_problem(&c, cf.file));
+                    }
+                    doc.text().to_owned()
+                }
+                None => t.doc.text().to_owned(),
+            };
+            texts.files.push((cf.file.to_owned(), text));
+            continue;
+        }
         let text = match (theirs_doc, mine_doc, changed.contains(&cf.file)) {
             (Some(t), Some(m), true) => {
                 let (text, conflicts) = rebase_one(cf.file, &m.doc, t.doc.text(), &format::class_rules(cf))?;
@@ -1035,6 +1094,7 @@ fn rebase(
     state.meta = now.meta.clone();
     let mut files = theirs.clone();
     files.base.meta = now.meta.clone();
+    files.hold_broken(Some(mine));
     Ok(((state, files), problems))
 }
 
@@ -1132,6 +1192,118 @@ mod tests {
         assert!(files.broken.is_empty());
         assert_eq!(back.find(ObjClass::SceneObject, "Box_02").unwrap().xform.position.x, 7.0);
         assert_eq!(back.find(ObjClass::Light, "Lamp_01").unwrap().xform.position.y, 5.0);
+    }
+
+    /// `objects.lua` with a brace too many.
+    fn broken_of(good: &Texts) -> Texts {
+        let mut broken = good.clone();
+        for (f, t) in &mut broken.files {
+            if f == "objects.lua" {
+                t.push_str("\n}} oops\n");
+            }
+        }
+        broken
+    }
+
+    fn box_x(s: &SceneState, name: &str) -> f32 {
+        s.find(ObjClass::SceneObject, name).map_or(f32::NAN, |o| o.xform.position.x)
+    }
+
+    fn move_box(s: &mut SceneState, name: &str, x: f32) {
+        let mut o = (**s.find(ObjClass::SceneObject, name).unwrap()).clone();
+        o.xform.position.x = x;
+        s.replace(o);
+    }
+
+    /// What the scene changes of a file's objects while the file does not read is unsaved work:
+    /// a save in between leaves the file and keeps the change, and when the file reads again the
+    /// change goes over its new text beside what the file's author changed.
+    #[test]
+    fn a_change_made_while_a_file_does_not_read_goes_over_it_when_it_reads_again() {
+        let good = disk();
+        let mine = read(&good, None);
+        let clean = mine.state.clone();
+        // the file breaks under a scene with nothing unsaved: its last reading is held
+        let theirs = read(&broken_of(&good), Some(format::Keep { state: &clean, files: &[] }));
+        let mut files = theirs.files;
+        files.hold_broken(Some(&mine.files));
+        assert_eq!(files.held.len(), 1);
+        assert!(files.pending_files(&clean, None).is_empty(), "nothing changed yet");
+        // a box moved in the window, then a save: the file is left, the change is still held
+        let mut now = clean.clone();
+        move_box(&mut now, "Box_01", 40.0);
+        assert_eq!(files.pending_files(&now, None), ["objects.lua"]);
+        let plan = format::write(&now, Some(&files), None).unwrap();
+        assert!(plan.files.iter().all(|f| f.file != "objects.lua"));
+        let files = plan.after;
+        assert_eq!(files.pending_files(&now, None), ["objects.lua"], "a save does not drop it");
+        // the author fixes the file and moves the other box in it
+        let mut fixed = good.clone();
+        for (f, t) in &mut fixed.files {
+            if f == "objects.lua" {
+                *t = t.replacen("pos = { 2, 0, 0 }", "pos = { 7, 0, 0 }", 1);
+            }
+        }
+        let theirs = read(&fixed, Some(format::Keep { state: &now, files: &[] }));
+        let ((back, files), conflicts) = rebase(&now, &files, &theirs.files, None).unwrap();
+        assert!(conflicts.is_empty(), "{conflicts:?}");
+        assert!(files.broken.is_empty() && files.held.is_empty());
+        assert_eq!((box_x(&back, "Box_01"), box_x(&back, "Box_02")), (40.0, 7.0));
+        // and the save then writes this side's line into the author's file, nothing else
+        let plan = format::write(&back, Some(&files), None).unwrap();
+        let written: Vec<&str> = plan.files.iter().map(|f| f.file.as_str()).collect();
+        assert_eq!(written, ["objects.lua"]);
+        let text = String::from_utf8(plan.files[0].bytes.clone().unwrap()).unwrap();
+        assert!(text.contains("40, 0, 0") && text.contains("7, 0, 0"), "{text}");
+    }
+
+    /// A file that never read in this session: an object made meanwhile is added to it when it
+    /// reads.
+    #[test]
+    fn an_object_made_while_its_file_never_read_is_added_when_it_reads() {
+        let good = disk();
+        let empty = SceneState { valid: true, ..SceneState::default() };
+        let opened = read(&broken_of(&good), Some(format::Keep { state: &empty, files: &[] }));
+        assert_eq!(boxes(&opened.state), 0);
+        let mut now = opened.state.clone();
+        let mut o = Object::new(
+            ObjClass::SceneObject,
+            "Box_09",
+            ObjData::SceneObject(SceneObjectData::library(r"props\box")),
+        );
+        o.xform.position = Vec3::new(9.0, 0.0, 0.0);
+        now.insert(o);
+        assert_eq!(opened.files.pending_files(&now, None), ["objects.lua"]);
+        let theirs = read(&good, Some(format::Keep { state: &now, files: &[] }));
+        let ((back, _), _) = rebase(&now, &opened.files, &theirs.files, None).unwrap();
+        assert_eq!(boxes(&back), 3, "the file's two and the one made here");
+        assert_eq!(box_x(&back, "Box_09"), 9.0);
+    }
+
+    /// A recovery snapshot of a scene with a file that does not read holds that file's objects,
+    /// written whole: a restore has every object the scene had.
+    #[test]
+    fn a_snapshot_holds_the_objects_of_a_file_that_does_not_read() {
+        let good = disk();
+        let mine = read(&good, None);
+        let mut now = mine.state.clone();
+        move_box(&mut now, "Box_01", 40.0);
+        let theirs = read(&broken_of(&good), Some(format::Keep { state: &now, files: &[] }));
+        let mut files = theirs.files;
+        files.hold_broken(Some(&mine.files));
+        let snap = snapshot_of(&now, Some(&files), None).unwrap();
+        let mut t = Texts::default();
+        for (name, bytes) in &snap.files {
+            let text = String::from_utf8(bytes.clone()).unwrap();
+            match name.rsplit_once('/') {
+                None => t.scene = text,
+                Some((_, file)) if file.ends_with(".lua") => t.files.push((file.to_owned(), text)),
+                Some(_) => {}
+            }
+        }
+        let back = read(&t, None);
+        assert!(back.files.broken.is_empty(), "the snapshot reads");
+        assert_eq!((boxes(&back.state), box_x(&back.state, "Box_01")), (2, 40.0));
     }
 
     #[test]

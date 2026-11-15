@@ -1132,8 +1132,7 @@ mod tests {
     /// the heading alone, a scale changes nothing.
     #[test]
     fn a_terrain_turns_about_the_vertical_alone_and_does_not_scale() {
-        let mut o =
-            Object::new(ObjClass::Terrain, "Yard", ObjData::Terrain(Box::new(gz_terrain::Spec::default())));
+        let mut o = Object::new(ObjClass::Terrain, "Yard", ObjData::Terrain(Box::default()));
         apply_edit(&mut o, TransformEdit::Rotation(Vec3::new(0.3, 1.2, -0.4)));
         assert_eq!(o.rotation(), Vec3::new(0.0, 1.2, 0.0));
         apply_edit(&mut o, TransformEdit::Scale(Vec3::splat(3.0)));

@@ -678,6 +678,26 @@ fn write_scene(
             let code = reply.get("code").and_then(Value::as_str).unwrap_or("failed");
             *failed.lock() = Some(gz_editor::CmdError::new(code, why));
             ed.exec.wake().ping();
+            return;
+        }
+        // a file that does not read was left as it is and the scene still holds changes of its
+        // objects: a person who saved is told, a command's caller has it in the answer
+        let unwritten: Vec<&str> = reply
+            .get("unwritten")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        if !unwritten.is_empty()
+            && origin != gz_base::Origin::Mcp
+            && let Ok(q) = UiQueue::of(&ed)
+        {
+            let text = gz_ui::tr!(
+                "{files} does not read: the changes to its objects are not saved until it does",
+                files = gz_ui::Tx::raw(unwritten.join(", "))
+            );
+            q.post(move |_, ctx| gz_ui::state::toast(ctx, gz_ui::Tone::Warning, text));
         }
     });
 }

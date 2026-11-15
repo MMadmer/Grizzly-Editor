@@ -765,6 +765,8 @@ return {
   { "These build files could not be removed: {files}.", "Не удалось удалить файлы сборки: {files}." },
   { "No build compiled this level of the linked game here.", "Здесь ни одна сборка не компилировала этот уровень привязанной игры." },
   { "The build files were not removed.", "Файлы сборки не удалены." },
+  -- a save over a scene file that does not read
+  { "{files} does not read: the changes to its objects are not saved until it does", "{files} не читается: изменения его объектов не сохранятся, пока файл не исправлен" },
   { "Building the module for play", "Сборка модуля для игры" },
 
   -- a terrain's rows (gz-scene's format/terrain.rs and props.rs)
