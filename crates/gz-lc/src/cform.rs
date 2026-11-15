@@ -104,7 +104,8 @@ fn fsimilar(a: f32, b: f32, e: f32) -> bool {
 }
 
 /// The decimation: the welded soup in, the faces left as a new soup out.
-fn simplify(cl: Welded, ctl: &Ctl<'_>) -> Result<Soup> {
+fn simplify(cl: Welded, log: &mut Log, ctl: &Ctl<'_>) -> Result<Soup> {
+    let mut tm = Instant::now();
     let Welded { verts, tris, flags } = cl;
     let mut mdl = Model::with_capacity(verts.len(), tris.len());
     for v in &verts {
@@ -130,6 +131,7 @@ fn simplify(cl: Welded, ctl: &Ctl<'_>) -> Result<Soup> {
     slim.placement = Placement::Endpoints;
     slim.weighting = Weighting::Uniform;
     slim.initialize();
+    timed(log, "the quadrics", &mut tm);
 
     // the edges that must stay, found for every face at once: X-Ray's compiler marks the faces around
     // both ends of an edge (0 for N1, 1 for N0, then +1 for each time a face is in N1) and takes
@@ -189,11 +191,14 @@ fn simplify(cl: Welded, ctl: &Ctl<'_>) -> Result<Soup> {
     for (a, b, f) in constraints {
         slim.constraint_manual(a, b, f);
     }
+    timed(log, "the constraints", &mut tm);
     slim.collect_edges();
     ctl.check()?;
     let stop = || ctl.cancelled();
+    timed(log, "the edges to contract", &mut tm);
     slim.decimate_until(0, MAX_DECIMATE_ERROR, &stop);
     ctl.check()?;
+    timed(log, "the contractions", &mut tm);
     let mut mdl = std::mem::take(&mut slim.model);
     mdl.compact_vertices();
     for f in 0..mdl.face_count() as u32 {
@@ -205,6 +210,7 @@ fn simplify(cl: Welded, ctl: &Ctl<'_>) -> Result<Soup> {
         let p = fc.map(|v| Vec3::from_array(mdl.vertex(v)));
         cl.add_face(fc, p, fp.material, fp.sector, fp.flags);
     }
+    timed(log, "the faces left", &mut tm);
     Ok(cl)
 }
 
@@ -322,8 +328,10 @@ pub fn build_cform(g: &mut LcGlobalData, log: &mut Log, ctl: &Ctl<'_>) -> Result
     let mut welded = cl.weld(&bb, ctl)?;
     timed(log, "the weld", &mut tm);
     if g.params.quality != QUALITY_DRAFT {
-        welded = simplify(welded, ctl)?.weld(&bb, ctl)?;
-        timed(log, "the decimation", &mut tm);
+        let soup = simplify(welded, log, ctl)?;
+        tm = Instant::now();
+        welded = soup.weld(&bb, ctl)?;
+        timed(log, "the weld of what is left", &mut tm);
     }
     let form = CForm::new(welded.verts, welded.tris);
     // the faces no longer name a deflector (X-Ray's compiler clears what shares memory with the game

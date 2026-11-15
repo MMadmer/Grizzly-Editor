@@ -26,6 +26,8 @@ pub enum Weighting {
 }
 
 const EDGE_BASE_ERROR: f32 = 1.0;
+/// The edges a contraction re-rates on the pool rather than on its own thread.
+const PARALLEL_RATINGS: usize = 512;
 const NOT_IN_HEAP: i32 = -47;
 
 type V3 = [f64; 3];
@@ -941,9 +943,11 @@ impl EdgeQSlim {
         // X-Ray's compiler sorts the edges by their addresses: here by the order they were made
         edges.sort_unstable();
         edges.dedup();
-        // rated at once (a rating reads the model and the quadrics only), put in the heap in order
+        // rated at once (a rating reads the model and the quadrics only), put in the heap in order;
+        // a contraction re-rates a few dozen edges, which one thread does sooner than a fork of
+        // the pool, and a pool that other work keeps busy makes such a fork wait far longer
         let this = &*self;
-        let infos: Vec<Option<([f32; 3], f32)>> = if edges.len() >= 16 {
+        let infos: Vec<Option<([f32; 3], f32)>> = if edges.len() >= PARALLEL_RATINGS {
             edges.par_iter().map(|&e| this.edge_info(e)).collect()
         } else {
             edges.iter().map(|&e| this.edge_info(e)).collect()

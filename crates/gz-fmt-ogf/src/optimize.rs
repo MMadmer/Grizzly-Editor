@@ -7,7 +7,7 @@
 //! a loop. What the recursion undoes after its deepest call is never read again, so the order
 //! that comes out is the same.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 
 const VALENCE_BOOST: [f32; 5] = [0.0, 0.68, 1.0, 1.1, 1.15];
 const CUTOFF_FACTOR: f32 = 2.0;
@@ -15,6 +15,13 @@ const EXPENSIVE_FACTOR: f32 = 1.5;
 /// `c_ctiCacheTypeSize`: FIFO length and miss score.
 const CACHE_TYPES: [(usize, f32); 2] = [(20, 0.95), (3, 0.05)];
 const UNUSED: u16 = 0xFFFF;
+
+/// A float as a key that orders like `<` (no NaN comes here; -0 is 0).
+pub(crate) fn order_key(x: f32) -> i32 {
+    let x = if x == 0.0 { 0.0 } else { x };
+    let b = x.to_bits() as i32;
+    b ^ (((b >> 31) as u32) >> 1) as i32
+}
 
 fn boost(valence: i32) -> f32 {
     let i = usize::try_from(valence).unwrap_or(0);
@@ -209,6 +216,19 @@ impl Cache {
         }
         if !dry {
             self.history.push(record);
+        }
+        total
+    }
+
+    /// What [`Self::add`] answers when it only measures.
+    fn dry(&self, index: [u16; 3]) -> f32 {
+        let mut total = 0.0f32;
+        for (t, &(_, miss_score)) in CACHE_TYPES.iter().enumerate() {
+            for &v in &index {
+                if self.rc(v, t) == 0 {
+                    total += miss_score;
+                }
+            }
         }
         total
     }
@@ -413,6 +433,82 @@ impl Optimizer {
         new_best
     }
 
+    /// What [`Self::best_order`] does without a lookahead, kept in order instead of scanned. With
+    /// a lookahead of one every step scores every remaining tri (no bound can cut one: a score
+    /// stays under 7 and the sum under the bound of 1e10), builds a heap of them and takes its
+    /// top - the first tri in slot order of the smallest score; the second candidate the heap
+    /// gives never beats it. So a step is the smallest (score, slot), and a step changes the
+    /// score only of the tris around the vertices whose valence or cache presence it changed.
+    fn best_order_cheap(&mut self) {
+        let n = self.tris.len();
+        let score_of = |o: &Self, t: usize| -> f32 {
+            let mut score = o.tri_valence_score(t);
+            score += o.cache.dry(o.tris[t].index);
+            score
+        };
+        let mut slot_of = vec![0usize; n];
+        for (s, &t) in self.slots.iter().enumerate() {
+            slot_of[t] = s;
+        }
+        let mut key = vec![0i32; n];
+        let mut order: BTreeSet<(i32, usize)> = BTreeSet::new();
+        for (t, k) in key.iter_mut().enumerate() {
+            *k = order_key(score_of(self, t));
+            order.insert((*k, slot_of[t]));
+        }
+        let mut touched: Vec<usize> = Vec::new();
+        for base in 0..n {
+            if base + 1 == n {
+                let t = self.slots[base];
+                self.put(base * 3, t);
+                return;
+            }
+            let Some(&(_, bs)) = order.first() else { return };
+            let b = self.slots[bs];
+            self.put(base * 3, b);
+            order.remove(&(key[b], bs));
+            // the tri at the base takes the chosen one's slot
+            let moved = self.slots[base];
+            if moved != b {
+                order.remove(&(key[moved], base));
+                order.insert((key[moved], bs));
+            }
+            self.slots[bs] = moved;
+            self.slots[base] = b;
+            slot_of[moved] = bs;
+            slot_of[b] = base;
+            self.cache.add(self.tris[b].index, false);
+            self.tris[b].used = true;
+            self.use_tri(b);
+            // the vertices whose valence changed and those the cache took in or let go
+            touched.clear();
+            touched.extend(self.tris[b].index.iter().map(|&v| usize::from(v)));
+            if let Some(last) = self.cache.history.last() {
+                for ty in &last.types {
+                    touched.extend(
+                        ty.binned[..ty.added].iter().filter(|&&v| v != UNUSED).map(|&v| usize::from(v)),
+                    );
+                }
+            }
+            touched.sort_unstable();
+            touched.dedup();
+            for &v in &touched {
+                for i in 0..self.tris_of.get(v).map_or(0, Vec::len) {
+                    let t = self.tris_of[v][i];
+                    if self.tris[t].used {
+                        continue;
+                    }
+                    let k = order_key(score_of(self, t));
+                    if k != key[t] {
+                        order.remove(&(key[t], slot_of[t]));
+                        key[t] = k;
+                        order.insert((k, slot_of[t]));
+                    }
+                }
+            }
+        }
+    }
+
     /// The best score, its outer recursion unrolled.
     fn best_order(&mut self) {
         let mut countdown = self.tris.len() as i32;
@@ -542,16 +638,25 @@ pub(crate) fn optimise_tri_list(indices: &mut [u16], mode: u32) {
         return;
     }
     let (lookahead, cutoff) = if mode == 1 { (1, 4) } else { (5, 16) };
-    let biggest = indices.iter().copied().max().map_or(0, usize::from);
+    // the vertices numbered densely: the search compares them only for being the same, and a
+    // short list of a large mesh then costs its own size, not the mesh's (the progressive pass
+    // orders a few faces per collapse); the sentinel's number is left alone
+    let mut used: Vec<u16> = indices[..n * 3].to_vec();
+    used.sort_unstable();
+    used.dedup();
+    let dense = used.last().is_some_and(|&v| v != UNUSED);
+    let id = |v: u16| if dense { used.binary_search(&v).map_or(v, |i| i as u16) } else { v };
+    let biggest = if dense { used.len() - 1 } else { indices.iter().copied().max().map_or(0, usize::from) };
     let mut valence = vec![0i32; biggest + 1];
     let mut tris_of = vec![Vec::new(); biggest + 1];
     let mut tris = Vec::with_capacity(n);
     for (i, f) in indices.as_chunks::<3>().0.iter().enumerate() {
-        for &v in f {
+        let f = [id(f[0]), id(f[1]), id(f[2])];
+        for &v in &f {
             valence[usize::from(v)] += 1;
             tris_of[usize::from(v)].push(i);
         }
-        tris.push(Tri { index: [f[0], f[1], f[2]], used: false, allowed: false });
+        tris.push(Tri { index: f, used: false, allowed: false });
     }
     let mut o = Optimizer {
         valence,
@@ -563,8 +668,15 @@ pub(crate) fn optimise_tri_list(indices: &mut [u16], mode: u32) {
         lookahead,
         cutoff,
     };
-    o.best_order();
-    indices[..n * 3].copy_from_slice(&o.result);
+    // a sum of steps under 10 each never reaches the search's bound of 1e10 (see `best_order_cheap`)
+    if lookahead == 1 && n < 1 << 24 {
+        o.best_order_cheap();
+    } else {
+        o.best_order();
+    }
+    for (slot, &v) in indices[..n * 3].iter_mut().zip(&o.result) {
+        *slot = if dense { used.get(usize::from(v)).copied().unwrap_or(v) } else { v };
+    }
 }
 
 /// `remap[new face] = old face`.
@@ -639,6 +751,86 @@ mod tests {
     fn vertices_follow_their_first_use() {
         // 2 -> 0, 0 -> 1, then the unused 1 and 3 in their own order
         assert_eq!(optimize_vertices(&[2, 0, 2], 4), vec![1, 2, 0, 3]);
+    }
+
+    /// Both searches of the cheap mode over one list.
+    fn both_orders(indices: &[u16]) -> (Vec<u16>, Vec<u16>) {
+        let run = |cheap: bool| {
+            let n = indices.len() / 3;
+            let biggest = indices.iter().copied().max().map_or(0, usize::from);
+            let mut valence = vec![0i32; biggest + 1];
+            let mut tris_of = vec![Vec::new(); biggest + 1];
+            let mut tris = Vec::new();
+            for (i, f) in indices.as_chunks::<3>().0.iter().enumerate() {
+                for &v in f {
+                    valence[usize::from(v)] += 1;
+                    tris_of[usize::from(v)].push(i);
+                }
+                tris.push(Tri { index: [f[0], f[1], f[2]], used: false, allowed: false });
+            }
+            let mut o = Optimizer {
+                valence,
+                tris_of,
+                tris,
+                slots: (0..n).collect(),
+                cache: Cache::new(biggest + 1),
+                result: vec![0; n * 3],
+                lookahead: 1,
+                cutoff: 4,
+            };
+            if cheap {
+                o.best_order_cheap();
+            } else {
+                o.best_order();
+            }
+            o.result
+        };
+        (run(true), run(false))
+    }
+
+    #[test]
+    fn the_kept_order_is_the_scanned_one() {
+        let mut lists: Vec<Vec<u16>> = Vec::new();
+        // grids of several sizes, their faces in a scrambled order
+        for n in [3u16, 9, 30, 70] {
+            let id = |x: u16, z: u16| z * (n + 1) + x;
+            let mut faces = Vec::new();
+            for z in 0..n {
+                for x in 0..n {
+                    faces.push([id(x, z), id(x, z + 1), id(x + 1, z + 1)]);
+                    faces.push([id(x, z), id(x + 1, z + 1), id(x + 1, z)]);
+                }
+            }
+            let len = faces.len();
+            for i in 0..len {
+                faces.swap(i, (i * 7919 + 13) % len);
+            }
+            lists.push(faces.into_iter().flatten().collect());
+        }
+        // a fan around one vertex of high valence, islands, repeated corners
+        let mut fan = Vec::new();
+        for i in 1..40u16 {
+            fan.extend_from_slice(&[0, i, i + 1]);
+        }
+        for i in 0..30u16 {
+            let b = 100 + i * 3;
+            fan.extend_from_slice(&[b, b + 1, b + 2]);
+        }
+        fan.extend_from_slice(&[5, 5, 6, 7, 7, 7, 8, 9, 8]);
+        lists.push(fan);
+        // a pseudo-random soup over a few vertices: many equal scores
+        let mut x = 12345u32;
+        let soup: Vec<u16> = (0..900)
+            .map(|_| {
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                ((x >> 16) % 60) as u16
+            })
+            .collect();
+        lists.push(soup);
+        for (i, l) in lists.iter().enumerate() {
+            let (cheap, scanned) = both_orders(l);
+            assert_eq!(cheap, scanned, "list {i}");
+        }
     }
 
     #[test]
