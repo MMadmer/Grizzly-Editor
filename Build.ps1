@@ -1,7 +1,9 @@
 # Single entry point: clean clone -> .\Build.ps1 -> the editor in Bin\x64\Release: Grizzly.exe (the editor, the
 # level compilers inside it), Grizzly-Cmd.exe (the editor for a command line: it runs Grizzly.exe and waits),
 # grizzly-mcp.exe (its MCP server over stdio), their PDBs and the third-party notices.
-# Nothing else in that folder is written or removed. pwsh 7 only: in PowerShell 5.1 a tool's stderr stops the script.
+# Nothing else in that folder is written or removed, but the copy of a program that was running while it was
+# replaced (<name>.old-<n>: an agent's bridge, an editor left open), which goes with a later build.
+# pwsh 7 only: in PowerShell 5.1 a tool's stderr stops the script.
 #   .\Build.ps1             - release
 #   .\Build.ps1 -Debug      - the debug build, into Bin\x64\Debug
 #   .\Build.ps1 -Out <dir>  - put the files there instead of Bin\x64\<config>
@@ -49,11 +51,25 @@ $files = [ordered]@{}
 foreach ($name in 'Grizzly.exe', 'Grizzly.pdb', 'Grizzly-Cmd.exe', 'Grizzly_Cmd.pdb', 'grizzly-mcp.exe', 'grizzly_mcp.pdb') { $files[$name] = Join-Path $from $name }
 $files['THIRD_PARTY_NOTICES.txt'] = Join-Path $root 'licenses\THIRD_PARTY_NOTICES.txt'
 $files['LICENSE.txt'] = Join-Path $root 'LICENSE'
+# what an earlier build put aside and is free now
+Get-ChildItem -LiteralPath $bin -File -Filter '*.old-*' | ForEach-Object {
+    try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop } catch { }
+}
 $copied = @()
+$running = @()
 foreach ($name in $files.Keys) {
     $src = $files[$name]
     if (Test-Path -LiteralPath $src) {
-        Copy-Item -LiteralPath $src -Destination (Join-Path $bin $name) -Force
+        $dst = Join-Path $bin $name
+        try { Copy-Item -LiteralPath $src -Destination $dst -Force }
+        catch {
+            # a program that is running cannot be written over, but it can be renamed: it goes aside under a name
+            # of its own and keeps running, and the new one takes its place
+            if (-not (Test-Path -LiteralPath $dst)) { throw }
+            Rename-Item -LiteralPath $dst -NewName "$name.old-$([DateTime]::UtcNow.Ticks)"
+            Copy-Item -LiteralPath $src -Destination $dst -Force
+            $running += $name
+        }
         $copied += $name
     } elseif ($name -notlike '*.pdb') {
         Fail "the build made no $src"
@@ -61,6 +77,9 @@ foreach ($name in $files.Keys) {
 }
 
 Write-Host "`nBuilt into ${bin}: $($copied -join ', ')"
+if ($running) {
+    Write-Host "Still running from the earlier build, put aside and replaced: $($running -join ', '). Start them again for the new one."
+}
 if ($Package) {
     $python = (Get-Command python -ErrorAction SilentlyContinue).Source
     if (-not $python) { Fail "python 3 not found: tools/rust/package.py makes the archives" }
