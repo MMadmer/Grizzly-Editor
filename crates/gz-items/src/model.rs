@@ -529,7 +529,7 @@ impl Cx {
     }
 
     fn key_names(&mut self, v: &Value, key: &str) -> Vec<String> {
-        let list = self.names(v, key, &format!("{key} is a list of keys:"));
+        let list = self.names(v, key, &format!("{key}, a list of keys,"));
         for k in &list {
             if !plain_name(k) {
                 self.bad(key, format!("'{k}' cannot be a key of a config"));

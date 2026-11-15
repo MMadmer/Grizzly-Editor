@@ -1424,7 +1424,7 @@ return {
   { "{what} names a section no config can hold.", "{what} называет секцию, которой не может быть в конфиге." },
   { "The base is a string or a list of them.", "Основа — строка или список строк." },
   { "A part of a recipe is a string or a list of them.", "Часть рецепта — строка или список строк." },
-  { "{key} is a list of keys: is a string or a list of them.", "{key} — список ключей: строка или список строк." },
+  { "{key}, a list of keys, is a string or a list of them.", "{key} — список ключей: строка или список строк." },
   { "{what} is a string or a list of them.", "{what} — строка или список строк." },
   { "{key} is a string or {{ language = text }}.", "{key} — строка или {{ language = text }}." },
   { "{key} takes key = value.", "{key} принимает key = value." },

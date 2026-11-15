@@ -243,7 +243,7 @@ mod i18n_tests {
             ("I427", "base is a string or a list of them".into()),
             ("I427", "the base is a string or a list of them".into()),
             ("I427", "a part of a recipe is a string or a list of them".into()),
-            ("I427", "unset is a list of keys: is a string or a list of them".into()),
+            ("I427", "unset, a list of keys, is a string or a list of them".into()),
             ("I427", "name is a string or { language = text }".into()),
             ("I427", "set takes key = value".into()),
             ("I427", "the value of cost holds characters no config can carry".into()),

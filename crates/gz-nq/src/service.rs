@@ -469,9 +469,10 @@ impl NqService {
         let lang = link.language().await.unwrap_or_else(|_| "rus".to_owned());
         let strings = link.strings(&lang).await.ok();
         let transitions = world.map(|w| w.transitions()).unwrap_or_default();
-        let built = self
-            .exec
-            .io(move || {
+        // the query's own computation: every quest of a project asks at once when it is checked, and
+        // one of them reads the game
+        self.game_pickers
+            .fresh(&(), key, move || {
                 let empty = gz_fmt_xml::strings::StringTable::default();
                 let inp = pickers::GameInput {
                     files: &files,
@@ -481,8 +482,9 @@ impl NqService {
                 };
                 Some(Arc::new(pickers::build_game(&inp)))
             })
-            .await;
-        self.game_pickers.fresh(&(), key, move || built).await.as_ref().clone()
+            .await
+            .as_ref()
+            .clone()
     }
 
     async fn project_part(&self) -> Arc<ProjectPart> {
@@ -493,9 +495,9 @@ impl NqService {
         }
         let root = PathBuf::from(&self.root);
         let exec = self.exec.clone();
-        let part =
-            self.exec.io(move || pickers::build_project(&read_project_files(&exec, &root, &tree))).await;
-        self.project_pickers.fresh(&(), rev, move || part).await
+        self.project_pickers
+            .fresh(&(), rev, move || pickers::build_project(&read_project_files(&exec, &root, &tree)))
+            .await
     }
 
     /// What the linked game's item sections can carry; `None` without a linked game.
