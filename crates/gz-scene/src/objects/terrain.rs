@@ -150,6 +150,13 @@ fn ground_objects<'a>(
         .collect()
 }
 
+/// Whether a terrain takes the look of the ground under it and has no ground there at all: its
+/// faces then wear no texture.
+#[must_use]
+pub fn wears_no_ground(state: &SceneState, lib: &Library, o: &Object) -> bool {
+    terrain(o).is_some_and(|t| t.spec.surface == Surface::Ground && ground_objects(state, lib, &t).is_empty())
+}
+
 /// What a terrain's ground is made of, as one number.
 fn ground_stamp(state: &SceneState, lib: &Library, t: &Terrain) -> u64 {
     ground_objects(state, lib, t)
@@ -212,12 +219,34 @@ fn load_ground(state: &SceneState, lib: &Library) {
     lib.prefetch(&refs);
 }
 
-/// The terrains whose `cut` is on and whose values are sound.
+/// The terrains whose `cut` is on and whose values are sound. A terrain that does not cut is
+/// passed by before anything of its text is copied.
 fn cutters(state: &SceneState) -> impl Iterator<Item = (&Arc<Object>, Terrain)> {
     state
         .of_class(ObjClass::Terrain)
+        .filter(|o| matches!(&o.data, ObjData::Terrain(d) if d.cut))
         .filter_map(|o| terrain(o).map(|t| (o, t)))
-        .filter(|(_, t)| t.spec.cut && t.check().is_ok())
+        .filter(|(_, t)| t.check().is_ok())
+}
+
+/// A terrain's rectangle over XZ from its transform and its size alone.
+fn rect_of(o: &Object, d: &Spec) -> (Vec2, Vec2) {
+    rect_xz(&Terrain {
+        centre: o.xform.position,
+        heading: o.xform.rotation.y,
+        spec: Spec { size: d.size, ..Spec::default() },
+    })
+}
+
+/// [`cutters`] whose rectangle meets a box. What every scene object asks in every pass: a
+/// terrain's text - its edits, its rows - is copied and checked only for the few that meet it.
+fn cutters_over<'a>(state: &'a SceneState, b: &Aabb) -> impl Iterator<Item = (&'a Arc<Object>, Terrain)> {
+    let b = *b;
+    state
+        .of_class(ObjClass::Terrain)
+        .filter(move |o| matches!(&o.data, ObjData::Terrain(d) if d.cut && meets_xz(&b, rect_of(o, d))))
+        .filter_map(|o| terrain(o).map(|t| (o, t)))
+        .filter(|(_, t)| t.check().is_ok())
 }
 
 // ---------------------------------------------------------------- what each is made of
@@ -237,7 +266,7 @@ pub fn stamp(state: &SceneState, lib: &Library, o: &Object) -> Option<u64> {
 fn cutting(state: &SceneState, lib: &Library, o: &Object) -> Vec<(Arc<Object>, Terrain)> {
     let Some(lo) = is_ground(o, lib) else { return Vec::new() };
     let b = crate::math::xform_box(&lo.bounds, &o.world());
-    cutters(state).filter(|(_, t)| meets_xz(&b, rect_xz(t))).map(|(c, t)| (c.clone(), t)).collect()
+    cutters_over(state, &b).map(|(c, t)| (c.clone(), t)).collect()
 }
 
 /// The reference a scene object's mesh is drawn and hit as: `@cut\<name>` while a cutting
@@ -264,7 +293,7 @@ pub fn is_cut(state: &SceneState, lookup: &dyn Fn(&str) -> Option<Arc<LibraryObj
     }
     let Some(lo) = lookup(&d.reference).filter(|lo| is_static_any(lo)) else { return false };
     let b = crate::math::xform_box(&lo.bounds, &o.world());
-    cutters(state).any(|(_, t)| meets_xz(&b, rect_xz(&t)))
+    cutters_over(state, &b).next().is_some()
 }
 
 /// The library object a scene object is drawn and hit as: its cut model once made, else its own.
@@ -770,6 +799,35 @@ mod tests {
             "{}",
             unmade[0].text
         );
+    }
+
+    /// A terrain is the module's own to the audit as it is to the build: read when nothing is
+    /// named, never told it will not ship; and one that wears the ground's look where no ground
+    /// is has no texture to wear.
+    #[test]
+    fn the_audit_reads_a_terrain_as_the_module_s_own_and_names_one_over_no_ground() {
+        use crate::sense::audit::{AuditParams, audit};
+        // on a level of the game (a base scene that has the floor): the terrain is not marked
+        let state = scene(false);
+        let terrains = Arc::new(Terrains::default());
+        let lib = library(&state, &terrains);
+        let pick = ScenePick::build(&state, &lib);
+        let sc = crate::sense::Scene { state: &state, lib: &lib, pick: &pick };
+        let base: rustc_hash::FxHashSet<String> = ["floor".to_owned()].into_iter().collect();
+        let found = audit(&sc, &AuditParams::default(), Some(&base)).map(|a| a.findings).unwrap_or_default();
+        assert!(found.iter().all(|f| f.code != "S210" && f.code != "S213"), "{found:?}");
+        // the same terrain with no ground under it
+        let mut bare = scene(false);
+        let floor = bare.find_any("Floor").map(|o| o.id).expect("the floor");
+        bare.remove(floor);
+        let terrains = Arc::new(Terrains::default());
+        let lib = library(&bare, &terrains);
+        let pick = ScenePick::build(&bare, &lib);
+        let sc = crate::sense::Scene { state: &bare, lib: &lib, pick: &pick };
+        let found = audit(&sc, &AuditParams::default(), None).map(|a| a.findings).unwrap_or_default();
+        let named: Vec<_> = found.iter().filter(|f| f.code == "S213").collect();
+        assert_eq!(named.len(), 1, "{found:?}");
+        assert!(named[0].text.starts_with("Yard takes the look of the ground"), "{}", named[0].text);
     }
 
     /// A thing that stands on a terrain is sound to the audit: it does not float, and it is not

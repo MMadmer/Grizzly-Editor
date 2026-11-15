@@ -31,7 +31,7 @@ pub const OFF_MAP: f32 = 1.0;
 const GROUND_SIDE: f32 = 20.0;
 
 /// The checks: code, word, what it finds.
-pub const CHECKS: [(&str, &str, &str); 12] = [
+pub const CHECKS: [(&str, &str, &str); 13] = [
     ("S201", "floating", "an object more than 0.25 m above whatever is under it, touching nothing"),
     ("S202", "buried", "an object more than half under the ground"),
     ("S203", "overlap", "two objects standing in each other"),
@@ -44,6 +44,7 @@ pub const CHECKS: [(&str, &str, &str); 12] = [
     ("S210", "not_authored", "an object the game's level does not have that is not marked authored"),
     ("S211", "terrain_border", "a terrain whose border stands more than 0.5 m off the ground around it"),
     ("S212", "terrain_unmade", "a terrain whose model cannot be made from what its file says"),
+    ("S213", "terrain_bare", "a terrain that wears the ground's look with no ground under it"),
 ];
 
 /// `scene.audit`'s parameters.
@@ -127,8 +128,15 @@ fn subjects(sc: &Scene<'_>, p: &AuditParams) -> Result<Vec<ObjId>, CmdError> {
                 .collect()
         }
         (None, None) => {
-            let own: Vec<ObjId> =
-                sc.state.objects.values().filter(|o| o.marks.authored).map(|o| o.id).collect();
+            // what the module adds: what is marked so, and every terrain (the build takes a
+            // terrain for the module's own, marked or not)
+            let own: Vec<ObjId> = sc
+                .state
+                .objects
+                .values()
+                .filter(|o| o.marks.authored || o.class == ObjClass::Terrain)
+                .map(|o| o.id)
+                .collect();
             if own.is_empty() { sc.state.objects.keys().copied().collect() } else { own }
         }
     };
@@ -452,6 +460,18 @@ pub fn audit(sc: &Scene<'_>, p: &AuditParams, base: Option<&FxHashSet<String>>) 
                 } else if want.contains("S211") {
                     f.extend(terrain_border(sc, o));
                 }
+                // the ground's look, and no ground: its faces wear no texture, which no level
+                // build takes
+                if want.contains("S213") && crate::objects::terrain::wears_no_ground(sc.state, sc.lib, o) {
+                    f.push(Finding {
+                        code: "S213",
+                        object: o.id,
+                        text: format!(
+                            "{} takes the look of the ground under it (surface = \"ground\") and no ground is there: give it a surface of its own (surface = {{ texture = ... }})",
+                            o.name
+                        ),
+                    });
+                }
             }
             ObjData::Light(_) => {
                 if want.contains("S209")
@@ -494,7 +514,8 @@ pub fn audit(sc: &Scene<'_>, p: &AuditParams, base: Option<&FxHashSet<String>>) 
         if want.contains("S210")
             && let Some(base) = base
             && !o.marks.authored
-            && !matches!(o.class, ObjClass::Sector | ObjClass::Portal | ObjClass::Group)
+            // a terrain is the module's own and ships with its piece, marked or not
+            && !matches!(o.class, ObjClass::Sector | ObjClass::Portal | ObjClass::Group | ObjClass::Terrain)
             && o.owner.is_none()
             && !base.contains(&o.name.to_lowercase())
         {

@@ -249,9 +249,10 @@ A change of plan is a change of its document first.
   scene's files - floating (`S201`), buried (`S202`), overlapping (`S203`), twice there (`S204`), nothing under it
   (`S205`), a walker's spawn point or a way point off the AI map (`S206`, `S208`), a spawn point or a light under
   the ground (`S207`, `S209`), not the game's and not `authored` (`S210`), a terrain's border off the ground
-  (`S211`), a terrain whose model cannot be made (`S212`). On a level of the game it reads what the module adds.
-  A terrain is ground: what stands on it is not "in" it. A new kind of mistake an agent can make with a file gets
-  a check here, with a scene that trips it and one that does not.
+  (`S211`), a terrain whose model cannot be made (`S212`) or that wears a ground that is not there (`S213`). On a
+  level of the game it reads what the module adds - a terrain among it, marked or not. A terrain is ground: what
+  stands on it is not "in" it. A new kind of mistake an agent can make with a file gets a check here, with a
+  scene that trips it and one that does not.
 - **A scene file with a typo costs nothing.** A part file (or the `.scene`) that does not parse changes nothing in
   the open scene and is left alone by a save (`scene.save` answers `skipped`); the problem has a line and a column;
   the scene follows the file again once it parses. A group written with a `ref` and no `members` is placed as the

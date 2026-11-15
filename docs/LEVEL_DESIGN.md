@@ -172,9 +172,10 @@ return {
   | `S210` | `not_authored` | on a level of the game: an object the game's level does not have and not marked `authored` |
   | `S211` | `terrain_border` | a terrain whose border stands more than 0.5 m off the ground around it |
   | `S212` | `terrain_unmade` | a terrain whose model cannot be made from what its file says |
+  | `S213` | `terrain_bare` | a terrain that wears the ground's look (`surface = "ground"`) with no ground under it |
 
-  Left out, it checks the objects marked `authored` (on a level of the game what the module adds), else every
-  object; `objects=` or `area=` choose, `checks=` narrows (codes or words), `limit=` caps the answer.
+  Left out, it checks the objects marked `authored` and every terrain (on a level of the game what the module
+  adds), else every object; `objects=` or `area=` choose, `checks=` narrows (codes or words), `limit=` caps the answer.
 - A picture: `shot.map highlight=<names>` for the plan, `shot.viewport view=iso objects=<names> labels=true` for the
   look.
 
@@ -262,7 +263,7 @@ Write - the scene is <name>.scene and a folder of Lua files; the editor follows 
   A file that does not parse changes nothing: the problem has its line, scene.save answers it skipped.
 
 Settle:  scene.align action=drop|surface objects=... [offset=<m>], then scene.save (only changed lines).
-Check:   asset.check   scene.audit [objects=...|area=...] [checks=...]   (S201 floating ... S212 terrain_unmade)
+Check:   asset.check   scene.audit [objects=...|area=...] [checks=...]   (S201 floating ... S213 terrain_bare)
 Build:   level.status   level.build   level.inspect part=pieces|cuts|ai_edits   mod.build (answers media)   mod.info
 Play:    level.play
 ```
