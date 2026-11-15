@@ -70,6 +70,9 @@ SUITES: dict[str, dict] = {
     "test_properties": {"args": ["--project", TEST], "timeout": 120},
     "test_scene_tools": {"args": ["--project", TEST], "timeout": 120},
     "test_level_commands": {"args": ["--project", TEST], "timeout": 120},
+    # an agent's level design on Escape: the scene's answers, its files, the audit, models, pictures, a terrain and
+    # the piece that carries its cut (about a minute; the build of the piece is a quarter of it)
+    "test_level_design": {"args": ["--project", TEST], "timeout": 300},
     # the compiler's regression net: two small scenes at draft quality from a cold start, against tools/qa/golden
     "test_level_compile": {"args": ["--project", TEST], "timeout": 120},
     "test_previews": {"args": ["--project", OD], "timeout": 120},
@@ -90,6 +93,11 @@ SUITES: dict[str, dict] = {
     "test_play_game_piece": {"script": os.path.join(HERE, "test_play_game.py"),
                              "args": ["--project", TEST, "--scene", "l01_escape_piece"], "timeout": 300, "alone": True,
                              "game": True},
+    # a yard cut into Escape's slope by a terrain, a blockout on a texture asset: the game cuts its ground, moves the
+    # AI map's nodes and reads the texture's description
+    "test_play_game_terrain": {"script": os.path.join(HERE, "test_play_game.py"),
+                               "args": ["--project", TEST, "--scene", "l01_escape_terrain"], "timeout": 300,
+                               "alone": True, "game": True},
     # a level of the project's own in streaming cells, played: the game loads the cells beside the level
     "test_play_game_cells": {"script": os.path.join(HERE, "test_play_game.py"),
                              "args": ["--project", TEST, "--scene", "mp_close_combat_cells"], "timeout": 300, "alone": True,

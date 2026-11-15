@@ -4,6 +4,12 @@ COPY of a project, in a game root of the editor's own, on a hidden desktop, with
 
     python tools/qa/test_play_game.py --project D:\\XFinedProjects\\Test [--scene <scene>] [--keep-log <file>]
 
+With --scene l01_escape_terrain the same level gets a yard: a terrain that cuts the ground under it (placed, then
+written in terrain.lua), a blockout model asset on a texture asset of the module; the piece is built with
+overlay.cut and overlay.aiedit, and the game's log must say `* [cuts] <level>: 1 region(s), <c> collision
+triangle(s) cut, <v> visual(s) cut` (c, v > 0), `* [ai edits] <level>: <n> node(s) moved, <c> closed, 0 skipped`
+(n > 0) and `* [assets] <t> texture(s), ...` (t >= 1), with no "!" line about them.
+
 With --scene l01_escape - a level the linked game has - nothing is compiled: Play builds the project's module into
 the root's modules\\<id> the way a module build does, gives the actor a Player Start where the scene's camera looks
 (in Play's copy of the module), and starts a new game (-start server(all/single/alife/new)) on the game's own level
@@ -57,6 +63,7 @@ playing and the suite does not start.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -109,6 +116,12 @@ SCENES["l01_escape"] = {"stock": True, "level": "l01_escape"}
 # object compiled and lit under the level's own shadows), Play ships it with the module, and the game hangs it on
 # the sector it finds at its place
 SCENES["l01_escape_piece"] = {"stock": True, "level": "l01_escape", "scene": "l01_escape", "piece": True}
+# the same level with a yard cut into the slope east of the village: a terrain that cuts the ground under it, a
+# blockout model asset on a texture asset of the module. The piece carries the terrain and the hut, overlay.cut and
+# overlay.aiedit go with the module, the texture is published as gamedata\textures\<module>\planks.dds with its
+# description; the game cuts its own ground there, moves the AI map's nodes and reads the description
+SCENES["l01_escape_terrain"] = {"stock": True, "level": "l01_escape", "scene": "l01_escape", "piece": True,
+                                "terrain": True}
 # the containers' arena in streaming cells of sixteen metres: what is larger than a cell stays the level's, the
 # rest is a piece per cell, which Play stages as a module of its own and the game loads beside the level
 SCENES["mp_close_combat_cells"] = {**SCENES["mp_close_combat"], "scene": "mp_close_combat", "cells": True,
@@ -350,11 +363,16 @@ def run_scene(project: str, root: str, scene: str, keep_log: str | None) -> None
                 check(gone.get("ok"), "the files an earlier build left over the game's level are removed (%d)"
                       % len(gone.get("removed") or []), qa.short(gone))
             pieces = None
-            if cfg.get("piece"):
+            if cfg.get("terrain"):
+                if not build_terrain(project, level):
+                    return
+                pieces = ["main"]
+            elif cfg.get("piece"):
                 if not build_piece(project, level):
                     return
                 pieces = ["main"]
-            play_in_place(root, level, loaded, keep_log, stock=True, pieces=pieces)
+            play_in_place(root, level, loaded, keep_log, stock=True, pieces=pieces,
+                          wants=terrain_lines if cfg.get("terrain") else None)
         return
     if not prepare_scene(scene):
         return
@@ -432,6 +450,111 @@ def build_piece(project: str, level: str) -> bool:
     return pieces_seen(level, ["main"])
 
 
+# the yard of docs/LEVEL_DESIGN.md: 16 x 10 m on the slope east of the village, flattened inside +-5 x +-3 m
+YARD = (-106.0, -164.5)
+YARD_FLAT = -12.7
+HUT_ASSET = """return {
+  mesh = 1,
+  surfaces = {
+    { name = "wall", texture = "%(tex)s", material = "materials\\\\wooden_board" },
+  },
+  parts = {
+    { shape = "box", size = { 6, 0.2, 4 }, surface = "wall", tile = 2 },
+    { shape = "box", size = { 6, 2.6, 0.2 }, pos = { 0, 0.2, 1.9 }, surface = "wall", tile = 2 },
+    { shape = "box", size = { 0.2, 2.6, 4 }, pos = { -2.9, 0.2, 0 }, surface = "wall", tile = 2 },
+    { shape = "box", size = { 0.2, 2.6, 4 }, pos = { 2.9, 0.2, 0 }, surface = "wall", tile = 2 },
+  },
+}
+"""
+
+
+def png(w: int, h: int, rgb=(150, 110, 70)) -> bytes:
+    """A plain RGB PNG: the picture of the module's texture asset."""
+    import struct
+    import zlib
+    raw = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
+
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+def build_terrain(project: str, level: str) -> bool:
+    """The yard: a terrain placed and then written in terrain.lua (base = "ground", a rect flattened, cut = true), a
+    texture asset made of a picture, a blockout model asset on it; the module's piece of the level built with the
+    level's overlay.cut and overlay.aiedit."""
+    module = (cmd("mod.info").get("manifest") or {}).get("id") or "test"
+    tex = "%s\\planks" % module
+    yard = os.path.join(project, "models", "yard")
+    os.makedirs(yard, exist_ok=True)
+    with open(os.path.join(yard, "planks.png"), "wb") as f:
+        f.write(png(64, 64))
+    with open(os.path.join(yard, "planks.texasset"), "w", encoding="utf-8", newline="") as f:
+        f.write('return {\n  tex = 1,\n  source = "planks.png",\n}\n')
+    with open(os.path.join(yard, "hut.meshasset"), "w", encoding="utf-8", newline="") as f:
+        f.write(HUT_ASSET % {"tex": tex.replace("\\", "\\\\")})
+    # the stock level's X-Ray SDK scene saved as its own .scene: its files are what the terrain is written in
+    saved = cmd("scene.save", timeout=280)
+    x, z = YARD
+    placed = cmd("scene.place", kind="terrain", name="yard", position=[x, YARD_FLAT, z], size=[16, 10])
+    hut = cmd("scene.place", kind="object", ref="models/yard/hut.meshasset", name="yard_hut",
+              position=[x - 1, YARD_FLAT, z])
+    marked = cmd("scene.set", objects=["yard_hut"], set={"authored": True})
+    again = cmd("scene.save", timeout=280)
+    if not check(saved.get("ok") and placed.get("ok") and hut.get("ok") and marked.get("ok") and again.get("ok"),
+                 "the yard's terrain and the hut of the model asset are placed and the scene saved as its .scene",
+                 qa.short([saved, placed, hut, marked, again])):
+        return False
+    terrain = os.path.join(project, "rawdata", "levels", "l01_escape", "terrain.lua")
+    with open(terrain, "w", encoding="utf-8", newline="") as f:
+        f.write('return {\n  terrains = {\n    { name = "yard", pos = { %g, %g, %g }, size = { 16, 10 }, cell = 1, '
+                'base = "ground", edge = 1.5,\n      edits = { { op = "rect", min = { -5, -3 }, max = { 5, 3 }, '
+                'falloff = 1.5, height = %g } },\n      surface = "ground", cut = true, authored = true },\n  },\n}\n'
+                % (x, YARD_FLAT, z, YARD_FLAT))
+
+    def flat() -> bool:
+        hit = cmd("scene.query", action="ray", **{"from": [x + 4, 30.0, z - 2], "to": [x + 4, -40.0, z - 2]}).get("hit")
+        return bool(hit) and hit.get("object") == "yard" and abs(hit["point"][1] - YARD_FLAT) < 0.02
+    if not check(qa.until(flat, 20, 0.3), "terrain.lua written: the yard is flat at %.1f m and cuts the ground" % YARD_FLAT,
+                 qa.short(cmd("scene.query", action="ray", **{"from": [x + 4, 30.0, z - 2], "to": [x + 4, -40.0, z - 2]}))):
+        return False
+    t = time.monotonic()
+    done = cmd("level.build", timeout=280)
+    ran = {r.get("step"): r for r in done.get("ran") or []}
+    files = (ran.get("piece") or {}).get("files") or []
+    if not check(done.get("ok") and "piece" in ran and "levels/%s/overlay.cut" % level in files
+                 and "levels/%s/overlay.aiedit" % level in files,
+                 "level.build builds the piece with the terrain and the hut, overlay.cut and overlay.aiedit (%.1f s)"
+                 % (time.monotonic() - t), qa.short({k: v for k, v in done.items() if k not in ("ran", "replaces")}
+                                                    | {"ran": sorted(ran), "files": files})):
+        return False
+    wait_idle(30)
+    cuts = cmd("level.inspect", part="cuts", level=level)
+    check(cuts.get("total") == 1, "level.inspect: one cut region", qa.short(cuts))
+    return pieces_seen(level, ["main"])
+
+
+def terrain_lines(lines: list[str], level: str) -> None:
+    """The game's log of a level with the module's terrain: the cut, the AI map's nodes, the texture's description."""
+    def numbers(prefix: str, pattern: str):
+        line = next((l.strip() for l in lines if l.strip().startswith(prefix)), "")
+        m = re.search(pattern, line)
+        return line, ([int(g) for g in m.groups()] if m else None)
+    line, n = numbers("* [cuts] %s:" % level, r": (\d+) region\(s\), (\d+) collision triangle\(s\) cut, (\d+) visual\(s\) cut")
+    check(n is not None and n[0] == 1 and n[1] > 0 and n[2] > 0, "the game cuts its level under the terrain: " + (line or "-"))
+    line, n = numbers("* [ai edits] %s:" % level, r": (\d+) node\(s\) moved, (\d+) closed, (\d+) skipped")
+    check(n is not None and n[0] > 0 and n[2] == 0, "the game moves the AI map's nodes under it: " + (line or "-"))
+    line, n = numbers("* [assets]", r"(\d+) texture\(s\)")
+    check(n is not None and n[0] >= 1, "the game reads the module's texture description: " + (line or "-"))
+    # the game's own data says things of itself in "!" lines (inventory_upgrade.xml, the upscaler's library): only
+    # what is about the module's cut, AI edits, descriptions and piece counts
+    ours = ("[cuts]", "[ai edits]", "[assets]", "[pieces]", "overlay.cut", "overlay.aiedit", "texasset", "meshasset",
+            "newer game")
+    said = [l.strip() for l in lines if l.lstrip().startswith("!") and any(w in l for w in ours)]
+    check(not said, "no '!' line about the module's cut, AI edits or assets", "; ".join(said[:5]))
+
+
 def cells_of(project: str, level: str) -> list[str]:
     """The streaming cells the build wrote for the level: the pieces of the module's levels\\<level>\\pieces."""
     folder = os.path.join(project, "levels", level, "pieces")
@@ -452,7 +575,7 @@ def no_way_named(answer: dict) -> list[str]:
 
 
 def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str | None, stock: bool = False,
-                  pieces: list[str] | None = None) -> bool:
+                  pieces: list[str] | None = None, wants=None) -> bool:
     """Play's root made, Play started on it - the installed engine where it is -, the level loaded, the game
     stopped. False when Play did not start the game."""
     # Play makes its root only in an empty folder (play_root.txt marks it its own): made first, then the root's own
@@ -549,6 +672,8 @@ def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str |
               "the game attaches every piece to the level's sectors: %s" % (attached[0][:150] if attached else "-"),
               "; ".join(said[:6]))
         check(not refused, "the game refuses no piece", "; ".join(refused[:3]))
+    if wants:
+        wants(lines, level)
     check(not dumps(root), "no crash dump", ", ".join(dumps(root)))
     state = os.path.join(root, "appdata", "content", "content-state.txt")
     check(os.path.isfile(state) and os.path.getmtime(state) >= play_wall - 1,

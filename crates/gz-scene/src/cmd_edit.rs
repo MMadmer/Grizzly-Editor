@@ -133,6 +133,61 @@ pub(crate) fn register(reg: &mut Registry) {
         .example("object=door_01 action=add_key"),
         scene_motion,
     );
+    reg.topic(gz_editor::Topic {
+        name: "level-design",
+        summary: "Building a place in a level from text files: look, write, settle, check, build, play",
+        text: |_| level_design_topic().to_owned(),
+    });
+}
+
+/// The guide an agent builds a place in a level by; its section "In short" is the help topic.
+const LEVEL_DESIGN_MD: &str = include_str!("../../../docs/LEVEL_DESIGN.md");
+
+/// The text of `help about=level-design`: the fenced block between the guide's topic markers.
+fn level_design_topic() -> &'static str {
+    let after = LEVEL_DESIGN_MD.split_once("<!-- level-design topic -->").map_or("", |(_, t)| t);
+    let after = after.split_once("```text").map_or("", |(_, t)| t);
+    after.split_once("```").map_or("", |(b, _)| b).trim()
+}
+
+#[cfg(test)]
+mod topic_tests {
+    /// Every command the guide teaches is named in the topic, and the topic is the guide's own section.
+    #[test]
+    fn the_level_design_topic_is_the_guide_s_section_and_names_its_commands() {
+        let topic = super::level_design_topic();
+        assert!(topic.starts_with("Building a place in a level") && !topic.contains("```"), "{topic}");
+        assert!(super::LEVEL_DESIGN_MD.contains(topic));
+        for command in [
+            "scene.query",
+            "scene.objects",
+            "scene.get",
+            "scene.align",
+            "scene.audit",
+            "scene.place kind=terrain",
+            "scene.save",
+            "shot.map",
+            "shot.viewport",
+            "shot.models",
+            "model.info",
+            "model.list",
+            "preview.model",
+            "asset.import",
+            "file.create kind=model|texture|sound",
+            "asset.check",
+            "level.build",
+            "level.inspect",
+            "level.status",
+            "mod.build",
+            "mod.info",
+            "level.play",
+        ] {
+            assert!(topic.contains(command), "the topic does not name {command}");
+        }
+        for action in ["ground", "heights", "ray", "box", "fit", "free", "ai"] {
+            assert!(topic.contains(&format!("action={action}")), "the topic does not name action={action}");
+        }
+    }
 }
 
 /// The objects a command means, selected first when the caller named them (the commands of

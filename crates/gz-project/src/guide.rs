@@ -17,7 +17,7 @@ use crate::rules;
 pub const FILE: &str = "AGENTS.md";
 
 /// The kinds the page counts: extension, what the author calls several.
-const KINDS: [(&str, &str); 7] = [
+const KINDS: [(&str, &str); 10] = [
     (".nqasset", "Quests"),
     (".behasset", "Behaviour graphs"),
     (".npcasset", "Characters"),
@@ -25,6 +25,9 @@ const KINDS: [(&str, &str); 7] = [
     (".scene", "Scenes"),
     (".level", "Scenes in the X-Ray SDK format"),
     (".group", "Object groups"),
+    (".meshasset", "Models"),
+    (".texasset", "Textures"),
+    (".sndasset", "Sounds"),
 ];
 
 /// What the page says about the project's files: per kind, how many and in which folders.
@@ -114,7 +117,9 @@ pub fn text(root: &Path, file_name: &str, id: &str) -> String {
         line(&format!("- Module manifest: `mod.ltx` - module `{module_id}` (LTX, read by the game)."));
     }
     if held.kinds.is_empty() {
-        line("- No quests, characters, PDA interfaces or scenes yet: a file of the kind anywhere is one.");
+        line(
+            "- No quests, characters, PDA interfaces, scenes or models yet: a file of the kind anywhere is one.",
+        );
     }
     for (i, (count, folders)) in &held.kinds {
         let shown: Vec<String> = folders.iter().take(4).map(|f| format!("`{f}/`")).collect();
@@ -129,7 +134,9 @@ pub fn text(root: &Path, file_name: &str, id: &str) -> String {
     line("## The files");
     line("");
     line("Every asset is Lua data: `return { ... }` of tables, strings, numbers and booleans, no code.");
-    line("The first key names the kind and its version (`nq = 1`, `npc = 1`, `pda = 1`); keys the editor");
+    line(
+        "The first key names the kind and its version (`nq = 1`, `npc = 1`, `pda = 1`, `mesh = 1`); keys the editor",
+    );
     line("does not know are kept, comments survive every save, things are named by `id`, never by position.");
     line("");
     line(
@@ -149,6 +156,20 @@ pub fn text(root: &Path, file_name: &str, id: &str) -> String {
     line("- `Grizzly-Cmd.exe build` - the module into the game, as the editor's Build button does.");
     line("");
     line("MCP (the editor's control endpoint) is for what files cannot do: the window and the 3D scene.");
+    line("");
+    line("## Building a place in a level");
+    line("");
+    line(
+        "A scene is `<name>.scene` and a folder of Lua files (`objects.lua`, `terrain.lua`, ...); models, textures",
+    );
+    line(
+        "and sounds are `.meshasset`, `.texasset` and `.sndasset` beside their sources. Look before writing, never",
+    );
+    line(
+        "write a coordinate from memory: `shot.map` (a map from above), `scene.query` (the ground, heights, rays,",
+    );
+    line("fit), `scene.align` (onto the ground), `scene.audit` (what floats, overlaps or will not ship),");
+    line("`level.build`. `Grizzly-Cmd.exe help level-design` is the guide in short.");
     line("");
     line("The editor wrote this page once. Edit or delete it freely: it is not written again.");
     out
@@ -178,20 +199,27 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let root = t.path();
         std::fs::write(root.join("mod.ltx"), "[module]\r\nid = night\r\nname = \"Night Watch\"\r\n").unwrap();
-        for f in
-            ["quests/a.nqasset", "quests/b.nqasset", "npc/sid.npcasset", ".git/x.nqasset", "temp/c.nqasset"]
-        {
+        for f in [
+            "quests/a.nqasset",
+            "quests/b.nqasset",
+            "npc/sid.npcasset",
+            ".git/x.nqasset",
+            "temp/c.nqasset",
+            "models/hut.meshasset",
+        ] {
             let p = root.join(f);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, "return {}").unwrap();
         }
         let text = text(root, "Night.grizzly", "7c1e6c1e-5c0f-4f6e-9f43-2d5b1c9a0e11");
         let lines = text.lines().count();
-        assert!((20..=34).contains(&lines), "{lines} lines:\n{text}");
+        assert!((20..=42).contains(&lines), "{lines} lines:\n{text}");
         assert!(text.starts_with("# Night Watch\n"), "{text}");
         assert!(text.contains("module `night`"), "{text}");
         assert!(text.contains("- Quests: 2 in `quests/`."), "{text}");
         assert!(text.contains("- Characters: 1 in `npc/`."), "{text}");
+        assert!(text.contains("- Models: 1 in `models/`."), "{text}");
+        assert!(text.contains("help level-design") && text.contains("scene.audit"), "{text}");
         // program-files: in memory
         assert!(text.contains("Grizzly-Cmd.exe check"), "{text}");
         // the manifest is a kind too, and the one thing a new module must state

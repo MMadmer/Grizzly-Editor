@@ -57,6 +57,36 @@ What the suites hold, beyond what their names say:
   the level with the piece draws the frames of the level without it, the piece is released away and attached
   back, saves load across the module on and off, and four pieces damaged on purpose are each refused with a line
   of the log, the game going on.
+- **Level design by an agent** (`test_level_design` on Escape; `docs/LEVEL_DESIGN.md`): `scene.query`'s actions
+  answer in numbers that agree with each other - a sample of `heights` is the `ground` there, a ray from 20 m up hits
+  20 m down, `fit`'s `rest` is where a second `ground` and `fit` find it standing, every `free` spot passes `fit`,
+  `top` over a tree is its crown and `only` the ground under it, a heights request over 257 x 257 is refused naming
+  a step that fits; `scene.objects` near, sorted, with boxes. The scene's files: a line appended to `objects.lua` is
+  in the scene; the file broken changes nothing (every object kept, the `syntax` problem at its line, `asset.check`
+  of the scene names it, `scene.save` answers `skipped` and leaves the file), the fixed file is followed; a group
+  written with `ref` and no `members` is placed, noted (`S023`) and saved with its members; `scene.align` lands
+  where `fit` said, `offset` above it, and the save changes exactly those lines. `scene.audit` finds `S201`, `S203`,
+  `S204` at the object's line and nothing once fixed. A glTF written as text and an OBJ come in with
+  `asset.import` (the `.mtl`, the texture asset of a picture), `model.info` answers their sizes, triangles and
+  surfaces, a `parts` blockout is 6.4 x 2.95 x 4.4 m, both placed by their paths are found by `box` and by a ray on
+  their surface. `shot.map`'s three modes, the same bytes twice, a legend centre carried to its pixel within one
+  pixel and in its colour; `shot.viewport` from a view and from a camera of its own with the author's camera
+  unmoved; `shot.models`. A terrain written into `terrain.lua` over Escape's slope: the flattened height at all 77
+  samples inside, the old ground outside, a ray meets it and no old ground (the cut), an object drops onto it, no
+  `S211` - raised 3 m by `base`, `S211`; its build writes `overlay.cut` (`XCU1`, one region at the terrain's centre
+  and half size), `overlay.aiedit` (every edit moved), a piece that carries the cut and does not stream, and
+  `mod.build` into a folder publishes a texture asset as `.dds` and `.texasset` with no source. The crates' tests: `gz-terrain` (every edit, the edge blend, the skirt, the clip rule's
+  four cases with the engine's numbers, the `overlay.cut` and `overlay.aiedit` writers and readers), `gz-fmt-mesh`
+  (glTF with data-URI buffers and `.glb`, sparse accessors, skins and clips through the OGF and OMF export, OBJ
+  n-gons, hostile files as errors), `gz-media` (the three kinds' keys, references, checks, the bake twice the same
+  bytes, the migration chains), `gz-scene`'s `sense` and `audit` tests (every action, cap and code, with a scene
+  that trips each and one that does not).
+- **The game reads a module's terrain and media** (`test_play_game --scene l01_escape_terrain`, `--with-game`): a
+  yard cut into Escape's slope - a terrain placed and its edits written in `terrain.lua`, a blockout on a texture
+  asset - built into the piece with `overlay.cut` and `overlay.aiedit`; the game's log says `* [cuts] l01_escape:
+  1 region(s), 29 collision triangle(s) cut, 3 visual(s) cut`, `* [ai edits] l01_escape: 345 node(s) moved, 63
+  closed, 0 skipped`, `* [assets] 1 texture(s), 0 sound(s), 0 model(s) described by 1 module(s)`, and attaches
+  the piece (the run then stops on the model asset's spawn, below).
 - **The updater** (`gz-update`'s end-to-end test with an HTTP server of its own, `test_update` against the mock): the
   check reads only the archive's end and its manifest; only the delta's ranges are asked for; a cut download resumes
   at its byte, also inside a record, also after a restart; a held file rolls the installation back exactly; the
@@ -121,6 +151,21 @@ What the suites hold, beyond what their names say:
   on the DX12 and Vulkan renderers (compared on DX11; the three share one loader), a piece's implicitly lit
   terrain in the game (its texture is described as the terrain's own is; no run drew one).
 - The sound preview's playback in the chooser.
+- Level design, what no run has shown: a skinned or animated model asset in the game (its OGF and OMF are tested
+  by reading them back, never drawn by the game); a sound asset's description in the game (the log counts
+  `0 sound(s)` in every run so far); a terrain on a level of the module's own in the game; a cut level's frames
+  compared on DX11, DX12 and Vulkan (the game's loader is shared, the frames were not compared); a terrain that
+  turns (`rot`) and a cut whose region is turned, in the game; grass on the new ground; the window's side of the
+  media assets (drops from Explorer, the Place panel's model assets) beyond what `test_tour` and
+  `test_asset_icons` reach.
+- Level design, what the suites name failing on this tree (`test_level_design`, `test_play_game --scene
+  l01_escape_terrain`): `S210` never runs on Escape (the level's X-Ray SDK scene has binary parts - `ai_map.part`,
+  `detail_object.part`, `wallmark.part` - and `base_names` gives up on the whole set); `asset.check` names no
+  glTF surface without a texture and warns `M107` of the template's own `materials\default`, while the piece build
+  refuses both; a static model asset placed `authored` on a level of the game is also exported to the spawn layer
+  with its `.meshasset` text copied as `meshes\<path>.ogf`, and the game stops after the level's load
+  (`CModelPool::Instance_Create`: "Unknown visual type"); `test_play_game --scene l01_escape_piece` stops before
+  the game at "The module's static objects on the level have no triangle to collide with".
 - What the manifest's reference says a key of `[world]`, `[start_kit]` or `[screens]` does in the game: it is
   read from the readers' code and the game's document, not from a run of the game. `mod.package` was seen
   refusing a manifest through the check on one wrong tag; the other errors take the same path.

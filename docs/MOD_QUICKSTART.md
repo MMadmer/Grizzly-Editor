@@ -311,15 +311,29 @@ said so.
 
 ## 5. Baking scene work into the mod
 
-Scene edits don't ship by themselves; they get baked into module files first.
-**Mod → Bake Scene Layer**:
+Scene edits don't ship by themselves; they get baked into module files first. On a level of the game
+**Build Level** (`level.build`) does it: the steps a level of the game needs are the spawn layer and the
+module's **piece** of the level, each built when stale. Mark what the module adds with the Details row **Added by the
+Module** (`authored = true`).
 
-| Layer | Output | What it carries |
+| Step | Output | What it carries |
 |---|---|---|
-| **Spawn Layer** | `spawn\<level>.xspawn` | Placed objects — both raw `.ogf` props and gameplay spawn elements, the latter with their config section and their logic (`custom_data`), plus what the section cannot hold: the model and its fixed bones, a restrictor's shapes, a smart cover's description (the animpoint an NPC takes), a hanging lamp's light (type, colour, brightness, range, cone, light bones, glow, ambient, animator) — so a lamp shines in game the way its properties say — and a remove op for every base object ticked **Mod → Removed from the game**. |
-| **Collision Overlay** | `levels\<level>\overlay.xcform` | Extra collision geometry. |
-| **Visual Overlay** | `levels\<level>\visuals\*.ogf` + `overlay_visuals.ltx` | Extra visible geometry. |
-| **Level Cut** | cut boxes in `overlay.xcform` | The selection used as volumes that *remove* base collision and visuals — replace a chunk of a stock level without editing a single base file. |
+| **Spawn Layer** | `spawn\<level>.xspawn` | Gameplay spawn elements with their config section and their logic (`custom_data`), plus what the section cannot hold: the model and its fixed bones, a restrictor's shapes, a smart cover's description (the animpoint an NPC takes), a hanging lamp's light (type, colour, brightness, range, cone, light bones, glow, ambient, animator) — so a lamp shines in game the way its properties say — and a remove op for every base object ticked **Mod → Removed from the game**. |
+| **Level Piece** | `levels\<level>\pieces\main\*`, `overlay.xcform` | The module's static objects (library objects and model assets) and terrains, compiled and lit under the whole level's shadows, and their collision. The game hangs the piece on the sectors it finds. |
+| (with a cutting terrain) | `levels\<level>\overlay.cut`, `overlay.aiedit` | The ground the terrain replaces, cut out of the level's picture and collision by the game, and the AI map's nodes under it moved to the new ground (none added or removed, so saves keep their ids). Needs a game that states `level-cuts`. |
+
+**Mod → Bake Scene Layer** still bakes the selection by hand: the Spawn Layer, a Collision Overlay, a Visual
+Overlay (`levels\<level>\visuals\*.ogf` + `overlay_visuals.ltx` - the piece draws static objects now; an object
+in both is drawn twice, and the build warns) and a Level Cut (the selection as boxes that remove base collision
+and visuals).
+
+**Terrain** is changed ground written as text: an object of `terrain.lua` (`scene.place kind=terrain` places one)
+over a rectangle, its heights from the ground under it (`base = "ground"`) changed by `edits` (flatten, rect,
+raise, ramp, smooth, noise), `cut = true` to replace the ground there. **Models, textures and sounds** are
+`.meshasset`, `.texasset` and `.sndasset` files beside their sources (`asset.import` brings a glTF, an OBJ, a
+picture or a sound in; a model's `parts` are a blockout); a scene object names a model asset by its path, and the
+module build publishes the media - `textures\<name>.dds`, `sounds\<name>.ogg`, a dynamic model's `.ogf` - beside a
+copy of the asset the game reads. `docs/LEVEL_DESIGN.md` is the whole loop, with a worked example.
 
 These write into the project. The next build ships them.
 
