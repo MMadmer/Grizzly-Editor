@@ -138,14 +138,26 @@ return {
 
 - **Craft**: the craft window adds, to the recipes of the tool or workbench it is opened with, the recipes modules
   bring: the system config's `[xms_craft]`, one key a recipe, `<n> = at, result, count, part, part, part, part`
-  (the game writes it from the items' `craft`; a module may write the section itself). Refined ships the craft
-  script with that read.
-- **Start kits** of the new-game screen and **upgrade costs** of a module's upgrade sections: see section 3,
-  G2 - decided there after reading the scripts.
-- **The item catalog** `configs\item_catalog.ltx` (the game's): the families of items by engine class and, for
-  every key the game reads of an item's section or its HUD section, its type, group, title, unit, whether the game
-  stops without it, a sentence of help. The editor reads the linked game's (a bundled copy is the fallback, kept
-  byte-identical); its form and its reference are made from it. No key is known to the editor's code by name.
+  (`-` or nothing: no part; the game writes it from the items' `craft`; a module may write the section itself). A
+  recipe whose result or part is no section is left out with a line. As done: the game's own `xms_items.script`
+  WRAPS the stock craft window - no changed copy of a stock script ships, because plain Dead Air and Revolution II
+  have different versions of the same scripts and one copy would replace one game's with the other's.
+- **Start kits** of the new-game screen: `[xms_start_kits]`, one key a kit (the value is not read), each kit a
+  section: `title = <string id>`, `cost = 0..100`, `items = row, row` (a row is `section[:N][@min-max | @c]`, and
+  `a|b|c` is one of them at random; ammo counts are boxes), optional `descr = <string id>` and
+  `after = <script>.<function>` called with the kit's section. Offered after the stock kits, on the same 100
+  points; given at a new game. A module mode's `[start_kit]` still replaces everything.
+- **Upgrade costs**: an upgrade or a property of a module that `item_upgrades.ltx` lacks is read from the system
+  config by the same stock logic (wrapped); a missing `cost` is free, with a line.
+- **The item catalog** `configs\item_catalog.ltx` (the game's; `docs\dead-air\ITEM_DATA.md` there): the scopes
+  (`item`, `hud`, `upgrade`, and the sections an item names: `immunities`, `absorbation`, `bones`, `sound_layers`,
+  `model`, `global`), the families of items by engine class with the sections a new one starts from, the groups,
+  and for every key the game reads (898) `[<scope>.<key>]`: type, families, `required` (`true` or the classes
+  that stop without it), `presence`, default, and for the 392 an author works with a title, a group, a unit, a
+  sentence of help, `common` (84). A series is one entry with a `pattern`. Generated in the game's repository
+  (`tools\items\make_item_catalog.py`), byte for byte. The editor reads the linked game's (a bundled copy is the
+  fallback, kept byte-identical); its form and its reference are made from it. No key is known to the editor's
+  code by name.
 
 ### 1.6 The editor
 
@@ -252,5 +264,8 @@ motions and sounds; a use scene plays; the silencer is crafted; the icons are th
 - 2026-11-15: the surveys are in; the contract above is written; G1, G2, E1 and P1 run. E2 (the Items tab) starts
   on E1's API; P2 (section 2's hand work: scripts, use scenes, XML, start kits) on P1's project and G1/G2's game.
 - 2026-11-15, later: the author asks for saves the original game still loads with modules on (1.8, G3).
+- G2 is in (the catalog, craft, start kits and upgrade costs from data; 134 headless tests over the stock scripts of
+  both game layers). To see in the running game: a data recipe crafts; a data kit is offered and given; a module
+  upgrade shows its cost and installs; with no module the log has no `xms_items` line. G4 (saves, scripts) runs.
 - The scratch of the task (surveys, the key table, the unpacked game views) is the session's scratchpad folder
   `we\`; nothing in the repository depends on it.
