@@ -138,6 +138,8 @@ pub fn read_ltx(r: &IniReader, sect: &str, cx: &mut ReadCx<'_>) -> Result<Loaded
         },
         ObjClass::Particles => ObjData::Particles(ParticlesData::read_ltx(r, sect)?),
         ObjClass::FogVolume => ObjData::FogVolume(FogData::read_ltx(r, sect)?),
+        // no X-Ray SDK scene has a terrain: an id it does not know is kept as it was
+        ObjClass::Terrain => refused("a class the X-Ray SDK does not have.".into(), cx),
         ObjClass::SpawnPoint => match SpawnData::read_ltx(r, sect, cx.settings)? {
             Body::Refused(w) => refused(w, cx),
             Body::Read(mut d) => {
@@ -299,6 +301,7 @@ pub fn read_stream(r: &Reader<'_>, cx: &mut ReadCx<'_>) -> Result<Loaded, SceneE
             Body::Read(d) => ObjData::FogVolume(d),
             Body::Refused(w) => refused(w, cx),
         },
+        ObjClass::Terrain => refused("a class the X-Ray SDK does not have.".into(), cx),
         ObjClass::SpawnPoint => match SpawnData::read_stream(&b, cx.settings)? {
             Body::Refused(w) => refused(w, cx),
             Body::Read(mut d) => {

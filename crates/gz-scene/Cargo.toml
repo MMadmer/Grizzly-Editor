@@ -28,6 +28,7 @@ gz-fmt-tex.workspace = true
 gz-entities.workspace = true
 gz-luadata.workspace = true
 gz-asset.workspace = true
+gz-terrain.workspace = true
 glam.workspace = true
 imbl.workspace = true
 rayon.workspace = true

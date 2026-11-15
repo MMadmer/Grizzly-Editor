@@ -1,10 +1,10 @@
-//! The sixteen kinds of things a scene holds: their names in files and commands, their labels and
+//! The kinds of things a scene holds: their names in files and commands, their labels and
 //! what a gizmo may do to each.
 
 use serde::Serialize;
 
 /// Number of classes; `by_class` and the tool table are indexed by [`ObjClass::index`].
-pub const CLASSES: usize = 16;
+pub const CLASSES: usize = 17;
 
 /// What the gizmo may do to an object of a class. A selection's is the intersection of its
 /// objects' ([`Caps::and`]).
@@ -30,7 +30,8 @@ impl Caps {
     }
 }
 
-/// The kinds. The discriminant is the id the X-Ray SDK's scene files carry for the class.
+/// The kinds. The discriminant is the id the X-Ray SDK's scene files carry for the class; a kind
+/// of the editor's own (the terrain) follows them and has no X-Ray SDK file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjClass {
@@ -50,6 +51,7 @@ pub enum ObjClass {
     AiMap = 13,
     Wallmark = 14,
     FogVolume = 15,
+    Terrain = 16,
 }
 
 impl ObjClass {
@@ -71,6 +73,7 @@ impl ObjClass {
         Self::AiMap,
         Self::Wallmark,
         Self::FogVolume,
+        Self::Terrain,
     ];
 
     #[must_use]
@@ -108,6 +111,7 @@ impl ObjClass {
             Self::AiMap => "ai_map",
             Self::Wallmark => "wallmark",
             Self::FogVolume => "fog_volume",
+            Self::Terrain => "terrain",
         }
     }
 
@@ -131,6 +135,7 @@ impl ObjClass {
             Self::AiMap => "ai_map",
             Self::Wallmark => "wallmarks",
             Self::FogVolume => "fog",
+            Self::Terrain => "terrain",
         }
     }
 
@@ -154,6 +159,7 @@ impl ObjClass {
             Self::AiMap => "AI Map",
             Self::Wallmark => "Wallmarks",
             Self::FogVolume => "Fog Volume",
+            Self::Terrain => "Terrain",
         }
     }
 
@@ -177,6 +183,7 @@ impl ObjClass {
             Self::AiMap => "AI map",
             Self::Wallmark => "wallmarks",
             Self::FogVolume => "fog volume",
+            Self::Terrain => "terrain",
         }
     }
 
@@ -200,6 +207,7 @@ impl ObjClass {
             Self::AiMap => "AI Map",
             Self::Wallmark => "Wallmarks",
             Self::FogVolume => "Fog Volumes",
+            Self::Terrain => "Terrains",
         }
     }
 
@@ -222,7 +230,8 @@ impl ObjClass {
     }
 
     /// What the gizmo may do to one: a glow scales (its radius) and does not turn, a sound
-    /// source and a way path only move, sectors and portals stand where their meshes are.
+    /// source and a way path only move, a terrain moves and turns about the vertical (its size is
+    /// a key of its own), sectors and portals stand where their meshes are.
     #[must_use]
     pub fn caps(self) -> Caps {
         let (moves, rotates, scales) = match self {
@@ -232,7 +241,7 @@ impl ObjClass {
             | Self::FogVolume
             | Self::SpawnPoint
             | Self::Group => (true, true, true),
-            Self::Light | Self::Particles => (true, true, false),
+            Self::Light | Self::Particles | Self::Terrain => (true, true, false),
             Self::Glow => (true, false, true),
             Self::SoundSrc | Self::Way => (true, false, false),
             Self::Sector | Self::Portal | Self::DetailObjects | Self::AiMap | Self::Wallmark => {
@@ -261,7 +270,7 @@ mod tests {
             assert_eq!(ObjClass::by_name(c.name()), Some(c));
             assert_eq!(ObjClass::by_key(c.key()), Some(c));
         }
-        assert_eq!(ObjClass::from_id(16), None);
+        assert_eq!(ObjClass::from_id(17), None);
         assert_eq!(ObjClass::by_name("SPAWN"), Some(ObjClass::SpawnPoint));
         assert_eq!(ObjClass::by_key("ps"), Some(ObjClass::Particles));
         assert_eq!(ObjClass::by_key("Sound Source"), Some(ObjClass::SoundSrc));

@@ -41,7 +41,7 @@ pub(crate) fn register(reg: &mut Registry) {
     reg.cmd(
         Spec::write(
             "scene.place",
-            "Places an object, a light, a spawn point, a way path or another thing in the scene.",
+            "Places an object, a light, a spawn point, a way path, a terrain or another thing in the scene.",
         )
         .example("kind=object ref=props\\box_wood_01 position=1,0,2 on_surface=true"),
         scene_place,
@@ -234,6 +234,8 @@ enum PlaceKind {
     Spawn,
     /// A way path through `points`.
     Way,
+    /// A terrain: a height grid of `size` (and `cell`) over the ground at `position`.
+    Terrain,
 }
 
 impl PlaceKind {
@@ -250,6 +252,7 @@ impl PlaceKind {
             Self::Fog => ObjClass::FogVolume,
             Self::Spawn => ObjClass::SpawnPoint,
             Self::Way => ObjClass::Way,
+            Self::Terrain => ObjClass::Terrain,
         }
     }
 }
@@ -296,6 +299,12 @@ struct PlaceParams {
     /// ai_map_bounds (the AI map is generated inside it).
     #[serde(default)]
     usage: Option<String>,
+    /// The terrain's size along its own x and z, metres (kind=terrain; default 20, 20).
+    #[serde(default)]
+    size: Option<[f32; 2]>,
+    /// The step of the terrain's height grid, 0.5 to 4 metres (kind=terrain; default 1).
+    #[serde(default)]
+    cell: Option<f32>,
 }
 
 /// The name a placed thing gets: the one asked for (refused when taken), or one made from `pref`.
@@ -347,6 +356,9 @@ async fn scene_place(ed: Arc<Editor>, p: PlaceParams, o: Origin) -> Reply {
         return Err(CmdError::invalid("a scale of zero"));
     }
     let class = p.kind.class();
+    if p.kind != PlaceKind::Terrain && (p.size.is_some() || p.cell.is_some()) {
+        return Err(CmdError::invalid(format!("kind={} takes no size or cell", class.key())));
+    }
     let caps = class.caps();
     if rot.is_some() && !caps.rotates {
         return Err(CmdError::invalid(format!(
@@ -445,6 +457,17 @@ async fn scene_place(ed: Arc<Editor>, p: PlaceParams, o: Origin) -> Reply {
             {
                 d.shapes = vec![ShapeDef::boxed(&crate::math::Mat4::IDENTITY)];
             }
+            if let ObjData::Terrain(d) = &mut n.data {
+                if let Some([x, z]) = p.size {
+                    d.size = glam::Vec2::new(x, z);
+                }
+                if let Some(c) = p.cell {
+                    d.cell = c;
+                }
+                // refused as its file would be
+                let t = gz_terrain::Terrain { centre: pos, heading: 0.0, spec: (**d).clone() };
+                t.check().map_err(CmdError::invalid)?;
+            }
             if let Some(u) = &p.usage {
                 let f = fields::object_field(class, "usage")
                     .filter(|_| p.kind == PlaceKind::Shape)
@@ -457,7 +480,7 @@ async fn scene_place(ed: Arc<Editor>, p: PlaceParams, o: Origin) -> Reply {
     if p.kind != PlaceKind::Way {
         let mut x = Transform { position: pos, rotation: obj.xform.rotation, scale: obj.xform.scale };
         if let Some(r) = rot {
-            x.rotation = r;
+            x.rotation = if p.kind == PlaceKind::Terrain { Vec3::new(0.0, r.y, 0.0) } else { r };
         }
         if let Some(s) = scale {
             x.scale = s;

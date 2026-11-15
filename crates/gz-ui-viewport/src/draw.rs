@@ -229,7 +229,9 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
                 let mesh = if d.visual_mode() {
                     assets.visual(&d.reference)
                 } else {
-                    assets.object(&lib.mesh_key(&d.reference))
+                    // the ground a terrain cuts is drawn as its cut model; the object keeps its ref
+                    let cut = objects::terrain::mesh_reference(state, lib, o);
+                    assets.object(&lib.mesh_key(cut.as_deref().unwrap_or(&d.reference)))
                 };
                 push(mesh, world, local);
                 if selected {
@@ -504,6 +506,15 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
                 }
                 romboid(h, p, 0.1, c);
                 if selected && let Some(b) = world_box(state, lib, o) {
+                    selection_box(h, &b, &Mat4::IDENTITY, Color::WHITE);
+                }
+            }
+            ObjData::Terrain(_) => {
+                // its model is in the world: an instance at the identity, like a static object's
+                let r = objects::terrain::reference(&o.name);
+                let bounds = lib.cached(&r).and_then(|l| ga(&l.bounds));
+                push(assets.object(&lib.mesh_key(&r)), Mat4::IDENTITY, bounds);
+                if selected && let Some(b) = bounds.or_else(|| world_box(state, lib, o)) {
                     selection_box(h, &b, &Mat4::IDENTITY, Color::WHITE);
                 }
             }

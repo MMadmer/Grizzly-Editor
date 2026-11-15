@@ -1,0 +1,16 @@
+[package]
+name = "gz-terrain"
+description = "A terrain of the scene: its height grid, its edits, its mesh, and the exact cut of the ground it replaces (the clip and the files overlay.cut and overlay.aiedit)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-fmt-object.workspace = true
+glam.workspace = true

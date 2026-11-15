@@ -20,6 +20,7 @@ escape\
   ways.lua          ways (Way Paths)
   zones.lua         sectors (Sectors), portals (Portals)
   groups.lua        groups (Groups)
+  terrain.lua       terrains (Terrains)
   ai_map.bin        the ai_map layer (binary)
   details.bin       the details layer (binary)
   wallmarks.bin     the wallmarks layer (binary)
@@ -57,7 +58,7 @@ Positions are metres, angles degrees, colours `{ r, g, b }` from 0 to 1. Things 
 | `camera.heading` | number (deg) | 0 | Where the camera looked, round the vertical. |
 | `camera.pitch` | number (deg) | 0 | How far the camera looked up or down. |
 | `camera.bank` | number (deg) | 0 | The camera's roll. |
-| `classes` | `{ <kind> = { hidden = true, locked = true } }` - kinds: `object`, `light`, `glow`, `sound`, `sound_env`, `particles`, `shape`, `fog`, `spawn`, `way`, `sector`, `portal`, `group`, `ai_map`, `details`, `wallmarks` | none | The kinds of objects that are hidden or locked in the viewport. |
+| `classes` | `{ <kind> = { hidden = true, locked = true } }` - kinds: `object`, `light`, `glow`, `sound`, `sound_env`, `particles`, `shape`, `fog`, `spawn`, `way`, `sector`, `portal`, `group`, `terrain`, `ai_map`, `details`, `wallmarks` | none | The kinds of objects that are hidden or locked in the viewport. |
 | `view_flags` | `{ <kind> = n }` | none | What the viewport draws of each kind (names, crosses, solid sectors), as the kinds' flags. |
 | `random_placement` | `{ on = true, scale = { {min}, {max} }, rotation = { {min}, {max} }, proportional = true, objects = { ref, ... } }` | off | What placing a library object picks at random: the object of a list, its scale and its rotation. |
 | `layers` | `{ ai_map = "ai_map.bin", details = "details.bin", wallmarks = "wallmarks.bin" }` | none | The painted layers' files in the scene's folder. |
@@ -249,6 +250,21 @@ Groups: objects held together; the members stay in their own files.
 |---|---|---|---|
 | `ref` | string (group) | - | The group asset or library group it was placed from. |
 | `members` | a list of object names | none | The objects the group holds, by name; each stays in its own file. |
+
+## Terrains - `terrains` of `terrain.lua`
+
+Terrains: a height grid over a rectangle that replaces the ground under it. `pos` is its centre, `rot` turns it by its heading alone. Its model is made from these keys (and, on the ground, from the static objects under it that the module does not add); with `cut` on, the ground it replaces is cut out of the level wherever the editor and the game look: a triangle of a static object that is not `authored` is clipped by the rectangle, and the part inside goes where it lies within 0.5 m of the old ground.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `size` | `{ x, z }` in metres | { 20, 20 } | How far it reaches along its own x and z, in metres; pos is its centre. |
+| `cell` | number (m) | 1 | The step of the height grid, 0.5 to 4 metres. |
+| `base` | `"ground"`, or a number: metres over the height of pos | "ground" | Where every point starts: the level's ground under it (every static object that is not added by the module), or flat at a height over pos. |
+| `edge` | number (m) | 4 | On the ground: the metres along the border over which the edits blend back into the ground around, so the border meets it. |
+| `edits` | a list, in order: `{ op = "flatten", at = { x, z }, radius, falloff, height }`, `{ op = "rect", min, max, falloff, height }`, `{ op = "raise", at, radius, falloff, amount }`, `{ op = "ramp", from, to, width, falloff, heights = { from, to } }`, `{ op = "smooth", at, radius, strength }`, `{ op = "noise", amount, scale, seed }` | none | How the heights change, one edit after the other: x and z are metres from the centre along the terrain's own axes, height is a world height, amount is relative, falloff is the width of the soft border. |
+| `rows` | a list of rows of heights, from -z to +z, each from -x | none | Instead of the edits: every world height of the grid written out. |
+| `surface` | `"ground"`, or `{ texture, shader, compile, material, tile }` | "ground" | What it looks like: the look and the texture coordinates of the ground under each face, or a surface of its own laid flat every tile metres. |
+| `cut` | boolean | false | On a level of the game, the ground under it is cut out of the level: its picture, its collision and its AI map. |
 
 ## Spawn properties
 

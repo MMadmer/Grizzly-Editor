@@ -1,5 +1,5 @@
 //! The collision model the AI map is generated over (the faces of the snap
-//! objects): every face of a surface whose compiler shader collides, a two-sided one twice
+//! objects - a scene object a terrain cuts as its cut model - and of every terrain): every face of a surface whose compiler shader collides, a two-sided one twice
 //! (the second time turned round), in the snap list's order; and the queries the generation asks
 //! of it - a full box test and a nearest-hit ray test with culling.
 //!
@@ -79,14 +79,21 @@ impl CollideModel {
         let mut materials: Vec<SmolStr> = Vec::new();
         let mut mtl_index: FxHashMap<String, u16> = FxHashMap::default();
         let mut unknown = 0;
-        for name in snap {
+        let terrains = state.of_class(ObjClass::Terrain).map(|o| (o, true));
+        let objects = snap
+            .iter()
+            .filter_map(|n| state.find(ObjClass::SceneObject, &n.to_lowercase()))
+            .map(|o| (o, false));
+        for (o, terrain) in objects.chain(terrains) {
             if stop() {
                 return None;
             }
-            let Some(o) = state.find(ObjClass::SceneObject, &name.to_lowercase()) else { continue };
-            let ObjData::SceneObject(d) = &o.data else { continue };
-            let Some(lo) = lib.cached(&d.reference) else { continue };
-            let world = o.world();
+            if !terrain && !matches!(o.data, ObjData::SceneObject(_)) {
+                continue;
+            }
+            let Some(lo) = crate::objects::terrain::mesh_of(state, lib, o) else { continue };
+            // a terrain's model is in the world already
+            let world = if terrain { crate::math::Mat4::IDENTITY } else { o.world() };
             let obj = &lo.object;
             for m in &obj.meshes {
                 for sf in &m.surf_faces {

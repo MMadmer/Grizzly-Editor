@@ -48,6 +48,8 @@ pub struct InspectorView {
 pub struct SceneService {
     pub store: Store<SceneState>,
     pub library: Arc<Library>,
+    /// What the scene's terrains made in the library: their meshes and the ground they cut.
+    pub terrains: Arc<crate::objects::terrain::Terrains>,
     pub recovery: Arc<Recovery>,
     pick: Derived<ScenePick>,
     pub load: Mutex<LoadStatus>,
@@ -149,6 +151,7 @@ impl SceneService {
         let svc = session.services.get_or_init(|| SceneService {
             store: Store::spawn("scene", SceneState::default(), &editor.exec, StoreOptions::default()),
             library,
+            terrains: Arc::default(),
             recovery: Arc::new(Recovery::new()),
             pick: Derived::new(editor.exec.clone()),
             load: Mutex::new(LoadStatus::default()),
@@ -163,6 +166,7 @@ impl SceneService {
         });
         start_recovery_timer(editor, &svc);
         follow_library(editor, &svc);
+        follow_terrains(editor, &svc);
         svc
     }
 
@@ -232,12 +236,25 @@ impl SceneService {
         if let Some(d) = state.bulk.details.as_ref() {
             refs.extend(d.model.indices.objects.iter().map(|o| o.reference.clone()));
         }
-        if refs.is_empty() {
+        let terrains = state.count(crate::class::ObjClass::Terrain) > 0;
+        if refs.is_empty() && !terrains {
             return;
         }
         let lib = self.library.clone();
         let exec = editor.exec.clone();
-        editor.exec.io(move || exec.io_pool().install(|| lib.prefetch(&refs))).await;
+        let state = terrains.then(|| state.clone());
+        editor
+            .exec
+            .io(move || {
+                exec.io_pool().install(|| {
+                    lib.prefetch(&refs);
+                    // the terrains' meshes and the cut ground, once their ground is loaded
+                    if let Some(s) = state {
+                        lib.prefetch(&crate::objects::terrain::references(&s, &lib));
+                    }
+                })
+            })
+            .await;
     }
 }
 
@@ -265,6 +282,8 @@ fn follow_library(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
     let Ok(under) = RelPath::new(LIBRARY_FOLDER) else { return };
     let mut rx = project.tree.changes().subscribe(Filter::Under(under));
     let lib = Arc::downgrade(&svc.library);
+    let scene = Arc::downgrade(svc);
+    let exec = editor.exec.clone();
     editor.exec.spawn(async move {
         while let Some(change) = rx.recv().await {
             let Some(lib) = lib.upgrade() else { break };
@@ -273,8 +292,38 @@ fn follow_library(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
             } else if let Some(r) = library_reference(&change.path) {
                 lib.forget(&r);
             }
+            // the ground a terrain samples or cuts may be what changed
+            if let Some(svc) = scene.upgrade() {
+                refresh_terrains(&exec, &svc).await;
+            }
         }
     });
+}
+
+/// The terrains' models follow the scene: a terrain, the ground under it or an object it cuts
+/// that changed has its model made again (worked out on the CPU pool after every change of the
+/// scene; a library object changed on the disk asks the same in [`follow_library`]).
+fn follow_terrains(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
+    let mut rx = svc.store.subscribe();
+    let weak = Arc::downgrade(svc);
+    svc.library.add_provider(svc.terrains.provider(weak.clone()));
+    let exec = editor.exec.clone();
+    editor.exec.spawn(async move {
+        while rx.changed().await.is_ok() {
+            let Some(svc) = weak.upgrade() else { break };
+            refresh_terrains(&exec, &svc).await;
+        }
+    });
+}
+
+/// Forgets the terrains' models that no longer match the scene.
+async fn refresh_terrains(exec: &gz_task::Executors, svc: &SceneService) {
+    let snap = svc.store.snapshot();
+    if snap.count(crate::class::ObjClass::Terrain) + svc.terrains.made() == 0 {
+        return;
+    }
+    let (lib, terrains) = (svc.library.clone(), svc.terrains.clone());
+    exec.cpu(move || terrains.refresh(&snap, &lib)).await;
 }
 
 /// The scene's files for a recovery snapshot: what a save would write, every file whole.

@@ -2101,6 +2101,7 @@ dependencies = [
  "gz-query",
  "gz-store",
  "gz-task",
+ "gz-terrain",
  "gz-vfs",
  "imbl",
  "parking_lot 0.13.0",
@@ -2159,6 +2160,15 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+]
+
+[[package]]
+name = "gz-terrain"
+version = "0.7.0"
+dependencies = [
+ "glam",
+ "gz-base",
+ "gz-fmt-object",
 ]
 
 [[package]]

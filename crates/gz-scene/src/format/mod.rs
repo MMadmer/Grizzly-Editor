@@ -17,6 +17,7 @@ pub mod fields;
 pub mod group;
 pub mod layers;
 pub mod spawn;
+pub mod terrain;
 pub mod values;
 
 use std::sync::Arc;
@@ -90,7 +91,7 @@ pub struct ClassFile {
     pub lists: &'static [(&'static str, ObjClass)],
 }
 
-pub const CLASS_FILES: [ClassFile; 11] = [
+pub const CLASS_FILES: [ClassFile; 12] = [
     ClassFile { file: "objects.lua", lists: &[("objects", ObjClass::SceneObject)] },
     ClassFile { file: "lights.lua", lists: &[("lights", ObjClass::Light)] },
     ClassFile { file: "glows.lua", lists: &[("glows", ObjClass::Glow)] },
@@ -105,6 +106,7 @@ pub const CLASS_FILES: [ClassFile; 11] = [
     ClassFile { file: "ways.lua", lists: &[("ways", ObjClass::Way)] },
     ClassFile { file: "zones.lua", lists: &[("sectors", ObjClass::Sector), ("portals", ObjClass::Portal)] },
     ClassFile { file: "groups.lua", lists: &[("groups", ObjClass::Group)] },
+    ClassFile { file: "terrain.lua", lists: &[("terrains", ObjClass::Terrain)] },
 ];
 
 /// The file and the list of a class.
@@ -545,7 +547,7 @@ pub static SCENE_FIELDS: &[Field<SceneState>] = &[
         group: "Editor",
         unit: "",
         ty: Ty::Table(
-            "`{ <kind> = { hidden = true, locked = true } }` - kinds: `object`, `light`, `glow`, `sound`, `sound_env`, `particles`, `shape`, `fog`, `spawn`, `way`, `sector`, `portal`, `group`, `ai_map`, `details`, `wallmarks`",
+            "`{ <kind> = { hidden = true, locked = true } }` - kinds: `object`, `light`, `glow`, `sound`, `sound_env`, `particles`, `shape`, `fog`, `spawn`, `way`, `sector`, `portal`, `group`, `terrain`, `ai_map`, `details`, `wallmarks`",
         ),
         default: "none",
         help: "The kinds of objects that are hidden or locked in the viewport.",
@@ -1799,6 +1801,45 @@ mod tests {
         assert_eq!(r.code, "syntax");
         assert!(r.problem.line.is_some() && r.problem.column.is_some());
         assert_eq!(r.problem.file.as_ref().map(RelPath::as_str), Some("a.scene"));
+    }
+
+    #[test]
+    fn a_terrain_reads_back_as_it_was_written_and_a_bad_edit_says_where() {
+        let text = "return {\n  terrains = {\n    { name = \"yard\", pos = { 120, 0, -40 }, rot = { 0, 30, 0 }, size = { 40, 30 }, cell = 2,\n      base = \"ground\", edge = 4,\n      edits = {\n        { op = \"flatten\", at = { 0, 0 }, radius = 10, falloff = 4, height = 12.5 },\n        { op = \"ramp\", from = { -10, 0 }, to = { 10, 0 }, width = 4, falloff = 2, heights = { 11, 13 } },\n        { op = \"noise\", amount = 0.3, scale = 8, seed = 1 },\n      },\n      surface = { texture = \"terrain\\\\grass\", tile = 6 },\n      cut = true, authored = true },\n  },\n}\n";
+        let disk = Texts {
+            scene: "return {\n  scene = 1,\n}\n".into(),
+            files: vec![("terrain.lua".into(), text.into())],
+            layers: Vec::new(),
+        };
+        let r = read_back(&disk);
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
+        let t = r.state.find(ObjClass::Terrain, "yard").unwrap();
+        assert!(t.marks.authored);
+        let ObjData::Terrain(d) = &t.data else { panic!("not a terrain") };
+        assert_eq!((d.size.x, d.size.y, d.cell, d.edits.len(), d.cut), (40.0, 30.0, 2.0, 3, true));
+        assert!((t.xform.rotation.y - 30f32.to_radians()).abs() < 1e-6);
+        // written from what it read, nothing changes; written anew, it reads back the same
+        assert!(write(&r.state, Some(&r.files), None).unwrap().files.is_empty());
+        let fresh = saved(Texts::default(), &write(&r.state, None, None).unwrap());
+        assert!(!file(&fresh, "terrain.lua").is_empty());
+        let again = read_back(&fresh);
+        assert_eq!(again.state.find(ObjClass::Terrain, "yard").unwrap().data, t.data);
+
+        // a terrain lies flat: pitch and bank are dropped
+        let tilted = text.replace("rot = { 0, 30, 0 }", "rot = { 10, 30, 5 }");
+        let r = read_back(&Texts { files: vec![("terrain.lua".into(), tilted)], ..disk.clone() });
+        let rot = r.state.find(ObjClass::Terrain, "yard").unwrap().xform.rotation;
+        assert!(rot.x == 0.0 && rot.z == 0.0);
+
+        // an unknown op: the edits are the default, the problem on the line of the key
+        let bad = text.replace("op = \"ramp\"", "op = \"dig\"");
+        let r = read_back(&Texts { files: vec![("terrain.lua".into(), bad)], ..disk });
+        let p = r.problems.iter().find(|p| p.code == "S011").unwrap_or_else(|| panic!("{:?}", r.problems));
+        assert!(p.message.contains("item 2: has the unknown op 'dig'"), "{}", p.message);
+        assert_eq!(p.file.as_ref().map(|f| f.as_str()), Some("levels/test/terrain.lua"));
+        assert_eq!(p.line, Some(5));
+        let ObjData::Terrain(d) = &r.state.find(ObjClass::Terrain, "yard").unwrap().data else { panic!() };
+        assert!(d.edits.is_empty() && d.cut, "the rest is read");
     }
 
     #[test]

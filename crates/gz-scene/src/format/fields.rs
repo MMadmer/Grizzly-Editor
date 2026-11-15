@@ -121,6 +121,7 @@ pub fn class_fields(class: ObjClass) -> &'static [Field<Object>] {
         ObjClass::Sector => SECTOR,
         ObjClass::Portal => PORTAL,
         ObjClass::Group => GROUP,
+        ObjClass::Terrain => super::terrain::TERRAIN,
         ObjClass::DetailObjects | ObjClass::AiMap | ObjClass::Wallmark => &[],
     }
 }
@@ -250,7 +251,9 @@ pub static COMMON: &[Field<Object>] = &[
         applies: rotates,
         get: |o| angles(o.xform.rotation),
         set: |o, v| {
-            o.xform.rotation = as_angles(v)?;
+            let r = as_angles(v)?;
+            // a terrain lies flat: only its heading turns it
+            o.xform.rotation = if o.class == ObjClass::Terrain { Vec3::new(0.0, r.y, 0.0) } else { r };
             Ok(())
         },
     },

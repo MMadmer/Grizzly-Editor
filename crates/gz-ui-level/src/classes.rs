@@ -26,6 +26,7 @@ pub fn icon(class: ObjClass) -> Icon {
         ObjClass::AiMap => Icon::AIMap,
         ObjClass::Wallmark => Icon::Wallmark,
         ObjClass::FogVolume => Icon::FogVolume,
+        ObjClass::Terrain => Icon::Area,
     }
 }
 

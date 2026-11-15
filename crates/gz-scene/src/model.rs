@@ -12,7 +12,7 @@ pub use crate::math::Transform;
 use crate::math::{Aabb, Mat4, Vec3};
 use crate::objects::{
     FogData, GlowData, GroupData, KeptObject, LightData, ParticlesData, PortalData, SceneObjectData,
-    SectorData, ShapeData, SoundEnvData, SoundSrcData, SpawnData, WayData,
+    SectorData, ShapeData, SoundEnvData, SoundSrcData, SpawnData, TerrainData, WayData,
 };
 pub use crate::tools::{BulkData, LevelOptions, SceneMode, ToolPart, ToolSettings};
 
@@ -97,6 +97,8 @@ pub enum ObjData {
     Group(GroupData),
     Particles(ParticlesData),
     FogVolume(FogData),
+    /// A height grid over a rectangle (`crate::objects::terrain`).
+    Terrain(Box<TerrainData>),
     /// An object of an X-Ray SDK scene of a version the importer does not read.
     Kept(KeptObject),
 }

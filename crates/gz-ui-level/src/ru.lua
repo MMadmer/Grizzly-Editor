@@ -179,6 +179,10 @@ return {
   { "wallmarks", "декали" },
   { "fog volume", "объём тумана" },
 
+  { "Terrain", "Рельеф" },
+  { "Terrains", "Рельефы" },
+  { "terrain", "рельеф" },
+
   -- the World Outliner
   { "No scene", "Нет сцены" },
   { "Open or create a scene to see its objects here.", "Откройте или создайте сцену, чтобы увидеть здесь её объекты." },
@@ -760,4 +764,27 @@ return {
   { "No build compiled this level of the linked game here.", "Здесь ни одна сборка не компилировала этот уровень привязанной игры." },
   { "The build files were not removed.", "Файлы сборки не удалены." },
   { "Building the module for play", "Сборка модуля для игры" },
+
+  -- a terrain's rows (gz-scene's format/terrain.rs and props.rs)
+  { "How far it reaches along its own x and z, in metres; pos is its centre.", "Насколько он простирается по своим осям x и z, в метрах; pos — его центр." },
+  { "Cell", "Шаг сетки" },
+  { "The step of the height grid, 0.5 to 4 metres.", "Шаг сетки высот, от 0,5 до 4 метров." },
+  { "Where every point starts: the level's ground under it (every static object that is not added by the module), or flat at a height over pos.", "Откуда начинается каждая точка: с земли уровня под ним (любого статического объекта, который не добавлен модулем) или ровно на высоте над pos." },
+  { "Edge", "Край" },
+  { "On the ground: the metres along the border over which the edits blend back into the ground around, so the border meets it.", "На земле: сколько метров вдоль границы правки плавно сходят на окружающую землю, чтобы граница с ней совпала." },
+  { "Edits", "Правки" },
+  { "How the heights change, one edit after the other: x and z are metres from the centre along the terrain's own axes, height is a world height, amount is relative, falloff is the width of the soft border.", "Как меняются высоты, правка за правкой: x и z — метры от центра по собственным осям рельефа, height — высота в мире, amount — относительная, falloff — ширина мягкой границы." },
+  { "Heights", "Высоты" },
+  { "Instead of the edits: every world height of the grid written out.", "Вместо правок: все высоты сетки в мире, выписанные целиком." },
+  { "Surface", "Поверхность" },
+  { "What it looks like: the look and the texture coordinates of the ground under each face, or a surface of its own laid flat every tile metres.", "Как он выглядит: вид и текстурные координаты земли под каждой гранью или своя поверхность, уложенная плашмя через каждые tile метров." },
+  { "Cuts the Ground", "Вырезает землю" },
+  { "On a level of the game, the ground under it is cut out of the level: its picture, its collision and its AI map.", "На уровне игры земля под ним вырезается из уровня: из картинки, из коллизии и из ИИ-сетки." },
+  { "Depth", "Глубина" },
+  { "On the Ground", "На земле" },
+  { "Base Height", "Высота основы" },
+  { "Metres over the height of the position the flat base lies at.", "На сколько метров выше позиции лежит ровная основа." },
+  { "Ground's Look", "Вид земли" },
+  { "Tile", "Плитка" },
+  { "The texture is laid flat once every this many metres.", "Текстура укладывается плашмя через каждые столько метров." },
 }

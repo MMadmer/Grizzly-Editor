@@ -1,9 +1,10 @@
-//! The data of the sixteen kinds of objects, and their boxes. Their keys in the scene's files are
+//! The data of the kinds of objects, and their boxes. Their keys in the scene's files are
 //! `crate::format::fields`; the X-Ray SDK importer reads them in `crate::sdk::objects`.
 
 mod shape;
 mod simple;
 mod spawn;
+pub mod terrain;
 mod way;
 
 use gz_base::{Blob, SmolStr};
@@ -20,6 +21,7 @@ pub use spawn::{
     ENVMOD_CHOOSE_NAME, EnvMod, ORDER_HOSTILE, ORDER_RUN, PLAYERSTART_CHOOSE_NAME, PointKind,
     RPOINT_CHOOSE_NAME, RPoint, SpawnData, SpawnEntity, XmsOrder, env_flags,
 };
+pub use terrain::TerrainData;
 pub use way::{
     PortalData, SectorData, WAYPOINT_RADIUS, WAYPOINT_SIZE, WayData, WayPoint, fcolor_from, fcolor_get,
 };
@@ -55,6 +57,7 @@ pub fn default_data(class: ObjClass) -> ObjData {
         ObjClass::Group => ObjData::Group(GroupData::default()),
         ObjClass::Particles => ObjData::Particles(ParticlesData::default()),
         ObjClass::FogVolume => ObjData::FogVolume(FogData::default()),
+        ObjClass::Terrain => ObjData::Terrain(Box::default()),
         ObjClass::DetailObjects | ObjClass::AiMap | ObjClass::Wallmark => {
             ObjData::Kept(KeptObject::Stream { why: "not an object class".into(), body: Blob::from(&[][..]) })
         }
@@ -88,6 +91,7 @@ pub fn world_box(state: &SceneState, obj: &Object, local_ref: &dyn Fn(&str) -> O
         ObjData::Shape(d) => d.world_box(&obj.xform),
         ObjData::SoundEnv(d) => d.shape.world_box(&obj.xform),
         ObjData::FogVolume(d) => d.shape.world_box(&obj.xform),
+        ObjData::Terrain(d) => Some(terrain::world_box(obj, d, local_ref)),
         ObjData::SoundSrc(d) => Some(point_box(p, d.max_distance)),
         ObjData::Spawn(d) => {
             let mut b = match d.kind {

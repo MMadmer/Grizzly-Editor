@@ -556,6 +556,7 @@ fn table_rows(state: &SceneState, o: &Object, f: &Field<Object>, cx: &PropCx<'_>
                     .help("The surfaces take the library object's own values again."),
             );
         }
+        (ObjData::Terrain(d), _) => terrain_rows(d, f, out),
         (ObjData::Light(d), "fuzzy") => {
             let g = "Fuzzy";
             out.push(
@@ -1560,6 +1561,7 @@ pub fn set_object(
             *slot = num(p) as f32;
         }
         ObjData::Particles(_) if k == "particles.controls" => return Ok(Effect::Nothing),
+        ObjData::Terrain(d) => set_terrain(d, k, p)?,
         ObjData::Way(w) => {
             let rest = k.strip_prefix("points.").ok_or("is no row of this object")?;
             let (pname, field) = rest.rsplit_once('.').ok_or("is no row of this object")?;
@@ -1771,6 +1773,125 @@ fn scene_story_ids(state: &SceneState) -> Vec<String> {
 #[must_use]
 pub fn sector_argb(c: [f32; 4]) -> u32 {
     fcolor_get(c)
+}
+
+// ---------------------------------------------------------------- terrains
+
+/// The rows of a terrain's tables: the size as two lengths, the base and the surface as a switch
+/// and what it leaves to set, the edits and the rows as what the file holds.
+fn terrain_rows(d: &gz_terrain::Spec, f: &Field<Object>, out: &mut Vec<Row>) {
+    let g = f.group;
+    let length = |max: f32| Kind::Float { min: 0.5, max, dec: 2 };
+    match f.key {
+        "size" => {
+            let size = gz_terrain::SIZE_MAX;
+            out.push(
+                Row::new("size.x", g, "Width", length(size), Val::Num(f64::from(d.size.x)))
+                    .unit("m")
+                    .help(f.help),
+            );
+            out.push(
+                Row::new("size.z", g, "Depth", length(size), Val::Num(f64::from(d.size.y)))
+                    .unit("m")
+                    .help(f.help),
+            );
+        }
+        "base" => {
+            let ground = d.base == gz_terrain::Base::Ground;
+            out.push(Row::new("base.ground", g, "On the Ground", Kind::Bool, Val::Bool(ground)).help(f.help));
+            if let gz_terrain::Base::Height(h) = d.base {
+                out.push(
+                    Row::new(
+                        "base.height",
+                        g,
+                        "Base Height",
+                        Kind::Float { min: -1000.0, max: 1000.0, dec: 2 },
+                        Val::Num(f64::from(h)),
+                    )
+                    .unit("m")
+                    .help("Metres over the height of the position the flat base lies at."),
+                );
+            }
+        }
+        "edits" => out.push(caption("edits", g, f.label, &d.edits.len().to_string()).help(f.help).disabled()),
+        "rows" if !d.rows.is_empty() => {
+            let size = format!("{} x {}", d.rows.first().map_or(0, Vec::len), d.rows.len());
+            out.push(caption("rows", g, f.label, &size).help(f.help).disabled());
+        }
+        "surface" => {
+            let s = "Terrain\\Surface";
+            let ground = d.surface == gz_terrain::Surface::Ground;
+            out.push(
+                Row::new("surface.ground", s, "Ground's Look", Kind::Bool, Val::Bool(ground)).help(f.help),
+            );
+            if let gz_terrain::Surface::Look(l) = &d.surface {
+                let pick = |k: &str, label: &str, list: &str, v: &str| {
+                    Row::new(
+                        format!("surface.{k}"),
+                        s,
+                        label,
+                        Kind::Choose(Choice::of(list)),
+                        Val::Text(v.to_owned()),
+                    )
+                };
+                out.push(pick("texture", "Texture", "texture", &l.texture));
+                out.push(pick("shader", "Shader", "e_shader", &l.shader));
+                out.push(
+                    pick("compile", "Build Shader", "c_shader", &l.compile)
+                        .help("How the level build compiles the surface."),
+                );
+                out.push(pick("material", "Material", "game_material", &l.material));
+                out.push(
+                    Row::new(
+                        "surface.tile",
+                        s,
+                        "Tile",
+                        Kind::Float { min: 0.05, max: 1000.0, dec: 2 },
+                        Val::Num(f64::from(l.tile)),
+                    )
+                    .unit("m")
+                    .help("The texture is laid flat once every this many metres."),
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Sets a row of a terrain's tables.
+fn set_terrain(d: &mut gz_terrain::Spec, k: &str, p: &Parsed) -> Result<(), String> {
+    let positive =
+        |v: f64| if v.is_finite() && v > 0.0 { Ok(v as f32) } else { Err("takes metres above 0".to_owned()) };
+    match k {
+        "size.x" => d.size.x = positive(num(p))?,
+        "size.z" => d.size.y = positive(num(p))?,
+        "base.ground" => {
+            d.base = if on(p) { gz_terrain::Base::Ground } else { gz_terrain::Base::Height(0.0) };
+        }
+        "base.height" => d.base = gz_terrain::Base::Height(num(p) as f32),
+        "surface.ground" => {
+            d.surface = if on(p) {
+                gz_terrain::Surface::Ground
+            } else {
+                gz_terrain::Surface::Look(gz_terrain::Look::default())
+            };
+        }
+        _ => {
+            let field = k.strip_prefix("surface.").ok_or("is no row of this object")?;
+            let gz_terrain::Surface::Look(l) = &mut d.surface else {
+                return Err("is no row of a terrain that takes the ground's look".into());
+            };
+            match field {
+                "texture" => l.texture = text_of(p),
+                "shader" => l.shader = text_of(p),
+                "compile" => l.compile = text_of(p),
+                "material" => l.material = text_of(p),
+                "tile" => l.tile = positive(num(p))?,
+                _ => return Err("is no row of this object".into()),
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

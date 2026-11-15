@@ -27,7 +27,7 @@ pub struct PickHit {
 /// Which kinds a scene ray takes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RayKinds {
-    /// The objects with a mesh: static and dynamic scene objects.
+    /// The objects with a mesh: static and dynamic scene objects, and terrains.
     #[default]
     Meshes,
     /// Every object with geometry: the meshes, and by their shapes the shapes, the sound
@@ -48,9 +48,10 @@ impl RayFilter<'_> {
     #[must_use]
     pub fn accepts(&self, o: &Object) -> bool {
         let kind = match self.kinds {
-            RayKinds::Meshes => o.class == ObjClass::SceneObject,
+            RayKinds::Meshes => matches!(o.class, ObjClass::SceneObject | ObjClass::Terrain),
             RayKinds::Geometry => match &o.data {
                 ObjData::SceneObject(_)
+                | ObjData::Terrain(_)
                 | ObjData::Shape(_)
                 | ObjData::SoundEnv(_)
                 | ObjData::FogVolume(_) => true,
@@ -260,8 +261,20 @@ fn build_node(items: &mut [(ObjId, Aabb)], first: usize, count: usize, nodes: &m
 /// front-facing triangle (`OPT_ONLYNEAREST | OPT_CULL`). The distance is the world's.
 #[must_use]
 pub fn ray_library(lo: &LibraryObject, obj: &Object, start: Vec3, dir: Vec3, range: f32) -> Option<PickHit> {
+    ray_library_at(lo, obj, &obj.world(), start, dir, range)
+}
+
+/// [`ray_library`] with the model placed by `world` (a terrain's is in the world already).
+fn ray_library_at(
+    lo: &LibraryObject,
+    obj: &Object,
+    world: &gz_fmt_object::Mat4,
+    start: Vec3,
+    dir: Vec3,
+    range: f32,
+) -> Option<PickHit> {
     let bvh = lo.bvh.as_ref()?;
-    let world = obj.world();
+    let world = *world;
     let inv = gz_fmt_object::Mat4::invert_43(&world);
     let s = inv.transform_tiny(start);
     let d = inv.transform_dir(dir);
@@ -292,9 +305,14 @@ pub fn ray_object(
     let at = |t: f32| PickHit { id: o.id, t, point: start + dir * t, normal: None, surface: None };
     let p = o.position();
     match &o.data {
-        ObjData::SceneObject(d) => {
-            let lo: Arc<LibraryObject> = lib.cached(&d.reference)?;
+        // a scene object a terrain cuts is hit as its cut model
+        ObjData::SceneObject(_) => {
+            let lo: Arc<LibraryObject> = objects::terrain::mesh_of(state, lib, o)?;
             ray_library(&lo, o, start, dir, range)
+        }
+        ObjData::Terrain(_) => {
+            let lo = objects::terrain::mesh_of(state, lib, o)?;
+            ray_library_at(&lo, o, &gz_fmt_object::Mat4::IDENTITY, start, dir, range)
         }
         ObjData::Light(_) | ObjData::SoundSrc(_) => {
             ray_point(start, dir, p, VIS_RADIUS).filter(|t| *t < range).map(at)
@@ -383,10 +401,9 @@ pub fn box_triangles(state: &SceneState, lib: &Library, ids: &[ObjId], b: &Aabb)
     let mut out = Vec::new();
     for id in ids {
         let Some(o) = state.get(*id) else { continue };
-        let ObjData::SceneObject(d) = &o.data else { continue };
-        let Some(lo) = lib.cached(&d.reference) else { continue };
+        let Some(lo) = objects::terrain::mesh_of(state, lib, o) else { continue };
         let Some(bvh) = &lo.bvh else { continue };
-        let world = o.world();
+        let world = if o.class == ObjClass::Terrain { gz_fmt_object::Mat4::IDENTITY } else { o.world() };
         let inv = gz_fmt_object::Mat4::invert_43(&world);
         let local = crate::math::xform_box(b, &inv);
         let mut found = Vec::new();

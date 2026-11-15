@@ -139,6 +139,9 @@ fn kind_text(class: ObjClass) -> &'static str {
         ObjClass::Sector => "Sectors: the cells the level's visibility is divided into.",
         ObjClass::Portal => "Portals: the openings between two sectors.",
         ObjClass::Group => "Groups: objects held together; the members stay in their own files.",
+        ObjClass::Terrain => {
+            "Terrains: a height grid over a rectangle that replaces the ground under it. `pos` is its centre, `rot` turns it by its heading alone. Its model is made from these keys (and, on the ground, from the static objects under it that the module does not add); with `cut` on, the ground it replaces is cut out of the level wherever the editor and the game look: a triangle of a static object that is not `authored` is clipped by the rectangle, and the part inside goes where it lies within 0.5 m of the old ground."
+        }
         ObjClass::DetailObjects | ObjClass::AiMap | ObjClass::Wallmark => "",
     }
 }

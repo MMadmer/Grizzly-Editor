@@ -282,8 +282,7 @@ pub(crate) fn slope_of(n: Vec3) -> f32 {
 pub(crate) fn surface_json(sc: &Scene<'_>, hit: &PickHit) -> Value {
     let Some(s) = hit.surface else { return Value::Null };
     let Some(o) = sc.state.get(hit.id) else { return Value::Null };
-    let ObjData::SceneObject(d) = &o.data else { return Value::Null };
-    let Some(lo) = sc.lib.cached(&d.reference) else { return Value::Null };
+    let Some(lo) = crate::objects::terrain::mesh_of(sc.state, sc.lib, o) else { return Value::Null };
     lo.object.surfaces.get(s as usize).map_or(Value::Null, |s| {
         json!({ "name": s.name.as_str(), "texture": s.texture.as_str(), "material": s.game_mtl.as_str() })
     })
@@ -303,8 +302,8 @@ pub(crate) fn opt_r4(v: Option<f32>) -> Value {
     v.map_or(Value::Null, |v| json!(r4(v)))
 }
 
-/// Whether a kind is a solid thing the ground queries stand on.
+/// Whether a kind is a solid thing the ground queries stand on: a scene object or a terrain.
 #[must_use]
 pub fn is_solid(o: &Object) -> bool {
-    o.class == ObjClass::SceneObject
+    matches!(o.class, ObjClass::SceneObject | ObjClass::Terrain)
 }

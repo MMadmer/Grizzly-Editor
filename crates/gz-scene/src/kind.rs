@@ -41,6 +41,7 @@ const GROUP_KEYS: &[&str] = &[
     "sectors",
     "portals",
     "groups",
+    "terrains",
 ];
 
 /// The scene kind.
