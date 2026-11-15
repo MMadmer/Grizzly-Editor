@@ -461,7 +461,10 @@ pub fn actions() -> Vec<Action> {
             .scope(TAB)
             .args(|_| pairs(&[("all", json!(true))]))
             .enabled(with_objects),
+        // Esc steps back: out of a mode first, then out of the selection
         Action::new(DESELECT_ALL, "Deselect All", SELECTION, "scene.select")
+            .keys(const { &[Chord::new(Key::Escape)] })
+            .after(gz_ui_viewport::actions::LEAVE_MODE)
             .scope(TAB)
             .args(|_| pairs(&[("none", json!(true))]))
             .enabled(with_selection),
@@ -687,14 +690,32 @@ mod tests {
 
     #[test]
     fn no_two_level_actions_share_a_default_chord() {
-        // the level's and the viewport's: both live on the Level tab
+        // the level's and the viewport's: both live on the Level tab. Two that share a key on
+        // purpose say which of them goes first.
         let all: Vec<gz_app::Action> =
             actions().into_iter().chain(gz_ui_viewport::actions::actions()).collect();
-        let mut chords: Vec<(String, &str)> =
-            all.iter().flat_map(|a| a.keys.iter().map(move |c| (c.label(), a.id))).collect();
-        chords.sort();
-        for w in chords.windows(2) {
-            assert!(w[0].0 != w[1].0, "{} and {} both default to {}", w[0].1, w[1].1, w[0].0);
+        for (i, a) in all.iter().enumerate() {
+            if let Some(first) = a.after {
+                assert!(all.iter().any(|b| b.id == first), "{} follows {first}, which is no action", a.id);
+            }
+            for b in &all[i + 1..] {
+                for c in a.keys.iter().filter(|c| b.keys.contains(c)) {
+                    assert!(a.steps_with(b), "{} and {} both default to {}", a.id, b.id, c.label());
+                }
+            }
         }
+    }
+
+    #[test]
+    fn esc_leaves_a_mode_and_then_clears_the_selection() {
+        let esc = Chord::new(Key::Escape);
+        let level = actions();
+        let viewport = gz_ui_viewport::actions::actions();
+        let deselect = level.iter().find(|a| a.id == DESELECT_ALL).expect("Deselect All");
+        let leave =
+            viewport.iter().find(|a| a.id == gz_ui_viewport::actions::LEAVE_MODE).expect("the mode's Esc");
+        assert!(deselect.keys.contains(&esc) && leave.keys.contains(&esc));
+        assert_eq!(deselect.after, Some(leave.id));
+        assert_eq!((deselect.command, leave.command), ("scene.select", "scene.mode"));
     }
 }

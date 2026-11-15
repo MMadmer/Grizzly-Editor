@@ -501,7 +501,9 @@ A change of plan is a change of its document first.
   Menu rows, toolbar buttons, keys and the Command Palette name actions by id; the Keyboard page and `app.keys`
   bind them. There is no other table of commands and no key that runs anything else.
 - **Keys, first taker wins** (`shell.rs`): a text field; an action whose keys are live - one of this tab (or its
-  part) before a global one, and only one that is on; the document's own `shortcut()`. While a popup is up or a
+  part) before a global one, and only one that is on; the document's own `shortcut()`. No two actions live
+  together default to one key, but two that share it on purpose, where one says it goes after the other
+  (`Action::after`): Esc leaves a mode, then clears the selection. While a popup is up or a
   panel that answers its own keys has the focus, only the frame's keys are taken, and nothing acts under a modal:
   Delete or Ctrl+D in a document can never reach the scene. `app.keys action=resolve` answers what a chord runs.
 - **Dialogs are `Title###dlg.<name>`**: modal, pinned and centred, S/M/L/XL, Enter =

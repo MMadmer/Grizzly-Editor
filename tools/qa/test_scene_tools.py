@@ -38,7 +38,7 @@ The Level tab's left panel and World Outliner (level.view answers what they draw
 
   T  the Place panel: its categories, a search that opens what matches (a spawn section found by its in-game name),
      a row's payload is the viewport's, a click arms Place mode and a second one stops it, Recent keeps it, a category
-     folds; typing in the search costs the UI thread nothing
+     folds; Esc leaves the mode first and clears the selection next; typing in the search costs the UI thread nothing
   U  the World Outliner: kinds in the order of their names, an eye and a lock per kind and per object, a way path's
      points By Hierarchy, a selection made elsewhere scrolled into view, 3000 objects selected and the search typed in
      with no stall
@@ -729,6 +729,37 @@ def phase_t() -> None:
           short(v.get("mode")))
     rec = [r for r in (v.get("place") or {}).get("rows") or [] if r.get("category") == "recent" and "item" in r]
     check(rec and rec[0].get("payload") == "object:" + CABINET, "T Recent keeps what was placed last", short(rec[:2]))
+    # Esc steps back: out of a mode first, then out of the selection (app.keys resolve is the key pass's answer)
+    def esc():
+        return cmd("app.keys", action="resolve", keys="Esc").get("runs")
+
+    def selected() -> int:
+        return len(cmd("scene.objects", selected=True, limit=10).get("objects") or [])
+
+    some = cmd("scene.objects", classes=["object"], limit=1).get("objects") or []
+    if check(bool(some), "T the scene has an object to select", short(some)):
+        deselect()
+        idle = esc()
+        cmd("scene.select", objects=[some[0]["name"]])
+        held = esc()
+        view(place="object", ref=CABINET)
+        placing = esc()
+        check([idle, held, placing] == [None, "level.deselect_all", "viewport.leave_mode"],
+              "T Esc runs nothing with nothing selected, Deselect All with a selection, and leaves a mode first",
+              json.dumps([idle, held, placing]))
+        cmd("ui.palette", action="run", id="viewport.leave_mode")
+        left = qa.until(lambda: cmd("scene.mode").get("mode") == "select", 10)
+        check(left and selected() == 1 and esc() == "level.deselect_all",
+              "T the first Esc leaves Place mode and keeps the selection", short(cmd("scene.mode")))
+        cmd("ui.palette", action="run", id="level.deselect_all")
+        cleared = qa.until(lambda: selected() == 0, 10)
+        check(cleared and esc() is None, "T the second Esc clears the selection", "selected %d" % selected())
+        rows = {r.get("id"): r for r in cmd("app.keys").get("keys", [])}
+        pair = [rows.get("level.deselect_all") or {}, rows.get("viewport.leave_mode") or {}]
+        check(pair[0].get("after") == "viewport.leave_mode" and not pair[0].get("conflicts") and not pair[1].get("conflicts")
+              and pair[0].get("keys") == ["Esc"] == pair[1].get("keys"),
+              "T the two share Esc on purpose: Deselect All goes after the mode's, neither is a conflict", short(pair))
+        view(place="none", place_search="")
     # a category folds and opens again
     v = view(category="lights", open=False)
     lights = [c for c in (v.get("place") or {}).get("categories") or [] if c.get("id") == "lights"]

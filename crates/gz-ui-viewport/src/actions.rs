@@ -17,6 +17,9 @@ use crate::service::{SHOW_FLAGS, ViewMode, Viewport};
 /// The tab the viewport's keys are live on.
 pub const LEVEL: &[&str] = &["level"];
 const TAB: Scope = Scope::Tab(LEVEL);
+
+/// Esc while a mode other than Select is up. The level's Deselect All takes the key after it.
+pub const LEAVE_MODE: &str = "viewport.leave_mode";
 const GROUP: &str = "Viewport";
 
 fn mode(cx: &ActionCx<'_>) -> Option<SceneMode> {
@@ -195,7 +198,7 @@ pub fn actions() -> Vec<Action> {
             .checked(|cx| checked_mode(cx, |m| m.layer().is_some())),
         act!("viewport.mode_zones", "Zones Mode", "scene.mode", Icon::Sector, const { &[Chord::shift(Key::Num4)] }, on_level, { "mode": "zones" })
             .checked(|cx| checked_mode(cx, |m| m == SceneMode::Zones)),
-        Action::new("viewport.leave_mode", "Back to Select Mode", GROUP, "scene.mode")
+        Action::new(LEAVE_MODE, "Back to Select Mode", GROUP, "scene.mode")
             .icon(Icon::Select)
             .keys(const { &[Chord::new(Key::Escape)] })
             .scope(TAB)

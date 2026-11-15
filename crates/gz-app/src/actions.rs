@@ -172,6 +172,10 @@ pub struct Action {
     /// also while a panel that answers its own keys has the focus. Every other action leaves the
     /// keys to such a panel (the Content Browser's Delete deletes its files, not the scene's).
     pub frame: bool,
+    /// The action that takes this one's keys first while it is on: one key that steps back
+    /// through two things (Esc leaves a mode, then clears the selection). The two share their
+    /// keys on purpose: neither is the other's conflict, and binding one leaves the other's.
+    pub after: Option<&'static str>,
 }
 
 impl Action {
@@ -197,7 +201,21 @@ impl Action {
             reply: None,
             in_palette: true,
             frame: false,
+            after: None,
         }
+    }
+
+    /// Takes its keys only when the action `first` does not (see [`Action::after`]).
+    #[must_use]
+    pub const fn after(mut self, first: &'static str) -> Self {
+        self.after = Some(first);
+        self
+    }
+
+    /// The two share their keys on purpose: one takes them after the other.
+    #[must_use]
+    pub fn steps_with(&self, other: &Action) -> bool {
+        self.after == Some(other.id) || other.after == Some(self.id)
     }
 
     /// One of the frame's own keys (see [`Action::frame`]).
@@ -334,15 +352,19 @@ impl ActionTable {
     }
 
     /// Binds an action to `keys` (empty takes its keys away); every other action of an
-    /// overlapping scope that had one of the chords lets it go. Answers those actions' ids. The
-    /// settings keep it (the caller saves them).
+    /// overlapping scope that had one of the chords lets it go - but the one it shares its keys
+    /// with on purpose. Answers those actions' ids. The settings keep it (the caller saves them).
     pub fn bind(&mut self, id: &str, keys: Vec<Chord>, settings: &EditorSettings) -> Vec<String> {
-        let Some(scope) = self.get(id).map(|a| a.scope) else { return Vec::new() };
+        let Some(me) = self.get(id).copied() else { return Vec::new() };
         let mut moved = Vec::new();
-        let others: Vec<(&'static str, Scope)> =
-            self.actions.iter().filter(|a| a.id != id).map(|a| (a.id, a.scope)).collect();
+        let others: Vec<(&'static str, Scope)> = self
+            .actions
+            .iter()
+            .filter(|a| a.id != id && !a.steps_with(&me))
+            .map(|a| (a.id, a.scope))
+            .collect();
         for (other, other_scope) in others {
-            if !scope.overlaps(other_scope) {
+            if !me.scope.overlaps(other_scope) {
                 continue;
             }
             let mut have = self.keys_of(other);
@@ -371,14 +393,15 @@ impl ActionTable {
         }
     }
 
-    /// The other actions whose keys of an overlapping scope are one of this action's.
+    /// The other actions whose keys of an overlapping scope are one of this action's - but the
+    /// one it shares them with on purpose.
     #[must_use]
     pub fn conflicts(&self, id: &str) -> Vec<&'static str> {
         let Some(me) = self.get(id) else { return Vec::new() };
         let mine = self.keys_of(id);
         self.actions
             .iter()
-            .filter(|a| a.id != id && me.scope.overlaps(a.scope))
+            .filter(|a| a.id != id && me.scope.overlaps(a.scope) && !a.steps_with(me))
             .filter(|a| self.keys_of(a.id).iter().any(|c| mine.contains(c)))
             .map(|a| a.id)
             .collect()
@@ -386,7 +409,8 @@ impl ActionTable {
 
     /// The action a chord runs here, first taker first: an action live on this tab (its part)
     /// before one live everywhere - a tab's own keys win over the window's - and only one that is
-    /// on (an action that is off lets the key go on to the next taker).
+    /// on (an action that is off lets the key go on to the next taker). Of two that are on, one
+    /// that names the other as going first ([`Action::after`]) waits for it.
     /// While a panel owns the keys (`owned`), only the frame's own keys are taken.
     #[must_use]
     pub fn for_chord(
@@ -398,13 +422,17 @@ impl ActionTable {
     ) -> Option<&Action> {
         let bound = |a: &&Action| (!owned || a.frame) && self.keys_of(a.id).contains(chord);
         let on = |a: &&Action| (a.enabled)(cx).on();
-        let local = self
-            .actions
-            .iter()
-            .filter(|a| a.scope != Scope::Global && a.scope.live(cx.kind, part))
-            .filter(bound)
-            .find(on);
-        local.or_else(|| self.actions.iter().filter(|a| a.scope == Scope::Global).filter(bound).find(on))
+        let pick = |global: bool| {
+            let takers: Vec<&Action> = self
+                .actions
+                .iter()
+                .filter(|a| (a.scope == Scope::Global) == global && a.scope.live(cx.kind, part))
+                .filter(bound)
+                .filter(on)
+                .collect();
+            takers.iter().copied().find(|a| !takers.iter().any(|b| a.after == Some(b.id)))
+        };
+        pick(false).or_else(|| pick(true))
     }
 
     /// Whether a chord belongs to an action that is live everywhere: a binding of the level's own
@@ -590,6 +618,7 @@ pub fn key_row(table: &ActionTable, a: &Action) -> Value {
         "default": a.keys.iter().map(Chord::label).collect::<Vec<_>>(),
         "scope": a.scope.describe(),
         "command": a.command,
+        "after": a.after,
         "conflicts": table.conflicts(a.id),
     })
 }
@@ -670,6 +699,40 @@ mod tests {
         assert!(Scope::Global.overlaps(Scope::Tab(&["level"])));
         assert!(!Scope::Tab(&["level"]).overlaps(Scope::Part(QUEST, "canvas")));
         let _ = ed;
+        drop(rt);
+    }
+
+    #[test]
+    fn a_key_two_actions_share_on_purpose_steps_from_one_to_the_other() {
+        const LEVEL: Scope = Scope::Tab(&["level"]);
+        let (rt, ed) = gz_editor_for_tests();
+        let settings =
+            crate::settings::EditorSettings::load(std::path::Path::new("Z:/nowhere/grizzly_editor.ltx"));
+        let esc = Chord::new(Key::Escape);
+        let mut t = ActionTable::default();
+        // added first and still second: it names whom it follows
+        t.add(
+            Action::new("level.deselect_all", "Deselect All", "Selection", "scene.select")
+                .keys(const { &[Chord::new(Key::Escape)] })
+                .scope(LEVEL)
+                .after("viewport.leave_mode"),
+        );
+        t.add(
+            Action::new("viewport.leave_mode", "Back to Select Mode", "Viewport", "scene.mode")
+                .keys(const { &[Chord::new(Key::Escape)] })
+                .scope(LEVEL)
+                .enabled(|cx| Enabled::when(cx.dirty, "Select mode is up.")),
+        );
+        let mut cx = cx(&ed, "level");
+        assert_eq!(t.for_chord(&esc, &cx, None, false).map(|a| a.id), Some("level.deselect_all"));
+        cx.dirty = true;
+        assert_eq!(t.for_chord(&esc, &cx, None, false).map(|a| a.id), Some("viewport.leave_mode"));
+        // neither is the other's conflict, and a binding of one leaves the other's keys alone
+        assert!(
+            t.conflicts("level.deselect_all").is_empty() && t.conflicts("viewport.leave_mode").is_empty()
+        );
+        assert!(t.bind("level.deselect_all", vec![esc], &settings).is_empty());
+        assert_eq!(t.keys_label("viewport.leave_mode"), "Esc");
         drop(rt);
     }
 
