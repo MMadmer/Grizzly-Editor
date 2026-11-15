@@ -243,6 +243,8 @@ fn set_position(o: &mut Object, p: Vec3) {
 }
 
 fn set_rotation(o: &mut Object, r: Vec3) {
+    // a terrain turns about the vertical alone: its mesh, its cut and the game read the heading
+    let r = if matches!(o.data, ObjData::Terrain(_)) { Vec3::new(0.0, r.y, 0.0) } else { r };
     o.xform.rotation = r;
     if let ObjData::Spawn(s) = &mut o.data {
         if let Some(a) = &mut s.attached {
@@ -269,6 +271,8 @@ fn set_scale(o: &mut Object, v: Vec3) {
             o.xform.scale = Vec3::splat(r);
         }
         ObjData::Shape(sh) => o.xform.scale = sh.constrain_scale(v),
+        // a terrain's size is its `size`
+        ObjData::Terrain(_) => {}
         ObjData::Spawn(s) => {
             o.xform.scale = v;
             if let Some(a) = &mut s.attached {
@@ -1122,6 +1126,23 @@ mod tests {
         fn state(&self) -> SceneState {
             self.store.snapshot().state.clone()
         }
+    }
+
+    /// A terrain's mesh, its cut and the game read its heading and its `size`: a rotation keeps
+    /// the heading alone, a scale changes nothing.
+    #[test]
+    fn a_terrain_turns_about_the_vertical_alone_and_does_not_scale() {
+        let mut o =
+            Object::new(ObjClass::Terrain, "Yard", ObjData::Terrain(Box::new(gz_terrain::Spec::default())));
+        apply_edit(&mut o, TransformEdit::Rotation(Vec3::new(0.3, 1.2, -0.4)));
+        assert_eq!(o.rotation(), Vec3::new(0.0, 1.2, 0.0));
+        apply_edit(&mut o, TransformEdit::Scale(Vec3::splat(3.0)));
+        assert_eq!(o.scale(), Vec3::ONE);
+        apply_edit(
+            &mut o,
+            TransformEdit::Land { position: Vec3::X, rotation: Some(Vec3::new(0.5, 0.1, 0.5)) },
+        );
+        assert_eq!((o.position(), o.rotation()), (Vec3::X, Vec3::new(0.0, 0.1, 0.0)));
     }
 
     #[test]
