@@ -859,7 +859,8 @@ impl ModelDoc {
         let textures: Vec<Value> = d.map_or_else(Vec::new, |d| {
             d.textures
                 .iter()
-                .map(|t| json!({ "name": crate::paths::json_path_str(&t.name), "from": t.from }))
+                // a game name, spelled as an asset and `model.info` spell it
+                .map(|t| json!({ "name": t.name.replace('/', "\\"), "from": t.from }))
                 .collect()
         });
         out.insert("textures".into(), Value::Array(textures));
