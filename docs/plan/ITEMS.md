@@ -103,6 +103,14 @@ return {
 - **A refused item stops nothing**: one line `! XMS: [<module>] <file>: left out - <why>` (no base, an unknown
   base, a name that cannot be a section, an edit of a section that is not there, a key that is no name).
 
+- **As the game does it** (its `MODDING.md` "A module's items" is the normative text now; the editor mirrors it):
+  a new item that is no template needs a `base`; `short_name` left out makes the short name the name whenever
+  `name` is given; `loot` without `count` writes no `[item_count]` line and such an item never drops;
+  `icon.texture` left out is the game's atlas, `w` / `h` left out keep the section's; a new item's `hud` without
+  `base` sits over the HUD section its bases name; a change's `hud.base`, and a new item whose `<section>_hud`
+  exists, are refused; any malformed part refuses the whole item; `sold` takes one table too; `add` / `drop` join
+  a list by `,`, a `set` list by `, `; an item whose base is another item of the module waits for it.
+
 ### 1.2 Patches reach what inherits (the config engine)
 
 - A section remembers its parents and which keys are its own lines. A change of a key by a module - an overlay
@@ -110,6 +118,9 @@ return {
   set by a line of its own, and not given by a later parent. `+ammo_class` on `wpn_ak74` reaches
   `wpn_ak74_kobra`; a line added to `[base]` of the death loot reaches every community.
 - `[section] : parents` on a section that exists stays what it is today: the parents are not changed.
+- Exactly: a section's own keys are its own lines, keys an overlay merged into it, keys a directive set on it and
+  keys a directive removed from it (the key is then absent there even when a parent has it); any other key
+  comes from the last parent that has it, and is gone when none has.
 - The editor's config reader (`gz-ltx`) composes the same way: change both or neither.
 
 ### 1.3 Patches of any config (`#file`)
@@ -121,6 +132,9 @@ return {
   `ini_file("misc\\death_generic.ltx")`, an engine reader) or pulled in by an `#include` of another - when it has
   been read whole, with 1.2's inheritance. So a line added to `trade_presets.ltx [merchant]` is in every trader's
   file. Modules apply in their load order; the ledger and `xms_why` name the file.
+- The path is relative to `configs`, lower case; one that climbs out drops its directives; keys before a section
+  header are ignored; a `#file` of a file of the system tree is the system config's too; a config the game opens
+  for writing is never patched.
 - What an item's `loot`, `sold`, `scene` and `lists` say becomes such patches, made by the game.
 - A game that does this states `config-file-patches` and `item-assets` in its `EngineAbilities`.
 - The module stage runs when the game's own overlays are all in, so a patch reaches their sections too.
@@ -267,5 +281,8 @@ motions and sounds; a use scene plays; the silencer is crafted; the icons are th
 - G2 is in (the catalog, craft, start kits and upgrade costs from data; 134 headless tests over the stock scripts of
   both game layers). To see in the running game: a data recipe crafts; a data kit is offered and given; a module
   upgrade shows its cost and installs; with no module the log has no `xms_items` line. G4 (saves, scripts) runs.
+- G1 is in and committed in the game (`b63a43e38`, `433b2ae47`): 64 of 64 in the real engine on a throw-away root,
+  a game without modules composing byte for byte as before. Not yet seen in a played game: loot dropping, a
+  trader stocking, a recipe in the craft window, a scene playing. G3 (saves, the engine) runs.
 - The scratch of the task (surveys, the key table, the unpacked game views) is the session's scratchpad folder
   `we\`; nothing in the repository depends on it.
