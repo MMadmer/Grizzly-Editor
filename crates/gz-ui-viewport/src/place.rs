@@ -42,10 +42,11 @@ pub enum Kind {
     Fog,
     Spawn,
     Way,
+    Terrain,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 11] = [
+    pub const ALL: [Kind; 12] = [
         Kind::Object,
         Kind::Group,
         Kind::Light,
@@ -57,6 +58,7 @@ impl Kind {
         Kind::Fog,
         Kind::Spawn,
         Kind::Way,
+        Kind::Terrain,
     ];
 
     /// The word `scene.place kind=` takes.
@@ -74,6 +76,7 @@ impl Kind {
             Kind::Fog => "fog",
             Kind::Spawn => "spawn",
             Kind::Way => "way",
+            Kind::Terrain => "terrain",
         }
     }
 
@@ -97,6 +100,7 @@ impl Kind {
             Kind::Fog => ObjClass::FogVolume,
             Kind::Spawn => ObjClass::SpawnPoint,
             Kind::Way => ObjClass::Way,
+            Kind::Terrain => ObjClass::Terrain,
         }
     }
 
@@ -239,6 +243,8 @@ fn of_asset(kind: &str, path: &str) -> Option<Placeable> {
     match (kind, ext) {
         ("spawn_section" | "spawn", _) => Some(Placeable::new(Kind::Spawn, Some(&p))),
         (_, "object") => Some(Placeable::new(Kind::Object, Some(&stem("objects")))),
+        // a model asset is referred to by its project path, extension and all
+        (_, "meshasset") => Some(Placeable::new(Kind::Object, Some(&p))),
         (_, "group") => Some(Placeable::new(Kind::Group, Some(&p))),
         ("particles", _) | (_, "pe" | "pg") => {
             Some(Placeable::new(Kind::Particles, Some(&stem("particles"))))

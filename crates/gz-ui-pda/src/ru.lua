@@ -168,7 +168,6 @@ return {
 
   -- Screens & Music
   { "The module's loading and menu screens and their music - saved to mod.ltx as you edit", "Экраны загрузки и меню модуля и их музыка — сохраняются в mod.ltx по ходу правки" },
-  { "Surface", "Поверхность" },
   { "Which screens to edit", "Какие экраны редактировать" },
   { "Screens", "Экраны" },
   { "Music", "Музыка" },

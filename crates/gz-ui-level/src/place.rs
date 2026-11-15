@@ -431,6 +431,7 @@ fn builtin() -> Vec<Item> {
         Item::own(C::Shapes, "AI Map Bounds", "", Icon::AIMap, What::of(Kind::Shape, Some("ai_map_bounds"))),
         Item::own(C::Shapes, "Fog Volume", "", Icon::FogVolume, What::of(Kind::Fog, None)),
         Item::own(C::Shapes, "Sound Environment", "", Icon::SoundEnv, What::of(Kind::SoundEnv, None)),
+        Item::own(C::Shapes, "Terrain", "", Icon::Area, What::of(Kind::Terrain, None)),
         Item::own(C::Ways, "Way Path", "", Icon::Way, What::of(Kind::Way, None)),
     ]
 }
