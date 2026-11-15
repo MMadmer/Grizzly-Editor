@@ -27,6 +27,7 @@ gz-fmt-xr.workspace = true
 gz-fmt-tex.workspace = true
 gz-scene.workspace = true
 gz-render.workspace = true
+gz-pix.workspace = true
 gz-chunk.workspace = true
 gz-particles = { path = "../gz-particles" }
 gz-ui.workspace = true

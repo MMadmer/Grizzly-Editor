@@ -3,7 +3,6 @@
 
 use std::sync::Arc;
 
-use base64::Engine;
 use glam::Vec3;
 use gz_editor::{CmdError, Editor, Origin, Registry, Reply, Spec, Value, json};
 use gz_scene::apply::SelectMode;
@@ -100,8 +99,12 @@ pub fn register(reg: &mut Registry) {
         crate::gesture::gesture,
     );
     reg.cmd(
-        Spec::read("shot.viewport", "A picture of the viewport's scene as the commands before it left it."),
-        shot_viewport,
+        Spec::read(
+            "shot.viewport",
+            "A picture of the scene: the viewport as it is, or from a camera of the picture's own.",
+        )
+        .example("view=top objects=bunker_wall_01,bunker_wall_02 labels=true"),
+        crate::shots::shot_viewport,
     );
     reg.cmd(
         Spec::read(
@@ -752,28 +755,11 @@ async fn play(ed: Arc<Editor>, p: PlayParams, _o: Origin) -> Reply {
     }
 }
 
-// ---- shot.viewport, perf.frames -----------------------------------------------------------------
+// ---- perf.frames (shot.viewport is in shots.rs) -----------------------------------------------------------------
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct NoParams {}
-
-async fn shot_viewport(ed: Arc<Editor>, _p: NoParams, _o: Origin) -> Reply {
-    let vp = Viewport::of(&ed);
-    let (image, pending) = vp.picture(&ed).await?;
-    let (w, h) = (image.width, image.height);
-    let png = ed.exec.cpu(move || gz_app::encode_png(image.width, image.height, &image.rgba)).await?;
-    let encoded = ed.exec.cpu(move || base64::engine::general_purpose::STANDARD.encode(png)).await;
-    let scale = vp.read(|s| r(s.ppp, 3));
-    // what was still loading when the wait ran out: never a silent half picture
-    let mut out = json!({ "png_base64": encoded, "width": w, "height": h, "scale": scale });
-    if !pending.is_empty()
-        && let Value::Object(m) = &mut out
-    {
-        m.insert("pending".into(), json!(pending));
-    }
-    Ok(out)
-}
 
 async fn perf_frames(ed: Arc<Editor>, _p: NoParams, _o: Origin) -> Reply {
     let settings = gz_app::EditorSettings::of(&ed);

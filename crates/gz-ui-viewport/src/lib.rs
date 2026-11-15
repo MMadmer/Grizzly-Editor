@@ -70,6 +70,7 @@ pub mod place;
 mod prefs;
 mod service;
 mod session;
+mod shots;
 pub mod spawn_anim;
 
 pub use actions::install;

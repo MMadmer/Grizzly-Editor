@@ -226,8 +226,11 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
                     continue;
                 }
                 let local = lib.cached(&d.reference).and_then(|l| ga(&l.bounds));
-                let mesh =
-                    if d.visual_mode() { assets.visual(&d.reference) } else { assets.object(&d.reference) };
+                let mesh = if d.visual_mode() {
+                    assets.visual(&d.reference)
+                } else {
+                    assets.object(&lib.mesh_key(&d.reference))
+                };
                 push(mesh, world, local);
                 if selected {
                     let b = local.or_else(|| assets.mesh_bounds(mesh)).unwrap_or(Aabb::UNIT);
@@ -529,7 +532,7 @@ fn ghost(out: &mut Built, lib: &Library, assets: &Assets, g: &crate::service::Gh
         && let Some(r) = g.what.reference.as_deref()
     {
         let bounds = lib.cached(r).and_then(|l| ga(&l.bounds));
-        let mesh = assets.object(r);
+        let mesh = assets.object(&lib.mesh_key(r));
         let mut i = Instance::new(mesh, at).with_flags(InstanceFlags::SELECTED);
         i.bounds = bounds;
         out.list.instances.push(i);

@@ -5,14 +5,21 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gz_render::{AssetBytes, AssetLoader, AssetRef};
+use gz_scene::library::Library;
 use gz_vfs::GameFiles;
 use smol_str::SmolStr;
+
+/// The scene's library when a scene service exists: asked at every load, because the loader
+/// may be made before the scene is.
+pub type LibrarySource = Arc<dyn Fn() -> Option<Arc<Library>> + Send + Sync>;
 
 /// The loader of one open project (or of the editor alone, without one).
 pub struct SceneLoader {
     /// The project's root, then the editor's.
     roots: Vec<PathBuf>,
     game: Option<Arc<GameFiles>>,
+    /// Where the objects that are no file come from: model assets, terrains.
+    library: Option<LibrarySource>,
 }
 
 impl SceneLoader {
@@ -23,7 +30,14 @@ impl SceneLoader {
         if !roots.iter().any(|r| r == &editor) {
             roots.push(editor);
         }
-        Self { roots, game }
+        Self { roots, game, library: None }
+    }
+
+    /// The same loader, also drawing what the scene's library makes in memory.
+    #[must_use]
+    pub fn with_library(mut self, library: LibrarySource) -> Self {
+        self.library = Some(library);
+        self
     }
 
     fn read_first(&self, candidates: &[(PathBuf, &'static str)]) -> Option<AssetBytes> {
@@ -83,6 +97,16 @@ impl AssetLoader for SceneLoader {
                     .ok_or_else(|| format!("no texture '{name}' in the project, the editor or the game"))
             }
             AssetRef::Object(name) => {
+                // an object made in memory is drawn from the very model the rays and the build
+                // read: written out as the file it would be
+                let reference = Library::reference_of(name);
+                if let Some(o) = self.library.as_ref().and_then(|l| l()).and_then(|l| l.provided(reference)) {
+                    return Ok(AssetBytes {
+                        bytes: o.object.write(),
+                        ext: Some(SmolStr::new_static("object")),
+                    });
+                }
+                let name = reference;
                 let c: Vec<_> = self
                     .roots
                     .iter()

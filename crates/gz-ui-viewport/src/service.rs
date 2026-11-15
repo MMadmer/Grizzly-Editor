@@ -1011,7 +1011,10 @@ impl Viewport {
                 Ok(g) => g.files().await.ok(),
                 Err(_) => None,
             };
-            let loader = Arc::new(SceneLoader::new(project, editor_root, game));
+            let scene = ed.clone();
+            let library: crate::loader::LibrarySource =
+                Arc::new(move || SceneService::of_opt(&scene).map(|svc| svc.library.clone()));
+            let loader = Arc::new(SceneLoader::new(project, editor_root, game).with_library(library));
             crate::spawn_anim::SpawnAnims::of(&ed).set_loader(loader.clone());
             renderer.assets().set_loader(Some(loader));
         });
@@ -1251,6 +1254,19 @@ impl Viewport {
         preview: bool,
         why: Reason,
     ) -> Option<Arc<FramePacket>> {
+        self.make_packet_from(editor, renderer, preview, why, None).await
+    }
+
+    /// [`Self::make_packet`], or with `shot` a packet of the scene from a camera of the
+    /// picture's own: the view's state is read and nothing of the pass is published into it.
+    pub(crate) async fn make_packet_from(
+        self: &Arc<Self>,
+        editor: &Arc<Editor>,
+        renderer: &Arc<Renderer>,
+        preview: bool,
+        why: Reason,
+        shot: Option<crate::shots::ShotView>,
+    ) -> Option<Arc<FramePacket>> {
         self.build.lock().passes.add(why);
         self.sync(editor);
         let game_on = self.read(|s| s.game.active());
@@ -1283,9 +1299,15 @@ impl Viewport {
         let built = editor
             .exec
             .cpu(move || {
-                let cam = st.nav.camera();
+                let cam = shot.map_or_else(|| st.nav.camera(), |s| s.camera);
                 // the render scale sizes the picture; the picture of the project keeps the pane's
-                let size = if preview { st.size } else { scaled(st.size, st.prefs.render_scale) };
+                let size = match shot {
+                    Some(s) => s.size,
+                    None if preview => st.size,
+                    None => scaled(st.size, st.prefs.render_scale),
+                };
+                // a picture of the scene alone: the project's, or a shot that asked for it
+                let preview = preview || shot.is_some_and(|s| s.clean);
                 let show = st.prefs.show;
                 let mut view = View::new(cam, size);
                 view.background = st.background;
@@ -1347,7 +1369,7 @@ impl Viewport {
                     spawn_names: show.spawn_names,
                     light_names: show.light_names,
                     glow_crosses: show.glow_crosses,
-                    ghost: if preview { None } else { st.ghost.clone() },
+                    ghost: if preview || shot.is_some() { None } else { st.ghost.clone() },
                     game,
                 };
                 let mut built = draw::build(state, library, &assets, &opts);
@@ -1389,6 +1411,10 @@ impl Viewport {
             })
             .await;
         let (packet, anchor, roof, baked, gathered, animating) = built;
+        if shot.is_some() {
+            // the author's view keeps its anchor, its lights and its roof map
+            return Some(packet);
+        }
         let animating = animating || playing;
         self.animating.store(animating, Ordering::Release);
         let log_bake = baked.map(|(ms, count)| (ms, count, roof.as_ref().map(|r| r.origin)));
@@ -1456,7 +1482,7 @@ impl Viewport {
     /// What a pass of the scene still waits for: placeholders drawn for a mesh still to come and
     /// textures of what it draws still loading. Assets of what lies outside the view load on
     /// meanwhile and are not waited for: the picture does not show them.
-    fn pending_of(renderer: &Renderer, packet: &FramePacket) -> Vec<String> {
+    pub(crate) fn pending_of(renderer: &Renderer, packet: &FramePacket) -> Vec<String> {
         let mut out = Vec::new();
         if packet.waiting_on_assets() {
             out.push("meshes still loading (placeholders drawn)".to_owned());
@@ -1628,7 +1654,7 @@ impl Viewport {
     }
 }
 
-trait SceneOpt {
+pub(crate) trait SceneOpt {
     fn of_opt(editor: &Editor) -> Option<Arc<SceneService>>;
 }
 
@@ -1754,7 +1780,7 @@ impl Default for GpuPreferenceSeen {
 }
 
 /// How long a picture waits for what its pass draws to load before it answers with `pending`.
-const PICTURE_LIMIT: Duration = Duration::from_secs(15);
+pub(crate) const PICTURE_LIMIT: Duration = Duration::from_secs(15);
 
 impl Viewport {
     /// Fills the camera slot quests read, once; applies a GPU preference changed in the settings;

@@ -134,6 +134,10 @@ enum Slot {
     Failed(String),
 }
 
+/// What stands between a reference and its stamp in a [`Library::mesh_key`]: a character no
+/// file name and no reference holds.
+pub const MESH_STAMP: char = '|';
+
 /// The triangle of no surface in [`LibraryObject::tri_surface`].
 pub const NO_SURFACE: u32 = u32::MAX;
 
@@ -220,6 +224,45 @@ impl Library {
             Some(Slot::Loaded(o)) => Some(o.clone()),
             _ => None,
         }
+    }
+
+    /// The object a provider answers for a reference: a model that is no file. `None` for a
+    /// reference no provider knows - the roots are not asked. Loaded once and shared like any
+    /// other. Blocking: call it on the IO pool.
+    pub fn provided(&self, name: &str) -> Option<Arc<LibraryObject>> {
+        let key = normalize(name);
+        if let Some(slot) = self.cache.lock().get(&key) {
+            return match slot {
+                Slot::Loaded(o) if o.file.as_os_str().is_empty() => Some(o.clone()),
+                _ => None,
+            };
+        }
+        let providers: Vec<Provider> = self.providers.read().clone();
+        let made = providers.iter().find_map(|p| p(&key))?;
+        let mut cache = self.cache.lock();
+        if let Some(Slot::Loaded(o)) = cache.get(&key) {
+            return Some(o.clone());
+        }
+        cache.insert(key, Slot::Loaded(made.clone()));
+        self.rev.bump();
+        Some(made)
+    }
+
+    /// The name the renderer keeps a reference's mesh under: the reference itself for a file,
+    /// and for an object made in memory the reference with its stamp, so a model whose source
+    /// changed is a new mesh and the old one is simply no longer asked for.
+    #[must_use]
+    pub fn mesh_key(&self, name: &str) -> String {
+        match self.cached(name) {
+            Some(o) if o.file.as_os_str().is_empty() => format!("{name}{MESH_STAMP}{:016x}", o.stamp),
+            _ => name.to_owned(),
+        }
+    }
+
+    /// The reference of a [`Self::mesh_key`].
+    #[must_use]
+    pub fn reference_of(mesh_key: &str) -> &str {
+        mesh_key.rsplit_once(MESH_STAMP).map_or(mesh_key, |(r, _)| r)
     }
 
     /// The file a reference names, in the first root that has it. Blocking.
@@ -349,5 +392,35 @@ mod tests {
         assert!(lib.load("a\\b").is_err());
         assert!(lib.load("a\\b").is_err());
         assert!(lib.cached("a\\b").is_none());
+    }
+
+    #[test]
+    fn an_object_made_in_memory_has_a_mesh_key_that_follows_its_stamp() {
+        let lib = Library::new(vec![PathBuf::from("Z:\\nowhere")]);
+        let stamp = Arc::new(std::sync::atomic::AtomicU64::new(7));
+        let s = stamp.clone();
+        lib.add_provider(Arc::new(move |name: &str| {
+            (name == "models\\wall.meshasset").then(|| {
+                let mut o = LibraryObject::provided(name, EditObject::default());
+                o.stamp = s.load(std::sync::atomic::Ordering::Relaxed);
+                Arc::new(o)
+            })
+        }));
+        // a reference no provider knows is not looked for in the roots
+        assert!(lib.provided("props\\box").is_none());
+        assert!(lib.cached("props\\box").is_none());
+        // before it is loaded the key is the reference; then the reference with its stamp
+        assert_eq!(lib.mesh_key("Models/Wall.meshasset"), "Models/Wall.meshasset");
+        let Some(o) = lib.provided("Models/Wall.meshasset") else { panic!("not provided") };
+        assert!(o.file.as_os_str().is_empty() && o.stamp == 7);
+        let key = lib.mesh_key("models\\wall.meshasset");
+        assert_eq!(key, "models\\wall.meshasset|0000000000000007");
+        assert_eq!(Library::reference_of(&key), "models\\wall.meshasset");
+        assert_eq!(Library::reference_of("props\\box"), "props\\box");
+        // its source changed: forgotten, made again, a new key
+        stamp.store(9, std::sync::atomic::Ordering::Relaxed);
+        assert!(lib.forget("models\\wall.meshasset"));
+        assert!(lib.provided("models\\wall.meshasset").is_some_and(|o| o.stamp == 9));
+        assert_eq!(lib.mesh_key("models\\wall.meshasset"), "models\\wall.meshasset|0000000000000009");
     }
 }

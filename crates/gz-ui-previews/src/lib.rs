@@ -51,6 +51,7 @@ pub mod model;
 pub mod model_load;
 pub mod paths;
 pub mod pending;
+mod sheet;
 pub mod texture;
 pub mod texture_load;
 pub mod writer;

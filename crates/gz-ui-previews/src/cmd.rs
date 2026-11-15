@@ -1014,6 +1014,17 @@ const THUMB_SIDE: u32 = 256;
 /// A model drawn offscreen at the three-quarter view, framed: what a game mesh shows instead of a
 /// baked thumbnail.
 async fn render_model(editor: &Arc<Editor>, name: &str, source: ModelSource) -> Result<Vec<u8>, String> {
+    let (img, _) = render_model_image(editor, name, source, THUMB_SIDE).await?;
+    gz_app::encode_png(img.width, img.height, &img.rgba).map_err(|e| e.message)
+}
+
+/// The same picture as pixels, `side` px square, with the model's box (model space).
+pub(crate) async fn render_model_image(
+    editor: &Arc<Editor>,
+    name: &str,
+    source: ModelSource,
+    side: u32,
+) -> Result<(gz_render::Image, gz_render::Aabb), String> {
     let data = load_model(editor.clone(), name.to_owned(), source).await;
     if !data.shown() {
         return Err(data.error.clone());
@@ -1038,14 +1049,14 @@ async fn render_model(editor: &Arc<Editor>, name: &str, source: ModelSource) -> 
                 inst = inst.with_pose(pose.clone());
             }
             list.push(inst);
-            let size = [THUMB_SIDE, THUMB_SIDE];
+            let size = [side, side];
             let mut view = View::new(Orbit::new(&data.bounds).camera(), size);
             view.flags = ViewFlags::PREVIEW;
             view.background = bg;
             assets.prepare(&list, Duration::from_secs(10));
             let packet = build_packet(&list, &view, assets);
             let img = renderer.render_offscreen(&packet, size).map_err(|e| e.to_string())?;
-            gz_app::encode_png(img.width, img.height, &img.rgba).map_err(|e| e.message)
+            Ok((img, data.bounds))
         })
         .await
 }
@@ -1204,6 +1215,14 @@ pub fn register(reg: &mut Registry) {
         Spec::read("shot.asset", "A picture of an asset: its thumbnail, or the model rendered.")
             .example("name=props\\box_wood_01 kind=objects"),
         asset_shot,
+    );
+    reg.cmd(
+        Spec::read(
+            "shot.models",
+            "A sheet of models side by side, each with its reference and its size in metres.",
+        )
+        .example("refs=props\\box_wood_01,props\\barrel_01"),
+        crate::sheet::shot_models,
     );
 }
 
