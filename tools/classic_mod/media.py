@@ -22,6 +22,10 @@ def junk(rel: str, mod_names: set) -> str | None:
         return "a picture source: the game reads only .dds there"
     if ext == ".txt" and rel.startswith("textures\\"):
         return "an author's note"
+    try:
+        rel.encode("cp1251")
+    except UnicodeEncodeError:
+        return "a name the game cannot open (characters its code page lacks)"
     return None
 
 
