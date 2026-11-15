@@ -129,6 +129,16 @@ LOADED = {
     "the level's load has ended": "End of synchronization",
 }
 FATAL = ("FATAL ERROR", "Expression    :", "stack trace:", "[error]", "! Cannot find level")
+# a library the game loads logs through the game's log in its own words: an update of the upscaler's feature that
+# its vendor's service refused is its line, "[streamline][error]", and nothing of the game's
+NOT_THE_GAMES = ("[Streamline]",)
+
+
+def fatal_lines(text: str) -> list[str]:
+    """The lines of the game's log that say it stopped on an error."""
+    return [l.strip() for l in text.splitlines()
+            if any(f in l for f in FATAL) and not any(n in l for n in NOT_THE_GAMES)]
+
 
 def wait_idle(limit: float) -> dict:
     """Until no build, compiler or game runs (level.play action=status), or `limit` seconds."""
@@ -494,7 +504,7 @@ def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str |
     text, loaded_at = "", None
     while time.monotonic() - t0 < GAME_LIMIT:
         text = engine_log(root)
-        if all(m in text for m in loaded.values()) or any(f in text for f in FATAL) or dumps(root):
+        if all(m in text for m in loaded.values()) or fatal_lines(text) or dumps(root):
             loaded_at = time.monotonic() - t0
             # a moment more: the first frames of the level, where a missing actor or graph would stop it
             time.sleep(5)
@@ -519,7 +529,7 @@ def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str |
         line = next((l for l in text.splitlines() if marker in l), "")
         check(bool(line), f"the game's log: {what}" + (f" - {line.strip()[:150]}" if line else ""), marker)
     lines = text.splitlines()
-    bad = [l.strip() for l in lines if any(f in l for f in FATAL)]
+    bad = fatal_lines(text)
     # the frame a crash stopped in, and the last line the game wrote before it
     for i, l in enumerate(lines):
         if l.startswith("stack trace:"):

@@ -866,6 +866,17 @@ async fn play_module(
     }
     let (e2, s2, svc2, id, lv, build) =
         (ed.clone(), session.clone(), svc.clone(), m.id.clone(), level.to_owned(), p.build != Some(false));
+    // the module's piece of the level plays as it was built - its quality, the compiler's flags, where
+    // its light was baked - unless the call says otherwise; a card asked for is there before anything
+    // is built
+    let built = lb.record_now(ed, session, level).await;
+    let built = built.as_ref().and_then(|r| r.steps.get(&Step::Piece));
+    let mut piece_opts: Options = service::default_options(ed);
+    piece_opts.quality = p.quality.unwrap_or_else(|| built.map_or(Quality::Standard, |r| r.quality));
+    piece_opts.flags = with_light(&built.map(|r| r.flags.clone()).unwrap_or_default(), p.light);
+    if build {
+        need_lighter(ed, &piece_opts.flags).await?;
+    }
     let place = Arc::new(place);
     let pl = place.clone();
     let mode2 = mode.clone();
@@ -883,7 +894,7 @@ async fn play_module(
                     steps: Some(vec![Step::Piece]),
                     only: None,
                     force: false,
-                    opts: service::default_options(&e2),
+                    opts: piece_opts,
                     verify_restrictors: false,
                 };
                 pipeline::run(&e2, &s2, &piece, &ctx).await?;

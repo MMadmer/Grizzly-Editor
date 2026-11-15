@@ -475,6 +475,28 @@ pub fn not_needed_why(scene: &SceneState, step: Step, opts: &Options) -> Option<
     }
 }
 
+/// The streaming cells a level is compiled in, in metres (0: whole), and why a level that asks
+/// for cells gets none: cells are pieces, which only a game that states so loads, and they are a
+/// level of the module's own - a level of the game is the game's, built whole when it is built at
+/// all.
+#[must_use]
+pub fn cells_of(scene: &SceneState, opts: &Options) -> (u32, Option<&'static str>) {
+    match scene.meta.level.cell_size {
+        0 => (0, None),
+        _ if opts.game_level => (
+            0,
+            Some("Streaming Cells are for a level of the module's own: a level of the game is built whole."),
+        ),
+        _ if !opts.pieces => (
+            0,
+            Some(
+                "The linked game does not load pieces of a level: the level is built whole, without its streaming cells.",
+            ),
+        ),
+        n => (n, None),
+    }
+}
+
 /// Whether a step has something to make ([`not_needed_why`]).
 #[must_use]
 pub fn is_needed(scene: &SceneState, step: Step, opts: &Options) -> bool {
@@ -567,7 +589,9 @@ fn why_stale(
     {
         return format!("{} is not fresh.", n.title);
     }
-    if (rec.quality != opts.quality || rec.flags != opts.flags)
+    // where the light was baked is no difference of what was built
+    let (rec_flags, flags) = (fingerprint::built_flags(&rec.flags), fingerprint::built_flags(&opts.flags));
+    if (rec.quality != opts.quality || rec_flags != flags)
         && matches!(step, Step::Geometry | Step::Light | Step::Piece)
     {
         let then = Options { quality: rec.quality, flags: rec.flags.clone(), ..opts.clone() };
@@ -577,8 +601,8 @@ fn why_stale(
             if rec.quality != opts.quality {
                 how.push(format!("at {} quality", capital(rec.quality.name())));
             }
-            if rec.flags != opts.flags {
-                how.push(format!("with the compiler's {}", rec.flags));
+            if rec_flags != flags {
+                how.push(format!("with the compiler's {rec_flags}"));
             }
             return format!("Built {}.", how.join(" and "));
         }
@@ -749,6 +773,44 @@ mod tests {
         s.insert(o)
     }
 
+    /// Streaming cells are built for a level of the module's own and a game that loads pieces, and
+    /// for nothing else - a level sent in cells to a game that reads none would lose every visual
+    /// smaller than a cell. Where the light is baked makes no step stale.
+    #[test]
+    fn cells_are_for_a_level_of_the_modules_own_and_a_game_that_loads_pieces() {
+        let (mut s, _) = scene();
+        let own = Options { pieces: true, ..Options::default() };
+        assert_eq!(cells_of(&s, &own), (0, None), "no size, no cells");
+        s.meta.level.cell_size = 32;
+        assert_eq!(cells_of(&s, &own), (32, None));
+        let old_game = Options { pieces: false, ..Options::default() };
+        let (n, why) = cells_of(&s, &old_game);
+        assert!(n == 0 && why.is_some_and(|w| w.contains("does not load pieces")), "{why:?}");
+        let games_level = Options { game_level: true, pieces: true, ..Options::default() };
+        let (n, why) = cells_of(&s, &games_level);
+        assert!(n == 0 && why.is_some_and(|w| w.contains("level of the game")), "{why:?}");
+        // the light step's fingerprint follows the cells that are built, not the number asked for
+        let cache = HashCache::default();
+        let objects = cache.objects(&s);
+        let light = |o: &Options| fingerprint::steps(&s, &objects, o).get(&Step::Light).copied();
+        assert_ne!(light(&own), light(&old_game), "a game that starts loading pieces makes the light stale");
+        let mut whole = s.clone();
+        whole.meta.level.cell_size = 0;
+        let objects_whole = cache.objects(&whole);
+        assert_eq!(
+            fingerprint::steps(&whole, &objects_whole, &old_game).get(&Step::Light).copied(),
+            light(&old_game),
+            "cells that are not built change nothing"
+        );
+        // where the light is baked is no difference of what is built
+        let on_cpu = Options { flags: "-light=cpu".to_owned(), ..own.clone() };
+        assert_eq!(light(&on_cpu), light(&own));
+        let noisy = Options { flags: "-noise -light=gpu".to_owned(), ..own.clone() };
+        assert_eq!(light(&noisy), light(&Options { flags: "-noise".to_owned(), ..own.clone() }));
+        assert_ne!(light(&noisy), light(&own));
+        assert_eq!(fingerprint::built_flags("  -noise   -LIGHT=cpu -threads=4 "), "-noise -threads=4");
+    }
+
     #[test]
     fn the_piece_is_built_on_a_game_level_with_objects_of_the_modules_own() {
         let (mut s, _) = scene();
@@ -806,7 +868,8 @@ mod tests {
     fn the_cells_are_part_of_the_light_and_none_change_nothing() {
         let (mut s, _) = scene();
         let cache = HashCache::default();
-        let opts = Options::default();
+        // a game that loads pieces: cells are built for no other
+        let opts = Options { pieces: true, ..Options::default() };
         let record = built(&s, &cache, &opts);
         // no cells: the light's fingerprint of a level that does not stream is as it was
         assert!(status_of(&s, &cache, Some(&record), &opts).to_build().is_empty());

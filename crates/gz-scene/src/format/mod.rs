@@ -120,6 +120,20 @@ fn opts(s: &SceneState) -> &LevelOptions {
 }
 
 const QUALITY: &[(&str, u32)] = &[("draft", 0), ("high", 1), ("custom", 2)];
+/// The smallest streaming cell: below it a level is thousands of pieces of a few faces each.
+pub const CELL_MIN: u32 = 8;
+/// The largest one.
+pub const CELL_MAX: u32 = 4096;
+
+/// A streaming cell's size: none, or [`CELL_MIN`] to [`CELL_MAX`] metres.
+fn cell_size_of(v: &Value) -> Result<u32, Bad> {
+    match as_u32(v)? {
+        0 => Ok(0),
+        n if (CELL_MIN..=CELL_MAX).contains(&n) => Ok(n),
+        _ => Err(format!("takes 0 (the level in one piece) or {CELL_MIN} to {CELL_MAX} metres")),
+    }
+}
+
 /// The samples a lightmap pixel may take: the row shows them as words, the file keeps the number.
 const JITTER: &[(&str, u32)] = &[("1", 1), ("4", 4), ("9", 9)];
 
@@ -322,9 +336,9 @@ pub static SCENE_FIELDS: &[Field<SceneState>] = &[
         "m",
         Ty::Integer { min: 0, max: 4096 },
         "0",
-        "The game loads the level's picture cell by cell around the player: the size of a cell. 0 keeps the level one piece.",
+        "The game loads the level's picture cell by cell around the player: the size of a cell, 8 m or more. 0 keeps the level one piece.",
         |l| int(l.cell_size),
-        |l, v| l.cell_size = as_u32(v)?
+        |l, v| l.cell_size = cell_size_of(v)?
     ),
     level!(
         "build.reserved",

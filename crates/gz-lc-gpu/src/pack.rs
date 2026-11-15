@@ -83,9 +83,12 @@ fn v4(v: Vec3, w: u32) -> [f32; 4] {
 /// Packs a ray model. `alpha_limit` is the largest alpha buffer the card binds, in bytes.
 pub(crate) fn scene(model: &RayModel, textures: &[BuildTexture], alpha_limit: u64) -> PackedScene {
     let (tris, faces) = (model.tris(), model.faces());
-    // a face that casts no shadow is passed by every ray: it is left out of the tree
+    // a face that casts no shadow is passed by every ray: it is left out of the tree. So is a
+    // triangle with a corner that is no number, as the CPU's tree leaves it out: in the kernel
+    // such a corner passes every range test and would shadow each ray that enters its box.
     let kept: Vec<u32> = (0..tris.len().min(faces.len()) as u32)
         .filter(|&i| faces.get(i as usize).is_some_and(|f| f.cast_shadow))
+        .filter(|&i| tris.get(i as usize).is_some_and(|t| t.iter().all(|c| c.is_finite())))
         .collect();
     let corners: Vec<[Vec3; 3]> =
         kept.iter().map(|&i| tris.get(i as usize).copied().unwrap_or_default()).collect();

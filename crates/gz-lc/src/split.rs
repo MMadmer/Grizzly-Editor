@@ -617,15 +617,17 @@ pub fn visual_charts(g: &LcGlobalData, splits: &[Split]) -> Vec<Vec<DeflId>> {
 
 /// A subdivision whose faces the packer put on several pages (a visual whose charts did not fit
 /// one page: never, by the merge's limit) becomes one subdivision per page, in place, the pages
-/// in the order its faces meet them, each where the visual was to go (`places`, cut alike). Answers
-/// how many were cut.
+/// in the order its faces meet them, each where the visual was to go (`places`, cut alike). So
+/// does one whose faces without area took no chart beside those that did: those faces are a
+/// visual of their own, without a lightmap. Answers how many were cut by page, and how many only
+/// by such faces.
 pub fn split_by_page(
     g: &LcGlobalData,
     splits: &mut Vec<Split>,
     places: &mut Vec<crate::tree::Place>,
     log: &mut Log,
-) -> usize {
-    let mut cut = 0;
+) -> (usize, usize) {
+    let (mut cut, mut bare) = (0, 0);
     let mut out = Vec::with_capacity(splits.len());
     let mut out_places = Vec::with_capacity(splits.len());
     for (i, s) in std::mem::take(splits).into_iter().enumerate() {
@@ -639,12 +641,16 @@ pub fn split_by_page(
             }
         }
         if pages.len() > 1 {
-            cut += 1;
-            log.warn(format!(
-                "The lightmaps of the visual {i} ({} faces) did not fit one page: it is made of {} visuals, one a page.",
-                s.len(),
-                pages.len()
-            ));
+            if pages.iter().filter(|(page, _)| page.is_some()).count() > 1 {
+                cut += 1;
+                log.warn(format!(
+                    "The lightmaps of the visual {i} ({} faces) did not fit one page: it is made of {} visuals, one a page.",
+                    s.len(),
+                    pages.len()
+                ));
+            } else {
+                bare += 1;
+            }
             out_places.extend(std::iter::repeat_n(place, pages.len()));
             out.extend(pages.into_iter().map(|(_, l)| l));
         } else {
@@ -654,5 +660,5 @@ pub fn split_by_page(
     }
     *splits = out;
     *places = out_places;
-    cut
+    (cut, bare)
 }

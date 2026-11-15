@@ -52,7 +52,11 @@ What the suites hold, beyond what their names say:
   `--scene mp_close_combat_cells`): an object of the module's own placed on Cordon, its piece built (lit under the
   level's shadows, the level's files untouched), shipped by Play with the module, found by the game and attached
   to the sector the game finds for it; a level of the project's own built in 45 streaming cells, staged by Play
-  as its module, every cell found and attached, none refused, the level loaded, no assert in the game's log.
+  as its module, every cell found and attached, none refused, the level loaded, no assert in the game's log. The
+  game's own acceptance of pieces (its `Run-PiecesQa.ps1`, a part of Cordon cut into a piece of 11 365 visuals):
+  the level with the piece draws the frames of the level without it, the piece is released away and attached
+  back, saves load across the module on and off, and four pieces damaged on purpose are each refused with a line
+  of the log, the game going on.
 - **The updater** (`gz-update`'s end-to-end test with an HTTP server of its own, `test_update` against the mock): the
   check reads only the archive's end and its manifest; only the delta's ranges are asked for; a cut download resumes
   at its byte, also inside a record, also after a restart; a held file rolls the installation back exactly; the
@@ -113,10 +117,9 @@ What the suites hold, beyond what their names say:
   adapter, DX12 alone, a software adapter. What holds there is the design - a check against the CPU on a sample of
   every scene, and the CPU taking over on a difference, a lost device or a limit - and `gz-lc-gpu`'s tests of that
   path with a lighter made to fail.
-- Pieces in the game beyond a load: a piece streamed out and in many times in one long session, a corrupt or cut
-  piece met by the running game (the loader refuses it with a line of the log; no run fed it one), frames compared
-  on the DX12 and Vulkan renderers (compared on DX11; the three share one loader), implicit-light textures of a
-  piece in a subfolder.
+- Pieces in the game beyond a load: a piece streamed out and in many times in one long session, frames compared
+  on the DX12 and Vulkan renderers (compared on DX11; the three share one loader), a piece's implicitly lit
+  terrain in the game (its texture is described as the terrain's own is; no run drew one).
 - The sound preview's playback in the chooser.
 - What the manifest's reference says a key of `[world]`, `[start_kit]` or `[screens]` does in the game: it is
   read from the readers' code and the game's document, not from a run of the game. `mod.package` was seen
@@ -294,8 +297,10 @@ What the suites hold, beyond what their names say:
   visuals by material before any light is computed (a visual is closed at a quarter of a lightmap page of chart
   texels), so no light value decides what is merged, and a lightmap page that came out darker never changes a
   mesh. The pages are packed in two levels - a visual's charts into one rectangle, the rectangles into pages by a
-  skyline - from the charts' sizes alone. A lightmap that came out flat is resampled smaller in place; it is not
-  lit again.
+  skyline. A lightmap that came out flat is resampled smaller in place (it is not lit again), and that is the one
+  place the light reaches a layout: the pages, the charts' places and the lightmap coordinates are the light's,
+  like the pixels, and may differ between the card and the CPU by a chart that one of them found flat. The
+  structure's hash leaves them out and nothing else.
 - The baker is the one place light is computed (`bake.rs`): 32-byte samples in, colours out. The CPU's lighter
   walks a 4-wide tree with the same hits and the same bytes as the tracer it replaced; the card's is a compute
   shader over a tree of its own with 8-bit planes, fed in batches sorted along a curve, on any DX12 or Vulkan
@@ -317,7 +322,25 @@ What the suites hold, beyond what their names say:
 - The compiler's moves of its files into place take a few tries, under a second in all: a scanner that reads
   what the compile has just written holds it for a moment, and the system refuses the move meanwhile.
 - `build.report` is written beside `build.state` by every build and never ships; `level.inspect` reads a folder
-  whether a project is open or not and writes nothing.
+  whether a project is open or not and writes nothing. A stopped build's report holds no counts: nothing is read
+  back after a Stop.
+- Where the light is baked is no part of what was built: `-light=` is kept in the record (Play lights a stale
+  level where it was lit last) and out of the steps' fingerprints, so a level built with `light=cpu` is fresh for
+  a plain build.
+- Streaming cells are built for a level of the module's own and a game that states `level-pieces`; a level of the
+  game compiled on purpose, or a level for a game that reads no pieces, is built whole with a warning that says
+  which. A cell is 8 to 4096 m.
+- The compiler's swap of its files is undone, not abandoned: a compile that starts (or a Stop) after a crash in
+  the middle of a swap puts back what the swap had moved aside, over what it had put in, and a failed swap does
+  the same before it answers; a stage is removed without that only when the swap marked itself done. The level's
+  files and its cells are still two swaps, one after the other.
+- The piece step writes `overlay.xcform`'s triangles from every static object of the module's own, so a hand
+  export of the collision overlay is replaced by the next build; it warns when `overlay_visuals.ltx` lists
+  exported visuals, which the piece would draw a second time.
+- The card's walk keeps at most 63 nodes (a tree that needs more is lit on the CPU), and its tree leaves out a
+  triangle with a corner that is no number, as the CPU's does.
+- The suite that starts the game takes a line of a library the game loads for what it is: the upscaler's
+  `[Streamline] ... [error]` about an update its vendor's service refused is no error of the game's.
 - What the build costs, measured on one machine (an i7-11800H with an RTX 3070 Laptop, release programs, one
   run at a time; `bench_level.py`, `lc_bench`), before this architecture and with it:
 

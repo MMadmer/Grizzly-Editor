@@ -123,13 +123,16 @@ A change of plan is a change of its document first.
   models, terrain, vertices, details - goes through it: a new one makes samples and never traces by itself. The
   one light outside it is the sky at the vertices that the tessellation phase computes, on the processor in every
   build: seconds, and not worth a scene of its own on the card.
-- **Light never decides structure.** Visuals are merged before the light, a visual's charts are packed into one
-  rectangle and the rectangles into pages, and every file is written the same whatever lit it, on any machine and
-  with any number of threads; only the lightmaps' pixels and the vertex colours differ. `structure` in the
-  compile's answer is that promise as a hash, and `test_level_compile.py` holds the card's build to the
-  processor's by it, by the collision and by `level.geomx`. `level.ai` (saves keep its vertex ids), the game
-  graph, the spawn, sectors, portals and collision are the same bytes of the same scene: a rebuilt level stays
-  the level other modules lay their deltas over. A speed-up of a phase keeps its bytes, or it is no speed-up.
+- **Light never decides structure.** Visuals are merged before the light, and for one scene the visuals with
+  their order, vertices and faces, the sectors, the portals and the collision are the same on any machine, with
+  any lighter and any number of threads: `structure` in the compile's answer is that promise as a hash, and
+  `test_level_compile.py` holds the card's build to the processor's by it, by the collision and by `level.geomx`.
+  What is the light's is the lightmaps and the vertex colours: the pixels, and with them - a chart that came out
+  flat is shrunk before the pages are packed - the pages, the charts' places on them, the lightmap coordinates
+  and the page names in `level`. One lighter gives all of that the same too: `light=cpu` is the same bytes on
+  every machine. `level.ai` (saves keep its vertex ids), the game graph and the spawn are made before the
+  compiler and never see a light: a rebuilt level stays the level other modules lay their deltas over. A
+  speed-up of a phase keeps its bytes, or it is no speed-up.
 - **A measurement runs alone**: `python tools/qa/bench_level.py` (a build through the editor on a copy, per step
   and phase) and `lc_bench` (`gz-lc-gpu`'s example: the compiler over a `build.prj`, by lighter, with `compare=1`
   against the reference) go through `tools/rust/alone.py`, one at a time - a number taken beside another build is
@@ -459,7 +462,10 @@ A change of plan is a change of its document first.
   and spawns stay the overlays they were. **Streaming Cells** (`build.cell_size`, metres; 0 is none) builds a level
   of the project's own that way: what is larger than a cell stays the level's with its sectors, portals and lights,
   the rest is a piece per cell (`cell_<x>_<z>`), each on lightmap pages of its own no larger than it needs. With
-  cells off a level's files are the same bytes as before there were any.
+  cells off a level's files are the same bytes as before there were any. A cell is 8 m or more, and cells are
+  built only for a level of the module's own and a game that states `level-pieces` (`service::cells_of`):
+  anywhere else the level is built whole and the build says why - a level sent in cells to a game that reads
+  none would lose every visual smaller than a cell.
 - **A level the linked game has (a stock level: its game graph lists it) is the game's**: the module adds to it
   (the spawn layer from what the scene marks `authored` / `removed`, the overlays the author exports), so its
   compile steps (`game`, `ai_map`, `game_graph`, `spawn`, `geometry`, `details`, `light`, `detail_light`) are not
@@ -482,7 +488,8 @@ A change of plan is a change of its document first.
   (`-start server(all/single/alife/new)`) with the module's mode on - Play's own `axr_options.ltx` in the root
   says it, as the new-game screen would. It refuses, in seconds and naming them, while the module holds files that
   replace the level's own (the game loads them over its level and stops: `level.clean` first). The module's piece
-  of the level is built first when it is stale. On a new level it builds what is stale at the quality the level was
+  of the level is built first when it is stale, as it was built last (its quality, its flags, where its light was
+  baked) unless the call says otherwise. On a new level it builds what is stale at the quality the level was
   last built with and starts the installed game on it; a level built in cells has them staged as a module of Play's
   own in the root (`modules\grizzly_play_level`, every mode), because the game reads pieces from modules. Its
   answer and its job say which way it went (Dangerous operations, below).

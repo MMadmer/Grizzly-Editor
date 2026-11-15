@@ -371,6 +371,56 @@ fn the_level_files_appear_together_or_not_at_all() {
     assert_eq!(listing(dir), with_details);
 }
 
+/// A swap that did not end - the files it moved aside still in the stage - is undone by the next
+/// compile's start or by a Stop: the earlier level whole again, over what the swap had put in. A
+/// swap that went through and only left its stage behind puts nothing back.
+#[test]
+fn an_unfinished_swap_puts_the_earlier_level_back() {
+    let s = Scratch::new("swap");
+    let dir = &s.0;
+    let old = dir.join(crate::STAGE_OLD);
+    std::fs::create_dir_all(old.join("terrain")).unwrap();
+    // the swap had moved the level and a texture aside and put a new level in, then the editor went
+    std::fs::write(old.join("level"), "earlier level").unwrap();
+    std::fs::write(old.join("terrain").join("t.dds"), "earlier t").unwrap();
+    std::fs::write(dir.join("level"), "half of a new level").unwrap();
+    std::fs::write(dir.join("build.prj"), "input").unwrap();
+    std::fs::create_dir_all(dir.join(crate::STAGE_NEW)).unwrap();
+    std::fs::write(dir.join(crate::STAGE_NEW).join("level.geom"), "not yet moved").unwrap();
+    crate::clean_stage(dir);
+    let names: Vec<(String, Vec<u8>)> = listing(dir);
+    assert_eq!(
+        names,
+        [
+            ("build.prj".to_owned(), b"input".to_vec()),
+            ("level".to_owned(), b"earlier level".to_vec()),
+            ("terrain/t.dds".to_owned(), b"earlier t".to_vec()),
+        ]
+    );
+
+    // a swap that went through: its stage only waited to be removed
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::write(old.join("level"), "the level before the last").unwrap();
+    std::fs::write(old.join(crate::SWAPPED), "").unwrap();
+    crate::clean_stage(dir);
+    assert_eq!(std::fs::read(dir.join("level")).unwrap(), b"earlier level");
+    assert!(!old.exists());
+
+    // pieces go back whole: the folder of the earlier compile replaces what the swap had put there
+    let pieces = dir.join("pieces");
+    std::fs::create_dir_all(pieces.join(crate::STAGE_OLD).join("cell_0_0")).unwrap();
+    std::fs::write(pieces.join(crate::STAGE_OLD).join("cell_0_0").join("piece"), "earlier piece").unwrap();
+    std::fs::create_dir_all(pieces.join("cell_0_0")).unwrap();
+    std::fs::write(pieces.join("cell_0_0").join("piece"), "new piece").unwrap();
+    std::fs::write(pieces.join("cell_0_0").join("lmap#9_1.dds"), "a page the earlier one had not").unwrap();
+    crate::write_pieces(&pieces, &[], false, &mut crate::Report::default()).unwrap();
+    assert_eq!(
+        listing(&pieces),
+        [("cell_0_0/piece".to_owned(), b"earlier piece".to_vec())],
+        "the earlier piece whole, nothing of the new one"
+    );
+}
+
 #[test]
 fn the_number_of_threads_is_an_option_of_the_test() {
     let (o, unknown) = Options::parse(["-threads=1", "-noise"]).unwrap();

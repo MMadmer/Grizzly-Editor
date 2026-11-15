@@ -47,7 +47,7 @@ Positions are metres, angles degrees, colours `{ r, g, b }` from 0 to 1. Things 
 | `build.weld_distance` | number (m) | 0.005 | Vertices closer than this are merged. |
 | `build.collapse_error` | integer | 4 | How much a lightmap may differ from a flat colour to be collapsed into one. |
 | `build.zero_error` | integer | 4 | How dark a lightmap may be to be dropped as black. |
-| `build.cell_size` | integer (m) | 0 | The game loads the level's picture cell by cell around the player: the size of a cell. 0 keeps the level one piece. |
+| `build.cell_size` | integer (m) | 0 | The game loads the level's picture cell by cell around the player: the size of a cell, 8 m or more. 0 keeps the level one piece. |
 | `build.reserved` | a list of 6 whole numbers: the bits of the floats | none | Values of the build parameters no key names, kept bit for bit as an X-Ray SDK scene had them. |
 | `build.reserved_word` | integer | 0 | A word of the build parameters no key names. |
 | `sun.altitude` | number (deg) | -25 | How high the sun stands for the build's sun shadows. |

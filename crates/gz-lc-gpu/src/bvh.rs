@@ -20,7 +20,7 @@ use rayon::prelude::*;
 
 /// No child.
 pub(crate) const NONE: u32 = u32::MAX;
-/// The kernel's stack holds this many nodes.
+/// The slots of the kernel's stack. A walk may keep one node fewer: a push past the end lands in the last slot.
 pub(crate) const STACK: u32 = 64;
 /// Past this depth the heuristic gives way to median splits, which bound the depth.
 const SAH_DEPTH: u32 = 32;
@@ -513,7 +513,7 @@ mod tests {
             walk(&tree, &tris, 0, 0, &mut seen, &mut deepest);
             seen.sort_unstable();
             assert_eq!(seen, (0..n as u32).collect::<Vec<_>>(), "{n} triangles");
-            assert!(deepest < 40 && tree.stack <= STACK, "{deepest}, {}", tree.stack);
+            assert!(deepest < 40 && tree.stack < STACK, "{deepest}, {}", tree.stack);
             // the same tree on one thread
             let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
             let one = pool.install(|| build(&tris));
@@ -530,6 +530,6 @@ mod tests {
         let (mut seen, mut deepest) = (Vec::new(), 0);
         walk(&tree, &tris, 0, 0, &mut seen, &mut deepest);
         assert_eq!(seen.len(), 50_000);
-        assert!(tree.stack <= STACK, "{deepest}, {}", tree.stack);
+        assert!(tree.stack < STACK, "{deepest}, {}", tree.stack);
     }
 }

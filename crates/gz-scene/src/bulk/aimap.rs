@@ -36,8 +36,9 @@ const RCAST_VALID: f32 = 0.55;
 /// The flags of the four sides: a side done in this pass.
 pub const SIDE_FLAGS: [u8; 4] = [nf::N1, nf::N2, nf::N3, nf::N4];
 const OPPOSITE: [usize; 4] = [2, 3, 0, 1];
-/// How many queued nodes are worked out ahead at once.
-const BATCH: usize = 2048;
+/// How many queued nodes are worked out ahead at once. The tests' maps are small: a batch of theirs
+/// is one their queues pass many times, so the batch worked out ahead is what they run.
+const BATCH: usize = if cfg!(test) { 96 } else { 2048 };
 
 /// An open side of a node: the node, the side, where it starts and where it leads.
 type Side = (usize, usize, Vec3, Vec3);
@@ -1734,6 +1735,90 @@ mod tests {
             put(u32::from(n.flags));
         }
         h
+    }
+
+    /// The flood as one loop with no side worked out ahead: what [`AiWork::flood`] has to equal,
+    /// node for node and link for link.
+    fn plain_flood(w: &mut AiWork, g: &Gen<'_>, bic: bool, selected_only: bool, within: Option<(Vec3, f32)>) {
+        let mut scratch = Scratch::default();
+        let mut i = 0;
+        while i < w.nodes.len() {
+            if !selected_only || w.selected(i) {
+                for s in 0..4 {
+                    if w.nodes.get(i).is_none_or(|n| n.links[s].is_some()) {
+                        continue;
+                    }
+                    let to = w.side_pos(i, s);
+                    if !reaches(within, to) {
+                        continue;
+                    }
+                    let from = w.nodes.get(i).map_or(Vec3::ZERO, |n| n.pos);
+                    let link = g.spec(&mut scratch, from, to, bic).and_then(|n| w.place(n));
+                    if let Some(n) = w.nodes.get_mut(i) {
+                        n.links[s] = link;
+                    }
+                }
+                if selected_only {
+                    let links = w.nodes.get(i).map(|n| n.links).unwrap_or_default();
+                    for l in links.into_iter().flatten() {
+                        if let Some(n) = w.nodes.get_mut(l as usize) {
+                            n.flags |= nf::SELECTED;
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
+
+    /// The three floods - a generation, one grown from the selected nodes, the brush - against the
+    /// plain loop, on eight threads: the batch worked out while the one before it takes its places
+    /// changes no node, no number and no link.
+    #[test]
+    fn the_flood_worked_out_ahead_is_the_plain_flood() {
+        let (m, spawns) = synthetic_ground(40, 5);
+        let g = Gen { model: &m, params: AiParams::default(), ignored: vec![false, true] };
+        let within =
+            Aabb::new(m.bounds.min - Vec3::new(0.0, 2.0, 0.0), m.bounds.max + Vec3::new(0.0, 2.0, 0.0));
+        let seeds = seeds(&m, &spawns, &within);
+        let seeded = |selected: bool| {
+            let mut w = work(within);
+            for p in &seeds {
+                if let Some(mut n) = g.create_node(snap_xz(*p, w.ps()), false) {
+                    if selected {
+                        n.flags |= nf::SELECTED;
+                    }
+                    w.place(n);
+                }
+            }
+            w
+        };
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(8).build().expect("a pool");
+        // where the brush is put down: a node of the generated map
+        let mut ground = None;
+        for selected_only in [false, true] {
+            let (mut fast, mut plain) = (seeded(selected_only), seeded(selected_only));
+            assert!(!fast.nodes.is_empty());
+            pool.install(|| fast.flood(&g, false, selected_only, None, &|_, _| true));
+            plain_flood(&mut plain, &g, false, selected_only, None);
+            assert!(fast.nodes.len() > 4 * BATCH, "the queue passes a batch: {} nodes", fast.nodes.len());
+            assert!(fast.nodes == plain.nodes, "selected_only {selected_only}: {} nodes", fast.nodes.len());
+            ground = fast.nodes.get(fast.nodes.len() / 2).map(|n| n.pos);
+        }
+        // the brush: one node on the ground, then the flood inside its circle
+        let at = ground.expect("a node of the generated map");
+        let (mut fast, mut plain) = (work(within), work(within));
+        let made = pool.install(|| fast.brush(&g, at, 14, false)).expect("the brush finds the ground");
+        let mut p = snap_xz(at, plain.ps());
+        p.y += 1.0;
+        let (_, range) = m.ray_nearest(p, Vec3::NEG_Y, 3.0).expect("ground under the brush");
+        p.y -= range;
+        let start = plain.build_node(&g, p, p, false, false).expect("the brush's first node");
+        let centre = plain.nodes.get(start as usize).map_or(p, |n| n.pos);
+        let radius = 14.0 * plain.ps() - EPS_L;
+        plain_flood(&mut plain, &g, false, false, Some((centre, radius)));
+        assert!(made > BATCH, "the brush's queue passes a batch: {made} nodes");
+        assert!(fast.nodes == plain.nodes, "the brush: {} nodes", fast.nodes.len());
     }
 
     fn run_synthetic(cells: usize, seed: u64) -> (usize, usize, u64) {

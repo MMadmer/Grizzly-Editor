@@ -574,10 +574,13 @@ pub fn compile_project(
         packed.pages,
         packed.fill * 100.0
     ));
-    if split::split_by_page(&g, &mut splits, &mut places, log) > 0 {
-        log.warn(format!(
-            "{} visuals were cut by lightmap page: their charts did not fit one page.",
-            packed.split.len()
+    let (cut, bare) = split::split_by_page(&g, &mut splits, &mut places, log);
+    if cut > 0 {
+        log.warn(format!("{cut} visuals were cut by lightmap page: their charts did not fit one page."));
+    }
+    if bare > 0 {
+        log.msg(format!(
+            "{bare} visuals hold faces without area, which take no lightmap: those faces are visuals of their own."
         ));
     }
     let encoded: Vec<_> =
@@ -791,13 +794,80 @@ fn whole_chunks(name: &str, bytes: &[u8]) -> Result<()> {
 const STAGE_NEW: &str = ".lc_new";
 const STAGE_OLD: &str = ".lc_old";
 
+/// The mark of a swap that went through, in [`STAGE_OLD`]: what lies beside it only waits to be
+/// removed.
+const SWAPPED: &str = ".swapped";
+
 /// What a compile that was stopped, failed or crashed left of its stage beside the level.
 fn clean_stage(dir: &Path) {
-    for d in [STAGE_NEW, STAGE_OLD] {
-        let p = dir.join(d);
-        if p.is_dir() {
-            let _ = std::fs::remove_dir_all(&p);
+    let _ = recover_stage(dir, false);
+}
+
+/// What an earlier compile left of its stage in `dir`. A swap that did not end left what it had
+/// moved aside in [`STAGE_OLD`]: it goes back where it was, over whatever the swap had put there
+/// (`folders`: a piece's folder whole; else file by file), so the last level stands whole again.
+/// Then the stage goes. What cannot go back stays where it is, and the stage with it: nothing a
+/// compile moved aside is removed before its place holds it again.
+fn recover_stage(dir: &Path, folders: bool) -> std::io::Result<()> {
+    let (new, old) = (dir.join(STAGE_NEW), dir.join(STAGE_OLD));
+    if old.is_dir() {
+        if !old.join(SWAPPED).is_file() {
+            if folders {
+                for e in std::fs::read_dir(&old)? {
+                    let e = e?;
+                    let at = dir.join(e.file_name());
+                    if at.is_dir() {
+                        std::fs::remove_dir_all(&at)?;
+                    }
+                    rename(&e.path(), &at)?;
+                }
+            } else {
+                put_back(&old, dir)?;
+            }
         }
+        std::fs::remove_dir_all(&old)?;
+    }
+    if new.is_dir() {
+        std::fs::remove_dir_all(&new)?;
+    }
+    Ok(())
+}
+
+/// Every file under `from` moved to the same place under `to`, over what is there.
+fn put_back(from: &Path, to: &Path) -> std::io::Result<()> {
+    for e in std::fs::read_dir(from)? {
+        let e = e?;
+        let (src, dst) = (e.path(), to.join(e.file_name()));
+        if e.file_type()?.is_dir() {
+            std::fs::create_dir_all(&dst)?;
+            put_back(&src, &dst)?;
+        } else {
+            rename(&src, &dst)?;
+        }
+    }
+    Ok(())
+}
+
+/// The swap went through: the stage says so, then goes. A stage that cannot be removed now - a
+/// scanner reads a file of it - goes with the next compile, which the mark tells to remove it
+/// and put nothing back.
+fn end_swap(new: &Path, old: &Path) {
+    if old.is_dir() {
+        let _ = std::fs::write(old.join(SWAPPED), b"");
+    }
+    let _ = std::fs::remove_dir_all(new);
+    let _ = std::fs::remove_dir_all(old);
+}
+
+/// A swap that failed: what it moved aside goes back; when that fails too, the error says where
+/// the earlier files are.
+fn undo_swap(dir: &Path, folders: bool, e: Error) -> Error {
+    match recover_stage(dir, folders) {
+        Ok(()) => e,
+        Err(back) => Error::Io(format!(
+            "{e} The files of the earlier compile could not be put back ({back}): they are in {}.",
+            dir.join(STAGE_OLD).display()
+        )),
     }
 }
 
@@ -856,12 +926,8 @@ fn stale_pages(dir: &Path, out: &Output) -> Vec<String> {
 /// back. The caller's write guard has judged the level folder.
 fn write_all(dir: &Path, out: &Output, pages: bool, report: &mut Report) -> Result<()> {
     let (new, old) = (dir.join(STAGE_NEW), dir.join(STAGE_OLD));
-    // what a compile that crashed while it moved left behind
-    for d in [&new, &old] {
-        if d.exists() {
-            std::fs::remove_dir_all(d).map_err(|e| io_err("removed", d, &e))?;
-        }
-    }
+    // what a compile that crashed while it moved left behind: the last level whole again first
+    recover_stage(dir, false).map_err(|e| io_err("cleared of an earlier compile's stage", dir, &e))?;
     std::fs::create_dir_all(&new).map_err(|e| io_err("made", &new, &e))?;
     let staged = (|| {
         for (name, bytes) in &out.files {
@@ -898,19 +964,14 @@ fn write_all(dir: &Path, out: &Output, pages: bool, report: &mut Report) -> Resu
         Ok(())
     })();
     if let Err(e) = swapped {
-        for name in placed.iter().rev() {
+        // a new file that replaced nothing goes; what was moved aside goes back over the rest
+        for name in placed.iter().filter(|n| !aside.contains(n)) {
             let _ = std::fs::remove_file(rel_path(dir, name));
         }
-        for name in aside.iter().rev() {
-            let _ = move_file(&rel_path(&old, name), &rel_path(dir, name));
-        }
-        let _ = std::fs::remove_dir_all(&new);
-        let _ = std::fs::remove_dir_all(&old);
-        return Err(e);
+        return Err(undo_swap(dir, false, e));
     }
-    // the level is in place: what is left of the stage goes with the next compile if not now
-    let _ = std::fs::remove_dir_all(&new);
-    let _ = std::fs::remove_dir_all(&old);
+    // the level is in place
+    end_swap(&new, &old);
     for (name, bytes) in &out.files {
         report.files.push((name.clone(), bytes.len()));
     }
@@ -923,11 +984,11 @@ fn write_all(dir: &Path, out: &Output, pages: bool, report: &mut Report) -> Resu
 /// does not write are removed too. The caller's write guard has judged `dir`.
 fn write_pieces(dir: &Path, pieces: &[PieceFiles], stale_cells: bool, report: &mut Report) -> Result<()> {
     let (new, old) = (dir.join(STAGE_NEW), dir.join(STAGE_OLD));
-    for d in [&new, &old] {
-        if d.exists() {
-            std::fs::remove_dir_all(d).map_err(|e| io_err("removed", d, &e))?;
-        }
+    if dir.is_dir() {
+        recover_stage(dir, true).map_err(|e| io_err("cleared of an earlier compile's stage", dir, &e))?;
     }
+    // the pieces this call has put into place
+    let mut placed: Vec<&str> = Vec::new();
     for p in pieces {
         let staged = new.join(&p.name);
         let made = (|| {
@@ -944,22 +1005,20 @@ fn write_pieces(dir: &Path, pieces: &[PieceFiles], stale_cells: bool, report: &m
                 std::fs::create_dir_all(&old).map_err(|e| io_err("made", &old, &e))?;
                 rename(&at, &old.join(&p.name)).map_err(|e| io_err("moved aside", &at, &e))?;
             }
-            if let Err(e) = rename(&staged, &at) {
-                // the piece of the earlier compile goes back
-                let _ = rename(&old.join(&p.name), &at);
-                return Err(io_err("moved into place", &at, &e));
-            }
-            Ok(())
+            rename(&staged, &at).map_err(|e| io_err("moved into place", &at, &e))
         })();
         if let Err(e) = made {
-            let _ = std::fs::remove_dir_all(&new);
-            let _ = std::fs::remove_dir_all(&old);
-            return Err(e);
+            // a new piece that replaced none goes; the pieces moved aside go back, this compile's
+            // earlier ones too: the pieces are the last compile's, all of them
+            for name in placed.iter().filter(|n| !old.join(n).exists()) {
+                let _ = std::fs::remove_dir_all(dir.join(name));
+            }
+            return Err(undo_swap(dir, true, e));
         }
+        placed.push(p.name.as_str());
         report.pieces.push((p.name.clone(), p.files.iter().map(|(n, b)| (n.clone(), b.len())).collect()));
     }
-    let _ = std::fs::remove_dir_all(&new);
-    let _ = std::fs::remove_dir_all(&old);
+    end_swap(&new, &old);
     if stale_cells && let Ok(listing) = std::fs::read_dir(dir) {
         for e in listing.flatten() {
             let Ok(name) = e.file_name().into_string() else { continue };
@@ -1127,14 +1186,22 @@ fn structure_digest(tree: &tree::Tree, parts: &Parts, parted: bool, out: &Output
                 h.f(uv.y);
             }
         }
-        for f in o.data.faces.iter().chain(&o.fast.faces) {
-            f.iter().for_each(|&i| h.u(u64::from(i)));
+        // every list with its length: no two structures run into the same stream
+        for faces in [&o.data.faces, &o.fast.faces] {
+            h.u(faces.len() as u64);
+            for f in faces {
+                f.iter().for_each(|&i| h.u(u64::from(i)));
+            }
         }
-        for s in o.data.swi.iter().chain(&o.fast.swi) {
-            h.u(u64::from(s.offset));
-            h.u(u64::from(s.num_tris));
-            h.u(u64::from(s.num_verts));
+        for swi in [&o.data.swi, &o.fast.swi] {
+            h.u(swi.len() as u64);
+            for s in swi {
+                h.u(u64::from(s.offset));
+                h.u(u64::from(s.num_tris));
+                h.u(u64::from(s.num_verts));
+            }
         }
+        h.u(o.fast.vertices.len() as u64);
         o.fast.vertices.iter().for_each(|&p| h.v3(p));
     };
     h.u(tree.nodes.len() as u64);
@@ -1158,10 +1225,12 @@ fn structure_digest(tree: &tree::Tree, parts: &Parts, parted: bool, out: &Output
             }
             tree::Item::Node(children) => {
                 h.u(3);
+                h.u(children.len() as u64);
                 children.iter().for_each(|&c| h.u(u64::from(c)));
             }
             tree::Item::Lod { children, material, faces } => {
                 h.u(4);
+                h.u(children.len() as u64);
                 children.iter().for_each(|&c| h.u(u64::from(c)));
                 h.u(u64::from(*material));
                 for v in faces.iter().flatten() {
@@ -1172,11 +1241,16 @@ fn structure_digest(tree: &tree::Tree, parts: &Parts, parted: bool, out: &Output
             }
         }
     }
-    for m in tree.mu.iter().flatten() {
-        ogf(&mut h, m);
+    for m in &tree.mu {
+        h.u(m.len() as u64);
+        for o in m {
+            ogf(&mut h, o);
+        }
     }
+    h.u(sectors.len() as u64);
     for s in sectors {
         h.u(s.root as u64);
+        h.u(s.portals.len() as u64);
         s.portals.iter().for_each(|&p| h.u(u64::from(p)));
     }
     if let Some((_, cform)) = out.files.iter().find(|(n, _)| n == "level.cform") {
@@ -1194,9 +1268,11 @@ fn structure_digest(tree: &tree::Tree, parts: &Parts, parted: bool, out: &Output
                 tree::Place::Dropped => h.u(2),
             }
         }
+        h.u(parts.cells.len() as u64);
         for c in &parts.cells {
             h.u(c.cell[0] as u32 as u64);
             h.u(c.cell[1] as u32 as u64);
+            h.u(c.roots.len() as u64);
             for &(r, s) in &c.roots {
                 h.u(r as u64);
                 h.u(u64::from(s));

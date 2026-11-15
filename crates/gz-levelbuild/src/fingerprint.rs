@@ -80,6 +80,17 @@ impl std::fmt::Write for Stable {
     }
 }
 
+/// The compiler's flags that decide what is built. Where the light is baked (`-light=`) is not one
+/// of them: a level lit on the CPU is as fresh as the same level lit on the card.
+#[must_use]
+pub fn built_flags(flags: &str) -> String {
+    flags
+        .split_whitespace()
+        .filter(|w| !w.to_ascii_lowercase().starts_with("-light="))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// A text's hash, case left out (a path compared the way Windows compares it).
 #[must_use]
 pub fn text_hash(s: &str) -> u64 {
@@ -275,11 +286,12 @@ fn layers(scene: &SceneState, step: Step, opts: &Options) -> u64 {
         }
         Step::Light => {
             h.word(opts.quality as u64);
-            h.str(&opts.flags);
+            h.str(&built_flags(&opts.flags));
             // only a level that streams says so: the fingerprint of one that does not stays as it was
-            if level.cell_size > 0 {
+            let (cells, _) = crate::service::cells_of(scene, opts);
+            if cells > 0 {
                 h.str("cells");
-                h.word(u64::from(level.cell_size));
+                h.word(u64::from(cells));
             }
         }
         Step::Details => {
@@ -309,7 +321,7 @@ fn layers(scene: &SceneState, step: Step, opts: &Options) -> u64 {
             h.word(u64::from(level.light_hemi_quality) | u64::from(level.light_sun_quality) << 8);
             debug_hash(&mut h, &scene.tools.part(ObjClass::Light).light());
             h.word(opts.quality as u64);
-            h.str(&opts.flags);
+            h.str(&built_flags(&opts.flags));
             h.str(&opts.game.to_lowercase());
         }
         Step::DetailLight | Step::GameGraph | Step::SpawnLayer => {}

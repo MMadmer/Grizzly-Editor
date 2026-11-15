@@ -396,7 +396,8 @@ impl Lighter for GpuLighter {
     ) -> gz_lc_light::Result<Box<dyn LitScene + 'a>> {
         self.device_failed()?;
         let packed = pack::scene(model, textures, self.alpha_limit);
-        if packed.stack > crate::bvh::STACK {
+        // the kernel's last slot is where a push past the end lands: a walk may keep one node fewer
+        if packed.stack >= crate::bvh::STACK {
             return Err(err(format!(
                 "a walk of the lighter's tree may keep {} nodes, more than its stack holds",
                 packed.stack

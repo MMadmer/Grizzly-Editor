@@ -1391,6 +1391,17 @@ async fn step_compile(cx: &mut StepCx<'_>, part: crate::compile::Part) -> Result
     } else {
         None
     };
+    let (cells, no_cells) = if level_part { service::cells_of(&cx.work, &cx.req.opts) } else { (0, None) };
+    if let Some(why) = no_cells {
+        cx.problems.push(LevelProblem {
+            step: Step::Light,
+            code: "no_cells",
+            severity: Severity::Warning,
+            text: why.to_owned(),
+            object: None,
+            position: None,
+        });
+    }
     let req = crate::compile::Request {
         level: cx.level.clone(),
         dir: cx.dir.clone(),
@@ -1398,7 +1409,7 @@ async fn step_compile(cx: &mut StepCx<'_>, part: crate::compile::Part) -> Result
         flags: cx.req.opts.flags.clone(),
         pieces,
         piece: false,
-        cells: if level_part { cx.work.meta.level.cell_size } else { 0 },
+        cells,
     };
     let step = if level_part { Step::Light } else { Step::DetailLight };
     let lb = LevelBuild::of(cx.session);
@@ -1490,10 +1501,32 @@ async fn step_piece(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
     cx.ctx.stage("Building the piece's geometry");
     let (lib, engine, s2) = (cx.inp.lib.clone(), cx.inp.engine.clone(), scene.clone());
     let job = cx.ctx.clone();
-    let existing = {
-        let p = gz_export_level::gather::level_dir(&root, &level).join("overlay.xcform");
-        cx.editor.exec.io(move || std::fs::read(p).unwrap_or_default()).await
+    let (existing, overlay_visuals) = {
+        let dir = gz_export_level::gather::level_dir(&root, &level);
+        cx.editor
+            .exec
+            .io(move || {
+                let listed = std::fs::read(dir.join("overlay_visuals.ltx")).is_ok_and(|t| {
+                    String::from_utf8_lossy(&t).lines().any(|l| l.trim_start().starts_with("[v_"))
+                });
+                (std::fs::read(dir.join("overlay.xcform")).unwrap_or_default(), listed)
+            })
+            .await
     };
+    // the piece draws every static object of the module's own; one exported as an overlay visual
+    // before is drawn by both
+    if overlay_visuals {
+        cx.problems.push(LevelProblem {
+            step: Step::Piece,
+            code: "overlay_visuals",
+            severity: Severity::Warning,
+            text: format!(
+                "levels\\{level}\\overlay_visuals.ltx lists exported visuals: an object exported there is in the level piece too and is drawn twice. Remove its entry and its file there."
+            ),
+            object: None,
+            position: None,
+        });
+    }
     let (project, log, collision) = cx
         .editor
         .exec

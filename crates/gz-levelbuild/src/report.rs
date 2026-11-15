@@ -205,7 +205,10 @@ fn text_of(
         put("lighter", json!(l));
     }
     put("phases", Json::Array(phases));
-    put("counts", Counts::of(dir).json());
+    // a Stop ends the job now: the level's files are not read back for their counts
+    if result != "stopped" {
+        put("counts", Counts::of(dir).json());
+    }
     let files = list_files(dir);
     put("files_total", json!(files.len()));
     put(

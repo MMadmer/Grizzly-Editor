@@ -207,11 +207,15 @@ save and no other module's delta. Play of a level built in cells stages them as 
 terrain, vertices, details - makes samples (a point, a normal, flags) and takes colours back; who lights them is
 the build's `Lighter`: the CPU's, which is the reference, or the card's (`gz-lc-gpu`), which is held to the
 reference on a sample of every scene and replaced by it on any failure. `light=auto|gpu|cpu` picks.
-**Structure is never the light's**: visuals are merged before the light, the lightmap pages are packed from the
-charts' sizes alone, and `structure` - a hash over everything but the lightmaps' pixels and the vertex colours -
-is the same for one scene on any machine, lighter and number of threads. `level.ai`, the game graph, the spawn,
-sectors, portals and collision are the same bytes, so a rebuilt level is the level the saves and the other
-modules know.
+**Structure is never the light's**: visuals are merged before the light, and `structure` - a hash over the
+visuals with their vertices and faces, the hierarchy, the sectors, the portals, the collision and the cells -
+is the same for one scene on any machine, lighter and number of threads. The light's own are the lightmaps and
+the vertex colours: the pixels, and because a chart the light left flat is shrunk before the pages are packed,
+the pages, the charts' places, the lightmap coordinates and the page names with them; one lighter gives the same
+bytes of those too (`light=cpu` on every machine). `level.ai`, the game graph and the spawn are made before the
+compiler, so a rebuilt level is the level the saves and the other modules know. The compiler's files take their
+places in a swap that a crash or a failure rolls back: what was moved aside goes back before anything of the
+stage is removed.
 
 ## 10. Proof
 
