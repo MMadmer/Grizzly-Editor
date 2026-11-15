@@ -3,7 +3,7 @@
 THROW-AWAY COPY of a project.
 
 What it proves:
-  A  one asset of every kind - quest, behaviour graph, character, character template, PDA
+  A  one asset of every kind - quest, behaviour graph, character, character template, item, PDA
      interface, model, texture, sound - is made the way an author makes it (file.create, a character
      file written beside it)
   B  selected in the content browser, each one's tile draws its own icon
@@ -39,6 +39,7 @@ KINDS = {
     "quest": "quest",
     "behaviour": "behaviour graph",
     "character": "character",
+    "item": "item",
     "pda": "PDA interface",
     "model": "model",
     "texture": "texture",
@@ -185,6 +186,7 @@ def run(ctx: qa.Run) -> None:
         cmd("file.mkdir", path="qa_icons/qa_sub")
         cmd("content.view", action="go", source="project", folder="qa_icons")
         want = {"qa_icons\\qa_sub": "folder", plain: "file_text", made["quest"].replace("/", "\\"): "quest"}
+        want[made["item"].replace("/", "\\")] = "item"
         for kind, glyph in MEDIA_GLYPHS.items():
             want[made[kind].replace("/", "\\")] = glyph
         for entry, glyph in want.items():

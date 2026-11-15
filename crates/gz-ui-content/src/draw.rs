@@ -384,6 +384,7 @@ fn add_menu(ui: &mut Ui, blocked: Option<&'static str>, pick: &mut Option<usize>
             Some("quest") => Icon::Quest,
             Some("behaviour") => Icon::Behaviour,
             Some("character") => Icon::Character,
+            Some("item") => Icon::Item,
             _ => Icon::PdaInterface,
         };
         if menu_item(

@@ -1,6 +1,6 @@
 [package]
 name = "gz-ui-world"
-description = "The Characters and World Rules tabs, their pickers and the one item picker."
+description = "The Characters, Items and World Rules tabs, their pickers and the one item picker."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -22,6 +22,11 @@ gz-luadata.workspace = true
 gz-characters.workspace = true
 gz-world.workspace = true
 gz-fmt-tex.workspace = true
+gz-fmt-sound.workspace = true
+gz-items.workspace = true
+gz-ltx.workspace = true
+gz-media.workspace = true
+gz-ui-level = { path = "../gz-ui-level" }
 gz-ui.workspace = true
 gz-app.workspace = true
 gz-ui-mod = { path = "../gz-ui-mod" }

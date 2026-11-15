@@ -40,6 +40,8 @@ from qa import check, cmd
 SIZES = ((1707, 912, 1.5), (1280, 720, 1.0))
 # what a tab of each kind opens on: nothing for a tool tab, a file of the linked game for the rest
 FILES = {"model": "dynamics\\weapons\\wpn_ak74\\wpn_ak74"}
+# the item the Items tab is opened on, as a change of it
+ITEM = "wpn_ak74"
 
 # the language the window shows now, and the English texts the English pass saw cut, per size
 PASS = {"lang": "en", "tag": "max", "cut": {}}
@@ -119,6 +121,12 @@ def open_tab(kind: str, project: str) -> dict:
         return cmd("ui.tab", action="open", kind=kind, path=files[0]["path"] if files else "", source="game")
     if kind in FILES:
         return cmd("ui.tab", action="open", kind=kind, path=FILES[kind])
+    if kind == "items":
+        # the tab is pictured with a form up: a change of an item of the linked game
+        shown = cmd("items.view", select=ITEM)
+        if not shown.get("ok"):
+            shown = cmd("items.view", change=ITEM)
+        return shown if shown.get("ok") else cmd("ui.tab", action="open", kind=kind)
     return cmd("ui.tab", action="open", kind=kind)
 
 

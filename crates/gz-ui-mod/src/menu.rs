@@ -1,6 +1,6 @@
 //! The Mod menu and the project toolbar's Build Mod (docs/UI_DESIGN.md, section 5), as actions.
 //!
-//! The menu's rows stand in the design's order - Mod Settings, Characters, World Rules, Screens
+//! The menu's rows stand in the design's order - Mod Settings, Characters, Items, World Rules, Screens
 //! & Music, PDA Interface | Build Into Game, Build to Folder..., Export Flat Gamedata..., Bake
 //! Scene Layer > | Package Release..., Publish Release..., Releases | Submit to Mod Browser... -
 //! as [`MOD_MENU`] gives each its group and order. This package adds the actions whose targets it
@@ -17,6 +17,7 @@ use crate::build::{build_running, build_target_text, can_build_into_game, job_st
 
 pub const MOD_SETTINGS: &str = "mod.settings";
 pub const CHARACTERS: &str = "mod.characters";
+pub const ITEMS: &str = "mod.items";
 pub const WORLD_RULES: &str = "mod.world_rules";
 pub const SCREENS: &str = "mod.screens";
 pub const PDA: &str = "mod.pda";
@@ -33,12 +34,13 @@ pub const CATALOG: &str = "mod.submit";
 
 /// Every row of the Mod menu: its action (or, for Bake Scene Layer, the submenu's name), its
 /// group (a separator stands between groups) and its order in the group.
-pub const MOD_MENU: [(&str, i32, i32); 13] = [
+pub const MOD_MENU: [(&str, i32, i32); 14] = [
     (MOD_SETTINGS, 0, 0),
     (CHARACTERS, 0, 1),
-    (WORLD_RULES, 0, 2),
-    (SCREENS, 0, 3),
-    (PDA, 0, 4),
+    (ITEMS, 0, 2),
+    (WORLD_RULES, 0, 3),
+    (SCREENS, 0, 4),
+    (PDA, 0, 5),
     (BUILD_INTO_GAME, 1, 0),
     (BUILD_TO_FOLDER, 1, 1),
     (EXPORT_FLAT, 1, 2),

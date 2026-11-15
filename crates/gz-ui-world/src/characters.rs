@@ -1058,7 +1058,8 @@ impl Document for CharactersDoc {
         let project = cx.editor.project_opt().is_some();
         let some = self.sel.is_some() && !self.edit.file.is_empty();
         tb.group(3);
-        let kind = if self.dirty { Kind::Primary } else { Kind::Ghost };
+        // Build Mod is the row's one Primary
+        let kind = if self.dirty { Kind::Secondary } else { Kind::Ghost };
         if tb.action(
             "save",
             Icon::Save,

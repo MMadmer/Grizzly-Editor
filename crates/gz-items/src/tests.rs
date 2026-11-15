@@ -343,6 +343,65 @@ fn a_new_item_and_a_change_resolve_in_the_games_order() {
 }
 
 #[test]
+fn an_edit_is_checked_as_the_module_would_be_with_it() {
+    let r = roster(&[("items/ak.itemasset", CHANGE), ("items/sil.itemasset", NEW)]);
+    let catalog = Catalog::parse(CATALOG);
+    let (mut sil, _) = load_text(NEW, "items/sil.itemasset").unwrap();
+    sil.changes.set.retain(|(k, _)| k != "cost");
+    sil.changes.set.push(("inv_weight".into(), SetValue::Text("heavy".into())));
+    let edited = r.with_edit(
+        "items/sil.itemasset",
+        write(&sil),
+        Path::new("D:\\nowhere"),
+        &crate::atlas::picture_size,
+    );
+    let i = edited.index_of_file("items/sil.itemasset").unwrap();
+    let res = edited.resolution(i, Some(&catalog)).unwrap();
+    // the key the edit takes away comes from the base again - as the change of it says - and the
+    // one it sets is its own
+    assert_eq!(res.main.get("cost").unwrap().from, From::Item);
+    assert_eq!(res.main.get("inv_weight").unwrap().from, From::This);
+    assert_eq!(res.main.get("inv_weight").unwrap().value.as_deref(), Some("heavy"));
+    let found: Vec<&str> = issues_of(&edited, i, &catalog, &NoGame, Path::new("D:\\nowhere"))
+        .into_iter()
+        .map(|x| x.code)
+        .collect();
+    assert!(found.contains(&"I412"), "{found:?}");
+    // the roster it came from is untouched, and a file it lacks is added
+    assert_eq!(
+        r.resolution(r.find("items/sil.itemasset").unwrap(), Some(&catalog))
+            .unwrap()
+            .main
+            .get("cost")
+            .unwrap()
+            .from,
+        From::This
+    );
+    let fresh = crate::model::Item {
+        file: "items/new.itemasset".into(),
+        edit: Some("bread".into()),
+        ..Default::default()
+    };
+    let added =
+        r.with_edit(&fresh.file, write(&fresh), Path::new("D:\\nowhere"), &crate::atlas::picture_size);
+    assert_eq!(added.entries.len(), 3);
+    assert!(added.index_of_file("items/new.itemasset").is_some());
+    // a change that says nothing of the HUD still resolves the HUD section its hud key names
+    let kobra = crate::model::Item {
+        file: "items/kobra.itemasset".into(),
+        edit: Some("wpn_ak74_kobra".into()),
+        ..Default::default()
+    };
+    let k = r.with_edit(&kobra.file, write(&kobra), Path::new("D:\\nowhere"), &crate::atlas::picture_size);
+    let res = k.resolution(k.index_of_file(&kobra.file).unwrap(), Some(&catalog)).unwrap();
+    assert_eq!(res.hud.as_ref().map(|h| h.name.as_str()), Some("wpn_ak74_hud"));
+    assert!(res.hud_before.as_ref().is_some_and(|h| h.get("anm_idle").is_some()));
+    let bread = crate::model::Item { edit: Some("bread".into()), ..fresh.clone() };
+    let b = r.with_edit(&bread.file, write(&bread), Path::new("D:\\nowhere"), &crate::atlas::picture_size);
+    assert!(b.resolution(b.index_of_file(&bread.file).unwrap(), Some(&catalog)).unwrap().hud.is_none());
+}
+
+#[test]
 fn a_module_config_and_patch_come_after_the_items() {
     let cfg = ModuleConfigs {
         xms: vec![ConfigFile {

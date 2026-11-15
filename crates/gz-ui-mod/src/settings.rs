@@ -1485,7 +1485,8 @@ impl Document for ModSettingsDoc {
             "Save the picture into the module (Ctrl+S)",
             !self.picture.making,
             false,
-            Kind::Primary,
+            // Build Mod is the row's one Primary
+            Kind::Secondary,
         ) {
             self.inbox.lock().save_asked = true;
         }

@@ -40,13 +40,14 @@ pub fn text_room(width: f32, cross: bool, dot: bool) -> f32 {
 /// A tab that shows its icon alone: as wide as the icon and its pads.
 pub const ICON_ONLY_W: f32 = PAD_L + ICON + PAD_L;
 
-/// A tool tab: a singleton of the editor (Characters, World Rules, Preferences, a library),
+/// A tool tab: a singleton of the editor (Characters, Items, World Rules, Preferences, a library),
 /// whose icon says what it is - it gives way to its icon alone before any name is cut.
 #[must_use]
 pub fn is_tool(kind: &str) -> bool {
     matches!(
         kind,
         "characters"
+            | "items"
             | "mod_settings"
             | "world_rules"
             | "screens"

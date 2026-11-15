@@ -137,6 +137,7 @@ pub(crate) fn what_opens(cat: &Catalog, path: &str) -> Result<Open, String> {
         ".sndasset" => return Ok(Open::Play(path.to_owned())),
         ".pdaasset" => return Ok(Open::Doc(OpenRequest::file("pda", path))),
         ".npcasset" => return Ok(Open::Doc(OpenRequest::file("characters", path))),
+        ".itemasset" => return Ok(Open::Doc(OpenRequest::file("items", path))),
         ".nqasset" | ".behasset" => {
             return Ok(Open::Doc(OpenRequest::file(if ext == ".nqasset" { "quest" } else { "beh" }, path)));
         }
@@ -1136,7 +1137,7 @@ pub(crate) fn new_folder(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>, st
     });
 }
 
-/// Add > Quest, Behaviour Graph, Character, PDA Interface: `file.create` in the folder shown,
+/// Add > Quest, Behaviour Graph, Character, Item, PDA Interface: `file.create` in the folder shown,
 /// then its name is up for typing.
 pub(crate) fn create(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>, st: &Inner, kind: &'static str) {
     let folder = st.loc.folder.clone();
@@ -1167,7 +1168,7 @@ pub(crate) const IMPORT: &str = "import";
 
 /// The Add menu's items: the label, the tip, the `file.create` kind (`None`: a folder; [`IMPORT`]:
 /// the file dialog).
-pub(crate) const ADD_ITEMS: [(&str, &str, Option<&str>); 6] = [
+pub(crate) const ADD_ITEMS: [(&str, &str, Option<&str>); 7] = [
     ("New Folder", "A folder in the folder shown.", None),
     (
         "Import...",
@@ -1177,6 +1178,7 @@ pub(crate) const ADD_ITEMS: [(&str, &str, Option<&str>); 6] = [
     ("Quest", "A quest graph (.nqasset).", Some("quest")),
     ("Behaviour Graph", "What an NPC does, step by step (.behasset).", Some("behaviour")),
     ("Character", "One of the module's own NPCs (.npcasset).", Some("character")),
+    ("Item", "An inventory item of the module, or a change of one of the game's (.itemasset).", Some("item")),
     (
         "PDA Interface",
         "The module's own PDA screens: pages, buttons, menus, the live map (.pdaasset).",

@@ -1437,11 +1437,14 @@ fn build(icon: Icon, b: &mut B<'_>) {
         Icon::Dialog => {
             b.z(&[2.0, 2.5, 14.0, 2.5, 14.0, 11.0, 6.0, 11.0, 2.0, 14.0]);
         }
-        // an item is loot: a gem
+        // an item is a thing you carry: a case with its handle, its band and its clasp - wider than
+        // tall, a flat handle, so it never reads as a padlock
         Icon::Item => {
-            b.z(&[4.0, 2.25, 12.0, 2.25, 14.5, 6.0, 8.0, 14.25, 1.5, 6.0]);
-            b.l(&[7.33, 2.25, 5.5, 6.0, 8.0, 14.25, 10.5, 6.0, 8.67, 2.25]);
-            b.l(&[1.5, 6.0, 14.5, 6.0]);
+            b.l(&[u(0.36), u(0.30), u(0.36), u(0.14), u(0.64), u(0.14), u(0.64), u(0.30)]);
+            b.r(u(0.03), u(0.30), u(0.97), u(0.88), 0.09 * 14.0);
+            b.quiet(true).l(&[u(0.03), u(0.55), u(0.42), u(0.55)]);
+            b.l(&[u(0.58), u(0.55), u(0.97), u(0.55)]);
+            b.quiet(false).r(u(0.42), u(0.47), u(0.58), u(0.63), 0.03 * 14.0);
         }
         Icon::PdaMsg => {
             b.r(1.5, 3.0, 14.5, 13.0, 1.5);

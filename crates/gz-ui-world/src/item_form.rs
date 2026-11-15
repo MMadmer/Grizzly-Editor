@@ -1,0 +1,1707 @@
+//! The drawing of the Items tab: the list, the form and the item as the game will show it.
+//!
+//! The form is the kit's property grid over the model of `item_model`: the catalog's rows of the
+//! item's family, each with an editor for its type, the inherited value muted until the author
+//! sets one and a Reset arrow that takes the item's own away. What a frame asks for is collected
+//! as [`Edit`]s and applied after the grid is drawn.
+
+use egui::{Align, Align2, Color32, CornerRadius, Id, Layout, Rect, Sense, Ui, UiBuilder, Vec2, pos2};
+use gz_items::{Count, Craft, Icon as ItemIcon, KeyType, Loot, OwnedSection, Scene, SetValue, Sold};
+use gz_nq::PickerEntry;
+use gz_ui::grid::{Grid, chips, switch, text_block};
+use gz_ui::list::list;
+use gz_ui::text::{self, Clip};
+use gz_ui::units::em;
+use gz_ui::{
+    Col, Font, Icon, ItemRows, PropFlags, PropertyGrid, SearchField, TipExt, Tone, Tx, icon_button, icons,
+    metrics, palette, tr,
+};
+
+use crate::item_model::{self, OtherRow, Own, Place, Row};
+use crate::items::{Action, IconSource, ItemsDoc, Pick, first_name, game_keys, is_picture, list_name};
+use crate::local::{local_add_field, local_dirty_dot, local_value_combo, local_value_text};
+use crate::picker::{item_picker, list_picker};
+
+const ROLE: &str = "item";
+const LABEL_FRAC: f32 = 0.34;
+/// A list row's icon: fitted into this many points.
+const THUMB: Vec2 = Vec2::new(30.0, 22.0);
+/// A cell of the inventory, pixels.
+const CELL: f32 = 50.0;
+/// The title of the form's Icon section.
+const ICON_TITLE: &str = "Icon";
+
+/// What the drawing asked for, applied once the grid is drawn.
+pub(crate) enum Edit {
+    Set {
+        scope: String,
+        key: String,
+        value: SetValue,
+    },
+    Reset {
+        scope: String,
+        key: String,
+    },
+    Unset {
+        scope: String,
+        key: String,
+    },
+    Add {
+        scope: String,
+        key: String,
+        member: String,
+        now: Vec<String>,
+    },
+    Drop {
+        scope: String,
+        key: String,
+        member: String,
+        now: Vec<String>,
+    },
+    /// Any other change of the item (its identity, texts, icon, where it is found ...).
+    Item(Box<dyn FnOnce(&mut gz_items::Item)>),
+    /// A text field, by `TEXTS`.
+    Text(usize, String),
+    Act(Action),
+    HudRow(String),
+}
+
+/// The tone of a value by where it comes from: the item's own in the text colour.
+fn from_text(row: &Row) -> Tx<'static> {
+    match (row.from, &row.base) {
+        (_, _) if matches!(row.own, Own::Set(_) | Own::Members { .. }) => Tx::from("Set by this item"),
+        ("base", Some(b)) => tr!("From {base}", base = b.as_str()),
+        ("base", None) => Tx::from("From the base"),
+        ("game", _) => Tx::from("The game's"),
+        ("module", _) => Tx::from("From the module's configs"),
+        ("item", _) => Tx::from("From another item of the module"),
+        _ => Tx::from("Not set"),
+    }
+}
+
+impl ItemsDoc {
+    // ---- icons ----------------------------------------------------------------------------------
+
+    /// Paints an icon fitted into `rect`, keeping its proportions; the kind's glyph while there
+    /// is none (or it is still read). Returns the rectangle it took.
+    pub(crate) fn paint_icon(&self, ui: &Ui, rect: Rect, src: Option<&IconSource>) -> Rect {
+        let p = palette(ui.ctx());
+        let glyph = |ui: &Ui| {
+            icons::draw(
+                ui.painter(),
+                Icon::Item,
+                Rect::from_center_size(
+                    rect.center(),
+                    Vec2::splat(rect.height().min(metrics::GLYPH_ROW * 2.0) * 0.8),
+                ),
+                p.text_secondary,
+            );
+            rect
+        };
+        let fit = |w: f32, h: f32| -> Rect {
+            let s = (rect.width() / w.max(1.0)).min(rect.height() / h.max(1.0));
+            Rect::from_center_size(rect.center(), Vec2::new(w * s, h * s))
+        };
+        match src {
+            Some(IconSource::Picture { path, stamp }) => {
+                match self.pictures.as_ref().and_then(|pics| pics.get(&self.editor, path, *stamp)) {
+                    Some((tex, size)) => {
+                        let r = fit(size[0] as f32, size[1] as f32);
+                        ui.painter().image(
+                            tex,
+                            r,
+                            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                            Color32::WHITE,
+                        );
+                        r
+                    }
+                    None => glyph(ui),
+                }
+            }
+            Some(IconSource::Cell { sheet, x, y, w, h }) => {
+                let c = CELL as u32;
+                let e = PickerEntry {
+                    id: String::new(),
+                    name: String::new(),
+                    extra: format!("{sheet}|{}|{}|{}|{}", x * c, y * c, w * c, h * c),
+                };
+                match self.sheets.as_ref().and_then(|s| s.portrait(&self.editor, &e)) {
+                    Some((tex, uv)) => {
+                        let r = fit(*w as f32, *h as f32);
+                        ui.painter().image(tex, r, uv, Color32::WHITE);
+                        r
+                    }
+                    None => glyph(ui),
+                }
+            }
+            None => glyph(ui),
+        }
+    }
+
+    /// The icon of the edited item: its own, or what its section resolves to.
+    pub(crate) fn edit_icon(&self) -> Option<IconSource> {
+        let root = std::path::PathBuf::from(self.root_path());
+        let main = self.res.as_ref().map(|r| &r.main);
+        let get = |k: &str| main.and_then(|m| m.get(k)).and_then(|r| r.value.clone());
+        crate::items::item_icon(&self.editor, &root, &self.edit, &get)
+    }
+
+    pub(crate) fn root_path(&self) -> String {
+        self.editor.project_opt().map(|s| s.root.to_string_lossy().into_owned()).unwrap_or_default()
+    }
+
+    /// The icon and name of a game item a row names, worked out once per section.
+    fn section_look(&mut self, section: &str) -> Option<IconSource> {
+        let key = section.trim().to_ascii_lowercase();
+        if let Some(v) = self.section_icons.get(&key) {
+            return v.clone();
+        }
+        let found = self.roster().and_then(|r| crate::items::section_icon(&r.composition.ltx, &key));
+        self.section_icons.insert(key, found.clone());
+        found
+    }
+
+    // ---- the list -------------------------------------------------------------------------------
+
+    pub(crate) fn draw_list(&mut self, ui: &mut Ui) {
+        let ctx = ui.ctx().clone();
+        let p = palette(&ctx);
+        ui.horizontal(|ui| {
+            let w = (ui.available_width() - metrics::ICON_BUTTON - 6.0).max(em(4.0));
+            let _ = SearchField::new(&mut self.list_filter)
+                .hint("Search items")
+                .width(w)
+                .id_salt("gz-ui-world.items.search")
+                .show(ui);
+            let resp = icon_button(ui, Icon::Plus, "Add an item", false, true);
+            let menu = Id::unique("gz-ui-world.items.add");
+            if resp.clicked() || gz_ui::menu::take_popup_request(&ctx, "items.add") {
+                egui::Popup::open_id(&ctx, menu);
+            }
+            let mut pick = None;
+            let _ = gz_ui::menu::menu_popup(&ctx, menu, resp.rect, ui.layer_id(), |ui| {
+                if gz_ui::menu_item(
+                    ui,
+                    "New Item...",
+                    gz_ui::MenuItem {
+                        icon: Icon::Item,
+                        tip: "An item of the module's own that starts from one of the game's".into(),
+                        ..gz_ui::MenuItem::default()
+                    },
+                ) {
+                    pick = Some(Pick::New);
+                }
+                if gz_ui::menu_item(
+                    ui,
+                    "Change a Game Item...",
+                    gz_ui::MenuItem {
+                        icon: Icon::Rename,
+                        tip: "What the module changes of an item of the game".into(),
+                        ..gz_ui::MenuItem::default()
+                    },
+                ) {
+                    pick = Some(Pick::Change);
+                }
+            });
+            if let Some(pick) = pick {
+                egui::Popup::close_id(&ctx, menu);
+                self.actions.push(Action::Choose(pick));
+            }
+        });
+        ui.add_space(4.0);
+        let Some(loaded) = self.loaded.as_ref() else {
+            gz_ui::state::busy_line(ui, "Reading the items...");
+            return;
+        };
+        let roster = loaded.roster.clone();
+        let filter = self.list_filter.clone();
+        let rows: Vec<(usize, bool, String, String)> = roster
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| {
+                let section =
+                    roster.composition.applied.get(i).map(|a| a.section.clone()).unwrap_or_default();
+                let name = list_name(&e.item, &self.item_lists, &section);
+                gz_ui::search::matches(&filter, &format!("{} {} {}", e.item.file, section, name))
+                    .then(|| (i, item_model::is_change(&e.item), name, section))
+            })
+            .collect();
+        let mut picked: Option<String> = None;
+        let mut new_clicked = false;
+        let sel = self.sel.clone();
+        let dirty = self.dirty;
+        let this: &ItemsDoc = self;
+        list(ui, "gz-ui-world.items.list", Vec2::ZERO, |l| {
+            for (heading, change) in [("New", false), ("Changes", true)] {
+                let of: Vec<&(usize, bool, String, String)> = rows.iter().filter(|r| r.1 == change).collect();
+                if of.is_empty() {
+                    continue;
+                }
+                let _ = text::label(l.ui(), heading, Font::Small, p.text_muted, Clip::End);
+                for (i, _, name, section) in of {
+                    let Some(e) = roster.entries.get(*i) else { continue };
+                    let selected = sel.as_deref().is_some_and(|f| f.eq_ignore_ascii_case(&e.item.file));
+                    let icon = loaded.icons.get(*i).cloned().flatten();
+                    let worst = loaded.problems.get(*i).and_then(|ps| {
+                        if ps.iter().any(gz_items::Issue::is_error) {
+                            Some(Tone::Error)
+                        } else {
+                            ps.iter()
+                                .any(|x| x.severity == gz_base::Severity::Warning)
+                                .then_some(Tone::Warning)
+                        }
+                    });
+                    let resp = l.row(&e.item.file, selected, |ui| {
+                        let r = ui.max_rect();
+                        let cy = r.center().y;
+                        let thumb = Rect::from_min_size(pos2(r.min.x, cy - THUMB.y * 0.5), THUMB);
+                        let _ = this.paint_icon(ui, thumb, icon.as_ref());
+                        let template = e.item.is_abstract();
+                        let right = if template { em(4.5) } else { 0.0 }
+                            + if selected && dirty { 14.0 } else { 0.0 }
+                            + if worst.is_some() { 12.0 } else { 0.0 }
+                            + 6.0;
+                        let x = r.min.x + THUMB.x + 6.0;
+                        let room = (r.max.x - x - right).max(0.0);
+                        let font = Font::Body.id();
+                        let shown = if name.is_empty() { section.as_str() } else { name.as_str() };
+                        let name_w = text::width(ui.ctx(), &font, Tx::raw(shown)).min(room);
+                        text::paint(
+                            ui.painter(),
+                            &font,
+                            pos2(x, cy),
+                            Align2::LEFT_CENTER,
+                            p.text,
+                            Tx::raw(shown),
+                            Some(room),
+                            Clip::End,
+                        );
+                        if !name.is_empty() && room - name_w > em(3.0) {
+                            text::paint(
+                                ui.painter(),
+                                &font,
+                                pos2(x + name_w + 8.0, cy),
+                                Align2::LEFT_CENTER,
+                                p.text_muted,
+                                Tx::raw(section.as_str()),
+                                Some((room - name_w - 8.0).max(0.0)),
+                                Clip::End,
+                            );
+                        }
+                        let mut end = r.max.x - 6.0;
+                        if let Some(tone) = worst {
+                            ui.painter().circle_filled(pos2(end - 3.0, cy), 3.5, p.tone(tone));
+                            end -= 12.0;
+                        }
+                        if selected && dirty {
+                            local_dirty_dot(ui.painter(), pos2(end - 4.0, cy), ui.ctx());
+                            end -= 14.0;
+                        }
+                        if template {
+                            let badge = Rect::from_min_max(pos2(end - em(4.5), r.min.y), pos2(end, r.max.y));
+                            let mut child = ui.new_child(
+                                UiBuilder::new()
+                                    .id_salt(("gz-ui-world.item_template", *i))
+                                    .max_rect(badge)
+                                    .layout(Layout::left_to_right(Align::Center)),
+                            );
+                            gz_ui::state::badge(&mut child, "Template", Tone::Muted);
+                        }
+                    });
+                    if resp.tip(Tx::raw(e.item.file.clone())).clicked() && !selected {
+                        picked = Some(e.item.file.clone());
+                    }
+                }
+            }
+            if roster.entries.is_empty() {
+                if gz_ui::state::empty_state(
+                    l.ui(),
+                    Icon::Item,
+                    "No items",
+                    "The module's own items and its changes of the game's live here.",
+                    Some("New Item...".into()),
+                ) {
+                    new_clicked = true;
+                }
+            } else if rows.is_empty() {
+                let _ = text::status(l.ui(), Tone::Muted, "No item matches.");
+            }
+        });
+        if new_clicked {
+            self.actions.push(Action::Choose(Pick::New));
+        }
+        if let Some(file) = picked {
+            self.actions.push(Action::Select(file));
+        }
+    }
+
+    // ---- the form -------------------------------------------------------------------------------
+
+    fn draw_header(&mut self, ui: &mut Ui, width: f32) {
+        let ctx = ui.ctx().clone();
+        let p = palette(&ctx);
+        let icon_box = Vec2::new(64.0 * 1.4, 64.0);
+        let section = self.res.as_ref().map(|r| r.section.clone()).unwrap_or_default();
+        let name = list_name(&self.edit, &self.item_lists, &section);
+        let title = if name.is_empty() {
+            Tx::raw(if section.is_empty() { self.edit.file.clone() } else { section.clone() })
+        } else {
+            Tx::raw(name)
+        };
+        let icon = self.edit_icon();
+        ui.horizontal_top(|ui| {
+            let (rect, _) = ui.allocate_exact_size(icon_box, Sense::hover());
+            ui.painter().rect_filled(rect, CornerRadius::same(4), p.inset);
+            let _ = self.paint_icon(ui, rect.shrink(4.0), icon.as_ref());
+            ui.add_space(12.0);
+            ui.vertical(|ui| {
+                ui.set_width((width - icon_box.x - 20.0).max(em(4.0)));
+                let _ = text::label(ui, &title, Font::Title, p.text, Clip::End);
+                let kind = if item_model::is_change(&self.edit) {
+                    tr!("A change of {section}", section = section.as_str())
+                } else if section.is_empty() {
+                    Tx::from("A new item")
+                } else {
+                    tr!("A new item: {section}", section = section.as_str())
+                };
+                let kind = if self.form.family_title.is_empty() {
+                    kind
+                } else {
+                    tr!("{kind} · {family}", kind = kind, family = Tx::raw(self.form.family_title.clone()))
+                };
+                let _ = text::label(ui, kind, Font::Body, p.text_secondary, Clip::End);
+                let _ = text::label(
+                    ui,
+                    Tx::raw(self.edit.file.clone()),
+                    Font::Body,
+                    p.text_secondary,
+                    Clip::Start,
+                );
+                if self.edit.is_abstract() {
+                    gz_ui::state::badge(ui, "Template", Tone::Muted);
+                }
+            });
+        });
+        for (_, tone, line) in self.places.iter().filter(|(pl, _, _)| *pl == Place::Head) {
+            let _ = text::status(ui, *tone, Tx::ui(line.as_str()));
+        }
+        if !self.status.is_empty() {
+            let _ = text::status(ui, Tone::Error, Tx::ui(self.status.as_str()));
+        }
+        if !self.conflicts.is_empty() {
+            let n = self.conflicts.len();
+            let head = tr!(
+                "Changed on disk too: {n} {n:value|values}. The form keeps its own; Take Theirs takes the file's.",
+                n = n
+            );
+            let lines: Vec<String> = self.conflicts.iter().map(crate::char_form::conflict_line).collect();
+            let items: Vec<(Tx<'_>, Option<Tx<'_>>)> =
+                lines.iter().map(|l| (Tx::ui(l.as_str()), Some(Tx::from("Take Theirs")))).collect();
+            if let Some(i) = gz_ui::state::banner_list(ui, Tone::Warning, head, &items) {
+                self.take_theirs(i);
+            }
+        }
+        ui.add_space(6.0);
+    }
+
+    pub(crate) fn draw_form(&mut self, ui: &mut Ui, width: f32) {
+        self.draw_header(ui, width);
+        let mut edits: Vec<Edit> = Vec::new();
+        let change = item_model::is_change(&self.edit);
+        // what the rows draw from, taken apart from the doc the closures borrow
+        let form = std::mem::take(&mut self.form);
+        let mut looks: Vec<(String, Option<IconSource>)> = Vec::new();
+        for row in
+            form.groups.iter().chain(form.hud.iter().flat_map(|(_, g)| g.iter())).flat_map(|g| g.rows.iter())
+        {
+            if row.ty == KeyType::Section
+                && let Some(v) = row.shown()
+            {
+                for s in item_model::members_of(&v) {
+                    let look = self.section_look(&s);
+                    looks.push((s, look));
+                }
+            }
+        }
+        let this: &ItemsDoc = self;
+        PropertyGrid::new(ROLE).label_frac(LABEL_FRAC).show(ui, |g| {
+            this.identity(g, change, &mut edits);
+            this.texts_section(g, &mut edits);
+            // the catalog's group of the icon's keys is the Icon section's own fold: two sections
+            // of one title would be one
+            let (icon_keys, groups): (Vec<&item_model::Group>, Vec<&item_model::Group>) =
+                form.groups.iter().partition(|g| g.title.eq_ignore_ascii_case(ICON_TITLE));
+            this.icon_section(g, &icon_keys, change, &looks, &mut edits);
+            for group in groups {
+                let open = group.rows.iter().any(|r| r.common || r.own.is_own());
+                g.section(Tx::raw(group.title.clone()), open, None, |g| this.group_rows(g, group, change, &looks, &mut edits));
+            }
+            if let Some((hud, groups)) = &form.hud {
+                g.section("In the Hands", true, None, |g| {
+                    let _ = g.row("HUD Section", "The section of the first-person model, the hands and the motions: the item's hud key names it.", PropFlags::READ_ONLY, 0, |ui| {
+                        gz_ui::grid::read_only(ui, Tx::raw(hud.as_str()), Clip::End);
+                    });
+                    for group in groups {
+                        let open = group.rows.iter().any(|r| r.own.is_own());
+                        g.section(Tx::raw(group.title.clone()), open, None, |g| this.group_rows(g, group, change, &looks, &mut edits));
+                    }
+                });
+            }
+            this.found_section(g, &mut edits);
+            this.scene_section(g, &form, &mut edits);
+            if !this.edit.sections.is_empty() {
+                g.section("More Sections", true, Some(Tx::raw(this.edit.sections.len().to_string())), |g| this.sections_section(g, &mut edits));
+            }
+            g.section("Other Keys", !form.other.is_empty(), None, |g| this.other_section(g, &form.other, &mut edits));
+        });
+        self.form = form;
+        self.apply(edits);
+    }
+
+    fn apply(&mut self, edits: Vec<Edit>) {
+        let mut changed = false;
+        for e in edits {
+            match e {
+                Edit::Set { scope, key, value } => {
+                    item_model::set_own(self.changes_mut(&scope), &key, value);
+                    changed = true;
+                }
+                Edit::Reset { scope, key } => {
+                    item_model::reset(self.changes_mut(&scope), &key);
+                    changed = true;
+                }
+                Edit::Unset { scope, key } => {
+                    item_model::take_away(self.changes_mut(&scope), &key);
+                    changed = true;
+                }
+                Edit::Add { scope, key, member, now } => {
+                    let change = item_model::is_change(&self.edit);
+                    item_model::add_member(self.changes_mut(&scope), &key, &member, change, &now);
+                    changed = true;
+                }
+                Edit::Drop { scope, key, member, now } => {
+                    let change = item_model::is_change(&self.edit);
+                    item_model::drop_member(self.changes_mut(&scope), &key, &member, change, &now);
+                    changed = true;
+                }
+                Edit::Item(f) => {
+                    f(&mut self.edit);
+                    changed = true;
+                }
+                Edit::Text(i, t) => {
+                    if let Some(slot) = self.texts.get_mut(i) {
+                        *slot = t;
+                    }
+                    changed = true;
+                }
+                Edit::Act(a) => self.actions.push(a),
+                Edit::HudRow(k) => self.hud_row = Some(k),
+            }
+        }
+        if changed {
+            // an empty HUD section says nothing
+            if self.edit.hud.as_ref().is_some_and(|h| h.base.is_empty() && h.changes.is_empty())
+                && self.base.as_ref().is_none_or(|b| b.hud.is_none())
+            {
+                self.edit.hud = None;
+            }
+            self.changed();
+        }
+    }
+
+    fn messages(&self, g: &mut Grid<'_>, at: &Place) {
+        for (pl, tone, line) in &self.places {
+            if pl == at {
+                g.message(*tone, Tx::ui(line.as_str()));
+            }
+        }
+    }
+
+    fn has_error(&self, at: &Place) -> bool {
+        self.places.iter().any(|(pl, tone, _)| pl == at && *tone == Tone::Error)
+    }
+
+    fn field_place(name: &str) -> Place {
+        Place::Field(name.to_owned())
+    }
+
+    // ---- Identity -------------------------------------------------------------------------------
+
+    fn identity(&self, g: &mut Grid<'_>, change: bool, edits: &mut Vec<Edit>) {
+        let module = if self.module.is_empty() { "<module>".to_owned() } else { self.module.clone() };
+        g.section("Identity", true, None, |g| {
+            if change {
+                let target = self.edit.edit.clone().unwrap_or_default();
+                let name = self.item_lists.game_item(&target).map(|x| x.name.clone()).filter(|n| !n.is_empty());
+                g.block(|ui| {
+                    let line = match name {
+                        Some(n) => tr!("Changes {name} ({section})", name = Tx::raw(n), section = target.as_str()),
+                        None => tr!("Changes {section}", section = target.as_str()),
+                    };
+                    let _ = text::prose(ui, line);
+                });
+                self.messages(g, &Self::field_place("edit"));
+                return;
+            }
+            let hint = format!("{module}_{}", self.edit.id_or_stem());
+            let own = self.edit.section.clone();
+            let flags = if self.has_error(&Self::field_place("section")) { PropFlags::INVALID } else { PropFlags::NONE };
+            if let Some((Some(typed), _)) = g.row("Section", tr!("The item's name in the game. Left empty it is {hint}.", hint = hint.as_str()), flags, 0, |ui| {
+                local_value_text(ui, "item.section", own.as_deref(), Tx::raw(hint.clone()), ui.available_width())
+            }) {
+                let typed = typed.trim().to_owned();
+                edits.push(Edit::Item(Box::new(move |it| it.section = (!typed.is_empty()).then_some(typed))));
+            }
+            self.messages(g, &Self::field_place("section"));
+            let bases = self.edit.base.clone();
+            let flags = if bases.is_empty() || self.has_error(&Self::field_place("base")) { PropFlags::REQUIRED } else { PropFlags::NONE };
+            let labels: Vec<Tx<'static>> = bases
+                .iter()
+                .map(|b| match self.item_lists.game_item(b).map(|x| x.name.clone()).filter(|n| !n.is_empty()) {
+                    Some(n) => Tx::raw(format!("{n}  ({b})")),
+                    None => Tx::raw(b.clone()),
+                })
+                .collect();
+            if let Some((removed, add)) = g.row("Starts From", "The item of the game it starts from: what it does not set comes from there. Several: a later one wins.", flags, 0, |ui| {
+                ui.vertical(|ui| {
+                    let removed = chips(ui, "item.base", &labels, true);
+                    let add = gz_ui::Button::new(if bases.is_empty() { "Pick an Item..." } else { "Add..." })
+                        .label_set(&["Pick an Item...", "Add..."])
+                        .show(ui)
+                        .clicked();
+                    (removed, add)
+                })
+                .inner
+            }) {
+                if let Some(i) = removed {
+                    edits.push(Edit::Item(Box::new(move |it| {
+                        if i < it.base.len() {
+                            it.base.remove(i);
+                        }
+                    })));
+                }
+                if add {
+                    edits.push(Edit::Act(Action::Choose(Pick::Base)));
+                }
+            }
+            self.messages(g, &Self::field_place("base"));
+            g.section("More", self.edit.id.is_some() || self.edit.is_abstract.is_some(), None, |g| {
+                let own = self.edit.id.clone();
+                let stem = gz_characters::model::id_from_name(gz_items::model::stem(&self.edit.file));
+                if let Some((Some(typed), _)) = g.row("Id", "a-z, 0-9 and _. Left empty it is the file's name.", PropFlags::NONE, 0, |ui| {
+                    local_value_text(ui, "item.id", own.as_deref(), Tx::raw(stem.clone()), ui.available_width())
+                }) {
+                    let typed = typed.trim().to_owned();
+                    edits.push(Edit::Item(Box::new(move |it| it.id = (!typed.is_empty()).then_some(typed))));
+                }
+                self.messages(g, &Self::field_place("id"));
+                let mut on = self.edit.is_abstract();
+                if g.row("Template", "A template only: its section and nothing else - no name, no icon, never in the game's lists.", PropFlags::INLINE, 0, |ui| switch(ui, &mut on).changed()) == Some(true) {
+                    edits.push(Edit::Item(Box::new(move |it| it.is_abstract = on.then_some(true))));
+                }
+            });
+        });
+    }
+
+    // ---- Name and Description -------------------------------------------------------------------
+
+    fn texts_section(&self, g: &mut Grid<'_>, edits: &mut Vec<Edit>) {
+        g.section("Name and Description", true, None, |g| {
+            let row = |g: &mut Grid<'_>,
+                       edits: &mut Vec<Edit>,
+                       i: usize,
+                       label: &'static str,
+                       help: &'static str| {
+                let hint = self.hints[i].clone();
+                let own = self.texts[i].clone();
+                let salt = format!("item.text.{i}");
+                if let Some((Some(typed), _)) = g.row(label, help, PropFlags::NONE, 0, |ui| {
+                    local_value_text(
+                        ui,
+                        &salt,
+                        Some(own.as_str()),
+                        Tx::raw(hint.clone()),
+                        ui.available_width(),
+                    )
+                }) {
+                    edits.push(Edit::Text(i, typed));
+                }
+            };
+            row(g, edits, 0, "Name (rus)", "What the player reads in the inventory and the trade window.");
+            row(g, edits, 1, "Name (eng)", "Left empty, an English install reads the Russian name.");
+            self.messages(g, &Self::field_place("name"));
+            g.block(|ui| {
+                for (i, label, help) in [
+                    (4, "Description (rus)", "What the inventory's tooltip says of the item."),
+                    (5, "Description (eng)", "Left empty, an English install reads the Russian description."),
+                ] {
+                    let mut text_ = self.texts[i].clone();
+                    if text_block(ui, label, help, &mut text_, 2).changed() {
+                        edits.push(Edit::Text(i, text_.clone()));
+                    }
+                    if text_.is_empty() && !self.hints[i].is_empty() {
+                        let _ = text::label(
+                            ui,
+                            Tx::raw(self.hints[i].clone()),
+                            Font::Small,
+                            palette(ui.ctx()).text_muted,
+                            Clip::End,
+                        )
+                        .tip("The game's text, shown while the item sets none");
+                    }
+                }
+            });
+            self.messages(g, &Self::field_place("description"));
+            g.section("More", !self.texts[2].is_empty() || !self.texts[3].is_empty(), None, |g| {
+                row(
+                    g,
+                    edits,
+                    2,
+                    "Short Name (rus)",
+                    "The name on the inventory cell. Left empty it is the name.",
+                );
+                row(
+                    g,
+                    edits,
+                    3,
+                    "Short Name (eng)",
+                    "Left empty, an English install reads the Russian short name.",
+                );
+                self.messages(g, &Self::field_place("short_name"));
+            });
+        });
+    }
+
+    // ---- Icon -----------------------------------------------------------------------------------
+
+    #[allow(clippy::too_many_lines)]
+    fn icon_section(
+        &self,
+        g: &mut Grid<'_>,
+        keys: &[&item_model::Group],
+        change: bool,
+        looks: &[(String, Option<IconSource>)],
+        edits: &mut Vec<Edit>,
+    ) {
+        let src = self.edit_icon();
+        let open_keys = keys.iter().flat_map(|k| k.rows.iter()).any(|r| r.own.is_own());
+        let draw_keys = |g: &mut Grid<'_>, edits: &mut Vec<Edit>| {
+            for row in keys.iter().flat_map(|k| k.rows.iter()) {
+                self.key_row(g, row, change, looks, edits);
+            }
+        };
+        g.section(ICON_TITLE, true, None, |g| {
+            g.block(|ui| {
+                let p = palette(ui.ctx());
+                let (cw, ch) = match &src {
+                    Some(IconSource::Cell { w, h, .. }) => (*w as f32, *h as f32),
+                    Some(IconSource::Picture { path, stamp }) => {
+                        let px = self.pictures.as_ref().and_then(|pics| pics.get(&self.editor, path, *stamp)).map(|(_, s)| s);
+                        let (w, h) = match &self.edit.icon {
+                            Some(ItemIcon::Picture { w, h, .. }) => (*w, *h),
+                            _ => (None, None),
+                        };
+                        let cells = px.map_or((w.unwrap_or(1), h.unwrap_or(1)), |s| gz_items::atlas::cells_of((s[0], s[1]), w, h));
+                        (cells.0 as f32, cells.1 as f32)
+                    }
+                    None => (1.0, 1.0),
+                };
+                // cells of 50 px at 1 pt a pixel, fitted to the row
+                let want = Vec2::new(cw * CELL, ch * CELL);
+                let s = (ui.available_width() / want.x).min(1.0);
+                let size = Vec2::new((want.x * s).max(CELL), (want.y * s).max(CELL * 0.6));
+                let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+                ui.painter().rect_filled(rect, CornerRadius::same(4), p.inset);
+                let _ = self.paint_icon(ui, rect.shrink(2.0), src.as_ref());
+                let _ = resp.tip("The icon as the inventory shows it. Drop a picture on it to use that one.");
+                let accepts = |pl: &gz_ui::drop::Payload| pl.files().iter().any(|f| is_picture(f));
+                if let Some(payload) = gz_ui::drop::Zone::new("Item icon", rect, &accepts).take(ui) {
+                    edits.push(Edit::Act(Action::Dropped(payload.files())));
+                }
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if gz_ui::Button::new("Choose Picture...").tip("A picture beside the asset: the module build bakes it into the module's icons").show(ui).clicked() {
+                        edits.push(Edit::Act(Action::ChoosePicture));
+                    }
+                    if self.edit.icon.is_some()
+                        && gz_ui::Button::new("Reset").icon(Icon::Undo).tip(if item_model::is_change(&self.edit) { "Back to the game's icon" } else { "Back to the base's icon" }).show(ui).clicked()
+                    {
+                        edits.push(Edit::Item(Box::new(|it| it.icon = None)));
+                    }
+                });
+            });
+            self.messages(g, &Self::field_place("icon"));
+            match self.edit.icon.clone() {
+                Some(ItemIcon::Picture { file, w, h, .. }) => {
+                    let _ = g.row("Picture", "The picture file, beside the asset.", PropFlags::READ_ONLY, 0, |ui| gz_ui::grid::read_only(ui, Tx::raw(file.clone()), Clip::Start));
+                    let px = match &src {
+                        Some(IconSource::Picture { path, stamp }) => self.pictures.as_ref().and_then(|pics| pics.get(&self.editor, path, *stamp)).map(|(_, s)| s),
+                        _ => None,
+                    };
+                    let auto = px.map(|s| gz_items::atlas::cells_of((s[0], s[1]), None, None));
+                    for (label, own, hint, wide) in [("Width", w, auto.map(|a| a.0), true), ("Height", h, auto.map(|a| a.1), false)] {
+                        let salt = if wide { "item.icon.w" } else { "item.icon.h" };
+                        let own_text = own.map(|v| v.to_string());
+                        if let Some((Some(typed), _)) = g.row(label, "In cells of 50 px. Left empty it is worked out from the picture.", PropFlags::NONE, 0, |ui| {
+                            local_value_text(ui, salt, own_text.as_deref(), Tx::raw(hint.map(|h| h.to_string()).unwrap_or_default()), em(6.0))
+                        }) {
+                            let v = typed.trim().parse::<u32>().ok().filter(|v| (1..=64).contains(v));
+                            edits.push(Edit::Item(Box::new(move |it| {
+                                if let Some(ItemIcon::Picture { w, h, plain, .. }) = &mut it.icon {
+                                    if wide { *w = v } else { *h = v }
+                                    *plain = w.is_none() && h.is_none();
+                                }
+                            })));
+                        }
+                    }
+                    if keys.iter().any(|k| !k.rows.is_empty()) {
+                        g.section("More", open_keys, None, |g| draw_keys(g, edits));
+                    }
+                }
+                Some(ItemIcon::Cell { texture, x, y, w, h }) => {
+                    g.section("More", open_keys, None, |g| {
+                        let tex = texture.clone();
+                        if let Some((Some(typed), _)) = g.row("Texture", "The texture of the rectangle, by its game name. Left empty it is the game's icons.", PropFlags::NONE, 0, |ui| {
+                            local_value_text(ui, "item.icon.texture", tex.as_deref(), Tx::raw(game_keys::DEFAULT_ICONS), ui.available_width())
+                        }) {
+                            let t = typed.trim().to_owned();
+                            edits.push(Edit::Item(Box::new(move |it| {
+                                if let Some(ItemIcon::Cell { texture, .. }) = &mut it.icon {
+                                    *texture = (!t.is_empty()).then_some(t);
+                                }
+                            })));
+                        }
+                        for (n, label, v) in [(0, "X", Some(x)), (1, "Y", Some(y)), (2, "Width", w), (3, "Height", h)] {
+                            let own = v.map(|v| v.to_string());
+                            if let Some((Some(typed), _)) = g.row(label, "In cells of 50 px.", PropFlags::NONE, 0, |ui| {
+                                local_value_text(ui, &format!("item.icon.cell.{n}"), own.as_deref(), Tx::EMPTY, em(6.0))
+                            }) {
+                                let v = typed.trim().parse::<u32>().ok();
+                                edits.push(Edit::Item(Box::new(move |it| {
+                                    if let Some(ItemIcon::Cell { x, y, w, h, .. }) = &mut it.icon {
+                                        match n {
+                                            0 => *x = v.unwrap_or(0),
+                                            1 => *y = v.unwrap_or(0),
+                                            2 => *w = v,
+                                            _ => *h = v,
+                                        }
+                                    }
+                                })));
+                            }
+                        }
+                        draw_keys(g, edits);
+                    });
+                }
+                _ => {
+                    if keys.iter().any(|k| !k.rows.is_empty()) {
+                        g.section("More", open_keys, None, |g| draw_keys(g, edits));
+                    }
+                }
+            }
+        });
+    }
+
+    // ---- the catalog's keys ---------------------------------------------------------------------
+
+    fn group_rows(
+        &self,
+        g: &mut Grid<'_>,
+        group: &item_model::Group,
+        change: bool,
+        looks: &[(String, Option<IconSource>)],
+        edits: &mut Vec<Edit>,
+    ) {
+        for row in group.rows.iter().filter(|r| r.common) {
+            self.key_row(g, row, change, looks, edits);
+        }
+        let more: Vec<&Row> = group.rows.iter().filter(|r| !r.common).collect();
+        if more.is_empty() {
+            return;
+        }
+        // a group with nothing on its surface is its own fold
+        if more.len() == group.rows.len() {
+            for row in more {
+                self.key_row(g, row, change, looks, edits);
+            }
+            return;
+        }
+        let open = more.iter().any(|r| r.own.is_own());
+        g.section("More", open, Some(Tx::raw(more.len().to_string())), |g| {
+            for row in more {
+                self.key_row(g, row, change, looks, edits);
+            }
+        });
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn key_row(
+        &self,
+        g: &mut Grid<'_>,
+        row: &Row,
+        change: bool,
+        looks: &[(String, Option<IconSource>)],
+        edits: &mut Vec<Edit>,
+    ) {
+        let place = Place::Key { scope: row.scope.clone(), key: row.key.clone() };
+        let own = row.own.is_own();
+        let mut flags = if own { PropFlags::MODIFIED } else { PropFlags::NONE };
+        if row.required && row.resolved.is_none() && !matches!(row.own, Own::Set(_)) {
+            flags = flags | PropFlags::REQUIRED;
+        }
+        if self.has_error(&place) {
+            flags = flags | PropFlags::INVALID;
+        }
+        let help = if row.help.is_empty() { row.key.clone() } else { format!("{}\n{}", row.key, row.help) };
+        let help = format!("{help}\n{}", from_text(row).en());
+        let salt = format!("item.key.{}.{}", row.scope, row.key);
+        let (scope, key) = (row.scope.clone(), row.key.clone());
+        let hud = row.scope == gz_items::catalog::HUD;
+        let shown = row.shown().unwrap_or_default();
+        let muted = Tx::raw(row.resolved.clone().unwrap_or_default());
+        let unit_w = |ui: &Ui| {
+            if row.unit.is_empty() {
+                0.0
+            } else {
+                text::width(ui.ctx(), &Font::Body.id(), Tx::raw(row.unit.as_str())) + 8.0
+            }
+        };
+        let mut focus = false;
+        let drawn = g.row(Tx::raw(row.title.clone()), Tx::raw(help), flags, 0, |ui| {
+            let p = palette(ui.ctx());
+            if row.own == Own::Unset {
+                let was = row.before.clone().or_else(|| row.resolved.clone()).unwrap_or_default();
+                let t = if was.is_empty() {
+                    Tx::from("Taken away")
+                } else {
+                    tr!("Taken away (was {value})", value = was.as_str())
+                };
+                let _ = text::label(ui, t, Font::Body, p.text_muted, Clip::End)
+                    .tip("The item takes the key away. The Reset arrow brings it back.");
+                return None;
+            }
+            if row.list {
+                let start = if change {
+                    row.before.as_deref().or(row.resolved.as_deref())
+                } else {
+                    row.resolved.as_deref()
+                };
+                let now = item_model::members_now(
+                    &row.own,
+                    if matches!(row.own, Own::Members { .. }) { row.before.as_deref() } else { start },
+                );
+                let labels: Vec<Tx<'static>> = now.iter().map(|m| self.member_label(m)).collect();
+                return ui
+                    .vertical(|ui| {
+                        let removed = chips(ui, &salt, &labels, true);
+                        let added = local_add_field(ui, &salt, Tx::from("Add a member"), em(12.0));
+                        if let Some(i) = removed {
+                            return Some(Edit::Drop {
+                                scope: scope.clone(),
+                                key: key.clone(),
+                                member: now[i].clone(),
+                                now: now.clone(),
+                            });
+                        }
+                        added.map(|m| Edit::Add {
+                            scope: scope.clone(),
+                            key: key.clone(),
+                            member: m,
+                            now: now.clone(),
+                        })
+                    })
+                    .inner;
+            }
+            match &row.ty {
+                KeyType::Bool => {
+                    let mut on = item_model::is_on(&shown);
+                    let r = switch(ui, &mut on);
+                    if !own {
+                        ui.add_space(8.0);
+                        let _ = text::label(ui, from_text(row), Font::Small, p.text_muted, Clip::End);
+                    }
+                    focus |= r.clicked();
+                    r.changed().then(|| Edit::Set {
+                        scope: scope.clone(),
+                        key: key.clone(),
+                        value: SetValue::Bool(on),
+                    })
+                }
+                KeyType::Token if !row.values.is_empty() => {
+                    local_value_combo(ui, &salt, &shown, own, &row.values).map(|w| Edit::Set {
+                        scope: scope.clone(),
+                        key: key.clone(),
+                        value: SetValue::Text(w),
+                    })
+                }
+                ty @ (KeyType::Visual | KeyType::Texture | KeyType::Sound | KeyType::Particles) => {
+                    let _ = ty;
+                    let text_ = if shown.is_empty() { Tx::from("None") } else { Tx::raw(shown.clone()) };
+                    let combo = gz_ui::Combo::new(("gz-ui-world.choose", salt.as_str()), text_)
+                        .placeholder(!own || shown.is_empty());
+                    let resp = combo.field(ui, false);
+                    focus |= resp.clicked();
+                    (resp.clicked() || gz_ui::menu::take_popup_request(ui.ctx(), &salt)).then(|| {
+                        Edit::Act(Action::Choose(Pick::Key { scope: scope.clone(), key: key.clone() }))
+                    })
+                }
+                ty => {
+                    // a section that is an item shows that item's icon and name
+                    let look = (*ty == KeyType::Section)
+                        .then(|| {
+                            looks
+                                .iter()
+                                .find(|(s, l)| l.is_some() && first_name(&shown).eq_ignore_ascii_case(s))
+                        })
+                        .flatten();
+                    let extra = if look.is_some() { em(10.0) } else { 0.0 };
+                    let w = (ui.available_width() - unit_w(ui) - extra).max(em(4.0));
+                    let own_text = match &row.own {
+                        Own::Set(v) => Some(v.ltx()),
+                        _ => None,
+                    };
+                    let (typed, f) = local_value_text(ui, &salt, own_text.as_deref(), muted.clone(), w);
+                    focus |= f;
+                    if !row.unit.is_empty() {
+                        let _ =
+                            text::label(ui, Tx::raw(row.unit.clone()), Font::Body, p.text_muted, Clip::End);
+                    }
+                    if let Some((section, src)) = look {
+                        let (r, _) = ui.allocate_exact_size(THUMB, Sense::hover());
+                        let _ = self.paint_icon(ui, r, src.as_ref());
+                        let name =
+                            self.item_lists.game_item(section).map(|x| x.name.clone()).unwrap_or_default();
+                        let _ = text::label(ui, Tx::raw(name), Font::Small, p.text_secondary, Clip::End);
+                    }
+                    typed.map(|t| {
+                        if t.trim().is_empty() {
+                            Edit::Reset { scope: scope.clone(), key: key.clone() }
+                        } else {
+                            Edit::Set {
+                                scope: scope.clone(),
+                                key: key.clone(),
+                                value: item_model::typed(&row.ty, &t),
+                            }
+                        }
+                    })
+                }
+            }
+        });
+        let Some(out) = drawn else { return };
+        if let Some(e) = out {
+            if hud {
+                edits.push(Edit::HudRow(row.key.clone()));
+            }
+            edits.push(e);
+        } else if hud && focus {
+            edits.push(Edit::HudRow(row.key.clone()));
+        }
+        if g.was_reset() {
+            edits.push(Edit::Reset { scope: row.scope.clone(), key: row.key.clone() });
+        }
+        // one look at what the row names: played, opened, shown
+        let mut looked = false;
+        let named = first_name(&shown);
+        if !named.is_empty() {
+            let act = match row.ty {
+                KeyType::Sound => Some((
+                    Icon::Play,
+                    Tx::from("Play the sound (again to stop)"),
+                    Action::Play(named.clone()),
+                )),
+                KeyType::Visual => Some((
+                    Icon::Eye,
+                    Tx::from("Open the model in the model viewer"),
+                    Action::OpenModel(named.clone()),
+                )),
+                KeyType::Texture => Some((
+                    Icon::Picture,
+                    Tx::from("Open the texture in the texture preview"),
+                    Action::OpenTexture(named.clone()),
+                )),
+                _ => None,
+            };
+            if let Some((icon, tip, action)) = act {
+                looked = true;
+                if g.trailing(icon, tip) {
+                    edits.push(Edit::Act(action));
+                }
+            }
+        }
+        // a change can take an inherited key away; one icon at a row's end, so not beside a look
+        if change
+            && !looked
+            && !own
+            && row.resolved.is_some()
+            && !row.required
+            && g.trailing(Icon::Clear, "Take the key away from the item")
+        {
+            edits.push(Edit::Unset { scope: row.scope.clone(), key: row.key.clone() });
+        }
+        self.messages(g, &place);
+    }
+
+    /// A member of a list as a chip: the player's name of an item beside its section.
+    fn member_label(&self, member: &str) -> Tx<'static> {
+        match self.item_lists.game_item(member).map(|g| g.name.clone()).filter(|n| !n.is_empty()) {
+            Some(n) => Tx::raw(format!("{n}  ({member})")),
+            None => Tx::raw(member.to_owned()),
+        }
+    }
+
+    // ---- Where It Is Found ----------------------------------------------------------------------
+
+    fn found_section(&self, g: &mut Grid<'_>, edits: &mut Vec<Edit>) {
+        let loot = self.edit.loot.clone().unwrap_or_default();
+        let any = self.edit.loot.is_some() || !self.edit.sold.is_empty() || !self.edit.craft.is_empty();
+        g.section("Where It Is Found", any, None, |g| {
+            // Loot: how many the dead carry and the chances
+            let (lo, hi) = match loot.count {
+                Some(Count::One(n)) => (Some(n), Some(n)),
+                Some(Count::Range(a, b)) => (Some(a), Some(b)),
+                None => (None, None),
+            };
+            let fmt = |v: Option<f64>| v.map(gz_luadata::number_to_text);
+            if let Some((typed_lo, typed_hi)) = g.row("Loot Count", "How many the dead carry when they carry it: from - to. Empty: the death manager never spawns it.", PropFlags::NONE, 0, |ui| {
+                let w = em(5.0);
+                let (a, _) = local_value_text(ui, "item.loot.from", fmt(lo).as_deref(), Tx::EMPTY, w);
+                let _ = text::label(ui, "to", Font::Body, palette(ui.ctx()).text_secondary, Clip::End);
+                let (b, _) = local_value_text(ui, "item.loot.to", fmt(hi).as_deref(), Tx::EMPTY, w);
+                (a, b)
+            }) && (typed_lo.is_some() || typed_hi.is_some())
+            {
+                let parse = |t: &Option<String>, was: Option<f64>| match t {
+                    Some(s) => gz_ui::grid::parse_number(s),
+                    None => was,
+                };
+                let (a, b) = (parse(&typed_lo, lo), parse(&typed_hi, hi));
+                edits.push(Edit::Item(Box::new(move |it| {
+                    let l = it.loot.get_or_insert_with(Loot::default);
+                    l.count = match (a, b) {
+                        (Some(a), Some(b)) if (a - b).abs() < f64::EPSILON => Some(Count::One(a)),
+                        (Some(a), Some(b)) => Some(Count::Range(a, b)),
+                        (Some(a), None) | (None, Some(a)) => Some(Count::One(a)),
+                        (None, None) => None,
+                    };
+                    tidy_loot(it);
+                })));
+            }
+            let chance = loot.chance.map(gz_luadata::number_to_text);
+            if let Some((Some(typed), _)) = g.row("Loot Chance", "The chance every community and rank has, 0 to 1.", PropFlags::NONE, 0, |ui| {
+                local_value_text(ui, "item.loot.chance", chance.as_deref(), Tx::EMPTY, em(6.0))
+            }) {
+                let v = gz_ui::grid::parse_number(&typed);
+                edits.push(Edit::Item(Box::new(move |it| {
+                    it.loot.get_or_insert_with(Loot::default).chance = v;
+                    tidy_loot(it);
+                })));
+            }
+            self.messages(g, &Place::Part { name: "loot".into(), row: None });
+            g.block(|ui| {
+                self.loot_rows(ui, &loot, edits);
+                ui.add_space(6.0);
+                self.sold_rows(ui, edits);
+                ui.add_space(6.0);
+                self.craft_rows(ui, edits);
+            });
+            for part in ["sold", "craft"] {
+                for (pl, tone, line) in &self.places {
+                    if matches!(pl, Place::Part { name, .. } if name == part) {
+                        g.message(*tone, Tx::ui(line.as_str()));
+                    }
+                }
+            }
+        });
+    }
+
+    fn loot_rows(&self, ui: &mut Ui, loot: &Loot, edits: &mut Vec<Edit>) {
+        let columns = [Col::new("Community", em(16.0)), Col::new("Chance", em(6.0))];
+        let mut picked: Option<(usize, String)> = None;
+        let mut chance: Option<(usize, Option<f64>)> = None;
+        let result = ItemRows::new("item.loot.by", &columns, loot.by.len())
+            .add_label("Add Community")
+            .empty_text("No community of its own: what the dead carry is the chance above.")
+            .show(ui, |ui, row, col| {
+                let Some((who, c)) = loot.by.get(row) else { return };
+                if col == 0 {
+                    let mut v = who.clone();
+                    if list_picker(
+                        ui,
+                        &format!("item.loot.by.{row}"),
+                        &mut v,
+                        &self.lists.communities,
+                        &self.lists.stalker_communities,
+                        None,
+                        !self.lists.loaded,
+                    ) {
+                        picked = Some((row, v));
+                    }
+                } else if let (Some(t), _) = local_value_text(
+                    ui,
+                    &format!("item.loot.by.{row}.chance"),
+                    Some(&gz_luadata::number_to_text(*c)),
+                    Tx::EMPTY,
+                    ui.available_width(),
+                ) {
+                    chance = Some((row, gz_ui::grid::parse_number(&t)));
+                }
+            });
+        if let Some((i, who)) = picked {
+            edits.push(Edit::Item(Box::new(move |it| {
+                if let Some(r) = it.loot.as_mut().and_then(|l| l.by.get_mut(i)) {
+                    r.0 = who;
+                }
+            })));
+        }
+        if let Some((i, Some(c))) = chance {
+            edits.push(Edit::Item(Box::new(move |it| {
+                if let Some(r) = it.loot.as_mut().and_then(|l| l.by.get_mut(i)) {
+                    r.1 = c;
+                }
+            })));
+        }
+        if let Some(i) = result.removed {
+            edits.push(Edit::Item(Box::new(move |it| {
+                if let Some(l) = it.loot.as_mut()
+                    && i < l.by.len()
+                {
+                    l.by.remove(i);
+                }
+                tidy_loot(it);
+            })));
+        }
+        if result.added {
+            let first = self
+                .lists
+                .stalker_communities
+                .entries
+                .first()
+                .map_or_else(|| "stalker".to_owned(), |e| e.id.clone());
+            edits.push(Edit::Item(Box::new(move |it| {
+                it.loot.get_or_insert_with(Loot::default).by.push((first, 0.01))
+            })));
+        }
+    }
+
+    fn sold_rows(&self, ui: &mut Ui, edits: &mut Vec<Edit>) {
+        let columns = [Col::new("Trader", em(16.0)), Col::new("Count", em(5.0)), Col::new("Chance", em(5.0))];
+        let rows = &self.edit.sold;
+        let mut set: Option<(usize, usize, String)> = None;
+        let traders = &self.item_lists.traders;
+        let result = ItemRows::new("item.sold", &columns, rows.len())
+            .add_label("Add Trader")
+            .empty_text("No trader sells it.")
+            .show(ui, |ui, row, col| {
+                let Some(r) = rows.get(row) else { return };
+                match col {
+                    0 => {
+                        let mut v = r.by.clone();
+                        if list_picker(
+                            ui,
+                            &format!("item.sold.{row}"),
+                            &mut v,
+                            traders,
+                            traders,
+                            None,
+                            !self.item_lists.loaded,
+                        ) {
+                            set = Some((row, 0, v));
+                        }
+                    }
+                    1 | 2 => {
+                        let v = if col == 1 { r.count } else { r.chance };
+                        if let (Some(t), _) = local_value_text(
+                            ui,
+                            &format!("item.sold.{row}.{col}"),
+                            v.map(gz_luadata::number_to_text).as_deref(),
+                            Tx::raw("1"),
+                            ui.available_width(),
+                        ) {
+                            set = Some((row, col, t));
+                        }
+                    }
+                    _ => {}
+                }
+            });
+        if let Some((i, col, v)) = set {
+            edits.push(Edit::Item(Box::new(move |it| {
+                if let Some(r) = it.sold.get_mut(i) {
+                    match col {
+                        0 => r.by = v,
+                        1 => r.count = gz_ui::grid::parse_number(&v),
+                        _ => r.chance = gz_ui::grid::parse_number(&v),
+                    }
+                }
+            })));
+        }
+        if let Some(i) = result.removed {
+            edits.push(Edit::Item(Box::new(move |it| {
+                if i < it.sold.len() {
+                    it.sold.remove(i);
+                }
+            })));
+        }
+        if result.added {
+            let first = traders.entries.first().map_or_else(String::new, |e| e.id.clone());
+            edits.push(Edit::Item(Box::new(move |it| it.sold.push(Sold { by: first, ..Sold::default() }))));
+        }
+    }
+
+    fn craft_rows(&self, ui: &mut Ui, edits: &mut Vec<Edit>) {
+        let columns = [
+            Col::new("Made At", em(9.0)),
+            Col::new("Part", em(7.0)),
+            Col::new("Part", em(7.0)),
+            Col::new("Part", em(7.0)),
+            Col::new("Part", em(7.0)),
+            Col::new("Count", em(4.0)),
+        ];
+        let rows = &self.edit.craft;
+        let mut set: Option<(usize, usize, String)> = None;
+        let result = ItemRows::new("item.craft", &columns, rows.len())
+            .add_label("Add Recipe")
+            .empty_text("No recipe makes it.")
+            .show(ui, |ui, row, col| {
+                let Some(r) = rows.get(row) else { return };
+                let salt = format!("item.craft.{row}.{col}");
+                match col {
+                    0 => {
+                        let mut v = r.at.clone();
+                        if item_picker(ui, &salt, &mut v, &self.lists, Some(Tx::from("Pick a tool..."))) {
+                            set = Some((row, col, v));
+                        }
+                    }
+                    1..=4 => {
+                        let mut v = r.parts.get(col - 1).cloned().unwrap_or_default();
+                        if item_picker(ui, &salt, &mut v, &self.lists, Some(Tx::from("None"))) {
+                            set = Some((row, col, v));
+                        }
+                    }
+                    _ => {
+                        if let (Some(t), _) = local_value_text(
+                            ui,
+                            &salt,
+                            r.count.map(|c| c.to_string()).as_deref(),
+                            Tx::raw("1"),
+                            ui.available_width(),
+                        ) {
+                            set = Some((row, col, t));
+                        }
+                    }
+                }
+            });
+        if let Some((i, col, v)) = set {
+            edits.push(Edit::Item(Box::new(move |it| {
+                let Some(r) = it.craft.get_mut(i) else { return };
+                match col {
+                    0 => r.at = v,
+                    1..=4 => {
+                        let at = col - 1;
+                        while r.parts.len() <= at {
+                            r.parts.push(String::new());
+                        }
+                        r.parts[at] = v;
+                        r.parts.retain(|p| !p.is_empty());
+                    }
+                    _ => r.count = v.trim().parse::<u32>().ok(),
+                }
+            })));
+        }
+        if let Some(i) = result.removed {
+            edits.push(Edit::Item(Box::new(move |it| {
+                if i < it.craft.len() {
+                    it.craft.remove(i);
+                }
+            })));
+        }
+        if result.added {
+            edits.push(Edit::Item(Box::new(|it| it.craft.push(Craft::default()))));
+        }
+    }
+
+    // ---- Use Scene ------------------------------------------------------------------------------
+
+    fn scene_section(&self, g: &mut Grid<'_>, form: &item_model::Form, edits: &mut Vec<Edit>) {
+        let used = form.family.as_ref().is_some_and(|f| self.item_lists.scene_families.contains(f));
+        if self.edit.scene.is_none() && !used {
+            return;
+        }
+        let (like, keys) = match &self.edit.scene {
+            Some(Scene::Like(s)) => (s.clone(), Vec::new()),
+            Some(Scene::Table { like, keys, .. }) => (like.clone().unwrap_or_default(), keys.clone()),
+            None => (String::new(), Vec::new()),
+        };
+        g.section("Use Scene", self.edit.scene.is_some(), None, |g| {
+            let mut v = like.clone();
+            if g.row(
+                "Like",
+                "The item whose use scene this one takes: its animation, sound and camera.",
+                PropFlags::NONE,
+                0,
+                |ui| {
+                    list_picker(
+                        ui,
+                        "item.scene.like",
+                        &mut v,
+                        &self.item_lists.scenes,
+                        &self.item_lists.scenes,
+                        Some(Tx::from("None")),
+                        !self.item_lists.loaded,
+                    )
+                },
+            ) == Some(true)
+            {
+                edits.push(Edit::Item(Box::new(move |it| set_scene(it, Some(v), None))));
+            }
+            self.messages(g, &Place::Part { name: "scene".into(), row: None });
+            g.section("More", !keys.is_empty(), None, |g| {
+                for (key, label, help) in [
+                    ("sound", "Sound", "The scene's sound."),
+                    ("camera", "Camera", "The camera effect."),
+                    ("time", "Time", "How long the scene lasts, seconds."),
+                    ("helmet", "Helmet", "What a helmet does to it, as the game's scenes say it."),
+                ] {
+                    let own = keys.iter().find(|(k, _)| k == key).map(|(_, v)| v.ltx());
+                    if let Some((Some(typed), _)) = g.row(label, help, PropFlags::NONE, 0, |ui| {
+                        local_value_text(
+                            ui,
+                            &format!("item.scene.{key}"),
+                            own.as_deref(),
+                            Tx::EMPTY,
+                            ui.available_width(),
+                        )
+                    }) {
+                        let value =
+                            (!typed.trim().is_empty()).then(|| match gz_ui::grid::parse_number(&typed) {
+                                Some(n) if key == "time" => SetValue::Number(n),
+                                _ => SetValue::Text(typed.trim().to_owned()),
+                            });
+                        edits.push(Edit::Item(Box::new(move |it| set_scene(it, None, Some((key, value))))));
+                    }
+                }
+            });
+        });
+    }
+
+    // ---- More Sections, Other Keys --------------------------------------------------------------
+
+    fn sections_section(&self, g: &mut Grid<'_>, edits: &mut Vec<Edit>) {
+        for (si, s) in self.edit.sections.iter().enumerate() {
+            g.block(|ui| {
+                let p = palette(ui.ctx());
+                let title = if s.name.is_empty() {
+                    tr!("Changes {section}", section = s.edit.as_str())
+                } else {
+                    Tx::raw(s.name.clone())
+                };
+                let _ = text::label(ui, title, Font::Strong, p.text, Clip::End);
+                if !s.base.is_empty() {
+                    let _ = text::label(
+                        ui,
+                        tr!("Starts from {base}", base = s.base.join(", ")),
+                        Font::Small,
+                        p.text_secondary,
+                        Clip::End,
+                    );
+                }
+                let mut set: Option<(usize, usize, String)> = None;
+                let columns = [Col::new("Key", em(12.0)), Col::new("Value", em(14.0))];
+                let rows = &s.changes.set;
+                let result = ItemRows::new(("item.sections", si), &columns, rows.len())
+                    .add_label("Add Key")
+                    .empty_text("It sets no key.")
+                    .show(ui, |ui, row, col| {
+                        let Some((k, v)) = rows.get(row) else { return };
+                        let shown = if col == 0 { k.clone() } else { v.ltx() };
+                        if let (Some(t), _) = local_value_text(
+                            ui,
+                            &format!("item.sections.{si}.{row}.{col}"),
+                            Some(&shown),
+                            Tx::EMPTY,
+                            ui.available_width(),
+                        ) {
+                            set = Some((row, col, t));
+                        }
+                    });
+                if let Some((r, col, t)) = set {
+                    edits.push(Edit::Item(Box::new(move |it| {
+                        edit_pair(&mut section_at(it, si).changes.set, r, col, t)
+                    })));
+                }
+                if let Some(r) = result.removed {
+                    edits.push(Edit::Item(Box::new(move |it| {
+                        let set = &mut section_at(it, si).changes.set;
+                        if r < set.len() {
+                            set.remove(r);
+                        }
+                    })));
+                }
+                if result.added {
+                    edits.push(Edit::Item(Box::new(move |it| {
+                        section_at(it, si).changes.set.push(("new_key".into(), SetValue::Text(String::new())))
+                    })));
+                }
+                let kept = s.changes.unset.len() + s.changes.add.len() + s.changes.drop.len();
+                if kept > 0 {
+                    let _ = text::label(
+                        ui,
+                        tr!("It also takes away or changes {n} {n:list|lists}, as its file says.", n = kept),
+                        Font::Small,
+                        p.text_muted,
+                        Clip::End,
+                    );
+                }
+            });
+            self.messages(g, &Place::Part { name: "sections".into(), row: Some(si) });
+        }
+    }
+
+    fn other_section(&self, g: &mut Grid<'_>, other: &[OtherRow], edits: &mut Vec<Edit>) {
+        g.block(|ui| {
+            let _ = text::label(
+                ui,
+                "What the item sets that the linked game's catalog does not know: written as it is.",
+                Font::Small,
+                palette(ui.ctx()).text_secondary,
+                Clip::End,
+            );
+            let rows: Vec<&OtherRow> = other.iter().filter(|o| o.scope == gz_items::catalog::ITEM).collect();
+            let columns = [Col::new("Key", em(12.0)), Col::new("Value", em(14.0))];
+            let mut set: Option<(String, usize, String)> = None;
+            let result = ItemRows::new("item.other", &columns, rows.len())
+                .add_label("Add Key")
+                .empty_text("Nothing the catalog does not know.")
+                .show(ui, |ui, row, col| {
+                    let Some(o) = rows.get(row) else { return };
+                    let value = match &o.own {
+                        Own::Set(v) => v.ltx(),
+                        Own::Unset => String::new(),
+                        Own::Members { add, .. } => add.join(", "),
+                        Own::Inherit => String::new(),
+                    };
+                    let shown = if col == 0 { o.key.clone() } else { value };
+                    if let (Some(t), _) = local_value_text(
+                        ui,
+                        &format!("item.other.{}.{col}", o.key),
+                        Some(&shown),
+                        Tx::EMPTY,
+                        ui.available_width(),
+                    ) {
+                        set = Some((o.key.clone(), col, t));
+                    }
+                });
+            if let Some((key, col, t)) = set {
+                edits.push(Edit::Item(Box::new(move |it| {
+                    if let Some(at) = it.changes.set.iter().position(|(k, _)| *k == key) {
+                        edit_pair(&mut it.changes.set, at, col, t);
+                    } else if col == 1 && !t.trim().is_empty() {
+                        item_model::set_own(&mut it.changes, &key, SetValue::Text(t.trim().to_owned()));
+                    }
+                })));
+            }
+            if let Some(r) = result.removed
+                && let Some(o) = rows.get(r)
+            {
+                let key = o.key.clone();
+                edits.push(Edit::Item(Box::new(move |it| item_model::reset(&mut it.changes, &key))));
+            }
+            if result.added {
+                edits.push(Edit::Item(Box::new(|it| {
+                    let mut name = "new_key".to_owned();
+                    let mut n = 2;
+                    while it.changes.set.iter().any(|(k, _)| *k == name) {
+                        name = format!("new_key_{n}");
+                        n += 1;
+                    }
+                    it.changes.set.push((name, SetValue::Text(String::new())));
+                })));
+            }
+        });
+        for (pl, tone, line) in &self.places {
+            if let Place::Key { key, .. } = pl
+                && other.iter().any(|o| o.key == *key)
+            {
+                g.message(*tone, Tx::ui(line.as_str()));
+            }
+        }
+    }
+
+    // ---- the preview ----------------------------------------------------------------------------
+
+    /// The item as the game shows it: the icon at twice its size, the names and the description
+    /// the player reads, the weight and the cost; then its world model.
+    pub(crate) fn draw_preview(&mut self, ui: &mut Ui, cx: &mut gz_app::DocCx<'_>) {
+        let p = palette(ui.ctx());
+        let full = ui.max_rect();
+        let resolved = |k: &str| -> Option<String> {
+            self.form.groups.iter().flat_map(|g| g.rows.iter()).find(|r| r.key == k).and_then(Row::shown)
+        };
+        let unit = |k: &str| {
+            self.form
+                .groups
+                .iter()
+                .flat_map(|g| g.rows.iter())
+                .find(|r| r.key == k)
+                .map(|r| r.unit.clone())
+                .unwrap_or_default()
+        };
+        let visual = resolved(game_keys::VISUAL).unwrap_or_default();
+        let _ = text::label(ui, "In the Game", Font::Strong, p.text, Clip::End);
+        ui.add_space(6.0);
+        let src = self.edit_icon();
+        let cells = src.as_ref().and_then(IconSource::cells).unwrap_or((2, 1));
+        let want = Vec2::new(cells.0 as f32 * CELL * 2.0, cells.1 as f32 * CELL * 2.0);
+        let s = (full.width() / want.x).min(1.0);
+        let (rect, _) = ui.allocate_exact_size(want * s, Sense::hover());
+        ui.painter().rect_filled(rect, CornerRadius::same(4), p.inset);
+        let _ = self.paint_icon(ui, rect.shrink(4.0), src.as_ref());
+        ui.add_space(8.0);
+        let pick = |own: &str, hint: &str| if own.is_empty() { hint.to_owned() } else { own.to_owned() };
+        let (eng, rus) = (pick(&self.texts[1], &self.hints[1]), pick(&self.texts[0], &self.hints[0]));
+        let name = if rus.is_empty() { eng.clone() } else { rus.clone() };
+        let _ = text::label(
+            ui,
+            if name.is_empty() { Tx::from("No name") } else { Tx::raw(name.clone()) },
+            Font::Title,
+            p.text,
+            Clip::End,
+        );
+        if !eng.is_empty() && eng != name {
+            let _ = text::label(ui, Tx::raw(eng), Font::Small, p.text_muted, Clip::End);
+        }
+        let short = pick(&self.texts[2], &self.hints[2]);
+        if !short.is_empty() {
+            let _ = text::label(ui, Tx::raw(short), Font::Body, p.text_secondary, Clip::End);
+        }
+        let descr = pick(&self.texts[4], &self.hints[4]);
+        if !descr.is_empty() {
+            ui.add_space(4.0);
+            let _ = text::prose(ui, Tx::raw(descr));
+        }
+        ui.add_space(6.0);
+        for (key, label) in [(game_keys::WEIGHT, "Weight"), (game_keys::COST, "Cost")] {
+            if let Some(v) = resolved(key) {
+                let u = unit(key);
+                let line = tr!(
+                    "{label}: {value} {unit}",
+                    label = Tx::from(label),
+                    value = v.as_str(),
+                    unit = Tx::raw(u)
+                );
+                let _ = text::label(ui, line, Font::Body, p.text_secondary, Clip::End);
+            }
+        }
+        ui.add_space(8.0);
+        if visual.is_empty() {
+            self.model = None;
+            return;
+        }
+        let key = first_name(&visual);
+        if self.model.as_ref().is_none_or(|(k, _)| *k != key) {
+            let req =
+                gz_ui_previews::model::open_request(&key, gz_ui_previews::model_load::ModelSource::Game);
+            self.model = gz_ui_previews::model::factory(&self.editor, &req).ok().map(|mut d| {
+                if let Some(m) =
+                    d.as_any_mut().and_then(|a| a.downcast_mut::<gz_ui_previews::model::ModelDoc>())
+                {
+                    m.show_details = false;
+                }
+                (key.clone(), d)
+            });
+        }
+        let below = ui.cursor().min.y;
+        let model_rect =
+            Rect::from_min_max(pos2(full.min.x, below), pos2(full.max.x, (below + 320.0).min(full.max.y)));
+        if model_rect.height() < 120.0 {
+            return;
+        }
+        if let Some((_, doc)) = self.model.as_mut() {
+            let mut child =
+                ui.new_child(UiBuilder::new().id_salt("gz-ui-world.items.model").max_rect(model_rect));
+            doc.body(&mut child, cx);
+        }
+    }
+}
+
+/// A loot that says nothing is no loot.
+fn tidy_loot(it: &mut gz_items::Item) {
+    if it.loot.as_ref().is_some_and(|l| l.count.is_none() && l.chance.is_none() && l.by.is_empty()) {
+        it.loot = None;
+    }
+}
+
+fn section_at(it: &mut gz_items::Item, i: usize) -> &mut OwnedSection {
+    if i >= it.sections.len() {
+        it.sections.resize_with(i + 1, OwnedSection::default);
+    }
+    &mut it.sections[i]
+}
+
+/// A key or a value of a `key = value` row typed.
+fn edit_pair(set: &mut [(String, SetValue)], row: usize, col: usize, typed: String) {
+    let Some(pair) = set.get_mut(row) else { return };
+    let t = typed.trim().to_owned();
+    if col == 0 {
+        if gz_items::model::plain_name(&t) {
+            pair.0 = t;
+        }
+    } else {
+        pair.1 = match gz_ui::grid::parse_number(&t) {
+            Some(n) if n.to_string() == t || gz_luadata::number_to_text(n) == t => SetValue::Number(n),
+            _ => SetValue::Text(t),
+        };
+    }
+}
+
+/// The use scene with `like` (when given) and a key set or taken away.
+fn set_scene(it: &mut gz_items::Item, like: Option<String>, key: Option<(&'static str, Option<SetValue>)>) {
+    let (mut l, mut keys, hud) = match it.scene.take() {
+        Some(Scene::Like(s)) => (Some(s), Vec::new(), None),
+        Some(Scene::Table { like, keys, hud }) => (like, keys, hud),
+        None => (None, Vec::new(), None),
+    };
+    if let Some(v) = like {
+        l = (!v.is_empty()).then_some(v);
+    }
+    if let Some((k, v)) = key {
+        keys.retain(|(x, _)| x != k);
+        if let Some(v) = v {
+            keys.push((k.to_owned(), v));
+        }
+    }
+    it.scene = match (l, keys.is_empty() && hud.is_none()) {
+        (None, true) => None,
+        (Some(s), true) => Some(Scene::Like(s)),
+        (like, _) => Some(Scene::Table { like, keys, hud }),
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_scene_is_as_short_as_what_it_says() {
+        let mut it = gz_items::Item::default();
+        set_scene(&mut it, Some("vodka".into()), None);
+        assert_eq!(it.scene, Some(Scene::Like("vodka".into())));
+        set_scene(&mut it, None, Some(("time", Some(SetValue::Number(3.0)))));
+        assert!(
+            matches!(&it.scene, Some(Scene::Table { like: Some(l), keys, .. }) if l == "vodka" && keys.len() == 1)
+        );
+        set_scene(&mut it, Some(String::new()), Some(("time", None)));
+        assert_eq!(it.scene, None);
+    }
+
+    #[test]
+    fn an_empty_loot_goes() {
+        let mut it = gz_items::Item { loot: Some(Loot::default()), ..gz_items::Item::default() };
+        tidy_loot(&mut it);
+        assert!(it.loot.is_none());
+        let mut set = vec![("a".to_owned(), SetValue::Text("x".into()))];
+        edit_pair(&mut set, 0, 1, "12".into());
+        assert_eq!(set[0].1, SetValue::Number(12.0));
+        edit_pair(&mut set, 0, 0, "bad key".into());
+        assert_eq!(set[0].0, "a");
+    }
+}

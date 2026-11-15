@@ -46,6 +46,9 @@ pub struct Roster {
     pub plan: Plan,
     /// The string ids the module's items make: `<section>_name`, `_short`, `_descr`.
     pub strings: Vec<String>,
+    /// What it was made from: the files' texts and the module's configs ([`Roster::with_edit`]).
+    sources: Arc<Vec<(String, Result<String, String>)>>,
+    configs: Arc<ModuleConfigs>,
 }
 
 impl Roster {
@@ -60,6 +63,7 @@ impl Roster {
         root: &Path,
         picture: &atlas::PictureSize,
     ) -> Self {
+        let sources = Arc::new(files.clone());
         let mut entries = Vec::with_capacity(files.len());
         let mut texts = Vec::with_capacity(files.len());
         for (file, text) in files {
@@ -121,9 +125,27 @@ impl Roster {
             composition: Arc::new(composition),
             plan,
             strings,
+            sources,
+            configs: Arc::new(configs.clone()),
         };
         roster.mark_twins();
         roster
+    }
+
+    /// The roster as it would be with the file `file` holding `text`, a file of the roster or a
+    /// new one: what a form checks the item it edits against before it is saved. Blocking.
+    #[must_use]
+    pub fn with_edit(&self, file: &str, text: String, root: &Path, picture: &atlas::PictureSize) -> Self {
+        let key = file.replace('\\', "/");
+        let mut files: Vec<(String, Result<String, String>)> = self.sources.as_ref().clone();
+        match files.iter_mut().find(|(f, _)| f.eq_ignore_ascii_case(&key)) {
+            Some(slot) => slot.1 = Ok(text),
+            None => {
+                files.push((key, Ok(text)));
+                files.sort_by_key(|(f, _)| f.to_ascii_lowercase());
+            }
+        }
+        Self::build(self.stamp, &self.module, files, self.game.clone(), &self.configs, root, picture)
     }
 
     /// Two items of one section: a problem on each.

@@ -220,9 +220,10 @@ impl Items {
         }
         let root = self.root.clone();
         let exec = self.exec.clone();
-        let built = self
-            .exec
-            .io(move || {
+        // the work is the query's own computation: however many ask at once - a check of a folder
+        // asks once per file - one of them builds and the rest wait for it
+        self.roster
+            .fresh(&(), stamp, move || {
                 let read = |rel: &RelPath| -> Result<String, String> { model::read_file(&rel.to_fs(&root)) };
                 let items: Vec<(String, Result<String, String>)> =
                     exec.par_io(files.items.clone(), |rel| (rel.as_str().to_owned(), read(&rel)));
@@ -257,8 +258,7 @@ impl Items {
                 cfg.patches.sort_by_key(|p| p.rel.to_ascii_lowercase());
                 Roster::build(stamp, &module, items, game, &cfg, &root, &crate::atlas::picture_size)
             })
-            .await;
-        self.roster.fresh(&(), stamp, move || built).await
+            .await
     }
 
     /// The roster once the file tree holds every change marked so far: what a command reads
@@ -333,9 +333,9 @@ impl Items {
         let tree = self.project.tree.snapshot();
         let root = self.root.clone();
         let module_atlas = (!roster.plan.is_empty()).then(|| roster.plan.texture.to_ascii_lowercase());
-        let made = self
-            .exec
-            .io(move || {
+        // computed by the query itself, so many askers at once share one walk of the files
+        self.lookups
+            .fresh(&(), rev, move || {
                 strings.extend(project_strings(&root, &tree));
                 let particles = particle_names(&files, &tree);
                 GameLookups {
@@ -351,8 +351,22 @@ impl Items {
                     motions: Arc::default(),
                 }
             })
-            .await;
-        self.lookups.fresh(&(), rev, move || made).await
+            .await
+    }
+
+    /// The problems of every item of a roster, by entry: what a list shows its dots by. Blocking
+    /// parts run on the IO pool.
+    pub async fn all_problems(&self, editor: &Arc<Editor>, roster: Arc<Roster>) -> Vec<Vec<Issue>> {
+        let catalog = self.catalog(editor).await;
+        let lookups = self.lookups(editor).await;
+        let root = self.root.clone();
+        self.exec
+            .io(move || {
+                (0..roster.entries.len())
+                    .map(|i| issues_of(&roster, i, &catalog.catalog, &*lookups, &root))
+                    .collect()
+            })
+            .await
     }
 
     /// What an item resolves to: `item` a file of the project or a section an item makes or
@@ -373,6 +387,25 @@ impl Items {
         let lookups = self.lookups(editor).await;
         let root = self.root.clone();
         Some(self.exec.io(move || issues_of(&roster, i, &catalog.catalog, &*lookups, &root)).await)
+    }
+
+    /// What an item a form edits resolves to and every problem of it, as the build would see the
+    /// module with the item written into its file (`item.file`, a file of the roster or a new
+    /// one): the composition made again with it, on the IO pool.
+    pub async fn check_edit(&self, editor: &Arc<Editor>, item: &Item) -> (Option<Resolution>, Vec<Issue>) {
+        let roster = self.roster(editor).await;
+        let catalog = self.catalog(editor).await;
+        let lookups = self.lookups(editor).await;
+        let root = self.root.clone();
+        let (file, text) = (item.file.clone(), model::write(item));
+        self.exec
+            .io(move || {
+                let edited = roster.with_edit(&file, text, &root, &crate::atlas::picture_size);
+                let Some(i) = edited.index_of_file(&file) else { return (None, Vec::new()) };
+                let res = edited.resolution(i, Some(&catalog.catalog));
+                (res, issues_of(&edited, i, &catalog.catalog, &*lookups, &root))
+            })
+            .await
     }
 
     /// Saves an edited item into its file: the difference between the item as it was read
@@ -403,6 +436,8 @@ impl Items {
             gz_asset::write_text(editor, &rel, model::write(after)).await?;
         }
         self.project.tree.refresh().await;
+        // the roster that follows reads the file as written, before the watcher reports it
+        self.changes.bump();
         Ok(rel.as_str().to_owned())
     }
 }

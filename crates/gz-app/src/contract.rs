@@ -49,7 +49,7 @@ pub const DIALOGS: [(&str, &str); 7] = [
 ];
 
 /// The kinds of major tab.
-pub const DOCUMENT_KINDS: [&str; 15] = [
+pub const DOCUMENT_KINDS: [&str; 16] = [
     "level",
     "quest",
     "beh",
@@ -57,6 +57,7 @@ pub const DOCUMENT_KINDS: [&str; 15] = [
     "model",
     "texture",
     "characters",
+    "items",
     "mod_settings",
     "world_rules",
     "screens",
@@ -69,7 +70,7 @@ pub const DOCUMENT_KINDS: [&str; 15] = [
 
 /// Kit dialogs a row, a document or a question raises; none opens over `ui.dialog`, each closes
 /// with it, as Esc.
-pub const KIT_DIALOGS: [&str; 29] = [
+pub const KIT_DIALOGS: [&str; 30] = [
     "dlg.disable_game_updates",
     "dlg.choose",
     "dlg.edit_text",
@@ -94,6 +95,7 @@ pub const KIT_DIALOGS: [&str; 29] = [
     "dlg.clean_target",
     "dlg.replace_release",
     "dlg.delete_character",
+    "dlg.delete_item",
     "dlg.empty_world",
     "dlg.edit_release",
     "dlg.catalog_withdraw",
@@ -132,7 +134,7 @@ pub const POPUPS: [&str; 15] = [
 /// `<command> show=<value>`), which opens the tab, the page and the fold that hold the list. A
 /// kit pick list is no menu, so `ui.list` does not name it: `ui.audit` lists its rows and
 /// `shot.window` shows it.
-pub const VIEW_POPUPS: [&str; 18] = [
+pub const VIEW_POPUPS: [&str; 22] = [
     "world.view show=add_level",
     "world.view show=add_area_level",
     "mod.view show=add_requires",
@@ -148,6 +150,10 @@ pub const VIEW_POPUPS: [&str; 18] = [
     "characters.view show=dialog",
     "characters.view show=sells",
     "characters.view show=buys",
+    "items.view show=add",
+    "items.view show=new",
+    "items.view show=change",
+    "items.view show=base",
     "library.view kind=texture_library show=detail",
     "library.view kind=texture_library show=bump",
     "library.view kind=texture_library show=normal",

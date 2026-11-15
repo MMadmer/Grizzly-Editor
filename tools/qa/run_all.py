@@ -61,6 +61,8 @@ SUITES: dict[str, dict] = {
     # it times the UI's frames during a build: alone, like the other suites that time something
     "test_build_job": {"args": ["--project", OD], "timeout": 120, "alone": True},
     "test_characters": {"args": ["--project", OD], "timeout": 120},
+    # the Items tab over MCP: the kind, the form from the catalog, a save as the difference, the icon's bake
+    "test_items": {"args": ["--project", TEST], "timeout": 120},
     "test_behaviours": {"args": ["--project", OD], "timeout": 120},
     "test_graph_ui": {"args": ["--project", OD], "timeout": 120},
     "test_assets": {"args": ["--project", OD], "timeout": 120},

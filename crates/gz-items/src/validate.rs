@@ -171,8 +171,13 @@ fn check_values(
         }
         let names = named(&info.ty, &text);
         let linked = cx.lookups.linked();
-        for n in names {
+        for (at, n) in names.into_iter().enumerate() {
             if n.starts_with('$') {
+                continue;
+            }
+            // a HUD motion line is `hands cycle[, item cycle[, speed]]`: the first is a motion of
+            // the hands' rig, which many files feed; only the second is the item model's own
+            if info.ty == KeyType::Motion && (at != 1 || n.parse::<f32>().is_ok()) {
                 continue;
             }
             let (known, code, what) = match &info.ty {
@@ -201,7 +206,7 @@ fn check_values(
             };
             if !known {
                 let whose = if *what == *"motion" {
-                    " the HUD model has"
+                    " the item's HUD model does not have"
                 } else {
                     " neither the game nor the project has"
                 };

@@ -232,7 +232,14 @@ pub fn resolve(
     let family =
         class.as_deref().and_then(|c| catalog.and_then(|cat| cat.family_of_class(c))).map(|f| f.id.clone());
     let hud_bases: Vec<String> = item.hud.as_ref().map(|h| h.base.clone()).unwrap_or_default();
-    let hud = applied.hud.as_ref().map(|h| view(&comp.ltx, h, comp, &item.file, &hud_bases));
+    // an item that says nothing of its HUD section still has the one its `hud` key names
+    let hud_name = applied.hud.clone().or_else(|| {
+        main.get("hud")
+            .and_then(|r| r.value.as_deref())
+            .map(|v| v.trim().trim_matches('"').to_ascii_lowercase())
+            .filter(|v| !v.is_empty() && comp.ltx.section(v).is_some())
+    });
+    let hud = hud_name.as_ref().map(|h| view(&comp.ltx, h, comp, &item.file, &hud_bases));
     let change = kind == Kind::Change;
     Resolution {
         file: item.file.clone(),
@@ -242,7 +249,7 @@ pub fn resolve(
         family,
         left_out: applied.left_out,
         before: change.then(|| game_view(game, &applied.section)),
-        hud_before: if change { applied.hud.as_ref().map(|h| game_view(game, h)) } else { None },
+        hud_before: if change { hud_name.as_ref().map(|h| game_view(game, h)) } else { None },
         main,
         hud,
         sections: applied.owned.iter().map(|s| view(&comp.ltx, s, comp, &item.file, &[])).collect(),
