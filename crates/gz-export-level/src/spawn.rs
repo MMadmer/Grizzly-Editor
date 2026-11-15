@@ -769,6 +769,9 @@ mod tests {
         assert!(crate::gather::is_model_asset("Models/Hut.MeshAsset"));
         assert!(!crate::gather::is_model_asset("meshes/props/box.ogf"));
         assert!(!crate::gather::is_model_asset(".meshasset"));
+        // a reference in other letters is no asset and no panic
+        assert!(!crate::gather::is_model_asset("ящик/стол_01"));
+        assert!(crate::gather::is_model_asset("модели/стол.meshasset"));
     }
 
     #[test]

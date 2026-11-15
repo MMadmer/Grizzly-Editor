@@ -59,7 +59,10 @@ pub struct ModelSources<'a> {
 /// Whether a scene object's reference names a model asset of the project (`*.meshasset`).
 #[must_use]
 pub fn is_model_asset(reference: &str) -> bool {
-    reference.len() > 10 && reference[reference.len() - 10..].eq_ignore_ascii_case(".meshasset")
+    // by the extension, never by a byte offset: a reference may hold any letters
+    reference
+        .rsplit_once('.')
+        .is_some_and(|(stem, ext)| !stem.is_empty() && ext.eq_ignore_ascii_case("meshasset"))
 }
 
 fn read_shared(p: &Path) -> Option<Arc<[u8]>> {
