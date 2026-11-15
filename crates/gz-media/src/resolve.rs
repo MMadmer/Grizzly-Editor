@@ -167,8 +167,17 @@ fn files_name(p: &Path) -> String {
 /// The scene's object of a model asset: what the library's provider answers.
 pub fn library_object(root: &Path, key: &str) -> Result<Arc<LibraryObject>, Failure> {
     let m = model(root, key)?;
+    // a dynamic model is published as a model of its own: the scene's layers name it by that name
+    let published = m.object.is_dynamic().then(|| {
+        let module = match gz_mod::read_manifest_file(root) {
+            Ok(Some(text)) => gz_mod::Manifest::parse(&gz_mod::ManifestDoc::parse(&text)).id,
+            _ => String::new(),
+        };
+        crate::files::published_name(m.asset.name.as_deref(), key, &module)
+    });
     let mut o = LibraryObject::provided(key, m.object);
     o.stamp = m.stamp;
+    o.published = published.map(Into::into);
     Ok(Arc::new(o))
 }
 

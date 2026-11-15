@@ -30,6 +30,9 @@ pub struct LibraryObject {
     /// The file's bytes as one number, the same on every machine; 0 for an object made in
     /// memory. What a build compares to know the model changed.
     pub stamp: u64,
+    /// For a model the module build publishes as a model of its own (a dynamic model asset):
+    /// the name the game knows it by. `None` for everything else.
+    pub published: Option<SmolStr>,
 }
 
 impl std::fmt::Debug for LibraryObject {
@@ -77,6 +80,7 @@ impl LibraryObject {
             tri_surface: tri_surface.into(),
             bvh,
             stamp: 0,
+            published: None,
         }
     }
 

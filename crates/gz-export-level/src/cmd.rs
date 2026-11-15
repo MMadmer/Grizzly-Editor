@@ -141,11 +141,14 @@ async fn run_spawn(
     let sdk = gz_project::library_root(editor).join("gamedata").join("meshes");
     let (snap, level) = (c.snap.clone(), c.level.clone());
     let st = settings.clone();
+    let library = c.session.services.get::<gz_scene::SceneService>().map(|svc| svc.library.clone());
     let gathered: Gathered = editor
         .exec
         .io(move || {
             let s = st.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync));
-            gather::spawn_inputs(&root, &level, &snap, selected_only, s, game.as_deref(), &sdk)
+            let sources =
+                gather::ModelSources { game: game.as_deref(), sdk_meshes: &sdk, library: library.as_deref() };
+            gather::spawn_inputs(&root, &level, &snap, selected_only, s, &sources)
         })
         .await;
     let (snap, level) = (c.snap.clone(), c.level.clone());

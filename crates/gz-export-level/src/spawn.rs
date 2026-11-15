@@ -148,9 +148,18 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
             out.result.skipped += 1;
             continue;
         }
+        // a model asset: a static one is the level's geometry (the piece compiles it) and no
+        // object of this layer; a dynamic one is spawned under the name the build publishes
+        let asset = input.visuals.assets.get(so.reference.as_str());
+        if crate::gather::is_model_asset(&so.reference) && !matches!(asset, Some(Some(_))) {
+            continue;
+        }
         let op = unique_op(&replaced, &o.name);
-        let visual = config_visual(&so.reference);
-        let reachable = if staged_now.contains(&visual) {
+        let visual = match asset {
+            Some(Some(name)) => name.clone(),
+            _ => config_visual(&so.reference),
+        };
+        let reachable = if staged_now.contains(&visual) || asset.is_some() {
             true
         } else {
             match input.visuals.props.get(so.reference.as_str()).unwrap_or(&Found::Missing) {
@@ -709,6 +718,57 @@ mod tests {
     fn dir(s: &SceneState, name: &str) -> String {
         let o = s.find_any(name).unwrap();
         f3(get_xyz(&o.world()))
+    }
+
+    /// A static model asset is the level's geometry and no object of the spawn layer, and its
+    /// asset file is never staged as a model; a dynamic one is spawned under the name the build
+    /// publishes it by.
+    #[test]
+    fn a_model_asset_is_never_a_raw_model_file() {
+        let st = settings();
+        let mut s = SceneState::default();
+        for (name, reference) in [("hut", "models/hut.meshasset"), ("crate", "models/crate.meshasset")] {
+            s.insert(authored(
+                Object::new(
+                    ObjClass::SceneObject,
+                    name,
+                    ObjData::SceneObject(SceneObjectData::library(reference)),
+                ),
+                Vec3::new(1.0, 2.0, 3.0),
+            ));
+        }
+        let mut visuals = Visuals::default();
+        visuals.assets.insert("models/hut.meshasset".into(), None);
+        visuals.assets.insert("models/crate.meshasset".into(), Some("my_mod\\crate".into()));
+        let patrols = HashSet::new();
+        let input = SpawnInput {
+            scene: &s,
+            level: "l01_escape".into(),
+            selected_only: false,
+            section: None,
+            mode: None,
+            mirror: false,
+            visuals: &visuals,
+            settings: Some(&st),
+            game_patrols: &patrols,
+            old_text: "",
+        };
+        let bake = bake(&input).unwrap();
+        let text = bake.text.clone().unwrap_or_default();
+        assert!(bake.stage.is_empty(), "nothing of an asset is staged as a model: {:?}", bake.stage);
+        assert!(!text.contains("[obj:hut]"), "{text}");
+        assert!(text.contains("[obj:crate]"), "{text}");
+        assert!(text.contains("my_mod\\crate"), "{text}");
+        assert!(!text.contains("meshasset"), "{text}");
+        // an asset the gather did not see (no library at hand) is left out, never staged
+        let bare = Visuals::default();
+        let input = SpawnInput { visuals: &bare, mirror: true, ..input };
+        let bake = super::bake(&input).unwrap();
+        let text = bake.text.clone().unwrap_or_default();
+        assert!(bake.stage.is_empty() && !text.contains("[obj:"), "{text}");
+        assert!(crate::gather::is_model_asset("Models/Hut.MeshAsset"));
+        assert!(!crate::gather::is_model_asset("meshes/props/box.ogf"));
+        assert!(!crate::gather::is_model_asset(".meshasset"));
     }
 
     #[test]

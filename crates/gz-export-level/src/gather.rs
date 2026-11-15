@@ -46,6 +46,22 @@ pub fn level_dir(root: &Path, level: &str) -> PathBuf {
     root.join("levels").join(level)
 }
 
+/// Where a bake's models are looked for: the linked game's files, the editor's own
+/// `gamedata\meshes`, and the scene's library (for the model assets, which are no files of
+/// either).
+#[derive(Clone, Copy)]
+pub struct ModelSources<'a> {
+    pub game: Option<&'a GameFiles>,
+    pub sdk_meshes: &'a Path,
+    pub library: Option<&'a gz_scene::library::Library>,
+}
+
+/// Whether a scene object's reference names a model asset of the project (`*.meshasset`).
+#[must_use]
+pub fn is_model_asset(reference: &str) -> bool {
+    reference.len() > 10 && reference[reference.len() - 10..].eq_ignore_ascii_case(".meshasset")
+}
+
 fn read_shared(p: &Path) -> Option<Arc<[u8]>> {
     std::fs::read(p).ok().map(Arc::from)
 }
@@ -59,19 +75,29 @@ pub fn spawn_inputs(
     scene: &SceneState,
     selected_only: bool,
     settings: Option<&(dyn Settings + Sync)>,
-    game: Option<&GameFiles>,
-    sdk_meshes: &Path,
+    sources: &ModelSources<'_>,
 ) -> Gathered {
+    let ModelSources { game, sdk_meshes, library } = *sources;
     let selected = |id| !selected_only || scene.is_selected(id);
     let mut props: Vec<String> = Vec::new();
     let mut prop_raw: HashMap<String, PathBuf> = HashMap::new();
+    // a model asset is no raw model file: a static one is the level's geometry, a dynamic one
+    // is published by the module build under its own name
+    let mut assets: HashMap<String, Option<String>> = HashMap::new();
     for o in scene.of_class(ObjClass::SceneObject) {
         if let ObjData::SceneObject(d) = &o.data
             && o.marks.authored
             && selected(o.id)
             && !d.reference.is_empty()
         {
-            props.push(d.reference.to_string());
+            if is_model_asset(&d.reference) {
+                let published = library
+                    .and_then(|l| l.load(&d.reference).ok())
+                    .and_then(|lo| lo.published.as_ref().map(ToString::to_string));
+                assets.insert(d.reference.to_string(), published);
+            } else {
+                props.push(d.reference.to_string());
+            }
         }
     }
     props.sort();
@@ -155,7 +181,11 @@ pub fn spawn_inputs(
     }
     stale.sort();
     Gathered {
-        visuals: Visuals { props: prop_found.into_iter().collect(), spawns: spawns.into_iter().collect() },
+        visuals: Visuals {
+            props: prop_found.into_iter().collect(),
+            spawns: spawns.into_iter().collect(),
+            assets,
+        },
         old_text,
         stale_custom_data: stale,
     }

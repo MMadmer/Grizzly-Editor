@@ -38,6 +38,10 @@ pub struct Visuals {
     pub props: HashMap<String, Found>,
     /// A spawn element's visual (configs form: `props\box`) -> where it is.
     pub spawns: HashMap<String, SpawnVisual>,
+    /// A reference that names a model asset -> the name the module build publishes it under
+    /// when it is a dynamic model; `None` for a static one, which is level geometry and no
+    /// object of the spawn layer.
+    pub assets: HashMap<String, Option<String>>,
 }
 
 /// OGF container chunks: `u32 id` (bit 31 = compressed), `u32 size`, the body.
