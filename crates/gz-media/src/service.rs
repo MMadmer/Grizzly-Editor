@@ -182,14 +182,19 @@ impl Media {
         }
         let tree = self.project.tree.snapshot();
         let rules = self.rules();
-        let files: Vec<(RelPath, bool)> = Self::files(&tree)
-            .into_iter()
-            .map(|r| (r.clone(), gz_mod::outside_build(&rules, r.as_str())))
-            .collect();
         let (root, module, exec) = (self.root.clone(), self.module(), self.exec.clone());
-        let made =
-            self.exec.io(move || exec.io_pool().install(|| index::build(&root, files, module, stamp))).await;
-        let index = self.index.fresh(&(), stamp, move || made).await;
+        // the query's own computation: however many ask at once - a check of a folder asks once
+        // per file - the files are walked and read once
+        let index = self
+            .index
+            .fresh(&(), stamp, move || {
+                let files: Vec<(RelPath, bool)> = Self::files(&tree)
+                    .into_iter()
+                    .map(|r| (r.clone(), gz_mod::outside_build(&rules, r.as_str())))
+                    .collect();
+                exec.io_pool().install(|| index::build(&root, files, module, stamp))
+            })
+            .await;
         *self.latest.write() = Some(index.clone());
         index
     }
