@@ -261,11 +261,20 @@ plays anything.
   `[playlist.<id>]` with `title`, `tracks = <track id>, ...` and `order = shuffle | list` (shuffle when left out).
   The player picks what the radios play in Options > Sound: everything (the game's music and every module's
   radio tracks; the default), the game's own music alone, or one playlist.
+- **A playlist on one radio, when the author wants it** (the author's own meaning of a playlist; the station stays
+  too): a radio object of a level names its playlist in its own data (`[xms_radio] playlist = <module>.<id>`,
+  `game`, `off`), the editor's scene gives a placed Radio the property Plays; a quest switches a radio at run
+  time (`radio.play`: which radio, which playlist, now or at the next track); a module's script calls
+  `xms_radio.set`. Such a radio plays its playlist whatever the player's station is; what a quest set is saved.
 - `[radio] music = mix | only` as for the screens: `only` makes this module's radio tracks the whole common
   music (the last module of the load order that says so).
 - **Copyrighted or not** is said where the sound is described: `copyrighted = true` in a `.sndasset` (any sound of
   a module, `false` when left out), and `copyrighted = true` of a `[track.<id>]` for a track of the manifest. The
   game's own copyrighted music is a list of the game's data the game's author keeps (names and masks).
+- **A copyrighted sound may name what plays instead**: `streamer = <a sound that is not copyrighted>` beside
+  `copyrighted` (the asset, the track, a line of the game's list). In the editor the field is under the checkbox
+  and live only while it is ticked: a sound picker that offers only sounds without the mark - the module's and
+  the game's. A replacement that is copyrighted itself is refused.
 - **The streamer mode** is an option of the game (Options > Sound, off by default). While it is on, a sound that
   is copyrighted is not played - asked by the sound engine before every play, and by the music of the loading
   screen and the menus, so no script has to remember; a radio skips such tracks and plays the rest.
@@ -308,6 +317,8 @@ motions and sounds; a use scene plays; the silencer is crafted; the icons are th
 | G5 (more) | with the particles | 1.9's engine part: `copyrighted` of a sound's description and of a track, the streamer mode variable, the check before every play, the script calls | game: the sound engine, the music thread, `xms_assets`, `xms_screens` |
 | G6 | agent | 1.9's game data and scripts: the radio's pool from modules, playlists, the option rows, the game's own copyrighted list | game: `packaging\dead-air-x64\compatibility\gamedata` (scripts, configs), docs |
 | E4 | agent | 1.9's editor part | editor: `gz-media` (the key), `gz-screens`, `gz-ui-pda` (Screens & Music), `gz-mod` (the manifest's reference and check) |
+| G7 | agent, after G4 | 1.9: the quest runtime's `radio.play` / `radio.stop` (catalog, runtime, parity) over `xms_radio.set` | game: `xms_nq_kinds.script`, `configs\nq\catalog.ltx`, `tools\nq` |
+| E5 | agent, after E4 | 1.9: a placed Radio with its Plays property (the scene, the Place panel, the bake), the quest editor's playlist picker | editor: `gz-scene`, `gz-ui-level`, `gz-export-level`, `gz-nq`, `gz-ui-graph` |
 | - | lead | this plan, the contracts' final text, integration, the game build and deploy, the in-game proof, the one full read by the critic and its fixes |
 
 ## 4. State
