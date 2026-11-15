@@ -53,17 +53,35 @@
 //!   name's folder once more (`configs\x\*.ltx` lists `configs\x\x\`).
 //! - A multi-line value that meets a line holding `[...]`, or outgrows the buffer, is cut back
 //!   to its first line (a warning) and reading goes on with the next line.
-//! - Layers ([`Loader::layer`]): with merging on ([`Builder::set_merge`]), a section that
+//! - Layers ([`Loader::layer`]): with merging on ([`Builder::set_merge`], the module stage; the
+//!   editor composes a module over a game's tree with it in its own dialect too), a section that
 //!   exists in another layer is merged instead of refused - new keys are appended, a key from a
 //!   layer at least as high wins - and the merged keys follow the sorted ones.
-//! - `.ltxp` directive patches ([`Builder::patch`]): `[section]` (created,
-//!   `: parents` inherited, when new), `[!section]` deletes it, `key = value` sets (the value
-//!   kept as written), `+key = a, b` appends missing list items, `-key = a` removes them,
-//!   `!key` deletes the key; `;` starts a comment. New keys go to the end of the section.
+//! - `.ltxp` directive patches ([`Builder::patch`], parsed by [`crate::patch`]): `[section]`
+//!   (created, `: parents` inherited, when new; the parents of a section that exists are left
+//!   as they are), `[!section]` deletes it, `key = value` sets (the value kept as written),
+//!   `+key = a, b` appends missing list items, `-key = a` removes them, `!key` deletes the key;
+//!   `;` starts a comment. New keys go to the end of the section. `#file <path under configs>`
+//!   (the word in any case; the path lower-cased, `.` and `..` resolved) sends the directives
+//!   after it to that file ([`crate::FilePatch`]) - and to the system config too when the tree was
+//!   read from it; a path that climbs out or names a drive discards them up to the next `#file`;
+//!   `#file` alone returns to the system config.
+//!
+//! # Changes reach what inherits
+//!
+//! A section remembers its parents ([`Section::parents`]) and which keys are lines of its own
+//! ([`Item::own`]). A change of a key by a module - an overlay merge, a `.ltxp` directive, a
+//! directive of [`Builder::apply`] - reaches every section that inherits the key from the
+//! changed one: a section that has no line of its own for the key and whose later parents do
+//! not give it takes the value of the last of its parents that has the key, or loses the key
+//! when none has it any more, and the change goes on to its own heirs. A key deleted by `!key`
+//! counts as a line of its own: a later change of a parent does not bring it back.
 
 use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
+
+use crate::patch::{Directive, FilePatch, Op};
 
 /// Which reader's rules apply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -398,8 +416,11 @@ pub struct Item {
     pub key: Arc<str>,
     /// `None` for `key =` or a bare `key`.
     pub value: Option<Arc<str>>,
+    /// Where the value was written: [`Ltx::files`]; a copied line keeps its parent's place.
     pub file: u32,
     pub line: u32,
+    /// A line of the section itself (or a module's change to it), not a copy of a parent's.
+    pub own: bool,
 }
 
 /// A section with its inherited lines resolved.
@@ -411,19 +432,44 @@ pub struct Section {
     index: FxHashMap<Arc<str>, u32>,
     pub file: u32,
     pub line: u32,
+    /// What it inherits from, as its header named it (lower case), in order.
+    pub parents: Vec<Arc<str>>,
+    /// Keys a `!key` took away: they hold against what the parents give.
+    dropped: Vec<Arc<str>>,
     layer: u16,
     item_layers: Option<Vec<u16>>,
 }
 
 impl Section {
     fn new(name: Arc<str>, file: u32, line: u32, layer: u16) -> Self {
-        Self { name, items: Vec::new(), index: FxHashMap::default(), file, line, layer, item_layers: None }
+        Self {
+            name,
+            items: Vec::new(),
+            index: FxHashMap::default(),
+            file,
+            line,
+            parents: Vec::new(),
+            dropped: Vec::new(),
+            layer,
+            item_layers: None,
+        }
     }
 
     /// The line of a key.
     #[must_use]
     pub fn get(&self, key: &str) -> Option<&Item> {
         self.index.get(key).and_then(|&i| self.items.get(i as usize))
+    }
+
+    /// Whether the section says its own word on a key: a line of its own, or a `!key`.
+    #[must_use]
+    pub fn holds(&self, key: &str) -> bool {
+        self.get(key).is_some_and(|it| it.own) || self.dropped.iter().any(|d| &**d == key)
+    }
+
+    /// A parent's line, copied: never a line of the section's own.
+    fn inherit(&mut self, it: &Item) {
+        self.insert(Item { own: false, ..it.clone() });
     }
 
     /// `insert_item`: overrides a key in place or appends it.
@@ -433,6 +479,7 @@ impl Section {
                 x.value = it.value;
                 x.file = it.file;
                 x.line = it.line;
+                x.own = it.own;
             }
             let layer = self.layer;
             if let Some(l) = self.item_layers.as_mut().and_then(|v| v.get_mut(i as usize)) {
@@ -458,6 +505,68 @@ impl Section {
     fn sort(&mut self) {
         self.items.sort_by(|a, b| a.key.as_bytes().cmp(b.key.as_bytes()));
         self.rebuild_index();
+    }
+
+    /// Takes a key out, with its layer.
+    fn take(&mut self, key: &str) -> bool {
+        let Some(&at) = self.index.get(key) else { return false };
+        self.items.remove(at as usize);
+        if let Some(v) = self.item_layers.as_mut()
+            && (at as usize) < v.len()
+        {
+            v.remove(at as usize);
+        }
+        self.rebuild_index();
+        true
+    }
+
+    /// A module's line: set in place or appended, a line of the section's own from now on.
+    fn put(&mut self, it: Item, layer: u16) {
+        self.dropped.retain(|d| *d != it.key);
+        if let Some(&k) = self.index.get(&*it.key) {
+            if let Some(x) = self.items.get_mut(k as usize) {
+                *x = it;
+            }
+            if let Some(l) = self.item_layers.as_mut().and_then(|v| v.get_mut(k as usize)) {
+                *l = layer;
+            }
+            return;
+        }
+        self.index.insert(it.key.clone(), u32::try_from(self.items.len()).unwrap_or(u32::MAX));
+        self.items.push(it);
+        if let Some(v) = self.item_layers.as_mut() {
+            v.push(layer);
+        }
+    }
+
+    /// A key a parent gives anew (`Some`) or no longer gives (`None`), for a section that has no
+    /// word of its own on it. Whether its value changed.
+    fn follow(&mut self, key: &str, from: Option<&Item>) -> bool {
+        match from {
+            None => self.take(key),
+            Some(it) => {
+                let same = self
+                    .get(key)
+                    .is_some_and(|x| x.value == it.value && x.file == it.file && x.line == it.line);
+                if same {
+                    return false;
+                }
+                let layer = self.layer;
+                let it = Item { own: false, ..it.clone() };
+                if let Some(&k) = self.index.get(key) {
+                    if let Some(x) = self.items.get_mut(k as usize) {
+                        *x = it;
+                    }
+                    return true;
+                }
+                self.index.insert(it.key.clone(), u32::try_from(self.items.len()).unwrap_or(u32::MAX));
+                self.items.push(it);
+                if let Some(v) = self.item_layers.as_mut() {
+                    v.push(layer);
+                }
+                true
+            }
+        }
     }
 }
 
@@ -503,6 +612,8 @@ pub struct Builder {
     by_name: FxHashMap<Arc<str>, usize>,
     created: Vec<usize>,
     removed: Vec<bool>,
+    /// The sections that name each one among their parents, in the order they were made.
+    children: Vec<Vec<usize>>,
     files: Vec<Arc<str>>,
     file_ids: FxHashMap<Arc<str>, u32>,
     warnings: Vec<LtxWarning>,
@@ -519,6 +630,7 @@ impl Builder {
             by_name: FxHashMap::default(),
             created: Vec::new(),
             removed: Vec::new(),
+            children: Vec::new(),
             files: Vec::new(),
             file_ids: FxHashMap::default(),
             warnings: Vec::new(),
@@ -526,12 +638,63 @@ impl Builder {
         }
     }
 
-    /// Cross-layer merging of duplicate sections (game dialect).
-    pub fn set_merge(&mut self, on: bool) {
-        self.merge = on && self.dialect == Dialect::Game;
+    /// A builder that goes on from a finished tree: its sections with their parents and their
+    /// own lines, its files. What a module's composition is laid over a game's tree with.
+    #[must_use]
+    pub fn from_ltx(ltx: &Ltx, dialect: Dialect) -> Self {
+        let mut b = Self::new(dialect);
+        let n = ltx.sections.len();
+        // the order the sections were made in: the file order, then any the order lacks
+        let mut order: Vec<usize> = ltx.file_order.iter().map(|&i| i as usize).filter(|&i| i < n).collect();
+        let mut listed = vec![false; n];
+        for &i in &order {
+            if let Some(l) = listed.get_mut(i) {
+                *l = true;
+            }
+        }
+        order.extend((0..n).filter(|&i| !listed.get(i).copied().unwrap_or(true)));
+        for i in order {
+            let Some(s) = ltx.sections.get(i) else { continue };
+            let at = b.sections.len();
+            b.by_name.insert(s.name.clone(), at);
+            b.sections.push(s.clone());
+            b.created.push(at);
+            b.removed.push(false);
+            b.children.push(Vec::new());
+            b.link_parents(at);
+        }
+        for f in ltx.files.iter() {
+            b.file_id(f);
+        }
+        b
     }
 
-    fn file_id(&mut self, path: &str) -> u32 {
+    /// Cross-layer merging of duplicate sections: the game's composition of its modules, also
+    /// as the editor lays a module over a game's tree.
+    pub fn set_merge(&mut self, on: bool) {
+        self.merge = on;
+    }
+
+    /// A section as it stands now, by its name (any case).
+    #[must_use]
+    pub fn section(&self, name: &str) -> Option<&Section> {
+        self.section_lc(name).and_then(|i| self.sections.get(i))
+    }
+
+    /// Whether a section stands now (any case).
+    #[must_use]
+    pub fn has(&self, name: &str) -> bool {
+        self.section_lc(name).is_some()
+    }
+
+    /// The files read so far; an [`Item`]'s `file` indexes them.
+    #[must_use]
+    pub fn files(&self) -> &[Arc<str>] {
+        &self.files
+    }
+
+    /// The id of a file in the tree, added when it is new: what [`Item::file`] holds.
+    pub fn file_id(&mut self, path: &str) -> u32 {
         if let Some(&id) = self.file_ids.get(path) {
             return id;
         }
@@ -582,17 +745,70 @@ impl Builder {
                     first_line: line,
                 });
             }
-            if let Some(dst) = self.sections.get_mut(i) {
-                merge_section(dst, s);
+            // the section that exists keeps its parents: what the merge wrote is its own
+            let changed = self.sections.get_mut(i).map(|dst| merge_section(dst, s)).unwrap_or_default();
+            for key in changed {
+                self.propagate(i, &key);
             }
             return Ok(());
         }
+        self.add_section(s);
+        Ok(())
+    }
+
+    /// A new section at the end, its parents told of it.
+    fn add_section(&mut self, s: Section) -> usize {
         let i = self.sections.len();
         self.by_name.insert(s.name.clone(), i);
         self.sections.push(s);
         self.created.push(i);
         self.removed.push(false);
-        Ok(())
+        self.children.push(Vec::new());
+        self.link_parents(i);
+        i
+    }
+
+    /// Lists section `i` among the children of each of its parents.
+    fn link_parents(&mut self, i: usize) {
+        let parents: Vec<usize> = self
+            .sections
+            .get(i)
+            .map(|s| s.parents.iter().filter_map(|p| self.find(p)).collect())
+            .unwrap_or_default();
+        for p in parents {
+            if let Some(c) = self.children.get_mut(p)
+                && !c.contains(&i)
+            {
+                c.push(i);
+            }
+        }
+    }
+
+    /// Carries a change of `key` in section `from` to every section that inherits it from there
+    /// (1.2): one without a word of its own on the key takes it from the last of its parents
+    /// that has it, or loses it, and passes the change on.
+    fn propagate(&mut self, from: usize, key: &str) {
+        let mut queue: std::collections::VecDeque<usize> =
+            self.children.get(from).cloned().unwrap_or_default().into();
+        while let Some(c) = queue.pop_front() {
+            if self.removed.get(c).copied().unwrap_or(true) {
+                continue;
+            }
+            let Some(sec) = self.sections.get(c) else { continue };
+            if sec.holds(key) {
+                continue;
+            }
+            let given = sec
+                .parents
+                .iter()
+                .rev()
+                .filter_map(|p| self.find(p))
+                .find_map(|p| self.sections.get(p).and_then(|ps| ps.get(key)).cloned());
+            let changed = self.sections.get_mut(c).is_some_and(|s| s.follow(key, given.as_ref()));
+            if changed {
+                queue.extend(self.children.get(c).cloned().unwrap_or_default());
+            }
+        }
     }
 
     fn load_file(
@@ -645,15 +861,22 @@ impl Builder {
                         };
                         if let Some(ps) = self.sections.get(pi) {
                             for it in &ps.items {
-                                s.insert(it.clone());
+                                s.inherit(it);
                             }
+                            s.parents.push(ps.name.clone());
                         }
                     }
                     current = Some(s);
                 }
                 Ev::Item { key, value, line } => {
                     if let Some(s) = current.as_mut() {
-                        s.insert(Item { key: key.clone(), value: value.clone(), file: fid, line: *line });
+                        s.insert(Item {
+                            key: key.clone(),
+                            value: value.clone(),
+                            file: fid,
+                            line: *line,
+                            own: true,
+                        });
                     }
                 }
                 Ev::BadSection { text, line } => {
@@ -747,33 +970,39 @@ impl Builder {
 
     // -- .ltxp ------------------------------------------------------------------------------
 
-    fn patch_create(&mut self, name: &str, parents: Option<&str>, layer: u16, line: u32) -> bool {
+    /// `[name]` of a patch: a section that exists is patched as it is (its parents stay), a new
+    /// one is made with its parents' lines. False when a parent is missing: the lines that
+    /// follow are skipped.
+    fn patch_create(
+        &mut self,
+        name: &str,
+        parents: Option<&[String]>,
+        layer: u16,
+        fid: u32,
+        line: u32,
+    ) -> bool {
         if self.find(name).is_some() {
             return true;
         }
-        let mut s = Section::new(arc(name), 0, line, layer);
-        if let Some(parents) = parents.filter(|p| !p.is_empty()) {
-            for p in get_items(parents) {
-                let Some(pi) = self.find(p) else {
-                    self.warnings.push(LtxWarning::PatchParentMissing {
-                        section: name.to_owned(),
-                        parent: p.to_owned(),
-                        line,
-                    });
-                    return false;
-                };
-                if let Some(ps) = self.sections.get(pi) {
-                    for it in &ps.items {
-                        s.insert(it.clone());
-                    }
+        let mut s = Section::new(arc(name), fid, line, layer);
+        for p in parents.unwrap_or_default() {
+            let lc = p.to_ascii_lowercase();
+            let Some(pi) = self.find(&lc) else {
+                self.warnings.push(LtxWarning::PatchParentMissing {
+                    section: name.to_owned(),
+                    parent: p.clone(),
+                    line,
+                });
+                return false;
+            };
+            if let Some(ps) = self.sections.get(pi) {
+                for it in &ps.items {
+                    s.inherit(it);
                 }
+                s.parents.push(ps.name.clone());
             }
         }
-        let i = self.sections.len();
-        self.by_name.insert(s.name.clone(), i);
-        self.sections.push(s);
-        self.created.push(i);
-        self.removed.push(false);
+        self.add_section(s);
         true
     }
 
@@ -781,22 +1010,18 @@ impl Builder {
         let Some(i) = self.find(section) else { return };
         let Some(s) = self.sections.get_mut(i) else { return };
         let value = (!value.is_empty()).then(|| arc(value));
-        if let Some(&k) = s.index.get(key) {
-            if let Some(x) = s.items.get_mut(k as usize) {
-                x.value = value;
-                x.file = fid;
-                x.line = line;
-            }
-            if let Some(l) = s.item_layers.as_mut().and_then(|v| v.get_mut(k as usize)) {
-                *l = layer;
-            }
-            return;
+        s.put(Item { key: arc(key), value, file: fid, line, own: true }, layer);
+        self.propagate(i, key);
+    }
+
+    fn patch_delete(&mut self, section: &str, key: &str) {
+        let Some(i) = self.find(section) else { return };
+        let Some(s) = self.sections.get_mut(i) else { return };
+        s.take(key);
+        if !s.dropped.iter().any(|d| &**d == key) {
+            s.dropped.push(arc(key));
         }
-        s.index.insert(arc(key), u32::try_from(s.items.len()).unwrap_or(u32::MAX));
-        s.items.push(Item { key: arc(key), value, file: fid, line });
-        if let Some(v) = s.item_layers.as_mut() {
-            v.push(layer);
-        }
+        self.propagate(i, key);
     }
 
     fn list_items(value: &str) -> Vec<String> {
@@ -808,67 +1033,64 @@ impl Builder {
             .collect()
     }
 
+    /// Whether the tree was read from `configs\<file>` (a [`crate::patch::config_key`]).
+    #[must_use]
+    pub fn reads(&self, file: &str) -> bool {
+        self.files.iter().any(|f| crate::patch::config_key(f) == file)
+    }
+
     /// Applies a `.ltxp` directive file (`apply_patch_file`). `path` names it in the tree;
-    /// `layer` is its module's layer.
-    pub fn patch(&mut self, path: &str, text: &str, layer: u16) {
-        let fid = self.file_id(path);
-        let tr = |s: &str| -> String {
-            s.trim_start_matches([' ', '\t']).trim_end_matches([' ', '\t', '\r']).to_owned()
-        };
+    /// `layer` is its module's layer. The directives `#file` sends to a file are answered, for
+    /// the configs that read it ([`compose_file`]); a file the tree itself was read from takes
+    /// them here too.
+    pub fn patch(&mut self, path: &str, text: &str, layer: u16) -> Vec<FilePatch> {
+        let mut out = Vec::new();
+        for block in crate::patch::parse(text) {
+            match block.file {
+                Some(file) => {
+                    if self.reads(&file) {
+                        self.apply(path, &block.directives, layer);
+                    }
+                    out.push(FilePatch {
+                        file,
+                        source: path.to_owned(),
+                        layer,
+                        directives: block.directives,
+                    });
+                }
+                None => self.apply(path, &block.directives, layer),
+            }
+        }
+        out
+    }
+
+    /// Applies directives as one `.ltxp` block of `source` does: a header picks the section
+    /// the lines after it change.
+    pub fn apply(&mut self, source: &str, directives: &[Directive], layer: u16) {
+        let fid = self.file_id(source);
         let mut section = String::new();
         let mut valid = false;
-        for (n, raw) in text.split('\0').next().unwrap_or("").split('\n').enumerate() {
-            let line = u32::try_from(n + 1).unwrap_or(u32::MAX);
-            let raw = raw.split(';').next().unwrap_or("");
-            let t = tr(raw);
-            if t.is_empty() {
-                continue;
-            }
-            if let Some(body) = t.strip_prefix('[') {
-                let Some(close) = body.find(']') else { continue };
-                let name = tr(body.get(..close).unwrap_or(""));
-                let rest = tr(body.get(close + 1..).unwrap_or(""));
-                let parents = rest.strip_prefix(':').map(tr);
-                if let Some(del) = name.strip_prefix('!') {
-                    let del = tr(del).to_ascii_lowercase();
+        for d in directives {
+            let line = d.line;
+            match &d.op {
+                Op::Section { name, parents } => {
+                    section = name.to_ascii_lowercase();
+                    valid = self.patch_create(&section, parents.as_deref(), layer, fid, line);
+                }
+                Op::DropSection(name) => {
+                    let del = name.to_ascii_lowercase();
                     if let Some(i) = self.by_name.remove(del.as_str())
                         && let Some(r) = self.removed.get_mut(i)
                     {
                         *r = true;
                     }
                     valid = false;
-                    continue;
                 }
-                section = name.to_ascii_lowercase();
-                valid = self.patch_create(&section, parents.as_deref(), layer, line);
-                continue;
-            }
-            if !valid {
-                continue;
-            }
-            if let Some(eq) = t.find('=') {
-                let key = tr(t.get(..eq).unwrap_or(""));
-                let value = tr(t.get(eq + 1..).unwrap_or(""));
-                if let Some(k) = key.strip_prefix('+').map(tr) {
-                    self.list_op(&section, &k, &value, true, layer, fid, line);
-                } else if let Some(k) = key.strip_prefix('-').map(tr) {
-                    self.list_op(&section, &k, &value, false, layer, fid, line);
-                } else if !key.is_empty() {
-                    self.patch_set(&section, &key, &value, layer, fid, line);
-                }
-            } else if let Some(k) = t.strip_prefix('!') {
-                let k = tr(k);
-                if let Some(s) = self.find(&section).and_then(|i| self.sections.get_mut(i))
-                    && let Some(&at) = s.index.get(k.as_str())
-                {
-                    s.items.remove(at as usize);
-                    if let Some(v) = s.item_layers.as_mut()
-                        && (at as usize) < v.len()
-                    {
-                        v.remove(at as usize);
-                    }
-                    s.rebuild_index();
-                }
+                _ if !valid => {}
+                Op::Set { key, value } => self.patch_set(&section, key, value, layer, fid, line),
+                Op::Append { key, value } => self.list_op(&section, key, value, true, layer, fid, line),
+                Op::Remove { key, value } => self.list_op(&section, key, value, false, layer, fid, line),
+                Op::Delete(key) => self.patch_delete(&section, key),
             }
         }
     }
@@ -928,15 +1150,38 @@ impl Builder {
     }
 }
 
-/// `xms_merge_section`: `src` into `dst`, layer against layer.
-fn merge_section(dst: &mut Section, src: Section) {
+/// A config file read with everything it includes, as a script's `ini_file` or an engine reader
+/// opens it, and the `#file` patches of the files it read applied in their order (1.3).
+pub fn compose_file(
+    root: &str,
+    loader: &dyn Loader,
+    dialect: Dialect,
+    patches: &[FilePatch],
+) -> Result<Loaded, LtxError> {
+    let mut b = Builder::new(dialect);
+    b.load(root, loader)?;
+    for p in patches {
+        if b.reads(&p.file) {
+            b.apply(&p.source, &p.directives, p.layer);
+        }
+    }
+    Ok(b.finish())
+}
+
+/// `xms_merge_section`: `src` into `dst`, layer against layer. What it wrote is a line of
+/// `dst`'s own; answers the keys it wrote.
+fn merge_section(dst: &mut Section, src: Section) -> Vec<Arc<str>> {
     let dst_layer = dst.layer;
     let n = dst.items.len();
     let layers = dst.item_layers.get_or_insert_with(|| vec![dst_layer; n]);
+    let mut changed = Vec::new();
     for it in src.items {
+        let it = Item { own: true, ..it };
+        dst.dropped.retain(|d| *d != it.key);
         match dst.index.get(&*it.key) {
             None => {
                 dst.index.insert(it.key.clone(), u32::try_from(dst.items.len()).unwrap_or(u32::MAX));
+                changed.push(it.key.clone());
                 dst.items.push(it);
                 layers.push(src.layer);
             }
@@ -944,9 +1189,11 @@ fn merge_section(dst: &mut Section, src: Section) {
                 let old = layers.get(i as usize).copied().unwrap_or(0);
                 if src.layer >= old {
                     if let Some(x) = dst.items.get_mut(i as usize) {
+                        changed.push(it.key.clone());
                         x.value = it.value;
                         x.file = it.file;
                         x.line = it.line;
+                        x.own = true;
                     }
                     if let Some(l) = layers.get_mut(i as usize) {
                         *l = src.layer;
@@ -956,6 +1203,7 @@ fn merge_section(dst: &mut Section, src: Section) {
         }
     }
     dst.layer = dst.layer.max(src.layer);
+    changed
 }
 
 // -- C conversions -----------------------------------------------------------------------------
@@ -1469,5 +1717,142 @@ mod tests {
         assert_eq!(l.r_string("n", "cost").unwrap(), "3 000");
         let order: Vec<&str> = l.sections_in_file_order().map(|s| &*s.name).collect();
         assert_eq!(order, ["a", "w", "n"]);
+    }
+
+    // -- 1.2: a change reaches what inherits ------------------------------------------------
+
+    const WEAPONS: &str = "[base]\ncost = 1\nweight = 1\n[wpn_ak74]:base\nammo_class = a, b\nscopes = x\n[wpn_ak74_kobra]:wpn_ak74\nscope = kobra\n[wpn_ak74_own]:wpn_ak74\ncost = 50\n[wpn_ak74_m1]:wpn_ak74_kobra\n";
+
+    fn tree(text: &str) -> Builder {
+        let files: FxHashMap<String, ParsedFile> =
+            [("c\\system.ltx".to_owned(), parse_file(text, Dialect::Game))].into_iter().collect();
+        let mut b = Builder::new(Dialect::Game);
+        b.load("c\\system.ltx", &Game(files)).unwrap();
+        b
+    }
+
+    fn val(l: &Ltx, s: &str, k: &str) -> Option<String> {
+        l.section(s).and_then(|x| x.get(k)).map(|it| it.value.as_deref().unwrap_or("").to_owned())
+    }
+
+    #[test]
+    fn a_parents_patch_reaches_its_heirs_and_their_own_lines_hold() {
+        let mut b = tree(WEAPONS);
+        b.patch("p.ltxp", "[base]\ncost = 2\n[wpn_ak74]\n+ammo_class = c\n", 1);
+        let l = b.finish().ltx;
+        // a parent's change reaches a child and a grandchild, three levels down
+        for s in ["wpn_ak74", "wpn_ak74_kobra", "wpn_ak74_m1"] {
+            assert_eq!(val(&l, s, "cost").as_deref(), Some("2"), "{s}");
+            assert_eq!(val(&l, s, "ammo_class").as_deref(), Some("a,b,c"), "{s}");
+        }
+        // a line of the child's own holds
+        assert_eq!(val(&l, "wpn_ak74_own", "cost").as_deref(), Some("50"));
+        assert_eq!(val(&l, "wpn_ak74_own", "ammo_class").as_deref(), Some("a,b,c"));
+        // where the value comes from: the patch, for the child that took it
+        let it = l.section("wpn_ak74_kobra").and_then(|s| s.get("cost")).unwrap();
+        assert!(!it.own);
+        assert_eq!(&*l.files()[it.file as usize], "p.ltxp");
+        assert!(l.section("wpn_ak74_own").and_then(|s| s.get("cost")).unwrap().own);
+        assert_eq!(l.section("wpn_ak74_m1").unwrap().parents, [Arc::<str>::from("wpn_ak74_kobra")]);
+    }
+
+    #[test]
+    fn a_later_parent_wins_and_a_removed_key_falls_back() {
+        let mut b = tree("[a]\nk = a\nonly_a = 1\n[b]\nk = b\n[c]:a, b\n[d]:c\n");
+        b.patch("p.ltxp", "[a]\nk = x\n", 1);
+        let l = b.finish().ltx;
+        // the later parent gives k: a's change does not reach c
+        assert_eq!(val(&l, "c", "k").as_deref(), Some("b"));
+        // a finished tree goes on with what it knew of parents and own lines
+        let mut b = Builder::from_ltx(&l, Dialect::Game);
+        b.patch("q.ltxp", "[b]\nk = y\n", 1);
+        let l = b.finish().ltx;
+        assert_eq!(val(&l, "d", "k").as_deref(), Some("y"));
+        let mut b = Builder::from_ltx(&l, Dialect::Game);
+        b.patch("r.ltxp", "[b]\n!k\n", 1);
+        let l = b.finish().ltx;
+        // b no longer gives k: c and d fall back to a's
+        assert_eq!(val(&l, "c", "k").as_deref(), Some("x"));
+        assert_eq!(val(&l, "d", "k").as_deref(), Some("x"));
+        let mut b = Builder::from_ltx(&l, Dialect::Game);
+        b.patch("s.ltxp", "[a]\n!k\n!only_a\n", 1);
+        let l = b.finish().ltx;
+        // nobody gives it any more: it is gone below
+        assert_eq!(val(&l, "c", "k"), None);
+        assert_eq!(val(&l, "d", "only_a"), None);
+    }
+
+    #[test]
+    fn a_childs_removal_holds_and_an_existing_header_keeps_its_parents() {
+        let mut b = tree(WEAPONS);
+        b.patch(
+            "p.ltxp",
+            "[wpn_ak74_kobra]\n!scopes\n[wpn_ak74_kobra] : nothing_here\n[wpn_ak74]\nscopes = y\n",
+            1,
+        );
+        let l = b.finish().ltx;
+        assert_eq!(val(&l, "wpn_ak74_kobra", "scopes"), None);
+        // the grandchild inherits from the child, which said no
+        assert_eq!(val(&l, "wpn_ak74_m1", "scopes"), None);
+        assert_eq!(val(&l, "wpn_ak74_own", "scopes").as_deref(), Some("y"));
+        assert_eq!(l.section("wpn_ak74_kobra").unwrap().parents, [Arc::<str>::from("wpn_ak74")]);
+    }
+
+    #[test]
+    fn an_overlay_merge_reaches_what_inherits() {
+        let files: FxHashMap<String, ParsedFile> = [
+            ("c\\system.ltx", WEAPONS),
+            ("mod\\over.ltx", "[base]\nweight = 3\n[wpn_ak74_own]\nweight = 9\n"),
+        ]
+        .into_iter()
+        .map(|(p, t)| (p.to_owned(), parse_file(t, Dialect::Game)))
+        .collect();
+        let loader = Game(files);
+        let mut b = Builder::new(Dialect::Game);
+        b.load("c\\system.ltx", &loader).unwrap();
+        b.set_merge(true);
+        b.overlay("mod\\over.ltx", &loader).unwrap();
+        let l = b.finish().ltx;
+        assert_eq!(val(&l, "wpn_ak74_m1", "weight").as_deref(), Some("3"));
+        assert_eq!(val(&l, "wpn_ak74_own", "weight").as_deref(), Some("9"));
+    }
+
+    #[test]
+    fn file_patches_go_to_the_files_that_read_them() {
+        let files: FxHashMap<String, ParsedFile> = [
+            ("configs\\system.ltx", "#include \"items.ltx\"\n"),
+            ("configs\\items.ltx", "[base]\ncost = 1\n"),
+            ("configs\\misc\\trade\\presets.ltx", "[merchant]\nbread = 1\n[cheap]:merchant\n"),
+            (
+                "configs\\misc\\trade\\trade_military.ltx",
+                "#include \"presets.ltx\"\n[supplies_1]\nbread = 1, 1\n",
+            ),
+        ]
+        .into_iter()
+        .map(|(p, t)| (p.to_owned(), parse_file(t, Dialect::Game)))
+        .collect();
+        let loader = Game(files);
+        let mut b = Builder::new(Dialect::Game);
+        b.load("configs\\system.ltx", &loader).unwrap();
+        let text = "[base]\ncost = 2\n#file Misc/Trade/Presets.ltx\n[merchant]\nvodka = 2\n#file items.ltx\n[base]\nweight = 5\n#file\n[base]\n+tags = x\n";
+        let out = b.patch("mod\\p.ltxp", text, 1);
+        let l = b.finish().ltx;
+        // the system tree took its own blocks and the one naming a file it was read from
+        assert_eq!(val(&l, "base", "cost").as_deref(), Some("2"));
+        assert_eq!(val(&l, "base", "weight").as_deref(), Some("5"));
+        assert_eq!(val(&l, "base", "tags").as_deref(), Some("x"));
+        assert!(!l.section_exist("merchant"));
+        // a block of a file of the tree is kept too, for another config that reads that file
+        assert_eq!(
+            out.iter().map(|p| p.file.as_str()).collect::<Vec<_>>(),
+            ["misc\\trade\\presets.ltx", "items.ltx"]
+        );
+        // a trader's file reads the presets by its include: the patch is there, inherited too
+        let trade = compose_file("configs\\misc\\trade\\trade_military.ltx", &loader, Dialect::Game, &out)
+            .unwrap()
+            .ltx;
+        assert_eq!(val(&trade, "merchant", "vodka").as_deref(), Some("2"));
+        assert_eq!(val(&trade, "cheap", "vodka").as_deref(), Some("2"));
+        assert!(trade.section_exist("supplies_1"));
     }
 }

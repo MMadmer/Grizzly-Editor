@@ -6,15 +6,19 @@
 //!   and nothing else. It is the one line model of LTX text: the ini reader's lines and the module
 //!   manifest's ([`Syntax`]) are two ways of reading the same lines.
 //! - [`Ltx`] ([`tree`]) is the engine's view of a config tree: `#include`s followed, sections
-//!   inherited, typed reads. It is what the game's `system.ltx` is read through.
+//!   inherited, typed reads. It is what the game's `system.ltx` is read through. A module's
+//!   composition goes on over a finished tree ([`Builder::from_ltx`]): overlays, `.ltxp`
+//!   patches ([`patch`]) and directives of the editor's own, each change reaching what inherits.
 //!
 //! Both work on `&str`; the caller decodes (UTF-8 for the editor's files, cp1251 for the game's).
 
 pub mod doc;
+pub mod patch;
 pub mod tree;
 
 pub use doc::{LineItem, LtxDoc, Placement, Syntax, quote, unquote};
+pub use patch::{Block, Directive, FilePatch, Op, config_key};
 pub use tree::{
     Builder, Dialect, Include, Item, Loaded, Loader, Ltx, LtxError, LtxWarning, ParsedFile, Section,
-    include_path, parse_file,
+    compose_file, include_path, parse_file,
 };
