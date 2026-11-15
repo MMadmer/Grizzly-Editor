@@ -673,6 +673,55 @@ fn the_bake_publishes_what_ships_the_same_bytes_every_time() {
     assert_eq!(files, anew);
 }
 
+/// The game reads row `n` of a shipped model's `surfaces` as its `n`th child; the author writes
+/// rows by name in any order. What ships has one row per child, in the children's order.
+#[test]
+fn a_model_ships_its_surfaces_in_the_order_of_the_baked_model_s_children() {
+    let d = Dir::new("surfaces");
+    d.put("mod.ltx", "[module]\nid = bunker\n");
+    // the rows the other way round than the parts use them, one with a key the bake does not read
+    let door = "return {\n  mesh = 1,\n  kind = \"dynamic\",\n  name = \"props\\\\door\",\n  surfaces = {\n    { name = \"frame\", texture = \"wood\\\\frame\", material = \"materials\\\\wood\" },\n    { name = \"leaf\", texture = \"wood\\\\leaf\" },\n  },\n  parts = {\n    { shape = \"box\", surface = \"leaf\" },\n    { shape = \"box\", pos = { 2, 0, 0 }, surface = \"frame\" },\n  },\n}\n";
+    d.put("m/door.meshasset", door);
+    // one surface, said as it is baked: the author's file ships as it is
+    let plank = "-- a plank\nreturn { mesh = 1, kind = \"dynamic\", name = \"props\\\\plank\", surfaces = { { name = \"wood\", texture = \"wood\\\\plank\", shader = \"default\" } }, parts = { { shape = \"box\", surface = \"wood\" } } }\n";
+    d.put("m/plank.meshasset", plank);
+    let index = index::scan(&d.0);
+    let mut got: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut sink = |rel: &str, p: Payload| -> Result<(), String> {
+        let bytes = match p {
+            Payload::Bytes(b) => b,
+            Payload::File(f) => std::fs::read(f).map_err(|e| e.to_string())?,
+        };
+        got.push((rel.to_owned(), bytes));
+        Ok(())
+    };
+    let done = publish(&d.0, &index, &mut sink);
+    assert!(done.problems.is_empty(), "{:?}", done.problems);
+    let file =
+        |name: &str| &got.iter().find(|(n, _)| n.ends_with(name)).unwrap_or_else(|| panic!("{name}")).1;
+    let children: Vec<String> = gz_fmt_ogf::Visual::read(file("door.ogf"))
+        .unwrap()
+        .children
+        .iter()
+        .map(|c| c.texture.as_ref().map(|(t, _)| t.to_string()).unwrap_or_default())
+        .collect();
+    assert_eq!(children.len(), 2, "{children:?}");
+    let text = String::from_utf8(file("door.meshasset").clone()).unwrap();
+    let shipped = gz_luadata::parse(&text).unwrap();
+    let rows = shipped.get("surfaces").unwrap().arr();
+    let said: Vec<&str> =
+        rows.iter().map(|r| r.get("texture").and_then(gz_luadata::Value::as_str).unwrap()).collect();
+    assert_eq!(said, children.iter().map(String::as_str).collect::<Vec<_>>(), "{text}");
+    // each row is the author's of that surface, with what the bake does not read kept
+    let frame =
+        rows.iter().find(|r| r.get("name").and_then(gz_luadata::Value::as_str) == Some("frame")).unwrap();
+    assert_eq!(frame.get("material").and_then(gz_luadata::Value::as_str), Some("materials\\wood"));
+    assert!(rows.iter().all(|r| r.get("shader").and_then(gz_luadata::Value::as_str) == Some("default")));
+    // the shipped text is an asset the editor reads back
+    assert!(kind::load(MediaKind::Model, "m/door.meshasset", &text).is_ok());
+    assert_eq!(file("plank.meshasset").as_slice(), plank.as_bytes());
+}
+
 // ---- the import ------------------------------------------------------------------------------
 
 #[test]

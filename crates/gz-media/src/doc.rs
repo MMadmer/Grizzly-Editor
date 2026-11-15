@@ -63,8 +63,11 @@ pub fn reference(kind: MediaKind) -> String {
 or an X-Ray SDK `.object` - or with its geometry written in it (`parts`). A scene object refers to it by its project \
 path: `ref = \"models/bunker/wall_long.meshasset\"` (any slashes, any case); any other reference is a library \
 object as before. A static model is compiled into the level by the level build; a dynamic one is published as \
-`meshes\\<name>.ogf` (and `.omf` with its motions) beside a copy of this text, which the game reads over the \
-model: each surface's texture and shader, each bone's physics, the user data, each motion's speed and flags.\n\n\
+`meshes\\<name>.ogf` (and `.omf` with its motions) beside this text, which the game reads over the \
+model: each surface's texture and shader, each bone's physics, the user data, each motion's speed and flags. \
+The game reads the rows of `surfaces` by position - row n is the nth part the model is drawn in -, so the \
+text that ships has one row for each of them, in their order; here a row is found by its `name`, and rows may \
+be left out or stand in any order.\n\n\
 glTF and OBJ are right-handed and the game is left-handed: Z is negated as the source is read and every \
 triangle turned to face the same way; hard edges of the source's normals are kept; a skin becomes bones and \
 weights (the four heaviest), its clips motions sampled 30 times a second.\n\n",

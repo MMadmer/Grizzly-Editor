@@ -280,8 +280,10 @@ A change of plan is a change of its document first.
   `default`.
 - **The description is text and ships; the data is binary and is baked.** The module build publishes every asset
   that ships (a texture, a sound, a dynamic model): the data baked into the game's own long-lived containers
-  (`.dds` and the bump pair, `.ogg`, `.ogf` / `.omf`) under the game's place for its `name`, with a copy of the
-  asset's text beside it, cached in the project's `temp\media` and deterministic. An asset where it lies and its
+  (`.dds` and the bump pair, `.ogg`, `.ogf` / `.omf`) under the game's place for its `name`, with the asset's
+  text beside it (a model's with `surfaces` written one row per child of the baked model, in the children's
+  order: the game reads them by position, the author writes them by name), cached in the project's
+  `temp\media` and deterministic. An asset where it lies and its
   source are sources: never shipped as they are. **The game reads the description** over the data (a texture's
   in place of a `.thm`, a sound's parameters, a model's surfaces, bones, user data and its own motions' flags):
   what a key means lives in the game, and a key the game reads means the same in the editor. A static model is

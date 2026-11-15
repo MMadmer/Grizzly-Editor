@@ -129,13 +129,97 @@ fn cached(
     Ok(path)
 }
 
-/// The baked files of one asset: `(path under the module, file of the cache)`.
-fn bake(root: &Path, e: &Entry, hits: &mut usize) -> Result<Vec<(String, PathBuf)>, String> {
+/// What a bake made of one asset.
+#[derive(Default)]
+struct Baked {
+    /// `(path under the module, file of the cache)`.
+    files: Vec<(String, PathBuf)>,
+    /// The asset's text as the module ships it, when that is not the author's file as it is.
+    text: Option<Vec<u8>>,
+}
+
+/// A model's text as the module ships it. The game reads row `n` of `surfaces` as the `n`th
+/// child of the model, and the author writes rows by name, any of them, in any order: the
+/// shipped text has one row per child of the baked model, in the children's order, each the
+/// author's row of that surface with the texture and the shader the model was baked with. The
+/// author's file as it is when its rows already say that.
+fn shipped_model_text(text: &[u8], ogf: &[u8], m: &resolve::Model) -> Result<Option<Vec<u8>>, String> {
+    use gz_luadata::{Table, Value};
+    let visual = gz_fmt_ogf::Visual::read(ogf).map_err(|e| e.to_string())?;
+    let children: Vec<(String, String)> = if visual.children.is_empty() {
+        visual.texture.iter().map(|(t, s)| (t.to_string(), s.to_string())).collect()
+    } else {
+        visual
+            .children
+            .iter()
+            .map(|c| c.texture.as_ref().map(|(t, s)| (t.to_string(), s.to_string())).unwrap_or_default())
+            .collect()
+    };
+    let source = std::str::from_utf8(text).map_err(|e| e.to_string())?;
+    let value = gz_luadata::parse(source).map_err(|e| e.message)?;
+    let Some(top) = value.as_table() else { return Ok(None) };
+    let said: Vec<&Table> =
+        top.get("surfaces").map(|v| v.arr().iter().filter_map(Value::as_table).collect()).unwrap_or_default();
+    let row_of = |name: &str| {
+        said.iter()
+            .find(|r| r.get("name").and_then(Value::as_str).is_some_and(|n| n.eq_ignore_ascii_case(name)))
+    };
+    let mut rows: Vec<Value> = Vec::with_capacity(children.len());
+    for (texture, shader) in &children {
+        // the asset's surface this child was made of: the first one baked with this look
+        let name = m
+            .object
+            .surfaces
+            .iter()
+            .find(|s| s.texture.eq_ignore_ascii_case(texture) && s.shader.eq_ignore_ascii_case(shader))
+            .map_or("", |s| s.name.as_str());
+        let mut row = Table::new();
+        row.put("name", name);
+        row.put("texture", texture.as_str());
+        row.put("shader", shader.as_str());
+        if let Some(theirs) = row_of(name) {
+            for (k, v) in &theirs.fields {
+                if !matches!(k.as_str(), "name" | "texture" | "shader") {
+                    row.put(k, v.clone());
+                }
+            }
+        }
+        rows.push(Value::Table(row));
+    }
+    let new = Value::Table(Table { arr: rows, fields: Vec::new() });
+    // the author's rows already are the children's, in their order: the file as it is
+    let same = said.len() == children.len()
+        && said.iter().zip(&children).all(|(r, (texture, shader))| {
+            let text = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or_default();
+            text("texture").eq_ignore_ascii_case(texture) && text("shader").eq_ignore_ascii_case(shader)
+        });
+    if same {
+        return Ok(None);
+    }
+    let mut out = Table::new();
+    let mut put = false;
+    for (k, v) in &top.fields {
+        if k == "surfaces" {
+            out.put(k, new.clone());
+            put = true;
+        } else {
+            out.put(k, v.clone());
+        }
+    }
+    if !put {
+        out.put("surfaces", new);
+    }
+    Ok(Some(gz_luadata::write_asset("", &out).into_bytes()))
+}
+
+/// The baked files of one asset and, for a model, the text it ships with.
+fn bake(root: &Path, e: &Entry, hits: &mut usize) -> Result<Baked, String> {
     let dir = cache_dir(root);
     let h = bake_stamp(root, e);
     let base = format!("{}\\{}", folder(e.kind), e.name);
     let rel = e.path.as_str();
     let mut out = Vec::new();
+    let mut shipped = None;
     match e.kind {
         MediaKind::Texture => {
             let t = resolve::texture(root, rel, &e.name).map_err(|f| f.to_string())?;
@@ -196,12 +280,25 @@ fn bake(root: &Path, e: &Entry, hits: &mut usize) -> Result<Vec<(String, PathBuf
         }
         MediaKind::Model => {
             let m = resolve::model(root, rel).map_err(|f| f.to_string())?;
+            // what its surfaces were resolved to is part of the model: a surface without a row
+            // takes its texture from a texture asset's name and the module's id, which no file
+            // of the stamp says
+            let h = m.object.surfaces.iter().fold(h, |h, s| {
+                [s.name.as_str(), s.texture.as_str(), s.shader.as_str()]
+                    .iter()
+                    .fold(fnv(h, b"\0"), |h, x| fnv(fnv(h, x.to_lowercase().as_bytes()), b"|"))
+            });
             let opts = ExportOptions { source_file: e.name.as_str().into(), ..ExportOptions::default() };
             let ogf = cached(&dir, &format!("{h:016x}.ogf"), hits, || {
                 gz_fmt_ogf::export_skeleton(&m.object, &opts, 4)
                     .map(|x| x.bytes)
                     .map_err(|err| err.to_string())
             })?;
+            let baked = std::fs::read(&ogf)
+                .map_err(|err| format!("{}: {}", ogf.display(), gz_base::io_reason(&err)))?;
+            let text = std::fs::read(e.path.to_fs(root))
+                .map_err(|err| format!("{}: {}", e.path, gz_base::io_reason(&err)))?;
+            shipped = shipped_model_text(&text, &baked, &m)?;
             out.push((format!("{base}.ogf"), ogf));
             if !m.object.motions.is_empty() {
                 let omf = cached(&dir, &format!("{h:016x}.omf"), hits, || {
@@ -211,7 +308,7 @@ fn bake(root: &Path, e: &Entry, hits: &mut usize) -> Result<Vec<(String, PathBuf
             }
         }
     }
-    Ok(out)
+    Ok(Baked { files: out, text: shipped })
 }
 
 /// Publishes every asset of the index that ships into `sink`: its baked files from the cache,
@@ -227,18 +324,21 @@ pub fn publish(root: &Path, index: &Index, sink: &mut dyn Sink) -> Published {
                 continue;
             }
         };
-        let text = match std::fs::read(e.path.to_fs(root)) {
-            Ok(t) => t,
-            Err(err) => {
-                done.problems.push(format!("{}: {}", e.path, gz_base::io_reason(&err)));
-                continue;
-            }
+        let text = match baked.text {
+            Some(t) => t,
+            None => match std::fs::read(e.path.to_fs(root)) {
+                Ok(t) => t,
+                Err(err) => {
+                    done.problems.push(format!("{}: {}", e.path, gz_base::io_reason(&err)));
+                    continue;
+                }
+            },
         };
         let mut put = |rel: String, payload: Payload, done: &mut Published| match sink.put(&rel, payload) {
             Ok(()) => done.files.push(rel),
             Err(why) => done.problems.push(format!("{rel}: {why}")),
         };
-        for (rel, file) in baked {
+        for (rel, file) in baked.files {
             put(rel, Payload::File(file), &mut done);
         }
         put(format!("{}\\{}{}", folder(e.kind), e.name, e.kind.extension()), Payload::Bytes(text), &mut done);
