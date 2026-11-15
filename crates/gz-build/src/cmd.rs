@@ -56,9 +56,9 @@ async fn mod_info(ed: Arc<Editor>, p: InfoParams, _origin: Origin) -> Reply {
     let snap = service.snapshot();
     let rules = snap.manifest().map(|m| m.exclude.clone()).unwrap_or_default();
     // what the media assets publish, without a bake: the paths are known, the sizes are not
-    let plan = match (BuildChecks::of(&ed).media(), ed.project()) {
-        (Some(media), Ok(session)) => media.plan(ed.clone(), session).await,
-        _ => MediaPlan::default(),
+    let plan = match ed.project() {
+        Ok(session) => BuildChecks::of(&ed).plan(ed.clone(), session).await,
+        Err(_) => MediaPlan::default(),
     };
     let tree = project.tree.snapshot();
     let exec = ed.exec.clone();

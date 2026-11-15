@@ -16,6 +16,8 @@ pub enum AssetKind {
     Character,
     CharacterTemplate,
     Pda,
+    /// An inventory item, new or a change of one that exists (`.itemasset`).
+    Item,
     /// A model asset (`.meshasset`), a texture asset (`.texasset`), a sound asset (`.sndasset`):
     /// the [`MediaKind`]s.
     Model,
@@ -36,6 +38,7 @@ impl AssetKind {
             AssetKind::Character => "character",
             AssetKind::CharacterTemplate => "character template",
             AssetKind::Pda => "PDA interface",
+            AssetKind::Item => "item",
             AssetKind::Model => MediaKind::Model.name(),
             AssetKind::Texture => MediaKind::Texture.name(),
             AssetKind::Sound => MediaKind::Sound.name(),
@@ -51,6 +54,7 @@ impl AssetKind {
             AssetKind::Behaviour => ".behasset",
             AssetKind::Character | AssetKind::CharacterTemplate => ".npcasset",
             AssetKind::Pda => ".pdaasset",
+            AssetKind::Item => ".itemasset",
             AssetKind::Model | AssetKind::Texture | AssetKind::Sound => {
                 self.media().map_or("", MediaKind::extension)
             }
@@ -66,6 +70,7 @@ impl AssetKind {
             AssetKind::Behaviour => "beh",
             AssetKind::Character | AssetKind::CharacterTemplate => "npc",
             AssetKind::Pda => "pda",
+            AssetKind::Item => "item",
             AssetKind::Model | AssetKind::Texture | AssetKind::Sound => {
                 self.media().map_or("", MediaKind::header)
             }
@@ -77,7 +82,7 @@ impl AssetKind {
     #[must_use]
     pub fn version(self) -> u32 {
         match self {
-            AssetKind::Quest | AssetKind::Behaviour | AssetKind::Pda => 1,
+            AssetKind::Quest | AssetKind::Behaviour | AssetKind::Pda | AssetKind::Item => 1,
             AssetKind::Character | AssetKind::CharacterTemplate => 1,
             AssetKind::Model | AssetKind::Texture | AssetKind::Sound => {
                 self.media().map_or(1, MediaKind::version)
@@ -104,11 +109,12 @@ impl AssetKind {
     }
 
     /// Every kind with a file of its own, one per extension.
-    pub const FILES: [AssetKind; 7] = [
+    pub const FILES: [AssetKind; 8] = [
         AssetKind::Quest,
         AssetKind::Behaviour,
         AssetKind::Character,
         AssetKind::Pda,
+        AssetKind::Item,
         AssetKind::Model,
         AssetKind::Texture,
         AssetKind::Sound,
@@ -185,8 +191,8 @@ impl MediaKind {
 }
 
 /// The extensions of the editor's own kinds: the one list every caller asks.
-pub const OWN_EXTENSIONS: [&str; 7] =
-    [".nqasset", ".behasset", ".npcasset", ".pdaasset", ".meshasset", ".texasset", ".sndasset"];
+pub const OWN_EXTENSIONS: [&str; 8] =
+    [".nqasset", ".behasset", ".npcasset", ".pdaasset", ".itemasset", ".meshasset", ".texasset", ".sndasset"];
 
 /// The own extension `name` ends in, as written (a slice of `name`, the dot included). A dot in
 /// a folder of the path is no extension, and an extension alone is no name.
@@ -221,6 +227,8 @@ pub fn kind_of(name: &str, head: Option<&[u8]>) -> Option<AssetKind> {
         Some(AssetKind::Behaviour)
     } else if is(".pdaasset") {
         Some(AssetKind::Pda)
+    } else if is(".itemasset") {
+        Some(AssetKind::Item)
     } else if let Some(media) = MediaKind::of_file(name) {
         Some(media.into())
     } else if is(crate::project::EXTENSION) {
@@ -289,6 +297,7 @@ mod tests {
         assert_eq!(own_extension("walls/Brick.TexAsset"), Some(".TexAsset"));
         assert_eq!(own_extension("wall.meshasset"), Some(".meshasset"));
         assert_eq!(own_extension("hum.sndasset"), Some(".sndasset"));
+        assert_eq!(own_extension("items/Sil.ItemAsset"), Some(".ItemAsset"));
     }
 
     #[test]
@@ -319,6 +328,7 @@ mod tests {
         assert_eq!(kind_of("q.nqasset", None), Some(AssetKind::Quest));
         assert_eq!(kind_of("b.behasset", None), Some(AssetKind::Behaviour));
         assert_eq!(kind_of("p.pdaasset", None), Some(AssetKind::Pda));
+        assert_eq!(kind_of("w.itemasset", None), Some(AssetKind::Item));
         assert_eq!(kind_of("c.npcasset", None), Some(AssetKind::Character));
         assert_eq!(
             kind_of("c.npcasset", Some(b"return {\n  abstract = true,\n")),

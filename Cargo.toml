@@ -57,6 +57,7 @@ gz-project = { path = "crates/gz-project" }
 gz-mod = { path = "crates/gz-mod" }
 gz-nq = { path = "crates/gz-nq" }
 gz-characters = { path = "crates/gz-characters" }
+gz-items = { path = "crates/gz-items" }
 gz-pda = { path = "crates/gz-pda" }
 gz-media = { path = "crates/gz-media" }
 gz-screens = { path = "crates/gz-screens" }

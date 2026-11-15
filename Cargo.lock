@@ -1249,6 +1249,7 @@ dependencies = [
  "gz-export-level",
  "gz-game",
  "gz-ico",
+ "gz-items",
  "gz-levelbuild",
  "gz-log",
  "gz-mcp",
@@ -1688,6 +1689,39 @@ name = "gz-ico"
 version = "0.7.0"
 dependencies = [
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "gz-items"
+version = "0.7.0"
+dependencies = [
+ "futures",
+ "gz-asset",
+ "gz-base",
+ "gz-build",
+ "gz-characters",
+ "gz-editor",
+ "gz-fmt-ogf",
+ "gz-fmt-tex",
+ "gz-fmt-xml",
+ "gz-fmt-xr",
+ "gz-game",
+ "gz-ltx",
+ "gz-luadata",
+ "gz-media",
+ "gz-mod",
+ "gz-nq",
+ "gz-project",
+ "gz-query",
+ "gz-task",
+ "gz-vfs",
+ "parking_lot 0.13.0",
+ "rayon",
+ "rustc-hash 2.1.3",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

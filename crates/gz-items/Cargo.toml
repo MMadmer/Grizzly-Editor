@@ -1,0 +1,42 @@
+[package]
+name = "gz-items"
+description = "The module's inventory items: the .itemasset model, what an item resolves to in the game's configs, the positioned check, the item catalog, the icon atlas the build bakes and the item kind."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-task.workspace = true
+gz-query.workspace = true
+gz-editor.workspace = true
+gz-luadata.workspace = true
+gz-ltx.workspace = true
+gz-vfs.workspace = true
+gz-game.workspace = true
+gz-project.workspace = true
+gz-mod.workspace = true
+gz-build.workspace = true
+gz-asset.workspace = true
+gz-nq.workspace = true
+gz-characters.workspace = true
+gz-media.workspace = true
+gz-fmt-tex.workspace = true
+gz-fmt-xml.workspace = true
+gz-fmt-xr.workspace = true
+gz-fmt-ogf.workspace = true
+futures.workspace = true
+parking_lot.workspace = true
+rayon.workspace = true
+rustc-hash.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -51,6 +51,14 @@ pub struct MediaPlan {
     pub published: Vec<String>,
 }
 
+impl MediaPlan {
+    /// Another publisher's plan added to this one.
+    pub fn join(&mut self, other: MediaPlan) {
+        self.sources.extend(other.sources);
+        self.published.extend(other.published);
+    }
+}
+
 /// What the media assets publish into a build.
 #[derive(Clone, Debug, Default)]
 pub struct Publication {
@@ -63,8 +71,19 @@ pub struct Publication {
     pub warnings: Vec<String>,
 }
 
-/// The media assets' half of a build (`docs/ASSETS.md` section 6): the area that knows them
-/// registers it, the build asks it before it lists the files.
+impl Publication {
+    /// Another publisher's files added to these.
+    pub fn join(&mut self, other: Publication) {
+        self.sources.extend(other.sources);
+        self.files.extend(other.files);
+        self.errors.extend(other.errors);
+        self.warnings.extend(other.warnings);
+    }
+}
+
+/// The half of a build an area that bakes its assets owns (`docs/ASSETS.md` section 6): the
+/// media assets, the items' icon atlas. The area registers it, the build asks every one before
+/// it lists the files.
 pub trait MediaPublisher: Send + Sync {
     /// What the build would publish, read from the assets' files alone.
     fn plan(&self, editor: Arc<Editor>, session: Arc<ProjectSession>) -> BoxFuture<'static, MediaPlan>;
@@ -78,7 +97,7 @@ pub trait MediaPublisher: Send + Sync {
 pub struct BuildChecks {
     checks: RwLock<Vec<Arc<dyn BuildCheck>>>,
     bake: RwLock<Option<BakeHook>>,
-    media: RwLock<Option<Arc<dyn MediaPublisher>>>,
+    publishers: RwLock<Vec<Arc<dyn MediaPublisher>>>,
 }
 
 impl BuildChecks {
@@ -112,13 +131,28 @@ impl BuildChecks {
         self.bake.read().clone()
     }
 
+    /// The media assets' publisher, asked first.
     pub fn set_media(&self, media: Arc<dyn MediaPublisher>) {
-        *self.media.write() = Some(media);
+        self.publishers.write().insert(0, media);
+    }
+
+    /// Another area's publisher, asked after the ones before it.
+    pub fn add_publisher(&self, publisher: Arc<dyn MediaPublisher>) {
+        self.publishers.write().push(publisher);
     }
 
     #[must_use]
-    pub fn media(&self) -> Option<Arc<dyn MediaPublisher>> {
-        self.media.read().clone()
+    pub fn publishers(&self) -> Vec<Arc<dyn MediaPublisher>> {
+        self.publishers.read().clone()
+    }
+
+    /// What every publisher would publish, without a bake.
+    pub async fn plan(&self, editor: Arc<Editor>, session: Arc<ProjectSession>) -> MediaPlan {
+        let mut out = MediaPlan::default();
+        for p in self.publishers() {
+            out.join(p.plan(editor.clone(), session.clone()).await);
+        }
+        out
     }
 }
 
@@ -128,7 +162,7 @@ impl BuildChecks {
 pub fn problem_line(p: &Problem) -> String {
     let b = p.code.as_bytes();
     let coded = b.len() == 4
-        && b.first().is_some_and(|c| matches!(c, b'E' | b'W' | b'N'))
+        && b.first().is_some_and(|c| matches!(c, b'E' | b'W' | b'N' | b'I'))
         && b.iter().skip(1).all(u8::is_ascii_digit);
     if coded { format!("{} {}", p.code, p.message) } else { p.message.clone() }
 }

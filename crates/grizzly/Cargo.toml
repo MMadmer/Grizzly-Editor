@@ -39,6 +39,7 @@ gz-catalog.workspace = true
 gz-pda.workspace = true
 gz-screens.workspace = true
 gz-characters.workspace = true
+gz-items.workspace = true
 gz-media.workspace = true
 gz-world.workspace = true
 gz-scene.workspace = true

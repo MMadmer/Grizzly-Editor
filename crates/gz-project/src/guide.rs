@@ -17,11 +17,12 @@ use crate::rules;
 pub const FILE: &str = "AGENTS.md";
 
 /// The kinds the page counts: extension, what the author calls several.
-const KINDS: [(&str, &str); 10] = [
+const KINDS: [(&str, &str); 11] = [
     (".nqasset", "Quests"),
     (".behasset", "Behaviour graphs"),
     (".npcasset", "Characters"),
     (".pdaasset", "PDA interfaces"),
+    (".itemasset", "Items"),
     (".scene", "Scenes"),
     (".level", "Scenes in the X-Ray SDK format"),
     (".group", "Object groups"),
@@ -138,6 +139,8 @@ pub fn text(root: &Path, file_name: &str, id: &str) -> String {
         "The first key names the kind and its version (`nq = 1`, `npc = 1`, `pda = 1`, `mesh = 1`); keys the editor",
     );
     line("does not know are kept, comments survive every save, things are named by `id`, never by position.");
+    line("An inventory item - a new one or a change of a game item - is an `.itemasset` (`item = 1`):");
+    line("`Grizzly-Cmd.exe reference item` lists its keys and the linked game's catalog of item keys.");
     line("");
     line(
         "`mod.ltx` is LTX, not Lua: `Grizzly-Cmd.exe reference manifest` lists every section and key. A module",

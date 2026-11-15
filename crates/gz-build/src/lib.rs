@@ -8,9 +8,10 @@
 //! - [`check`] - [`BuildCheck`]: what an area that knows quests, characters, the PDA or the
 //!   screens registers in [`BuildChecks`] (`editor.services`); the build runs them in parallel
 //!   after the manifest's own check, and an `Error` stops it. [`BuildChecks::set_bake`] is the
-//!   scene's bake that runs first; [`BuildChecks::set_media`] the media assets' publisher
-//!   ([`MediaPublisher`]): what they are made of never ships where it lies, what they bake is
-//!   added to the walk ([`BuildWalk::publish`]).
+//!   scene's bake that runs first; [`BuildChecks::set_media`] the media assets' publisher and
+//!   [`BuildChecks::add_publisher`] any other area's ([`MediaPublisher`]: the items' icon atlas):
+//!   what they are made of never ships where it lies, what they bake is added to the walk
+//!   ([`BuildWalk::publish`]).
 //! - [`target`] - where a build goes and the refusals made before a folder of it is created:
 //!   inside the game's gamedata, a link, a target that is / holds / sits in the project.
 //! - [`install`] - the clean build written beside the last one in `<target>\modules\.new\<id>`

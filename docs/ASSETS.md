@@ -5,9 +5,10 @@ tools - no editor, no MCP. This document is the contract of that: the one syntax
 how the editor reads, writes and follows the files, and what a project is. It is changed here first.
 
 The per-kind references: `docs/nq/NQ_FORMAT.md` (quests and behaviour graphs), `docs/pda/PDA_FORMAT.md` (PDA
-interfaces), `docs/assets/CHARACTER.md`, `docs/assets/SCENE.md`, `docs/assets/PROJECT.md`, `docs/assets/MODEL.md`,
-`docs/assets/TEXTURE.md`, `docs/assets/SOUND.md`. `asset.reference`
-prints any of them together with what only the linked game knows (the node kinds, the pickers' lists).
+interfaces), `docs/assets/CHARACTER.md`, `docs/assets/ITEM.md`, `docs/assets/SCENE.md`, `docs/assets/PROJECT.md`,
+`docs/assets/MODEL.md`, `docs/assets/TEXTURE.md`, `docs/assets/SOUND.md`. `asset.reference`
+prints any of them together with what only the linked game knows (the node kinds, the pickers' lists, the item
+catalog).
 
 ## 1. The syntax: Lua data
 
@@ -116,6 +117,7 @@ once. MCP is for what files cannot do - looking at the editor, driving its UI, t
 | Behaviour graph | `*.behasset` | `beh` | the game, the editor | `docs/nq/NQ_FORMAT.md` section 10 |
 | Character | `*.npcasset` | `npc` | the game, the editor | `docs/assets/CHARACTER.md` |
 | PDA interface | `*.pdaasset` | `pda` | the game, the editor | `docs/pda/PDA_FORMAT.md` |
+| Item | `*.itemasset` | `item` | the game, the editor | `docs/assets/ITEM.md` |
 | Scene | `*.scene` + its folder | `scene` | the editor | `docs/assets/SCENE.md` |
 | Object group | `*.group` | `group` | the editor | `docs/assets/SCENE.md` |
 | Model | `*.meshasset` | `mesh` | the game (a dynamic model), the editor | `docs/assets/MODEL.md` |

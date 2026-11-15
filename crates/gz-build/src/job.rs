@@ -421,19 +421,22 @@ async fn build(
     out.path.clone_from(&dst);
     still_open(editor, session, ctx)?;
 
-    // the media assets bake into the project's scratch, which no walk enters
-    let publication = match checks.media() {
-        Some(media) => {
-            feeder.stage(0, "Publishing the media assets");
-            let p = media.publish(editor.clone(), session.clone()).await;
-            warnings.extend(p.warnings.iter().cloned());
-            if !p.errors.is_empty() {
-                return Err(format!("The media assets could not be published:\n{}", p.errors.join("\n")));
-            }
+    // the media assets and the items' icons bake into the project's scratch, which no walk enters
+    let publishers = checks.publishers();
+    let publication = if publishers.is_empty() {
+        None
+    } else {
+        feeder.stage(0, "Publishing the media assets");
+        let mut all = crate::check::Publication::default();
+        for publisher in publishers {
+            all.join(publisher.publish(editor.clone(), session.clone()).await);
             still_open(editor, session, ctx)?;
-            Some(p)
         }
-        None => None,
+        warnings.extend(all.warnings.iter().cloned());
+        if !all.errors.is_empty() {
+            return Err(format!("The media assets could not be published:\n{}", all.errors.join("\n")));
+        }
+        Some(all)
     };
 
     feeder.stage(0, "Listing the files");
@@ -558,10 +561,7 @@ async fn check_module(
     // the files the project holds now: what the areas check
     let tree = project.tree.snapshot();
     let scope = if flat { WalkScope::Gamedata } else { WalkScope::Module };
-    let sources = match checks.media() {
-        Some(media) => media.plan(editor.clone(), session.clone()).await.sources,
-        None => Default::default(),
-    };
+    let sources = checks.plan(editor.clone(), session.clone()).await.sources;
     let (rules, walk_tree, exec) = (m.exclude.clone(), tree, editor.exec.clone());
     let walk = Arc::new(
         editor.exec.io(move || BuildWalk::scan_with(&walk_tree, &rules, scope, &exec, &sources)).await,

@@ -77,6 +77,7 @@ const ALLOWED: &[&str] = &[
     "texasset",
     "sndasset",
     "meshasset",
+    "itemasset",
     "xspawn",
     "xcform",
     "cut",
@@ -580,11 +581,12 @@ mod tests {
         assert!(path_allowed("gamedata/configs/mod.ltx").is_ok());
         assert!(path_allowed("README").is_ok());
         assert!(path_allowed("Textures/A.DDS").is_ok());
-        // the media descriptions and the level's cuts, AI edits and AI map, as the game's list has them
+        // the media descriptions, the items and the level's cuts, AI edits and AI map, as the game's list has them
         for p in [
             "gamedata/textures/od/wall.texasset",
             "gamedata/sounds/od/hum.SndAsset",
             "gamedata/meshes/od/crate.meshasset",
+            "items/wpn_sil_diy.ItemAsset",
             "levels/l01_escape/overlay.cut",
             "levels/l01_escape/overlay.aiedit",
             "levels/l01_escape/overlay.aimap",

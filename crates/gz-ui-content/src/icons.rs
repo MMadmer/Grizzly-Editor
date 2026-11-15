@@ -13,6 +13,7 @@ pub fn own_icon(kind: AssetKind) -> Icon {
         AssetKind::Character => Icon::Character,
         AssetKind::CharacterTemplate => Icon::CharacterTemplate,
         AssetKind::Pda => Icon::PdaInterface,
+        AssetKind::Item => Icon::Item,
         AssetKind::Model => Icon::ModelAsset,
         AssetKind::Texture => Icon::TextureAsset,
         AssetKind::Sound => Icon::SoundAsset,

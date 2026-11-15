@@ -35,6 +35,7 @@ gamedata/anims/
 gamedata/configs/*
 !gamedata/configs/nq/
 !gamedata/configs/pda/
+!gamedata/configs/item_catalog.ltx
 gamedata/levels/
 gamedata/meshes/
 gamedata/scripts/
