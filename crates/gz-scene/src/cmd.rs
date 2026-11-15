@@ -441,7 +441,21 @@ async fn scene_save(ed: Arc<Editor>, p: SaveParams, _o: Origin) -> Reply {
         }
     }
     let written = service::save_scene(&ed, &svc, file.clone()).await.map_err(CmdError::io)?;
-    Ok(json!({ "file": wire(&svc.root, &file), "written": written }))
+    let mut out = json!({ "file": wire(&svc.root, &file), "written": written });
+    // a part file that does not read was left as it is: the caller must know its objects' changes
+    // are not on the disk
+    let skipped: Vec<&'static str> = svc.files().map(|f| f.broken.clone()).unwrap_or_default();
+    if let (false, Value::Object(m)) = (skipped.is_empty(), &mut out) {
+        m.insert("skipped".into(), json!(skipped));
+        m.insert(
+            "warning".into(),
+            json!(format!(
+                "{} of the scene does not read and was left as it is: what the scene changed of its objects is not written. Fix the file (asset.check names the line) and save again.",
+                skipped.join(", ")
+            )),
+        );
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
