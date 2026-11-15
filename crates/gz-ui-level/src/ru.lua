@@ -771,7 +771,7 @@ return {
   { "How far it reaches along its own x and z, in metres; pos is its centre.", "Насколько он простирается по своим осям x и z, в метрах; pos — его центр." },
   { "Cell", "Шаг сетки" },
   { "The step of the height grid, 0.5 to 4 metres.", "Шаг сетки высот, от 0,5 до 4 метров." },
-  { "Where every point starts: the level's ground under it (every static object that is not added by the module), or flat at a height over pos.", "Откуда начинается каждая точка: с земли уровня под ним (любого статического объекта, который не добавлен модулем) или ровно на высоте над pos." },
+  { "Where every point starts: the level's ground under it (of the static objects that are not added by the module, the surface nearest pos under the centre, followed outward: a roof or a tree's crown over it is not the ground), or flat at a height over pos.", "Откуда начинается каждая точка: с земли уровня под ним (среди статических объектов, не добавленных модулем, - поверхность под центром, ближайшая к pos, и дальше от неё наружу: крыша или крона дерева над землёй землёй не считается) или ровно на высоте над pos." },
   { "Edge", "Край" },
   { "On the ground: the metres along the border over which the edits blend back into the ground around, so the border meets it.", "На земле: сколько метров вдоль границы правки плавно сходят на окружающую землю, чтобы граница с ней совпала." },
   { "Edits", "Правки" },

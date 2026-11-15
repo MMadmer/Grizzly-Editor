@@ -13,7 +13,7 @@ then **build** and **play**. Never write coordinates from memory: ask where the 
 
 | Question | Ask |
 |---|---|
-| What does this place look like from above, and where is everything? | `shot.map position=<x,0,z> size=<m>` - every object in a colour of its own with its name, a grid in metres with coordinates in the margins, spawn points, lights, ways and volumes as signs. `legend` lists every object with its colour, middle and area; a pixel reads back to metres through `px_per_m` and `map` (`x = area.x0 + (px - map.left) / px_per_m`, `z = area.z1 - (py - map.top) / px_per_m`). |
+| What does this place look like from above, and where is everything? | `shot.map position=<x,0,z> size=<m>` - every object in a colour of its own with its name, a grid in metres with coordinates in the margins, spawn points, lights, ways and volumes as signs (`signs=false` leaves them out). `below=<height>` starts the view under that height: what is under a roof or under the trees' crowns. `legend` lists the objects with their colour, middle and area, the largest first (100 rows, `legend=<n>` for more; `legend_total` counts them all); a pixel reads back to metres through `px_per_m` and `map` (`x = area.x0 + (px - map.left) / px_per_m`, `z = area.z1 - (py - map.top) / px_per_m`). |
 | How high is the ground, and how does it slope? | `shot.map mode=height` (colours, contour lines, the heights written where grid lines cross), or `scene.query action=heights area=<x0,z0,x1,z1> step=<m>` for the numbers: rows from `z0` up, each from `x0`, `null` where nothing is; at most 257 x 257 samples (a bigger request is refused naming a step that fits). |
 | What is under these points? | `scene.query action=ground positions=[[x,y,z],...] top=true` - the floor, its normal and slope, the object and its surface (texture, game material). Up to 1024 points a call. `top` starts above everything: under a tree that is its crown, so add `only=<the ground's object>` for the ground itself. |
 | What is in this box? | `scene.query action=box min=<x,y,z> max=<x,y,z>` (or `position=` + `size=`; `exact=true` tests triangles); `scene.objects near=<x,y,z> radius=<m> sort=distance bounds=true` or `box=` for the objects' own boxes. |
@@ -22,7 +22,7 @@ then **build** and **play**. Never write coordinates from memory: ask where the 
 | Would this model fit here? Where does it stand? | `scene.query action=fit ref=<model> position=<x,y,z> rotation=<...>` - `fits`, what blocks it and how deep, the ground under it, `gap`, and `rest`: the position at which it stands on the ground (on the highest point under its box). `except=<names>` leaves objects out - the object itself, when it is already written. |
 | Where near here is there room for it? | `scene.query action=free ref=<model> position=<x,y,z> radius=<m> count=<n>` - spots where it fits, standing on the ground, nearest first. |
 | Can a creature walk here, and get from A to B? | `scene.query action=ai positions=[...]`, or `from=` + `to=` (`reachable`, `length`); `shot.map mode=ai` shows the nodes. |
-| What does it really look like? | `shot.viewport view=<top, front, back, left, right, iso> objects=<names>` (or `area=`), or `position=` + `target=`: a lit picture from a camera of its own, the author's camera untouched; `labels=true` writes the names in and answers their pixels; a flat view answers its `camera.px_per_m`. |
+| What does it really look like? | `shot.viewport view=<top, front, back, left, right, iso> objects=<names>` (or `area=`), or `position=` + `target=`: a lit picture from a camera of its own, the author's camera untouched (`heading=<degrees>` turns the `iso` view about what it frames; 45 left out); `labels=true` writes the names in and answers their pixels; a flat view answers its `camera.px_per_m`. |
 
 Positions are metres, rotations degrees, `[x, y, z]`; +Y is up. On a map +X is right and +Z is up.
 
@@ -171,6 +171,7 @@ return {
   | `S209` | `light_underground` | a light inside geometry |
   | `S210` | `not_authored` | on a level of the game: an object the game's level does not have and not marked `authored` |
   | `S211` | `terrain_border` | a terrain whose border stands more than 0.5 m off the ground around it |
+  | `S212` | `terrain_unmade` | a terrain whose model cannot be made from what its file says |
 
   Left out, it checks the objects marked `authored` (on a level of the game what the module adds), else every
   object; `objects=` or `area=` choose, `checks=` narrows (codes or words), `limit=` caps the answer.
@@ -261,7 +262,7 @@ Write - the scene is <name>.scene and a folder of Lua files; the editor follows 
   A file that does not parse changes nothing: the problem has its line, scene.save answers it skipped.
 
 Settle:  scene.align action=drop|surface objects=... [offset=<m>], then scene.save (only changed lines).
-Check:   asset.check   scene.audit [objects=...|area=...] [checks=...]   (S201 floating ... S211 terrain_border)
+Check:   asset.check   scene.audit [objects=...|area=...] [checks=...]   (S201 floating ... S212 terrain_unmade)
 Build:   level.status   level.build   level.inspect part=pieces|cuts|ai_edits   mod.build (answers media)   mod.info
 Play:    level.play
 ```

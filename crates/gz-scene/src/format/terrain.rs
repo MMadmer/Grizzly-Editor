@@ -1,6 +1,6 @@
 //! The keys of a terrain (`terrain.lua`, the list `terrains`; the contract is
-//! `docs/plan/LEVEL_DESIGN.md` 2.5). `pos` is the centre and `rot` turns it about the vertical
-//! alone; the rest is here.
+//! `docs/assets/SCENE.md`, made from this table). `pos` is the centre and `rot` turns it about
+//! the vertical alone; the rest is here.
 
 use glam::Vec2;
 use gz_luadata::{Table, Value};

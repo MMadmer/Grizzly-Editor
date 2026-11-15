@@ -1,6 +1,6 @@
 //! The exact cut of a triangle by a region: a line-by-line port of the game's
-//! `XMS::Cut::ClipTriangle` (`src/xrCore/XMS/xms_cut_clip.cpp`, the game's
-//! `docs/dead-air/XMS_ARCHITECTURE.md` 8.4), in single precision, with the same constants, the
+//! `XMS::Cut::ClipTriangle` (the game's `docs/dead-air/XMS_ARCHITECTURE.md` 8.4 is the
+//! normative text), in single precision, with the same constants, the
 //! same order of the four lines and the same weights - the editor's preview and the game cut the
 //! same triangles the same way. [`clip_mesh`] runs it over a triangle soup.
 
@@ -319,7 +319,7 @@ pub fn clip_mesh(regions: &[Region], tris: &[[Corner; 3]]) -> Vec<Piece> {
 mod tests {
     use super::*;
 
-    /// The game's test region (`tools/qa/cuts/cut_clip_test.cpp`): 20 x 8 m turned a quarter about
+    /// The region of the game's own test of the clip (`tools/qa/cuts`): 20 x 8 m turned a quarter about
     /// +Y, so it spans |x| <= 4, |z| <= 10 in the world; the old ground is flat at 0 and the band
     /// is half a metre.
     fn ground_region() -> Region {

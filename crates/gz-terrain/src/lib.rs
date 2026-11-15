@@ -1,4 +1,4 @@
-//! A terrain of the scene (`docs/plan/LEVEL_DESIGN.md` 2.5, `docs/assets/SCENE.md`): a height
+//! A terrain of the scene (`docs/assets/SCENE.md`): a height
 //! grid over a rectangle, made from its text and nothing else.
 //!
 //! - [`Terrain`] - the centre, the heading and the [`Spec`] the file says: size, cell, [`Base`],

@@ -70,7 +70,7 @@ commands to start with:
 | `shot.map position=<x,0,z> size=<m>` | the place from above: every object named, a grid in metres, `mode=height` for the slope |
 | `scene.query action=<ground, heights, ray, box, fit, free, ai>` | the ground under points, the heights of an area, what is in the way, where a model stands (`fit` answers `rest`) |
 | `scene.align action=drop objects=<names>` | what was written settled onto the ground; `scene.save` writes only those lines |
-| `scene.audit` | what floats, is buried, overlaps, is there twice, is off the AI map, will not ship (`S201`-`S211`, each at its line) |
+| `scene.audit` | what floats, is buried, overlaps, is there twice, is off the AI map, will not ship (`S201`-`S212`, each at its line) |
 | `level.build` | the module's piece of the level: its objects and terrains, the cut of the game's ground (`level.inspect part=cuts`) |
 
 `docs/LEVEL_DESIGN.md` is the guide with a worked example; `grizzly_help about=level-design` (`Grizzly-Cmd.exe help

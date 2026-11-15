@@ -85,8 +85,12 @@ What the suites hold, beyond what their names say:
   yard cut into Escape's slope - a terrain placed and its edits written in `terrain.lua`, a blockout on a texture
   asset - built into the piece with `overlay.cut` and `overlay.aiedit`; the game's log says `* [cuts] l01_escape:
   1 region(s), 29 collision triangle(s) cut, 3 visual(s) cut`, `* [ai edits] l01_escape: 345 node(s) moved, 63
-  closed, 0 skipped`, `* [assets] 1 texture(s), 0 sound(s), 0 model(s) described by 1 module(s)`, and attaches
-  the piece (the run then stops on the model asset's spawn, below).
+  closed, 0 skipped`, `* [assets] 1 texture(s), 0 sound(s), 0 model(s) described by 1 module(s)`, attaches the
+  piece and plays on without a fatal line (40 of 40). A static model asset marked `authored` is the piece's and no
+  object of the spawn layer; a dynamic one is spawned under its published name (`gz-export-level`'s test).
+  `--scene l01_escape_piece` builds the piece at the first try (39 of 39): the build reads a library of its own, so
+  a watcher that lost count of the files changes nothing under it (`gz-scene`'s `library` tests: the fork, the
+  rescan that drops only what changed).
 - **The updater** (`gz-update`'s end-to-end test with an HTTP server of its own, `test_update` against the mock): the
   check reads only the archive's end and its manifest; only the delta's ranges are asked for; a cut download resumes
   at its byte, also inside a record, also after a restart; a held file rolls the installation back exactly; the
@@ -158,14 +162,6 @@ What the suites hold, beyond what their names say:
   turns (`rot`) and a cut whose region is turned, in the game; grass on the new ground; the window's side of the
   media assets (drops from Explorer, the Place panel's model assets) beyond what `test_tour` and
   `test_asset_icons` reach.
-- Level design, what the suites name failing on this tree (`test_level_design`, `test_play_game --scene
-  l01_escape_terrain`): `S210` never runs on Escape (the level's X-Ray SDK scene has binary parts - `ai_map.part`,
-  `detail_object.part`, `wallmark.part` - and `base_names` gives up on the whole set); `asset.check` names no
-  glTF surface without a texture and warns `M107` of the template's own `materials\default`, while the piece build
-  refuses both; a static model asset placed `authored` on a level of the game is also exported to the spawn layer
-  with its `.meshasset` text copied as `meshes\<path>.ogf`, and the game stops after the level's load
-  (`CModelPool::Instance_Create`: "Unknown visual type"); `test_play_game --scene l01_escape_piece` stops before
-  the game at "The module's static objects on the level have no triangle to collide with".
 - What the manifest's reference says a key of `[world]`, `[start_kit]` or `[screens]` does in the game: it is
   read from the readers' code and the game's document, not from a run of the game. `mod.package` was seen
   refusing a manifest through the check on one wrong tag; the other errors take the same path.

@@ -1642,8 +1642,8 @@ async fn step_piece(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
 }
 
 /// What a module's piece takes away of a level of the game and changes under it: the regions of
-/// `overlay.cut`, what each cuts, and the edits of `overlay.aiedit` (`docs/plan/LEVEL_DESIGN.md`
-/// 2.6, the game's `XMS_ARCHITECTURE.md` 8.4).
+/// `overlay.cut`, what each cuts, and the edits of `overlay.aiedit` (the game's
+/// `XMS_ARCHITECTURE.md` 8.4).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LevelEdits {
     pub regions: Vec<gz_terrain::Region>,

@@ -44,7 +44,8 @@ A change of plan is a change of its document first.
 | `docs/UPDATES.md` | the editor updating itself |
 | `docs/UI_DESIGN.md` | every surface, size, colour, action and UI answer |
 | `docs/NQ_ARCHITECTURE.md`, `docs/nq/NQ_FORMAT.md` | quests and behaviour graphs |
-| `docs/pda/PDA_FORMAT.md`, `docs/assets/*.md` | PDA interfaces; characters, the scene, the project file |
+| `docs/pda/PDA_FORMAT.md`, `docs/assets/*.md` | PDA interfaces; characters, the scene, the project file, models, textures, sounds |
+| `docs/LEVEL_DESIGN.md` | how a place in a level is built by editing text: what to ask, what to write, how to check it |
 | `docs/STATE.md` | what is proven and how, what is not, and the decisions the contracts do not state |
 | `tools/mcp/AI_SETUP.md`, `docs/MOD_QUICKSTART.md` | the editor for an agent; a mod from nothing |
 
@@ -229,10 +230,105 @@ A change of plan is a change of its document first.
   share - a test fails on a hand edit). A spawn point's properties are named, never a positional packet; what the
   editor cannot name is kept under `raw` and written back. The X-Ray SDK scene (`.level`) is read and never written.
 
+## Level design by text (gz-scene's `sense`, `docs/LEVEL_DESIGN.md`)
+
+- **Whoever writes a scene as text cannot see it; the editor answers what it is like.** `scene.query` answers the
+  geometry in numbers (`ground` under points with the normal, the object and its surface; `heights` over an area;
+  `ray`; `box`; `fit` and `free` for a model at a place; `ai`; `walls`), `scene.objects` / `scene.get` carry every
+  object's box, `model.info` / `model.list` a model's size and surfaces. All of it runs without a window, on the
+  pools, every list and grid capped with the cap named in the refusal.
+- **Pictures an agent reads back into metres.** `shot.map` is the scene from above drawn on the processor
+  (`gz-pix`: no window, no graphics card, the same bytes for the same scene): every object in a colour of its own
+  with its name beside it, the ground shaded by its relief, a grid in metres with its coordinates at the edges,
+  the caller's marks; `mode=height` draws heights with contour lines and spot heights, `mode=ai` the AI map. Its
+  answer says `px_per_m`, where the map lies in the picture and a legend (object, colour, middle, area).
+  `shot.viewport` takes a camera of the picture's own - `position` + `target`, or a `view` framing `objects` or an
+  `area` - and never moves the author's camera or draws the working grid; `shot.models` is a sheet of models with
+  their sizes. A new picture command draws into targets of its own and answers what a pixel means.
+- **`scene.audit` is the check of where things stand**: a warning per finding at the object's line in the
+  scene's files - floating (`S201`), buried (`S202`), overlapping (`S203`), twice there (`S204`), nothing under it
+  (`S205`), a walker's spawn point or a way point off the AI map (`S206`, `S208`), a spawn point or a light under
+  the ground (`S207`, `S209`), not the game's and not `authored` (`S210`), a terrain's border off the ground
+  (`S211`), a terrain whose model cannot be made (`S212`). On a level of the game it reads what the module adds.
+  A terrain is ground: what stands on it is not "in" it. A new kind of mistake an agent can make with a file gets
+  a check here, with a scene that trips it and one that does not.
+- **A scene file with a typo costs nothing.** A part file (or the `.scene`) that does not parse changes nothing in
+  the open scene and is left alone by a save (`scene.save` answers `skipped`); the problem has a line and a column;
+  the scene follows the file again once it parses. A group written with a `ref` and no `members` is placed as the
+  scene is read: a prefab is one line. Every problem of the scene's reader carries file, line and column.
+- **A library object may exist in memory only** (`gz_scene::library`): a provider answers a reference that is no
+  `.object` file - a model asset (a reference ending in `.meshasset`), a terrain (`@terrain\<name>`), the ground a
+  terrain cuts (`@cut\<name>`) - with a `LibraryObject` made from a `gz_fmt_object::Object`, its `stamp` a hash of
+  what it was made from. Such an object is drawn (under a mesh key that follows its stamp), hit by rays and
+  compiled exactly like a file's; its owner forgets it when its source changes. A miss of a model the scene itself
+  makes (`@...`) is never remembered: it may only not be there yet.
+- **A long job reads a library of its own** (`SceneService::library_for`, a `Library::fork`): the level build and
+  the level exports load what the scene names and keep it, so a model the watcher has forgotten meanwhile is
+  still there for them - most of the editor reads the cache without loading (`cached`), and a job must not find it
+  emptied half way. A rescan (the watcher lost count) forgets only what is another file now
+  (`Library::revalidate`), never the whole library.
+
+## Media assets (gz-media, `docs/assets/MODEL.md`, `TEXTURE.md`, `SOUND.md`)
+
+- **A model, a texture and a sound are text assets over a source file**: `*.meshasset` (`mesh = 1`) over a
+  `.glb` / `.gltf` / `.obj` / `.object` or with its geometry written in it as `parts` (box, ramp, cylinder, plane,
+  prism - a blockout an agent types); `*.texasset` (`tex = 1`) over a picture, saying all a `.thm` says in words;
+  `*.sndasset` (`snd = 1`) over a `.wav` or `.ogg`. Their keys are tables (`gz-media`'s `fields.rs`) that generate
+  the references; a test fails on a hand edit. The X-Ray SDK library (`.object`, `.thm`) stays what it is.
+  What the level build would refuse is an error of the asset's own check, said first: a surface without a texture
+  (`M112`), a surface's game material the game lacks (`M107`). A surface that names no material is the game's
+  `default`.
+- **The description is text and ships; the data is binary and is baked.** The module build publishes every asset
+  that ships (a texture, a sound, a dynamic model): the data baked into the game's own long-lived containers
+  (`.dds` and the bump pair, `.ogg`, `.ogf` / `.omf`) under the game's place for its `name`, with a copy of the
+  asset's text beside it, cached in the project's `temp\media` and deterministic. An asset where it lies and its
+  source are sources: never shipped as they are. **The game reads the description** over the data (a texture's
+  in place of a `.thm`, a sound's parameters, a model's surfaces, bones, user data and its own motions' flags):
+  what a key means lives in the game, and a key the game reads means the same in the editor. A static model is
+  compiled into the level and ships nothing.
+- `gz-fmt-mesh` reads glTF 2.0 and OBJ into the very model a library `.object` is (the game's handedness, hard
+  edges from the source's normals, skins as bones and weights, clips as motions): everything downstream - the
+  picture, the rays, the level compiler, the OGF export - is one code path. A scene object refers to a model asset
+  by its project path (`ref = "models/hut.meshasset"`).
+- `asset.import` brings files in (the sources copied, the assets written, a texture asset for every picture a
+  model names); files dropped from Explorer and Add > Import run it. The content browser shows the asset as the
+  tile and the source as its companion; the previews open an asset and follow its files.
+- **Every reader of what a module ships reads every version up to its own and refuses a newer one by name** -
+  the editor's kinds through their migration chains (`KindOps.migrations`; the scene's and the group's own reads
+  apply them too), the game's readers through theirs. A change of a shipped format is a new version with its
+  step, on both sides.
+
+## Terrain (gz-terrain; `docs/assets/SCENE.md`, the game's `XMS_ARCHITECTURE.md` 8.4)
+
+- **Changed ground is an object of the scene written as text** (`terrain.lua`): a height grid over a rectangle
+  (`pos` its centre, `rot` its heading, `size`, `cell`), `base = "ground"` (every point starts at the level's
+  ground under it - the surface nearest `pos` under the centre, followed outward, so a roof or a tree's crown over
+  the ground is not the ground -, blended back to it over `edge` metres at the border) or a height, `edits` in
+  order (`flatten`, `rect`, `raise`, `ramp`, `smooth`, `noise`) or `rows` written out, `surface = "ground"` (the
+  look and texture coordinates of what is under each face) or a surface of its own. Its mesh is made from the text
+  (`gz-terrain`: pure, deterministic) and is a library object in memory.
+- **With `cut` the ground a terrain replaces is gone wherever the editor looks** - the picture, every ray, the
+  drop to ground, the AI map's generation, the audit, the level build's geometry and shadow casters: the static
+  objects that are not `authored` are read as their cut models. The clip is the game's, ported line by line
+  (`gz-terrain`'s `clip.rs`; the normative text and the reference are the game's `XMS_ARCHITECTURE.md` 8.4 and
+  `xms_cut_clip.cpp`): change both or neither.
+- **On a level of the game a terrain is the module's**: its picture goes into the module's piece, its triangles
+  into `overlay.xcform`, and the build writes `overlay.cut` (the regions with the old ground's heights) and
+  `overlay.aiedit` (the level's AI nodes under it: new heights, closed where the new ground is too steep or
+  something `authored` stands) - the game clips its collision and its own visuals exactly and moves its nodes in
+  place, so the vertex ids saves keep are untouched; grass follows the collision. The piece says `stream =
+  false` with a cut. A face that took the ground's look keeps the level's own light texture instead of being lit
+  again. A game that does not state `level-cuts` refuses such a build by name; without `ai-edits` it is warned.
+  On a level of the module's own a terrain is level geometry like any static object.
+
 ## Mod philosophy
 
 - **The editor describes what has to happen, the game does it.** An asset or a manifest key is the description; what it means lives in the game. When a build would have
   to generate a game file for something, teach the game to read the description instead.
+- **Media are described, not hidden in binaries.** What a module's texture, sound or model IS - its bump and
+  detail, its distances, its surfaces and physics - is the asset's text, shipped and read by the game; only pixels,
+  samples and geometry are baked, into containers the game reads for good. So a module built today keeps working
+  on a later game, and a later game can read the same description better.
 - **The game knows modules and nothing else.** No code, script, config or document of the game names the editor: it is a program of its own, and a module may come from anywhere.
 - A mod is a self-contained project in ITS OWN folder. Installed into the
   game it lives as a separate folder (mods/<name>); the game pulls its data
@@ -438,6 +534,7 @@ A change of plan is a change of its document first.
   default, several objects showing the rows they share. Every row has a stable key, a Title Case label, a unit and
   words instead of numbers (`gz-scene`'s `props.rs`; a test fails on a key without a label). A value from a list is
   picked in the chooser (`dlg.choose`: search, pictures, a preview), never typed.
+- **Terrain** is placed from the Place panel or written into `terrain.lua` (above, "Terrain").
 - **Building a level is one command and one job**, `level.build` (`gz-levelbuild`): the steps `game`,
   `spawn_layer`, `ai_map`, `game_graph`, `spawn`, `geometry`, `details`, `light`, `detail_light`, `piece`, each fresh,
   stale (with why: "12 objects moved"), never built, failed or not needed - judged by fingerprints of what the step
@@ -653,6 +750,9 @@ A change of plan is a change of its document first.
     `releases\`, preview.png, the scratch folders; `AGENTS.md`);
   - the level build's own files in `gamedata\levels\<level>\` (`is_level_build_file`: `build.prj`, `build.state`,
     the other `build.*`, `level_stat.*`) - what the compiler reads, never what the game does;
+  - **media assets and their sources** where they lie (`*.meshasset`, `*.texasset`, `*.sndasset` and the files they
+    name): the build publishes what they bake to instead, with the asset's text, under the game's place for the
+    asset's `name` (above, "Media assets");
   - **mod.ltx `[exclude]`** - the author's call (`gz-mod`'s `exclude.rs`, `exclude_match`): a
     project path (a folder takes everything below it) or a pattern (no slash = a
     name at any depth, `*.psd`; with one = a path, `docs/*.md`). Set from the

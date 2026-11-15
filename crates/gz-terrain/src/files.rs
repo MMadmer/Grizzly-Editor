@@ -1,7 +1,7 @@
 //! `levels\<level>\overlay.cut` (`XCU1`) and `levels\<level>\overlay.aiedit` (`XAE1`), written
-//! and read exactly as the game's reader takes them (`src/xrCore/XMS/xms_level_edits.cpp`, the
-//! game's `docs/dead-air/XMS_ARCHITECTURE.md` 8.4): little-endian, the same caps, and a file the
-//! game would refuse is refused here with the game's reason.
+//! and read exactly as the game's readers take them (`XMS::ReadLevelCuts`, `XMS::ReadAiEdits`;
+//! the game's `docs/dead-air/XMS_ARCHITECTURE.md` 8.4): little-endian, the same caps, and a
+//! file the game would refuse is refused here with the game's reason.
 
 use glam::Vec3;
 
