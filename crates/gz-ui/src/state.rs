@@ -515,8 +515,9 @@ pub fn draw_toasts_at(ui: &mut Ui, at: Align2) {
             ui.push_id(item.serial, |ui| {
                 let inner_w = TOAST_W - 24.0;
                 let text_w = inner_w - 22.0 - 24.0;
-                let galley =
-                    ui.ctx().fonts_mut(|f| f.layout(item.text.text(&ctx), Font::Body.id(), p.text, text_w));
+                // the text first: the catalog is read from the context, which the fonts' closure holds
+                let text = item.text.text(&ctx);
+                let galley = ui.ctx().fonts_mut(|f| f.layout(text, Font::Body.id(), p.text, text_w));
                 let text_h = galley.size().y.max(metrics::GLYPH);
                 // the button sits under the text, at its right end
                 let button_h = if item.action.is_some() { metrics::FRAME + 8.0 } else { 0.0 };
@@ -591,5 +592,30 @@ pub fn draw_toasts_at(ui: &mut Ui, at: Align2) {
         ctx.data_mut(|d| {
             d.get_temp_mut_or_default::<Toasts>(toasts_id()).items.retain(|t| t.serial != serial)
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A toast is drawn and its frame ends. Its text is looked up before the fonts are asked for
+    /// its layout: the catalog and the fonts live behind the context's one lock, and a frame that
+    /// takes it twice never ends - the window stood still on its first toast.
+    #[test]
+    fn a_toast_is_drawn_and_its_frame_ends() {
+        let (done, ended) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let ctx = crate::testkit::context();
+            crate::i18n::install(&ctx, None);
+            toast(&ctx, Tone::Info, "Nothing in the import folder is new to the library.");
+            toast_with(&ctx, Tone::Info, "A note with a button.", "Details", "help.update");
+            crate::testkit::frame(&ctx, 0.0, Vec::new(), draw_toasts);
+            let _ = done.send(toast_texts(&ctx));
+        });
+        let texts = ended
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("the frame that draws a toast ends");
+        assert_eq!(texts.len(), 2);
     }
 }

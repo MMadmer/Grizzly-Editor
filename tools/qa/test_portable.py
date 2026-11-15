@@ -127,9 +127,13 @@ def run(ctx: qa.Run) -> None:
     if not os.path.isfile(legacy) and not project_file(a):
         check(False, "A the copy is a project", a)
         return
+    # the first open of a project of the old kind writes the file and names it after the folder; a project that
+    # has its file keeps the file's name wherever the folder goes
+    named = "QaPortable.grizzly"
     if os.path.isfile(legacy):
         set_legacy(legacy, "last_scene", scene_rel)
     else:
+        named = os.path.basename(project_file(a))
         # a project converted already: its project file names the scene
         pf = project_file(a)
         text = open(pf, encoding="utf-8").read()
@@ -144,9 +148,9 @@ def run(ctx: qa.Run) -> None:
         info = ed1.cmd("project.info")
         pf = project_file(a)
         text = open(pf, encoding="utf-8").read() if pf else ""
-        check(pf and os.path.basename(pf) == "QaPortable.grizzly" and re.search(r'id = "[0-9a-f-]{36}"', text) and
+        check(pf and os.path.basename(pf) == named and re.search(r'id = "[0-9a-f-]{36}"', text) and
               ("rawdata/levels/%s.level" % SCENE) in text,
-              "A the project file is written, named after the folder, with its id and the scene", text[:300])
+              "A the project file (%s) is the project's, with its id and the scene" % named, text[:300])
         check(not os.path.exists(legacy), "A project.ltx was read once and is gone")
         check(os.path.isfile(os.path.join(a, "AGENTS.md")), "A AGENTS.md is written")
         game = (info.get("game") or {})
