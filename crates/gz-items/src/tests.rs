@@ -305,7 +305,7 @@ fn a_new_item_and_a_change_resolve_in_the_games_order() {
     let row = |s: &crate::SectionView, k: &str| s.get(k).cloned().unwrap();
     assert_eq!(row(&sil.main, "cost").from, From::This);
     assert_eq!(row(&sil.main, "cost").value.as_deref(), Some("1200"));
-    // the change of its base reaches it: it does not set the key itself (1.2)
+    // the change of its base reaches it: it does not set the key itself
     assert_eq!(row(&sil.main, "ammo_class").value.as_deref(), Some("ammo_b,ammo_c"));
     assert_eq!(row(&sil.main, "class").from, From::Base);
     assert_eq!(row(&sil.main, "class").base.as_deref(), Some("wpn_ak74"));

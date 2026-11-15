@@ -784,8 +784,8 @@ impl Builder {
         }
     }
 
-    /// Carries a change of `key` in section `from` to every section that inherits it from there
-    /// (1.2): one without a word of its own on the key takes it from the last of its parents
+    /// Carries a change of `key` in section `from` to every section that inherits it from there:
+    /// one without a word of its own on the key takes it from the last of its parents
     /// that has it, or loses it, and passes the change on.
     fn propagate(&mut self, from: usize, key: &str) {
         let mut queue: std::collections::VecDeque<usize> =
@@ -1151,7 +1151,7 @@ impl Builder {
 }
 
 /// A config file read with everything it includes, as a script's `ini_file` or an engine reader
-/// opens it, and the `#file` patches of the files it read applied in their order (1.3).
+/// opens it, and the `#file` patches of the files it read applied in their order.
 pub fn compose_file(
     root: &str,
     loader: &dyn Loader,

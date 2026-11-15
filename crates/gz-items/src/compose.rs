@@ -1,9 +1,9 @@
-//! The module's items laid over the linked game's configs, in the game's order (`docs/plan`'s
-//! contract, "Order"): the game's tree with the module's files that replace a game config, then
+//! The module's items laid over the linked game's configs, in the game's order
+//! (`docs/assets/ITEM.md`, "Order"): the game's tree with the module's files that replace a game config, then
 //! the items - new sections first (a base that is another item of the module before the item
 //! made from it, else in path order), then the changes in path order -, then the module's
 //! `configs\xms\*.ltx`, then its `patch\*.ltxp`. Every change reaches what inherits
-//! (`gz-ltx`'s 1.2). What an item says of another config file (`loot`, `sold`, `lists`) is a
+//! (`gz-ltx`'s `tree.rs`). What an item says of another config file (`loot`, `sold`, `lists`) is a
 //! `#file` patch of that file ([`FilePatch`]), as the game makes it.
 //!
 //! The files of the tree are named so their origin can be told: the game's as the game names

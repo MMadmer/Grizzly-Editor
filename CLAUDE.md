@@ -1220,6 +1220,50 @@ A change of plan is a change of its document first.
   MCP on a COPY of the project and wants the asset shipped and nothing made of it; what the
   game makes of it is the game's `tools/qa/screens/Run-ScreensQa.ps1 -Part Descriptions`.
 
+## Items (the module's own inventory items)
+
+- One `.itemasset` per item (`gz-items`; `docs/assets/ITEM.md`, generated from the crate's `fields.rs`): a NEW
+  item (`id`, `section` - `<module>_<id>` when left out -, `base`, `abstract`) or a CHANGE of one that exists
+  (`edit`: the game's, or another module's), never both. An agent writes the file and checks it with
+  `asset.check`: the asset is text, so that path is the primary one. Mod > Items (a tab: the list, then the
+  form; `gz-ui-world`'s `items.rs`, `item_form.rs`; `items.view`) is the same for a person, the content
+  browser's Add > Item makes one (`file.create kind=item`), and `items.list` / `items.info` answer what the
+  module's items resolve to.
+- **The module ships the `.itemasset` and the game makes the item** (`xms_items.cpp` in the game repo;
+  MODDING.md, "A module's items"): the sections, the strings (`<section>_name`, `_short`, `_descr`), the HUD
+  section, the icon's keys, and the item's rows of the game's lists - craft recipes, death loot, traders'
+  stock, use scenes. The build makes one thing of an item: the pictures items name (`icon = "icons/ak.png"`)
+  packed into `gamedata\textures\ui\<module>_icons.dds`, with the shipped text rewritten to the game's own
+  form (`{ texture, x, y, w, h }`, cells of 50 px). The game's atlas is never touched.
+- **A change says only what changes**: `set`, `unset`, `add` / `drop` for the members of a list, `hud` for the
+  HUD section, `sections` for the sections the item brings or changes. That is what keeps two modules on one
+  weapon working - neither carries the other's keys. A whole section copied from the game is what a classic
+  mod did and what a module must not.
+- **Config patches follow inheritance** (`gz-ltx`'s `tree.rs` and `patch.rs`; the game's `xr_ini` and
+  `xms_inherit.h` - change both or neither): a section's own keys are its lines, what an overlay merged, what
+  a directive set and what a directive took away; every other key comes from the last parent that has it, and a
+  change of a parent reaches its descendants. A `.ltxp` reaches any config the game reads by name with
+  `#file <path under configs>` - never one the game writes. A game says `item-assets` and
+  `config-file-patches` among its abilities.
+- **What a key is comes from the game's item catalog** (`configs\item_catalog.ltx`, generated in the game repo
+  from its code and narrowed by the game's own items; the bundled `gamedata\configs\item_catalog.ltx` is a
+  fallback kept byte-identical): the type, the families, whether the game stops without it, the title, the
+  group, the unit, the help. The form, the check and the reference read it; the editor's code names no item
+  key but the handful the inventory's picture needs (`item_form.rs`, `game_keys`). A new key is a row of the
+  catalog, never of the editor.
+- **The check composes the module as the game would** (`gz-items`' `Items`: codes `I400`-`I430`): what the game
+  would leave out is an error, what would only look or sound wrong a warning. The roster and the game's
+  lookups are queries computed INSIDE `Query::fresh` - once, however many files ask: built beside it, a check
+  of a folder of 715 items built them 715 times at once and overflowed the IO pool's stacks. The config tree
+  the editor reads holds the engine's own overlays (`gz-game`'s `configs.rs`, `OVERLAYS`), laid as the engine
+  lays them: without them a key the engine adds itself read as missing.
+- The form: what comes from a list is picked (the chooser over the linked game's items, by the names the
+  player reads); the value a key inherits is its field's hint and only what the author typed is written; a
+  problem is a sentence under its row. The catalog's texts and the check's sentences are Russian through
+  `gz-ui-world`'s `items.ru.lua` (`ctx = "item"`, `"item_help"`), held to the bundled catalog by a test.
+- QA: `tools/qa/test_items.py --project <project>` over MCP on a COPY; what the game makes of an item is the
+  game's `tools/qa/items/Run-ItemsQa.ps1` in the real engine.
+
 ## Quests (NQ — node graph)
 
 - Architecture and rollout plan: `docs/NQ_ARCHITECTURE.md`; the document IS the contract, changed by editing the
