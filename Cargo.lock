@@ -1530,6 +1530,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "gz-fmt-mesh"
+version = "0.7.0"
+dependencies = [
+ "base64",
+ "gz-base",
+ "gz-fmt-object",
+ "gz-fmt-ogf",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "tempfile",
+]
+
+[[package]]
 name = "gz-fmt-object"
 version = "0.7.0"
 dependencies = [
@@ -1913,6 +1927,13 @@ dependencies = [
  "rayon",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "gz-pix"
+version = "0.7.0"
+dependencies = [
+ "png",
 ]
 
 [[package]]
@@ -2307,6 +2328,7 @@ dependencies = [
  "gz-fmt-xr",
  "gz-game",
  "gz-log",
+ "gz-pix",
  "gz-project",
  "gz-query",
  "gz-render",
@@ -2373,6 +2395,7 @@ dependencies = [
  "gz-game",
  "gz-ltx",
  "gz-particles",
+ "gz-pix",
  "gz-project",
  "gz-render",
  "gz-scene",

@@ -53,6 +53,9 @@ mod object;
 mod skeleton;
 pub mod xmath;
 
+/// The vector types the model is made of, for crates that build one.
+pub use glam;
+
 pub use bone::{Bone, BoneShape, JointIk, JointLimit, JointType, ShapeType};
 pub use envelope::{Envelope, Key, behavior, shape};
 pub use io::TextEncoding;

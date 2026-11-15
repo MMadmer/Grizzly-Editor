@@ -37,8 +37,10 @@ gz-luadata = { path = "crates/gz-luadata" }
 gz-asset = { path = "crates/gz-asset" }
 gz-chunk = { path = "crates/gz-chunk" }
 gz-ico = { path = "crates/gz-ico" }
+gz-pix = { path = "crates/gz-pix" }
 gz-fmt-object = { path = "crates/gz-fmt-object" }
 gz-fmt-ogf = { path = "crates/gz-fmt-ogf" }
+gz-fmt-mesh = { path = "crates/gz-fmt-mesh" }
 gz-fmt-tex = { path = "crates/gz-fmt-tex" }
 gz-fmt-level = { path = "crates/gz-fmt-level" }
 gz-fmt-spawn = { path = "crates/gz-fmt-spawn" }
