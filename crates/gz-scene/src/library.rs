@@ -324,7 +324,12 @@ impl Library {
                 self.rev.bump();
             }
             Err(e) => {
-                cache.insert(key, Slot::Failed(e.clone()));
+                // what a provider makes from the scene itself (`@terrain\...`, `@cut\...`) may
+                // only not be there yet - asked for before the scene that holds it was published:
+                // such a miss is not remembered, the next asker gets it made
+                if !key.starts_with('@') {
+                    cache.insert(key, Slot::Failed(e.clone()));
+                }
             }
         }
         result
@@ -424,6 +429,25 @@ mod tests {
         assert!(lib.load("a\\b").is_err());
         assert!(lib.load("a\\b").is_err());
         assert!(lib.cached("a\\b").is_none());
+    }
+
+    #[test]
+    fn a_miss_of_a_model_the_scene_makes_is_not_remembered() {
+        let lib = Library::new(vec![PathBuf::from("Z:\\nowhere")]);
+        let there = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let t = there.clone();
+        lib.add_provider(Arc::new(move |name: &str| {
+            (name == "@terrain\\yard" && t.load(std::sync::atomic::Ordering::Relaxed))
+                .then(|| Arc::new(LibraryObject::provided(name, EditObject::default())))
+        }));
+        // asked for before its scene holds it: not there, and not held against it
+        assert!(lib.load("@terrain\\yard").is_err());
+        there.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(lib.load("@terrain\\yard").is_ok());
+        assert!(lib.cached("@terrain\\yard").is_some());
+        // a file that is not there stays not there until it is forgotten
+        assert!(lib.load("props\\box").is_err());
+        assert!(lib.load("props\\box").is_err_and(|e| e.contains("Can't find")));
     }
 
     #[test]
