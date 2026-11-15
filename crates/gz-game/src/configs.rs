@@ -6,13 +6,22 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gz_base::text::cp1251_to_utf8;
-use gz_ltx::{Dialect, Loader, Ltx, LtxWarning, ParsedFile, include_path, parse_file};
+use gz_ltx::{Builder, Dialect, Loader, Ltx, LtxWarning, ParsedFile, include_path, parse_file};
 use gz_vfs::{GameFiles, normalize};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// The root of the tree, as the engine names it.
 pub const SYSTEM_LTX: &str = "configs\\system.ltx";
+
+/// The game's own overlays: files the engine lays over the system config after it is read, in
+/// this order, before any module (its `InitSettings`). They are no `#include` of the tree, so
+/// the reader has to know them: change both or neither.
+pub const OVERLAYS: &[&str] = &[
+    "configs\\dead_air_x64_ai.ltx",
+    "configs\\dead_air_x64_pda3d_items.ltx",
+    "configs\\dead_air_x64_animations.ltx",
+];
 
 /// Where the bytes of game files come from: the linked game's index, or a folder on disk (the
 /// editor's bundled copy).
@@ -74,6 +83,17 @@ pub fn load_tree(
     let mut seen: FxHashSet<String> = FxHashSet::default();
     seen.insert(root_key.clone());
     let mut frontier = vec![root_key.clone()];
+    // the overlays are read with the tree: they and what they include
+    let overlays: Vec<String> = if root_key == normalize(SYSTEM_LTX) {
+        OVERLAYS.iter().map(|o| normalize(o)).collect()
+    } else {
+        Vec::new()
+    };
+    for o in &overlays {
+        if seen.insert(o.clone()) {
+            frontier.push(o.clone());
+        }
+    }
     while !frontier.is_empty() {
         let bytes = read(&frontier);
         let level: Vec<(String, ParsedFile)> = frontier
@@ -97,8 +117,22 @@ pub fn load_tree(
         return Err(missing.to_owned());
     }
     let files = parsed.len();
-    let loaded = Ltx::assemble(root, &Parsed(parsed), Dialect::Editor).map_err(|e| e.to_string())?;
-    Ok(ConfigTree { ltx: Arc::new(loaded.ltx), warnings: loaded.warnings, files })
+    let loader = Parsed(parsed);
+    let loaded = Ltx::assemble(root, &loader, Dialect::Editor).map_err(|e| e.to_string())?;
+    let present: Vec<&String> = overlays.iter().filter(|o| loader.0.contains_key(*o)).collect();
+    if present.is_empty() {
+        return Ok(ConfigTree { ltx: Arc::new(loaded.ltx), warnings: loaded.warnings, files });
+    }
+    // laid over the tree the way the engine does: a section of theirs that the tree has is merged
+    let mut b = Builder::from_ltx(&loaded.ltx, Dialect::Editor);
+    b.set_merge(true);
+    let mut warnings = loaded.warnings;
+    for o in present {
+        b.overlay(o, &loader).map_err(|e| e.to_string())?;
+    }
+    let laid = b.finish();
+    warnings.extend(laid.warnings);
+    Ok(ConfigTree { ltx: Arc::new(laid.ltx), warnings, files })
 }
 
 #[cfg(test)]
@@ -136,6 +170,29 @@ mod tests {
         assert_eq!(tree.ltx.r_string("wpn", "b").unwrap(), "А");
         assert_eq!(tree.ltx.r_string("knife", "c").unwrap(), "3");
         assert!(matches!(tree.warnings.as_slice(), [LtxWarning::IncludeSkipped { .. }]));
+    }
+
+    #[test]
+    fn the_games_own_overlays_are_laid_over_the_tree() {
+        // a section only an overlay has is there, and one the tree has too takes the overlay's keys
+        let src = source(&[
+            ("configs/system.ltx", b"[actor]\nhealth = 1\n[base]\na = 1\n"),
+            (
+                "configs/dead_air_x64_pda3d_items.ltx",
+                b"#include \"pda_more.ltx\"\n[pda_show_animator]:base\nb = 2\n",
+            ),
+            ("configs/pda_more.ltx", b"[pda_more]\nc = 3\n"),
+            ("configs/dead_air_x64_animations.ltx", b"[da_hud_animations]\nhands = x\n"),
+        ]);
+        let tree = load_tree(&src, SYSTEM_LTX, None, "no root").unwrap();
+        assert_eq!(tree.ltx.r_string("pda_show_animator", "a").unwrap(), "1");
+        assert_eq!(tree.ltx.r_string("pda_show_animator", "b").unwrap(), "2");
+        assert_eq!(tree.ltx.r_string("pda_more", "c").unwrap(), "3");
+        assert_eq!(tree.ltx.r_string("da_hud_animations", "hands").unwrap(), "x");
+        assert_eq!(tree.ltx.r_string("actor", "health").unwrap(), "1");
+        // another root takes no overlay
+        let other = load_tree(&src, "configs\\pda_more.ltx", None, "no root").unwrap();
+        assert!(!other.ltx.section_exist("pda_show_animator"));
     }
 
     #[test]
