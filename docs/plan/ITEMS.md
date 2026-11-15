@@ -190,6 +190,12 @@ return {
   the base's value muted until the author sets it (a Reset arrow unsets), the HUD section the same way, Where It
   Is Found (loot, sold by, craft), and the raw rows for a key the catalog lacks. Every edit is the difference
   written into the file.
+- **In the Hands is shown, not typed** (asked for while the task ran: the editor is as simple and visual for a
+  person as it is drivable for an agent): the Items tab's preview column draws the first-person picture - the
+  hands and the item's HUD model posed by the motion of the row the author is on (`anm_idle` by default), placed
+  by the HUD section's offsets as the game places them, at the game's HUD field of view; an offset edited moves
+  the picture at once, a motion row plays. A sound row plays, a model row opens in the model viewer, a section
+  row shows the item it names with its icon.
 - The content browser: an Item icon; Add > Item (`file.create kind=item`).
 - The catalog's allow-list takes `itemasset` (four sides).
 
@@ -269,6 +275,9 @@ motions and sounds; a use scene plays; the silencer is crafted; the icons are th
 | E1 | agent | `gz-ltx` (1.2, 1.3), `gz-items` (domain, kind, check, reference, publish), the allow-list | editor: `crates\gz-ltx`, `crates\gz-items` (new), `crates\gz-project`, `crates\gz-build`, `crates\gz-release`, `crates\grizzly` |
 | E2 | agent | Mod > Items, the browser's icon, QA `test_items.py` | editor: `crates\gz-ui-world` (or a crate of its own), `gz-ui`, `gz-ui-content`, `tools\qa` |
 | P1 | agent | 1.7 and section 2 | editor: `tools\classic_mod`; the new project |
+| P2 | agent, after P1 | section 2's hand work: the scripts, the use scenes, the XML, the start kits | the project |
+| E3 | agent, after E2 | 1.6: the first-person picture of the Items tab | editor: `gz-ui-previews`, `gz-ui-world`, `gz-fmt-ogf` (posing) |
+| G5 | lead or agent, after G3 | a loose particle effect carries its compiled actions (`[actions]`): without them the game's loader makes an effect that emits nothing | game: `src\Layers\xrRender` (the loose particle loader), `MODDING.md` |
 | G3 | agent, after G1 | 1.8: objects and item state in `.scov`, a switched-off module's records kept, ids reserved | game: `src\xrGame` (the ALife registry's save and load, the save extensions, `xms_game.cpp`), the stock scripts' save hooks, `docs\dead-air\SAVE_COMPATIBILITY.md`, `tools\qa` |
 | G4 | agent, with G3 | 1.8: what scripts save about a module's objects, the quest runtime keeping an absent module's quests, per-module data kept | game: `packaging\dead-air-x64\compatibility\gamedata\scripts` (`xms_*.script`), `tools\nq` |
 | - | lead | this plan, the contracts' final text, integration, the game build and deploy, the in-game proof, the one full read by the critic and its fixes |
@@ -284,5 +293,15 @@ motions and sounds; a use scene plays; the silencer is crafted; the icons are th
 - G1 is in and committed in the game (`b63a43e38`, `433b2ae47`): 64 of 64 in the real engine on a throw-away root,
   a game without modules composing byte for byte as before. Not yet seen in a played game: loot dropping, a
   trader stocking, a recipe in the craft window, a scene playing. G3 (saves, the engine) runs.
+- E1 is in and committed (`f7ad7c0a`, `51d742e9`): `gz-ltx` composes as the game does, `gz-items` with its check
+  (I400-I430), the icon atlas at build, `items.list` / `items.info`. Fixed after it by the lead: the roster and the
+  lookups are computed inside their queries (a check of 715 files built the roster 715 times at once and
+  overflowed the IO pool's stacks); the config tree holds the game's own overlays (`54328895`); the motion check
+  looks at the item model's cycle only. E2 (the Items tab) runs.
+- P1 is in: the converter (`tools/classic_mod`, uncommitted until P2 is done with it) and the project
+  `D:\XFinedProjects\WeaponsEvolution2026` (4.7 GB): 715 item assets (6 new, 709 changes, 409 of them a picture
+  only), 12 patch files, 481 icons, 1182 loose particle files, 7067 media files; its own composition check equals
+  the wanted state in all 14 515 sections. Open: the game's loose particle loader reads no actions (G5); four
+  weapons change class (their objects become the module's: told to G3). P2 (the hand work) runs.
 - The scratch of the task (surveys, the key table, the unpacked game views) is the session's scratchpad folder
   `we\`; nothing in the repository depends on it.
