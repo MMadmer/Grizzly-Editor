@@ -31,7 +31,7 @@ pub const OFF_MAP: f32 = 1.0;
 const GROUND_SIDE: f32 = 20.0;
 
 /// The checks: code, word, what it finds.
-pub const CHECKS: [(&str, &str, &str); 11] = [
+pub const CHECKS: [(&str, &str, &str); 12] = [
     ("S201", "floating", "an object more than 0.25 m above whatever is under it, touching nothing"),
     ("S202", "buried", "an object more than half under the ground"),
     ("S203", "overlap", "two objects standing in each other"),
@@ -43,6 +43,7 @@ pub const CHECKS: [(&str, &str, &str); 11] = [
     ("S209", "light_underground", "a light under the ground"),
     ("S210", "not_authored", "an object the game's level does not have that is not marked authored"),
     ("S211", "terrain_border", "a terrain whose border stands more than 0.5 m off the ground around it"),
+    ("S212", "terrain_unmade", "a terrain whose model cannot be made from what its file says"),
 ];
 
 /// `scene.audit`'s parameters.
@@ -59,7 +60,7 @@ pub struct AuditParams {
     pub area: Option<[f32; 4]>,
     /// Only these checks, by code (`S201`) or word (`floating`, `buried`, `overlap`, `duplicate`,
     /// `unsupported`, `off_ai_map`, `underground`, `way_off_ai_map`, `light_underground`,
-    /// `not_authored`, `terrain_border`). Left out: all of them.
+    /// `not_authored`, `terrain_border`, `terrain_unmade`). Left out: all of them.
     #[serde(default)]
     pub checks: Option<Vec<String>>,
     /// At most this many problems in the answer (200); `total` counts them all.
@@ -437,7 +438,18 @@ pub fn audit(sc: &Scene<'_>, p: &AuditParams, base: Option<&FxHashSet<String>>) 
                 }
             }
             ObjData::Terrain(_) => {
-                if want.contains("S211") {
+                // a terrain the library holds no model of: its values do not make one
+                let made = sc.lib.cached(&crate::objects::terrain::reference(&o.name)).is_some();
+                if !made
+                    && want.contains("S212")
+                    && let Err(why) = crate::objects::terrain::make(sc.state, sc.lib, o)
+                {
+                    f.push(Finding {
+                        code: "S212",
+                        object: o.id,
+                        text: format!("{} has no model: {why}", o.name),
+                    });
+                } else if want.contains("S211") {
                     f.extend(terrain_border(sc, o));
                 }
             }

@@ -298,7 +298,8 @@ async fn model_list(ed: Arc<Editor>, p: ListParams, _o: Origin) -> Reply {
         .io(move || {
             let project_root = lib.roots().first().cloned();
             let in_project = |r: &str| project_root.as_ref().is_some_and(|pr| pr.join(format!("{r}.object")).is_file());
-            let query = p.query.as_deref().map(str::to_lowercase).unwrap_or_default();
+            // a reference is written with either slash: the query too
+            let query = p.query.as_deref().map(|q| q.to_lowercase().replace('/', "\\")).unwrap_or_default();
             let folder = p.folder.as_deref().map(|f| f.replace('/', "\\").trim_matches('\\').to_lowercase());
             let fits = |r: &str| {
                 let k = r.replace('/', "\\").to_lowercase();

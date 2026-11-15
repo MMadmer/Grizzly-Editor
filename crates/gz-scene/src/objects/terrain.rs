@@ -730,6 +730,33 @@ mod tests {
         }
     }
 
+    /// A terrain whose values make no model is named by the audit with the reason.
+    #[test]
+    fn the_audit_says_why_a_terrain_has_no_model() {
+        use crate::sense::audit::{AuditParams, audit};
+        let mut state = scene(false);
+        let id = state.find_any("Yard").map(|o| o.id).expect("the terrain");
+        let mut o = (**state.get(id).expect("the terrain")).clone();
+        if let ObjData::Terrain(d) = &mut o.data {
+            // one row where the grid has eleven
+            d.rows = vec![vec![0.0; 3]];
+        }
+        state.remove(id);
+        state.insert(o);
+        let terrains = Arc::new(Terrains::default());
+        let lib = library(&state, &terrains);
+        let pick = ScenePick::build(&state, &lib);
+        let sc = crate::sense::Scene { state: &state, lib: &lib, pick: &pick };
+        let found = audit(&sc, &AuditParams::default(), None).map(|a| a.findings).unwrap_or_default();
+        let unmade: Vec<_> = found.iter().filter(|f| f.code == "S212").collect();
+        assert_eq!(unmade.len(), 1, "{found:?}");
+        assert!(
+            unmade[0].text.starts_with("Yard has no model: rows holds 1 rows of 3 heights"),
+            "{}",
+            unmade[0].text
+        );
+    }
+
     /// A thing that stands on a terrain is sound to the audit: it does not float, and it is not
     /// "in" the terrain it stands on.
     #[test]
