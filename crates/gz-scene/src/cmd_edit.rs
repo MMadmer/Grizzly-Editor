@@ -151,6 +151,33 @@ fn level_design_topic() -> &'static str {
 }
 
 #[cfg(test)]
+mod base_tests {
+    /// The painted layers of an X-Ray SDK scene are binary in every scene and name no object;
+    /// a binary part of a kind that does name objects leaves no set to trust.
+    #[test]
+    fn the_base_scene_s_names_skip_the_painted_layers() {
+        let root = std::env::temp_dir().join(format!("gz-base-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("rawdata").join("levels").join("lv");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(root.join("rawdata").join("levels").join("lv.level"), b"").unwrap();
+        std::fs::write(dir.join("scene_object.part"), "[object_0]\r\n  name = Hut_01\r\n").unwrap();
+        std::fs::write(dir.join("spawn.part"), "[object_0]\r\n  name = actor\r\n").unwrap();
+        for painted in ["ai_map.part", "detail_object.part", "wallmark.part"] {
+            std::fs::write(dir.join(painted), [0u8, 0x70, 0, 0, 0x10, 0, 0, 0]).unwrap();
+        }
+        let roots = [root.clone()];
+        let names = super::base_names(&roots, "lv").expect("the text parts name the objects");
+        assert!(names.contains("hut_01") && names.contains("actor") && names.len() == 2, "{names:?}");
+        assert!(super::base_names(&roots, "other").is_none(), "no such scene");
+        // a part of the binary form that names objects: the set would miss them
+        std::fs::write(dir.join("spawn.part"), [0u8, 0x70, 0, 0]).unwrap();
+        assert!(super::base_names(&roots, "lv").is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
 mod topic_tests {
     /// Every command the guide teaches is named in the topic, and the topic is the guide's own section.
     #[test]
@@ -1073,6 +1100,11 @@ fn base_names(roots: &[std::path::PathBuf], level: &str) -> Option<rustc_hash::F
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let path = entry.path();
         if !path.extension().is_some_and(|x| x.eq_ignore_ascii_case("part")) {
+            continue;
+        }
+        // the painted layers are binary in every scene and name no object
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_ascii_lowercase();
+        if matches!(stem.as_str(), "ai_map" | "detail_object" | "wallmark") {
             continue;
         }
         let Ok(bytes) = std::fs::read(&path) else { continue };
