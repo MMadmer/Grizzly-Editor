@@ -250,8 +250,10 @@ A change of plan is a change of its document first.
   the editor in release - `Grizzly.exe` (the level compilers are crates of it), `Grizzly-Cmd.exe` (the editor for a
   command line), `grizzly-mcp.exe`, their PDBs, which
   the crash reports read, and the third-party notices of `licenses\` - into `Bin\x64\Release`, touching nothing else
-  there; it says what it built and how long it took. `-Debug`, `-Out <folder>`, `-Package` (the release archive the
-  updater installs from, below). One build, cargo alone; Visual Studio's
+  there; it says what it built and how long it took. A program of that folder that is running while it is
+  replaced - an agent's bridge, an editor left open - is put aside as `<name>.old-<n>` and keeps running: the copy
+  goes with a later build, and the build says which programs to start again. `-Debug`, `-Out <folder>`, `-Package`
+  (the release archive the updater installs from, below). One build, cargo alone; Visual Studio's
   C++ workload is needed only for the C compiler of the vendored LuaJIT and libvorbis and the Windows SDK libraries.
   The everyday build is `bash tools/rust/cg.sh build -p grizzly -p gz-mcp-bridge` (`Intermediate\cargo\debug`).
 - The release profile (`Cargo.toml`): thin LTO, 16 codegen units, the line tables in the PDB beside the executable.
