@@ -198,6 +198,8 @@ and everything else a module adds included.
 - **What scripts save** that names such objects (a smart terrain's list of the NPCs it holds, tasks a module gave)
   is taken out of the stock stream and kept in `.scov` where the stock scripts would stop on it in the original
   game; found by reading what each stock `STATE_Write` / `save_state` writes.
+- **The same holds inside Refined**: a player who switches a module off and plays on keeps a working save -
+  that module's content is not there any more, everything else is, and the next save holds none of it.
 - Limits are said, not hidden: the player saved on a module's level; a module that changes the game's own objects
   in place; a mode of a module (a game of its own, which the original never starts).
 - A game with no module, and a save with nothing of a module in it, are written byte for byte as before.
