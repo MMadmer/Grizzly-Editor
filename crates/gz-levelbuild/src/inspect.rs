@@ -41,9 +41,10 @@ pub(crate) fn register(reg: &mut Registry) {
     reg.cmd(
         Spec::read(
             "level.inspect",
-            "Reads what a level build made, by part (summary, files, visuals, sectors, portals, lights, lightmaps, collision, ai_map, graph): the open project's level, a level of it by name or any folder.",
+            "Reads what a level build made, by part (summary, files, visuals, sectors, portals, lights, lightmaps, collision, ai_map, graph, pieces): the open project's level, a level of it by name or any folder.",
         )
-        .example("part=visuals level=l01_escape shader=wall limit=20"),
+        .example("part=visuals level=l01_escape shader=wall limit=20")
+        .example("part=pieces level=l01_escape"),
         |ed, p: InspectParams, _o| async move { inspect(ed, p).await },
     );
 }
@@ -71,6 +72,10 @@ enum Part {
     AiMap,
     /// The level's game graph.
     Graph,
+    /// The module's pieces of the level (`levels\<level>\pieces`): each one's box, whether it
+    /// streams, its visuals, roots, vertices, faces and lightmap pages, and what the game would
+    /// refuse it for.
+    Pieces,
 }
 
 impl Part {
@@ -86,6 +91,7 @@ impl Part {
             Self::Collision => "collision",
             Self::AiMap => "ai_map",
             Self::Graph => "graph",
+            Self::Pieces => "pieces",
         }
     }
 }
@@ -149,29 +155,34 @@ async fn inspect(ed: Arc<Editor>, p: InspectParams) -> Reply {
         offset: p.offset.unwrap_or(0),
         limit: p.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT),
     };
-    let dir = resolve(&ed, &p).await?;
-    ed.exec.io(move || read_part(&dir, &query)).await.map_err(|e| CmdError::new("refused", e))
+    let (dir, pieces) = resolve(&ed, &p).await?;
+    ed.exec.io(move || read_part(&dir, &pieces, &query)).await.map_err(|e| CmdError::new("refused", e))
 }
 
-/// The folder the request names.
-async fn resolve(ed: &Arc<Editor>, p: &InspectParams) -> Result<PathBuf, CmdError> {
+/// The folder the request names, and where the level's pieces are: the module's
+/// `levels\<level>\pieces` for a level of the project, a folder's own `pieces` otherwise.
+async fn resolve(ed: &Arc<Editor>, p: &InspectParams) -> Result<(PathBuf, PathBuf), CmdError> {
+    let of_level = |ed: &Arc<Editor>, level: &str| -> Result<(PathBuf, PathBuf), CmdError> {
+        let session = ed.project()?;
+        let dir = crate::folder::level_folder(&levels_root(&session), level).map_err(CmdError::invalid)?;
+        Ok((dir, crate::pipeline::pieces_dir(&session, level.trim())))
+    };
     match (&p.folder, &p.level) {
         (Some(_), Some(_)) => Err(CmdError::invalid("folder or level, not both.")),
         (Some(folder), None) => {
             let raw = PathBuf::from(folder.replace('/', "\\"));
-            if raw.is_absolute() {
-                return Ok(raw);
-            }
-            ed.project_root()
-                .map(|root| root.join(raw))
-                .ok_or_else(|| CmdError::invalid("folder: an absolute path, or one inside the open project"))
+            let dir = if raw.is_absolute() {
+                raw
+            } else {
+                ed.project_root().map(|root| root.join(raw)).ok_or_else(|| {
+                    CmdError::invalid("folder: an absolute path, or one inside the open project")
+                })?
+            };
+            let pieces = dir.join("pieces");
+            Ok((dir, pieces))
         }
-        (None, Some(level)) => {
-            let session = ed.project()?;
-            crate::folder::level_folder(&levels_root(&session), level).map_err(CmdError::invalid)
-        }
+        (None, Some(level)) => of_level(ed, level),
         (None, None) => {
-            let session = ed.project()?;
             let svc = need_scene(ed).await?;
             let level = svc.store.snapshot().meta.level.level_path.to_string();
             if level.trim().is_empty() {
@@ -179,7 +190,7 @@ async fn resolve(ed: &Arc<Editor>, p: &InspectParams) -> Result<PathBuf, CmdErro
                     "The scene has no level path: give a folder or a level, or set it in Level Settings.",
                 ));
             }
-            crate::folder::level_folder(&levels_root(&session), &level).map_err(CmdError::invalid)
+            of_level(ed, &level)
         }
     }
 }
@@ -414,7 +425,15 @@ fn read_graph(dir: &Path) -> Result<Option<gz_fmt_spawn::GameGraph>, String> {
 
 // ------------------------------------------------------------------------------------- the parts
 
-fn read_part(dir: &Path, q: &Query) -> Result<Value, String> {
+fn read_part(dir: &Path, pieces: &Path, q: &Query) -> Result<Value, String> {
+    if q.part == Part::Pieces {
+        let mut out = pieces_part(pieces, q);
+        if let Value::Object(o) = &mut out {
+            o.insert("folder".into(), json!(show(pieces)));
+            o.insert("part".into(), json!(q.part.name()));
+        }
+        return Ok(out);
+    }
     if !dir.is_dir() {
         return Err(format!("{} is no folder.", show(dir)));
     }
@@ -425,7 +444,7 @@ fn read_part(dir: &Path, q: &Query) -> Result<Value, String> {
         ));
     }
     let mut out = match q.part {
-        Part::Summary => summary(dir, q)?,
+        Part::Summary => summary(dir, pieces, q)?,
         Part::Files => {
             let files = list_files(dir);
             page(files, q, "files", |(name, size)| json!({ "name": name, "size": size }))
@@ -438,6 +457,7 @@ fn read_part(dir: &Path, q: &Query) -> Result<Value, String> {
         Part::Collision => collision(dir, q)?,
         Part::AiMap => ai_map(dir, q)?,
         Part::Graph => graph(dir, q)?,
+        Part::Pieces => Value::Null,
     };
     if let Value::Object(o) = &mut out {
         o.insert("folder".into(), json!(show(dir)));
@@ -457,7 +477,7 @@ fn with_level(
     }
 }
 
-fn summary(dir: &Path, _q: &Query) -> Result<Value, String> {
+fn summary(dir: &Path, pieces: &Path, _q: &Query) -> Result<Value, String> {
     let counts = Counts::of(dir);
     let files = list_files(dir);
     let top: Vec<Value> = files
@@ -481,6 +501,10 @@ fn summary(dir: &Path, _q: &Query) -> Result<Value, String> {
         "files": top,
         "folders": folders,
     });
+    let found = piece_folders(pieces);
+    if !found.is_empty() {
+        out["pieces"] = json!(found.iter().map(|p| piece_row(p)).collect::<Vec<_>>());
+    }
     match read_file(dir, crate::report::FILE) {
         Ok(Some(bytes)) => {
             out["report"] = crate::report::read_json(&String::from_utf8_lossy(&bytes)).map_or(
@@ -692,6 +716,104 @@ fn ai_map(dir: &Path, q: &Query) -> Result<Value, String> {
     }))
 }
 
+/// The piece folders under `pieces`, by name: each that holds a `piece`.
+pub(crate) fn piece_folders(pieces: &Path) -> Vec<PathBuf> {
+    let Ok(rd) = fs::read_dir(pieces) else { return Vec::new() };
+    let mut out: Vec<PathBuf> = rd
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .map(|e| e.path())
+        .filter(|p| p.join("piece").is_file())
+        .collect();
+    out.sort();
+    out
+}
+
+/// The keys of a piece's `piece.ltx` (`[piece]`), lower case.
+fn piece_manifest(dir: &Path) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let Ok(bytes) = fs::read(dir.join("piece.ltx")) else { return out };
+    let text = String::from_utf8_lossy(&bytes);
+    let mut inside = false;
+    for line in text.lines() {
+        let line = line.split(';').next().unwrap_or_default().trim();
+        if line.starts_with('[') {
+            inside = line.eq_ignore_ascii_case("[piece]");
+        } else if inside && let Some((k, v)) = line.split_once('=') {
+            out.insert(k.trim().to_ascii_lowercase(), v.trim().to_owned());
+        }
+    }
+    out
+}
+
+/// One piece as a row: its name, the manifest's box, sector and streaming, what its files hold,
+/// and what the game would refuse it for.
+pub(crate) fn piece_row(dir: &Path) -> Value {
+    let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let m = piece_manifest(dir);
+    let mut o = serde_json::Map::new();
+    o.insert("name".into(), json!(name));
+    let numbers: Vec<f64> = m
+        .get("box")
+        .map(|b| b.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+        .unwrap_or_default();
+    o.insert("box".into(), if numbers.len() == 6 { json!(numbers) } else { Value::Null });
+    o.insert("sector".into(), json!(m.get("sector").cloned().unwrap_or_else(|| "auto".into())));
+    o.insert("stream".into(), json!(m.get("stream").is_none_or(|s| !s.eq_ignore_ascii_case("false"))));
+    if let Some(v) = m.get("version") {
+        o.insert("version".into(), json!(v));
+    }
+    let mut problems: Vec<String> = Vec::new();
+    match fs::read(dir.join("piece"))
+        .map_err(|e| e.to_string())
+        .and_then(|b| CompiledLevel::read_piece(&b).map_err(|e| e.to_string()))
+    {
+        Ok(p) => {
+            let leaves =
+                p.visuals.iter().filter(|v| matches!(v.kind, VisualKind::Normal | VisualKind::Progressive));
+            let (faces, vertices) = leaves.fold((0usize, 0usize), |(f, v), x| {
+                x.geometry.map_or((f, v), |g| (f + g.faces() as usize, v + g.vertex_count as usize))
+            });
+            o.insert("visuals".into(), json!(p.visuals.len()));
+            o.insert("roots".into(), json!(p.roots.len()));
+            o.insert("shaders".into(), json!(p.shaders.len()));
+            o.insert("faces".into(), json!(faces));
+            o.insert("vertices".into(), json!(vertices));
+            let geom = fs::read(dir.join("piece.geom"))
+                .map_err(|e| e.to_string())
+                .and_then(|b| gz_fmt_level::GeomTables::read(&b).map_err(|e| e.to_string()));
+            let fast = match fs::read(dir.join("piece.geomx")) {
+                Ok(b) => Some(gz_fmt_level::GeomTables::read(&b).map_err(|e| e.to_string())),
+                Err(_) => None,
+            };
+            match (geom, fast.transpose()) {
+                (Ok(g), Ok(f)) => problems.extend(p.piece_problems(&g, f.as_ref())),
+                (Err(e), _) | (_, Err(e)) => problems.push(format!("piece.geom could not be read: {e}")),
+            }
+        }
+        Err(e) => problems.push(format!("piece could not be read: {e}")),
+    }
+    o.insert("lightmap_pages".into(), json!(lightmap_files(dir).len()));
+    o.insert("files".into(), json!(list_files(dir).len()));
+    if !m.contains_key("box") {
+        problems.push("piece.ltx names no box.".to_owned());
+    }
+    o.insert("problems".into(), json!(problems));
+    Value::Object(o)
+}
+
+fn pieces_part(pieces: &Path, q: &Query) -> Value {
+    let found = piece_folders(pieces);
+    let mut out = page(found.iter(), q, "pieces", |p| piece_row(p));
+    if found.is_empty() {
+        out["note"] = json!(
+            "The level has no piece: a module's piece of a level of the game, or a level's streaming cells, are what the level build makes into this folder."
+        );
+    }
+    out
+}
+
 fn graph(dir: &Path, q: &Query) -> Result<Value, String> {
     let Some(g) = read_graph(dir)? else { return Ok(missing(q.part, "level.graph")) };
     Ok(json!({
@@ -730,6 +852,55 @@ pub(crate) mod sample {
             }
         });
         header(w, 0, shader, min, max);
+    }
+
+    /// A piece: two leaves in one vertex and one index buffer of its own, both roots, the first
+    /// hung on sector 3, the second on the sector at its centre.
+    pub(crate) fn piece() -> (Vec<u8>, Vec<u8>) {
+        let mut piece = Writer::new();
+        piece.chunk(1, |w| {
+            w.w_u16(14);
+            w.w_u16(1);
+        });
+        let mut visuals = Writer::new();
+        visuals.chunk(0, |w| leaf(w, 1, Vec3::ZERO, Vec3::ONE, 4, 6));
+        visuals.chunk(1, |w| {
+            w.chunk(21, |w| {
+                for v in [0, 4, 4, 0, 6, 6] {
+                    w.w_u32(v);
+                }
+            });
+            header(w, 0, 1, Vec3::new(1.0, 0.0, 0.0), Vec3::new(2.0, 1.0, 1.0));
+        });
+        piece.chunk(3, |w| w.w(visuals.bytes()));
+        piece.chunk(2, |w| {
+            w.w_u32(2);
+            w.w_stringz("");
+            w.w_stringz(r"def_shaders\lmap/wall\wall_a,lmap#1_1,lmap#1_2");
+        });
+        piece.chunk(32, |w| {
+            w.w_u32(2);
+            for (v, s) in [(0u32, 3u16), (1, 0xFFFF)] {
+                w.w_u32(v);
+                w.w_u16(s);
+                w.w_u16(0);
+            }
+        });
+        let mut geom = Writer::new();
+        geom.chunk(9, |w| {
+            w.w_u32(1);
+            // one float3 position and the end mark
+            w.w(&[0, 0, 0, 0, 2, 0, 0, 0, 0xFF, 0, 0, 0, 17, 0, 0, 0]);
+            w.w_u32(8);
+            w.w(&[0u8; 8 * 12]);
+        });
+        geom.chunk(10, |w| {
+            w.w_u32(1);
+            w.w_u32(12);
+            w.w(&[0u8; 24]);
+        });
+        geom.chunk(11, |w| w.w_u32(0));
+        (piece.into_bytes(), geom.into_bytes())
     }
 
     pub(crate) fn level() -> Vec<u8> {
@@ -867,6 +1038,61 @@ mod tests {
         assert_eq!((r["lights"][0]["kind"].clone(), r["glows"]["total"].clone()), (json!("point"), json!(1)));
         let r = call(&rt, &ed, json!({ "folder": folder, "part": "files" }));
         assert_eq!(r["files"][0]["name"], "level");
+    }
+
+    #[test]
+    fn the_pieces_of_a_level_are_read_with_what_the_game_would_refuse() {
+        let (rt, ed) = editor();
+        let dir = level_folder();
+        let folder = dir.path().to_string_lossy().into_owned();
+        // no piece yet: said, and the summary carries none
+        let r = call(&rt, &ed, json!({ "folder": folder, "part": "pieces" }));
+        assert_eq!((r["ok"].clone(), r["total"].clone()), (json!(true), json!(0)), "{r}");
+        assert!(r["note"].as_str().unwrap().contains("no piece"));
+        assert!(call(&rt, &ed, json!({ "folder": folder }))["pieces"].is_null());
+
+        let (piece, geom) = sample::piece();
+        let main = dir.path().join("pieces").join("main");
+        fs::create_dir_all(&main).unwrap();
+        fs::write(main.join("piece"), &piece).unwrap();
+        fs::write(main.join("piece.geom"), &geom).unwrap();
+        fs::write(main.join("lmap#1_1.dds"), b"DDS ").unwrap();
+        fs::write(main.join("lmap#1_2.dds"), b"DDS ").unwrap();
+        fs::write(
+            main.join("piece.ltx"),
+            "[piece]\r\nversion = 1\r\nbox     = 0.000, 0.000, 0.000, 2.000, 1.000, 1.000\r\nsector  = auto\r\nstream  = true\r\n",
+        )
+        .unwrap();
+        let r = call(&rt, &ed, json!({ "folder": folder, "part": "pieces" }));
+        assert_eq!(r["total"], 1, "{r}");
+        let p = &r["pieces"][0];
+        assert_eq!(
+            (p["name"].clone(), p["stream"].clone(), p["sector"].clone()),
+            (json!("main"), json!(true), json!("auto"))
+        );
+        assert_eq!(p["box"], json!([0.0, 0.0, 0.0, 2.0, 1.0, 1.0]));
+        assert_eq!((p["visuals"].clone(), p["roots"].clone()), (json!(2), json!(2)));
+        assert_eq!(
+            (p["vertices"].clone(), p["faces"].clone(), p["lightmap_pages"].clone()),
+            (json!(8), json!(4), json!(1))
+        );
+        assert_eq!(p["problems"], json!([]), "{p}");
+        // in the summary too
+        let s = call(&rt, &ed, json!({ "folder": folder }));
+        assert_eq!(s["pieces"][0]["name"], "main", "{s}");
+        // a piece whose visual names a range past its buffers is one the game refuses
+        let mut short = geom.clone();
+        let at = short.len() - 4 - 8 - 24 - 4;
+        short[at..at + 4].copy_from_slice(&10u32.to_le_bytes());
+        fs::write(main.join("piece.geom"), &short).unwrap();
+        let r = call(&rt, &ed, json!({ "folder": folder, "part": "pieces" }));
+        let problems = r["pieces"][0]["problems"].as_array().unwrap();
+        assert!(problems.iter().any(|x| x.as_str().unwrap().contains("outside its buffers")), "{r}");
+        // the reader of a compiled level reads the piece: roots, their sectors, nothing of a level's
+        let l = CompiledLevel::read_piece(&piece).unwrap();
+        assert_eq!(l.roots.len(), 2);
+        assert_eq!((l.visuals[0].sector, l.visuals[1].sector), (Some(3), None));
+        assert!(CompiledLevel::read_piece(&sample::level()).is_err(), "a level is no piece");
     }
 
     #[test]

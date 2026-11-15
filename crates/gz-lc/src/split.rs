@@ -145,7 +145,7 @@ pub fn uv_map(g: &mut LcGlobalData, splits: &mut Vec<Split>, log: &mut Log, ctl:
     Ok(())
 }
 
-fn faces_box(g: &LcGlobalData, faces: &[FaceId]) -> Aabb {
+pub(crate) fn faces_box(g: &LcGlobalData, faces: &[FaceId]) -> Aabb {
     let mut bb = Aabb::INVALID;
     for &f in faces {
         if let Some(p) = g.mesh.positions(f) {
@@ -408,16 +408,29 @@ fn chart_texels(g: &LcGlobalData, s: &[FaceId]) -> u64 {
 /// material is a key that merging never changes (the merged front is the taken one's, of the same
 /// key), so each subdivision looks only at the later ones of its key; a taken one is marked gone,
 /// which keeps the others' order.
-pub fn merge_geometry(g: &LcGlobalData, splits: &mut Vec<Split>, log: &mut Log, ctl: &Ctl<'_>) -> Result<()> {
-    // the material and the number of texture channels (one for every face before the light)
-    let key = |s: &Split| s.first().and_then(|&f| g.mesh.face(f)).map(|x| (x.material, x.tc.len()));
-    let keys: Vec<_> = splits.iter().map(key).collect();
+///
+/// A level that streams by cells of `cells` metres (0: it does not) merges within a cell only: the
+/// cell the subdivision's centre lies in is part of the key, and a merge that would make a
+/// visual larger than a cell on x or z out of two that are not is refused.
+pub fn merge_geometry(
+    g: &LcGlobalData,
+    splits: &mut Vec<Split>,
+    cells: f32,
+    log: &mut Log,
+    ctl: &Ctl<'_>,
+) -> Result<()> {
+    // the material, the number of texture channels (one for every face before the light), the cell
+    let cell = |s: &Split| {
+        if cells > 0.0 { crate::tree::cell_of(faces_box(g, s).center(), cells) } else { [0, 0] }
+    };
+    let key = |s: &Split| s.first().and_then(|&f| g.mesh.face(f)).map(|x| (x.material, x.tc.len(), cell(s)));
+    let keys: Vec<_> = splits.par_iter().map(key).collect();
     let mut texels: Vec<u64> = splits.par_iter().map(|s| chart_texels(g, s)).collect();
     let mut needs: Vec<(bool, Aabb)> = splits.par_iter().map(|s| need_merge(g, s)).collect();
     // per key, the candidates by the cells (x, z) their boxes touch. A candidate's box does not
     // change while it is one: only the subdivision whose turn it is grows, and it is never a
     // candidate again.
-    let mut grids: FxHashMap<(u16, usize), Grid> = FxHashMap::default();
+    let mut grids: FxHashMap<(u16, usize, [i32; 2]), Grid> = FxHashMap::default();
     for (i, k) in keys.iter().enumerate() {
         let (Some(k), (true, bb)) = (k, needs[i]) else { continue };
         let grid = grids.entry(*k).or_default();
@@ -447,6 +460,9 @@ pub fn merge_geometry(g: &LcGlobalData, splits: &mut Vec<Split>, log: &mut Log, 
             let judge = |i: usize| {
                 let (need, bb) = needs[i];
                 if i <= split || !alive[i] || !need {
+                    return None;
+                }
+                if cells > 0.0 && !within_cell(&base, &base_orig, &bb, cells) {
                     return None;
                 }
                 // X-Ray's compiler starts from flt_max and takes only a smaller volume
@@ -494,6 +510,27 @@ pub fn merge_geometry(g: &LcGlobalData, splits: &mut Vec<Split>, log: &mut Log, 
     });
     log.msg(format!("{} subdivisions.", splits.len()));
     Ok(())
+}
+
+/// Whether a merge keeps a visual a cell's: no larger than a cell on x and z, unless one of the two
+/// already is (then it is the level's visual anyway).
+fn within_cell(base: &Aabb, base_orig: &Aabb, bb: &Aabb, cells: f32) -> bool {
+    let big = |b: &Aabb| b.max.x - b.min.x > cells || b.max.z - b.min.z > cells;
+    if big(base_orig) || big(bb) {
+        return true;
+    }
+    let mut m = *base;
+    m.merge(bb);
+    !big(&m)
+}
+
+/// Where every subdivision's visual goes: the level when it does not stream by cells (`cells` 0),
+/// else by its box ([`crate::tree::place_of`]).
+pub fn places(g: &LcGlobalData, splits: &[Split], cells: f32) -> Vec<crate::tree::Place> {
+    if cells <= 0.0 {
+        return vec![crate::tree::Place::Base; splits.len()];
+    }
+    splits.par_iter().map(|s| crate::tree::place_of(&faces_box(g, s), cells)).collect()
 }
 
 /// How far from its box a subdivision looks for a candidate: past `4 * c_SS_maxsize / 3` (42 m)
@@ -580,11 +617,19 @@ pub fn visual_charts(g: &LcGlobalData, splits: &[Split]) -> Vec<Vec<DeflId>> {
 
 /// A subdivision whose faces the packer put on several pages (a visual whose charts did not fit
 /// one page: never, by the merge's limit) becomes one subdivision per page, in place, the pages
-/// in the order its faces meet them. Answers how many were cut.
-pub fn split_by_page(g: &LcGlobalData, splits: &mut Vec<Split>, log: &mut Log) -> usize {
+/// in the order its faces meet them, each where the visual was to go (`places`, cut alike). Answers
+/// how many were cut.
+pub fn split_by_page(
+    g: &LcGlobalData,
+    splits: &mut Vec<Split>,
+    places: &mut Vec<crate::tree::Place>,
+    log: &mut Log,
+) -> usize {
     let mut cut = 0;
     let mut out = Vec::with_capacity(splits.len());
+    let mut out_places = Vec::with_capacity(splits.len());
     for (i, s) in std::mem::take(splits).into_iter().enumerate() {
+        let place = places.get(i).copied().unwrap_or_default();
         let mut pages: Vec<(Option<u32>, Split)> = Vec::new();
         for &f in &s {
             let p = g.mesh.face(f).and_then(|x| x.lmap);
@@ -600,11 +645,14 @@ pub fn split_by_page(g: &LcGlobalData, splits: &mut Vec<Split>, log: &mut Log) -
                 s.len(),
                 pages.len()
             ));
+            out_places.extend(std::iter::repeat_n(place, pages.len()));
             out.extend(pages.into_iter().map(|(_, l)| l));
         } else {
             out.push(s);
+            out_places.push(place);
         }
     }
     *splits = out;
+    *places = out_places;
     cut
 }

@@ -189,7 +189,13 @@ is on disk, read back from the finished archive.
 beside them) and never into the game; a level folder is wiped only when its real path lies below the project's
 levels folder and is no link. It is one job of steps that checks first what a later step would refuse, ends at
 the first error (a warning never ends it) and stops within about a second in any phase; on a level the linked
-game has, the compile steps are not needed for the module, and Play builds the module instead of the level.
+game has, the compile steps are not needed for the module, and Play builds the module instead of the level. A level's
+picture can also come in pieces the game loads beside the level (the game's `XMS_ARCHITECTURE.md` 8.3): on a
+level the linked game has, the build's `piece` step compiles the static objects the module places, lit beside the
+rest of the scene as occluders, into the module's `levels\<level>\pieces\main` (its scratch under `temp`), their
+collision into `overlay.xcform`; a level of the module's own with Streaming Cells (`build.cell_size`) keeps its
+sectors, portals, lights and its visuals larger than a cell, and every cell's visuals become a piece of their own in
+`levels\<level>\pieces\cell_<x>_<z>`. `level.inspect part=pieces` reads them.
 
 ## 10. Proof
 

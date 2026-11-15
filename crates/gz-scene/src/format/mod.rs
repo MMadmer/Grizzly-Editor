@@ -314,6 +314,17 @@ pub static SCENE_FIELDS: &[Field<SceneState>] = &[
         |l, v| l.build.lm_rms_zero = as_u32(v)?
     ),
     level!(
+        "build.cell_size",
+        "Streaming Cells",
+        "Build",
+        "m",
+        Ty::Integer { min: 0, max: 4096 },
+        "0",
+        "The game loads the level's picture cell by cell around the player: the size of a cell. 0 keeps the level one piece.",
+        |l| int(l.cell_size),
+        |l, v| l.cell_size = as_u32(v)?
+    ),
+    level!(
         "build.reserved",
         "Kept Build Values",
         "Build",

@@ -55,6 +55,15 @@ pub struct Request {
     pub parts: Vec<Part>,
     /// The compiler's flags (`-nosun`, `-noise`, ...); unknown ones are named in the log.
     pub flags: String,
+    /// The level's `pieces` folder in the module (`<project>\levels\<level>\pieces`), where its
+    /// streaming cells or the module's piece go; `None`: the compile writes no piece and leaves the
+    /// folder as it is.
+    pub pieces: Option<PathBuf>,
+    /// `dir` holds a piece's build project: the compile makes the module's piece of a level of the
+    /// game (`-piece`).
+    pub piece: bool,
+    /// The level's streaming cells in metres (`-cells=`), 0: none.
+    pub cells: u32,
 }
 
 /// The parts a level folder can be compiled with: the level always, the details when the build
@@ -68,8 +77,12 @@ pub fn parts_of(dir: &std::path::Path, details: Option<bool>) -> Vec<Part> {
 /// Runs the request inside a job: each part on the CPU pool, the job's stage following the
 /// compiler's phases. Answers the report of every part.
 pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<serde_json::Value, JobError> {
-    let (opts, unknown) =
+    let (mut opts, unknown) =
         Options::parse(req.flags.split_whitespace()).map_err(|e| JobError::new(e.to_string()))?;
+    opts.piece |= req.piece;
+    if req.cells > 0 {
+        opts.cells = req.cells;
+    }
     for u in &unknown {
         editor.log.warn(format!("The compiler does not know the option '{u}'; it is left out."));
     }
@@ -101,8 +114,8 @@ pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<ser
             Part::Level => format!("Compiling the level, the light on {on}"),
             Part::Details => format!("Lighting the detail objects on {on}"),
         });
-        let (input, opts2, ctx2) =
-            (Input { level: req.dir.clone(), sources: sources.clone() }, opts.clone(), ctx.clone());
+        let input = Input { level: req.dir.clone(), sources: sources.clone(), pieces: req.pieces.clone() };
+        let (opts2, ctx2) = (opts.clone(), ctx.clone());
         let out = Throttle::new(ctx.clone(), editor.log.clone(), on.clone());
         let lighter = lighter.clone();
         let worker = out.clone();
@@ -161,6 +174,10 @@ pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<ser
             "lighter": report.lighter,
             "samples": report.samples,
             "structure": format!("{:016x}", report.structure),
+            "pieces": report.pieces.iter().map(|(name, files)| json!({
+                "name": name,
+                "files": files.iter().map(|(n, s)| json!({ "name": n, "size": s })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
         }));
     }
     Ok(json!({

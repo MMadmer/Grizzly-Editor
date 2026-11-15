@@ -15,7 +15,7 @@ use crate::light::LightSet;
 use crate::lightmap::{Lightmap, LightmapPage, PackReport, merge_lightmaps, pack_lightmaps};
 use crate::mesh::{DeflId, FaceId, Mesh, Smoothing};
 use crate::mu::{MuEnv, MuModel, MuReference, cache_opacity, light_mu};
-use crate::ray::{RayModel, RcastForm};
+use crate::ray::{Occluder, RayModel, RcastForm};
 use crate::vertex::{apply_vertex_light, light_vertices};
 use crate::{Ctl, LcError, Result};
 
@@ -34,6 +34,8 @@ pub struct LcGlobalData {
     pub lightmaps: Vec<Lightmap>,
     pub mu_models: Vec<MuModel>,
     pub mu_refs: Vec<MuReference>,
+    /// Faces that only cast shadows (a piece's build): in the ray model and nowhere else.
+    pub occluders: Vec<Occluder>,
     /// The level's vertices and faces, and the error records.
     pub mesh: Mesh,
     /// The level's deflectors.
@@ -74,6 +76,7 @@ impl LcGlobalData {
             lightmaps: Vec::new(),
             mu_models: Vec::new(),
             mu_refs: Vec::new(),
+            occluders: Vec::new(),
             mesh: Mesh::new(),
             deflectors: Deflectors::default(),
             nosun: false,
@@ -172,6 +175,7 @@ impl LcGlobalData {
             &mut self.mesh,
             &mut self.mu_models,
             &self.mu_refs,
+            &self.occluders,
             &self.shaders,
             &self.materials,
             bounds,
@@ -243,6 +247,27 @@ impl LcGlobalData {
         ctl: &Ctl<'_>,
     ) -> Result<(Vec<LightmapPage>, PackReport)> {
         pack_lightmaps(&mut self.deflectors, visuals, &mut self.mesh, &mut self.lightmaps, ctl)
+    }
+
+    /// [`Self::pack_lightmaps`] with every visual in a group (`groups[i]` the group of visual `i`):
+    /// the visuals of one group share pages that hold no other group's, and every group's pages
+    /// are numbered from 1 (`lmap#1`), as each lies in a folder of its own. Answers each page's
+    /// group beside the pages.
+    pub fn pack_lightmaps_grouped(
+        &mut self,
+        visuals: &[Vec<DeflId>],
+        groups: &[u32],
+        ctl: &Ctl<'_>,
+    ) -> Result<(Vec<(u32, LightmapPage)>, PackReport)> {
+        let (pages, report, of_page) = crate::lightmap::pack_grouped(
+            &mut self.deflectors,
+            visuals,
+            Some(groups),
+            &mut self.mesh,
+            &mut self.lightmaps,
+            ctl,
+        )?;
+        Ok((of_page.into_iter().zip(pages).collect(), report))
     }
 
     /// The light of a build, every part of it through `lighter`, in one scene of the level where

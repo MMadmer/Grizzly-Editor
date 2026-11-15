@@ -89,6 +89,7 @@ pub fn step_action(step: Step) -> &'static str {
         Step::Details => "level.build_details",
         Step::Light => "level.build_light",
         Step::DetailLight => "level.build_detail_light",
+        Step::Piece => "level.build_piece",
     }
 }
 
@@ -402,6 +403,7 @@ fn step_actions() -> Vec<Action> {
         step!(Step::Details),
         step!(Step::Light),
         step!(Step::DetailLight),
+        step!(Step::Piece),
     ]
 }
 
@@ -418,6 +420,7 @@ pub fn step_title(step: Step) -> &'static str {
         Step::Details => "Build Detail Objects",
         Step::Light => "Build Lighting",
         Step::DetailLight => "Build Detail Lighting",
+        Step::Piece => "Build Level Piece",
     }
 }
 

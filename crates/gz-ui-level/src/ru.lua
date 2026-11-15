@@ -70,6 +70,7 @@ return {
   { "Build Detail Objects", "Собрать детейл-объекты" },
   { "Build Lighting", "Рассчитать освещение" },
   { "Build Detail Lighting", "Рассчитать освещение детейл-объектов" },
+  { "Build Level Piece", "Собрать фрагмент уровня" },
 
   -- why an action is off
   { "Open or create a scene first.", "Сначала откройте или создайте сцену." },
@@ -107,6 +108,7 @@ return {
   { "Details", "Детейл-объекты", ctx = "build_step" },
   { "Light", "Освещение", ctx = "build_step" },
   { "Detail Light", "Освещение детейл-объектов", ctx = "build_step" },
+  { "Level Piece", "Фрагмент уровня", ctx = "build_step" },
   { "Fresh", "Актуален" },
   { "Stale", "Устарел" },
   { "Never Built", "Не собирался" },

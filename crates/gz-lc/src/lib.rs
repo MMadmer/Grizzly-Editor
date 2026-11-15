@@ -39,6 +39,8 @@ mod vcache;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_pieces;
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -104,6 +106,58 @@ pub struct Options {
     /// light may be - the charts, the merge and the packing measured at their real sizes under a
     /// constant light.
     pub no_lm_shrink: bool,
+    /// `-piece`: the build project is a piece of a level of the game - its authored objects, with
+    /// the rest of the level as occluders: the structure, the light and the atlas as for a level,
+    /// without the collision, the sectors, the portals and the lights; the output is one piece.
+    pub piece: bool,
+    /// `-cells=<metres>`: the level streams by cells of this size (0: it does not). The level keeps
+    /// its sectors, portals, lights and every visual larger than a cell; the rest is one piece per
+    /// cell.
+    pub cells: u32,
+}
+
+/// What a compile makes of its build project.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Layout {
+    /// The level, as one file.
+    Whole,
+    /// The level beside a piece per streaming cell of this many metres.
+    Cells(f32),
+    /// One piece of a level the game has.
+    Piece,
+}
+
+impl Layout {
+    fn of(o: &Options) -> Self {
+        match (o.piece, o.cells) {
+            (true, _) => Self::Piece,
+            (false, 0) => Self::Whole,
+            (false, c) => Self::Cells(c as f32),
+        }
+    }
+
+    fn cells(self) -> f32 {
+        if let Self::Cells(c) = self { c } else { 0.0 }
+    }
+}
+
+/// The name of a module's piece of a level of the game, the folder under the level's `pieces`.
+pub const PIECE_NAME: &str = "main";
+/// What a streaming cell's piece is named: `cell_<x>_<z>`.
+pub const CELL_PREFIX: &str = "cell_";
+
+/// The name of a streaming cell's piece.
+#[must_use]
+pub fn cell_name(c: [i32; 2]) -> String {
+    format!("{CELL_PREFIX}{}_{}", c[0], c[1])
+}
+
+/// The files of one piece of a level, by their names in its folder.
+#[derive(Clone, Debug, Default)]
+pub struct PieceFiles {
+    /// The folder under the level's `pieces`: [`PIECE_NAME`] or a cell's ([`cell_name`]).
+    pub name: String,
+    pub files: Vec<(String, Vec<u8>)>,
 }
 
 impl Options {
@@ -128,6 +182,15 @@ impl Options {
                     None => {
                         return Err(Error::Refused(format!(
                             "{a}: the light is baked on auto, gpu, cpu or off."
+                        )));
+                    }
+                },
+                "piece" => o.piece = true,
+                t if t.starts_with("cells=") => match t["cells=".len()..].parse::<u32>() {
+                    Ok(n) => o.cells = n,
+                    _ => {
+                        return Err(Error::Refused(format!(
+                            "{a}: the streaming cells' size is a whole number of metres (0: none)."
                         )));
                     }
                 },
@@ -238,6 +301,9 @@ pub struct Output {
     /// the static models' references, the collision - and nothing of its light: two compiles of one
     /// project with any lighter on any number of threads answer the same.
     pub structure: u64,
+    /// The pieces the compile made (`-piece`: one; `-cells=`: one per cell), each written into a
+    /// folder of its own under the level's `pieces`.
+    pub pieces: Vec<PieceFiles>,
 }
 
 impl Output {
@@ -261,14 +327,20 @@ pub struct Report {
     pub samples: u64,
     /// [`Output::structure`]: the same on every lighter, machine and number of threads.
     pub structure: u64,
+    /// The pieces written, each with its files.
+    pub pieces: Vec<(String, Vec<(String, usize)>)>,
 }
 
 /// Where a compile reads and writes.
 #[derive(Clone, Debug)]
 pub struct Input {
-    /// The level folder: `build.prj` and the other build files in, the level out.
+    /// The level folder: `build.prj` and the other build files in, the level out (for a piece: the
+    /// build's scratch).
     pub level: PathBuf,
     pub sources: Sources,
+    /// The level's `pieces` folder, where the pieces go - and where the streaming cells of an
+    /// earlier compile this one does not write are removed from. `None`: no pieces are written.
+    pub pieces: Option<PathBuf>,
 }
 
 fn adapt(e: LcError) -> Error {
@@ -347,6 +419,12 @@ pub fn compile_project(
     ctl: &Ctl<'_>,
     log: &mut Log,
 ) -> Result<Output> {
+    let layout = Layout::of(opts);
+    if layout != Layout::Piece && !prj.occluders.is_empty() {
+        return Err(Error::Invalid(
+            "build.prj holds occluders, which only a piece's build has: compile it with -piece.".into(),
+        ));
+    }
     log.phase(PHASES[0]);
     let (mut g, mut extra) = load::load(prj, shaders, textures, !opts.nosmg)?;
     g.nosun = opts.nosun;
@@ -381,8 +459,12 @@ pub fn compile_project(
     ctl.check().map_err(adapt)?;
 
     log.phase(PHASES[4]);
-    out.put("level.cform", cform::build_cform(&mut g, log, ctl)?);
-    tree::save_portals(&extra, &mut level);
+    let cform = cform::build_cform(&mut g, log, ctl)?;
+    // a piece's collision is the module's overlay, made from the scene
+    if layout != Layout::Piece {
+        out.put("level.cform", cform);
+        tree::save_portals(&extra, &mut level);
+    }
     ctl.check().map_err(adapt)?;
 
     log.phase(PHASES[5]);
@@ -411,9 +493,13 @@ pub fn compile_project(
     ctl.check().map_err(adapt)?;
 
     log.phase(PHASES[10]);
-    split::merge_geometry(&g, &mut splits, log, ctl)?;
+    split::merge_geometry(&g, &mut splits, layout.cells(), log, ctl)?;
     let charts = split::visual_charts(&g, &splits);
+    let mut places = split::places(&g, &splits, layout.cells());
     ctl.check().map_err(adapt)?;
+    // the files of each piece, by its folder's name
+    let mut piece_files: std::collections::BTreeMap<String, Vec<(String, Vec<u8>)>> =
+        std::collections::BTreeMap::new();
 
     // LIGHT: every light value through the lighter
     g.shrink = !opts.no_lm_shrink;
@@ -433,37 +519,86 @@ pub fn compile_project(
     let implicit_dds: Vec<_> = implicit.par_iter().map(|m| m.dds().map(|d| (m.name.clone(), d))).collect();
     for r in implicit_dds {
         let (name, (base, lm)) = r?;
-        out.put(format!("{name}.dds"), base);
-        out.put(format!("{name}_lm.dds"), lm);
+        // the textures a piece's visuals name lie in its folder; a level's cells read the level's
+        if layout == Layout::Piece {
+            let files = piece_files.entry(PIECE_NAME.to_owned()).or_default();
+            files.push((format!("{name}.dds"), base));
+            files.push((format!("{name}_lm.dds"), lm));
+        } else {
+            out.put(format!("{name}.dds"), base);
+            out.put(format!("{name}_lm.dds"), lm);
+        }
     }
     ctl.check().map_err(adapt)?;
 
     // ATLAS: what was lit packed, the charts of one visual on one page
     log.phase(PHASES[15]);
-    let (pages, packed) = g.pack_lightmaps(&charts, ctl)?;
+    // with cells, every cell's visuals on pages of its own (group 0 the level's)
+    let (pages, packed): (Vec<(Option<String>, gz_lc_light::LightmapPage)>, _) = match layout {
+        Layout::Whole => {
+            let (pages, packed) = g.pack_lightmaps(&charts, ctl)?;
+            (pages.into_iter().map(|p| (None, p)).collect(), packed)
+        }
+        Layout::Piece => {
+            let (pages, packed) = g.pack_lightmaps(&charts, ctl)?;
+            (pages.into_iter().map(|p| (Some(PIECE_NAME.to_owned()), p)).collect(), packed)
+        }
+        Layout::Cells(_) => {
+            let mut cells: Vec<[i32; 2]> = places
+                .iter()
+                .filter_map(|p| match p {
+                    tree::Place::Cell(c) => Some(*c),
+                    _ => None,
+                })
+                .collect();
+            cells.sort_unstable();
+            cells.dedup();
+            let groups: Vec<u32> = places
+                .iter()
+                .map(|p| match p {
+                    tree::Place::Cell(c) => cells.binary_search(c).map_or(0, |k| k as u32 + 1),
+                    _ => 0,
+                })
+                .collect();
+            let (pages, packed) = g.pack_lightmaps_grouped(&charts, &groups, ctl)?;
+            let folder =
+                |grp: u32| grp.checked_sub(1).and_then(|k| cells.get(k as usize)).map(|c| cell_name(*c));
+            (pages.into_iter().map(|(grp, p)| (folder(grp), p)).collect(), packed)
+        }
+    };
     log.msg(format!(
         "{} lightmap pages, {:.1} % of their texels taken by the charts.",
         packed.pages,
         packed.fill * 100.0
     ));
-    if split::split_by_page(&g, &mut splits, log) > 0 {
+    if split::split_by_page(&g, &mut splits, &mut places, log) > 0 {
         log.warn(format!(
             "{} visuals were cut by lightmap page: their charts did not fit one page.",
             packed.split.len()
         ));
     }
-    let encoded: Vec<_> = pages.par_iter().map(|p| p.dds().map(|d| (p.name.clone(), d))).collect();
+    let encoded: Vec<_> =
+        pages.par_iter().map(|(at, p)| p.dds().map(|d| (at.clone(), p.name.clone(), d))).collect();
     drop(pages);
     for r in encoded {
-        let (name, (a, b)) = r?;
-        out.put(format!("{name}_1.dds"), a);
-        out.put(format!("{name}_2.dds"), b);
+        let (at, name, (a, b)) = r?;
+        match at {
+            None => {
+                out.put(format!("{name}_1.dds"), a);
+                out.put(format!("{name}_2.dds"), b);
+            }
+            Some(piece) => {
+                let files = piece_files.entry(piece).or_default();
+                files.push((format!("{name}_1.dds"), a));
+                files.push((format!("{name}_2.dds"), b));
+            }
+        }
     }
     ctl.check().map_err(adapt)?;
 
     // OUTPUT
     log.phase(PHASES[16]);
-    tree::flex2ogf(&g, splits, &mut tree, opts.noise, log, ctl)?;
+    tree::flex2ogf(&g, splits, &places, &mut tree, opts.noise, log, ctl)?;
     ctl.check().map_err(adapt)?;
 
     log.phase(PHASES[17]);
@@ -471,29 +606,146 @@ pub fn compile_project(
     tree::mu_calc_ogf(&g, &mut tree, log, ctl)?;
     tree::mu_export_geometry(&g, &mut tree);
     log.status("The references".into());
-    tree::mu_export_refs(&g, &extra, &mut tree)?;
+    tree::mu_export_refs(&g, &extra, &mut tree, layout != Layout::Piece)?;
+    if let Layout::Cells(size) = layout {
+        tree::place_models(&mut tree, size);
+    }
     ctl.check().map_err(adapt)?;
 
     log.phase(PHASES[18]);
-    let sectors = tree::build_sectors(&mut extra, &mut tree, log)?;
     let mut rng = sphere::MsvcRand::min_sphere();
-    tree::take_bounds(&mut tree, &mut rng);
-    out.structure = structure_digest(&tree, &sectors, &out);
+    let parts = match layout {
+        Layout::Whole => {
+            let sectors = tree::build_sectors(&mut extra, &mut tree, log)?;
+            tree::take_bounds(&mut tree, &mut rng);
+            Parts { sectors, cells: Vec::new(), piece: Vec::new() }
+        }
+        Layout::Cells(_) => {
+            let (sectors, cells) = tree::build_sectors_cells(&mut extra, &mut tree, log)?;
+            tree::take_bounds(&mut tree, &mut rng);
+            tree::bound_empty_roots(&mut tree, &sectors, &cells);
+            log.msg(format!("{} streaming cells.", cells.len()));
+            Parts { sectors, cells, piece: Vec::new() }
+        }
+        Layout::Piece => {
+            let piece = tree::piece_roots(&mut extra, &mut tree);
+            tree::take_bounds(&mut tree, &mut rng);
+            log.msg(format!("{} roots of the piece.", piece.len()));
+            Parts { sectors: Vec::new(), cells: Vec::new(), piece }
+        }
+    };
+    out.structure = structure_digest(&tree, &parts, layout != Layout::Whole, &out);
     ctl.check().map_err(adapt)?;
 
     log.phase(PHASES[19]);
     ctl.check().map_err(adapt)?;
-    tree::save_lights(&extra, &mut level);
-    tree::save_glows(&g, &extra, &mut tree, &mut level);
-    let (geom_main, geom_fast) = tree::save_tree(&g, &extra, &mut tree, &mut level, log);
-    tree::save_sectors(&sectors, &mut level);
-    out.put("level", level.into_bytes());
-    out.put("level.geom", geom_main);
-    out.put("level.geomx", geom_fast);
+    let quality = g.params.quality;
+    match layout {
+        Layout::Whole => {
+            tree::save_lights(&extra, &mut level);
+            tree::save_glows(&g, &extra, &mut tree, &mut level);
+            let (geom_main, geom_fast) = tree::save_tree(&g, &extra, &mut tree, &mut level, log);
+            tree::save_sectors(&parts.sectors, &mut level);
+            out.put("level", level.into_bytes());
+            out.put("level.geom", geom_main);
+            out.put("level.geomx", geom_fast);
+        }
+        Layout::Cells(_) => {
+            let ids: Vec<usize> =
+                (0..tree.nodes.len()).filter(|&i| tree.nodes[i].place == tree::Place::Base).collect();
+            let (mut base, map) = tree::sub_tree(&g, &tree, &ids)?;
+            tree::save_lights(&extra, &mut level);
+            tree::save_glows(&g, &extra, &mut base, &mut level);
+            let (geom_main, geom_fast) = tree::save_tree(&g, &extra, &mut base, &mut level, log);
+            let sectors: Vec<tree::Sector> = parts
+                .sectors
+                .iter()
+                .map(|s| tree::Sector {
+                    root: map.get(&s.root).map_or(0, |&r| r as usize),
+                    portals: s.portals.clone(),
+                })
+                .collect();
+            tree::save_sectors(&sectors, &mut level);
+            out.put("level", level.into_bytes());
+            out.put("level.geom", geom_main);
+            out.put("level.geomx", geom_fast);
+            for c in &parts.cells {
+                ctl.check().map_err(adapt)?;
+                let place = tree::Place::Cell(c.cell);
+                let ids: Vec<usize> =
+                    (0..tree.nodes.len()).filter(|&i| tree.nodes[i].place == place).collect();
+                let files = save_piece(&g, &extra, &tree, &ids, &c.roots, quality, log)?;
+                piece_files.entry(cell_name(c.cell)).or_default().extend(files);
+            }
+        }
+        Layout::Piece => {
+            let ids: Vec<usize> =
+                (0..tree.nodes.len()).filter(|&i| tree.nodes[i].place != tree::Place::Dropped).collect();
+            let roots: Vec<(usize, u16)> =
+                parts.piece.iter().map(|&r| (r, gz_fmt_level::PIECE_SECTOR_AUTO)).collect();
+            let files = save_piece(&g, &extra, &tree, &ids, &roots, quality, log)?;
+            piece_files.entry(PIECE_NAME.to_owned()).or_default().extend(files);
+        }
+    }
     out.put("build.err", g.mesh.errors.write_err());
     out.invalid_faces = g.mesh.errors.invalid_faces;
+    out.pieces = piece_files.into_iter().map(|(name, files)| PieceFiles { name, files }).collect();
     log.end_phase();
     Ok(out)
+}
+
+/// What the sectors' phase made: the level's sectors, the cells' pieces with their roots, a
+/// module piece's roots.
+struct Parts {
+    sectors: Vec<tree::Sector>,
+    cells: Vec<tree::CellPiece>,
+    piece: Vec<usize>,
+}
+
+/// One piece's files from the nodes `ids` of the tree: `piece` (the header, the shader table,
+/// the visuals, the roots - each with its sector), `piece.geom`, `piece.geomx` when a visual has
+/// fast geometry, and `piece.ltx` with the roots' box.
+fn save_piece(
+    g: &gz_lc_light::LcGlobalData,
+    extra: &Extra,
+    tree: &tree::Tree,
+    ids: &[usize],
+    roots: &[(usize, u16)],
+    quality: u16,
+    log: &mut Log,
+) -> Result<Vec<(String, Vec<u8>)>> {
+    let (mut sub, map) = tree::sub_tree(g, tree, ids)?;
+    let mut piece = gz_chunk::Writer::new();
+    piece.chunk(1, |w| {
+        w.w_u16(gz_fmt_level::LEVEL_COMPILER_VERSION);
+        w.w_u16(quality);
+    });
+    let (geom_main, geom_fast) = tree::save_tree(g, extra, &mut sub, &mut piece, log);
+    let mut written = Vec::with_capacity(roots.len());
+    let mut bb = gz_fmt_level::Aabb::INVALID;
+    for &(r, sector) in roots {
+        let at = map.get(&r).copied().ok_or_else(|| {
+            Error::Invalid(format!("The root {r} of a piece is not one of the piece's visuals."))
+        })?;
+        if let Some(n) = tree.nodes.get(r) {
+            bb.merge(&n.base.bbox);
+        }
+        written.push((at, sector));
+    }
+    tree::save_roots(&written, &mut piece);
+    let mut files = vec![("piece".to_owned(), piece.into_bytes()), ("piece.geom".to_owned(), geom_main)];
+    if tree::has_fast(&sub) {
+        files.push(("piece.geomx".to_owned(), geom_fast));
+    }
+    files.push(("piece.ltx".to_owned(), piece_ltx(&bb).into_bytes()));
+    Ok(files)
+}
+
+/// A piece's manifest: version 1, its box, its sectors by each root, streamed.
+#[must_use]
+pub fn piece_ltx(b: &gz_fmt_level::Aabb) -> String {
+    let n = [b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z].map(|v| format!("{v:.3}")).join(", ");
+    format!("[piece]\r\nversion = 1\r\nbox     = {n}\r\nsector  = auto\r\nstream  = true\r\n")
 }
 
 fn read(path: &Path) -> Result<Vec<u8>> {
@@ -646,6 +898,64 @@ fn write_all(dir: &Path, out: &Output, pages: bool, report: &mut Report) -> Resu
     Ok(())
 }
 
+/// The pieces into their folders under `dir`, each whole or not at all: written beside into
+/// [`STAGE_NEW`], the folder an earlier compile left moved aside into [`STAGE_OLD`], the new one
+/// moved in, the old one removed. With `stale_cells`, the cells' folders (`cell_*`) this compile
+/// does not write are removed too. The caller's write guard has judged `dir`.
+fn write_pieces(dir: &Path, pieces: &[PieceFiles], stale_cells: bool, report: &mut Report) -> Result<()> {
+    let (new, old) = (dir.join(STAGE_NEW), dir.join(STAGE_OLD));
+    for d in [&new, &old] {
+        if d.exists() {
+            std::fs::remove_dir_all(d).map_err(|e| io_err("removed", d, &e))?;
+        }
+    }
+    for p in pieces {
+        let staged = new.join(&p.name);
+        let made = (|| {
+            std::fs::create_dir_all(&staged).map_err(|e| io_err("made", &staged, &e))?;
+            for (name, bytes) in &p.files {
+                let path = rel_path(&staged, name);
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| io_err("made", parent, &e))?;
+                }
+                std::fs::write(&path, bytes).map_err(|e| io_err("written", &path, &e))?;
+            }
+            let at = dir.join(&p.name);
+            if at.exists() {
+                std::fs::create_dir_all(&old).map_err(|e| io_err("made", &old, &e))?;
+                std::fs::rename(&at, old.join(&p.name)).map_err(|e| io_err("moved aside", &at, &e))?;
+            }
+            if let Err(e) = std::fs::rename(&staged, &at) {
+                // the piece of the earlier compile goes back
+                let _ = std::fs::rename(old.join(&p.name), &at);
+                return Err(io_err("moved into place", &at, &e));
+            }
+            Ok(())
+        })();
+        if let Err(e) = made {
+            let _ = std::fs::remove_dir_all(&new);
+            let _ = std::fs::remove_dir_all(&old);
+            return Err(e);
+        }
+        report.pieces.push((p.name.clone(), p.files.iter().map(|(n, b)| (n.clone(), b.len())).collect()));
+    }
+    let _ = std::fs::remove_dir_all(&new);
+    let _ = std::fs::remove_dir_all(&old);
+    if stale_cells && let Ok(listing) = std::fs::read_dir(dir) {
+        for e in listing.flatten() {
+            let Ok(name) = e.file_name().into_string() else { continue };
+            let cell = name.to_ascii_lowercase().starts_with(CELL_PREFIX);
+            if cell
+                && e.file_type().is_ok_and(|t| t.is_dir())
+                && !pieces.iter().any(|p| p.name.eq_ignore_ascii_case(&name))
+            {
+                std::fs::remove_dir_all(e.path()).map_err(|err| io_err("removed", &e.path(), &err))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A level folder's `build.prj` compiled, the files written beside it, `build.err` (the faces the
 /// compiler refused, which the viewport draws) among them.
 pub fn compile(
@@ -663,6 +973,12 @@ pub fn compile(
         let opts = Options { threads: None, ..opts.clone() };
         log.msg(format!("* {n} worker threads of its own (-threads={n})"));
         return pool.install(|| compile(input, &opts, lighter, ctl, log));
+    }
+    let layout = Layout::of(opts);
+    if layout != Layout::Whole && input.pieces.is_none() {
+        return Err(Error::Refused(
+            "A level's pieces need the folder they go into: build the level with level.build.".into(),
+        ));
     }
     let t = Instant::now();
     log.phase(READING);
@@ -698,7 +1014,12 @@ pub fn compile(
     };
     // the last moment a Stop costs nothing: the level folder is not touched yet
     ctl.check().map_err(adapt)?;
-    write_all(&input.level, &out, true, &mut report)?;
+    write_all(&input.level, &out, layout != Layout::Piece, &mut report)?;
+    if let Some(dir) = &input.pieces {
+        // a level's own build owns its cells: those it does not write are an earlier build's
+        let stale_cells = layout != Layout::Piece;
+        write_pieces(dir, &out.pieces, stale_cells, &mut report)?;
+    }
     report.seconds = t.elapsed().as_secs_f64();
     report.lines = std::mem::take(&mut log.lines);
     report.phases = log.phases.clone();
@@ -769,8 +1090,10 @@ impl Fnv {
 /// lighters - which faces make which visual, their order, bounds, vertices' positions, normals,
 /// tangent basis, base texture coordinates, indices and windows, the static models' visuals and
 /// references, the sectors and the collision - and nothing of the light: no lightmap coordinate,
-/// page, colour or fit.
-fn structure_digest(tree: &tree::Tree, sectors: &[tree::Sector], out: &Output) -> u64 {
+/// page, colour or fit. A level that streams and a piece also hold where every visual went and the
+/// roots of the pieces (`parted`: left out for a level of one file, whose number stays as it was).
+fn structure_digest(tree: &tree::Tree, parts: &Parts, parted: bool, out: &Output) -> u64 {
+    let sectors = &parts.sectors;
     let mut h = Fnv(0xcbf2_9ce4_8422_2325);
     let ogf = |h: &mut Fnv, o: &ogf::Ogf| {
         h.u(u64::from(o.material));
@@ -839,6 +1162,28 @@ fn structure_digest(tree: &tree::Tree, sectors: &[tree::Sector], out: &Output) -
     }
     if let Some((_, cform)) = out.files.iter().find(|(n, _)| n == "level.cform") {
         h.bytes(cform);
+    }
+    if parted {
+        for n in &tree.nodes {
+            match n.place {
+                tree::Place::Base => h.u(0),
+                tree::Place::Cell([x, z]) => {
+                    h.u(1);
+                    h.u(x as u32 as u64);
+                    h.u(z as u32 as u64);
+                }
+                tree::Place::Dropped => h.u(2),
+            }
+        }
+        for c in &parts.cells {
+            h.u(c.cell[0] as u32 as u64);
+            h.u(c.cell[1] as u32 as u64);
+            for &(r, s) in &c.roots {
+                h.u(r as u64);
+                h.u(u64::from(s));
+            }
+        }
+        parts.piece.iter().for_each(|&r| h.u(r as u64));
     }
     h.0
 }

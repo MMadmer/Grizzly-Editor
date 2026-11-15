@@ -391,6 +391,8 @@ pub struct PackReport {
 /// One rectangle to place: a visual, or one chart of a visual that did not fit a page whole.
 struct Block {
     visual: usize,
+    /// The group whose pages it goes on.
+    group: u32,
     w: u32,
     h: u32,
     charts: Vec<(DeflId, Spot)>,
@@ -409,6 +411,21 @@ pub fn pack_lightmaps(
     lightmaps: &mut Vec<Lightmap>,
     ctl: &Ctl<'_>,
 ) -> Result<(Vec<LightmapPage>, PackReport)> {
+    pack_grouped(defls, visuals, None, mesh, lightmaps, ctl).map(|(pages, report, _)| (pages, report))
+}
+
+/// [`pack_lightmaps`] with the visuals in groups (`groups[i]` the group of visual `i`; `None`: one
+/// group): a page holds the charts of one group, and every group's pages are numbered from 1 in
+/// the order they are opened (one group: the pages' order). Answers the group of every page too.
+pub fn pack_grouped(
+    defls: &mut Deflectors,
+    visuals: &[Vec<DeflId>],
+    groups: Option<&[u32]>,
+    mesh: &mut Mesh,
+    lightmaps: &mut Vec<Lightmap>,
+    ctl: &Ctl<'_>,
+) -> Result<(Vec<LightmapPage>, PackReport, Vec<u32>)> {
+    let group_of = |i: usize| groups.and_then(|g| g.get(i)).copied().unwrap_or(0);
     ctl.stage("the charts of each visual");
     let packed: Vec<Option<Packed>> = visuals
         .par_iter()
@@ -432,7 +449,13 @@ pub fn pack_lightmaps(
         match p {
             Some((w, h, spots, t)) => {
                 texels += t;
-                blocks.push(Block { visual: i, w, h, charts: ids.into_iter().zip(spots).collect() });
+                blocks.push(Block {
+                    visual: i,
+                    group: group_of(i),
+                    w,
+                    h,
+                    charts: ids.into_iter().zip(spots).collect(),
+                });
             }
             None => {
                 // a pathology the merge's limit rules out: the visual's charts one by one
@@ -448,6 +471,7 @@ pub fn pack_lightmaps(
                     texels += t;
                     blocks.push(Block {
                         visual: i,
+                        group: group_of(i),
                         w,
                         h,
                         charts: spots.into_iter().map(|s| (d, s)).collect(),
@@ -459,7 +483,8 @@ pub fn pack_lightmaps(
     blocks.sort_by_key(|b| (std::cmp::Reverse(u64::from(b.w) * u64::from(b.h)), b.visual));
 
     ctl.stage("the visuals into pages");
-    let mut skylines: Vec<Skyline> = Vec::new();
+    // per page: its group, its skyline, its number in the group
+    let mut skylines: Vec<(u32, Skyline, u32)> = Vec::new();
     // per page: the charts with where they lie in it
     let mut placed: Vec<Vec<(DeflId, Spot)>> = Vec::new();
     for (n, b) in blocks.iter().enumerate() {
@@ -467,7 +492,11 @@ pub fn pack_lightmaps(
             ctl.check()?;
             ctl.progress(n, blocks.len());
         }
-        let found = skylines.iter().enumerate().find_map(|(p, s)| s.find(b.w, b.h).map(|at| (p, at)));
+        let found = skylines
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.0 == b.group)
+            .find_map(|(p, s)| s.1.find(b.w, b.h).map(|at| (p, at)));
         let (page, (x, y)) = match found {
             Some(f) => f,
             None => {
@@ -475,13 +504,14 @@ pub fn pack_lightmaps(
                 let at = s.find(b.w, b.h).ok_or_else(|| {
                     LcError::Invalid(format!("A lightmap of {} x {} texels does not fit a page.", b.w, b.h))
                 })?;
-                skylines.push(s);
+                let number = skylines.iter().filter(|s| s.0 == b.group).count() as u32;
+                skylines.push((b.group, s, number));
                 placed.push(Vec::new());
                 (skylines.len() - 1, at)
             }
         };
         if let Some(s) = skylines.get_mut(page) {
-            s.add(x, y, b.w, b.h);
+            s.1.add(x, y, b.w, b.h);
         }
         if let Some(list) = placed.get_mut(page) {
             list.extend(b.charts.iter().map(|&(d, s)| (d, Spot { x: s.x + x, y: s.y + y, ..s })));
@@ -502,6 +532,7 @@ pub fn pack_lightmaps(
     ctl.check()?;
     ctl.stage("saving the pages");
     let defls_ref = &*defls;
+    let numbers: Vec<u32> = skylines.iter().map(|s| s.2).collect();
     let pages: Vec<(Lightmap, LightmapPage)> = placed
         .par_iter()
         .enumerate()
@@ -513,7 +544,8 @@ pub fn pack_lightmaps(
                     lmap.blit_chart(defl, s);
                 }
             }
-            let page = lmap.save((first + p + 1) as u32);
+            let number = numbers.get(p).copied().unwrap_or(p as u32) as usize;
+            let page = lmap.save((first + number + 1) as u32);
             (lmap, page)
         })
         .collect();
@@ -527,7 +559,7 @@ pub fn pack_lightmaps(
         out.push(p);
     }
     defls.clear();
-    Ok((out, report))
+    Ok((out, report, skylines.iter().map(|s| s.0).collect()))
 }
 
 /// The chart's faces get their page and their coordinates in it (a channel each).

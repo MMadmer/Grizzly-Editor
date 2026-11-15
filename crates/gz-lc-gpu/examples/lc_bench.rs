@@ -19,7 +19,9 @@
 //!   clocks); `compare=1` lights them on the CPU too and says how far the two are apart;
 //! - `mode=details` lights the detail slots from `build.details`, `build.cform` and
 //!   `build.lights` (the last two from `out=` when it holds them, else from the level folder);
-//! - a word without `=` is a compiler flag (`nosun`, `no_invalidefaces`, ...).
+//! - a word without `=` is a compiler flag (`nosun`, `no_invalidefaces`, ...), and so is
+//!   `cells=<metres>` (the level beside a piece per streaming cell, written under `out=`'s
+//!   `pieces\cell_<x>_<z>`); `piece` compiles a piece's build project (`pieces\main`).
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -142,8 +144,25 @@ fn compile(a: &Args, prj: &BuildProject, opts: &Options, lighter: &dyn Lighter) 
             for (name, bytes) in &out.files {
                 say!("file  {} {:>10}  {name}", sha(bytes), bytes.len());
             }
+            // the pieces (`piece`, `cells=<metres>`) under `pieces\<name>`, as the level's module has them
+            let pieces: Vec<(String, &Vec<u8>)> = out
+                .pieces
+                .iter()
+                .flat_map(|p| p.files.iter().map(move |(n, b)| (format!("pieces\\{}\\{n}", p.name), b)))
+                .collect();
+            if !out.pieces.is_empty() {
+                say!("pieces {} with {} files", out.pieces.len(), pieces.len());
+            }
+            for (name, bytes) in &pieces {
+                say!("file  {} {:>10}  {name}", sha(bytes), bytes.len());
+            }
             if let Some(dir) = &a.out {
-                for (name, bytes) in &out.files {
+                let all = out
+                    .files
+                    .iter()
+                    .map(|(n, b)| (n.clone(), b))
+                    .chain(pieces.iter().map(|(n, b)| (n.clone(), *b)));
+                for (name, bytes) in all {
                     let path = dir.join(name.replace('\\', "/"));
                     if let Some(parent) = path.parent() {
                         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;

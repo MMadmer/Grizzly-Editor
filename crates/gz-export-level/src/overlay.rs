@@ -40,6 +40,24 @@ pub fn collision(
     lib: LibraryLookup<'_>,
     existing: &[u8],
 ) -> Result<Collision, ExportError> {
+    let empty = if selected_only {
+        "no triangles collected - select scene objects first"
+    } else {
+        "no triangles collected - the scene has no static objects"
+    };
+    collision_of(scene, &|o| !selected_only || scene.is_selected(o.id), sector, lib, existing, empty)
+}
+
+/// [`collision`] of the scene objects `keep` takes (the level build's piece: the authored ones);
+/// `empty` is the refusal when they hold no triangle.
+pub fn collision_of(
+    scene: &SceneState,
+    keep: &dyn Fn(&Object) -> bool,
+    sector: i64,
+    lib: LibraryLookup<'_>,
+    existing: &[u8],
+    empty: &str,
+) -> Result<Collision, ExportError> {
     if !(0..=65535).contains(&sector) {
         return Err(ExportError::new("sector out of u16 range"));
     }
@@ -48,7 +66,7 @@ pub fn collision(
     let mut mtls: Vec<smol_str::SmolStr> = Vec::new();
     let mut objects_used = 0u32;
     for o in scene.of_class(ObjClass::SceneObject) {
-        if selected_only && !scene.is_selected(o.id) {
+        if !keep(o) {
             continue;
         }
         let Some(lo) = library_of(o, lib) else { continue };
@@ -97,11 +115,7 @@ pub fn collision(
         }
     }
     if tris.is_empty() {
-        return Err(ExportError::new(if selected_only {
-            "no triangles collected - select scene objects first"
-        } else {
-            "no triangles collected - the scene has no static objects"
-        }));
+        return Err(ExportError::new(empty));
     }
     if mtls.len() > 65535 {
         return Err(ExportError::new("too many materials"));

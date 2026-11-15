@@ -125,11 +125,13 @@ pub struct LevelProblem {
     pub position: Option<[f32; 3]>,
 }
 
-/// The levels of the linked game, read for the game's revision.
+/// The levels of the linked game, read for the game's revision, and whether it loads pieces of a
+/// level.
 #[derive(Default)]
 struct GameLevels {
     rev: Option<Rev>,
     levels: Arc<Vec<String>>,
+    pieces: bool,
     reading: bool,
 }
 
@@ -177,7 +179,15 @@ pub fn levels_root(session: &ProjectSession) -> PathBuf {
 #[must_use]
 pub fn default_options(editor: &Editor) -> Options {
     let game = gz_project::Project::of(editor).map(|(_, p)| p.game_root()).unwrap_or_default();
-    Options { quality: Quality::Standard, flags: String::new(), game, library: 0, stock: false }
+    Options {
+        quality: Quality::Standard,
+        flags: String::new(),
+        game,
+        library: 0,
+        stock: false,
+        game_level: false,
+        pieces: false,
+    }
 }
 
 impl LevelBuild {
@@ -206,9 +216,9 @@ impl LevelBuild {
             editor.exec.spawn(async move {
                 let Some(session) = session else { return };
                 let lb = Self::of(&session);
-                let levels = read_game_levels(&ed).await;
+                let (levels, pieces) = read_game_levels(&ed).await;
                 let mut slot = lb.game_levels.lock();
-                *slot = GameLevels { rev, levels: Arc::new(levels), reading: false };
+                *slot = GameLevels { rev, levels: Arc::new(levels), pieces, reading: false };
                 drop(slot);
                 lb.levels_rev.bump();
                 ed.exec.wake().ping();
@@ -227,12 +237,25 @@ impl LevelBuild {
                 return slot.levels.clone();
             }
         }
-        let levels = Arc::new(read_game_levels(editor).await);
+        let (levels, pieces) = read_game_levels(editor).await;
+        let levels = Arc::new(levels);
         let mut slot = self.game_levels.lock();
-        *slot = GameLevels { rev, levels: levels.clone(), reading: false };
+        *slot = GameLevels { rev, levels: levels.clone(), pieces, reading: false };
         drop(slot);
         self.levels_rev.bump();
         levels
+    }
+
+    /// Whether the linked game loads pieces of a level, as read with its levels
+    /// ([`Self::game_levels`]).
+    pub async fn game_pieces(&self, editor: &Arc<Editor>) -> bool {
+        let _ = self.game_levels(editor).await;
+        self.game_levels.lock().pieces
+    }
+
+    /// [`Self::game_pieces`] as last read, asking for nothing.
+    fn game_pieces_now(&self) -> bool {
+        self.game_levels.lock().pieces
     }
 
     /// The record of `level` when it has been read; starts the read the first time a level is
@@ -334,6 +357,8 @@ impl LevelBuild {
         let levels = lb.game_levels_now(editor)?;
         let mut opts = default_options(editor);
         opts.stock = crate::stock::is_stock(&levels, &level);
+        opts.game_level = opts.stock;
+        opts.pieces = lb.game_pieces_now();
         let lib = svc.library.clone();
         let rev = svc
             .store
@@ -367,6 +392,8 @@ impl LevelBuild {
         let levels = lb.game_levels(editor).await;
         let mut opts = default_options(editor);
         opts.stock = crate::stock::is_stock(&levels, &level);
+        opts.game_level = opts.stock;
+        opts.pieces = lb.game_pieces(editor).await;
         let lib = session.services.get::<SceneService>().map(|svc| svc.library.clone());
         let rev = rev
             .mix(lb.record_rev.get())
@@ -385,23 +412,73 @@ impl LevelBuild {
 }
 
 /// The levels of the linked game's game graph, as `gz-world` reads its `all.spawn` (cached per
-/// game revision there); none when no game is linked or it cannot be read.
-async fn read_game_levels(editor: &Arc<Editor>) -> Vec<String> {
-    match gz_world::WorldService::of(editor).await {
+/// game revision there), none when no game is linked or it cannot be read; and whether the game
+/// loads pieces of a level (its engine's version resources say `level-pieces`).
+async fn read_game_levels(editor: &Arc<Editor>) -> (Vec<String>, bool) {
+    let levels = match gz_world::WorldService::of(editor).await {
         Ok(w) => w.game().await.levels.clone(),
         Err(_) => Vec::new(),
-    }
+    };
+    let game = gz_project::Project::of(editor).map(|(_, p)| p.game_root()).unwrap_or_default();
+    let pieces = !game.is_empty()
+        && editor
+            .exec
+            .io(move || {
+                crate::play::game_states(
+                    std::path::Path::new(&game),
+                    &crate::play::LINKED_GAME,
+                    crate::play::PIECES,
+                )
+            })
+            .await;
+    (levels, pieces)
 }
 
-/// Whether the scene has what a step makes.
+/// Whether the scene has what a step makes: detail objects for the details, a static object of
+/// the module's own for the piece.
 #[must_use]
 pub fn needed(scene: &SceneState, step: Step) -> bool {
     match step {
         Step::Details | Step::DetailLight => {
             scene.bulk.details.as_ref().is_some_and(|d| !d.model.slots.is_empty())
         }
+        Step::Piece => has_authored_static(scene),
         _ => true,
     }
+}
+
+/// Whether the scene places a static object of the module's own (marked authored).
+#[must_use]
+pub fn has_authored_static(scene: &SceneState) -> bool {
+    scene.of_class(gz_scene::ObjClass::SceneObject).any(|o| {
+        o.marks.authored
+            && matches!(&o.data, gz_scene::ObjData::SceneObject(d) if !d.visual_mode() && !d.reference.is_empty())
+    })
+}
+
+/// Why a step has nothing to make for this scene and these options, in a sentence; `None`: it has.
+#[must_use]
+pub fn not_needed_why(scene: &SceneState, step: Step, opts: &Options) -> Option<String> {
+    match step {
+        Step::Details | Step::DetailLight if !needed(scene, step) => {
+            Some("The scene has no detail objects.".to_owned())
+        }
+        Step::Piece if !opts.game_level => Some(
+            "The level is the module's own: it is built whole, and a piece is what a module adds to a level of the linked game."
+                .to_owned(),
+        ),
+        Step::Piece if !needed(scene, step) => {
+            Some("The scene has no static object of the module's own on the game's level.".to_owned())
+        }
+        Step::Piece if !opts.pieces => Some("The linked game does not load pieces of a level.".to_owned()),
+        _ => None,
+    }
+}
+
+/// Whether a step has something to make ([`not_needed_why`]).
+#[must_use]
+pub fn is_needed(scene: &SceneState, step: Step, opts: &Options) -> bool {
+    not_needed_why(scene, step, opts).is_none()
 }
 
 /// Every step's state for one scene version and the record of the level.
@@ -435,9 +512,9 @@ pub(crate) fn status_with(
             seconds: rec.map(|r| r.seconds),
             quality: rec.map(|r| r.quality),
         };
-        if !needed(scene, step) {
+        if let Some(why) = not_needed_why(scene, step, opts) {
             st.state = StepState::NotNeeded;
-            st.why = "The scene has no detail objects.".to_owned();
+            st.why = why;
             steps.push(st);
             continue;
         }
@@ -491,7 +568,7 @@ fn why_stale(
         return format!("{} is not fresh.", n.title);
     }
     if (rec.quality != opts.quality || rec.flags != opts.flags)
-        && matches!(step, Step::Geometry | Step::Light)
+        && matches!(step, Step::Geometry | Step::Light | Step::Piece)
     {
         let then = Options { quality: rec.quality, flags: rec.flags.clone(), ..opts.clone() };
         let fps = fingerprint::steps(scene, objects, &then);
@@ -522,6 +599,8 @@ fn why_stale(
         Step::Geometry => "The level's build settings, lights or wallmarks changed.".to_owned(),
         Step::Game => "The level's settings changed.".to_owned(),
         Step::Spawn => "The linked game changed.".to_owned(),
+        Step::Piece => "The level's build settings, lights or the linked game changed.".to_owned(),
+        Step::Light => "The level's streaming cells changed.".to_owned(),
         _ => "What it is made of changed.".to_owned(),
     }
 }
@@ -599,8 +678,8 @@ mod tests {
         // a new session: no hash is cached, every one is worked out again from the content
         let fresh = HashCache::default();
         assert!(status_of(&s, &fresh, Some(&again), &opts).to_build().is_empty());
-        // without a record everything is to build
-        assert_eq!(status_of(&s, &fresh, None, &opts).to_build().len(), Step::ORDER.len() - 2);
+        // without a record everything is to build but the details and the piece (the scene has neither)
+        assert_eq!(status_of(&s, &fresh, None, &opts).to_build().len(), Step::ORDER.len() - 3);
     }
 
     #[test]
@@ -659,6 +738,82 @@ mod tests {
         assert!(st.built_over.contains(&Step::Geometry) && !st.built_over.contains(&Step::SpawnLayer));
         // the same level built as a level of the module's own: every step by its record
         assert!(status_of(&s, &cache, Some(&record), &Options::default()).built_over.is_empty());
+    }
+
+    /// A scene object of the module's own (marked authored) or of the game's level.
+    fn house(s: &mut SceneState, name: &str, authored: bool) -> gz_scene::ObjId {
+        let data =
+            gz_scene::objects::SceneObjectData { reference: "buildings\\house".into(), ..Default::default() };
+        let mut o = Object::new(ObjClass::SceneObject, name, ObjData::SceneObject(data));
+        o.marks.authored = authored;
+        s.insert(o)
+    }
+
+    #[test]
+    fn the_piece_is_built_on_a_game_level_with_objects_of_the_modules_own() {
+        let (mut s, _) = scene();
+        let cache = HashCache::default();
+        let game = Options { stock: true, game_level: true, pieces: true, ..Options::default() };
+        // the game's level without an object of the module's own: nothing to make
+        let base = house(&mut s, "base_house", false);
+        let st = status_of(&s, &cache, None, &game);
+        let piece = st.get(Step::Piece).unwrap();
+        assert_eq!(piece.state, StepState::NotNeeded);
+        assert!(piece.why.contains("no static object of the module's own"), "{}", piece.why);
+        assert_eq!(st.to_build(), [Step::SpawnLayer]);
+        // one authored house: the piece joins the spawn layer, the compile steps stay not needed
+        let mine = house(&mut s, "my_house", true);
+        let st = status_of(&s, &cache, None, &game);
+        assert_eq!(st.to_build(), [Step::SpawnLayer, Step::Piece]);
+        assert_eq!(st.get(Step::Light).unwrap().state, StepState::NotNeeded);
+        assert_eq!(st.get(Step::Piece).unwrap().state, StepState::Never);
+        // a level of the module's own never has one, nor a game that does not load pieces
+        let own = Options { pieces: true, ..Options::default() };
+        let piece = status_of(&s, &cache, None, &own).get(Step::Piece).cloned().unwrap();
+        assert!(piece.state == StepState::NotNeeded && piece.why.contains("module's own"), "{}", piece.why);
+        let old = Options { pieces: false, ..game.clone() };
+        let piece = status_of(&s, &cache, None, &old).get(Step::Piece).cloned().unwrap();
+        assert!(
+            piece.state == StepState::NotNeeded && piece.why.contains("does not load pieces"),
+            "{}",
+            piece.why
+        );
+        // built: fresh; what it is made of moving - the authored house, the game's house, a lamp -
+        // makes it stale, and only the steps that read that
+        let record = built(&s, &cache, &game);
+        assert!(status_of(&s, &cache, Some(&record), &game).to_build().is_empty());
+        for id in [mine, base] {
+            let mut t = s.clone();
+            let mut o = (**t.get(id).unwrap()).clone();
+            o.xform.position.x += 1.0;
+            t.replace(o);
+            let st = status_of(&t, &cache, Some(&record), &game);
+            assert_eq!(st.to_build(), [Step::SpawnLayer, Step::Piece], "{}", st.text());
+            assert_eq!(st.get(Step::Piece).unwrap().why, "1 object moved.");
+        }
+        // the build settings, the quality and the linked game are part of it
+        let mut t = s.clone();
+        t.meta.level.build.lm_pixels_per_meter = 3.0;
+        assert_eq!(status_of(&t, &cache, Some(&record), &game).to_build(), [Step::Piece]);
+        let draft = Options { quality: Quality::Draft, ..game.clone() };
+        let st = status_of(&s, &cache, Some(&record), &draft);
+        assert_eq!(st.get(Step::Piece).unwrap().why, "Built at Standard quality.");
+        let other = Options { game: "D:\\Other Game".into(), ..game.clone() };
+        assert_eq!(status_of(&s, &cache, Some(&record), &other).to_build(), [Step::Piece]);
+    }
+
+    #[test]
+    fn the_cells_are_part_of_the_light_and_none_change_nothing() {
+        let (mut s, _) = scene();
+        let cache = HashCache::default();
+        let opts = Options::default();
+        let record = built(&s, &cache, &opts);
+        // no cells: the light's fingerprint of a level that does not stream is as it was
+        assert!(status_of(&s, &cache, Some(&record), &opts).to_build().is_empty());
+        s.meta.level.cell_size = 32;
+        let st = status_of(&s, &cache, Some(&record), &opts);
+        assert_eq!(st.to_build(), [Step::Light]);
+        assert_eq!(st.get(Step::Light).unwrap().why, "The level's streaming cells changed.");
     }
 
     #[test]

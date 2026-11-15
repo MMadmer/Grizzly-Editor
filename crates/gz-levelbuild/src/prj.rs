@@ -6,7 +6,7 @@ use glam::{Vec2, Vec3};
 use gz_base::{Finding, Findings};
 use gz_fmt_level::{
     Aabb, BuildFace, BuildGlow, BuildLight, BuildLightDynamic, BuildLod, BuildMaterial, BuildParams,
-    BuildProject, BuildTexture, Light, LightControl, LodFace, MuModel, MuReference, Portal,
+    BuildProject, BuildTexture, Light, LightControl, LodFace, MuModel, MuReference, Occluder, Portal,
     XRCL_CURRENT_VERSION, i_floor,
 };
 use gz_fmt_object::{Mesh, ObjectFlags, Surface, SurfaceFlags, VMapKind};
@@ -263,6 +263,7 @@ struct Builder {
     lods: Vec<(BuildLod, String, Vec<u8>, Vec<u8>)>,
     mu_models: Vec<MuModel>,
     mu_refs: Vec<MuReference>,
+    occluders: Vec<Occluder>,
     log: Vec<Finding>,
 }
 
@@ -455,6 +456,39 @@ impl Builder {
                     "Object '{}', mesh '{}': {invalid} invalid face(s) are removed.",
                     object.name, mesh.name
                 ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The faces of a mesh placed by `world` whose compiler shader casts a shadow, as occluders:
+    /// what a piece of a level is lit beside. A face of no texture or too small to be one is left
+    /// out; a two-sided surface casts from both sides.
+    fn occluders(&mut self, cx: &Ctx<'_>, world: &Mat4, surfaces: &[Surface], mesh: &Mesh) -> Result<()> {
+        for sf in &mesh.surf_faces {
+            let Some(surf) = surfaces.get(sf.surface as usize) else { continue };
+            let casts = cx
+                .engine
+                .xrlc_flags(&surf.shader_xrlc)
+                .is_some_and(|f| f & gz_fmt_xr::ShaderXrlc::LIGHT_CAST_SHADOW != 0);
+            if surf.game_mtl == "materials\\occ" || !casts || surf.texture.is_empty() {
+                continue;
+            }
+            let texture = self.texture(&surf.texture)?;
+            for &fi in sf.faces.iter() {
+                let Some(face) = mesh.faces.get(fi as usize) else { continue };
+                let p = face.v.map(|v| {
+                    world.transform_tiny(mesh.points.get(v.point as usize).copied().unwrap_or(Vec3::ZERO))
+                });
+                let a = calc_area(p[0], p[1], p[2]);
+                if !a.is_finite() || a < EPS_S {
+                    continue;
+                }
+                let t = face.v.map(|v| corner_uv(mesh, v.vmref));
+                self.occluders.push(Occluder { p, t, texture });
+                if surf.flags.contains(SurfaceFlags::TWO_SIDED) {
+                    self.occluders.push(Occluder { p: [p[2], p[1], p[0]], t: [t[2], t[1], t[0]], texture });
+                }
             }
         }
         Ok(())
@@ -788,8 +822,52 @@ pub fn compile_until(
     lods: LodSource<'_>,
     stop: crate::Stop<'_>,
 ) -> Result<Compiled> {
-    let level_box = level_box(scene, lib)
-        .ok_or_else(|| BuildError::new("The level's bounding volume cannot be computed."))?;
+    build(scene, lib, engine, lods, stop, false)
+}
+
+/// The build project of a module's piece of a level of the game: the static objects the module
+/// places (marked authored) are its geometry; every other static object of the scene that is not
+/// marked removed is occluders, the faces the piece's light meets; the scene's lights light it.
+/// No glow, portal, wallmark or LOD: a piece has none.
+pub fn compile_piece_until(
+    scene: &SceneState,
+    lib: Lookup<'_>,
+    engine: &Engine,
+    stop: crate::Stop<'_>,
+) -> Result<Compiled> {
+    build(scene, lib, engine, &|_| None, stop, true)
+}
+
+/// The authored scene objects' box: what a piece is made of.
+fn authored_box(scene: &SceneState, lib: Lookup<'_>) -> Option<Aabb> {
+    let mut b = Aabb::INVALID;
+    for o in scene.of_class(ObjClass::SceneObject).filter(|o| o.marks.authored) {
+        if let Some(lo) = reference(o).and_then(lib) {
+            let wb = xform_box(&lo.bounds, &o.world());
+            if wb.is_valid() {
+                b.modify(wb.min);
+                b.modify(wb.max);
+            }
+        }
+    }
+    b.is_valid().then_some(b)
+}
+
+fn build(
+    scene: &SceneState,
+    lib: Lookup<'_>,
+    engine: &Engine,
+    lods: LodSource<'_>,
+    stop: crate::Stop<'_>,
+    piece: bool,
+) -> Result<Compiled> {
+    let level_box = if piece {
+        authored_box(scene, lib)
+            .ok_or_else(|| BuildError::new("The scene has no static object of the module's own."))?
+    } else {
+        level_box(scene, lib)
+            .ok_or_else(|| BuildError::new("The level's bounding volume cannot be computed."))?
+    };
     if scene.objects.is_empty() {
         return Err(BuildError::new("The static geometry could not be built."));
     }
@@ -813,6 +891,19 @@ pub fn compile_until(
                 return Err(BuildError::stopped());
             }
             match class {
+                ObjClass::Glow | ObjClass::Portal if piece => {}
+                ObjClass::SceneObject if piece && !o.marks.authored => {
+                    // the rest of the level: the piece's shadows, and nothing else
+                    let Some(lo) = reference(o).and_then(lib) else { continue };
+                    if o.marks.removed || !(is_static(&lo.object) || is_mu_static(&lo.object)) {
+                        continue;
+                    }
+                    let surfaces = object_surfaces(o, &lo);
+                    let world = o.world();
+                    for m in &lo.object.meshes {
+                        b.occluders(&cx, &world, &surfaces, m)?;
+                    }
+                }
                 ObjClass::Glow => b.glow(&cx, o, &sectors)?,
                 ObjClass::Light => b.light(o, &sectors, scene)?,
                 ObjClass::Portal => {
@@ -857,7 +948,12 @@ pub fn compile_until(
                         let model = match b.mu_models.iter().position(|m| m.name == lo.name) {
                             Some(i) => i,
                             None => {
-                                let lod_id = b.lod(&cx, &lo, sector)?.unwrap_or(u16::MAX);
+                                // a piece's model draws itself: the level's LOD atlas is not the piece's
+                                let lod_id = if piece {
+                                    u16::MAX
+                                } else {
+                                    b.lod(&cx, &lo, sector)?.unwrap_or(u16::MAX)
+                                };
                                 let mut out = (Vec::new(), Vec::new(), Vec::new());
                                 for m in &lo.object.meshes {
                                     b.mesh(
@@ -909,6 +1005,7 @@ pub fn compile_until(
         // the X-Ray SDK leaves a mark face's game material and smoothing group as the
         // allocation held them; they are 0 here.
         if class == ObjClass::Wallmark
+            && !piece
             && let Some(part) = &scene.bulk.wallmarks
         {
             for slot in crate::wallmarks::read(&part.raw) {
@@ -1009,6 +1106,7 @@ pub fn compile_until(
         lods: b.lods.into_iter().map(|(l, ..)| l).collect(),
         mu_models: b.mu_models,
         mu_refs: b.mu_refs,
+        occluders: b.occluders,
     };
     Ok(Compiled { project, stat, lod_textures, log: b.log })
 }
@@ -1195,5 +1293,147 @@ mod obj_tests {
     fn a_texture_name_splits_like_splitpath() {
         assert_eq!(split_tex("ston\\ston_wall1"), ("ston\\", "ston_wall1"));
         assert_eq!(split_tex("plain"), ("", "plain"));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod piece_tests {
+    use std::path::PathBuf;
+
+    use gz_fmt_object::{Face as MFace, FaceVert, Object as EditObject, SurfFaces};
+    use gz_fmt_xr::{Blender, GameMaterial, GameMaterials, ShadersXrlc};
+    use gz_scene::objects::SceneObjectData;
+
+    use super::*;
+
+    /// The engine's libraries with one shader, one compiler shader that casts shadows and one
+    /// game material, and a library of one box made of them.
+    fn fixture() -> (Engine, impl Fn(&str) -> Option<Arc<LibraryObject>> + Sync) {
+        let corners: Vec<Vec3> = (0..8)
+            .map(|i| {
+                Vec3::new(
+                    if i & 1 != 0 { 1.0 } else { -1.0 },
+                    if i & 2 != 0 { 2.0 } else { 0.0 },
+                    if i & 4 != 0 { 1.0 } else { -1.0 },
+                )
+            })
+            .collect();
+        let quads = [[0u32, 1, 3, 2], [4, 6, 7, 5], [0, 4, 5, 1], [2, 3, 7, 6], [0, 2, 6, 4], [1, 5, 7, 3]];
+        let fv = |p: u32| FaceVert { point: p, vmref: 0 };
+        let faces: Vec<MFace> = quads
+            .iter()
+            .flat_map(|q| {
+                [MFace { v: [fv(q[0]), fv(q[1]), fv(q[2])] }, MFace { v: [fv(q[0]), fv(q[2]), fv(q[3])] }]
+            })
+            .collect();
+        let mesh = Mesh {
+            name: "box".into(),
+            points: Arc::from(corners),
+            faces: Arc::from(faces),
+            smooth_groups: Arc::from(vec![0u32; 12]),
+            surf_faces: vec![SurfFaces { surface: 0, faces: Arc::from((0..12).collect::<Vec<u32>>()) }],
+            ..Mesh::default()
+        };
+        let object = EditObject {
+            surfaces: vec![Surface {
+                name: "s".into(),
+                texture: "wood\\a".into(),
+                shader: "default".into(),
+                shader_xrlc: "default".into(),
+                game_mtl: "materials\\wood".into(),
+                fvf: 0x112,
+                ..Surface::default()
+            }],
+            meshes: vec![mesh],
+            ..EditObject::default()
+        };
+        let lo = Arc::new(LibraryObject::from_object("props\\box", PathBuf::new(), object));
+        let wood = GameMaterial {
+            id: 1,
+            name: "materials\\wood".into(),
+            desc: "".into(),
+            flags: 0,
+            friction: 1.0,
+            damping: 1.0,
+            spring: 1.0,
+            bounce_start_velocity: 0.0,
+            bouncing: 0.0,
+            shoot_factor: 0.0,
+            bounce_damage_factor: 0.0,
+            vis_transparency_factor: 0.0,
+            snd_occlusion_factor: 0.0,
+            shoot_factor_mp: 0.0,
+            flotation_factor: None,
+            injurious_speed: None,
+            density_factor: None,
+        };
+        let mut xrlc = gz_lc_light::default_shader();
+        xrlc.name_raw = [0; 128];
+        xrlc.name_raw[..7].copy_from_slice(b"default");
+        let blender = Blender {
+            class_id: *b"BLENDER ",
+            name: "default".into(),
+            computer: "".into(),
+            time: 0,
+            version: 0,
+            props: Vec::new(),
+        };
+        let engine = Engine {
+            shaders: Some(gz_fmt_xr::Shaders { blenders: vec![blender], ..gz_fmt_xr::Shaders::default() }),
+            xrlc: Some(ShadersXrlc { shaders: vec![xrlc] }),
+            materials: Some(GameMaterials { materials: vec![wood], ..GameMaterials::default() }),
+        };
+        (engine, move |_: &str| Some(lo.clone()))
+    }
+
+    fn scene() -> SceneState {
+        let mut scene = SceneState::default();
+        // two boxes of the module's own, one of the game's level, one the module took away
+        for (name, x, authored, removed) in [
+            ("mine_a", 0.0f32, true, false),
+            ("mine_b", 4.0, true, false),
+            ("base", 10.0, false, false),
+            ("gone", 20.0, false, true),
+        ] {
+            let mut o = Object::new(
+                ObjClass::SceneObject,
+                name,
+                ObjData::SceneObject(SceneObjectData::library("props\\box")),
+            );
+            o.xform.position = Vec3::new(x, 0.0, 0.0);
+            o.marks.authored = authored;
+            o.marks.removed = removed;
+            scene.insert(o);
+        }
+        scene
+    }
+
+    #[test]
+    fn a_piece_is_the_modules_objects_lit_beside_the_rest_as_occluders() {
+        let (engine, look) = fixture();
+        let s = scene();
+        let piece = compile_piece_until(&s, &look, &engine, crate::NEVER).unwrap().project;
+        // the authored boxes are the geometry, the game's box is occluders, the removed one nothing
+        assert_eq!(piece.faces.len(), 24);
+        assert_eq!(piece.occluders.len(), 12);
+        assert!(piece.occluders.iter().all(|o| o.p.iter().all(|p| (9.0..=11.0).contains(&p.x))));
+        assert_eq!(piece.textures[usize::from(piece.occluders[0].texture)].name, "wood\\a");
+        assert!(piece.portals.is_empty() && piece.glows.is_empty() && piece.lods.is_empty());
+        assert!(!piece.lights_static.is_empty(), "the sky and the sun light the piece");
+        // the file reads back with its occluders
+        assert_eq!(BuildProject::read(&piece.write()).unwrap().occluders, piece.occluders);
+        // the level's own build: every box geometry, no occluder
+        let whole = compile_until(&s, &look, &engine, &|_| None, crate::NEVER).unwrap().project;
+        assert_eq!((whole.faces.len(), whole.occluders.len()), (48, 0));
+        // nothing of the module's own: no piece
+        let mut none = s.clone();
+        let ids: Vec<_> = none.of_class(ObjClass::SceneObject).map(|o| o.id).collect();
+        for id in ids {
+            let mut o = (**none.get(id).unwrap()).clone();
+            o.marks.authored = false;
+            none.replace(o);
+        }
+        assert!(compile_piece_until(&none, &look, &engine, crate::NEVER).is_err());
     }
 }
