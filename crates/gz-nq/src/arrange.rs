@@ -9,11 +9,17 @@
 //! 2. **Who owns whom.** The dominator tree of the forward wires: a node owns what can only be
 //!    reached through it, so a branch keeps its nodes together and a node several branches reach
 //!    (a merge) sits after all of them, between them.
-//! 3. **Blocks.** A node is laid out with what it owns after it in depth: its children side by side
-//!    in breadth, in pin order, a merge in a band of its own after the branches that feed it. A band
-//!    of six children and more **wraps** into rows several deep instead of one ribbon.
-//! 4. **Folding.** A chain longer than the graph is broad folds into lines - text-like flowing right,
-//!    newspaper columns flowing down - at the depth that frames the graph largest in a 16:10 view.
+//! 3. **A tree.** A node with one child goes on in a line. A node with several lays them out in a
+//!    row after it, in pin order, each with what it owns, and stands across from the middle of the
+//!    row: the first child on one side of it, the last on the other. A merge stands after the nodes
+//!    that lead into it, across from the middle of them, and the merges the same nodes lead into
+//!    stand there together, side by side; where that place is taken, a little aside or further on.
+//!    The tree goes on along the flow as far as the graph does - nothing of it is cut and laid
+//!    beside the rest. Only a row of six and more nodes that lead nowhere **wraps** into a few rows
+//!    instead of one ribbon, and so do six and more separate trees.
+//! 4. **Loose nodes.** A node nothing leads into that is no trigger and leads only where other
+//!    wires lead too - a node whose input is not wired yet - starts no tree: it shapes nothing and
+//!    waits just before the first node it leads to, beside it.
 
 use rustc_hash::FxHashMap;
 
@@ -29,8 +35,6 @@ pub struct Gaps {
     pub depth: f32,
     /// Between siblings.
     pub breadth: f32,
-    /// Between two lines of a folded chain.
-    pub fold: f32,
     /// Between two trigger trees.
     pub tree: f32,
 }
@@ -39,8 +43,8 @@ pub struct Gaps {
 pub fn gaps(flow: Flow) -> Gaps {
     match flow {
         // the wire's pin label sits on its first stretch: a flow to the right needs room across
-        Flow::Right => Gaps { depth: 56.0, breadth: 28.0, fold: 72.0, tree: 64.0 },
-        Flow::Down => Gaps { depth: 56.0, breadth: 40.0, fold: 96.0, tree: 96.0 },
+        Flow::Right => Gaps { depth: 56.0, breadth: 28.0, tree: 64.0 },
+        Flow::Down => Gaps { depth: 56.0, breadth: 40.0, tree: 96.0 },
     }
 }
 
@@ -61,8 +65,6 @@ struct Net {
     /// The forward wires into a node, from whom.
     preds: Vec<Vec<usize>>,
     topo: Vec<usize>,
-    /// The dominator of each node ([`ROOT`] for the starts).
-    idom: Vec<usize>,
     /// The children of each node in the dominator tree, and of the root (last).
     kids: Vec<Vec<usize>>,
     /// The band of each child among its owner's: after the siblings that lead into it.
@@ -301,21 +303,7 @@ fn build(cx: &BoxCx<'_>, g: &Graph, set: &[usize]) -> Net {
     for list in &mut kids {
         list.sort_by(|&x, &y| band[x].cmp(&band[y]).then(key[x].total_cmp(&key[y])).then(x.cmp(&y)));
     }
-    Net { n, d, b, axis, preds, topo, idom, kids, band, loose }
-}
-
-impl Net {
-    /// The child of `owner` whose branch holds `p`.
-    fn branch(&self, p: usize, owner: usize) -> usize {
-        let mut c = p;
-        while let Some(&up) = self.idom.get(c) {
-            if up == owner || up == ROOT {
-                break;
-            }
-            c = up;
-        }
-        c
-    }
+    Net { n, d, b, axis, preds, topo, kids, band, loose }
 }
 
 /// A laid-out group of nodes: their top-left corners in (depth, breadth) and its extent.
@@ -359,29 +347,10 @@ impl Piece {
 /// The rows a band of pieces is laid out in: one row, or rows of `k` when the band is wide. In a
 /// folded graph (`limit`) the band takes as little breadth as its line's depth allows; otherwise
 /// the shape that frames best.
-fn wrap(flow: Flow, items: &[Piece], gap: &Gaps, limit: f32) -> usize {
+fn wrap(flow: Flow, items: &[Piece], gap: &Gaps) -> usize {
     let n = items.len();
     if n < WRAP_MIN {
         return n.max(1);
-    }
-    if limit < f32::MAX {
-        let mut narrow: Option<(f32, usize)> = None;
-        for k in 1..=n {
-            let mut band_b = 0.0f32;
-            let mut band_d = 0.0f32;
-            for (r, row) in items.chunks(k).enumerate() {
-                let rb: f32 = row.iter().map(|p| p.bb).sum::<f32>() + gap.breadth * (row.len() - 1) as f32;
-                band_b = band_b.max(rb);
-                band_d +=
-                    row.iter().map(|p| p.dd).fold(0.0f32, f32::max) + if r > 0 { gap.depth } else { 0.0 };
-            }
-            if band_d <= limit && narrow.is_none_or(|(b, _)| band_b < b) {
-                narrow = Some((band_b, k));
-            }
-        }
-        if let Some((_, k)) = narrow {
-            return k;
-        }
     }
     let mut best = (f32::MIN, n);
     for k in 1..=n {
@@ -426,265 +395,161 @@ fn grid(net: &Net, items: Vec<Piece>, k: usize, across: f32, gap: &Gaps) -> Piec
     out.normalise(net)
 }
 
-/// What hangs off a node of a spine: a branch laid out as one piece, where it starts in depth
-/// (from the node's own start) and on which side of the spine.
-struct Side {
-    piece: Piece,
-    start: f32,
-    neg: bool,
+/// Pieces side by side in one row; the axis of the result lies half way between the first piece's
+/// axis and the last one's, where their owner stands.
+fn row(net: &Net, items: &[Piece], across: f32) -> Piece {
+    let mut out = Piece::default();
+    let mut x = 0.0f32;
+    let (mut first, mut last) = (None, 0.0f32);
+    for p in items {
+        p.shifted(0.0, x, &mut out.at);
+        first.get_or_insert(x + p.axis);
+        last = x + p.axis;
+        x += p.bb + across;
+    }
+    out.axis = (first.unwrap_or(0.0) + last) * 0.5;
+    out.normalise(net)
 }
 
-/// One node of a spine with what hangs off it, and how far after its start the next node of the
-/// spine starts.
-struct Seg {
-    node: usize,
-    sides: Vec<Side>,
-    next: f32,
-}
-
-/// How much of the breadth beside the spine is taken, by depth: `(from, to, extent)`.
-#[derive(Default)]
-struct Skyline(Vec<(f32, f32, f32)>);
-
-impl Skyline {
-    fn over(&self, d0: f32, d1: f32) -> f32 {
-        self.0.iter().filter(|(a, b, _)| *a < d1 && *b > d0).map(|e| e.2).fold(0.0f32, f32::max)
-    }
-
-    fn add(&mut self, d0: f32, d1: f32, extent: f32) {
-        self.0.push((d0, d1, extent));
-    }
+/// Whether `piece`, moved by (`dd`, `db`), keeps half a gap from every node placed in `at`.
+fn free(net: &Net, gap: &Gaps, at: &[(usize, f32, f32)], piece: &Piece, dd: f32, db: f32) -> bool {
+    let (hd, hb) = (gap.depth * 0.5, gap.breadth * 0.5);
+    piece.at.iter().all(|&(v, d, b)| {
+        let (d0, b0) = (d + dd, b + db);
+        at.iter().all(|&(w, e, c)| {
+            d0 + net.d[v] + hd <= e
+                || e + net.d[w] + hd <= d0
+                || b0 + net.b[v] + hb <= c
+                || c + net.b[w] + hb <= b0
+        })
+    })
 }
 
 struct Run<'a> {
     net: &'a Net,
     flow: Flow,
     gap: Gaps,
-    limit: f32,
-    /// For every node: the depth of the longest spine it starts.
-    len: Vec<f32>,
+}
+
+/// A row wraps when it is six and more nodes that own nothing: a ribbon of leaves.
+fn wraps(items: &[Piece]) -> bool {
+    items.len() >= WRAP_MIN && items.iter().all(|p| p.at.len() == 1)
 }
 
 impl Run<'_> {
-    /// A spine cut into lines no deeper than the limit, each line laid out - its spine on one
-    /// axis, its branches hanging off both sides of it - and the lines side by side across.
-    fn lines(&self, segs: Vec<Seg>) -> Piece {
+    /// The tree a node starts: the node, and after it what it owns, the middle of its children's
+    /// row on the node's axis. `memo` holds the trees of what it owns.
+    fn piece(&self, v: usize, memo: &mut [Option<Piece>]) -> Piece {
         let net = self.net;
-        let gap = &self.gap;
-        let mut at = Vec::with_capacity(segs.len());
-        let mut d = 0.0;
-        for s in &segs {
-            at.push(d);
-            d += s.next;
-        }
-        // how far each node of the spine reaches in depth with what hangs off it
-        let reach: Vec<f32> = segs
-            .iter()
-            .zip(&at)
-            .map(|(s, a)| a + s.sides.iter().map(|x| x.start + x.piece.dd).fold(net.d[s.node], f32::max))
-            .collect();
-        let cuts = |limit: f32| -> Vec<usize> {
-            let mut out = vec![0];
-            let mut base = 0usize;
-            let mut far = reach.first().copied().unwrap_or(0.0);
-            for (j, &r) in reach.iter().enumerate().skip(1) {
-                far = far.max(r);
-                if far - at[base] > limit {
-                    out.push(j);
-                    base = j;
-                    far = r;
-                }
-            }
-            out
-        };
-        // as many lines as the limit asks for, as even as they come: the least limit that makes
-        // no more of them
-        let mut starts = cuts(self.limit);
-        if starts.len() > 1 {
-            let lines = starts.len();
-            let (mut lo, mut hi) = (0.0f32, self.limit);
-            for _ in 0..24 {
-                let mid = (lo + hi) * 0.5;
-                if cuts(mid).len() <= lines {
-                    hi = mid;
-                } else {
-                    lo = mid;
-                }
-            }
-            starts = cuts(hi);
-        }
-        let mut out = Piece::default();
-        let mut used = Skyline::default();
-        let mut first_axis = None;
-        let mut segs: Vec<Option<Seg>> = segs.into_iter().map(Some).collect();
-        for (li, &i) in starts.iter().enumerate() {
-            let base = at[i];
-            let j = starts.get(li + 1).copied().unwrap_or(segs.len());
-            let mut pos = Skyline::default();
-            let mut neg = Skyline::default();
-            let mut line: Vec<(usize, f32, f32)> = Vec::new();
-            let taken: Vec<Seg> = (i..j).filter_map(|k| segs[k].take()).collect();
-            for (k, s) in taken.iter().enumerate() {
-                let d0 = at[i + k] - base;
-                let v = s.node;
-                line.push((v, d0, -net.axis[v]));
-                pos.add(d0, d0 + net.d[v], net.b[v] - net.axis[v]);
-                neg.add(d0, d0 + net.d[v], net.axis[v]);
-            }
-            for (k, s) in taken.iter().enumerate() {
-                let d0 = at[i + k] - base;
-                for side in &s.sides {
-                    let ds = d0 + side.start;
-                    let pc = &side.piece;
-                    // node by node against what that side holds: a thin stretch of a branch comes
-                    // close to the spine where its wide end cannot
-                    let half = gap.depth * 0.5;
-                    let mut off = 0.0f32;
-                    for &(v, nd, nb) in &pc.at {
-                        let (a0, a1) = (ds + nd - half, ds + nd + net.d[v] + half);
-                        let near = if side.neg { pc.bb - nb - net.b[v] } else { nb };
-                        let sky = if side.neg { &neg } else { &pos };
-                        off = off.max(sky.over(a0, a1) + gap.breadth - near);
-                    }
-                    let top = if side.neg { -(off + pc.bb) } else { off };
-                    for &(v, nd, nb) in &pc.at {
-                        let far = if side.neg { off + pc.bb - nb } else { off + nb + net.b[v] };
-                        let sky = if side.neg { &mut neg } else { &mut pos };
-                        sky.add(ds + nd, ds + nd + net.d[v], far);
-                        line.push((v, ds + nd, top + nb));
-                    }
-                }
-            }
-            // the line comes as close to the lines before it as its nodes allow
-            let half = gap.depth * 0.5;
-            let shift = if used.0.is_empty() {
-                line.iter().map(|&(_, _, b)| -b).fold(0.0f32, f32::max)
+        let mut heads = Vec::new();
+        let mut merges = Vec::new();
+        for &x in &net.kids[v] {
+            let Some(piece) = memo[x].take() else { continue };
+            if net.band[x] == 0 {
+                heads.push(piece);
             } else {
-                line.iter()
-                    .map(|&(v, d, b)| used.over(d - half, d + net.d[v] + half) + gap.fold - b)
-                    .fold(f32::MIN, f32::max)
-            };
-            for &(v, d, b) in &line {
-                used.add(d, d + net.d[v], shift + b + net.b[v]);
+                merges.push((x, piece));
             }
-            if first_axis.is_none() {
-                first_axis = Some(shift);
-            }
-            out.at.extend(line.into_iter().map(|(v, d, b)| (v, d, b + shift)));
         }
-        out.axis = first_axis.unwrap_or(0.0);
-        out.normalise(net)
+        let mut piece = Piece::default();
+        piece.at.push((v, 0.0, -net.axis[v]));
+        if let Some(fan) = self.fan(heads, merges) {
+            fan.shifted(net.d[v] + self.gap.depth, -fan.axis, &mut piece.at);
+        }
+        piece.axis = 0.0;
+        piece.normalise(net)
     }
 
-    /// The spine a node starts: the node with what hangs off it, then the spine of its deepest
-    /// child that nothing else waits for.
-    fn segs(&mut self, v: usize, memo: &mut [Option<Vec<Seg>>], pieces: &mut [Option<Piece>]) -> Vec<Seg> {
+    /// What a node owns, as one piece that starts right after the node and whose axis is where
+    /// the node stands: its children in a row, in pin order, each with what it owns; then the
+    /// merges, each after the nodes that lead into it and across from the middle of them - further
+    /// on where that place is taken.
+    fn fan(&self, items: Vec<Piece>, merges: Vec<(usize, Piece)>) -> Option<Piece> {
         let net = self.net;
         let gap = self.gap;
-        let kids = net.kids[v].clone();
-        // the siblings each child waits for
-        let feeders: Vec<Vec<usize>> = kids
-            .iter()
-            .map(|&x| {
-                let mut f: Vec<usize> =
-                    net.preds[x].iter().filter(|&&p| p != v).map(|&p| net.branch(p, v)).collect();
-                f.sort_unstable();
-                f.dedup();
-                f
-            })
-            .collect();
-        let waited_for = |c: usize| feeders.iter().any(|f| f.contains(&c));
-        let spine = kids
-            .iter()
-            .copied()
-            .filter(|&c| !waited_for(c))
-            .max_by(|&a, &b| self.len[a].total_cmp(&self.len[b]).then(b.cmp(&a)));
-        let spine_key = spine.and_then(|c| kids.iter().position(|&x| x == c));
-        let mut starts: Vec<f32> = vec![0.0; kids.len()];
-        let mut sides: Vec<Side> = Vec::new();
-        let mut groups: Vec<(bool, f32, Vec<Piece>)> = Vec::new();
-        for (k, &x) in kids.iter().enumerate() {
-            let start = if feeders[k].is_empty() {
-                net.d[v] + gap.depth
-            } else {
-                feeders[k]
-                    .iter()
-                    .filter_map(|f| kids.iter().position(|y| y == f))
-                    .map(|fi| starts[fi] + pieces[kids[fi]].as_ref().map_or(0.0, |p| p.dd) + gap.depth)
-                    .fold(net.d[v] + gap.depth, f32::max)
-            };
-            starts[k] = start;
-            if Some(x) == spine {
-                continue;
-            }
-            let piece = {
-                let list = memo[x].take().unwrap_or_default();
-                self.lines(list)
-            };
-            pieces[x] = Some(piece.clone());
-            // the branches before the spine's pin hang on one side, the rest on the other
-            let neg = match spine_key {
-                Some(sk) => k < sk,
-                None => k * 2 < kids.len(),
-            };
-            match groups.iter_mut().find(|g| g.0 == neg && (g.1 - start).abs() < 0.5) {
+        if items.is_empty() && merges.is_empty() {
+            return None;
+        }
+        let mut out = if wraps(&items) {
+            let k = wrap(self.flow, &items, &gap);
+            grid(net, items, k, gap.breadth, &gap)
+        } else {
+            row(net, &items, gap.breadth)
+        };
+        let axis = out.axis;
+        // the merges the same nodes lead into stand together, as children do: in one row
+        let mut groups: Vec<(usize, Vec<usize>, Vec<Piece>)> = Vec::new();
+        for (x, piece) in merges {
+            let mut from = net.preds[x].clone();
+            from.sort_unstable();
+            match groups.iter_mut().find(|g| net.band[g.0] == net.band[x] && g.1 == from) {
                 Some(g) => g.2.push(piece),
-                None => groups.push((neg, start, vec![piece])),
+                None => groups.push((x, from, vec![piece])),
             }
         }
-        for (neg, start, items) in groups {
-            if items.len() >= WRAP_MIN {
-                let k = wrap(self.flow, &items, &gap, self.limit);
-                sides.push(Side { piece: grid(net, items, k, gap.breadth, &gap), start, neg });
+        for (_, preds, pieces) in groups {
+            let piece = if wraps(&pieces) {
+                let k = wrap(self.flow, &pieces, &gap);
+                grid(net, pieces, k, gap.breadth, &gap)
             } else {
-                // nearest the spine first
-                let mut items = items;
-                if neg {
-                    items.reverse();
+                row(net, &pieces, gap.breadth)
+            };
+            // the nodes that lead in: where each ends in depth, where its axis lies across; the
+            // owner itself stands before the row, on its axis
+            let from: Vec<(f32, f32)> = preds
+                .iter()
+                .map(|&f| {
+                    out.at
+                        .iter()
+                        .find(|e| e.0 == f)
+                        .map_or((0.0, axis), |&(_, d, b)| (d + net.d[f] + gap.depth, b + net.axis[f]))
+                })
+                .collect();
+            let start = from.iter().map(|f| f.0).fold(0.0f32, f32::max);
+            let db = from.iter().map(|f| f.1).sum::<f32>() / from.len().max(1) as f32 - piece.axis;
+            let end = out.at.iter().map(|&(w, d, _)| d + net.d[w]).fold(0.0f32, f32::max) + gap.depth;
+            // across from the middle of them; a little aside where that place is taken; further
+            // on where there is none near
+            let step = (piece.bb + gap.breadth) * 0.5;
+            let aside = (1..=8)
+                .flat_map(|k| [k as f32, -(k as f32)])
+                .map(|k| db + k * step)
+                .find(|&b| free(net, &gap, &out.at, &piece, start, b));
+            let (mut dd, mut at) = (start, db);
+            if !free(net, &gap, &out.at, &piece, start, db) {
+                match aside {
+                    Some(b) => at = b,
+                    None => {
+                        while dd < end && !free(net, &gap, &out.at, &piece, dd, db) {
+                            dd += layout::GRID;
+                        }
+                    }
                 }
-                for p in items {
-                    sides.push(Side { piece: p, start, neg });
-                }
             }
+            piece.shifted(dd, at, &mut out.at);
         }
-        let mut list = Vec::new();
-        match spine {
-            Some(c) => {
-                let k = kids.iter().position(|&x| x == c).unwrap_or(0);
-                list.push(Seg { node: v, sides, next: starts[k] });
-                self.len[v] = starts[k] + self.len[c];
-                list.extend(memo[c].take().unwrap_or_default());
-            }
-            None => {
-                self.len[v] = net.d[v];
-                list.push(Seg { node: v, sides, next: 0.0 });
-            }
-        }
-        list
+        out.axis = axis;
+        Some(out.normalise(net))
     }
 
-    fn all(&mut self) -> Piece {
+    fn all(&self) -> Piece {
         let net = self.net;
-        let mut memo: Vec<Option<Vec<Seg>>> = (0..net.n).map(|_| None).collect();
-        let mut pieces: Vec<Option<Piece>> = vec![None; net.n];
+        let mut memo: Vec<Option<Piece>> = vec![None; net.n];
         for &v in net.topo.iter().rev() {
-            let s = self.segs(v, &mut memo, &mut pieces);
-            memo[v] = Some(s);
+            let piece = self.piece(v, &mut memo);
+            memo[v] = Some(piece);
         }
         // the starts of the graph, side by side
         let roots = net.kids[net.n].clone();
         let first: Vec<Piece> = roots
             .iter()
             .filter(|&&r| net.band[r] == 0 && !net.loose.iter().any(|(l, _)| *l == r))
-            .map(|&r| {
-                let list = memo[r].take().unwrap_or_default();
-                self.lines(list)
-            })
+            .filter_map(|&r| memo[r].take())
             .collect();
         let mut out = Piece::default();
         let mut depth = 0.0f32;
         if !first.is_empty() {
-            let k = wrap(self.flow, &first, &self.gap, self.limit);
+            let k = wrap(self.flow, &first, &self.gap);
             let block = grid(net, first, k, self.gap.tree, &self.gap);
             block.shifted(0.0, 0.0, &mut out.at);
             depth = block.dd + self.gap.depth;
@@ -696,21 +561,10 @@ impl Run<'_> {
         for &(v, d, b) in &out.at {
             at[v] = Some((d, b));
         }
-        let (hd, hb) = (self.gap.depth * 0.5, self.gap.breadth * 0.5);
-        let free = |out: &Piece, piece: &Piece, dd: f32, db: f32| {
-            piece.at.iter().all(|&(v, d, b)| {
-                let (d0, b0) = (d + dd, b + db);
-                out.at.iter().all(|&(w, e, c)| {
-                    d0 + net.d[v] + hd <= e
-                        || e + net.d[w] + hd <= d0
-                        || b0 + net.b[v] + hb <= c
-                        || c + net.b[w] + hb <= b0
-                })
-            })
-        };
+        let gap = self.gap;
+        let free = |out: &Piece, piece: &Piece, dd: f32, db: f32| free(net, &gap, &out.at, piece, dd, db);
         for &r in roots.iter().filter(|&&r| net.band[r] > 0) {
-            let list = memo[r].take().unwrap_or_default();
-            let piece = self.lines(list);
+            let Some(piece) = memo[r].take() else { continue };
             let feeders: Vec<(f32, f32)> = net.preds[r]
                 .iter()
                 .filter_map(|&f| at[f].map(|(d, b)| (d + net.d[f], b + net.axis[f])))
@@ -730,8 +584,7 @@ impl Run<'_> {
         }
         // a loose node: just before the first node it leads to, beside what leads in there
         for (u, targets) in &net.loose {
-            let Some(list) = memo[*u].take() else { continue };
-            let piece = self.lines(list);
+            let Some(piece) = memo[*u].take() else { continue };
             let Some((v, (td, tb))) = targets.iter().find_map(|&v| at[v].map(|p| (v, p))) else {
                 piece.shifted(depth, 0.0, &mut out.at);
                 depth += piece.dd + self.gap.depth;
@@ -764,10 +617,6 @@ fn fit_size(flow: Flow, d: f32, b: f32) -> f32 {
     (VIEW[0] / w.max(1.0)).min(VIEW[1] / h.max(1.0)).min(1.0)
 }
 
-fn fit(flow: Flow, p: &Piece) -> f32 {
-    fit_size(flow, p.dd, p.bb)
-}
-
 /// The top-left corner of every node of `set` (indices of `g.nodes`), laid out in `g`'s flow, in
 /// the order of `set`, with the first node near the origin.
 #[must_use]
@@ -775,25 +624,7 @@ pub fn layout(catalog: &Catalog, g: &Graph, set: &[usize]) -> Vec<[f32; 2]> {
     let cx = BoxCx::of(catalog, g);
     let net = build(&cx, g, set);
     let gap = gaps(cx.flow);
-    let mut run = Run { net: &net, flow: cx.flow, gap, limit: f32::MAX, len: vec![0.0; net.n] };
-    let mut best = run.all();
-    let mut score = fit(cx.flow, &best);
-    let longest = best.dd;
-    let floor = net.d.iter().copied().fold(0.0f32, f32::max);
-    // a graph too long to be read whole folds into lines, at the depth that frames it largest;
-    // a fold turns wires back across the graph, so it has to buy a lot: a graph that a wide canvas
-    // shows at almost half its size stays one line
-    if score < 0.45 {
-        for k in 2..=12 {
-            run.limit = (longest / k as f32).max(floor);
-            let p = run.all();
-            let s = fit(cx.flow, &p) * (1.0 - 0.02 * (k - 1) as f32);
-            if s > score {
-                best = p;
-                score = s;
-            }
-        }
-    }
+    let best = Run { net: &net, flow: cx.flow, gap }.all();
     let mut out = vec![[0.0, 0.0]; set.len()];
     for &(v, d, b) in &best.at {
         let p = match cx.flow {
@@ -1026,43 +857,18 @@ mod tests {
         out
     }
 
+    /// The 110-node quest in both flows: no node on another. A tree is as long as its longest way
+    /// and as broad as its rows - nothing of it is folded, so its size is the graph's.
     #[test]
-    fn the_big_quest_fits_without_an_overlap_in_both_flows() {
-        let mut sizes = Vec::new();
+    fn the_big_quest_is_laid_out_without_an_overlap_in_both_flows() {
         for flow in [Flow::Right, Flow::Down] {
             let (cat, mut g) = big(flow);
             assert_eq!(g.nodes.len(), 110);
             layout::run(&cat, &mut g, false);
             let r = rects(&cat, &g);
-            let (x0, y0, x1, y1) = r.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |a, b| {
-                (a.0.min(b[0]), a.1.min(b[1]), a.2.max(b[2]), a.3.max(b[3]))
-            });
-            let (w, h) = (x1 - x0, y1 - y0);
-            eprintln!("{flow:?}: {w} x {h}");
-            if let Some(dir) = std::env::var_os("GZ_LAYOUT_DUMP") {
-                let list: Vec<serde_json::Value> = g
-                    .nodes
-                    .iter()
-                    .zip(&r)
-                    .map(|(n, b)| serde_json::json!({ "id": n.id, "r": b, "out": n.out.iter().flat_map(|p| p.targets.iter().map(|t| t.to_string())).collect::<Vec<_>>() }))
-                    .collect();
-                let path = std::path::Path::new(&dir).join(format!("layout_{flow:?}.json"));
-                let _ = std::fs::write(path, serde_json::Value::Array(list).to_string());
-            }
             let o = overlaps(&r);
-            sizes.push((
-                flow,
-                w,
-                h,
-                o.len(),
-                o.first().map(|&(a, b)| (g.nodes[a].id.clone(), g.nodes[b].id.clone())),
-            ));
-        }
-        for (flow, w, h, o, first) in sizes {
-            // flowing right (the default) it fits in 4000 pt; flowing down its nodes are wide
-            let most = if flow == Flow::Right { 4000.0 } else { 4800.0 };
-            assert!(w.max(h) < most, "{flow:?}: {w} x {h} pt");
-            assert!(o == 0, "{flow:?}: {o} overlaps, first {first:?}");
+            let first = o.first().map(|&(a, b)| (g.nodes[a].id.clone(), g.nodes[b].id.clone()));
+            assert!(o.is_empty(), "{flow:?}: {} overlaps, first {first:?}", o.len());
         }
     }
 
@@ -1181,6 +987,102 @@ mod tests {
             assert!(e_d.0 > b_d.1 && e_b.0 < b_b.1 && b_b.0 < e_b.1, "{flow:?}: the end is under b");
             // the loose node ends before the end starts, in the layer of b
             assert!(l_d.1 <= e_d.0 && l_d.0 >= b_d.0 - 1.0, "{flow:?}: {l_d:?} against {e_d:?} and {b_d:?}");
+        }
+    }
+
+    /// Where a node lies along the flow and where its axis lies across it.
+    fn along_across(cat: &Catalog, g: &Graph, id: &str) -> (f32, f32) {
+        let cx = BoxCx::of(cat, g);
+        let Some(n) = g.find_node(id) else { panic!("no node {id}") };
+        let s = layout::node_size(&cx, n);
+        match g.flow() {
+            Flow::Down => (n.pos[1], n.pos[0] + s[0] * 0.5),
+            Flow::Right => (n.pos[0], n.pos[1] + HEADER * 0.5),
+        }
+    }
+
+    /// A node's children stand in one row after it, in pin order, each with its own after it, and
+    /// the node stands across from the middle of the row - a tree, in both flows.
+    #[test]
+    fn a_node_stands_across_from_the_middle_of_its_children() {
+        let cat = bundled();
+        let mut g = Graph::default();
+        let mut s = Node::new("s", "trigger.start");
+        s.connect("next", "top");
+        let mut top = Node::new("top", "flow.step");
+        for id in ["a", "b", "c"] {
+            top.connect("next", id);
+        }
+        let mut a = Node::new("a", "flow.step");
+        a.connect("next", "a1");
+        a.connect("next", "a2");
+        let mut c = Node::new("c", "flow.step");
+        c.connect("next", "c1");
+        for n in [s, top, a, Node::new("b", "flow.end"), c] {
+            g.nodes.push_back(n);
+        }
+        for id in ["a1", "a2", "c1"] {
+            g.nodes.push_back(Node::new(id, "flow.end"));
+        }
+        for flow in [Flow::Down, Flow::Right] {
+            g.canvas.flow = Some(flow);
+            layout::run(&cat, &mut g, false);
+            assert!(overlaps(&rects(&cat, &g)).is_empty(), "{flow:?}");
+            let at = |id: &str| along_across(&cat, &g, id);
+            let (top, a, b, c) = (at("top"), at("a"), at("b"), at("c"));
+            assert!(a.0 == b.0 && b.0 == c.0 && a.0 > top.0, "{flow:?}: one row after the node");
+            assert!(a.1 < b.1 && b.1 < c.1, "{flow:?}: in pin order");
+            // positions snap to the grid: a node is within one cell of the middle
+            assert!(
+                (top.1 - (a.1 + c.1) * 0.5).abs() <= layout::GRID,
+                "{flow:?}: {top:?} over {a:?} .. {c:?}"
+            );
+            let (a1, a2) = (at("a1"), at("a2"));
+            assert!((a.1 - (a1.1 + a2.1) * 0.5).abs() <= layout::GRID, "{flow:?}: {a:?} over {a1:?}, {a2:?}");
+            assert!((c.1 - at("c1").1).abs() <= layout::GRID, "{flow:?}: an only child goes straight on");
+        }
+    }
+
+    /// What the answers of a question all lead to stands after them, across from the middle of
+    /// them; two nodes the same answers lead to stand there side by side.
+    #[test]
+    fn a_merge_stands_across_from_the_middle_of_what_leads_into_it() {
+        let cat = bundled();
+        for merges in [vec!["more"], vec!["more", "other"]] {
+            let mut g = Graph::default();
+            let mut s = Node::new("s", "trigger.start");
+            s.connect("next", "q");
+            let mut q = Node::new("q", "flow.step");
+            let answers = ["a", "b", "c", "d"];
+            for id in answers {
+                q.connect("next", id);
+            }
+            g.nodes.push_back(s);
+            g.nodes.push_back(q);
+            for id in answers {
+                let mut n = Node::new(id, "flow.step");
+                for m in &merges {
+                    n.connect("next", m);
+                }
+                g.nodes.push_back(n);
+            }
+            for m in &merges {
+                g.nodes.push_back(Node::new(m, "flow.end"));
+            }
+            for flow in [Flow::Down, Flow::Right] {
+                g.canvas.flow = Some(flow);
+                layout::run(&cat, &mut g, false);
+                assert!(overlaps(&rects(&cat, &g)).is_empty(), "{flow:?}");
+                let at = |id: &str| along_across(&cat, &g, id);
+                let middle = answers.iter().map(|id| at(id).1).sum::<f32>() / answers.len() as f32;
+                let own: Vec<(f32, f32)> = merges.iter().map(|m| at(m)).collect();
+                assert!(
+                    own.iter().all(|m| m.0 > at("a").0 && m.0 == own[0].0),
+                    "{flow:?}: after the answers, level"
+                );
+                let centre = own.iter().map(|m| m.1).sum::<f32>() / own.len() as f32;
+                assert!((centre - middle).abs() <= layout::GRID, "{flow:?}: {centre} under {middle}");
+            }
         }
     }
 

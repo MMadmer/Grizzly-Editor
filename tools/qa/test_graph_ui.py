@@ -288,20 +288,21 @@ def phase_g(tag: str) -> None:
         # the fixture's positions are an old layout's: the auto layout of today
         r = cmd("graph.arrange", doc=doc(BIG), action="layout")
         check(r.get("ok"), tag + " G the big quest is laid out", json.dumps(r)[:200])
+        # a tree along the flow, as long as the quest's longest way: no node lies on another
         boxes = r.get("boxes", [])
-        w = max(b["x"] + b["w"] for b in boxes) - min(b["x"] for b in boxes)
-        h = max(b["y"] + b["h"] for b in boxes) - min(b["y"] for b in boxes)
-        check(max(w, h) < 4000, tag + " G under 4000 pt on its long side", "%d x %d" % (w, h))
+        on = [(a["id"], b["id"]) for i, a in enumerate(boxes) for b in boxes[i + 1:]
+              if a["x"] < b["x"] + b["w"] and b["x"] < a["x"] + a["w"]
+              and a["y"] < b["y"] + b["h"] and b["y"] < a["y"] + a["h"]]
+        check(boxes and not on, tag + " G no node of it lies on another (%d nodes)" % len(boxes), json.dumps(on[:3]))
     # under 1400 pt Details is a rail: shown it would lie over the framed graph
     v = view(BIG, frame="all", graph_panel="show", details="show" if tag.startswith("1707") else "hide")
     check(v.get("ok"), tag + " G the big quest opens", json.dumps(v)[:200])
     check(v.get("nodes", 0) >= 100, tag + " G it is the 110-node quest", str(v.get("nodes")))
-    # no text is drawn under 11 px at any zoom; at 1707x912 @ 1.5 every node shows its title, at
-    # 1280x720 @ 1.0 the whole quest takes a zoom where the narrowest nodes are blocks (titles on hover)
+    # no text is drawn under 11 px at any zoom: the whole quest - a tree as long as its longest way - takes a
+    # zoom where its nodes are blocks in their families' colours (titles on hover)
     check(v.get("title_px", 0) >= 11, tag + " G Frame All: no header's text under 11 px", json.dumps([v.get("title_px"), v.get("zoom")]))
-    if tag.endswith("@1.5"):
-        check(v.get("detail") in ("full", "header"), tag + " G and every header shows its title",
-              json.dumps([v.get("detail"), v.get("zoom")]))
+    check(v.get("detail") in ("full", "header", "block"), tag + " G and the level of detail is one the zoom has",
+          json.dumps([v.get("detail"), v.get("zoom")]))
     b = v.get("beyond") or {}
     check(sum(b.values()) == 0, tag + " G the whole graph is in view", json.dumps(b))
     shot("big_quest_framed_" + tag)

@@ -1125,10 +1125,14 @@ A painter canvas of the kit: the scene of a revision is built off the UI thread
   input's rim. A pin that is not the way on is named on its wire's first stretch, never on the
   dot; a pin's hover says what it means (the catalog's `pin.<name>`).
 - **Auto layout** (`arrange.rs`): the forward edges of a graph (cycles broken by the strongly
-  connected components and the depth from the triggers) laid out along the flow, every node under
-  its dominator; a node with many children lays them out in a block several rows (or columns) deep
-  instead of one ribbon, and long chains fold, so the 110-node quest of the reference project is
-  under 4000 pt on its long side. What several trees lead into (a quest's end reached from the
+  connected components and the depth from the triggers) laid out along the flow as a tree, every
+  node under its dominator: a node's children stand in one row after it, in pin order, each with
+  what it owns, and the node stands across from the middle of the row; a merge stands after the
+  nodes that lead into it, across from the middle of them, and the merges the same nodes lead into
+  stand there side by side. The tree goes on along the flow as far as the graph does: nothing of
+  it is cut and laid beside the rest, flowing right as flowing down. Only a row of six and more
+  nodes that lead nowhere is a few rows (or columns) deep instead of one ribbon, and six and more
+  separate trees wrap the same way. What several trees lead into (a quest's end reached from the
   start's tree and a trigger's) goes right after the trees that feed it, across from the middle of
   their wires. A node nothing leads into that is no trigger and leads only where other wires lead
   too - a node whose input is not wired yet - is no start of a tree: it shapes nothing and waits
