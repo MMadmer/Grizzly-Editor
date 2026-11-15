@@ -23,6 +23,9 @@ pub struct LibraryObject {
     /// The visible meshes' triangles, object space, for picking.
     pub verts: Arc<[Vec3]>,
     pub tris: Arc<[[u32; 3]]>,
+    /// Per triangle of `tris`: its surface, an index into `object.surfaces` ([`NO_SURFACE`]
+    /// for a face no surface lists).
+    pub tri_surface: Arc<[u32]>,
     pub bvh: Option<Bvh>,
     /// The file's bytes as one number, the same on every machine; 0 for an object made in
     /// memory. What a build compares to know the model changed.
@@ -44,11 +47,21 @@ impl LibraryObject {
     pub fn from_object(name: &str, file: PathBuf, object: EditObject) -> Self {
         let mut verts: Vec<Vec3> = Vec::new();
         let mut tris: Vec<[u32; 3]> = Vec::new();
+        let mut tri_surface: Vec<u32> = Vec::new();
         for m in object.meshes.iter().filter(|m| m.flags.contains(MeshFlags::VISIBLE)) {
             let base = u32::try_from(verts.len()).unwrap_or(u32::MAX);
+            let first = tris.len();
             verts.extend(m.points.iter().copied());
             for f in m.faces.iter() {
                 tris.push([base + f.v[0].point, base + f.v[1].point, base + f.v[2].point]);
+            }
+            tri_surface.resize(tris.len(), NO_SURFACE);
+            for sf in &m.surf_faces {
+                for face in sf.faces.iter() {
+                    if let Some(slot) = tri_surface.get_mut(first + *face as usize) {
+                        *slot = sf.surface;
+                    }
+                }
             }
         }
         let bvh = Bvh::build(&verts, &tris).ok();
@@ -61,9 +74,34 @@ impl LibraryObject {
             bounds,
             verts: verts.into(),
             tris: tris.into(),
+            tri_surface: tri_surface.into(),
             bvh,
             stamp: 0,
         }
+    }
+
+    /// A library object made in memory from a model (a model asset, a terrain): every mesh's
+    /// box is worked out from its points first, so a model whose boxes were never filled in has
+    /// its true bounds. What a provider ([`Library::add_provider`]) answers.
+    #[must_use]
+    pub fn provided(name: &str, mut object: EditObject) -> Self {
+        for m in &mut object.meshes {
+            if !m.points.is_empty() {
+                let mut b = gz_fmt_object::Aabb::INVALID;
+                for p in m.points.iter() {
+                    b.modify(*p);
+                }
+                m.bbox = b;
+            }
+        }
+        Self::from_object(name, PathBuf::new(), object)
+    }
+
+    /// The surface of the triangle `i` (name, texture, shaders, game material).
+    #[must_use]
+    pub fn surface_of(&self, i: u32) -> Option<&gz_fmt_object::Surface> {
+        let s = *self.tri_surface.get(i as usize)?;
+        self.object.surfaces.get(s as usize)
     }
 
     /// A dynamic object cannot be scaled.
@@ -96,9 +134,27 @@ enum Slot {
     Failed(String),
 }
 
+/// The triangle of no surface in [`LibraryObject::tri_surface`].
+pub const NO_SURFACE: u32 = u32::MAX;
+
+/// A source of library objects that are no `.object` file: it answers a reference it knows with
+/// its object, and `None` for every other.
+pub type Provider = Arc<dyn Fn(&str) -> Option<Arc<LibraryObject>> + Send + Sync>;
+
 /// The library: the folders it reads, and what it has read.
+///
+/// **Providers.** Before a reference is looked for in the roots, every provider added with
+/// [`Library::add_provider`] is asked in the order they were added, with the reference
+/// normalized ([`normalize`]: lower case, backslashes, no `.object`); the first answer wins.
+/// That is how models that are no `.object` take part: a model asset (a reference ending in
+/// `.meshasset`) or a terrain (`@terrain\<name>`) is made by its provider, usually with
+/// [`LibraryObject::provided`]. A provided object is cached, counted in [`Library::rev`],
+/// answered by [`Library::cached`] and [`Library::load`] and stands in the pick tree exactly
+/// like one read from a file. A provider may block (it runs where `load` runs, on the IO pool);
+/// when what it answers changes, its owner calls [`Library::forget`] with the reference.
 pub struct Library {
     roots: Vec<PathBuf>,
+    providers: parking_lot::RwLock<Vec<Provider>>,
     cache: Mutex<FxHashMap<String, Slot>>,
     listing: Mutex<Option<Arc<Vec<String>>>>,
     rev: RevCounter,
@@ -110,10 +166,40 @@ impl Library {
     pub fn new(roots: Vec<PathBuf>) -> Self {
         Self {
             roots,
+            providers: parking_lot::RwLock::new(Vec::new()),
             cache: Mutex::new(FxHashMap::default()),
             listing: Mutex::new(None),
             rev: RevCounter::new(),
         }
+    }
+
+    /// Adds a provider, asked after the ones added before it and before the roots.
+    pub fn add_provider(&self, provider: Provider) {
+        self.providers.write().push(provider);
+    }
+
+    /// Drops one reference from what was read (loaded or failed), so the next load reads it
+    /// again: its file or its provider's answer changed. Moves [`Self::rev`] when something
+    /// was dropped; answers whether it was.
+    pub fn forget(&self, reference: &str) -> bool {
+        let gone = self.cache.lock().remove(&normalize(reference)).is_some();
+        if gone {
+            self.rev.bump();
+        }
+        gone
+    }
+
+    /// What a changed file of the roots means: an `.object` under a root is forgotten (and the
+    /// listing read again). Answers whether the file was one of the library's.
+    pub fn forget_file(&self, file: &Path) -> bool {
+        if !file.extension().is_some_and(|x| x.eq_ignore_ascii_case("object")) {
+            return false;
+        }
+        let Some(rel) = self.roots.iter().find_map(|r| file.strip_prefix(r).ok()) else { return false };
+        let reference = normalize(&rel.to_string_lossy());
+        *self.listing.lock() = None;
+        self.forget(&reference);
+        true
     }
 
     /// Moves whenever an object is loaded: what a pick tree over the scene's boxes depends on.
@@ -153,6 +239,10 @@ impl Library {
         }
         let result = self.read(&key);
         let mut cache = self.cache.lock();
+        // another thread loaded it meanwhile: keep the one there, the revision moved for it
+        if let Some(Slot::Loaded(o)) = cache.get(&key) {
+            return Ok(o.clone());
+        }
         match &result {
             Ok(o) => {
                 cache.insert(key, Slot::Loaded(o.clone()));
@@ -166,6 +256,10 @@ impl Library {
     }
 
     fn read(&self, key: &str) -> Result<Arc<LibraryObject>, String> {
+        let providers: Vec<Provider> = self.providers.read().clone();
+        if let Some(o) = providers.iter().find_map(|p| p(key)) {
+            return Ok(o);
+        }
         let file = self.file_of(key).ok_or_else(|| format!("Can't find file '{key}.object'"))?;
         let bytes = std::fs::read(&file).map_err(|e| format!("Can't read '{}': {e}", file.display()))?;
         let object = EditObject::read(&bytes).map_err(|e| format!("Can't load '{}': {e}", file.display()))?;

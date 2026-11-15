@@ -80,6 +80,7 @@ pub mod pick;
 pub mod props;
 pub mod recovery;
 pub mod sdk;
+pub mod sense;
 mod service;
 pub mod summary;
 pub mod tools;

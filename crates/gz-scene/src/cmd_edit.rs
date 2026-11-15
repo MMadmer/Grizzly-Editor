@@ -25,6 +25,7 @@ use crate::objects::{
     PointKind, SceneObjectData, ShapeData, ShapeDef, SpawnData, SpawnEntity, WayData, default_data,
 };
 use crate::pick::ray_scene_objects;
+use crate::sense::{self, QueryAction, QueryParams};
 use crate::service::{self, SceneService};
 
 pub(crate) fn register(reg: &mut Registry) {
@@ -89,15 +90,15 @@ pub(crate) fn register(reg: &mut Registry) {
     );
     reg.cmd(
         Spec::write("scene.align", "Drops objects onto what is below them, or stands them on the surface.")
-            .example("action=surface objects=barrel_01"),
+            .example("action=surface objects=barrel_01 offset=0.05"),
         scene_align,
     );
     reg.cmd(
         Spec::read(
             "scene.query",
-            "Casts rays into the scene: the floor and ceiling at a point, or the walls of an area.",
+            "Asks the scene's geometry: the ground under points, heights over an area, a ray, what is in a box, whether and where a model fits, the AI map, the walls of an area.",
         )
-        .example("action=ground position=10,5,3"),
+        .example("action=fit ref=props\\box_wood_01 position=10,0,3"),
         scene_query,
     );
     reg.cmd(
@@ -155,16 +156,17 @@ fn finite(v: [f32; 3], what: &str) -> Result<Vec3, CmdError> {
     if v.is_finite() { Ok(v) } else { Err(CmdError::invalid(format!("{what} takes finite numbers"))) }
 }
 
-/// Drops objects onto what is below them (a box under each, or the line under its pivot);
-/// answers how many landed.
+/// Drops objects onto what is below them (a box under each, or the line under its pivot), then
+/// `offset` metres up; answers the ones that landed.
 async fn drop_ids(
     ed: &Arc<Editor>,
     svc: &Arc<SceneService>,
     ids: &[ObjId],
     align: bool,
     line: bool,
+    offset: f32,
     o: Origin,
-) -> Result<usize, CmdError> {
+) -> Result<Vec<ObjId>, CmdError> {
     let snap = svc.store.snapshot();
     svc.prefetch_library(ed, &snap).await;
     let (snap, pick) = svc.pick().await;
@@ -173,18 +175,21 @@ async fn drop_ids(
     let s = snap.clone();
     let landings = ed.exec.cpu(move || drop_to_ground(&s, &lib, &pick, &ids, align, line)).await;
     if landings.is_empty() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
-    let n = landings.len();
+    let landed: Vec<ObjId> = landings.iter().map(|l| l.id).collect();
     let items = landings
         .into_iter()
-        .map(|l| (l.id, TransformEdit::Land { position: l.position, rotation: l.rotation }))
+        .map(|l| {
+            let position = l.position + Vec3::Y * offset;
+            (l.id, TransformEdit::Land { position, rotation: l.rotation })
+        })
         .collect();
     let label = if align { "Align to Surface" } else { "Drop to Ground" };
     svc.store
         .send(SceneCmd::Transform { items, members: false, label: label.into(), merge: None }, o)
         .await?;
-    Ok(n)
+    Ok(landed)
 }
 
 // ---------------------------------------------------------------- place
@@ -297,7 +302,7 @@ async fn place_reply(
 ) -> Reply {
     let mut landed = false;
     if p.on_surface && p.kind != PlaceKind::Way {
-        landed = drop_ids(ed, svc, &[id], p.align, false, o).await? > 0;
+        landed = !drop_ids(ed, svc, &[id], p.align, false, 0.0, o).await?.is_empty();
     }
     let s = svc.store.snapshot();
     let obj = s.get(id).ok_or_else(|| CmdError::internal("the placed object is gone"))?;
@@ -849,6 +854,9 @@ struct AlignParams {
     /// Drop along the line under each pivot instead of under the whole box.
     #[serde(default)]
     line: bool,
+    /// Metres above where each object lands (0).
+    #[serde(default)]
+    offset: Option<f32>,
 }
 
 async fn scene_align(ed: Arc<Editor>, p: AlignParams, o: Origin) -> Reply {
@@ -857,67 +865,43 @@ async fn scene_align(ed: Arc<Editor>, p: AlignParams, o: Origin) -> Reply {
     if ids.is_empty() {
         return Err(CmdError::invalid("nothing is selected to drop"));
     }
-    let n = drop_ids(&ed, &svc, &ids, p.action == AlignAction::Surface, p.line, o).await?;
-    Ok(json!({ "requested": ids.len(), "landed": n }))
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-enum QueryAction {
-    /// The floor below and the ceiling above `position`.
-    Ground,
-    /// The walls of `area` at the height `position` names: the grid cells rays hit.
-    Walls,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct QueryParams {
-    action: QueryAction,
-    /// Metres. action=walls reads its height.
-    position: [f32; 3],
-    /// How far the rays reach, metres (ground: 30, walls: 6).
-    #[serde(default)]
-    reach: Option<f32>,
-    /// action=walls: the area, `[x0, z0, x1, z1]` in metres, at most 80 x 80.
-    #[serde(default)]
-    area: Option<[f32; 4]>,
-    /// action=walls: metres between the points rays start from (0.5).
-    #[serde(default)]
-    step: Option<f32>,
-    /// action=walls: the size of a grid cell, metres (0.1).
-    #[serde(default)]
-    cell: Option<f32>,
-    /// action=walls: rays around each point (24).
-    #[serde(default)]
-    rays: Option<usize>,
+    let offset = p.offset.unwrap_or(0.0);
+    if !offset.is_finite() {
+        return Err(CmdError::invalid("offset takes a finite number of metres"));
+    }
+    let landed = drop_ids(&ed, &svc, &ids, p.action == AlignAction::Surface, p.line, offset, o).await?;
+    let s = svc.store.snapshot();
+    let objects: Vec<Value> = ids
+        .iter()
+        .filter_map(|id| s.get(*id))
+        .map(|x| {
+            let mut b = brief(&s, x);
+            if let Value::Object(m) = &mut b {
+                m.insert("landed".into(), json!(landed.contains(&x.id)));
+            }
+            b
+        })
+        .collect();
+    Ok(json!({ "requested": ids.len(), "landed": landed.len(), "objects": objects }))
 }
 
 async fn scene_query(ed: Arc<Editor>, p: QueryParams, _o: Origin) -> Reply {
     let svc = service::need_scene(&ed).await?;
-    let at = finite(p.position, "position")?;
     let snap = svc.store.snapshot();
     svc.prefetch_library(&ed, &snap).await;
+    // a model the scene does not name yet (fit, free) is loaded too
+    for r in sense::extra_refs(&p).into_iter().filter(|r| !r.is_empty()) {
+        let lib = svc.library.clone();
+        let _ = ed.exec.io(move || lib.load(&r)).await;
+    }
     let (snap, pick) = svc.pick().await;
     let lib = svc.library.clone();
     match p.action {
-        QueryAction::Ground => {
-            let reach = p.reach.unwrap_or(30.0).max(0.1);
-            let (up, down) = ed
-                .exec
-                .cpu(move || {
-                    let cast = |d: Vec3| {
-                        ray_scene_objects(&pick, &snap, &lib, at, d, reach, None)
-                            .map(|h| h.point)
-                            .filter(|p| p.is_finite())
-                            .map(|p| p.y)
-                    };
-                    (cast(Vec3::Y), cast(Vec3::NEG_Y))
-                })
-                .await;
-            Ok(json!({ "floor": down.map(r4), "ceiling": up.map(r4) }))
-        }
         QueryAction::Walls => {
+            let at = finite(
+                p.position.ok_or_else(|| CmdError::invalid("action=walls takes position: its height"))?,
+                "position",
+            )?;
             let [x0, z0, x1, z1] =
                 p.area.ok_or_else(|| CmdError::invalid("action=walls takes area: [x0, z0, x1, z1]"))?;
             if x1 <= x0 || z1 <= z0 || (x1 - x0) > 80.0 || (z1 - z0) > 80.0 {
@@ -970,6 +954,11 @@ async fn scene_query(ed: Arc<Editor>, p: QueryParams, _o: Origin) -> Reply {
             Ok(
                 json!({ "area": [r4(x0), r4(z0), r4(x1), r4(z1)], "cell": r4(res), "width": w, "height": h, "rays": cast, "cells": cells }),
             )
+        }
+        _ => {
+            ed.exec
+                .cpu(move || sense::query(&sense::Scene { state: &snap, lib: &lib, pick: &pick }, &p))
+                .await
         }
     }
 }

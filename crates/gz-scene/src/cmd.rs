@@ -66,8 +66,11 @@ pub fn register(reg: &mut Registry) {
         scene_info,
     );
     reg.cmd(
-        Spec::read("scene.objects", "Lists the scene's objects, by kind or found by name.")
-            .example("classes=light,glow query=lamp limit=20"),
+        Spec::read(
+            "scene.objects",
+            "Lists the scene's objects, by kind, found by name, in a box or near a point, with their boxes.",
+        )
+        .example("near=10,0,5 radius=8 sort=distance bounds=true"),
         scene_objects,
     );
     reg.cmd(
@@ -669,12 +672,99 @@ struct ObjectsParams {
     /// Answer the kinds with their counts and their objects under each (`kinds`).
     #[serde(default)]
     tree: bool,
+    /// Each object carries its world box (`bounds {min, max}`) and `size`, where it has one.
+    #[serde(default)]
+    bounds: bool,
+    /// Only the objects whose world box meets this box: `[minx, miny, minz, maxx, maxy, maxz]`.
+    #[serde(default)]
+    r#box: Option<[f32; 6]>,
+    /// Only the objects within `radius` of this point (metres; their box, else their position).
+    #[serde(default)]
+    near: Option<[f32; 3]>,
+    /// With near: how far, metres (10).
+    #[serde(default)]
+    radius: Option<f32>,
+    /// The order: `name`, or `distance` from near (left out: by kind, as the scene holds them).
+    #[serde(default)]
+    sort: Option<ObjectsSort>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ObjectsSort {
+    /// By name, any case.
+    Name,
+    /// Nearest to `near` first.
+    Distance,
+}
+
+/// How far a point is from an object: from its box (0 inside it), else from its position.
+fn distance_to(b: Option<&crate::math::Aabb>, o: &Object, at: Vec3) -> f32 {
+    match b {
+        Some(b) => (at.clamp(b.min, b.max) - at).length(),
+        None => o.position().distance(at),
+    }
+}
+
+/// A brief with the object's box when asked for.
+fn brief_boxed(s: &SceneState, o: &Object, b: Option<&crate::math::Aabb>, with: bool) -> Value {
+    let mut v = brief(s, o);
+    if with && let (Value::Object(m), Some(b)) = (&mut v, b) {
+        m.insert("bounds".into(), crate::sense::bounds_json(b));
+        m.insert("size".into(), crate::sense::size_json(b));
+    }
+    v
 }
 
 async fn scene_objects(ed: Arc<Editor>, p: ObjectsParams, _o: Origin) -> Reply {
     let svc = service::need_scene(&ed).await?;
     let s = svc.store.snapshot();
     let classes = kinds_of(p.classes.as_deref())?;
+    let near = p.near.map(Vec3::from_array).filter(|v| v.is_finite());
+    if p.near.is_some() && near.is_none() {
+        return Err(CmdError::invalid("near takes finite numbers"));
+    }
+    if p.radius.is_some() && near.is_none() {
+        return Err(CmdError::invalid("radius goes with near: the point"));
+    }
+    if p.sort == Some(ObjectsSort::Distance) && near.is_none() {
+        return Err(CmdError::invalid("sort=distance takes near: the point distances are from"));
+    }
+    let radius = p.radius.unwrap_or(10.0);
+    if !radius.is_finite() || radius < 0.0 {
+        return Err(CmdError::invalid("radius takes metres, 0 or more"));
+    }
+    let within = match p.r#box {
+        Some([x0, y0, z0, x1, y1, z1]) => {
+            let b = crate::math::Aabb::new(Vec3::new(x0, y0, z0), Vec3::new(x1, y1, z1));
+            if !b.min.is_finite() || !b.max.is_finite() || b.max.cmplt(b.min).any() {
+                return Err(CmdError::invalid(
+                    "box takes [minx, miny, minz, maxx, maxy, maxz], max not below min",
+                ));
+            }
+            Some(b)
+        }
+        None => None,
+    };
+    let spatial = p.bounds || within.is_some() || near.is_some();
+    if spatial {
+        svc.prefetch_library(&ed, &s).await;
+    }
+    let boxes: rustc_hash::FxHashMap<ObjId, crate::math::Aabb> = if spatial {
+        s.objects
+            .values()
+            .filter_map(|o| crate::sense::world_bounds(&s, &svc.library, o).map(|b| (o.id, b)))
+            .collect()
+    } else {
+        rustc_hash::FxHashMap::default()
+    };
+    let placed = |o: &Object| {
+        let b = boxes.get(&o.id);
+        let in_box = within
+            .as_ref()
+            .is_none_or(|w| b.is_some_and(|b| (0..3).all(|a| b.min[a] <= w.max[a] && b.max[a] >= w.min[a])));
+        in_box && near.is_none_or(|at| distance_to(b, o, at) <= radius)
+    };
     let query = p.query.as_deref().unwrap_or("").trim().to_lowercase();
     let (limit, offset) = (p.limit.unwrap_or(100), p.offset.unwrap_or(0));
     let mut kinds: Vec<ObjClass> = ObjClass::ALL
@@ -684,8 +774,11 @@ async fn scene_objects(ed: Arc<Editor>, p: ObjectsParams, _o: Origin) -> Reply {
         .collect();
     kinds.sort_by_key(|c| c.label_plural());
     let matches = |o: &Object| {
-        (query.is_empty() || o.name.to_lowercase().contains(&query)) && (!p.selected || s.is_selected(o.id))
+        (query.is_empty() || o.name.to_lowercase().contains(&query))
+            && (!p.selected || s.is_selected(o.id))
+            && placed(o)
     };
+    let shown_brief = |o: &Object| brief_boxed(&s, o, boxes.get(&o.id), p.bounds);
     if p.tree {
         let mut tree = Vec::new();
         for c in kinds {
@@ -700,21 +793,35 @@ async fn scene_objects(ed: Arc<Editor>, p: ObjectsParams, _o: Origin) -> Reply {
                 "count": found.len(),
                 "hidden": !part.visible,
                 "locked": part.locked,
-                "objects": found.iter().skip(offset).take(limit).map(|o| brief(&s, o)).collect::<Vec<_>>(),
+                "objects": found.iter().skip(offset).take(limit).map(|o| shown_brief(o)).collect::<Vec<_>>(),
             }));
         }
         return Ok(json!({ "kinds": tree }));
     }
-    let mut total = 0usize;
-    let mut shown = Vec::new();
-    for c in kinds {
-        for o in s.of_class(c).filter(|o| matches(o)) {
-            if total >= offset && shown.len() < limit {
-                shown.push(brief(&s, o));
-            }
-            total += 1;
+    let mut found: Vec<&Arc<Object>> =
+        kinds.iter().flat_map(|c| s.of_class(*c).filter(|o| matches(o))).collect();
+    match (p.sort, near) {
+        (Some(ObjectsSort::Name), _) => found.sort_by_cached_key(|o| o.name.to_lowercase()),
+        (Some(ObjectsSort::Distance), Some(at)) => {
+            found.sort_by(|a, b| {
+                distance_to(boxes.get(&a.id), a, at).total_cmp(&distance_to(boxes.get(&b.id), b, at))
+            });
         }
+        _ => {}
     }
+    let total = found.len();
+    let shown: Vec<Value> = found
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|o| {
+            let mut v = shown_brief(o);
+            if let (Some(at), Value::Object(m)) = (near, &mut v) {
+                m.insert("distance".into(), json!(r4(distance_to(boxes.get(&o.id), o, at))));
+            }
+            v
+        })
+        .collect();
     Ok(json!({ "objects": shown, "total": total }))
 }
 
@@ -875,6 +982,10 @@ async fn scene_get(ed: Arc<Editor>, p: GetParams, _o: Origin) -> Reply {
         .map(|o| {
             let mut b = brief(&s, o);
             if let Value::Object(m) = &mut b {
+                if let Some(bx) = crate::sense::world_bounds(&s, &svc.library, o) {
+                    m.insert("bounds".into(), crate::sense::bounds_json(&bx));
+                    m.insert("size".into(), crate::sense::size_json(&bx));
+                }
                 m.insert("label".into(), json!(o.class.desc()));
                 m.insert("properties".into(), Value::Array(pick(rows_of(&s, &svc, o, &ctx))));
             }

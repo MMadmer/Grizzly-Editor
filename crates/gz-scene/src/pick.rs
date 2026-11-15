@@ -7,19 +7,59 @@ use std::sync::Arc;
 use gz_fmt_level::Ray;
 
 use crate::class::ObjClass;
-use crate::library::{Library, LibraryObject};
+use crate::library::{Library, LibraryObject, NO_SURFACE};
 use crate::math::{Aabb, Vec3, ray_box, ray_point, tri_normal};
 use crate::model::{ObjData, ObjId, Object, SceneState};
 use crate::objects::{self, PSOBJECT_SIZE, VIS_RADIUS};
 
 /// A hit: the object, the distance along the ray, the point, the surface normal when the hit
-/// was a triangle.
+/// was a triangle, and then the triangle's surface (an index into the library object's
+/// `object.surfaces`) when it has one.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PickHit {
     pub id: ObjId,
     pub t: f32,
     pub point: Vec3,
     pub normal: Option<Vec3>,
+    pub surface: Option<u32>,
+}
+
+/// Which kinds a scene ray takes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RayKinds {
+    /// The objects with a mesh: static and dynamic scene objects.
+    #[default]
+    Meshes,
+    /// Every object with geometry: the meshes, and by their shapes the shapes, the sound
+    /// environments, the fog volumes and the spawn points that own a shape.
+    Geometry,
+}
+
+/// What a scene ray takes: the kinds, visible objects only, `only` a list, never `except`'s.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RayFilter<'a> {
+    pub kinds: RayKinds,
+    pub only: Option<&'a [ObjId]>,
+    pub except: &'a [ObjId],
+}
+
+impl RayFilter<'_> {
+    /// Whether the ray tests this object.
+    #[must_use]
+    pub fn accepts(&self, o: &Object) -> bool {
+        let kind = match self.kinds {
+            RayKinds::Meshes => o.class == ObjClass::SceneObject,
+            RayKinds::Geometry => match &o.data {
+                ObjData::SceneObject(_)
+                | ObjData::Shape(_)
+                | ObjData::SoundEnv(_)
+                | ObjData::FogVolume(_) => true,
+                ObjData::Spawn(sp) => sp.attached.is_some(),
+                _ => false,
+            },
+        };
+        kind && o.flags.visible && self.only.is_none_or(|l| l.contains(&o.id)) && !self.except.contains(&o.id)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -55,6 +95,12 @@ impl ScenePick {
             build_node(&mut items, 0, n, &mut nodes);
         }
         Self { items, nodes }
+    }
+
+    /// The box around every object of the tree (invalid for an empty tree).
+    #[must_use]
+    pub fn bounds(&self) -> Aabb {
+        self.nodes.first().map_or(Aabb::INVALID, |n| n.bounds)
     }
 
     /// The objects whose box a ray crosses within `range`.
@@ -146,6 +192,32 @@ impl ScenePick {
         };
         hits.into_iter().min_by(|a, b| a.t.total_cmp(&b.t))
     }
+
+    /// Every object's nearest hit along a ray, nearest first.
+    #[must_use]
+    pub fn ray_hits(
+        &self,
+        state: &SceneState,
+        lib: &Library,
+        start: Vec3,
+        dir: Vec3,
+        range: f32,
+        accept: &(dyn Fn(&Object) -> bool + Sync),
+    ) -> Vec<PickHit> {
+        let mut hits: Vec<PickHit> = self
+            .ray_candidates(start, dir, range)
+            .iter()
+            .filter_map(|(id, _)| {
+                let o = state.get(*id)?;
+                if !accept(o) {
+                    return None;
+                }
+                ray_object(state, lib, o, start, dir, range)
+            })
+            .collect();
+        hits.sort_by(|a, b| a.t.total_cmp(&b.t));
+        hits
+    }
 }
 
 fn build_node(items: &mut [(ObjId, Aabb)], first: usize, count: usize, nodes: &mut Vec<Node>) {
@@ -203,6 +275,7 @@ pub fn ray_library(lo: &LibraryObject, obj: &Object, start: Vec3, dir: Vec3, ran
         t: hit.t,
         point: start + dir * hit.t,
         normal: Some(tri_normal(w[0], w[1], w[2])),
+        surface: lo.tri_surface.get(hit.tri as usize).copied().filter(|s| *s != NO_SURFACE),
     })
 }
 
@@ -216,7 +289,7 @@ pub fn ray_object(
     dir: Vec3,
     range: f32,
 ) -> Option<PickHit> {
-    let at = |t: f32| PickHit { id: o.id, t, point: start + dir * t, normal: None };
+    let at = |t: f32| PickHit { id: o.id, t, point: start + dir * t, normal: None, surface: None };
     let p = o.position();
     match &o.data {
         ObjData::SceneObject(d) => {
@@ -273,9 +346,35 @@ pub fn ray_scene_objects(
     range: f32,
     only: Option<&[ObjId]>,
 ) -> Option<PickHit> {
-    pick.ray_pick(state, lib, start, dir, range, &|o: &Object| {
-        o.class == ObjClass::SceneObject && o.flags.visible && only.is_none_or(|l| l.contains(&o.id))
-    })
+    ray_scene(pick, state, lib, start, dir, range, &RayFilter { only, ..RayFilter::default() })
+}
+
+/// The nearest object a ray meets within its range, of the kinds and lists `filter` takes.
+#[must_use]
+pub fn ray_scene(
+    pick: &ScenePick,
+    state: &SceneState,
+    lib: &Library,
+    start: Vec3,
+    dir: Vec3,
+    range: f32,
+    filter: &RayFilter<'_>,
+) -> Option<PickHit> {
+    pick.ray_pick(state, lib, start, dir, range, &|o: &Object| filter.accepts(o))
+}
+
+/// Every object a ray meets within its range (each one's nearest hit), nearest first.
+#[must_use]
+pub fn ray_scene_all(
+    pick: &ScenePick,
+    state: &SceneState,
+    lib: &Library,
+    start: Vec3,
+    dir: Vec3,
+    range: f32,
+    filter: &RayFilter<'_>,
+) -> Vec<PickHit> {
+    pick.ray_hits(state, lib, start, dir, range, &|o: &Object| filter.accepts(o))
 }
 
 /// The world triangles of these scene objects that may meet a box.
