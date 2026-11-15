@@ -392,5 +392,18 @@ motions and sounds; a use scene plays; the silencer is crafted; the icons are th
   was built with the mark on a track too is reworked: the engine agent (G5, running) was told - a track names a
   sound (`sound =`), one lookup by name; the editor's part (the track's switch and picker of `4d2efccd`) goes
   into E7 with the Sound tab: tracks become references to sound assets.
+- Every package is in and committed. Editor: E5 (`ad5c4bea`: a placed radio's Plays, the quest editor's radio
+  kinds, catalog v22), E3 with E6 (`e1ebb947`: the first-person picture, the form's polish, the Russian of the
+  item catalog and the check), E7 (`ab83a2c1`: the Sound tab, a track names its sound, no copyright key on a
+  track). Game: G5 (`7d95e6ef4`: the streamer mode by one lookup, radio tracks, loose particles' actions).
+- The converted module in the real game (`tools\qa\module\Run-ModuleInGameQa.ps1` of the game: one start, about
+  two minutes; every motion of every first-person section played guarded, a few weapons held). What it found:
+  (1) 23 motion files of the mod written for other bones stood on the game's paths and took the motions from
+  the game's models the mod does not replace - the game stopped at the first scene; the converter's
+  `motion_files.py` gives them names of their own (`8cfbc578`). (2) 90 weapons kept only the wide forms of the
+  placement keys, and the game stopped on a 4:3 screen: the general answer is the game's - a placement key read
+  by the screen's shape takes the other form when the one asked for is not there. (3) The author's rule, said
+  twice: tests are short; a full sweep only once, at the very end. And: nothing is bent to this mod - what a
+  mod needs becomes a general ability of the game or the editor, or a rule of the converter for any classic mod.
 - The scratch of the task (surveys, the key table, the unpacked game views) is the session's scratchpad folder
   `we\`; nothing in the repository depends on it.
