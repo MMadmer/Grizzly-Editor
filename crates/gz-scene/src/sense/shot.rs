@@ -87,6 +87,18 @@ pub struct MapParams {
     /// put there.
     #[serde(default)]
     pub marks: Option<Vec<MarkParam>>,
+    /// Whether spawn points, lights, sounds, ways and volumes are drawn as signs. Left out: drawn
+    /// at 2 px a metre and more, left out on a smaller map, where they would hide it.
+    #[serde(default)]
+    pub signs: Option<bool>,
+    /// The height the rays start from, in metres, instead of above everything: what is under a
+    /// roof or under the trees' crowns.
+    #[serde(default)]
+    pub below: Option<f32>,
+    /// The rows of the legend at most (100), the largest objects first and the highlighted ones
+    /// before them; `legend_total` counts them all.
+    #[serde(default)]
+    pub legend: Option<usize>,
     /// Only these objects are seen from above.
     #[serde(default)]
     pub only: Option<Vec<String>>,
@@ -181,9 +193,13 @@ pub fn shot_map(sc: &Scene<'_>, p: &MapParams) -> Result<Value, CmdError> {
     let size = size_px(area, px);
     let k = size[0] as f32 / (area[2] - area[0]);
 
-    // one ray a pixel, from above everything
-    let (hi, lo) = sc.top().unwrap_or((1.0, -1.0));
-    let reach = hi - lo;
+    // one ray a pixel, from above everything - or from the height the caller names
+    let (top, lo) = sc.top().unwrap_or((1.0, -1.0));
+    if p.below.is_some_and(|b| !b.is_finite()) {
+        return Err(CmdError::invalid("below takes a height in metres"));
+    }
+    let hi = p.below.unwrap_or(top);
+    let reach = (hi - lo).max(0.1);
     let hits: Vec<Option<(ObjId, f32, Vec3)>> = {
         use rayon::prelude::*;
         (0..size[1])
@@ -227,7 +243,14 @@ pub fn shot_map(sc: &Scene<'_>, p: &MapParams) -> Result<Value, CmdError> {
     let mut points: Vec<MapPoint> = Vec::new();
     let mut lines: Vec<MapLine> = Vec::new();
     let shown = |id: ObjId| only.as_ref().is_none_or(|l| l.contains(&id)) && !except.contains(&id);
-    for o in sc.state.objects.values().filter(|o| o.flags.visible && shown(o.id)) {
+    // on a small map the signs would be all there is to see: what is highlighted is drawn anyway
+    let signs = p.signs.unwrap_or(k >= 2.0);
+    for o in sc
+        .state
+        .objects
+        .values()
+        .filter(|o| o.flags.visible && shown(o.id) && (signs || highlight.contains(&o.id)))
+    {
         let at = o.position();
         let lit = highlight.contains(&o.id);
         let mut point = |kind: PointKind| {
@@ -325,9 +348,12 @@ pub fn shot_map(sc: &Scene<'_>, p: &MapParams) -> Result<Value, CmdError> {
     let drawn = map::draw(&data);
     let png =
         drawn.canvas.png().map_err(|e| CmdError::internal(format!("the map could not be encoded: {e}")))?;
+    // the legend is drawn largest first, the highlighted before them: its head is what matters
+    let legend_total = drawn.legend.len();
     let legend: Vec<Value> = drawn
         .legend
         .iter()
+        .take(p.legend.unwrap_or(100))
         .map(|r| {
             json!({
                 "object": r.object, "kind": r.kind, "colour": r.colour,
@@ -347,6 +373,8 @@ pub fn shot_map(sc: &Scene<'_>, p: &MapParams) -> Result<Value, CmdError> {
         "grid": r4(drawn.grid),
         "mode": match mode { MapMode::Objects => "objects", MapMode::Height => "height", MapMode::Ai => "ai" },
         "legend": legend,
+        "legend_total": legend_total,
+        "signs": signs,
     });
     if let Value::Object(m) = &mut out {
         if let Some((lo, hi)) = drawn.heights {
