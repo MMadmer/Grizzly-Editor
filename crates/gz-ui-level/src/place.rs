@@ -419,6 +419,7 @@ fn builtin() -> Vec<Item> {
             Icon::Spawn,
             What::of(Kind::Spawn, Some("env_mod")),
         ),
+        Item::own(C::SpawnPoints, "Radio", "radio", Icon::SoundSource, What::of(Kind::Spawn, Some("radio"))),
         Item::own(
             C::SpawnPoints,
             "Respawn Point",

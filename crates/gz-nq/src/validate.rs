@@ -179,6 +179,10 @@ pub struct Context<'a> {
     pub characters: &'a [CharacterBrief],
     /// The module's global variables (`mod.ltx [vars]`).
     pub globals: &'a [String],
+    /// The module's id (`[module] id`) and its radio playlists (`[playlist.<id>]`): what a
+    /// `radio_playlist` of its own names.
+    pub module: &'a str,
+    pub playlists: &'a [gz_mod::RadioPlaylist],
     /// The sections the module itself brings (`W060`: an item of the module is known).
     pub own_sections: Option<&'a gz_mod::SectionSet>,
 }
@@ -1407,6 +1411,15 @@ impl<'a> V<'a> {
             return;
         };
         match t {
+            "radio_playlist" => match gz_mod::radio::binding(s, self.ctx.module) {
+                Err(why) => self.err("E006", node, slot, format!("'{name}': {why}")),
+                Ok(gz_mod::radio::Binding::Own(id))
+                    if self.ctx.file_path.is_some() && !gz_mod::radio::declares(self.ctx.playlists, id) =>
+                {
+                    self.err("E030", node, slot, format!("playlist '{id}' is not declared in mod.ltx - add it in Mod > Screens & Music, or name another module's as <module>.<playlist>"));
+                }
+                _ => {}
+            },
             "global_name" => {
                 if s.is_empty() {
                     self.err("E006", node, slot, format!("'{name}' names no global variable"));
@@ -2494,6 +2507,49 @@ mod tests {
             "{texts:?}"
         );
         assert_eq!(to_text(&[]), "problems: none");
+    }
+
+    /// `radio_playlist`: a playlist of this module by its id or `<module>.<id>`, another module's
+    /// as written, `game`, `off`; an id of this module that `mod.ltx` lacks is `E030`, a value
+    /// that is no name `E006`.
+    #[test]
+    fn a_radio_playlist_names_a_playlist_the_module_declares() {
+        let cat = bundled();
+        let text = r#"return { nq = 1, id = "q", nodes = {
+            { id = "s", kind = "trigger.start", out = { next = "e" }, on_enter = {
+                { kind = "radio.play", params = { radio = { story = "camp_radio" }, playlist = "road" } },
+                { kind = "radio.play", params = { radio = { story = "camp_radio" }, playlist = "my_mod.road" } },
+                { kind = "radio.play", params = { radio = { story = "camp_radio" }, playlist = "other.x" } },
+                { kind = "radio.play", params = { radio = { story = "camp_radio" }, playlist = "game", next_track = true } },
+                { kind = "radio.play", params = { radio = { story = "camp_radio" }, playlist = "gone" } },
+                { kind = "radio.play", params = { radio = { story = "camp_radio" }, playlist = "no name" } },
+                { kind = "radio.reset", params = { radio = { story = "camp_radio" } } },
+            } },
+            { id = "e", kind = "flow.end" },
+        } }"#;
+        let g = match parse(&cat, text, "q") {
+            Ok(g) => g,
+            Err(e) => panic!("{}", e.message),
+        };
+        let playlists = [gz_mod::RadioPlaylist { id: "road".into(), title: "Road songs".into() }];
+        let ctx = Context {
+            file_path: Some("quests/q.nqasset"),
+            module: "my_mod",
+            playlists: &playlists,
+            ..Context::default()
+        };
+        let texts: Vec<String> = run(&g, &cat, &ctx).iter().map(NqProblem::text).collect();
+        let radio: Vec<&String> = texts.iter().filter(|t| t.contains("playlist")).collect();
+        assert_eq!(radio.len(), 2, "{texts:?}");
+        assert!(
+            radio.iter().any(|t| t.starts_with("E030") && t.contains("playlist 'gone' is not declared")),
+            "{texts:?}"
+        );
+        assert!(
+            radio.iter().any(|t| t.starts_with("E006") && t.contains("'no name' is no playlist")),
+            "{texts:?}"
+        );
+        assert!(!texts.iter().any(|t| t.contains("radio.reset") || t.contains("next_track")), "{texts:?}");
     }
 
     #[test]

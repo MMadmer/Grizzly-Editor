@@ -132,6 +132,7 @@ async fn run_spawn(
 ) -> Result<SpawnRun, String> {
     let settings = gz_scene::game::settings(editor).await;
     let patrols = ExportService::game_patrols(editor).await;
+    let radio = gz_scene::game::radio_cx(editor).await;
     let game = match GameLink::of(editor) {
         Ok(link) => link.files().await.ok(),
         Err(_) => None,
@@ -165,6 +166,7 @@ async fn run_spawn(
                 visuals: &g2.visuals,
                 settings: settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync)),
                 game_patrols: &patrols,
+                radio: Some(&radio),
                 old_text: &g2.old_text,
             };
             spawn::bake(&input)
@@ -206,6 +208,7 @@ pub async fn export_spawn(editor: &Arc<Editor>, l: &Layer) -> Reply {
         "starts": r.starts,
         "paths": r.paths,
         "orders": r.orders,
+        "radios": r.radios,
         // the bake's "Base objects removed" row and its missing-model warning
         "missing": r.missing,
         "removed": r.removed,

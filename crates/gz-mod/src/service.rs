@@ -24,7 +24,7 @@ use crate::doc::ManifestDoc;
 use crate::edit::{self, Edit};
 use crate::exclude;
 use crate::io::{installed_commands, read_manifest_file, script_functions};
-use crate::model::{FILE, GlobalVar, Manifest, scaffold_text};
+use crate::model::{FILE, GlobalVar, Manifest, RadioPlaylist, scaffold_text};
 
 struct Loaded {
     doc: ManifestDoc,
@@ -329,6 +329,17 @@ impl ManifestService {
         let snap = self.store.snapshot();
         let vars = snap.manifest().map_or_else(|| Arc::from(Vec::new()), |m| m.vars.clone());
         (snap.rev, vars)
+    }
+
+    /// The module's id and its radio playlists (`[playlist.<id>]`), with the generation they
+    /// belong to: a lookup, never a parse.
+    #[must_use]
+    pub fn playlists(&self) -> (Rev, String, Arc<[RadioPlaylist]>) {
+        let snap = self.store.snapshot();
+        match snap.manifest() {
+            Some(m) => (snap.rev, m.id.clone(), m.playlists.clone()),
+            None => (snap.rev, String::new(), Arc::from(Vec::new())),
+        }
     }
 }
 

@@ -181,12 +181,13 @@ async fn scene_choose(ed: Arc<Editor>, p: ChooseParams, _o: Origin) -> Reply {
     let snap = svc.store.snapshot();
     let lib = svc.library.clone();
     let ctx = gz_scene::prop_context(&ed).await;
+    let radio = gz_scene::game::radio_cx(&ed).await;
     let target = if p.world { crate::details::WORLD } else { crate::details::SELECTION };
     let k = key.clone();
     let chooser = ed
         .exec
         .cpu(move || {
-            crate::details::chooser_for(&crate::details::rows(&snap, &lib, target, &ctx), &k, target)
+            crate::details::chooser_for(&crate::details::rows(&snap, &lib, target, &ctx, &radio), &k, target)
         })
         .await;
     let Some(mut chooser) = chooser else {

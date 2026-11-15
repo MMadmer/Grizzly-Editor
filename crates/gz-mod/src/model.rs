@@ -25,6 +25,14 @@ pub struct GlobalVar {
     pub value: String,
 }
 
+/// A playlist of the module's radio music (`[playlist.<id>]`): its id and its title (a string id
+/// or text), what a radio or a quest is bound to by `<module>.<id>`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RadioPlaylist {
+    pub id: String,
+    pub title: String,
+}
+
 /// A console command: a `[commands]` line and its `[command.<name>]` section.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Command {
@@ -121,6 +129,9 @@ pub struct Manifest {
     /// `[pda] layout`: a project-relative `.pdaasset`, empty when the module leaves the PDA alone.
     pub pda_layout: String,
     pub commands: Vec<Command>,
+    /// `[playlist.<id>]`, in the author's order: the radio's stations the module brings (the
+    /// Screens & Music tab owns the rest of those sections).
+    pub playlists: Arc<[RadioPlaylist]>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -137,6 +148,7 @@ enum Sec {
     Pda,
     Commands,
     Command(usize),
+    Playlist(usize),
     /// Read raw by the areas that own them, or unknown.
     Other,
 }
@@ -155,6 +167,7 @@ impl Manifest {
     pub fn parse(doc: &ManifestDoc) -> Self {
         let mut m = Manifest::default();
         let mut vars: Vec<GlobalVar> = Vec::new();
+        let mut playlists: Vec<RadioPlaylist> = Vec::new();
         let mut sec = Sec::None;
         for item in doc.items() {
             let (key, value, code) = match item {
@@ -182,6 +195,16 @@ impl Manifest {
                                         ..Command::default()
                                     });
                                     Sec::Command(m.commands.len() - 1)
+                                }
+                            }
+                        }
+                        s if s.len() > 9 && s.starts_with("playlist.") => {
+                            let id = s.get(9..).unwrap_or("");
+                            match playlists.iter().position(|p| p.id.eq_ignore_ascii_case(id)) {
+                                Some(at) => Sec::Playlist(at),
+                                None => {
+                                    playlists.push(RadioPlaylist { id: id.to_owned(), title: String::new() });
+                                    Sec::Playlist(playlists.len() - 1)
                                 }
                             }
                         }
@@ -267,6 +290,13 @@ impl Manifest {
                         });
                     }
                 }
+                Sec::Playlist(at) => {
+                    if key == "title"
+                        && let Some(p) = playlists.get_mut(at)
+                    {
+                        p.title = text_value(value);
+                    }
+                }
                 Sec::Command(at) => {
                     if let Some(c) = m.commands.get_mut(at) {
                         match key {
@@ -280,6 +310,7 @@ impl Manifest {
             }
         }
         m.vars = vars.into();
+        m.playlists = playlists.into();
         m
     }
 
@@ -356,6 +387,19 @@ mod tests {
         assert_eq!(m.commands[0].help, "Shows; it");
         assert_eq!(m.commands[0].extra, ["odd = 1"]);
         assert_eq!(m.commands[1].function, "od.again");
+    }
+
+    #[test]
+    fn reads_the_radio_playlists() {
+        let text = "[module]\r\nid = od\r\n[playlist.Road_Songs]\r\ntitle  = \"Road songs\"\r\ntracks = a, b\r\n[playlist.night]\r\ntracks = c\r\n";
+        let m = Manifest::parse(&ManifestDoc::parse(text));
+        assert_eq!(
+            &*m.playlists,
+            [
+                RadioPlaylist { id: "road_songs".into(), title: "Road songs".into() },
+                RadioPlaylist { id: "night".into(), title: String::new() }
+            ]
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! Spawn points: a game entity, a respawn point, an environment modifier or the module's Player
-//! Start, with a stalker's standing order.
+//! Start, with a stalker's standing order and what a radio plays.
 
 use std::sync::Arc;
 
@@ -252,6 +252,9 @@ pub struct SpawnData {
     /// The spawn data flags.
     pub sd_flags: u8,
     pub order: XmsOrder,
+    /// What a radio plays (`[xms_radio] playlist`) as the author wrote it: a playlist of the
+    /// module by its id, `<module>.<playlist>`, `game` or `off`; empty: the player's station.
+    pub plays: SmolStr,
     pub rpoint: RPoint,
     pub env: EnvMod,
     /// The shape a zone carries: out of the scene's lists.
@@ -266,6 +269,7 @@ impl SpawnData {
             entity: None,
             sd_flags: 0,
             order: XmsOrder::default(),
+            plays: SmolStr::default(),
             rpoint: RPoint::default(),
             env: EnvMod::default(),
             attached: None,

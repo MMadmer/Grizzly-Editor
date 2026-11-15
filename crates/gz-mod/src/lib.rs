@@ -24,6 +24,9 @@
 //!   [`validate_commands`] (`E401`..`E406`, `W406`..`W408`).
 //! - [`exclude`] - what the build leaves out: [`exclude_match`], [`outside_build`],
 //!   [`ship_state`], [`set_excluded`].
+//! - [`radio`] - what a radio is told to play ([`radio::binding`]): `game`, `off`, a playlist of
+//!   this module by its id or `<module>.<playlist>`; the scene's radios and the quests' radio
+//!   actions read it the same.
 //! - [`spot`] - [`Spot`]: where in `mod.ltx` a problem of an area is about (a section, a key, a
 //!   layer's key), carried by the problem and located by [`ManifestDoc::locate`].
 //! - [`text`] - the quoting of `name` / `author` / `description`, list splitting, cp1251 coverage.
@@ -34,7 +37,8 @@
 //!   it is edited ([`gz_editor::AutoSave`]). The store's revision IS the manifest generation.
 //!   A change of `mod.ltx` behind the editor (git, an agent) comes through the project's
 //!   watcher and loads the file as a new document.
-//!   [`ManifestService::outside_build`] and [`ManifestService::globals`] are the answers other
+//!   [`ManifestService::outside_build`], [`ManifestService::globals`] and
+//!   [`ManifestService::playlists`] are the answers other
 //!   areas ask for; [`command_check`] the functions and problems of `[commands]`.
 //! - [`ManifestFields`] and [`ManifestArgs`] - what other areas add to the manifest's answer
 //!   (the `world` field) and to `mod.set` (`tags`, `pda.layout`).
@@ -50,6 +54,7 @@ pub mod edit;
 pub mod exclude;
 mod io;
 pub mod model;
+pub mod radio;
 pub mod reference;
 pub mod rules;
 pub mod sections;
@@ -65,7 +70,7 @@ pub use doc::ManifestDoc;
 pub use edit::Edit;
 pub use exclude::{ShipState, exclude_match, normalize_rel, outside_build, set_excluded, ship_state};
 pub use io::{installed_commands, read_manifest_file, scaffold, script_functions};
-pub use model::{Command, FILE, GlobalVar, Manifest, ProvidesMode, derive_id, scaffold_text};
+pub use model::{Command, FILE, GlobalVar, Manifest, ProvidesMode, RadioPlaylist, derive_id, scaffold_text};
 pub use reference::{
     Check, KeyDoc, Reader, SectionDoc, is_manifest_word, key_doc, key_of, reference, reference_text,
 };

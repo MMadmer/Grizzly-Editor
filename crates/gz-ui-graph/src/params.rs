@@ -599,6 +599,47 @@ pub fn draw_param(
     ch
 }
 
+/// What a radio is told to play: the module's playlists by their titles, the game's music,
+/// silence; a value the list lacks is kept and shown as written (another module's playlist).
+fn radio_playlist(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value) -> bool {
+    use gz_mod::radio::{Binding, GAME, OFF, binding};
+    let cur = v.as_str().unwrap_or("").trim().to_owned();
+    let module = cx.data.module.as_str();
+    let same = |a: &str, b: &str| match (binding(a, module), binding(b, module)) {
+        (Ok(Binding::Own(x)), Ok(Binding::Own(y))) => x.eq_ignore_ascii_case(y),
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    };
+    let mut values: Vec<String> = Vec::new();
+    let mut labels: Vec<Tx<'static>> = vec![Tx::from("(unset)")];
+    for p in cx.data.playlists.iter() {
+        values.push(p.id.clone());
+        labels.push(Tx::raw(if p.title.is_empty() { p.id.clone() } else { p.title.clone() }));
+    }
+    values.push(GAME.to_owned());
+    labels.push(Tx::from("The Game's Music"));
+    values.push(OFF.to_owned());
+    labels.push(Tx::from("Silence"));
+    let known = values.iter().position(|x| !cur.is_empty() && same(x, &cur));
+    if !cur.is_empty() && known.is_none() {
+        values.push(cur.clone());
+        labels.push(Tx::raw(cur.clone()));
+    }
+    let mut at = if cur.is_empty() { 0 } else { known.unwrap_or(values.len() - 1) + 1 };
+    let changed = grid(ui, cx.role, salt, |g| {
+        g.row(&row.label, &row.help, row.flags, row.depth, |ui| grid::combo(ui, "v", &mut at, &labels))
+            .unwrap_or(false)
+    });
+    if changed {
+        *v = if at == 0 {
+            Value::Nil
+        } else {
+            values.get(at - 1).map_or(Value::Nil, |s| Value::from(s.as_str()))
+        };
+    }
+    changed
+}
+
 /// The editor of a parameter type.
 #[allow(clippy::too_many_lines)]
 pub fn typed(
@@ -712,6 +753,7 @@ pub fn typed(
         "role_bindings" => role_bindings(ui, cx, salt, row, v),
         "npc_list" => npc_list(ui, cx, salt, row, v),
         "spawn_spec" => spawn_spec(ui, cx, salt, row, v),
+        "radio_playlist" => radio_playlist(ui, cx, salt, row, v),
         "item_list" => item_list(ui, cx, salt, row, v, true, None),
         "loot_spawn" => loot_spawn(ui, cx, salt, row, v),
         "cases_cond" => cases(ui, cx, salt, row, v, false),

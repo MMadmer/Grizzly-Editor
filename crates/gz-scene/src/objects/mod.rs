@@ -1,6 +1,7 @@
 //! The data of the kinds of objects, and their boxes. Their keys in the scene's files are
 //! `crate::format::fields`; the X-Ray SDK importer reads them in `crate::sdk::objects`.
 
+pub mod radio;
 mod shape;
 mod simple;
 mod spawn;

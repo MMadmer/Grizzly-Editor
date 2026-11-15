@@ -26,6 +26,7 @@ gz-fmt-level.workspace = true
 gz-fmt-xr.workspace = true
 gz-fmt-tex.workspace = true
 gz-entities.workspace = true
+gz-mod.workspace = true
 gz-luadata.workspace = true
 gz-asset.workspace = true
 gz-terrain.workspace = true

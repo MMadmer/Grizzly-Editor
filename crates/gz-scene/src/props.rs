@@ -18,6 +18,7 @@ use crate::format::values;
 use crate::library::Library;
 use crate::math::{Vec3, fmt_g};
 use crate::model::{ObjData, Object, SceneState, co};
+use crate::objects::radio::RadioCx;
 use crate::objects::{
     PointKind, SO_USE_SURFACE, SpawnEntity, SurfaceOverride, env_flags, fcolor_get, light_flags,
 };
@@ -50,6 +51,9 @@ pub enum Kind {
         max: i64,
     },
     Token(Vec<(SmolStr, i64)>),
+    /// A pick from a list of values, each shown by its name; the value is the text written
+    /// (`Val::Text`), and a value the list lacks is kept and shown.
+    Options(Vec<Opt>),
     Vector {
         min: f32,
         max: f32,
@@ -67,6 +71,16 @@ pub enum Kind {
     /// Seconds after midnight, shown as `hh:mm:ss`.
     Time,
     Canvas,
+}
+
+/// One choice of an options row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Opt {
+    /// What the file and `scene.set` write.
+    pub value: String,
+    /// What it is called: the editor's words, or data (`data`) such as a playlist's title.
+    pub label: String,
+    pub data: bool,
 }
 
 /// What a choose row picks from.
@@ -200,6 +214,8 @@ fn caption(key: &str, group: &str, label: &str, text: &str) -> Row {
 pub struct PropCx<'a> {
     pub lib: Option<&'a Library>,
     pub entity: &'a PropContext,
+    /// What a radio's rows read: the game's radios and the module's playlists.
+    pub radio: Option<&'a RadioCx>,
 }
 
 /// A word of a file as the panel names it: `"point"` reads Point, `"team_deathmatch"` Team
@@ -311,6 +327,23 @@ fn token(items: &[(&str, i64)]) -> Kind {
     Kind::Token(items.iter().map(|(n, i)| (SmolStr::new(n), *i)).collect())
 }
 
+/// The key of a radio's Plays row.
+pub const RADIO_PLAYS: &str = "radio.plays";
+
+/// A radio's Plays row: the player's station, the module's playlists by their titles, the
+/// game's music, silence, and a value the list lacks as it is written.
+fn plays_row(plays: &str, radio: Option<&RadioCx>, help: &str) -> Row {
+    let unlinked = RadioCx::unlinked();
+    let r = radio.unwrap_or(&unlinked);
+    let choices = r.choices(plays);
+    let value = choices
+        .iter()
+        .find(|c| !plays.is_empty() && !c.value.is_empty() && r.same(&c.value, plays))
+        .map_or_else(|| plays.trim().to_owned(), |c| c.value.clone());
+    let options = choices.into_iter().map(|c| Opt { value: c.value, label: c.label, data: c.data }).collect();
+    Row::new(RADIO_PLAYS, "Radio", "Plays", Kind::Options(options), Val::Text(value)).help(help)
+}
+
 /// A motion's rows (a dynamic object moves along one).
 fn motion_rows(o: &Object, out: &mut Vec<Row>) {
     let g = "Motion";
@@ -412,6 +445,15 @@ fn sector_faces(state: &SceneState, lib: Option<&Library>, d: &crate::objects::S
 pub fn object_rows(state: &SceneState, o: &Object, cx: &PropCx<'_>) -> Vec<Row> {
     let mut out = Vec::new();
     for f in fields::object_fields(o.class) {
+        // a radio of the world shows what it plays, bound or not
+        if o.class == ObjClass::SpawnPoint && f.key == "radio" {
+            if let ObjData::Spawn(d) = &o.data
+                && (!d.plays.is_empty() || cx.radio.is_some_and(|r| r.is_radio(o)))
+            {
+                out.push(plays_row(&d.plays, cx.radio, f.help));
+            }
+            continue;
+        }
         if !(f.applies)(o) {
             continue;
         }
@@ -1330,6 +1372,13 @@ pub fn parse(r: &Row, t: &str) -> Result<Parsed, String> {
             }
         }
         Kind::Button(c) => find_name(t, c).map(Parsed::Press),
+        // a choice by its value or its name; any other text is the setter's to judge
+        Kind::Options(items) => Ok(Parsed::Text(
+            items
+                .iter()
+                .find(|o| o.value.eq_ignore_ascii_case(t.trim()) || o.label.eq_ignore_ascii_case(t.trim()))
+                .map_or_else(|| t.trim().to_owned(), |o| o.value.clone()),
+        )),
         Kind::Text | Kind::Name | Kind::Choose(_) => Ok(Parsed::Text(t.to_owned())),
         Kind::Caption | Kind::Canvas => Err("cannot be set: it only shows a value".into()),
     }
@@ -1627,6 +1676,9 @@ pub fn set_object(
                 if o.kind == 2 && o.route.is_empty() && field == "kind" {
                     // a patrol walks a route: it is picked next
                 }
+            } else if k == RADIO_PLAYS {
+                let unlinked = RadioCx::unlinked();
+                d.plays = SmolStr::new(cx.radio.unwrap_or(&unlinked).pick(&text_of(p))?);
             } else if k == "respawn" {
                 d.sd_flags = if on(p) { d.sd_flags | 1 } else { d.sd_flags & !1 };
             } else if let Some(field) = k.strip_prefix("respawn_point.") {
@@ -1911,7 +1963,7 @@ mod tests {
         let b = Object::new(ObjClass::Light, "b", ObjData::Light(LightData::default()));
         let (ia, ib) = (s.insert(a), s.insert(b));
         let e = cx();
-        let pcx = PropCx { lib: None, entity: &e };
+        let pcx = PropCx { lib: None, entity: &e, radio: None };
         let rows =
             merge(vec![object_rows(&s, s.get(ia).unwrap(), &pcx), object_rows(&s, s.get(ib).unwrap(), &pcx)]);
         let pos = find(&rows, "pos").unwrap();
@@ -1935,7 +1987,7 @@ mod tests {
         let mut s = SceneState::default();
         let id = s.insert(Object::new(ObjClass::Glow, "g", ObjData::Glow(GlowData::default())));
         let e = cx();
-        let pcx = PropCx { lib: None, entity: &e };
+        let pcx = PropCx { lib: None, entity: &e, radio: None };
         let rows = merge(vec![object_rows(&s, s.get(id).unwrap(), &pcx)]);
         let r = &find(&rows, "radius").unwrap().row;
         assert_eq!(parse(r, "abc"), Err("takes a number".into()));
@@ -1956,7 +2008,7 @@ mod tests {
     fn the_module_marks_are_rows_that_take_a_value() {
         let mut s = SceneState::default();
         let e = cx();
-        let pcx = PropCx { lib: None, entity: &e };
+        let pcx = PropCx { lib: None, entity: &e, radio: None };
         let spawn = s.insert(Object::new(ObjClass::SpawnPoint, "sp", default_data(ObjClass::SpawnPoint)));
         let light = s.insert(Object::new(ObjClass::Light, "l", ObjData::Light(LightData::default())));
         for (id, key) in [(light, "authored"), (spawn, "removed")] {
@@ -1978,7 +2030,7 @@ mod tests {
         let mut s = SceneState::default();
         let id = s.insert(Object::new(ObjClass::Light, "l", ObjData::Light(LightData::default())));
         let e = cx();
-        let pcx = PropCx { lib: None, entity: &e };
+        let pcx = PropCx { lib: None, entity: &e, radio: None };
         let rows = merge(vec![object_rows(&s, s.get(id).unwrap(), &pcx)]);
         let kind = &find(&rows, "kind").unwrap().row;
         assert_eq!(kind.text(), "Point");
@@ -1994,7 +2046,7 @@ mod tests {
     fn every_row_has_a_label_in_title_case() {
         let mut s = SceneState::default();
         let e = cx();
-        let pcx = PropCx { lib: None, entity: &e };
+        let pcx = PropCx { lib: None, entity: &e, radio: None };
         for c in ObjClass::ALL.iter().copied().filter(|c| c.is_object_tool()) {
             let id = s.insert(Object::new(c, &format!("{}_01", c.key()), default_data(c)));
             for r in object_rows(&s, s.get(id).unwrap(), &pcx) {
@@ -2017,6 +2069,56 @@ mod tests {
         for f in crate::format::SCENE_FIELDS {
             assert!(!f.label.is_empty() && !f.help.is_empty(), "{}", f.key);
         }
+    }
+
+    /// A radio shows Radio\Plays: the player's station, the module's playlists by their titles,
+    /// the game's music, silence; a title or a value sets it, a text that is no playlist is
+    /// refused, and something that is no radio has no such row.
+    #[test]
+    fn a_radio_picks_what_it_plays() {
+        use std::sync::Arc;
+
+        use crate::objects::radio::{RADIO_LOGIC, RadioCx, RadioPlaylist, Radios};
+        let st = gz_entities::MapSettings::new()
+            .section("script", &[("current_server_entity_version", "12")])
+            .section("physic_object", &[("class", "O_PHYS_S"), ("visual", "dynamics\\radio.ogf")]);
+        let e = cx();
+        let mut s = SceneState::default();
+        let mut ids = Vec::new();
+        for (name, logic) in [("radio", RADIO_LOGIC), ("barrel", "")] {
+            let mut ent = gz_entities::Entity::create("physic_object", &st).unwrap();
+            let path = ent.properties(&e).into_iter().find(|p| p.key() == "custom_data").unwrap().path;
+            ent.set(&path, &PropValue::Text(logic.to_owned()), &e).unwrap();
+            let mut d = crate::objects::SpawnData::of_kind(PointKind::Spawn);
+            d.entity = Some(SpawnEntity::Decoded(Arc::new(ent)));
+            ids.push(s.insert(Object::new(ObjClass::SpawnPoint, name, ObjData::Spawn(Box::new(d)))));
+        }
+        let radio = RadioCx {
+            radios: Arc::new(Radios::unlinked()),
+            module: "my_mod".into(),
+            playlists: Arc::from(vec![RadioPlaylist { id: "road".into(), title: "Road Songs".into() }]),
+        };
+        let pcx = PropCx { lib: None, entity: &e, radio: Some(&radio) };
+        let o = s.get(ids[0]).unwrap();
+        let rows = merge(vec![object_rows(&s, o, &pcx)]);
+        let r = &find(&rows, RADIO_PLAYS).expect("a radio has Radio\\Plays").row;
+        assert_eq!(r.path, "Radio\\Plays");
+        let Kind::Options(items) = &r.kind else { panic!("{:?}", r.kind) };
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, ["As the Player Chose", "Road Songs", "The Game's Music", "Silence"]);
+        assert_eq!(r.value, Val::Text(String::new()));
+        let set = |text: &str| -> Result<String, String> {
+            let p = parse(r, text)?;
+            let Effect::Object(n) = set_object(&s, o, RADIO_PLAYS, &p, &pcx)? else { panic!() };
+            let ObjData::Spawn(d) = &n.data else { panic!() };
+            Ok(d.plays.to_string())
+        };
+        assert_eq!(set("Road Songs").as_deref(), Ok("road"));
+        assert_eq!(set("off").as_deref(), Ok("off"));
+        assert_eq!(set("other.x").as_deref(), Ok("other.x"));
+        assert!(set("not a playlist").is_err());
+        let barrel = s.get(ids[1]).unwrap();
+        assert!(find(&merge(vec![object_rows(&s, barrel, &pcx)]), RADIO_PLAYS).is_none());
     }
 
     #[test]

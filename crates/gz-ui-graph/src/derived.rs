@@ -1,6 +1,6 @@
 //! What a graph tab reads besides its document's snapshot, fetched off the UI thread: the
 //! catalog, the problems, the pickers, the item capabilities, the project's characters, the
-//! module's globals, the ids of the project's graphs (with a behaviour graph's roles), the way
+//! module's globals and radio playlists, the ids of the project's graphs (with a behaviour graph's roles), the way
 //! paths, the scene's level, and what the file on disk says the document does not show (its
 //! `DiskState`, kept by the project's watcher). All of it comes from `gz_nq::NqService`'s
 //! queries, so a refresh of an unchanged document costs lookups only.
@@ -81,6 +81,9 @@ pub struct DocData {
     /// The module's globals, `name = default` as written.
     pub globals: Vec<(String, String)>,
     pub globals_rev: Rev,
+    /// The module's id and its radio playlists (`[playlist.<id>]`).
+    pub module: String,
+    pub playlists: Arc<[gz_mod::RadioPlaylist]>,
     pub graphs: Arc<Vec<ProjectGraph>>,
     pub way_paths: Arc<Vec<PickerEntry>>,
     /// The open scene's level, for a fresh position.
@@ -163,6 +166,7 @@ async fn fetch(ed: &Arc<Editor>, doc: &Arc<DocHandle>) -> Option<DocData> {
     let caps = if pickers.available() { svc.caps(ed).await } else { None };
     let (_, characters) = svc.characters();
     let globals = svc.global_vars(ed).await;
+    let (_, module, playlists) = svc.playlists(ed).await;
     let globals_rev = gz_mod::ManifestService::of(ed).await.map(|m| m.rev()).unwrap_or(Rev::ZERO);
     let index = svc.index(ed, true).await;
     let env = svc.env(ed, true).await;
@@ -226,6 +230,8 @@ async fn fetch(ed: &Arc<Editor>, doc: &Arc<DocHandle>) -> Option<DocData> {
         characters,
         globals,
         globals_rev,
+        module,
+        playlists,
         graphs: Arc::new(graphs),
         way_paths: Arc::new(svc.way_paths()),
         level: env.level.clone().unwrap_or_default(),

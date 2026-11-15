@@ -308,6 +308,8 @@ pub(crate) async fn settle_scene(
 /// The Details sheet's lists the linked game gives (story ids, the spawn sections' names), read
 /// now and kept for the panel (`SceneService::prop_cx`).
 pub async fn prop_context(ed: &Arc<Editor>) -> Arc<PropContext> {
+    // the radio rows' context, from the same configs and the manifest as it is now
+    crate::game::radio_cx(ed).await;
     let mut ctx = crate::game::settings(ed).await.map(|g| g.prop_context()).unwrap_or_default();
     ctx.profiles = crate::game::spawn_sections(ed)
         .await
@@ -874,7 +876,7 @@ fn kind_word(k: &Kind) -> &'static str {
         Kind::Float { .. } => "number",
         Kind::Angle { .. } => "angle",
         Kind::Int { .. } => "integer",
-        Kind::Token(_) => "choice",
+        Kind::Token(_) | Kind::Options(_) => "choice",
         Kind::Vector { .. } => "vector",
         Kind::Angle3 { .. } => "angles",
         Kind::Color | Kind::FColor => "color",
@@ -921,6 +923,14 @@ fn row_json(m: &MergedRow) -> Value {
         Kind::Token(items) => {
             o.insert("choices".into(), json!(items.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>()));
         }
+        // the values `scene.set` takes, each with its name
+        Kind::Options(items) => {
+            o.insert("choices".into(), json!(items.iter().map(|c| c.value.as_str()).collect::<Vec<_>>()));
+            o.insert(
+                "choice_labels".into(),
+                json!(items.iter().map(|c| c.label.as_str()).collect::<Vec<_>>()),
+            );
+        }
         Kind::Button(c) => {
             o.insert("choices".into(), json!(c.iter().map(SmolStr::as_str).collect::<Vec<_>>()));
         }
@@ -944,7 +954,8 @@ fn row_json(m: &MergedRow) -> Value {
 
 /// The rows of one object, in the panel's order.
 pub(crate) fn rows_of(s: &SceneState, svc: &SceneService, o: &Object, ctx: &PropContext) -> Vec<MergedRow> {
-    let cx = PropCx { lib: Some(&svc.library), entity: ctx };
+    let radio = svc.radio_cx_cached();
+    let cx = PropCx { lib: Some(&svc.library), entity: ctx, radio: Some(&radio) };
     props::tree_order(props::merge(vec![props::object_rows(s, o, &cx)]))
 }
 
@@ -958,7 +969,7 @@ pub fn selection_rows(
     if world {
         return props::tree_order(props::merge(vec![props::world_rows(s)]));
     }
-    let cx = PropCx { lib: Some(lib), entity: ctx };
+    let cx = PropCx { lib: Some(lib), entity: ctx, radio: None };
     let lists: Vec<Vec<Row>> = s
         .selected_in_order()
         .iter()
@@ -1261,7 +1272,8 @@ async fn scene_set(ed: Arc<Editor>, mut p: SetParams, o: Origin) -> Reply {
     if let Some(set) = &p.set {
         let s = svc.store.snapshot();
         svc.prefetch_library(&ed, &s).await;
-        let cx = PropCx { lib: Some(&svc.library), entity: &ctx };
+        let radio = svc.radio_cx_cached();
+        let cx = PropCx { lib: Some(&svc.library), entity: &ctx, radio: Some(&radio) };
         for id in &ids {
             let Some(obj) = s.get(*id) else { continue };
             // each key sees what the keys before it did
@@ -1481,6 +1493,7 @@ pub async fn choices(
         .clone();
     let items = match &row.kind {
         Kind::Token(items) => Some(items.iter().map(|(n, _)| n.to_string()).collect()),
+        Kind::Options(items) => Some(items.iter().map(|c| c.value.clone()).collect()),
         Kind::Button(c) => Some(c.iter().map(ToString::to_string).collect()),
         Kind::Bool | Kind::Flag => Some(vec!["true".to_owned(), "false".to_owned()]),
         Kind::Choose(c) => list_items(ed, &s, &c.list).await,
@@ -1511,6 +1524,20 @@ pub fn choices_reply(row: &Row, items: &[String], query: Option<&str>, limit: Op
         }
     }
     m.insert("value".into(), value_json(row));
+    // an options row: each value with its name, a name found by the query too
+    if let Kind::Options(opts) = &row.kind {
+        let hit: Vec<&props::Opt> = opts
+            .iter()
+            .filter(|o| {
+                q.is_empty() || o.value.to_lowercase().contains(&q) || o.label.to_lowercase().contains(&q)
+            })
+            .take(limit.unwrap_or(500))
+            .collect();
+        m.insert("total".into(), json!(hit.len()));
+        m.insert("choices".into(), json!(hit.iter().map(|o| o.value.as_str()).collect::<Vec<_>>()));
+        m.insert("labels".into(), json!(hit.iter().map(|o| o.label.as_str()).collect::<Vec<_>>()));
+        return Value::Object(m);
+    }
     m.insert("total".into(), json!(found.len()));
     m.insert("choices".into(), json!(found.into_iter().take(limit.unwrap_or(500)).collect::<Vec<_>>()));
     Value::Object(m)

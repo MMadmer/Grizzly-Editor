@@ -17,6 +17,7 @@ use crate::class::ObjClass;
 use crate::math::{Aabb, Vec3};
 use crate::model::{ObjData, ObjId, Object};
 use crate::objects::PointKind;
+use crate::objects::radio::RadioCx;
 use crate::pick::{RayFilter, RayKinds, ray_scene};
 
 /// The objects one audit reads at most: past it the caller names objects or an area.
@@ -31,7 +32,7 @@ pub const OFF_MAP: f32 = 1.0;
 const GROUND_SIDE: f32 = 20.0;
 
 /// The checks: code, word, what it finds.
-pub const CHECKS: [(&str, &str, &str); 13] = [
+pub const CHECKS: [(&str, &str, &str); 14] = [
     ("S201", "floating", "an object more than 0.25 m above whatever is under it, touching nothing"),
     ("S202", "buried", "an object more than half under the ground"),
     ("S203", "overlap", "two objects standing in each other"),
@@ -45,6 +46,7 @@ pub const CHECKS: [(&str, &str, &str); 13] = [
     ("S211", "terrain_border", "a terrain whose border stands more than 0.5 m off the ground around it"),
     ("S212", "terrain_unmade", "a terrain whose model cannot be made from what its file says"),
     ("S213", "terrain_bare", "a terrain that wears the ground's look with no ground under it"),
+    ("S214", "radio_playlist", "a radio bound to a playlist the module's mod.ltx does not declare"),
 ];
 
 /// `scene.audit`'s parameters.
@@ -61,7 +63,8 @@ pub struct AuditParams {
     pub area: Option<[f32; 4]>,
     /// Only these checks, by code (`S201`) or word (`floating`, `buried`, `overlap`, `duplicate`,
     /// `unsupported`, `off_ai_map`, `underground`, `way_off_ai_map`, `light_underground`,
-    /// `not_authored`, `terrain_border`, `terrain_unmade`). Left out: all of them.
+    /// `not_authored`, `terrain_border`, `terrain_unmade`, `terrain_bare`, `radio_playlist`). Left
+    /// out: all of them.
     #[serde(default)]
     pub checks: Option<Vec<String>>,
     /// At most this many problems in the answer (200); `total` counts them all.
@@ -357,6 +360,16 @@ fn walks(o: &Object) -> bool {
 /// Runs the checks. `base` is the names of the objects the game's own level has, lower case,
 /// when they are known: without them `S210` does not run. Blocking: call it on the CPU pool.
 pub fn audit(sc: &Scene<'_>, p: &AuditParams, base: Option<&FxHashSet<String>>) -> Result<Audit, CmdError> {
+    audit_with(sc, p, base, None)
+}
+
+/// [`audit`] with the module's radio playlists: without them `S214` does not run.
+pub fn audit_with(
+    sc: &Scene<'_>,
+    p: &AuditParams,
+    base: Option<&FxHashSet<String>>,
+    radio: Option<&RadioCx>,
+) -> Result<Audit, CmdError> {
     let want = wanted(p)?;
     let ids = subjects(sc, p)?;
     let mut out = Audit { checked: ids.len(), ..Audit::default() };
@@ -418,7 +431,20 @@ pub fn audit(sc: &Scene<'_>, p: &AuditParams, base: Option<&FxHashSet<String>>) 
             }
         }
         match &o.data {
-            ObjData::Spawn(_) => {
+            ObjData::Spawn(d) => {
+                if want.contains("S214")
+                    && let Some(r) = radio
+                    && let Some(id) = r.missing(&d.plays)
+                {
+                    f.push(Finding {
+                        code: "S214",
+                        object: o.id,
+                        text: format!(
+                            "{} plays the playlist '{id}', which mod.ltx does not declare: the radio plays the player's station; add [playlist.{id}] (Mod > Screens & Music) or pick another in Radio\\Plays",
+                            o.name
+                        ),
+                    });
+                }
                 let at = o.position();
                 if want.contains("S207")
                     && let Some(above) = under_the_ground(sc, at)

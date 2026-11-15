@@ -183,6 +183,9 @@ pub struct ValidateEnv {
     pub caps: Option<Arc<ItemCaps>>,
     pub characters: Arc<[CharacterBrief]>,
     pub globals: Vec<String>,
+    /// The module's id and its radio playlists.
+    pub module: String,
+    pub playlists: Arc<[gz_mod::RadioPlaylist]>,
     pub level: Option<String>,
     pub index: Arc<IndexSnapshot>,
     /// The sections the module itself brings.
@@ -206,6 +209,8 @@ impl ValidateEnv {
             caps: self.caps.as_deref(),
             characters: &self.characters,
             globals: &self.globals,
+            module: &self.module,
+            playlists: &self.playlists,
             own_sections: Some(&self.own_sections),
         };
         validate::run(g, &self.catalog, &ctx)
@@ -582,6 +587,14 @@ impl NqService {
         self.globals(editor).await.2
     }
 
+    /// The module's id and its radio playlists (`[playlist.<id>]`), with the manifest's revision.
+    pub async fn playlists(&self, editor: &Editor) -> (Rev, String, Arc<[gz_mod::RadioPlaylist]>) {
+        match self.manifest_now(editor).await {
+            Some(m) => m.playlists(),
+            None => (Rev::ZERO, String::new(), Arc::from(Vec::new())),
+        }
+    }
+
     // ---- the project index ---------------------------------------------------------------------
 
     fn overlay_rev(&self) -> Rev {
@@ -719,6 +732,7 @@ impl NqService {
         let caps = if pickers.available() { self.caps(editor).await } else { None };
         let (crev, characters) = self.characters();
         let (grev, globals, _) = self.globals(editor).await;
+        let (prev, module, playlists) = self.playlists(editor).await;
         let level = self.scene_lookup().and_then(|s| s.level());
         let index = self.index(editor, overlay).await;
         let own_sections = gz_mod::own_sections(editor).await;
@@ -729,8 +743,21 @@ impl NqService {
             .mix(self.scene_lookup().map_or(Rev::ZERO, |s| s.rev()))
             .mix(crev)
             .mix(grev)
+            .mix(prev)
             .mix(Rev(index.fingerprint));
-        Arc::new(ValidateEnv { catalog, pickers, caps, characters, globals, level, index, own_sections, rev })
+        Arc::new(ValidateEnv {
+            catalog,
+            pickers,
+            caps,
+            characters,
+            globals,
+            module,
+            playlists,
+            level,
+            index,
+            own_sections,
+            rev,
+        })
     }
 
     /// The problems of an open document: computed once per content and per

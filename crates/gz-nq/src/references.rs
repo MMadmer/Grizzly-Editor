@@ -128,6 +128,7 @@ const KNOWN_TYPES: &[&str] = &[
     "objective_id",
     "character_id",
     "global_name",
+    "radio_playlist",
 ];
 
 /// Whether references of a type can be looked for.
@@ -149,6 +150,7 @@ fn is_string_type(t: &str) -> bool {
             | "profile"
             | "character_id"
             | "global_name"
+            | "radio_playlist"
             | "community"
             | "info"
             | "var_name"

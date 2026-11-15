@@ -208,6 +208,7 @@ Spawn points: what the game spawns, and the editor's own points.
 | `respawn` | boolean | false | The multiplayer games spawn it again after it is gone. |
 | `spawn_flags` | integer | 0 | Bits of the spawn's flags no key names. |
 | `order` | `{ kind = "guard" \| "patrol" \| "wander" \| "follow", route = way, look = way, radius = m, target = name, distance = m, run = true, hostile = true }` | none | A placed stalker's standing order; the build writes it into the entity's custom data as `[xms_order]`. |
+| `radio` | `{ plays = "<playlist id>" \| "<module>.<playlist>" \| "game" \| "off" }`: a playlist of the module by its id (`mod.ltx [playlist.<id>]`), another module's, the game's music alone, silence | none: the player's station | What a radio of the world plays whatever station the player chose; the build writes it into the entity's custom data as `[xms_radio]`. |
 | `respawn_point` | `{ team = 1, kind = "actor" \| "artefact" \| "item", game_types = {...}, profile = section }` | `{ team = 1, kind = "actor" }` | Who or what respawns there in the multiplayer games. |
 | `environment` | `{ radius = m, power, view_distance = m, fog_color = { r, g, b }, fog_density, ambient_color, sky_color, hemi_color, uses = { "view_distance", "fog_color", ... } }` | radius 10, power 1, view distance 300, every value used | How the weather looks within the modifier's radius. |
 | `shape` | `{ shapes = { ... } }` as in `shapes.lua`, `pos`, `rot`, `scale` where they are not the point's | none | The volume of a zone, a restrictor or a level changer. |

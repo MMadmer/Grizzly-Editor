@@ -1225,7 +1225,8 @@ mod tests {
         let b = s.insert(Object::new(ObjClass::Glow, "b", ObjData::Glow(GlowData::default())));
         let t = T::new(s);
         let snap = t.state();
-        let pcx = crate::props::PropCx { lib: None, entity: &gz_entities::PropContext::default() };
+        let pcx =
+            crate::props::PropCx { lib: None, entity: &gz_entities::PropContext::default(), radio: None };
         let objects: Vec<Object> = [a, b]
             .iter()
             .map(|id| {

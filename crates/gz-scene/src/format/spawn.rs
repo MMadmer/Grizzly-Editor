@@ -666,6 +666,40 @@ pub static FIELDS: &[Field<Object>] = &[
         },
     },
     Field {
+        key: "radio",
+        label: "Radio",
+        group: "Radio",
+        unit: "",
+        ty: Ty::Table(
+            "`{ plays = \"<playlist id>\" | \"<module>.<playlist>\" | \"game\" | \"off\" }`: a playlist of the module by its id (`mod.ltx [playlist.<id>]`), another module's, the game's music alone, silence",
+        ),
+        default: "none: the player's station",
+        help: "What a radio of the world plays whatever station the player chose; the build writes it into the entity's custom data as `[xms_radio]`.",
+        applies: |o| spawn(o).is_some_and(|d| !d.plays.is_empty()),
+        get: |o| match spawn(o) {
+            Some(d) if !d.plays.is_empty() => {
+                let mut t = Table::new();
+                t.put("plays", text(&d.plays));
+                Value::Table(t)
+            }
+            _ => Value::Nil,
+        },
+        set: |o, v| {
+            let plays = match v {
+                Value::Nil => SmolStr::default(),
+                _ => match v.get("plays") {
+                    Some(p) => as_text(p)?,
+                    None if v.as_table().is_some() => SmolStr::default(),
+                    None => return Err("takes `{ plays = \"<playlist>\" }`".into()),
+                },
+            };
+            if let Some(d) = spawn_mut(o) {
+                d.plays = plays;
+            }
+            Ok(())
+        },
+    },
+    Field {
         key: "respawn_point",
         label: "Respawn Point",
         group: "Respawn Point",

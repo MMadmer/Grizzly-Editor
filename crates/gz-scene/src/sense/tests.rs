@@ -741,3 +741,42 @@ fn the_audit_names_what_the_game_s_level_lacks_and_refuses_what_it_cannot_do() {
     assert_eq!(refused(json!({ "objects": ["floating"], "area": [0, 0, 1, 1] }), "give one"), "invalid");
     assert_eq!(refused(json!({ "objects": ["nobody"] }), "nobody"), "not_found");
 }
+
+/// S214: a radio bound to a playlist of the module that mod.ltx lacks; one it declares, the
+/// game's music, silence and another module's playlist pass; without the module's playlists the
+/// check does not run.
+#[test]
+fn the_audit_names_a_radio_bound_to_a_playlist_the_module_lacks() {
+    use crate::objects::radio::{RadioCx, RadioPlaylist, Radios};
+    use crate::objects::{PointKind, SpawnData};
+    let w = world_with(|s| {
+        for (name, plays) in [
+            ("lost", "gone"),
+            ("road", "road"),
+            ("keyed", "my_mod.road"),
+            ("game", "game"),
+            ("other", "other.x"),
+        ] {
+            let mut d = SpawnData::of_kind(PointKind::Spawn);
+            d.plays = plays.into();
+            let mut o = Object::new(ObjClass::SpawnPoint, name, ObjData::Spawn(Box::new(d)));
+            o.xform.position = Vec3::new(15.0, 0.1, 18.0);
+            s.insert(o);
+        }
+    });
+    let radio = RadioCx {
+        radios: Arc::new(Radios::unlinked()),
+        module: "my_mod".into(),
+        playlists: Arc::from(vec![RadioPlaylist { id: "road".into(), title: "Road songs".into() }]),
+    };
+    let p: super::audit::AuditParams =
+        serde_json::from_value(json!({ "checks": ["radio_playlist"] })).expect("read");
+    let sc = Scene { state: &w.state, lib: &w.lib, pick: &w.pick };
+    let a = super::audit::audit_with(&sc, &p, None, Some(&radio)).unwrap_or_else(|e| panic!("{}", e.message));
+    let names: Vec<&str> =
+        a.findings.iter().filter_map(|f| w.state.get(f.object).map(|o| o.name.as_str())).collect();
+    assert_eq!(names, ["lost"], "{:?}", a.findings);
+    assert_eq!(a.findings[0].code, "S214");
+    assert!(a.findings[0].text.starts_with("lost plays the playlist 'gone', which mod.ltx does not declare"));
+    assert!(found(&w, json!({ "checks": ["S214"] })).is_empty());
+}

@@ -123,3 +123,14 @@ pub async fn settings(editor: &Editor) -> Option<Arc<GameSettings>> {
 pub async fn spawn_sections(editor: &Editor) -> Arc<[SpawnSection]> {
     gz_game::spawn_roster(editor).await
 }
+
+/// What the radio rows, the audit and the bake read, current: the game's radios read again when
+/// the configs changed, the module's playlists from its manifest.
+pub async fn radio_cx(editor: &Arc<Editor>) -> Arc<crate::objects::radio::RadioCx> {
+    let Ok(session) = editor.project() else { return Arc::new(crate::objects::radio::RadioCx::unlinked()) };
+    let svc = crate::SceneService::of_session(editor, &session);
+    svc.refresh_radios(editor, settings(editor).await).await;
+    // made on first use: the playlists are its answer
+    let _ = gz_mod::ManifestService::of_session(editor, &session).await;
+    svc.radio_cx_now(&session)
+}

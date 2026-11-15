@@ -16,6 +16,12 @@ What it proves:
   D  a second Player Start is E201 and the build refuses it; the build ships the rest
   E  the quest side: level_changer is a picker type, { role = } in a quest is E024
   F  the stock preset takes the section out of mod.ltx again
+  R  a radio: Place > Radio (scene.place section=radio) places one the editor tells for a radio, its
+     Radio\\Plays lists the module's playlists by title and is set by scene.set and read back from the
+     scene's file; the bake writes [xms_radio] playlist = <module>.<id>; scene.audit says S214 for a
+     playlist mod.ltx lacks and nothing for one it has; a stalker has no Plays; a quest's radio.play is
+     checked by asset.check (a playlist it has, one it lacks, a value that is no name); the Details row and
+     the graph's parameter audited and pictured at both sizes, in English and Russian
 
     python tools/qa/test_world.py --project <project>
 
@@ -61,6 +67,187 @@ def world(answer: dict) -> dict:
 def placed_name(answer: dict) -> str:
     # scene.place answers with the object under "object"
     return (answer.get("object") or {}).get("name", "") if isinstance(answer, dict) else ""
+
+
+RADIO_QUEST = """return {
+  nq = 1,
+  id = "qa_radio",
+  title = "QA radio",
+  activation = "auto",
+  nodes = {
+    { id = "start", kind = "trigger.start", out = { next = "go" } },
+    { id = "go", kind = "flow.step",
+      on_enter = {
+        { kind = "radio.play", params = { radio = { story = "qa_radio" }, playlist = "qa_road" } },
+        { kind = "radio.play", params = { radio = { story = "qa_radio" }, playlist = "qa_gone" } },
+        { kind = "radio.play", params = { radio = { story = "qa_radio" }, playlist = "no name", next_track = true } },
+        { kind = "radio.reset", params = { radio = { story = "qa_radio" } } },
+      },
+      out = { next = "done" } },
+    { id = "done", kind = "flow.end" },
+  },
+}
+"""
+
+SIZES = ((1707, 912, 1.5), (1280, 720, 1.0))
+
+
+def plays_row(name: str) -> dict:
+    got = (cmd("scene.get", objects=[name], keys=["radio"]).get("objects") or [{}])[0]
+    return next((p for p in got.get("properties") or [] if p.get("key") == "radio.plays"), {})
+
+
+def audit_pass(tag: str, panel: str, want: list, shots, shot_name: str, before=None) -> None:
+    """One look at a panel at both sizes, in English and Russian: what it shows, nothing cut to nothing, nothing
+    escaping, every text of the editor's own in Russian."""
+    for lang in ("en", "ru"):
+        cmd("app.prefs", action="set", key="language", value=lang)
+        for width, height, scale in SIZES:
+            cmd("ui.scale", value=scale)
+            cmd("app.window", action="resize", width=width, height=height)
+            if before:
+                before()
+            a = cmd("ui.audit", id=panel) if panel else cmd("ui.audit")
+            labels = {c.get("label") for c in a.get("controls", []) if c.get("label")}
+            where = "%s %s %dx%d" % (tag, lang, width, height)
+            if lang == "en":
+                check(all(w in labels for w in want), "%s shows %s" % (where, ", ".join(want)),
+                      json.dumps(sorted(labels))[:500])
+            cut = a.get("truncated") or []
+            vanished = [t for t in cut if not t.get("shown") and (t.get("rect") or [0, 0, 0])[2] > 0]
+            check(a.get("ok") and not vanished and not a.get("escaped"), "%s: nothing cut to nothing, nothing escapes" % where,
+                  qa.short({"vanished": vanished[:3], "escaped": (a.get("escaped") or [])[:3]}))
+            if lang == "ru":
+                missing = [m.get("label") for m in a.get("untranslated") or []]
+                check(not missing, "%s: the editor's own words read in Russian" % where, qa.short(missing[:12]))
+            qa.shot(shots, "%s_%s_%d" % (shot_name, lang, width))
+    cmd("app.prefs", action="set", key="language", value="en")
+    cmd("ui.scale", value=1.5)
+
+
+def radio_checks(project: str, module: str, shots) -> None:
+    """R: a radio of the world, what it plays, its bake, its audit, a quest's radio actions, the UI."""
+    mod_ltx = os.path.join(project, "mod.ltx")
+    added = cmd("screens.set", action="playlist_add", id="qa_road", title="QA Road")
+    check(added.get("ok") and "[playlist.qa_road]" in read(mod_ltx), "R the module gets a playlist", json.dumps(added)[:300])
+    radio = cmd("scene.place", kind="spawn", section="radio", name="qa_radio", position=[-218.0, -20.0, -150.0], on_surface=True)
+    check(radio.get("ok") and placed_name(radio) == "qa_radio", "R Place > Radio places a radio", json.dumps(radio)[:300])
+    got = (cmd("scene.get", objects=["qa_radio"], keys=["section", "props.visual", "props.custom_data"]).get("objects") or [{}])[0]
+    props = {p["key"]: p.get("value") for p in got.get("properties") or []}
+    check("priemnik_gorizont" in str(props.get("props.visual")) and "ph_sound@play" in str(props.get("props.custom_data"))
+          and "common_radio" in str(props.get("props.custom_data")),
+          "R as the game's own level radios are: their model, the radio's logic in its custom data", json.dumps(props)[:400])
+    row = plays_row("qa_radio")
+    check(row.get("section") == "Radio" and row.get("label") == "Plays" and row.get("value") == "",
+          "R a radio shows Radio\\Plays, at the player's station", json.dumps(row)[:400])
+    check("qa_road" in (row.get("choices") or []) and "QA Road" in (row.get("choice_labels") or [])
+          and {"game", "off"} <= set(row.get("choices") or []),
+          "R its list: the module's playlists by title, the game's music, silence", json.dumps(row)[:400])
+    ch = cmd("scene.choices", object="qa_radio", key="radio.plays")
+    check(ch.get("ok") and "QA Road" in (ch.get("labels") or []) and "As the Player Chose" in (ch.get("labels") or []),
+          "R scene.choices answers the pick list with its names", json.dumps(ch)[:400])
+
+    s1 = cmd("scene.set", objects=["qa_radio"], key="radio.plays", value="QA Road")
+    check(s1.get("ok") and plays_row("qa_radio").get("value") == "qa_road", "R a title sets it to the playlist's id", json.dumps(s1)[:300])
+    bad = cmd("scene.set", objects=["qa_radio"], key="radio.plays", value="not a playlist")
+    check(not bad.get("ok") and "no playlist" in bad.get("error", ""), "R a text that is no playlist is refused", json.dumps(bad)[:300])
+    roster = cmd("game.lookup", type="spawn_section", query="stalker", limit=400).get("entries", [])
+    stalker = ""
+    for r in roster:
+        if r.get("extra") == "AI_STL_S":
+            placed = cmd("scene.place", kind="spawn", section=r["id"], position=[-214.0, -20.0, -146.0], on_surface=True)
+            if placed.get("ok"):
+                stalker = placed_name(placed)
+                break
+    if stalker:
+        check(not plays_row(stalker), "R a stalker is no radio: no Plays", json.dumps(plays_row(stalker))[:200])
+        no = cmd("scene.set", objects=[stalker], key="radio.plays", value="game")
+        check(not no.get("ok"), "R and scene.set gives it none", json.dumps(no)[:200])
+        cmd("scene.delete", objects=[stalker])
+
+    # the scene's file says it by name
+    saved = cmd("scene.save", timeout=900)
+    check(saved.get("ok"), "R the scene saves", json.dumps(saved)[:300])
+    scene_file = cmd("scene.info").get("file") or ""
+    folder = os.path.splitext(os.path.join(project, scene_file) if not os.path.isabs(scene_file) else scene_file)[0]
+    spawns = os.path.join(folder, "spawns.lua")
+    text = read(spawns) if os.path.isfile(spawns) else ""
+    at = text.find('"qa_radio"')
+    check(at >= 0 and 'radio = { plays = "qa_road" }' in text[at:at + 4000], "R spawns.lua carries radio = { plays = \"qa_road\" }",
+          spawns + " " + text[at:at + 600])
+
+    # the audit: nothing for a playlist the module has, S214 for one it lacks
+    a = cmd("scene.audit", objects=["qa_radio"], checks=["radio_playlist"])
+    check(a.get("ok") and not a.get("problems"), "R scene.audit finds nothing wrong with a playlist mod.ltx has", json.dumps(a)[:400])
+    cmd("scene.set", objects=["qa_radio"], key="radio.plays", value="qa_gone")
+    a = cmd("scene.audit", objects=["qa_radio"], checks=["radio_playlist"])
+    probs = a.get("problems") or []
+    check(len(probs) == 1 and probs[0].get("code") == "S214" and "qa_gone" in json.dumps(probs[0]) and probs[0].get("line"),
+          "R S214 for a playlist mod.ltx lacks, at the radio's line of spawns.lua", json.dumps(a)[:500])
+    e = cmd("level.export", kind="spawn", objects=["qa_radio"])
+    check(e.get("ok") and any("qa_gone" in w and "does not declare" in w for w in e.get("warnings", [])),
+          "R the level export says the same", json.dumps(e.get("warnings"))[:400])
+
+    # the bake
+    cmd("scene.set", objects=["qa_radio"], key="radio.plays", value="qa_road")
+    e = cmd("level.export", kind="spawn", all=True)
+    check(e.get("ok") and e.get("radios") == 1, "R the bake binds one radio", json.dumps({k: e.get(k) for k in ("radios", "warnings")})[:400])
+    cd = os.path.join(project, "spawn", "custom_data", "l01_escape_qa_radio.ltx")
+    baked = read(cd) if os.path.isfile(cd) else ""
+    check("[xms_radio]" in baked and ("playlist = %s.qa_road" % module) in baked and "ph_sound@play" in baked,
+          "R its custom data: the logic and [xms_radio] playlist = <module>.qa_road", baked[-400:])
+    layer = read(os.path.join(project, "spawn", "l01_escape.xspawn"))
+    at = layer.find("[obj:qa_radio]")
+    check(at >= 0 and "section   = physic_object" in layer[at:at + 400] and "custom_data = @spawn/custom_data/l01_escape_qa_radio.ltx" in layer[at:at + 600],
+          "R the spawn layer names it and its custom data", layer[at:at + 500])
+
+    # the quest
+    qpath = os.path.join(project, "quests", "qa_radio.nqasset")
+    os.makedirs(os.path.dirname(qpath), exist_ok=True)
+    with open(qpath, "w", encoding="utf-8") as f:
+        f.write(RADIO_QUEST)
+    problems = lambda: [p if isinstance(p, str) else json.dumps(p) for p in cmd("asset.check", path=qpath).get("problems", [])]
+    unknown = lambda found: [p for p in found if "radio.play' is not" in p or "radio.reset' is not" in p]
+    found = problems()
+    if unknown(found):
+        # the linked game is older than catalog v22: the copy brings the two kinds as a module's own, word for word
+        # the game's catalog (the bundled copy), as the deployed game will have them
+        print("note: the linked game's catalog has no radio kinds yet - the copy brings them from the bundled catalog",
+              flush=True)
+        bundled = read(os.path.join(qa.REPO, "gamedata", "configs", "nq", "catalog.ltx"))
+        kinds = "".join(m.group(0) for m in re.finditer(r"\[nq\.radio\.(?:play|reset)\][^\[]*", bundled))
+        kdir = os.path.join(project, "gamedata", "configs", "nq", "kinds")
+        os.makedirs(kdir, exist_ok=True)
+        with open(os.path.join(kdir, "qa_radio_kinds.ltx"), "w", encoding="utf-8") as f:
+            f.write(kinds)
+        found = qa.until(lambda: (lambda f: f if not unknown(f) else [])(problems()), 20) or problems()
+    check(not unknown(found), "R the catalog knows radio.play and radio.reset", json.dumps(found)[:300])
+    radio_probs = [p for p in found if "playlist" in p]
+    check(any("E030" in p and "qa_gone" in p for p in radio_probs), "R a playlist the module lacks is E030", json.dumps(found)[:600])
+    check(any("E006" in p and "no name" in p for p in radio_probs), "R a value that is no name is E006", json.dumps(found)[:600])
+    check(not any("qa_road" in p for p in found), "R a playlist the module has passes", json.dumps(found)[:600])
+    look = cmd("game.lookup", type="radio_playlist")
+    ids = [x.get("id") for x in look.get("entries", [])]
+    check("qa_road" in ids and "game" in ids and "off" in ids, "R game.lookup lists the playlists, game and off", json.dumps(look)[:300])
+
+    # the UI: the Details row, then the graph's parameter
+    cmd("ui.tab", action="activate", doc="level")
+    cmd("scene.select", objects=["qa_radio"])
+    cmd("ui.panel", id="details", action="open")
+    audit_pass("R Details of a radio", "details", ["Radio", "Plays", "QA Road"], shots, "radio_details",
+               before=lambda: cmd("ui.scroll", id="details", to="bottom"))
+    opened = cmd("ui.tab", action="open", kind="quest", path="quests/qa_radio.nqasset")
+    check(opened.get("ok"), "R the quest opens in the graph tab", json.dumps(opened)[:300])
+    def show_action():
+        cmd("graph.view", doc="quests/qa_radio.nqasset", select=["go"])
+        cmd("graph.view", doc="quests/qa_radio.nqasset", slot="enter:0", details="show")
+        cmd("graph.view", doc="quests/qa_radio.nqasset", scroll="action:top")
+    audit_pass("R the graph's radio.play", "", ["Playlist", "QA Road"], shots, "radio_graph", before=show_action)
+    cmd("ui.tab", action="close", doc="quest:quests/qa_radio.nqasset", discard=True)
+    cmd("file.delete", path="quests/qa_radio.nqasset")
+    cmd("scene.delete", objects=["qa_radio"])
+    cmd("screens.set", action="playlist_remove", id="qa_road")
+    qa.stalls("R no UI pass stalled")
 
 
 QUEST_E024 = """return {
@@ -388,6 +575,9 @@ def run(ctx: qa.Run) -> None:
         check(removed.get("ok") and not removed.get("start_kit", {}).get("declared"), "G Remove Kit takes it out",
               json.dumps(removed.get("start_kit"))[:200])
         cmd("world.set", preset="stock")
+
+        # ------------------------------------------------------------ R: a radio
+        radio_checks(project, module, ctx.shots)
     finally:
         ed.close()
         qa.remove_tree(out_dir)

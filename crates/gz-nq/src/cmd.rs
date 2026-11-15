@@ -686,11 +686,12 @@ pub async fn references(ed: Arc<Editor>, args: Args) -> Reply {
 // ---- game.lookup ------------------------------------------------------------------------------
 
 /// The lists of the project's documents `game.lookup` serves beside the pickers' own.
-const DOCUMENT_LISTS: [&str; 10] = [
+const DOCUMENT_LISTS: [&str; 11] = [
     "quest_id",
     "behaviour_id",
     "way_path",
     "global_name",
+    "radio_playlist",
     "character_id",
     "role",
     "task_id",
@@ -733,6 +734,23 @@ async fn lookup(ed: Arc<Editor>, q: gz_game::LookupQuery) -> Result<gz_game::Loo
                 for (name, value) in svc.global_vars(&ed).await {
                     doc_entries.push(entry(name, value, "mod.ltx [vars]".into()));
                 }
+            }
+            // the module's playlists by their titles, then the game's music and silence
+            "radio_playlist" => {
+                let (_, _, playlists) = svc.playlists(&ed).await;
+                for p in playlists.iter() {
+                    doc_entries.push(entry(
+                        p.id.clone(),
+                        p.title.clone(),
+                        format!("mod.ltx [playlist.{}]", p.id),
+                    ));
+                }
+                doc_entries.push(entry(
+                    "game".into(),
+                    "The game's music".into(),
+                    "the game's radio music alone".into(),
+                ));
+                doc_entries.push(entry("off".into(), "Silence".into(), "the radio plays nothing".into()));
             }
             "character_id" => {
                 // a template is listed and marked: it explains itself instead of being missing

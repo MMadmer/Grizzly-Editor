@@ -211,6 +211,7 @@ refused (`E022`).
 | `enum` | `"actor"` | one of the catalog's `enum=a\|b\|c` values |
 | `relation` | `"enemy"` \| `"neutral"` \| `"friend"` | |
 | `value` | bool, number or string | for `var.set` / `var` / `global.set` / `global` |
+| `radio_playlist` | `"road_songs"` \| `"<module>.<playlist>"` \| `"game"` \| `"off"` | what a radio plays (the game's `RADIO.md`): a playlist of the module by its id (`mod.ltx` `[playlist.<id>]`, made in Mod > Screens & Music; `<this module>.<id>` is the same), another module's as written, `game` the game's radio music alone, `off` silence. The Details editor picks the module's playlists by their titles, The Game's Music or Silence, and keeps and shows a value the list lacks; `game.lookup type=radio_playlist` lists the same. An id of this module that `mod.ltx` lacks is `E030`; a value that is no name (a space in it, a dot with nothing on one side) is `E006` |
 | `global_name` | `"night"` \| `"<module>.<name>"` | a **global variable** of the module: declared in `mod.ltx` `[vars]` (`name = default`), one value every quest and behaviour graph of the module reads and writes, kept in the save. The editor edits them in the graph tab's Variables pane, under **Global**, and saves them into `mod.ltx` at once; the picker lists them with their defaults. A name the module does not declare is `E030`; another module's (`"<module>.<name>"`) is only checked by the game |
 | `count_or_all` | an integer ≥ 1 or `"all"` | `item.take` |
 | `duration` | `{ seconds = N }` (real time), `{ game_minutes = N }`, `{ game_hours = N }`, `{ game_seconds = N }` (game time), or a plain number (real seconds) | |
@@ -414,6 +415,8 @@ else is plumbing around it. When a stage without waiting is needed —
 | `dialog.break` | Break dialog | — | Closes the current dialog. |
 | `actor.teleport` | Teleport player | **`place: place`** | Moves the player to a point on the current level. |
 | `sound.play` | Play sound | **`theme: string`** | Plays a sound theme on the player. |
+| `radio.play` | Play on radio | **`radio: object_ref`**, **`playlist: radio_playlist`**, `next_track: bool = false` | Makes one radio of the world play a playlist of a module, the game's music alone or nothing, whatever station the player chose. A radio the level itself has is named by its object name in `story`. The track playing is cut unless `next_track`. The radio keeps it through saves. |
+| `radio.reset` | Radio as before | **`radio: object_ref`**, `next_track: bool = false` | Takes away what a quest told the radio: it plays what its own data says (a radio placed in the editor: its Radio\Plays), else the player's station. |
 | `lua` | Custom Lua | **`code: lua`** | Custom Lua. As an action it runs, as a condition it must return true or false. The nq object and the full game API are available. |
 
 ### 6.4 Conditions (`use = cond`)

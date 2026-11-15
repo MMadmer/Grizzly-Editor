@@ -1735,6 +1735,29 @@ mod tests {
         assert!(write(&r.state, Some(&r.files), None).unwrap().files.is_empty());
     }
 
+    /// What a radio plays is a named key of its spawn point: written, read back, and a radio
+    /// that plays the player's station writes nothing.
+    #[test]
+    fn a_radios_playlist_reads_back_as_it_was_written() {
+        use crate::objects::{PointKind, SpawnData};
+        let mut s = scene();
+        for (name, plays) in [("radio_01", "road_songs"), ("radio_02", "")] {
+            let mut d = SpawnData::of_kind(PointKind::RPoint);
+            d.plays = plays.into();
+            s.insert(Object::new(ObjClass::SpawnPoint, name, ObjData::Spawn(Box::new(d))));
+        }
+        let disk = saved(Texts::default(), &write(&s, None, None).unwrap());
+        let text = file(&disk, "spawns.lua");
+        assert!(text.contains("radio = { plays = \"road_songs\" }"), "{text}");
+        assert_eq!(text.matches("plays").count(), 1, "{text}");
+        let r = read_back(&disk);
+        let plays = |n: &str| match &r.state.find(ObjClass::SpawnPoint, n).unwrap().data {
+            ObjData::Spawn(d) => d.plays.to_string(),
+            _ => String::new(),
+        };
+        assert_eq!((plays("radio_01"), plays("radio_02")), ("road_songs".to_owned(), String::new()));
+    }
+
     #[test]
     fn moving_one_object_changes_its_line_and_nothing_else() {
         let disk = saved(Texts::default(), &write(&scene(), None, None).unwrap());

@@ -175,6 +175,7 @@ return {
   | `S211` | `terrain_border` | a terrain whose border stands more than 0.5 m off the ground around it |
   | `S212` | `terrain_unmade` | a terrain whose model cannot be made from what its file says |
   | `S213` | `terrain_bare` | a terrain that wears the ground's look (`surface = "ground"`) with no ground under it |
+  | `S214` | `radio_playlist` | a radio bound (`radio = { plays = ... }`) to a playlist of the module that `mod.ltx` does not declare |
 
   Left out, it checks the objects marked `authored` and every terrain (on a level of the game what the module
   adds), else every object; `objects=` or `area=` choose, `checks=` narrows (codes or words), `limit=` caps the answer.
@@ -266,7 +267,7 @@ Write - the scene is <name>.scene and a folder of Lua files; the editor follows 
   (and unwritten, when the scene holds changes of its objects: they go over the file once it reads).
 
 Settle:  scene.align action=drop|surface objects=... [offset=<m>], then scene.save (only changed lines).
-Check:   asset.check   scene.audit [objects=...|area=...] [checks=...]   (S201 floating ... S213 terrain_bare)
+Check:   asset.check   scene.audit [objects=...|area=...] [checks=...]   (S201 floating ... S214 radio_playlist)
 Build:   level.status   level.build   level.inspect part=pieces|cuts|ai_edits   mod.build (answers media)   mod.info
 Play:    level.play
 ```

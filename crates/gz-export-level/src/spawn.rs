@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use gz_base::{Finding, Findings};
 use gz_entities::{Entity, Settings, Shape};
 use gz_scene::math::{Mat4, Vec3, get_xyz};
+use gz_scene::objects::radio::RadioCx;
 use gz_scene::objects::{CF_SPHERE, PointKind, SpawnEntity};
 use gz_scene::{ObjClass, ObjData, Object, SceneState};
 
@@ -37,6 +38,8 @@ pub struct SpawnInput<'a> {
     pub settings: Option<&'a (dyn Settings + Sync)>,
     /// The linked game's patrol names.
     pub game_patrols: &'a HashSet<String>,
+    /// What tells a radio, and the module's playlists: what a radio's Plays bakes into.
+    pub radio: Option<&'a RadioCx>,
     /// The `.xspawn` on disk, for the merge (empty when there is none).
     pub old_text: &'a str,
 }
@@ -59,6 +62,8 @@ pub struct SpawnResult {
     pub paths: u32,
     /// Placed stalkers that carry a standing order.
     pub orders: u32,
+    /// Radios bound to what they play (`[xms_radio]`).
+    pub radios: u32,
     /// Base spawns the mod takes out (`op = remove`).
     pub removed: u32,
     pub names: Vec<String>,
@@ -450,6 +455,10 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
                 out.result.orders += 1;
             }
         }
+        // what a radio plays rides in it too: the game reads [xms_radio] off the radio's spawn ini
+        if !pt.plays.is_empty() {
+            bake_plays(&mut out, input.radio, &entity, &op, &sp_section, &pt.plays, &mut cd);
+        }
         if !cd.is_empty() {
             let file = format!("{level}_{op}.ltx");
             let _ = write!(fresh, "custom_data = @spawn/custom_data/{file}\r\n");
@@ -561,6 +570,44 @@ fn entity_visual(entity: &Entity, settings: Option<&(dyn Settings + Sync)>) -> S
         vname.clear();
     }
     vname
+}
+
+/// A radio's `[xms_radio]` appended to its custom data, or why it is left out.
+fn bake_plays(
+    out: &mut SpawnBake,
+    radio: Option<&RadioCx>,
+    entity: &Entity,
+    op: &str,
+    section: &str,
+    plays: &str,
+    cd: &mut String,
+) {
+    let Some(r) = radio.filter(|r| r.radios.is_radio(entity)) else {
+        out.warn(format!("'{op}' ({section}) is no radio - what it plays is left out"));
+        return;
+    };
+    let text = match r.section(plays) {
+        Ok(t) => t,
+        Err(why) => {
+            out.warn(format!("'{op}': {why} - what it plays is left out; pick it in Radio\\Plays"));
+            return;
+        }
+    };
+    if let Some(id) = r.missing(plays) {
+        out.warn(format!(
+            "'{op}' plays the playlist '{id}', which mod.ltx does not declare - the radio plays the player's station until it does"
+        ));
+    }
+    if strip_ini_section(cd, "xms_radio") {
+        out.warn(format!(
+            "'{op}': the [xms_radio] written into its custom data is replaced by its Radio properties"
+        ));
+    }
+    if !cd.is_empty() && !cd.ends_with('\n') {
+        cd.push_str("\r\n");
+    }
+    cd.push_str(&text);
+    out.result.radios += 1;
 }
 
 /// Whether a point can take an order, for a point whose entity was decoded for this bake only.
@@ -751,6 +798,7 @@ mod tests {
             visuals: &visuals,
             settings: Some(&st),
             game_patrols: &patrols,
+            radio: None,
             old_text: "",
         };
         let bake = bake(&input).unwrap();
@@ -791,6 +839,7 @@ mod tests {
             visuals: &visuals,
             settings: Some(&st),
             game_patrols: &patrols,
+            radio: None,
             old_text: "",
         };
         let bake = bake(&input).unwrap();
@@ -843,6 +892,7 @@ mod tests {
             visuals: &visuals,
             settings: Some(&st),
             game_patrols: &patrols,
+            radio: None,
             old_text: "[obj:hand_made]\r\nop        = add\r\n\r\n[obj:guard]\r\nop = add\r\n",
         };
         let bake = bake(&input).unwrap();
@@ -859,6 +909,76 @@ mod tests {
         // the hand-written op stays, the exported one is rewritten
         assert!(text.starts_with("[obj:hand_made]\r\nop        = add\r\n\r\n[obj:start]\r\n"));
         assert_eq!(text.matches("[obj:guard]").count(), 1);
+    }
+
+    /// A radio's Plays rides in its custom data as `[xms_radio]`, keyed by the module; a playlist
+    /// `mod.ltx` lacks is said; a hand-written `[xms_radio]` gives way; a playlist on something
+    /// that is no radio is left out with a warning.
+    #[test]
+    fn a_radio_bakes_what_it_plays() {
+        use gz_entities::{PropContext, PropValue};
+        use gz_scene::objects::radio::{RADIO_LOGIC, Radios};
+        let st = settings().section(
+            "physic_object",
+            &[("class", "O_PHYS_S"), ("visual", "dynamics\\radio.ogf"), ("fixed_bones", "link")],
+        );
+        let mut s = SceneState::default();
+        let ctx = PropContext::default();
+        for (name, logic, plays) in [
+            ("radio", format!("{RADIO_LOGIC}[xms_radio]\r\nplaylist = off\r\n"), "road"),
+            ("lost", RADIO_LOGIC.to_owned(), "gone"),
+            ("barrel", String::new(), "game"),
+        ] {
+            let mut e = Entity::create("physic_object", &st).unwrap();
+            let path = e.properties(&ctx).into_iter().find(|p| p.key() == "custom_data").unwrap().path;
+            e.set(&path, &PropValue::Text(logic), &ctx).unwrap();
+            let mut sd = SpawnData::of_kind(PointKind::Spawn);
+            sd.entity = Some(SpawnEntity::Decoded(Arc::new(e)));
+            sd.plays = plays.into();
+            s.insert(authored(
+                Object::new(ObjClass::SpawnPoint, name, ObjData::Spawn(Box::new(sd))),
+                Vec3::ZERO,
+            ));
+        }
+        let radio = RadioCx {
+            radios: Arc::new(Radios::unlinked()),
+            module: "my_mod".into(),
+            playlists: Arc::from(vec![gz_mod_playlist("road")]),
+        };
+        let (visuals, patrols) = (Visuals::default(), HashSet::new());
+        let input = SpawnInput {
+            scene: &s,
+            level: "l01".into(),
+            selected_only: false,
+            section: None,
+            mode: None,
+            mirror: true,
+            visuals: &visuals,
+            settings: Some(&st),
+            game_patrols: &patrols,
+            radio: Some(&radio),
+            old_text: "",
+        };
+        let bake = bake(&input).unwrap();
+        let cd = |op: &str| {
+            bake.custom_data.iter().find(|(f, _)| f == &format!("l01_{op}.ltx")).map(|(_, t)| t.clone())
+        };
+        assert_eq!(cd("radio"), Some(format!("{RADIO_LOGIC}[xms_radio]\r\nplaylist = my_mod.road\r\n")));
+        assert_eq!(cd("lost"), Some(format!("{RADIO_LOGIC}[xms_radio]\r\nplaylist = my_mod.gone\r\n")));
+        assert_eq!(cd("barrel"), None);
+        assert_eq!(bake.result.radios, 2);
+        assert_eq!(
+            bake.result.warnings,
+            [
+                "'radio': the [xms_radio] written into its custom data is replaced by its Radio properties",
+                "'lost' plays the playlist 'gone', which mod.ltx does not declare - the radio plays the player's station until it does",
+                "'barrel' (physic_object) is no radio - what it plays is left out",
+            ]
+        );
+    }
+
+    fn gz_mod_playlist(id: &str) -> gz_scene::objects::radio::RadioPlaylist {
+        gz_scene::objects::radio::RadioPlaylist { id: id.into(), title: String::new() }
     }
 
     #[test]
@@ -887,6 +1007,7 @@ mod tests {
             visuals: &visuals,
             settings: None,
             game_patrols: &patrols,
+            radio: None,
             old_text: "",
         };
         let b = bake(&input).unwrap();

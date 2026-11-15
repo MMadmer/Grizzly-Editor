@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use gz_base::{Origin, Problem, RelPath, SmolStr};
+use gz_base::{Origin, Problem, RelPath, Rev, SmolStr};
 use gz_editor::{CmdError, DirtyDoc, DirtySource, Editor, JobError, ProjectSession};
 use gz_project::Filter;
 use gz_query::Derived;
@@ -18,6 +18,7 @@ use crate::apply::{ReplaceKind, SceneCmd};
 use crate::format::{self, SceneFiles, Texts};
 use crate::library::Library;
 use crate::model::{ObjData, SceneState};
+use crate::objects::radio::{RadioCx, Radios};
 use crate::pick::ScenePick;
 use crate::recovery::{Recovery, Snapshot};
 use crate::sdk;
@@ -60,6 +61,10 @@ pub struct SceneService {
     /// The Details sheet's lists from the linked game (story ids, the spawn sections' names), the
     /// newest read.
     prop_cx: parking_lot::RwLock<Arc<gz_entities::PropContext>>,
+    /// What the linked game says a radio is, with the configs it was read from (their address).
+    radios: Mutex<(usize, Arc<Radios>)>,
+    /// The radio rows' context as last made: the radios and the manifest's generation it is of.
+    radio_cx: Mutex<Option<(usize, Rev, Arc<RadioCx>)>>,
     /// The documents the open scene was read from or last saved to: what a save writes the
     /// difference into. `None` for a scene not in its own files yet (new, imported).
     files: Mutex<Option<Arc<SceneFiles>>>,
@@ -159,6 +164,8 @@ impl SceneService {
             root,
             editor_root,
             prop_cx: parking_lot::RwLock::new(Arc::new(gz_entities::PropContext::default())),
+            radios: Mutex::new((0, Arc::new(Radios::unlinked()))),
+            radio_cx: Mutex::new(None),
             files: Mutex::new(None),
             problems: Mutex::new(Vec::new()),
             opened: AtomicBool::new(false),
@@ -180,6 +187,49 @@ impl SceneService {
         let cx = Arc::new(cx);
         *self.prop_cx.write() = cx.clone();
         cx
+    }
+
+    /// What the radio rows, the audit and the bake read: the radios of the game as last read and
+    /// the module's playlists as the manifest holds them now. Never waits: what a frame asks.
+    #[must_use]
+    pub fn radio_cx_now(&self, session: &ProjectSession) -> Arc<RadioCx> {
+        let (rkey, radios) = {
+            let r = self.radios.lock();
+            (Arc::as_ptr(&r.1) as usize, r.1.clone())
+        };
+        let (mrev, module, playlists) = gz_mod::ManifestService::get(session)
+            .map_or_else(|| (Rev::ZERO, String::new(), Arc::from(Vec::new())), |m| m.playlists());
+        let mut c = self.radio_cx.lock();
+        if let Some((k, r, cx)) = &*c
+            && *k == rkey
+            && *r == mrev
+        {
+            return cx.clone();
+        }
+        let cx = Arc::new(RadioCx { radios, module, playlists });
+        *c = Some((rkey, mrev, cx.clone()));
+        cx
+    }
+
+    /// The radio rows' context as last made (by [`crate::game::radio_cx`], or a frame).
+    #[must_use]
+    pub fn radio_cx_cached(&self) -> Arc<RadioCx> {
+        self.radio_cx.lock().as_ref().map_or_else(|| Arc::new(RadioCx::unlinked()), |c| c.2.clone())
+    }
+
+    /// Reads the game's radios again when the configs are others than those last read.
+    pub(crate) async fn refresh_radios(
+        &self,
+        editor: &Editor,
+        settings: Option<Arc<crate::game::GameSettings>>,
+    ) {
+        let Some(g) = settings else { return };
+        let key = std::ptr::from_ref(g.ltx()) as usize;
+        if self.radios.lock().0 == key {
+            return;
+        }
+        let read = editor.exec.io(move || Radios::read(g)).await;
+        *self.radios.lock() = (key, Arc::new(read));
     }
 
     /// Whether a scene was loaded or made in this session.

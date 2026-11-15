@@ -24,6 +24,7 @@ use gz_editor::Editor;
 use gz_entities::PropContext;
 use gz_query::Query;
 use gz_scene::format::fields;
+use gz_scene::objects::radio::RadioCx;
 use gz_scene::props::{self, Effect, Kind as RowKind, MergedRow, PropCx, Row, Val};
 use gz_scene::{ObjClass, SceneCmd, SceneService, SceneState};
 use gz_ui::grid::{self, PickAction, PropFlags, PropertyGrid};
@@ -78,11 +79,12 @@ pub fn rows(
     lib: &gz_scene::library::Library,
     target: usize,
     ctx: &PropContext,
+    radio: &RadioCx,
 ) -> Vec<MergedRow> {
     if target == WORLD {
         return gz_scene::selection_rows(state, lib, true, ctx);
     }
-    let cx = PropCx { lib: Some(lib), entity: ctx };
+    let cx = PropCx { lib: Some(lib), entity: ctx, radio: Some(radio) };
     let lists: Vec<Vec<Row>> = state
         .selected_in_order()
         .iter()
@@ -242,9 +244,10 @@ pub fn prepare(
     target: usize,
     filter: &str,
     ctx: &PropContext,
+    radio: &RadioCx,
     window: Option<&egui::Context>,
 ) -> Prepared {
-    let all = rows(state, lib, target, ctx);
+    let all = rows(state, lib, target, ctx, radio);
     let f = filter.to_lowercase();
     let mut nodes = Vec::new();
     let mut visible = 0;
@@ -455,9 +458,10 @@ pub async fn set_value(
     let svc = SceneService::of(editor).map_err(|e| (None, e.message))?;
     let snap = svc.store.snapshot();
     let ctx = svc.prop_cx();
+    let radio = gz_scene::game::radio_cx(editor).await;
     let (s2, lib) = (snap.clone(), svc.library.clone());
-    let c2 = ctx.clone();
-    let all = editor.exec.cpu(move || rows(&s2, &lib, target, &c2)).await;
+    let (c2, r2) = (ctx.clone(), radio.clone());
+    let all = editor.exec.cpu(move || rows(&s2, &lib, target, &c2, &r2)).await;
     let row = props::find(&all, key).ok_or_else(|| (None, format!("no row '{key}'")))?.clone();
     let k = row.row.key.clone();
     let refused = |e: String| (Some(row.row.label.clone()), e);
@@ -479,7 +483,7 @@ pub async fn set_value(
             .map_err(|e| (None, e.message))?;
         return Ok(());
     }
-    let cx = PropCx { lib: Some(&svc.library), entity: &ctx };
+    let cx = PropCx { lib: Some(&svc.library), entity: &ctx, radio: Some(&radio) };
     let mut objects = Vec::new();
     let mut transforms = Vec::new();
     for obj in snap.selected_in_order().iter().filter_map(|id| snap.get(*id)) {
@@ -562,6 +566,8 @@ pub struct PropsPanel {
     texts: FxHashMap<String, String>,
     live: bool,
     edit_text: Option<EditText>,
+    /// How far the rows scrolled down at most, last frame: where Bottom goes.
+    scroll_max: f32,
 }
 
 impl PropsPanel {
@@ -579,6 +585,7 @@ impl PropsPanel {
             texts: FxHashMap::default(),
             live: false,
             edit_text: None,
+            scroll_max: 0.0,
         }
     }
 
@@ -618,11 +625,15 @@ impl PropsPanel {
         let key = (t, self.search.clone(), lang);
         let (s, lib, filter) = (snap.clone(), svc.library.clone(), self.search.clone());
         let ctx = svc.prop_cx();
-        let rev = rev.mix(gz_base::Rev(Arc::as_ptr(&ctx) as usize as u64));
+        // the radios of the game and the module's playlists: a lookup, never a read
+        let radio = svc.radio_cx_now(&session);
+        let rev = rev
+            .mix(gz_base::Rev(Arc::as_ptr(&ctx) as usize as u64))
+            .mix(gz_base::Rev(Arc::as_ptr(&radio) as usize as u64));
         let window = ui.ctx().clone();
         let answer = self.query.get(&key, rev, move || {
             let window = (lang != Lang::En).then_some(&window);
-            prepare(&s, &lib, t, &filter, &ctx, window)
+            prepare(&s, &lib, t, &filter, &ctx, &radio, window)
         });
         let Some(prep) = answer.value().cloned() else {
             state::busy_line(ui, "Reading the properties...");
@@ -662,7 +673,7 @@ impl PropsPanel {
             .auto_shrink([false, false]);
         match gz_app::take_scroll(ui.ctx(), self.window()) {
             Some(gz_app::ScrollTo::Top) => scroll = scroll.vertical_scroll_offset(0.0),
-            Some(gz_app::ScrollTo::Bottom) => scroll = scroll.vertical_scroll_offset(f32::MAX / 4.0),
+            Some(gz_app::ScrollTo::Bottom) => scroll = scroll.vertical_scroll_offset(self.scroll_max),
             Some(gz_app::ScrollTo::Offset(y)) => scroll = scroll.vertical_scroll_offset(y),
             _ => {}
         }
@@ -736,6 +747,7 @@ impl PropsPanel {
             (out.content_size.y - out.inner_rect.height()).max(0.0),
         );
         self.sections = sections;
+        self.scroll_max = (out.content_size.y - out.inner_rect.height()).max(0.0);
         grid::help_footer(ui);
 
         // what waited for the pointer goes once it lets go; a drag of a transform ends its step
@@ -1071,6 +1083,25 @@ fn draw_row(g: &mut grid::Grid<'_>, item: &Item, depth: u32, cx: &mut RowCx<'_>)
                     && let Some(name) = names.get(cur)
                 {
                     out.now = Some((*name).to_owned());
+                }
+            }
+            // the editor's words for the fixed choices, the names a module gives as they are
+            (RowKind::Options(items), _) => {
+                let current = match &value {
+                    Val::Text(t) => t.as_str(),
+                    _ => "",
+                };
+                let shown: Vec<Tx<'_>> = items
+                    .iter()
+                    .map(|o| {
+                        if o.data { Tx::raw(o.label.as_str()) } else { Tx::ui_in(DETAILS, o.label.as_str()) }
+                    })
+                    .collect();
+                let mut cur = items.iter().position(|o| o.value == current).unwrap_or(0);
+                if grid::combo(ui, &key, &mut cur, &shown)
+                    && let Some(o) = items.get(cur)
+                {
+                    out.now = Some(o.value.clone());
                 }
             }
             (RowKind::Button(captions), _) => {

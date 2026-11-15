@@ -75,6 +75,7 @@ const TYPES: &[&str] = &[
     "npc_list",
     "character_id",
     "level_changer",
+    "radio_playlist",
 ];
 
 const ATTRS: &[&str] = &[

@@ -321,7 +321,7 @@ enum PlaceKind {
     /// A fog volume.
     Fog,
     /// A spawn point (`section`: a spawn section of the game, or `player_start`, `env_mod`,
-    /// `rpoint`).
+    /// `rpoint`, `radio` - a radio of the world that plays what Radio\Plays says).
     Spawn,
     /// A way path through `points`.
     Way,
@@ -489,7 +489,7 @@ async fn scene_place(ed: Arc<Editor>, p: PlaceParams, o: Origin) -> Reply {
         }
         PlaceKind::Spawn => {
             let section = p.section.as_deref().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| {
-                CmdError::invalid("kind=spawn takes section: a spawn section (game.lookup type=spawn_section), player_start, env_mod or rpoint")
+                CmdError::invalid("kind=spawn takes section: a spawn section (game.lookup type=spawn_section), player_start, env_mod, rpoint or radio")
             })?;
             spawn_object(&ed, &snap, section, p.name.as_deref(), pos).await?
         }
@@ -601,7 +601,18 @@ async fn spawn_object(
     name: Option<&str>,
     pos: Vec3,
 ) -> Result<Object, CmdError> {
+    use crate::objects::radio::RADIO_CHOOSE_NAME;
     use crate::objects::{ENVMOD_CHOOSE_NAME, PLAYERSTART_CHOOSE_NAME, RPOINT_CHOOSE_NAME};
+    if RADIO_CHOOSE_NAME.eq_ignore_ascii_case(section) || RADIO_CHOOSE_NAME[1..].eq_ignore_ascii_case(section)
+    {
+        let entity = radio_entity(ed).await?;
+        let mut d = SpawnData::of_kind(PointKind::Spawn);
+        d.entity = Some(SpawnEntity::Decoded(Arc::new(entity)));
+        let name = name_for(snap, name, &RADIO_CHOOSE_NAME[1..])?;
+        let mut obj = Object::new(ObjClass::SpawnPoint, &name, ObjData::Spawn(Box::new(d)));
+        obj.xform.position = pos;
+        return Ok(obj);
+    }
     let point = [PLAYERSTART_CHOOSE_NAME, ENVMOD_CHOOSE_NAME, RPOINT_CHOOSE_NAME]
         .into_iter()
         .find(|p| p.eq_ignore_ascii_case(section) || p[1..].eq_ignore_ascii_case(section));
@@ -654,6 +665,43 @@ async fn spawn_object(
     let mut obj = Object::new(ObjClass::SpawnPoint, &name, ObjData::Spawn(Box::new(data)));
     obj.xform.position = pos;
     Ok(obj)
+}
+
+/// A radio of the world as the game's own level radios are: the physics object, its model nailed
+/// at its root bone, and the radio's logic in its custom data (the game has no section of its own
+/// for one). Refused when the linked game's configs lack the section.
+async fn radio_entity(ed: &Arc<Editor>) -> Result<Entity, CmdError> {
+    use crate::objects::radio::{RADIO_BONES, RADIO_LOGIC, RADIO_SECTION, RADIO_VISUAL};
+    let settings = crate::game::settings(ed)
+        .await
+        .ok_or_else(|| CmdError::invalid("a radio needs the linked game's configs: link the game first"))?;
+    let ctx = gz_entities::PropContext::default();
+    ed.exec
+        .io(move || -> Result<Entity, CmdError> {
+            use gz_entities::{PropValue, Settings};
+            if !settings.section_exist(RADIO_SECTION) {
+                return Err(CmdError::not_found(format!(
+                    "the linked game has no {RADIO_SECTION} section: it places no radio"
+                )));
+            }
+            let mut e = Entity::create_spawn_point(RADIO_SECTION, settings.as_ref()).map_err(|e| {
+                CmdError::invalid(format!("the section {RADIO_SECTION} makes no spawn point: {e}"))
+            })?;
+            for (key, value) in
+                [("visual", RADIO_VISUAL), ("physic.fixed_bones", RADIO_BONES), ("custom_data", RADIO_LOGIC)]
+            {
+                let path = e
+                    .properties(&ctx)
+                    .into_iter()
+                    .find(|p| p.key() == key)
+                    .map(|p| p.path.clone())
+                    .ok_or_else(|| CmdError::internal(format!("a {RADIO_SECTION} has no {key}")))?;
+                e.set(&path, &PropValue::Text(value.to_owned()), &ctx)
+                    .map_err(|err| CmdError::internal(format!("the radio's {key}: {err}")))?;
+            }
+            Ok(e)
+        })
+        .await
 }
 
 /// The `.group` asset of the project a reference names, when there is one.
@@ -1166,11 +1214,13 @@ async fn scene_audit(ed: Arc<Editor>, p: sense::audit::AuditParams, _o: Origin) 
     roots.push(gz_project::library_root(&ed));
     let level = snap.meta.level.level_path.to_string();
     let base = ed.exec.io(move || base_names(&roots, &level)).await;
+    let radio = crate::game::radio_cx(&ed).await;
     let state = snap.clone();
     let found = ed
         .exec
         .cpu(move || {
-            sense::audit::audit(&sense::Scene { state: &state, lib: &lib, pick: &pick }, &p, base.as_ref())
+            let sc = sense::Scene { state: &state, lib: &lib, pick: &pick };
+            sense::audit::audit_with(&sc, &p, base.as_ref(), Some(&radio))
         })
         .await?;
     // where each object is written: the file of its kind in the scene's folder
