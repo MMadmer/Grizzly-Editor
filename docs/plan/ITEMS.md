@@ -317,7 +317,7 @@ motions and sounds; a use scene plays; the silencer is crafted; the icons are th
 | G5 (more) | with the particles | 1.9's engine part: `copyrighted` of a sound's description and of a track, the streamer mode variable, the check before every play, the script calls | game: the sound engine, the music thread, `xms_assets`, `xms_screens` |
 | G6 | agent | 1.9's game data and scripts: the radio's pool from modules, playlists, the option rows, the game's own copyrighted list | game: `packaging\dead-air-x64\compatibility\gamedata` (scripts, configs), docs |
 | E4 | agent | 1.9's editor part | editor: `gz-media` (the key), `gz-screens`, `gz-ui-pda` (Screens & Music), `gz-mod` (the manifest's reference and check) |
-| G7 | agent, after G4 | 1.9: the quest runtime's `radio.play` / `radio.stop` (catalog, runtime, parity) over `xms_radio.set` | game: `xms_nq_kinds.script`, `configs\nq\catalog.ltx`, `tools\nq` |
+| G7 | lead (done, game `6637198f6`) | 1.9: the quest runtime's `radio.play` / `radio.reset` and the type `radio_playlist` (catalog v22, runtime, parity, tests) over `xms_radio.set` | game: `xms_nq_kinds.script`, `configs\nq\catalog.ltx`, `tools\nq` |
 | E5 | agent, after E4 | 1.9: a placed Radio with its Plays property (the scene, the Place panel, the bake), the quest editor's playlist picker | editor: `gz-scene`, `gz-ui-level`, `gz-export-level`, `gz-nq`, `gz-ui-graph` |
 | - | lead | this plan, the contracts' final text, integration, the game build and deploy, the in-game proof, the one full read by the critic and its fixes |
 
@@ -355,5 +355,11 @@ motions and sounds; a use scene plays; the silencer is crafted; the icons are th
   the four sides (game `e2fc33daf`, editor `8f4fc0c0`) and in the catalog clone (local, not pushed).
 - Open on the converted project: one stray `.tga` under `gamedata\textures` (the game reads none: it goes
   out with the converter's rule for files the game cannot read).
+- G4 and G6 are in and committed in the game (`7a1b2fc79`, `b04317a3d`): the save scripts (1004 checks of the
+  harness) and the radio scripts with the game's own copyrighted list (to be reviewed by the author). What they
+  need of the engine went to G3 (ownership calls for placeholders, `xms.section_owner`, `xms_forget` calling
+  the script, the `xms.radio` blob) and into G5's brief (`xms.sound_replacement` for mounted names, a radio's
+  `spawn_ini`). G7 is done by the lead. E4 runs; E5's brief is written (the placed Radio's Plays, the quest
+  editor's `radio_playlist`).
 - The scratch of the task (surveys, the key table, the unpacked game views) is the session's scratchpad folder
   `we\`; nothing in the repository depends on it.
