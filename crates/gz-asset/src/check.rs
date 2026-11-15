@@ -74,8 +74,40 @@ fn walk_disk(root: &Path, rel: &RelPath, out: &mut Vec<RelPath>) {
     }
 }
 
+/// The asset a folder is the own folder of: the asset of the folder's name beside it (a scene's
+/// folder beside its `.scene`). `None` for any other folder.
+async fn asset_beside(editor: &Arc<Editor>, folder: &RelPath) -> Option<RelPath> {
+    if folder.is_root() {
+        return None;
+    }
+    let session = editor.project().ok()?;
+    let up = folder.parent().unwrap_or_else(RelPath::root);
+    let candidates: Vec<RelPath> = Kinds::of(editor)
+        .all()
+        .iter()
+        .filter_map(|k| up.join(&format!("{}{}", folder.file_name(), k.ext)).ok())
+        .collect();
+    let root = session.root.clone();
+    editor.exec.io(move || candidates.into_iter().find(|c| c.to_fs(&root).is_file())).await
+}
+
+/// The asset a file is a part of when it is no asset itself: a file of an asset's own folder
+/// (a scene's `objects.lua`). A check of it is the asset's check, read for that file.
+async fn owner_of(editor: &Arc<Editor>, path: &RelPath) -> Option<RelPath> {
+    let name = path.file_name();
+    if Kinds::of(editor).of_file(name).is_some() || name.eq_ignore_ascii_case(MANIFEST) {
+        return None;
+    }
+    let abs = editor.project().ok()?.fs(path);
+    if !editor.exec.io(move || abs.is_file()).await {
+        return None;
+    }
+    asset_beside(editor, &path.parent()?).await
+}
+
 /// The files a check of `path` covers (a file, a folder, `None`: the project): every file of
-/// a kind the editor knows, and the manifest when it is in the scope.
+/// a kind the editor knows, and the manifest when it is in the scope. An asset's own folder
+/// stands for the asset.
 pub async fn targets(editor: &Arc<Editor>, path: Option<&RelPath>) -> Result<Vec<RelPath>, CmdError> {
     let session = editor.project()?;
     let kinds = Kinds::of(editor);
@@ -121,6 +153,11 @@ pub async fn targets(editor: &Arc<Editor>, path: Option<&RelPath>) -> Result<Vec
                 || (p.parent().is_some_and(|d| d.is_root()) && p.file_name().eq_ignore_ascii_case(MANIFEST))
         })
         .collect();
+    if out.is_empty()
+        && let Some(owner) = asset_beside(editor, &under).await
+    {
+        out.push(owner);
+    }
     out.sort();
     Ok(out)
 }
@@ -241,7 +278,15 @@ pub async fn check_manifest(editor: &Arc<Editor>) -> Vec<Problem> {
 
 /// Every problem of `path` (a file, a folder, `None`: the project), sorted by file and place.
 pub async fn run(editor: &Arc<Editor>, path: Option<&RelPath>) -> Result<Report, CmdError> {
-    let files = targets(editor, path).await?;
+    // a part of an asset (a file of a scene's folder) is checked with its asset
+    let part = match path {
+        Some(p) => owner_of(editor, p).await,
+        None => None,
+    };
+    let files = match &part {
+        Some(owner) => vec![owner.clone()],
+        None => targets(editor, path).await?,
+    };
     let manifest = files
         .iter()
         .any(|f| f.file_name().eq_ignore_ascii_case(MANIFEST) && f.parent().is_some_and(|d| d.is_root()));
@@ -254,6 +299,10 @@ pub async fn run(editor: &Arc<Editor>, path: Option<&RelPath>) -> Result<Report,
         .collect();
     if manifest {
         problems.extend(check_manifest(editor).await);
+    }
+    // of the asset's problems, the ones in the file that was asked about
+    if let (Some(_), Some(asked)) = (&part, path) {
+        problems.retain(|p| p.file.as_ref().is_some_and(|f| f.key() == asked.key()));
     }
     problems.sort_by(|a, b| {
         a.file
