@@ -102,6 +102,14 @@ pub(crate) fn register(reg: &mut Registry) {
         scene_query,
     );
     reg.cmd(
+        Spec::read(
+            "shot.map",
+            "A map of the scene from above, drawn without a window: every object in its colour with its name, a grid in metres.",
+        )
+        .example("position=120,0,-40 size=60 highlight=bunker_wall_01"),
+        shot_map,
+    );
+    reg.cmd(
         Spec::write(
             "scene.attach",
             "Makes a shape a spawn point's own, or gives a spawn point's shape back to the scene.",
@@ -961,6 +969,18 @@ async fn scene_query(ed: Arc<Editor>, p: QueryParams, _o: Origin) -> Reply {
                 .await
         }
     }
+}
+
+/// `shot.map`: one ray a pixel from above, then the drawing - all of it on the pools.
+async fn shot_map(ed: Arc<Editor>, p: sense::shot::MapParams, _o: Origin) -> Reply {
+    let svc = service::need_scene(&ed).await?;
+    let snap = svc.store.snapshot();
+    svc.prefetch_library(&ed, &snap).await;
+    let (snap, pick) = svc.pick().await;
+    let lib = svc.library.clone();
+    ed.exec
+        .cpu(move || sense::shot::shot_map(&sense::Scene { state: &snap, lib: &lib, pick: &pick }, &p))
+        .await
 }
 
 // ---------------------------------------------------------------- attach

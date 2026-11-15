@@ -7,7 +7,9 @@
 mod ai;
 mod fit;
 mod ground;
+pub mod map;
 mod rays;
+pub mod shot;
 #[cfg(test)]
 mod tests;
 

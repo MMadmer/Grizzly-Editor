@@ -465,3 +465,106 @@ fn a_hit_carries_its_surface() {
     .expect("a hit");
     assert_eq!(wall.surface, None);
 }
+
+fn map_of(w: &World, v: Value) -> Result<Value, gz_editor::CmdError> {
+    let p: super::shot::MapParams = serde_json::from_value(v).expect("the parameters read");
+    super::shot::shot_map(&Scene { state: &w.state, lib: &w.lib, pick: &w.pick }, &p)
+}
+
+#[test]
+fn the_map_shows_the_scene_from_above_and_reads_back_in_metres() {
+    let w = world();
+    let a = map_of(
+        &w,
+        json!({
+            "area": [-8, -8, 8, 8], "px": 320, "highlight": ["floating"],
+            "marks": [{ "position": [-5, 0, -5], "text": "here" }],
+        }),
+    )
+    .unwrap_or_else(|e| panic!("{}", e.message));
+    // the picture is the map and its two margins; a pixel reads back to metres
+    assert_eq!(a["width"], 320 + 46);
+    assert_eq!(a["height"], 320 + 14);
+    near(&a["px_per_m"], 20.0);
+    assert_eq!(a["map"], json!({ "left": 46, "top": 14, "width": 320, "height": 320 }));
+    assert_eq!(a["area"], json!([-8.0, -8.0, 8.0, 8.0]));
+    assert_eq!(a["mode"], "objects");
+    assert!(a["png_base64"].as_str().is_some_and(|s| s.starts_with("iVBORw0KGgo")));
+    // the legend names what the rays met: the wall stands outside the rectangle
+    let legend = a["legend"].as_array().expect("a legend");
+    let row = |name: &str| legend.iter().find(|r| r["object"] == name);
+    assert!(row("wall").is_none());
+    let standing = row("standing").expect("the box on the ground");
+    near(&standing["centre"][0], 0.0);
+    near(&standing["centre"][1], 0.0);
+    assert!((num(&standing["area"]) - 1.0).abs() < 0.11, "{}", standing["area"]);
+    assert_eq!(standing["named"], true);
+    let floating = row("floating").expect("the box in the air");
+    near(&floating["centre"][0], 5.0);
+    assert_eq!(floating["colour"], "#ff40a0");
+    let ground = row("ground").expect("the ground");
+    assert_eq!(ground["named"], false);
+    assert_eq!(ground["kind"], "object");
+    // from the ground to the top of the box in the air
+    near(&a["heights"]["min"], 0.0);
+    near(&a["heights"]["max"], 3.5);
+    // the same scene, the same picture
+    let b = map_of(
+        &w,
+        json!({
+            "area": [-8, -8, 8, 8], "px": 320, "highlight": ["floating"],
+            "marks": [{ "position": [-5, 0, -5], "text": "here" }],
+        }),
+    )
+    .unwrap_or_else(|e| panic!("{}", e.message));
+    assert_eq!(a["png_base64"], b["png_base64"]);
+}
+
+#[test]
+fn the_map_takes_a_middle_and_a_size_and_says_its_heights() {
+    let w = world();
+    let a = map_of(
+        &w,
+        json!({ "position": [0, 0, 0], "size": [16, 8], "px": 160, "mode": "height", "labels": false }),
+    )
+    .unwrap_or_else(|e| panic!("{}", e.message));
+    assert_eq!(a["map"]["width"], 160);
+    assert_eq!(a["map"]["height"], 80);
+    assert_eq!(a["area"], json!([-8.0, -4.0, 8.0, 4.0]));
+    assert_eq!(a["mode"], "height");
+    assert!(num(&a["heights"]["contour"]) > 0.0);
+    // only one object seen from above: the others are not there
+    let a = map_of(&w, json!({ "position": [0, 0, 0], "size": 16, "px": 64, "only": ["standing"] }))
+        .unwrap_or_else(|e| panic!("{}", e.message));
+    let legend = a["legend"].as_array().expect("a legend");
+    assert_eq!(legend.len(), 1);
+    assert_eq!(legend[0]["object"], "standing");
+    // the AI map's nodes are counted where there is a map
+    let a = map_of(&w, json!({ "position": [0, 0, 0], "size": 16, "px": 64, "mode": "ai" }))
+        .unwrap_or_else(|e| panic!("{}", e.message));
+    assert!(a.get("ai_nodes").is_some());
+}
+
+#[test]
+fn a_map_that_cannot_be_drawn_is_refused_in_a_sentence() {
+    let w = world();
+    let refused = |v: Value, words: &str| {
+        let e = map_of(&w, v).expect_err("refused");
+        assert!(e.message.contains(words), "{}", e.message);
+        e.code
+    };
+    assert_eq!(refused(json!({ "area": [0, 0, 5, 5], "position": [0, 0, 0] }), "give one"), "invalid");
+    assert_eq!(refused(json!({ "area": [0, 0, 5, 5], "size": 4 }), "size goes with position"), "invalid");
+    assert_eq!(refused(json!({ "position": [0, 0, 0] }), "takes size"), "invalid");
+    assert_eq!(refused(json!({ "position": [0, 0, 0], "size": [1, 2, 3] }), "one number"), "invalid");
+    assert_eq!(refused(json!({ "area": [0, 0, 5, 5], "px": 4000 }), "px takes"), "invalid");
+    assert_eq!(refused(json!({ "area": [0, 0, 5, 5], "px": 8 }), "px takes"), "invalid");
+    assert_eq!(refused(json!({ "area": [0, 0, 0.1, 5] }), "half a metre"), "invalid");
+    assert_eq!(refused(json!({ "area": [0, 0, 90000, 5] }), "at most"), "invalid");
+    assert_eq!(refused(json!({ "area": [0, 0, 5, 5], "grid": 0 }), "grid takes"), "invalid");
+    assert_eq!(refused(json!({ "area": [0, 0, 5, 5], "highlight": ["nobody"] }), "nobody"), "not_found");
+    // the sizes of a rectangle that is not square
+    assert_eq!(super::shot::size_px([0.0, 0.0, 10.0, 5.0], 200), [200, 100]);
+    assert_eq!(super::shot::size_px([0.0, 0.0, 5.0, 10.0], 200), [100, 200]);
+    assert_eq!(super::shot::size_px([0.0, 0.0, 1000.0, 1.0], 200), [200, 16]);
+}
