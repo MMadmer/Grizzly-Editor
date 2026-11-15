@@ -343,5 +343,17 @@ motions and sounds; a use scene plays; the silencer is crafted; the icons are th
   the wanted state in all 14 515 sections. Open: the game's loose particle loader reads no actions (G5); four
   weapons change class (their objects become the module's: told to G3). P2 (the hand work) runs.
 - 2026-11-15, later still: the author asks for radio music from modules and a streamer mode (1.9: G5, G6, E4).
+- E2 is in and committed (`66260a7c`): the Items tab, `items.view`, the item glyph, `test_items.py` (88 checks).
+  With it: a tab's Save is Secondary while dirty (Build Mod is the row's one Primary; a second one stopped a
+  debug build in Characters and Mod Settings too). The project rules have their Items section (`3a157f1b`).
+- The queue of the editor, one or two at a time, never more than three agents in all (the author's word):
+  E4 (1.9 in the editor), E3 (the first-person picture and the form's polish: the catalog's texts through
+  the translation catalog, the name keys under Name and Description, In the Hands nested, icons in the item
+  chooser, a project's own icon texture), E6 (the Russian of the item catalog and of the check's sentences:
+  `gz-ui-world`'s `items.ru.lua`, a stub wired in), then E5. Their briefs are in the scratch (`briefs\`).
+- The catalog's allow-list lacked loose particle files (`pe`, `pg`: 1182 of the converted module): added on
+  the four sides (game `e2fc33daf`, editor `8f4fc0c0`) and in the catalog clone (local, not pushed).
+- Open on the converted project: one stray `.tga` under `gamedata\textures` (the game reads none: it goes
+  out with the converter's rule for files the game cannot read).
 - The scratch of the task (surveys, the key table, the unpacked game views) is the session's scratchpad folder
   `we\`; nothing in the repository depends on it.
