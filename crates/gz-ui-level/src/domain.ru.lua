@@ -410,7 +410,7 @@ return {
   { "Lightmap Zero Error", "Порог чёрной карты освещения" },
   { "How dark a lightmap may be to be dropped as black.", "Насколько тёмной может быть карта освещения, чтобы её отбросили как чёрную." },
   { "Streaming Cells", "Ячейки подгрузки" },
-  { "The game loads the level's picture cell by cell around the player: the size of a cell. 0 keeps the level one piece.", "Игра подгружает изображение уровня по ячейкам вокруг игрока: размер ячейки. 0 оставляет уровень одним целым." },
+  { "The game loads the level's picture cell by cell around the player: the size of a cell, 8 m or more. 0 keeps the level one piece.", "Игра подгружает изображение уровня по ячейкам вокруг игрока: размер ячейки, от 8 м. 0 оставляет уровень одним целым." },
   { "Kept Build Values", "Сохранённые параметры сборки" },
   { "Values of the build parameters no key names, kept bit for bit as an X-Ray SDK scene had them.", "Значения параметров сборки без ключей; сохраняются бит в бит, как в сцене X-Ray SDK." },
   { "Kept Build Word", "Сохранённое слово сборки" },
