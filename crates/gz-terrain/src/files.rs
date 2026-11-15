@@ -16,8 +16,8 @@ pub const MAX_BYTES: usize = 64 << 20;
 pub const MAX_REGIONS: u32 = 4096;
 pub const MAX_GRID_SIDE: u32 = 4096;
 pub const MAX_AI_EDITS: u32 = 1 << 20;
-/// x, z, old y, new y, the normal and the flags. The game's reader asks for 36 bytes an edit
-/// before it reads 32 of each (`ai_edit_bytes`): the contract's record is the 32 it reads.
+/// x, z, old y, new y, the normal and the flags: the 32 bytes of the contract's record, which
+/// the game's reader asks for and reads.
 const AI_EDIT_BYTES: usize = 32;
 
 /// A change of one AI node in place.

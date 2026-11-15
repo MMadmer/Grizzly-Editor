@@ -190,6 +190,14 @@ pub fn shot_map(sc: &Scene<'_>, p: &MapParams) -> Result<Value, CmdError> {
     let except = ids_named(sc.state, p.except.as_deref())?.unwrap_or_default();
     let highlight = ids_named(sc.state, p.highlight.as_deref())?.unwrap_or_default();
     let filter = RayFilter { kinds: RayKinds::Meshes, only: only.as_deref(), except: &except };
+    // a side under 16 px would be drawn wider than it is, at another scale than the answer says
+    let (dx, dz) = (area[2] - area[0], area[3] - area[1]);
+    if dx.min(dz) * px as f32 / dx.max(dz) < 16.0 {
+        return Err(CmdError::invalid(format!(
+            "the area is {dx:.1} x {dz:.1} m: at px={px} its short side is under 16 px - an area at most {} times as long as it is wide",
+            px / 16
+        )));
+    }
     let size = size_px(area, px);
     let k = size[0] as f32 / (area[2] - area[0]);
 

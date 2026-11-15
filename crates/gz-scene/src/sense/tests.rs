@@ -562,6 +562,8 @@ fn a_map_that_cannot_be_drawn_is_refused_in_a_sentence() {
     assert_eq!(refused(json!({ "area": [0, 0, 0.1, 5] }), "half a metre"), "invalid");
     assert_eq!(refused(json!({ "area": [0, 0, 90000, 5] }), "at most"), "invalid");
     assert_eq!(refused(json!({ "area": [0, 0, 5, 5], "grid": 0 }), "grid takes"), "invalid");
+    // a strip so narrow that its short side would be drawn wider than it is
+    assert_eq!(refused(json!({ "area": [0, 0, 2000, 5], "px": 512 }), "under 16 px"), "invalid");
     assert_eq!(refused(json!({ "area": [0, 0, 5, 5], "highlight": ["nobody"] }), "nobody"), "not_found");
     // the sizes of a rectangle that is not square
     assert_eq!(super::shot::size_px([0.0, 0.0, 10.0, 5.0], 200), [200, 100]);

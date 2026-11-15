@@ -261,13 +261,17 @@ fn picture_of(path: &Path, pictures: &mut Vec<SourcePicture>) -> usize {
     pictures.len() - 1
 }
 
+/// The corners of the largest polygon ears are cut off; a larger one is a fan.
+const EAR_CORNERS: usize = 512;
+
 /// A polygon's triangles as indices of its corners, in the polygon's own winding: ears cut off
 /// its outline as seen along its normal, so a concave face is filled where it is and nowhere
 /// else. A polygon without area, or one that crosses itself, is a fan from its first corner.
 fn ears(points: &[Vec3]) -> Vec<[usize; 3]> {
     let n = points.len();
     let fan = || (1..n.saturating_sub(1)).map(|i| [0, i, i + 1]).collect::<Vec<_>>();
-    if n <= 3 {
+    // cutting ears costs the cube of the corners: an outline of thousands is a fan
+    if n <= 3 || n > EAR_CORNERS {
         return fan();
     }
     // Newell's normal, then the plane it is longest on

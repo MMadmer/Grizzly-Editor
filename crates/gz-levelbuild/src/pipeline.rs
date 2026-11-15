@@ -1565,6 +1565,19 @@ async fn step_piece(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
         .map_err(job_err)?;
     log_lines(cx.editor, &log);
     cx.ctx.check()?;
+    // a cut with no AI map in the scene: nothing says where the level's nodes are, so none moves
+    if !edits.regions.is_empty() && cx.work.bulk.ai_map.as_ref().is_none_or(|a| a.node_count() == 0) {
+        cx.problems.push(LevelProblem {
+            step: Step::Piece,
+            code: "no_ai_map",
+            severity: Severity::Warning,
+            text: format!(
+                "The scene holds no AI map of {level}: the level's AI nodes under the terrains keep their old heights, and creatures walk the ground that is gone. Open the level's scene with its AI map and build again."
+            ),
+            object: None,
+            position: None,
+        });
+    }
     if !edits.ai_edits.is_empty() && !service::game_states(cx.editor, service::AI_EDITS).await {
         cx.problems.push(LevelProblem {
             step: Step::Piece,

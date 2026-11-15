@@ -1035,6 +1035,28 @@ async fn scene_query(ed: Arc<Editor>, p: QueryParams, _o: Origin) -> Reply {
             let y = at.y;
             let w = ((x1 - x0) / res).ceil() as u32;
             let h = ((z1 - z0) / res).ceil() as u32;
+            // every count has its cap, named: the rays a point, the rays in all, the grid's cells
+            const RAYS: usize = 64;
+            const CASTS: f64 = 1_000_000.0;
+            const CELLS: u64 = 1 << 20;
+            if rays > RAYS {
+                return Err(CmdError::invalid(format!("rays takes at most {RAYS} a point, not {rays}")));
+            }
+            let points =
+                (f64::from((x1 - x0) / step).floor() + 1.0) * (f64::from((z1 - z0) / step).floor() + 1.0);
+            if points * rays as f64 > CASTS {
+                return Err(CmdError::invalid(format!(
+                    "that is {:.0} rays: at most {CASTS:.0} - a larger step or fewer rays (step={:.2} fits these rays)",
+                    points * rays as f64,
+                    (f64::from((x1 - x0) * (z1 - z0)) * rays as f64 / CASTS).sqrt().max(0.1) * 1.05
+                )));
+            }
+            if u64::from(w) * u64::from(h) > CELLS {
+                return Err(CmdError::invalid(format!(
+                    "the grid is {w} x {h} cells: at most {CELLS} - a larger cell (cell={:.2} fits)",
+                    (f64::from((x1 - x0) * (z1 - z0)) / CELLS as f64).sqrt() * 1.05
+                )));
+            }
             let mut origins = Vec::new();
             let mut ox = x0;
             while ox <= x1 {
