@@ -575,6 +575,12 @@ fn a_model_names_its_problems_at_their_keys() {
         "return {\n  mesh = 1,\n  kind = \"dynamic\",\n  scale = 0,\n  parts = { { shape = \"box\", surface = \"s\" }, { shape = \"star\" } },\n  surfaces = {\n    { name = \"s\", texture = \"nobody\\\\has\", shader = \"bogus\", compile = \"bogus\", material = \"bogus\" },\n  },\n}\n",
     );
     d.put("m/bare.meshasset", "return { mesh = 1, parts = { { shape = \"box\" } } }\n");
+    // a source that is there, outside the project; and one named by a drive, which is no path
+    let outside = d.0.with_file_name(format!("gz-media-outside-{}.obj", std::process::id()));
+    std::fs::write(&outside, "v 0 0 0\nv 1 0 0\nv 0 0 1\nf 1 2 3\n").unwrap();
+    let up = format!("../../{}", outside.file_name().unwrap().to_string_lossy());
+    d.put("m/out.meshasset", format!("return {{ mesh = 1, source = \"{up}\" }}\n"));
+    d.put("m/drive.meshasset", "return { mesh = 1, source = \"C:/art/hut.glb\" }\n");
     d.put("rawdata/textures/mine/own.tga", "x");
     let index = index::scan(&d.0);
     let g = game(true);
@@ -582,6 +588,14 @@ fn a_model_names_its_problems_at_their_keys() {
     let bare = issues_of(&d, "m/bare.meshasset", MediaKind::Model, &index, &g);
     assert_eq!(codes(&bare), ["M112"]);
     assert!(bare[0].is_error() && gz_luadata::path::show(&bare[0].path) == "surfaces", "{bare:?}");
+    let out = issues_of(&d, "m/out.meshasset", MediaKind::Model, &index, &g);
+    let _ = std::fs::remove_file(&outside);
+    assert_eq!(codes(&out), ["M113"], "{out:?}");
+    assert!(out[0].is_error() && gz_luadata::path::show(&out[0].path) == "source");
+    assert_eq!(codes(&issues_of(&d, "m/drive.meshasset", MediaKind::Model, &index, &g)), ["M101"]);
+    assert!(crate::files::inside(&d.0, &d.0.join("m").join("a.glb")));
+    assert!(!crate::files::inside(&d.0, &d.0.with_file_name("elsewhere").join("a.glb")));
+    assert!(!crate::files::inside(&d.0, &d.0));
     let gone = issues_of(&d, "m/gone.meshasset", MediaKind::Model, &index, &g);
     assert_eq!(codes(&gone), ["M101"]);
     assert_eq!(gz_luadata::path::show(&gone[0].path), "source");

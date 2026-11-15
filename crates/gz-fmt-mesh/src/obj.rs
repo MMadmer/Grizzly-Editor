@@ -89,8 +89,11 @@ fn read_mtl(text: &str, dir: &Path, into: &mut HashMap<String, Option<PathBuf>>)
                 current = Some(name);
             }
             Some(key) if key.eq_ignore_ascii_case("map_Kd") => {
-                if let (Some(name), Some(file)) = (&current, map_file(&tokens[1..])) {
-                    into.insert(name.clone(), Some(dir.join(file)));
+                // a picture named by a rooted path (the artist's own disk) is no picture of it
+                if let (Some(name), Some(file)) = (&current, map_file(&tokens[1..]))
+                    && let Some(path) = crate::beside(dir, &file)
+                {
+                    into.insert(name.clone(), Some(path));
                 }
             }
             _ => {}
@@ -216,13 +219,14 @@ pub(crate) fn from_text(text: &str, dir: &Path, default_name: &str) -> Result<Me
             "usemtl" => material = args.join(" "),
             "mtllib" => {
                 let whole = args.join(" ");
-                let files: Vec<String> = if dir.join(&whole).is_file() {
+                let files: Vec<String> = if crate::beside(dir, &whole).is_some_and(|p| p.is_file()) {
                     vec![whole]
                 } else {
                     args.iter().map(|s| (*s).to_owned()).collect()
                 };
                 for f in files {
-                    let path = dir.join(&f);
+                    // a library named by a rooted path is not followed
+                    let Some(path) = crate::beside(dir, &f) else { continue };
                     match crate::read_file(&path) {
                         Ok(bytes) => {
                             let mtl_dir = path.parent().unwrap_or(dir).to_owned();

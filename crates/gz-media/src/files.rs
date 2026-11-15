@@ -35,13 +35,15 @@ pub fn fnv(mut h: u64, bytes: &[u8]) -> u64 {
     h
 }
 
-/// A file name of the asset's own text, relative to its folder: either slash, no climbing out
-/// of the project is checked by the caller.
+/// A file name of the asset's own text, relative to its folder: either slash. A name is never
+/// rooted - a drive or a server in it is no part of the path, so `C:/x` and `\\host\x` are
+/// files beside the asset like any other -, and whether `..` climbs out of the project is the
+/// caller's check ([`inside`]).
 #[must_use]
 pub fn beside(asset: &Path, file: &str) -> PathBuf {
     let dir = asset.parent().unwrap_or(Path::new(""));
     let mut p = dir.to_path_buf();
-    for part in file.split(['/', '\\']).filter(|s| !s.is_empty() && *s != ".") {
+    for part in file.split(['/', '\\']).filter(|s| !s.is_empty() && *s != "." && !s.contains(':')) {
         if part == ".." {
             p.pop();
         } else {
@@ -49,6 +51,16 @@ pub fn beside(asset: &Path, file: &str) -> PathBuf {
         }
     }
     p
+}
+
+/// Whether `path` lies in the project at `root`, as both are written (any case): a project names
+/// nothing outside it.
+#[must_use]
+pub fn inside(root: &Path, path: &Path) -> bool {
+    let lower = |p: &Path| p.to_string_lossy().replace('/', "\\").to_lowercase();
+    let (root, path) = (lower(root), lower(path));
+    let root = root.trim_end_matches('\\');
+    path.strip_prefix(root).is_some_and(|rest| rest.starts_with('\\'))
 }
 
 /// The source of an asset: the file `source` names, else the file with the asset's own name and

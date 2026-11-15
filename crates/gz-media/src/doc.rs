@@ -45,7 +45,8 @@ const CODES: &str = "\
 | `M109` | error | A value outside what its key takes. |\n\
 | `M110` | error | `parts` together with `source`. |\n\
 | `M111` | warning | What the model cannot take: `rotate` on a model with bones, a part that makes no faces. |\n\
-| `M112` | error | A surface that wears no texture: no level build and no model of the game takes it. |\n";
+| `M112` | error | A surface that wears no texture: no level build and no model of the game takes it. |\n\
+| `M113` | error | A source that lies outside the project: a project names nothing outside itself. |\n";
 
 /// The reference of a kind, as Markdown.
 #[must_use]

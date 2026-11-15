@@ -61,6 +61,20 @@ pub const UNREADABLE: &str = "M102";
 pub const NO_BONES: &str = "M108";
 pub const PARTS_AND_SOURCE: &str = "M110";
 pub const CANNOT: &str = "M111";
+pub const OUTSIDE: &str = "M113";
+
+/// The source of an asset when it lies in the project; a failure that names it when it does
+/// not: a project names nothing outside itself.
+fn in_project(root: &Path, source: PathBuf, at: &'static str) -> Result<PathBuf, Failure> {
+    if files::inside(root, &source) {
+        return Ok(source);
+    }
+    Err(Failure::new(
+        OUTSIDE,
+        at,
+        format!("the source lies outside the project: {} (asset.import copies a file in)", source.display()),
+    ))
+}
 
 fn read_text(abs: &Path, rel: &str) -> Result<String, Failure> {
     let bytes = std::fs::read(abs).map_err(|e| {
@@ -115,6 +129,7 @@ pub fn model(root: &Path, rel: &str) -> Result<Model, Failure> {
                 ),
             )
         })?;
+        let source = in_project(root, source, if has_source { "source" } else { "" })?;
         let mut all = vec![source.clone()];
         all.extend(files::dependencies(&source));
         stamp = stamp_files(stamp, &all);
@@ -242,6 +257,8 @@ fn surfaces(object: &mut Object, asset: &ModelAsset, source: Option<&MeshSource>
             continue;
         };
         let asset_of_picture = match &pic.data {
+            // a picture the document names outside the project is none of its textures
+            PictureData::File(p) if !files::inside(root, p) => continue,
             PictureData::File(p) => p.with_extension("texasset"),
             PictureData::Embedded(_) => {
                 let stem = abs.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -433,6 +450,7 @@ pub fn texture_source(root: &Path, rel: &str) -> Result<(TextureAsset, PathBuf, 
             ),
         )
     })?;
+    let source = in_project(root, source, if has_source { "source" } else { "" })?;
     Ok((asset, source, issues))
 }
 
@@ -466,5 +484,6 @@ pub fn sound(root: &Path, rel: &str) -> Result<(SoundAsset, PathBuf, Vec<Issue>)
             ),
         )
     })?;
+    let source = in_project(root, source, if has_source { "source" } else { "" })?;
     Ok((asset, source, issues))
 }

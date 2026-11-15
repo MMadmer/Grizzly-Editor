@@ -160,6 +160,28 @@ pub(crate) fn file_name(path: &Path) -> String {
     path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
 }
 
+/// A file a document names, beside the document: a relative name, either slash. `None` for a
+/// name that is rooted or carries a prefix - a drive, a server (`C:\x`, `/x`, `\\host\share`): a
+/// model names its buffers, its material library and its pictures relative to itself, and a
+/// name that points at a place of the machine or the network is not followed (opening one
+/// would read whatever is there, or ask a server for it).
+pub(crate) fn beside(dir: &Path, name: &str) -> Option<PathBuf> {
+    let name = name.trim();
+    let rooted = name.starts_with(['/', '\\']) || name.split(['/', '\\']).any(|part| part.contains(':'));
+    if name.is_empty() || rooted {
+        return None;
+    }
+    let mut path = dir.to_path_buf();
+    for part in name.split(['/', '\\']).filter(|s| !s.is_empty() && *s != ".") {
+        if part == ".." {
+            path.pop();
+        } else {
+            path.push(part);
+        }
+    }
+    Some(path)
+}
+
 /// Reads a whole file, refusing one larger than [`MAX_FILE_BYTES`].
 pub(crate) fn read_file(path: &Path) -> Result<Vec<u8>> {
     let io = |e: std::io::Error| MeshError::Io { path: path.to_owned(), reason: gz_base::io_reason(&e) };

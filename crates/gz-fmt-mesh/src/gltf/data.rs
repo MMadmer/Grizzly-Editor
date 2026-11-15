@@ -66,7 +66,8 @@ pub(crate) fn percent_decode(s: &str) -> Vec<u8> {
     out
 }
 
-/// A relative URI as a path beside the document; `None` for a URI of another scheme.
+/// A relative URI as a path beside the document; `None` for a URI of another scheme, and for
+/// one that names a place of the machine or the network ([`crate::beside`]).
 pub(crate) fn file_of(dir: &Path, uri: &str) -> Option<PathBuf> {
     let scheme = uri.split_once(':').map(|(s, _)| s);
     // a drive letter is no scheme
@@ -75,7 +76,7 @@ pub(crate) fn file_of(dir: &Path, uri: &str) -> Option<PathBuf> {
     {
         return None;
     }
-    Some(dir.join(String::from_utf8_lossy(&percent_decode(uri)).as_ref()))
+    crate::beside(dir, String::from_utf8_lossy(&percent_decode(uri)).as_ref())
 }
 
 fn too_short(name: &str, have: usize, need: usize) -> Bad {

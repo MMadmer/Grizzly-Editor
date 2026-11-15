@@ -13,6 +13,7 @@
 //! | `M110` | `parts` together with `source` |
 //! | `M111` | what the model cannot take (warning) |
 //! | `M112` | a surface that wears no texture |
+//! | `M113` | a source that lies outside the project |
 
 use std::path::Path;
 use std::sync::Arc;
@@ -201,7 +202,14 @@ pub fn issues(
                     }
                     if let Some(src) = t.asset.bump.as_ref().and_then(|b| b.source.as_deref()) {
                         let p = crate::files::beside(&t.source.with_file_name("x"), src);
-                        if !p.is_file() {
+                        if !crate::files::inside(root, &p) {
+                            out.push(Issue::new(
+                                resolve::OUTSIDE,
+                                Severity::Error,
+                                vec![Seg::key("bump"), Seg::key("source")],
+                                format!("the bump picture lies outside the project: {src}"),
+                            ));
+                        } else if !p.is_file() {
                             out.push(Issue::new(
                                 resolve::MISSING,
                                 Severity::Error,

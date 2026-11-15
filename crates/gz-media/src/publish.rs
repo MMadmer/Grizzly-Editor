@@ -231,6 +231,9 @@ fn bake(root: &Path, e: &Entry, hits: &mut usize) -> Result<Baked, String> {
             out.push((format!("{base}.dds"), dds));
             if let Some(src) = t.asset.bump.as_ref().and_then(|b| b.source.as_deref()) {
                 let abs = files::beside(&e.path.to_fs(root), src);
+                if !files::inside(root, &abs) {
+                    return Err(format!("the bump picture lies outside the project: {src}"));
+                }
                 let from_normal = t.asset.bump.as_ref().and_then(|b| b.from) == Some(1);
                 let depth = t.params.bump_virtual_height;
                 let pair = std::cell::OnceCell::new();

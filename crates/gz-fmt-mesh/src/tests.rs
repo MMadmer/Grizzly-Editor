@@ -740,6 +740,51 @@ fn data_uris_and_percent_names_decode() {
     assert!(crate::gltf::file_of(Path::new("d"), "https://x/y.bin").is_none());
     assert_eq!(
         crate::gltf::file_of(Path::new("d"), "sub/a%20b.bin"),
-        Some(Path::new("d").join("sub/a b.bin"))
+        Some(Path::new("d").join("sub").join("a b.bin"))
     );
+}
+
+/// A document names its files relative to itself: a name that points at a place of the machine
+/// or the network is never turned into a path, so nothing there is opened.
+#[test]
+fn a_document_s_file_names_never_leave_for_a_drive_or_a_server() {
+    let dir = Path::new("models").join("hut");
+    assert_eq!(crate::beside(&dir, "tex\\a.png"), Some(dir.join("tex").join("a.png")));
+    assert_eq!(crate::beside(&dir, "./a.bin"), Some(dir.join("a.bin")));
+    assert_eq!(
+        crate::beside(&dir, "../shared/a.png"),
+        Some(Path::new("models").join("shared").join("a.png"))
+    );
+    for rooted in [
+        "C:\\art\\a.png",
+        "c:/art/a.png",
+        "C:a.png",
+        "/etc/a",
+        "\\a",
+        "\\\\host\\share\\a.bin",
+        "//host/share/a.bin",
+        "",
+        "  ",
+    ] {
+        assert_eq!(crate::beside(&dir, rooted), None, "{rooted}");
+        assert_eq!(crate::gltf::file_of(&dir, rooted), None, "{rooted}");
+    }
+    // an OBJ whose material library names a picture on the artist's disk: the surface is there,
+    // its picture is not followed
+    let tmp = std::env::temp_dir().join(format!("gz-fmt-mesh-rooted-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    write(&tmp, "a.mtl", "newmtl wall\nmap_Kd C:\\art\\wall.png\n");
+    let obj = write(&tmp, "a.obj", "mtllib a.mtl\nv 0 0 0\nv 1 0 0\nv 0 0 1\nusemtl wall\nf 1 2 3\n");
+    let src = read_obj(&obj).expect("the model reads");
+    assert_eq!(src.object.surfaces.len(), 1);
+    assert!(src.pictures.is_empty(), "{:?}", src.pictures.iter().map(|p| &p.name).collect::<Vec<_>>());
+    // a glTF buffer on a server is refused in a sentence, with no file asked for
+    let doc = json!({
+        "asset": { "version": "2.0" },
+        "buffers": [{ "byteLength": 36, "uri": "//host/share/a.bin" }],
+    });
+    let gltf = write(&tmp, "a.gltf", doc.to_string());
+    assert!(read_gltf(&gltf).is_err());
+    let _ = std::fs::remove_dir_all(&tmp);
 }

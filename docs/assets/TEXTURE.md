@@ -81,3 +81,4 @@ return {
 | `M110` | error | `parts` together with `source`. |
 | `M111` | warning | What the model cannot take: `rotate` on a model with bones, a part that makes no faces. |
 | `M112` | error | A surface that wears no texture: no level build and no model of the game takes it. |
+| `M113` | error | A source that lies outside the project: a project names nothing outside itself. |
