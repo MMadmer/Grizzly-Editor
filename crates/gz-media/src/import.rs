@@ -131,6 +131,127 @@ pub fn plan(from: &[PathBuf], to: Option<&RelPath>, module: &str) -> Plan {
     plan
 }
 
+/// A sound brought in as a sound asset ([`sound_asset`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoundImport {
+    /// The sound asset, project-relative (`/`).
+    pub asset: String,
+    /// The name the game knows it by.
+    pub name: String,
+    /// The asset was written now; false: it was there.
+    pub written: bool,
+}
+
+/// Music brought in as a sound asset, the way `asset.import` brings a sound: a file of the
+/// project stays where it lies, one from outside is copied into `sounds\` (the same bytes there
+/// already are that file), and the asset is written beside it unless one is there over it. The
+/// name is the module's `<module id>\<file name>`, which no sound of the game or of another
+/// module has; one that `taken` (the names the project's sound assets publish) or another file's
+/// asset holds gets `_2`, `_3`, ... A sound asset of the project given is that sound. `guard`
+/// passes every write first. Blocking.
+pub fn sound_asset(
+    root: &Path,
+    from: &Path,
+    module: &str,
+    taken: &dyn Fn(&str) -> bool,
+    guard: Option<&gz_editor::fsx::WriteGuard>,
+) -> Result<SoundImport, String> {
+    let name = leaf(from);
+    let write = |abs: &Path, bytes: &[u8]| -> Result<(), String> {
+        if let Some(g) = guard {
+            g.check(abs).map_err(|e| e.0)?;
+        }
+        if let Some(dir) = abs.parent() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| format!("{}: {}", dir.display(), gz_base::io_reason(&e)))?;
+        }
+        gz_editor::fsx::write_atomic(abs, bytes).map_err(|e| format!("{name}: {}", gz_base::io_reason(&e)))
+    };
+    let rel_of = |abs: &Path| {
+        files::rel_of(root, abs)
+            .map(|r| r.as_str().to_owned())
+            .ok_or_else(|| format!("{name}: the file cannot be a file of the project"))
+    };
+    if MediaKind::of_file(&name) == Some(MediaKind::Sound) {
+        if !files::inside(root, from) {
+            return Err(format!(
+                "{name}: a sound asset of another folder - bring in its sound file (.wav, .ogg) instead"
+            ));
+        }
+        let text =
+            std::fs::read_to_string(from).map_err(|e| format!("{name}: {}", gz_base::io_reason(&e)))?;
+        let asset = rel_of(from)?;
+        let value = gz_luadata::parse(&text).map_err(|e| format!("{name}: {}", e.message))?;
+        let (a, _) = crate::sound::SoundAsset::from_value(&value);
+        return Ok(SoundImport {
+            name: files::published_name(a.name.as_deref(), &asset, module),
+            asset,
+            written: false,
+        });
+    }
+    if files::kind_of_source(&name) != Some(MediaKind::Sound) {
+        return Err(format!("{name}: not a sound (.wav, .ogg)"));
+    }
+    if !from.is_file() {
+        return Err(format!("{}: there is no such file", from.display()));
+    }
+    // where the sound lies in the project
+    let source = if files::inside(root, from) {
+        from.to_path_buf()
+    } else {
+        let bytes = std::fs::read(from).map_err(|e| format!("{name}: {}", gz_base::io_reason(&e)))?;
+        let folder = root.join(default_folder(MediaKind::Sound));
+        let ext = from.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+        let base = stem(from);
+        let mut n = 1u32;
+        loop {
+            let candidate =
+                if n == 1 { folder.join(&name) } else { folder.join(format!("{base}_{n}.{ext}")) };
+            if !candidate.exists() {
+                write(&candidate, &bytes)?;
+                break candidate;
+            }
+            // the same file there already is the one to use
+            if std::fs::read(&candidate).is_ok_and(|there| there == bytes) {
+                break candidate;
+            }
+            n += 1;
+            if n > 10_000 {
+                return Err(format!("{name}: the file cannot be copied into the project"));
+            }
+        }
+    };
+    let file = leaf(&source);
+    let base = stem(&source);
+    let dir = source.parent().unwrap_or(root).to_path_buf();
+    let mut n = 1u32;
+    loop {
+        let s = if n == 1 { base.clone() } else { format!("{base}_{n}") };
+        let abs = dir.join(format!("{s}{}", MediaKind::Sound.extension()));
+        let asset = rel_of(&abs)?;
+        if abs.is_file() {
+            // an asset there already over this very sound is the sound
+            let key = |p: &Path| p.to_string_lossy().replace('/', "\\").to_lowercase();
+            if let Ok((a, src, _)) = crate::resolve::sound(root, &asset)
+                && key(&src) == key(&source)
+            {
+                let name = files::published_name(a.name.as_deref(), &asset, module);
+                return Ok(SoundImport { asset, name, written: false });
+            }
+        } else {
+            let published = files::published_name(None, &asset, module);
+            if !taken(&published) {
+                write(&abs, &asset_text(MediaKind::Sound, &file, Vec::new()))?;
+                return Ok(SoundImport { asset, name: published, written: true });
+            }
+        }
+        n += 1;
+        if n > 10_000 {
+            return Err(format!("{name}: no name is free for its sound asset"));
+        }
+    }
+}
+
 /// A model's files beside it and the texture assets of its pictures; answers its `surfaces`.
 fn model_extras(plan: &mut Plan, src: &Path, folder: &RelPath, module: &str) -> Vec<Value> {
     let dir = src.parent().unwrap_or(Path::new(""));

@@ -113,32 +113,49 @@ impl Default for Screen {
     }
 }
 
+/// A track of the music: a sound by its name, or a plain file. Whether it is copyrighted is its
+/// sound's to say (the sound asset, else the game's own list) - a track carries no mark.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Track {
     pub id: String,
+    /// The sound it plays, by its game name (`sounds\<name>.ogg`); wins over `file`.
+    pub sound: String,
+    /// A plain `.ogg` of the project, project-relative: a file has no description.
     pub file: String,
     /// The shuffles it joins: the surfaces' and [`RADIO`].
     pub play: u32,
     pub weight: f32,
     pub volume: f32,
-    /// Not played while the game's streamer mode is on.
-    pub copyrighted: bool,
-    /// What plays instead in the streamer mode: a track id of the module or a sound name;
-    /// empty: nothing.
-    pub streamer: String,
+    /// The lines of its section no key of a track reads (the mark a track carried before it was
+    /// its sound's among them), in their order: written back as they are.
+    pub extra: Vec<(String, String)>,
 }
 
 impl Default for Track {
     fn default() -> Self {
         Self {
             id: String::new(),
+            sound: String::new(),
             file: String::new(),
             play: 0,
             weight: 1.0,
             volume: 1.0,
-            copyrighted: false,
-            streamer: String::new(),
+            extra: Vec::new(),
         }
+    }
+}
+
+impl Track {
+    /// What the track plays: its sound when it names one.
+    #[must_use]
+    pub fn is_sound(&self) -> bool {
+        !self.sound.trim().is_empty()
+    }
+
+    /// The value of a line no key reads, by its key.
+    #[must_use]
+    pub fn extra(&self, key: &str) -> Option<&str> {
+        self.extra.iter().rev().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
     }
 }
 
@@ -381,13 +398,12 @@ fn parse_screen_key(s: &mut Screen, key: &str, val: &str) {
 
 fn parse_track_key(t: &mut Track, key: &str, val: &str) {
     match key {
+        "sound" => t.sound = val.to_owned(),
         "file" => t.file = val.to_owned(),
         "play" => t.play = plays(val),
         "weight" => t.weight = atof(val) as f32,
         "volume" => t.volume = atof(val) as f32,
-        "copyrighted" => t.copyrighted = matches!(val, "true" | "1" | "yes" | "on"),
-        "streamer" => t.streamer = val.to_owned(),
-        _ => {}
+        _ => t.extra.push((key.to_owned(), val.to_owned())),
     }
 }
 
@@ -567,7 +583,13 @@ impl Screens {
     /// The lines of a track's section.
     #[must_use]
     pub fn track_lines(t: &Track) -> Vec<String> {
-        let mut out = vec![row("file", &t.file)];
+        let mut out = Vec::new();
+        if !t.sound.is_empty() {
+            out.push(row("sound", &t.sound));
+        }
+        if !t.file.is_empty() || t.sound.is_empty() {
+            out.push(row("file", &t.file));
+        }
         if t.play != 0 {
             out.push(row("play", &surfaces_text(t.play)));
         }
@@ -577,12 +599,7 @@ impl Screens {
         if t.volume != 1.0 {
             out.push(row("volume", &number(t.volume)));
         }
-        if t.copyrighted {
-            out.push(row("copyrighted", "true"));
-        }
-        if !t.streamer.is_empty() {
-            out.push(row("streamer", &t.streamer));
-        }
+        out.extend(t.extra.iter().map(|(k, v)| row(k, v)));
         out
     }
 
@@ -682,17 +699,11 @@ impl Screens {
         unique_id(base, |id| self.playlist(id).is_some())
     }
 
-    /// Takes a track out, and out of every screen and playlist that names it, and out of every
-    /// track that plays it instead.
+    /// Takes a track out, and out of every screen and playlist that names it.
     pub fn remove_track(&mut self, id: &str) {
         self.tracks.retain(|t| t.id != id);
         for p in &mut self.playlists {
             p.tracks.retain(|t| t != id);
-        }
-        for t in &mut self.tracks {
-            if t.streamer == id {
-                t.streamer.clear();
-            }
         }
         for d in &mut self.screens {
             d.tracks.retain(|t| t != id);

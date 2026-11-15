@@ -8,9 +8,13 @@
   D  problems: a missing file blocks the build, an empty layer does not; the build ships what screens name
   U  the tab: opens, both surfaces, nothing escapes, a drop at a point of the window lands where it should
   G  Disable Game Updates: the build writes the patch, and turning it off takes it away again
-  R  the radio: a track on the radio and copyrighted, what plays instead (the picker holds no copyrighted sound),
-     playlists made, reordered, a track taken out, removed whole; the refusals; a playlist's missing track at its line
-  S  a sound asset: copyrighted and streamer checked (a copyrighted replacement is an error), shipped with its keys
+  R  the radio: music brought in is a sound asset and the track says sound; the mark is the sound's - screens.set
+     refuses copyrighted and streamer naming the asset, and a track's copyrighted in screens.info follows the asset's
+     file; Make It a Sound on a plain-file track (its old mark carried into the asset); a sound nobody has is an
+     error and a hand-written copyrighted a warning, each at its line; playlists made, reordered, a track taken out,
+     removed whole; the refusals; a playlist's missing track at its line
+  S  a sound asset: copyrighted and streamer checked (a copyrighted replacement is an error); the module build ships
+     the baked sound with its description holding both keys and a mod.ltx whose track says sound
   T  the tab: a copyrighted track and a playlist audited and pictured at both sizes, English and Russian, dark and light
 
     python tools/qa/test_screens.py --project <project> [--shots <dir>]
@@ -50,6 +54,23 @@ def text(path: str) -> str:
 
 def screens(answer: dict) -> dict:
     return {s["id"]: s for s in answer.get("screens", [])}
+
+
+def listing(folder: str) -> list:
+    """What a folder holds, sorted; nothing when it is not there."""
+    return sorted(os.listdir(folder)) if os.path.isdir(folder) else []
+
+
+def module_id(mod: str) -> str:
+    """`[module] id` of a mod.ltx."""
+    section = ""
+    for line in text(mod).splitlines():
+        line = line.split(";")[0].strip()
+        if line.startswith("["):
+            section = line.strip("[]").strip().lower()
+        elif section == "module" and line.split("=")[0].strip() == "id":
+            return line.split("=", 1)[1].strip()
+    return ""
 
 
 def run(ctx: qa.Run) -> None:
@@ -109,24 +130,31 @@ def run(ctx: qa.Run) -> None:
                   "A a word the game would drop is refused by name: " + says, a)
 
         # ---- B: files
-        ogg = write(os.path.join(outside, "rain theme.ogg"), b"OggS")
-        a = cmd("screens.set", action="track_add", id="rain", file=ogg, play="loading", volume=0.7)
+        modid = module_id(mod)
+        music = write(os.path.join(outside, "rain theme.wav"), wav())
+        a = cmd("screens.set", action="track_add", id="rain", file=music, play="loading", volume=0.7)
         t = next((t for t in a.get("tracks", []) if t["id"] == "rain"), {})
-        check(t.get("file") == "screens\\rain theme.ogg" and os.path.exists(os.path.join(project, "screens", "rain theme.ogg")), "B a file from outside is copied into the project", t)
+        check(t.get("sound") == modid + "\\rain theme" and t.get("plays") == "sound" and t.get("file") == ""
+              and t.get("asset") == "sounds/rain theme.sndasset"
+              and os.path.exists(os.path.join(project, "sounds", "rain theme.wav"))
+              and os.path.exists(os.path.join(project, "sounds", "rain theme.sndasset")),
+              "B music from outside is copied in as a sound asset under the module's name, and the track says sound", t)
+        check("sound             = %s\\rain theme" % modid in text(mod), "B mod.ltx names the track's sound", text(mod)[-300:])
+        ogg = write(os.path.join(outside, "song.ogg"), b"OggS")
         a = cmd("screens.set", action="screen_set", id="night", music="rain")
         check(screens(a)["night"]["music"] == "tracks" and screens(a)["night"]["tracks"] == ["rain"], "A a track is tied to a screen", screens(a)["night"])
 
         # a track takes a sound: a picture is refused before anything is converted or written
         before = text(mod)
         png(os.path.join(outside, "title.png"))
-        shots_before = sorted(os.listdir(os.path.join(project, "screens")))
+        shots_before = listing(os.path.join(project, "screens"))
         a = cmd("screens.set", action="track_add", id="art", file=os.path.join(outside, "title.png"))
-        check(not a.get("ok") and "a track takes an .ogg sound, not title.png" in a.get("error", ""), "B track_add of a picture is refused in a sentence", a)
-        check(text(mod) == before and sorted(os.listdir(os.path.join(project, "screens"))) == shots_before
+        check(not a.get("ok") and "a track takes music (.ogg, .wav) or a sound asset, not title.png" in a.get("error", ""), "B track_add of a picture is refused in a sentence", a)
+        check(text(mod) == before and listing(os.path.join(project, "screens")) == shots_before
               and not os.path.exists(os.path.join(project, "screens", "title.dds")),
-              "B nothing was written and nothing converted or copied", sorted(os.listdir(os.path.join(project, "screens"))))
+              "B nothing was written and nothing converted or copied", listing(os.path.join(project, "screens")))
         a = cmd("screens.set", action="track_set", id="rain", file=os.path.join(outside, "title.png"))
-        check(not a.get("ok") and "an .ogg sound" in a.get("error", "") and text(mod) == before,
+        check(not a.get("ok") and "a track takes music" in a.get("error", "") and text(mod) == before,
               "B track_set of a picture is refused too", a)
         a = cmd("screens.set", action="layer_add", id="night", file=ogg)
         check(not a.get("ok") and "music goes into a track" in a.get("error", "") and text(mod) == before,
@@ -177,7 +205,7 @@ def run(ctx: qa.Run) -> None:
         if check(built.get("ok"), "D the build takes them", built):
             module = built.get("module_dir") or built.get("target") or ""
             found = [os.path.join(r, f) for r, _, fs in os.walk(target) for f in fs]
-            check(any(p.endswith(os.path.join("screens", "rain theme.ogg")) for p in found), "D the track is shipped", module)
+            check(any(p.endswith(os.path.join("sounds", modid, "rain theme.ogg")) for p in found), "D the track's sound is baked and shipped", module)
             check(any(p.endswith(os.path.join("screens", "qa_fog.ps")) for p in found) and any(p.endswith(os.path.join("screens", "qa_fog.s")) for p in found), "D both halves of the shader are shipped")
 
         # ---- U: the tab
@@ -244,57 +272,101 @@ def wav() -> bytes:
     return b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVEfmt " + struct.pack("<I", 16) + fmt + b"data" + struct.pack("<I", len(data)) + data
 
 
+def set_lines(path: str, old: str, new: str) -> None:
+    """Rewrites a text file the way an agent edits it: one replacement, the rest kept."""
+    body = text(path)
+    assert old in body, (old, body[-300:])
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(body.replace(old, new, 1))
+
+
+def problems_at(path: str, code: str) -> list:
+    return [p for p in cmd("asset.check", path=path).get("problems", []) if p.get("code") == code]
+
+
 def phase_r(project: str, outside: str, mod: str) -> None:
-    """R  the radio: a track plays on the radio and is copyrighted, what plays instead, playlists, the refusals."""
-    night = write(os.path.join(outside, "night road.ogg"), b"OggS night")
-    calm = write(os.path.join(outside, "calm.ogg"), b"OggS calm")
-    loud = write(os.path.join(outside, "loud.ogg"), b"OggS loud")
+    """R  the radio: a track is a sound, the mark is the sound's, Make It a Sound, playlists, the refusals."""
+    modid = module_id(mod)
+    night = write(os.path.join(outside, "night road.wav"), wav())
+    calm = write(os.path.join(outside, "calm.wav"), wav())
     a = cmd("screens.set", action="track_add", id="night", file=night, play="menu,radio")
-    a = cmd("screens.set", action="track_set", id="night", copyrighted=True)
     t = tracks(a).get("night", {})
-    check(a.get("ok") and t.get("play") == "menu,radio" and t.get("copyrighted") is True,
-          "R a track plays on the menu and the radio and is copyrighted", t)
+    check(a.get("ok") and t.get("play") == "menu,radio" and t.get("sound") == modid + "\\night road"
+          and t.get("copyrighted") is False, "R a track plays on the menu and the radio, and names its sound", t)
     body = text(mod)
-    check("[track.night]" in body and "play              = menu, radio" in body and "copyrighted       = true" in body,
-          "R both reach mod.ltx", body[-400:])
+    check("[track.night]" in body and "play              = menu, radio" in body and "copyrighted" not in body,
+          "R it reaches mod.ltx, no mark of its own", body[-400:])
     info = cmd("screens.info")
     check("night" in info.get("radio", {}).get("tracks", []) and info["radio"].get("music") == "mix",
           "R screens.info names the radio's tracks", info.get("radio"))
-    cmd("screens.set", action="track_add", id="calm", file=calm, play="radio")
-    cmd("screens.set", action="track_add", id="loud", file=loud, play="radio", copyrighted=True)
+    a = cmd("screens.set", action="track_add", id="calm", file=calm, play="radio")
+    calm_name = tracks(a).get("calm", {}).get("sound", "")
+
+    # the mark is the sound's: refused in a sentence naming the asset to edit, nothing written
+    before = text(mod)
+    for params in ({"copyrighted": True}, {"streamer": calm_name}):
+        a = cmd("screens.set", action="track_set", id="night", **params)
+        check(not a.get("ok") and "is no key of a track" in a.get("error", "")
+              and "sounds/night road.sndasset" in a.get("error", "") and text(mod) == before,
+              "R screens.set %s= is refused, naming the sound asset" % list(params)[0], a.get("error"))
+    # ticked in the asset (an agent edits the file), read back from the track
+    asset = os.path.join(project, "sounds", "night road.sndasset")
+    set_lines(asset, "  snd = 1,\n", "  snd = 1,\n  copyrighted = true,\n  streamer = \"%s\",\n" % calm_name.replace("\\", "\\\\"))
+    t = tracks(cmd("screens.info")).get("night", {})
+    check(t.get("copyrighted") is True and t.get("streamer") == calm_name and t.get("asset") == "sounds/night road.sndasset",
+          "R a track's copyrighted in screens.info follows its sound asset's file", t)
 
     # what the game would drop is refused by name, and nothing is written
     before = text(mod)
     for params, says in (({"action": "track_set", "id": "night", "play": "radio,tv"}, "play takes loading, menu, pause, radio"),
-                         ({"action": "track_set", "id": "calm", "streamer": "night"}, "is not copyrighted"),
-                         ({"action": "track_set", "id": "night", "streamer": "night"}, "cannot play instead of itself"),
-                         ({"action": "track_set", "id": "night", "streamer": "loud"}, "is copyrighted itself"),
                          ({"action": "policy", "surface": "radio", "music": "sometimes"}, "music takes only or mix"),
                          ({"action": "playlist_add", "title": "X", "tracks": ["night", "ghost"]}, "there is no track 'ghost'"),
                          ({"action": "playlist_add", "title": "X", "order": "random"}, "order takes shuffle or list")):
         a = cmd("screens.set", **params)
         check(not a.get("ok") and says in a.get("error", "") and text(mod) == before,
               "R refused by name, nothing written: " + says, a.get("error"))
-    a = cmd("screens.set", action="track_set", id="night", streamer="qa_nowhere\\no_such_sound")
-    if a.get("ok"):
-        print("note: no game is linked, so a sound nobody has cannot be told apart", flush=True)
-        cmd("screens.set", action="track_set", id="night", streamer="")
+    a = cmd("screens.set", action="track_set", id="night", sound="qa_nowhere\\no_such_sound")
+    linked = not a.get("ok")
+    if linked:
+        check("nobody has the sound" in a.get("error", "") and text(mod) == before, "R a sound nobody has is refused", a.get("error"))
     else:
-        check("nobody's sound" in a.get("error", "") and text(mod) == before, "R a replacement nobody has is refused", a.get("error"))
+        print("note: no game is linked, so a sound nobody has cannot be told apart", flush=True)
+        cmd("screens.set", action="track_set", id="night", sound=modid + "\\night road")
 
-    # a replacement without the mark is taken; the picker offers no copyrighted sound
-    a = cmd("screens.set", action="track_set", id="night", streamer="calm")
-    check(a.get("ok") and tracks(a)["night"].get("streamer") == "calm" and "streamer          = calm" in text(mod),
-          "R a track without the mark plays instead", a.get("error"))
-    v = cmd("screens.view", open=True, track="night", show="streamer")
-    picker = v.get("picker") or {}
-    ids = [r["id"] for r in picker.get("rows", [])]
-    check(v.get("ok") and "calm" in picker.get("tracks", []) and "night" not in ids and "loud" not in picker.get("tracks", []),
-          "R the picker offers the tracks without the mark, never a copyrighted one", qa.short(picker))
-    check(not any(r["id"].lower().startswith(("music\\radio\\", "radio\\01\\")) for r in picker.get("rows", [])),
-          "R the picker offers none of the game's own copyrighted music", qa.short(ids[:20]))
-    a = cmd("screens.view", track="calm", show="streamer")
-    check(not a.get("ok"), "R a track that is not copyrighted has no Plays Instead to put up", qa.short(a))
+    # written by hand: a track that is a plain file with the mark it had, one whose sound nobody has
+    plain = write(os.path.join(project, "music", "plain song.wav"), wav())
+    with open(mod, "a", encoding="utf-8", newline="") as f:
+        f.write("\r\n[track.plain]\r\nfile              = music\\plain song.wav\r\nplay              = radio\r\n"
+                "copyrighted       = true\r\nstreamer          = calm\r\n"
+                "\r\n[track.ghost]\r\nsound             = qa_nowhere\\no_such_sound\r\nplay              = radio\r\n")
+    lines = text(mod).splitlines()
+    marked = problems_at("mod.ltx", "W417")
+    check(any(p.get("line") == lines.index("copyrighted       = true") + 1 for p in marked)
+          and all(p.get("severity") == "warning" for p in marked) and "action=track_sound id=plain" in json.dumps(marked),
+          "R a hand-written copyrighted on a track is a warning at its line that says where the mark goes", qa.short(marked))
+    ghost = problems_at("mod.ltx", "E416")
+    if linked:
+        check(bool(ghost) and ghost[0].get("line") == lines.index("sound             = qa_nowhere\\no_such_sound") + 1
+              and ghost[0].get("severity") == "error", "R a sound nobody has is the check's error at its line", qa.short(ghost))
+    seen = qa.until(lambda: "plain" in tracks(cmd("screens.info")), 10)
+    check(seen, "R the editor reads the tracks written by hand")
+    # Make It a Sound: the asset over the file, the track says sound, the old mark carried into the asset
+    a = cmd("screens.set", action="track_sound", id="plain")
+    t = tracks(a).get("plain", {})
+    made = os.path.join(project, "music", "plain song.sndasset")
+    check(a.get("ok") and t.get("sound") == modid + "\\plain song" and t.get("file") == "" and os.path.isfile(made),
+          "R Make It a Sound writes the asset over the file and the track names its sound", t)
+    if os.path.isfile(made):
+        body = text(made)
+        check("copyrighted = true" in body and ('streamer = "%s"' % calm_name.replace("\\", "\\\\")) in body,
+              "R the mark the track had is the sound's now (the replacement a track named is its sound)", body)
+    check(t.get("copyrighted") is True and "copyrighted" not in text(mod).split("[track.plain]")[1].split("[")[0],
+          "R the track carries no mark any more and screens.info reads it from the sound", t)
+    cmd("screens.set", action="track_remove", id="plain")
+    cmd("screens.set", action="track_remove", id="ghost")
+    for f in (made, plain):
+        if os.path.isfile(f):
+            os.remove(f)
 
     # playlists: made, reordered, a track taken out, removed whole
     a = cmd("screens.set", action="playlist_add", title="Road Songs", tracks=["night", "calm"], order="list")
@@ -333,17 +405,15 @@ def phase_r(project: str, outside: str, mod: str) -> None:
     a = cmd("screens.set", action="playlist_set", id="road_songs", tracks=["night", "calm"])
     check(a.get("ok") and playlists(a)["road_songs"]["tracks"] == ["night", "calm"] and "tracks            = night, calm" in text(mod),
           "R a change after an edit by hand writes over the file as it is now", qa.short(a))
-    # a track removed leaves the playlists and the replacement that named it
+    # a track removed leaves the playlists
     a = cmd("screens.set", action="track_remove", id="calm")
-    check(playlists(a)["road_songs"]["tracks"] == ["night"] and tracks(a)["night"].get("streamer") == "",
-          "R a track removed leaves the playlists and the replacements", (playlists(a), tracks(a).get("night")))
-    cmd("screens.set", action="track_add", id="calm", file=calm, play="radio")
-    cmd("screens.set", action="track_set", id="night", streamer="calm")
+    check(playlists(a)["road_songs"]["tracks"] == ["night"], "R a track removed leaves the playlists", playlists(a))
+    cmd("screens.set", action="track_add", id="calm", sound=calm_name, play="radio")
     cmd("screens.set", action="playlist_track_add", id="road_songs", track="calm")
 
 
 def phase_s(project: str, target: str, mod: str) -> None:
-    """S  a sound asset: copyrighted and what plays instead, checked, shipped with the keys in its text."""
+    """S  a sound asset: copyrighted and what plays instead, checked; a track plays it; shipped with its keys."""
     sounds = os.path.join(project, "sounds", "qa")
     for n in ("qa_song", "qa_calm", "qa_bad"):
         write(os.path.join(sounds, n + ".wav"), wav())
@@ -365,14 +435,12 @@ def phase_s(project: str, target: str, mod: str) -> None:
           "S a replacement on a sound that is not copyrighted is a warning", qa.short(r.get("problems")))
     os.remove(os.path.join(sounds, "qa_bad.sndasset"))
     os.remove(os.path.join(sounds, "qa_bad.wav"))
-    # the picker offers the module's free sound asset and never its copyrighted one
-    v = cmd("screens.view", track="night", show="streamer")
-    ids = [x["id"] for x in (v.get("picker") or {}).get("rows", [])]
-    check("qa\\qa_calm" in ids and "qa\\qa_song" not in ids, "S the picker offers the free sound asset, not the copyrighted one",
-          qa.short(ids[:12]))
-    a = cmd("screens.set", action="track_set", id="night", streamer="qa\\qa_song")
-    check(not a.get("ok") and "is copyrighted itself" in a.get("error", ""), "S a copyrighted sound asset is refused as a replacement",
-          a.get("error"))
+    # a track plays the sound by its name; what the sound says is what screens.info says
+    a = cmd("screens.set", action="track_add", id="song", sound="qa\\qa_song", play="radio")
+    t = tracks(a).get("song", {})
+    check(a.get("ok") and t.get("copyrighted") is True and t.get("streamer") == "qa\\qa_calm"
+          and t.get("asset") == "sounds/qa/qa_song.sndasset", "S a track that names the sound reads its mark from it", t)
+    cmd("screens.set", action="playlist_track_add", id="road_songs", track="song")
     built = cmd("mod.build", timeout=600, clean=False, target="folder", path=target)
     shipped = [os.path.join(r, f) for r, _, fs in os.walk(target) for f in fs if f == "qa_song.sndasset"]
     if check(built.get("ok") and bool(shipped), "S the module build ships the sound asset", qa.short(built)):
@@ -380,15 +448,18 @@ def phase_s(project: str, target: str, mod: str) -> None:
         check("copyrighted = true" in body and 'streamer = "qa\\\\qa_calm"' in body, "S its text carries copyrighted and streamer", body)
         check(any(f == "qa_song.ogg" for _, _, fs in os.walk(target) for f in fs), "S and its sound is baked beside it")
         manifest = [os.path.join(r, "mod.ltx") for r, _, fs in os.walk(target) if "mod.ltx" in fs]
-        check(bool(manifest) and "[playlist.road_songs]" in text(manifest[0]) and "copyrighted       = true" in text(manifest[0]),
-              "S the shipped mod.ltx carries the radio", manifest)
+        shipped_mod = text(manifest[0]) if manifest else ""
+        check("[playlist.road_songs]" in shipped_mod and "sound             = qa\\qa_song" in shipped_mod
+              and "copyrighted" not in shipped_mod and "streamer" not in shipped_mod,
+              "S the shipped mod.ltx's track says sound, and carries no mark", manifest)
 
 
 SIZES = ((1707, 912, 1.5), (1280, 720, 1.0))
 
 
 def phase_t(shots: str | None) -> None:
-    """T  the tab: a copyrighted track, Radio Music and a playlist, at both sizes, in English and Russian, dark and light."""
+    """T  the tab: a track whose sound is copyrighted (its mark, Open Sound), a playlist, at both sizes, in English and
+    Russian, dark and light; Open Sound opens the Sound tab on the track's asset."""
     seen: dict[str, set] = {}
     views = (("track", {"track": "night"}), ("playlist", {"playlist": "road_songs"}))
     for theme in ("", "grizzly-light"):
@@ -419,13 +490,14 @@ def phase_t(shots: str | None) -> None:
                         longer = [t.get("label") for t in cut if t.get("en") and str(t["en"]) not in seen.get(key, set())]
                         check(not longer, "%s: no Russian text is cut where its English fits" % tag, qa.short(longer[:6]))
                     qa.shot(shots, "screens_%s_%s_%d%s" % (name, lang, width, "_light" if theme else ""))
-            v = cmd("screens.view", track="night", show="streamer")
-            check(v.get("ok") and (v.get("picker") or {}).get("count", 0) >= 1, "T %s: the picker is up" % lang, qa.short(v.get("picker")))
-            qa.shot(shots, "screens_picker_%s%s" % (lang, "_light" if theme else ""))
-            cmd("ui.popup", action="close")
     cmd("app.prefs", action="set", key="language", value="en")
     cmd("app.prefs", action="set", key="theme", value="grizzly-dark")
     cmd("ui.scale", value=1.5)
+    cmd("app.window", action="resize", width=1707, height=912)
+    # the track's sound opens in the Sound tab, where its mark is said
+    a = cmd("preview.sound", open=True, path="sounds/night road.sndasset")
+    check(a.get("ok") and a.get("active") and a.get("copyrighted") is True, "T the track's sound opens in the Sound tab", qa.short(a))
+    qa.shot(shots, "screens_open_sound")
 
 
 def main() -> int:

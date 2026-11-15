@@ -188,8 +188,13 @@ fn the_values_the_check_takes_are_the_values_the_readers_give_a_meaning() {
         assert!(screens(&format!("[track.a]\r\nplay = {w}\r\n")).tracks[0].play != 0, "{w}");
     }
     assert_eq!(screens("[screen.a]\r\nshow = radio\r\n").screens[0].show, 0);
-    assert!(screens("[track.a]\r\ncopyrighted = true\r\n").tracks[0].copyrighted);
-    assert!(!screens("[track.a]\r\ncopyrighted = false\r\n").tracks[0].copyrighted);
+    // a track names its sound, and carries no mark: what it had is kept as written, and the page
+    // and the check leave it to the screens' check, which says where the mark went
+    assert_eq!(screens("[track.a]\r\nsound = od\\rain\r\n").tracks[0].sound, "od\\rain");
+    for key in gz_mod::reference::TRACK_MARK_KEYS {
+        assert!(key_doc("track.<id>", key).is_none(), "{key}");
+        assert_eq!(screens(&format!("[track.a]\r\n{key} = true\r\n")).tracks[0].extra(key), Some("true"));
+    }
     // the playlist's orders and the radio's policy are the words the reader gives a meaning
     for w in words("playlist.<id>", "order") {
         assert_eq!(gz_screens::Order::parse(w).name(), w);

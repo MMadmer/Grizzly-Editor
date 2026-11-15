@@ -17,6 +17,7 @@ gz-project.workspace = true
 gz-mod.workspace = true
 gz-build.workspace = true
 gz-media.workspace = true
+gz-fmt-sound.workspace = true
 gz-luadata.workspace = true
 gz-fmt-tex.workspace = true
 futures.workspace = true

@@ -19,12 +19,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::import::{FileKind, file_kind, import, stem};
+use crate::import::{FileKind, file_kind, import, is_music, stem};
 use crate::model::{
     Fit, HIDE_BAR, HIDE_PERCENT, HIDE_STAGE, HIDE_TIP, LOADING, Layer, MENU, Order, PAUSE, Playlist, RADIO,
     Screen, Screens, Track, atof, sanitize, scan_floats, split,
 };
-use crate::validate::replacement_mark;
 
 pub fn register(reg: &mut Registry) {
     reg.area(
@@ -43,13 +42,13 @@ pub fn register(reg: &mut Registry) {
             "screens.set",
             "One change of the screens, the music or the radio: a screen, a layer, a track, a playlist, the policy.",
         )
-        .example("action=track_set id=rain play=menu,radio copyrighted=true"),
+        .example("action=track_add file=D:/Music/rain.ogg play=menu,radio"),
         screens_set,
     );
     reg.cmd(
         Spec::write(
             "screens.import",
-            "Brings files into the screens: a picture or a video becomes a screen or a layer, an .ogg a track.",
+            "Brings files into the screens: a picture or a video becomes a screen or a layer, music a sound asset and a track that plays it.",
         )
         .example("path=D:/Art/night.mp4 screen=night"),
         screens_import,
@@ -77,10 +76,13 @@ enum SetAction {
     LayerRemove,
     /// Moves the layer `index` of the screen `id` to `to`.
     LayerMove,
-    /// A new track `id` with `file`, play, weight, volume, copyrighted, streamer.
+    /// A new track `id` with `sound` or `file`, play, weight, volume.
     TrackAdd,
-    /// Changes the track `id`: file, play, weight, volume, copyrighted, streamer.
+    /// Changes the track `id`: sound, file, play, weight, volume.
     TrackSet,
+    /// Make It a Sound: the track `id`'s plain file becomes a sound asset (written beside it) and
+    /// the track names its sound - only a sound can carry the copyrighted mark.
+    TrackSound,
     /// Removes the track `id`, from every screen and playlist too.
     TrackRemove,
     /// A new playlist `id` (made unique; left out: made of the title) with title, tracks, order.
@@ -135,9 +137,10 @@ struct SetParams {
     /// A screen: its new id, made of a-z, 0-9 and _ (anything else becomes _).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     new_id: Option<String>,
-    /// A layer or a track: its file, from anywhere (brought into screens\ when it is outside the
-    /// project); empty clears a layer's. A layer takes a picture, a GIF, a video, a shader or an HTML
-    /// page (a PNG, JPG, TGA or BMP becomes a .dds); a track takes an .ogg sound and nothing else.
+    /// A layer or a track: its file, from anywhere; empty clears a layer's. A layer takes a picture,
+    /// a GIF, a video, a shader or an HTML page (brought into screens\ when it is outside the
+    /// project; a PNG, JPG, TGA or BMP becomes a .dds). A track takes music (.ogg, .wav), brought in
+    /// as a sound asset the way asset.import brings a sound, and the track names that sound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     file: Option<String>,
     /// A shader layer: its texture (a .dds).
@@ -153,9 +156,11 @@ struct SetParams {
     /// whole screen) when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     rect: Option<[f32; 4]>,
-    /// A video layer: whether its sound plays.
+    /// A video layer: whether its sound plays (true or false). A track: the sound it plays, by its
+    /// name (a sound asset of the module or a sound of the game), or a sound asset of the project by
+    /// its path (`sounds/rain.sndasset`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    sound: Option<bool>,
+    sound: Option<Value>,
     /// A layer: its index, 0 the bottom one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     index: Option<i64>,
@@ -169,12 +174,11 @@ struct SetParams {
     /// A track: how loud, 0 to 1; a number outside it is cut to the nearest end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     volume: Option<f32>,
-    /// A track: a recording that may not be streamed - not played while the game's streamer mode
-    /// is on. false also clears its streamer.
+    /// Refused: a track carries no copyrighted mark. Whether music is copyrighted is its sound's to
+    /// say - Copyrighted in the sound asset (the Sound tab, or its `copyrighted` key).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     copyrighted: Option<bool>,
-    /// A copyrighted track: what plays instead in the streamer mode - a track id of the module or a
-    /// sound name, neither copyrighted itself; empty clears it.
+    /// Refused: what plays instead in the streamer mode is the sound's too (its `streamer` key).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     streamer: Option<String>,
     /// A playlist: what the player reads in the list of stations (text or a string table id).
@@ -202,7 +206,7 @@ struct ImportParams {
     /// On that screen: the layer whose file they replace; left out: new layers on top.
     #[serde(default)]
     layer: Option<i64>,
-    /// Into the music: only .ogg files are taken.
+    /// Into the music: only music (.ogg, .wav) and sound assets are taken.
     #[serde(default)]
     music: bool,
     /// What a new screen or track shows on: loading, menu or radio (a track the radios play; left
@@ -251,7 +255,7 @@ pub async fn issues(
 ) -> Vec<Issue> {
     let levels = GameLevels::of(editor).levels(editor).await;
     let manifest = manifest.clone();
-    let sounds = Sounds::of(editor, &s).await;
+    let sounds = Sounds::now(editor).await;
     editor
         .exec
         .io(move || {
@@ -260,43 +264,73 @@ pub async fn issues(
                 &s,
                 &|rel| manifest.outside_build(rel),
                 levels.as_deref(),
-                &|name| sounds.mark(name),
+                &|name| sounds.facts(name),
             )
         })
         .await
 }
 
-/// What the streamer mode makes of a sound name: the module's sound assets and the linked game's
-/// sounds with its own list, as `gz-media` reads them. Only gathered when a track names a
-/// replacement.
+/// The sounds a track names, as `gz-media` reads them: the module's sound assets and the linked
+/// game's sounds with its own list - what one is to the streamer mode, whose it is, and the way
+/// music comes in as a sound asset.
 pub struct Sounds {
     look: Option<(PathBuf, Arc<gz_media::index::Index>, Arc<gz_media::GameLists>)>,
+    guard: Option<gz_editor::fsx::WriteGuard>,
 }
 
 impl Sounds {
-    /// The media of the open project, when `s` needs them.
-    pub async fn of(editor: &Arc<Editor>, s: &Screens) -> Arc<Self> {
-        if s.tracks.iter().all(|t| t.streamer.is_empty()) {
-            return Arc::new(Self { look: None });
-        }
-        Self::now(editor).await
+    /// No project: every sound is free and nothing comes in.
+    #[must_use]
+    pub fn none() -> Arc<Self> {
+        Arc::new(Self { look: None, guard: None })
     }
 
-    /// The media of the open project.
+    /// The media of the open project, its files as the tree holds every change so far.
     pub async fn now(editor: &Arc<Editor>) -> Arc<Self> {
-        let Ok(media) = gz_media::Media::of(editor).await else { return Arc::new(Self { look: None }) };
-        let index = media.index().await;
+        let Ok(media) = gz_media::Media::of(editor).await else { return Self::none() };
+        let index = media.fresh_index().await;
         let game = media.game_lists(editor).await;
-        Arc::new(Self { look: Some((media.root().to_path_buf(), index, game)) })
+        let guard = Project::of(editor).ok().map(|(_, p)| p.write_guard(None));
+        Arc::new(Self { look: Some((media.root().to_path_buf(), index, game)), guard })
+    }
+
+    /// What a sound name is to the streamer mode and whose it is. Blocking: a sound asset of the
+    /// module is read.
+    #[must_use]
+    pub fn facts(&self, name: &str) -> gz_media::sound::Facts {
+        match &self.look {
+            Some((root, index, game)) => gz_media::sound::facts(root, index, game, name),
+            None => gz_media::sound::Facts { mark: Mark::Free, instead: String::new(), asset: None },
+        }
     }
 
     /// Blocking: a sound asset of the module is read.
     #[must_use]
     pub fn mark(&self, name: &str) -> Mark {
-        match &self.look {
-            Some((root, index, game)) => gz_media::sound::mark(root, index, game, name),
-            None => Mark::Free,
+        self.facts(name).mark
+    }
+
+    /// How long a sound lasts, in seconds: the module's asset's source, else the game's
+    /// `sounds\<name>.ogg`. Blocking: the file is read.
+    #[must_use]
+    pub fn seconds(&self, name: &str) -> Option<f64> {
+        use gz_project::asset_kind::MediaKind;
+        let (root, index, game) = self.look.as_ref()?;
+        let length = |bytes: &[u8], ogg: bool| -> Option<f64> {
+            if ogg {
+                gz_fmt_sound::ogg_info(bytes).ok().map(|i| i.seconds())
+            } else {
+                gz_fmt_sound::read_wav(bytes).ok().map(|w| w.frames() as f64 / f64::from(w.rate.max(1)))
+            }
+        };
+        if let Some(e) = index.by_name(MediaKind::Sound, name) {
+            let (_, source, _) = gz_media::resolve::sound(root, e.path.as_str()).ok()?;
+            let ogg = source.extension().is_some_and(|x| x.eq_ignore_ascii_case("ogg"));
+            return length(&std::fs::read(&source).ok()?, ogg);
         }
+        let files = game.files.as_ref()?;
+        let bytes = files.read(&format!("sounds\\{}.ogg", gz_media::read::name_key(name))).ok()?;
+        length(&bytes, true)
     }
 
     /// Every sound that plays in the streamer mode. Blocking.
@@ -306,6 +340,26 @@ impl Sounds {
             Some((root, index, game)) => gz_media::sound::free_sounds(root, index, game),
             None => Vec::new(),
         }
+    }
+
+    /// Music from anywhere (or a sound asset of the project) as a sound asset of the module:
+    /// [`gz_media::import::sound_asset`], the names the project's sound assets publish taken.
+    /// `made` holds the names made by this call so far. Blocking file work.
+    pub fn import(
+        &self,
+        given: &str,
+        made: &mut Vec<String>,
+    ) -> Result<gz_media::import::SoundImport, String> {
+        use gz_project::asset_kind::MediaKind;
+        let Some((root, index, _)) = &self.look else { return Err("no project is open".to_owned()) };
+        let path = std::path::Path::new(given);
+        let from = if path.is_absolute() { path.to_path_buf() } else { root.join(given.replace('/', "\\")) };
+        let taken = |n: &str| {
+            index.by_name(MediaKind::Sound, n).is_some() || made.iter().any(|m| m.eq_ignore_ascii_case(n))
+        };
+        let got = gz_media::import::sound_asset(root, &from, &index.module, &taken, self.guard.as_ref())?;
+        made.push(got.name.clone());
+        Ok(got)
     }
 }
 
@@ -396,9 +450,23 @@ fn layer_json(l: &Layer) -> Value {
     Value::Object(o)
 }
 
-/// The answer of both commands (`Answer`).
+/// What the answer says of a track's music: its sound's facts, read where the game reads them.
+pub type TrackFacts = std::collections::HashMap<String, gz_media::sound::Facts>;
+
+/// The facts of every sound the tracks name. Blocking: the module's sound assets are read.
 #[must_use]
-pub fn answer(s: &Screens, problems: &[String]) -> Value {
+pub fn track_facts(s: &Screens, sounds: &Sounds) -> TrackFacts {
+    let mut out = TrackFacts::default();
+    for t in s.tracks.iter().filter(|t| t.is_sound()) {
+        out.entry(t.sound.clone()).or_insert_with(|| sounds.facts(&t.sound));
+    }
+    out
+}
+
+/// The answer of both commands (`Answer`). `facts` says what the tracks' sounds are
+/// ([`track_facts`]); a track whose sound it lacks answers it free.
+#[must_use]
+pub fn answer(s: &Screens, problems: &[String], facts: &TrackFacts) -> Value {
     let side = |i: usize| {
         let pick = |v: &[bool; 2], yes: &str, no: &str| {
             if v.get(i).copied().unwrap_or(false) { yes.to_owned() } else { no.to_owned() }
@@ -434,12 +502,21 @@ pub fn answer(s: &Screens, problems: &[String]) -> Value {
         .map(|t| {
             let mut o = Map::new();
             o.insert("id".into(), json!(t.id));
+            // what it plays: its sound, else its file - and what that sound says of itself
+            let f = t.is_sound().then(|| facts.get(&t.sound)).flatten();
+            o.insert("plays".into(), json!(if t.is_sound() { "sound" } else { "file" }));
+            o.insert("sound".into(), json!(t.sound));
             o.insert("file".into(), json!(t.file));
+            o.insert("asset".into(), json!(f.and_then(|f| f.asset.clone())));
+            o.insert("copyrighted".into(), json!(f.is_some_and(|f| f.mark == Mark::Copyrighted)));
+            o.insert(
+                "streamer".into(),
+                json!(f.filter(|f| f.mark == Mark::Copyrighted).map_or("", |f| f.instead.as_str())),
+            );
+            o.insert("missing".into(), json!(f.is_some_and(|f| f.mark == Mark::Missing)));
             o.insert("play".into(), json!(surfaces_json(t.play)));
             o.insert("weight".into(), json_number(t.weight));
             o.insert("volume".into(), json_number(t.volume));
-            o.insert("copyrighted".into(), json!(t.copyrighted));
-            o.insert("streamer".into(), json!(t.streamer));
             Value::Object(o)
         })
         .collect();
@@ -564,6 +641,24 @@ fn leaf(path: &str) -> &str {
     path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
 
+/// Writes the mark into a sound asset just made: `copyrighted = true` and, when one is named,
+/// what plays instead. Blocking.
+fn mark_asset(root: &str, asset: &str, instead: Option<&str>) -> Result<(), String> {
+    use gz_luadata::{Seg, Value};
+    let abs = std::path::Path::new(root).join(asset.replace('/', "\\"));
+    let text = std::fs::read_to_string(&abs).map_err(|e| format!("{asset}: {}", gz_base::io_reason(&e)))?;
+    let mut doc = gz_luadata::LuaDoc::parse(&text).map_err(|e| format!("{asset}: {}", e.message))?;
+    let set = |doc: &mut gz_luadata::LuaDoc, key: &str, v: Value| {
+        doc.set(&[Seg::key(key)], &v).map_err(|e| format!("{asset}: {}", e.message))
+    };
+    set(&mut doc, gz_media::sound::MARK_KEY, Value::from(true))?;
+    if let Some(r) = instead {
+        set(&mut doc, gz_media::sound::REPLACEMENT_KEY, Value::from(r))?;
+    }
+    gz_editor::fsx::write_atomic(&abs, doc.text().as_bytes())
+        .map_err(|e| format!("{asset}: {}", gz_base::io_reason(&e)))
+}
+
 /// Everything an action needs while it runs on the IO pool.
 struct Cx<'a> {
     root: &'a str,
@@ -571,8 +666,12 @@ struct Cx<'a> {
     show: u32,
     args: &'a Args,
     exec: &'a Executors,
-    /// What a track's replacement is to the streamer mode.
+    /// The sounds the tracks name, and the way music comes in as a sound asset.
     sounds: &'a Sounds,
+    /// The names of the sound assets this action made.
+    made: Vec<String>,
+    /// The sound assets written, project-relative: the tree lists their folders again.
+    written: Vec<String>,
     err: String,
 }
 
@@ -674,13 +773,51 @@ impl Cx<'_> {
         }
     }
 
-    fn apply_track(&mut self, t: &mut Track, others: &Screens) {
+    /// Music from anywhere, or a sound asset of the project, as the module's sound: its name.
+    fn import_sound(&mut self, given: &str) -> Option<String> {
+        match self.sounds.import(given, &mut self.made) {
+            Ok(got) => {
+                if got.written {
+                    self.written.push(got.asset.clone());
+                }
+                Some(got.name)
+            }
+            Err(e) => {
+                self.err = e;
+                None
+            }
+        }
+    }
+
+    fn apply_track(&mut self, t: &mut Track) {
+        // the mark is the sound's: refused before anything is copied, naming where it is set
+        for key in gz_mod::reference::TRACK_MARK_KEYS {
+            if self.args.contains_key(*key) {
+                let asset = if t.is_sound() { self.sounds.facts(&t.sound).asset } else { None };
+                self.err = crate::validate::mark_moved(key, t, asset.as_deref());
+                return;
+            }
+        }
         // before anything is copied or converted: a picture is no track
         if let Some(v) = arg(self.args, "file") {
-            if file_kind(&v) != FileKind::Music {
-                self.err = format!("a track takes an .ogg sound, not {}", leaf(&v));
-            } else if let Some(rel) = self.import(&v) {
-                t.file = rel;
+            if !is_music(&v) {
+                self.err = format!("a track takes music (.ogg, .wav) or a sound asset, not {}", leaf(&v));
+            } else if let Some(name) = self.import_sound(&v) {
+                t.sound = name;
+                t.file.clear();
+            }
+        }
+        if let Some(v) = arg(self.args, "sound").map(|v| v.trim().to_owned()) {
+            if v.to_ascii_lowercase().ends_with(".sndasset") {
+                if let Some(name) = self.import_sound(&v) {
+                    t.sound = name;
+                }
+            } else if self.sounds.mark(&v) == Mark::Missing {
+                self.err = format!(
+                    "sound: nobody has the sound '{v}' - no sound asset of the project publishes it, and the linked game has none of that name"
+                );
+            } else {
+                t.sound = v.replace('/', "\\");
             }
         }
         if let Some(v) = arg(self.args, "play") {
@@ -695,47 +832,40 @@ impl Cx<'_> {
         if let Some(f) = arg_float(self.args, "volume") {
             t.volume = f.clamp(0.0, 1.0);
         }
-        if let Some(b) = arg_bool(self.args, "copyrighted") {
-            t.copyrighted = b;
-            // the replacement is a copyrighted track's: off, it has nothing to replace
-            if !b {
-                t.streamer.clear();
-            }
-        }
-        if let Some(v) = arg(self.args, "streamer") {
-            let v = v.trim().to_owned();
-            if let Some(why) = self.streamer_refusal(t, &v, others) {
-                self.err = why;
-            } else {
-                t.streamer = v;
-            }
-        }
     }
 
-    /// Why `name` cannot play instead of `t` in the streamer mode; `None` when it can (or is
-    /// empty: no replacement). Blocking: a sound asset of the module is read.
-    fn streamer_refusal(&self, t: &Track, name: &str, others: &Screens) -> Option<String> {
-        if name.is_empty() {
-            return None;
+    /// Make It a Sound: a plain file's track names a sound asset written over that file; the mark
+    /// the track carried goes into the asset it is now said in.
+    fn make_sound(&mut self, t: &mut Track, others: &Screens) {
+        if t.is_sound() {
+            self.err = format!("the track '{}' plays the sound {} already", t.id, t.sound);
+            return;
         }
-        if !t.copyrighted {
-            return Some(format!(
-                "streamer names what plays instead of a copyrighted track, and the track '{}' is not copyrighted: set copyrighted=true first",
-                t.id
-            ));
+        if t.file.trim().is_empty() {
+            self.err = format!("the track '{}' has no file to make a sound of", t.id);
+            return;
         }
-        if name == t.id {
-            return Some(format!("the track '{}' cannot play instead of itself", t.id));
+        let Ok(got) = self.sounds.import(&t.file.clone(), &mut self.made).map_err(|e| self.err = e) else {
+            return;
+        };
+        if got.written {
+            self.written.push(got.asset.clone());
         }
-        match replacement_mark(others, name, &|n| self.sounds.mark(n)) {
-            Mark::Free => None,
-            Mark::Copyrighted => Some(format!(
-                "streamer: '{name}' is copyrighted itself and does not play in the streamer mode either; name a track or a sound without the mark"
-            )),
-            Mark::Missing => Some(format!(
-                "streamer: '{name}' is no track of the module and nobody's sound (no sound asset of the project, no sound of the linked game)"
-            )),
+        let copyrighted = t.extra("copyrighted").is_some_and(|v| gz_mod::rules::parse_flag(v) == Some(true));
+        if got.written && copyrighted {
+            // a replacement named by a track of the module is that track's sound
+            let instead = t.extra("streamer").map(|r| match others.track(r) {
+                Some(o) if o.is_sound() => o.sound.clone(),
+                _ => r.to_owned(),
+            });
+            if let Err(e) = mark_asset(self.root, &got.asset, instead.as_deref().filter(|r| !r.is_empty())) {
+                self.err = e;
+                return;
+            }
         }
+        t.extra.retain(|(k, _)| !gz_mod::reference::TRACK_MARK_KEYS.contains(&k.as_str()));
+        t.sound = got.name;
+        t.file.clear();
     }
 
     /// Track ids of a playlist: every one a track of the module, refused by name otherwise.
@@ -766,12 +896,22 @@ impl Cx<'_> {
         }
     }
 
-    /// Files brought from anywhere: imported in parallel, then put where they go -
-    /// music into the tracks, anything else on the screen `screen` (its layer `layer`, or a new
-    /// one), or as a new screen of its own.
+    /// Files brought from anywhere: imported in parallel, then put where they go - music as a
+    /// sound asset and a track that names it, anything else on the screen `screen` (its layer
+    /// `layer`, or a new one), or as a new screen of its own.
     fn take_files(&mut self, s: &mut Screens, files: Vec<String>, screen: &str, layer: i64, to_music: bool) {
+        let (music, rest): (Vec<String>, Vec<String>) = files.into_iter().partition(|f| is_music(f));
+        for f in music {
+            let Some(name) = self.import_sound(&f) else { continue };
+            // the same sound twice is one track
+            if s.tracks.iter().any(|t| t.sound.eq_ignore_ascii_case(&name)) {
+                continue;
+            }
+            let id = s.new_track_id(&stem(&f));
+            s.tracks.push(Track { id, sound: name, play: self.show, ..Track::default() });
+        }
         let root = self.root.to_owned();
-        let imported = self.exec.par_io(files, |f| import(&root, &f));
+        let imported = self.exec.par_io(rest, |f| import(&root, &f));
         for result in imported {
             let rel = match result {
                 Ok(rel) => rel,
@@ -780,13 +920,8 @@ impl Cx<'_> {
                     continue;
                 }
             };
-            if file_kind(&rel) == FileKind::Music {
-                let id = s.new_track_id(&stem(&rel));
-                s.tracks.push(Track { id, file: rel, play: self.show, ..Track::default() });
-                continue;
-            }
             if to_music || self.show == RADIO {
-                "Only .ogg files go into the music.".clone_into(&mut self.err);
+                "Only music (.ogg, .wav) and sound assets go into the music.".clone_into(&mut self.err);
                 continue;
             }
             let found = if screen.is_empty() { None } else { s.screen_mut(screen) };
@@ -809,7 +944,7 @@ impl Cx<'_> {
     }
 }
 
-const ACTIONS: &str = "action must be policy, screen_add, screen_set, screen_remove, layer_add, layer_set, layer_remove, layer_move, track_add, track_set, track_remove, playlist_add, playlist_set, playlist_remove, playlist_track_add, playlist_track_move, playlist_track_remove or drop";
+const ACTIONS: &str = "action must be policy, screen_add, screen_set, screen_remove, layer_add, layer_set, layer_remove, layer_move, track_add, track_set, track_sound, track_remove, playlist_add, playlist_set, playlist_remove, playlist_track_add, playlist_track_move, playlist_track_remove or drop";
 
 /// Runs one `screens.set` action on the model. `Err`: the call is refused before anything is
 /// done to the model (`surface`, `action`); `Ok(err)`: the action ran, and a non-empty `err`
@@ -935,18 +1070,23 @@ fn run(cx: &mut Cx<'_>, s: &mut Screens) -> Result<(), String> {
         "track_add" => {
             let mut t =
                 Track { id: s.new_track_id(if id.is_empty() { "track" } else { &id }), ..Track::default() };
-            cx.apply_track(&mut t, s);
-            if t.file.is_empty() && cx.err.is_empty() {
-                "a track needs a file".clone_into(&mut cx.err);
+            cx.apply_track(&mut t);
+            if t.file.is_empty() && !t.is_sound() && cx.err.is_empty() {
+                "a track needs its music: sound=<a sound's name> or file=<music from anywhere>"
+                    .clone_into(&mut cx.err);
             }
             if cx.err.is_empty() {
                 s.tracks.push(t);
             }
         }
-        "track_set" => {
+        "track_set" => match s.track_mut(&id) {
+            Some(t) => cx.apply_track(t),
+            None => cx.err = format!("no track '{id}'"),
+        },
+        "track_sound" => {
             let others = s.clone();
             match s.track_mut(&id) {
-                Some(t) => cx.apply_track(t, &others),
+                Some(t) => cx.make_sound(t, &others),
                 None => cx.err = format!("no track '{id}'"),
             }
         }
@@ -1037,7 +1177,15 @@ async fn screens_info(ed: Arc<Editor>, _p: NoParams, _origin: Origin) -> Reply {
     let Some(doc) = snap.doc() else { return Err(refuse("the project has no mod.ltx: it is no module")) };
     let s = Screens::parse(doc);
     let found = problems(&ed, PathBuf::from(project.root()), &manifest, s.clone()).await;
-    Ok(answer(&s, &found))
+    Ok(answered(&ed, &s, &found).await)
+}
+
+/// [`answer`] with the facts of the tracks' sounds, read on the IO pool.
+async fn answered(ed: &Arc<Editor>, s: &Screens, found: &[String]) -> Value {
+    let sounds = Sounds::now(ed).await;
+    let model = s.clone();
+    let facts = ed.exec.io(move || track_facts(&model, &sounds)).await;
+    answer(s, found, &facts)
 }
 
 /// The parameters as the request map the actions read.
@@ -1085,27 +1233,39 @@ async fn apply(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
     let exec = ed.exec.clone();
     let dropping = arg(&args, "action").as_deref() == Some("drop");
     let show = if dropping { drop_show(&ed, &args).await } else { LOADING };
-    let sounds = if arg(&args, "streamer").is_some_and(|v| !v.trim().is_empty()) {
-        Sounds::now(&ed).await
-    } else {
-        Arc::new(Sounds { look: None })
-    };
+    let sounds = Sounds::now(&ed).await;
     // imports are file work: the whole action runs on the IO pool
-    let (s, outcome) = ed
+    let (s, outcome, wrote) = ed
         .exec
         .io(move || {
-            let mut cx =
-                Cx { root: &root, show, args: &args, exec: &exec, sounds: &sounds, err: String::new() };
-            let outcome = run(&mut cx, &mut s).map(|()| cx.err);
-            (s, outcome)
+            let mut cx = Cx {
+                root: &root,
+                show,
+                args: &args,
+                exec: &exec,
+                sounds: &sounds,
+                made: Vec::new(),
+                written: Vec::new(),
+                err: String::new(),
+            };
+            let outcome = run(&mut cx, &mut s).map(|()| cx.err.clone());
+            (s, outcome, cx.written)
         })
         .await;
+    // a file brought in from outside landed in screens\ or sounds\: the tree lists it again
+    let base = PathBuf::from(project.root());
+    project.tree.mark_fs(&base.join("screens"));
+    for asset in &wrote {
+        let abs = base.join(asset.replace('/', "\\"));
+        project.tree.mark_fs(abs.parent().unwrap_or(&base));
+    }
+    if !wrote.is_empty() {
+        project.tree.refresh().await;
+    }
     let err = outcome.map_err(refuse)?;
     if !err.is_empty() {
         return Err(refuse(err));
     }
-    // a file brought in from outside landed in screens\: the tree lists it again
-    project.tree.mark_fs(&PathBuf::from(project.root()).join("screens"));
     let edits = {
         let now = manifest.snapshot();
         let Some(doc) = now.doc() else { return Err(refuse("the project has no mod.ltx: it is no module")) };
@@ -1116,5 +1276,5 @@ async fn apply(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
         .await
         .map_err(|e| if e.code == "io" { refuse("can't write mod.ltx") } else { e })?;
     let found = problems(&ed, PathBuf::from(project.root()), &manifest, s.clone()).await;
-    Ok(answer(&s, &found))
+    Ok(answered(&ed, &s, &found).await)
 }

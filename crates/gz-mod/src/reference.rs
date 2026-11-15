@@ -500,7 +500,19 @@ pub const SECTIONS: &[SectionDoc] = &[
         reader: Reader::Screens,
         summary: "One music track. The id takes a-z, 0-9 and _; a screen's music key and a playlist's tracks name it.",
         keys: &[
-            key("file", "a project-relative .ogg file", "required", "The track: the game plays .ogg only."),
+            key(
+                "sound",
+                "a sound's name under sounds, without .ogg: a sound asset of the module (its name) or a sound of the game",
+                "empty: the track plays its file",
+                "The track's music by the sound's name. The sound says whether it is copyrighted and what plays \
+                 instead in the streamer mode - a track carries no mark of its own. With file beside it, sound wins.",
+            ),
+            key(
+                "file",
+                "a project-relative .ogg file",
+                "empty: the track plays its sound",
+                "A plain file to play: it has no description, so no copyrighted mark. Make it a sound to give it one.",
+            ),
             key(
                 "play",
                 PLAYS,
@@ -510,19 +522,6 @@ pub const SECTIONS: &[SectionDoc] = &[
             key("weight", "a number, 0 to 1000", "1", "How often it comes up against the others.")
                 .judged(Check::Range(0, 1000)),
             key("volume", "0 to 1", "1", "How loud.").judged(Check::Range(0, 1)),
-            key(
-                "copyrighted",
-                "true | false",
-                "false",
-                "A recording that may not be streamed: the game does not play it anywhere while its streamer mode is on.",
-            ).judged(Check::Flag),
-            key(
-                "streamer",
-                "a track id of this module, or a sound name",
-                "empty: nothing plays",
-                "What plays in its place while the streamer mode is on: a track or a sound that is not copyrighted \
-                 itself. Only for a copyrighted track.",
-            ),
         ],
     },
     SectionDoc {
@@ -564,6 +563,11 @@ pub const SECTIONS: &[SectionDoc] = &[
         .judged(Check::Choice(MIX_ONLY))],
     },
 ];
+
+/// The keys a track had while it carried the copyrighted mark itself: the mark is its sound's
+/// now. The screens' check says so at their line, where the mark went - `gz-screens` knows the
+/// sound - so the rows of the page leave them out and the check of the values passes them by.
+pub const TRACK_MARK_KEYS: &[&str] = &["copyrighted", "streamer"];
 
 /// The key of `section` a written key is, as the reader spells it (exactly, and `[world]`'s five
 /// rules in any case); a `<...>` key takes any other name.

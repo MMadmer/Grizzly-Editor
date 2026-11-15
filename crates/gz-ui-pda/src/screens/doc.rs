@@ -25,21 +25,21 @@ use gz_screens::model::{
 };
 use gz_screens::{FileKind, Fit, Layer, Playlist, Screen, Screens, Track, file_kind};
 use gz_ui::file_dialog::FileRequest;
-use gz_ui::grid::{Grid, chips, number, pick_field, switch, text_field};
+use gz_ui::grid::{Grid, chips, number, pick_field, read_only, switch, text_field};
 use gz_ui::list::{NavRowSpec, nav_row};
 use gz_ui::state::{busy_line, empty_state};
 use gz_ui::text::{self, Clip};
 use gz_ui::{
     Combo, Font, Icon, Kind, MenuItem, PickAction, PickItem, PickList, PropFlags, PropertyGrid, TipExt, Tone,
-    Toolbar, Tx, icon_button, icon_button_sized, icons, menu_item, metrics, palette, segmented, tr,
+    Toolbar, Tx, icon_button_sized, icons, menu_item, metrics, palette, segmented, tr,
 };
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
 use crate::local::{local_drop_mark, local_list_header};
 use crate::screens::{
-    Change, Choice, ChoiceFrom, DropAt, ScreensTab, Selection, View, choices, commit, default_show,
-    surface_mask, take_drop, take_drop_at, take_one,
+    Change, DropAt, ScreensTab, Selection, TrackInfo, View, commit, default_show, mark_line, play_track,
+    surface_mask, take_drop, take_drop_at, take_one, track_infos,
 };
 
 /// pt (docs/UI_DESIGN.md, section 6).
@@ -74,12 +74,9 @@ enum ThumbSlot {
 /// The problems read for the manifest and the tree at their revisions.
 type ProblemsRead = ((Rev, Rev), Vec<String>);
 
-/// The sounds that play in the streamer mode, read for the manifest and the tree at their
-/// revisions.
-type FreeRead = ((Rev, Rev), Arc<Vec<gz_media::sound::FreeSound>>);
-
-/// The Plays Instead rows, and the model's revision, the sounds' and the track they were made for.
-type RowsMade = ((Rev, Rev, String), Arc<Vec<Choice>>);
+/// What the tracks' sounds are, by name, read for the manifest and the tree at their revisions.
+type Infos = Arc<FxHashMap<String, TrackInfo>>;
+type InfosRead = ((Rev, Rev), Infos);
 
 /// What a dragged row of the Music list carries.
 const TRACK_ROW: &str = "screens.track";
@@ -170,13 +167,16 @@ struct Out {
     /// A file to pick: the filter's name and extensions, and where the file goes.
     picks: Vec<(&'static str, &'static [&'static str], Pick)>,
     open_mod_settings: bool,
+    /// Open Sound: the sound asset to open in the Sound tab.
+    open_sound: Option<String>,
+    /// Make It a Sound: the track whose file becomes a sound asset.
+    make_sound: Option<String>,
 }
 
 #[derive(Clone)]
 enum Pick {
     LayerFile(String, usize),
     LayerTexture(String, usize),
-    TrackFile(String),
     /// A new track.
     Music,
     /// A new track the radios play.
@@ -217,12 +217,11 @@ pub struct ScreensDoc {
     thumbs: Thumbs,
     edit: Edit,
     picking: Arc<AtomicBool>,
-    /// What may play instead of a copyrighted track, read off the UI thread when one is shown.
-    free: Option<FreeRead>,
-    free_in: Arc<Mutex<Option<FreeRead>>>,
-    free_asked: Option<(Rev, Rev)>,
-    /// The Plays Instead rows for the model and the sounds they were made from.
-    rows: Option<RowsMade>,
+    /// What the tracks' sounds are, read off the UI thread once per state of the manifest and
+    /// the files.
+    infos: Option<InfosRead>,
+    infos_in: Arc<Mutex<Option<InfosRead>>>,
+    infos_asked: Option<(Rev, Rev)>,
 }
 
 fn mask_check(ui: &mut Ui, label: &'static str, mask: &mut u32, bit: u32, invert: bool) -> bool {
@@ -379,41 +378,30 @@ impl ScreensDoc {
             thumbs: Thumbs::default(),
             edit: Edit::default(),
             picking: Arc::new(AtomicBool::new(false)),
-            free: None,
-            free_in: Arc::new(Mutex::new(None)),
-            free_asked: None,
-            rows: None,
+            infos: None,
+            infos_in: Arc::new(Mutex::new(None)),
+            infos_asked: None,
         }
     }
 
-    /// The Plays Instead rows of the track `id`: asked for off the UI thread once per state of the
-    /// manifest and the files, made into rows once per model. `None` while they are read.
-    fn streamer_rows(&mut self, s: &Screens, rev: Rev, id: &str) -> Option<Arc<Vec<Choice>>> {
-        if let Some(read) = self.free_in.lock().take() {
-            self.free = Some(read);
+    /// What the tracks' sounds are: asked for off the UI thread once per state of the manifest and
+    /// the files; the last answer while a newer one is read.
+    fn infos(&mut self, s: &Screens, rev: Rev) -> Option<Infos> {
+        if let Some(read) = self.infos_in.lock().take() {
+            self.infos = Some(read);
         }
         let tree = Project::of(&self.editor).map_or(Rev::ZERO, |(_, p)| p.tree.rev());
         let key = (rev, tree);
-        if self.free.as_ref().is_none_or(|(k, _)| *k != key) && self.free_asked != Some(key) {
-            self.free_asked = Some(key);
-            let (out, ed) = (self.free_in.clone(), self.editor.clone());
+        if self.infos.as_ref().is_none_or(|(k, _)| *k != key) && self.infos_asked != Some(key) {
+            self.infos_asked = Some(key);
+            let (out, ed, model) = (self.infos_in.clone(), self.editor.clone(), s.clone());
             let _task = self.editor.exec.spawn(async move {
-                let sounds = gz_screens::Sounds::now(&ed).await;
-                let free = ed.exec.io(move || sounds.free()).await;
-                *out.lock() = Some((key, Arc::new(free)));
+                let infos = track_infos(&ed, model).await;
+                *out.lock() = Some((key, Arc::new(infos)));
                 ed.exec.wake().ping();
             });
         }
-        let (fkey, free) = self.free.clone()?;
-        let want = (rev, fkey.1, id.to_owned());
-        if let Some((k, rows)) = &self.rows
-            && *k == want
-        {
-            return Some(rows.clone());
-        }
-        let rows = Arc::new(choices(s, id, &free));
-        self.rows = Some((want, rows.clone()));
-        Some(rows)
+        self.infos.as_ref().map(|(_, i)| i.clone())
     }
 
     /// The model follows the manifest: read again off the UI thread when its
@@ -533,6 +521,28 @@ impl ScreensDoc {
         if out.open_mod_settings {
             cx.requests.open(OpenRequest::kind("mod_settings"));
         }
+        if let Some(asset) = out.open_sound {
+            cx.requests.open(OpenRequest::file("sound", &asset.replace('/', "\\")));
+        }
+        if let Some(id) = out.make_sound {
+            // the command's one path: the window and an agent make a sound the same way
+            let (ed, tab) = (self.editor.clone(), self.tab.clone());
+            self.spawn_busy(async move {
+                let mut args = gz_editor::Args::new();
+                args.insert("action".into(), serde_json::json!("track_sound"));
+                args.insert("id".into(), serde_json::json!(id));
+                let reply = ed.call("screens.set", args, gz_base::Origin::Ui).await;
+                let mut v = tab.v.lock();
+                match reply.get("error").and_then(serde_json::Value::as_str) {
+                    Some(e) if reply.get("ok").and_then(serde_json::Value::as_bool) == Some(false) => {
+                        v.status = format!("Not saved: {e}");
+                    }
+                    _ => v.status.clear(),
+                }
+                drop(v);
+                ed.exec.wake().ping();
+            });
+        }
     }
 
     /// The system's file dialog, off the UI thread; the file picked is imported where it goes.
@@ -577,19 +587,6 @@ impl ScreensDoc {
                         )
                         .await
                     }
-                    Pick::TrackFile(id) => {
-                        take_one(
-                            &ed,
-                            &tab,
-                            file,
-                            Arc::new(move |s: &mut Screens, rel: &str| {
-                                if let Some(t) = s.track_mut(&id) {
-                                    rel.clone_into(&mut t.file);
-                                }
-                            }),
-                        )
-                        .await;
-                    }
                 }
             });
         });
@@ -622,8 +619,8 @@ struct Frame<'a> {
     edit: &'a mut Edit,
     thumbs: &'a mut Thumbs,
     tree: Option<Arc<gz_project::tree::FileTree>>,
-    /// The selected track's Plays Instead rows; `None` while they are read or not wanted.
-    rows: Option<Arc<Vec<Choice>>>,
+    /// What the tracks' sounds are; `None` until they are first read.
+    infos: Option<Infos>,
 }
 
 impl Frame<'_> {
@@ -702,19 +699,24 @@ impl Frame<'_> {
     fn music_list(&mut self, ui: &mut Ui) {
         let from = ui.cursor().min;
         let mask = surface_mask(self.view.surface);
-        if local_list_header(ui, "Music", "Add a track (.ogg)") {
-            self.out.picks.push(("Music", &["ogg"], Pick::Music));
+        if local_list_header(ui, "Music", "Add music (.ogg, .wav)") {
+            self.out.picks.push(("Music", MUSIC_FILES, Pick::Music));
         }
         let s = self.s;
         for t in &s.tracks {
+            let mark = self.mark_of(t);
+            let tip: Tx<'_> = match &mark {
+                Some(line) => tr!("{mark}. Drag it onto a playlist to put it there.", mark = line.clone()),
+                None => "Drag it onto a playlist to put it there.".into(),
+            };
             let spec = NavRowSpec {
-                icon: Icon::FileSound,
+                icon: if t.is_sound() { Icon::SoundAsset } else { Icon::FileSound },
                 dim: t.play & mask == 0,
                 dot: row_dot(self.problems, "track", &t.id),
+                count: mark.as_ref().map(|_| Tx::raw(COPYRIGHT)),
                 action: Icon::Delete,
-                action_tip: "Remove this track. Its file stays in the project.".into(),
-                tip: "Drag it onto a playlist to put it there.".into(),
-                ..NavRowSpec::default()
+                action_tip: "Remove this track. Its sound stays in the project.".into(),
+                tip,
             };
             let top = ui.cursor().min.y;
             let r = nav_row(
@@ -740,7 +742,7 @@ impl Frame<'_> {
             }
         }
         if self.s.tracks.is_empty() {
-            text::status(ui, Tone::Muted, "Drop .ogg files here.");
+            text::status(ui, Tone::Muted, "Drop music here (.ogg, .wav) or sound assets.");
         }
         let to = pos2(from.x + ui.available_width(), ui.cursor().min.y + 8.0);
         if let Some(files) = take_files(ui, "drop_music", Rect::from_min_max(from, to), false) {
@@ -775,16 +777,19 @@ impl Frame<'_> {
     /// for more, and Only Mine under More.
     fn radio_list(&mut self, ui: &mut Ui) {
         let from = ui.cursor().min;
-        if local_list_header(ui, "Radio Music", "Add a track the radios play (.ogg)") {
-            self.out.picks.push(("Music", &["ogg"], Pick::RadioMusic));
+        if local_list_header(ui, "Radio Music", "Add music the radios play (.ogg, .wav)") {
+            self.out.picks.push(("Music", MUSIC_FILES, Pick::RadioMusic));
         }
         let mut any = false;
         let s = self.s;
         for t in s.tracks.iter().filter(|t| t.play & RADIO != 0) {
             any = true;
+            let mark = self.mark_of(t);
             let spec = NavRowSpec {
                 icon: Icon::SoundSource,
                 dot: row_dot(self.problems, "track", &t.id),
+                count: mark.as_ref().map(|_| Tx::raw(COPYRIGHT)),
+                tip: mark.unwrap_or(Tx::EMPTY),
                 action: Icon::Close,
                 action_tip: "Take it off the radio. The track stays in the music.".into(),
                 ..NavRowSpec::default()
@@ -809,7 +814,7 @@ impl Frame<'_> {
             text::status(
                 ui,
                 Tone::Muted,
-                "Drop .ogg files here: the radios play them among the game's music.",
+                "Drop music here (.ogg, .wav) or sound assets: the radios play it among the game's music.",
             );
         }
         let to = pos2(from.x + ui.available_width(), ui.cursor().min.y + 8.0);
@@ -998,37 +1003,32 @@ impl Frame<'_> {
             let mut play: Option<usize> = None;
             let edit = gz_ui::ItemRows::new(("gz-ui-pda.playlist_rows", &id), &COLS, tracks.len())
                 .add_label("Add Tracks")
-                .empty_text("Drop tracks here from the Music list, or .ogg files.")
+                .empty_text("Drop tracks here from the Music list, or music files.")
                 .show(ui, |ui, row, _| {
                     let Some(t) = tracks.get(row) else { return };
-                    let file = self.s.track(t).map(|x| x.file.clone()).unwrap_or_default();
-                    if icon_button_sized(
-                        ui,
-                        Icon::Play,
-                        "Play it",
-                        false,
-                        !file.is_empty(),
-                        22.0,
-                        metrics::GLYPH_ROW,
-                    )
-                    .clicked()
+                    let track = self.s.track(t);
+                    let audible = track.is_some_and(|x| x.is_sound() || !x.file.is_empty());
+                    if icon_button_sized(ui, Icon::Play, "Play it", false, audible, 22.0, metrics::GLYPH_ROW)
+                        .clicked()
                     {
                         play = Some(row);
                     }
-                    let known = self.s.track(t).is_some();
                     let p = palette(ui.ctx());
                     text::label(
                         ui,
                         Tx::raw(t.as_str()),
                         Font::Body,
-                        if known { p.text } else { p.tone(Tone::Error) },
+                        if track.is_some() { p.text } else { p.tone(Tone::Error) },
                         Clip::Start,
                     );
+                    if let Some(line) = track.and_then(|x| self.mark_of(x)) {
+                        text::label(ui, Tx::raw(COPYRIGHT), Font::Small, p.text_muted, Clip::End).tip(line);
+                    }
                 });
             if let Some(row) = play
                 && let Some(t) = tracks.get(row).and_then(|t| self.s.track(t))
             {
-                crate::screens::play(self.editor, &t.file, "");
+                play_track(self.editor, t, self.info_of(t));
             }
             if let Some(row) = edit.removed {
                 let pid = id.clone();
@@ -1051,7 +1051,7 @@ impl Frame<'_> {
                 }));
             }
             if edit.added {
-                self.out.picks.push(("Music", &["ogg"], Pick::Playlist(id.clone())));
+                self.out.picks.push(("Music", MUSIC_FILES, Pick::Playlist(id.clone())));
             }
         });
         let to = pos2(from.x + ui.available_width(), ui.cursor().min.y);
@@ -1411,42 +1411,14 @@ impl Frame<'_> {
         self.out.changes.push(change);
     }
 
-    /// Plays Instead: the picker over the sounds without the mark (its first row Nothing), and Play
-    /// for the one picked.
-    fn streamer_row(&mut self, ui: &mut Ui, t: &Track) {
-        let id = t.id.clone();
-        let Some(rows) = self.rows.clone() else {
-            busy_line(ui, "Reading the sounds...");
-            return;
-        };
-        let open = std::mem::take(&mut self.view.open_picker);
-        let w = ui.available_width();
-        ui.horizontal(|ui| {
-            ui.set_width(w);
-            let field_w = (w - metrics::ICON_BUTTON - 6.0).max(80.0);
-            let asked = ui
-                .scope(|ui| {
-                    ui.set_width(field_w);
-                    crate::screens::sounds::picker(ui, &id, &t.streamer, &rows, open)
-                })
-                .inner;
-            if let Some(r) = asked.play.and_then(|i| rows.get(i)) {
-                play_choice(self.editor, r);
-            }
-            if let Some(r) = asked.picked.and_then(|i| rows.get(i)) {
-                let v = r.id.clone();
-                self.out.changes.push(set_track(&id, move |t| v.clone_into(&mut t.streamer)));
-            }
-            if asked.clear {
-                self.out.changes.push(set_track(&id, |t| t.streamer.clear()));
-            }
-            let chosen = rows.iter().find(|r| r.id == t.streamer);
-            if icon_button(ui, Icon::Play, "Play what plays instead", false, chosen.is_some()).clicked()
-                && let Some(r) = chosen
-            {
-                play_choice(self.editor, r);
-            }
-        });
+    /// What the tab knows of a track's sound.
+    fn info_of(&self, t: &Track) -> Option<&TrackInfo> {
+        t.is_sound().then(|| self.infos.as_deref().and_then(|i| i.get(&t.sound))).flatten()
+    }
+
+    /// The quiet mark of a copyrighted track's sound: what it does in the streamer mode.
+    fn mark_of(&self, t: &Track) -> Option<Tx<'static>> {
+        self.info_of(t).filter(|i| i.copyrighted()).map(mark_line)
     }
 
     fn levels_row(&mut self, ui: &mut Ui, d: &Screen) {
@@ -1602,25 +1574,67 @@ impl Frame<'_> {
         for (error, msg) in problems_of(self.problems, "track", &t.id) {
             text::status(ui, if error { Tone::Error } else { Tone::Warning }, Tx::ui(msg));
         }
+        let info = self.info_of(t).cloned();
         ui.horizontal(|ui| {
             if gz_ui::Button::new(Tx::ctx("playback", "Play"))
                 .icon(Icon::Play)
-                .enabled(!t.file.is_empty(), "The track has no file.")
+                .enabled(t.is_sound() || !t.file.is_empty(), "The track has no music.")
                 .show(ui)
                 .clicked()
             {
-                crate::screens::play(self.editor, &t.file, "");
+                play_track(self.editor, t, info.as_ref());
             }
             if gz_ui::Button::new(Tx::ctx("playback", "Stop")).icon(Icon::Stop).show(ui).clicked() {
                 crate::screens::stop(self.editor);
             }
         });
+        if let Some(line) = info.as_ref().filter(|i| i.copyrighted()).map(mark_line) {
+            ui.add_space(2.0);
+            text::status(ui, Tone::Muted, line);
+        }
         ui.add_space(4.0);
         let id = t.id.clone();
         PropertyGrid::new("track").label_frac(0.28).show(ui, |g: &mut Grid<'_>| {
-            g.row("File", "An .ogg of the project.", PropFlags::NONE, 0, |ui| {
-                self.pick(ui, "track_file", &t.file, set_track(&id, |t| t.file.clear()), Pick::TrackFile(id.clone()));
-            });
+            if t.is_sound() {
+                let asset = info.as_ref().and_then(|i| i.facts.asset.clone());
+                g.row("Sound", "The sound the track plays, by its name. Whether it is copyrighted is the sound's to say: Open Sound.", PropFlags::READ_ONLY, 0, |ui| {
+                    read_only(ui, Tx::raw(t.sound.as_str()), Clip::Start);
+                });
+                let length = info.as_ref().and_then(|i| i.seconds).map(clock);
+                g.row("Length", "How long the sound lasts.", PropFlags::READ_ONLY, 0, |ui| {
+                    read_only(ui, length.map_or(Tx::from("Unknown"), Tx::raw), Clip::End);
+                });
+                g.block(|ui| {
+                    let why = if info.is_none() { "Reading the sound..." } else { "A sound of the game has no sound asset of the module." };
+                    if gz_ui::Button::new("Open Sound")
+                        .icon(Icon::SoundAsset)
+                        .kind(Kind::Secondary)
+                        .enabled(asset.is_some(), why)
+                        .tip("Opens the sound asset: its keys, and whether it is copyrighted.")
+                        .show(ui)
+                        .clicked()
+                        && let Some(a) = &asset
+                    {
+                        self.out.open_sound = Some(a.clone());
+                    }
+                });
+            } else {
+                g.row("File", "A plain .ogg of the project: it has no description, so it cannot be marked copyrighted.", PropFlags::READ_ONLY, 0, |ui| {
+                    read_only(ui, Tx::raw(t.file.as_str()), Clip::Start);
+                });
+                g.block(|ui| {
+                    if gz_ui::Button::new("Make It a Sound")
+                        .icon(Icon::SoundAsset)
+                        .kind(Kind::Secondary)
+                        .enabled(!t.file.is_empty(), "The track has no file.")
+                        .tip("Only a sound can carry the copyrighted mark: a sound asset is written over the file and the track plays that sound.")
+                        .show(ui)
+                        .clicked()
+                    {
+                        self.out.make_sound = Some(id.clone());
+                    }
+                });
+            }
             g.row("Shuffle On", "Where this track is played at random: on the surfaces, and on the radios of the world. Leave all off to play it only with the screens and playlists that name it.", PropFlags::NONE, 0, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     let mut play = t.play;
@@ -1633,22 +1647,6 @@ impl Frame<'_> {
                     }
                 });
             });
-            g.row("Copyrighted", "Not played while the game's streamer mode is on.", PropFlags::INLINE, 0, |ui| {
-                let mut on = t.copyrighted;
-                if switch(ui, &mut on).changed() {
-                    self.out.changes.push(set_track(&id, move |t| {
-                        t.copyrighted = on;
-                        if !on {
-                            t.streamer.clear();
-                        }
-                    }));
-                }
-            });
-            if t.copyrighted {
-                g.row("Plays Instead", "What plays in its place while the streamer mode is on: a track or a sound without the mark. Nothing: the track is left out.", PropFlags::NONE, 0, |ui| {
-                    self.streamer_row(ui, t);
-                });
-            }
             g.row("Volume", "", PropFlags::NONE, 0, |ui| {
                 let key = format!("{id}.volume");
                 if let Some(v) = edited_number(ui, self.edit, &key, t.volume * 100.0, 1.0, "%", 0.0, 100.0) {
@@ -1664,6 +1662,22 @@ impl Frame<'_> {
         });
     }
 }
+
+/// `1:05`, the length of a track; `0:03.2` for a short one.
+fn clock(seconds: f64) -> String {
+    let s = seconds.max(0.0);
+    if s < 10.0 {
+        return format!("0:{s:04.1}");
+    }
+    let whole = s.round() as u64;
+    format!("{}:{:02}", whole / 60, whole % 60)
+}
+
+/// What a track's Add picks: music, made a sound asset of the module.
+const MUSIC_FILES: &[&str] = &["ogg", "wav"];
+
+/// The quiet mark of a copyrighted sound on its rows.
+const COPYRIGHT: &str = "\u{a9}";
 
 use gz_ui::Palette;
 
@@ -1707,14 +1721,6 @@ fn drag_track(ui: &mut Ui, top: f32, list: &str, id: &str) {
 fn accepts_tracks(p: &gz_ui::drop::Payload) -> bool {
     matches!(p, gz_ui::drop::Payload::Row { surface, .. } if surface == TRACK_ROW)
         || gz_ui::drop::accepts_files(p)
-}
-
-/// Plays a row of Plays Instead: a track's file, a sound asset, or the game's sound by its name.
-fn play_choice(editor: &Arc<Editor>, r: &Choice) {
-    match r.from {
-        ChoiceFrom::Game => crate::screens::play(editor, "", &r.id),
-        _ => crate::screens::play(editor, &r.file, ""),
-    }
 }
 
 /// The files dropped on `rect` this frame, from Explorer or from tiles of the Content Browser: the
@@ -1853,18 +1859,7 @@ impl Document for ScreensDoc {
         let tree = Project::of(&self.editor).ok().map(|(_, p)| p.tree.snapshot());
         let levels = self.levels.lock().clone().flatten();
         let mut view = self.tab.v.lock().clone();
-        let close = self.tab.v.lock().close_picker.take();
-        if let Some(was) = close {
-            crate::screens::sounds::close(ui.ctx(), &was);
-            crate::screens::sounds::close(ui.ctx(), &view.sel_track);
-        }
-        // the Plays Instead rows are read only while a copyrighted track is up
-        let rows = local
-            .s
-            .track(&view.sel_track)
-            .filter(|t| t.copyrighted && view.sel_screen.is_empty())
-            .cloned()
-            .and_then(|t| self.streamer_rows(&local.s, local.rev, &t.id));
+        let infos = self.infos(&local.s, local.rev);
         let before = view.clone();
         let mut out = Out::default();
         {
@@ -1881,7 +1876,7 @@ impl Document for ScreensDoc {
                 edit: &mut self.edit,
                 thumbs: &mut self.thumbs,
                 tree,
-                rows,
+                infos,
             };
             let gap = 8.0;
             let left = Rect::from_min_max(full.min, pos2((full.min.x + LEFT_W).min(full.max.x), full.max.y));
@@ -1974,9 +1969,6 @@ impl Document for ScreensDoc {
                 v.sel_track = view.sel_track;
                 v.sel_playlist = view.sel_playlist;
                 v.sel_layer = view.sel_layer;
-            }
-            if before.open_picker && !view.open_picker {
-                v.open_picker = false;
             }
         }
         self.finish(out, cx);

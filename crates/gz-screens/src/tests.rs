@@ -1,8 +1,13 @@
-use gz_media::sound::Mark;
+use gz_media::sound::{Facts, Mark};
 use gz_mod::{ManifestDoc, edit};
 
 use super::*;
 use crate::model::{HIDE_BAR, HIDE_TIP, LOADING, MENU, Order, PAUSE, Playlist, RADIO};
+
+/// Every sound free and nobody's asset: what a check without a project reads.
+fn free(_: &str) -> Facts {
+    Facts { mark: Mark::Free, instead: String::new(), asset: None }
+}
 
 const TEXT: &str = "[module]\r\nid          = od\r\n\r\n\
 [screens]\r\nloading_screens   = only\r\nmenu_music_end    = next\r\n\r\n\
@@ -182,7 +187,7 @@ fn validation_says_what_is_wrong() {
         ..Screens::default()
     };
     let levels = vec!["l01_escape".to_owned()];
-    let out = validate(&base, &s, &|_| false, Some(&levels), &|_| Mark::Free);
+    let out = validate(&base, &s, &|_| false, Some(&levels), &free);
     let codes: Vec<&str> = out.iter().map(|l| l.get(..4).unwrap()).collect();
     assert_eq!(codes, ["W406", "W405", "E402", "E401", "E404", "W411", "W407", "E403", "E409", "W410"]);
     assert_eq!(out[0], "W406 screen empty: it has no layers, so it is never shown");
@@ -198,7 +203,7 @@ fn a_problem_carries_its_section_and_key_and_the_document_puts_it_at_the_line() 
     let base = std::env::temp_dir().join(format!("gz-screens-spots-{}", std::process::id()));
     std::fs::create_dir_all(base.join("art")).unwrap();
     std::fs::write(base.join("art").join("a.dds"), b"DDS ").unwrap();
-    let found = crate::validate::issues(&base, &s, &|_| false, None, &|_| Mark::Free);
+    let found = crate::validate::issues(&base, &s, &|_| false, None, &free);
     let at = |code: &str, text: &str| {
         let i = found
             .iter()
@@ -220,7 +225,7 @@ fn a_problem_carries_its_section_and_key_and_the_document_puts_it_at_the_line() 
     assert_eq!(at("E401", "track t1").1, Some(19));
     // the same problems as lines are what the answers have always said
     let lines: Vec<String> = found.iter().map(gz_mod::Issue::line).collect();
-    assert_eq!(lines, validate(&base, &s, &|_| false, None, &|_| Mark::Free));
+    assert_eq!(lines, validate(&base, &s, &|_| false, None, &free));
     // and as problems of the manifest's check they carry the spot
     let p = found[0].problem();
     assert_eq!(gz_mod::Spot::of(&p), Some(found[0].spot.clone()));
@@ -228,7 +233,7 @@ fn a_problem_carries_its_section_and_key_and_the_document_puts_it_at_the_line() 
 }
 
 const RADIO_TEXT: &str = "[module]\r\nid = od\r\n\r\n\
-[track.night]\r\nfile = music/night.ogg\r\nplay = menu, radio\r\ncopyrighted = true\r\nstreamer = calm\r\n\r\n\
+[track.night]\r\nsound = od\\night\r\nplay = menu, radio\r\ncopyrighted = true\r\n\r\n\
 [track.calm]\r\nfile = music/calm.ogg\r\nplay = radio\r\n\r\n\
 [playlist.road] ; the author's\r\ntitle = \"Road; Songs\"\r\ntracks = night, calm\r\norder = list\r\n\r\n\
 [radio]\r\nmusic = only\r\n";
@@ -238,8 +243,10 @@ fn the_radio_reads_writes_and_keeps_its_place() {
     let mut doc = ManifestDoc::parse(RADIO_TEXT);
     let s = Screens::parse(&doc);
     let night = s.track("night").unwrap();
-    assert_eq!((night.play, night.copyrighted, night.streamer.as_str()), (MENU | RADIO, true, "calm"));
-    assert!(!s.track("calm").unwrap().copyrighted);
+    assert_eq!((night.play, night.sound.as_str(), night.is_sound()), (MENU | RADIO, "od\\night", true));
+    // a key no track reads is kept as it is, the mark that is the sound's now among them
+    assert_eq!(night.extra("copyrighted"), Some("true"));
+    assert!(!s.track("calm").unwrap().is_sound());
     let road = s.playlist("road").unwrap();
     assert_eq!(
         (road.title.as_str(), road.tracks.clone(), road.order),
@@ -252,14 +259,16 @@ fn the_radio_reads_writes_and_keeps_its_place() {
     assert!(once.contains("[playlist.road] ; the author's"), "{once}");
     assert!(once.contains("title             = \"Road; Songs\"\r\n"), "{once}");
     assert!(
-        once.contains("play              = menu, radio\r\n") && once.contains("copyrighted       = true\r\n")
+        once.contains("sound             = od\\night\r\nplay              = menu, radio\r\n")
+            && once.contains("copyrighted       = true\r\n")
+            && !once.contains("file              = \r\n"),
+        "{once}"
     );
     assert_eq!(Screens::parse(&doc), s);
-    // a track taken out leaves the playlists and the replacements that named it
+    // a track taken out leaves the playlists that named it
     let mut s2 = s.clone();
     s2.remove_track("calm");
     assert_eq!(s2.playlist("road").unwrap().tracks, ["night"]);
-    assert!(s2.track("night").unwrap().streamer.is_empty());
     // the mix, a shuffled playlist and a new one write their defaults away
     let mut s3 = s.clone();
     s3.only_radio = false;
@@ -282,23 +291,23 @@ fn the_radio_reads_writes_and_keeps_its_place() {
 #[test]
 fn the_radio_says_what_is_wrong_at_its_lines() {
     let text = "[module]\r\nid = od\r\n\r\n\
-[track.a]\r\nfile = a.ogg\r\nplay = radio\r\nstreamer = b\r\n\r\n\
-[track.b]\r\nfile = b.ogg\r\nplay = radio\r\ncopyrighted = true\r\nstreamer = a\r\n\r\n\
-[track.c]\r\nfile = c.ogg\r\ncopyrighted = true\r\nstreamer = game\\song\r\n\r\n\
-[track.d]\r\nfile = d.ogg\r\ncopyrighted = true\r\nstreamer = nowhere\r\n\r\n\
+[track.a]\r\nsound = od\\a\r\nplay = radio\r\nstreamer = b\r\n\r\n\
+[track.b]\r\nfile = b.ogg\r\nplay = radio\r\ncopyrighted = true\r\n\r\n\
+[track.c]\r\nsound = nowhere\r\nfile = c.ogg\r\nplay = radio\r\n\r\n\
+[track.d]\r\nplay = radio\r\n\r\n\
 [playlist.p]\r\ntitle = Дорога ★\r\ntracks = a, gone\r\n\r\n\
 [playlist.empty]\r\ntitle = x\r\n";
     let doc = ManifestDoc::parse(text);
     let s = Screens::parse(&doc);
     let base = std::env::temp_dir().join(format!("gz-screens-radio-{}", std::process::id()));
     std::fs::create_dir_all(&base).unwrap();
-    for f in ["a.ogg", "b.ogg", "c.ogg", "d.ogg"] {
+    for f in ["b.ogg", "c.ogg"] {
         std::fs::write(base.join(f), b"OggS").unwrap();
     }
     let sounds = |n: &str| match n {
-        "game\\song" => Mark::Copyrighted,
-        "nowhere" => Mark::Missing,
-        _ => Mark::Free,
+        "nowhere" => Facts { mark: Mark::Missing, ..free(n) },
+        "od\\a" => Facts { asset: Some("sounds/a.sndasset".into()), ..free(n) },
+        _ => free(n),
     };
     let found = crate::validate::issues(&base, &s, &|_| false, None, &sounds);
     let at = |code: &str, text: &str| {
@@ -308,15 +317,22 @@ fn the_radio_says_what_is_wrong_at_its_lines() {
             .unwrap_or_else(|| panic!("{code} {text}: {found:?}"));
         doc.locate(&i.spot).map(|p| p.line)
     };
-    // a replacement on a track that is not copyrighted; a copyrighted one, a track or a sound
-    assert_eq!(at("W415", "track a:"), Some(7));
-    assert_eq!(at("E416", "track a:"), Some(7));
-    assert_eq!(at("E416", "track c:"), Some(18));
-    assert_eq!(at("E417", "track d:"), Some(23));
+    // the mark a track still carries is said at its line, naming where it is set now: the
+    // track's sound asset, or Make It a Sound for a plain file
+    assert_eq!(at("W417", "sounds/a.sndasset"), Some(7));
+    assert_eq!(at("W417", "action=track_sound id=b"), Some(12));
+    // a sound nobody has at its line, and the file beside it at its own (the sound plays)
+    assert_eq!(at("E416", "track c:"), Some(15));
+    assert_eq!(at("W415", "track c:"), Some(16));
+    // a track that names no music at its header
+    assert_eq!(at("E418", "track d:"), Some(19));
     // a playlist's missing track, its title outside cp1251, an empty one at its header
-    assert_eq!(at("E412", "gone"), Some(27));
-    assert_eq!(at("W414", "★"), Some(26));
-    assert_eq!(at("W413", "playlist empty:"), Some(29));
+    assert_eq!(at("E412", "gone"), Some(24));
+    assert_eq!(at("W414", "★"), Some(23));
+    assert_eq!(at("W413", "playlist empty:"), Some(26));
+    // the mark's warning is no warning of the manifest's own check too
+    let own: Vec<String> = gz_mod::validate(&doc).iter().map(|p| p.code.to_string()).collect();
+    assert!(!own.iter().any(|c| c == "mod.key"), "{own:?}");
     // a track the radio plays plays somewhere
     assert!(!found.iter().any(|i| i.code == "W410" && i.text.starts_with("track a:")), "{found:?}");
     let _ = std::fs::remove_dir_all(&base);

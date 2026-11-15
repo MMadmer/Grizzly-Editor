@@ -20,11 +20,17 @@
 //!   [`audio`]). Lists are walks on the IO pool kept per revision; edits live in a `Store` per
 //!   library with undo and are saved explicitly, as a job beside the editor.
 //!
-//! [`install`] plugs the five tabs and the Libraries menu (Light Animations, Texture Library,
+//! - **The sound preview** ([`sound`], the `sound` tab): one sound asset - Play / Stop, its file
+//!   and format, and what the asset says as the property grid of `gz-media`'s sound table, saved
+//!   into the file's own text as it is edited; Copyrighted and, under it, Plays Instead
+//!   ([`sound_pick`]), the one place the editor says whether a sound is copyrighted.
+//!
+//! [`install`] plugs the six tabs and the Libraries menu (Light Animations, Texture Library,
 //! Sound Library, Reload Objects) into the shell; Check New Textures, Synchronize Textures,
 //! Synchronize Sounds, Rewrite Texture Descriptions... and Reload Textures are actions too, on
 //! the palette and under their tab's More ([`libtools`]). [`register`] adds `preview.model`,
-//! `preview.texture`, `library.view`, `shot.asset` and the `library.*` maintenance commands.
+//! `preview.texture`, `preview.sound`, `library.view`, `shot.asset` and the `library.*` maintenance
+//! commands.
 //!
 //! Widgets the kit lacks, local to this crate: [`local::local_heading`] (a preview's title and
 //! its facts), [`local::local_ends`] (a row's two end labels), [`local::local_frame`] and
@@ -53,6 +59,8 @@ pub mod model_load;
 pub mod paths;
 pub mod pending;
 mod sheet;
+pub mod sound;
+pub mod sound_pick;
 pub mod texture;
 pub mod texture_load;
 pub mod writer;
@@ -299,12 +307,13 @@ fn tab_actions() -> Vec<Action> {
     ]
 }
 
-/// Plugs the model and texture previews, the three library tabs and the Libraries menu into the
+/// Plugs the model, texture and sound previews, the three library tabs and the Libraries menu into the
 /// shell.
 pub fn install(b: &mut ShellBuilder) {
     b.translation(include_str!("ru.lua"));
     b.document("model", model::factory);
     b.document("texture", texture::factory);
+    b.document("sound", sound::factory);
     b.document(lanim::KIND, lanim::factory);
     b.document(textures::KIND, textures::factory);
     b.document(sounds::KIND, sounds::factory);

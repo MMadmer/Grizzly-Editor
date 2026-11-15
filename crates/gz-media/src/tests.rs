@@ -835,7 +835,13 @@ fn a_copyrighted_sound_names_a_free_replacement_and_the_game_list_reads_its_mask
     let rights = crate::sound::parse_rights(
         "; the game's\r\n[other]\r\nnot\\this\r\n[copyrighted]\r\nmusic\\radio\\*\r\nRadio/Edward_Meditation = radio\\free ; a replacement\r\n*_theme_*\r\n",
     );
-    assert_eq!(rights, ["music\\radio\\*", "radio\\edward_meditation", "*_theme_*"]);
+    let masks: Vec<&str> = rights.iter().map(|r| r.mask.as_str()).collect();
+    assert_eq!(masks, ["music\\radio\\*", "radio\\edward_meditation", "*_theme_*"]);
+    assert_eq!(rights[1].instead, "radio\\free");
+    assert_eq!(
+        crate::sound::right_of(&rights, "radio\\edward_meditation").map(|r| r.instead.as_str()),
+        Some("radio\\free")
+    );
     let listed = |n: &str| crate::sound::listed(&rights, n);
     assert!(
         listed("music\\radio\\music_3") && listed("MUSIC/radio/x.ogg") && listed("radio\\edward_meditation")
@@ -887,4 +893,66 @@ fn a_copyrighted_sound_names_a_free_replacement_and_the_game_list_reads_its_mask
     let free: Vec<String> =
         crate::sound::free_sounds(&d.0, &index, &lone).into_iter().map(|f| f.name).collect();
     assert_eq!(free, ["od\\calm", "od\\plain"]);
+    // what a name is to the streamer mode, where the game reads it: the module's asset, the game's list
+    let f = crate::sound::facts(&d.0, &index, &lone, "od\\song");
+    assert_eq!(
+        (f.mark, f.instead.as_str(), f.asset.as_deref()),
+        (crate::sound::Mark::Copyrighted, "ambient\\wind", Some("s/song.sndasset"))
+    );
+    let f = crate::sound::facts(&d.0, &index, &lone, "od\\plain");
+    assert_eq!((f.mark, f.instead.as_str()), (crate::sound::Mark::Free, ""));
+    assert_eq!(crate::sound::facts(&d.0, &index, &lone, "nobody\\x").mark, crate::sound::Mark::Missing);
+    assert_eq!(crate::sound::facts(&d.0, &index, &game(false), "nobody\\x").mark, crate::sound::Mark::Free);
+}
+
+#[test]
+fn music_from_anywhere_becomes_a_sound_asset_under_the_modules_name() {
+    let outside = Dir::new("music-out");
+    outside.put("Rain Song.ogg", wav());
+    let project = Dir::new("music-in");
+    project.put("mod.ltx", "[module]\nid = od\n");
+    project.put("tracks/inside.ogg", wav());
+    let none = |_: &str| false;
+    // from outside: copied into sounds\, its asset beside it, published under the module's id
+    let a = import::sound_asset(&project.0, &outside.0.join("Rain Song.ogg"), "od", &none, None).unwrap();
+    assert_eq!(
+        (a.asset.as_str(), a.name.as_str(), a.written),
+        ("sounds/Rain Song.sndasset", "od\\Rain Song", true)
+    );
+    assert!(project.0.join("sounds").join("Rain Song.ogg").is_file());
+    let text = std::fs::read_to_string(project.0.join("sounds").join("Rain Song.sndasset")).unwrap();
+    assert!(text.contains("snd = 1") && text.contains("source = \"Rain Song.ogg\""), "{text}");
+    // the same file again is the same sound
+    let again = import::sound_asset(&project.0, &outside.0.join("Rain Song.ogg"), "od", &none, None).unwrap();
+    assert_eq!((again.asset.as_str(), again.written), ("sounds/Rain Song.sndasset", false));
+    // a file of the project stays where it is, its asset beside it
+    let inside =
+        import::sound_asset(&project.0, &project.0.join("tracks").join("inside.ogg"), "od", &none, None)
+            .unwrap();
+    assert_eq!((inside.asset.as_str(), inside.name.as_str()), ("tracks/inside.sndasset", "od\\inside"));
+    // a name another asset publishes is not taken: the asset gets a stem of its own
+    let taken = |n: &str| n.eq_ignore_ascii_case("od\\inside");
+    project.put("other/inside.ogg", wav());
+    let other =
+        import::sound_asset(&project.0, &project.0.join("other").join("inside.ogg"), "od", &taken, None)
+            .unwrap();
+    assert_eq!((other.asset.as_str(), other.name.as_str()), ("other/inside_2.sndasset", "od\\inside_2"));
+    let text = std::fs::read_to_string(project.0.join("other").join("inside_2.sndasset")).unwrap();
+    assert!(text.contains("source = \"inside.ogg\""), "{text}");
+    // a sound asset given is that sound; another kind of file is refused by name
+    let given = import::sound_asset(
+        &project.0,
+        &project.0.join("sounds").join("Rain Song.sndasset"),
+        "od",
+        &none,
+        None,
+    )
+    .unwrap();
+    assert_eq!((given.name.as_str(), given.written), ("od\\Rain Song", false));
+    project.put("notes.txt", "x");
+    assert!(
+        import::sound_asset(&project.0, &project.0.join("notes.txt"), "od", &none, None)
+            .unwrap_err()
+            .contains("notes.txt")
+    );
 }

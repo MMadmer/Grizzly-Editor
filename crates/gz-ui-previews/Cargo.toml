@@ -31,6 +31,7 @@ gz-render.workspace = true
 gz-pix.workspace = true
 gz-scene.workspace = true
 gz-media.workspace = true
+gz-asset.workspace = true
 gz-luadata.workspace = true
 gz-ui.workspace = true
 gz-app.workspace = true

@@ -24,6 +24,7 @@ use crate::model::{ModelDoc, ModelPreload, Orbit};
 use crate::model_load::{ModelSource, load as load_model};
 use crate::paths::engine_name;
 use crate::pending::Pending;
+use crate::sound::SoundDoc;
 use crate::texture::{TextureDoc, TexturePreload, parse_channel};
 use crate::texture_load::{TexSource, UNREADABLE, UNREADABLE_REPLY, load as load_texture};
 
@@ -395,84 +396,194 @@ enum SoundAction {
     Play,
     /// Stops what plays.
     Stop,
-    /// Answers whether something plays.
+    /// Answers whether something plays, and what the Sound tab shows when it is open.
     State,
+}
+
+/// A pick list of the Sound tab put up to be looked at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum SoundShow {
+    /// Plays Instead's list of a copyrighted sound: its rows are answered as `picker`.
+    Streamer,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SoundParams {
+    /// Left out: play when a sound is named, else answer the state.
     #[serde(default)]
-    action: SoundAction,
-    /// play: a sound asset of the project (`sounds/hum.sndasset`), or a sound file of it (`.wav`,
-    /// `.ogg`).
+    action: Option<SoundAction>,
+    /// A sound asset of the project (`sounds/hum.sndasset`), or a sound file of it (`.wav`, `.ogg`).
     #[serde(default)]
     path: Option<String>,
     /// play, instead of `path`: a sound of the linked game by its name (`ambient\wind`), its
     /// `sounds\<name>.ogg`.
     #[serde(default)]
     name: Option<String>,
+    /// Opens the Sound tab on the sound asset `path` (nothing plays) and answers what it shows:
+    /// every row with its key, title, value, default, whether the asset sets it, its problems.
+    #[serde(default)]
+    open: bool,
+    /// Puts a pick list of the open Sound tab up and answers its rows.
+    #[serde(default)]
+    show: Option<SoundShow>,
+    /// The open Sound tab's edits, as a person makes them in it, saved into the file as the tab
+    /// saves: `{"key": value}` sets a row, `{"key": null}` takes the key out. Copyrighted off takes
+    /// streamer out with it; streamer takes only a row of Plays Instead.
+    #[serde(default)]
+    set: Option<Map<String, Value>>,
 }
 
-/// A WAV's samples as the player takes them: 16-bit, interleaved.
-fn pcm_of_wav(w: &gz_fmt_sound::Wav) -> gz_fmt_sound::Pcm {
-    let frames = w.frames();
-    let channels = w.channels.len().clamp(1, 8);
-    let mut samples = Vec::with_capacity(frames * channels);
-    for i in 0..frames {
-        for c in w.channels.iter().take(channels) {
-            let v = c.get(i).copied().unwrap_or(0.0).clamp(-1.0, 1.0);
-            samples.push((v * 32767.0).round() as i16);
+/// The most rows of Plays Instead an answer names.
+const PICKER_ROWS: usize = 200;
+
+/// What the sound tab answers: `tab`, `active`, its state, and Plays Instead's rows when asked.
+async fn sound_answer(editor: &Arc<Editor>, picker: bool) -> Reply {
+    let (active, state, rows) = on_ui(editor, move |shell, _| {
+        let active = shell.active() == "sound";
+        let d = doc::<SoundDoc>(shell, "sound");
+        let state = d.as_ref().map(|d| d.state_json());
+        let rows = d.filter(|_| picker).map(|d| d.picker_json(PICKER_ROWS));
+        Ok((active, state, rows))
+    })
+    .await?;
+    let player = crate::audio::Player::of(editor);
+    let mut head = Map::new();
+    head.insert("tab".into(), json!("sound"));
+    head.insert("active".into(), json!(active));
+    let mut tail = state.unwrap_or_else(|| Map::from_iter([("open".to_owned(), json!(false))]));
+    if !tail.contains_key("playing") {
+        tail.insert("playing".into(), json!(player.is_playing()));
+    }
+    tail.insert("player_error".into(), json!(player.error()));
+    if let Some(r) = rows {
+        tail.insert("picker".into(), r);
+    }
+    Ok(merge(head, tail))
+}
+
+/// Waits until the open Sound tab has read its file and written its edits (and, for `picker`,
+/// read Plays Instead's rows), then for the frames that show it.
+async fn sound_settled(editor: &Arc<Editor>, picker: bool) -> Result<(), CmdError> {
+    let deadline = tokio::time::Instant::now() + LOAD_WAIT;
+    loop {
+        owe_frames(editor, 1).await;
+        let ready = on_ui(editor, move |shell, ctx| {
+            ctx.request_repaint();
+            Ok(doc::<SoundDoc>(shell, "sound")
+                .is_none_or(|d| d.loaded().is_some() && !d.settling() && (!picker || d.picker_ready())))
+        })
+        .await?;
+        if ready || tokio::time::Instant::now() > deadline || !editor.frames.has_window() {
+            break;
         }
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    gz_fmt_sound::Pcm { channels: u8::try_from(channels).unwrap_or(1), rate: w.rate, samples }
-}
-
-/// A sound of the project decoded for the player, and what its asset says. Blocking.
-fn decode_sound(root: &std::path::Path, rel: &str) -> Result<(gz_fmt_sound::Pcm, Value), String> {
-    let is_asset =
-        gz_project::asset_kind::MediaKind::of_file(rel) == Some(gz_project::asset_kind::MediaKind::Sound);
-    let (source, facts) = if is_asset {
-        let (a, source, _) = gz_media::resolve::sound(root, rel).map_err(|f| f.to_string())?;
-        let facts = json!({
-            "name": a.name,
-            "min_distance": a.min_distance,
-            "max_distance": a.max_distance,
-            "volume": a.volume,
-            "ai_distance": a.ai_distance,
-            "type": a.ty.and_then(|t| gz_media::fields::SOUND_TYPES.iter().find(|(_, v)| *v == t).map(|(w, _)| *w)),
-            "quality": a.quality,
-            "copyrighted": a.is_copyrighted(),
-            "streamer": a.streamer,
-        });
-        (source, facts)
-    } else {
-        (root.join(rel.replace('/', "\\")), Value::Null)
-    };
-    let bytes =
-        std::fs::read(&source).map_err(|e| format!("{}: {}", source.display(), gz_base::io_reason(&e)))?;
-    let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    let pcm = match ext.as_str() {
-        "wav" => pcm_of_wav(&gz_fmt_sound::read_wav(&bytes).map_err(|e| e.to_string())?),
-        "ogg" => gz_fmt_sound::decode_ogg(&bytes).map_err(|e| e.to_string())?,
-        _ => return Err(format!("{} is no sound the editor plays (.wav, .ogg)", source.display())),
-    };
-    let mut out = serde_json::Map::new();
-    out.insert("source".into(), json!(crate::paths::json_path(&source)));
-    if !facts.is_null() {
-        out.insert("asset".into(), facts);
-    }
-    Ok((pcm, Value::Object(out)))
+    owe_frames(editor, 3).await;
+    Ok(())
 }
 
 async fn preview_sound(editor: Arc<Editor>, p: SoundParams, _origin: Origin) -> Reply {
     let player = crate::audio::Player::of(&editor);
-    match p.action {
+    if p.open || p.show.is_some() || p.set.is_some() {
+        // a view command puts up what it asks for: a list the last one left up goes
+        if p.show.is_none() {
+            on_ui(&editor, |shell, ctx| {
+                if let Some(d) = doc::<SoundDoc>(shell, "sound") {
+                    d.close_picker = true;
+                    ctx.request_repaint();
+                }
+                Ok(())
+            })
+            .await?;
+        }
+        if p.open {
+            let path = p.path.as_deref().map(|x| x.replace('/', "\\")).filter(|x| !x.trim().is_empty());
+            let Some(path) = path.filter(|x| {
+                gz_project::asset_kind::MediaKind::of_file(x)
+                    == Some(gz_project::asset_kind::MediaKind::Sound)
+            }) else {
+                return Err(invalid("open takes path= naming a sound asset of the project (.sndasset)"));
+            };
+            let p2 = path.clone();
+            let showing = on_ui(&editor, move |shell, ctx| {
+                let same = doc::<SoundDoc>(shell, "sound").is_some_and(|d| d.rel().eq_ignore_ascii_case(&p2));
+                if same {
+                    shell.activate(ctx, "sound");
+                }
+                Ok(same)
+            })
+            .await?;
+            if !showing {
+                open_tab(&editor, "sound", Some(&path), None).await?;
+            }
+            sound_settled(&editor, false).await?;
+        }
+        if let Some(set) = p.set {
+            // the replacement is a row of a list read once the sound is copyrighted: after the rest
+            let (mut rest, mut instead) = (set, Map::new());
+            if let Some(v) = rest.remove(gz_media::sound::REPLACEMENT_KEY) {
+                instead.insert(gz_media::sound::REPLACEMENT_KEY.to_owned(), v);
+            }
+            for (part, picker) in [(rest, !instead.is_empty()), (instead, false)] {
+                if part.is_empty() {
+                    continue;
+                }
+                on_ui(&editor, move |shell, _| match doc::<SoundDoc>(shell, "sound") {
+                    Some(d) => d.apply_set(&part).map_err(invalid),
+                    None => Err(invalid(
+                        "no Sound tab is open: preview.sound open=true path=<a sound asset> opens it",
+                    )),
+                })
+                .await?;
+                sound_settled(&editor, picker).await?;
+            }
+        }
+        if p.show == Some(SoundShow::Streamer) {
+            let up = on_ui(&editor, |shell, ctx| {
+                let copyrighted = doc::<SoundDoc>(shell, "sound").map(|d| d.state_json())
+                    .and_then(|s| s.get("copyrighted").and_then(serde_json::Value::as_bool));
+                match copyrighted {
+                    None => Err(invalid("no Sound tab is open: preview.sound open=true path=<a sound asset> opens it")),
+                    Some(false) => Err(CmdError::new(
+                        "refused",
+                        "show=streamer puts up Plays Instead, which is live only while the sound is copyrighted (copyrighted = true)",
+                    )),
+                    Some(true) => {
+                        shell.activate(ctx, "sound");
+                        if let Some(d) = doc::<SoundDoc>(shell, "sound") {
+                            d.open_picker = true;
+                        }
+                        ctx.request_repaint();
+                        Ok(())
+                    }
+                }
+            })
+            .await;
+            up?;
+            sound_settled(&editor, true).await?;
+            // the list goes up in the frame that draws the field
+            on_ui(&editor, |shell, _| {
+                if let Some(d) = doc::<SoundDoc>(shell, "sound") {
+                    d.open_picker = true;
+                }
+                Ok(())
+            })
+            .await?;
+            owe_frames(&editor, 3).await;
+        }
+        return sound_answer(&editor, p.show.is_some()).await;
+    }
+    let named = p.path.as_deref().is_some_and(|x| !x.trim().is_empty())
+        || p.name.as_deref().is_some_and(|x| !x.trim().is_empty());
+    match p.action.unwrap_or(if named { SoundAction::Play } else { SoundAction::State }) {
         SoundAction::Stop => {
             player.stop();
+            owe_frames(&editor, 1).await;
             return Ok(json!({ "playing": false }));
         }
-        SoundAction::State => return Ok(json!({ "playing": player.is_playing(), "error": player.error() })),
+        SoundAction::State => return sound_answer(&editor, false).await,
         SoundAction::Play => {}
     }
     if let Some(name) = p.name.filter(|n| !n.trim().is_empty()) {
@@ -512,6 +623,62 @@ async fn preview_sound(editor: Arc<Editor>, p: SoundParams, _origin: Origin) -> 
         m.insert("rate".into(), json!(rate));
     }
     Ok(facts)
+}
+
+/// A WAV's samples as the player takes them: 16-bit, interleaved.
+fn pcm_of_wav(w: &gz_fmt_sound::Wav) -> gz_fmt_sound::Pcm {
+    let frames = w.frames();
+    let channels = w.channels.len().clamp(1, 8);
+    let mut samples = Vec::with_capacity(frames * channels);
+    for i in 0..frames {
+        for c in w.channels.iter().take(channels) {
+            let v = c.get(i).copied().unwrap_or(0.0).clamp(-1.0, 1.0);
+            samples.push((v * 32767.0).round() as i16);
+        }
+    }
+    gz_fmt_sound::Pcm { channels: u8::try_from(channels).unwrap_or(1), rate: w.rate, samples }
+}
+
+/// A sound file decoded for the player. Blocking.
+pub(crate) fn decode_file(source: &std::path::Path) -> Result<gz_fmt_sound::Pcm, String> {
+    let bytes =
+        std::fs::read(source).map_err(|e| format!("{}: {}", source.display(), gz_base::io_reason(&e)))?;
+    let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "wav" => Ok(pcm_of_wav(&gz_fmt_sound::read_wav(&bytes).map_err(|e| e.to_string())?)),
+        "ogg" => gz_fmt_sound::decode_ogg(&bytes).map_err(|e| e.to_string()),
+        _ => Err(format!("{} is no sound the editor plays (.wav, .ogg)", source.display())),
+    }
+}
+
+/// A sound of the project decoded for the player, and what its asset says. Blocking.
+fn decode_sound(root: &std::path::Path, rel: &str) -> Result<(gz_fmt_sound::Pcm, Value), String> {
+    let is_asset =
+        gz_project::asset_kind::MediaKind::of_file(rel) == Some(gz_project::asset_kind::MediaKind::Sound);
+    let (source, facts) = if is_asset {
+        let (a, source, _) = gz_media::resolve::sound(root, rel).map_err(|f| f.to_string())?;
+        let facts = json!({
+            "name": a.name,
+            "min_distance": a.min_distance,
+            "max_distance": a.max_distance,
+            "volume": a.volume,
+            "ai_distance": a.ai_distance,
+            "type": a.ty.map(|t| gz_media::fields::words_of(gz_media::fields::SOUND_TYPES, t)),
+            "quality": a.quality,
+            "copyrighted": a.is_copyrighted(),
+            "streamer": a.streamer,
+        });
+        (source, facts)
+    } else {
+        (root.join(rel.replace('/', "\\")), Value::Null)
+    };
+    let pcm = decode_file(&source)?;
+    let mut out = serde_json::Map::new();
+    out.insert("source".into(), json!(crate::paths::json_path(&source)));
+    if !facts.is_null() {
+        out.insert("asset".into(), facts);
+    }
+    Ok((pcm, Value::Object(out)))
 }
 
 // ---- the libraries -----------------------------------------------------------------------------
@@ -1325,8 +1492,11 @@ pub fn register(reg: &mut Registry) {
         texture_preview,
     );
     reg.cmd(
-        Spec::view("preview.sound", "Plays a sound asset or a sound file of the project, or stops it.")
-            .example("path=sounds/hum.sndasset"),
+        Spec::write(
+            "preview.sound",
+            "Plays a sound asset or a sound file of the project, or stops it; open=true shows a sound asset in the Sound tab, set= makes the tab's edits, and it answers what the tab shows.",
+        )
+        .example("path=sounds/hum.sndasset open=true set={\"copyrighted\":true}"),
         preview_sound,
     );
     reg.cmd(
@@ -1391,8 +1561,13 @@ mod tests {
         let m: ModelParams = serde_json::from_value(json!({ "path": "models/wall.meshasset" })).unwrap();
         assert_eq!(m.path.as_deref(), Some("models/wall.meshasset"));
         let s: SoundParams = serde_json::from_value(json!({ "path": "sounds/hum.sndasset" })).unwrap();
-        assert_eq!(s.action, SoundAction::Play);
-        assert!(serde_json::from_value::<SoundParams>(json!({ "name": "x" })).is_err());
+        assert_eq!((s.action, s.open), (None, false));
+        let s: SoundParams = serde_json::from_value(
+            json!({ "path": "sounds/hum.sndasset", "open": true, "show": "streamer" }),
+        )
+        .unwrap();
+        assert_eq!((s.open, s.show), (true, Some(SoundShow::Streamer)));
+        assert!(serde_json::from_value::<SoundParams>(json!({ "nme": "x" })).is_err());
         let w = gz_fmt_sound::Wav { rate: 8000, channels: vec![vec![0.0, 1.0], vec![-1.0, 0.5]] };
         let pcm = pcm_of_wav(&w);
         assert_eq!(

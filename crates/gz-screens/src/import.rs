@@ -68,6 +68,13 @@ pub fn file_kind(path: &str) -> FileKind {
     }
 }
 
+/// Music a track takes, by its extension: a sound file (`.ogg`, `.wav`), or a sound asset, which
+/// comes in as the sound it is.
+#[must_use]
+pub fn is_music(path: &str) -> bool {
+    matches!(extension(path).as_str(), ".ogg" | ".wav" | ".sndasset")
+}
+
 /// `\` separators, no doubled ones, no `\.\`, no trailing one.
 #[must_use]
 pub fn normalize_path(input: &str) -> String {

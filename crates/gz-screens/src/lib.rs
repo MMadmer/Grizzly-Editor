@@ -19,9 +19,11 @@
 //!   [`file_kind`], [`FileKind`]. Imports are blocking file work for the IO pool; a drop of
 //!   several files imports them in parallel, and two imports at once never write over each
 //!   other.
-//! - [`validate()`] - `E401`..`E417` with their texts; [`validate::issues`] the same with the
+//! - [`validate()`] - `E401`..`E418` with their texts (a track names a sound, whose description
+//!   says whether it is copyrighted - a track carries no mark: [`validate::mark_moved`]); [`validate::issues`] the same with the
 //!   section and the key of `mod.ltx` each is about, which the manifest's check puts at their lines.
-//! - [`register`]: `screens.info`, `screens.set`, `screens.import`; [`install`]: the build's check (an `E4xx`
+//! - [`register`]: `screens.info`, `screens.set`, `screens.import` (music comes in as a sound asset,
+//!   [`Sounds::import`]); [`install`]: the build's check (an `E4xx`
 //!   refuses the build); [`GameLevels`]: where the world area hangs the linked game's levels
 //!   for `W407`; [`answer`] - the reply both commands give.
 
@@ -30,8 +32,10 @@ pub mod import;
 pub mod model;
 pub mod validate;
 
-pub use cmd::{GameLevels, LevelsHook, Sounds, answer, install, issues, problems, register};
-pub use import::{FileKind, Plan, file_kind, import, plan};
+pub use cmd::{
+    GameLevels, LevelsHook, Sounds, TrackFacts, answer, install, issues, problems, register, track_facts,
+};
+pub use import::{FileKind, Plan, file_kind, import, is_music, plan};
 pub use model::{Fit, Layer, Order, Playlist, Screen, Screens, Track};
 pub use validate::{issues as validate_issues, validate};
 

@@ -33,8 +33,8 @@ pub struct GameLists {
     pub compiler_shaders: FxHashSet<String>,
     pub materials: FxHashSet<String>,
     /// The game's own list of copyrighted sounds ([`crate::sound::RIGHTS_FILE`]): names and masks,
-    /// keyed by [`name_key`]. Empty when the game has no such file.
-    pub rights: Vec<String>,
+    /// keyed by [`name_key`], with what plays instead. Empty when the game has no such file.
+    pub rights: Vec<crate::sound::Right>,
     pub files: Option<Arc<GameFiles>>,
 }
 

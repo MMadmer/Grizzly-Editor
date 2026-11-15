@@ -3,7 +3,7 @@
 //! nothing here blocks a frame.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender, unbounded};
@@ -53,6 +53,9 @@ pub struct Player {
     tx: Sender<Msg>,
     playing: Arc<AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
+    /// The sound sent last, and where the callback has got to in it (source frames).
+    current: Mutex<Option<Arc<Pcm>>>,
+    frame: Arc<AtomicU64>,
 }
 
 impl Player {
@@ -66,17 +69,30 @@ impl Player {
             let (tx, rx) = unbounded();
             let playing = Arc::new(AtomicBool::new(false));
             let error = Arc::new(Mutex::new(None));
-            let (p, e) = (playing.clone(), error.clone());
+            let frame = Arc::new(AtomicU64::new(0));
+            let (p, e, f) = (playing.clone(), error.clone(), frame.clone());
             // asked for in a frame (the toolbar reads the player's state): the pool makes the
             // thread, and what is sent meanwhile waits in the channel
-            let _ = exec.thread("gz-audio", move || run(&rx, &p, &e, &wake, &muted));
-            Player { tx, playing, error }
+            let _ = exec.thread("gz-audio", move || run(&rx, &p, &e, &wake, &muted, &f));
+            Player { tx, playing, error, current: Mutex::new(None), frame }
         })
     }
 
     pub fn play(&self, pcm: Arc<Pcm>) {
         self.playing.store(true, Ordering::Release);
+        self.frame.store(0, Ordering::Release);
+        *self.current.lock() = Some(pcm.clone());
         let _ = self.tx.send(Msg::Play(pcm));
+    }
+
+    /// Where `pcm` is, in seconds, while it is the sound that plays.
+    #[must_use]
+    pub fn progress(&self, pcm: &Arc<Pcm>) -> Option<f64> {
+        if !self.is_playing() || !self.current.lock().as_ref().is_some_and(|c| Arc::ptr_eq(c, pcm)) {
+            return None;
+        }
+        let rate = f64::from(pcm.rate.max(1));
+        Some(self.frame.load(Ordering::Acquire) as f64 / rate)
     }
 
     pub fn stop(&self) {
@@ -102,6 +118,7 @@ fn open(
     playing: &Arc<AtomicBool>,
     wake: &gz_task::Wake,
     muted: &Arc<AtomicBool>,
+    frame: &Arc<AtomicU64>,
 ) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or_else(|| "There is no audio output device.".to_owned())?;
@@ -122,11 +139,14 @@ fn open(
     let on_error = |_e: cpal::Error| {};
     let stream = match format {
         cpal::SampleFormat::F32 => {
-            let (voice, muted) = (voice.clone(), muted.clone());
+            let (voice, muted, frame) = (voice.clone(), muted.clone(), frame.clone());
             device.build_output_stream::<f32, _, _>(
                 config,
                 move |data: &mut [f32], _| {
-                    let done = mix(&mut voice.lock(), data, channels, rate);
+                    let mut v = voice.lock();
+                    let done = mix(&mut v, data, channels, rate);
+                    frame.store(v.pos >> 16, Ordering::Release);
+                    drop(v);
                     if muted.load(Ordering::Acquire) {
                         data.fill(0.0);
                     }
@@ -139,13 +159,16 @@ fn open(
             )
         }
         cpal::SampleFormat::I16 => {
-            let (voice, muted) = (voice.clone(), muted.clone());
+            let (voice, muted, frame) = (voice.clone(), muted.clone(), frame.clone());
             let mut scratch: Vec<f32> = Vec::new();
             device.build_output_stream::<i16, _, _>(
                 config,
                 move |data: &mut [i16], _| {
                     scratch.resize(data.len(), 0.0);
-                    let done = mix(&mut voice.lock(), &mut scratch, channels, rate);
+                    let mut v = voice.lock();
+                    let done = mix(&mut v, &mut scratch, channels, rate);
+                    frame.store(v.pos >> 16, Ordering::Release);
+                    drop(v);
                     if muted.load(Ordering::Acquire) {
                         scratch.fill(0.0);
                     }
@@ -177,6 +200,7 @@ fn run(
     error: &Arc<Mutex<Option<String>>>,
     wake: &gz_task::Wake,
     muted: &Arc<AtomicBool>,
+    frame: &Arc<AtomicU64>,
 ) {
     let voice = Arc::new(Mutex::new(Voice::default()));
     let mut stream: Option<cpal::Stream> = None;
@@ -184,7 +208,7 @@ fn run(
         match msg {
             Msg::Play(pcm) => {
                 if stream.is_none() {
-                    match open(&voice, playing, wake, muted) {
+                    match open(&voice, playing, wake, muted, frame) {
                         Ok(s) => {
                             stream = Some(s);
                             *error.lock() = None;

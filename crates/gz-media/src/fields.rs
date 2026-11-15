@@ -78,10 +78,50 @@ pub struct Field {
     /// What a key left out means, as the reference says it; empty: nothing.
     pub default: &'static str,
     pub help: &'static str,
+    /// What the window calls the key (Title Case); empty: the window shows no row of it.
+    pub title: &'static str,
+    /// The window's tip of the row; empty: the help.
+    pub tip: &'static str,
+    /// The window shows the row where an author meets it, not under More.
+    pub surface: bool,
+    /// The unit the window writes after a number (`m`); empty: none.
+    pub unit: &'static str,
 }
 
 const fn f(key: &'static str, ty: Ty, default: &'static str, help: &'static str) -> Field {
-    Field { key, ty, default, help }
+    Field { key, ty, default, help, title: "", tip: "", surface: false, unit: "" }
+}
+
+impl Field {
+    /// The same key with the window's title.
+    const fn titled(mut self, title: &'static str) -> Self {
+        self.title = title;
+        self
+    }
+
+    /// The same key with a shorter tip than its help.
+    const fn tip(mut self, tip: &'static str) -> Self {
+        self.tip = tip;
+        self
+    }
+
+    /// The same key with the unit of its number.
+    const fn unit(mut self, unit: &'static str) -> Self {
+        self.unit = unit;
+        self
+    }
+
+    /// The same key on the window's surface.
+    const fn on_surface(mut self) -> Self {
+        self.surface = true;
+        self
+    }
+
+    /// The window's tip of the row.
+    #[must_use]
+    pub fn shown_tip(&self) -> &'static str {
+        if self.tip.is_empty() { self.help } else { self.tip }
+    }
 }
 
 /// The word of a value in a list: the first word that stands for it.
@@ -533,49 +573,68 @@ pub const SOUND: &[Field] = &[
         "",
         "The header: the format version (1). A file of a newer version is refused by name.",
     ),
-    f("source", Ty::File, "the file with the asset's own name and `.wav` or `.ogg`", "The sound."),
+    f("source", Ty::File, "the file with the asset's own name and `.wav` or `.ogg`", "The sound.")
+        .titled("Source"),
     f(
         "name",
         Ty::GameName,
         "`<module id>\\<file name>`",
         "The name the game knows the sound by: it is published as `sounds\\<name>.ogg`.",
-    ),
+    )
+    .titled("Game Name"),
+    f("type", Ty::WordSet(SOUND_TYPES), "\"no_sound\"", "What NPCs make of it, in the game's own words.")
+        .titled("Type")
+        .on_surface(),
     f(
         "min_distance",
         Ty::Number { min: 0.0, max: 10_000.0 },
         "1",
         "Up to this distance the sound plays at its full volume, metres.",
-    ),
+    )
+    .titled("Full Volume Within")
+    .unit("m")
+    .on_surface(),
     f(
         "max_distance",
         Ty::Number { min: 0.1, max: 10_000.0 },
         "300",
         "Beyond this distance it is not heard, metres.",
-    ),
-    f("volume", Ty::Number { min: 0.0, max: 10.0 }, "1", "Its base volume."),
+    )
+    .titled("Heard Within")
+    .unit("m")
+    .on_surface(),
+    f("volume", Ty::Number { min: 0.0, max: 10.0 }, "1", "Its base volume.").titled("Volume").on_surface(),
     f(
         "ai_distance",
         Ty::Number { min: 0.1, max: 10_000.0 },
         "`max_distance`",
         "How far NPCs hear it, metres.",
-    ),
-    f("type", Ty::WordSet(SOUND_TYPES), "\"no_sound\"", "What NPCs make of it, in the game's own words."),
+    )
+    .titled("NPCs Hear It Within")
+    .unit("m"),
     f(
         "quality",
         Ty::Number { min: -0.1, max: 1.0 },
         "0",
         "The Vorbis quality a `.wav` source is encoded with.",
-    ),
+    )
+    .titled("Encoding Quality"),
     f(
         "copyrighted",
         Ty::Bool,
         "false",
         "A recording that may not be streamed: the game does not play it while its streamer mode is on.",
-    ),
+    )
+    .titled("Copyrighted")
+    .tip("Not played while the game's streamer mode is on.")
+    .on_surface(),
     f(
         "streamer",
         Ty::GameName,
         "none: nothing plays",
         "What plays in its place while the streamer mode is on, by its game name: a sound that is not copyrighted itself - a sound asset's `name` without `copyrighted`, or a sound of the game its own list (`configs\\dead_air_x64_sound_rights.ltx`) does not name. Only for a copyrighted sound.",
-    ),
+    )
+    .titled("Plays Instead")
+    .tip("What plays in its place while the streamer mode is on: a sound without the mark. Nothing: the sound is left out.")
+    .on_surface(),
 ];

@@ -121,6 +121,18 @@ def open_tab(kind: str, project: str) -> dict:
         return cmd("ui.tab", action="open", kind=kind, path=files[0]["path"] if files else "", source="game")
     if kind in FILES:
         return cmd("ui.tab", action="open", kind=kind, path=FILES[kind])
+    if kind == "sound":
+        # a sound asset of the project from the template, its .wav beside it: the Sound tab on it
+        made = cmd("file.create", kind="sound", path="qa_tour_sound")
+        rel = made.get("path", "")
+        if rel:
+            import wave
+            with wave.open(os.path.join(project, rel.replace("/", os.sep)).rsplit(".", 1)[0] + ".wav", "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(22050)
+                w.writeframes(b"\0\0" * 4410)
+        return cmd("preview.sound", open=True, path=rel)
     if kind == "items":
         # the tab is pictured with a form up: a change of an item of the linked game
         shown = cmd("items.view", select=ITEM)

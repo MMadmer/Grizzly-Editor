@@ -49,13 +49,14 @@ pub const DIALOGS: [(&str, &str); 7] = [
 ];
 
 /// The kinds of major tab.
-pub const DOCUMENT_KINDS: [&str; 16] = [
+pub const DOCUMENT_KINDS: [&str; 17] = [
     "level",
     "quest",
     "beh",
     "pda",
     "model",
     "texture",
+    "sound",
     "characters",
     "items",
     "mod_settings",
@@ -134,7 +135,7 @@ pub const POPUPS: [&str; 15] = [
 /// `<command> show=<value>`), which opens the tab, the page and the fold that hold the list. A
 /// kit pick list is no menu, so `ui.list` does not name it: `ui.audit` lists its rows and
 /// `shot.window` shows it.
-pub const VIEW_POPUPS: [&str; 22] = [
+pub const VIEW_POPUPS: [&str; 23] = [
     "world.view show=add_level",
     "world.view show=add_area_level",
     "mod.view show=add_requires",
@@ -157,6 +158,7 @@ pub const VIEW_POPUPS: [&str; 22] = [
     "library.view kind=texture_library show=detail",
     "library.view kind=texture_library show=bump",
     "library.view kind=texture_library show=normal",
+    "preview.sound show=streamer",
 ];
 
 /// The caption's menus, in their order; Graph is a graph tab's own, Menu the folded button.

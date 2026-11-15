@@ -3,21 +3,22 @@
 //!
 //! `E401` a layer's or a track's file does not exist, `E402` a layer's file is no kind the game
 //! shows, `E403` a screen names a track the module does not have, `E404` a shader has no `.ps`
-//! (or `.s`) beside it, `E408` the build leaves out a file a screen needs, `E409` a track is not
-//! an `.ogg`; `W405` a layer nothing was put on, `W406` a screen with no layers, `W407` a level
+//! (or `.s`) beside it, `E408` the build leaves out a file a screen needs, `E409` a track's file is
+//! not an `.ogg`; `W405` a layer nothing was put on, `W406` a screen with no layers, `W407` a level
 //! the linked game lacks, `W410` a track that plays nowhere, `W411` a screen asks for a video's
 //! sound and has no video; `E412` a playlist names a track the module does not have, `W413` a
 //! playlist without tracks, `W414` a playlist's title the game cannot show (outside cp1251);
-//! `W415` a track's `streamer` on a track that is not copyrighted, `E416` a replacement that is
-//! copyrighted itself, `E417` a replacement nobody has.
+//! `W415` a track that names a sound and a file (the sound plays), `E416` a track's sound that
+//! neither the module nor the linked game has, `W417` a track that still says `copyrighted` or
+//! `streamer` (the mark is its sound's), `E418` a track that names no music.
 
 use std::path::Path;
 
-use gz_media::sound::Mark;
+use gz_media::sound::{Facts, Mark};
 use gz_mod::{Issue, Spot};
 
 use crate::import::{FileKind, extension, file_kind};
-use crate::model::Screens;
+use crate::model::{Screens, Track};
 
 /// The whole path without its extension (`substr(0, rfind('.'))`).
 fn without_ext(file: &str) -> &str {
@@ -30,19 +31,31 @@ pub fn validate(
     s: &Screens,
     outside: &dyn Fn(&str) -> bool,
     levels: Option<&[String]>,
-    sounds: &dyn Fn(&str) -> Mark,
+    sounds: &dyn Fn(&str) -> Facts,
 ) -> Vec<String> {
     issues(root, s, outside, levels, sounds).iter().map(Issue::line).collect()
 }
 
-/// What a track's replacement is to the streamer mode: a track of the module by its own mark,
-/// anything else a sound by its name (`sounds`).
+/// What a track that still carries the mark is told, at the key's line, and what `screens.set`
+/// refuses `copyrighted` and `streamer` with: the mark is the sound's, and where to set it.
+/// `asset` is the module's sound asset the track plays, when it plays one.
 #[must_use]
-pub fn replacement_mark(s: &Screens, name: &str, sounds: &dyn Fn(&str) -> Mark) -> Mark {
-    match s.track(name) {
-        Some(t) if t.copyrighted => Mark::Copyrighted,
-        Some(_) => Mark::Free,
-        None => sounds(name),
+pub fn mark_moved(key: &str, track: &Track, asset: Option<&str>) -> String {
+    let lead = format!(
+        "{key} is no key of a track: whether music is copyrighted, and what plays instead in the streamer mode, is its sound's to say"
+    );
+    match asset {
+        Some(a) => {
+            format!("{lead} - tick Copyrighted in its sound asset {a} (its copyrighted and streamer keys)")
+        }
+        None if track.is_sound() => format!(
+            "{lead} - the track plays the game's sound {}, which the game's own list describes",
+            track.sound
+        ),
+        None => format!(
+            "{lead} - make the track a sound first (Make It a Sound; screens.set action=track_sound id={}), then tick Copyrighted in its sound asset",
+            track.id
+        ),
     }
 }
 
@@ -50,13 +63,13 @@ pub fn replacement_mark(s: &Screens, name: &str, sounds: &dyn Fn(&str) -> Mark) 
 /// file at its `layer` line, a track's file at its `file` line, a screen without layers at its
 /// header. `outside` says whether the build leaves a project path out; `levels` are the linked
 /// game's levels, `None` when they are not known (W407 is not checked then); `sounds` says what
-/// a sound name is to the streamer mode. Blocking: a file is looked for on the disk.
+/// a sound name is to the streamer mode and whose it is. Blocking: a file is looked for on the disk.
 pub fn issues(
     root: &Path,
     s: &Screens,
     outside: &dyn Fn(&str) -> bool,
     levels: Option<&[String]>,
-    sounds: &dyn Fn(&str) -> Mark,
+    sounds: &dyn Fn(&str) -> Facts,
 ) -> Vec<Issue> {
     let exists = |rel: &str| root.join(rel.replace('/', "\\")).is_file();
     let mut problems = Vec::new();
@@ -139,7 +152,37 @@ pub fn issues(
         let tag = format!("track {}: ", t.id);
         let section = format!("track.{}", t.id);
         let file = Spot::key(&section, "file");
-        if extension(&t.file) != ".ogg" {
+        if t.is_sound() {
+            let at = Spot::key(&section, "sound");
+            if !t.file.trim().is_empty() {
+                problems.push(Issue::new(
+                    "W415",
+                    format!(
+                        "{tag}it names its music twice, by sound and by file: the sound plays, {} does not",
+                        t.file
+                    ),
+                    file,
+                ));
+            }
+            if sounds(&t.sound).mark == Mark::Missing {
+                problems.push(Issue::new(
+                    "E416",
+                    format!(
+                        "{tag}nobody has the sound {}: no sound asset of the module publishes it, and the linked game has none of that name",
+                        t.sound
+                    ),
+                    at,
+                ));
+            }
+        } else if t.file.trim().is_empty() {
+            problems.push(Issue::new(
+                "E418",
+                format!(
+                    "{tag}it names no music: sound = <a sound's name> or file = <an .ogg of the project>"
+                ),
+                Spot::section(&section),
+            ));
+        } else if extension(&t.file) != ".ogg" {
             problems.push(Issue::new(
                 "E409",
                 format!("{tag}the game plays .ogg files only: {}", t.file),
@@ -163,30 +206,14 @@ pub fn issues(
                 Spot::section(&section),
             ));
         }
-        if !t.streamer.is_empty() {
-            let at = Spot::key(&section, "streamer");
-            let r = &t.streamer;
-            if !t.copyrighted {
+        for key in gz_mod::reference::TRACK_MARK_KEYS {
+            if t.extra(key).is_some() {
+                let asset = if t.is_sound() { sounds(&t.sound).asset } else { None };
                 problems.push(Issue::new(
-                    "W415",
-                    format!("{tag}it names what plays instead of it in the streamer mode, and it is not copyrighted: {r} never plays for it"),
-                    at.clone(),
+                    "W417",
+                    format!("{tag}{}", mark_moved(key, t, asset.as_deref())),
+                    Spot::key(&section, key),
                 ));
-            }
-            match replacement_mark(s, r, sounds) {
-                Mark::Free => {}
-                Mark::Copyrighted => problems.push(Issue::new(
-                    "E416",
-                    format!("{tag}what plays instead of it is copyrighted itself: {r}"),
-                    at,
-                )),
-                Mark::Missing => problems.push(Issue::new(
-                    "E417",
-                    format!(
-                        "{tag}what plays instead of it is no track of the module and nobody's sound: {r}"
-                    ),
-                    at,
-                )),
             }
         }
     }

@@ -32,6 +32,11 @@ What it proves:
      library.sync (both libraries) and library.rewrite_descriptions are jobs the command waits for - they make what
      is missing, say what they made, answer a job with wait=false, refuse an unknown kind with the real ones, and
      open no dialog
+  A  the Sound tab: a sound asset opened; a key set through it is one changed line of the file, its comments and
+     unknown keys kept; Copyrighted on and a replacement picked (the picker holds no copyrighted sound and not the
+     sound itself), the two keys in the file; the switch off removes both; a copyrighted replacement written by hand
+     is its row's problem; the file changed outside is followed; ui.audit clean at 1707x912 / 1.5 and 1280x720 / 1.0,
+     English and Russian, dark and light; perf.stalls empty
 
     python tools/qa/test_previews.py --project <project> [--shots <folder>] [--sizes]
 """
@@ -843,7 +848,186 @@ def library_maintenance(lib: str) -> None:
     check(listed.get("dialogs") == [], "K no command opened a dialog", json.dumps(listed.get("dialogs"))[:300])
 
 
-PHASES = "CTMLSK"
+def tone(seconds: float = 0.4, rate: int = 22050) -> bytes:
+    """A WAV of a quiet tone: what a sound asset's source is."""
+    import io
+    import math
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"".join(struct.pack("<h", int(3000 * math.sin(i * 0.05))) for i in range(int(seconds * rate))))
+    return buf.getvalue()
+
+
+def module_id(project: str) -> str:
+    """`[module] id` of the project's mod.ltx."""
+    section = ""
+    with open(os.path.join(project, "mod.ltx"), encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.split(";")[0].strip()
+            if line.startswith("["):
+                section = line.strip("[]").strip().lower()
+            elif section == "module" and line.split("=")[0].strip() == "id":
+                return line.split("=", 1)[1].strip()
+    return ""
+
+
+def read_text(path: str) -> str:
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def write_text(path: str, body: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(body)
+
+
+def sound_rows(answer: dict) -> dict:
+    return {r["key"]: r for r in answer.get("rows", [])}
+
+
+SOUND_SIZES = ((1707, 912, 1.5), (1280, 720, 1.0))
+
+
+def run_sound(project: str, shots: str | None) -> None:
+    """A  the Sound tab: a sound asset opened, a key set through it is one line of the file, Copyrighted and Plays
+    Instead (no copyrighted row), the switch off takes both out, a hand-written replacement's problem on its row, the
+    file followed, audited at both sizes in English and Russian, dark and light."""
+    mod = module_id(project)
+    folder = os.path.join(project, "sounds", "qa_tab")
+    os.makedirs(folder, exist_ok=True)
+    for n in ("qa_song", "qa_calm", "qa_loud"):
+        with open(os.path.join(folder, n + ".wav"), "wb") as f:
+            f.write(tone())
+    song = os.path.join(folder, "qa_song.sndasset")
+    write_text(song, "-- the author's note: kept through every edit\nreturn {\n  snd = 1,\n  -- how far it is heard\n"
+                     "  max_distance = 40,\n  odd_key = \"kept\",\n}\n")
+    write_text(os.path.join(folder, "qa_calm.sndasset"), "return {\n  snd = 1,\n}\n")
+    write_text(os.path.join(folder, "qa_loud.sndasset"), "return {\n  snd = 1,\n  copyrighted = true,\n}\n")
+    calm, loud, me = mod + "\\qa_calm", mod + "\\qa_loud", mod + "\\qa_song"
+    rel = "sounds/qa_tab/qa_song.sndasset"
+
+    s = cmd("preview.sound", open=True, path=rel)
+    rows = sound_rows(s)
+    check(s.get("ok") and s.get("tab") == "sound" and s.get("active") and s.get("open"), "A a sound asset opens the Sound tab",
+          qa.short(s))
+    check(cmd("state").get("active_tab") == "sound", "A it is the tab that is up")
+    check(s.get("name") == me and s.get("format") == "WAV" and s.get("seconds", 0) > 0.3 and s.get("source", "").endswith("qa_song.wav"),
+          "A the sound itself: its game name, its file, its format and length", qa.short(s))
+    surface = [k for k, r in rows.items() if r.get("surface")]
+    check(surface == ["type", "min_distance", "max_distance", "volume", "copyrighted", "streamer"]
+          and {"source", "name", "ai_distance", "quality"} <= set(rows),
+          "A the table's rows: what an author meets on the surface, the rest under More", qa.short(surface))
+    check(rows["max_distance"].get("set") and rows["max_distance"].get("value") == 40 and not rows["volume"].get("set")
+          and rows["volume"].get("default") == "1" and rows["ai_distance"].get("default") == "40"
+          and rows["name"].get("default") == me,
+          "A a key the file sets shows its value, one left out its default (the key it names, the name it publishes)",
+          qa.short({k: rows[k] for k in ("max_distance", "volume", "ai_distance", "name")}))
+    check(rows["copyrighted"].get("value") is None and rows["streamer"].get("enabled") is False,
+          "A not copyrighted: Plays Instead is not live", qa.short(rows.get("streamer")))
+    shot(shots, "sound_tab")
+    audit("A the Sound tab")
+
+    # a key set through the tab is one changed line, the author's comment and an unknown key kept
+    before = read_text(song)
+    s = cmd("preview.sound", set={"max_distance": 60})
+    after = read_text(song)
+    changed = [(a, b) for a, b in zip(before.splitlines(), after.splitlines()) if a != b]
+    check(s.get("ok") and len(before.splitlines()) == len(after.splitlines()) and len(changed) == 1
+          and "max_distance = 60" in changed[0][1], "A a key set through the tab is one changed line of the file", qa.short(changed))
+    check("-- the author's note" in after and "-- how far it is heard" in after and 'odd_key = "kept"' in after,
+          "A the comments and the unknown key stay", after)
+    check(sound_rows(s)["max_distance"].get("value") == 60, "A the tab shows what it wrote", qa.short(sound_rows(s).get("max_distance")))
+    bad = cmd("preview.sound", set={"type": "loud_noise"})
+    check(not bad.get("ok") and "game's words" in bad.get("error", "") and read_text(song) == after,
+          "A a word the game lacks is refused and nothing is written", qa.short(bad))
+    s = cmd("preview.sound", set={"max_distance": None})
+    check("max_distance" not in read_text(song) and not sound_rows(s)["max_distance"].get("set"),
+          "A a Reset takes the key out of the file", read_text(song))
+
+    # Copyrighted, and under it Plays Instead: the module's free sounds and the game's, never a copyrighted one
+    s = cmd("preview.sound", set={"copyrighted": True}, show="streamer")
+    picker = s.get("picker") or {}
+    names = [r.get("name") for r in picker.get("rows", [])]
+    check(s.get("ok") and "copyrighted = true" in read_text(song) and sound_rows(s)["streamer"].get("enabled") is True,
+          "A Copyrighted on: the mark in the file, Plays Instead live", qa.short(s.get("rows")))
+    check(calm in names and loud not in names and me not in names and picker.get("first") == "Nothing: it is left out",
+          "A the picker offers the free sound asset, never a copyrighted one nor the sound itself", qa.short(names[:12]))
+    check(not any(str(n).lower().startswith(("music\\radio\\", "radio\\01\\")) for n in names),
+          "A the picker offers none of the game's own copyrighted music", qa.short(names[:20]))
+    shot(shots, "sound_picker")
+    cmd("preview.sound", open=True, path=rel)
+    before = read_text(song)
+    bad = cmd("preview.sound", set={"streamer": loud})
+    check(not bad.get("ok") and "no row of Plays Instead" in bad.get("error", "") and read_text(song) == before,
+          "A a copyrighted replacement is refused and nothing is written", qa.short(bad))
+    s = cmd("preview.sound", set={"streamer": calm})
+    body = read_text(song)
+    check(s.get("ok") and "copyrighted = true" in body and ('streamer = "%s"' % calm.replace("\\", "\\\\")) in body
+          and s.get("copyrighted") is True and s.get("streamer") == calm,
+          "A a replacement picked: the two keys in the file", body)
+    # the switch off takes the replacement out with the mark
+    s = cmd("preview.sound", set={"copyrighted": False})
+    body = read_text(song)
+    check(s.get("ok") and "copyrighted" not in body and "streamer" not in body, "A the switch off removes both keys", body)
+
+    # written by hand: a copyrighted replacement is its row's problem, and the tab follows the file
+    write_text(song, body.replace("return {\n", "return {\n  copyrighted = true,\n  streamer = \"%s\",\n  volume = 0.5,\n"
+                                  % loud.replace("\\", "\\\\"), 1))
+    got = qa.until(lambda: (lambda a: a if sound_rows(a).get("volume", {}).get("value") == 0.5 else None)(
+        cmd("preview.sound", action="state")), 10) or {}
+    check(bool(got), "A the file changed outside is followed", qa.short(sound_rows(cmd("preview.sound", action="state")).get("volume")))
+    on_row = [p for p in sound_rows(got).get("streamer", {}).get("problems", []) if p.get("code") == "M115"]
+    check(bool(on_row) and on_row[0].get("severity") == "error", "A a copyrighted replacement written by hand shows its problem on the row",
+          qa.short(sound_rows(got).get("streamer")))
+    shot(shots, "sound_problem")
+    # a clean copyrighted sound with its replacement for the pictures
+    cmd("preview.sound", set={"streamer": calm, "volume": None})
+
+    for theme in ("", "grizzly-light"):
+        if theme:
+            check(cmd("app.prefs", action="set", key="theme", value=theme).get("ok"), "A the window takes the light theme")
+        seen: dict[str, set] = {}
+        for lang in ("en", "ru"):
+            cmd("app.prefs", action="set", key="language", value=lang)
+            for width, height, scale in SOUND_SIZES:
+                cmd("ui.scale", value=scale)
+                cmd("app.window", action="resize", width=width, height=height)
+                tag = "A %s %dx%d%s" % (lang, width, height, " light" if theme else "")
+                cmd("preview.sound", open=True, path=rel)
+                a = cmd("ui.audit", id="sound")
+                cut = a.get("truncated") or []
+                vanished = [t for t in cut if not t.get("shown") and (t.get("rect") or [0, 0, 0])[2] > 0]
+                check(a.get("ok") and not vanished and not a.get("escaped"), "%s: nothing is cut to nothing, nothing escapes" % tag,
+                      qa.short({"vanished": vanished[:3], "escaped": (a.get("escaped") or [])[:3]}))
+                key = "%dx%d" % (width, height)
+                if lang == "en":
+                    seen.setdefault(key, set()).update(str(t.get("label")) for t in cut)
+                else:
+                    missing = [m.get("label") for m in a.get("untranslated") or []]
+                    check(not missing, "%s: every text of the editor's own reads in Russian" % tag, qa.short(missing[:12]))
+                    longer = [t.get("label") for t in cut if t.get("en") and str(t["en"]) not in seen.get(key, set())]
+                    check(not longer, "%s: no Russian text is cut where its English fits" % tag, qa.short(longer[:6]))
+                shot(shots, "sound_%s_%d%s" % (lang, width, "_light" if theme else ""))
+            s = cmd("preview.sound", show="streamer")
+            check(s.get("ok") and (s.get("picker") or {}).get("count", 0) >= 1, "A %s: the picker is up" % lang, qa.short(s.get("picker")))
+            if lang == "ru":
+                a = cmd("ui.audit", id="sound")
+                missing = [m.get("label") for m in a.get("untranslated") or []]
+                check(not missing, "A ru%s: the picker reads in Russian" % (" light" if theme else ""), qa.short(missing[:12]))
+            shot(shots, "sound_picker_%s%s" % (lang, "_light" if theme else ""))
+            cmd("preview.sound", open=True, path=rel)
+    cmd("app.prefs", action="set", key="language", value="en")
+    cmd("app.prefs", action="set", key="theme", value="grizzly-dark")
+    cmd("ui.scale", value=1.5)
+    cmd("app.window", action="resize", width=1707, height=912)
+    qa.stalls()
+
+
+PHASES = "CTMLSKA"
 
 
 def run(ctx: qa.Run) -> None:
@@ -854,7 +1038,7 @@ def run(ctx: qa.Run) -> None:
     session = os.path.join(project, "temp", "session.ltx")
     if os.path.isfile(session):
         os.remove(session)
-    only = ctx.only.upper().replace(",", "") or "CTMLK"
+    only = ctx.only.upper().replace(",", "") or "CTMLKA"
     # K runs in an editor of its own: its data root is a library the test makes
     phases = only.replace("K", "")
     if phases or sizes:
@@ -862,7 +1046,7 @@ def run(ctx: qa.Run) -> None:
         try:
             steps = {"C": lambda: run_content(project, shots), "T": lambda: run_texture(project, shots),
                      "M": lambda: run_model(shots), "L": lambda: run_libraries(shots),
-                     "S": lambda: run_sizes(project, shots)}
+                     "S": lambda: run_sizes(project, shots), "A": lambda: run_sound(project, shots)}
             # S, every tab at two sizes, runs when --sizes or --only asks for it
             qa.run_phases(steps, phases if sizes is False else phases + "S")
         finally:
@@ -875,7 +1059,7 @@ def main() -> int:
     def more(ap) -> None:
         ap.add_argument("--sizes", action="store_true", help="also look at every tab at 1707x912 / 1.5 and 1280x720 / 1.0")
 
-    return qa.suite("PREVIEWS", run, doc=__doc__, add_args=more, ignore=(".git",), phases="CTMLS")
+    return qa.suite("PREVIEWS", run, doc=__doc__, add_args=more, ignore=(".git",), phases="CTMLSKA")
 
 
 if __name__ == "__main__":

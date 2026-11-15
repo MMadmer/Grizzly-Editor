@@ -3,7 +3,8 @@ use crate::gamefile::{
     Device, FRect, LtxSection, atof, comma_floats, ltx_value, parse_level_map, strip_comments, tag_attr,
     xml_node,
 };
-use crate::screens::{default_show, surface_mask, take_files};
+use crate::screens::{Arrived, DropAt, default_show, surface_mask, take_files, take_sounds};
+use gz_screens::model::{LOADING, RADIO};
 
 #[test]
 fn numbers_read_like_c() {
@@ -154,19 +155,24 @@ fn files_land_where_they_are_dropped() {
     assert_eq!(s.screens[0].id, "night");
     assert_eq!(s.screens[0].show, surface_mask(1));
     assert_eq!(sel.screen.as_deref(), Some("fog"));
-    // music is a track wherever it lands
-    let sel = take_files(
+    // music came in as a sound: a track that names it wherever it lands, one track per sound
+    let rain = [Arrived { stem: "rain theme".into(), name: "od\\rain theme".into() }];
+    let sel = take_sounds(
         &mut s,
-        &["screens\\rain theme.ogg".to_owned()],
-        "night",
-        0,
-        false,
-        default_show(0),
-        &mut err,
+        &rain,
+        &DropAt { screen: "night".into(), layer: 0, ..DropAt::default() },
+        LOADING,
     );
     assert_eq!(s.tracks.len(), 1);
-    assert_eq!(s.tracks[0].id, "rain_theme");
+    assert_eq!((s.tracks[0].id.as_str(), s.tracks[0].sound.as_str()), ("rain_theme", "od\\rain theme"));
+    assert_eq!((s.tracks[0].play, s.tracks[0].file.as_str()), (LOADING, ""));
     assert_eq!(sel.track.as_deref(), Some("rain_theme"));
+    // on the radio it plays on the radio, the same track, and into a playlist at its end
+    take_sounds(&mut s, &rain, &DropAt { radio: true, ..DropAt::default() }, LOADING);
+    assert_eq!((s.tracks.len(), s.tracks[0].play), (1, LOADING | RADIO));
+    s.playlists.push(gz_screens::Playlist { id: "road".into(), ..gz_screens::Playlist::default() });
+    let sel = take_sounds(&mut s, &rain, &DropAt { playlist: "road".into(), ..DropAt::default() }, LOADING);
+    assert_eq!((s.playlists[0].tracks.clone(), sel.track), (vec!["rain_theme".to_owned()], None));
     // on a layer it replaces the layer's file; on Layers it adds one
     take_files(&mut s, &["screens\\day.dds".to_owned()], "night", 0, false, default_show(0), &mut err);
     assert_eq!(s.screens[0].layers[0].file, "screens\\day.dds");
@@ -174,8 +180,8 @@ fn files_land_where_they_are_dropped() {
         take_files(&mut s, &["screens\\top.gif".to_owned()], "night", -1, false, default_show(0), &mut err);
     assert_eq!(s.screens[0].layers.len(), 2);
     assert_eq!(sel.layer, Some(1));
-    // the music list takes .ogg files only
+    // the music list takes music only
     take_files(&mut s, &["screens\\x.dds".to_owned()], "", -1, true, default_show(0), &mut err);
-    assert_eq!(err, "Only .ogg files go into the music.");
+    assert_eq!(err, "Only music (.ogg, .wav) and sound assets go into the music.");
     assert_eq!(s.screens.len(), 2);
 }

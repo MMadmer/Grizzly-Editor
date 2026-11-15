@@ -1,23 +1,28 @@
 //! Screens & Music: the tab ([`doc`]), `screens.view` ([`cmd`]) and what
 //! both keep - which surface the tab edits, what is selected, the last status - plus the one way
 //! an edit is saved: the manifest is read again, the change made to what it holds and written
-//! through `gz-mod`'s store, and the one way a file arrives: `gz_screens::import` off
-//! the UI thread, then put where it was dropped.
+//! through `gz-mod`'s store, and the one way a file arrives: off the UI thread, music as a sound
+//! asset of the module (`gz_screens::Sounds::import`, the way `asset.import` brings a sound), the
+//! rest through `gz_screens::import`, then put where it was dropped.
+//!
+//! A track plays a sound; whether that sound is copyrighted is the sound asset's to say (the
+//! Sound tab), never the track's: the tab shows it ([`TrackInfo`]) and edits none of it.
 
 pub mod cmd;
 pub mod doc;
-pub mod sounds;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use gz_base::Origin;
 use gz_editor::{Editor, ProjectSession};
+use gz_media::sound::{Facts, Mark};
 use gz_mod::ManifestService;
 use gz_project::Project;
 use gz_screens::model::{LOADING, MENU, PAUSE, RADIO};
-use gz_screens::{FileKind, Layer, Screen, Screens, Track, file_kind};
+use gz_screens::{FileKind, Layer, Screen, Screens, Track, file_kind, is_music};
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 
 /// What the tab shows and `screens.view` reports.
 #[derive(Clone, Debug, Default)]
@@ -32,11 +37,6 @@ pub struct View {
     pub sel_layer: i64,
     /// The last save's or import's failure; empty when all is well.
     pub status: String,
-    /// The selected track's Plays Instead list is to be put up (`screens.view show=streamer`).
-    pub open_picker: bool,
-    /// The Plays Instead list of this track (and of the selected one) is to be taken down
-    /// (`screens.view` without `show`).
-    pub close_picker: Option<String>,
 }
 
 /// The screens tab's state of the open project (`session.services`).
@@ -122,25 +122,26 @@ pub struct DropAt {
     pub playlist: String,
 }
 
-/// Files from anywhere, imported, put where they were dropped: music into the tracks (onto the
-/// radio or into a playlist when they landed there), anything else as [`take_files`] puts it.
-/// `err` gets the last refusal.
-pub fn take_into(s: &mut Screens, rels: &[String], at: &DropAt, show: u32, err: &mut String) -> Selection {
-    if !at.radio && at.playlist.is_empty() {
-        return take_files(s, rels, &at.screen, at.layer, at.music, show, err);
-    }
+/// A sound that came in: the file's stem (what a new track's id is made of) and the sound's name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Arrived {
+    pub stem: String,
+    pub name: String,
+}
+
+/// Sounds that came in, put where they were dropped: a track each that names its sound (one that
+/// plays it already is that track), onto the radio or into a playlist when they landed there,
+/// else playing on `show`.
+pub fn take_sounds(s: &mut Screens, sounds: &[Arrived], at: &DropAt, show: u32) -> Selection {
     let mut sel = Selection::default();
-    for rel in rels {
-        if file_kind(rel) != FileKind::Music {
-            "Only .ogg files go into the music.".clone_into(err);
-            continue;
-        }
-        // the same file twice is one track
-        let id = match s.tracks.iter().find(|t| t.file.eq_ignore_ascii_case(rel)) {
+    let elsewhere = !at.radio && at.playlist.is_empty();
+    for a in sounds {
+        let id = match s.tracks.iter().find(|t| t.sound.eq_ignore_ascii_case(&a.name)) {
             Some(t) => t.id.clone(),
             None => {
-                let id = s.new_track_id(&gz_screens::import::stem(rel));
-                s.tracks.push(Track { id: id.clone(), file: rel.clone(), ..Track::default() });
+                let id = s.new_track_id(&a.stem);
+                let play = if elsewhere { show } else { 0 };
+                s.tracks.push(Track { id: id.clone(), sound: a.name.clone(), play, ..Track::default() });
                 id
             }
         };
@@ -148,20 +149,22 @@ pub fn take_into(s: &mut Screens, rels: &[String], at: &DropAt, show: u32, err: 
             && let Some(t) = s.track_mut(&id)
         {
             t.play |= RADIO;
-            sel = Selection { track: Some(id.clone()), ..Selection::default() };
         }
         if let Some(p) = s.playlist_mut(&at.playlist)
             && !p.tracks.contains(&id)
         {
-            p.tracks.push(id);
+            p.tracks.push(id.clone());
+        }
+        if at.playlist.is_empty() {
+            sel = Selection { track: Some(id), ..Selection::default() };
         }
     }
     sel
 }
 
-/// Files from anywhere, imported, put where they were dropped: music into the
-/// tracks, anything else on the screen `screen` (its layer `layer`, or a new one), or each as a
-/// new screen of its own. `err` gets the last refusal.
+/// Files from anywhere that are no music, imported, put where they were dropped: on the screen
+/// `screen` (its layer `layer`, or a new one), or each as a new screen of its own. Onto the music,
+/// the radio or a playlist they are refused: `err` gets the refusal.
 pub fn take_files(
     s: &mut Screens,
     rels: &[String],
@@ -173,14 +176,8 @@ pub fn take_files(
 ) -> Selection {
     let mut sel = Selection::default();
     for rel in rels {
-        if file_kind(rel) == FileKind::Music {
-            let id = s.new_track_id(&gz_screens::import::stem(rel));
-            s.tracks.push(Track { id: id.clone(), file: rel.clone(), play: show, ..Track::default() });
-            sel = Selection { track: Some(id), layer: sel.layer, ..Selection::default() };
-            continue;
-        }
-        if to_music {
-            "Only .ogg files go into the music.".clone_into(err);
+        if to_music || file_kind(rel) == FileKind::Music {
+            "Only music (.ogg, .wav) and sound assets go into the music.".clone_into(err);
             continue;
         }
         let found = if screen.is_empty() { None } else { s.screen_mut(screen) };
@@ -265,17 +262,59 @@ pub async fn take_drop(
     take_drop_at(editor, tab, files, at).await;
 }
 
-/// [`take_drop`] onto any place of the tab: the radio or a playlist too.
+/// [`take_drop`] onto any place of the tab: the radio or a playlist too. Music becomes a sound
+/// asset of the module and a track that names it; the rest is a layer or a screen.
 pub async fn take_drop_at(editor: &Arc<Editor>, tab: &Arc<ScreensTab>, files: Vec<String>, at: DropAt) {
     tab.busy.fetch_add(1, Ordering::SeqCst);
+    let (music, rest): (Vec<String>, Vec<String>) = files.into_iter().partition(|f| is_music(f));
+    let mut err = String::new();
+    // music first, one file after another: two of one stem get two names
+    let sounds_in: Vec<Result<(Arrived, String, bool), String>> = if music.is_empty() {
+        Vec::new()
+    } else {
+        let sounds = gz_screens::Sounds::now(editor).await;
+        editor
+            .exec
+            .io(move || {
+                let mut made = Vec::new();
+                music
+                    .iter()
+                    .map(|f| {
+                        sounds.import(f, &mut made).map(|g| {
+                            let stem = gz_screens::import::stem(f);
+                            (Arrived { stem, name: g.name }, g.asset, g.written)
+                        })
+                    })
+                    .collect()
+            })
+            .await
+    };
     let root = tab.root.clone();
     let exec = editor.exec.clone();
     let imported: Vec<Result<String, String>> =
-        editor.exec.io(move || exec.par_io(files, |f| gz_screens::import(&root, &f))).await;
+        editor.exec.io(move || exec.par_io(rest, |f| gz_screens::import(&root, &f))).await;
+    let mut sounds = Vec::new();
     if let Ok((_, project)) = Project::of(editor) {
-        project.tree.mark_fs(&std::path::Path::new(&tab.root).join("screens"));
+        let base = std::path::Path::new(&tab.root);
+        project.tree.mark_fs(&base.join("screens"));
+        let mut wrote = false;
+        for r in sounds_in {
+            match r {
+                Ok((a, asset, written)) => {
+                    if written {
+                        let abs = base.join(asset.replace('/', "\\"));
+                        project.tree.mark_fs(abs.parent().unwrap_or(base));
+                        wrote = true;
+                    }
+                    sounds.push(a);
+                }
+                Err(e) => err = e,
+            }
+        }
+        if wrote {
+            project.tree.refresh().await;
+        }
     }
-    let mut err = String::new();
     let rels: Vec<String> = imported
         .into_iter()
         .filter_map(|r| match r {
@@ -287,12 +326,17 @@ pub async fn take_drop_at(editor: &Arc<Editor>, tab: &Arc<ScreensTab>, files: Ve
         })
         .collect();
     let show = default_show(tab.v.lock().surface);
-    if !rels.is_empty() {
+    if !rels.is_empty() || !sounds.is_empty() {
         let refused = Arc::new(Mutex::new(String::new()));
         let r2 = refused.clone();
         let change: Change = Arc::new(move |s: &mut Screens| {
             let mut e = String::new();
-            let sel = take_into(s, &rels, &at, show, &mut e);
+            let music_only = at.music || at.radio || !at.playlist.is_empty();
+            let mut sel = take_files(s, &rels, &at.screen, at.layer, music_only, show, &mut e);
+            let heard = take_sounds(s, &sounds, &at, show);
+            if heard.track.is_some() {
+                sel = heard;
+            }
             *r2.lock() = e;
             sel
         });
@@ -312,8 +356,7 @@ pub async fn take_drop_at(editor: &Arc<Editor>, tab: &Arc<ScreensTab>, files: Ve
 /// Where an imported file goes in the screens: the model and the file's project path.
 pub type PutFile = Arc<dyn Fn(&mut Screens, &str) + Send + Sync>;
 
-/// A file picked for one place (a layer's file or texture, a track's file): imported, then set
-/// by `put`.
+/// A file picked for one place (a layer's file or texture): imported, then set by `put`.
 pub async fn take_one(editor: &Arc<Editor>, tab: &Arc<ScreensTab>, file: String, put: PutFile) {
     tab.busy.fetch_add(1, Ordering::SeqCst);
     let root = tab.root.clone();
@@ -335,53 +378,67 @@ pub async fn take_one(editor: &Arc<Editor>, tab: &Arc<ScreensTab>, file: String,
     editor.exec.wake().ping();
 }
 
-/// A row of the Plays Instead list: what may play in a copyrighted track's place.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Choice {
-    /// What `streamer` is set to: a track id or a sound name.
-    pub id: String,
-    /// A track of the module, a sound asset of the module, or a sound of the game.
-    pub from: ChoiceFrom,
-    /// What plays it in the editor: the track's file or the sound asset, project-relative; empty
-    /// for a sound of the game.
-    pub file: String,
+/// What the tab shows of a track's sound: what it says of itself, read where the game reads it,
+/// and how long it lasts.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrackInfo {
+    pub facts: Facts,
+    pub seconds: Option<f64>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChoiceFrom {
-    Track,
-    Asset,
-    Game,
-}
-
-impl ChoiceFrom {
+impl TrackInfo {
     #[must_use]
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Track => "track",
-            Self::Asset => "sound_asset",
-            Self::Game => "game",
-        }
+    pub fn copyrighted(&self) -> bool {
+        self.facts.mark == Mark::Copyrighted
     }
 }
 
-/// Everything that may play instead of the track `id` in the streamer mode: the module's other
-/// tracks without the mark, then `free` (the module's sound assets and the game's sounds that
-/// play in the streamer mode). Never a copyrighted sound.
+/// The sounds the tracks of `s` name, by name. Off the UI thread: the module's sound assets and
+/// the sounds' files are read.
+pub async fn track_infos(editor: &Arc<Editor>, s: Screens) -> FxHashMap<String, TrackInfo> {
+    if !s.tracks.iter().any(Track::is_sound) {
+        return FxHashMap::default();
+    }
+    let sounds = gz_screens::Sounds::now(editor).await;
+    editor
+        .exec
+        .io(move || {
+            let mut out = FxHashMap::default();
+            for t in s.tracks.iter().filter(|t| t.is_sound()) {
+                out.entry(t.sound.clone()).or_insert_with(|| TrackInfo {
+                    facts: sounds.facts(&t.sound),
+                    seconds: sounds.seconds(&t.sound),
+                });
+            }
+            out
+        })
+        .await
+}
+
+/// What a copyrighted sound does in the streamer mode, as a track's row and details say it.
 #[must_use]
-pub fn choices(s: &Screens, id: &str, free: &[gz_media::sound::FreeSound]) -> Vec<Choice> {
-    let mut out: Vec<Choice> = s
-        .tracks
-        .iter()
-        .filter(|t| t.id != id && !t.copyrighted)
-        .map(|t| Choice { id: t.id.clone(), from: ChoiceFrom::Track, file: t.file.clone() })
-        .collect();
-    out.extend(free.iter().filter(|f| s.track(&f.name).is_none()).map(|f| Choice {
-        id: f.name.clone(),
-        from: if f.asset.is_some() { ChoiceFrom::Asset } else { ChoiceFrom::Game },
-        file: f.asset.clone().unwrap_or_default(),
-    }));
-    out
+pub fn mark_line(info: &TrackInfo) -> gz_ui::Tx<'static> {
+    if info.facts.instead.is_empty() {
+        gz_ui::Tx::from("Copyrighted: it is left out in the streamer mode")
+    } else {
+        gz_ui::tr!(
+            "Copyrighted: {instead} plays instead in the streamer mode",
+            instead = info.facts.instead.clone()
+        )
+        .into_owned()
+    }
+}
+
+/// Plays a track: its sound (the module's asset, or the game's sound by its name) or its file.
+pub fn play_track(editor: &Arc<Editor>, t: &Track, info: Option<&TrackInfo>) {
+    if t.is_sound() {
+        match info.and_then(|i| i.facts.asset.as_deref()) {
+            Some(asset) => play(editor, asset, ""),
+            None => play(editor, "", &t.sound),
+        }
+    } else {
+        play(editor, &t.file, "");
+    }
 }
 
 /// Plays a file of the project (a track's `.ogg`, a sound asset) or a sound of the linked game

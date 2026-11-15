@@ -73,8 +73,6 @@ pub(crate) enum Open {
     Scene(String),
     /// A base scene of the library: brought into the project, then opened there.
     BaseScene(String),
-    /// A sound asset: played (`preview.sound`).
-    Play(String),
 }
 
 /// What opening an entry means. `cat` is the catalog it is listed in.
@@ -121,7 +119,7 @@ pub(crate) fn what_opens(cat: &Catalog, path: &str) -> Result<Open, String> {
     }
     match ext.as_str() {
         // a model asset in the model viewer, a texture asset in the texture preview, as the game
-        // and the level compiler will have them; a sound asset plays
+        // and the level compiler will have them; a sound asset in the Sound tab
         ".meshasset" => {
             return Ok(Open::Doc(OpenRequest {
                 arg: Some("project".to_owned()),
@@ -134,7 +132,7 @@ pub(crate) fn what_opens(cat: &Catalog, path: &str) -> Result<Open, String> {
                 ..OpenRequest::file("texture", path)
             }));
         }
-        ".sndasset" => return Ok(Open::Play(path.to_owned())),
+        ".sndasset" => return Ok(Open::Doc(OpenRequest::file("sound", path))),
         ".pdaasset" => return Ok(Open::Doc(OpenRequest::file("pda", path))),
         ".npcasset" => return Ok(Open::Doc(OpenRequest::file("characters", path))),
         ".itemasset" => return Ok(Open::Doc(OpenRequest::file("items", path))),
@@ -179,9 +177,6 @@ pub(crate) fn open_entry(
     match what_opens(&cat, &entry.path) {
         Ok(Open::Doc(req)) => cx.requests.open(req),
         Ok(Open::Scene(scene)) => cx.editor.post("scene.open", args(&[("path", json!(scene))])),
-        Ok(Open::Play(path)) => {
-            cx.editor.post("preview.sound", args(&[("path", json!(path)), ("action", json!("play"))]));
-        }
         Ok(Open::BaseScene(name)) => {
             let ed = cx.editor.clone();
             cx.editor.exec.spawn(async move {
@@ -217,12 +212,6 @@ pub(crate) async fn open_for_mcp(editor: &Arc<Editor>, cat: &Catalog, path: &str
         }
         Open::Scene(scene) => {
             call(editor, "scene.open", &[("path", json!(scene))]).await.map(|_| ()).map_err(|(e, _)| e)
-        }
-        Open::Play(path) => {
-            call(editor, "preview.sound", &[("path", json!(path)), ("action", json!("play"))])
-                .await
-                .map(|_| ())
-                .map_err(|(e, _)| e)
         }
         Open::BaseScene(name) => {
             let scene = bring_in_base_scene(editor, &name).await?;
@@ -1453,7 +1442,7 @@ mod tests {
         assert_eq!((t.kind.as_str(), t.path.as_deref()), ("texture", Some("textures\\brick.texasset")));
         assert_eq!(
             what_opens(&project, "sounds\\hum.sndasset"),
-            Ok(Open::Play("sounds\\hum.sndasset".into()))
+            Ok(Open::Doc(OpenRequest::file("sound", "sounds\\hum.sndasset")))
         );
         // a model asset is placed by its project path, its extension kept
         assert_eq!(

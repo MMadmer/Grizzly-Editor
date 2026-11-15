@@ -536,6 +536,10 @@ fn value_problems(line: &Line<'_>, doc_section: &'static SectionDoc, out: &mut V
                 out.push(line.place(p));
             }
         }
+        // the mark a track carried before it was its sound's: the screens' check says where it went
+        if doc_section.name == "track.<id>" && crate::reference::TRACK_MARK_KEYS.contains(&line.key) {
+            return;
+        }
         if matches!(doc_section.reader, Reader::World | Reader::Screens) {
             let keys: Vec<&str> =
                 doc_section.keys.iter().map(|k| k.key).filter(|k| !k.starts_with('<')).collect();
@@ -1097,9 +1101,11 @@ mod tests {
     fn the_radio_keys_are_judged_at_their_lines() {
         // what the radio takes passes
         assert!(
-            one("[track.t]\r\nfile = a.ogg\r\nplay = menu, radio\r\ncopyrighted = true\r\nstreamer = u\r\n[playlist.p]\r\ntitle = Road\r\ntracks = t\r\norder = list\r\n[radio]\r\nmusic = only\r\n")
+            one("[track.t]\r\nsound = od\\rain\r\nplay = menu, radio\r\n[playlist.p]\r\ntitle = Road\r\ntracks = t\r\norder = list\r\n[radio]\r\nmusic = only\r\n")
                 .is_empty()
         );
+        // the mark a track carried before it was its sound's is the screens' check to report
+        assert!(one("[track.t]\r\nfile = a.ogg\r\ncopyrighted = maybe\r\nstreamer = u\r\n").is_empty());
         // a word of the screens' show is the screens': radio is no surface a screen shows on
         assert!(
             one("[screen.s]\r\nshow = radio\r\nlayer = a.dds\r\n")[0]
@@ -1110,7 +1116,6 @@ mod tests {
         assert_eq!((p[0].0.as_str(), p[0].1), ("mod.value", 5));
         assert!(p[0].2.contains("order takes shuffle | list"), "{}", p[0].2);
         assert!(one("[radio]\r\nmusic = all\r\n")[0].2.contains("music takes mix | only"));
-        assert!(one("[track.t]\r\ncopyrighted = maybe\r\n")[0].2.contains("copyrighted takes true | false"));
         assert!(one("[radio]\r\nvolume = 1\r\n")[0].2.contains("no reader takes this key"));
     }
 
