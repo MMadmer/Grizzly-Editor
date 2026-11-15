@@ -314,7 +314,7 @@ pub const SCENE: &[Field] = &[
     f("like", Ty::Section, "", "The item whose scene this one starts from (`vodka`)."),
     f("sound", Ty::String, "", "The scene's sound (`snd`)."),
     f("camera", Ty::String, "", "The camera effect (`cam`)."),
-    f("time", Ty::Number { min: 0.0, max: 600.0 }, "", "How long the scene lasts, seconds (`tm`)."),
+    f("time", Ty::Number { min: 0.0, max: 600_000.0 }, "", "How long the scene lasts, milliseconds (`tm`)."),
     f("helmet", Ty::Value, "", "What a helmet does to it (`helm`), as `animations_settings.ltx` says it."),
     f("anm", Ty::String, "", "The scene's motion."),
     f("hud_anm", Ty::String, "", "The motion of the scene's HUD."),

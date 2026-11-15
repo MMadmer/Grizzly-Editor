@@ -154,7 +154,7 @@ What a key of an item's section means is the game's: its `configs\item_catalog.l
 | `like` | string (a section) | - | The item whose scene this one starts from (`vodka`). |
 | `sound` | string | - | The scene's sound (`snd`). |
 | `camera` | string | - | The camera effect (`cam`). |
-| `time` | number, 0 to 600 | - | How long the scene lasts, seconds (`tm`). |
+| `time` | number, 0 to 600000 | - | How long the scene lasts, milliseconds (`tm`). |
 | `helmet` | string, number, boolean or list | - | What a helmet does to it (`helm`), as `animations_settings.ltx` says it. |
 | `anm` | string | - | The scene's motion. |
 | `hud_anm` | string | - | The motion of the scene's HUD. |
