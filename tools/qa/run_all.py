@@ -85,6 +85,15 @@ SUITES: dict[str, dict] = {
     "test_cli": {"args": ["--project", TEST], "timeout": 120},
     # the real game in a root of its own (three minutes at most for the game itself)
     "test_play_game": {"args": ["--project", TEST], "timeout": 300, "alone": True, "game": True},
+    # a module's piece of a level the game has - an object of the module's own compiled and lit - built, shipped by
+    # Play and attached by the game to the sector it finds
+    "test_play_game_piece": {"script": os.path.join(HERE, "test_play_game.py"),
+                             "args": ["--project", TEST, "--scene", "l01_escape_piece"], "timeout": 300, "alone": True,
+                             "game": True},
+    # a level of the project's own in streaming cells, played: the game loads the cells beside the level
+    "test_play_game_cells": {"script": os.path.join(HERE, "test_play_game.py"),
+                             "args": ["--project", TEST, "--scene", "mp_close_combat_cells"], "timeout": 300, "alone": True,
+                             "game": True},
 }
 
 # What an editor without a home of its own would write into the repository root.

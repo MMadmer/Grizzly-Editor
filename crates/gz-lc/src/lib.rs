@@ -813,7 +813,23 @@ fn move_file(from: &Path, to: &Path) -> Result<()> {
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent).map_err(|e| io_err("made", parent, &e))?;
     }
-    std::fs::rename(from, to).map_err(|e| io_err("moved into place", to, &e))
+    rename(from, to).map_err(|e| io_err("moved into place", to, &e))
+}
+
+/// A move inside the level's folder. Whoever reads what the compile has just written - an
+/// on-access scanner, an indexer - holds it for a moment and the system refuses the move
+/// meanwhile: a few tries some milliseconds apart, under a second in all.
+fn rename(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut tries = 0u64;
+    loop {
+        match std::fs::rename(from, to) {
+            Err(e) if tries < 9 && e.kind() == std::io::ErrorKind::PermissionDenied => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20 * tries));
+            }
+            r => return r,
+        }
+    }
 }
 
 /// The lightmap pages of an earlier compile this one does not write: they would be a level of
@@ -926,11 +942,11 @@ fn write_pieces(dir: &Path, pieces: &[PieceFiles], stale_cells: bool, report: &m
             let at = dir.join(&p.name);
             if at.exists() {
                 std::fs::create_dir_all(&old).map_err(|e| io_err("made", &old, &e))?;
-                std::fs::rename(&at, old.join(&p.name)).map_err(|e| io_err("moved aside", &at, &e))?;
+                rename(&at, &old.join(&p.name)).map_err(|e| io_err("moved aside", &at, &e))?;
             }
-            if let Err(e) = std::fs::rename(&staged, &at) {
+            if let Err(e) = rename(&staged, &at) {
                 // the piece of the earlier compile goes back
-                let _ = std::fs::rename(old.join(&p.name), &at);
+                let _ = rename(&old.join(&p.name), &at);
                 return Err(io_err("moved into place", &at, &e));
             }
             Ok(())

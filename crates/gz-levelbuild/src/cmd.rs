@@ -830,7 +830,8 @@ async fn play_module(
     })?;
     let mode =
         crate::module_play::new_game_mode(&m.target, &m.mode).map_err(|e| CmdError::new("refused", e))?;
-    let note = format!("Playing the module over {level}: no compile needed.");
+    // the module's own piece of the level is built below, when the scene has one that is not fresh
+    let note = format!("Playing the module over {level}: the game's level is not compiled.");
     ed.log.info(&note);
     // what an earlier build left in the level's folder ships with the module and replaces the game's own
     let lb = LevelBuild::of(session);

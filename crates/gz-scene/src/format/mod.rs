@@ -120,6 +120,8 @@ fn opts(s: &SceneState) -> &LevelOptions {
 }
 
 const QUALITY: &[(&str, u32)] = &[("draft", 0), ("high", 1), ("custom", 2)];
+/// The samples a lightmap pixel may take: the row shows them as words, the file keeps the number.
+const JITTER: &[(&str, u32)] = &[("1", 1), ("4", 4), ("9", 9)];
 
 macro_rules! level {
     ($key:literal, $label:literal, $group:literal, $unit:literal, $ty:expr, $default:literal, $help:literal,
@@ -263,11 +265,11 @@ pub static SCENE_FIELDS: &[Field<SceneState>] = &[
         "Samples per Pixel",
         "Build",
         "",
-        Ty::Words(&[("1", 1), ("4", 4), ("9", 9)]),
+        Ty::Words(JITTER),
         "9",
         "Light samples per lightmap pixel, 1, 4 or 9: more is smoother and slower to build.",
         |l| int(l.build.lm_jitter_samples),
-        |l, v| l.build.lm_jitter_samples = as_u32(v)?
+        |l, v| l.build.lm_jitter_samples = as_word_or_number(v, JITTER)?
     ),
     level!(
         "build.smooth_angle",
@@ -1351,6 +1353,23 @@ mod tests {
             }
         }
         disk
+    }
+
+    /// A row of the level that shows words takes every one of them back, and its number too: the
+    /// Details panel sets the word, a file may keep either.
+    #[test]
+    fn a_word_row_of_the_level_takes_its_own_words() {
+        for f in SCENE_FIELDS {
+            let Ty::Words(words) = f.ty else { continue };
+            for (w, n) in words {
+                let mut s = SceneState::default();
+                (f.set)(&mut s, &text(w)).unwrap_or_else(|e| panic!("{} refuses its word {w:?}: {e}", f.key));
+                let by_word = (f.get)(&s);
+                let mut s = SceneState::default();
+                (f.set)(&mut s, &int(*n)).unwrap_or_else(|e| panic!("{} refuses its number {n}: {e}", f.key));
+                assert_eq!(by_word, (f.get)(&s), "{}: {w:?} and {n} are one value", f.key);
+            }
+        }
     }
 
     fn file<'a>(t: &'a Texts, name: &str) -> &'a str {

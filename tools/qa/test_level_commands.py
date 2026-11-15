@@ -695,7 +695,7 @@ def phase_g() -> None:
     if "fsltx-in-place" in str(play.get("error")) or "no game" in str(play.get("error")).lower():
         print("SKIP G Play: the linked game does not run in place here: " + short(play), flush=True)
         return
-    check(play.get("ok") and play.get("way") == "module" and "no compile needed" in str(play.get("note")),
+    check(play.get("ok") and play.get("way") == "module" and "is not compiled" in str(play.get("note")),
           "G Play on %s plays the module (%.1f s)" % (STOCK, secs), short(play))
     root = (play.get("root") or "").replace("/", "\\")
     module = (play.get("module_dir") or "").replace("/", "\\")

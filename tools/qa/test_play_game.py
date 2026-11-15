@@ -105,6 +105,14 @@ SCENES = {
 }
 # a level the linked game has: Play plays the module over it, nothing is built
 SCENES["l01_escape"] = {"stock": True, "level": "l01_escape"}
+# the same level with an object of the module's own on it: the build makes the module's piece of the level (the
+# object compiled and lit under the level's own shadows), Play ships it with the module, and the game hangs it on
+# the sector it finds at its place
+SCENES["l01_escape_piece"] = {"stock": True, "level": "l01_escape", "scene": "l01_escape", "piece": True}
+# the containers' arena in streaming cells of sixteen metres: what is larger than a cell stays the level's, the
+# rest is a piece per cell, which Play stages as a module of its own and the game loads beside the level
+SCENES["mp_close_combat_cells"] = {**SCENES["mp_close_combat"], "scene": "mp_close_combat", "cells": True,
+                                   "options": {**SCENES["mp_close_combat"]["options"], "build.cell_size": 16}}
 SCENE = "mp_test"
 # the settings the game's own QA forces (Run-NqQa.ps1, Update-QaUserLtx): a window, no sound, no pause
 USER_LTX = {"renderer": "renderer_r4", "vid_mode": "1024x768", "vid_window_mode": "st_opt_windowed",
@@ -283,7 +291,7 @@ def listing(top: str) -> dict[str, tuple[int, int]]:
 def prepare_scene(scene: str) -> bool:
     """The scene opened and made ready for Play (SCENES), saved."""
     cfg = SCENES[scene]
-    opened = cmd("scene.open", path="rawdata/levels/%s.level" % scene, discard=True)
+    opened = cmd("scene.open", path="rawdata/levels/%s.level" % cfg.get("scene", scene), discard=True)
     if not check(opened.get("ok"), "the scene opens", qa.short(opened)):
         return False
     remove = cfg["remove"]
@@ -299,7 +307,7 @@ def prepare_scene(scene: str) -> bool:
         # the AI map lies on the arena's ground alone: the build generates it there from the spawn points
         steps.append(("scene.ai_map", {"action": "set", "objects": cfg["aimap"]["objects"].split(",")}))
     world = dict(cfg["options"])
-    if cfg["level"] != scene:
+    if cfg["level"] != cfg.get("scene", scene):
         world["level.path"] = cfg["level"]
     steps.append(("scene.set", {"world": True, "set": world}))
     steps.append(("scene.save", {}))
@@ -314,13 +322,14 @@ def run_scene(project: str, root: str, scene: str, keep_log: str | None) -> None
     cfg = SCENES[scene]
     level = cfg["level"]
     loaded = {k: v.replace("<level>", level) for k, v in LOADED.items()}
+    src = cfg.get("scene", scene)
     os.makedirs(os.path.join(project, "rawdata", "levels"), exist_ok=True)
-    shutil.copy2(os.path.join(qa.REPO, "rawdata", "levels", scene + ".level"),
-                 os.path.join(project, "rawdata", "levels", scene + ".level"))
-    shutil.copytree(os.path.join(qa.REPO, "rawdata", "levels", scene), os.path.join(project, "rawdata", "levels", scene),
+    shutil.copy2(os.path.join(qa.REPO, "rawdata", "levels", src + ".level"),
+                 os.path.join(project, "rawdata", "levels", src + ".level"))
+    shutil.copytree(os.path.join(qa.REPO, "rawdata", "levels", src), os.path.join(project, "rawdata", "levels", src),
                     dirs_exist_ok=True)
     if cfg.get("stock"):
-        opened = cmd("scene.open", path="rawdata/levels/%s.level" % scene, discard=True, timeout=280)
+        opened = cmd("scene.open", path="rawdata/levels/%s.level" % src, discard=True, timeout=280)
         if check(opened.get("ok"), "the scene of a level the game has opens", qa.short(opened)):
             wait_idle(120)
             st = cmd("level.status", timeout=120)
@@ -330,7 +339,12 @@ def run_scene(project: str, root: str, scene: str, keep_log: str | None) -> None
                 gone = qa.gate("destroy", "level.clean")
                 check(gone.get("ok"), "the files an earlier build left over the game's level are removed (%d)"
                       % len(gone.get("removed") or []), qa.short(gone))
-            play_in_place(root, level, loaded, keep_log, stock=True)
+            pieces = None
+            if cfg.get("piece"):
+                if not build_piece(project, level):
+                    return
+                pieces = ["main"]
+            play_in_place(root, level, loaded, keep_log, stock=True, pieces=pieces)
         return
     if not prepare_scene(scene):
         return
@@ -352,8 +366,70 @@ def run_scene(project: str, root: str, scene: str, keep_log: str | None) -> None
           ", ".join(sorted(os.listdir(level_dir))) if os.path.isdir(level_dir) else "no folder")
     if not compiled:
         return
+    pieces = None
+    if cfg.get("cells"):
+        pieces = cells_of(project, level)
+        if not pieces:
+            return
 
-    play_in_place(root, level, loaded, keep_log)
+    play_in_place(root, level, loaded, keep_log, pieces=pieces)
+
+
+def pieces_seen(level: str, names: list[str]) -> bool:
+    """level.inspect part=pieces: the pieces the build wrote are there, read back without a problem."""
+    seen = cmd("level.inspect", part="pieces", level=level, limit=500)
+    rows = {r.get("name"): r for r in seen.get("pieces") or []}
+    bad = {n: r.get("problems") for n, r in rows.items() if r.get("problems")}
+    return check(seen.get("ok") and all(n in rows for n in names) and not bad,
+                 "level.inspect reads the level's %d piece(s) back without a problem (%s visuals)"
+                 % (len(rows), sum(r.get("visuals") or 0 for r in rows.values())),
+                 qa.short({"names": sorted(rows)[:6], "problems": bad, "answer": {k: v for k, v in seen.items() if k != "pieces"}}))
+
+
+def build_piece(project: str, level: str) -> bool:
+    """An object of the module's own placed on the game's level, and the module's piece of the level built: the
+    piece's files in the module's levels\\<level>\\pieces\\main, its collision in overlay.xcform."""
+    listed = cmd("scene.objects", classes=["object"], limit=200).get("objects") or []
+    ref = next((o.get(k) for o in listed for k in ("ref", "reference") if o.get(k)), None)
+    if not check(bool(ref), "the scene names a library object to place a copy of", qa.short(listed[:2])):
+        return False
+    placed = cmd("scene.place", kind="object", ref=ref, name="qa_piece_object")
+    if not check(placed.get("ok"), "an object of the module's own is placed in front of the camera (%s)" % ref,
+                 qa.short(placed)):
+        return False
+    st = cmd("level.status", timeout=120)
+    step = next((s for s in st.get("steps") or [] if s.get("step") == "piece"), {})
+    check(step.get("state") in ("never", "stale", "never_built"), "level.status: the module's piece of the level is to be built",
+          qa.short(step or st))
+    t = time.monotonic()
+    done = cmd("level.build", timeout=280)
+    ran = {r.get("step"): r for r in done.get("ran") or []}
+    if not check(done.get("ok") and "piece" in ran, "level.build builds the module's piece of the game's level (%.1f s)"
+                 % (time.monotonic() - t), qa.short({k: v for k, v in done.items() if k != "ran"} | {"ran": sorted(ran)})):
+        return False
+    print("TIME piece %.1f s" % (time.monotonic() - t), flush=True)
+    wait_idle(30)
+    folder = os.path.join(project, "levels", level, "pieces", "main")
+    have = sorted(os.listdir(folder)) if os.path.isdir(folder) else []
+    check(all(n in have for n in ("piece", "piece.geom", "piece.ltx")) and any(n.startswith("lmap#") for n in have),
+          "the piece's visuals, buffers, manifest and lightmap pages are in the module's levels\\%s\\pieces\\main" % level,
+          ", ".join(have))
+    check(os.path.isfile(os.path.join(project, "levels", level, "overlay.xcform")),
+          "the object's collision is in the module's overlay.xcform")
+    scratch = os.path.join(project, "temp", "piece_" + level)
+    check(os.path.isfile(os.path.join(scratch, "build.prj")) and "build.prj" not in have,
+          "the step's own files are under the project's temp, never beside the piece")
+    return pieces_seen(level, ["main"])
+
+
+def cells_of(project: str, level: str) -> list[str]:
+    """The streaming cells the build wrote for the level: the pieces of the module's levels\\<level>\\pieces."""
+    folder = os.path.join(project, "levels", level, "pieces")
+    names = sorted(n for n in os.listdir(folder) if n.startswith("cell_")) if os.path.isdir(folder) else []
+    if not check(len(names) > 1, "the level is built in streaming cells: %d of them beside its base" % len(names),
+                 folder):
+        return []
+    return names if pieces_seen(level, names) else []
 
 
 # what an answer of Play said while it had a second way to run the game
@@ -365,7 +441,8 @@ def no_way_named(answer: dict) -> list[str]:
     return [k for a in (answer, answer.get("run") or {}) for k in GONE if k in a]
 
 
-def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str | None, stock: bool = False) -> bool:
+def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str | None, stock: bool = False,
+                  pieces: list[str] | None = None) -> bool:
     """Play's root made, Play started on it - the installed engine where it is -, the level loaded, the game
     stopped. False when Play did not start the game."""
     # Play makes its root only in an empty folder (play_root.txt marks it its own): made first, then the root's own
@@ -408,6 +485,12 @@ def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str |
         check(all(os.path.isfile(os.path.join(staged, f)) for f in ("level", "level.ai", "level.geom")) and
               os.path.isfile(os.path.join(root, "gamedata", "spawns", "editor.spawn")),
               "the level, its level.ai and editor.spawn are staged in the game root")
+        if pieces:
+            there = os.path.join(root, "modules", "grizzly_play_level", "levels", level, "pieces")
+            check(os.path.isfile(os.path.join(root, "modules", "grizzly_play_level", "mod.ltx")) and
+                  all(os.path.isfile(os.path.join(there, n, "piece.ltx")) for n in pieces),
+                  "the level's %d cells are staged as a module of Play's own, where the game reads pieces" % len(pieces),
+                  there)
     text, loaded_at = "", None
     while time.monotonic() - t0 < GAME_LIMIT:
         text = engine_log(root)
@@ -445,6 +528,17 @@ def play_in_place(root: str, level: str, loaded: dict[str, str], keep_log: str |
             bad.append(f"after '{before}' the game stopped in {frame[:220]}")
             break
     check(not bad, "no assert and no fatal error in the game's log", "; ".join(bad[:3]))
+    if pieces:
+        said = [l.strip() for l in lines if "[pieces]" in l]
+        found = next((l for l in said if "piece(s) found" in l), "")
+        attached = [l for l in said if ": attached," in l]
+        refused = [l for l in said if l.startswith("!")]
+        check((": %d piece(s) found" % len(pieces)) in found,
+              "the game finds the level's %d piece(s): %s" % (len(pieces), found[:120]), "; ".join(said[:4]))
+        check(len(attached) == len(pieces) and all(any(("/%s: attached" % n) in l for l in attached) for n in pieces),
+              "the game attaches every piece to the level's sectors: %s" % (attached[0][:150] if attached else "-"),
+              "; ".join(said[:6]))
+        check(not refused, "the game refuses no piece", "; ".join(refused[:3]))
     check(not dumps(root), "no crash dump", ", ".join(dumps(root)))
     state = os.path.join(root, "appdata", "content", "content-state.txt")
     check(os.path.isfile(state) and os.path.getmtime(state) >= play_wall - 1,
