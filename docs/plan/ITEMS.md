@@ -178,6 +178,30 @@ the ids the mod adds or changes against its base, media the files that are the m
 not an older version of the game's file), icons the pictures that are the mod's own, cut out of its atlas,
 particles the effects and groups it adds or changes, as loose `.pe` / `.pg`.
 
+### 1.8 A save the original game still loads (asked for while the task ran)
+
+The author's wish: as far as it can be done, a module must not cost a save its compatibility with the original
+Dead Air - what a module brought simply is not there when the save is loaded in the original game. Characters
+and everything else a module adds included.
+
+- `.scop` always describes a world the original game can load. What only a module explains lives in `.scov`
+  (the game's `docs\dead-air\SAVE_COMPATIBILITY.md`: the one extension container, chunks, bound to its `.scop`,
+  ignored by the original game, stale after the original game saved over the pair) and is laid over the `.scop`
+  world when Refined loads the save.
+- **Objects**: an ALife object goes to `.scov` instead of `.scop` when its section was made by a module (an item,
+  a character, a squad of a module), when a module's spawn layer added it, when it stands on a level a module
+  added, or when it is inside such an object (a stock medkit in a module character's pockets). Loaded back after
+  the `.scop` objects when its section still exists; left out with one line when its module is gone.
+- **State of the game's own objects that names a module's data** follows the weapon-extension precedent: the
+  `.scop` record keeps what the original game understands, `.scov` the rest - an upgrade of a module installed on
+  a stock item, an ammo type a module added to a stock weapon's list that is loaded in it.
+- **What scripts save** that names such objects (a smart terrain's list of the NPCs it holds, tasks a module gave)
+  is taken out of the stock stream and kept in `.scov` where the stock scripts would stop on it in the original
+  game; found by reading what each stock `STATE_Write` / `save_state` writes.
+- Limits are said, not hidden: the player saved on a module's level; a module that changes the game's own objects
+  in place; a mode of a module (a game of its own, which the original never starts).
+- A game with no module, and a save with nothing of a module in it, are written byte for byte as before.
+
 ## 2. Weapons Evolution 2026 as a module
 
 The project: `D:\XFinedProjects\WeaponsEvolution2026` (new; the old conversion `WeaponsEvolution` stays as it
@@ -205,11 +229,13 @@ motions and sounds; a use scene plays; the silencer is crafted; the icons are th
 | E1 | agent | `gz-ltx` (1.2, 1.3), `gz-items` (domain, kind, check, reference, publish), the allow-list | editor: `crates\gz-ltx`, `crates\gz-items` (new), `crates\gz-project`, `crates\gz-build`, `crates\gz-release`, `crates\grizzly` |
 | E2 | agent | Mod > Items, the browser's icon, QA `test_items.py` | editor: `crates\gz-ui-world` (or a crate of its own), `gz-ui`, `gz-ui-content`, `tools\qa` |
 | P1 | agent | 1.7 and section 2 | editor: `tools\classic_mod`; the new project |
+| G3 | agent, after G1 | 1.8 | game: `src\xrGame` (the ALife registry's save and load, the save extensions, `xms_game.cpp`), the stock scripts' save hooks, `docs\dead-air\SAVE_COMPATIBILITY.md`, `tools\qa` |
 | - | lead | this plan, the contracts' final text, integration, the game build and deploy, the in-game proof, the one full read by the critic and its fixes |
 
 ## 4. State
 
 - 2026-11-15: the surveys are in; the contract above is written; G1, G2, E1 and P1 run. E2 (the Items tab) starts
   on E1's API; P2 (section 2's hand work: scripts, use scenes, XML, start kits) on P1's project and G1/G2's game.
+- 2026-11-15, later: the author asks for saves the original game still loads with modules on (1.8, G3).
 - The scratch of the task (surveys, the key table, the unpacked game views) is the session's scratchpad folder
   `we\`; nothing in the repository depends on it.
