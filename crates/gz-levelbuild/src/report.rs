@@ -15,6 +15,7 @@
 //!   counts = { visuals = { total = 812, by_kind = { ... } }, ... },
 //!   files = { { name = "level", size = 123456 }, ... },
 //!   pieces = { { step = "light", name = "cell_0_-1", files = 6, bytes = 2101234 }, ... },
+//!   cuts = { regions = 1, references = 2, ai_edits = 140, closed = 3 },  -- overlay.cut, .aiedit
 //!   warnings = { { step = "light", code = "compiler", text = "..." } },
 //! }
 //! ```
@@ -176,6 +177,7 @@ fn text_of(
     let mut phases = Vec::new();
     let mut pieces = Vec::new();
     let mut lighter = None;
+    let mut cuts = None;
     let mut total = 0.0;
     for r in ran {
         let name = r.get("step").and_then(Json::as_str).unwrap_or("");
@@ -188,6 +190,9 @@ fn text_of(
         if let Some(note) = r.get("note") {
             phases_of(name, note, &mut phases);
             pieces_of(name, note, &mut pieces);
+            if let Some(c) = note.get("level_cuts").filter(|c| c.is_object()) {
+                cuts = Some(c.clone());
+            }
             if let Some(l) = find_string(note, "lighter") {
                 s["lighter"] = json!(l);
                 lighter.get_or_insert(l);
@@ -217,6 +222,10 @@ fn text_of(
     );
     if !pieces.is_empty() {
         put("pieces", Json::Array(pieces));
+    }
+    // what the piece takes away of the level and changes under it
+    if let Some(c) = cuts {
+        put("cuts", c);
     }
     put("warnings", Json::Array(warnings.to_vec()));
 
@@ -322,6 +331,16 @@ mod tests {
         assert_eq!((v["pieces"][0]["files"].clone(), v["pieces"][0]["bytes"].clone()), (json!(2), json!(42)));
         assert_eq!(v["pieces"][0]["step"], "light");
         assert!(v.get("error").is_none());
+        assert!(v.get("cuts").is_none(), "no piece cut anything");
+    }
+
+    #[test]
+    fn a_piece_that_cuts_the_level_is_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let ran = vec![json!({ "step": "piece", "seconds": 3.0, "files": [], "note": {
+            "level_cuts": { "regions": 1, "references": 2, "ai_edits": 40, "closed": 3 } } })];
+        let v = read_json(&text_of(dir.path(), "l01_escape", "draft", "built", None, &ran, &[])).unwrap();
+        assert_eq!(v["cuts"], json!({ "regions": 1, "references": 2, "ai_edits": 40, "closed": 3 }));
     }
 
     #[test]

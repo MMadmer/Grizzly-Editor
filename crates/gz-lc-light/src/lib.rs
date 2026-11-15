@@ -70,9 +70,9 @@ pub use bake::{
 pub use batch::{BATCH, Gathered, Run, light_samples};
 pub use color::{BaseColor, ColorC, fixed16_r, fixed16_w};
 pub use data::{
-    BuildMaterial, BuildParams, BuildTexture, NO_SHADER, QUALITY_DRAFT, ShaderXrlc, Shaders, TextureUse,
-    default_shader, has_alpha_channel, post_process_materials, prepare_texture, shader_of, surface_of,
-    texture_key,
+    BuildMaterial, BuildParams, BuildTexture, KEEPS_LEVEL_LIGHT, NO_SHADER, QUALITY_DRAFT, ShaderXrlc,
+    Shaders, TextureUse, default_shader, has_alpha_channel, keeps_level_light, post_process_materials,
+    prepare_texture, shader_of, surface_of, texture_key,
 };
 pub use deflector::{
     Deflector, Deflectors, LMAP_SIZE, LightEnv, MAX_LAYER, UvTri, compress_rms, compress_zero, jitter,

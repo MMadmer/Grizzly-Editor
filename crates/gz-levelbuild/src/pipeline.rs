@@ -414,7 +414,12 @@ pub(crate) async fn run(
     let inp = inputs(editor, ctx).await?;
     // the models the scene's objects are made from are part of what the steps read
     let (snap, lib) = (inp.snap.clone(), inp.lib.clone());
-    let library = editor.exec.io(move || fingerprint::library_stamp(&snap, &lib)).await;
+    // the media assets as they are now: a build waits for the index, a status never does
+    let media = match gz_media::Media::get(editor) {
+        Some(m) => Some((m.index().await, m.root().to_path_buf())),
+        None => None,
+    };
+    let library = editor.exec.io(move || fingerprint::library_stamp_known(&snap, &lib, media.as_ref())).await;
     let level = inp.snap.meta.level.level_path.to_string();
     if level.trim().is_empty() {
         return Err(JobError::new("The scene has no level path: set it in Level Settings."));
@@ -743,6 +748,13 @@ async fn preflight(cx: &mut StepCx<'_>, plan: &[Step]) -> Result<(), JobError> {
             continue;
         }
         refuse(&mut found, step, format!("The level has no {file}: {how}."), None);
+    }
+    // a terrain that cuts a level of the game needs a game that cuts it
+    if has(Step::Piece) && cx.req.opts.game_level && service::cutting_terrain(&cx.work).is_some() {
+        let cuts = service::game_states(cx.editor, service::LEVEL_CUTS).await;
+        if let Some((name, text)) = cut_refusal(&cx.work, &cx.level, cuts) {
+            refuse(&mut found, Step::Piece, text, Some(name));
+        }
     }
     if has(Step::GameGraph) && graph_points(&cx.work, sync_settings(&cx.inp.settings)).is_empty() {
         refuse(
@@ -1527,30 +1539,44 @@ async fn step_piece(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
             position: None,
         });
     }
-    let (project, log, collision) = cx
+    let (project, log, collision, edits) = cx
         .editor
         .exec
-        .cpu(move || -> crate::Result<(Vec<u8>, Vec<Finding>, gz_fmt_level::XcForm)> {
-            let look = crate::files::lookup(lib);
+        .cpu(move || -> crate::Result<(Vec<u8>, Vec<Finding>, gz_fmt_level::XcForm, LevelEdits)> {
+            let look = crate::files::lookup(lib.clone());
             let stop = || job.cancel.is_cancelled();
             let c = prj::compile_piece_until(&s2, &look, &engine, &stop)?;
             let sector =
                 if existing.is_empty() { 0 } else { gz_fmt_level::XcForm::read_back(&existing).0.sector };
+            // on a level of the game a terrain is always the module's own
             let form = gz_export_level::overlay::collision_of(
                 &s2,
-                &|o| o.marks.authored && !o.marks.removed,
+                &|o| (o.marks.authored || o.class == ObjClass::Terrain) && !o.marks.removed,
                 i64::from(sector),
                 &look,
                 &existing,
                 "The module's static objects on the level have no triangle to collide with.",
             )
             .map_err(|e| crate::BuildError::new(e.0))?;
-            Ok((c.project.write(), c.log, form.form))
+            Ok((c.project.write(), c.log, form.form, LevelEdits::of(&s2, &lib)))
         })
         .await
         .map_err(job_err)?;
     log_lines(cx.editor, &log);
     cx.ctx.check()?;
+    if !edits.ai_edits.is_empty() && !service::game_states(cx.editor, service::AI_EDITS).await {
+        cx.problems.push(LevelProblem {
+            step: Step::Piece,
+            code: "no_ai_edits",
+            severity: Severity::Warning,
+            text: format!(
+                "The linked game does not move a level's AI nodes (it does not state the ability {}): under the terrains its creatures walk the old heights of {level}.",
+                service::AI_EDITS
+            ),
+            object: None,
+            position: None,
+        });
+    }
     write_files(cx.editor, scratch.clone(), vec![("build.prj".to_owned(), project)]).await?;
     let (guard, d2) = (write_guard(cx.editor), pieces.clone());
     cx.editor.exec.io(move || guard.check(&d2).map_err(|e| e.to_string())).await.map_err(JobError::new)?;
@@ -1601,8 +1627,159 @@ async fn step_piece(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
         .map_err(JobError::new)?;
     let mut files = piece_files(&level, &report);
     files.push(format!("levels/{level}/overlay.xcform"));
-    let note = json!({ "parts": report.get("parts").cloned().unwrap_or(Value::Null), "lighter": report.get("lighter").cloned().unwrap_or(Value::Null), "collision": { "triangles": collision.tris.len(), "cuts": collision.cuts.len() } });
+    // the ground the terrains replace and the AI nodes under them, beside the collision
+    let (guard, root2, level2, e2) = (write_guard(cx.editor), root.clone(), level.clone(), edits.clone());
+    let written =
+        cx.editor.exec.io(move || e2.write(&root2, &level2, &guard)).await.map_err(JobError::new)?;
+    files.extend(written.iter().map(|n| format!("levels/{level}/{n}")));
+    let cuts = edits.note();
+    if !edits.regions.is_empty() {
+        cx.editor.log.info(format!("{}: {}.", Step::Piece.title(), edits.sentence()));
+    }
+    let note = json!({ "parts": report.get("parts").cloned().unwrap_or(Value::Null), "lighter": report.get("lighter").cloned().unwrap_or(Value::Null), "collision": { "triangles": collision.tris.len(), "cuts": collision.cuts.len() }, "level_cuts": cuts });
     Ok(Made { files, note, ..Made::default() })
+}
+
+/// What a module's piece takes away of a level of the game and changes under it: the regions of
+/// `overlay.cut`, what each cuts, and the edits of `overlay.aiedit` (`docs/plan/LEVEL_DESIGN.md`
+/// 2.6, the game's `XMS_ARCHITECTURE.md` 8.4).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LevelEdits {
+    pub regions: Vec<gz_terrain::Region>,
+    /// The library references the regions cut, every one once.
+    pub references: Vec<String>,
+    pub ai_edits: Vec<gz_terrain::AiEdit>,
+}
+
+/// The files of a level of the game a piece build writes beside `overlay.xcform`.
+pub(crate) const CUT_FILE: &str = "overlay.cut";
+pub(crate) const AI_EDIT_FILE: &str = "overlay.aiedit";
+
+impl LevelEdits {
+    /// The scene's cutting terrains over the library objects loaded now.
+    pub fn of(scene: &SceneState, lib: &gz_scene::library::Library) -> Self {
+        let cuts = gz_scene::objects::terrain::cuts(scene, lib);
+        let mut references: Vec<String> = Vec::new();
+        for r in cuts.iter().flat_map(|c| c.references.iter()) {
+            if !references.iter().any(|x| x.eq_ignore_ascii_case(r)) {
+                references.push(r.to_string());
+            }
+        }
+        let ai_edits =
+            if cuts.is_empty() { Vec::new() } else { gz_scene::objects::terrain::ai_edits(scene, lib) };
+        Self { regions: cuts.into_iter().map(|c| c.region).collect(), references, ai_edits }
+    }
+
+    /// Writes the two files of the module's level folder, and removes each that has nothing to
+    /// say; answers the names written. Blocking.
+    pub fn write(
+        &self,
+        root: &std::path::Path,
+        level: &str,
+        guard: &gz_editor::fsx::WriteGuard,
+    ) -> Result<Vec<String>, String> {
+        let mut written = Vec::new();
+        for (name, bytes) in [
+            (CUT_FILE, (!self.regions.is_empty()).then(|| gz_terrain::write_cuts(&self.regions))),
+            (AI_EDIT_FILE, (!self.ai_edits.is_empty()).then(|| gz_terrain::write_ai_edits(&self.ai_edits))),
+        ] {
+            match bytes {
+                Some(b) => {
+                    gz_export_level::gather::write_level_file(root, level, name, &b, name, guard)?;
+                    written.push(name.to_owned());
+                }
+                None => remove_level_file(root, level, name, guard),
+            }
+        }
+        // a hole in the ground with nothing in it must never be seen: such a piece never streams
+        if !self.regions.is_empty() {
+            let ltx = gz_export_level::gather::level_dir(root, level)
+                .join("pieces")
+                .join(gz_lc::PIECE_NAME)
+                .join("piece.ltx");
+            if let Ok(text) = std::fs::read_to_string(&ltx) {
+                guard.check(&ltx).map_err(|e| e.to_string())?;
+                gz_editor::fsx::write_atomic(&ltx, not_streamed(&text).as_bytes())
+                    .map_err(|e| format!("{} could not be written: {e}", ltx.display()))?;
+            }
+        }
+        Ok(written)
+    }
+
+    /// The piece step's note of them: `build.report` and the build's answer count them.
+    pub fn note(&self) -> Value {
+        let closed = self.ai_edits.iter().filter(|e| e.closed).count();
+        json!({
+            "regions": self.regions.len(),
+            "references": self.references.len(),
+            "ai_edits": self.ai_edits.len(),
+            "closed": closed,
+        })
+    }
+
+    /// A sentence of them for the log.
+    pub fn sentence(&self) -> String {
+        let n = |k: usize, one: &str, many: &str| format!("{k} {}", if k == 1 { one } else { many });
+        format!(
+            "{} cutting {}, {}",
+            n(self.regions.len(), "region", "regions"),
+            n(self.references.len(), "model of the level", "models of the level"),
+            n(self.ai_edits.len(), "AI node moved", "AI nodes moved"),
+        )
+    }
+}
+
+/// `piece.ltx`'s text with `stream = false`.
+fn not_streamed(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 8);
+    let mut seen = false;
+    for line in text.split_inclusive('\n') {
+        let key = line.split(['=', ';']).next().unwrap_or_default().trim();
+        if key.eq_ignore_ascii_case("stream") {
+            let end = if line.ends_with("\r\n") {
+                "\r\n"
+            } else if line.ends_with('\n') {
+                "\n"
+            } else {
+                ""
+            };
+            out.push_str("stream  = false");
+            out.push_str(end);
+            seen = true;
+        } else {
+            out.push_str(line);
+        }
+    }
+    if !seen {
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push_str("\r\n");
+        }
+        out.push_str("stream  = false\r\n");
+    }
+    out
+}
+
+/// Removes a file of the module's level folder a piece build wrote, when the guard lets it.
+fn remove_level_file(root: &std::path::Path, level: &str, name: &str, guard: &gz_editor::fsx::WriteGuard) {
+    let dir = gz_export_level::gather::level_dir(root, level);
+    if guard.check(&dir).is_ok() {
+        let _ = std::fs::remove_file(dir.join(name));
+    }
+}
+
+/// Why a piece with a cutting terrain cannot be built for the linked game: a game that does not
+/// state `level-cuts` would draw the terrain over the ground it does not take away. The terrain's
+/// name and the sentence.
+pub(crate) fn cut_refusal(scene: &SceneState, level: &str, game_cuts: bool) -> Option<(String, String)> {
+    if game_cuts {
+        return None;
+    }
+    let name = service::cutting_terrain(scene)?;
+    let text = format!(
+        "The terrain '{name}' cuts the ground of {level}, and the linked game cannot cut a level's ground: it does not state the ability {}. Turn the terrain's cut off, or link a game that states it.",
+        service::LEVEL_CUTS
+    );
+    Some((name, text))
 }
 
 /// What a module's piece build left, when the scene has no piece any more: the piece goes, and so
@@ -1612,6 +1789,11 @@ async fn remove_piece(editor: &Arc<Editor>, session: &ProjectSession, level: &st
     let dir = pieces_dir(session, level).join(gz_lc::PIECE_NAME);
     let module = gz_export_level::gather::level_dir(&session.root, level);
     let xcform = files.iter().any(|f| f.to_ascii_lowercase().ends_with("overlay.xcform"));
+    // the cut and the AI edits are the piece's alone
+    let edits: Vec<&'static str> = [CUT_FILE, AI_EDIT_FILE]
+        .into_iter()
+        .filter(|n| files.iter().any(|f| f.to_ascii_lowercase().ends_with(n)))
+        .collect();
     let guard = write_guard(editor);
     let level = level.to_owned();
     let root = session.root.clone();
@@ -1623,6 +1805,9 @@ async fn remove_piece(editor: &Arc<Editor>, session: &ProjectSession, level: &st
             }
             if dir.is_dir() {
                 let _ = std::fs::remove_dir_all(&dir);
+            }
+            for name in edits {
+                remove_level_file(&root, &level, name, &guard);
             }
             let path = module.join("overlay.xcform");
             if xcform && let Ok(bytes) = std::fs::read(&path) {
@@ -1705,6 +1890,8 @@ mod tests {
             "levels\\l01_escape\\pieces\\main\\lmap#1_1.dds",
             "levels\\l01_escape\\pieces\\cell_0_-1\\piece",
             "levels\\l01_escape\\overlay.xcform",
+            "levels\\l01_escape\\overlay.cut",
+            "levels\\l01_escape\\overlay.aiedit",
             "temp\\piece_l01_escape\\build.prj",
             "temp\\piece_l01_escape\\build.err",
             "gamedata\\levels\\l01_escape\\build.state",
@@ -1730,14 +1917,100 @@ mod tests {
             "levels/l01_escape/pieces/main/lmap#1_1.dds",
             "levels/l01_escape/pieces/cell_0_-1/piece",
             "levels/l01_escape/overlay.xcform",
+            "levels/l01_escape/overlay.cut",
+            "levels/l01_escape/overlay.aiedit",
         ] {
             assert!(files.contains(&want), "{want} does not ship: {files:?}");
         }
+        // the cut and the AI edits are the module's: no file of the level that replaces the game's
+        let mut record = crate::state::BuildState::new("l01_escape");
+        record.steps.insert(
+            Step::Piece,
+            StepRecord {
+                fingerprint: 1,
+                time: String::new(),
+                seconds: 0.0,
+                quality: crate::steps::Quality::default(),
+                flags: String::new(),
+                library: 0,
+                failed: None,
+                files: vec![
+                    "levels/l01_escape/overlay.cut".into(),
+                    "levels/l01_escape/overlay.aiedit".into(),
+                ],
+            },
+        );
+        let level = root.join("levels").join("l01_escape");
+        assert!(crate::stock::written(&record, &level).is_empty());
         assert!(files.iter().all(|f| !f.starts_with("temp/") && !f.contains("build.")), "{files:?}");
         // where the steps put them
         let session_root = std::path::Path::new("P:\\proj");
         let pieces = gz_export_level::gather::level_dir(session_root, "l01_escape").join("pieces");
         assert_eq!(pieces, session_root.join("levels").join("l01_escape").join("pieces"));
+    }
+
+    /// The cut and the AI edits of a cutting terrain, written beside the piece and read back the
+    /// way the game reads them; a piece with a cut never streams; nothing to say, no file.
+    #[test]
+    fn a_cutting_terrain_writes_the_cut_and_the_ai_edits_of_the_level() {
+        let mut s = crate::prj::terrain_fixture::scene(true);
+        let nodes = [
+            gz_fmt_level::AiMapNode::new(glam::Vec3::new(0.0, 0.0, 0.0), glam::Vec3::Y),
+            gz_fmt_level::AiMapNode::new(glam::Vec3::new(4.0, 0.0, 0.0), glam::Vec3::Y),
+            gz_fmt_level::AiMapNode::new(glam::Vec3::new(20.0, 0.0, 0.0), glam::Vec3::Y),
+        ];
+        let header = gz_fmt_level::SceneAiMap {
+            bbox: gz_fmt_level::Aabb::new(glam::Vec3::splat(-50.0), glam::Vec3::splat(50.0)),
+            ..gz_fmt_level::SceneAiMap::default()
+        };
+        s.bulk.ai_map = Some(Arc::new(gz_scene::tools::AiMapPart::from_nodes(header, &nodes, None)));
+        let lib = crate::prj::terrain_fixture::library(&s);
+        let edits = LevelEdits::of(&s, &lib);
+        assert_eq!(edits.regions.len(), 1);
+        assert_eq!(edits.references, ["ground\\flat"]);
+        assert_eq!(edits.ai_edits.len(), 2, "the node beside the terrain is no edit");
+        assert_eq!(edits.note(), json!({ "regions": 1, "references": 1, "ai_edits": 2, "closed": 0 }));
+        assert_eq!(edits.sentence(), "1 region cutting 1 model of the level, 2 AI nodes moved");
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let main = root.join("levels").join("l01_escape").join("pieces").join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        std::fs::write(
+            main.join("piece.ltx"),
+            gz_lc::piece_ltx(&gz_fmt_level::Aabb::new(glam::Vec3::ZERO, glam::Vec3::ONE)),
+        )
+        .unwrap();
+        let guard = gz_editor::fsx::WriteGuard::default();
+        assert_eq!(edits.write(root, "l01_escape", &guard).unwrap(), [CUT_FILE, AI_EDIT_FILE]);
+        let level = root.join("levels").join("l01_escape");
+        let regions = gz_terrain::read_cuts(&std::fs::read(level.join(CUT_FILE)).unwrap()).unwrap();
+        assert_eq!(regions, edits.regions);
+        assert_eq!((regions[0].columns, regions[0].rows), (11, 11));
+        assert!(regions[0].heights.iter().all(|h| h.abs() < 1e-4), "the old ground's heights");
+        let read = gz_terrain::read_ai_edits(&std::fs::read(level.join(AI_EDIT_FILE)).unwrap()).unwrap();
+        assert_eq!(read, edits.ai_edits);
+        assert!((read[0].new_y - 2.0).abs() < 1e-3 && read[0].old_y == 0.0);
+        let ltx = std::fs::read_to_string(main.join("piece.ltx")).unwrap();
+        assert!(ltx.contains("stream  = false\r\n") && !ltx.contains("true"), "{ltx}");
+        // the terrain's cut off: both files go
+        assert!(LevelEdits::default().write(root, "l01_escape", &guard).unwrap().is_empty());
+        assert!(!level.join(CUT_FILE).exists() && !level.join(AI_EDIT_FILE).exists());
+    }
+
+    #[test]
+    fn a_game_that_cannot_cut_refuses_a_cutting_terrain_by_name() {
+        let s = crate::prj::terrain_fixture::scene(true);
+        let (name, text) = cut_refusal(&s, "l01_escape", false).unwrap();
+        assert_eq!(name, "Yard");
+        assert_eq!(
+            text,
+            "The terrain 'Yard' cuts the ground of l01_escape, and the linked game cannot cut a level's ground: it does not state the ability level-cuts. Turn the terrain's cut off, or link a game that states it."
+        );
+        assert!(cut_refusal(&s, "l01_escape", true).is_none());
+        assert!(cut_refusal(&crate::prj::terrain_fixture::scene(false), "l01_escape", false).is_none());
+        // a manifest without the key gets it
+        assert_eq!(not_streamed("[piece]\r\nversion = 1"), "[piece]\r\nversion = 1\r\nstream  = false\r\n");
     }
 
     #[test]

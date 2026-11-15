@@ -250,6 +250,23 @@ pub fn mesh_reference(state: &SceneState, lib: &Library, o: &Object) -> Option<S
     (!cutting(state, lib, o).is_empty()).then(|| cut_reference(&o.name))
 }
 
+/// [`mesh_reference`]'s question over a lookup of library objects instead of a library: whether a
+/// cutting terrain meets a static scene object that is no `authored` one. What the level build
+/// asks to compile the object as its cut model.
+#[must_use]
+pub fn is_cut(state: &SceneState, lookup: &dyn Fn(&str) -> Option<Arc<LibraryObject>>, o: &Object) -> bool {
+    if o.class != ObjClass::SceneObject || o.marks.authored || state.count(ObjClass::Terrain) == 0 {
+        return false;
+    }
+    let ObjData::SceneObject(d) = &o.data else { return false };
+    if d.visual_mode() || d.reference.is_empty() {
+        return false;
+    }
+    let Some(lo) = lookup(&d.reference).filter(|lo| is_static_any(lo)) else { return false };
+    let b = crate::math::xform_box(&lo.bounds, &o.world());
+    cutters(state).any(|(_, t)| meets_xz(&b, rect_xz(&t)))
+}
+
 /// The library object a scene object is drawn and hit as: its cut model once made, else its own.
 #[must_use]
 pub fn mesh_of(state: &SceneState, lib: &Library, o: &Object) -> Option<Arc<LibraryObject>> {

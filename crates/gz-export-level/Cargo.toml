@@ -32,3 +32,6 @@ serde_json.workspace = true
 futures.workspace = true
 rayon.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+gz-terrain.workspace = true

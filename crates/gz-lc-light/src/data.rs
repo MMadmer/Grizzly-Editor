@@ -16,6 +16,19 @@ pub const QUALITY_DRAFT: u16 = 0;
 /// `b_material::shader_xrlc` of a material without a compiler shader.
 pub const NO_SHADER: u16 = 65535;
 
+/// A bit of `b_material::internal_max_area`, which no compiler reads otherwise: the material's
+/// faces keep the light the level they lie in has baked into its own texture. Set by the build of
+/// a module's piece of a level of the game on a terrain's faces whose look is the level's ground;
+/// where the texture is implicitly lighted, such a face is not lit again and its visual names the
+/// level's own `<texture>` and `<texture>_lm`, which the game finds in the level.
+pub const KEEPS_LEVEL_LIGHT: u32 = 1 << 31;
+
+/// Whether a material's faces keep the level's own light ([`KEEPS_LEVEL_LIGHT`]).
+#[must_use]
+pub fn keeps_level_light(material: u16, materials: &[BuildMaterial]) -> bool {
+    materials.get(usize::from(material)).is_some_and(|m| m.internal_max_area & KEEPS_LEVEL_LIGHT != 0)
+}
+
 /// What a shader is before the library says otherwise.
 #[must_use]
 pub fn default_shader() -> ShaderXrlc {

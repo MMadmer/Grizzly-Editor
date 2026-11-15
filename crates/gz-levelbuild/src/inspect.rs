@@ -41,10 +41,11 @@ pub(crate) fn register(reg: &mut Registry) {
     reg.cmd(
         Spec::read(
             "level.inspect",
-            "Reads what a level build made, by part (summary, files, visuals, sectors, portals, lights, lightmaps, collision, ai_map, graph, pieces): the open project's level, a level of it by name or any folder.",
+            "Reads what a level build made, by part (summary, files, visuals, sectors, portals, lights, lightmaps, collision, ai_map, graph, pieces, cuts, ai_edits): the open project's level, a level of it by name or any folder.",
         )
         .example("part=visuals level=l01_escape shader=wall limit=20")
-        .example("part=pieces level=l01_escape"),
+        .example("part=pieces level=l01_escape")
+        .example("part=ai_edits level=l01_escape limit=20"),
         |ed, p: InspectParams, _o| async move { inspect(ed, p).await },
     );
 }
@@ -76,6 +77,12 @@ enum Part {
     /// streams, its visuals, roots, vertices, faces and lightmap pages, and what the game would
     /// refuse it for.
     Pieces,
+    /// The module's exact cuts of the level (`levels\<level>\overlay.cut`): each region's kind,
+    /// centre, half sizes, yaw, tolerance and grid.
+    Cuts,
+    /// The module's changes of the level's AI nodes (`levels\<level>\overlay.aiedit`): how many
+    /// move and close, and a page of them.
+    AiEdits,
 }
 
 impl Part {
@@ -92,6 +99,8 @@ impl Part {
             Self::AiMap => "ai_map",
             Self::Graph => "graph",
             Self::Pieces => "pieces",
+            Self::Cuts => "cuts",
+            Self::AiEdits => "ai_edits",
         }
     }
 }
@@ -426,10 +435,16 @@ fn read_graph(dir: &Path) -> Result<Option<gz_fmt_spawn::GameGraph>, String> {
 // ------------------------------------------------------------------------------------- the parts
 
 fn read_part(dir: &Path, pieces: &Path, q: &Query) -> Result<Value, String> {
-    if q.part == Part::Pieces {
-        let mut out = pieces_part(pieces, q);
+    if matches!(q.part, Part::Pieces | Part::Cuts | Part::AiEdits) {
+        // the module's files of the level, beside its pieces
+        let module = pieces.parent().unwrap_or(dir);
+        let (mut out, folder) = match q.part {
+            Part::Cuts => (cuts_part(module, q)?, module),
+            Part::AiEdits => (ai_edits_part(module, q)?, module),
+            _ => (pieces_part(pieces, q), pieces),
+        };
         if let Value::Object(o) = &mut out {
-            o.insert("folder".into(), json!(show(pieces)));
+            o.insert("folder".into(), json!(show(folder)));
             o.insert("part".into(), json!(q.part.name()));
         }
         return Ok(out);
@@ -457,7 +472,7 @@ fn read_part(dir: &Path, pieces: &Path, q: &Query) -> Result<Value, String> {
         Part::Collision => collision(dir, q)?,
         Part::AiMap => ai_map(dir, q)?,
         Part::Graph => graph(dir, q)?,
-        Part::Pieces => Value::Null,
+        Part::Pieces | Part::Cuts | Part::AiEdits => Value::Null,
     };
     if let Value::Object(o) = &mut out {
         o.insert("folder".into(), json!(show(dir)));
@@ -761,6 +776,11 @@ pub(crate) fn piece_row(dir: &Path) -> Value {
     o.insert("box".into(), if numbers.len() == 6 { json!(numbers) } else { Value::Null });
     o.insert("sector".into(), json!(m.get("sector").cloned().unwrap_or_else(|| "auto".into())));
     o.insert("stream".into(), json!(m.get("stream").is_none_or(|s| !s.eq_ignore_ascii_case("false"))));
+    // the module's cut of the level lies beside its pieces: a module piece carries it
+    let cut =
+        dir.parent().and_then(Path::parent).is_some_and(|l| l.join(crate::pipeline::CUT_FILE).is_file())
+            && name.eq_ignore_ascii_case(gz_lc::PIECE_NAME);
+    o.insert("cut".into(), json!(cut));
     if let Some(v) = m.get("version") {
         o.insert("version".into(), json!(v));
     }
@@ -812,6 +832,48 @@ fn pieces_part(pieces: &Path, q: &Query) -> Value {
         );
     }
     out
+}
+
+/// The regions of the module's `overlay.cut`, read as the game reads them.
+fn cuts_part(module: &Path, q: &Query) -> Result<Value, String> {
+    let name = crate::pipeline::CUT_FILE;
+    let Some(bytes) = read_file(module, name)? else { return Ok(missing(q.part, name)) };
+    let regions = parse(name, gz_terrain::read_cuts(&bytes))?;
+    Ok(page(regions.iter(), q, "regions", |r| {
+        let mut o = json!({
+            "kind": match r.kind { gz_terrain::CutKind::Everything => "everything", gz_terrain::CutKind::Ground => "ground" },
+            "centre": vec3(r.centre),
+            "half": vec3(r.half),
+            "yaw": r3(r.yaw),
+        });
+        if r.kind == gz_terrain::CutKind::Ground {
+            o["tolerance"] = json!(r3(r.tolerance));
+            o["grid"] = json!([r.columns, r.rows]);
+        }
+        o
+    }))
+}
+
+/// The edits of the module's `overlay.aiedit`: the counts, then a page of them.
+fn ai_edits_part(module: &Path, q: &Query) -> Result<Value, String> {
+    let name = crate::pipeline::AI_EDIT_FILE;
+    let Some(bytes) = read_file(module, name)? else { return Ok(missing(q.part, name)) };
+    let edits = parse(name, gz_terrain::read_ai_edits(&bytes))?;
+    let closed = edits.iter().filter(|e| e.closed).count();
+    let mut out = page(edits.iter(), q, "edits", |e| {
+        json!({
+            "x": r3(e.x),
+            "z": r3(e.z),
+            "old_y": r3(e.old_y),
+            "new_y": r3(e.new_y),
+            "normal": vec3(e.normal),
+            "closed": e.closed,
+        })
+    });
+    // a closed node is moved too, as the game counts it
+    out["moved"] = json!(edits.len());
+    out["closed"] = json!(closed);
+    Ok(out)
 }
 
 fn graph(dir: &Path, q: &Query) -> Result<Value, String> {
@@ -1080,6 +1142,11 @@ mod tests {
         // in the summary too
         let s = call(&rt, &ed, json!({ "folder": folder }));
         assert_eq!(s["pieces"][0]["name"], "main", "{s}");
+        assert_eq!(p["cut"], false);
+        // a cut of the level beside it: the module's piece carries it
+        fs::write(dir.path().join("overlay.cut"), gz_terrain::write_cuts(&[])).unwrap();
+        let r = call(&rt, &ed, json!({ "folder": folder, "part": "pieces" }));
+        assert_eq!(r["pieces"][0]["cut"], true, "{r}");
         // a piece whose visual names a range past its buffers is one the game refuses
         let mut short = geom.clone();
         let at = short.len() - 4 - 8 - 24 - 4;
@@ -1093,6 +1160,58 @@ mod tests {
         assert_eq!(l.roots.len(), 2);
         assert_eq!((l.visuals[0].sector, l.visuals[1].sector), (Some(3), None));
         assert!(CompiledLevel::read_piece(&sample::level()).is_err(), "a level is no piece");
+    }
+
+    #[test]
+    fn the_cuts_and_the_ai_edits_of_a_level_are_read_as_the_game_reads_them() {
+        let (rt, ed) = editor();
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().to_string_lossy().into_owned();
+        let r = call(&rt, &ed, json!({ "folder": folder, "part": "cuts" }));
+        assert_eq!((r["ok"].clone(), r["missing"].clone()), (json!(true), json!("overlay.cut")), "{r}");
+        let region = gz_terrain::Region {
+            kind: gz_terrain::CutKind::Ground,
+            centre: glam::Vec3::new(1.0, 2.0, 3.0),
+            half: glam::Vec3::new(5.0, 0.5, 4.0),
+            yaw: 0.5,
+            tolerance: 0.5,
+            columns: 2,
+            rows: 3,
+            heights: vec![0.0; 6],
+        };
+        fs::write(dir.path().join("overlay.cut"), gz_terrain::write_cuts(&[region])).unwrap();
+        let edit = |x: f32, closed: bool| gz_terrain::AiEdit {
+            x,
+            z: 0.0,
+            old_y: 0.0,
+            new_y: 1.5,
+            normal: glam::Vec3::Y,
+            closed,
+        };
+        let edits = [edit(0.0, false), edit(1.0, true), edit(2.0, false)];
+        fs::write(dir.path().join("overlay.aiedit"), gz_terrain::write_ai_edits(&edits)).unwrap();
+        let r = call(&rt, &ed, json!({ "folder": folder, "part": "cuts" }));
+        assert_eq!(r["total"], 1, "{r}");
+        let g = &r["regions"][0];
+        assert_eq!(
+            (g["kind"].clone(), g["centre"].clone(), g["half"].clone(), g["yaw"].clone()),
+            (json!("ground"), json!([1.0, 2.0, 3.0]), json!([5.0, 0.5, 4.0]), json!(0.5))
+        );
+        assert_eq!((g["tolerance"].clone(), g["grid"].clone()), (json!(0.5), json!([2, 3])));
+        let r = call(&rt, &ed, json!({ "folder": folder, "part": "ai_edits", "limit": 2 }));
+        assert_eq!(
+            (r["moved"].clone(), r["closed"].clone(), r["total"].clone()),
+            (json!(3), json!(1), json!(3))
+        );
+        assert_eq!(r["edits"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            (r["edits"][1]["closed"].clone(), r["edits"][1]["new_y"].clone()),
+            (json!(true), json!(1.5))
+        );
+        // a file the game would refuse is a sentence
+        fs::write(dir.path().join("overlay.aiedit"), b"XAE1").unwrap();
+        let r = call(&rt, &ed, json!({ "folder": folder, "part": "ai_edits" }));
+        assert_eq!(r["ok"], false, "{r}");
     }
 
     #[test]

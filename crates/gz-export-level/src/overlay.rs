@@ -8,6 +8,7 @@ use gz_fmt_level::{Aabb, VisualsWriter, XcForm, XcTri, append_cuts, unique_visua
 use gz_fmt_object::Object as EditObject;
 use gz_fmt_ogf::{ExportOptions, export_static};
 use gz_scene::library::LibraryObject;
+use gz_scene::objects::terrain;
 use gz_scene::{ObjClass, ObjData, Object, SceneState};
 use rayon::prelude::*;
 
@@ -30,7 +31,8 @@ pub struct Collision {
     pub objects_used: u32,
 }
 
-/// The collision overlay from the level name on: the scene objects' meshes in world space, a game
+/// The collision overlay from the level name on: the scene objects' and the terrains' meshes in
+/// world space (a terrain's skirt is no collision), a game
 /// material per face from its surface (`materials\default` where the surface names none or a
 /// face is in no surface), over the cut list `existing` holds.
 pub fn collision(
@@ -48,7 +50,8 @@ pub fn collision(
     collision_of(scene, &|o| !selected_only || scene.is_selected(o.id), sector, lib, existing, empty)
 }
 
-/// [`collision`] of the scene objects `keep` takes (the level build's piece: the authored ones);
+/// [`collision`] of the scene objects and terrains `keep` takes (the level build's piece: the
+/// authored objects and every terrain);
 /// `empty` is the refusal when they hold no triangle.
 pub fn collision_of(
     scene: &SceneState,
@@ -109,6 +112,40 @@ pub fn collision_of(
                 });
             }
             used = true;
+        }
+        if used {
+            objects_used += 1;
+        }
+    }
+    // a terrain's mesh is made in the world: the grid's faces with their materials, not the skirt
+    for o in scene.of_class(ObjClass::Terrain) {
+        if !keep(o) {
+            continue;
+        }
+        let (Some(t), Some(lo)) = (terrain::terrain(o), lib(&terrain::reference(&o.name))) else { continue };
+        let (cols, rows) = t.dims();
+        let grid_faces = 2 * cols.saturating_sub(1) * rows.saturating_sub(1);
+        let mut used = false;
+        for mesh in &lo.object.meshes {
+            let base = u32::try_from(verts.len()).map_err(|_| ExportError::new("too many vertices"))?;
+            verts.extend(mesh.points.iter().copied());
+            for sf in &mesh.surf_faces {
+                let gm = lo
+                    .object
+                    .surfaces
+                    .get(sf.surface as usize)
+                    .map(|s| s.game_mtl.as_str())
+                    .filter(|g| !g.is_empty());
+                let mi = XcForm::material_index(&mut mtls, gm.unwrap_or("materials\\default"));
+                for &fi in sf.faces.iter().filter(|f| (**f as usize) < grid_faces) {
+                    let Some(face) = mesh.faces.get(fi as usize) else { continue };
+                    tris.push(XcTri {
+                        v: [base + face.v[0].point, base + face.v[1].point, base + face.v[2].point],
+                        material: mi as u16,
+                    });
+                    used = true;
+                }
+            }
         }
         if used {
             objects_used += 1;
@@ -372,6 +409,39 @@ mod tests {
         assert!(
             matches!(collision(&scene, false, 70000, &lookup, &[]), Err(ExportError(e)) if e == "sector out of u16 range")
         );
+    }
+
+    #[test]
+    fn a_terrain_collides_with_its_grid_and_not_its_skirt() {
+        use gz_terrain::{Base, Look, Looks, Spec, Surface, Terrain};
+        let look =
+            Look { texture: "ground\\grass".into(), material: "materials\\earth".into(), ..Look::default() };
+        let spec = Spec {
+            size: gz_terrain::glam::Vec2::new(4.0, 2.0),
+            cell: 1.0,
+            base: Base::Height(0.0),
+            surface: Surface::Look(look.clone()),
+            ..Spec::default()
+        };
+        let t = Terrain { centre: Vec3::new(5.0, 1.0, 0.0), heading: 0.0, spec: spec.clone() };
+        let mesh = t.mesh(&t.heights(None).unwrap(), Looks::Table(&look));
+        let all = mesh.meshes[0].faces.len();
+        let lo = Arc::new(LibraryObject::provided("@terrain\\yard", mesh));
+        let mut scene = SceneState::default();
+        let mut o = Object::new(ObjClass::Terrain, "Yard", ObjData::Terrain(Box::new(spec)));
+        o.xform.position = t.centre;
+        scene.insert(o);
+        let lookup = move |r: &str| (r == "@terrain\\yard").then(|| lo.clone());
+        let c = collision_of(&scene, &|_| true, 0, &lookup, &[], "none").unwrap();
+        // 4 x 2 cells of two triangles, every one of the earth; the skirt round it is no collision
+        assert_eq!(c.form.tris.len(), 16);
+        assert!(all > 16);
+        assert_eq!(c.form.materials, ["materials\\earth"]);
+        assert_eq!(c.objects_used, 1);
+        // in the world as made, at the height the base says
+        assert!(c.form.verts.iter().take(15).all(|v| (v.y - 1.0).abs() < 1e-5 && v.x >= 2.99 && v.x <= 7.01));
+        // what `keep` leaves out is not there
+        assert!(collision_of(&scene, &|_| false, 0, &lookup, &[], "none").is_err());
     }
 
     #[test]

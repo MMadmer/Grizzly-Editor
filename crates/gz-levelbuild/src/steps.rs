@@ -11,9 +11,10 @@
 //! details       build.details and its texture, from the painted detail slots
 //! light         the compiler on build.prj: level, level.geom, level.cform, the light maps
 //! detail_light  the detail compiler: level.details
-//! piece         a module's piece of a level the game has: the authored static objects compiled
-//!               and lit beside the rest of the scene (levels\<level>\pieces\main), their
-//!               collision into the module's overlay.xcform
+//! piece         a module's piece of a level the game has: the authored static objects and the
+//!               terrains compiled and lit beside the rest of the scene (levels\<level>\pieces\main),
+//!               their collision into the module's overlay.xcform, the ground the terrains replace
+//!               into overlay.cut and the AI nodes under them into overlay.aiedit
 //! ```
 //!
 //! [`Step::ORDER`] is one order in which every step comes after what it needs: the quick steps
@@ -137,9 +138,14 @@ impl Step {
     #[must_use]
     pub fn classes(self) -> &'static [ObjClass] {
         match self {
-            Self::Geometry => {
-                &[ObjClass::SceneObject, ObjClass::Light, ObjClass::Glow, ObjClass::Sector, ObjClass::Portal]
-            }
+            Self::Geometry => &[
+                ObjClass::SceneObject,
+                ObjClass::Terrain,
+                ObjClass::Light,
+                ObjClass::Glow,
+                ObjClass::Sector,
+                ObjClass::Portal,
+            ],
             Self::Game => &[
                 ObjClass::SceneObject,
                 ObjClass::Shape,
@@ -150,12 +156,14 @@ impl Step {
                 ObjClass::Particles,
                 ObjClass::FogVolume,
             ],
-            Self::AiMap => &[ObjClass::SceneObject, ObjClass::Shape],
+            // the ground the map is made over: the cut ground and the terrains on it
+            Self::AiMap => &[ObjClass::SceneObject, ObjClass::Terrain, ObjClass::Shape],
             Self::GameGraph => &[ObjClass::SpawnPoint],
             Self::Spawn => &[ObjClass::SpawnPoint, ObjClass::Way],
             Self::SpawnLayer => &ObjClass::ALL,
-            // the authored objects are the piece, the rest cast its shadows, the lights light it
-            Self::Piece => &[ObjClass::SceneObject, ObjClass::Light],
+            // the authored objects and the terrains are the piece, the rest cast its shadows, the
+            // lights light it; the terrains that cut also make the cut and the AI edits
+            Self::Piece => &[ObjClass::SceneObject, ObjClass::Terrain, ObjClass::Light],
             Self::Details | Self::Light | Self::DetailLight => &[],
         }
     }

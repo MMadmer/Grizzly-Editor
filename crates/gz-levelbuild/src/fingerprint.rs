@@ -242,6 +242,30 @@ pub fn library_stamp(scene: &SceneState, lib: &gz_scene::library::Library) -> u6
     library_stamp_with(scene, lib, index.as_ref().zip(project.as_deref()))
 }
 
+/// The media assets as a project's media service last read them, with the project's folder.
+pub type KnownMedia = (std::sync::Arc<gz_media::Index>, std::path::PathBuf);
+
+/// The open project's media assets as its service holds them now, without waiting or walking.
+#[must_use]
+pub fn known_media(editor: &gz_editor::Editor) -> Option<KnownMedia> {
+    let media = gz_media::Media::get(editor)?;
+    media.latest().map(|index| (index, media.root().to_path_buf()))
+}
+
+/// [`library_stamp_with`] over what the media service holds; without it ([`known_media`] had
+/// nothing yet) the project is read once, as [`library_stamp`] does.
+#[must_use]
+pub fn library_stamp_known(
+    scene: &SceneState,
+    lib: &gz_scene::library::Library,
+    media: Option<&KnownMedia>,
+) -> u64 {
+    match media {
+        Some((index, root)) => library_stamp_with(scene, lib, Some((index.as_ref(), root.as_path()))),
+        None => library_stamp(scene, lib),
+    }
+}
+
 /// The project a scene's library belongs to: the folder two above its first root,
 /// `<project>\rawdata\objects`.
 fn project_of(lib: &gz_scene::library::Library) -> Option<std::path::PathBuf> {
@@ -377,6 +401,9 @@ fn layers(scene: &SceneState, step: Step, opts: &Options) -> u64 {
         }
         Step::DetailLight | Step::GameGraph | Step::SpawnLayer => {}
     }
+    if let Some(t) = terrain_layers(scene, step) {
+        h.word(t);
+    }
     h.str(&level.level_path);
     h.finish()
 }
@@ -433,7 +460,7 @@ pub fn steps(scene: &SceneState, objects: &Objects, opts: &Options) -> FxHashMap
 #[must_use]
 pub fn changes(step: Step, was: &Objects, now: &Objects) -> String {
     let (mut moved, mut changed, mut added, mut removed) = (0usize, 0usize, 0usize, 0usize);
-    for c in step.classes() {
+    for c in step.classes().iter().filter(|c| **c != ObjClass::Terrain) {
         let old: FxHashMap<&SmolStr, &ObjHash> = was.read_by(step, *c).map(|e| (&e.name, &e.hash)).collect();
         let new: FxHashMap<&SmolStr, &ObjHash> = now.read_by(step, *c).map(|e| (&e.name, &e.hash)).collect();
         for (name, h) in &new {
@@ -456,7 +483,51 @@ pub fn changes(step: Step, was: &Objects, now: &Objects) -> String {
     say(changed, "changed");
     say(added, "added");
     say(removed, "removed");
+    parts.extend(terrain_changes(step, was, now));
     parts.join(", ")
+}
+
+// ---------------------------------------------------------------- the terrains (C1b)
+
+/// What a step reads of the scene for its terrains besides their objects: the piece writes the AI
+/// map's nodes under a cutting terrain into `overlay.aiedit`. `None` for a scene without a cutting
+/// terrain, so the fingerprint of every other scene stays as it was.
+fn terrain_layers(scene: &SceneState, step: Step) -> Option<u64> {
+    if step != Step::Piece || crate::service::cutting_terrain(scene).is_none() {
+        return None;
+    }
+    let mut h = Stable::new();
+    h.str("terrain cuts");
+    h.word(ai_nodes_hash(scene));
+    Some(h.finish())
+}
+
+/// What changed of a step's terrains, in words: "1 terrain changed". A terrain's hashes are its
+/// text and its place; the ground it samples and the ground it cuts are scene objects of their own,
+/// and their models are in the library's stamp.
+fn terrain_changes(step: Step, was: &Objects, now: &Objects) -> Vec<String> {
+    if !step.classes().contains(&ObjClass::Terrain) {
+        return Vec::new();
+    }
+    let old: FxHashMap<&SmolStr, &ObjHash> =
+        was.read_by(step, ObjClass::Terrain).map(|e| (&e.name, &e.hash)).collect();
+    let new: FxHashMap<&SmolStr, &ObjHash> =
+        now.read_by(step, ObjClass::Terrain).map(|e| (&e.name, &e.hash)).collect();
+    let (mut moved, mut changed, mut added) = (0usize, 0usize, 0usize);
+    for (name, h) in &new {
+        match old.get(name) {
+            None => added += 1,
+            Some(o) if o.data != h.data => changed += 1,
+            Some(o) if o.xform != h.xform => moved += 1,
+            Some(_) => {}
+        }
+    }
+    let removed = old.keys().filter(|n| !new.contains_key(**n)).count();
+    [(moved, "moved"), (changed, "changed"), (added, "added"), (removed, "removed")]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, word)| format!("{n} {} {word}", if n == 1 { "terrain" } else { "terrains" }))
+        .collect()
 }
 
 #[cfg(test)]
@@ -556,5 +627,51 @@ mod tests {
         let mut nz = Stable::new();
         nz.f32(-0.0);
         assert_eq!(z.finish(), nz.finish());
+    }
+
+    fn terrain_scene(cut: bool) -> SceneState {
+        let mut s = SceneState::default();
+        let spec = gz_terrain::Spec { cut, ..gz_terrain::Spec::default() };
+        s.insert(Object::new(ObjClass::Terrain, "Yard", ObjData::Terrain(Box::new(spec))));
+        s
+    }
+
+    #[test]
+    fn a_terrain_edit_makes_the_geometry_and_the_piece_stale_with_a_sentence() {
+        let opts = Options::default();
+        let cache = HashCache::default();
+        let s = terrain_scene(true);
+        let was = cache.objects(&s);
+        let before = steps(&s, &was, &opts);
+        // the terrain's text: one more edit
+        let mut edited = s.clone();
+        let mut t = (**edited.find_any("yard").unwrap()).clone();
+        if let ObjData::Terrain(d) = &mut t.data {
+            d.edits.push(gz_terrain::Edit::Raise {
+                at: glam::Vec2::ZERO,
+                radius: 2.0,
+                falloff: 1.0,
+                amount: 1.0,
+            });
+        }
+        edited.replace(t);
+        let now = cache.objects(&edited);
+        let after = steps(&edited, &now, &opts);
+        for step in [Step::Geometry, Step::Piece, Step::AiMap] {
+            assert_ne!(before[&step], after[&step], "{step:?}");
+            assert_eq!(changes(step, &was, &now), "1 terrain changed");
+        }
+        // what reads no terrain stays fresh
+        assert_eq!(before[&Step::Game], after[&Step::Game]);
+        assert_eq!(changes(Step::Game, &was, &now), "");
+        // a scene without a terrain has the fingerprints it had before there were terrains
+        let empty = SceneState::default();
+        let none = cache.objects(&empty);
+        assert_eq!(terrain_layers(&empty, Step::Piece), None);
+        assert!(terrain_changes(Step::Piece, &none, &none).is_empty());
+        // the AI map under a cutting terrain is part of the piece; under one that does not cut, not
+        assert!(terrain_layers(&s, Step::Piece).is_some());
+        assert!(terrain_layers(&terrain_scene(false), Step::Piece).is_none());
+        assert!(terrain_layers(&s, Step::Geometry).is_none());
     }
 }

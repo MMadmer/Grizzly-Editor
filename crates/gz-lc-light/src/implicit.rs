@@ -1,7 +1,9 @@
 //! The implicit light: a
 //! texture marked "implicitly lighted" (terrain) is lit texel by texel through its own texture
 //! coordinates on every face that wears it without a deflector; the hemisphere goes into the
-//! texture's alpha and the light into a lightmap of the texture's size (`<texture>_lm`).
+//! texture's alpha and the light into a lightmap of the texture's size (`<texture>_lm`). A face
+//! whose material keeps the level's own light ([`crate::KEEPS_LEVEL_LIGHT`]) is lit by none of it:
+//! it takes the second channel alone and reads the pair the level already has.
 
 use glam::Vec2;
 use gz_fmt_tex::{DdsEncoding, Image, encode_dds};
@@ -11,7 +13,9 @@ use smol_str::SmolStr;
 use crate::bake::{LitScene, Sample};
 use crate::batch::{self, BATCH, Gathered, light_samples};
 use crate::color::{BaseColor, fixed16_r};
-use crate::data::{BuildMaterial, BuildTexture, QUALITY_DRAFT, ShaderXrlc, Shaders, shader_of};
+use crate::data::{
+    BuildMaterial, BuildTexture, QUALITY_DRAFT, ShaderXrlc, Shaders, keeps_level_light, shader_of,
+};
 use crate::deflector::{LightEnv, jitter};
 use crate::hash2d::Hash2D;
 use crate::layer::{LmLayer, apply_borders, image_of, pixels_of};
@@ -88,14 +92,26 @@ pub fn implicit_lighting(
     }
     ctl.stage("sorting the faces");
     let mut by_texture: std::collections::BTreeMap<u32, Vec<FaceId>> = std::collections::BTreeMap::new();
+    let mut kept: Vec<FaceId> = Vec::new();
     for &f in mesh.faces() {
         let Some(face) = mesh.face(f) else { continue };
         if face.deflector.is_some() || !has_implicit_lighting(face, input.shaders, input.materials, textures)
         {
             continue;
         }
+        if keeps_level_light(face.material, input.materials) {
+            kept.push(f);
+            continue;
+        }
         let tid = input.materials.get(usize::from(face.material)).map_or(0, |m| u32::from(m.surface));
         by_texture.entry(tid).or_default().push(f);
+    }
+    // the level's own light texture is read through the same coordinates: nothing is lit for it
+    for f in kept {
+        if let Some(face) = mesh.face_mut(f) {
+            let tc = face.tc0();
+            face.add_channel(tc[0], tc[1], tc[2]);
+        }
     }
 
     let mut out = Vec::with_capacity(by_texture.len());

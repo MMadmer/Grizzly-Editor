@@ -149,8 +149,9 @@ impl Media {
         Rev(h)
     }
 
-    /// The stamp of the files now, worked out once per state of the tree and the manifest.
-    fn current_stamp(&self) -> Rev {
+    /// The stamp of the files now, worked out once per state of the tree and the manifest: what
+    /// a cache of something made from the media assets is keyed by.
+    pub fn current_stamp(&self) -> Rev {
         let tree = self.project.tree.snapshot();
         let cheap = tree.rev().mix(self.manifest.rev()).mix(self.changes.get());
         if let Some((key, stamp)) = *self.memo.lock()

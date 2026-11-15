@@ -404,6 +404,28 @@ fn implicit_light_puts_the_sky_into_the_texture() {
     assert!(g.implicit_lighting(&CpuLighter::default(), &Ctl::quiet()).unwrap().is_empty());
 }
 
+#[test]
+fn a_face_that_keeps_the_levels_light_is_not_lit_again() {
+    let lights =
+        LightSet { rgb: vec![], hemi: vec![direct(SUN_DOWN, 0.5)], sun: vec![direct(SUN_DOWN, 1.0)] };
+    let mut g = global(lights);
+    let f = floor(&mut g.mesh, 0.0, (0.0, 0.0), (2.0, 2.0), 3);
+    finish_mesh(&mut g);
+    g.materials[3].internal_max_area |= crate::KEEPS_LEVEL_LIGHT;
+    assert!(crate::keeps_level_light(3, &g.materials) && !crate::keeps_level_light(2, &g.materials));
+    g.build_rapid(&g.scene_bounds()).unwrap();
+    let before = g.textures[2].surface.clone();
+    // no map, so no copy of the texture or its light; the faces read the level's pair
+    assert!(g.implicit_lighting(&CpuLighter::default(), &Ctl::quiet()).unwrap().is_empty());
+    assert_eq!(g.textures[2].surface, before);
+    for face in f {
+        let face = g.mesh.face(face).unwrap();
+        assert_eq!(face.tc.len(), 2);
+        assert_eq!(face.tc[1].uv, face.tc[0].uv);
+        assert!(g.has_implicit_lighting(g.mesh.faces()[0]));
+    }
+}
+
 fn mu_scene() -> LcGlobalData {
     let lights =
         LightSet { rgb: vec![], hemi: vec![direct(SUN_DOWN, 0.5)], sun: vec![direct(SUN_DOWN, 1.0)] };

@@ -12,7 +12,7 @@ use gz_fmt_level::{
 use gz_fmt_object::{Mesh, ObjectFlags, Surface, SurfaceFlags, VMapKind};
 use gz_scene::library::LibraryObject;
 use gz_scene::math::{Mat4, xform_box};
-use gz_scene::objects::{LT_POINT, SO_USE_SURFACE, light_flags};
+use gz_scene::objects::{LT_POINT, SO_USE_SURFACE, light_flags, terrain};
 use gz_scene::{ObjClass, ObjData, Object, SceneState};
 
 use crate::hemi::{HEMI_1, HEMI_2, HEMI_3};
@@ -188,6 +188,57 @@ fn reference(o: &Object) -> Option<&str> {
     }
 }
 
+/// What an object is compiled as.
+struct Model {
+    /// The faces: a terrain's mesh, a ground object's cut model, or the object's own.
+    lo: Arc<LibraryObject>,
+    /// The object's own model: its name and LOD.
+    base: Arc<LibraryObject>,
+    /// Where the faces are: a terrain's mesh is made in the world.
+    world: Mat4,
+    /// A cutting terrain meets the object, and its cut model is not made: it is its own whole.
+    uncut: bool,
+}
+
+/// A scene object or a terrain as the build compiles it. The ground a cutting terrain meets is
+/// its cut model ([`terrain::is_cut`]), the swap the editor's picture and rays make, so nothing
+/// under a terrain is built or casts a shadow twice.
+fn model_of(scene: &SceneState, o: &Object, lib: Lookup<'_>) -> Option<Model> {
+    match o.class {
+        ObjClass::Terrain => {
+            let lo = lib(&terrain::reference(&o.name))?;
+            Some(Model { base: lo.clone(), lo, world: Mat4::IDENTITY, uncut: false })
+        }
+        ObjClass::SceneObject => {
+            let base = reference(o).and_then(lib)?;
+            let (lo, uncut) = if terrain::is_cut(scene, lib, o) {
+                lib(&terrain::cut_reference(&o.name)).map_or_else(|| (base.clone(), true), |c| (c, false))
+            } else {
+                (base.clone(), false)
+            };
+            Some(Model { lo, base, world: o.world(), uncut })
+        }
+        _ => None,
+    }
+}
+
+/// Whether a terrain's look is the level's ground under it.
+fn wears_the_ground(o: &Object) -> bool {
+    matches!(&o.data, ObjData::Terrain(d) if d.surface == gz_terrain::Surface::Ground)
+}
+
+/// The terrains' meshes' box: they are made in the world.
+fn terrains_box(scene: &SceneState, lib: Lookup<'_>, b: &mut Aabb) {
+    for o in scene.of_class(ObjClass::Terrain) {
+        if let Some(lo) = lib(&terrain::reference(&o.name))
+            && lo.bounds.is_valid()
+        {
+            b.modify(lo.bounds.min);
+            b.modify(lo.bounds.max);
+        }
+    }
+}
+
 /// Whether an object is static / multiple-usage static.
 fn is_static(o: &gz_fmt_object::Object) -> bool {
     !o.flags.intersects(
@@ -265,6 +316,8 @@ struct Builder {
     mu_refs: Vec<MuReference>,
     occluders: Vec<Occluder>,
     log: Vec<Finding>,
+    /// The faces made now keep the level's own light ([`gz_lc_light::KEEPS_LEVEL_LIGHT`]).
+    keep_light: bool,
 }
 
 struct Ctx<'a> {
@@ -321,6 +374,7 @@ impl Builder {
                 && x.shader == m.shader
                 && x.shader_xrlc == m.shader_xrlc
                 && x.sector == m.sector
+                && x.internal_max_area == m.internal_max_area
         }) {
             return i as u32;
         }
@@ -358,7 +412,7 @@ impl Builder {
             shader_xrlc,
             sector,
             reserved: 0,
-            internal_max_area: 0,
+            internal_max_area: if self.keep_light { gz_lc_light::KEEPS_LEVEL_LIGHT } else { 0 },
         }))
     }
 
@@ -492,6 +546,49 @@ impl Builder {
             }
         }
         Ok(())
+    }
+
+    /// A static object's meshes placed by `world` into the level's own lists, each mesh in its
+    /// sector, counted in the scene statistic.
+    fn static_object(
+        &mut self,
+        cx: &Ctx<'_>,
+        o: &Object,
+        lo: &LibraryObject,
+        world: &Mat4,
+        sectors: &Sectors,
+        stat: &mut SceneStat,
+    ) -> Result<()> {
+        let surfaces = object_surfaces(o, lo);
+        let mut out = (
+            std::mem::take(&mut self.verts),
+            std::mem::take(&mut self.faces),
+            std::mem::take(&mut self.smgroups),
+        );
+        for m in &lo.object.meshes {
+            let sector = sectors.of_mesh(&o.name, &m.name);
+            let r = self.mesh(cx, world, world, o, lo, &surfaces, m, sector, &mut out);
+            if let Err(e) = r {
+                (self.verts, self.faces, self.smgroups) = out;
+                self.log.error(e.0.clone());
+                return Err(BuildError::new(format!("{}\nThe object '{}' could not be built.", e.0, o.name)));
+            }
+            for p in m.points.iter() {
+                stat.add_svert(world.transform_tiny(*p));
+            }
+        }
+        (self.verts, self.faces, self.smgroups) = out;
+        Ok(())
+    }
+
+    /// A ground object a cutting terrain meets whose cut model is not made is built whole: said.
+    fn uncut(&mut self, o: &Object, m: &Model) {
+        if m.uncut {
+            self.log.warn(format!(
+                "The ground object '{}' that a terrain cuts is built whole: its cut model could not be made.",
+                o.name
+            ));
+        }
     }
 
     /// `None` for an object without a LOD.
@@ -788,7 +885,7 @@ impl Builder {
     }
 }
 
-/// The scene objects' box.
+/// The scene objects' and the terrains' box.
 #[must_use]
 pub fn level_box(scene: &SceneState, lib: Lookup<'_>) -> Option<Aabb> {
     let mut b = Aabb::INVALID;
@@ -801,6 +898,7 @@ pub fn level_box(scene: &SceneState, lib: Lookup<'_>) -> Option<Aabb> {
             }
         }
     }
+    terrains_box(scene, lib, &mut b);
     b.is_valid().then_some(b)
 }
 
@@ -838,7 +936,8 @@ pub fn compile_piece_until(
     build(scene, lib, engine, &|_| None, stop, true)
 }
 
-/// The authored scene objects' box: what a piece is made of.
+/// The authored scene objects' and the terrains' box: what a piece is made of. On a level of the
+/// game a terrain is always the module's own.
 fn authored_box(scene: &SceneState, lib: Lookup<'_>) -> Option<Aabb> {
     let mut b = Aabb::INVALID;
     for o in scene.of_class(ObjClass::SceneObject).filter(|o| o.marks.authored) {
@@ -850,6 +949,7 @@ fn authored_box(scene: &SceneState, lib: Lookup<'_>) -> Option<Aabb> {
             }
         }
     }
+    terrains_box(scene, lib, &mut b);
     b.is_valid().then_some(b)
 }
 
@@ -862,8 +962,9 @@ fn build(
     piece: bool,
 ) -> Result<Compiled> {
     let level_box = if piece {
-        authored_box(scene, lib)
-            .ok_or_else(|| BuildError::new("The scene has no static object of the module's own."))?
+        authored_box(scene, lib).ok_or_else(|| {
+            BuildError::new("The scene has no static object or terrain of the module's own.")
+        })?
     } else {
         level_box(scene, lib)
             .ok_or_else(|| BuildError::new("The level's bounding volume cannot be computed."))?
@@ -894,15 +995,32 @@ fn build(
                 ObjClass::Glow | ObjClass::Portal if piece => {}
                 ObjClass::SceneObject if piece && !o.marks.authored => {
                     // the rest of the level: the piece's shadows, and nothing else
-                    let Some(lo) = reference(o).and_then(lib) else { continue };
+                    let Some(m) = model_of(scene, o, lib) else { continue };
+                    let lo = &m.lo;
                     if o.marks.removed || !(is_static(&lo.object) || is_mu_static(&lo.object)) {
                         continue;
                     }
-                    let surfaces = object_surfaces(o, &lo);
-                    let world = o.world();
-                    for m in &lo.object.meshes {
-                        b.occluders(&cx, &world, &surfaces, m)?;
+                    b.uncut(o, &m);
+                    let surfaces = object_surfaces(o, lo);
+                    for mesh in &lo.object.meshes {
+                        b.occluders(&cx, &m.world, &surfaces, mesh)?;
                     }
+                }
+                ObjClass::Terrain => {
+                    // level geometry like a static object; on a level of the game the module's own
+                    let Some(m) = model_of(scene, o, lib) else {
+                        let why = terrain::terrain(o).and_then(|t| t.check().err()).unwrap_or_else(|| {
+                            "its mesh could not be made over the ground under it".to_owned()
+                        });
+                        return Err(BuildError::new(format!(
+                            "The terrain '{}' cannot be built: {why}.",
+                            o.name
+                        )));
+                    };
+                    b.keep_light = piece && wears_the_ground(o);
+                    let r = b.static_object(&cx, o, &m.lo, &m.world, &sectors, &mut stat);
+                    b.keep_light = false;
+                    r?;
                 }
                 ObjClass::Glow => b.glow(&cx, o, &sectors)?,
                 ObjClass::Light => b.light(o, &sectors, scene)?,
@@ -918,41 +1036,25 @@ fn build(
                     }
                 }
                 ObjClass::SceneObject => {
-                    let Some(lo) = reference(o).and_then(lib) else { continue };
+                    let Some(made) = model_of(scene, o, lib) else { continue };
+                    b.uncut(o, &made);
+                    let lo = made.lo.clone();
                     let surfaces = object_surfaces(o, &lo);
-                    let world = o.world();
+                    let world = made.world;
                     if is_static(&lo.object) {
-                        let mut out = (
-                            std::mem::take(&mut b.verts),
-                            std::mem::take(&mut b.faces),
-                            std::mem::take(&mut b.smgroups),
-                        );
-                        for m in &lo.object.meshes {
-                            let sector = sectors.of_mesh(&o.name, &m.name);
-                            let r = b.mesh(&cx, &world, &world, o, &lo, &surfaces, m, sector, &mut out);
-                            if let Err(e) = r {
-                                b.log.error(e.0.clone());
-                                return Err(BuildError::new(format!(
-                                    "{}\nThe object '{}' could not be built.",
-                                    e.0, o.name
-                                )));
-                            }
-                            for p in m.points.iter() {
-                                stat.add_svert(world.transform_tiny(*p));
-                            }
-                        }
-                        (b.verts, b.faces, b.smgroups) = out;
+                        b.static_object(&cx, o, &lo, &world, &sectors, &mut stat)?;
                     } else if is_mu_static(&lo.object) {
                         let first = lo.object.meshes.first().map_or(String::new(), |m| m.name.to_string());
                         let sector = sectors.of_mesh(&o.name, &first);
                         let model = match b.mu_models.iter().position(|m| m.name == lo.name) {
                             Some(i) => i,
                             None => {
-                                // a piece's model draws itself: the level's LOD atlas is not the piece's
+                                // a piece's model draws itself: the level's LOD atlas is not the piece's;
+                                // a cut model's LOD is its object's
                                 let lod_id = if piece {
                                     u16::MAX
                                 } else {
-                                    b.lod(&cx, &lo, sector)?.unwrap_or(u16::MAX)
+                                    b.lod(&cx, &made.base, sector)?.unwrap_or(u16::MAX)
                                 };
                                 let mut out = (Vec::new(), Vec::new(), Vec::new());
                                 for m in &lo.object.meshes {
@@ -1296,6 +1398,77 @@ mod obj_tests {
     }
 }
 
+/// A scene of a flat floor of the level (100 x 100 m at y = 0, `ground\flat`) and a terrain of
+/// 10 x 10 m over its middle (`Yard`, flattened to 2 m in its middle), with a library that makes
+/// the terrain's mesh and the cut floor as the editor's providers do.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+pub(crate) mod terrain_fixture {
+    use gz_scene::library::Library;
+    use gz_scene::objects::SceneObjectData;
+    use gz_terrain::{Base, Edit, Look, Looks, Spec, Terrain};
+
+    use super::*;
+
+    pub(crate) fn ground_model() -> gz_fmt_object::Object {
+        let t = Terrain {
+            centre: Vec3::ZERO,
+            heading: 0.0,
+            spec: Spec { size: Vec2::splat(100.0), cell: 4.0, base: Base::Height(0.0), ..Spec::default() },
+        };
+        let look =
+            Look { texture: "ground\\grass".into(), material: "materials\\wood".into(), ..Look::default() };
+        t.mesh(&t.heights(None).unwrap(), Looks::Table(&look))
+    }
+
+    pub(crate) fn scene(cut: bool) -> SceneState {
+        let mut s = SceneState::default();
+        s.insert(Object::new(
+            ObjClass::SceneObject,
+            "Floor",
+            ObjData::SceneObject(SceneObjectData::library("ground\\flat")),
+        ));
+        s.insert(Object::new(
+            ObjClass::Terrain,
+            "Yard",
+            ObjData::Terrain(Box::new(Spec {
+                size: Vec2::splat(10.0),
+                cell: 1.0,
+                base: Base::Ground,
+                edge: 0.0,
+                edits: vec![Edit::Flatten { at: Vec2::ZERO, radius: 2.0, falloff: 1.0, height: 2.0 }],
+                cut,
+                ..Spec::default()
+            })),
+        ));
+        s
+    }
+
+    pub(crate) fn library(state: &SceneState) -> Arc<Library> {
+        let lib = Arc::new(Library::new(Vec::new()));
+        let ground = Arc::new(LibraryObject::provided("ground\\flat", ground_model()));
+        lib.add_provider(Arc::new(move |k: &str| (k == "ground\\flat").then(|| ground.clone())));
+        lib.prefetch(&["ground\\flat".into()]);
+        let (weak, s) = (Arc::downgrade(&lib), state.clone());
+        lib.add_provider(Arc::new(move |k: &str| {
+            let lib = weak.upgrade()?;
+            if let Some(name) = k.strip_prefix(terrain::TERRAIN_PREFIX) {
+                let o = s.find(ObjClass::Terrain, name)?;
+                let made = terrain::make(&s, &lib, o).ok()?;
+                return Some(Arc::new(LibraryObject::provided(k, made.mesh())));
+            }
+            let name = k.strip_prefix(terrain::CUT_PREFIX)?;
+            let o = s.find(ObjClass::SceneObject, name)?;
+            let regions: Vec<_> = terrain::cuts(&s, &lib).into_iter().map(|c| c.region).collect();
+            let ground = lib.cached("ground\\flat")?;
+            let cut = terrain::cut_model(&ground.object, &o.world(), &regions)?;
+            Some(Arc::new(LibraryObject::provided(k, cut)))
+        }));
+        lib.prefetch(&terrain::references(state, &lib));
+        lib
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod piece_tests {
@@ -1407,6 +1580,46 @@ mod piece_tests {
             scene.insert(o);
         }
         scene
+    }
+
+    #[test]
+    fn a_terrain_is_level_geometry_and_the_ground_it_cuts_is_its_cut_model() {
+        let (engine, _) = fixture();
+        let s = terrain_fixture::scene(true);
+        let lib = terrain_fixture::library(&s);
+        let look = crate::files::lookup(lib.clone());
+        let inside = |p: &BuildProject, f: &BuildFace| {
+            let c = (p.verts[f.v[0] as usize] + p.verts[f.v[1] as usize] + p.verts[f.v[2] as usize]) / 3.0;
+            c.x.abs() < 4.9 && c.z.abs() < 4.9
+        };
+        // the level of the module's own: the terrain's 10 x 10 cells and the floor without them
+        let whole = compile_until(&s, &look, &engine, &|_| None, crate::NEVER).unwrap();
+        let p = &whole.project;
+        assert_eq!(p.faces.iter().filter(|f| inside(p, f)).count(), 200);
+        let high = p.faces.iter().filter(|f| (0..3).all(|k| p.verts[f.v[k] as usize].y > 1.9)).count();
+        assert!(high > 0, "the terrain's flattened middle is built");
+        assert!(p.materials.iter().all(|m| m.internal_max_area == 0), "lit by the normal path");
+        let lb = level_box(&s, &look).unwrap();
+        assert!(lb.max.y > 1.9 && lb.min.x < -49.0);
+        // without the cut, the floor under the terrain is built too
+        let s2 = terrain_fixture::scene(false);
+        let lib2 = terrain_fixture::library(&s2);
+        let look2 = crate::files::lookup(lib2.clone());
+        let p2 = compile_until(&s2, &look2, &engine, &|_| None, crate::NEVER).unwrap().project;
+        assert!(p2.faces.iter().filter(|f| inside(&p2, f)).count() > 200);
+
+        // a level of the game: the terrain is the piece whatever its marks, the cut floor its
+        // shadows, and its faces of the ground's look keep the level's own light
+        let piece = compile_piece_until(&s, &look, &engine, crate::NEVER).unwrap().project;
+        assert_eq!(piece.faces.iter().filter(|f| inside(&piece, f)).count(), 200);
+        assert!(!piece.occluders.is_empty());
+        assert!(piece.occluders.iter().all(|o| {
+            let c = (o.p[0] + o.p[1] + o.p[2]) / 3.0;
+            !(c.x.abs() < 4.9 && c.z.abs() < 4.9)
+        }));
+        assert!(piece.faces.iter().all(|f| piece.materials[usize::from(f.material)].internal_max_area
+            & gz_lc_light::KEEPS_LEVEL_LIGHT
+            != 0));
     }
 
     #[test]

@@ -366,11 +366,14 @@ impl LevelBuild {
             .mix(lb.record_rev.get())
             .mix(lb.levels_rev.get())
             .mix(Rev(fingerprint::text_hash(&opts.game)))
-            .mix(lib.rev());
+            .mix(lib.rev())
+            .mix(media_rev(editor));
         let query = lb.status.get_or_init(|| Query::new(editor.exec.clone()));
         let lb2 = lb.clone();
+        let media = fingerprint::known_media(editor);
         let made = move || {
-            let opts = Options { library: fingerprint::library_stamp(&snap, &lib), ..opts };
+            let library = fingerprint::library_stamp_known(&snap, &lib, media.as_ref());
+            let opts = Options { library, ..opts };
             status_of(&snap, &lb2.hashes, record.as_deref(), &opts)
         };
         match query.get(&(), rev, made) {
@@ -399,12 +402,14 @@ impl LevelBuild {
             .mix(lb.record_rev.get())
             .mix(lb.levels_rev.get())
             .mix(Rev(fingerprint::text_hash(&opts.game)))
-            .mix(lib.as_ref().map_or(Rev::ZERO, |l| l.rev()));
+            .mix(lib.as_ref().map_or(Rev::ZERO, |l| l.rev()))
+            .mix(media_rev(editor));
         let query = lb.status.get_or_init(|| Query::new(editor.exec.clone()));
         let lb2 = lb.clone();
+        let media = fingerprint::known_media(editor);
         query
             .fresh(&(), rev, move || {
-                let library = lib.map_or(0, |l| fingerprint::library_stamp(&scene, &l));
+                let library = lib.map_or(0, |l| fingerprint::library_stamp_known(&scene, &l, media.as_ref()));
                 status_of(&scene, &lb2.hashes, record.as_deref(), &Options { library, ..opts })
             })
             .await
@@ -447,13 +452,42 @@ pub fn needed(scene: &SceneState, step: Step) -> bool {
     }
 }
 
-/// Whether the scene places a static object of the module's own (marked authored).
+/// Whether the scene places a static object of the module's own (marked authored) or a terrain
+/// (on a level of the game always the module's own).
 #[must_use]
 pub fn has_authored_static(scene: &SceneState) -> bool {
-    scene.of_class(gz_scene::ObjClass::SceneObject).any(|o| {
-        o.marks.authored
-            && matches!(&o.data, gz_scene::ObjData::SceneObject(d) if !d.visual_mode() && !d.reference.is_empty())
-    })
+    scene.count(gz_scene::ObjClass::Terrain) > 0
+        || scene.of_class(gz_scene::ObjClass::SceneObject).any(|o| {
+            o.marks.authored
+                && matches!(&o.data, gz_scene::ObjData::SceneObject(d) if !d.visual_mode() && !d.reference.is_empty())
+        })
+}
+
+/// The engine's word for "I cut a level's ground by a module's `overlay.cut`".
+pub const LEVEL_CUTS: &str = "level-cuts";
+/// The engine's word for "I move a level's AI nodes by a module's `overlay.aiedit`".
+pub const AI_EDITS: &str = "ai-edits";
+
+/// Whether the linked game states `word` among its abilities, as [`read_game_levels`] asks for
+/// `level-pieces`; no game linked: no.
+pub(crate) async fn game_states(editor: &Arc<Editor>, word: &'static str) -> bool {
+    let game = gz_project::Project::of(editor).map(|(_, p)| p.game_root()).unwrap_or_default();
+    !game.is_empty()
+        && editor
+            .exec
+            .io(move || {
+                crate::play::game_states(std::path::Path::new(&game), &crate::play::LINKED_GAME, word)
+            })
+            .await
+}
+
+/// The first terrain of the scene that cuts the ground under it, by name.
+#[must_use]
+pub fn cutting_terrain(scene: &SceneState) -> Option<String> {
+    scene
+        .of_class(gz_scene::ObjClass::Terrain)
+        .find(|o| gz_scene::objects::terrain::terrain(o).is_some_and(|t| t.spec.cut && t.check().is_ok()))
+        .map(|o| o.name.to_string())
 }
 
 /// Why a step has nothing to make for this scene and these options, in a sentence; `None`: it has.
@@ -632,6 +666,12 @@ fn why_stale(
 fn capital(s: &str) -> String {
     let mut c = s.chars();
     c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+/// The state of the project's media assets: a status made from them is made again when one
+/// changes. Zero before the project has a media service.
+fn media_rev(editor: &Editor) -> Rev {
+    gz_media::Media::get(editor).map_or(Rev::ZERO, |m| m.current_stamp())
 }
 
 #[cfg(test)]
@@ -862,6 +902,36 @@ mod tests {
         assert_eq!(st.get(Step::Piece).unwrap().why, "Built at Standard quality.");
         let other = Options { game: "D:\\Other Game".into(), ..game.clone() };
         assert_eq!(status_of(&s, &cache, Some(&record), &other).to_build(), [Step::Piece]);
+    }
+
+    #[test]
+    fn a_terrain_on_a_game_level_is_a_piece_and_its_edit_makes_it_stale_with_a_sentence() {
+        let (mut s, _) = scene();
+        let cache = HashCache::default();
+        let game = Options { stock: true, game_level: true, pieces: true, ..Options::default() };
+        house(&mut s, "base_house", false);
+        assert!(!has_authored_static(&s));
+        let spec = gz_terrain::Spec { cut: true, ..gz_terrain::Spec::default() };
+        let id = s.insert(gz_scene::Object::new(
+            gz_scene::ObjClass::Terrain,
+            "Yard",
+            gz_scene::ObjData::Terrain(Box::new(spec)),
+        ));
+        // a terrain is the module's own whatever its marks
+        assert!(has_authored_static(&s));
+        assert_eq!(cutting_terrain(&s).as_deref(), Some("Yard"));
+        assert_eq!(status_of(&s, &cache, None, &game).to_build(), [Step::SpawnLayer, Step::Piece]);
+        let record = built(&s, &cache, &game);
+        assert!(status_of(&s, &cache, Some(&record), &game).to_build().is_empty());
+        let mut t = s.clone();
+        let mut o = (**t.get(id).unwrap()).clone();
+        if let gz_scene::ObjData::Terrain(d) = &mut o.data {
+            d.cell = 2.0;
+        }
+        t.replace(o);
+        let st = status_of(&t, &cache, Some(&record), &game);
+        assert_eq!(st.to_build(), [Step::SpawnLayer, Step::Piece], "{}", st.text());
+        assert_eq!(st.get(Step::Piece).unwrap().why, "1 terrain changed.");
     }
 
     #[test]
