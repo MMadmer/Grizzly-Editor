@@ -25,7 +25,7 @@
 //! - One [`Mesh`](gz_fmt_object::Mesh) per glTF node that holds a mesh, or per OBJ object or
 //!   group; positions welded within it (corners at the same point share it).
 //! - One surface per material (a triangle without one gets `default`), each valid as it is:
-//!   shader and compiler shader `default`, game material `materials\default` (the name the level
+//!   shader and compiler shader `default`, game material `default` (the name the level
 //!   compiler finds in the game's material list), the vertex map `Texture` and exactly one texture
 //!   coordinate set. The texture is left empty: [`MeshSource::materials`] (parallel to
 //!   `object.surfaces`) says which picture a surface wears.

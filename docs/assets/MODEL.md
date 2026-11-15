@@ -55,7 +55,7 @@ return {
 | `texture` | string (a game name) | the texture asset of the source's picture | The texture, by its game name (a texture asset's `name`, a texture of the project or the game). |
 | `shader` | string | "default" | The engine shader (`shaders.xr` of the linked game). |
 | `compile` | string | "default" | The level compiler's shader (`shaders_xrlc.xr`). |
-| `material` | string | "materials\\default" | The game material (`gamemtl.xr`): how the surface sounds, breaks and is walked on. |
+| `material` | string | "default" | The game material (`gamemtl.xr`): how the surface sounds, breaks and is walked on. |
 | `two_sided` | boolean | the source's | Both sides are drawn. |
 
 ## A row of `parts`
@@ -109,8 +109,9 @@ Every face of a part looks outward and every edge is hard; the texture is laid b
 | `M104` | warning | A texture nobody has: not a texture asset, not a file of the project, not the game's. |
 | `M105` | warning | An engine shader the linked game does not have. |
 | `M106` | warning | A compiler shader the linked game does not have. |
-| `M107` | warning | A game material the linked game does not have. |
+| `M107` | error | A surface's game material the linked game does not have: the level build refuses it (a bone's: a warning). |
 | `M108` | note | A dynamic model whose source has no bones: it gets one bone, `root`. |
 | `M109` | error | A value outside what its key takes. |
 | `M110` | error | `parts` together with `source`. |
 | `M111` | warning | What the model cannot take: `rotate` on a model with bones, a part that makes no faces. |
+| `M112` | error | A surface that wears no texture: no level build and no model of the game takes it. |

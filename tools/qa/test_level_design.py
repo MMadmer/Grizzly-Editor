@@ -288,6 +288,15 @@ def phase_b() -> None:
     named = [p for p in checked.get("problems") or [] if "objects.lua" in str(p.get("file")) and p.get("code") == "syntax"]
     check(named and abs((named[0].get("line") or 0) - at) <= 1, "B asset.check of the scene names the line",
           short(checked))
+    # the file itself, and the scene's folder, are checked as the scene: the file's own problems, the scene's
+    part = cmd("asset.check", path=SCENE.rsplit(".", 1)[0] + "/objects.lua")
+    folder = cmd("asset.check", path=SCENE.rsplit(".", 1)[0])
+    of_part = [p for p in part.get("problems") or []]
+    check(part.get("ok") and of_part and all("objects.lua" in str(p.get("file")) for p in of_part)
+          and any(p.get("code") == "syntax" for p in of_part)
+          and folder.get("ok") and any(p.get("code") == "syntax" for p in folder.get("problems") or []),
+          "B asset.check of objects.lua answers that file's problems; of the scene's folder, the scene's",
+          short(part) + " | " + short(folder))
     cmd("scene.set", objects=["qa_line_a"], position=[x, y + 1, z])
     saved = cmd("scene.save")
     check(saved.get("ok") and "objects.lua" in (saved.get("skipped") or []) and read(scene_file("objects.lua")) == broken,
@@ -531,14 +540,20 @@ def phase_e() -> None:
           and sorted(s.get("name") for s in ramp.get("surfaces") or []) == ["ramp_side", "ramp_top"],
           "E model.info of the OBJ: 2 x 1 x 3 m, 8 triangles, two surfaces, z turned to the game's side", short(ramp))
     untextured = [p for p in cmd("asset.check", path="models/yard/crate.meshasset").get("problems") or []
-                  if "texture" in str(p.get("text"))]
-    check(untextured, "E asset.check names the glTF surface that has no texture (the piece build refuses it)",
-          "asset.check answers no problem about it; level.build then fails: 'Invalid texture name found.'")
+                  if p.get("code") == "M112"]
+    check(untextured and untextured[0].get("severity") == "error",
+          "E asset.check names the glTF surface that has no texture: an error, as the level build would refuse it",
+          short(untextured))
 
     tex = "%s\\planks" % CTX.module
     write(os.path.join(CTX.project, "models", "yard", "crate.meshasset"),
           'return {\n  mesh = 1,\n  source = "crate.gltf",\n  surfaces = {\n'
           '    { name = "crate_wood", texture = "%s", material = "materials\\\\wooden_board" },\n  },\n}\n' % lua(tex))
+    # the OBJ's two materials name no picture either: each gets the texture, and no material - the game's `default`
+    write(os.path.join(CTX.project, "models", "yard", "ramp.meshasset"),
+          'return {\n  mesh = 1,\n  source = "ramp.obj",\n  surfaces = {\n'
+          '    { name = "ramp_top", texture = "%s" },\n    { name = "ramp_side", texture = "%s" },\n  },\n}\n'
+          % (lua(tex), lua(tex)))
     write(os.path.join(CTX.project, "models", "yard", "hut.meshasset"), HUT % {"tex": lua(tex)})
     hut = qa.until(lambda: (cmd("model.info", refs=["models/yard/hut.meshasset"]).get("models") or [{}])[0].get("size"), 10)
     hut = (cmd("model.info", refs=["models/yard/hut.meshasset"]).get("models") or [{}])[0]

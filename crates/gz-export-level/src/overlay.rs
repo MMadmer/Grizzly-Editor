@@ -33,7 +33,7 @@ pub struct Collision {
 
 /// The collision overlay from the level name on: the scene objects' and the terrains' meshes in
 /// world space (a terrain's skirt is no collision), a game
-/// material per face from its surface (`materials\default` where the surface names none or a
+/// material per face from its surface (`default` where the surface names none or a
 /// face is in no surface), over the cut list `existing` holds.
 pub fn collision(
     scene: &SceneState,
@@ -94,7 +94,7 @@ pub fn collision_of(
                     .get(sf.surface as usize)
                     .map(|s| s.game_mtl.as_str())
                     .filter(|g| !g.is_empty());
-                let mi = XcForm::material_index(&mut mtls, gm.unwrap_or("materials\\default"));
+                let mi = XcForm::material_index(&mut mtls, gm.unwrap_or("default"));
                 for face in sf.faces.iter() {
                     if let Some(slot) = fmtl.get_mut(*face as usize) {
                         *slot = Some(mi);
@@ -104,7 +104,7 @@ pub fn collision_of(
             for (fi, face) in mesh.faces.iter().enumerate() {
                 let mi = match fmtl[fi] {
                     Some(m) => m,
-                    None => XcForm::material_index(&mut mtls, "materials\\default"),
+                    None => XcForm::material_index(&mut mtls, "default"),
                 };
                 tris.push(XcTri {
                     v: [base + face.v[0].point, base + face.v[1].point, base + face.v[2].point],
@@ -136,7 +136,7 @@ pub fn collision_of(
                     .get(sf.surface as usize)
                     .map(|s| s.game_mtl.as_str())
                     .filter(|g| !g.is_empty());
-                let mi = XcForm::material_index(&mut mtls, gm.unwrap_or("materials\\default"));
+                let mi = XcForm::material_index(&mut mtls, gm.unwrap_or("default"));
                 for &fi in sf.faces.iter().filter(|f| (**f as usize) < grid_faces) {
                     let Some(face) = mesh.faces.get(fi as usize) else { continue };
                     tris.push(XcTri {
@@ -382,7 +382,7 @@ mod tests {
         assert_eq!(c.form.sector, 3);
         assert_eq!(c.form.verts.len(), 8);
         assert_eq!(c.form.tris.len(), 12);
-        assert_eq!(c.form.materials, ["materials\\concrete", "materials\\default"]);
+        assert_eq!(c.form.materials, ["materials\\concrete", "default"]);
         assert_eq!(c.form.tris[0].material, 0);
         assert_eq!(c.form.tris[11].material, 1);
         assert!((c.form.verts[0] - Vec3::new(9.5, -0.5, -0.5)).length() < 1e-6);
@@ -393,7 +393,7 @@ mod tests {
         assert_eq!(u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]), 2);
         assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 3);
         assert_eq!(u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]), 2);
-        let names = b"materials\\concrete\0materials\\default\0";
+        let names = b"materials\\concrete\0default\0";
         assert_eq!(&bytes[16..16 + names.len()], names);
         let total = 16 + names.len() + 4 + 8 * 12 + 4 + 12 * 16 + 4;
         assert_eq!(bytes.len(), total);

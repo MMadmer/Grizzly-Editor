@@ -485,7 +485,7 @@ fn game(textures: bool) -> GameLists {
         linked: textures,
         shaders: ["default".to_owned()].into_iter().collect(),
         compiler_shaders: ["default".to_owned()].into_iter().collect(),
-        materials: ["materials\\default".to_owned()].into_iter().collect(),
+        materials: ["default".to_owned()].into_iter().collect(),
         files: None,
     }
 }
@@ -551,9 +551,14 @@ fn a_model_names_its_problems_at_their_keys() {
         "m/ok.meshasset",
         "return {\n  mesh = 1,\n  kind = \"dynamic\",\n  scale = 0,\n  parts = { { shape = \"box\", surface = \"s\" }, { shape = \"star\" } },\n  surfaces = {\n    { name = \"s\", texture = \"nobody\\\\has\", shader = \"bogus\", compile = \"bogus\", material = \"bogus\" },\n  },\n}\n",
     );
+    d.put("m/bare.meshasset", "return { mesh = 1, parts = { { shape = \"box\" } } }\n");
     d.put("rawdata/textures/mine/own.tga", "x");
     let index = index::scan(&d.0);
     let g = game(true);
+    // a surface without a texture: what the level build would refuse is said here first
+    let bare = issues_of(&d, "m/bare.meshasset", MediaKind::Model, &index, &g);
+    assert_eq!(codes(&bare), ["M112"]);
+    assert!(bare[0].is_error() && gz_luadata::path::show(&bare[0].path) == "surfaces", "{bare:?}");
     let gone = issues_of(&d, "m/gone.meshasset", MediaKind::Model, &index, &g);
     assert_eq!(codes(&gone), ["M101"]);
     assert_eq!(gz_luadata::path::show(&gone[0].path), "source");
@@ -577,7 +582,9 @@ fn a_model_names_its_problems_at_their_keys() {
     ] {
         assert!(at.contains(&(want.0, want.1.clone())), "{want:?} not in {at:?}");
     }
-    assert!(ok.iter().filter(|i| i.code.starts_with("M10") && i.code != "M109").all(|i| !i.is_error()));
+    // what the level build refuses is an error; the rest of what the game lacks is a warning
+    assert!(ok.iter().filter(|i| ["M104", "M105", "M106", "M108"].contains(&i.code)).all(|i| !i.is_error()));
+    assert!(ok.iter().filter(|i| i.code == "M107").all(|i| i.is_error()));
     // a texture of the project's files, of an asset, or with no game to ask is somebody's
     assert!(texture_known(&d.0, &index, &g, "mine\\own"));
     assert!(!texture_known(&d.0, &index, &g, "nobody\\has"));

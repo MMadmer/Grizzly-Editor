@@ -270,7 +270,7 @@ pub const SURFACE: &[Field] = &[
     f(
         "material",
         Ty::Text,
-        "\"materials\\\\default\"",
+        "\"default\"",
         "The game material (`gamemtl.xr`): how the surface sounds, breaks and is walked on.",
     ),
     f("two_sided", Ty::Bool, "the source's", "Both sides are drawn."),

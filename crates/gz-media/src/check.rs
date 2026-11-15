@@ -6,11 +6,13 @@
 //! | `M102` | the source cannot be read (the reader's sentence) |
 //! | `M103` | two assets of a kind publish one name (on both) |
 //! | `M104` | a texture nobody has: no texture asset, no file of the project, not the game's (warning) |
-//! | `M105` `M106` `M107` | an engine shader, a compiler shader, a game material the linked game lacks (warning) |
+//! | `M105` `M106` | an engine shader, a compiler shader the linked game lacks (warning) |
+//! | `M107` | a game material the linked game lacks (a surface's; a bone's is a warning) |
 //! | `M108` | a dynamic model without bones gets one (note) |
 //! | `M109` | a value outside what its key takes |
 //! | `M110` | `parts` together with `source` |
 //! | `M111` | what the model cannot take (warning) |
+//! | `M112` | a surface that wears no texture |
 
 use std::path::Path;
 use std::sync::Arc;
@@ -34,6 +36,7 @@ pub const NO_TEXTURE: &str = "M104";
 pub const NO_SHADER: &str = "M105";
 pub const NO_COMPILER_SHADER: &str = "M106";
 pub const NO_MATERIAL: &str = "M107";
+pub const BARE_SURFACE: &str = "M112";
 
 fn problem(i: &Issue) -> Problem {
     Problem::new(i.code, i.severity, i.message.clone())
@@ -108,6 +111,18 @@ pub fn issues(
                         Some(r) => vec![Seg::key("surfaces"), Seg::item("name", &r.name), Seg::key(key)],
                         None => vec![Seg::key("surfaces")],
                     };
+                    // no level build and no model the game loads takes a surface without one
+                    if s.texture.trim().is_empty() {
+                        out.push(Issue::new(
+                            BARE_SURFACE,
+                            Severity::Error,
+                            at("texture"),
+                            format!(
+                                "the surface '{}' wears no texture: name one in `surfaces` ({{ name = \"{}\", texture = ... }}) - a texture asset of the project or a texture of the game",
+                                s.name, s.name
+                            ),
+                        ));
+                    }
                     if !s.texture.is_empty() && !texture_known(root, index, game, &s.texture) {
                         out.push(warn(
                                 NO_TEXTURE,
@@ -134,11 +149,16 @@ pub fn issues(
                             format!("the linked game has no compiler shader '{}'", s.shader_xrlc),
                         ));
                     }
+                    // the level build refuses the surface, so this is no warning
                     if !s.game_mtl.is_empty() && !game.materials.contains(&s.game_mtl.to_lowercase()) {
-                        out.push(warn(
+                        out.push(Issue::new(
                             NO_MATERIAL,
+                            Severity::Error,
                             at("material"),
-                            format!("the linked game has no game material '{}'", s.game_mtl),
+                            format!(
+                                "the linked game has no game material '{}' (its own are `default`, `materials\\wood`, ...: gamemtl.xr)",
+                                s.game_mtl
+                            ),
                         ));
                     }
                 }

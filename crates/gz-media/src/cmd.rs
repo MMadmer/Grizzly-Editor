@@ -30,7 +30,7 @@ pub fn install(editor: &Editor) {
     let templates = AssetTemplates::of(editor);
     templates.provide(TemplateKind::Model, |_| {
         Ok(b"-- A model: its geometry from a source beside it (source = \"wall.glb\"), or written here.\n\
-return {\n  mesh = 1,\n  parts = {\n    { shape = \"box\", size = { 1, 1, 1 } },\n  },\n}\n"
+return {\n  mesh = 1,\n  surfaces = {\n    { name = \"plank\", texture = \"wood\\\\wood_table_01\", material = \"materials\\\\wooden_board\" },\n  },\n  parts = {\n    { shape = \"box\", size = { 1, 1, 1 }, surface = \"plank\" },\n  },\n}\n"
             .to_vec())
     });
     templates.provide(TemplateKind::Texture, |cx| {

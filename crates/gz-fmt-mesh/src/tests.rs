@@ -214,7 +214,7 @@ fn a_cube_gltf_is_welded_turned_and_keeps_its_hard_edges() {
     assert_eq!((s.name.as_str(), s.shader.as_str(), s.shader_xrlc.as_str()), ("Wood", "default", "default"));
     assert_eq!(
         (s.game_mtl.as_str(), s.vmap.as_str(), s.tex_count(), s.texture.as_str()),
-        ("materials\\default", "Texture", 1, "")
+        ("default", "Texture", 1, "")
     );
     assert_eq!(src.materials[0].picture, Some(0));
     assert_eq!(src.pictures[0].data, PictureData::File(dir.path().join("crate wood.png")));

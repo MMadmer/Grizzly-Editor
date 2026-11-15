@@ -223,7 +223,7 @@ pub(crate) fn surface(name: &str, two_sided: bool) -> Surface {
         vmap: SmolStr::new_static("Texture"),
         shader: SmolStr::new_static("default"),
         shader_xrlc: SmolStr::new_static("default"),
-        game_mtl: SmolStr::new_static("materials\\default"),
+        game_mtl: SmolStr::new_static("default"),
         flags: if two_sided { SurfaceFlags::TWO_SIDED } else { SurfaceFlags::empty() },
         // a position, a normal and one texture coordinate set
         fvf: 0x112,

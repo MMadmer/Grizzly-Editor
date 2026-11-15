@@ -23,7 +23,7 @@ pub fn default_surface(name: &str) -> Surface {
         vmap: "Texture".into(),
         shader: "default".into(),
         shader_xrlc: "default".into(),
-        game_mtl: "materials\\default".into(),
+        game_mtl: "default".into(),
         flags: SurfaceFlags::empty(),
         // a position, a normal and one texture coordinate set
         fvf: 0x112,

@@ -99,8 +99,9 @@ kind=model|texture|sound`).
 
 - **Using it**: `ref = "models/yard/hut.meshasset"` in `objects.lua` (or `scene.place kind=object ref=<path>`);
   `model.info refs=models/yard/hut.meshasset` answers its box and surfaces; `preview.model path=<asset>` shows it.
-- Give every surface a texture and a game material the game has: `asset.check` warns of an unknown one (`M104`,
-  `M107`), and the level build refuses a surface without a texture or with a bad game material.
+- Give every surface a texture and a game material the game has: `asset.check` refuses a surface without a texture
+  (`M112`) or with a game material the game lacks (`M107`; its own are `default`, `materials\wood`, ...), as the
+  level build would, and warns of a texture nobody has (`M104`). A surface that names no material gets `default`.
 - **A texture**: `source`, the game `name` (left out: `<module id>\<file name>`), and what a `.thm` says as named
   keys (`use`, `format`, `bump`, `detail`, `material`). A surface names it by that `name`.
 - **A sound**: `source`, `name`, `min_distance`, `max_distance`, `volume`, `ai_distance`, `type`. A sound source of
@@ -126,10 +127,11 @@ return {
 ```
 
 - `pos` is the centre, `size` metres along its own x and z, `cell` the grid step (0.5 to 4 m), `rot` its heading.
-- `base = "ground"`: every grid point starts at the level's ground under it (every static object that is not
-  `authored` - trees too: keep a terrain clear of tree crowns, or they become hills); within `edge` metres of the
-  border the edits blend back to the ground, so the border meets it. A number instead is flat at that many metres
-  over `pos`.
+- `base = "ground"`: every grid point starts at the level's ground under it - the surface of the static objects
+  that are not `authored` which the terrain's centre stands on (the one nearest `pos`), followed outward from
+  there. What stands over the ground - a roof, a tree's crown - is not the ground; a `pos` written at a bridge's
+  height puts the terrain on the bridge. Within `edge` metres of the border the edits blend back to the ground, so
+  the border meets it. A number instead is flat at that many metres over `pos`.
 - `edits` apply in order, x and z in metres from the centre: `flatten` (a circle), `rect`, `raise`, `ramp`,
   `smooth`, `noise`; `height` is a world height, `amount` relative, `falloff` the soft border. Or `rows`: every
   height written out.

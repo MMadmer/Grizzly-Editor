@@ -38,8 +38,9 @@ return {
 | `M104` | warning | A texture nobody has: not a texture asset, not a file of the project, not the game's. |
 | `M105` | warning | An engine shader the linked game does not have. |
 | `M106` | warning | A compiler shader the linked game does not have. |
-| `M107` | warning | A game material the linked game does not have. |
+| `M107` | error | A surface's game material the linked game does not have: the level build refuses it (a bone's: a warning). |
 | `M108` | note | A dynamic model whose source has no bones: it gets one bone, `root`. |
 | `M109` | error | A value outside what its key takes. |
 | `M110` | error | `parts` together with `source`. |
 | `M111` | warning | What the model cannot take: `rotate` on a model with bones, a part that makes no faces. |
+| `M112` | error | A surface that wears no texture: no level build and no model of the game takes it. |
