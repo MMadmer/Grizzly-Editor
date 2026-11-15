@@ -298,10 +298,12 @@ fn v3(v: Vec3, digits: i32) -> Value {
     json!([r(v.x, digits), r(v.y, digits), r(v.z, digits)])
 }
 
-/// The box a view frames: the named objects, the objects over a ground rectangle, or everything.
+/// The box a view frames: the named objects, a ground rectangle with what stands in it, or
+/// everything. `ground` answers the height of the highest thing at a point of the ground.
 fn frame_box(
     state: &SceneState,
     bounds: &dyn Fn(&gz_scene::Object) -> Option<Aabb>,
+    ground: &dyn Fn(f32, f32) -> Option<f32>,
     objects: Option<&[String]>,
     area: Option<[f32; 4]>,
 ) -> Result<Aabb, CmdError> {
@@ -326,17 +328,28 @@ fn frame_box(
         }
         let (x0, x1) = (a[0].min(a[2]), a[0].max(a[2]));
         let (z0, z1) = (a[1].min(a[3]), a[1].max(a[3]));
-        // the heights of what stands over the rectangle; flat ground when nothing does
+        // the heights of the rectangle itself: what rays from above meet across it, and the boxes
+        // of what stands in it. A box that only crosses it - the level's whole ground, a hill
+        // beside it - gives no height: the camera would stand off the level
         let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+        const N: u32 = 9;
+        for i in 0..N {
+            for j in 0..N {
+                let x = x0 + (x1 - x0) * (i as f32 + 0.5) / N as f32;
+                let z = z0 + (z1 - z0) * (j as f32 + 0.5) / N as f32;
+                if let Some(y) = ground(x, z) {
+                    lo = lo.min(y);
+                    hi = hi.max(y);
+                }
+            }
+        }
         for o in state.objects.values() {
             if let Some(b) = bounds(o)
-                && b.min.x <= x1
-                && b.max.x >= x0
-                && b.min.z <= z1
-                && b.max.z >= z0
+                && b.min.x >= x0
+                && b.max.x <= x1
+                && b.min.z >= z0
+                && b.max.z <= z1
             {
-                // a box much larger than the rectangle (the ground) gives its heights no weight
-                // beyond what the rectangle can show
                 lo = lo.min(b.min.y);
                 hi = hi.max(b.max.y);
             }
@@ -382,14 +395,26 @@ pub(crate) async fn shot_viewport(ed: Arc<Editor>, p: ShotParams, _o: Origin) ->
     let scene = SceneService::of_opt(&ed);
     let snap_lib = match &scene {
         Some(svc) => {
-            let (snap, _) = svc.pick().await;
-            Some((snap, svc.library.clone()))
+            let (snap, pick) = svc.pick().await;
+            Some((snap, svc.library.clone(), pick))
         }
         None => None,
     };
     let empty = SceneState::default();
-    let state = snap_lib.as_ref().map_or(&empty, |(s, _)| &s.state);
-    let lib = snap_lib.as_ref().map(|(_, l)| l.clone());
+    let state = snap_lib.as_ref().map_or(&empty, |(s, _, _)| &s.state);
+    let lib = snap_lib.as_ref().map(|(_, l, _)| l.clone());
+    // the highest thing at a point of the ground: one ray from above everything
+    let ground = |x: f32, z: f32| -> Option<f32> {
+        let (_, lib, pick) = snap_lib.as_ref()?;
+        let b = pick.bounds();
+        if !b.is_valid() {
+            return None;
+        }
+        let from = Vec3::new(x, b.max.y + 1.0, z);
+        let filter = gz_scene::pick::RayFilter::default();
+        gz_scene::pick::ray_scene(pick, state, lib, from, Vec3::NEG_Y, b.max.y - b.min.y + 2.0, &filter)
+            .map(|h| h.point.y)
+    };
     let bounds = |o: &gz_scene::Object| -> Option<Aabb> {
         let lib = lib.as_ref()?;
         gz_scene::objects::world_box(state, o, &|r| lib.cached(r).map(|lo| lo.bounds))
@@ -415,7 +440,7 @@ pub(crate) async fn shot_viewport(ed: Arc<Editor>, p: ShotParams, _o: Origin) ->
                 (standing(at, target, rotation, fov), "free")
             }
             (None, Some(side)) => {
-                let b = frame_box(state, &bounds, p.objects.as_deref(), p.area)?;
+                let b = frame_box(state, &bounds, &ground, p.objects.as_deref(), p.area)?;
                 (framing(side, &b, size), side.key())
             }
             (None, None) => return Err(CmdError::internal("no camera")),
