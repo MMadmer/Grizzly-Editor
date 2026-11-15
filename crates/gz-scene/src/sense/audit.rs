@@ -243,8 +243,10 @@ fn overlaps(sc: &Scene<'_>, s: &Solid<'_>, seen: &mut FxHashSet<(u32, u32)>, out
     let f = RayFilter { kinds: RayKinds::Meshes, only: None, except: &except };
     let size = |b: &Aabb| (b.max - b.min).min_element().max(0.01);
     for (id, _) in blocked(sc, &s.local, &s.o.xform, &f).blocked {
-        let Some(other) = sc.state.get(id).and_then(|o| sc.world_box(o)) else { continue };
-        if is_ground(&other) {
+        let Some(partner) = sc.state.get(id) else { continue };
+        let Some(other) = sc.world_box(partner) else { continue };
+        // what stands on the ground is not in it: a terrain is ground whatever its size
+        if partner.class == ObjClass::Terrain || is_ground(&other) {
             continue;
         }
         let shared = (s.world.max.min(other.max) - s.world.min.max(other.min)).min_element();

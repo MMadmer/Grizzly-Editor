@@ -730,6 +730,31 @@ mod tests {
         }
     }
 
+    /// A thing that stands on a terrain is sound to the audit: it does not float, and it is not
+    /// "in" the terrain it stands on.
+    #[test]
+    fn a_thing_on_a_terrain_neither_floats_nor_stands_in_it() {
+        use crate::sense::audit::{AuditParams, audit};
+        let mut state = scene(true);
+        let mut thing = Object::new(
+            ObjClass::SceneObject,
+            "thing",
+            ObjData::SceneObject(SceneObjectData::library("ground\\flat")),
+        );
+        // a square of one metre lying on the yard's flat middle, 2 m up
+        thing.xform.position = Vec3::new(0.0, 2.0, 0.0);
+        thing.xform.scale = Vec3::splat(0.01);
+        thing.marks.authored = true;
+        state.insert(thing);
+        let terrains = Arc::new(Terrains::default());
+        let lib = library(&state, &terrains);
+        let pick = ScenePick::build(&state, &lib);
+        let sc = crate::sense::Scene { state: &state, lib: &lib, pick: &pick };
+        let p = AuditParams { objects: Some(vec!["thing".to_owned()]), ..AuditParams::default() };
+        let found = audit(&sc, &p, None).map(|a| a.findings).unwrap_or_default();
+        assert!(found.is_empty(), "{found:?}");
+    }
+
     fn scene(cut: bool) -> SceneState {
         let mut s = SceneState::default();
         s.insert(Object::new(
