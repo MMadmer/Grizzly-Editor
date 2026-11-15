@@ -153,6 +153,35 @@ fn an_edit_made_before_the_saver_runs_is_saved_and_flushed() {
     }
 }
 
+#[test]
+fn a_state_that_returns_to_what_was_written_last_is_written_after_a_change_behind_the_saver() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("doc.txt");
+    let store = Store::spawn("doc", Doc::default(), &rt.exec(), StoreOptions::default());
+    let f = file.clone();
+    // 0 stands for the disk read back after a change behind the editor: nothing to write
+    let saver = AutoSave::spawn(
+        &rt.exec(),
+        &store,
+        move |d: &Doc| (d.0 != 0).then(|| (f.clone(), d.0.to_string().into_bytes())),
+        |e| panic!("{e}"),
+    );
+    let send = |v: u64| {
+        rt.block_on(async {
+            store.send(v, Origin::Mcp).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), saver.flush(store.rev())).await.unwrap().unwrap();
+        });
+    };
+    send(5);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "5");
+    std::fs::write(&file, "7").unwrap();
+    send(0);
+    // the edit puts back what the saver wrote before the change: the disk holds the change, so it is written
+    send(5);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "5");
+}
+
 // ---- commands with a card ---------------------------------------------------------------------
 
 mod cards {

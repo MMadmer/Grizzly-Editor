@@ -1,5 +1,5 @@
-//! A module's loading and menu screens and their music: `mod.ltx [screens]`, `[screen.<id>]`,
-//! `[track.<id>]`, kept in the manifest store of `gz-mod` and saved as they are edited.
+//! A module's loading and menu screens, their music and its radio music: `mod.ltx [screens]`, `[screen.<id>]`,
+//! `[track.<id>]`, `[playlist.<id>]`, `[radio]`, kept in the manifest store of `gz-mod` and saved as they are edited.
 //!
 //! What a
 //! screen means in the game is the game repo's `docs/dead-air/MODDING.md`, "Screens and music".
@@ -19,7 +19,7 @@
 //!   [`file_kind`], [`FileKind`]. Imports are blocking file work for the IO pool; a drop of
 //!   several files imports them in parallel, and two imports at once never write over each
 //!   other.
-//! - [`validate()`] - `E401`..`W411` with their texts; [`validate::issues`] the same with the
+//! - [`validate()`] - `E401`..`E417` with their texts; [`validate::issues`] the same with the
 //!   section and the key of `mod.ltx` each is about, which the manifest's check puts at their lines.
 //! - [`register`]: `screens.info`, `screens.set`, `screens.import`; [`install`]: the build's check (an `E4xx`
 //!   refuses the build); [`GameLevels`]: where the world area hangs the linked game's levels
@@ -30,9 +30,9 @@ pub mod import;
 pub mod model;
 pub mod validate;
 
-pub use cmd::{GameLevels, LevelsHook, answer, install, issues, problems, register};
+pub use cmd::{GameLevels, LevelsHook, Sounds, answer, install, issues, problems, register};
 pub use import::{FileKind, Plan, file_kind, import, plan};
-pub use model::{Fit, Layer, Screen, Screens, Track};
+pub use model::{Fit, Layer, Order, Playlist, Screen, Screens, Track};
 pub use validate::{issues as validate_issues, validate};
 
 #[cfg(test)]

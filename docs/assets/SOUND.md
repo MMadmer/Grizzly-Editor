@@ -2,6 +2,8 @@
 
 This page is generated from the editor's own tables of the kind's keys (`crates/gz-media/src/fields.rs`): the reader, the check and this reference are one list. A test of `gz-media` fails when this file is not what the tables say. A sound asset is a text file beside its sound (`.wav`, `.ogg`) that says what a sound's `.thm` says: how far it carries, how loud it is, what NPCs make of it. It is published as `sounds\<name>.ogg` - a `.wav` encoded at `quality`, an `.ogg` as it is with these parameters written into it - beside a copy of this text, which the game reads over what the `.ogg` carries.
 
+A recording the module may not have streamed says `copyrighted = true`: while the game's streamer mode is on, the game plays it nowhere - its engine refuses to start it, the radio passes over it - unless `streamer` names a sound that plays in its place. The game keeps such a list of its own sounds; a replacement is never a copyrighted sound.
+
 Every key but the header may be left out. A key the editor does not know is kept where it is through every save and listed once as a note. The asset may lie anywhere in the project: the module build publishes it - the data baked from its source and a copy of this text - where the game looks for its `name`; the asset where it lies and its source never ship as they are. What is baked is kept in the project's `temp\media\`. `asset.check` names every problem at its key (`M1xx`); `asset.import from=<files> to=<folder>` brings files in and writes their assets. The rules every kind keeps are `docs/ASSETS.md`.
 
 ```lua
@@ -27,6 +29,8 @@ return {
 | `ai_distance` | number, 0.1 to 10000 | `max_distance` | How far NPCs hear it, metres. |
 | `type` | one of these words, or a list of them: `"no_sound"` `"item_picking_up"` `"item_dropping"` `"item_hiding"` `"item_taking"` `"item_using"` `"weapon_shooting"` `"weapon_empty_clicking"` `"weapon_bullet_hit"` `"weapon_recharging"` `"monster_dying"` `"monster_injuring"` `"monster_step"` `"monster_talking"` `"monster_attacking"` `"monster_eating"` `"anomaly_idle"` `"world_object_breaking"` `"world_object_colliding"` `"world_object_exploding"` `"world_ambient"` `"weapon"` `"item"` `"monster"` `"anomaly"` `"world"` `"picking_up"` `"dropping"` `"hiding"` `"taking"` `"using"` `"shooting"` `"empty_clicking"` `"bullet_hit"` `"recharging"` `"dying"` `"injuring"` `"step"` `"talking"` `"attacking"` `"eating"` `"idle"` `"object_breaking"` `"object_colliding"` `"object_exploding"` `"ambient"` | "no_sound" | What NPCs make of it, in the game's own words. |
 | `quality` | number, -0.1 to 1 | 0 | The Vorbis quality a `.wav` source is encoded with. |
+| `copyrighted` | boolean | false | A recording that may not be streamed: the game does not play it while its streamer mode is on. |
+| `streamer` | string (a game name) | none: nothing plays | What plays in its place while the streamer mode is on, by its game name: a sound that is not copyrighted itself - a sound asset's `name` without `copyrighted`, or a sound of the game its own list (`configs\dead_air_x64_sound_rights.ltx`) does not name. Only for a copyrighted sound. |
 
 ## Problems
 
@@ -45,3 +49,6 @@ return {
 | `M111` | warning | What the model cannot take: `rotate` on a model with bones, a part that makes no faces. |
 | `M112` | error | A surface that wears no texture: no level build and no model of the game takes it. |
 | `M113` | error | A source that lies outside the project: a project names nothing outside itself. |
+| `M114` | warning | A sound's `streamer` on a sound that is not `copyrighted`: the replacement never plays. |
+| `M115` | error | A sound's replacement that is copyrighted itself: the streamer mode keeps it from playing too. |
+| `M116` | error | A sound's replacement nobody has: no sound asset of the project, no sound of the linked game. |

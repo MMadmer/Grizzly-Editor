@@ -13,14 +13,23 @@ use gz_ltx::{LtxDoc, Placement, Syntax};
 
 pub use gz_ltx::LineItem as Item;
 
+/// A section `gz-screens` reads (lower case): the screens, the music and the radio.
+fn screens_section(s: &str) -> bool {
+    s == "screens"
+        || s == "radio"
+        || s.starts_with("screen.")
+        || s.starts_with("track.")
+        || s.starts_with("playlist.")
+}
+
 /// The pad of a key in the editor's own lines: 11 ("description"), 15 for the
-/// longer keys of `[world]` and its kind, 17 for the screens.
+/// longer keys of `[world]` and its kind, 17 for the screens, the music and the radio.
 #[must_use]
 pub fn key_width(section: &str) -> usize {
     let s = section.to_ascii_lowercase();
     if matches!(s.as_str(), "world" | "start_kit" | "vars" | "commands") {
         15
-    } else if s == "screens" || s.starts_with("screen.") || s.starts_with("track.") {
+    } else if screens_section(&s) {
         17
     } else {
         11
@@ -46,7 +55,7 @@ fn section_rank(section: &str) -> usize {
     if let Some(i) = ORDER.iter().position(|o| *o == s) {
         return i;
     }
-    if s == "screens" || s.starts_with("screen.") || s.starts_with("track.") {
+    if screens_section(&s) {
         ORDER.len()
     } else if s == "commands" {
         ORDER.len() + 1

@@ -14,6 +14,9 @@
 //! | `M111` | what the model cannot take (warning) |
 //! | `M112` | a surface that wears no texture |
 //! | `M113` | a source that lies outside the project |
+//! | `M114` | a sound's `streamer` on a sound that is not copyrighted (warning) |
+//! | `M115` | a sound's replacement that is copyrighted itself |
+//! | `M116` | a sound's replacement nobody has |
 
 use std::path::Path;
 use std::sync::Arc;
@@ -38,6 +41,9 @@ pub const NO_SHADER: &str = "M105";
 pub const NO_COMPILER_SHADER: &str = "M106";
 pub const NO_MATERIAL: &str = "M107";
 pub const BARE_SURFACE: &str = "M112";
+pub const STREAMER_UNUSED: &str = "M114";
+pub const STREAMER_COPYRIGHTED: &str = "M115";
+pub const STREAMER_MISSING: &str = "M116";
 
 fn problem(i: &Issue) -> Problem {
     Problem::new(i.code, i.severity, i.message.clone())
@@ -248,8 +254,43 @@ pub fn issues(
                         source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     out.push(Issue::new(resolve::UNREADABLE, Severity::Error, at, format!("{name}: {e}")));
                 }
+                out.extend(streamer_issues(root, index, game, &asset));
             }
         },
+    }
+    out
+}
+
+/// The problems of a sound's replacement in the streamer mode, at its `streamer` key: one on a
+/// sound that is not copyrighted (`M114`), one that is copyrighted itself (`M115`), one nobody
+/// has (`M116`). Blocking.
+#[must_use]
+pub fn streamer_issues(root: &Path, index: &Index, game: &GameLists, asset: &SoundAsset) -> Vec<Issue> {
+    let Some(name) = asset.streamer.as_deref() else { return Vec::new() };
+    let at = vec![Seg::key("streamer")];
+    let mut out = Vec::new();
+    if !asset.is_copyrighted() {
+        out.push(Issue::new(
+            STREAMER_UNUSED,
+            Severity::Warning,
+            at.clone(),
+            format!("`streamer` names what plays instead of a copyrighted sound, and this sound is not marked `copyrighted = true`: '{name}' never plays for it"),
+        ));
+    }
+    match crate::sound::mark(root, index, game, name) {
+        crate::sound::Mark::Free => {}
+        crate::sound::Mark::Copyrighted => out.push(Issue::new(
+            STREAMER_COPYRIGHTED,
+            Severity::Error,
+            at,
+            format!("the replacement '{name}' is copyrighted itself: the streamer mode keeps it from playing too - pick a sound without the mark"),
+        )),
+        crate::sound::Mark::Missing => out.push(Issue::new(
+            STREAMER_MISSING,
+            Severity::Error,
+            at,
+            format!("the replacement '{name}' is nobody's sound: no sound asset of the project publishes it and the linked game has none of that name"),
+        )),
     }
     out
 }

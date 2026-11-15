@@ -658,12 +658,14 @@ fn plain_id(id: &str) -> bool {
     !id.is_empty() && id.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
 }
 
-/// The problems of the ids in `[screen.<id>]` and `[track.<id>]` headers: the game reads the
-/// section name without case and drops a screen or a track whose id holds anything but `a-z`,
+/// The problems of the ids in `[screen.<id>]`, `[track.<id>]` and `[playlist.<id>]` headers: the
+/// game reads the section name without case and drops one whose id holds anything but `a-z`,
 /// `0-9` and `_`.
 fn section_id_problems(headers: &[(String, Header)], out: &mut Vec<Problem>) {
     for (lower, h) in headers {
-        let Some((kind, id)) = lower.split_once('.').filter(|(k, _)| matches!(*k, "screen" | "track")) else {
+        let Some((kind, id)) =
+            lower.split_once('.').filter(|(k, _)| matches!(*k, "screen" | "track" | "playlist"))
+        else {
             continue;
         };
         if id.is_empty() || plain_id(id) {
@@ -737,7 +739,8 @@ fn place_rule(p: Problem, lines: &[Line<'_>], headers: &[(String, Header)]) -> P
 /// The manifest's own check before a build, with its messages: the id, the targeting choice,
 /// the declared modes, every value the reference judges (version, website, tags, target, the
 /// mode ids, the repository, a global's name, the description, and the values and keys of
-/// `[world]`, `[start_kit]`, `[screens]`, `[screen.<id>]` and `[track.<id>]`), the warnings about
+/// `[world]`, `[start_kit]`, `[screens]`, `[screen.<id>]`, `[track.<id>]`, `[playlist.<id>]` and
+/// `[radio]`), the warnings about
 /// the mode titles and about a module that turns the game's updates off. Every problem is at its
 /// line of `mod.ltx`; a key the file leaves out is at its section's header. Console commands are
 /// [`crate::validate_commands`]: they need the project's scripts.
@@ -1086,6 +1089,29 @@ mod tests {
         );
         // upper case is read as lower case: the game does not drop it
         assert!(problems(&with("[Screen.Night]\r\nlayer = a.dds\r\n")).is_empty());
+        let p = problems(&with("[playlist.Road Songs]\r\ntracks = a\r\n"));
+        assert_eq!((codes(&p), p[0].fix.as_deref()), (vec!["mod.section_id"], Some("[playlist.road_songs]")));
+    }
+
+    #[test]
+    fn the_radio_keys_are_judged_at_their_lines() {
+        // what the radio takes passes
+        assert!(
+            one("[track.t]\r\nfile = a.ogg\r\nplay = menu, radio\r\ncopyrighted = true\r\nstreamer = u\r\n[playlist.p]\r\ntitle = Road\r\ntracks = t\r\norder = list\r\n[radio]\r\nmusic = only\r\n")
+                .is_empty()
+        );
+        // a word of the screens' show is the screens': radio is no surface a screen shows on
+        assert!(
+            one("[screen.s]\r\nshow = radio\r\nlayer = a.dds\r\n")[0]
+                .2
+                .contains("show takes loading, menu, pause")
+        );
+        let p = one("[playlist.p]\r\norder = random\r\n");
+        assert_eq!((p[0].0.as_str(), p[0].1), ("mod.value", 5));
+        assert!(p[0].2.contains("order takes shuffle | list"), "{}", p[0].2);
+        assert!(one("[radio]\r\nmusic = all\r\n")[0].2.contains("music takes mix | only"));
+        assert!(one("[track.t]\r\ncopyrighted = maybe\r\n")[0].2.contains("copyrighted takes true | false"));
+        assert!(one("[radio]\r\nvolume = 1\r\n")[0].2.contains("no reader takes this key"));
     }
 
     #[test]

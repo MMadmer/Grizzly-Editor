@@ -6,10 +6,14 @@
 //! (or `.s`) beside it, `E408` the build leaves out a file a screen needs, `E409` a track is not
 //! an `.ogg`; `W405` a layer nothing was put on, `W406` a screen with no layers, `W407` a level
 //! the linked game lacks, `W410` a track that plays nowhere, `W411` a screen asks for a video's
-//! sound and has no video.
+//! sound and has no video; `E412` a playlist names a track the module does not have, `W413` a
+//! playlist without tracks, `W414` a playlist's title the game cannot show (outside cp1251);
+//! `W415` a track's `streamer` on a track that is not copyrighted, `E416` a replacement that is
+//! copyrighted itself, `E417` a replacement nobody has.
 
 use std::path::Path;
 
+use gz_media::sound::Mark;
 use gz_mod::{Issue, Spot};
 
 use crate::import::{FileKind, extension, file_kind};
@@ -26,20 +30,33 @@ pub fn validate(
     s: &Screens,
     outside: &dyn Fn(&str) -> bool,
     levels: Option<&[String]>,
+    sounds: &dyn Fn(&str) -> Mark,
 ) -> Vec<String> {
-    issues(root, s, outside, levels).iter().map(Issue::line).collect()
+    issues(root, s, outside, levels, sounds).iter().map(Issue::line).collect()
+}
+
+/// What a track's replacement is to the streamer mode: a track of the module by its own mark,
+/// anything else a sound by its name (`sounds`).
+#[must_use]
+pub fn replacement_mark(s: &Screens, name: &str, sounds: &dyn Fn(&str) -> Mark) -> Mark {
+    match s.track(name) {
+        Some(t) if t.copyrighted => Mark::Copyrighted,
+        Some(_) => Mark::Free,
+        None => sounds(name),
+    }
 }
 
 /// The problems of `s`, each with the section and the key of `mod.ltx` it is about: a layer's
 /// file at its `layer` line, a track's file at its `file` line, a screen without layers at its
 /// header. `outside` says whether the build leaves a project path out; `levels` are the linked
-/// game's levels, `None` when they are not known (W407 is not checked then). Blocking: a file is
-/// looked for on the disk.
+/// game's levels, `None` when they are not known (W407 is not checked then); `sounds` says what
+/// a sound name is to the streamer mode. Blocking: a file is looked for on the disk.
 pub fn issues(
     root: &Path,
     s: &Screens,
     outside: &dyn Fn(&str) -> bool,
     levels: Option<&[String]>,
+    sounds: &dyn Fn(&str) -> Mark,
 ) -> Vec<Issue> {
     let exists = |rel: &str| root.join(rel.replace('/', "\\")).is_file();
     let mut problems = Vec::new();
@@ -137,12 +154,66 @@ pub fn issues(
                 file,
             ));
         }
-        let named = s.screens.iter().any(|d| d.music == "tracks" && d.tracks.contains(&t.id));
+        let named = s.screens.iter().any(|d| d.music == "tracks" && d.tracks.contains(&t.id))
+            || s.playlists.iter().any(|p| p.tracks.contains(&t.id));
         if t.play == 0 && !named {
             problems.push(Issue::new(
                 "W410",
-                format!("{tag}it joins no shuffle and no screen names it, so it never plays"),
+                format!("{tag}it joins no shuffle and no screen or playlist names it, so it never plays"),
                 Spot::section(&section),
+            ));
+        }
+        if !t.streamer.is_empty() {
+            let at = Spot::key(&section, "streamer");
+            let r = &t.streamer;
+            if !t.copyrighted {
+                problems.push(Issue::new(
+                    "W415",
+                    format!("{tag}it names what plays instead of it in the streamer mode, and it is not copyrighted: {r} never plays for it"),
+                    at.clone(),
+                ));
+            }
+            match replacement_mark(s, r, sounds) {
+                Mark::Free => {}
+                Mark::Copyrighted => problems.push(Issue::new(
+                    "E416",
+                    format!("{tag}what plays instead of it is copyrighted itself: {r}"),
+                    at,
+                )),
+                Mark::Missing => problems.push(Issue::new(
+                    "E417",
+                    format!(
+                        "{tag}what plays instead of it is no track of the module and nobody's sound: {r}"
+                    ),
+                    at,
+                )),
+            }
+        }
+    }
+    for p in &s.playlists {
+        let tag = format!("playlist {}: ", p.id);
+        let section = format!("playlist.{}", p.id);
+        if p.tracks.is_empty() {
+            problems.push(Issue::new(
+                "W413",
+                format!("{tag}it has no tracks, so it plays nothing"),
+                Spot::section(&section),
+            ));
+        }
+        for t in &p.tracks {
+            if s.track(t).is_none() {
+                problems.push(Issue::new(
+                    "E412",
+                    format!("{tag}it names a track the module does not have: {t}"),
+                    Spot::key(&section, "tracks"),
+                ));
+            }
+        }
+        if let Some(bad) = gz_mod::text::outside_cp1251(&p.title) {
+            problems.push(Issue::new(
+                "W414",
+                format!("{tag}the game shows the title in cp1251 and has no {bad}: the player sees a look-alike or ?"),
+                Spot::key(&section, "title"),
             ));
         }
     }

@@ -62,7 +62,10 @@ impl AutoSave {
                 let previous = on_disk.take();
                 let (kept, outcome) = io
                     .io(move || match render(&snap.state) {
-                        None => (previous, Ok(())),
+                        // a state that is not this saver's to write (the disk read back after a
+                        // change behind the editor) leaves the disk's bytes unknown: the next state
+                        // is written even when it equals what this saver wrote last
+                        None => (None, Ok(())),
                         Some(next) if previous.as_ref() == Some(&next) => (previous, Ok(())),
                         Some(next) => match fsx::write_atomic(&next.0, &next.1) {
                             Ok(()) => (Some(next), Ok(())),

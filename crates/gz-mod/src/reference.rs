@@ -4,7 +4,7 @@
 //! words here fails the build of the tests.
 //!
 //! The sections of the areas that read their own (`[world]`, `[start_kit]`, `[screens]`,
-//! `[screen.<id>]`, `[track.<id>]`) are described here too - an author learns the whole file from
+//! `[screen.<id>]`, `[track.<id>]`, `[playlist.<id>]`, `[radio]`) are described here too - an author learns the whole file from
 //! one page - and held to their readers by a test in `grizzly`, which sees every crate.
 
 use std::fmt::Write as _;
@@ -21,7 +21,7 @@ pub enum Reader {
     Manifest,
     /// `gz-world`: `[world]` and `[start_kit]`.
     World,
-    /// `gz-screens`: `[screens]`, `[screen.<id>]` and `[track.<id>]`.
+    /// `gz-screens`: `[screens]`, `[screen.<id>]`, `[track.<id>]`, `[playlist.<id>]` and `[radio]`.
     Screens,
     /// Not in the model: the build and the game act on it (`[vfs]`).
     Files,
@@ -119,6 +119,10 @@ const TAGS: &str = "story, quests, gameplay, weapons, equipment, npcs, mutants, 
 
 const SURFACES: &str = "loading, menu, pause";
 const SURFACE_WORDS: &[&str] = &["loading", "menu", "pause"];
+/// Where a track plays: the surfaces and the radio.
+const PLAYS: &str = "loading, menu, pause, radio";
+const PLAY_WORDS: &[&str] = &["loading", "menu", "pause", "radio"];
+const ORDER_WORDS: &[&str] = &["shuffle", "list"];
 const MIX_ONLY: &[&str] = &["mix", "only"];
 const LOOP_NEXT: &[&str] = &["loop", "next"];
 const FIT_WORDS: &[&str] = &["cover", "contain", "stretch"];
@@ -494,19 +498,70 @@ pub const SECTIONS: &[SectionDoc] = &[
     SectionDoc {
         name: "track.<id>",
         reader: Reader::Screens,
-        summary: "One music track. The id takes a-z, 0-9 and _; a screen's music key names it.",
+        summary: "One music track. The id takes a-z, 0-9 and _; a screen's music key and a playlist's tracks name it.",
         keys: &[
             key("file", "a project-relative .ogg file", "required", "The track: the game plays .ogg only."),
             key(
                 "play",
-                SURFACES,
-                "empty: only where a screen names it",
-                "The surfaces whose shuffle it joins.",
-            ).judged(Check::Words(SURFACE_WORDS)),
+                PLAYS,
+                "empty: only where a screen or a playlist names it",
+                "The shuffles it joins: the surfaces', and radio - the music the radios of the world play among the game's own.",
+            ).judged(Check::Words(PLAY_WORDS)),
             key("weight", "a number, 0 to 1000", "1", "How often it comes up against the others.")
                 .judged(Check::Range(0, 1000)),
             key("volume", "0 to 1", "1", "How loud.").judged(Check::Range(0, 1)),
+            key(
+                "copyrighted",
+                "true | false",
+                "false",
+                "A recording that may not be streamed: the game does not play it anywhere while its streamer mode is on.",
+            ).judged(Check::Flag),
+            key(
+                "streamer",
+                "a track id of this module, or a sound name",
+                "empty: nothing plays",
+                "What plays in its place while the streamer mode is on: a track or a sound that is not copyrighted \
+                 itself. Only for a copyrighted track.",
+            ),
         ],
+    },
+    SectionDoc {
+        name: "playlist.<id>",
+        reader: Reader::Screens,
+        summary: "A station of the radio: a named list of the module's tracks. The player tunes the radios to it in the game's sound options, and a radio of a level may name it. The id takes a-z, 0-9 and _.",
+        keys: &[
+            key(
+                "title",
+                "text or a string table id",
+                "the id",
+                "What the player reads in the list of stations. The game shows it in cp1251: characters outside it are warned about.",
+            ),
+            key(
+                "tracks",
+                "track ids, comma separated",
+                "empty: the playlist plays nothing",
+                "Its tracks, in order. A track plays here whatever its own play says.",
+            ),
+            key(
+                "order",
+                "shuffle | list",
+                "shuffle",
+                "shuffle: every track once a pass, in a new order each pass. list: in this order, round and round.",
+            ).judged(Check::Choice(ORDER_WORDS)),
+        ],
+    },
+    SectionDoc {
+        name: "radio",
+        reader: Reader::Screens,
+        summary: "How the module's radio tracks share the radios with the game's music and other modules'. screens.set edits it.",
+        keys: &[key(
+            "music",
+            "mix | only",
+            "mix",
+            "only: this module's radio tracks are the whole common music of the radios (the last module of the load \
+             order that says so).",
+        )
+        .judged(Check::Choice(MIX_ONLY))],
     },
 ];
 
@@ -597,9 +652,10 @@ Writing it
   - Edit the file with your own tools, or run mod.set for the sections it takes (help mod.set); check
     it with asset.check path=mod.ltx (Grizzly-Cmd.exe check mod.ltx).
   - The check reads every value this page lists. A wrong one is an error at its line, and the build
-    refuses it. A key that [world], [start_kit], [screens], [screen.<id>] or [track.<id>] do not read,
-    a value they do not read as written, an id of a [screen.<id>] or [track.<id>] section that takes
-    other characters than a-z, 0-9 and _, and a key of [module] or [provides_mode] spelled like one
+    refuses it. A key that [world], [start_kit], [screens], [screen.<id>], [track.<id>],
+    [playlist.<id>] or [radio] do not read, a value they do not read as written, an id of a
+    [screen.<id>], [track.<id>] or [playlist.<id>] section that takes other characters than a-z, 0-9
+    and _, and a key of [module] or [provides_mode] spelled like one
     of this page's in another case or one letter off, are warnings: the build goes on and the game
     ignores them. What is written in a section the editor keeps ([budget], [redirects], any other)
     is left as it is and never reported.
@@ -852,6 +908,8 @@ mod tests {
         // the tags' text is the vocabulary the check and the hook of gz-release judge by
         assert_eq!(TAGS, crate::rules::TAG_VOCABULARY.join(", "));
         assert_eq!(SURFACES, SURFACE_WORDS.join(", "));
+        assert_eq!(PLAYS, PLAY_WORDS.join(", "));
+        assert!(SURFACE_WORDS.iter().all(|w| PLAY_WORDS.contains(w)));
         assert_eq!(HIDE_WORDS.join(", "), "bar, percent, stage, tip");
         for s in SECTIONS {
             for k in s.keys {

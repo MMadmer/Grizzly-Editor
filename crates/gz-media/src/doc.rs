@@ -46,7 +46,10 @@ const CODES: &str = "\
 | `M110` | error | `parts` together with `source`. |\n\
 | `M111` | warning | What the model cannot take: `rotate` on a model with bones, a part that makes no faces. |\n\
 | `M112` | error | A surface that wears no texture: no level build and no model of the game takes it. |\n\
-| `M113` | error | A source that lies outside the project: a project names nothing outside itself. |\n";
+| `M113` | error | A source that lies outside the project: a project names nothing outside itself. |\n\
+| `M114` | warning | A sound's `streamer` on a sound that is not `copyrighted`: the replacement never plays. |\n\
+| `M115` | error | A sound's replacement that is copyrighted itself: the streamer mode keeps it from playing too. |\n\
+| `M116` | error | A sound's replacement nobody has: no sound asset of the project, no sound of the linked game. |\n";
 
 /// The reference of a kind, as Markdown.
 #[must_use]
@@ -122,7 +125,11 @@ same name loses to it. A key left out is what the texture's `use` needs.\n\n",
                 "A sound asset is a text file beside its sound (`.wav`, `.ogg`) that says what a sound's `.thm` says: \
 how far it carries, how loud it is, what NPCs make of it. It is published as `sounds\\<name>.ogg` - a `.wav` \
 encoded at `quality`, an `.ogg` as it is with these parameters written into it - beside a copy of this text, \
-which the game reads over what the `.ogg` carries.\n\n",
+which the game reads over what the `.ogg` carries.\n\n\
+A recording the module may not have streamed says `copyrighted = true`: while the game's streamer mode is on, \
+the game plays it nowhere - its engine refuses to start it, the radio passes over it - unless `streamer` names \
+a sound that plays in its place. The game keeps such a list of its own sounds; a replacement is never a \
+copyrighted sound.\n\n",
             );
             out.push_str(COMMON);
             out.push_str(

@@ -103,7 +103,17 @@ fn the_screens_are_the_readers_keys() {
     assert_eq!(documented("screen.<id>"), screen, "[screen.<id>]: the page and gz-screens' reader differ");
     let track = arms(SCREENS_SRC, "fn parse_track_key", "\n}\n", &[8]);
     assert_eq!(documented("track.<id>"), track, "[track.<id>]: the page and gz-screens' reader differ");
-    for s in ["screens", "screen.night", "track.rain"] {
+    let playlist = arms(SCREENS_SRC, "fn parse_playlist_key", "\n}\n", &[8]);
+    assert_eq!(
+        documented("playlist.<id>"),
+        playlist,
+        "[playlist.<id>]: the page and gz-screens' reader differ"
+    );
+    let from = SCREENS_SRC.find("fn parse_radio_key").expect("the radio's reader");
+    let to = SCREENS_SRC.get(from..).and_then(|s| s.find("\n}\n")).map_or(SCREENS_SRC.len(), |e| from + e);
+    let radio = key_literals(SCREENS_SRC.get(from..to).unwrap_or(""));
+    assert_eq!(documented("radio"), radio, "[radio]: the page and gz-screens' reader differ");
+    for s in ["screens", "screen.night", "track.rain", "playlist.road", "radio"] {
         assert_eq!(section_named(s).map(|d| d.reader), Some(Reader::Screens), "{s}");
     }
 }
@@ -170,7 +180,25 @@ fn the_values_the_check_takes_are_the_values_the_readers_give_a_meaning() {
     for w in words("screen.<id>", "fit") {
         assert_eq!(gz_screens::Fit::parse(w).name(), w);
     }
-    assert_eq!(words("track.<id>", "play"), words("screen.<id>", "show"));
+    // a track plays where a screen shows, and on the radio
+    let mut plays = words("screen.<id>", "show");
+    plays.push("radio");
+    assert_eq!(words("track.<id>", "play"), plays);
+    for w in words("track.<id>", "play") {
+        assert!(screens(&format!("[track.a]\r\nplay = {w}\r\n")).tracks[0].play != 0, "{w}");
+    }
+    assert_eq!(screens("[screen.a]\r\nshow = radio\r\n").screens[0].show, 0);
+    assert!(screens("[track.a]\r\ncopyrighted = true\r\n").tracks[0].copyrighted);
+    assert!(!screens("[track.a]\r\ncopyrighted = false\r\n").tracks[0].copyrighted);
+    // the playlist's orders and the radio's policy are the words the reader gives a meaning
+    for w in words("playlist.<id>", "order") {
+        assert_eq!(gz_screens::Order::parse(w).name(), w);
+    }
+    assert_eq!(words("radio", "music"), ["mix", "only"]);
+    assert!(
+        screens("[radio]\r\nmusic = only\r\n").only_radio
+            && !screens("[radio]\r\nmusic = mix\r\n").only_radio
+    );
 }
 
 #[test]

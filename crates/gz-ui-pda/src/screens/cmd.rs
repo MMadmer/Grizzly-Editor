@@ -1,7 +1,9 @@
 //! `screens.view`: opens or reports the Screens & Music tab - `open`, `surface`, `screen` /
-//! `track` / `layer` - and lands files at a window point the way a drop from Explorer does
-//! (`simulate_drop`, `x`, `y` in pixels). Answers `{tab, open, active, surface, screen, track,
-//! layer, status}`; the data is `screens.info` / `screens.set` / `screens.import`.
+//! `track` / `layer` / `playlist`, `show=streamer` (the selected track's Plays Instead list) - and
+//! lands files at a window point the way a drop from Explorer does (`simulate_drop`, `x`, `y` in
+//! pixels). Answers `{tab, open, active, surface, screen, track, playlist, layer, status}`, and
+//! with a copyrighted track selected `picker` (`count`, the first `rows`); the data is
+//! `screens.info` / `screens.set` / `screens.import`.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -77,6 +79,12 @@ pub struct ViewParams {
     /// Selects a track.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     track: Option<String>,
+    /// Selects a playlist: its card shows on the right.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    playlist: Option<String>,
+    /// streamer: puts up the Plays Instead list of the selected track (a copyrighted one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    show: Option<String>,
     /// Files (separated by |) dropped at the window point `x`, `y` (px), the way a drop from
     /// Explorer lands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -104,6 +112,10 @@ pub async fn screens_view(editor: Arc<Editor>, p: ViewParams, _origin: Origin) -
     }
     if let Some(tab) = &tab {
         let mut v = tab.v.lock();
+        // a view command puts up what it asks for: a list the last one left up goes
+        if p.show.is_none() {
+            v.close_picker = Some(v.sel_track.clone());
+        }
         if let Some(s) = arg(&args, "surface") {
             v.surface = usize::from(s == "menu");
         }
@@ -115,8 +127,21 @@ pub async fn screens_view(editor: Arc<Editor>, p: ViewParams, _origin: Origin) -
         if let Some(t) = arg(&args, "track") {
             v.sel_track = t;
             v.sel_screen.clear();
+            v.sel_playlist.clear();
             v.sel_layer = -1;
         }
+        if let Some(pl) = arg(&args, "playlist") {
+            v.sel_playlist = pl;
+            v.sel_screen.clear();
+            v.sel_track.clear();
+            v.sel_layer = -1;
+        }
+    }
+    let show = arg(&args, "show");
+    if let Some(what) = show.as_deref()
+        && what != "streamer"
+    {
+        return Err(gz_editor::CmdError::invalid(format!("show takes streamer, not '{what}'")));
     }
     // the same way a drop from Explorer lands: at a point of the editor's window
     if let Some(list) = arg(&args, "simulate_drop") {
@@ -144,8 +169,22 @@ pub async fn screens_view(editor: Arc<Editor>, p: ViewParams, _origin: Origin) -
             }
         }
     }
-    let active = gz_app::on_ui(&editor, |shell, _| Ok(shell.active() == "screens")).await.unwrap_or(false);
     let v = tab.as_ref().map(|t| t.v.lock().clone()).unwrap_or_default();
+    let picker = picker(&editor, &v.sel_track).await;
+    if show.is_some() {
+        if picker.is_null() {
+            return Err(gz_editor::CmdError::new(
+                "refused",
+                "show=streamer puts up the Plays Instead list of a copyrighted track: select one (track=) first",
+            ));
+        }
+        if let Some(tab) = &tab {
+            tab.v.lock().open_picker = true;
+        }
+        let _ = editor.frames.after(2).await;
+    }
+    let active = gz_app::on_ui(&editor, |shell, _| Ok(shell.active() == "screens")).await.unwrap_or(false);
+    let v = tab.as_ref().map(|t| t.v.lock().clone()).unwrap_or(v);
     Ok(json!({
         "tab": "screens",
         "open": v.open,
@@ -153,7 +192,36 @@ pub async fn screens_view(editor: Arc<Editor>, p: ViewParams, _origin: Origin) -
         "surface": if v.surface == 1 { "menu" } else { "loading" },
         "screen": v.sel_screen,
         "track": v.sel_track,
+        "playlist": v.sel_playlist,
         "layer": if tab.is_some() { v.sel_layer } else { -1 },
         "status": v.status,
+        "picker": picker,
     }))
+}
+
+/// The most rows of the Plays Instead list an answer names.
+const PICKER_ROWS: usize = 200;
+
+/// The Plays Instead list of the track `id` as the tab offers it, when it is a copyrighted track
+/// of the module: how many rows, the first ones (`id`, `from`); `null` otherwise.
+async fn picker(editor: &Arc<Editor>, id: &str) -> Value {
+    if id.is_empty() {
+        return Value::Null;
+    }
+    let Ok(manifest) = gz_mod::ManifestService::of(editor).await else { return Value::Null };
+    let _ = manifest.sync().await;
+    let snap = manifest.snapshot();
+    let Some(doc) = snap.doc() else { return Value::Null };
+    let s = gz_screens::Screens::parse(doc);
+    if !s.track(id).is_some_and(|t| t.copyrighted) {
+        return Value::Null;
+    }
+    let sounds = gz_screens::Sounds::now(editor).await;
+    let free = editor.exec.io(move || sounds.free()).await;
+    let rows = crate::screens::choices(&s, id, &free);
+    let first: Vec<Value> =
+        rows.iter().take(PICKER_ROWS).map(|r| json!({ "id": r.id, "from": r.from.name() })).collect();
+    let tracks: Vec<&str> =
+        rows.iter().filter(|r| r.from == crate::screens::ChoiceFrom::Track).map(|r| r.id.as_str()).collect();
+    json!({ "count": rows.len(), "tracks": tracks, "rows": first })
 }

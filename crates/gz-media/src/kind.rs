@@ -71,8 +71,19 @@ const TEXTURE_TOP: &[&str] = &[
 const TEXTURE_BUMP: &[&str] = &["texture", "source", "from", "depth", "parallax"];
 const TEXTURE_DETAIL: &[&str] = &["texture", "scale", "on"];
 
-const SOUND_TOP: &[&str] =
-    &["snd", "source", "name", "min_distance", "max_distance", "volume", "ai_distance", "type", "quality"];
+const SOUND_TOP: &[&str] = &[
+    "snd",
+    "source",
+    "name",
+    "min_distance",
+    "max_distance",
+    "volume",
+    "ai_distance",
+    "type",
+    "quality",
+    "copyrighted",
+    "streamer",
+];
 
 /// The keys each level of a kind knows: any other is the author's, kept and noted.
 #[must_use]

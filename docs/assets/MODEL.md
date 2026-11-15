@@ -116,3 +116,6 @@ Every face of a part looks outward and every edge is hard; the texture is laid b
 | `M111` | warning | What the model cannot take: `rotate` on a model with bones, a part that makes no faces. |
 | `M112` | error | A surface that wears no texture: no level build and no model of the game takes it. |
 | `M113` | error | A source that lies outside the project: a project names nothing outside itself. |
+| `M114` | warning | A sound's `streamer` on a sound that is not `copyrighted`: the replacement never plays. |
+| `M115` | error | A sound's replacement that is copyrighted itself: the streamer mode keeps it from playing too. |
+| `M116` | error | A sound's replacement nobody has: no sound asset of the project, no sound of the linked game. |

@@ -32,6 +32,9 @@ pub struct GameLists {
     pub shaders: FxHashSet<String>,
     pub compiler_shaders: FxHashSet<String>,
     pub materials: FxHashSet<String>,
+    /// The game's own list of copyrighted sounds ([`crate::sound::RIGHTS_FILE`]): names and masks,
+    /// keyed by [`name_key`]. Empty when the game has no such file.
+    pub rights: Vec<String>,
     pub files: Option<Arc<GameFiles>>,
 }
 
@@ -40,6 +43,12 @@ impl GameLists {
     #[must_use]
     pub fn has_texture(&self, name: &str) -> bool {
         self.files.as_ref().is_some_and(|f| f.exists(&format!("textures\\{}.dds", name_key(name))))
+    }
+
+    /// Whether the game has a sound of this name (`sounds\<name>.ogg`).
+    #[must_use]
+    pub fn has_sound(&self, name: &str) -> bool {
+        self.files.as_ref().is_some_and(|f| f.exists(&format!("sounds\\{}.ogg", name_key(name))))
     }
 }
 
@@ -238,13 +247,16 @@ impl Media {
         let f = files.clone();
         let read = self
             .exec
-            .io(move || ["shaders.xr", "shaders_xrlc.xr", "gamemtl.xr"].map(|n| f.read(n).ok()))
+            .io(move || {
+                ["shaders.xr", "shaders_xrlc.xr", "gamemtl.xr", crate::sound::RIGHTS_FILE]
+                    .map(|n| f.read(n).ok())
+            })
             .await;
         self.lists
             .fresh(&(), rev, move || {
                 let lower =
                     |v: Vec<String>| v.into_iter().map(|s| s.to_lowercase()).collect::<FxHashSet<_>>();
-                let [sh, xrlc, mtl] = read;
+                let [sh, xrlc, mtl, rights] = read;
                 GameLists {
                     linked: true,
                     shaders: lower(
@@ -262,6 +274,10 @@ impl Media {
                             .map(|m| m.materials.iter().map(|x| x.name.to_string()).collect())
                             .unwrap_or_default(),
                     ),
+                    // the game's own text, cp1251 where it is not ASCII
+                    rights: rights
+                        .map(|b| crate::sound::parse_rights(&gz_base::text::cp1251_to_utf8(&b)))
+                        .unwrap_or_default(),
                     files: Some(files),
                 }
             })

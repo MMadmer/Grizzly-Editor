@@ -19,6 +19,10 @@ pub struct SoundAsset {
     /// [`fields::SOUND_TYPES`].
     pub ty: Option<u32>,
     pub quality: Option<f64>,
+    /// Not played while the game's streamer mode is on.
+    pub copyrighted: Option<bool>,
+    /// The game name of what plays instead while the streamer mode is on.
+    pub streamer: Option<String>,
 }
 
 impl SoundAsset {
@@ -34,8 +38,16 @@ impl SoundAsset {
             ai_distance: read::number(&mut cx, v, SOUND, "ai_distance"),
             ty: read::word_set(&mut cx, v, SOUND, "type"),
             quality: read::number(&mut cx, v, SOUND, "quality"),
+            copyrighted: read::boolean(&mut cx, v, "copyrighted"),
+            streamer: read::text(&mut cx, v, "streamer").filter(|s| !s.trim().is_empty()),
         };
         (s, cx.issues)
+    }
+
+    /// Whether the streamer mode keeps it from playing.
+    #[must_use]
+    pub fn is_copyrighted(&self) -> bool {
+        self.copyrighted == Some(true)
     }
 
     /// What the game plays the sound with, and its encoding quality.
@@ -68,6 +80,8 @@ impl SoundAsset {
             ai_distance: some(t.max_ai_dist, t.max_dist),
             ty: (t.game_type != d.game_type).then_some(t.game_type),
             quality: some(t.quality, d.quality),
+            copyrighted: None,
+            streamer: None,
         }
     }
 
@@ -92,6 +106,8 @@ impl SoundAsset {
                     }),
                 }),
                 "quality" => self.quality.map(Value::from),
+                "copyrighted" => self.copyrighted.map(Value::from),
+                "streamer" => self.streamer.clone().map(Value::from),
                 _ => None,
             };
             if let Some(v) = v {
@@ -100,4 +116,146 @@ impl SoundAsset {
         }
         top
     }
+}
+
+// ---- the streamer mode -------------------------------------------------------------------------
+
+/// Where the game keeps its own list of copyrighted sounds (the game's `docs/dead-air/RADIO.md`):
+/// `[copyrighted]`, one line per sound name or mask with `*`, optionally `= <replacement>`.
+pub const RIGHTS_FILE: &str = "configs\\dead_air_x64_sound_rights.ltx";
+
+/// The names and masks of the game's own list, as [`read::name_key`] keys them. A game without the
+/// file has an empty list.
+#[must_use]
+pub fn parse_rights(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut inside = false;
+    for raw in text.lines() {
+        let line = raw.split(';').next().unwrap_or("").trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix('[') {
+            let name = rest.split(']').next().unwrap_or("").trim();
+            inside = name.eq_ignore_ascii_case("copyrighted");
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        let key = read::name_key(line.split('=').next().unwrap_or(""));
+        if !key.is_empty() && !out.contains(&key) {
+            out.push(key);
+        }
+    }
+    out
+}
+
+/// Whether a name (already a [`read::name_key`]) matches a mask, `*` standing for any run of
+/// characters.
+#[must_use]
+pub fn mask_matches(mask: &str, name: &str) -> bool {
+    let parts: Vec<&str> = mask.split('*').collect();
+    let [first, middle @ .., last] = parts.as_slice() else { return mask == name };
+    let Some(mut rest) = name.strip_prefix(first) else { return false };
+    for p in middle {
+        match rest.find(p) {
+            Some(at) => rest = rest.get(at + p.len()..).unwrap_or(""),
+            None => return false,
+        }
+    }
+    rest.len() >= last.len() && rest.ends_with(last)
+}
+
+/// Whether the game's own list names a sound.
+#[must_use]
+pub fn listed(rights: &[String], name: &str) -> bool {
+    let key = read::name_key(name);
+    !key.is_empty() && rights.iter().any(|m| mask_matches(m, &key))
+}
+
+/// What a sound is to the streamer mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mark {
+    /// It plays in the streamer mode.
+    Free,
+    /// The streamer mode keeps it from playing.
+    Copyrighted,
+    /// Neither the module nor the linked game has it.
+    Missing,
+}
+
+/// A sound by its game name: one of the module's sound assets (by what it says of itself), else
+/// one of the linked game's (by the game's own list). Without a linked game a name the module
+/// lacks is taken as free: nothing says otherwise. Blocking: a sound asset of the module is read.
+#[must_use]
+pub fn mark(
+    root: &std::path::Path,
+    index: &crate::index::Index,
+    game: &crate::service::GameLists,
+    name: &str,
+) -> Mark {
+    use gz_project::asset_kind::MediaKind;
+    if let Some(e) = index.by_name(MediaKind::Sound, name) {
+        let copyrighted =
+            crate::resolve::sound(root, e.path.as_str()).is_ok_and(|(a, _, _)| a.is_copyrighted());
+        return if copyrighted { Mark::Copyrighted } else { Mark::Free };
+    }
+    if !game.linked {
+        return Mark::Free;
+    }
+    if !game.has_sound(name) {
+        return Mark::Missing;
+    }
+    if listed(&game.rights, name) { Mark::Copyrighted } else { Mark::Free }
+}
+
+/// A sound that plays in the streamer mode, as a picker offers it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FreeSound {
+    /// The game name.
+    pub name: String,
+    /// The module's sound asset that publishes it; `None` for a sound of the game.
+    pub asset: Option<String>,
+}
+
+/// Every sound that plays in the streamer mode: the module's sound assets without the mark
+/// (sorted), then the linked game's sounds its own list does not name (sorted), each name once.
+/// Blocking.
+#[must_use]
+pub fn free_sounds(
+    root: &std::path::Path,
+    index: &crate::index::Index,
+    game: &crate::service::GameLists,
+) -> Vec<FreeSound> {
+    use gz_project::asset_kind::MediaKind;
+    let mut out: Vec<FreeSound> = Vec::new();
+    let mut seen = rustc_hash::FxHashSet::default();
+    let mut own: Vec<&crate::index::Entry> =
+        index.of_kind(MediaKind::Sound).filter(|e| !e.excluded && e.error.is_none()).collect();
+    own.sort_by_key(|e| e.name.to_lowercase());
+    for e in own {
+        let free = crate::resolve::sound(root, e.path.as_str()).is_ok_and(|(a, _, _)| !a.is_copyrighted());
+        if free && seen.insert(e.key.clone()) {
+            out.push(FreeSound { name: e.name.clone(), asset: Some(e.path.as_str().to_owned()) });
+        }
+    }
+    if let Some(files) = &game.files {
+        let mut names: Vec<String> = files
+            .find("sounds", "ogg")
+            .into_iter()
+            .filter_map(|f| {
+                let rel = f.path.strip_prefix("sounds/")?;
+                Some(rel.rsplit_once('.').map_or(rel, |(s, _)| s).replace('/', "\\"))
+            })
+            .collect();
+        names.sort();
+        for n in names {
+            let key = read::name_key(&n);
+            if !listed(&game.rights, &key) && seen.insert(key) {
+                out.push(FreeSound { name: n, asset: None });
+            }
+        }
+    }
+    out
 }

@@ -518,6 +518,7 @@ fn game(textures: bool) -> GameLists {
         shaders: ["default".to_owned()].into_iter().collect(),
         compiler_shaders: ["default".to_owned()].into_iter().collect(),
         materials: ["default".to_owned()].into_iter().collect(),
+        rights: Vec::new(),
         files: None,
     }
 }
@@ -826,4 +827,64 @@ fn an_import_copies_a_source_with_what_it_names_and_writes_the_assets() {
     let plan = import::plan(&from[..1], Some(&to), "");
     assert!(plan.writes.iter().all(|(r, _)| r.as_str().starts_with("art/in/")));
     assert!(texture_known(Path::new("Z:\\nowhere"), &Index::default(), &game(false), "x"));
+}
+
+#[test]
+fn a_copyrighted_sound_names_a_free_replacement_and_the_game_list_reads_its_masks() {
+    // the game's own list: names and masks, comments and other sections left out
+    let rights = crate::sound::parse_rights(
+        "; the game's\r\n[other]\r\nnot\\this\r\n[copyrighted]\r\nmusic\\radio\\*\r\nRadio/Edward_Meditation = radio\\free ; a replacement\r\n*_theme_*\r\n",
+    );
+    assert_eq!(rights, ["music\\radio\\*", "radio\\edward_meditation", "*_theme_*"]);
+    let listed = |n: &str| crate::sound::listed(&rights, n);
+    assert!(
+        listed("music\\radio\\music_3") && listed("MUSIC/radio/x.ogg") && listed("radio\\edward_meditation")
+    );
+    assert!(
+        listed("a\\guitar_theme_1") && !listed("music\\radiox") && !listed("radio\\edward") && !listed("")
+    );
+    assert!(crate::sound::mask_matches("a*b*c", "axbyc") && !crate::sound::mask_matches("a*b*c", "axcyb"));
+    assert!(crate::sound::parse_rights("").is_empty());
+
+    // the keys read and write back; left out, a sound is free
+    let v = gz_luadata::parse("return { snd = 1, copyrighted = true, streamer = \"od\\\\calm\" }").unwrap();
+    let (a, issues) = SoundAsset::from_value(&v);
+    assert!(
+        issues.is_empty() && a.is_copyrighted() && a.streamer.as_deref() == Some("od\\calm"),
+        "{issues:?}"
+    );
+    let text = write_asset("", &a.to_table());
+    assert!(text.contains("copyrighted = true") && text.contains("streamer = \"od\\\\calm\""), "{text}");
+    assert!(!SoundAsset::from_value(&gz_luadata::parse("return { snd = 1 }").unwrap()).0.is_copyrighted());
+    let bad = gz_luadata::parse("return { snd = 1, copyrighted = 1 }").unwrap();
+    assert_eq!(codes(&SoundAsset::from_value(&bad).1), ["M109"]);
+
+    // the check: a free replacement passes, a copyrighted one and one nobody has are errors, a
+    // replacement on a free sound is a warning
+    let d = Dir::new("streamer");
+    d.put("mod.ltx", "[module]\nid = od\n");
+    for n in ["song", "calm", "loud", "plain"] {
+        d.put(&format!("s/{n}.wav"), wav());
+    }
+    d.put("s/song.sndasset", "return { snd = 1, copyrighted = true, streamer = \"od\\\\calm\" }\n");
+    d.put("s/calm.sndasset", "return { snd = 1 }\n");
+    d.put("s/loud.sndasset", "return { snd = 1, copyrighted = true, streamer = \"od\\\\song\" }\n");
+    d.put("s/plain.sndasset", "return { snd = 1, streamer = \"od\\\\calm\" }\n");
+    let index = index::scan(&d.0);
+    let lone = GameLists { linked: true, ..GameLists::default() };
+    let of = |rel: &str, index: &Index, game: &GameLists| {
+        codes(&issues_of(&d, rel, MediaKind::Sound, index, game)).into_iter().collect::<Vec<_>>()
+    };
+    assert!(of("s/song.sndasset", &index, &game(false)).is_empty());
+    assert_eq!(of("s/loud.sndasset", &index, &game(false)), ["M115"]);
+    assert_eq!(of("s/plain.sndasset", &index, &game(false)), ["M114"]);
+    d.put("s/song.sndasset", "return { snd = 1, copyrighted = true, streamer = \"ambient\\\\wind\" }\n");
+    let index = index::scan(&d.0);
+    // without a game nothing says the game lacks it; with one that has no such sound it is nobody's
+    assert!(of("s/song.sndasset", &index, &game(false)).is_empty());
+    assert_eq!(of("s/song.sndasset", &index, &lone), ["M116"]);
+    // the picker's list: the module's free sounds, never a copyrighted one
+    let free: Vec<String> =
+        crate::sound::free_sounds(&d.0, &index, &lone).into_iter().map(|f| f.name).collect();
+    assert_eq!(free, ["od\\calm", "od\\plain"]);
 }

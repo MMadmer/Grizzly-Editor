@@ -390,7 +390,7 @@ async fn texture_preview(editor: Arc<Editor>, p: TextureParams, _origin: Origin)
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum SoundAction {
-    /// Plays `path` from its start.
+    /// Plays `path` (or the game's sound `name`) from its start.
     #[default]
     Play,
     /// Stops what plays.
@@ -408,6 +408,10 @@ struct SoundParams {
     /// `.ogg`).
     #[serde(default)]
     path: Option<String>,
+    /// play, instead of `path`: a sound of the linked game by its name (`ambient\wind`), its
+    /// `sounds\<name>.ogg`.
+    #[serde(default)]
+    name: Option<String>,
 }
 
 /// A WAV's samples as the player takes them: 16-bit, interleaved.
@@ -438,6 +442,8 @@ fn decode_sound(root: &std::path::Path, rel: &str) -> Result<(gz_fmt_sound::Pcm,
             "ai_distance": a.ai_distance,
             "type": a.ty.and_then(|t| gz_media::fields::SOUND_TYPES.iter().find(|(_, v)| *v == t).map(|(w, _)| *w)),
             "quality": a.quality,
+            "copyrighted": a.is_copyrighted(),
+            "streamer": a.streamer,
         });
         (source, facts)
     } else {
@@ -469,7 +475,24 @@ async fn preview_sound(editor: Arc<Editor>, p: SoundParams, _origin: Origin) -> 
         SoundAction::State => return Ok(json!({ "playing": player.is_playing(), "error": player.error() })),
         SoundAction::Play => {}
     }
-    let path = p.path.filter(|p| !p.trim().is_empty()).ok_or_else(|| invalid("play takes path="))?;
+    if let Some(name) = p.name.filter(|n| !n.trim().is_empty()) {
+        let link = gz_game::GameLink::of(&editor).map_err(|e| invalid(e.to_string()))?;
+        let files = link.files().await.map_err(|e| invalid(e.to_string()))?;
+        let rel = format!("sounds\\{}.ogg", gz_media::read::name_key(&name));
+        let pcm = editor
+            .exec
+            .io(move || {
+                files
+                    .read(&rel)
+                    .map_err(|e| e.to_string())
+                    .and_then(|b| gz_fmt_sound::decode_ogg(&b).map_err(|e| e.to_string()))
+            })
+            .await
+            .map_err(|e| invalid(format!("the linked game's sound {name} could not be read: {e}")))?;
+        player.play(Arc::new(pcm));
+        return Ok(json!({ "name": name, "playing": true }));
+    }
+    let path = p.path.filter(|p| !p.trim().is_empty()).ok_or_else(|| invalid("play takes path= or name="))?;
     let root = editor.project_root().ok_or_else(|| invalid("no project is open"))?;
     let rel = path.replace('\\', "/");
     let r = rel.clone();

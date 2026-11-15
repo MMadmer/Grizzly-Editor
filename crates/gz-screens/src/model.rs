@@ -1,5 +1,5 @@
-//! The model of `[screens]`, `[screen.<id>]` and `[track.<id>]`: read off
-//! the manifest document, written back by the screens' edits.
+//! The model of `[screens]`, `[screen.<id>]`, `[track.<id>]`, `[playlist.<id>]` and `[radio]`:
+//! read off the manifest document, written back by the screens' edits.
 
 use gz_mod::doc::Item;
 use gz_mod::{Edit, ManifestDoc};
@@ -9,6 +9,8 @@ pub const LOADING: u32 = 1;
 pub const MENU: u32 = 2;
 pub const PAUSE: u32 = 4;
 pub const ALL: u32 = 7;
+/// A track's `play`: the radios of the world shuffle it among the game's own radio music.
+pub const RADIO: u32 = 8;
 
 /// What a loading screen hides.
 pub const HIDE_BAR: u32 = 1;
@@ -115,16 +117,66 @@ impl Default for Screen {
 pub struct Track {
     pub id: String,
     pub file: String,
-    /// The surfaces whose shuffle it joins.
+    /// The shuffles it joins: the surfaces' and [`RADIO`].
     pub play: u32,
     pub weight: f32,
     pub volume: f32,
+    /// Not played while the game's streamer mode is on.
+    pub copyrighted: bool,
+    /// What plays instead in the streamer mode: a track id of the module or a sound name;
+    /// empty: nothing.
+    pub streamer: String,
 }
 
 impl Default for Track {
     fn default() -> Self {
-        Self { id: String::new(), file: String::new(), play: 0, weight: 1.0, volume: 1.0 }
+        Self {
+            id: String::new(),
+            file: String::new(),
+            play: 0,
+            weight: 1.0,
+            volume: 1.0,
+            copyrighted: false,
+            streamer: String::new(),
+        }
     }
+}
+
+/// The order a playlist plays its tracks in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Order {
+    /// Every track once a pass, in a new order each pass.
+    #[default]
+    Shuffle,
+    /// In the playlist's order, round and round.
+    List,
+}
+
+impl Order {
+    /// `list`; anything else is `shuffle`, as the game reads it.
+    #[must_use]
+    pub fn parse(v: &str) -> Self {
+        if v.trim().eq_ignore_ascii_case("list") { Self::List } else { Self::Shuffle }
+    }
+
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Shuffle => "shuffle",
+            Self::List => "list",
+        }
+    }
+}
+
+/// A station of the radio: a named list of the module's tracks.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Playlist {
+    pub id: String,
+    /// What the player reads: text or a string table id; empty: the id.
+    pub title: String,
+    /// Track ids, in order.
+    pub tracks: Vec<String>,
+    pub order: Order,
 }
 
 /// The module's screens and music. `[0]` is the loading screen, `[1]` the menu.
@@ -135,6 +187,9 @@ pub struct Screens {
     pub next_track: [bool; 2],
     pub screens: Vec<Screen>,
     pub tracks: Vec<Track>,
+    pub playlists: Vec<Playlist>,
+    /// `[radio] music = only`: this module's radio tracks are the radios' whole common music.
+    pub only_radio: bool,
 }
 
 /// C `atof`: the longest number at the start of the text (after white space), 0 without one.
@@ -222,10 +277,21 @@ pub fn surfaces(value: &str) -> u32 {
     })
 }
 
-/// `loading, menu, pause` as the file writes them.
+/// Where a track plays (`play`): the surfaces and the radio.
+#[must_use]
+pub fn plays(value: &str) -> u32 {
+    split(value, ',').iter().fold(0, |m, n| {
+        m | match n.as_str() {
+            "radio" => RADIO,
+            other => surfaces(other),
+        }
+    })
+}
+
+/// `loading, menu, pause, radio` as the file writes them.
 #[must_use]
 pub fn surfaces_text(mask: u32) -> String {
-    let names: Vec<&str> = [(LOADING, "loading"), (MENU, "menu"), (PAUSE, "pause")]
+    let names: Vec<&str> = [(LOADING, "loading"), (MENU, "menu"), (PAUSE, "pause"), (RADIO, "radio")]
         .into_iter()
         .filter(|(b, _)| mask & b != 0)
         .map(|(_, n)| n)
@@ -316,10 +382,27 @@ fn parse_screen_key(s: &mut Screen, key: &str, val: &str) {
 fn parse_track_key(t: &mut Track, key: &str, val: &str) {
     match key {
         "file" => t.file = val.to_owned(),
-        "play" => t.play = surfaces(val),
+        "play" => t.play = plays(val),
         "weight" => t.weight = atof(val) as f32,
         "volume" => t.volume = atof(val) as f32,
+        "copyrighted" => t.copyrighted = matches!(val, "true" | "1" | "yes" | "on"),
+        "streamer" => t.streamer = val.to_owned(),
         _ => {}
+    }
+}
+
+fn parse_playlist_key(p: &mut Playlist, key: &str, val: &str) {
+    match key {
+        "title" => p.title = gz_mod::text::text_value(val),
+        "tracks" => p.tracks = split(val, ','),
+        "order" => p.order = Order::parse(val),
+        _ => {}
+    }
+}
+
+fn parse_radio_key(s: &mut Screens, key: &str, val: &str) {
+    if key == "music" {
+        s.only_radio = val == "only";
     }
 }
 
@@ -334,6 +417,8 @@ enum Sec {
     Screens,
     Screen(usize),
     Track(usize),
+    Playlist(usize),
+    Radio,
 }
 
 impl Screens {
@@ -355,6 +440,11 @@ impl Screens {
                     } else if let Some(id) = sn.strip_prefix("track.").filter(|id| !id.is_empty()) {
                         s.tracks.push(Track { id: id.to_owned(), ..Track::default() });
                         Sec::Track(s.tracks.len() - 1)
+                    } else if let Some(id) = sn.strip_prefix("playlist.").filter(|id| !id.is_empty()) {
+                        s.playlists.push(Playlist { id: id.to_owned(), ..Playlist::default() });
+                        Sec::Playlist(s.playlists.len() - 1)
+                    } else if sn == "radio" {
+                        Sec::Radio
                     } else {
                         Sec::Other
                     };
@@ -382,6 +472,12 @@ impl Screens {
                             parse_track_key(track, key, value);
                         }
                     }
+                    Sec::Playlist(i) => {
+                        if let Some(p) = s.playlists.get_mut(i) {
+                            parse_playlist_key(p, key, value);
+                        }
+                    }
+                    Sec::Radio => parse_radio_key(&mut s, key, value),
                     Sec::Other => {}
                 },
                 Item::Other => {}
@@ -481,7 +577,33 @@ impl Screens {
         if t.volume != 1.0 {
             out.push(row("volume", &number(t.volume)));
         }
+        if t.copyrighted {
+            out.push(row("copyrighted", "true"));
+        }
+        if !t.streamer.is_empty() {
+            out.push(row("streamer", &t.streamer));
+        }
         out
+    }
+
+    /// The lines of a playlist's section.
+    #[must_use]
+    pub fn playlist_lines(p: &Playlist) -> Vec<String> {
+        let mut out = Vec::new();
+        if !p.title.is_empty() {
+            out.push(row("title", &gz_mod::text::display_value(&p.title, false)));
+        }
+        out.push(row("tracks", &p.tracks.join(", ")));
+        if p.order == Order::List {
+            out.push(row("order", "list"));
+        }
+        out
+    }
+
+    /// The lines of `[radio]`: empty when the radio mixes in.
+    #[must_use]
+    pub fn radio_lines(&self) -> Vec<String> {
+        if self.only_radio { vec![row("music", "only")] } else { Vec::new() }
     }
 
     /// The edits that make `doc` hold this model. Sections that keep their names and order are
@@ -490,12 +612,15 @@ impl Screens {
     /// order, after the rest of the file.
     #[must_use]
     pub fn edits(&self, doc: &ManifestDoc) -> Vec<Edit> {
-        let mut out = vec![Edit::lines("screens", self.policy_lines())];
+        let mut out =
+            vec![Edit::lines("screens", self.policy_lines()), Edit::lines("radio", self.radio_lines())];
         let screens: Vec<(String, Vec<String>)> =
             self.screens.iter().map(|d| (format!("screen.{}", d.id), Self::screen_lines(d))).collect();
         let tracks: Vec<(String, Vec<String>)> =
             self.tracks.iter().map(|t| (format!("track.{}", t.id), Self::track_lines(t))).collect();
-        for (prefix, want) in [("screen.", screens), ("track.", tracks)] {
+        let playlists: Vec<(String, Vec<String>)> =
+            self.playlists.iter().map(|p| (format!("playlist.{}", p.id), Self::playlist_lines(p))).collect();
+        for (prefix, want) in [("screen.", screens), ("track.", tracks), ("playlist.", playlists)] {
             let have: Vec<String> = doc
                 .sections_with_prefix(prefix)
                 .into_iter()
@@ -542,9 +667,33 @@ impl Screens {
         unique_id(base, |id| self.track(id).is_some())
     }
 
-    /// Takes a track out, and out of every screen that names it.
+    #[must_use]
+    pub fn playlist(&self, id: &str) -> Option<&Playlist> {
+        self.playlists.iter().find(|p| p.id == id)
+    }
+
+    pub fn playlist_mut(&mut self, id: &str) -> Option<&mut Playlist> {
+        self.playlists.iter_mut().find(|p| p.id == id)
+    }
+
+    /// A playlist id made of `base` that no playlist has.
+    #[must_use]
+    pub fn new_playlist_id(&self, base: &str) -> String {
+        unique_id(base, |id| self.playlist(id).is_some())
+    }
+
+    /// Takes a track out, and out of every screen and playlist that names it, and out of every
+    /// track that plays it instead.
     pub fn remove_track(&mut self, id: &str) {
         self.tracks.retain(|t| t.id != id);
+        for p in &mut self.playlists {
+            p.tracks.retain(|t| t != id);
+        }
+        for t in &mut self.tracks {
+            if t.streamer == id {
+                t.streamer.clear();
+            }
+        }
         for d in &mut self.screens {
             d.tracks.retain(|t| t != id);
             if d.music == "tracks" && d.tracks.is_empty() {

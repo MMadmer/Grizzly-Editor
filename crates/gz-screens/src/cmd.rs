@@ -1,6 +1,7 @@
 //! The screens' commands, the build's check and the slot for the linked game's levels:
-//! `screens.info` (the screens and music as data, with their problems), `screens.set` (one change
-//! of them, checked) and `screens.import` (files brought from anywhere, put where they go).
+//! `screens.info` (the screens, the music and the radio as data, with their problems),
+//! `screens.set` (one change of them, checked) and `screens.import` (files brought from anywhere,
+//! put where they go).
 //! `screens.view` is the tab's. An agent may equally edit `mod.ltx` itself.
 
 use std::path::PathBuf;
@@ -10,6 +11,7 @@ use futures::future::BoxFuture;
 use gz_base::{Origin, Problem};
 use gz_build::{BuildCheck, BuildChecks, BuildWalk};
 use gz_editor::{Args, CmdError, Editor, Executors, NoParams, ProjectSession, Registry, Reply, Spec};
+use gz_media::sound::Mark;
 use gz_mod::{Issue, ManifestService};
 use gz_project::Project;
 use parking_lot::RwLock;
@@ -19,25 +21,29 @@ use serde_json::{Map, Value, json};
 
 use crate::import::{FileKind, file_kind, import, stem};
 use crate::model::{
-    Fit, HIDE_BAR, HIDE_PERCENT, HIDE_STAGE, HIDE_TIP, LOADING, Layer, MENU, PAUSE, Screen, Screens, Track,
-    atof, sanitize, scan_floats, split,
+    Fit, HIDE_BAR, HIDE_PERCENT, HIDE_STAGE, HIDE_TIP, LOADING, Layer, MENU, Order, PAUSE, Playlist, RADIO,
+    Screen, Screens, Track, atof, sanitize, scan_floats, split,
 };
+use crate::validate::replacement_mark;
 
 pub fn register(reg: &mut Registry) {
-    reg.area("screens", "The module's loading and menu screens and their music ([screens] of mod.ltx)");
+    reg.area(
+        "screens",
+        "The module's loading and menu screens, their music and its radio music ([screens], [track.*], [playlist.*], [radio] of mod.ltx)",
+    );
     reg.cmd(
         Spec::read(
             "screens.info",
-            "The module's screens, layers and music tracks as data, with their problems.",
+            "The module's screens, layers, music tracks, radio tracks and playlists as data, with their problems.",
         ),
         screens_info,
     );
     reg.cmd(
         Spec::write(
             "screens.set",
-            "One change of the screens or the music: a screen, a layer, a track, the policy.",
+            "One change of the screens, the music or the radio: a screen, a layer, a track, a playlist, the policy.",
         )
-        .example("action=layer_set id=night index=0 opacity=0.5"),
+        .example("action=track_set id=rain play=menu,radio copyrighted=true"),
         screens_set,
     );
     reg.cmd(
@@ -54,7 +60,8 @@ pub fn register(reg: &mut Registry) {
 #[serde(rename_all = "snake_case")]
 enum SetAction {
     /// What a surface's screens and music do with the game's own: `surface`, `screens` (only or
-    /// mix), `music` (only or mix), `end` (loop or next).
+    /// mix), `music` (only or mix), `end` (loop or next). `surface=radio` takes `music` alone:
+    /// only makes this module's radio tracks the radios' whole common music.
     Policy,
     /// A new screen `id` (made unique) with the screen's fields, and a first layer with `file`.
     ScreenAdd,
@@ -70,23 +77,35 @@ enum SetAction {
     LayerRemove,
     /// Moves the layer `index` of the screen `id` to `to`.
     LayerMove,
-    /// A new track `id` with `file`, play, weight, volume.
+    /// A new track `id` with `file`, play, weight, volume, copyrighted, streamer.
     TrackAdd,
-    /// Changes the track `id`.
+    /// Changes the track `id`: file, play, weight, volume, copyrighted, streamer.
     TrackSet,
-    /// Removes the track `id`.
+    /// Removes the track `id`, from every screen and playlist too.
     TrackRemove,
+    /// A new playlist `id` (made unique; left out: made of the title) with title, tracks, order.
+    PlaylistAdd,
+    /// Changes the playlist `id`: title, tracks (the whole list, in its order), order.
+    PlaylistSet,
+    /// Removes the playlist `id`. Its tracks stay.
+    PlaylistRemove,
+    /// Puts `track` into the playlist `id` at `index` (left out: at its end).
+    PlaylistTrackAdd,
+    /// Moves `track` of the playlist `id` to `to`.
+    PlaylistTrackMove,
+    /// Takes `track` out of the playlist `id`. The track stays in the music.
+    PlaylistTrackRemove,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SetParams {
     action: SetAction,
-    /// The screen or the track; for screen_add and track_add the wanted id, made of a-z, 0-9 and _
-    /// (anything else becomes _).
+    /// The screen, the track or the playlist; for screen_add, track_add and playlist_add the wanted
+    /// id, made of a-z, 0-9 and _ (anything else becomes _).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     id: Option<String>,
-    /// Policy: loading or menu.
+    /// Policy: loading, menu or radio.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     surface: Option<String>,
     /// Policy: only (the module's screens alone) or mix.
@@ -143,12 +162,33 @@ struct SetParams {
     /// layer_move: where the layer goes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     to: Option<i64>,
-    /// A track: the surfaces it plays on (loading, menu, pause).
+    /// A track: the shuffles it joins (loading, menu, pause, radio; comma separated); empty:
+    /// only where a screen or a playlist names it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     play: Option<String>,
     /// A track: how loud, 0 to 1; a number outside it is cut to the nearest end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     volume: Option<f32>,
+    /// A track: a recording that may not be streamed - not played while the game's streamer mode
+    /// is on. false also clears its streamer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    copyrighted: Option<bool>,
+    /// A copyrighted track: what plays instead in the streamer mode - a track id of the module or a
+    /// sound name, neither copyrighted itself; empty clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    streamer: Option<String>,
+    /// A playlist: what the player reads in the list of stations (text or a string table id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    /// A playlist: its track ids, in the order they play.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tracks: Option<Vec<String>>,
+    /// A playlist: shuffle (every track once a pass, a new order each pass) or list (in order).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    order: Option<String>,
+    /// playlist_track_add, playlist_track_move, playlist_track_remove: the track.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    track: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -165,7 +205,8 @@ struct ImportParams {
     /// Into the music: only .ogg files are taken.
     #[serde(default)]
     music: bool,
-    /// What a new screen or track shows on: loading or menu (left out: what the open tab shows).
+    /// What a new screen or track shows on: loading, menu or radio (a track the radios play; left
+    /// out: what the open tab shows).
     #[serde(default)]
     surface: Option<String>,
 }
@@ -210,10 +251,62 @@ pub async fn issues(
 ) -> Vec<Issue> {
     let levels = GameLevels::of(editor).levels(editor).await;
     let manifest = manifest.clone();
+    let sounds = Sounds::of(editor, &s).await;
     editor
         .exec
-        .io(move || crate::validate::issues(&root, &s, &|rel| manifest.outside_build(rel), levels.as_deref()))
+        .io(move || {
+            crate::validate::issues(
+                &root,
+                &s,
+                &|rel| manifest.outside_build(rel),
+                levels.as_deref(),
+                &|name| sounds.mark(name),
+            )
+        })
         .await
+}
+
+/// What the streamer mode makes of a sound name: the module's sound assets and the linked game's
+/// sounds with its own list, as `gz-media` reads them. Only gathered when a track names a
+/// replacement.
+pub struct Sounds {
+    look: Option<(PathBuf, Arc<gz_media::index::Index>, Arc<gz_media::GameLists>)>,
+}
+
+impl Sounds {
+    /// The media of the open project, when `s` needs them.
+    pub async fn of(editor: &Arc<Editor>, s: &Screens) -> Arc<Self> {
+        if s.tracks.iter().all(|t| t.streamer.is_empty()) {
+            return Arc::new(Self { look: None });
+        }
+        Self::now(editor).await
+    }
+
+    /// The media of the open project.
+    pub async fn now(editor: &Arc<Editor>) -> Arc<Self> {
+        let Ok(media) = gz_media::Media::of(editor).await else { return Arc::new(Self { look: None }) };
+        let index = media.index().await;
+        let game = media.game_lists(editor).await;
+        Arc::new(Self { look: Some((media.root().to_path_buf(), index, game)) })
+    }
+
+    /// Blocking: a sound asset of the module is read.
+    #[must_use]
+    pub fn mark(&self, name: &str) -> Mark {
+        match &self.look {
+            Some((root, index, game)) => gz_media::sound::mark(root, index, game, name),
+            None => Mark::Free,
+        }
+    }
+
+    /// Every sound that plays in the streamer mode. Blocking.
+    #[must_use]
+    pub fn free(&self) -> Vec<gz_media::sound::FreeSound> {
+        match &self.look {
+            Some((root, index, game)) => gz_media::sound::free_sounds(root, index, game),
+            None => Vec::new(),
+        }
+    }
 }
 
 /// The problems of `s` in the open project as lines, each starting with its code.
@@ -284,7 +377,7 @@ fn mask_text(mask: u32, names: &[(u32, &str)]) -> String {
 }
 
 fn surfaces_json(mask: u32) -> String {
-    mask_text(mask, &[(LOADING, "loading"), (MENU, "menu"), (PAUSE, "pause")])
+    mask_text(mask, &[(LOADING, "loading"), (MENU, "menu"), (PAUSE, "pause"), (RADIO, "radio")])
 }
 
 fn layer_json(l: &Layer) -> Value {
@@ -345,13 +438,27 @@ pub fn answer(s: &Screens, problems: &[String]) -> Value {
             o.insert("play".into(), json!(surfaces_json(t.play)));
             o.insert("weight".into(), json_number(t.weight));
             o.insert("volume".into(), json_number(t.volume));
+            o.insert("copyrighted".into(), json!(t.copyrighted));
+            o.insert("streamer".into(), json!(t.streamer));
             Value::Object(o)
         })
         .collect();
+    let playlists: Vec<Value> = s
+        .playlists
+        .iter()
+        .map(|p| json!({ "id": p.id, "title": p.title, "tracks": p.tracks, "order": p.order.name() }))
+        .collect();
+    let radio_tracks: Vec<&str> =
+        s.tracks.iter().filter(|t| t.play & RADIO != 0).map(|t| t.id.as_str()).collect();
     let mut out = Map::new();
     out.insert("policy".into(), json!({ "loading": side(0), "menu": side(1) }));
     out.insert("screens".into(), Value::Array(screens));
     out.insert("tracks".into(), Value::Array(tracks));
+    out.insert(
+        "radio".into(),
+        json!({ "music": if s.only_radio { "only" } else { "mix" }, "tracks": radio_tracks }),
+    );
+    out.insert("playlists".into(), Value::Array(playlists));
     out.insert("problems".into(), json!(problems));
     Value::Object(out)
 }
@@ -424,24 +531,25 @@ fn parse_surfaces(text: &str) -> u32 {
         .fold(0, |m, (_, b)| m | b)
 }
 
-/// What a screen or a track made by a drop shows on: the surface the Screens
-/// tab shows - the loading screen, or the menu and the pause screen.
-fn default_show(menu: bool) -> u32 {
-    if menu { MENU | PAUSE } else { LOADING }
-}
-
-/// The surface a drop lands on: `surface=` when given, else the one the open Screens tab shows
-/// (`s_Surface`), else the loading screen.
-async fn drop_surface(ed: &Arc<Editor>, args: &Args) -> bool {
-    if let Some(v) = arg(args, "surface") {
-        return v == "menu";
+/// What a screen or a track made by a drop shows on: `surface=` when given (loading, menu - the
+/// main and the pause menu -, radio: a track the radios play), else the surface the open Screens
+/// tab shows, else the loading screen.
+async fn drop_show(ed: &Arc<Editor>, args: &Args) -> u32 {
+    let surface = match arg(args, "surface") {
+        Some(v) => v,
+        None if ed.registry().has("screens.view") => {
+            let view = ed.call("screens.view", Args::new(), Origin::Mcp).await;
+            let open = view.get("open").and_then(Value::as_bool) == Some(true);
+            let shown = view.get("surface").and_then(Value::as_str).unwrap_or_default();
+            if open { shown.to_owned() } else { String::new() }
+        }
+        None => String::new(),
+    };
+    match surface.as_str() {
+        "menu" => MENU | PAUSE,
+        "radio" => RADIO,
+        _ => LOADING,
     }
-    if !ed.registry().has("screens.view") {
-        return false;
-    }
-    let view = ed.call("screens.view", Args::new(), Origin::Mcp).await;
-    view.get("open").and_then(Value::as_bool) == Some(true)
-        && view.get("surface").and_then(Value::as_str) == Some("menu")
 }
 
 /// A refusal when `value` names something `key` does not take: the words are separated by commas
@@ -463,6 +571,8 @@ struct Cx<'a> {
     show: u32,
     args: &'a Args,
     exec: &'a Executors,
+    /// What a track's replacement is to the streamer mode.
+    sounds: &'a Sounds,
     err: String,
 }
 
@@ -564,7 +674,7 @@ impl Cx<'_> {
         }
     }
 
-    fn apply_track(&mut self, t: &mut Track) {
+    fn apply_track(&mut self, t: &mut Track, others: &Screens) {
         // before anything is copied or converted: a picture is no track
         if let Some(v) = arg(self.args, "file") {
             if file_kind(&v) != FileKind::Music {
@@ -574,9 +684,9 @@ impl Cx<'_> {
             }
         }
         if let Some(v) = arg(self.args, "play") {
-            match words_refusal("play", &v, &["loading", "menu", "pause"]) {
+            match words_refusal("play", &v, &["loading", "menu", "pause", "radio"]) {
                 Some(why) => self.err = why,
-                None => t.play = parse_surfaces(&v),
+                None => t.play = crate::model::plays(&v.to_ascii_lowercase()),
             }
         }
         if let Some(f) = arg_float(self.args, "weight") {
@@ -584,6 +694,75 @@ impl Cx<'_> {
         }
         if let Some(f) = arg_float(self.args, "volume") {
             t.volume = f.clamp(0.0, 1.0);
+        }
+        if let Some(b) = arg_bool(self.args, "copyrighted") {
+            t.copyrighted = b;
+            // the replacement is a copyrighted track's: off, it has nothing to replace
+            if !b {
+                t.streamer.clear();
+            }
+        }
+        if let Some(v) = arg(self.args, "streamer") {
+            let v = v.trim().to_owned();
+            if let Some(why) = self.streamer_refusal(t, &v, others) {
+                self.err = why;
+            } else {
+                t.streamer = v;
+            }
+        }
+    }
+
+    /// Why `name` cannot play instead of `t` in the streamer mode; `None` when it can (or is
+    /// empty: no replacement). Blocking: a sound asset of the module is read.
+    fn streamer_refusal(&self, t: &Track, name: &str, others: &Screens) -> Option<String> {
+        if name.is_empty() {
+            return None;
+        }
+        if !t.copyrighted {
+            return Some(format!(
+                "streamer names what plays instead of a copyrighted track, and the track '{}' is not copyrighted: set copyrighted=true first",
+                t.id
+            ));
+        }
+        if name == t.id {
+            return Some(format!("the track '{}' cannot play instead of itself", t.id));
+        }
+        match replacement_mark(others, name, &|n| self.sounds.mark(n)) {
+            Mark::Free => None,
+            Mark::Copyrighted => Some(format!(
+                "streamer: '{name}' is copyrighted itself and does not play in the streamer mode either; name a track or a sound without the mark"
+            )),
+            Mark::Missing => Some(format!(
+                "streamer: '{name}' is no track of the module and nobody's sound (no sound asset of the project, no sound of the linked game)"
+            )),
+        }
+    }
+
+    /// Track ids of a playlist: every one a track of the module, refused by name otherwise.
+    fn playlist_tracks(&mut self, s: &Screens, given: &str) -> Option<Vec<String>> {
+        let ids = split(given, ',');
+        if let Some(bad) = ids.iter().find(|id| s.track(id).is_none()) {
+            self.err = format!("a playlist plays the module's tracks, and there is no track '{bad}'");
+            return None;
+        }
+        Some(ids)
+    }
+
+    /// The playlist's fields from the request: title, tracks, order.
+    fn apply_playlist(&mut self, p: &mut Playlist, s: &Screens) {
+        if let Some(v) = arg(self.args, "title") {
+            p.title = v.trim().to_owned();
+        }
+        if let Some(v) = arg(self.args, "tracks")
+            && let Some(ids) = self.playlist_tracks(s, &v)
+        {
+            p.tracks = ids;
+        }
+        if let Some(v) = arg(self.args, "order") {
+            match v.as_str() {
+                "shuffle" | "list" => p.order = Order::parse(&v),
+                _ => self.err = format!("order takes shuffle or list, not '{v}'"),
+            }
         }
     }
 
@@ -606,7 +785,7 @@ impl Cx<'_> {
                 s.tracks.push(Track { id, file: rel, play: self.show, ..Track::default() });
                 continue;
             }
-            if to_music {
+            if to_music || self.show == RADIO {
                 "Only .ogg files go into the music.".clone_into(&mut self.err);
                 continue;
             }
@@ -630,7 +809,7 @@ impl Cx<'_> {
     }
 }
 
-const ACTIONS: &str = "action must be policy, screen_add, screen_set, screen_remove, layer_add, layer_set, layer_remove, layer_move, track_add, track_set, track_remove or drop";
+const ACTIONS: &str = "action must be policy, screen_add, screen_set, screen_remove, layer_add, layer_set, layer_remove, layer_move, track_add, track_set, track_remove, playlist_add, playlist_set, playlist_remove, playlist_track_add, playlist_track_move, playlist_track_remove or drop";
 
 /// Runs one `screens.set` action on the model. `Err`: the call is refused before anything is
 /// done to the model (`surface`, `action`); `Ok(err)`: the action ran, and a non-empty `err`
@@ -640,12 +819,24 @@ fn run(cx: &mut Cx<'_>, s: &mut Screens) -> Result<(), String> {
     let id = arg(cx.args, "id").unwrap_or_default();
     let no_screen = |id: &str| format!("no screen '{id}'");
     match action.as_str() {
+        "policy" if arg(cx.args, "surface").as_deref() == Some("radio") => {
+            if arg(cx.args, "screens").is_some() || arg(cx.args, "end").is_some() {
+                return Err("the radio's policy is music alone (only or mix): it has no screens and no end"
+                    .to_owned());
+            }
+            match arg(cx.args, "music").as_deref() {
+                Some("only") => s.only_radio = true,
+                Some("mix") => s.only_radio = false,
+                Some(v) => return Err(format!("music takes only or mix, not '{v}'")),
+                None => {}
+            }
+        }
         "policy" => {
             let surface = arg(cx.args, "surface").unwrap_or_default();
             let side = match surface.as_str() {
                 "loading" => 0,
                 "menu" => 1,
-                _ => return Err("surface must be loading or menu".to_owned()),
+                _ => return Err("surface must be loading, menu or radio".to_owned()),
             };
             for (key, words) in
                 [("screens", ["only", "mix"]), ("music", ["only", "mix"]), ("end", ["loop", "next"])]
@@ -744,7 +935,7 @@ fn run(cx: &mut Cx<'_>, s: &mut Screens) -> Result<(), String> {
         "track_add" => {
             let mut t =
                 Track { id: s.new_track_id(if id.is_empty() { "track" } else { &id }), ..Track::default() };
-            cx.apply_track(&mut t);
+            cx.apply_track(&mut t, s);
             if t.file.is_empty() && cx.err.is_empty() {
                 "a track needs a file".clone_into(&mut cx.err);
             }
@@ -752,11 +943,74 @@ fn run(cx: &mut Cx<'_>, s: &mut Screens) -> Result<(), String> {
                 s.tracks.push(t);
             }
         }
-        "track_set" => match s.track_mut(&id) {
-            Some(t) => cx.apply_track(t),
-            None => cx.err = format!("no track '{id}'"),
-        },
+        "track_set" => {
+            let others = s.clone();
+            match s.track_mut(&id) {
+                Some(t) => cx.apply_track(t, &others),
+                None => cx.err = format!("no track '{id}'"),
+            }
+        }
         "track_remove" => s.remove_track(&id),
+        "playlist_add" => {
+            let title = arg(cx.args, "title").unwrap_or_default();
+            let base = if !id.is_empty() {
+                id.clone()
+            } else if !title.trim().is_empty() {
+                title.trim().to_owned()
+            } else {
+                "playlist".to_owned()
+            };
+            let mut p = Playlist { id: s.new_playlist_id(&base), ..Playlist::default() };
+            cx.apply_playlist(&mut p, s);
+            if cx.err.is_empty() {
+                s.playlists.push(p);
+            }
+        }
+        "playlist_set" => match s.playlists.iter().position(|p| p.id == id) {
+            Some(i) => {
+                let others = s.clone();
+                if let Some(p) = s.playlists.get_mut(i) {
+                    cx.apply_playlist(p, &others);
+                }
+            }
+            None => cx.err = format!("no playlist '{id}'"),
+        },
+        "playlist_remove" => {
+            if s.playlist(&id).is_some() {
+                s.playlists.retain(|p| p.id != id);
+            } else {
+                cx.err = format!("no playlist '{id}'");
+            }
+        }
+        "playlist_track_add" | "playlist_track_move" | "playlist_track_remove" => {
+            let track = arg(cx.args, "track").unwrap_or_default();
+            if s.track(&track).is_none() {
+                cx.err = format!("no track '{track}'");
+                return Ok(());
+            }
+            let Some(p) = s.playlist_mut(&id) else {
+                cx.err = format!("no playlist '{id}'");
+                return Ok(());
+            };
+            let at = p.tracks.iter().position(|t| *t == track);
+            match (action.as_str(), at) {
+                ("playlist_track_add", _) => {
+                    let len = i64::try_from(p.tracks.len()).unwrap_or(i64::MAX);
+                    let to = usize::try_from(arg_int(cx.args, "index", len).clamp(0, len)).unwrap_or(0);
+                    p.tracks.insert(to.min(p.tracks.len()), track);
+                }
+                ("playlist_track_move", Some(from)) => {
+                    let last = i64::try_from(p.tracks.len().saturating_sub(1)).unwrap_or(0);
+                    let to = usize::try_from(arg_int(cx.args, "to", last).clamp(0, last)).unwrap_or(0);
+                    let moved = p.tracks.remove(from);
+                    p.tracks.insert(to.min(p.tracks.len()), moved);
+                }
+                ("playlist_track_remove", Some(from)) => {
+                    p.tracks.remove(from);
+                }
+                _ => cx.err = format!("the playlist '{id}' does not play the track '{track}'"),
+            }
+        }
         "drop" => {
             // the path of a drop in the tab: files separated by |; on a screen, a layer of it
             // (index), the music, or the tab
@@ -830,12 +1084,18 @@ async fn apply(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
     let root = project.root().to_owned();
     let exec = ed.exec.clone();
     let dropping = arg(&args, "action").as_deref() == Some("drop");
-    let show = default_show(dropping && drop_surface(&ed, &args).await);
+    let show = if dropping { drop_show(&ed, &args).await } else { LOADING };
+    let sounds = if arg(&args, "streamer").is_some_and(|v| !v.trim().is_empty()) {
+        Sounds::now(&ed).await
+    } else {
+        Arc::new(Sounds { look: None })
+    };
     // imports are file work: the whole action runs on the IO pool
     let (s, outcome) = ed
         .exec
         .io(move || {
-            let mut cx = Cx { root: &root, show, args: &args, exec: &exec, err: String::new() };
+            let mut cx =
+                Cx { root: &root, show, args: &args, exec: &exec, sounds: &sounds, err: String::new() };
             let outcome = run(&mut cx, &mut s).map(|()| cx.err);
             (s, outcome)
         })

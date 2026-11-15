@@ -1,7 +1,8 @@
+use gz_media::sound::Mark;
 use gz_mod::{ManifestDoc, edit};
 
 use super::*;
-use crate::model::{HIDE_BAR, HIDE_TIP, LOADING, MENU, PAUSE};
+use crate::model::{HIDE_BAR, HIDE_TIP, LOADING, MENU, Order, PAUSE, Playlist, RADIO};
 
 const TEXT: &str = "[module]\r\nid          = od\r\n\r\n\
 [screens]\r\nloading_screens   = only\r\nmenu_music_end    = next\r\n\r\n\
@@ -181,7 +182,7 @@ fn validation_says_what_is_wrong() {
         ..Screens::default()
     };
     let levels = vec!["l01_escape".to_owned()];
-    let out = validate(&base, &s, &|_| false, Some(&levels));
+    let out = validate(&base, &s, &|_| false, Some(&levels), &|_| Mark::Free);
     let codes: Vec<&str> = out.iter().map(|l| l.get(..4).unwrap()).collect();
     assert_eq!(codes, ["W406", "W405", "E402", "E401", "E404", "W411", "W407", "E403", "E409", "W410"]);
     assert_eq!(out[0], "W406 screen empty: it has no layers, so it is never shown");
@@ -197,7 +198,7 @@ fn a_problem_carries_its_section_and_key_and_the_document_puts_it_at_the_line() 
     let base = std::env::temp_dir().join(format!("gz-screens-spots-{}", std::process::id()));
     std::fs::create_dir_all(base.join("art")).unwrap();
     std::fs::write(base.join("art").join("a.dds"), b"DDS ").unwrap();
-    let found = crate::validate::issues(&base, &s, &|_| false, None);
+    let found = crate::validate::issues(&base, &s, &|_| false, None, &|_| Mark::Free);
     let at = |code: &str, text: &str| {
         let i = found
             .iter()
@@ -219,9 +220,114 @@ fn a_problem_carries_its_section_and_key_and_the_document_puts_it_at_the_line() 
     assert_eq!(at("E401", "track t1").1, Some(19));
     // the same problems as lines are what the answers have always said
     let lines: Vec<String> = found.iter().map(gz_mod::Issue::line).collect();
-    assert_eq!(lines, validate(&base, &s, &|_| false, None));
+    assert_eq!(lines, validate(&base, &s, &|_| false, None, &|_| Mark::Free));
     // and as problems of the manifest's check they carry the spot
     let p = found[0].problem();
     assert_eq!(gz_mod::Spot::of(&p), Some(found[0].spot.clone()));
     let _ = std::fs::remove_dir_all(&base);
+}
+
+const RADIO_TEXT: &str = "[module]\r\nid = od\r\n\r\n\
+[track.night]\r\nfile = music/night.ogg\r\nplay = menu, radio\r\ncopyrighted = true\r\nstreamer = calm\r\n\r\n\
+[track.calm]\r\nfile = music/calm.ogg\r\nplay = radio\r\n\r\n\
+[playlist.road] ; the author's\r\ntitle = \"Road; Songs\"\r\ntracks = night, calm\r\norder = list\r\n\r\n\
+[radio]\r\nmusic = only\r\n";
+
+#[test]
+fn the_radio_reads_writes_and_keeps_its_place() {
+    let mut doc = ManifestDoc::parse(RADIO_TEXT);
+    let s = Screens::parse(&doc);
+    let night = s.track("night").unwrap();
+    assert_eq!((night.play, night.copyrighted, night.streamer.as_str()), (MENU | RADIO, true, "calm"));
+    assert!(!s.track("calm").unwrap().copyrighted);
+    let road = s.playlist("road").unwrap();
+    assert_eq!(
+        (road.title.as_str(), road.tracks.clone(), road.order),
+        ("Road; Songs", vec!["night".to_owned(), "calm".to_owned()], Order::List)
+    );
+    assert!(s.only_radio);
+    // the same model writes the same file, the author's comment kept
+    apply(&mut doc, &s);
+    let once = doc.to_string();
+    assert!(once.contains("[playlist.road] ; the author's"), "{once}");
+    assert!(once.contains("title             = \"Road; Songs\"\r\n"), "{once}");
+    assert!(
+        once.contains("play              = menu, radio\r\n") && once.contains("copyrighted       = true\r\n")
+    );
+    assert_eq!(Screens::parse(&doc), s);
+    // a track taken out leaves the playlists and the replacements that named it
+    let mut s2 = s.clone();
+    s2.remove_track("calm");
+    assert_eq!(s2.playlist("road").unwrap().tracks, ["night"]);
+    assert!(s2.track("night").unwrap().streamer.is_empty());
+    // the mix, a shuffled playlist and a new one write their defaults away
+    let mut s3 = s.clone();
+    s3.only_radio = false;
+    s3.playlists[0].order = Order::Shuffle;
+    let id = s3.new_playlist_id("Road");
+    assert_eq!(id, "road_2");
+    s3.playlists.push(Playlist { id, ..Playlist::default() });
+    apply(&mut doc, &s3);
+    let text = doc.to_string();
+    assert!(
+        !text.contains("[radio]") && !text.contains("order") && text.contains("[playlist.road_2]"),
+        "{text}"
+    );
+    assert_eq!(Screens::parse(&doc), s3);
+    // radio is a word of a track's play and no surface a screen shows on
+    assert_eq!(crate::model::plays("radio, loading"), RADIO | LOADING);
+    assert_eq!(crate::model::surfaces("radio"), 0);
+}
+
+#[test]
+fn the_radio_says_what_is_wrong_at_its_lines() {
+    let text = "[module]\r\nid = od\r\n\r\n\
+[track.a]\r\nfile = a.ogg\r\nplay = radio\r\nstreamer = b\r\n\r\n\
+[track.b]\r\nfile = b.ogg\r\nplay = radio\r\ncopyrighted = true\r\nstreamer = a\r\n\r\n\
+[track.c]\r\nfile = c.ogg\r\ncopyrighted = true\r\nstreamer = game\\song\r\n\r\n\
+[track.d]\r\nfile = d.ogg\r\ncopyrighted = true\r\nstreamer = nowhere\r\n\r\n\
+[playlist.p]\r\ntitle = Дорога ★\r\ntracks = a, gone\r\n\r\n\
+[playlist.empty]\r\ntitle = x\r\n";
+    let doc = ManifestDoc::parse(text);
+    let s = Screens::parse(&doc);
+    let base = std::env::temp_dir().join(format!("gz-screens-radio-{}", std::process::id()));
+    std::fs::create_dir_all(&base).unwrap();
+    for f in ["a.ogg", "b.ogg", "c.ogg", "d.ogg"] {
+        std::fs::write(base.join(f), b"OggS").unwrap();
+    }
+    let sounds = |n: &str| match n {
+        "game\\song" => Mark::Copyrighted,
+        "nowhere" => Mark::Missing,
+        _ => Mark::Free,
+    };
+    let found = crate::validate::issues(&base, &s, &|_| false, None, &sounds);
+    let at = |code: &str, text: &str| {
+        let i = found
+            .iter()
+            .find(|i| i.code == code && i.text.contains(text))
+            .unwrap_or_else(|| panic!("{code} {text}: {found:?}"));
+        doc.locate(&i.spot).map(|p| p.line)
+    };
+    // a replacement on a track that is not copyrighted; a copyrighted one, a track or a sound
+    assert_eq!(at("W415", "track a:"), Some(7));
+    assert_eq!(at("E416", "track a:"), Some(7));
+    assert_eq!(at("E416", "track c:"), Some(18));
+    assert_eq!(at("E417", "track d:"), Some(23));
+    // a playlist's missing track, its title outside cp1251, an empty one at its header
+    assert_eq!(at("E412", "gone"), Some(27));
+    assert_eq!(at("W414", "★"), Some(26));
+    assert_eq!(at("W413", "playlist empty:"), Some(29));
+    // a track the radio plays plays somewhere
+    assert!(!found.iter().any(|i| i.code == "W410" && i.text.starts_with("track a:")), "{found:?}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_playlist_written_by_hand_takes_a_change() {
+    let text = "[module]\r\nid = od\r\n\r\n[track.night]\r\nfile              = a.ogg\r\n\r\n[track.calm]\r\nfile              = b.ogg\r\n\r\n[playlist.road_songs]\r\ntitle             = Road Songs\r\ntracks            = night, gone\r\n\r\n[radio]\r\nmusic             = only\r\n";
+    let mut doc = ManifestDoc::parse(text);
+    let mut s = Screens::parse(&doc);
+    s.playlist_mut("road_songs").unwrap().tracks = vec!["night".into(), "calm".into()];
+    apply(&mut doc, &s);
+    assert!(doc.to_string().contains("tracks            = night, calm"), "{}", doc);
 }

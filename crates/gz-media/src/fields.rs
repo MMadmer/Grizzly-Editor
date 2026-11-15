@@ -566,4 +566,16 @@ pub const SOUND: &[Field] = &[
         "0",
         "The Vorbis quality a `.wav` source is encoded with.",
     ),
+    f(
+        "copyrighted",
+        Ty::Bool,
+        "false",
+        "A recording that may not be streamed: the game does not play it while its streamer mode is on.",
+    ),
+    f(
+        "streamer",
+        Ty::GameName,
+        "none: nothing plays",
+        "What plays in its place while the streamer mode is on, by its game name: a sound that is not copyrighted itself - a sound asset's `name` without `copyrighted`, or a sound of the game its own list (`configs\\dead_air_x64_sound_rights.ltx`) does not name. Only for a copyrighted sound.",
+    ),
 ];
