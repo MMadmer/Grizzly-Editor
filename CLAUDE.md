@@ -23,6 +23,12 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   across both repositories, but on the game side it must not disturb the old
   modding path or the save contract (`.scop`/`.scoc`/`.scov` — see the game's
   `docs/dead-air/SAVE_COMPATIBILITY.md`).
+- **A module's content lives in the extension save** (the game's `SAVE_COMPATIBILITY.md`, `SAVE_SCRIPTS.md`): the
+  objects of a module's sections, spawn layer and levels, what a script declared its own and a module's own data
+  (`xms.storage`, the quest runtime's state) are written into `.scov`; the world save keeps an inert placeholder
+  under each id, so the original game still loads it. A module that is disabled or removed is kept as it was and
+  comes back with it. The editor builds nothing for this - but what it makes must stay tellable: a module's
+  things are made by its own sections, and a quest names its tasks `nq.<module>.*`.
 - **After the editor's release** the rule flips: the export format contract
   freezes and the game starts guaranteeing that mods built by any past release
   of the editor keep working (already written into the game's
@@ -141,6 +147,10 @@ A change of plan is a change of its document first.
   every machine. `level.ai` (saves keep its vertex ids), the game graph and the spawn are made before the
   compiler and never see a light: a rebuilt level stays the level other modules lay their deltas over. A
   speed-up of a phase keeps its bytes, or it is no speed-up.
+- **A check is short, and the long ones run once.** While working: one crate, one suite, one phase, one start of
+  the game of a minute or two. A sweep that takes much longer (every item held in the hands, the whole corpus)
+  is redesigned until it is short - played guarded in one frame instead of waited for - or runs once, at the
+  very end of the work.
 - **A measurement runs alone**: `python tools/qa/bench_level.py` (a build through the editor on a copy, per step
   and phase) and `lc_bench` (`gz-lc-gpu`'s example: the compiler over a `build.prj`, by lighter, with `compare=1`
   against the reference) go through `tools/rust/alone.py`, one at a time - a number taken beside another build is
@@ -308,6 +318,14 @@ A change of plan is a change of its document first.
   in place of a `.thm`, a sound's parameters, a model's surfaces, bones, user data and its own motions' flags):
   what a key means lives in the game, and a key the game reads means the same in the editor. A static model is
   compiled into the level and ships nothing.
+- **What a thing is lives in its asset and nowhere else.** A sound says in its `.sndasset` whether it is
+  copyrighted and what plays instead (`copyrighted`, `streamer`: a sound that is not copyrighted; `M114`-`M116`),
+  and the Sound tab (`sound`, `gz-ui-previews`' `sound.rs`: Play / Stop and the asset's keys as a grid made from
+  the sound table, saved into the file's text as it is edited) is the one place the editor sets it - Copyrighted
+  and, under it, Plays Instead, a picker that offers only sounds without the mark. A track, a playlist, a radio
+  only REFER to sounds and show the mark as a fact with Open Sound; no manifest key, check or switch of theirs
+  repeats it. The same holds for every asset: a property is one key of one file, and what refers to the thing
+  never carries a copy of it.
 - `gz-fmt-mesh` reads glTF 2.0 and OBJ into the very model a library `.object` is (the game's handedness, hard
   edges from the source's normals, skins as bones and weights, clips as motions): everything downstream - the
   picture, the rays, the level compiler, the OGF export - is one code path. A scene object refers to a model asset
@@ -762,6 +780,14 @@ A change of plan is a change of its document first.
   old Dead Air, would have lost some three thousand sections of today's game and rolled back twenty-five hundred values, and the game did not
   start. The same holds for binary files a mod copied from the old game: its 41 motion files lacked the motions the game grew since, and
   every HUD key that names one stops the game - the port merges the game's motions back in.
+- **Nothing is bent to one mod.** A mod is an example of what authors need: what it needs and the game or the
+  editor lacks becomes a general ability (the game reads one form of a placement key when the other is missing,
+  for every module), and what is only an old mod's shape is a rule of the converter, for any classic mod -
+  never a branch for a name.
+- `tools/classic_mod/motion_files.py` (any classic mod): a motion file of the mod written for other bones than
+  the game's file of the same path gets a name of its own, and the mod's models are pointed at it - mounted over
+  the game's it took the motions from every model of today's game the mod does not replace, and the first scene
+  that played one stopped the game.
 - `mod.ltx` of such a module says `mode = *` and `target = any`: it mounts in every game, like the classic install did,
   and keeps `target = any` when the manifest is saved.
 - Nothing leaves a module for merely looking unused: a `.ogf` names its `_lod` model from inside, and a list made by reading files had five
@@ -1280,8 +1306,16 @@ A change of plan is a change of its document first.
   player reads); the value a key inherits is its field's hint and only what the author typed is written; a
   problem is a sentence under its row. The catalog's texts and the check's sentences are Russian through
   `gz-ui-world`'s `items.ru.lua` (`ctx = "item"`, `"item_help"`), held to the bundled catalog by a test.
+- **In the Hands is shown, not typed** (`gz-ui-previews`' `hands.rs`, `gz-ui-world`'s `item_hands.rs`): the hands
+  and the item's HUD model posed by the motion of the row the author is on, hung on the hand's bone with the HUD
+  section's offsets exactly as the game places them, at the game's HUD field of view; an offset edited moves the
+  picture at once and a motion row plays. The placement is the game's, ported: change both or neither. Models,
+  motions and skinning are made on the pools; the comments say what the game does in words and name none of its
+  functions (`check_words.py`).
 - QA: `tools/qa/test_items.py --project <project>` over MCP on a COPY; what the game makes of an item is the
-  game's `tools/qa/items/Run-ItemsQa.ps1` in the real engine.
+  game's `tools/qa/items/Run-ItemsQa.ps1`, and a whole built module in a new game is its
+  `tools/qa/module/Run-ModuleInGameQa.ps1 -Module <folder>`: one start, about two minutes - every first-person
+  motion of the module's items played guarded, a few weapons held.
 
 ## Quests (NQ — node graph)
 
@@ -1448,6 +1482,12 @@ A change of plan is a change of its document first.
   stored in the scene, and baked into its custom data as `[xms_order]` (`gz-export-level`). A hand-written
   `[xms_order]` is replaced (with a warning), a non-stalker's order is dropped (with a
   warning). Its keys are `scene.set`'s (`order.kind`, `order.route`, ...). A quest gives orders at run time: `order.*`.
+- **A placed radio's Plays** (`gz-scene`'s `objects/radio.rs`): a spawn point that is a radio - a physics object
+  whose logic plays the radio theme, told the way the game tells one - has Radio > Plays (as the player chose, a
+  playlist of the module by its title, the game's music, silence), stored named in the scene and baked into the
+  object's custom data as `[xms_radio]`, like the Order. Place > Radio places the object the game's own level
+  radios are, its logic in its own data: no file is generated. `S214`: a radio bound to a playlist `mod.ltx`
+  lacks. A quest switches a radio with `radio.play` / `radio.reset` (the value type `radio_playlist`).
 - `level_changer` is a picker type of the quest editor (`gz-nq`'s `pickers.rs`, from the same reader). `{ role = }`
   in a quest's destination or target is `E024`: a quest casts nobody, roles are a behaviour graph's.
 - QA: `tools/qa/test_world.py --project <project>` over MCP on a COPY.
@@ -1525,6 +1565,17 @@ A change of plan is a change of its document first.
   word the game would drop, by name, before anything is written or converted. The screens' problems, like the
   world's, are at their line of `mod.ltx`: an area says which section and key a problem is about
   (`gz_mod::Spot`) and the manifest's check places it there.
+- **Radio**: a track plays on the radios of the world with `play = radio`; `[playlist.<id>]` (`title`, `tracks`,
+  `order = shuffle | list`) is a station the player picks in the game's options, and one radio of a level may be
+  bound to a playlist (below, the Level tab); `[radio] music = mix | only`. The tab's Radio Music and Playlists
+  edit them by drop, +, a cross and drag.
+- **A track names its sound**: `sound = <the sound's name>` - a sound asset of the module, or a sound of the game;
+  music brought into the tab becomes a sound asset as it is imported, and a track that is still a plain file
+  (`file =`) has Make It a Sound. A track has no `copyrighted` and no `streamer`: `screens.set` refuses them in a
+  sentence that names the asset to edit, and a manifest that still has them is warned (`W417`).
+- **The streamer mode is the game's** (its option; `docs/dead-air/RADIO.md` and MODDING.md "Streamer mode" in the
+  game repo): one lookup by the sound's name - its description, else the game's own list of its copyrighted
+  music - asked before anything plays. The editor reads that list only to know what a replacement may be.
 - HTML is litehtml drawn ONCE into a picture (the game's `CommunityHtmlCanvas`): no scripts, no network, files only beside the page. That is why a page is safe in a catalog
   module, and why it does not animate: what moves is another layer.
 - Import (`gz-screens`' `import.rs`) is the one way a file enters: inside the project it stays, from outside it is copied to `screens\`, PNG/JPG/TGA/BMP becomes a `.dds`, a `.ps` gets its `.s`.
