@@ -336,6 +336,12 @@ pub const ANIMATION: &[Field] = &[
     f("clip", Ty::Text, "the row's `name`", "The source's clip the motion is made of."),
     f("speed", Ty::Number { min: 0.0, max: 100.0 }, "1", "How fast the motion plays."),
     f("loop", Ty::Bool, "true", "The motion starts again at its end; false: it stops there."),
+    f("no_mix", Ty::Bool, "false", "The motion replaces what plays instead of blending in."),
+    f("sync_part", Ty::Bool, "false", "The motion keeps time with the other parts of the body."),
+    f("foot_steps", Ty::Bool, "false", "The motion's marks sound as steps."),
+    f("root_mover", Ty::Bool, "false", "The root bone's motion moves the object."),
+    f("idle", Ty::Bool, "false", "A motion the game may cut short: an idle."),
+    f("weapon_bone", Ty::Bool, "false", "The motion drives the weapon's bone."),
 ];
 
 // ---- the texture ---------------------------------------------------------------------------

@@ -378,6 +378,20 @@ fn animations(object: &mut Object, asset: &ModelAsset) {
         if let Some(l) = row.looped {
             m.flags.set(SMotionFlags::STOP_AT_END, !l);
         }
+        // in the order of `ANIMATION_FLAGS`
+        const BITS: [SMotionFlags; 6] = [
+            SMotionFlags::NO_MIX,
+            SMotionFlags::SYNC_PART,
+            SMotionFlags::USE_FOOT_STEPS,
+            SMotionFlags::ROOT_MOVER,
+            SMotionFlags::IDLE,
+            SMotionFlags::USE_WEAPON_BONE,
+        ];
+        for (on, bit) in row.flags.iter().zip(BITS) {
+            if let Some(on) = on {
+                m.flags.set(bit, *on);
+            }
+        }
     }
 }
 

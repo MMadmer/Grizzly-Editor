@@ -72,7 +72,14 @@ pub struct AnimationRow {
     pub clip: Option<String>,
     pub speed: Option<f64>,
     pub looped: Option<bool>,
+    /// The other flags the game reads, each as written: `no_mix`, `sync_part`, `foot_steps`,
+    /// `root_mover`, `idle`, `weapon_bone`.
+    pub flags: [Option<bool>; 6],
 }
+
+/// The keys of [`AnimationRow::flags`], in its order.
+pub const ANIMATION_FLAGS: [&str; 6] =
+    ["no_mix", "sync_part", "foot_steps", "root_mover", "idle", "weapon_bone"];
 
 /// A model asset; `None` is a key left out.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -161,6 +168,7 @@ impl ModelAsset {
             clip: read::text(cx, a, "clip"),
             speed: read::number(cx, a, ANIMATION, "speed"),
             looped: read::boolean(cx, a, "loop"),
+            flags: ANIMATION_FLAGS.map(|key| read::boolean(cx, a, key)),
         });
         (m, cx.issues)
     }

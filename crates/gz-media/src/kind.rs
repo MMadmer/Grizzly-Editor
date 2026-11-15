@@ -27,7 +27,18 @@ const MODEL_SURFACE: &[&str] = &["name", "texture", "shader", "compile", "materi
 const MODEL_PART: &[&str] =
     &["shape", "size", "pos", "rot", "surface", "tile", "radius", "height", "sides", "outline"];
 const MODEL_BONE: &[&str] = &["name", "shape", "mass", "material"];
-const MODEL_ANIMATION: &[&str] = &["name", "clip", "speed", "loop"];
+const MODEL_ANIMATION: &[&str] = &[
+    "name",
+    "clip",
+    "speed",
+    "loop",
+    "no_mix",
+    "sync_part",
+    "foot_steps",
+    "root_mover",
+    "idle",
+    "weapon_bone",
+];
 
 const TEXTURE_TOP: &[&str] = &[
     "tex",

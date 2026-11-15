@@ -92,6 +92,12 @@ Every face of a part looks outward and every edge is hard; the texture is laid b
 | `clip` | string | the row's `name` | The source's clip the motion is made of. |
 | `speed` | number, 0 to 100 | 1 | How fast the motion plays. |
 | `loop` | boolean | true | The motion starts again at its end; false: it stops there. |
+| `no_mix` | boolean | false | The motion replaces what plays instead of blending in. |
+| `sync_part` | boolean | false | The motion keeps time with the other parts of the body. |
+| `foot_steps` | boolean | false | The motion's marks sound as steps. |
+| `root_mover` | boolean | false | The root bone's motion moves the object. |
+| `idle` | boolean | false | A motion the game may cut short: an idle. |
+| `weapon_bone` | boolean | false | The motion drives the weapon's bone. |
 
 ## Problems
 
