@@ -303,6 +303,29 @@ fn a_sound_description_round_trips_and_its_type_is_a_word() {
     assert_eq!((t.min_dist, t.max_dist, t.max_ai_dist, t.base_volume), (1.0, 12.0, 12.0, 1.0));
     let v = gz_luadata::parse("return { snd = 1, type = \"loud\", max_distance = 0 }").unwrap();
     assert_eq!(codes(&SoundAsset::from_value(&v).1), ["M109", "M109"]);
+    // the type is said in the game's own words, one or a list of them, and written back the same
+    let ty = |text: &str| SoundAsset::from_value(&gz_luadata::parse(text).unwrap());
+    assert_eq!(ty("return { snd = 1, type = \"monster_step\" }").0.ty, Some(0x2000_8000));
+    assert_eq!(ty("return { snd = 1, type = \"world_object_breaking\" }").0.ty, Some(0x0800_0400));
+    assert_eq!(ty("return { snd = 1, type = \"object_breaking\" }").0.ty, Some(0x0000_0400));
+    assert_eq!(ty("return { snd = 1, type = \"no_sound\" }").0.ty, Some(0));
+    let (both, issues) = ty("return { snd = 1, type = { \"weapon\", \"item\", \"shooting\" } }");
+    assert!(issues.is_empty() && both.ty == Some(0xc020_0000), "{issues:?} {:?}", both.ty);
+    let text = write_asset("", &both.to_table());
+    assert!(
+        text.contains("\"weapon\"") && text.contains("\"item\"") && text.contains("\"shooting\""),
+        "{text}"
+    );
+    assert_eq!(ty(&text).0.ty, both.ty);
+    assert_eq!(codes(&ty("return { snd = 1, type = { \"weapon\", \"npc_step\" } }").1), ["M109"]);
+    assert_eq!(codes(&ty("return { snd = 1, type = 7 }").1), ["M109"]);
+    // every word is one the game reads: none twice, and the bits the game has
+    let words: Vec<&str> = crate::fields::SOUND_TYPES.iter().map(|(w, _)| *w).collect();
+    let mut once = words.clone();
+    once.sort_unstable();
+    once.dedup();
+    assert_eq!(once.len(), words.len());
+    assert_eq!(crate::fields::SOUND_TYPES.iter().fold(0, |all, (_, v)| all | v), 0xffff_ff80);
 }
 
 // ---- the parts -------------------------------------------------------------------------------

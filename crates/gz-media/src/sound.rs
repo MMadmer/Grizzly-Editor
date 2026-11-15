@@ -4,7 +4,7 @@
 use gz_fmt_sound::SoundThm;
 use gz_luadata::{Table, Value};
 
-use crate::fields::{self, SOUND, word_of};
+use crate::fields::{self, SOUND};
 use crate::read::{self, Cx};
 
 /// A sound asset as its file says; `None` is a key left out.
@@ -32,7 +32,7 @@ impl SoundAsset {
             max_distance: read::number(&mut cx, v, SOUND, "max_distance"),
             volume: read::number(&mut cx, v, SOUND, "volume"),
             ai_distance: read::number(&mut cx, v, SOUND, "ai_distance"),
-            ty: read::word(&mut cx, v, SOUND, "type"),
+            ty: read::word_set(&mut cx, v, SOUND, "type"),
             quality: read::number(&mut cx, v, SOUND, "quality"),
         };
         (s, cx.issues)
@@ -83,9 +83,14 @@ impl SoundAsset {
                 "max_distance" => self.max_distance.map(Value::from),
                 "volume" => self.volume.map(Value::from),
                 "ai_distance" => self.ai_distance.map(Value::from),
-                "type" => self
-                    .ty
-                    .map(|n| word_of(fields::SOUND_TYPES, n).map_or_else(|| Value::from(n), Value::from)),
+                // one word where one stands for it, else the words of its bits
+                "type" => self.ty.map(|n| match fields::words_of(fields::SOUND_TYPES, n).as_slice() {
+                    [one] => Value::from(*one),
+                    many => Value::Table(Table {
+                        arr: many.iter().map(|w| Value::from(*w)).collect(),
+                        fields: Vec::new(),
+                    }),
+                }),
                 "quality" => self.quality.map(Value::from),
                 _ => None,
             };

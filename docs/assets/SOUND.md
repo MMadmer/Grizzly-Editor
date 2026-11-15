@@ -25,7 +25,7 @@ return {
 | `max_distance` | number, 0.1 to 10000 | 300 | Beyond this distance it is not heard, metres. |
 | `volume` | number, 0 to 10 | 1 | Its base volume. |
 | `ai_distance` | number, 0.1 to 10000 | `max_distance` | How far NPCs hear it, metres. |
-| `type` | `"undefined"` `"item_picking_up"` `"item_dropping"` `"item_taking"` `"item_hiding"` `"item_using"` `"weapon_shooting"` `"weapon_empty_clicking"` `"weapon_bullet_hit"` `"weapon_recharging"` `"npc_dying"` `"npc_injuring"` `"npc_step"` `"npc_talking"` `"npc_attacking"` `"npc_eating"` `"anomaly_idle"` `"object_breaking"` `"object_colliding"` `"object_exploding"` `"world_ambient"` | "undefined" | What NPCs make of it. |
+| `type` | one of these words, or a list of them: `"no_sound"` `"item_picking_up"` `"item_dropping"` `"item_hiding"` `"item_taking"` `"item_using"` `"weapon_shooting"` `"weapon_empty_clicking"` `"weapon_bullet_hit"` `"weapon_recharging"` `"monster_dying"` `"monster_injuring"` `"monster_step"` `"monster_talking"` `"monster_attacking"` `"monster_eating"` `"anomaly_idle"` `"world_object_breaking"` `"world_object_colliding"` `"world_object_exploding"` `"world_ambient"` `"weapon"` `"item"` `"monster"` `"anomaly"` `"world"` `"picking_up"` `"dropping"` `"hiding"` `"taking"` `"using"` `"shooting"` `"empty_clicking"` `"bullet_hit"` `"recharging"` `"dying"` `"injuring"` `"step"` `"talking"` `"attacking"` `"eating"` `"idle"` `"object_breaking"` `"object_colliding"` `"object_exploding"` `"ambient"` | "no_sound" | What NPCs make of it, in the game's own words. |
 | `quality` | number, -0.1 to 1 | 0 | The Vorbis quality a `.wav` source is encoded with. |
 
 ## Problems

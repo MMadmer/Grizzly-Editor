@@ -26,6 +26,8 @@ pub enum Ty {
     },
     /// One word of a list.
     Words(&'static [(&'static str, u32)]),
+    /// One word of a list, or a list of them: their values together.
+    WordSet(&'static [(&'static str, u32)]),
     /// `{ x, y, z }`.
     Vec3,
     /// `{ x, y, z }` in degrees.
@@ -56,6 +58,10 @@ impl Ty {
                 }
                 seen.iter().map(|x| format!("`\"{x}\"`")).collect::<Vec<_>>().join(" ")
             }
+            Ty::WordSet(w) => format!(
+                "one of these words, or a list of them: {}",
+                w.iter().map(|(x, _)| format!("`\"{x}\"`")).collect::<Vec<_>>().join(" ")
+            ),
             Ty::Vec3 => "{ x, y, z }".into(),
             Ty::Angles => "{ x, y, z } (degrees)".into(),
             Ty::Color => "{ r, g, b, a } (0-255)".into(),
@@ -163,30 +169,67 @@ pub const DETAIL_ON: &[(&str, u32)] = &[("none", 0), ("diffuse", 1), ("bump", 2)
 /// What a bump source holds.
 pub const BUMP_FROM: &[(&str, u32)] = &[("height", 0), ("normal", 1)];
 
-/// The game's sound types (`anomaly_type_token`): what NPCs make of a sound.
+/// The game's sound types, by the game's own names (its `SOUND_TYPE_` list without the prefix,
+/// in lower case): what NPCs make of a sound. The whole kinds first - a value is named by the
+/// first word that stands for it -, then the single bits they are made of.
 pub const SOUND_TYPES: &[(&str, u32)] = &[
-    ("undefined", 0),
+    ("no_sound", 0),
     ("item_picking_up", 0x4000_0000 | 0x0400_0000),
     ("item_dropping", 0x4000_0000 | 0x0200_0000),
-    ("item_taking", 0x4000_0000 | 0x0080_0000),
     ("item_hiding", 0x4000_0000 | 0x0100_0000),
+    ("item_taking", 0x4000_0000 | 0x0080_0000),
     ("item_using", 0x4000_0000 | 0x0040_0000),
     ("weapon_shooting", 0x8000_0000 | 0x0020_0000),
     ("weapon_empty_clicking", 0x8000_0000 | 0x0010_0000),
     ("weapon_bullet_hit", 0x8000_0000 | 0x0008_0000),
     ("weapon_recharging", 0x8000_0000 | 0x0004_0000),
-    ("npc_dying", 0x2000_0000 | 0x0002_0000),
-    ("npc_injuring", 0x2000_0000 | 0x0001_0000),
-    ("npc_step", 0x2000_0000 | 0x0000_8000),
-    ("npc_talking", 0x2000_0000 | 0x0000_4000),
-    ("npc_attacking", 0x2000_0000 | 0x0000_2000),
-    ("npc_eating", 0x2000_0000 | 0x0000_1000),
+    ("monster_dying", 0x2000_0000 | 0x0002_0000),
+    ("monster_injuring", 0x2000_0000 | 0x0001_0000),
+    ("monster_step", 0x2000_0000 | 0x0000_8000),
+    ("monster_talking", 0x2000_0000 | 0x0000_4000),
+    ("monster_attacking", 0x2000_0000 | 0x0000_2000),
+    ("monster_eating", 0x2000_0000 | 0x0000_1000),
     ("anomaly_idle", 0x1000_0000 | 0x0000_0800),
-    ("object_breaking", 0x0800_0000 | 0x0000_0400),
-    ("object_colliding", 0x0800_0000 | 0x0000_0200),
-    ("object_exploding", 0x0800_0000 | 0x0000_0100),
+    ("world_object_breaking", 0x0800_0000 | 0x0000_0400),
+    ("world_object_colliding", 0x0800_0000 | 0x0000_0200),
+    ("world_object_exploding", 0x0800_0000 | 0x0000_0100),
     ("world_ambient", 0x0800_0000 | 0x0000_0080),
+    ("weapon", 0x8000_0000),
+    ("item", 0x4000_0000),
+    ("monster", 0x2000_0000),
+    ("anomaly", 0x1000_0000),
+    ("world", 0x0800_0000),
+    ("picking_up", 0x0400_0000),
+    ("dropping", 0x0200_0000),
+    ("hiding", 0x0100_0000),
+    ("taking", 0x0080_0000),
+    ("using", 0x0040_0000),
+    ("shooting", 0x0020_0000),
+    ("empty_clicking", 0x0010_0000),
+    ("bullet_hit", 0x0008_0000),
+    ("recharging", 0x0004_0000),
+    ("dying", 0x0002_0000),
+    ("injuring", 0x0001_0000),
+    ("step", 0x0000_8000),
+    ("talking", 0x0000_4000),
+    ("attacking", 0x0000_2000),
+    ("eating", 0x0000_1000),
+    ("idle", 0x0000_0800),
+    ("object_breaking", 0x0000_0400),
+    ("object_colliding", 0x0000_0200),
+    ("object_exploding", 0x0000_0100),
+    ("ambient", 0x0000_0080),
 ];
+
+/// A set's value as its file says it: the one word that stands for it, or the words of its
+/// bits (a bit no word names is left out).
+#[must_use]
+pub fn words_of(words: &[(&'static str, u32)], value: u32) -> Vec<&'static str> {
+    if let Some(w) = word_of(words, value) {
+        return vec![w];
+    }
+    words.iter().filter(|(_, v)| v.count_ones() == 1 && value & v != 0).map(|(w, _)| *w).collect()
+}
 
 // ---- the model -----------------------------------------------------------------------------
 
@@ -514,7 +557,7 @@ pub const SOUND: &[Field] = &[
         "`max_distance`",
         "How far NPCs hear it, metres.",
     ),
-    f("type", Ty::Words(SOUND_TYPES), "\"undefined\"", "What NPCs make of it."),
+    f("type", Ty::WordSet(SOUND_TYPES), "\"no_sound\"", "What NPCs make of it, in the game's own words."),
     f(
         "quality",
         Ty::Number { min: -0.1, max: 1.0 },

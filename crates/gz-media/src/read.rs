@@ -139,6 +139,34 @@ pub fn word(cx: &mut Cx, v: &Value, fields: &[Field], key: &str) -> Option<u32> 
     }
 }
 
+/// One of its key's words or a list of them, as the numbers they stand for together.
+pub fn word_set(cx: &mut Cx, v: &Value, fields: &[Field], key: &str) -> Option<u32> {
+    let raw = v.get(key)?;
+    let Some(Ty::WordSet(words)) = field(fields, key).map(|f| f.ty) else { return None };
+    let said: Vec<&str> = match raw.as_str() {
+        Some(s) => vec![s],
+        None if raw.is_table() && raw.arr().iter().all(|x| x.as_str().is_some()) => {
+            raw.arr().iter().filter_map(Value::as_str).collect()
+        }
+        None => {
+            cx.bad(key, format!("'{key}' takes a word or a list of words"));
+            return None;
+        }
+    };
+    let mut value = 0;
+    for s in said {
+        match value_of(words, s) {
+            Some(n) => value |= n,
+            None => {
+                let list: Vec<&str> = words.iter().map(|(w, _)| *w).collect();
+                cx.bad(key, format!("'{key}' holds \"{s}\"; it takes {}", list.join(", ")));
+                return None;
+            }
+        }
+    }
+    Some(value)
+}
+
 /// A list of `n` numbers.
 pub fn numbers<const N: usize>(cx: &mut Cx, v: &Value, key: &str) -> Option<[f64; N]> {
     let raw = v.get(key)?;
