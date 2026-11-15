@@ -108,6 +108,20 @@ fn phases(log: &Log) {
     }
 }
 
+/// The timed steps inside the phases (`<what>: 1.234 s`), in the order they were logged.
+fn steps(log: &Log) {
+    for line in &log.lines {
+        let line = line.trim_start_matches([' ', '|']);
+        let timed = line
+            .strip_suffix(" s")
+            .and_then(|l| l.rsplit_once(": "))
+            .is_some_and(|(_, n)| n.parse::<f64>().is_ok());
+        if timed {
+            say!("step  {line}");
+        }
+    }
+}
+
 fn said_by(lighter: &dyn Lighter) {
     for note in lighter.notes() {
         say!("note   {note}");
@@ -136,6 +150,7 @@ fn compile(a: &Args, prj: &BuildProject, opts: &Options, lighter: &dyn Lighter) 
     let made = gz_lc::compile_project(prj, shaders, textures, opts, lighter, &ctl, &mut log);
     let seconds = t.elapsed().as_secs_f64();
     phases(&log);
+    steps(&log);
     said_by(lighter);
     match made {
         Ok(out) => {

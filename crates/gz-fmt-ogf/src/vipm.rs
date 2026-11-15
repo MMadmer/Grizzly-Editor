@@ -12,9 +12,12 @@
 // the loops index several arrays at once
 #![allow(clippy::needless_range_loop)]
 
+use std::cmp::Reverse;
+use std::collections::BTreeSet;
+
 use glam::{Vec2, Vec3};
 
-use crate::optimize::optimise_tri_list;
+use crate::optimize::{optimise_tri_list, order_key};
 
 const INVALID: u32 = u32::MAX;
 const QUAD_SIZE: usize = 5;
@@ -240,6 +243,48 @@ struct Collapse {
     bin: usize,
 }
 
+/// What the collapses know of a point: its errors (taken at `stamp`), whether it may be binned,
+/// whether binning it starts a new level, its first cheapest edge and the totals of its errors.
+#[derive(Default)]
+struct Seen {
+    stamp: Option<u32>,
+    errs: Vec<f32>,
+    allowed: bool,
+    cheapest: usize,
+    sum: f64,
+    abs: f64,
+    finite: bool,
+    /// Its group (a new level or not) and its key there, while it stands in one.
+    entry: Option<(bool, i32)>,
+}
+
+/// The points that may be binned, in two groups by whether binning them starts a new level, each
+/// in the order the X-Ray SDK's scan finds its best (the smallest error, then the last point);
+/// and the totals of every counted error, which bound the average.
+struct Candidates {
+    seen: Vec<Seen>,
+    groups: [BTreeSet<(i32, Reverse<usize>)>; 2],
+    count: u64,
+    sum: f64,
+    abs: f64,
+    abs_max: f64,
+    not_finite: usize,
+    /// Additions into the totals since they were last added up again.
+    ops: u64,
+}
+
+/// The largest float not above `x`.
+fn round_down(x: f64) -> f32 {
+    let f = x as f32;
+    if f64::from(f) > x { f.next_down() } else { f }
+}
+
+/// The smallest float not under `x`.
+fn round_up(x: f64) -> f32 {
+    let f = x as f32;
+    if f64::from(f) < x { f.next_up() } else { f }
+}
+
 /// Why the pass gave nothing (the X-Ray SDK asserts, or returns nothing).
 #[derive(Debug)]
 pub(crate) struct Failed;
@@ -258,6 +303,9 @@ struct Object {
     /// `None` is `&CollapseRoot`.
     next_collapse: Option<usize>,
     level: i32,
+    /// The points touched since the collapses last looked, while `track` is on.
+    dirty: Vec<usize>,
+    track: bool,
 }
 
 impl Object {
@@ -287,6 +335,9 @@ impl Object {
 
     /// The point, for a change of its edges or triangles.
     fn touch(&mut self, p: usize) -> Result<&mut Pt, Failed> {
+        if self.track {
+            self.dirty.push(p);
+        }
         let pt = self.pts.get_mut(p).ok_or(Failed)?;
         pt.stamp = pt.stamp.wrapping_add(1);
         Ok(pt)
@@ -614,8 +665,188 @@ impl Object {
         Ok(true)
     }
 
-    /// Collapses edges, cheapest first, until none is left under the tolerance.
+    /// What [`Self::all_collapses`] keeps of a point: taken again only when the point was touched
+    /// (its edges or triangles changed) or the level changed.
+    fn refresh(&self, c: &mut Candidates, p: usize) -> Result<(), Failed> {
+        let pt = self.pt(p)?;
+        let s = c.seen.get_mut(p).ok_or(Failed)?;
+        if let Some((g, k)) = s.entry.take() {
+            c.groups[usize::from(g)].remove(&(k, Reverse(p)));
+        }
+        if s.allowed {
+            c.count -= s.errs.len() as u64;
+            c.sum -= s.sum;
+            c.abs -= s.abs;
+            c.not_finite -= usize::from(!s.finite);
+            c.ops += 2;
+        }
+        let mut allowed = !pt.edges.is_empty();
+        for &e in &pt.edges {
+            let ed = self.edge(e)?;
+            if ed.tri12.is_none() || ed.tri21.is_none() {
+                allowed = false;
+                break;
+            }
+        }
+        s.allowed = allowed;
+        if !allowed {
+            return Ok(());
+        }
+        if s.stamp != Some(pt.stamp) {
+            self.collapse_errors(p, &mut s.errs)?;
+            s.stamp = Some(pt.stamp);
+            let mut cheapest = (f32::INFINITY, 0usize);
+            let (mut sum, mut abs, mut finite) = (0.0f64, 0.0f64, true);
+            for (k, &err) in s.errs.iter().enumerate() {
+                if cheapest.0 > err {
+                    cheapest = (err, k);
+                }
+                sum += f64::from(err);
+                abs += f64::from(err.abs());
+                finite &= err.is_finite();
+            }
+            (s.cheapest, s.sum, s.abs, s.finite) = (cheapest.1, sum, abs, finite);
+            c.ops += s.errs.len() as u64;
+        }
+        let new_level = !self.allowed_for_level(p, self.level)?;
+        c.count += s.errs.len() as u64;
+        c.sum += s.sum;
+        c.abs += s.abs;
+        c.abs_max = c.abs_max.max(c.abs);
+        c.not_finite += usize::from(!s.finite);
+        c.ops += 2;
+        let err = s.errs.get(s.cheapest).copied().unwrap_or(f32::INFINITY);
+        // the X-Ray SDK's best starts at 1e10: an error that is not under it is never taken
+        if err < 1.0e10 {
+            let k = order_key(err);
+            s.entry = Some((new_level, k));
+            c.groups[usize::from(new_level)].insert((k, Reverse(p)));
+        }
+        Ok(())
+    }
+
+    /// The f32 average of every counted error, added up point after point from the last as the
+    /// X-Ray SDK adds it.
+    fn exact_average(&self, c: &Candidates) -> f32 {
+        let mut average = 0.0f32;
+        let mut count = 0i32;
+        for s in c.seen.iter().rev().filter(|s| s.allowed) {
+            for &err in &s.errs {
+                count += 1;
+                average += err;
+            }
+        }
+        average / count as f32
+    }
+
+    /// Whether the cheapest collapse that starts a new level (`bn`) is taken over the cheapest of
+    /// this level (`b0`): `b0 > bn + average * tolerance`. The average is the f32 sum of every
+    /// counted error in the X-Ray SDK's order; its totals here bound that sum, so the order is
+    /// only walked when the two sides are too close for the bounds to tell.
+    fn take_new_level(&self, c: &Candidates, b0: f32, bn: f32, tolerance: f32) -> bool {
+        let n = c.count as f64;
+        let u = f64::from(f32::EPSILON) / 2.0;
+        if c.not_finite == 0
+            && c.count > 0
+            && n * u < 0.25
+            && tolerance >= 0.0
+            && c.abs_max < f64::from(f32::MAX) / 4.0
+        {
+            // a sum of n floats added one by one is within n u / (1 - n u) of their absolute sum
+            // from the true one; the totals' own drift is far under the last term
+            let gamma = n * u / (1.0 - n * u);
+            let margin = gamma * c.abs * (1.0 + 1e-6) + c.abs_max * f64::from(2.0f32.powi(-30));
+            let (lo, hi) = (round_down(c.sum - margin), round_up(c.sum + margin));
+            let count = c.count as f32;
+            let (r_lo, r_hi) = (bn + lo / count * tolerance, bn + hi / count * tolerance);
+            if b0 > r_hi {
+                return true;
+            }
+            // every value here is finite: not above the lowest bound is not above the average
+            if b0 <= r_lo {
+                return false;
+            }
+        }
+        b0 > bn + self.exact_average(c) * tolerance
+    }
+
+    /// Collapses edges, cheapest first, until none is left under the tolerance: the X-Ray SDK
+    /// rates every edge of every point on each collapse; here what a point says is kept until it
+    /// is touched, and the points stand in order of their cheapest edge.
     fn all_collapses(&mut self, tolerance: f32, max_window: u32) -> Result<(), Failed> {
+        let n = self.pts.len();
+        let mut c = Candidates {
+            seen: (0..n).map(|_| Seen::default()).collect(),
+            groups: [BTreeSet::new(), BTreeSet::new()],
+            count: 0,
+            sum: 0.0,
+            abs: 0.0,
+            abs_max: 0.0,
+            not_finite: 0,
+            ops: 0,
+        };
+        self.track = true;
+        self.dirty.clear();
+        let done = self.collapse_loop(&mut c, tolerance, max_window);
+        self.track = false;
+        self.dirty = Vec::new();
+        done
+    }
+
+    fn collapse_loop(&mut self, c: &mut Candidates, tolerance: f32, max_window: u32) -> Result<(), Failed> {
+        let mut all = true;
+        loop {
+            if all {
+                self.dirty.clear();
+                for p in 0..self.pts.len() {
+                    self.refresh(c, p)?;
+                }
+            } else {
+                let dirty = std::mem::take(&mut self.dirty);
+                for &p in &dirty {
+                    self.refresh(c, p)?;
+                }
+                self.dirty = dirty;
+                self.dirty.clear();
+            }
+            if c.ops > 1 << 20 {
+                // the running totals start again from the points
+                c.sum = c.seen.iter().filter(|s| s.allowed).map(|s| s.sum).sum();
+                c.abs = c.seen.iter().filter(|s| s.allowed).map(|s| s.abs).sum();
+                c.abs_max = c.abs;
+                c.ops = 0;
+            }
+            let first = |g: usize| -> Option<(f32, usize)> {
+                let &(_, Reverse(p)) = c.groups[g].first()?;
+                let s = c.seen.get(p)?;
+                Some((s.errs.get(s.cheapest).copied()?, p))
+            };
+            let (best, best_nl) = (first(0), first(1));
+            if best.is_none() && best_nl.is_none() {
+                break;
+            }
+            let (b0, bn) = (best.map_or(1.0e10, |b| b.0), best_nl.map_or(1.0e10, |b| b.0));
+            let pick = if self.take_new_level(c, b0, bn, tolerance) { best_nl } else { best };
+            let Some((_, p)) = pick else { break };
+            let at = c.seen.get(p).ok_or(Failed)?.cheapest;
+            let e = *self.pt(p)?.edges.get(at).ok_or(Failed)?;
+            let ed = self.edge(e)?;
+            let kept = if ed.p[0] == Some(p) { ed.p[1] } else { ed.p[0] }.ok_or(Failed)?;
+            let level = self.level;
+            self.create_edge_collapse(p, kept)?;
+            // a new level puts every triangle on it: every point's group is taken again
+            all = self.level != level;
+            // the level counts as unsigned against the limit, as the X-Ray SDK compares it
+            if self.level as u32 > max_window {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// The X-Ray SDK's loop as it is written, for the tests: every point rated on every collapse.
+    #[cfg(test)]
+    fn all_collapses_reference(&mut self, tolerance: f32, max_window: u32) -> Result<(), Failed> {
         // the errors of a point stay what they were until its edges or triangles change (the
         // positions never do): kept with the stamp they were taken at
         let mut cache: Vec<(u32, Vec<f32>)> =
@@ -856,26 +1087,54 @@ impl Object {
             cur_level = self.collapses[next].level;
         }
 
-        // every window must stay within its vertices (the count is raised to what it holds)
-        let mut ok = true;
-        for w in &mut swr {
-            for j in 0..usize::from(w.num_tris) * 3 {
-                let v = indices.get(j + w.offset as usize).ok_or(Failed)?;
-                if j + w.offset as usize >= indices.size {
-                    return Err(Failed);
-                }
-                w.num_verts = w.num_verts.max(v);
-                if v >= w.num_verts {
-                    ok = false;
-                }
+        // every window must stay within its vertices: the X-Ray SDK raises a window's count to each
+        // index it holds and fails on one not under it, so a window passes when its largest index
+        // is under its count, which then stays
+        let size = indices.size;
+        let held = indices.data.get(..size).ok_or(Failed)?;
+        let largest = RangeMax::new(held);
+        for w in &swr {
+            let (from, n) = (w.offset as usize, usize::from(w.num_tris) * 3);
+            if n == 0 {
+                continue;
             }
-        }
-        if !ok {
-            return Err(Failed);
+            if from + n > size {
+                return Err(Failed);
+            }
+            if largest.of(from, from + n) >= w.num_verts {
+                return Err(Failed);
+            }
         }
         let mut out = indices.data;
         out.truncate(indices.size);
         Ok(VipmResult { permute_verts: permute, swr, indices: out })
+    }
+}
+
+/// The largest of any range of a list, each answered at once (a sparse table).
+struct RangeMax {
+    levels: Vec<Vec<u16>>,
+}
+
+impl RangeMax {
+    fn new(list: &[u16]) -> Self {
+        let mut levels = vec![list.to_vec()];
+        let mut span = 1usize;
+        while span * 2 <= list.len() {
+            let prev = &levels[levels.len() - 1];
+            let next: Vec<u16> = (0..=list.len() - span * 2).map(|i| prev[i].max(prev[i + span])).collect();
+            levels.push(next);
+            span *= 2;
+        }
+        Self { levels }
+    }
+
+    /// The largest of `from..to` (not empty).
+    fn of(&self, from: usize, to: usize) -> u16 {
+        let len = to - from;
+        let k = (usize::BITS - 1 - len.leading_zeros()) as usize;
+        let level = &self.levels[k];
+        level[from].max(level[to - (1 << k)])
     }
 }
 
@@ -898,6 +1157,13 @@ pub(crate) fn convert(verts: &[(Vec3, Vec2)], faces: &[[u16; 3]]) -> Option<Vipm
 /// `max_window` (the level compiler asks for 25).
 #[must_use]
 pub fn vipm_convert(verts: &[(Vec3, Vec2)], faces: &[[u16; 3]], max_window: u32) -> Option<VipmResult> {
+    let mut o = object(verts, faces)?;
+    o.all_collapses(1.0, max_window).ok()?;
+    o.sliding_windows().ok()
+}
+
+/// The object of the pass with every face appended, at its finest level.
+fn object(verts: &[(Vec3, Vec2)], faces: &[[u16; 3]]) -> Option<Object> {
     let mut o = Object {
         pts: verts
             .iter()
@@ -921,6 +1187,8 @@ pub fn vipm_convert(verts: &[(Vec3, Vec2)], faces: &[[u16; 3]], max_window: u32)
         collapses: Vec::new(),
         next_collapse: None,
         level: 0,
+        dirty: Vec::new(),
+        track: false,
     };
     for f in faces {
         let p = f.map(usize::from);
@@ -934,8 +1202,7 @@ pub fn vipm_convert(verts: &[(Vec3, Vec2)], faces: &[[u16; 3]], max_window: u32)
     if !o.valid().ok()? {
         return None;
     }
-    o.all_collapses(1.0, max_window).ok()?;
-    o.sliding_windows().ok()
+    Some(o)
 }
 
 #[cfg(test)]
@@ -1000,6 +1267,114 @@ mod tests {
         assert!(q.evaluate(&[0.5, 0.5, 0.0, 0.5, 0.5]).abs() < 1e-12);
         // off the plane it costs the squared distance
         assert!((q.evaluate(&[0.0, 0.0, 2.0, 0.0, 0.0]) - 4.0).abs() < 1e-12);
+    }
+
+    /// A grid of `n` x `n` quads over heights `height(x, z)`, its texture coordinates the grid's,
+    /// closed into a box's lid by a skirt so that its inner points have closed fans.
+    fn grid(n: u16, height: impl Fn(u16, u16) -> f32) -> (Vec<(Vec3, Vec2)>, Vec<[u16; 3]>) {
+        let mut verts = Vec::new();
+        for z in 0..=n {
+            for x in 0..=n {
+                let p = Vec3::new(f32::from(x), height(x, z), f32::from(z));
+                verts.push((p, Vec2::new(f32::from(x) / f32::from(n), f32::from(z) / f32::from(n))));
+            }
+        }
+        let id = |x: u16, z: u16| z * (n + 1) + x;
+        let mut faces = Vec::new();
+        for z in 0..n {
+            for x in 0..n {
+                if (x + z) % 3 == 0 {
+                    faces.push([id(x, z), id(x, z + 1), id(x + 1, z)]);
+                    faces.push([id(x + 1, z), id(x, z + 1), id(x + 1, z + 1)]);
+                } else {
+                    faces.push([id(x, z), id(x, z + 1), id(x + 1, z + 1)]);
+                    faces.push([id(x, z), id(x + 1, z + 1), id(x + 1, z)]);
+                }
+            }
+        }
+        (verts, faces)
+    }
+
+    /// A sphere of `rings` x `segments`, closed at its poles.
+    fn sphere(rings: u16, segments: u16, bump: impl Fn(usize) -> f32) -> (Vec<(Vec3, Vec2)>, Vec<[u16; 3]>) {
+        let mut verts = vec![(Vec3::Y, Vec2::new(0.5, 0.0)), (-Vec3::Y, Vec2::new(0.5, 1.0))];
+        for r in 1..rings {
+            let t = std::f32::consts::PI * f32::from(r) / f32::from(rings);
+            for s in 0..segments {
+                let a = std::f32::consts::TAU * f32::from(s) / f32::from(segments);
+                let k = verts.len();
+                let p = Vec3::new(t.sin() * a.cos(), t.cos(), t.sin() * a.sin()) * (1.0 + bump(k));
+                verts.push((
+                    p,
+                    Vec2::new(f32::from(s) / f32::from(segments), f32::from(r) / f32::from(rings)),
+                ));
+            }
+        }
+        let ring = |r: u16, s: u16| 2 + (r - 1) * segments + s % segments;
+        let mut faces = Vec::new();
+        for s in 0..segments {
+            faces.push([0, ring(1, s + 1), ring(1, s)]);
+            faces.push([1, ring(rings - 1, s), ring(rings - 1, s + 1)]);
+        }
+        for r in 1..rings - 1 {
+            for s in 0..segments {
+                faces.push([ring(r, s), ring(r, s + 1), ring(r + 1, s)]);
+                faces.push([ring(r, s + 1), ring(r + 1, s + 1), ring(r + 1, s)]);
+            }
+        }
+        (verts, faces)
+    }
+
+    /// A few numbers of a fixed generator.
+    fn noise(seed: u32) -> impl Fn(usize) -> f32 {
+        move |k| {
+            let mut x = (k as u32).wrapping_mul(2_654_435_761).wrapping_add(seed);
+            x ^= x >> 15;
+            x = x.wrapping_mul(2_246_822_519);
+            x ^= x >> 13;
+            (x % 10_000) as f32 / 10_000.0
+        }
+    }
+
+    fn both(
+        verts: &[(Vec3, Vec2)],
+        faces: &[[u16; 3]],
+        max_window: u32,
+    ) -> (Option<VipmResult>, Option<VipmResult>) {
+        let fast = vipm_convert(verts, faces, max_window);
+        let reference = object(verts, faces).and_then(|mut o| {
+            o.all_collapses_reference(1.0, max_window).ok()?;
+            o.sliding_windows().ok()
+        });
+        (fast, reference)
+    }
+
+    #[test]
+    fn the_kept_ratings_collapse_as_the_sdk_does() {
+        let mut meshes = vec![
+            // flat: every error is the same, the order decides alone
+            grid(12, |_, _| 0.0),
+            // a few steps: ties between unequal points
+            grid(16, |x, z| f32::from((x / 4 + z / 3) % 3)),
+            grid(24, |x, z| noise(7)(usize::from(x) * 97 + usize::from(z)) * 0.3),
+            grid(40, |x, z| (f32::from(x) * 0.37).sin() + (f32::from(z) * 0.21).cos()),
+            sphere(9, 12, |_| 0.0),
+            sphere(14, 20, noise(3)),
+            sphere(30, 40, |k| noise(11)(k) * 0.05),
+        ];
+        // texture coordinates that tear: points of one place with two coordinates
+        let (mut v, f) = sphere(12, 16, noise(5));
+        for (k, p) in v.iter_mut().enumerate() {
+            p.1 *= 1.0 + noise(9)(k);
+        }
+        meshes.push((v, f));
+        for (i, (verts, faces)) in meshes.iter().enumerate() {
+            for window in [0, 1, 3, 25, u32::MAX] {
+                let (fast, reference) = both(verts, faces, window);
+                assert!(reference.is_some(), "mesh {i} gave nothing");
+                assert_eq!(fast, reference, "mesh {i}, window {window}");
+            }
+        }
     }
 
     #[test]

@@ -849,17 +849,19 @@ impl Deflectors {
     /// Every deflector on the list lit through `scene`: the samples of as many deflectors as
     /// make a batch gathered at once (each deflector's on a worker), lit in one call, scattered
     /// back, then each layer finished. A deflector's light depends on nothing but itself, so the
-    /// order is the list's.
+    /// order is the list's, and while one batch is lit the next is gathered and the last
+    /// scattered beside it: the batches and their samples stay the same, the CPU's work no
+    /// longer waits for the lighter's.
     pub fn light_all(&mut self, env: &LightEnv<'_>, scene: &dyn LitScene, ctl: &Ctl<'_>) -> Result<()> {
         let ids: Vec<DeflId> = self.list.iter().copied().filter(|&d| self.get(d).is_some()).collect();
         let total = ids.len();
         let jit = jitter(env.params.lm_jitter_samples).len();
         let job = env.job();
         let sun = env.sun_flag();
+        // the batches: whole deflectors, by their texels' samples (a batch changes only its own)
+        let mut ranges = Vec::new();
         let mut at = 0usize;
         while at < ids.len() {
-            ctl.check()?;
-            // a batch: whole deflectors, by their texels' samples
             let (mut end, mut n) = (at, 0usize);
             while let Some(&d) = ids.get(end) {
                 let est = self.get(d).map_or(0, |x| x.layer.width as usize * x.layer.height as usize * jit);
@@ -869,10 +871,10 @@ impl Deflectors {
                 n += est;
                 end += 1;
             }
-            let mut chunk: Vec<(DeflId, Deflector)> = ids[at..end]
-                .iter()
-                .filter_map(|&d| self.arena.get_mut(d.0 as usize).and_then(Option::take).map(|x| (d, x)))
-                .collect();
+            ranges.push(at..end);
+            at = end;
+        }
+        let gather = |mut chunk: Vec<(DeflId, Deflector)>| -> ChartBatch {
             let gathered: Vec<Gathered> = chunk
                 .par_iter_mut()
                 .map(|(_, d)| {
@@ -889,25 +891,83 @@ impl Deflectors {
                 bases.push(samples.len());
                 samples.extend_from_slice(&g.samples);
             }
-            let lit = light_samples(scene, &job, &samples, ctl);
-            if let Ok(lit) = &lit {
-                chunk.par_iter_mut().zip(gathered.par_iter().zip(&bases)).for_each(|((_, d), (g, &base))| {
-                    let mine = lit.get(base..base + g.samples.len()).unwrap_or_default();
-                    d.scatter(mine, &g.runs);
-                    d.finish(env.mesh, env.params, sun, env.shrink);
-                });
+            ChartBatch { chunk, gathered, bases, samples }
+        };
+        let finish = |b: ChartBatch, lit: Vec<ColorC>| -> Vec<(DeflId, Deflector)> {
+            let ChartBatch { mut chunk, gathered, bases, .. } = b;
+            chunk.par_iter_mut().zip(gathered.par_iter().zip(&bases)).for_each(|((_, d), (g, &base))| {
+                let mine = lit.get(base..base + g.samples.len()).unwrap_or_default();
+                d.scatter(mine, &g.runs);
+                d.finish(env.mesh, env.params, sun, env.shrink);
+            });
+            chunk
+        };
+        let mut next = ranges.first().map(|r| gather(self.take_range(&ids, r)));
+        let mut done: Option<(ChartBatch, Vec<ColorC>)> = None;
+        let mut outcome = Ok(());
+        for k in 0..ranges.len() {
+            let Some(cur) = next.take() else { break };
+            if let Err(e) = ctl.check() {
+                self.put_back(cur.chunk);
+                outcome = Err(e);
+                break;
             }
-            for (id, d) in chunk {
-                if let Some(slot) = self.arena.get_mut(id.0 as usize) {
-                    *slot = Some(d);
+            let upcoming = ranges.get(k + 1).map(|r| self.take_range(&ids, r));
+            let last = done.take();
+            let (lit, (gathered, finished)) = rayon::join(
+                || light_samples(scene, &job, &cur.samples, ctl),
+                || (upcoming.map(gather), last.map(|(b, lit)| finish(b, lit))),
+            );
+            if let Some(chunk) = finished {
+                self.put_back(chunk);
+                ctl.progress(ranges[k].start, total);
+            }
+            next = gathered;
+            match lit {
+                Ok(lit) => done = Some((cur, lit)),
+                Err(e) => {
+                    self.put_back(cur.chunk);
+                    outcome = Err(e);
+                    break;
                 }
             }
-            lit?;
-            at = end;
-            ctl.progress(at, total);
         }
+        if let Some(b) = next.take() {
+            self.put_back(b.chunk);
+        }
+        if let Some((b, lit)) = done.take() {
+            let chunk = finish(b, lit);
+            self.put_back(chunk);
+        }
+        outcome?;
+        ctl.progress(total, total);
         ctl.check()
     }
+
+    /// The deflectors of a batch, taken out of the arena while they are worked on.
+    fn take_range(&mut self, ids: &[DeflId], r: &std::ops::Range<usize>) -> Vec<(DeflId, Deflector)> {
+        ids.get(r.clone())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|&d| self.arena.get_mut(d.0 as usize).and_then(Option::take).map(|x| (d, x)))
+            .collect()
+    }
+
+    fn put_back(&mut self, chunk: Vec<(DeflId, Deflector)>) {
+        for (id, d) in chunk {
+            if let Some(slot) = self.arena.get_mut(id.0 as usize) {
+                *slot = Some(d);
+            }
+        }
+    }
+}
+
+/// A batch of deflectors with their gathered samples.
+struct ChartBatch {
+    chunk: Vec<(DeflId, Deflector)>,
+    gathered: Vec<Gathered>,
+    bases: Vec<usize>,
+    samples: Vec<Sample>,
 }
 
 #[cfg(test)]

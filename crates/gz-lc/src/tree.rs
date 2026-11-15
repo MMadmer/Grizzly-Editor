@@ -484,41 +484,56 @@ fn mu_face_vertices(
 pub fn mu_calc_ogf(g: &LcGlobalData, tree: &mut Tree, log: &mut Log, ctl: &Ctl<'_>) -> Result<()> {
     let mut tm = std::time::Instant::now();
     let draft = g.params.quality == gz_lc_light::QUALITY_DRAFT;
-    let results: Vec<(Vec<Ogf>, Vec<String>)> = g
+    let indexes: Vec<rustc_hash::FxHashMap<_, _>> = g
         .mu_models
         .par_iter()
-        .map(|m| {
-            let index: rustc_hash::FxHashMap<_, _> =
-                m.mesh.vertices().iter().enumerate().map(|(i, &v)| (v, i)).collect();
-            let mut l = Vec::new();
-            let mut out = Vec::new();
-            for s in &m.subdivs {
-                if ctl.cancelled() {
-                    break;
-                }
-                let material = s.material as u16;
-                let mut o = Ogf { material, sector: 0, ..Ogf::default() };
-                o.textures.push(texture_of(g, material));
-                let faces = m.mesh.faces();
-                let corners: Vec<[OgfVertex; 3]> = faces
-                    .iter()
-                    .skip(s.start as usize)
-                    .take(s.count as usize)
-                    .filter_map(|&f| mu_face_vertices(m, f, &index))
-                    .collect();
-                o.build_faces(&corners, true);
-                let optimize_uv = g.shader(material).flags & ShaderXrlc::OPTIMIZE_UV != 0;
-                o.optimize(optimize_uv);
-                let _ = pending_bounds(&mut o);
-                o.calculate_tb();
-                o.make_progressive(PM_METRIC_MU, draft, &mut l);
-                o.stripify(&mut l);
-                out.push(o);
+        .map(|m| m.mesh.vertices().iter().enumerate().map(|(i, &v)| (v, i)).collect())
+        .collect();
+    // every subdivision of every model is a visual of its own: one large model with many
+    // materials no longer keeps one worker busy after the others are done
+    let jobs: Vec<(usize, usize)> = g
+        .mu_models
+        .iter()
+        .enumerate()
+        .flat_map(|(mi, m)| (0..m.subdivs.len()).map(move |si| (mi, si)))
+        .collect();
+    let made: Vec<Option<(Ogf, Vec<String>)>> = jobs
+        .par_iter()
+        .map(|&(mi, si)| {
+            if ctl.cancelled() {
+                return None;
             }
-            (out, l)
+            let (m, index) = (g.mu_models.get(mi)?, indexes.get(mi)?);
+            let s = m.subdivs.get(si)?;
+            let mut l = Vec::new();
+            let material = s.material as u16;
+            let mut o = Ogf { material, sector: 0, ..Ogf::default() };
+            o.textures.push(texture_of(g, material));
+            let faces = m.mesh.faces();
+            let corners: Vec<[OgfVertex; 3]> = faces
+                .iter()
+                .skip(s.start as usize)
+                .take(s.count as usize)
+                .filter_map(|&f| mu_face_vertices(m, f, index))
+                .collect();
+            o.build_faces(&corners, true);
+            let optimize_uv = g.shader(material).flags & ShaderXrlc::OPTIMIZE_UV != 0;
+            o.optimize(optimize_uv);
+            let _ = pending_bounds(&mut o);
+            o.calculate_tb();
+            o.make_progressive(PM_METRIC_MU, draft, &mut l);
+            o.stripify(&mut l);
+            Some((o, l))
         })
         .collect();
     ctl.check()?;
+    let mut results: Vec<(Vec<Ogf>, Vec<String>)> = g.mu_models.iter().map(|_| Default::default()).collect();
+    for (&(mi, _), r) in jobs.iter().zip(made) {
+        if let (Some((o, l)), Some((ogfs, lines))) = (r, results.get_mut(mi)) {
+            ogfs.push(o);
+            lines.extend(l);
+        }
+    }
     crate::geom::timed(log, "the models' visuals", &mut tm);
     for (mi, (ogfs, l)) in results.into_iter().enumerate() {
         for si in 0..ogfs.len() {

@@ -192,63 +192,85 @@ pub fn lblit(dst: &mut LmLayer, src: &LmLayer, px: u32, py: u32, a_ref: u32) {
 
 /// Every unlit texel next to texels marked above `r` takes their mean and the
 /// marker `r`. Every texel reads the layer as it was before the pass (as X-Ray's compiler does
-/// through its saved lines), so the rows are grown in parallel. Answers whether a texel
-/// grew.
+/// through its saved lines): a texel this pass grows is still unlit to it - its marker `r` is not
+/// above `r` - so the rows are read in parallel and what grew is written after, without a copy
+/// of the layer. Answers whether a texel grew.
 pub fn apply_borders(lm: &mut LmLayer, r: u32) -> bool {
+    const SMALL_LAYER: usize = 128 * 128;
     let (w, h) = (lm.width as usize, lm.height as usize);
     if w == 0 || h == 0 || lm.surface.len() < w * h || lm.marker.len() < w * h {
         return false;
     }
-    let src_s = lm.surface.clone();
-    let src_m = lm.marker.clone();
-    lm.surface
-        .par_chunks_mut(w)
-        .zip(lm.marker.par_chunks_mut(w))
-        .take(h)
-        .enumerate()
-        .map(|(y, (srow, mrow))| {
-            let mut any = false;
-            for x in 0..w {
-                if src_m.get(y * w + x) != Some(&0) {
-                    continue;
-                }
-                let mut sum = ColorC::default();
-                let mut count = 0u32;
-                // X-Ray's order: the row above, left, right, the row below
-                let take = |dx: isize, dy: isize, sum: &mut ColorC, count: &mut u32| {
-                    let (nx, ny) = (x as isize + dx, y as isize + dy);
-                    if nx < 0 || ny < 0 || nx >= w as isize || ny >= h as isize {
-                        return;
-                    }
-                    let id = ny as usize * w + nx as usize;
-                    if src_m.get(id).is_some_and(|&m| u32::from(m) > r)
-                        && let Some(c) = src_s.get(id)
-                    {
-                        sum.add(&c.get());
-                        *count += 1;
-                    }
-                };
-                for (dx, dy) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
-                    take(dx, dy, &mut sum, &mut count);
-                }
-                if count > 0 {
-                    sum.scale(count);
-                    if let (Some(s), Some(m)) = (srow.get_mut(x), mrow.get_mut(x)) {
-                        *s = BaseColor::from_c(&sum);
-                        *m = r as u8;
-                    }
-                    any = true;
-                }
+    let (surface, marker) = (&lm.surface, &lm.marker);
+    let row = |y: usize| {
+        let mut out = Vec::new();
+        for x in 0..w {
+            if marker.get(y * w + x) != Some(&0) {
+                continue;
             }
-            any
-        })
-        .reduce(|| false, |a, b| a || b)
+            let mut sum = ColorC::default();
+            let mut count = 0u32;
+            // X-Ray's order: the row above, left, right, the row below
+            let take = |dx: isize, dy: isize, sum: &mut ColorC, count: &mut u32| {
+                let (nx, ny) = (x as isize + dx, y as isize + dy);
+                if nx < 0 || ny < 0 || nx >= w as isize || ny >= h as isize {
+                    return;
+                }
+                let id = ny as usize * w + nx as usize;
+                if marker.get(id).is_some_and(|&m| u32::from(m) > r)
+                    && let Some(c) = surface.get(id)
+                {
+                    sum.add(&c.get());
+                    *count += 1;
+                }
+            };
+            for (dx, dy) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+                take(dx, dy, &mut sum, &mut count);
+            }
+            if count > 0 {
+                sum.scale(count);
+                out.push((y * w + x, BaseColor::from_c(&sum)));
+            }
+        }
+        out
+    };
+    // a small layer (most charts) costs less than a fork of the pool
+    let grown: Vec<Vec<(usize, BaseColor)>> = if w * h <= SMALL_LAYER {
+        (0..h).map(row).collect()
+    } else {
+        (0..h).into_par_iter().map(row).collect()
+    };
+    let mut any = false;
+    for (i, c) in grown.into_iter().flatten() {
+        if let (Some(s), Some(m)) = (lm.surface.get_mut(i), lm.marker.get_mut(i)) {
+            *s = c;
+            *m = r as u8;
+            any = true;
+        }
+    }
+    any
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use glam::Vec3;
+
+    #[test]
+    fn a_border_pass_reads_the_layer_as_it_was() {
+        // small (one thread) and large (the pool): one lit texel grows a ring per pass, and a
+        // texel grown in a pass gives nothing to its neighbours in the same pass
+        for n in [9u32, 200] {
+            let mut lm = LmLayer::new(n, n);
+            let c = (n / 2 * n + n / 2) as usize;
+            lm.marker[c] = 255;
+            lm.surface[c] = BaseColor { r: 100, g: 200, b: 300, h: 400, s: 500, t: 0 };
+            assert!(apply_borders(&mut lm, 254));
+            assert_eq!(lm.marker.iter().filter(|&&m| m == 254).count(), 8);
+            assert!(apply_borders(&mut lm, 253));
+            assert_eq!(lm.marker.iter().filter(|&&m| m == 253).count(), 16);
+        }
+    }
 
     #[test]
     fn the_border_grows_ring_by_ring_with_the_mean_of_the_lit() {
