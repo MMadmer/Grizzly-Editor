@@ -93,6 +93,8 @@ const ALLOWED: &[&str] = &[
     "skls",
     "anm",
     "ppe",
+    "pe",
+    "pg",
     "xr",
     "ps",
     "vs",
