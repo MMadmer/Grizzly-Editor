@@ -5,7 +5,8 @@ tools - no editor, no MCP. This document is the contract of that: the one syntax
 how the editor reads, writes and follows the files, and what a project is. It is changed here first.
 
 The per-kind references: `docs/nq/NQ_FORMAT.md` (quests and behaviour graphs), `docs/pda/PDA_FORMAT.md` (PDA
-interfaces), `docs/assets/CHARACTER.md`, `docs/assets/SCENE.md`, `docs/assets/PROJECT.md`. `asset.reference`
+interfaces), `docs/assets/CHARACTER.md`, `docs/assets/SCENE.md`, `docs/assets/PROJECT.md`, `docs/assets/MODEL.md`,
+`docs/assets/TEXTURE.md`, `docs/assets/SOUND.md`. `asset.reference`
 prints any of them together with what only the linked game knows (the node kinds, the pickers' lists).
 
 ## 1. The syntax: Lua data
@@ -38,7 +39,8 @@ and the editor already edits it without losing a byte it does not change.
 ## 2. The rules every kind keeps
 
 1. **A header key names the kind and the version**: `nq = 1`, `beh = 1`, `npc = 1`, `pda = 1`, `scene = 1`,
-   `group = 1`, `grizzly = 1` (the project). The extension is the kind; the header has to agree with it.
+   `group = 1`, `mesh = 1`, `tex = 1`, `snd = 1`, `grizzly = 1` (the project). The extension is the kind; the
+   header has to agree with it.
 2. **Read every version up to the current one; refuse a newer one, saying so.** A file of an older version is
    migrated in memory when it is read (a chain of small steps, one per version, in the kind's crate) and written
    in the current version the next time the editor saves it. `asset.migrate` does it for a whole project. A file
@@ -129,7 +131,7 @@ three media kinds above) beside a **source** of a common format - glTF, OBJ or a
 TGA, BMP or DDS; WAV or OGG - or, for a model, with its geometry written in it (`parts`). The asset is what
 everything refers to (a scene object's `ref` is the asset's project path); the source is its companion. The
 description is the module's: the build publishes a copy of the asset's text where the game looks for its `name`
-(`gamedata	extures\<name>.texasset`, `sounds\<name>.sndasset`, `meshes\<name>.meshasset`) and the game reads
+(`gamedata\textures\<name>.texasset`, `sounds\<name>.sndasset`, `meshes\<name>.meshasset`) and the game reads
 it over the data - a texture's description in place of a `.thm`, a sound's parameters over its `.ogg`, a model's
 surfaces, bones and motions over its `.ogf`. The data is binary by nature and is **baked** into the game's own
 containers beside it (`.dds` and the bump pair, `.ogg`, `.ogf` and `.omf`; a static model is compiled into the
