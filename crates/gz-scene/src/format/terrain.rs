@@ -325,7 +325,7 @@ pub static TERRAIN: &[Field<Object>] = &[
         "",
         Ty::Table("`\"ground\"`, or a number: metres over the height of pos"),
         "\"ground\"",
-        "Where every point starts: the level's ground under it (every static object that is not added by the module), or flat at a height over pos.",
+        "Where every point starts: the level's ground under it (of the static objects that are not added by the module, the surface nearest pos under the centre, followed outward: a roof or a tree's crown over it is not the ground), or flat at a height over pos.",
         |s| match s.base {
             Base::Ground => text("ground"),
             Base::Height(h) => num(h),

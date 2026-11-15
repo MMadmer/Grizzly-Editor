@@ -227,13 +227,16 @@ fn quad(y: f32, lo: Vec2, hi: Vec2, look: u32) -> [GroundTri; 2] {
 }
 
 #[test]
-fn the_ground_is_the_first_hit_from_above_and_faces_wear_its_look() {
+fn the_ground_is_the_surface_under_the_centre_and_faces_wear_its_look() {
     let mut t = flat_terrain(Vec::new());
     t.spec.base = Base::Ground;
     t.spec.edge = 0.0;
     let mut tris: Vec<GroundTri> = quad(2.0, Vec2::splat(-50.0), Vec2::splat(50.0), 0).to_vec();
-    // a roof over the corner x, z >= 5: higher, so first from above
+    // a roof over the corner x, z >= 5 and a crown over the middle: neither is the ground
     tris.extend(quad(5.0, Vec2::splat(5.0), Vec2::splat(50.0), 1));
+    tris.extend(quad(7.0, Vec2::splat(-2.0), Vec2::splat(2.0), 1));
+    // a slab 1 m over the ground at x <= -5: the ground goes on under it
+    tris.extend(quad(3.0, Vec2::new(-50.0, -50.0), Vec2::new(-5.0, 50.0), 0));
     // one facing down is no ground
     let mut under = quad(9.0, Vec2::splat(-50.0), Vec2::splat(50.0), 1);
     for t in &mut under {
@@ -242,7 +245,19 @@ fn the_ground_is_the_first_hit_from_above_and_faces_wear_its_look() {
     tris.extend(under);
     let s = sample_ground(&t, &tris);
     let g = s.grid(&t);
-    assert!(near(at(&g, 0, 0), 2.0) && near(at(&g, 8, 8), 5.0) && near(at(&g, -9, 9), 2.0));
+    assert!(near(at(&g, 0, 0), 2.0) && near(at(&g, 8, 8), 2.0) && near(at(&g, 9, -9), 2.0));
+    assert!(near(at(&g, -9, 9), 2.0));
+    // written at the crown's height, the terrain lies on the crown where there is one and on
+    // the ground it comes down to around it
+    let mut high = t.clone();
+    high.centre.y = 6.9;
+    let up = sample_ground(&high, &tris).grid(&high);
+    assert!(near(at(&up, 0, 0), 7.0) && near(at(&up, 2, -2), 7.0) && near(at(&up, 8, 8), 2.0));
+    // and one whose middle is on the roof takes the roof as far as it goes
+    let mut roof = t.clone();
+    roof.centre = Vec3::new(8.0, 5.2, 8.0);
+    let on = sample_ground(&roof, &tris).grid(&roof);
+    assert!(near(at(&on, 0, 0), 5.0) && near(at(&on, 9, 9), 5.0) && near(at(&on, -9, -9), 2.0));
     let looks = [
         Look { texture: "grass".into(), ..Look::default() },
         Look { texture: "roof".into(), ..Look::default() },
@@ -253,7 +268,7 @@ fn the_ground_is_the_first_hit_from_above_and_faces_wear_its_look() {
         Looks::Ground { faces: &faces, tris: &tris, looks: &looks },
     );
     let textures: Vec<&str> = o.surfaces.iter().map(|s| s.texture.as_str()).collect();
-    assert_eq!(textures, ["grass", "roof"]);
+    assert_eq!(textures, ["grass"]);
     // the texture coordinates are the ground's, carried to the corners
     let m = &o.meshes[0];
     for f in 0..4 {

@@ -1,5 +1,6 @@
-//! The level's ground under a terrain: the first hit from above at every grid point and under the
-//! middle of every face, from the ground's triangles the caller gathers.
+//! The level's ground under a terrain: at every grid point and under the middle of every face,
+//! the surface the terrain's centre stands on, followed outward through the ground's triangles
+//! the caller gathers.
 
 use std::collections::VecDeque;
 
@@ -73,7 +74,44 @@ fn raster(l: &Lattice, q: [Vec2; 3], heights: [f32; 3], mut hit: impl FnMut(usiz
     }
 }
 
-/// The ground under a terrain: of the triangles that face up, the highest at every point.
+/// Every hit of a lattice, by point: the hits of point `i` are `hits[starts[i]..starts[i + 1]]`,
+/// in the order of the triangles.
+struct Layers {
+    starts: Vec<usize>,
+    hits: Vec<Hit>,
+}
+
+impl Layers {
+    fn new(points: usize, mut found: Vec<(usize, Hit)>) -> Self {
+        // stable: the hits of a point stay in the triangles' order
+        found.sort_by_key(|(i, _)| *i);
+        let mut starts = vec![0; points + 1];
+        for (i, _) in &found {
+            starts[*i + 1] += 1;
+        }
+        for i in 0..points {
+            starts[i + 1] += starts[i];
+        }
+        Self { starts, hits: found.into_iter().map(|(_, h)| h).collect() }
+    }
+
+    /// The hit of point `i` nearest the height `near`; of two as near, the earlier triangle's.
+    fn nearest(&self, i: usize, near: f32) -> Option<Hit> {
+        let mut best: Option<Hit> = None;
+        for h in &self.hits[self.starts[i]..self.starts[i + 1]] {
+            if best.is_none_or(|b| (h.height - near).abs() < (b.height - near).abs()) {
+                best = Some(*h);
+            }
+        }
+        best
+    }
+}
+
+/// The ground under a terrain: the surface its centre stands on, followed outward. Of the
+/// triangles that face up, the middle of the grid takes the one nearest the terrain's own height
+/// and every other point the one nearest the height its neighbour took, so what stands over the
+/// ground - a roof, a tree's crown, a bridge - is not the ground, and a terrain written at a
+/// bridge's height lies on the bridge. A face takes the triangle nearest its corners' heights.
 #[must_use]
 pub fn sample_ground(t: &Terrain, tris: &[GroundTri]) -> GroundSample {
     let (cols, rows) = t.dims();
@@ -84,13 +122,8 @@ pub fn sample_ground(t: &Terrain, tris: &[GroundTri]) -> GroundSample {
     // the middles of the two faces of a cell: a third and two thirds across it
     let lower = Lattice { origin: corner + step / 3.0, step, columns: cols - 1, rows: rows - 1 };
     let upper = Lattice { origin: corner + step * (2.0 / 3.0), step, columns: cols - 1, rows: rows - 1 };
-    let mut at_points: Vec<Option<Hit>> = vec![None; cols * rows];
-    let mut at_faces: Vec<Option<Hit>> = vec![None; (cols - 1) * (rows - 1) * 2];
-    let keep = |slot: &mut Option<Hit>, height: f32, tri: u32| {
-        if slot.is_none_or(|h| height > h.height) {
-            *slot = Some(Hit { height, tri });
-        }
-    };
+    let mut over_points: Vec<(usize, Hit)> = Vec::new();
+    let mut over_faces: Vec<(usize, Hit)> = Vec::new();
     for (k, tri) in tris.iter().enumerate() {
         let n = (tri.p[1] - tri.p[0]).cross(tri.p[2] - tri.p[0]);
         if !tri.p.iter().all(|p| p.is_finite()) || n.y <= 0.0 {
@@ -104,9 +137,50 @@ pub fn sample_ground(t: &Terrain, tris: &[GroundTri]) -> GroundSample {
         }
         let h = tri.p.map(|p| p.y);
         let k = k as u32;
-        raster(&points, q, h, |i, y| keep(&mut at_points[i], y, k));
-        raster(&lower, q, h, |i, y| keep(&mut at_faces[i * 2], y, k));
-        raster(&upper, q, h, |i, y| keep(&mut at_faces[i * 2 + 1], y, k));
+        raster(&points, q, h, |i, y| over_points.push((i, Hit { height: y, tri: k })));
+        raster(&lower, q, h, |i, y| over_faces.push((i * 2, Hit { height: y, tri: k })));
+        raster(&upper, q, h, |i, y| over_faces.push((i * 2 + 1, Hit { height: y, tri: k })));
+    }
+    let over_points = Layers::new(cols * rows, over_points);
+    let over_faces = Layers::new((cols - 1) * (rows - 1) * 2, over_faces);
+
+    // outward from the middle, each point by the height the point it was reached from took (a
+    // point over nothing hands on the height it was given)
+    let mut at_points: Vec<Option<Hit>> = vec![None; cols * rows];
+    let mut level: Vec<f32> = vec![t.centre.y; cols * rows];
+    let mut seen = vec![false; cols * rows];
+    let middle = (rows / 2) * cols + cols / 2;
+    let mut queue = VecDeque::from([middle]);
+    seen[middle] = true;
+    while let Some(i) = queue.pop_front() {
+        if let Some(hit) = over_points.nearest(i, level[i]) {
+            at_points[i] = Some(hit);
+            level[i] = hit.height;
+        }
+        let (x, z) = (i % cols, i / cols);
+        let near = [
+            (x > 0).then(|| i - 1),
+            (x + 1 < cols).then(|| i + 1),
+            (z > 0).then(|| i - cols),
+            (z + 1 < rows).then(|| i + cols),
+        ];
+        for n in near.into_iter().flatten() {
+            if !seen[n] {
+                seen[n] = true;
+                level[n] = level[i];
+                queue.push_back(n);
+            }
+        }
+    }
+    let mut at_faces: Vec<Option<Hit>> = vec![None; (cols - 1) * (rows - 1) * 2];
+    for z in 0..rows - 1 {
+        for x in 0..cols - 1 {
+            let i = z * cols + x;
+            let corners = (level[i] + level[i + 1] + level[i + cols] + level[i + cols + 1]) / 4.0;
+            let cell = (z * (cols - 1) + x) * 2;
+            at_faces[cell] = over_faces.nearest(cell, corners);
+            at_faces[cell + 1] = over_faces.nearest(cell + 1, corners);
+        }
     }
     GroundSample { points: at_points, faces: at_faces }
 }

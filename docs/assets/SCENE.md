@@ -259,7 +259,7 @@ Terrains: a height grid over a rectangle that replaces the ground under it. `pos
 |---|---|---|---|
 | `size` | `{ x, z }` in metres | { 20, 20 } | How far it reaches along its own x and z, in metres; pos is its centre. |
 | `cell` | number (m) | 1 | The step of the height grid, 0.5 to 4 metres. |
-| `base` | `"ground"`, or a number: metres over the height of pos | "ground" | Where every point starts: the level's ground under it (every static object that is not added by the module), or flat at a height over pos. |
+| `base` | `"ground"`, or a number: metres over the height of pos | "ground" | Where every point starts: the level's ground under it (of the static objects that are not added by the module, the surface nearest pos under the centre, followed outward: a roof or a tree's crown over it is not the ground), or flat at a height over pos. |
 | `edge` | number (m) | 4 | On the ground: the metres along the border over which the edits blend back into the ground around, so the border meets it. |
 | `edits` | a list, in order: `{ op = "flatten", at = { x, z }, radius, falloff, height }`, `{ op = "rect", min, max, falloff, height }`, `{ op = "raise", at, radius, falloff, amount }`, `{ op = "ramp", from, to, width, falloff, heights = { from, to } }`, `{ op = "smooth", at, radius, strength }`, `{ op = "noise", amount, scale, seed }` | none | How the heights change, one edit after the other: x and z are metres from the centre along the terrain's own axes, height is a world height, amount is relative, falloff is the width of the soft border. |
 | `rows` | a list of rows of heights, from -z to +z, each from -x | none | Instead of the edits: every world height of the grid written out. |
