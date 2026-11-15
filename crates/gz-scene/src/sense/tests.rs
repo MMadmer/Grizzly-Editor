@@ -568,3 +568,174 @@ fn a_map_that_cannot_be_drawn_is_refused_in_a_sentence() {
     assert_eq!(super::shot::size_px([0.0, 0.0, 5.0, 10.0], 200), [100, 200]);
     assert_eq!(super::shot::size_px([0.0, 0.0, 1000.0, 1.0], 200), [200, 16]);
 }
+
+// ---- scene.audit ----------------------------------------------------------------------------
+
+fn audit_of(w: &World, v: Value, base: Option<&[&str]>) -> Result<super::audit::Audit, gz_editor::CmdError> {
+    let p: super::audit::AuditParams = serde_json::from_value(v).expect("the parameters read");
+    let base: Option<rustc_hash::FxHashSet<String>> =
+        base.map(|b| b.iter().map(|s| (*s).to_owned()).collect());
+    super::audit::audit(&Scene { state: &w.state, lib: &w.lib, pick: &w.pick }, &p, base.as_ref())
+}
+
+/// The findings as `code object` lines, in order.
+fn found(w: &World, v: Value) -> Vec<String> {
+    let a = audit_of(w, v, None).unwrap_or_else(|e| panic!("{}", e.message));
+    a.findings
+        .iter()
+        .map(|f| format!("{} {}", f.code, w.state.get(f.object).map_or("?", |o| o.name.as_str())))
+        .collect()
+}
+
+/// The world with more in it; the pick tree made again.
+fn world_with(add: impl FnOnce(&mut SceneState)) -> World {
+    let mut w = world();
+    add(&mut w.state);
+    w.pick = ScenePick::build(&w.state, &w.lib);
+    w
+}
+
+#[test]
+fn the_audit_finds_what_floats_and_leaves_what_stands() {
+    let w = world();
+    // the box in the air floats; the box on the ground, the wall and the ground do not
+    let a = audit_of(&w, json!({}), None).unwrap_or_else(|e| panic!("{}", e.message));
+    assert_eq!(a.checked, 5);
+    assert_eq!(a.findings.len(), 1, "{:?}", a.findings);
+    assert_eq!(a.findings[0].code, "S201");
+    assert_eq!(a.findings[0].text, "floating floats 2.50 m above ground: nothing holds it");
+    // a box hung under something, or leaning on something, is held
+    let w = world_with(|s| {
+        place(s, "lamp", "test\\box", Vec3::new(5.0, 1.9, 0.0), Vec3::ONE);
+        place(s, "shelf", "test\\box", Vec3::new(9.4, 2.0, 0.0), Vec3::ONE);
+    });
+    // the lamp hangs 0.1 m under the box in the air; the shelf touches the wall
+    assert_eq!(found(&w, json!({ "objects": ["lamp", "shelf"] })), Vec::<String>::new());
+    // off the ground's edge there is nothing to stand on
+    let w = world_with(|s| place(s, "lost", "test\\box", Vec3::new(500.0, 5.0, 500.0), Vec3::ONE));
+    assert_eq!(found(&w, json!({ "objects": ["lost"] })), ["S205 lost"]);
+    assert_eq!(found(&w, json!({ "objects": ["lost"], "checks": ["floating"] })), Vec::<String>::new());
+}
+
+#[test]
+fn the_audit_finds_what_is_buried_what_overlaps_and_what_is_twice_there() {
+    let w = world_with(|s| {
+        // its middle 0.2 m under the ground
+        place(s, "sunk", "test\\box", Vec3::new(20.0, -0.2, 0.0), Vec3::ONE);
+        // a pole a third in the ground is as it should be
+        place(s, "pole", "test\\box", Vec3::new(25.0, 0.2, 0.0), Vec3::ONE);
+        // two boxes, one 0.7 m into the other
+        place(s, "left", "test\\box", Vec3::new(30.0, 0.5, 0.0), Vec3::ONE);
+        place(s, "right", "test\\box", Vec3::new(30.3, 0.5, 0.0), Vec3::ONE);
+        // two boxes that only touch
+        place(s, "a", "test\\box", Vec3::new(35.0, 0.5, 0.0), Vec3::ONE);
+        place(s, "b", "test\\box", Vec3::new(36.0, 0.5, 0.0), Vec3::ONE);
+        // one box twice
+        place(s, "twin", "test\\box", Vec3::new(40.0, 0.5, 0.0), Vec3::ONE);
+        place(s, "twin_again", "test\\box", Vec3::new(40.0, 0.5, 0.0), Vec3::ONE);
+    });
+    assert_eq!(found(&w, json!({ "objects": ["sunk", "pole"] })), ["S202 sunk"]);
+    assert_eq!(found(&w, json!({ "objects": ["left", "right", "a", "b"] })), ["S203 left"]);
+    // the pair is said once, from either side
+    assert_eq!(found(&w, json!({ "objects": ["right"], "checks": ["S203"] })), ["S203 right"]);
+    assert_eq!(
+        found(&w, json!({ "objects": ["twin", "twin_again"], "checks": ["duplicate"] })),
+        ["S204 twin_again"]
+    );
+    // an area takes what stands in it
+    assert_eq!(found(&w, json!({ "area": [19, -1, 21, 1] })), ["S202 sunk"]);
+}
+
+#[test]
+fn the_audit_finds_points_under_the_ground_and_ways_off_the_ai_map() {
+    use crate::objects::{PointKind, SpawnData, WayData, WayPoint};
+    let mut w = world_with(|s| {
+        let mut under = Object::new(
+            ObjClass::SpawnPoint,
+            "deep",
+            ObjData::Spawn(Box::new(SpawnData::of_kind(PointKind::Spawn))),
+        );
+        under.xform.position = Vec3::new(15.0, -5.0, 15.0);
+        s.insert(under);
+        let mut fine = Object::new(
+            ObjClass::SpawnPoint,
+            "fine",
+            ObjData::Spawn(Box::new(SpawnData::of_kind(PointKind::Spawn))),
+        );
+        fine.xform.position = Vec3::new(15.0, 0.1, 18.0);
+        s.insert(fine);
+        let mut start = Object::new(
+            ObjClass::SpawnPoint,
+            "start",
+            ObjData::Spawn(Box::new(SpawnData::of_kind(PointKind::PlayerStart))),
+        );
+        start.xform.position = Vec3::new(-30.0, 0.1, -30.0);
+        s.insert(start);
+        let way = WayData {
+            kind: 0,
+            points: vec![
+                WayPoint::new("p0", Vec3::new(0.2, 0.0, 0.1)),
+                WayPoint::new("p1", Vec3::new(8.0, 0.0, 8.0)),
+            ],
+        };
+        s.insert(Object::new(ObjClass::Way, "walk", ObjData::Way(way)));
+    });
+    // no AI map: the checks that need one are named as skipped when they were asked for
+    let a = audit_of(&w, json!({ "checks": ["off_ai_map", "underground"] }), None)
+        .unwrap_or_else(|e| panic!("{}", e.message));
+    assert_eq!(a.findings.len(), 1);
+    assert_eq!(
+        (a.findings[0].code, a.findings[0].text.as_str()),
+        ("S207", "deep is under ground: nothing is under it within 50 m")
+    );
+    assert_eq!(a.skipped, ["S206, S208: the scene has no AI map"]);
+    let nodes = vec![
+        AiMapNode::new(Vec3::new(0.0, 0.0, 0.0), Vec3::Y),
+        AiMapNode::new(Vec3::new(0.7, 0.0, 0.0), Vec3::Y),
+    ];
+    let header = SceneAiMap { bbox: gz_fmt_level::nodes_bbox(&nodes), ..SceneAiMap::default() };
+    w.state.bulk.ai_map = Some(Arc::new(AiMapPart::from_nodes(header, &nodes, None)));
+    // the player's start is a walker off the map; the way's second point is off it too
+    let lines = found(&w, json!({ "checks": ["off_ai_map", "way_off_ai_map"] }));
+    assert_eq!(lines, ["S206 start", "S208 walk"]);
+    let a = audit_of(&w, json!({ "objects": ["walk"] }), None).unwrap_or_else(|e| panic!("{}", e.message));
+    assert_eq!(a.findings[0].text, "walk: p1 off the AI map");
+}
+
+#[test]
+fn the_audit_names_what_the_game_s_level_lacks_and_refuses_what_it_cannot_do() {
+    let w = world();
+    // against the game's own objects: what is neither there nor marked is not shipped
+    let base = ["ground", "standing", "wall", "zone"];
+    let a = audit_of(&w, json!({ "checks": ["not_authored"] }), Some(&base))
+        .unwrap_or_else(|e| panic!("{}", e.message));
+    assert_eq!(a.findings.len(), 1);
+    assert_eq!(a.findings[0].code, "S210");
+    assert!(a.findings[0].text.starts_with("floating is not in the game's level"));
+    // marked, it is the module's; and then the module's own objects are what an audit reads
+    let w = world_with(|s| {
+        let mut o = Object::new(
+            ObjClass::SceneObject,
+            "mine",
+            ObjData::SceneObject(SceneObjectData::library("test\\box")),
+        );
+        o.xform.position = Vec3::new(-20.0, 3.0, 0.0);
+        o.marks.authored = true;
+        s.insert(o);
+    });
+    let a = audit_of(&w, json!({}), Some(&base)).unwrap_or_else(|e| panic!("{}", e.message));
+    assert_eq!(a.checked, 1);
+    assert_eq!(a.findings.iter().map(|f| f.code).collect::<Vec<_>>(), ["S201"]);
+    // without the game's level the check is skipped, and says so when it was asked for
+    let a = audit_of(&w, json!({ "checks": ["S210"] }), None).unwrap_or_else(|e| panic!("{}", e.message));
+    assert!(a.findings.is_empty());
+    assert_eq!(a.skipped.len(), 1);
+    let refused = |v: Value, words: &str| {
+        let e = audit_of(&w, v, None).expect_err("refused");
+        assert!(e.message.contains(words), "{}", e.message);
+        e.code
+    };
+    assert_eq!(refused(json!({ "checks": ["tidy"] }), "not 'tidy'"), "invalid");
+    assert_eq!(refused(json!({ "objects": ["floating"], "area": [0, 0, 1, 1] }), "give one"), "invalid");
+    assert_eq!(refused(json!({ "objects": ["nobody"] }), "nobody"), "not_found");
+}

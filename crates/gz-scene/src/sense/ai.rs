@@ -17,14 +17,14 @@ const HEIGHT_BAND: f32 = 2.0;
 const RINGS: i32 = 32;
 
 /// The nodes in cells of a patch's size.
-struct Map {
+pub(super) struct Map {
     nodes: Vec<AiMapNode>,
     ps: f32,
     cells: FxHashMap<(i32, i32), Vec<u32>>,
 }
 
 impl Map {
-    fn new(nodes: Vec<AiMapNode>, ps: f32) -> Self {
+    pub(super) fn new(nodes: Vec<AiMapNode>, ps: f32) -> Self {
         let ps = if ps.is_finite() && ps > 0.0 { ps } else { 0.7 };
         let mut cells: FxHashMap<(i32, i32), Vec<u32>> = FxHashMap::default();
         for (i, n) in nodes.iter().enumerate() {
@@ -38,7 +38,7 @@ impl Map {
     }
 
     /// The node nearest a point (in space), with its distance.
-    fn nearest(&self, p: Vec3) -> Option<(u32, f32)> {
+    pub(super) fn nearest(&self, p: Vec3) -> Option<(u32, f32)> {
         let best_of = |ids: &mut dyn Iterator<Item = u32>| {
             ids.filter_map(|i| self.nodes.get(i as usize).map(|n| (i, n.pos.distance(p))))
                 .min_by(|a, b| a.1.total_cmp(&b.1))

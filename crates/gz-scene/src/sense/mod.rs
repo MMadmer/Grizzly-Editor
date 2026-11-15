@@ -5,6 +5,7 @@
 //! command loads what the scene names first, builds the tree and runs it on the CPU pool.
 
 mod ai;
+pub mod audit;
 mod fit;
 mod ground;
 pub mod map;

@@ -105,8 +105,8 @@ struct Under {
 const EVEN: f32 = 0.1;
 
 /// What stands in a model's way at a place.
-struct Placed {
-    blocked: Vec<(ObjId, f32)>,
+pub(super) struct Placed {
+    pub(super) blocked: Vec<(ObjId, f32)>,
     bottom: f32,
 }
 
@@ -115,7 +115,7 @@ fn filter<'a>(lists: &'a Lists, except: &'a [ObjId]) -> RayFilter<'a> {
 }
 
 /// The solid objects a model at `x` meets, each with how deep, metres.
-fn blocked(sc: &Scene<'_>, local: &Aabb, x: &Transform, f: &RayFilter<'_>) -> Placed {
+pub(super) fn blocked(sc: &Scene<'_>, local: &Aabb, x: &Transform, f: &RayFilter<'_>) -> Placed {
     let ob = OBox::new(local, x.matrix());
     let world = ob.world();
     let scale = x.scale.abs().max(Vec3::splat(1e-6));

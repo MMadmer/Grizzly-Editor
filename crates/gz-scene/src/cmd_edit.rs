@@ -103,6 +103,14 @@ pub(crate) fn register(reg: &mut Registry) {
     );
     reg.cmd(
         Spec::read(
+            "scene.audit",
+            "Checks where things stand: what floats, is buried, stands in something, is twice there, is off the AI map.",
+        )
+        .example("objects=crate_01,crate_02 checks=floating,overlap"),
+        scene_audit,
+    );
+    reg.cmd(
+        Spec::read(
             "shot.map",
             "A map of the scene from above, drawn without a window: every object in its colour with its name, a grid in metres.",
         )
@@ -969,6 +977,121 @@ async fn scene_query(ed: Arc<Editor>, p: QueryParams, _o: Origin) -> Reply {
                 .await
         }
     }
+}
+
+/// The names of the objects the game's own level has, lower case: the names its base scene
+/// writes - an X-Ray SDK scene named as the scene's level, in the project or in the editor's
+/// library. `None` when there is none or its parts are not text.
+fn base_names(roots: &[std::path::PathBuf], level: &str) -> Option<rustc_hash::FxHashSet<String>> {
+    if level.is_empty() {
+        return None;
+    }
+    let dir = roots
+        .iter()
+        .map(|r| r.join("rawdata").join("levels"))
+        .find(|d| d.join(format!("{level}.level")).is_file())?
+        .join(level);
+    let mut names = rustc_hash::FxHashSet::default();
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if !path.extension().is_some_and(|x| x.eq_ignore_ascii_case("part")) {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else { continue };
+        // a part of the binary form names nothing a line at a time: the set would be wrong
+        if bytes.iter().take(4096).any(|b| *b == 0) {
+            return None;
+        }
+        for line in String::from_utf8_lossy(&bytes).lines() {
+            let Some((key, value)) = line.split_once('=') else { continue };
+            if key.trim() == "name" {
+                names.insert(value.trim().to_lowercase());
+            }
+        }
+    }
+    (!names.is_empty()).then_some(names)
+}
+
+/// `scene.audit`: the checks on the pools, then each finding at its object's line.
+async fn scene_audit(ed: Arc<Editor>, p: sense::audit::AuditParams, _o: Origin) -> Reply {
+    let svc = service::need_scene(&ed).await?;
+    let snap = svc.store.snapshot();
+    svc.prefetch_library(&ed, &snap).await;
+    let (snap, pick) = svc.pick().await;
+    let lib = svc.library.clone();
+    let limit = p.limit.unwrap_or(200).clamp(1, 2000);
+    let root = ed.project_root();
+    let mut roots: Vec<std::path::PathBuf> = root.iter().cloned().collect();
+    roots.push(gz_project::library_root(&ed));
+    let level = snap.meta.level.level_path.to_string();
+    let base = ed.exec.io(move || base_names(&roots, &level)).await;
+    let state = snap.clone();
+    let found = ed
+        .exec
+        .cpu(move || {
+            sense::audit::audit(&sense::Scene { state: &state, lib: &lib, pick: &pick }, &p, base.as_ref())
+        })
+        .await?;
+    // where each object is written: the file of its kind in the scene's folder
+    let scene_file = snap.meta.file.clone();
+    let listed: Vec<(sense::audit::Finding, String, ObjClass)> = found
+        .findings
+        .iter()
+        .map(|f| {
+            let o = snap.get(f.object);
+            (
+                f.clone(),
+                o.map_or_else(String::new, |o| o.name.to_string()),
+                o.map_or(ObjClass::SceneObject, |o| o.class),
+            )
+        })
+        .collect();
+    let total = listed.len();
+    let problems = ed
+        .exec
+        .io(move || {
+            let mut docs: rustc_hash::FxHashMap<&'static str, Option<gz_luadata::LuaDoc>> =
+                Default::default();
+            let folder = scene_file.as_deref().map(crate::format::folder_of);
+            listed
+                .into_iter()
+                .take(limit)
+                .map(|(f, name, class)| {
+                    let mut problem = gz_base::Problem::warning(f.code, f.text).about(name.clone());
+                    if let (Some(folder), Some(root), Some((file, list))) =
+                        (&folder, &root, crate::format::file_of(class))
+                    {
+                        let doc = docs.entry(file).or_insert_with(|| {
+                            std::fs::read_to_string(folder.join(file))
+                                .ok()
+                                .and_then(|text| gz_luadata::LuaDoc::parse(&text).ok())
+                        });
+                        let path = [gz_luadata::Seg::key(list), gz_luadata::Seg::item("name", &name)];
+                        let rel = folder
+                            .join(file)
+                            .strip_prefix(root)
+                            .ok()
+                            .and_then(|r| gz_base::RelPath::new(&r.to_string_lossy()).ok());
+                        if let (Some(doc), Some(rel)) = (doc.as_ref(), rel)
+                            && let Some(s) = doc.span(&path)
+                        {
+                            problem = problem.in_file(rel).at(s.line, s.column, s.end_line, s.end_column);
+                        }
+                    }
+                    let mut v = serde_json::to_value(&problem).unwrap_or(Value::Null);
+                    if let Value::Object(m) = &mut v {
+                        m.insert("object".into(), json!(name));
+                    }
+                    v
+                })
+                .collect::<Vec<Value>>()
+        })
+        .await;
+    let mut out = json!({ "problems": problems, "total": total, "checked": found.checked });
+    if let (false, Value::Object(m)) = (found.skipped.is_empty(), &mut out) {
+        m.insert("skipped".into(), json!(found.skipped));
+    }
+    Ok(out)
 }
 
 /// `shot.map`: one ray a pixel from above, then the drawing - all of it on the pools.
