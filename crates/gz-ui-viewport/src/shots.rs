@@ -68,9 +68,13 @@ impl Side {
 const STAND_OFF: f32 = 5.0;
 const ROOM: f32 = 1.08;
 
-/// The camera of a view that frames `bounds` in a picture of `size`.
+/// The heading an iso view looks along when none is given: towards +X and +Z.
+pub const ISO_HEADING: f32 = 45.0;
+
+/// The camera of a view that frames `bounds` in a picture of `size`. `heading` turns an iso
+/// view about the vertical: the way it looks, degrees from +Z towards +X.
 #[must_use]
-pub fn framing(side: Side, bounds: &Aabb, size: [u32; 2]) -> Camera {
+pub fn framing(side: Side, bounds: &Aabb, size: [u32; 2], heading: f32) -> Camera {
     let centre = (bounds.min + bounds.max) * 0.5;
     let d = (bounds.max - bounds.min).max(Vec3::splat(0.1));
     let aspect = gz_render::aspect(size);
@@ -101,7 +105,9 @@ pub fn framing(side: Side, bounds: &Aabb, size: [u32; 2]) -> Camera {
             // the sphere around the box fits the narrower of the picture's two angles
             let half = (fov * 0.5).min(((fov * 0.5).tan() * aspect).atan());
             let dist = radius / half.sin() * ROOM;
-            let from = centre + Vec3::new(-1.0, 0.9, -1.0).normalize() * dist;
+            // looking along the heading and down: the camera stands on the other side, above
+            let (s, c) = heading.to_radians().sin_cos();
+            let from = centre + Vec3::new(-s, 0.64, -c).normalize() * dist;
             Camera::look_at(from, centre).with_projection(Projection::Perspective {
                 fov_y: fov,
                 near: (dist - radius * 1.5).max(0.1),
@@ -158,11 +164,16 @@ pub fn labels_of(
     bounds: &dyn Fn(&gz_scene::Object) -> Option<Aabb>,
     camera: &Camera,
     size: [u32; 2],
+    wanted: &dyn Fn(&gz_scene::Object, Vec3) -> bool,
 ) -> Vec<Label> {
     let mut out: Vec<Label> = state
         .objects
         .values()
         .filter(|o| o.flags.visible)
+        .filter(|o| {
+            let centre = bounds(o).map_or_else(|| o.position(), |b| (b.min + b.max) * 0.5);
+            wanted(o, centre)
+        })
         .filter_map(|o| {
             let centre = bounds(o).map_or_else(|| o.position(), |b| (b.min + b.max) * 0.5);
             let at = to_pixel(camera, size, centre)?;
@@ -260,6 +271,10 @@ pub struct ShotParams {
     /// right are flat and to scale, iso is from above and aside.
     #[serde(default)]
     view: Option<Side>,
+    /// For `view=iso`: the way it looks about the vertical, degrees from +Z towards +X (45). A
+    /// tree in the way: look from another side.
+    #[serde(default)]
+    heading: Option<f32>,
     /// The objects `view` frames.
     #[serde(default)]
     objects: Option<Vec<String>>,
@@ -374,6 +389,7 @@ pub(crate) async fn shot_viewport(ed: Arc<Editor>, p: ShotParams, _o: Origin) ->
     if !own {
         let stray = [
             ("target", p.target.is_some()),
+            ("heading", p.heading.is_some()),
             ("rotation", p.rotation.is_some()),
             ("fov", p.fov.is_some()),
             ("objects", p.objects.is_some()),
@@ -441,7 +457,11 @@ pub(crate) async fn shot_viewport(ed: Arc<Editor>, p: ShotParams, _o: Origin) ->
             }
             (None, Some(side)) => {
                 let b = frame_box(state, &bounds, &ground, p.objects.as_deref(), p.area)?;
-                (framing(side, &b, size), side.key())
+                let heading = p.heading.unwrap_or(ISO_HEADING);
+                if !heading.is_finite() {
+                    return Err(CmdError::invalid("heading takes degrees"));
+                }
+                (framing(side, &b, size, heading), side.key())
             }
             (None, None) => return Err(CmdError::internal("no camera")),
         };
@@ -456,7 +476,21 @@ pub(crate) async fn shot_viewport(ed: Arc<Editor>, p: ShotParams, _o: Origin) ->
 
     let (w, h) = (image.width, image.height);
     let size = [w, h];
-    let names = if p.labels { labels_of(state, &bounds, &camera, size) } else { Vec::new() };
+    // the names of what the picture frames: the objects named, what stands in the area, or -
+    // with a camera placed by hand, or the viewport's own - whatever is nearest
+    let framed: Option<Vec<gz_scene::ObjId>> = p
+        .objects
+        .as_ref()
+        .map(|names| names.iter().filter_map(|n| state.find_any(n).map(|o| o.id)).collect());
+    let area = p.area.map(|a| (a[0].min(a[2]), a[1].min(a[3]), a[0].max(a[2]), a[1].max(a[3])));
+    let wanted = |o: &gz_scene::Object, centre: Vec3| match (&framed, area) {
+        (Some(ids), _) => ids.contains(&o.id),
+        (None, Some((x0, z0, x1, z1))) => {
+            centre.x >= x0 && centre.x <= x1 && centre.z >= z0 && centre.z <= z1
+        }
+        (None, None) => true,
+    };
+    let names = if p.labels { labels_of(state, &bounds, &camera, size, &wanted) } else { Vec::new() };
     let (png, drawn) = ed
         .exec
         .cpu(move || -> Result<(Vec<u8>, Vec<Label>), CmdError> {
@@ -514,7 +548,7 @@ mod tests {
     #[test]
     fn the_top_view_is_to_scale_with_x_right_and_z_up() {
         let size = [800, 800];
-        let cam = framing(Side::Top, &unit_box(), size);
+        let cam = framing(Side::Top, &unit_box(), size, ISO_HEADING);
         assert!(cam.projection.is_ortho());
         let Projection::Orthographic { height, .. } = cam.projection else { panic!("not flat") };
         // the box is 20 x 40 m: the picture is as high as its 40 m with room around
@@ -538,7 +572,7 @@ mod tests {
     fn a_wide_box_is_fitted_by_its_width() {
         let b = Aabb { min: Vec3::new(0.0, 0.0, 0.0), max: Vec3::new(100.0, 1.0, 10.0) };
         let size = [1000, 500];
-        let cam = framing(Side::Top, &b, size);
+        let cam = framing(Side::Top, &b, size, ISO_HEADING);
         let Projection::Orthographic { height, .. } = cam.projection else { panic!("not flat") };
         assert!((height - 100.0 / 2.0 * ROOM).abs() < 1e-3, "{height}");
         for corner in [Vec3::new(0.0, 0.0, 0.0), Vec3::new(100.0, 0.0, 10.0)] {
@@ -559,19 +593,27 @@ mod tests {
             Vec3::new(b.max.x, b.max.y, b.min.z),
         ];
         for side in [Side::Top, Side::Front, Side::Back, Side::Left, Side::Right, Side::Iso] {
-            let cam = framing(side, &b, size);
+            let cam = framing(side, &b, size, ISO_HEADING);
             assert_eq!(cam.projection.is_ortho(), side != Side::Iso);
             for c in corners {
                 assert!(to_pixel(&cam, size, c).is_some(), "{side:?} loses {c}");
             }
         }
         // the front looks along +Z: +X is right and up is up
-        let cam = framing(Side::Front, &b, size);
+        let cam = framing(Side::Front, &b, size, ISO_HEADING);
         let Some(a) = to_pixel(&cam, size, Vec3::new(12.0, 1.0, 20.0)) else { panic!("a") };
         let Some(c) = to_pixel(&cam, size, Vec3::new(28.0, 3.0, 20.0)) else { panic!("c") };
         assert!(c.0 > a.0 && c.1 < a.1);
         // the back mirrors it
-        let cam = framing(Side::Back, &b, size);
+        let cam = framing(Side::Back, &b, size, ISO_HEADING);
+        // an iso view looks along its heading: from the south-west by default, from the north
+        // when told to look south
+        let cam = framing(Side::Iso, &b, size, ISO_HEADING);
+        assert!(cam.forward.x > 0.0 && cam.forward.z > 0.0 && cam.forward.y < 0.0);
+        let cam = framing(Side::Iso, &b, size, 180.0);
+        assert!(cam.forward.z < -0.5 && cam.forward.x.abs() < 1e-4);
+        let centre = (b.min + b.max) * 0.5;
+        assert!(cam.position.z > centre.z && cam.position.y > centre.y);
         let Some(a) = to_pixel(&cam, size, Vec3::new(12.0, 1.0, 60.0)) else { panic!("a") };
         let Some(c) = to_pixel(&cam, size, Vec3::new(28.0, 1.0, 60.0)) else { panic!("c") };
         assert!(c.0 < a.0);

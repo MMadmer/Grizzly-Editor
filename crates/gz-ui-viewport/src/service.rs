@@ -1015,10 +1015,12 @@ impl Viewport {
             let library: crate::loader::LibrarySource =
                 Arc::new(move || SceneService::of_opt(&scene).map(|svc| svc.library.clone()));
             let media = Arc::downgrade(&ed);
-            let textures: crate::loader::TextureAssets =
-                Arc::new(move |name: &str| gz_media::Media::get(media.upgrade()?.as_ref())?.texture_file(name));
-            let loader =
-                Arc::new(SceneLoader::new(project, editor_root, game).with_library(library).with_textures(textures));
+            let textures: crate::loader::TextureAssets = Arc::new(move |name: &str| {
+                gz_media::Media::get(media.upgrade()?.as_ref())?.texture_file(name)
+            });
+            let loader = Arc::new(
+                SceneLoader::new(project, editor_root, game).with_library(library).with_textures(textures),
+            );
             crate::spawn_anim::SpawnAnims::of(&ed).set_loader(loader.clone());
             renderer.assets().set_loader(Some(loader));
         });
@@ -1324,7 +1326,9 @@ impl Viewport {
                 };
                 view.flags = ViewFlags::HELPERS | ViewFlags::SELECTION;
                 view.style = gz_render::ViewStyle { fog: show.fog };
-                if show.grid {
+                // the grid is the author's aid on its own plane: a picture from a camera of its own
+                // shows the scene, and a level's ground far under that plane would lie hidden
+                if show.grid && shot.is_none() {
                     view.flags |= ViewFlags::GRID;
                 }
                 view.grid.cells = st.prefs.grid_count.max(1);
