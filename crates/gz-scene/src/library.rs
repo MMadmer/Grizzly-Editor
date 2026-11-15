@@ -210,6 +210,9 @@ pub type Provider = Arc<dyn Fn(&str) -> Option<Arc<LibraryObject>> + Send + Sync
 pub struct Library {
     roots: Vec<PathBuf>,
     providers: parking_lot::RwLock<Vec<Provider>>,
+    /// The providers of what a scene itself makes (`@...`): bound to that scene, so a fork gets
+    /// none of them and none of what they made.
+    of_scene: parking_lot::RwLock<Vec<Provider>>,
     cache: Mutex<FxHashMap<String, Slot>>,
     /// The file of each object read from one, as it was then.
     disk: Mutex<FxHashMap<String, Disk>>,
@@ -224,6 +227,7 @@ impl Library {
         Self {
             roots,
             providers: parking_lot::RwLock::new(Vec::new()),
+            of_scene: parking_lot::RwLock::new(Vec::new()),
             cache: Mutex::new(FxHashMap::default()),
             disk: Mutex::new(FxHashMap::default()),
             listing: Mutex::new(None),
@@ -234,13 +238,23 @@ impl Library {
     /// A library of its own over the same roots and providers, holding what this one has read.
     /// What a long job reads (a level build): an object forgotten here afterwards - its file
     /// changed, the watcher lost count and everything is checked again - stays readable there,
-    /// so nothing takes a model from under the job half way.
+    /// so nothing takes a model from under the job half way. What the scene itself makes
+    /// (`@...`, [`Self::add_scene_provider`]) is not taken over: the job makes it from the state
+    /// of the scene it works on, with a provider of its own.
     #[must_use]
     pub fn fork(&self) -> Self {
+        let cache: FxHashMap<String, Slot> = self
+            .cache
+            .lock()
+            .iter()
+            .filter(|(k, _)| !k.starts_with('@'))
+            .map(|(k, s)| (k.clone(), s.clone()))
+            .collect();
         Self {
             roots: self.roots.clone(),
             providers: parking_lot::RwLock::new(self.providers.read().clone()),
-            cache: Mutex::new(self.cache.lock().clone()),
+            of_scene: parking_lot::RwLock::new(Vec::new()),
+            cache: Mutex::new(cache),
             disk: Mutex::new(self.disk.lock().clone()),
             listing: Mutex::new(self.listing.lock().clone()),
             rev: RevCounter::new(),
@@ -293,6 +307,19 @@ impl Library {
     /// Adds a provider, asked after the ones added before it and before the roots.
     pub fn add_provider(&self, provider: Provider) {
         self.providers.write().push(provider);
+    }
+
+    /// Adds a provider of what one scene makes (`@terrain\...`, `@cut\...`): asked like any other, and left
+    /// behind by [`Self::fork`].
+    pub fn add_scene_provider(&self, provider: Provider) {
+        self.of_scene.write().push(provider);
+    }
+
+    /// Every provider, the scene's first.
+    fn asked(&self) -> Vec<Provider> {
+        let mut all = self.of_scene.read().clone();
+        all.extend(self.providers.read().iter().cloned());
+        all
     }
 
     /// Drops one reference from what was read (loaded or failed), so the next load reads it
@@ -352,7 +379,7 @@ impl Library {
                 _ => None,
             };
         }
-        let providers: Vec<Provider> = self.providers.read().clone();
+        let providers = self.asked();
         let made = providers.iter().find_map(|p| p(&key))?;
         let mut cache = self.cache.lock();
         if let Some(Slot::Loaded(o)) = cache.get(&key) {
@@ -419,7 +446,7 @@ impl Library {
     }
 
     fn read(&self, key: &str) -> Result<Arc<LibraryObject>, String> {
-        let providers: Vec<Provider> = self.providers.read().clone();
+        let providers = self.asked();
         if let Some(o) = providers.iter().find_map(|p| p(key)) {
             return Ok(o);
         }

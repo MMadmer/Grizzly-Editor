@@ -241,6 +241,12 @@ impl SceneService {
     pub async fn library_for(&self, editor: &Editor, state: &SceneState) -> Arc<Library> {
         self.prefetch_library(editor, state).await;
         let own = Arc::new(self.library.fork());
+        // its terrains and the ground they cut are made from this state and from itself: the
+        // open scene may be edited and its library emptied while the job runs
+        own.add_scene_provider(crate::objects::terrain::Terrains::provider_over(
+            Arc::new(state.clone()),
+            Arc::downgrade(&own),
+        ));
         // what was forgotten between the load and the fork is read into the job's own
         prefetch_into(editor, own.clone(), state).await;
         own
@@ -332,7 +338,7 @@ fn follow_library(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
 fn follow_terrains(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
     let mut rx = svc.store.subscribe();
     let weak = Arc::downgrade(svc);
-    svc.library.add_provider(svc.terrains.provider(weak.clone()));
+    svc.library.add_scene_provider(svc.terrains.provider(weak.clone()));
     let exec = editor.exec.clone();
     editor.exec.spawn(async move {
         while rx.changed().await.is_ok() {

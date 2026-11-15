@@ -510,6 +510,21 @@ impl Terrains {
         })
     }
 
+    /// The provider of `@terrain\<name>` and `@cut\<name>` over one state of the scene and one
+    /// library: what a long job's own library makes them from, whatever the open scene and its
+    /// library have become meanwhile.
+    #[must_use]
+    pub fn provider_over(state: Arc<SceneState>, lib: Weak<Library>) -> Provider {
+        let made = Arc::new(Terrains::default());
+        Arc::new(move |key: &str| {
+            if !(key.starts_with(TERRAIN_PREFIX) || key.starts_with(CUT_PREFIX)) {
+                return None;
+            }
+            let lib = lib.upgrade()?;
+            provide(&state, &lib, &made, key)
+        })
+    }
+
     /// Forgets every model made here whose stamp moved: the terrain, its ground or the object it
     /// cuts changed, or it is gone. Answers whether something was forgotten.
     pub fn refresh(&self, state: &SceneState, lib: &Library) -> bool {
@@ -825,6 +840,38 @@ mod tests {
         assert!(lib.provided("ground\\flat").is_some());
         lib.prefetch(&references(state, &lib));
         lib
+    }
+
+    /// A job's library makes a terrain from the state of the scene the job works on: nothing
+    /// made for the open scene is taken over, and an edit of the open scene changes nothing in
+    /// it.
+    #[test]
+    fn a_fork_makes_its_terrains_from_its_own_state() {
+        let state_of = |height: f32| {
+            let mut s = scene(false);
+            let mut yard = (**s.find_any("yard").expect("yard")).clone();
+            if let ObjData::Terrain(d) = &mut yard.data {
+                d.edits =
+                    vec![gz_terrain::Edit::Flatten { at: Vec2::ZERO, radius: 2.0, falloff: 1.0, height }];
+            }
+            s.replace(yard);
+            Arc::new(s)
+        };
+        let top = |lib: &Library| lib.load(&reference("Yard")).expect("the terrain").bounds.max.y;
+        // the open scene's library, with the terrain as the scene had it before its last edit
+        let open = Arc::new(Library::new(Vec::new()));
+        open.add_provider(Arc::new(|k: &str| {
+            (k == "ground\\flat").then(|| Arc::new(LibraryObject::provided(k, ground_model())))
+        }));
+        open.add_scene_provider(Terrains::provider_over(state_of(2.0), Arc::downgrade(&open)));
+        assert!((top(&open) - 2.0).abs() < 1e-3);
+        // the job works on the scene after the edit: its fork makes the terrain anew
+        let own = Arc::new(open.fork());
+        assert!(own.cached(&reference("Yard")).is_none(), "what the scene made is not taken over");
+        assert!(own.cached("ground\\flat").is_some(), "what was read is");
+        own.add_scene_provider(Terrains::provider_over(state_of(5.0), Arc::downgrade(&own)));
+        assert!((top(&own) - 5.0).abs() < 1e-3, "{}", top(&own));
+        assert!((top(&open) - 2.0).abs() < 1e-3, "the open scene's library keeps its own");
     }
 
     fn down(state: &SceneState, lib: &Library, x: f32, z: f32) -> Option<(f32, String)> {
