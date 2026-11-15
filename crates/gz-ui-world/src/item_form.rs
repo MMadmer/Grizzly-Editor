@@ -79,6 +79,30 @@ fn from_text(row: &Row) -> Tx<'static> {
     }
 }
 
+/// A title or a unit of the game's item catalog, in the window's language.
+fn cat(en: &str) -> Tx<'static> {
+    Tx::ui_in("item", en.to_owned())
+}
+
+/// A row's label: the catalog's title, with the key after it where rows share one; the key
+/// alone for a key the catalog gives no title.
+pub(crate) fn row_label(row: &Row) -> Tx<'static> {
+    if row.title == row.key {
+        Tx::raw(row.key.clone())
+    } else if row.keyed {
+        tr!("{title} ({key})", title = cat(&row.title), key = row.key.as_str())
+    } else {
+        cat(&row.title)
+    }
+}
+
+/// The keys of the item's texts: Name and Description owns them, so their rows stand under its
+/// More and not in the catalog's group.
+fn text_key(row: &Row) -> bool {
+    row.scope == gz_items::catalog::ITEM
+        && [game_keys::NAME, game_keys::SHORT, game_keys::DESCRIPTION].contains(&row.key.as_str())
+}
+
 impl ItemsDoc {
     // ---- icons ----------------------------------------------------------------------------------
 
@@ -368,7 +392,7 @@ impl ItemsDoc {
                 let kind = if self.form.family_title.is_empty() {
                     kind
                 } else {
-                    tr!("{kind} · {family}", kind = kind, family = Tx::raw(self.form.family_title.clone()))
+                    tr!("{kind} · {family}", kind = kind, family = cat(&self.form.family_title))
                 };
                 let _ = text::label(ui, kind, Font::Body, p.text_secondary, Clip::End);
                 let _ = text::label(
@@ -427,15 +451,19 @@ impl ItemsDoc {
         let this: &ItemsDoc = self;
         PropertyGrid::new(ROLE).label_frac(LABEL_FRAC).show(ui, |g| {
             this.identity(g, change, &mut edits);
-            this.texts_section(g, &mut edits);
+            let ids: Vec<&Row> = form.groups.iter().flat_map(|g| g.rows.iter()).filter(|r| text_key(r)).collect();
+            this.texts_section(g, &ids, change, &looks, &mut edits);
             // the catalog's group of the icon's keys is the Icon section's own fold: two sections
             // of one title would be one
             let (icon_keys, groups): (Vec<&item_model::Group>, Vec<&item_model::Group>) =
                 form.groups.iter().partition(|g| g.title.eq_ignore_ascii_case(ICON_TITLE));
             this.icon_section(g, &icon_keys, change, &looks, &mut edits);
             for group in groups {
-                let open = group.rows.iter().any(|r| r.common || r.own.is_own());
-                g.section(Tx::raw(group.title.clone()), open, None, |g| this.group_rows(g, group, change, &looks, &mut edits));
+                if group.rows.iter().all(text_key) {
+                    continue;
+                }
+                let open = group.rows.iter().any(|r| !text_key(r) && (r.common || r.own.is_own()));
+                g.section(cat(&group.title), open, None, |g| this.group_rows(g, group, change, &looks, &mut edits));
             }
             if let Some((hud, groups)) = &form.hud {
                 g.section("In the Hands", true, None, |g| {
@@ -444,7 +472,7 @@ impl ItemsDoc {
                     });
                     for group in groups {
                         let open = group.rows.iter().any(|r| r.own.is_own());
-                        g.section(Tx::raw(group.title.clone()), open, None, |g| this.group_rows(g, group, change, &looks, &mut edits));
+                        g.section(cat(&group.title), open, None, |g| this.group_rows(g, group, change, &looks, &mut edits));
                     }
                 });
             }
@@ -606,7 +634,14 @@ impl ItemsDoc {
 
     // ---- Name and Description -------------------------------------------------------------------
 
-    fn texts_section(&self, g: &mut Grid<'_>, edits: &mut Vec<Edit>) {
+    fn texts_section(
+        &self,
+        g: &mut Grid<'_>,
+        ids: &[&Row],
+        change: bool,
+        looks: &[(String, Option<IconSource>)],
+        edits: &mut Vec<Edit>,
+    ) {
         g.section("Name and Description", true, None, |g| {
             let row = |g: &mut Grid<'_>,
                        edits: &mut Vec<Edit>,
@@ -653,7 +688,9 @@ impl ItemsDoc {
                 }
             });
             self.messages(g, &Self::field_place("description"));
-            g.section("More", !self.texts[2].is_empty() || !self.texts[3].is_empty(), None, |g| {
+            let open =
+                !self.texts[2].is_empty() || !self.texts[3].is_empty() || ids.iter().any(|r| r.own.is_own());
+            g.section("More", open, None, |g| {
                 row(
                     g,
                     edits,
@@ -669,6 +706,10 @@ impl ItemsDoc {
                     "Left empty, an English install reads the Russian short name.",
                 );
                 self.messages(g, &Self::field_place("short_name"));
+                // the string ids themselves, for a text that exists already
+                for row in ids {
+                    self.key_row(g, row, change, looks, edits);
+                }
             });
         });
     }
@@ -812,15 +853,16 @@ impl ItemsDoc {
         looks: &[(String, Option<IconSource>)],
         edits: &mut Vec<Edit>,
     ) {
-        for row in group.rows.iter().filter(|r| r.common) {
+        let rows: Vec<&Row> = group.rows.iter().filter(|r| !text_key(r)).collect();
+        for row in rows.iter().filter(|r| r.common) {
             self.key_row(g, row, change, looks, edits);
         }
-        let more: Vec<&Row> = group.rows.iter().filter(|r| !r.common).collect();
+        let more: Vec<&Row> = rows.iter().copied().filter(|r| !r.common).collect();
         if more.is_empty() {
             return;
         }
         // a group with nothing on its surface is its own fold
-        if more.len() == group.rows.len() {
+        if more.len() == rows.len() {
             for row in more {
                 self.key_row(g, row, change, looks, edits);
             }
@@ -852,8 +894,16 @@ impl ItemsDoc {
         if self.has_error(&place) {
             flags = flags | PropFlags::INVALID;
         }
-        let help = if row.help.is_empty() { row.key.clone() } else { format!("{}\n{}", row.key, row.help) };
-        let help = format!("{help}\n{}", from_text(row).en());
+        let help = if row.help.is_empty() {
+            tr!("{key}\n{from}", key = row.key.as_str(), from = from_text(row))
+        } else {
+            tr!(
+                "{key}\n{help}\n{from}",
+                key = row.key.as_str(),
+                help = Tx::ui_in("item_help", row.help.clone()),
+                from = from_text(row)
+            )
+        };
         let salt = format!("item.key.{}.{}", row.scope, row.key);
         let (scope, key) = (row.scope.clone(), row.key.clone());
         let hud = row.scope == gz_items::catalog::HUD;
@@ -863,11 +913,11 @@ impl ItemsDoc {
             if row.unit.is_empty() {
                 0.0
             } else {
-                text::width(ui.ctx(), &Font::Body.id(), Tx::raw(row.unit.as_str())) + 8.0
+                text::width(ui.ctx(), &Font::Body.id(), cat(&row.unit)) + 8.0
             }
         };
         let mut focus = false;
-        let drawn = g.row(Tx::raw(row.title.clone()), Tx::raw(help), flags, 0, |ui| {
+        let drawn = g.row(row_label(row), help, flags, 0, |ui| {
             let p = palette(ui.ctx());
             if row.own == Own::Unset {
                 let was = row.before.clone().or_else(|| row.resolved.clone()).unwrap_or_default();
@@ -963,8 +1013,7 @@ impl ItemsDoc {
                     let (typed, f) = local_value_text(ui, &salt, own_text.as_deref(), muted.clone(), w);
                     focus |= f;
                     if !row.unit.is_empty() {
-                        let _ =
-                            text::label(ui, Tx::raw(row.unit.clone()), Font::Body, p.text_muted, Clip::End);
+                        let _ = text::label(ui, cat(&row.unit), Font::Body, p.text_muted, Clip::End);
                     }
                     if let Some((section, src)) = look {
                         let (r, _) = ui.allocate_exact_size(THUMB, Sense::hover());

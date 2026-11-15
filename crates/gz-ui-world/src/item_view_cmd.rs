@@ -505,7 +505,7 @@ fn row_json(doc: &ItemsDoc, r: &Row) -> Value {
     let place = Place::Key { scope: r.scope.clone(), key: r.key.clone() };
     json!({
         "key": r.key,
-        "title": r.title,
+        "title": r.label(),
         "type": r.ty.word(),
         "unit": r.unit,
         "common": r.common,

@@ -896,7 +896,7 @@ impl ItemsDoc {
                 let Some((list, what)) = list_of(&row.ty) else { return };
                 let current = row.shown().map(|v| first_name(&v)).unwrap_or_default();
                 let mut c = Chooser::new(purpose, what, Some(list), &current);
-                c.title = tr!("Select {what}", what = Tx::raw(row.title.clone()));
+                c.title = tr!("Select {what}", what = crate::item_form::row_label(row));
                 c
             }
         };

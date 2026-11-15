@@ -54,6 +54,9 @@ pub struct Row {
     pub key: String,
     /// The catalog's title; the key itself when it has none.
     pub title: String,
+    /// The key stands after the title: a series' member, or one of two rows of a group that
+    /// share a title.
+    pub keyed: bool,
     pub ty: KeyType,
     pub unit: String,
     pub help: String,
@@ -77,6 +80,12 @@ pub struct Row {
 }
 
 impl Row {
+    /// The row's label in English: the title, with the key after it where rows share one.
+    #[must_use]
+    pub fn label(&self) -> String {
+        if self.keyed { format!("{} ({})", self.title, self.key) } else { self.title.clone() }
+    }
+
     /// The value the field shows: the item's own, else what the section holds.
     #[must_use]
     pub fn shown(&self) -> Option<String> {
@@ -187,17 +196,13 @@ fn scope_groups(
     let mut row_of = |info: &gz_items::KeyInfo, key: &str, series: bool| {
         let resolved = view.and_then(|v| v.get(key));
         let own = own_of(changes, key);
-        let title = if series && info.title != info.key {
-            format!("{} ({key})", info.title)
-        } else if info.title.is_empty() {
-            key.to_owned()
-        } else {
-            info.title.clone()
-        };
+        let title = if info.title.is_empty() { key.to_owned() } else { info.title.clone() };
+        let keyed = series && title != key;
         let row = Row {
             scope: scope.to_owned(),
             key: key.to_owned(),
             title,
+            keyed,
             ty: info.ty.clone(),
             unit: info.unit.clone(),
             help: info.help.clone(),
@@ -265,10 +270,8 @@ fn scope_groups(
     for g in &mut groups {
         let titles: Vec<String> = g.rows.iter().map(|r| r.title.clone()).collect();
         for r in &mut g.rows {
-            if titles.iter().filter(|t| **t == r.title).count() > 1
-                && !r.title.ends_with(&format!("({})", r.key))
-            {
-                r.title = format!("{} ({})", r.title, r.key);
+            if !r.keyed && r.title != r.key && titles.iter().filter(|t| **t == r.title).count() > 1 {
+                r.keyed = true;
             }
         }
     }
@@ -611,7 +614,7 @@ mod tests {
         let general: Vec<&str> = f.groups[0].rows.iter().map(|r| r.key.as_str()).collect();
         // the series shows the member the section has; a key of another family is no row
         assert_eq!(general, ["ammo_class", "snd_shoot1"]);
-        assert_eq!(f.groups[0].rows[1].title, "Shot (snd_shoot1)");
+        assert_eq!(f.groups[0].rows[1].label(), "Shot (snd_shoot1)");
         let cost = &f.groups[1].rows[0];
         assert!(cost.common && cost.required && cost.own.is_own());
         assert_eq!(
