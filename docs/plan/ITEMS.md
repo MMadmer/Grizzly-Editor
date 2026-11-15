@@ -361,5 +361,25 @@ motions and sounds; a use scene plays; the silencer is crafted; the icons are th
   the script, the `xms.radio` blob) and into G5's brief (`xms.sound_replacement` for mounted names, a radio's
   `spawn_ini`). G7 is done by the lead. E4 runs; E5's brief is written (the placed Radio's Plays, the quest
   editor's `radio_playlist`).
+- G3 is in and committed in the game (`3f60b9b40`): a module's objects and state in the extension save, placeholders in
+  the world save, lineage, absent modules kept, `xms_forget`, the script calls; its runner passed every phase in the
+  real engine. Not handled, said in SAVE_COMPATIBILITY.md: a save made on a module's level, stock objects a module
+  changed in place, a few weapon client fields. Its slip: a script made a folder inside the installed game
+  (`_work\saves-qa`); removed, the game checked unchanged.
+- P2 is in: the hand port of the project (use scenes as item `scene`s, the option row, first-person death, aim
+  sounds, three start kits, XML patches, 41 motion files merged with today's game so no HUD motion is lost).
+  The converter is committed (`00e3ca38`, `e849aa8b`). The project checks whole with 0 errors and 24 warnings, all
+  the mod's own leftovers; it builds (9036 files, the atlas baked) and packages (10 parts, 2.2 GB, the content
+  rules pass with three script lines for review). Nothing of it has run in the game.
+- A bug of the editor found on the way and fixed (`e5eafc86`, `6cc0c888`): a check of the whole project took the
+  editor past 50 GB (every file checked at once, each holding the icon sheet it read for its size; the game
+  mounted by every first asker). Now 8 s and under 2 GB. This was the 99 % of memory the author saw.
+- E4 is in and committed (`4d2efccd`): the manifest's radio, playlists, `copyrighted` and `streamer`, the Radio
+  block of Screens & Music with the Plays Instead picker. Missing: a sound ASSET has no surface for its
+  checkbox - E7 (the Sound tab; brief written). A use scene's time is milliseconds (`1b3fb652`).
+- Running: G5 (engine: particles' actions, the streamer mode, radio tracks), E3 (the first-person picture), E5 (a
+  placed radio's Plays, the quest editor's radio kinds). Queued: E6 (the Russian of the item catalog), E7.
+  To do by the lead after them: `gz-nq`'s project pickers built outside their query (the same pattern as the
+  media index), the game's deploy and the proof in the game, the critic.
 - The scratch of the task (surveys, the key table, the unpacked game views) is the session's scratchpad folder
   `we\`; nothing in the repository depends on it.
