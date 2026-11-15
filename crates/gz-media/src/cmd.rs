@@ -173,14 +173,16 @@ fn wire(root: &Path, file: &Path) -> String {
 
 fn model_json(r: &str, source: &str, file: String, o: &LibraryObject) -> Value {
     let b = o.bounds;
-    let size = [b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z];
+    // millimetres: a size is read by a person or an agent, not fed back bit for bit
+    let mm = |v: f32| (f64::from(v) * 1000.0).round() / 1000.0;
+    let size = [mm(b.max.x - b.min.x), mm(b.max.y - b.min.y), mm(b.max.z - b.min.z)];
     let obj = &o.object;
     json!({
         "ref": r,
         "source": source,
         "file": file,
         "kind": if obj.is_dynamic() { "dynamic" } else { "static" },
-        "bounds": { "min": [b.min.x, b.min.y, b.min.z], "max": [b.max.x, b.max.y, b.max.z] },
+        "bounds": { "min": [mm(b.min.x), mm(b.min.y), mm(b.min.z)], "max": [mm(b.max.x), mm(b.max.y), mm(b.max.z)] },
         "size": size,
         "vertices": obj.meshes.iter().map(|m| m.points.len()).sum::<usize>(),
         "triangles": o.tris.len(),
