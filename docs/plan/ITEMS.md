@@ -198,8 +198,17 @@ and everything else a module adds included.
 - **What scripts save** that names such objects (a smart terrain's list of the NPCs it holds, tasks a module gave)
   is taken out of the stock stream and kept in `.scov` where the stock scripts would stop on it in the original
   game; found by reading what each stock `STATE_Write` / `save_state` writes.
-- **The same holds inside Refined**: a player who switches a module off and plays on keeps a working save -
-  that module's content is not there any more, everything else is, and the next save holds none of it.
+- **A module switched off inside Refined is kept, not erased.** The player who disables a module and plays on has
+  a working save without that module's content - and gets the content back where it stopped when the module is
+  switched on again (an update of it in between, a story mod set aside for a while). The module's records stay in
+  `.scov` as they were written, byte for byte, through every save made without it; the ids of its objects stay
+  reserved meanwhile, so nothing else takes them and every reference to them - a quest's, a smart terrain's -
+  still means the same object when they return. The quest runtime keeps the state of a quest whose module is
+  absent the same way, untouched and not run. What cannot come back safely is dropped with a line saying why,
+  when the module is there again: a section the module no longer has, a section whose class changed (the record
+  is in the old class's format), an item whose owner is gone. `xms_forget <module>` drops a module's kept content
+  from the game in progress for a player who will not bring it back. A save the ORIGINAL game wrote over the
+  pair makes `.scov` stale, as the save contract says: everything kept there is gone with it.
 - Limits are said, not hidden: the player saved on a module's level; a module that changes the game's own objects
   in place; a mode of a module (a game of its own, which the original never starts).
 - A game with no module, and a save with nothing of a module in it, are written byte for byte as before.
@@ -231,7 +240,8 @@ motions and sounds; a use scene plays; the silencer is crafted; the icons are th
 | E1 | agent | `gz-ltx` (1.2, 1.3), `gz-items` (domain, kind, check, reference, publish), the allow-list | editor: `crates\gz-ltx`, `crates\gz-items` (new), `crates\gz-project`, `crates\gz-build`, `crates\gz-release`, `crates\grizzly` |
 | E2 | agent | Mod > Items, the browser's icon, QA `test_items.py` | editor: `crates\gz-ui-world` (or a crate of its own), `gz-ui`, `gz-ui-content`, `tools\qa` |
 | P1 | agent | 1.7 and section 2 | editor: `tools\classic_mod`; the new project |
-| G3 | agent, after G1 | 1.8 | game: `src\xrGame` (the ALife registry's save and load, the save extensions, `xms_game.cpp`), the stock scripts' save hooks, `docs\dead-air\SAVE_COMPATIBILITY.md`, `tools\qa` |
+| G3 | agent, after G1 | 1.8: objects and item state in `.scov`, a switched-off module's records kept, ids reserved | game: `src\xrGame` (the ALife registry's save and load, the save extensions, `xms_game.cpp`), the stock scripts' save hooks, `docs\dead-air\SAVE_COMPATIBILITY.md`, `tools\qa` |
+| G4 | agent, with G3 | 1.8: what scripts save about a module's objects, the quest runtime keeping an absent module's quests, per-module data kept | game: `packaging\dead-air-x64\compatibility\gamedata\scripts` (`xms_*.script`), `tools\nq` |
 | - | lead | this plan, the contracts' final text, integration, the game build and deploy, the in-game proof, the one full read by the critic and its fixes |
 
 ## 4. State
