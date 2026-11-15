@@ -56,6 +56,8 @@ pub struct LevelOptions {
     pub build: BuildParams,
     /// The game types, one bit each.
     pub map_usage: u16,
+    /// The size of the level's streaming cells in metres; 0: the level does not stream.
+    pub cell_size: u32,
 }
 
 impl Default for LevelOptions {
@@ -69,6 +71,7 @@ impl Default for LevelOptions {
             light_sun_quality: 3,
             build: BuildParams::default(),
             map_usage: 0xffff,
+            cell_size: 0,
         }
     }
 }

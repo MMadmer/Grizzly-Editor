@@ -864,6 +864,16 @@ async fn play_module(
             let target = root.root.display().to_string();
             let mut files = Value::Null;
             if build {
+                // the module's piece of the level first, when the scene has one that is not fresh
+                let piece = Request {
+                    steps: Some(vec![Step::Piece]),
+                    only: None,
+                    force: false,
+                    opts: service::default_options(&e2),
+                    verify_restrictors: false,
+                };
+                pipeline::run(&e2, &s2, &piece, &ctx).await?;
+                ctx.check()?;
                 let req = gz_build::BuildRequest {
                     kind: gz_build::BuildKind::ToFolder,
                     target: target.clone(),
@@ -1324,7 +1334,15 @@ async fn compile_folder(ed: Arc<Editor>, p: CompileParams) -> Reply {
         names.join(", "),
         if flags.is_empty() { String::new() } else { format!(" {flags}") }
     ));
-    let req = compile::Request { level: level.clone(), dir: dir.clone(), parts, flags };
+    let req = compile::Request {
+        level: level.clone(),
+        dir: dir.clone(),
+        parts,
+        flags,
+        pieces: None,
+        piece: false,
+        cells: 0,
+    };
     let e2 = ed.clone();
     let id = ed
         .jobs

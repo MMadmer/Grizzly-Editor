@@ -40,6 +40,9 @@ pub mod chunk {
     pub const MU_MODELS: u32 = 14;
     pub const MU_REFS: u32 = 15;
     pub const SMOOTH_GROUPS: u32 = 16;
+    /// The occluders of a piece's build: faces the light's rays meet and nothing else reads.
+    /// Optional; a file without it has none.
+    pub const OCCLUDERS: u32 = 17;
 }
 
 const PARAMS: usize = 52;
@@ -53,6 +56,7 @@ pub(crate) const LIGHT: usize = 108;
 const LIGHT_DYNAMIC: usize = 144;
 const LOD: usize = 644;
 const MU_REF: usize = 108;
+const OCCLUDER: usize = 64;
 
 /// `b_params`: the build settings of a level.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -372,6 +376,40 @@ pub struct MuReference {
     pub reserved: [u32; 8],
 }
 
+/// A triangle that only casts a shadow: what a piece of a level is lit beside (the rest of the
+/// level's static geometry). Its corners in world space, its texture coordinates and its texture
+/// (an index into the textures), whose alpha the rays read; only faces that cast shadows are made
+/// occluders.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Occluder {
+    pub p: [Vec3; 3],
+    pub t: [Vec2; 3],
+    /// Index into the textures.
+    pub texture: u16,
+}
+
+impl Occluder {
+    fn read(b: &[u8]) -> Self {
+        let uv = |at: usize| Vec2::new(f32_at(b, at), f32_at(b, at + 4));
+        Self {
+            p: [vec3_at(b, 0), vec3_at(b, 12), vec3_at(b, 24)],
+            t: [uv(36), uv(44), uv(52)],
+            texture: u16_at(b, 60),
+        }
+    }
+
+    fn write(&self, w: &mut Writer) {
+        for p in self.p {
+            w.w_vec3(p);
+        }
+        for t in self.t {
+            w.w_vec2(t);
+        }
+        w.w_u16(self.texture);
+        w.w_u16(0);
+    }
+}
+
 /// A whole `build.prj`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BuildProject {
@@ -395,6 +433,8 @@ pub struct BuildProject {
     pub lods: Vec<BuildLod>,
     pub mu_models: Vec<MuModel>,
     pub mu_refs: Vec<MuReference>,
+    /// Faces that only cast shadows (a piece's build); written only when there are any.
+    pub occluders: Vec<Occluder>,
 }
 
 /// What a chunk of the file holds, for a sentence about it, and the size of its records when it
@@ -418,6 +458,7 @@ fn chunk_info(id: u32) -> Option<(&'static str, usize)> {
         chunk::MU_MODELS => ("multi-usage models", 1),
         chunk::MU_REFS => ("multi-usage references", MU_REF),
         chunk::SMOOTH_GROUPS => ("smoothing groups", 4),
+        chunk::OCCLUDERS => ("occluders", OCCLUDER),
         _ => return None,
     })
 }
@@ -611,6 +652,7 @@ impl BuildProject {
                 reserved,
             }
         })?;
+        out.occluders = records(&r, chunk::OCCLUDERS, OCCLUDER, Occluder::read)?;
         Ok(out)
     }
 
@@ -747,6 +789,13 @@ impl BuildProject {
                 }
             }
         });
+        if !self.occluders.is_empty() {
+            w.chunk(chunk::OCCLUDERS, |w| {
+                for o in &self.occluders {
+                    o.write(w);
+                }
+            });
+        }
         w.into_bytes()
     }
 }
@@ -843,6 +892,7 @@ mod tests {
                 sector: 2,
                 reserved: [0; 8],
             }],
+            occluders: Vec::new(),
         }
     }
 
@@ -880,6 +930,30 @@ mod tests {
         assert_eq!(back, file);
         assert_eq!(back.write(), bytes);
         assert_eq!(back.portals[0].used().len(), 4);
+    }
+
+    #[test]
+    fn the_occluders_round_trip_and_a_file_without_them_has_none() {
+        let plain = project();
+        let bytes = plain.write();
+        assert!(Reader::new(&bytes).sub(chunk::OCCLUDERS).unwrap().is_none());
+        assert!(BuildProject::read(&bytes).unwrap().occluders.is_empty());
+        let mut with = plain.clone();
+        with.occluders = vec![
+            Occluder {
+                p: [Vec3::ZERO, Vec3::X, Vec3::new(0.0, 0.0, 2.0)],
+                t: [Vec2::ZERO, Vec2::new(1.0, 0.0), Vec2::new(0.5, 0.25)],
+                texture: 1,
+            },
+            Occluder { texture: 0, ..Occluder::default() },
+        ];
+        let bytes2 = with.write();
+        assert_eq!(Reader::new(&bytes2).sub(chunk::OCCLUDERS).unwrap().unwrap().len(), 2 * 64);
+        // the file of today's chunks, then the occluders: an older file is a prefix of this one
+        assert!(bytes2.starts_with(&bytes));
+        let back = BuildProject::read(&bytes2).unwrap();
+        assert_eq!(back, with);
+        assert_eq!(back.write(), bytes2);
     }
 
     #[test]

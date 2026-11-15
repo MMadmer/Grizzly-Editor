@@ -106,8 +106,8 @@ pub use point::{
     Falloff, LP_DEFAULT, LP_DONT_HEMI, LP_DONT_RGB, LP_DONT_SUN, LP_USE_FACE_DISABLE, Tracer, light_point,
 };
 pub use ray::{
-    CFORM_VERSION, LightCache, NO_TRI, Opacity, RapidCollector, RayFace, RayModel, RcFace, RcastForm,
-    build_ray_model, casts,
+    CFORM_VERSION, LightCache, NO_TRI, Occluder, Opacity, RapidCollector, RayFace, RayModel, RcFace,
+    RcastForm, build_ray_model, casts,
 };
 pub use vertex::{TransGroups, apply_vertex_light, light_vertices, mix_group};
 

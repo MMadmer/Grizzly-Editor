@@ -276,6 +276,11 @@ fn layers(scene: &SceneState, step: Step, opts: &Options) -> u64 {
         Step::Light => {
             h.word(opts.quality as u64);
             h.str(&opts.flags);
+            // only a level that streams says so: the fingerprint of one that does not stays as it was
+            if level.cell_size > 0 {
+                h.str("cells");
+                h.word(u64::from(level.cell_size));
+            }
         }
         Step::Details => {
             if let Some(d) = &scene.bulk.details {
@@ -297,6 +302,16 @@ fn layers(scene: &SceneState, step: Step, opts: &Options) -> u64 {
             h.word(ai_nodes_hash(scene));
         }
         Step::Spawn => h.str(&opts.game.to_lowercase()),
+        // the build settings, the light's, the quality, the flags, the linked game; the objects
+        // (authored ones the piece, the rest its shadows) and the lights are the classes it reads
+        Step::Piece => {
+            debug_hash(&mut h, &level.build);
+            h.word(u64::from(level.light_hemi_quality) | u64::from(level.light_sun_quality) << 8);
+            debug_hash(&mut h, &scene.tools.part(ObjClass::Light).light());
+            h.word(opts.quality as u64);
+            h.str(&opts.flags);
+            h.str(&opts.game.to_lowercase());
+        }
         Step::DetailLight | Step::GameGraph | Step::SpawnLayer => {}
     }
     h.str(&level.level_path);

@@ -63,6 +63,18 @@ pub struct RayFace {
     pub uv: [Vec2; 3],
 }
 
+/// A face that only casts a shadow: what a piece of a level is lit beside (the rest of the
+/// level's static geometry). Its corners in world space, its texture and texture coordinates, and
+/// whether it lets no light through; the ray model holds it, nothing else does.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Occluder {
+    pub p: [Vec3; 3],
+    /// The texture (an index into the build's textures) whose alpha a ray reads.
+    pub texture: u32,
+    pub uv: [Vec2; 3],
+    pub opaque: bool,
+}
+
 /// The ray model.
 #[derive(Clone, Debug)]
 pub struct RayModel {
@@ -655,16 +667,19 @@ fn described(face: &Face, materials: &[BuildMaterial], level: Option<FaceId>) ->
 }
 
 /// The ray model of a build: the shadow-casting faces of the level (one of each set of equal
-/// faces) and of every static model's reference, with the soup as `build.cform` holds it.
-/// `bounds` is the box of the build's vertices; `ctl` stops it between faces.
+/// faces) and of every static model's reference, with the soup as `build.cform` holds it, and the
+/// `occluders` after them (in the ray model only: the soup ends before them). `bounds` is the box
+/// of the build's vertices; `ctl` stops it between faces.
 ///
 /// The soup is what X-Ray's compiler's collector makes of these faces added in order
 /// (`gz_fmt_level::CollectorPacked`, welded within `EPS_L`), welded here all at once
 /// ([`weld_packed`]); a model's faces are chosen once for all its references.
+#[allow(clippy::too_many_arguments)]
 pub fn build_ray_model(
     mesh: &mut Mesh,
     mu_models: &mut [MuModel],
     mu_refs: &[MuReference],
+    occluders: &[Occluder],
     shaders: &Shaders,
     materials: &[BuildMaterial],
     bounds: &Aabb,
@@ -709,17 +724,37 @@ pub fn build_ray_model(
             rc_faces.push(rc);
         }
     }
+    // the occluders: corners of their own, welded like the rest, inside the weld's box
+    let mut weld_box = *bounds;
+    if !occluders.is_empty() {
+        points.begin();
+        for (i, o) in occluders.iter().enumerate() {
+            for (k, p) in o.p.iter().enumerate() {
+                points.push((i * 3 + k) as u32, *p);
+                weld_box.modify(*p);
+            }
+            faces.push(RayFace {
+                face: None,
+                cast_shadow: true,
+                opaque: o.opaque,
+                texture: o.texture,
+                uv: o.uv,
+            });
+        }
+    }
     ctl.check()?;
     let stop = || ctl.cancelled();
-    let Some((verts, index)) = weld_packed(bounds, &points.points, Some(&points.same), &stop) else {
+    let Some((verts, index)) = weld_packed(&weld_box, &points.points, Some(&points.same), &stop) else {
         ctl.check()?;
         return Err(LcError::Cancelled);
     };
     drop(points);
     let tris: Vec<[u32; 3]> = index.as_chunks::<3>().0.to_vec();
-    let dummy: Vec<u32> = (0..tris.len() as u32).collect();
     ctl.check()?;
     let model = RayModel::new(&verts, &tris, faces, Opacity::Squared, false)?;
+    let mut tris = tris;
+    tris.truncate(rc_faces.len());
+    let dummy: Vec<u32> = (0..tris.len() as u32).collect();
     Ok((model, RcastForm { bounds: *bounds, verts, tris, dummy, faces: rc_faces }))
 }
 
@@ -1287,9 +1322,17 @@ mod tests {
         let (mut mesh2, mut models2) = (mesh.clone(), models.clone());
         let (old_model, old_form) =
             build_ray_model_reference(&mut mesh, &mut models, &refs, &shaders, &materials, &bounds);
-        let (model, form) =
-            build_ray_model(&mut mesh2, &mut models2, &refs, &shaders, &materials, &bounds, &Ctl::quiet())
-                .unwrap();
+        let (model, form) = build_ray_model(
+            &mut mesh2,
+            &mut models2,
+            &refs,
+            &[],
+            &shaders,
+            &materials,
+            &bounds,
+            &Ctl::quiet(),
+        )
+        .unwrap();
         assert!(
             old_form.verts.len() < old_form.tris.len() * 3 / 2,
             "nothing was welded: the test proves little"
@@ -1309,7 +1352,16 @@ mod tests {
         let (mut mesh3, mut models3) = (mesh2.clone(), models2.clone());
         let (_, one) = pool
             .install(|| {
-                build_ray_model(&mut mesh3, &mut models3, &refs, &shaders, &materials, &bounds, &Ctl::quiet())
+                build_ray_model(
+                    &mut mesh3,
+                    &mut models3,
+                    &refs,
+                    &[],
+                    &shaders,
+                    &materials,
+                    &bounds,
+                    &Ctl::quiet(),
+                )
             })
             .unwrap();
         assert!(one.write() == old_form.write());

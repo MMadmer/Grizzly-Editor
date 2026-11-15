@@ -158,6 +158,17 @@ pub fn load(
         }
     }
     g.load_mu(prj)?;
+    // a piece's occluders: what the rays read of them, a transparent one by its texture's alpha
+    g.occluders = prj
+        .occluders
+        .iter()
+        .map(|o| gz_lc_light::Occluder {
+            p: o.p,
+            texture: u32::from(o.texture),
+            uv: o.t,
+            opaque: g.textures.get(usize::from(o.texture)).is_none_or(|t| !(t.has_alpha && t.has_surface)),
+        })
+        .collect();
     // the pools' later blocks go where build.prj was
     g.mesh.mark_loaded();
     let mut bb = Aabb::INVALID;

@@ -21,7 +21,7 @@ fn shader(name: &str, flags: u32) -> ShaderXrlc {
 
 /// A floor of 8 x 8 quads 48 m wide (long edges to split), a box on it, a wall of vertex light,
 /// and an MU model placed twice; two sectors and a portal between them.
-fn project() -> (BuildProject, Shaders, Vec<gz_lc_light::BuildTexture>) {
+pub(crate) fn project() -> (BuildProject, Shaders, Vec<gz_lc_light::BuildTexture>) {
     let mut verts = Vec::new();
     let mut faces = Vec::new();
     let mut groups = Vec::new();
@@ -185,6 +185,7 @@ fn project() -> (BuildProject, Shaders, Vec<gz_lc_light::BuildTexture>) {
             MuReference { model: 0, transform: place(10.0, 10.0), flags: 0, sector: 1, reserved: [0; 8] },
             MuReference { model: 0, transform: place(-10.0, 12.0), flags: 0, sector: 0, reserved: [0; 8] },
         ],
+        occluders: Vec::new(),
     };
     let rendering = ShaderXrlc::COLLISION
         | ShaderXrlc::RENDERING
@@ -486,7 +487,7 @@ fn a_stop_while_the_references_are_lit_leaves_the_rest_unlit() {
 /// The CPU's light with every sample scaled by a factor between 0.9 and 1.1 drawn from the
 /// sample's own position: another light, the same geometry.
 #[derive(Default)]
-struct Scaled(CpuLighter);
+pub(crate) struct Scaled(CpuLighter);
 
 struct ScaledScene<'a>(Box<dyn gz_lc_light::LitScene + 'a>);
 

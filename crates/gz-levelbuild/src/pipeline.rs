@@ -421,9 +421,12 @@ pub(crate) async fn run(
     }
     // a stock level's compile steps run only when they are asked for by name or forced
     let stock = crate::stock::is_stock(&lb.game_levels(editor).await, &level);
+    let pieces = lb.game_pieces(editor).await;
     let explicit = req.force || req.only.is_some() || req.steps.is_some();
-    let req =
-        &Request { opts: Options { library, stock: stock && !explicit, ..req.opts.clone() }, ..req.clone() };
+    let req = &Request {
+        opts: Options { library, stock: stock && !explicit, game_level: stock, pieces, ..req.opts.clone() },
+        ..req.clone()
+    };
     let dir = level_dir(session, &level).map_err(JobError::new)?;
     let record = lb
         .record_now(editor, session, &level)
@@ -448,11 +451,12 @@ pub(crate) async fn run(
         status.get(*s).is_some_and(|x| !matches!(x.state, StepState::Fresh | StepState::NotNeeded))
     };
     // what has nothing to make (no detail objects): not what a stock level does not need
-    let not_needed: Vec<Step> = asked.iter().copied().filter(|s| !service::needed(&work, *s)).collect();
+    let not_needed: Vec<Step> =
+        asked.iter().copied().filter(|s| !service::is_needed(&work, *s, &req.opts)).collect();
     let plan: Vec<Step> = asked
         .iter()
         .copied()
-        .filter(|s| service::needed(&work, *s) && (forced.contains(s) || stale(s)))
+        .filter(|s| service::is_needed(&work, *s, &req.opts) && (forced.contains(s) || stale(s)))
         .collect();
     let mut cx = StepCx {
         editor,
@@ -471,7 +475,15 @@ pub(crate) async fn run(
     };
     // what a step that has nothing to make made before goes, so the game reads none of it
     for s in &not_needed {
-        if cx.record.steps.remove(s).is_some() {
+        // a piece the linked game cannot load stays: it is the module's for the games that can
+        if *s == Step::Piece && req.opts.game_level && service::needed(&cx.work, *s) {
+            continue;
+        }
+        if let Some(rec) = cx.record.steps.remove(s) {
+            if *s == Step::Piece {
+                remove_piece(editor, session, &level, &rec.files).await;
+                continue;
+            }
             let names: Vec<String> = match s {
                 Step::Details => {
                     vec!["build.details".into(), format!("{}.dds", crate::details::DETAILS_TEX_NAME)]
@@ -692,7 +704,7 @@ async fn preflight(cx: &mut StepCx<'_>, plan: &[Step]) -> Result<(), JobError> {
             position: None,
         });
     };
-    if (has(Step::Light) || has(Step::DetailLight))
+    if (has(Step::Light) || has(Step::DetailLight) || has(Step::Piece))
         && let Err(e) = gz_lc::Options::parse(cx.req.opts.flags.split_whitespace())
     {
         refuse(&mut found, Step::Light, e.to_string(), None);
@@ -893,6 +905,7 @@ async fn run_step(cx: &mut StepCx<'_>, step: Step) -> Result<Made, JobError> {
         Step::Details => step_details(cx).await,
         Step::Light => step_compile(cx, crate::compile::Part::Level).await,
         Step::DetailLight => step_compile(cx, crate::compile::Part::Details).await,
+        Step::Piece => step_piece(cx).await,
     }
 }
 
@@ -1363,13 +1376,31 @@ async fn step_details(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
 
 /// The level compiler (geometry and light) or the detail compiler on the level folder.
 async fn step_compile(cx: &mut StepCx<'_>, part: crate::compile::Part) -> Result<Made, JobError> {
+    let level_part = part == crate::compile::Part::Level;
+    // the level's streaming cells go into the module's level folder; with none, the cells an
+    // earlier build left there go
+    let pieces = if level_part {
+        let dir = pieces_dir(cx.session, &cx.level);
+        let (guard, d2) = (write_guard(cx.editor), dir.clone());
+        cx.editor
+            .exec
+            .io(move || guard.check(&d2).map_err(|e| e.to_string()))
+            .await
+            .map_err(JobError::new)?;
+        Some(dir)
+    } else {
+        None
+    };
     let req = crate::compile::Request {
         level: cx.level.clone(),
         dir: cx.dir.clone(),
         parts: vec![part],
         flags: cx.req.opts.flags.clone(),
+        pieces,
+        piece: false,
+        cells: if level_part { cx.work.meta.level.cell_size } else { 0 },
     };
-    let step = if part == crate::compile::Part::Level { Step::Light } else { Step::DetailLight };
+    let step = if level_part { Step::Light } else { Step::DetailLight };
     let lb = LevelBuild::of(cx.session);
     *lb.running.lock() = Some((service::Running::Compile, cx.ctx.id));
     let out = crate::compile::run(cx.editor, req, cx.ctx).await;
@@ -1417,6 +1448,172 @@ async fn step_compile(cx: &mut StepCx<'_>, part: crate::compile::Part) -> Result
     Ok(Made { files, note: report, ..Made::default() })
 }
 
+/// The module's folder of a level's pieces: `<project>\levels\<level>\pieces`, beside the
+/// level's other module files (`overlay.xcform`, `overlay_visuals.ltx`).
+pub(crate) fn pieces_dir(session: &ProjectSession, level: &str) -> PathBuf {
+    gz_export_level::gather::level_dir(&session.root, level).join("pieces")
+}
+
+/// Where a piece's build works: `<project>\temp\piece_<level>` - its build project, its
+/// compiler's scratch - never beside the piece, which ships.
+pub(crate) fn piece_scratch(session: &ProjectSession, level: &str) -> PathBuf {
+    session.root.join("temp").join(format!("piece_{level}"))
+}
+
+/// The files a module's piece build wrote, project-relative, `/` between the names.
+fn piece_files(level: &str, report: &Value) -> Vec<String> {
+    let mut files = Vec::new();
+    for part in report.get("parts").and_then(Value::as_array).into_iter().flatten() {
+        for p in part.get("pieces").and_then(Value::as_array).into_iter().flatten() {
+            let name = p.get("name").and_then(Value::as_str).unwrap_or_default();
+            for f in p.get("files").and_then(Value::as_array).into_iter().flatten() {
+                if let Some(n) = f.get("name").and_then(Value::as_str) {
+                    files.push(format!("levels/{level}/pieces/{name}/{}", n.replace('\\', "/")));
+                }
+            }
+        }
+    }
+    files
+}
+
+/// A module's piece of a level of the game: the static objects the module places compiled and lit
+/// beside the rest of the scene (its occluders) into `levels\<level>\pieces\main`, their collision
+/// into the module's `overlay.xcform` with the cut list it holds kept. The build project and the
+/// compiler's scratch stay under the project's `temp`.
+async fn step_piece(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
+    let scratch = piece_scratch(cx.session, &cx.level);
+    let pieces = pieces_dir(cx.session, &cx.level);
+    let (root, level) = (cx.session.root.clone(), cx.level.clone());
+    let mut scene = cx.work.clone();
+    scene.meta.level = cx.req.opts.quality.apply(&scene.meta.level);
+    let scene = Arc::new(scene);
+    cx.ctx.stage("Building the piece's geometry");
+    let (lib, engine, s2) = (cx.inp.lib.clone(), cx.inp.engine.clone(), scene.clone());
+    let job = cx.ctx.clone();
+    let existing = {
+        let p = gz_export_level::gather::level_dir(&root, &level).join("overlay.xcform");
+        cx.editor.exec.io(move || std::fs::read(p).unwrap_or_default()).await
+    };
+    let (project, log, collision) = cx
+        .editor
+        .exec
+        .cpu(move || -> crate::Result<(Vec<u8>, Vec<Finding>, gz_fmt_level::XcForm)> {
+            let look = crate::files::lookup(lib);
+            let stop = || job.cancel.is_cancelled();
+            let c = prj::compile_piece_until(&s2, &look, &engine, &stop)?;
+            let sector =
+                if existing.is_empty() { 0 } else { gz_fmt_level::XcForm::read_back(&existing).0.sector };
+            let form = gz_export_level::overlay::collision_of(
+                &s2,
+                &|o| o.marks.authored && !o.marks.removed,
+                i64::from(sector),
+                &look,
+                &existing,
+                "The module's static objects on the level have no triangle to collide with.",
+            )
+            .map_err(|e| crate::BuildError::new(e.0))?;
+            Ok((c.project.write(), c.log, form.form))
+        })
+        .await
+        .map_err(job_err)?;
+    log_lines(cx.editor, &log);
+    cx.ctx.check()?;
+    write_files(cx.editor, scratch.clone(), vec![("build.prj".to_owned(), project)]).await?;
+    let (guard, d2) = (write_guard(cx.editor), pieces.clone());
+    cx.editor.exec.io(move || guard.check(&d2).map_err(|e| e.to_string())).await.map_err(JobError::new)?;
+    let req = crate::compile::Request {
+        level: cx.level.clone(),
+        dir: scratch,
+        parts: vec![crate::compile::Part::Level],
+        flags: cx.req.opts.flags.clone(),
+        pieces: Some(pieces),
+        piece: true,
+        cells: 0,
+    };
+    let lb = LevelBuild::of(cx.session);
+    *lb.running.lock() = Some((service::Running::Compile, cx.ctx.id));
+    let out = crate::compile::run(cx.editor, req, cx.ctx).await;
+    *lb.running.lock() = None;
+    let report = out?;
+    for part in report.get("parts").and_then(Value::as_array).into_iter().flatten() {
+        for w in part.get("warnings").and_then(Value::as_array).into_iter().flatten() {
+            if let Some(t) = w.as_str() {
+                cx.problems.push(LevelProblem {
+                    step: Step::Piece,
+                    code: "compiler",
+                    severity: Severity::Warning,
+                    text: t.trim().to_owned(),
+                    object: None,
+                    position: None,
+                });
+            }
+        }
+    }
+    // the collision once the piece is in: the overlay and the picture describe the same objects
+    let bytes = collision.write();
+    let (guard, root2, level2) = (write_guard(cx.editor), root.clone(), level.clone());
+    cx.editor
+        .exec
+        .io(move || {
+            gz_export_level::gather::write_level_file(
+                &root2,
+                &level2,
+                "overlay.xcform",
+                &bytes,
+                "overlay.xcform",
+                &guard,
+            )
+        })
+        .await
+        .map_err(JobError::new)?;
+    let mut files = piece_files(&level, &report);
+    files.push(format!("levels/{level}/overlay.xcform"));
+    let note = json!({ "parts": report.get("parts").cloned().unwrap_or(Value::Null), "lighter": report.get("lighter").cloned().unwrap_or(Value::Null), "collision": { "triangles": collision.tris.len(), "cuts": collision.cuts.len() } });
+    Ok(Made { files, note, ..Made::default() })
+}
+
+/// What a module's piece build left, when the scene has no piece any more: the piece goes, and so
+/// do the triangles it wrote into `overlay.xcform` (the cut list stays; a file of nothing else
+/// goes).
+async fn remove_piece(editor: &Arc<Editor>, session: &ProjectSession, level: &str, files: &[String]) {
+    let dir = pieces_dir(session, level).join(gz_lc::PIECE_NAME);
+    let module = gz_export_level::gather::level_dir(&session.root, level);
+    let xcform = files.iter().any(|f| f.to_ascii_lowercase().ends_with("overlay.xcform"));
+    let guard = write_guard(editor);
+    let level = level.to_owned();
+    let root = session.root.clone();
+    editor
+        .exec
+        .io(move || {
+            if guard.check(&dir).is_err() || guard.check(&module).is_err() {
+                return;
+            }
+            if dir.is_dir() {
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+            let path = module.join("overlay.xcform");
+            if xcform && let Ok(bytes) = std::fs::read(&path) {
+                let (mut form, _) = gz_fmt_level::XcForm::read_back(&bytes);
+                if form.cuts.is_empty() {
+                    let _ = std::fs::remove_file(&path);
+                } else {
+                    form.verts = Vec::new().into();
+                    form.tris = Vec::new().into();
+                    form.materials.clear();
+                    let _ = gz_export_level::gather::write_level_file(
+                        &root,
+                        &level,
+                        "overlay.xcform",
+                        &form.write(),
+                        "overlay.xcform",
+                        &guard,
+                    );
+                }
+            }
+        })
+        .await;
+}
+
 /// `build.err` of the level folder into the viewport's error drawing, each refused face a problem
 /// at its place.
 async fn show_errors(cx: &mut StepCx<'_>) {
@@ -1459,6 +1656,55 @@ mod tests {
         let stopped = job_err(crate::BuildError::stopped());
         assert!(stopped.cancelled && stopped.message == "Stopped.");
         assert!(!job_err(crate::BuildError::new("x")).cancelled);
+    }
+
+    /// A module build ships the level's pieces - the module's content - and never the piece
+    /// build's scratch under `temp`, nor the level build's own files.
+    #[test]
+    fn a_module_ships_its_pieces_and_never_their_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for f in [
+            "mod.ltx",
+            "levels\\l01_escape\\pieces\\main\\piece",
+            "levels\\l01_escape\\pieces\\main\\piece.geom",
+            "levels\\l01_escape\\pieces\\main\\piece.ltx",
+            "levels\\l01_escape\\pieces\\main\\lmap#1_1.dds",
+            "levels\\l01_escape\\pieces\\cell_0_-1\\piece",
+            "levels\\l01_escape\\overlay.xcform",
+            "temp\\piece_l01_escape\\build.prj",
+            "temp\\piece_l01_escape\\build.err",
+            "gamedata\\levels\\l01_escape\\build.state",
+        ] {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "x").unwrap();
+        }
+        let rt =
+            gz_task::Runtime::start(gz_task::ExecOptions { async_threads: 1, cpu_threads: 1, io_threads: 2 })
+                .unwrap();
+        let walk = gz_build::BuildWalk::scan(
+            &gz_project::FileTree::scan(root),
+            &[],
+            gz_build::WalkScope::Module,
+            &rt.exec(),
+        );
+        let files: Vec<&str> = walk.files.iter().map(|f| f.rel.as_str()).collect();
+        for want in [
+            "levels/l01_escape/pieces/main/piece",
+            "levels/l01_escape/pieces/main/piece.geom",
+            "levels/l01_escape/pieces/main/piece.ltx",
+            "levels/l01_escape/pieces/main/lmap#1_1.dds",
+            "levels/l01_escape/pieces/cell_0_-1/piece",
+            "levels/l01_escape/overlay.xcform",
+        ] {
+            assert!(files.contains(&want), "{want} does not ship: {files:?}");
+        }
+        assert!(files.iter().all(|f| !f.starts_with("temp/") && !f.contains("build.")), "{files:?}");
+        // where the steps put them
+        let session_root = std::path::Path::new("P:\\proj");
+        let pieces = gz_export_level::gather::level_dir(session_root, "l01_escape").join("pieces");
+        assert_eq!(pieces, session_root.join("levels").join("l01_escape").join("pieces"));
     }
 
     #[test]

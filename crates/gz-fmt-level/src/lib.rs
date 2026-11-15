@@ -72,15 +72,15 @@ pub use ai_scene::{
 };
 pub use build_prj::{
     BuildFace, BuildGlow, BuildLight, BuildLightDynamic, BuildLod, BuildMaterial, BuildParams, BuildProject,
-    BuildTexture, Light, LightControl, LodFace, MAX_PORTAL_VERTS, MuModel, MuReference, Portal,
+    BuildTexture, Light, LightControl, LodFace, MAX_PORTAL_VERTS, MuModel, MuReference, Occluder, Portal,
     XRCL_CURRENT_VERSION, chunk as build_chunk,
 };
 pub use bvh::{Bvh, Ray, RayHit, ray_triangle};
 pub use cform::{CFORM_VERSION, CForm, Tri};
 pub use collector::{Collector, CollectorPacked};
 pub use compiled::{
-    CompiledGlow, CompiledLevel, CompiledLight, CompiledPortal, CompiledSector, Geometry, ShaderEntry,
-    Visual, VisualKind, parse_shader,
+    CompiledGlow, CompiledLevel, CompiledLight, CompiledPortal, CompiledSector, GeomTables, Geometry,
+    LEVEL_COMPILER_VERSION, PIECE_SECTOR_AUTO, PieceRoot, ShaderEntry, Visual, VisualKind, parse_shader,
 };
 pub use details::{
     ColorIndex, DETAIL_SLOT_SIZE, DETAIL_VERSION, DETMGR_VERSION, DETOBJ_VERSION, DO_NO_WAVING,

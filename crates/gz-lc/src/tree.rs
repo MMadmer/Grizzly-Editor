@@ -94,10 +94,21 @@ pub enum Item {
     Lod { children: Vec<u32>, material: u32, faces: Box<[[LodVertex; 4]; 8]> },
 }
 
+/// Which file of a build a node is written into: the level (or the one piece a piece build
+/// makes), the piece of a streaming cell, or none (a LOD whose models went into cells).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Place {
+    #[default]
+    Base,
+    Cell([i32; 2]),
+    Dropped,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TreeNode {
     pub base: NodeBase,
     pub item: Item,
+    pub place: Place,
 }
 
 /// The tree, the MU models' visuals, the containers and the shader names of a build.
@@ -239,6 +250,11 @@ pub struct VbContainer {
 
 impl VbContainer {
     /// Begin, add, end: the container's id and the first vertex.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.decls.is_empty()
+    }
+
     pub fn add(&mut self, d: &Decl, bytes: Vec<u8>) -> (u32, u32) {
         let collected = bytes.len();
         let verts = collected / d.stride as usize;
@@ -388,6 +404,7 @@ fn build_ogf(g: &LcGlobalData, faces: &[gz_lc_light::FaceId]) -> Option<Ogf> {
 pub fn flex2ogf(
     g: &LcGlobalData,
     splits: Vec<Split>,
+    places: &[Place],
     tree: &mut Tree,
     noise: bool,
     log: &mut Log,
@@ -402,9 +419,11 @@ pub fn flex2ogf(
     let ogfs: Vec<Option<Ogf>> =
         splits.par_iter().map(|s| if ctl.cancelled() { None } else { build_ogf(g, s) }).collect();
     ctl.check()?;
-    for o in ogfs.into_iter().flatten() {
+    for (k, o) in ogfs.into_iter().enumerate() {
+        let Some(o) = o else { continue };
+        let place = places.get(k).copied().unwrap_or_default();
         let id = tree.nodes.len();
-        tree.nodes.push(TreeNode { base: NodeBase::new(0, o.sector), item: Item::Ogf(Box::new(o)) });
+        tree.nodes.push(TreeNode { base: NodeBase::new(0, o.sector), item: Item::Ogf(Box::new(o)), place });
         tree.bounds_jobs.push(BoundsOf::Tree(id));
     }
     crate::geom::timed(log, "the visuals made", &mut tm);
@@ -539,8 +558,16 @@ fn qc(v: f32) -> i16 {
 
 /// `export_geometry` of every model: its subdivisions' vertices into the shared buffers.
 pub fn mu_export_geometry(g: &LcGlobalData, tree: &mut Tree) {
+    mu_export_geometry_of(g, tree, &|_| true);
+}
+
+/// [`mu_export_geometry`] of the models `used` takes, in the models' order.
+fn mu_export_geometry_of(g: &LcGlobalData, tree: &mut Tree, used: &dyn Fn(usize) -> bool) {
     let d = decl_mu();
     for (mi, m) in g.mu_models.iter().enumerate() {
+        if !used(mi) {
+            continue;
+        }
         let mut bb = Aabb::INVALID;
         for &v in m.mesh.vertices() {
             if let Some(x) = m.mesh.vertex(v) {
@@ -601,8 +628,9 @@ pub fn mu_export_geometry(g: &LcGlobalData, tree: &mut Tree) {
 }
 
 /// `export_ogf` of every reference: a visual per subdivision placing the model's, and a LOD
-/// node over them when the model has a LOD, its corners coloured by the reference's light.
-pub fn mu_export_refs(g: &LcGlobalData, extra: &Extra, tree: &mut Tree) -> Result<()> {
+/// node over them when the model has a LOD (and `lods`: a piece draws its models without one), its
+/// corners coloured by the reference's light.
+pub fn mu_export_refs(g: &LcGlobalData, extra: &Extra, tree: &mut Tree, lods: bool) -> Result<()> {
     for r in &g.mu_refs {
         let mi = r.model as usize;
         let Some(m) = g.mu_models.get(mi) else { continue };
@@ -629,13 +657,17 @@ pub fn mu_export_refs(g: &LcGlobalData, extra: &Extra, tree: &mut Tree) -> Resul
             };
             let id = tree.nodes.len();
             generated.push(id as u32);
-            let mut node = TreeNode { base: NodeBase::new(0, r.sector), item: Item::Ref(Box::new(item)) };
+            let mut node = TreeNode {
+                base: NodeBase::new(0, r.sector),
+                item: Item::Ref(Box::new(item)),
+                place: Place::Base,
+            };
             node.base.sector = r.sector;
             tree.nodes.push(node);
             tree.bounds_jobs.push(BoundsOf::Tree(id));
             set_box(tree, id);
         }
-        if m.lod_id == u16::MAX {
+        if m.lod_id == u16::MAX || !lods {
             continue;
         }
         let lod: &BuildLod = extra.lods.get(usize::from(m.lod_id)).ok_or_else(|| {
@@ -662,6 +694,7 @@ pub fn mu_export_refs(g: &LcGlobalData, extra: &Extra, tree: &mut Tree) -> Resul
         tree.nodes.push(TreeNode {
             base: NodeBase::new(1, r.sector),
             item: Item::Lod { children: generated, material: lod.material, faces: faces.clone() },
+            place: Place::Base,
         });
         tree.bounds_jobs.push(BoundsOf::Tree(id));
         set_box(tree, id);
@@ -777,6 +810,37 @@ pub fn build_sectors(extra: &mut Extra, tree: &mut Tree, log: &mut Log) -> Resul
 }
 
 fn build_hierarchy(extra: &mut Extra, tree: &mut Tree, sid: u16, log: &mut Log) -> Result<usize> {
+    hierarchy(extra, tree, sid, Place::Base, log)
+}
+
+/// The hierarchy over the visuals of sector `sid` in `place`, X-Ray's: boxes of ever larger
+/// limits merged until one root holds them all; answers the root.
+fn hierarchy(extra: &mut Extra, tree: &mut Tree, sid: u16, place: Place, log: &mut Log) -> Result<usize> {
+    let grown = grow_hierarchy(extra, tree, sid, place, None);
+    if let Some(r) = grown.last {
+        return Ok(r);
+    }
+    match grown.free.as_slice() {
+        [one] => Ok(*one),
+        [] => {
+            log.msg(format!("Can't build hierrarhy for sector #{sid}"));
+            Err(Error::Invalid(format!("Can't build the hierarchy of the sector #{sid}.")))
+        }
+        _ => Err(Error::Invalid(format!("The sector #{sid} has more than one root."))),
+    }
+}
+
+/// What [`grow_hierarchy`] left: the last node it made when it ran to the end (the root), and the
+/// members no node holds.
+struct Grown {
+    last: Option<usize>,
+    free: Vec<usize>,
+}
+
+/// The nodes of the hierarchy over the members (sector `sid`, `place`), their boxes' limit growing
+/// from 8 m to the scene's size - or up to `cap`, when the members are to stay several roots.
+fn grow_hierarchy(extra: &mut Extra, tree: &mut Tree, sid: u16, place: Place, cap: Option<f32>) -> Grown {
+    let member = |n: &TreeNode| n.base.sector == sid && n.place == place;
     let mut scene = Aabb::INVALID;
     for n in &tree.nodes {
         scene.merge(&n.base.bbox);
@@ -792,11 +856,12 @@ fn build_hierarchy(extra: &mut Extra, tree: &mut Tree, sid: u16, log: &mut Log) 
         delimiter *= 2.0;
     }
     let mut any = false;
-    while limit <= delimiter {
+    let top = cap.map_or(delimiter, |c| delimiter.min(c));
+    while limit <= top {
         let isize = tree.nodes.len();
         for i in 0..isize {
             let Some(n) = tree.nodes.get(i) else { continue };
-            if n.base.connected || n.base.sector != sid {
+            if n.base.connected || !member(n) {
                 continue;
             }
             let mut children = vec![i as u32];
@@ -809,7 +874,7 @@ fn build_hierarchy(extra: &mut Extra, tree: &mut Tree, sid: u16, log: &mut Log) 
                 let mut best_v = f32::MAX;
                 for j in 0..isize {
                     let Some(c) = tree.nodes.get(j) else { continue };
-                    if c.base.connected || c.base.sector != sid {
+                    if c.base.connected || !member(c) {
                         continue;
                     }
                     if let Some(v) = validate_node(&bbox, &c.base.bbox, limit)
@@ -829,7 +894,11 @@ fn build_hierarchy(extra: &mut Extra, tree: &mut Tree, sid: u16, log: &mut Log) 
             }
             if children.len() > 1 {
                 let id = tree.nodes.len();
-                tree.nodes.push(TreeNode { base: NodeBase::new(level, sid), item: Item::Node(children) });
+                tree.nodes.push(TreeNode {
+                    base: NodeBase::new(level, sid),
+                    item: Item::Node(children),
+                    place,
+                });
                 tree.bounds_jobs.push(BoundsOf::Tree(id));
                 set_box(tree, id);
                 any = true;
@@ -842,22 +911,14 @@ fn build_hierarchy(extra: &mut Extra, tree: &mut Tree, sid: u16, log: &mut Log) 
         }
         limit *= 2.0;
     }
-    if any {
-        return Ok(tree.nodes.len() - 1);
-    }
-    let mut root = None;
-    for (i, n) in tree.nodes.iter().enumerate() {
-        if !n.base.connected && n.base.sector == sid {
-            if root.is_some() {
-                return Err(Error::Invalid(format!("The sector #{sid} has more than one root.")));
-            }
-            root = Some(i);
-        }
-    }
-    root.ok_or_else(|| {
-        log.msg(format!("Can't build hierrarhy for sector #{sid}"));
-        Error::Invalid(format!("Can't build the hierarchy of the sector #{sid}."))
-    })
+    let free = tree
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| !n.base.connected && member(n))
+        .map(|(i, _)| i)
+        .collect();
+    Grown { last: (any && cap.is_none()).then(|| tree.nodes.len() - 1), free }
 }
 
 // --------------------------------------------------------------------------------- bounds
@@ -1232,6 +1293,259 @@ pub fn save_sectors(sectors: &[Sector], level: &mut Writer) {
         });
     }
     level.chunk(8, |w| w.w(m.bytes()));
+}
+
+// --------------------------------------------------------------------------------- pieces
+
+/// The most a root of a piece spans, in metres: the engine hangs each root on the sector at its
+/// centre, so a root that held a whole building's corners in several sectors would lose them.
+pub const PIECE_ROOT_SIZE: f32 = 64.0;
+
+/// The streaming cell a point lies in: `[x, z]`, cells of `size` metres from the origin.
+#[must_use]
+pub fn cell_of(p: Vec3, size: f32) -> [i32; 2] {
+    [(p.x / size).floor() as i32, (p.z / size).floor() as i32]
+}
+
+/// Where a visual of this box goes when the level streams by cells of `size` metres: the level
+/// itself when it is larger than a cell on x or z, else the cell its centre lies in.
+#[must_use]
+pub fn place_of(b: &Aabb, size: f32) -> Place {
+    let s = b.max - b.min;
+    if s.x > size || s.z > size { Place::Base } else { Place::Cell(cell_of(b.center(), size)) }
+}
+
+/// The static models' visuals placed by cells: a reference by its own box, a LOD over references
+/// by its box - into the level with its references when it is larger than a cell; otherwise the
+/// LOD is dropped (the level's LOD atlas is no piece's) and each reference goes where its own box
+/// says.
+pub fn place_models(tree: &mut Tree, size: f32) {
+    for i in 0..tree.nodes.len() {
+        let Some(n) = tree.nodes.get(i) else { continue };
+        let place = place_of(&n.base.bbox, size);
+        match &n.item {
+            Item::Lod { children, .. } => {
+                let children = children.clone();
+                if place == Place::Base {
+                    for c in children {
+                        if let Some(x) = tree.nodes.get_mut(c as usize) {
+                            x.place = Place::Base;
+                        }
+                    }
+                } else {
+                    if let Some(x) = tree.nodes.get_mut(i) {
+                        x.place = Place::Dropped;
+                    }
+                    for c in children {
+                        if let Some(x) = tree.nodes.get_mut(c as usize) {
+                            x.base.connected = false;
+                            x.place = place_of(&x.base.bbox, size);
+                        }
+                    }
+                }
+            }
+            Item::Ref(_) if !n.base.connected => {
+                if let Some(x) = tree.nodes.get_mut(i) {
+                    x.place = place;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A streaming cell's piece: its roots, each with the level's sector it hangs on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CellPiece {
+    pub cell: [i32; 2],
+    pub roots: Vec<(usize, u16)>,
+}
+
+/// The sectors of a level that streams by cells: per sector the hierarchy over the visuals the
+/// level keeps (an empty root where it keeps none: the cells' roots hang on it), the portals; and
+/// per cell, per sector it holds, the hierarchy over the cell's visuals there.
+pub fn build_sectors_cells(
+    extra: &mut Extra,
+    tree: &mut Tree,
+    log: &mut Log,
+) -> Result<(Vec<Sector>, Vec<CellPiece>)> {
+    let live = |n: &&TreeNode| n.place != Place::Dropped;
+    let max = tree.nodes.iter().filter(live).map(|n| n.base.sector).max().unwrap_or(0);
+    if max == u16::MAX {
+        return Err(Error::Invalid("A visual has no sector.".into()));
+    }
+    let count = usize::from(max) + 1;
+    let mut tm = std::time::Instant::now();
+    log.msg(format!("{count} sectors accepted."));
+    let mut sectors = Vec::with_capacity(count);
+    for sid in 0..count {
+        let sid16 = sid as u16;
+        if !tree.nodes.iter().filter(live).any(|n| n.base.sector == sid16) {
+            return Err(Error::Invalid(format!("The sector #{sid} has no visual.")));
+        }
+        // a sector the level keeps nothing of gets its empty root once every hierarchy is made:
+        // a box that holds nothing would make the hierarchies' scene endless
+        let root = if tree.nodes.iter().any(|n| n.base.sector == sid16 && n.place == Place::Base) {
+            hierarchy(extra, tree, sid16, Place::Base, log)?
+        } else {
+            usize::MAX
+        };
+        sectors.push(Sector { root, portals: Vec::new() });
+    }
+    for (i, p) in extra.portals.iter().enumerate() {
+        for s in [p.sector_front, p.sector_back] {
+            let sec = sectors.get_mut(usize::from(s)).ok_or_else(|| {
+                Error::Invalid(format!("The portal #{i} names a sector the level does not have."))
+            })?;
+            sec.portals.push(i as u16);
+        }
+    }
+    for s in &mut sectors {
+        s.portals.sort_unstable();
+    }
+    let mut cells: Vec<[i32; 2]> = tree
+        .nodes
+        .iter()
+        .filter_map(|n| match n.place {
+            Place::Cell(c) => Some(c),
+            _ => None,
+        })
+        .collect();
+    cells.sort_unstable();
+    cells.dedup();
+    let mut pieces = Vec::with_capacity(cells.len());
+    for c in cells {
+        let mut held: Vec<u16> =
+            tree.nodes.iter().filter(|n| n.place == Place::Cell(c)).map(|n| n.base.sector).collect();
+        held.sort_unstable();
+        held.dedup();
+        let mut roots = Vec::with_capacity(held.len());
+        for s in held {
+            roots.push((hierarchy(extra, tree, s, Place::Cell(c), log)?, s));
+        }
+        pieces.push(CellPiece { cell: c, roots });
+    }
+    for (sid, s) in sectors.iter_mut().enumerate() {
+        if s.root == usize::MAX {
+            tree.nodes.push(TreeNode {
+                base: NodeBase::new(2, sid as u16),
+                item: Item::Node(Vec::new()),
+                place: Place::Base,
+            });
+            s.root = tree.nodes.len() - 1;
+        }
+    }
+    crate::geom::timed(log, "the hierarchies", &mut tm);
+    Ok((sectors, pieces))
+}
+
+/// A sector's root that holds nothing of the level's own (all its visuals stream) takes the box
+/// of the cells' roots that hang on it, so the engine's culling meets them inside it.
+pub fn bound_empty_roots(tree: &mut Tree, sectors: &[Sector], cells: &[CellPiece]) {
+    for (sid, s) in sectors.iter().enumerate() {
+        let empty = tree.nodes.get(s.root).is_some_and(|n| matches!(&n.item, Item::Node(c) if c.is_empty()));
+        if !empty {
+            continue;
+        }
+        let mut bb = Aabb::INVALID;
+        for (root, _) in cells.iter().flat_map(|c| &c.roots).filter(|(_, sec)| usize::from(*sec) == sid) {
+            if let Some(n) = tree.nodes.get(*root) {
+                bb.merge(&n.base.bbox);
+            }
+        }
+        if let Some(n) = tree.nodes.get_mut(s.root) {
+            n.base.bbox = bb;
+            n.base.c = bb.center();
+            n.base.r = (bb.max - bb.min).length() / 2.0;
+        }
+    }
+}
+
+/// The roots of a module's piece: per sector its visuals' hierarchy, grown only up to
+/// [`PIECE_ROOT_SIZE`], whatever is left unjoined a root (each hangs on the sector at its centre).
+pub fn piece_roots(extra: &mut Extra, tree: &mut Tree) -> Vec<usize> {
+    let mut held: Vec<u16> =
+        tree.nodes.iter().filter(|n| n.place == Place::Base).map(|n| n.base.sector).collect();
+    held.sort_unstable();
+    held.dedup();
+    let mut roots = Vec::new();
+    for s in held {
+        roots.extend(grow_hierarchy(extra, tree, s, Place::Base, Some(PIECE_ROOT_SIZE)).free);
+    }
+    roots
+}
+
+/// The nodes `ids` (ascending: a child before its parent) as a tree of their own, numbered from 0,
+/// with fresh buffers holding the geometry of the static models their references place, and an
+/// empty shader table: what one file of a build - the level beside its cells, a piece - is
+/// written from. Answers it with every node's new number.
+pub fn sub_tree(
+    g: &LcGlobalData,
+    tree: &Tree,
+    ids: &[usize],
+) -> Result<(Tree, rustc_hash::FxHashMap<usize, u32>)> {
+    let map: rustc_hash::FxHashMap<usize, u32> =
+        ids.iter().enumerate().map(|(k, &i)| (i, k as u32)).collect();
+    let remap = |list: &[u32]| -> Result<Vec<u32>> {
+        list.iter()
+            .map(|c| {
+                map.get(&(*c as usize)).copied().ok_or_else(|| {
+                    Error::Invalid(format!(
+                        "The visual {c} is a child of a visual written into another file."
+                    ))
+                })
+            })
+            .collect()
+    };
+    let mut sub = Tree::default();
+    sub.register_shader("");
+    for &i in ids {
+        let Some(n) = tree.nodes.get(i) else { continue };
+        let mut n = n.clone();
+        match &mut n.item {
+            Item::Node(ch) => *ch = remap(ch)?,
+            Item::Lod { children, .. } => *children = remap(children)?,
+            _ => {}
+        }
+        sub.nodes.push(n);
+    }
+    sub.mu = tree.mu.clone();
+    let used: Vec<bool> = (0..g.mu_models.len())
+        .map(|mi| sub.nodes.iter().any(|n| matches!(&n.item, Item::Ref(r) if r.model.0 == mi)))
+        .collect();
+    mu_export_geometry_of(g, &mut sub, &|mi| used.get(mi).copied().unwrap_or(false));
+    let Tree { nodes, mu, .. } = &mut sub;
+    for n in nodes.iter_mut() {
+        if let Item::Ref(r) = &mut n.item
+            && let Some(o) = mu.get(r.model.0).and_then(|m| m.get(r.model.1))
+        {
+            r.vb_id = o.data.vb_id;
+            r.vb_start = o.data.vb_start;
+            r.ib_id = o.data.ib_id;
+            r.ib_start = o.data.ib_start;
+            r.sw_id = o.mu_sw_id;
+        }
+    }
+    Ok((sub, map))
+}
+
+/// Whether any visual of the tree has fast (position only) geometry: a piece without any has no
+/// `piece.geomx`.
+#[must_use]
+pub fn has_fast(tree: &Tree) -> bool {
+    !tree.xvb.is_empty()
+}
+
+/// The roots chunk of a piece (32): the count, then per root its visual and its sector.
+pub fn save_roots(roots: &[(u32, u16)], piece: &mut Writer) {
+    piece.chunk(32, |w| {
+        w.w_u32(roots.len() as u32);
+        for &(v, s) in roots {
+            w.w_u32(v);
+            w.w_u16(s);
+            w.w_u16(0);
+        }
+    });
 }
 
 /// The glows chunk: position, size and the shader of each.

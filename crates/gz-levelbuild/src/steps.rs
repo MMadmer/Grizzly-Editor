@@ -11,6 +11,9 @@
 //! details       build.details and its texture, from the painted detail slots
 //! light         the compiler on build.prj: level, level.geom, level.cform, the light maps
 //! detail_light  the detail compiler: level.details
+//! piece         a module's piece of a level the game has: the authored static objects compiled
+//!               and lit beside the rest of the scene (levels\<level>\pieces\main), their
+//!               collision into the module's overlay.xcform
 //! ```
 //!
 //! [`Step::ORDER`] is one order in which every step comes after what it needs: the quick steps
@@ -43,11 +46,14 @@ pub enum Step {
     Light,
     /// The detail compiler: `level.details`.
     DetailLight,
+    /// A module's piece of a level of the linked game: the authored static objects compiled and
+    /// lit beside the rest of the scene, into the module's `levels\<level>\pieces\main`.
+    Piece,
 }
 
 impl Step {
     /// Every step, each after what it needs.
-    pub const ORDER: [Step; 9] = [
+    pub const ORDER: [Step; 10] = [
         Step::Game,
         Step::SpawnLayer,
         Step::AiMap,
@@ -57,6 +63,7 @@ impl Step {
         Step::Details,
         Step::Light,
         Step::DetailLight,
+        Step::Piece,
     ];
 
     #[must_use]
@@ -71,6 +78,7 @@ impl Step {
             Self::Details => "details",
             Self::Light => "light",
             Self::DetailLight => "detail_light",
+            Self::Piece => "piece",
         }
     }
 
@@ -92,6 +100,7 @@ impl Step {
             Self::Details => "Details",
             Self::Light => "Light",
             Self::DetailLight => "Detail Light",
+            Self::Piece => "Level Piece",
         }
     }
 
@@ -108,6 +117,7 @@ impl Step {
             Self::Details => "Writing the details",
             Self::Light => "Compiling the geometry and light",
             Self::DetailLight => "Lighting the details",
+            Self::Piece => "Building the level piece",
         }
     }
 
@@ -119,7 +129,7 @@ impl Step {
             Self::Spawn => &[Step::GameGraph],
             Self::Light => &[Step::Geometry],
             Self::DetailLight => &[Step::Details, Step::Light],
-            Self::Game | Self::SpawnLayer | Self::AiMap | Self::Geometry | Self::Details => &[],
+            Self::Game | Self::SpawnLayer | Self::AiMap | Self::Geometry | Self::Details | Self::Piece => &[],
         }
     }
 
@@ -144,6 +154,8 @@ impl Step {
             Self::GameGraph => &[ObjClass::SpawnPoint],
             Self::Spawn => &[ObjClass::SpawnPoint, ObjClass::Way],
             Self::SpawnLayer => &ObjClass::ALL,
+            // the authored objects are the piece, the rest cast its shadows, the lights light it
+            Self::Piece => &[ObjClass::SceneObject, ObjClass::Light],
             Self::Details | Self::Light | Self::DetailLight => &[],
         }
     }
@@ -160,21 +172,22 @@ impl Step {
             Self::Details => &["build.details"],
             Self::Light => &["level", "level.geom", "level.cform", "build.lights", "build.cform"],
             Self::DetailLight => &["level.details"],
-            Self::Spawn | Self::SpawnLayer => &[],
+            Self::Spawn | Self::SpawnLayer | Self::Piece => &[],
         }
     }
 
     /// Whether the step runs only when the scene has what it is made of.
     #[must_use]
     pub fn optional(self) -> bool {
-        matches!(self, Self::Details | Self::DetailLight)
+        matches!(self, Self::Details | Self::DetailLight | Self::Piece)
     }
 
-    /// Whether the step compiles the level itself - everything but the module's spawn layer. On a
-    /// level the linked game has, none of these is needed for the module.
+    /// Whether the step compiles the level itself - everything but the module's own layers (the
+    /// spawn layer, the piece). On a level the linked game has, none of these is needed for the
+    /// module.
     #[must_use]
     pub fn compiles(self) -> bool {
-        self != Self::SpawnLayer
+        !matches!(self, Self::SpawnLayer | Self::Piece)
     }
 
     /// The steps that need this one, directly or not.
@@ -246,6 +259,11 @@ pub struct Options {
     /// The level is one of the linked game's and no compile step was asked for by name: those
     /// steps are not needed for the module (`Step::compiles`).
     pub stock: bool,
+    /// The level is one of the linked game's, whatever was asked: the module's piece of it is
+    /// built ([`Step::Piece`]).
+    pub game_level: bool,
+    /// The linked game loads pieces of a level (it states `level-pieces`).
+    pub pieces: bool,
 }
 
 /// The steps a request names, with what they need, in [`Step::ORDER`].
@@ -289,6 +307,8 @@ mod tests {
         );
         assert_eq!(with_needs(&[Step::Spawn]), [Step::AiMap, Step::GameGraph, Step::Spawn]);
         assert_eq!(Step::Geometry.dependents(), [Step::Light, Step::DetailLight]);
+        assert!(Step::Piece.needs().is_empty() && Step::Piece.dependents().is_empty());
+        assert!(!Step::Piece.compiles() && Step::Piece.optional());
         assert_eq!(Step::AiMap.dependents(), [Step::GameGraph, Step::Spawn]);
     }
 }

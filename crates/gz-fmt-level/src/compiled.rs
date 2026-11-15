@@ -6,6 +6,12 @@
 //! Top-level chunks: 1 header (`u16` version, `u16` quality), 2 shader table, 3 visuals (one chunk
 //! per visual, its id the visual's index), 4 portals, 6 lights, 7 glows, 8 sectors (one chunk per
 //! sector with 2 = root visual, 1 = portal ids).
+//!
+//! A level piece (`piece`, the game's `XMS_ARCHITECTURE.md` 8.3) is the same file without portals,
+//! lights, glows and sectors, with chunk 32: its root visuals, each with the sector it hangs on
+//! (`0xFFFF`: the sector at the visual's centre). [`GeomTables`] reads what a geometry file
+//! (`level.geom`, `piece.geom`, their fast twins) holds, and [`CompiledLevel::piece_problems`]
+//! checks every id a piece's visuals name against it, as the engine does before it loads one.
 
 use glam::Vec3;
 use gz_chunk::Reader;
@@ -20,12 +26,21 @@ const LEVEL_PORTALS: u32 = 4;
 const LEVEL_LIGHTS: u32 = 6;
 const LEVEL_GLOWS: u32 = 7;
 const LEVEL_SECTORS: u32 = 8;
+const PIECE_ROOTS: u32 = 32;
+const GEOM_VB: u32 = 9;
+const GEOM_IB: u32 = 10;
+const GEOM_SWIS: u32 = 11;
+/// The compiler's version in the header of every level and piece.
+pub const LEVEL_COMPILER_VERSION: u16 = 14;
+/// A piece's root without a sector of its own: the engine finds it at the visual's centre.
+pub const PIECE_SECTOR_AUTO: u16 = 0xFFFF;
 
 const OGF_HEADER: u32 = 1;
 const OGF_SWIDATA: u32 = 6;
 const OGF_CHILDREN_L: u32 = 10;
 const OGF_LODDEF2: u32 = 11;
 const OGF_TREEDEF2: u32 = 12;
+const OGF_SWICONTAINER: u32 = 20;
 const OGF_GCONTAINER: u32 = 21;
 const OGF_FASTPATH: u32 = 22;
 
@@ -123,6 +138,8 @@ pub struct Visual {
     pub lod: bool,
     /// The visual carries sliding windows (a progressive mesh).
     pub sliding: bool,
+    /// The sliding windows a static model's progressive reference takes from the geometry file.
+    pub swi: Option<u32>,
     /// The sector the visual lies under, through the sectors' root visuals.
     pub sector: Option<u16>,
 }
@@ -142,6 +159,14 @@ pub struct CompiledSector {
     pub index: u32,
     pub root: u32,
     pub portals: Vec<u16>,
+}
+
+/// A root visual of a piece and the sector it hangs on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PieceRoot {
+    pub visual: u32,
+    /// [`PIECE_SECTOR_AUTO`]: the sector at the visual's centre.
+    pub sector: u16,
 }
 
 /// A dynamic light of the level.
@@ -200,6 +225,8 @@ pub struct CompiledLevel {
     pub sectors: Vec<CompiledSector>,
     pub lights: Vec<CompiledLight>,
     pub glows: Vec<CompiledGlow>,
+    /// A piece's root visuals (chunk 32); a level has none.
+    pub roots: Vec<PieceRoot>,
 }
 
 fn invalid(text: impl Into<String>) -> LevelError {
@@ -308,6 +335,10 @@ fn read_visual(index: u32, body: &[u8]) -> Result<Visual> {
         transform,
         lod: chunk(&parts, OGF_LODDEF2).is_some(),
         sliding: chunk(&parts, OGF_SWIDATA).is_some(),
+        swi: match chunk(&parts, OGF_SWICONTAINER) {
+            Some(body) => Some(short(Reader::new(body).r_u32(), &format!("windows of visual {index}"))?),
+            None => None,
+        },
         sector: None,
     })
 }
@@ -324,6 +355,25 @@ fn read_sectors(body: &[u8]) -> Result<Vec<CompiledSector>> {
         }
         let portals = list.as_chunks::<2>().0.iter().map(|p| u16::from_le_bytes(*p)).collect();
         out.push(CompiledSector { index, root, portals });
+    }
+    Ok(out)
+}
+
+fn read_roots(body: &[u8]) -> Result<Vec<PieceRoot>> {
+    let mut r = Reader::new(body);
+    let count = short(r.r_u32(), "piece's roots")? as usize;
+    if count.saturating_mul(8) != r.elapsed() {
+        return Err(invalid(format!(
+            "The piece's root chunk names {count} roots and holds {} bytes for them.",
+            r.elapsed()
+        )));
+    }
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        let visual = short(r.r_u32(), "piece's roots")?;
+        let sector = short(r.r_u16(), "piece's roots")?;
+        short(r.r_u16(), "piece's roots")?;
+        out.push(PieceRoot { visual, sector });
     }
     Ok(out)
 }
@@ -423,28 +473,112 @@ impl CompiledLevel {
         let portals = chunk(&top, LEVEL_PORTALS).map(read_portals).transpose()?.unwrap_or_default();
         let lights = chunk(&top, LEVEL_LIGHTS).map(read_lights).transpose()?.unwrap_or_default();
         let glows = chunk(&top, LEVEL_GLOWS).map(read_glows).transpose()?.unwrap_or_default();
+        let roots = chunk(&top, PIECE_ROOTS).map(read_roots).transpose()?.unwrap_or_default();
 
-        let mut level = Self { version, quality, shaders, visuals, portals, sectors, lights, glows };
+        let mut level = Self { version, quality, shaders, visuals, portals, sectors, lights, glows, roots };
         level.assign_sectors();
         Ok(level)
     }
 
+    /// Reads a `piece` file: a level file with its roots and nothing of a level's own. One without
+    /// roots is refused.
+    pub fn read_piece(piece: &[u8]) -> Result<Self> {
+        let p = Self::read(piece)?;
+        if p.roots.is_empty() {
+            return Err(invalid("The piece has no root chunk (32): no visual of it would be drawn."));
+        }
+        Ok(p)
+    }
+
     /// Every visual under a sector's root belongs to that sector; the first sector to reach one
-    /// keeps it.
+    /// keeps it. A piece's root that names its sector gives it to what is under it.
     fn assign_sectors(&mut self) {
         let at: FxHashMap<u32, usize> = self.visuals.iter().enumerate().map(|(k, v)| (v.index, k)).collect();
         let mut seen = FxHashSet::default();
-        for s in &self.sectors {
-            let mut stack = vec![s.root];
+        let named = self.roots.iter().filter(|r| r.sector != PIECE_SECTOR_AUTO).map(|r| (r.visual, r.sector));
+        let starts: Vec<(u32, u16)> =
+            self.sectors.iter().map(|s| (s.root, s.index as u16)).chain(named).collect();
+        for (root, sector) in starts {
+            let mut stack = vec![root];
             while let Some(id) = stack.pop() {
                 let Some(&k) = at.get(&id) else { continue };
                 if !seen.insert(id) {
                     continue;
                 }
-                self.visuals[k].sector = Some(s.index as u16);
+                self.visuals[k].sector = Some(sector);
                 stack.extend(self.visuals[k].children.iter().copied());
             }
         }
+    }
+
+    /// What the engine refuses a piece for, in sentences (empty: it loads): the compiler's
+    /// version, anything of a level's own (sectors, portals, lights, glows), every id its visuals
+    /// name outside its own tables - the shader, the vertex and index buffers and the ranges in
+    /// them, the fast geometry, the sliding windows -, a child that is not an earlier visual of the
+    /// piece, and a root that is no visual of it.
+    #[must_use]
+    pub fn piece_problems(&self, geom: &GeomTables, fast: Option<&GeomTables>) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.version != LEVEL_COMPILER_VERSION {
+            out.push(format!(
+                "The header says the compiler's version {}, not {LEVEL_COMPILER_VERSION}.",
+                self.version
+            ));
+        }
+        if !self.sectors.is_empty()
+            || !self.portals.is_empty()
+            || !self.lights.is_empty()
+            || !self.glows.is_empty()
+        {
+            out.push("A piece carries no sectors, portals, lights or glows.".to_owned());
+        }
+        if self.roots.is_empty() {
+            out.push("The piece has no root.".to_owned());
+        }
+        let range = |g: &Geometry, t: &GeomTables, what: &str, v: u32| -> Option<String> {
+            let verts = t.vertex_buffers.get(g.vertex_buffer as usize);
+            let idx = t.index_buffers.get(g.index_buffer as usize);
+            match (verts, idx) {
+                (Some(&vc), Some(&ic)) => {
+                    let vend = u64::from(g.vertex_start) + u64::from(g.vertex_count);
+                    let iend = u64::from(g.index_start) + u64::from(g.index_count);
+                    (vend > u64::from(vc) || iend > u64::from(ic))
+                        .then(|| format!("Visual {v}: its {what} lies outside its buffers."))
+                }
+                _ => Some(format!("Visual {v}: its {what} names a buffer the piece does not have.")),
+            }
+        };
+        for (k, v) in self.visuals.iter().enumerate() {
+            if v.index as usize != k {
+                out.push(format!("Visual {k} is stored as visual {}.", v.index));
+            }
+            if usize::from(v.shader) >= self.shaders.len() {
+                out.push(format!("Visual {}: shader {} is not in the piece's table.", v.index, v.shader));
+            }
+            if let Some(g) = &v.geometry {
+                out.extend(range(g, geom, "geometry", v.index));
+            }
+            if let Some(g) = &v.fast {
+                match fast {
+                    Some(f) => out.extend(range(g, f, "fast geometry", v.index)),
+                    None => out.push(format!("Visual {}: fast geometry without piece.geomx.", v.index)),
+                }
+            }
+            if let Some(w) = v.swi
+                && w as usize >= geom.windows
+            {
+                out.push(format!("Visual {}: sliding windows {w} are not in piece.geom.", v.index));
+            }
+            if let Some(c) = v.children.iter().find(|&&c| c >= v.index) {
+                out.push(format!("Visual {}: its child {c} is not an earlier visual.", v.index));
+            }
+        }
+        for r in &self.roots {
+            if r.visual as usize >= self.visuals.len() {
+                out.push(format!("Root {} is no visual of the piece.", r.visual));
+            }
+        }
+        out
     }
 
     /// The shader table entry of a visual, split.
@@ -456,7 +590,8 @@ impl CompiledLevel {
     /// The box of the level: the sectors' root visuals, or every visual without sectors.
     #[must_use]
     pub fn aabb(&self) -> Aabb {
-        let roots: FxHashSet<u32> = self.sectors.iter().map(|s| s.root).collect();
+        let roots: FxHashSet<u32> =
+            self.sectors.iter().map(|s| s.root).chain(self.roots.iter().map(|r| r.visual)).collect();
         let mut out = Aabb::INVALID;
         for v in &self.visuals {
             if roots.is_empty() || roots.contains(&v.index) {
@@ -465,6 +600,78 @@ impl CompiledLevel {
             }
         }
         out
+    }
+}
+
+/// What a geometry file holds: the vertices of each vertex buffer, the indices of each index
+/// buffer, how many sets of sliding windows.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GeomTables {
+    pub vertex_buffers: Vec<u32>,
+    pub index_buffers: Vec<u32>,
+    pub windows: usize,
+}
+
+/// The bytes of a vertex element's type (`D3DDECLTYPE`).
+fn element_size(ty: u8) -> Option<usize> {
+    Some(match ty {
+        0 | 4 | 5 | 6 | 8 | 9 | 11 | 13 | 14 | 15 => 4,
+        1 | 7 | 10 | 12 | 16 => 8,
+        2 => 12,
+        3 => 16,
+        _ => return None,
+    })
+}
+
+impl GeomTables {
+    /// Reads `level.geom`, `piece.geom` or a fast twin; the buffers' bytes are walked over.
+    pub fn read(bytes: &[u8]) -> Result<Self> {
+        let top = walk(bytes, "geometry file")?;
+        let mut out = Self::default();
+        if let Some(body) = chunk(&top, GEOM_VB) {
+            let mut r = Reader::new(body);
+            let what = "vertex buffers";
+            let count = short(r.r_u32(), what)?;
+            for _ in 0..count {
+                // the declaration: 8-byte elements up to the end mark (stream 0xFF)
+                let mut stride = 0usize;
+                loop {
+                    let e = short(r.take(8), what)?;
+                    if e[0] == 0xFF {
+                        break;
+                    }
+                    let size = element_size(e[4]).ok_or_else(|| {
+                        invalid(format!("A vertex declaration has an unknown type {}.", e[4]))
+                    })?;
+                    if u16::from_le_bytes([e[0], e[1]]) == 0 {
+                        stride = stride.max(usize::from(u16::from_le_bytes([e[2], e[3]])) + size);
+                    }
+                }
+                let n = short(r.r_u32(), what)?;
+                short(r.advance((n as usize).saturating_mul(stride)), what)?;
+                out.vertex_buffers.push(n);
+            }
+        }
+        if let Some(body) = chunk(&top, GEOM_IB) {
+            let mut r = Reader::new(body);
+            let count = short(r.r_u32(), "index buffers")?;
+            for _ in 0..count {
+                let n = short(r.r_u32(), "index buffers")?;
+                short(r.advance((n as usize).saturating_mul(2)), "index buffers")?;
+                out.index_buffers.push(n);
+            }
+        }
+        if let Some(body) = chunk(&top, GEOM_SWIS) {
+            let mut r = Reader::new(body);
+            let count = short(r.r_u32(), "sliding windows")?;
+            for _ in 0..count {
+                short(r.advance(16), "sliding windows")?;
+                let n = short(r.r_u32(), "sliding windows")?;
+                short(r.advance((n as usize).saturating_mul(8)), "sliding windows")?;
+                out.windows += 1;
+            }
+        }
+        Ok(out)
     }
 }
 

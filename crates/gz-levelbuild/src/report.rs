@@ -14,6 +14,7 @@
 //!   phases = { { step = "light", name = "Lighting", seconds = 60.1 }, ... },
 //!   counts = { visuals = { total = 812, by_kind = { ... } }, ... },
 //!   files = { { name = "level", size = 123456 }, ... },
+//!   pieces = { { step = "light", name = "cell_0_-1", files = 6, bytes = 2101234 }, ... },
 //!   warnings = { { step = "light", code = "compiler", text = "..." } },
 //! }
 //! ```
@@ -125,6 +126,22 @@ fn phases_of(step: &str, note: &Json, out: &mut Vec<Json>) {
     }
 }
 
+/// The pieces a step's note says the compiler wrote, each with the step's name.
+fn pieces_of(step: &str, note: &Json, out: &mut Vec<Json>) {
+    for part in note.get("parts").and_then(Json::as_array).into_iter().flatten() {
+        for p in part.get("pieces").and_then(Json::as_array).into_iter().flatten() {
+            let files = p.get("files").and_then(Json::as_array).map(Vec::as_slice).unwrap_or_default();
+            let bytes: u64 = files.iter().filter_map(|f| f.get("size").and_then(Json::as_u64)).sum();
+            out.push(json!({
+                "step": step,
+                "name": p.get("name").cloned().unwrap_or(Json::Null),
+                "files": files.len(),
+                "bytes": bytes,
+            }));
+        }
+    }
+}
+
 /// The file's text. Blocking: it reads the level folder back.
 fn text_of(
     dir: &Path,
@@ -157,6 +174,7 @@ fn text_of(
 
     let mut steps = Vec::new();
     let mut phases = Vec::new();
+    let mut pieces = Vec::new();
     let mut lighter = None;
     let mut total = 0.0;
     for r in ran {
@@ -169,6 +187,7 @@ fn text_of(
         }
         if let Some(note) = r.get("note") {
             phases_of(name, note, &mut phases);
+            pieces_of(name, note, &mut pieces);
             if let Some(l) = find_string(note, "lighter") {
                 s["lighter"] = json!(l);
                 lighter.get_or_insert(l);
@@ -193,6 +212,9 @@ fn text_of(
         "files",
         Json::Array(files.iter().take(LIST_CAP).map(|(n, s)| json!({ "name": n, "size": s })).collect()),
     );
+    if !pieces.is_empty() {
+        put("pieces", Json::Array(pieces));
+    }
     put("warnings", Json::Array(warnings.to_vec()));
 
     let Lua::Table(table) = lua_of_json(&top) else { return String::new() };
@@ -270,7 +292,8 @@ mod tests {
             json!({ "step": "geometry", "title": "Geometry", "seconds": 1.2, "files": ["build.prj"], "note": {} }),
             json!({ "step": "light", "title": "Light", "seconds": 60.5, "files": [], "note": {
                 "level": "x", "parts": [ { "part": "level", "seconds": 60.0, "lighter": "gpu",
-                    "phases": [ { "name": "Lighting", "seconds": 40.25 }, { "name": "Saving", "seconds": 2.0 } ] } ] } }),
+                    "phases": [ { "name": "Lighting", "seconds": 40.25 }, { "name": "Saving", "seconds": 2.0 } ],
+                    "pieces": [ { "name": "cell_0_-1", "files": [ { "name": "piece", "size": 10 }, { "name": "piece.geom", "size": 32 } ] } ] } ] } }),
         ];
         let warnings = vec![json!({ "step": "light", "code": "compiler", "text": "a \"quoted\" warning" })];
         let text = text_of(dir.path(), "mp_test", "standard", "built", None, &ran, &warnings);
@@ -292,6 +315,9 @@ mod tests {
         assert_eq!(v["files_total"], 2);
         assert_eq!(v["files"][0]["name"], "level");
         assert_eq!(v["warnings"][0]["text"], "a \"quoted\" warning");
+        assert_eq!(v["pieces"][0]["name"], "cell_0_-1");
+        assert_eq!((v["pieces"][0]["files"].clone(), v["pieces"][0]["bytes"].clone()), (json!(2), json!(42)));
+        assert_eq!(v["pieces"][0]["step"], "light");
         assert!(v.get("error").is_none());
     }
 

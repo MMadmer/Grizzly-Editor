@@ -63,7 +63,7 @@ pub fn known_files(step: Step) -> &'static [&'static str] {
             "lmap#*_2.dds",
         ],
         Step::DetailLight => &["level.details"],
-        Step::Spawn | Step::SpawnLayer => &[],
+        Step::Spawn | Step::SpawnLayer | Step::Piece => &[],
     }
 }
 

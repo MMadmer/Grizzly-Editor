@@ -117,6 +117,7 @@ pub fn level_ltx(r: &IniReader) -> Result<LevelOptions, SceneError> {
         light_sun_quality: r.r_u8(s, "light_sun_quality")?,
         build,
         map_usage,
+        cell_size: 0,
     })
 }
 
