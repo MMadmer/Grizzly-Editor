@@ -31,7 +31,7 @@ pub const OFF_MAP: f32 = 1.0;
 const GROUND_SIDE: f32 = 20.0;
 
 /// The checks: code, word, what it finds.
-pub const CHECKS: [(&str, &str, &str); 10] = [
+pub const CHECKS: [(&str, &str, &str); 11] = [
     ("S201", "floating", "an object more than 0.25 m above whatever is under it, touching nothing"),
     ("S202", "buried", "an object more than half under the ground"),
     ("S203", "overlap", "two objects standing in each other"),
@@ -42,6 +42,7 @@ pub const CHECKS: [(&str, &str, &str); 10] = [
     ("S208", "way_off_ai_map", "a way point off the AI map"),
     ("S209", "light_underground", "a light under the ground"),
     ("S210", "not_authored", "an object the game's level does not have that is not marked authored"),
+    ("S211", "terrain_border", "a terrain whose border stands more than 0.5 m off the ground around it"),
 ];
 
 /// `scene.audit`'s parameters.
@@ -58,7 +59,7 @@ pub struct AuditParams {
     pub area: Option<[f32; 4]>,
     /// Only these checks, by code (`S201`) or word (`floating`, `buried`, `overlap`, `duplicate`,
     /// `unsupported`, `off_ai_map`, `underground`, `way_off_ai_map`, `light_underground`,
-    /// `not_authored`). Left out: all of them.
+    /// `not_authored`, `terrain_border`). Left out: all of them.
     #[serde(default)]
     pub checks: Option<Vec<String>>,
     /// At most this many problems in the answer (200); `total` counts them all.
@@ -259,6 +260,43 @@ fn overlaps(sc: &Scene<'_>, s: &Solid<'_>, seen: &mut FxHashSet<(u32, u32)>, out
     }
 }
 
+/// How far a terrain's border may stand off the ground around it, metres.
+pub const BORDER: f32 = 0.5;
+
+/// S211: a terrain's border against the ground just outside it, at eight places a side.
+fn terrain_border(sc: &Scene<'_>, o: &Object) -> Option<Finding> {
+    let t = crate::objects::terrain::terrain(o)?;
+    let (hi, lo) = sc.top()?;
+    let own = [o.id];
+    let on = RayFilter { kinds: RayKinds::Meshes, only: Some(&own), except: &[] };
+    let off = RayFilter { kinds: RayKinds::Meshes, only: None, except: &own };
+    let half = t.half();
+    let mut worst = 0.0f32;
+    for side in 0..4 {
+        for n in 0..8 {
+            // along the side, clear of the corners
+            let u = -0.9 + 1.8 * n as f32 / 7.0;
+            // a little inside the border (off the skirt) and a little outside it
+            let at = |d: f32| match side {
+                0 => glam::Vec2::new(u * half.x, half.y + d),
+                1 => glam::Vec2::new(u * half.x, -half.y - d),
+                2 => glam::Vec2::new(half.x + d, u * half.y),
+                _ => glam::Vec2::new(-half.x - d, u * half.y),
+            };
+            let inside = ground::down(sc, t.to_world(at(-0.1), hi), hi - lo, &on);
+            let outside = ground::down(sc, t.to_world(at(0.4), hi), hi - lo, &off);
+            if let (Some(a), Some(b)) = (inside, outside) {
+                worst = worst.max((a.point.y - b.point.y).abs());
+            }
+        }
+    }
+    (worst > BORDER).then(|| Finding {
+        code: "S211",
+        object: o.id,
+        text: format!("{}'s border stands {worst:.2} m off the ground around it: a step shows there", o.name),
+    })
+}
+
 /// A model, where it stands, how it is turned and how large it is: centimetres, tenths of a
 /// degree, hundredths.
 type Placement = (String, [i64; 3], [i64; 3], [i64; 3]);
@@ -394,6 +432,11 @@ pub fn audit(sc: &Scene<'_>, p: &AuditParams, base: Option<&FxHashSet<String>>) 
                         object: o.id,
                         text: format!("{} stands {d:.1} m off the AI map: it cannot walk from there", o.name),
                     });
+                }
+            }
+            ObjData::Terrain(_) => {
+                if want.contains("S211") {
+                    f.extend(terrain_border(sc, o));
                 }
             }
             ObjData::Light(_) => {

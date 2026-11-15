@@ -650,6 +650,37 @@ mod tests {
         t.mesh(&t.heights(None).expect("heights"), Looks::Table(&look))
     }
 
+    /// The audit's check of a terrain's border, on the scene below and on one that stands 3 m
+    /// above the ground it lies on.
+    #[test]
+    fn the_audit_finds_a_terrain_whose_border_stands_off_the_ground() {
+        use crate::sense::audit::{AuditParams, audit};
+        let run = |state: &SceneState| {
+            let terrains = Arc::new(Terrains::default());
+            let lib = library(state, &terrains);
+            let pick = ScenePick::build(state, &lib);
+            let sc = crate::sense::Scene { state, lib: &lib, pick: &pick };
+            let p = AuditParams { checks: Some(vec!["terrain_border".to_owned()]), ..AuditParams::default() };
+            audit(&sc, &p, None).map(|a| a.findings).unwrap_or_default()
+        };
+        // its border lies on the ground: nothing to say
+        assert!(run(&scene(false)).is_empty());
+        // flat at 3 m over ground at 0: the border is a step
+        let mut high = scene(false);
+        let id = high.find_any("Yard").map(|o| o.id).expect("the terrain");
+        let mut o = (**high.get(id).expect("the terrain")).clone();
+        if let ObjData::Terrain(d) = &mut o.data {
+            d.base = Base::Height(3.0);
+            d.edits.clear();
+        }
+        high.remove(id);
+        high.insert(o);
+        let found = run(&high);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].code, "S211");
+        assert!(found[0].text.starts_with("Yard's border stands 3.00 m off the ground"), "{}", found[0].text);
+    }
+
     fn scene(cut: bool) -> SceneState {
         let mut s = SceneState::default();
         s.insert(Object::new(
