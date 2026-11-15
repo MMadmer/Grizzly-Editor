@@ -268,19 +268,26 @@ plays anything.
   `xms_radio.set`. Such a radio plays its playlist whatever the player's station is; what a quest set is saved.
 - `[radio] music = mix | only` as for the screens: `only` makes this module's radio tracks the whole common
   music (the last module of the load order that says so).
-- **Copyrighted or not** is said where the sound is described: `copyrighted = true` in a `.sndasset` (any sound of
-  a module, `false` when left out), and `copyrighted = true` of a `[track.<id>]` for a track of the manifest. The
-  game's own copyrighted music is a list of the game's data the game's author keeps (names and masks).
-- **A copyrighted sound may name what plays instead**: `streamer = <a sound that is not copyrighted>` beside
-  `copyrighted` (the asset, the track, a line of the game's list). In the editor the field is under the checkbox
-  and live only while it is ticked: a sound picker that offers only sounds without the mark - the module's and
-  the game's. A replacement that is copyrighted itself is refused.
+- **A sound is one asset, and the mark is the asset's alone** (the author's word, 2026-11-16: "one sound asset,
+  as other editors have it; the check in one single place, not spread over the editor"). Whether a sound is
+  copyrighted, and what plays instead, is said in its description and nowhere else: `copyrighted = true` and
+  `streamer = "<a sound that is not copyrighted>"` of a `.sndasset`. A track, a playlist, a radio only REFER
+  to sounds: a track of the manifest names its music by `sound = <the sound's name>` (a sound asset the module
+  ships, or a sound of the game); `file = <a file>` stays for a plain file, which has no description and so no
+  mark. A `[track.<id>]` has no `copyrighted` and no `streamer`. For the game's own music, which has no
+  descriptions, the game's author keeps a list in the game's data (names and masks, each with its replacement):
+  the game asks ONE lookup by the sound's name - the description, else that list - before it plays anything.
+- **In the editor the mark has one place: the Sound tab** (a `.sndasset` opened: its keys, Copyrighted, and under
+  it - live only while it is ticked - Plays Instead, the picker that offers only sounds without the mark, the
+  module's and the game's; a replacement that is copyrighted itself is refused). Music brought into Screens &
+  Music becomes a sound asset as it is imported; a track's row there shows the sound it plays and whether that
+  sound is copyrighted, and opens the sound - it has no switch of its own.
 - **The streamer mode** is an option of the game (Options > Sound, off by default). While it is on, a sound that
   is copyrighted is not played - asked by the sound engine before every play, and by the music of the loading
   screen and the menus, so no script has to remember; a radio skips such tracks and plays the rest.
-- **The editor**: the sound asset's key and its checkbox (Copyrighted); Screens & Music gains Radio - the tracks
-  that play on the radio, each with its Copyrighted switch and a play button, and Playlists (+ makes one: a
-  title, its tracks dragged in and reordered, Shuffle); the manifest's reference and check know the new keys.
+- **The editor**: Screens & Music gains Radio - the tracks that play on the radio, each with a play button, and
+  Playlists (+ makes one: a title, its tracks dragged in and reordered, Shuffle); the manifest's reference and
+  check know the new keys.
 
 ## 2. Weapons Evolution 2026 as a module
 
@@ -381,5 +388,9 @@ motions and sounds; a use scene plays; the silencer is crafted; the icons are th
   placed radio's Plays, the quest editor's radio kinds). Queued: E6 (the Russian of the item catalog), E7.
   To do by the lead after them: `gz-nq`'s project pickers built outside their query (the same pattern as the
   media index), the game's deploy and the proof in the game, the critic.
+- 2026-11-16: the author wants ONE sound asset and the copyrighted mark in that one place (1.9 rewritten). What
+  was built with the mark on a track too is reworked: the engine agent (G5, running) was told - a track names a
+  sound (`sound =`), one lookup by name; the editor's part (the track's switch and picker of `4d2efccd`) goes
+  into E7 with the Sound tab: tracks become references to sound assets.
 - The scratch of the task (surveys, the key table, the unpacked game views) is the session's scratchpad folder
   `we\`; nothing in the repository depends on it.
