@@ -5,12 +5,15 @@
 //!
 //! Each is read once on the pools - never in a frame - and kept for the project's session; a
 //! frame asks with [`Lists::get`] and draws nothing (a spinner) until the list is there.
-//! Reading the same list again ([`Lists::refresh`]) is the author's Refresh List.
+//! Reading the same list again ([`Lists::refresh`]) is the author's Refresh List. The lists of
+//! the project's media assets - the texture names they publish, the model assets - follow the
+//! media index: a change of the project's files has the index looked at again off the UI thread,
+//! and a list whose index moved is read again ([`ListKey::follows_media`]).
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gz_base::SmolStr;
+use gz_base::{Rev, SmolStr};
 use gz_editor::Editor;
 use gz_scene::props::Choice;
 use parking_lot::Mutex;
@@ -20,6 +23,8 @@ use rustc_hash::FxHashMap;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ListKey {
     Objects,
+    /// The project's model assets, by their project paths (`models/wall.meshasset`).
+    ModelAssets,
     Groups,
     SpawnSections,
     Particles,
@@ -89,6 +94,7 @@ impl ListKey {
     pub fn noun(&self) -> &'static str {
         match self {
             ListKey::Objects => "library objects",
+            ListKey::ModelAssets => "model assets",
             ListKey::Groups => "groups",
             ListKey::SpawnSections => "spawn sections",
             ListKey::Particles => "particle systems",
@@ -106,6 +112,14 @@ impl ListKey {
             ListKey::SkeletonBones(_) => "bones",
             ListKey::GameAnims => "animations",
         }
+    }
+}
+
+impl ListKey {
+    /// Whether the list is read from the project's media index, and so follows it.
+    #[must_use]
+    pub fn follows_media(&self) -> bool {
+        matches!(self, ListKey::Textures | ListKey::ModelAssets)
     }
 }
 
@@ -131,6 +145,19 @@ pub struct Lists {
     slots: Mutex<FxHashMap<ListKey, Slot>>,
     /// The project the lists were read for: a new one starts afresh.
     project: Mutex<Option<std::path::PathBuf>>,
+    /// A list that follows the media index: the revision of the project's files it was last
+    /// looked at for, the index's stamp it was read from, whether a look is under way.
+    media: Mutex<FxHashMap<ListKey, (Rev, Rev, bool)>>,
+}
+
+/// The revision of the open project's files.
+fn tree_rev(editor: &Editor) -> Rev {
+    gz_project::Project::of(editor).map_or(Rev::ZERO, |(_, p)| p.tree.rev())
+}
+
+/// The stamp of the newest media index made.
+fn media_stamp(editor: &Editor) -> Rev {
+    gz_media::Media::get(editor).and_then(|m| m.latest()).map_or(Rev::ZERO, |i| i.stamp)
 }
 
 impl Lists {
@@ -146,7 +173,39 @@ impl Lists {
         if *p != root {
             *p = root;
             self.slots.lock().clear();
+            self.media.lock().clear();
         }
+    }
+
+    /// A list of the media index whose project files moved since it was looked at: the index
+    /// is made current on the pools, and the list read again when its stamp moved. The old
+    /// list stays shown meanwhile.
+    fn follow_media(editor: &Arc<Editor>, key: &ListKey) {
+        let this = Self::of(editor);
+        let now = tree_rev(editor);
+        {
+            let mut seen = this.media.lock();
+            let entry = seen.entry(key.clone()).or_insert((now, media_stamp(editor), false));
+            if entry.0 == now || entry.2 {
+                return;
+            }
+            entry.2 = true;
+        }
+        let (ed, key) = (editor.clone(), key.clone());
+        editor.exec.spawn(async move {
+            let stamp = match gz_media::Media::of(&ed).await {
+                Ok(m) => m.index().await.stamp,
+                Err(_) => Rev::ZERO,
+            };
+            let this = Self::of(&ed);
+            let read_at = this.media.lock().get(&key).map(|s| s.1);
+            if read_at != Some(stamp) {
+                let list = read(&ed, &key).await;
+                this.slots.lock().insert(key.clone(), Slot::Ready(Arc::new(list)));
+                ed.exec.wake().ping();
+            }
+            this.media.lock().insert(key, (now, stamp, false));
+        });
     }
 
     /// The list when it is there; the first ask starts reading it.
@@ -157,7 +216,14 @@ impl Lists {
         {
             let mut slots = this.slots.lock();
             match slots.get(key) {
-                Some(Slot::Ready(list)) => return Some(list.clone()),
+                Some(Slot::Ready(list)) => {
+                    let list = list.clone();
+                    drop(slots);
+                    if key.follows_media() {
+                        Self::follow_media(editor, key);
+                    }
+                    return Some(list);
+                }
                 Some(Slot::Reading) => return None,
                 None => {
                     slots.insert(key.clone(), Slot::Reading);
@@ -165,9 +231,14 @@ impl Lists {
             }
         }
         let (ed, key) = (editor.clone(), key.clone());
+        let at = tree_rev(editor);
         editor.exec.spawn(async move {
             let list = read(&ed, &key).await;
-            Self::of(&ed).slots.lock().insert(key, Slot::Ready(Arc::new(list)));
+            let this = Self::of(&ed);
+            if key.follows_media() {
+                this.media.lock().insert(key.clone(), (at, media_stamp(&ed), false));
+            }
+            this.slots.lock().insert(key, Slot::Ready(Arc::new(list)));
             ed.exec.wake().ping();
         });
         None
@@ -177,10 +248,22 @@ impl Lists {
     pub async fn wait(editor: &Arc<Editor>, key: &ListKey) -> Arc<Vec<String>> {
         let this = Self::of(editor);
         this.follow_project(editor);
-        if let Some(Slot::Ready(list)) = this.slots.lock().get(key) {
+        // a list of the media index is current with the files as they are now
+        let current = !key.follows_media() || {
+            let stamp = match gz_media::Media::of(editor).await {
+                Ok(m) => m.fresh_index().await.stamp,
+                Err(_) => Rev::ZERO,
+            };
+            this.media.lock().get(key).is_some_and(|s| s.1 == stamp)
+        };
+        if current && let Some(Slot::Ready(list)) = this.slots.lock().get(key) {
             return list.clone();
         }
+        let at = tree_rev(editor);
         let list = Arc::new(read(editor, key).await);
+        if key.follows_media() {
+            this.media.lock().insert(key.clone(), (at, media_stamp(editor), false));
+        }
         this.slots.lock().insert(key.clone(), Slot::Ready(list.clone()));
         editor.exec.wake().ping();
         list
@@ -322,6 +405,19 @@ async fn read(editor: &Arc<Editor>, key: &ListKey) -> Vec<String> {
             Ok(svc) => {
                 let lib = svc.library.clone();
                 editor.exec.io(move || lib.list().as_ref().clone()).await
+            }
+            Err(_) => Vec::new(),
+        },
+        ListKey::ModelAssets => match gz_media::Media::of(editor).await {
+            Ok(m) => {
+                let index = m.index().await;
+                let mut out: Vec<String> = index
+                    .of_kind(gz_project::asset_kind::MediaKind::Model)
+                    .filter(|e| !e.excluded)
+                    .map(|e| e.path.as_str().to_owned())
+                    .collect();
+                out.sort_by_key(|p| p.to_lowercase());
+                out
             }
             Err(_) => Vec::new(),
         },

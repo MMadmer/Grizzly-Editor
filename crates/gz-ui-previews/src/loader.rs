@@ -1,6 +1,6 @@
 //! Where the previews find a file: the open project, the editor's own folders, the linked game.
 //!
-//! The order is the texture loader's:
+//! The order is the texture loader's: the project's texture assets by the name they publish,
 //! the editor's folders - the project's when the file lies in it - then the linked game. A
 //! [`Sources`] is a snapshot of the three, made once per load; it is also the
 //! [`gz_render::AssetLoader`] the model preview's renderer reads through.
@@ -43,6 +43,8 @@ pub struct Sources {
     pub project: Option<PathBuf>,
     pub dirs: EditorDirs,
     pub game: Option<Arc<GameFiles>>,
+    /// The open project's media assets: a texture asset's picture wins over every file.
+    pub media: Option<Arc<gz_media::Media>>,
 }
 
 impl Sources {
@@ -52,7 +54,12 @@ impl Sources {
             Ok(link) => link.files().await.ok(),
             Err(_) => None,
         };
-        Self { project: editor.project_root(), dirs: EditorDirs::of(editor), game }
+        Self {
+            project: editor.project_root(),
+            dirs: EditorDirs::of(editor),
+            game,
+            media: gz_media::Media::get(editor),
+        }
     }
 
     fn in_project(&self, path: &Path) -> bool {
@@ -76,10 +83,16 @@ impl Sources {
         Some(Found::Game { key: f.path.to_owned(), loose })
     }
 
-    /// A texture by its engine name (below `textures\`, no extension): the project's, the
+    /// A texture by its engine name (below `textures\`, no extension): a texture asset of the
+    /// project that publishes it (its picture), the project's file, the
     /// editor's `$level$`, `$game_saves$`, `$game_textures$`, then the linked game's.
     #[must_use]
     pub fn find_texture(&self, name: &str) -> Option<Found> {
+        if let Some((file, _)) = self.media.as_ref().and_then(|m| m.texture_file(name))
+            && file.is_file()
+        {
+            return Some(Found::Project(file));
+        }
         let rel = format!("{}.dds", name.replace('/', "\\"));
         let mut local = Vec::with_capacity(5);
         if let Some(p) = &self.project {

@@ -84,7 +84,8 @@ fn want_of(editor: &Editor, cats: &Catalogs, key: CatKey) -> Want {
     match key.0 {
         Source::Project => match Project::of(editor) {
             Ok((_, p)) => {
-                let rev = p.tree.rev();
+                let rev =
+                    p.tree.rev().mix(media_stamp(gz_media::Media::get(editor).and_then(|m| m.latest())));
                 Want::Project(p, rev)
             }
             Err(_) => Want::Nothing(None),
@@ -92,6 +93,18 @@ fn want_of(editor: &Editor, cats: &Catalogs, key: CatKey) -> Want {
         Source::Library if key.1 >= HOME => Want::Nothing(None),
         Source::Library => Want::Library(key.1, library_rev(editor, cats, key.1)),
     }
+}
+
+/// The state of the media files an index was made from: a project's listing is current with it
+/// too (the sources it names are companions).
+fn media_stamp(index: Option<Arc<gz_media::Index>>) -> Rev {
+    index.map_or(Rev::ZERO, |i| i.stamp)
+}
+
+/// The media index of the open project, made on the pools when it is not current.
+async fn media_index(editor: &Arc<Editor>, fresh: bool) -> Option<Arc<gz_media::Index>> {
+    let media = gz_media::Media::of(editor).await.ok()?;
+    Some(if fresh { media.fresh_index().await } else { media.index().await })
 }
 
 /// What a Library kind's catalog is current with: its Refresh and, for a kind that lists the
@@ -135,10 +148,13 @@ impl Catalogs {
             let exec = editor.exec.clone();
             match want {
                 Want::Project(project, _) => {
-                    let snap = project.tree.snapshot();
-                    exec.spawn_cpu(move || {
-                        let rev = snap.rev();
-                        let cat = Catalog::from_project(&snap);
+                    let ed = editor.clone();
+                    exec.spawn(async move {
+                        let index = media_index(&ed, false).await;
+                        let snap = project.tree.snapshot();
+                        let rev = snap.rev().mix(media_stamp(index.clone()));
+                        let cat =
+                            ed.exec.cpu(move || Catalog::from_project_with(&snap, index.as_deref())).await;
                         me.store(key, rev, Some(cat), None);
                         me.wake.ping();
                     });
@@ -187,14 +203,15 @@ impl Catalogs {
             })),
             Want::Project(project, _) => {
                 project.tree.refresh().await;
+                let index = media_index(editor, true).await;
                 let snap = project.tree.snapshot();
-                let rev = snap.rev();
+                let rev = snap.rev().mix(media_stamp(index.clone()));
                 if let Some(cat) =
                     self.slots.lock().get(&key).filter(|s| s.rev == rev).and_then(|s| s.cat.clone())
                 {
                     return Ok(cat);
                 }
-                let cat = editor.exec.cpu(move || Catalog::from_project(&snap)).await;
+                let cat = editor.exec.cpu(move || Catalog::from_project_with(&snap, index.as_deref())).await;
                 self.store(key, rev, Some(cat), None);
                 self.peek(key).ok_or_else(|| "the project could not be listed".to_owned())
             }
@@ -267,6 +284,22 @@ pub(crate) struct Inbox {
     pub renamed: Option<(String, String)>,
     /// What was selected was deleted.
     pub clear_selection: bool,
+    /// An import made assets: how many, for the frame's toast.
+    pub imported: Option<u64>,
+    /// An import found files of the project in its way: what it was asked, for the frame to ask
+    /// the author whether they go (`asset.import overwrite=true`).
+    pub import_clash: Option<ImportClash>,
+}
+
+/// An import that would replace files of the project.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ImportClash {
+    /// The files to bring in, absolute.
+    pub from: Vec<String>,
+    /// The project folder they go into.
+    pub to: String,
+    /// The project's files they would replace.
+    pub there: Vec<String>,
 }
 
 /// The view of one host.

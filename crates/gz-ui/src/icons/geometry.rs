@@ -1377,6 +1377,37 @@ fn build(icon: Icon, b: &mut B<'_>) {
                 b.d(u(x), u(0.75), 0.055 * 14.0);
             }
         }
+        // a model is a solid: the outline of a faceted gem and the facets that meet in front
+        Icon::ModelAsset => {
+            let (left, right, top, foot) = (u(0.08), u(0.92), u(0.04), u(0.96));
+            b.z(&[u(0.5), top, right, u(0.27), right, u(0.73), u(0.5), foot, left, u(0.73), left, u(0.27)]);
+            let (il, ir, iy, ib) = (u(0.27), u(0.73), u(0.38), u(0.76));
+            b.z(&[il, iy, ir, iy, u(0.5), ib]);
+            b.quiet(true).l(&[left, u(0.27), il, iy]);
+            b.l(&[right, u(0.27), ir, iy]);
+            b.l(&[u(0.5), ib, u(0.5), foot]);
+        }
+        // a texture is a picture that tiles: a checkered square
+        Icon::TextureAsset => {
+            let (lo, hi) = (u(0.06), u(0.94));
+            b.r(lo, lo, hi, hi, 0.5);
+            let step = (hi - lo) / 3.0;
+            for (cx, cy) in [(0.0, 0.0), (2.0, 0.0), (1.0, 1.0), (0.0, 2.0), (2.0, 2.0)] {
+                let (x0, y0) = (lo + step * cx, lo + step * cy);
+                b.f(&[x0, y0, x0 + step, y0, x0 + step, y0 + step, x0, y0 + step]);
+            }
+        }
+        // a sound is a wave: one and a half periods across the square
+        Icon::SoundAsset => {
+            let n: u32 = 24;
+            let mut xy = Vec::with_capacity(2 * (n as usize + 1));
+            for i in 0..=n {
+                let t = f64::from(i) / f64::from(n);
+                xy.push(u(0.04 + 0.92 * t));
+                xy.push(u(0.5 - 0.34 * (t * 3.0 * std::f64::consts::PI).sin()));
+            }
+            b.l(&xy);
+        }
         // graph editor ------------------------------------------------------------
         Icon::Flow => {
             b.r(2.0, 2.0, 7.0, 7.0, 1.0);

@@ -59,6 +59,7 @@ fn merge_game(mut lib: Catalog, files: Option<Arc<gz_vfs::GameFiles>>, category:
             label: None,
             note: None,
             companions: Vec::new(),
+            published: None,
         });
     }
     // a path both hold is the game's: the library keeps what the game does not have
@@ -157,6 +158,7 @@ async fn spawn_sections(editor: &Arc<Editor>) -> Catalog {
                     format!("Section {section} \u{b7} class {class}")
                 })),
                 companions: Vec::new(),
+                published: None,
             };
             if item.label.as_deref() == Some(section.as_str()) {
                 item.label = None;
@@ -185,6 +187,7 @@ async fn particles(editor: &Arc<Editor>) -> Catalog {
                         label: None,
                         note: None,
                         companions: Vec::new(),
+                        published: None,
                     });
                 }
             }

@@ -4,7 +4,8 @@ THROW-AWAY COPY of a project.
 
 What it proves:
   A  one asset of every kind - quest, behaviour graph, character, character template, PDA
-     interface - is made the way an author makes it (file.create, a character file written beside it)
+     interface, model, texture, sound - is made the way an author makes it (file.create, a character
+     file written beside it)
   B  selected in the content browser, each one's tile draws its own icon
      (content.view 'icons'), and a file of no kind of the editor's own draws none
   C  the tile size answers over MCP (content.view tile=, in pt) at both ends of its range - under
@@ -16,6 +17,10 @@ What it proves:
      the search narrows the view and the Sources pane turns off and on over MCP; Show in Explorer
      answers the path it would select (dry run); the toolbar's Add is off, saying why, on a
      read-only source and on in the project; with --shots the Add menu is captured
+  E  a media asset's source is its companion, never a tile; a model written as OBJ text comes in
+     through asset.import as a model asset, its tile draws the model asset's icon and glyph, a drag of
+     it places an object by the asset's path, it opens in the model preview with its bounds, size and
+     surfaces, and the Place panel lists it among the objects with the model asset's icon
 
     python tools/qa/test_asset_icons.py --project <project> [--shots <folder>]
 """
@@ -24,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import time
 
 import qa
@@ -34,7 +40,33 @@ KINDS = {
     "behaviour": "behaviour graph",
     "character": "character",
     "pda": "PDA interface",
+    "model": "model",
+    "texture": "texture",
+    "sound": "sound",
 }
+# the glyph a tile of each media kind draws while it has no picture
+MEDIA_GLYPHS = {"model": "model_asset", "texture": "texture_asset", "sound": "sound_asset"}
+# a crate of a metre, as OBJ text: the test writes it, nothing binary is checked in
+CRATE_OBJ = """o crate
+v 0 0 0
+v 1 0 0
+v 1 1 0
+v 0 1 0
+v 0 0 1
+v 1 0 1
+v 1 1 1
+v 0 1 1
+vt 0 0
+vt 1 0
+vt 1 1
+vt 0 1
+f 1/1 2/2 3/3 4/4
+f 5/1 8/4 7/3 6/2
+f 1/1 5/2 6/3 2/4
+f 2/1 6/2 7/3 3/4
+f 3/1 7/2 8/3 4/4
+f 4/1 8/2 5/3 1/4
+"""
 TEMPLATE = """return {
     npc      = 1,
     id       = "qa_icon_template",
@@ -153,6 +185,8 @@ def run(ctx: qa.Run) -> None:
         cmd("file.mkdir", path="qa_icons/qa_sub")
         cmd("content.view", action="go", source="project", folder="qa_icons")
         want = {"qa_icons\\qa_sub": "folder", plain: "file_text", made["quest"].replace("/", "\\"): "quest"}
+        for kind, glyph in MEDIA_GLYPHS.items():
+            want[made[kind].replace("/", "\\")] = glyph
         for entry, glyph in want.items():
             s = cmd("content.view", action="select", path=entry)
             key = entry + ("\\" if glyph == "folder" else "")
@@ -220,8 +254,63 @@ def run(ctx: qa.Run) -> None:
             check(not r.get("ok") and word in str(r.get("error")) and "win32" not in str(r.get("error"))
                   and not os.path.isdir(os.path.join(project, *bad.split("/"))),
                   "D file.create path=" + bad + " is refused in a sentence, nothing made", json.dumps(r)[:300])
+        media(project, made)
     finally:
         ed.close()
+
+
+def media(project: str, made: dict[str, str]) -> None:
+    """E: the media kinds in the browser, the model preview and the Place panel."""
+    # a texture asset names its picture: the picture beside it is its companion, no tile
+    texture = made["texture"].replace("/", "\\")
+    picture = texture[: -len(".texasset")] + ".png"
+    with open(os.path.join(project, picture), "w", encoding="utf-8") as f:
+        f.write("not a picture: the companion rule goes by the name\n")
+    cmd("content.view", action="go", source="project", folder="qa_icons")
+    seen = qa.until(lambda: cmd("content.view", action="select", path=picture).get("ok") is False, 10)
+    tile = cmd("content.view", action="select", path=texture)
+    check(seen and tile.get("ok"), "E a texture asset's picture is its companion, not a tile of its own",
+          json.dumps(tile)[:300])
+    cmd("content.view", action="clear")
+
+    # a model of OBJ text comes in as a model asset with its source beside it
+    work = tempfile.mkdtemp(prefix="qa_media_")
+    try:
+        obj = os.path.join(work, "qa_crate.obj")
+        with open(obj, "w", encoding="utf-8", newline="\n") as f:
+            f.write(CRATE_OBJ)
+        imp = cmd("asset.import", **{"from": [obj], "to": "qa_icons/imported"})
+    finally:
+        qa.remove_tree(work)
+    asset = "qa_icons\\imported\\qa_crate.meshasset"
+    check(imp.get("ok") and any(a.replace("/", "\\").lower() == asset.lower() for a in imp.get("assets", [])),
+          "E asset.import makes a model asset of an OBJ", json.dumps(imp)[:300])
+    cmd("content.view", action="go", source="project", folder="qa_icons/imported")
+    shown = qa.until(lambda: cmd("content.view", action="select", path=asset).get("ok"), 10)
+    s = cmd("content.view", action="select", path=asset)
+    entry = next((e for e in s.get("entries", []) if e.get("path", "").lower() == asset.lower()), {})
+    names = [e.get("path") for e in s.get("entries", [])]
+    check(shown and (s.get("icons") or {}).get(asset) == "model" and (s.get("glyphs") or {}).get(asset) == "model_asset",
+          "E the imported model asset's tile draws the model asset's icon", json.dumps(s)[:400])
+    check(not any(str(n).lower().endswith(".obj") for n in names), "E its OBJ is its companion, not a tile", names)
+    check(entry.get("picture") == "model" and (entry.get("payload") or {}).get("kind") == "object"
+          and (entry.get("place") or {}).get("ref", "").lower() == asset.lower(),
+          "E it is pictured as a model and placed as an object by its project path", json.dumps(entry)[:400])
+    cmd("content.view", action="clear")
+
+    p = cmd("preview.model", path=asset.replace("\\", "/"))
+    size = p.get("size") or []
+    check(p.get("ok") and not p.get("error") and len(size) == 3 and all(abs(v - 1.0) < 0.01 for v in size)
+          and p.get("bounds") and p.get("surfaces"),
+          "E the model preview shows the model asset with its bounds, size (1 x 1 x 1 m) and surfaces",
+          json.dumps(p)[:400])
+    cmd("ui.tab", action="activate", doc="level")
+    v = cmd("level.view", place_search="qa_crate")
+    rows = [r for r in v.get("place", v).get("rows", []) if r.get("item")] if v.get("ok") else []
+    found = qa.until(lambda: any(r.get("icon") == "model_asset" for r in
+                                 cmd("level.view", place_search="qa_crate").get("place", {}).get("rows", [])), 10)
+    check(found, "E the Place panel lists the model asset among the objects", json.dumps(rows)[:300])
+    cmd("level.view", place_search="")
 
 
 def main() -> int:

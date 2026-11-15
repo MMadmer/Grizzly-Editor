@@ -6,12 +6,18 @@
 //! thumbnail, a `.~` backup, an object's `.skl` / `.bones` beside it, the folder of a `.scene`
 //! (and the part folder of an X-Ray SDK `.level`). They stay with the asset as its
 //! [`FileItem::companions`]: copied, moved, renamed and deleted with it.
+//!
+//! **A media asset's source is its companion** ([`media_claims`]): the file a model, a texture
+//! or a sound asset takes its data from, and what its source names beside it (a glTF's buffers,
+//! an OBJ's material libraries, the pictures no texture asset wraps). The media index says what
+//! each asset names; an asset it does not know yet takes the source beside it with its own name.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use gz_base::SmolStr;
 use gz_mod::exclude::{ShipState, ship_state};
+use gz_project::asset_kind::MediaKind;
 use gz_project::{AssetKind, EntryKind, FileTree, is_editor_only_entry};
 use gz_ui::Icon;
 use gz_vfs::GameFiles;
@@ -47,6 +53,8 @@ pub struct FileItem {
     /// What goes with it and is never a tile: sidecar files and a scene's folder, as the source
     /// names them.
     pub companions: Vec<SmolStr>,
+    /// A media asset's name in the game (`bunker\wall_brick`), from the media index.
+    pub published: Option<SmolStr>,
 }
 
 impl FileItem {
@@ -59,6 +67,7 @@ impl FileItem {
             label: None,
             note: None,
             companions: Vec::new(),
+            published: None,
         }
     }
 }
@@ -157,6 +166,71 @@ fn sidecar_of(name: &str) -> Option<&str> {
     }
 }
 
+/// The files media assets take their data from, by lower-case backslash path, each with the
+/// asset it goes with (backslashes, as the tree spells it); and every asset's published name, by
+/// its lower-case path. A file is the companion of the asset whose source it is first, else of
+/// one that uses it; a media asset, the asset itself and a file the tree lacks are nobody's. An
+/// asset `media` does not list takes the file beside it with its own name and one of its kind's
+/// source extensions.
+#[must_use]
+pub fn media_claims(
+    tree: &FileTree,
+    media: Option<&gz_media::Index>,
+) -> (FxHashMap<String, String>, FxHashMap<String, SmolStr>) {
+    let mut on_disk: FxHashMap<String, String> = FxHashMap::default();
+    let mut assets: Vec<(String, MediaKind)> = Vec::new();
+    for dir in tree.dirs() {
+        let path = dir.path.to_backslash();
+        for e in dir.entries.iter() {
+            if !matches!(e.kind, EntryKind::File { .. }) {
+                continue;
+            }
+            let full = if path.is_empty() { e.name.to_string() } else { format!("{path}\\{}", e.name) };
+            if let Some(k) = MediaKind::of_file(&e.name) {
+                assets.push((full.clone(), k));
+            }
+            on_disk.insert(full.to_lowercase(), full);
+        }
+    }
+    let mut claims: FxHashMap<String, String> = FxHashMap::default();
+    let mut names: FxHashMap<String, SmolStr> = FxHashMap::default();
+    let claim = |file: &str, owner: &str, claims: &mut FxHashMap<String, String>| {
+        let key = file.replace('/', "\\").to_lowercase();
+        if MediaKind::of_file(&key).is_some() || claims.contains_key(&key) {
+            return;
+        }
+        if let Some(owner) = on_disk.get(&owner.replace('/', "\\").to_lowercase())
+            && on_disk.contains_key(&key)
+        {
+            claims.insert(key, owner.clone());
+        }
+    };
+    let mut known: FxHashSet<String> = FxHashSet::default();
+    if let Some(index) = media {
+        for e in &index.entries {
+            let owner = e.path.to_backslash();
+            known.insert(owner.to_lowercase());
+            names.insert(owner.to_lowercase(), SmolStr::new(&e.name));
+            if let Some(src) = &e.source {
+                claim(&src.to_backslash(), &owner, &mut claims);
+            }
+        }
+        for e in &index.entries {
+            let owner = e.path.to_backslash();
+            for u in &e.uses {
+                claim(&u.to_backslash(), &owner, &mut claims);
+            }
+        }
+    }
+    for (asset, kind) in assets.iter().filter(|(a, _)| !known.contains(&a.to_lowercase())) {
+        let base = stem(asset);
+        for ext in gz_media::files::source_extensions(*kind) {
+            claim(&format!("{base}.{ext}"), asset, &mut claims);
+        }
+    }
+    (claims, names)
+}
+
 impl Catalog {
     /// A catalog of nothing: a source that cannot be read.
     #[must_use]
@@ -221,9 +295,18 @@ impl Catalog {
     /// asset. Links are not listed.
     #[must_use]
     pub fn from_project(tree: &FileTree) -> Self {
+        Self::from_project_with(tree, None)
+    }
+
+    /// [`Catalog::from_project`] with what the media index says: the sources of the media assets
+    /// are their companions, and each asset carries its published name.
+    #[must_use]
+    pub fn from_project_with(tree: &FileTree, media: Option<&gz_media::Index>) -> Self {
         let mut c = Self::empty(Source::Project, 0);
         c.disk_root = Some(tree.root().to_path_buf());
         let hidden = scene_folders(tree, &[".scene", ".level"]);
+        let (claims, published) = media_claims(tree, media);
+        let mut media_companions: FxHashMap<String, Vec<SmolStr>> = FxHashMap::default();
         for dir in tree.dirs() {
             let path = dir.path.to_backslash();
             let top = path.split('\\').next().unwrap_or("");
@@ -284,6 +367,13 @@ impl Catalog {
                         if is_backup(&e.name) {
                             continue;
                         }
+                        if let Some(owner) = claims.get(&full.to_lowercase()) {
+                            media_companions
+                                .entry(owner.to_lowercase())
+                                .or_default()
+                                .push(SmolStr::new(&full));
+                            continue;
+                        }
                         items.push(FileItem::new(&full, size, asset, Origin::Disk));
                     }
                     EntryKind::Link => {}
@@ -297,6 +387,15 @@ impl Catalog {
                     .map(|(_, p)| p.clone())
                     .collect();
                 c.add(item);
+            }
+        }
+        for n in &mut c.nodes {
+            for f in &mut n.files {
+                let key = f.path.to_lowercase();
+                if let Some(more) = media_companions.remove(&key) {
+                    f.companions.extend(more);
+                }
+                f.published = published.get(&key).cloned();
             }
         }
         c.sort();
@@ -608,10 +707,13 @@ pub fn build_view(cat: &Catalog, folder: &str, search: &str, input: ViewInput<'_
         own: f.asset,
         ship: ship(&f.path),
         size: f.size,
-        picture: if f.asset.is_some() || f.origin == Origin::None {
-            Picture::None
-        } else {
-            picture_of(cat.source, cat.category, &f.path)
+        picture: match f.asset {
+            // a texture asset shows its picture, a model asset its model rendered
+            Some(AssetKind::Texture) => Picture::Image,
+            Some(AssetKind::Model) => Picture::Model,
+            Some(_) => Picture::None,
+            None if f.origin == Origin::None => Picture::None,
+            None => picture_of(cat.source, cat.category, &f.path),
         },
         label: f.label.clone(),
         note: f.note.clone(),
@@ -761,6 +863,122 @@ mod tests {
         // the project file is the project, not a tile
         let root_view = build_view(&c, "", "", ViewInput::default());
         assert!(root_view.entries.iter().all(|e| !e.entry.path.ends_with(".grizzly")));
+    }
+
+    fn media_entry(
+        path: &str,
+        kind: MediaKind,
+        name: &str,
+        source: Option<&str>,
+        uses: &[&str],
+    ) -> gz_media::Entry {
+        let rel = |p: &str| gz_base::RelPath::new(p).unwrap();
+        gz_media::Entry {
+            kind,
+            path: rel(path),
+            name: name.to_owned(),
+            key: name.to_lowercase(),
+            source: source.map(rel),
+            uses: uses.iter().map(|u| rel(u)).collect(),
+            dynamic: false,
+            parts: false,
+            excluded: false,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn a_media_asset_and_what_it_takes_its_data_from_are_one_tile() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path();
+        for f in [
+            "models\\wall.meshasset",
+            "models\\wall.glb",
+            "models\\wall.png",
+            "models\\crate.meshasset",
+            "models\\crate.gltf",
+            "models\\crate.bin",
+            "models\\tex\\crate_d.png",
+            "models\\tex\\crate_d.texasset",
+            "models\\tex\\crate_n.png",
+            "sounds\\hum.sndasset",
+            "sounds\\hum_take2.wav",
+            "sounds\\hum.wav",
+            "notes.png",
+        ] {
+            put(root, f);
+        }
+        let tree = FileTree::scan(root);
+        // without the index: an asset takes the source beside it with its own name and its kind's extension
+        let c = Catalog::from_project(&tree);
+        let wall = c.file("models\\wall.meshasset").unwrap();
+        assert_eq!(wall.companions, ["models\\wall.glb"]);
+        assert_eq!(wall.asset, Some(AssetKind::Model));
+        // a picture beside a model is no source of the model's kind: a tile of its own
+        assert!(c.file("models\\wall.png").is_some());
+        assert!(c.file("models\\wall.glb").is_none());
+        assert_eq!(c.file("sounds\\hum.sndasset").unwrap().companions, ["sounds\\hum.wav"]);
+        assert!(c.file("sounds\\hum_take2.wav").is_some());
+        // with it: the source the asset names, what its source uses, the pictures no texture asset wraps
+        let index = gz_media::Index {
+            stamp: gz_base::Rev(1),
+            module: "qa".to_owned(),
+            entries: vec![
+                media_entry(
+                    "models/crate.meshasset",
+                    MediaKind::Model,
+                    "qa\\crate",
+                    Some("models/crate.gltf"),
+                    &["models/crate.bin", "models/tex/crate_d.png", "models/tex/crate_n.png"],
+                ),
+                media_entry(
+                    "models/tex/crate_d.texasset",
+                    MediaKind::Texture,
+                    "qa\\crate_d",
+                    Some("models/tex/CRATE_D.png"),
+                    &[],
+                ),
+                media_entry(
+                    "sounds/hum.sndasset",
+                    MediaKind::Sound,
+                    "ambient\\hum",
+                    Some("sounds/hum_take2.wav"),
+                    &[],
+                ),
+                // a source that is another asset is nobody's companion
+                media_entry(
+                    "models/wall.meshasset",
+                    MediaKind::Model,
+                    "qa\\wall",
+                    Some("models/crate.meshasset"),
+                    &[],
+                ),
+            ],
+        };
+        let c = Catalog::from_project_with(&tree, Some(&index));
+        let mut crate_ = c.file("models\\crate.meshasset").unwrap().companions.clone();
+        crate_.sort();
+        assert_eq!(crate_, ["models\\crate.bin", "models\\crate.gltf", "models\\tex\\crate_n.png"]);
+        let tex = c.file("models\\tex\\crate_d.texasset").unwrap();
+        assert_eq!(tex.companions, ["models\\tex\\crate_d.png"], "the tree's own spelling");
+        assert_eq!(tex.published.as_deref(), Some("qa\\crate_d"));
+        assert_eq!(c.file("sounds\\hum.sndasset").unwrap().companions, ["sounds\\hum_take2.wav"]);
+        // the index knows hum.sndasset names another file: the one with its name is a tile
+        assert!(c.file("sounds\\hum.wav").is_some());
+        assert!(
+            c.file("models\\crate.meshasset").is_some()
+                && c.file("models\\wall.meshasset").unwrap().companions.is_empty()
+        );
+        assert!(c.file("notes.png").is_some());
+        let tiles = build_view(&c, "models\\tex", "", ViewInput::default());
+        let names: Vec<&str> = tiles.entries.iter().map(|e| e.entry.path.as_str()).collect();
+        assert_eq!(names, ["models\\tex\\crate_d.texasset"]);
+        assert_eq!(tiles.entries[0].picture, Picture::Image);
+        let models = build_view(&c, "models", "", ViewInput::default());
+        let crate_tile = models.entries.iter().find(|e| e.entry.path.ends_with("crate.meshasset")).unwrap();
+        assert_eq!(crate_tile.picture, Picture::Model);
+        let sounds = build_view(&c, "sounds", "", ViewInput::default());
+        assert!(sounds.entries.iter().all(|e| e.picture == Picture::None));
     }
 
     #[test]

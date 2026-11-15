@@ -1,5 +1,7 @@
 //! The editor's own asset kinds. The extension is the kind; only a character is looked INTO,
-//! to tell a template from a character. The UI maps a kind to its icon.
+//! to tell a template from a character. The UI maps a kind to its icon. The media kinds - a
+//! model, a texture, a sound over a source file beside them - are kinds of their own too
+//! ([`MediaKind`], and [`AssetKind::Model`] / `Texture` / `Sound` for what lists every kind).
 
 use serde::Serialize;
 
@@ -14,6 +16,11 @@ pub enum AssetKind {
     Character,
     CharacterTemplate,
     Pda,
+    /// A model asset (`.meshasset`), a texture asset (`.texasset`), a sound asset (`.sndasset`):
+    /// the [`MediaKind`]s.
+    Model,
+    Texture,
+    Sound,
     /// The project file (`<Name>.grizzly`): the project itself, never a tile of the Content
     /// Browser.
     Project,
@@ -29,6 +36,9 @@ impl AssetKind {
             AssetKind::Character => "character",
             AssetKind::CharacterTemplate => "character template",
             AssetKind::Pda => "PDA interface",
+            AssetKind::Model => MediaKind::Model.name(),
+            AssetKind::Texture => MediaKind::Texture.name(),
+            AssetKind::Sound => MediaKind::Sound.name(),
             AssetKind::Project => "project",
         }
     }
@@ -41,6 +51,9 @@ impl AssetKind {
             AssetKind::Behaviour => ".behasset",
             AssetKind::Character | AssetKind::CharacterTemplate => ".npcasset",
             AssetKind::Pda => ".pdaasset",
+            AssetKind::Model | AssetKind::Texture | AssetKind::Sound => {
+                self.media().map_or("", MediaKind::extension)
+            }
             AssetKind::Project => crate::project::EXTENSION,
         }
     }
@@ -53,6 +66,9 @@ impl AssetKind {
             AssetKind::Behaviour => "beh",
             AssetKind::Character | AssetKind::CharacterTemplate => "npc",
             AssetKind::Pda => "pda",
+            AssetKind::Model | AssetKind::Texture | AssetKind::Sound => {
+                self.media().map_or("", MediaKind::header)
+            }
             AssetKind::Project => crate::project::HEADER,
         }
     }
@@ -63,7 +79,21 @@ impl AssetKind {
         match self {
             AssetKind::Quest | AssetKind::Behaviour | AssetKind::Pda => 1,
             AssetKind::Character | AssetKind::CharacterTemplate => 1,
+            AssetKind::Model | AssetKind::Texture | AssetKind::Sound => {
+                self.media().map_or(1, MediaKind::version)
+            }
             AssetKind::Project => crate::project::VERSION,
+        }
+    }
+
+    /// The media kind it is, for a model, a texture or a sound.
+    #[must_use]
+    pub fn media(self) -> Option<MediaKind> {
+        match self {
+            AssetKind::Model => Some(MediaKind::Model),
+            AssetKind::Texture => Some(MediaKind::Texture),
+            AssetKind::Sound => Some(MediaKind::Sound),
+            _ => None,
         }
     }
 
@@ -74,8 +104,25 @@ impl AssetKind {
     }
 
     /// Every kind with a file of its own, one per extension.
-    pub const FILES: [AssetKind; 4] =
-        [AssetKind::Quest, AssetKind::Behaviour, AssetKind::Character, AssetKind::Pda];
+    pub const FILES: [AssetKind; 7] = [
+        AssetKind::Quest,
+        AssetKind::Behaviour,
+        AssetKind::Character,
+        AssetKind::Pda,
+        AssetKind::Model,
+        AssetKind::Texture,
+        AssetKind::Sound,
+    ];
+}
+
+impl From<MediaKind> for AssetKind {
+    fn from(kind: MediaKind) -> Self {
+        match kind {
+            MediaKind::Model => AssetKind::Model,
+            MediaKind::Texture => AssetKind::Texture,
+            MediaKind::Sound => AssetKind::Sound,
+        }
+    }
 }
 
 /// The media kinds: a text asset that describes a source file of a common format beside it (a
@@ -174,6 +221,8 @@ pub fn kind_of(name: &str, head: Option<&[u8]>) -> Option<AssetKind> {
         Some(AssetKind::Behaviour)
     } else if is(".pdaasset") {
         Some(AssetKind::Pda)
+    } else if let Some(media) = MediaKind::of_file(name) {
+        Some(media.into())
     } else if is(crate::project::EXTENSION) {
         Some(AssetKind::Project)
     } else if is(".npcasset") {
@@ -249,8 +298,20 @@ mod tests {
         assert_eq!(MediaKind::of_file("hum.sndasset"), Some(MediaKind::Sound));
         assert_eq!(MediaKind::of_file("wall.glb"), None);
         assert_eq!(MediaKind::Texture.header(), "tex");
-        // a media asset is no kind the content browser tells apart by looking into it
-        assert_eq!(kind_of("wall.meshasset", None), None);
+        // a media asset is a kind of the editor's own, told by its extension alone
+        assert_eq!(kind_of("wall.meshasset", None), Some(AssetKind::Model));
+        assert_eq!(kind_of("a/Brick.TEXASSET", Some(b"abstract = true")), Some(AssetKind::Texture));
+        assert_eq!(kind_of("hum.sndasset", None), Some(AssetKind::Sound));
+        assert_eq!(kind_of("wall.glb", None), None);
+        for k in MediaKind::ALL {
+            let a = AssetKind::from(k);
+            assert_eq!(
+                (a.media(), a.extension(), a.header(), a.name()),
+                (Some(k), k.extension(), k.header(), k.name())
+            );
+            assert!(AssetKind::FILES.contains(&a));
+        }
+        assert_eq!(AssetKind::Quest.media(), None);
     }
 
     #[test]

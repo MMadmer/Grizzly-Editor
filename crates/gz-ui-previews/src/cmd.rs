@@ -1,5 +1,6 @@
-//! The commands of the previews: `preview.model`, `preview.texture`, `library.view`, `library.set`,
-//! `library.play`, `library.import`, `library.rebuild` and `shot.asset`.
+//! The commands of the previews: `preview.model`, `preview.texture`, `preview.sound`,
+//! `library.view`, `library.set`, `library.play`, `library.import`, `library.rebuild` and
+//! `shot.asset`.
 //!
 //! A command that changes what a tab draws applies itself, then waits for the frames that show
 //! it and reads the tab again: the answer is the frame it asked for.
@@ -103,6 +104,10 @@ struct ModelParams {
     /// out: the tab open now.
     #[serde(default)]
     name: Option<String>,
+    /// In place of name: a model asset of the project (`models/wall.meshasset`), shown as the
+    /// scene and the level compiler have it and again whenever its files change.
+    #[serde(default)]
+    path: Option<String>,
     /// Where `name` is looked for: `library` (the project, the library, then the game - the
     /// default), `project`, or `game` (the linked game's visuals only).
     #[serde(default)]
@@ -142,10 +147,18 @@ async fn model_answer(editor: &Arc<Editor>) -> Reply {
 }
 
 async fn preview_model(editor: Arc<Editor>, p: ModelParams, _origin: Origin) -> Reply {
-    let name = engine_name(p.name.as_deref().unwrap_or_default());
+    if p.name.is_some() && p.path.is_some() {
+        return Err(invalid("name a model with name= or a model asset with path=, not both"));
+    }
+    let asset = p.path.as_deref().map(engine_name).filter(|n| !n.is_empty());
+    if asset.as_deref().is_some_and(|a| !crate::model_load::is_model_asset(a)) {
+        return Err(invalid("path names a model asset of the project (.meshasset)"));
+    }
+    let name = asset.clone().unwrap_or_else(|| engine_name(p.name.as_deref().unwrap_or_default()));
     let Some(source) = ModelSource::parse(p.source.as_deref().unwrap_or_default()) else {
         return Err(invalid("source takes library, project or game"));
     };
+    let source = if asset.is_some() { ModelSource::Project } else { source };
     let lighting = p.lighting.map(|l| usize::from(l == Lighting::Unlit));
     let (wireframe, bones, details) = (p.wireframe, p.bones, p.details);
     let (frame, reset) = (p.frame, p.reset);
@@ -369,6 +382,113 @@ async fn texture_preview(editor: Arc<Editor>, p: TextureParams, _origin: Origin)
         owe_frames(&editor, 3).await;
     }
     texture_answer(&editor).await
+}
+
+// ---- preview.sound -----------------------------------------------------------------------------
+
+/// What `preview.sound` does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum SoundAction {
+    /// Plays `path` from its start.
+    #[default]
+    Play,
+    /// Stops what plays.
+    Stop,
+    /// Answers whether something plays.
+    State,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SoundParams {
+    #[serde(default)]
+    action: SoundAction,
+    /// play: a sound asset of the project (`sounds/hum.sndasset`), or a sound file of it (`.wav`,
+    /// `.ogg`).
+    #[serde(default)]
+    path: Option<String>,
+}
+
+/// A WAV's samples as the player takes them: 16-bit, interleaved.
+fn pcm_of_wav(w: &gz_fmt_sound::Wav) -> gz_fmt_sound::Pcm {
+    let frames = w.frames();
+    let channels = w.channels.len().clamp(1, 8);
+    let mut samples = Vec::with_capacity(frames * channels);
+    for i in 0..frames {
+        for c in w.channels.iter().take(channels) {
+            let v = c.get(i).copied().unwrap_or(0.0).clamp(-1.0, 1.0);
+            samples.push((v * 32767.0).round() as i16);
+        }
+    }
+    gz_fmt_sound::Pcm { channels: u8::try_from(channels).unwrap_or(1), rate: w.rate, samples }
+}
+
+/// A sound of the project decoded for the player, and what its asset says. Blocking.
+fn decode_sound(root: &std::path::Path, rel: &str) -> Result<(gz_fmt_sound::Pcm, Value), String> {
+    let is_asset =
+        gz_project::asset_kind::MediaKind::of_file(rel) == Some(gz_project::asset_kind::MediaKind::Sound);
+    let (source, facts) = if is_asset {
+        let (a, source, _) = gz_media::resolve::sound(root, rel).map_err(|f| f.to_string())?;
+        let facts = json!({
+            "name": a.name,
+            "min_distance": a.min_distance,
+            "max_distance": a.max_distance,
+            "volume": a.volume,
+            "ai_distance": a.ai_distance,
+            "type": a.ty.and_then(|t| gz_media::fields::SOUND_TYPES.iter().find(|(_, v)| *v == t).map(|(w, _)| *w)),
+            "quality": a.quality,
+        });
+        (source, facts)
+    } else {
+        (root.join(rel.replace('/', "\\")), Value::Null)
+    };
+    let bytes =
+        std::fs::read(&source).map_err(|e| format!("{}: {}", source.display(), gz_base::io_reason(&e)))?;
+    let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let pcm = match ext.as_str() {
+        "wav" => pcm_of_wav(&gz_fmt_sound::read_wav(&bytes).map_err(|e| e.to_string())?),
+        "ogg" => gz_fmt_sound::decode_ogg(&bytes).map_err(|e| e.to_string())?,
+        _ => return Err(format!("{} is no sound the editor plays (.wav, .ogg)", source.display())),
+    };
+    let mut out = serde_json::Map::new();
+    out.insert("source".into(), json!(crate::paths::json_path(&source)));
+    if !facts.is_null() {
+        out.insert("asset".into(), facts);
+    }
+    Ok((pcm, Value::Object(out)))
+}
+
+async fn preview_sound(editor: Arc<Editor>, p: SoundParams, _origin: Origin) -> Reply {
+    let player = crate::audio::Player::of(&editor);
+    match p.action {
+        SoundAction::Stop => {
+            player.stop();
+            return Ok(json!({ "playing": false }));
+        }
+        SoundAction::State => return Ok(json!({ "playing": player.is_playing(), "error": player.error() })),
+        SoundAction::Play => {}
+    }
+    let path = p.path.filter(|p| !p.trim().is_empty()).ok_or_else(|| invalid("play takes path="))?;
+    let root = editor.project_root().ok_or_else(|| invalid("no project is open"))?;
+    let rel = path.replace('\\', "/");
+    let r = rel.clone();
+    let (pcm, mut facts) = editor.exec.io(move || decode_sound(&root, &r)).await.map_err(invalid)?;
+    let rate = pcm.rate.max(1);
+    let channels = pcm.channels.max(1);
+    let seconds = pcm.samples.len() as f64 / f64::from(channels) / f64::from(rate);
+    player.play(Arc::new(pcm));
+    if let Some(e) = player.error() {
+        return Err(CmdError::new("refused", e));
+    }
+    if let Value::Object(m) = &mut facts {
+        m.insert("path".into(), json!(rel));
+        m.insert("playing".into(), json!(true));
+        m.insert("seconds".into(), json!((seconds * 1000.0).round() / 1000.0));
+        m.insert("channels".into(), json!(channels));
+        m.insert("rate".into(), json!(rate));
+    }
+    Ok(facts)
 }
 
 // ---- the libraries -----------------------------------------------------------------------------
@@ -969,8 +1089,9 @@ async fn library_rebuild(editor: Arc<Editor>, p: RebuildParams, _origin: Origin)
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct AssetShotParams {
-    /// The asset: a library object (`props\box_wood_01`), a group, a texture name (`ui\x`) or a
-    /// visual (`dynamics\box\box_1a`).
+    /// The asset: a library object (`props\box_wood_01`), a model asset of the project
+    /// (`models/wall.meshasset`, kind objects), a group, a texture name (`ui\x`) or a visual
+    /// (`dynamics\box\box_1a`).
     name: String,
     /// objects (the default), groups, textures, raw_textures, or visuals - which the name is.
     #[serde(default)]
@@ -1163,18 +1284,27 @@ async fn asset_shot(editor: Arc<Editor>, p: AssetShotParams, _origin: Origin) ->
     Ok(png_reply(&name, &png, false))
 }
 
-/// Registers `preview.model`, `preview.texture`, the library commands and `shot.asset`.
+/// Registers `preview.model`, `preview.texture`, `preview.sound`, the library commands and
+/// `shot.asset`.
 pub fn register(reg: &mut Registry) {
     reg.area("preview", "The model and texture previews: one asset in a tab of its own");
     reg.cmd(
-        Spec::view("preview.model", "Shows a model in the model preview, or changes how it is shown.")
-            .example("name=dynamics\\box\\box_1a lighting=unlit"),
+        Spec::view(
+            "preview.model",
+            "Shows a model or a model asset in the model preview, or changes how it is shown.",
+        )
+        .example("path=models/wall.meshasset lighting=unlit"),
         preview_model,
     );
     reg.cmd(
         Spec::view("preview.texture", "Shows a texture in the texture preview, or changes how it is shown.")
             .example("action=open path=ui\\ui_icon source=library zoom=fit"),
         texture_preview,
+    );
+    reg.cmd(
+        Spec::view("preview.sound", "Plays a sound asset or a sound file of the project, or stops it.")
+            .example("path=sounds/hum.sndasset"),
+        preview_sound,
     );
     reg.cmd(
         Spec::view("library.view", "Opens a library tab, picks its entry or answers what it shows.")
@@ -1235,6 +1365,17 @@ mod tests {
         let m: ModelParams =
             serde_json::from_value(json!({ "lighting": "unlit", "wireframe": true })).unwrap();
         assert_eq!((m.lighting, m.wireframe), (Some(Lighting::Unlit), Some(true)));
+        let m: ModelParams = serde_json::from_value(json!({ "path": "models/wall.meshasset" })).unwrap();
+        assert_eq!(m.path.as_deref(), Some("models/wall.meshasset"));
+        let s: SoundParams = serde_json::from_value(json!({ "path": "sounds/hum.sndasset" })).unwrap();
+        assert_eq!(s.action, SoundAction::Play);
+        assert!(serde_json::from_value::<SoundParams>(json!({ "name": "x" })).is_err());
+        let w = gz_fmt_sound::Wav { rate: 8000, channels: vec![vec![0.0, 1.0], vec![-1.0, 0.5]] };
+        let pcm = pcm_of_wav(&w);
+        assert_eq!(
+            (pcm.channels, pcm.rate, pcm.samples.as_slice()),
+            (2, 8000, [0, -32767, 32767, 16384].as_slice())
+        );
         let t: TextureParams = serde_json::from_value(json!({ "action": "open", "mip": 2 })).unwrap();
         assert_eq!((t.action, t.mip), (TextureAction::Open, Some(2)));
         assert!(

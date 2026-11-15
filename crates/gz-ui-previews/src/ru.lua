@@ -22,7 +22,6 @@ return {
   { "Cube Maps", "Кубические карты" },
   { "Bump Maps", "Карты рельефа" },
   { "Normal Maps", "Карты нормалей" },
-  { "Terrain", "Ландшафт" },
   { "Play Sound", "Воспроизвести звук" },
   { "Stop Sound", "Остановить звук" },
   { "Play Animation", "Воспроизвести анимацию" },
@@ -134,6 +133,11 @@ return {
   { "Particle Group", "Группа частиц" },
   { "Unknown", "Неизвестно" },
   { "Library Object", "Объект библиотеки" },
+  { "Model Asset", "Ассет модели" },
+  -- a texture asset in the texture preview
+  { "Game Name", "Имя в игре" },
+  { "The name the game and the scene know the texture by", "Имя, под которым текстуру знают игра и сцена" },
+  { "The source picture the texture is baked from", "Исходное изображение, из которого запекается текстура" },
   -- why a model is not shown
   { "not found in the linked game install", "не найдено в установке связанной игры" },
   { "file not found", "файл не найден" },

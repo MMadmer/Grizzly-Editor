@@ -90,7 +90,7 @@ pub fn content_browser(ui: &mut Ui, cx: &mut DocCx<'_>, host: Host) {
     };
     let has_project = !project_root.is_empty();
     st.sync_scope(&project_root, &game_root, &browser.cats);
-    take_inbox(st, &browser);
+    take_inbox(&ctx, &editor, st, &browser);
     st.pics.begin_frame(&ctx, now);
     // Libraries > Reload Textures: the tiles' pictures are read again
     let reload = gz_app::gpu::TextureReload::generation(&editor);
@@ -147,8 +147,16 @@ pub fn content_browser(ui: &mut Ui, cx: &mut DocCx<'_>, host: Host) {
 }
 
 /// What jobs left for the frame: a rename box to open, a rename that landed, a deletion.
-fn take_inbox(st: &mut Inner, browser: &ContentBrowser) {
+fn take_inbox(ctx: &egui::Context, editor: &Arc<Editor>, st: &mut Inner, browser: &ContentBrowser) {
     let mut inbox = browser.inbox.lock();
+    if let Some(n) = inbox.imported.take()
+        && n > 0
+    {
+        gz_ui::state::toast(ctx, gz_ui::Tone::Success, tr!("Made {n} {n:asset|assets}.", n = n));
+    }
+    if let Some(clash) = inbox.import_clash.take() {
+        actions::ask_import_clash(ctx, editor, clash);
+    }
     if let Some((was, now)) = inbox.renamed.take() {
         st.follow_rename(&was, &now);
     }
@@ -366,15 +374,16 @@ fn crumb_target(loc: &Location, path: &str) -> Location {
 }
 
 fn add_menu(ui: &mut Ui, blocked: Option<&'static str>, pick: &mut Option<usize>) {
-    for (i, (label, _tip, _)) in ADD_ITEMS.iter().enumerate() {
-        if i == 1 {
+    for (i, (label, _tip, kind)) in ADD_ITEMS.iter().enumerate() {
+        if i == 2 {
             ui.separator();
         }
-        let icon = match i {
-            0 => Icon::Folder,
-            1 => Icon::Quest,
-            2 => Icon::Behaviour,
-            3 => Icon::Character,
+        let icon = match *kind {
+            None => Icon::Folder,
+            Some(actions::IMPORT) => Icon::Open,
+            Some("quest") => Icon::Quest,
+            Some("behaviour") => Icon::Behaviour,
+            Some("character") => Icon::Character,
             _ => Icon::PdaInterface,
         };
         if menu_item(
@@ -397,6 +406,7 @@ fn run_add(st: &Inner, f: &Frame<'_>, i: usize) {
         return;
     }
     match ADD_ITEMS.get(i).and_then(|(_, _, kind)| *kind) {
+        Some(actions::IMPORT) => actions::import_dialog(f.editor, f.browser, &st.loc.folder),
         Some(kind) => actions::create(f.editor, f.browser, st, kind),
         None => actions::new_folder(f.editor, f.browser, st),
     }
@@ -862,7 +872,7 @@ fn take_drop(st: &mut Inner, f: &Frame<'_>, payload: Payload, dst: &str) {
                 f.toast("Open a project to bring files into it.");
                 return;
             }
-            actions::import_files(f.editor, files, dst);
+            actions::import_files(f.editor, f.browser, files, dst);
         }
         _ => {}
     }
@@ -1286,10 +1296,15 @@ fn tile(
         let rel = path.to_owned();
         shown = st.pics.get(&key, ve.picture, path, square.width() * ppp, f.now, move || {
             let cat = cat?;
-            match cat.file(&rel).map(|f| f.origin) {
-                Some(Origin::Game) => Some(Bytes::Game(cat.game.clone()?, cat.game_path(&rel)?)),
-                Some(Origin::Disk) => cat.disk_path(&rel).map(Bytes::Disk),
-                _ => None,
+            let file = cat.file(&rel)?;
+            // a media asset's picture is made from what it describes
+            if file.asset.is_some_and(|k| k.media().is_some()) {
+                return Some(Bytes::Asset(cat.disk_root.clone()?, rel.clone()));
+            }
+            match file.origin {
+                Origin::Game => Some(Bytes::Game(cat.game.clone()?, cat.game_path(&rel)?)),
+                Origin::Disk => cat.disk_path(&rel).map(Bytes::Disk),
+                Origin::None => None,
             }
         });
     }
@@ -1446,6 +1461,10 @@ fn tile(
         }
         if let Some(kind) = ve.own {
             lines.push(Tx::from(crate::icons::own_name(kind)));
+        }
+        // a media asset goes by the name the game knows it by
+        if let Some(name) = f.cat.cat.as_ref().and_then(|c| c.file(path)).and_then(|f| f.published.clone()) {
+            lines.push(tr!("The game knows it as {name}.", name = name.to_string()));
         }
         match &ve.ship {
             crate::catalog::Ship::Excluded(rule) => {

@@ -43,9 +43,15 @@ impl Default for Thumbs {
     }
 }
 
-/// Where a texture a model names is: the project's `gamedata\textures`, the editor's, the linked
-/// game's index, the editor's `.tga` sources.
+/// Where a texture a model names is: the project's texture asset of that name, its
+/// `gamedata\textures`, the editor's, the linked game's index, the editor's `.tga` sources.
 fn load_texture(editor: &Editor, name: &str) -> Result<AssetBytes, String> {
+    // a texture asset of the project wins: its picture is what the game gets baked
+    if let Some((file, ext)) = gz_media::Media::get(editor).and_then(|m| m.texture_file(name))
+        && let Ok(bytes) = std::fs::read(&file)
+    {
+        return Ok(AssetBytes { bytes, ext: Some(ext.into()) });
+    }
     let rel = name.replace('/', "\\");
     let mut disk: Vec<(PathBuf, &str)> = Vec::new();
     if let Some(root) = editor.project_root() {

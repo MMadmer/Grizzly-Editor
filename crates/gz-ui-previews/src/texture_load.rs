@@ -1,5 +1,6 @@
 //! What the texture preview loads: a file's bytes wherever it lives, taken by the GPU as they
-//! are when it can, decoded otherwise.
+//! are when it can, decoded otherwise. A texture asset of the project is shown as the game will
+//! have it: its picture baked into the `.dds` the module build publishes, with the asset's keys.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -283,6 +284,64 @@ pub struct TexFile {
     pub raw: Arc<[u8]>,
     /// The decoded top level, when the file was decoded.
     pub image: Option<Image>,
+    /// A texture asset's name in the game, and its keys as written (`use`, `format`, `mips`, ...).
+    pub asset: Option<AssetFacts>,
+}
+
+/// What a texture asset says of itself.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AssetFacts {
+    /// The name the game knows it by (`bunker\wall_brick`).
+    pub published: String,
+    /// Its source picture.
+    pub source: Option<PathBuf>,
+    /// Each top-level key of the file but its header, with its value as text.
+    pub keys: Vec<(String, String)>,
+}
+
+/// A Lua data value as one line of text: a list or a table in braces.
+#[must_use]
+pub fn value_text(v: &gz_luadata::Value) -> String {
+    if v.is_table() {
+        let mut parts: Vec<String> = v.arr().iter().map(value_text).collect();
+        parts.extend(v.fields().iter().map(|(k, x)| format!("{k} = {}", value_text(x))));
+        return format!("{{ {} }}", parts.join(", "));
+    }
+    v.to_text("")
+}
+
+/// Whether a name is a texture asset's project path.
+#[must_use]
+pub fn is_texture_asset(name: &str) -> bool {
+    gz_project::asset_kind::MediaKind::of_file(name) == Some(gz_project::asset_kind::MediaKind::Texture)
+}
+
+/// A texture asset of the project baked the way the module build bakes it: the `.dds`, and what
+/// the asset says. Blocking.
+fn bake_asset(sources: &Sources, rel: &str) -> Result<(Vec<u8>, AssetFacts), String> {
+    let root = sources.project.as_ref().ok_or_else(|| "no project is open".to_owned())?;
+    let rel = rel.replace('\\', "/");
+    let published = sources
+        .media
+        .as_ref()
+        .and_then(|m| m.latest())
+        .and_then(|i| i.at(&rel).map(|e| e.name.clone()))
+        .unwrap_or_else(|| gz_media::files::published_name(None, &rel, &gz_media::files::module_id(root)));
+    let t = gz_media::resolve::texture(root, &rel, &published).map_err(|f| f.to_string())?;
+    let made = gz_fmt_tex::make_game_texture(&t.image, &t.params, None).map_err(|e| e.to_string())?;
+    let text = std::fs::read(root.join(&rel)).map_err(|e| gz_base::io_reason(&e))?;
+    let value = gz_media::kind::load(
+        gz_project::asset_kind::MediaKind::Texture,
+        &rel,
+        &String::from_utf8_lossy(&text),
+    )?;
+    let keys = value
+        .fields()
+        .iter()
+        .filter(|(k, _)| k.as_str() != "tex")
+        .map(|(k, v)| (k.to_string(), value_text(v)))
+        .collect();
+    Ok((made.dds, AssetFacts { published, source: Some(t.source), keys }))
 }
 
 impl TexFile {
@@ -303,6 +362,7 @@ impl TexFile {
             texture: None,
             raw: Arc::from(Vec::new()),
             image: None,
+            asset: None,
         }
     }
 
@@ -404,7 +464,25 @@ pub async fn load(editor: Arc<Editor>, name: String, source: TexSource) -> TexFi
     let sources = Sources::of(&editor).await;
     let n = name.clone();
     let looked = sources.clone();
-    let got = editor.exec.io(move || read(&sources, &n, source)).await;
+    let mut facts = None;
+    let got = if source == TexSource::Project && is_texture_asset(&name) {
+        let made = editor
+            .exec
+            .io(move || {
+                let file = sources.project.as_ref().map(|r| r.join(&n));
+                bake_asset(&sources, &n).map(|(dds, f)| (dds, file, f))
+            })
+            .await;
+        match made {
+            Ok((dds, file, f)) => {
+                facts = Some(f);
+                Some((dds, file, String::new(), Origin::Project))
+            }
+            Err(why) => return TexFile::failed(&name, &why),
+        }
+    } else {
+        editor.exec.io(move || read(&sources, &n, source)).await
+    };
     let Some((bytes, file, archive, origin)) = got else {
         return TexFile::failed(&name, &not_found(&looked, &name, source));
     };
@@ -416,6 +494,7 @@ pub async fn load(editor: Arc<Editor>, name: String, source: TexSource) -> TexFi
             let container =
                 container_of(&bytes, file.as_ref().map_or(n.as_str(), |f| f.to_str().unwrap_or(&n)));
             let mut t = TexFile::failed(&n, "");
+            t.asset = facts;
             t.file = file;
             t.archive = archive;
             t.origin = origin;

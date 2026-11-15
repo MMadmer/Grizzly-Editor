@@ -211,6 +211,8 @@ impl Item {
 #[derive(Clone, Default)]
 pub struct Inputs {
     pub objects: Option<Arc<Vec<String>>>,
+    /// The project's model assets, by their project paths: listed with the objects.
+    pub models: Option<Arc<Vec<String>>>,
     pub spawns: Option<Arc<Vec<String>>>,
     /// A spawn section's in-game name, by section.
     pub names: Option<Arc<FxHashMap<String, String>>>,
@@ -227,6 +229,7 @@ impl Inputs {
             Rev(l.as_ref().map_or(0, |a| Arc::as_ptr(a) as *const u8 as usize as u64))
         }
         of(&self.objects)
+            .mix(of(&self.models))
             .mix(of(&self.spawns))
             .mix(of(&self.names))
             .mix(of(&self.sounds))
@@ -239,6 +242,7 @@ impl Inputs {
     pub fn now(editor: &Arc<Editor>) -> Self {
         Self {
             objects: Lists::get(editor, &ListKey::Objects),
+            models: Lists::get(editor, &ListKey::ModelAssets),
             spawns: Lists::get(editor, &ListKey::SpawnSections),
             names: SpawnNames::get(editor),
             sounds: Lists::get(editor, &ListKey::Sounds),
@@ -251,6 +255,7 @@ impl Inputs {
     pub async fn wait(editor: &Arc<Editor>) -> Self {
         Self {
             objects: Some(Lists::wait(editor, &ListKey::Objects).await),
+            models: Some(Lists::wait(editor, &ListKey::ModelAssets).await),
             spawns: Some(Lists::wait(editor, &ListKey::SpawnSections).await),
             names: Some(SpawnNames::wait(editor).await),
             sounds: Some(Lists::wait(editor, &ListKey::Sounds).await),
@@ -444,6 +449,18 @@ fn leaf(path: &str) -> &str {
     path.rsplit('\\').next().unwrap_or(path)
 }
 
+/// Whether a reference is a model asset's project path.
+fn is_model_asset(reference: &str) -> bool {
+    gz_project::asset_kind::MediaKind::of_file(reference) == Some(gz_project::asset_kind::MediaKind::Model)
+}
+
+/// A model asset's row: its file's name without the extension, the path it is placed by.
+fn model_asset_item(cat: Category, path: &str) -> Item {
+    let file = path.rsplit(['\\', '/']).next().unwrap_or(path);
+    let label = file.rsplit_once('.').map_or(file, |(stem, _)| stem);
+    Item::new(cat, label, path, Icon::ModelAsset, What::of(Kind::Object, Some(path)))
+}
+
 /// The item a recent key names, as the lists read it now.
 fn recent_item(key: &str, names: Option<&FxHashMap<String, String>>) -> Option<Item> {
     let what = What::parse(key)?;
@@ -452,6 +469,9 @@ fn recent_item(key: &str, names: Option<&FxHashMap<String, String>>) -> Option<I
     }
     let p = what.placeable()?;
     let r = p.reference.clone()?;
+    if p.kind == Kind::Object && is_model_asset(&r) {
+        return Some(model_asset_item(Category::Recent, &r));
+    }
     let (label, icon) = match p.kind {
         Kind::Spawn => (names.and_then(|n| n.get(&r)).cloned().unwrap_or_else(|| r.clone()), Icon::Spawn),
         k => (leaf(&r).to_owned(), crate::classes::icon(k.class())),
@@ -470,7 +490,18 @@ fn list_items(cat: Category, inputs: &Inputs) -> Option<Vec<(String, Item)>> {
             .collect()
     };
     Some(match cat {
-        Category::Objects => make(inputs.objects.as_ref()?, Kind::Object, Icon::SceneObject),
+        // the project's model assets first, at the top of the list, then the library's objects
+        Category::Objects => {
+            let objects = inputs.objects.as_ref()?;
+            let mut out: Vec<(String, Item)> = inputs
+                .models
+                .iter()
+                .flat_map(|m| m.iter())
+                .map(|p| (String::new(), model_asset_item(cat, p)))
+                .collect();
+            out.extend(make(objects, Kind::Object, Icon::SceneObject));
+            out
+        }
         Category::Sounds => make(inputs.sounds.as_ref()?, Kind::Sound, Icon::SoundSource),
         Category::Particles => make(inputs.particles.as_ref()?, Kind::Particles, Icon::Particles),
         Category::Groups => make(inputs.groups.as_ref()?, Kind::Group, Icon::Group),
@@ -1139,6 +1170,7 @@ impl PlacePanel {
                 Row::Item { item, depth } => json!({
                     "item": item.label,
                     "what": item.detail,
+                    "icon": item.icon.name(),
                     "category": item.category.id(),
                     "depth": depth,
                     "payload": item.what.key(),
@@ -1221,6 +1253,7 @@ mod tests {
                 "props\\barrel".into(),
                 "trees\\pine".into(),
             ])),
+            models: Some(Arc::new(vec!["models/bunker/wall_long.meshasset".into()])),
             spawns: Some(Arc::new(vec!["weapons\\pistols\\wpn_pm".into(), "monsters\\dog_weak".into()])),
             names: Some(Arc::new(names)),
             sounds: Some(Arc::new(vec!["ambient\\wind".into()])),
@@ -1264,11 +1297,12 @@ mod tests {
     fn folded_categories_and_folders_hide_their_rows() {
         let key = Key { open: vec![Category::Objects, Category::Lights], ..Key::default() };
         let r = rows(&inputs(), &key, &FxHashMap::default());
-        assert_eq!(item_labels(&r), vec!["Light", "Glow"]);
+        // the project's model assets head the objects, outside the library's folders
+        assert_eq!(item_labels(&r), vec!["wall_long", "Light", "Glow"]);
         let mut folders = FxHashMap::default();
         folders.insert(Category::Objects, ["props".to_owned()].into_iter().collect::<FxHashSet<String>>());
         let r = rows(&inputs(), &key, &folders);
-        assert_eq!(item_labels(&r), vec!["box_wood", "barrel", "Light", "Glow"]);
+        assert_eq!(item_labels(&r), vec!["wall_long", "box_wood", "barrel", "Light", "Glow"]);
         // a list still being read says so under its open header
         let key = Key { open: vec![Category::Groups], ..Key::default() };
         let r = rows(&inputs(), &key, &FxHashMap::default());
@@ -1276,6 +1310,43 @@ mod tests {
         // the tops add up
         assert_eq!(r.tops.len(), r.rows.len());
         assert!((r.height - r.rows.iter().map(Row::height).sum::<f32>()).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_model_asset_is_listed_searched_placed_and_recent() {
+        let key = Key { search: "wall".into(), ..Key::default() };
+        let r = rows(&inputs(), &key, &FxHashMap::default());
+        assert_eq!(item_labels(&r), vec!["wall_long"]);
+        let item = r
+            .rows
+            .iter()
+            .find_map(|x| match x {
+                Row::Item { item, .. } => Some(item.clone()),
+                _ => None,
+            })
+            .expect("the model asset");
+        assert_eq!(
+            (item.icon, item.category, item.detail.as_str()),
+            (Icon::ModelAsset, Category::Objects, "models/bunker/wall_long.meshasset")
+        );
+        let What::Place(p) = &item.what;
+        // placed as an object whose reference is the asset's project path, its extension kept
+        assert_eq!(
+            (p.kind, p.reference.as_deref()),
+            (Kind::Object, Some("models\\bunker\\wall_long.meshasset"))
+        );
+        assert_eq!(Placeable::of_payload(&p.payload()), vec![p.clone()]);
+        // the folder part of the path is searched too
+        let key = Key { search: "bunker".into(), ..Key::default() };
+        assert_eq!(item_labels(&rows(&inputs(), &key, &FxHashMap::default())), vec!["wall_long"]);
+        let key = Key { open: vec![Category::Recent], recent: vec![p.key()], ..Key::default() };
+        let r = rows(&inputs(), &key, &FxHashMap::default());
+        assert_eq!(item_labels(&r)[..1], ["wall_long"]);
+        // without the list of model assets the objects still show
+        let mut without = inputs();
+        without.models = None;
+        let key = Key { search: "barrel".into(), ..Key::default() };
+        assert_eq!(item_labels(&rows(&without, &key, &FxHashMap::default())), vec!["barrel"]);
     }
 
     #[test]

@@ -18,6 +18,7 @@ gz-query.workspace = true
 gz-project.workspace = true
 gz-vfs.workspace = true
 gz-mod.workspace = true
+gz-media.workspace = true
 gz-fmt-tex.workspace = true
 gz-fmt-ogf.workspace = true
 gz-fmt-object.workspace = true

@@ -1,6 +1,6 @@
-//! What the model preview loads: a compiled visual (`.ogf`) or a library object (`.object`),
-//! read, measured and made into a mesh on the pools (the visual preview's show, set visual,
-//! set editable and texture reads).
+//! What the model preview loads: a compiled visual (`.ogf`), a library object (`.object`) or a
+//! model asset of the project (`.meshasset`, made into the model the scene and the level
+//! compiler use), read, measured and made into a mesh on the pools.
 
 use std::sync::Arc;
 
@@ -96,6 +96,8 @@ pub struct Material {
     pub name: String,
     pub texture: String,
     pub shader: String,
+    /// The shader the level compiler lights it with; empty for a visual.
+    pub compile: String,
     pub game_mtl: String,
 }
 
@@ -132,6 +134,9 @@ pub struct ModelData {
     /// The box of the pose drawn.
     pub bounds: Aabb,
     pub textures: Vec<TextureUse>,
+    /// What it is drawn with, surface by surface: an object's or a model asset's surfaces, a
+    /// visual's texture and shader pairs.
+    pub surfaces: Vec<Material>,
     pub object: Option<ObjectFacts>,
     pub mesh: Option<MeshData>,
     pub pose: Option<Arc<[Mat4]>>,
@@ -152,6 +157,7 @@ impl ModelData {
             bones: 0,
             bounds: Aabb::EMPTY,
             textures: Vec::new(),
+            surfaces: Vec::new(),
             object: None,
             mesh: None,
             pose: None,
@@ -166,11 +172,33 @@ impl ModelData {
     }
 }
 
-/// Loads a model by its name: the editor's visuals (then a library object of that name), or the
-/// linked game's.
+/// Whether a name is a model asset's project path.
+#[must_use]
+pub fn is_model_asset(name: &str) -> bool {
+    gz_project::asset_kind::MediaKind::of_file(name) == Some(gz_project::asset_kind::MediaKind::Model)
+}
+
+/// Loads a model by its name: a model asset of the project by its path, the editor's visuals
+/// (then a library object of that name), or the linked game's.
 pub async fn load(editor: Arc<Editor>, name: String, source: ModelSource) -> ModelData {
     let sources = Sources::of(&editor).await;
     let exec = editor.exec.clone();
+    if !source.is_game() && is_model_asset(&name) {
+        let Some(root) = sources.project.clone() else {
+            return ModelData::failed(&name, "no project is open");
+        };
+        let n = name.clone();
+        return exec
+            .io(move || match gz_media::resolve::model(&root, &n.replace('\\', "/")) {
+                Ok(m) => {
+                    let mut d = from_object_value(&n, &m.object, sources);
+                    "Model Asset".clone_into(&mut d.kind);
+                    d
+                }
+                Err(f) => ModelData::failed(&n, &f.to_string()),
+            })
+            .await;
+    }
     let n = name.clone();
     let found = exec
         .io(move || {
@@ -227,7 +255,12 @@ fn from_object(name: &str, bytes: &[u8], sources: Sources) -> ModelData {
         }
         Err(_) => return ModelData::failed(name, "cannot load object"),
     };
-    let mesh = match MeshData::from_object(&object, &MaterialTable::default()) {
+    from_object_value(name, &object, sources)
+}
+
+/// What a library object is, measured and made into its mesh.
+fn from_object_value(name: &str, object: &Object, sources: Sources) -> ModelData {
+    let mesh = match MeshData::from_object(object, &MaterialTable::default()) {
         Ok(m) => m,
         Err(_) => return ModelData::failed(name, "cannot load object"),
     };
@@ -247,11 +280,12 @@ fn from_object(name: &str, bytes: &[u8], sources: Sources) -> ModelData {
                 name: s.name.to_string(),
                 texture: s.texture.to_string(),
                 shader: s.shader.to_string(),
+                compile: s.shader_xrlc.to_string(),
                 game_mtl: s.game_mtl.to_string(),
             })
             .collect(),
     };
-    let pose = mesh.skinned.then(|| object_rest(&object));
+    let pose = mesh.skinned.then(|| object_rest(object));
     ModelData {
         name: name.to_owned(),
         error: String::new(),
@@ -262,6 +296,7 @@ fn from_object(name: &str, bytes: &[u8], sources: Sources) -> ModelData {
         bounds,
         // a library object is not an engine visual: its Details list Materials instead
         textures: Vec::new(),
+        surfaces: facts.materials.clone(),
         object: Some(facts),
         mesh: Some(mesh),
         pose,
@@ -457,6 +492,20 @@ fn from_visual(name: &str, bytes: &[u8], found: &Found, sources: Sources) -> Mod
             joints.push((at(i), parent.map(at)));
         }
     }
+    let mut surfaces: Vec<Material> = Vec::new();
+    for m in visual.meshes() {
+        let Some((texture, shader)) = &m.texture else { continue };
+        let s = Material {
+            name: String::new(),
+            texture: texture.to_string(),
+            shader: shader.to_string(),
+            compile: String::new(),
+            game_mtl: String::new(),
+        };
+        if !surfaces.contains(&s) {
+            surfaces.push(s);
+        }
+    }
     let textures = texture_names(&visual)
         .into_iter()
         .map(|t| {
@@ -473,6 +522,7 @@ fn from_visual(name: &str, bytes: &[u8], found: &Found, sources: Sources) -> Mod
         bones: u32::try_from(bones).unwrap_or(u32::MAX),
         bounds,
         textures,
+        surfaces,
         object: None,
         mesh: Some(mesh),
         pose,
@@ -505,6 +555,7 @@ mod tests {
             project: None,
             dirs: crate::paths::EditorDirs::at(std::path::Path::new("x")),
             game: None,
+            media: None,
         };
         let m = from_visual("a", b"not a model at all", &Found::Editor("a.ogf".into()), sources);
         assert_eq!(m.error, "not an OGF model");

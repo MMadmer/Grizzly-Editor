@@ -2,7 +2,9 @@
 //!
 //! An orbit viewport of its own - a `gz_render::Renderer` whose target is sized to the canvas,
 //! fed a draw list built here (the model, a floor grid under it, the bones when asked) - beside a
-//! Details pane of what the model is made of.
+//! Details pane of what the model is made of. A model asset of the project is shown as the scene
+//! and the level compiler have it, and again whenever the asset or a file it is made of changes
+//! on the disk ([`follow_asset`]: the project's watcher, no polling).
 
 use std::sync::Arc;
 
@@ -262,6 +264,45 @@ pub struct ModelDoc {
     submitted: Arc<std::sync::atomic::AtomicU64>,
     /// The Reload Textures generation the model's textures were loaded at.
     reload_seen: u64,
+    /// A model asset's files: moves when one changes on the disk, and the model is read again.
+    follow: Option<Arc<std::sync::atomic::AtomicU64>>,
+    follow_seen: u64,
+    /// The model is the same one read again: the view stays where the author left it.
+    keep_view: bool,
+}
+
+/// Whether a change of the project's file `changed` concerns the model asset `asset` (both
+/// project-relative, either slash): the asset itself, its source or a file the source names, or a
+/// texture asset, which a surface may wear.
+#[must_use]
+pub fn touches(asset: &str, changed: &str, index: Option<&gz_media::Index>) -> bool {
+    use gz_project::asset_kind::MediaKind;
+    let key = |p: &str| p.replace('\\', "/").to_lowercase();
+    let (asset, changed) = (key(asset), key(changed));
+    asset == changed
+        || MediaKind::of_file(&changed) == Some(MediaKind::Texture)
+        || index.is_some_and(|i| i.users_of(&changed).iter().any(|e| key(e.path.as_str()) == asset))
+}
+
+/// A counter that moves whenever [`touches`] says a change of the project's files concerns the
+/// model asset `rel`; it follows the project's watcher until the counter is dropped.
+#[must_use]
+pub fn follow_asset(editor: &Arc<Editor>, rel: &str) -> Arc<std::sync::atomic::AtomicU64> {
+    let counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let Ok((_, project)) = gz_project::Project::of(editor) else { return counter };
+    let mut rx = project.tree.changes().subscribe(gz_project::Filter::All);
+    let (weak, ed, asset) = (Arc::downgrade(&counter), Arc::downgrade(editor), rel.to_owned());
+    editor.exec.spawn(async move {
+        while let Some(change) = rx.recv().await {
+            let (Some(c), Some(ed)) = (weak.upgrade(), ed.upgrade()) else { break };
+            let index = gz_media::Media::get(&ed).and_then(|m| m.latest());
+            if touches(&asset, change.path.as_str(), index.as_deref()) {
+                c.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                ed.exec.wake().ping();
+            }
+        }
+    });
+    counter
 }
 
 impl ModelDoc {
@@ -286,6 +327,8 @@ impl ModelDoc {
                     .await
             })
         });
+        let follow = (source != ModelSource::Game && crate::model_load::is_model_asset(&name))
+            .then(|| follow_asset(editor, &name));
         Self {
             editor: editor.clone(),
             name,
@@ -308,7 +351,27 @@ impl ModelDoc {
             gpu: None,
             submitted: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             reload_seen: gz_app::gpu::TextureReload::generation(editor),
+            follow,
+            follow_seen: 0,
+            keep_view: false,
         }
+    }
+
+    /// A model asset whose files changed is read again; what the tab shows stays until it is.
+    fn follow_files(&mut self) {
+        let Some(now) = self.follow.as_ref().map(|f| f.load(std::sync::atomic::Ordering::Acquire)) else {
+            return;
+        };
+        if now == self.follow_seen {
+            return;
+        }
+        self.follow_seen = now;
+        self.load = Some(Pending::spawn(
+            &self.editor.exec,
+            load(self.editor.clone(), self.name.clone(), self.source),
+        ));
+        self.serial += 1;
+        self.keep_view = true;
     }
 
     /// The model, once it is loaded.
@@ -468,7 +531,9 @@ impl ModelDoc {
         }
         self.reload_seen = reload;
         self.uploaded = self.serial;
-        self.orbit = Some(Orbit::new(&data.bounds));
+        if !std::mem::take(&mut self.keep_view) || self.orbit.is_none() {
+            self.orbit = Some(Orbit::new(&data.bounds));
+        }
         self.last_key = None;
         if let (Some(mesh), Some(sources)) = (&data.mesh, &data.sources) {
             renderer.assets().set_loader(Some(Arc::new(sources.clone())));
@@ -798,6 +863,27 @@ impl ModelDoc {
                 .collect()
         });
         out.insert("textures".into(), Value::Array(textures));
+        let b = d.filter(|_| shown).map(|d| d.bounds).filter(|b| !b.is_empty());
+        out.insert(
+            "bounds".into(),
+            b.map_or(Value::Null, |b| json!({ "min": b.min.to_array(), "max": b.max.to_array() })),
+        );
+        out.insert("size".into(), b.map_or(Value::Null, |b| json!(b.size().to_array())));
+        let surfaces: Vec<Value> = d.filter(|_| shown).map_or_else(Vec::new, |d| {
+            d.surfaces
+                .iter()
+                .map(|s| {
+                    json!({
+                        "name": s.name,
+                        "texture": crate::paths::json_path_str(&s.texture),
+                        "shader": s.shader,
+                        "compile": s.compile,
+                        "material": s.game_mtl,
+                    })
+                })
+                .collect()
+        });
+        out.insert("surfaces".into(), Value::Array(surfaces));
         out
     }
 
@@ -850,6 +936,7 @@ impl Document for ModelDoc {
         let ctx = ui.ctx().clone();
         let frame = ctx.cumulative_frame_nr();
         self.drawn_frame = Some(frame);
+        self.follow_files();
         if self.gpu.is_none() {
             self.gpu = Some(cx.gpu.clone());
             // the picture's pass is made while the picture loads

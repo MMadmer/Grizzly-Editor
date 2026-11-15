@@ -36,7 +36,18 @@ return {
   { "character", "персонаж" },
   { "character template", "шаблон персонажа" },
   { "PDA interface", "интерфейс КПК" },
+  { "model", "модель" },
+  { "texture", "текстура" },
+  { "sound", "звук" },
   { "project", "проект" },
+  { "The game knows it as {name}.", "В игре называется {name}." },
+
+  -- Add > Import... and files dropped from Explorer (asset.import)
+  { "Models, pictures and sounds become assets in the folder shown; any other file is copied in.", "Модели, изображения и звуки становятся ассетами в показанной папке; остальные файлы копируются как есть." },
+  { "Models, pictures and sounds", "Модели, изображения и звуки" },
+  { "Made {n} {n:asset|assets}.", "Создано ассетов: {n}." },
+  { "Import", "Импорт", ctx = "dlg.cb_import_replace" },
+  { "{n} {n:file is|files are} in the project already and will be replaced:", "В проекте уже есть {n} {n:такой файл|таких файла|таких файлов}, {n:он будет заменён|они будут заменены|они будут заменены}:" },
 
   -- the toolbar and the breadcrumbs
   { "A folder or an asset in the folder shown", "Папка или ассет в показанной папке" },

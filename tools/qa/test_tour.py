@@ -125,6 +125,50 @@ def open_tab(kind: str, project: str) -> dict:
 LIBRARIES = ("light_animations", "texture_library", "sound_library")
 
 
+def media_tabs(project: str, tag: str, shots: str | None) -> list[str]:
+    """The model and the texture tab on a media asset of the project: a model asset made of its parts (the
+    template), a texture asset over a picture of the linked game brought into the project. Each is audited and
+    pictured as the tabs on a file are."""
+    opened: list[str] = []
+    model = cmd("file.create", kind="model", path="qa_tour")
+    label = "A %s %s model asset" % (PASS["lang"], tag)
+    shown = cmd("preview.model", path=model.get("path", "")) if model.get("ok") else model
+    check(shown.get("ok") and not shown.get("error") and shown.get("size"), label + " opens in the model preview",
+          qa.short(shown))
+    if shown.get("ok"):
+        settled(label)
+        shows_content(label)
+        audited(label)
+        pictured(label, kept(shots, tag), "tab_model_asset")
+        opened.append(cmd("ui.list").get("active_tab", ""))
+    listed = cmd("file.list", source="game", kind="dds", query="textures", limit=1)
+    files = listed.get("files", []) if listed.get("ok") else []
+    if not files:
+        print("NOTE the linked game has no texture: no texture asset is toured", flush=True)
+        return opened
+    got = cmd("file.import", **{"from": "game", "path": files[0]["path"]})
+    label = "A %s %s texture asset" % (PASS["lang"], tag)
+    picture = str(got.get("path", "")).replace("\\", "/")
+    # the pass before brought it in already: the file is there to wear
+    check((got.get("ok") or got.get("exists")) and picture, label + ": a picture of the game is in the project",
+          qa.short(got))
+    if not picture:
+        return opened
+    folder, leaf = picture.rsplit("/", 1) if "/" in picture else ("", picture)
+    asset = (folder + "/" if folder else "") + "qa_tour_" + leaf.rsplit(".", 1)[0] + ".texasset"
+    qa.write(os.path.join(project, *asset.split("/")), 'return {\n  tex = 1,\n  source = "%s",\n}\n' % leaf)
+    shown = cmd("preview.texture", action="open", path=asset, source="project")
+    check(shown.get("ok") and (shown.get("asset") or {}).get("name"), label + " opens in the texture preview with its keys",
+          qa.short(shown))
+    if shown.get("ok"):
+        settled(label)
+        shows_content(label)
+        audited(label)
+        pictured(label, kept(shots, tag), "tab_texture_asset")
+        opened.append(cmd("ui.list").get("active_tab", ""))
+    return opened
+
+
 def pick_first(kind: str, label: str) -> None:
     """A library tab is pictured with an entry picked: the timeline, the key actions, the description and the
     attenuation curve are only drawn for one. A library with no entry is said so."""
@@ -156,6 +200,7 @@ def phase_a(project: str, tag: str, shots: str | None, contract: dict) -> None:
         audited(label)
         pictured(label, kept(shots, tag), "tab_%s" % kind.replace(":", "_"))
         opened.append(active)
+    opened.extend(media_tabs(project, tag, shots))
     cmd("ui.tab", action="activate", doc="level")
     for doc in opened:
         if doc and doc != "level":

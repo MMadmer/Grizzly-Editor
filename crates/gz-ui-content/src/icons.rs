@@ -13,6 +13,9 @@ pub fn own_icon(kind: AssetKind) -> Icon {
         AssetKind::Character => Icon::Character,
         AssetKind::CharacterTemplate => Icon::CharacterTemplate,
         AssetKind::Pda => Icon::PdaInterface,
+        AssetKind::Model => Icon::ModelAsset,
+        AssetKind::Texture => Icon::TextureAsset,
+        AssetKind::Sound => Icon::SoundAsset,
         // the project file is the project: the Start page's and the caption's, never a tile
         AssetKind::Project => Icon::Home,
     }
@@ -34,6 +37,9 @@ const TYPES: &[(&str, Icon)] = &[
     (".ogf", Icon::FileModel),
     (".object", Icon::FileModel),
     (".omf", Icon::FileModel),
+    (".glb", Icon::FileModel),
+    (".gltf", Icon::FileModel),
+    (".obj", Icon::FileModel),
     (".ogg", Icon::FileSound),
     (".wav", Icon::FileSound),
     (".script", Icon::FileScript),
@@ -119,5 +125,22 @@ mod tests {
         assert_eq!(tile_icon(".gitignore", false, None, None), Icon::File);
         assert!(is_image("ui\\x.DDS") && !is_image("x.ogf") && is_model("m.Object"));
         assert_eq!(own_name(AssetKind::Pda), "PDA interface");
+    }
+
+    #[test]
+    fn every_kind_of_the_editors_own_has_an_icon_of_its_own() {
+        let mut seen = std::collections::HashSet::new();
+        for kind in AssetKind::FILES.into_iter().chain([AssetKind::CharacterTemplate]) {
+            let icon = own_icon(kind);
+            assert!(seen.insert(icon), "{} shares its icon", kind.name());
+            assert_eq!(tile_icon(&format!("a{}", kind.extension()), false, Some(kind), None), icon);
+        }
+        assert_eq!(own_icon(AssetKind::Model).name(), "model_asset");
+        assert_eq!(own_icon(AssetKind::Texture).name(), "texture_asset");
+        assert_eq!(own_icon(AssetKind::Sound).name(), "sound_asset");
+        assert_eq!(own_name(AssetKind::Texture), "texture");
+        // a source file keeps its file type's glyph: it is no asset of its own
+        assert_eq!(tile_icon("wall.glb", false, None, None), Icon::FileModel);
+        assert_eq!(tile_icon("brick.png", false, None, None), Icon::FileTexture);
     }
 }

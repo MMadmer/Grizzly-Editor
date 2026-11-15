@@ -73,6 +73,9 @@ pub struct Shown {
 pub enum Bytes {
     Disk(PathBuf),
     Game(Arc<GameFiles>, String),
+    /// A media asset of the project (`root`, its project-relative path): a texture asset's
+    /// picture is its source's, a model asset's model is made from what it describes.
+    Asset(PathBuf, String),
 }
 
 struct Request {
@@ -142,7 +145,31 @@ fn read(from: &Bytes, limit: u64) -> Option<Vec<u8>> {
             }
             files.read_ref(f).ok()
         }
+        // what an asset describes is read by its kind: [`image_bytes`], [`model_bytes`]
+        Bytes::Asset(..) => None,
     }
+}
+
+/// An image's bytes and the extension they are read by: a texture asset's are its source
+/// picture's. Blocking.
+fn image_bytes(from: &Bytes, name: &str) -> Option<(Vec<u8>, Option<String>)> {
+    let ext_of = |n: &str| crate::icons::extension(n).map(|e| e.trim_start_matches('.').to_ascii_lowercase());
+    if let Bytes::Asset(root, rel) = from {
+        let (_, source, _) = gz_media::resolve::texture_source(root, rel).ok()?;
+        let ext = source.extension().map(|e| e.to_string_lossy().to_ascii_lowercase());
+        return read(&Bytes::Disk(source), MAX_BYTES).map(|b| (b, ext));
+    }
+    read(from, MAX_BYTES).map(|b| (b, ext_of(name)))
+}
+
+/// A model's bytes and the name the renderer reads them by: a model asset is made into its
+/// model and written out as the `.object` it would be. Blocking.
+fn model_bytes(from: &Bytes, name: &str) -> Option<(Vec<u8>, String)> {
+    if let Bytes::Asset(root, rel) = from {
+        let m = gz_media::resolve::model(root, rel).ok()?;
+        return Some((m.object.write(), format!("{rel}.object")));
+    }
+    read(from, MAX_MODEL_BYTES).map(|b| (b, name.to_owned()))
 }
 
 /// Where the `.thm` beside a library object's file is: an object of the disk only.
@@ -358,13 +385,11 @@ impl Pictures {
                         let live = || shared.generation.load(Ordering::Acquire) == generation;
                         let mut made = None;
                         if live() {
-                            let from = r.from.clone();
-                            let bytes = exec.io(move || read(&from, MAX_BYTES)).await;
-                            if let Some(bytes) = bytes
+                            let (from, name) = (r.from.clone(), r.name.clone());
+                            let bytes = exec.io(move || image_bytes(&from, &name)).await;
+                            if let Some((bytes, ext)) = bytes
                                 && live()
                             {
-                                let ext = crate::icons::extension(&r.name)
-                                    .map(|e| e.trim_start_matches('.').to_ascii_lowercase());
                                 let side = r.side;
                                 made = exec
                                     .cpu(move || gz_fmt_tex::texture_tile(&bytes, ext.as_deref(), side).ok())
@@ -431,9 +456,9 @@ impl Pictures {
                             let made = if live {
                                 thumb.or_else(|| {
                                     let renderer = renderer?;
-                                    read(&r.from, MAX_MODEL_BYTES)
-                                        .and_then(|bytes| {
-                                            thumbs.render(&renderer, &r.name, &bytes, r.side, background).ok()
+                                    model_bytes(&r.from, &r.name)
+                                        .and_then(|(bytes, name)| {
+                                            thumbs.render(&renderer, &name, &bytes, r.side, background).ok()
                                         })
                                         .map(|img| Made {
                                             w: img.width,
@@ -468,9 +493,9 @@ impl Pictures {
                     editor.exec.spawn_io(move || {
                         let live = shared.generation.load(Ordering::Acquire) == generation;
                         let made = if live {
-                            read(&r.from, MAX_MODEL_BYTES)
-                                .and_then(|bytes| {
-                                    thumbs.render(&renderer, &r.name, &bytes, r.side, background).ok()
+                            model_bytes(&r.from, &r.name)
+                                .and_then(|(bytes, name)| {
+                                    thumbs.render(&renderer, &name, &bytes, r.side, background).ok()
                                 })
                                 .map(|img| Made {
                                     w: img.width,

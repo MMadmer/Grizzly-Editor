@@ -488,6 +488,22 @@ impl TextureDoc {
                     }
                 }
             });
+            // a texture asset: the name the game knows it by and what the file says
+            if let Some(a) = &t.asset {
+                g.section("Asset", true, None, |g| {
+                    g.row("Game Name", "The name the game and the scene know the texture by", ro, 0, |ui| {
+                        read_only(ui, Tx::raw(&a.published), Clip::Start)
+                    });
+                    if let Some(src) = &a.source {
+                        g.row("Picture", "The source picture the texture is baked from", ro, 0, |ui| {
+                            read_only(ui, Tx::raw(src.to_string_lossy().into_owned()), Clip::Start)
+                        });
+                    }
+                    for (k, v) in &a.keys {
+                        g.row(Tx::raw(k), "", ro, 0, |ui| read_only(ui, Tx::raw(v), Clip::End));
+                    }
+                });
+            }
             g.section("View", true, None, |g| {
                 g.row("Shown", "The mip level the canvas shows and its size", ro, 0, |ui| {
                     read_only(ui, tr!("Mip {m} \u{b7} {w} x {h}", m = mip, w = mw, h = mh), Clip::End)
@@ -550,6 +566,19 @@ impl TextureDoc {
         out.insert("alpha".into(), json!(self.channel == 0));
         out.insert("has_alpha".into(), json!(fi.is_some_and(|f| f.alpha)));
         out.insert("bytes".into(), json!(t.map_or(0, |t| t.file_size)));
+        // a texture asset: shown as the game will have it, with what its file says
+        if let Some(a) = t.and_then(|t| t.asset.as_ref()) {
+            let keys: serde_json::Map<String, Value> =
+                a.keys.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
+            out.insert(
+                "asset".into(),
+                json!({
+                    "name": a.published,
+                    "source": a.source.as_ref().map(|p| crate::paths::json_path(p)),
+                    "keys": keys,
+                }),
+            );
+        }
         out.insert("panes".into(), json!({ "details": self.show_details, "details_width": if self.show_details { self.details_w.round() } else { 0.0 } }));
         out
     }

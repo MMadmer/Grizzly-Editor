@@ -66,7 +66,8 @@ struct ViewParams {
     /// light, glow, sound, sound_env, particles, shape, fog, spawn, way); `none` stops placing.
     #[serde(default)]
     place: Option<String>,
-    /// With `place`: the library object, group, sound or effect.
+    /// With `place`: the library object (or a model asset by its project path,
+    /// `models/wall.meshasset`), group, sound or effect.
     #[serde(default)]
     r#ref: Option<String>,
     /// With `place=spawn`: the spawn section.

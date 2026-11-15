@@ -66,11 +66,13 @@ pub const PANEL_ID: &str = "content_browser";
 
 /// What a dragged entry is to whoever takes it: the kit's [`Asset`].
 ///
-/// - `kind`: for what is placed in a level, the `scene.place` kind - `object`, `group`, `sound`,
-///   `particles`, `spawn`; otherwise `texture`, `model`, `scene`, `folder`, one of the editor's
-///   own kinds (`quest`, `behaviour`, `character`, `character_template`, `pda`) or `file`.
+/// - `kind`: for what is placed in a level, the `scene.place` kind - `object` (a model asset
+///   too), `group`, `sound` (a sound asset too), `particles`, `spawn`; otherwise `texture` (a
+///   texture asset too), `model`, `scene`, `folder`, one of the editor's own kinds (`quest`,
+///   `behaviour`, `character`, `character_template`, `pda`) or `file`.
 /// - `path`: an object or a group by its file - below the library's `rawdata\objects` /
-///   `rawdata\groups`, or project-relative - with its extension; a sound or a particle effect by its
+///   `rawdata\groups`, or project-relative - with its extension (a model asset by its project
+///   path); a texture or a sound asset by the name it publishes; a sound or a particle effect by its
 ///   reference (`ambient\wind`); a spawn by its section; a texture by its name below `textures`
 ///   without the extension; anything else by its path in its source (project-relative,
 ///   backslashes).
@@ -97,15 +99,21 @@ pub fn payload_of(cat: &catalog::Catalog, path: &str, folder: bool) -> Asset {
             let lower = path.to_ascii_lowercase();
             let ext = icons::extension(&lower).unwrap_or("").to_owned();
             if let Some(kind) = item.and_then(|f| f.asset) {
-                let word = match kind {
-                    gz_project::AssetKind::Quest => "quest",
-                    gz_project::AssetKind::Behaviour => "behaviour",
-                    gz_project::AssetKind::Character => "character",
-                    gz_project::AssetKind::CharacterTemplate => "character_template",
-                    gz_project::AssetKind::Pda => "pda",
-                    gz_project::AssetKind::Project => "project",
-                };
-                (word, path.to_owned())
+                use gz_project::AssetKind as K;
+                // a texture and a sound go by the name the game knows them by
+                let published = || item.and_then(|f| f.published.as_deref()).unwrap_or(&stem).to_owned();
+                match kind {
+                    K::Quest => ("quest", path.to_owned()),
+                    K::Behaviour => ("behaviour", path.to_owned()),
+                    K::Character => ("character", path.to_owned()),
+                    K::CharacterTemplate => ("character_template", path.to_owned()),
+                    K::Pda => ("pda", path.to_owned()),
+                    // a scene object names a model asset by its project path
+                    K::Model => ("object", path.to_owned()),
+                    K::Texture => ("texture", published()),
+                    K::Sound => ("sound", published()),
+                    K::Project => ("project", path.to_owned()),
+                }
             } else if ext == ".object" && lower.starts_with("rawdata\\objects\\") {
                 ("object", path.to_owned())
             } else if ext == ".group" {
@@ -156,13 +164,43 @@ pub fn install(b: &mut ShellBuilder) {
 }
 
 /// What the browser tells the rest of the editor: the folder `file.create` makes an asset in when
-/// the caller names none (the project folder shown).
+/// the caller names none (the project folder shown); and, while a project is open, that a texture
+/// asset or its picture changed on the disk ([`follow_textures`]).
 pub fn install_hooks(editor: &gz_editor::Editor) {
+    gz_project::ProjectHooks::of(editor).on_open(|ed, _session| follow_textures(ed));
     gz_project::ProjectHooks::of(editor).provide_content_folder(|ed| {
         let loc = service::ContentBrowser::of(ed).inner.lock().loc.clone();
         match loc.source {
             model::Source::Project => Ok(loc.folder.replace('/', "\\")),
             model::Source::Library => Err("only the project source can be written to".to_owned()),
+        }
+    });
+}
+
+/// Whether a change of the project's files is one the window's textures follow: a texture asset,
+/// or a file a texture asset takes its picture from.
+#[must_use]
+pub fn changes_a_texture(path: &str, index: Option<&gz_media::Index>) -> bool {
+    use gz_project::asset_kind::MediaKind;
+    MediaKind::of_file(path) == Some(MediaKind::Texture)
+        || index.is_some_and(|i| i.users_of(path).iter().any(|e| e.kind == MediaKind::Texture))
+}
+
+/// A texture asset or its picture changed on the disk: every texture cache of the window - the
+/// viewport's renderer, the previews, the tiles - reads its textures again, as Libraries > Reload
+/// Textures has them do. The project's watcher says so; nothing polls, and the UI thread does
+/// none of it.
+fn follow_textures(editor: &std::sync::Arc<gz_editor::Editor>) {
+    let Ok((_, project)) = gz_project::Project::of(editor) else { return };
+    let mut rx = project.tree.changes().subscribe(gz_project::Filter::All);
+    let ed = std::sync::Arc::downgrade(editor);
+    editor.exec.spawn(async move {
+        while let Some(change) = rx.recv().await {
+            let Some(ed) = ed.upgrade() else { break };
+            let index = gz_media::Media::get(&ed).and_then(|m| m.latest());
+            if changes_a_texture(change.path.as_str(), index.as_deref()) {
+                gz_app::gpu::TextureReload::bump(&ed);
+            }
         }
     });
 }
@@ -174,6 +212,34 @@ pub fn register(reg: &mut Registry) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn what_the_window_textures_follow() {
+        use gz_project::asset_kind::MediaKind;
+        assert!(super::changes_a_texture("textures/Brick.TEXASSET", None));
+        assert!(!super::changes_a_texture("textures/brick.png", None));
+        assert!(!super::changes_a_texture("models/wall.meshasset", None));
+        let rel = |p: &str| gz_base::RelPath::new(p).unwrap();
+        let index = gz_media::Index {
+            stamp: gz_base::Rev(1),
+            module: String::new(),
+            entries: vec![gz_media::Entry {
+                kind: MediaKind::Texture,
+                path: rel("textures/brick.texasset"),
+                name: "brick".to_owned(),
+                key: "brick".to_owned(),
+                source: Some(rel("textures/brick.png")),
+                uses: Vec::new(),
+                dynamic: false,
+                parts: false,
+                excluded: false,
+                error: None,
+            }],
+        };
+        // the picture a texture asset wears, and nothing else of the folder
+        assert!(super::changes_a_texture("textures/BRICK.png", Some(&index)));
+        assert!(!super::changes_a_texture("textures/other.png", Some(&index)));
+    }
+
     #[test]
     fn the_catalog_reads_with_the_kits_and_the_shells() {
         let c = gz_ui::i18n::Catalog::parse(&[gz_ui::i18n::KIT_RU, gz_app::lang::SHELL_RU, super::RU])

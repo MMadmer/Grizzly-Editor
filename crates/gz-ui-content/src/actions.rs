@@ -16,7 +16,7 @@ use crate::catalog::{Catalog, Origin};
 use crate::icons;
 use crate::model::{self, Location, Source, leaf_of, parent_of};
 use crate::select::Entry;
-use crate::service::{CatKey, Clip, Clipboard, ContentBrowser, Inner, Rename};
+use crate::service::{CatKey, Clip, Clipboard, ContentBrowser, ImportClash, Inner, Rename};
 
 /// Who answers the browser's questions from the window.
 #[must_use]
@@ -73,6 +73,8 @@ pub(crate) enum Open {
     Scene(String),
     /// A base scene of the library: brought into the project, then opened there.
     BaseScene(String),
+    /// A sound asset: played (`preview.sound`).
+    Play(String),
 }
 
 /// What opening an entry means. `cat` is the catalog it is listed in.
@@ -118,6 +120,21 @@ pub(crate) fn what_opens(cat: &Catalog, path: &str) -> Result<Open, String> {
         }));
     }
     match ext.as_str() {
+        // a model asset in the model viewer, a texture asset in the texture preview, as the game
+        // and the level compiler will have them; a sound asset plays
+        ".meshasset" => {
+            return Ok(Open::Doc(OpenRequest {
+                arg: Some("project".to_owned()),
+                ..OpenRequest::file("model", path)
+            }));
+        }
+        ".texasset" => {
+            return Ok(Open::Doc(OpenRequest {
+                arg: Some("project".to_owned()),
+                ..OpenRequest::file("texture", path)
+            }));
+        }
+        ".sndasset" => return Ok(Open::Play(path.to_owned())),
         ".pdaasset" => return Ok(Open::Doc(OpenRequest::file("pda", path))),
         ".npcasset" => return Ok(Open::Doc(OpenRequest::file("characters", path))),
         ".nqasset" | ".behasset" => {
@@ -161,6 +178,9 @@ pub(crate) fn open_entry(
     match what_opens(&cat, &entry.path) {
         Ok(Open::Doc(req)) => cx.requests.open(req),
         Ok(Open::Scene(scene)) => cx.editor.post("scene.open", args(&[("path", json!(scene))])),
+        Ok(Open::Play(path)) => {
+            cx.editor.post("preview.sound", args(&[("path", json!(path)), ("action", json!("play"))]));
+        }
         Ok(Open::BaseScene(name)) => {
             let ed = cx.editor.clone();
             cx.editor.exec.spawn(async move {
@@ -197,6 +217,12 @@ pub(crate) async fn open_for_mcp(editor: &Arc<Editor>, cat: &Catalog, path: &str
         Open::Scene(scene) => {
             call(editor, "scene.open", &[("path", json!(scene))]).await.map(|_| ()).map_err(|(e, _)| e)
         }
+        Open::Play(path) => {
+            call(editor, "preview.sound", &[("path", json!(path)), ("action", json!("play"))])
+                .await
+                .map(|_| ())
+                .map_err(|(e, _)| e)
+        }
         Open::BaseScene(name) => {
             let scene = bring_in_base_scene(editor, &name).await?;
             call(editor, "scene.open", &[("path", json!(scene))]).await.map(|_| ()).map_err(|(e, _)| e)
@@ -226,6 +252,8 @@ pub(crate) fn placeable(cat: &Catalog, path: &str) -> Option<(String, &'static s
     let asset = crate::payload_of(cat, path, false);
     let p = asset.path;
     match asset.kind.as_str() {
+        // a model asset by its project path, with its extension
+        "object" if gz_project::asset_kind::MediaKind::of_file(&p).is_some() => Some((asset.kind, "ref", p)),
         // an object by its reference: below `rawdata\objects`, without the extension
         "object" => {
             let below =
@@ -288,6 +316,10 @@ pub(crate) fn commit_rename(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>,
     let inbox = browser.inbox.clone();
     let ed = editor.clone();
     editor.exec.spawn(async move {
+        // a media asset that names its source keeps it as it is named: the name is in its text
+        let named = names_its_source(&ed, &was).await;
+        let companions: Vec<String> =
+            companions.into_iter().filter(|c| follows_rename(&was, c, named)).collect();
         match call(&ed, "file.rename", &[("path", json!(was)), ("name", json!(r.text))]).await {
             Ok(reply) => {
                 // the thumbnail and the scene's folder take the new name too
@@ -319,6 +351,34 @@ pub(crate) fn commit_rename(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>,
         }
         ed.exec.wake().ping();
     });
+}
+
+/// Whether a companion takes the asset's new name: a thumbnail and a scene's folder always do;
+/// what a media asset takes its data from only when it is found by the asset's own name (the
+/// asset names no `source`) and has that name.
+#[must_use]
+pub(crate) fn follows_rename(asset: &str, companion: &str, names_source: bool) -> bool {
+    if gz_project::asset_kind::MediaKind::of_file(asset).is_none() {
+        return true;
+    }
+    !names_source
+        && crate::catalog::stem(leaf_of(companion)).eq_ignore_ascii_case(crate::catalog::stem(leaf_of(asset)))
+}
+
+/// Whether the media asset at `rel` (project-relative) names its source in its text.
+async fn names_its_source(editor: &Arc<Editor>, rel: &str) -> bool {
+    let Some(kind) = gz_project::asset_kind::MediaKind::of_file(rel) else { return false };
+    let Some(root) = editor.project_root() else { return false };
+    let rel = rel.replace('\\', "/");
+    editor
+        .exec
+        .io(move || {
+            let text = std::fs::read(root.join(&rel)).ok()?;
+            let value = gz_media::kind::load(kind, &rel, &String::from_utf8_lossy(&text)).ok()?;
+            value.get("source").and_then(|v| v.as_str()).map(|s| !s.trim().is_empty())
+        })
+        .await
+        .unwrap_or(false)
 }
 
 // ---- delete ------------------------------------------------------------------------------------
@@ -485,10 +545,24 @@ pub(crate) fn clips_of(entries: &[Entry], cat: &Catalog) -> Vec<Clip> {
         out.extend(clip_of(cat, f, leaf.to_owned()));
         for c in &f.companions {
             let cf = crate::catalog::FileItem { path: c.clone(), ..f.clone() };
-            out.extend(clip_of(cat, &cf, leaf_of(c).to_owned()));
+            out.extend(clip_of(cat, &cf, below_folder_of(&e.path, c)));
         }
     }
     out
+}
+
+/// Where a companion lies below its asset's folder (a glTF's `textures\a.png`): it keeps that
+/// place wherever the asset goes. One outside the folder goes beside it.
+#[must_use]
+pub(crate) fn below_folder_of(asset: &str, companion: &str) -> String {
+    let dir = parent_of(asset);
+    if dir.is_empty() {
+        return companion.to_owned();
+    }
+    match companion.get(..=dir.len()) {
+        Some(head) if head.eq_ignore_ascii_case(&format!("{dir}\\")) => companion[dir.len() + 1..].to_owned(),
+        _ => leaf_of(companion).to_owned(),
+    }
 }
 
 pub(crate) fn clipboard_copy(
@@ -699,17 +773,60 @@ fn convertible_picture(path: &std::path::Path) -> bool {
         .is_some_and(|e| ["png", "jpg", "jpeg", "tga", "bmp"].iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
 
-/// Files from Explorer dropped on a project folder: copied in (`file.copy`); a picture dropped
-/// into a folder under `gamedata\textures` becomes a `.dds` there, the way the game reads it.
-pub(crate) fn import_files(editor: &Arc<Editor>, files: Vec<PathBuf>, dst: &str) {
+/// Whether a project folder keeps the files brought into it as they are: the game's own tree
+/// (`gamedata`) and the X-Ray SDK's library (`rawdata`), whose files the game and the editor read
+/// by where they lie and what they are.
+#[must_use]
+pub(crate) fn keeps_files_as_they_are(dst: &str) -> bool {
+    let top = dst.split(['\\', '/']).next().unwrap_or("");
+    top.eq_ignore_ascii_case("gamedata") || top.eq_ignore_ascii_case("rawdata")
+}
+
+/// What the files brought into `dst` are made into: the models, pictures and sounds that become
+/// assets (`asset.import`), and the rest, copied as they are.
+#[must_use]
+pub(crate) fn import_split(files: Vec<PathBuf>, dst: &str) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    if keeps_files_as_they_are(dst) {
+        return (Vec::new(), files);
+    }
+    files.into_iter().partition(|f| {
+        f.file_name().is_some_and(|n| gz_media::files::kind_of_source(&n.to_string_lossy()).is_some())
+    })
+}
+
+/// Files from Explorer dropped on a project folder, or picked with Add > Import...: a model
+/// (`.glb`, `.gltf`, `.obj`, `.object`), a picture or a sound becomes an asset there
+/// (`asset.import`: the file copied in, its asset beside it); anything else is copied in
+/// (`file.copy`). The game's and the X-Ray SDK's folders keep what comes in as it is, but for a
+/// picture dropped under `gamedata\textures`, which becomes a `.dds` there, the way the game reads
+/// it. The frame says how many assets were made; files of the project in the way are asked about
+/// first.
+pub(crate) fn import_files(
+    editor: &Arc<Editor>,
+    browser: &Arc<ContentBrowser>,
+    files: Vec<PathBuf>,
+    dst: &str,
+) {
     let ed = editor.clone();
+    let inbox = browser.inbox.clone();
     let dst = dst.to_owned();
     editor.exec.spawn(async move {
+        let (media, files) = import_split(files, &dst);
         let textures = dst.to_ascii_lowercase().starts_with("gamedata\\textures");
         let (pictures, plain): (Vec<PathBuf>, Vec<PathBuf>) =
             files.into_iter().partition(|f| textures && convertible_picture(f));
         let mut done = 0u64;
         let mut errors: Vec<String> = Vec::new();
+        if !media.is_empty() {
+            let from: Vec<String> = media.iter().map(|p| p.display().to_string()).collect();
+            match import_assets(&ed, &from, &dst, false).await {
+                Ok(made) => done += made,
+                Err(Imported::Clash(there)) => {
+                    inbox.lock().import_clash = Some(ImportClash { from, to: dst.clone(), there });
+                }
+                Err(Imported::Failed(e)) => errors.push(e),
+            }
+        }
         if !plain.is_empty() {
             let list: Vec<String> = plain.iter().map(|p| p.display().to_string()).collect();
             let to = if dst.is_empty() { ".".to_owned() } else { dst.clone() };
@@ -766,6 +883,122 @@ pub(crate) fn import_files(editor: &Arc<Editor>, files: Vec<PathBuf>, dst: &str)
         }
         ed.exec.wake().ping();
     });
+}
+
+/// Why an import made nothing.
+pub(crate) enum Imported {
+    /// Files of the project are in the way: these.
+    Clash(Vec<String>),
+    Failed(String),
+}
+
+/// `asset.import` of `from` into the project folder `to` (the kinds' own folders at the root);
+/// answers the files it wrote. The assets made are the frame's toast; what the import left out
+/// and why is a notice.
+pub(crate) async fn import_assets(
+    editor: &Arc<Editor>,
+    from: &[String],
+    to: &str,
+    overwrite: bool,
+) -> Result<u64, Imported> {
+    let mut pairs = vec![("from", json!(from))];
+    if !to.is_empty() {
+        pairs.push(("to", json!(to)));
+    }
+    if overwrite {
+        pairs.push(("overwrite", json!(true)));
+    }
+    let browser = ContentBrowser::of(editor);
+    let list = |r: &Value, key: &str| -> Vec<String> {
+        r.get(key)
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+            .unwrap_or_default()
+    };
+    match call(editor, "asset.import", &pairs).await {
+        Ok(r) => {
+            let (assets, copied, problems) = (list(&r, "assets"), list(&r, "copied"), list(&r, "problems"));
+            if !problems.is_empty() {
+                editor.notices.push(gz_editor::NoticeKind::Warning, problems.join("\n"));
+            }
+            browser.inbox.lock().imported = Some(assets.len() as u64);
+            editor.exec.wake().ping();
+            Ok((assets.len() + copied.len()) as u64)
+        }
+        Err((_, r)) if r.get("code").and_then(Value::as_str) == Some("exists") => {
+            Err(Imported::Clash(list(&r, "files")))
+        }
+        Err((e, r)) => {
+            let problems = list(&r, "problems");
+            Err(Imported::Failed(if problems.is_empty() {
+                e
+            } else {
+                format!("{e}: {}", problems.join("; "))
+            }))
+        }
+    }
+}
+
+/// The question of an import whose files would replace the project's: it names them.
+#[must_use]
+pub(crate) fn replace_spec(there: &[String]) -> ConfirmSpec {
+    ConfirmSpec {
+        id: "cb_import_replace".into(),
+        title: Tx::ctx("dlg.cb_import_replace", "Import"),
+        headline: tr!(
+            "{n} {n:file is|files are} in the project already and will be replaced:",
+            n = there.len()
+        ),
+        total: there.len(),
+        items: there.iter().map(|t| Tx::raw(t.clone())).collect(),
+        consequence: "What they replace is gone for good - this cannot be undone.".into(),
+        action: "Replace".into(),
+        destructive: true,
+    }
+}
+
+/// An import the frame found files in the way of: the author is asked, and Replace sends it
+/// again with `overwrite=true`. Under `-nodlg` the answer is No and nothing is replaced.
+pub(crate) fn ask_import_clash(ctx: &egui::Context, editor: &Arc<Editor>, clash: ImportClash) {
+    let spec = replace_spec(&clash.there);
+    let ed = editor.clone();
+    let line = dialog::confirm(ctx, asker(editor), spec, move |answer| {
+        if answer != Answer::Yes {
+            return;
+        }
+        let ed2 = ed.clone();
+        ed.exec.spawn(async move {
+            match import_assets(&ed2, &clash.from, &clash.to, true).await {
+                Ok(_) => {}
+                Err(Imported::Clash(t)) => {
+                    ed2.notices.error(format!("Cannot import: {} files are still in the way.", t.len()));
+                }
+                Err(Imported::Failed(e)) => ed2.notices.error(format!("Cannot import: {e}")),
+            }
+            ed2.exec.wake().ping();
+        });
+    });
+    if let Some(line) = line {
+        editor.log.finding(&line);
+    }
+}
+
+/// Add > Import...: the system's file dialog, then the file it picked is brought into the folder
+/// shown as a drop of it would be.
+pub(crate) fn import_dialog(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>, folder: &str) {
+    let request = gz_ui::file_dialog::FileRequest::open("Import")
+        .filter(
+            "Models, pictures and sounds",
+            &["glb", "gltf", "obj", "object", "png", "jpg", "jpeg", "tga", "bmp", "dds", "wav", "ogg"],
+        )
+        .filter("All files", &["*"]);
+    let (ed, b, dst) = (editor.clone(), browser.clone(), folder.to_owned());
+    let picked = gz_ui::file_dialog::pick(&editor.exec, None, asker(editor), request, move |file| {
+        import_files(&ed, &b, vec![file], &dst);
+    });
+    if let Err(line) = picked {
+        editor.log.finding(&line);
+    }
 }
 
 /// One picture made into `<folder>\<name>.dds` with a game texture's defaults.
@@ -929,9 +1162,18 @@ pub(crate) fn create(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>, st: &I
     });
 }
 
-/// The Add menu's items: the label, the tip, the `file.create` kind (`None`: a folder).
-pub(crate) const ADD_ITEMS: [(&str, &str, Option<&str>); 5] = [
+/// The Add menu's Import...: not a `file.create` kind.
+pub(crate) const IMPORT: &str = "import";
+
+/// The Add menu's items: the label, the tip, the `file.create` kind (`None`: a folder; [`IMPORT`]:
+/// the file dialog).
+pub(crate) const ADD_ITEMS: [(&str, &str, Option<&str>); 6] = [
     ("New Folder", "A folder in the folder shown.", None),
+    (
+        "Import...",
+        "Models, pictures and sounds become assets in the folder shown; any other file is copied in.",
+        Some(IMPORT),
+    ),
     ("Quest", "A quest graph (.nqasset).", Some("quest")),
     ("Behaviour Graph", "What an NPC does, step by step (.behasset).", Some("behaviour")),
     ("Character", "One of the module's own NPCs (.npcasset).", Some("character")),
@@ -1099,6 +1341,7 @@ mod tests {
                 label: None,
                 note: None,
                 companions: Vec::new(),
+                published: None,
             });
         }
         let Ok(Open::Doc(q)) = what_opens(&project, "quests\\a.nqasset") else { panic!() };
@@ -1117,6 +1360,7 @@ mod tests {
             label: None,
             note: None,
             companions: Vec::new(),
+            published: None,
         });
         let Ok(Open::Doc(t)) = what_opens(&tex, "ui\\x.dds") else { panic!() };
         assert_eq!(
@@ -1139,6 +1383,7 @@ mod tests {
             label: None,
             note: None,
             companions: Vec::new(),
+            published: None,
         });
         assert_eq!(placeable(&objects, "box\\b.object"), Some(("object".into(), "ref", "box\\b".into())));
         let a = crate::payload_of(&objects, "box\\b.object", false);
@@ -1153,6 +1398,7 @@ mod tests {
             label: Some("PM".into()),
             note: None,
             companions: Vec::new(),
+            published: None,
         });
         assert_eq!(
             placeable(&spawns, "weapons\\pistols\\wpn_pm"),
@@ -1169,6 +1415,7 @@ mod tests {
             label: None,
             note: None,
             companions: Vec::new(),
+            published: None,
         });
         assert_eq!(
             placeable(&project, "rawdata\\objects\\box\\b.object").map(|p| p.2),
@@ -1180,6 +1427,70 @@ mod tests {
         assert_eq!(spec.headline.en(), "Delete 1 folder and 1 file?");
         assert!(spec.destructive && spec.items == [Tx::raw("a\\"), Tx::raw("b.txt")]);
         assert_eq!(free_folder_name(None, ""), Some("New Folder".into()));
+    }
+
+    #[test]
+    fn media_assets_open_place_rename_move_and_come_in() {
+        let mut project = Catalog::empty(Source::Project, 0);
+        project.disk_root = Some(PathBuf::from("D:\\p"));
+        for p in ["models\\wall.meshasset", "textures\\brick.texasset", "sounds\\hum.sndasset"] {
+            project.add(crate::catalog::FileItem {
+                path: p.into(),
+                size: 1,
+                asset: gz_project::kind_of(p, None),
+                origin: Origin::Disk,
+                label: None,
+                note: None,
+                companions: Vec::new(),
+                published: p.ends_with(".texasset").then(|| "bunker\\brick".into()),
+            });
+        }
+        let Ok(Open::Doc(m)) = what_opens(&project, "models\\wall.meshasset") else { panic!() };
+        assert_eq!((m.kind.as_str(), m.arg.as_deref()), ("model", Some("project")));
+        let Ok(Open::Doc(t)) = what_opens(&project, "textures\\brick.texasset") else { panic!() };
+        assert_eq!((t.kind.as_str(), t.path.as_deref()), ("texture", Some("textures\\brick.texasset")));
+        assert_eq!(
+            what_opens(&project, "sounds\\hum.sndasset"),
+            Ok(Open::Play("sounds\\hum.sndasset".into()))
+        );
+        // a model asset is placed by its project path, its extension kept
+        assert_eq!(
+            placeable(&project, "models\\wall.meshasset"),
+            Some(("object".into(), "ref", "models\\wall.meshasset".into()))
+        );
+        assert!(placeable(&project, "textures\\brick.texasset").is_none());
+        let a = crate::payload_of(&project, "textures\\brick.texasset", false);
+        assert_eq!((a.kind.as_str(), a.path.as_str()), ("texture", "bunker\\brick"));
+        let a = crate::payload_of(&project, "sounds\\hum.sndasset", false);
+        assert_eq!((a.kind.as_str(), a.path.as_str()), ("sound", "sounds\\hum"));
+        // a source found by the asset's name takes the new name; one the asset names keeps its own
+        assert!(follows_rename("m\\wall.meshasset", "m\\wall.glb", false));
+        assert!(!follows_rename("m\\wall.meshasset", "m\\wall.glb", true));
+        assert!(!follows_rename("m\\wall.meshasset", "m\\wall_lod.bin", false));
+        assert!(follows_rename("rawdata\\objects\\a.object", "rawdata\\objects\\a.thm", true));
+        // what lies below the asset's folder keeps its place there
+        assert_eq!(
+            below_folder_of("models\\crate.meshasset", "models\\tex\\crate_d.png"),
+            "tex\\crate_d.png"
+        );
+        assert_eq!(below_folder_of("models\\crate.meshasset", "MODELS\\crate.bin"), "crate.bin");
+        assert_eq!(below_folder_of("models\\crate.meshasset", "other\\x.png"), "x.png");
+        assert_eq!(below_folder_of("crate.meshasset", "tex\\a.png"), "tex\\a.png");
+        // models, pictures and sounds become assets; the game's own folders keep them as they are
+        let files = || {
+            ["D:\\art\\wall.glb", "D:\\art\\brick.PNG", "D:\\art\\hum.wav", "D:\\art\\readme.txt"]
+                .map(PathBuf::from)
+                .to_vec()
+        };
+        let (media, rest) = import_split(files(), "models\\bunker");
+        assert_eq!((media.len(), rest.len()), (3, 1));
+        assert!(rest[0].ends_with("readme.txt"));
+        let (media, rest) = import_split(files(), "gamedata\\textures\\ui");
+        assert_eq!((media.len(), rest.len()), (0, 4));
+        assert!(keeps_files_as_they_are("RawData") && !keeps_files_as_they_are("art\\gamedata"));
+        let spec = replace_spec(&["models\\wall.glb".to_owned()]);
+        assert!(spec.destructive && spec.items == [Tx::raw("models\\wall.glb")]);
+        assert_eq!(spec.headline.en(), "1 file is in the project already and will be replaced:");
     }
 
     #[test]

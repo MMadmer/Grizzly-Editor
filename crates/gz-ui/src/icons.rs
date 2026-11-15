@@ -162,6 +162,9 @@ pub enum Icon {
     Character,
     CharacterTemplate,
     PdaInterface,
+    ModelAsset,
+    TextureAsset,
+    SoundAsset,
     Flow,
     Wait,
     Condition,
@@ -356,6 +359,9 @@ impl Icon {
         Icon::Character,
         Icon::CharacterTemplate,
         Icon::PdaInterface,
+        Icon::ModelAsset,
+        Icon::TextureAsset,
+        Icon::SoundAsset,
         Icon::Flow,
         Icon::Wait,
         Icon::Condition,
@@ -552,6 +558,9 @@ impl Icon {
             Icon::Character => "character",
             Icon::CharacterTemplate => "character_template",
             Icon::PdaInterface => "pda_interface",
+            Icon::ModelAsset => "model_asset",
+            Icon::TextureAsset => "texture_asset",
+            Icon::SoundAsset => "sound_asset",
             Icon::Flow => "flow",
             Icon::Wait => "wait",
             Icon::Condition => "condition",
@@ -718,7 +727,7 @@ mod tests {
             assert!(seen.insert(icon.name()), "{} twice", icon.name());
             assert_eq!(Icon::from_name(icon.name()), Some(icon));
         }
-        assert_eq!(Icon::ALL.len(), 189);
+        assert_eq!(Icon::ALL.len(), 192);
         assert!(!Icon::ALL.contains(&Icon::None));
         assert_eq!(Icon::from_name("no_such_icon"), None);
     }

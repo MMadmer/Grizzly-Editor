@@ -22,7 +22,8 @@ const CELL: (u32, u32) = (128, 512);
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SheetParams {
-    /// The models: library references (`props\box_wood_01`) or visuals, at most 16.
+    /// The models: library references (`props\box_wood_01`), model assets of the project by
+    /// their path (`models/wall.meshasset`) or visuals, at most 16.
     refs: Vec<String>,
     /// Where the names are looked up: `library` (the project's and the editor's objects; the
     /// default), `project`, or `game` (the linked game's visuals).
