@@ -28,6 +28,7 @@ serde.workspace = true
 schemars.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

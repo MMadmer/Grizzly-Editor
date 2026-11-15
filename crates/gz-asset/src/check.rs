@@ -292,7 +292,22 @@ pub async fn run(editor: &Arc<Editor>, path: Option<&RelPath>) -> Result<Report,
         .any(|f| f.file_name().eq_ignore_ascii_case(MANIFEST) && f.parent().is_some_and(|d| d.is_root()));
     let assets: Vec<&RelPath> =
         files.iter().filter(|f| !f.file_name().eq_ignore_ascii_case(MANIFEST)).collect();
-    let mut problems: Vec<Problem> = futures::future::join_all(assets.iter().map(|f| check_file(editor, f)))
+    // A few files at a time, in order: a check in flight holds what it read of the project and
+    // the game, and every file of a large project in flight at once is all of that at once -
+    // tens of gigabytes for some hundred items.
+    let in_flight = std::thread::available_parallelism().map_or(8, std::num::NonZero::get);
+    use futures::StreamExt as _;
+    // each check owns its path: the stream holds them past this function's borrows
+    let checks: Vec<_> = assets
+        .iter()
+        .map(|f| {
+            let (editor, path) = (editor.clone(), (*f).clone());
+            async move { check_file(&editor, &path).await }
+        })
+        .collect();
+    let mut problems: Vec<Problem> = futures::stream::iter(checks)
+        .buffered(in_flight)
+        .collect::<Vec<_>>()
         .await
         .into_iter()
         .flatten()

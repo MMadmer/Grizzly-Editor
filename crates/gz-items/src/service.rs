@@ -310,7 +310,8 @@ impl Items {
             let unlinked = GameLookups { root: self.root.clone(), ..GameLookups::default() };
             return self.lookups.fresh(&(), rev, move || unlinked).await;
         };
-        let mut strings: FxHashSet<String> = FxHashSet::default();
+        // the tables are shared; the set of their ids is made once, by the query below
+        let mut tables = Vec::new();
         if let Some(link) = &link {
             let lang = link.language().await.unwrap_or_else(|_| "rus".into());
             let mut langs = vec!["rus".to_owned(), "eng".to_owned()];
@@ -319,7 +320,7 @@ impl Items {
             }
             for l in langs {
                 if let Ok(t) = link.strings(&l).await {
-                    strings.extend(t.iter().map(|(id, _)| id.to_ascii_lowercase()));
+                    tables.push(t);
                 }
             }
         }
@@ -336,6 +337,10 @@ impl Items {
         // computed by the query itself, so many askers at once share one walk of the files
         self.lookups
             .fresh(&(), rev, move || {
+                let mut strings: FxHashSet<String> = FxHashSet::default();
+                for t in &tables {
+                    strings.extend(t.iter().map(|(id, _)| id.to_ascii_lowercase()));
+                }
                 strings.extend(project_strings(&root, &tree));
                 let particles = particle_names(&files, &tree);
                 GameLookups {
@@ -348,7 +353,8 @@ impl Items {
                     communities,
                     ranks,
                     module_atlas,
-                    motions: Arc::default(),
+                    motions: OnceMap::default(),
+                    sizes: OnceMap::default(),
                 }
             })
             .await
@@ -570,6 +576,23 @@ fn name_key(name: &str, ext: &str) -> String {
     n.strip_suffix(ext).unwrap_or(n).to_owned()
 }
 
+/// A value worked out once per name: the first asker computes it and the rest wait for it, so
+/// many checks at once read a file of the game once.
+struct OnceMap<V>(Mutex<FxHashMap<String, Arc<std::sync::OnceLock<V>>>>);
+
+impl<V> Default for OnceMap<V> {
+    fn default() -> Self {
+        Self(Mutex::default())
+    }
+}
+
+impl<V: Clone> OnceMap<V> {
+    fn get(&self, key: &str, make: impl FnOnce() -> V) -> V {
+        let cell = self.0.lock().entry(key.to_owned()).or_default().clone();
+        cell.get_or_init(make).clone()
+    }
+}
+
 /// What the check looks up of the linked game and the project.
 #[derive(Default)]
 pub struct GameLookups {
@@ -583,7 +606,8 @@ pub struct GameLookups {
     ranks: Vec<String>,
     /// The module's own atlas, when its items make one.
     module_atlas: Option<String>,
-    motions: Arc<Mutex<FxHashMap<String, Option<Vec<String>>>>>,
+    motions: OnceMap<Option<Vec<String>>>,
+    sizes: OnceMap<Option<(u32, u32)>>,
 }
 
 impl GameLookups {
@@ -653,8 +677,20 @@ impl Lookups for GameLookups {
 
     fn texture_size(&self, name: &str) -> Option<(u32, u32)> {
         let key = name_key(name, ".dds");
-        let bytes = self.read(&format!("textures\\{key}.dds"))?;
-        gz_fmt_tex::read_dds_info(&bytes).ok().map(|i| (i.width, i.height))
+        // every item asks for the size of the sheet its icon lies on, and a sheet is tens of
+        // megabytes: read once, and of a file of the project only its head
+        self.sizes.get(&key, || {
+            let path = format!("textures\\{key}.dds");
+            let head = match std::fs::File::open(self.root.join("gamedata").join(&path)) {
+                Ok(f) => {
+                    let mut head = Vec::new();
+                    std::io::Read::read_to_end(&mut std::io::Read::take(f, 256), &mut head).ok()?;
+                    head
+                }
+                Err(_) => self.files.as_ref()?.read(&path).ok()?,
+            };
+            gz_fmt_tex::read_dds_info(&head).ok().map(|i| (i.width, i.height))
+        })
     }
 
     fn sound(&self, name: &str) -> bool {
@@ -703,12 +739,7 @@ impl Lookups for GameLookups {
 
     fn motions(&self, visual: &str) -> Option<Vec<String>> {
         let key = name_key(visual, ".ogf");
-        if let Some(m) = self.motions.lock().get(&key) {
-            return m.clone();
-        }
-        let found = self.motions_of_model(&key);
-        self.motions.lock().insert(key, found.clone());
-        found
+        self.motions.get(&key, || self.motions_of_model(&key))
     }
 
     fn picture(&self, path: &Path) -> Result<(u32, u32), String> {

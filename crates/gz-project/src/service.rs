@@ -513,6 +513,14 @@ impl Project {
             .map(|m| (m.files.clone(), m.rev))
     }
 
+    /// Whether the index in place is the linked game's: asking for it mounts nothing. Touches no
+    /// file.
+    #[must_use]
+    pub fn game_in_place(&self) -> bool {
+        let root = self.game_root();
+        !root.is_empty() && self.current_game(&root).is_some()
+    }
+
     /// The game's index and its revision, mounted on first need and again when the game changes.
     /// Blocking: call it on the IO pool (the mount runs its parallel work there).
     pub fn game_snapshot(&self) -> Result<(Arc<GameFiles>, Rev), String> {

@@ -65,6 +65,8 @@ pub struct GameLink {
     modes: Query<(), ModeScan>,
     spawn: Derived<[SpawnSection]>,
     version: Query<(), Option<String>>,
+    /// Held by the one asker that mounts the game; see [`GameLink::snapshot`].
+    mounting: tokio::sync::Mutex<()>,
 }
 
 impl GameLink {
@@ -80,6 +82,7 @@ impl GameLink {
             modes: Query::new(exec.clone()),
             spawn: Query::new(exec.clone()),
             version: Query::new(exec.clone()),
+            mounting: tokio::sync::Mutex::new(()),
             exec,
             project,
         }))
@@ -100,6 +103,10 @@ impl GameLink {
 
     /// The index and its revision, mounted on first need.
     pub async fn snapshot(&self) -> Result<(Arc<GameFiles>, Rev), GameError> {
+        // The first mount is one asker's and the rest wait here, as tasks: a check of a whole
+        // project asks once per file, and every asker mounting for itself held the game's whole
+        // index once per file - tens of gigabytes for a project of some hundred assets.
+        let _first = if self.project.game_in_place() { None } else { Some(self.mounting.lock().await) };
         let p = self.project.clone();
         self.exec.io(move || p.game_snapshot()).await.map_err(GameError::NotLinked)
     }
