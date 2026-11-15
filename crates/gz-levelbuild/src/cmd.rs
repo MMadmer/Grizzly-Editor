@@ -604,7 +604,20 @@ async fn play(ed: Arc<Editor>, p: PlayParams, _o: Origin) -> Reply {
                     format!("The level {level} is not built: run level.build first."),
                 ));
             }
-            let root = prepare_root(&ed, &place, Some((level.clone(), dir.clone(), spawn)), None).await?;
+            // the level's own pieces (its streaming cells) are read by the game from a module: Play
+            // stages them as one of its own
+            let pieces = session.root.join("levels").join(&level).join("pieces");
+            let p2 = pieces.clone();
+            let with_pieces = ed.exec.io(move || p2.is_dir()).await;
+            let module = with_pieces.then(|| crate::play::PLAY_PIECES_MODULE.to_owned());
+            let root = prepare_root(&ed, &place, Some((level.clone(), dir.clone(), spawn)), module).await?;
+            if with_pieces {
+                let (r2, l2) = (root.root.clone(), level.clone());
+                ed.exec
+                    .io(move || crate::play::stage_pieces(&r2, &l2, &pieces))
+                    .await
+                    .map_err(|e| CmdError::new("refused", e))?;
+            }
             let params = format!("{PLAY_PARAMS} {}", place.params);
             if p.dry_run {
                 let mut v = dry_answer(&root, params.trim_end());

@@ -966,6 +966,41 @@ pub fn stage_level(root: &Path, level: &str, level_dir: &Path, spawn: &Path) -> 
     Ok(m)
 }
 
+/// The module a level's own pieces are staged as in a Play root.
+pub const PLAY_PIECES_MODULE: &str = "grizzly_play_level";
+
+/// A level's own pieces - its streaming cells (`pieces`, the project's
+/// `levels\<level>\pieces`) - staged where the game reads a module's: the root's
+/// `modules\<PLAY_PIECES_MODULE>\levels\<level>\pieces`, under a manifest of Play's own that
+/// mounts in every mode. The game finds a level's pieces in modules only, and a level Play
+/// stages is no module's: without this the game would draw the level's base alone. What an
+/// earlier Play staged there goes first; only into a root whose marker names the module.
+/// Hard links where the volume allows. Blocking.
+pub fn stage_pieces(root: &Path, level: &str, pieces: &Path) -> Result<Mirrored, String> {
+    let named = play_root::read_marker_all(root)
+        .is_some_and(|(_, _, modules)| modules.iter().any(|m| m.eq_ignore_ascii_case(PLAY_PIECES_MODULE)));
+    if !named {
+        return Err(format!(
+            "{} is not a Play root that holds the level's pieces: its {MARKER} does not name {PLAY_PIECES_MODULE}.",
+            root.display()
+        ));
+    }
+    if !play_root::plain_name(level) {
+        return Err(format!("{level} is not a level name"));
+    }
+    let module = root.join("modules").join(PLAY_PIECES_MODULE);
+    remove_tree(&module);
+    let mut m = Mirrored::default();
+    mirror_tree(pieces, &module.join("levels").join(level).join("pieces"), &[], &mut m)?;
+    let manifest = format!(
+        "[module]\r\nid      = {PLAY_PIECES_MODULE}\r\nname    = The pieces of the level in play\r\nversion = 1.0.0\r\napi     = 1\r\nmode    = *\r\n"
+    );
+    fs::write(module.join("mod.ltx"), manifest).map_err(|e| {
+        format!("The manifest of the level's pieces could not be written in {}: {e}", module.display())
+    })?;
+    Ok(m)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -984,6 +1019,44 @@ mod tests {
             bytes.extend(s.encode_utf16().flat_map(u16::to_le_bytes));
         }
         bytes
+    }
+
+    /// A level's own pieces reach the game as a module of Play's own that mounts in every mode;
+    /// a root whose marker does not name that module takes nothing, and what an earlier Play
+    /// staged goes with the next.
+    #[test]
+    fn a_levels_own_pieces_are_staged_as_a_module_of_plays() {
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("root");
+        let pieces = base.path().join("project").join("levels").join("arena").join("pieces");
+        fs::create_dir_all(pieces.join("cell_0_0")).unwrap();
+        fs::write(pieces.join("cell_0_0").join("piece.ltx"), "[piece]\r\nversion = 1\r\n").unwrap();
+        fs::write(pieces.join("cell_0_0").join("piece"), b"visuals").unwrap();
+        fs::create_dir_all(&root).unwrap();
+        let entries: Vec<String> = ENTRIES.iter().map(|e| (*e).to_owned()).collect();
+        // a root that does not name the module: nothing is written
+        fs::write(root.join(MARKER), play_root::marker_text(&entries, &[])).unwrap();
+        let why = stage_pieces(&root, "arena", &pieces).unwrap_err();
+        assert!(why.contains(PLAY_PIECES_MODULE) && !root.join("modules").exists(), "{why}");
+        fs::write(root.join(MARKER), play_root::marker_text(&entries, &[PLAY_PIECES_MODULE.to_owned()]))
+            .unwrap();
+        assert!(stage_pieces(&root, "..", &pieces).is_err(), "a level is a plain name");
+        let m = stage_pieces(&root, "arena", &pieces).unwrap();
+        assert_eq!(m.linked + m.copied, 2);
+        let module = root.join("modules").join(PLAY_PIECES_MODULE);
+        let manifest = fs::read_to_string(module.join("mod.ltx")).unwrap();
+        assert!(
+            manifest.contains("id      = grizzly_play_level") && manifest.contains("mode    = *"),
+            "{manifest}"
+        );
+        let cell = module.join("levels").join("arena").join("pieces").join("cell_0_0");
+        assert_eq!(fs::read(cell.join("piece")).unwrap(), b"visuals");
+        // the next Play of a level with other cells: the old ones are gone
+        fs::remove_dir_all(pieces.join("cell_0_0")).unwrap();
+        fs::create_dir_all(pieces.join("cell_1_0")).unwrap();
+        fs::write(pieces.join("cell_1_0").join("piece.ltx"), "[piece]\r\n").unwrap();
+        stage_pieces(&root, "arena", &pieces).unwrap();
+        assert!(!cell.exists() && cell.with_file_name("cell_1_0").join("piece.ltx").is_file());
     }
 
     #[test]
