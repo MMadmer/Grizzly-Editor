@@ -248,6 +248,31 @@ and everything else a module adds included.
   in place; a mode of a module (a game of its own, which the original never starts).
 - A game with no module, and a save with nothing of a module in it, are written byte for byte as before.
 
+### 1.9 Radio music and the streamer mode (asked for while the task ran)
+
+The author's wish: a module adds music to the radio - whole playlists, or simply tracks into the radio's common
+music - and the game gets a streamer mode in which nothing copyrighted plays, on the radio or anywhere else. A
+sound says whether it is copyrighted (a checkbox of the sound asset, off by default); the game checks before it
+plays anything.
+
+- **The radio's common music.** A track of a module (`mod.ltx [track.<id>]`, as for the screens) joins the radio
+  with `play = radio`: the radios of the world shuffle it among the game's own radio music.
+- **A playlist** is a named list of the module's tracks, a station of its own:
+  `[playlist.<id>]` with `title`, `tracks = <track id>, ...` and `order = shuffle | list` (shuffle when left out).
+  The player picks what the radios play in Options > Sound: everything (the game's music and every module's
+  radio tracks; the default), the game's own music alone, or one playlist.
+- `[radio] music = mix | only` as for the screens: `only` makes this module's radio tracks the whole common
+  music (the last module of the load order that says so).
+- **Copyrighted or not** is said where the sound is described: `copyrighted = true` in a `.sndasset` (any sound of
+  a module, `false` when left out), and `copyrighted = true` of a `[track.<id>]` for a track of the manifest. The
+  game's own copyrighted music is a list of the game's data the game's author keeps (names and masks).
+- **The streamer mode** is an option of the game (Options > Sound, off by default). While it is on, a sound that
+  is copyrighted is not played - asked by the sound engine before every play, and by the music of the loading
+  screen and the menus, so no script has to remember; a radio skips such tracks and plays the rest.
+- **The editor**: the sound asset's key and its checkbox (Copyrighted); Screens & Music gains Radio - the tracks
+  that play on the radio, each with its Copyrighted switch and a play button, and Playlists (+ makes one: a
+  title, its tracks dragged in and reordered, Shuffle); the manifest's reference and check know the new keys.
+
 ## 2. Weapons Evolution 2026 as a module
 
 The project: `D:\XFinedProjects\WeaponsEvolution2026` (new; the old conversion `WeaponsEvolution` stays as it
@@ -280,6 +305,9 @@ motions and sounds; a use scene plays; the silencer is crafted; the icons are th
 | G5 | lead or agent, after G3 | a loose particle effect carries its compiled actions (`[actions]`): without them the game's loader makes an effect that emits nothing | game: `src\Layers\xrRender` (the loose particle loader), `MODDING.md` |
 | G3 | agent, after G1 | 1.8: objects and item state in `.scov`, a switched-off module's records kept, ids reserved | game: `src\xrGame` (the ALife registry's save and load, the save extensions, `xms_game.cpp`), the stock scripts' save hooks, `docs\dead-air\SAVE_COMPATIBILITY.md`, `tools\qa` |
 | G4 | agent, with G3 | 1.8: what scripts save about a module's objects, the quest runtime keeping an absent module's quests, per-module data kept | game: `packaging\dead-air-x64\compatibility\gamedata\scripts` (`xms_*.script`), `tools\nq` |
+| G5 (more) | with the particles | 1.9's engine part: `copyrighted` of a sound's description and of a track, the streamer mode variable, the check before every play, the script calls | game: the sound engine, the music thread, `xms_assets`, `xms_screens` |
+| G6 | agent | 1.9's game data and scripts: the radio's pool from modules, playlists, the option rows, the game's own copyrighted list | game: `packaging\dead-air-x64\compatibility\gamedata` (scripts, configs), docs |
+| E4 | agent | 1.9's editor part | editor: `gz-media` (the key), `gz-screens`, `gz-ui-pda` (Screens & Music), `gz-mod` (the manifest's reference and check) |
 | - | lead | this plan, the contracts' final text, integration, the game build and deploy, the in-game proof, the one full read by the critic and its fixes |
 
 ## 4. State
@@ -303,5 +331,6 @@ motions and sounds; a use scene plays; the silencer is crafted; the icons are th
   only), 12 patch files, 481 icons, 1182 loose particle files, 7067 media files; its own composition check equals
   the wanted state in all 14 515 sections. Open: the game's loose particle loader reads no actions (G5); four
   weapons change class (their objects become the module's: told to G3). P2 (the hand work) runs.
+- 2026-11-15, later still: the author asks for radio music from modules and a streamer mode (1.9: G5, G6, E4).
 - The scratch of the task (surveys, the key table, the unpacked game views) is the session's scratchpad folder
   `we\`; nothing in the repository depends on it.
