@@ -606,6 +606,9 @@ mod tests {
         assert!(c.0 > a.0 && c.1 < a.1);
         // the back mirrors it
         let cam = framing(Side::Back, &b, size, ISO_HEADING);
+        let Some(a) = to_pixel(&cam, size, Vec3::new(12.0, 1.0, 60.0)) else { panic!("a") };
+        let Some(c) = to_pixel(&cam, size, Vec3::new(28.0, 1.0, 60.0)) else { panic!("c") };
+        assert!(c.0 < a.0);
         // an iso view looks along its heading: from the south-west by default, from the north
         // when told to look south
         let cam = framing(Side::Iso, &b, size, ISO_HEADING);
@@ -614,9 +617,6 @@ mod tests {
         assert!(cam.forward.z < -0.5 && cam.forward.x.abs() < 1e-4);
         let centre = (b.min + b.max) * 0.5;
         assert!(cam.position.z > centre.z && cam.position.y > centre.y);
-        let Some(a) = to_pixel(&cam, size, Vec3::new(12.0, 1.0, 60.0)) else { panic!("a") };
-        let Some(c) = to_pixel(&cam, size, Vec3::new(28.0, 1.0, 60.0)) else { panic!("c") };
-        assert!(c.0 < a.0);
     }
 
     #[test]
