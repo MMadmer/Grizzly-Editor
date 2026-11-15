@@ -130,7 +130,7 @@ the level build produces for the game.
 A scene is `<name>.scene` and the folder `<name>\` beside it:
 
 ```text
-escape.scene              the scene: header, level options, build settings, bookmarks
+escape.scene              the scene: header, level options, build settings, the sun, the camera
 escape\
   objects.lua             static objects
   lights.lua  glows.lua  sounds.lua  particles.lua  shapes.lua  fog.lua
@@ -147,8 +147,16 @@ escape\
   ...), never a positional packet. A property the editor cannot name is kept under `raw` and written back as it
   was.
 - A file of a class that has no objects does not exist.
+- A file of the folder that does not parse changes nothing: the open scene keeps the objects it had of it, the
+  problem is a `syntax` error at its line and column, and a save leaves the file as it is; once it parses the scene
+  follows it again. A scene first opened with such a file opens without that file's objects.
+- A group written with a `ref` and no `members` is placed when the scene is read: its members are made from the
+  group asset at the group's `pos`, `rot` and `scale`, named `<group>_<member>`, and the scene is unsaved until the
+  next save writes them; an asset that cannot be read is an error at the group's line, and the group stays as
+  written.
 - The X-Ray SDK scene (`*.level` with `*.part` files) is read and never written: opening one converts it, saving
-  writes a `.scene`, and `asset.migrate` converts a project's scenes in one run.
+  writes a `.scene`, and `scene.convert` writes a `.scene` beside a `.level` without opening it; `asset.migrate`
+  does not take a `.level`.
 
 ## 8. The project
 

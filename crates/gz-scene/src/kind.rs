@@ -52,7 +52,7 @@ pub fn scene() -> KindOps {
         header: format::HEADER,
         version: format::VERSION,
         limits: Limits::scene(),
-        migrations: &[],
+        migrations: format::MIGRATIONS,
         known: &[("", SCENE_KEYS)],
         reference_doc: "docs/assets/SCENE.md",
         check: check_scene,
@@ -71,7 +71,7 @@ pub fn group() -> KindOps {
         header: group::HEADER,
         version: group::VERSION,
         limits: Limits::scene(),
-        migrations: &[],
+        migrations: group::MIGRATIONS,
         known: &[("", GROUP_KEYS)],
         reference_doc: "docs/assets/SCENE.md",
         check: check_group,
@@ -87,6 +87,7 @@ fn check_scene(ed: Arc<Editor>, file: Arc<AssetFile>) -> BoxFuture<'static, Vec<
         let settings = crate::game::settings(&ed).await;
         let abs = file.abs.clone();
         let main = file.path.clone();
+        let lib = gz_project::library_root(&ed);
         ed.exec
             .io(move || {
                 let texts = match crate::service::read_texts(&abs) {
@@ -102,7 +103,21 @@ fn check_scene(ed: Arc<Editor>, file: Arc<AssetFile>) -> BoxFuture<'static, Vec<
                 let folder = gz_base::RelPath::new(stem).unwrap_or_else(|_| main.clone());
                 let st = settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync));
                 match format::read(&texts, &main, &folder, st) {
-                    Ok(read) => read.problems,
+                    Ok(mut read) => {
+                        // the groups placed at the read: a group asset that cannot be read is an error
+                        let depth = main.as_str().split('/').count();
+                        if let Some(root) = abs.ancestors().nth(depth) {
+                            let (notes, _) = crate::edit::place_unplaced(
+                                &mut read.state,
+                                &read.unplaced,
+                                root,
+                                Some(&lib),
+                                st,
+                            );
+                            read.problems.extend(notes);
+                        }
+                        read.problems
+                    }
                     Err(r) => vec![*r.problem],
                 }
             })

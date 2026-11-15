@@ -241,27 +241,42 @@ pub async fn library_group(
     svc: &SceneService,
     reference: &str,
 ) -> Result<Loaded, CmdError> {
-    let rel = format!("{}.group", reference.replace('/', "\\").trim_end_matches(".group"));
-    let files = [
-        svc.root.join("rawdata").join("groups").join(&rel),
-        gz_project::library_root(editor).join("rawdata").join("groups").join(&rel),
-    ];
-    let shown = rel.clone();
-    let body =
-        editor.exec.io(move || files.iter().find_map(|f| std::fs::read(f).ok())).await.ok_or_else(|| {
-            CmdError::not_found(format!("there is no group {shown} in the project or the library"))
-        })?;
+    let (root, lib) = (svc.root.clone(), gz_project::library_root(editor));
     let settings = crate::game::settings(editor).await;
-    let (loaded, warnings) = crate::sdk::read_library_group(
-        &body,
-        reference,
-        settings.as_deref().map(|s| s as &(dyn gz_entities::Settings + Sync)),
-    )
-    .map_err(CmdError::invalid)?;
+    let r = reference.to_owned();
+    let (loaded, warnings) = editor
+        .exec
+        .io(move || {
+            library_group_at(
+                &root,
+                Some(&lib),
+                &r,
+                settings.as_deref().map(|s| s as &(dyn gz_entities::Settings + Sync)),
+            )
+        })
+        .await?;
     for w in warnings {
         editor.log.warn(w);
     }
     Ok(loaded)
+}
+
+/// [`library_group`] blocking, with the folders it looks in.
+fn library_group_at(
+    root: &Path,
+    editor_root: Option<&Path>,
+    reference: &str,
+    settings: Option<&(dyn gz_entities::Settings + Sync)>,
+) -> Result<(Loaded, Vec<String>), CmdError> {
+    let rel = format!("{}.group", reference.replace('/', "\\").trim_end_matches(".group"));
+    let body = std::iter::once(root)
+        .chain(editor_root)
+        .map(|r| r.join("rawdata").join("groups").join(&rel))
+        .find_map(|f| std::fs::read(f).ok())
+        .ok_or_else(|| {
+            CmdError::not_found(format!("there is no group {rel} in the project or the library"))
+        })?;
+    crate::sdk::read_library_group(&body, reference, settings).map_err(CmdError::invalid)
 }
 
 /// A group whose `.group` is `reference`: the project's asset, else a group of the library.
@@ -270,31 +285,123 @@ pub async fn group_asset(
     svc: &SceneService,
     reference: &str,
 ) -> Result<Loaded, CmdError> {
-    let rel = RelPath::new(&reference.replace('\\', "/")).ok();
-    let file = rel.as_ref().map(|r| r.to_fs(&svc.root));
-    let f = file.clone();
-    let is_asset = editor.exec.io(move || f.is_some_and(|f| f.is_file())).await;
-    let (Some(file), Some(rel), true) = (file, rel, is_asset) else {
-        return library_group(editor, svc, reference).await;
-    };
-    let (bundle, warnings) = read_group_file(editor, file, rel).await?;
+    let (root, lib) = (svc.root.clone(), gz_project::library_root(editor));
+    let settings = crate::game::settings(editor).await;
+    let r = reference.to_owned();
+    let (loaded, warnings) = editor
+        .exec
+        .io(move || {
+            group_asset_at(
+                &root,
+                Some(&lib),
+                &r,
+                settings.as_deref().map(|s| s as &(dyn gz_entities::Settings + Sync)),
+            )
+        })
+        .await?;
     for w in &warnings {
         editor.log.warn(w);
     }
-    let [(gi, members)] = bundle.groups.as_slice() else {
-        return Err(CmdError::invalid(format!("{reference} holds no single group")));
+    Ok(loaded)
+}
+
+/// [`group_asset`] blocking. A project asset that holds one group gives that group and its
+/// members; one that holds no group gives every object it holds as a member of a group at its
+/// pivot.
+pub(crate) fn group_asset_at(
+    root: &Path,
+    editor_root: Option<&Path>,
+    reference: &str,
+    settings: Option<&(dyn gz_entities::Settings + Sync)>,
+) -> Result<(Loaded, Vec<String>), CmdError> {
+    let rel = RelPath::new(&reference.replace('\\', "/")).ok();
+    let file = rel.as_ref().map(|r| r.to_fs(root)).filter(|f| f.is_file());
+    let (Some(file), Some(rel)) = (file, rel) else {
+        return library_group_at(root, editor_root, reference, settings);
     };
-    let obj = bundle
-        .objects
-        .get(*gi)
-        .cloned()
-        .ok_or_else(|| CmdError::invalid(format!("{reference} holds no group")))?;
-    let members = members
-        .iter()
-        .filter_map(|i| bundle.objects.get(*i).cloned())
-        .map(|obj| Loaded { obj, members: Vec::new() })
-        .collect();
-    Ok(Loaded { obj, members })
+    let text = std::fs::read_to_string(&file)
+        .map_err(|e| CmdError::not_found(format!("{} could not be read ({e})", file.display())))?;
+    let (bundle, problems) =
+        group::read_group(&text, &rel, settings).map_err(|r| CmdError::new(r.code, r.problem.line_text()))?;
+    let warnings = problems.iter().map(gz_base::Problem::line_text).collect();
+    let (obj, members) = match bundle.groups.as_slice() {
+        [(gi, members)] => (
+            bundle
+                .objects
+                .get(*gi)
+                .cloned()
+                .ok_or_else(|| CmdError::invalid(format!("{reference} holds no group")))?,
+            members.iter().filter_map(|i| bundle.objects.get(*i).cloned()).collect::<Vec<_>>(),
+        ),
+        [] => (
+            crate::model::Object::new(
+                crate::class::ObjClass::Group,
+                "group",
+                ObjData::Group(crate::objects::GroupData::default()),
+            ),
+            bundle.objects,
+        ),
+        _ => return Err(CmdError::invalid(format!("{reference} holds no single group"))),
+    };
+    let members = members.into_iter().map(|obj| Loaded { obj, members: Vec::new() }).collect();
+    Ok((Loaded { obj, members }, warnings))
+}
+
+/// Places every group a scene's files name with a `ref` and no `members`: its members made from
+/// the group asset at the group's position, rotation and scale, named `<group>_<member>`. Answers
+/// a note per group placed and an error per group whose asset cannot be read (that group is kept
+/// as written), and how many were placed.
+pub(crate) fn place_unplaced(
+    state: &mut SceneState,
+    unplaced: &[crate::format::Unplaced],
+    root: &Path,
+    editor_root: Option<&Path>,
+    settings: Option<&(dyn gz_entities::Settings + Sync)>,
+) -> (Vec<gz_base::Problem>, usize) {
+    let mut problems = Vec::new();
+    let mut placed = 0;
+    for u in unplaced {
+        let Some(group) = state.get(u.id).map(|g| (**g).clone()) else { continue };
+        let ObjData::Group(gd) = &group.data else { continue };
+        let reference = gd.reference.clone();
+        let at = |p: gz_base::Problem| {
+            p.in_file(u.file.clone()).at(u.span.line, u.span.column, u.span.end_line, u.span.end_column)
+        };
+        let (mut loaded, _) = match group_asset_at(root, editor_root, &reference, settings) {
+            Ok(l) => l,
+            Err(e) => {
+                problems.push(at(gz_base::Problem::error(
+                    "S022",
+                    format!("the group '{}' is placed from {reference}, which cannot be read: {}; it is kept as written", group.name, e.message),
+                )));
+                continue;
+            }
+        };
+        let n = loaded.members.len();
+        for m in &mut loaded.members {
+            m.obj.name = format!("{}_{}", group.name, m.obj.name).into();
+            m.obj.marks = group.marks;
+        }
+        let mut g = group.clone();
+        g.xform = loaded.obj.xform;
+        g.data =
+            ObjData::Group(crate::objects::GroupData { reference: reference.clone(), members: Vec::new() });
+        loaded.obj = g;
+        state.remove(u.id);
+        if let Err(e) = state.insert_group_at(loaded, group.xform) {
+            problems.push(at(gz_base::Problem::error(
+                "S022",
+                format!("the group '{}' could not be placed: {}", group.name, e.message),
+            )));
+            continue;
+        }
+        placed += 1;
+        problems.push(at(gz_base::Problem::note(
+            "S023",
+            format!("the group '{}' was placed from {reference}: {n} objects (the scene is unsaved until it is saved)", group.name),
+        )));
+    }
+    (problems, placed)
 }
 
 /// New Scene: an empty scene with no file, its history new; the kinds' eyes and locks stay.
@@ -319,4 +426,96 @@ pub async fn new_scene(editor: &Arc<Editor>, svc: &SceneService, origin: Origin)
 pub fn writable(editor: &Editor, path: &Path) -> Result<(), CmdError> {
     let guard = gz_project::Project::of(editor).map(|(_, p)| p.write_guard(None)).unwrap_or_default();
     guard.check(path).map_err(|e| CmdError::invalid(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::class::ObjClass;
+    use crate::format::{self, Texts};
+    use crate::model::Object;
+    use crate::objects::SceneObjectData;
+
+    fn hut(root: &Path) {
+        let mut s = SceneState::default();
+        for (name, p) in [("wall", Vec3::new(1.0, 0.0, 0.0)), ("roof", Vec3::new(0.0, 2.0, 0.0))] {
+            let mut o = Object::new(
+                ObjClass::SceneObject,
+                name,
+                ObjData::SceneObject(SceneObjectData::library(r"props\box")),
+            );
+            o.xform.position = p;
+            s.insert(o);
+        }
+        let ids: Vec<ObjId> = s.objects.values().map(|o| o.id).collect();
+        let text = group::group_text(&s, &ids, Vec3::ZERO, None).unwrap();
+        std::fs::create_dir_all(root.join("prefabs")).unwrap();
+        std::fs::write(root.join("prefabs").join("hut.group"), text).unwrap();
+    }
+
+    fn scene_with(group_ref: &str) -> Texts {
+        Texts {
+            scene: "return { scene = 1 }\n".into(),
+            files: vec![(
+                "groups.lua".into(),
+                format!(
+                    "return {{\n  groups = {{\n    {{ name = \"hut\", ref = \"{group_ref}\", pos = {{ 10, 0, 0 }}, authored = true }},\n  }},\n}}\n"
+                ),
+            )],
+            layers: Vec::new(),
+        }
+    }
+
+    fn read(t: &Texts) -> format::Read {
+        let main = RelPath::new("test.scene").unwrap();
+        let dir = RelPath::new("test").unwrap();
+        format::read(t, &main, &dir, None).unwrap()
+    }
+
+    #[test]
+    fn a_group_without_members_is_placed_from_its_asset() {
+        let root = std::env::temp_dir().join(format!("gz-place-group-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        hut(&root);
+        let mut r = read(&scene_with("prefabs/hut.group"));
+        assert_eq!(r.unplaced.len(), 1);
+        let (notes, placed) = place_unplaced(&mut r.state, &r.unplaced, &root, None, None);
+        assert_eq!(placed, 1);
+        let note = notes.iter().find(|p| p.code == "S023").expect("a note per group");
+        assert!(note.message.contains("2 objects") && note.line == Some(3), "{note:?}");
+        let wall = r.state.find(ObjClass::SceneObject, "hut_wall").expect("named <group>_<member>");
+        assert_eq!(wall.xform.position, Vec3::new(11.0, 0.0, 0.0));
+        assert!(wall.marks.authored && wall.owner.is_some());
+        let g = r.state.find(ObjClass::Group, "hut").unwrap();
+        let ObjData::Group(gd) = &g.data else { panic!() };
+        assert_eq!(gd.members.len(), 2);
+        assert_eq!(gd.reference, "prefabs/hut.group");
+        // the next save writes the members and the group's list of them
+        let plan = format::write(&r.state, Some(&r.files), None).unwrap();
+        let names: Vec<&str> = plan.files.iter().map(|f| f.file.as_str()).collect();
+        assert!(names.contains(&"objects.lua") && names.contains(&"groups.lua"), "{names:?}");
+        // a group whose asset is not there is kept as written, with an error at its line
+        let mut r = read(&scene_with("prefabs/gone.group"));
+        let (notes, placed) = place_unplaced(&mut r.state, &r.unplaced, &root, None, None);
+        assert_eq!(placed, 0);
+        let e = notes.iter().find(|p| p.code == "S022").expect("an error");
+        assert_eq!((e.severity, e.line), (gz_base::Severity::Error, Some(3)));
+        assert!(r.state.find(ObjClass::Group, "hut").is_some());
+        assert!(r.state.of_class(ObjClass::SceneObject).next().is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_group_with_members_is_read_as_it_is() {
+        let t = Texts {
+            scene: "return { scene = 1 }\n".into(),
+            files: vec![(
+                "groups.lua".into(),
+                "return { groups = { { name = \"hut\", ref = \"prefabs/hut.group\", members = {} } } }\n"
+                    .into(),
+            )],
+            layers: Vec::new(),
+        };
+        assert!(read(&t).unplaced.is_empty());
+    }
 }

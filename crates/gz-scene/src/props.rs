@@ -1832,6 +1832,27 @@ mod tests {
     }
 
     #[test]
+    fn the_module_marks_are_rows_that_take_a_value() {
+        let mut s = SceneState::default();
+        let e = cx();
+        let pcx = PropCx { lib: None, entity: &e };
+        let spawn = s.insert(Object::new(ObjClass::SpawnPoint, "sp", default_data(ObjClass::SpawnPoint)));
+        let light = s.insert(Object::new(ObjClass::Light, "l", ObjData::Light(LightData::default())));
+        for (id, key) in [(light, "authored"), (spawn, "removed")] {
+            let o = s.get(id).unwrap();
+            let rows = merge(vec![object_rows(&s, o, &pcx)]);
+            let r = &find(&rows, key).unwrap_or_else(|| panic!("{key} is a row")).row;
+            assert_eq!(r.path, format!("Module\\{}", r.label));
+            let p = parse(r, "true").unwrap();
+            let Effect::Object(n) = set_object(&s, o, key, &p, &pcx).unwrap() else { panic!("{key}") };
+            assert!(if key == "authored" { n.marks.authored } else { n.marks.removed }, "{key}");
+        }
+        // a light is no spawn of the base level: it has nothing to remove
+        let rows = merge(vec![object_rows(&s, s.get(light).unwrap(), &pcx)]);
+        assert!(find(&rows, "removed").is_none());
+    }
+
+    #[test]
     fn a_light_takes_its_kind_as_a_word() {
         let mut s = SceneState::default();
         let id = s.insert(Object::new(ObjClass::Light, "l", ObjData::Light(LightData::default())));

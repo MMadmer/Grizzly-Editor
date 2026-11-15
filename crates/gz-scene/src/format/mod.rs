@@ -39,6 +39,49 @@ pub const EXT: &str = "scene";
 /// The header key, and the version this editor writes and the newest it reads.
 pub const HEADER: &str = "scene";
 pub const VERSION: u32 = 1;
+/// The steps that lift an older `.scene` to [`VERSION`]: the first lifts version 1 to 2 (the
+/// scene kind's `KindOps.migrations`, the same list `gz-asset` applies).
+pub const MIGRATIONS: &[gz_asset::Migration] = &[];
+
+/// A chain of migration steps: `steps[i]` lifts version `first + i` to `first + i + 1`, up to
+/// `current`.
+#[derive(Clone, Copy)]
+pub struct Chain {
+    pub current: u32,
+    pub first: u32,
+    pub steps: &'static [gz_asset::Migration],
+}
+
+/// The scene's own chain.
+pub const CHAIN: Chain = Chain { current: VERSION, first: 1, steps: MIGRATIONS };
+
+impl Chain {
+    /// Lifts `doc` (written in `from`, under the header key `header`) to the current version, one
+    /// step at a time, the header rewritten after each.
+    pub(crate) fn lift(
+        &self,
+        doc: &mut LuaDoc,
+        header: &str,
+        file: &RelPath,
+        from: u32,
+    ) -> Result<(), Refused> {
+        let fail = |message: String| Refused {
+            code: "migration",
+            problem: Box::new(Problem::error("migration", message).in_file(file.clone())),
+        };
+        for step in from..self.current {
+            let Some(migrate) = step.checked_sub(self.first).and_then(|i| self.steps.get(i as usize)) else {
+                return Err(fail(format!(
+                    "{file}: version {step} of the format cannot be read: the editor has no step from it"
+                )));
+            };
+            migrate(doc).and_then(|()| doc.set(&[Seg::key(header)], &Value::from(step + 1))).map_err(
+                |e| fail(format!("{file}: lifting version {step} to {} failed: {}", step + 1, e.message)),
+            )?;
+        }
+        Ok(())
+    }
+}
 
 /// One file of the scene's folder: its name and the lists it holds, each of one class.
 #[derive(Clone, Copy, Debug)]
@@ -859,6 +902,20 @@ pub struct SceneFiles {
     pub scene: LuaDoc,
     pub docs: Vec<Doc>,
     pub base: SceneState,
+    /// The folder's files that did not parse when they were last read: a save leaves each as it
+    /// is, so nothing the author wrote in it is lost.
+    pub broken: Vec<&'static str>,
+    /// The `.scene` was read in an older version: the next save writes it in the current one.
+    pub migrated: bool,
+}
+
+/// A group written with a `ref` and no `members`: placed from its asset when the scene is read.
+#[derive(Clone, Debug)]
+pub struct Unplaced {
+    pub id: ObjId,
+    /// The file and the place of the group's item.
+    pub file: RelPath,
+    pub span: gz_luadata::Span,
 }
 
 /// A scene read from its files.
@@ -866,6 +923,20 @@ pub struct Read {
     pub state: SceneState,
     pub files: SceneFiles,
     pub problems: Vec<Problem>,
+    pub unplaced: Vec<Unplaced>,
+}
+
+/// What a read over an open scene keeps of it: the objects of `files` and of every file that does
+/// not parse now come from `state` instead of the texts.
+#[derive(Clone, Copy)]
+pub struct Keep<'a> {
+    pub state: &'a SceneState,
+    pub files: &'a [&'static str],
+}
+
+/// A problem at a span of a file.
+fn at_span(p: Problem, file: &RelPath, s: gz_luadata::Span) -> Problem {
+    p.in_file(file.clone()).at(s.line, s.column, s.end_line, s.end_column)
 }
 
 /// Why a scene was not read at all: its `.scene` does not parse or is of a newer editor.
@@ -896,36 +967,78 @@ fn syntax(file: RelPath, e: gz_luadata::LuaDataError) -> Refused {
 /// The version a `.scene` says it is written in, or why it says none.
 fn header_version(v: &Value) -> Option<u32> {
     match v.get(HEADER) {
-        Some(Value::Number(n)) if n.fract() == 0.0 && *n >= 1.0 => Some(*n as u32),
+        Some(Value::Number(n)) if n.fract() == 0.0 && *n >= 0.0 => Some(*n as u32),
         _ => None,
     }
 }
 
 /// Reads a scene. `dir` is the folder's path as problems name it (`levels/escape`), `main` the
 /// `.scene`'s. Objects whose kind is in a file that does not read are left out, with the
-/// reader's sentence; a `.scene` that does not read refuses the whole scene.
+/// reader's sentence, and the file is one a save leaves as it is; a `.scene` that does not read
+/// refuses the whole scene.
 pub fn read(
     texts: &Texts,
     main: &RelPath,
     dir: &RelPath,
     settings: Option<&(dyn Settings + Sync)>,
 ) -> Result<Read, Refused> {
-    let (scene_doc, scene_v) =
+    read_with(texts, main, dir, settings, None, &CHAIN)
+}
+
+/// [`read`] over an open scene: what a file that does not parse gave is taken from `keep`.
+pub fn read_over(
+    texts: &Texts,
+    main: &RelPath,
+    dir: &RelPath,
+    settings: Option<&(dyn Settings + Sync)>,
+    keep: Option<Keep<'_>>,
+) -> Result<Read, Refused> {
+    read_with(texts, main, dir, settings, keep, &CHAIN)
+}
+
+/// [`read_over`] through a migration chain.
+pub fn read_with(
+    texts: &Texts,
+    main: &RelPath,
+    dir: &RelPath,
+    settings: Option<&(dyn Settings + Sync)>,
+    keep: Option<Keep<'_>>,
+    chain: &Chain,
+) -> Result<Read, Refused> {
+    let (mut scene_doc, mut scene_v) =
         LuaDoc::parse_value(&texts.scene, HEADER, Limits::scene()).map_err(|e| syntax(main.clone(), e))?;
     let mut problems = Vec::new();
+    let mut migrated = false;
     match header_version(&scene_v) {
-        Some(v) if v > VERSION => {
+        Some(v) if v > chain.current => {
             let s = scene_doc.span(&[Seg::key(HEADER)]).unwrap_or_else(|| scene_doc.head_span());
             return Err(Refused {
                 code: "newer_version",
                 problem: Problem::error(
                     "newer_version",
-                    format!("{main} was made by a newer Grizzly Editor (scene = {v}; this one reads up to {VERSION}): update the editor to open it"),
+                    format!("{main} was made by a newer Grizzly Editor (scene = {v}; this one reads up to {}): update the editor to open it", chain.current),
                 )
                 .in_file(main.clone())
                 .at(s.line, s.column, s.end_line, s.end_column)
                 .into(),
             });
+        }
+        Some(v) if v < chain.current => {
+            chain.lift(&mut scene_doc, HEADER, main, v)?;
+            scene_v = scene_doc.value();
+            migrated = true;
+            let s = scene_doc.span(&[Seg::key(HEADER)]).unwrap_or_else(|| scene_doc.head_span());
+            problems.push(at_span(
+                Problem::note(
+                    "old_version",
+                    format!(
+                        "written in version {v} of the format: read as version {}; saving writes version {}",
+                        chain.current, chain.current
+                    ),
+                ),
+                main,
+                s,
+            ));
         }
         Some(_) => {}
         None => {
@@ -972,20 +1085,29 @@ pub fn read(
     struct Part {
         file: &'static str,
         doc: LuaDoc,
-        objects: Vec<(ObjClass, Object)>,
+        /// Each object with its item's place (by index: a name may be there twice).
+        objects: Vec<(ObjClass, Object, gz_luadata::Span)>,
         problems: Vec<Problem>,
         controls: Vec<(usize, SmolStr)>,
-        members: Vec<(usize, Vec<SmolStr>)>,
+        members: Vec<(usize, Vec<(SmolStr, gz_luadata::Span)>)>,
+        /// The groups with a `ref` and no `members`.
+        unplaced: Vec<usize>,
     }
-    let parts: Vec<Result<Part, Box<Problem>>> = CLASS_FILES
+    let parts: Vec<Result<Part, (&'static str, Box<Problem>)>> = CLASS_FILES
         .par_iter()
         .filter_map(|cf| {
             texts.files.iter().find(|(n, _)| n.eq_ignore_ascii_case(cf.file)).map(|(_, t)| (cf, t))
         })
         .map(|(cf, text)| {
             let rel = dir.join(cf.file).unwrap_or_else(|_| dir.clone());
-            let (doc, v) = LuaDoc::parse_value(text, cf.file, Limits::scene())
-                .map_err(|e| syntax(rel.clone(), e).problem)?;
+            let (doc, v) = LuaDoc::parse_value(text, cf.file, Limits::scene()).map_err(|e| {
+                let mut p = syntax(rel.clone(), e).problem;
+                p.message = format!(
+                    "{}: the scene keeps what it had of this file, and a save leaves the file as it is, until it reads",
+                    p.message
+                );
+                (cf.file, p)
+            })?;
             let mut part = Part {
                 file: cf.file,
                 doc,
@@ -993,15 +1115,16 @@ pub fn read(
                 problems: Vec::new(),
                 controls: Vec::new(),
                 members: Vec::new(),
+                unplaced: Vec::new(),
             };
             for (k, _) in v.fields() {
                 if !cf.lists.iter().any(|(l, _)| l == k) {
                     let s = part.doc.nearest_span(&[Seg::key(k)]);
-                    part.problems.push(
-                        Problem::note("unknown_key", format!("unknown key '{k}' (kept)"))
-                            .in_file(rel.clone())
-                            .at(s.line, s.column, s.end_line, s.end_column),
-                    );
+                    part.problems.push(at_span(
+                        Problem::note("unknown_key", format!("unknown key '{k}' (kept)")),
+                        &rel,
+                        s,
+                    ));
                 }
             }
             for (list, class) in cf.lists {
@@ -1029,11 +1152,27 @@ pub fn read(
                         part.controls.push((n, SmolStr::new(c)));
                     }
                     if *class == ObjClass::Group {
-                        let m: Vec<SmolStr> = item
-                            .get("members")
-                            .map(|x| x.arr().iter().filter_map(Value::as_str).map(SmolStr::new).collect())
-                            .unwrap_or_default();
-                        part.members.push((n, m));
+                        match item.get("members") {
+                            Some(x) => {
+                                let m = x
+                                    .arr()
+                                    .iter()
+                                    .enumerate()
+                                    .filter_map(|(j, v)| v.as_str().map(|s| (j, s)))
+                                    .map(|(j, s)| {
+                                        let at = [Seg::key(list), Seg::Index(i), Seg::key("members"), Seg::Index(j)];
+                                        (SmolStr::new(s), part.doc.nearest_span(&at))
+                                    })
+                                    .collect();
+                                part.members.push((n, m));
+                            }
+                            None => {
+                                if matches!(&o.data, ObjData::Group(g) if !g.reference.is_empty()) {
+                                    part.unplaced.push(n);
+                                }
+                                part.members.push((n, Vec::new()));
+                            }
+                        }
                     }
                     if o.name.is_empty() {
                         o.name = SmolStr::new(class.key());
@@ -1041,7 +1180,8 @@ pub fn read(
                     if let (ObjData::Spawn(_), Some(st)) = (&o.data, settings) {
                         spawn::resolve(&mut o, st);
                     }
-                    part.objects.push((*class, o));
+                    let span = part.doc.nearest_span(&[Seg::key(list), Seg::Index(i)]);
+                    part.objects.push((*class, o, span));
                 }
             }
             Ok(part)
@@ -1049,18 +1189,29 @@ pub fn read(
         .collect();
 
     let mut docs = Vec::new();
-    let mut groups: Vec<(ObjId, Vec<SmolStr>)> = Vec::new();
+    let mut broken: Vec<&'static str> = Vec::new();
+    // each group with the names of its members and where each is written
+    type Named = Vec<(SmolStr, Option<(RelPath, gz_luadata::Span)>)>;
+    let mut groups: Vec<(ObjId, Named)> = Vec::new();
+    let mut unplaced = Vec::new();
     for part in parts {
         let mut part = match part {
             Ok(p) => p,
-            Err(p) => {
+            Err((file, p)) => {
+                broken.push(file);
                 problems.push(*p);
                 continue;
             }
         };
+        if keep.is_some_and(|k| k.files.contains(&part.file)) {
+            // the caller keeps this file's objects as it has them
+            broken.push(part.file);
+            continue;
+        }
+        let rel = dir.join(part.file).unwrap_or_else(|_| dir.clone());
         problems.append(&mut part.problems);
         let mut ids = Vec::with_capacity(part.objects.len());
-        for (i, (_, mut o)) in part.objects.into_iter().enumerate() {
+        for (i, (_, mut o, span)) in part.objects.into_iter().enumerate() {
             if let Some((_, c)) = part.controls.iter().find(|(n, _)| *n == i)
                 && let ObjData::Light(d) = &mut o.data
             {
@@ -1071,7 +1222,7 @@ pub fn read(
             }
             if !state.name_free(&o.name) {
                 let fresh = state.unique_name(&o.name);
-                problems.push(
+                problems.push(at_span(
                     Problem::warning(
                         "S013",
                         format!(
@@ -1079,36 +1230,79 @@ pub fn read(
                             o.name,
                             o.class.label()
                         ),
-                    )
-                    .in_file(dir.join(part.file).unwrap_or_else(|_| dir.clone())),
-                );
+                    ),
+                    &rel,
+                    span,
+                ));
                 o.name = SmolStr::new(fresh);
             }
             if let ObjData::Spawn(d) = &o.data
                 && let Some(SpawnEntity::Kept { why, .. }) = &d.entity
                 && !why.is_empty()
             {
-                problems.push(
+                problems.push(at_span(
                     Problem::warning(
                         "S021",
                         format!("the spawn point '{}' is kept as the file has it: {why}", o.name),
-                    )
-                    .in_file(dir.join(part.file).unwrap_or_else(|_| dir.clone())),
-                );
+                    ),
+                    &rel,
+                    span,
+                ));
             }
-            ids.push(state.insert(o));
+            let id = state.insert(o);
+            if part.unplaced.contains(&i) {
+                unplaced.push(Unplaced { id, file: rel.clone(), span });
+            }
+            ids.push(id);
         }
         for (i, m) in part.members {
             if let Some(id) = ids.get(i) {
-                groups.push((*id, m));
+                groups.push((*id, m.into_iter().map(|(n, s)| (n, Some((rel.clone(), s)))).collect()));
             }
         }
         docs.push(Doc { file: part.file, doc: part.doc });
     }
+    for f in keep.map_or(&[][..], |k| k.files) {
+        if !broken.contains(f) {
+            broken.push(f);
+        }
+    }
+    // what a file that does not read gave stays as the open scene has it
+    if let Some(k) = keep {
+        for cf in CLASS_FILES.iter().filter(|cf| broken.contains(&cf.file)) {
+            for (_, class) in cf.lists {
+                for o in k.state.of_class(*class) {
+                    let mut o = (**o).clone();
+                    o.owner = None;
+                    o.flags.co &= !co::IN_GROUP;
+                    let names = match &mut o.data {
+                        ObjData::Group(g) => {
+                            let names: Vec<_> = g
+                                .members
+                                .iter()
+                                .filter_map(|m| k.state.get(*m))
+                                .map(|m| (m.name.clone(), None))
+                                .collect();
+                            g.members.clear();
+                            Some(names)
+                        }
+                        _ => None,
+                    };
+                    if !state.name_free(&o.name) {
+                        o.name = SmolStr::new(state.unique_name(&o.name));
+                    }
+                    let id = state.insert(o);
+                    if let Some(n) = names {
+                        groups.push((id, n));
+                    }
+                }
+            }
+        }
+    }
     // what names other objects: groups, the snap list
     for (gid, names) in groups {
         let mut members = Vec::new();
-        for n in names {
+        for (n, at) in names {
             match state.find_any(&n).map(|o| o.id) {
                 Some(id) if id != gid => {
                     let mut o = (**state.get(id).unwrap_or_else(|| unreachable!())).clone();
@@ -1117,10 +1311,16 @@ pub fn read(
                     state.replace(o);
                     members.push(id);
                 }
-                _ => problems.push(Problem::warning(
-                    "S020",
-                    format!("a group names '{n}', which is no object of the scene"),
-                )),
+                _ => {
+                    let p = Problem::warning(
+                        "S020",
+                        format!("a group names '{n}', which is no object of the scene"),
+                    );
+                    problems.push(match at {
+                        Some((file, s)) => at_span(p, &file, s),
+                        None => p,
+                    });
+                }
             }
         }
         if let Some(g) = state.get(gid) {
@@ -1136,22 +1336,28 @@ pub fn read(
         for (k, f) in named.fields() {
             let Some(layer) = layers::by_key(k) else { continue };
             let file = f.as_str().unwrap_or(layer.file);
+            let s = scene_doc.nearest_span(&[Seg::key("layers"), Seg::key(k)]);
             match texts.layers.iter().find(|(n, _)| n.eq_ignore_ascii_case(file)) {
                 Some((_, bytes)) => match layers::read(layer, bytes, &mut state.bulk) {
                     Ok(None) => {}
-                    Ok(Some(note)) | Err(note) => problems.push(
-                        Problem::warning("S030", note)
-                            .in_file(dir.join(file).unwrap_or_else(|_| dir.clone())),
-                    ),
+                    Ok(Some(note)) | Err(note) => {
+                        problems.push(at_span(Problem::warning("S030", format!("{file}: {note}")), main, s));
+                    }
                 },
-                None => problems.push(
-                    Problem::warning("S030", format!("the layer file {file} is not in the scene's folder"))
-                        .in_file(main.clone()),
-                ),
+                None => problems.push(at_span(
+                    Problem::warning("S030", format!("the layer file {file} is not in the scene's folder")),
+                    main,
+                    s,
+                )),
             }
         }
     }
-    Ok(Read { files: SceneFiles { scene: scene_doc, docs, base: state.clone() }, state, problems })
+    Ok(Read {
+        files: SceneFiles { scene: scene_doc, docs, base: state.clone(), broken, migrated },
+        state,
+        problems,
+        unplaced,
+    })
 }
 
 // ---------------------------------------------------------------- writing
@@ -1168,6 +1374,8 @@ pub struct Out {
 pub struct Plan {
     pub files: Vec<Out>,
     pub after: SceneFiles,
+    /// The folder's files that did not read and are left as they are.
+    pub kept: Vec<&'static str>,
 }
 
 /// A file's value as the model read it (`old`) and as it is now (`new`), for `apply_diff`: an
@@ -1270,7 +1478,7 @@ pub fn write(
         Some(f) => {
             let old = scene_value(&f.base);
             let mut d = f.scene.clone();
-            if d.apply_diff(&old, &new_scene, &scene_rules()).map_err(|e| e.message)? {
+            if d.apply_diff(&old, &new_scene, &scene_rules()).map_err(|e| e.message)? || f.migrated {
                 out.push(Out { file: String::new(), bytes: Some(d.text().as_bytes().to_vec()) });
             }
             d
@@ -1288,7 +1496,11 @@ pub fn write(
         by.insert(c, state.by_class[c.index()].iter().copied().collect());
     }
     let mut docs = Vec::new();
+    let broken: Vec<&'static str> = files.map(|f| f.broken.clone()).unwrap_or_default();
     for cf in &CLASS_FILES {
+        if broken.contains(&cf.file) {
+            continue;
+        }
         let ids: Vec<Vec<ObjId>> =
             cf.lists.iter().map(|(_, c)| by.get(c).cloned().unwrap_or_default()).collect();
         let empty = ids.iter().all(Vec::is_empty);
@@ -1331,7 +1543,17 @@ pub fn write(
             out.push(Out { file: l.file.to_owned(), bytes: None });
         }
     }
-    Ok(Plan { files: out, after: SceneFiles { scene: scene_doc, docs, base: state.clone() } })
+    Ok(Plan {
+        files: out,
+        after: SceneFiles {
+            scene: scene_doc,
+            docs,
+            base: state.clone(),
+            broken: broken.clone(),
+            migrated: false,
+        },
+        kept: broken,
+    })
 }
 
 fn opt_ptr_eq<T>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
@@ -1501,6 +1723,172 @@ mod tests {
         s.remove(id);
         let plan = write(&s, Some(&r.files), None).unwrap();
         assert!(plan.files.iter().any(|f| f.file == "lights.lua" && f.bytes.is_none()));
+    }
+
+    /// Breaks a file of the folder; answers its good text.
+    fn break_file(disk: &mut Texts, name: &str) -> String {
+        let (_, t) = disk.files.iter_mut().find(|(f, _)| f == name).unwrap();
+        let good = t.clone();
+        t.push_str("\n}} oops = \n");
+        good
+    }
+
+    fn objects_of(s: &SceneState) -> Vec<(String, Vec3)> {
+        let mut v: Vec<_> =
+            s.of_class(ObjClass::SceneObject).map(|o| (o.name.to_string(), o.xform.position)).collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    }
+
+    #[test]
+    fn a_part_file_that_does_not_read_loses_nothing() {
+        let disk = saved(Texts::default(), &write(&scene(), None, None).unwrap());
+        let open = read_back(&disk);
+        let mut broken = disk.clone();
+        let good = break_file(&mut broken, "objects.lua");
+        let bad = file(&broken, "objects.lua").to_owned();
+
+        // the open scene follows the files: the broken file's objects stay as they were
+        let main = RelPath::new("levels/test.scene").unwrap();
+        let dir = RelPath::new("levels/test").unwrap();
+        let keep = Keep { state: &open.state, files: &[] };
+        let r = read_over(&broken, &main, &dir, None, Some(keep)).unwrap();
+        assert_eq!(objects_of(&r.state), objects_of(&open.state));
+        assert_eq!(r.files.broken, ["objects.lua"]);
+        let p = r.problems.iter().find(|p| p.code == "syntax").expect("the file's problem");
+        assert_eq!(p.file.as_ref().map(RelPath::as_str), Some("levels/test/objects.lua"));
+        assert!(p.line.is_some() && p.column.is_some(), "{p:?}");
+
+        // a first open opens the rest and names the file
+        let first = read_back(&broken);
+        assert!(objects_of(&first.state).is_empty());
+        assert!(first.state.find(ObjClass::Light, "Lamp_01").is_some());
+        assert!(first.problems.iter().any(|p| p.code == "syntax" && p.line.is_some()));
+
+        // another change saved: the broken file is left as it is
+        let mut s = r.state.clone();
+        let mut l = (**s.find(ObjClass::Light, "Lamp_01").unwrap()).clone();
+        l.xform.position.y = 4.0;
+        s.replace(l);
+        let plan = write(&s, Some(&r.files), None).unwrap();
+        assert!(plan.files.iter().all(|f| f.file != "objects.lua"), "{:?}", plan.files);
+        assert_eq!(plan.kept, ["objects.lua"]);
+        let after = saved(broken.clone(), &plan);
+        assert_eq!(file(&after, "objects.lua"), bad);
+        let plan = write(&first.state, Some(&first.files), None).unwrap();
+        assert!(plan.files.iter().all(|f| f.file != "objects.lua"), "a first open's save neither");
+
+        // fixed, the file is read again
+        let mut fixed = after.clone();
+        for (f, t) in &mut fixed.files {
+            if f == "objects.lua" {
+                t.clone_from(&good);
+            }
+        }
+        let back = read_over(&fixed, &main, &dir, None, Some(Keep { state: &s, files: &[] })).unwrap();
+        assert!(back.files.broken.is_empty());
+        assert_eq!(objects_of(&back.state), objects_of(&open.state));
+        assert_eq!(back.state.find(ObjClass::Light, "Lamp_01").unwrap().xform.position.y, 4.0);
+    }
+
+    #[test]
+    fn a_scene_file_that_does_not_read_says_where() {
+        let disk = Texts { scene: "return {\n  scene = 1,\n  level = {\n}\n".into(), ..Texts::default() };
+        let main = RelPath::new("a.scene").unwrap();
+        let Err(r) = read(&disk, &main, &RelPath::new("a").unwrap(), None) else { panic!() };
+        assert_eq!(r.code, "syntax");
+        assert!(r.problem.line.is_some() && r.problem.column.is_some());
+        assert_eq!(r.problem.file.as_ref().map(RelPath::as_str), Some("a.scene"));
+    }
+
+    #[test]
+    fn the_readers_problems_are_positioned() {
+        let disk = Texts {
+            scene: "return {\n  scene = 1,\n  layers = {\n    ai_map = \"ai_map.bin\",\n  },\n}\n".into(),
+            files: vec![
+                (
+                    "objects.lua".into(),
+                    "return {\n  objects = {\n    { name = \"a\", ref = \"x\" },\n    { name = \"a\", ref = \"y\" },\n  },\n}\n"
+                        .into(),
+                ),
+                (
+                    "groups.lua".into(),
+                    "return {\n  groups = {\n    { name = \"g\", members = {\n      \"a\",\n      \"nope\",\n    } },\n  },\n}\n"
+                        .into(),
+                ),
+            ],
+            layers: Vec::new(),
+        };
+        let r = read_back(&disk);
+        let at = |code: &str| {
+            let p = r
+                .problems
+                .iter()
+                .find(|p| p.code == code)
+                .unwrap_or_else(|| panic!("{code}: {:?}", r.problems));
+            (p.file.as_ref().map(|f| f.as_str().to_owned()).unwrap_or_default(), p.line.unwrap_or(0))
+        };
+        assert_eq!(at("S013"), ("levels/test/objects.lua".to_owned(), 4));
+        assert_eq!(at("S020"), ("levels/test/groups.lua".to_owned(), 5));
+        assert_eq!(at("S030"), ("levels/test.scene".to_owned(), 4));
+    }
+
+    fn v0_to_v1(doc: &mut LuaDoc) -> Result<(), gz_luadata::LuaDataError> {
+        // version 0 named the level's folder `level.folder`
+        if let Some(f) = doc.value().get("level").and_then(|l| l.get("folder")).cloned() {
+            doc.set(&[Seg::key("level"), Seg::key("folder")], &Value::Nil)?;
+            doc.set(&[Seg::key("level"), Seg::key("path")], &f)?;
+        }
+        Ok(())
+    }
+
+    const TEST_CHAIN: Chain = Chain { current: 1, first: 0, steps: &[v0_to_v1] };
+
+    #[test]
+    fn an_older_scene_is_lifted_by_the_chain_and_a_newer_one_refused() {
+        let main = RelPath::new("a.scene").unwrap();
+        let dir = RelPath::new("a").unwrap();
+        let old = Texts {
+            scene: "return {\n  scene = 0,\n  level = { folder = \"night\" },\n}\n".into(),
+            ..Texts::default()
+        };
+        let r = read_with(&old, &main, &dir, None, None, &TEST_CHAIN).unwrap();
+        assert_eq!(r.state.meta.level.level_path, "night");
+        assert!(r.problems.iter().any(|p| p.code == "old_version"), "{:?}", r.problems);
+        assert!(r.files.migrated);
+        // the next save writes the current version
+        let plan = write(&r.state, Some(&r.files), None).unwrap();
+        let scene = plan.files.iter().find(|f| f.file.is_empty()).expect("the .scene is written");
+        let text = String::from_utf8(scene.bytes.clone().unwrap()).unwrap();
+        assert!(
+            text.contains("scene = 1") && text.contains("path = \"night\"") && !text.contains("folder"),
+            "{text}"
+        );
+        // the editor's own chain has no step from 0
+        let Err(e) = read(&old, &main, &dir, None) else { panic!() };
+        assert_eq!(e.code, "migration");
+        // a newer one is refused by name
+        let new = Texts { scene: "return { scene = 2 }\n".into(), ..Texts::default() };
+        let Err(e) = read_with(&new, &main, &dir, None, None, &TEST_CHAIN) else { panic!() };
+        assert_eq!(e.code, "newer_version");
+        assert!(e.problem.message.contains("a.scene") && e.problem.line.is_some());
+    }
+
+    #[test]
+    fn an_older_group_is_lifted_by_the_chain_and_a_newer_one_refused() {
+        fn add_ref(doc: &mut LuaDoc) -> Result<(), gz_luadata::LuaDataError> {
+            doc.set(&[Seg::key("objects"), Seg::Index(0), Seg::key("ref")], &Value::from("props\\box"))
+        }
+        const CHAIN0: Chain = Chain { current: 1, first: 0, steps: &[add_ref] };
+        let f = RelPath::new("a.group").unwrap();
+        let old = "return {\n  group = 0,\n  objects = {\n    { name = \"a\" },\n  },\n}\n";
+        let (b, _) = group::read_group_with(old, &f, None, &CHAIN0).unwrap();
+        let ObjData::SceneObject(d) = &b.objects[0].data else { panic!() };
+        assert_eq!(d.reference, "props\\box");
+        assert_eq!(group::read_group(old, &f, None).unwrap_err().code, "migration");
+        let e = group::read_group_with("return { group = 3 }\n", &f, None, &CHAIN0).unwrap_err();
+        assert_eq!(e.code, "newer_version");
+        assert!(e.problem.message.contains("a.group"));
     }
 
     #[test]

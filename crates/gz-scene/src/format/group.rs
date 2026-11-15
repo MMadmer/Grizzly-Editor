@@ -7,13 +7,17 @@ use gz_entities::Settings;
 use gz_luadata::{Limits, LuaDoc, Seg, Table, Value};
 
 use super::values::*;
-use super::{CLASS_FILES, Cx, Refused, default_object, object_of, object_value, spawn};
+use super::{CLASS_FILES, Chain, Cx, Refused, default_object, object_of, object_value, spawn};
 use crate::math::Vec3;
 use crate::model::{ObjData, ObjId, Object, SceneState, co};
 
 pub const EXT: &str = "group";
 pub const HEADER: &str = "group";
 pub const VERSION: u32 = 1;
+/// The steps that lift an older `.group` to [`VERSION`] (the group kind's `KindOps.migrations`).
+pub const MIGRATIONS: &[gz_asset::Migration] = &[];
+/// The group's own chain.
+pub const CHAIN: Chain = Chain { current: VERSION, first: 1, steps: MIGRATIONS };
 
 /// A set of objects as read: the objects in the file's order, the groups among them with their
 /// members (by index into `objects`).
@@ -80,7 +84,17 @@ pub fn read_group(
     file: &RelPath,
     settings: Option<&(dyn Settings + Sync)>,
 ) -> Result<(Bundle, Vec<Problem>), Refused> {
-    let (doc, v) = LuaDoc::parse_value(text, HEADER, Limits::scene()).map_err(|e| Refused {
+    read_group_with(text, file, settings, &CHAIN)
+}
+
+/// [`read_group`] through a migration chain.
+pub fn read_group_with(
+    text: &str,
+    file: &RelPath,
+    settings: Option<&(dyn Settings + Sync)>,
+    chain: &Chain,
+) -> Result<(Bundle, Vec<Problem>), Refused> {
+    let (mut doc, mut v) = LuaDoc::parse_value(text, HEADER, Limits::scene()).map_err(|e| Refused {
         code: "syntax",
         problem: Box::new(Problem::error("syntax", e.message).in_file(file.clone()).at(
             e.line.max(1),
@@ -89,17 +103,24 @@ pub fn read_group(
             e.column.max(1) + 1,
         )),
     })?;
+    let header_at = |doc: &LuaDoc| doc.span(&[Seg::key(HEADER)]).unwrap_or_else(|| doc.head_span());
     match v.get(HEADER).and_then(Value::as_number) {
-        Some(n) if n > f64::from(VERSION) => {
+        Some(n) if n > f64::from(chain.current) => {
+            let s = header_at(&doc);
             return Err(Refused {
                 code: "newer_version",
                 problem: Problem::error(
                     "newer_version",
-                    format!("{file} was made by a newer Grizzly Editor (group = {n}; this one reads up to {VERSION}): update the editor to open it"),
+                    format!("{file} was made by a newer Grizzly Editor (group = {n}; this one reads up to {}): update the editor to open it", chain.current),
                 )
                 .in_file(file.clone())
+                .at(s.line, s.column, s.end_line, s.end_column)
                 .into(),
             });
+        }
+        Some(n) if n >= 0.0 && n.fract() == 0.0 && n < f64::from(chain.current) => {
+            chain.lift(&mut doc, HEADER, file, n as u32)?;
+            v = doc.value();
         }
         Some(_) => {}
         None => {
@@ -110,6 +131,12 @@ pub fn read_group(
                     format!("{file} is no object group: it has no 'group = {VERSION}'"),
                 )
                 .in_file(file.clone())
+                .at(
+                    doc.head_span().line,
+                    doc.head_span().column,
+                    doc.head_span().end_line,
+                    doc.head_span().end_column,
+                )
                 .into(),
             });
         }

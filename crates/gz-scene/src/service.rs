@@ -159,6 +159,7 @@ impl SceneService {
             watch_gen: AtomicU64::new(0),
         });
         start_recovery_timer(editor, &svc);
+        follow_library(editor, &svc);
         svc
     }
 
@@ -235,6 +236,42 @@ impl SceneService {
         let exec = editor.exec.clone();
         editor.exec.io(move || exec.io_pool().install(|| lib.prefetch(&refs))).await;
     }
+}
+
+/// The project's library folder as the watcher names it.
+const LIBRARY_FOLDER: &str = "rawdata/objects";
+
+/// The library reference a changed project file is, when it is a library object
+/// (`rawdata/objects/props/box.object` is `props\box`).
+#[must_use]
+pub fn library_reference(path: &RelPath) -> Option<String> {
+    let p = path.as_str();
+    let head = p.get(..LIBRARY_FOLDER.len() + 1)?;
+    if !head.eq_ignore_ascii_case(&format!("{LIBRARY_FOLDER}/")) {
+        return None;
+    }
+    let rest = &p[head.len()..];
+    let ext = rest.rsplit_once('.').map(|(_, e)| e)?;
+    ext.eq_ignore_ascii_case("object").then(|| crate::library::normalize(rest))
+}
+
+/// The library hears the project's watcher: a library object changed on the disk is read again
+/// the next time it is used.
+fn follow_library(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
+    let Ok((_, project)) = gz_project::Project::of(editor) else { return };
+    let Ok(under) = RelPath::new(LIBRARY_FOLDER) else { return };
+    let mut rx = project.tree.changes().subscribe(Filter::Under(under));
+    let lib = Arc::downgrade(&svc.library);
+    editor.exec.spawn(async move {
+        while let Some(change) = rx.recv().await {
+            let Some(lib) = lib.upgrade() else { break };
+            if change.kind == gz_project::ChangeKind::Rescan {
+                lib.clear();
+            } else if let Some(r) = library_reference(&change.path) {
+                lib.forget(&r);
+            }
+        }
+    });
 }
 
 /// The scene's files for a recovery snapshot: what a save would write, every file whole.
@@ -373,6 +410,20 @@ pub(crate) struct Opened {
     pub state: SceneState,
     pub files: Option<SceneFiles>,
     pub problems: Vec<Problem>,
+    /// Groups placed from their assets as the scene was read: the scene is unsaved.
+    pub placed: usize,
+}
+
+/// Why a scene did not open: the sentence, and the positioned problem when its file says where.
+pub(crate) struct OpenFailed {
+    pub message: String,
+    pub problem: Option<Box<Problem>>,
+}
+
+impl From<String> for OpenFailed {
+    fn from(message: String) -> Self {
+        Self { message, problem: None }
+    }
 }
 
 /// Reads a scene's files into the model (blocking: run on the IO / CPU pools).
@@ -381,6 +432,18 @@ pub(crate) fn open_files(
     file: &Path,
     settings: sdk::SyncSettings<'_>,
 ) -> Result<Opened, String> {
+    open_scene(root, None, file, settings, None).map_err(|e| e.message)
+}
+
+/// [`open_files`] with the editor's library (`editor_root`) for the groups placed at the read, and
+/// what the open scene keeps of a file that does not parse (`keep`).
+pub(crate) fn open_scene(
+    root: &Path,
+    editor_root: Option<&Path>,
+    file: &Path,
+    settings: sdk::SyncSettings<'_>,
+    keep: Option<&SceneState>,
+) -> Result<Opened, OpenFailed> {
     if is_sdk(file) {
         let main =
             std::fs::read(file).map_err(|e| format!("Cannot open scene file: {} ({e})", file.display()))?;
@@ -390,15 +453,21 @@ pub(crate) fn open_files(
         let rel = rel_of(root, file);
         let problems =
             loaded.warnings.into_iter().map(|w| Problem::warning("S040", w).in_file(rel.clone())).collect();
-        return Ok(Opened { state: loaded.state, files: None, problems });
+        return Ok(Opened { state: loaded.state, files: None, problems, placed: 0 });
     }
     let texts = read_texts(file).map_err(|e| format!("Cannot open scene file: {} ({e})", file.display()))?;
     let main = rel_of(root, file);
     let dir = rel_of(root, &format::folder_of(file));
-    let mut read = format::read(&texts, &main, &dir, settings).map_err(|r| r.to_string())?;
+    let keep = keep.map(|state| format::Keep { state, files: &[] });
+    let mut read = format::read_over(&texts, &main, &dir, settings, keep)
+        .map_err(|r| OpenFailed { message: r.to_string(), problem: Some(r.problem) })?;
     read.state.meta.file = Some(file.to_path_buf());
     read.files.base.meta.file = Some(file.to_path_buf());
-    Ok(Opened { state: read.state, files: Some(read.files), problems: read.problems })
+    // the base stays the files as written: what was placed is unsaved and the next save writes it
+    let (notes, placed) =
+        crate::edit::place_unplaced(&mut read.state, &read.unplaced, root, editor_root, settings);
+    read.problems.extend(notes);
+    Ok(Opened { state: read.state, files: Some(read.files), problems: read.problems, placed })
 }
 
 /// The load as a job: the files on the IO pool, the parse on the CPU pool, the library objects
@@ -427,16 +496,16 @@ pub async fn load_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: Pat
         crate::cmd::prop_context(&ed).await;
         ctx.check()?;
         ctx.stage("Reading the scene");
-        let (root, pf) = (s.root.clone(), f.clone());
+        let (root, lib, pf) = (s.root.clone(), s.editor_root.clone(), f.clone());
         let opened = ctx
             .exec
             .io(move || {
                 let st: sdk::SyncSettings<'_> =
                     settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync));
-                open_files(&root, &pf, st)
+                open_scene(&root, Some(&lib), &pf, st, None)
             })
             .await
-            .map_err(JobError::new)?;
+            .map_err(|e| JobError::new(e.message))?;
         ctx.check()?;
         ctx.stage("Loading the library objects");
         s.prefetch_library(&ed, &opened.state).await;
@@ -448,6 +517,9 @@ pub async fn load_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: Pat
             .send(SceneCmd::Replace(Box::new(opened.state), ReplaceKind::Loaded), Origin::Mcp)
             .await
             .map_err(|e| JobError::new(e.message))?;
+        if opened.placed > 0 {
+            s.store.send(SceneCmd::Touch, Origin::Mcp).await.map_err(|e| JobError::new(e.message))?;
+        }
         *s.files.lock() = opened.files.map(Arc::new);
         *s.problems.lock() = opened.problems;
         s.set_opened();
@@ -638,6 +710,11 @@ pub async fn save_scene(
             )
         })
         .await?;
+    for f in &plan.kept {
+        editor.log.warn(format!(
+            "the scene's {f} does not read: the save leaves it as it is, and what the scene changed of its objects is not written"
+        ));
+    }
     let watch = gz_project::Project::of(editor).ok().map(|(_, p)| p.tree.changes().clone());
     let f = file.clone();
     let out = plan.files.clone();
@@ -717,22 +794,37 @@ pub(crate) async fn outside_change(
     file: &Path,
 ) -> Result<(), String> {
     let settings = crate::game::settings(ed).await;
-    let (root, f) = (svc.root.clone(), file.to_path_buf());
+    let (root, lib, f) = (svc.root.clone(), svc.editor_root.clone(), file.to_path_buf());
     let st = settings.clone();
+    let snap = svc.store.snapshot();
+    let last = snap.clone();
     let opened = ed
         .exec
-        .io(move || open_files(&root, &f, st.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync))))
+        .io(move || {
+            open_scene(
+                &root,
+                Some(&lib),
+                &f,
+                st.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync)),
+                Some(&last),
+            )
+        })
         .await;
     let opened = match opened {
         Ok(o) => o,
         Err(e) => {
-            let p = Problem::error("syntax", e.clone()).in_file(rel_of(&svc.root, file));
-            svc.problems.lock().push(p);
-            return Err(e);
+            // the scene stays as it is; the problem replaces the one its file had before
+            let p = e.problem.map_or_else(
+                || Problem::error("syntax", e.message.clone()).in_file(rel_of(&svc.root, file)),
+                |p| *p,
+            );
+            let mut problems = svc.problems.lock();
+            problems.retain(|q| !(q.code == p.code && q.file == p.file));
+            problems.push(p);
+            return Err(e.message);
         }
     };
     let Some(theirs) = opened.files else { return Ok(()) };
-    let snap = svc.store.snapshot();
     if !svc.store.is_dirty() {
         svc.prefetch_library(ed, &opened.state).await;
         svc.store
@@ -740,7 +832,7 @@ pub(crate) async fn outside_change(
                 SceneCmd::Reload {
                     state: Box::new(opened.state),
                     label: "Reload from Disk".into(),
-                    clean: true,
+                    clean: opened.placed == 0,
                 },
                 Origin::Mcp,
             )
@@ -837,6 +929,10 @@ fn rebase(
         }
     }
     for cf in &format::CLASS_FILES {
+        // a file that does not read keeps what this side has of it
+        if theirs.broken.contains(&cf.file) {
+            continue;
+        }
         let theirs_doc = theirs.docs.iter().find(|d| d.file == cf.file);
         let mine_doc = mine.docs.iter().find(|d| d.file == cf.file);
         let text = match (theirs_doc, mine_doc, changed.contains(&cf.file)) {
@@ -862,7 +958,8 @@ fn rebase(
     }
     let main = RelPath::new("scene.scene").unwrap_or_else(|_| RelPath::root());
     let dir = RelPath::root();
-    let merged = format::read(&texts, &main, &dir, settings).map_err(|r| r.to_string())?;
+    let keep = format::Keep { state: now, files: &theirs.broken };
+    let merged = format::read_over(&texts, &main, &dir, settings, Some(keep)).map_err(|r| r.to_string())?;
     let mut state = merged.state;
     state.meta = now.meta.clone();
     let mut files = theirs.clone();
@@ -881,5 +978,114 @@ fn conflict_problem(c: &gz_luadata::Conflict, file: &str) -> Problem {
     match c.span {
         Some(s) => p.at(s.line, s.column, s.end_line, s.end_column),
         None => p,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::class::ObjClass;
+    use crate::math::Vec3;
+    use crate::model::Object;
+    use crate::objects::{LightData, SceneObjectData};
+
+    fn disk() -> Texts {
+        let mut s = SceneState { valid: true, ..SceneState::default() };
+        for (name, x) in [("Box_01", 1.0), ("Box_02", 2.0)] {
+            let mut o = Object::new(
+                ObjClass::SceneObject,
+                name,
+                ObjData::SceneObject(SceneObjectData::library(r"props\box")),
+            );
+            o.xform.position = Vec3::new(x, 0.0, 0.0);
+            s.insert(o);
+        }
+        s.insert(Object::new(ObjClass::Light, "Lamp_01", ObjData::Light(LightData::default())));
+        let plan = format::write(&s, None, None).unwrap();
+        let mut t = Texts::default();
+        for o in plan.files {
+            let Some(b) = o.bytes else { continue };
+            let text = String::from_utf8(b).unwrap();
+            if o.file.is_empty() {
+                t.scene = text;
+            } else if o.file.ends_with(".lua") {
+                t.files.push((o.file, text));
+            }
+        }
+        t
+    }
+
+    fn read(t: &Texts, keep: Option<format::Keep<'_>>) -> format::Read {
+        let main = RelPath::new("test.scene").unwrap();
+        let dir = RelPath::new("test").unwrap();
+        format::read_over(t, &main, &dir, None, keep).unwrap()
+    }
+
+    fn boxes(s: &SceneState) -> usize {
+        s.of_class(ObjClass::SceneObject).count()
+    }
+
+    #[test]
+    fn unsaved_changes_over_a_part_file_that_does_not_read_lose_nothing() {
+        let good = disk();
+        let mine = read(&good, None);
+        // an unsaved change of the open scene
+        let mut now = mine.state.clone();
+        let mut l = (**now.find(ObjClass::Light, "Lamp_01").unwrap()).clone();
+        l.xform.position.y = 5.0;
+        now.replace(l);
+        // another program breaks objects.lua
+        let mut broken = good.clone();
+        for (f, t) in &mut broken.files {
+            if f == "objects.lua" {
+                t.push_str("\n}} oops\n");
+            }
+        }
+        let theirs = read(&broken, Some(format::Keep { state: &now, files: &[] }));
+        let ((merged, files), _) = rebase(&now, &mine.files, &theirs.files, None).unwrap();
+        assert_eq!(boxes(&merged), 2, "the broken file's objects stay");
+        assert_eq!(merged.find(ObjClass::Light, "Lamp_01").unwrap().xform.position.y, 5.0);
+        assert_eq!(files.broken, ["objects.lua"]);
+        let plan = format::write(&merged, Some(&files), None).unwrap();
+        assert!(plan.files.iter().all(|f| f.file != "objects.lua"), "a save leaves the broken file");
+        // fixed with one box moved: the file is read again
+        let mut fixed = good.clone();
+        for (f, t) in &mut fixed.files {
+            if f == "objects.lua" {
+                *t = t.replacen("pos = { 2, 0, 0 }", "pos = { 7, 0, 0 }", 1);
+                assert!(t.contains("7, 0, 0"), "{t}");
+            }
+        }
+        let theirs = read(&fixed, Some(format::Keep { state: &merged, files: &[] }));
+        let ((back, files), _) = rebase(&merged, &files, &theirs.files, None).unwrap();
+        assert!(files.broken.is_empty());
+        assert_eq!(back.find(ObjClass::SceneObject, "Box_02").unwrap().xform.position.x, 7.0);
+        assert_eq!(back.find(ObjClass::Light, "Lamp_01").unwrap().xform.position.y, 5.0);
+    }
+
+    #[test]
+    fn a_changed_library_file_names_its_reference() {
+        let r = |p: &str| library_reference(&RelPath::new(p).unwrap());
+        assert_eq!(r("rawdata/objects/props/Box_01.object").as_deref(), Some("props\\box_01"));
+        assert_eq!(r("RawData/Objects/a.OBJECT").as_deref(), Some("a"));
+        assert_eq!(r("rawdata/objects/props/box.thm"), None);
+        assert_eq!(r("rawdata/objectsx/a.object"), None);
+        assert_eq!(r("levels/a.object"), None);
+    }
+
+    #[test]
+    fn a_forgotten_object_is_read_again() {
+        let dir = std::env::temp_dir().join(format!("gz-library-forget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let lib = Library::new(vec![dir.clone()]);
+        assert!(lib.load("a").is_err(), "not there yet");
+        std::fs::write(dir.join("a.object"), b"not an object").unwrap();
+        assert!(lib.load("a").unwrap_err().contains("Can't find"), "the failure is remembered");
+        let rev = lib.rev();
+        lib.forget("A");
+        assert_ne!(lib.rev(), rev);
+        assert!(lib.load("a").unwrap_err().contains("Can't load"), "the file is read again");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

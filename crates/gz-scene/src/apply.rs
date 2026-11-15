@@ -436,7 +436,7 @@ impl SceneState {
     }
 
     /// A group as read, its objects carried from where the file had it to `at`.
-    fn insert_group_at(
+    pub(crate) fn insert_group_at(
         &mut self,
         loaded: crate::objects::Loaded,
         at: crate::math::Transform,
@@ -1195,6 +1195,35 @@ mod tests {
         assert_eq!(t.rt.block_on(t.store.undo()).as_deref(), Some("Delete"));
         let s = t.state();
         assert!(s.get(l).is_some() && s.get(g).is_some());
+    }
+
+    /// What `scene.set set={"authored": true}` sends: the objects with the mark, one undo step.
+    #[test]
+    fn the_module_mark_set_on_objects_is_one_undo_step() {
+        let mut s = SceneState::default();
+        let a = s.insert(Object::new(ObjClass::Light, "a", ObjData::Light(LightData::default())));
+        let b = s.insert(Object::new(ObjClass::Glow, "b", ObjData::Glow(GlowData::default())));
+        let t = T::new(s);
+        let snap = t.state();
+        let pcx = crate::props::PropCx { lib: None, entity: &gz_entities::PropContext::default() };
+        let objects: Vec<Object> = [a, b]
+            .iter()
+            .map(|id| {
+                let o = snap.get(*id).unwrap();
+                let p = crate::props::Parsed::Bool(true);
+                match crate::props::set_object(&snap, o, "authored", &p, &pcx).unwrap() {
+                    crate::props::Effect::Object(n) => n,
+                    _ => panic!(),
+                }
+            })
+            .collect();
+        t.send(SceneCmd::ReplaceObjects { objects, serial: snap.serial, label: "Set Properties".into() })
+            .unwrap();
+        let s = t.state();
+        assert!(s.get(a).unwrap().marks.authored && s.get(b).unwrap().marks.authored);
+        assert_eq!(t.rt.block_on(t.store.undo()).as_deref(), Some("Set Properties"));
+        let s = t.state();
+        assert!(!s.get(a).unwrap().marks.authored && !s.get(b).unwrap().marks.authored);
     }
 
     #[test]
