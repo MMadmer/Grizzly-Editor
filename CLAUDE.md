@@ -83,6 +83,13 @@ A change of plan is a change of its document first.
   long job has the machine; what a command answers never waits for a frame to compute it (a tab's `dirty()` answers
   for a document not drawn yet). No pool is made smaller or slower for smoothness; the process opts out of Windows'
   power throttling (`gz_win::keep_full_speed`). `perf.frames` tells UI frames from scene passes, with their causes.
+- **A check of a thousand files holds what a check of ten holds.** Whatever many callers ask at once is computed by
+  ONE of them: the computation is the closure given to `Query::fresh` (a value worked out beside it and handed in
+  is worked out once per caller), the game is mounted by one asker while the rest wait as tasks
+  (`GameLink::snapshot`), and a file of the game a check needs is read once per name. `asset.check` runs as many
+  files at a time as the machine has processors: a job that waits inside a pool runs other queued jobs on its own
+  stack, so every file queued at once is every file in memory at once - a check of 759 items held the icon sheet
+  759 times and took 50 GB.
 - **`unsafe` only in `gz-win`** (the Win32 that `std` lacks), every block with a `// SAFETY:` line, and no
   `unsafe impl Send` / `Sync` anywhere. Every other crate is `#![forbid(unsafe_code)]` through the workspace lints.
 - **Three entry points prove a change**: `bash tools/rust/check.sh` (clippy, fmt, `unsafe` only in `gz-win`, one
@@ -742,14 +749,26 @@ A change of plan is a change of its document first.
 ## Classic mods
 
 - **A classic gamedata mod becomes a module by changing the mod.** Neither the game nor the editor bends to one mod, however popular it is.
-- `tools/classic_mod/classic_to_module.py --project <project> --game <game>` runs once on a project whose `gamedata` holds the mod's. It takes out what the game writes
-  (`axr_options.ltx`, `atmosfear_options.ltx`), sources, backups and files identical to the game's; it turns the `.ltx` files of the `system.ltx` tree into one
-  `configs\xms\<id>.ltx` of what the mod really changes, plus a `patch\<id>_removed.ltxp` for the `anm_*` and `snd_*` keys of sections the mod rewrote without them; and the string tables into one file per
-  language. An old mod's whole-file copies would otherwise take the game's newer sections with them: Weapons Evolution 2026 lost 3089 and the game did not start.
+- **A classic mod carries the game it was made over**, and that game is not today's. Its work is the mod MINUS its base, laid over today's game:
+  `tools/classic_mod/classic_to_module.py --mod <gamedata> --game <game root> --out <new project> --id <module id>` writes a new project and
+  never changes the mod or the game. The base of a file is the archived version of that path the mod's file is closest to; the `system.ltx`
+  tree is compared on resolved values, three ways (base, mod, today's game).
+- What it writes: an item asset per inventory item (`items\<family>\<group>\<section>.itemasset`: a change that says only its difference, or
+  a new item), `patch\<id>_<topic>.ltxp` for what no item owns and `#file` patches for the configs scripts open by name, the strings the mod
+  adds or changes per language, its own icons as pictures (the build packs the atlas), its particle effects as loose `.pe` / `.pg` with their
+  compiled actions, and the media that is the mod's own bytes. Its own composition check holds the result to the state the mod wanted,
+  section by section. XML and scripts are not converted: their diffs go to `port\` and are a person's or an agent's next step.
+- An old mod's whole-file copies would otherwise take the game's newer sections and values with them: Weapons Evolution 2026, made over an
+  old Dead Air, would have lost some three thousand sections of today's game and rolled back twenty-five hundred values, and the game did not
+  start. The same holds for binary files a mod copied from the old game: its 41 motion files lacked the motions the game grew since, and
+  every HUD key that names one stops the game - the port merges the game's motions back in.
 - `mod.ltx` of such a module says `mode = *` and `target = any`: it mounts in every game, like the classic install did,
   and keeps `target = any` when the manifest is saved.
-- Nothing leaves a module for merely looking unused: a `.ogf` names its `_lod` model from inside, and a list made by reading files had five such in Weapons Evolution. What goes is what provably does nothing: copies identical to the game's and files the game cannot read.
-- A mod that changes a section's `class` needs a new game while it is on: the save holds that object in the old class's format. Without the module such a save loads again.
+- Nothing leaves a module for merely looking unused: a `.ogf` names its `_lod` model from inside, and a list made by reading files had five
+  such in Weapons Evolution. What goes is what provably does nothing: copies identical to the game's, sources (`.psd`, `.wav`, a `.tga`
+  under `textures`), and files the game cannot read or open (a name with characters its code page lacks).
+- A mod that changes a section's `class` makes every object of that section its own in a save (the game's `SAVE_COMPATIBILITY.md`): such
+  objects live in the extension save and come back with the module.
 
 ## What a build ships
 
