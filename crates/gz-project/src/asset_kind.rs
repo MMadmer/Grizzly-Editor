@@ -78,8 +78,68 @@ impl AssetKind {
         [AssetKind::Quest, AssetKind::Behaviour, AssetKind::Character, AssetKind::Pda];
 }
 
+/// The media kinds: a text asset that describes a source file of a common format beside it (a
+/// model, a texture, a sound). The module build publishes the description and the data baked
+/// from the source under the game's place for the asset's name; the asset where it lies and its
+/// source never ship. The extension is the kind; nothing in the file needs to be looked into.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaKind {
+    Model,
+    Texture,
+    Sound,
+}
+
+impl MediaKind {
+    pub const ALL: [MediaKind; 3] = [MediaKind::Model, MediaKind::Texture, MediaKind::Sound];
+
+    /// What the author calls it.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            MediaKind::Model => "model",
+            MediaKind::Texture => "texture",
+            MediaKind::Sound => "sound",
+        }
+    }
+
+    /// The extension of its file, with the dot.
+    #[must_use]
+    pub fn extension(self) -> &'static str {
+        match self {
+            MediaKind::Model => ".meshasset",
+            MediaKind::Texture => ".texasset",
+            MediaKind::Sound => ".sndasset",
+        }
+    }
+
+    /// The key that names the kind and its format version in the file (`mesh = 1`).
+    #[must_use]
+    pub fn header(self) -> &'static str {
+        match self {
+            MediaKind::Model => "mesh",
+            MediaKind::Texture => "tex",
+            MediaKind::Sound => "snd",
+        }
+    }
+
+    /// The format version this editor writes and the newest it reads.
+    #[must_use]
+    pub fn version(self) -> u32 {
+        1
+    }
+
+    /// The media kind of a file, by its extension (any case).
+    #[must_use]
+    pub fn of_file(name: &str) -> Option<MediaKind> {
+        let ext = name.rfind('.').and_then(|d| name.get(d..))?;
+        Self::ALL.into_iter().find(|k| k.extension().eq_ignore_ascii_case(ext))
+    }
+}
+
 /// The extensions of the editor's own kinds: the one list every caller asks.
-pub const OWN_EXTENSIONS: [&str; 4] = [".nqasset", ".behasset", ".npcasset", ".pdaasset"];
+pub const OWN_EXTENSIONS: [&str; 7] =
+    [".nqasset", ".behasset", ".npcasset", ".pdaasset", ".meshasset", ".texasset", ".sndasset"];
 
 /// The own extension `name` ends in, as written (a slice of `name`, the dot included). A dot in
 /// a folder of the path is no extension, and an extension alone is no name.
@@ -177,6 +237,20 @@ mod tests {
         assert_eq!(own_extension("dir/.nqasset"), None);
         assert_eq!(own_extension("model.ogf"), None);
         assert_eq!(own_extension("noext"), None);
+        assert_eq!(own_extension("walls/Brick.TexAsset"), Some(".TexAsset"));
+        assert_eq!(own_extension("wall.meshasset"), Some(".meshasset"));
+        assert_eq!(own_extension("hum.sndasset"), Some(".sndasset"));
+    }
+
+    #[test]
+    fn media_kinds_by_extension() {
+        assert_eq!(MediaKind::of_file("a/b/wall.MESHASSET"), Some(MediaKind::Model));
+        assert_eq!(MediaKind::of_file("brick.texasset"), Some(MediaKind::Texture));
+        assert_eq!(MediaKind::of_file("hum.sndasset"), Some(MediaKind::Sound));
+        assert_eq!(MediaKind::of_file("wall.glb"), None);
+        assert_eq!(MediaKind::Texture.header(), "tex");
+        // a media asset is no kind the content browser tells apart by looking into it
+        assert_eq!(kind_of("wall.meshasset", None), None);
     }
 
     #[test]

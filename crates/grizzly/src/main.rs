@@ -133,6 +133,7 @@ fn main() -> ExitCode {
     gz_pda::install(&editor);
     gz_screens::install(&editor);
     gz_characters::install(&editor);
+    gz_media::install(&editor);
     gz_world::install(&editor);
     gz_catalog::install(&editor);
     // the editor's own updates: a finished one tidied up, a download continued
@@ -253,6 +254,7 @@ fn build_registry() -> Registry {
     gz_mod::register(&mut registry);
     gz_build::register(&mut registry);
     gz_asset::register(&mut registry);
+    gz_media::register(&mut registry);
     gz_nq::register(&mut registry);
     gz_release::register(&mut registry);
     gz_publish::register(&mut registry);

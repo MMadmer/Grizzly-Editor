@@ -348,11 +348,27 @@ async fn read(editor: &Arc<Editor>, key: &ListKey) -> Vec<String> {
                     .collect(),
             )
         }
-        ListKey::Textures | ListKey::Sounds | ListKey::Visuals => {
+        ListKey::Textures => {
+            // the project's texture assets first, by the names they publish, then the game's
+            let mut out = match gz_media::Media::of(editor).await {
+                Ok(m) => m.index().await.names(gz_project::asset_kind::MediaKind::Texture),
+                Err(_) => Vec::new(),
+            };
+            let game = match gz_game::GameLink::of(editor) {
+                Ok(link) => match link.files().await {
+                    Ok(files) => editor.exec.cpu(move || game_names(&files, "textures", "dds")).await,
+                    Err(_) => Vec::new(),
+                },
+                Err(_) => Vec::new(),
+            };
+            let own: rustc_hash::FxHashSet<String> = out.iter().map(|n| n.to_lowercase()).collect();
+            out.extend(game.into_iter().filter(|n| !own.contains(&n.to_lowercase())));
+            out
+        }
+        ListKey::Sounds | ListKey::Visuals => {
             let Ok(link) = gz_game::GameLink::of(editor) else { return Vec::new() };
             let Ok(files) = link.files().await else { return Vec::new() };
             let (dir, ext) = match key {
-                ListKey::Textures => ("textures", "dds"),
                 ListKey::Sounds => ("sounds", "ogg"),
                 _ => ("meshes", "ogf"),
             };

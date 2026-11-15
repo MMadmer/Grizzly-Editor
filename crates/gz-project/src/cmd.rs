@@ -1169,6 +1169,9 @@ enum CreateKind {
     Behaviour,
     Character,
     Pda,
+    Model,
+    Texture,
+    Sound,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1188,6 +1191,9 @@ async fn file_create(ed: Arc<Editor>, p: FileCreateParams, _origin: Origin) -> R
         CreateKind::Behaviour => TemplateKind::Behaviour,
         CreateKind::Character => TemplateKind::Character,
         CreateKind::Pda => TemplateKind::Pda,
+        CreateKind::Model => TemplateKind::Model,
+        CreateKind::Texture => TemplateKind::Texture,
+        CreateKind::Sound => TemplateKind::Sound,
     };
     let folder = match p.path {
         Some(f) => RelPath::new(&f).map_err(|e| refuse(e.to_string()))?,
@@ -1403,7 +1409,8 @@ async fn file_list(ed: Arc<Editor>, p: ListParams, _origin: Origin) -> Reply {
                     continue;
                 }
                 let kind_ok = match template {
-                    Some(t) => asset.is_some_and(|a| t.leaf(1).ends_with(a.extension())),
+                    // the kind's extension: a media asset is no kind the tree tells apart
+                    Some(t) => t.leaf(1).rsplit_once('.').is_some_and(|(_, e)| path.has_extension(e)),
                     None => ext.is_empty() || path.has_extension(&ext),
                 };
                 if kind_ok && matches(&wire) {

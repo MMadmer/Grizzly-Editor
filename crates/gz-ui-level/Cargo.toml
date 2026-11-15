@@ -16,6 +16,7 @@ gz-store.workspace = true
 gz-query.workspace = true
 gz-editor.workspace = true
 gz-scene.workspace = true
+gz-media.workspace = true
 gz-levelbuild.workspace = true
 gz-game.workspace = true
 gz-vfs.workspace = true

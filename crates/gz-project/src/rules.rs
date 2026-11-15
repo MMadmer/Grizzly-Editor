@@ -71,6 +71,14 @@ pub fn is_level_build_file(rel: &str) -> bool {
         if g.eq_ignore_ascii_case("gamedata") && l.eq_ignore_ascii_case("levels") && is_level_build_name(name))
 }
 
+/// A media asset (`*.meshasset`, `*.texasset`, `*.sndasset`), by its file name: the build
+/// publishes it under the game's place for its name - its description and the data baked from its
+/// source - and never ships the file where it lies.
+#[must_use]
+pub fn is_media_asset_name(name: &str) -> bool {
+    crate::asset_kind::MediaKind::of_file(name).is_some()
+}
+
 /// Tooling: version control, IDE and OS litter. Never shown, never shipped and never walked,
 /// at ANY depth.
 #[must_use]
@@ -189,6 +197,8 @@ mod tests {
         assert!(is_source_only_entry("CLAUDE.md"));
         assert!(is_source_only_entry("content"));
         assert!(!is_source_only_entry("gamedata"));
+        assert!(is_media_asset_name("Wall.MeshAsset") && is_media_asset_name("hum.sndasset"));
+        assert!(!is_media_asset_name("wall.glb") && !is_media_asset_name("meshasset"));
     }
 
     #[test]

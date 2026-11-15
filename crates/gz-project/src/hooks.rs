@@ -159,13 +159,16 @@ pub enum TemplateKind {
     Behaviour,
     Character,
     Pda,
+    Model,
+    Texture,
+    Sound,
 }
 
 impl TemplateKind {
-    /// `quest`, `behaviour`, `character` or `pda`, any case.
+    /// `quest`, `behaviour`, `character`, `pda`, `model`, `texture` or `sound`, any case.
     #[must_use]
     pub fn parse(kind: &str) -> Option<Self> {
-        [Self::Quest, Self::Behaviour, Self::Character, Self::Pda]
+        [Self::Quest, Self::Behaviour, Self::Character, Self::Pda, Self::Model, Self::Texture, Self::Sound]
             .into_iter()
             .find(|k| k.key().eq_ignore_ascii_case(kind))
     }
@@ -177,6 +180,9 @@ impl TemplateKind {
             Self::Behaviour => "behaviour",
             Self::Character => "character",
             Self::Pda => "pda",
+            Self::Model => "model",
+            Self::Texture => "texture",
+            Self::Sound => "sound",
         }
     }
 
@@ -188,6 +194,9 @@ impl TemplateKind {
             Self::Behaviour => ("NewBehaviour", ".behasset"),
             Self::Character => ("NewCharacter", ".npcasset"),
             Self::Pda => ("NewPda", ".pdaasset"),
+            Self::Model => ("NewModel", ".meshasset"),
+            Self::Texture => ("NewTexture", ".texasset"),
+            Self::Sound => ("NewSound", ".sndasset"),
         };
         if n <= 1 { format!("{base}{ext}") } else { format!("{base}{n}{ext}") }
     }
@@ -200,6 +209,9 @@ impl TemplateKind {
             Self::Behaviour => "behaviour graph",
             Self::Character => "character",
             Self::Pda => "PDA interface",
+            Self::Model => "model",
+            Self::Texture => "texture",
+            Self::Sound => "sound",
         }
     }
 
@@ -211,6 +223,9 @@ impl TemplateKind {
             Self::Behaviour => "Too many unnamed behaviour graphs here.",
             Self::Character => "Too many unnamed characters here.",
             Self::Pda => "no free NewPda name in the folder",
+            Self::Model => "Too many unnamed models here.",
+            Self::Texture => "Too many unnamed textures here.",
+            Self::Sound => "Too many unnamed sounds here.",
         }
     }
 }

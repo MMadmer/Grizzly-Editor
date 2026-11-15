@@ -13,6 +13,10 @@ use smol_str::SmolStr;
 /// may be made before the scene is.
 pub type LibrarySource = Arc<dyn Fn() -> Option<Arc<Library>> + Send + Sync>;
 
+/// The project's texture assets: the picture file of the asset that publishes a name, and its
+/// extension. Asked before every other place a texture is looked for.
+pub type TextureAssets = Arc<dyn Fn(&str) -> Option<(PathBuf, String)> + Send + Sync>;
+
 /// The loader of one open project (or of the editor alone, without one).
 pub struct SceneLoader {
     /// The project's root, then the editor's.
@@ -20,6 +24,7 @@ pub struct SceneLoader {
     game: Option<Arc<GameFiles>>,
     /// Where the objects that are no file come from: model assets, terrains.
     library: Option<LibrarySource>,
+    textures: Option<TextureAssets>,
 }
 
 impl SceneLoader {
@@ -30,13 +35,20 @@ impl SceneLoader {
         if !roots.iter().any(|r| r == &editor) {
             roots.push(editor);
         }
-        Self { roots, game, library: None }
+        Self { roots, game, library: None, textures: None }
     }
 
     /// The same loader, also drawing what the scene's library makes in memory.
     #[must_use]
     pub fn with_library(mut self, library: LibrarySource) -> Self {
         self.library = Some(library);
+        self
+    }
+
+    /// The same loader, also drawing the project's texture assets.
+    #[must_use]
+    pub fn with_textures(mut self, textures: TextureAssets) -> Self {
+        self.textures = Some(textures);
         self
     }
 
@@ -87,6 +99,12 @@ impl AssetLoader for SceneLoader {
     fn load(&self, what: AssetRef<'_>) -> Result<AssetBytes, String> {
         match what {
             AssetRef::Texture(name) => {
+                // a texture asset of the project wins: its picture is what the game gets baked
+                if let Some((file, ext)) = self.textures.as_ref().and_then(|t| t(name))
+                    && let Ok(bytes) = std::fs::read(&file)
+                {
+                    return Ok(AssetBytes { bytes, ext: Some(SmolStr::new(ext)) });
+                }
                 let mut c = Vec::with_capacity(self.roots.len() * 2);
                 for r in &self.roots {
                     c.push((under(r, &["gamedata", "textures"], name, "dds"), "dds"));

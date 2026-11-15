@@ -116,14 +116,28 @@ once. MCP is for what files cannot do - looking at the editor, driving its UI, t
 | PDA interface | `*.pdaasset` | `pda` | the game, the editor | `docs/pda/PDA_FORMAT.md` |
 | Scene | `*.scene` + its folder | `scene` | the editor | `docs/assets/SCENE.md` |
 | Object group | `*.group` | `group` | the editor | `docs/assets/SCENE.md` |
+| Model | `*.meshasset` | `mesh` | the game (a dynamic model), the editor | `docs/assets/MODEL.md` |
+| Texture | `*.texasset` | `tex` | the game, the editor | `docs/assets/TEXTURE.md` |
+| Sound | `*.sndasset` | `snd` | the game, the editor | `docs/assets/SOUND.md` |
 
 `gz-asset` is the one list of them (`AssetKind`: extension, header key, current version, migrations, validator,
 reference, template, icon). The content browser, `asset.*`, the watcher and the build read that list; a new kind
 is one entry there.
 
-Binary by nature, and staying so: geometry (`.object`, `.ogf`), textures (`.dds`, `.tga`, `.thm`), sounds, the
-painted layers of a scene (AI map, detail objects, wallmarks - sidecar files the scene names), and everything
-the level build produces for the game.
+**Media: the description is text, the data stays binary.** A model, a texture and a sound are text assets (the
+three media kinds above) beside a **source** of a common format - glTF, OBJ or an X-Ray SDK `.object`; PNG, JPG,
+TGA, BMP or DDS; WAV or OGG - or, for a model, with its geometry written in it (`parts`). The asset is what
+everything refers to (a scene object's `ref` is the asset's project path); the source is its companion. The
+description is the module's: the build publishes a copy of the asset's text where the game looks for its `name`
+(`gamedata	extures\<name>.texasset`, `sounds\<name>.sndasset`, `meshes\<name>.meshasset`) and the game reads
+it over the data - a texture's description in place of a `.thm`, a sound's parameters over its `.ogg`, a model's
+surfaces, bones and motions over its `.ogf`. The data is binary by nature and is **baked** into the game's own
+containers beside it (`.dds` and the bump pair, `.ogg`, `.ogf` and `.omf`; a static model is compiled into the
+level instead), cached in the project's `temp\media\`; the asset where it lies and its source never ship as they
+are. Binary by nature, and staying so: the X-Ray SDK library as it is (`rawdata\objects\*.object`, `.thm`,
+`.wav`, read as before; an asset may wrap an `.object` to restate its surfaces), the painted layers of a scene
+(AI map, detail objects, wallmarks - sidecar files the scene names), and everything the level build produces for
+the game.
 
 ## 7. The scene
 

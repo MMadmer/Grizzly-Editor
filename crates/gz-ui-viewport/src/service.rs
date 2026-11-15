@@ -1014,7 +1014,11 @@ impl Viewport {
             let scene = ed.clone();
             let library: crate::loader::LibrarySource =
                 Arc::new(move || SceneService::of_opt(&scene).map(|svc| svc.library.clone()));
-            let loader = Arc::new(SceneLoader::new(project, editor_root, game).with_library(library));
+            let media = Arc::downgrade(&ed);
+            let textures: crate::loader::TextureAssets =
+                Arc::new(move |name: &str| gz_media::Media::get(media.upgrade()?.as_ref())?.texture_file(name));
+            let loader =
+                Arc::new(SceneLoader::new(project, editor_root, game).with_library(library).with_textures(textures));
             crate::spawn_anim::SpawnAnims::of(&ed).set_loader(loader.clone());
             renderer.assets().set_loader(Some(loader));
         });
