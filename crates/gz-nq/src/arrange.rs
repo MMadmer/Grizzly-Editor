@@ -67,6 +67,10 @@ struct Net {
     kids: Vec<Vec<usize>>,
     /// The band of each child among its owner's: after the siblings that lead into it.
     band: Vec<usize>,
+    /// The loose nodes: no wire comes in, it is no trigger, and every node it leads to is reached
+    /// from elsewhere too - a node whose input is not wired yet, no start of anything. It shapes
+    /// nothing and goes in front of the first node it leads to (the targets, in pin order).
+    loose: Vec<(usize, Vec<usize>)>,
 }
 
 fn kid_slot(n: usize, v: usize) -> usize {
@@ -196,9 +200,17 @@ fn build(cx: &BoxCx<'_>, g: &Graph, set: &[usize]) -> Net {
         queue.push_back(start);
     }
     let comp = components(n, &adj);
+    let loose: Vec<(usize, Vec<usize>)> = (0..n)
+        .filter(|&u| !trig[u] && indeg[u] == 0 && !adj[u].is_empty())
+        .filter(|&u| adj[u].iter().all(|&v| (0..n).any(|w| w != u && adj[w].contains(&v))))
+        .map(|u| (u, adj[u].clone()))
+        .collect();
     let mut out: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
     for u in 0..n {
+        if loose.iter().any(|(l, _)| *l == u) {
+            continue;
+        }
         for &v in &adj[u] {
             if comp[u] != comp[v] || depth[v] > depth[u] {
                 out[u].push(v);
@@ -289,7 +301,7 @@ fn build(cx: &BoxCx<'_>, g: &Graph, set: &[usize]) -> Net {
     for list in &mut kids {
         list.sort_by(|&x, &y| band[x].cmp(&band[y]).then(key[x].total_cmp(&key[y])).then(x.cmp(&y)));
     }
-    Net { n, d, b, axis, preds, topo, idom, kids, band }
+    Net { n, d, b, axis, preds, topo, idom, kids, band, loose }
 }
 
 impl Net {
@@ -659,25 +671,85 @@ impl Run<'_> {
             let s = self.segs(v, &mut memo, &mut pieces);
             memo[v] = Some(s);
         }
-        // the starts of the graph, side by side; what several of them lead to after them
+        // the starts of the graph, side by side
         let roots = net.kids[net.n].clone();
-        let mut rows: Vec<Piece> = Vec::new();
-        let mut i = 0;
-        let mut depth = 0.0f32;
+        let first: Vec<Piece> = roots
+            .iter()
+            .filter(|&&r| net.band[r] == 0 && !net.loose.iter().any(|(l, _)| *l == r))
+            .map(|&r| {
+                let list = memo[r].take().unwrap_or_default();
+                self.lines(list)
+            })
+            .collect();
         let mut out = Piece::default();
-        while i < roots.len() {
-            let band = net.band[roots[i]];
-            let mut items = Vec::new();
-            while i < roots.len() && net.band[roots[i]] == band {
-                let list = memo[roots[i]].take().unwrap_or_default();
-                items.push(self.lines(list));
-                i += 1;
+        let mut depth = 0.0f32;
+        if !first.is_empty() {
+            let k = wrap(self.flow, &first, &self.gap, self.limit);
+            let block = grid(net, first, k, self.gap.tree, &self.gap);
+            block.shifted(0.0, 0.0, &mut out.at);
+            depth = block.dd + self.gap.depth;
+        }
+        // what several of them lead to (a quest's end that two trees reach): right after the trees
+        // that lead into it, across from the middle of their wires; below everything only where
+        // that place is taken
+        let mut at: Vec<Option<(f32, f32)>> = vec![None; net.n];
+        for &(v, d, b) in &out.at {
+            at[v] = Some((d, b));
+        }
+        let (hd, hb) = (self.gap.depth * 0.5, self.gap.breadth * 0.5);
+        let free = |out: &Piece, piece: &Piece, dd: f32, db: f32| {
+            piece.at.iter().all(|&(v, d, b)| {
+                let (d0, b0) = (d + dd, b + db);
+                out.at.iter().all(|&(w, e, c)| {
+                    d0 + net.d[v] + hd <= e
+                        || e + net.d[w] + hd <= d0
+                        || b0 + net.b[v] + hb <= c
+                        || c + net.b[w] + hb <= b0
+                })
+            })
+        };
+        for &r in roots.iter().filter(|&&r| net.band[r] > 0) {
+            let list = memo[r].take().unwrap_or_default();
+            let piece = self.lines(list);
+            let feeders: Vec<(f32, f32)> = net.preds[r]
+                .iter()
+                .filter_map(|&f| at[f].map(|(d, b)| (d + net.d[f], b + net.axis[f])))
+                .collect();
+            let (mut dd, mut db) = (depth, 0.0);
+            if !feeders.is_empty() {
+                let after = feeders.iter().map(|f| f.0).fold(f32::MIN, f32::max) + self.gap.depth;
+                let across = feeders.iter().map(|f| f.1).sum::<f32>() / feeders.len() as f32 - piece.axis;
+                db = across;
+                dd = if free(&out, &piece, after, across) { after } else { depth.max(after) };
             }
-            let k = wrap(self.flow, &items, &self.gap, self.limit);
-            let block = grid(net, items, k, self.gap.tree, &self.gap);
-            block.shifted(depth, 0.0, &mut out.at);
-            depth += block.dd + self.gap.depth;
-            rows.push(block);
+            piece.shifted(dd, db, &mut out.at);
+            for &(v, d, b) in &piece.at {
+                at[v] = Some((d + dd, b + db));
+            }
+            depth = depth.max(dd + piece.dd + self.gap.depth);
+        }
+        // a loose node: just before the first node it leads to, beside what leads in there
+        for (u, targets) in &net.loose {
+            let Some(list) = memo[*u].take() else { continue };
+            let piece = self.lines(list);
+            let Some((v, (td, tb))) = targets.iter().find_map(|&v| at[v].map(|p| (v, p))) else {
+                piece.shifted(depth, 0.0, &mut out.at);
+                depth += piece.dd + self.gap.depth;
+                continue;
+            };
+            let dd = td - self.gap.depth - piece.dd;
+            let centre = tb + net.axis[v] - piece.axis;
+            let step = piece.bb + self.gap.breadth;
+            let db = (1..=64)
+                .flat_map(|k| [k as f32, -(k as f32)])
+                .map(|k| centre + k * step)
+                .find(|&db| free(&out, &piece, dd, db));
+            let (dd, db) = db.map_or((depth, centre), |db| (dd, db));
+            piece.shifted(dd, db, &mut out.at);
+            for &(w, d, b) in &piece.at {
+                at[w] = Some((d + dd, b + db));
+            }
+            depth = depth.max(dd + piece.dd + self.gap.depth);
         }
         out.normalise(net)
     }
@@ -1067,5 +1139,74 @@ mod tests {
         layout::run(&cat, &mut g, false);
         let x = |id: &str| g.find_node(id).map_or(0.0, |n| n.pos[0]);
         assert!(x("m") > x("c") && x("c") > x("b"), "{} {} {}", x("m"), x("c"), x("b"));
+    }
+
+    /// A quest whose end a trigger's tree reaches, and a node whose input is not wired yet that
+    /// leads there too: the loose node is no start of a tree of its own and shapes nothing - the
+    /// end stays under what leads into it, the loose node goes just before the end, beside it.
+    #[test]
+    fn a_node_nothing_leads_into_waits_beside_its_target() {
+        let cat = bundled();
+        let mut g = Graph::default();
+        let mut s = Node::new("s", "trigger.start");
+        s.connect("next", "a");
+        let mut a = Node::new("a", "flow.step");
+        a.connect("next", "b");
+        let mut b = Node::new("b", "flow.step");
+        b.connect("next", "end");
+        let mut loose = Node::new("loose", "flow.step");
+        loose.connect("next", "end");
+        for n in [s, a, b, loose, Node::new("end", "flow.end")] {
+            g.nodes.push_back(n);
+        }
+        let cx = BoxCx::of(&cat, &g);
+        for flow in [Flow::Down, Flow::Right] {
+            g.canvas.flow = Some(flow);
+            layout::run(&cat, &mut g, false);
+            assert!(overlaps(&rects(&cat, &g)).is_empty(), "{flow:?}");
+            let at =
+                |id: &str| g.find_node(id).map(|n| (n.pos, layout::node_size(&cx, n))).unwrap_or_default();
+            // depth and breadth of a node's box: (start, end) along the flow, (start, end) across it
+            let axes = |id: &str| {
+                let (p, s) = at(id);
+                match flow {
+                    Flow::Down => ((p[1], p[1] + s[1]), (p[0], p[0] + s[0])),
+                    Flow::Right => ((p[0], p[0] + s[0]), (p[1], p[1] + s[1])),
+                }
+            };
+            let (b_d, b_b) = axes("b");
+            let (e_d, e_b) = axes("end");
+            let (l_d, _) = axes("loose");
+            // the chain runs straight: the end under its step, not after a row of its own
+            assert!(e_d.0 > b_d.1 && e_b.0 < b_b.1 && b_b.0 < e_b.1, "{flow:?}: the end is under b");
+            // the loose node ends before the end starts, in the layer of b
+            assert!(l_d.1 <= e_d.0 && l_d.0 >= b_d.0 - 1.0, "{flow:?}: {l_d:?} against {e_d:?} and {b_d:?}");
+        }
+    }
+
+    /// What two trees lead into stays between them, right after the deeper of the two - not at the
+    /// start of a row of its own below everything.
+    #[test]
+    fn a_merge_of_two_trees_sits_between_them() {
+        let cat = bundled();
+        let mut g = Graph::default();
+        let mut s = Node::new("s", "trigger.start");
+        s.connect("next", "a");
+        let mut a = Node::new("a", "flow.step");
+        a.connect("next", "end");
+        let mut w = Node::new("w", "trigger.start");
+        w.connect("next", "c");
+        let mut c = Node::new("c", "flow.step");
+        c.connect("next", "end");
+        for n in [s, a, w, c, Node::new("end", "flow.end")] {
+            g.nodes.push_back(n);
+        }
+        g.canvas.flow = Some(Flow::Down);
+        layout::run(&cat, &mut g, false);
+        assert!(overlaps(&rects(&cat, &g)).is_empty());
+        let cx = BoxCx::of(&cat, &g);
+        let mid = |id: &str| g.find_node(id).map_or(0.0, |n| n.pos[0] + layout::node_size(&cx, n)[0] * 0.5);
+        let (xa, xc, xe) = (mid("a"), mid("c"), mid("end"));
+        assert!(xa.min(xc) < xe && xe < xa.max(xc), "{xa} {xe} {xc}");
     }
 }

@@ -1128,8 +1128,12 @@ A painter canvas of the kit: the scene of a revision is built off the UI thread
   connected components and the depth from the triggers) laid out along the flow, every node under
   its dominator; a node with many children lays them out in a block several rows (or columns) deep
   instead of one ribbon, and long chains fold, so the 110-node quest of the reference project is
-  under 4000 pt on its long side. Auto Layout Selection lays out the selected nodes alone where
-  they were, Auto Layout Branch the node and what only it leads to.
+  under 4000 pt on its long side. What several trees lead into (a quest's end reached from the
+  start's tree and a trigger's) goes right after the trees that feed it, across from the middle of
+  their wires. A node nothing leads into that is no trigger and leads only where other wires lead
+  too - a node whose input is not wired yet - is no start of a tree: it shapes nothing and waits
+  just before the first node it leads to, beside it. Auto Layout Selection lays out the selected
+  nodes alone where they were, Auto Layout Branch the node and what only it leads to.
 - **Interaction**: LMB selects and drags (snapped to the 16 pt grid, alignment guides to the
   neighbours' edges and centres - both preferences); Ctrl/Shift+click toggles; a rubber band on
   empty space. A wire is drawn from an output into a node or from an input out of one; dropped on
