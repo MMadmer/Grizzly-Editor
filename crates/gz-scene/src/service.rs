@@ -140,12 +140,15 @@ impl SceneService {
         });
         let root = session.root.clone();
         let editor_root = gz_project::library_root(editor);
+        let library = Arc::new(Library::new(vec![
+            root.join("rawdata").join("objects"),
+            editor_root.join("rawdata").join("objects"),
+        ]));
+        // the models that are no files of the library: every crate that makes some adds them
+        crate::library::ProviderMakers::of(editor).provide(editor, &root, &library);
         let svc = session.services.get_or_init(|| SceneService {
             store: Store::spawn("scene", SceneState::default(), &editor.exec, StoreOptions::default()),
-            library: Arc::new(Library::new(vec![
-                root.join("rawdata").join("objects"),
-                editor_root.join("rawdata").join("objects"),
-            ])),
+            library,
             recovery: Arc::new(Recovery::new()),
             pick: Derived::new(editor.exec.clone()),
             load: Mutex::new(LoadStatus::default()),

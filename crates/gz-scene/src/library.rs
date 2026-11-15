@@ -138,6 +138,38 @@ enum Slot {
 /// file name and no reference holds.
 pub const MESH_STAMP: char = '|';
 
+/// Makes a project's provider: called once for every scene service, as it makes its library,
+/// with the editor and the project's root. `None` when it has nothing for that project.
+pub type ProviderMaker = Arc<dyn Fn(&Arc<gz_editor::Editor>, &Path) -> Option<Provider> + Send + Sync>;
+
+/// The provider makers of this editor: a crate whose models are no `.object` files (model
+/// assets) adds its maker here when it installs, and every project's scene gets its provider.
+#[derive(Default)]
+pub struct ProviderMakers {
+    list: parking_lot::RwLock<Vec<ProviderMaker>>,
+}
+
+impl ProviderMakers {
+    /// The editor's list.
+    #[must_use]
+    pub fn of(editor: &gz_editor::Editor) -> Arc<Self> {
+        editor.services.get_or_init(Self::default)
+    }
+
+    /// Adds a maker; scenes opened from now on get its provider.
+    pub fn add(&self, maker: ProviderMaker) {
+        self.list.write().push(maker);
+    }
+
+    /// Gives a new library every maker's provider for the project at `root`.
+    pub fn provide(&self, editor: &Arc<gz_editor::Editor>, root: &Path, library: &Library) {
+        let makers: Vec<ProviderMaker> = self.list.read().clone();
+        for provider in makers.iter().filter_map(|m| m(editor, root)) {
+            library.add_provider(provider);
+        }
+    }
+}
+
 /// The triangle of no surface in [`LibraryObject::tri_surface`].
 pub const NO_SURFACE: u32 = u32::MAX;
 
